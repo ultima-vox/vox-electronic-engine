@@ -23,48 +23,84 @@ bool writeSnapshot(VstEngineAudioProcessorEditor& editor, const juce::File& targ
     return format.writeImageToStream(image, output);
 }
 
-bool captureVisualGateSnapshot(const juce::File& directory,
-                               const juce::String& fileName,
-                               std::string_view instrumentId,
-                               Page page,
-                               juce::Point<int> size)
+Page pageFromEnvironment(const juce::String& value)
 {
-    std::cout << "Capturing " << fileName << "\n";
+    if (value.equalsIgnoreCase("macros"))
+        return Page::macros;
+    if (value.equalsIgnoreCase("pattern"))
+        return Page::pattern;
+    if (value.equalsIgnoreCase("routing"))
+        return Page::routing;
+    if (value.equalsIgnoreCase("zones"))
+        return Page::zones;
+    if (value.equalsIgnoreCase("advanced"))
+        return Page::advanced;
+    return Page::sound;
+}
+
+int runSingleSnapshotCapture()
+{
+    const auto targetPath = juce::SystemStats::getEnvironmentVariable("VOX_UI_CAPTURE_PATH", {});
+    if (targetPath.isEmpty())
+        return -1;
+
+    const auto instrumentId = juce::SystemStats::getEnvironmentVariable(
+        "VOX_UI_CAPTURE_INSTRUMENT", "com.ultimavox.psy-bass");
+    const auto pageName = juce::SystemStats::getEnvironmentVariable("VOX_UI_CAPTURE_PAGE", "sound");
+    const auto width = juce::jmax(1040, juce::SystemStats::getEnvironmentVariable(
+        "VOX_UI_CAPTURE_WIDTH", "1180").getIntValue());
+    const auto height = juce::jmax(680, juce::SystemStats::getEnvironmentVariable(
+        "VOX_UI_CAPTURE_HEIGHT", "760").getIntValue());
+
+    std::cout << "Visual Gate capture: " << targetPath
+              << " instrument=" << instrumentId
+              << " page=" << pageName
+              << " size=" << width << "x" << height << std::endl;
 
     VstEngineAudioProcessor processor;
     juce::String diagnostic;
-    if (!processor.loadSlotInstrument(0, instrumentId, diagnostic)) {
+    if (!processor.loadSlotInstrument(0, instrumentId.toStdString(), diagnostic)) {
         std::cerr << "Unable to load visual-gate instrument " << instrumentId
-                  << ": " << diagnostic << "\n";
-        return false;
+                  << ": " << diagnostic << std::endl;
+        return EXIT_FAILURE;
     }
     processor.selectSlot(0);
 
     std::unique_ptr<juce::AudioProcessorEditor> base(processor.createEditor());
     auto* editor = dynamic_cast<VstEngineAudioProcessorEditor*>(base.get());
     if (editor == nullptr)
-        return false;
+        return EXIT_FAILURE;
 
-    editor->setSize(size.x, size.y);
-    editor->showPageForTesting(page);
-    const auto ok = writeSnapshot(*editor, directory.getChildFile(fileName));
+    editor->setSize(width, height);
+    editor->showPageForTesting(pageFromEnvironment(pageName));
+    const auto ok = writeSnapshot(*editor, juce::File(targetPath));
     base.reset();
 
-    if (ok)
-        std::cout << "Captured " << fileName << "\n";
-    return ok;
+    if (!ok)
+        return EXIT_FAILURE;
+
+    std::cout << "Visual Gate capture complete: " << targetPath << std::endl;
+    return EXIT_SUCCESS;
 }
 } // namespace
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI gui;
+
+    // Visual Gate captures run as one editor per process. JUCE GUI teardown on
+    // Windows self-hosted CI was unstable when multiple full plugin editors were
+    // created and destroyed sequentially inside the normal CTest smoke process.
+    if (const auto captureResult = runSingleSnapshotCapture(); captureResult >= 0)
+        return captureResult;
+
     VstEngineAudioProcessor processor;
     std::unique_ptr<juce::AudioProcessorEditor> base(processor.createEditor());
     auto* editor = dynamic_cast<VstEngineAudioProcessorEditor*>(base.get());
     if (editor == nullptr)
         return EXIT_FAILURE;
 
+    using Page = vstengine::ui::MainNavigation::Page;
     for (const auto page : { Page::sound, Page::pattern, Page::routing,
                              Page::zones, Page::macros, Page::advanced }) {
         editor->showPageForTesting(page);
@@ -98,42 +134,6 @@ int main()
         editor->showPageForTesting(Page::sound);
         if (!writeSnapshot(*editor, juce::File(snapshotPath)))
             return EXIT_FAILURE;
-    }
-
-    const auto snapshotDirectory = juce::SystemStats::getEnvironmentVariable(
-        "VOX_UI_SNAPSHOT_DIR", {});
-    if (snapshotDirectory.isNotEmpty()) {
-        const juce::File directory(snapshotDirectory);
-        if (!directory.exists() && !directory.createDirectory())
-            return EXIT_FAILURE;
-
-        // Release the smoke-test editor before creating capture editors. Keeping
-        // multiple full plugin editors alive in this headless test process caused
-        // a JUCE GUI teardown crash on Windows self-hosted CI.
-        base.reset();
-        editor = nullptr;
-
-        struct Capture {
-            const char* fileName;
-            std::string_view instrumentId;
-            Page page;
-            juce::Point<int> size;
-        };
-
-        constexpr std::string_view psyBassId = "com.ultimavox.psy-bass";
-        constexpr std::string_view acidId = "com.ultimavox.acid";
-        const Capture captures[] {
-            { "psy-bass-sound-1180x760.png", psyBassId, Page::sound, { 1180, 760 } },
-            { "psy-bass-sound-1500x920.png", psyBassId, Page::sound, { 1500, 920 } },
-            { "acid-sound-1500x920.png", acidId, Page::sound, { 1500, 920 } },
-            { "psy-bass-macros-1500x920.png", psyBassId, Page::macros, { 1500, 920 } }
-        };
-
-        for (const auto& capture : captures)
-            if (!captureVisualGateSnapshot(directory, capture.fileName,
-                                           capture.instrumentId, capture.page,
-                                           capture.size))
-                return EXIT_FAILURE;
     }
 
     std::cout << "Editor smoke test passed\n";
