@@ -14,7 +14,8 @@ target_compile_definitions(vox_ui_showcase PRIVATE
 # Visual Gate capture must not modify editor_smoke_tests. Defer target creation
 # until the top-level directory has finished defining the VstEngine target.
 function(vox_add_visual_gate_capture)
-  add_executable(vox_ui_visual_gate_capture VisualGateCapture.cpp)
+  add_executable(vox_ui_visual_gate_capture
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/VisualGateCapture.cpp")
   target_include_directories(vox_ui_visual_gate_capture PRIVATE
     ${CMAKE_SOURCE_DIR}/apps/vst3
     ${CMAKE_SOURCE_DIR}/libs
