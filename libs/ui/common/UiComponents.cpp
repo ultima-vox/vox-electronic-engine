@@ -12,7 +12,10 @@ VoxLookAndFeel::VoxLookAndFeel()
     setColour(juce::PopupMenu::highlightedBackgroundColourId,
               colours::primary.withAlpha(0.22f));
     setColour(juce::Slider::rotarySliderFillColourId, colours::primary);
-    setColour(juce::Slider::rotarySliderOutlineColourId, colours::inactive);
+    setColour(juce::Slider::rotarySliderOutlineColourId, colours::border);
+    setColour(juce::Slider::textBoxTextColourId, colours::text);
+    setColour(juce::Slider::textBoxBackgroundColourId, colours::background);
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 }
 
 void VoxLookAndFeel::drawButtonBackground(
@@ -32,31 +35,47 @@ void VoxLookAndFeel::drawButtonBackground(
 
 void VoxLookAndFeel::drawRotarySlider(
     juce::Graphics& g, int x, int y, int width, int height, float position,
-    float start, float end, juce::Slider&)
+    float start, float end, juce::Slider& slider)
 {
-    const auto radius = 0.5f * static_cast<float>(juce::jmin(width, height))
-        - 5.0f;
+    const auto diameter = static_cast<float>(juce::jmin(width, height));
+    const auto radius = juce::jmax(8.0f, diameter * 0.5f - 7.0f);
     const auto centre = juce::Point<float>(x + width * 0.5f,
                                            y + height * 0.5f);
-    const auto bounds = juce::Rectangle<float>(centre.x - radius,
-        centre.y - radius, radius * 2.0f, radius * 2.0f);
-    g.setColour(colours::shadow);
-    g.fillEllipse(bounds.translated(0.0f, 2.0f));
-    g.setColour(colours::inactive);
-    g.fillEllipse(bounds);
-    juce::Path arc;
-    arc.addCentredArc(centre.x, centre.y, radius - 2.0f, radius - 2.0f,
-                      0.0f, start, start + position * (end - start), true);
-    g.setColour(colours::primary);
-    g.strokePath(arc, juce::PathStrokeType(2.5f,
-        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    const auto stroke = juce::jmax(2.0f, radius * 0.12f);
+    const auto arcRadius = juce::jmax(3.0f, radius - stroke * 0.85f);
     const auto angle = start + position * (end - start);
-    juce::Path pointer;
-    pointer.addRoundedRectangle(-1.2f, -radius + 7.0f, 2.4f,
-                                radius * 0.42f, 1.2f);
-    g.setColour(colours::text);
-    g.fillPath(pointer, juce::AffineTransform::rotation(angle)
-        .translated(centre.x, centre.y));
+    const auto enabled = slider.isEnabled();
+
+    juce::Path inactiveArc;
+    inactiveArc.addCentredArc(centre.x, centre.y, arcRadius, arcRadius,
+                              0.0f, start, end, true);
+    g.setColour(colours::border);
+    g.strokePath(inactiveArc, juce::PathStrokeType(stroke,
+        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    juce::Path activeArc;
+    activeArc.addCentredArc(centre.x, centre.y, arcRadius, arcRadius,
+                            0.0f, start, angle, true);
+    g.setColour(enabled ? colours::primary : colours::mutedText);
+    g.strokePath(activeArc, juce::PathStrokeType(stroke,
+        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    const auto bodyRadius = radius * 0.62f;
+    const auto body = juce::Rectangle<float>(centre.x - bodyRadius,
+                                              centre.y - bodyRadius,
+                                              bodyRadius * 2.0f,
+                                              bodyRadius * 2.0f);
+    g.setColour(colours::background);
+    g.fillEllipse(body);
+    g.setColour(colours::border.darker(0.18f));
+    g.drawEllipse(body, juce::jmax(1.0f, stroke * 0.30f));
+
+    const auto markerStart = centre + juce::Point<float>(0.0f, -bodyRadius * 0.30f)
+                                        .rotatedAboutOrigin(angle);
+    const auto markerEnd = centre + juce::Point<float>(0.0f, -bodyRadius * 0.88f)
+                                      .rotatedAboutOrigin(angle);
+    g.setColour(enabled ? colours::text : colours::mutedText);
+    g.drawLine({ markerStart, markerEnd }, juce::jmax(1.2f, stroke * 0.42f));
 }
 
 void VoxLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height,
@@ -106,11 +125,15 @@ ParameterKnob::ParameterKnob (juce::AudioProcessorValueTreeState& state,
 
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 82, 20);
+    slider.setRotaryParameters(juce::MathConstants<float>::pi * 0.75f,
+                               juce::MathConstants<float>::pi * 2.25f,
+                               true);
+    slider.setMouseDragSensitivity(180);
     slider.setColour (juce::Slider::rotarySliderFillColourId, colours::primary);
     slider.setColour (juce::Slider::rotarySliderOutlineColourId, colours::border);
     slider.setColour (juce::Slider::textBoxTextColourId, colours::text);
     slider.setColour (juce::Slider::textBoxBackgroundColourId, colours::background);
-    slider.setColour (juce::Slider::textBoxOutlineColourId, colours::border);
+    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     slider.setTooltip (tooltip);
     addAndMakeVisible (slider);
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
@@ -127,7 +150,7 @@ void ParameterKnob::resized()
 ParameterSection::ParameterSection (juce::String titleText)
 {
     title.setText (std::move (titleText), juce::dontSendNotification);
-    styleLabel (title, 13.0f, juce::Justification::centredLeft, colours::primary);
+    styleLabel (title, 13.0f, juce::Justification::centredLeft, colours::text);
     addAndMakeVisible (title);
 }
 
@@ -147,9 +170,9 @@ void ParameterSection::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat().reduced (0.5f);
     g.setColour (colours::panel);
-    g.fillRoundedRectangle (bounds, 8.0f);
+    g.fillRoundedRectangle (bounds, metrics::corner);
     g.setColour (colours::border);
-    g.drawRoundedRectangle (bounds, 8.0f, 1.0f);
+    g.drawRoundedRectangle (bounds, metrics::corner, 1.0f);
 }
 
 void ParameterSection::resized()
