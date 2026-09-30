@@ -33,16 +33,14 @@ jobs:
         run: |
           $snapshotDir = Join-Path $PWD "build\visual-gate"
           New-Item -ItemType Directory -Force -Path $snapshotDir | Out-Null
-          $capture = Join-Path $PWD "build\Release\editor_smoke_tests.exe"
+          $capture = Join-Path $PWD "build\Release\vox_ui_visual_gate_capture.exe"
+          if (-not (Test-Path $capture)) { throw "Visual Gate capture executable not found: $capture" }
 
           function Capture-VisualGate($file, $instrument, $page, $width, $height) {
-            $env:VOX_UI_CAPTURE_PATH = Join-Path $snapshotDir $file
-            $env:VOX_UI_CAPTURE_INSTRUMENT = $instrument
-            $env:VOX_UI_CAPTURE_PAGE = $page
-            $env:VOX_UI_CAPTURE_WIDTH = "$width"
-            $env:VOX_UI_CAPTURE_HEIGHT = "$height"
-            & $capture
+            $output = Join-Path $snapshotDir $file
+            & $capture $output $instrument $page $width $height
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (-not (Test-Path $output)) { throw "Visual Gate snapshot not created: $output" }
           }
 
           Capture-VisualGate "psy-bass-sound-1180x760.png" "com.ultimavox.psy-bass" "sound" 1180 760
