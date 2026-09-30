@@ -28,6 +28,33 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Capture Visual Gate snapshots
+        shell: powershell
+        run: |
+          $snapshotDir = Join-Path $PWD "build\visual-gate"
+          New-Item -ItemType Directory -Force -Path $snapshotDir | Out-Null
+          $capture = Join-Path $PWD "build\Release\vox_ui_visual_gate_capture.exe"
+          if (-not (Test-Path $capture)) { throw "Visual Gate capture executable not found: $capture" }
+
+          function Capture-VisualGate($file, $instrument, $page, $width, $height) {
+            $output = Join-Path $snapshotDir $file
+            & $capture $output $instrument $page $width $height
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (-not (Test-Path $output)) { throw "Visual Gate snapshot not created: $output" }
+          }
+
+          Capture-VisualGate "psy-bass-sound-1180x760.png" "com.ultimavox.psy-bass" "sound" 1180 760
+          Capture-VisualGate "psy-bass-sound-1500x920.png" "com.ultimavox.psy-bass" "sound" 1500 920
+          Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
+          Capture-VisualGate "psy-bass-macros-1500x920.png" "com.ultimavox.psy-bass" "macros" 1500 920
+
+      - name: Upload Visual Gate snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-UI-Visual-Gate
+          path: build/visual-gate/*.png
+          if-no-files-found: error
+
       - name: Package Vox Electronic Engine
         shell: powershell
         run: cmake --build build --config Release --target package
