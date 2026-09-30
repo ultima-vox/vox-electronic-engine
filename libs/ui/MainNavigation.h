@@ -1,6 +1,7 @@
 #pragma once
-#include <juce_gui_basics/juce_gui_basics.h>
-#include <array>
+
+#include "vox-ui/components/VoxTabBar.h"
+#include <functional>
 
 namespace vstengine::ui {
 
@@ -13,6 +14,7 @@ public:
         advanced = 5, settings = advanced,
         count = 6
     };
+
     MainNavigation();
     void resized() override;
     void setCurrentPage (Page);
@@ -20,8 +22,9 @@ public:
     std::function<void(Page)> onPageChanged;
 
 private:
-    std::array<juce::TextButton, static_cast<size_t> (Page::count)> buttons;
-    Page currentPage { Page::rack };
+    vox::ui::VoxTabBar tabs;
+    Page currentPage { Page::sound };
+    bool synchronizingSelection {};
 };
 
 } // namespace vstengine::ui
