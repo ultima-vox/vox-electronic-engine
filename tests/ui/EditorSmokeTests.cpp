@@ -29,6 +29,8 @@ bool captureVisualGateSnapshot(const juce::File& directory,
                                Page page,
                                juce::Point<int> size)
 {
+    std::cout << "Capturing " << fileName << "\n";
+
     VstEngineAudioProcessor processor;
     juce::String diagnostic;
     if (!processor.loadSlotInstrument(0, instrumentId, diagnostic)) {
@@ -45,7 +47,12 @@ bool captureVisualGateSnapshot(const juce::File& directory,
 
     editor->setSize(size.x, size.y);
     editor->showPageForTesting(page);
-    return writeSnapshot(*editor, directory.getChildFile(fileName));
+    const auto ok = writeSnapshot(*editor, directory.getChildFile(fileName));
+    base.reset();
+
+    if (ok)
+        std::cout << "Captured " << fileName << "\n";
+    return ok;
 }
 } // namespace
 
@@ -99,6 +106,12 @@ int main()
         const juce::File directory(snapshotDirectory);
         if (!directory.exists() && !directory.createDirectory())
             return EXIT_FAILURE;
+
+        // Release the smoke-test editor before creating capture editors. Keeping
+        // multiple full plugin editors alive in this headless test process caused
+        // a JUCE GUI teardown crash on Windows self-hosted CI.
+        base.reset();
+        editor = nullptr;
 
         struct Capture {
             const char* fileName;
