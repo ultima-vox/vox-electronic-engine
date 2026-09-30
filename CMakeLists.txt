@@ -150,6 +150,10 @@ add_library(vst_generator STATIC
 target_include_directories(vst_generator PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_generator PUBLIC vst_parts)
 
+# shared VOX design-system primitives. Product UI may depend on this target;
+# the shared target must never depend on product UI or DSP targets.
+add_subdirectory(libs/vox-ui)
+
 # ui: reusable JUCE components and tab pages.
 add_library(vst_ui STATIC
   libs/ui/common/UiComponents.cpp libs/ui/common/UiComponents.h
@@ -162,7 +166,7 @@ add_library(vst_ui STATIC
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_ui PUBLIC
   juce::juce_gui_basics juce::juce_audio_utils juce::juce_audio_processors
-  vst_sequence vst_parts vst_preset)
+  vox_ui vst_sequence vst_parts vst_preset)
 
 # ---------------------------------------------------------------------------
 # VST3 shell: composition + host integration only.

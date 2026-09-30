@@ -20,7 +20,7 @@ jobs:
         run: |
           $nsis = Get-Command makensis -ErrorAction SilentlyContinue
           $flag = if ($null -ne $nsis) { "ON" } else { "OFF" }
-          cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag"
+          cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag" "-DVOX_UI_BUILD_SHOWCASE=ON"
 
       - name: Build
         run: cmake --build build --config Release --clean-first --parallel
