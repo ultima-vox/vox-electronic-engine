@@ -25,14 +25,30 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --clean-first --parallel
 
-      - name: Test and capture Visual Gate
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Capture Visual Gate snapshots
         shell: powershell
         run: |
           $snapshotDir = Join-Path $PWD "build\visual-gate"
           New-Item -ItemType Directory -Force -Path $snapshotDir | Out-Null
-          $env:VOX_UI_SNAPSHOT_DIR = $snapshotDir
-          ctest --test-dir build -C Release --output-on-failure
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $capture = Join-Path $PWD "build\Release\editor_smoke_tests.exe"
+
+          function Capture-VisualGate($file, $instrument, $page, $width, $height) {
+            $env:VOX_UI_CAPTURE_PATH = Join-Path $snapshotDir $file
+            $env:VOX_UI_CAPTURE_INSTRUMENT = $instrument
+            $env:VOX_UI_CAPTURE_PAGE = $page
+            $env:VOX_UI_CAPTURE_WIDTH = "$width"
+            $env:VOX_UI_CAPTURE_HEIGHT = "$height"
+            & $capture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+          Capture-VisualGate "psy-bass-sound-1180x760.png" "com.ultimavox.psy-bass" "sound" 1180 760
+          Capture-VisualGate "psy-bass-sound-1500x920.png" "com.ultimavox.psy-bass" "sound" 1500 920
+          Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
+          Capture-VisualGate "psy-bass-macros-1500x920.png" "com.ultimavox.psy-bass" "macros" 1500 920
 
       - name: Upload Visual Gate snapshots
         uses: actions/upload-artifact@v4
