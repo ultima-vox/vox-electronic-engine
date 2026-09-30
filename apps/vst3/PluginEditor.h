@@ -6,6 +6,8 @@
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
 #include "ui/ZoneRangeEditor.h"
+#include "VoxButton.h"
+#include "VoxComboBox.h"
 
 class VstEngineAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer {
@@ -43,9 +45,17 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void refresh();
         std::function<void(std::size_t)> onSelected;
     private:
+        class RackSlotButton final : public vox::ui::VoxButton {
+        public:
+            RackSlotButton() : VoxButton({}, vox::ui::VoxButton::Type::Toggle)
+            {
+                setClickingTogglesState(false);
+            }
+        };
+
         VstEngineAudioProcessor& processor;
         juce::Label title;
-        std::array<juce::TextButton, vstengine::instrument::maxSlots> slots;
+        std::array<RackSlotButton, vstengine::instrument::maxSlots> slots;
     };
 
     class InstrumentHeader final : public juce::Component {
@@ -57,8 +67,9 @@ private:
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, subtitle;
-        juce::ComboBox instrument, preset, midiIn;
-        juce::TextButton presetPrevious { "<" }, presetNext { ">" };
+        vox::ui::VoxComboBox instrument, preset, midiIn;
+        vox::ui::VoxButton presetPrevious { "<", vox::ui::VoxButton::Type::Icon };
+        vox::ui::VoxButton presetNext { ">", vox::ui::VoxButton::Type::Icon };
         std::vector<std::string> presetIds;
         std::size_t selected {};
     };
