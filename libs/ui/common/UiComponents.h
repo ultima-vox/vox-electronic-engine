@@ -15,17 +15,21 @@ inline constexpr int spaceLg = 18;
 inline constexpr float corner = 7.0f;
 }
 
+// Compatibility bridge for legacy product widgets that have not yet moved to
+// vox::ui components. Keep these values aligned with the canonical VOX design
+// tokens so mixed old/new screens do not render two competing palettes during
+// the Visual Gate migration.
 namespace colours {
-inline const auto background = juce::Colour::fromRGB (8, 13, 22);
-inline const auto panel = juce::Colour::fromRGB (19, 29, 43);
-inline const auto panelRaised = juce::Colour::fromRGB (26, 39, 56);
-inline const auto border = juce::Colour::fromRGB (48, 67, 88);
-inline const auto primary = juce::Colour::fromRGB (55, 201, 235);
-inline const auto status = juce::Colour::fromRGB (93, 190, 139);
-inline const auto warning = juce::Colour::fromRGB (211, 113, 82);
-inline const auto text = juce::Colour::fromRGB (225, 233, 241);
-inline const auto mutedText = juce::Colour::fromRGB (137, 154, 174);
-inline const auto inactive = juce::Colour::fromRGB (32, 46, 63);
+inline const auto background = juce::Colour::fromRGB (6, 18, 29);       // #06121D
+inline const auto panel = juce::Colour::fromRGB (11, 25, 37);           // #0B1925
+inline const auto panelRaised = juce::Colour::fromRGB (16, 34, 48);     // #102230
+inline const auto border = juce::Colour::fromRGB (29, 59, 80);          // #1D3B50
+inline const auto primary = juce::Colour::fromRGB (0, 221, 245);        // #00DDF5
+inline const auto status = juce::Colour::fromRGB (50, 210, 150);        // #32D296
+inline const auto warning = juce::Colour::fromRGB (227, 179, 65);       // #E3B341
+inline const auto text = juce::Colour::fromRGB (233, 243, 250);         // #E9F3FA
+inline const auto mutedText = juce::Colour::fromRGB (88, 116, 135);     // #587487
+inline const auto inactive = juce::Colour::fromRGB (10, 23, 34);        // #0A1722
 inline const auto shadow = juce::Colour::fromRGBA (0, 0, 0, 88);
 }
 
