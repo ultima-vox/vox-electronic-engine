@@ -2,6 +2,7 @@
 #include "instrument/HostParameterSchema.h"
 #include "ui/common/UiComponents.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using Page = vstengine::ui::MainNavigation::Page;
@@ -198,25 +199,464 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
     midiIn.setSelectedId(channel + 1, juce::dontSendNotification);
 }
 
+void VstEngineAudioProcessorEditor::SoundPage::HeroBanner::setLayout(
+    Layout newLayout, juce::String instrumentName)
+{
+    layout = newLayout;
+    name = std::move(instrumentName);
+    repaint();
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::HeroBanner::paint(juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    const auto cyan = vstengine::ui::colours::primary;
+    const auto acidGreen = juce::Colour::fromRGB(72, 210, 132);
+    const auto accent = layout == Layout::acid ? acidGreen : cyan;
+
+    juce::ColourGradient gradient(vstengine::ui::colours::panelRaised,
+                                  bounds.getTopLeft(),
+                                  vstengine::ui::colours::panel,
+                                  bounds.getBottomRight(), false);
+    gradient.addColour(0.72, accent.withAlpha(0.08f));
+    g.setGradientFill(gradient);
+    g.fillRoundedRectangle(bounds.reduced(0.5f), 6.0f);
+    g.setColour(vstengine::ui::colours::border);
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
+
+    auto text = getLocalBounds().reduced(18, 10);
+    auto right = text.removeFromRight(280);
+    g.setColour(vstengine::ui::colours::text);
+    g.setFont(juce::Font(20.0f, juce::Font::bold));
+    g.drawText(name.toUpperCase(), text.removeFromTop(28), juce::Justification::centredLeft);
+
+    const juce::String tagline = layout == Layout::acid
+        ? "303 motion with accent and slide — pattern-first performance"
+        : layout == Layout::psyBass
+            ? "Tight low-end architecture — transient-shaped rolling bass"
+            : "Descriptor-driven electronic instrument workspace";
+    g.setColour(vstengine::ui::colours::mutedText);
+    g.setFont(12.0f);
+    g.drawText(tagline, text.removeFromTop(24), juce::Justification::centredLeft);
+
+    const juce::String keywords = layout == Layout::acid
+        ? "SQUELCH  /  SLIDE  /  DRIVE"
+        : layout == Layout::psyBass
+            ? "MONO  /  PUNCH  /  CONTROL"
+            : "SOUND  /  MOTION  /  PERFORMANCE";
+    g.setColour(accent.withAlpha(0.92f));
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.drawText(keywords, right.removeFromTop(20), juce::Justification::centredRight);
+    g.setColour(vstengine::ui::colours::mutedText);
+    g.setFont(10.0f);
+    g.drawText(layout == Layout::acid ? "ACID ENGINE" : layout == Layout::psyBass ? "PSY BASS ENGINE" : "VOX ENGINE",
+               right.removeFromTop(18), juce::Justification::centredRight);
+
+    juce::Path wave;
+    const auto waveArea = bounds.withTrimmedLeft(bounds.getWidth() * 0.48f)
+                                .withTrimmedRight(300.0f)
+                                .reduced(4.0f, 16.0f);
+    const float mid = waveArea.getCentreY();
+    for (int i = 0; i <= 48; ++i) {
+        const float t = static_cast<float>(i) / 48.0f;
+        const float x = waveArea.getX() + t * waveArea.getWidth();
+        const float y = mid + std::sin(t * juce::MathConstants<float>::twoPi * (layout == Layout::acid ? 2.5f : 1.7f))
+                                * waveArea.getHeight() * (0.20f + 0.12f * std::sin(t * 5.0f));
+        if (i == 0) wave.startNewSubPath(x, y); else wave.lineTo(x, y);
+    }
+    g.setColour(accent.withAlpha(0.24f));
+    g.strokePath(wave, juce::PathStrokeType(2.0f));
+}
+
+VstEngineAudioProcessorEditor::SoundPage::VisualPanel::VisualPanel(
+    juce::String titleText, VisualRole visualRole)
+    : title(std::move(titleText)), role(visualRole), accent(vstengine::ui::colours::primary)
+{
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::setAccent(juce::Colour newAccent)
+{
+    accent = newAccent;
+    repaint();
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::setSubtitle(juce::String text)
+{
+    subtitle = std::move(text);
+    repaint();
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+    g.setColour(vstengine::ui::colours::panelRaised);
+    g.fillRoundedRectangle(bounds, 6.0f);
+    g.setColour(vstengine::ui::colours::border);
+    g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
+
+    auto area = getLocalBounds().reduced(11, 9);
+    auto header = area.removeFromTop(18);
+    g.setColour(vstengine::ui::colours::text);
+    g.setFont(juce::Font(11.0f, juce::Font::bold));
+    g.drawText(title, header, juce::Justification::centredLeft);
+    if (subtitle.isNotEmpty()) {
+        g.setColour(vstengine::ui::colours::mutedText);
+        g.setFont(9.0f);
+        g.drawText(subtitle, header, juce::Justification::centredRight);
+    }
+
+    auto graph = area.reduced(2, 5).toFloat();
+    if (graph.getHeight() < 18.0f || graph.getWidth() < 30.0f)
+        return;
+
+    g.setColour(vstengine::ui::colours::background.withAlpha(0.72f));
+    g.fillRoundedRectangle(graph, 4.0f);
+    g.setColour(vstengine::ui::colours::border.withAlpha(0.55f));
+    g.drawRoundedRectangle(graph, 4.0f, 1.0f);
+
+    auto plot = graph.reduced(8.0f, 7.0f);
+    juce::Path p;
+    switch (role) {
+        case VisualRole::oscillator: {
+            for (int i = 0; i <= 40; ++i) {
+                const float t = static_cast<float>(i) / 40.0f;
+                const float x = plot.getX() + t * plot.getWidth();
+                const float y = plot.getCentreY() + std::sin(t * juce::MathConstants<float>::twoPi * 1.6f)
+                                                  * plot.getHeight() * 0.28f;
+                if (i == 0) p.startNewSubPath(x, y); else p.lineTo(x, y);
+            }
+            break;
+        }
+        case VisualRole::filter:
+            p.startNewSubPath(plot.getX(), plot.getBottom() - plot.getHeight() * 0.12f);
+            p.cubicTo(plot.getX() + plot.getWidth() * 0.45f, plot.getBottom() - plot.getHeight() * 0.14f,
+                      plot.getX() + plot.getWidth() * 0.58f, plot.getY() + plot.getHeight() * 0.08f,
+                      plot.getRight(), plot.getY() + plot.getHeight() * 0.34f);
+            break;
+        case VisualRole::envelope:
+            p.startNewSubPath(plot.getX(), plot.getBottom());
+            p.lineTo(plot.getX() + plot.getWidth() * 0.12f, plot.getY() + plot.getHeight() * 0.10f);
+            p.lineTo(plot.getX() + plot.getWidth() * 0.36f, plot.getY() + plot.getHeight() * 0.42f);
+            p.lineTo(plot.getX() + plot.getWidth() * 0.76f, plot.getY() + plot.getHeight() * 0.42f);
+            p.lineTo(plot.getRight(), plot.getBottom());
+            break;
+        case VisualRole::modulation:
+            for (int i = 0; i <= 32; ++i) {
+                const float t = static_cast<float>(i) / 32.0f;
+                const float x = plot.getX() + t * plot.getWidth();
+                const float y = plot.getCentreY() + std::sin(t * juce::MathConstants<float>::twoPi * 2.0f)
+                                                  * plot.getHeight() * 0.24f;
+                if (i == 0) p.startNewSubPath(x, y); else p.lineTo(x, y);
+            }
+            break;
+        case VisualRole::matrix: {
+            const int cols = 5, rows = 3;
+            g.setColour(vstengine::ui::colours::border.withAlpha(0.65f));
+            for (int c = 0; c <= cols; ++c) {
+                const float x = plot.getX() + plot.getWidth() * static_cast<float>(c) / cols;
+                g.drawVerticalLine(static_cast<int>(x), plot.getY(), plot.getBottom());
+            }
+            for (int r = 0; r <= rows; ++r) {
+                const float y = plot.getY() + plot.getHeight() * static_cast<float>(r) / rows;
+                g.drawHorizontalLine(static_cast<int>(y), plot.getX(), plot.getRight());
+            }
+            g.setColour(accent.withAlpha(0.9f));
+            for (const auto point : { juce::Point<float>{0.18f, 0.25f}, {0.52f, 0.66f}, {0.78f, 0.38f} })
+                g.fillEllipse(plot.getX() + point.x * plot.getWidth() - 3.0f,
+                              plot.getY() + point.y * plot.getHeight() - 3.0f, 6.0f, 6.0f);
+            return;
+        }
+        case VisualRole::sequencer: {
+            const float labelWidth = juce::jmin(54.0f, plot.getWidth() * 0.12f);
+            auto lanes = plot.withTrimmedLeft(labelWidth);
+            static constexpr std::array<const char*, 5> laneNames { "NOTE", "ACC", "SLIDE", "GATE", "OCT" };
+            const int rows = static_cast<int>(laneNames.size());
+            g.setFont(8.0f);
+            for (int r = 0; r < rows; ++r) {
+                const float y0 = plot.getY() + plot.getHeight() * static_cast<float>(r) / rows;
+                const float y1 = plot.getY() + plot.getHeight() * static_cast<float>(r + 1) / rows;
+                g.setColour(vstengine::ui::colours::mutedText);
+                g.drawText(laneNames[static_cast<std::size_t>(r)],
+                           juce::Rectangle<float>(plot.getX(), y0, labelWidth - 4.0f, y1 - y0),
+                           juce::Justification::centredLeft);
+                g.setColour(vstengine::ui::colours::border.withAlpha(0.55f));
+                g.drawHorizontalLine(static_cast<int>(y1), lanes.getX(), lanes.getRight());
+            }
+            for (int s = 0; s <= 16; ++s) {
+                const float x = lanes.getX() + lanes.getWidth() * static_cast<float>(s) / 16.0f;
+                g.setColour(vstengine::ui::colours::border.withAlpha(s % 4 == 0 ? 0.8f : 0.35f));
+                g.drawVerticalLine(static_cast<int>(x), lanes.getY(), lanes.getBottom());
+            }
+            g.setColour(accent.withAlpha(0.78f));
+            for (int s = 0; s < 16; ++s) {
+                const float cellW = lanes.getWidth() / 16.0f;
+                const float rowH = lanes.getHeight() / rows;
+                if ((s * 5 + 1) % 7 < 4)
+                    g.fillRoundedRectangle(lanes.getX() + s * cellW + 2.0f,
+                                           lanes.getY() + 2.0f + (s % 3) * rowH * 0.10f,
+                                           cellW - 4.0f, rowH * 0.52f, 2.0f);
+                if (s % 4 == 0)
+                    g.fillEllipse(lanes.getX() + s * cellW + cellW * 0.35f,
+                                  lanes.getY() + rowH + rowH * 0.35f, 5.0f, 5.0f);
+                if (s == 3 || s == 7 || s == 11)
+                    g.drawLine(lanes.getX() + s * cellW + 3.0f,
+                               lanes.getY() + rowH * 2.5f,
+                               lanes.getX() + (s + 1) * cellW - 3.0f,
+                               lanes.getY() + rowH * 2.5f, 2.0f);
+            }
+            return;
+        }
+        case VisualRole::character:
+        case VisualRole::accent:
+        case VisualRole::performance:
+        case VisualRole::playMode:
+        case VisualRole::output: {
+            const float y = plot.getCentreY();
+            g.setColour(vstengine::ui::colours::border.withAlpha(0.8f));
+            g.drawLine(plot.getX(), y, plot.getRight(), y, 2.0f);
+            g.setColour(accent.withAlpha(0.86f));
+            const float amount = role == VisualRole::output ? 0.72f : role == VisualRole::accent ? 0.58f : 0.42f;
+            g.drawLine(plot.getX(), y, plot.getX() + plot.getWidth() * amount, y, 3.0f);
+            return;
+        }
+    }
+
+    g.setColour(accent.withAlpha(0.88f));
+    g.strokePath(p, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                         juce::PathStrokeType::rounded));
+}
+
+VstEngineAudioProcessorEditor::SoundPage::SoundPage(VstEngineAudioProcessor& p)
+    : processor(p)
+{
+    addAndMakeVisible(hero);
+    for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
+                          &performance, &modulation, &matrix, &sequencer, &playMode, &output })
+        addAndMakeVisible(visual);
+
+    for (std::size_t i = 0; i < knobs.size(); ++i) {
+        knobs[i] = std::make_unique<vox::ui::VoxKnob>(
+            "M" + juce::String(static_cast<int>(i + 1)), vox::ui::VoxKnob::Size::Normal);
+        knobs[i]->setVisible(false);
+        addAndMakeVisible(*knobs[i]);
+    }
+    configureLayout(Layout::generic, "Instrument");
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::paint(juce::Graphics& g)
+{
+    panel(g, getLocalBounds());
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::hideAllPanels()
+{
+    for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
+                          &performance, &modulation, &matrix, &sequencer, &playMode, &output })
+        visual->setVisible(false);
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::hideAllKnobs()
+{
+    for (auto& item : knobs)
+        item->setVisible(false);
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::configureLayout(Layout newLayout, juce::String instrumentName)
+{
+    layout = newLayout;
+    hero.setLayout(layout, std::move(instrumentName));
+    hideAllPanels();
+    hideAllKnobs();
+
+    const auto acidGreen = juce::Colour::fromRGB(72, 210, 132);
+    const auto accent = layout == Layout::acid ? acidGreen : vstengine::ui::colours::primary;
+    for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
+                          &performance, &modulation, &matrix, &sequencer, &playMode, &output })
+        visual->setAccent(accent);
+
+    if (layout == Layout::psyBass) {
+        oscillator.setSubtitle("MONO / PHASE");
+        filter.setSubtitle("LOW-PASS");
+        envelope.setSubtitle("TRANSIENT");
+        for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
+                              &performance, &modulation, &matrix })
+            visual->setVisible(true);
+        for (std::size_t i = 0; i < 6; ++i) {
+            knobs[i]->setKnobSize(vox::ui::VoxKnob::Size::Small);
+            knobs[i]->setVisible(true);
+        }
+    } else if (layout == Layout::acid) {
+        oscillator.setSubtitle("303 CORE");
+        filter.setSubtitle("RESONANT");
+        envelope.setSubtitle("DECAY");
+        sequencer.setSubtitle("PATTERN PREVIEW");
+        for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
+                              &performance, &modulation, &sequencer, &playMode, &output })
+            visual->setVisible(true);
+        for (std::size_t i = 0; i < 8; ++i) {
+            knobs[i]->setKnobSize(vox::ui::VoxKnob::Size::Small);
+            knobs[i]->setVisible(true);
+        }
+    } else {
+        for (auto* visual : { &oscillator, &filter, &envelope, &performance, &modulation, &matrix })
+            visual->setVisible(true);
+        for (std::size_t i = 0; i < 6; ++i) {
+            knobs[i]->setKnobSize(vox::ui::VoxKnob::Size::Normal);
+            knobs[i]->setVisible(true);
+        }
+    }
+    resized();
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::placeKnobs(
+    juce::Rectangle<int> panelBounds, std::initializer_list<std::size_t> indices)
+{
+    if (indices.size() == 0)
+        return;
+    auto content = panelBounds.reduced(8);
+    content.removeFromTop(26);
+    const int width = content.getWidth() / static_cast<int>(indices.size());
+    int x = content.getX();
+    for (const auto index : indices) {
+        if (index >= knobs.size())
+            continue;
+        auto cell = juce::Rectangle<int>(x, content.getY(), width, content.getHeight()).reduced(3);
+        knobs[index]->setBounds(cell);
+        x += width;
+    }
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::resized()
+{
+    auto area = getLocalBounds().reduced(10);
+    const int heroHeight = juce::jlimit(66, 92, area.getHeight() / 6);
+    hero.setBounds(area.removeFromTop(heroHeight));
+    area.removeFromTop(8);
+
+    constexpr int gap = 8;
+    if (layout == Layout::psyBass) {
+        const int row1H = juce::jmax(120, static_cast<int>(area.getHeight() * 0.38f));
+        const int row2H = juce::jmax(96, static_cast<int>(area.getHeight() * 0.27f));
+        auto row1 = area.removeFromTop(juce::jmin(row1H, area.getHeight()));
+        area.removeFromTop(gap);
+        auto row2 = area.removeFromTop(juce::jmin(row2H, area.getHeight()));
+        area.removeFromTop(gap);
+        auto row3 = area;
+
+        const int w1 = (row1.getWidth() - gap * 2) / 3;
+        const auto osc = row1.removeFromLeft(w1); row1.removeFromLeft(gap);
+        const auto fil = row1.removeFromLeft(w1); row1.removeFromLeft(gap);
+        const auto env = row1;
+        oscillator.setBounds(osc); filter.setBounds(fil); envelope.setBounds(env);
+        placeKnobs(fil, { 0, 1 });
+        placeKnobs(env, { 2, 3 });
+
+        const int w2 = (row2.getWidth() - gap * 2) / 3;
+        const auto chr = row2.removeFromLeft(w2); row2.removeFromLeft(gap);
+        const auto acc = row2.removeFromLeft(w2); row2.removeFromLeft(gap);
+        const auto perf = row2;
+        character.setBounds(chr); accentPanel.setBounds(acc); performance.setBounds(perf);
+        placeKnobs(chr, { 4 });
+        placeKnobs(acc, { 5 });
+
+        const int modW = static_cast<int>((row3.getWidth() - gap) * 0.42f);
+        const auto mod = row3.removeFromLeft(modW); row3.removeFromLeft(gap);
+        modulation.setBounds(mod); matrix.setBounds(row3);
+    } else if (layout == Layout::acid) {
+        const int topH = juce::jlimit(92, 132, area.getHeight() / 4);
+        auto top = area.removeFromTop(topH);
+        area.removeFromTop(gap);
+        const int panelW = (top.getWidth() - gap * 6) / 7;
+        std::array<juce::Rectangle<int>, 7> topPanels;
+        for (int i = 0; i < 7; ++i) {
+            topPanels[static_cast<std::size_t>(i)] = top.removeFromLeft(i == 6 ? top.getWidth() : panelW);
+            if (i != 6) top.removeFromLeft(gap);
+        }
+        oscillator.setBounds(topPanels[0]); filter.setBounds(topPanels[1]); envelope.setBounds(topPanels[2]);
+        character.setBounds(topPanels[3]); accentPanel.setBounds(topPanels[4]); performance.setBounds(topPanels[5]);
+        output.setBounds(topPanels[6]);
+        placeKnobs(topPanels[0], { 0 });
+        placeKnobs(topPanels[1], { 1, 2 });
+        placeKnobs(topPanels[2], { 3, 4 });
+        placeKnobs(topPanels[3], { 7 });
+        placeKnobs(topPanels[4], { 5 });
+        placeKnobs(topPanels[5], { 6 });
+
+        const int sequencerH = juce::jmax(126, static_cast<int>(area.getHeight() * 0.58f));
+        sequencer.setBounds(area.removeFromTop(juce::jmin(sequencerH, area.getHeight())));
+        area.removeFromTop(gap);
+        auto bottom = area;
+        const int bottomW = (bottom.getWidth() - gap * 2) / 3;
+        const auto mod = bottom.removeFromLeft(bottomW); bottom.removeFromLeft(gap);
+        const auto perf = bottom.removeFromLeft(bottomW); bottom.removeFromLeft(gap);
+        modulation.setBounds(mod); performance.setBounds(perf); playMode.setBounds(bottom);
+    } else {
+        const int rowH = (area.getHeight() - gap) / 2;
+        auto top = area.removeFromTop(rowH); area.removeFromTop(gap); auto bottom = area;
+        const int colW = (top.getWidth() - gap * 2) / 3;
+        const auto a = top.removeFromLeft(colW); top.removeFromLeft(gap);
+        const auto b = top.removeFromLeft(colW); top.removeFromLeft(gap);
+        const auto c = top;
+        oscillator.setBounds(a); filter.setBounds(b); envelope.setBounds(c);
+        placeKnobs(a, { 0 }); placeKnobs(b, { 1, 2 }); placeKnobs(c, { 3 });
+        const auto d = bottom.removeFromLeft(colW); bottom.removeFromLeft(gap);
+        const auto e = bottom.removeFromLeft(colW); bottom.removeFromLeft(gap);
+        performance.setBounds(d); modulation.setBounds(e); matrix.setBounds(bottom);
+        placeKnobs(d, { 4 }); placeKnobs(e, { 5 });
+    }
+}
+
+void VstEngineAudioProcessorEditor::SoundPage::bind(std::size_t slot)
+{
+    selected = slot;
+    attachments.clear();
+    const auto* descriptor = processor.instrumentRack().descriptor(slot);
+    Layout nextLayout = Layout::generic;
+    juce::String instrumentName = "Empty slot";
+    if (descriptor != nullptr) {
+        instrumentName = descriptor->name;
+        if (descriptor->id == "com.ultimavox.psy-bass") nextLayout = Layout::psyBass;
+        else if (descriptor->id == "com.ultimavox.acid") nextLayout = Layout::acid;
+    }
+
+    for (std::size_t macro = 0; macro < knobs.size(); ++macro) {
+        juce::String label(vstengine::instrument::hostparams::macroLabels[macro].data());
+        if (descriptor != nullptr)
+            for (const auto& parameter : descriptor->parameters)
+                if (parameter.preferredMacro == static_cast<std::int8_t>(macro)) {
+                    label = parameter.name;
+                    break;
+                }
+        knobs[macro]->setLabel(label);
+        knobs[macro]->setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
+        attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro),
+            knobs[macro]->getSlider()));
+    }
+    configureLayout(nextLayout, instrumentName);
+}
+
 VstEngineAudioProcessorEditor::MacroPage::MacroPage(
     VstEngineAudioProcessor& p, juce::String heading, std::size_t visibleCount)
     : processor(p), count(juce::jlimit<std::size_t>(1, knobs.size(), visibleCount))
 {
     title.setText(heading, juce::dontSendNotification);
-    description.setText(heading == "SOUND"
-        ? "Primary performance controls"
-        : "Stable host automation macros and instrument mappings", juce::dontSendNotification);
+    description.setText("Stable host automation macros and instrument mappings", juce::dontSendNotification);
     vstengine::ui::styleLabel(title, 15.0f, juce::Justification::centredLeft,
                               vstengine::ui::colours::primary);
     vstengine::ui::styleLabel(description, 12.0f, juce::Justification::centredLeft,
                               vstengine::ui::colours::mutedText);
     addAndMakeVisible(title); addAndMakeVisible(description);
+
     for (std::size_t i = 0; i < knobs.size(); ++i) {
-        knob(knobs[i]);
-        vstengine::ui::styleLabel(labels[i], 11.0f, juce::Justification::centred,
-                                  vstengine::ui::colours::text);
-        addChildComponent(knobs[i]); addChildComponent(labels[i]);
-        knobs[i].setVisible(i < count); labels[i].setVisible(i < count);
+        cards[i] = std::make_unique<vox::ui::VoxPanel>(
+            "MACRO " + juce::String(static_cast<int>(i + 1)).paddedLeft('0', 2));
+        knobs[i] = std::make_unique<vox::ui::VoxKnob>(
+            "Macro " + juce::String(static_cast<int>(i + 1)), vox::ui::VoxKnob::Size::Normal);
+        addChildComponent(*cards[i]);
+        addChildComponent(*knobs[i]);
+        cards[i]->setVisible(i < count);
+        knobs[i]->setVisible(i < count);
     }
 }
 
@@ -224,17 +664,26 @@ void VstEngineAudioProcessorEditor::MacroPage::paint(juce::Graphics& g) { panel(
 
 void VstEngineAudioProcessorEditor::MacroPage::resized()
 {
-    auto area = getLocalBounds().reduced(18);
-    title.setBounds(area.removeFromTop(26)); description.setBounds(area.removeFromTop(25));
-    area.removeFromTop(12);
-    const int columns = count <= 6 ? static_cast<int>(count) : 4;
+    auto area = getLocalBounds().reduced(16);
+    title.setBounds(area.removeFromTop(24));
+    description.setBounds(area.removeFromTop(22));
+    area.removeFromTop(10);
+
+    const int columns = 4;
     const int rows = static_cast<int>((count + columns - 1) / columns);
-    const int cellWidth = area.getWidth() / columns;
-    const int cellHeight = area.getHeight() / rows;
+    constexpr int gap = 8;
+    const int cellWidth = (area.getWidth() - gap * (columns - 1)) / columns;
+    const int cellHeight = rows > 0 ? (area.getHeight() - gap * (rows - 1)) / rows : area.getHeight();
     for (std::size_t i = 0; i < count; ++i) {
-        auto cell = juce::Rectangle<int>(area.getX() + static_cast<int>(i % columns) * cellWidth,
-            area.getY() + static_cast<int>(i / columns) * cellHeight, cellWidth, cellHeight).reduced(5);
-        labels[i].setBounds(cell.removeFromTop(24)); knobs[i].setBounds(cell);
+        const int col = static_cast<int>(i % columns);
+        const int row = static_cast<int>(i / columns);
+        auto cell = juce::Rectangle<int>(area.getX() + col * (cellWidth + gap),
+                                         area.getY() + row * (cellHeight + gap),
+                                         cellWidth, cellHeight);
+        cards[i]->setBounds(cell);
+        auto knobArea = cell.reduced(10);
+        knobArea.removeFromTop(24);
+        knobs[i]->setBounds(knobArea);
     }
 }
 
@@ -250,10 +699,13 @@ void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
                     label = parameter.name;
                     break;
                 }
-        labels[macro].setText(label, juce::dontSendNotification);
-        knobs[macro].setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
+        cards[macro]->setTitle("M" + juce::String(static_cast<int>(macro + 1)).paddedLeft('0', 2)
+                               + "  /  " + label.toUpperCase());
+        knobs[macro]->setLabel(label);
+        knobs[macro]->setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
         attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-            processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro), knobs[macro]));
+            processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro),
+            knobs[macro]->getSlider()));
     }
 }
 
@@ -461,7 +913,7 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProce
           [this] { cycleGlobalPreset(-1); }, [this] { cycleGlobalPreset(1); },
           [this] { saveGlobalPreset(); }, [&p] { p.requestPanic(); },
           [this] { showPage(Page::advanced); }, [this](int index) { loadGlobalPreset(index); } }),
-      rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6), patternPage(p),
+      rackRail(p), instrumentHeader(p), soundPage(p), patternPage(p),
       routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8), advancedPage(p),
       pages { &soundPage, &patternPage, &routingPage, &zonesPage, &macrosPage, &advancedPage },
       keyboard(p.keyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
