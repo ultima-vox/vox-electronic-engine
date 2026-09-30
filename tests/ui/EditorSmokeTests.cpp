@@ -3,6 +3,51 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <string_view>
+
+namespace {
+using Page = vstengine::ui::MainNavigation::Page;
+
+bool writeSnapshot(VstEngineAudioProcessorEditor& editor, const juce::File& target)
+{
+    if (auto parent = target.getParentDirectory(); !parent.exists() && !parent.createDirectory())
+        return false;
+
+    const auto image = editor.createComponentSnapshot(editor.getLocalBounds());
+    juce::FileOutputStream output { target };
+    juce::PNGImageFormat format;
+    if (!output.openedOk())
+        return false;
+    output.setPosition(0);
+    output.truncate();
+    return format.writeImageToStream(image, output);
+}
+
+bool captureVisualGateSnapshot(const juce::File& directory,
+                               const juce::String& fileName,
+                               std::string_view instrumentId,
+                               Page page,
+                               juce::Point<int> size)
+{
+    VstEngineAudioProcessor processor;
+    juce::String diagnostic;
+    if (!processor.loadSlotInstrument(0, instrumentId, diagnostic)) {
+        std::cerr << "Unable to load visual-gate instrument " << instrumentId
+                  << ": " << diagnostic << "\n";
+        return false;
+    }
+    processor.selectSlot(0);
+
+    std::unique_ptr<juce::AudioProcessorEditor> base(processor.createEditor());
+    auto* editor = dynamic_cast<VstEngineAudioProcessorEditor*>(base.get());
+    if (editor == nullptr)
+        return false;
+
+    editor->setSize(size.x, size.y);
+    editor->showPageForTesting(page);
+    return writeSnapshot(*editor, directory.getChildFile(fileName));
+}
+} // namespace
 
 int main()
 {
@@ -13,7 +58,6 @@ int main()
     if (editor == nullptr)
         return EXIT_FAILURE;
 
-    using Page = vstengine::ui::MainNavigation::Page;
     for (const auto page : { Page::sound, Page::pattern, Page::routing,
                              Page::zones, Page::macros, Page::advanced }) {
         editor->showPageForTesting(page);
@@ -39,21 +83,46 @@ int main()
             || workspace.intersects(keyboard))
             return EXIT_FAILURE;
     }
+
     const auto snapshotPath = juce::SystemStats::getEnvironmentVariable(
         "VOX_UI_SNAPSHOT", {});
     if (snapshotPath.isNotEmpty()) {
         editor->setSize(1240, 800);
         editor->showPageForTesting(Page::sound);
-        const auto image = editor->createComponentSnapshot(editor->getLocalBounds());
-        juce::FileOutputStream output { juce::File(snapshotPath) };
-        juce::PNGImageFormat format;
-        if (!output.openedOk())
-            return EXIT_FAILURE;
-        output.setPosition(0);
-        output.truncate();
-        if (!format.writeImageToStream(image, output))
+        if (!writeSnapshot(*editor, juce::File(snapshotPath)))
             return EXIT_FAILURE;
     }
+
+    const auto snapshotDirectory = juce::SystemStats::getEnvironmentVariable(
+        "VOX_UI_SNAPSHOT_DIR", {});
+    if (snapshotDirectory.isNotEmpty()) {
+        const juce::File directory(snapshotDirectory);
+        if (!directory.exists() && !directory.createDirectory())
+            return EXIT_FAILURE;
+
+        struct Capture {
+            const char* fileName;
+            std::string_view instrumentId;
+            Page page;
+            juce::Point<int> size;
+        };
+
+        constexpr std::string_view psyBassId = "com.ultimavox.psy-bass";
+        constexpr std::string_view acidId = "com.ultimavox.acid";
+        const Capture captures[] {
+            { "psy-bass-sound-1180x760.png", psyBassId, Page::sound, { 1180, 760 } },
+            { "psy-bass-sound-1500x920.png", psyBassId, Page::sound, { 1500, 920 } },
+            { "acid-sound-1500x920.png", acidId, Page::sound, { 1500, 920 } },
+            { "psy-bass-macros-1500x920.png", psyBassId, Page::macros, { 1500, 920 } }
+        };
+
+        for (const auto& capture : captures)
+            if (!captureVisualGateSnapshot(directory, capture.fileName,
+                                           capture.instrumentId, capture.page,
+                                           capture.size))
+                return EXIT_FAILURE;
+    }
+
     std::cout << "Editor smoke test passed\n";
     return EXIT_SUCCESS;
 }
