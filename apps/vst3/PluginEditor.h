@@ -6,8 +6,8 @@
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
 #include "ui/ZoneRangeEditor.h"
-#include "VoxButton.h"
-#include "VoxComboBox.h"
+#include "vox-ui/components/VoxButton.h"
+#include "vox-ui/components/VoxComboBox.h"
 
 class VstEngineAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer {
