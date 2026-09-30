@@ -8,6 +8,8 @@
 #include "ui/ZoneRangeEditor.h"
 #include "VoxButton.h"
 #include "VoxComboBox.h"
+#include "VoxKnob.h"
+#include "VoxPanel.h"
 
 class VstEngineAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer {
@@ -74,15 +76,14 @@ private:
         std::size_t selected {};
     };
 
-    class MacroPage final : public juce::Component {
+    class MacroPage final : public vox::ui::VoxPanel {
     public:
         MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount);
-        void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
+        void resized() override; void bind(std::size_t);
     private:
         VstEngineAudioProcessor& processor;
-        juce::Label title, description;
-        std::array<juce::Slider, vstengine::instrument::macrosPerSlot> knobs;
-        std::array<juce::Label, vstengine::instrument::macrosPerSlot> labels;
+        juce::Label description;
+        std::vector<std::unique_ptr<vox::ui::VoxKnob>> knobs;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
         std::size_t count;
     };
