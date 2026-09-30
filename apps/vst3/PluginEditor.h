@@ -8,6 +8,8 @@
 #include "ui/ZoneRangeEditor.h"
 #include "vox-ui/components/VoxButton.h"
 #include "vox-ui/components/VoxComboBox.h"
+#include "vox-ui/components/VoxKnob.h"
+#include "vox-ui/components/VoxPanel.h"
 
 class VstEngineAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer {
@@ -74,6 +76,67 @@ private:
         std::size_t selected {};
     };
 
+    class SoundPage final : public juce::Component {
+    public:
+        explicit SoundPage(VstEngineAudioProcessor&);
+        void paint(juce::Graphics&) override;
+        void resized() override;
+        void bind(std::size_t);
+
+    private:
+        enum class Layout { generic, psyBass, acid };
+        enum class VisualRole {
+            oscillator, filter, envelope, character, accent, performance,
+            modulation, matrix, sequencer, playMode, output
+        };
+
+        class HeroBanner final : public juce::Component {
+        public:
+            void setLayout(Layout newLayout, juce::String instrumentName);
+            void paint(juce::Graphics&) override;
+        private:
+            Layout layout { Layout::generic };
+            juce::String name { "INSTRUMENT" };
+        };
+
+        class VisualPanel final : public juce::Component {
+        public:
+            VisualPanel(juce::String titleText, VisualRole visualRole);
+            void setAccent(juce::Colour newAccent);
+            void setSubtitle(juce::String text);
+            void paint(juce::Graphics&) override;
+        private:
+            juce::String title;
+            juce::String subtitle;
+            VisualRole role;
+            juce::Colour accent;
+        };
+
+        void configureLayout(Layout newLayout, juce::String instrumentName);
+        void hideAllPanels();
+        void hideAllKnobs();
+        void placeKnobs(juce::Rectangle<int> panelBounds,
+                        std::initializer_list<std::size_t> indices);
+
+        VstEngineAudioProcessor& processor;
+        HeroBanner hero;
+        VisualPanel oscillator { "OSCILLATOR", VisualRole::oscillator };
+        VisualPanel filter { "FILTER", VisualRole::filter };
+        VisualPanel envelope { "AMP ENVELOPE", VisualRole::envelope };
+        VisualPanel character { "DRIVE / CHARACTER", VisualRole::character };
+        VisualPanel accentPanel { "ACCENT", VisualRole::accent };
+        VisualPanel performance { "PERFORMANCE", VisualRole::performance };
+        VisualPanel modulation { "MODULATION", VisualRole::modulation };
+        VisualPanel matrix { "MOD MATRIX", VisualRole::matrix };
+        VisualPanel sequencer { "STEP SEQUENCER", VisualRole::sequencer };
+        VisualPanel playMode { "PLAY MODE", VisualRole::playMode };
+        VisualPanel output { "OUTPUT", VisualRole::output };
+        std::array<std::unique_ptr<vox::ui::VoxKnob>, vstengine::instrument::macrosPerSlot> knobs;
+        std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
+        Layout layout { Layout::generic };
+        std::size_t selected {};
+    };
+
     class MacroPage final : public juce::Component {
     public:
         MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount);
@@ -81,8 +144,8 @@ private:
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, description;
-        std::array<juce::Slider, vstengine::instrument::macrosPerSlot> knobs;
-        std::array<juce::Label, vstengine::instrument::macrosPerSlot> labels;
+        std::array<std::unique_ptr<vox::ui::VoxKnob>, vstengine::instrument::macrosPerSlot> knobs;
+        std::array<std::unique_ptr<vox::ui::VoxPanel>, vstengine::instrument::macrosPerSlot> cards;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
         std::size_t count;
     };
@@ -159,7 +222,7 @@ private:
     RackRail rackRail;
     InstrumentHeader instrumentHeader;
     vstengine::ui::MainNavigation navigation;
-    MacroPage soundPage;
+    SoundPage soundPage;
     PatternPage patternPage;
     RoutingPage routingPage;
     ZonesPage zonesPage;
