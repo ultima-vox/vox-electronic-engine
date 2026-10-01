@@ -469,7 +469,7 @@ void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::paint(juce::Graphics
             static constexpr std::array<const char*, 4> sources { "MOD WHEEL", "AFTERTOUCH", "LFO 1", "ENV 2" };
             static constexpr std::array<const char*, 4> destinations { "FILTER CUTOFF", "DRIVE AMOUNT", "PITCH", "RESONANCE" };
             for (int row = 0; row < 4; ++row) {
-                const auto rr = juce::Rectangle<int>(static_cast<int>(table.getX()),
+                auto rr = juce::Rectangle<int>(static_cast<int>(table.getX()),
                                                      static_cast<int>(table.getY()) + row * rowH,
                                                      static_cast<int>(table.getWidth()), rowH);
                 g.setColour(vstengine::ui::colours::borderSubtle.withAlpha(0.55f));
