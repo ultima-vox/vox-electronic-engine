@@ -76,8 +76,14 @@ void VoxKnob::resized()
     label.setBounds (area.removeFromTop (16));
     area.removeFromBottom (18);
 
-    const auto diameter = juce::jmin (getKnobDiameter(),
-                                      juce::jmin (area.getWidth(), area.getHeight()));
+    const auto nominal = getKnobDiameter();
+    const auto responsiveCap = knobSize == Size::Small
+        ? tokens::size::knobNormal
+        : tokens::size::knobLarge;
+    const auto available = juce::jmin (area.getWidth(), area.getHeight());
+    const auto desired = juce::jlimit (nominal, responsiveCap,
+                                       static_cast<int> (static_cast<float> (available) * 0.64f));
+    const auto diameter = juce::jmin (desired, available);
     slider.setBounds (area.withSizeKeepingCentre (diameter, diameter));
 }
 
@@ -106,7 +112,6 @@ void VoxKnob::paint (juce::Graphics& g)
     const auto angle = startAngle + proportion * angleRange;
     const auto enabled = slider.isEnabled() && isEnabled();
 
-    // Restrained scale marks give the control a calibrated hardware feel without visual noise.
     g.setColour (tokens::colour::borderSubtle.withAlpha (0.72f));
     for (int tick = 0; tick <= 10; ++tick)
     {
