@@ -73,9 +73,27 @@ int VoxKnob::getKnobDiameter() const noexcept
 void VoxKnob::resized()
 {
     auto area = getLocalBounds();
-    label.setBounds (area.removeFromTop (16));
     area.removeFromBottom (18);
 
+    // Small knobs placed into tall instrument panels are control strips beneath the
+    // visual display, matching the accepted reference renders. Normal/large knobs
+    // (notably the dedicated MACROS page) retain the centred composition.
+    if (knobSize == Size::Small && area.getHeight() >= 86)
+    {
+        const auto stripHeight = juce::jmin (76, area.getHeight());
+        auto strip = area.removeFromBottom (stripHeight);
+        label.setBounds (strip.removeFromTop (16));
+
+        const auto nominal = getKnobDiameter();
+        const auto available = juce::jmin (strip.getWidth(), strip.getHeight());
+        const auto desired = juce::jlimit (nominal, tokens::size::knobNormal,
+                                           static_cast<int> (static_cast<float> (available) * 0.78f));
+        const auto diameter = juce::jmin (desired, available);
+        slider.setBounds (strip.withSizeKeepingCentre (diameter, diameter));
+        return;
+    }
+
+    label.setBounds (area.removeFromTop (16));
     const auto nominal = getKnobDiameter();
     const auto responsiveCap = knobSize == Size::Small
         ? tokens::size::knobNormal
