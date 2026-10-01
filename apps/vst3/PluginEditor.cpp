@@ -214,58 +214,140 @@ void VstEngineAudioProcessorEditor::SoundPage::HeroBanner::paint(juce::Graphics&
     const auto acidGreen = juce::Colour::fromRGB(72, 210, 132);
     const auto accent = layout == Layout::acid ? acidGreen : cyan;
 
-    juce::ColourGradient gradient(vstengine::ui::colours::panelRaised,
-                                  bounds.getTopLeft(),
-                                  vstengine::ui::colours::panel,
-                                  bounds.getBottomRight(), false);
-    gradient.addColour(0.72, accent.withAlpha(0.08f));
-    g.setGradientFill(gradient);
+    juce::ColourGradient bg(vstengine::ui::colours::panelRaised.brighter(0.035f),
+                            bounds.getTopLeft(), vstengine::ui::colours::background,
+                            bounds.getBottomRight(), false);
+    bg.addColour(0.50, vstengine::ui::colours::panel);
+    bg.addColour(0.78, accent.withAlpha(0.16f));
+    g.setGradientFill(bg);
     g.fillRoundedRectangle(bounds.reduced(0.5f), 6.0f);
-    g.setColour(vstengine::ui::colours::border);
-    g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
 
-    auto text = getLocalBounds().reduced(18, 10);
-    auto right = text.removeFromRight(280);
+    // Reference-style instrument artwork: layered horizon for Psy Bass and a
+    // perspective 303 control surface for Acid. Gate A only; no DSP dependency.
+    auto art = bounds.withTrimmedLeft(bounds.getWidth() * 0.26f).reduced(4.0f, 4.0f);
+    g.saveState();
+    g.reduceClipRegion(art.toNearestInt());
+
+    if (layout == Layout::acid) {
+        const auto board = art.reduced(art.getWidth() * 0.05f, art.getHeight() * 0.12f);
+        juce::Path deck;
+        deck.startNewSubPath(board.getX(), board.getBottom());
+        deck.lineTo(board.getX() + board.getWidth() * 0.18f, board.getY());
+        deck.lineTo(board.getRight(), board.getY() + board.getHeight() * 0.12f);
+        deck.lineTo(board.getRight() - board.getWidth() * 0.08f, board.getBottom());
+        deck.closeSubPath();
+        juce::ColourGradient deckGradient(juce::Colour::fromRGB(18, 38, 39), board.getTopLeft(),
+                                          juce::Colour::fromRGB(4, 16, 22), board.getBottomRight(), false);
+        deckGradient.addColour(0.65, accent.withAlpha(0.12f));
+        g.setGradientFill(deckGradient);
+        g.fillPath(deck);
+        g.setColour(accent.withAlpha(0.28f));
+        g.strokePath(deck, juce::PathStrokeType(1.2f));
+
+        for (int i = 0; i < 5; ++i) {
+            const float t = static_cast<float>(i) / 4.0f;
+            const auto cx = board.getX() + board.getWidth() * (0.32f + 0.11f * i);
+            const auto cy = board.getY() + board.getHeight() * (0.43f + 0.08f * t);
+            const auto r = board.getHeight() * 0.11f;
+            g.setColour(vstengine::ui::colours::background.withAlpha(0.92f));
+            g.fillEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
+            g.setColour(accent.withAlpha(0.55f));
+            g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 1.5f);
+            g.drawLine(cx, cy, cx + std::sin(t * 2.6f) * r * 0.70f,
+                       cy - std::cos(t * 2.6f) * r * 0.70f, 1.5f);
+        }
+
+        g.setColour(accent.withAlpha(0.13f));
+        for (int line = 0; line < 8; ++line) {
+            const auto y = board.getY() + board.getHeight() * (0.66f + line * 0.035f);
+            g.drawLine(board.getX() + board.getWidth() * 0.22f, y,
+                       board.getRight() - board.getWidth() * 0.10f, y, 1.0f);
+        }
+        g.setColour(accent.withAlpha(0.62f));
+        g.setFont(juce::Font(24.0f, juce::Font::bold));
+        g.drawText("303", board.withTrimmedLeft(board.getWidth() * 0.72f)
+                                .withTrimmedBottom(board.getHeight() * 0.54f),
+                   juce::Justification::centred, false);
+    } else {
+        const auto horizon = art.getBottom() - art.getHeight() * 0.20f;
+        for (int layer = 0; layer < 3; ++layer) {
+            juce::Path mountains;
+            const float base = horizon - layer * art.getHeight() * 0.06f;
+            mountains.startNewSubPath(art.getX(), art.getBottom());
+            mountains.lineTo(art.getX(), base);
+            constexpr int peaks = 13;
+            for (int i = 0; i <= peaks; ++i) {
+                const float t = static_cast<float>(i) / peaks;
+                const float x = art.getX() + t * art.getWidth();
+                const float amp = art.getHeight() * (0.10f + 0.035f * layer);
+                const float y = base - std::abs(std::sin(t * 17.0f + layer * 1.4f)) * amp
+                                   - std::abs(std::sin(t * 31.0f + 0.7f)) * amp * 0.32f;
+                mountains.lineTo(x, y);
+            }
+            mountains.lineTo(art.getRight(), art.getBottom());
+            mountains.closeSubPath();
+            g.setColour(juce::Colour::fromRGB(4 + layer * 3, 18 + layer * 7, 30 + layer * 11)
+                            .withAlpha(0.94f - layer * 0.12f));
+            g.fillPath(mountains);
+            g.setColour(accent.withAlpha(0.08f + layer * 0.05f));
+            g.strokePath(mountains, juce::PathStrokeType(1.0f));
+        }
+
+        const auto moonR = art.getHeight() * 0.42f;
+        const juce::Point<float> moon(art.getX() + art.getWidth() * 0.58f,
+                                      art.getY() + art.getHeight() * 0.48f);
+        g.setColour(accent.withAlpha(0.05f));
+        g.fillEllipse(moon.x - moonR, moon.y - moonR, moonR * 2.0f, moonR * 2.0f);
+        g.setColour(accent.withAlpha(0.42f));
+        g.drawEllipse(moon.x - moonR, moon.y - moonR, moonR * 2.0f, moonR * 2.0f, 1.6f);
+
+        g.setColour(accent.withAlpha(0.22f));
+        for (int i = 0; i < 11; ++i) {
+            const float x = art.getX() + art.getWidth() * (0.10f + 0.078f * i);
+            const float h = art.getHeight() * (0.05f + 0.14f * std::abs(std::sin(i * 1.7f)));
+            g.fillRoundedRectangle(x, art.getBottom() - h - 8.0f, 2.0f, h, 1.0f);
+        }
+    }
+
+    for (int i = 0; i < 24; ++i) {
+        const float t = static_cast<float>(i) / 23.0f;
+        const float x = art.getX() + art.getWidth() * std::fmod(t * 1.73f + 0.11f, 1.0f);
+        const float y = art.getY() + art.getHeight() * std::fmod(t * 2.37f + 0.07f, 0.72f);
+        g.setColour(accent.withAlpha(0.11f + 0.18f * std::fmod(t * 5.0f, 1.0f)));
+        g.fillEllipse(x, y, 1.4f, 1.4f);
+    }
+    g.restoreState();
+
+    auto text = getLocalBounds().reduced(22, 12);
+    auto right = text.removeFromRight(210);
     g.setColour(vstengine::ui::colours::text);
-    g.setFont(juce::Font(20.0f, juce::Font::bold));
-    g.drawText(name.toUpperCase(), text.removeFromTop(28), juce::Justification::centredLeft);
+    g.setFont(juce::Font(layout == Layout::acid ? 25.0f : 22.0f, juce::Font::bold));
+    g.drawText(name.toUpperCase(), text.removeFromTop(30), juce::Justification::centredLeft);
 
     const juce::String tagline = layout == Layout::acid
-        ? "303 motion with accent and slide — pattern-first performance"
+        ? "CLASSIC ATTITUDE  /  MODERN POSSIBILITIES"
         : layout == Layout::psyBass
-            ? "Tight low-end architecture — transient-shaped rolling bass"
-            : "Descriptor-driven electronic instrument workspace";
-    g.setColour(vstengine::ui::colours::mutedText);
-    g.setFont(12.0f);
-    g.drawText(tagline, text.removeFromTop(24), juce::Justification::centredLeft);
-
-    const juce::String keywords = layout == Layout::acid
-        ? "SQUELCH  /  SLIDE  /  DRIVE"
-        : layout == Layout::psyBass
-            ? "MONO  /  PUNCH  /  CONTROL"
+            ? "DEEP FREQUENCIES  /  HIGHER POSSIBILITIES"
             : "SOUND  /  MOTION  /  PERFORMANCE";
     g.setColour(accent.withAlpha(0.92f));
-    g.setFont(juce::Font(11.0f, juce::Font::bold));
-    g.drawText(keywords, right.removeFromTop(20), juce::Justification::centredRight);
-    g.setColour(vstengine::ui::colours::mutedText);
     g.setFont(10.0f);
-    g.drawText(layout == Layout::acid ? "ACID ENGINE" : layout == Layout::psyBass ? "PSY BASS ENGINE" : "VOX ENGINE",
-               right.removeFromTop(18), juce::Justification::centredRight);
+    g.drawText(tagline, text.removeFromTop(20), juce::Justification::centredLeft);
 
-    juce::Path wave;
-    const auto waveArea = bounds.withTrimmedLeft(bounds.getWidth() * 0.48f)
-                                .withTrimmedRight(300.0f)
-                                .reduced(4.0f, 16.0f);
-    const float mid = waveArea.getCentreY();
-    for (int i = 0; i <= 48; ++i) {
-        const float t = static_cast<float>(i) / 48.0f;
-        const float x = waveArea.getX() + t * waveArea.getWidth();
-        const float y = mid + std::sin(t * juce::MathConstants<float>::twoPi * (layout == Layout::acid ? 2.5f : 1.7f))
-                                * waveArea.getHeight() * (0.20f + 0.12f * std::sin(t * 5.0f));
-        if (i == 0) wave.startNewSubPath(x, y); else wave.lineTo(x, y);
-    }
-    g.setColour(accent.withAlpha(0.24f));
-    g.strokePath(wave, juce::PathStrokeType(2.0f));
+    const juce::String keywords = layout == Layout::acid
+        ? "SQUELCH\nSEQUENCE\nDISTORT\nTRANSCEND"
+        : layout == Layout::psyBass
+            ? "DEEP\nEVOLVING\nHYPNOTIC"
+            : "CREATE\nEVOLVE\nTRANSCEND";
+    g.setColour(accent.withAlpha(0.82f));
+    g.setFont(9.0f);
+    g.drawFittedText(keywords, right.removeFromTop(54), juce::Justification::topRight, 4);
+    g.setColour(vstengine::ui::colours::mutedText);
+    g.setFont(8.5f);
+    g.drawFittedText(layout == Layout::acid ? "AN ICON\nREIMAGINED" : "MODERN ELECTRONIC\nINSTRUMENT",
+                     right.removeFromTop(32), juce::Justification::topRight, 2);
+
+    g.setColour(vstengine::ui::colours::border);
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
 }
 
 VstEngineAudioProcessorEditor::SoundPage::VisualPanel::VisualPanel(
@@ -289,19 +371,25 @@ void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::setSubtitle(juce::St
 void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat().reduced(0.5f);
-    g.setColour(vstengine::ui::colours::panelRaised);
+    juce::ColourGradient surface(vstengine::ui::colours::panelRaised.brighter(0.02f),
+                                 bounds.getTopLeft(), vstengine::ui::colours::panel,
+                                 bounds.getBottomLeft(), false);
+    g.setGradientFill(surface);
     g.fillRoundedRectangle(bounds, 6.0f);
     g.setColour(vstengine::ui::colours::border);
     g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
 
     auto area = getLocalBounds().reduced(11, 9);
     auto header = area.removeFromTop(18);
+    g.setColour(accent.withAlpha(0.88f));
+    g.drawEllipse(static_cast<float>(header.getX()), static_cast<float>(header.getCentreY() - 3), 6.0f, 6.0f, 1.2f);
+    auto titleArea = header.withTrimmedLeft(11);
     g.setColour(vstengine::ui::colours::text);
-    g.setFont(juce::Font(11.0f, juce::Font::bold));
-    g.drawText(title, header, juce::Justification::centredLeft);
+    g.setFont(juce::Font(10.5f, juce::Font::bold));
+    g.drawText(title, titleArea, juce::Justification::centredLeft);
     if (subtitle.isNotEmpty()) {
         g.setColour(vstengine::ui::colours::mutedText);
-        g.setFont(9.0f);
+        g.setFont(8.0f);
         g.drawText(subtitle, header, juce::Justification::centredRight);
     }
 
@@ -309,72 +397,116 @@ void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::paint(juce::Graphics
     if (graph.getHeight() < 18.0f || graph.getWidth() < 30.0f)
         return;
 
-    g.setColour(vstengine::ui::colours::background.withAlpha(0.72f));
+    g.setColour(vstengine::ui::colours::background.withAlpha(0.82f));
     g.fillRoundedRectangle(graph, 4.0f);
     g.setColour(vstengine::ui::colours::border.withAlpha(0.55f));
     g.drawRoundedRectangle(graph, 4.0f, 1.0f);
 
     auto plot = graph.reduced(8.0f, 7.0f);
+    g.setColour(vstengine::ui::colours::borderSubtle.withAlpha(0.36f));
+    for (int c = 1; c < 5; ++c) {
+        const float x = plot.getX() + plot.getWidth() * static_cast<float>(c) / 5.0f;
+        g.drawVerticalLine(static_cast<int>(x), plot.getY(), plot.getBottom());
+    }
+    for (int r = 1; r < 4; ++r) {
+        const float y = plot.getY() + plot.getHeight() * static_cast<float>(r) / 4.0f;
+        g.drawHorizontalLine(static_cast<int>(y), plot.getX(), plot.getRight());
+    }
+
     juce::Path p;
     switch (role) {
         case VisualRole::oscillator: {
+            const auto waveArea = plot.withTrimmedBottom(plot.getHeight() * 0.28f);
+            for (int i = 0; i <= 56; ++i) {
+                const float t = static_cast<float>(i) / 56.0f;
+                const float x = waveArea.getX() + t * waveArea.getWidth();
+                const float y = waveArea.getCentreY()
+                    + std::sin(t * juce::MathConstants<float>::twoPi * 2.35f)
+                          * waveArea.getHeight() * (0.20f + 0.10f * std::sin(t * 9.0f));
+                if (i == 0) p.startNewSubPath(x, y); else p.lineTo(x, y);
+            }
+            break;
+        }
+        case VisualRole::filter: {
+            const auto graphArea = plot.withTrimmedBottom(plot.getHeight() * 0.28f);
+            p.startNewSubPath(graphArea.getX(), graphArea.getBottom() - graphArea.getHeight() * 0.14f);
+            p.cubicTo(graphArea.getX() + graphArea.getWidth() * 0.42f,
+                      graphArea.getBottom() - graphArea.getHeight() * 0.12f,
+                      graphArea.getX() + graphArea.getWidth() * 0.54f,
+                      graphArea.getY() + graphArea.getHeight() * 0.12f,
+                      graphArea.getRight(), graphArea.getY() + graphArea.getHeight() * 0.38f);
+            break;
+        }
+        case VisualRole::envelope: {
+            const auto graphArea = plot.withTrimmedBottom(plot.getHeight() * 0.28f);
+            p.startNewSubPath(graphArea.getX(), graphArea.getBottom());
+            p.lineTo(graphArea.getX() + graphArea.getWidth() * 0.10f,
+                     graphArea.getY() + graphArea.getHeight() * 0.08f);
+            p.cubicTo(graphArea.getX() + graphArea.getWidth() * 0.25f,
+                      graphArea.getY() + graphArea.getHeight() * 0.25f,
+                      graphArea.getX() + graphArea.getWidth() * 0.54f,
+                      graphArea.getY() + graphArea.getHeight() * 0.42f,
+                      graphArea.getX() + graphArea.getWidth() * 0.70f,
+                      graphArea.getY() + graphArea.getHeight() * 0.45f);
+            p.lineTo(graphArea.getRight(), graphArea.getBottom());
+            break;
+        }
+        case VisualRole::modulation: {
             for (int i = 0; i <= 40; ++i) {
                 const float t = static_cast<float>(i) / 40.0f;
                 const float x = plot.getX() + t * plot.getWidth();
-                const float y = plot.getCentreY() + std::sin(t * juce::MathConstants<float>::twoPi * 1.6f)
-                                                  * plot.getHeight() * 0.28f;
+                const float y = plot.getCentreY() + std::sin(t * juce::MathConstants<float>::twoPi * 2.0f)
+                                                  * plot.getHeight() * (0.16f + t * 0.09f);
                 if (i == 0) p.startNewSubPath(x, y); else p.lineTo(x, y);
             }
             break;
         }
-        case VisualRole::filter:
-            p.startNewSubPath(plot.getX(), plot.getBottom() - plot.getHeight() * 0.12f);
-            p.cubicTo(plot.getX() + plot.getWidth() * 0.45f, plot.getBottom() - plot.getHeight() * 0.14f,
-                      plot.getX() + plot.getWidth() * 0.58f, plot.getY() + plot.getHeight() * 0.08f,
-                      plot.getRight(), plot.getY() + plot.getHeight() * 0.34f);
-            break;
-        case VisualRole::envelope:
-            p.startNewSubPath(plot.getX(), plot.getBottom());
-            p.lineTo(plot.getX() + plot.getWidth() * 0.12f, plot.getY() + plot.getHeight() * 0.10f);
-            p.lineTo(plot.getX() + plot.getWidth() * 0.36f, plot.getY() + plot.getHeight() * 0.42f);
-            p.lineTo(plot.getX() + plot.getWidth() * 0.76f, plot.getY() + plot.getHeight() * 0.42f);
-            p.lineTo(plot.getRight(), plot.getBottom());
-            break;
-        case VisualRole::modulation:
-            for (int i = 0; i <= 32; ++i) {
-                const float t = static_cast<float>(i) / 32.0f;
-                const float x = plot.getX() + t * plot.getWidth();
-                const float y = plot.getCentreY() + std::sin(t * juce::MathConstants<float>::twoPi * 2.0f)
-                                                  * plot.getHeight() * 0.24f;
-                if (i == 0) p.startNewSubPath(x, y); else p.lineTo(x, y);
-            }
-            break;
         case VisualRole::matrix: {
-            const int cols = 5, rows = 3;
-            g.setColour(vstengine::ui::colours::border.withAlpha(0.65f));
-            for (int c = 0; c <= cols; ++c) {
-                const float x = plot.getX() + plot.getWidth() * static_cast<float>(c) / cols;
-                g.drawVerticalLine(static_cast<int>(x), plot.getY(), plot.getBottom());
+            g.setColour(vstengine::ui::colours::textSecondary);
+            g.setFont(8.0f);
+            auto table = plot;
+            const int rowH = juce::jmax(13, static_cast<int>(table.getHeight() / 5.0f));
+            static constexpr std::array<const char*, 4> sources { "MOD WHEEL", "AFTERTOUCH", "LFO 1", "ENV 2" };
+            static constexpr std::array<const char*, 4> destinations { "FILTER CUTOFF", "DRIVE AMOUNT", "PITCH", "RESONANCE" };
+            for (int row = 0; row < 4; ++row) {
+                const auto rr = juce::Rectangle<int>(static_cast<int>(table.getX()),
+                                                     static_cast<int>(table.getY()) + row * rowH,
+                                                     static_cast<int>(table.getWidth()), rowH);
+                g.setColour(vstengine::ui::colours::borderSubtle.withAlpha(0.55f));
+                g.drawHorizontalLine(rr.getBottom(), table.getX(), table.getRight());
+                g.setColour(vstengine::ui::colours::textSecondary);
+                g.drawText(juce::String(row + 1), rr.removeFromLeft(22), juce::Justification::centredLeft);
+                auto rowArea = juce::Rectangle<int>(static_cast<int>(table.getX()) + 22,
+                                                    static_cast<int>(table.getY()) + row * rowH,
+                                                    static_cast<int>(table.getWidth()) - 22, rowH);
+                auto src = rowArea.removeFromLeft(static_cast<int>(rowArea.getWidth() * 0.35f));
+                auto amt = rowArea.removeFromLeft(static_cast<int>(rowArea.getWidth() * 0.22f));
+                g.drawText(sources[static_cast<std::size_t>(row)], src, juce::Justification::centredLeft);
+                g.setColour(accent.withAlpha(0.9f));
+                g.drawText("+0." + juce::String(35 + row * 10), amt, juce::Justification::centredLeft);
+                g.setColour(vstengine::ui::colours::textSecondary);
+                g.drawText(destinations[static_cast<std::size_t>(row)], rowArea, juce::Justification::centredLeft);
             }
-            for (int r = 0; r <= rows; ++r) {
-                const float y = plot.getY() + plot.getHeight() * static_cast<float>(r) / rows;
-                g.drawHorizontalLine(static_cast<int>(y), plot.getX(), plot.getRight());
-            }
-            g.setColour(accent.withAlpha(0.9f));
-            for (const auto point : { juce::Point<float>{0.18f, 0.25f}, {0.52f, 0.66f}, {0.78f, 0.38f} })
-                g.fillEllipse(plot.getX() + point.x * plot.getWidth() - 3.0f,
-                              plot.getY() + point.y * plot.getHeight() - 3.0f, 6.0f, 6.0f);
             return;
         }
         case VisualRole::sequencer: {
-            const float labelWidth = juce::jmin(54.0f, plot.getWidth() * 0.12f);
+            const float labelWidth = juce::jmin(58.0f, plot.getWidth() * 0.11f);
             auto lanes = plot.withTrimmedLeft(labelWidth);
-            static constexpr std::array<const char*, 5> laneNames { "NOTE", "ACC", "SLIDE", "GATE", "OCT" };
+            static constexpr std::array<const char*, 5> laneNames { "NOTE", "ACCENT", "SLIDE", "GATE", "OCTAVE" };
             const int rows = static_cast<int>(laneNames.size());
-            g.setFont(8.0f);
+            g.setFont(7.8f);
+            const float stepHeader = juce::jmin(18.0f, plot.getHeight() * 0.10f);
+            auto headerArea = lanes.removeFromTop(stepHeader);
+            for (int s = 0; s < 16; ++s) {
+                const float cellW = headerArea.getWidth() / 16.0f;
+                g.setColour(s % 4 == 0 ? accent.withAlpha(0.75f) : vstengine::ui::colours::mutedText);
+                g.drawText(juce::String(s + 1),
+                           juce::Rectangle<float>(headerArea.getX() + s * cellW, headerArea.getY(), cellW, headerArea.getHeight()),
+                           juce::Justification::centred);
+            }
             for (int r = 0; r < rows; ++r) {
-                const float y0 = plot.getY() + plot.getHeight() * static_cast<float>(r) / rows;
-                const float y1 = plot.getY() + plot.getHeight() * static_cast<float>(r + 1) / rows;
+                const float y0 = lanes.getY() + lanes.getHeight() * static_cast<float>(r) / rows;
+                const float y1 = lanes.getY() + lanes.getHeight() * static_cast<float>(r + 1) / rows;
                 g.setColour(vstengine::ui::colours::mutedText);
                 g.drawText(laneNames[static_cast<std::size_t>(r)],
                            juce::Rectangle<float>(plot.getX(), y0, labelWidth - 4.0f, y1 - y0),
@@ -384,25 +516,41 @@ void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::paint(juce::Graphics
             }
             for (int s = 0; s <= 16; ++s) {
                 const float x = lanes.getX() + lanes.getWidth() * static_cast<float>(s) / 16.0f;
-                g.setColour(vstengine::ui::colours::border.withAlpha(s % 4 == 0 ? 0.8f : 0.35f));
+                g.setColour(vstengine::ui::colours::border.withAlpha(s % 4 == 0 ? 0.82f : 0.38f));
                 g.drawVerticalLine(static_cast<int>(x), lanes.getY(), lanes.getBottom());
             }
-            g.setColour(accent.withAlpha(0.78f));
             for (int s = 0; s < 16; ++s) {
                 const float cellW = lanes.getWidth() / 16.0f;
                 const float rowH = lanes.getHeight() / rows;
-                if ((s * 5 + 1) % 7 < 4)
-                    g.fillRoundedRectangle(lanes.getX() + s * cellW + 2.0f,
-                                           lanes.getY() + 2.0f + (s % 3) * rowH * 0.10f,
-                                           cellW - 4.0f, rowH * 0.52f, 2.0f);
-                if (s % 4 == 0)
-                    g.fillEllipse(lanes.getX() + s * cellW + cellW * 0.35f,
-                                  lanes.getY() + rowH + rowH * 0.35f, 5.0f, 5.0f);
-                if (s == 3 || s == 7 || s == 11)
-                    g.drawLine(lanes.getX() + s * cellW + 3.0f,
-                               lanes.getY() + rowH * 2.5f,
-                               lanes.getX() + (s + 1) * cellW - 3.0f,
-                               lanes.getY() + rowH * 2.5f, 2.0f);
+                const bool noteOn = ((s * 7 + 3) % 11) < 7;
+                if (noteOn) {
+                    const int pitch = 1 + ((s * 5 + 2) % 4);
+                    const auto cell = juce::Rectangle<float>(lanes.getX() + s * cellW + 2.0f,
+                                                             lanes.getY() + 2.0f,
+                                                             cellW - 4.0f, rowH - 4.0f);
+                    g.setColour(accent.withAlpha(0.78f));
+                    g.fillRoundedRectangle(cell, 2.0f);
+                    g.setColour(vstengine::ui::colours::background.withAlpha(0.9f));
+                    g.setFont(7.5f);
+                    g.drawText(juce::String(pitch == 1 ? "C3" : pitch == 2 ? "D3" : pitch == 3 ? "E3" : "G3"),
+                               cell, juce::Justification::centred);
+                }
+                if (s % 4 == 0) {
+                    g.setColour(accent.withAlpha(0.92f));
+                    g.fillEllipse(lanes.getX() + s * cellW + cellW * 0.38f,
+                                  lanes.getY() + rowH + rowH * 0.34f, 5.0f, 5.0f);
+                }
+                if (s == 2 || s == 6 || s == 10 || s == 14) {
+                    g.setColour(accent.withAlpha(0.72f));
+                    g.drawRoundedRectangle(lanes.getX() + s * cellW + 3.0f,
+                                           lanes.getY() + rowH * 2.0f + rowH * 0.28f,
+                                           cellW - 6.0f, rowH * 0.45f, 2.0f, 1.2f);
+                }
+                g.setColour(accent.withAlpha(0.55f));
+                const float gate = rowH * (0.22f + 0.56f * std::fmod(s * 0.37f, 1.0f));
+                g.fillRoundedRectangle(lanes.getX() + s * cellW + cellW * 0.42f,
+                                       lanes.getY() + rowH * 3.0f + rowH * 0.10f,
+                                       juce::jmax(2.0f, cellW * 0.16f), gate, 1.0f);
             }
             return;
         }
@@ -411,19 +559,39 @@ void VstEngineAudioProcessorEditor::SoundPage::VisualPanel::paint(juce::Graphics
         case VisualRole::performance:
         case VisualRole::playMode:
         case VisualRole::output: {
-            const float y = plot.getCentreY();
-            g.setColour(vstengine::ui::colours::border.withAlpha(0.8f));
-            g.drawLine(plot.getX(), y, plot.getRight(), y, 2.0f);
-            g.setColour(accent.withAlpha(0.86f));
-            const float amount = role == VisualRole::output ? 0.72f : role == VisualRole::accent ? 0.58f : 0.42f;
-            g.drawLine(plot.getX(), y, plot.getX() + plot.getWidth() * amount, y, 3.0f);
+            const int count = role == VisualRole::performance ? 4 : role == VisualRole::playMode ? 3 : 2;
+            const auto strip = plot.reduced(4.0f, 2.0f);
+            for (int i = 0; i < count; ++i) {
+                const float x = strip.getX() + strip.getWidth() * (static_cast<float>(i) + 0.5f) / count;
+                const float y = strip.getCentreY();
+                const float r = juce::jmin(strip.getHeight() * 0.22f, strip.getWidth() / count * 0.15f);
+                g.setColour(vstengine::ui::colours::control);
+                g.fillEllipse(x - r, y - r, r * 2.0f, r * 2.0f);
+                g.setColour(vstengine::ui::colours::border);
+                g.drawEllipse(x - r, y - r, r * 2.0f, r * 2.0f, 1.0f);
+                juce::Path arc;
+                arc.addCentredArc(x, y, r * 0.86f, r * 0.86f, 0.0f,
+                                  juce::MathConstants<float>::pi * 0.78f,
+                                  juce::MathConstants<float>::pi * (1.48f + 0.16f * i), true);
+                g.setColour(accent.withAlpha(0.86f));
+                g.strokePath(arc, juce::PathStrokeType(1.6f));
+            }
             return;
         }
     }
 
-    g.setColour(accent.withAlpha(0.88f));
-    g.strokePath(p, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
-                                         juce::PathStrokeType::rounded));
+    if (!p.isEmpty()) {
+        juce::Path fillPath = p;
+        const auto last = p.getCurrentPosition();
+        fillPath.lineTo(last.x, plot.getBottom());
+        fillPath.lineTo(plot.getX(), plot.getBottom());
+        fillPath.closeSubPath();
+        g.setColour(accent.withAlpha(0.07f));
+        g.fillPath(fillPath);
+        g.setColour(accent.withAlpha(0.92f));
+        g.strokePath(p, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded));
+    }
 }
 
 VstEngineAudioProcessorEditor::SoundPage::SoundPage(VstEngineAudioProcessor& p)
@@ -478,6 +646,9 @@ void VstEngineAudioProcessorEditor::SoundPage::configureLayout(Layout newLayout,
         oscillator.setSubtitle("MONO / PHASE");
         filter.setSubtitle("LOW-PASS");
         envelope.setSubtitle("TRANSIENT");
+        character.setSubtitle("ANALOG DRIVE");
+        performance.setSubtitle("VOICE / WIDTH");
+        matrix.setSubtitle("5 / 16");
         for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
                               &performance, &modulation, &matrix })
             visual->setVisible(true);
@@ -487,9 +658,14 @@ void VstEngineAudioProcessorEditor::SoundPage::configureLayout(Layout newLayout,
         }
     } else if (layout == Layout::acid) {
         oscillator.setSubtitle("303 CORE");
-        filter.setSubtitle("RESONANT");
-        envelope.setSubtitle("DECAY");
-        sequencer.setSubtitle("PATTERN PREVIEW");
+        filter.setSubtitle("24 DB");
+        envelope.setSubtitle("AMP / FILTER");
+        character.setSubtitle("ANALOG TYPE");
+        accentPanel.setSubtitle("AMOUNT");
+        performance.setSubtitle("SLIDE");
+        sequencer.setSubtitle("16 STEP / PATTERN PREVIEW");
+        playMode.setSubtitle("MONO");
+        output.setSubtitle("MASTER");
         for (auto* visual : { &oscillator, &filter, &envelope, &character, &accentPanel,
                               &performance, &modulation, &sequencer, &playMode, &output })
             visual->setVisible(true);
@@ -514,13 +690,13 @@ void VstEngineAudioProcessorEditor::SoundPage::placeKnobs(
     if (indices.size() == 0)
         return;
     auto content = panelBounds.reduced(8);
-    content.removeFromTop(26);
+    content.removeFromTop(24);
     const int width = content.getWidth() / static_cast<int>(indices.size());
     int x = content.getX();
     for (const auto index : indices) {
         if (index >= knobs.size())
             continue;
-        auto cell = juce::Rectangle<int>(x, content.getY(), width, content.getHeight()).reduced(3);
+        auto cell = juce::Rectangle<int>(x, content.getY(), width, content.getHeight()).reduced(2);
         knobs[index]->setBounds(cell);
         x += width;
     }
@@ -528,67 +704,84 @@ void VstEngineAudioProcessorEditor::SoundPage::placeKnobs(
 
 void VstEngineAudioProcessorEditor::SoundPage::resized()
 {
-    auto area = getLocalBounds().reduced(10);
-    const int heroHeight = juce::jlimit(66, 92, area.getHeight() / 6);
+    auto area = getLocalBounds().reduced(8);
+    const int heroHeight = juce::jlimit(82, 122, static_cast<int>(area.getHeight() * 0.19f));
     hero.setBounds(area.removeFromTop(heroHeight));
-    area.removeFromTop(8);
+    area.removeFromTop(7);
 
-    constexpr int gap = 8;
+    constexpr int gap = 7;
     if (layout == Layout::psyBass) {
-        const int row1H = juce::jmax(120, static_cast<int>(area.getHeight() * 0.38f));
-        const int row2H = juce::jmax(96, static_cast<int>(area.getHeight() * 0.27f));
+        const int row1H = juce::jlimit(150, 224, static_cast<int>(area.getHeight() * 0.42f));
+        const int row2H = juce::jlimit(104, 142, static_cast<int>(area.getHeight() * 0.27f));
         auto row1 = area.removeFromTop(juce::jmin(row1H, area.getHeight()));
         area.removeFromTop(gap);
         auto row2 = area.removeFromTop(juce::jmin(row2H, area.getHeight()));
         area.removeFromTop(gap);
         auto row3 = area;
 
-        const int w1 = (row1.getWidth() - gap * 2) / 3;
-        const auto osc = row1.removeFromLeft(w1); row1.removeFromLeft(gap);
-        const auto fil = row1.removeFromLeft(w1); row1.removeFromLeft(gap);
+        const int oscW = static_cast<int>((row1.getWidth() - gap * 2) * 0.31f);
+        const int filterW = static_cast<int>((row1.getWidth() - gap * 2) * 0.37f);
+        const auto osc = row1.removeFromLeft(oscW); row1.removeFromLeft(gap);
+        const auto fil = row1.removeFromLeft(filterW); row1.removeFromLeft(gap);
         const auto env = row1;
         oscillator.setBounds(osc); filter.setBounds(fil); envelope.setBounds(env);
         placeKnobs(fil, { 0, 1 });
         placeKnobs(env, { 2, 3 });
 
-        const int w2 = (row2.getWidth() - gap * 2) / 3;
-        const auto chr = row2.removeFromLeft(w2); row2.removeFromLeft(gap);
-        const auto acc = row2.removeFromLeft(w2); row2.removeFromLeft(gap);
+        const int charW = static_cast<int>((row2.getWidth() - gap * 2) * 0.31f);
+        const int accentW = static_cast<int>((row2.getWidth() - gap * 2) * 0.37f);
+        const auto chr = row2.removeFromLeft(charW); row2.removeFromLeft(gap);
+        const auto acc = row2.removeFromLeft(accentW); row2.removeFromLeft(gap);
         const auto perf = row2;
         character.setBounds(chr); accentPanel.setBounds(acc); performance.setBounds(perf);
         placeKnobs(chr, { 4 });
         placeKnobs(acc, { 5 });
 
-        const int modW = static_cast<int>((row3.getWidth() - gap) * 0.42f);
+        const int modW = static_cast<int>((row3.getWidth() - gap) * 0.52f);
         const auto mod = row3.removeFromLeft(modW); row3.removeFromLeft(gap);
         modulation.setBounds(mod); matrix.setBounds(row3);
     } else if (layout == Layout::acid) {
-        const int topH = juce::jlimit(92, 132, area.getHeight() / 4);
+        const int topH = juce::jlimit(118, 168, static_cast<int>(area.getHeight() * 0.30f));
         auto top = area.removeFromTop(topH);
         area.removeFromTop(gap);
-        const int panelW = (top.getWidth() - gap * 6) / 7;
-        std::array<juce::Rectangle<int>, 7> topPanels;
-        for (int i = 0; i < 7; ++i) {
-            topPanels[static_cast<std::size_t>(i)] = top.removeFromLeft(i == 6 ? top.getWidth() : panelW);
-            if (i != 6) top.removeFromLeft(gap);
-        }
-        oscillator.setBounds(topPanels[0]); filter.setBounds(topPanels[1]); envelope.setBounds(topPanels[2]);
-        character.setBounds(topPanels[3]); accentPanel.setBounds(topPanels[4]); performance.setBounds(topPanels[5]);
-        output.setBounds(topPanels[6]);
-        placeKnobs(topPanels[0], { 0 });
-        placeKnobs(topPanels[1], { 1, 2 });
-        placeKnobs(topPanels[2], { 3, 4 });
-        placeKnobs(topPanels[3], { 7 });
-        placeKnobs(topPanels[4], { 5 });
-        placeKnobs(topPanels[5], { 6 });
 
-        const int sequencerH = juce::jmax(126, static_cast<int>(area.getHeight() * 0.58f));
-        sequencer.setBounds(area.removeFromTop(juce::jmin(sequencerH, area.getHeight())));
-        area.removeFromTop(gap);
-        auto bottom = area;
-        const int bottomW = (bottom.getWidth() - gap * 2) / 3;
-        const auto mod = bottom.removeFromLeft(bottomW); bottom.removeFromLeft(gap);
-        const auto perf = bottom.removeFromLeft(bottomW); bottom.removeFromLeft(gap);
+        const int usable = top.getWidth() - gap * 5;
+        const int oscW = static_cast<int>(usable * 0.19f);
+        const int filterW = static_cast<int>(usable * 0.20f);
+        const int envW = static_cast<int>(usable * 0.24f);
+        const int driveW = static_cast<int>(usable * 0.14f);
+        const int accentW = static_cast<int>(usable * 0.105f);
+
+        const auto osc = top.removeFromLeft(oscW); top.removeFromLeft(gap);
+        const auto fil = top.removeFromLeft(filterW); top.removeFromLeft(gap);
+        const auto env = top.removeFromLeft(envW); top.removeFromLeft(gap);
+        const auto drv = top.removeFromLeft(driveW); top.removeFromLeft(gap);
+        const auto acc = top.removeFromLeft(accentW); top.removeFromLeft(gap);
+        const auto side = top;
+        auto slide = side;
+        auto out = side;
+        slide.setHeight((side.getHeight() - gap) / 2);
+        out.setY(slide.getBottom() + gap);
+        out.setHeight(side.getBottom() - out.getY());
+
+        oscillator.setBounds(osc); filter.setBounds(fil); envelope.setBounds(env);
+        character.setBounds(drv); accentPanel.setBounds(acc); performance.setBounds(slide); output.setBounds(out);
+        placeKnobs(osc, { 0 });
+        placeKnobs(fil, { 1, 2 });
+        placeKnobs(env, { 3, 4 });
+        placeKnobs(drv, { 7 });
+        placeKnobs(acc, { 5 });
+        placeKnobs(slide, { 6 });
+
+        const int bottomH = juce::jlimit(96, 138, static_cast<int>(area.getHeight() * 0.28f));
+        auto bottom = area.removeFromBottom(juce::jmin(bottomH, area.getHeight()));
+        area.removeFromBottom(gap);
+        sequencer.setBounds(area);
+
+        const int modW = static_cast<int>((bottom.getWidth() - gap * 2) * 0.52f);
+        const int perfW = static_cast<int>((bottom.getWidth() - gap * 2) * 0.28f);
+        const auto mod = bottom.removeFromLeft(modW); bottom.removeFromLeft(gap);
+        const auto perf = bottom.removeFromLeft(perfW); bottom.removeFromLeft(gap);
         modulation.setBounds(mod); performance.setBounds(perf); playMode.setBounds(bottom);
     } else {
         const int rowH = (area.getHeight() - gap) / 2;
@@ -944,12 +1137,14 @@ void VstEngineAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds();
     header.setBounds(area.removeFromTop(58));
-    auto keyboardArea = area.removeFromBottom(92).reduced(10, 8);
+    const int keyboardHeight = juce::jlimit(86, 104, static_cast<int>(getHeight() * 0.105f));
+    auto keyboardArea = area.removeFromBottom(keyboardHeight).reduced(8, 7);
     keyboard.setBounds(keyboardArea);
     keyboard.setKeyWidth(static_cast<float>(keyboardArea.getWidth()) / 43.0f);
-    auto rail = area.removeFromLeft(245).reduced(10, 8);
+    const int railWidth = juce::jlimit(220, 300, static_cast<int>(getWidth() * 0.205f));
+    auto rail = area.removeFromLeft(railWidth).reduced(8, 7);
     rackRail.setBounds(rail);
-    area = area.reduced(6, 8);
+    area = area.reduced(5, 7);
     instrumentHeader.setBounds(area.removeFromTop(66));
     navigation.setBounds(area.removeFromTop(44).reduced(0, 4));
     for (auto* page : pages) page->setBounds(area);
