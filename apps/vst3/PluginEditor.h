@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ui/GlobalHeader.h"
+#include "ui/sound/SoundPage.h"
 #include "ui/InstrumentRack.h"
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
@@ -58,66 +59,6 @@ private:
         std::size_t selected {};
     };
 
-    class SoundPage final : public juce::Component {
-    public:
-        explicit SoundPage(VstEngineAudioProcessor&);
-        void paint(juce::Graphics&) override;
-        void resized() override;
-        void bind(std::size_t);
-
-    private:
-        enum class Layout { generic, psyBass, acid };
-        enum class VisualRole {
-            oscillator, filter, envelope, character, accent, performance,
-            modulation, matrix, sequencer, playMode, output
-        };
-
-        class HeroBanner final : public juce::Component {
-        public:
-            void setLayout(Layout newLayout, juce::String instrumentName);
-            void paint(juce::Graphics&) override;
-        private:
-            Layout layout { Layout::generic };
-            juce::String name { "INSTRUMENT" };
-        };
-
-        class VisualPanel final : public juce::Component {
-        public:
-            VisualPanel(juce::String titleText, VisualRole visualRole);
-            void setAccent(juce::Colour newAccent);
-            void setSubtitle(juce::String text);
-            void paint(juce::Graphics&) override;
-        private:
-            juce::String title;
-            juce::String subtitle;
-            VisualRole role;
-            juce::Colour accent;
-        };
-
-        void configureLayout(Layout newLayout, juce::String instrumentName);
-        void hideAllPanels();
-        void hideAllKnobs();
-        void placeKnobs(juce::Rectangle<int> panelBounds,
-                        std::initializer_list<std::size_t> indices);
-
-        VstEngineAudioProcessor& processor;
-        HeroBanner hero;
-        VisualPanel oscillator { "OSCILLATOR", VisualRole::oscillator };
-        VisualPanel filter { "FILTER", VisualRole::filter };
-        VisualPanel envelope { "AMP ENVELOPE", VisualRole::envelope };
-        VisualPanel character { "DRIVE / CHARACTER", VisualRole::character };
-        VisualPanel accentPanel { "ACCENT", VisualRole::accent };
-        VisualPanel performance { "PERFORMANCE", VisualRole::performance };
-        VisualPanel modulation { "MODULATION", VisualRole::modulation };
-        VisualPanel matrix { "MOD MATRIX", VisualRole::matrix };
-        VisualPanel sequencer { "STEP SEQUENCER", VisualRole::sequencer };
-        VisualPanel playMode { "PLAY MODE", VisualRole::playMode };
-        VisualPanel output { "OUTPUT", VisualRole::output };
-        std::array<std::unique_ptr<vox::ui::VoxKnob>, vstengine::instrument::macrosPerSlot> knobs;
-        std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
-        Layout layout { Layout::generic };
-        std::size_t selected {};
-    };
 
     class MacroPage final : public juce::Component {
     public:
@@ -205,7 +146,7 @@ private:
     vstengine::ui::InstrumentRack rackRail;
     InstrumentHeader instrumentHeader;
     vstengine::ui::MainNavigation navigation;
-    SoundPage soundPage;
+    vstengine::ui::SoundPage soundPage;
     PatternPage patternPage;
     RoutingPage routingPage;
     ZonesPage zonesPage;
