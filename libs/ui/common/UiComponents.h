@@ -34,6 +34,10 @@ inline const auto textSecondary = juce::Colour::fromRGB (154, 178, 197);// #9AB2
 inline const auto mutedText = juce::Colour::fromRGB (88, 116, 135);     // #587487
 inline const auto inactive = control;
 inline const auto shadow = juce::Colour::fromRGBA (0, 0, 0, 88);
+// Aliases matching vox::ui canonical tokens so extracted components can use the
+// semantic names (accent/danger) without pulling in a second palette.
+inline const auto accent = primary;
+inline const auto danger = juce::Colour::fromRGB (228, 66, 93);          // #E4425D
 }
 
 class VoxLookAndFeel final : public juce::LookAndFeel_V4 {

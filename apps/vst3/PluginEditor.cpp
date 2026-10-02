@@ -30,11 +30,6 @@ void panel(juce::Graphics& g, juce::Rectangle<int> bounds)
     g.drawRoundedRectangle(area, vstengine::ui::metrics::corner, 1.0f);
 }
 
-juce::String routeName(const vstengine::rack::PersistentSlotState& state)
-{
-    return state.routing.mode == vstengine::rack::RouteMode::off
-        ? "OFF" : "CH" + juce::String(state.routing.channel);
-}
 } // namespace
 
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onCopy() { processor.sequence().copyTo(clipboard); copied = true; }
@@ -56,49 +51,59 @@ void VstEngineAudioProcessorEditor::SequenceCallbacks::onMutate()
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onClear() { processor.sequence().clearSelected(); }
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onSequenceChanged() { processor.publishSequenceForAudio(); }
 
-VstEngineAudioProcessorEditor::RackRail::RackRail(VstEngineAudioProcessor& p) : processor(p)
-{
-    title.setText("INSTRUMENT RACK", juce::dontSendNotification);
-    vstengine::ui::styleLabel(title, 12.0f, juce::Justification::centredLeft,
-                              vstengine::ui::colours::mutedText);
-    addAndMakeVisible(title);
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        vstengine::ui::styleButton(slots[i]);
-        slots[i].setClickingTogglesState(false);
-        slots[i].onClick = [this, i] { if (onSelected) onSelected(i); };
-        addAndMakeVisible(slots[i]);
-    }
-}
+namespace {
 
-void VstEngineAudioProcessorEditor::RackRail::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
-
-void VstEngineAudioProcessorEditor::RackRail::resized()
-{
-    auto area = getLocalBounds().reduced(8);
-    title.setBounds(area.removeFromTop(25));
-    const int height = juce::jmax(24, area.getHeight() / static_cast<int>(slots.size()));
-    for (auto& slot : slots) slot.setBounds(area.removeFromTop(height).reduced(0, 1));
-}
-
-void VstEngineAudioProcessorEditor::RackRail::refresh()
+// Adapts authoritative rack state into the explicit rack view model. The rack
+// component reads only RackSlotView; no display string is parsed or rebuilt.
+std::vector<vstengine::ui::RackSlotView> buildRackViews(
+    VstEngineAudioProcessor& processor)
 {
     const auto& states = processor.instrumentRack().state();
-    const auto runtime = processor.instrumentRack().runtimeState();
+    const auto& runtime = processor.instrumentRack().runtimeState();
     const auto selected = processor.selectedSlotIndex();
-    for (std::size_t i = 0; i < slots.size(); ++i) {
+    constexpr std::size_t slotCount = vstengine::instrument::maxSlots;
+
+    std::vector<vstengine::ui::RackSlotView> views;
+    views.reserve(slotCount);
+
+    for (std::size_t i = 0; i < slotCount; ++i) {
         const auto* descriptor = processor.instrumentRack().descriptor(i);
-        auto name = descriptor != nullptr ? juce::String(descriptor->name) : "Empty +";
-        auto stateFlags = states[i].mute ? " M" : states[i].solo ? " S" : "";
-        auto activity = runtime[i].ownedNotes != 0 ? "  *" : "";
-        const auto level = descriptor != nullptr
-            ? "  " + juce::String(states[i].level, 1) : juce::String();
-        slots[i].setButtonText(juce::String(static_cast<int>(i + 1)).paddedLeft('0', 2)
-            + "  " + name + "  " + routeName(states[i]) + level + stateFlags + activity);
-        slots[i].setToggleState(i == selected, juce::dontSendNotification);
-        slots[i].setColour(juce::TextButton::buttonColourId,
-            i == selected ? vstengine::ui::colours::primary.darker(0.68f)
-                          : vstengine::ui::colours::panelRaised);
+        const auto& state = states[i];
+
+        vstengine::ui::RackSlotView view;
+        view.slotIndex = i;
+        view.displayNumber = static_cast<int> (i + 1);
+        view.occupied = descriptor != nullptr;
+        view.instrumentName = view.occupied
+            ? juce::String (descriptor->name) : juce::String ("Empty");
+        view.vendorName = view.occupied
+            ? juce::String (descriptor->vendor) : juce::String();
+        view.versionName = view.occupied
+            ? "v" + juce::String (descriptor->instrumentVersion)
+            : juce::String();
+        view.routeEnabled = state.routing.mode != vstengine::rack::RouteMode::off;
+        view.midiChannel = view.routeEnabled ? static_cast<int> (state.routing.channel) : 0;
+        view.selected = i == selected;
+        view.enabled = state.enabled;
+        view.muted = state.mute;
+        view.soloed = state.solo;
+        view.locked = state.locked;
+        view.level = state.level;
+        view.active = runtime[i].ownedNotes != 0;
+        view.slotIdText = juce::String (state.slotId);
+        view.accent = vstengine::ui::colours::primary;
+        views.push_back (view);
     }
+
+    return views;
+}
+
+} // namespace
+
+void VstEngineAudioProcessorEditor::refreshRack()
+{
+    rackRail.setViews (buildRackViews (processor));
+    rackRail.setSelectedSlot (processor.selectedSlotIndex());
 }
 
 VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudioProcessor& p)
@@ -1106,7 +1111,7 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProce
           [this] { cycleGlobalPreset(-1); }, [this] { cycleGlobalPreset(1); },
           [this] { saveGlobalPreset(); }, [&p] { p.requestPanic(); },
           [this] { showPage(Page::advanced); }, [this](int index) { loadGlobalPreset(index); } }),
-      rackRail(p), instrumentHeader(p), soundPage(p), patternPage(p),
+      rackRail(), instrumentHeader(p), soundPage(p), patternPage(p),
       routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8), advancedPage(p),
       pages { &soundPage, &patternPage, &routingPage, &zonesPage, &macrosPage, &advancedPage },
       keyboard(p.keyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
@@ -1155,7 +1160,7 @@ void VstEngineAudioProcessorEditor::bindSelection(std::size_t slot)
     processor.selectSlot(slot);
     instrumentHeader.bind(slot); soundPage.bind(slot); patternPage.bind(slot);
     routingPage.bind(slot); zonesPage.bind(slot); macrosPage.bind(slot); advancedPage.bind(slot);
-    rackRail.refresh();
+    refreshRack();
 }
 
 void VstEngineAudioProcessorEditor::showPage(Page page)
@@ -1226,7 +1231,7 @@ juce::Rectangle<int> VstEngineAudioProcessorEditor::keyboardBoundsForTesting() c
 
 void VstEngineAudioProcessorEditor::timerCallback()
 {
-    processor.publishSequenceForAudio(); rackRail.refresh(); instrumentHeader.refresh();
+    processor.publishSequenceForAudio(); refreshRack(); instrumentHeader.refresh();
     patternPage.setPlayHead(processor.getCurrentPlayHeadStep());
     header.setMidiActivity(processor.hasRecentMidiActivity());
     header.setCpuLoad(processor.currentCpuLoad());

@@ -161,6 +161,7 @@ add_library(vst_ui STATIC
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
   libs/ui/BassPanel.cpp libs/ui/BassPanel.h
+  libs/ui/InstrumentRack.cpp libs/ui/InstrumentRack.h
   libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h
   libs/ui/PresetBrowser.cpp libs/ui/PresetBrowser.h)
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})

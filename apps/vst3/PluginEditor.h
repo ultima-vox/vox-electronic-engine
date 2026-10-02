@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ui/GlobalHeader.h"
+#include "ui/InstrumentRack.h"
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
 #include "ui/ZoneRangeEditor.h"
@@ -39,132 +40,6 @@ private:
         VstEngineAudioProcessor& processor;
         vstengine::sequence::Sequence clipboard;
         bool copied {};
-    };
-
-    class RackRail final : public juce::Component {
-    public:
-        explicit RackRail(VstEngineAudioProcessor&);
-        void paint(juce::Graphics&) override; void resized() override; void refresh();
-        std::function<void(std::size_t)> onSelected;
-    private:
-        class RackSlotButton final : public vox::ui::VoxButton {
-        public:
-            RackSlotButton() : VoxButton({}, vox::ui::VoxButton::Type::Toggle)
-            {
-                setClickingTogglesState(false);
-            }
-
-            void paintButton(juce::Graphics& g, bool isMouseOverButton, bool isButtonDown) override
-            {
-                auto bounds = getLocalBounds().toFloat().reduced(0.5f);
-                const bool selected = getToggleState();
-                const auto accent = vstengine::ui::colours::primary;
-
-                auto fill = selected ? vstengine::ui::colours::panelRaised.brighter(0.08f)
-                                     : vstengine::ui::colours::panel;
-                if (isMouseOverButton)
-                    fill = fill.brighter(0.045f);
-                if (isButtonDown)
-                    fill = fill.darker(0.08f);
-
-                g.setColour(fill);
-                g.fillRoundedRectangle(bounds, 5.0f);
-                g.setColour(selected ? accent : vstengine::ui::colours::border);
-                g.drawRoundedRectangle(bounds, 5.0f, selected ? 1.6f : 1.0f);
-
-                if (selected) {
-                    g.setColour(accent);
-                    g.fillRoundedRectangle(bounds.getX(), bounds.getY() + 4.0f,
-                                           3.0f, bounds.getHeight() - 8.0f, 1.5f);
-                }
-
-                juce::StringArray tokens;
-                tokens.addTokens(getButtonText(), " ", "");
-                tokens.removeEmptyStrings();
-
-                const auto index = tokens.isEmpty() ? juce::String("--") : tokens[0];
-                int routeIndex = -1;
-                for (int i = 1; i < tokens.size(); ++i)
-                    if (tokens[i].startsWithIgnoreCase("CH") || tokens[i].equalsIgnoreCase("OFF")) {
-                        routeIndex = i;
-                        break;
-                    }
-
-                juce::String name;
-                if (routeIndex > 1)
-                    for (int i = 1; i < routeIndex; ++i)
-                        name += (name.isEmpty() ? juce::String() : juce::String(" ")) + tokens[i];
-                else if (tokens.size() > 1)
-                    name = tokens[1];
-                if (name.isEmpty())
-                    name = "Empty";
-
-                const auto route = routeIndex >= 0 ? tokens[routeIndex] : juce::String("OFF");
-                const bool empty = name.startsWithIgnoreCase("Empty");
-
-                auto content = getLocalBounds().reduced(7, 4);
-                auto indexArea = content.removeFromLeft(25);
-                auto thumb = content.removeFromLeft(34).reduced(2);
-                content.removeFromLeft(5);
-                auto routeArea = content.removeFromRight(42);
-
-                g.setColour(selected ? vstengine::ui::colours::text : vstengine::ui::colours::mutedText);
-                g.setFont(juce::Font(10.0f, juce::Font::bold));
-                g.drawText(index, indexArea, juce::Justification::centred, false);
-
-                g.setColour(vstengine::ui::colours::background);
-                g.fillRoundedRectangle(thumb.toFloat(), 4.0f);
-                g.setColour(selected ? accent.withAlpha(0.52f) : vstengine::ui::colours::borderSubtle);
-                g.drawRoundedRectangle(thumb.toFloat(), 4.0f, 1.0f);
-
-                if (!empty) {
-                    juce::Path waveform;
-                    const auto plot = thumb.toFloat().reduced(4.0f);
-                    const auto seed = static_cast<float>((name.hashCode() & 0x0f) + 7);
-                    for (int i = 0; i <= 18; ++i) {
-                        const auto t = static_cast<float>(i) / 18.0f;
-                        const auto x = plot.getX() + plot.getWidth() * t;
-                        const auto y = plot.getCentreY()
-                            + std::sin(t * juce::MathConstants<float>::twoPi * (1.2f + seed * 0.03f))
-                                  * plot.getHeight() * (0.17f + 0.18f * std::sin(t * 4.7f + seed));
-                        if (i == 0) waveform.startNewSubPath(x, y); else waveform.lineTo(x, y);
-                    }
-                    g.setColour(accent.withAlpha(selected ? 0.96f : 0.58f));
-                    g.strokePath(waveform, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
-                                                                juce::PathStrokeType::rounded));
-                } else {
-                    g.setColour(vstengine::ui::colours::mutedText.withAlpha(0.45f));
-                    g.drawLine(thumb.getCentreX() - 5.0f, thumb.getCentreY(),
-                               thumb.getCentreX() + 5.0f, thumb.getCentreY(), 1.2f);
-                    g.drawLine(thumb.getCentreX(), thumb.getCentreY() - 5.0f,
-                               thumb.getCentreX(), thumb.getCentreY() + 5.0f, 1.2f);
-                }
-
-                auto nameArea = content;
-                auto subArea = nameArea.removeFromBottom(13);
-                g.setColour(empty ? vstengine::ui::colours::mutedText : vstengine::ui::colours::text);
-                g.setFont(juce::Font(empty ? 10.0f : 11.0f, empty ? juce::Font::plain : juce::Font::bold));
-                g.drawText(name, nameArea, juce::Justification::centredLeft, true);
-                g.setColour(vstengine::ui::colours::mutedText);
-                g.setFont(8.5f);
-                g.drawText(empty ? "ADD INSTRUMENT" : "ULTIMA VOX",
-                           subArea, juce::Justification::centredLeft, true);
-
-                g.setColour(selected ? accent : vstengine::ui::colours::textSecondary);
-                g.setFont(9.0f);
-                g.drawText(route, routeArea, juce::Justification::centred, false);
-
-                const auto led = juce::Rectangle<float>(bounds.getRight() - 9.0f,
-                                                        bounds.getY() + 6.0f, 3.0f, 3.0f);
-                g.setColour(empty ? vstengine::ui::colours::mutedText.withAlpha(0.35f)
-                                  : accent.withAlpha(selected ? 1.0f : 0.62f));
-                g.fillEllipse(led);
-            }
-        };
-
-        VstEngineAudioProcessor& processor;
-        juce::Label title;
-        std::array<RackSlotButton, vstengine::instrument::maxSlots> slots;
     };
 
     class InstrumentHeader final : public juce::Component {
@@ -323,10 +198,11 @@ private:
     void loadGlobalPreset(int index);
     void saveGlobalPreset();
     void refreshGlobalPresets();
+    void refreshRack();
     VstEngineAudioProcessor& processor;
     vstengine::ui::VoxLookAndFeel lookAndFeel;
     vstengine::ui::GlobalHeader header;
-    RackRail rackRail;
+    vstengine::ui::InstrumentRack rackRail;
     InstrumentHeader instrumentHeader;
     vstengine::ui::MainNavigation navigation;
     SoundPage soundPage;
