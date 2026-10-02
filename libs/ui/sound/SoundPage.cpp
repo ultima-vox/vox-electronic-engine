@@ -3,6 +3,8 @@
 #include "AcidSoundWorkspace.h"
 #include "GenericSoundWorkspace.h"
 #include "PsyBassSoundWorkspace.h"
+#include "modules/BuiltInProvider.h"
+#include "acid/AcidProvider.h"
 
 namespace vstengine::ui {
 
@@ -10,11 +12,6 @@ namespace {
 
 constexpr int pagePadding = 8;
 constexpr int heroGap = 7;
-
-// Stable InstrumentIds owned by the providers. These are contract identifiers,
-// not display strings, so the dispatch is stable across renames.
-constexpr const char* psyBassId = "com.ultimavox.psy-bass";
-constexpr const char* acidId = "com.ultimavox.acid";
 
 } // namespace
 
@@ -29,11 +26,11 @@ void SoundPage::selectWorkspaceFor (const instrument::InstrumentDescriptor* desc
     // Releasing the previous workspace also releases its APVTS attachments.
     workspace.reset();
 
-    const auto id = descriptor != nullptr ? juce::String (descriptor->id) : juce::String();
-
-    if (id == psyBassId)
+    // Compared against the provider-owned InstrumentId constants rather than
+    // copied literals, so the dispatch cannot drift from the contract.
+    if (descriptor != nullptr && descriptor->id == modules::bassInstrumentId)
         workspace = std::make_unique<PsyBassSoundWorkspace>();
-    else if (id == acidId)
+    else if (descriptor != nullptr && descriptor->id == acid::instrumentId)
         workspace = std::make_unique<AcidSoundWorkspace>();
     else
         workspace = std::make_unique<GenericSoundWorkspace>();
