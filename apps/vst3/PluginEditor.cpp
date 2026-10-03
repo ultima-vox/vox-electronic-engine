@@ -2,6 +2,7 @@
 #include "instrument/HostParameterSchema.h"
 #include "ui/common/UiComponents.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using Page = vstengine::ui::MainNavigation::Page;
@@ -29,11 +30,6 @@ void panel(juce::Graphics& g, juce::Rectangle<int> bounds)
     g.drawRoundedRectangle(area, vstengine::ui::metrics::corner, 1.0f);
 }
 
-juce::String routeName(const vstengine::rack::PersistentSlotState& state)
-{
-    return state.routing.mode == vstengine::rack::RouteMode::off
-        ? "OFF" : "CH" + juce::String(state.routing.channel);
-}
 } // namespace
 
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onCopy() { processor.sequence().copyTo(clipboard); copied = true; }
@@ -55,49 +51,59 @@ void VstEngineAudioProcessorEditor::SequenceCallbacks::onMutate()
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onClear() { processor.sequence().clearSelected(); }
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onSequenceChanged() { processor.publishSequenceForAudio(); }
 
-VstEngineAudioProcessorEditor::RackRail::RackRail(VstEngineAudioProcessor& p) : processor(p)
-{
-    title.setText("INSTRUMENT RACK", juce::dontSendNotification);
-    vstengine::ui::styleLabel(title, 12.0f, juce::Justification::centredLeft,
-                              vstengine::ui::colours::mutedText);
-    addAndMakeVisible(title);
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        vstengine::ui::styleButton(slots[i]);
-        slots[i].setClickingTogglesState(false);
-        slots[i].onClick = [this, i] { if (onSelected) onSelected(i); };
-        addAndMakeVisible(slots[i]);
-    }
-}
+namespace {
 
-void VstEngineAudioProcessorEditor::RackRail::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
-
-void VstEngineAudioProcessorEditor::RackRail::resized()
-{
-    auto area = getLocalBounds().reduced(8);
-    title.setBounds(area.removeFromTop(25));
-    const int height = juce::jmax(24, area.getHeight() / static_cast<int>(slots.size()));
-    for (auto& slot : slots) slot.setBounds(area.removeFromTop(height).reduced(0, 1));
-}
-
-void VstEngineAudioProcessorEditor::RackRail::refresh()
+// Adapts authoritative rack state into the explicit rack view model. The rack
+// component reads only RackSlotView; no display string is parsed or rebuilt.
+std::vector<vstengine::ui::RackSlotView> buildRackViews(
+    VstEngineAudioProcessor& processor)
 {
     const auto& states = processor.instrumentRack().state();
-    const auto runtime = processor.instrumentRack().runtimeState();
+    const auto& runtime = processor.instrumentRack().runtimeState();
     const auto selected = processor.selectedSlotIndex();
-    for (std::size_t i = 0; i < slots.size(); ++i) {
+    constexpr std::size_t slotCount = vstengine::instrument::maxSlots;
+
+    std::vector<vstengine::ui::RackSlotView> views;
+    views.reserve(slotCount);
+
+    for (std::size_t i = 0; i < slotCount; ++i) {
         const auto* descriptor = processor.instrumentRack().descriptor(i);
-        auto name = descriptor != nullptr ? juce::String(descriptor->name) : "Empty +";
-        auto stateFlags = states[i].mute ? " M" : states[i].solo ? " S" : "";
-        auto activity = runtime[i].ownedNotes != 0 ? "  *" : "";
-        const auto level = descriptor != nullptr
-            ? "  " + juce::String(states[i].level, 1) : juce::String();
-        slots[i].setButtonText(juce::String(static_cast<int>(i + 1)).paddedLeft('0', 2)
-            + "  " + name + "  " + routeName(states[i]) + level + stateFlags + activity);
-        slots[i].setToggleState(i == selected, juce::dontSendNotification);
-        slots[i].setColour(juce::TextButton::buttonColourId,
-            i == selected ? vstengine::ui::colours::primary.darker(0.68f)
-                          : vstengine::ui::colours::panelRaised);
+        const auto& state = states[i];
+
+        vstengine::ui::RackSlotView view;
+        view.slotIndex = i;
+        view.displayNumber = static_cast<int> (i + 1);
+        view.occupied = descriptor != nullptr;
+        view.instrumentName = view.occupied
+            ? juce::String (descriptor->name) : juce::String ("Empty");
+        view.vendorName = view.occupied
+            ? juce::String (descriptor->vendor) : juce::String();
+        view.versionName = view.occupied
+            ? "v" + juce::String (descriptor->instrumentVersion)
+            : juce::String();
+        view.routeEnabled = state.routing.mode != vstengine::rack::RouteMode::off;
+        view.midiChannel = view.routeEnabled ? static_cast<int> (state.routing.channel) : 0;
+        view.selected = i == selected;
+        view.enabled = state.enabled;
+        view.muted = state.mute;
+        view.soloed = state.solo;
+        view.locked = state.locked;
+        view.level = state.level;
+        view.active = runtime[i].ownedNotes != 0;
+        view.slotIdText = juce::String (state.slotId);
+        view.accent = vstengine::ui::colours::primary;
+        views.push_back (view);
     }
+
+    return views;
+}
+
+} // namespace
+
+void VstEngineAudioProcessorEditor::refreshRack()
+{
+    rackRail.setViews (buildRackViews (processor));
+    rackRail.setSelectedSlot (processor.selectedSlotIndex());
 }
 
 VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudioProcessor& p)
@@ -198,25 +204,28 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
     midiIn.setSelectedId(channel + 1, juce::dontSendNotification);
 }
 
+
 VstEngineAudioProcessorEditor::MacroPage::MacroPage(
     VstEngineAudioProcessor& p, juce::String heading, std::size_t visibleCount)
     : processor(p), count(juce::jlimit<std::size_t>(1, knobs.size(), visibleCount))
 {
     title.setText(heading, juce::dontSendNotification);
-    description.setText(heading == "SOUND"
-        ? "Primary performance controls"
-        : "Stable host automation macros and instrument mappings", juce::dontSendNotification);
+    description.setText("Stable host automation macros and instrument mappings", juce::dontSendNotification);
     vstengine::ui::styleLabel(title, 15.0f, juce::Justification::centredLeft,
                               vstengine::ui::colours::primary);
     vstengine::ui::styleLabel(description, 12.0f, juce::Justification::centredLeft,
                               vstengine::ui::colours::mutedText);
     addAndMakeVisible(title); addAndMakeVisible(description);
+
     for (std::size_t i = 0; i < knobs.size(); ++i) {
-        knob(knobs[i]);
-        vstengine::ui::styleLabel(labels[i], 11.0f, juce::Justification::centred,
-                                  vstengine::ui::colours::text);
-        addChildComponent(knobs[i]); addChildComponent(labels[i]);
-        knobs[i].setVisible(i < count); labels[i].setVisible(i < count);
+        cards[i] = std::make_unique<vox::ui::VoxPanel>(
+            "MACRO " + juce::String(static_cast<int>(i + 1)).paddedLeft('0', 2));
+        knobs[i] = std::make_unique<vox::ui::VoxKnob>(
+            "Macro " + juce::String(static_cast<int>(i + 1)), vox::ui::VoxKnob::Size::Normal);
+        addChildComponent(*cards[i]);
+        addChildComponent(*knobs[i]);
+        cards[i]->setVisible(i < count);
+        knobs[i]->setVisible(i < count);
     }
 }
 
@@ -224,17 +233,26 @@ void VstEngineAudioProcessorEditor::MacroPage::paint(juce::Graphics& g) { panel(
 
 void VstEngineAudioProcessorEditor::MacroPage::resized()
 {
-    auto area = getLocalBounds().reduced(18);
-    title.setBounds(area.removeFromTop(26)); description.setBounds(area.removeFromTop(25));
-    area.removeFromTop(12);
-    const int columns = count <= 6 ? static_cast<int>(count) : 4;
+    auto area = getLocalBounds().reduced(16);
+    title.setBounds(area.removeFromTop(24));
+    description.setBounds(area.removeFromTop(22));
+    area.removeFromTop(10);
+
+    const int columns = 4;
     const int rows = static_cast<int>((count + columns - 1) / columns);
-    const int cellWidth = area.getWidth() / columns;
-    const int cellHeight = area.getHeight() / rows;
+    constexpr int gap = 8;
+    const int cellWidth = (area.getWidth() - gap * (columns - 1)) / columns;
+    const int cellHeight = rows > 0 ? (area.getHeight() - gap * (rows - 1)) / rows : area.getHeight();
     for (std::size_t i = 0; i < count; ++i) {
-        auto cell = juce::Rectangle<int>(area.getX() + static_cast<int>(i % columns) * cellWidth,
-            area.getY() + static_cast<int>(i / columns) * cellHeight, cellWidth, cellHeight).reduced(5);
-        labels[i].setBounds(cell.removeFromTop(24)); knobs[i].setBounds(cell);
+        const int col = static_cast<int>(i % columns);
+        const int row = static_cast<int>(i / columns);
+        auto cell = juce::Rectangle<int>(area.getX() + col * (cellWidth + gap),
+                                         area.getY() + row * (cellHeight + gap),
+                                         cellWidth, cellHeight);
+        cards[i]->setBounds(cell);
+        auto knobArea = cell.reduced(10);
+        knobArea.removeFromTop(24);
+        knobs[i]->setBounds(knobArea);
     }
 }
 
@@ -250,10 +268,13 @@ void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
                     label = parameter.name;
                     break;
                 }
-        labels[macro].setText(label, juce::dontSendNotification);
-        knobs[macro].setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
+        cards[macro]->setTitle("M" + juce::String(static_cast<int>(macro + 1)).paddedLeft('0', 2)
+                               + "  /  " + label.toUpperCase());
+        knobs[macro]->setLabel(label);
+        knobs[macro]->setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
         attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-            processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro), knobs[macro]));
+            processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro),
+            knobs[macro]->getSlider()));
     }
 }
 
@@ -461,7 +482,7 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProce
           [this] { cycleGlobalPreset(-1); }, [this] { cycleGlobalPreset(1); },
           [this] { saveGlobalPreset(); }, [&p] { p.requestPanic(); },
           [this] { showPage(Page::advanced); }, [this](int index) { loadGlobalPreset(index); } }),
-      rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6), patternPage(p),
+      rackRail(), instrumentHeader(p), soundPage(), patternPage(p),
       routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8), advancedPage(p),
       pages { &soundPage, &patternPage, &routingPage, &zonesPage, &macrosPage, &advancedPage },
       keyboard(p.keyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
@@ -492,12 +513,14 @@ void VstEngineAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds();
     header.setBounds(area.removeFromTop(58));
-    auto keyboardArea = area.removeFromBottom(92).reduced(10, 8);
+    const int keyboardHeight = juce::jlimit(86, 104, static_cast<int>(getHeight() * 0.105f));
+    auto keyboardArea = area.removeFromBottom(keyboardHeight).reduced(8, 7);
     keyboard.setBounds(keyboardArea);
     keyboard.setKeyWidth(static_cast<float>(keyboardArea.getWidth()) / 43.0f);
-    auto rail = area.removeFromLeft(245).reduced(10, 8);
+    const int railWidth = juce::jlimit(220, 300, static_cast<int>(getWidth() * 0.205f));
+    auto rail = area.removeFromLeft(railWidth).reduced(8, 7);
     rackRail.setBounds(rail);
-    area = area.reduced(6, 8);
+    area = area.reduced(5, 7);
     instrumentHeader.setBounds(area.removeFromTop(66));
     navigation.setBounds(area.removeFromTop(44).reduced(0, 4));
     for (auto* page : pages) page->setBounds(area);
@@ -506,9 +529,11 @@ void VstEngineAudioProcessorEditor::resized()
 void VstEngineAudioProcessorEditor::bindSelection(std::size_t slot)
 {
     processor.selectSlot(slot);
-    instrumentHeader.bind(slot); soundPage.bind(slot); patternPage.bind(slot);
+    instrumentHeader.bind(slot);
+    soundPage.bind(processor.parameters(), slot, processor.instrumentRack().descriptor(slot));
+    patternPage.bind(slot);
     routingPage.bind(slot); zonesPage.bind(slot); macrosPage.bind(slot); advancedPage.bind(slot);
-    rackRail.refresh();
+    refreshRack();
 }
 
 void VstEngineAudioProcessorEditor::showPage(Page page)
@@ -579,7 +604,7 @@ juce::Rectangle<int> VstEngineAudioProcessorEditor::keyboardBoundsForTesting() c
 
 void VstEngineAudioProcessorEditor::timerCallback()
 {
-    processor.publishSequenceForAudio(); rackRail.refresh(); instrumentHeader.refresh();
+    processor.publishSequenceForAudio(); refreshRack(); instrumentHeader.refresh();
     patternPage.setPlayHead(processor.getCurrentPlayHeadStep());
     header.setMidiActivity(processor.hasRecentMidiActivity());
     header.setCpuLoad(processor.currentCpuLoad());

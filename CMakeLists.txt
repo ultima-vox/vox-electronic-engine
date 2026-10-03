@@ -161,6 +161,17 @@ add_library(vst_ui STATIC
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
   libs/ui/BassPanel.cpp libs/ui/BassPanel.h
+  libs/ui/InstrumentRack.cpp libs/ui/InstrumentRack.h
+  libs/ui/sound/SoundPage.cpp libs/ui/sound/SoundPage.h
+  libs/ui/sound/SoundWorkspace.cpp libs/ui/sound/SoundWorkspace.h
+  libs/ui/sound/SoundModulePanel.cpp libs/ui/sound/SoundModulePanel.h
+  libs/ui/sound/SoundControls.cpp libs/ui/sound/SoundControls.h
+  libs/ui/sound/SoundGraphs.cpp libs/ui/sound/SoundGraphs.h
+  libs/ui/sound/GateAVisualData.cpp libs/ui/sound/GateAVisualData.h
+  libs/ui/sound/HeroBanner.cpp libs/ui/sound/HeroBanner.h
+  libs/ui/sound/PsyBassSoundWorkspace.cpp libs/ui/sound/PsyBassSoundWorkspace.h
+  libs/ui/sound/AcidSoundWorkspace.cpp libs/ui/sound/AcidSoundWorkspace.h
+  libs/ui/sound/GenericSoundWorkspace.cpp libs/ui/sound/GenericSoundWorkspace.h
   libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h
   libs/ui/PresetBrowser.cpp libs/ui/PresetBrowser.h)
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})

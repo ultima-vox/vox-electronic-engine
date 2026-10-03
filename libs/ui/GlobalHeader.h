@@ -38,6 +38,8 @@ private:
     vox::ui::VoxButton settingsButton { "Settings", vox::ui::VoxButton::Type::Secondary };
     juce::Slider output;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAttachment;
+    float cpuLoad01 {};
+    bool midiActive {};
 };
 
 } // namespace vstengine::ui

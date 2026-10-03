@@ -3,11 +3,15 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "ui/GlobalHeader.h"
+#include "ui/sound/SoundPage.h"
+#include "ui/InstrumentRack.h"
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
 #include "ui/ZoneRangeEditor.h"
 #include "vox-ui/components/VoxButton.h"
 #include "vox-ui/components/VoxComboBox.h"
+#include "vox-ui/components/VoxKnob.h"
+#include "vox-ui/components/VoxPanel.h"
 
 class VstEngineAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer {
@@ -39,25 +43,6 @@ private:
         bool copied {};
     };
 
-    class RackRail final : public juce::Component {
-    public:
-        explicit RackRail(VstEngineAudioProcessor&);
-        void paint(juce::Graphics&) override; void resized() override; void refresh();
-        std::function<void(std::size_t)> onSelected;
-    private:
-        class RackSlotButton final : public vox::ui::VoxButton {
-        public:
-            RackSlotButton() : VoxButton({}, vox::ui::VoxButton::Type::Toggle)
-            {
-                setClickingTogglesState(false);
-            }
-        };
-
-        VstEngineAudioProcessor& processor;
-        juce::Label title;
-        std::array<RackSlotButton, vstengine::instrument::maxSlots> slots;
-    };
-
     class InstrumentHeader final : public juce::Component {
     public:
         explicit InstrumentHeader(VstEngineAudioProcessor&);
@@ -74,6 +59,7 @@ private:
         std::size_t selected {};
     };
 
+
     class MacroPage final : public juce::Component {
     public:
         MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount);
@@ -81,8 +67,8 @@ private:
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, description;
-        std::array<juce::Slider, vstengine::instrument::macrosPerSlot> knobs;
-        std::array<juce::Label, vstengine::instrument::macrosPerSlot> labels;
+        std::array<std::unique_ptr<vox::ui::VoxKnob>, vstengine::instrument::macrosPerSlot> knobs;
+        std::array<std::unique_ptr<vox::ui::VoxPanel>, vstengine::instrument::macrosPerSlot> cards;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
         std::size_t count;
     };
@@ -153,13 +139,14 @@ private:
     void loadGlobalPreset(int index);
     void saveGlobalPreset();
     void refreshGlobalPresets();
+    void refreshRack();
     VstEngineAudioProcessor& processor;
     vstengine::ui::VoxLookAndFeel lookAndFeel;
     vstengine::ui::GlobalHeader header;
-    RackRail rackRail;
+    vstengine::ui::InstrumentRack rackRail;
     InstrumentHeader instrumentHeader;
     vstengine::ui::MainNavigation navigation;
-    MacroPage soundPage;
+    vstengine::ui::SoundPage soundPage;
     PatternPage patternPage;
     RoutingPage routingPage;
     ZonesPage zonesPage;
