@@ -35,7 +35,7 @@ public:
         return SoundWorkspaceKind::acid;
     }
 
-    [[nodiscard]] juce::StringList getGateAVisualOnlyLabels() const override;
+    [[nodiscard]] juce::StringArray getGateAVisualOnlyLabels() const override;
 
     void resized() override;
 

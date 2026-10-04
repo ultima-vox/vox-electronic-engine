@@ -182,9 +182,9 @@ void PsyBassSoundWorkspace::bind (const SoundWorkspaceBinding& binding)
     resized();
 }
 
-juce::StringList PsyBassSoundWorkspace::getGateAVisualOnlyLabels() const
+juce::StringArray PsyBassSoundWorkspace::getGateAVisualOnlyLabels() const
 {
-    juce::StringList labels;
+    juce::StringArray labels;
     for (const auto& control : controls)
         if (control != nullptr && ! control->isBoundToRealParameter())
             labels.add (control->getLabel());

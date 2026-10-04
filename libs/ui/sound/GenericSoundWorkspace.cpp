@@ -73,24 +73,31 @@ void GenericSoundWorkspace::buildControls()
     performanceKnobs.fill (nullptr);
     modulationKnobs.fill (nullptr);
 
-    // Only ids that are common enough to be a genuine semantic match are
-    // requested. Everything else is preview-only for Gate A.
+    // Generic is the fallback for Lead, Atmos, Semantic FX and any future rack
+    // instrument, and those providers do NOT share one parameter set. Nothing
+    // here can be guaranteed to be a genuine semantic match, so every control
+    // requests no host parameter at all and renders Gate-A visual-only.
+    //
+    // Psy Bass and Acid have dedicated workspaces, which is where their real
+    // descriptor ids are requested. Functional Gate B introduces descriptors and
+    // then requests the matching ids here; the presentation layer does not
+    // change.
     oscillatorKnobs[0] = &addControl ({}, "OCTAVE",  "+0");
     oscillatorKnobs[1] = &addControl ({}, "SEMITONE", "+0");
     oscillatorKnobs[2] = &addControl ({}, "BLEND",  "0.30");
     oscillatorKnobs[3] = &addControl ({}, "SHAPE",  "SAW");
 
-    filterKnobs[0] = &addControl (cutoff,    "CUTOFF",    "520 Hz");
-    filterKnobs[1] = &addControl (resonance, "RESONANCE", "0.30");
+    filterKnobs[0] = &addControl ({}, "CUTOFF",    "520 Hz");
+    filterKnobs[1] = &addControl ({}, "RESONANCE", "0.30");
     filterKnobs[2] = &addControl ({}, "ENV AMOUNT", "+0.30");
-    filterKnobs[3] = &addControl ({},  "KEY TRACK", "0.40");
+    filterKnobs[3] = &addControl ({}, "KEY TRACK", "0.40");
 
     envelopeKnobs[0] = &addControl ({},  "A", "8 ms");
-    envelopeKnobs[1] = &addControl (decay,      "D", "220 ms");
+    envelopeKnobs[1] = &addControl ({},  "D", "220 ms");
     envelopeKnobs[2] = &addControl ({}, "S", "0.65");
     envelopeKnobs[3] = &addControl ({}, "R", "260 ms");
 
-    characterKnobs[0] = &addControl (drive,     "DRIVE", "0.30");
+    characterKnobs[0] = &addControl ({}, "DRIVE", "0.30");
     characterKnobs[1] = &addControl ({}, "TONE",  "0.50");
     characterKnobs[2] = &addControl ({},  "MIX",   "0.70");
 
@@ -118,9 +125,9 @@ void GenericSoundWorkspace::bind (const SoundWorkspaceBinding& binding)
     resized();
 }
 
-juce::StringList GenericSoundWorkspace::getGateAVisualOnlyLabels() const
+juce::StringArray GenericSoundWorkspace::getGateAVisualOnlyLabels() const
 {
-    juce::StringList labels;
+    juce::StringArray labels;
     for (const auto& control : controls)
         if (control != nullptr && ! control->isBoundToRealParameter())
             labels.add (control->getLabel());

@@ -45,7 +45,7 @@ public:
 
     // Labels of every control that is still Gate A preview-only, so the Visual
     // Gate capture can report which controls were mock driven.
-    [[nodiscard]] virtual juce::StringList getGateAVisualOnlyLabels() const { return {}; }
+    [[nodiscard]] virtual juce::StringArray getGateAVisualOnlyLabels() const { return {}; }
 
     [[nodiscard]] virtual SoundWorkspaceKind getKind() const = 0;
 

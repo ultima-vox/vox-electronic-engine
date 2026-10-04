@@ -36,7 +36,7 @@ public:
     //
     // The Visual Gate capture uses this to report which controls were mock
     // driven, as required by UI_PRODUCTION_IMPLEMENTATION_STANDARD.md section 24.
-    [[nodiscard]] juce::StringList getGateAVisualOnlyLabels() const;
+    [[nodiscard]] juce::StringArray getGateAVisualOnlyLabels() const;
 
     [[nodiscard]] juce::String getSelectedInstrumentName() const { return instrumentName; }
 

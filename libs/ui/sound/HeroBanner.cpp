@@ -165,7 +165,12 @@ void HeroBanner::paint (juce::Graphics& g)
     }
 
     auto text = getLocalBounds().reduced (22, 12);
-    auto right = text.removeFromRight (juce::jmin (210, text.getWidth() * 0.34f));
+
+    // Keep the whole computation in ints: jmin(int, float) fails to deduce, and
+    // Rectangle::removeFromRight takes an int anyway.
+    const auto rightWidth = juce::jlimit (0, 210,
+        juce::roundToInt (static_cast<float> (text.getWidth()) * 0.34f));
+    auto right = text.removeFromRight (rightWidth);
 
     g.setColour (colours::text);
     g.setFont (juce::Font (identity == HeroIdentity::acid ? 25.0f : 22.0f, juce::Font::bold));

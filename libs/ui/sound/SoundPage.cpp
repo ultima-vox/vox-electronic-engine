@@ -60,9 +60,9 @@ void SoundPage::bind (juce::AudioProcessorValueTreeState& state, const std::size
     }
 }
 
-juce::StringList SoundPage::getGateAVisualOnlyLabels() const
+juce::StringArray SoundPage::getGateAVisualOnlyLabels() const
 {
-    return workspace != nullptr ? workspace->getGateAVisualOnlyLabels() : juce::StringList();
+    return workspace != nullptr ? workspace->getGateAVisualOnlyLabels() : juce::StringArray();
 }
 
 void SoundPage::paint (juce::Graphics& g)
