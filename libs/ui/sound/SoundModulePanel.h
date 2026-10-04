@@ -2,7 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-#include "common/UiComponents.h"
+#include "ui/common/UiComponents.h"
 
 namespace vstengine::ui {
 
