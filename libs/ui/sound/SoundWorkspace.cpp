@@ -24,6 +24,63 @@ void SoundWorkspace::applyAccentToPanels()
         panel->setAccent (identityAccent);
 }
 
+void SoundWorkspace::clearPanelContent()
+{
+    for (auto& panel : panels)
+        if (panel != nullptr)
+            panel->clearContent();
+}
+
+void SoundWorkspace::addPanelContent (SoundModulePanel& panel,
+                                      const std::vector<juce::Component*>& components,
+                                      std::function<void (juce::Rectangle<int>)> layout)
+{
+    panel.addContent (components, std::move (layout));
+}
+
+void SoundWorkspace::addControlStrip (SoundModulePanel& panel,
+                                      const std::vector<SoundParameterKnob*>& knobs,
+                                      const int columns, const int gap)
+{
+    if (knobs.empty())
+        return;
+
+    std::vector<juce::Component*> items;
+    items.reserve (knobs.size());
+    for (auto* knob : knobs)
+        if (knob != nullptr)
+            items.push_back (knob);
+    if (items.empty())
+        return;
+
+    // The knobs become children of the panel, so this hook receives panel-local
+    // coordinates and every setBounds() below is in the panel's own space.
+    //
+    // The item list is captured by value, so the hook never dereferences the
+    // workspace and stays valid independently of it.
+    addPanelContent (panel, items, [items, columns, gap] (juce::Rectangle<int> content)
+    {
+        if (columns > 1)
+            layoutControlGrid (items.data(), static_cast<int> (items.size()),
+                               content, columns, gap);
+        else
+            layoutControlRow (items.data(), static_cast<int> (items.size()),
+                              content, gap);
+    });
+}
+
+void SoundWorkspace::addCentreControl (SoundModulePanel& panel, SoundParameterKnob& knob)
+{
+    addPanelContent (panel, { &knob }, [&knob] (juce::Rectangle<int> content)
+    {
+        // One dominant control, centred, bounded so it cannot grow into the
+        // panel header.
+        const auto side = juce::jlimit (0, content.getWidth(),
+            juce::jlimit (0, content.getHeight(), content.getHeight()));
+        knob.setBounds (content.reduced (juce::jmax (0, (content.getWidth() - side) / 2), 0));
+    });
+}
+
 void SoundWorkspace::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat().reduced (0.5f);

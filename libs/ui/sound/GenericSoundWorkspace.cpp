@@ -35,19 +35,15 @@ void GenericSoundWorkspace::buildComposition()
     oscillatorGraph = std::make_unique<SoundGraph> (SoundGraphKind::oscillator);
     oscillatorGraph->setWaveShape (PreviewWaveShape::saw);
     oscillatorGraph->setVerticalWeight (0.45f);
-    addAndMakeVisible (*oscillatorGraph);
 
     filterGraph = std::make_unique<SoundGraph> (SoundGraphKind::filter);
     filterGraph->setVerticalWeight (0.50f);
-    addAndMakeVisible (*filterGraph);
 
     envelopeGraph = std::make_unique<SoundGraph> (SoundGraphKind::envelope);
     envelopeGraph->setVerticalWeight (0.48f);
-    addAndMakeVisible (*envelopeGraph);
 
     modulationGraph = std::make_unique<SoundGraph> (SoundGraphKind::modulation);
     modulationGraph->setVerticalWeight (1.0f);
-    addAndMakeVisible (*modulationGraph);
 }
 
 SoundParameterKnob& GenericSoundWorkspace::addControl (juce::String requestedId,
@@ -59,12 +55,16 @@ SoundParameterKnob& GenericSoundWorkspace::addControl (juce::String requestedId,
         vox::ui::VoxKnob::Size::Normal, std::move (previewValue)));
     auto& knob = *controls.back();
     knob.setAccent (identityAccent);
-    addAndMakeVisible (knob);
     return knob;
 }
 
 void GenericSoundWorkspace::buildControls()
 {
+    // Clear panel content before destroying controls: the knobs are children of
+    // their panels, so their layout hooks must go first to avoid dangling
+    // pointers.
+    clearPanelContent();
+
     controls.clear();
     oscillatorKnobs.fill (nullptr);
     filterKnobs.fill (nullptr);
@@ -110,6 +110,8 @@ void GenericSoundWorkspace::buildControls()
     modulationKnobs[1] = &addControl ({},  "ATTACK",  "20 ms");
     modulationKnobs[2] = &addControl ({},   "DECAY",   "240 ms");
     modulationKnobs[3] = &addControl ({}, "RELEASE", "200 ms");
+
+    populatePanels();
 }
 
 void GenericSoundWorkspace::bind (const SoundWorkspaceBinding& binding)
@@ -135,28 +137,102 @@ juce::StringArray GenericSoundWorkspace::getGateAVisualOnlyLabels() const
     return labels;
 }
 
+void GenericSoundWorkspace::populatePanels()
+{
+    // Model A: every module component is a child of its panel and laid out in
+    // PANEL-LOCAL coordinates. The workspace positions panels only.
+    //
+    // Content was already cleared at the top of buildControls(), before the old
+    // controls were destroyed, so nothing is cleared again here.
+    const auto asVector = [] (auto& knobs)
+    {
+        std::vector<SoundParameterKnob*> out;
+        for (auto* knob : knobs)
+            if (knob != nullptr)
+                out.push_back (knob);
+        return out;
+    };
+
+    const auto graphOverControls =
+        [] (SoundModulePanel& panel, SoundGraph& graph,
+            const std::array<SoundParameterKnob*, 4>& knobs, const float weight)
+        {
+            std::vector<juce::Component*> items { &graph };
+            for (auto* knob : knobs)
+                if (knob != nullptr)
+                    items.push_back (knob);
+
+            addPanelContent (panel, items, [items, weight] (juce::Rectangle<int> content)
+            {
+                auto area = content;
+                const auto graphHeight = juce::jmax (18,
+                    static_cast<int> (static_cast<float> (area.getHeight()) * weight));
+                items[0]->setBounds (area.removeFromTop (graphHeight));
+                layoutControlRow (items.data() + 1,
+                                  static_cast<int> (items.size()) - 1,
+                                  area.reduced (0, 2));
+            });
+        };
+
+    if (oscillatorPanel != nullptr && oscillatorGraph != nullptr)
+        graphOverControls (*oscillatorPanel, *oscillatorGraph, oscillatorKnobs, 0.45f);
+    if (filterPanel != nullptr && filterGraph != nullptr)
+        graphOverControls (*filterPanel, *filterGraph, filterKnobs, 0.50f);
+    if (envelopePanel != nullptr && envelopeGraph != nullptr)
+        graphOverControls (*envelopePanel, *envelopeGraph, envelopeKnobs, 0.48f);
+
+    if (characterPanel != nullptr)
+        addControlStrip (*characterPanel, asVector (characterKnobs));
+    if (performancePanel != nullptr)
+        addControlStrip (*performancePanel, asVector (performanceKnobs));
+
+    // MODULATION graph fills its panel; the controls sit beneath it.
+    if (modulationPanel != nullptr && modulationGraph != nullptr)
+    {
+        auto items = asComponents (modulationKnobs);
+        std::vector<juce::Component*> all { modulationGraph.get() };
+        all.insert (all.end(), items.begin(), items.end());
+
+        addPanelContent (*modulationPanel, all, [all] (juce::Rectangle<int> content)
+        {
+            auto area = content;
+            const auto knobStrip = juce::jmax (0,
+                static_cast<int> (static_cast<float> (area.getHeight()) * 0.36f));
+            auto graphArea = area;
+            graphArea.setHeight (juce::jmax (12, area.getHeight() - knobStrip - 2));
+            all[0]->setBounds (graphArea);
+            layoutControlRow (all.data() + 1, static_cast<int> (all.size()) - 1,
+                              juce::Rectangle<int> (area.getX(), area.getBottom() - knobStrip,
+                                                    area.getWidth(), knobStrip).reduced (0, 2));
+        });
+    }
+
+    resized();
+}
+
 void GenericSoundWorkspace::resized()
 {
+    // The workspace positions PANELS only; content is laid out inside each panel.
     auto area = getLocalBounds();
 
     const auto topHeight = juce::jlimit (130, 210, static_cast<int> (area.getHeight() * 0.54f));
-    auto top = area.removeFromTop (juce::jmin (topHeight, area.getHeight()));
+    const auto top = area.removeFromTop (juce::jmin (topHeight, area.getHeight()));
     area.removeFromTop (panelGap);
     const auto bottom = area;
 
     const auto colWidth = (top.getWidth() - panelGap * 2) / 3;
     auto topRest = top;
-    auto oscillatorArea = topRest.removeFromLeft (colWidth);
+    const auto oscillatorArea = topRest.removeFromLeft (colWidth);
     topRest.removeFromLeft (panelGap);
-    auto filterArea = topRest.removeFromLeft (colWidth);
+    const auto filterArea = topRest.removeFromLeft (colWidth);
     topRest.removeFromLeft (panelGap);
     const auto envelopeArea = topRest;
 
     const auto bottomCol = (bottom.getWidth() - panelGap * 2) / 3;
     auto bottomRest = bottom;
-    auto characterArea = bottomRest.removeFromLeft (bottomCol);
+    const auto characterArea = bottomRest.removeFromLeft (bottomCol);
     bottomRest.removeFromLeft (panelGap);
-    auto performanceArea = bottomRest.removeFromLeft (bottomCol);
+    const auto performanceArea = bottomRest.removeFromLeft (bottomCol);
     bottomRest.removeFromLeft (panelGap);
     const auto modulationArea = bottomRest;
 
@@ -172,44 +248,6 @@ void GenericSoundWorkspace::resized()
         performancePanel->setBounds (performanceArea);
     if (modulationPanel != nullptr)
         modulationPanel->setBounds (modulationArea);
-
-    const auto layoutGraphOverRow =
-        [] (SoundModulePanel& panel, SoundGraph& graph,
-            const std::array<juce::Component*, 4>& row, const float weight)
-    {
-        auto content = panel.getContentBounds();
-        const auto graphHeight = juce::jmax (18,
-            static_cast<int> (content.getHeight() * weight));
-        graph.setBounds (content.removeFromTop (graphHeight));
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          content.reduced (0, 2));
-    };
-
-    if (oscillatorPanel != nullptr && oscillatorGraph != nullptr)
-        layoutGraphOverRow (*oscillatorPanel, *oscillatorGraph,
-                           asComponents (oscillatorKnobs), 0.45f);
-    if (filterPanel != nullptr && filterGraph != nullptr)
-        layoutGraphOverRow (*filterPanel, *filterGraph,
-                           asComponents (filterKnobs), 0.50f);
-    if (envelopePanel != nullptr && envelopeGraph != nullptr)
-        layoutGraphOverRow (*envelopePanel, *envelopeGraph,
-                           asComponents (envelopeKnobs), 0.48f);
-
-    if (characterPanel != nullptr) {
-        const auto row = asComponents (characterKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          characterPanel->getContentBounds());
-    }
-    if (performancePanel != nullptr) {
-        const auto row = asComponents (performanceKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          performancePanel->getContentBounds());
-    }
-    if (modulationPanel != nullptr) {
-        auto content = modulationPanel->getContentBounds();
-        if (modulationGraph != nullptr)
-            modulationGraph->setBounds (content);
-    }
 }
 
 } // namespace vstengine::ui

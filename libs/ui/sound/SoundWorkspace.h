@@ -3,12 +3,14 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "HeroBanner.h"
+#include "SoundControls.h"
 #include "SoundModulePanel.h"
-#include "ui/common/UiComponents.h"
+#include "common/UiComponents.h"
 #include "instrument/InstrumentContract.h"
 
 namespace vstengine::ui {
@@ -60,6 +62,26 @@ protected:
     [[nodiscard]] SoundModulePanel& addPanel (juce::String title);
     void applyAccentToPanels();
 
+    // Clears panel content before a rebuild, so re-binding a slot cannot leave
+    // stale children or layout hooks behind.
+    void clearPanelContent();
+
+    // Installs content components into a panel. The layout callback receives a
+    // PANEL-LOCAL rectangle, because the components become children of the panel.
+    void addPanelContent (SoundModulePanel& panel,
+                          const std::vector<juce::Component*>& components,
+                          std::function<void (juce::Rectangle<int>)> layout);
+
+    // Installs a horizontal control strip spanning a panel's content.
+    // `columns` > 1 wraps the controls into that many columns.
+    void addControlStrip (SoundModulePanel& panel,
+                          const std::vector<SoundParameterKnob*>& knobs,
+                          int columns = 1, int gap = 4);
+
+    // Centres one control in a panel's content, for panels whose reference
+    // layout is a single dominant knob rather than a row.
+    void addCentreControl (SoundModulePanel& panel, SoundParameterKnob& knob);
+
     juce::Colour identityAccent { colours::primary };
     HeroIdentity heroIdentity { HeroIdentity::generic };
 
@@ -70,6 +92,10 @@ protected:
 //
 // The strip is divided into `count` equal cells, so a control row never
 // overflows its panel and always keeps a stable musical order.
+//
+// `area` must be in the coordinate space of the PARENT of `items[i]`. When the
+// controls are panel content, pass the panel's getContentBounds(), because the
+// panel is their parent.
 void layoutControlRow (juce::Component* const* items, int count,
                        juce::Rectangle<int> area, int gap = 4);
 

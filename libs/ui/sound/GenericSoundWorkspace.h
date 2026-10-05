@@ -38,6 +38,9 @@ private:
     void buildComposition();
     void buildControls();
 
+    // Parents every module component into its panel with panel-local layout hooks.
+    void populatePanels();
+
     SoundParameterKnob& addControl (juce::String requestedId, juce::String label,
                                     juce::String previewValue);
 

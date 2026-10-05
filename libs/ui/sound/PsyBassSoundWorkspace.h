@@ -46,6 +46,10 @@ private:
     void buildComposition();
     void buildControls();
 
+    // Parents every graph, knob, tab strip and matrix into its module panel and
+    // installs the panel-local layout hooks.
+    void populatePanels();
+
     // Creates a control bound to `requestedId` when the selected descriptor
     // actually publishes that parameter, and an explicit Gate A preview-only
     // control otherwise.

@@ -38,18 +38,15 @@ void AcidSoundWorkspace::buildComposition()
     envelopeTabs = std::make_unique<SoundTabStrip> ();
     envelopeTabs->setTabs ({ "AMP", "FILTER" });
     envelopeTabs->setAccent (identityAccent);
-    addAndMakeVisible (*envelopeTabs);
 
     envelopeGraph = std::make_unique<SoundGraph> (SoundGraphKind::envelope);
     envelopeGraph->setVerticalWeight (0.52f);
     envelopeGraph->setAccent (identityAccent);
-    addAndMakeVisible (*envelopeGraph);
 
     // --- Centre: the sequencer is the identity of this instrument ----------
     sequencerPanel = &addPanel ("STEP SEQUENCER");
     sequencer = std::make_unique<GateAVisualSequencer> ();
     sequencer->setAccent (identityAccent);
-    addAndMakeVisible (*sequencer);
 
     // --- Bottom row --------------------------------------------------------
     modulationPanel = &addPanel ("MODULATION");
@@ -58,16 +55,13 @@ void AcidSoundWorkspace::buildComposition()
 
     modulationTabs = std::make_unique<SoundTabStrip> ();
     modulationTabs->setAccent (identityAccent);
-    addAndMakeVisible (*modulationTabs);
 
     modulationGraph = std::make_unique<SoundGraph> (SoundGraphKind::modulation);
     modulationGraph->setVerticalWeight (1.0f);
     modulationGraph->setAccent (identityAccent);
-    addAndMakeVisible (*modulationGraph);
 
     playMode = std::make_unique<GateAVisualOptionList> ();
     playMode->setAccent (identityAccent);
-    addAndMakeVisible (*playMode);
 }
 
 SoundParameterKnob& AcidSoundWorkspace::addControl (juce::String requestedId,
@@ -80,13 +74,17 @@ SoundParameterKnob& AcidSoundWorkspace::addControl (juce::String requestedId,
         size, std::move (previewValue)));
     auto& knob = *controls.back();
     knob.setAccent (identityAccent);
-    addAndMakeVisible (knob);
     return knob;
 }
 
 void AcidSoundWorkspace::buildControls()
 {
     // Releases the APVTS attachments created for the previously selected slot.
+    // Clear panel content before destroying controls: the knobs are children of
+    // their panels, so their layout hooks must go first to avoid dangling
+    // pointers.
+    clearPanelContent();
+
     controls.clear();
     oscillatorKnobs.fill (nullptr);
     filterKnobs.fill (nullptr);
@@ -150,6 +148,8 @@ void AcidSoundWorkspace::buildControls()
     performanceKnobs[1] = &addControl ({},     "UNISON",     "1",      vox::ui::VoxKnob::Size::Small);
     performanceKnobs[2] = &addControl ({},     "DETUNE",     "0 ct",   vox::ui::VoxKnob::Size::Small);
     performanceKnobs[3] = &addControl ({},     "SPREAD",     "0.30",   vox::ui::VoxKnob::Size::Small);
+
+    populatePanels();
 }
 
 void AcidSoundWorkspace::bind (const SoundWorkspaceBinding& binding)
@@ -185,37 +185,167 @@ juce::StringArray AcidSoundWorkspace::getGateAVisualOnlyLabels() const
     return labels;
 }
 
+void AcidSoundWorkspace::populatePanels()
+{
+    // Model A: every module component is a child of its panel and laid out in
+    // PANEL-LOCAL coordinates. The workspace positions panels only.
+    //
+    // Content was already cleared at the top of buildControls(), before the old
+    // controls were destroyed, so nothing is cleared again here.
+    const auto asVector = [] (auto& knobs)
+    {
+        std::vector<SoundParameterKnob*> out;
+        for (auto* knob : knobs)
+            if (knob != nullptr)
+                out.push_back (knob);
+        return out;
+    };
+
+    // Top strip: four even voice panels, each a 2x2 control grid.
+    if (oscillatorPanel != nullptr)
+        addControlStrip (*oscillatorPanel, asVector (oscillatorKnobs), 2);
+    if (filterPanel != nullptr)
+        addControlStrip (*filterPanel, asVector (filterKnobs), 2);
+    if (drivePanel != nullptr)
+        addControlStrip (*drivePanel, asVector (driveKnobs), 2);
+
+    // ACCENT and SLIDE hold a single centred control each.
+    if (accentPanel != nullptr && accentKnob != nullptr)
+        addCentreControl (*accentPanel, *accentKnob);
+    if (slidePanel != nullptr && slideKnob != nullptr)
+        addCentreControl (*slidePanel, *slideKnob);
+
+    if (outputPanel != nullptr)
+        addControlStrip (*outputPanel, asVector (outputKnobs), 2);
+
+    // ENVELOPE: tab strip, then a graph, then a 2x2 control grid.
+    if (envelopePanel != nullptr && envelopeTabs != nullptr && envelopeGraph != nullptr)
+    {
+        auto items = asComponents (envelopeKnobs);
+        std::vector<juce::Component*> all { envelopeTabs.get(), envelopeGraph.get() };
+        all.insert (all.end(), items.begin(), items.end());
+
+        addPanelContent (*envelopePanel, all, [all] (juce::Rectangle<int> content)
+        {
+            auto area = content;
+            auto tabs = area.removeFromTop (tabStripHeight);
+            tabs.removeFromTop (2);
+            all[0]->setBounds (tabs);
+
+            const auto knobStrip = juce::jmax (0,
+                static_cast<int> (static_cast<float> (area.getHeight()) * 0.42f));
+            auto graphArea = area;
+            graphArea.setHeight (juce::jmax (12, area.getHeight() - knobStrip - 2));
+            all[1]->setBounds (graphArea);
+
+            layoutControlGrid (all.data() + 2, static_cast<int> (all.size()) - 2,
+                               juce::Rectangle<int> (area.getX(), area.getBottom() - knobStrip,
+                                                     area.getWidth(), knobStrip).reduced (0, 2),
+                               2);
+        });
+    }
+
+    // STEP SEQUENCER fills its panel: it is the centre of this composition.
+    if (sequencerPanel != nullptr && sequencer != nullptr)
+        addPanelContent (*sequencerPanel, { sequencer.get() },
+                         [raw = sequencer.get()] (juce::Rectangle<int> content)
+                         {
+                             if (raw != nullptr)
+                                 raw->setBounds (content);
+                         });
+
+    // MODULATION: tab strip, dominant graph, then a 2x2 control grid.
+    if (modulationPanel != nullptr && modulationTabs != nullptr && modulationGraph != nullptr)
+    {
+        auto items = asComponents (modulationKnobs);
+        std::vector<juce::Component*> all { modulationTabs.get(), modulationGraph.get() };
+        all.insert (all.end(), items.begin(), items.end());
+
+        addPanelContent (*modulationPanel, all, [all] (juce::Rectangle<int> content)
+        {
+            auto area = content;
+            auto tabs = area.removeFromTop (tabStripHeight);
+            tabs.removeFromTop (2);
+            all[0]->setBounds (tabs);
+            area.removeFromTop (tabStripHeight + 2);
+
+            const auto knobStrip = juce::jmax (0,
+                static_cast<int> (static_cast<float> (area.getHeight()) * 0.44f));
+            auto graphArea = area;
+            graphArea.setHeight (juce::jmax (12, area.getHeight() - knobStrip - 2));
+            all[1]->setBounds (graphArea);
+
+            layoutControlGrid (all.data() + 2, static_cast<int> (all.size()) - 2,
+                               juce::Rectangle<int> (area.getX(), area.getBottom() - knobStrip,
+                                                     area.getWidth(), knobStrip),
+                               2);
+        });
+    }
+
+    if (performancePanel != nullptr)
+        addControlStrip (*performancePanel, asVector (performanceKnobs), 2);
+
+    // PLAY MODE fills its panel with the inert option list.
+    if (playModePanel != nullptr && playMode != nullptr)
+        addPanelContent (*playModePanel, { playMode.get() },
+                         [raw = playMode.get()] (juce::Rectangle<int> content)
+                         {
+                             if (raw != nullptr)
+                                 raw->setBounds (content);
+                         });
+
+    resized();
+}
+
+void AcidSoundWorkspace::resized()
+{
+    // The workspace positions PANELS only. Content is laid out inside each panel
+    // in panel-local coordinates, so no content rectangle is computed here.
+    auto area = getLocalBounds();
+
+    // The sequencer takes whatever the top strip and bottom row do not need, so
+    // it stays dominant at every breakpoint instead of being clipped.
+    const int topHeight = juce::jlimit (96, 148, static_cast<int> (area.getHeight() * 0.28f));
+    const int bottomHeight = juce::jlimit (84, 128, static_cast<int> (area.getHeight() * 0.26f));
+
+    const auto top = area.removeFromTop (juce::jmin (topHeight, area.getHeight()));
+    area.removeFromTop (panelGap);
+
+    const auto bottom = area.removeFromBottom (juce::jmin (bottomHeight, area.getHeight()));
+    area.removeFromBottom (panelGap);
+
+    layoutTopStrip (top);
+
+    if (sequencerPanel != nullptr)
+        sequencerPanel->setBounds (area);
+
+    layoutBottomRow (bottom);
+}
+
 void AcidSoundWorkspace::layoutTopStrip (juce::Rectangle<int> area)
 {
-    if (area.getHeight() <= 0 || area.getWidth() <= 0)
+    if (area.getHeight() <= 0 || area.getWidth() <= panelGap * 4)
         return;
 
     // Non-uniform widths taken from the accepted render, not an equal grid.
     const float proportions[] = { 0.22f, 0.21f, 0.22f, 0.13f };
     SoundModulePanel* panels[] = { oscillatorPanel, filterPanel,
                                    envelopePanel, drivePanel };
-    std::array<juce::Rectangle<int>, 4> cells {};
 
     const auto usable = area.getWidth() - panelGap * 4;
     auto rest = area;
     for (int i = 0; i < 4; ++i) {
-        const auto width = juce::jmax (1, static_cast<int> (usable * proportions[i]));
-        cells[static_cast<std::size_t> (i)] = rest.removeFromLeft (width);
-        rest.removeFromLeft (panelGap);
-    }
-
-    // Control placement inside each top-strip panel.
-    for (int i = 0; i < 4; ++i) {
-        auto* panel = panels[i];
-        if (panel == nullptr)
+        if (panels[i] == nullptr)
             continue;
-        panel->setBounds (cells[static_cast<std::size_t> (i)]);
+        panels[i]->setBounds (rest.removeFromLeft (
+            juce::jmax (1, static_cast<int> (static_cast<float> (usable) * proportions[i]))));
+        rest.removeFromLeft (panelGap);
     }
 
     // Right block: ACCENT + SLIDE side by side, OUTPUT spanning beneath them.
     //
-    // At very compact widths the remainder can collapse, so the block is
-    // dropped rather than laid out with negative or overlapping rectangles.
+    // At very compact widths the remainder can collapse, so the block is dropped
+    // rather than laid out with negative or overlapping rectangles.
     const auto rightBlock = rest;
     const auto rightBlockUsable = rightBlock.getWidth() > panelGap
                                && rightBlock.getHeight() > panelGap;
@@ -237,50 +367,6 @@ void AcidSoundWorkspace::layoutTopStrip (juce::Rectangle<int> area)
         if (outputPanel != nullptr)
             outputPanel->setBounds (rightRest);
     }
-
-    if (oscillatorPanel != nullptr) {
-        const auto row = asComponents (oscillatorKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          oscillatorPanel->getContentBounds(), 2);
-    }
-    if (filterPanel != nullptr) {
-        const auto row = asComponents (filterKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          filterPanel->getContentBounds(), 2);
-    }
-    if (envelopePanel != nullptr) {
-        auto content = envelopePanel->getContentBounds();
-        if (envelopeTabs != nullptr) {
-            auto tabs = content.removeFromTop (tabStripHeight);
-            tabs.removeFromTop (2);
-            envelopeTabs->setBounds (tabs);
-        }
-        const auto knobStrip = juce::jmax (0, static_cast<int> (content.getHeight() * 0.42f));
-        const auto knobArea = juce::Rectangle<int> (content.getX(),
-                                                    content.getBottom() - knobStrip,
-                                                    content.getWidth(), knobStrip);
-        if (envelopeGraph != nullptr) {
-            auto graphArea = content;
-            graphArea.setHeight (juce::jmax (12, content.getHeight() - knobStrip - 2));
-            envelopeGraph->setBounds (graphArea);
-        }
-        const auto row = asComponents (envelopeKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()), knobArea, 2);
-    }
-    if (drivePanel != nullptr) {
-        const auto row = asComponents (driveKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          drivePanel->getContentBounds(), 2);
-    }
-    if (accentPanel != nullptr && accentKnob != nullptr && accentPanel->isVisible())
-        accentKnob->setBounds (accentPanel->getContentBounds());
-    if (slidePanel != nullptr && slideKnob != nullptr && slidePanel->isVisible())
-        slideKnob->setBounds (slidePanel->getContentBounds());
-    if (outputPanel != nullptr && outputPanel->isVisible()) {
-        const auto row = asComponents (outputKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          outputPanel->getContentBounds(), 2);
-    }
 }
 
 void AcidSoundWorkspace::layoutBottomRow (juce::Rectangle<int> area)
@@ -288,76 +374,19 @@ void AcidSoundWorkspace::layoutBottomRow (juce::Rectangle<int> area)
     if (area.getHeight() <= 0 || area.getWidth() <= 0)
         return;
 
-    const float proportions[] = { 0.52f, 0.30f };
-    auto rest = area;
     const auto usable = area.getWidth() - panelGap * 2;
+    auto rest = area;
 
     if (modulationPanel != nullptr)
         modulationPanel->setBounds (rest.removeFromLeft (
-            juce::jmax (1, static_cast<int> (usable * proportions[0]))));
+            juce::jmax (1, static_cast<int> (static_cast<float> (usable) * 0.52f))));
     rest.removeFromLeft (panelGap);
     if (performancePanel != nullptr)
         performancePanel->setBounds (rest.removeFromLeft (
-            juce::jmax (1, static_cast<int> (usable * proportions[1]))));
+            juce::jmax (1, static_cast<int> (static_cast<float> (usable) * 0.30f))));
     rest.removeFromLeft (panelGap);
     if (playModePanel != nullptr)
         playModePanel->setBounds (rest);
-
-    if (modulationPanel != nullptr) {
-        auto content = modulationPanel->getContentBounds();
-        if (modulationTabs != nullptr) {
-            auto tabs = content.removeFromTop (tabStripHeight);
-            tabs.removeFromTop (2);
-            modulationTabs->setBounds (tabs);
-        }
-        content.removeFromTop (tabStripHeight + 2);
-
-        const auto knobStrip = juce::jmax (0, static_cast<int> (content.getHeight() * 0.44f));
-        const auto knobArea = juce::Rectangle<int> (content.getX(),
-                                                    content.getBottom() - knobStrip,
-                                                    content.getWidth(), knobStrip);
-        if (modulationGraph != nullptr) {
-            auto graphArea = content;
-            graphArea.setHeight (juce::jmax (12, content.getHeight() - knobStrip - 2));
-            modulationGraph->setBounds (graphArea);
-        }
-        const auto row = asComponents (modulationKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()), knobArea, 2);
-    }
-
-    if (performancePanel != nullptr) {
-        const auto row = asComponents (performanceKnobs);
-        layoutControlRow (row.data(), static_cast<int> (row.size()),
-                          performancePanel->getContentBounds(), 2);
-    }
-
-    if (playModePanel != nullptr && playMode != nullptr)
-        playMode->setBounds (playModePanel->getContentBounds());
-}
-
-void AcidSoundWorkspace::resized()
-{
-    auto area = getLocalBounds();
-
-    // The sequencer takes whatever the top strip and bottom row do not need, so
-    // it stays dominant at every breakpoint instead of being clipped.
-    const int topHeight = juce::jlimit (96, 148, static_cast<int> (area.getHeight() * 0.28f));
-    const int bottomHeight = juce::jlimit (84, 128, static_cast<int> (area.getHeight() * 0.26f));
-
-    layoutTopStrip (area.removeFromTop (juce::jmin (topHeight, area.getHeight())));
-    area.removeFromTop (panelGap);
-
-    const auto bottom = area.removeFromBottom (juce::jmin (bottomHeight, area.getHeight()));
-    area.removeFromBottom (panelGap);
-
-    if (sequencerPanel != nullptr)
-        sequencerPanel->setBounds (area);
-    if (sequencer != nullptr)
-        sequencer->setBounds (sequencerPanel != nullptr
-                                  ? sequencerPanel->getContentBounds()
-                                  : area);
-
-    layoutBottomRow (bottom);
 }
 
 } // namespace vstengine::ui

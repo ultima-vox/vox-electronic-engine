@@ -59,6 +59,46 @@ juce::Rectangle<int> SoundModulePanel::getContentBounds() const
         .withTrimmedTop (headerHeight + 4);
 }
 
+void SoundModulePanel::addContent (const std::vector<juce::Component*>& components,
+                                   std::function<void (juce::Rectangle<int>)> layout)
+{
+    if (components.empty())
+        return;
+
+    // Reparent into this panel, so the components' coordinates become
+    // panel-local from here on. addAndMakeVisible detaches a component from any
+    // previous parent, which is what keeps one consistent coordinate model.
+    for (auto* component : components)
+        if (component != nullptr) {
+            addAndMakeVisible (*component);
+            contentComponents.push_back (component);
+        }
+
+    contentLayouts.push_back (std::move (layout));
+
+    // Lay out immediately so content is correctly placed even before the first
+    // resize pass reaches this panel.
+    if (contentLayouts.back() != nullptr)
+        contentLayouts.back() (getContentBounds());
+}
+
+void SoundModulePanel::clearContent()
+{
+    for (auto* component : contentComponents)
+        if (component != nullptr)
+            removeChildComponent (component);
+    contentComponents.clear();
+    contentLayouts.clear();
+}
+
+void SoundModulePanel::resized()
+{
+    const auto content = getContentBounds();
+    for (auto& layout : contentLayouts)
+        if (layout != nullptr)
+            layout (content);
+}
+
 void SoundModulePanel::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat().reduced (0.5f);

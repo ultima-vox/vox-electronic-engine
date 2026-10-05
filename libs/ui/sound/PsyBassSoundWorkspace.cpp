@@ -9,13 +9,14 @@ namespace {
 constexpr int panelGap = 8;
 constexpr int tabStripHeight = 15;
 
-// Bridges the typed control arrays to the generic row/grid layout helpers.
-template <std::size_t N>
-std::array<juce::Component*, N> asComponents (const std::array<SoundParameterKnob*, N>& knobs)
+// Knob array -> component vector, dropping any unbuilt entries.
+std::vector<SoundParameterKnob*> asVector (const std::array<SoundParameterKnob*, 4>& knobs)
 {
-    std::array<juce::Component*, N> out {};
-    for (std::size_t i = 0; i < N; ++i)
-        out[i] = knobs[i];
+    std::vector<SoundParameterKnob*> out;
+    out.reserve (knobs.size());
+    for (auto* knob : knobs)
+        if (knob != nullptr)
+            out.push_back (knob);
     return out;
 }
 
@@ -51,15 +52,12 @@ void PsyBassSoundWorkspace::buildComposition()
     oscillatorGraph = std::make_unique<SoundGraph> (SoundGraphKind::oscillator);
     oscillatorGraph->setWaveShape (PreviewWaveShape::saw);
     oscillatorGraph->setVerticalWeight (0.45f);
-    addAndMakeVisible (*oscillatorGraph);
 
     filterGraph = std::make_unique<SoundGraph> (SoundGraphKind::filter);
     filterGraph->setVerticalWeight (0.52f);
-    addAndMakeVisible (*filterGraph);
 
     envelopeGraph = std::make_unique<SoundGraph> (SoundGraphKind::envelope);
     envelopeGraph->setVerticalWeight (0.48f);
-    addAndMakeVisible (*envelopeGraph);
 
     // --- Row 2 -------------------------------------------------------------
     characterPanel = &addPanel ("DRIVE / CHARACTER");
@@ -72,16 +70,13 @@ void PsyBassSoundWorkspace::buildComposition()
 
     modulationTabs = std::make_unique<SoundTabStrip>();
     modulationTabs->setAccent (identityAccent);
-    addAndMakeVisible (*modulationTabs);
 
     modulationGraph = std::make_unique<SoundGraph> (SoundGraphKind::modulation);
     modulationGraph->setVerticalWeight (1.0f);
     modulationGraph->setAccent (identityAccent);
-    addAndMakeVisible (*modulationGraph);
 
     matrix = std::make_unique<GateAVisualMatrix>();
     matrix->setAccent (identityAccent);
-    addAndMakeVisible (*matrix);
 }
 
 SoundParameterKnob& PsyBassSoundWorkspace::addControl (juce::String requestedId,
@@ -94,14 +89,19 @@ SoundParameterKnob& PsyBassSoundWorkspace::addControl (juce::String requestedId,
         size, std::move (previewValue)));
     auto& knob = *controls.back();
     knob.setAccent (identityAccent);
-    addAndMakeVisible (knob);
     return knob;
 }
 
 void PsyBassSoundWorkspace::buildControls()
 {
-    // Destroy any previous controls first. This is what releases the APVTS
-    // SliderAttachments created for the previously selected slot.
+    // Drop panel content BEFORE destroying controls. The knobs are children of
+    // their panels, so the panels' content and layout hooks must be released
+    // first, otherwise destroying a knob would leave a dangling pointer behind
+    // for the next clearPanelContent() to dereference.
+    clearPanelContent();
+
+    // Destroy any previous controls. This releases the APVTS SliderAttachments
+    // created for the previously selected slot.
     controls.clear();
     oscillatorKnobs.fill (nullptr);
     filterKnobs.fill (nullptr);
@@ -159,6 +159,94 @@ void PsyBassSoundWorkspace::buildControls()
     modulationKnobs[1] = &addControl ({}, "ATTACK",  "14 ms", vox::ui::VoxKnob::Size::Small);
     modulationKnobs[2] = &addControl ({},  "DECAY",   "120 ms", vox::ui::VoxKnob::Size::Small);
     modulationKnobs[3] = &addControl ({}, "RELEASE", "180 ms", vox::ui::VoxKnob::Size::Small);
+
+    populatePanels();
+}
+
+void PsyBassSoundWorkspace::populatePanels()
+{
+    // Every module component becomes a child of its panel, so all of the layout
+    // below happens in PANEL-LOCAL coordinates. The workspace only decides the
+    // arrangement; the panel owns where its content lives.
+    //
+
+    // A graph over a control strip, repeated for the three voice modules.
+    const auto graphOverControls =
+        [] (SoundModulePanel& panel, SoundGraph& graph,
+            const std::array<SoundParameterKnob*, 4>& knobs, const float weight)
+        {
+            std::vector<juce::Component*> items { &graph };
+            for (auto* knob : knobs)
+                if (knob != nullptr)
+                    items.push_back (knob);
+
+            // Captured by value: the hook never dereferences the workspace.
+            addPanelContent (panel, items, [items, weight] (juce::Rectangle<int> content)
+            {
+                auto area = content;
+                const auto graphHeight = juce::jmax (20,
+                    static_cast<int> (static_cast<float> (area.getHeight()) * weight));
+                items[0]->setBounds (area.removeFromTop (graphHeight));
+                layoutControlRow (items.data() + 1,
+                                  static_cast<int> (items.size()) - 1,
+                                  area.reduced (0, 2));
+            });
+        };
+
+    if (oscillatorPanel != nullptr && oscillatorGraph != nullptr)
+        graphOverControls (*oscillatorPanel, *oscillatorGraph, oscillatorKnobs, 0.45f);
+    if (filterPanel != nullptr && filterGraph != nullptr)
+        graphOverControls (*filterPanel, *filterGraph, filterKnobs, 0.52f);
+    if (envelopePanel != nullptr && envelopeGraph != nullptr)
+        graphOverControls (*envelopePanel, *envelopeGraph, envelopeKnobs, 0.48f);
+
+    // Control-only panels.
+    if (characterPanel != nullptr)
+        addControlStrip (*characterPanel, asVector (characterKnobs));
+    if (accentPanel != nullptr)
+        addControlStrip (*accentPanel, asVector (accentKnobs));
+    if (performancePanel != nullptr)
+        addControlStrip (*performancePanel, asVector (performanceKnobs));
+
+    // MODULATION: tab strip, dominant graph, then a compact control strip.
+    if (modulationPanel != nullptr && modulationTabs != nullptr && modulationGraph != nullptr)
+    {
+        std::vector<juce::Component*> items { modulationTabs.get(), modulationGraph.get() };
+        for (auto* knob : modulationKnobs)
+            if (knob != nullptr)
+                items.push_back (knob);
+
+        addPanelContent (*modulationPanel, items, [items] (juce::Rectangle<int> content)
+        {
+            auto area = content;
+            auto tabs = area.removeFromTop (tabStripHeight);
+            tabs.removeFromTop (3);
+            items[0]->setBounds (tabs);
+            area.removeFromTop (3);
+
+            const auto knobStrip = juce::jmax (0,
+                static_cast<int> (static_cast<float> (area.getHeight()) * 0.40f));
+            auto graphArea = area;
+            graphArea.setHeight (juce::jmax (14, area.getHeight() - knobStrip - 2));
+            items[1]->setBounds (graphArea);
+
+            layoutControlRow (items.data() + 2, static_cast<int> (items.size()) - 2,
+                              juce::Rectangle<int> (area.getX(), area.getBottom() - knobStrip,
+                                                    area.getWidth(), knobStrip).reduced (0, 2));
+        });
+    }
+
+    // MOD MATRIX fills its panel.
+    if (matrixPanel != nullptr && matrix != nullptr)
+        addPanelContent (*matrixPanel, { matrix.get() },
+                         [raw = matrix.get()] (juce::Rectangle<int> content)
+                         {
+                             // Single child: give it the whole content rectangle.
+                             if (raw != nullptr)
+                                 raw->setBounds (content);
+                         });
+
+    resized();
 }
 
 void PsyBassSoundWorkspace::bind (const SoundWorkspaceBinding& binding)
@@ -195,14 +283,17 @@ juce::StringArray PsyBassSoundWorkspace::getGateAVisualOnlyLabels() const
 
 void PsyBassSoundWorkspace::resized()
 {
+    // The workspace only positions PANELS. Every graph, knob, tab strip and
+    // matrix is a child of its panel and is laid out by that panel in
+    // panel-local coordinates, so no content rectangle is computed here.
     auto area = getLocalBounds();
 
     const int row1Height = juce::jlimit (128, 210, static_cast<int> (area.getHeight() * 0.40f));
     const int row2Height = juce::jlimit (88, 136, static_cast<int> (area.getHeight() * 0.26f));
 
-    auto row1 = area.removeFromTop (juce::jmin (row1Height, area.getHeight()));
+    const auto row1 = area.removeFromTop (juce::jmin (row1Height, area.getHeight()));
     area.removeFromTop (panelGap);
-    auto row2 = area.removeFromTop (juce::jmin (row2Height, area.getHeight()));
+    const auto row2 = area.removeFromTop (juce::jmin (row2Height, area.getHeight()));
     area.removeFromTop (panelGap);
     const auto row3 = area;
 
@@ -213,28 +304,6 @@ void PsyBassSoundWorkspace::resized()
         oscillatorPanel->setBounds (cells[0]);
         filterPanel->setBounds (cells[1]);
         envelopePanel->setBounds (cells[2]);
-
-        const auto layoutGraphOverRow =
-            [] (SoundModulePanel& panel, SoundGraph& graph,
-                const std::array<juce::Component*, 4>& row, const float weight)
-        {
-            auto content = panel.getContentBounds();
-            const auto graphHeight = juce::jmax (20,
-                static_cast<int> (content.getHeight() * weight));
-            graph.setBounds (content.removeFromTop (graphHeight));
-            const auto rowArea = content.reduced (0, 2);
-            layoutControlRow (row.data(), static_cast<int> (row.size()), rowArea);
-        };
-
-        if (oscillatorGraph != nullptr)
-            layoutGraphOverRow (*oscillatorPanel, *oscillatorGraph,
-                               asComponents (oscillatorKnobs), 0.45f);
-        if (filterGraph != nullptr)
-            layoutGraphOverRow (*filterPanel, *filterGraph,
-                               asComponents (filterKnobs), 0.52f);
-        if (envelopeGraph != nullptr)
-            layoutGraphOverRow (*envelopePanel, *envelopeGraph,
-                               asComponents (envelopeKnobs), 0.48f);
     }
 
     // --- Row 2: DRIVE / ACCENT / PERFORMANCE -------------------------------
@@ -244,16 +313,6 @@ void PsyBassSoundWorkspace::resized()
         characterPanel->setBounds (cells[0]);
         accentPanel->setBounds (cells[1]);
         performancePanel->setBounds (cells[2]);
-
-        const auto characterRow = asComponents (characterKnobs);
-        layoutControlRow (characterRow.data(), static_cast<int> (characterRow.size()),
-                          characterPanel->getContentBounds());
-        const auto accentRow = asComponents (accentKnobs);
-        layoutControlRow (accentRow.data(), static_cast<int> (accentRow.size()),
-                          accentPanel->getContentBounds());
-        const auto performanceRow = asComponents (performanceKnobs);
-        layoutControlRow (performanceRow.data(), static_cast<int> (performanceRow.size()),
-                          performancePanel->getContentBounds());
     }
 
     // --- Row 3: MODULATION / MOD MATRIX -----------------------------------
@@ -262,37 +321,9 @@ void PsyBassSoundWorkspace::resized()
         const auto usable = row3.getWidth() - panelGap;
         auto rest = row3;
         modulationPanel->setBounds (rest.removeFromLeft (juce::jmax (1,
-            static_cast<int> (usable * 0.52f))));
+            static_cast<int> (static_cast<float> (usable) * 0.52f))));
         rest.removeFromLeft (panelGap);
         matrixPanel->setBounds (rest);
-
-        if (modulationTabs != nullptr) {
-            auto tabs = modulationPanel->getContentBounds().removeFromTop (tabStripHeight);
-            tabs.removeFromTop (3);
-            modulationTabs->setBounds (tabs);
-        }
-
-        auto content = modulationPanel->getContentBounds();
-        content.removeFromTop (tabStripHeight + 3);
-
-        // The modulation graph stays visually dominant; the four ADSR-style
-        // controls sit beneath it.
-        const auto knobStrip = juce::jmax (0, static_cast<int> (content.getHeight() * 0.40f));
-        const auto knobArea = juce::Rectangle<int> (content.getX(),
-                                                    content.getBottom() - knobStrip,
-                                                    content.getWidth(), knobStrip);
-        if (modulationGraph != nullptr) {
-            auto graphArea = content;
-            graphArea.setHeight (juce::jmax (14, content.getHeight() - knobStrip - 2));
-            modulationGraph->setBounds (graphArea);
-        }
-
-        const auto rowMod = asComponents (modulationKnobs);
-        layoutControlRow (rowMod.data(), static_cast<int> (rowMod.size()),
-                          knobArea.reduced (0, 2));
-
-        if (matrix != nullptr)
-            matrix->setBounds (matrixPanel->getContentBounds());
     }
 }
 
