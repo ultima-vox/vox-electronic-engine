@@ -172,7 +172,7 @@ void PsyBassSoundWorkspace::populatePanels()
 
     // A graph over a control strip, repeated for the three voice modules.
     const auto graphOverControls =
-        [] (SoundModulePanel& panel, SoundGraph& graph,
+        [this] (SoundModulePanel& panel, SoundGraph& graph,
             const std::array<SoundParameterKnob*, 4>& knobs, const float weight)
         {
             std::vector<juce::Component*> items { &graph };

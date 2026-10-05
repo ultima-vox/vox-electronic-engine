@@ -154,7 +154,7 @@ void GenericSoundWorkspace::populatePanels()
     };
 
     const auto graphOverControls =
-        [] (SoundModulePanel& panel, SoundGraph& graph,
+        [this] (SoundModulePanel& panel, SoundGraph& graph,
             const std::array<SoundParameterKnob*, 4>& knobs, const float weight)
         {
             std::vector<juce::Component*> items { &graph };

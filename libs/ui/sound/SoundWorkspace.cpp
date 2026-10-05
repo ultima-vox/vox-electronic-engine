@@ -71,13 +71,17 @@ void SoundWorkspace::addControlStrip (SoundModulePanel& panel,
 
 void SoundWorkspace::addCentreControl (SoundModulePanel& panel, SoundParameterKnob& knob)
 {
-    addPanelContent (panel, { &knob }, [&knob] (juce::Rectangle<int> content)
+    // Captured by value: the hook outlives this call, so capturing the reference
+    // parameter itself would dangle.
+    auto* const target = &knob;
+
+    addPanelContent (panel, { &knob }, [target] (juce::Rectangle<int> content)
     {
         // One dominant control, centred, bounded so it cannot grow into the
         // panel header.
         const auto side = juce::jlimit (0, content.getWidth(),
             juce::jlimit (0, content.getHeight(), content.getHeight()));
-        knob.setBounds (content.reduced (juce::jmax (0, (content.getWidth() - side) / 2), 0));
+        target->setBounds (content.reduced (juce::jmax (0, (content.getWidth() - side) / 2), 0));
     });
 }
 
