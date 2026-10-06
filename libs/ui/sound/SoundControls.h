@@ -28,6 +28,10 @@ namespace vstengine::ui {
 // ("Visual-prototype exception") for Visual Gate A composition review only, and
 // must be replaced by a bound control at Functional Gate B.
 //
+// It deliberately borrows vox::ui::VoxKnob for its anatomy instead of painting
+// a second knob: a Gate A capture then differs from a bound control only by
+// accent alpha, so the two can never drift into different-looking controls.
+//
 // The type name is deliberately explicit so the distinction is obvious in code
 // review. Every workspace lists these through
 // SoundWorkspace::getGateAVisualOnlyLabels() so the Visual Gate capture can
@@ -41,16 +45,21 @@ public:
 
     void setAccent (juce::Colour newAccent);
 
-    void paint (juce::Graphics&) override;
+    // The knob this control previews; exposed so a future Gate B binding can
+    // reuse the same instance instead of rebuilding the panel.
+    [[nodiscard]] vox::ui::VoxKnob& getKnob() noexcept { return *knob; }
+
     void resized() override;
 
 private:
+    // Preview-only controls draw a quieter arc than a bound parameter so a
+    // Gate A screenshot shows which controls are still unbacked.
+    static constexpr float previewAccentAlpha = 0.42f;
+
     juce::String label;
     juce::String valueText;
-    float previewValue01 { 0.5f };
     juce::Colour accent { colours::primary };
-    float diameter { 47.0f };
-    juce::Rectangle<float> knobBounds;
+    std::unique_ptr<vox::ui::VoxKnob> knob;
 };
 
 // Resolves an EXISTING stable descriptor parameter id to the APVTS macro slot it

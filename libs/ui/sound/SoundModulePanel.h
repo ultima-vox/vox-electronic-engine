@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "ui/common/UiComponents.h"
+#include "vox-ui/components/VoxInlineSelector.h"
+#include "vox-ui/components/VoxSectionHeader.h"
 
 namespace vstengine::ui {
 
@@ -16,6 +18,15 @@ namespace vstengine::ui {
 // It has no domain knowledge, no parameter state and no instrument-specific
 // behaviour, so the Psy Bass, Acid and generic workspaces all compose the same
 // primitive instead of sharing one hardcoded panel set.
+//
+// HEADER
+// ------
+// The header is exactly one vox::ui::VoxSectionHeader, the shared implementation
+// of the canonical `status/power | title | optional selector/action` strip
+// (UI_PRODUCTION_IMPLEMENTATION_STANDARD.md section 11). This panel used to
+// paint its own header, which is how it ended up with a plain 6 px circle
+// instead of a power glyph, a badge with no real affordance, and a Unicode
+// black-down-pointing-triangle used as a chevron.
 //
 // CONTENT OWNERSHIP
 // -----------------
@@ -40,17 +51,46 @@ public:
     explicit SoundModulePanel (juce::String titleText = {});
 
     void setSubtitle (juce::String text);
+
+    // Instrument/domain identity accent.
+    //
+    // The module header itself deliberately stays on the shared interaction
+    // accent, because the accepted render draws the power glyph in cyan for the
+    // instrument whose identity accent is green. Product content (graphs,
+    // sequencers, option lists) applies the identity accent through its own
+    // setAccent(); this accessor is how a workspace reads the same value back.
     void setAccent (juce::Colour newAccent);
     [[nodiscard]] juce::Colour getAccent() const noexcept { return accent; }
 
-    // Compact right-aligned selector text in the header (waveform type, filter
-    // type, drive type, ...). Presentation only during Visual Gate A.
+    // Compact header value readout (filter type, drive type, ...). It is a real
+    // VoxComboBox carrying a vector chevron; it stays a readout until a
+    // workspace supplies options through getHeaderSelector().setItems(...).
     void setHeaderSelector (juce::String text);
+    [[nodiscard]] vox::ui::VoxInlineSelector& getHeaderSelector() noexcept
+    {
+        return headerSelector;
+    }
 
+    // Leading status affordance. These two calls map onto the shared header's
+    // power glyph, which is interactive and reports through onPowerToggled.
     void setStatusDotVisible (bool shouldBeVisible);
     void setStatusDotActive (bool shouldBeActive);
+    [[nodiscard]] bool isStatusDotActive() const noexcept { return statusDotActive; }
 
-    // Below this height the header chrome stops being drawn so that compact
+    // Replaces the leading power glyph with a vector status icon. The accepted
+    // render uses the gear for AMP ENVELOPE and the matrix glyph for MATRIX.
+    void setLeadingIcon (vox::ui::icons::Icon icon);
+
+    // Trailing affordances. `action` is flush right (the bordered "+" on AMP
+    // ENVELOPE and MATRIX); `control` is the centred slot the OSCILLATOR and
+    // MODULATION segmented rows use.
+    void setActionComponent (juce::Component* component);
+    void setControlComponent (juce::Component* component);
+    void setTrailingPowerVisible (bool shouldBeVisible);
+
+    std::function<void (bool)> onPowerToggled;
+
+    // Below this height the header chrome stops being laid out so that compact
     // breakpoints degrade gracefully instead of clipping text.
     static constexpr int minimumUsefulHeight = 46;
 
@@ -88,12 +128,14 @@ public:
     void resized() override;
 
 private:
-    juce::String title;
+    juce::String headerTitle;
     juce::String subtitle;
-    juce::String headerSelector;
     juce::Colour accent { colours::primary };
     bool statusDotVisible { true };
-    bool statusDotActive { false };
+    bool statusDotActive { true };
+
+    vox::ui::VoxSectionHeader header;
+    vox::ui::VoxInlineSelector headerSelector { vox::ui::VoxInlineSelector::Form::Header };
 
     std::vector<juce::Component*> contentComponents;
     std::vector<std::function<void (juce::Rectangle<int>)>> contentLayouts;

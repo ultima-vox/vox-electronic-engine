@@ -4,22 +4,51 @@
 
 namespace vox::ui {
 
+namespace {
+
+// The accepted render stacks the control as knob / label / value: the caption
+// sits directly under the knob and the formatted value under the caption. Both
+// bands are always reserved, so a short cell degrades by shrinking the knob
+// rather than by letting text drift over the control.
+constexpr int labelBandHeight = 16;
+constexpr int valueBandHeight = 14;
+
+// Measured from the accepted render (arc ring outer diameter ~52 px including
+// the housing ring, ~4.5 px track weight, body at ~0.74 of the arc radius,
+// pointer from ~0.26 to 1.0 of the arc radius).
+constexpr float trackWeightFraction = 0.088f;
+constexpr float bodyRadiusFraction = 0.74f;
+constexpr float pointerInnerFraction = 0.26f;
+constexpr float pointerOuterFraction = 1.0f;
+constexpr float pointerWeightFraction = 0.045f;
+constexpr float pointerToTextMix = 0.82f;
+
+} // namespace
+
 VoxKnob::VoxKnob (juce::String labelText, Size size)
     : knobSize (size)
 {
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    slider.setRotaryParameters (juce::MathConstants<float>::pi * 0.75f,
-                                juce::MathConstants<float>::pi * 2.25f,
+
+    // The accepted render has a gap at the bottom of the track, which is the
+    // JUCE rotary default span (1.2 pi to 2.8 pi measured clockwise from 12).
+    slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.2f,
+                                juce::MathConstants<float>::pi * 2.8f,
                                 true);
     slider.setVelocityBasedMode (false);
     slider.setMouseDragSensitivity (180);
     slider.onValueChange = [this] { repaint(); };
+
+    // Documented accent hook. Product code overrides this per instrument
+    // identity; the default is the shared interaction accent.
+    setColour (juce::Slider::rotarySliderFillColourId, tokens::colour::accent);
+
     addAndMakeVisible (slider);
 
     label.setText (std::move (labelText), juce::dontSendNotification);
     label.setJustificationType (juce::Justification::centred);
-    label.setColour (juce::Label::textColourId, tokens::colour::textSecondary);
+    label.setColour (juce::Label::textColourId, tokens::colour::text);
     label.setFont (typography::controlLabel());
     label.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (label);
@@ -73,148 +102,190 @@ int VoxKnob::getKnobDiameter() const noexcept
 void VoxKnob::resized()
 {
     auto area = getLocalBounds();
-    area.removeFromBottom (18);
+    valueBounds = {};
 
-    // Small knobs placed into tall instrument panels are control strips beneath the
-    // visual display, matching the accepted reference renders. Normal/large knobs
-    // (notably the dedicated MACROS page) retain the centred composition.
-    if (knobSize == Size::Small && area.getHeight() >= 86)
+    const auto nominal = getKnobDiameter();
+    const auto responsiveCap = knobSize == Size::Small ? tokens::size::knobNormal
+                                                       : tokens::size::knobLarge;
+    const auto bandHeight = labelBandHeight + valueBandHeight;
+
+    if (area.getWidth() <= 0 || area.getHeight() <= 0)
     {
-        const auto stripHeight = juce::jmin (76, area.getHeight());
-        auto strip = area.removeFromBottom (stripHeight);
-        label.setBounds (strip.removeFromTop (16));
-
-        const auto nominal = getKnobDiameter();
-        const auto available = juce::jmin (strip.getWidth(), strip.getHeight());
-        const auto desired = juce::jlimit (nominal, tokens::size::knobNormal,
-                                           static_cast<int> (static_cast<float> (available) * 0.78f));
-        const auto diameter = juce::jmin (desired, available);
-        slider.setBounds (strip.withSizeKeepingCentre (diameter, diameter));
+        label.setBounds ({});
+        slider.setBounds ({});
         return;
     }
 
-    label.setBounds (area.removeFromTop (16));
-    const auto nominal = getKnobDiameter();
-    const auto responsiveCap = knobSize == Size::Small
-        ? tokens::size::knobNormal
-        : tokens::size::knobLarge;
-    const auto available = juce::jmin (area.getWidth(), area.getHeight());
-    const auto desired = juce::jlimit (nominal, responsiveCap,
-                                       static_cast<int> (static_cast<float> (available) * 0.64f));
-    const auto diameter = juce::jmin (desired, available);
-    slider.setBounds (area.withSizeKeepingCentre (diameter, diameter));
+    const auto knobSpace = juce::jmax (0, area.getHeight() - bandHeight);
+    const auto available = juce::jmin (area.getWidth(), knobSpace);
+    const auto scaled = static_cast<int> (static_cast<float> (available) * 0.88f);
+    const auto diameter = available <= 0
+        ? 0
+        : juce::jmin (available, juce::jlimit (nominal, responsiveCap, scaled));
+
+    // The caption/value bands always travel with the knob, so a tall cell centres
+    // one control block instead of stranding the caption at the cell edge. No
+    // page-specific placement rule lives here: callers that want a control strip
+    // size the component and this stays centred inside it.
+    const auto blockHeight = juce::jmin (area.getHeight(), diameter + bandHeight);
+    auto block = area.withHeight (blockHeight)
+                     .withY (area.getCentreY() - blockHeight / 2);
+
+    valueBounds = block.removeFromBottom (valueBandHeight);
+    label.setBounds (block.removeFromBottom (labelBandHeight));
+
+    slider.setBounds (block.withSizeKeepingCentre (
+        juce::jmin (diameter, block.getWidth()),
+        juce::jmin (diameter, block.getHeight())));
 }
 
 void VoxKnob::paint (juce::Graphics& g)
 {
     const auto knobBounds = slider.getBounds().toFloat();
-    if (knobBounds.isEmpty())
-        return;
 
-    const auto diameter = juce::jmin (knobBounds.getWidth(), knobBounds.getHeight());
-    const auto radius = diameter * 0.5f;
-    const auto centre = knobBounds.getCentre();
-    const auto strokeW = juce::jmax (1.7f, radius * 0.105f);
-    const auto arcRadius = juce::jmax (1.0f, radius - strokeW * 1.05f);
-
-    const auto params = slider.getRotaryParameters();
-    const auto startAngle = params.startAngleRadians;
-    const auto endAngle = params.endAngleRadians;
-    const auto angleRange = endAngle - startAngle;
-
-    const auto range = slider.getRange();
-    const auto proportion = range.getLength() > 0.0
-        ? juce::jlimit (0.0f, 1.0f,
-                       static_cast<float> ((slider.getValue() - range.getStart()) / range.getLength()))
-        : 0.0f;
-    const auto angle = startAngle + proportion * angleRange;
+    const auto accent = findColour (juce::Slider::rotarySliderFillColourId);
     const auto enabled = slider.isEnabled() && isEnabled();
 
-    g.setColour (tokens::colour::borderSubtle.withAlpha (0.72f));
-    for (int tick = 0; tick <= 10; ++tick)
+    if (! knobBounds.isEmpty())
     {
-        const auto a = startAngle + angleRange * static_cast<float> (tick) / 10.0f;
-        const auto inner = centre + juce::Point<float> (0.0f, -(arcRadius + 2.0f)).rotatedAboutOrigin (a);
-        const auto outer = centre + juce::Point<float> (0.0f, -(arcRadius + (tick % 5 == 0 ? 5.5f : 4.0f)))
-                                              .rotatedAboutOrigin (a);
-        g.drawLine ({ inner, outer }, tick % 5 == 0 ? 1.0f : 0.7f);
-    }
+        const auto diameter = juce::jmin (knobBounds.getWidth(), knobBounds.getHeight());
+        const auto radius = diameter * 0.5f;
+        const auto centre = knobBounds.getCentre();
+        const auto trackWeight = juce::jmax (2.4f, diameter * trackWeightFraction);
+        const auto arcRadius = juce::jmax (1.0f, radius - trackWeight * 0.5f);
 
-    juce::Path inactive;
-    inactive.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
-                            startAngle, endAngle, true);
-    g.setColour (tokens::colour::border);
-    g.strokePath (inactive, juce::PathStrokeType (strokeW,
+        const auto params = slider.getRotaryParameters();
+        const auto startAngle = params.startAngleRadians;
+        const auto angleRange = params.endAngleRadians - params.startAngleRadians;
+
+        const auto range = slider.getRange();
+        const auto proportion = range.getLength() > 0.0
+            ? juce::jlimit (0.0f, 1.0f,
+                            static_cast<float> ((slider.getValue() - range.getStart())
+                                                / range.getLength()))
+            : 0.0f;
+        const auto angle = startAngle + proportion * angleRange;
+
+        const auto stroke = juce::PathStrokeType (trackWeight,
                                                   juce::PathStrokeType::curved,
-                                                  juce::PathStrokeType::rounded));
+                                                  juce::PathStrokeType::butt);
 
-    if (modulationAmount > 0.001f)
-    {
-        juce::Path modulation;
-        if (style == Style::Bipolar)
+        // 4. outer housing ring: the shallow lip the track is cut into.
+        const auto housingRadius = arcRadius + trackWeight;
+        g.setColour (tokens::colour::borderSubtle.withAlpha (enabled ? 0.55f : 0.25f));
+        g.drawEllipse (juce::Rectangle<float> (housingRadius * 2.0f, housingRadius * 2.0f)
+                           .withCentre (centre),
+                       1.0f);
+
+        // 1. modulation range, drawn under the value track so it reads as a range
+        //    rather than as a second value.
+        if (modulationAmount > 0.001f)
         {
-            const auto mid = startAngle + angleRange * 0.5f;
-            const auto half = modulationAmount * angleRange * 0.5f;
-            modulation.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
-                                      juce::jmax (startAngle, mid - half),
-                                      juce::jmin (endAngle, mid + half), true);
+            juce::Path modulation;
+            if (style == Style::Bipolar)
+            {
+                const auto mid = startAngle + angleRange * 0.5f;
+                const auto half = modulationAmount * angleRange * 0.5f;
+                modulation.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
+                                          juce::jmax (startAngle, mid - half),
+                                          juce::jmin (startAngle + angleRange, mid + half),
+                                          true);
+            }
+            else
+            {
+                modulation.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
+                                          angle,
+                                          juce::jmin (startAngle + angleRange,
+                                                      angle + modulationAmount * angleRange),
+                                          true);
+            }
+
+            g.setColour (accent.withAlpha (enabled ? 0.34f : 0.16f));
+            g.strokePath (modulation, juce::PathStrokeType (trackWeight * 1.6f,
+                                                            juce::PathStrokeType::curved,
+                                                            juce::PathStrokeType::butt));
         }
-        else
+
+        // 2. inactive value track.
+        juce::Path track;
+        track.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
+                             startAngle, startAngle + angleRange, true);
+        g.setColour (tokens::colour::border);
+        g.strokePath (track, stroke);
+
+        // 3. active value track.
+        if (proportion > 0.0f)
         {
-            modulation.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
-                                      angle,
-                                      juce::jmin (endAngle, angle + modulationAmount * angleRange),
-                                      true);
+            juce::Path active;
+            active.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
+                                  startAngle, angle, true);
+            g.setColour (enabled ? accent : tokens::colour::textMuted);
+            g.strokePath (active, stroke);
         }
-        g.setColour (tokens::colour::accentHover.withAlpha (enabled ? 0.42f : 0.18f));
-        g.strokePath (modulation, juce::PathStrokeType (juce::jmax (1.0f, strokeW * 0.5f),
-                                                        juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
+
+        // 5. recessed body, lit from the rim inwards: the accepted render is
+        //    darkest at the centre.
+        const auto bodyRadius = arcRadius * bodyRadiusFraction;
+        const auto body = juce::Rectangle<float> (bodyRadius * 2.0f, bodyRadius * 2.0f)
+                              .withCentre (centre);
+        juce::ColourGradient bodyFill (tokens::colour::background.darker (0.55f),
+                                       centre.x, centre.y,
+                                       tokens::colour::panelRaised,
+                                       centre.x + bodyRadius, centre.y, true);
+        g.setGradientFill (bodyFill);
+        g.fillEllipse (body);
+
+        // 6. body shading: rim, inner shadow and the small machined centre pin
+        //    visible in the accepted render.
+        g.setColour (tokens::colour::borderSubtle.withAlpha (0.9f));
+        g.drawEllipse (body, 1.0f);
+        g.setColour (tokens::colour::background.withAlpha (0.5f));
+        g.drawEllipse (body.reduced (bodyRadius * 0.16f), 1.0f);
+
+        const auto pinRadius = juce::jmax (1.4f, bodyRadius * 0.15f);
+        const auto pin = juce::Rectangle<float> (pinRadius * 2.0f, pinRadius * 2.0f)
+                             .withCentre (centre);
+        g.setColour (tokens::colour::background);
+        g.fillEllipse (pin);
+        g.setColour (tokens::colour::borderSubtle.withAlpha (0.85f));
+        g.drawEllipse (pin, 1.0f);
+
+        // 7. position indicator: one bright pointer from near the centre out to
+        //    the track, tinted towards the text colour exactly like the render.
+        const auto pointerColour = enabled
+            ? accent.interpolatedWith (tokens::colour::text, pointerToTextMix)
+            : tokens::colour::textMuted;
+        const auto pointerStart = centre
+            + juce::Point<float> (0.0f, -arcRadius * pointerInnerFraction)
+                  .rotatedAboutOrigin (angle);
+        const auto pointerEnd = centre
+            + juce::Point<float> (0.0f, -arcRadius * pointerOuterFraction)
+                  .rotatedAboutOrigin (angle);
+
+        g.setColour (pointerColour);
+        g.drawLine ({ pointerStart, pointerEnd },
+                    juce::jmax (2.0f, diameter * pointerWeightFraction));
+
+        // 8. focus state on its own ring so it never overloads the value colour.
+        if (hasKeyboardFocus (true))
+        {
+            g.setColour (accent.withAlpha (0.65f));
+            g.drawEllipse (juce::Rectangle<float> ((housingRadius + 2.0f) * 2.0f,
+                                                   (housingRadius + 2.0f) * 2.0f)
+                               .withCentre (centre),
+                           1.0f);
+        }
     }
 
-    juce::Path active;
-    active.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
-                          startAngle, angle, true);
-    g.setColour (enabled ? tokens::colour::accent : tokens::colour::textMuted);
-    g.strokePath (active, juce::PathStrokeType (strokeW,
-                                                juce::PathStrokeType::curved,
-                                                juce::PathStrokeType::rounded));
-
-    const auto bodyRadius = radius * 0.60f;
-    juce::ColourGradient bodyGradient (tokens::colour::panelRaised.brighter (0.08f),
-                                       centre.x, centre.y - bodyRadius,
-                                       tokens::colour::background,
-                                       centre.x, centre.y + bodyRadius, false);
-    bodyGradient.addColour (0.48, tokens::colour::control);
-    g.setGradientFill (bodyGradient);
-    g.fillEllipse (centre.x - bodyRadius, centre.y - bodyRadius,
-                   bodyRadius * 2.0f, bodyRadius * 2.0f);
-
-    g.setColour (tokens::colour::borderSubtle);
-    g.drawEllipse (centre.x - bodyRadius, centre.y - bodyRadius,
-                   bodyRadius * 2.0f, bodyRadius * 2.0f,
-                   juce::jmax (1.0f, strokeW * 0.30f));
-    g.setColour (tokens::colour::border.withAlpha (0.44f));
-    g.drawEllipse (centre.x - bodyRadius * 0.78f, centre.y - bodyRadius * 0.78f,
-                   bodyRadius * 1.56f, bodyRadius * 1.56f, 1.0f);
-
-    const auto markerStart = centre + juce::Point<float> (0.0f, -bodyRadius * 0.28f)
-                                        .rotatedAboutOrigin (angle);
-    const auto markerEnd = centre + juce::Point<float> (0.0f, -bodyRadius * 0.88f)
-                                      .rotatedAboutOrigin (angle);
-    g.setColour (enabled ? tokens::colour::text : tokens::colour::textMuted);
-    g.drawLine ({ markerStart, markerEnd }, juce::jmax (1.2f, strokeW * 0.40f));
-
-    const auto valueBounds = getLocalBounds().removeFromBottom (17).reduced (6, 0);
-    const auto valueText = slider.getTextFromValue (slider.getValue());
-    g.setColour (tokens::colour::background.withAlpha (0.64f));
-    const auto pill = valueBounds.withSizeKeepingCentre (juce::jmin (valueBounds.getWidth(), 68), 16).toFloat();
-    g.fillRoundedRectangle (pill, 3.0f);
-    g.setColour (tokens::colour::borderSubtle);
-    g.drawRoundedRectangle (pill, 3.0f, 1.0f);
-    g.setColour (enabled ? tokens::colour::textSecondary : tokens::colour::textMuted);
-    g.setFont (typography::valueText());
-    g.drawText (valueText, valueBounds, juce::Justification::centred, false);
+    // 10. formatted value. Measured from the accepted render at ~#F3F8FF, i.e.
+    //     the primary text colour rather than a second accent.
+    if (valueBounds.getHeight() >= 8)
+    {
+        g.setColour (enabled ? tokens::colour::text : tokens::colour::textMuted);
+        g.setFont (typography::valueText());
+        g.drawText (slider.getTextFromValue (slider.getValue()), valueBounds,
+                    juce::Justification::centred, false);
+    }
 }
 
 } // namespace vox::ui

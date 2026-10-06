@@ -4,6 +4,21 @@
 
 namespace vox::ui {
 
+// VOX rotary control.
+//
+// UI_PRODUCTION_IMPLEMENTATION_STANDARD.md section 10 defines the production
+// anatomy; this class renders exactly that stack (modulation range, inactive
+// track, active track, housing ring, recessed body, shading, pointer, focus,
+// label, value) and nothing else. It carries no page-specific layout rules: a
+// page that wants a control strip composes its own bounds and passes them in.
+//
+// ACCENT COLOUR
+// -------------
+// `setColour (juce::Slider::rotarySliderFillColourId, c)` is honoured: the
+// active arc is drawn in that colour and defaults to tokens::colour::accent.
+// This is the documented hook product code uses to apply an instrument identity
+// accent, and it is the same id juce::Slider uses for a rotary fill, so no
+// second colour API exists.
 class VoxKnob : public juce::Component,
                 public juce::SettableTooltipClient
 {
@@ -41,6 +56,7 @@ private:
     Size knobSize = Size::Normal;
     Style style = Style::Standard;
     float modulationAmount = 0.0f;
+    juce::Rectangle<int> valueBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxKnob)
 };

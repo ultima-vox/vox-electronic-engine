@@ -2,136 +2,50 @@
 
 #include "instrument/HostParameterSchema.h"
 
-#include <cmath>
-
 namespace vstengine::ui {
-
-namespace {
-
-constexpr float smallDiameter = 36.0f;
-constexpr float normalDiameter = 47.0f;
-constexpr float largeDiameter = 62.0f;
-constexpr int labelHeight = 12;
-constexpr int valueHeight = 12;
-
-float diameterFor (const vox::ui::VoxKnob::Size size) noexcept
-{
-    switch (size) {
-        case vox::ui::VoxKnob::Size::Small:  return smallDiameter;
-        case vox::ui::VoxKnob::Size::Large:  return largeDiameter;
-        case vox::ui::VoxKnob::Size::Normal: break;
-    }
-    return normalDiameter;
-}
-
-// Shared knob anatomy, matching VoxKnob's layer order closely enough that a
-// preview knob and a bound knob read as the same component family.
-void paintKnobBody (juce::Graphics& g, juce::Rectangle<float> area, float value01,
-                    juce::Colour accent, bool dimmed)
-{
-    const auto d = juce::jmin (area.getWidth(), area.getHeight());
-    const auto centre = area.getCentre();
-    const auto r = d * 0.5f;
-    auto body = juce::Rectangle<float> (d, d).withCentre (centre);
-
-    g.setColour (colours::control);
-    g.fillEllipse (body);
-
-    juce::ColourGradient face (colours::panelRaised.brighter (0.06f), body.getTopLeft(),
-                               colours::control.darker (0.25f), body.getBottomLeft(), false);
-    g.setGradientFill (face);
-    g.fillEllipse (body.reduced (d * 0.10f));
-
-    const auto ringR = r * 0.80f;
-    const auto start = juce::MathConstants<float>::pi * 0.78f;
-    const auto sweep = juce::MathConstants<float>::pi * 1.44f;
-
-    juce::Path track;
-    track.addCentredArc (centre.x, centre.y, ringR, ringR, 0.0f, start, start + sweep, true);
-    g.setColour (colours::borderSubtle);
-    g.strokePath (track, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
-                                               juce::PathStrokeType::rounded));
-
-    const auto clamped = juce::jlimit (0.0f, 1.0f, value01);
-    if (clamped > 0.001f) {
-        juce::Path active;
-        active.addCentredArc (centre.x, centre.y, ringR, ringR, 0.0f, start,
-                              start + sweep * clamped, true);
-        // Preview-only controls use a visibly quieter arc so that a bound
-        // control and an unbound one are distinguishable on a Gate A capture.
-        g.setColour (accent.withAlpha (dimmed ? 0.42f : 0.95f));
-        g.strokePath (active, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
-    }
-
-    const auto angle = start + sweep * clamped;
-    const auto pointer = juce::Point<float> (
-        centre.x + std::cos (angle) * r * 0.52f,
-        centre.y + std::sin (angle) * r * 0.52f);
-    g.setColour (colours::text.withAlpha (dimmed ? 0.55f : 1.0f));
-    g.drawLine (centre.x, centre.y, pointer.x, pointer.y, juce::jmax (1.2f, d * 0.035f));
-
-    g.setColour (colours::border);
-    g.drawEllipse (body, 1.0f);
-}
-
-} // namespace
 
 // --- GateAVisualKnob -------------------------------------------------------
 
 GateAVisualKnob::GateAVisualKnob (juce::String labelText, juce::String value,
                                   const float preview, const vox::ui::VoxKnob::Size size)
     : label (std::move (labelText)), valueText (std::move (value)),
-      previewValue01 (preview), diameter (diameterFor (size))
+      accent (colours::primary)
 {
+    // Presentation only: neither this control nor the VoxKnob it borrows its
+    // anatomy from may take a click, a drag or keyboard focus.
     setInterceptsMouseClicks (false, false);
+
+    knob = std::make_unique<vox::ui::VoxKnob> (label, size);
+    knob->setInterceptsMouseClicks (false, false);
+    knob->setWantsKeyboardFocus (false);
+
+    auto& slider = knob->getSlider();
+    slider.setRange (0.0, 1.0, 0.001);
+    slider.setValue (juce::jlimit (0.0f, 1.0f, preview), juce::dontSendNotification);
+
+    // The reference prints the previewed value exactly, so the preview string is
+    // the formatter rather than the slider's own rounding of the preview ratio.
+    slider.textFromValueFunction = [text = valueText] (double) { return text; };
+    slider.valueFromTextFunction = [] (const juce::String&) { return 0.0; };
+
+    knob->setColour (juce::Slider::rotarySliderFillColourId,
+                     accent.withAlpha (previewAccentAlpha));
+    addAndMakeVisible (*knob);
 }
 
 void GateAVisualKnob::setAccent (juce::Colour newAccent)
 {
     accent = newAccent;
+    if (knob != nullptr)
+        knob->setColour (juce::Slider::rotarySliderFillColourId,
+                         accent.withAlpha (previewAccentAlpha));
     repaint();
 }
 
 void GateAVisualKnob::resized()
 {
-    // The label and value are always painted in a band at the bottom of this
-    // component, so that band is always reserved. Reserving it only when the
-    // component happened to be tall enough centred the knob over its own text in
-    // short cells, and the knob arc struck through the label.
-    const auto textHeight = labelHeight + valueHeight;
-    auto area = getLocalBounds().toFloat().reduced (1.0f);
-    area.removeFromBottom (static_cast<float> (textHeight));
-
-    const auto d = juce::jmax (0.0f, juce::jmin (diameter,
-                                                 juce::jmin (area.getWidth(),
-                                                             area.getHeight())));
-    knobBounds = juce::Rectangle<float> (d, d).withCentre (area.getCentre());
-}
-
-void GateAVisualKnob::paint (juce::Graphics& g)
-{
-    if (! knobBounds.isEmpty())
-        paintKnobBody (g, knobBounds, previewValue01, accent, true);
-
-    auto text = getLocalBounds().reduced (1, 0);
-    auto valueArea = text.removeFromBottom (valueHeight);
-    auto labelArea = text.removeFromBottom (labelHeight);
-
-    // In a cell too short to hold both bands the areas collapse. Drawing into a
-    // collapsed band is what spilled text across neighbouring cells, so skip it
-    // rather than render text outside the space this control actually owns.
-    if (labelArea.getHeight() >= 8) {
-        g.setFont (juce::Font (9.0f));
-        g.setColour (colours::textSecondary);
-        g.drawText (label, labelArea, juce::Justification::centred, true);
-    }
-
-    if (valueArea.getHeight() >= 8) {
-        g.setFont (juce::Font (9.5f));
-        g.setColour (accent.withAlpha (0.72f));
-        g.drawText (valueText, valueArea, juce::Justification::centred, true);
-    }
+    if (knob != nullptr)
+        knob->setBounds (getLocalBounds());
 }
 
 // --- parameter resolution --------------------------------------------------
