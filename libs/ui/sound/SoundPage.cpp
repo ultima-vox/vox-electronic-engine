@@ -74,9 +74,36 @@ void SoundPage::paint (juce::Graphics& g)
     g.drawRoundedRectangle (bounds, metrics::corner, 1.0f);
 }
 
+void SoundPage::setHeroBounds (const juce::Rectangle<int> boundsInEditorSpace)
+{
+    if (heroBounds == boundsInEditorSpace && heroBoundsFromShell)
+        return;
+
+    heroBounds = boundsInEditorSpace;
+    heroBoundsFromShell = ! boundsInEditorSpace.isEmpty();
+    resized();
+}
+
 void SoundPage::resized()
 {
-    auto area = getLocalBounds().reduced (pagePadding);
+    auto area = getLocalBounds();
+
+    if (heroBoundsFromShell)
+    {
+        // The shell owns the hero band; the workspace is everything below it
+        // inside this page. Page-local: the hero rectangle arrives in editor
+        // space, so it is translated by this page's own origin.
+        hero.setBounds (heroBounds);
+
+        auto below = area.withTop (juce::jlimit (area.getY(), area.getBottom(),
+                                                 heroBounds.getBottom() - getY()));
+        below.removeFromTop (heroGap);
+
+        if (workspace != nullptr)
+            workspace->setBounds (below);
+
+        return;
+    }
 
     // The hero stays shallow; the workspace below it is the priority.
     const auto heroHeight = juce::jlimit (74, 116,

@@ -38,6 +38,18 @@ public:
     // driven, as required by UI_PRODUCTION_IMPLEMENTATION_STANDARD.md section 24.
     [[nodiscard]] juce::StringArray getGateAVisualOnlyLabels() const;
 
+    // Hero band, owned by the shell.
+    //
+    // The shell places the hero band explicitly (it is a full-width band in the
+    // accepted composition, at the same x range as the module rows) rather than
+    // deriving it from a fraction of the page height. When the shell has set it,
+    // this page keeps that rectangle and only lays out the workspace below it.
+    // With no shell rectangle the page falls back to its own proportional band so
+    // the page still composes correctly when used on its own.
+    void setHeroBounds (juce::Rectangle<int> boundsInEditorSpace);
+
+    [[nodiscard]] juce::Rectangle<int> getHeroBounds() const noexcept { return heroBounds; }
+
     [[nodiscard]] juce::String getSelectedInstrumentName() const { return instrumentName; }
 
     void paint (juce::Graphics&) override;
@@ -49,6 +61,8 @@ private:
     HeroBanner hero;
     std::unique_ptr<SoundWorkspace> workspace;
     juce::String instrumentName { "Empty slot" };
+    juce::Rectangle<int> heroBounds;
+    bool heroBoundsFromShell {};
 };
 
 } // namespace vstengine::ui

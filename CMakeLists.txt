@@ -157,6 +157,8 @@ add_subdirectory(libs/vox-ui)
 # ui: reusable JUCE components and tab pages.
 add_library(vst_ui STATIC
   libs/ui/common/UiComponents.cpp libs/ui/common/UiComponents.h
+  libs/ui/ArtworkLoader.cpp libs/ui/ArtworkLoader.h
+  libs/ui/InstrumentIdentity.h
   libs/ui/ZoneRangeEditor.cpp libs/ui/ZoneRangeEditor.h
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
