@@ -5,10 +5,14 @@ target_sources(vox_ui PRIVATE
   VoxComponents.h
   Tokens.h
   Typography.h
+  components/VoxIcons.cpp components/VoxIcons.h
   components/VoxPanel.cpp components/VoxPanel.h
   components/VoxKnob.cpp components/VoxKnob.h
   components/VoxButton.cpp components/VoxButton.h
+  components/VoxIconButton.cpp components/VoxIconButton.h
   components/VoxComboBox.cpp components/VoxComboBox.h
+  components/VoxSegmentedControl.cpp components/VoxSegmentedControl.h
+  components/VoxInlineSelector.cpp components/VoxInlineSelector.h
   components/VoxTabBar.cpp components/VoxTabBar.h
   components/VoxSectionHeader.cpp components/VoxSectionHeader.h)
 
