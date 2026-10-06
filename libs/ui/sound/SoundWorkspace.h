@@ -10,7 +10,7 @@
 #include "HeroBanner.h"
 #include "SoundControls.h"
 #include "SoundModulePanel.h"
-#include "common/UiComponents.h"
+#include "ui/common/UiComponents.h"
 #include "instrument/InstrumentContract.h"
 
 namespace vstengine::ui {

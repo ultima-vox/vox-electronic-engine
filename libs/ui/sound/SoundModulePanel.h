@@ -5,7 +5,7 @@
 #include <functional>
 #include <vector>
 
-#include "common/UiComponents.h"
+#include "ui/common/UiComponents.h"
 
 namespace vstengine::ui {
 
