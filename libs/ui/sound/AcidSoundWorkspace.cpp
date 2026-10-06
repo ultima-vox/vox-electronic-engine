@@ -360,10 +360,14 @@ void AcidSoundWorkspace::layoutTopStrip (juce::Rectangle<int> area)
             juce::jmax (1, (rightBlock.getHeight() - panelGap) / 2));
         rightRest.removeFromTop (panelGap);
 
+        // ACCENT and SLIDE sit side by side in the upper half; OUTPUT spans the
+        // lower half. SLIDE must be placed INSIDE the block: offsetting it past
+        // rightTop.getRight() put it beyond the workspace's right edge, where it
+        // was clipped away entirely and never appeared on any capture.
         if (accentPanel != nullptr)
-            accentPanel->setBounds (rightTop);
+            accentPanel->setBounds (rightTop.withWidth (rightHalf));
         if (slidePanel != nullptr)
-            slidePanel->setBounds (rightTop.withX (rightTop.getRight() + panelGap));
+            slidePanel->setBounds (rightTop.withTrimmedLeft (rightHalf + panelGap));
         if (outputPanel != nullptr)
             outputPanel->setBounds (rightRest);
     }

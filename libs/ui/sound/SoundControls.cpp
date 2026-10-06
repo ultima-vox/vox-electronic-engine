@@ -95,30 +95,43 @@ void GateAVisualKnob::setAccent (juce::Colour newAccent)
 
 void GateAVisualKnob::resized()
 {
+    // The label and value are always painted in a band at the bottom of this
+    // component, so that band is always reserved. Reserving it only when the
+    // component happened to be tall enough centred the knob over its own text in
+    // short cells, and the knob arc struck through the label.
     const auto textHeight = labelHeight + valueHeight;
     auto area = getLocalBounds().toFloat().reduced (1.0f);
-    if (area.getHeight() > textHeight + 8.0f)
-        area.removeFromBottom (static_cast<float> (textHeight));
+    area.removeFromBottom (static_cast<float> (textHeight));
 
-    const auto d = juce::jmin (diameter, juce::jmin (area.getWidth(), area.getHeight()));
+    const auto d = juce::jmax (0.0f, juce::jmin (diameter,
+                                                 juce::jmin (area.getWidth(),
+                                                             area.getHeight())));
     knobBounds = juce::Rectangle<float> (d, d).withCentre (area.getCentre());
 }
 
 void GateAVisualKnob::paint (juce::Graphics& g)
 {
-    paintKnobBody (g, knobBounds, previewValue01, accent, true);
+    if (! knobBounds.isEmpty())
+        paintKnobBody (g, knobBounds, previewValue01, accent, true);
 
     auto text = getLocalBounds().reduced (1, 0);
     auto valueArea = text.removeFromBottom (valueHeight);
     auto labelArea = text.removeFromBottom (labelHeight);
 
-    g.setFont (juce::Font (9.0f));
-    g.setColour (colours::textSecondary);
-    g.drawText (label, labelArea, juce::Justification::centred, true);
+    // In a cell too short to hold both bands the areas collapse. Drawing into a
+    // collapsed band is what spilled text across neighbouring cells, so skip it
+    // rather than render text outside the space this control actually owns.
+    if (labelArea.getHeight() >= 8) {
+        g.setFont (juce::Font (9.0f));
+        g.setColour (colours::textSecondary);
+        g.drawText (label, labelArea, juce::Justification::centred, true);
+    }
 
-    g.setFont (juce::Font (9.5f));
-    g.setColour (accent.withAlpha (0.72f));
-    g.drawText (valueText, valueArea, juce::Justification::centred, true);
+    if (valueArea.getHeight() >= 8) {
+        g.setFont (juce::Font (9.5f));
+        g.setColour (accent.withAlpha (0.72f));
+        g.drawText (valueText, valueArea, juce::Justification::centred, true);
+    }
 }
 
 // --- parameter resolution --------------------------------------------------

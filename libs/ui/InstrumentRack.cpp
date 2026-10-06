@@ -146,8 +146,15 @@ void RackSlotCard::paintButton (juce::Graphics& g,
 
     // Name + secondary descriptor. Occupied slots show the resolved provider as
     // the descriptor line; empty slots show the call to action.
+    //
+    // Cards shrink at compact window heights. Split the text column into two
+    // lines only when the card is tall enough for both, otherwise a short card
+    // renders a vertically clipped name.
     auto nameArea = content;
-    auto subArea = nameArea.removeFromBottom (13);
+    const auto descriptorHeight = 13;
+    const auto twoLines = content.getHeight() >= 24;
+    auto subArea = twoLines ? nameArea.removeFromBottom (descriptorHeight)
+                            : juce::Rectangle<int>();
 
     g.setColour (! current.occupied ? colours::mutedText
                                    : colours::text);
@@ -157,15 +164,17 @@ void RackSlotCard::paintButton (juce::Graphics& g,
     g.drawText (current.occupied ? current.instrumentName : juce::String("Empty"),
                 nameArea, juce::Justification::centredLeft, true);
 
-    g.setColour (colours::mutedText);
-    g.setFont (8.5f);
-    juce::String descriptor = "ADD INSTRUMENT";
-    if (current.occupied) {
-        descriptor = current.vendorName;
-        if (! current.versionName.isEmpty())
-            descriptor += " " + current.versionName;
+    if (twoLines) {
+        g.setColour (colours::mutedText);
+        g.setFont (8.5f);
+        juce::String descriptor = "ADD INSTRUMENT";
+        if (current.occupied) {
+            descriptor = current.vendorName;
+            if (! current.versionName.isEmpty())
+                descriptor += " " + current.versionName;
+        }
+        g.drawText (descriptor, subArea, juce::Justification::centredLeft, true);
     }
-    g.drawText (descriptor, subArea, juce::Justification::centredLeft, true);
 
     // Mute / solo / lock are textual, not colour-only.
     g.setColour (colours::textSecondary);
@@ -245,9 +254,13 @@ void InstrumentRack::resized()
 
     // Cards share the available height evenly, so the rail never overflows and
     // extra window height turns into breathing room rather than giant rows.
-    const auto cardStride = area.getHeight() / static_cast<int> (slotCount);
-    const auto height = std::max (cardHeight - cardGap,
-                                  std::min (cardHeight + 14, cardStride - cardGap));
+    //
+    // The preferred height is capped from above for breathing room, and clamped
+    // from above by the space the rail actually has. A floor that ignored the
+    // available height used to push the last cards past the bottom edge, where
+    // JUCE clipped them and slots 14-16 became unreachable at 1180x760.
+    const auto stride = juce::jmax (1, area.getHeight() / static_cast<int> (slotCount));
+    const auto height = juce::jmax (1, juce::jmin (cardHeight + 14, stride) - cardGap);
 
     for (std::size_t i = 0; i < slotCount; ++i)
         cards[i].setBounds (area.removeFromTop (height + cardGap));

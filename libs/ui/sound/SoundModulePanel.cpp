@@ -131,29 +131,54 @@ void SoundModulePanel::paint (juce::Graphics& g)
 
     auto titleArea = header.withTrimmedLeft (statusDotVisible ? 11 : 0);
 
-    // Reserve room for the right-aligned selector/subtitle so a long instrument
-    // selector can never push the module title out of the panel.
-    if (headerSelector.isNotEmpty())
-        titleArea.setWidth (juce::jmax (0, titleArea.getWidth() - 74));
+    // The right-aligned selector badge is sized to its own text rather than a flat
+    // reservation. A fixed 74px reservation squeezed narrow module titles down to
+    // an ellipsis (the DISTORTION panel rendered as "DISTO...") and let the badge
+    // label draw underneath its own chevron.
+    const auto chevronWidth = 10;
+    const auto selectorWidth = headerSelector.isNotEmpty()
+        ? juce::jlimit (36, 96, juce::roundToInt (juce::GlyphArrangement::getStringWidth (
+                                      juce::Font (8.5f), headerSelector))
+                                 + chevronWidth + 12)
+        : 0;
+    if (selectorWidth > 0)
+        titleArea.setWidth (juce::jmax (0, titleArea.getWidth() - selectorWidth));
+
+    // A module title identifies its panel, so shrink it to fit rather than
+    // ellipsising it away.
+    auto titleFont = juce::Font (10.5f, juce::Font::bold);
+    while (titleFont.getHeight() > 7.0f
+           && juce::GlyphArrangement::getStringWidth (titleFont, title)
+                  > static_cast<float> (titleArea.getWidth()))
+        titleFont = titleFont.withHeight (titleFont.getHeight() - 0.5f);
 
     g.setColour (colours::text);
-    g.setFont (juce::Font (10.5f, juce::Font::bold));
+    g.setFont (titleFont);
     g.drawText (title, titleArea, juce::Justification::centredLeft, true);
 
-    if (headerSelector.isNotEmpty()) {
-        auto selector = juce::Rectangle<int> (header.getRight() - 74, header.getY(),
-                                              74, header.getHeight())
+    if (selectorWidth > 0) {
+        auto selector = juce::Rectangle<int> (header.getRight() - selectorWidth, header.getY(),
+                                              selectorWidth, header.getHeight())
                             .reduced (0, 2);
         g.setColour (colours::control);
         g.fillRoundedRectangle (selector.toFloat(), 3.0f);
         g.setColour (colours::border);
         g.drawRoundedRectangle (selector.toFloat(), 3.0f, 1.0f);
         g.setColour (accent.withAlpha (0.85f));
-        g.setFont (8.5f);
-        g.drawText (headerSelector, selector.reduced (4, 0),
-                    juce::Justification::centredRight, true);
+
+        // The badge carries a real control value ("LOW-PASS 24", "SAWTOOTH"), so
+        // shrink it to fit the box rather than ellipsising the value away.
+        const auto badgeText = selector.reduced (4, 0).withTrimmedRight (chevronWidth);
+        auto badgeFont = juce::Font (8.5f);
+        while (badgeFont.getHeight() > 6.5f
+               && juce::GlyphArrangement::getStringWidth (badgeFont, headerSelector)
+                      > static_cast<float> (badgeText.getWidth()))
+            badgeFont = badgeFont.withHeight (badgeFont.getHeight() - 0.5f);
+        g.setFont (badgeFont);
+        g.drawText (headerSelector, badgeText, juce::Justification::centredRight, false);
+
         g.setColour (colours::mutedText.withAlpha (0.9f));
-        g.drawText ("\xE2\x96\xBC", selector.withTrimmedLeft (selector.getWidth() - 10),
+        g.drawText ("\xE2\x96\xBC", selector.withTrimmedLeft (selector.getWidth() - chevronWidth),
                     juce::Justification::centred, false);
     } else if (subtitle.isNotEmpty()) {
         g.setColour (colours::mutedText);
