@@ -52,9 +52,10 @@ public:
     void resized() override;
 
 private:
-    // Preview-only controls draw a quieter arc than a bound parameter so a
-    // Gate A screenshot shows which controls are still unbacked.
-    static constexpr float previewAccentAlpha = 0.42f;
+    // Preview-only controls draw a slightly quieter arc than a bound parameter
+    // so a Gate A capture is still honest about which controls are unbacked,
+    // without diverging from the accepted render's bright arc.
+    static constexpr float previewAccentAlpha = 0.85f;
 
     juce::String label;
     juce::String valueText;

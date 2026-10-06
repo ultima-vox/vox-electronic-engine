@@ -16,11 +16,11 @@ constexpr int valueBandHeight = 14;
 // Measured from the accepted render (arc ring outer diameter ~52 px including
 // the housing ring, ~4.5 px track weight, body at ~0.74 of the arc radius,
 // pointer from ~0.26 to 1.0 of the arc radius).
-constexpr float trackWeightFraction = 0.088f;
-constexpr float bodyRadiusFraction = 0.74f;
+constexpr float trackWeightFraction = 0.10f;
+constexpr float bodyRadiusFraction = 0.78f;
 constexpr float pointerInnerFraction = 0.26f;
 constexpr float pointerOuterFraction = 1.0f;
-constexpr float pointerWeightFraction = 0.045f;
+constexpr float pointerWeightFraction = 0.052f;
 constexpr float pointerToTextMix = 0.82f;
 
 } // namespace

@@ -173,7 +173,10 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
         g.drawRoundedRectangle (bounds, tokens::radius::small, 1.0f);
     }
 
-    if (type == Type::Icon && (hasVectorIcon || icon != nullptr))
+    // Any button carrying a glyph draws that glyph instead of its text label.
+    // Type::Toggle is included on purpose: a toggling icon button (a lit power
+    // affordance, for example) is the same control in a different state.
+    if (hasVectorIcon || icon != nullptr)
     {
         paintIcon (g, text);
         return;
