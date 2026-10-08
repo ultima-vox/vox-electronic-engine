@@ -92,10 +92,14 @@ Typography.h
 VoxLookAndFeel.h/.cpp
 VoxComponents.h        umbrella
 components/
+  VoxIcons.h/.cpp
   VoxPanel.h/.cpp
   VoxKnob.h/.cpp
   VoxButton.h/.cpp
+  VoxIconButton.h/.cpp
   VoxComboBox.h/.cpp
+  VoxSegmentedControl.h/.cpp
+  VoxInlineSelector.h/.cpp
   VoxTabBar.h/.cpp
   VoxSectionHeader.h/.cpp
 showcase/
@@ -103,9 +107,29 @@ showcase/
   Main.cpp
 ```
 
+## Iconography
+
+`components/VoxIcons.h` is the single icon grammar for the family
+(`UI_PRODUCTION_IMPLEMENTATION_STANDARD.md` section 9): every glyph is a
+`juce::Path` authored in a normalised 100x100 unit box, so one family scales to
+any size at a consistent stroke weight. Drawing a glyph from a character code
+point (`"<"`, `">"`, a Unicode triangle, an emoji) is not permitted anywhere in
+the product.
+
+`VoxComboBox` paints its own surface, value text and vector chevron, so a combo
+box never inherits a stock arrow, arrow colour or text inset from whichever
+LookAndFeel a product installs.
+
 `VoxLookAndFeel` implements the shared fallback grammar for button background, rotary slider, combo box, toggle, linear slider and popup-menu items.
 
-`VoxKnob` owns specialised knob rendering and semantic state. Its internal slider is used only for interaction/value/attachment. The canonical layout is label top / knob centre / always-visible value bottom. Small/Normal/Large diameters are 36/48/64 px, the rotary span is 270 degrees, and modulation appears automatically when a modulation snapshot is non-zero.
+`VoxKnob` owns specialised knob rendering and semantic state. Its internal slider is used only for interaction/value/attachment. The canonical layout is knob / label / value, matching the accepted reference renders. Small/Normal/Large diameters are 36/48/64 px and the rotary span is the accepted 1.2pi to 2.8pi measured clockwise from 12 o'clock, i.e. a gap at the bottom of the track. `setColour (juce::Slider::rotarySliderFillColourId, c)` is honoured for the active arc and pointer and defaults to the shared interaction accent.
+
+`VoxSectionHeader` is the one implementation of the canonical panel header
+(`status/power | title | optional selector/action`) and is what
+`SoundModulePanel` composes. Product panels must not paint a second header.
+
+The showcase accepts `--capture=<file.png>` to render itself once to a PNG
+without a display, which is how the shared primitives are reviewed headlessly.
 
 Double-click reset is not hard-coded to zero: callers configure the real parameter default through `setDoubleClickResetValue()`.
 

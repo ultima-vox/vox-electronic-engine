@@ -22,13 +22,78 @@ void VoxButton::setType (Type newType)
 void VoxButton::setIcon (std::unique_ptr<juce::Drawable> drawable)
 {
     icon = std::move (drawable);
+    hasVectorIcon = false;
+    repaint();
+}
+
+void VoxButton::setIcon (const icons::Icon newIcon, const float sizePx)
+{
+    vectorIcon = newIcon;
+    hasVectorIcon = true;
+    icon.reset();
+    iconSizePx = sizePx;
     repaint();
 }
 
 void VoxButton::clearIcon()
 {
     icon.reset();
+    hasVectorIcon = false;
     repaint();
+}
+
+void VoxButton::setBorderVisible (const bool shouldBeVisible)
+{
+    if (borderVisible == shouldBeVisible)
+        return;
+    borderVisible = shouldBeVisible;
+    repaint();
+}
+
+void VoxButton::setIconSize (const float sizePx)
+{
+    iconSizePx = sizePx;
+    repaint();
+}
+
+void VoxButton::setIconColour (juce::Colour colour)
+{
+    iconColour = colour;
+    hasIconColour = true;
+    repaint();
+}
+
+void VoxButton::clearIconColour()
+{
+    hasIconColour = false;
+    repaint();
+}
+
+float VoxButton::resolvedIconSize() const noexcept
+{
+    if (iconSizePx > 0.0f)
+        return iconSizePx;
+
+    return juce::jlimit (10.0f, 24.0f,
+                         static_cast<float> (juce::jmin (getWidth(), getHeight())) * 0.46f);
+}
+
+void VoxButton::paintIcon (juce::Graphics& g, const juce::Colour stateColour) const
+{
+    const auto area = getLocalBounds().toFloat();
+    const auto alpha = isEnabled() ? 1.0f : 0.35f;
+
+    if (hasVectorIcon)
+    {
+        auto glyphArea = area.withSizeKeepingCentre (resolvedIconSize(), resolvedIconSize());
+        icons::draw (g, vectorIcon, glyphArea,
+                     hasIconColour ? iconColour : stateColour, alpha);
+        return;
+    }
+
+    if (icon != nullptr)
+        icon->drawWithin (g, area.reduced (static_cast<float> (tokens::spacing::sm)),
+                          juce::RectanglePlacement::centred, alpha);
 }
 
 void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isButtonDown)
@@ -74,6 +139,14 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
             break;
     }
 
+    if (isButtonDown && type == Type::Icon)
+    {
+        // A pressed icon still needs a visible down state even though the rest
+        // state is deliberately bare.
+        fill = tokens::colour::control;
+        border = tokens::colour::accent;
+    }
+
     if (hasKeyboardFocus (true))
         border = tokens::colour::accent;
     if (isButtonDown)
@@ -85,19 +158,27 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
         text = tokens::colour::textMuted;
     }
 
-    g.setColour (fill);
-    g.fillRoundedRectangle (bounds, tokens::radius::small);
+    if (! borderVisible)
+        border = juce::Colours::transparentBlack;
+
+    if (! fill.isTransparent())
+    {
+        g.setColour (fill);
+        g.fillRoundedRectangle (bounds, tokens::radius::small);
+    }
+
     if (! border.isTransparent())
     {
         g.setColour (border);
         g.drawRoundedRectangle (bounds, tokens::radius::small, 1.0f);
     }
 
-    if (type == Type::Icon && icon != nullptr)
+    // Any button carrying a glyph draws that glyph instead of its text label.
+    // Type::Toggle is included on purpose: a toggling icon button (a lit power
+    // affordance, for example) is the same control in a different state.
+    if (hasVectorIcon || icon != nullptr)
     {
-        icon->drawWithin (g, bounds.reduced (static_cast<float> (tokens::spacing::sm)),
-                          juce::RectanglePlacement::centred,
-                          isEnabled() ? 1.0f : 0.35f);
+        paintIcon (g, text);
         return;
     }
 

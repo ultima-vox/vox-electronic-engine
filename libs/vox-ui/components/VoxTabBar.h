@@ -22,6 +22,12 @@ public:
     void setSelectedIndex (int index);
     int getSelectedIndex() const noexcept { return selectedIndex; }
 
+    // Gap kept between adjacent tabs. The accepted render leaves ~5 px of panel
+    // between one tab body and the next, so the six nav tabs read as six
+    // controls rather than one continuous bar.
+    void setTabGutter (int newGutter);
+    int getTabGutter() const noexcept { return tabGutter; }
+
     std::function<void (int)> onTabChanged;
 
     void paint (juce::Graphics&) override;
@@ -35,6 +41,7 @@ private:
     int selectedIndex = -1;
     int hoverIndex = -1;
     int pressedIndex = -1;
+    int tabGutter = 5;
 
     int indexAt (juce::Point<int> position) const noexcept;
     juce::Rectangle<int> boundsForIndex (int index) const noexcept;

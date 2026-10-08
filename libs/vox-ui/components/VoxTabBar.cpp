@@ -39,6 +39,15 @@ void VoxTabBar::setSelectedIndex (int index)
         onTabChanged (selectedIndex);
 }
 
+void VoxTabBar::setTabGutter (const int newGutter)
+{
+    const auto clamped = juce::jmax (0, newGutter);
+    if (tabGutter == clamped)
+        return;
+    tabGutter = clamped;
+    repaint();
+}
+
 juce::Rectangle<int> VoxTabBar::boundsForIndex (int index) const noexcept
 {
     if (tabs.empty() || index < 0 || index >= static_cast<int> (tabs.size()))
@@ -47,8 +56,11 @@ juce::Rectangle<int> VoxTabBar::boundsForIndex (int index) const noexcept
     const auto count = static_cast<int> (tabs.size());
     const auto baseWidth = getWidth() / count;
     const auto x = index * baseWidth;
-    const auto width = index == count - 1 ? getWidth() - x : baseWidth;
-    return { x, 0, width, getHeight() };
+    const auto span = index == count - 1 ? getWidth() - x : baseWidth;
+
+    // The gutter comes out of the tab's own span, so the bar keeps its tab count,
+    // order and total width and only the drawn bodies shrink.
+    return { x, 0, juce::jmax (1, span - tabGutter), getHeight() };
 }
 
 int VoxTabBar::indexAt (juce::Point<int> position) const noexcept

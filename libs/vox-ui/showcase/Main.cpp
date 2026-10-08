@@ -23,6 +23,49 @@ std::unique_ptr<juce::Drawable> makeDiamondIcon()
     return drawable;
 }
 
+// Draws the whole shared vector icon family in one strip, because "one icon
+// grammar" is only verifiable if every glyph is visible at the same weight.
+class IconGallery final : public juce::Component
+{
+public:
+    void paint (juce::Graphics& g) override
+    {
+        using namespace vox::ui;
+        const std::array<std::pair<icons::Icon, const char*>, 14> entries { {
+            { icons::Icon::chevronLeft, "chevronLeft" },
+            { icons::Icon::chevronRight, "chevronRight" },
+            { icons::Icon::chevronDown, "chevronDown" },
+            { icons::Icon::power, "power" },
+            { icons::Icon::plus, "plus" },
+            { icons::Icon::gear, "gear" },
+            { icons::Icon::pencil, "pencil" },
+            { icons::Icon::heart, "heart" },
+            { icons::Icon::dice, "dice" },
+            { icons::Icon::cube, "cube" },
+            { icons::Icon::keyboardLayout, "keyboard" },
+            { icons::Icon::play, "play" },
+            { icons::Icon::stop, "stop" },
+            { icons::Icon::matrixGrid, "matrixGrid" },
+        } };
+
+        const auto cell = getWidth() / static_cast<int> (entries.size());
+        for (std::size_t i = 0; i < entries.size(); ++i)
+        {
+            auto area = juce::Rectangle<int> (static_cast<int> (i) * cell, 0, cell, getHeight());
+            auto glyphArea = area.removeFromTop (juce::jmax (0, area.getHeight() - 16))
+                                 .toFloat()
+                                 .withSizeKeepingCentre (26.0f, 26.0f);
+
+            icons::draw (g, entries[i].first, glyphArea,
+                         i % 2 == 0 ? tokens::colour::accent : tokens::colour::text);
+
+            g.setColour (tokens::colour::textMuted);
+            g.setFont (typography::valueText());
+            g.drawText (entries[i].second, area, juce::Justification::centred, false);
+        }
+    }
+};
+
 class ShowcaseContent final : public juce::Component
 {
 public:
@@ -39,9 +82,12 @@ public:
           modKnob ("MOD", vox::ui::VoxKnob::Size::Normal),
           bipolarKnob ("BIPOLAR", vox::ui::VoxKnob::Size::Normal),
           panel ("FOUNDATION"),
-          powerHeader ("POWER HEADER"),
-          iconHeader ("ICON HEADER"),
-          plainHeader ("PLAIN HEADER")
+          powerHeader ("OSCILLATOR"),
+          iconHeader ("AMP ENVELOPE"),
+          plainHeader ("PLAIN HEADER"),
+          gearButton (vox::ui::icons::Icon::gear),
+          heartButton (vox::ui::icons::Icon::heart),
+          togglePowerButton (vox::ui::icons::Icon::power, true)
     {
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         setOpaque (true);
@@ -51,17 +97,20 @@ public:
                         { "routing", "Routing", true },
                         { "disabled", "Disabled", false } });
 
-        const std::array<juce::Component*, 18> components {
+        const std::array<juce::Component*, 24> components {
             &tabs, &panel, &primary, &secondary, &toggle, &danger,
             &iconButton, &disabled, &smallKnob, &normalKnob,
             &largeKnob, &modKnob, &bipolarKnob,
-            &combo, &scaleBox, &powerHeader, &iconHeader, &plainHeader
+            &combo, &scaleBox, &powerHeader, &iconHeader, &plainHeader,
+            &iconGallery, &segments, &stepper, &headerSelector,
+            &gearButton, &togglePowerButton
         };
 
         for (auto* component : components)
             addAndMakeVisible (*component);
 
         iconButton.setIcon (makeDiamondIcon());
+        iconButton.setIcon (vox::ui::icons::Icon::dice);
         disabled.setEnabled (false);
 
         const std::array<vox::ui::VoxKnob*, 5> knobs {
@@ -100,7 +149,21 @@ public:
 
         powerHeader.setPowerVisible (true);
         powerHeader.setPowerState (true);
-        iconHeader.setIcon (makeDiamondIcon());
+        powerHeader.setControlComponent (&segments);
+        powerHeader.setTrailingPowerVisible (true);
+
+        iconHeader.setIcon (vox::ui::icons::Icon::gear);
+        iconHeader.setSubtitle ("(5/16)");
+        iconHeader.setSelectorComponent (&headerSelector);
+        iconHeader.setActionComponent (&gearButton);
+
+        // The stepper row from the OSCILLATOR panel: previous / value / next.
+        segments.setSegments ({ "1", "2", "3" });
+        stepper.setItems ({ "Wavetable 01", "Wavetable 02", "Wavetable 03" });
+        headerSelector.setReadOnly (true);
+        headerSelector.setPlaceholderText ("Low Pass 24 dB");
+
+        togglePowerButton.setToggled (true);
 
         setSize (vox::ui::tokens::size::referenceWidth,
                  vox::ui::tokens::size::referenceHeight);
@@ -122,8 +185,8 @@ public:
 
         g.setColour (vox::ui::tokens::colour::textMuted);
         g.setFont (vox::ui::typography::valueText());
-        g.drawText ("UI-1 • TOKENS / TYPOGRAPHY / STATES / SCALE", subtitleBounds,
-                    juce::Justification::centredLeft, false);
+        g.drawText ("UI-1 / TOKENS / TYPOGRAPHY / STATES / SCALE / ICONS",
+                    subtitleBounds, juce::Justification::centredLeft, false);
     }
 
     void resized() override
@@ -145,11 +208,14 @@ public:
         area.removeFromTop (px (tokens::spacing::lg));
 
         panel.setBounds (area);
-        auto content = panel.getContentBounds();
+        // getContentBounds() is PANEL-LOCAL, and the showcase composes the panel
+        // from outside it, so the rect has to be brought back into this
+        // component's coordinate space before it can position siblings.
+        auto content = panel.getContentBounds().translated (panel.getX(), panel.getY());
         const auto gap = px (tokens::spacing::lg);
 
         powerHeader.setBounds (content.removeFromTop (px (32)));
-        content.removeFromTop (gap);
+        content.removeFromTop (px (tokens::spacing::sm));
 
         auto knobRow = content.removeFromTop (px (120));
         const auto knobCell = knobRow.getWidth() / 5;
@@ -176,10 +242,26 @@ public:
         }
 
         content.removeFromTop (gap);
+        auto primitiveRow = content.removeFromTop (juce::jmax (px (30), px (tokens::size::controlHeight)));
+        const auto square = primitiveRow.getHeight();
+        gearButton.setBounds (primitiveRow.removeFromLeft (square));
+        primitiveRow.removeFromLeft (buttonGap);
+        heartButton.setBounds (primitiveRow.removeFromLeft (square));
+        primitiveRow.removeFromLeft (buttonGap);
+        togglePowerButton.setBounds (primitiveRow.removeFromLeft (square));
+        primitiveRow.removeFromLeft (px (tokens::spacing::lg));
+        stepper.setBounds (primitiveRow.removeFromLeft (px (280)));
+        primitiveRow.removeFromLeft (buttonGap);
+        headerSelector.setBounds (primitiveRow.removeFromLeft (px (196)));
+
+        content.removeFromTop (gap);
         plainHeader.setBounds (content.removeFromTop (px (32)));
         content.removeFromTop (px (tokens::spacing::sm));
         combo.setBounds (content.removeFromTop (px (tokens::size::controlHeight))
                                 .removeFromLeft (px (180)));
+
+        content.removeFromTop (gap);
+        iconGallery.setBounds (content.removeFromTop (juce::jmax (px (48), area.getHeight() / 6)));
     }
 
 private:
@@ -206,6 +288,13 @@ private:
     vox::ui::VoxSectionHeader powerHeader;
     vox::ui::VoxSectionHeader iconHeader;
     vox::ui::VoxSectionHeader plainHeader;
+    IconGallery iconGallery;
+    vox::ui::VoxSegmentedControl segments;
+    vox::ui::VoxInlineSelector stepper { vox::ui::VoxInlineSelector::Form::Stepper };
+    vox::ui::VoxInlineSelector headerSelector { vox::ui::VoxInlineSelector::Form::Header };
+    vox::ui::VoxIconButton gearButton;
+    vox::ui::VoxIconButton heartButton;
+    vox::ui::VoxIconButton togglePowerButton;
 };
 
 class ShowcaseWindow final : public juce::DocumentWindow
@@ -237,8 +326,29 @@ public:
     const juce::String getApplicationVersion() override { return "1.0"; }
     bool moreThanOneInstanceAllowed() override { return true; }
 
-    void initialise (const juce::String&) override
+    void initialise (const juce::String& commandLine) override
     {
+        // Headless evidence path: render the showcase once to a PNG and exit, so
+        // the shared primitives can be reviewed without a display.
+        const auto captureTarget = commandLineFrom (commandLine);
+
+        if (captureTarget.isNotEmpty())
+        {
+            ShowcaseContent content;
+            content.setSize (vox::ui::tokens::size::referenceWidth,
+                             vox::ui::tokens::size::referenceHeight);
+            const auto image = content.createComponentSnapshot (content.getLocalBounds());
+
+            juce::File file (captureTarget);
+            file.deleteFile();
+            juce::PNGImageFormat format;
+            if (auto stream = std::unique_ptr<juce::FileOutputStream> (file.createOutputStream()))
+                format.writeImageToStream (image, *stream);
+
+            quit();
+            return;
+        }
+
         window = std::make_unique<ShowcaseWindow>();
     }
 
@@ -253,6 +363,18 @@ public:
     }
 
 private:
+    static juce::String commandLineFrom (const juce::String& commandLine)
+    {
+        const auto marker = commandLine.indexOf ("--capture=");
+        if (marker < 0)
+            return {};
+
+        auto value = commandLine.substring (marker + 10).trim();
+        if (value.startsWithChar ('"') && value.endsWithChar ('"') && value.length() > 1)
+            value = value.substring (1, value.length() - 1);
+        return value.unquoted();
+    }
+
     std::unique_ptr<ShowcaseWindow> window;
 };
 
