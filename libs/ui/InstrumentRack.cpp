@@ -167,12 +167,8 @@ void RackSlotCard::paintButton (juce::Graphics& g,
     if (twoLines) {
         g.setColour (colours::mutedText);
         g.setFont (8.5f);
-        juce::String descriptor = "ADD INSTRUMENT";
-        if (current.occupied) {
-            descriptor = current.vendorName;
-            if (! current.versionName.isEmpty())
-                descriptor += " " + current.versionName;
-        }
+        juce::String descriptor = current.occupied ? current.secondaryText()
+                                                   : juce::String("ADD INSTRUMENT");
         g.drawText (descriptor, subArea, juce::Justification::centredLeft, true);
     }
 

@@ -419,7 +419,12 @@ std::vector<vstengine::ui::RackSlotView> buildRackViews(
         view.vendorName = view.occupied
             ? juce::String (descriptor->vendor) : juce::String();
         view.versionName = view.occupied
-            ? "v" + juce::String (descriptor->instrumentVersion)
+            ? juce::String (descriptor->instrumentVersion)
+            : juce::String();
+        view.descriptorLine = view.occupied
+            ? vstengine::ui::rackDescriptorLine (
+                  descriptor->id, view.vendorName,
+                  descriptor->instrumentVersion)
             : juce::String();
         view.routeEnabled = state.routing.mode != vstengine::rack::RouteMode::off;
         view.midiChannel = view.routeEnabled ? static_cast<int> (state.routing.channel) : 0;
@@ -431,7 +436,9 @@ std::vector<vstengine::ui::RackSlotView> buildRackViews(
         view.level = state.level;
         view.active = runtime[i].ownedNotes != 0;
         view.slotIdText = juce::String (state.slotId);
-        view.accent = vstengine::ui::colours::primary;
+        view.accent = view.occupied
+            ? vstengine::ui::identityAccentFor (descriptor->id)
+            : vstengine::ui::colours::primary;
         views.push_back (view);
     }
 

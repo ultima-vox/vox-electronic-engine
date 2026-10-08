@@ -99,6 +99,7 @@ public:
 
 private:
     void drawThumbnail (juce::Graphics&, juce::Rectangle<int> bounds) const;
+    void drawStatusStrip (juce::Graphics&, juce::Rectangle<float>) const;
 
     vox::ui::VoxIconButton powerGlyph { vox::ui::icons::Icon::power, true };
     RackSlotView current;
