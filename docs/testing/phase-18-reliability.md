@@ -1,5 +1,8 @@
 # Phase 18 reliability gate
 
+Scope: existing synthetic regression suite; not production or DAW acceptance.
+See [current status](../STATUS.md) and [product target](../product/PRODUCT_SPEC.md).
+
 Whole-plugin reliability coverage complements provider, Rack, preset, migration, scheduler,
 and state unit tests.
 

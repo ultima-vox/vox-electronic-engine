@@ -1,5 +1,8 @@
 # Phase 17 performance gate
 
+Scope: existing synthetic regression suite; not production or DAW acceptance.
+See [current status](../STATUS.md) and [product target](../product/PRODUCT_SPEC.md).
+
 Production performance gate exercises dense rack workload through real VST3 processor shell.
 
 ## Fixed budgets
