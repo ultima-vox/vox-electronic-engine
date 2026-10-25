@@ -1361,7 +1361,9 @@ juce::File VstEngineAudioProcessor::createPartMidiFile(const int partIndex)
         apvts.getRawParameterValue("rngSeed")->load())
         ^ 0xB455A11u;
 
-    auto exportSequence = parts[index].sequence;
+    const auto exportSequence =
+        patternRuntime->slotSequences[index];
+    parts[index].sequence = exportSequence;
     const auto track =
         vstengine::midiexport::buildSequenceTrack(exportSequence, options);
 

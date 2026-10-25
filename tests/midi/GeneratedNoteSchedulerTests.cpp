@@ -259,6 +259,87 @@ int main()
         }
     }
 
+    // 6: Regression test for Issue #45 - PPQ note-off scheduling at arbitrary block offsets.
+    // In pre-fix implementation, a loop countdown starting at offset 0 caused notes triggered
+    // mid-block to emit NoteOff before NoteOn or fail to emit NoteOff across block boundaries,
+    // causing continuous stuck tones ("beep").
+    {
+        GeneratedNoteScheduler s;
+        s.reset(sampleRate);
+        s.reseedProbability(1234);
+
+        // Sequence with 1 note at step 0, gateWidth = 0.5 (1/16 note = 5000 samples @ 144 BPM)
+        Sequence seq(16);
+        seq.setTimingMode(vstengine::sequence::TimingMode::sixteenth);
+        seq[0].gate = true;
+        seq[0].noteOffset = 0;
+        seq[0].velocity = 0.8f;
+        seq[0].probability = 1.0f;
+        seq[0].ratchetCount = 1;
+        seq[0].gateWidth = 0.5f; // Duration = 2500 samples
+        for (int i = 1; i < 16; ++i) seq[i].gate = false;
+
+        TransportFrame frame;
+        frame.playing = true;
+        frame.havePpq = true;
+        frame.bpm = 144.0; // 1 beat = 20000 samples, 1/16 step = 5000 samples, duration = 2500 samples
+
+        // Start playback slightly before step 0 boundary (e.g. at ppq = 3.99, boundary at 4.0)
+        // so that step 0 boundary lands at sample 350 inside a 512-sample block.
+        const double ppqPerSample = (frame.bpm / 60.0) / sampleRate;
+        const double ppqAtBlockStart = 4.0 - (350.0 * ppqPerSample);
+        frame.ppqAtBlockStart = ppqAtBlockStart;
+
+        juce::MidiBuffer block0;
+        s.process(block0, seq, frame, blockSize, sampleRate, 1, 36, 1234);
+
+        // Block 0 must contain NoteOn at sample 350, and NO NoteOff before sample 350!
+        int noteOnSample = -1;
+        for (const auto meta : block0) {
+            if (meta.getMessage().isNoteOn()) noteOnSample = meta.samplePosition;
+            if (meta.getMessage().isNoteOff()) {
+                require(meta.samplePosition > noteOnSample,
+                        "Issue #45 regression: NoteOff must never precede NoteOn");
+            }
+        }
+        require(noteOnSample == 350, "Issue #45 regression: NoteOn placed accurately at mid-block offset 350");
+
+        // Advance 4 blocks (4 * 512 = 2048 samples). Note duration is 2500 samples.
+        // Off offset = 350 + 2500 = 2850.
+        // Block 0: 350..511 (162 samples)
+        // Block 1..4: 4 * 512 = 2048 samples (total 2210 samples elapsed)
+        // Block 5: offset = 2850 - 5 * 512 = 290.
+        double currentPpq = ppqAtBlockStart;
+        for (int b = 1; b <= 4; ++b) {
+            currentPpq += static_cast<double>(blockSize) * ppqPerSample;
+            frame.ppqAtBlockStart = currentPpq;
+            juce::MidiBuffer blk;
+            s.process(blk, seq, frame, blockSize, sampleRate, 1, 36, 1234);
+            require(countNoteOns(blk) == 0, "No new note during sustain");
+            require(countNoteOffs(blk) == 0, "No premature note-off during sustain");
+        }
+
+        // Block 5: NoteOff must arrive exactly at sample 290
+        currentPpq += static_cast<double>(blockSize) * ppqPerSample;
+        frame.ppqAtBlockStart = currentPpq;
+        juce::MidiBuffer block5;
+        s.process(block5, seq, frame, blockSize, sampleRate, 1, 36, 1234);
+
+        int noteOffSample = -1;
+        for (const auto meta : block5) {
+            if (meta.getMessage().isNoteOff()) noteOffSample = meta.samplePosition;
+        }
+        require(noteOffSample == 290, "Issue #45 regression: NoteOff arrives at exact sample 290 across blocks");
+
+        // Subsequent blocks must be completely silent (heldNote == -1, no stuck note)
+        currentPpq += static_cast<double>(blockSize) * ppqPerSample;
+        frame.ppqAtBlockStart = currentPpq;
+        juce::MidiBuffer block6;
+        s.process(block6, seq, frame, blockSize, sampleRate, 1, 36, 1234);
+        require(countNoteOns(block6) == 0 && countNoteOffs(block6) == 0,
+                "Issue #45 regression: No lingering note after note-off");
+    }
+
     std::cout << "GeneratedNoteScheduler tests passed (" << testsPassed << "/"
               << testsRun << ")\n";
     return EXIT_SUCCESS;
