@@ -5,7 +5,6 @@
 #include <cstring>
 #include <limits>
 #include <type_traits>
-#include <unordered_set>
 
 namespace vstengine::rack::state {
 namespace {
@@ -13,7 +12,7 @@ constexpr auto rackType = "RACK";
 constexpr auto slotType = "SLOT";
 bool validString(const juce::var& value, std::size_t maxBytes = 256)
 {
-    return value.toString().getNumBytesAsUTF8() <= static_cast<int>(maxBytes);
+    return value.toString().getNumBytesAsUTF8() <= maxBytes;
 }
 bool validStableId(std::string_view id, bool allowEmpty = false)
 {
@@ -52,6 +51,62 @@ bool readSigned(const juce::var& value, int& result)
     return true;
 }
 } // namespace
+
+bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
+{
+    if (slot.schemaVersion != static_cast<std::uint32_t>(schemaVersion)
+        || slot.slotId == instrument::invalidSlotId
+        || !validStableId(slot.instrumentId, true)
+        || !validStableId(slot.resolvedProviderId, true)
+        || slot.soundPreset.size() > 256 || slot.patternPreset.size() > 256) {
+        diagnostic = "invalid rack slot identity or metadata";
+        return false;
+    }
+    if (!valid(slot.routing)
+        || (slot.routing.mode != RouteMode::off
+            && slot.routing.mode != RouteMode::channel
+            && slot.routing.mode != RouteMode::layer)
+        || slot.routing.keyHigh > 127 || slot.routing.velocityHigh > 127
+        || slot.outputDestination != 0) {
+        diagnostic = "invalid rack routing or unsupported output";
+        return false;
+    }
+    if (!std::isfinite(slot.level) || slot.level < 0.0f || slot.level > 2.0f
+        || !std::isfinite(slot.pan) || slot.pan < -1.0f || slot.pan > 1.0f) {
+        diagnostic = "invalid rack mix state";
+        return false;
+    }
+    for (std::size_t macro = 0; macro < slot.macros.size(); ++macro)
+        if (!std::isfinite(slot.macros[macro]) || slot.macros[macro] < 0.0f
+            || slot.macros[macro] > 1.0f
+            || !validStableId(slot.macroAssignments[macro], true)) {
+            diagnostic = "invalid rack macro state";
+            return false;
+        }
+    if (slot.patternSchemaVersion == 0
+        || slot.modulePayload.size() > maxModulePayloadBytes
+        || slot.patternPayload.size() > maxPatternPayloadBytes
+        || slot.modulationPayload.size() > maxModulationPayloadBytes) {
+        diagnostic = "invalid rack pattern schema or payload exceeds host budget";
+        return false;
+    }
+    return true;
+}
+
+bool validate(const std::array<PersistentSlotState, instrument::maxSlots>& slots,
+              std::string& diagnostic)
+{
+    for (std::size_t index = 0; index < slots.size(); ++index) {
+        if (!validateSlot(slots[index], diagnostic)) return false;
+        for (std::size_t previous = 0; previous < index; ++previous)
+            if (slots[previous].slotId == slots[index].slotId) {
+                diagnostic = "duplicate rack SlotId";
+                return false;
+            }
+    }
+    diagnostic.clear();
+    return true;
+}
 
 juce::ValueTree serialize(
     const std::array<PersistentSlotState, instrument::maxSlots>& slots)
@@ -118,7 +173,6 @@ bool deserialize(const juce::ValueTree& root,
         return false;
     }
     std::array<PersistentSlotState, instrument::maxSlots> parsed;
-    std::unordered_set<instrument::SlotId> ids;
     for (int i = 0; i < root.getNumChildren(); ++i) {
         const auto child = root.getChild(i);
         auto& slot = parsed[static_cast<std::size_t>(i)];
@@ -276,13 +330,8 @@ bool deserialize(const juce::ValueTree& root,
                             modulation.getSize());
         }
         slot.schemaVersion = schemaVersion;
-        if (!valid(slot.routing)
-            || slot.slotId == instrument::invalidSlotId
-            || !ids.insert(slot.slotId).second || slot.outputDestination != 0) {
-            diagnostic = "invalid or duplicate rack slot identity";
-            return false;
-        }
     }
+    if (!validate(parsed, diagnostic)) return false;
     result = std::move(parsed);
     return true;
 }

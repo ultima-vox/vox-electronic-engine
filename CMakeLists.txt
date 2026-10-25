@@ -240,6 +240,13 @@ add_executable(rack_integration_tests tests/rack/RackIntegrationTests.cpp)
 target_link_libraries(rack_integration_tests PRIVATE vst_rack vst_modules)
 add_test(NAME rack_integration_tests COMMAND rack_integration_tests)
 
+add_executable(rack_lifecycle_tests
+  tests/rack/RackLifecycleTests.cpp
+  tests/support/ReferenceInstrument.cpp tests/support/ReferenceInstrument.h)
+target_include_directories(rack_lifecycle_tests PRIVATE tests)
+target_link_libraries(rack_lifecycle_tests PRIVATE vst_rack)
+add_test(NAME rack_lifecycle_tests COMMAND rack_lifecycle_tests)
+
 add_executable(transport_sync_tests tests/transport/TransportSyncTests.cpp)
 target_link_libraries(transport_sync_tests PRIVATE vst_transport)
 add_test(NAME transport_sync_tests COMMAND transport_sync_tests)
