@@ -3,6 +3,18 @@
 
 namespace vstengine::rack {
 namespace {
+bool validChannelEvent(const VoxMidiEventV1& event) noexcept
+{
+    // VoxMidiEventV1 carries channel-voice messages, not SysEx or transport.
+    // Check before using any data byte as an ownership-array index.
+    if (event.size < 2 || event.size > 3
+        || event.data[0] < 0x80 || event.data[0] >= 0xf0)
+        return false;
+    const auto type = event.data[0] & 0xf0;
+    const auto expectedSize = type == 0xc0 || type == 0xd0 ? 2 : 3;
+    return event.size == expectedSize && event.data[1] < 128
+        && (event.size == 2 || event.data[2] < 128);
+}
 bool isNoteOn(const VoxMidiEventV1& event) noexcept
 {
     return event.size >= 3 && (event.data[0] & 0xf0) == 0x90
@@ -26,6 +38,7 @@ std::size_t channelIndex(const VoxMidiEventV1& event) noexcept
 int findSlot(std::span<const ProcessSlotControls> slots,
              instrument::SlotId id) noexcept
 {
+    if (id == instrument::invalidSlotId) return -1;
     for (std::size_t i = 0; i < slots.size(); ++i)
         if (slots[i].slotId == id) return static_cast<int>(i);
     return -1;
@@ -75,6 +88,7 @@ void RackRouter::DestinationBuffer::sortBySampleOffset() noexcept
 
 void RackRouter::reset() noexcept
 {
+    releaseRecovery_.fill(instrument::invalidSlotId);
     for (auto& channel : ownership_)
         for (auto& note : channel)
             note.size = 0;
@@ -84,6 +98,8 @@ void RackRouter::reset() noexcept
 
 void RackRouter::forgetSlot(instrument::SlotId slotId) noexcept
 {
+    for (auto& pending : releaseRecovery_)
+        if (pending == slotId) pending = instrument::invalidSlotId;
     for (auto& channel : ownership_)
         for (auto& notes : channel) {
             std::uint8_t write = 0;
@@ -101,6 +117,45 @@ void RackRouter::forgetSlot(instrument::SlotId slotId) noexcept
     }
 }
 
+bool RackRouter::recoveryPending(instrument::SlotId slotId) const noexcept
+{
+    return slotId != instrument::invalidSlotId
+        && std::find(releaseRecovery_.begin(), releaseRecovery_.end(), slotId)
+            != releaseRecovery_.end();
+}
+
+void RackRouter::deferReleaseRecovery(instrument::SlotId slotId) noexcept
+{
+    if (slotId == instrument::invalidSlotId || recoveryPending(slotId)) return;
+    for (auto& pending : releaseRecovery_)
+        if (pending == instrument::invalidSlotId) {
+            pending = slotId;
+            return;
+        }
+}
+
+void RackRouter::flushReleaseRecovery(
+    std::span<const ProcessSlotControls> slots,
+    std::array<DestinationBuffer, instrument::maxSlots>& output) noexcept
+{
+    for (const auto slotId : releaseRecovery_) {
+        if (slotId == instrument::invalidSlotId) continue;
+        const int index = findSlot(slots, slotId);
+        if (index < 0) {
+            forgetSlot(slotId);
+            continue;
+        }
+        auto& destination = output[static_cast<std::size_t>(index)];
+        if (destination.events.size() - destination.size < 16) continue;
+        // Slot-level fail-safe, not a musical/channel-selective release.
+        // Cover all channels for providers that implement channel-aware CC.
+        for (std::uint8_t channel = 0; channel < 16; ++channel)
+            destination.push({ 0, 3,
+                { static_cast<std::uint8_t>(0xb0 | channel), 120, 0 } });
+        forgetSlot(slotId);
+    }
+}
+
 void RackRouter::routeAudition(
     std::span<const VoxMidiEventV1> input, instrument::SlotId selectedSlot,
     std::span<const ProcessSlotControls> slots,
@@ -108,38 +163,50 @@ void RackRouter::routeAudition(
     bool generated) noexcept
 {
     if (generated) return;
+    slots = slots.first(std::min(slots.size(), instrument::maxSlots));
     auto& ownership = auditionOwnership_;
     for (const auto& source : input) {
-        if (source.size < 2) continue;
+        if (!validChannelEvent(source)) continue;
         const auto note = source.data[1];
         if (isNoteOff(source)) {
             const auto owner = ownership[note];
             const int index = findSlot(slots, owner.slotId);
             if (index >= 0) {
                 auto event = source;
+                event.data[0] = static_cast<std::uint8_t>(
+                    (source.data[0] & 0xf0) | owner.channel);
                 event.data[1] = owner.transposedNote;
-                if (!output[static_cast<std::size_t>(index)].push(event))
+                if (!output[static_cast<std::size_t>(index)].push(event)) {
+                    deferReleaseRecovery(owner.slotId);
                     continue;
+                }
             }
             ownership[note] = {};
         } else if (isNoteOn(source)) {
             const int index = findSlot(slots, selectedSlot);
             if (index < 0 || !slots[static_cast<std::size_t>(index)].enabled)
                 continue;
+            if (recoveryPending(selectedSlot)) {
+                ++output[static_cast<std::size_t>(index)].dropped;
+                continue;
+            }
             if (ownership[note].slotId != instrument::invalidSlotId) {
                 const int old = findSlot(slots, ownership[note].slotId);
                 if (old >= 0) {
                     auto off = source;
                     off.data[0] = static_cast<std::uint8_t>(0x80
-                                                           | (source.data[0] & 0x0f));
+                                                           | ownership[note].channel);
                     off.data[1] = ownership[note].transposedNote;
                     off.data[2] = 0;
-                    if (!output[static_cast<std::size_t>(old)].push(off))
+                    if (!output[static_cast<std::size_t>(old)].push(off)) {
+                        deferReleaseRecovery(ownership[note].slotId);
                         continue;
+                    }
                 }
             }
             if (output[static_cast<std::size_t>(index)].push(source))
-                ownership[note] = { selectedSlot, note };
+                ownership[note] = { selectedSlot, note,
+                    static_cast<std::uint8_t>(channelIndex(source)) };
             else
                 ownership[note] = {};
         }
@@ -151,6 +218,7 @@ void RackRouter::routeGenerated(
     std::span<const ProcessSlotControls> slots,
     std::array<DestinationBuffer, instrument::maxSlots>& output) noexcept
 {
+    slots = slots.first(std::min(slots.size(), instrument::maxSlots));
     for (const auto& stream : input) {
         const int targetIndex = findSlot(slots, stream.slotId);
         if (targetIndex < 0) continue;
@@ -170,32 +238,42 @@ void RackRouter::routeGenerated(
         if (domain == nullptr) continue;
         auto& ownership = domain->notes;
         for (const auto& source : stream.events) {
-            if (source.size == 0) continue;
+            if (!validChannelEvent(source)) continue;
             const auto note = source.size >= 2 ? source.data[1] : 0;
             if (isNoteOff(source)) {
                 const auto owner = ownership[note];
                 const int ownerIndex = findSlot(slots, owner.slotId);
                 if (ownerIndex >= 0) {
                     auto event = source;
+                    event.data[0] = static_cast<std::uint8_t>(
+                        (source.data[0] & 0xf0) | owner.channel);
                     event.data[1] = owner.transposedNote;
                     if (output[static_cast<std::size_t>(ownerIndex)].push(event))
                         ownership[note] = {};
+                    else
+                        deferReleaseRecovery(owner.slotId);
                 } else {
                     ownership[note] = {};
                 }
                 continue;
             }
             if (isNoteOn(source)) {
+                if (recoveryPending(stream.slotId)) {
+                    ++output[static_cast<std::size_t>(targetIndex)].dropped;
+                    continue;
+                }
                 const auto previous = ownership[note];
                 const int previousIndex = findSlot(slots, previous.slotId);
                 if (previousIndex >= 0) {
                     auto off = source;
                     off.data[0] = static_cast<std::uint8_t>(
-                        0x80 | (source.data[0] & 0x0f));
+                        0x80 | previous.channel);
                     off.data[1] = previous.transposedNote;
                     off.data[2] = 0;
-                    if (!output[static_cast<std::size_t>(previousIndex)].push(off))
+                    if (!output[static_cast<std::size_t>(previousIndex)].push(off)) {
+                        deferReleaseRecovery(previous.slotId);
                         continue;
+                    }
                 }
                 ownership[note] = {};
                 if (!slots[static_cast<std::size_t>(targetIndex)].enabled)
@@ -205,11 +283,14 @@ void RackRouter::routeGenerated(
                 // External MIDI transpose/zones do not alter internal content.
                 event.data[1] = note;
                 if (output[static_cast<std::size_t>(targetIndex)].push(event))
-                    ownership[note] = { stream.slotId, event.data[1] };
+                    ownership[note] = { stream.slotId, event.data[1],
+                        static_cast<std::uint8_t>(channelIndex(source)) };
                 continue;
             }
-            if (slots[static_cast<std::size_t>(targetIndex)].enabled)
-                output[static_cast<std::size_t>(targetIndex)].push(source);
+            if (slots[static_cast<std::size_t>(targetIndex)].enabled
+                && !output[static_cast<std::size_t>(targetIndex)].push(source)
+                && isChannelPanic(source))
+                deferReleaseRecovery(stream.slotId);
         }
     }
 }
@@ -219,9 +300,11 @@ void RackRouter::route(
     std::span<const ProcessSlotControls> slots,
     std::array<DestinationBuffer, instrument::maxSlots>& output) noexcept
 {
+    slots = slots.first(std::min(slots.size(), instrument::maxSlots));
     for (auto& destination : output) destination.clear();
+    flushReleaseRecovery(slots, output);
     for (const auto& source : input) {
-        if (source.size == 0) continue;
+        if (!validChannelEvent(source)) continue;
         const auto channel = channelIndex(source);
         const auto note = source.size >= 2 ? source.data[1] : 0;
         if (isChannelPanic(source)) {
@@ -237,7 +320,8 @@ void RackRouter::route(
                         targets[static_cast<std::size_t>(slotIndex)] = true;
                 }
             for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex)
-                if (targets[slotIndex]) output[slotIndex].push(source);
+                if (targets[slotIndex] && !output[slotIndex].push(source))
+                    deferReleaseRecovery(slots[slotIndex].slotId);
             for (auto& owners : ownership_[channel]) owners.size = 0;
             continue;
         }
@@ -251,8 +335,10 @@ void RackRouter::route(
                 if (slotIndex < 0) continue;
                 auto event = source;
                 event.data[1] = owner.transposedNote;
-                if (!output[static_cast<std::size_t>(slotIndex)].push(event))
+                if (!output[static_cast<std::size_t>(slotIndex)].push(event)) {
                     owners.values[retained++] = owner;
+                    deferReleaseRecovery(owner.slotId);
+                }
             }
             owners.size = retained;
             continue;
@@ -269,14 +355,20 @@ void RackRouter::route(
                 noteOff.data[0] = static_cast<std::uint8_t>(0x80 | channel);
                 noteOff.data[1] = owner.transposedNote;
                 noteOff.data[2] = 0;
-                if (!output[static_cast<std::size_t>(slotIndex)].push(noteOff))
+                if (!output[static_cast<std::size_t>(slotIndex)].push(noteOff)) {
                     previous.values[retained++] = owner;
+                    deferReleaseRecovery(owner.slotId);
+                }
             }
             previous.size = retained;
         }
         for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
             const auto& slot = slots[slotIndex];
             if (!accepts(slot, source)) continue;
+            if (isNoteOn(source) && recoveryPending(slot.slotId)) {
+                ++output[slotIndex].dropped;
+                continue;
+            }
             auto event = source;
             if (isNoteOn(event)) {
                 const int transposed = std::clamp(
@@ -287,7 +379,8 @@ void RackRouter::route(
             if (output[slotIndex].push(event) && isNoteOn(event)) {
                 auto& owners = ownership_[channel][note];
                 if (owners.size < owners.values.size())
-                    owners.values[owners.size++] = { slot.slotId, event.data[1] };
+                    owners.values[owners.size++] = { slot.slotId, event.data[1],
+                        static_cast<std::uint8_t>(channel) };
             }
         }
     }
