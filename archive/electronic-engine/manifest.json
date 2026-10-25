@@ -1,0 +1,181 @@
+{
+  "archived_on": "2026-10-25",
+  "source_main": "b076a53d8900b53433e8aa4fdb1027c8f2bed135",
+  "source_design_commit": "6b454f87ae44992a77869a2f574b69f1da2415b8",
+  "entries": [
+    {
+      "original_path": "README.md",
+      "archived_path": "archive/electronic-engine/README.md",
+      "sha256": "9694519ff1a48b35cae6035178b00dd3db8194704f33d5eaa313b68226dccde0",
+      "operation": "snapshot"
+    },
+    {
+      "original_path": "AGENTS.md",
+      "archived_path": "archive/electronic-engine/AGENTS.md",
+      "sha256": "56b155f21863b26916edec213212178ee7bf3299aa7dbe4bb45f32a3f8d381db",
+      "operation": "snapshot"
+    },
+    {
+      "original_path": "agents/PROJECT_CONTEXT.md",
+      "archived_path": "archive/electronic-engine/agents/PROJECT_CONTEXT.md",
+      "sha256": "2e579bfdc5b61a9064f44d9bfa979796a7548437089fb1354680cf582b2a6cd1",
+      "operation": "snapshot"
+    },
+    {
+      "original_path": "agents/DEVELOPMENT_WORKFLOW.md",
+      "archived_path": "archive/electronic-engine/agents/DEVELOPMENT_WORKFLOW.md",
+      "sha256": "2650132d32a1f6cd2e55f6d24110ea2995685ba307bd0fd3836b85dbfd4e0783",
+      "operation": "snapshot"
+    },
+    {
+      "original_path": "libs/vox-ui/README.md",
+      "archived_path": "archive/electronic-engine/libs/vox-ui/README.md",
+      "sha256": "b62d742caa4c33d7151bc600a7a51f126087ca9077c9df56c7d1af04b6fd01b5",
+      "operation": "snapshot"
+    },
+    {
+      "original_path": "docs/UI_VISUAL_REFERENCE_SPEC.md",
+      "archived_path": "archive/electronic-engine/docs/UI_VISUAL_REFERENCE_SPEC.md",
+      "sha256": "17dc4b0c13803f19c91056321c7b2a9f0cf3bf04d33693bce0ab67b20923723c",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/UI_COMPONENT_CATALOG.md",
+      "archived_path": "archive/electronic-engine/docs/UI_COMPONENT_CATALOG.md",
+      "sha256": "1fe9a726aa842defa508add18e73e07862d06e11be7a1ae9ceb2488d638eee38",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/UI_DESIGN_SYSTEM.md",
+      "archived_path": "archive/electronic-engine/docs/UI_DESIGN_SYSTEM.md",
+      "sha256": "fac97e396f2711fb6878ee9aadc514e6266e8de60ac73a91c6fa2fceba11dba1",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/UI_PRODUCTION_IMPLEMENTATION_STANDARD.md",
+      "archived_path": "archive/electronic-engine/docs/UI_PRODUCTION_IMPLEMENTATION_STANDARD.md",
+      "sha256": "faae94eeae866dc4427c22030d2ed42a8d578d9229a327f49cd1debc19865823",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/VOX_UI_FAMILY_ARCHITECTURE.md",
+      "archived_path": "archive/electronic-engine/docs/VOX_UI_FAMILY_ARCHITECTURE.md",
+      "sha256": "8c713707eda51501aff2e3d27184147942834bab47ecea851f6fc5fa64da819b",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/architecture/checkpoint-7b0-contract-freeze.md",
+      "archived_path": "archive/electronic-engine/docs/architecture/checkpoint-7b0-contract-freeze.md",
+      "sha256": "ba2afd5ca3e828b17618623f997acda06ef42f15556a10d671e32505514784ce",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/architecture/checkpoint-7a-product-split.md",
+      "archived_path": "archive/electronic-engine/docs/architecture/checkpoint-7a-product-split.md",
+      "sha256": "0b064b93435acfb605c065ce42d0cff346deb45414e6fbd1962274d3f003e64a",
+      "operation": "move"
+    },
+    {
+      "original_path": "docs/product/trance-engine-production-proposal.md",
+      "archived_path": "archive/electronic-engine/docs/product/trance-engine-production-proposal.md",
+      "sha256": "4d50b40faf6dec8e3d242e9fe7e298de35d7b4aa7da75dac529ae15caf675ca0",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/mastering_engine/README.md",
+      "archived_path": "archive/electronic-engine/legacy/mastering_engine/README.md",
+      "sha256": "10c68efd930a12da53eb9478a9e0f179a7c59c2e216de10a33828a23c7626c6d",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/vox_drum_engine/README.md",
+      "archived_path": "archive/electronic-engine/legacy/vox_drum_engine/README.md",
+      "sha256": "e39987d21455b75cabba0974a23db548a81c48825242a6d6f3ad7c85848d34f1",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/mastering_engine/ui/MatchPanel.h",
+      "archived_path": "archive/electronic-engine/legacy/mastering_engine/ui/MatchPanel.h",
+      "sha256": "bdecee817f9b9f785a789cb2b9c06f2281dc8c068a9463f1cff292106f63266c",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/mastering_engine/ui/MatchPanel.cpp",
+      "archived_path": "archive/electronic-engine/legacy/mastering_engine/ui/MatchPanel.cpp",
+      "sha256": "d718713abf9b3aad8fb59172614c4b90bdf2ce6982c0c744a34e499999efa34d",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/mastering_engine/tests/match/KickBassMatchTests.cpp",
+      "archived_path": "archive/electronic-engine/legacy/mastering_engine/tests/match/KickBassMatchTests.cpp",
+      "sha256": "bf30dae512d43afaad2feb467caca54ea46c01d8b26782ced1e0680fd19433ca",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/mastering_engine/libs/match/KickBassMatch.cpp",
+      "archived_path": "archive/electronic-engine/legacy/mastering_engine/libs/match/KickBassMatch.cpp",
+      "sha256": "d159b6935c8a42c0dab05823f191b568c5f82a2f96baebd4e4fe304f4676166e",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/mastering_engine/libs/match/KickBassMatch.h",
+      "archived_path": "archive/electronic-engine/legacy/mastering_engine/libs/match/KickBassMatch.h",
+      "sha256": "04b229608c50a121646033d8dc89ba0bbf18fd0fd4135bbbc956fac70466f5fc",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/vox_drum_engine/ui/KickPanel.h",
+      "archived_path": "archive/electronic-engine/legacy/vox_drum_engine/ui/KickPanel.h",
+      "sha256": "c064a5ac034ed120a36e83bd92c54c35b2f456d7db3eddcfc396095ef3b2eff5",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/vox_drum_engine/ui/KickPanel.cpp",
+      "archived_path": "archive/electronic-engine/legacy/vox_drum_engine/ui/KickPanel.cpp",
+      "sha256": "e68b68a39340cf00e7ded34c48c06ef321dfaed42c4e5cca30c1638ac432123e",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/vox_drum_engine/tests/kick/KickSynthTests.cpp",
+      "archived_path": "archive/electronic-engine/legacy/vox_drum_engine/tests/kick/KickSynthTests.cpp",
+      "sha256": "1abe6a1e9d7da1645472b245be4d335215aaf3091db34c797feebb32b34cdf77",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/vox_drum_engine/libs/kick/KickSynth.h",
+      "archived_path": "archive/electronic-engine/legacy/vox_drum_engine/libs/kick/KickSynth.h",
+      "sha256": "00391f78c35c6593a7ef3d7f7c7473d6ba519523f3f59d66d1724b527c2e583b",
+      "operation": "move"
+    },
+    {
+      "original_path": "legacy/vox_drum_engine/libs/kick/KickSynth.cpp",
+      "archived_path": "archive/electronic-engine/legacy/vox_drum_engine/libs/kick/KickSynth.cpp",
+      "sha256": "6f073d13fd76fcb6cc86a17319a7d221206c888edf869720f150ef6619d1c0b5",
+      "operation": "move"
+    },
+    {
+      "original_path": "github:issue/10",
+      "archived_path": "archive/electronic-engine/issues/issue-10.json",
+      "sha256": "8e3b98b8445d005822e7be0fa07b9380a375879594bbba6c43e8d137e874ecbf",
+      "operation": "issue-snapshot"
+    },
+    {
+      "original_path": "github:issue/11",
+      "archived_path": "archive/electronic-engine/issues/issue-11.json",
+      "sha256": "727d79099d8816c8f6f53531400fa3f0a552957d4f2ccab0b4a21e43a29bd4b7",
+      "operation": "issue-snapshot"
+    },
+    {
+      "original_path": "agents/README.md",
+      "archived_path": "archive/electronic-engine/agents/README.md",
+      "sha256": "dcba474b719d83fe57d6cf13cfc38285b16931992edf4ae21076b68107b0c8e0",
+      "operation": "snapshot"
+    },
+    {
+      "original_path": "agents/PROJECT_CONTEXT.template.md",
+      "archived_path": "archive/electronic-engine/agents/PROJECT_CONTEXT.template.md",
+      "sha256": "82a6fdc6e232e8d9987416e7c3770d3e9e4f5bc0efd7561fe6f2b92dd4b040a9",
+      "operation": "move"
+    }
+  ]
+}
