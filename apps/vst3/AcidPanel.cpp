@@ -74,7 +74,10 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
             g.setFont(juce::Font(juce::FontOptions(9.0f)));
             juce::String text;
             if (lane == 0) {
-                const auto note = juce::jlimit(0, 127, 48 + step.noteOffset);
+                const auto root = processor_.parameters().getRawParameterValue("rootNote");
+                const int rootNote = root != nullptr
+                    ? static_cast<int>(std::round(root->load())) : 48;
+                const auto note = juce::jlimit(0, 127, rootNote + step.noteOffset);
                 text = step.gate ? juce::MidiMessage::getMidiNoteName(
                     note, true, true, 4) : "--";
             } else if (lane == 1) text = step.accent ? "A" : "";
@@ -240,7 +243,43 @@ void AcidPanel::addKnob(Group group, std::string_view semantic, const char* name
     k.semantic = std::string(semantic);
     k.envelopeStage = stage;
     k.widget = std::make_unique<vox::ui::VoxKnob>(name, vox::ui::VoxKnob::Size::Small);
-    k.widget->setTooltip("Acid " + juce::String(name) + ": " + juce::String(semantic));
+    k.widget->setTooltip("Acid " + juce::String(name) + ": " + juce::String(std::string(semantic)));
+    // Values displayed by VoxKnob describe the actual normalized DSP map;
+    // they are never fictional labels independent of the parameter.
+    const auto target = k.semantic;
+    k.widget->getSlider().textFromValueFunction = [target](double raw) {
+        const auto v = static_cast<float>(juce::jlimit(0.0, 1.0, raw));
+        if (target == "cutoff") {
+            const auto hz = vstengine::acid::AcidEngine::cutoffNormalizedToHz(v);
+            return hz >= 1000.0f ? juce::String(hz / 1000.0f, 1) + "kHz"
+                                 : juce::String(hz, 0) + "Hz";
+        }
+        if (target == "osc_tune")
+            return juce::String(static_cast<int>(std::round((v - 0.5f) * 48.0f))) + "st";
+        if (target == "osc_fine")
+            return juce::String(static_cast<int>(std::round((v - 0.5f) * 200.0f))) + "ct";
+        if (target == "unison_voices")
+            return juce::String(1 + static_cast<int>(std::round(v * 3.0f)));
+        if (target == "output")
+            return v <= 0.0f ? juce::String("-inf")
+                             : juce::String(20.0f * std::log10(v), 1) + "dB";
+        if (target == "pan")
+            return std::abs(v - 0.5f) < 0.001f ? juce::String("C")
+                             : (v < 0.5f ? juce::String("L") : juce::String("R"))
+                                + juce::String(static_cast<int>(
+                                     std::round(std::abs(v - 0.5f) * 200.0f)));
+        if (target == "amp_attack" || target == "flt_attack")
+            return juce::String((0.0005f + v * v * 0.8f) * 1000.0f, 0) + "ms";
+        if (target == "amp_decay" || target == "decay")
+            return juce::String(0.015f + v * v * 2.2f, 2) + "s";
+        if (target == "amp_release")
+            return juce::String(0.004f + v * v * 1.8f, 2) + "s";
+        if (target == "flt_release")
+            return juce::String(0.010f + v * v * 1.5f, 2) + "s";
+        if (target == "portamento" || target == "slide")
+            return juce::String(6.0f + v * 240.0f, 0) + "ms";
+        return juce::String(v * 100.0f, 0) + "%";
+    };
     addAndMakeVisible(*k.widget);
     knobs_.push_back(std::move(k));
 }

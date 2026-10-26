@@ -47,6 +47,17 @@ jobs:
           Capture-VisualGate "psy-bass-sound-1500x920.png" "com.ultimavox.psy-bass" "sound" 1500 920
           Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
           Capture-VisualGate "psy-bass-macros-1500x920.png" "com.ultimavox.psy-bass" "macros" 1500 920
+          # Source of truth for owner screenshot review: the actual VST3 editor,
+          # not the independent showcase/capture program above.
+          $editorTest = Join-Path $PWD "build\\Release\\editor_smoke_tests.exe"
+          if (-not (Test-Path $editorTest)) { throw "Editor smoke executable missing" }
+          $env:VOX_UI_ACID_SNAPSHOT = Join-Path $snapshotDir "acid-actual-editor-1040x768.png"
+          & $editorTest
+          if ($LASTEXITCODE -ne 0) { throw "Acid actual editor capture failed" }
+          if (-not (Test-Path $env:VOX_UI_ACID_SNAPSHOT)) {
+            throw "Actual Acid editor snapshot not created"
+          }
+          Remove-Item Env:VOX_UI_ACID_SNAPSHOT
 
       - name: Upload Visual Gate snapshots
         uses: actions/upload-artifact@v4

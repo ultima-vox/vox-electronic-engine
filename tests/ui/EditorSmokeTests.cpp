@@ -75,6 +75,20 @@ int main()
         if (!format.writeImageToStream(image, output))
             return EXIT_FAILURE;
     }
+    const auto acidPath = juce::SystemStats::getEnvironmentVariable(
+        "VOX_UI_ACID_SNAPSHOT", {});
+    if (acidPath.isNotEmpty()) {
+        editor->selectSlotForTesting(1);
+        editor->showPageForTesting(Page::sound);
+        editor->setSize(1040, 768);
+        const auto image = editor->createComponentSnapshot(editor->getLocalBounds());
+        juce::FileOutputStream output { juce::File(acidPath) };
+        juce::PNGImageFormat format;
+        if (!output.openedOk()) return EXIT_FAILURE;
+        output.setPosition(0);
+        output.truncate();
+        if (!format.writeImageToStream(image, output)) return EXIT_FAILURE;
+    }
     std::cout << "Editor smoke test passed\n";
     return EXIT_SUCCESS;
 }
