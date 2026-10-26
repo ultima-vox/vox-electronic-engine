@@ -117,6 +117,9 @@ int main()
             || rack.intersects(workspace) || rack.intersects(keyboard)
             || workspace.intersects(keyboard))
             return EXIT_FAILURE;
+        if (editor->acidWorkspaceVisibleForTesting()
+            && editor->acidModulationDiameterForTesting() < 17)
+            return EXIT_FAILURE; // Never show a cosmetic 1–12 px knob.
     }
     // Retain the established Psy Bass screenshot reference: UI snapshots
     // must not silently switch their underlying instrument to Acid.

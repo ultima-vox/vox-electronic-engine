@@ -31,6 +31,9 @@ public:
     [[nodiscard]] std::size_t acidControlsForTesting() const noexcept {
         return acidSoundPage.attachedControlCount();
     }
+    [[nodiscard]] int acidModulationDiameterForTesting() const noexcept {
+        return acidSoundPage.modulationKnobDiameterForTesting();
+    }
     bool setAcidKnobForTesting(std::string_view semantic, double normalized) {
         return acidSoundPage.setKnobForTesting(semantic, normalized);
     }

@@ -21,6 +21,7 @@ public:
     void resized() override;
     [[nodiscard]] std::size_t boundSlot() const noexcept { return slot_; }
     [[nodiscard]] std::size_t attachedControlCount() const noexcept;
+    [[nodiscard]] int modulationKnobDiameterForTesting() const noexcept;
     bool setKnobForTesting(std::string_view semantic, double normalized);
     void switchEnvelopeForTesting(bool filter);
     void switchModulationForTesting(bool lfo1);

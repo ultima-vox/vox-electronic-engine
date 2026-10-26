@@ -6,6 +6,7 @@
 #include "ui/common/UiComponents.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 const auto acidAccentColour = juce::Colour::fromRGB(0, 221, 245);
@@ -243,6 +244,15 @@ std::size_t AcidPanel::attachedControlCount() const noexcept {
     for (const auto& knob : knobs_)
         if (knob.attach != nullptr) ++count;
     return count;
+}
+int AcidPanel::modulationKnobDiameterForTesting() const noexcept {
+    int minDiameter = std::numeric_limits<int>::max();
+    for (const auto& knob : knobs_)
+        if (knob.group == modulation && knob.attach && knob.widget->isVisible())
+            minDiameter = std::min(minDiameter,
+                std::min(knob.widget->getSlider().getWidth(),
+                         knob.widget->getSlider().getHeight()));
+    return minDiameter == std::numeric_limits<int>::max() ? 0 : minDiameter;
 }
 bool AcidPanel::setKnobForTesting(std::string_view semantic, double normalized) {
     for (auto& knob : knobs_)
