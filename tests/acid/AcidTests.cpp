@@ -81,6 +81,52 @@ int main()
     REQUIRE(provider->contentDescriptors(acid::instrumentId).size() == 18,
             "six Sound, Pattern and Generator factory entries");
 
+    // Acid Production Gate 1: one stable semantic ID per DSP parameter.
+    // Do not alias controls to other parameters merely to fill eight host macros.
+    REQUIRE(descriptor.parameters.size() == acid::AcidEngine::parameterCount,
+            "all 36 Acid parameters are advertised by the production descriptor");
+    std::set<std::string> semanticIds;
+    for (std::size_t i = 0; i < acid::AcidEngine::parameterCount; ++i) {
+        const auto id = acid::AcidEngine::parameterIds[i];
+        REQUIRE(descriptor.parameters[i].id == id,
+                "Acid descriptor ordering matches stable DSP IDs");
+        REQUIRE(semanticIds.insert(std::string(id)).second,
+                "every Acid parameter ID is unique");
+    }
+    REQUIRE(semanticIds.size() == acid::AcidEngine::parameterCount,
+            "no duplicate Acid controls in the parameter schema");
+    for (std::size_t i = 0; i < instrument::macrosPerSlot; ++i)
+        REQUIRE(descriptor.parameters[i].preferredMacro == static_cast<int>(i),
+                "legacy Acid host macro assignment remains stable");
+    for (std::size_t i = instrument::macrosPerSlot;
+         i < descriptor.parameters.size(); ++i)
+        REQUIRE(descriptor.parameters[i].preferredMacro == -1,
+                "extended Acid controls never alias an unrelated host macro");
+
+    acid::AcidEngine isolated;
+    std::array<float, acid::AcidEngine::parameterCount> initialValues {};
+    for (std::size_t i = 0; i < initialValues.size(); ++i)
+        initialValues[i] = isolated.parameter(acid::AcidEngine::parameterIds[i]);
+    for (std::size_t i = 0; i < initialValues.size(); ++i) {
+        const float probeValue = initialValues[i] < 0.5f ? 0.937f : 0.063f;
+        REQUIRE(isolated.setParameter(acid::AcidEngine::parameterIds[i], probeValue),
+                "each Acid control has a writable semantic DSP target");
+        REQUIRE(std::abs(isolated.parameter(acid::AcidEngine::parameterIds[i])
+                         - probeValue) < 0.00001f,
+                "parameter write reads back its own exact target");
+        for (std::size_t j = 0; j < initialValues.size(); ++j)
+            if (i != j)
+                REQUIRE(std::abs(isolated.parameter(acid::AcidEngine::parameterIds[j])
+                                 - initialValues[j]) < 0.00001f,
+                        "changing one Acid knob must not alter any other parameter");
+        REQUIRE(isolated.setParameter(acid::AcidEngine::parameterIds[i],
+                                       initialValues[i]),
+                "restore isolated probe parameter");
+    }
+    REQUIRE(!isolated.setParameter("not_an_acid_parameter", 0.5f),
+            "unknown control IDs cannot write arbitrary DSP state");
+
+
     std::set<std::uint64_t> signatures;
     constexpr std::array profiles { acid::AcidProfile::classic303,
         acid::AcidProfile::psyAcid, acid::AcidProfile::darkAcid,
