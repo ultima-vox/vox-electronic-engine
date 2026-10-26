@@ -248,7 +248,8 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         return false;
     }
 
-    auto parsedTargets = targets_;\n    if (schemaVersion == legacyStateVersion) {
+    auto parsedTargets = targets_;
+    if (schemaVersion == legacyStateVersion) {
         if (payload.size() < 8 + legacyParameterCount * sizeof(float)) {
             return false;
         }
