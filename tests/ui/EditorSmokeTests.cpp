@@ -86,6 +86,19 @@ int main()
         || std::abs(lfoRate->load() - rateBefore) > 0.0001f)
         return EXIT_FAILURE;
 
+    // ENV2 is never an alias for either the ENV1 amount or the LFO rate.
+    const auto* env2Depth = params.getRawParameterValue("slot02Acid_env2_amount");
+    if (!env2Depth) return EXIT_FAILURE;
+    const float oldEnvAmount = envAmount->load();
+    const float oldLfoRate = lfoRate->load();
+    editor->selectAcidEnv2ForTesting();
+    if (!editor->setAcidKnobForTesting("env2_amount", 0.78)
+        || std::abs(env2Depth->load() - 0.78f) > 0.001f
+        || std::abs(envAmount->load() - oldEnvAmount) > 0.0001f
+        || std::abs(lfoRate->load() - oldLfoRate) > 0.0001f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfo1ForTesting(false);
+
     for (const auto size : { juce::Point<int> { 1024, 768 },
                              juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },

@@ -182,6 +182,8 @@ int main()
             "new Acid slot accepts empty current module state");
     REQUIRE(soundState.loadState(acid::AcidEngine::previousStateVersion, {}),
             "new Acid slot accepts empty previous v3 module state");
+    REQUIRE(soundState.loadState(acid::AcidEngine::lfo1StateVersion, {}),
+            "new Acid slot accepts empty previous v4 module state");
     REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion + 1u, {}),
             "unknown future Acid schema rejected even with empty bytes");
     constexpr std::uint32_t magic = 0x44494341u;
@@ -247,6 +249,24 @@ int main()
             && reusedInstance.loadState(legacyVersion, oldState)
             && reusedInstance.parameter("lfo1_depth") == 0.0f,
             "v1 recall likewise disables previously active LFO1");
+
+    // Legacy LFO1 (v4) payload must retain all 40 original parameters but
+    // never inherit ENV2 from an already-used instrument during recall.
+    std::array<std::byte, 8 + acid::AcidEngine::lfo1ParameterCount
+                             * sizeof(float)> stateV4 {};
+    std::memcpy(stateV4.data(), encoded.data(), stateV4.size());
+    const auto oldLfoVersion = acid::AcidEngine::lfo1StateVersion;
+    std::memcpy(stateV4.data() + 4, &oldLfoVersion, sizeof(oldLfoVersion));
+    acid::AcidEngine migratedV4;
+    REQUIRE(migratedV4.setParameter("env2_amount", 0.85f)
+            && migratedV4.loadState(oldLfoVersion, stateV4),
+            "v4 Acid sound can migrate into an already-used v5 engine");
+    for (std::size_t i = 0; i < acid::AcidEngine::lfo1ParameterCount; ++i)
+        REQUIRE(std::abs(migratedV4.parameter(acid::AcidEngine::parameterIds[i])
+                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
+                    < 0.00001f, "v4 migration retains previous 40 parameters");
+    REQUIRE(migratedV4.parameter("env2_amount") == 0.0f,
+            "v4 migration disables nonexistent ENV2, preserving previous sound");
 
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
@@ -421,6 +441,39 @@ int main()
         REQUIRE(std::abs(lfoReloaded.parameter(parameter)
                          - lfoSaved.parameter(parameter)) < 0.00001f,
                 "all four LFO1 controls survive module state round-trip");
+
+    // Real ENV2 DSP must have an independent ADSR and target. Its depth
+    // should change rendered audio with ENV1 + LFO1 explicitly disabled.
+    auto renderEnv2 = [](float depth, float target, float attack) {
+        acid::AcidEngine engine;
+        if (!engine.setParameter("mod_amount", 0.0f)
+            || !engine.setParameter("lfo1_depth", 0.0f)
+            || !engine.setParameter("env2_amount", depth)
+            || !engine.setParameter("env2_target", target)
+            || !engine.setParameter("env2_attack", attack)
+            || !engine.prepare(48000.0, 16384, 2))
+            return std::vector<float> {};
+        std::vector<float> left(16384), right(16384);
+        std::array<float*, 2> outputs { left.data(), right.data() };
+        const std::array notes { VoxMidiEventV1 { 0, 3, { 0x90, 48, 110 } } };
+        engine.process(outputs, 16384, notes);
+        return left;
+    };
+    const auto env2Off = renderEnv2(0.0f, 0.0f, 0.0f);
+    const auto env2Cutoff = renderEnv2(0.92f, 0.0f, 0.0f);
+    const auto env2Pitch = renderEnv2(0.92f, 0.2f, 0.0f);
+    const auto env2SlowAttack = renderEnv2(0.92f, 0.0f, 0.85f);
+    REQUIRE(env2Off.size() == 16384 && env2Pitch.size() == env2Off.size(),
+            "ENV2 prepares and renders its own MIDI-triggered ADSR");
+    REQUIRE(sumAbsoluteDifference(env2Off, env2Cutoff) > 1.0,
+            "ENV2 depth changes audible filter cutoff");
+    REQUIRE(sumAbsoluteDifference(env2Cutoff, env2Pitch) > 1.0,
+            "ENV2 target routes independently between cutoff and pitch");
+    REQUIRE(sumAbsoluteDifference(env2Cutoff, env2SlowAttack) > 1.0,
+            "ENV2 Attack changes its own audible envelope timing");
+    for (float sample : env2SlowAttack)
+        REQUIRE(std::isfinite(sample) && std::abs(sample) <= 8.0f,
+                "ENV2 high depth remains finite and bounded");
 
     // Production DSP gate: user-visible Acid knob changes must alter audio,
     // not just move a normalized property. Render both variants from fresh,
