@@ -261,6 +261,14 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
     }
 
     auto parsedTargets = targets_;
+    if (schemaVersion != stateVersion) {
+        // Older payloads did not contain LFO1. Never inherit its state from
+        // a previously used instance during preset recall/migration.
+        parsedTargets[Parameter::lfo1Rate] = 0.35f;
+        parsedTargets[Parameter::lfo1Depth] = 0.0f;
+        parsedTargets[Parameter::lfo1Wave] = 0.0f;
+        parsedTargets[Parameter::lfo1Target] = 0.0f;
+    }
     if (schemaVersion == legacyStateVersion) {
         if (payload.size() < 8 + legacyParameterCount * sizeof(float)) {
             return false;

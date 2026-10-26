@@ -238,6 +238,15 @@ int main()
                     < 0.00001f, "v3 migration preserves every original Acid parameter");
     REQUIRE(migratedV3.parameter("lfo1_depth") == 0.0f,
             "v3 projects migrate with LFO1 depth OFF, preserving their sound");
+    acid::AcidEngine reusedInstance;
+    REQUIRE(reusedInstance.setParameter("lfo1_depth", 0.88f)
+            && reusedInstance.loadState(oldVersion, stateV3)
+            && reusedInstance.parameter("lfo1_depth") == 0.0f,
+            "v3 recall resets stale LFO1 from an already-used Acid instance");
+    REQUIRE(reusedInstance.setParameter("lfo1_depth", 0.88f)
+            && reusedInstance.loadState(legacyVersion, oldState)
+            && reusedInstance.parameter("lfo1_depth") == 0.0f,
+            "v1 recall likewise disables previously active LFO1");
 
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
