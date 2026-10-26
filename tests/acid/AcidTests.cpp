@@ -214,6 +214,62 @@ int main()
         { instrument::initialSlotId(1), nullptr });
     REQUIRE(instance && instance->prepare({ 48000.0, 4096, 2 }),
             "Acid instance prepares");
+    // Short 512-sample blocks match the actual host routing workload. A
+    // freshly created Acid module must make audible sound on the first block.
+    auto shortBlock = provider->create(acid::instrumentId,
+        { instrument::initialSlotId(7), nullptr });
+    REQUIRE(shortBlock != nullptr
+            && shortBlock->loadState(acid::AcidEngine::legacyStateVersion, {})
+            && shortBlock->prepare({ 48000.0, 512, 2 }),
+            "fresh Acid instance loads empty Rack state and prepares");
+    std::array<float, 512> shortLeft {}, shortRight {};
+    std::array<float*, 2> shortOutput { shortLeft.data(), shortRight.data() };
+    const std::array firstNote {
+        VoxMidiEventV1 { 0, 3, { 0x90u, 48u, 110u } }
+    };
+    const std::array lastNote {
+        VoxMidiEventV1 { 0, 3, { 0x80u, 48u, 0u } }
+    };
+    shortBlock->process({ shortOutput, 512, firstNote,
+                          48000.0, 138.0, 0.0, true });
+    REQUIRE(std::all_of(shortLeft.begin(), shortLeft.end(), [](float x) {
+                return std::isfinite(x);
+            }), "Acid first host block contains finite audio");
+    const double firstBlockEnergy = std::inner_product(
+        shortLeft.begin(), shortLeft.end(), shortLeft.begin(), 0.0);
+    REQUIRE(firstBlockEnergy > 1.0e-7,
+            "first 512-sample Acid block has audible energy");
+
+    shortBlock->process({ shortOutput, 512, lastNote,
+                          48000.0, 138.0, 0.0, true });
+    // 400 blocks cover 4.27 s, longer than Acid's maximum amp release.
+    for (int i = 0; i < 400; ++i)
+        shortBlock->process({ shortOutput, 512, {},
+                              48000.0, 138.0, 0.0, true });
+    const double releasedEnergy = std::inner_product(
+        shortLeft.begin(), shortLeft.end(), shortLeft.begin(), 0.0);
+    REQUIRE(releasedEnergy < 1.0e-9,
+            "Acid NoteOff releases fully, never leaves a continuous beep");
+
+    // Stress Acid's own resonant filter at Nyquist-proximal cutoff and the
+    // loudest saturated voice. Do not loosen Rack or host tests to hide NaNs.
+    shortBlock->reset();
+    REQUIRE(shortBlock->setParameter("cutoff", 1.0f)
+            && shortBlock->setParameter("resonance", 1.0f)
+            && shortBlock->setParameter("drive", 1.0f)
+            && shortBlock->setParameter("dist_mix", 1.0f),
+            "Acid high-resonance stress parameters accepted");
+    shortBlock->process({ shortOutput, 512, firstNote,
+                          48000.0, 138.0, 0.0, true });
+    for (int i = 0; i < 200; ++i) {
+        shortBlock->process({ shortOutput, 512, {},
+                              48000.0, 138.0, 0.0, true });
+        REQUIRE(std::all_of(shortLeft.begin(), shortLeft.end(), [](float x) {
+                    return std::isfinite(x) && std::abs(x) <= 8.0f;
+                }), "Acid maximum resonance and drive remain bounded");
+    }
+    shortBlock->reset();
+
     std::vector<double> presetEnergy;
     for (const auto& content : provider->contentDescriptors(acid::instrumentId)) {
         if (content.kind != instrument::ContentKind::soundPreset) continue;
