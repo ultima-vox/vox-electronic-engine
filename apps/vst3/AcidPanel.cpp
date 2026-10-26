@@ -81,7 +81,7 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
                     ? static_cast<int>(std::round(root->load())) : 48;
                 const auto note = juce::jlimit(0, 127, rootNote + step.noteOffset);
                 text = step.gate ? juce::MidiMessage::getMidiNoteName(
-                    note, true, true, 4) : "--";
+                    note, true, true, 5) : "--";
             } else if (lane == 1) text = step.accent ? "A" : "";
             else if (lane == 2) text = step.slideDuration > 0.0f ? "S" : "";
             else if (lane == 3) text = step.gate ? "|" : "";
