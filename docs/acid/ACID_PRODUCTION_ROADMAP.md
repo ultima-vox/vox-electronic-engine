@@ -1,10 +1,10 @@
 # Acid Synth — production delivery plan (owner reference, 2026-10-26)
 
-Status: **Acid DSP, controls and SOUND UI in progress; NOT production accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
+Status: **Acid DSP, controls and SOUND UI in progress; neither Acid nor Rack production-accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
 
 ## Scope lock — Acid module ONLY (owner clarification, 2026-10-26)
 
-**The existing Rack is considered implemented / nearly completed and is OUT OF SCOPE for this work.** Do not redesign, reconstruct, refactor, restyle, or extend Rack, its slot cards, routing UI, global project header, host transport, or shared keyboard. The red annotated region is precisely **NOT** our task. Our deliverable is only the **selected Acid Synth workspace** shown in the green annotated region, with production-grade independent controls, sound DSP, modulation, pattern and presets.
+**Rack is not yet Production-ready (owner clarification, 2026-10-26). It is nevertheless OUT OF SCOPE for this Acid module feature branch.** Do not redesign, reconstruct, refactor, restyle, or extend Rack, its slot cards, routing UI, global project header, host transport, or shared keyboard. The red annotated region is precisely **NOT** our task. Our deliverable is only the **selected Acid Synth workspace** shown in the green annotated region, with production-grade independent controls, sound DSP, modulation, pattern and presets.
 
 Permitted integration is minimal: connect `AcidPanel` to the existing editor's selected-instrument workspace and implement necessary per-slot Acid parameter automation/state forwarding through existing host/processor extension points **without redesigning Rack or its contracts**. Rack regression tests remain acceptance guards, not feature-development tasks. Investigate their failures by fixing Acid integration and state/descriptor compatibility **inside Acid first**. If proof identifies a pre-existing Rack defect, document it separately and request explicit scope approval; do not silently touch Rack.
 
@@ -26,14 +26,14 @@ The shared `instrument/InstrumentContract.h`, `VoxMidiEventV1`, `sequence::Seque
 | 2 | Acid-only DSP/Provider stabilization | Fix Acid-specific causes of the two failing Rack regression tests without modifying Rack; Windows Release and entire existing test suite green; Acid render, NoteOn/Off, release, state, parameter isolation evidence |
 | 3 | Independent parameter authority | 1 knob → exactly 1 semantic parameter; per-slot, stable VST3 host IDs and automation; no reassignment of unrelated macros; transactional/RT-safe publication into current Rack runtime; V1→V3→future version state migration |
 | 4 | Working Acid sound path | Oscillator morph/type, tune/fine/PW; filter 4 modes and key tracking; amp/filter ADSR; distortion modes/Tone/Mix; Accent/Slide/Output/Pan; measured audio-difference and envelope tests |
-| 5 | Extended modulation + performance | ENV1/ENV2/LFO1/LFO2/LFO3/STEP each backed by distinct source state and timing; assignable destinations; portamento/unison/detune/spread; discrete legato/retrigger/velocity-accent/slide-on-overlap; host/preset roundtrip |
+| 5 | Extended modulation + performance | ENV1, LFO1 and new ENV2 implemented in Acid branch (ENV2 v5 pending CI); LFO2/LFO3/STEP not yet implemented; independent sources, own destination, per-slot automation, proper save/restore and audible validation required |
 | 6 | Pattern / generation / MIDI | Sequence ownership per selected Rack slot; 16 visible editable cells per lane; accent/slide/octave mapped to existing Step fields; Generate/Mutate/Clear/Play/Stop real; PPQ sync, swing, resolution, length, export and reimport agree |
 | 7 | Final Acid workspace UI | Keep existing Rack/outer shell/keyboard exactly as-is; implement only Acid instrument header content, 303 hero/banner, top synth cards, center sequencer, lower Mod/Performance/PlayMode inside selected Acid workspace; VOX shared components and screenshots versus owner source |
 | 8 | Production verification | Cubase and REAPER VST3; state restore, automation playback, all 16 slots, multiple Acid instances, release/no stuck notes, CPU, NaN/denorm, 1024×768 baseline and 1180×760/1500×920/125%-DPI screenshots; independent review & owner acceptance |
 
 ## Hard technical decisions
 
-1. **Rack ownership (non-negotiable)**: Product Rack, its routing/slots/host transport, shared keyboard and shell are read-only external dependencies. No Rack implementation or redesign; all functionality in Acid and thin existing integration points.
+1. **Rack ownership (non-negotiable)**: Product Rack is not production-accepted; its routing/slots/host transport, shared keyboard and shell are external dependencies to Acid feature work. No Rack implementation or redesign; all functionality in Acid and thin existing integration points.
 2. **Control ownership**: Editor widgets send UI-thread commands to a controller/processor per slot. Do **not** bind an `AcidPanel` directly to an address of `AcidEngine` owned by the Rack: runtime instances can be replaced and processing is concurrent. A change must update host parameter authority, persistent module state and audio-thread snapshot atomically/without callback locking.
 3. **Stable host identifiers**: Keep existing eight frozen slot macro IDs. Acid-specific controls require independent host-visible IDs in `PluginProcessor::createParameterLayout()`, with a slot namespace stable across instrument selection and project reload. Do not map all controls to one macro; do not rename old automation IDs. Exposing new Acid-specific host parameters is a host/schema implementation task, **not** an edit to `InstrumentContract.h`.
 4. **State**: Every functional selector, knob, toggle, modulation source, sequence edit and generator setting must survive save/load, plugin reopen and preset recall. V1 Acid sound state compatibility must be tested; a migration cannot lose the first nine parameter values. Never store envelope/audio runtime state.
@@ -57,3 +57,12 @@ Gate output for each review commit: exact SHA, CI URL, failures and screenshot c
 - Tests cover v3→v4 migration, v4 LFO1 persistence, per-slot automation, UI independence, measurable audio effects from depth/rate/wave/target, and finite output. **Do not mark passed until Windows CI verifies head.**
 - UI target still owner-provided Acid 1024×768; original Rack remains out of scope. Remaining blockers: full CTest green (existing Bass save/restore diagnostic), actual screenshot comparison, ENV2/LFO2/LFO3/STEP, functional transport, DAW acceptance.
 
+
+## ENV2 checkpoint and Rack status clarification (2026-10-26)
+
+- Owner: **Rack itself is not Production-ready**. This does not authorize Rack redevelopment within Acid PR #59. Integrating with Rack is necessary for testing, but its final acceptance belongs to a separate platform effort. Acid feature acceptance and whole-plugin Production release are different gates.
+- Acid v5 appends six ENV2 params (Target, Amount, A, D, S, R) after the 40 existing params, preserving every historical host ID; default depth is zero. ENV2 is an independent note-triggered ADSR mixed only into its selected modulation destination.
+- Supports sound payload schemas v1/v3/v4/v5; older presets disable non-existent ENV2 even when loaded over an active newer instance.
+- ENV2 tab in actual AcidPanel reattaches five real parameter controls and the target selector; the existing ENV1 and LFO1 assignments are independent.
+- New audio tests for ENV2 sound response and modulation attack, state migration and editor isolation are committed. **Their Windows CI result is pending; do not claim Production acceptance.**
+- Actual `acid-actual-editor-1024x768.png` artifact from Windows run 40373368577 is confirmed. It differs materially from the owner's UI reference: 303 hero artwork absent, cramped control/value typography, modulation/pattern spacing and play transport unfinished. This is a functional intermediate UI only.
