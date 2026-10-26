@@ -184,6 +184,8 @@ int main()
             "new Acid slot accepts empty previous v3 module state");
     REQUIRE(soundState.loadState(acid::AcidEngine::lfo1StateVersion, {}),
             "new Acid slot accepts empty previous v4 module state");
+    REQUIRE(soundState.loadState(acid::AcidEngine::env2StateVersion, {}),
+            "new Acid slot accepts empty previous v5 module state");
     REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion + 1u, {}),
             "unknown future Acid schema rejected even with empty bytes");
     constexpr std::uint32_t magic = 0x44494341u;
@@ -268,6 +270,28 @@ int main()
     REQUIRE(migratedV4.parameter("env2_amount") == 0.0f,
             "v4 migration disables nonexistent ENV2, preserving previous sound");
 
+    // LFO2/LFO3 are new in v6: v5 state owns only 46 sound controls.
+    // Loading a v5 preset into an active v6 instance must never leak the
+    // destination or depth of a previously used LFO2/LFO3 source.
+    std::array<std::byte, 8 + acid::AcidEngine::env2ParameterCount
+                             * sizeof(float)> stateV5 {};
+    std::memcpy(stateV5.data(), encoded.data(), stateV5.size());
+    constexpr auto oldEnv2Version = acid::AcidEngine::env2StateVersion;
+    std::memcpy(stateV5.data() + 4, &oldEnv2Version, sizeof(oldEnv2Version));
+    acid::AcidEngine migratedV5;
+    REQUIRE(migratedV5.setParameter("lfo2_depth", 0.88f)
+            && migratedV5.setParameter("lfo3_depth", 0.91f)
+            && migratedV5.loadState(oldEnv2Version, stateV5),
+            "v5 Acid sound migrates into a previously used v6 instance");
+    for (std::size_t i = 0; i < acid::AcidEngine::env2ParameterCount; ++i)
+        REQUIRE(std::abs(migratedV5.parameter(acid::AcidEngine::parameterIds[i])
+                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
+                    < 0.00001f,
+                "v5 migration preserves all 46 earlier sound controls");
+    REQUIRE(migratedV5.parameter("lfo2_depth") == 0.0f
+            && migratedV5.parameter("lfo3_depth") == 0.0f,
+            "v5 recall disables absent LFO2/LFO3 in an active synth");
+
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
             "Acid v3 save/load round-trips");
@@ -328,7 +352,7 @@ int main()
     REQUIRE(uniqueHostIds.size() == instrument::maxSlots
                                   * (acid::AcidEngine::parameterCount
                                      - instrument::macrosPerSlot - 1),
-            "all 496 extended Acid parameter IDs are unique");
+            "all independent Acid host automation IDs are unique");
 
     // The separate Slide and Portamento controls must not change each
     // other's timing. Fresh voices, equal MIDI and all other parameters.
@@ -441,6 +465,80 @@ int main()
         REQUIRE(std::abs(lfoReloaded.parameter(parameter)
                          - lfoSaved.parameter(parameter)) < 0.00001f,
                 "all four LFO1 controls survive module state round-trip");
+
+    // LFO2 and LFO3 must be separately audible and must not alias LFO1
+    // or each other. Preserve sample-continuous phase across host blocks.
+    auto renderAddedLfo = [](int which, float rate, float depth, float wave,
+                              float target) {
+        acid::AcidEngine synth;
+        if (!synth.setParameter("mod_amount", 0.0f)
+            || !synth.setParameter("env2_amount", 0.0f)
+            || !synth.setParameter("lfo1_depth", 0.0f))
+            return std::vector<float> {};
+        const auto prefix = which == 2 ? "lfo2_" : "lfo3_";
+        if (!synth.setParameter(std::string(prefix) + "rate", rate)
+            || !synth.setParameter(std::string(prefix) + "depth", depth)
+            || !synth.setParameter(std::string(prefix) + "wave", wave)
+            || !synth.setParameter(std::string(prefix) + "target", target)
+            || !synth.prepare(48000.0, 4096, 2))
+            return std::vector<float> {};
+        std::vector<float> left(16384), right(16384);
+        std::array<float*, 2> outputs { left.data(), right.data() };
+        const std::array firstNote { VoxMidiEventV1 { 0, 3, { 0x90, 48, 120 } } };
+        synth.process(outputs, 4096, firstNote);
+        for (int block = 1; block < 4; ++block) {
+            std::array<float*, 2> subOutputs {
+                left.data() + block * 4096, right.data() + block * 4096
+            };
+            synth.process(subOutputs, 4096, {});
+        }
+        return left;
+    };
+    const auto lfo2Off = renderAddedLfo(2, 0.56f, 0.0f, 0.0f, 0.0f);
+    const auto lfo2On = renderAddedLfo(2, 0.56f, 0.90f, 0.0f, 0.0f);
+    const auto lfo3Off = renderAddedLfo(3, 0.56f, 0.0f, 0.0f, 0.0f);
+    const auto lfo3On = renderAddedLfo(3, 0.56f, 0.90f, 0.0f, 0.0f);
+    REQUIRE(lfo2Off.size() == 16384 && lfo2Off.size() == lfo3On.size(),
+            "independent LFO2/LFO3 voices render all host blocks");
+    REQUIRE(sumAbsoluteDifference(lfo2Off, lfo2On) > 1.0
+            && sumAbsoluteDifference(lfo3Off, lfo3On) > 1.0,
+            "LFO2 and LFO3 depth individually change real Acid audio");
+    REQUIRE(sumAbsoluteDifference(lfo2On,
+            renderAddedLfo(2, 0.93f, 0.90f, 0.0f, 0.0f)) > 1.0,
+            "LFO2 rate changes audible modulation frequency");
+    REQUIRE(sumAbsoluteDifference(lfo3On,
+            renderAddedLfo(3, 0.56f, 0.90f, 0.75f, 0.0f)) > 1.0,
+            "LFO3 waveform changes audible result");
+    REQUIRE(sumAbsoluteDifference(lfo3On,
+            renderAddedLfo(3, 0.56f, 0.90f, 0.0f, 0.2f)) > 1.0,
+            "LFO3 destination switches between cutoff and pitch");
+    for (const float sample : lfo3On)
+        REQUIRE(std::isfinite(sample) && std::abs(sample) <= 8.0f,
+                "LFO3 high depth remains finite and bounded");
+
+    acid::AcidEngine savedWithLfo2Lfo3;
+    REQUIRE(savedWithLfo2Lfo3.setParameter("lfo2_rate", 0.82f)
+            && savedWithLfo2Lfo3.setParameter("lfo2_depth", 0.64f)
+            && savedWithLfo2Lfo3.setParameter("lfo2_wave", 0.68f)
+            && savedWithLfo2Lfo3.setParameter("lfo2_target", 0.4f)
+            && savedWithLfo2Lfo3.setParameter("lfo3_rate", 0.28f)
+            && savedWithLfo2Lfo3.setParameter("lfo3_depth", 0.74f)
+            && savedWithLfo2Lfo3.setParameter("lfo3_wave", 0.32f)
+            && savedWithLfo2Lfo3.setParameter("lfo3_target", 0.8f),
+            "all eight LFO2/LFO3 controls are writable");
+    std::array<std::byte, acid::AcidEngine::encodedStateBytes> lfo23Bytes {};
+    std::uint32_t lfo23Size = 0;
+    REQUIRE(savedWithLfo2Lfo3.saveState(lfo23Bytes, lfo23Size)
+            && lfo23Size == lfo23Bytes.size(), "v6 LFO2/3 serialized");
+    acid::AcidEngine restoredWithLfo2Lfo3;
+    REQUIRE(restoredWithLfo2Lfo3.loadState(
+                acid::AcidEngine::stateVersion, lfo23Bytes),
+            "v6 LFO2/3 restored");
+    for (const char* id : { "lfo2_rate", "lfo2_depth", "lfo2_wave", "lfo2_target",
+                            "lfo3_rate", "lfo3_depth", "lfo3_wave", "lfo3_target" })
+        REQUIRE(std::abs(restoredWithLfo2Lfo3.parameter(id)
+                         - savedWithLfo2Lfo3.parameter(id)) < 0.00001f,
+                "separate LFO2/LFO3 controls survive v6 preset roundtrip");
 
     // Real ENV2 DSP must have an independent ADSR and target. Its depth
     // should change rendered audio with ENV1 + LFO1 explicitly disabled.

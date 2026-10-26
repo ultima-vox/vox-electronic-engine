@@ -99,6 +99,27 @@ int main()
         return EXIT_FAILURE;
     editor->selectAcidLfo1ForTesting(false);
 
+    // All three real LFO tabs have distinct host parameter attachments.
+    const auto* lfo2Rate = params.getRawParameterValue("slot02Acid_lfo2_rate");
+    const auto* lfo3Depth = params.getRawParameterValue("slot02Acid_lfo3_depth");
+    if (!lfo2Rate || !lfo3Depth) return EXIT_FAILURE;
+    const float oldLfo1Rate = lfoRate->load();
+    const float oldEnv2Depth = env2Depth->load();
+    editor->selectAcidLfoForTesting(2);
+    if (!editor->setAcidKnobForTesting("lfo2_rate", 0.76)
+        || std::abs(lfo2Rate->load() - 0.76f) > 0.001f
+        || std::abs(lfoRate->load() - oldLfo1Rate) > 0.0001f
+        || std::abs(env2Depth->load() - oldEnv2Depth) > 0.0001f)
+        return EXIT_FAILURE;
+    const float oldLfo2Rate = lfo2Rate->load();
+    editor->selectAcidLfoForTesting(3);
+    if (!editor->setAcidKnobForTesting("lfo3_depth", 0.58)
+        || std::abs(lfo3Depth->load() - 0.58f) > 0.001f
+        || std::abs(lfo2Rate->load() - oldLfo2Rate) > 0.0001f
+        || std::abs(lfoRate->load() - oldLfo1Rate) > 0.0001f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfoForTesting(1);
+
     for (const auto size : { juce::Point<int> { 1024, 768 },
                              juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },

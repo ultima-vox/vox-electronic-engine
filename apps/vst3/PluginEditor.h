@@ -43,6 +43,9 @@ public:
     void selectAcidLfo1ForTesting(bool on) {
         acidSoundPage.switchModulationForTesting(on);
     }
+    void selectAcidLfoForTesting(int number) {
+        acidSoundPage.switchLfoForTesting(number);
+    }
     void selectAcidEnv2ForTesting() {
         acidSoundPage.switchEnv2ForTesting();
     }
