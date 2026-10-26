@@ -88,6 +88,28 @@ int main()
     processor->instrumentRack().reset();
     require(renderHostNote(*processor, 2, 48) > audible,
             "CH2 renders independent ReferenceInstrument");
+    // Acid-only extended controls and independent play-mode automation must
+    // be available to VST3, without replacing any of the 8 Rack macros.
+    constexpr std::array<std::string_view, 4> acidFlags {
+        "legato", "retrigger", "vel_to_accent", "slide_on_overlap"
+    };
+    for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot) {
+        for (std::size_t p = vstengine::instrument::macrosPerSlot;
+             p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+            const auto id = vstengine::acid::hostParameterId(
+                slot, vstengine::acid::AcidEngine::parameterIds[p]);
+            const auto* param = processor->parameters().getParameter(id);
+            require(param && param->isAutomatable(),
+                    "each extended Acid parameter exposed to host separately");
+        }
+        for (auto semantic : acidFlags) {
+            const auto id = vstengine::acid::hostParameterId(slot, semantic);
+            const auto* param = processor->parameters().getParameter(id);
+            require(param && param->isAutomatable(),
+                    "Acid play-mode toggle has its own VST automation ID");
+        }
+    }
+
     processor->instrumentRack().reset();
     require(renderHostNote(*processor, 3) < silent, "unassigned channel silent");
 

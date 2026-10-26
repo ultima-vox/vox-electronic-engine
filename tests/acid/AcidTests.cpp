@@ -1,10 +1,12 @@
 #include "acid/AcidEngine.h"
+#include "acid/AcidParameterBridge.h"
 #include "acid/AcidGenerator.h"
 #include "acid/AcidProvider.h"
 #include "instrument/InstrumentComplianceHarness.h"
 #include "support/ReferenceInstrument.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -209,6 +211,59 @@ int main()
         REQUIRE(std::abs(restoredSound.parameter(acid::AcidEngine::parameterIds[i])
                          - soundState.parameter(acid::AcidEngine::parameterIds[i]))
                          < 0.00001f, "Acid v3 restores every semantic parameter");
+
+    // Host automation bridge is per plugin and slot, never global.
+    // Only extended Acid controls use the bridge; frozen macro IDs do not.
+    acid::AcidParameterBridge hostBridge;
+    std::atomic<float> outputA { 0.13f }, outputB { 0.79f };
+    std::atomic<float> fineA { 0.67f }, fineB { 0.38f };
+    std::atomic<float> legato { 1.0f }, retrigger { 0.0f };
+    std::atomic<float> velAccent { 1.0f }, overlap { 0.0f };
+    hostBridge.setSlotId(0, instrument::initialSlotId(0));
+    hostBridge.setSlotId(1, instrument::initialSlotId(1));
+    hostBridge.bind(0, acid::AcidEngine::output, &outputA);
+    hostBridge.bind(1, acid::AcidEngine::output, &outputB);
+    hostBridge.bind(0, acid::AcidEngine::oscFine, &fineA);
+    hostBridge.bind(1, acid::AcidEngine::oscFine, &fineB);
+    for (std::size_t flag = 0; flag < 4; ++flag) {
+        std::array<std::atomic<float>*, 4> values {
+            &legato, &retrigger, &velAccent, &overlap
+        };
+        hostBridge.bindFlag(0, flag, values[flag]);
+    }
+    acid::AcidEngine acidA, acidB;
+    hostBridge.apply(instrument::initialSlotId(0), acidA);
+    hostBridge.apply(instrument::initialSlotId(1), acidB);
+    REQUIRE(std::abs(acidA.parameter("output") - 0.13f) < 0.00001f
+            && std::abs(acidB.parameter("output") - 0.79f) < 0.00001f,
+            "one Acid host parameter maps to exactly one slot");
+    REQUIRE(std::abs(acidA.parameter("osc_fine") - 0.67f) < 0.00001f
+            && std::abs(acidB.parameter("osc_fine") - 0.38f) < 0.00001f,
+            "Acid fine tuning never bleeds across slots");
+    REQUIRE(acidA.isLegatoEnabled() && !acidA.isRetriggerEnabled()
+            && acidA.isVelToAccentEnabled() && !acidA.isSlideOnOverlapEnabled(),
+            "four Acid play-mode switches remain independent");
+    outputA.store(0.41f);
+    hostBridge.apply(instrument::initialSlotId(0), acidA);
+    REQUIRE(std::abs(acidA.parameter("output") - 0.41f) < 0.00001f
+            && std::abs(acidB.parameter("output") - 0.79f) < 0.00001f,
+            "automating one Acid slot preserves another slot");
+    hostBridge.setSlotId(0, instrument::initialSlotId(3));
+    outputA.store(0.55f);
+    hostBridge.apply(instrument::initialSlotId(0), acidA);
+    REQUIRE(std::abs(acidA.parameter("output") - 0.41f) < 0.00001f,
+            "obsolete slot ID cannot change a replaced Acid engine");
+    std::set<std::string> uniqueHostIds;
+    for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+        for (std::size_t parameter = instrument::macrosPerSlot;
+             parameter < acid::AcidEngine::playModeFlags; ++parameter)
+            REQUIRE(uniqueHostIds.insert(acid::hostParameterId(
+                slot, acid::AcidEngine::parameterIds[parameter])).second,
+                "Acid host automation identity unique across slots and controls");
+    REQUIRE(uniqueHostIds.size() == instrument::maxSlots
+                                  * (acid::AcidEngine::playModeFlags
+                                     - instrument::macrosPerSlot),
+            "all 432 extended Acid parameter IDs are unique");
 
     auto instance = provider->create(acid::instrumentId,
         { instrument::initialSlotId(1), nullptr });
