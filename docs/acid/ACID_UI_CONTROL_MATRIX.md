@@ -4,9 +4,13 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 
 **Definitions**: `S` = current semantic `AcidEngine::parameterIds` in PR #59; `HOST` = dedicated stable per-slot VST3 parameter and automation to be implemented; `PERSIST` = Acid-local versioned state to be implemented. The old eight host macro IDs remain unchanged. `MISSING` = displayed function needs real model/DSP implementation. All rows require preset/state round-trip and real effect.
 
+## Explicit responsibility boundary
+
+**Implement ONLY Acid Synth.** The product Rack (red region in annotated user screenshot) is complete/nearly complete and must not be re-implemented. Red/green annotated outlines are reference markup only. Acid's green workspace is the entire feature scope. Keep the existing shared header, slot rail, keyboard, transport, channel routing and global shell untouched. Minimal selected-slot integration in existing editor/processor is allowed; no Rack refactor or API redesign. Smoke/Rack tests are regression checks only.
+
 ## Screen hierarchy
 
-- **Shared shell, outside Acid ownership**: product logo, global project preset/save, seed and panic, CPU/MIDI indicators, 16 real Rack slot cards with selected state, channel, enable, artwork, and keyboard footer. Must use live Rack state, never four hardcoded demo slots.
+- **Existing product shell and Rack, not a deliverable**: product logo, global project preset/save, seed and panic, CPU/MIDI indicators, 16 real Rack slot cards, global routing, and shared keyboard. Read their selected-slot state only; do not implement, restyle or duplicate these areas.
 - **Acid header**: slot identity/name, local sound preset selector and prev/next/favorite, actual MIDI channel; navigation SOUND/PATTERN/ROUTING/ZONES/MACROS/ADVANCED uses existing product navigation.
 - **Acid hero**: `ACID` + 303 instrument artwork, display-only identity without overlay marks; cyan controls, green Acid identity artwork.
 
