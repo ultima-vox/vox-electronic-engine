@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "instrument/HostParameterSchema.h"
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -37,6 +38,36 @@ int main()
         return EXIT_FAILURE;
     editor->selectSlotForTesting(1);
     editor->showPageForTesting(Page::sound);
+    auto& params = processor.parameters();
+    // True UI->APVTS attachment checks: an Acid knob must not move another
+    // physical sound parameter or bleed into the Psy Bass slot.
+    const auto* tune = params.getRawParameterValue("slot02Acid_osc_tune");
+    const auto* fine = params.getRawParameterValue("slot02Acid_osc_fine");
+    const auto* other = params.getRawParameterValue("slot01Acid_osc_tune");
+    if (!tune || !fine || !other) return EXIT_FAILURE;
+    const float previousFine = fine->load(), previousOther = other->load();
+    if (!editor->setAcidKnobForTesting("osc_tune", 0.83)
+        || std::abs(tune->load() - 0.83f) > 0.001f
+        || std::abs(fine->load() - previousFine) > 0.0001f
+        || std::abs(other->load() - previousOther) > 0.0001f)
+        return EXIT_FAILURE;
+
+    editor->selectAcidFilterEnvelopeForTesting(true);
+    const auto* ampDecay = params.getRawParameterValue("slot02Acid_amp_decay");
+    const auto* filterDecay = params.getRawParameterValue(
+        vstengine::instrument::hostparams::macroId(1, 4).c_str());
+    if (!ampDecay || !filterDecay) return EXIT_FAILURE;
+    const float oldAmpDecay = ampDecay->load();
+    if (!editor->setAcidKnobForTesting("decay", 0.67)
+        || std::abs(filterDecay->load() - 0.67f) > 0.001f
+        || std::abs(ampDecay->load() - oldAmpDecay) > 0.0001f)
+        return EXIT_FAILURE;
+    editor->selectAcidFilterEnvelopeForTesting(false);
+    const float oldFilterDecay = filterDecay->load();
+    if (!editor->setAcidKnobForTesting("amp_decay", 0.24)
+        || std::abs(ampDecay->load() - 0.24f) > 0.001f
+        || std::abs(filterDecay->load() - oldFilterDecay) > 0.0001f)
+        return EXIT_FAILURE;
 
     for (const auto size : { juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },

@@ -21,6 +21,8 @@ public:
     void resized() override;
     [[nodiscard]] std::size_t boundSlot() const noexcept { return slot_; }
     [[nodiscard]] std::size_t attachedControlCount() const noexcept;
+    bool setKnobForTesting(std::string_view semantic, double normalized);
+    void switchEnvelopeForTesting(bool filter);
 private:
     enum Group : int { osc, filter, envelope, drive, accent, slide,
                        output, modulation, performance, playMode, grid, groupCount };

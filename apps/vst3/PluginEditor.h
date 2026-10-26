@@ -31,6 +31,12 @@ public:
     [[nodiscard]] std::size_t acidControlsForTesting() const noexcept {
         return acidSoundPage.attachedControlCount();
     }
+    bool setAcidKnobForTesting(std::string_view semantic, double normalized) {
+        return acidSoundPage.setKnobForTesting(semantic, normalized);
+    }
+    void selectAcidFilterEnvelopeForTesting(bool on) {
+        acidSoundPage.switchEnvelopeForTesting(on);
+    }
 
 private:
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {

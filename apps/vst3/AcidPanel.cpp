@@ -237,6 +237,19 @@ std::size_t AcidPanel::attachedControlCount() const noexcept {
         if (knob.attach != nullptr) ++count;
     return count;
 }
+bool AcidPanel::setKnobForTesting(std::string_view semantic, double normalized) {
+    for (auto& knob : knobs_)
+        if (knob.semantic == semantic && knob.attach) {
+            knob.widget->getSlider().setValue(
+                juce::jlimit(0.0, 1.0, normalized), juce::sendNotificationSync);
+            return true;
+        }
+    return false;
+}
+void AcidPanel::switchEnvelopeForTesting(bool filter) {
+    filterEnvelope_ = filter;
+    updateEnvelopeAttachments();
+}
 void AcidPanel::addKnob(Group group, std::string_view semantic, const char* name, bool stage) {
     Knob k;
     k.group = group;
