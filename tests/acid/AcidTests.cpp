@@ -7,7 +7,9 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <set>
 #include <vector>
@@ -151,6 +153,54 @@ int main()
         instrument::initialSlotId(3), acid::instrumentId);
     REQUIRE(patternSignature(differentSlot) != patternSignature(basePsy),
             "SlotId participates in generation domain");
+
+    // Acid-only legacy migration and malformed-state transaction checks.
+    acid::AcidEngine soundState;
+    constexpr std::uint32_t magic = 0x44494341u;
+    constexpr std::uint32_t legacyVersion = 1u;
+    const std::array<float, acid::AcidEngine::legacyParameterCount> legacyValues {
+        0.22f, 0.39f, 0.64f, 0.48f, 0.27f, 0.78f, 0.51f, 0.42f, 0.68f
+    };
+    std::array<std::byte, 8 + legacyValues.size() * sizeof(float)> oldState {};
+    std::memcpy(oldState.data(), &magic, sizeof(magic));
+    std::memcpy(oldState.data() + 4, &legacyVersion, sizeof(legacyVersion));
+    std::memcpy(oldState.data() + 8, legacyValues.data(),
+                legacyValues.size() * sizeof(float));
+    REQUIRE(soundState.loadState(legacyVersion, oldState),
+            "Acid v1 sound state migrates into current engine");
+    for (std::size_t i = 0; i < legacyValues.size(); ++i)
+        REQUIRE(std::abs(soundState.parameter(acid::AcidEngine::parameterIds[i])
+                         - legacyValues[i]) < 0.00001f,
+                "Acid v1 migration preserves all nine legacy parameters");
+
+    std::array<std::byte, acid::AcidEngine::encodedStateBytes> encoded {};
+    std::uint32_t written {};
+    REQUIRE(soundState.saveState(encoded, written)
+                && written == encoded.size(), "Acid v3 save succeeds");
+    const float originalCutoff = soundState.parameter("cutoff");
+    auto malformed = encoded;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::memcpy(malformed.data() + 8 + 25 * sizeof(float),
+                &nan, sizeof(nan));
+    REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion, malformed),
+            "Acid v3 rejects NaN without applying any parameters");
+    REQUIRE(std::abs(soundState.parameter("cutoff") - originalCutoff) < 0.00001f,
+            "rejected Acid v3 payload cannot partially alter cutoff");
+
+    auto invalidOld = oldState;
+    std::memcpy(invalidOld.data() + 8 + 8 * sizeof(float),
+                &nan, sizeof(nan));
+    REQUIRE(!soundState.loadState(legacyVersion, invalidOld),
+            "Acid v1 migration rejects malformed float");
+    REQUIRE(std::abs(soundState.parameter("cutoff") - originalCutoff) < 0.00001f,
+            "rejected v1 migration leaves pre-existing sound values intact");
+    acid::AcidEngine restoredSound;
+    REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
+            "Acid v3 save/load round-trips");
+    for (std::size_t i = 0; i < acid::AcidEngine::parameterCount; ++i)
+        REQUIRE(std::abs(restoredSound.parameter(acid::AcidEngine::parameterIds[i])
+                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
+                         < 0.00001f, "Acid v3 restores every semantic parameter");
 
     auto instance = provider->create(acid::instrumentId,
         { instrument::initialSlotId(1), nullptr });
