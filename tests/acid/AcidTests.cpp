@@ -281,6 +281,53 @@ int main()
                                      - instrument::macrosPerSlot),
             "all 432 extended Acid parameter IDs are unique");
 
+    // The separate Slide and Portamento controls must not change each
+    // other's timing. Fresh voices, equal MIDI and all other parameters.
+    auto renderGlideGesture = [](float slide, float portamento, bool overlap) {
+        acid::AcidEngine voice;
+        if (!voice.setParameter("slide", slide)
+            || !voice.setParameter("portamento", portamento)
+            || !voice.prepare(48000.0, 4096, 2))
+            return std::vector<float> {};
+        std::vector<float> left(4096), right(4096);
+        std::array<float*, 2> outputs { left.data(), right.data() };
+        // MIDI events remain sample-offset sorted for either gesture.
+        if (overlap) {
+            const std::array<VoxMidiEventV1, 4> legato {{
+                { 0, 3, { 0x90u, 48u, 100u } },
+                { 1024, 3, { 0x90u, 60u, 100u } },
+                { 2048, 3, { 0x80u, 48u, 0u } },
+                { 3072, 3, { 0x80u, 60u, 0u } }
+            }};
+            voice.process(outputs, 4096, legato);
+        } else {
+            const std::array<VoxMidiEventV1, 4> detached {{
+                { 0, 3, { 0x90u, 48u, 100u } },
+                { 512, 3, { 0x80u, 48u, 0u } },
+                { 1024, 3, { 0x90u, 60u, 100u } },
+                { 3072, 3, { 0x80u, 60u, 0u } }
+            }};
+            voice.process(outputs, 4096, detached);
+        }
+        return left;
+    };
+    auto audioDiff = [](const std::vector<float>& a,
+                        const std::vector<float>& b) {
+        return std::inner_product(a.begin(), a.end(), b.begin(), 0.0,
+            std::plus<> {}, [](float x, float y) {
+                return std::abs(static_cast<double>(x) - static_cast<double>(y));
+            });
+    };
+    const auto disconnectedSlideLow = renderGlideGesture(0.05f, 0.75f, false);
+    const auto disconnectedSlideHigh = renderGlideGesture(0.95f, 0.75f, false);
+    REQUIRE(disconnectedSlideLow.size() == 4096
+            && audioDiff(disconnectedSlideLow, disconnectedSlideHigh) < 1.0e-5,
+            "Slide Time never alters disconnected Portamento timing");
+    const auto overlappingPortaLow = renderGlideGesture(0.75f, 0.05f, true);
+    const auto overlappingPortaHigh = renderGlideGesture(0.75f, 0.95f, true);
+    REQUIRE(audioDiff(overlappingPortaLow, overlappingPortaHigh) < 1.0e-5,
+            "Portamento never alters overlapping Slide timing");
+
     // Production DSP gate: user-visible Acid knob changes must alter audio,
     // not just move a normalized property. Render both variants from fresh,
     // identically prepared voices so no envelope/RNG history can mask a bug.
