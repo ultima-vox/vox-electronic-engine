@@ -130,6 +130,57 @@ void GeneratedNoteScheduler::processPpq(
         ppqAtBlockStart, seqSize, stepsPerQuarter);
     playHeadStep_.store(grid.stepIndex, std::memory_order_relaxed);
 
+    // Check if a note carried over from a previous block expires in this block
+    // before any new boundary onset.
+    if (heldNote >= 0 && samplesUntilNoteOff >= 0.0) {
+        if (samplesUntilNoteOff < static_cast<double>(numSamples)) {
+            const int offOffset = juce::jlimit(
+                0, numSamples - 1, static_cast<int>(samplesUntilNoteOff));
+            midi.addEvent(
+                juce::MidiMessage::noteOff(heldChannel, heldNote), offOffset);
+            heldNote = -1;
+            samplesUntilNoteOff = -1.0;
+        } else {
+            samplesUntilNoteOff -= static_cast<double>(numSamples);
+        }
+    }
+
+    // Carried ratchet sub-notes across block boundary.
+    while (ratchetsRemaining > 0
+           && samplesUntilNextRatchet < static_cast<double>(numSamples)) {
+        const int rOnset =
+            juce::jmax(0, static_cast<int>(samplesUntilNextRatchet));
+        if (heldNote >= 0) {
+            midi.addEvent(
+                juce::MidiMessage::noteOff(heldChannel, heldNote), rOnset);
+            heldNote = -1;
+            samplesUntilNoteOff = -1.0;
+        }
+        const auto& step = sequence[(currentStep + seqSize - 1) % seqSize];
+        triggerNote(midi, rOnset, channel, rootNote, step,
+                    samplesPerQuarter / stepsPerQuarter, subNoteDuration,
+                    sampleRate);
+        const double rOffOffset = samplesUntilNextRatchet + samplesUntilNoteOff;
+        if (rOffOffset < static_cast<double>(numSamples)) {
+            const int offOffset = juce::jlimit(
+                rOnset, numSamples - 1, static_cast<int>(rOffOffset));
+            midi.addEvent(
+                juce::MidiMessage::noteOff(heldChannel, heldNote), offOffset);
+            heldNote = -1;
+            samplesUntilNoteOff = -1.0;
+        } else {
+            samplesUntilNoteOff =
+                rOffOffset - static_cast<double>(numSamples);
+        }
+        --ratchetsRemaining;
+        samplesUntilNextRatchet += subNoteDuration;
+    }
+
+    // Pending ratchets use an offset relative to the current block. Advance
+    // even when no onset fits this block, or a distant ratchet never arrives.
+    if (ratchetsRemaining > 0)
+        samplesUntilNextRatchet -= static_cast<double>(numSamples);
+
     // Schedule every step boundary that starts inside this block. Onsets are
     // derived from absolute musical coordinates, so starting the transport
     // from an arbitrary locator, a seek, and a cycle-loop wrap all land on the
@@ -181,46 +232,42 @@ void GeneratedNoteScheduler::processPpq(
                 + static_cast<double>(r) * subNoteSamples;
 
             if (onOffsetSamples < static_cast<double>(numSamples)) {
+                const int onOffset =
+                    juce::jmax(0, static_cast<int>(onOffsetSamples));
+                if (heldNote >= 0) {
+                    midi.addEvent(
+                        juce::MidiMessage::noteOff(heldChannel, heldNote),
+                        onOffset);
+                    heldNote = -1;
+                    samplesUntilNoteOff = -1.0;
+                }
                 triggerNote(
-                    midi, juce::jmax(0, static_cast<int>(onOffsetSamples)),
+                    midi, onOffset,
                     channel, rootNote, step, samplesPerStep, subNoteSamples,
                     sampleRate);
+                const double offOffsetSamples =
+                    onOffsetSamples + samplesUntilNoteOff;
+                if (offOffsetSamples < static_cast<double>(numSamples)) {
+                    const int offOffset = juce::jlimit(
+                        onOffset, numSamples - 1,
+                        static_cast<int>(offOffsetSamples));
+                    midi.addEvent(
+                        juce::MidiMessage::noteOff(heldChannel, heldNote),
+                        offOffset);
+                    heldNote = -1;
+                    samplesUntilNoteOff = -1.0;
+                } else {
+                    samplesUntilNoteOff =
+                        offOffsetSamples - static_cast<double>(numSamples);
+                }
             } else {
                 // The tail of this step's ratchets lands in the next block:
                 // continue it with the sample-domain countdown (same mechanics
                 // as the free-running path).
                 ratchetsRemaining = ratchet - r;
                 samplesUntilNextRatchet =
-                    onOffsetSamples - static_cast<double>(numSamples) + 1.0;
+                    onOffsetSamples - static_cast<double>(numSamples);
                 break;
-            }
-        }
-    }
-
-    // Countdown for note-off and carried-ratchet tails (sample domain). Step
-    // onsets are already scheduled above; this loop only finishes tails that
-    // span blocks.
-    for (int offset = 0; offset < numSamples; ++offset) {
-        if (samplesUntilNoteOff >= 0.0) {
-            samplesUntilNoteOff -= 1.0;
-            if (samplesUntilNoteOff <= 0.0 && heldNote >= 0) {
-                midi.addEvent(
-                    juce::MidiMessage::noteOff(heldChannel, heldNote), offset);
-                heldNote = -1;
-                samplesUntilNoteOff = -1.0;
-            }
-        }
-
-        if (ratchetsRemaining > 0) {
-            samplesUntilNextRatchet -= 1.0;
-            if (samplesUntilNextRatchet <= 0.0) {
-                const auto& step =
-                    sequence[(currentStep + seqSize - 1) % seqSize];
-                triggerNote(midi, offset, channel, rootNote, step,
-                            samplesPerQuarter / stepsPerQuarter,
-                            subNoteDuration, sampleRate);
-                --ratchetsRemaining;
-                samplesUntilNextRatchet += subNoteDuration;
             }
         }
     }
