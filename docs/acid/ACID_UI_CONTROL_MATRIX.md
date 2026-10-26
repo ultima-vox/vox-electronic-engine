@@ -39,7 +39,8 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 | OUTPUT | Pan | S `pan` | Output stereo pan only, center is neutral |
 | MOD/ENV1 | Target, Amount, A, D, S, R | S `mod_target`, `mod_amount`, `mod_attack`, `mod_decay`, `mod_sustain`, `mod_release` | Per-source envelope routed to chosen target; curve reflects actual state |
 | MOD/ENV2 | Target, Amount, envelope controls | MISSING separate ENV2 | Independent state/DSP, not ENV1 reused |
-| MOD/LFO1–3 | Rate, shape, sync, depth, target as appropriate | MISSING three distinct LFOs | Each LFO modulates independent/assigned target, is host-sync capable and persisted |
+| MOD/LFO1 | Rate, waveform, depth, target | S `lfo1_rate`, `lfo1_wave`, `lfo1_depth`, `lfo1_target` (additive IDs 36–39) | Implemented in Acid branch: distinct 0.05–20 Hz bipolar LFO, 4 waves, independent destination, APVTS, source selector, v4 state; Windows CI confirmation pending. Host BPM sync remains outstanding. |
+| MOD/LFO2–3 | Rate, shape, sync, depth, target | MISSING separate LFO2 and LFO3 | Independent modulators, state, host sync, UI and automation still to implement |
 | MOD/STEP | Step modulator, sync, target, depth | MISSING step modulation source | Distinct from note sequencer; audible and stateful |
 | PERFORMANCE | Portamento | S `portamento` | Glides by selected duration, independent of Slide Time semantics |
 | PERFORMANCE | Unison voices | S `unison_voices` | 1–4 audible voices; correct normalization and CPU budget |
@@ -66,8 +67,7 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 
 ## Production acceptance / status
 
-Current PR #59 implements 36 DSP targets but exposes only frozen eight host macros; its extra descriptor parameters are not currently independent host automations. Gemini's preview AcidPanel is stored on `backup/gemini-acid-2026-10-26` but **not yet wired** to the recovered product editor. Current CI at PR #59: 28/30 tests pass, Rack integration crash and CH2 isolation failure; do not merge. In particular:
-
+Current PR #59 implements **40 Acid DSP parameters** (original 36 unchanged + 4 additive LFO1 controls); extended parameters and four play-mode switches have per-slot VST3 APVTS host IDs. A dedicated `AcidPanel` is mounted inside the existing SOUND workspace, and actual APVTS attachments now switch between ENV1 and LFO1. Acid-local state schema v4 writes all 40 controls and loads v1/v3, with silent LFO1 defaults on migration. Measured LFO audio, UI-switch isolation and host ID regression tests were added, but the latest Windows CI has **not finished**. The most recent completed older UI builds passed 29/30 tests; `bass_render_diagnostics/save_restore_rerender` remained red. No production or DAW acceptance yet. Specifically:
 - No `AcidEngine*` direct UI binding to replaceable Rack runtime instance.
 - No silent aliasing to host macro `Space`/`Motion`.
 - No imaginary `Step.note`, `Step.slide`, `Step.octave`, `Sequence.stepCount`.

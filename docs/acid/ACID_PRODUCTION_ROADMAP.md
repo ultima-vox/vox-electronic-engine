@@ -1,6 +1,6 @@
 # Acid Synth — production delivery plan (owner reference, 2026-10-26)
 
-Status: **Stage 1 started; NOT production accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
+Status: **Acid DSP, controls and SOUND UI in progress; NOT production accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
 
 ## Scope lock — Acid module ONLY (owner clarification, 2026-10-26)
 
@@ -37,7 +37,7 @@ The shared `instrument/InstrumentContract.h`, `VoxMidiEventV1`, `sequence::Seque
 2. **Control ownership**: Editor widgets send UI-thread commands to a controller/processor per slot. Do **not** bind an `AcidPanel` directly to an address of `AcidEngine` owned by the Rack: runtime instances can be replaced and processing is concurrent. A change must update host parameter authority, persistent module state and audio-thread snapshot atomically/without callback locking.
 3. **Stable host identifiers**: Keep existing eight frozen slot macro IDs. Acid-specific controls require independent host-visible IDs in `PluginProcessor::createParameterLayout()`, with a slot namespace stable across instrument selection and project reload. Do not map all controls to one macro; do not rename old automation IDs. Exposing new Acid-specific host parameters is a host/schema implementation task, **not** an edit to `InstrumentContract.h`.
 4. **State**: Every functional selector, knob, toggle, modulation source, sequence edit and generator setting must survive save/load, plugin reopen and preset recall. V1 Acid sound state compatibility must be tested; a migration cannot lose the first nine parameter values. Never store envelope/audio runtime state.
-5. **Mod sources**: Gemini 36-parameter DSP currently implements one modulation envelope with one target. The reference has ENV 1, ENV 2, LFO 1–3 and STEP. These **are not complete** until implemented as independent persisted source states with real DSP contribution. Expand Acid-local state schema/version; do not pretend tab changes select a new source when they only relabel existing knobs.
+5. **Mod sources**: Acid's original 36 parameters implement ENV1. The Acid-only v4 extension adds **LFO1 with four independent, host-automatable controls** and a real sample-continuous DSP signal. The UI switches actual ENV1/LFO1 bindings. **Not complete:** ENV2, LFO2/LFO3, STEP, tempo-sync for LFO1; each requires independent persisted state and actual audio contribution. Never show unsupported sources as working.
 6. **Choice controls**: Oscillator shape, filter mode, distortion mode, root/length/resolution and play modes must be semantically bound, not look-only. AMP vs FILTER must rebind the knob value, listener and automation attachment to the correct parameter, without mutating only its label or `paramId`.
 7. **Real-time correctness**: no mutex/heap allocation or UI Component touching inside `processBlock`; no stale pointers/callbacks after slot replacement; ordered sample-offset MIDI, including velocity-zero NoteOn; test NoteOff, CC120/123 and release across audio block boundaries.
 8. **Honest status**: passing compile/CTest is necessary, not sufficient for visual match, audible Acid character or manual DAW tests. Do not claim production-ready until all gates pass.
@@ -47,3 +47,13 @@ The shared `instrument/InstrumentContract.h`, `VoxMidiEventV1`, `sequence::Seque
 Primary screenshot `1024×768`: one horizontal global header; left persistent 16-slot Rack rail ~22% width, right selected Acid workspace ~78%. Within the workspace: instrument header and channel/preset, 6 navigation tabs, wide 303 Acid hero banner, seven compact top module cards (OSC/FILTER/ENVELOPE/DIST/ACCENT/SLIDE/OUTPUT), a single full-width 16-step sequencer with Note/Accent/Slide/Gate/Octave lanes, Modulation/Performance/PlayMode bottom cards, fixed keyboard footer. Avoid cropped controls and horizontal scroll. Required responsive checks: 1180×760, 1500×920 and 125% Windows scaling; control touch target, readable values, GPU/text rendering and focus order all reviewed.
 
 Gate output for each review commit: exact SHA, CI URL, failures and screenshot comparisons (target vs JUCE capture), trace evidence for every control, and explicit manual DAW status. Owner approval required before merge.
+
+## Implementation checkpoint — LFO1 slice (2026-10-26)
+
+- Acid-only v4 state adds stable semantic IDs `lfo1_rate`, `lfo1_depth`, `lfo1_wave`, `lfo1_target`; old IDs 0–35 retain ordering. Versions 1 and 3 load with LFO1 depth off, including into a previously active Acid engine. V4 save/load persists all four.
+- `AcidEngine::renderStereoSample`: LFO1 is a sample-continuous 0.05–20 Hz bipolar oscillator; four waveforms and six destinations. ENV1 and LFO1 modulation paths sum only at their own chosen destinations; no shared envelope state. No audio-thread allocations introduced.
+- Stable per-slot host IDs are registered for LFO1. `AcidParameterBridge` skips packed play-mode bitset index 35 but reads all extended Acid parameters through index 39.
+- `AcidPanel`: actual ENV1/LFO1 tab selection swaps attachments; inactive controls have no live host attachment. Waveform and Rate show semantic values, destination combobox switches host ID.
+- Tests cover v3→v4 migration, v4 LFO1 persistence, per-slot automation, UI independence, measurable audio effects from depth/rate/wave/target, and finite output. **Do not mark passed until Windows CI verifies head.**
+- UI target still owner-provided Acid 1024×768; original Rack remains out of scope. Remaining blockers: full CTest green (existing Bass save/restore diagnostic), actual screenshot comparison, ENV2/LFO2/LFO3/STEP, functional transport, DAW acceptance.
+
