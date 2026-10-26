@@ -1,302 +1,319 @@
-#include "acid/AcidEngine.h"
-#include <algorithm>
-#include <bit>
-#include <cmath>
-#include <cstring>
+#pragma once
+
+#include "instrument/InstrumentAbi.h"
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string_view>
 
 namespace vstengine::acid {
-namespace {
-constexpr std::uint32_t stateMagic = 0x44494341u; // "ACID", little-endian.
-constexpr float pi = 3.14159265358979323846f;
 
-void writeU32(std::byte* destination, std::uint32_t value) noexcept
-{
-    destination[0] = static_cast<std::byte>(value & 0xffu);
-    destination[1] = static_cast<std::byte>((value >> 8) & 0xffu);
-    destination[2] = static_cast<std::byte>((value >> 16) & 0xffu);
-    destination[3] = static_cast<std::byte>((value >> 24) & 0xffu);
-}
+class AcidEngine final {
+public:
+    static constexpr std::uint32_t stateVersion = 3;
+    static constexpr std::uint32_t legacyStateVersion = 1;
+    static constexpr std::size_t legacyParameterCount = 9;
+    static constexpr std::size_t parameterCount = 36;
+    static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
+    static constexpr std::size_t maxUnisonVoices = 4;
 
-std::uint32_t readU32(const std::byte* source) noexcept
-{
-    return std::to_integer<std::uint32_t>(source[0])
-        | (std::to_integer<std::uint32_t>(source[1]) << 8)
-        | (std::to_integer<std::uint32_t>(source[2]) << 16)
-        | (std::to_integer<std::uint32_t>(source[3]) << 24);
-}
+    enum Parameter : std::size_t {
+        // Core 9 parameters (indices 0..8 kept identical for ABI & test compatibility)
+        waveform = 0,       // Oscillator Wave Morph / Type
+        cutoff,             // Filter Cutoff (20 Hz .. 18 kHz)
+        resonance,          // Filter Resonance (0.00 .. 1.00)
+        envelopeAmount,     // Filter Env Amt (0.00 .. 1.00)
+        decay,              // Filter Decay (0.01 s .. 2.50 s)
+        accent,             // Accent Amount (0.00 .. 1.00)
+        slide,              // Slide Time (0.00 .. 1.00)
+        drive,              // Distortion Drive (0.00 .. 1.00)
+        output,             // Output Volume (0.00 .. 1.00)
 
-float flushDenormal(float value) noexcept
-{
-    return std::abs(value) < 1.0e-20f ? 0.0f : value;
-}
-} // namespace
+        // Oscillator Extended Controls
+        oscTune,            // Semitone tune (-24 .. +24 st, 0.5 = 0.00)
+        oscFine,            // Fine tune (-100 .. +100 ct, 0.5 = 0.00)
+        oscPulseWidth,      // Pulse Width PW (0.05 .. 0.95)
 
-bool AcidEngine::prepare(double sampleRate, std::uint32_t maximumBlockSize,
-                         std::uint32_t outputChannels) noexcept
-{
-    if (!std::isfinite(sampleRate) || sampleRate < 8000.0
-        || sampleRate > 384000.0 || maximumBlockSize == 0
-        || outputChannels == 0 || outputChannels > 2)
-        return false;
-    sampleRate_ = sampleRate;
-    maximumBlockSize_ = maximumBlockSize;
-    outputChannels_ = outputChannels;
-    prepared_ = true;
-    reset();
-    return true;
-}
+        // Filter Extended Controls
+        filterMode,         // 0=Low Pass 24 dB, 1=Diode 18 dB (303), 2=Band Pass 12 dB, 3=High Pass 12 dB
+        keyTracking,        // Key Track (0.00 .. 1.00)
 
-void AcidEngine::reset() noexcept
-{
-    phase_ = 0.0;
-    currentFrequency_ = targetFrequency_ = 110.0;
-    pitchBendSemitones_ = 0.0f;
-    filterEnvelope_ = ampEnvelope_ = 0.0f;
-    velocityGain_ = 1.0f;
-    accentGain_ = 0.0f;
-    portamentoSeconds_ = 0.08f;
-    filterState_.fill(0.0f);
-    currentNote_ = 255;
-    gate_ = active_ = portamentoEnabled_ = false;
-    smoothed_ = targets_;
-}
+        // Envelope Section: AMP ADSR & FILTER ADSR
+        ampAttack,
+        ampDecay,
+        ampSustain,
+        ampRelease,
+        fltAttack,
+        fltSustain,
+        fltRelease,
 
-bool AcidEngine::setParameter(std::string_view id, float value) noexcept
-{
-    if (!std::isfinite(value)) return false;
-    for (std::size_t index = 0; index < parameterIds.size(); ++index)
-        if (parameterIds[index] == id) {
-            targets_[index] = std::clamp(value, 0.0f, 1.0f);
-            return true;
-        }
-    return false;
-}
+        // Distortion / Drive Extended Controls
+        distMode,           // 0=Analog Tube, 1=Soft Clip, 2=Hard Clip, 3=Wavefold
+        distTone,           // Post-distortion Tone filter (0.00 .. 1.00, 0.40 on mockup)
+        distMix,            // Dry/Wet Mix (0.00 .. 1.00, 0.70 on mockup)
 
-float AcidEngine::parameter(std::string_view id) const noexcept
-{
-    for (std::size_t index = 0; index < parameterIds.size(); ++index)
-        if (parameterIds[index] == id) return targets_[index];
-    return 0.0f;
-}
+        // Output Pan
+        pan,                // Stereo Pan (0.5 = C)
 
-void AcidEngine::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept
-{
-    const bool portamento = portamentoEnabled_ && currentNote_ != 255;
-    const bool legato = (gate_ && active_) || portamento;
-    currentNote_ = note;
-    targetFrequency_ = midiFrequency(static_cast<float>(note)
-                                     + pitchBendSemitones_);
-    velocityGain_ = 0.55f + 0.45f * (static_cast<float>(velocity) / 127.0f);
-    accentGain_ = velocity >= 108 ? targets_[accent] : 0.0f;
-    gate_ = active_ = true;
+        // Modulation Section (ENV 1/2, LFO 1..3, STEP)
+        modTarget,          // 0=Filter Cutoff, 1=Pitch, 2=Pulse Width, 3=Resonance, 4=Drive, 5=Pan
+        modAmount,
+        modAttack,
+        modDecay,
+        modSustain,
+        modRelease,
 
-    if (!legato) {
-        // Deterministic hard trigger. Legato note-ons preserve phase/envelopes.
-        phase_ = 0.0;
-        currentFrequency_ = targetFrequency_;
-        filterEnvelope_ = 1.0f;
-        ampEnvelope_ = 0.0f;
-    } else if (!gate_) {
-        filterEnvelope_ = 1.0f;
-        ampEnvelope_ = 0.0f;
-    }
-}
+        // Performance Section (Unison & Portamento)
+        portamento,         // Additional performance portamento time
+        unisonVoices,       // Normalized 1..4 unison voices
+        unisonDetune,       // Unison detune amount (0.10 on mockup)
+        stereoSpread,       // Stereo unison spread (0.40 on mockup)
 
-void AcidEngine::noteOff(std::uint8_t note) noexcept
-{
-    if (currentNote_ == note) gate_ = false;
-}
+        // Play Mode Flags (packed or individual normalized toggle: legato, retrigger, vel->accent, slide_on_overlap)
+        playModeFlags,
 
-void AcidEngine::allNotesOff() noexcept
-{
-    gate_ = false;
-    currentNote_ = 255;
-}
+        count
+    };
 
-void AcidEngine::pitchBend(std::uint8_t lsb, std::uint8_t msb) noexcept
-{
-    const int value = static_cast<int>(lsb) | (static_cast<int>(msb) << 7);
-    pitchBendSemitones_ = (static_cast<float>(value) - 8192.0f)
-        * (2.0f / 8192.0f);
-    if (currentNote_ != 255)
-        targetFrequency_ = midiFrequency(static_cast<float>(currentNote_)
-                                         + pitchBendSemitones_);
-}
+    enum class FilterMode : std::uint8_t {
+        lowPass24dB = 0,
+        diode18dB = 1,
+        bandPass12dB = 2,
+        highPass12dB = 3
+    };
 
-double AcidEngine::midiFrequency(float note) noexcept
-{
-    return 440.0 * std::exp2((static_cast<double>(note) - 69.0) / 12.0);
-}
+    enum class DistortionMode : std::uint8_t {
+        analogTube = 0,
+        softClip = 1,
+        hardClip = 2,
+        wavefold = 3
+    };
 
-float AcidEngine::polyBlep(double phase, double increment) noexcept
-{
-    if (increment <= 0.0) return 0.0f;
-    if (phase < increment) {
-        const auto x = phase / increment;
-        return static_cast<float>(x + x - x * x - 1.0);
-    }
-    if (phase > 1.0 - increment) {
-        const auto x = (phase - 1.0) / increment;
-        return static_cast<float>(x * x + x + x + 1.0);
-    }
-    return 0.0f;
-}
+    enum class ModTarget : std::uint8_t {
+        filterCutoff = 0,
+        pitch = 1,
+        pulseWidth = 2,
+        resonance = 3,
+        drive = 4,
+        pan = 5
+    };
 
-float AcidEngine::oscillator(double increment) noexcept
-{
-    const float saw = static_cast<float>(2.0 * phase_ - 1.0)
-        - polyBlep(phase_, increment);
-    float square = phase_ < 0.5 ? 1.0f : -1.0f;
-    square += polyBlep(phase_, increment);
-    auto shifted = phase_ + 0.5;
-    if (shifted >= 1.0) shifted -= 1.0;
-    square -= polyBlep(shifted, increment);
-    return saw + (square - saw) * smoothed_[waveform];
-}
+    static constexpr std::array<std::string_view, parameterCount> parameterIds {
+        "waveform",
+        "cutoff",
+        "resonance",
+        "envelope",
+        "decay",
+        "accent",
+        "slide",
+        "drive",
+        "output",
+        "osc_tune",
+        "osc_fine",
+        "osc_pw",
+        "filter_mode",
+        "key_tracking",
+        "amp_attack",
+        "amp_decay",
+        "amp_sustain",
+        "amp_release",
+        "flt_attack",
+        "flt_sustain",
+        "flt_release",
+        "dist_mode",
+        "dist_tone",
+        "dist_mix",
+        "pan",
+        "mod_target",
+        "mod_amount",
+        "mod_attack",
+        "mod_decay",
+        "mod_sustain",
+        "mod_release",
+        "portamento",
+        "unison_voices",
+        "unison_detune",
+        "stereo_spread",
+        "play_mode_flags"
+    };
 
-float AcidEngine::filter(float input, float cutoffHz,
-                         float resonanceAmount) noexcept
-{
-    // Four nonlinear one-pole stages with bounded ladder-style feedback.
-    const float coefficient = std::clamp(
-        1.0f - std::exp(-2.0f * pi * cutoffHz
-                        / static_cast<float>(sampleRate_)), 0.0f, 0.92f);
-    const float feedback = 3.75f * resonanceAmount;
-    float stageInput = std::tanh(input - feedback * filterState_[3]);
-    for (auto& stage : filterState_) {
-        stage += coefficient * (std::tanh(stageInput) - std::tanh(stage));
-        stage = flushDenormal(std::clamp(stage, -4.0f, 4.0f));
-        stageInput = stage;
-    }
-    return filterState_[3];
-}
+    bool prepare(double sampleRate, std::uint32_t maximumBlockSize,
+                 std::uint32_t outputChannels) noexcept;
+    void reset() noexcept;
+    void process(std::span<float*> outputs, std::uint32_t sampleCount,
+                 std::span<const VoxMidiEventV1> midi) noexcept;
 
-void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
-                         std::span<const VoxMidiEventV1> midi) noexcept
-{
-    if (!prepared_ || sampleCount > maximumBlockSize_ || outputs.empty()
-        || outputs.size() > outputChannels_)
-        return;
+    bool setParameter(std::string_view id, float normalizedValue) noexcept;
+    [[nodiscard]] float parameter(std::string_view id) const noexcept;
 
-    std::size_t eventIndex = 0;
-    const float smoothing = 1.0f - std::exp(-1.0f
-        / static_cast<float>(sampleRate_ * 0.006));
-    for (std::uint32_t sample = 0; sample < sampleCount; ++sample) {
-        while (eventIndex < midi.size()
-               && midi[eventIndex].sampleOffset <= sample) {
-            const auto& event = midi[eventIndex++];
-            if (event.sampleOffset != sample || event.size == 0) continue;
-            const auto type = event.data[0] & 0xf0u;
-            if (type == 0x90u && event.size >= 3 && event.data[2] != 0)
-                noteOn(event.data[1], event.data[2]);
-            else if ((type == 0x80u || type == 0x90u) && event.size >= 3)
-                noteOff(event.data[1]);
-            else if (type == 0xe0u && event.size >= 3)
-                pitchBend(event.data[1], event.data[2]);
-            else if (type == 0xb0u && event.size >= 3
-                     && event.data[1] == 65)
-                portamentoEnabled_ = event.data[2] >= 64;
-            else if (type == 0xb0u && event.size >= 3
-                     && event.data[1] == 5) {
-                const auto normalized = static_cast<float>(event.data[2]) / 127.0f;
-                portamentoSeconds_ = std::max(0.001f,
-                    2.0f * normalized * normalized);
-            }
-            else if (type == 0xb0u && event.size >= 3
-                     && (event.data[1] == 120 || event.data[1] == 123))
-                allNotesOff();
-        }
+    void setPlayModeOptions(bool legato, bool retrigger,
+                            bool velToAccent, bool slideOnOverlap) noexcept;
+    [[nodiscard]] bool isLegatoEnabled() const noexcept { return legatoEnabled_; }
+    [[nodiscard]] bool isRetriggerEnabled() const noexcept { return retriggerEnabled_; }
+    [[nodiscard]] bool isVelToAccentEnabled() const noexcept { return velToAccentEnabled_; }
+    [[nodiscard]] bool isSlideOnOverlapEnabled() const noexcept { return slideOnOverlapEnabled_; }
 
-        for (std::size_t index = 0; index < smoothed_.size(); ++index)
-            smoothed_[index] += smoothing * (targets_[index] - smoothed_[index]);
+    bool loadState(std::uint32_t schemaVersion,
+                   std::span<const std::byte> payload) noexcept;
+    bool saveState(std::span<std::byte> destination,
+                   std::uint32_t& bytesWritten) const noexcept;
 
-        const float slideSeconds = portamentoEnabled_ ? portamentoSeconds_
-            : 0.004f + 0.32f * smoothed_[slide] * smoothed_[slide];
-        const double glide = 1.0 - std::exp(-1.0 / (sampleRate_ * slideSeconds));
-        currentFrequency_ += (targetFrequency_ - currentFrequency_) * glide;
-        currentFrequency_ = std::clamp(currentFrequency_, 8.0,
-                                       sampleRate_ * 0.45);
-        const double increment = currentFrequency_ / sampleRate_;
+    [[nodiscard]] bool isPrepared() const noexcept { return prepared_; }
+    [[nodiscard]] bool isActive() const noexcept { return active_; }
+    [[nodiscard]] std::uint32_t latencySamples() const noexcept { return 0; }
+    [[nodiscard]] std::uint32_t tailSamples() const noexcept;
 
-        const float envSeconds = 0.045f + 1.15f * smoothed_[decay]
-            * smoothed_[decay] * (1.0f + 0.35f * accentGain_);
-        filterEnvelope_ *= std::exp(-1.0f
-            / (static_cast<float>(sampleRate_) * envSeconds));
-        const float ampAttack = 1.0f - std::exp(-1.0f
-            / static_cast<float>(sampleRate_ * 0.0015));
-        const float ampRelease = 1.0f - std::exp(-1.0f
-            / static_cast<float>(sampleRate_ * 0.028));
-        ampEnvelope_ += (gate_ ? ampAttack : ampRelease)
-            * ((gate_ ? 1.0f : 0.0f) - ampEnvelope_);
+    [[nodiscard]] static float cutoffNormalizedToHz(float norm) noexcept;
+    [[nodiscard]] static float cutoffHzToNormalized(float hz) noexcept;
 
-        const float baseCutoff = 45.0f * std::pow(400.0f, smoothed_[cutoff]);
-        const float envelopeOctaves = (2.0f + 5.0f * smoothed_[envelopeAmount])
-            * filterEnvelope_ * (1.0f + 0.65f * accentGain_);
-        const float cutoffHz = std::clamp(
-            baseCutoff * std::exp2(envelopeOctaves), 35.0f,
-            static_cast<float>(sampleRate_ * 0.45));
-        const float oscillatorSample = oscillator(increment);
-        const float driven = std::tanh(oscillatorSample
-            * (1.0f + 9.0f * smoothed_[drive] * smoothed_[drive]));
-        float value = filter(driven, cutoffHz, smoothed_[resonance]);
-        value = std::tanh(value * (1.1f + 1.8f * smoothed_[drive]));
-        value *= ampEnvelope_ * velocityGain_ * (1.0f + 0.45f * accentGain_)
-            * (0.08f + 0.42f * smoothed_[output]);
-        if (!std::isfinite(value)) {
-            filterState_.fill(0.0f);
+private:
+    enum class EnvStage : std::uint8_t {
+        idle = 0,
+        attack,
+        decay,
+        sustain,
+        release
+    };
+
+    struct AdsrState {
+        EnvStage stage { EnvStage::idle };
+        float value {};
+
+        void reset() noexcept {
+            stage = EnvStage::idle;
             value = 0.0f;
         }
-        for (auto* channel : outputs)
-            if (channel != nullptr) channel[sample] += value;
 
-        phase_ += increment;
-        phase_ -= std::floor(phase_);
-        if (!gate_ && ampEnvelope_ < 1.0e-5f) {
-            active_ = false;
-            currentNote_ = 255;
-            ampEnvelope_ = 0.0f;
+        void trigger(bool retriggerFromZero) noexcept {
+            if (retriggerFromZero) {
+                value = 0.0f;
+            }
+            stage = EnvStage::attack;
         }
-    }
-}
 
-bool AcidEngine::saveState(std::span<std::byte> destination,
-                           std::uint32_t& bytesWritten) const noexcept
-{
-    bytesWritten = static_cast<std::uint32_t>(encodedStateBytes);
-    if (destination.size() < encodedStateBytes) return false;
-    writeU32(destination.data(), stateMagic);
-    writeU32(destination.data() + 4, stateVersion);
-    for (std::size_t index = 0; index < targets_.size(); ++index)
-        writeU32(destination.data() + 8 + index * 4,
-                 std::bit_cast<std::uint32_t>(targets_[index]));
-    return true;
-}
+        void release() noexcept {
+            if (stage != EnvStage::idle) {
+                stage = EnvStage::release;
+            }
+        }
 
-bool AcidEngine::loadState(std::uint32_t schemaVersion,
-                           std::span<const std::byte> payload) noexcept
-{
-    if (schemaVersion != stateVersion) return false;
-    if (payload.empty()) return true;
-    if (payload.size() != encodedStateBytes
-        || readU32(payload.data()) != stateMagic
-        || readU32(payload.data() + 4) != stateVersion)
-        return false;
-    std::array<float, parameterCount> decoded {};
-    for (std::size_t index = 0; index < decoded.size(); ++index) {
-        decoded[index] = std::bit_cast<float>(
-            readU32(payload.data() + 8 + index * 4));
-        if (!std::isfinite(decoded[index]) || decoded[index] < 0.0f
-            || decoded[index] > 1.0f)
-            return false;
-    }
-    targets_ = decoded;
-    smoothed_ = decoded;
-    return true;
-}
+        float advance(float attackSec, float decaySec, float sustainLevel,
+                      float releaseSec, bool gateOpen, double sampleRate) noexcept;
+    };
 
-std::uint32_t AcidEngine::tailSamples() const noexcept
-{
-    return static_cast<std::uint32_t>(sampleRate_ * 0.4);
-}
+    void handleMidiEvent(const VoxMidiEventV1& event) noexcept;
+    void noteOn(std::uint8_t note, std::uint8_t velocity) noexcept;
+    void noteOff(std::uint8_t note) noexcept;
+    void allNotesOff() noexcept;
+    void pitchBend(std::uint8_t lsb, std::uint8_t msb) noexcept;
+
+    void renderStereoSample(float& outLeft, float& outRight) noexcept;
+    [[nodiscard]] float renderVoiceOscillator(std::size_t voiceIdx,
+                                              double baseIncrement,
+                                              float waveMorph,
+                                              float pulseWidth) noexcept;
+    [[nodiscard]] float processFilter(float input, float cutoffHz,
+                                      float resonanceAmount,
+                                      FilterMode mode) noexcept;
+    [[nodiscard]] float processDistortion(float drySignal, float driveNorm,
+                                          float toneNorm, float mixNorm,
+                                          DistortionMode mode) noexcept;
+
+    [[nodiscard]] static double midiFrequency(float note) noexcept;
+    [[nodiscard]] static float polyBlep(double phase, double increment) noexcept;
+    [[nodiscard]] static FilterMode decodeFilterMode(float normalized) noexcept;
+    [[nodiscard]] static DistortionMode decodeDistortionMode(float normalized) noexcept;
+    [[nodiscard]] static ModTarget decodeModTarget(float normalized) noexcept;
+
+    // Default normalized values matching the V2 Acid UI mockup:
+    // Cutoff 250 Hz (~0.37), Res 0.75, Env Amt 0.60, Key Track 0.20,
+    // AMP ADSR: A 0.00s, D 0.10s, S 0.80, R 0.25s
+    // Distortion: Analog Tube, Drive 0.65, Tone 0.40, Mix 0.70
+    // Accent: 0.58, Slide Time: 0.30, Output: 0.75 (-3.0 dB), Pan: 0.50 (C)
+    // Mod Env1: Filter Cutoff, Amount 0.70, A 0.00s, D 0.35s, S 0.80, R 0.45s
+    // Performance: Portamento 0.00s, Unison 1, Detune 0.10, Spread 0.40
+    std::array<float, parameterCount> targets_ {
+        0.50f, // 0: waveform (Saw)
+        0.37f, // 1: cutoff (250 Hz)
+        0.75f, // 2: resonance (0.75)
+        0.60f, // 3: envelope (Env Amt 0.60)
+        0.35f, // 4: decay (Filter Decay)
+        0.58f, // 5: accent
+        0.30f, // 6: slide (Time 0.30)
+        0.65f, // 7: drive (Drive 0.65)
+        0.75f, // 8: output (-3.0 dB)
+        0.50f, // 9: osc_tune (0.00)
+        0.50f, // 10: osc_fine (0.00)
+        0.50f, // 11: osc_pw (0)
+        0.00f, // 12: filter_mode (Low Pass 24 dB)
+        0.20f, // 13: key_tracking (0.20)
+        0.00f, // 14: amp_attack (0.00 s)
+        0.22f, // 15: amp_decay (0.10 s)
+        0.80f, // 16: amp_sustain (0.80)
+        0.35f, // 17: amp_release (0.25 s)
+        0.00f, // 18: flt_attack (0.00 s)
+        0.00f, // 19: flt_sustain (0.00)
+        0.25f, // 20: flt_release (0.15 s)
+        0.00f, // 21: dist_mode (Analog Tube)
+        0.40f, // 22: dist_tone (0.40)
+        0.70f, // 23: dist_mix (0.70)
+        0.50f, // 24: pan (C)
+        0.00f, // 25: mod_target (Filter Cutoff)
+        0.70f, // 26: mod_amount (0.70)
+        0.00f, // 27: mod_attack (0.00 s)
+        0.38f, // 28: mod_decay (0.35 s)
+        0.80f, // 29: mod_sustain (0.80)
+        0.42f, // 30: mod_release (0.45 s)
+        0.00f, // 31: portamento (0.00 s)
+        0.00f, // 32: unison_voices (1 voice)
+        0.10f, // 33: unison_detune (0.10)
+        0.40f, // 34: stereo_spread (0.40)
+        0.75f  // 35: play_mode_flags (Legato + Vel->Accent + Slide on Overlap)
+    };
+    std::array<float, parameterCount> smoothed_ { targets_ };
+
+    double sampleRate_ { 48000.0 };
+    std::uint32_t maximumBlockSize_ {};
+    std::uint32_t outputChannels_ {};
+
+    std::array<double, maxUnisonVoices> phases_ {};
+    std::array<double, maxUnisonVoices> subPhases_ {};
+    std::array<double, maxUnisonVoices> triIntegrators_ {};
+
+    double currentFrequency_ { 130.81 };
+    double targetFrequency_ { 130.81 };
+    float pitchBendSemitones_ {};
+
+    // Envelopes: VCA, Filter (303 MEG + ADSR), and Mod Env 1
+    AdsrState ampEnv_ {};
+    AdsrState fltEnv_ {};
+    AdsrState modEnv_ {};
+
+    float accentCapacitor_ {};
+    float accentGain_ {};
+    float velocityGain_ { 1.0f };
+    bool isAccentedNote_ {};
+
+    // TPT/ZDF 4-pole ladder filter state + Post-Distortion Tone LP state
+    std::array<float, 4> filterState_ {};
+    float postToneState_ {};
+
+    // Monophonic held-note stack for seamless legato & slide
+    static constexpr std::size_t maxHeldNotes = 8;
+    std::array<std::uint8_t, maxHeldNotes> heldNotes_ {};
+    std::size_t heldCount_ {};
+
+    std::uint8_t currentNote_ { 255 };
+    bool gate_ {};
+    bool slideActive_ {};
+    bool ccPortamento_ {};
+    bool legatoEnabled_ { true };
+    bool retriggerEnabled_ { false };
+    bool velToAccentEnabled_ { true };
+    bool slideOnOverlapEnabled_ { true };
+    bool active_ {};
+    bool prepared_ {};
+};
 
 } // namespace vstengine::acid
