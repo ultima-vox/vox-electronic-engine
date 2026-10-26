@@ -73,8 +73,10 @@ inline ProcessSlotControls processControls(const PersistentSlotState& state) noe
 
 inline bool valid(const Routing& routing) noexcept
 {
-    return routing.channel >= 1 && routing.channel <= 16
-        && routing.keyLow <= routing.keyHigh
+    return (routing.mode == RouteMode::off || routing.mode == RouteMode::channel
+            || routing.mode == RouteMode::layer)
+        && routing.channel >= 1 && routing.channel <= 16
+        && routing.keyLow <= routing.keyHigh && routing.keyHigh <= 127
         && routing.velocityLow >= 1
         && routing.velocityLow <= routing.velocityHigh
         && routing.velocityHigh <= 127

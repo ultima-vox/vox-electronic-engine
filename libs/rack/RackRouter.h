@@ -46,6 +46,7 @@ private:
     struct Owner {
         instrument::SlotId slotId {};
         std::uint8_t transposedNote {};
+        std::uint8_t channel {};
     };
     struct Owners {
         std::array<Owner, instrument::maxSlots> values {};
@@ -58,6 +59,14 @@ private:
         std::array<Owner, 128> notes {};
     };
     std::array<GeneratedDomain, instrument::maxSlots> generatedOwnership_ {};
+    // Runtime-only, fixed-capacity fail-safe. A lost release silences the
+    // affected slot at the next block, before accepting fresh notes.
+    std::array<instrument::SlotId, instrument::maxSlots> releaseRecovery_ {};
+    bool recoveryPending(instrument::SlotId) const noexcept;
+    void deferReleaseRecovery(instrument::SlotId) noexcept;
+    void flushReleaseRecovery(
+        std::span<const ProcessSlotControls>,
+        std::array<DestinationBuffer, instrument::maxSlots>&) noexcept;
 };
 
 } // namespace vstengine::rack
