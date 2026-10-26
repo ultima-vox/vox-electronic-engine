@@ -10,16 +10,20 @@ target_sources(vox_ui PRIVATE
   components/VoxButton.cpp components/VoxButton.h
   components/VoxComboBox.cpp components/VoxComboBox.h
   components/VoxTabBar.cpp components/VoxTabBar.h
-  components/VoxSectionHeader.cpp components/VoxSectionHeader.h)
+  components/VoxSectionHeader.cpp components/VoxSectionHeader.h
+  AcidPanel.cpp
+  AcidPanel.h
+  )
 
 target_include_directories(vox_ui PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/components)
 
 target_link_libraries(vox_ui PUBLIC
+  vst_acid
   juce::juce_gui_basics
-  juce::juce_graphics)
-
+  juce::juce_graphics
+)
 target_compile_features(vox_ui PUBLIC cxx_std_20)
 
 option(VOX_UI_BUILD_SHOWCASE "Build VOX UI showcase" OFF)
