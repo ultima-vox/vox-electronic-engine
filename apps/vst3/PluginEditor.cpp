@@ -1,7 +1,11 @@
 #include "PluginEditor.h"
+#include "RackRoutingPanel.h"
 #include "instrument/HostParameterSchema.h"
 #include "ui/common/UiComponents.h"
+#include "vox-ui/Tokens.h"
+#include "vox-ui/Typography.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using Page = vstengine::ui::MainNavigation::Page;
@@ -55,49 +59,257 @@ void VstEngineAudioProcessorEditor::SequenceCallbacks::onMutate()
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onClear() { processor.sequence().clearSelected(); }
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onSequenceChanged() { processor.publishSequenceForAudio(); }
 
+VstEngineAudioProcessorEditor::RackRail::SlotRow::SlotRow() {
+  power.setClickingTogglesState(true);
+  power.setTooltip("Enable or disable this slot; independent from selection");
+  addAndMakeVisible(power);
+  setMouseCursor(juce::MouseCursor::PointingHandCursor);
+  setWantsKeyboardFocus(true);
+}
+void VstEngineAudioProcessorEditor::RackRail::SlotRow::resized() {
+  power.setBounds(getWidth() - 27, 2, 25, getHeight() - 4);
+}
+void VstEngineAudioProcessorEditor::RackRail::SlotRow::mouseDown(
+    const juce::MouseEvent &event) {
+  if (onSelect)
+    onSelect(event.mods.isPopupMenu());
+}
+void VstEngineAudioProcessorEditor::RackRail::SlotRow::paint(
+    juce::Graphics &g) {
+  using namespace vox::ui::tokens;
+  const auto area = getLocalBounds().toFloat().reduced(0.5f);
+  g.setColour(selected ? colour::accent.withAlpha(0.12f) : colour::control);
+  g.fillRoundedRectangle(area, 3.0f);
+  g.setColour(selected ? colour::accent : colour::border);
+  g.drawRoundedRectangle(area, 3.0f, selected ? 1.4f : 0.7f);
+  auto left = getLocalBounds().reduced(6, 3);
+  g.setFont(vox::ui::typography::makeFont(10.0f));
+  g.setColour(colour::textSecondary);
+  g.drawText(juce::String(static_cast<int>(index + 1)).paddedLeft('0', 2),
+             left.removeFromLeft(18), juce::Justification::centredLeft);
+  const auto icon = left.removeFromLeft(32).reduced(1, 2);
+  const bool occupied = !summary.instrumentId.empty();
+  if (occupied) {
+    const auto tint = juce::Colour::fromHSV(
+        static_cast<float>(juce::String(summary.instrumentId).hashCode() &
+                           255) /
+            255.0f,
+        0.6f, 0.85f, 1.0f);
+    g.setColour(tint.withAlpha(0.14f));
+    g.fillRoundedRectangle(icon.toFloat(), 3.0f);
+    juce::Path wave;
+    wave.startNewSubPath(static_cast<float>(icon.getX()),
+                         static_cast<float>(icon.getCentreY()));
+    for (int x = 0; x < icon.getWidth(); ++x)
+      wave.lineTo(static_cast<float>(icon.getX() + x),
+                  static_cast<float>(icon.getCentreY()) +
+                      std::sin(x * 0.65f) * std::sin(x * 0.16f) *
+                          icon.getHeight() * 0.35f);
+    g.setColour(tint);
+    g.strokePath(wave, juce::PathStrokeType(1.1f));
+  }
+  left.removeFromLeft(5);
+  left.removeFromRight(25);
+  const auto name =
+      occupied ? juce::String(summary.name) : juce::String("Empty");
+  g.setColour(enabled ? colour::text : colour::textMuted);
+  g.setFont(vox::ui::typography::makeFont(12.0f));
+  auto first = left.removeFromTop(juce::jmax(17, left.getHeight() / 2));
+  const auto status = channel + (mute ? " M" : solo ? " S" : "");
+  g.drawText(status, first.removeFromRight(39),
+             juce::Justification::centredRight);
+  g.drawFittedText(name, first, juce::Justification::centredLeft, 1);
+  if (occupied) {
+    const bool resolved =
+        summary.resolution == vstengine::instrument::ResolutionStatus::resolved;
+    g.setFont(vox::ui::typography::makeFont(8.5f));
+    g.setColour(resolved ? colour::textSecondary : colour::warning);
+    g.drawFittedText(resolved
+                         ? juce::String(summary.vendor) + "  " +
+                               juce::String(summary.instrumentVersion) + ".0"
+                         : "Unavailable / preserved",
+                     left, juce::Justification::centredLeft, 1);
+  }
+}
 VstEngineAudioProcessorEditor::RackRail::RackRail(VstEngineAudioProcessor& p) : processor(p)
 {
-    title.setText("INSTRUMENT RACK", juce::dontSendNotification);
-    vstengine::ui::styleLabel(title, 12.0f, juce::Justification::centredLeft,
-                              vstengine::ui::colours::mutedText);
-    addAndMakeVisible(title);
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        vstengine::ui::styleButton(slots[i]);
-        slots[i].setClickingTogglesState(false);
-        slots[i].onClick = [this, i] { if (onSelected) onSelected(i); };
-        addAndMakeVisible(slots[i]);
-    }
+  title.setText("INSTRUMENT RACK       16 slots", juce::dontSendNotification);
+  vstengine::ui::styleLabel(title, 10.0f, juce::Justification::centredLeft,
+                            vstengine::ui::colours::mutedText);
+  addAndMakeVisible(title);
+  addAndMakeVisible(add);
+  add.setTooltip("Load an instrument into the first empty slot");
+  add.onClick = [this] {
+    const auto summaries = processor.rackSlotSummaries();
+    for (std::size_t i = 0; i < summaries.size(); ++i)
+      if (summaries[i].instrumentId.empty()) {
+        showCatalog(i);
+        return;
+      }
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::MessageBoxIconType::InfoIcon, "Rack full",
+        "All 16 slots are occupied. Use a slot's context menu to replace or "
+        "unload an instrument.");
+  };
+  for (std::size_t i = 0; i < slots.size(); ++i) {
+    auto &row = slots[i];
+    row.index = i;
+    row.setName("Rack slot " + juce::String(static_cast<int>(i + 1)));
+    row.power.setName(slotId(i, "Enabled"));
+    row.onSelect = [this, i](bool popup) {
+      if (popup)
+        showSlotMenu(i);
+      else {
+        if (onSelected)
+          onSelected(i);
+        if (slots[i].summary.instrumentId.empty())
+          showCatalog(i);
+      }
+    };
+    addAndMakeVisible(row);
+    powerAttachments.push_back(
+        std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            processor.parameters(), slotId(i, "Enabled"), row.power));
+  }
 }
-
-void VstEngineAudioProcessorEditor::RackRail::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
-
+void VstEngineAudioProcessorEditor::RackRail::paint(juce::Graphics &g) {
+  panel(g, getLocalBounds());
+  const auto bottom = slots.back().getBottom() + 12;
+  if (getHeight() - bottom > 30) {
+    g.setColour(vox::ui::tokens::colour::accentDim);
+    g.setFont(vox::ui::typography::makeFont(9.0f));
+    g.drawText("S O U N D   F O R   A   D I F F E R E N T", 8, bottom,
+               getWidth() - 16, 15, juce::Justification::centred);
+    g.drawText("T O M O R R O W", 8, bottom + 17, getWidth() - 16, 15,
+               juce::Justification::centred);
+  }
+}
 void VstEngineAudioProcessorEditor::RackRail::resized()
 {
-    auto area = getLocalBounds().reduced(8);
-    title.setBounds(area.removeFromTop(25));
-    const int height = juce::jmax(24, area.getHeight() / static_cast<int>(slots.size()));
-    for (auto& slot : slots) slot.setBounds(area.removeFromTop(height).reduced(0, 1));
+  auto a = getLocalBounds().reduced(6);
+  auto heading = a.removeFromTop(28);
+  add.setBounds(heading.removeFromRight(24).reduced(1));
+  title.setBounds(heading);
+  const int h = juce::jlimit(29, 42, (a.getHeight() - 42) / 16);
+  for (auto &row : slots)
+    row.setBounds(a.removeFromTop(h).reduced(0, 1));
 }
-
 void VstEngineAudioProcessorEditor::RackRail::refresh()
 {
-    const auto& states = processor.instrumentRack().state();
-    const auto runtime = processor.instrumentRack().runtimeState();
-    const auto selected = processor.selectedSlotIndex();
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        const auto* descriptor = processor.instrumentRack().descriptor(i);
-        auto name = descriptor != nullptr ? juce::String(descriptor->name) : "Empty +";
-        auto stateFlags = states[i].mute ? " M" : states[i].solo ? " S" : "";
-        auto activity = runtime[i].ownedNotes != 0 ? "  *" : "";
-        const auto level = descriptor != nullptr
-            ? "  " + juce::String(states[i].level, 1) : juce::String();
-        slots[i].setButtonText(juce::String(static_cast<int>(i + 1)).paddedLeft('0', 2)
-            + "  " + name + "  " + routeName(states[i]) + level + stateFlags + activity);
-        slots[i].setToggleState(i == selected, juce::dontSendNotification);
-        slots[i].setColour(juce::TextButton::buttonColourId,
-            i == selected ? vstengine::ui::colours::primary.darker(0.68f)
-                          : vstengine::ui::colours::panelRaised);
+  const auto summaries = processor.rackSlotSummaries();
+  for (std::size_t i = 0; i < slots.size(); ++i) {
+    auto &row = slots[i];
+    row.summary = summaries[i];
+    row.selected = i == processor.selectedSlotIndex();
+    const auto value = [this, i](const char *suffix) {
+      return processor.parameters()
+          .getRawParameterValue(slotId(i, suffix).c_str())
+          ->load();
+    };
+    row.enabled = value("Enabled") >= 0.5f;
+    row.mute = value("Mute") >= 0.5f;
+    row.solo = value("Solo") >= 0.5f;
+    const int channel = juce::roundToInt(value("MidiIn"));
+    row.channel = channel == 0 ? "OFF" : "CH" + juce::String(channel);
+    row.power.setEnabled(!row.summary.instrumentId.empty());
+    row.repaint();
+  }
+}
+void VstEngineAudioProcessorEditor::RackRail::loadInstrument(
+    std::size_t i, const std::string &id) {
+  juce::String diagnostic;
+  if (!processor.loadSlotInstrument(i, id, diagnostic))
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::MessageBoxIconType::WarningIcon, "Instrument not loaded",
+        diagnostic);
+  else if (id.empty()) {
+    if (auto *p =
+            processor.parameters().getParameter(slotId(i, "MidiIn").c_str())) {
+      p->beginChangeGesture();
+      p->setValueNotifyingHost(p->convertTo0to1(0.0f));
+      p->endChangeGesture();
     }
+  } else {
+    const auto channel = processor.parameters()
+                             .getRawParameterValue(slotId(i, "MidiIn").c_str())
+                             ->load();
+    if (channel == 0) {
+      const int free = processor.nextFreeChannel();
+      if (free > 0)
+        (void)processor.assignSlotChannel(
+            i, free, VstEngineAudioProcessor::ChannelConflictAction::reject,
+            diagnostic);
+    }
+    if (auto *p =
+            processor.parameters().getParameter(slotId(i, "Enabled").c_str())) {
+      p->beginChangeGesture();
+      p->setValueNotifyingHost(1.0f);
+      p->endChangeGesture();
+    }
+  }
+  refresh();
+  if (onSelected)
+    onSelected(i);
+}
+void VstEngineAudioProcessorEditor::RackRail::showCatalog(std::size_t i) {
+  juce::PopupMenu menu;
+  std::vector<std::string> ids;
+  for (const auto *d : processor.availableInstruments()) {
+    ids.push_back(d->id);
+    menu.addItem(static_cast<int>(ids.size()), d->name + " / " + d->vendor);
+  }
+  if (ids.empty())
+    menu.addItem(1, "No installed instruments", false);
+  juce::Component::SafePointer<RackRail> safe(this);
+  menu.showMenuAsync(
+      juce::PopupMenu::Options().withTargetComponent(&slots[i]),
+      [safe, i, ids = std::move(ids)](int result) {
+        if (safe && result > 0 && result <= static_cast<int>(ids.size()))
+          safe->loadInstrument(i, ids[static_cast<std::size_t>(result - 1)]);
+      });
+}
+void VstEngineAudioProcessorEditor::RackRail::showSlotMenu(std::size_t i) {
+  juce::PopupMenu menu;
+  menu.addItem(1, "Load / replace instrument...");
+  menu.addItem(2, "Unload instrument", !slots[i].summary.instrumentId.empty());
+  menu.addSeparator();
+  menu.addItem(3, "Mute", true, slots[i].mute);
+  menu.addItem(4, "Solo", true, slots[i].solo);
+  juce::PopupMenu channels;
+  channels.addItem(100, "OFF", true, slots[i].channel == "OFF");
+  for (int c = 1; c <= 16; ++c)
+    channels.addItem(100 + c, "CH" + juce::String(c), true,
+                     slots[i].channel == "CH" + juce::String(c));
+  menu.addSubMenu("MIDI input (conflicts require Routing)", channels);
+  juce::Component::SafePointer<RackRail> safe(this);
+  menu.showMenuAsync(
+      juce::PopupMenu::Options().withTargetComponent(&slots[i]),
+      [safe, i](int r) {
+        if (!safe || r == 0)
+          return;
+        if (r == 1)
+          safe->showCatalog(i);
+        else if (r == 2)
+          safe->loadInstrument(i, {});
+        else if (r == 3 || r == 4) {
+          if (auto *p = safe->processor.parameters().getParameter(
+                  slotId(i, r == 3 ? "Mute" : "Solo").c_str())) {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(p->getValue() < 0.5f ? 1.0f : 0.0f);
+            p->endChangeGesture();
+          }
+        } else if (r >= 100 && r <= 116) {
+          juce::String d;
+          if (!safe->processor.assignSlotChannel(
+                  i, r - 100,
+                  VstEngineAudioProcessor::ChannelConflictAction::reject, d))
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::MessageBoxIconType::WarningIcon, "MIDI routing conflict",
+                d);
+        }
+        if (safe)
+          safe->refresh();
+      });
 }
 
 VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudioProcessor& p)
@@ -450,37 +662,56 @@ void VstEngineAudioProcessorEditor::AdvancedPage::resized()
 }
 void VstEngineAudioProcessorEditor::AdvancedPage::bind(std::size_t slot)
 {
-    const auto& runtime = processor.instrumentRack().runtimeState()[slot];
-    status.setText("Slot " + juce::String(static_cast<int>(slot + 1)) + " / dropped MIDI "
-        + juce::String(runtime.droppedMidiEvents), juce::dontSendNotification);
+  const auto runtime = processor.instrumentRack().runtimeState()[slot];
+  status.setText("Slot " + juce::String(static_cast<int>(slot + 1)) +
+                     " / dropped MIDI " +
+                     juce::String(runtime.droppedMidiEvents),
+                 juce::dontSendNotification);
 }
 
-VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProcessor& p)
+VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(
+    VstEngineAudioProcessor &p)
     : AudioProcessorEditor(&p), processor(p),
-      header(p.parameters(), {
-          [this] { cycleGlobalPreset(-1); }, [this] { cycleGlobalPreset(1); },
-          [this] { saveGlobalPreset(); }, [&p] { p.requestPanic(); },
-          [this] { showPage(Page::advanced); }, [this](int index) { loadGlobalPreset(index); } }),
-      rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6), patternPage(p),
-      routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8), advancedPage(p),
-      pages { &soundPage, &patternPage, &routingPage, &zonesPage, &macrosPage, &advancedPage },
-      keyboard(p.keyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
-{
-    setLookAndFeel(&lookAndFeel);
-    addAndMakeVisible(header); addAndMakeVisible(rackRail); addAndMakeVisible(instrumentHeader);
-    addAndMakeVisible(navigation); addAndMakeVisible(keyboard);
-    for (auto* page : pages) addChildComponent(page);
-    rackRail.onSelected = [this](std::size_t slot) { bindSelection(slot); };
-    instrumentHeader.onModelChanged = [this] { bindSelection(processor.selectedSlotIndex()); };
-    navigation.onPageChanged = [this](Page page) { showPage(page); };
-    keyboard.setAvailableRange(24, 96);
-    setResizable(true, true); setResizeLimits(1040, 680, 1600, 1000); setSize(1240, 800);
-    bindSelection(0); refreshGlobalPresets(); showPage(Page::sound); startTimerHz(20);
+      header(p.parameters(),
+             {[this] { cycleGlobalPreset(-1); },
+              [this] { cycleGlobalPreset(1); }, [this] { saveGlobalPreset(); },
+              [&p] { p.requestPanic(); }, [this] { showRackSettings(); },
+              [this](int index) { loadGlobalPreset(index); }}),
+      rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6),
+      patternPage(p), routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8),
+      advancedPage(p), pages{&soundPage, &patternPage, &routingPage,
+                             &zonesPage, &macrosPage,  &advancedPage},
+      keyboard(p.keyboardState(),
+               juce::MidiKeyboardComponent::horizontalKeyboard) {
+  setLookAndFeel(&lookAndFeel);
+  addAndMakeVisible(header);
+  addAndMakeVisible(rackRail);
+  addAndMakeVisible(instrumentHeader);
+  addAndMakeVisible(navigation);
+  addAndMakeVisible(keyboard);
+  for (auto *page : pages)
+    addChildComponent(page);
+  rackRail.onSelected = [this](std::size_t slot) { bindSelection(slot); };
+  instrumentHeader.onModelChanged = [this] {
+    bindSelection(processor.selectedSlotIndex());
+  };
+  navigation.onPageChanged = [this](Page page) { showPage(page); };
+  keyboard.setAvailableRange(24, 96);
+  setResizable(true, true);
+  setResizeLimits(1040, 680, 1600, 1000);
+  setSize(1240, 800);
+  bindSelection(0);
+  refreshGlobalPresets();
+  showPage(Page::sound);
+  startTimerHz(20);
 }
 
 VstEngineAudioProcessorEditor::~VstEngineAudioProcessorEditor()
 {
-    stopTimer(); setLookAndFeel(nullptr);
+  stopTimer();
+  if (routingWindow)
+    delete routingWindow.getComponent();
+  setLookAndFeel(nullptr);
 }
 
 void VstEngineAudioProcessorEditor::paint(juce::Graphics& g)
@@ -492,11 +723,12 @@ void VstEngineAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds();
     header.setBounds(area.removeFromTop(58));
+    auto rail = area.removeFromLeft(245).reduced(8, 6);
+    rackRail.setBounds(rail);
     auto keyboardArea = area.removeFromBottom(92).reduced(10, 8);
     keyboard.setBounds(keyboardArea);
     keyboard.setKeyWidth(static_cast<float>(keyboardArea.getWidth()) / 43.0f);
-    auto rail = area.removeFromLeft(245).reduced(10, 8);
-    rackRail.setBounds(rail);
+
     area = area.reduced(6, 8);
     instrumentHeader.setBounds(area.removeFromTop(66));
     navigation.setBounds(area.removeFromTop(44).reduced(0, 4));
@@ -519,17 +751,93 @@ void VstEngineAudioProcessorEditor::showPage(Page page)
     if (navigation.getCurrentPage() != page) navigation.setCurrentPage(page);
 }
 
+void VstEngineAudioProcessorEditor::showOperationError(
+    const juce::String &message) {
+  juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                         "Rack operation failed", message);
+}
+void VstEngineAudioProcessorEditor::showRackSettings() {
+  juce::PopupMenu menu, modes;
+  auto *mode = processor.parameters().getParameter("midiMode");
+  const auto current =
+      juce::roundToInt(mode->convertFrom0to1(mode->getValue()));
+  const juce::StringArray names{"Auto", "Host MIDI", "Internal patterns",
+                                "Host + internal"};
+  for (int i = 0; i < names.size(); ++i)
+    modes.addItem(10 + i, names[i], true, current == i);
+  menu.addSubMenu("MIDI source", modes);
+  juce::PopupMenu sizes;
+  sizes.addItem(30, "Compact 1040 x 680");
+  sizes.addItem(31, "Reference 1240 x 800");
+  sizes.addItem(32, "Large 1500 x 920");
+  menu.addSubMenu("Editor size", sizes);
+  menu.addItem(50, "Rack audio routing / sends / ducking...");
+  menu.addSeparator();
+  menu.addItem(40, "About / host information");
+  juce::Component::SafePointer<VstEngineAudioProcessorEditor> safe(this);
+  menu.showMenuAsync(
+      juce::PopupMenu::Options().withTargetComponent(&header), [safe](int r) {
+        if (!safe)
+          return;
+        if (r >= 10 && r < 14) {
+          if (auto *p = safe->processor.parameters().getParameter("midiMode")) {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(
+                p->convertTo0to1(static_cast<float>(r - 10)));
+            p->endChangeGesture();
+          }
+        } else if (r == 30)
+          safe->setSize(1040, 680);
+        else if (r == 31)
+          safe->setSize(1240, 800);
+        else if (r == 32)
+          safe->setSize(1500, 920);
+        else if (r == 50) {
+          if (safe->routingWindow) {
+            safe->routingWindow->toFront(true);
+            return;
+          }
+          juce::DialogWindow::LaunchOptions options;
+          options.content.setOwned(new RackRoutingPanel(safe->processor));
+          options.dialogTitle = "VOX / Rack Routing";
+          options.dialogBackgroundColour = vstengine::ui::colours::background;
+          options.componentToCentreAround = safe.getComponent();
+          options.useNativeTitleBar = true;
+          options.resizable = true;
+          safe->routingWindow = options.launchAsync();
+        } else if (r == 40)
+          juce::AlertWindow::showMessageBoxAsync(
+              juce::MessageBoxIconType::InfoIcon, "Vox Electronic Engine",
+              juce::String("Windows x64 VST3 / offline generation\nHost: ") +
+                  juce::PluginHostType().getHostDescription() +
+                  "\nSample rate: " +
+                  juce::String(safe->processor.getSampleRate(), 0) +
+                  " Hz\nMaximum block: " +
+                  juce::String(safe->processor.getBlockSize()) +
+                  " samples\n16 instrument slots / independent slot power and "
+                  "MIDI routing");
+      });
+}
+
 void VstEngineAudioProcessorEditor::cycleGlobalPreset(int delta)
 {
     auto* manager = processor.presetManager();
     if (manager == nullptr) return;
-    const auto presets = manager->getPresets();
+    auto presets = manager->getPresets();
+    for (int i = presets.size(); --i >= 0;)
+      if (presets.getReference(i).kind !=
+          vstengine::PresetManager::PresetKind::full)
+        presets.remove(i);
     if (presets.isEmpty()) return;
     int current = -1;
     for (int i = 0; i < presets.size(); ++i)
         if (presets.getReference(i).name == manager->getCurrentPresetName()) current = i;
     const int next = (current + delta + presets.size()) % presets.size();
-    manager->loadPreset(presets.getReference(next));
+    const auto result = manager->loadPreset(presets.getReference(next));
+    if (!result) {
+      showOperationError(result.message);
+      return;
+    }
     bindSelection(processor.selectedSlotIndex());
     refreshGlobalPresets();
 }
@@ -538,27 +846,57 @@ void VstEngineAudioProcessorEditor::loadGlobalPreset(int index)
 {
     auto* manager = processor.presetManager();
     if (manager == nullptr) return;
-    const auto presets = manager->getPresets();
+    auto presets = manager->getPresets();
+    for (int i = presets.size(); --i >= 0;)
+      if (presets.getReference(i).kind !=
+          vstengine::PresetManager::PresetKind::full)
+        presets.remove(i);
     if (index < 0 || index >= presets.size()) return;
-    manager->loadPreset(presets.getReference(index));
+    const auto result = manager->loadPreset(presets.getReference(index));
+    if (!result) {
+      showOperationError(result.message);
+      return;
+    }
     bindSelection(processor.selectedSlotIndex());
     refreshGlobalPresets();
 }
 
 void VstEngineAudioProcessorEditor::saveGlobalPreset()
 {
-    if (auto* manager = processor.presetManager()) {
-        const auto stamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
-        manager->saveFullPreset("User " + stamp);
-        refreshGlobalPresets();
-    }
+  auto dialog = std::make_shared<juce::AlertWindow>(
+      "Save Rack scene", "Save all slots, patterns, routing and effects.",
+      juce::MessageBoxIconType::NoIcon);
+  dialog->addTextEditor(
+      "name", "Rack " + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S"),
+      "Name");
+  dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+  dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+  juce::Component::SafePointer<VstEngineAudioProcessorEditor> safe(this);
+  dialog->enterModalState(
+      true, juce::ModalCallbackFunction::create([safe, dialog](int r) {
+        if (!safe || r != 1)
+          return;
+        if (auto *manager = safe->processor.presetManager()) {
+          const auto result = manager->saveFullPreset(
+              dialog->getTextEditorContents("name").trim());
+          if (!result)
+            safe->showOperationError(result.message);
+          else
+            safe->refreshGlobalPresets();
+        }
+      }),
+      false);
 }
 
 void VstEngineAudioProcessorEditor::refreshGlobalPresets()
 {
     auto* manager = processor.presetManager();
     if (manager == nullptr) return;
-    const auto presets = manager->getPresets();
+    auto presets = manager->getPresets();
+    for (int i = presets.size(); --i >= 0;)
+      if (presets.getReference(i).kind !=
+          vstengine::PresetManager::PresetKind::full)
+        presets.remove(i);
     juce::StringArray names;
     int selected = -1;
     for (int i = 0; i < presets.size(); ++i) {
@@ -583,6 +921,9 @@ void VstEngineAudioProcessorEditor::timerCallback()
     patternPage.setPlayHead(processor.getCurrentPlayHeadStep());
     header.setMidiActivity(processor.hasRecentMidiActivity());
     header.setCpuLoad(processor.currentCpuLoad());
+    header.setTransportActive(processor.transportIsPlaying());
+    const auto peaks = processor.consumeOutputPeaks();
+    header.setOutputPeaks(peaks[0], peaks[1]);
     if (auto* manager = processor.presetManager())
         header.setPresetName(manager->getCurrentPresetName());
 }

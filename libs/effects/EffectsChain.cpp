@@ -94,16 +94,13 @@ bool EffectsChain::prepare(double sampleRate, std::uint32_t maximumBlockSize,
 
 void EffectsChain::reset() noexcept
 {
-    for (auto* buffer : { &flangerBuffer_, &chorusBuffer_, &delayBuffer_,
-                          &reverbBuffer_ })
-        for (auto& channel : *buffer)
-            std::fill(channel.begin(), channel.end(), 0.0f);
-    flangerWrite_ = chorusWrite_ = delayWrite_ = reverbWrite_ = 0;
-    phaserState_ = {};
-    bitHold_ = {};
-    bitCounter_ = {};
-    delayDamping_ = reverbDamping_ = {};
-    phaserPhase_ = flangerPhase_ = chorusPhase_ = 0.0;
+  flangerValid_ = chorusValid_ = delayValid_ = reverbValid_ = {};
+  flangerWrite_ = chorusWrite_ = delayWrite_ = reverbWrite_ = 0;
+  phaserState_ = {};
+  bitHold_ = {};
+  bitCounter_ = {};
+  delayDamping_ = reverbDamping_ = {};
+  phaserPhase_ = flangerPhase_ = chorusPhase_ = 0.0;
 }
 
 bool EffectsChain::valid(const EffectSettings& value,
@@ -127,17 +124,21 @@ bool EffectsChain::setEffect(std::size_t index,
     return true;
 }
 
-float EffectsChain::readDelay(const std::vector<float>& buffer,
-                              std::size_t write, float delaySamples) noexcept
-{
-    if (buffer.empty()) return 0.0f;
-    const float size = static_cast<float>(buffer.size());
-    float position = static_cast<float>(write) - delaySamples;
-    while (position < 0.0f) position += size;
-    const auto first = static_cast<std::size_t>(position) % buffer.size();
-    const auto second = (first + 1) % buffer.size();
-    const float fraction = position - std::floor(position);
-    return buffer[first] + (buffer[second] - buffer[first]) * fraction;
+float EffectsChain::readDelay(const std::vector<float> &buffer,
+                              std::size_t write, float delaySamples,
+                              std::size_t validSamples) noexcept {
+  if (buffer.empty())
+    return 0.0f;
+  const float size = static_cast<float>(buffer.size());
+  float position = static_cast<float>(write) - delaySamples;
+  while (position < 0.0f)
+    position += size;
+  const auto first = static_cast<std::size_t>(position) % buffer.size();
+  const auto second = (first + 1) % buffer.size();
+  const float fraction = position - std::floor(position);
+  const auto a = first < validSamples ? buffer[first] : 0.0f;
+  const auto b = second < validSamples ? buffer[second] : 0.0f;
+  return a + (b - a) * fraction;
 }
 
 void EffectsChain::processDistortion(std::span<float*> audio, std::uint32_t n,
@@ -205,11 +206,20 @@ void EffectsChain::processFlanger(std::span<float*> audio, std::uint32_t n,
             * (0.0004f + (0.001f + 0.008f * s.amount) * lfo);
         for (std::size_t channel = 0; channel < audio.size(); ++channel) {
             const float dry = audio[channel][i];
-            const float delayed = readDelay(flangerBuffer_[channel],
-                                             flangerWrite_, delay);
+            const float delayed =
+                readDelay(flangerBuffer_[channel], flangerWrite_, delay,
+                          flangerValid_[channel]);
             flangerBuffer_[channel][flangerWrite_] = sanitize(
                 dry + delayed * (0.1f + 0.65f * s.character));
+            flangerValid_[channel] = std::min(flangerValid_[channel] + 1,
+                                              flangerBuffer_[channel].size());
             audio[channel][i] = wetDry(dry, delayed, s.mix);
+        }
+        for (std::size_t channel = audio.size(); channel < channelCount_;
+             ++channel) {
+          flangerBuffer_[channel][flangerWrite_] = 0.0f;
+          flangerValid_[channel] = std::min(flangerValid_[channel] + 1,
+                                            flangerBuffer_[channel].size());
         }
         flangerWrite_ = (flangerWrite_ + 1) % flangerBuffer_[0].size();
         flangerPhase_ = advance(flangerPhase_, increment);
@@ -228,10 +238,19 @@ void EffectsChain::processChorus(std::span<float*> audio, std::uint32_t n,
             const float delay = static_cast<float>(sampleRate_)
                 * (0.008f + (0.003f + 0.020f * s.amount) * lfo);
             const float dry = audio[channel][i];
-            const float delayed = readDelay(chorusBuffer_[channel],
-                                             chorusWrite_, delay);
+            const float delayed =
+                readDelay(chorusBuffer_[channel], chorusWrite_, delay,
+                          chorusValid_[channel]);
             chorusBuffer_[channel][chorusWrite_] = dry;
+            chorusValid_[channel] = std::min(chorusValid_[channel] + 1,
+                                             chorusBuffer_[channel].size());
             audio[channel][i] = wetDry(dry, delayed, s.mix);
+        }
+        for (std::size_t channel = audio.size(); channel < channelCount_;
+             ++channel) {
+          chorusBuffer_[channel][chorusWrite_] = 0.0f;
+          chorusValid_[channel] = std::min(chorusValid_[channel] + 1,
+                                           chorusBuffer_[channel].size());
         }
         chorusWrite_ = (chorusWrite_ + 1) % chorusBuffer_[0].size();
         chorusPhase_ = advance(chorusPhase_, increment);
@@ -264,13 +283,23 @@ void EffectsChain::processDelay(std::span<float*> audio, std::uint32_t n,
     for (std::uint32_t i = 0; i < n; ++i) {
         for (std::size_t channel = 0; channel < audio.size(); ++channel) {
             const float dry = audio[channel][i];
-            const float tapped = readDelay(delayBuffer_[channel], delayWrite_,
-                delaySamples * (channel == 0 ? 1.0f : 0.755f));
+            const float tapped =
+                readDelay(delayBuffer_[channel], delayWrite_,
+                          delaySamples * (channel == 0 ? 1.0f : 0.755f),
+                          delayValid_[channel]);
             delayDamping_[channel] += damping
                 * (tapped - delayDamping_[channel]);
             delayBuffer_[channel][delayWrite_] = sanitize(
                 dry + delayDamping_[channel] * feedback);
+            delayValid_[channel] = std::min(delayValid_[channel] + 1,
+                                            delayBuffer_[channel].size());
             audio[channel][i] = wetDry(dry, delayDamping_[channel], s.mix);
+        }
+        for (std::size_t channel = audio.size(); channel < channelCount_;
+             ++channel) {
+          delayBuffer_[channel][delayWrite_] = 0.0f;
+          delayValid_[channel] =
+              std::min(delayValid_[channel] + 1, delayBuffer_[channel].size());
         }
         delayWrite_ = (delayWrite_ + 1) % delayBuffer_[0].size();
     }
@@ -288,17 +317,29 @@ void EffectsChain::processReverb(std::span<float*> audio, std::uint32_t n,
             const float dry = audio[channel][i];
             float wet = 0.0f;
             for (const float tap : taps)
-                wet += readDelay(reverbBuffer_[channel], reverbWrite_,
-                    static_cast<float>(sampleRate_) * room * tap)
-                    * 0.25f;
+              wet += readDelay(reverbBuffer_[channel], reverbWrite_,
+                               static_cast<float>(sampleRate_) * room * tap,
+                               reverbValid_[channel]) *
+                     0.25f;
             reverbDamping_[channel] += damping
                 * (wet - reverbDamping_[channel]);
-            const float cross = audio.size() > 1
-                ? readDelay(reverbBuffer_[1 - channel], reverbWrite_,
-                    static_cast<float>(sampleRate_) * room * 0.727f) : 0.0f;
+            const float cross =
+                audio.size() > 1
+                    ? readDelay(reverbBuffer_[1 - channel], reverbWrite_,
+                                static_cast<float>(sampleRate_) * room * 0.727f,
+                                reverbValid_[1 - channel])
+                    : 0.0f;
             reverbBuffer_[channel][reverbWrite_] = sanitize(
                 dry + (reverbDamping_[channel] + 0.17f * cross) * feedback);
+            reverbValid_[channel] = std::min(reverbValid_[channel] + 1,
+                                             reverbBuffer_[channel].size());
             audio[channel][i] = wetDry(dry, wet, s.mix);
+        }
+        for (std::size_t channel = audio.size(); channel < channelCount_;
+             ++channel) {
+          reverbBuffer_[channel][reverbWrite_] = 0.0f;
+          reverbValid_[channel] = std::min(reverbValid_[channel] + 1,
+                                           reverbBuffer_[channel].size());
         }
         reverbWrite_ = (reverbWrite_ + 1) % reverbBuffer_[0].size();
     }

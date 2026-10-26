@@ -37,6 +37,7 @@ add_library(vst_instrument STATIC
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
 
 add_library(vst_rack STATIC
+  libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
   libs/rack/RackTypes.h
   libs/rack/RackRouter.cpp libs/rack/RackRouter.h
   libs/rack/Rack.cpp libs/rack/Rack.h
@@ -129,6 +130,7 @@ target_link_libraries(vst_rack PUBLIC vst_modulation)
 add_library(vst_effects STATIC
   libs/effects/EffectsChain.cpp libs/effects/EffectsChain.h)
 target_include_directories(vst_effects PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_rack PUBLIC vst_effects)
 
 add_library(vst_modules STATIC
   libs/modules/BuiltInProvider.cpp libs/modules/BuiltInProvider.h)
@@ -343,6 +345,19 @@ add_executable(state_round_trip_tests
   tests/integration/StateRoundTripTests.cpp)
 target_link_libraries(state_round_trip_tests PRIVATE vst_preset vst_sequence vst_parts)
 add_test(NAME state_round_trip_tests COMMAND state_round_trip_tests)
+
+add_executable(audio_routing_tests tests/rack/AudioRoutingTests.cpp)
+target_include_directories(audio_routing_tests PRIVATE ${VST_LIBS_DIR})
+target_link_libraries(audio_routing_tests PRIVATE vst_effects)
+# AudioRouting itself is JUCE-independent; test the same production source.
+target_sources(audio_routing_tests PRIVATE libs/rack/AudioRouting.cpp)
+add_test(NAME audio_routing_tests COMMAND audio_routing_tests)
+
+add_executable(rack_shell_integration_tests tests/integration/RackShellIntegrationTests.cpp)
+target_include_directories(rack_shell_integration_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(rack_shell_integration_tests PRIVATE VstEngine)
+add_test(NAME rack_shell_integration_tests COMMAND rack_shell_integration_tests)
 
 add_executable(editor_smoke_tests tests/ui/EditorSmokeTests.cpp)
 target_include_directories(editor_smoke_tests PRIVATE

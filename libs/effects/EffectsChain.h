@@ -70,8 +70,9 @@ private:
                       const EffectSettings&) noexcept;
     void processReverb(std::span<float*>, std::uint32_t,
                        const EffectSettings&) noexcept;
-    static float readDelay(const std::vector<float>&, std::size_t write,
-                           float delaySamples) noexcept;
+    static float readDelay(const std::vector<float> &, std::size_t write,
+                           float delaySamples,
+                           std::size_t validSamples) noexcept;
 
     ChainState state_;
     double sampleRate_ { 48000.0 };
@@ -81,6 +82,11 @@ private:
     StereoBuffer chorusBuffer_;
     StereoBuffer delayBuffer_;
     StereoBuffer reverbBuffer_;
+    // Sequential ring writes after reset form [0, validSamples). Reads outside
+    // that interval are zero until the first wrap. Reset is O(1), no bulk
+    // clear.
+    std::array<std::size_t, 2> flangerValid_{}, chorusValid_{}, delayValid_{},
+        reverbValid_{};
     std::size_t flangerWrite_ {};
     std::size_t chorusWrite_ {};
     std::size_t delayWrite_ {};

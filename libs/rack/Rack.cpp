@@ -1,4 +1,5 @@
 #include "rack/Rack.h"
+#include "rack/AudioRouting.h"
 #include "rack/RackState.h"
 #include <algorithm>
 #include <cmath>
@@ -52,6 +53,21 @@ const instrument::ParameterDescriptor* findParameter(
     return nullptr;
 }
 } // namespace
+
+std::array<Rack::SlotSummary, instrument::maxSlots> Rack::summaries() const {
+  const std::scoped_lock lock(persistentStateMutex_);
+  std::array<SlotSummary, instrument::maxSlots> result;
+  for (std::size_t i = 0; i < result.size(); ++i) {
+    const auto *d = runtime_[i].descriptor;
+    result[i] = {state_[i].slotId,
+                 state_[i].instrumentId,
+                 d ? d->name : state_[i].instrumentId,
+                 d ? d->vendor : std::string{},
+                 state_[i].instrumentVersion,
+                 runtimeState_[i].resolution};
+  }
+  return result;
+}
 
 Rack::Rack(instrument::InstrumentRegistry& registry) : registry_(registry)
 {
@@ -555,65 +571,94 @@ void Rack::updateControls(std::size_t slot, Routing routing, bool enabled,
     endExclusive();
 }
 
-void Rack::process(std::span<float*> outputs, std::uint32_t sampleCount,
-                   std::span<const VoxMidiEventV1> midi, double bpm,
-                   double ppq, bool playing,
-                   std::span<const VoxMidiEventV1> audition,
+void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
+                   std::span<const VoxMidiEventV1> midi, double bpm, double ppq,
+                   bool playing, std::span<const VoxMidiEventV1> audition,
                    instrument::SlotId selectedSlot,
                    std::span<const ProcessSlotControls> controls,
-                   std::span<const RackRouter::GeneratedSlotEvents> generated) noexcept
-{
-    if (mutationGate_.load(std::memory_order_seq_cst))
-        return;
-    const ActiveProcess active(activeProcessors_);
-    if (mutationGate_.load(std::memory_order_seq_cst))
-        return;
-    // Read the prepared spec only after joining the control/audio gate.
-    if (sampleCount > spec_.maximumBlockSize || outputs.empty()
-        || outputs.size() > spec_.outputChannels)
-        return;
-    if (controls.size() != state_.size()) {
-        for (std::size_t i = 0; i < state_.size(); ++i)
-            defaultControls_[i] = processControls(state_[i]);
-        controls = defaultControls_;
+                   std::span<const RackRouter::GeneratedSlotEvents> generated,
+                   AudioRouting *audioRouting,
+                   const AudioRoutingControls *audioControls) noexcept {
+  if (mutationGate_.load(std::memory_order_seq_cst))
+    return;
+  const ActiveProcess active(activeProcessors_);
+  if (mutationGate_.load(std::memory_order_seq_cst))
+    return;
+  // Read the prepared spec only after joining the control/audio gate.
+  if (sampleCount > spec_.maximumBlockSize || outputs.empty() ||
+      outputs.size() > spec_.outputChannels)
+    return;
+  if (controls.size() != state_.size()) {
+    for (std::size_t i = 0; i < state_.size(); ++i)
+      defaultControls_[i] = processControls(state_[i]);
+    controls = defaultControls_;
+  }
+  router_.route(midi, controls, routed_);
+  router_.routeAudition(audition, selectedSlot, controls, routed_);
+  router_.routeGenerated(generated, controls, routed_);
+  for (auto &destination : routed_)
+    destination.sortBySampleOffset();
+  if (audioRouting && audioControls && AudioRouting::valid(*audioControls)) {
+    auto available = *audioControls;
+    bool found = false;
+    for (std::size_t i = 0; i < controls.size(); ++i)
+      if (controls[i].slotId == available.kickSource && runtime_[i].instance)
+        found = true;
+    if (!found)
+      available.kickSource = instrument::invalidSlotId;
+    if (!audioRouting->begin(available, controls, routed_, sampleCount))
+      audioRouting = nullptr;
+  } else
+    audioRouting = nullptr;
+  const bool anySolo = std::any_of(controls.begin(), controls.end(),
+                                   [](const auto &slot) { return slot.solo; });
+  for (std::size_t i = 0; i < state_.size(); ++i) {
+    auto &slot = runtime_[i];
+    droppedMidiEvents_[i].store(routed_[i].dropped, std::memory_order_relaxed);
+    if (!slot.instance)
+      continue;
+    for (std::size_t channel = 0; channel < outputs.size(); ++channel)
+      std::fill_n(slot.audio[channel].data(), sampleCount, 0.0f);
+    for (std::size_t macro = 0; macro < instrument::macrosPerSlot; ++macro) {
+      const auto &mapped = state_[i].macroAssignments[macro];
+      if (!mapped.empty())
+        if (const auto *parameter = findParameter(*slot.descriptor, mapped))
+          slot.instance->setParameter(
+              mapped, macroToPlain(controls[i].macros[macro], *parameter));
     }
-    router_.route(midi, controls, routed_);
-    router_.routeAudition(audition, selectedSlot, controls, routed_);
-    router_.routeGenerated(generated, controls, routed_);
-    for (auto& destination : routed_)
-        destination.sortBySampleOffset();
-    const bool anySolo = std::any_of(controls.begin(), controls.end(),
-                                     [](const auto& slot) { return slot.solo; });
-    for (std::size_t i = 0; i < state_.size(); ++i) {
-        auto& slot = runtime_[i];
-        droppedMidiEvents_[i].store(routed_[i].dropped,
-                                    std::memory_order_relaxed);
-        if (!slot.instance) continue;
-        for (std::size_t channel = 0; channel < outputs.size(); ++channel)
-            std::fill_n(slot.audio[channel].data(), sampleCount, 0.0f);
-        for (std::size_t macro = 0; macro < instrument::macrosPerSlot; ++macro) {
-            const auto& mapped = state_[i].macroAssignments[macro];
-            if (!mapped.empty())
-                if (const auto* parameter = findParameter(*slot.descriptor, mapped))
-                    slot.instance->setParameter(mapped,
-                        macroToPlain(controls[i].macros[macro], *parameter));
-        }
-        applyModulation(slot, state_[i], controls[i], routed_[i], sampleCount,
-                        spec_.sampleRate, bpm, ppq);
-        slot.instance->setBypassed(!controls[i].enabled || controls[i].mute
-                                  || (anySolo && !controls[i].solo));
-        slot.instance->process({ { slot.pointers.data(), outputs.size() },
-            sampleCount, routed_[i].view(), spec_.sampleRate, bpm, ppq, playing });
-        const float left = controls[i].level * (controls[i].pan <= 0.0f
-            ? 1.0f : 1.0f - controls[i].pan);
-        const float right = controls[i].level * (controls[i].pan >= 0.0f
-            ? 1.0f : 1.0f + controls[i].pan);
-        for (std::uint32_t sample = 0; sample < sampleCount; ++sample) {
-            outputs[0][sample] += slot.audio[0][sample] * left;
-            if (outputs.size() > 1)
-                outputs[1][sample] += slot.audio[1][sample] * right;
-        }
+    applyModulation(slot, state_[i], controls[i], routed_[i], sampleCount,
+                    spec_.sampleRate, bpm, ppq);
+    slot.instance->setBypassed(!controls[i].enabled || controls[i].mute ||
+                               (anySolo && !controls[i].solo));
+    slot.instance->process({{slot.pointers.data(), outputs.size()},
+                            sampleCount,
+                            routed_[i].view(),
+                            spec_.sampleRate,
+                            bpm,
+                            ppq,
+                            playing});
+    if (audioRouting) {
+      audioRouting->mixSlot(i, {slot.pointers.data(), outputs.size()}, outputs,
+                            controls[i],
+                            controls[i].enabled && !controls[i].mute &&
+                                (!anySolo || controls[i].solo),
+                            sampleCount);
+      continue;
     }
+    const float left =
+        controls[i].level *
+        (controls[i].pan <= 0.0f ? 1.0f : 1.0f - controls[i].pan);
+    const float right =
+        controls[i].level *
+        (controls[i].pan >= 0.0f ? 1.0f : 1.0f + controls[i].pan);
+    for (std::uint32_t sample = 0; sample < sampleCount; ++sample) {
+      outputs[0][sample] += slot.audio[0][sample] * left;
+      if (outputs.size() > 1)
+        outputs[1][sample] += slot.audio[1][sample] * right;
+    }
+  }
+  if (audioRouting)
+    audioRouting->finish(outputs, sampleCount);
 }
 
 const instrument::InstrumentDescriptor* Rack::descriptor(std::size_t index) const noexcept

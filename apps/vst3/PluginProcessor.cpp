@@ -44,6 +44,8 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
                               0.48f, 0.58f, 0.30f, 0.28f };
     (void) rack.replaceState(initialRack, nullptr, diagnostic);
     cacheRackParameterPointers();
+    audioRoutingRefs.cache(apvts);
+    masterGainParameter = apvts.getRawParameterValue("outputLevel");
     for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
         rackControls[slot].slotId = initialRack[slot].slotId;
 
@@ -89,6 +91,9 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
                 }
                 if (rack.replaceState(parsed, nullptr, diagnostic)) {
                     effectsChain = std::move(candidateEffects);
+                    audioRouting.reset();
+                    returnTailSamples.store(0);
+                    duckReduction.store(0);
                     for (auto& scheduler : patternRuntime->schedulers)
                         scheduler.reset(currentSampleRate);
                     suspendProcessing(false);
@@ -107,14 +112,26 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
 void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
                                             const int samplesPerBlock)
 {
+  rackAudioReady.store(false);
+  if (!std::isfinite(sampleRate) || sampleRate < 8000.0 ||
+      sampleRate > 384000.0 || samplesPerBlock <= 0 ||
+      samplesPerBlock > 65536 || getTotalNumOutputChannels() < 1 ||
+      getTotalNumOutputChannels() > 2)
+    return;
+  try {
     currentSampleRate = sampleRate;
-    currentMaximumBlockSize = static_cast<std::uint32_t>(
-        juce::jmax(1, samplesPerBlock));
-    (void) rack.prepare({ sampleRate,
-        currentMaximumBlockSize,
-        static_cast<std::uint32_t>(juce::jmax(1, getTotalNumOutputChannels())) });
-    (void) effectsChain.prepare(sampleRate, currentMaximumBlockSize,
-        static_cast<std::uint32_t>(juce::jmax(1, getTotalNumOutputChannels())));
+    currentMaximumBlockSize = static_cast<std::uint32_t>(samplesPerBlock);
+    const vstengine::instrument::PrepareSpec spec{
+        sampleRate, currentMaximumBlockSize,
+        static_cast<std::uint32_t>(getTotalNumOutputChannels())};
+    if (!audioRouting.prepare(spec) || !rack.prepare(spec) ||
+        !effectsChain.prepare(sampleRate, currentMaximumBlockSize,
+                              spec.outputChannels))
+      return;
+    masterGain.reset(sampleRate, 0.005);
+    masterGain.setCurrentAndTargetValue(masterGainParameter->load());
+    for (auto &peak : outputPeaks)
+      peak.store(0.0f);
     setLatencySamples(static_cast<int>(rack.latencySamples()));
 
     // Reset the generated-playback scheduler and reseed the deterministic
@@ -140,15 +157,23 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
     for (auto& scratch : patternRuntime->generatedScratch)
         scratch.ensureSize(65536);
     wasTransportPlaying = false;
+    rackAudioReady.store(true);
+  } catch (...) {
+    rackAudioReady.store(false);
+  }
 }
 
 void VstEngineAudioProcessor::releaseResources()
 {
-    rack.reset();
-    effectsChain.reset();
-    for (auto& scheduler : patternRuntime->schedulers)
-        scheduler.reset(currentSampleRate);
-    wasTransportPlaying = false;
+  rackAudioReady.store(false);
+  rack.reset();
+  effectsChain.reset();
+  audioRouting.reset();
+  returnTailSamples.store(0);
+  duckReduction.store(0);
+  for (auto &scheduler : patternRuntime->schedulers)
+    scheduler.reset(currentSampleRate);
+  wasTransportPlaying = false;
 }
 
 bool VstEngineAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -364,6 +389,8 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 #else
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
+    if (!rackAudioReady.load(std::memory_order_relaxed))
+      return;
     syncRackControlsFromParameters();
     for (std::size_t slot = 0; slot < patternRuntime->audioSequences.size(); ++slot)
         (void) patternRuntime->sequenceBridges[slot].read(
@@ -383,6 +410,7 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             }
         }
     latestHostBpm.store(bpm, std::memory_order_relaxed);
+    transportPlaying.store(playing, std::memory_order_relaxed);
     if (wasTransportPlaying && !playing) {
         rack.reset();
         for (auto& scheduler : patternRuntime->schedulers)
@@ -413,6 +441,8 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         for (auto& scheduler : patternRuntime->schedulers)
             scheduler.reset(currentSampleRate);
         rack.reset();
+        effectsChain.reset();
+        audioRouting.reset();
     }
 
     if (!panicThisBlock && vstengine::midi::shouldRunGenerator(
@@ -466,12 +496,36 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     };
     const auto channels = static_cast<std::size_t>(buffer.getNumChannels());
     const auto selected = selectedSlot.load();
-    rack.process({ outputs.data(), channels },
-        static_cast<std::uint32_t>(buffer.getNumSamples()),
-        { hostEvents.data(), hostCount }, bpm, ppq, playing,
-        { auditionEvents.data(), auditionCount }, rackControls[selected].slotId,
-        rackControls, generatedStreams);
+    const auto audioControls = audioRoutingRefs.read(rackControls);
+    rack.process({outputs.data(), channels},
+                 static_cast<std::uint32_t>(buffer.getNumSamples()),
+                 {hostEvents.data(), hostCount}, bpm, ppq, playing,
+                 {auditionEvents.data(), auditionCount},
+                 rackControls[selected].slotId, rackControls, generatedStreams,
+                 &audioRouting, &audioControls);
+    returnTailSamples.store(audioRouting.tailSamples(),
+                            std::memory_order_relaxed);
+    duckReduction.store(audioRouting.gainReduction(),
+                        std::memory_order_relaxed);
     effectsChain.process({ outputs.data(), channels }, blockSamples);
+    masterGain.setTargetValue(
+        masterGainParameter->load(std::memory_order_relaxed));
+    float peaks[2]{};
+    for (std::uint32_t sample = 0; sample < blockSamples; ++sample) {
+      const float gain = masterGain.getNextValue();
+      for (std::size_t c = 0; c < channels; ++c) {
+        outputs[c][sample] *= gain;
+        peaks[c] = std::max(peaks[c], std::abs(outputs[c][sample]));
+      }
+    }
+    if (channels == 1)
+      peaks[1] = peaks[0];
+    for (std::size_t c = 0; c < 2; ++c) {
+      auto previousPeak = outputPeaks[c].load(std::memory_order_relaxed);
+      if (previousPeak < peaks[c])
+        (void)outputPeaks[c].compare_exchange_strong(previousPeak, peaks[c],
+                                                     std::memory_order_relaxed);
+    }
     const auto elapsed = juce::Time::highResolutionTicksToSeconds(
         juce::Time::getHighResolutionTicks() - processStart);
     const auto budget = currentSampleRate > 0.0
@@ -1030,6 +1084,7 @@ VstEngineAudioProcessor::createParameterLayout()
                 juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f }, 0.5f));
     }
 
+    vstengine::host::appendRackAudioParameters(params);
     return { params.begin(), params.end() };
 }
 
@@ -1040,6 +1095,14 @@ bool VstEngineAudioProcessor::loadSlotInstrument(
     std::string detail;
     const bool accepted = rack.loadModule(slot, instrumentId, nullptr, detail);
     if (accepted) {
+      const auto &values = rack.state()[slot].macros;
+      for (std::size_t i = 0; i < values.size(); ++i)
+        if (auto *parameter = apvts.getParameter(
+                vstengine::instrument::hostparams::macroId(slot, i).c_str())) {
+          parameter->beginChangeGesture();
+          parameter->setValueNotifyingHost(values[i]);
+          parameter->endChangeGesture();
+        }
         patternRuntime->slotSequences[slot].clear();
         publishPartSequenceForAudio(static_cast<int>(slot));
         patternRuntime->schedulers[slot].reset(currentSampleRate);
@@ -1473,6 +1536,9 @@ void VstEngineAudioProcessor::setStateInformation(const void* data,
             for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
                 rackControls[slot].slotId = parsedRack[slot].slotId;
         effectsChain = std::move(candidateEffects);
+        audioRouting.reset();
+        returnTailSamples.store(0);
+        duckReduction.store(0);
 
         if (!rackTree.isValid() && restoredParts) {
             // Keep old Kick data readable, but never reactivate removed product

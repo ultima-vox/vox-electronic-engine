@@ -31,6 +31,8 @@ int main()
             editor->keyboardComponentWidthForTesting(Page::rack));
         if (std::abs(coveredWidth - componentWidth) > 0.5f)
             return EXIT_FAILURE;
+        if (!editor->headerControlsFitForTesting())
+          return EXIT_FAILURE;
         const auto rack = editor->rackBoundsForTesting();
         const auto workspace = editor->workspaceBoundsForTesting();
         const auto keyboard = editor->keyboardBoundsForTesting();

@@ -1,7 +1,5 @@
 #pragma once
-#include <JuceHeader.h>
-#include <array>
-#include <memory>
+#include "RackAudioParameters.h"
 #include "effects/EffectsChain.h"
 #include "instrument/InstrumentRegistry.h"
 #include "midi/GeneratedNoteScheduler.h"
@@ -10,8 +8,11 @@
 #include "preset/PresetManager.h"
 #include "rack/Rack.h"
 #include "rack/RackState.h"
-#include "sequence/Sequence.h"
 #include "sequence/RealtimeSequenceBridge.h"
+#include "sequence/Sequence.h"
+#include <JuceHeader.h>
+#include <array>
+#include <memory>
 
 class VstEngineAudioProcessor final : public juce::AudioProcessor {
 public:
@@ -37,9 +38,12 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override
     {
-        return currentSampleRate > 0.0
-            ? static_cast<double>(rack.tailSamples()
-                + effectsChain.tailSamples()) / currentSampleRate : 0.0;
+      return currentSampleRate > 0.0
+                 ? static_cast<double>(rack.tailSamples() +
+                                       effectsChain.tailSamples() +
+                                       returnTailSamples.load()) /
+                       currentSampleRate
+                 : 0.0;
     }
 
     int getNumPrograms() override { return 1; }
@@ -82,6 +86,16 @@ public:
     {
         return midiActivity.load(std::memory_order_relaxed) != 0;
     }
+    [[nodiscard]] std::array<float, 2> consumeOutputPeaks() noexcept {
+      return {outputPeaks[0].exchange(0.0f), outputPeaks[1].exchange(0.0f)};
+    }
+    [[nodiscard]] float currentDuckReduction() const noexcept {
+      return duckReduction.load();
+    }
+    [[nodiscard]] bool transportIsPlaying() const noexcept {
+      return transportPlaying.load();
+    }
+    [[nodiscard]] auto rackSlotSummaries() const { return rack.summaries(); }
     void publishPartSequenceForAudio(int partIndex) noexcept;
     void publishSequenceForAudio() noexcept
     {
@@ -195,6 +209,12 @@ private:
     vstengine::instrument::InstrumentRegistry instrumentRegistry;
     vstengine::rack::Rack rack;
     vstengine::effects::EffectsChain effectsChain;
+    vstengine::rack::AudioRouting audioRouting;
+    vstengine::host::RackAudioParameterRefs audioRoutingRefs;
+    std::atomic<bool> rackAudioReady{false};
+    std::atomic<std::uint32_t> returnTailSamples{};
+    std::atomic<float> duckReduction{};
+
     vstengine::parts::PartRegistry parts;
     struct PatternRuntime {
         std::array<vstengine::sequence::Sequence,
@@ -219,6 +239,11 @@ private:
     bool wasTransportPlaying { false };
     std::atomic<bool> panicRequested { false };
     std::atomic<double> latestHostBpm { 145.0 };
+    std::array<std::atomic<float>, 2> outputPeaks{};
+    std::atomic<bool> transportPlaying{false};
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> masterGain{
+        1.0f};
+    std::atomic<float> *masterGainParameter{};
     std::atomic<float> cpuLoad { 0.0f };
     std::atomic<std::uint32_t> midiActivity { 0 };
 

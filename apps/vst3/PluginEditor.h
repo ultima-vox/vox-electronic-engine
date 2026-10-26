@@ -16,6 +16,9 @@ public:
     ~VstEngineAudioProcessorEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    [[nodiscard]] bool headerControlsFitForTesting() const noexcept {
+      return header.controlsFit();
+    }
     void showPageForTesting(vstengine::ui::MainNavigation::Page);
     [[nodiscard]] vstengine::ui::MainNavigation::Page currentPageForTesting() const noexcept;
     [[nodiscard]] float keyboardKeyWidthForTesting(vstengine::ui::MainNavigation::Page) const noexcept;
@@ -45,17 +48,53 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void refresh();
         std::function<void(std::size_t)> onSelected;
     private:
-        class RackSlotButton final : public vox::ui::VoxButton {
+      class SlotRow final : public juce::Component {
+      public:
+        SlotRow();
+        void paint(juce::Graphics &) override;
+        void resized() override;
+        void mouseDown(const juce::MouseEvent &) override;
+        bool keyPressed(const juce::KeyPress &key) override {
+          if (key == juce::KeyPress::returnKey ||
+              key == juce::KeyPress::spaceKey) {
+            if (onSelect)
+              onSelect(false);
+            return true;
+          }
+          return false;
+        }
+        std::function<void(bool)> onSelect;
+        class PowerButton final : public juce::Button {
         public:
-            RackSlotButton() : VoxButton({}, vox::ui::VoxButton::Type::Toggle)
-            {
-                setClickingTogglesState(false);
-            }
-        };
-
-        VstEngineAudioProcessor& processor;
-        juce::Label title;
-        std::array<RackSlotButton, vstengine::instrument::maxSlots> slots;
+          PowerButton() : juce::Button("Slot power") {}
+          void paintButton(juce::Graphics &g, bool hover, bool) override {
+            g.setColour(
+                (getToggleState() ? juce::Colour(0xff00ddf5)
+                                  : juce::Colour(0xff587487))
+                    .withAlpha(isEnabled() ? (hover ? 1.0f : 0.85f) : 0.3f));
+            const auto x = getWidth() * 0.5f, y = getHeight() * 0.5f;
+            juce::Path arc;
+            arc.addCentredArc(x, y, 5.0f, 5.0f, 0, 0.65f,
+                              juce::MathConstants<float>::twoPi - 0.65f, true);
+            g.strokePath(arc, juce::PathStrokeType(1.2f));
+            g.drawLine(x, y - 7, x, y - 1, 1.2f);
+          }
+        } power;
+        vstengine::rack::Rack::SlotSummary summary;
+        juce::String channel;
+        std::size_t index{};
+        bool selected{}, enabled{}, mute{}, solo{};
+      };
+      void showCatalog(std::size_t);
+      void showSlotMenu(std::size_t);
+      void loadInstrument(std::size_t, const std::string &);
+      VstEngineAudioProcessor &processor;
+      juce::Label title;
+      juce::TextButton add{"+"};
+      std::array<SlotRow, vstengine::instrument::maxSlots> slots;
+      std::vector<
+          std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>>
+          powerAttachments;
     };
 
     class InstrumentHeader final : public juce::Component {
@@ -149,10 +188,13 @@ private:
     void timerCallback() override;
     void bindSelection(std::size_t);
     void showPage(vstengine::ui::MainNavigation::Page);
+    void showRackSettings();
+    void showOperationError(const juce::String &);
     void cycleGlobalPreset(int delta);
     void loadGlobalPreset(int index);
     void saveGlobalPreset();
     void refreshGlobalPresets();
+    juce::Component::SafePointer<juce::DialogWindow> routingWindow;
     VstEngineAudioProcessor& processor;
     vstengine::ui::VoxLookAndFeel lookAndFeel;
     vstengine::ui::GlobalHeader header;

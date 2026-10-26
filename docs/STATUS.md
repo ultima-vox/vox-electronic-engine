@@ -91,3 +91,17 @@ not a per-PR handoff. Standalone is not required; VST3 remains the product.
   they are not the published shared interface or evidence of production Bass.
 - UI PR #43: existing Sound workspace candidate. Re-evaluate against current workflows; do not merge or close automatically during cleanup.
 - Pattern/API v2 and new style instruments: subsequent scoped implementation, not part of AGY's first task.
+
+## Rack implementation candidate — 26 October 2026
+
+`feat/rack-production` implements the accepted red header/16-slot rail, real
+master gain/meters, four internal wet send returns and a kick-note event ducking
+bus. Settings opens the shared audio-routing utility; the green Acid workspace
+is not implemented or redesigned by this change. No Acid/Bass DSP changes.
+See [runtime contract](architecture/RACK_AUDIO_ROUTING.md).
+
+Independent core review and 14,624 ASan/UBSan routing checks passed (leak checking
+unavailable in this container). Full native build/integration, Windows CI,
+real-editor visual acceptance and the integrated DAW milestone are separate gates.
+The generic direct instrument parameter contract (#56) is still a tracked
+integration requirement; this candidate does not claim all Rack work complete.
