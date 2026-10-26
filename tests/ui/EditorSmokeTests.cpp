@@ -55,7 +55,7 @@ int main()
     editor->selectAcidFilterEnvelopeForTesting(true);
     const auto* ampDecay = params.getRawParameterValue("slot02Acid_amp_decay");
     const auto* filterDecay = params.getRawParameterValue(
-        vstengine::instrument::hostparams::macroId(1, 4).c_str());
+        vstengine::instrument::hostparams::macroId(1, 3).c_str());
     if (!ampDecay || !filterDecay) return EXIT_FAILURE;
     const float oldAmpDecay = ampDecay->load();
     if (!editor->setAcidKnobForTesting("decay", 0.67)
