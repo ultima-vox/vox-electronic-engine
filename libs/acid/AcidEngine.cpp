@@ -135,6 +135,7 @@ void AcidEngine::reset() noexcept {
     currentNote_ = 255;
     gate_ = false;
     slideActive_ = false;
+    glideSource_ = GlideSource::none;
     ccPortamento_ = false;
     active_ = false;
 }
@@ -358,6 +359,7 @@ void AcidEngine::handleMidiEvent(const VoxMidiEventV1& event) noexcept {
 
 void AcidEngine::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
     const bool wasGateOpen = gate_;
+    const bool hadPreviousNote = currentNote_ < 128u;
 
     if (heldCount_ < maxHeldNotes) {
         heldNotes_[heldCount_++] = note;
@@ -372,11 +374,19 @@ void AcidEngine::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
 
     const bool overlapSlide = wasGateOpen && slideOnOverlapEnabled_;
     const bool hasPortamento = smoothed_[Parameter::portamento] > 0.01f;
-    slideActive_ =
-        ((overlapSlide || ccPortamento_) && smoothed_[Parameter::slide] > 0.01f) ||
-        hasPortamento;
+    // A dedicated Slide knob governs only the overlapping/CC-legato glide.
+    // General Portamento is separate: never use max(slide, portamento),
+    // which makes two independent controls modify one another's timing.
+    if ((overlapSlide || ccPortamento_)
+        && smoothed_[Parameter::slide] > 0.01f)
+        glideSource_ = GlideSource::slide;
+    else if (hasPortamento && hadPreviousNote)
+        glideSource_ = GlideSource::portamento;
+    else
+        glideSource_ = GlideSource::none;
+    slideActive_ = glideSource_ != GlideSource::none;
 
-    if (!slideActive_ && !wasGateOpen) {
+    if (!slideActive_ || !hadPreviousNote) {
         currentFrequency_ = targetFrequency_;
     }
 
@@ -420,14 +430,21 @@ void AcidEngine::noteOff(std::uint8_t note) noexcept {
         currentNote_ = heldNotes_[heldCount_ - 1];
         targetFrequency_ =
             midiFrequency(static_cast<float>(currentNote_) + pitchBendSemitones_);
-        slideActive_ =
-            slideOnOverlapEnabled_ && (smoothed_[Parameter::slide] > 0.01f);
+        if (slideOnOverlapEnabled_
+            && smoothed_[Parameter::slide] > 0.01f)
+            glideSource_ = GlideSource::slide;
+        else if (smoothed_[Parameter::portamento] > 0.01f)
+            glideSource_ = GlideSource::portamento;
+        else
+            glideSource_ = GlideSource::none;
+        slideActive_ = glideSource_ != GlideSource::none;
         return;
     }
 
     if (note == currentNote_ || heldCount_ == 0) {
         gate_ = false;
         slideActive_ = false;
+        glideSource_ = GlideSource::none;
         ampEnv_.release();
         fltEnv_.release();
         modEnv_.release();
@@ -440,6 +457,7 @@ void AcidEngine::allNotesOff() noexcept {
     currentNote_ = 255;
     gate_ = false;
     slideActive_ = false;
+    glideSource_ = GlideSource::none;
     ampEnv_.reset();
     fltEnv_.reset();
     modEnv_.reset();
@@ -480,11 +498,10 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
 
     // 2. Glide / Slide & Oscillator Tune + Fine + Pitch Modulation
     if (slideActive_) {
+        const float glideAmount = glideSource_ == GlideSource::slide
+            ? smoothed_[Parameter::slide] : smoothed_[Parameter::portamento];
         const double slideTimeSec =
-            0.006 +
-            static_cast<double>(std::max(smoothed_[Parameter::slide],
-                                         smoothed_[Parameter::portamento])) *
-                0.240;
+            0.006 + static_cast<double>(glideAmount) * 0.240;
         const double glideCoeff =
             1.0 - std::exp(-1.0 / (slideTimeSec * sampleRate_));
         currentFrequency_ += glideCoeff * (targetFrequency_ - currentFrequency_);

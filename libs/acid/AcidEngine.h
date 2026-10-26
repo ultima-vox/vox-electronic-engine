@@ -306,6 +306,8 @@ private:
 
     std::uint8_t currentNote_ { 255 };
     bool gate_ {};
+    enum class GlideSource : std::uint8_t { none, slide, portamento };
+    GlideSource glideSource_ { GlideSource::none };
     bool slideActive_ {};
     bool ccPortamento_ {};
     bool legatoEnabled_ { true };
