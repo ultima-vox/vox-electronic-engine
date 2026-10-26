@@ -56,6 +56,10 @@ int main()
             || workspace.intersects(keyboard))
             return EXIT_FAILURE;
     }
+    // Retain the established Psy Bass screenshot reference: UI snapshots
+    // must not silently switch their underlying instrument to Acid.
+    editor->selectSlotForTesting(0);
+    editor->showPageForTesting(Page::sound);
     const auto snapshotPath = juce::SystemStats::getEnvironmentVariable(
         "VOX_UI_SNAPSHOT", {});
     if (snapshotPath.isNotEmpty()) {

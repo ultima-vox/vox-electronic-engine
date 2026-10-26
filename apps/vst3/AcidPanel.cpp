@@ -228,6 +228,12 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
     startTimerHz(12);
 }
 AcidPanel::~AcidPanel() { stopTimer(); flagAttachments_.clear(); for (auto& c : knobs_) c.attach.reset(); }
+std::size_t AcidPanel::attachedControlCount() const noexcept {
+    std::size_t count = flagAttachments_.size();
+    for (const auto& knob : knobs_)
+        if (knob.attach != nullptr) ++count;
+    return count;
+}
 void AcidPanel::addKnob(Group group, std::string_view semantic, const char* name, bool stage) {
     Knob k;
     k.group = group;
@@ -357,13 +363,12 @@ void AcidPanel::resized() {
     area.removeFromBottom(5);
     sections_[grid] = area;
     constexpr std::array<int, 7> weights { 18, 18, 18, 14, 9, 9, 14 };
-    const int sum = 100;
-    int used = 0;
+    const int fullWidth = top.getWidth();
     for (int i = 0; i < 7; ++i) {
-        const int w = i == 6 ? top.getWidth() - used
-                              : top.getWidth() * weights[static_cast<std::size_t>(i)] / sum;
-        sections_[static_cast<std::size_t>(i)] = top.removeFromLeft(std::max(1,w));
-        used += w;
+        const int w = i == 6 ? top.getWidth()
+                             : fullWidth * weights[static_cast<std::size_t>(i)] / 100;
+        sections_[static_cast<std::size_t>(i)] =
+            top.removeFromLeft(juce::jlimit(1, top.getWidth(), w));
     }
     sections_[modulation] = bottom.removeFromLeft(bottom.getWidth() * 52 / 100);
     sections_[performance] = bottom.removeFromLeft(bottom.getWidth() * 65 / 100);
