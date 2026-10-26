@@ -8,8 +8,8 @@
 #include <cmath>
 
 namespace {
-const auto accent = juce::Colour::fromRGB(0, 221, 245);
-const auto green = juce::Colour::fromRGB(0, 218, 163);
+const auto acidAccentColour = juce::Colour::fromRGB(0, 221, 245);
+const auto acidGreenColour = juce::Colour::fromRGB(0, 218, 163);
 const auto panelFill = juce::Colour::fromRGB(9, 28, 42);
 const auto edge = juce::Colour::fromRGB(24, 64, 81);
 const auto dimText = juce::Colour::fromRGB(130, 176, 190);
@@ -22,7 +22,7 @@ void drawCard(juce::Graphics& g, juce::Rectangle<int> area,
     g.fillRoundedRectangle(rect, 5.0f);
     g.setColour(edge);
     g.drawRoundedRectangle(rect, 5.0f, 1.0f);
-    g.setColour(accent);
+    g.setColour(acidAccentColour);
     g.fillEllipse(static_cast<float>(area.getX() + 9),
                   static_cast<float>(area.getY() + 12), 5.0f, 5.0f);
     g.setColour(juce::Colours::whitesmoke);
@@ -40,7 +40,8 @@ std::string macroOrAcidId(std::size_t slot, std::string_view semantic) {
 
 AcidPanel::StepGrid::StepGrid(VstEngineAudioProcessor& p) : processor_(p)
 {
-    setTooltip("Edit Note, Accent, Slide, Gate and Octave for the selected Acid pattern");
+    // StepGrid does not implement SettableTooltipClient. Keep the grid
+    // accessible via its lane labels without a non-existent tooltip API.
 }
 void AcidPanel::StepGrid::paint(juce::Graphics& g) {
     const auto a = getLocalBounds();
@@ -63,11 +64,11 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
                 : lane == 3 ? step.gate : (std::abs(step.noteOffset) >= 12));
             auto cell = juce::Rectangle<int>(gutter + s * width, lane * height,
                                              width - 2, height - 2);
-            g.setColour(active ? (lane == 1 || lane == 2 ? green.darker(0.65f)
-                                                        : accent.darker(0.72f))
+            g.setColour(active ? (lane == 1 || lane == 2 ? acidGreenColour.darker(0.65f)
+                                                        : acidAccentColour.darker(0.72f))
                                : juce::Colour::fromRGB(12, 38, 53));
             g.fillRect(cell);
-            g.setColour(s == head_ ? accent : edge);
+            g.setColour(s == head_ ? acidAccentColour : edge);
             g.drawRect(cell, s == head_ ? 2 : 1);
             if (!valid) continue;
             g.setColour(active ? juce::Colours::white : dimText);
@@ -469,7 +470,7 @@ void AcidPanel::paint(juce::Graphics& g) {
         juce::Colour::fromRGB(4, 74, 81), h.getTopLeft().toFloat(),
         juce::Colour::fromRGB(5, 20, 33), h.getBottomRight().toFloat(), false));
     g.fillRoundedRectangle(h.toFloat(), 5.0f);
-    g.setColour(green);
+    g.setColour(acidGreenColour);
     g.setFont(juce::Font(juce::FontOptions(getHeight() < 475 ? 22.0f : 37.0f,
                                            juce::Font::bold)));
     g.drawText("ACID", h.reduced(15, 3).removeFromLeft(160),

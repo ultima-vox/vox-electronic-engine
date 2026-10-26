@@ -7,6 +7,7 @@
 #include "preset/PresetManager.h"
 #include "sequence/PatternAdapter.h"
 #include "acid/AcidEngine.h"
+#include "acid/AcidProvider.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1057,7 +1058,7 @@ VstEngineAudioProcessor::createParameterLayout()
             params.push_back(std::make_unique<juce::AudioParameterFloat>(
                 juce::ParameterID {
                     juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
-                label + "Acid " + juce::String(semantic),
+                label + "Acid " + juce::String(std::string(semantic)),
                 juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f },
                 acidDefaults.parameter(semantic)));
         }
@@ -1069,7 +1070,7 @@ VstEngineAudioProcessor::createParameterLayout()
             params.push_back(std::make_unique<juce::AudioParameterBool>(
                 juce::ParameterID {
                     juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
-                label + "Acid " + juce::String(semantic), enabled));
+                label + "Acid " + juce::String(std::string(semantic)), enabled));
     }
 
     return { params.begin(), params.end() };

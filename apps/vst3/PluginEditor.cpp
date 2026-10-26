@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "instrument/HostParameterSchema.h"
+#include "acid/AcidProvider.h"
 #include "ui/common/UiComponents.h"
 #include <algorithm>
 #include <cstdio>
