@@ -95,7 +95,8 @@ int main()
     };
     for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot) {
         for (std::size_t p = vstengine::instrument::macrosPerSlot;
-             p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+             p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+            if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
             const auto id = vstengine::acid::hostParameterId(
                 slot, vstengine::acid::AcidEngine::parameterIds[p]);
             const auto* param = processor->parameters().getParameter(id);

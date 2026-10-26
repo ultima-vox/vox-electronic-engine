@@ -89,7 +89,7 @@ int main()
     // Acid Production Gate 1: one stable semantic ID per DSP parameter.
     // Do not alias controls to other parameters merely to fill eight host macros.
     REQUIRE(descriptor.parameters.size() == acid::AcidEngine::parameterCount,
-            "all 36 Acid parameters are advertised by the production descriptor");
+            "all Acid parameters are advertised by the production descriptor");
     std::set<std::string> semanticIds;
     for (std::size_t i = 0; i < acid::AcidEngine::parameterCount; ++i) {
         const auto id = acid::AcidEngine::parameterIds[i];
@@ -180,6 +180,8 @@ int main()
             "new Acid slot accepts empty legacy module state");
     REQUIRE(soundState.loadState(acid::AcidEngine::stateVersion, {}),
             "new Acid slot accepts empty current module state");
+    REQUIRE(soundState.loadState(acid::AcidEngine::previousStateVersion, {}),
+            "new Acid slot accepts empty previous v3 module state");
     REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion + 1u, {}),
             "unknown future Acid schema rejected even with empty bytes");
     constexpr std::uint32_t magic = 0x44494341u;
@@ -220,6 +222,23 @@ int main()
             "Acid v1 migration rejects malformed float");
     REQUIRE(std::abs(soundState.parameter("cutoff") - originalCutoff) < 0.00001f,
             "rejected v1 migration leaves pre-existing sound values intact");
+    // Version 3 Acid sound payloads have 36 parameters and must remain
+    // loadable after the additive LFO1 v4 upgrade, preserving old automation.
+    std::array<std::byte, 8 + acid::AcidEngine::previousParameterCount
+                             * sizeof(float)> stateV3 {};
+    std::memcpy(stateV3.data(), encoded.data(), stateV3.size());
+    const auto oldVersion = acid::AcidEngine::previousStateVersion;
+    std::memcpy(stateV3.data() + 4, &oldVersion, sizeof(oldVersion));
+    acid::AcidEngine migratedV3;
+    REQUIRE(migratedV3.loadState(oldVersion, stateV3),
+            "v3 Acid state accepted by v4 DSP without shared Rack migration");
+    for (std::size_t i = 0; i < acid::AcidEngine::previousParameterCount; ++i)
+        REQUIRE(std::abs(migratedV3.parameter(acid::AcidEngine::parameterIds[i])
+                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
+                    < 0.00001f, "v3 migration preserves every original Acid parameter");
+    REQUIRE(migratedV3.parameter("lfo1_depth") == 0.0f,
+            "v3 projects migrate with LFO1 depth OFF, preserving their sound");
+
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
             "Acid v3 save/load round-trips");
@@ -272,14 +291,15 @@ int main()
     std::set<std::string> uniqueHostIds;
     for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
         for (std::size_t parameter = instrument::macrosPerSlot;
-             parameter < acid::AcidEngine::playModeFlags; ++parameter)
-            REQUIRE(uniqueHostIds.insert(acid::hostParameterId(
-                slot, acid::AcidEngine::parameterIds[parameter])).second,
+             parameter < acid::AcidEngine::parameterCount; ++parameter)
+            if (parameter != acid::AcidEngine::playModeFlags)
+                REQUIRE(uniqueHostIds.insert(acid::hostParameterId(
+                    slot, acid::AcidEngine::parameterIds[parameter])).second,
                 "Acid host automation identity unique across slots and controls");
     REQUIRE(uniqueHostIds.size() == instrument::maxSlots
-                                  * (acid::AcidEngine::playModeFlags
-                                     - instrument::macrosPerSlot),
-            "all 432 extended Acid parameter IDs are unique");
+                                  * (acid::AcidEngine::parameterCount
+                                     - instrument::macrosPerSlot - 1),
+            "all 496 extended Acid parameter IDs are unique");
 
     // The separate Slide and Portamento controls must not change each
     // other's timing. Fresh voices, equal MIDI and all other parameters.
@@ -328,6 +348,46 @@ int main()
     REQUIRE(audioDiff(overlappingPortaLow, overlappingPortaHigh) < 1.0e-5,
             "Portamento never alters overlapping Slide timing");
 
+
+    // Measured LFO1 DSP proof: four controls belong to LFO1, with no alias to
+    // the original ENV1 settings. This tests rendered audio, not UI labels.
+    auto renderLfo1 = [](float depth, float rate, float waveform, float target) {
+        acid::AcidEngine synth;
+        const bool configured =
+            synth.setParameter("mod_amount", 0.0f)
+            && synth.setParameter("lfo1_depth", depth)
+            && synth.setParameter("lfo1_rate", rate)
+            && synth.setParameter("lfo1_wave", waveform)
+            && synth.setParameter("lfo1_target", target)
+            && synth.prepare(48000.0, 16384, 2);
+        if (!configured) return std::vector<float> {};
+        std::vector<float> left(16384), right(16384);
+        std::array<float*, 2> outs { left.data(), right.data() };
+        const std::array midi { VoxMidiEventV1 { 0, 3, { 0x90, 48, 120 } } };
+        synth.process(outs, 16384, midi);
+        return left;
+    };
+    auto sumAbsoluteDifference = [](const auto& a, const auto& b) {
+        return std::inner_product(a.begin(), a.end(), b.begin(), 0.0,
+            std::plus<> {}, [](float x, float y) {
+                return std::abs(static_cast<double>(x) - static_cast<double>(y));
+            });
+    };
+    const auto noLfo = renderLfo1(0.0f, 0.68f, 0.0f, 0.0f);
+    const auto cutoffLfo = renderLfo1(0.85f, 0.68f, 0.0f, 0.0f);
+    const auto pitchLfo = renderLfo1(0.85f, 0.68f, 0.0f, 0.2f);
+    const auto squareLfo = renderLfo1(0.85f, 0.68f, 0.68f, 0.0f);
+    REQUIRE(noLfo.size() == 16384 && cutoffLfo.size() == noLfo.size(),
+            "LFO1 DSP prepares and renders");
+    REQUIRE(sumAbsoluteDifference(noLfo, cutoffLfo) > 1.0,
+            "LFO1 depth changes the real audible cutoff");
+    REQUIRE(sumAbsoluteDifference(cutoffLfo, pitchLfo) > 1.0,
+            "LFO1 target routes independently to pitch or cutoff");
+    REQUIRE(sumAbsoluteDifference(cutoffLfo, squareLfo) > 1.0,
+            "LFO1 waveform changes the modulation's audible waveform");
+    for (float sample : squareLfo)
+        REQUIRE(std::isfinite(sample) && std::abs(sample) <= 8.0f,
+                "LFO1 high depth stays finite and bounded");
     // Production DSP gate: user-visible Acid knob changes must alter audio,
     // not just move a normalized property. Render both variants from fresh,
     // identically prepared voices so no envelope/RNG history can mask a bug.

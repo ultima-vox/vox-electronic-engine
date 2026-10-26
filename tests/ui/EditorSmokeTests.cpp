@@ -69,6 +69,23 @@ int main()
         || std::abs(filterDecay->load() - oldFilterDecay) > 0.0001f)
         return EXIT_FAILURE;
 
+    // LFO1 and ENV1 must have independent physical controls and state.
+    const auto* lfoRate = params.getRawParameterValue("slot02Acid_lfo1_rate");
+    const auto* envAmount = params.getRawParameterValue("slot02Acid_mod_amount");
+    if (!lfoRate || !envAmount) return EXIT_FAILURE;
+    const float envBefore = envAmount->load();
+    editor->selectAcidLfo1ForTesting(true);
+    if (!editor->setAcidKnobForTesting("lfo1_rate", 0.63)
+        || std::abs(lfoRate->load() - 0.63f) > 0.001f
+        || std::abs(envAmount->load() - envBefore) > 0.0001f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfo1ForTesting(false);
+    const float rateBefore = lfoRate->load();
+    if (!editor->setAcidKnobForTesting("mod_amount", 0.31)
+        || std::abs(envAmount->load() - 0.31f) > 0.001f
+        || std::abs(lfoRate->load() - rateBefore) > 0.0001f)
+        return EXIT_FAILURE;
+
     for (const auto size : { juce::Point<int> { 1024, 768 },
                              juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },

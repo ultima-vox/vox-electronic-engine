@@ -37,6 +37,9 @@ public:
     void selectAcidFilterEnvelopeForTesting(bool on) {
         acidSoundPage.switchEnvelopeForTesting(on);
     }
+    void selectAcidLfo1ForTesting(bool on) {
+        acidSoundPage.switchModulationForTesting(on);
+    }
 
 private:
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {
