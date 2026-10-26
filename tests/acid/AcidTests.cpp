@@ -397,6 +397,31 @@ int main()
     for (float sample : squareLfo)
         REQUIRE(std::isfinite(sample) && std::abs(sample) <= 8.0f,
                 "LFO1 high depth stays finite and bounded");
+    const auto slowLfo = renderLfo1(0.85f, 0.08f, 0.0f, 0.0f);
+    const auto fastLfo = renderLfo1(0.85f, 0.92f, 0.0f, 0.0f);
+    REQUIRE(sumAbsoluteDifference(slowLfo, fastLfo) > 1.0,
+            "LFO1 rate changes modulation frequency audibly");
+
+    acid::AcidEngine lfoSaved;
+    REQUIRE(lfoSaved.setParameter("lfo1_rate", 0.81f)
+            && lfoSaved.setParameter("lfo1_depth", 0.64f)
+            && lfoSaved.setParameter("lfo1_wave", 0.66f)
+            && lfoSaved.setParameter("lfo1_target", 0.80f),
+            "LFO1 four parameters writable independently");
+    std::array<std::byte, acid::AcidEngine::encodedStateBytes> lfoBlob {};
+    std::uint32_t lfoBytes {};
+    REQUIRE(lfoSaved.saveState(lfoBlob, lfoBytes)
+                && lfoBytes == lfoBlob.size(),
+            "LFO1 v4 Acid preset serialized");
+    acid::AcidEngine lfoReloaded;
+    REQUIRE(lfoReloaded.loadState(acid::AcidEngine::stateVersion, lfoBlob),
+            "LFO1 v4 Acid preset restored");
+    for (auto parameter : { "lfo1_rate", "lfo1_depth",
+                            "lfo1_wave", "lfo1_target" })
+        REQUIRE(std::abs(lfoReloaded.parameter(parameter)
+                         - lfoSaved.parameter(parameter)) < 0.00001f,
+                "all four LFO1 controls survive module state round-trip");
+
     // Production DSP gate: user-visible Acid knob changes must alter audio,
     // not just move a normalized property. Render both variants from fresh,
     // identically prepared voices so no envelope/RNG history can mask a bug.
