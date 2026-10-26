@@ -1,6 +1,10 @@
 # AGY packet — Bass/generation diagnosis and reproducible audio renders
 
-Priority: P0. Scope: existing Bass path only.
+Historical packet: the integrated diagnostics/fixes are in PR #51. Remaining
+Bass acceptance (#45) is deferred until Rack completion. The active lead task is
+[RACK_PRODUCTION](RACK_PRODUCTION.md). Do not treat this packet as a new Bass assignment.
+
+Original priority: P0. Scope: existing Bass path only.
 Result: reproducible evidence, meaningful regression coverage and minimal fixes for confirmed defects.
 This is a development assignment, not a request to redesign the product.
 

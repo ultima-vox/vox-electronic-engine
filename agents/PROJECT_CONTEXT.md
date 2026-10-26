@@ -10,7 +10,7 @@ See [product](../docs/product/PRODUCT_SPEC.md), [status](../docs/STATUS.md),
 
 Full-on Bass/Drums/Lead/Keys/FX are independent style-specific rack instruments.
 They reuse common DSP families; they are not separate VST3 hosts.
-The first instrument to finish is Full-on Bass.
+Current priority: finish the generic Rack first; Bass afterwards. Another agent owns Acid DSP and its dedicated UI. Read [Rack task](../docs/tasks/RACK_PRODUCTION.md).
 Current shipping/build name remains Vox Electronic Engine until a scoped migration.
 
 ## Product boundaries
@@ -44,4 +44,4 @@ No drawing until requested.
 All required Windows checks must pass before merge.
 Real DAW acceptance and listening must be reported separately from CTest.
 CPU/RAM promises await agreed hardware; current test ceilings are regression limits.
-Current AGY scope: [Bass diagnostics](../docs/tasks/AGY_BASS_DIAGNOSTICS.md).
+Historical AGY scope (remaining Bass work is deferred until Rack): [Bass diagnostics](../docs/tasks/AGY_BASS_DIAGNOSTICS.md).

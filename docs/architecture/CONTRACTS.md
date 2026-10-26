@@ -1,7 +1,21 @@
 # Protected contracts and intentional evolution
 
 Product authority: [PRODUCT_SPEC](../product/PRODUCT_SPEC.md).
-These existing safety/compatibility protections remain in force.
+These safety/compatibility protections remain in force with the owner-authorized
+POC replacement policy below.
+
+## Current scope and deliberate POC replacement
+
+Rack completion is the current priority; Bass follows. Acid DSP and dedicated UI
+are separately owned. One lead coordinates shared Rack/host/state interfaces;
+unmerged experiments are not a frozen contract. See [current task](../tasks/RACK_PRODUCTION.md).
+
+The owner confirms no old POC projects need migration. Explicit versioned
+replacement/rejection of obsolete POC parameter/state meanings is authorized;
+do not add parallel legacy Bass modes or silently reinterpret payloads. This does
+not authorize plugin identity changes, hidden parameter coupling, unsafe realtime
+work or loss of MIDI ownership. One ordinary control changes one base parameter;
+explicit modulation must not rewrite other host base values.
 
 ## Preserve now
 
@@ -30,6 +44,9 @@ The new product name alone does not authorise an identity or install-path change
 | Keys and long polyphonic phrases | Pattern v2 contract, adapter/migration, scheduling and export tests |
 | Additional slot audio outputs | Stable bus topology, project migration and actual host testing |
 | Per-slot effects | Explicit routing/state/resource design; current global chain is not silently reinterpreted |
+| Send FX / return graph | Stable audio bus identities, tap points, mute/solo/tail/latency policy, state/automation, feedback rejection and bounded buffers; currently absent |
+| Internal kick ducking | Explicit source/recipient contract and event-vs-audio-detector semantics, envelope policy and effective-gain routing; currently absent |
+| Complete direct parameter binding | Named host identities, source-of-truth/rollback, full bank/resource bounds and consolidated reviewed state changes |
 | Modular paid distribution | Offline content/entitlement policy; no hidden network dependency |
 
 No implementation in this cleanup changes those runtime contracts.
