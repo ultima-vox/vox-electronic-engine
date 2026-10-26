@@ -1125,6 +1125,31 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
             if (auto* parameter = apvts.getParameter(
                     vstengine::instrument::hostparams::macroId(index, macro).c_str()))
                 parameter->setValueNotifyingHost(values[macro]);
+        if (rack.state()[index].instrumentId == vstengine::acid::instrumentId) {
+            // Factory Acid presets are v3 state snapshots with the original
+            // nine sound controls. Reset host-side extended defaults as well:
+            // otherwise the next process block would replay stale automation
+            // values over the just-applied preset sound.
+            const vstengine::acid::AcidEngine defaults;
+            for (std::size_t p = vstengine::instrument::macrosPerSlot;
+                 p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+                const auto id = vstengine::acid::hostParameterId(
+                    index, vstengine::acid::AcidEngine::parameterIds[p]);
+                if (auto* param = apvts.getParameter(id.c_str()))
+                    param->setValueNotifyingHost(
+                        param->convertTo0to1(defaults.parameter(
+                            vstengine::acid::AcidEngine::parameterIds[p])));
+            }
+            constexpr std::array<std::pair<std::string_view, float>, 4> flags {{
+                { "legato", 1.0f }, { "retrigger", 0.0f },
+                { "vel_to_accent", 1.0f }, { "slide_on_overlap", 1.0f }
+            }};
+            for (const auto& [name, value] : flags) {
+                const auto id = vstengine::acid::hostParameterId(index, name);
+                if (auto* param = apvts.getParameter(id.c_str()))
+                    param->setValueNotifyingHost(value);
+            }
+        }
     }
     suspendProcessing(false);
     diagnostic = detail;
