@@ -166,12 +166,11 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
         changeChoice("dist_mode", distortionChoice_.getSelectedItemIndex(), 4);
     };
     modulationChoice_.onChange = [this] {
-        changeChoice(lfo1Selected_ ? "lfo1_target"
-                     : (env2Selected_ ? "env2_target" : "mod_target"),
+        changeChoice(std::string(selectedModTarget()),
                      modulationChoice_.getSelectedItemIndex(), 6);
     };
     for (auto* button : { &ampButton_, &filterButton_, &env1Button_, &env2Button_, &lfo1Button_,
-                          &generate_, &mutate_, &clear_ }) {
+                          &lfo2Button_, &lfo3Button_, &generate_, &mutate_, &clear_ }) {
         vstengine::ui::styleButton(*button);
         addAndMakeVisible(*button);
     }
@@ -179,7 +178,9 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
     filterButton_.onClick = [this] { filterEnvelope_ = true; updateEnvelopeAttachments(); };
     env1Button_.onClick = [this] { switchModulationForTesting(false); };
     env2Button_.onClick = [this] { switchEnv2ForTesting(); };
-    lfo1Button_.onClick = [this] { switchModulationForTesting(true); };
+    lfo1Button_.onClick = [this] { switchLfoForTesting(1); };
+    lfo2Button_.onClick = [this] { switchLfoForTesting(2); };
+    lfo3Button_.onClick = [this] { switchLfoForTesting(3); };
     for (int i = 0; i < 4; ++i) addAndMakeVisible(flags_[static_cast<std::size_t>(i)]);
     for (const auto& t : { "Classic 303", "Psy Acid", "Dark Acid",
                             "Forest Acid", "Hi-Tech Acid", "Hypnotic Acid" })
@@ -268,16 +269,31 @@ void AcidPanel::switchEnvelopeForTesting(bool filter) {
     updateEnvelopeAttachments();
 }
 void AcidPanel::switchModulationForTesting(bool lfo1) {
-    lfo1Selected_ = lfo1;
-    env2Selected_ = false;
+    modSource_ = lfo1 ? ModSource::lfo1 : ModSource::env1;
     updateModulationAttachments();
     refreshChoices();
 }
 void AcidPanel::switchEnv2ForTesting() {
-    lfo1Selected_ = false;
-    env2Selected_ = true;
+    modSource_ = ModSource::env2;
     updateModulationAttachments();
     refreshChoices();
+}
+void AcidPanel::switchLfoForTesting(int number) {
+    if (number < 1 || number > 3) return;
+    modSource_ = number == 1 ? ModSource::lfo1
+               : number == 2 ? ModSource::lfo2 : ModSource::lfo3;
+    updateModulationAttachments();
+    refreshChoices();
+}
+std::string_view AcidPanel::selectedModTarget() const noexcept {
+    switch (modSource_) {
+        case ModSource::env1: return "mod_target";
+        case ModSource::env2: return "env2_target";
+        case ModSource::lfo1: return "lfo1_target";
+        case ModSource::lfo2: return "lfo2_target";
+        case ModSource::lfo3: return "lfo3_target";
+    }
+    return "mod_target";
 }
 void AcidPanel::addKnob(Group group, std::string_view semantic, const char* name, bool stage) {
     Knob k;
@@ -364,41 +380,47 @@ void AcidPanel::attachKnobs() {
     updateModulationAttachments();
 }
 void AcidPanel::updateModulationAttachments() {
-    constexpr std::array<const char*, 5> envIds {
+    constexpr std::array<const char*, 5> env1Ids {
         "mod_amount", "mod_attack", "mod_decay", "mod_sustain", "mod_release"
     };
-    constexpr std::array<const char*, 3> lfoIds {
-        "lfo1_rate", "lfo1_depth", "lfo1_wave"
-    };
     constexpr std::array<const char*, 5> env2Ids {
-        "env2_amount", "env2_attack", "env2_decay",
-        "env2_sustain", "env2_release"
+        "env2_amount", "env2_attack", "env2_decay", "env2_sustain", "env2_release"
     };
-    constexpr std::array<const char*, 5> envNames {
+    constexpr std::array<const char*, 5> envLabels {
         "Amount", "Attack", "Decay", "Sustain", "Release"
     };
-    constexpr std::array<const char*, 3> lfoNames {
-        "Rate", "Depth", "Wave"
-    };
+    constexpr std::array<const char*, 3> lfoLabels { "Rate", "Depth", "Wave" };
+    constexpr std::array<std::array<const char*, 3>, 3> lfoIds {{
+        {{ "lfo1_rate", "lfo1_depth", "lfo1_wave" }},
+        {{ "lfo2_rate", "lfo2_depth", "lfo2_wave" }},
+        {{ "lfo3_rate", "lfo3_depth", "lfo3_wave" }}
+    }};
+    const bool isLfo = modSource_ == ModSource::lfo1
+                    || modSource_ == ModSource::lfo2
+                    || modSource_ == ModSource::lfo3;
+    const auto lfoIndex = modSource_ == ModSource::lfo2 ? 1u
+                        : modSource_ == ModSource::lfo3 ? 2u : 0u;
     std::size_t index = 0;
     for (auto& k : knobs_) {
         if (k.group != modulation) continue;
-        // An inactive tab must have no hidden parameter attachment.
+        // Source tabs do not share APVTS attachments, and hidden controls
+        // must never retain an automation gesture for an unrelated source.
         k.attach.reset();
-        const bool active = !lfo1Selected_ || index < lfoIds.size();
+        const bool active = !isLfo || index < lfoLabels.size();
         k.widget->setVisible(active);
         if (active) {
-            k.semantic = lfo1Selected_ ? lfoIds[index]
-                       : (env2Selected_ ? env2Ids[index] : envIds[index]);
-            k.widget->setLabel(lfo1Selected_ ? lfoNames[index] : envNames[index]);
-            if (lfo1Selected_) {
+            k.semantic = isLfo ? lfoIds[lfoIndex][index]
+                        : modSource_ == ModSource::env2
+                            ? env2Ids[index] : env1Ids[index];
+            k.widget->setLabel(isLfo ? lfoLabels[index] : envLabels[index]);
+            if (isLfo) {
                 const auto semantic = k.semantic;
                 k.widget->getSlider().textFromValueFunction =
                     [semantic](double norm) {
                         const float v = static_cast<float>(juce::jlimit(0.0, 1.0, norm));
-                        if (semantic == "lfo1_rate")
+                        if (semantic.ends_with("_rate"))
                             return juce::String(0.05f * std::pow(400.0f, v), 2) + " Hz";
-                        if (semantic == "lfo1_wave") {
+                        if (semantic.ends_with("_wave")) {
                             constexpr std::array<const char*, 4> waves {
                                 "Sine", "Triangle", "Square", "Saw"
                             };
@@ -408,10 +430,10 @@ void AcidPanel::updateModulationAttachments() {
                         return juce::String(v * 100.0f, 0) + "%";
                     };
             } else {
-                k.widget->getSlider().textFromValueFunction =
-                    [](double norm) {
-                        return juce::String(juce::jlimit(0.0, 100.0, norm * 100.0), 0) + "%";
-                    };
+                k.widget->getSlider().textFromValueFunction = [](double normalized) {
+                    return juce::String(
+                        juce::jlimit(0.0, 100.0, normalized * 100.0), 0) + "%";
+                };
             }
             const auto id = hostId(k.semantic);
             k.attach = std::make_unique<
@@ -422,10 +444,16 @@ void AcidPanel::updateModulationAttachments() {
         }
         ++index;
     }
-    env1Button_.setToggleState(!lfo1Selected_ && !env2Selected_,
+    env1Button_.setToggleState(modSource_ == ModSource::env1,
                                 juce::dontSendNotification);
-    env2Button_.setToggleState(env2Selected_, juce::dontSendNotification);
-    lfo1Button_.setToggleState(lfo1Selected_, juce::dontSendNotification);
+    env2Button_.setToggleState(modSource_ == ModSource::env2,
+                                juce::dontSendNotification);
+    lfo1Button_.setToggleState(modSource_ == ModSource::lfo1,
+                                juce::dontSendNotification);
+    lfo2Button_.setToggleState(modSource_ == ModSource::lfo2,
+                                juce::dontSendNotification);
+    lfo3Button_.setToggleState(modSource_ == ModSource::lfo3,
+                                juce::dontSendNotification);
     if (!sections_[modulation].isEmpty()) {
         layoutKnobs(modulation, section(modulation).reduced(3).withTrimmedTop(22));
         repaint(sections_[modulation]);
@@ -489,8 +517,7 @@ void AcidPanel::refreshChoices() {
     };
     refresh(filterChoice_, "filter_mode", 4);
     refresh(distortionChoice_, "dist_mode", 4);
-    refresh(modulationChoice_, lfo1Selected_ ? "lfo1_target"
-        : (env2Selected_ ? "env2_target" : "mod_target"), 6);
+    refresh(modulationChoice_, selectedModTarget(), 6);
 }
 void AcidPanel::timerCallback() {
     if (!isVisible()) return;
@@ -553,14 +580,18 @@ void AcidPanel::resized() {
     distortionChoice_.setBounds(section(drive).reduced(6).removeFromTop(23)
                                .translated(0, 23));
     const auto modBounds = section(modulation);
-    env1Button_.setBounds(modBounds.getX() + 81, modBounds.getY() + 2, 46, 18);
-    env2Button_.setBounds(modBounds.getX() + 129, modBounds.getY() + 2, 46, 18);
-    lfo1Button_.setBounds(modBounds.getX() + 177, modBounds.getY() + 2, 46, 18);
-    // Place the modulation destination in the existing tab/title strip.
-    // Previously it consumed another 25 px row and left only a 5–12 px
-    // diameter for VoxKnob in the 1024x768 screenshot — effectively no knobs.
-    modulationChoice_.setBounds(modBounds.getRight() - 163,
-                                modBounds.getY() + 2, 157, 18);
+    // Keep five actual source tabs and a real target selector in one row.
+    // No new vertical strip: 1024x768 must preserve rotary knob hit areas.
+    const int tabWidth = 39;
+    const int x0 = modBounds.getX() + 78;
+    env1Button_.setBounds(x0, modBounds.getY() + 2, tabWidth - 1, 18);
+    env2Button_.setBounds(x0 + tabWidth, modBounds.getY() + 2, tabWidth - 1, 18);
+    lfo1Button_.setBounds(x0 + tabWidth * 2, modBounds.getY() + 2, tabWidth - 1, 18);
+    lfo2Button_.setBounds(x0 + tabWidth * 3, modBounds.getY() + 2, tabWidth - 1, 18);
+    lfo3Button_.setBounds(x0 + tabWidth * 4, modBounds.getY() + 2, tabWidth - 1, 18);
+    modulationChoice_.setBounds(x0 + tabWidth * 5 + 2, modBounds.getY() + 2,
+                                std::max(40, modBounds.getRight() -
+                                    (x0 + tabWidth * 5 + 7)), 18);
     ampButton_.setBounds(section(envelope).getX() + 41,
                           section(envelope).getY() + 2, 38, 19);
     filterButton_.setBounds(section(envelope).getX() + 82,

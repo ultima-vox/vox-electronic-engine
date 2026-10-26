@@ -26,6 +26,7 @@ public:
     void switchEnvelopeForTesting(bool filter);
     void switchModulationForTesting(bool lfo1);
     void switchEnv2ForTesting();
+    void switchLfoForTesting(int number);
 private:
     enum Group : int { osc, filter, envelope, drive, accent, slide,
                        output, modulation, performance, playMode, grid, groupCount };
@@ -51,6 +52,7 @@ private:
     void attachKnobs();
     void updateEnvelopeAttachments();
     void updateModulationAttachments();
+    [[nodiscard]] std::string_view selectedModTarget() const noexcept;
     void changeChoice(const std::string&, int choiceIndex, int choices);
     void refreshChoices();
     [[nodiscard]] std::string hostId(std::string_view) const;
@@ -59,14 +61,15 @@ private:
     VstEngineAudioProcessor& processor_;
     std::size_t slot_ {};
     bool filterEnvelope_ {};
-    bool lfo1Selected_ {};
-    bool env2Selected_ {};
+    enum class ModSource { env1, env2, lfo1, lfo2, lfo3 };
+    ModSource modSource_ { ModSource::env1 };
     std::vector<Knob> knobs_;
     std::array<juce::Rectangle<int>, groupCount> sections_ {};
     juce::ComboBox filterChoice_, distortionChoice_, modulationChoice_;
     juce::TextButton ampButton_ { "AMP" }, filterButton_ { "FILTER" };
-    juce::TextButton env1Button_ { "ENV 1" }, env2Button_ { "ENV 2" },
-                     lfo1Button_ { "LFO 1" };
+    juce::TextButton env1Button_ { "ENV1" }, env2Button_ { "ENV2" },
+                     lfo1Button_ { "LFO1" }, lfo2Button_ { "LFO2" },
+                     lfo3Button_ { "LFO3" };
     juce::ComboBox profileChoice_, lengthChoice_, timingChoice_;
     juce::TextButton generate_ { "Generate" }, mutate_ { "Mutate" },
                      clear_ { "Clear" };
