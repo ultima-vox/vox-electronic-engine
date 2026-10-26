@@ -346,6 +346,23 @@ void AcidPanel::updateEnvelopeAttachments() {
         if (!k.envelopeStage) continue;
         k.attach.reset();
         k.semantic = filterEnvelope_ ? filterIds[stage] : ampIds[stage];
+        const auto stageIndex = stage;
+        const bool isFilter = filterEnvelope_;
+        k.widget->getSlider().textFromValueFunction =
+            [stageIndex, isFilter](double normalized) {
+                const auto v = static_cast<float>(juce::jlimit(0.0, 1.0, normalized));
+                if (stageIndex == 0)
+                    return juce::String((0.0005f + v * v * 0.8f) * 1000.0f, 0) + "ms";
+                if (stageIndex == 1) {
+                    const float seconds = isFilter ? 0.03f + v * v * 2.2f
+                                                   : 0.015f + v * v * 2.2f;
+                    return juce::String(seconds, 2) + "s";
+                }
+                if (stageIndex == 2) return juce::String(v * 100.0f, 0) + "%";
+                const float seconds = isFilter ? 0.010f + v * v * 1.5f
+                                               : 0.004f + v * v * 1.8f;
+                return juce::String(seconds, 2) + "s";
+            };
         const auto id = hostId(k.semantic);
         k.attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor_.parameters(), id, k.widget->getSlider());
@@ -387,6 +404,7 @@ void AcidPanel::timerCallback() {
     lengthChoice_.setText(juce::String(seq.size()), juce::dontSendNotification);
     timingChoice_.setSelectedId(static_cast<int>(seq.getTimingMode()) + 1,
                                 juce::dontSendNotification);
+    repaint(sections_[envelope]);
 }
 juce::Rectangle<int> AcidPanel::section(Group group) const noexcept {
     return sections_[static_cast<std::size_t>(group)];
@@ -443,7 +461,10 @@ void AcidPanel::resized() {
                             section(envelope).getY() + 2, 48, 19);
     for (int i = 0; i < 7; ++i) {
         auto group = static_cast<Group>(i);
-        layoutKnobs(group, controlArea(group, group == filter || group == drive ? 25 : 0));
+        auto inner = controlArea(group, group == filter || group == drive ? 25 : 0);
+        if (group == envelope)
+            inner.removeFromTop(compact ? 24 : 36);
+        layoutKnobs(group, inner);
     }
     layoutKnobs(modulation, controlArea(modulation, 25));
     layoutKnobs(performance, controlArea(performance, 0));
@@ -486,4 +507,53 @@ void AcidPanel::paint(juce::Graphics& g) {
     };
     for (int i = 0; i < groupCount; ++i)
         drawCard(g, sections_[static_cast<std::size_t>(i)], titles[static_cast<std::size_t>(i)]);
+
+    // Display actual, host-automated Amp or Filter ADSR values. The plotted
+    // time axes are normalized to the active envelope's duration, never
+    // a hard-coded decorative curve that disagrees with the sound controls.
+    auto plot = section(envelope).reduced(6);
+    plot.removeFromTop(25);
+    plot.setHeight(getHeight() < 475 ? 23 : 33);
+    if (plot.getWidth() > 20 && plot.getHeight() > 10) {
+        auto read = [this](const char* semantic, float fallback) {
+            const auto id = hostId(semantic);
+            if (const auto* raw = processor_.parameters().getRawParameterValue(id.c_str()))
+                return juce::jlimit(0.0f, 1.0f, raw->load());
+            return fallback;
+        };
+        const float a = read(filterEnvelope_ ? "flt_attack" : "amp_attack", 0.0f);
+        const float d = read(filterEnvelope_ ? "decay" : "amp_decay", 0.2f);
+        const float sustain = read(filterEnvelope_ ? "flt_sustain" : "amp_sustain", 0.8f);
+        const float r = read(filterEnvelope_ ? "flt_release" : "amp_release", 0.2f);
+        const float attackSeconds = 0.0005f + a * a * 0.8f;
+        const float decaySeconds = (filterEnvelope_ ? 0.030f : 0.015f) + d * d * 2.2f;
+        const float releaseSeconds = (filterEnvelope_ ? 0.010f : 0.004f)
+                                   + r * r * (filterEnvelope_ ? 1.5f : 1.8f);
+        const float holdSeconds = 0.22f; // graph convention: illustrative sustain hold
+        const float total = attackSeconds + decaySeconds + holdSeconds + releaseSeconds;
+        const auto left = static_cast<float>(plot.getX());
+        const auto right = static_cast<float>(plot.getRight());
+        const auto top = static_cast<float>(plot.getY());
+        const auto bottom = static_cast<float>(plot.getBottom());
+        const auto width = right - left;
+        auto pointX = [left, width, total](float seconds) {
+            return left + width * (seconds / total);
+        };
+        const auto attackX = pointX(attackSeconds);
+        const auto decayX = pointX(attackSeconds + decaySeconds);
+        const auto releaseX = pointX(attackSeconds + decaySeconds + holdSeconds);
+        const auto sustainY = bottom - sustain * (bottom - top);
+        juce::Path curve;
+        curve.startNewSubPath(left, bottom);
+        curve.lineTo(attackX, top);
+        curve.lineTo(decayX, sustainY);
+        curve.lineTo(releaseX, sustainY);
+        curve.lineTo(right, bottom);
+        g.setColour(acidAccentColour.withAlpha(0.65f));
+        g.strokePath(curve, juce::PathStrokeType(1.6f));
+        for (const auto point : { juce::Point<float>(attackX, top),
+                                  juce::Point<float>(decayX, sustainY),
+                                  juce::Point<float>(releaseX, sustainY) })
+            g.fillEllipse(point.x - 2.0f, point.y - 2.0f, 4.0f, 4.0f);
+    }
 }
