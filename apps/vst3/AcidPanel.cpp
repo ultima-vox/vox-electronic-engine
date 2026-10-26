@@ -323,16 +323,16 @@ void AcidPanel::bind(std::size_t slot) {
     for (auto& knob : knobs_) knob.attach.reset();
     flagAttachments_.clear();
     attachKnobs();
-    constexpr std::array<const char*, 4> flags { "legato", "retrigger",
-                                                   "vel_to_accent", "slide_on_overlap" };
+    constexpr std::array<const char*, 4> flagNames { "legato", "retrigger",
+                                                       "vel_to_accent", "slide_on_overlap" };
     constexpr std::array<const char*, 4> captions { "Legato", "Retrigger",
                                                      "Vel -> Accent", "Slide overlap" };
-    for (std::size_t i = 0; i < flags.size(); ++i) {
+    for (std::size_t i = 0; i < flagNames.size(); ++i) {
         flags_[i].setButtonText(captions[i]);
         flagAttachments_.push_back(std::make_unique<
             juce::AudioProcessorValueTreeState::ButtonAttachment>(
                 processor_.parameters(),
-                vstengine::acid::hostParameterId(slot_, flags[i]), flags_[i]));
+                vstengine::acid::hostParameterId(slot_, flagNames[i]), flags_[i]));
     }
     const auto& seq = processor_.sequence();
     lengthChoice_.setText(juce::String(seq.size()), juce::dontSendNotification);
@@ -417,7 +417,7 @@ void AcidPanel::updateModulationAttachments() {
     env2Button_.setToggleState(env2Selected_, juce::dontSendNotification);
     lfo1Button_.setToggleState(lfo1Selected_, juce::dontSendNotification);
     if (!sections_[modulation].isEmpty()) {
-        layoutKnobs(modulation, section(modulation).reduced(3).withTrimmedTop(48));
+        layoutKnobs(modulation, section(modulation).reduced(3).withTrimmedTop(22));
         repaint(sections_[modulation]);
     }
 }
@@ -546,8 +546,11 @@ void AcidPanel::resized() {
     env1Button_.setBounds(modBounds.getX() + 81, modBounds.getY() + 2, 46, 18);
     env2Button_.setBounds(modBounds.getX() + 129, modBounds.getY() + 2, 46, 18);
     lfo1Button_.setBounds(modBounds.getX() + 177, modBounds.getY() + 2, 46, 18);
-    modulationChoice_.setBounds(modBounds.reduced(6).removeFromTop(22)
-                               .translated(0, 23));
+    // Place the modulation destination in the existing tab/title strip.
+    // Previously it consumed another 25 px row and left only a 5–12 px
+    // diameter for VoxKnob in the 1024x768 screenshot — effectively no knobs.
+    modulationChoice_.setBounds(modBounds.getRight() - 163,
+                                modBounds.getY() + 2, 157, 18);
     ampButton_.setBounds(section(envelope).getX() + 41,
                           section(envelope).getY() + 2, 38, 19);
     filterButton_.setBounds(section(envelope).getX() + 82,
@@ -559,7 +562,7 @@ void AcidPanel::resized() {
             inner.removeFromTop(compact ? 24 : 36);
         layoutKnobs(group, inner);
     }
-    layoutKnobs(modulation, controlArea(modulation, 25));
+    layoutKnobs(modulation, controlArea(modulation, 0));
     layoutKnobs(performance, controlArea(performance, 0));
     auto modeArea = section(playMode).reduced(4);
     modeArea.removeFromTop(23);
