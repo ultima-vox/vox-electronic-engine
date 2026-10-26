@@ -40,7 +40,11 @@ Visual Gate A: actual editor screenshots/comparison, scaling checks and explicit
 Functional Gate B: real DSP/state bindings, gestures/automation, presets, routing and regression checks.
 Do not introduce visual-only controls into production.
 Sound quality, DAW routing/automation, drag-and-drop, project reopen and offline render require actual host evidence.
-Mark unperformed manual checks REQUIRED; never infer them from CTest.
+Owner policy (26.10.2026): manual DAW checks occur at integrated milestones
+(Rack, complete Full-on Bass, release candidate), not after every PR.
+Mark unperformed manual checks REQUIRED AT MILESTONE; never infer them from CTest.
+A technical PR may merge after required automated checks and independent review
+without waiting for that milestone. VST3 is the product; standalone is not required.
 New drawing/artwork/mockups require an explicit owner request.
 
 ## 6. Verify and release

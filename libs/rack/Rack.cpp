@@ -134,7 +134,7 @@ void Rack::reset() noexcept
             slot.modulation->sampleHoldStep = -1;
         }
     }
-    for (auto& state : runtimeState_) state.ownedNotes = 0;
+    // ownedNotes is reserved (always zero); reset must not mutate UI metadata.
 }
 
 bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
@@ -530,12 +530,11 @@ void Rack::setMacro(std::size_t slot, std::size_t macro, float value) noexcept
     if (slot >= state_.size() || macro >= instrument::macrosPerSlot
         || !std::isfinite(value)) return;
     value = std::clamp(value, 0.0f, 1.0f);
+    beginExclusive();
     state_[slot].macros[macro] = value;
-    auto& target = runtime_[slot];
-    if (target.instance && target.descriptor) {
-        const auto& mapped = state_[slot].macroAssignments[macro];
-        if (!mapped.empty()) target.instance->setParameter(mapped, value);
-    }
+    endExclusive();
+    // DSP consumes normalized defaults on the next block via macroToPlain.
+    // An explicit host block snapshot takes precedence over these defaults.
 }
 
 void Rack::updateControls(std::size_t slot, Routing routing, bool enabled,
@@ -545,6 +544,7 @@ void Rack::updateControls(std::size_t slot, Routing routing, bool enabled,
     const std::scoped_lock persistentLock(persistentStateMutex_);
     if (slot >= state_.size() || !valid(routing) || !std::isfinite(level)
         || !std::isfinite(pan)) return;
+    beginExclusive();
     state_[slot].routing = routing;
     state_[slot].enabled = enabled;
     state_[slot].mute = mute;
@@ -552,6 +552,7 @@ void Rack::updateControls(std::size_t slot, Routing routing, bool enabled,
     state_[slot].locked = locked;
     state_[slot].level = std::clamp(level, 0.0f, 2.0f);
     state_[slot].pan = std::clamp(pan, -1.0f, 1.0f);
+    endExclusive();
 }
 
 void Rack::process(std::span<float*> outputs, std::uint32_t sampleCount,
@@ -645,6 +646,7 @@ std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(
 
 std::array<RuntimeSlotState, instrument::maxSlots> Rack::runtimeState() const noexcept
 {
+    const std::scoped_lock persistentLock(persistentStateMutex_);
     auto snapshot = runtimeState_;
     for (std::size_t index = 0; index < snapshot.size(); ++index)
         snapshot[index].droppedMidiEvents =
