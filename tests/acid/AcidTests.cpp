@@ -156,6 +156,14 @@ int main()
 
     // Acid-only legacy migration and malformed-state transaction checks.
     acid::AcidEngine soundState;
+    // Contract regression: a fresh Rack slot has no serialized module bytes.
+    // This is not an error and must not leave Acid unresolved/silent.
+    REQUIRE(soundState.loadState(acid::AcidEngine::legacyStateVersion, {}),
+            "new Acid slot accepts empty legacy module state");
+    REQUIRE(soundState.loadState(acid::AcidEngine::stateVersion, {}),
+            "new Acid slot accepts empty current module state");
+    REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion + 1u, {}),
+            "unknown future Acid schema rejected even with empty bytes");
     constexpr std::uint32_t magic = 0x44494341u;
     constexpr std::uint32_t legacyVersion = 1u;
     const std::array<float, acid::AcidEngine::legacyParameterCount> legacyValues {
