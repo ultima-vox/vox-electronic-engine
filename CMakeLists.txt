@@ -383,6 +383,19 @@ target_include_directories(reliability_stress_tests PRIVATE
 target_link_libraries(reliability_stress_tests PRIVATE VstEngine)
 add_test(NAME reliability_stress_tests COMMAND reliability_stress_tests)
 
+add_executable(bass_render_diagnostics
+  tests/diagnostics/BassRenderDiagnostics.cpp)
+target_include_directories(bass_render_diagnostics PRIVATE
+  apps/vst3
+  ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode
+  ${juce_SOURCE_DIR}/modules)
+target_link_libraries(bass_render_diagnostics PRIVATE VstEngine)
+if(MSVC)
+  set_target_properties(bass_render_diagnostics PROPERTIES LINK_FLAGS "/STACK:8388608")
+endif()
+add_test(NAME bass_render_diagnostics COMMAND bass_render_diagnostics)
+
 # 7C installable product. Keep VST3 bundle name stable for upgrades; CPack
 # provides NSIS install/uninstall and ZIP artifact for CI/review environments.
 install(DIRECTORY

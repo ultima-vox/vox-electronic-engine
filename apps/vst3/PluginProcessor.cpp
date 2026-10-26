@@ -1351,17 +1351,19 @@ juce::File VstEngineAudioProcessor::createPartMidiFile(const int partIndex)
     vstengine::midiexport::Options options;
     if (partIndex != 0)
         return {};
-    syncPartControlsFromParameters(parts);
     constexpr std::size_t index = 0;
-    options.channel = parts[index].midiChannel;
-    options.rootNote = juce::jlimit(
-        0, 127,
-        static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
-    options.seed = static_cast<std::uint32_t>(
-        apvts.getRawParameterValue("rngSeed")->load())
-        ^ 0xB455A11u;
+    const auto& slot = rack.state()[index];
+    const int inputChannel = static_cast<int>(std::lround(
+        rackParameterRefs[index].midiIn->load()));
+    options.channel = juce::jlimit(1, 16, inputChannel);
+    options.rootNote = juce::jlimit(0, 127, static_cast<int>(
+        apvts.getRawParameterValue("rootNote")->load()));
+    options.seed = vstengine::instrument::generationSubSeed(
+        static_cast<std::uint32_t>(apvts.getRawParameterValue("rngSeed")->load()),
+        slot.slotId, slot.instrumentId);
 
-    auto exportSequence = parts[index].sequence;
+    const auto exportSequence =
+        patternRuntime->slotSequences[index];
     const auto track =
         vstengine::midiexport::buildSequenceTrack(exportSequence, options);
 
