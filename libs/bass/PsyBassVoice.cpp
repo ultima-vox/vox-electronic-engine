@@ -14,6 +14,7 @@ void PsyBassVoice::updateFilterCoefficients(const double sampleRate,
     lastCoefficientCutoff = filterCutoffSmooth;
     lastCoefficientResonance = filterResonance;
     lastCoefficientNote = midiNoteNumber;
+    lastCoefficientTracking = keyTracking;
 
     // Map normalized cutoff [0,1] to Hz. The 2-pole low-pass (12 dB/oct)
     // keeps the bass body while the resonance adds the characteristic "acid"
@@ -78,8 +79,10 @@ void PsyBassVoice::startNote(const int midiNoteNumber, const float velocity,
     level = velocity;
 
     // Reset smoothed controls to avoid clicks at note start.
-    filterCutoffSmooth = juce::jlimit(0.01f, 1.0f, filterCutoffTarget);
+    filterCutoffSmooth = juce::jlimit(0.0f, 1.0f, filterCutoffTarget);
     smoothedDrive = drive;
+    outputGain.reset(getSampleRate(), .005);
+    outputGain.setCurrentAndTargetValue(juce::jmax(0.0f, outputLevel));
 
     updateFilterCoefficients(getSampleRate(), midiNoteNumber);
     resetFilterState();
@@ -95,6 +98,9 @@ void PsyBassVoice::startNote(const int midiNoteNumber, const float velocity,
     p.decay = juce::jmax(0.001f, ampDecay);
     p.sustain = juce::jlimit(0.0f, 1.0f, ampSustain);
     p.release = juce::jmax(0.001f, ampRelease);
+    // JUCE ADSR parameters are latched on NoteOn. Do not change parameters
+    // during playback; reset before retrigger as required by its contract.
+    ampEnvelope.reset();
     ampEnvelope.setSampleRate(getSampleRate());
     ampEnvelope.setParameters(p);
     ampEnvelope.noteOn();
@@ -121,6 +127,7 @@ void PsyBassVoice::renderNextBlock(juce::AudioBuffer<float>& output,
     const float driveGainComp = 1.0f / (0.5f + drive * 0.18f);
     // Pre-filter drive (boosts the signal into the resonant filter).
     const float fd = juce::jlimit(0.0f, 5.0f, filterDrive);
+    outputGain.setTargetValue(juce::jmax(0.0f, outputLevel));
 
     // One-pole smoothing constants (per sample). These prevent zipper noise
     // when the host automates drive / cutoff.
@@ -137,7 +144,8 @@ void PsyBassVoice::renderNextBlock(juce::AudioBuffer<float>& output,
         // while keeping updates cheap. Pure math, no allocation.
         if (std::abs(filterCutoffSmooth - lastCoefficientCutoff) > 0.01f
             || std::abs(filterResonance - lastCoefficientResonance) > 0.01f
-            || currentMidiNote != lastCoefficientNote) {
+            || currentMidiNote != lastCoefficientNote
+            || keyTracking != lastCoefficientTracking) {
             updateFilterCoefficients(getSampleRate(), currentMidiNote);
         }
 
@@ -170,7 +178,7 @@ void PsyBassVoice::renderNextBlock(juce::AudioBuffer<float>& output,
             / juce::MathConstants<double>::twoPi);
         const auto saw = 2.0f * cycle - 1.0f;
         const auto pulse = cycle < 0.42f ? 1.0f : -1.0f;
-        const auto raw = (0.72f * saw + 0.28f * pulse) * level;
+        const auto raw = 0.72f * saw + 0.28f * pulse;
 
         // --- Amp envelope ---
         const auto envLevel = ampEnvelope.getNextSample();
@@ -196,7 +204,7 @@ void PsyBassVoice::renderNextBlock(juce::AudioBuffer<float>& output,
         const auto filtered = y;
 
         // --- Output level ---
-        const auto out = filtered * outputLevel;
+        const auto out = static_cast<float>(filtered * outputGain.getNextValue() * level);
 
         for (int channel = 0; channel < output.getNumChannels(); ++channel)
             output.addSample(channel, startSample + sample, out);

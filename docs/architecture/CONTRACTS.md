@@ -1,7 +1,17 @@
 # Protected contracts and intentional evolution
 
 Product authority: [PRODUCT_SPEC](../product/PRODUCT_SPEC.md).
-These existing safety/compatibility protections remain in force.
+These existing safety/compatibility protections remain in force except for the
+owner-authorized POC Bass replacement below.
+
+## Owner-authorized POC reset, 26 October 2026
+
+The owner confirms there are no old projects and rejects keeping legacy tails.
+Replace coupled POC Bass sound/automation/state with independent Full-on Bass,
+without a parallel compatibility mode. This overrides preservation of that POC
+mapping, not realtime safety, routing ownership, plugin identity or validation.
+Version deliberate state/automation breaks and reject unsupported old data
+explicitly. See [independent parameters](independent-sound-parameters.md).
 
 ## Preserve now
 

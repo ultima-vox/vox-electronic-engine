@@ -4,6 +4,16 @@ Updated: 26.10.2026.
 Source baseline: `b076a53d8900b53433e8aa4fdb1027c8f2bed135`.
 Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
 
+## Independent Bass parameters: implementation in progress
+
+The owner confirms no old projects need preservation: replace POC Bass without
+a legacy compatibility mode. The independent DSP core defines 13 named plain
+parameters, transactional sound state, post-drive output/velocity amplitude and
+JUCE gain smoothing. See [parameter contract](architecture/independent-sound-parameters.md).
+It is not yet connected to all host parameters or the new Sound page, and is
+not registered as another instrument alongside POC Bass. The old coupled mapping
+must be removed when this path replaces it. Production Bass remains incomplete.
+
 ## Existing code, not a production-acceptance claim
 
 - C++20, JUCE 9.0.1, CMake; Windows VST3 package workflow.
