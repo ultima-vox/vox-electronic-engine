@@ -131,6 +131,21 @@ int main()
             "unknown control IDs cannot write arbitrary DSP state");
 
 
+    float outputValue = -1.0f;
+    REQUIRE(acid::factorySoundParameterValue(
+                "classic-303", "output", outputValue)
+                && std::abs(outputValue - 0.72f) < 0.00001f,
+            "factory Acid output gain remains preset-specific after host sync");
+    REQUIRE(acid::factorySoundParameterValue(
+                "hi-tech-acid", "output", outputValue)
+                && std::abs(outputValue - 0.60f) < 0.00001f,
+            "Acid preset output gain is not replaced with generic defaults");
+    REQUIRE(!acid::factorySoundParameterValue(
+                "not-a-preset", "output", outputValue)
+            && !acid::factorySoundParameterValue(
+                "classic-303", "osc_fine", outputValue),
+            "factory value lookup never fabricates unsupported fields");
+
     std::set<std::uint64_t> signatures;
     constexpr std::array profiles { acid::AcidProfile::classic303,
         acid::AcidProfile::psyAcid, acid::AcidProfile::darkAcid,
