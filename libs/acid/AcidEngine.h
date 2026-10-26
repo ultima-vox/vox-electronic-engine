@@ -11,10 +11,12 @@ namespace vstengine::acid {
 
 class AcidEngine final {
 public:
-    static constexpr std::uint32_t stateVersion = 3;
+    static constexpr std::uint32_t stateVersion = 4;
+    static constexpr std::uint32_t previousStateVersion = 3;
+    static constexpr std::size_t previousParameterCount = 36;
     static constexpr std::uint32_t legacyStateVersion = 1;
     static constexpr std::size_t legacyParameterCount = 9;
-    static constexpr std::size_t parameterCount = 36;
+    static constexpr std::size_t parameterCount = 40;
     static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
     static constexpr std::size_t maxUnisonVoices = 4;
 
@@ -72,6 +74,11 @@ public:
 
         // Play Mode Flags (packed or individual normalized toggle: legato, retrigger, vel->accent, slide_on_overlap)
         playModeFlags,
+        // Independent LFO 1 — additive IDs, never renumber the original 36.
+        lfo1Rate,
+        lfo1Depth,
+        lfo1Wave,
+        lfo1Target,
 
         count
     };
@@ -135,7 +142,11 @@ public:
         "unison_voices",
         "unison_detune",
         "stereo_spread",
-        "play_mode_flags"
+        "play_mode_flags",
+        "lfo1_rate",
+        "lfo1_depth",
+        "lfo1_wave",
+        "lfo1_target"
     };
 
     bool prepare(double sampleRate, std::uint32_t maximumBlockSize,
@@ -269,11 +280,16 @@ private:
         0.00f, // 32: unison_voices (1 voice)
         0.10f, // 33: unison_detune (0.10)
         0.40f, // 34: stereo_spread (0.40)
-        (13.0f / 15.0f)  // 35: play_mode_flags: Legato, Vel->Accent, Slide on Overlap
+        (13.0f / 15.0f), // 35: play_mode_flags: Legato, Vel->Accent, Slide on Overlap
+        0.35f, // 36: LFO1 Rate, 0.05 .. 20 Hz exponential
+        0.00f, // 37: LFO1 Depth; silence-compatible default
+        0.00f, // 38: LFO1 Wave: sine / triangle / square / saw
+        0.00f  // 39: LFO1 Target: cutoff/pitch/PW/resonance/drive/pan
     };
     std::array<float, parameterCount> smoothed_ { targets_ };
 
     double sampleRate_ { 48000.0 };
+    double lfo1Phase_ {};
     std::uint32_t maximumBlockSize_ {};
     std::uint32_t outputChannels_ {};
 

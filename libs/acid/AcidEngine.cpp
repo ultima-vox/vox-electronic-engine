@@ -121,6 +121,7 @@ void AcidEngine::reset() noexcept {
     ampEnv_.reset();
     fltEnv_.reset();
     modEnv_.reset();
+    lfo1Phase_ = 0.0;
 
     accentCapacitor_ = 0.0f;
     accentGain_ = 0.0f;
@@ -243,7 +244,9 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
     // The existing Rack creates a newly selected instrument with an empty
     // payload: retain factory defaults for both supported schemas.
     // Non-empty payloads must be fully validated transactionally.
-    if (schemaVersion != legacyStateVersion && schemaVersion != stateVersion)
+    if (schemaVersion != legacyStateVersion
+        && schemaVersion != previousStateVersion
+        && schemaVersion != stateVersion)
         return false;
     if (payload.empty()) return true;
     if (payload.size() < 8) return false;
@@ -274,11 +277,11 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         return true;
     }
 
-    if (schemaVersion == stateVersion) {
-        if (payload.size() < encodedStateBytes) {
-            return false;
-        }
-        for (std::size_t i = 0; i < parameterCount; ++i) {
+    if (schemaVersion == previousStateVersion || schemaVersion == stateVersion) {
+        const std::size_t count = schemaVersion == previousStateVersion
+            ? previousParameterCount : parameterCount;
+        if (payload.size() < 8 + count * sizeof(float)) return false;
+        for (std::size_t i = 0; i < count; ++i) {
             float val = 0.0f;
             std::memcpy(&val, payload.data() + 8 + i * sizeof(float),
                         sizeof(float));
@@ -496,6 +499,30 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         smoothed_[Parameter::modAmount];
     const ModTarget mTarget = decodeModTarget(smoothed_[Parameter::modTarget]);
 
+    // Independent bipolar LFO 1. The oscillator keeps phase continuously
+    // across blocks and resets deterministically only at engine reset.
+    const float lfoRateHz =
+        0.05f * std::pow(400.0f, smoothed_[Parameter::lfo1Rate]); // .05..20 Hz
+    lfo1Phase_ += static_cast<double>(lfoRateHz) / sampleRate_;
+    if (lfo1Phase_ >= 1.0) lfo1Phase_ -= std::floor(lfo1Phase_);
+    float lfoWave = 0.0f;
+    switch (std::min(3, static_cast<int>(std::round(
+        smoothed_[Parameter::lfo1Wave] * 3.0f)))) {
+        case 0: lfoWave = static_cast<float>(std::sin(twoPi * lfo1Phase_)); break;
+        case 1: lfoWave = static_cast<float>(
+            1.0 - 4.0 * std::abs(lfo1Phase_ - 0.5)); break;
+        case 2: lfoWave = lfo1Phase_ < 0.5 ? 1.0f : -1.0f; break;
+        default: lfoWave = static_cast<float>(2.0 * lfo1Phase_ - 1.0); break;
+    }
+    const float lfoValue = lfoWave * smoothed_[Parameter::lfo1Depth];
+    const ModTarget lfoTarget = decodeModTarget(smoothed_[Parameter::lfo1Target]);
+    // ENV1 and LFO1 each contribute only to their selected destination.
+    // Their source rates, depth and targets are individually addressable.
+    auto modulation = [&](ModTarget target) noexcept {
+        return (mTarget == target ? modVal : 0.0f)
+             + (lfoTarget == target ? lfoValue : 0.0f);
+    };
+
     // 2. Glide / Slide & Oscillator Tune + Fine + Pitch Modulation
     if (slideActive_) {
         const float glideAmount = glideSource_ == GlideSource::slide
@@ -514,7 +541,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     const float fineSemitones =
         (smoothed_[Parameter::oscFine] - 0.5f) * 2.0f;  // -100 .. +100 cents
     const float pitchModSemitones =
-        (mTarget == ModTarget::pitch) ? (modVal * 12.0f) : 0.0f;
+        modulation(ModTarget::pitch) * 12.0f;
 
     const double tunedFreq =
         currentFrequency_ *
@@ -531,7 +558,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         1u, maxUnisonVoices);
     const float detuneAmount = smoothed_[Parameter::unisonDetune];
     const float pwMod =
-        (mTarget == ModTarget::pulseWidth) ? (modVal * 0.35f) : 0.0f;
+        modulation(ModTarget::pulseWidth) * 0.35f;
     const float pulseWidth = std::clamp(
         0.50f + (smoothed_[Parameter::oscPulseWidth] - 0.5f) * 0.85f + pwMod,
         0.08f, 0.92f);
@@ -585,7 +612,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     const float effectiveEnvMod =
         smoothed_[Parameter::envelopeAmount] + accentGain_ * 0.45f;
     const float modCutoffOctaves =
-        (mTarget == ModTarget::filterCutoff) ? (modVal * 3.0f) : 0.0f;
+        modulation(ModTarget::filterCutoff) * 3.0f;
 
     const float noteOffsetSemitones =
         (currentNote_ < 128u) ? (static_cast<float>(currentNote_) - 48.0f) : 0.0f;
@@ -602,7 +629,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         20.0f, static_cast<float>(sampleRate_ * 0.46));
 
     const float resMod =
-        (mTarget == ModTarget::resonance) ? (modVal * 0.25f) : 0.0f;
+        modulation(ModTarget::resonance) * 0.25f;
     const float effectiveResonance = std::clamp(
         smoothed_[Parameter::resonance] + accentGain_ * 0.18f + resMod,
         0.0f, 0.98f);
@@ -613,7 +640,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
 
     // 6. Distortion / Drive with Post-Filter Tone control
     const float driveMod =
-        (mTarget == ModTarget::drive) ? (modVal * 0.35f) : 0.0f;
+        modulation(ModTarget::drive) * 0.35f;
     const float effectiveDrive =
         clamp01(smoothed_[Parameter::drive] + driveMod);
     const DistortionMode dMode =
@@ -637,7 +664,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     const float totalGain =
         vcaEnv * velocityGain_ * accentVcaBoost * smoothed_[Parameter::output];
 
-    const float panMod = (mTarget == ModTarget::pan) ? (modVal * 0.4f) : 0.0f;
+    const float panMod = modulation(ModTarget::pan) * 0.4f;
     const float panNorm = clamp01(smoothed_[Parameter::pan] + panMod);
     const float panAngle =
         panNorm * static_cast<float>(std::numbers::pi * 0.5);

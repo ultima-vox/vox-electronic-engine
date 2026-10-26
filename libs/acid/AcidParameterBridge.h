@@ -33,7 +33,8 @@ public:
     void bind(std::size_t slot, std::size_t parameter, std::atomic<float>* value) noexcept
     {
         if (slot < slots_.size() && parameter >= firstExtended
-            && parameter < AcidEngine::playModeFlags)
+            && parameter != AcidEngine::playModeFlags
+            && parameter < AcidEngine::parameterCount)
             slots_[slot].raw[parameter] = value;
     }
     void bindFlag(std::size_t slot, std::size_t flag, std::atomic<float>* value) noexcept
@@ -52,8 +53,9 @@ public:
         if (id == instrument::invalidSlotId) return;
         for (const auto& slot : slots_) {
             if (slot.id.load(std::memory_order_acquire) != id) continue;
-            for (std::size_t p = firstExtended; p < AcidEngine::playModeFlags; ++p)
-                if (const auto* value = slot.raw[p])
+            for (std::size_t p = firstExtended; p < AcidEngine::parameterCount; ++p)
+                if (p != AcidEngine::playModeFlags)
+                    if (const auto* value = slot.raw[p])
                     (void) engine.setParameter(AcidEngine::parameterIds[p],
                                                value->load(std::memory_order_relaxed));
             if (slot.flags[0] && slot.flags[1] && slot.flags[2] && slot.flags[3])

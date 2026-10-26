@@ -52,7 +52,8 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
         rackControls[slot].slotId = initialRack[slot].slotId;
         acidHostBridge.setSlotId(slot, initialRack[slot].slotId);
         for (std::size_t p = vstengine::instrument::macrosPerSlot;
-             p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+             p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+            if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
             const auto id = vstengine::acid::hostParameterId(
                 slot, vstengine::acid::AcidEngine::parameterIds[p]);
             acidHostBridge.bind(slot, p, apvts.getRawParameterValue(id.c_str()));
@@ -1053,7 +1054,8 @@ VstEngineAudioProcessor::createParameterLayout()
         // The first eight Acid controls are already stable Rack macros.
         const vstengine::acid::AcidEngine acidDefaults;
         for (std::size_t p = vstengine::instrument::macrosPerSlot;
-             p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+             p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+            if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
             const auto semantic = vstengine::acid::AcidEngine::parameterIds[p];
             params.push_back(std::make_unique<juce::AudioParameterFloat>(
                 juce::ParameterID {
@@ -1133,7 +1135,8 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
             // values over the just-applied preset sound.
             const vstengine::acid::AcidEngine defaults;
             for (std::size_t p = vstengine::instrument::macrosPerSlot;
-                 p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+                 p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+                if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
                 const auto id = vstengine::acid::hostParameterId(
                     index, vstengine::acid::AcidEngine::parameterIds[p]);
                 if (auto* param = apvts.getParameter(id.c_str())) {
