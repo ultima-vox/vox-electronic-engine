@@ -58,7 +58,7 @@ private:
 struct SoundPreset {
     const char* id;
     const char* name;
-    std::array<float, AcidEngine::parameterCount> values;
+    std::array<float, AcidEngine::legacyParameterCount> values;
 };
 
 constexpr std::array soundPresets {
@@ -114,6 +114,17 @@ public:
                 instrument::ParameterType::floating,
                 i == 8 ? "Output" : "Acid", {}, true, true,
                 i < instrument::macrosPerSlot ? static_cast<std::int8_t>(i) : -1 });
+        // Extended Acid sound parameters belong to this module, not to the
+        // frozen eight host macro IDs. Stable original mapping is retained.
+        const AcidEngine defaults;
+        for (std::size_t i = AcidEngine::legacyParameterCount;
+             i < AcidEngine::parameterCount; ++i) {
+            const auto id = AcidEngine::parameterIds[i];
+            descriptor_.parameters.push_back({ std::string(id), std::string(id),
+                "", 0.0f, 1.0f, defaults.parameter(id), 0.0001f,
+                instrument::ParameterType::floating, "Acid Extended",
+                {}, false, true, -1 });
+        }
 
         for (const auto& preset : soundPresets) {
             instrument::ContentDescriptor sound { std::string(instrumentId),
