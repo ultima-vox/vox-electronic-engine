@@ -1,241 +1,133 @@
-#if __has_include("acid/AcidGenerator.h")
 #include "acid/AcidGenerator.h"
-#else
-#include "AcidGenerator.h"
-#endif
-
+#include "instrument/InstrumentContract.h"
 #include <algorithm>
 #include <array>
 
 namespace vstengine::acid {
-
 namespace {
-
-struct XorShift32 {
-    std::uint32_t state;
-
-    explicit constexpr XorShift32(std::uint32_t seed) noexcept
-        : state(seed != 0 ? seed : 0x9E3779B9u) {}
-
-    [[nodiscard]] constexpr std::uint32_t next() noexcept {
-        std::uint32_t x = state;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        state = x;
-        return x;
+class Random final {
+public:
+    explicit Random(std::uint32_t seed) noexcept : state_(seed ? seed : 1u) {}
+    std::uint32_t next() noexcept
+    {
+        auto value = state_;
+        value ^= value << 13;
+        value ^= value >> 17;
+        value ^= value << 5;
+        state_ = value;
+        return value;
     }
-
-    [[nodiscard]] constexpr float nextFloat01() noexcept {
-        return static_cast<float>(next() & 0x00FFFFFFu) /
-               static_cast<float>(0x01000000u);
+    float unit() noexcept { return static_cast<float>(next() >> 8)
+        * (1.0f / 16777216.0f); }
+    int choose(int count) noexcept
+    {
+        return count > 0 ? static_cast<int>(next() % static_cast<std::uint32_t>(count)) : 0;
     }
+private:
+    std::uint32_t state_;
 };
 
-constexpr std::array<std::int8_t, 7> kPhrygianScale   { 0, 1, 3, 5, 7, 8, 10 };
-constexpr std::array<std::int8_t, 7> kNaturalMinor    { 0, 2, 3, 5, 7, 8, 10 };
-constexpr std::array<std::int8_t, 6> kHarmonicAcid    { 0, 1, 4, 5, 7, 8 };
-constexpr std::array<std::int8_t, 5> kTechnoMinorPent { 0, 3, 5, 7, 10 };
+constexpr std::array<int, 8> minorNotes { 0, 3, 5, 7, 10, 12, -2, -5 };
+constexpr std::array<int, 8> darkNotes { 0, -2, -5, -7, 3, 5, 10, 12 };
 
-[[nodiscard]] std::int8_t pickScaleInterval(AcidProfile profile,
-                                            XorShift32& rng,
-                                            float variation) noexcept {
-    if (rng.nextFloat01() > (0.35f + 0.55f * variation)) {
-        return 0;
-    }
-
-    switch (profile) {
-        case AcidProfile::psyAcid:
-        case AcidProfile::forestAcid:
-        case AcidProfile::hiTechAcid: {
-            const std::size_t idx = rng.next() % kHarmonicAcid.size();
-            return kHarmonicAcid[idx];
-        }
-        case AcidProfile::darkAcid: {
-            const std::size_t idx = rng.next() % kPhrygianScale.size();
-            return kPhrygianScale[idx];
-        }
-        case AcidProfile::technoDrive:
-        case AcidProfile::hypnoticAcid: {
-            const std::size_t idx = rng.next() % kTechnoMinorPent.size();
-            return kTechnoMinorPent[idx];
-        }
-        case AcidProfile::classic303:
-        default: {
-            const std::size_t idx = rng.next() % kNaturalMinor.size();
-            return kNaturalMinor[idx];
-        }
-    }
+void setDefaults(sequence::Step& step) noexcept
+{
+    step = {};
+    step.velocity = 0.74f;
+    step.probability = 1.0f;
+    step.ratchetCount = 1;
+    step.gateWidth = 0.72f;
 }
-
 } // namespace
 
-std::uint32_t AcidGenerator::stableSeed(
-    std::uint32_t globalSeed, std::uint64_t slotId,
-    std::string_view instrumentId) noexcept {
-    std::uint32_t hash = 2166136261u ^ globalSeed;
-    for (int i = 0; i < 8; ++i) {
-        hash ^= static_cast<std::uint32_t>((slotId >> (i * 8)) & 0xFFu);
-        hash *= 16777619u;
-    }
-    for (char c : instrumentId) {
-        hash ^= static_cast<std::uint8_t>(c);
-        hash *= 16777619u;
-    }
-    return hash != 0 ? hash : 0xA341316Cu;
+std::uint32_t AcidGenerator::stableSeed(std::uint32_t globalSeed,
+                                        std::uint64_t slotId,
+                                        std::string_view instrumentId) noexcept
+{
+    return instrument::generationSubSeed(globalSeed, slotId, instrumentId);
 }
 
-sequence::Sequence AcidGenerator::generate(
-    AcidProfile profile, std::uint32_t globalSeed, std::uint64_t slotId,
-    std::string_view instrumentId) noexcept {
-    AcidPatternParams params {};
-    params.profile = profile;
+sequence::Sequence AcidGenerator::generate(AcidProfile profile,
+                                            std::uint32_t globalSeed,
+                                            std::uint64_t slotId,
+                                            std::string_view instrumentId) noexcept
+{
+    const int length = profile == AcidProfile::hiTechAcid ? 32 : 16;
+    sequence::Sequence result(length);
+    result.setTimingMode(profile == AcidProfile::hypnoticAcid
+        ? sequence::TimingMode::triplet
+        : profile == AcidProfile::hiTechAcid
+            ? sequence::TimingMode::thirtySecond
+            : sequence::TimingMode::sixteenth);
+    Random random(stableSeed(globalSeed, slotId, instrumentId)
+                  ^ (0x9e3779b9u * (1u + static_cast<std::uint32_t>(profile))));
 
-    switch (profile) {
-        case AcidProfile::classic303:
-            params.density = 0.70f;
-            params.variation = 0.50f;
-            break;
-        case AcidProfile::psyAcid:
-            params.density = 0.85f;
-            params.variation = 0.45f;
-            break;
-        case AcidProfile::darkAcid:
-            params.density = 0.65f;
-            params.variation = 0.55f;
-            break;
-        case AcidProfile::forestAcid:
-            params.density = 0.75f;
-            params.variation = 0.65f;
-            break;
-        case AcidProfile::hiTechAcid:
-            params.density = 0.90f;
-            params.variation = 0.75f;
-            break;
-        case AcidProfile::hypnoticAcid:
-            params.density = 0.80f;
-            params.variation = 0.30f;
-            break;
-        case AcidProfile::technoDrive:
-            params.density = 0.70f;
-            params.variation = 0.50f;
-            break;
-    }
-
-    return generateWithParams(params, globalSeed, slotId, instrumentId);
-}
-
-sequence::Sequence AcidGenerator::generateWithParams(
-    const AcidPatternParams& params, std::uint32_t globalSeed,
-    std::uint64_t slotId, std::string_view instrumentId) noexcept {
-    sequence::Sequence seq {};
-    seq.stepCount = std::clamp<std::uint32_t>(
-        params.length, 1u, static_cast<std::uint32_t>(sequence::Sequence::maxSteps));
-    seq.timingMode = sequence::TimingMode::sixteenth;
-
-    const std::uint32_t seed =
-        stableSeed(globalSeed, slotId, instrumentId) ^
-        (static_cast<std::uint32_t>(params.profile) * 0x45D9F3Bu);
-    XorShift32 rng(seed);
-
-    const float density = std::clamp(params.density, 0.05f, 1.0f);
-    const float variation = std::clamp(params.variation, 0.0f, 1.0f);
-
-    for (std::uint32_t i = 0; i < seq.stepCount; ++i) {
-        auto& step = seq.steps[i];
-        const bool isDownbeat = (i % 4 == 0);
-        const bool isOffbeat = (i % 4 == 2);
-
-        const float gateThreshold = isDownbeat ? std::min(1.0f, density + 0.25f)
-                                               : density;
-        step.gate = (rng.nextFloat01() < gateThreshold);
-
-        const std::int8_t interval =
-            pickScaleInterval(params.profile, rng, variation);
-
-        std::int8_t octaveShift = 0;
-        const float octRoll = rng.nextFloat01();
-        if (octRoll < 0.22f * variation) {
-            octaveShift = 1;
-        } else if (octRoll < 0.32f * variation && !isDownbeat) {
-            octaveShift = -1;
+    int previousNote = 0;
+    bool previousGate = false;
+    for (int index = 0; index < length; ++index) {
+        auto& step = result.getStep(index);
+        setDefaults(step);
+        const int beat = index % 4;
+        switch (profile) {
+            case AcidProfile::classic303:
+                step.gate = beat != 3 || random.unit() > 0.42f;
+                step.noteOffset = minorNotes[static_cast<std::size_t>(random.choose(6))];
+                step.accent = step.gate && (beat == 0 || random.unit() < 0.18f);
+                step.gateWidth = 0.62f;
+                break;
+            case AcidProfile::psyAcid:
+                step.gate = beat != 0 || random.unit() > 0.58f;
+                step.noteOffset = minorNotes[static_cast<std::size_t>(random.choose(7))];
+                step.accent = step.gate && (beat == 1 || random.unit() < 0.14f);
+                step.gateWidth = 0.58f;
+                break;
+            case AcidProfile::darkAcid:
+                step.gate = random.unit() > (beat == 0 ? 0.48f : 0.18f);
+                step.noteOffset = darkNotes[static_cast<std::size_t>(random.choose(6))];
+                step.accent = step.gate && (index % 8 == 3 || random.unit() < 0.12f);
+                step.velocity = 0.68f;
+                step.gateWidth = 0.78f;
+                break;
+            case AcidProfile::forestAcid:
+                step.gate = random.unit() > 0.24f;
+                step.noteOffset = darkNotes[static_cast<std::size_t>(random.choose(8))];
+                step.accent = step.gate && random.unit() < 0.27f;
+                step.probability = step.gate && random.unit() < 0.2f ? 0.72f : 1.0f;
+                step.gateWidth = 0.48f + random.unit() * 0.38f;
+                break;
+            case AcidProfile::hiTechAcid:
+                step.gate = random.unit() > 0.16f;
+                step.noteOffset = minorNotes[static_cast<std::size_t>(random.choose(8))];
+                step.accent = step.gate && (index % 6 == 1 || random.unit() < 0.19f);
+                step.ratchetCount = step.gate && random.unit() < 0.16f ? 2 : 1;
+                step.gateWidth = 0.42f;
+                break;
+            case AcidProfile::hypnoticAcid:
+                step.gate = (index % 3) != 2 || random.unit() > 0.64f;
+                step.noteOffset = (index % 6 < 3) ? 0 : (random.unit() < 0.5f ? 3 : 7);
+                step.accent = step.gate && index % 6 == 0;
+                step.gateWidth = 0.88f;
+                break;
         }
-        step.octave = octaveShift;
+        step.velocity = std::clamp(step.velocity
+            + (step.accent ? 0.22f : random.unit() * 0.1f - 0.05f), 0.35f, 1.0f);
 
-        const int midiNote = std::clamp(
-            static_cast<int>(params.rootNote) + static_cast<int>(interval) +
-                static_cast<int>(octaveShift) * 12,
-            24, 96);
-        step.note = static_cast<std::uint8_t>(midiNote);
-
-        const float accentProb =
-            (isOffbeat ? 0.35f : 0.18f) * (0.4f + 0.8f * variation);
-        step.accent = step.gate && (rng.nextFloat01() < accentProb);
-
-        const float slideProb = 0.28f * (0.3f + 0.9f * variation);
-        step.slide = step.gate && (rng.nextFloat01() < slideProb);
-
-        step.velocity = step.accent ? 122u : 96u;
-    }
-
-    return seq;
-}
-
-sequence::Sequence AcidGenerator::mutate(
-    const sequence::Sequence& current, const AcidPatternParams& params,
-    std::uint32_t mutationCounter, std::uint32_t globalSeed,
-    std::uint64_t slotId) noexcept {
-    sequence::Sequence nextSeq = current;
-    nextSeq.stepCount = std::clamp<std::uint32_t>(
-        params.length, 1u, static_cast<std::uint32_t>(sequence::Sequence::maxSteps));
-
-    const std::uint32_t seed =
-        stableSeed(globalSeed ^ (mutationCounter * 0x27D4EB2Du), slotId,
-                   "com.ultimavox.acid.mutate");
-    XorShift32 rng(seed);
-
-    const float variation = std::clamp(params.variation, 0.1f, 1.0f);
-
-    for (std::uint32_t i = 0; i < nextSeq.stepCount; ++i) {
-        if (rng.nextFloat01() > (0.18f + 0.25f * variation)) {
-            continue;
-        }
-
-        auto& step = nextSeq.steps[i];
-        const std::uint32_t action = rng.next() % 4u;
-
-        switch (action) {
-            case 0: {
-                const std::int8_t interval =
-                    pickScaleInterval(params.profile, rng, variation);
-                step.note = static_cast<std::uint8_t>(std::clamp(
-                    static_cast<int>(params.rootNote) + static_cast<int>(interval) +
-                        static_cast<int>(step.octave) * 12,
-                    24, 96));
-                break;
-            }
-            case 1: {
-                step.accent = !step.accent && step.gate;
-                step.velocity = step.accent ? 122u : 96u;
-                break;
-            }
-            case 2: {
-                step.slide = !step.slide && step.gate;
-                break;
-            }
-            case 3: {
-                if (i % 4 != 0 && rng.nextFloat01() < 0.5f) {
-                    step.gate = (rng.nextFloat01() < params.density);
-                } else {
-                    constexpr std::array<std::int8_t, 3> kOctaves { -1, 0, 1 };
-                    step.octave = kOctaves[rng.next() % kOctaves.size()];
-                }
-                break;
+        // Slide only joins adjacent audible, different-pitch notes. This keeps
+        // Accent/Slide musical and matches scheduler glide eligibility.
+        if (step.gate && previousGate && step.noteOffset != previousNote) {
+            const float chance = profile == AcidProfile::hypnoticAcid ? 0.48f
+                : profile == AcidProfile::classic303 ? 0.28f
+                : profile == AcidProfile::hiTechAcid ? 0.18f : 0.34f;
+            if (random.unit() < chance) {
+                step.slideDuration = profile == AcidProfile::hypnoticAcid
+                    ? 1.5f : 1.0f;
+                step.gateWidth = 1.0f;
             }
         }
+        previousGate = step.gate;
+        if (step.gate) previousNote = step.noteOffset;
     }
-
-    return nextSeq;
+    return result;
 }
 
 } // namespace vstengine::acid
