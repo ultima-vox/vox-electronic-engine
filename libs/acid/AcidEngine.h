@@ -11,14 +11,16 @@ namespace vstengine::acid {
 
 class AcidEngine final {
 public:
-    static constexpr std::uint32_t stateVersion = 5;
+    static constexpr std::uint32_t stateVersion = 6;
+    static constexpr std::uint32_t env2StateVersion = 5;
+    static constexpr std::size_t env2ParameterCount = 46;
     static constexpr std::uint32_t lfo1StateVersion = 4;
     static constexpr std::size_t lfo1ParameterCount = 40;
     static constexpr std::uint32_t previousStateVersion = 3;
     static constexpr std::size_t previousParameterCount = 36;
     static constexpr std::uint32_t legacyStateVersion = 1;
     static constexpr std::size_t legacyParameterCount = 9;
-    static constexpr std::size_t parameterCount = 46;
+    static constexpr std::size_t parameterCount = 54;
     static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
     static constexpr std::size_t maxUnisonVoices = 4;
 
@@ -89,6 +91,16 @@ public:
         env2Decay,
         env2Sustain,
         env2Release,
+
+        // LFO2 & LFO3 append independently addressable control groups.
+        lfo2Rate,
+        lfo2Depth,
+        lfo2Wave,
+        lfo2Target,
+        lfo3Rate,
+        lfo3Depth,
+        lfo3Wave,
+        lfo3Target,
 
         count
     };
@@ -162,7 +174,15 @@ public:
         "env2_attack",
         "env2_decay",
         "env2_sustain",
-        "env2_release"
+        "env2_release",
+        "lfo2_rate",
+        "lfo2_depth",
+        "lfo2_wave",
+        "lfo2_target",
+        "lfo3_rate",
+        "lfo3_depth",
+        "lfo3_wave",
+        "lfo3_target"
     };
 
     bool prepare(double sampleRate, std::uint32_t maximumBlockSize,
@@ -306,12 +326,22 @@ private:
         0.00f, // 42: ENV2 attack
         0.35f, // 43: ENV2 decay
         0.80f, // 44: ENV2 sustain
-        0.40f  // 45: ENV2 release
+        0.40f, // 45: ENV2 release
+        0.35f, // 46: LFO2 rate
+        0.00f, // 47: LFO2 depth off by default
+        0.00f, // 48: LFO2 waveform sine
+        0.00f, // 49: LFO2 cutoff target
+        0.35f, // 50: LFO3 rate
+        0.00f, // 51: LFO3 depth off by default
+        0.00f, // 52: LFO3 waveform sine
+        0.00f  // 53: LFO3 cutoff target
     };
     std::array<float, parameterCount> smoothed_ { targets_ };
 
     double sampleRate_ { 48000.0 };
     double lfo1Phase_ {};
+    double lfo2Phase_ {};
+    double lfo3Phase_ {};
     std::uint32_t maximumBlockSize_ {};
     std::uint32_t outputChannels_ {};
 

@@ -123,6 +123,8 @@ void AcidEngine::reset() noexcept {
     modEnv_.reset();
     env2State_.reset();
     lfo1Phase_ = 0.0;
+    lfo2Phase_ = 0.0;
+    lfo3Phase_ = 0.0;
 
     accentCapacitor_ = 0.0f;
     accentGain_ = 0.0f;
@@ -248,6 +250,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
     if (schemaVersion != legacyStateVersion
         && schemaVersion != previousStateVersion
         && schemaVersion != lfo1StateVersion
+        && schemaVersion != env2StateVersion
         && schemaVersion != stateVersion)
         return false;
     if (payload.empty()) return true;
@@ -264,6 +267,17 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
 
     auto parsedTargets = targets_;
     if (schemaVersion != stateVersion) {
+        // v1/v3/v4/v5 do not contain independent LFO2/3.
+        parsedTargets[Parameter::lfo2Rate] = 0.35f;
+        parsedTargets[Parameter::lfo2Depth] = 0.0f;
+        parsedTargets[Parameter::lfo2Wave] = 0.0f;
+        parsedTargets[Parameter::lfo2Target] = 0.0f;
+        parsedTargets[Parameter::lfo3Rate] = 0.35f;
+        parsedTargets[Parameter::lfo3Depth] = 0.0f;
+        parsedTargets[Parameter::lfo3Wave] = 0.0f;
+        parsedTargets[Parameter::lfo3Target] = 0.0f;
+    }
+    if (schemaVersion != stateVersion && schemaVersion != env2StateVersion) {
         // Any v1/v3/v4 recall must disable ENV2, which was absent in those
         // formats, even when the engine previously played an ENV2 preset.
         parsedTargets[Parameter::env2Target] = 0.0f;
@@ -299,10 +313,13 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
 
     if (schemaVersion == previousStateVersion
         || schemaVersion == lfo1StateVersion
+        || schemaVersion == env2StateVersion
         || schemaVersion == stateVersion) {
         const std::size_t count = schemaVersion == previousStateVersion
             ? previousParameterCount
-            : (schemaVersion == lfo1StateVersion ? lfo1ParameterCount : parameterCount);
+            : (schemaVersion == lfo1StateVersion ? lfo1ParameterCount
+               : (schemaVersion == env2StateVersion ? env2ParameterCount
+                                                    : parameterCount));
         if (payload.size() < 8 + count * sizeof(float)) return false;
         for (std::size_t i = 0; i < count; ++i) {
             float val = 0.0f;
@@ -542,29 +559,43 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         gate_, sampleRate_) * smoothed_[Parameter::env2Amount];
     const ModTarget env2Target = decodeModTarget(smoothed_[Parameter::env2Target]);
 
-    // Independent bipolar LFO 1. The oscillator keeps phase continuously
-    // across blocks and resets deterministically only at engine reset.
-    const float lfoRateHz =
-        0.05f * std::pow(400.0f, smoothed_[Parameter::lfo1Rate]); // .05..20 Hz
-    lfo1Phase_ += static_cast<double>(lfoRateHz) / sampleRate_;
-    if (lfo1Phase_ >= 1.0) lfo1Phase_ -= std::floor(lfo1Phase_);
-    float lfoWave = 0.0f;
-    switch (std::min(3, static_cast<int>(std::round(
-        smoothed_[Parameter::lfo1Wave] * 3.0f)))) {
-        case 0: lfoWave = static_cast<float>(std::sin(twoPi * lfo1Phase_)); break;
-        case 1: lfoWave = static_cast<float>(
-            1.0 - 4.0 * std::abs(lfo1Phase_ - 0.5)); break;
-        case 2: lfoWave = lfo1Phase_ < 0.5 ? 1.0f : -1.0f; break;
-        default: lfoWave = static_cast<float>(2.0 * lfo1Phase_ - 1.0); break;
-    }
-    const float lfoValue = lfoWave * smoothed_[Parameter::lfo1Depth];
-    const ModTarget lfoTarget = decodeModTarget(smoothed_[Parameter::lfo1Target]);
-    // ENV1 and LFO1 each contribute only to their selected destination.
-    // Their source rates, depth and targets are individually addressable.
+    // Three distinct continuously running bipolar oscillators. Each owns
+    // its phase, Rate, Depth, Wave and Target. The helper makes the waveform
+    // transfer function identical without sharing any control state.
+    const auto renderLfo = [this](Parameter rate, Parameter depth,
+                                  Parameter wave, double& phase) noexcept {
+        const float hz = 0.05f * std::pow(400.0f, smoothed_[rate]);
+        phase += static_cast<double>(hz) / sampleRate_;
+        if (phase >= 1.0) phase -= std::floor(phase);
+        float signal = 0.0f;
+        switch (std::min(3, static_cast<int>(
+                    std::round(smoothed_[wave] * 3.0f)))) {
+            case 0: signal = static_cast<float>(std::sin(twoPi * phase)); break;
+            case 1: signal = static_cast<float>(
+                1.0 - 4.0 * std::abs(phase - 0.5)); break;
+            case 2: signal = phase < 0.5 ? 1.0f : -1.0f; break;
+            default: signal = static_cast<float>(2.0 * phase - 1.0); break;
+        }
+        return signal * smoothed_[depth];
+    };
+    const float lfo1Value = renderLfo(
+        Parameter::lfo1Rate, Parameter::lfo1Depth,
+        Parameter::lfo1Wave, lfo1Phase_);
+    const float lfo2Value = renderLfo(
+        Parameter::lfo2Rate, Parameter::lfo2Depth,
+        Parameter::lfo2Wave, lfo2Phase_);
+    const float lfo3Value = renderLfo(
+        Parameter::lfo3Rate, Parameter::lfo3Depth,
+        Parameter::lfo3Wave, lfo3Phase_);
+    const ModTarget lfo1Target = decodeModTarget(smoothed_[Parameter::lfo1Target]);
+    const ModTarget lfo2Target = decodeModTarget(smoothed_[Parameter::lfo2Target]);
+    const ModTarget lfo3Target = decodeModTarget(smoothed_[Parameter::lfo3Target]);
     auto modulation = [&](ModTarget target) noexcept {
         return (mTarget == target ? modVal : 0.0f)
              + (env2Target == target ? env2Value : 0.0f)
-             + (lfoTarget == target ? lfoValue : 0.0f);
+             + (lfo1Target == target ? lfo1Value : 0.0f)
+             + (lfo2Target == target ? lfo2Value : 0.0f)
+             + (lfo3Target == target ? lfo3Value : 0.0f);
     };
 
     // 2. Glide / Slide & Oscillator Tune + Fine + Pitch Modulation
