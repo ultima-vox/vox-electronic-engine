@@ -248,7 +248,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         return false;
     }
 
-    if (schemaVersion == legacyStateVersion) {
+    auto parsedTargets = targets_;\n    if (schemaVersion == legacyStateVersion) {
         if (payload.size() < 8 + legacyParameterCount * sizeof(float)) {
             return false;
         }
@@ -257,9 +257,9 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
             std::memcpy(&val, payload.data() + 8 + i * sizeof(float),
                         sizeof(float));
             if (!std::isfinite(val)) return false;
-            if (!std::isfinite(val)) return false;
-            targets_[i] = clamp01(val);
+            parsedTargets[i] = clamp01(val);
         }
+        targets_ = parsedTargets;
         smoothed_ = targets_;
         return true;
     }
@@ -272,9 +272,12 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
             float val = 0.0f;
             std::memcpy(&val, payload.data() + 8 + i * sizeof(float),
                         sizeof(float));
-            targets_[i] = clamp01(val);
+            if (!std::isfinite(val)) return false;
+            parsedTargets[i] = clamp01(val);
         }
+        targets_ = parsedTargets;
         smoothed_ = targets_;
+        (void) setParameter("play_mode_flags", targets_[Parameter::playModeFlags]);
         return true;
     }
 
