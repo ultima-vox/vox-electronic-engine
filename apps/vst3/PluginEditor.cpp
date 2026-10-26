@@ -461,7 +461,8 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProce
           [this] { cycleGlobalPreset(-1); }, [this] { cycleGlobalPreset(1); },
           [this] { saveGlobalPreset(); }, [&p] { p.requestPanic(); },
           [this] { showPage(Page::advanced); }, [this](int index) { loadGlobalPreset(index); } }),
-      rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6), patternPage(p),
+      rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6),
+      acidSoundPage(p), patternPage(p),
       routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8), advancedPage(p),
       pages { &soundPage, &patternPage, &routingPage, &zonesPage, &macrosPage, &advancedPage },
       keyboard(p.keyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
@@ -470,6 +471,7 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProce
     addAndMakeVisible(header); addAndMakeVisible(rackRail); addAndMakeVisible(instrumentHeader);
     addAndMakeVisible(navigation); addAndMakeVisible(keyboard);
     for (auto* page : pages) addChildComponent(page);
+    addChildComponent(acidSoundPage);
     rackRail.onSelected = [this](std::size_t slot) { bindSelection(slot); };
     instrumentHeader.onModelChanged = [this] { bindSelection(processor.selectedSlotIndex()); };
     navigation.onPageChanged = [this](Page page) { showPage(page); };
@@ -501,21 +503,32 @@ void VstEngineAudioProcessorEditor::resized()
     instrumentHeader.setBounds(area.removeFromTop(66));
     navigation.setBounds(area.removeFromTop(44).reduced(0, 4));
     for (auto* page : pages) page->setBounds(area);
+    acidSoundPage.setBounds(area);
 }
 
 void VstEngineAudioProcessorEditor::bindSelection(std::size_t slot)
 {
     processor.selectSlot(slot);
-    instrumentHeader.bind(slot); soundPage.bind(slot); patternPage.bind(slot);
+    instrumentHeader.bind(slot); soundPage.bind(slot);
+    if (processor.instrumentRack().state()[slot].instrumentId
+        == vstengine::acid::instrumentId)
+        acidSoundPage.bind(slot);
+    patternPage.bind(slot);
     routingPage.bind(slot); zonesPage.bind(slot); macrosPage.bind(slot); advancedPage.bind(slot);
     rackRail.refresh();
+    showPage(navigation.getCurrentPage());
 }
 
 void VstEngineAudioProcessorEditor::showPage(Page page)
 {
     const auto index = static_cast<std::size_t>(page);
     if (index >= pages.size()) return;
-    for (std::size_t i = 0; i < pages.size(); ++i) pages[i]->setVisible(i == index);
+    const bool selectedAcid =
+        processor.instrumentRack().state()[processor.selectedSlotIndex()].instrumentId
+        == vstengine::acid::instrumentId;
+    for (std::size_t i = 0; i < pages.size(); ++i)
+        pages[i]->setVisible(i == index && !(i == 0 && selectedAcid));
+    acidSoundPage.setVisible(page == Page::sound && selectedAcid);
     if (navigation.getCurrentPage() != page) navigation.setCurrentPage(page);
 }
 
@@ -570,6 +583,9 @@ void VstEngineAudioProcessorEditor::refreshGlobalPresets()
 }
 
 void VstEngineAudioProcessorEditor::showPageForTesting(Page page) { showPage(page); }
+void VstEngineAudioProcessorEditor::selectSlotForTesting(std::size_t slot) {
+    if (slot < vstengine::instrument::maxSlots) bindSelection(slot);
+}
 Page VstEngineAudioProcessorEditor::currentPageForTesting() const noexcept { return navigation.getCurrentPage(); }
 float VstEngineAudioProcessorEditor::keyboardKeyWidthForTesting(Page) const noexcept { return keyboard.getKeyWidth(); }
 int VstEngineAudioProcessorEditor::keyboardComponentWidthForTesting(Page) const noexcept { return keyboard.getWidth(); }

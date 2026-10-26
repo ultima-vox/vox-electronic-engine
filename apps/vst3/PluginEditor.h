@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "AcidPanel.h"
 #include "ui/GlobalHeader.h"
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
@@ -23,6 +24,13 @@ public:
     [[nodiscard]] juce::Rectangle<int> rackBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> workspaceBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> keyboardBoundsForTesting() const noexcept;
+    void selectSlotForTesting(std::size_t);
+    [[nodiscard]] bool acidWorkspaceVisibleForTesting() const noexcept {
+        return acidSoundPage.isVisible();
+    }
+    [[nodiscard]] std::size_t acidControlsForTesting() const noexcept {
+        return acidSoundPage.attachedControlCount();
+    }
 
 private:
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {
@@ -160,6 +168,7 @@ private:
     InstrumentHeader instrumentHeader;
     vstengine::ui::MainNavigation navigation;
     MacroPage soundPage;
+    AcidPanel acidSoundPage;
     PatternPage patternPage;
     RoutingPage routingPage;
     ZonesPage zonesPage;

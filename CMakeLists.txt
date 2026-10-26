@@ -189,7 +189,8 @@ juce_generate_juce_header(VstEngine)
 
 target_sources(VstEngine PRIVATE
   apps/vst3/PluginProcessor.cpp apps/vst3/PluginProcessor.h
-  apps/vst3/PluginEditor.cpp apps/vst3/PluginEditor.h)
+  apps/vst3/PluginEditor.cpp apps/vst3/PluginEditor.h
+  apps/vst3/AcidPanel.cpp apps/vst3/AcidPanel.h)
 
 target_compile_definitions(VstEngine PUBLIC
   JUCE_WEB_BROWSER=0

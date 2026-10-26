@@ -21,6 +21,23 @@ int main()
             return EXIT_FAILURE;
     }
 
+    // UI integration gate: Acid owns SOUND only when its Rack slot is
+    // selected. All other pages and other instruments are unchanged.
+    editor->selectSlotForTesting(1);
+    editor->showPageForTesting(Page::sound);
+    if (!editor->acidWorkspaceVisibleForTesting()
+        || editor->acidControlsForTesting() < 25)
+        return EXIT_FAILURE;
+    editor->showPageForTesting(Page::pattern);
+    if (editor->acidWorkspaceVisibleForTesting())
+        return EXIT_FAILURE;
+    editor->selectSlotForTesting(0);
+    editor->showPageForTesting(Page::sound);
+    if (editor->acidWorkspaceVisibleForTesting())
+        return EXIT_FAILURE;
+    editor->selectSlotForTesting(1);
+    editor->showPageForTesting(Page::sound);
+
     for (const auto size : { juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },
                              juce::Point<int> { 1500, 920 } }) {
