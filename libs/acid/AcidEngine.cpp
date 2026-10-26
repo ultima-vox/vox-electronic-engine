@@ -121,6 +121,7 @@ void AcidEngine::reset() noexcept {
     ampEnv_.reset();
     fltEnv_.reset();
     modEnv_.reset();
+    env2State_.reset();
     lfo1Phase_ = 0.0;
 
     accentCapacitor_ = 0.0f;
@@ -246,6 +247,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
     // Non-empty payloads must be fully validated transactionally.
     if (schemaVersion != legacyStateVersion
         && schemaVersion != previousStateVersion
+        && schemaVersion != lfo1StateVersion
         && schemaVersion != stateVersion)
         return false;
     if (payload.empty()) return true;
@@ -262,8 +264,18 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
 
     auto parsedTargets = targets_;
     if (schemaVersion != stateVersion) {
-        // Older payloads did not contain LFO1. Never inherit its state from
-        // a previously used instance during preset recall/migration.
+        // Any v1/v3/v4 recall must disable ENV2, which was absent in those
+        // formats, even when the engine previously played an ENV2 preset.
+        parsedTargets[Parameter::env2Target] = 0.0f;
+        parsedTargets[Parameter::env2Amount] = 0.0f;
+        parsedTargets[Parameter::env2Attack] = 0.0f;
+        parsedTargets[Parameter::env2Decay] = 0.35f;
+        parsedTargets[Parameter::env2Sustain] = 0.80f;
+        parsedTargets[Parameter::env2Release] = 0.40f;
+    }
+    if (schemaVersion == legacyStateVersion
+        || schemaVersion == previousStateVersion) {
+        // These payloads also predate LFO1. Preserve LFO1 from v4 presets.
         parsedTargets[Parameter::lfo1Rate] = 0.35f;
         parsedTargets[Parameter::lfo1Depth] = 0.0f;
         parsedTargets[Parameter::lfo1Wave] = 0.0f;
@@ -285,9 +297,12 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         return true;
     }
 
-    if (schemaVersion == previousStateVersion || schemaVersion == stateVersion) {
+    if (schemaVersion == previousStateVersion
+        || schemaVersion == lfo1StateVersion
+        || schemaVersion == stateVersion) {
         const std::size_t count = schemaVersion == previousStateVersion
-            ? previousParameterCount : parameterCount;
+            ? previousParameterCount
+            : (schemaVersion == lfo1StateVersion ? lfo1ParameterCount : parameterCount);
         if (payload.size() < 8 + count * sizeof(float)) return false;
         for (std::size_t i = 0; i < count; ++i) {
             float val = 0.0f;
@@ -415,6 +430,7 @@ void AcidEngine::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
         ampEnv_.trigger(retriggerEnabled_);
         fltEnv_.trigger(retriggerEnabled_);
         modEnv_.trigger(retriggerEnabled_);
+        env2State_.trigger(retriggerEnabled_);
 
         if (isAccentedNote_) {
             accentCapacitor_ =
@@ -459,6 +475,7 @@ void AcidEngine::noteOff(std::uint8_t note) noexcept {
         ampEnv_.release();
         fltEnv_.release();
         modEnv_.release();
+        env2State_.release();
     }
 }
 
@@ -472,6 +489,7 @@ void AcidEngine::allNotesOff() noexcept {
     ampEnv_.reset();
     fltEnv_.reset();
     modEnv_.reset();
+    env2State_.reset();
     accentCapacitor_ = 0.0f;
     filterState_.fill(0.0f);
     active_ = false;
@@ -507,6 +525,23 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         smoothed_[Parameter::modAmount];
     const ModTarget mTarget = decodeModTarget(smoothed_[Parameter::modTarget]);
 
+    // ENV2 is a separate ADSR with its own MIDI trigger, tail and destination.
+    // In particular, changing ENV1 ADSR never changes ENV2's stage or depth.
+    const float env2AttackSec =
+        0.0008f + smoothed_[Parameter::env2Attack]
+                   * smoothed_[Parameter::env2Attack] * 1.2f;
+    const float env2DecaySec =
+        0.020f + smoothed_[Parameter::env2Decay]
+                  * smoothed_[Parameter::env2Decay] * 2.4f;
+    const float env2SustainValue = clamp01(smoothed_[Parameter::env2Sustain]);
+    const float env2ReleaseSec =
+        0.005f + smoothed_[Parameter::env2Release]
+                   * smoothed_[Parameter::env2Release] * 2.0f;
+    const float env2Value = env2State_.advance(
+        env2AttackSec, env2DecaySec, env2SustainValue, env2ReleaseSec,
+        gate_, sampleRate_) * smoothed_[Parameter::env2Amount];
+    const ModTarget env2Target = decodeModTarget(smoothed_[Parameter::env2Target]);
+
     // Independent bipolar LFO 1. The oscillator keeps phase continuously
     // across blocks and resets deterministically only at engine reset.
     const float lfoRateHz =
@@ -528,6 +563,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     // Their source rates, depth and targets are individually addressable.
     auto modulation = [&](ModTarget target) noexcept {
         return (mTarget == target ? modVal : 0.0f)
+             + (env2Target == target ? env2Value : 0.0f)
              + (lfoTarget == target ? lfoValue : 0.0f);
     };
 

@@ -11,12 +11,14 @@ namespace vstengine::acid {
 
 class AcidEngine final {
 public:
-    static constexpr std::uint32_t stateVersion = 4;
+    static constexpr std::uint32_t stateVersion = 5;
+    static constexpr std::uint32_t lfo1StateVersion = 4;
+    static constexpr std::size_t lfo1ParameterCount = 40;
     static constexpr std::uint32_t previousStateVersion = 3;
     static constexpr std::size_t previousParameterCount = 36;
     static constexpr std::uint32_t legacyStateVersion = 1;
     static constexpr std::size_t legacyParameterCount = 9;
-    static constexpr std::size_t parameterCount = 40;
+    static constexpr std::size_t parameterCount = 46;
     static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
     static constexpr std::size_t maxUnisonVoices = 4;
 
@@ -79,6 +81,14 @@ public:
         lfo1Depth,
         lfo1Wave,
         lfo1Target,
+
+        // ENV2: fully independent destination, amount and ADSR stages.
+        env2Target,
+        env2Amount,
+        env2Attack,
+        env2Decay,
+        env2Sustain,
+        env2Release,
 
         count
     };
@@ -146,7 +156,13 @@ public:
         "lfo1_rate",
         "lfo1_depth",
         "lfo1_wave",
-        "lfo1_target"
+        "lfo1_target",
+        "env2_target",
+        "env2_amount",
+        "env2_attack",
+        "env2_decay",
+        "env2_sustain",
+        "env2_release"
     };
 
     bool prepare(double sampleRate, std::uint32_t maximumBlockSize,
@@ -284,7 +300,13 @@ private:
         0.35f, // 36: LFO1 Rate, 0.05 .. 20 Hz exponential
         0.00f, // 37: LFO1 Depth; silence-compatible default
         0.00f, // 38: LFO1 Wave: sine / triangle / square / saw
-        0.00f  // 39: LFO1 Target: cutoff/pitch/PW/resonance/drive/pan
+        0.00f, // 39: LFO1 Target: cutoff/pitch/PW/resonance/drive/pan
+        0.00f, // 40: ENV2 target: cutoff
+        0.00f, // 41: ENV2 depth: off for backward-compatible factory sound
+        0.00f, // 42: ENV2 attack
+        0.35f, // 43: ENV2 decay
+        0.80f, // 44: ENV2 sustain
+        0.40f  // 45: ENV2 release
     };
     std::array<float, parameterCount> smoothed_ { targets_ };
 
@@ -305,6 +327,7 @@ private:
     AdsrState ampEnv_ {};
     AdsrState fltEnv_ {};
     AdsrState modEnv_ {};
+    AdsrState env2State_ {};
 
     float accentCapacitor_ {};
     float accentGain_ {};
