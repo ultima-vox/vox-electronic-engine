@@ -342,6 +342,11 @@ private:
     double lfo1Phase_ {};
     double lfo2Phase_ {};
     double lfo3Phase_ {};
+    // Hz mapping is computed once per audio block (3 exp/pow operations),
+    // increments are smoothed every sample to avoid rate automation zipper.
+    std::array<double, 3> lfoPhaseIncrement_ {};
+    std::array<double, 3> lfoTargetIncrement_ {};
+    double lfoIncrementSmoothing_ {};
     std::uint32_t maximumBlockSize_ {};
     std::uint32_t outputChannels_ {};
 

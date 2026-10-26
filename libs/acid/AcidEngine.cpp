@@ -125,6 +125,9 @@ void AcidEngine::reset() noexcept {
     lfo1Phase_ = 0.0;
     lfo2Phase_ = 0.0;
     lfo3Phase_ = 0.0;
+    lfoPhaseIncrement_.fill(0.0);
+    lfoTargetIncrement_.fill(0.0);
+    lfoIncrementSmoothing_ = 1.0 - std::exp(-1.0 / (0.004 * sampleRate_));
 
     accentCapacitor_ = 0.0f;
     accentGain_ = 0.0f;
@@ -165,6 +168,16 @@ void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
     if (!prepared_ || outputs.empty() || sampleCount == 0) {
         return;
     }
+
+    constexpr std::array<Parameter, 3> rateParameters {
+        Parameter::lfo1Rate, Parameter::lfo2Rate, Parameter::lfo3Rate
+    };
+    // pow is expensive inside the audio sample loop. Convert each source
+    // rate to cycles/sample only once per host block, then smooth phase
+    // increments sample-by-sample in renderStereoSample().
+    for (std::size_t i = 0; i < rateParameters.size(); ++i)
+        lfoTargetIncrement_[i] = static_cast<double>(
+            0.05f * std::pow(400.0f, targets_[rateParameters[i]])) / sampleRate_;
 
     std::size_t midiIndex = 0;
     const float smoothCoeff =
@@ -562,10 +575,14 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     // Three distinct continuously running bipolar oscillators. Each owns
     // its phase, Rate, Depth, Wave and Target. The helper makes the waveform
     // transfer function identical without sharing any control state.
-    const auto renderLfo = [this](Parameter rate, Parameter depth,
+    const auto renderLfo = [this](std::size_t index, Parameter depth,
                                   Parameter wave, double& phase) noexcept {
-        const float hz = 0.05f * std::pow(400.0f, smoothed_[rate]);
-        phase += static_cast<double>(hz) / sampleRate_;
+        // At the 4ms parameter smoothing constant used by this synth,
+        // increment smoothing avoids hard discontinuities at host automation
+        // changes without calling pow for every output sample.
+        lfoPhaseIncrement_[index] += lfoIncrementSmoothing_ *
+            (lfoTargetIncrement_[index] - lfoPhaseIncrement_[index]);
+        phase += lfoPhaseIncrement_[index];
         if (phase >= 1.0) phase -= std::floor(phase);
         float signal = 0.0f;
         switch (std::min(3, static_cast<int>(
@@ -579,13 +596,13 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         return signal * smoothed_[depth];
     };
     const float lfo1Value = renderLfo(
-        Parameter::lfo1Rate, Parameter::lfo1Depth,
+        0u, Parameter::lfo1Depth,
         Parameter::lfo1Wave, lfo1Phase_);
     const float lfo2Value = renderLfo(
-        Parameter::lfo2Rate, Parameter::lfo2Depth,
+        1u, Parameter::lfo2Depth,
         Parameter::lfo2Wave, lfo2Phase_);
     const float lfo3Value = renderLfo(
-        Parameter::lfo3Rate, Parameter::lfo3Depth,
+        2u, Parameter::lfo3Depth,
         Parameter::lfo3Wave, lfo3Phase_);
     const ModTarget lfo1Target = decodeModTarget(smoothed_[Parameter::lfo1Target]);
     const ModTarget lfo2Target = decodeModTarget(smoothed_[Parameter::lfo2Target]);
