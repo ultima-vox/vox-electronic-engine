@@ -239,9 +239,13 @@ float AcidEngine::parameter(std::string_view id) const noexcept {
 
 bool AcidEngine::loadState(std::uint32_t schemaVersion,
                            std::span<const std::byte> payload) noexcept {
-    if (payload.size() < 8) {
+    // The existing Rack creates a newly selected instrument with an empty
+    // payload: retain factory defaults for both supported schemas.
+    // Non-empty payloads must be fully validated transactionally.
+    if (schemaVersion != legacyStateVersion && schemaVersion != stateVersion)
         return false;
-    }
+    if (payload.empty()) return true;
+    if (payload.size() < 8) return false;
 
     std::uint32_t magic = 0;
     std::uint32_t version = 0;
