@@ -6,7 +6,7 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 
 ## Explicit responsibility boundary
 
-**Implement ONLY Acid Synth.** The product Rack (red region in annotated user screenshot) is complete/nearly complete and must not be re-implemented. Red/green annotated outlines are reference markup only. Acid's green workspace is the entire feature scope. Keep the existing shared header, slot rail, keyboard, transport, channel routing and global shell untouched. Minimal selected-slot integration in existing editor/processor is allowed; no Rack refactor or API redesign. Smoke/Rack tests are regression checks only.
+**Implement ONLY Acid Synth.** The product Rack (red region in annotated user screenshot) is not Production-ready but must not be re-implemented as part of this Acid feature branch. Red/green annotated outlines are reference markup only. Acid's green workspace is the entire feature scope. Keep the existing shared header, slot rail, keyboard, transport, channel routing and global shell untouched. Minimal selected-slot integration in existing editor/processor is allowed; no Rack refactor or API redesign. Smoke/Rack tests are regression checks only.
 
 ## Screen hierarchy
 
@@ -40,7 +40,8 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 | MOD/ENV1 | Target, Amount, A, D, S, R | S `mod_target`, `mod_amount`, `mod_attack`, `mod_decay`, `mod_sustain`, `mod_release` | Per-source envelope routed to chosen target; curve reflects actual state |
 | MOD/ENV2 | Target, Amount, Attack, Decay, Sustain, Release | `env2_target`, `env2_amount`, `env2_attack`, `env2_decay`, `env2_sustain`, `env2_release` (new IDs 40–45) | Implemented in branch: independent ADSR, own destination, host bindings and v5 module state; CI pending |
 | MOD/LFO1 | Rate, waveform, depth, target | S `lfo1_rate`, `lfo1_wave`, `lfo1_depth`, `lfo1_target` (additive IDs 36–39) | Implemented in Acid branch: distinct 0.05–20 Hz bipolar LFO, 4 waves, independent destination, APVTS, source selector, v4 state; Windows CI confirmation pending. Host BPM sync remains outstanding. |
-| MOD/LFO2–3 | Rate, shape, sync, depth, target | MISSING separate LFO2 and LFO3 | Independent modulators, state, host sync, UI and automation still to implement |
+| MOD/LFO2 | Rate, waveform, depth, target | S `lfo2_rate`, `lfo2_wave`, `lfo2_depth`, `lfo2_target` (IDs 46–49) | Implemented in source: independent bipolar LFO2 DSP, host automation, own UI tab and v6 state. CI pending; host BPM sync missing. |
+| MOD/LFO3 | Rate, waveform, depth, target | S `lfo3_rate`, `lfo3_wave`, `lfo3_depth`, `lfo3_target` (IDs 50–53) | Implemented in source: independent bipolar LFO3 DSP, host automation, own UI tab and v6 state. CI pending; host BPM sync missing. |
 | MOD/STEP | Step modulator, sync, target, depth | MISSING step modulation source | Distinct from note sequencer; audible and stateful |
 | PERFORMANCE | Portamento | S `portamento` | Glides by selected duration, independent of Slide Time semantics |
 | PERFORMANCE | Unison voices | S `unison_voices` | 1–4 audible voices; correct normalization and CPU budget |
@@ -67,7 +68,7 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 
 ## Production acceptance / status
 
-Current PR #59 implements **46 Acid DSP parameters** (original 36 + 4 LFO1 + 6 ENV2) with v5 schema; extended parameters and four play-mode switches have per-slot VST3 APVTS host IDs. A dedicated `AcidPanel` is mounted inside the existing SOUND workspace, and actual APVTS attachments now switch between ENV1 and LFO1. Acid-local state schema v5 writes all 46 controls and loads v1/v3/v4, defaulting absent LFO1 and ENV2 sources off on migration. Measured LFO audio, UI-switch isolation and host ID regression tests were added, but the latest Windows CI has **not finished**. The latest fully completed pre-ENV2 CI for commit f5bb524 passed 29/30 tests; `bass_render_diagnostics/save_restore_rerender` remained red. No production or DAW acceptance yet. Specifically:
+Current PR #59 has **54 Acid DSP semantic parameters** (36 original + LFO1 4 + ENV2 6 + LFO2/3 8). Acid-local schema v6 serializes all 54 and accepts v1/v3/v4/v5; absent sources default to depth off. Five UI modulation source tabs rebind the actual slot-scoped host parameters (ENV1, ENV2, LFO1, LFO2, LFO3). New audio/host/UI regression tests were added, **but their latest Windows CI result is not verified**. Last completed pre-v6 CI passed 29/30 tests, with `bass_render_diagnostics/save_restore_rerender` failing. STEP, host-BPM sync, final visual layout and DAW acceptance remain outstanding. Specifically:
 - No `AcidEngine*` direct UI binding to replaceable Rack runtime instance.
 - No silent aliasing to host macro `Space`/`Motion`.
 - No imaginary `Step.note`, `Step.slide`, `Step.octave`, `Sequence.stepCount`.
