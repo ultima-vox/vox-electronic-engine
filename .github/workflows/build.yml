@@ -51,7 +51,7 @@ jobs:
           # not the independent showcase/capture program above.
           $editorTest = Join-Path $PWD "build\\Release\\editor_smoke_tests.exe"
           if (-not (Test-Path $editorTest)) { throw "Editor smoke executable missing" }
-          $env:VOX_UI_ACID_SNAPSHOT = Join-Path $snapshotDir "acid-actual-editor-1040x768.png"
+          $env:VOX_UI_ACID_SNAPSHOT = Join-Path $snapshotDir "acid-actual-editor-1024x768.png"
           & $editorTest
           if ($LASTEXITCODE -ne 0) { throw "Acid actual editor capture failed" }
           if (-not (Test-Path $env:VOX_UI_ACID_SNAPSHOT)) {

@@ -69,7 +69,8 @@ int main()
         || std::abs(filterDecay->load() - oldFilterDecay) > 0.0001f)
         return EXIT_FAILURE;
 
-    for (const auto size : { juce::Point<int> { 1040, 680 },
+    for (const auto size : { juce::Point<int> { 1024, 768 },
+                             juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },
                              juce::Point<int> { 1500, 920 } }) {
         editor->setSize(size.x, size.y);
@@ -111,7 +112,7 @@ int main()
     if (acidPath.isNotEmpty()) {
         editor->selectSlotForTesting(1);
         editor->showPageForTesting(Page::sound);
-        editor->setSize(1040, 768);
+        editor->setSize(1024, 768);
         const auto image = editor->createComponentSnapshot(editor->getLocalBounds());
         juce::FileOutputStream output { juce::File(acidPath) };
         juce::PNGImageFormat format;

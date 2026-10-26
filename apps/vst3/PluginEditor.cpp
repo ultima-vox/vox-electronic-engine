@@ -476,7 +476,7 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(VstEngineAudioProce
     instrumentHeader.onModelChanged = [this] { bindSelection(processor.selectedSlotIndex()); };
     navigation.onPageChanged = [this](Page page) { showPage(page); };
     keyboard.setAvailableRange(24, 96);
-    setResizable(true, true); setResizeLimits(1040, 680, 1600, 1000); setSize(1240, 800);
+    setResizable(true, true); setResizeLimits(1024, 680, 1600, 1000); setSize(1240, 800);
     bindSelection(0); refreshGlobalPresets(); showPage(Page::sound); startTimerHz(20);
 }
 
