@@ -1,5 +1,6 @@
 #include "acid/AcidProvider.h"
 #include "acid/AcidEngine.h"
+#include "acid/AcidParameterBridge.h"
 #include "acid/AcidGenerator.h"
 #include <algorithm>
 #include <array>
@@ -9,6 +10,8 @@ namespace vstengine::acid {
 namespace {
 class AcidInstance final : public instrument::InstrumentInstance {
 public:
+    AcidInstance(AcidParameterBridge* controls, instrument::SlotId slotId)
+        : controls_(controls), slotId_(slotId) {}
     bool prepare(const instrument::PrepareSpec& spec) override
     {
         return engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
@@ -24,8 +27,10 @@ public:
     }
     void process(const instrument::ProcessBlock& block) noexcept override
     {
-        if (!bypassed_ && !suspended_)
+        if (!bypassed_ && !suspended_) {
+            if (controls_) controls_->apply(slotId_, engine_);
             engine_.process(block.outputs, block.sampleCount, block.midi);
+        }
     }
     bool setParameter(std::string_view id, float value) noexcept override
     {
@@ -50,6 +55,8 @@ public:
         return engine_.tailSamples();
     }
 private:
+    AcidParameterBridge* controls_ {};
+    instrument::SlotId slotId_ {};
     AcidEngine engine_;
     bool bypassed_ {};
     bool suspended_ {};
@@ -88,7 +95,7 @@ AcidProfile profile(std::string_view id) noexcept
 
 class AcidProvider final : public instrument::InstrumentProvider {
 public:
-    AcidProvider()
+    explicit AcidProvider(AcidParameterBridge* controls) : controls_(controls)
     {
         descriptor_.id = std::string(instrumentId);
         descriptor_.providerId = "com.ultimavox.builtin";
@@ -146,9 +153,10 @@ public:
         descriptors() const noexcept override { return { &descriptor_, 1 }; }
 
     std::unique_ptr<instrument::InstrumentInstance> create(
-        std::string_view id, const instrument::CreateContext&) override
+        std::string_view id, const instrument::CreateContext& context) override
     {
-        return id == instrumentId ? std::make_unique<AcidInstance>() : nullptr;
+        return id == instrumentId
+            ? std::make_unique<AcidInstance>(controls_, context.slotId) : nullptr;
     }
 
     std::span<const instrument::ContentDescriptor> contentDescriptors(
@@ -217,13 +225,14 @@ public:
         return instrument::ContentStatus::ok;
     }
 private:
+    AcidParameterBridge* controls_ {};
     instrument::InstrumentDescriptor descriptor_;
     std::vector<instrument::ContentDescriptor> content_;
 };
 } // namespace
 
-std::unique_ptr<instrument::InstrumentProvider> createAcidProvider()
+std::unique_ptr<instrument::InstrumentProvider> createAcidProvider(AcidParameterBridge* controls)
 {
-    return std::make_unique<AcidProvider>();
+    return std::make_unique<AcidProvider>(controls);
 }
 } // namespace vstengine::acid
