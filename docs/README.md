@@ -28,6 +28,7 @@ Implementing a contract change requires its own migration analysis, tests and re
 | [AGY Bass task](tasks/AGY_BASS_DIAGNOSTICS.md) | Independent, bounded development packet |
 | [Performance suite](testing/phase-17-performance.md) | Existing synthetic workload and limits |
 | [Reliability suite](testing/phase-18-reliability.md) | Existing automated lifecycle/state workload |
+| [Rack lifecycle validation](testing/rack-lifecycle-report.md) | Typed/project state preflight and safe reprepare evidence |
 
 ## Historical material
 

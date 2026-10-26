@@ -8,6 +8,16 @@ namespace vstengine::rack {
 namespace {
 constexpr double pi = 3.14159265358979323846;
 
+struct ActiveProcess final {
+    explicit ActiveProcess(std::atomic<std::uint32_t>& counter) noexcept
+        : counter_(counter) { counter_.fetch_add(1, std::memory_order_seq_cst); }
+    ~ActiveProcess() { counter_.fetch_sub(1, std::memory_order_seq_cst); }
+    ActiveProcess(const ActiveProcess&) = delete;
+    ActiveProcess& operator=(const ActiveProcess&) = delete;
+private:
+    std::atomic<std::uint32_t>& counter_;
+};
+
 std::uint32_t nextRandom(std::uint32_t& state) noexcept
 {
     state ^= state << 13;
@@ -51,31 +61,58 @@ Rack::Rack(instrument::InstrumentRegistry& registry) : registry_(registry)
 
 void Rack::beginExclusive() const noexcept
 {
-    mutationGate_.store(true, std::memory_order_release);
-    while (activeProcessors_.load(std::memory_order_acquire) != 0)
+    mutationGate_.store(true, std::memory_order_seq_cst);
+    while (activeProcessors_.load(std::memory_order_seq_cst) != 0)
         std::this_thread::yield();
 }
 
 void Rack::endExclusive() const noexcept
 {
-    mutationGate_.store(false, std::memory_order_release);
+    mutationGate_.store(false, std::memory_order_seq_cst);
 }
 
 bool Rack::prepare(const instrument::PrepareSpec& spec)
 {
-    if (spec.sampleRate <= 0.0 || spec.maximumBlockSize == 0
+    if (!std::isfinite(spec.sampleRate) || spec.sampleRate <= 0.0
+        || spec.maximumBlockSize == 0
         || spec.outputChannels == 0 || spec.outputChannels > 2)
         return false;
-    spec_ = spec;
-    for (auto& slot : runtime_) {
-        for (std::size_t channel = 0; channel < spec.outputChannels; ++channel) {
-            slot.audio[channel].assign(spec.maximumBlockSize, 0.0f);
-            slot.pointers[channel] = slot.audio[channel].data();
+    const std::scoped_lock persistentLock(persistentStateMutex_);
+    std::array<std::array<std::vector<float>, 2>, instrument::maxSlots> audio;
+    try {
+        for (auto& slot : audio)
+            for (std::size_t channel = 0; channel < spec.outputChannels; ++channel)
+                slot[channel].assign(spec.maximumBlockSize, 0.0f);
+    } catch (...) {
+        return false; // No live DSP/spec/buffers were touched.
+    }
+    beginExclusive();
+    // A provider can mutate itself before returning false/throwing. Once that
+    // starts, rollback is not guaranteed: leave the rack non-processing until
+    // every provider successfully prepares on a later retry.
+    spec_ = {};
+    bool prepared = true;
+    try {
+        for (auto& slot : runtime_)
+            if (slot.instance && !slot.instance->prepare(spec)) {
+                prepared = false;
+                break;
+            }
+    } catch (...) {
+        prepared = false;
+    }
+    if (prepared) {
+        for (std::size_t index = 0; index < runtime_.size(); ++index) {
+            runtime_[index].audio = std::move(audio[index]);
+            for (std::size_t channel = 0; channel < 2; ++channel)
+                runtime_[index].pointers[channel] = channel < spec.outputChannels
+                    ? runtime_[index].audio[channel].data() : nullptr;
         }
-        if (slot.instance && !slot.instance->prepare(spec)) return false;
+        spec_ = spec;
     }
     reset();
-    return true;
+    endExclusive();
+    return prepared;
 }
 
 void Rack::reset() noexcept
@@ -104,16 +141,11 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
                      instrument::ResourceResolver* resources, SlotRuntime& target,
                      RuntimeSlotState& runtimeState, std::string& diagnostic)
 {
-    if (index >= state_.size()
-        || state.schemaVersion
-            != static_cast<std::uint32_t>(vstengine::rack::state::schemaVersion)
-        || state.slotId == instrument::invalidSlotId || !valid(state.routing)
-        || !std::isfinite(state.level) || !std::isfinite(state.pan)
-        || state.level < 0.0f || state.level > 2.0f
-        || state.pan < -1.0f || state.pan > 1.0f) {
+    if (index >= state_.size()) {
         diagnostic = "invalid rack slot state";
         return false;
     }
+    if (!vstengine::rack::state::validateSlot(state, diagnostic)) return false;
     if (state.instrumentId.empty()) {
         runtimeState.resolution = instrument::ResolutionStatus::missingModule;
         return true;
@@ -200,6 +232,7 @@ bool Rack::replaceState(
     instrument::ResourceResolver* resources, std::string& diagnostic)
 {
     const std::scoped_lock persistentLock(persistentStateMutex_);
+    if (!state::validate(replacement, diagnostic)) return false;
     std::array<SlotRuntime, instrument::maxSlots> preparedRuntime;
     std::array<RuntimeSlotState, instrument::maxSlots> preparedState;
     for (std::size_t i = 0; i < replacement.size(); ++i)
@@ -370,7 +403,7 @@ bool Rack::updatePatternState(std::size_t index, std::string presetId,
                               std::vector<std::byte> payload)
 {
     const std::scoped_lock persistentLock(persistentStateMutex_);
-    if (index >= state_.size() || patternSchema == 0
+    if (index >= state_.size() || presetId.size() > 256 || patternSchema == 0
         || payload.size() > state::maxPatternPayloadBytes)
         return false;
     beginExclusive();
@@ -529,14 +562,15 @@ void Rack::process(std::span<float*> outputs, std::uint32_t sampleCount,
                    std::span<const ProcessSlotControls> controls,
                    std::span<const RackRouter::GeneratedSlotEvents> generated) noexcept
 {
+    if (mutationGate_.load(std::memory_order_seq_cst))
+        return;
+    const ActiveProcess active(activeProcessors_);
+    if (mutationGate_.load(std::memory_order_seq_cst))
+        return;
+    // Read the prepared spec only after joining the control/audio gate.
     if (sampleCount > spec_.maximumBlockSize || outputs.empty()
-        || outputs.size() > 2 || mutationGate_.load(std::memory_order_acquire))
+        || outputs.size() > spec_.outputChannels)
         return;
-    activeProcessors_.fetch_add(1, std::memory_order_acq_rel);
-    if (mutationGate_.load(std::memory_order_acquire)) {
-        activeProcessors_.fetch_sub(1, std::memory_order_release);
-        return;
-    }
     if (controls.size() != state_.size()) {
         for (std::size_t i = 0; i < state_.size(); ++i)
             defaultControls_[i] = processControls(state_[i]);
@@ -579,7 +613,6 @@ void Rack::process(std::span<float*> outputs, std::uint32_t sampleCount,
                 outputs[1][sample] += slot.audio[1][sample] * right;
         }
     }
-    activeProcessors_.fetch_sub(1, std::memory_order_release);
 }
 
 const instrument::InstrumentDescriptor* Rack::descriptor(std::size_t index) const noexcept
