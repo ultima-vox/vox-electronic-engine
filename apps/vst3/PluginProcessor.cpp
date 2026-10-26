@@ -1135,10 +1135,14 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
                  p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
                 const auto id = vstengine::acid::hostParameterId(
                     index, vstengine::acid::AcidEngine::parameterIds[p]);
-                if (auto* param = apvts.getParameter(id.c_str()))
-                    param->setValueNotifyingHost(
-                        param->convertTo0to1(defaults.parameter(
-                            vstengine::acid::AcidEngine::parameterIds[p])));
+                if (auto* param = apvts.getParameter(id.c_str())) {
+                    float value = defaults.parameter(
+                        vstengine::acid::AcidEngine::parameterIds[p]);
+                    (void) vstengine::acid::factorySoundParameterValue(
+                        presetId, vstengine::acid::AcidEngine::parameterIds[p],
+                        value);
+                    param->setValueNotifyingHost(param->convertTo0to1(value));
+                }
             }
             constexpr std::array<std::pair<std::string_view, float>, 4> flags {{
                 { "legato", 1.0f }, { "retrigger", 0.0f },

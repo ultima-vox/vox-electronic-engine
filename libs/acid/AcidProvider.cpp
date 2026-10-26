@@ -235,4 +235,19 @@ std::unique_ptr<instrument::InstrumentProvider> createAcidProvider(AcidParameter
 {
     return std::make_unique<AcidProvider>(controls);
 }
+
+bool factorySoundParameterValue(std::string_view presetId,
+                                std::string_view semanticId, float& value) noexcept
+{
+    for (const auto& preset : soundPresets) {
+        if (presetId != preset.id) continue;
+        for (std::size_t i = 0; i < preset.values.size(); ++i)
+            if (AcidEngine::parameterIds[i] == semanticId) {
+                value = preset.values[i];
+                return true;
+            }
+        return false;
+    }
+    return false;
+}
 } // namespace vstengine::acid
