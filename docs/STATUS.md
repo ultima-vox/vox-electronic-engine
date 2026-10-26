@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 25.10.2026.
+Updated: 26.10.2026.
 Source baseline: `b076a53d8900b53433e8aa4fdb1027c8f2bed135`.
 Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
 
@@ -47,13 +47,16 @@ Existing generic Lead/FX code is not equivalent to an accepted Full-on instrumen
 
 ## Current work allocation
 
-Rack lifecycle hardening in this branch: shared state preflight, safe failed reprepare
-and prepared-channel checks. Actual Rack + JUCE lifecycle suite: 406 checks PASS.
-Windows CI/full plugin and DAW acceptance remain required; see the
-[verification report](testing/rack-lifecycle-report.md).
-The independent router-overflow fix remains in PR #46 until integrated.
+Rack state/lifecycle hardening and MIDI release recovery are integrated in main
+(PRs #48 and #46; required Windows CI passed for both). See the
+[lifecycle report](testing/rack-lifecycle-report.md) and
+[router report](testing/rack-midi-hardening-report.md).
+Live-control synchronization is the current change; see its
+[verification report](testing/rack-live-controls-report.md).
+Manual sound/DAW acceptance remains outstanding at integrated milestones,
+not a per-PR handoff. Standalone is not required; VST3 remains the product.
 
-- Documentation/archival: this PR; no runtime change.
+- Documentation/archival: completed in PR #44.
 - AGY: [Bass/generation diagnosis and render harness](tasks/AGY_BASS_DIAGNOSTICS.md), separate branch.
 - UI PR #43: existing Sound workspace candidate. Re-evaluate against current workflows; do not merge or close automatically during cleanup.
 - Pattern/API v2 and new style instruments: subsequent scoped implementation, not part of AGY's first task.

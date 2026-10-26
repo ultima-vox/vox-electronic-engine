@@ -46,6 +46,8 @@ A showcase render is not proof that the real editor works.
 ## Acceptance
 
 Run all existing tests without weakening limits.
-For functional changes also verify generated MIDI, automation, project reopen,
-transport/loop/seek and offline rendering in the target DAWs.
+At integrated milestones verify generated MIDI, automation, project reopen,
+transport/loop/seek and offline rendering in the target DAWs. Manual DAW checks
+are not required after every technical PR; required automated checks and review
+still apply. Build the VST3 product; no separate standalone app is required.
 Report actual Windows/DAW build numbers; do not claim a full version range from a single test.

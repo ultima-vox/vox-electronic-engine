@@ -247,6 +247,10 @@ target_include_directories(rack_lifecycle_tests PRIVATE tests)
 target_link_libraries(rack_lifecycle_tests PRIVATE vst_rack)
 add_test(NAME rack_lifecycle_tests COMMAND rack_lifecycle_tests)
 
+add_executable(rack_live_controls_tests tests/rack/RackLiveControlsTests.cpp)
+target_link_libraries(rack_live_controls_tests PRIVATE vst_rack)
+add_test(NAME rack_live_controls_tests COMMAND rack_live_controls_tests)
+
 add_executable(transport_sync_tests tests/transport/TransportSyncTests.cpp)
 target_link_libraries(transport_sync_tests PRIVATE vst_transport)
 add_test(NAME transport_sync_tests COMMAND transport_sync_tests)

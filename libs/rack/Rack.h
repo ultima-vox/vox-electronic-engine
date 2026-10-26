@@ -34,18 +34,24 @@ public:
                  instrument::SlotId selectedSlot = instrument::invalidSlotId,
                  std::span<const ProcessSlotControls> controls = {},
                  std::span<const RackRouter::GeneratedSlotEvents> generated = {}) noexcept;
+    // Non-realtime defaults: may wait for an active callback. DSP applies the
+    // change at the next block; explicit ProcessSlotControls take precedence.
+    // Host automation uses process() block snapshots, never these setters.
     void setMacro(std::size_t slotIndex, std::size_t macroIndex,
                   float value) noexcept;
     void updateControls(std::size_t slotIndex, Routing, bool enabled,
                         bool mute, bool solo, bool locked, float level,
                         float pan) noexcept;
+    // Borrowed views require caller serialization against control mutations.
     [[nodiscard]] const auto& state() const noexcept { return state_; }
     [[nodiscard]] std::array<PersistentSlotState, instrument::maxSlots>
         snapshotState(std::span<const ProcessSlotControls> controls = {}) const;
+    // Non-realtime metadata snapshot; takes the control-state mutex.
     [[nodiscard]] std::array<RuntimeSlotState, instrument::maxSlots>
         runtimeState() const noexcept;
     [[nodiscard]] const instrument::InstrumentDescriptor* descriptor(
         std::size_t slotIndex) const noexcept;
+    // Query only while lifecycle/module mutations are externally serialized.
     [[nodiscard]] std::uint32_t latencySamples() const noexcept;
     [[nodiscard]] std::uint32_t tailSamples() const noexcept;
 
