@@ -21,6 +21,10 @@ constexpr double twoPi = 2.0 * std::numbers::pi;
 }
 
 [[nodiscard]] inline float fastTanh(float x) noexcept {
+    // The cubic rational approximation is only bounded for |x| <= 3.
+    // Keep saturation truly bounded: high Acid resonance/Drive must never
+    // amplify the feedback path above unity because of the approximant.
+    x = std::clamp(x, -3.0f, 3.0f);
     const float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
