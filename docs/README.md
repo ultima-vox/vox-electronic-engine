@@ -22,6 +22,7 @@ Implementing a contract change requires its own migration analysis, tests and re
 | [Status](STATUS.md) | Observed implementation, owner-reported defects, unverified acceptance |
 | [Roadmap](ROADMAP.md) | Ordered work and deliverables |
 | [Contracts](architecture/CONTRACTS.md) | Boundaries that implementation must preserve |
+| [Independent Sound parameters](architecture/independent-sound-parameters.md) | One control per parameter, authorized POC replacement, DSP semantics and remaining host/UI work |
 | [Build](BUILD.md) | Real commands, artifact names and check limitations |
 | [Design system](ui/DESIGN_SYSTEM.md) | Current component/token locations and interaction rules |
 | [UI workflows](ui/WORKFLOWS.md) | Rack, instrument pages, generators and visual gates |

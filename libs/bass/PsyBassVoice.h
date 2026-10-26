@@ -1,6 +1,5 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
-#include <juce_audio_processors/juce_audio_processors.h>
 
 namespace vstengine::bass {
 
@@ -26,6 +25,7 @@ public:
     void prepareDirect(double sampleRate) noexcept
     {
         setCurrentPlaybackSampleRate(sampleRate);
+        outputGain.reset(sampleRate, .005);
         directActive = false;
     }
     void noteOnDirect(int note, float velocity) noexcept
@@ -136,6 +136,7 @@ private:
     float lastCoefficientCutoff { -1.0f };
     float lastCoefficientResonance { -1.0f };
     int lastCoefficientNote { -1 };
+    float lastCoefficientTracking { -1.0f };
     float filterResonance { 0.7f };
     float filterDrive { 1.0f };
     float keyTracking { 0.0f };
@@ -153,6 +154,7 @@ private:
     float drive { 1.8f };
     float smoothedDrive { 1.8f };
     float outputLevel { 1.0f };
+    juce::SmoothedValue<double> outputGain { 1.0 };
     bool directActive {};
 };
 

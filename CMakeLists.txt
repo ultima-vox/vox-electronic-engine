@@ -80,10 +80,11 @@ target_link_libraries(vst_midi
 # bass: psy-bass DSP voice (oscillator/pitch env/amp env/filter/drive/glide).
 add_library(vst_bass STATIC
   libs/bass/PsyBassVoice.cpp libs/bass/PsyBassVoice.h
+  libs/bass/FullOnBass.cpp libs/bass/FullOnBass.h
   libs/bass/BassGenerator.cpp libs/bass/BassGenerator.h)
 target_include_directories(vst_bass PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_bass PUBLIC
-  juce::juce_audio_basics juce::juce_audio_processors)
+  vst_instrument juce::juce_audio_basics juce::juce_audio_processors)
 
 # acid: self-contained 303-style DSP, deterministic generator and provider.
 add_library(vst_acid STATIC
@@ -288,6 +289,13 @@ add_test(NAME part_mixer_tests COMMAND part_mixer_tests)
 add_executable(psy_bass_tests tests/bass/PsyBassTests.cpp)
 target_link_libraries(psy_bass_tests PRIVATE vst_bass)
 add_test(NAME psy_bass_tests COMMAND psy_bass_tests)
+
+add_executable(fullon_bass_parameter_tests
+  tests/bass/FullOnBassParameterTests.cpp
+  tests/instrument/InstrumentComplianceHarness.cpp)
+target_include_directories(fullon_bass_parameter_tests PRIVATE tests)
+target_link_libraries(fullon_bass_parameter_tests PRIVATE vst_bass vst_sequence)
+add_test(NAME fullon_bass_parameter_tests COMMAND fullon_bass_parameter_tests)
 
 add_executable(acid_tests
   tests/acid/AcidTests.cpp
