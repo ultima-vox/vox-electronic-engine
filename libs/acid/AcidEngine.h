@@ -269,7 +269,7 @@ private:
         0.00f, // 32: unison_voices (1 voice)
         0.10f, // 33: unison_detune (0.10)
         0.40f, // 34: stereo_spread (0.40)
-        0.75f  // 35: play_mode_flags (Legato + Vel->Accent + Slide on Overlap)
+        (13.0f / 15.0f)  // 35: play_mode_flags: Legato, Vel->Accent, Slide on Overlap
     };
     std::array<float, parameterCount> smoothed_ { targets_ };
 
