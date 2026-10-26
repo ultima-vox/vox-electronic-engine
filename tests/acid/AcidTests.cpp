@@ -280,6 +280,36 @@ int main()
                                      - instrument::macrosPerSlot),
             "all 432 extended Acid parameter IDs are unique");
 
+    // Production DSP gate: user-visible Acid knob changes must alter audio,
+    // not just move a normalized property. Render both variants from fresh,
+    // identically prepared voices so no envelope/RNG history can mask a bug.
+    auto renderControl = [&](std::string_view semantic, float value) {
+        auto voice = provider->create(acid::instrumentId,
+            { instrument::initialSlotId(9), nullptr });
+        if (!voice || !voice->prepare({ 48000.0, 4096, 2 })
+            || !voice->setParameter(semantic, value))
+            return std::vector<float> {};
+        return render(*voice, 48, 120);
+    };
+    constexpr std::array<std::string_view, 12> independentlyAudible {
+        "osc_tune", "osc_fine", "waveform", "cutoff",
+        "resonance", "filter_mode", "drive", "dist_mode",
+        "dist_mix", "output", "pan", "amp_attack"
+    };
+    for (const auto id : independentlyAudible) {
+        const auto low = renderControl(id, 0.07f);
+        const auto high = renderControl(id, 0.93f);
+        REQUIRE(!low.empty() && low.size() == high.size(),
+                "independently automated Acid control renders both variants");
+        const double difference = std::inner_product(
+            low.begin(), low.end(), high.begin(), 0.0,
+            std::plus<> {}, [](float a, float b) {
+                return std::abs(static_cast<double>(a) - static_cast<double>(b));
+            });
+        REQUIRE(difference > 0.01,
+                "each Acid oscillator/filter/drive/output control has audible DSP effect");
+    }
+
     auto instance = provider->create(acid::instrumentId,
         { instrument::initialSlotId(1), nullptr });
     REQUIRE(instance && instance->prepare({ 48000.0, 4096, 2 }),
