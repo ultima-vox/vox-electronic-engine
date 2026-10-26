@@ -9,6 +9,7 @@
 #include "parts/PartState.h"
 #include "preset/PresetManager.h"
 #include "rack/Rack.h"
+#include "acid/AcidParameterBridge.h"
 #include "rack/RackState.h"
 #include "sequence/Sequence.h"
 #include "sequence/RealtimeSequenceBridge.h"
@@ -192,6 +193,7 @@ private:
 
     juce::MidiKeyboardState keyboard;
     juce::AudioProcessorValueTreeState apvts;
+    vstengine::acid::AcidParameterBridge acidHostBridge;
     vstengine::instrument::InstrumentRegistry instrumentRegistry;
     vstengine::rack::Rack rack;
     vstengine::effects::EffectsChain effectsChain;

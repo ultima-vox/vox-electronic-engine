@@ -6,6 +6,7 @@
 #include "modules/BuiltInProvider.h"
 #include "preset/PresetManager.h"
 #include "sequence/PatternAdapter.h"
+#include "acid/AcidEngine.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -28,7 +29,7 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
 {
     std::string diagnostic;
     if (!instrumentRegistry.registerProvider(
-            vstengine::modules::createBuiltInProvider(), diagnostic))
+            vstengine::modules::createBuiltInProvider(&acidHostBridge), diagnostic))
         jassertfalse;
 
     auto initialRack = rack.state();
@@ -44,8 +45,25 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
                               0.48f, 0.58f, 0.30f, 0.28f };
     (void) rack.replaceState(initialRack, nullptr, diagnostic);
     cacheRackParameterPointers();
-    for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
+    // Acid-specific host parameter IDs are additive and slot-stable. The
+    // original eight Rack host macros remain their sole DSP controllers.
+    for (std::size_t slot = 0; slot < rackControls.size(); ++slot) {
         rackControls[slot].slotId = initialRack[slot].slotId;
+        acidHostBridge.setSlotId(slot, initialRack[slot].slotId);
+        for (std::size_t p = vstengine::instrument::macrosPerSlot;
+             p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+            const auto id = vstengine::acid::hostParameterId(
+                slot, vstengine::acid::AcidEngine::parameterIds[p]);
+            acidHostBridge.bind(slot, p, apvts.getRawParameterValue(id.c_str()));
+        }
+        constexpr std::array<std::string_view, 4> flags {
+            "legato", "retrigger", "vel_to_accent", "slide_on_overlap"
+        };
+        for (std::size_t f = 0; f < flags.size(); ++f) {
+            const auto id = vstengine::acid::hostParameterId(slot, flags[f]);
+            acidHostBridge.bindFlag(slot, f, apvts.getRawParameterValue(id.c_str()));
+        }
+    }
 
     // Seed initial sequence with darkPsy pattern (canonical seeded operation
     // owned by the sequence module; same generator stream as before).
@@ -88,6 +106,8 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
                     return false;
                 }
                 if (rack.replaceState(parsed, nullptr, diagnostic)) {
+                    for (std::size_t slot = 0; slot < parsed.size(); ++slot)
+                        acidHostBridge.setSlotId(slot, parsed[slot].slotId);
                     effectsChain = std::move(candidateEffects);
                     for (auto& scheduler : patternRuntime->schedulers)
                         scheduler.reset(currentSampleRate);
@@ -1028,6 +1048,28 @@ VstEngineAudioProcessor::createParameterLayout()
                     vstengine::instrument::hostparams::macroId(slot, macro), 1 },
                 vstengine::instrument::hostparams::macroName(slot, macro),
                 juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f }, 0.5f));
+        // Acid-only additions: independent per-slot automatable parameters.
+        // The first eight Acid controls are already stable Rack macros.
+        const vstengine::acid::AcidEngine acidDefaults;
+        for (std::size_t p = vstengine::instrument::macrosPerSlot;
+             p < vstengine::acid::AcidEngine::playModeFlags; ++p) {
+            const auto semantic = vstengine::acid::AcidEngine::parameterIds[p];
+            params.push_back(std::make_unique<juce::AudioParameterFloat>(
+                juce::ParameterID {
+                    juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                label + "Acid " + juce::String(semantic),
+                juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f },
+                acidDefaults.parameter(semantic)));
+        }
+        constexpr std::array<std::pair<std::string_view, bool>, 4> modes {{
+            { "legato", true }, { "retrigger", false },
+            { "vel_to_accent", true }, { "slide_on_overlap", true }
+        }};
+        for (const auto& [semantic, enabled] : modes)
+            params.push_back(std::make_unique<juce::AudioParameterBool>(
+                juce::ParameterID {
+                    juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                label + "Acid " + juce::String(semantic), enabled));
     }
 
     return { params.begin(), params.end() };
@@ -1470,8 +1512,10 @@ void VstEngineAudioProcessor::setStateInformation(const void* data,
             return;
         }
         if (rackTree.isValid())
-            for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
+            for (std::size_t slot = 0; slot < rackControls.size(); ++slot) {
                 rackControls[slot].slotId = parsedRack[slot].slotId;
+                acidHostBridge.setSlotId(slot, parsedRack[slot].slotId);
+            }
         effectsChain = std::move(candidateEffects);
 
         if (!rackTree.isValid() && restoredParts) {
