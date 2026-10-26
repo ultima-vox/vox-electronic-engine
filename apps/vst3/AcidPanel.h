@@ -23,6 +23,7 @@ public:
     [[nodiscard]] std::size_t attachedControlCount() const noexcept;
     bool setKnobForTesting(std::string_view semantic, double normalized);
     void switchEnvelopeForTesting(bool filter);
+    void switchModulationForTesting(bool lfo1);
 private:
     enum Group : int { osc, filter, envelope, drive, accent, slide,
                        output, modulation, performance, playMode, grid, groupCount };
@@ -47,6 +48,7 @@ private:
     void addKnob(Group, std::string_view, const char*, bool stage = false);
     void attachKnobs();
     void updateEnvelopeAttachments();
+    void updateModulationAttachments();
     void changeChoice(const std::string&, int choiceIndex, int choices);
     void refreshChoices();
     [[nodiscard]] std::string hostId(std::string_view) const;
@@ -55,10 +57,12 @@ private:
     VstEngineAudioProcessor& processor_;
     std::size_t slot_ {};
     bool filterEnvelope_ {};
+    bool lfo1Selected_ {};
     std::vector<Knob> knobs_;
     std::array<juce::Rectangle<int>, groupCount> sections_ {};
     juce::ComboBox filterChoice_, distortionChoice_, modulationChoice_;
     juce::TextButton ampButton_ { "AMP" }, filterButton_ { "FILTER" };
+    juce::TextButton env1Button_ { "ENV 1" }, lfo1Button_ { "LFO 1" };
     juce::ComboBox profileChoice_, lengthChoice_, timingChoice_;
     juce::TextButton generate_ { "Generate" }, mutate_ { "Mutate" },
                      clear_ { "Clear" };

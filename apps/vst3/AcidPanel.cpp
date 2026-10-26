@@ -165,14 +165,18 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
         changeChoice("dist_mode", distortionChoice_.getSelectedItemIndex(), 4);
     };
     modulationChoice_.onChange = [this] {
-        changeChoice("mod_target", modulationChoice_.getSelectedItemIndex(), 6);
+        changeChoice(lfo1Selected_ ? "lfo1_target" : "mod_target",
+                     modulationChoice_.getSelectedItemIndex(), 6);
     };
-    for (auto* button : { &ampButton_, &filterButton_, &generate_, &mutate_, &clear_ }) {
+    for (auto* button : { &ampButton_, &filterButton_, &env1Button_, &lfo1Button_,
+                          &generate_, &mutate_, &clear_ }) {
         vstengine::ui::styleButton(*button);
         addAndMakeVisible(*button);
     }
     ampButton_.onClick = [this] { filterEnvelope_ = false; updateEnvelopeAttachments(); };
     filterButton_.onClick = [this] { filterEnvelope_ = true; updateEnvelopeAttachments(); };
+    env1Button_.onClick = [this] { switchModulationForTesting(false); };
+    lfo1Button_.onClick = [this] { switchModulationForTesting(true); };
     for (int i = 0; i < 4; ++i) addAndMakeVisible(flags_[static_cast<std::size_t>(i)]);
     for (const auto& t : { "Classic 303", "Psy Acid", "Dark Acid",
                             "Forest Acid", "Hi-Tech Acid", "Hypnotic Acid" })
@@ -251,6 +255,11 @@ void AcidPanel::switchEnvelopeForTesting(bool filter) {
     filterEnvelope_ = filter;
     updateEnvelopeAttachments();
 }
+void AcidPanel::switchModulationForTesting(bool lfo1) {
+    lfo1Selected_ = lfo1;
+    updateModulationAttachments();
+    refreshChoices();
+}
 void AcidPanel::addKnob(Group group, std::string_view semantic, const char* name, bool stage) {
     Knob k;
     k.group = group;
@@ -325,7 +334,7 @@ void AcidPanel::bind(std::size_t slot) {
 }
 void AcidPanel::attachKnobs() {
     for (auto& k : knobs_) {
-        if (k.envelopeStage) continue;
+        if (k.envelopeStage || k.group == modulation) continue;
         auto id = hostId(k.semantic);
         k.attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor_.parameters(), id, k.widget->getSlider());
@@ -333,6 +342,68 @@ void AcidPanel::attachKnobs() {
             k.widget->setDoubleClickResetValue(param->getDefaultValue());
     }
     updateEnvelopeAttachments();
+    updateModulationAttachments();
+}
+void AcidPanel::updateModulationAttachments() {
+    constexpr std::array<const char*, 5> envIds {
+        "mod_amount", "mod_attack", "mod_decay", "mod_sustain", "mod_release"
+    };
+    constexpr std::array<const char*, 3> lfoIds {
+        "lfo1_rate", "lfo1_depth", "lfo1_wave"
+    };
+    constexpr std::array<const char*, 5> envNames {
+        "Amount", "Attack", "Decay", "Sustain", "Release"
+    };
+    constexpr std::array<const char*, 3> lfoNames {
+        "Rate", "Depth", "Wave"
+    };
+    std::size_t index = 0;
+    for (auto& k : knobs_) {
+        if (k.group != modulation) continue;
+        // An inactive tab must have no hidden parameter attachment.
+        k.attach.reset();
+        const bool active = !lfo1Selected_ || index < lfoIds.size();
+        k.widget->setVisible(active);
+        if (active) {
+            k.semantic = lfo1Selected_ ? lfoIds[index] : envIds[index];
+            k.widget->setLabel(lfo1Selected_ ? lfoNames[index] : envNames[index]);
+            if (lfo1Selected_) {
+                const auto semantic = k.semantic;
+                k.widget->getSlider().textFromValueFunction =
+                    [semantic](double norm) {
+                        const float v = static_cast<float>(juce::jlimit(0.0, 1.0, norm));
+                        if (semantic == "lfo1_rate")
+                            return juce::String(0.05f * std::pow(400.0f, v), 2) + " Hz";
+                        if (semantic == "lfo1_wave") {
+                            constexpr std::array<const char*, 4> waves {
+                                "Sine", "Triangle", "Square", "Saw"
+                            };
+                            return juce::String(waves[juce::jlimit(
+                                0, 3, static_cast<int>(std::round(v * 3.0f)))]);
+                        }
+                        return juce::String(v * 100.0f, 0) + "%";
+                    };
+            } else {
+                k.widget->getSlider().textFromValueFunction =
+                    [](double norm) {
+                        return juce::String(juce::jlimit(0.0, 100.0, norm * 100.0), 0) + "%";
+                    };
+            }
+            const auto id = hostId(k.semantic);
+            k.attach = std::make_unique<
+                juce::AudioProcessorValueTreeState::SliderAttachment>(
+                    processor_.parameters(), id, k.widget->getSlider());
+            if (auto* p = processor_.parameters().getParameter(id.c_str()))
+                k.widget->setDoubleClickResetValue(p->getDefaultValue());
+        }
+        ++index;
+    }
+    env1Button_.setToggleState(!lfo1Selected_, juce::dontSendNotification);
+    lfo1Button_.setToggleState(lfo1Selected_, juce::dontSendNotification);
+    if (!sections_[modulation].isEmpty()) {
+        layoutKnobs(modulation, section(modulation).reduced(3).withTrimmedTop(48));
+        repaint(sections_[modulation]);
+    }
 }
 void AcidPanel::updateEnvelopeAttachments() {
     constexpr std::array<const char*, 4> ampIds {
@@ -392,7 +463,7 @@ void AcidPanel::refreshChoices() {
     };
     refresh(filterChoice_, "filter_mode", 4);
     refresh(distortionChoice_, "dist_mode", 4);
-    refresh(modulationChoice_, "mod_target", 6);
+    refresh(modulationChoice_, lfo1Selected_ ? "lfo1_target" : "mod_target", 6);
 }
 void AcidPanel::timerCallback() {
     if (!isVisible()) return;
@@ -411,11 +482,12 @@ juce::Rectangle<int> AcidPanel::section(Group group) const noexcept {
 }
 void AcidPanel::layoutKnobs(Group group, juce::Rectangle<int> box) {
     int count = 0;
-    for (const auto& k : knobs_) if (k.group == group) ++count;
+    for (const auto& k : knobs_)
+        if (k.group == group && k.widget->isVisible()) ++count;
     if (count <= 0) return;
     const int width = std::max(1, box.getWidth() / count);
     int index = 0;
-    for (auto& k : knobs_) if (k.group == group) {
+    for (auto& k : knobs_) if (k.group == group && k.widget->isVisible()) {
         k.widget->setBounds(box.getX() + index * width, box.getY(),
                             width, box.getHeight());
         ++index;
@@ -453,7 +525,10 @@ void AcidPanel::resized() {
                            .translated(0, 23));
     distortionChoice_.setBounds(section(drive).reduced(6).removeFromTop(23)
                                .translated(0, 23));
-    modulationChoice_.setBounds(section(modulation).reduced(6).removeFromTop(22)
+    const auto modBounds = section(modulation);
+    env1Button_.setBounds(modBounds.getX() + 88, modBounds.getY() + 2, 48, 18);
+    lfo1Button_.setBounds(modBounds.getX() + 138, modBounds.getY() + 2, 48, 18);
+    modulationChoice_.setBounds(modBounds.reduced(6).removeFromTop(22)
                                .translated(0, 23));
     ampButton_.setBounds(section(envelope).getX() + 41,
                           section(envelope).getY() + 2, 38, 19);
@@ -502,7 +577,7 @@ void AcidPanel::paint(juce::Graphics& g) {
                juce::Justification::centredLeft);
     constexpr std::array<const char*, 11> titles {
         "OSCILLATOR", "FILTER", "ENVELOPE", "DISTORTION / DRIVE",
-        "ACCENT", "SLIDE", "OUTPUT", "MODULATION (ENV 1)",
+        "ACCENT", "SLIDE", "OUTPUT", "MODULATION",
         "PERFORMANCE", "PLAY MODE", "16-STEP SEQUENCER"
     };
     for (int i = 0; i < groupCount; ++i)
