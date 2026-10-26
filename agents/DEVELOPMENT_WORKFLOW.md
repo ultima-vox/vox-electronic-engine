@@ -9,6 +9,10 @@ Issues #10/#11 are historical product/roadmap records, not current authority.
 
 ## 2. Scope and ownership
 
+Current owner allocation: Rack lead owns generic Rack/host/state/shared UI; another
+agent owns Acid DSP and its dedicated UI; Bass follows the Rack milestone.
+Read [current task](../docs/tasks/RACK_PRODUCTION.md).
+
 One Lead owns integration. Record objective, acceptance, files, assumptions and required evidence.
 Use a separate branch for one coherent task.
 Independent workers may operate in parallel only when they do not redefine shared contracts.

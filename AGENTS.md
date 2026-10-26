@@ -7,11 +7,28 @@ Before substantive work read:
 4. [Protected contracts](docs/architecture/CONTRACTS.md).
 5. [Agent contract](agents/AGENT_CONTRACT.md), [roles](agents/ROLES.md),
    [project context](agents/PROJECT_CONTEXT.md) and [workflow](agents/DEVELOPMENT_WORKFLOW.md).
-6. The active scoped task; for AGY: [Bass diagnostics](docs/tasks/AGY_BASS_DIAGNOSTICS.md).
+6. The active scoped task: [Rack production](docs/tasks/RACK_PRODUCTION.md).
+   The [AGY Bass diagnostics](docs/tasks/AGY_BASS_DIAGNOSTICS.md) packet is historical.
 
 Current owner instructions and the current product specification supersede the old
 Electronic Engine scope in issues #10/#11. Their snapshots are historical.
 Do not use archived documents as active instructions.
+
+## Current execution priority (26 October 2026)
+
+Finish the generic Rack first; Bass afterwards. Read
+[RACK_PRODUCTION](docs/tasks/RACK_PRODUCTION.md) and the
+[capability audit](docs/testing/rack-capability-audit-20261026.md).
+Another agent owns Acid Synth DSP and its dedicated UI. The Rack lead owns the
+shared Rack/host/state contracts and shared Routing UI; coordinate their binding
+adapter without overlapping edits. Unmerged Bass/direct-control experiments are
+not an interface already delivered to the Acid agent.
+
+The owner confirms there are no old POC projects requiring migration. Explicit,
+reviewed/versioned POC replacement is authorized; do not add a parallel legacy
+Bass mode. Preserve plugin identity, realtime/routing safety and independent
+parameter semantics. The full selected VOX Bass interface remains mandatory after
+Rack; a simplified control panel does not satisfy production acceptance.
 
 ## Non-negotiable rules
 
