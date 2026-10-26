@@ -188,6 +188,20 @@ int main()
             "internal distortion becomes active");
     setPlain(*processor, "kickTune", 43.0f);
     setPlain(*processor, "matchBassTimingOffsetMs", 12.0f);
+    // Acid-only independent VST automation is stored in host APVTS state,
+    // not another instrument's macro or a non-durable editor component.
+    const auto acidFine = vstengine::acid::hostParameterId(1, "osc_fine");
+    const auto acidLevel = vstengine::acid::hostParameterId(1, "output");
+    const auto acidLegato = vstengine::acid::hostParameterId(1, "legato");
+    const auto otherAcidFine = vstengine::acid::hostParameterId(0, "osc_fine");
+    const float otherBefore = processor->parameters()
+                                  .getRawParameterValue(otherAcidFine.c_str())->load();
+    setPlain(*processor, acidFine, 0.27f);
+    setPlain(*processor, acidLevel, 0.64f);
+    setPlain(*processor, acidLegato, 0.0f);
+    require(std::abs(processor->parameters().getRawParameterValue(
+                         otherAcidFine.c_str())->load() - otherBefore) < 0.0001f,
+            "Acid host write must not affect another slot before save");
     juce::MemoryBlock state;
     processor->getStateInformation(state);
     require(state.getSize() > 0, "state serialization succeeds");
@@ -199,6 +213,16 @@ int main()
     require(restored->sequence()[3].gate
                 && restored->sequence()[3].noteOffset == 7,
             "Bass sequence round-trips");
+    require(std::abs(restored->parameters().getRawParameterValue(
+                         acidFine.c_str())->load() - 0.27f) < 0.001f
+                && std::abs(restored->parameters().getRawParameterValue(
+                         acidLevel.c_str())->load() - 0.64f) < 0.001f
+                && restored->parameters().getRawParameterValue(
+                         acidLegato.c_str())->load() < 0.5f,
+            "Acid independent host parameter automation survives project restore");
+    require(std::abs(restored->parameters().getRawParameterValue(
+                         otherAcidFine.c_str())->load() - otherBefore) < 0.0001f,
+            "Acid saved parameter authority never bleeds between slots");
     require(restored->internalEffectsState().effects[0].enabled
                 && restored->internalEffectsState().effects[0].mix > 0.0f,
             "internal FX state round-trips");
