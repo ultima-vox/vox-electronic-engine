@@ -31,6 +31,30 @@ void panel(juce::Graphics& g, juce::Rectangle<int> bounds)
     vox::ui::paint::panel(g, bounds.toFloat());
 }
 
+constexpr int sectionHeader = 30;
+
+// Page body: outer panel plus titled raised sections.
+template <typename SectionList>
+void pageWithSections(juce::Graphics& g, juce::Rectangle<int> bounds, const SectionList& sections)
+{
+    panel(g, bounds);
+    for (const auto& [area, heading] : sections) {
+        vox::ui::paint::panel(g, area.toFloat(), true);
+        vox::ui::paint::sectionTitle(g, area.withHeight(sectionHeader).reduced(12, 0), heading,
+                                     false, false);
+    }
+}
+
+// Caption above a knob or field.
+void caption(juce::Label& label, const juce::String& text)
+{
+    label.setText(text, juce::dontSendNotification);
+    label.setFont(vox::ui::paint::spaced(10.0f, 0.12f, true));
+    label.setJustificationType(juce::Justification::centred);
+    label.setColour(juce::Label::textColourId, juce::Colour(0xff9ab2c5));
+    label.setInterceptsMouseClicks(false, false);
+}
+
 } // namespace
 
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onCopy() {
@@ -607,16 +631,22 @@ VstEngineAudioProcessorEditor::PatternPage::PatternPage(
   };
 }
 
-void VstEngineAudioProcessorEditor::PatternPage::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
+void VstEngineAudioProcessorEditor::PatternPage::paint(juce::Graphics& g)
+{
+    pageWithSections(g, getLocalBounds(), sections);
+}
 void VstEngineAudioProcessorEditor::PatternPage::resized()
 {
     auto area = getLocalBounds().reduced(12);
-    auto tools = area.removeFromTop(38);
+    const auto generator = area.removeFromTop(sectionHeader + 42);
+    sections = {{generator, "GENERATOR"}};
+    auto tools = generator.withTrimmedTop(sectionHeader).reduced(10, 0).withTrimmedBottom(8);
     profile.setBounds(tools.removeFromLeft(220).reduced(2));
     generate.setBounds(tools.removeFromLeft(105).reduced(2));
     mutate.setBounds(tools.removeFromLeft(145).reduced(2));
     status.setBounds(tools.reduced(8, 0));
-    sequencer.setBounds(area.reduced(0, 6));
+    area.removeFromTop(10);
+    sequencer.setBounds(area);
 }
 void VstEngineAudioProcessorEditor::PatternPage::bind(std::size_t)
 {
@@ -657,10 +687,15 @@ VstEngineAudioProcessorEditor::RoutingPage::RoutingPage(VstEngineAudioProcessor&
     midiIn.addItem("OFF", 1);
     for (int channel = 1; channel <= 16; ++channel) midiIn.addItem("CH" + juce::String(channel), channel + 1);
     for (auto* slider : { &level, &pan }) knob(*slider);
+    pan.getProperties().set("vox.bipolar", true);
+    caption(levelLabel, "LEVEL"); caption(panLabel, "PAN");
     for (auto* button : { &swap, &move, &layerAction }) vstengine::ui::styleButton(*button);
-    const std::array<juce::Component*, 13> components {
+    swap.setTooltip("Take the channel; the other slot gets this slot's channel");
+    move.setTooltip("Take the channel; the other slot is set to Off");
+    layerAction.setTooltip("Share the channel with the other slot");
+    const std::array<juce::Component*, 15> components {
         &title, &status, &midiIn, &layer, &enabled, &mute, &solo, &locked,
-        &level, &pan, &swap, &move, &layerAction
+        &level, &pan, &swap, &move, &layerAction, &levelLabel, &panLabel
     };
     for (auto* component : components) addAndMakeVisible(component);
     midiIn.onChange = [this] { pendingChannel = midiIn.getSelectedId() - 1; assign(VstEngineAudioProcessor::ChannelConflictAction::reject); };
@@ -668,19 +703,43 @@ VstEngineAudioProcessorEditor::RoutingPage::RoutingPage(VstEngineAudioProcessor&
     move.onClick = [this] { assign(VstEngineAudioProcessor::ChannelConflictAction::move); };
     layerAction.onClick = [this] { assign(VstEngineAudioProcessor::ChannelConflictAction::layer); };
 }
-void VstEngineAudioProcessorEditor::RoutingPage::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
+void VstEngineAudioProcessorEditor::RoutingPage::paint(juce::Graphics& g)
+{
+    pageWithSections(g, getLocalBounds(), sections);
+}
 void VstEngineAudioProcessorEditor::RoutingPage::resized()
 {
-    auto area = getLocalBounds().reduced(20);
+    auto area = getLocalBounds().reduced(18);
     title.setBounds(area.removeFromTop(30));
-    auto route = area.removeFromTop(42);
-    midiIn.setBounds(route.removeFromLeft(120).reduced(2));
-    swap.setBounds(route.removeFromLeft(80).reduced(2)); move.setBounds(route.removeFromLeft(80).reduced(2));
-    layerAction.setBounds(route.removeFromLeft(85).reduced(2));
-    auto toggles = area.removeFromTop(40);
-    for (auto* button : { &enabled, &mute, &solo, &locked, &layer }) button->setBounds(toggles.removeFromLeft(100));
-    auto controls = area.removeFromTop(150);
-    level.setBounds(controls.removeFromLeft(130)); pan.setBounds(controls.removeFromLeft(130));
+    area.removeFromTop(8);
+    auto top = area.removeFromTop(sectionHeader + 52);
+    const auto input = top.removeFromLeft(juce::jmin(420, top.getWidth() / 2 - 6));
+    top.removeFromLeft(12);
+    const auto state = top;
+    area.removeFromTop(12);
+    const auto mix = area.removeFromTop(sectionHeader + 150).withWidth(juce::jmin(320, area.getWidth()));
+    sections = {{input, "MIDI INPUT"}, {state, "SLOT STATE"}, {mix, "MIX"}};
+
+    auto route = input.withTrimmedTop(sectionHeader).reduced(10, 10);
+    midiIn.setBounds(route.removeFromLeft(110).reduced(2));
+    route.removeFromLeft(8);
+    const int action = route.getWidth() / 3;
+    swap.setBounds(route.removeFromLeft(action).reduced(2));
+    move.setBounds(route.removeFromLeft(action).reduced(2));
+    layerAction.setBounds(route.reduced(2));
+
+    auto toggles = state.withTrimmedTop(sectionHeader).reduced(10, 10);
+    const int toggle = toggles.getWidth() / 5;
+    for (auto* button : { &enabled, &mute, &solo, &locked, &layer })
+        button->setBounds(toggles.removeFromLeft(toggle).reduced(2));
+
+    auto knobs = mix.withTrimmedTop(sectionHeader).reduced(14, 6);
+    for (auto [slider, label] : { std::pair { &level, &levelLabel }, std::pair { &pan, &panLabel } }) {
+        auto cell = knobs.removeFromLeft(knobs.getWidth() >= 260 ? 140 : knobs.getWidth() / 2);
+        label->setBounds(cell.removeFromTop(18));
+        slider->setBounds(cell.withSizeKeepingCentre(100, cell.getHeight()));
+    }
+    area.removeFromTop(8);
     status.setBounds(area.removeFromTop(28));
 }
 void VstEngineAudioProcessorEditor::RoutingPage::assign(VstEngineAudioProcessor::ChannelConflictAction action)
@@ -716,20 +775,28 @@ VstEngineAudioProcessorEditor::ZonesPage::ZonesPage(VstEngineAudioProcessor& p)
     : processor(p), ranges(p.parameters())
 {
     title.setText("KEY / VELOCITY ZONES", juce::dontSendNotification);
-    transposeLabel.setText("Transpose", juce::dontSendNotification);
     vstengine::ui::styleLabel(title, 15.0f, juce::Justification::centredLeft, vstengine::ui::colours::primary);
-    vstengine::ui::styleLabel(transposeLabel, 11.0f, juce::Justification::centred, vstengine::ui::colours::text);
+    caption(transposeLabel, "SEMITONES");
     transpose.setSliderStyle(juce::Slider::IncDecButtons);
     transpose.setTextBoxStyle(juce::Slider::TextBoxAbove, false, 80, 24);
     addAndMakeVisible(title); addAndMakeVisible(ranges); addAndMakeVisible(transposeLabel); addAndMakeVisible(transpose);
 }
-void VstEngineAudioProcessorEditor::ZonesPage::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
+void VstEngineAudioProcessorEditor::ZonesPage::paint(juce::Graphics& g)
+{
+    pageWithSections(g, getLocalBounds(), sections);
+}
 void VstEngineAudioProcessorEditor::ZonesPage::resized()
 {
     auto area = getLocalBounds().reduced(18); title.setBounds(area.removeFromTop(28));
-    auto side = area.removeFromRight(130).reduced(12);
-    transposeLabel.setBounds(side.removeFromTop(24)); transpose.setBounds(side.removeFromTop(72));
-    ranges.setBounds(area.reduced(0, 8));
+    area.removeFromTop(8);
+    auto row = area.removeFromTop(juce::jmin(area.getHeight(), sectionHeader + 200));
+    const auto side = row.removeFromRight(150);
+    row.removeFromRight(12);
+    sections = {{row, "KEY / VELOCITY RANGE"}, {side, "TRANSPOSE"}};
+    ranges.setBounds(row.withTrimmedTop(sectionHeader).reduced(10, 6));
+    auto inner = side.withTrimmedTop(sectionHeader).reduced(14, 8);
+    transposeLabel.setBounds(inner.removeFromTop(18));
+    transpose.setBounds(inner.removeFromTop(64));
 }
 void VstEngineAudioProcessorEditor::ZonesPage::bind(std::size_t slot)
 {
@@ -748,6 +815,7 @@ VstEngineAudioProcessorEditor::AdvancedPage::AdvancedPage(VstEngineAudioProcesso
     midiMode.addItemList({ "AUTO", "PIANO ROLL", "GENERATOR", "BOTH" }, 1);
     effectsPreset.addItemList({ "Clean", "Psy Drive", "Wide Motion", "Lo-Fi", "Deep Space" }, 1);
     effectsPreset.setTextWhenNothingSelected("Global FX preset"); knob(seed);
+    caption(seedLabel, "SEED"); addAndMakeVisible(seedLabel);
     vstengine::ui::styleButton(generateAll, true); vstengine::ui::styleButton(mutateAll);
     const std::array<juce::Component*, 8> components {
         &title, &description, &status, &midiMode, &effectsPreset, &seed,
@@ -765,18 +833,35 @@ VstEngineAudioProcessorEditor::AdvancedPage::AdvancedPage(VstEngineAudioProcesso
     modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.parameters(), "midiMode", midiMode);
     seedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.parameters(), "rngSeed", seed);
 }
-void VstEngineAudioProcessorEditor::AdvancedPage::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
+void VstEngineAudioProcessorEditor::AdvancedPage::paint(juce::Graphics& g)
+{
+    pageWithSections(g, getLocalBounds(), sections);
+}
 void VstEngineAudioProcessorEditor::AdvancedPage::resized()
 {
-    auto area = getLocalBounds().reduced(22); title.setBounds(area.removeFromTop(28));
-    description.setBounds(area.removeFromTop(26));
-    auto controls = area.removeFromTop(130);
-    midiMode.setBounds(controls.removeFromLeft(180).removeFromTop(38).reduced(2));
-    effectsPreset.setBounds(controls.removeFromLeft(210).removeFromTop(38).reduced(2));
-    seed.setBounds(controls.removeFromLeft(120));
-    auto actions = area.removeFromTop(42);
-    generateAll.setBounds(actions.removeFromLeft(140).reduced(2)); mutateAll.setBounds(actions.removeFromLeft(140).reduced(2));
-    status.setBounds(area.removeFromTop(30));
+    auto area = getLocalBounds().reduced(18); title.setBounds(area.removeFromTop(28));
+    description.setBounds(area.removeFromTop(22));
+    area.removeFromTop(8);
+    auto row = area.removeFromTop(sectionHeader + 60);
+    const int half = (row.getWidth() - 12) / 2;
+    const auto source = row.removeFromLeft(half);
+    row.removeFromLeft(12);
+    const auto fx = row;
+    area.removeFromTop(12);
+    const auto generation = area.removeFromTop(sectionHeader + 140);
+    sections = {{source, "HOST MIDI SOURCE"}, {fx, "GLOBAL FX"}, {generation, "GENERATION"}};
+    midiMode.setBounds(source.withTrimmedTop(sectionHeader).reduced(12, 14).withWidth(220));
+    effectsPreset.setBounds(fx.withTrimmedTop(sectionHeader).reduced(12, 14).withWidth(240));
+    auto gen = generation.withTrimmedTop(sectionHeader).reduced(14, 6);
+    auto seedCell = gen.removeFromLeft(120);
+    seedLabel.setBounds(seedCell.removeFromTop(18));
+    seed.setBounds(seedCell.withSizeKeepingCentre(100, seedCell.getHeight()));
+    gen.removeFromLeft(16);
+    auto actions = gen.withSizeKeepingCentre(gen.getWidth(), 34).withX(gen.getX());
+    generateAll.setBounds(actions.removeFromLeft(140).reduced(2));
+    mutateAll.setBounds(actions.removeFromLeft(140).reduced(2));
+    actions.removeFromLeft(12);
+    status.setBounds(actions);
 }
 void VstEngineAudioProcessorEditor::AdvancedPage::bind(std::size_t slot)
 {

@@ -1,10 +1,12 @@
 #include "PluginEditor.h"
 #include "RackRoutingPanel.h"
 #include "modules/BuiltInProvider.h"
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <utility>
 
 // Protect the ordinary host/test stack footprint; moving the test instance to
 // heap alone would hide an oversized production processor object.
@@ -193,6 +195,23 @@ int main()
         output.truncate();
         if (!format.writeImageToStream(image, output))
             return EXIT_FAILURE;
+    }
+    // Optional visual evidence: one capture per workspace page.
+    const auto pageDirectory = juce::SystemStats::getEnvironmentVariable(
+        "VOX_PAGE_SNAPSHOT_DIR", {});
+    if (pageDirectory.isNotEmpty()) {
+        editor->setSize(1240, 800);
+        const std::array<std::pair<Page, const char *>, 6> pages{{
+            {Page::sound, "sound"}, {Page::pattern, "pattern"},
+            {Page::routing, "routing"}, {Page::zones, "zones"},
+            {Page::macros, "macros"}, {Page::advanced, "advanced"}}};
+        for (const auto &[page, name] : pages) {
+            editor->showPageForTesting(page);
+            if (!writeCapture(*editor, juce::File(pageDirectory)
+                                           .getChildFile(juce::String(name) + ".png")
+                                           .getFullPathName()))
+                return EXIT_FAILURE;
+        }
     }
     std::cout << "Editor smoke test passed\n";
     return EXIT_SUCCESS;

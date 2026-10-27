@@ -33,6 +33,8 @@ public:
     }
 
 private:
+    // Raised sub-panels painted behind a page's controls: bounds + title.
+    using Sections = std::vector<std::pair<juce::Rectangle<int>, juce::String>>;
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {
       explicit SequenceCallbacks(VstEngineAudioProcessor &p)
           : processor(p), edit(p.sequenceEditSnapshot()) {}
@@ -158,6 +160,7 @@ private:
         juce::TextButton generate { "Generate" }, mutate { "Mutate Selected" };
         juce::Label status;
         std::vector<std::string> profileIds;
+        Sections sections;
     };
 
     class RoutingPage final : public juce::Component {
@@ -167,7 +170,7 @@ private:
     private:
         void assign(VstEngineAudioProcessor::ChannelConflictAction);
         VstEngineAudioProcessor& processor;
-        juce::Label title, status;
+        juce::Label title, status, levelLabel, panLabel;
         juce::ComboBox midiIn;
         juce::ToggleButton layer { "Layer" }, enabled { "Enabled" }, mute { "Mute" }, solo { "Solo" }, locked { "Lock" };
         juce::Slider level, pan;
@@ -176,6 +179,7 @@ private:
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> buttonAttachments;
         std::size_t selected {};
         int pendingChannel {};
+        Sections sections;
     };
 
     class ZonesPage final : public juce::Component {
@@ -188,6 +192,7 @@ private:
         vstengine::ui::ZoneRangeEditor ranges;
         juce::Slider transpose;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+        Sections sections;
     };
 
     class AdvancedPage final : public juce::Component {
@@ -196,12 +201,13 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
     private:
         VstEngineAudioProcessor& processor;
-        juce::Label title, description, status;
+        juce::Label title, description, status, seedLabel;
         juce::ComboBox midiMode, effectsPreset;
         juce::Slider seed;
         juce::TextButton generateAll { "Generate All" }, mutateAll { "Mutate All" };
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> seedAttachment;
+        Sections sections;
     };
 
     void timerCallback() override;
