@@ -49,6 +49,15 @@ public:
     void selectAcidEnv2ForTesting() {
         acidSoundPage.switchEnv2ForTesting();
     }
+    void selectAcidStepForTesting() {
+        acidSoundPage.switchStepForTesting();
+    }
+    bool setAcidStepLevelForTesting(std::size_t step, double level) {
+        return acidSoundPage.setStepLevelForTesting(step, level);
+    }
+    [[nodiscard]] std::size_t acidStepAttachmentCountForTesting() const noexcept {
+        return acidSoundPage.attachedStepLevelsForTesting();
+    }
 
 private:
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {

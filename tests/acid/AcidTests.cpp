@@ -186,6 +186,8 @@ int main()
             "new Acid slot accepts empty previous v4 module state");
     REQUIRE(soundState.loadState(acid::AcidEngine::env2StateVersion, {}),
             "new Acid slot accepts empty previous v5 module state");
+    REQUIRE(soundState.loadState(acid::AcidEngine::lfo23StateVersion, {}),
+            "new Acid slot accepts empty v6 module state");
     REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion + 1u, {}),
             "unknown future Acid schema rejected even with empty bytes");
     constexpr std::uint32_t magic = 0x44494341u;
@@ -291,6 +293,26 @@ int main()
     REQUIRE(migratedV5.parameter("lfo2_depth") == 0.0f
             && migratedV5.parameter("lfo3_depth") == 0.0f,
             "v5 recall disables absent LFO2/LFO3 in an active synth");
+
+    // STEP was introduced in v7. Loading a v6 preset into a previously
+    // used engine must not retain any v7 STEP amount or curve.
+    std::array<std::byte, 8 + acid::AcidEngine::lfo23ParameterCount
+                             * sizeof(float)> stateV6 {};
+    std::memcpy(stateV6.data(), encoded.data(), stateV6.size());
+    constexpr auto oldLfo23Version = acid::AcidEngine::lfo23StateVersion;
+    std::memcpy(stateV6.data() + 4, &oldLfo23Version, sizeof(oldLfo23Version));
+    acid::AcidEngine migratedV6;
+    REQUIRE(migratedV6.setParameter("step_amount", 0.9f)
+            && migratedV6.setParameter("step_01", 1.0f)
+            && migratedV6.loadState(oldLfo23Version, stateV6),
+            "v6 Acid preset migrates over an active STEP patch");
+    for (std::size_t i = 0; i < acid::AcidEngine::lfo23ParameterCount; ++i)
+        REQUIRE(std::abs(migratedV6.parameter(acid::AcidEngine::parameterIds[i])
+                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
+                    < 0.00001f, "v6 migration preserves 54 earlier parameters");
+    REQUIRE(migratedV6.parameter("step_amount") == 0.0f
+            && migratedV6.parameter("step_01") == 0.5f,
+            "v6 migration disables STEP and resets the absent curve");
 
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
@@ -539,6 +561,91 @@ int main()
         REQUIRE(std::abs(restoredWithLfo2Lfo3.parameter(id)
                          - savedWithLfo2Lfo3.parameter(id)) < 0.00001f,
                 "separate LFO2/LFO3 controls survive v6 preset roundtrip");
+
+    // STEP is a musical-time modulation source, not the note sequencer.
+    // Sample-accurate PPQ and BPM are supplied through the Acid provider.
+    auto renderStep = [](float amount, float target, float rate, float smooth,
+                          float firstStep, float secondStep, bool transport,
+                          std::uint32_t blockSize) {
+        acid::AcidEngine engine;
+        if (!engine.setParameter("mod_amount", 0.0f)
+            || !engine.setParameter("env2_amount", 0.0f)
+            || !engine.setParameter("lfo1_depth", 0.0f)
+            || !engine.setParameter("lfo2_depth", 0.0f)
+            || !engine.setParameter("lfo3_depth", 0.0f)
+            || !engine.setParameter("step_amount", amount)
+            || !engine.setParameter("step_target", target)
+            || !engine.setParameter("step_rate", rate)
+            || !engine.setParameter("step_smooth", smooth)
+            || !engine.setParameter("step_01", firstStep)
+            || !engine.setParameter("step_02", secondStep)
+            || !engine.prepare(48000.0, blockSize, 2))
+            return std::vector<float> {};
+        constexpr int total = 16384;
+        std::vector<float> left(total), right(total);
+        const std::array note { VoxMidiEventV1 { 0, 3, { 0x90, 48, 110 } } };
+        double ppq = 0.0;
+        for (int pos = 0; pos < total; pos += static_cast<int>(blockSize)) {
+            engine.setTransport(120.0, ppq, transport);
+            std::array<float*, 2> outputs {
+                left.data() + pos, right.data() + pos
+            };
+            engine.process(outputs, blockSize, pos == 0
+                ? std::span<const VoxMidiEventV1>(note)
+                : std::span<const VoxMidiEventV1> {});
+            ppq += static_cast<double>(blockSize) * 120.0 /
+                   (48000.0 * 60.0);
+        }
+        return left;
+    };
+    const auto inactiveStep = renderStep(0.0f, 0.0f, 1.0f/3.0f,
+        0.0f, 1.0f, 0.0f, true, 512);
+    const auto activeStep = renderStep(0.92f, 0.0f, 1.0f/3.0f,
+        0.0f, 1.0f, 0.0f, true, 512);
+    REQUIRE(inactiveStep.size() == 16384 && activeStep.size() == inactiveStep.size(),
+            "STEP modulation renders at actual PPQ and fixed host block size");
+    REQUIRE(sumAbsoluteDifference(inactiveStep, activeStep) > 1.0,
+            "STEP Amount audibly modulates its target");
+    REQUIRE(sumAbsoluteDifference(activeStep,
+            renderStep(0.92f, 0.2f, 1.0f/3.0f, 0.0f, 1.0f, 0.0f, true, 512)) > 1.0,
+            "STEP Target changes routed audible destination");
+    REQUIRE(sumAbsoluteDifference(activeStep,
+            renderStep(0.92f, 0.0f, 2.0f/3.0f, 0.0f, 1.0f, 0.0f, true, 512)) > 1.0,
+            "STEP rhythm changes the number of levels per quarter note");
+    REQUIRE(sumAbsoluteDifference(activeStep,
+            renderStep(0.92f, 0.0f, 1.0f/3.0f, 0.85f, 1.0f, 0.0f, true, 512)) > 1.0,
+            "STEP smoothing changes interpolated modulation shape");
+    REQUIRE(sumAbsoluteDifference(activeStep,
+            renderStep(0.92f, 0.0f, 1.0f/3.0f, 0.0f, 0.0f, 0.0f, true, 512)) > 1.0,
+            "STEP first editable level independently changes rendered sound");
+    REQUIRE(sumAbsoluteDifference(inactiveStep,
+            renderStep(0.92f, 0.0f, 1.0f/3.0f, 0.0f, 1.0f, 0.0f, false, 512))
+            < 1.0e-5,
+            "STEP transport stop produces no modulation");
+    for (float sample : activeStep)
+        REQUIRE(std::isfinite(sample) && std::abs(sample) <= 8.0f,
+                "active STEP remains finite under audio render");
+
+    acid::AcidEngine savedStep;
+    REQUIRE(savedStep.setParameter("step_amount", 0.77f)
+            && savedStep.setParameter("step_target", 0.4f)
+            && savedStep.setParameter("step_rate", 1.0f)
+            && savedStep.setParameter("step_smooth", 0.69f)
+            && savedStep.setParameter("step_01", 0.97f)
+            && savedStep.setParameter("step_16", 0.02f),
+            "all STEP source controls and individual levels are writable");
+    std::array<std::byte, acid::AcidEngine::encodedStateBytes> stepPayload {};
+    std::uint32_t stepWritten {};
+    REQUIRE(savedStep.saveState(stepPayload, stepWritten)
+            && stepWritten == stepPayload.size(), "v7 STEP state serialized");
+    acid::AcidEngine restoredStep;
+    REQUIRE(restoredStep.loadState(acid::AcidEngine::stateVersion, stepPayload),
+            "v7 STEP state deserializes");
+    for (auto semantic : { "step_amount", "step_target", "step_rate", "step_smooth",
+                           "step_01", "step_16" })
+        REQUIRE(std::abs(restoredStep.parameter(semantic)
+                         - savedStep.parameter(semantic)) < 0.00001f,
+                "STEP independent parameters and 16-level curve preserve their state");
 
     // Real ENV2 DSP must have an independent ADSR and target. Its depth
     // should change rendered audio with ENV1 + LFO1 explicitly disabled.

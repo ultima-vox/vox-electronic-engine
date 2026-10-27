@@ -120,6 +120,25 @@ int main()
         return EXIT_FAILURE;
     editor->selectAcidLfoForTesting(1);
 
+    // STEP owns sixteen independent host-automated curve levels.
+    const auto* step0 = params.getRawParameterValue("slot02Acid_step_01");
+    const auto* step15 = params.getRawParameterValue("slot02Acid_step_16");
+    const auto* otherStep0 = params.getRawParameterValue("slot01Acid_step_01");
+    if (!step0 || !step15 || !otherStep0) return EXIT_FAILURE;
+    const float oldFirstSlot = otherStep0->load();
+    editor->selectAcidStepForTesting();
+    if (editor->acidStepAttachmentCountForTesting() != 16
+        || !editor->setAcidStepLevelForTesting(0, 0.91)
+        || !editor->setAcidStepLevelForTesting(15, 0.08)
+        || std::abs(step0->load() - 0.91f) > 0.001f
+        || std::abs(step15->load() - 0.08f) > 0.001f
+        || std::abs(otherStep0->load() - oldFirstSlot) > 0.0001f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfoForTesting(1);
+    if (editor->acidStepAttachmentCountForTesting() != 0
+        || editor->setAcidStepLevelForTesting(0, 0.2))
+        return EXIT_FAILURE;
+
     for (const auto size : { juce::Point<int> { 1024, 768 },
                              juce::Point<int> { 1040, 680 },
                              juce::Point<int> { 1180, 760 },
