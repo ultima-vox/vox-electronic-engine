@@ -49,6 +49,11 @@ deferred after Rack, tracked in #45/#58.
 - Complete Keys and Drum Kit workflows.
 - Style-instrument packaging, commercial entitlements and offline licensing policy.
 - Approved production UI and full Windows/Cubase/REAPER acceptance.
+- Installing new instruments (new DSP) without updating the Rack. Owner decision
+  27.10.2026: a fixed host-parameter pool per slot replaces per-instrument direct
+  IDs, plus a native module loader on the existing C ABI v1. Separate PR after #62;
+  requires Architecture Guard review. Today the catalog is compiled in and each
+  instrument adds its own direct endpoints, so the host parameter list changes.
 
 Lead DSP already has8 voices and Atmos6. The missing polyphonic/long-phrase
 Sequence/Pattern/scheduler model is a separate gap. Dedicated AcidPanel is not
@@ -124,4 +129,8 @@ CTest/native capture/package/upload. A further regression repair preserves futur
 incompatible named parameter domains while keeping dormant live endpoints safe;
 268 processor checks pass locally. Fresh exact-head Windows checks for that repair
 are required before merge.
+The PR #62 VOX UI pass (single canonical look, header width tiers, rail identity
+artwork, sectioned generic pages, routing/ducking utility) passes the native editor
+smoke test at 1040/1180/1500 px; proposed identity accents and knob sizes await
+owner acceptance ([design system](ui/DESIGN_SYSTEM.md)).
 Owner visual acceptance and integrated Cubase/REAPER acceptance remain separate gates. Do not close #53 or describe the Rack as production accepted.

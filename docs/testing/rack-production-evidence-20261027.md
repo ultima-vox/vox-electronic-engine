@@ -162,3 +162,27 @@ regressions and independent Architecture Guard review provide the recorded check
 
 Disposition: **WAIT / do not call production accepted**. Preserve the known local
 Bass failure and wait for the exact consolidated Windows checks and manual gates.
+
+## VOX UI pass — 27 October 2026
+
+Scope: shared Rack UI only (header, rail, slot header, generic pages, routing
+utility). No Acid-specific UI, Acid/Bass DSP, parameter ID, schema or binding change.
+
+Commits on `feat/rack-production`: `240ddc0` canonical look-and-feel, `7f5f14c`
+header width tiers, `6e10818` rail/slot header/macro panel, `25259bc` routing
+utility, `4f330a5` sectioned generic pages.
+
+- Linux native build of all test targets; full CTest 38/39 PASS. Only the known
+  Linux `bass_render_diagnostics` fails (unchanged).
+- `editor_smoke_tests` passes at 1040x680, 1180x760 and 1500x920: header controls
+  fit without overlap; rack/workspace/keyboard bounds do not intersect. Before the
+  width tiers the header failed this check at 1040 and 1180 px.
+- The smoke test can optionally write one capture per page
+  (`VOX_PAGE_SNAPSHOT_DIR`); existing assertions are untouched.
+- Native captures of shell, all six pages, routing and the scrolled ducking panel
+  were reviewed locally. The ducking graph is drawn from the bound A/H/R
+  parameters; the GR meter reads the published duck reduction.
+
+Open: owner visual acceptance (Gate A), proposed identity accents and knob sizes
+in [DESIGN_SYSTEM](../ui/DESIGN_SYSTEM.md), fresh exact-head Windows CI, and the
+manual DAW gates above.
