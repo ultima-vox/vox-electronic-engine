@@ -29,6 +29,7 @@ public:
     {
         if (!bypassed_ && !suspended_) {
             if (controls_) controls_->apply(slotId_, engine_);
+            engine_.setTransport(block.bpm, block.ppqPosition, block.transportPlaying);
             engine_.process(block.outputs, block.sampleCount, block.midi);
         }
     }

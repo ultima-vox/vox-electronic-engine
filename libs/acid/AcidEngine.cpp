@@ -128,6 +128,9 @@ void AcidEngine::reset() noexcept {
     lfoPhaseIncrement_.fill(0.0);
     lfoTargetIncrement_.fill(0.0);
     lfoIncrementSmoothing_ = 1.0 - std::exp(-1.0 / (0.004 * sampleRate_));
+    transportBpm_ = 120.0;
+    stepPpqPosition_ = 0.0;
+    transportPlaying_ = false;
 
     accentCapacitor_ = 0.0f;
     accentGain_ = 0.0f;
@@ -161,6 +164,17 @@ void AcidEngine::setPlayModeOptions(bool legato, bool retrigger,
     if (velToAccent) mask |= 0x04u;
     if (slideOnOverlap) mask |= 0x08u;
     targets_[Parameter::playModeFlags] = static_cast<float>(mask) / 15.0f;
+}
+
+void AcidEngine::setTransport(double bpm, double ppqPosition, bool playing) noexcept {
+    if (!std::isfinite(bpm) || bpm <= 1.0 || bpm > 1000.0
+        || !std::isfinite(ppqPosition)) {
+        transportPlaying_ = false;
+        return;
+    }
+    transportBpm_ = bpm;
+    stepPpqPosition_ = ppqPosition;
+    transportPlaying_ = playing;
 }
 
 void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
@@ -264,6 +278,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         && schemaVersion != previousStateVersion
         && schemaVersion != lfo1StateVersion
         && schemaVersion != env2StateVersion
+        && schemaVersion != lfo23StateVersion
         && schemaVersion != stateVersion)
         return false;
     if (payload.empty()) return true;
@@ -280,6 +295,16 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
 
     auto parsedTargets = targets_;
     if (schemaVersion != stateVersion) {
+        // STEP did not exist before v7. A legacy recall must not keep an
+        // active pattern/amount from a previously used v7 Acid instance.
+        parsedTargets[Parameter::stepAmount] = 0.0f;
+        parsedTargets[Parameter::stepTarget] = 0.0f;
+        parsedTargets[Parameter::stepRate] = 1.0f / 3.0f;
+        parsedTargets[Parameter::stepSmooth] = 0.0f;
+        for (std::size_t i = 0; i < stepCount; ++i)
+            parsedTargets[Parameter::step01 + i] = 0.5f;
+    }
+    if (schemaVersion != stateVersion && schemaVersion != lfo23StateVersion) {
         // v1/v3/v4/v5 do not contain independent LFO2/3.
         parsedTargets[Parameter::lfo2Rate] = 0.35f;
         parsedTargets[Parameter::lfo2Depth] = 0.0f;
@@ -290,7 +315,9 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         parsedTargets[Parameter::lfo3Wave] = 0.0f;
         parsedTargets[Parameter::lfo3Target] = 0.0f;
     }
-    if (schemaVersion != stateVersion && schemaVersion != env2StateVersion) {
+    if (schemaVersion != stateVersion
+        && schemaVersion != lfo23StateVersion
+        && schemaVersion != env2StateVersion) {
         // Any v1/v3/v4 recall must disable ENV2, which was absent in those
         // formats, even when the engine previously played an ENV2 preset.
         parsedTargets[Parameter::env2Target] = 0.0f;
@@ -327,12 +354,14 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
     if (schemaVersion == previousStateVersion
         || schemaVersion == lfo1StateVersion
         || schemaVersion == env2StateVersion
+        || schemaVersion == lfo23StateVersion
         || schemaVersion == stateVersion) {
         const std::size_t count = schemaVersion == previousStateVersion
             ? previousParameterCount
             : (schemaVersion == lfo1StateVersion ? lfo1ParameterCount
                : (schemaVersion == env2StateVersion ? env2ParameterCount
-                                                    : parameterCount));
+                  : (schemaVersion == lfo23StateVersion ? lfo23ParameterCount
+                                                        : parameterCount)));
         if (payload.size() < 8 + count * sizeof(float)) return false;
         for (std::size_t i = 0; i < count; ++i) {
             float val = 0.0f;
@@ -607,12 +636,38 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     const ModTarget lfo1Target = decodeModTarget(smoothed_[Parameter::lfo1Target]);
     const ModTarget lfo2Target = decodeModTarget(smoothed_[Parameter::lfo2Target]);
     const ModTarget lfo3Target = decodeModTarget(smoothed_[Parameter::lfo3Target]);
+
+    // STEP source is *not* the note sequencer. Its 16 independent bipolar
+    // values repeat on the host musical timeline. No allocations, locks or
+    // reliance on UI state during the audio callback.
+    float stepValue = 0.0f;
+    if (transportPlaying_) {
+        constexpr std::array<double, 4> stepsPerQuarter { 2.0, 4.0, 8.0, 3.0 };
+        const int rhythm = std::clamp(static_cast<int>(
+            std::round(smoothed_[Parameter::stepRate] * 3.0f)), 0, 3);
+        const double absoluteStep =
+            std::max(0.0, stepPpqPosition_) * stepsPerQuarter[rhythm];
+        const double cycle = std::fmod(absoluteStep, static_cast<double>(stepCount));
+        const int index = static_cast<int>(cycle);
+        const float phase = static_cast<float>(cycle - index);
+        const float current = smoothed_[Parameter::step01 + index] * 2.0f - 1.0f;
+        const float previous = smoothed_[
+            Parameter::step01 + ((index + stepCount - 1) % stepCount)] * 2.0f - 1.0f;
+        const float smoothing = smoothed_[Parameter::stepSmooth];
+        const float transition = smoothing <= 0.00001f ? 1.0f
+            : std::clamp(phase / smoothing, 0.0f, 1.0f);
+        stepValue = (previous + (current - previous) * transition)
+                    * smoothed_[Parameter::stepAmount];
+        stepPpqPosition_ += transportBpm_ / (60.0 * sampleRate_);
+    }
+    const ModTarget stepTarget = decodeModTarget(smoothed_[Parameter::stepTarget]);
     auto modulation = [&](ModTarget target) noexcept {
         return (mTarget == target ? modVal : 0.0f)
              + (env2Target == target ? env2Value : 0.0f)
              + (lfo1Target == target ? lfo1Value : 0.0f)
              + (lfo2Target == target ? lfo2Value : 0.0f)
-             + (lfo3Target == target ? lfo3Value : 0.0f);
+             + (lfo3Target == target ? lfo3Value : 0.0f)
+             + (stepTarget == target ? stepValue : 0.0f);
     };
 
     // 2. Glide / Slide & Oscillator Tune + Fine + Pitch Modulation

@@ -11,7 +11,9 @@ namespace vstengine::acid {
 
 class AcidEngine final {
 public:
-    static constexpr std::uint32_t stateVersion = 6;
+    static constexpr std::uint32_t stateVersion = 7;
+    static constexpr std::uint32_t lfo23StateVersion = 6;
+    static constexpr std::size_t lfo23ParameterCount = 54;
     static constexpr std::uint32_t env2StateVersion = 5;
     static constexpr std::size_t env2ParameterCount = 46;
     static constexpr std::uint32_t lfo1StateVersion = 4;
@@ -20,7 +22,8 @@ public:
     static constexpr std::size_t previousParameterCount = 36;
     static constexpr std::uint32_t legacyStateVersion = 1;
     static constexpr std::size_t legacyParameterCount = 9;
-    static constexpr std::size_t parameterCount = 54;
+    static constexpr std::size_t parameterCount = 74;
+    static constexpr std::size_t stepCount = 16;
     static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
     static constexpr std::size_t maxUnisonVoices = 4;
 
@@ -102,6 +105,13 @@ public:
         lfo3Wave,
         lfo3Target,
 
+        // Dedicated 16-step modulation source, NOT the MIDI note sequence.
+        stepAmount, stepTarget, stepRate, stepSmooth,
+        step01, step02, step03, step04,
+        step05, step06, step07, step08,
+        step09, step10, step11, step12,
+        step13, step14, step15, step16,
+
         count
     };
 
@@ -182,12 +192,20 @@ public:
         "lfo3_rate",
         "lfo3_depth",
         "lfo3_wave",
-        "lfo3_target"
+        "lfo3_target",
+        "step_amount", "step_target", "step_rate", "step_smooth",
+        "step_01", "step_02", "step_03", "step_04",
+        "step_05", "step_06", "step_07", "step_08",
+        "step_09", "step_10", "step_11", "step_12",
+        "step_13", "step_14", "step_15", "step_16"
     };
 
     bool prepare(double sampleRate, std::uint32_t maximumBlockSize,
                  std::uint32_t outputChannels) noexcept;
     void reset() noexcept;
+    // Per-host-block musical timeline from the existing ProcessBlock.
+    // No dependence on global Rack transport or mutable UI pointers.
+    void setTransport(double bpm, double ppqPosition, bool playing) noexcept;
     void process(std::span<float*> outputs, std::uint32_t sampleCount,
                  std::span<const VoxMidiEventV1> midi) noexcept;
 
@@ -334,7 +352,15 @@ private:
         0.35f, // 50: LFO3 rate
         0.00f, // 51: LFO3 depth off by default
         0.00f, // 52: LFO3 waveform sine
-        0.00f  // 53: LFO3 cutoff target
+        0.00f, // 53: LFO3 cutoff target
+        0.00f, // 54: STEP depth off for old patches
+        0.00f, // 55: STEP cutoff target
+        (1.0f / 3.0f), // 56: 1/16 notes, other modes 1/8, 1/32, triplet
+        0.00f, // 57: no inter-step smoothing
+        0.50f, 0.50f, 0.50f, 0.50f,
+        0.50f, 0.50f, 0.50f, 0.50f,
+        0.50f, 0.50f, 0.50f, 0.50f,
+        0.50f, 0.50f, 0.50f, 0.50f
     };
     std::array<float, parameterCount> smoothed_ { targets_ };
 
@@ -347,6 +373,9 @@ private:
     std::array<double, 3> lfoPhaseIncrement_ {};
     std::array<double, 3> lfoTargetIncrement_ {};
     double lfoIncrementSmoothing_ {};
+    double transportBpm_ { 120.0 };
+    double stepPpqPosition_ {};
+    bool transportPlaying_ {};
     std::uint32_t maximumBlockSize_ {};
     std::uint32_t outputChannels_ {};
 
