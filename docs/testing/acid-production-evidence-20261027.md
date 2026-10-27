@@ -31,14 +31,36 @@ allocation counters. Independent reviewer freshly built and ran the same source
 with ASan/UBSan:1376 PASS; LeakSanitizer disabled. This is module coverage, not a
 claim of complete Rack callback/host allocation certification.
 
-## Measured blockers still open
+## Release duration and numeric admission correction
 
-1. `tailSamples()` underreports release: maximum-release NoteOff remains active
-   after declared86639 samples, measured peak0.113012. Envelope timing, host
-   declaration and descriptor budget must agree before production acceptance.
-2. Exotic finite sample rates1e-320/1e300 are accepted but produce NaNs. Ordinary
-   supported rates need explicit admission limits and render evidence; retain the
-   existing high-rate saturation regression rather than silently deleting it.
+New94-check actual-engine test first failed17 checks: every tested Release duration
+at44.1/48/96/192/384kHz exceeded its displayed deadline, and two unsafe finite sample
+rates were accepted. The corrected exponential reaches -80dB then exact zero at
+its selected duration. Continuous progress keeps automation amplitude continuous.
+The stable declaration uses the maximum VCA duration+4 samples, not mutable DSP
+parameter state; the provider's700000-sample budget covers its explicit8k..384kHz
+range. A failed prepare disables processing. Existing1e12-Hz direct-engine tail
+saturation coverage is retained, separate from provider support.
+
+Optimized release96 and MIDI1376 tests PASS after this correction. The audible
+curve intentionally changes; v8 encoding/77 IDs do not. See the
+[runtime contract](../acid/ACID_RUNTIME_CONTRACT.md). Independent review and full
+native/Windows results must be recorded separately before acceptance.
+
+Freshly compiled current AcidEngine, AcidProvider and AcidTests, linked to the
+already-built unchanged JUCE/Sequence/compliance dependencies, pass81876 checks
+plus667 compliance checks. This controlled relink is not a full clean-tree build.
+The final MIDI1376 checks also pass under an actual1MiB stack. Independent fresh
+ASan/UBSan release96 checks PASS; an actual Provider+Engine probe passes11 cases
+covering supported rates, budget, failed preparation and recovery. Guard found no
+blocker in the timing/budget/numeric fix. LeakSanitizer is disabled. The full native
+build/CTest is not yet complete.
+
+## Measured blockers / acceptance still open
+
+1. The independently measured pre-fix tail86639/peak0.113012 and exotic-rate NaNs
+   have source/test corrections above. Independent verification, supported-rate
+   provider budget checks and fresh Windows validation remain required.
 3. Full Windows Release/CTest/package and real Cubase/REAPER audition, automation,
    project restore and UI/reference acceptance remain mandatory.
 4. Acid UI/reference, generator controls/persistence, complete content delivery
@@ -55,6 +77,9 @@ claim of complete Rack callback/host allocation certification.
    Add and reproduce CC120-during-release failure, then fix the release-owner case.
 5. Run optimized and fully instrumented ASan/UBSan module tests; all1376 pass.
    Native full-suite verification follows before publication.
+6. Reproduce the release deadline and rate failures in94 actual-engine checks.
+   Correct the envelope semantics and declared/provider bounds together; retain
+   the existing high-rate regression. Document the audible behavior change.
 
 ub-mode is available and used in this session. Its named crapper/dryer/mutator
 tools are unavailable; no metrics or mutation-test result is fabricated. Existing

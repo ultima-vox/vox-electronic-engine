@@ -14,8 +14,11 @@ public:
         : controls_(controls), slotId_(slotId) {}
     bool prepare(const instrument::PrepareSpec& spec) override
     {
-        return engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
-                               spec.outputChannels);
+      prepared_ = spec.sampleRate >= AcidEngine::minimumSupportedSampleRate &&
+                  spec.sampleRate <= AcidEngine::maximumSupportedSampleRate &&
+                  engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
+                                  spec.outputChannels);
+      return prepared_;
     }
     void reset() noexcept override { engine_.reset(); }
     void suspend() noexcept override { suspended_ = true; engine_.reset(); }
@@ -27,11 +30,13 @@ public:
     }
     void process(const instrument::ProcessBlock& block) noexcept override
     {
-        if (!bypassed_ && !suspended_) {
-            if (controls_) controls_->apply(slotId_, engine_);
-            engine_.setTransport(block.bpm, block.ppqPosition, block.transportPlaying);
-            engine_.process(block.outputs, block.sampleCount, block.midi);
-        }
+      if (prepared_ && !bypassed_ && !suspended_) {
+        if (controls_)
+          controls_->apply(slotId_, engine_);
+        engine_.setTransport(block.bpm, block.ppqPosition,
+                             block.transportPlaying);
+        engine_.process(block.outputs, block.sampleCount, block.midi);
+      }
     }
     bool setParameter(std::string_view id, float value) noexcept override
     {
@@ -59,6 +64,7 @@ private:
     AcidParameterBridge* controls_ {};
     instrument::SlotId slotId_ {};
     AcidEngine engine_;
+    bool prepared_{};
     bool bypassed_ {};
     bool suspended_ {};
 };
@@ -110,8 +116,8 @@ public:
             | instrument::Capability::patternGenerator
             | instrument::Capability::modulation
             | instrument::Capability::standardEditor;
-        descriptor_.budget = { 1, 2048, 4096, 0, 0, 153600,
-                               64, 32, 65536 };
+        descriptor_.budget = {
+            1, 2048, 4096, 0, 0, AcidEngine::maximumTailSamples, 64, 32, 65536};
         constexpr std::array ids { "waveform", "cutoff", "resonance",
             "envelope", "decay", "accent", "slide", "drive", "output" };
         constexpr std::array names { "Waveform", "Cutoff", "Resonance",

@@ -79,6 +79,27 @@ int main()
     }
     REQUIRE(compliance.passed(), "Acid passes common module compliance");
 
+    auto rateProbe = provider->create(acid::instrumentId,
+                                      {instrument::initialSlotId(15), nullptr});
+    REQUIRE(rateProbe != nullptr, "Acid rate/budget probe creates");
+    for (double rate :
+         {8000.0, 44100.0, 48000.0, 96000.0, 192000.0, 384000.0}) {
+      REQUIRE(rateProbe->prepare({rate, 4096, 2}),
+              "Acid provider supports declared sample-rate range");
+      REQUIRE(rateProbe->setParameter("amp_release", 1),
+              "maximum Acid Release is available");
+      REQUIRE(rateProbe->tailSamples() <=
+                  provider->descriptors().front().budget.maxTailSamples,
+              "Acid declared maximum tail fits provider budget at every "
+              "supported rate");
+    }
+    for (double rate : {7999.0, 384001.0, 1.0e12}) {
+      REQUIRE(!rateProbe->prepare({rate, 4096, 2}),
+              "Acid provider rejects rates outside production contract");
+      REQUIRE(energy(render(*rateProbe)) == 0,
+              "failed Acid prepare cannot render with an earlier sample rate");
+    }
+
     auto reference = tests::createReferenceInstrumentProvider();
     REQUIRE(tests::runInstrumentCompliance(*reference,
                 tests::referenceInstrumentId).passed(),

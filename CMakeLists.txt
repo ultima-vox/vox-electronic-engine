@@ -304,6 +304,10 @@ add_executable(acid_midi_lifecycle_tests tests/acid/AcidMidiLifecycleTests.cpp)
 target_link_libraries(acid_midi_lifecycle_tests PRIVATE vst_acid)
 add_test(NAME acid_midi_lifecycle_tests COMMAND acid_midi_lifecycle_tests)
 
+add_executable(acid_release_tests tests/acid/AcidReleaseTests.cpp)
+target_link_libraries(acid_release_tests PRIVATE vst_acid)
+add_test(NAME acid_release_tests COMMAND acid_release_tests)
+
 add_executable(lead_tests
   tests/lead/LeadTests.cpp
   tests/instrument/InstrumentComplianceHarness.cpp

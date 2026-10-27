@@ -104,3 +104,23 @@ Gate output for each review commit: exact SHA, CI URL, failures and screenshot c
 - GUI: button toggles `Preview` / `Stop` on Acid SOUND sequence toolbar and rebinds with the selected slot, with explicit tooltip identifying paused-DAW behavior. The shared top bar and Rack remain unmodified.
 - Checks added: Editor Smoke validates two-slot transient state isolation; project host-state integration validates restore cannot arm Preview; a new paused-DAW `AudioPlayHead` test exercises real audio output, the neighboring Bass playhead remaining stopped, Stop's playhead release, and Panic cancellation. **These new checks are committed but not CI-verified yet.**
 - QA gate: ensure full Windows compile/CTest on latest branch, visual capture of real toolbar, and manual Cubase/REAPER verification across stopped/playing/looping host transport. **This is not global DAW transport Play/Stop**, and does not pretend to control DAW playback.
+
+
+## Current owner handoff and runtime corrections — 27 October 2026
+
+Owner transferred PR #59 / Acid to the current worker; PR #62 / generic Rack now
+belongs to another agent. Scope remains Acid-only. Existing Rack API, shared
+shell and DLL-loading architecture are not changed.
+
+- Fixed note/channel ownership, full2048-key capacity, last-key velocity fallback,
+  CC65/bend/CC120/123 isolation, malformed and out-of-block MIDI admission.
+- Corrected Release from exponential time-constant behavior to displayed duration
+  to silence; stable host tail, explicit8k..384kHz provider support and700000-sample
+  tail budget. No77 semantic IDs or v8 sound format changed.
+- [Runtime contract](ACID_RUNTIME_CONTRACT.md) and
+  [current evidence/action log](../testing/acid-production-evidence-20261027.md)
+  are the current correction record. Historical checkpoints above retain their
+  original observed CI status; they are not current acceptance claims.
+- Remaining: exact-head full Windows/CTest/package, generic Rack parameter adapter
+  integration, complete generator controls/content and exact Acid UI reference,
+  musical/DAW/visual acceptance. Keep Draft; no production declaration.

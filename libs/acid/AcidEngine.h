@@ -28,6 +28,10 @@ public:
     static constexpr std::size_t stepCount = 16;
     static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
     static constexpr std::size_t maxUnisonVoices = 4;
+    static constexpr double minimumSupportedSampleRate = 8000.0;
+    static constexpr double maximumSupportedSampleRate = 384000.0;
+    static constexpr std::uint32_t maximumTailSamples = 700000;
+    static constexpr float maximumAmpReleaseSeconds = 0.004f + 1.8f;
 
     enum Parameter : std::size_t {
         // Core 9 parameters (indices 0..8 kept identical for ABI & test compatibility)
@@ -250,10 +254,14 @@ private:
     struct AdsrState {
         EnvStage stage { EnvStage::idle };
         float value {};
+        float releaseStartValue{};
+        double releaseProgress{};
 
         void reset() noexcept {
             stage = EnvStage::idle;
             value = 0.0f;
+            releaseStartValue = 0.0f;
+            releaseProgress = 0.0;
         }
 
         void trigger(bool retriggerFromZero) noexcept {
@@ -266,6 +274,8 @@ private:
         void release() noexcept {
             if (stage != EnvStage::idle) {
                 stage = EnvStage::release;
+                releaseStartValue = value;
+                releaseProgress = 0.0;
             }
         }
 

@@ -66,20 +66,25 @@ float AcidEngine::AdsrState::advance(float attackSec, float decaySec,
 
         case EnvStage::sustain: {
             value = sustainLevel;
-            if (!gateOpen) {
-                stage = EnvStage::release;
-            }
+            if (!gateOpen)
+              release();
             break;
         }
 
         case EnvStage::release: {
-            const float coeff = std::exp(
-                -1.0f / std::max(1.0f, static_cast<float>(releaseSec * sampleRate)));
-            value *= coeff;
-            if (value < 1.0e-4f) {
-                value = 0.0f;
-                stage = EnvStage::idle;
-            }
+          // Release is the displayed duration to silence, not an exponential
+          // time constant whose real tail is over nine times longer. Accumulate
+          // progress so automation changes speed without jumping amplitude.
+          releaseProgress +=
+              1.0 / std::max(1.0, static_cast<double>(releaseSec) * sampleRate);
+          if (releaseProgress >= 1.0 || releaseStartValue < 1.0e-4f) {
+            value = 0.0f;
+            stage = EnvStage::idle;
+          } else {
+            constexpr double minus80dB = -9.210340371976184;
+            value = releaseStartValue *
+                    static_cast<float>(std::exp(minus80dB * releaseProgress));
+          }
             break;
         }
     }
@@ -99,10 +104,10 @@ bool AcidEngine::prepare(double sampleRate, std::uint32_t maximumBlockSize,
                          std::uint32_t outputChannels) noexcept {
     // Comparing NaN with <= 0 is false; accepting it would poison phase
     // increments and eventually make float->integer tail conversion UB.
-    if (!std::isfinite(sampleRate) || sampleRate <= 0.0
-        || maximumBlockSize == 0 || outputChannels == 0) {
-        prepared_ = false;
-        return false;
+    if (!std::isfinite(sampleRate) || sampleRate < minimumSupportedSampleRate ||
+        sampleRate > 1.0e12 || maximumBlockSize == 0 || outputChannels == 0) {
+      prepared_ = false;
+      return false;
     }
 
     sampleRate_ = sampleRate;
@@ -365,11 +370,14 @@ bool AcidEngine::saveState(std::span<std::byte> destination,
 }
 
 std::uint32_t AcidEngine::tailSamples() const noexcept {
-    const float releaseSec =
-        0.005f + smoothed_[Parameter::ampRelease] * 1.8f;
-    const double count = static_cast<double>(releaseSec) * sampleRate_;
-    return static_cast<std::uint32_t>(std::clamp(
-        count, 0.0, static_cast<double>(std::numeric_limits<std::uint32_t>::max())));
+  // Conservative, stable upper bound across all Release automation. Runtime
+  // envelope/parameter values must not change the host declaration mid-tail.
+  const double count =
+      std::ceil(static_cast<double>(maximumAmpReleaseSeconds) * sampleRate_) +
+      4.0;
+  return static_cast<std::uint32_t>(std::clamp(
+      count, 0.0,
+      static_cast<double>(std::numeric_limits<std::uint32_t>::max())));
 }
 
 void AcidEngine::handleMidiEvent(const VoxMidiEventV1& event) noexcept {
