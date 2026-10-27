@@ -318,8 +318,10 @@ int main()
         require(acidPreviewProcessor->getPartPlayHeadStep(1) == -1,
                 "paused DAW alone never starts the Acid sequencer");
         acidPreviewProcessor->setAcidPreview(1, true);
-        double auditionEnergy = 0.0;
-        for (int block = 0; block < 48; ++block)
+        double auditionEnergy = renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == 0,
+                "Preview begins at Acid sequence step zero on first block");
+        for (int block = 1; block < 48; ++block)
             auditionEnergy += renderStopped();
         require(auditionEnergy > audible,
                 "explicit Preview produces Acid pattern audio with DAW stopped");
@@ -329,7 +331,12 @@ int main()
         (void) renderStopped();
         require(acidPreviewProcessor->getPartPlayHeadStep(1) == -1,
                 "Stop flushes Acid scheduler, resetting active playhead");
+        // Re-arm after Stop, not just at initial preparation. flush() alone
+        // leaves the fallback currentStep untouched; this must reset to zero.
         acidPreviewProcessor->setAcidPreview(1, true);
+        (void) renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == 0,
+                "repeated Preview starts deterministically at step zero");
         acidPreviewProcessor->requestPanic();
         (void) renderStopped();
         require(!acidPreviewProcessor->acidPreviewEnabled(1),
