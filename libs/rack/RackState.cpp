@@ -38,6 +38,22 @@ bool readUnsigned(const juce::var& value, UInt& result)
     result = static_cast<UInt>(parsed);
     return true;
 }
+bool readPlain(const juce::var &value, float &result) {
+  if (!(value.isString() || value.isDouble() || value.isInt() ||
+        value.isInt64()))
+    return false;
+  const auto text = value.toString().toStdString();
+  double parsed{};
+  const auto converted = std::from_chars(text.data(), text.data() + text.size(),
+                                         parsed, std::chars_format::general);
+  if (converted.ec != std::errc{} ||
+      converted.ptr != text.data() + text.size() || !std::isfinite(parsed) ||
+      parsed > std::numeric_limits<float>::max() ||
+      parsed < -std::numeric_limits<float>::max())
+    return false;
+  result = static_cast<float>(parsed);
+  return true;
+}
 bool readSigned(const juce::var& value, int& result)
 {
     const auto text = value.toString().toStdString();
@@ -89,6 +105,28 @@ bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
         || slot.modulationPayload.size() > maxModulationPayloadBytes) {
         diagnostic = "invalid rack pattern schema or payload exceeds host budget";
         return false;
+    }
+    if (slot.directParameters.size() > instrument::maxDirectParameters) {
+      diagnostic = "direct parameter state exceeds host limit";
+      return false;
+    }
+    for (std::size_t i = 0; i < slot.directParameters.size(); ++i) {
+      const auto &parameter = slot.directParameters[i];
+      if (!validStableId(parameter.id) || !std::isfinite(parameter.value)) {
+        diagnostic = "invalid direct parameter state";
+        return false;
+      }
+      for (std::size_t previous = 0; previous < i; ++previous)
+        if (slot.directParameters[previous].id == parameter.id) {
+          diagnostic = "duplicate direct parameter ID";
+          return false;
+        }
+    }
+    if (!slot.directParameters.empty() &&
+        std::any_of(slot.macroAssignments.begin(), slot.macroAssignments.end(),
+                    [](const auto &id) { return !id.empty(); })) {
+      diagnostic = "macro assignments cannot own direct instrument parameters";
+      return false;
     }
     return true;
 }
@@ -154,6 +192,12 @@ juce::ValueTree serialize(
                                      slot.modulationPayload.size());
         child.setProperty("modulationPayload", modulation.toBase64Encoding(),
                           nullptr);
+        for (const auto &parameter : slot.directParameters) {
+          juce::ValueTree direct("SOUND_PARAMETER");
+          direct.setProperty("id", juce::String(parameter.id), nullptr);
+          direct.setProperty("value", parameter.value, nullptr);
+          child.appendChild(direct, nullptr);
+        }
         root.appendChild(child, nullptr);
     }
     return root;
@@ -328,6 +372,25 @@ bool deserialize(const juce::ValueTree& root,
             if (!slot.modulationPayload.empty())
                 std::memcpy(slot.modulationPayload.data(), modulation.getData(),
                             modulation.getSize());
+        }
+        if (encodedSchema >= 4) {
+          if (child.getNumChildren() >
+              static_cast<int>(instrument::maxDirectParameters)) {
+            diagnostic = "direct parameter count exceeds host limit";
+            return false;
+          }
+          for (const auto direct : child) {
+            float value{};
+            if (!direct.hasType("SOUND_PARAMETER") ||
+                !validString(direct.getProperty("id"),
+                             VOX_INSTRUMENT_MAX_ID_BYTES) ||
+                !readPlain(direct.getProperty("value"), value)) {
+              diagnostic = "invalid direct parameter encoding";
+              return false;
+            }
+            slot.directParameters.push_back(
+                {direct.getProperty("id").toString().toStdString(), value});
+          }
         }
         slot.schemaVersion = schemaVersion;
     }

@@ -1,6 +1,6 @@
 # Execution roadmap
 
-Updated:26.10.2026. Owner priority: **finish the production Rack; Bass afterwards**.
+Updated:27.10.2026. Owner priority: **finish the production Rack; Bass afterwards**.
 Another agent is developing Acid Synth and its dedicated UI in parallel.
 Small engineering checkpoints provide evidence; they are not permission to ship
 incomplete controls or label an MVP production.
@@ -26,7 +26,10 @@ incomplete controls or label an MVP production.
 [RACK_PRODUCTION](tasks/RACK_PRODUCTION.md) is the active lead packet.
 [Main audit](testing/rack-capability-audit-20261026.md) separates present code from
 missing features and unconfirmed causes. The existing Main-only mixer is useful
-infrastructure; Send FX, internal ducking and complete user routing are not present.
+infrastructure on audited main. The unmerged PR #62 candidate adds Send FX,
+internal event ducking, shared Routing and named parameter/state contracts; see
+[implementation evidence](testing/rack-production-evidence-20261027.md). These
+source changes do not close the production milestone before its exit gates.
 
 Acid DSP and its dedicated UI belong to the other agent. Shared Rack/provider
 host/state contracts belong to one lead; publish/review their integration adapter

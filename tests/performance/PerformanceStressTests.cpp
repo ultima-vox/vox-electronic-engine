@@ -196,6 +196,25 @@ int main()
             verifyFinite(instance.audio);
         }
     }
+    // Exercise maximum 16x4 send graph with all four returns and explicit kick
+    // event ducking, not merely dry rack voices. Host automation precedes
+    // scope.
+    for (auto &instance : instances) {
+      for (std::size_t slot = 0; slot < 16; ++slot) {
+        for (std::size_t bus = 0; bus < 4; ++bus) {
+          const auto id = vstengine::host::sendParameterId(slot, bus, "level");
+          setPlain(*instance.processor, id.c_str(), 0.08f);
+        }
+        const auto id = "slot" +
+                        juce::String(static_cast<int>(slot + 1))
+                            .paddedLeft('0', 2)
+                            .toStdString() +
+                        ".duck.depth";
+        setPlain(*instance.processor, id.c_str(), 0.7f);
+      }
+      setPlain(*instance.processor, "rack.duck.source", 1);
+      setPlain(*instance.processor, "rack.duck.note", 37);
+    }
     std::chrono::nanoseconds processTime {};
     double aggregateEnergy {};
     for (int block = 0; block < iterations; ++block) {

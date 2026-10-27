@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 26.10.2026.
+Updated: 27.10.2026.
 Audited main: `ccc1b4dbe416d96370721674eb4857aec19f8fac`.
 Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
 
@@ -49,6 +49,11 @@ deferred after Rack, tracked in #45/#58.
 - Complete Keys and Drum Kit workflows.
 - Style-instrument packaging, commercial entitlements and offline licensing policy.
 - Approved production UI and full Windows/Cubase/REAPER acceptance.
+- Installing new instruments (new DSP) without updating the Rack. Owner decision
+  27.10.2026: a fixed host-parameter pool per slot replaces per-instrument direct
+  IDs, plus a native module loader on the existing C ABI v1. Separate PR after #62;
+  requires Architecture Guard review. Today the catalog is compiled in and each
+  instrument adds its own direct endpoints, so the host parameter list changes.
 
 Lead DSP already has8 voices and Atmos6. The missing polyphonic/long-phrase
 Sequence/Pattern/scheduler model is a separate gap. Dedicated AcidPanel is not
@@ -91,3 +96,41 @@ not a per-PR handoff. Standalone is not required; VST3 remains the product.
   they are not the published shared interface or evidence of production Bass.
 - UI PR #43: existing Sound workspace candidate. Re-evaluate against current workflows; do not merge or close automatically during cleanup.
 - Pattern/API v2 and new style instruments: subsequent scoped implementation, not part of AGY's first task.
+
+## Rack implementation candidate — 27 October 2026
+
+PR #62 (`feat/rack-production`, unmerged) adds the accepted red header/16-slot
+rail, master gain/meters, four wet FX returns with per-slot pre/post sends and
+explicit kick-note event ducking. Settings opens shared audio routing. Generic
+named instrument/APVTS banks, transactional host/complete-scene restore, bounded
+FX tails and the lock-free keyboard/audio handoff are integrated in the candidate.
+Selected/explicit slot MIDI export and a shared Settings save action are now present;
+320 independent SMF/write-failure checks pass. The green Acid workspace is not redesigned; Acid/Bass DSP is unchanged.
+
+Contracts: [audio graph](architecture/RACK_AUDIO_ROUTING.md),
+[named parameters/state](architecture/RACK_PARAMETER_CONTRACT.md).
+Project/Rack/FX schemas deliberately become 5/4/2; old POC project/complete-scene
+formats are rejected under the owner-authorized replacement policy. Existing
+plugin and parameter identities are not renamed.
+
+Independent evidence includes FX-tail 6,023,910 ASan/UBSan checks, direct contract
+1,385 checks, actual processor state/scene 268 checks, realtime MIDI/keyboard
+33,808 checks with GNU malloc/calloc/realloc wrapping, and native editor restore/
+selection/routing tests. Full final CTest/build results and limits are recorded in
+[implementation evidence](testing/rack-production-evidence-20261027.md).
+
+The earlier PR #62 head e6d892c had successful Windows run40329748342; this does
+not verify subsequent direct/state/FX/realtime changes. Run40461084884 for consolidated3537554 built successfully but failed three
+Windows tests; Bass rerender passed there. The candidate repairs the reproduced
+1MiB-stack overflow risk by moving fixed Rack processing storage to construction-time
+heap allocation; all three formerly crashing cases pass independent low-stack
+repeats. Windows run40469745576 for head760e751 subsequently passed Release build/full
+CTest/native capture/package/upload. A further regression repair preserves future
+incompatible named parameter domains while keeping dormant live endpoints safe;
+268 processor checks pass locally. Fresh exact-head Windows checks for that repair
+are required before merge.
+The PR #62 VOX UI pass (single canonical look, header width tiers, rail identity
+artwork, sectioned generic pages, routing/ducking utility) passes the native editor
+smoke test at 1040/1180/1500 px; proposed identity accents and knob sizes await
+owner acceptance ([design system](ui/DESIGN_SYSTEM.md)).
+Owner visual acceptance and integrated Cubase/REAPER acceptance remain separate gates. Do not close #53 or describe the Rack as production accepted.

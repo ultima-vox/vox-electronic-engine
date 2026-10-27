@@ -37,6 +37,8 @@ add_library(vst_instrument STATIC
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
 
 add_library(vst_rack STATIC
+  libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
+  libs/rack/RealtimeMutationGate.h
   libs/rack/RackTypes.h
   libs/rack/RackRouter.cpp libs/rack/RackRouter.h
   libs/rack/Rack.cpp libs/rack/Rack.h
@@ -129,6 +131,7 @@ target_link_libraries(vst_rack PUBLIC vst_modulation)
 add_library(vst_effects STATIC
   libs/effects/EffectsChain.cpp libs/effects/EffectsChain.h)
 target_include_directories(vst_effects PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_rack PUBLIC vst_effects)
 
 add_library(vst_modules STATIC
   libs/modules/BuiltInProvider.cpp libs/modules/BuiltInProvider.h)
@@ -327,6 +330,10 @@ add_executable(modulation_tests tests/modulation/ModulationTests.cpp)
 target_link_libraries(modulation_tests PRIVATE vst_modulation)
 add_test(NAME modulation_tests COMMAND modulation_tests)
 
+add_executable(effects_tail_policy_tests tests/effects/EffectsTailPolicyTests.cpp)
+target_link_libraries(effects_tail_policy_tests PRIVATE vst_effects)
+add_test(NAME effects_tail_policy_tests COMMAND effects_tail_policy_tests)
+
 add_executable(effects_tests tests/effects/EffectsChainTests.cpp)
 target_link_libraries(effects_tests PRIVATE vst_effects)
 add_test(NAME effects_tests COMMAND effects_tests)
@@ -343,6 +350,52 @@ add_executable(state_round_trip_tests
   tests/integration/StateRoundTripTests.cpp)
 target_link_libraries(state_round_trip_tests PRIVATE vst_preset vst_sequence vst_parts)
 add_test(NAME state_round_trip_tests COMMAND state_round_trip_tests)
+
+add_executable(direct_parameter_contract_tests tests/rack/DirectParameterContractTests.cpp)
+target_link_libraries(direct_parameter_contract_tests PRIVATE vst_rack vst_modulation)
+add_test(NAME direct_parameter_contract_tests COMMAND direct_parameter_contract_tests)
+
+add_executable(realtime_mutation_gate_tests tests/rack/RealtimeMutationGateTests.cpp)
+target_include_directories(realtime_mutation_gate_tests PRIVATE ${VST_LIBS_DIR})
+add_test(NAME realtime_mutation_gate_tests COMMAND realtime_mutation_gate_tests)
+
+foreach(direct_test IN ITEMS DirectParameterBankTests DirectProcessorStateTests RackMidiExportTests)
+  if(direct_test STREQUAL "DirectParameterBankTests")
+    set(direct_target direct_parameter_bank_tests)
+  elseif(direct_test STREQUAL "DirectProcessorStateTests")
+    set(direct_target direct_processor_state_tests)
+  else()
+    set(direct_target rack_midi_export_tests)
+  endif()
+  add_executable(${direct_target} tests/integration/${direct_test}.cpp)
+  target_include_directories(${direct_target} PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(${direct_target} PRIVATE VstEngine)
+  add_test(NAME ${direct_target} COMMAND ${direct_target})
+endforeach()
+
+add_executable(rack_realtime_boundary_tests tests/integration/RackRealtimeBoundaryTests.cpp)
+target_include_directories(rack_realtime_boundary_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(rack_realtime_boundary_tests PRIVATE VstEngine)
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_definitions(rack_realtime_boundary_tests PRIVATE VOX_TEST_WRAP_MALLOC=1)
+  target_link_options(rack_realtime_boundary_tests PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
+endif()
+add_test(NAME rack_realtime_boundary_tests COMMAND rack_realtime_boundary_tests)
+
+add_executable(audio_routing_tests tests/rack/AudioRoutingTests.cpp)
+target_include_directories(audio_routing_tests PRIVATE ${VST_LIBS_DIR})
+target_link_libraries(audio_routing_tests PRIVATE vst_effects)
+# AudioRouting itself is JUCE-independent; test the same production source.
+target_sources(audio_routing_tests PRIVATE libs/rack/AudioRouting.cpp)
+add_test(NAME audio_routing_tests COMMAND audio_routing_tests)
+
+add_executable(rack_shell_integration_tests tests/integration/RackShellIntegrationTests.cpp)
+target_include_directories(rack_shell_integration_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(rack_shell_integration_tests PRIVATE VstEngine)
+add_test(NAME rack_shell_integration_tests COMMAND rack_shell_integration_tests)
 
 add_executable(editor_smoke_tests tests/ui/EditorSmokeTests.cpp)
 target_include_directories(editor_smoke_tests PRIVATE

@@ -34,6 +34,31 @@ Read realtime displays from safe snapshots, never mutable audio objects.
 These values reflect the current token files; this cleanup changes no tokens.
 Old token reference canvas is 1440x1080, not a new fixed-window requirement.
 
+## VOX product skin (PR #62 candidate, 27.10.2026)
+
+The owner explicitly requested an original VOX design for the Rack (mockup and
+JUCE implementation) with no default JUCE controls. Implemented, pending owner
+visual acceptance:
+
+- One canonical look: `vox::ui::VoxLookAndFeel`; `vstengine::ui::VoxLookAndFeel`
+  is an alias. Shared drawing primitives live in `libs/vox-ui/VoxPaint.h`.
+- Panel grammar: `[power] TITLE [actions]`, 1px border, radius 4-6, no shadows;
+  pages use titled raised sections.
+- Global header width tiers: Settings label at >= 1280 px, CPU bar and full seed
+  field at >= 1120 px; below that they collapse so every control fits at 1040 px.
+- Rack rail: procedural identity thumbnail per slot, cyan selected glow,
+  procedural mountain footer. Artwork never carries state or acts as a control.
+
+Proposed tokens/deviations requiring owner acceptance:
+
+| Item | Proposal |
+| --- | --- |
+| Identity accents (artwork only; interaction stays cyan) | Psy Bass #1E9BFF, Acid #39E27A, Lead #A066FF, Atmos #BFE8FF, Semantic FX #22C7FF; unknown IDs get a deterministic hash hue |
+| Macro page knob diameter | Up to 104 px (scales 56-104 with cell width) versus the 64 px token maximum |
+| Return/ducking knobs | 46 px (between the 36 and 48 px tokens) |
+
+Source: `libs/ui/InstrumentIdentity.h`. Not yet tokens in `Tokens.h`.
+
 ## Interaction
 
 - One knob grammar: label, 270-degree arc, always-visible value, distinct modulation layer.

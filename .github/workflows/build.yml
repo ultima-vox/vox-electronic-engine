@@ -43,6 +43,16 @@ jobs:
             if (-not (Test-Path $output)) { throw "Visual Gate snapshot not created: $output" }
           }
 
+          # Capture actual shared Rack editor/utility components as well as the showcase.
+          $env:VOX_UI_SNAPSHOT = Join-Path $snapshotDir "rack-shell-native-1240x800.png"
+          $env:VOX_ROUTING_SNAPSHOT = Join-Path $snapshotDir "rack-routing-native-1040x780.png"
+          $env:VOX_DUCKING_SNAPSHOT = Join-Path $snapshotDir "rack-ducking-native-1040x780.png"
+          & (Join-Path $PWD "build\Release\editor_smoke_tests.exe")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:VOX_UI_SNAPSHOT
+          Remove-Item Env:VOX_ROUTING_SNAPSHOT
+          Remove-Item Env:VOX_DUCKING_SNAPSHOT
+
           Capture-VisualGate "psy-bass-sound-1180x760.png" "com.ultimavox.psy-bass" "sound" 1180 760
           Capture-VisualGate "psy-bass-sound-1500x920.png" "com.ultimavox.psy-bass" "sound" 1500 920
           Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
