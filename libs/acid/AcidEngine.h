@@ -304,7 +304,7 @@ private:
     // Accent: 0.58, Slide Time: 0.30, Output: 0.75 (-3.0 dB), Pan: 0.50 (C)
     // Mod Env1: Filter Cutoff, Amount 0.70, A 0.00s, D 0.35s, S 0.80, R 0.45s
     // Performance: Portamento 0.00s, Unison 1, Detune 0.10, Spread 0.40
-    static constexpr std::array<float, parameterCount> factoryTargets_ {
+    static constexpr auto factoryTargets_ = std::to_array<float>({
         0.50f, // 0: waveform (Saw)
         0.37f, // 1: cutoff (250 Hz)
         0.75f, // 2: resonance (0.75)
@@ -368,7 +368,14 @@ private:
         0.50f, 0.50f, 0.50f, 0.50f,
         0.50f, 0.50f, 0.50f, 0.50f,
         0.00f, 0.00f, 0.00f // 74..76: sync off, preserve previous LFO behavior
-    };
+    });
+    // C++ array value-initialization silently fills missing elements with
+    // zero; deduce the initializer count so adding a future Acid parameter
+    // without an explicit factory value becomes a compile-time error.
+    static_assert(factoryTargets_.size() == parameterCount,
+                  "Every Acid parameter requires an explicit factory default");
+    static_assert(parameterCount == static_cast<std::size_t>(Parameter::count),
+                  "Acid parameter count must match the frozen enum order");
     std::array<float, parameterCount> targets_ { factoryTargets_ };
     std::array<float, parameterCount> smoothed_ { targets_ };
 
