@@ -11,7 +11,9 @@ namespace vstengine::acid {
 
 class AcidEngine final {
 public:
-    static constexpr std::uint32_t stateVersion = 7;
+    static constexpr std::uint32_t stateVersion = 8;
+    static constexpr std::uint32_t stepStateVersion = 7;
+    static constexpr std::size_t stepParameterCount = 74;
     static constexpr std::uint32_t lfo23StateVersion = 6;
     static constexpr std::size_t lfo23ParameterCount = 54;
     static constexpr std::uint32_t env2StateVersion = 5;
@@ -22,7 +24,7 @@ public:
     static constexpr std::size_t previousParameterCount = 36;
     static constexpr std::uint32_t legacyStateVersion = 1;
     static constexpr std::size_t legacyParameterCount = 9;
-    static constexpr std::size_t parameterCount = 74;
+    static constexpr std::size_t parameterCount = 77;
     static constexpr std::size_t stepCount = 16;
     static constexpr std::size_t encodedStateBytes = 8 + parameterCount * sizeof(float);
     static constexpr std::size_t maxUnisonVoices = 4;
@@ -112,6 +114,9 @@ public:
         step09, step10, step11, step12,
         step13, step14, step15, step16,
 
+        // Three independent host-tempo sync mode switches (default OFF).
+        lfo1Sync, lfo2Sync, lfo3Sync,
+
         count
     };
 
@@ -197,7 +202,8 @@ public:
         "step_01", "step_02", "step_03", "step_04",
         "step_05", "step_06", "step_07", "step_08",
         "step_09", "step_10", "step_11", "step_12",
-        "step_13", "step_14", "step_15", "step_16"
+        "step_13", "step_14", "step_15", "step_16",
+        "lfo1_sync", "lfo2_sync", "lfo3_sync"
     };
 
     bool prepare(double sampleRate, std::uint32_t maximumBlockSize,
@@ -360,7 +366,8 @@ private:
         0.50f, 0.50f, 0.50f, 0.50f,
         0.50f, 0.50f, 0.50f, 0.50f,
         0.50f, 0.50f, 0.50f, 0.50f,
-        0.50f, 0.50f, 0.50f, 0.50f
+        0.50f, 0.50f, 0.50f, 0.50f,
+        0.00f, 0.00f, 0.00f // 74..76: sync off, preserve previous LFO behavior
     };
     std::array<float, parameterCount> smoothed_ { targets_ };
 

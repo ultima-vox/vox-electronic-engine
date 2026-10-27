@@ -1057,12 +1057,21 @@ VstEngineAudioProcessor::createParameterLayout()
              p < vstengine::acid::AcidEngine::parameterCount; ++p) {
             if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
             const auto semantic = vstengine::acid::AcidEngine::parameterIds[p];
-            params.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID {
-                    juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
-                label + "Acid " + juce::String(std::string(semantic)),
-                juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f },
-                acidDefaults.parameter(semantic)));
+            if (p == vstengine::acid::AcidEngine::lfo1Sync
+                || p == vstengine::acid::AcidEngine::lfo2Sync
+                || p == vstengine::acid::AcidEngine::lfo3Sync) {
+                params.push_back(std::make_unique<juce::AudioParameterBool>(
+                    juce::ParameterID {
+                        juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                    label + "Acid " + juce::String(std::string(semantic)), false));
+            } else {
+                params.push_back(std::make_unique<juce::AudioParameterFloat>(
+                    juce::ParameterID {
+                        juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                    label + "Acid " + juce::String(std::string(semantic)),
+                    juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f },
+                    acidDefaults.parameter(semantic)));
+            }
         }
         constexpr std::array<std::pair<std::string_view, bool>, 4> modes {{
             { "legato", true }, { "retrigger", false },

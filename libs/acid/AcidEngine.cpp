@@ -279,6 +279,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         && schemaVersion != lfo1StateVersion
         && schemaVersion != env2StateVersion
         && schemaVersion != lfo23StateVersion
+        && schemaVersion != stepStateVersion
         && schemaVersion != stateVersion)
         return false;
     if (payload.empty()) return true;
@@ -295,6 +296,13 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
 
     auto parsedTargets = targets_;
     if (schemaVersion != stateVersion) {
+        // v7 and earlier LFOs were free-running. Do not inherit sync
+        // switches from a previously used v8 instance on preset recall.
+        parsedTargets[Parameter::lfo1Sync] = 0.0f;
+        parsedTargets[Parameter::lfo2Sync] = 0.0f;
+        parsedTargets[Parameter::lfo3Sync] = 0.0f;
+    }
+    if (schemaVersion != stateVersion && schemaVersion != stepStateVersion) {
         // STEP did not exist before v7. A legacy recall must not keep an
         // active pattern/amount from a previously used v7 Acid instance.
         parsedTargets[Parameter::stepAmount] = 0.0f;
@@ -304,7 +312,8 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         for (std::size_t i = 0; i < stepCount; ++i)
             parsedTargets[Parameter::step01 + i] = 0.5f;
     }
-    if (schemaVersion != stateVersion && schemaVersion != lfo23StateVersion) {
+    if (schemaVersion != stateVersion && schemaVersion != stepStateVersion
+        && schemaVersion != lfo23StateVersion) {
         // v1/v3/v4/v5 do not contain independent LFO2/3.
         parsedTargets[Parameter::lfo2Rate] = 0.35f;
         parsedTargets[Parameter::lfo2Depth] = 0.0f;
@@ -316,6 +325,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         parsedTargets[Parameter::lfo3Target] = 0.0f;
     }
     if (schemaVersion != stateVersion
+        && schemaVersion != stepStateVersion
         && schemaVersion != lfo23StateVersion
         && schemaVersion != env2StateVersion) {
         // Any v1/v3/v4 recall must disable ENV2, which was absent in those
@@ -355,13 +365,15 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         || schemaVersion == lfo1StateVersion
         || schemaVersion == env2StateVersion
         || schemaVersion == lfo23StateVersion
+        || schemaVersion == stepStateVersion
         || schemaVersion == stateVersion) {
         const std::size_t count = schemaVersion == previousStateVersion
             ? previousParameterCount
-            : (schemaVersion == lfo1StateVersion ? lfo1ParameterCount
-               : (schemaVersion == env2StateVersion ? env2ParameterCount
-                  : (schemaVersion == lfo23StateVersion ? lfo23ParameterCount
-                                                        : parameterCount)));
+            : schemaVersion == lfo1StateVersion ? lfo1ParameterCount
+            : schemaVersion == env2StateVersion ? env2ParameterCount
+            : schemaVersion == lfo23StateVersion ? lfo23ParameterCount
+            : schemaVersion == stepStateVersion ? stepParameterCount
+                                                : parameterCount;
         if (payload.size() < 8 + count * sizeof(float)) return false;
         for (std::size_t i = 0; i < count; ++i) {
             float val = 0.0f;
@@ -605,34 +617,53 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     // its phase, Rate, Depth, Wave and Target. The helper makes the waveform
     // transfer function identical without sharing any control state.
     const auto renderLfo = [this](std::size_t index, Parameter depth,
-                                  Parameter wave, double& phase) noexcept {
-        // At the 4ms parameter smoothing constant used by this synth,
-        // increment smoothing avoids hard discontinuities at host automation
-        // changes without calling pow for every output sample.
-        lfoPhaseIncrement_[index] += lfoIncrementSmoothing_ *
-            (lfoTargetIncrement_[index] - lfoPhaseIncrement_[index]);
-        phase += lfoPhaseIncrement_[index];
-        if (phase >= 1.0) phase -= std::floor(phase);
-        float signal = 0.0f;
+                                  Parameter wave, Parameter sync,
+                                  double& phase) noexcept {
+        // Sync enabled: derive phase directly from authoritative PPQ. This
+        // survives transport stop/start, looping and arbitrary DAW seeks
+        // without depending on previous audio block length or audio thread
+        // state. Sync off keeps the original continuously running oscillator.
+        double samplePhase = 0.0;
+        if (smoothed_[sync] >= 0.5f) {
+            constexpr std::array<double, 8> beatsPerCycle {
+                4.0, 2.0, 1.0, 0.5, 0.25, 1.0 / 3.0, 1.0 / 6.0, 0.125
+            };
+            constexpr std::array<Parameter, 3> rateIds {
+                Parameter::lfo1Rate, Parameter::lfo2Rate, Parameter::lfo3Rate
+            };
+            const int rhythm = std::clamp(static_cast<int>(std::round(
+                smoothed_[rateIds[index]] * 7.0f)), 0, 7);
+            const double cycles = stepPpqPosition_ / beatsPerCycle[rhythm];
+            samplePhase = cycles - std::floor(cycles);
+        } else {
+            // At the established 4ms smoothing constant, changes in
+            // free-running frequency remain smooth; no per-sample pow().
+            lfoPhaseIncrement_[index] += lfoIncrementSmoothing_ *
+                (lfoTargetIncrement_[index] - lfoPhaseIncrement_[index]);
+            phase += lfoPhaseIncrement_[index];
+            if (phase >= 1.0) phase -= std::floor(phase);
+            samplePhase = phase;
+        }
+        float signal = 0.0;
         switch (std::min(3, static_cast<int>(
                     std::round(smoothed_[wave] * 3.0f)))) {
-            case 0: signal = static_cast<float>(std::sin(twoPi * phase)); break;
+            case 0: signal = static_cast<float>(std::sin(twoPi * samplePhase)); break;
             case 1: signal = static_cast<float>(
-                1.0 - 4.0 * std::abs(phase - 0.5)); break;
-            case 2: signal = phase < 0.5 ? 1.0f : -1.0f; break;
-            default: signal = static_cast<float>(2.0 * phase - 1.0); break;
+                1.0 - 4.0 * std::abs(samplePhase - 0.5)); break;
+            case 2: signal = samplePhase < 0.5 ? 1.0f : -1.0f; break;
+            default: signal = static_cast<float>(2.0 * samplePhase - 1.0); break;
         }
         return signal * smoothed_[depth];
     };
     const float lfo1Value = renderLfo(
         0u, Parameter::lfo1Depth,
-        Parameter::lfo1Wave, lfo1Phase_);
+        Parameter::lfo1Wave, Parameter::lfo1Sync, lfo1Phase_);
     const float lfo2Value = renderLfo(
         1u, Parameter::lfo2Depth,
-        Parameter::lfo2Wave, lfo2Phase_);
+        Parameter::lfo2Wave, Parameter::lfo2Sync, lfo2Phase_);
     const float lfo3Value = renderLfo(
         2u, Parameter::lfo3Depth,
-        Parameter::lfo3Wave, lfo3Phase_);
+        Parameter::lfo3Wave, Parameter::lfo3Sync, lfo3Phase_);
     const ModTarget lfo1Target = decodeModTarget(smoothed_[Parameter::lfo1Target]);
     const ModTarget lfo2Target = decodeModTarget(smoothed_[Parameter::lfo2Target]);
     const ModTarget lfo3Target = decodeModTarget(smoothed_[Parameter::lfo3Target]);
