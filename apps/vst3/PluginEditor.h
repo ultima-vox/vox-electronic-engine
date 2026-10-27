@@ -8,6 +8,7 @@
 #include "ui/ZoneRangeEditor.h"
 #include "vox-ui/components/VoxButton.h"
 #include "vox-ui/components/VoxComboBox.h"
+#include "vox-ui/VoxPaint.h"
 
 class VstEngineAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer {
@@ -81,16 +82,15 @@ private:
         public:
           PowerButton() : juce::Button("Slot power") {}
           void paintButton(juce::Graphics &g, bool hover, bool) override {
-            g.setColour(
-                (getToggleState() ? juce::Colour(0xff00ddf5)
-                                  : juce::Colour(0xff587487))
-                    .withAlpha(isEnabled() ? (hover ? 1.0f : 0.85f) : 0.3f));
-            const auto x = getWidth() * 0.5f, y = getHeight() * 0.5f;
-            juce::Path arc;
-            arc.addCentredArc(x, y, 5.0f, 5.0f, 0, 0.65f,
-                              juce::MathConstants<float>::twoPi - 0.65f, true);
-            g.strokePath(arc, juce::PathStrokeType(1.2f));
-            g.drawLine(x, y - 7, x, y - 1, 1.2f);
+            const auto on = getToggleState() && isEnabled();
+            auto c = on ? juce::Colour(0xff00ddf5) : juce::Colour(0xff587487);
+            if (!isEnabled())
+              c = c.withAlpha(0.45f);
+            else if (hover)
+              c = c.brighter(0.3f);
+            vox::ui::paint::powerIcon(
+                g, getLocalBounds().toFloat().withSizeKeepingCentre(18.0f, 18.0f),
+                c);
           }
         } power;
         vstengine::rack::Rack::SlotSummary summary;
@@ -102,7 +102,7 @@ private:
       void showSlotMenu(std::size_t);
       void loadInstrument(std::size_t, const std::string &);
       VstEngineAudioProcessor &processor;
-      juce::Label title;
+      juce::Rectangle<int> headingBounds, artBounds;
       juce::TextButton add{"+"};
       std::array<SlotRow, vstengine::instrument::maxSlots> slots;
       std::vector<
@@ -136,6 +136,7 @@ private:
         std::array<juce::Slider, vstengine::instrument::macrosPerSlot> knobs;
         std::array<juce::Label, vstengine::instrument::macrosPerSlot> labels;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
+        juce::Rectangle<int> groupBounds;
         std::size_t count;
     };
 

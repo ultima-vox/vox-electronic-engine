@@ -4,6 +4,8 @@
 #include "ui/common/UiComponents.h"
 #include "vox-ui/Tokens.h"
 #include "vox-ui/Typography.h"
+#include "vox-ui/VoxPaint.h"
+#include "ui/InstrumentIdentity.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -26,11 +28,7 @@ void knob(juce::Slider& slider)
 
 void panel(juce::Graphics& g, juce::Rectangle<int> bounds)
 {
-    auto area = bounds.toFloat().reduced(0.5f);
-    g.setColour(vstengine::ui::colours::panel);
-    g.fillRoundedRectangle(area, vstengine::ui::metrics::corner);
-    g.setColour(vstengine::ui::colours::border);
-    g.drawRoundedRectangle(area, vstengine::ui::metrics::corner, 1.0f);
+    vox::ui::paint::panel(g, bounds.toFloat());
 }
 
 } // namespace
@@ -92,7 +90,7 @@ VstEngineAudioProcessorEditor::RackRail::SlotRow::SlotRow() {
   setWantsKeyboardFocus(true);
 }
 void VstEngineAudioProcessorEditor::RackRail::SlotRow::resized() {
-  power.setBounds(getWidth() - 27, 2, 25, getHeight() - 4);
+  power.setBounds(getWidth() - 30, 0, 28, getHeight());
 }
 void VstEngineAudioProcessorEditor::RackRail::SlotRow::mouseDown(
     const juce::MouseEvent &event) {
@@ -102,66 +100,91 @@ void VstEngineAudioProcessorEditor::RackRail::SlotRow::mouseDown(
 void VstEngineAudioProcessorEditor::RackRail::SlotRow::paint(
     juce::Graphics &g) {
   using namespace vox::ui::tokens;
-  const auto area = getLocalBounds().toFloat().reduced(0.5f);
-  g.setColour(selected ? colour::accent.withAlpha(0.12f) : colour::control);
-  g.fillRoundedRectangle(area, 3.0f);
-  g.setColour(selected ? colour::accent : colour::border);
-  g.drawRoundedRectangle(area, 3.0f, selected ? 1.4f : 0.7f);
-  auto left = getLocalBounds().reduced(6, 3);
-  g.setFont(vox::ui::typography::makeFont(10.0f));
-  g.setColour(colour::textSecondary);
-  g.drawText(juce::String(static_cast<int>(index + 1)).paddedLeft('0', 2),
-             left.removeFromLeft(18), juce::Justification::centredLeft);
-  const auto icon = left.removeFromLeft(32).reduced(1, 2);
+  namespace paint = vox::ui::paint;
   const bool occupied = !summary.instrumentId.empty();
-  if (occupied) {
-    const auto tint = juce::Colour::fromHSV(
-        static_cast<float>(juce::String(summary.instrumentId).hashCode() &
-                           255) /
-            255.0f,
-        0.6f, 0.85f, 1.0f);
-    g.setColour(tint.withAlpha(0.14f));
-    g.fillRoundedRectangle(icon.toFloat(), 3.0f);
-    juce::Path wave;
-    wave.startNewSubPath(static_cast<float>(icon.getX()),
-                         static_cast<float>(icon.getCentreY()));
-    for (int x = 0; x < icon.getWidth(); ++x)
-      wave.lineTo(static_cast<float>(icon.getX() + x),
-                  static_cast<float>(icon.getCentreY()) +
-                      std::sin(x * 0.65f) * std::sin(x * 0.16f) *
-                          icon.getHeight() * 0.35f);
-    g.setColour(tint);
-    g.strokePath(wave, juce::PathStrokeType(1.1f));
+  const auto area = getLocalBounds().toFloat().reduced(1.0f);
+  if (selected) {
+    g.setGradientFill(juce::ColourGradient(
+        colour::accent.withAlpha(0.16f), area.getX(), area.getY(),
+        colour::panelRaised, area.getRight(), area.getY(), false));
+    g.fillRoundedRectangle(area, radius::small);
+    paint::selectedOutline(g, area);
+  } else {
+    g.setColour(occupied ? colour::control : colour::background.brighter(0.02f));
+    g.fillRoundedRectangle(area, radius::small);
+    g.setColour(occupied ? colour::border : colour::borderSubtle);
+    g.drawRoundedRectangle(area.reduced(0.5f), radius::small, 1.0f);
   }
-  left.removeFromLeft(5);
-  left.removeFromRight(25);
-  const auto name =
-      occupied ? juce::String(summary.name) : juce::String("Empty");
-  g.setColour(enabled ? colour::text : colour::textMuted);
-  g.setFont(vox::ui::typography::makeFont(12.0f));
-  auto first = left.removeFromTop(juce::jmax(17, left.getHeight() / 2));
-  const auto status = channel + (mute ? " M" : solo ? " S" : "");
-  g.drawText(status, first.removeFromRight(39),
-             juce::Justification::centredRight);
-  g.drawFittedText(name, first, juce::Justification::centredLeft, 1);
+  if (hasKeyboardFocus(false) && !selected) {
+    g.setColour(colour::accentDim);
+    g.drawRoundedRectangle(area.reduced(0.5f), radius::small, 1.2f);
+  }
+
+  auto content = getLocalBounds().reduced(8, 0);
+  content.removeFromRight(30); // power
+  const auto big = juce::jlimit(12.0f, 15.0f, getHeight() * 0.36f);
+  g.setFont(paint::spaced(big, 0.02f));
+  g.setColour(selected ? colour::text
+                       : (occupied ? colour::textSecondary : colour::textMuted));
+  g.drawText(juce::String(static_cast<int>(index + 1)).paddedLeft('0', 2),
+             content.removeFromLeft(24), juce::Justification::centredLeft);
+
+  const auto channelArea = content.removeFromRight(40);
   if (occupied) {
+    const auto thumbHeight = static_cast<float>(getHeight()) - 10.0f;
+    auto thumb = content.removeFromLeft(juce::roundToInt(thumbHeight * 1.3f))
+                     .toFloat()
+                     .withSizeKeepingCentre(thumbHeight * 1.3f, thumbHeight);
+    vstengine::ui::identity::drawThumbnail(
+        g, thumb, vstengine::ui::identity::forInstrument(summary.instrumentId));
+    if (!enabled) {
+      g.setColour(colour::background.withAlpha(0.55f));
+      g.fillRoundedRectangle(thumb, 3.0f);
+    }
+    content.removeFromLeft(8);
+  }
+
+  const bool twoLines = getHeight() >= 34;
+  auto first = twoLines ? content.removeFromTop(getHeight() / 2 + 1)
+                        : content;
+  g.setFont(vox::ui::typography::makeFont(juce::jlimit(11.5f, 13.5f, big - 0.5f)));
+  g.setColour(occupied ? (enabled ? colour::text : colour::textSecondary)
+                       : colour::textMuted);
+  g.drawFittedText(occupied ? juce::String(summary.name) : juce::String("Empty"),
+                   first.withTrimmedBottom(twoLines ? 1 : 0),
+                   twoLines ? juce::Justification::bottomLeft
+                            : juce::Justification::centredLeft,
+                   1, 0.85f);
+  auto channelText = channelArea;
+  g.setFont(vox::ui::typography::makeFont(11.5f));
+  g.setColour(occupied ? colour::textSecondary : colour::textMuted);
+  g.drawText(channel,
+             twoLines ? channelText.removeFromTop(getHeight() / 2 + 1)
+                            .withTrimmedBottom(1)
+                      : channelText,
+             twoLines ? juce::Justification::bottomRight
+                      : juce::Justification::centredRight);
+  if (twoLines && (mute || solo)) {
+    g.setFont(paint::spaced(8.5f, 0.12f, true));
+    g.setColour(mute ? colour::danger : colour::warning);
+    g.drawText(mute ? "MUTE" : "SOLO", channelText.withTrimmedTop(2),
+               juce::Justification::topRight);
+  }
+  if (occupied && twoLines) {
     const bool resolved =
         summary.resolution == vstengine::instrument::ResolutionStatus::resolved;
-    g.setFont(vox::ui::typography::makeFont(8.5f));
+    g.setFont(vox::ui::typography::makeFont(10.5f));
     g.setColour(resolved ? colour::textSecondary : colour::warning);
     g.drawFittedText(resolved
-                         ? juce::String(summary.vendor) + "  " +
+                         ? juce::String(summary.vendor) + " " +
                                juce::String(summary.instrumentVersion) + ".0"
-                         : "Unavailable / preserved",
-                     left, juce::Justification::centredLeft, 1);
+                         : juce::String("Unavailable / state preserved"),
+                     content.withTrimmedTop(2), juce::Justification::topLeft, 1,
+                     0.85f);
   }
 }
 VstEngineAudioProcessorEditor::RackRail::RackRail(VstEngineAudioProcessor& p) : processor(p)
 {
-  title.setText("INSTRUMENT RACK       16 slots", juce::dontSendNotification);
-  vstengine::ui::styleLabel(title, 10.0f, juce::Justification::centredLeft,
-                            vstengine::ui::colours::mutedText);
-  addAndMakeVisible(title);
   addAndMakeVisible(add);
   add.setTooltip("Load an instrument into the first empty slot");
   add.onClick = [this] {
@@ -198,26 +221,44 @@ VstEngineAudioProcessorEditor::RackRail::RackRail(VstEngineAudioProcessor& p) : 
   }
 }
 void VstEngineAudioProcessorEditor::RackRail::paint(juce::Graphics &g) {
+  using namespace vox::ui::tokens;
   panel(g, getLocalBounds());
-  const auto bottom = slots.back().getBottom() + 12;
-  if (getHeight() - bottom > 30) {
-    g.setColour(vox::ui::tokens::colour::accentDim);
-    g.setFont(vox::ui::typography::makeFont(9.0f));
-    g.drawText("S O U N D   F O R   A   D I F F E R E N T", 8, bottom,
-               getWidth() - 16, 15, juce::Justification::centred);
-    g.drawText("T O M O R R O W", 8, bottom + 17, getWidth() - 16, 15,
-               juce::Justification::centred);
+  g.setFont(vox::ui::paint::spaced(12.0f, 0.06f));
+  g.setColour(colour::text);
+  g.drawText("INSTRUMENT RACK", headingBounds, juce::Justification::centredLeft);
+  g.setFont(vox::ui::typography::makeFont(11.0f));
+  g.setColour(colour::textSecondary);
+  g.drawText("16 slots", headingBounds.withTrimmedRight(32),
+             juce::Justification::centredRight);
+  if (artBounds.getHeight() >= 64) {
+    auto art = artBounds.toFloat();
+    vstengine::ui::identity::drawMountains(g, art, colour::accent);
+    g.setColour(colour::text.withAlpha(0.85f));
+    g.setFont(vox::ui::paint::spaced(9.5f, 0.5f));
+    const auto lines = juce::StringArray{"SOUND", "FOR A DIFFERENT", "TOMORROW"};
+    auto text = art.removeFromBottom(juce::jmin(54.0f, art.getHeight() * 0.5f))
+                    .toNearestInt();
+    const int lineHeight = text.getHeight() / 3;
+    for (const auto &line : lines)
+      g.drawText(line, text.removeFromTop(lineHeight),
+                 juce::Justification::centred);
+    g.setColour(colour::border);
+    g.drawRoundedRectangle(artBounds.toFloat().reduced(0.5f), radius::small, 1.0f);
   }
 }
 void VstEngineAudioProcessorEditor::RackRail::resized()
 {
-  auto a = getLocalBounds().reduced(6);
-  auto heading = a.removeFromTop(28);
-  add.setBounds(heading.removeFromRight(24).reduced(1));
-  title.setBounds(heading);
-  const int h = juce::jlimit(29, 42, (a.getHeight() - 42) / 16);
-  for (auto &row : slots)
-    row.setBounds(a.removeFromTop(h).reduced(0, 1));
+  auto a = getLocalBounds().reduced(8, 6);
+  headingBounds = a.removeFromTop(32);
+  add.setBounds(headingBounds.withLeft(headingBounds.getRight() - 26)
+                    .withSizeKeepingCentre(26, 24));
+  a.removeFromTop(2);
+  const int h = juce::jlimit(30, 46, (a.getHeight() - 70) / 16);
+  for (auto &row : slots) {
+    row.setBounds(a.removeFromTop(h).reduced(0, 2));
+  }
+  a.removeFromTop(6);
+  artBounds = a;
 }
 void VstEngineAudioProcessorEditor::RackRail::refresh()
 {
@@ -340,10 +381,12 @@ void VstEngineAudioProcessorEditor::RackRail::showSlotMenu(std::size_t i) {
 VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudioProcessor& p)
     : processor(p)
 {
-    vstengine::ui::styleLabel(title, 18.0f, juce::Justification::centredLeft,
+    vstengine::ui::styleLabel(title, 26.0f, juce::Justification::bottomLeft,
                               vstengine::ui::colours::text);
-    vstengine::ui::styleLabel(subtitle, 11.0f, juce::Justification::centredLeft,
-                              vstengine::ui::colours::mutedText);
+    title.setFont(vox::ui::paint::spaced(27.0f, 0.02f, true));
+    title.setMinimumHorizontalScale(0.7f);
+    vstengine::ui::styleLabel(subtitle, 12.0f, juce::Justification::topLeft,
+                              vox::ui::tokens::colour::textSecondary);
     midiIn.addItem("OFF", 1);
     for (int channel = 1; channel <= 16; ++channel)
         midiIn.addItem("CH" + juce::String(channel), channel + 1);
@@ -391,18 +434,33 @@ VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudio
     };
 }
 
-void VstEngineAudioProcessorEditor::InstrumentHeader::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
+void VstEngineAudioProcessorEditor::InstrumentHeader::paint(juce::Graphics& g)
+{
+    panel(g, getLocalBounds());
+    g.setFont(vox::ui::typography::makeFont(12.5f));
+    g.setColour(vox::ui::tokens::colour::textSecondary);
+    g.drawText("Channel", midiIn.getBounds().withX(midiIn.getX() - 62).withWidth(56),
+               juce::Justification::centredRight);
+}
 
 void VstEngineAudioProcessorEditor::InstrumentHeader::resized()
 {
-    auto area = getLocalBounds().reduced(14, 9);
-    auto identity = area.removeFromLeft(245);
-    title.setBounds(identity.removeFromTop(26)); subtitle.setBounds(identity);
-    instrument.setBounds(area.removeFromLeft(190).reduced(4, 8));
-    presetPrevious.setBounds(area.removeFromLeft(38).reduced(2, 8));
-    preset.setBounds(area.removeFromLeft(190).reduced(4, 8));
-    presetNext.setBounds(area.removeFromLeft(38).reduced(2, 8));
-    midiIn.setBounds(area.removeFromRight(90).reduced(4, 8));
+    auto area = getLocalBounds().reduced(16, 8);
+    const auto control = [](juce::Rectangle<int> r) {
+        return r.withSizeKeepingCentre(r.getWidth(), 32);
+    };
+    midiIn.setBounds(control(area.removeFromRight(86)));
+    area.removeFromRight(70); // "Channel" caption
+    presetNext.setBounds(control(area.removeFromRight(34)));
+    area.removeFromRight(4);
+    preset.setBounds(control(area.removeFromRight(juce::jlimit(120, 200, area.getWidth() / 4))));
+    area.removeFromRight(4);
+    presetPrevious.setBounds(control(area.removeFromRight(34)));
+    area.removeFromRight(10);
+    instrument.setBounds(control(area.removeFromRight(juce::jlimit(120, 200, area.getWidth() / 3))));
+    area.removeFromRight(12);
+    title.setBounds(area.removeFromTop(area.getHeight() * 3 / 5));
+    subtitle.setBounds(area);
 }
 
 void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
@@ -431,14 +489,18 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
   const auto *descriptor = processor.instrumentRack().descriptor(selected);
   title.setText(descriptor != nullptr ? descriptor->name : "Empty slot",
                 juce::dontSendNotification);
-  subtitle.setText(descriptor != nullptr
-                       ? juce::String(descriptor->vendor) + "  /  slot " +
-                             juce::String(static_cast<int>(selected + 1))
-                       : "Choose instrument to activate slot",
-                   juce::dontSendNotification);
   const int channel = state.routing.mode == vstengine::rack::RouteMode::off
                           ? 0
                           : state.routing.channel;
+  const auto slotText = "Slot " + juce::String(static_cast<int>(selected + 1));
+  const auto channelText = channel == 0 ? juce::String("MIDI off")
+                                        : "CH" + juce::String(channel);
+  subtitle.setText(descriptor != nullptr
+                       ? slotText + "   |   " + channelText + "   |   " +
+                             juce::String(descriptor->vendor) + " " +
+                             juce::String(descriptor->instrumentVersion) + ".0"
+                       : slotText + "   |   Choose an instrument to activate this slot",
+                   juce::dontSendNotification);
   midiIn.setSelectedId(channel + 1, juce::dontSendNotification);
 }
 
@@ -459,26 +521,38 @@ VstEngineAudioProcessorEditor::MacroPage::MacroPage(
         knob(knobs[i]);
         vstengine::ui::styleLabel(labels[i], 11.0f, juce::Justification::centred,
                                   vstengine::ui::colours::text);
+        labels[i].setFont(vox::ui::paint::spaced(11.0f, 0.12f, true));
         addChildComponent(knobs[i]); addChildComponent(labels[i]);
         knobs[i].setVisible(i < count); labels[i].setVisible(i < count);
     }
 }
 
-void VstEngineAudioProcessorEditor::MacroPage::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
+void VstEngineAudioProcessorEditor::MacroPage::paint(juce::Graphics& g)
+{
+    panel(g, getLocalBounds());
+    if (!groupBounds.isEmpty())
+        vox::ui::paint::panel(g, groupBounds.toFloat(), true);
+}
 
 void VstEngineAudioProcessorEditor::MacroPage::resized()
 {
     auto area = getLocalBounds().reduced(18);
-    title.setBounds(area.removeFromTop(26)); description.setBounds(area.removeFromTop(25));
-    area.removeFromTop(12);
+    title.setBounds(area.removeFromTop(26)); description.setBounds(area.removeFromTop(22));
+    area.removeFromTop(14);
     const int columns = count <= 6 ? static_cast<int>(count) : 4;
     const int rows = static_cast<int>((count + columns - 1) / columns);
-    const int cellWidth = area.getWidth() / columns;
-    const int cellHeight = area.getHeight() / rows;
+    // Knobs keep an instrument-panel scale instead of filling the page.
+    const int cellWidth = juce::jmin(150, area.getWidth() / columns);
+    const int knobSize = juce::jlimit(56, 104, cellWidth - 34);
+    const int cellHeight = 26 + knobSize + 28;
+    groupBounds = area.withSizeKeepingCentre(cellWidth * columns + 24, cellHeight * rows + 24)
+                      .withY(area.getY());
+    const auto inner = groupBounds.reduced(12);
     for (std::size_t i = 0; i < count; ++i) {
-        auto cell = juce::Rectangle<int>(area.getX() + static_cast<int>(i % columns) * cellWidth,
-            area.getY() + static_cast<int>(i / columns) * cellHeight, cellWidth, cellHeight).reduced(5);
-        labels[i].setBounds(cell.removeFromTop(24)); knobs[i].setBounds(cell);
+        auto cell = juce::Rectangle<int>(inner.getX() + static_cast<int>(i % columns) * cellWidth,
+            inner.getY() + static_cast<int>(i / columns) * cellHeight, cellWidth, cellHeight);
+        labels[i].setBounds(cell.removeFromTop(26));
+        knobs[i].setBounds(cell.withSizeKeepingCentre(juce::jmax(knobSize, 76), cell.getHeight()));
     }
 }
 
@@ -494,7 +568,7 @@ void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
                     label = parameter.name;
                     break;
                 }
-        labels[macro].setText(label, juce::dontSendNotification);
+        labels[macro].setText(label.toUpperCase(), juce::dontSendNotification);
         knobs[macro].setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
         attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro), knobs[macro]));
@@ -741,6 +815,16 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(
   };
   navigation.onPageChanged = [this](Page page) { showPage(page); };
   keyboard.setAvailableRange(24, 96);
+  // VOX keybed: cool ivory keys, ink black keys, cyan key-down state.
+  keyboard.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xffe3e9ee));
+  keyboard.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xff081018));
+  keyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour(0xff6d7f8c));
+  keyboard.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour(0xcc00ddf5));
+  keyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x4000ddf5));
+  keyboard.setColour(juce::MidiKeyboardComponent::shadowColourId, juce::Colour(0x5506121d));
+  keyboard.setColour(juce::MidiKeyboardComponent::upDownButtonBackgroundColourId, juce::Colour(0xff0a1722));
+  keyboard.setColour(juce::MidiKeyboardComponent::upDownButtonArrowColourId, juce::Colour(0xff9ab2c5));
+  keyboard.setColour(juce::MidiKeyboardComponent::textLabelColourId, juce::Colour(0xff587487));
   setResizable(true, true);
   setResizeLimits(1040, 680, 1600, 1000);
   setSize(1240, 800);
