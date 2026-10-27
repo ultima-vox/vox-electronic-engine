@@ -56,6 +56,30 @@ covering supported rates, budget, failed preparation and recovery. Guard found n
 blocker in the timing/budget/numeric fix. LeakSanitizer is disabled. The full native
 build/CTest is not yet complete.
 
+## Host root note generation
+
+The Acid profile generator previously always used its internal root36 when
+clamping the generated absolute pitch to24..96, although the host later plays
+step offsets relative to its selected root. A regression using other roots
+reproduced out-of-range notes. The provider now validates the host root0..127 and
+passes it to the same deterministic profile grammar. Invalid roots reject without
+changing the caller's pattern. The old root36 behavior and profile defaults remain.
+Pattern schema/ABI and other instruments are unchanged. For roots near the MIDI
+extremes, the existing24..96 grammar clamps pitches rather than octave-wrapping;
+this is explicit existing style policy. Tests cover all six profiles at eight
+roots and check the shared Pattern ABI. An independent fresh actual-source build
+passed82024 checks plus667 compliance checks and found no review blocker.
+
+## Windows result for head da3f7fc
+
+[Run40549369245](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/40549369245)
+built Release and passed31/32 CTest, including Acid, MIDI lifecycle, Release and
+Editor Smoke. `bass_render_diagnostics/save_restore_rerender` failed: max difference
+0.169352, RMS difference0.000233738. Native visual captures succeeded; packaging
+was not reached. This result does not cover the subsequent root-note correction.
+Bass DSP and the existing diagnostic are not changed here; full Rack integration
+and a green exact-head Windows suite remain required.
+
 ## Measured blockers / acceptance still open
 
 1. The independently measured pre-fix tail86639/peak0.113012 and exotic-rate NaNs
@@ -80,6 +104,8 @@ build/CTest is not yet complete.
 6. Reproduce the release deadline and rate failures in94 actual-engine checks.
    Correct the envelope semantics and declared/provider bounds together; retain
    the existing high-rate regression. Document the audible behavior change.
+7. Review completed Windows CI and isolate the Acid generator root mismatch with
+   a failing provider test. Forward the validated host root through Acid only.
 
 ub-mode is available and used in this session. Its named crapper/dryer/mutator
 tools are unavailable; no metrics or mutation-test result is fabricated. Existing

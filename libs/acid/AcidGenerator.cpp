@@ -85,44 +85,47 @@ std::uint32_t AcidGenerator::stableSeed(
     return hash != 0 ? hash : 0xA341316Cu;
 }
 
-sequence::Sequence AcidGenerator::generate(
-    AcidProfile profile, std::uint32_t globalSeed, std::uint64_t slotId,
-    std::string_view instrumentId) noexcept {
-    AcidPatternParams params {};
-    params.profile = profile;
+sequence::Sequence AcidGenerator::generate(AcidProfile profile,
+                                           std::uint32_t globalSeed,
+                                           std::uint64_t slotId,
+                                           std::string_view instrumentId,
+                                           std::uint8_t rootNote) noexcept {
+  AcidPatternParams params{};
+  params.profile = profile;
+  params.rootNote = rootNote;
 
-    switch (profile) {
-        case AcidProfile::classic303:
-            params.density = 0.70f;
-            params.variation = 0.50f;
-            break;
-        case AcidProfile::psyAcid:
-            params.density = 0.85f;
-            params.variation = 0.45f;
-            break;
-        case AcidProfile::darkAcid:
-            params.density = 0.65f;
-            params.variation = 0.55f;
-            break;
-        case AcidProfile::forestAcid:
-            params.density = 0.75f;
-            params.variation = 0.65f;
-            break;
-        case AcidProfile::hiTechAcid:
-            params.density = 0.90f;
-            params.variation = 0.75f;
-            break;
-        case AcidProfile::hypnoticAcid:
-            params.density = 0.80f;
-            params.variation = 0.30f;
-            break;
-        case AcidProfile::technoDrive:
-            params.density = 0.70f;
-            params.variation = 0.50f;
-            break;
-    }
+  switch (profile) {
+  case AcidProfile::classic303:
+    params.density = 0.70f;
+    params.variation = 0.50f;
+    break;
+  case AcidProfile::psyAcid:
+    params.density = 0.85f;
+    params.variation = 0.45f;
+    break;
+  case AcidProfile::darkAcid:
+    params.density = 0.65f;
+    params.variation = 0.55f;
+    break;
+  case AcidProfile::forestAcid:
+    params.density = 0.75f;
+    params.variation = 0.65f;
+    break;
+  case AcidProfile::hiTechAcid:
+    params.density = 0.90f;
+    params.variation = 0.75f;
+    break;
+  case AcidProfile::hypnoticAcid:
+    params.density = 0.80f;
+    params.variation = 0.30f;
+    break;
+  case AcidProfile::technoDrive:
+    params.density = 0.70f;
+    params.variation = 0.50f;
+    break;
+  }
 
-    return generateWithParams(params, globalSeed, slotId, instrumentId);
+  return generateWithParams(params, globalSeed, slotId, instrumentId);
 }
 
 sequence::Sequence AcidGenerator::generateWithParams(

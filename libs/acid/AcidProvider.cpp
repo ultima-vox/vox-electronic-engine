@@ -203,14 +203,16 @@ public:
         VoxPatternV1& output) const noexcept override
     {
         if (id != instrumentId) return instrument::ContentStatus::notFound;
-        if (context.structSize != sizeof(VoxGenerationContextV1)
-            || output.structSize != sizeof(VoxPatternV1))
-            return instrument::ContentStatus::invalidArgument;
+        if (context.structSize != sizeof(VoxGenerationContextV1) ||
+            output.structSize != sizeof(VoxPatternV1) || context.rootNote < 0 ||
+            context.rootNote > 127)
+          return instrument::ContentStatus::invalidArgument;
         const auto found = std::find_if(soundPresets.begin(), soundPresets.end(),
             [profileId](const auto& preset) { return profileId == preset.id; });
         if (found == soundPresets.end()) return instrument::ContentStatus::notFound;
-        const auto generated = AcidGenerator::generate(profile(profileId),
-            context.globalSeed, context.slotId, instrumentId);
+        const auto generated = AcidGenerator::generate(
+            profile(profileId), context.globalSeed, context.slotId,
+            instrumentId, static_cast<std::uint8_t>(context.rootNote));
         VoxPatternV1 candidate {};
         candidate.structSize = sizeof(candidate);
         candidate.schemaVersion = VOX_PATTERN_SCHEMA_V1;

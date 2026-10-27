@@ -31,9 +31,11 @@ public:
         std::uint32_t globalSeed, std::uint64_t slotId,
         std::string_view instrumentId) noexcept;
 
-    [[nodiscard]] static sequence::Sequence generate(
-        AcidProfile profile, std::uint32_t globalSeed, std::uint64_t slotId,
-        std::string_view instrumentId = "com.ultimavox.acid") noexcept;
+    [[nodiscard]] static sequence::Sequence
+    generate(AcidProfile profile, std::uint32_t globalSeed,
+             std::uint64_t slotId,
+             std::string_view instrumentId = "com.ultimavox.acid",
+             std::uint8_t rootNote = 36) noexcept;
 
     [[nodiscard]] static sequence::Sequence generateWithParams(
         const AcidPatternParams& params, std::uint32_t globalSeed,

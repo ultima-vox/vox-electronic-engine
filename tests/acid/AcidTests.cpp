@@ -1,8 +1,9 @@
 #include "acid/AcidEngine.h"
-#include "acid/AcidParameterBridge.h"
 #include "acid/AcidGenerator.h"
+#include "acid/AcidParameterBridge.h"
 #include "acid/AcidProvider.h"
 #include "instrument/InstrumentComplianceHarness.h"
+#include "sequence/PatternAdapter.h"
 #include "support/ReferenceInstrument.h"
 #include <algorithm>
 #include <array>
@@ -1023,6 +1024,42 @@ int main()
     REQUIRE(output.schemaVersion == VOX_PATTERN_SCHEMA_V1
             && output.stepCount > 0 && output.stepCount <= VOX_PATTERN_MAX_STEPS,
             "generated POD pattern bounded and versioned");
+    // Generation offsets are relative to the host's actual root. The Acid
+    // grammar confines absolute notes to its declared 24..96 musical range.
+    for (const auto *profileId :
+         {"classic-303", "psy-acid", "dark-acid", "forest-acid", "hi-tech-acid",
+          "hypnotic-acid"}) {
+      for (int root : {0, 12, 24, 36, 48, 60, 96, 127}) {
+        context.rootNote = root;
+        VoxPatternV1 rootPattern{sizeof(VoxPatternV1)};
+        REQUIRE(provider->generatePattern(acid::instrumentId, profileId,
+                                          context, nullptr, rootPattern) ==
+                    instrument::ContentStatus::ok,
+                "Acid profile accepts each valid host MIDI root");
+        REQUIRE(
+            sequence::validPattern(rootPattern),
+            "generated root-specific pattern satisfies the shared ABI bounds");
+        REQUIRE(std::all_of(rootPattern.steps,
+                            rootPattern.steps + rootPattern.stepCount,
+                            [root](const auto &step) {
+                              const int absolute = root + step.noteOffset;
+                              return absolute >= 24 && absolute <= 96;
+                            }),
+                "generated pitches use selected root and stay in Acid range");
+      }
+    }
+    std::array<std::byte, sizeof(VoxPatternV1)> previousOutput{};
+    std::memcpy(previousOutput.data(), &output, sizeof(output));
+    for (int root : {-1, 128}) {
+      context.rootNote = root;
+      REQUIRE(provider->generatePattern(acid::instrumentId, "forest-acid",
+                                        context, nullptr, output) ==
+                  instrument::ContentStatus::invalidArgument,
+              "invalid host root is rejected");
+      REQUIRE(std::memcmp(&output, previousOutput.data(), sizeof(output)) == 0,
+              "invalid root preserves caller-owned output");
+    }
+    context.rootNote = 48;
     REQUIRE(provider->generatePattern("com.ultimavox.psy-bass", "forest-acid",
                 context, nullptr, output) == instrument::ContentStatus::notFound,
             "wrong-instrument generation rejected");
