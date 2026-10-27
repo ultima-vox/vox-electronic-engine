@@ -364,6 +364,19 @@ void VoxLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& label)
     if (auto* slider = dynamic_cast<juce::Slider*> (label.getParentComponent());
         slider != nullptr && ! slider->getProperties().getWithDefault ("vox.valueField", false))
     {
+        // A bar slider's value box overlays the bar: text only.
+        if (slider->getSliderStyle() == juce::Slider::LinearBar
+            || slider->getSliderStyle() == juce::Slider::LinearBarVertical)
+        {
+            if (! label.isBeingEdited())
+            {
+                g.setColour (colour::text.withMultipliedAlpha (label.isEnabled() ? 1.0f : 0.45f));
+                g.setFont (getLabelFont (label));
+                g.drawFittedText (label.getText(), label.getLocalBounds().reduced (3, 0),
+                                  juce::Justification::centred, 1, 0.8f);
+            }
+            return;
+        }
         const auto field = label.getLocalBounds().toFloat().reduced (0.5f);
         g.setColour (colour::graph);
         g.fillRoundedRectangle (field, radius::small);
