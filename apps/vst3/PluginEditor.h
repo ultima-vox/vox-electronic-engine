@@ -46,6 +46,9 @@ public:
     void selectAcidLfoForTesting(int number) {
         acidSoundPage.switchLfoForTesting(number);
     }
+    bool setAcidLfoSyncForTesting(bool enabled) {
+        return acidSoundPage.setCurrentLfoSyncForTesting(enabled);
+    }
     void selectAcidEnv2ForTesting() {
         acidSoundPage.switchEnv2ForTesting();
     }

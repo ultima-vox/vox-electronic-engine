@@ -27,6 +27,7 @@ public:
     void switchModulationForTesting(bool lfo1);
     void switchEnv2ForTesting();
     void switchLfoForTesting(int number);
+    bool setCurrentLfoSyncForTesting(bool enabled);
     void switchStepForTesting();
     bool setStepLevelForTesting(std::size_t index, double normalized);
     [[nodiscard]] std::size_t attachedStepLevelsForTesting() const noexcept;
@@ -74,6 +75,9 @@ private:
         juce::AudioProcessorValueTreeState::SliderAttachment>, 16> stepLevelAttachments_;
     std::array<juce::Rectangle<int>, groupCount> sections_ {};
     juce::ComboBox filterChoice_, distortionChoice_, modulationChoice_;
+    juce::ToggleButton lfoSyncButton_ { "SYNC" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        lfoSyncAttachment_;
     juce::TextButton ampButton_ { "AMP" }, filterButton_ { "FILTER" };
     juce::TextButton env1Button_ { "ENV1" }, env2Button_ { "ENV2" },
                      lfo1Button_ { "LFO1" }, lfo2Button_ { "LFO2" },

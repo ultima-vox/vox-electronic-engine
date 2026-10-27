@@ -174,6 +174,14 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
         vstengine::ui::styleButton(*button);
         addAndMakeVisible(*button);
     }
+    addAndMakeVisible(lfoSyncButton_);
+    lfoSyncButton_.setVisible(false);
+    lfoSyncButton_.setTooltip("Use DAW BPM and PPQ for the selected LFO");
+    lfoSyncButton_.onClick = [this] {
+        for (auto& k : knobs_)
+            if (k.group == modulation && k.semantic.ends_with("_rate"))
+                k.widget->getSlider().repaint();
+    };
     ampButton_.onClick = [this] { filterEnvelope_ = false; updateEnvelopeAttachments(); };
     filterButton_.onClick = [this] { filterEnvelope_ = true; updateEnvelopeAttachments(); };
     env1Button_.onClick = [this] { switchModulationForTesting(false); };
@@ -257,6 +265,7 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
 AcidPanel::~AcidPanel() {
     stopTimer();
     for (auto& a : stepLevelAttachments_) a.reset();
+    lfoSyncAttachment_.reset();
     flagAttachments_.clear();
     for (auto& k : knobs_) k.attach.reset();
 }
@@ -304,6 +313,13 @@ void AcidPanel::switchLfoForTesting(int number) {
                : number == 2 ? ModSource::lfo2 : ModSource::lfo3;
     updateModulationAttachments();
     refreshChoices();
+}
+bool AcidPanel::setCurrentLfoSyncForTesting(bool enabled) {
+    if (!lfoSyncAttachment_ || !lfoSyncButton_.isVisible())
+        return false;
+    if (lfoSyncButton_.getToggleState() != enabled)
+        lfoSyncButton_.triggerClick();
+    return lfoSyncButton_.getToggleState() == enabled;
 }
 void AcidPanel::switchStepForTesting() {
     modSource_ = ModSource::step;
@@ -386,6 +402,7 @@ void AcidPanel::bind(std::size_t slot) {
     slot_ = juce::jlimit<std::size_t>(0, vstengine::instrument::maxSlots - 1, slot);
     for (auto& knob : knobs_) knob.attach.reset();
     flagAttachments_.clear();
+    lfoSyncAttachment_.reset();
     for (auto& attachment : stepLevelAttachments_) attachment.reset();
     attachKnobs();
     constexpr std::array<const char*, 4> flagNames { "legato", "retrigger",
@@ -440,6 +457,17 @@ void AcidPanel::updateModulationAttachments() {
                     || modSource_ == ModSource::lfo3;
     const auto lfoIndex = modSource_ == ModSource::lfo2 ? 1u
                         : modSource_ == ModSource::lfo3 ? 2u : 0u;
+    lfoSyncAttachment_.reset();
+    lfoSyncButton_.setVisible(isLfo);
+    if (isLfo) {
+        constexpr std::array<const char*, 3> syncIds {
+            "lfo1_sync", "lfo2_sync", "lfo3_sync"
+        };
+        lfoSyncAttachment_ = std::make_unique<
+            juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                processor_.parameters(), hostId(syncIds[lfoIndex]),
+                lfoSyncButton_);
+    }
     std::size_t index = 0;
     for (auto& k : knobs_) {
         if (k.group != modulation) continue;
@@ -479,10 +507,19 @@ void AcidPanel::updateModulationAttachments() {
             } else if (isLfo) {
                 const auto semantic = k.semantic;
                 k.widget->getSlider().textFromValueFunction =
-                    [semantic](double norm) {
+                    [this, semantic](double norm) {
                         const float v = static_cast<float>(juce::jlimit(0.0, 1.0, norm));
-                        if (semantic.ends_with("_rate"))
+                        if (semantic.ends_with("_rate")) {
+                            if (lfoSyncButton_.getToggleState()) {
+                                constexpr std::array<const char*, 8> divisions {
+                                    "1/1", "1/2", "1/4", "1/8",
+                                    "1/16", "1/8T", "1/16T", "1/32"
+                                };
+                                return juce::String(divisions[juce::jlimit(
+                                    0, 7, static_cast<int>(std::round(v * 7.0f)))]);
+                            }
                             return juce::String(0.05f * std::pow(400.0f, v), 2) + " Hz";
+                        }
                         if (semantic.ends_with("_wave")) {
                             constexpr std::array<const char*, 4> waves {
                                 "Sine", "Triangle", "Square", "Saw"
@@ -685,6 +722,14 @@ void AcidPanel::resized() {
         layoutKnobs(group, inner);
     }
     auto modControlArea = controlArea(modulation, 0);
+    const bool lfoTab = modSource_ == ModSource::lfo1
+                     || modSource_ == ModSource::lfo2
+                     || modSource_ == ModSource::lfo3;
+    if (lfoTab) {
+        auto toggleArea = modControlArea.removeFromRight(
+            std::min(61, modControlArea.getWidth() / 5));
+        lfoSyncButton_.setBounds(toggleArea.reduced(2).removeFromTop(29));
+    }
     const bool stepTab = modSource_ == ModSource::step;
     if (stepTab) {
         auto barArea = modControlArea.removeFromBottom(
