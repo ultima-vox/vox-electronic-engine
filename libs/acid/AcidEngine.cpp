@@ -304,101 +304,43 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
         return false;
     }
 
+    // A single version table owns the serialized prefix length. v1 is a
+    // special pre-v3 payload: preserve previously configured original
+    // extension 9..35, but reset every feature appended after v3.
+    const std::size_t storedParameters =
+        schemaVersion == legacyStateVersion ? legacyParameterCount
+        : schemaVersion == previousStateVersion ? previousParameterCount
+        : schemaVersion == lfo1StateVersion ? lfo1ParameterCount
+        : schemaVersion == env2StateVersion ? env2ParameterCount
+        : schemaVersion == lfo23StateVersion ? lfo23ParameterCount
+        : schemaVersion == stepStateVersion ? stepParameterCount
+                                            : parameterCount;
+    if (payload.size() < 8 + storedParameters * sizeof(float))
+        return false;
+
     auto parsedTargets = targets_;
-    if (schemaVersion != stateVersion) {
-        // v7 and earlier LFOs were free-running. Do not inherit sync
-        // switches from a previously used v8 instance on preset recall.
-        parsedTargets[Parameter::lfo1Sync] = 0.0f;
-        parsedTargets[Parameter::lfo2Sync] = 0.0f;
-        parsedTargets[Parameter::lfo3Sync] = 0.0f;
-    }
-    if (schemaVersion != stateVersion && schemaVersion != stepStateVersion) {
-        // STEP did not exist before v7. A legacy recall must not keep an
-        // active pattern/amount from a previously used v7 Acid instance.
-        parsedTargets[Parameter::stepAmount] = 0.0f;
-        parsedTargets[Parameter::stepTarget] = 0.0f;
-        parsedTargets[Parameter::stepRate] = 1.0f / 3.0f;
-        parsedTargets[Parameter::stepSmooth] = 0.0f;
-        for (std::size_t i = 0; i < stepCount; ++i)
-            parsedTargets[Parameter::step01 + i] = 0.5f;
-    }
-    if (schemaVersion != stateVersion && schemaVersion != stepStateVersion
-        && schemaVersion != lfo23StateVersion) {
-        // v1/v3/v4/v5 do not contain independent LFO2/3.
-        parsedTargets[Parameter::lfo2Rate] = 0.35f;
-        parsedTargets[Parameter::lfo2Depth] = 0.0f;
-        parsedTargets[Parameter::lfo2Wave] = 0.0f;
-        parsedTargets[Parameter::lfo2Target] = 0.0f;
-        parsedTargets[Parameter::lfo3Rate] = 0.35f;
-        parsedTargets[Parameter::lfo3Depth] = 0.0f;
-        parsedTargets[Parameter::lfo3Wave] = 0.0f;
-        parsedTargets[Parameter::lfo3Target] = 0.0f;
-    }
-    if (schemaVersion != stateVersion
-        && schemaVersion != stepStateVersion
-        && schemaVersion != lfo23StateVersion
-        && schemaVersion != env2StateVersion) {
-        // Any v1/v3/v4 recall must disable ENV2, which was absent in those
-        // formats, even when the engine previously played an ENV2 preset.
-        parsedTargets[Parameter::env2Target] = 0.0f;
-        parsedTargets[Parameter::env2Amount] = 0.0f;
-        parsedTargets[Parameter::env2Attack] = 0.0f;
-        parsedTargets[Parameter::env2Decay] = 0.35f;
-        parsedTargets[Parameter::env2Sustain] = 0.80f;
-        parsedTargets[Parameter::env2Release] = 0.40f;
-    }
-    if (schemaVersion == legacyStateVersion
-        || schemaVersion == previousStateVersion) {
-        // These payloads also predate LFO1. Preserve LFO1 from v4 presets.
-        parsedTargets[Parameter::lfo1Rate] = 0.35f;
-        parsedTargets[Parameter::lfo1Depth] = 0.0f;
-        parsedTargets[Parameter::lfo1Wave] = 0.0f;
-        parsedTargets[Parameter::lfo1Target] = 0.0f;
-    }
-    if (schemaVersion == legacyStateVersion) {
-        if (payload.size() < 8 + legacyParameterCount * sizeof(float)) {
-            return false;
-        }
-        for (std::size_t i = 0; i < legacyParameterCount; ++i) {
-            float val = 0.0f;
-            std::memcpy(&val, payload.data() + 8 + i * sizeof(float),
-                        sizeof(float));
-            if (!std::isfinite(val)) return false;
-            parsedTargets[i] = clamp01(val);
-        }
-        targets_ = parsedTargets;
-        smoothed_ = targets_;
-        return true;
+    const std::size_t factorySuffixStart =
+        schemaVersion == legacyStateVersion ? previousParameterCount
+                                           : storedParameters;
+    std::copy(factoryTargets_.begin() + static_cast<std::ptrdiff_t>(factorySuffixStart),
+              factoryTargets_.end(),
+              parsedTargets.begin() + static_cast<std::ptrdiff_t>(factorySuffixStart));
+
+    // Parse transactionally: malformed or non-finite data must never
+    // partially change the live DSP. All legacy schemas use the same
+    // validated normalized-float wire format for their stored prefix.
+    for (std::size_t i = 0; i < storedParameters; ++i) {
+        float value = 0.0f;
+        std::memcpy(&value, payload.data() + 8 + i * sizeof(float), sizeof(float));
+        if (!std::isfinite(value)) return false;
+        parsedTargets[i] = clamp01(value);
     }
 
-    if (schemaVersion == previousStateVersion
-        || schemaVersion == lfo1StateVersion
-        || schemaVersion == env2StateVersion
-        || schemaVersion == lfo23StateVersion
-        || schemaVersion == stepStateVersion
-        || schemaVersion == stateVersion) {
-        const std::size_t count = schemaVersion == previousStateVersion
-            ? previousParameterCount
-            : schemaVersion == lfo1StateVersion ? lfo1ParameterCount
-            : schemaVersion == env2StateVersion ? env2ParameterCount
-            : schemaVersion == lfo23StateVersion ? lfo23ParameterCount
-            : schemaVersion == stepStateVersion ? stepParameterCount
-                                                : parameterCount;
-        if (payload.size() < 8 + count * sizeof(float)) return false;
-        for (std::size_t i = 0; i < count; ++i) {
-            float val = 0.0f;
-            std::memcpy(&val, payload.data() + 8 + i * sizeof(float),
-                        sizeof(float));
-            if (!std::isfinite(val)) return false;
-            parsedTargets[i] = clamp01(val);
-        }
-        targets_ = parsedTargets;
-        smoothed_ = targets_;
+    targets_ = parsedTargets;
+    smoothed_ = targets_;
+    if (schemaVersion != legacyStateVersion)
         (void) setParameter("play_mode_flags", targets_[Parameter::playModeFlags]);
-        return true;
-    }
-
-    return false;
+    return true;
 }
 
 bool AcidEngine::saveState(std::span<std::byte> destination,
