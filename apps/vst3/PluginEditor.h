@@ -58,6 +58,9 @@ public:
     void selectAcidStepForTesting() {
         acidSoundPage.switchStepForTesting();
     }
+    void setAcidPreviewForTesting(bool on) {
+        acidSoundPage.setPreviewForTesting(on);
+    }
     bool setAcidStepLevelForTesting(std::size_t step, double level) {
         return acidSoundPage.setStepLevelForTesting(step, level);
     }

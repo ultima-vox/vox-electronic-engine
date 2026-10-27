@@ -75,6 +75,16 @@ public:
         return patternRuntime->schedulers[selectedSlotIndex()].playHeadStep();
     }
     void requestPanic() noexcept { panicRequested.store(true); }
+    // Transient, Acid-only local pattern audition. Does not drive the DAW
+    // transport, does not change global midiMode and is never serialized.
+    void setAcidPreview(std::size_t slot, bool enabled) noexcept {
+        if (slot < acidPreviewRequested.size())
+            acidPreviewRequested[slot].store(enabled, std::memory_order_relaxed);
+    }
+    [[nodiscard]] bool acidPreviewEnabled(std::size_t slot) const noexcept {
+        return slot < acidPreviewRequested.size()
+            && acidPreviewRequested[slot].load(std::memory_order_relaxed);
+    }
     [[nodiscard]] float currentCpuLoad() const noexcept
     {
         return cpuLoad.load(std::memory_order_relaxed);
@@ -220,6 +230,8 @@ private:
     std::uint32_t currentMaximumBlockSize { 512 };
     bool wasTransportPlaying { false };
     std::atomic<bool> panicRequested { false };
+    std::array<std::atomic<bool>, vstengine::instrument::maxSlots>
+        acidPreviewRequested {};
     std::atomic<double> latestHostBpm { 145.0 };
     std::atomic<float> cpuLoad { 0.0f };
     std::atomic<std::uint32_t> midiActivity { 0 };

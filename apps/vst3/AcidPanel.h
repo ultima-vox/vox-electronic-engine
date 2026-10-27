@@ -32,6 +32,8 @@ public:
     void switchStepForTesting();
     bool setStepLevelForTesting(std::size_t index, double normalized);
     [[nodiscard]] std::size_t attachedStepLevelsForTesting() const noexcept;
+    void setPreviewForTesting(bool enabled);
+    [[nodiscard]] bool previewForTesting() const noexcept;
 private:
     enum Group : int { osc, filter, envelope, drive, accent, slide,
                        output, modulation, performance, playMode, grid, groupCount };
@@ -84,6 +86,7 @@ private:
                      lfo1Button_ { "LFO1" }, lfo2Button_ { "LFO2" },
                      lfo3Button_ { "LFO3" }, stepButton_ { "STEP" };
     juce::ComboBox profileChoice_, lengthChoice_, timingChoice_;
+    juce::TextButton previewButton_ { "Preview" };
     juce::TextButton generate_ { "Generate" }, mutate_ { "Mutate" },
                      clear_ { "Clear" };
     std::array<juce::ToggleButton, 4> flags_;

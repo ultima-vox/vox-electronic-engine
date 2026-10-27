@@ -170,7 +170,8 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
                      modulationChoice_.getSelectedItemIndex(), 6);
     };
     for (auto* button : { &ampButton_, &filterButton_, &env1Button_, &env2Button_, &lfo1Button_,
-                          &lfo2Button_, &lfo3Button_, &stepButton_, &generate_, &mutate_, &clear_ }) {
+                          &lfo2Button_, &lfo3Button_, &stepButton_, &previewButton_,
+                          &generate_, &mutate_, &clear_ }) {
         vstengine::ui::styleButton(*button);
         addAndMakeVisible(*button);
     }
@@ -218,6 +219,16 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
     addAndMakeVisible(status_);
     vstengine::ui::styleLabel(status_, 10.0f,
                                juce::Justification::centredLeft, dimText);
+    previewButton_.setTooltip(
+        "Preview the selected Acid sequence while the DAW transport is stopped. "
+        "Does not start the DAW or other Rack slots.");
+    previewButton_.onClick = [this] {
+        const bool enabled = !processor_.acidPreviewEnabled(slot_);
+        processor_.setAcidPreview(slot_, enabled);
+        previewButton_.setButtonText(enabled ? "Stop" : "Preview");
+        status_.setText(enabled ? "Local Acid preview armed" : "Preview stopped",
+                        juce::dontSendNotification);
+    };
     generate_.onClick = [this] {
         constexpr std::array<const char*, 6> profiles {
             "classic-303", "psy-acid", "dark-acid",
@@ -299,6 +310,13 @@ bool AcidPanel::setKnobForTesting(std::string_view semantic, double normalized) 
             return true;
         }
     return false;
+}
+void AcidPanel::setPreviewForTesting(bool enabled) {
+    processor_.setAcidPreview(slot_, enabled);
+    previewButton_.setButtonText(enabled ? "Stop" : "Preview");
+}
+bool AcidPanel::previewForTesting() const noexcept {
+    return processor_.acidPreviewEnabled(slot_);
 }
 void AcidPanel::switchEnvelopeForTesting(bool filter) {
     filterEnvelope_ = filter;
@@ -407,6 +425,8 @@ std::string AcidPanel::hostId(std::string_view semantic) const {
 }
 void AcidPanel::bind(std::size_t slot) {
     slot_ = juce::jlimit<std::size_t>(0, vstengine::instrument::maxSlots - 1, slot);
+    previewButton_.setButtonText(processor_.acidPreviewEnabled(slot_)
+        ? "Stop" : "Preview");
     for (auto& knob : knobs_) knob.attach.reset();
     flagAttachments_.clear();
     lfoSyncAttachment_.reset();
@@ -765,6 +785,7 @@ void AcidPanel::resized() {
     lengthChoice_.setBounds(toolbar.removeFromRight(50).reduced(1));
     timingChoice_.setBounds(toolbar.removeFromRight(65).reduced(1));
     clear_.setBounds(toolbar.removeFromRight(48).reduced(1));
+    previewButton_.setBounds(toolbar.removeFromLeft(56).reduced(1));
     mutate_.setBounds(toolbar.removeFromRight(55).reduced(1));
     generate_.setBounds(toolbar.removeFromRight(70).reduced(1));
     status_.setBounds(toolbar);

@@ -161,11 +161,15 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
     keyboardScratch.ensureSize(32768);
     for (auto& scratch : patternRuntime->generatedScratch)
         scratch.ensureSize(65536);
+    for (auto& requested : acidPreviewRequested)
+        requested.store(false, std::memory_order_relaxed);
     wasTransportPlaying = false;
 }
 
 void VstEngineAudioProcessor::releaseResources()
 {
+    for (auto& requested : acidPreviewRequested)
+        requested.store(false, std::memory_order_relaxed);
     rack.reset();
     effectsChain.reset();
     for (auto& scheduler : patternRuntime->schedulers)
@@ -428,6 +432,8 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (mode == MidiSourceMode::generator) midi.clear();
     const bool panicThisBlock = panicRequested.exchange(false);
     if (panicThisBlock) {
+        for (auto& requested : acidPreviewRequested)
+            requested.store(false, std::memory_order_relaxed);
         midi.clear();
         keyboard.reset();
         keyboardScratch.clear();
@@ -437,36 +443,47 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         rack.reset();
     }
 
-    if (!panicThisBlock && vstengine::midi::shouldRunGenerator(
-            mode, inputNotes, keyboardHasActiveNotes())) {
-        vstengine::midi::TransportFrame frame;
-        frame.playing = playing;
-        frame.havePpq = havePpq;
-        frame.ppqAtBlockStart = ppq;
-        frame.bpm = bpm;
-        const auto root = juce::jlimit(0, 127,
-            static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
-        const auto seed = static_cast<std::uint32_t>(
-            apvts.getRawParameterValue("rngSeed")->load());
-        for (std::size_t slot = 0; slot < patternRuntime->schedulers.size(); ++slot) {
-            const auto* descriptor = rack.descriptor(slot);
-            if (descriptor == nullptr
-                || (descriptor->capabilities
-                    & vstengine::instrument::Capability::sequence) == 0)
-                continue;
+    // Host playback remains the sole musical clock for normal generation.
+    // A stopped DAW can audition only an explicitly requested Acid pattern
+    // through the existing scheduler's tested free-running fallback. This
+    // never starts other slots, changes midiMode, or mutates Rack contracts.
+    const bool hostGeneration = !panicThisBlock
+        && vstengine::midi::shouldRunGenerator(
+            mode, inputNotes, keyboardHasActiveNotes());
+    const auto root = juce::jlimit(0, 127,
+        static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
+    const auto seed = static_cast<std::uint32_t>(
+        apvts.getRawParameterValue("rngSeed")->load());
+    for (std::size_t slot = 0; slot < patternRuntime->schedulers.size(); ++slot) {
+        auto& scheduler = patternRuntime->schedulers[slot];
+        auto& scratch = patternRuntime->generatedScratch[slot];
+        const auto* descriptor = rack.descriptor(slot);
+        const bool isAcid = descriptor != nullptr
+            && descriptor->id == vstengine::acid::instrumentId;
+        const bool preview = !panicThisBlock && !playing && isAcid
+            && acidPreviewRequested[slot].load(std::memory_order_relaxed);
+        if ((hostGeneration || preview) && descriptor != nullptr
+            && (descriptor->capabilities
+                & vstengine::instrument::Capability::sequence) != 0) {
+            vstengine::midi::TransportFrame frame;
+            frame.playing = playing || preview;
+            // Local preview deliberately uses the scheduler's BPM fallback,
+            // never an invented DAW PPQ position.
+            frame.havePpq = playing && havePpq;
+            frame.ppqAtBlockStart = ppq;
+            frame.bpm = bpm;
             const auto slotSeed = vstengine::instrument::generationSubSeed(
                 seed, rackControls[slot].slotId, descriptor->id);
-            patternRuntime->schedulers[slot].process(
-                patternRuntime->generatedScratch[slot],
-                patternRuntime->audioSequences[slot],
+            scheduler.process(
+                scratch, patternRuntime->audioSequences[slot],
                 frame, buffer.getNumSamples(), currentSampleRate, 1, root,
                 slotSeed);
-            patternRuntime->schedulers[slot].clearGlideRequests();
+            scheduler.clearGlideRequests();
+        } else {
+            // Mandatory NoteOff on Preview Stop, host stop, source-mode
+            // changes and module removal; no stuck preview notes.
+            scheduler.flush(scratch, 0);
         }
-    } else {
-        for (std::size_t slot = 0; slot < patternRuntime->schedulers.size(); ++slot)
-            patternRuntime->schedulers[slot].flush(
-                patternRuntime->generatedScratch[slot], 0);
     }
 
     const auto blockSamples = static_cast<std::uint32_t>(buffer.getNumSamples());
@@ -1094,6 +1111,7 @@ bool VstEngineAudioProcessor::loadSlotInstrument(
     std::string detail;
     const bool accepted = rack.loadModule(slot, instrumentId, nullptr, detail);
     if (accepted) {
+        acidPreviewRequested[slot].store(false, std::memory_order_relaxed);
         patternRuntime->slotSequences[slot].clear();
         publishPartSequenceForAudio(static_cast<int>(slot));
         patternRuntime->schedulers[slot].reset(currentSampleRate);

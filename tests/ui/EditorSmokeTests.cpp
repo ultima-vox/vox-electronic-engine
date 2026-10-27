@@ -152,6 +152,19 @@ int main()
         || sync1->load() < 0.5f)
         return EXIT_FAILURE;
 
+    // Acid-only local preview must neither toggle another Rack slot nor
+    // persist as a project parameter. A host project loads with preview off.
+    if (processor.acidPreviewEnabled(1)
+        || processor.acidPreviewEnabled(0))
+        return EXIT_FAILURE;
+    editor->setAcidPreviewForTesting(true);
+    if (!processor.acidPreviewEnabled(1)
+        || processor.acidPreviewEnabled(0))
+        return EXIT_FAILURE;
+    editor->setAcidPreviewForTesting(false);
+    if (processor.acidPreviewEnabled(1))
+        return EXIT_FAILURE;
+
     // STEP owns sixteen independent host-automated curve levels.
     const auto* step0 = params.getRawParameterValue("slot02Acid_step_01");
     const auto* step15 = params.getRawParameterValue("slot02Acid_step_16");
