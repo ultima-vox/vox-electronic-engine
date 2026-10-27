@@ -146,12 +146,26 @@ int main()
                                                      diagnostic),
             "modulation graph restores transactionally for all engines");
 
-    state[1].routing = { rack::RouteMode::layer, 1, 48, 72, 80, 127, 0 };
-    REQUIRE(rack.replaceState(state, nullptr, diagnostic), "Layer state loads");
+    // One instrument = one MIDI channel: a second owner of CH1 is rejected
+    // and the previous state stays active.
+    auto sharedChannel = state;
+    sharedChannel[1].routing = { rack::RouteMode::channel, 1, 48, 72, 80, 127, 0 };
+    REQUIRE(!rack.replaceState(sharedChannel, nullptr, diagnostic)
+                && diagnostic == "duplicate rack MIDI channel"
+                && rack.state()[1].routing.channel == 2,
+            "duplicate channel owner is rejected transactionally");
+
+    // Key/velocity zones remain a filter on the slot's own channel.
+    state[1].routing = { rack::RouteMode::channel, 2, 48, 72, 80, 127, 0 };
+    REQUIRE(rack.replaceState(state, nullptr, diagnostic), "zoned own-channel state loads");
     rack.reset();
-    const std::array layerMidi { noteOn(1, 60) };
-    REQUIRE(energy(render(rack, layerMidi)) > energy(reference) * 0.1,
-            "explicit Layer adds second module");
+    const std::array zonedMidi { noteOn(2, 60) };
+    REQUIRE(energy(render(rack, zonedMidi)) > energy(reference) * 0.1,
+            "note inside the zone renders on the slot channel");
+    rack.reset();
+    const std::array outsideZone { noteOn(2, 30) };
+    REQUIRE(energy(render(rack, outsideZone)) < 1.0e-12,
+            "note outside the zone reaches no engine");
 
     const auto beforeInvalid = rack.state()[0].instrumentId;
     auto invalid = rack.state();
@@ -221,7 +235,8 @@ int main()
             "v1 migration serializes canonical current pattern fields");
 
     for (const auto& [property, raw] : std::array {
-             std::pair { "routeMode", -1 }, std::pair { "routeMode", 3 },
+             std::pair { "routeMode", -1 }, std::pair { "routeMode", 2 },
+             std::pair { "routeMode", 3 },
              std::pair { "channel", 0 }, std::pair { "channel", 17 },
              std::pair { "keyLow", -1 }, std::pair { "keyLow", 128 },
              std::pair { "keyHigh", -1 }, std::pair { "keyHigh", 128 },

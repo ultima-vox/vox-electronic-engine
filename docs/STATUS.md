@@ -49,11 +49,12 @@ deferred after Rack, tracked in #45/#58.
 - Complete Keys and Drum Kit workflows.
 - Style-instrument packaging, commercial entitlements and offline licensing policy.
 - Approved production UI and full Windows/Cubase/REAPER acceptance.
-- Installing new instruments (new DSP) without updating the Rack. Owner decision
-  27.10.2026: a fixed host-parameter pool per slot replaces per-instrument direct
-  IDs, plus a native module loader on the existing C ABI v1. Separate PR after #62;
-  requires Architecture Guard review. Today the catalog is compiled in and each
-  instrument adds its own direct endpoints, so the host parameter list changes.
+- Installing new instruments without updating the Rack (Kontakt model). Owner
+  decisions 27.10.2026: data-only instrument packages on a fixed engine, a fixed
+  host-parameter pool per slot, one instrument = one MIDI channel. Proposal:
+  [instrument packages](architecture/INSTRUMENT_PACKAGES.md); needs Architecture
+  Guard review. Today the catalog is compiled in and each instrument adds its own
+  direct endpoints, so the host parameter list changes.
 
 Lead DSP already has8 voices and Atmos6. The missing polyphonic/long-phrase
 Sequence/Pattern/scheduler model is a separate gap. Dedicated AcidPanel is not

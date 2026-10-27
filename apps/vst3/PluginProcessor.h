@@ -154,7 +154,6 @@ public:
     {
         return selectedSlot.load();
     }
-    enum class ChannelConflictAction { reject, swap, move, layer };
     [[nodiscard]] std::span<const vstengine::instrument::InstrumentDescriptor* const>
         availableInstruments() const noexcept
     {
@@ -162,8 +161,11 @@ public:
     }
     bool loadSlotInstrument(std::size_t, std::string_view,
                             juce::String& diagnostic);
-    bool assignSlotChannel(std::size_t, int channel,
-                           ChannelConflictAction, juce::String& diagnostic);
+    // One instrument = one MIDI channel. 0 = Off; a channel held by another
+    // slot is rejected (no swap/move/layer). Loading an instrument into a slot
+    // without a channel takes the next free one.
+    bool assignSlotChannel(std::size_t, int channel, juce::String& diagnostic);
+    [[nodiscard]] bool channelAvailable(std::size_t slot, int channel) const noexcept;
     [[nodiscard]] std::span<const vstengine::instrument::ContentDescriptor>
         selectedContent() const noexcept;
     [[nodiscard]] std::uint32_t selectedSequenceFieldMask() const noexcept;
@@ -321,7 +323,6 @@ private:
     std::atomic<std::size_t> selectedSlot { 0 };
     struct RackParameterRefs {
         std::atomic<float>* midiIn {};
-        std::atomic<float>* layer {};
         std::atomic<float>* keyLow {};
         std::atomic<float>* keyHigh {};
         std::atomic<float>* velocityLow {};

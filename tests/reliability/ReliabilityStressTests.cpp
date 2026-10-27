@@ -184,11 +184,12 @@ int main()
     for (int iteration = 0; iteration < 256; ++iteration) {
         const auto slot = static_cast<std::size_t>(iteration % 16);
         juce::String diagnostic;
-        const auto action = static_cast<VstEngineAudioProcessor::ChannelConflictAction>(
-            1 + iteration % 3);
-        require(processor.assignSlotChannel(slot, 1 + iteration % 16,
-                    action, diagnostic),
-                "rapid routing conflict action stays deterministic");
+        // Mix free and owned channels: an owned one must be rejected.
+        const int channel = (iteration * 5) % 17; // 0 = Off
+        const bool expected = processor.channelAvailable(slot, channel);
+        require(processor.assignSlotChannel(slot, channel, diagnostic)
+                    == expected,
+                "rapid channel assignment follows the one-owner rule");
         if (iteration % 17 == 0) processor.requestPanic();
         if (iteration % 31 == 0)
           processor.setStateInformation(retained.getData(),

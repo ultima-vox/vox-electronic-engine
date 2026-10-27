@@ -80,8 +80,7 @@ bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
     }
     if (!valid(slot.routing)
         || (slot.routing.mode != RouteMode::off
-            && slot.routing.mode != RouteMode::channel
-            && slot.routing.mode != RouteMode::layer)
+            && slot.routing.mode != RouteMode::channel)
         || slot.routing.keyHigh > 127 || slot.routing.velocityHigh > 127
         || slot.outputDestination != 0) {
         diagnostic = "invalid rack routing or unsupported output";
@@ -137,10 +136,18 @@ bool validate(const std::array<PersistentSlotState, instrument::maxSlots>& slots
     for (std::size_t index = 0; index < slots.size(); ++index) {
         if (!validateSlot(slots[index], diagnostic)) return false;
         for (std::size_t previous = 0; previous < index; ++previous)
+        {
             if (slots[previous].slotId == slots[index].slotId) {
                 diagnostic = "duplicate rack SlotId";
                 return false;
             }
+            if (slots[index].routing.mode == RouteMode::channel
+                && slots[previous].routing.mode == RouteMode::channel
+                && slots[previous].routing.channel == slots[index].routing.channel) {
+                diagnostic = "duplicate rack MIDI channel";
+                return false;
+            }
+        }
     }
     diagnostic.clear();
     return true;
@@ -260,7 +267,7 @@ bool deserialize(const juce::ValueTree& root,
             || !readSigned(child.getProperty("velocityHigh", 0), velocityHigh)
             || !readSigned(child.getProperty("transpose", 99), transpose)
             || routeMode < static_cast<int>(RouteMode::off)
-            || routeMode > static_cast<int>(RouteMode::layer)
+            || routeMode > static_cast<int>(RouteMode::channel)
             || channel < 1 || channel > 16 || keyLow < 0 || keyLow > 127
             || keyHigh < 0 || keyHigh > 127 || velocityLow < 1
             || velocityLow > 127 || velocityHigh < 1 || velocityHigh > 127

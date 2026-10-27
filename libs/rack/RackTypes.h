@@ -7,7 +7,9 @@
 
 namespace vstengine::rack {
 
-enum class RouteMode : std::uint8_t { off, channel, layer };
+// One instrument = one MIDI channel: an enabled route owns its channel
+// exclusively (validated in RackState; the processor resolves host conflicts).
+enum class RouteMode : std::uint8_t { off, channel };
 
 struct Routing {
     RouteMode mode { RouteMode::off };
@@ -20,7 +22,7 @@ struct Routing {
 };
 
 struct PersistentSlotState {
-  std::uint32_t schemaVersion{4};
+  std::uint32_t schemaVersion{5};
   instrument::SlotId slotId{instrument::invalidSlotId};
   instrument::InstrumentId instrumentId;
   std::string resolvedProviderId;
@@ -102,8 +104,7 @@ inline ProcessSlotControls processControls(const PersistentSlotState& state) noe
 
 inline bool valid(const Routing& routing) noexcept
 {
-    return (routing.mode == RouteMode::off || routing.mode == RouteMode::channel
-            || routing.mode == RouteMode::layer)
+    return (routing.mode == RouteMode::off || routing.mode == RouteMode::channel)
         && routing.channel >= 1 && routing.channel <= 16
         && routing.keyLow <= routing.keyHigh && routing.keyHigh <= 127
         && routing.velocityLow >= 1
