@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <thread>
+#include <type_traits>
 
 namespace vstengine::rack {
 namespace {
@@ -51,6 +52,35 @@ const instrument::ParameterDescriptor* findParameter(
     for (const auto& parameter : descriptor.parameters)
         if (parameter.id == id) return &parameter;
     return nullptr;
+}
+void initializeDirect(PersistentSlotState &state,
+                      const instrument::InstrumentDescriptor &descriptor) {
+  // Never canonicalize a future/unresolved module with today's descriptor.
+  // Init is distinguished by all default version markers and empty payload.
+  if ((state.instrumentVersion != 0 &&
+       state.instrumentVersion != descriptor.instrumentVersion) ||
+      (state.contentVersion != 0 &&
+       state.contentVersion != descriptor.contentVersion) ||
+      state.instrumentStateVersion > descriptor.stateVersion ||
+      state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V1)
+    return;
+  if (state.instrumentVersion == 0 && state.modulePayload.empty())
+    state.instrumentStateVersion = descriptor.stateVersion;
+  if (descriptor.directParameters && state.directParameters.empty() &&
+      state.modulePayload.empty())
+    for (const auto &parameter : descriptor.parameters)
+      state.directParameters.push_back({parameter.id, parameter.defaultValue});
+}
+void canonicalizeResolvedDirect(
+    PersistentSlotState &state,
+    const instrument::InstrumentDescriptor &descriptor) {
+  if (descriptor.directParameters)
+    for (auto &value : state.directParameters)
+      if (const auto *parameter = findParameter(descriptor, value.id))
+        if (std::isfinite(value.value) && value.value >= parameter->minimum &&
+            value.value <= parameter->maximum)
+          value.value =
+              instrument::hostparams::canonicalPlain(value.value, *parameter);
 }
 } // namespace
 
@@ -182,7 +212,36 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
     target.instance = std::move(prepared.instance);
     if (!target.instance) {
         diagnostic = prepared.resolution.diagnostic;
-        return true; // Explicit unresolved slot is valid persistent state.
+        return prepared.resolution.status !=
+               instrument::ResolutionStatus::constructionFailed;
+        // Missing/incompatible identity remains a valid unresolved slot.
+    }
+    if (target.descriptor->directParameters) {
+      if (state.directParameters.size() !=
+              target.descriptor->parameters.size() ||
+          std::any_of(state.macroAssignments.begin(),
+                      state.macroAssignments.end(),
+                      [](const auto &id) { return !id.empty(); })) {
+        diagnostic = "direct instrument requires exact named base parameters "
+                     "and no macro mapping";
+        return false;
+      }
+      for (const auto &value : state.directParameters) {
+        const auto *parameter = findParameter(*target.descriptor, value.id);
+        if (parameter == nullptr || !std::isfinite(value.value) ||
+            value.value < parameter->minimum ||
+            value.value > parameter->maximum) {
+          diagnostic = "direct parameter identity or range invalid";
+          return false;
+        }
+        target.direct[target.directCount++] = {
+            instrument::hostparams::directKey(state.instrumentId, value.id),
+            parameter,
+            instrument::hostparams::canonicalPlain(value.value, *parameter)};
+      }
+    } else if (!state.directParameters.empty()) {
+      diagnostic = "instrument does not accept direct parameters";
+      return false;
     }
     // Mapping identity persists independently from descriptor order. Populate
     // only previously-unassigned macros from descriptor preferences.
@@ -191,7 +250,7 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         target.descriptor = nullptr;
         runtimeState.resolution = instrument::ResolutionStatus::constructionFailed;
         diagnostic = "instrument prepare failed";
-        return true;
+        return false;
     }
     for (std::size_t channel = 0; channel < spec_.outputChannels; ++channel) {
         target.audio[channel].assign(spec_.maximumBlockSize, 0.0f);
@@ -210,6 +269,12 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
                 target.instance->setParameter(parameterId,
                     macroToPlain(state.macros[macro], *parameter));
     }
+    for (std::size_t i = 0; i < target.directCount; ++i)
+      if (!target.instance->setParameter(target.direct[i].parameter->id,
+                                         target.direct[i].base)) {
+        diagnostic = "instrument rejected validated direct parameter";
+        return false;
+      }
     if ((target.descriptor->capabilities
             & instrument::Capability::modulation) != 0) {
         target.modulation = std::make_unique<ModulationRuntime>();
@@ -244,45 +309,61 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
 }
 
 bool Rack::replaceState(
-    const std::array<PersistentSlotState, instrument::maxSlots>& replacement,
-    instrument::ResourceResolver* resources, std::string& diagnostic)
-{
-    const std::scoped_lock persistentLock(persistentStateMutex_);
-    if (!state::validate(replacement, diagnostic)) return false;
-    std::array<SlotRuntime, instrument::maxSlots> preparedRuntime;
-    std::array<RuntimeSlotState, instrument::maxSlots> preparedState;
-    for (std::size_t i = 0; i < replacement.size(); ++i)
-        if (!buildSlot(i, replacement[i], resources, preparedRuntime[i],
-                       preparedState[i], diagnostic))
-            return false;
-    beginExclusive();
-    state_ = replacement;
-    runtime_ = std::move(preparedRuntime);
-    runtimeState_ = preparedState;
-    for (std::size_t i = 0; i < state_.size(); ++i)
-        if (const auto* descriptor = runtime_[i].descriptor) {
-            state_[i].resolvedProviderId = descriptor->providerId;
-            state_[i].instrumentVersion = descriptor->instrumentVersion;
-            state_[i].instrumentStateVersion = descriptor->stateVersion;
-            state_[i].contentVersion = descriptor->contentVersion;
-            for (const auto& parameter : descriptor->parameters)
-                if (parameter.preferredMacro >= 0
-                    && parameter.preferredMacro < static_cast<std::int8_t>(
-                        instrument::macrosPerSlot)
-                    && state_[i].macroAssignments[
-                        static_cast<std::size_t>(parameter.preferredMacro)].empty())
-                    state_[i].macroAssignments[
-                        static_cast<std::size_t>(parameter.preferredMacro)] = parameter.id;
-        }
-    router_.reset();
-    for (auto& destination : routed_) {
-        destination.size = 0;
-        destination.dropped = 0;
+    const std::array<PersistentSlotState, instrument::maxSlots> &input,
+    instrument::ResourceResolver *resources, std::string &diagnostic) try {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  auto replacement = input;
+  for (auto &slot : replacement)
+    if (const auto resolution = registry_.resolve(slot.instrumentId))
+      initializeDirect(slot, *resolution.descriptor);
+  if (!state::validate(replacement, diagnostic))
+    return false;
+  std::array<SlotRuntime, instrument::maxSlots> preparedRuntime;
+  std::array<RuntimeSlotState, instrument::maxSlots> preparedState;
+  for (std::size_t i = 0; i < replacement.size(); ++i)
+    if (!buildSlot(i, replacement[i], resources, preparedRuntime[i],
+                   preparedState[i], diagnostic))
+      return false;
+  for (std::size_t i = 0; i < replacement.size(); ++i)
+    if (const auto *descriptor = preparedRuntime[i].descriptor) {
+      canonicalizeResolvedDirect(replacement[i], *descriptor);
+      replacement[i].resolvedProviderId = descriptor->providerId;
+      replacement[i].instrumentVersion = descriptor->instrumentVersion;
+      replacement[i].instrumentStateVersion = descriptor->stateVersion;
+      replacement[i].contentVersion = descriptor->contentVersion;
+      for (const auto &parameter : descriptor->parameters)
+        if (parameter.preferredMacro >= 0 &&
+            parameter.preferredMacro <
+                static_cast<std::int8_t>(instrument::macrosPerSlot) &&
+            replacement[i]
+                .macroAssignments[static_cast<std::size_t>(
+                    parameter.preferredMacro)]
+                .empty())
+          replacement[i].macroAssignments[static_cast<std::size_t>(
+              parameter.preferredMacro)] = parameter.id;
     }
-    for (auto& dropped : droppedMidiEvents_)
-        dropped.store(0, std::memory_order_relaxed);
-    endExclusive();
-    return true;
+  // All allocating metadata work is complete before publishing the runtime.
+  static_assert(std::is_nothrow_move_assignable_v<decltype(state_)>);
+  static_assert(std::is_nothrow_move_assignable_v<decltype(runtime_)>);
+  beginExclusive();
+  state_ = std::move(replacement);
+  runtime_ = std::move(preparedRuntime);
+  runtimeState_ = preparedState;
+  for (std::size_t i = 0; i < runtime_.size(); ++i)
+    publishedDescriptors_[i].store(runtime_[i].descriptor,
+                                   std::memory_order_release);
+  router_.reset();
+  for (auto &destination : routed_) {
+    destination.size = 0;
+    destination.dropped = 0;
+  }
+  for (auto &dropped : droppedMidiEvents_)
+    dropped.store(0, std::memory_order_relaxed);
+  endExclusive();
+  return true;
+} catch (...) {
+  diagnostic = "rack state preparation failed";
+  return false;
 }
 
 bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
@@ -294,6 +375,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     auto replacement = state_[index];
     replacement.instrumentId = instrumentId;
     replacement.modulePayload.clear();
+    replacement.directParameters.clear();
     replacement.patternSchemaVersion = VOX_PATTERN_SCHEMA_V1;
     replacement.patternPayload.clear();
     replacement.modulationPayload.clear();
@@ -306,6 +388,8 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     replacement.macroAssignments.fill({});
     replacement.macros.fill(0.0f);
     const auto resolution = registry_.resolve(instrumentId);
+    if (resolution)
+      initializeDirect(replacement, *resolution.descriptor);
     if (resolution && resolution.descriptor)
         for (const auto& parameter : resolution.descriptor->parameters)
             if (parameter.preferredMacro >= 0
@@ -323,26 +407,30 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     RuntimeSlotState preparedState;
     if (!buildSlot(index, replacement, resources, prepared, preparedState,
                    diagnostic)) return false;
+    if (prepared.descriptor) {
+      canonicalizeResolvedDirect(replacement, *prepared.descriptor);
+      replacement.resolvedProviderId = prepared.descriptor->providerId;
+      replacement.instrumentVersion = prepared.descriptor->instrumentVersion;
+      replacement.instrumentStateVersion = prepared.descriptor->stateVersion;
+      replacement.contentVersion = prepared.descriptor->contentVersion;
+      for (const auto &parameter : prepared.descriptor->parameters)
+        if (parameter.preferredMacro >= 0 &&
+            parameter.preferredMacro <
+                static_cast<std::int8_t>(instrument::macrosPerSlot))
+          replacement.macroAssignments[static_cast<std::size_t>(
+              parameter.preferredMacro)] = parameter.id;
+    }
     beginExclusive();
-    if (runtime_[index].instance) runtime_[index].instance->reset();
+    if (runtime_[index].instance)
+      runtime_[index].instance->reset();
     router_.forgetSlot(state_[index].slotId);
     routed_[index].size = 0;
     routed_[index].dropped = 0;
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
     state_[index] = std::move(replacement);
-    if (prepared.descriptor) {
-        state_[index].resolvedProviderId = prepared.descriptor->providerId;
-        state_[index].instrumentVersion = prepared.descriptor->instrumentVersion;
-        state_[index].instrumentStateVersion = prepared.descriptor->stateVersion;
-        state_[index].contentVersion = prepared.descriptor->contentVersion;
-        for (const auto& parameter : prepared.descriptor->parameters)
-            if (parameter.preferredMacro >= 0
-                && parameter.preferredMacro < static_cast<std::int8_t>(
-                    instrument::macrosPerSlot))
-                state_[index].macroAssignments[
-                    static_cast<std::size_t>(parameter.preferredMacro)] = parameter.id;
-    }
     runtime_[index] = std::move(prepared);
+    publishedDescriptors_[index].store(runtime_[index].descriptor,
+                                       std::memory_order_release);
     runtimeState_[index] = preparedState;
     endExclusive();
     return true;
@@ -375,14 +463,42 @@ bool Rack::applySoundPreset(std::size_t index, std::string_view presetId,
         diagnostic = "sound preset not found";
         return false;
     }
+    if (resolution.descriptor->directParameters) {
+      if (content->macroValueMask != 0 ||
+          content->parameterValues.size() !=
+              resolution.descriptor->parameters.size()) {
+        diagnostic = "direct preset requires complete named base values and no "
+                     "macro values";
+        return false;
+      }
+      replacement.directParameters.clear();
+      for (const auto &value : content->parameterValues)
+        replacement.directParameters.push_back({value.id, value.value});
+      if (content->nativeState) {
+        if (content->nativeStateVersion !=
+                resolution.descriptor->stateVersion ||
+            content->nativeState->size() >
+                resolution.descriptor->budget.maxStateBytes ||
+            content->nativeState->size() > state::maxModulePayloadBytes) {
+          diagnostic = "native preset state version or resource budget invalid";
+          return false;
+        }
+        replacement.modulePayload = *content->nativeState;
+        replacement.instrumentStateVersion = content->nativeStateVersion;
+      }
+      initializeDirect(replacement, *resolution.descriptor);
+    }
     SlotRuntime prepared;
     RuntimeSlotState preparedState;
     if (!buildSlot(index, replacement, resources, prepared, preparedState,
                    diagnostic)
         || !prepared.instance)
         return false;
-    const auto status = resolution.provider->applySoundPreset(
-        replacement.instrumentId, presetId, *prepared.instance);
+    const auto status =
+        resolution.descriptor->directParameters
+            ? instrument::ContentStatus::ok
+            : resolution.provider->applySoundPreset(
+                  replacement.instrumentId, presetId, *prepared.instance);
     if (status != instrument::ContentStatus::ok) {
         diagnostic = "sound preset incompatible";
         return false;
@@ -401,11 +517,15 @@ bool Rack::applySoundPreset(std::size_t index, std::string_view presetId,
             replacement.macros[macro] = std::clamp(
                 content->macroValues[macro], 0.0f, 1.0f);
 
+    if (prepared.descriptor)
+      canonicalizeResolvedDirect(replacement, *prepared.descriptor);
     beginExclusive();
     if (runtime_[index].instance) runtime_[index].instance->reset();
     router_.forgetSlot(replacement.slotId);
     state_[index] = std::move(replacement);
     runtime_[index] = std::move(prepared);
+    publishedDescriptors_[index].store(runtime_[index].descriptor,
+                                       std::memory_order_release);
     runtimeState_[index] = preparedState;
     routed_[index].clear();
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
@@ -529,6 +649,29 @@ void Rack::applyModulation(
             ? std::clamp((destination.defaultValue - destination.minimum)
                 / range, 0.0f, 1.0f)
             : 0.0f;
+        if (slot.descriptor->directParameters) {
+          auto plain = destination.defaultValue;
+          for (const auto &value : persistent.directParameters)
+            if (value.id == destination.parameterId) {
+              plain = value.value;
+              break;
+            }
+          const auto key = instrument::hostparams::directKey(
+              slot.descriptor->id, destination.parameterId);
+          for (const auto &change : controls.directValues())
+            if (change.key == key && std::isfinite(change.value)) {
+              const auto *parameter =
+                  findParameter(*slot.descriptor, destination.parameterId);
+              plain = parameter ? instrument::hostparams::canonicalPlain(
+                                      change.value, *parameter)
+                                : change.value;
+              break;
+            }
+          runtime.baseNormalized[index] =
+              range > 0.0f ? std::clamp((plain - destination.minimum) / range,
+                                        0.0f, 1.0f)
+                           : 0.0f;
+        }
         for (std::size_t macro = 0; macro < persistent.macroAssignments.size(); ++macro)
             if (persistent.macroAssignments[macro] == destination.parameterId)
                 runtime.baseNormalized[index] = controls.macros[macro];
@@ -626,6 +769,17 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
           slot.instance->setParameter(
               mapped, macroToPlain(controls[i].macros[macro], *parameter));
     }
+    for (std::size_t binding = 0; binding < slot.directCount; ++binding) {
+      const auto &direct = slot.direct[binding];
+      auto value = direct.base;
+      for (const auto &change : controls[i].directValues())
+        if (change.key == direct.key && std::isfinite(change.value)) {
+          value = instrument::hostparams::canonicalPlain(change.value,
+                                                         *direct.parameter);
+          break;
+        }
+      slot.instance->setParameter(direct.parameter->id, value);
+    }
     applyModulation(slot, state_[i], controls[i], routed_[i], sampleCount,
                     spec_.sampleRate, bpm, ppq);
     slot.instance->setBypassed(!controls[i].enabled || controls[i].mute ||
@@ -663,7 +817,9 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
 
 const instrument::InstrumentDescriptor* Rack::descriptor(std::size_t index) const noexcept
 {
-    return index < runtime_.size() ? runtime_[index].descriptor : nullptr;
+  return index < publishedDescriptors_.size()
+             ? publishedDescriptors_[index].load(std::memory_order_acquire)
+             : nullptr;
 }
 
 std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(
@@ -681,6 +837,23 @@ std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(
             snapshot[index].level = controls[index].level;
             snapshot[index].pan = controls[index].pan;
             snapshot[index].macros = controls[index].macros;
+            for (auto &value : snapshot[index].directParameters) {
+              const auto key = instrument::hostparams::directKey(
+                  snapshot[index].instrumentId, value.id);
+              for (const auto &change : controls[index].directValues())
+                if (change.key == key && std::isfinite(change.value)) {
+                  const auto *descriptor = runtime_[index].descriptor;
+                  const auto *parameter =
+                      descriptor != nullptr
+                          ? findParameter(*descriptor, value.id)
+                          : nullptr;
+                  value.value = parameter != nullptr
+                                    ? instrument::hostparams::canonicalPlain(
+                                          change.value, *parameter)
+                                    : change.value;
+                  break;
+                }
+            }
         }
         // Module payload is committed transactionally by module/preset loads.
         // Live automated values are persisted through macros above. Touching

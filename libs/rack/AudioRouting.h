@@ -19,6 +19,9 @@ struct ReturnControls {
   float level{0.5f}, pan{}, amount{0.5f}, rate{0.5f}, character{0.5f};
 };
 struct AudioRoutingControls {
+  // Each route owns its stable recipient identity, independently of render
+  // order.
+  std::array<instrument::SlotId, instrument::maxSlots> routeSlotIds{};
   std::array<std::array<SendControls, sendBusCount>, instrument::maxSlots>
       sends{};
   std::array<ReturnControls, sendBusCount> returns{};

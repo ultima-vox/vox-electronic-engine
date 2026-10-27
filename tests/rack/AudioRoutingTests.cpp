@@ -66,6 +66,8 @@ struct Fixture {
       r.enabled = false;
     slots[0].slotId = 100;
     slots[1].slotId = 200;
+    controls.routeSlotIds[0] = 100;
+    controls.routeSlotIds[1] = 200;
     CHECK(routing.prepare({sampleRate, frames, 2}),
           "routing prepares for stereo");
   }
@@ -105,6 +107,105 @@ struct Fixture {
     return output;
   }
 };
+
+void routesFollowStableIdsAcrossRenderOrder() {
+  Fixture a, b;
+  for (auto *f : {&a, &b}) {
+    f->duck();
+    f->instantaneousReturn(0);
+    f->controls.sends[1][0] = {0.4f, true};
+    f->trigger(0);
+  }
+  const auto routeSnapshot = b.controls.routeSlotIds;
+  std::swap(b.slots[0], b.slots[1]);
+  std::swap(b.events[0], b.events[1]);
+  a.begin();
+  b.begin();
+  Audio input(0.25f);
+  const auto normal = a.process(1, input), reordered = b.process(0, input);
+  for (std::size_t c = 0; c < 2; ++c)
+    for (std::size_t s = 0; s < frames; ++s)
+      CHECK(close(normal.at(c, s), reordered.at(c, s)),
+            "send/duck routing follows ID through render reorder");
+  CHECK(b.controls.routeSlotIds == routeSnapshot,
+        "render reorder does not retag route ownership");
+  Fixture removed;
+  removed.duck();
+  removed.controls.routeSlotIds[1] = 999;
+  removed.trigger(0);
+  removed.begin();
+  constant(removed.process(1, input), 0.25f, 0.25f);
+  auto invalid = a.controls;
+  invalid.routeSlotIds[1] = invalid.routeSlotIds[0];
+  CHECK(!AudioRouting::valid(invalid), "duplicate recipient identity rejected");
+  invalid = a.controls;
+  invalid.routeSlotIds[1] = 0;
+  CHECK(!AudioRouting::valid(invalid), "active zero identity route rejected");
+}
+
+void supportedRateBlockAndChannelMatrix() {
+  for (const double rate : {44100.0, 48000.0, 96000.0})
+    for (const std::uint32_t block : {64u, 128u, 256u, 512u, 1024u})
+      for (const std::uint32_t channels : {1u, 2u}) {
+        AudioRouting graph;
+        CHECK(graph.prepare({rate, block, channels}),
+              "matrix prepare succeeds");
+        AudioRoutingControls controls;
+        controls.routeSlotIds[0] = 100;
+        controls.routeSlotIds[1] = 200;
+        controls.kickSource = 100;
+        controls.duckDepth[1] = 0.8f;
+        controls.attackMs = 0;
+        controls.holdMs = 2;
+        controls.releaseMs = 3;
+        for (auto &ret : controls.returns)
+          ret.enabled = false;
+        std::array<ProcessSlotControls, 2> slots{};
+        slots[0].slotId = 100;
+        slots[1].slotId = 200;
+        std::array<RackRouter::DestinationBuffer, 2> events{};
+        events[0].events[0] = {block - 1, 3, {0x90, 36, 100}};
+        events[0].size = 1;
+        std::array<std::vector<float>, 2> input, output;
+        std::array<float *, 2> in{}, out{};
+        for (std::size_t c = 0; c < channels; ++c) {
+          input[c].assign(block, 0.25f);
+          output[c].assign(block, 0);
+          in[c] = input[c].data();
+          out[c] = output[c].data();
+        }
+        CHECK(graph.begin(controls, slots, events, block),
+              "matrix trigger block valid");
+        graph.mixSlot(1, {in.data(), channels}, {out.data(), channels},
+                      slots[1], true, block);
+        graph.finish({out.data(), channels}, block);
+        for (std::size_t c = 0; c < channels; ++c) {
+          CHECK(close(output[c][block - 1], 0.05f),
+                "last-sample trigger applies exact attenuation");
+          if (block > 1)
+            CHECK(close(output[c][block - 2], 0.25f),
+                  "trigger does not move before its offset");
+        }
+        events[0].size = 0;
+        const auto blocks =
+            static_cast<unsigned>(std::ceil(rate * 0.02 / block)) + 1;
+        for (unsigned b = 0; b < blocks; ++b) {
+          for (std::size_t c = 0; c < channels; ++c)
+            std::fill(output[c].begin(), output[c].end(), 0);
+          CHECK(graph.begin(controls, slots, events, block),
+                "matrix continuing block valid");
+          graph.mixSlot(1, {in.data(), channels}, {out.data(), channels},
+                        slots[1], true, block);
+          graph.finish({out.data(), channels}, block);
+        }
+        for (std::size_t c = 0; c < channels; ++c)
+          for (auto sample : output[c])
+            CHECK(sample == 0.25f, "matrix release reaches exact unity");
+        graph.reset();
+        CHECK(graph.gainReduction() == 0,
+              "matrix lifecycle resets attenuation");
+      }
+}
 
 void dryGainAndStateInvariance() {
   Fixture f;
@@ -578,8 +679,11 @@ int main() {
     const char *name;
     void (*run)();
   };
-  const std::array<Test, 16> tests{
-      {Test{"dry gain/base-state invariance", dryGainAndStateInvariance},
+  const std::array<Test, 18> tests{
+      {Test{"rate/block/channel matrix", supportedRateBlockAndChannelMatrix},
+       Test{"stable recipient identity",
+            routesFollowStableIdsAcrossRenderOrder},
+       Test{"dry gain/base-state invariance", dryGainAndStateInvariance},
        Test{"pre/post sends", preAndPostSendsUseRealAudio},
        Test{"mute/solo audible gating", audibleFlagSuppressesDryAndEverySend},
        Test{"return bus isolation",

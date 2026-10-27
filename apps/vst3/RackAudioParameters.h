@@ -120,6 +120,11 @@ public:
       return std::isfinite(v) ? v : 0.0f;
     };
     rack::AudioRoutingControls result;
+    // slots is the immutable automation-bank snapshot, not display/render
+    // order.
+    for (std::size_t i = 0; i < slots.size() && i < result.routeSlotIds.size();
+         ++i)
+      result.routeSlotIds[i] = slots[i].slotId;
     for (std::size_t s = 0; s < sends_.size(); ++s) {
       for (std::size_t b = 0; b < rack::sendBusCount; ++b)
         result.sends[s][b] = {value(sends_[s][b].gain),

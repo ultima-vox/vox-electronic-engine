@@ -138,23 +138,36 @@ int main()
     require(capture(processor) == baseline,
             "semantically invalid rack state rolls back exactly");
 
-    auto legacyTree = juce::ValueTree::fromXml(*xml);
-    removeChildren(legacyTree, "RACK");
-    removeChildren(legacyTree, "EFFECTS");
-    legacyTree.setProperty("stateSchemaVersion", 1, nullptr);
-    juce::MemoryBlock legacy;
-    if (auto legacyXml = legacyTree.createXml())
-        juce::AudioProcessor::copyXmlToBinary(*legacyXml, legacy);
-    processor.setStateInformation(legacy.getData(), static_cast<int>(legacy.getSize()));
-    const auto migrated = capture(processor);
-    auto migratedXml = juce::AudioProcessor::getXmlFromBinary(
-        migrated.getData(), static_cast<int>(migrated.getSize()));
-    require(migratedXml != nullptr, "migrated project serializes");
-    const auto migratedTree = juce::ValueTree::fromXml(*migratedXml);
-    require(migratedTree.getChildWithName("RACK").isValid()
-                && migratedTree.getChildWithName("EFFECTS").isValid()
-                && static_cast<int>(migratedTree.getProperty("stateSchemaVersion")) == 4,
-            "legacy project migrates to canonical current state");
+    // Owner-authorized POC replacement: engine v5 explicitly rejects old
+    // complete projects. Rejection must preserve the entire committed state;
+    // it must never silently reinterpret an old parameter/pattern layout.
+    for (const int obsoleteSchema : {1, 2, 3, 4}) {
+      auto obsoleteTree = juce::ValueTree::fromXml(*xml);
+      removeChildren(obsoleteTree, "RACK");
+      removeChildren(obsoleteTree, "EFFECTS");
+      obsoleteTree.setProperty("stateSchemaVersion", obsoleteSchema, nullptr);
+      auto changed = obsoleteTree.getChildWithProperty("id", "outputLevel");
+      require(changed.isValid(), "obsolete fixture has a real parameter");
+      changed.setProperty("value", 0.123f, nullptr);
+      juce::MemoryBlock obsolete;
+      if (auto obsoleteXml = obsoleteTree.createXml())
+        juce::AudioProcessor::copyXmlToBinary(*obsoleteXml, obsolete);
+      processor.setStateInformation(obsolete.getData(),
+                                    static_cast<int>(obsolete.getSize()));
+      require(capture(processor) == baseline,
+              "obsolete project rejection preserves complete committed state "
+              "exactly");
+    }
+    const auto retained = capture(processor);
+    auto retainedXml = juce::AudioProcessor::getXmlFromBinary(
+        retained.getData(), static_cast<int>(retained.getSize()));
+    require(retainedXml != nullptr, "retained current project serializes");
+    const auto retainedTree = juce::ValueTree::fromXml(*retainedXml);
+    require(retainedTree.getChildWithName("RACK").isValid() &&
+                retainedTree.getChildWithName("EFFECTS").isValid() &&
+                static_cast<int>(
+                    retainedTree.getProperty("stateSchemaVersion")) == 5,
+            "rejected POC state leaves the canonical current project intact");
 
     std::atomic<bool> mutationDone { false };
     std::thread parameterMutator([&] {
@@ -178,8 +191,8 @@ int main()
                 "rapid routing conflict action stays deterministic");
         if (iteration % 17 == 0) processor.requestPanic();
         if (iteration % 31 == 0)
-            processor.setStateInformation(migrated.getData(),
-                                          static_cast<int>(migrated.getSize()));
+          processor.setStateInformation(retained.getData(),
+                                        static_cast<int>(retained.getSize()));
         playHead.bpm.store(20.0 + (iteration * 37) % 381,
                            std::memory_order_relaxed);
         render(processor, playHead, 48000.0, 512,

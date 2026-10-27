@@ -1,8 +1,9 @@
 #pragma once
-#include <juce_core/juce_core.h>
-#include <juce_data_structures/juce_data_structures.h>
 #include "sequence/Sequence.h"
 #include <functional>
+#include <juce_core/juce_core.h>
+#include <juce_data_structures/juce_data_structures.h>
+#include <mutex>
 
 namespace vstengine {
 
@@ -75,6 +76,10 @@ public:
     struct FullStateCallbacks {
         std::function<juce::ValueTree()> capture;
         std::function<bool(const juce::ValueTree&)> restore;
+        // Modern Rack scenes have one transactional project authority. The
+        // generic manager never commits APVTS/Sequence around these callbacks.
+        std::function<juce::ValueTree()> captureComplete;
+        std::function<bool(const juce::ValueTree &)> restoreComplete;
     };
 
     PresetManager(PresetStateStore& stateStore,
@@ -111,28 +116,32 @@ public:
     OperationResult loadFactoryPreset(EngineType engine,
                                       const juce::String& name);
     OperationResult loadFactoryPreset(const juce::String& name);
-    juce::String getCurrentPresetName() const { return currentPresetName; }
+    juce::String getCurrentPresetName() const {
+      const std::scoped_lock lock(stateMutex);
+      return currentPresetName;
+    }
 
 private:
-    PresetStateStore& store;
-    vstengine::sequence::Sequence& sequence;
-    juce::File presetDirectory;
-    juce::String currentPresetName;
-    FullStateCallbacks fullStateCallbacks;
+  mutable std::recursive_mutex stateMutex;
+  PresetStateStore &store;
+  vstengine::sequence::Sequence &sequence;
+  juce::File presetDirectory;
+  juce::String currentPresetName;
+  FullStateCallbacks fullStateCallbacks;
 
-    static juce::File getPresetDirectory();
-    void serializeToXml(juce::XmlElement& xml, PresetKind kind,
-                        EngineType engine = EngineType::none);
-    bool deserializeFromXml(const juce::XmlElement& xml, PresetKind expectedKind,
-                            EngineType expectedEngine = EngineType::none);
-    OperationResult writePresetFile(const juce::XmlElement& xml,
-                                    const juce::String& name);
-    OperationResult loadPresetFile(const juce::File& file,
-                                   PresetKind expectedKind,
-                                   EngineType expectedEngine = EngineType::none);
-    OperationResult validateName(const juce::String& name) const;
-    bool isFactoryName(const juce::String& name) const;
-    juce::String makeSafeFilename(const juce::String& name) const;
+  static juce::File getPresetDirectory();
+  bool serializeToXml(juce::XmlElement &xml, PresetKind kind,
+                      EngineType engine = EngineType::none);
+  bool deserializeFromXml(const juce::XmlElement &xml, PresetKind expectedKind,
+                          EngineType expectedEngine = EngineType::none);
+  OperationResult writePresetFile(const juce::XmlElement &xml,
+                                  const juce::String &name);
+  OperationResult loadPresetFile(const juce::File &file,
+                                 PresetKind expectedKind,
+                                 EngineType expectedEngine = EngineType::none);
+  OperationResult validateName(const juce::String &name) const;
+  bool isFactoryName(const juce::String &name) const;
+  juce::String makeSafeFilename(const juce::String &name) const;
 };
 
 } // namespace vstengine

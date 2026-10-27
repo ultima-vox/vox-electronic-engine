@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 26.10.2026.
+Updated: 27.10.2026.
 Audited main: `ccc1b4dbe416d96370721674eb4857aec19f8fac`.
 Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
 
@@ -92,16 +92,28 @@ not a per-PR handoff. Standalone is not required; VST3 remains the product.
 - UI PR #43: existing Sound workspace candidate. Re-evaluate against current workflows; do not merge or close automatically during cleanup.
 - Pattern/API v2 and new style instruments: subsequent scoped implementation, not part of AGY's first task.
 
-## Rack implementation candidate — 26 October 2026
+## Rack implementation candidate — 27 October 2026
 
-`feat/rack-production` implements the accepted red header/16-slot rail, real
-master gain/meters, four internal wet send returns and a kick-note event ducking
-bus. Settings opens the shared audio-routing utility; the green Acid workspace
-is not implemented or redesigned by this change. No Acid/Bass DSP changes.
-See [runtime contract](architecture/RACK_AUDIO_ROUTING.md).
+PR #62 (`feat/rack-production`, unmerged) adds the accepted red header/16-slot
+rail, master gain/meters, four wet FX returns with per-slot pre/post sends and
+explicit kick-note event ducking. Settings opens shared audio routing. Generic
+named instrument/APVTS banks, transactional host/complete-scene restore, bounded
+FX tails and the lock-free keyboard/audio handoff are integrated in the candidate.
+The green Acid workspace is not redesigned; Acid/Bass DSP is unchanged.
 
-Independent core review and 14,624 ASan/UBSan routing checks passed (leak checking
-unavailable in this container). Full native build/integration, Windows CI,
-real-editor visual acceptance and the integrated DAW milestone are separate gates.
-The generic direct instrument parameter contract (#56) is still a tracked
-integration requirement; this candidate does not claim all Rack work complete.
+Contracts: [audio graph](architecture/RACK_AUDIO_ROUTING.md),
+[named parameters/state](architecture/RACK_PARAMETER_CONTRACT.md).
+Project/Rack/FX schemas deliberately become 5/4/2; old POC project/complete-scene
+formats are rejected under the owner-authorized replacement policy. Existing
+plugin and parameter identities are not renamed.
+
+Independent evidence includes FX-tail 6,023,910 ASan/UBSan checks, direct contract
+1,385 checks, actual processor state/scene 220 checks, realtime MIDI/keyboard
+33,808 checks with GNU malloc/calloc/realloc wrapping, and native editor restore/
+selection/routing tests. Full final CTest/build results and limits are recorded in
+[implementation evidence](testing/rack-production-evidence-20261027.md).
+
+The earlier PR #62 head e6d892c had successful Windows run40329748342; this does
+not verify subsequent direct/state/FX/realtime changes. Required Windows Release,
+full CTest/package, owner visual acceptance and integrated Cubase/REAPER acceptance
+remain separate gates. Do not close #53 or describe the Rack as production accepted.

@@ -26,20 +26,33 @@ public:
     [[nodiscard]] juce::Rectangle<int> rackBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> workspaceBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> keyboardBoundsForTesting() const noexcept;
+    void refreshForTesting() { timerCallback(); }
+    [[nodiscard]] int patternLengthForTesting() const noexcept {
+      return patternPage.displayedLength();
+    }
 
 private:
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {
-        explicit SequenceCallbacks(VstEngineAudioProcessor& p) : processor(p) {}
-        void onCopy() override; void onPaste() override;
-        void onRotateLeft() override; void onRotateRight() override;
-        void onReverse() override; void onShiftLeft() override; void onShiftRight() override;
-        void onTransposeUp() override; void onTransposeDown() override;
-        void onOctaveUp() override; void onOctaveDown() override;
-        void onMutate() override; void onClear() override;
-        void onSequenceChanged() override;
-        VstEngineAudioProcessor& processor;
-        vstengine::sequence::Sequence clipboard;
-        bool copied {};
+      explicit SequenceCallbacks(VstEngineAudioProcessor &p)
+          : processor(p), edit(p.sequenceEditSnapshot()) {}
+      void onCopy() override;
+      void onPaste() override;
+      void onRotateLeft() override;
+      void onRotateRight() override;
+      void onReverse() override;
+      void onShiftLeft() override;
+      void onShiftRight() override;
+      void onTransposeUp() override;
+      void onTransposeDown() override;
+      void onOctaveUp() override;
+      void onOctaveDown() override;
+      void onMutate() override;
+      void onClear() override;
+      void onSequenceChanged() override;
+      VstEngineAudioProcessor &processor;
+      VstEngineAudioProcessor::SequenceEdit edit;
+      vstengine::sequence::Sequence clipboard;
+      bool copied{};
     };
 
     class RackRail final : public juce::Component {
@@ -131,6 +144,11 @@ private:
         explicit PatternPage(VstEngineAudioProcessor&);
         void paint(juce::Graphics&) override; void resized() override;
         void bind(std::size_t); void refresh(); void setPlayHead(int);
+        void synchronize();
+        [[nodiscard]] int displayedLength() const noexcept {
+          return callbacks.edit.value.size();
+        }
+
     private:
         VstEngineAudioProcessor& processor;
         SequenceCallbacks callbacks;
@@ -195,6 +213,10 @@ private:
     void saveGlobalPreset();
     void refreshGlobalPresets();
     juce::Component::SafePointer<juce::DialogWindow> routingWindow;
+    std::size_t boundSlot{vstengine::instrument::maxSlots};
+    vstengine::instrument::SlotId boundSlotId{};
+    std::string boundInstrument;
+    const vstengine::instrument::InstrumentDescriptor *boundDescriptor{};
     VstEngineAudioProcessor& processor;
     vstengine::ui::VoxLookAndFeel lookAndFeel;
     vstengine::ui::GlobalHeader header;

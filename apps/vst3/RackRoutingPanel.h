@@ -48,18 +48,20 @@ class RackRoutingPanel final : public juce::Component, private juce::Timer {
               const juce::String &name) {
     s.setSliderStyle(juce::Slider::LinearHorizontal);
     s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 54, 20);
-    s.setName(name);
+    s.setName(id);
     s.setTooltip(name);
     content.addAndMakeVisible(s);
     sliders.push_back(
         std::make_unique<SliderAttachment>(processor.parameters(), id, s));
   }
   void toggle(juce::ToggleButton &b, const std::string &id) {
+    b.setName(id);
     content.addAndMakeVisible(b);
     buttons.push_back(
         std::make_unique<ButtonAttachment>(processor.parameters(), id, b));
   }
   void combo(juce::ComboBox &c, const std::string &id) {
+    c.setName(id);
     content.addAndMakeVisible(c);
     combos.push_back(
         std::make_unique<ComboAttachment>(processor.parameters(), id, c));
@@ -72,9 +74,21 @@ class RackRoutingPanel final : public juce::Component, private juce::Timer {
               (meta[i].instrumentId.empty() ? "Empty"
                                             : juce::String(meta[i].name)),
           juce::dontSendNotification);
+    for (std::size_t i = 0; i < meta.size(); ++i)
+      source.changeItemText(
+          static_cast<int>(i + 2),
+          "Slot " + juce::String(static_cast<int>(i + 1)) + " / " +
+              (meta[i].instrumentId.empty() ? "Empty"
+                                            : juce::String(meta[i].name)));
+    const int selectedSource = source.getSelectedId() - 2;
+    const bool unavailable =
+        selectedSource >= 0 && selectedSource < 16 &&
+        meta[static_cast<std::size_t>(selectedSource)].resolution !=
+            vstengine::instrument::ResolutionStatus::resolved;
     reduction.setText(
         "Duck envelope: " +
-            juce::String(processor.currentDuckReduction() * 100.0f, 0) + "%",
+            juce::String(processor.currentDuckReduction() * 100.0f, 0) + "%" +
+            (unavailable ? " / source unavailable; gain is unity" : ""),
         juce::dontSendNotification);
   }
 

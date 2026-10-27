@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,7 +27,12 @@ inline constexpr std::uint32_t stateSchemaVersion =
     VOX_INSTRUMENT_STATE_SCHEMA_V1;
 inline constexpr std::uint32_t hostContractVersion = 1;
 inline constexpr std::size_t maxSlots = 16;
+// APVTS transports plain values as float. Every supported integer seed is
+// exact.
+inline constexpr std::uint32_t maxGenerationSeed = 0x00ffffffu;
 inline constexpr std::size_t macrosPerSlot = 8;
+inline constexpr std::size_t maxDirectParameters = 128;
+inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {
     std::uint32_t maxVoices {};
@@ -95,6 +101,13 @@ struct InstrumentDescriptor {
     std::vector<std::uint32_t> supportedPresetSchemaVersions { 1 };
     ResourceBudget budget;
     std::vector<ParameterDescriptor> parameters;
+    // Internal host integration policy, not an extension of the external C ABI.
+    bool directParameters{};
+};
+
+struct ParameterValue {
+  ParameterId id;
+  float value{};
 };
 
 struct ContentDescriptor {
@@ -108,6 +121,14 @@ struct ContentDescriptor {
     std::uint32_t supportedPresetClasses {};
     std::uint32_t macroValueMask {};
     std::array<float, macrosPerSlot> macroValues {};
+    // Complete, named base values for a direct-parameter sound preset. The host
+    // validates/prepares them transactionally; no live DSP read is required.
+    std::vector<ParameterValue> parameterValues;
+    // Optional versioned non-parameter sound state (e.g. resource identities).
+    // Absence preserves it; present empty payload requests native Init. Named
+    // bases remain authoritative and are applied after native preparation.
+    std::optional<std::vector<std::byte>> nativeState;
+    std::uint32_t nativeStateVersion{};
 };
 
 // Stable traversal-order-independent seed domain. SlotId is hashed as explicit

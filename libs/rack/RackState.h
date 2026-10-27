@@ -3,7 +3,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 namespace vstengine::rack::state {
-inline constexpr int schemaVersion = 3;
+inline constexpr int schemaVersion = 4;
 // Absolute host-side bound applies before module resolution. Missing modules
 // cannot bypass state resource limits by carrying an unbounded opaque payload.
 inline constexpr std::size_t maxModulePayloadBytes = 1024u * 1024u;

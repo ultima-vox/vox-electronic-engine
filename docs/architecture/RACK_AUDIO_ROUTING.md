@@ -20,8 +20,13 @@ Host parameter IDs:
   `.attack` (0…100 ms), `.hold` (0…500 ms), `.release` (1…2000 ms).
 - `slotNN.duck.depth` (0–1).
 
-The source bank resolves to that bank's current persistent SlotId before the
-Rack callback. Display selection does not change routing. Slot-order drag/reorder
+Each route snapshot owns `routeSlotIds + sends + depth`. Nonzero duplicate IDs
+and active zero-ID routes are rejected. Mixing resolves recipients by SlotId,
+so a reordered render span cannot reassign a send or duck recipient. Missing
+recipients receive no substitute route.
+
+The source bank resolves to its immutable project bank-to-SlotId mapping before the
+Rack callback. Display selection does not change routing. The host bridge reads the bank snapshot, never the display/render ordering. Slot-order drag/reorder
 is not implemented; any future reorder must move identity-linked routing and
 host bindings together through a reviewed contract.
 
@@ -45,9 +50,18 @@ the old tail. Return level/pan act after the effect. The existing global chain
 still follows the complete Rack mix, and master Output follows that chain.
 Master gain ramps for 5 ms and never rewrites an instrument base parameter.
 
-Current return effects have zero declared latency. This change supplies no
-new lookahead or compensator for future nonzero-latency parallel processors.
-Module latency policy/PDC must be reviewed before admitting such processors.
+Current modules/returns have zero latency; the production registry rejects
+nonzero-latency descriptors pending reviewed parallel-path compensation.
+FX schema 2 bounds reverb history to 8 s, delay to 6 s, phaser to 0.5 s,
+flanger/chorus to 0.1 s and bitcrusher to 0.01 s after the last nonzero original
+input sample. The final min(50 ms, declared tail) fades to zero; expiry resets
+histories at the exact sample, including new input later in that block. Tiny
+nonzero input retriggers the deadline; no hidden noise gate is used. Serial
+stateful stages share the chain deadline. Reverb feedback row gain is at most
+0.91. Bypass/disable clears the affected stage history. This is an intentional
+finite-tail policy, not a claim that every natural decay is inaudible by then.
+The host tail getter reads one atomic duration; it never queries mutable DSP.
+See [parameter/state contract](RACK_PARAMETER_CONTRACT.md).
 
 ## Kick-event ducking
 
@@ -92,3 +106,24 @@ and catalog load/replace/unload. Slot context menus expose mute/solo and explici
 MIDI channel assignment with conflict errors. Settings opens the Rack audio
 routing utility and source/size/about choices. The green Acid workspace is owned
 by its separate agent; this task does not draw or implement it.
+
+## Routing parameter defaults
+
+All continuous routing controls below are plain host units. Gain/pan/mix controls
+use step 0.0001; time controls use 0.1 ms; note uses step 1.
+
+| Endpoint | Range / unit | Default |
+| --- | --- | --- |
+| slotNN.send.B.level | 0..1 linear gain | 0 |
+| slotNN.send.B.pre | Boolean | false (post) |
+| slotNN.duck.depth | 0..1 reduction | 0 |
+| rack.return.B.type | Distortion, Wavefolder, Phaser, Flanger, Chorus, Bitcrusher, Delay, Reverb | Reverb / Delay / Chorus / Phaser for B=1..4 |
+| rack.return.B.enabled | Boolean | true |
+| rack.return.B.level | 0..2 linear gain | 0.5 |
+| rack.return.B.pan | -1..1 | 0 |
+| rack.return.B.amount/rate/character | 0..1 | 0.5 each |
+| rack.duck.source | Off, immutable slot bank 1..16 | Off |
+| rack.duck.note | 0..127 MIDI note | 36 |
+| rack.duck.attack | 0..100 ms | 1 ms |
+| rack.duck.hold | 0..500 ms | 40 ms |
+| rack.duck.release | 1..2000 ms | 120 ms |

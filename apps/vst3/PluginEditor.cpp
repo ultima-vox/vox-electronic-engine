@@ -33,31 +33,56 @@ void panel(juce::Graphics& g, juce::Rectangle<int> bounds)
     g.drawRoundedRectangle(area, vstengine::ui::metrics::corner, 1.0f);
 }
 
-juce::String routeName(const vstengine::rack::PersistentSlotState& state)
-{
-    return state.routing.mode == vstengine::rack::RouteMode::off
-        ? "OFF" : "CH" + juce::String(state.routing.channel);
-}
 } // namespace
 
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onCopy() { processor.sequence().copyTo(clipboard); copied = true; }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onPaste() { if (copied) processor.sequence().paste(clipboard); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onRotateLeft() { processor.sequence().rotateLeft(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onRotateRight() { processor.sequence().rotateRight(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onReverse() { processor.sequence().reverse(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onShiftLeft() { processor.sequence().shiftLeft(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onShiftRight() { processor.sequence().shiftRight(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onTransposeUp() { processor.sequence().transpose(1); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onTransposeDown() { processor.sequence().transpose(-1); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onOctaveUp() { processor.sequence().octaveUp(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onOctaveDown() { processor.sequence().octaveDown(); }
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onCopy() {
+  edit.value.copyTo(clipboard);
+  copied = true;
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onPaste() {
+  if (copied)
+    edit.value.paste(clipboard);
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onRotateLeft() {
+  edit.value.rotateLeft();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onRotateRight() {
+  edit.value.rotateRight();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onReverse() {
+  edit.value.reverse();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onShiftLeft() {
+  edit.value.shiftLeft();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onShiftRight() {
+  edit.value.shiftRight();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onTransposeUp() {
+  edit.value.transpose(1);
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onTransposeDown() {
+  edit.value.transpose(-1);
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onOctaveUp() {
+  edit.value.octaveUp();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onOctaveDown() {
+  edit.value.octaveDown();
+}
 void VstEngineAudioProcessorEditor::SequenceCallbacks::onMutate()
 {
     juce::String diagnostic;
     (void) processor.mutateSelectedPattern(true, diagnostic);
+    edit = processor.sequenceEditSnapshot();
 }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onClear() { processor.sequence().clearSelected(); }
-void VstEngineAudioProcessorEditor::SequenceCallbacks::onSequenceChanged() { processor.publishSequenceForAudio(); }
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onClear() {
+  edit.value.clearSelected();
+}
+void VstEngineAudioProcessorEditor::SequenceCallbacks::onSequenceChanged() {
+  if (!processor.commitSequenceEdit(edit))
+    edit = processor.sequenceEditSnapshot();
+}
 
 VstEngineAudioProcessorEditor::RackRail::SlotRow::SlotRow() {
   power.setClickingTogglesState(true);
@@ -383,7 +408,9 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::resized()
 void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
 {
     selected = slot;
-    const auto& state = processor.instrumentRack().state()[selected];
+    instrument.setName("rack.instrument.selector");
+    preset.setName("rack.sound.preset");
+    const auto state = processor.instrumentRack().snapshotState()[selected];
     const auto descriptors = processor.availableInstruments();
     int descriptorIndex = 0;
     for (std::size_t i = 0; i < descriptors.size(); ++i)
@@ -400,14 +427,19 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
 
 void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
 {
-    const auto& state = processor.instrumentRack().state()[selected];
-    const auto* descriptor = processor.instrumentRack().descriptor(selected);
-    title.setText(descriptor != nullptr ? descriptor->name : "Empty slot", juce::dontSendNotification);
-    subtitle.setText(descriptor != nullptr
-        ? juce::String(descriptor->vendor) + "  /  slot " + juce::String(static_cast<int>(selected + 1))
-        : "Choose instrument to activate slot", juce::dontSendNotification);
-    const int channel = state.routing.mode == vstengine::rack::RouteMode::off ? 0 : state.routing.channel;
-    midiIn.setSelectedId(channel + 1, juce::dontSendNotification);
+  const auto state = processor.instrumentRack().snapshotState()[selected];
+  const auto *descriptor = processor.instrumentRack().descriptor(selected);
+  title.setText(descriptor != nullptr ? descriptor->name : "Empty slot",
+                juce::dontSendNotification);
+  subtitle.setText(descriptor != nullptr
+                       ? juce::String(descriptor->vendor) + "  /  slot " +
+                             juce::String(static_cast<int>(selected + 1))
+                       : "Choose instrument to activate slot",
+                   juce::dontSendNotification);
+  const int channel = state.routing.mode == vstengine::rack::RouteMode::off
+                          ? 0
+                          : state.routing.channel;
+  midiIn.setSelectedId(channel + 1, juce::dontSendNotification);
 }
 
 VstEngineAudioProcessorEditor::MacroPage::MacroPage(
@@ -469,31 +501,36 @@ void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
     }
 }
 
-VstEngineAudioProcessorEditor::PatternPage::PatternPage(VstEngineAudioProcessor& p)
-    : processor(p), callbacks(p), sequencer(p.sequence(), &callbacks)
-{
-    profile.setTextWhenNothingSelected("Generator profile");
-    vstengine::ui::styleButton(generate, true); vstengine::ui::styleButton(mutate);
-    vstengine::ui::styleLabel(status, 12.0f, juce::Justification::centredLeft,
-                              vstengine::ui::colours::mutedText);
-    const std::array<juce::Component*, 5> components {
-        &profile, &generate, &mutate, &status, &sequencer
-    };
-    for (auto* component : components) addAndMakeVisible(component);
-    generate.onClick = [this] {
+VstEngineAudioProcessorEditor::PatternPage::PatternPage(
+    VstEngineAudioProcessor &p)
+    : processor(p), callbacks(p), sequencer(callbacks.edit.value, &callbacks) {
+  profile.setName("rack.generator.profile");
+  profile.setTextWhenNothingSelected("Generator profile");
+  vstengine::ui::styleButton(generate, true);
+  vstengine::ui::styleButton(mutate);
+  vstengine::ui::styleLabel(status, 12.0f, juce::Justification::centredLeft,
+                            vstengine::ui::colours::mutedText);
+  const std::array<juce::Component *, 5> components{
+      &profile, &generate, &mutate, &status, &sequencer};
+  for (auto *component : components)
+    addAndMakeVisible(component);
+  generate.onClick =
+      [this] {
         const auto index = profile.getSelectedItemIndex();
-        if (index < 0 || index >= static_cast<int>(profileIds.size())) return;
+        if (index < 0 || index >= static_cast<int>(profileIds.size()))
+          return;
         juce::String diagnostic;
         processor.generateSelectedPattern(profileIds[static_cast<std::size_t>(index)], diagnostic);
         status.setText(diagnostic.isEmpty() ? "Pattern generated" : diagnostic, juce::dontSendNotification);
         refresh();
-    };
-    mutate.onClick = [this] {
-        juce::String diagnostic;
-        processor.mutateSelectedPattern(true, diagnostic);
-        status.setText(diagnostic.isEmpty() ? "Selected steps mutated" : diagnostic, juce::dontSendNotification);
-        refresh();
-    };
+      };
+  mutate.onClick = [this] {
+    juce::String diagnostic;
+    processor.mutateSelectedPattern(true, diagnostic);
+    status.setText(diagnostic.isEmpty() ? "Selected steps mutated" : diagnostic,
+                   juce::dontSendNotification);
+    refresh();
+  };
 }
 
 void VstEngineAudioProcessorEditor::PatternPage::paint(juce::Graphics& g) { panel(g, getLocalBounds()); }
@@ -523,11 +560,18 @@ void VstEngineAudioProcessorEditor::PatternPage::refresh()
     const auto* descriptor = processor.instrumentRack().descriptor(processor.selectedSlotIndex());
     const bool supported = descriptor != nullptr
         && (descriptor->capabilities & vstengine::instrument::Capability::sequence) != 0;
-    sequencer.setSequence(processor.sequence());
+    callbacks.edit = processor.sequenceEditSnapshot();
+    sequencer.setSequence(callbacks.edit.value);
     sequencer.setSlideEnabled((processor.selectedSequenceFieldMask() & VOX_SEQUENCE_SLIDE) != 0);
     sequencer.setEnabled(supported); generate.setEnabled(supported && !profileIds.empty());
     mutate.setEnabled(supported); sequencer.refreshFromModel();
     if (!supported) status.setText("Selected instrument has no sequence capability", juce::dontSendNotification);
+}
+void VstEngineAudioProcessorEditor::PatternPage::synchronize() {
+  const auto latest = processor.sequenceEditSnapshot();
+  if (latest.slot != callbacks.edit.slot ||
+      latest.revision != callbacks.edit.revision)
+    refresh();
 }
 void VstEngineAudioProcessorEditor::PatternPage::setPlayHead(int step) { sequencer.setPlayHeadPosition(step); }
 
@@ -570,14 +614,14 @@ void VstEngineAudioProcessorEditor::RoutingPage::assign(VstEngineAudioProcessor:
     juce::String diagnostic;
     const bool ok = processor.assignSlotChannel(selected, pendingChannel, action, diagnostic);
     status.setText(ok ? "Routing updated" : diagnostic, juce::dontSendNotification);
-    const auto& state = processor.instrumentRack().state()[selected];
+    const auto state = processor.instrumentRack().snapshotState()[selected];
     midiIn.setSelectedId((state.routing.mode == vstengine::rack::RouteMode::off ? 0 : state.routing.channel) + 1,
                          juce::dontSendNotification);
 }
 void VstEngineAudioProcessorEditor::RoutingPage::bind(std::size_t slot)
 {
     selected = slot; sliderAttachments.clear(); buttonAttachments.clear();
-    const auto& state = processor.instrumentRack().state()[slot];
+    const auto state = processor.instrumentRack().snapshotState()[slot];
     pendingChannel = state.routing.mode == vstengine::rack::RouteMode::off ? 0 : state.routing.channel;
     midiIn.setSelectedId(pendingChannel + 1, juce::dontSendNotification);
     auto& apvts = processor.parameters();
@@ -738,6 +782,11 @@ void VstEngineAudioProcessorEditor::resized()
 void VstEngineAudioProcessorEditor::bindSelection(std::size_t slot)
 {
     processor.selectSlot(slot);
+    const auto state = processor.instrumentRack().snapshotState()[slot];
+    boundSlot = slot;
+    boundSlotId = state.slotId;
+    boundInstrument = state.instrumentId;
+    boundDescriptor = processor.instrumentRack().descriptor(slot);
     instrumentHeader.bind(slot); soundPage.bind(slot); patternPage.bind(slot);
     routingPage.bind(slot); zonesPage.bind(slot); macrosPage.bind(slot); advancedPage.bind(slot);
     rackRail.refresh();
@@ -917,15 +966,24 @@ juce::Rectangle<int> VstEngineAudioProcessorEditor::keyboardBoundsForTesting() c
 
 void VstEngineAudioProcessorEditor::timerCallback()
 {
-    processor.publishSequenceForAudio(); rackRail.refresh(); instrumentHeader.refresh();
-    patternPage.setPlayHead(processor.getCurrentPlayHeadStep());
-    header.setMidiActivity(processor.hasRecentMidiActivity());
-    header.setCpuLoad(processor.currentCpuLoad());
-    header.setTransportActive(processor.transportIsPlaying());
-    const auto peaks = processor.consumeOutputPeaks();
-    header.setOutputPeaks(peaks[0], peaks[1]);
-    if (auto* manager = processor.presetManager())
-        header.setPresetName(manager->getCurrentPresetName());
+  processor.serviceKeyboardUi();
+  const auto selected = processor.selectedSlotIndex();
+  const auto state = processor.instrumentRack().snapshotState()[selected];
+  if (selected != boundSlot || state.slotId != boundSlotId ||
+      state.instrumentId != boundInstrument ||
+      processor.instrumentRack().descriptor(selected) != boundDescriptor)
+    bindSelection(selected);
+  rackRail.refresh();
+  instrumentHeader.refresh();
+  patternPage.synchronize();
+  patternPage.setPlayHead(processor.getCurrentPlayHeadStep());
+  header.setMidiActivity(processor.hasRecentMidiActivity());
+  header.setCpuLoad(processor.currentCpuLoad());
+  header.setTransportActive(processor.transportIsPlaying());
+  const auto peaks = processor.consumeOutputPeaks();
+  header.setOutputPeaks(peaks[0], peaks[1]);
+  if (auto *manager = processor.presetManager())
+    header.setPresetName(manager->getCurrentPresetName());
 }
 
 juce::AudioProcessorEditor* VstEngineAudioProcessor::createEditor()

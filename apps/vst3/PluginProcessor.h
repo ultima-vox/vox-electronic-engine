@@ -1,20 +1,24 @@
 #pragma once
+#include "DirectParameterBank.h"
 #include "RackAudioParameters.h"
 #include "effects/EffectsChain.h"
 #include "instrument/InstrumentRegistry.h"
 #include "midi/GeneratedNoteScheduler.h"
+#include "midi/RealtimeAuditionQueue.h"
 #include "midi/SourceSelector.h"
 #include "parts/PartState.h"
 #include "preset/PresetManager.h"
 #include "rack/Rack.h"
 #include "rack/RackState.h"
+#include "rack/RealtimeMutationGate.h"
 #include "sequence/RealtimeSequenceBridge.h"
 #include "sequence/Sequence.h"
 #include <JuceHeader.h>
 #include <array>
 #include <memory>
 
-class VstEngineAudioProcessor final : public juce::AudioProcessor {
+class VstEngineAudioProcessor final : public juce::AudioProcessor,
+                                      private juce::MidiKeyboardStateListener {
 public:
     // Canonical MIDI source mode (AUTO / PIANO ROLL / GENERATOR / BOTH).
     // The decision rule lives in vstengine::midi::shouldRunGenerator() so the
@@ -22,7 +26,10 @@ public:
     using MidiSourceMode = vstengine::midi::SourceMode;
 
     VstEngineAudioProcessor();
-    ~VstEngineAudioProcessor() override = default;
+    // Static C++ composition boundary; no DLL loading or runtime code download.
+    explicit VstEngineAudioProcessor(
+        std::unique_ptr<vstengine::instrument::InstrumentProvider>);
+    ~VstEngineAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -38,12 +45,7 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override
     {
-      return currentSampleRate > 0.0
-                 ? static_cast<double>(rack.tailSamples() +
-                                       effectsChain.tailSamples() +
-                                       returnTailSamples.load()) /
-                       currentSampleRate
-                 : 0.0;
+      return declaredTailSeconds.load(std::memory_order_relaxed);
     }
 
     int getNumPrograms() override { return 1; }
@@ -67,6 +69,15 @@ public:
     {
         return patternRuntime->slotSequences[selectedSlotIndex()];
     }
+    // Shared editor adapters own a local model. Never hand the native editor
+    // a mutable reference also used by host project restoration.
+    struct SequenceEdit {
+      vstengine::sequence::Sequence value;
+      std::size_t slot{};
+      std::uint64_t revision{};
+    };
+    [[nodiscard]] SequenceEdit sequenceEditSnapshot();
+    bool commitSequenceEdit(SequenceEdit &);
     vstengine::PresetManager* presetManager() noexcept { return presetManager_.get(); }
     int getPartPlayHeadStep(int partIndex) const noexcept
     {
@@ -76,6 +87,11 @@ public:
     int getCurrentPlayHeadStep() const noexcept
     {
         return patternRuntime->schedulers[selectedSlotIndex()].playHeadStep();
+    }
+    // Message/controller thread only. Audio merely requests this cleanup.
+    void serviceKeyboardUi() {
+      if (keyboardResetRequested.exchange(false))
+        keyboard.allNotesOff(0);
     }
     void requestPanic() noexcept { panicRequested.store(true); }
     [[nodiscard]] float currentCpuLoad() const noexcept
@@ -171,7 +187,12 @@ private:
         juce::AudioProcessorValueTreeState& apvts;
     };
 
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static vstengine::instrument::InstrumentRegistry makeRegistry(
+        std::unique_ptr<vstengine::instrument::InstrumentProvider>);
+    static juce::AudioProcessorValueTreeState::ParameterLayout
+        createParameterLayout(
+            std::span<
+                const vstengine::instrument::InstrumentDescriptor *const>);
     void seedInitialSequence();
     static bool containsNoteEvents(const juce::MidiBuffer& midi) noexcept;
     MidiSourceMode currentMidiMode() const noexcept;
@@ -183,6 +204,14 @@ private:
     void readRackControlsFromParameters(
         std::span<vstengine::rack::ProcessSlotControls>) const noexcept;
     void cacheRackParameterPointers();
+    juce::ValueTree captureProjectState();
+    bool restoreProjectState(const juce::ValueTree &);
+    void updateReportedLatencyAndTails() noexcept;
+    bool preflightDirectState(
+        const std::array<vstengine::rack::PersistentSlotState,
+                         vstengine::instrument::maxSlots> &) const noexcept;
+    void syncDirectParametersFromRack(
+        std::size_t onlySlot = vstengine::instrument::maxSlots);
     [[nodiscard]] std::array<vstengine::rack::PersistentSlotState,
         vstengine::instrument::maxSlots> snapshotRackWithPatterns();
     [[nodiscard]] juce::ValueTree captureEffectsState() const;
@@ -199,34 +228,46 @@ private:
     bool runGlobalPatternOperation(bool mutate, juce::String& diagnostic);
     bool restoreSlotPatterns(const std::array<vstengine::rack::PersistentSlotState,
         vstengine::instrument::maxSlots>&, bool allowEmpty) noexcept;
-    std::size_t convertMidi(const juce::MidiBuffer&,
-                            std::array<VoxMidiEventV1,
-                                vstengine::rack::RackRouter::eventCapacity>&,
-                            std::uint32_t sampleCount) noexcept;
+    std::size_t convertMidi(
+        const juce::MidiBuffer &,
+        std::array<VoxMidiEventV1, vstengine::rack::RackRouter::eventCapacity>
+            &,
+        std::uint32_t sampleCount, bool *overflow = nullptr) noexcept;
 
+    mutable vstengine::rack::RealtimeMutationGate mutationGate;
+    void handleNoteOn(juce::MidiKeyboardState *, int, int, float) override;
+    void handleNoteOff(juce::MidiKeyboardState *, int, int, float) override;
     juce::MidiKeyboardState keyboard;
-    juce::AudioProcessorValueTreeState apvts;
+    vstengine::midi::RealtimeAuditionQueue auditionQueue;
+    std::atomic<bool> keyboardResetRequested{};
     vstengine::instrument::InstrumentRegistry instrumentRegistry;
+    juce::AudioProcessorValueTreeState apvts;
     vstengine::rack::Rack rack;
     vstengine::effects::EffectsChain effectsChain;
     vstengine::rack::AudioRouting audioRouting;
     vstengine::host::RackAudioParameterRefs audioRoutingRefs;
+    vstengine::host::DirectParameterBank directParameterBank;
+    std::atomic<double> declaredTailSeconds{0.0};
+    std::atomic<std::uint32_t> declaredRackTail{}, declaredEffectsTail{};
     std::atomic<bool> rackAudioReady{false};
     std::atomic<std::uint32_t> returnTailSamples{};
     std::atomic<float> duckReduction{};
 
     vstengine::parts::PartRegistry parts;
     struct PatternRuntime {
-        std::array<vstengine::sequence::Sequence,
-                   vstengine::instrument::maxSlots> slotSequences {};
-        std::array<vstengine::sequence::RealtimeSequenceBridge,
-                   vstengine::instrument::maxSlots> sequenceBridges {};
-        std::array<vstengine::sequence::Sequence,
-                   vstengine::instrument::maxSlots> audioSequences {};
-        std::array<vstengine::midi::GeneratedNoteScheduler,
-                   vstengine::instrument::maxSlots> schedulers {};
-        std::array<juce::MidiBuffer, vstengine::instrument::maxSlots>
-            generatedScratch {};
+      std::array<std::uint64_t, vstengine::instrument::maxSlots> revisions{};
+      std::array<vstengine::sequence::Sequence, vstengine::instrument::maxSlots>
+          slotSequences{};
+      std::array<vstengine::sequence::RealtimeSequenceBridge,
+                 vstengine::instrument::maxSlots>
+          sequenceBridges{};
+      std::array<vstengine::sequence::Sequence, vstengine::instrument::maxSlots>
+          audioSequences{};
+      std::array<vstengine::midi::GeneratedNoteScheduler,
+                 vstengine::instrument::maxSlots>
+          schedulers{};
+      std::array<juce::MidiBuffer, vstengine::instrument::maxSlots>
+          generatedScratch{};
     };
     std::unique_ptr<PatternRuntime> patternRuntime {
         std::make_unique<PatternRuntime>()
@@ -247,11 +288,7 @@ private:
     std::atomic<float> cpuLoad { 0.0f };
     std::atomic<std::uint32_t> midiActivity { 0 };
 
-    // Preallocated scratch buffer for keyboard MIDI. processBlock() reuses it
-    // every block (clear, processNextMidiBuffer, merge) so the realtime
-    // callback never constructs a local MidiBuffer or grows one past this
-    // reserved capacity. Capacity is reserved once in prepareToPlay.
-    juce::MidiBuffer keyboardScratch;
+    // Audio-owned held-note accounting; controller handoff is auditionQueue.
     std::array<bool, 128> auditionNotes {};
     std::array<VoxMidiEventV1, vstengine::rack::RackRouter::eventCapacity>
         hostEvents {};

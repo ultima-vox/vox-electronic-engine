@@ -69,6 +69,9 @@ bool EffectsChain::prepare(double sampleRate, std::uint32_t maximumBlockSize,
         return false;
     try {
         StereoBuffer flanger, chorus, delay, reverb;
+        std::vector<float> gains(maximumBlockSize, 1.0f);
+        std::vector<std::uint8_t> resets(
+            static_cast<std::size_t>(maximumBlockSize) + 1, 0);
         const auto make = [channels](StereoBuffer& buffer, std::size_t size) {
             for (std::size_t channel = 0; channel < channels; ++channel)
                 buffer[channel].assign(size, 0.0f);
@@ -81,6 +84,8 @@ bool EffectsChain::prepare(double sampleRate, std::uint32_t maximumBlockSize,
         chorusBuffer_.swap(chorus);
         delayBuffer_.swap(delay);
         reverbBuffer_.swap(reverb);
+        tailGain_.swap(gains);
+        resetAfter_.swap(resets);
     } catch (...) {
         return false;
     }
@@ -92,15 +97,45 @@ bool EffectsChain::prepare(double sampleRate, std::uint32_t maximumBlockSize,
     return true;
 }
 
+void EffectsChain::resetEffect(std::size_t index) noexcept {
+  switch (static_cast<EffectType>(index)) {
+  case EffectType::phaser:
+    phaserState_ = {};
+    phaserPhase_ = 0;
+    break;
+  case EffectType::flanger:
+    flangerValid_ = {};
+    flangerWrite_ = 0;
+    flangerPhase_ = 0;
+    break;
+  case EffectType::chorus:
+    chorusValid_ = {};
+    chorusWrite_ = 0;
+    chorusPhase_ = 0;
+    break;
+  case EffectType::bitcrusher:
+    bitHold_ = {};
+    bitCounter_ = {};
+    break;
+  case EffectType::delay:
+    delayValid_ = {};
+    delayWrite_ = 0;
+    delayDamping_ = {};
+    break;
+  case EffectType::reverb:
+    reverbValid_ = {};
+    reverbWrite_ = 0;
+    reverbDamping_ = {};
+    break;
+  default:
+    break;
+  }
+}
 void EffectsChain::reset() noexcept
 {
-  flangerValid_ = chorusValid_ = delayValid_ = reverbValid_ = {};
-  flangerWrite_ = chorusWrite_ = delayWrite_ = reverbWrite_ = 0;
-  phaserState_ = {};
-  bitHold_ = {};
-  bitCounter_ = {};
-  delayDamping_ = reverbDamping_ = {};
-  phaserPhase_ = flangerPhase_ = chorusPhase_ = 0.0;
+  for (std::size_t i = 0; i < effectCount; ++i)
+    resetEffect(i);
+  tailRemaining_ = 0;
 }
 
 bool EffectsChain::valid(const EffectSettings& value,
@@ -309,7 +344,9 @@ void EffectsChain::processReverb(std::span<float*> audio, std::uint32_t n,
                                  const EffectSettings& s) noexcept
 {
     const float room = 0.035f + 0.145f * s.amount;
-    const float feedback = 0.45f + 0.46f * s.amount;
+    // Four-tap average has gain <=1 and the crossfeed adds .17.
+    // Normalize the complete row: its loop gain must stay below unity.
+    const float feedback = (0.45f + 0.46f * s.amount) / 1.17f;
     const float damping = 0.04f + 0.55f * (1.0f - s.character);
     constexpr std::array<float, 4> taps { 1.0f, 0.817f, 0.613f, 0.431f };
     for (std::uint32_t i = 0; i < n; ++i) {
@@ -348,26 +385,102 @@ void EffectsChain::processReverb(std::span<float*> audio, std::uint32_t n,
 void EffectsChain::process(std::span<float*> audio,
                            std::uint32_t sampleCount) noexcept
 {
-    if (!prepared_ || audio.empty() || audio.size() > channelCount_
-        || sampleCount > maximumBlockSize_)
-        return;
+  if (!prepared_ || audio.empty() || audio.size() > channelCount_ ||
+      sampleCount > maximumBlockSize_)
+    return;
+  for (auto *channel : audio)
+    if (channel == nullptr)
+      return;
+  const auto processRange = [&](std::uint32_t offset,
+                                std::uint32_t count) noexcept {
+    if (count == 0)
+      return;
+    std::array<float *, 2> pointers{};
+    for (std::size_t c = 0; c < audio.size(); ++c)
+      pointers[c] = audio[c] + offset;
+    const std::span<float *> segment{pointers.data(), audio.size()};
     for (std::size_t index = 0; index < effectCount; ++index) {
-        const auto settings = state_.effects[index];
-        if (!settings.enabled || settings.mix <= 0.0f) continue;
-        switch (settings.type) {
-        case EffectType::distortion: processDistortion(audio, sampleCount, settings); break;
-        case EffectType::wavefolder: processWavefolder(audio, sampleCount, settings); break;
-        case EffectType::phaser: processPhaser(audio, sampleCount, settings); break;
-        case EffectType::flanger: processFlanger(audio, sampleCount, settings); break;
-        case EffectType::chorus: processChorus(audio, sampleCount, settings); break;
-        case EffectType::bitcrusher: processBitcrusher(audio, sampleCount, settings); break;
-        case EffectType::delay: processDelay(audio, sampleCount, settings); break;
-        case EffectType::reverb: processReverb(audio, sampleCount, settings); break;
-        }
+      const auto settings = state_.effects[index];
+      if (!settings.enabled || settings.mix <= 0) {
+        resetEffect(index);
+        continue;
+      }
+      switch (settings.type) {
+      case EffectType::distortion:
+        processDistortion(segment, count, settings);
+        break;
+      case EffectType::wavefolder:
+        processWavefolder(segment, count, settings);
+        break;
+      case EffectType::phaser:
+        processPhaser(segment, count, settings);
+        break;
+      case EffectType::flanger:
+        processFlanger(segment, count, settings);
+        break;
+      case EffectType::chorus:
+        processChorus(segment, count, settings);
+        break;
+      case EffectType::bitcrusher:
+        processBitcrusher(segment, count, settings);
+        break;
+      case EffectType::delay:
+        processDelay(segment, count, settings);
+        break;
+      case EffectType::reverb:
+        processReverb(segment, count, settings);
+        break;
+      }
     }
-    for (auto* channel : audio)
-        for (std::uint32_t sample = 0; sample < sampleCount; ++sample)
-            channel[sample] = sanitize(channel[sample]);
+  };
+  const auto deadline = tailSamples();
+  if (deadline == 0) {
+    processRange(0, sampleCount);
+    tailRemaining_ = 0;
+  } else {
+    if (tailRemaining_ == 0)
+      reset();
+    std::fill_n(resetAfter_.data(), static_cast<std::size_t>(sampleCount) + 1,
+                0);
+    auto remaining = tailRemaining_;
+    const auto fadeSamples = std::min(
+        deadline, std::max(1u, static_cast<std::uint32_t>(sampleRate_ * 0.05)));
+    // Scan the ORIGINAL input before in-place DSP. Wet feedback must never
+    // retrigger its own lifetime. Every finite nonzero input counts; there
+    // is no undocumented noise gate or level threshold.
+    for (std::uint32_t s = 0; s < sampleCount; ++s) {
+      bool input = false;
+      for (auto *channel : audio) {
+        if (!std::isfinite(channel[s]))
+          channel[s] = 0;
+        input = input || channel[s] != 0.0f;
+      }
+      if (input) {
+        remaining = deadline;
+        tailGain_[s] = 1.0f;
+      } else {
+        tailGain_[s] =
+            std::min(1.0f, static_cast<float>(remaining) / fadeSamples);
+        if (remaining > 0 && --remaining == 0)
+          resetAfter_[s + 1] = 1;
+      }
+    }
+    std::uint32_t begin = 0;
+    for (std::uint32_t end = 1; end <= sampleCount; ++end)
+      if (resetAfter_[end]) {
+        processRange(begin, end - begin);
+        reset();
+        begin = end;
+      }
+    processRange(begin, sampleCount - begin);
+    for (auto *channel : audio)
+      for (std::uint32_t s = 0; s < sampleCount; ++s)
+        channel[s] *= tailGain_[s];
+    tailRemaining_ = remaining;
+  }
+  for (auto *channel : audio)
+    for (std::uint32_t sample = 0; sample < sampleCount; ++sample)
+      channel[sample] = sanitize(channel[sample]);
 }
 
 bool EffectsChain::saveState(std::span<std::byte> destination,
@@ -444,11 +557,21 @@ bool EffectsChain::applyPreset(std::string_view id) noexcept
 
 std::uint32_t EffectsChain::tailSamples() const noexcept
 {
-    if (state_.effects[7].enabled && state_.effects[7].mix > 0.0f)
-        return static_cast<std::uint32_t>(sampleRate_ * 8.0);
-    if (state_.effects[6].enabled && state_.effects[6].mix > 0.0f)
-        return static_cast<std::uint32_t>(sampleRate_ * 6.0);
-    return 0;
+  const auto enabled = [&](std::size_t i) {
+    return state_.effects[i].enabled && state_.effects[i].mix > 0;
+  };
+  // Intentional whole-chain bounds, including serial effect combinations.
+  // These are finite tail policies with a 50ms fade, not natural-decay claims.
+  if (enabled(7))
+    return static_cast<std::uint32_t>(sampleRate_ * 8.0);
+  if (enabled(6))
+    return static_cast<std::uint32_t>(sampleRate_ * 6.0);
+  if (enabled(2))
+    return static_cast<std::uint32_t>(sampleRate_ * 0.5);
+  if (enabled(3) || enabled(4))
+    return static_cast<std::uint32_t>(sampleRate_ * 0.1);
+  if (enabled(5))
+    return static_cast<std::uint32_t>(sampleRate_ * 0.01);
+  return 0;
 }
-
 } // namespace vstengine::effects

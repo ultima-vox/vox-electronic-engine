@@ -1,4 +1,5 @@
 #include "instrument/InstrumentRegistry.h"
+#include "instrument/HostParameterSchema.h"
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
@@ -52,23 +53,48 @@ Resolution InstrumentRegistry::validate(InstrumentProvider& provider,
     } else if (exceeds(descriptor.budget, limits_)) {
         result.status = ResolutionStatus::budgetExceeded;
         result.diagnostic = "instrument resource budget exceeds host limit";
+    } else if (descriptor.directParameters &&
+               (descriptor.parameters.empty() ||
+                descriptor.parameters.size() > maxDirectParameters)) {
+      result.status = ResolutionStatus::invalidDescriptor;
+      result.diagnostic = "direct parameter count exceeds host limit";
     } else {
-        std::unordered_set<std::string_view> ids;
-        for (const auto& parameter : descriptor.parameters) {
-            if (!validId(parameter.id) || parameter.name.empty()
-                || !std::isfinite(parameter.minimum)
-                || !std::isfinite(parameter.maximum)
-                || !std::isfinite(parameter.defaultValue)
-                || parameter.minimum >= parameter.maximum || parameter.step < 0.0f
-                || parameter.defaultValue < parameter.minimum
-                || parameter.defaultValue > parameter.maximum
-                || parameter.preferredMacro >= static_cast<std::int8_t>(macrosPerSlot)
-                || !ids.insert(parameter.id).second) {
-                result.status = ResolutionStatus::invalidDescriptor;
-                result.diagnostic = "invalid instrument parameter descriptor";
-                break;
-            }
+      std::unordered_set<std::string_view> ids;
+      for (const auto &parameter : descriptor.parameters) {
+        if (!validId(parameter.id) || parameter.name.empty() ||
+            !std::isfinite(parameter.minimum) ||
+            !std::isfinite(parameter.maximum) ||
+            !std::isfinite(parameter.defaultValue) ||
+            parameter.minimum >= parameter.maximum ||
+            !std::isfinite(parameter.step) || parameter.step < 0.0f ||
+            parameter.step > parameter.maximum - parameter.minimum ||
+            parameter.defaultValue < parameter.minimum ||
+            parameter.defaultValue > parameter.maximum ||
+            parameter.preferredMacro >=
+                static_cast<std::int8_t>(macrosPerSlot) ||
+            (descriptor.directParameters &&
+             !hostparams::validDirectParameter(parameter)) ||
+            (descriptor.directParameters &&
+             (static_cast<unsigned>(parameter.type) >
+                  static_cast<unsigned>(ParameterType::choice) ||
+              (parameter.type != ParameterType::floating &&
+               (std::floor(parameter.minimum) != parameter.minimum ||
+                std::floor(parameter.maximum) != parameter.maximum ||
+                std::floor(parameter.defaultValue) != parameter.defaultValue ||
+                static_cast<double>(parameter.minimum) < -2147483648.0 ||
+                static_cast<double>(parameter.maximum) > 2147483647.0)) ||
+              (parameter.type == ParameterType::boolean &&
+               (parameter.minimum != 0 || parameter.maximum != 1)) ||
+              (parameter.type == ParameterType::choice &&
+               (parameter.minimum != 0 ||
+                parameter.choices.size() !=
+                    static_cast<std::size_t>(parameter.maximum) + 1)))) ||
+            !ids.insert(parameter.id).second) {
+          result.status = ResolutionStatus::invalidDescriptor;
+          result.diagnostic = "invalid instrument parameter descriptor";
+          break;
         }
+      }
     }
     return result;
 }
@@ -120,6 +146,11 @@ bool InstrumentRegistry::registerProvider(
                 }
         }
     }
+    auto candidateCatalog = descriptors_;
+    for (const auto &descriptor : offered)
+      candidateCatalog.push_back(&descriptor);
+    if (!hostparams::validateDirectCatalog(candidateCatalog, diagnostic))
+      return false;
     auto* accepted = provider.get();
     providers_.push_back(std::move(provider));
     for (const auto& descriptor : accepted->descriptors())

@@ -44,12 +44,16 @@ The new product name alone does not authorise an identity or install-path change
 | Keys and long polyphonic phrases | Pattern v2 contract, adapter/migration, scheduling and export tests |
 | Additional slot audio outputs | Stable bus topology, project migration and actual host testing |
 | Per-slot effects | Explicit routing/state/resource design; current global chain is not silently reinterpreted |
-| Send FX / return graph | Stable audio bus identities, tap points, mute/solo/tail/latency policy, state/automation, feedback rejection and bounded buffers; currently absent |
-| Internal kick ducking | Explicit source/recipient contract and event-vs-audio-detector semantics, envelope policy and effective-gain routing; currently absent |
+| Send FX / return graph | Stable audio bus identities, tap points, mute/solo/tail/latency policy, state/automation, feedback rejection and bounded buffers; candidate PR #62 |
+| Internal kick ducking | Explicit source/recipient contract and event-vs-audio-detector semantics, envelope policy and effective-gain routing; candidate PR #62 |
 | Complete direct parameter binding | Named host identities, source-of-truth/rollback, full bank/resource bounds and consolidated reviewed state changes |
 | Modular paid distribution | Offline content/entitlement policy; no hidden network dependency |
 
-No implementation in this cleanup changes those runtime contracts.
+The Rack candidate deliberately evolves project/Rack/FX schemas to 5/4/2 and
+adds the [named parameter/state contract](RACK_PARAMETER_CONTRACT.md) and
+[audio routing contract](RACK_AUDIO_ROUTING.md). It remains subject to independent
+review, required CI and the integrated host milestone; implementation presence
+alone does not establish production acceptance.
 For each future critical change record old/new versions, migration/failure behaviour,
 tests and Architecture Guard review before merge.
 

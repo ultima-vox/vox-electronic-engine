@@ -11,6 +11,17 @@ bool AudioRouting::valid(const AudioRoutingControls &c) noexcept {
   if (c.kickNote > 127 || !range(c.attackMs, 0, 100) ||
       !range(c.holdMs, 0, 500) || !range(c.releaseMs, 1, 2000))
     return false;
+  for (std::size_t i = 0; i < c.routeSlotIds.size(); ++i) {
+    if (c.routeSlotIds[i] == instrument::invalidSlotId) {
+      if (c.duckDepth[i] != 0 ||
+          std::any_of(c.sends[i].begin(), c.sends[i].end(),
+                      [](const auto &send) { return send.gain != 0; }))
+        return false;
+    } else
+      for (std::size_t j = 0; j < i; ++j)
+        if (c.routeSlotIds[i] == c.routeSlotIds[j])
+          return false;
+  }
   for (const auto &slot : c.sends)
     for (const auto &send : slot)
       if (!range(send.gain, 0, 1))
@@ -159,18 +170,29 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
   for (std::size_t c = 0; c < input.size(); ++c)
     if (!input[c] || !output[c])
       return;
+  std::size_t route = instrument::maxSlots;
+  for (std::size_t i = 0; i < controls_.routeSlotIds.size(); ++i)
+    if (controls_.routeSlotIds[i] == slot.slotId &&
+        slot.slotId != instrument::invalidSlotId) {
+      route = i;
+      break;
+    }
   const auto left = slot.pan <= 0 ? 1.0f : 1.0f - slot.pan,
              right = slot.pan >= 0 ? 1.0f : 1.0f + slot.pan;
   const bool source = slot.slotId == controls_.kickSource;
   for (std::uint32_t s = 0; s < count; ++s) {
     const auto duck =
-        source ? 1.0f : 1 - controls_.duckDepth[index] * envelopeBuffer_[s];
+        source ? 1.0f
+               : 1 - (route < instrument::maxSlots ? controls_.duckDepth[route]
+                                                   : 0.0f) *
+                         envelopeBuffer_[s];
     for (std::size_t c = 0; c < output.size(); ++c) {
       const auto pre = input[c][s] * duck;
       const auto post = pre * slot.level * (c == 0 ? left : right);
       output[c][s] += post;
-      for (std::size_t bus = 0; bus < sendBusCount; ++bus) {
-        const auto &send = controls_.sends[index][bus];
+      for (std::size_t bus = 0;
+           route < instrument::maxSlots && bus < sendBusCount; ++bus) {
+        const auto &send = controls_.sends[route][bus];
         returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
       }
     }

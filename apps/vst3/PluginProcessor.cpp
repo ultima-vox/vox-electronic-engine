@@ -1,16 +1,88 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "core/ResourceLimits.h"
+#include "instrument/HostParameterSchema.h"
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/MidiExport.h"
-#include "instrument/HostParameterSchema.h"
 #include "modules/BuiltInProvider.h"
 #include "preset/PresetManager.h"
 #include "sequence/PatternAdapter.h"
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <unordered_set>
 
 namespace {
+bool hasVersion(const juce::ValueTree &tree, const char *property,
+                unsigned expected) {
+  const auto text = tree.getProperty(property).toString().toStdString();
+  unsigned version{};
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), version);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size() &&
+         version == expected;
+}
+// Project values are plain host units, not normalized automation values.
+// Unknown module endpoints survive as opaque finite scalars; installed
+// endpoints must satisfy their real descriptor before any live state is
+// replaced.
+bool validateProjectParameters(const juce::ValueTree &tree,
+                               juce::AudioProcessorValueTreeState &parameters) {
+  if (tree.getNumChildren() < 3 || tree.getNumChildren() > 20000)
+    return false;
+  std::unordered_set<std::string> ids;
+  unsigned racks{}, effects{};
+  for (const auto child : tree) {
+    if (child.hasType("RACK")) {
+      if (++racks > 1)
+        return false;
+      continue;
+    }
+    if (child.hasType("EFFECTS")) {
+      if (++effects > 1)
+        return false;
+      continue;
+    }
+    if (!child.hasType("PARAM") || child.getNumChildren() != 0 ||
+        !child.hasProperty("id") || !child.hasProperty("value"))
+      return false;
+    const auto id = child.getProperty("id").toString().toStdString();
+    if (id.empty() || id.size() > 512 || !ids.insert(id).second)
+      return false;
+    const auto scalar = child.getProperty("value");
+    if (!(scalar.isDouble() || scalar.isInt() || scalar.isInt64() ||
+          scalar.isString()))
+      return false;
+    const auto text = scalar.toString().toStdString();
+    double value{};
+    const auto result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+        !std::isfinite(value))
+      return false;
+    if (const auto *endpoint = parameters.getParameter(id.c_str())) {
+      const auto &range = endpoint->getNormalisableRange();
+      if (value < range.start || value > range.end)
+        return false;
+      if (endpoint->isDiscrete() && value != std::round(value))
+        return false;
+    }
+  }
+  // Every currently known endpoint is present in snapshots of this catalog.
+  // New module banks may be absent in older compatible catalog snapshots;
+  // Rack named values remain authoritative for the selected module.
+  for (const auto *parameter : parameters.processor.getParameters()) {
+    const auto *identified =
+        dynamic_cast<const juce::AudioProcessorParameterWithID *>(parameter);
+    if (identified == nullptr)
+      return false;
+    const auto name = identified->paramID.toStdString();
+    if (name.find(".sound.") == std::string::npos && !ids.contains(name))
+      return false;
+  }
+  return racks == 1 && effects == 1;
+}
 std::string slotParameterId(std::size_t slot, std::string_view suffix)
 {
     char prefix[16] {};
@@ -19,99 +91,110 @@ std::string slotParameterId(std::size_t slot, std::string_view suffix)
 }
 } // namespace
 
+vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
+    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider) {
+  vstengine::instrument::HostBudgetLimits limits;
+  // All shipped synths/returns are zero-latency. Reject a future latent module
+  // explicitly until parallel-path compensation is implemented and reviewed.
+  limits.maxLatencySamples = 0;
+  vstengine::instrument::InstrumentRegistry registry(limits);
+  std::string diagnostic;
+  if (!registry.registerProvider(std::move(provider), diagnostic))
+    throw std::invalid_argument(diagnostic);
+  return registry;
+}
+
 VstEngineAudioProcessor::VstEngineAudioProcessor()
+    : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider()) {}
+
+VstEngineAudioProcessor::VstEngineAudioProcessor(
+    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider)
     : AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
-      apvts(*this, nullptr, "PARAMETERS", createParameterLayout()),
-      rack(instrumentRegistry),
-      presetStore(apvts)
-{
-    std::string diagnostic;
-    if (!instrumentRegistry.registerProvider(
-            vstengine::modules::createBuiltInProvider(), diagnostic))
-        jassertfalse;
-
-    auto initialRack = rack.state();
+      instrumentRegistry(makeRegistry(std::move(provider))),
+      apvts(*this, nullptr, "PARAMETERS",
+            createParameterLayout(instrumentRegistry.descriptors())),
+      rack(instrumentRegistry), presetStore(apvts) {
+  std::string diagnostic;
+  auto initialRack = rack.state();
+  if (instrumentRegistry.resolve(vstengine::modules::bassInstrumentId)) {
     initialRack[0].instrumentId = vstengine::modules::bassInstrumentId;
     initialRack[0].routing = { vstengine::rack::RouteMode::channel, 1,
                                0, 127, 1, 127, 0 };
     initialRack[0].macros = { 0.48f, 0.55f, 0.4f, 0.25f,
                               0.32f, 0.5f, 0.0f, 0.15f };
+  }
+  if (instrumentRegistry.resolve(vstengine::modules::acidInstrumentId)) {
     initialRack[1].instrumentId = vstengine::modules::acidInstrumentId;
     initialRack[1].routing = { vstengine::rack::RouteMode::channel, 2,
                                0, 127, 1, 127, 0 };
     initialRack[1].macros = { 0.05f, 0.46f, 0.72f, 0.70f,
                               0.48f, 0.58f, 0.30f, 0.28f };
-    (void) rack.replaceState(initialRack, nullptr, diagnostic);
-    cacheRackParameterPointers();
-    audioRoutingRefs.cache(apvts);
-    masterGainParameter = apvts.getRawParameterValue("outputLevel");
-    for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
-        rackControls[slot].slotId = initialRack[slot].slotId;
+  }
+  if (!rack.replaceState(initialRack, nullptr, diagnostic))
+    throw std::invalid_argument(diagnostic);
+  keyboard.addListener(this);
+  cacheRackParameterPointers();
+  audioRoutingRefs.cache(apvts);
+  directParameterBank.cache(apvts, instrumentRegistry.descriptors());
+  syncDirectParametersFromRack();
+  masterGainParameter = apvts.getRawParameterValue("outputLevel");
+  for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
+    rackControls[slot].slotId = initialRack[slot].slotId;
 
-    // Seed initial sequence with darkPsy pattern (canonical seeded operation
-    // owned by the sequence module; same generator stream as before).
-    seedInitialSequence();
-    for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size(); ++slot) {
-        publishPartSequenceForAudio(static_cast<int>(slot));
-        (void) patternRuntime->sequenceBridges[slot].read(
-            patternRuntime->audioSequences[slot]);
-    }
+  // Seed initial sequence with darkPsy pattern (canonical seeded operation
+  // owned by the sequence module; same generator stream as before).
+  seedInitialSequence();
+  for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size();
+       ++slot) {
+    publishPartSequenceForAudio(static_cast<int>(slot));
+    (void)patternRuntime->sequenceBridges[slot].read(
+        patternRuntime->audioSequences[slot]);
+  }
 
-    presetManager_ = std::make_unique<vstengine::PresetManager>(
-        presetStore, patternRuntime->slotSequences[0],
-        vstengine::PresetManager::FullStateCallbacks {
-            [this] {
-                juce::ValueTree extra("ENGINE_EXTRA");
-                extra.addChild(vstengine::rack::state::serialize(
-                    snapshotRackWithPatterns()), -1, nullptr);
-                extra.addChild(captureEffectsState(), -1, nullptr);
-                return extra;
-            },
-            [this](const juce::ValueTree& state) {
-                const auto rackState = state.hasType("RACK")
-                    ? state : state.getChildWithName("RACK");
-                std::array<vstengine::rack::PersistentSlotState,
-                           vstengine::instrument::maxSlots> parsed;
-                std::string diagnostic;
-                if (!vstengine::rack::state::deserialize(
-                        rackState, parsed, diagnostic))
-                    return false;
-                vstengine::effects::EffectsChain candidateEffects;
-                if (!prepareEffectsState(
-                        state.hasType("RACK") ? juce::ValueTree {}
-                            : state.getChildWithName("EFFECTS"),
-                        candidateEffects))
-                    return false;
-                const auto previous = patternRuntime->slotSequences;
-                suspendProcessing(true);
-                if (!restoreSlotPatterns(parsed, true)) {
-                    suspendProcessing(false);
-                    return false;
-                }
-                if (rack.replaceState(parsed, nullptr, diagnostic)) {
-                    effectsChain = std::move(candidateEffects);
-                    audioRouting.reset();
-                    returnTailSamples.store(0);
-                    duckReduction.store(0);
-                    for (auto& scheduler : patternRuntime->schedulers)
-                        scheduler.reset(currentSampleRate);
-                    suspendProcessing(false);
-                    return true;
-                }
-                patternRuntime->slotSequences = previous;
-                for (std::size_t slot = 0;
-                     slot < patternRuntime->slotSequences.size(); ++slot)
-                    publishPartSequenceForAudio(static_cast<int>(slot));
-                suspendProcessing(false);
-                return false;
-            }
-        });
+  presetManager_ = std::make_unique<vstengine::PresetManager>(
+      presetStore, patternRuntime->slotSequences[0],
+      vstengine::PresetManager::FullStateCallbacks{
+          {},
+          {},
+          [this] { return captureProjectState(); },
+          [this](const juce::ValueTree &state) {
+            return restoreProjectState(state);
+          }});
+}
+
+VstEngineAudioProcessor::~VstEngineAudioProcessor() {
+  keyboard.removeListener(this);
+}
+void VstEngineAudioProcessor::handleNoteOn(juce::MidiKeyboardState *,
+                                           int channel, int note,
+                                           float velocity) {
+  if (channel < 1 || channel > 16 || note < 0 || note > 127 ||
+      !std::isfinite(velocity))
+    return;
+  VoxMidiEventV1 event{};
+  event.size = 3;
+  event.data[0] = static_cast<std::uint8_t>(0x90 | (channel - 1));
+  event.data[1] = static_cast<std::uint8_t>(note);
+  event.data[2] = static_cast<std::uint8_t>(
+      std::lround(std::clamp(velocity, 0.0f, 1.0f) * 127.0f));
+  (void)auditionQueue.push(event);
+}
+void VstEngineAudioProcessor::handleNoteOff(juce::MidiKeyboardState *,
+                                            int channel, int note, float) {
+  if (channel < 1 || channel > 16 || note < 0 || note > 127)
+    return;
+  VoxMidiEventV1 event{};
+  event.size = 3;
+  event.data[0] = static_cast<std::uint8_t>(0x80 | (channel - 1));
+  event.data[1] = static_cast<std::uint8_t>(note);
+  (void)auditionQueue.push(event);
 }
 
 void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
                                             const int samplesPerBlock)
 {
+  vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
   rackAudioReady.store(false);
   if (!std::isfinite(sampleRate) || sampleRate < 8000.0 ||
       sampleRate > 384000.0 || samplesPerBlock <= 0 ||
@@ -132,7 +215,7 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
     masterGain.setCurrentAndTargetValue(masterGainParameter->load());
     for (auto &peak : outputPeaks)
       peak.store(0.0f);
-    setLatencySamples(static_cast<int>(rack.latencySamples()));
+    updateReportedLatencyAndTails();
 
     // Reset the generated-playback scheduler and reseed the deterministic
     // probability RNG from the rngSeed parameter so the same project state
@@ -148,12 +231,6 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
                 rack.state()[slot].instrumentId));
     }
 
-    // Preallocate the keyboard MIDI scratch buffer using JUCE's intended API.
-    // Budget: 4096 bytes covers a dense block of keyboard events (256 events
-    // at ~16 bytes/event sysex headroom) with safety margin. processBlock()
-    // then only clears and reuses — no allocation or growth on the realtime
-    // thread.
-    keyboardScratch.ensureSize(32768);
     for (auto& scratch : patternRuntime->generatedScratch)
         scratch.ensureSize(65536);
     wasTransportPlaying = false;
@@ -165,6 +242,7 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
 
 void VstEngineAudioProcessor::releaseResources()
 {
+  vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
   rackAudioReady.store(false);
   rack.reset();
   effectsChain.reset();
@@ -183,13 +261,32 @@ bool VstEngineAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts)
         || output == juce::AudioChannelSet::stereo();
 }
 
+void VstEngineAudioProcessor::updateReportedLatencyAndTails() noexcept {
+  declaredRackTail.store(rack.tailSamples(), std::memory_order_relaxed);
+  declaredEffectsTail.store(effectsChain.tailSamples(),
+                            std::memory_order_relaxed);
+  // Before the next admitted callback, advertise a conservative bound for all
+  // armed internal returns. Audio publishes the exact configured chain bound.
+  declaredTailSeconds.store(
+      currentSampleRate > 0.0
+          ? static_cast<double>(
+                static_cast<std::uint64_t>(declaredRackTail.load()) +
+                declaredEffectsTail.load()) /
+                    currentSampleRate +
+                8.0
+          : 0.0,
+      std::memory_order_relaxed);
+  setLatencySamples(static_cast<int>(rack.latencySamples()));
+}
+
 bool VstEngineAudioProcessor::applyInternalEffectsPreset(
     std::string_view presetId) noexcept
 {
-    suspendProcessing(true);
-    const auto applied = effectsChain.applyPreset(presetId);
-    suspendProcessing(false);
-    return applied;
+  vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
+  const auto applied = effectsChain.applyPreset(presetId);
+  if (applied)
+    updateReportedLatencyAndTails();
+  return applied;
 }
 
 juce::ValueTree VstEngineAudioProcessor::captureEffectsState() const
@@ -217,10 +314,15 @@ bool VstEngineAudioProcessor::prepareEffectsState(
             static_cast<std::uint32_t>(
                 juce::jmax(1, getTotalNumOutputChannels()))))
         return false;
-    if (!state.isValid()) return true; // Legacy state predates internal FX.
+    if (!state.isValid())
+      return false;
     if (!state.hasType("EFFECTS")) return false;
-    const auto schema = static_cast<std::uint32_t>(
-        static_cast<int>(state.getProperty("schemaVersion", 0)));
+    if (!hasVersion(state, "schemaVersion",
+                    vstengine::effects::EffectsChain::stateVersion))
+      return false;
+    const auto schema = vstengine::effects::EffectsChain::stateVersion;
+    if (state.getProperty("payload").toString().getNumBytesAsUTF8() > 512)
+      return false;
     juce::MemoryBlock bytes;
     if (!bytes.fromBase64Encoding(state.getProperty("payload").toString())
         || bytes.getSize() != vstengine::effects::EffectsChain::encodedStateBytes)
@@ -232,6 +334,27 @@ bool VstEngineAudioProcessor::prepareEffectsState(
 void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                            juce::MidiBuffer& midi)
 {
+  vstengine::rack::RealtimeMutationGate::AudioScope active(mutationGate);
+  if (!active) {
+    buffer.clear();
+    return;
+  }
+  if (buffer.getNumChannels() < 1 || buffer.getNumChannels() > 2 ||
+      buffer.getNumSamples() == 0) {
+    buffer.clear();
+    return;
+  }
+  if (mutationGate.takeRecovery()) {
+    // A skipped block may have held the final NoteOff. Clear ownership and
+    // voices before accepting new events; never leave an unrelated drone.
+    rack.reset();
+    auditionQueue.discard();
+    keyboardResetRequested.store(true);
+    auditionNotes.fill(false);
+    for (auto &scheduler : patternRuntime->schedulers)
+      scheduler.reset(currentSampleRate);
+    audioRouting.reset();
+  }
     const auto processStart = juce::Time::getHighResolutionTicks();
     if (!midi.isEmpty()) {
         midiActivity.store(12u, std::memory_order_relaxed);
@@ -418,25 +541,37 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
     wasTransportPlaying = playing;
 
-    keyboardScratch.clear();
-    keyboard.processNextMidiBuffer(keyboardScratch, 0, buffer.getNumSamples(), true);
-    for (const auto metadata : keyboardScratch) {
-        const auto message = metadata.getMessage();
-        if (message.isNoteOn(false))
-            auditionNotes[static_cast<std::size_t>(message.getNoteNumber())] = true;
-        else if (message.isNoteOff())
-            auditionNotes[static_cast<std::size_t>(message.getNoteNumber())] = false;
+    std::size_t auditionCount = 0;
+    while (auditionCount < auditionEvents.size() &&
+           auditionQueue.pop(auditionEvents[auditionCount])) {
+      const auto &event = auditionEvents[auditionCount++];
+      auditionNotes[event.data[1]] =
+          (event.data[0] & 0xf0) == 0x90 && event.data[2] != 0;
     }
-
-    const bool inputNotes = containsNoteEvents(midi);
+    const auto blockSamples =
+        static_cast<std::uint32_t>(buffer.getNumSamples());
+    bool hostOverflow = false;
+    auto hostCount = convertMidi(midi, hostEvents, blockSamples, &hostOverflow);
+    bool inputNotes = false;
+    for (std::size_t i = 0; i < hostCount; ++i)
+      if ((hostEvents[i].data[0] & 0xf0) == 0x80 ||
+          (hostEvents[i].data[0] & 0xf0) == 0x90)
+        inputNotes = true;
     const auto mode = currentMidiMode();
     for (auto& scratch : patternRuntime->generatedScratch) scratch.clear();
-    if (mode == MidiSourceMode::generator) midi.clear();
-    const bool panicThisBlock = panicRequested.exchange(false);
+    if (mode == MidiSourceMode::generator) {
+      midi.clear();
+      hostCount = 0;
+    }
+    const bool queueOverflow = auditionQueue.takeOverflow();
+    const bool panicThisBlock =
+        panicRequested.exchange(false) || queueOverflow || hostOverflow;
     if (panicThisBlock) {
         midi.clear();
-        keyboard.reset();
-        keyboardScratch.clear();
+        auditionQueue.discard();
+        keyboardResetRequested.store(true);
+        auditionCount = 0;
+        hostCount = 0;
         auditionNotes.fill(false);
         for (auto& scheduler : patternRuntime->schedulers)
             scheduler.reset(currentSampleRate);
@@ -477,10 +612,6 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 patternRuntime->generatedScratch[slot], 0);
     }
 
-    const auto blockSamples = static_cast<std::uint32_t>(buffer.getNumSamples());
-    const auto hostCount = convertMidi(midi, hostEvents, blockSamples);
-    const auto auditionCount = convertMidi(keyboardScratch, auditionEvents,
-                                           blockSamples);
     auto& generatedEvents = generatedRoutingScratch->events;
     auto& generatedStreams = generatedRoutingScratch->streams;
     for (std::size_t slot = 0; slot < generatedStreams.size(); ++slot) {
@@ -505,11 +636,24 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                  &audioRouting, &audioControls);
     returnTailSamples.store(audioRouting.tailSamples(),
                             std::memory_order_relaxed);
+    declaredTailSeconds.store(
+        currentSampleRate > 0.0
+            ? static_cast<double>(
+                  static_cast<std::uint64_t>(
+                      declaredRackTail.load(std::memory_order_relaxed)) +
+                  declaredEffectsTail.load(std::memory_order_relaxed) +
+                  audioRouting.tailSamples()) /
+                  currentSampleRate
+            : 0.0,
+        std::memory_order_relaxed);
     duckReduction.store(audioRouting.gainReduction(),
                         std::memory_order_relaxed);
     effectsChain.process({ outputs.data(), channels }, blockSamples);
-    masterGain.setTargetValue(
-        masterGainParameter->load(std::memory_order_relaxed));
+    const auto requestedGain =
+        masterGainParameter->load(std::memory_order_relaxed);
+    masterGain.setTargetValue(std::isfinite(requestedGain)
+                                  ? std::clamp(requestedGain, 0.0f, 2.0f)
+                                  : 0.0f);
     float peaks[2]{};
     for (std::uint32_t sample = 0; sample < blockSamples; ++sample) {
       const float gain = masterGain.getNextValue();
@@ -581,11 +725,14 @@ void VstEngineAudioProcessor::syncVoiceParameters()
 bool VstEngineAudioProcessor::containsNoteEvents(
     const juce::MidiBuffer& midi) noexcept
 {
-    for (const auto metadata : midi) {
-        const auto message = metadata.getMessage();
-        if (message.isNoteOnOrOff())
-            return true;
-    }
+  std::size_t scanned = 0;
+  for (const auto metadata : midi) {
+    if (++scanned > vstengine::rack::RackRouter::eventCapacity)
+      break;
+    if (metadata.numBytes == 3 && ((metadata.data[0] & 0xf0) == 0x80 ||
+                                   (metadata.data[0] & 0xf0) == 0x90))
+      return true;
+  }
 
     return false;
 }
@@ -654,31 +801,37 @@ void VstEngineAudioProcessor::readRackControlsFromParameters(
         controls.pan = refs.pan->load();
         for (std::size_t macro = 0; macro < refs.macros.size(); ++macro)
             controls.macros[macro] = refs.macros[macro]->load();
+        directParameterBank.read(slot, controls);
     }
 }
 
 std::size_t VstEngineAudioProcessor::convertMidi(
-    const juce::MidiBuffer& input,
-    std::array<VoxMidiEventV1,
-        vstengine::rack::RackRouter::eventCapacity>& output,
-    std::uint32_t sampleCount) noexcept
-{
-    std::size_t count = 0;
-    for (const auto metadata : input) {
-        const auto message = metadata.getMessage();
-        if (count >= output.size() || message.getRawDataSize() > 3
-            || metadata.samplePosition < 0
-            || static_cast<std::uint32_t>(metadata.samplePosition) >= sampleCount)
-            continue;
-        auto& event = output[count++];
-        event.sampleOffset = static_cast<std::uint32_t>(juce::jmax(
-            0, metadata.samplePosition));
-        event.size = static_cast<std::uint8_t>(message.getRawDataSize());
-        std::fill(std::begin(event.data), std::end(event.data),
-                  static_cast<std::uint8_t>(0));
-        std::copy_n(message.getRawData(), event.size, event.data);
+    const juce::MidiBuffer &input,
+    std::array<VoxMidiEventV1, vstengine::rack::RackRouter::eventCapacity>
+        &output,
+    std::uint32_t sampleCount, bool *overflow) noexcept {
+  std::size_t count = 0, scanned = 0;
+  if (overflow)
+    *overflow = false;
+  for (const auto metadata : input) {
+    if (++scanned > output.size()) {
+      if (overflow)
+        *overflow = true;
+      break;
     }
-    return count;
+    // Inspect raw metadata first: constructing MidiMessage for SysEx can
+    // malloc even though that message is unsupported and will be dropped.
+    if (metadata.numBytes < 1 || metadata.numBytes > 3 ||
+        metadata.samplePosition < 0 ||
+        static_cast<std::uint32_t>(metadata.samplePosition) >= sampleCount)
+      continue;
+    auto &event = output[count++];
+    event.sampleOffset = static_cast<std::uint32_t>(metadata.samplePosition);
+    event.size = static_cast<std::uint8_t>(metadata.numBytes);
+    std::fill(std::begin(event.data), std::end(event.data), std::uint8_t{});
+    std::copy_n(metadata.data, event.size, event.data);
+  }
+  return count;
 }
 
 void VstEngineAudioProcessor::syncPartControlsFromParameters(
@@ -732,12 +885,36 @@ void VstEngineAudioProcessor::syncParametersFromParts()
     juce::ignoreUnused(sync);
 }
 
+VstEngineAudioProcessor::SequenceEdit
+VstEngineAudioProcessor::sequenceEditSnapshot() {
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  const auto slot = selectedSlotIndex();
+  return {patternRuntime->slotSequences[slot], slot,
+          patternRuntime->revisions[slot]};
+}
+
+bool VstEngineAudioProcessor::commitSequenceEdit(SequenceEdit &edit) {
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  if (edit.slot >= patternRuntime->slotSequences.size() ||
+      selectedSlotIndex() != edit.slot ||
+      patternRuntime->revisions[edit.slot] != edit.revision)
+    return false;
+  patternRuntime->slotSequences[edit.slot] = edit.value;
+  publishPartSequenceForAudio(static_cast<int>(edit.slot));
+  edit.revision = patternRuntime->revisions[edit.slot];
+  return true;
+}
+
 void VstEngineAudioProcessor::publishPartSequenceForAudio(const int partIndex) noexcept
 {
-    if (partIndex >= 0
-        && partIndex < static_cast<int>(patternRuntime->sequenceBridges.size()))
-        patternRuntime->sequenceBridges[static_cast<std::size_t>(partIndex)].publish(
-            patternRuntime->slotSequences[static_cast<std::size_t>(partIndex)]);
+  if (partIndex >= 0 &&
+      partIndex < static_cast<int>(patternRuntime->sequenceBridges.size())) {
+    vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+    const auto slot = static_cast<std::size_t>(partIndex);
+    patternRuntime->sequenceBridges[slot].publish(
+        patternRuntime->slotSequences[slot]);
+    ++patternRuntime->revisions[slot];
+  }
 }
 
 std::array<vstengine::rack::PersistentSlotState,
@@ -750,16 +927,7 @@ VstEngineAudioProcessor::snapshotRackWithPatterns()
     for (std::size_t slot = 0; slot < snapshot.size(); ++slot)
         controls[slot] = vstengine::rack::processControls(snapshot[slot]);
     readRackControlsFromParameters(controls);
-    for (std::size_t slot = 0; slot < snapshot.size(); ++slot) {
-        snapshot[slot].routing = controls[slot].routing;
-        snapshot[slot].enabled = controls[slot].enabled;
-        snapshot[slot].mute = controls[slot].mute;
-        snapshot[slot].solo = controls[slot].solo;
-        snapshot[slot].locked = controls[slot].locked;
-        snapshot[slot].level = controls[slot].level;
-        snapshot[slot].pan = controls[slot].pan;
-        snapshot[slot].macros = controls[slot].macros;
-    }
+    snapshot = rack.snapshotState(controls);
     for (std::size_t slot = 0; slot < snapshot.size(); ++slot) {
         const auto* descriptor = rack.descriptor(slot);
         if (descriptor == nullptr
@@ -836,278 +1004,295 @@ void VstEngineAudioProcessor::clearVoiceGlideRequests() noexcept
 #endif
 
 juce::AudioProcessorValueTreeState::ParameterLayout
-VstEngineAudioProcessor::createParameterLayout()
-{
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+VstEngineAudioProcessor::createParameterLayout(
+    std::span<const vstengine::instrument::InstrumentDescriptor *const>
+        catalog) {
+  std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "drive", 1 }, "Drive",
-        juce::NormalisableRange<float> { 1.0f, 6.0f, 0.01f }, 1.8f));
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"drive", 1}, "Drive",
+      juce::NormalisableRange<float>{1.0f, 6.0f, 0.01f}, 1.8f));
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "release", 1 }, "Release",
-        juce::NormalisableRange<float> { 0.005f, 0.250f, 0.001f, 0.5f },
-        0.035f, "s"));
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"release", 1}, "Release",
+      juce::NormalisableRange<float>{0.005f, 0.250f, 0.001f, 0.5f}, 0.035f,
+      "s"));
 
+  params.push_back(std::make_unique<juce::AudioParameterChoice>(
+      juce::ParameterID{"midiMode", 1}, "MIDI Source",
+      juce::StringArray{"Auto", "Piano Roll", "Generator", "Both"}, 0));
+
+  params.push_back(std::make_unique<juce::AudioParameterInt>(
+      juce::ParameterID{"midiChannel", 1}, "Bass MIDI Channel", 1, 16, 1));
+
+  for (auto parameter :
+       {std::pair{"bassMute", "Bass Mute"}, std::pair{"bassSolo", "Bass Solo"},
+        std::pair{"bassLock", "Bass Lock"}})
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{parameter.first, 1}, parameter.second, false));
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"bassLevel", 1}, "Bass Part Level",
+      juce::NormalisableRange<float>{0.0f, 2.0f, 0.01f}, 1.0f));
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"bassPan", 1}, "Bass Part Pan",
+      juce::NormalisableRange<float>{-1.0f, 1.0f, 0.01f}, 0.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterInt>(
+      juce::ParameterID{"rootNote", 1}, "Generator Root Note", 24, 60, 36));
+
+  // Seed for the deterministic probability RNG used by realtime playback.
+  params.push_back(std::make_unique<juce::AudioParameterInt>(
+      juce::ParameterID{"rngSeed", 1}, "Generator Seed", 0,
+      static_cast<int>(vstengine::instrument::maxGenerationSeed), 1234));
+
+  // --- Resonant low-pass filter ---
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"filterCutoff", 1}, "Filter Cutoff",
+      juce::NormalisableRange<float>{0.02f, 0.95f, 0.001f, 0.4f}, 0.55f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"filterResonance", 1}, "Filter Resonance",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.7f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"filterDrive", 1}, "Filter Drive",
+      juce::NormalisableRange<float>{0.0f, 4.0f, 0.01f}, 1.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"keyTracking", 1}, "Key Tracking",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.2f));
+
+  // --- Per-parameter amp ADSR (release is the existing "release" knob) ---
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"ampAttack", 1}, "Amp Attack",
+      juce::NormalisableRange<float>{0.0005f, 0.100f, 0.0005f, 0.3f}, 0.001f,
+      "s"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"ampDecay", 1}, "Amp Decay",
+      juce::NormalisableRange<float>{0.005f, 1.0f, 0.001f, 0.4f}, 0.055f, "s"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"ampSustain", 1}, "Amp Sustain",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.72f));
+
+  // --- Pitch envelope ---
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"pitchEnvAmount", 1}, "Pitch Env Amount",
+      juce::NormalisableRange<float>{0.0f, 36.0f, 0.1f}, 12.0f, "st"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"pitchEnvTime", 1}, "Pitch Env Time",
+      juce::NormalisableRange<float>{0.001f, 0.5f, 0.001f, 0.4f}, 0.018f, "s"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"pitchEnvCurve", 1}, "Pitch Env Curve",
+      juce::NormalisableRange<float>{0.5f, 8.0f, 0.1f}, 2.0f));
+
+  // --- Output gain compensation ---
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"outputLevel", 1}, "Output Level",
+      juce::NormalisableRange<float>{0.0f, 2.0f, 0.01f, 0.6f}, 1.0f));
+
+  // --- Kick engine (issue #11 PHASE 5, exact parameter set) ---
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickPitchStart", 1}, "Kick Pitch Start",
+      juce::NormalisableRange<float>{0.0f, 36.0f, 0.1f}, 12.0f, "st"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickPitchEnd", 1}, "Kick Pitch End",
+      juce::NormalisableRange<float>{-24.0f, 24.0f, 0.1f}, 0.0f, "st"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickPitchDecay", 1}, "Kick Pitch Decay",
+      juce::NormalisableRange<float>{0.001f, 0.5f, 0.001f, 0.4f}, 0.03f, "s"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickPitchCurve", 1}, "Kick Pitch Curve",
+      juce::NormalisableRange<float>{0.5f, 8.0f, 0.1f}, 2.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickBodyDecay", 1}, "Kick Body Decay",
+      juce::NormalisableRange<float>{0.01f, 2.0f, 0.001f, 0.4f}, 0.16f, "s"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickTail", 1}, "Kick Tail",
+      juce::NormalisableRange<float>{0.0f, 4.0f, 0.001f, 0.5f}, 0.3f, "s"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickClick", 1}, "Kick Click",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.5f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickClickTone", 1}, "Kick Click Tone",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.5f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickDrive", 1}, "Kick Drive",
+      juce::NormalisableRange<float>{1.0f, 10.0f, 0.01f}, 1.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickClip", 1}, "Kick Clip",
+      juce::NormalisableRange<float>{0.1f, 1.0f, 0.005f}, 1.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickTransient", 1}, "Kick Transient",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.5f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickSub", 1}, "Kick Sub",
+      juce::NormalisableRange<float>{0.0f, 1.0f, 0.01f}, 0.4f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickTune", 1}, "Kick Tune",
+      juce::NormalisableRange<float>{24.0f, 48.0f, 1.0f}, 36.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickPhase", 1}, "Kick Phase",
+      juce::NormalisableRange<float>{0.0f, 360.0f, 1.0f}, 0.0f, "deg"));
+
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickOutputLevel", 1}, "Kick Output Level",
+      juce::NormalisableRange<float>{0.0f, 2.0f, 0.01f, 0.6f}, 1.0f));
+
+  params.push_back(std::make_unique<juce::AudioParameterInt>(
+      juce::ParameterID{"kickMidiChannel", 1}, "Kick MIDI Channel", 1, 16, 2));
+
+  for (auto parameter :
+       {std::pair{"kickMute", "Kick Mute"}, std::pair{"kickSolo", "Kick Solo"},
+        std::pair{"kickLock", "Kick Lock"}})
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{parameter.first, 1}, parameter.second, false));
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickLevel", 1}, "Kick Part Level",
+      juce::NormalisableRange<float>{0.0f, 2.0f, 0.01f}, 1.0f));
+  params.push_back(std::make_unique<juce::AudioParameterFloat>(
+      juce::ParameterID{"kickPan", 1}, "Kick Part Pan",
+      juce::NormalisableRange<float>{-1.0f, 1.0f, 0.01f}, 0.0f));
+
+  // --- Kick/bass match (issue #11 PHASE 6) ---
+  // User-visible bounded result of the match analysis: the bass's note
+  // events are delayed by this many ms relative to the kick attack
+  // (0 = no delay). Bound 16 ms by construction.
+  params.push_back(std::make_unique<juce::AudioParameterInt>(
+      juce::ParameterID{"matchBassTimingOffsetMs", 1}, "Bass Timing Offset", 0,
+      16, 0));
+
+  // Stable host-facing automation bank. Module-specific parameters map to
+  // these fixed IDs; loading another module never changes Cubase automation.
+  juce::StringArray midiInputs{"Off"};
+  for (int channel = 1; channel <= 16; ++channel)
+    midiInputs.add("CH" + juce::String(channel));
+  for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot) {
+    const auto id = [slot](std::string_view suffix) {
+      return juce::ParameterID{juce::String(slotParameterId(slot, suffix)), 1};
+    };
+    const auto label = "Slot " + juce::String(static_cast<int>(slot + 1)) + " ";
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID { "midiMode", 1 },
-        "MIDI Source",
-        juce::StringArray { "Auto", "Piano Roll", "Generator", "Both" },
-        0));
-
+        id("MidiIn"), label + "MIDI In", midiInputs,
+        slot < 2 ? static_cast<int>(slot + 1) : 0));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        id("Layer"), label + "Layer", false));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        juce::ParameterID { "midiChannel", 1 },
-        "Bass MIDI Channel",
-        1, 16, 1));
-
-    for (auto parameter : {
-             std::pair { "bassMute", "Bass Mute" },
-             std::pair { "bassSolo", "Bass Solo" },
-             std::pair { "bassLock", "Bass Lock" } })
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            juce::ParameterID { parameter.first, 1 }, parameter.second, false));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "bassLevel", 1 }, "Bass Part Level",
-        juce::NormalisableRange<float> { 0.0f, 2.0f, 0.01f }, 1.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "bassPan", 1 }, "Bass Part Pan",
-        juce::NormalisableRange<float> { -1.0f, 1.0f, 0.01f }, 0.0f));
-
+        id("KeyLow"), label + "Key Low", 0, 127, 0));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        juce::ParameterID { "rootNote", 1 },
-        "Generator Root Note",
-        24, 60, 36));
-
-    // Seed for the deterministic probability RNG used by realtime playback.
+        id("KeyHigh"), label + "Key High", 0, 127, 127));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        juce::ParameterID { "rngSeed", 1 },
-        "Generator Seed",
-        0, 2147483647, 1234));
-
-    // --- Resonant low-pass filter ---
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "filterCutoff", 1 }, "Filter Cutoff",
-        juce::NormalisableRange<float> { 0.02f, 0.95f, 0.001f, 0.4f },
-        0.55f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "filterResonance", 1 }, "Filter Resonance",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f },
-        0.7f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "filterDrive", 1 }, "Filter Drive",
-        juce::NormalisableRange<float> { 0.0f, 4.0f, 0.01f },
-        1.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "keyTracking", 1 }, "Key Tracking",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f },
-        0.2f));
-
-    // --- Per-parameter amp ADSR (release is the existing "release" knob) ---
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "ampAttack", 1 }, "Amp Attack",
-        juce::NormalisableRange<float> { 0.0005f, 0.100f, 0.0005f, 0.3f },
-        0.001f, "s"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "ampDecay", 1 }, "Amp Decay",
-        juce::NormalisableRange<float> { 0.005f, 1.0f, 0.001f, 0.4f },
-        0.055f, "s"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "ampSustain", 1 }, "Amp Sustain",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f },
-        0.72f));
-
-    // --- Pitch envelope ---
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "pitchEnvAmount", 1 }, "Pitch Env Amount",
-        juce::NormalisableRange<float> { 0.0f, 36.0f, 0.1f },
-        12.0f, "st"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "pitchEnvTime", 1 }, "Pitch Env Time",
-        juce::NormalisableRange<float> { 0.001f, 0.5f, 0.001f, 0.4f },
-        0.018f, "s"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "pitchEnvCurve", 1 }, "Pitch Env Curve",
-        juce::NormalisableRange<float> { 0.5f, 8.0f, 0.1f },
-        2.0f));
-
-    // --- Output gain compensation ---
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "outputLevel", 1 }, "Output Level",
-        juce::NormalisableRange<float> { 0.0f, 2.0f, 0.01f, 0.6f },
-        1.0f));
-
-    // --- Kick engine (issue #11 PHASE 5, exact parameter set) ---
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickPitchStart", 1 }, "Kick Pitch Start",
-        juce::NormalisableRange<float> { 0.0f, 36.0f, 0.1f }, 12.0f, "st"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickPitchEnd", 1 }, "Kick Pitch End",
-        juce::NormalisableRange<float> { -24.0f, 24.0f, 0.1f }, 0.0f, "st"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickPitchDecay", 1 }, "Kick Pitch Decay",
-        juce::NormalisableRange<float> { 0.001f, 0.5f, 0.001f, 0.4f },
-        0.03f, "s"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickPitchCurve", 1 }, "Kick Pitch Curve",
-        juce::NormalisableRange<float> { 0.5f, 8.0f, 0.1f }, 2.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickBodyDecay", 1 }, "Kick Body Decay",
-        juce::NormalisableRange<float> { 0.01f, 2.0f, 0.001f, 0.4f },
-        0.16f, "s"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickTail", 1 }, "Kick Tail",
-        juce::NormalisableRange<float> { 0.0f, 4.0f, 0.001f, 0.5f },
-        0.3f, "s"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickClick", 1 }, "Kick Click",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickClickTone", 1 }, "Kick Click Tone",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickDrive", 1 }, "Kick Drive",
-        juce::NormalisableRange<float> { 1.0f, 10.0f, 0.01f }, 1.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickClip", 1 }, "Kick Clip",
-        juce::NormalisableRange<float> { 0.1f, 1.0f, 0.005f }, 1.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickTransient", 1 }, "Kick Transient",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickSub", 1 }, "Kick Sub",
-        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 0.4f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickTune", 1 }, "Kick Tune",
-        juce::NormalisableRange<float> { 24.0f, 48.0f, 1.0f }, 36.0f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickPhase", 1 }, "Kick Phase",
-        juce::NormalisableRange<float> { 0.0f, 360.0f, 1.0f }, 0.0f, "deg"));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickOutputLevel", 1 }, "Kick Output Level",
-        juce::NormalisableRange<float> { 0.0f, 2.0f, 0.01f, 0.6f },
-        1.0f));
-
+        id("VelocityLow"), label + "Velocity Low", 1, 127, 1));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        juce::ParameterID { "kickMidiChannel", 1 },
-        "Kick MIDI Channel",
-        1, 16, 2));
-
-    for (auto parameter : {
-             std::pair { "kickMute", "Kick Mute" },
-             std::pair { "kickSolo", "Kick Solo" },
-             std::pair { "kickLock", "Kick Lock" } })
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            juce::ParameterID { parameter.first, 1 }, parameter.second, false));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickLevel", 1 }, "Kick Part Level",
-        juce::NormalisableRange<float> { 0.0f, 2.0f, 0.01f }, 1.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { "kickPan", 1 }, "Kick Part Pan",
-        juce::NormalisableRange<float> { -1.0f, 1.0f, 0.01f }, 0.0f));
-
-    // --- Kick/bass match (issue #11 PHASE 6) ---
-    // User-visible bounded result of the match analysis: the bass's note
-    // events are delayed by this many ms relative to the kick attack
-    // (0 = no delay). Bound 16 ms by construction.
+        id("VelocityHigh"), label + "Velocity High", 1, 127, 127));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        juce::ParameterID { "matchBassTimingOffsetMs", 1 },
-        "Bass Timing Offset",
-        0, 16, 0));
+        id("Transpose"), label + "Transpose", -48, 48, 0));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        id("Enabled"), label + "Enabled", true));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        id("Mute"), label + "Mute", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        id("Solo"), label + "Solo", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        id("Lock"), label + "Lock", false));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        id("Level"), label + "Level",
+        juce::NormalisableRange<float>{0.0f, 2.0f, 0.001f}, 1.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        id("Pan"), label + "Pan",
+        juce::NormalisableRange<float>{-1.0f, 1.0f, 0.001f}, 0.0f));
+    for (std::size_t macro = 0; macro < vstengine::instrument::macrosPerSlot;
+         ++macro)
+      params.push_back(std::make_unique<juce::AudioParameterFloat>(
+          juce::ParameterID{
+              vstengine::instrument::hostparams::macroId(slot, macro), 1},
+          vstengine::instrument::hostparams::macroName(slot, macro),
+          juce::NormalisableRange<float>{0.0f, 1.0f, 0.0001f}, 0.5f));
+  }
 
-    // Stable host-facing automation bank. Module-specific parameters map to
-    // these fixed IDs; loading another module never changes Cubase automation.
-    juce::StringArray midiInputs { "Off" };
-    for (int channel = 1; channel <= 16; ++channel)
-        midiInputs.add("CH" + juce::String(channel));
-    for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot) {
-        const auto id = [slot](std::string_view suffix) {
-            return juce::ParameterID {
-                juce::String(slotParameterId(slot, suffix)), 1 };
-        };
-        const auto label = "Slot " + juce::String(static_cast<int>(slot + 1)) + " ";
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(
-            id("MidiIn"), label + "MIDI In", midiInputs,
-            slot < 2 ? static_cast<int>(slot + 1) : 0));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            id("Layer"), label + "Layer", false));
-        params.push_back(std::make_unique<juce::AudioParameterInt>(
-            id("KeyLow"), label + "Key Low", 0, 127, 0));
-        params.push_back(std::make_unique<juce::AudioParameterInt>(
-            id("KeyHigh"), label + "Key High", 0, 127, 127));
-        params.push_back(std::make_unique<juce::AudioParameterInt>(
-            id("VelocityLow"), label + "Velocity Low", 1, 127, 1));
-        params.push_back(std::make_unique<juce::AudioParameterInt>(
-            id("VelocityHigh"), label + "Velocity High", 1, 127, 127));
-        params.push_back(std::make_unique<juce::AudioParameterInt>(
-            id("Transpose"), label + "Transpose", -48, 48, 0));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            id("Enabled"), label + "Enabled", true));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            id("Mute"), label + "Mute", false));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            id("Solo"), label + "Solo", false));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            id("Lock"), label + "Lock", false));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            id("Level"), label + "Level",
-            juce::NormalisableRange<float> { 0.0f, 2.0f, 0.001f }, 1.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            id("Pan"), label + "Pan",
-            juce::NormalisableRange<float> { -1.0f, 1.0f, 0.001f }, 0.0f));
-        for (std::size_t macro = 0;
-             macro < vstengine::instrument::macrosPerSlot; ++macro)
-            params.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID {
-                    vstengine::instrument::hostparams::macroId(slot, macro), 1 },
-                vstengine::instrument::hostparams::macroName(slot, macro),
-                juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f }, 0.5f));
+  vstengine::host::appendRackAudioParameters(params);
+  vstengine::host::appendDirectParameters(params, catalog);
+  return {params.begin(), params.end()};
+}
+
+bool VstEngineAudioProcessor::preflightDirectState(
+    const std::array<vstengine::rack::PersistentSlotState,
+                     vstengine::instrument::maxSlots> &state) const noexcept {
+  try {
+    for (std::size_t slot = 0; slot < state.size(); ++slot) {
+      const auto resolution =
+          instrumentRegistry.resolve(state[slot].instrumentId);
+      if (resolution && resolution.descriptor->directParameters &&
+          (state[slot].instrumentVersion == 0 ||
+           state[slot].instrumentVersion ==
+               resolution.descriptor->instrumentVersion) &&
+          (state[slot].contentVersion == 0 ||
+           state[slot].contentVersion ==
+               resolution.descriptor->contentVersion) &&
+          state[slot].instrumentStateVersion ==
+              resolution.descriptor->stateVersion &&
+          state[slot].patternSchemaVersion <= VOX_PATTERN_SCHEMA_V1 &&
+          !directParameterBank.canSelectAndRestore(slot, state[slot]))
+        return false;
     }
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
 
-    vstengine::host::appendRackAudioParameters(params);
-    return { params.begin(), params.end() };
+void VstEngineAudioProcessor::syncDirectParametersFromRack(
+    std::size_t onlySlot) {
+  const auto &snapshot = rack.state();
+  const auto runtime = rack.runtimeState();
+  for (std::size_t slot = 0; slot < snapshot.size(); ++slot)
+    if (onlySlot == vstengine::instrument::maxSlots || onlySlot == slot) {
+      if (runtime[slot].resolution !=
+          vstengine::instrument::ResolutionStatus::resolved)
+        directParameterBank.deactivate(slot);
+      else if (!directParameterBank.selectAndRestore(slot, snapshot[slot]))
+        throw std::logic_error("validated direct state has no host binding");
+    }
 }
 
 bool VstEngineAudioProcessor::loadSlotInstrument(
     std::size_t slot, std::string_view instrumentId, juce::String& diagnostic)
 {
-    suspendProcessing(true);
-    std::string detail;
-    const bool accepted = rack.loadModule(slot, instrumentId, nullptr, detail);
-    if (accepted) {
-      const auto &values = rack.state()[slot].macros;
-      for (std::size_t i = 0; i < values.size(); ++i)
-        if (auto *parameter = apvts.getParameter(
-                vstengine::instrument::hostparams::macroId(slot, i).c_str())) {
-          parameter->beginChangeGesture();
-          parameter->setValueNotifyingHost(values[i]);
-          parameter->endChangeGesture();
-        }
-        patternRuntime->slotSequences[slot].clear();
-        publishPartSequenceForAudio(static_cast<int>(slot));
-        patternRuntime->schedulers[slot].reset(currentSampleRate);
-    }
-    suspendProcessing(false);
+  vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
+  std::string detail;
+  const bool accepted = rack.loadModule(slot, instrumentId, nullptr, detail);
+  if (accepted) {
+    syncDirectParametersFromRack(slot);
+    updateReportedLatencyAndTails();
+    const auto &values = rack.state()[slot].macros;
+    for (std::size_t i = 0; i < values.size(); ++i)
+      if (auto *parameter = apvts.getParameter(
+              vstengine::instrument::hostparams::macroId(slot, i).c_str())) {
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost(values[i]);
+        parameter->endChangeGesture();
+      }
+    patternRuntime->slotSequences[slot].clear();
+    publishPartSequenceForAudio(static_cast<int>(slot));
+    patternRuntime->schedulers[slot].reset(currentSampleRate);
+  }
+
     diagnostic = detail;
     return accepted;
 }
@@ -1115,12 +1300,13 @@ bool VstEngineAudioProcessor::loadSlotInstrument(
 std::span<const vstengine::instrument::ContentDescriptor>
 VstEngineAudioProcessor::selectedContent() const noexcept
 {
-    const auto index = selectedSlotIndex();
-    const auto& state = rack.state()[index];
-    const auto resolution = instrumentRegistry.resolve(state.instrumentId);
-    return resolution && resolution.provider != nullptr
-        ? resolution.provider->contentDescriptors(state.instrumentId)
-        : std::span<const vstengine::instrument::ContentDescriptor> {};
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  const auto index = selectedSlotIndex();
+  const auto &state = rack.state()[index];
+  const auto resolution = instrumentRegistry.resolve(state.instrumentId);
+  return resolution && resolution.provider != nullptr
+             ? resolution.provider->contentDescriptors(state.instrumentId)
+             : std::span<const vstengine::instrument::ContentDescriptor>{};
 }
 
 std::uint32_t VstEngineAudioProcessor::selectedSequenceFieldMask() const noexcept
@@ -1137,17 +1323,21 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
     std::string_view presetId, juce::String& diagnostic)
 {
     const auto index = selectedSlotIndex();
-    suspendProcessing(true);
+    vstengine::rack::RealtimeMutationGate::ControllerScope mutation(
+        mutationGate);
     std::string detail;
     const bool accepted = rack.applySoundPreset(index, presetId, nullptr, detail);
     if (accepted) {
-        const auto& values = rack.state()[index].macros;
-        for (std::size_t macro = 0; macro < values.size(); ++macro)
-            if (auto* parameter = apvts.getParameter(
-                    vstengine::instrument::hostparams::macroId(index, macro).c_str()))
-                parameter->setValueNotifyingHost(values[macro]);
+      syncDirectParametersFromRack(index);
+      updateReportedLatencyAndTails();
+      const auto &values = rack.state()[index].macros;
+      for (std::size_t macro = 0; macro < values.size(); ++macro)
+        if (auto *parameter = apvts.getParameter(
+                vstengine::instrument::hostparams::macroId(index, macro)
+                    .c_str()))
+          parameter->setValueNotifyingHost(values[macro]);
     }
-    suspendProcessing(false);
+
     diagnostic = detail;
     return accepted;
 }
@@ -1155,28 +1345,30 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
 bool VstEngineAudioProcessor::generateSelectedPattern(
     std::string_view profileId, juce::String& diagnostic)
 {
-    const auto index = selectedSlotIndex();
-    if (rackParameterRefs[index].locked->load() >= 0.5f) {
-        diagnostic = "Slot locked";
-        return false;
-    }
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  const auto index = selectedSlotIndex();
+  if (rackParameterRefs[index].locked->load() >= 0.5f) {
+    diagnostic = "Slot locked";
+    return false;
+  }
     vstengine::sequence::Sequence candidate;
     std::vector<std::byte> encoded;
     if (!prepareGeneratedPattern(index, profileId, nullptr, 0.0f, -1, -1,
                                  candidate, encoded, diagnostic))
         return false;
-    suspendProcessing(true);
+    vstengine::rack::RealtimeMutationGate::ControllerScope mutation(
+        mutationGate);
     if (!rack.updatePatternState(index, std::string(profileId),
                                  VOX_PATTERN_SCHEMA_V1,
                                  std::move(encoded))) {
-        suspendProcessing(false);
+
         diagnostic = "pattern state commit failed";
         return false;
     }
     patternRuntime->slotSequences[index] = std::move(candidate);
     publishPartSequenceForAudio(static_cast<int>(index));
     patternRuntime->schedulers[index].reset(currentSampleRate);
-    suspendProcessing(false);
+
     diagnostic.clear();
     return true;
 }
@@ -1254,11 +1446,12 @@ bool VstEngineAudioProcessor::prepareGeneratedPattern(
 bool VstEngineAudioProcessor::mutateSelectedPattern(
     bool selectedStepsOnly, juce::String& diagnostic)
 {
-    const auto index = selectedSlotIndex();
-    if (rackParameterRefs[index].locked->load() >= 0.5f) {
-        diagnostic = "Slot locked";
-        return false;
-    }
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  const auto index = selectedSlotIndex();
+  if (rackParameterRefs[index].locked->load() >= 0.5f) {
+    diagnostic = "Slot locked";
+    return false;
+  }
     const auto profile = generatorProfileForSlot(index);
     const auto input = vstengine::sequence::toPattern(
         patternRuntime->slotSequences[index]);
@@ -1273,7 +1466,8 @@ bool VstEngineAudioProcessor::mutateSelectedPattern(
                                  candidate, encoded, diagnostic))
         return false;
     if (start >= 0) candidate.setSelectedRange(start, end);
-    suspendProcessing(true);
+    vstengine::rack::RealtimeMutationGate::ControllerScope mutation(
+        mutationGate);
     const auto committed = rack.updatePatternState(index, profile,
         VOX_PATTERN_SCHEMA_V1, std::move(encoded));
     if (committed) {
@@ -1281,7 +1475,7 @@ bool VstEngineAudioProcessor::mutateSelectedPattern(
         publishPartSequenceForAudio(static_cast<int>(index));
         patternRuntime->schedulers[index].reset(currentSampleRate);
     }
-    suspendProcessing(false);
+
     diagnostic = committed ? juce::String {} : "pattern state commit failed";
     return committed;
 }
@@ -1289,40 +1483,43 @@ bool VstEngineAudioProcessor::mutateSelectedPattern(
 bool VstEngineAudioProcessor::runGlobalPatternOperation(
     bool mutate, juce::String& diagnostic)
 {
-    std::array<vstengine::sequence::Sequence,
-               vstengine::instrument::maxSlots> candidates;
-    std::array<std::vector<std::byte>,
-               vstengine::instrument::maxSlots> encoded;
-    std::array<std::string, vstengine::instrument::maxSlots> profiles;
-    std::array<bool, vstengine::instrument::maxSlots> changed {};
-    std::size_t changedCount {};
-    for (std::size_t index = 0; index < changed.size(); ++index) {
-        if (rackParameterRefs[index].locked->load() >= 0.5f) continue;
-        const auto* descriptor = rack.descriptor(index);
-        if (descriptor == nullptr
-            || (descriptor->capabilities
-                & vstengine::instrument::Capability::patternGenerator) == 0)
-            continue;
-        profiles[index] = generatorProfileForSlot(index);
-        const auto input = vstengine::sequence::toPattern(
-            patternRuntime->slotSequences[index]);
-        if (!prepareGeneratedPattern(index, profiles[index],
-                mutate ? &input : nullptr, mutate ? 0.35f : 0.0f, -1, -1,
-                candidates[index], encoded[index], diagnostic))
-            return false;
-        changed[index] = true;
-        ++changedCount;
-    }
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  std::array<vstengine::sequence::Sequence, vstengine::instrument::maxSlots>
+      candidates;
+  std::array<std::vector<std::byte>, vstengine::instrument::maxSlots> encoded;
+  std::array<std::string, vstengine::instrument::maxSlots> profiles;
+  std::array<bool, vstengine::instrument::maxSlots> changed{};
+  std::size_t changedCount{};
+  for (std::size_t index = 0; index < changed.size(); ++index) {
+    if (rackParameterRefs[index].locked->load() >= 0.5f)
+      continue;
+    const auto *descriptor = rack.descriptor(index);
+    if (descriptor == nullptr ||
+        (descriptor->capabilities &
+         vstengine::instrument::Capability::patternGenerator) == 0)
+      continue;
+    profiles[index] = generatorProfileForSlot(index);
+    const auto input =
+        vstengine::sequence::toPattern(patternRuntime->slotSequences[index]);
+    if (!prepareGeneratedPattern(index, profiles[index],
+                                 mutate ? &input : nullptr,
+                                 mutate ? 0.35f : 0.0f, -1, -1,
+                                 candidates[index], encoded[index], diagnostic))
+      return false;
+    changed[index] = true;
+    ++changedCount;
+  }
     if (changedCount == 0) {
         diagnostic = "No unlocked generator slots";
         return false;
     }
-    suspendProcessing(true);
+    vstengine::rack::RealtimeMutationGate::ControllerScope mutation(
+        mutationGate);
     for (std::size_t index = 0; index < changed.size(); ++index) {
         if (!changed[index]) continue;
         if (!rack.updatePatternState(index, profiles[index],
                 VOX_PATTERN_SCHEMA_V1, std::move(encoded[index]))) {
-            suspendProcessing(false);
+
             diagnostic = "global pattern commit failed";
             return false;
         }
@@ -1330,7 +1527,7 @@ bool VstEngineAudioProcessor::runGlobalPatternOperation(
         publishPartSequenceForAudio(static_cast<int>(index));
         patternRuntime->schedulers[index].reset(currentSampleRate);
     }
-    suspendProcessing(false);
+
     diagnostic = juce::String(static_cast<int>(changedCount))
         + (mutate ? " slots mutated" : " slots generated");
     return true;
@@ -1363,10 +1560,11 @@ bool VstEngineAudioProcessor::assignSlotChannel(
     std::size_t slot, int channel, ChannelConflictAction action,
     juce::String& diagnostic)
 {
-    if (slot >= rackParameterRefs.size() || channel < 0 || channel > 16) {
-        diagnostic = "Invalid slot/channel";
-        return false;
-    }
+  vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
+  if (slot >= rackParameterRefs.size() || channel < 0 || channel > 16) {
+    diagnostic = "Invalid slot/channel";
+    return false;
+  }
     auto setPlain = [this](const std::string& id, float value) {
         if (auto* parameter = apvts.getParameter(id.c_str())) {
             parameter->beginChangeGesture();
@@ -1408,212 +1606,181 @@ bool VstEngineAudioProcessor::assignSlotChannel(
 
 juce::File VstEngineAudioProcessor::createPartMidiFile(const int partIndex)
 {
-    // Export goes through the shared MIDI export builder so timing mode,
-    // ratchet and slide behave exactly as documented and identically to
-    // realtime playback.
-    vstengine::midiexport::Options options;
-    if (partIndex != 0)
-        return {};
-    constexpr std::size_t index = 0;
-    const auto& slot = rack.state()[index];
-    const int inputChannel = static_cast<int>(std::lround(
-        rackParameterRefs[index].midiIn->load()));
-    options.channel = juce::jlimit(1, 16, inputChannel);
-    options.rootNote = juce::jlimit(0, 127, static_cast<int>(
-        apvts.getRawParameterValue("rootNote")->load()));
-    options.seed = vstengine::instrument::generationSubSeed(
-        static_cast<std::uint32_t>(apvts.getRawParameterValue("rngSeed")->load()),
-        slot.slotId, slot.instrumentId);
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  // Export goes through the shared MIDI export builder so timing mode,
+  // ratchet and slide behave exactly as documented and identically to
+  // realtime playback.
+  vstengine::midiexport::Options options;
+  if (partIndex != 0)
+    return {};
+  constexpr std::size_t index = 0;
+  const auto &slot = rack.state()[index];
+  const int inputChannel =
+      static_cast<int>(std::lround(rackParameterRefs[index].midiIn->load()));
+  options.channel = juce::jlimit(1, 16, inputChannel);
+  options.rootNote = juce::jlimit(
+      0, 127, static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
+  options.seed = vstengine::instrument::generationSubSeed(
+      static_cast<std::uint32_t>(apvts.getRawParameterValue("rngSeed")->load()),
+      slot.slotId, slot.instrumentId);
 
-    const auto exportSequence =
-        patternRuntime->slotSequences[index];
-    const auto track =
-        vstengine::midiexport::buildSequenceTrack(exportSequence, options);
+  const auto exportSequence = patternRuntime->slotSequences[index];
+  const auto track =
+      vstengine::midiexport::buildSequenceTrack(exportSequence, options);
 
-    juce::MidiFile midiFile;
-    midiFile.setTicksPerQuarterNote(
-        static_cast<int>(options.ticksPerQuarter));
-    midiFile.addTrack(track);
+  juce::MidiFile midiFile;
+  midiFile.setTicksPerQuarterNote(static_cast<int>(options.ticksPerQuarter));
+  midiFile.addTrack(track);
 
-    const auto tempFile =
-        juce::File::getSpecialLocation(juce::File::tempDirectory)
-            .getChildFile("Vox-Trance-Engine-Bass.mid");
+  const auto tempFile =
+      juce::File::getSpecialLocation(juce::File::tempDirectory)
+          .getChildFile("Vox-Trance-Engine-Bass.mid");
 
-    tempFile.deleteFile();
+  tempFile.deleteFile();
 
-    if (auto stream = tempFile.createOutputStream()) {
-        if (midiFile.writeTo(*stream))
-            return tempFile;
-    }
+  if (auto stream = tempFile.createOutputStream()) {
+    if (midiFile.writeTo(*stream))
+      return tempFile;
+  }
 
     return {};
 }
 
-void VstEngineAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
-{
-    auto tree = apvts.copyState();
-    for (;;) {
-        const auto stale = tree.getChildWithName("PARTS");
-        if (!stale.isValid())
-            break;
-        tree.removeChild(stale, nullptr);
-    }
-    for (;;) {
-        const auto stale = tree.getChildWithName("RACK");
-        if (!stale.isValid()) break;
-        tree.removeChild(stale, nullptr);
-    }
-    for (;;) {
-        const auto stale = tree.getChildWithName("EFFECTS");
-        if (!stale.isValid()) break;
-        tree.removeChild(stale, nullptr);
-    }
-    tree.setProperty("stateSchemaVersion", 4, nullptr);
-    tree.addChild(vstengine::rack::state::serialize(
-        snapshotRackWithPatterns()), -1, nullptr);
-    tree.addChild(captureEffectsState(), -1, nullptr);
-    tree.removeProperty("sequenceData", nullptr);
-    std::unique_ptr<juce::XmlElement> xml(tree.createXml());
-    copyXmlToBinary(*xml, destData);
+juce::ValueTree VstEngineAudioProcessor::captureProjectState() {
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  auto tree = apvts.copyState();
+  for (;;) {
+    const auto stale = tree.getChildWithName("PARTS");
+    if (!stale.isValid())
+      break;
+    tree.removeChild(stale, nullptr);
+  }
+  for (;;) {
+    const auto stale = tree.getChildWithName("RACK");
+    if (!stale.isValid())
+      break;
+    tree.removeChild(stale, nullptr);
+  }
+  for (;;) {
+    const auto stale = tree.getChildWithName("EFFECTS");
+    if (!stale.isValid())
+      break;
+    tree.removeChild(stale, nullptr);
+  }
+  tree.setProperty("stateSchemaVersion", 5, nullptr);
+  tree.addChild(vstengine::rack::state::serialize(snapshotRackWithPatterns()),
+                -1, nullptr);
+  tree.addChild(captureEffectsState(), -1, nullptr);
+  tree.removeProperty("sequenceData", nullptr);
+  return tree;
 }
 
-void VstEngineAudioProcessor::setStateInformation(const void* data,
-                                                    const int sizeInBytes)
-{
-    if (auto xml = getXmlFromBinary(data, sizeInBytes)) {
-        auto tree = juce::ValueTree::fromXml(*xml);
-        const auto rackTree = tree.getChildWithName("RACK");
-        const auto effectsTree = tree.getChildWithName("EFFECTS");
-        vstengine::effects::EffectsChain candidateEffects;
-        if (!prepareEffectsState(effectsTree, candidateEffects)) return;
-        std::array<vstengine::rack::PersistentSlotState,
-                   vstengine::instrument::maxSlots> parsedRack;
-        std::string rackDiagnostic;
-        if (rackTree.isValid()) {
-            if (!vstengine::rack::state::deserialize(
-                    rackTree, parsedRack, rackDiagnostic))
-                return;
-        }
-        const auto previousSequences = patternRuntime->slotSequences;
-        suspendProcessing(true);
-        if (rackTree.isValid() && !restoreSlotPatterns(parsedRack, true)) {
-            suspendProcessing(false);
-            return;
-        }
-        const auto partState = tree.getChildWithName("PARTS");
-        const bool restoredParts =
-            vstengine::parts::PartState::restore(partState, parts);
-        auto apvtsState = tree.createCopy();
-        for (;;) {
-            const auto extra = apvtsState.getChildWithName("PARTS");
-            if (!extra.isValid())
-                break;
-            apvtsState.removeChild(extra, nullptr);
-        }
-        for (;;) {
-            const auto extra = apvtsState.getChildWithName("RACK");
-            if (!extra.isValid()) break;
-            apvtsState.removeChild(extra, nullptr);
-        }
-        for (;;) {
-            const auto extra = apvtsState.getChildWithName("EFFECTS");
-            if (!extra.isValid()) break;
-            apvtsState.removeChild(extra, nullptr);
-        }
-        const auto previousApvts = apvts.copyState();
-        apvts.replaceState(apvtsState);
-        if (rackTree.isValid()
-            && !rack.replaceState(parsedRack, nullptr, rackDiagnostic)) {
-            apvts.replaceState(previousApvts);
-            patternRuntime->slotSequences = previousSequences;
-            for (std::size_t slot = 0;
-                 slot < patternRuntime->slotSequences.size(); ++slot)
-                publishPartSequenceForAudio(static_cast<int>(slot));
-            suspendProcessing(false);
-            return;
-        }
-        if (rackTree.isValid())
-            for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
-                rackControls[slot].slotId = parsedRack[slot].slotId;
-        effectsChain = std::move(candidateEffects);
-        audioRouting.reset();
-        returnTailSamples.store(0);
-        duckReduction.store(0);
+void VstEngineAudioProcessor::getStateInformation(juce::MemoryBlock &destData) {
+  const auto tree = captureProjectState();
+  const auto xml = tree.createXml();
+  copyXmlToBinary(*xml, destData);
+}
 
-        if (!rackTree.isValid() && restoredParts) {
-            // Keep old Kick data readable, but never reactivate removed product
-            // content. Map it to explicit unresolved Rack state.
-            parts[1].enabled = false;
-            syncParametersFromParts();
-            auto migrated = rack.state();
-            migrated[0].instrumentId = vstengine::modules::bassInstrumentId;
-            migrated[0].routing.mode = vstengine::rack::RouteMode::channel;
-            migrated[0].routing.channel = static_cast<std::uint8_t>(parts[0].midiChannel);
-            migrated[0].mute = parts[0].mute; migrated[0].solo = parts[0].solo;
-            migrated[0].locked = parts[0].locked; migrated[0].level = parts[0].level;
-            migrated[0].pan = parts[0].pan;
-            migrated[1].instrumentId = "com.ultimavox.legacy-kick";
-            migrated[1].routing.mode = vstengine::rack::RouteMode::off;
-            migrated[1].routing.channel = static_cast<std::uint8_t>(parts[1].midiChannel);
-            migrated[1].enabled = false;
-            if (auto legacyXml = partState.createXml()) {
-                const auto text = legacyXml->toString().toStdString();
-                migrated[1].modulePayload.resize(text.size());
-                std::memcpy(migrated[1].modulePayload.data(), text.data(), text.size());
-            }
-            std::string diagnostic;
-            (void) rack.replaceState(migrated, nullptr, diagnostic);
-            for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
-                rackControls[slot].slotId = migrated[slot].slotId;
-            auto setPlain = [this](const std::string& id, float value) {
-                if (auto* parameter = apvts.getParameter(id.c_str()))
-                    parameter->setValueNotifyingHost(
-                        parameter->convertTo0to1(value));
-            };
-            setPlain(slotParameterId(0, "MidiIn"),
-                     static_cast<float>(parts[0].midiChannel));
-            setPlain(slotParameterId(0, "Mute"), parts[0].mute ? 1.0f : 0.0f);
-            setPlain(slotParameterId(0, "Solo"), parts[0].solo ? 1.0f : 0.0f);
-            setPlain(slotParameterId(0, "Lock"), parts[0].locked ? 1.0f : 0.0f);
-            setPlain(slotParameterId(0, "Level"), parts[0].level);
-            setPlain(slotParameterId(0, "Pan"), parts[0].pan);
-            setPlain(slotParameterId(1, "MidiIn"), 0.0f);
-            setPlain(slotParameterId(1, "Enabled"), 0.0f);
-            const std::array<float, 8> migratedMacros {
-                apvts.getRawParameterValue("filterCutoff")->load(),
-                apvts.getRawParameterValue("filterResonance")->load(),
-                apvts.getRawParameterValue("pitchEnvAmount")->load() / 36.0f,
-                juce::jlimit(0.0f, 1.0f,
-                    (apvts.getRawParameterValue("ampDecay")->load() - 0.015f)
-                    / 0.18f),
-                juce::jlimit(0.0f, 1.0f,
-                    (apvts.getRawParameterValue("drive")->load() - 1.0f) / 5.0f),
-                apvts.getRawParameterValue("ampSustain")->load(), 0.0f,
-                apvts.getRawParameterValue("keyTracking")->load()
-            };
-            for (std::size_t macro = 0; macro < migratedMacros.size(); ++macro)
-                setPlain(vstengine::instrument::hostparams::macroId(0, macro),
-                         migratedMacros[macro]);
-        } else if (!rackTree.isValid()) {
-            // PR #18 migration: APVTS routing + legacy Sequence -> Bass Part;
-            // Kick keeps canonical defaults and independent empty sequence.
-            syncPartControlsFromParameters(parts);
-        }
-        if (!rackTree.isValid()
-            || static_cast<int>(rackTree.getProperty("schemaVersion", 1)) == 1) {
-            const auto seqBase64 = tree.getProperty("sequenceData").toString();
-            juce::MemoryBlock sequenceData;
-            if (sequenceData.fromBase64Encoding(seqBase64)
-                && vstengine::sequence::Sequence::isValidSerialization(sequenceData))
-                patternRuntime->slotSequences[0] =
-                    vstengine::sequence::Sequence::deserialize(sequenceData);
-        }
+bool VstEngineAudioProcessor::restoreProjectState(const juce::ValueTree &tree) {
+  vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
+  if (!tree.hasType("PARAMETERS") || !hasVersion(tree, "stateSchemaVersion", 5))
+    return false;
+  if (!validateProjectParameters(tree, apvts))
+    return false;
+  const auto rackTree = tree.getChildWithName("RACK");
+  if (!rackTree.isValid() || !hasVersion(rackTree, "schemaVersion",
+                                         vstengine::rack::state::schemaVersion))
+    return false;
+  const auto effectsTree = tree.getChildWithName("EFFECTS");
+  vstengine::effects::EffectsChain candidateEffects;
+  if (!prepareEffectsState(effectsTree, candidateEffects))
+    return false;
+  std::array<vstengine::rack::PersistentSlotState,
+             vstengine::instrument::maxSlots>
+      parsedRack;
+  std::string rackDiagnostic;
+  if (rackTree.isValid()) {
+    if (!vstengine::rack::state::deserialize(rackTree, parsedRack,
+                                             rackDiagnostic))
+      return false;
+  }
+  if (rackTree.isValid() && !preflightDirectState(parsedRack))
+    return false;
+  // Decode into local fixed-size sequences; no live publication until
+  // every module and scalar has passed validation.
+  auto candidateSequences = patternRuntime->slotSequences;
+  for (std::size_t slot = 0; slot < parsedRack.size(); ++slot) {
+    const auto &saved = parsedRack[slot];
+    if (saved.patternPayload.empty() ||
+        saved.patternSchemaVersion != VOX_PATTERN_SCHEMA_V1) {
+      candidateSequences[slot].clear();
+      continue;
     }
-    for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size(); ++slot)
-        publishPartSequenceForAudio(static_cast<int>(slot));
-    for (auto& scheduler : patternRuntime->schedulers)
-        scheduler.reset(currentSampleRate);
-    suspendProcessing(false);
+    VoxPatternV1 pattern{};
+    if (!vstengine::sequence::decodePattern(saved.patternPayload, pattern) ||
+        !vstengine::sequence::fromPattern(pattern, candidateSequences[slot]))
+      return false;
+  }
+  auto apvtsState = tree.createCopy();
+  for (;;) {
+    const auto extra = apvtsState.getChildWithName("PARTS");
+    if (!extra.isValid())
+      break;
+    apvtsState.removeChild(extra, nullptr);
+  }
+  for (;;) {
+    const auto extra = apvtsState.getChildWithName("RACK");
+    if (!extra.isValid())
+      break;
+    apvtsState.removeChild(extra, nullptr);
+  }
+  for (;;) {
+    const auto extra = apvtsState.getChildWithName("EFFECTS");
+    if (!extra.isValid())
+      break;
+    apvtsState.removeChild(extra, nullptr);
+  }
+  const auto previousApvts = apvts.copyState();
+  vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
+  apvts.replaceState(apvtsState);
+  if (rackTree.isValid() &&
+      !rack.replaceState(parsedRack, nullptr, rackDiagnostic)) {
+    apvts.replaceState(previousApvts);
+
+    return false;
+  }
+  if (rackTree.isValid())
+    for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
+      rackControls[slot].slotId = parsedRack[slot].slotId;
+  patternRuntime->slotSequences = std::move(candidateSequences);
+  syncDirectParametersFromRack();
+  const auto restoredGain =
+      masterGainParameter->load(std::memory_order_relaxed);
+  masterGain.setCurrentAndTargetValue(std::isfinite(restoredGain)
+                                          ? std::clamp(restoredGain, 0.0f, 2.0f)
+                                          : 0.0f);
+  effectsChain = std::move(candidateEffects);
+  updateReportedLatencyAndTails();
+  audioRouting.reset();
+  returnTailSamples.store(0);
+  duckReduction.store(0);
+
+  for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size();
+       ++slot)
+    publishPartSequenceForAudio(static_cast<int>(slot));
+  for (auto &scheduler : patternRuntime->schedulers)
+    scheduler.reset(currentSampleRate);
+  return true;
+}
+
+void VstEngineAudioProcessor::setStateInformation(const void *data,
+                                                  int sizeInBytes) {
+  if (data == nullptr || sizeInBytes <= 0 ||
+      static_cast<std::size_t>(sizeInBytes) >
+          vstengine::core::maxSerializedProjectBytes)
+    return;
+  if (auto xml = getXmlFromBinary(data, sizeInBytes))
+    (void)restoreProjectState(juce::ValueTree::fromXml(*xml));
 }
 
 void VstEngineAudioProcessor::seedInitialSequence()

@@ -82,6 +82,13 @@ private:
         std::array<std::vector<float>, 2> audio;
         std::array<float*, 2> pointers {};
         std::unique_ptr<ModulationRuntime> modulation;
+        struct DirectBinding {
+          std::uint64_t key{};
+          const instrument::ParameterDescriptor *parameter{};
+          float base{};
+        };
+        std::array<DirectBinding, instrument::maxDirectParameters> direct{};
+        std::size_t directCount{};
     };
     bool buildSlot(std::size_t, const PersistentSlotState&,
                    instrument::ResourceResolver*, SlotRuntime&,
@@ -101,6 +108,11 @@ private:
     std::array<std::atomic<std::uint64_t>, instrument::maxSlots>
         droppedMidiEvents_ {};
     std::array<SlotRuntime, instrument::maxSlots> runtime_ {};
+    // Registry descriptors have process lifetime; only pointer publication is
+    // mutable. UI metadata reads never race runtime replacement or lock audio.
+    std::array<std::atomic<const instrument::InstrumentDescriptor *>,
+               instrument::maxSlots>
+        publishedDescriptors_{};
     std::array<RackRouter::DestinationBuffer, instrument::maxSlots> routed_ {};
     std::array<ProcessSlotControls, instrument::maxSlots> defaultControls_ {};
     RackRouter router_;
