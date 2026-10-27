@@ -62,7 +62,7 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
             }
             break;
         case Type::Danger:
-            fill = tokens::colour::danger;
+            fill = tokens::colour::danger.withAlpha (isMouseOverButton ? 0.42f : 0.28f);
             border = tokens::colour::danger;
             text = tokens::colour::text;
             break;
@@ -101,10 +101,25 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
         return;
     }
 
+    auto content = getLocalBounds().reduced (tokens::spacing::sm, 0);
     g.setFont (typography::controlLabel());
+    if (icon != nullptr)
+    {
+        // Leading icon + label, centred as one group.
+        const auto textWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(),
+                                                                          getButtonText());
+        const auto iconSize = juce::jmin (14, content.getHeight());
+        auto group = content.withSizeKeepingCentre (
+            juce::jmin (content.getWidth(), iconSize + 6 + textWidth), content.getHeight());
+        icon->drawWithin (g, group.removeFromLeft (iconSize).toFloat()
+                                 .withSizeKeepingCentre (static_cast<float> (iconSize),
+                                                         static_cast<float> (iconSize)),
+                          juce::RectanglePlacement::centred, isEnabled() ? 1.0f : 0.35f);
+        group.removeFromLeft (6);
+        content = group;
+    }
     g.setColour (text);
-    g.drawText (getButtonText(), getLocalBounds().reduced (tokens::spacing::sm, 0),
-                juce::Justification::centred, true);
+    g.drawText (getButtonText(), content, juce::Justification::centred, true);
 }
 
 } // namespace vox::ui
