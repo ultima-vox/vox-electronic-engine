@@ -63,6 +63,13 @@ jobs:
             throw "Actual Acid editor snapshot not created"
           }
           Remove-Item Env:VOX_UI_ACID_SNAPSHOT
+          $env:VOX_UI_ACID_STEP_SNAPSHOT = Join-Path $snapshotDir "acid-step-actual-editor-1024x768.png"
+          & $editorTest
+          if ($LASTEXITCODE -ne 0) { throw "Acid STEP editor capture failed" }
+          if (-not (Test-Path $env:VOX_UI_ACID_STEP_SNAPSHOT)) {
+            throw "Actual Acid STEP editor snapshot not created"
+          }
+          Remove-Item Env:VOX_UI_ACID_STEP_SNAPSHOT
 
       - name: Upload Visual Gate snapshots
         if: ${{ always() && steps.build.outcome == 'success' }}
