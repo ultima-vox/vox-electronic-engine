@@ -254,6 +254,34 @@ int main()
             && reusedInstance.parameter("lfo1_depth") == 0.0f,
             "v1 recall likewise disables previously active LFO1");
 
+    // Pin v1 compatibility before reducing migration code: the original
+    // nine serialized values overwrite indices 0-8, v3-era extension 9-35
+    // retains its existing value, and all later, missing features reset
+    // to their factory (audibly off) defaults.
+    acid::AcidEngine legacyIntoUsed;
+    REQUIRE(legacyIntoUsed.setParameter("osc_tune", 0.72f)
+            && legacyIntoUsed.setParameter("lfo1_depth", 0.97f)
+            && legacyIntoUsed.setParameter("env2_amount", 0.93f)
+            && legacyIntoUsed.setParameter("lfo3_depth", 0.89f)
+            && legacyIntoUsed.setParameter("step_amount", 0.77f)
+            && legacyIntoUsed.setParameter("step_16", 1.0f)
+            && legacyIntoUsed.setParameter("lfo2_sync", 1.0f),
+            "populate v1-absent fields before compatibility recall");
+    REQUIRE(legacyIntoUsed.loadState(legacyVersion, oldState),
+            "v1 module state accepted after newer controls were active");
+    REQUIRE(std::abs(legacyIntoUsed.parameter("output") - legacyValues[8])
+                < 0.00001f
+            && std::abs(legacyIntoUsed.parameter("osc_tune") - 0.72f)
+                < 0.00001f,
+            "v1 overrides its own nine fields while preserving v3-era values");
+    for (auto id : { "lfo1_depth", "env2_amount", "lfo3_depth",
+                     "step_amount", "lfo2_sync" })
+        REQUIRE(legacyIntoUsed.parameter(id) == 0.0f,
+                "missing post-v3 modulation source resets to factory-off");
+    REQUIRE(legacyIntoUsed.parameter("step_16") == 0.5f,
+            "v1 recall resets absent STEP curve to bipolar neutral");
+
+
     // Legacy LFO1 (v4) payload must retain all 40 original parameters but
     // never inherit ENV2 from an already-used instrument during recall.
     std::array<std::byte, 8 + acid::AcidEngine::lfo1ParameterCount
