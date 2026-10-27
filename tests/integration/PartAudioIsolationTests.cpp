@@ -194,6 +194,8 @@ int main()
     const auto acidFine = vstengine::acid::hostParameterId(1, "osc_fine");
     const auto acidLevel = vstengine::acid::hostParameterId(1, "output");
     const auto acidLegato = vstengine::acid::hostParameterId(1, "legato");
+    const auto acidLfo1Sync = vstengine::acid::hostParameterId(1, "lfo1_sync");
+    const auto acidLfo2Sync = vstengine::acid::hostParameterId(1, "lfo2_sync");
     const auto acidStep0 = vstengine::acid::hostParameterId(1, "step_01");
     const auto acidStep15 = vstengine::acid::hostParameterId(1, "step_16");
     const auto otherAcidFine = vstengine::acid::hostParameterId(0, "osc_fine");
@@ -202,6 +204,8 @@ int main()
     setPlain(*processor, acidFine, 0.27f);
     setPlain(*processor, acidLevel, 0.64f);
     setPlain(*processor, acidLegato, 0.0f);
+    setPlain(*processor, acidLfo1Sync, 1.0f);
+    setPlain(*processor, acidLfo2Sync, 0.0f);
     setPlain(*processor, acidStep0, 0.87f);
     setPlain(*processor, acidStep15, 0.04f);
     require(std::abs(processor->parameters().getRawParameterValue(
@@ -224,6 +228,10 @@ int main()
                          acidLevel.c_str())->load() - 0.64f) < 0.001f
                 && restored->parameters().getRawParameterValue(
                          acidLegato.c_str())->load() < 0.5f
+                && restored->parameters().getRawParameterValue(
+                         acidLfo1Sync.c_str())->load() >= 0.5f
+                && restored->parameters().getRawParameterValue(
+                         acidLfo2Sync.c_str())->load() < 0.5f
                 && std::abs(restored->parameters().getRawParameterValue(
                          acidStep0.c_str())->load() - 0.87f) < 0.001f
                 && std::abs(restored->parameters().getRawParameterValue(

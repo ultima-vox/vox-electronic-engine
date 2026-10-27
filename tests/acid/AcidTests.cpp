@@ -314,6 +314,29 @@ int main()
             && migratedV6.parameter("step_01") == 0.5f,
             "v6 migration disables STEP and resets the absent curve");
 
+    // The pre-sync v7 format contains 74 fields, all of which must migrate
+    // unchanged. Recalling it into a v8 instance with SYNC already active
+    // must explicitly disable those previously nonexistent mode controls.
+    std::array<std::byte, 8 + acid::AcidEngine::stepParameterCount
+                             * sizeof(float)> stateV7 {};
+    std::memcpy(stateV7.data(), encoded.data(), stateV7.size());
+    constexpr auto oldStepVersion = acid::AcidEngine::stepStateVersion;
+    std::memcpy(stateV7.data() + 4, &oldStepVersion, sizeof(oldStepVersion));
+    acid::AcidEngine migratedV7;
+    REQUIRE(migratedV7.setParameter("lfo1_sync", 1.0f)
+            && migratedV7.setParameter("lfo2_sync", 1.0f)
+            && migratedV7.setParameter("lfo3_sync", 1.0f)
+            && migratedV7.loadState(oldStepVersion, stateV7),
+            "v7 Acid state migrates over an active v8 sync patch");
+    for (std::size_t i = 0; i < acid::AcidEngine::stepParameterCount; ++i)
+        REQUIRE(std::abs(migratedV7.parameter(acid::AcidEngine::parameterIds[i])
+                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
+                    < 0.00001f, "v7 import preserves 74 original controls");
+    REQUIRE(migratedV7.parameter("lfo1_sync") == 0.0f
+            && migratedV7.parameter("lfo2_sync") == 0.0f
+            && migratedV7.parameter("lfo3_sync") == 0.0f,
+            "legacy import disables newly introduced musical sync switches");
+
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
             "Acid v3 save/load round-trips");
@@ -561,6 +584,84 @@ int main()
         REQUIRE(std::abs(restoredWithLfo2Lfo3.parameter(id)
                          - savedWithLfo2Lfo3.parameter(id)) < 0.00001f,
                 "separate LFO2/LFO3 controls survive v6 preset roundtrip");
+
+    // All LFOs support a free-running Hz mode and an independent musical
+    // PPQ mode. At the same musical position a synced LFO must be block-size
+    // invariant; seeks and song loops must restart its phase on the grid.
+    auto renderSync = [](int which, bool sync, float rate,
+                         double ppqStart, std::uint32_t blockSize,
+                         bool playing = true) {
+        acid::AcidEngine synth;
+        if (!synth.setParameter("mod_amount", 0.0f)
+            || !synth.setParameter("env2_amount", 0.0f)
+            || !synth.setParameter("step_amount", 0.0f))
+            return std::vector<float> {};
+        for (int n = 1; n <= 3; ++n) {
+            const auto prefix = std::string("lfo") + std::to_string(n) + "_";
+            if (!synth.setParameter(prefix + "depth", n == which ? 0.87f : 0.0f)
+                || !synth.setParameter(prefix + "sync", n == which && sync ? 1.0f : 0.0f)
+                || !synth.setParameter(prefix + "rate", rate)
+                || !synth.setParameter(prefix + "target", 0.0f)
+                || !synth.setParameter(prefix + "wave", 0.0f))
+                return std::vector<float> {};
+        }
+        if (!synth.prepare(48000.0, blockSize, 2)) return std::vector<float> {};
+        constexpr int total = 8192;
+        std::vector<float> left(total), right(total);
+        const std::array note { VoxMidiEventV1 { 0, 3, { 0x90, 48, 112 } } };
+        for (int offset = 0; offset < total; offset += static_cast<int>(blockSize)) {
+            const double ppq = ppqStart + (playing
+                ? static_cast<double>(offset) * 120.0 / (48000.0 * 60.0)
+                : 0.0);
+            synth.setTransport(120.0, ppq, playing);
+            std::array<float*, 2> outputs {
+                left.data() + offset, right.data() + offset
+            };
+            synth.process(outputs, blockSize, offset == 0
+                ? std::span<const VoxMidiEventV1>(note)
+                : std::span<const VoxMidiEventV1> {});
+        }
+        return left;
+    };
+    constexpr float quarterNoteRate = 2.0f / 7.0f; // 1/4, one cycle per beat
+    for (int lfo = 1; lfo <= 3; ++lfo) {
+        const auto base = renderSync(lfo, true, quarterNoteRate, 0.125, 512);
+        const auto otherBlocks = renderSync(lfo, true, quarterNoteRate, 0.125, 128);
+        const auto afterOneBeat = renderSync(lfo, true, quarterNoteRate, 1.125, 512);
+        const auto offGrid = renderSync(lfo, true, quarterNoteRate, 0.625, 512);
+        const auto freeRun = renderSync(lfo, false, quarterNoteRate, 0.125, 512);
+        REQUIRE(base.size() == 8192 && otherBlocks.size() == base.size(),
+                "host-synced LFO produces all requested audio samples");
+        REQUIRE(sumAbsoluteDifference(base, otherBlocks) < 0.1,
+                "host PPQ LFO phase is invariant to 128/512 sample-block partition");
+        REQUIRE(sumAbsoluteDifference(base, afterOneBeat) < 0.1,
+                "host PPQ LFO phase repeats identically after one musical beat");
+        REQUIRE(sumAbsoluteDifference(base, offGrid) > 1.0,
+                "host DAW seek to another musical position changes LFO phase");
+        REQUIRE(sumAbsoluteDifference(base, freeRun) > 1.0,
+                "SYNC off keeps original free-running Hz oscillator behavior");
+    }
+    const auto stationary = renderSync(2, true, quarterNoteRate, 0.125, 512, false);
+    const auto advancing = renderSync(2, true, quarterNoteRate, 0.125, 512, true);
+    REQUIRE(sumAbsoluteDifference(stationary, advancing) > 1.0,
+            "when transport stops the musical LFO phase holds instead of drifting");
+
+    acid::AcidEngine savedSynced;
+    REQUIRE(savedSynced.setParameter("lfo1_sync", 1.0f)
+            && savedSynced.setParameter("lfo2_sync", 0.0f)
+            && savedSynced.setParameter("lfo3_sync", 1.0f),
+            "three musical sync mode flags write independently");
+    std::array<std::byte, acid::AcidEngine::encodedStateBytes> syncBytes {};
+    std::uint32_t syncWritten {};
+    REQUIRE(savedSynced.saveState(syncBytes, syncWritten)
+            && syncWritten == syncBytes.size(),
+            "v8 sync state saves all previous sound and three sync switches");
+    acid::AcidEngine restoredSynced;
+    REQUIRE(restoredSynced.loadState(acid::AcidEngine::stateVersion, syncBytes)
+            && restoredSynced.parameter("lfo1_sync") == 1.0f
+            && restoredSynced.parameter("lfo2_sync") == 0.0f
+            && restoredSynced.parameter("lfo3_sync") == 1.0f,
+            "all three independent sync settings survive v8 state roundtrip");
 
     // STEP is a musical-time modulation source, not the note sequencer.
     // Sample-accurate PPQ and BPM are supplied through the Acid provider.

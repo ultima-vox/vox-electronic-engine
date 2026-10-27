@@ -120,6 +120,32 @@ int main()
         return EXIT_FAILURE;
     editor->selectAcidLfoForTesting(1);
 
+    // Each LFO has its own Boolean Sync button attachment, not an aliased
+    // ENV/LFO source control. Switching tabs must restore that LFO's value.
+    const auto* sync1 = params.getRawParameterValue("slot02Acid_lfo1_sync");
+    const auto* sync2 = params.getRawParameterValue("slot02Acid_lfo2_sync");
+    const auto* sync3 = params.getRawParameterValue("slot02Acid_lfo3_sync");
+    const auto* otherSync = params.getRawParameterValue("slot01Acid_lfo1_sync");
+    if (!sync1 || !sync2 || !sync3 || !otherSync) return EXIT_FAILURE;
+    const float otherSyncBefore = otherSync->load();
+    editor->selectAcidLfoForTesting(1);
+    if (!editor->setAcidLfoSyncForTesting(true)
+        || sync1->load() < 0.5f || sync2->load() > 0.5f
+        || std::abs(otherSync->load() - otherSyncBefore) > 0.0001f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfoForTesting(2);
+    if (!editor->setAcidLfoSyncForTesting(true)
+        || sync2->load() < 0.5f || sync1->load() < 0.5f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfoForTesting(3);
+    if (!editor->setAcidLfoSyncForTesting(false)
+        || sync3->load() > 0.5f || sync2->load() < 0.5f)
+        return EXIT_FAILURE;
+    editor->selectAcidLfoForTesting(1);
+    if (!editor->setAcidLfoSyncForTesting(true)
+        || sync1->load() < 0.5f)
+        return EXIT_FAILURE;
+
     // STEP owns sixteen independent host-automated curve levels.
     const auto* step0 = params.getRawParameterValue("slot02Acid_step_01");
     const auto* step15 = params.getRawParameterValue("slot02Acid_step_16");
