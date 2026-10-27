@@ -300,6 +300,10 @@ target_include_directories(acid_tests PRIVATE tests ${VST_LIBS_DIR})
 target_link_libraries(acid_tests PRIVATE vst_acid vst_instrument)
 add_test(NAME acid_tests COMMAND acid_tests)
 
+add_executable(acid_midi_lifecycle_tests tests/acid/AcidMidiLifecycleTests.cpp)
+target_link_libraries(acid_midi_lifecycle_tests PRIVATE vst_acid)
+add_test(NAME acid_midi_lifecycle_tests COMMAND acid_midi_lifecycle_tests)
+
 add_executable(lead_tests
   tests/lead/LeadTests.cpp
   tests/instrument/InstrumentComplianceHarness.cpp

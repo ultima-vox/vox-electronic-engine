@@ -274,10 +274,17 @@ private:
     };
 
     void handleMidiEvent(const VoxMidiEventV1& event) noexcept;
-    void noteOn(std::uint8_t note, std::uint8_t velocity) noexcept;
-    void noteOff(std::uint8_t note) noexcept;
+    void noteOn(std::uint8_t channel, std::uint8_t note,
+                std::uint8_t velocity) noexcept;
+    void noteOff(std::uint8_t channel, std::uint8_t note) noexcept;
+    void removeHeldKey(std::uint16_t key) noexcept;
+    void selectHeldKey(std::uint16_t key) noexcept;
+    void restoreHeldVoice() noexcept;
+    void releaseVoice() noexcept;
+    void channelNotesOff(std::uint8_t channel, bool immediate) noexcept;
     void allNotesOff() noexcept;
-    void pitchBend(std::uint8_t lsb, std::uint8_t msb) noexcept;
+    void pitchBend(std::uint8_t channel, std::uint8_t lsb,
+                   std::uint8_t msb) noexcept;
 
     void renderStereoSample(float& outLeft, float& outRight) noexcept;
     [[nodiscard]] float renderVoiceOscillator(std::size_t voiceIdx,
@@ -400,7 +407,7 @@ private:
 
     double currentFrequency_ { 130.81 };
     double targetFrequency_ { 130.81 };
-    float pitchBendSemitones_ {};
+    std::array<float, 16> pitchBendSemitones_{};
 
     // Envelopes: VCA, Filter (303 MEG + ADSR), and Mod Env 1
     AdsrState ampEnv_ {};
@@ -417,17 +424,25 @@ private:
     std::array<float, 4> filterState_ {};
     float postToneState_ {};
 
-    // Monophonic held-note stack for seamless legato & slide
-    static constexpr std::size_t maxHeldNotes = 8;
-    std::array<std::uint8_t, maxHeldNotes> heldNotes_ {};
-    std::size_t heldCount_ {};
+    // Indexed intrusive last-key priority list: every MIDI channel/key can be
+    // held. Re-press replaces that key's ownership, matching Rack retrigger
+    // semantics. Insert/remove/priority lookup are O(1), with no audio
+    // allocation.
+    static constexpr std::uint16_t noHeldKey = 0xffffu;
+    struct HeldKey {
+      std::uint16_t previous{noHeldKey}, next{noHeldKey};
+      std::uint8_t velocity{}; // zero means not held
+    };
+    std::array<HeldKey, 16 * 128> heldKeys_{};
+    std::uint16_t latestHeldKey_{noHeldKey};
+    std::uint8_t currentChannel_{};
 
     std::uint8_t currentNote_ { 255 };
     bool gate_ {};
     enum class GlideSource : std::uint8_t { none, slide, portamento };
     GlideSource glideSource_ { GlideSource::none };
     bool slideActive_ {};
-    bool ccPortamento_ {};
+    std::array<bool, 16> ccPortamento_{};
     bool legatoEnabled_ { true };
     bool retriggerEnabled_ { false };
     bool velToAccentEnabled_ { true };

@@ -120,7 +120,7 @@ void AcidEngine::reset() noexcept {
     triIntegrators_.fill(0.0);
     currentFrequency_ = 130.81;
     targetFrequency_ = 130.81;
-    pitchBendSemitones_ = 0.0f;
+    pitchBendSemitones_.fill(0.0f);
 
     ampEnv_.reset();
     fltEnv_.reset();
@@ -144,13 +144,14 @@ void AcidEngine::reset() noexcept {
     filterState_.fill(0.0f);
     postToneState_ = 0.0f;
 
-    heldNotes_.fill(255);
-    heldCount_ = 0;
+    heldKeys_.fill({});
+    latestHeldKey_ = noHeldKey;
+    currentChannel_ = 0;
     currentNote_ = 255;
     gate_ = false;
     slideActive_ = false;
     glideSource_ = GlideSource::none;
-    ccPortamento_ = false;
+    ccPortamento_.fill(false);
     active_ = false;
 }
 
@@ -239,10 +240,8 @@ void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
         }
     }
 
-    while (midiIndex < midi.size()) {
-        handleMidiEvent(midi[midiIndex]);
-        ++midiIndex;
-    }
+    // Events at or beyond sampleCount do not belong to this block. Never
+    // mutate the voice early; the caller owns scheduling into later blocks.
 
     active_ = gate_ ||
               (ampEnv_.stage != EnvStage::idle && ampEnv_.value > 1.0e-5f);
@@ -375,159 +374,198 @@ std::uint32_t AcidEngine::tailSamples() const noexcept {
 
 void AcidEngine::handleMidiEvent(const VoxMidiEventV1& event) noexcept {
     // Follow the stable VoxMidiEventV1 ABI: sampleOffset, size, data[3].
-    if (event.size < 3) return;
+    if (event.size != 3 || event.data[0] < 0x80u || event.data[0] >= 0xf0u ||
+        event.data[1] >= 128u || event.data[2] >= 128u)
+      return;
+    const std::uint8_t channel = event.data[0] & 0x0fu;
     const std::uint8_t statusType = event.data[0] & 0xF0u;
 
     switch (statusType) {
         case 0x90u: {
             if (event.data[2] > 0) {
-                noteOn(event.data[1], event.data[2]);
+              noteOn(channel, event.data[1], event.data[2]);
             } else {
-                noteOff(event.data[1]);
+              noteOff(channel, event.data[1]);
             }
             break;
         }
         case 0x80u: {
-            noteOff(event.data[1]);
-            break;
+          noteOff(channel, event.data[1]);
+          break;
         }
         case 0xB0u: {
             if (event.data[1] == 65u) {
-                ccPortamento_ = (event.data[2] >= 64u);
+              ccPortamento_[channel] = (event.data[2] >= 64u);
             } else if (event.data[1] == 120u || event.data[1] == 123u) {
-                allNotesOff();
+              channelNotesOff(channel, event.data[1] == 120u);
             }
             break;
         }
         case 0xE0u: {
-            pitchBend(event.data[1], event.data[2]);
-            break;
+          pitchBend(channel, event.data[1], event.data[2]);
+          break;
         }
         default:
             break;
     }
 }
 
-void AcidEngine::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
-    const bool wasGateOpen = gate_;
-    const bool hadPreviousNote = currentNote_ < 128u;
+void AcidEngine::noteOn(std::uint8_t channel, std::uint8_t note,
+                        std::uint8_t velocity) noexcept {
+  const bool wasGateOpen = gate_;
+  const bool hadPreviousNote = currentNote_ < 128u;
+  const auto key = static_cast<std::uint16_t>(channel * 128u + note);
+  removeHeldKey(key);
+  heldKeys_[key] = {latestHeldKey_, noHeldKey, velocity};
+  if (latestHeldKey_ != noHeldKey)
+    heldKeys_[latestHeldKey_].next = key;
+  latestHeldKey_ = key;
+  selectHeldKey(key);
 
-    if (heldCount_ < maxHeldNotes) {
-        heldNotes_[heldCount_++] = note;
-    } else {
-        std::move(heldNotes_.begin() + 1, heldNotes_.end(), heldNotes_.begin());
-        heldNotes_[maxHeldNotes - 1] = note;
+  const bool overlapSlide = wasGateOpen && slideOnOverlapEnabled_;
+  const bool hasPortamento = smoothed_[Parameter::portamento] > 0.01f;
+  // A dedicated Slide knob governs only the overlapping/CC-legato glide.
+  // General Portamento is separate: never use max(slide, portamento),
+  // which makes two independent controls modify one another's timing.
+  if ((overlapSlide || ccPortamento_[channel]) &&
+      smoothed_[Parameter::slide] > 0.01f)
+    glideSource_ = GlideSource::slide;
+  else if (hasPortamento && hadPreviousNote)
+    glideSource_ = GlideSource::portamento;
+  else
+    glideSource_ = GlideSource::none;
+  slideActive_ = glideSource_ != GlideSource::none;
+
+  if (!slideActive_ || !hadPreviousNote) {
+    currentFrequency_ = targetFrequency_;
+  }
+
+  const float accentParam = smoothed_[Parameter::accent];
+
+  const bool shouldRetrigger =
+      retriggerEnabled_ || !wasGateOpen || !legatoEnabled_;
+
+  if (shouldRetrigger) {
+    ampEnv_.trigger(retriggerEnabled_);
+    fltEnv_.trigger(retriggerEnabled_);
+    modEnv_.trigger(retriggerEnabled_);
+    env2State_.trigger(retriggerEnabled_);
+
+    if (isAccentedNote_) {
+      accentCapacitor_ = std::min(1.5f, accentCapacitor_ + 0.35f * accentParam);
     }
+  }
 
-    currentNote_ = note;
-    targetFrequency_ =
-        midiFrequency(static_cast<float>(note) + pitchBendSemitones_);
-
-    const bool overlapSlide = wasGateOpen && slideOnOverlapEnabled_;
-    const bool hasPortamento = smoothed_[Parameter::portamento] > 0.01f;
-    // A dedicated Slide knob governs only the overlapping/CC-legato glide.
-    // General Portamento is separate: never use max(slide, portamento),
-    // which makes two independent controls modify one another's timing.
-    if ((overlapSlide || ccPortamento_)
-        && smoothed_[Parameter::slide] > 0.01f)
-        glideSource_ = GlideSource::slide;
-    else if (hasPortamento && hadPreviousNote)
-        glideSource_ = GlideSource::portamento;
-    else
-        glideSource_ = GlideSource::none;
-    slideActive_ = glideSource_ != GlideSource::none;
-
-    if (!slideActive_ || !hadPreviousNote) {
-        currentFrequency_ = targetFrequency_;
-    }
-
-    isAccentedNote_ = velToAccentEnabled_ && (velocity >= 110u);
-    velocityGain_ =
-        std::clamp(static_cast<float>(velocity) / 127.0f, 0.15f, 1.0f);
-
-    const float accentParam = smoothed_[Parameter::accent];
-    accentGain_ = isAccentedNote_ ? accentParam : 0.0f;
-
-    const bool shouldRetrigger =
-        retriggerEnabled_ || !wasGateOpen || !legatoEnabled_;
-
-    if (shouldRetrigger) {
-        ampEnv_.trigger(retriggerEnabled_);
-        fltEnv_.trigger(retriggerEnabled_);
-        modEnv_.trigger(retriggerEnabled_);
-        env2State_.trigger(retriggerEnabled_);
-
-        if (isAccentedNote_) {
-            accentCapacitor_ =
-                std::min(1.5f, accentCapacitor_ + 0.35f * accentParam);
-        }
-    }
-
-    gate_ = true;
-    active_ = true;
+  gate_ = true;
+  active_ = true;
 }
 
-void AcidEngine::noteOff(std::uint8_t note) noexcept {
-    auto it = std::find(heldNotes_.begin(),
-                        heldNotes_.begin() + static_cast<std::ptrdiff_t>(heldCount_),
-                        note);
-    if (it != heldNotes_.begin() + static_cast<std::ptrdiff_t>(heldCount_)) {
-        std::move(it + 1,
-                  heldNotes_.begin() + static_cast<std::ptrdiff_t>(heldCount_),
-                  it);
-        --heldCount_;
-    }
+void AcidEngine::removeHeldKey(std::uint16_t key) noexcept {
+  auto &held = heldKeys_[key];
+  if (held.velocity == 0)
+    return;
+  if (held.previous != noHeldKey)
+    heldKeys_[held.previous].next = held.next;
+  if (held.next != noHeldKey)
+    heldKeys_[held.next].previous = held.previous;
+  if (latestHeldKey_ == key)
+    latestHeldKey_ = held.previous;
+  held = {};
+}
 
-    if (heldCount_ > 0) {
-        currentNote_ = heldNotes_[heldCount_ - 1];
-        targetFrequency_ =
-            midiFrequency(static_cast<float>(currentNote_) + pitchBendSemitones_);
-        if (slideOnOverlapEnabled_
-            && smoothed_[Parameter::slide] > 0.01f)
-            glideSource_ = GlideSource::slide;
-        else if (smoothed_[Parameter::portamento] > 0.01f)
-            glideSource_ = GlideSource::portamento;
-        else
-            glideSource_ = GlideSource::none;
-        slideActive_ = glideSource_ != GlideSource::none;
-        return;
-    }
+void AcidEngine::selectHeldKey(std::uint16_t key) noexcept {
+  currentNote_ = static_cast<std::uint8_t>(key % 128u);
+  currentChannel_ = static_cast<std::uint8_t>(key / 128u);
+  targetFrequency_ = midiFrequency(static_cast<float>(currentNote_) +
+                                   pitchBendSemitones_[currentChannel_]);
+  const auto velocity = heldKeys_[key].velocity;
+  isAccentedNote_ = velToAccentEnabled_ && velocity >= 110u;
+  velocityGain_ =
+      std::clamp(static_cast<float>(velocity) / 127.0f, 0.15f, 1.0f);
+  accentGain_ = isAccentedNote_ ? smoothed_[Parameter::accent] : 0.0f;
+}
 
-    if (note == currentNote_ || heldCount_ == 0) {
-        gate_ = false;
-        slideActive_ = false;
-        glideSource_ = GlideSource::none;
-        ampEnv_.release();
-        fltEnv_.release();
-        modEnv_.release();
-        env2State_.release();
-    }
+void AcidEngine::releaseVoice() noexcept {
+  gate_ = false;
+  slideActive_ = false;
+  glideSource_ = GlideSource::none;
+  ampEnv_.release();
+  fltEnv_.release();
+  modEnv_.release();
+  env2State_.release();
+}
+
+void AcidEngine::restoreHeldVoice() noexcept {
+  if (latestHeldKey_ == noHeldKey) {
+    releaseVoice();
+    return;
+  }
+  selectHeldKey(latestHeldKey_);
+  if ((slideOnOverlapEnabled_ || ccPortamento_[currentChannel_]) &&
+      smoothed_[Parameter::slide] > 0.01f)
+    glideSource_ = GlideSource::slide;
+  else if (smoothed_[Parameter::portamento] > 0.01f)
+    glideSource_ = GlideSource::portamento;
+  else
+    glideSource_ = GlideSource::none;
+  slideActive_ = glideSource_ != GlideSource::none;
+  if (!slideActive_)
+    currentFrequency_ = targetFrequency_;
+}
+
+void AcidEngine::noteOff(std::uint8_t channel, std::uint8_t note) noexcept {
+  const auto key = static_cast<std::uint16_t>(channel * 128u + note);
+  const bool wasLatest = latestHeldKey_ == key;
+  removeHeldKey(key);
+  // An unmatched or background NoteOff cannot change pitch, glide or gate.
+  if (wasLatest)
+    restoreHeldVoice();
+}
+
+void AcidEngine::channelNotesOff(std::uint8_t channel,
+                                 bool immediate) noexcept {
+  const auto previousLatest = latestHeldKey_;
+  for (std::uint16_t note = 0; note < 128; ++note)
+    removeHeldKey(static_cast<std::uint16_t>(channel * 128u + note));
+  if (latestHeldKey_ == previousLatest) {
+    // Key ownership ends at NoteOff, but the channel still owns its VCA
+    // release. CC120 must silence that tail without affecting another channel.
+    if (immediate && latestHeldKey_ == noHeldKey && currentChannel_ == channel)
+      allNotesOff();
+    return;
+  }
+  if (immediate && latestHeldKey_ == noHeldKey)
+    allNotesOff();
+  else
+    restoreHeldVoice();
 }
 
 void AcidEngine::allNotesOff() noexcept {
-    heldNotes_.fill(255);
-    heldCount_ = 0;
-    currentNote_ = 255;
-    gate_ = false;
-    slideActive_ = false;
-    glideSource_ = GlideSource::none;
-    ampEnv_.reset();
-    fltEnv_.reset();
-    modEnv_.reset();
-    env2State_.reset();
-    accentCapacitor_ = 0.0f;
-    filterState_.fill(0.0f);
-    active_ = false;
+  heldKeys_.fill({});
+  latestHeldKey_ = noHeldKey;
+  currentChannel_ = 0;
+  currentNote_ = 255;
+  gate_ = false;
+  slideActive_ = false;
+  glideSource_ = GlideSource::none;
+  ampEnv_.reset();
+  fltEnv_.reset();
+  modEnv_.reset();
+  env2State_.reset();
+  accentCapacitor_ = 0.0f;
+  filterState_.fill(0.0f);
+  active_ = false;
 }
 
-void AcidEngine::pitchBend(std::uint8_t lsb, std::uint8_t msb) noexcept {
-    const int bendValue = (static_cast<int>(msb) << 7) | static_cast<int>(lsb);
-    const float normalized = static_cast<float>(bendValue - 8192) / 8192.0f;
-    pitchBendSemitones_ = normalized * 2.0f;
-    if (currentNote_ < 128u) {
-        targetFrequency_ =
-            midiFrequency(static_cast<float>(currentNote_) + pitchBendSemitones_);
-    }
+void AcidEngine::pitchBend(std::uint8_t channel, std::uint8_t lsb,
+                           std::uint8_t msb) noexcept {
+  const int bendValue = (static_cast<int>(msb) << 7) | static_cast<int>(lsb);
+  const float normalized = static_cast<float>(bendValue - 8192) / 8192.0f;
+  pitchBendSemitones_[channel] = normalized * 2.0f;
+  if (currentNote_ < 128u && channel == currentChannel_) {
+    targetFrequency_ = midiFrequency(static_cast<float>(currentNote_) +
+                                     pitchBendSemitones_[channel]);
+  }
 }
 
 void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
