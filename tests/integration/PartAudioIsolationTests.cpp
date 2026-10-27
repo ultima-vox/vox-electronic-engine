@@ -8,6 +8,15 @@
 #include <thread>
 
 namespace {
+struct PausedDawPlayHead final : juce::AudioPlayHead {
+    juce::Optional<PositionInfo> getPosition() const override {
+        PositionInfo position;
+        position.setIsPlaying(false);
+        position.setBpm(120.0);
+        position.setPpqPosition(0.0);
+        return position;
+    }
+};
 int testsRun = 0;
 void require(bool condition, const char* message)
 {
@@ -287,6 +296,46 @@ int main()
             "concurrent host snapshots remain valid");
     require(silentBlocks == 0,
             "concurrent host snapshots never gate realtime audio");
+
+    // End-to-end Acid-only Preview/Stop: a stopped host must not start
+    // generators in any other Rack slot. Preview routes through the actual
+    // scheduler and Rack MIDI path; Stop flushes its cursor/held note.
+    {
+        PausedDawPlayHead stoppedHost;
+        auto acidPreviewProcessor = std::make_unique<VstEngineAudioProcessor>();
+        acidPreviewProcessor->prepareToPlay(48000.0, 512);
+        acidPreviewProcessor->setPlayHead(&stoppedHost);
+        require(!acidPreviewProcessor->acidPreviewEnabled(1),
+                "local Acid preview defaults off under paused DAW transport");
+        auto renderStopped = [&]() {
+            juce::AudioBuffer<float> block(2, 512);
+            juce::MidiBuffer emptyMidi;
+            acidPreviewProcessor->processBlock(block, emptyMidi);
+            return energy(block);
+        };
+        for (int block = 0; block < 8; ++block)
+            (void) renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == -1,
+                "paused DAW alone never starts the Acid sequencer");
+        acidPreviewProcessor->setAcidPreview(1, true);
+        double auditionEnergy = 0.0;
+        for (int block = 0; block < 48; ++block)
+            auditionEnergy += renderStopped();
+        require(auditionEnergy > audible,
+                "explicit Preview produces Acid pattern audio with DAW stopped");
+        require(acidPreviewProcessor->getPartPlayHeadStep(0) == -1,
+                "Acid preview never starts the neighboring Psy Bass sequence");
+        acidPreviewProcessor->setAcidPreview(1, false);
+        (void) renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == -1,
+                "Stop flushes Acid scheduler, resetting active playhead");
+        acidPreviewProcessor->setAcidPreview(1, true);
+        acidPreviewProcessor->requestPanic();
+        (void) renderStopped();
+        require(!acidPreviewProcessor->acidPreviewEnabled(1),
+                "panic cancels any pending Acid local preview");
+        acidPreviewProcessor->setPlayHead(nullptr);
+    }
 
     std::cout << "Plugin Rack integration tests passed (" << testsRun << ")\n";
     return EXIT_SUCCESS;
