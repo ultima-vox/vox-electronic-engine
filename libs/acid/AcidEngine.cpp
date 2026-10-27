@@ -200,6 +200,8 @@ void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
     std::size_t midiIndex = 0;
     const float smoothCoeff =
         1.0f - std::exp(-1.0f / static_cast<float>(0.004 * sampleRate_));
+    const double ppqIncrement = transportPlaying_
+        ? transportBpm_ / (60.0 * sampleRate_) : 0.0;
 
     for (std::uint32_t sample = 0; sample < sampleCount; ++sample) {
         while (midiIndex < midi.size() &&
@@ -215,6 +217,10 @@ void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
         float left = 0.0f;
         float right = 0.0f;
         renderStereoSample(left, right);
+        // Musical position belongs to the host's audio timeline, not the
+        // voice envelope. Advance across silence, release tails and any
+        // sampleOffset before the first NoteOn, exactly once per sample.
+        stepPpqPosition_ += ppqIncrement;
 
         if (outputs.size() == 1 && outputs[0] != nullptr) {
             outputs[0][sample] = 0.5f * (left + right);
@@ -639,8 +645,15 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
             };
             const int rhythm = std::clamp(static_cast<int>(std::round(
                 smoothed_[rateIds[index]] * 7.0f)), 0, 7);
-            const double cycles = stepPpqPosition_ / beatsPerCycle[rhythm];
-            samplePhase = cycles - std::floor(cycles);
+            const double cycleLength = beatsPerCycle[rhythm];
+            const double cycles = stepPpqPosition_ / cycleLength;
+            // A finite host double can still overflow after division by a
+            // short musical note (e.g. DBL_MAX / 0.125). Avoid inf - inf,
+            // which otherwise poisons phase and filter calculations.
+            const double wrapped = std::isfinite(cycles)
+                ? cycles - std::floor(cycles)
+                : std::fmod(stepPpqPosition_, cycleLength) / cycleLength;
+            samplePhase = wrapped - std::floor(wrapped);
         } else {
             // At the established 4ms smoothing constant, changes in
             // free-running frequency remain smooth; no per-sample pow().
@@ -682,10 +695,17 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         constexpr std::array<double, 4> stepsPerQuarter { 2.0, 4.0, 8.0, 3.0 };
         const int rhythm = std::clamp(static_cast<int>(
             std::round(smoothed_[Parameter::stepRate] * 3.0f)), 0, 3);
-        const double absoluteStep =
-            std::max(0.0, stepPpqPosition_) * stepsPerQuarter[rhythm];
-        const double cycle = std::fmod(absoluteStep, static_cast<double>(stepCount));
-        const int index = static_cast<int>(cycle);
+        const double quarters = std::max(0.0, stepPpqPosition_);
+        const double absoluteStep = quarters * stepsPerQuarter[rhythm];
+        // Overflow in a finite PPQ multiplication must never lead to
+        // fmod(inf, 16) -> NaN -> undefined float-to-int index conversion.
+        const double cycle = std::isfinite(absoluteStep)
+            ? std::fmod(absoluteStep, static_cast<double>(stepCount))
+            : std::fmod(quarters,
+                static_cast<double>(stepCount) / stepsPerQuarter[rhythm])
+                  * stepsPerQuarter[rhythm];
+        const int index = std::clamp(static_cast<int>(cycle), 0,
+                                    static_cast<int>(stepCount) - 1);
         const float phase = static_cast<float>(cycle - index);
         const float current = smoothed_[Parameter::step01 + index] * 2.0f - 1.0f;
         const float previous = smoothed_[
@@ -695,7 +715,6 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
             : std::clamp(phase / smoothing, 0.0f, 1.0f);
         stepValue = (previous + (current - previous) * transition)
                     * smoothed_[Parameter::stepAmount];
-        stepPpqPosition_ += transportBpm_ / (60.0 * sampleRate_);
     }
     const ModTarget stepTarget = decodeModTarget(smoothed_[Parameter::stepTarget]);
     auto modulation = [&](ModTarget target) noexcept {
