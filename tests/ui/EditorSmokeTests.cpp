@@ -21,6 +21,38 @@ int main()
     if (editor == nullptr)
         EDITOR_SMOKE_FAIL();
 
+    // Visual Gate capture is intentionally independent from Editor Smoke
+    // assertions. A UI regression must remain red in CTest, while the actual
+    // editor PNG remains available for debugging on the same compiled head.
+    // This mode is not invoked by CTest and cannot make its result green.
+    if (juce::SystemStats::getEnvironmentVariable("VOX_UI_CAPTURE_ONLY", {})
+            == "1") {
+        const auto acidPath = juce::SystemStats::getEnvironmentVariable(
+            "VOX_UI_ACID_SNAPSHOT", {});
+        const auto stepPath = juce::SystemStats::getEnvironmentVariable(
+            "VOX_UI_ACID_STEP_SNAPSHOT", {});
+        if (acidPath.isEmpty() && stepPath.isEmpty())
+            EDITOR_SMOKE_FAIL();
+        editor->selectSlotForTesting(1);
+        editor->showPageForTesting(
+            vstengine::ui::MainNavigation::Page::sound);
+        editor->setSize(1024, 768);
+        if (stepPath.isNotEmpty())
+            editor->selectAcidStepForTesting();
+        const auto image = editor->createComponentSnapshot(
+            editor->getLocalBounds());
+        juce::FileOutputStream output { juce::File(
+            stepPath.isNotEmpty() ? stepPath : acidPath) };
+        juce::PNGImageFormat format;
+        if (!output.openedOk()) EDITOR_SMOKE_FAIL();
+        output.setPosition(0);
+        output.truncate();
+        if (!format.writeImageToStream(image, output))
+            EDITOR_SMOKE_FAIL();
+        std::cout << "[VISUAL_GATE] real Acid editor capture completed\n";
+        return EXIT_SUCCESS;
+    }
+
     using Page = vstengine::ui::MainNavigation::Page;
     for (const auto page : { Page::sound, Page::pattern, Page::routing,
                              Page::zones, Page::macros, Page::advanced }) {

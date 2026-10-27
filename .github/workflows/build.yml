@@ -56,6 +56,9 @@ jobs:
           # not the independent showcase/capture program above.
           $editorTest = Join-Path $PWD "build\\Release\\editor_smoke_tests.exe"
           if (-not (Test-Path $editorTest)) { throw "Editor smoke executable missing" }
+          # Screenshot-only mode does not run/waive Editor Smoke assertions.
+          # The ordinary ctest step above still gates the Release artifact.
+          $env:VOX_UI_CAPTURE_ONLY = "1"
           $env:VOX_UI_ACID_SNAPSHOT = Join-Path $snapshotDir "acid-actual-editor-1024x768.png"
           & $editorTest
           if ($LASTEXITCODE -ne 0) { throw "Acid actual editor capture failed" }
@@ -70,6 +73,7 @@ jobs:
             throw "Actual Acid STEP editor snapshot not created"
           }
           Remove-Item Env:VOX_UI_ACID_STEP_SNAPSHOT
+          Remove-Item Env:VOX_UI_CAPTURE_ONLY
 
       - name: Upload Visual Gate snapshots
         if: ${{ always() && steps.build.outcome == 'success' }}
