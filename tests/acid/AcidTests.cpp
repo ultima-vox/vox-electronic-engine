@@ -701,6 +701,67 @@ int main()
             && restoredSynced.parameter("lfo3_sync") == 1.0f,
             "all three independent sync settings survive v8 state roundtrip");
 
+    // UB/transport contract: a note received at sampleOffset N after
+    // silence must hear the *same* synced LFO + STEP phase as a note played
+    // immediately at the corresponding absolute host PPQ position. This
+    // also exercises the DSP early-return path while the envelope is idle.
+    auto renderAcidPpqOnset = [](std::uint32_t midiOffset,
+                                 double hostPpq, std::uint32_t samples) {
+        acid::AcidEngine engine;
+        if (!engine.setParameter("mod_amount", 0.0f)
+            || !engine.setParameter("env2_amount", 0.0f)
+            || !engine.setParameter("cutoff", 0.35f)
+            || !engine.setParameter("lfo1_depth", 0.8f)
+            || !engine.setParameter("lfo1_sync", 1.0f)
+            || !engine.setParameter("lfo1_rate", 2.0f / 7.0f)
+            || !engine.setParameter("lfo2_depth", 0.0f)
+            || !engine.setParameter("lfo3_depth", 0.0f)
+            || !engine.setParameter("step_amount", 0.85f)
+            || !engine.setParameter("step_rate", 1.0f / 3.0f)
+            || !engine.setParameter("step_smooth", 1.0f)
+            || !engine.setParameter("step_01", 0.0f)
+            || !engine.setParameter("step_16", 1.0f)
+            || !engine.prepare(48000.0, 4096, 2))
+            return std::vector<float> {};
+        std::vector<float> left(samples), right(samples);
+        std::array<float*, 2> output { left.data(), right.data() };
+        const std::array notes { VoxMidiEventV1 {
+            midiOffset, 3, { 0x90, 48, 110 } } };
+        engine.setTransport(120.0, hostPpq, true);
+        engine.process(output, samples, notes);
+        return left;
+    };
+    constexpr std::uint32_t delayedOnset = 384;
+    const double delayedPpq = static_cast<double>(delayedOnset) * 120.0
+                              / (48000.0 * 60.0);
+    const auto delayedAudio = renderAcidPpqOnset(delayedOnset, 0.0, 4096);
+    const auto immediateAudio = renderAcidPpqOnset(
+        0u, delayedPpq, 4096 - delayedOnset);
+    REQUIRE(delayedAudio.size() == 4096
+            && immediateAudio.size() == 4096 - delayedOnset,
+            "sample-offset Acid note and absolute PPQ reference both render");
+    double delayedMaxError = 0.0;
+    for (std::size_t i = 0; i < immediateAudio.size(); ++i)
+        delayedMaxError = std::max(delayedMaxError,
+            std::abs(static_cast<double>(delayedAudio[i + delayedOnset])
+                   - static_cast<double>(immediateAudio[i])));
+    REQUIRE(delayedMaxError < 0.005,
+            "synced LFO/STEP musical phase must advance through silent samples");
+
+    // Finite but enormous host PPQ positions must not overflow intermediate
+    // step-rate multiplication or generate a NaN->int conversion for the
+    // 16-step array index. The host ABI permits finite double PPQ values.
+    for (double extremePpq : {
+            std::numeric_limits<double>::max(),
+            -std::numeric_limits<double>::max() }) {
+        const auto extreme = renderAcidPpqOnset(0u, extremePpq, 4096);
+        REQUIRE(extreme.size() == 4096,
+                "Acid renders at extreme but finite musical positions");
+        for (const float sample : extreme)
+            REQUIRE(std::isfinite(sample) && std::abs(sample) <= 8.0f,
+                    "extreme host PPQ cannot overflow STEP index or poison audio");
+    }
+
     // STEP is a musical-time modulation source, not the note sequencer.
     // Sample-accurate PPQ and BPM are supplied through the Acid provider.
     auto renderStep = [](float amount, float target, float rate, float smooth,
