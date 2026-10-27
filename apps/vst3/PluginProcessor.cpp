@@ -8,6 +8,7 @@
 #include "preset/PresetManager.h"
 #include "sequence/PatternAdapter.h"
 #include <charconv>
+#include <utility>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -785,7 +786,7 @@ void VstEngineAudioProcessor::cacheRackParameterPointers()
             const auto id = slotParameterId(slot, suffix);
             return apvts.getRawParameterValue(id.c_str());
         };
-        refs.midiIn = get("MidiIn"); refs.layer = get("Layer");
+        refs.midiIn = get("MidiIn");
         refs.keyLow = get("KeyLow"); refs.keyHigh = get("KeyHigh");
         refs.velocityLow = get("VelocityLow");
         refs.velocityHigh = get("VelocityHigh"); refs.transpose = get("Transpose");
@@ -807,14 +808,18 @@ void VstEngineAudioProcessor::readRackControlsFromParameters(
     std::span<vstengine::rack::ProcessSlotControls> destination) const noexcept
 {
     if (destination.size() != rackParameterRefs.size()) return;
+    // A host can still write a duplicate channel through state or a raw
+    // parameter; the lowest slot keeps it and later duplicates read as Off.
+    std::array<bool, 17> claimed {};
     for (std::size_t slot = 0; slot < rackParameterRefs.size(); ++slot) {
         const auto& refs = rackParameterRefs[slot];
-        const int midiIn = juce::jlimit(0, 16,
+        int midiIn = juce::jlimit(0, 16,
             static_cast<int>(std::lround(refs.midiIn->load())));
+        if (midiIn > 0 && std::exchange(claimed[static_cast<std::size_t>(midiIn)], true))
+            midiIn = 0;
         vstengine::rack::Routing routing;
         routing.mode = midiIn == 0 ? vstengine::rack::RouteMode::off
-            : refs.layer->load() >= 0.5f ? vstengine::rack::RouteMode::layer
-                                        : vstengine::rack::RouteMode::channel;
+                                   : vstengine::rack::RouteMode::channel;
         routing.channel = static_cast<std::uint8_t>(juce::jmax(1, midiIn));
         routing.keyLow = static_cast<std::uint8_t>(refs.keyLow->load());
         routing.keyHigh = static_cast<std::uint8_t>(refs.keyHigh->load());
@@ -1218,11 +1223,11 @@ VstEngineAudioProcessor::createParameterLayout(
       return juce::ParameterID{juce::String(slotParameterId(slot, suffix)), 1};
     };
     const auto label = "Slot " + juce::String(static_cast<int>(slot + 1)) + " ";
+    // Channel ownership is configuration, not a performance control.
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         id("MidiIn"), label + "MIDI In", midiInputs,
-        slot < 2 ? static_cast<int>(slot + 1) : 0));
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        id("Layer"), label + "Layer", false));
+        slot < 2 ? static_cast<int>(slot + 1) : 0,
+        juce::AudioParameterChoiceAttributes{}.withAutomatable(false)));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
         id("KeyLow"), label + "Key Low", 0, 127, 0));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
@@ -1321,6 +1326,16 @@ bool VstEngineAudioProcessor::loadSlotInstrument(
     patternRuntime->slotSequences[slot].clear();
     publishPartSequenceForAudio(static_cast<int>(slot));
     patternRuntime->schedulers[slot].reset(currentSampleRate);
+    // An empty slot releases its channel; a new instrument without one takes
+    // the next free channel (Off when all sixteen are owned).
+    auto* channel = apvts.getParameter(slotParameterId(slot, "MidiIn").c_str());
+    const int current = static_cast<int>(std::lround(rackParameterRefs[slot].midiIn->load()));
+    const int wanted = instrumentId.empty() ? 0 : current > 0 ? current : nextFreeChannel();
+    if (channel != nullptr && wanted != current) {
+      channel->beginChangeGesture();
+      channel->setValueNotifyingHost(channel->convertTo0to1(static_cast<float>(wanted)));
+      channel->endChangeGesture();
+    }
   }
 
     diagnostic = detail;
@@ -1586,51 +1601,39 @@ int VstEngineAudioProcessor::nextFreeChannel() const noexcept
     return 0;
 }
 
-bool VstEngineAudioProcessor::assignSlotChannel(
-    std::size_t slot, int channel, ChannelConflictAction action,
-    juce::String& diagnostic)
+bool VstEngineAudioProcessor::channelAvailable(std::size_t slot,
+                                               int channel) const noexcept
+{
+    if (slot >= rackParameterRefs.size() || channel < 0 || channel > 16)
+        return false;
+    if (channel == 0)
+        return true;
+    for (std::size_t i = 0; i < rackParameterRefs.size(); ++i)
+        if (i != slot && static_cast<int>(std::lround(
+                             rackParameterRefs[i].midiIn->load())) == channel)
+            return false;
+    return true;
+}
+
+bool VstEngineAudioProcessor::assignSlotChannel(std::size_t slot, int channel,
+                                                juce::String& diagnostic)
 {
   vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
   if (slot >= rackParameterRefs.size() || channel < 0 || channel > 16) {
     diagnostic = "Invalid slot/channel";
     return false;
   }
-    auto setPlain = [this](const std::string& id, float value) {
-        if (auto* parameter = apvts.getParameter(id.c_str())) {
-            parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
-            parameter->endChangeGesture();
-        }
-    };
-    std::size_t conflict = rackParameterRefs.size();
-    if (channel > 0)
-        for (std::size_t i = 0; i < rackParameterRefs.size(); ++i)
-            if (i != slot && rackParameterRefs[i].enabled->load() >= 0.5f
-                && rackParameterRefs[i].layer->load() < 0.5f
-                && static_cast<int>(std::lround(
-                    rackParameterRefs[i].midiIn->load())) == channel) {
-                conflict = i;
-                break;
-            }
-    if (conflict < rackParameterRefs.size()) {
-        if (action == ChannelConflictAction::reject) {
-            diagnostic = "Channel occupied; choose SWAP, MOVE, or LAYER";
-            return false;
-        }
-        if (action == ChannelConflictAction::swap) {
-            const float previous = rackParameterRefs[slot].midiIn->load();
-            setPlain(slotParameterId(conflict, "MidiIn"), previous);
-        } else if (action == ChannelConflictAction::move) {
-            setPlain(slotParameterId(conflict, "MidiIn"), 0.0f);
-        } else if (action == ChannelConflictAction::layer) {
-            setPlain(slotParameterId(slot, "Layer"), 1.0f);
-        }
-    } else if (action != ChannelConflictAction::layer) {
-        setPlain(slotParameterId(slot, "Layer"), 0.0f);
-    }
-    setPlain(slotParameterId(slot, "MidiIn"), static_cast<float>(channel));
-    diagnostic.clear();
-    return true;
+  if (!channelAvailable(slot, channel)) {
+    diagnostic = "CH" + juce::String(channel) + " belongs to another instrument";
+    return false;
+  }
+  if (auto* parameter = apvts.getParameter(slotParameterId(slot, "MidiIn").c_str())) {
+    parameter->beginChangeGesture();
+    parameter->setValueNotifyingHost(parameter->convertTo0to1(static_cast<float>(channel)));
+    parameter->endChangeGesture();
+  }
+  diagnostic.clear();
+  return true;
 }
 
 bool VstEngineAudioProcessor::serializeSlotPatternMidi(

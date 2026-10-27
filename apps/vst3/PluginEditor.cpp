@@ -45,6 +45,21 @@ void pageWithSections(juce::Graphics& g, juce::Rectangle<int> bounds, const Sect
     }
 }
 
+// Channel picker: Off, this slot's own channel and channels no other
+// instrument owns (one instrument = one MIDI channel).
+void fillChannelChoices(juce::ComboBox& combo, const VstEngineAudioProcessor& processor,
+                        std::size_t slot, int current)
+{
+    if (combo.isPopupActive())
+        return;
+    combo.clear(juce::dontSendNotification);
+    combo.addItem("OFF", 1);
+    for (int channel = 1; channel <= 16; ++channel)
+        if (channel == current || processor.channelAvailable(slot, channel))
+            combo.addItem("CH" + juce::String(channel), channel + 1);
+    combo.setSelectedId(current + 1, juce::dontSendNotification);
+}
+
 // Caption above a knob or field.
 void caption(juce::Label& label, const juce::String& text)
 {
@@ -320,16 +335,6 @@ void VstEngineAudioProcessorEditor::RackRail::loadInstrument(
       p->endChangeGesture();
     }
   } else {
-    const auto channel = processor.parameters()
-                             .getRawParameterValue(slotId(i, "MidiIn").c_str())
-                             ->load();
-    if (channel == 0) {
-      const int free = processor.nextFreeChannel();
-      if (free > 0)
-        (void)processor.assignSlotChannel(
-            i, free, VstEngineAudioProcessor::ChannelConflictAction::reject,
-            diagnostic);
-    }
     if (auto *p =
             processor.parameters().getParameter(slotId(i, "Enabled").c_str())) {
       p->beginChangeGesture();
@@ -367,10 +372,12 @@ void VstEngineAudioProcessorEditor::RackRail::showSlotMenu(std::size_t i) {
   menu.addItem(4, "Solo", true, slots[i].solo);
   juce::PopupMenu channels;
   channels.addItem(100, "OFF", true, slots[i].channel == "OFF");
+  // Channels owned by another instrument are listed but disabled.
   for (int c = 1; c <= 16; ++c)
-    channels.addItem(100 + c, "CH" + juce::String(c), true,
+    channels.addItem(100 + c, "CH" + juce::String(c),
+                     processor.channelAvailable(i, c),
                      slots[i].channel == "CH" + juce::String(c));
-  menu.addSubMenu("MIDI input (conflicts require Routing)", channels);
+  menu.addSubMenu("MIDI channel", channels);
   juce::Component::SafePointer<RackRail> safe(this);
   menu.showMenuAsync(
       juce::PopupMenu::Options().withTargetComponent(&slots[i]),
@@ -390,12 +397,9 @@ void VstEngineAudioProcessorEditor::RackRail::showSlotMenu(std::size_t i) {
           }
         } else if (r >= 100 && r <= 116) {
           juce::String d;
-          if (!safe->processor.assignSlotChannel(
-                  i, r - 100,
-                  VstEngineAudioProcessor::ChannelConflictAction::reject, d))
+          if (!safe->processor.assignSlotChannel(i, r - 100, d))
             juce::AlertWindow::showMessageBoxAsync(
-                juce::MessageBoxIconType::WarningIcon, "MIDI routing conflict",
-                d);
+                juce::MessageBoxIconType::WarningIcon, "MIDI channel", d);
         }
         if (safe)
           safe->refresh();
@@ -411,9 +415,6 @@ VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudio
     title.setMinimumHorizontalScale(0.7f);
     vstengine::ui::styleLabel(subtitle, 12.0f, juce::Justification::topLeft,
                               vox::ui::tokens::colour::textSecondary);
-    midiIn.addItem("OFF", 1);
-    for (int channel = 1; channel <= 16; ++channel)
-        midiIn.addItem("CH" + juce::String(channel), channel + 1);
     int item = 1;
     for (const auto* descriptor : processor.availableInstruments())
         instrument.addItem(descriptor->name, item++);
@@ -451,8 +452,7 @@ VstEngineAudioProcessorEditor::InstrumentHeader::InstrumentHeader(VstEngineAudio
     midiIn.onChange = [this] {
         juce::String diagnostic;
         const int requested = midiIn.getSelectedId() - 1;
-        if (!processor.assignSlotChannel(selected, requested,
-                VstEngineAudioProcessor::ChannelConflictAction::reject, diagnostic))
+        if (!processor.assignSlotChannel(selected, requested, diagnostic))
             refresh();
         if (onModelChanged) onModelChanged();
     };
@@ -525,7 +525,7 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
                              juce::String(descriptor->instrumentVersion) + ".0"
                        : slotText + "   |   Choose an instrument to activate this slot",
                    juce::dontSendNotification);
-  midiIn.setSelectedId(channel + 1, juce::dontSendNotification);
+  fillChannelChoices(midiIn, processor, selected, channel);
 }
 
 VstEngineAudioProcessorEditor::MacroPage::MacroPage(
@@ -684,24 +684,19 @@ VstEngineAudioProcessorEditor::RoutingPage::RoutingPage(VstEngineAudioProcessor&
     title.setText("ROUTING / MIX", juce::dontSendNotification);
     vstengine::ui::styleLabel(title, 15.0f, juce::Justification::centredLeft, vstengine::ui::colours::primary);
     vstengine::ui::styleLabel(status, 12.0f, juce::Justification::centredLeft, vstengine::ui::colours::mutedText);
-    midiIn.addItem("OFF", 1);
-    for (int channel = 1; channel <= 16; ++channel) midiIn.addItem("CH" + juce::String(channel), channel + 1);
+    vstengine::ui::styleLabel(channelHint, 11.0f, juce::Justification::centredLeft,
+                              vstengine::ui::colours::mutedText);
+    channelHint.setText("One instrument, one channel. Only free channels are listed.",
+                        juce::dontSendNotification);
     for (auto* slider : { &level, &pan }) knob(*slider);
     pan.getProperties().set("vox.bipolar", true);
     caption(levelLabel, "LEVEL"); caption(panLabel, "PAN");
-    for (auto* button : { &swap, &move, &layerAction }) vstengine::ui::styleButton(*button);
-    swap.setTooltip("Take the channel; the other slot gets this slot's channel");
-    move.setTooltip("Take the channel; the other slot is set to Off");
-    layerAction.setTooltip("Share the channel with the other slot");
-    const std::array<juce::Component*, 15> components {
-        &title, &status, &midiIn, &layer, &enabled, &mute, &solo, &locked,
-        &level, &pan, &swap, &move, &layerAction, &levelLabel, &panLabel
+    const std::array<juce::Component*, 12> components {
+        &title, &status, &midiIn, &channelHint, &enabled, &mute, &solo, &locked,
+        &level, &pan, &levelLabel, &panLabel
     };
     for (auto* component : components) addAndMakeVisible(component);
-    midiIn.onChange = [this] { pendingChannel = midiIn.getSelectedId() - 1; assign(VstEngineAudioProcessor::ChannelConflictAction::reject); };
-    swap.onClick = [this] { assign(VstEngineAudioProcessor::ChannelConflictAction::swap); };
-    move.onClick = [this] { assign(VstEngineAudioProcessor::ChannelConflictAction::move); };
-    layerAction.onClick = [this] { assign(VstEngineAudioProcessor::ChannelConflictAction::layer); };
+    midiIn.onChange = [this] { assign(midiIn.getSelectedId() - 1); };
 }
 void VstEngineAudioProcessorEditor::RoutingPage::paint(juce::Graphics& g)
 {
@@ -722,15 +717,12 @@ void VstEngineAudioProcessorEditor::RoutingPage::resized()
 
     auto route = input.withTrimmedTop(sectionHeader).reduced(10, 10);
     midiIn.setBounds(route.removeFromLeft(110).reduced(2));
-    route.removeFromLeft(8);
-    const int action = route.getWidth() / 3;
-    swap.setBounds(route.removeFromLeft(action).reduced(2));
-    move.setBounds(route.removeFromLeft(action).reduced(2));
-    layerAction.setBounds(route.reduced(2));
+    route.removeFromLeft(10);
+    channelHint.setBounds(route);
 
     auto toggles = state.withTrimmedTop(sectionHeader).reduced(10, 10);
-    const int toggle = toggles.getWidth() / 5;
-    for (auto* button : { &enabled, &mute, &solo, &locked, &layer })
+    const int toggle = toggles.getWidth() / 4;
+    for (auto* button : { &enabled, &mute, &solo, &locked })
         button->setBounds(toggles.removeFromLeft(toggle).reduced(2));
 
     auto knobs = mix.withTrimmedTop(sectionHeader).reduced(14, 6);
@@ -742,21 +734,23 @@ void VstEngineAudioProcessorEditor::RoutingPage::resized()
     area.removeFromTop(8);
     status.setBounds(area.removeFromTop(28));
 }
-void VstEngineAudioProcessorEditor::RoutingPage::assign(VstEngineAudioProcessor::ChannelConflictAction action)
+void VstEngineAudioProcessorEditor::RoutingPage::assign(int channel)
 {
     juce::String diagnostic;
-    const bool ok = processor.assignSlotChannel(selected, pendingChannel, action, diagnostic);
+    const bool ok = processor.assignSlotChannel(selected, channel, diagnostic);
     status.setText(ok ? "Routing updated" : diagnostic, juce::dontSendNotification);
-    const auto state = processor.instrumentRack().snapshotState()[selected];
-    midiIn.setSelectedId((state.routing.mode == vstengine::rack::RouteMode::off ? 0 : state.routing.channel) + 1,
-                         juce::dontSendNotification);
+    fillChannelChoices(midiIn, processor, selected, currentChannel());
+}
+int VstEngineAudioProcessorEditor::RoutingPage::currentChannel() const
+{
+    return juce::roundToInt(processor.parameters()
+                                .getRawParameterValue(slotId(selected, "MidiIn").c_str())
+                                ->load());
 }
 void VstEngineAudioProcessorEditor::RoutingPage::bind(std::size_t slot)
 {
     selected = slot; sliderAttachments.clear(); buttonAttachments.clear();
-    const auto state = processor.instrumentRack().snapshotState()[slot];
-    pendingChannel = state.routing.mode == vstengine::rack::RouteMode::off ? 0 : state.routing.channel;
-    midiIn.setSelectedId(pendingChannel + 1, juce::dontSendNotification);
+    fillChannelChoices(midiIn, processor, slot, currentChannel());
     auto& apvts = processor.parameters();
     auto attachSlider = [&](juce::Slider& slider, std::string_view suffix) {
         sliderAttachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -766,7 +760,7 @@ void VstEngineAudioProcessorEditor::RoutingPage::bind(std::size_t slot)
         buttonAttachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             apvts, slotId(slot, suffix), button));
     };
-    attachButton(layer, "Layer"); attachButton(enabled, "Enabled"); attachButton(mute, "Mute");
+    attachButton(enabled, "Enabled"); attachButton(mute, "Mute");
     attachButton(solo, "Solo"); attachButton(locked, "Lock");
     attachSlider(level, "Level"); attachSlider(pan, "Pan");
 }

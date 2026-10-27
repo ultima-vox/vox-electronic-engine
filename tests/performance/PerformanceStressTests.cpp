@@ -166,7 +166,7 @@ std::unique_ptr<VstEngineAudioProcessor> makeDenseProcessor()
         require(processor->loadSlotInstrument(slot, ids[slot % ids.size()], diagnostic),
                 "all 16 stress slots load");
         require(processor->assignSlotChannel(slot, static_cast<int>(slot + 1),
-                    VstEngineAudioProcessor::ChannelConflictAction::reject, diagnostic),
+                    diagnostic),
                 "stress slot gets independent MIDI channel");
     }
     return processor;
@@ -278,9 +278,8 @@ int main()
         require(processor.loadSlotInstrument(slot, ids[(cycle + 1) % ids.size()], diagnostic),
                 "slot recreates after unload");
         const int channel = static_cast<int>(slot + 1);
-        require(processor.assignSlotChannel(slot, channel,
-                    VstEngineAudioProcessor::ChannelConflictAction::swap, diagnostic),
-                "channel swap remains deterministic under churn");
+        require(processor.assignSlotChannel(slot, channel, diagnostic),
+                "channel reassignment remains deterministic under churn");
     }
     processor.instrumentRack().reset();
     juce::MidiBuffer emptyMidi;

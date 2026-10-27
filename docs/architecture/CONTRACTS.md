@@ -23,7 +23,10 @@ explicit modulation must not rewrite other host base values.
 - Provider/descriptor/factory boundary; no concrete instrument routing in the shell.
 - Stable SlotId independent of order, MIDI channel, InstrumentId and audio output.
 - NoteOff returns to the exact slot that accepted NoteOn.
-- Explicit SWAP/MOVE/LAYER semantics; no accidental duplicate-channel layering.
+- One instrument = one MIDI channel (owner decision 27.10.2026). A channel has at
+  most one owning slot; a loaded instrument takes the next free channel; there is
+  no Layer mode and no SWAP/MOVE. Key/velocity zones and transpose filter the
+  slot's own channel. Rack schema 5 rejects layered or duplicate-channel states.
 - Sound and Pattern remain independent.
 - Transactional parse -> validate -> prepare -> commit state loads.
 - Missing/incompatible modules preserve identity and payload; no silent substitution.

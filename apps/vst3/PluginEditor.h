@@ -168,17 +168,16 @@ private:
         explicit RoutingPage(VstEngineAudioProcessor&);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
     private:
-        void assign(VstEngineAudioProcessor::ChannelConflictAction);
+        void assign(int channel);
+        [[nodiscard]] int currentChannel() const;
         VstEngineAudioProcessor& processor;
-        juce::Label title, status, levelLabel, panLabel;
+        juce::Label title, status, levelLabel, panLabel, channelHint;
         juce::ComboBox midiIn;
-        juce::ToggleButton layer { "Layer" }, enabled { "Enabled" }, mute { "Mute" }, solo { "Solo" }, locked { "Lock" };
+        juce::ToggleButton enabled { "Enabled" }, mute { "Mute" }, solo { "Solo" }, locked { "Lock" };
         juce::Slider level, pan;
-        juce::TextButton swap { "SWAP" }, move { "MOVE" }, layerAction { "LAYER" };
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAttachments;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> buttonAttachments;
         std::size_t selected {};
-        int pendingChannel {};
         Sections sections;
     };
 

@@ -102,8 +102,9 @@ target hardware/buffer size and perform the integrated Cubase/REAPER milestone.
 The accepted red reference consists of the top header and left 16-slot rail.
 It supplies full-scene preset navigation/save, editable seed/dice, MIDI/CPU/stereo
 output telemetry, master Output, Panic, Settings, selected slot, independent power
-and catalog load/replace/unload. Slot context menus expose mute/solo and explicit
-MIDI channel assignment with conflict errors. Settings opens the Rack audio
+and catalog load/replace/unload. Slot context menus expose mute/solo and the MIDI
+channel picker: one instrument = one channel, channels owned by another slot are
+disabled, a loaded instrument takes the next free channel. Settings opens the Rack audio
 routing utility and source/size/about choices. The green Acid workspace is owned
 by its separate agent; this task does not draw or implement it.
 

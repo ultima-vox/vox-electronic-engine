@@ -29,7 +29,10 @@ int main()
     slots[0].slotId = instrument::initialSlotId(0);
     slots[0].routing = { rack::RouteMode::channel, 1, 36, 60, 50, 127, 12 };
     slots[1].slotId = instrument::initialSlotId(1);
-    slots[1].routing = { rack::RouteMode::layer, 1, 48, 72, 1, 127, -12 };
+    // Router level: two targets on one channel still route deterministically.
+    // The one-instrument-one-channel contract is enforced by RackState and
+    // the processor (see RackIntegrationTests / RackShellIntegrationTests).
+    slots[1].routing = { rack::RouteMode::channel, 1, 48, 72, 1, 127, -12 };
     slots[2].slotId = instrument::initialSlotId(2);
     slots[2].routing = { rack::RouteMode::off, 2, 0, 127, 1, 127, 0 };
 
@@ -40,13 +43,13 @@ int main()
     REQUIRE(output[0].size == 1 && output[0].events[0].data[1] == 60,
             "CH1 zone routes and transposes Bass");
     REQUIRE(output[1].size == 1 && output[1].events[0].data[1] == 36,
-            "explicit Layer routes independently");
+            "same-channel target routes independently");
     REQUIRE(output[2].size == 0, "OFF slot receives nothing");
 
     const std::array wrongChannel { note(0x91, 40, 100) };
     router.route(wrongChannel, slots, output);
     REQUIRE(output[0].size == 0, "wrong channel blocked");
-    REQUIRE(output[1].size == 0, "Layer key zone still enforced");
+    REQUIRE(output[1].size == 0, "same-channel key zone still enforced");
 
     router.reset();
     const std::array lowVelocity { note(0x90, 48, 20) };
@@ -60,7 +63,7 @@ int main()
     const std::array off { note(0x80, 48, 0) };
     router.route(off, slots, output);
     REQUIRE(output[0].size == 1 && output[0].events[0].data[1] == 36,
-            "NoteOff follows Layer SlotId after reorder");
+            "NoteOff follows same-channel SlotId after reorder");
     REQUIRE(output[1].size == 1 && output[1].events[0].data[1] == 60,
             "NoteOff follows Bass SlotId after route disabled");
 
@@ -75,7 +78,7 @@ int main()
         panicSlots[0].slotId = instrument::initialSlotId(0);
         panicSlots[0].routing = { rack::RouteMode::channel, 1 };
         panicSlots[1].slotId = instrument::initialSlotId(1);
-        panicSlots[1].routing = { rack::RouteMode::layer, 1 };
+        panicSlots[1].routing = { rack::RouteMode::channel, 1 };
         panicSlots[2].slotId = instrument::initialSlotId(2);
         panicSlots[2].routing = { rack::RouteMode::off, 1 };
         panicSlots[3].slotId = instrument::initialSlotId(3);
@@ -404,7 +407,7 @@ int main()
         std::array<rack::ProcessSlotControls, instrument::maxSlots> targets {};
         for (std::size_t i = 0; i < targets.size(); ++i) {
             targets[i].slotId = instrument::initialSlotId(i);
-            targets[i].routing = { rack::RouteMode::layer, 1 };
+            targets[i].routing = { rack::RouteMode::channel, 1 };
         }
         layerRouter->route(std::array { note(0x90, 60) }, targets, *layerOutput);
         std::vector<VoxMidiEventV1> flood(
@@ -414,7 +417,7 @@ int main()
         layerRouter->route({}, targets, *layerOutput);
         for (const auto& destination : *layerOutput)
             REQUIRE(destination.size == 16,
-                    "all sixteen layered slots can queue and flush recovery");
+                    "all sixteen same-channel targets can queue and flush recovery");
     }
     {
         auto generatedRouter = std::make_unique<rack::RackRouter>();

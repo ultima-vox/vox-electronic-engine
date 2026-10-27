@@ -42,10 +42,20 @@ int main() {
     juce::String d;
     require(p->loadSlotInstrument(2, vstengine::modules::leadInstrumentId, d),
             "load real Lead fixture");
-    require(
-        p->assignSlotChannel(
-            2, 3, VstEngineAudioProcessor::ChannelConflictAction::reject, d),
-        "route Lead fixture");
+    const auto channelOf = [p](std::size_t slot) {
+      return static_cast<int>(std::lround(
+          p->parameters()
+              .getRawParameterValue(("slot" + juce::String(static_cast<int>(slot + 1))
+                                         .paddedLeft('0', 2) + "MidiIn").toRawUTF8())
+              ->load()));
+    };
+    require(channelOf(2) == 3, "loaded instrument takes the next free channel");
+    require(!p->assignSlotChannel(2, 1, d) && channelOf(2) == 3 &&
+                !p->channelAvailable(2, 1),
+            "a channel owned by another instrument is rejected");
+    require(p->assignSlotChannel(2, 0, d) && p->channelAvailable(1, 3),
+            "Off releases the channel");
+    require(p->assignSlotChannel(2, 3, d), "route Lead fixture");
   }
   set(*b, "outputLevel", 0.5f);
   render(*a, true);
