@@ -28,7 +28,7 @@ not support reliably. The pool keeps the list fixed:
 Names follow the loaded package (`updateHostDisplay` with parameter-info
 change). Automation written for one instrument plays into whatever instrument
 occupies the slot later; this is the Kontakt behaviour and must be documented.
-N is an open question (proposal: 64; 16 × 64 = 1024 host parameters).
+N = 64 (owner decision): 16 × 64 = 1024 pool parameters plus the macros.
 
 ## Engine and package boundary
 
@@ -43,7 +43,7 @@ N is an open question (proposal: 64; 16 × 64 = 1024 host parameters).
   a prepared plan (same transactional parse → validate → prepare → commit).
 - Budgets reuse `HostBudgetLimits` (voices, state, resources, scratch).
 
-Proposed layout (`<id>.voxinst`, folder or zip):
+Layout: one folder per package, `<id>.voxinst/` (owner decision: folders):
 
 ```
 manifest.json   id, name, vendor, version, engineApi, schema
@@ -65,10 +65,10 @@ assets/         samples, thumbnail
 
 ## UI
 
-The instrument page renders `ui.json` with VOX widgets. Open conflict: the
-mandatory full VOX Bass interface and the dedicated Acid UI may need richer
-widgets than a generic layout; decide whether built-in blocks may provide a
-native panel.
+The instrument page renders `ui.json` with VOX widgets. Owner decision:
+built-in blocks (Bass, Acid) may provide a native panel. The Bass UI follows
+the same instrument-page grammar as every other instrument (header, tabs,
+panels, knobs); it is not a separate shell.
 
 ## Phases
 
@@ -80,7 +80,10 @@ native panel.
 
 ## Open questions for the owner
 
-1. Pool size per slot (proposal 64).
-2. Install folder and whether packages are zip or folders.
-3. Licensing/encryption of packages (out of scope until asked).
-4. Native panels for built-in blocks (Bass/Acid) or `ui.json` only.
+1. Install root per OS (proposal: Windows `%PROGRAMDATA%\Ultima Vox\Instruments`
+   plus a user folder; macOS `/Library/Application Support/Ultima Vox/Instruments`
+   plus `~/Library/...`).
+2. Licensing/encryption of packages (out of scope until asked).
+
+Resolved 27.10.2026: 64 pool parameters per slot; folder packages; native
+panels allowed for built-in blocks, Bass UI uses the common instrument grammar.
