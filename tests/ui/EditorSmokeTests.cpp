@@ -171,6 +171,14 @@ int main()
     editor->setAcidPreviewForTesting(false);
     if (processor.acidPreviewEnabled(1))
         EDITOR_SMOKE_FAIL();
+    editor->setAcidPreviewForTesting(true);
+    editor->selectSlotForTesting(0);
+    if (processor.acidPreviewEnabled(1))
+        EDITOR_SMOKE_FAIL(); // No invisible Acid preview under Psy Bass.
+    editor->selectSlotForTesting(1);
+    editor->showPageForTesting(Page::sound);
+    if (processor.acidPreviewEnabled(1))
+        EDITOR_SMOKE_FAIL(); // Selection return must not restart audition.
 
     // STEP owns sixteen independent host-automated curve levels.
     const auto* step0 = params.getRawParameterValue("slot02Acid_step_01");
