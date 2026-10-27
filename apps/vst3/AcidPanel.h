@@ -56,6 +56,7 @@ private:
     };
     void timerCallback() override;
     void addKnob(Group, std::string_view, const char*, bool stage = false);
+    void attachKnob(Knob&);
     void attachKnobs();
     void updateEnvelopeAttachments();
     void updateModulationAttachments();

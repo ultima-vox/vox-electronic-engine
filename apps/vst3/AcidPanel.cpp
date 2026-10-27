@@ -454,17 +454,26 @@ void AcidPanel::bind(std::size_t slot) {
     refreshChoices();
     steps_.repaint();
 }
+// Single owner for all Acid rotary APVTS bindings. In addition to host
+// automation, this preserves Acid's semantic unit captions: JUCE's attachment
+// installs its own numeric formatter, which otherwise replaces Hz/dB/note text.
+void AcidPanel::attachKnob(Knob& knob) {
+    auto& slider = knob.widget->getSlider();
+    const auto parameterId = hostId(knob.semantic);
+    const auto displayText = slider.textFromValueFunction;
+    knob.attach.reset();
+    knob.attach = std::make_unique<
+        juce::AudioProcessorValueTreeState::SliderAttachment>(
+            processor_.parameters(), parameterId, slider);
+    if (displayText)
+        slider.textFromValueFunction = displayText;
+    if (auto* parameter = processor_.parameters().getParameter(parameterId.c_str()))
+        knob.widget->setDoubleClickResetValue(parameter->getDefaultValue());
+}
 void AcidPanel::attachKnobs() {
-    for (auto& k : knobs_) {
-        if (k.envelopeStage || k.group == modulation) continue;
-        auto id = hostId(k.semantic);
-        auto localText = k.widget->getSlider().textFromValueFunction;
-        k.attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-            processor_.parameters(), id, k.widget->getSlider());
-        if (localText) k.widget->getSlider().textFromValueFunction = std::move(localText);
-        if (auto* param = processor_.parameters().getParameter(id.c_str()))
-            k.widget->setDoubleClickResetValue(param->getDefaultValue());
-    }
+    for (auto& knob : knobs_)
+        if (!knob.envelopeStage && knob.group != modulation)
+            attachKnob(knob);
     updateEnvelopeAttachments();
     updateModulationAttachments();
 }
@@ -568,14 +577,7 @@ void AcidPanel::updateModulationAttachments() {
                         juce::jlimit(0.0, 100.0, normalized * 100.0), 0) + "%";
                 };
             }
-            const auto id = hostId(k.semantic);
-            auto localText = k.widget->getSlider().textFromValueFunction;
-            k.attach = std::make_unique<
-                juce::AudioProcessorValueTreeState::SliderAttachment>(
-                    processor_.parameters(), id, k.widget->getSlider());
-            if (localText) k.widget->getSlider().textFromValueFunction = std::move(localText);
-            if (auto* p = processor_.parameters().getParameter(id.c_str()))
-                k.widget->setDoubleClickResetValue(p->getDefaultValue());
+            attachKnob(k);
         }
         ++index;
     }
@@ -640,13 +642,7 @@ void AcidPanel::updateEnvelopeAttachments() {
                                                : 0.004f + v * v * 1.8f;
                 return juce::String(seconds, 2) + "s";
             };
-        const auto id = hostId(k.semantic);
-        auto localText = k.widget->getSlider().textFromValueFunction;
-        k.attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-            processor_.parameters(), id, k.widget->getSlider());
-        if (localText) k.widget->getSlider().textFromValueFunction = std::move(localText);
-        if (auto* param = processor_.parameters().getParameter(id.c_str()))
-            k.widget->setDoubleClickResetValue(param->getDefaultValue());
+        attachKnob(k);
         ++stage;
     }
     ampButton_.setToggleState(!filterEnvelope_, juce::dontSendNotification);
