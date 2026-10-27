@@ -1647,6 +1647,10 @@ void VstEngineAudioProcessor::setStateInformation(const void* data,
                     vstengine::sequence::Sequence::deserialize(sequenceData);
         }
     }
+    // Audition is a transient action, not a project/preset setting.
+    // Successful state recall cancels any preview armed by the prior patch.
+    for (auto& requested : acidPreviewRequested)
+        requested.store(false, std::memory_order_relaxed);
     for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size(); ++slot)
         publishPartSequenceForAudio(static_cast<int>(slot));
     for (auto& scheduler : patternRuntime->schedulers)

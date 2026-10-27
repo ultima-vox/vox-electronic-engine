@@ -211,12 +211,19 @@ int main()
     require(std::abs(processor->parameters().getRawParameterValue(
                          otherAcidFine.c_str())->load() - otherBefore) < 0.0001f,
             "Acid host write must not affect another slot before save");
+    processor->setAcidPreview(1, true);
+    require(processor->acidPreviewEnabled(1)
+            && !processor->acidPreviewEnabled(0),
+            "only selected Acid slot can be armed for transient preview");
     juce::MemoryBlock state;
     processor->getStateInformation(state);
     require(state.getSize() > 0, "state serialization succeeds");
 
     auto restored = std::make_unique<VstEngineAudioProcessor>();
+    restored->setAcidPreview(1, true);
     restored->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    require(!restored->acidPreviewEnabled(1),
+            "project restore cannot auto-start an earlier Acid preview");
     restored->prepareToPlay(48000.0, 512);
     setPlain(*restored, "midiMode", 1.0f);
     require(restored->sequence()[3].gate

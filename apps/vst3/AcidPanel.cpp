@@ -671,6 +671,10 @@ void AcidPanel::refreshChoices() {
 }
 void AcidPanel::timerCallback() {
     if (!isVisible()) return;
+    const bool preview = processor_.acidPreviewEnabled(slot_);
+    const auto label = preview ? juce::String("Stop") : juce::String("Preview");
+    if (previewButton_.getButtonText() != label)
+        previewButton_.setButtonText(label);
     refreshChoices();
     steps_.setHead(processor_.getCurrentPlayHeadStep());
     if (lengthChoice_.hasKeyboardFocus(true) || timingChoice_.hasKeyboardFocus(true))
