@@ -8,8 +8,8 @@ Contracts: [parameters/state](../architecture/RACK_PARAMETER_CONTRACT.md),
 ## Local native build and tests
 
 Linux native Release, C++20, pinned JUCE 9.0.1; real JUCE/DSP objects and the real
-PluginProcessor/editor, not a browser UI or fake audio implementation. All **38
-CTest targets build successfully**. Full final CTest: **37/38 PASS**, exit 8 due
+PluginProcessor/editor, not a browser UI or fake audio implementation. All **39
+CTest targets build successfully**. Full final CTest: **38/39 PASS**, exit 8 due
 to the unchanged Bass diagnostic below. No tests are skipped or thresholds raised.
 
 | Check | Observed result |
@@ -25,6 +25,7 @@ to the unchanged Bass diagnostic below. No tests are skipped or thresholds raise
 | Existing processor integration | 2,056,370 checks PASS |
 | Reliability stress | 559,552 checks PASS, including schemas1..4 rejection preserving exact committed current5 state |
 | Performance stress | 202,189 checks PASS; two instances, 16 slots each, 64 sends/four returns, 48 kHz/512 samples; aggregate realtime ratio 1.28865 in this shared container |
+| Rack MIDI export | 320 independent checks PASS; actual SMF for slots01/02/16, matched NoteOffs, seed/channel/timing, selected helper, unique files, captured-byte isolation and failed-write rollback |
 | Native editor | PASS; real widgets change APVTS, independent slot power, restored pattern length/revisions and instrument catalogs, supported window sizes and actual component captures |
 
 The performance suite's existing ratio ceiling6 is a regression ceiling, not a
@@ -94,6 +95,16 @@ bash -c 'ulimit -s 1024; exec build/rack-production/rack_integration_tests'
 bash -c 'ulimit -s 1024; exec build/rack-production/editor_smoke_tests'
 bash -c 'ulimit -s 1024; exec build/rack-production/reliability_stress_tests'
 ```
+
+## All-slot MIDI export completion
+
+The previous helper accepted only slot01 and reused a fixed Bass filename.
+The candidate now exports selected or explicit banks01..16 using unique temporary
+paths; shared Settings provides a real Save MIDI action without Acid UI changes.
+Independent320-check tests parse actual SMF, verify raw authored-input semantics,
+seed determinism and channel/NoteOff/timing, and prove write failure preserves
+existing content. Export/EditorSmoke/RealtimeBoundary pass under1MiB stack.
+Native chooser interaction and host drag/drop remain unperformed manual gates.
 
 ## Delivery and milestone gates
 

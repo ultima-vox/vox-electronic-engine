@@ -99,7 +99,8 @@ rail, master gain/meters, four wet FX returns with per-slot pre/post sends and
 explicit kick-note event ducking. Settings opens shared audio routing. Generic
 named instrument/APVTS banks, transactional host/complete-scene restore, bounded
 FX tails and the lock-free keyboard/audio handoff are integrated in the candidate.
-The green Acid workspace is not redesigned; Acid/Bass DSP is unchanged.
+Selected/explicit slot MIDI export and a shared Settings save action are now present;
+320 independent SMF/write-failure checks pass. The green Acid workspace is not redesigned; Acid/Bass DSP is unchanged.
 
 Contracts: [audio graph](architecture/RACK_AUDIO_ROUTING.md),
 [named parameters/state](architecture/RACK_PARAMETER_CONTRACT.md).

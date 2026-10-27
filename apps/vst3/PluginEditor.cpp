@@ -821,6 +821,7 @@ void VstEngineAudioProcessorEditor::showRackSettings() {
   sizes.addItem(32, "Large 1500 x 920");
   menu.addSubMenu("Editor size", sizes);
   menu.addItem(50, "Rack audio routing / sends / ducking...");
+  menu.addItem(51, "Export selected pattern MIDI...");
   menu.addSeparator();
   menu.addItem(40, "About / host information");
   juce::Component::SafePointer<VstEngineAudioProcessorEditor> safe(this);
@@ -854,6 +855,8 @@ void VstEngineAudioProcessorEditor::showRackSettings() {
           options.useNativeTitleBar = true;
           options.resizable = true;
           safe->routingWindow = options.launchAsync();
+        } else if (r == 51) {
+          safe->exportSelectedPattern();
         } else if (r == 40)
           juce::AlertWindow::showMessageBoxAsync(
               juce::MessageBoxIconType::InfoIcon, "Vox Electronic Engine",
@@ -865,6 +868,47 @@ void VstEngineAudioProcessorEditor::showRackSettings() {
                   juce::String(safe->processor.getBlockSize()) +
                   " samples\n16 instrument slots / independent slot power and "
                   "MIDI routing");
+      });
+}
+
+void VstEngineAudioProcessorEditor::exportSelectedPattern() {
+  if (exportChooserActive)
+    return;
+  juce::MemoryBlock bytes;
+  juce::String diagnostic;
+  const auto slot = processor.selectedSlotIndex();
+  if (!processor.serializeSlotPatternMidi(slot, bytes, diagnostic)) {
+    showOperationError(diagnostic);
+    return;
+  }
+  // Snapshot bytes before opening the dialog: later selection/generation or
+  // host restore cannot silently switch the sound/pattern being exported.
+  const auto suggested =
+      juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+          .getChildFile("Vox-Slot-" + juce::String(static_cast<int>(slot + 1)) +
+                        ".mid");
+  exportChooser = std::make_unique<juce::FileChooser>(
+      "Export slot pattern MIDI", suggested, "*.mid");
+  exportChooserActive = true;
+  juce::Component::SafePointer<VstEngineAudioProcessorEditor> safe(this);
+  exportChooser->launchAsync(
+      juce::FileBrowserComponent::saveMode |
+          juce::FileBrowserComponent::canSelectFiles |
+          juce::FileBrowserComponent::warnAboutOverwriting,
+      [safe, bytes = std::move(bytes)](const juce::FileChooser &chooser) {
+        if (!safe)
+          return;
+        safe->exportChooserActive = false;
+        auto file = chooser.getResult();
+        if (file == juce::File{})
+          return;
+        if (!file.hasFileExtension("mid;midi")) {
+          safe->showOperationError("Choose a filename ending in .mid or .midi");
+          return;
+        }
+        juce::String diagnostic;
+        if (!safe->processor.writePatternMidiFile(file, bytes, diagnostic))
+          safe->showOperationError(diagnostic);
       });
 }
 

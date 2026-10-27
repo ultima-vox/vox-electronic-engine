@@ -117,8 +117,22 @@ public:
     {
         publishPartSequenceForAudio(static_cast<int>(selectedSlotIndex()));
     }
-    juce::File createPartMidiFile(int partIndex);
-    juce::File createGeneratedMidiFile() { return createPartMidiFile(0); }
+    // Controller-only: pattern data at the Rack input, before transpose/zones,
+    // fader/FX or ducking. Each export owns a distinct temporary file.
+    bool serializeSlotPatternMidi(std::size_t, juce::MemoryBlock &,
+                                  juce::String &diagnostic);
+    juce::File createSlotMidiFile(std::size_t);
+    static bool writePatternMidiFile(const juce::File &,
+                                     const juce::MemoryBlock &,
+                                     juce::String &diagnostic);
+    juce::File createPartMidiFile(int slotIndex) {
+      return slotIndex >= 0
+                 ? createSlotMidiFile(static_cast<std::size_t>(slotIndex))
+                 : juce::File{};
+    }
+    juce::File createGeneratedMidiFile() {
+      return createSlotMidiFile(selectedSlotIndex());
+    }
     [[nodiscard]] vstengine::parts::PartRegistry& partRegistry() noexcept
     {
         return parts;

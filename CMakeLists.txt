@@ -359,11 +359,13 @@ add_executable(realtime_mutation_gate_tests tests/rack/RealtimeMutationGateTests
 target_include_directories(realtime_mutation_gate_tests PRIVATE ${VST_LIBS_DIR})
 add_test(NAME realtime_mutation_gate_tests COMMAND realtime_mutation_gate_tests)
 
-foreach(direct_test IN ITEMS DirectParameterBankTests DirectProcessorStateTests)
+foreach(direct_test IN ITEMS DirectParameterBankTests DirectProcessorStateTests RackMidiExportTests)
   if(direct_test STREQUAL "DirectParameterBankTests")
     set(direct_target direct_parameter_bank_tests)
-  else()
+  elseif(direct_test STREQUAL "DirectProcessorStateTests")
     set(direct_target direct_processor_state_tests)
+  else()
+    set(direct_target rack_midi_export_tests)
   endif()
   add_executable(${direct_target} tests/integration/${direct_test}.cpp)
   target_include_directories(${direct_target} PRIVATE apps/vst3 ${VST_LIBS_DIR}

@@ -1603,47 +1603,101 @@ bool VstEngineAudioProcessor::assignSlotChannel(
     return true;
 }
 
-
-juce::File VstEngineAudioProcessor::createPartMidiFile(const int partIndex)
-{
+bool VstEngineAudioProcessor::serializeSlotPatternMidi(
+    std::size_t index, juce::MemoryBlock &destination,
+    juce::String &diagnostic) {
   vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
-  // Export goes through the shared MIDI export builder so timing mode,
-  // ratchet and slide behave exactly as documented and identically to
-  // realtime playback.
-  vstengine::midiexport::Options options;
-  if (partIndex != 0)
-    return {};
-  constexpr std::size_t index = 0;
-  const auto &slot = rack.state()[index];
-  const int inputChannel =
-      static_cast<int>(std::lround(rackParameterRefs[index].midiIn->load()));
-  options.channel = juce::jlimit(1, 16, inputChannel);
-  options.rootNote = juce::jlimit(
-      0, 127, static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
-  options.seed = vstengine::instrument::generationSubSeed(
-      static_cast<std::uint32_t>(apvts.getRawParameterValue("rngSeed")->load()),
-      slot.slotId, slot.instrumentId);
-
-  const auto exportSequence = patternRuntime->slotSequences[index];
-  const auto track =
-      vstengine::midiexport::buildSequenceTrack(exportSequence, options);
-
-  juce::MidiFile midiFile;
-  midiFile.setTicksPerQuarterNote(static_cast<int>(options.ticksPerQuarter));
-  midiFile.addTrack(track);
-
-  const auto tempFile =
-      juce::File::getSpecialLocation(juce::File::tempDirectory)
-          .getChildFile("Vox-Trance-Engine-Bass.mid");
-
-  tempFile.deleteFile();
-
-  if (auto stream = tempFile.createOutputStream()) {
-    if (midiFile.writeTo(*stream))
-      return tempFile;
+  if (index >= vstengine::instrument::maxSlots ||
+      rack.state()[index].instrumentId.empty()) {
+    diagnostic = "Choose a populated Rack slot to export";
+    return false;
   }
+  const auto &slot = rack.state()[index];
+  const auto channel = rackParameterRefs[index].midiIn->load();
+  const auto root = apvts.getRawParameterValue("rootNote")->load();
+  const auto seed = apvts.getRawParameterValue("rngSeed")->load();
+  if (!std::isfinite(channel) || channel < 0 || channel > 16 ||
+      !std::isfinite(root) || root < 0 || root > 127 || !std::isfinite(seed) ||
+      seed < 0 || seed > vstengine::instrument::maxGenerationSeed) {
+    diagnostic = "Invalid MIDI export parameters";
+    return false;
+  }
+  vstengine::midiexport::Options options;
+  options.channel = std::clamp(static_cast<int>(std::lround(channel)), 1, 16);
+  options.rootNote = static_cast<int>(std::lround(root));
+  options.seed = vstengine::instrument::generationSubSeed(
+      static_cast<std::uint32_t>(seed), slot.slotId, slot.instrumentId);
+  const auto track = vstengine::midiexport::buildSequenceTrack(
+      patternRuntime->slotSequences[index], options);
+  bool hasNotes = false;
+  for (int event = 0; event < track.getNumEvents(); ++event)
+    hasNotes = hasNotes || track.getEventPointer(event)->message.isNoteOn();
+  if (!hasNotes) {
+    diagnostic = "Selected slot has no audible pattern notes to export";
+    return false;
+  }
+  juce::MidiFile file;
+  file.setTicksPerQuarterNote(static_cast<int>(options.ticksPerQuarter));
+  file.addTrack(track);
+  juce::MemoryBlock candidate;
+  {
+    juce::MemoryOutputStream stream(candidate, false);
+    if (!file.writeTo(stream)) {
+      diagnostic = "Could not encode the MIDI pattern";
+      return false;
+    }
+  } // Trim the external MemoryBlock before publishing its encoded bytes.
+  destination = std::move(candidate);
+  diagnostic.clear();
+  return true;
+}
 
+juce::File VstEngineAudioProcessor::createSlotMidiFile(std::size_t index) {
+  juce::MemoryBlock bytes;
+  juce::String diagnostic;
+  if (!serializeSlotPatternMidi(index, bytes, diagnostic))
     return {};
+  const auto file =
+      juce::File::getSpecialLocation(juce::File::tempDirectory)
+          .getChildFile("Vox-Trance-Engine-Slot-" +
+                        juce::String(static_cast<int>(index + 1)) + "-" +
+                        juce::Uuid().toString() + ".mid");
+  if (writePatternMidiFile(file, bytes, diagnostic))
+    return file;
+  (void)file.deleteFile();
+  return {};
+}
+
+bool VstEngineAudioProcessor::writePatternMidiFile(
+    const juce::File &destination, const juce::MemoryBlock &bytes,
+    juce::String &diagnostic) {
+  if (destination == juce::File{} || destination.isDirectory() ||
+      bytes.getSize() == 0) {
+    diagnostic = "Choose a valid MIDI file destination";
+    return false;
+  }
+  juce::TemporaryFile temporary(destination);
+  {
+    auto stream = temporary.getFile().createOutputStream();
+    if (!stream || !stream->write(bytes.getData(), bytes.getSize())) {
+      diagnostic =
+          "Could not write MIDI file: " + destination.getFullPathName();
+      return false;
+    }
+    stream->flush();
+    if (stream->getStatus().failed()) {
+      diagnostic =
+          "Could not flush MIDI file: " + destination.getFullPathName();
+      return false;
+    }
+  }
+  if (!temporary.overwriteTargetFileWithTemporary()) {
+    diagnostic =
+        "Could not replace MIDI file: " + destination.getFullPathName();
+    return false;
+  }
+  diagnostic.clear();
+  return true;
 }
 
 juce::ValueTree VstEngineAudioProcessor::captureProjectState() {

@@ -207,6 +207,9 @@ private:
     void bindSelection(std::size_t);
     void showPage(vstengine::ui::MainNavigation::Page);
     void showRackSettings();
+    void exportSelectedPattern();
+    std::unique_ptr<juce::FileChooser> exportChooser;
+    bool exportChooserActive{};
     void showOperationError(const juce::String &);
     void cycleGlobalPreset(int delta);
     void loadGlobalPreset(int index);

@@ -99,6 +99,31 @@ resets them. Current parameter values and explicit native payload are persistent
 For signal topology, tap/reset/duck policy and numeric defaults see
 [Rack audio routing](RACK_AUDIO_ROUTING.md).
 
+## Rack pattern MIDI export
+
+`serializeSlotPatternMidi` snapshots any populated immutable slot bank 0..15 on
+the controller thread and emits a Standard MIDI File. It shares the canonical
+Sequence export builder with the scheduler/export timing contract. The selected
+helper uses the currently selected slot; the explicit slot helper never aliases
+an invalid index to slot01. Probability uses the same stored global seed,
+InstrumentId and SlotId domain as generated playback.
+
+Export represents the authored pattern at the Rack input: transpose, zones,
+slot mute/solo/power, fader, FX and ducking are not baked into MIDI. Reimporting to
+the same Rack therefore does not apply them twice. The assigned input channel is
+written; MIDI Off uses neutral channel1 for exporting to another instrument and
+requires explicit host routing for reimport. Empty/unpopulated/all-skipped patterns
+fail with a diagnostic while preserving the caller's previous MemoryBlock.
+
+Settings exposes Export selected pattern MIDI. Encoded bytes are captured before
+the asynchronous native file dialog; later selection, generation or project
+restore cannot change that pending export. It writes the exact chosen .mid/.midi
+path, using checked temporary write/flush before atomic target replacement.
+The temporary-file helper creates unique caller-owned paths across slots and
+instances; a drag/drop consumer must remove its own file after use. No file I/O
+or serialization runs in the audio callback. Actual host import/drag/native-dialog
+acceptance remains a milestone check, separate from SMF parsing tests.
+
 ## Latency and verification boundary
 
 The production processor admits only descriptors declaring zero latency. The
