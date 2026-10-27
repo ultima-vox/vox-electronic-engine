@@ -342,8 +342,12 @@ void AcidPanel::switchLfoForTesting(int number) {
 bool AcidPanel::setCurrentLfoSyncForTesting(bool enabled) {
     if (!lfoSyncAttachment_ || !lfoSyncButton_.isVisible())
         return false;
-    if (lfoSyncButton_.getToggleState() != enabled)
-        lfoSyncButton_.triggerClick();
+    if (lfoSyncButton_.getToggleState() != enabled) {
+        // triggerClick() posts an asynchronous click message. A synchronous
+        // editor smoke assertion would observe the old button/APVTS state.
+        // Send the same notification as a real toggle change, synchronously.
+        lfoSyncButton_.setToggleState(enabled, juce::sendNotificationSync);
+    }
     return lfoSyncButton_.getToggleState() == enabled;
 }
 void AcidPanel::switchStepForTesting() {
