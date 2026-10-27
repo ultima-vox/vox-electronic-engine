@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 
 // Distinguish independent binding/layout failures in headless Windows CI.
@@ -84,6 +85,18 @@ int main()
         || !editor->acidKnobTextForTesting("cutoff").contains("Hz")
         || !editor->acidKnobTextForTesting("output").contains("dB"))
         EDITOR_SMOKE_FAIL();
+    // UB regression: the UI may see live Sequence offsets beyond preset
+    // bounds (from another editor or programmatic caller). Neither paint
+    // nor octave labels may perform signed overflow/abs(INT_MIN).
+    {
+        auto& rawStep = processor.sequence()[0];
+        const int original = rawStep.noteOffset;
+        rawStep.noteOffset = std::numeric_limits<int>::min();
+        (void) editor->createComponentSnapshot(editor->getLocalBounds());
+        rawStep.noteOffset = std::numeric_limits<int>::max();
+        (void) editor->createComponentSnapshot(editor->getLocalBounds());
+        rawStep.noteOffset = original;
+    }
     const auto* tune = params.getRawParameterValue("slot02Acid_osc_tune");
     const auto* fine = params.getRawParameterValue("slot02Acid_osc_fine");
     const auto* other = params.getRawParameterValue("slot01Acid_osc_tune");

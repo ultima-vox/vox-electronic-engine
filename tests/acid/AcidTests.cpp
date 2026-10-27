@@ -60,6 +60,16 @@ std::uint64_t patternSignature(const vstengine::sequence::Sequence& pattern)
 int main()
 {
     using namespace vstengine;
+    // Reject non-finite sample rates before entering realtime math.
+    acid::AcidEngine invalidRate;
+    REQUIRE(!invalidRate.prepare(std::numeric_limits<double>::quiet_NaN(), 512, 2),
+            "NaN sample rate must not enter the audio render path");
+    REQUIRE(!invalidRate.prepare(std::numeric_limits<double>::infinity(), 512, 2),
+            "Infinite sample rate must not enter the audio render path");
+    REQUIRE(invalidRate.prepare(1.0e12, 512, 2),
+            "finite high sample rate has a defined tail-count behavior");
+    REQUIRE(invalidRate.tailSamples() <= std::numeric_limits<std::uint32_t>::max(),
+            "tail sample count remains within uint32 range");
     auto provider = acid::createAcidProvider();
     const auto compliance = tests::runInstrumentCompliance(
         *provider, acid::instrumentId);

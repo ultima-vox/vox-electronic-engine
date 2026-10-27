@@ -60,9 +60,14 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
         for (int s = 0; s < 16; ++s) {
             const auto& step = seq[s];
             const bool valid = s < seq.size();
+            // Other editors can place arbitrary signed offsets in Sequence.
+            // abs(INT_MIN) and root + INT_MAX are undefined signed arithmetic.
+            // Bound UI reads without changing the underlying note sequence.
+            const int displayOffset = juce::jlimit(-24, 36, step.noteOffset);
             const bool active = valid && (lane == 0 ? step.gate
                 : lane == 1 ? step.accent : lane == 2 ? step.slideDuration > 0.0f
-                : lane == 3 ? step.gate : (std::abs(step.noteOffset) >= 12));
+                : lane == 3 ? step.gate
+                : (displayOffset <= -12 || displayOffset >= 12));
             auto cell = juce::Rectangle<int>(gutter + s * width, lane * height,
                                              width - 2, height - 2);
             g.setColour(active ? (lane == 1 || lane == 2 ? acidGreenColour.darker(0.65f)
@@ -79,13 +84,13 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
                 const auto root = processor_.parameters().getRawParameterValue("rootNote");
                 const int rootNote = root != nullptr
                     ? static_cast<int>(std::round(root->load())) : 48;
-                const auto note = juce::jlimit(0, 127, rootNote + step.noteOffset);
+                const auto note = juce::jlimit(0, 127, rootNote + displayOffset);
                 text = step.gate ? juce::MidiMessage::getMidiNoteName(
                     note, true, true, 5) : "--";
             } else if (lane == 1) text = step.accent ? "A" : "";
             else if (lane == 2) text = step.slideDuration > 0.0f ? "S" : "";
             else if (lane == 3) text = step.gate ? "|" : "";
-            else text = juce::String(step.noteOffset / 12);
+            else text = juce::String(displayOffset / 12);
             g.drawFittedText(text, cell, juce::Justification::centred, 1);
         }
     }
@@ -100,15 +105,20 @@ void AcidPanel::StepGrid::mouseDown(const juce::MouseEvent& e) {
     if (column < 0 || column >= 16 || column >= seq.size()
         || row < 0 || row >= 5) return;
     auto& s = seq[column];
+    // Clamp before adding a semitone/octave. Clamping only afterward is
+    // too late if a serialized/editor-mutated offset is near INT_MAX.
+    const int boundedOffset = juce::jlimit(-24, 36, s.noteOffset);
     switch (row) {
-        case 0: s.noteOffset = juce::jlimit(-24, 36, s.noteOffset + (e.mods.isShiftDown() ? -1 : 1));
+        case 0: s.noteOffset = juce::jlimit(
+                    -24, 36, boundedOffset + (e.mods.isShiftDown() ? -1 : 1));
                 s.gate = true; break;
         case 1: s.accent = !s.accent; break;
         case 2: s.slideDuration = s.slideDuration > 0.0f ? 0.0f : 0.5f;
                 if (s.slideDuration > 0.0f) { s.gate = true; s.gateWidth = 1.0f; }
                 break;
         case 3: s.gate = !s.gate; break;
-        case 4: s.noteOffset += e.mods.isShiftDown() ? -12 : 12;
+        case 4: s.noteOffset = boundedOffset
+                             + (e.mods.isShiftDown() ? -12 : 12);
                 if (s.noteOffset > 36) s.noteOffset = -24;
                 if (s.noteOffset < -24) s.noteOffset = 36;
                 break;

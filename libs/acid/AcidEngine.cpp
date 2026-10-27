@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <numbers>
 
 namespace vstengine::acid {
@@ -96,7 +97,10 @@ float AcidEngine::cutoffHzToNormalized(float hz) noexcept {
 
 bool AcidEngine::prepare(double sampleRate, std::uint32_t maximumBlockSize,
                          std::uint32_t outputChannels) noexcept {
-    if (sampleRate <= 0.0 || maximumBlockSize == 0 || outputChannels == 0) {
+    // Comparing NaN with <= 0 is false; accepting it would poison phase
+    // increments and eventually make float->integer tail conversion UB.
+    if (!std::isfinite(sampleRate) || sampleRate <= 0.0
+        || maximumBlockSize == 0 || outputChannels == 0) {
         prepared_ = false;
         return false;
     }
@@ -416,7 +420,9 @@ bool AcidEngine::saveState(std::span<std::byte> destination,
 std::uint32_t AcidEngine::tailSamples() const noexcept {
     const float releaseSec =
         0.005f + smoothed_[Parameter::ampRelease] * 1.8f;
-    return static_cast<std::uint32_t>(releaseSec * sampleRate_);
+    const double count = static_cast<double>(releaseSec) * sampleRate_;
+    return static_cast<std::uint32_t>(std::clamp(
+        count, 0.0, static_cast<double>(std::numeric_limits<std::uint32_t>::max())));
 }
 
 void AcidEngine::handleMidiEvent(const VoxMidiEventV1& event) noexcept {
