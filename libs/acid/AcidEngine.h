@@ -296,6 +296,7 @@ private:
     void pitchBend(std::uint8_t channel, std::uint8_t lsb,
                    std::uint8_t msb) noexcept;
 
+    void advanceFreeLfo(std::size_t index, double &phase) noexcept;
     void renderStereoSample(float& outLeft, float& outRight) noexcept;
     [[nodiscard]] float renderVoiceOscillator(std::size_t voiceIdx,
                                               double baseIncrement,

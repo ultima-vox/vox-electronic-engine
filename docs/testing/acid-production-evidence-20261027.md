@@ -80,6 +80,33 @@ was not reached. This result does not cover the subsequent root-note correction.
 Bass DSP and the existing diagnostic are not changed here; full Rack integration
 and a green exact-head Windows suite remain required.
 
+## Free-running LFO across silent callbacks
+
+A real-engine regression first failed all3 checks: LFO1/2/3 stopped whenever the
+amp voice was idle. Each free-running source now advances once per processed sample
+through silence; host-synced sources continue to use PPQ. This does not advance
+while the host stops calling the plugin, or while the instance is suspended/bypassed.
+No state field, semantic ID, serialized format or ABI change is introduced.
+
+Nine behavioral checks cover all3 sources, half-cycle audible difference, full
+1Hz cycle recurrence and 512/127-frame block partitioning. Independent ASan/UBSan
+run PASS (LeakSanitizer disabled); Architecture Guard found no blocker. The existing
+Acid suite independently recompiled against current Engine/Provider/Generator:
+82024 checks +667 compliance PASS, using unchanged prebuilt JUCE dependencies.
+
+A local optimized synthetic test of 4000 silent 512-frame blocks, median of5,
+measured33.4214ms before and36.0367ms after on this shared Linux container (~7.8%
+in this narrow loop). This is not target-hardware or full Rack deadline evidence.
+
+## Windows result for root-note head 3e3b59e
+
+[Run40557841966](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/40557841966)
+built Release and passed31/32 CTest, including Acid/Release/editor. The only failure
+was Bass save_restore_rerender (max difference0.351862, RMS0.0000177501). Visual
+captures succeeded; package stage did not run. It predates the LFO correction.
+The changing Bass difference does not establish the cause; no Bass code or test is
+changed here. Fresh exact-head Windows validation remains required.
+
 ## Measured blockers / acceptance still open
 
 1. The independently measured pre-fix tail86639/peak0.113012 and exotic-rate NaNs
@@ -106,6 +133,8 @@ and a green exact-head Windows suite remain required.
    the existing high-rate regression. Document the audible behavior change.
 7. Review completed Windows CI and isolate the Acid generator root mismatch with
    a failing provider test. Forward the validated host root through Acid only.
+8. Reproduce free-running LFO phase freeze while idle; fix once-per-sample source
+   progression, independently review it and run behavioral/sanitizer tests.
 
 ub-mode is available and used in this session. Its named crapper/dryer/mutator
 tools are unavailable; no metrics or mutation-test result is fabricated. Existing

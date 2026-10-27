@@ -37,6 +37,13 @@ channel status and7-bit data. Invalid messages and offsets outside
 I/O, construction or heap storage occur in MIDI processing. Ordinary key changes
 are O(1); channel-wide cleanup visits exactly128 indexed keys.
 
+## LFO clock during silence
+
+Each free-running LFO advances once per processed audio sample even when the
+voice envelope is idle. Host-synced LFOs derive their phase from PPQ. If the host
+does not call the plugin, or the instance is suspended/bypassed, free phase is
+not advanced; this contract does not invent elapsed time from wall-clock I/O.
+
 ## Release, sample rate and resource bounds
 
 Release controls express duration to silence, not an exponential time constant.

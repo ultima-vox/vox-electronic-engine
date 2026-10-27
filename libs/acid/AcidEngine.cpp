@@ -198,7 +198,7 @@ void AcidEngine::process(std::span<float*> outputs, std::uint32_t sampleCount,
     };
     // pow is expensive inside the audio sample loop. Convert each source
     // rate to cycles/sample only once per host block, then smooth phase
-    // increments sample-by-sample in renderStereoSample().
+    // increments sample-by-sample, even while the voice is silent.
     for (std::size_t i = 0; i < rateParameters.size(); ++i)
         lfoTargetIncrement_[i] = static_cast<double>(
             0.05f * std::pow(400.0f, targets_[rateParameters[i]])) / sampleRate_;
@@ -576,11 +576,28 @@ void AcidEngine::pitchBend(std::uint8_t channel, std::uint8_t lsb,
   }
 }
 
+void AcidEngine::advanceFreeLfo(std::size_t index, double &phase) noexcept {
+  lfoPhaseIncrement_[index] +=
+      lfoIncrementSmoothing_ *
+      (lfoTargetIncrement_[index] - lfoPhaseIncrement_[index]);
+  phase += lfoPhaseIncrement_[index];
+  if (phase >= 1.0)
+    phase -= std::floor(phase);
+}
+
 void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
     if (ampEnv_.stage == EnvStage::idle && !gate_) {
-        outLeft = 0.0f;
-        outRight = 0.0f;
-        return;
+      // Free-running modulation follows elapsed audio time even without a
+      // voice. Synced sources are derived from host PPQ when rendered.
+      if (smoothed_[Parameter::lfo1Sync] < 0.5f)
+        advanceFreeLfo(0, lfo1Phase_);
+      if (smoothed_[Parameter::lfo2Sync] < 0.5f)
+        advanceFreeLfo(1, lfo2Phase_);
+      if (smoothed_[Parameter::lfo3Sync] < 0.5f)
+        advanceFreeLfo(2, lfo3Phase_);
+      outLeft = 0.0f;
+      outRight = 0.0f;
+      return;
     }
 
     // 1. Advance Modulation Envelope (MODULATION card: ENV 1)
@@ -645,10 +662,7 @@ void AcidEngine::renderStereoSample(float& outLeft, float& outRight) noexcept {
         } else {
             // At the established 4ms smoothing constant, changes in
             // free-running frequency remain smooth; no per-sample pow().
-            lfoPhaseIncrement_[index] += lfoIncrementSmoothing_ *
-                (lfoTargetIncrement_[index] - lfoPhaseIncrement_[index]);
-            phase += lfoPhaseIncrement_[index];
-            if (phase >= 1.0) phase -= std::floor(phase);
+            advanceFreeLfo(index, phase);
             samplePhase = phase;
         }
         float signal = 0.0;
