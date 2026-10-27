@@ -17,6 +17,17 @@ not authorize plugin identity changes, hidden parameter coupling, unsafe realtim
 work or loss of MIDI ownership. One ordinary control changes one base parameter;
 explicit modulation must not rewrite other host base values.
 
+## Owner change: independently installed instrument binaries (27 October 2026)
+
+The prior static-DSP/no-loader product decision is superseded. Instrument packages
+must deliver their own DSP and instrument UI separately from the single VST3 Rack;
+installing a new compatible instrument must not require rebuilding/replacing Rack.
+This is an authorized product change, not evidence of a working loader. The Rack
+owner owns the shared loader/ABI/state/automation design; Acid owns its module and
+adapter. [Design packet](INDEPENDENT_INSTRUMENTS.md) specifies required review and
+measurable integration gates. Existing identifiers, realtime and missing-module
+protections remain in force; a host parameter strategy is not yet approved.
+
 ## Preserve now
 
 - One generic VST3 host with at most 16 rack slots.
@@ -47,6 +58,7 @@ The new product name alone does not authorise an identity or install-path change
 | Send FX / return graph | Stable audio bus identities, tap points, mute/solo/tail/latency policy, state/automation, feedback rejection and bounded buffers; currently absent |
 | Internal kick ducking | Explicit source/recipient contract and event-vs-audio-detector semantics, envelope policy and effective-gain routing; currently absent |
 | Complete direct parameter binding | Named host identities, source-of-truth/rollback, full bank/resource bounds and consolidated reviewed state changes |
+| Independently installed instrument binaries | Versioned module ABI, offline loader/lifecycle, UI delivery, automation/restore/collision strategy and Windows/DAW gates; see design packet |
 | Modular paid distribution | Offline content/entitlement policy; no hidden network dependency |
 
 No implementation in this cleanup changes those runtime contracts.

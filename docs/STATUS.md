@@ -1,8 +1,18 @@
 # Implementation status
 
-Updated: 26.10.2026.
+Updated: 27.10.2026.
 Audited main: `ccc1b4dbe416d96370721674eb4857aec19f8fac`.
 Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
+
+## Owner decision — separate instruments (27 October 2026)
+
+Instrument DSP and instrument UI must be independently installed and updated,
+not built into the Rack VST3. One VST3 remains the host. Current main and pending
+PR #62 still use static built-in providers; a reviewed module loader, package,
+host automation strategy and Acid external-module adapter do not yet exist.
+This owner decision supersedes the previous static-only 1.0 decision. Details and
+exit gates: [independent instruments](architecture/INDEPENDENT_INSTRUMENTS.md).
+Rack / PR #62 belongs to the other agent; Acid / PR #59 is separately owned.
 
 ## Current priority and ownership
 

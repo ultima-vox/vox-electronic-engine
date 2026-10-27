@@ -21,6 +21,15 @@ incomplete controls or label an MVP production.
 | 10 | Package instruments/content | Offline installation, identity/version policy and selected licensing |
 | 11 | Final production acceptance | Complete lineup, installer/upgrade, real editor, sound review and measured Windows/DAW workload matrix |
 
+## Owner change — independently delivered instruments (27 October 2026)
+
+Instrument DSP/UI are installed separately from the one Rack VST3. The Rack
+owner must review the [module design packet](architecture/INDEPENDENT_INSTRUMENTS.md)
+and integrate a loader, discovery, lifecycle, state and a viable DAW automation
+strategy. Acid implements the first independent module against the reviewed
+boundary. Existing static-provider candidates do not satisfy this new gate.
+No project or production acceptance is implied by this documentation update.
+
 ## Current task and boundaries
 
 [RACK_PRODUCTION](tasks/RACK_PRODUCTION.md) is the active lead packet.
