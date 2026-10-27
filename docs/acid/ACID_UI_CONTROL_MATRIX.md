@@ -42,6 +42,7 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 | MOD/LFO1 | Rate, waveform, depth, target | S `lfo1_rate`, `lfo1_wave`, `lfo1_depth`, `lfo1_target` (additive IDs 36–39) | Implemented in Acid branch: distinct 0.05–20 Hz bipolar LFO, 4 waves, independent destination, APVTS, source selector, v4 state; Windows CI confirmation pending. Host BPM sync remains outstanding. |
 | MOD/LFO2 | Rate, waveform, depth, target | S `lfo2_rate`, `lfo2_wave`, `lfo2_depth`, `lfo2_target` (IDs 46–49) | Implemented in source: independent bipolar LFO2 DSP, host automation, own UI tab and v6 state. CI pending; host BPM sync missing. |
 | MOD/LFO3 | Rate, waveform, depth, target | S `lfo3_rate`, `lfo3_wave`, `lfo3_depth`, `lfo3_target` (IDs 50–53) | Implemented in source: independent bipolar LFO3 DSP, host automation, own UI tab and v6 state. CI pending; host BPM sync missing. |
+| MOD/STEP | Depth, Target, Rate, Smooth, 16 bipolar step levels | S `step_amount`, `step_target`, `step_rate`, `step_smooth`, `step_01`–`step_16` (IDs 54–73) | v7: real 16-step bipolar modulation source, independent of MIDI sequencer, driven by existing ProcessBlock BPM/PPQ/playing, each bar individually VST3-automatable, stored in v7. Windows CI unverified; musical seek/restart QA pending. |
 | MOD/STEP | Step modulator, sync, target, depth | MISSING step modulation source | Distinct from note sequencer; audible and stateful |
 | PERFORMANCE | Portamento | S `portamento` | Glides by selected duration, independent of Slide Time semantics |
 | PERFORMANCE | Unison voices | S `unison_voices` | 1–4 audible voices; correct normalization and CPU budget |
@@ -68,7 +69,7 @@ Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated imag
 
 ## Production acceptance / status
 
-Current PR #59 has **54 Acid DSP semantic parameters** (36 original + LFO1 4 + ENV2 6 + LFO2/3 8). Acid-local schema v6 serializes all 54 and accepts v1/v3/v4/v5; absent sources default to depth off. Five UI modulation source tabs rebind the actual slot-scoped host parameters (ENV1, ENV2, LFO1, LFO2, LFO3). New audio/host/UI regression tests were added, **but their latest Windows CI result is not verified**. Last completed pre-v6 CI passed 29/30 tests, with `bass_render_diagnostics/save_restore_rerender` failing. STEP, host-BPM sync, final visual layout and DAW acceptance remain outstanding. Specifically:
+Current PR #59 implements **74 Acid DSP semantic parameters** (54 from v6 + 20 independent STEP values) with v7 state and legacy v1/v3/v4/v5/v6 import. Six modulation source tabs ENV1/ENV2/LFO1/LFO2/LFO3/STEP are wired to actual per-slot host automation controls. STEP owns a separate 16-bar edit curve, distinct from the note sequencer; PPQ/BPM come from the existing ProcessBlock. These are **code changes under test**, not production acceptance. New Windows CI in progress. Prior completed v6 CI built and passed 29/30; Bass save/restore diagnostic remains failing. Host LFO tempo sync, transport seek/restart and DAW/manual visual gates remain outstanding. Specifically:
 - No `AcidEngine*` direct UI binding to replaceable Rack runtime instance.
 - No silent aliasing to host macro `Space`/`Motion`.
 - No imaginary `Step.note`, `Step.slide`, `Step.octave`, `Sequence.stepCount`.
