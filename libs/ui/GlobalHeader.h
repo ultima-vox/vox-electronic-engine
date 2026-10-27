@@ -34,10 +34,11 @@ public:
     vox::ui::VoxButton panicButton { "Panic", vox::ui::VoxButton::Type::Danger };
     vox::ui::VoxButton settingsButton { "Settings", vox::ui::VoxButton::Type::Secondary };
     juce::Slider output, seed;
-    juce::Rectangle<int> brandBounds, meterBounds;
+    juce::Rectangle<int> brandBounds, meterBounds, seedBounds, cpuBarBounds,
+        midiDotBounds, transportBounds, statusBounds;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
         outputAttachment, seedAttachment;
     float cpuValue{}, peaks[2]{};
-    bool transportActive{};
+    bool transportActive{}, midiActive{};
 };
 } // namespace vstengine::ui
