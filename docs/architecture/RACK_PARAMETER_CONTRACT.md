@@ -84,7 +84,7 @@ scenes use `format="rack-project-v5"` and the same whole-project capture/restore
 path as host state, rather than separate partial APVTS/sequence commits.
 
 Before parsing, host chunks and scene files are capped at 32 MiB. Validation
-requires unique PARAM IDs, finite numeric scalars, installed endpoint ranges and
+requires unique PARAM IDs, finite numeric scalars, compatible installed endpoint ranges and
 discrete domains, and every fixed shell/routing endpoint. New `.sound.` banks
 may be absent in compatible catalog snapshots; unknown module endpoints remain
 opaque finite scalars. Rack requires its complete unique named parameter set.
@@ -92,6 +92,15 @@ Patterns, FX and module candidates are prepared before publication; invalid
 values, construction exceptions, null factories and prepare failures reject the
 transaction. Missing/incompatible modules instead retain InstrumentId, versions
 and opaque payload in an explicitly unresolved silent slot, without substitution.
+
+A known host ID in an incompatible module still belongs to the saved module's
+parameter domain. Its finite named values and native payload remain authoritative
+in the unresolved Rack slot, even outside today's installed descriptor range.
+Dormant live APVTS endpoints receive the installed descriptor's Init value; capture
+overlays the preserved named values into the serialized copy only. No secondary
+opaque cache or automation rewrite is introduced. A compatible newer provider can
+recover the original values. Explicit module replacement discards that saved domain;
+active compatible values and all non-finite values retain strict rejection/rollback.
 
 Rack preparation failure retains the previous committed APVTS, patterns and Rack.
 DSP histories, envelopes, meters and tails are runtime state; successful restore

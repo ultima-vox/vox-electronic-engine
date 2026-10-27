@@ -18,7 +18,7 @@ to the unchanged Bass diagnostic below. No tests are skipped or thresholds raise
 | FX finite tails | 6,023,910 checks PASS; independent ASan/UBSan rerun PASS; maxfeedback, serial bounds, sample expiry/new input, retrigger, bypass and zero C++ allocation at expiry |
 | Direct parameter contract | 1,385 checks PASS; independent ASan/UBSan run PASS; 128/512 bounds, metadata/hash identity, one-base controls, modulation isolation, native/named preset authority, rollback/unresolved state |
 | Real JUCE APVTS bank | 25 checks PASS; typed endpoints/units, replay, other-slot isolation and literal/VST3-hash collision rejection |
-| Actual processor state/scenes | 220 checks PASS; live bases → XML → restore, exact fixture audio rerender at nonunity master gain, complete scenes, factory null/throw/prepare failure rollback, malformed/duplicate/missing core PARAM rejection, exact incompatible named/payload preservation |
+| Actual processor state/scenes | 268 checks PASS; live bases → XML → restore, exact fixture audio rerender at nonunity master gain, complete scenes, factory null/throw/prepare failure rollback, malformed/duplicate/missing core PARAM rejection, exact incompatible named/payload preservation |
 | Mutation gate | 10,009 checks PASS; nonblocking callback admission, nested controller ownership and exception recovery |
 | Realtime MIDI boundary | 33,808 checks PASS, independently executed; C++ new plus GNU malloc/calloc/realloc wrapping; 64 KiB SysEx/dense input, held GUI keyboard lock, concurrent keyboard burst, fresh post-Panic NoteOff ownership |
 | Rack shell integration | 10,276 checks PASS; actual master/routing/state/duck effects |
@@ -105,6 +105,45 @@ Independent320-check tests parse actual SMF, verify raw authored-input semantics
 seed determinism and channel/NoteOff/timing, and prove write failure preserves
 existing content. Export/EditorSmoke/RealtimeBoundary pass under1MiB stack.
 Native chooser interaction and host drag/drop remain unperformed manual gates.
+
+## Forward-incompatible parameter domain repair
+
+An independent regression first reproduced whole-project rejection when a future
+module saved gain1.5 in a 0..2 domain but today's descriptor admitted only0..1.
+The fix keeps that unresolved module's finite named/native values exact while
+initializing dormant live endpoints safely. Capture edits only a serialized copy;
+no extra persistent cache, schema or host identity is added. The268-check actual
+processor suite covers future provider recovery, mixed compatible/incompatible
+slots, exact host/Rack resave, explicit replacement and invalid/NaN rollback.
+Realtime boundary and native editor also pass under1MiB stack. Independent Guard
+reproduced the original failure and ran267 checks normally and under1MiB, finding
+no blocker in the core diff; the parent adds the explicit dormant Init assertion
+for268 checks. No compatibility schema or plugin identity changes in this repair.
+
+## Published Windows evidence
+
+Run [40469745576](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/40469745576)
+for exported-pattern head760e751 completed Windows x64 Release build, full CTest (39/39 PASS in27.34s),
+native snapshots, packaging and both artifact uploads successfully. Published
+artifacts: Vox-Electronic-Engine-Windows (4,866,935 bytes) and Vox-UI-Visual-Gate
+(481,757 bytes). This supersedes the earlier failed stack result for that published
+head; it does not cover the subsequent forward-incompatible-domain repair.
+
+## Execution log — forward-domain repair
+
+1. Independently reproduce the valid future-domain project rejection before the
+   fix; keep malformed compatible-state rejection tests intact.
+2. Validate Rack ownership first, preserve unresolved named/native authority and
+   initialize only the dormant live copy. Avoid a second opaque state cache.
+3. Prove exact resave and later provider recovery; independently review the diff
+   and execute processor tests. Add explicit dormant Init coverage.
+4. Rebuild the complete native test set and run CTest; retain the separate Linux
+   Bass diagnostic failure and require fresh exact-head Windows checks.
+5. Publish one scoped follow-up to PR #62 and synchronize #53/#56/contracts.
+
+The ub-mode crapper/dryer/mutator tools are not available in this environment;
+no complexity, duplication or mutation-score result is claimed. Behavioural
+regressions and independent Architecture Guard review provide the recorded checks.
 
 ## Delivery and milestone gates
 

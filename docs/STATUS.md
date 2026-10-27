@@ -109,7 +109,7 @@ formats are rejected under the owner-authorized replacement policy. Existing
 plugin and parameter identities are not renamed.
 
 Independent evidence includes FX-tail 6,023,910 ASan/UBSan checks, direct contract
-1,385 checks, actual processor state/scene 220 checks, realtime MIDI/keyboard
+1,385 checks, actual processor state/scene 268 checks, realtime MIDI/keyboard
 33,808 checks with GNU malloc/calloc/realloc wrapping, and native editor restore/
 selection/routing tests. Full final CTest/build results and limits are recorded in
 [implementation evidence](testing/rack-production-evidence-20261027.md).
@@ -119,5 +119,9 @@ not verify subsequent direct/state/FX/realtime changes. Run40461084884 for conso
 Windows tests; Bass rerender passed there. The candidate repairs the reproduced
 1MiB-stack overflow risk by moving fixed Rack processing storage to construction-time
 heap allocation; all three formerly crashing cases pass independent low-stack
-repeats. Fresh repaired Windows Release/full CTest/package is still required.
+repeats. Windows run40469745576 for head760e751 subsequently passed Release build/full
+CTest/native capture/package/upload. A further regression repair preserves future
+incompatible named parameter domains while keeping dormant live endpoints safe;
+268 processor checks pass locally. Fresh exact-head Windows checks for that repair
+are required before merge.
 Owner visual acceptance and integrated Cubase/REAPER acceptance remain separate gates. Do not close #53 or describe the Rack as production accepted.

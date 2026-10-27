@@ -18,8 +18,10 @@ std::atomic<unsigned> faultAttempts{};
 class Signal final : public instrument::InstrumentInstance {
   float gain_{0.25f}, tone_{1000};
   bool bypass_{};
+  bool future_{};
 
 public:
+  explicit Signal(bool future = false) : future_(future) {}
   bool prepare(const instrument::PrepareSpec &) override {
     if (factoryFault.load() == 3) {
       ++faultAttempts;
@@ -41,7 +43,8 @@ public:
     }
   }
   bool setParameter(std::string_view id, float v) noexcept override {
-    if (id == "gain" && std::isfinite(v) && v >= 0 && v <= 1) {
+    if (id == "gain" && std::isfinite(v) && v >= 0 &&
+        v <= (future_ ? 2.0f : 1.0f)) {
       gain_ = v;
       return true;
     }
@@ -53,7 +56,7 @@ public:
   }
   bool loadState(std::uint32_t v,
                  std::span<const std::byte> bytes) noexcept override {
-    if (v != 1)
+    if (v != (future_ ? 2u : 1u))
       return false;
     if (bytes.empty())
       return true;
@@ -78,9 +81,10 @@ public:
 class Provider final : public instrument::InstrumentProvider {
   instrument::InstrumentDescriptor descriptor_;
   std::array<instrument::ContentDescriptor, 1> contents_;
+  bool future_{};
 
 public:
-  Provider() {
+  explicit Provider(bool future = false) : future_(future) {
     auto &d = descriptor_;
     d.id = fixtureId;
     d.providerId = "test.static.provider";
@@ -116,6 +120,10 @@ public:
                      true,
                      true,
                      -1}};
+    if (future_) {
+      d.stateVersion = 2;
+      d.parameters[0].maximum = 2.0f;
+    }
     auto &preset = contents_[0];
     preset.id = "named";
     preset.instrumentId = fixtureId;
@@ -144,7 +152,7 @@ public:
         std::this_thread::yield();
       creating.store(false);
     }
-    return std::make_unique<Signal>();
+    return std::make_unique<Signal>(future_);
   }
   std::span<const instrument::ContentDescriptor>
   contentDescriptors(std::string_view id) const noexcept override {
@@ -376,6 +384,133 @@ void incompatibleModuleStateRemainsRecoverable(
         "instrument");
 }
 
+void futureParameterDomainRemainsOpaque(
+    const juce::MemoryBlock &validIncoming) {
+  auto future = decodeProject(validIncoming);
+  auto slot = future.getChildWithName("RACK").getChild(0);
+  slot.setProperty("instrumentStateVersion", 2, nullptr);
+  constexpr float futureGain = 1.5f;
+  for (auto child : slot)
+    if (child.hasType("SOUND_PARAMETER") &&
+        child.getProperty("id").toString() == "gain")
+      child.setProperty("value", futureGain, nullptr);
+  auto hostGain = parameterChild(future, id(0, "gain"));
+  check(hostGain.isValid(),
+        "future parameter fixture contains the actual installed host endpoint");
+  hostGain.setProperty("value", futureGain, nullptr);
+  const std::array<float, 2> native{futureGain, 7654.0f};
+  const juce::MemoryBlock nativeBytes(native.data(), sizeof(native));
+  slot.setProperty("modulePayload", nativeBytes.toBase64Encoding(), nullptr);
+  const auto incoming = encodeProject(future);
+
+  auto older =
+      std::make_unique<VstEngineAudioProcessor>(std::make_unique<Provider>());
+  older->prepareToPlay(48000, 64);
+  older->setStateInformation(incoming.getData(),
+                             static_cast<int>(incoming.getSize()));
+  const auto retained = older->instrumentRack().state()[0];
+  check(retained.instrumentId == fixtureId &&
+            retained.instrumentStateVersion == 2,
+        "newer module domain is retained rather than rejecting the entire "
+        "project against old parameter ranges");
+  check(older->instrumentRack().runtimeState()[0].resolution ==
+            instrument::ResolutionStatus::incompatibleSchema,
+        "newer parameter domain remains explicitly unresolved under old "
+        "provider");
+  check(saved(*older, 0, "gain") == futureGain,
+        "future named value outside old range is preserved exactly without "
+        "clamping");
+  check(retained.modulePayload ==
+            std::vector<std::byte>(
+                static_cast<const std::byte *>(nativeBytes.getData()),
+                static_cast<const std::byte *>(nativeBytes.getData()) +
+                    nativeBytes.getSize()),
+        "future native module payload remains byte-identical");
+  check(raw(*older, id(0, "gain")) == 0.25f,
+        "dormant installed endpoint retains safe Init instead of future value");
+  check(render(*older) == std::array<float, 2>{0, 0},
+        "unresolved future-domain slot remains silent");
+
+  const auto resavedBytes = capture(*older);
+  const auto resaved = decodeProject(resavedBytes);
+  check(static_cast<float>(static_cast<double>(
+            parameterChild(resaved, id(0, "gain")).getProperty("value"))) ==
+            futureGain,
+        "re-save retains opaque host value outside the installed old endpoint "
+        "range");
+  const auto resavedSlot = resaved.getChildWithName("RACK").getChild(0);
+  check(resavedSlot.getProperty("modulePayload").toString() ==
+            nativeBytes.toBase64Encoding(),
+        "re-save retains native payload for an upgraded provider");
+
+  // A future domain in one slot must not relax validation for another active
+  // slot that still belongs to the current installed descriptor.
+  auto mixed = future.createCopy();
+  auto mixedRack = mixed.getChildWithName("RACK");
+  auto active = decodeProject(validIncoming)
+                    .getChildWithName("RACK")
+                    .getChild(0)
+                    .createCopy();
+  active.setProperty("slotId", mixedRack.getChild(1).getProperty("slotId"),
+                     nullptr);
+  active.setProperty("channel", 2, nullptr);
+  mixedRack.removeChild(1, nullptr);
+  mixedRack.addChild(active, 1, nullptr);
+  parameterChild(mixed, id(1, "gain")).setProperty("value", 0.73f, nullptr);
+  parameterChild(mixed, id(1, "tone")).setProperty("value", 7654.0f, nullptr);
+  const auto mixedBytes = encodeProject(mixed);
+  older->setStateInformation(mixedBytes.getData(),
+                             static_cast<int>(mixedBytes.getSize()));
+  check(older->instrumentRack().runtimeState()[0].resolution ==
+                instrument::ResolutionStatus::incompatibleSchema &&
+            older->instrumentRack().runtimeState()[1].resolution ==
+                instrument::ResolutionStatus::resolved,
+        "future unresolved and current active module domains coexist in one "
+        "valid project");
+  const auto mixedCommitted = capture(*older);
+  const auto mixedSound = render(*older);
+  auto badActive = mixed.createCopy();
+  parameterChild(badActive, id(1, "gain")).setProperty("value", 1.5f, nullptr);
+  rejectedRestoreKeepsLiveState(*older, encodeProject(badActive),
+                                mixedCommitted, mixedSound);
+  auto malformedOpaque = mixed.createCopy();
+  parameterChild(malformedOpaque, id(0, "gain"))
+      .setProperty("value", "NaN", nullptr);
+  rejectedRestoreKeepsLiveState(*older, encodeProject(malformedOpaque),
+                                mixedCommitted, mixedSound);
+
+  juce::String resetDiagnostic;
+  check(older->loadSlotInstrument(0, fixtureId, resetDiagnostic),
+        "explicit current-module replacement can reset the unresolved future "
+        "slot");
+  set(*older, id(0, "gain"), 0.6f);
+  const auto currentAgain = decodeProject(capture(*older));
+  check(
+      static_cast<float>(static_cast<double>(
+          parameterChild(currentAgain, id(0, "gain")).getProperty("value"))) ==
+          raw(*older, id(0, "gain")),
+      "old opaque host value never overwrites live bases after explicit "
+      "compatible module replacement");
+
+  auto newer = std::make_unique<VstEngineAudioProcessor>(
+      std::make_unique<Provider>(true));
+  newer->prepareToPlay(48000, 64);
+  newer->setStateInformation(resavedBytes.getData(),
+                             static_cast<int>(resavedBytes.getSize()));
+  check(newer->instrumentRack().runtimeState()[0].resolution ==
+            instrument::ResolutionStatus::resolved,
+        "compatible upgraded provider reactivates the retained future module");
+  check(raw(*newer, id(0, "gain")) == futureGain &&
+            saved(*newer, 0, "gain") == futureGain,
+        "upgraded endpoint and named authority recover the exact future base "
+        "value");
+  const auto sound = render(*newer);
+  check(std::abs(sound[0] - 0.06f) < 1e-6f &&
+            std::abs(sound[1] - 0.15308f) < 1e-6f,
+        "reactivated provider renders its retained native/named state at saved "
+        "master gain");
+}
+
 } // namespace
 int main() {
   juce::ScopedJuceInitialiser_GUI gui;
@@ -462,6 +597,7 @@ int main() {
   factoryFailureRollback(*b, bytes);
   malformedApvtsRollback(*b, bytes);
   incompatibleModuleStateRemainsRecoverable(bytes);
+  futureParameterDomainRemainsOpaque(bytes);
   // A deliberately slow controller construction must not race a direct
   // processBlock caller or leave the gate permanently closed.
   slowCreate.store(true);

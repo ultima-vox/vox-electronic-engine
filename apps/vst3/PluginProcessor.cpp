@@ -23,12 +23,41 @@ bool hasVersion(const juce::ValueTree &tree, const char *property,
   return result.ec == std::errc{} && result.ptr == text.data() + text.size() &&
          version == expected;
 }
+std::string slotParameterId(std::size_t, std::string_view);
+using PersistentRack = std::array<vstengine::rack::PersistentSlotState,
+                                  vstengine::instrument::maxSlots>;
+bool isOpaqueSoundEndpoint(
+    std::string_view id, const PersistentRack &slots,
+    const vstengine::instrument::InstrumentRegistry &registry) {
+  for (std::size_t slot = 0; slot < slots.size(); ++slot) {
+    const auto &saved = slots[slot];
+    if (saved.instrumentId.empty())
+      continue;
+    const auto prefix =
+        slotParameterId(slot, ".sound.") + saved.instrumentId + ".";
+    if (!id.starts_with(prefix))
+      continue;
+    const auto resolution = registry.resolve(saved.instrumentId);
+    if (!resolution)
+      return true;
+    const auto &current = *resolution.descriptor;
+    return (saved.instrumentVersion != 0 &&
+            saved.instrumentVersion != current.instrumentVersion) ||
+           (saved.contentVersion != 0 &&
+            saved.contentVersion != current.contentVersion) ||
+           saved.instrumentStateVersion > current.stateVersion ||
+           saved.patternSchemaVersion > VOX_PATTERN_SCHEMA_V1 ||
+           saved.modulePayload.size() > current.budget.maxStateBytes;
+  }
+  return false;
+}
 // Project values are plain host units, not normalized automation values.
-// Unknown module endpoints survive as opaque finite scalars; installed
-// endpoints must satisfy their real descriptor before any live state is
-// replaced.
-bool validateProjectParameters(const juce::ValueTree &tree,
-                               juce::AudioProcessorValueTreeState &parameters) {
+// Unresolved module endpoints survive as opaque finite scalars. Current
+// compatible endpoints must satisfy their descriptor before replacing state.
+bool validateProjectParameters(
+    const juce::ValueTree &tree, juce::AudioProcessorValueTreeState &parameters,
+    const PersistentRack &slots,
+    const vstengine::instrument::InstrumentRegistry &registry) {
   if (tree.getNumChildren() < 3 || tree.getNumChildren() > 20000)
     return false;
   std::unordered_set<std::string> ids;
@@ -61,7 +90,8 @@ bool validateProjectParameters(const juce::ValueTree &tree,
     if (result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
         !std::isfinite(value))
       return false;
-    if (const auto *endpoint = parameters.getParameter(id.c_str())) {
+    if (const auto *endpoint = parameters.getParameter(id.c_str());
+        endpoint && !isOpaqueSoundEndpoint(id, slots, registry)) {
       const auto &range = endpoint->getNormalisableRange();
       if (value < range.start || value > range.end)
         return false;
@@ -1722,8 +1752,27 @@ juce::ValueTree VstEngineAudioProcessor::captureProjectState() {
     tree.removeChild(stale, nullptr);
   }
   tree.setProperty("stateSchemaVersion", 5, nullptr);
-  tree.addChild(vstengine::rack::state::serialize(snapshotRackWithPatterns()),
-                -1, nullptr);
+  const auto slots = snapshotRackWithPatterns();
+  const auto resolutions = rack.runtimeState();
+  for (std::size_t slot = 0; slot < slots.size(); ++slot) {
+    if (resolutions[slot].resolution ==
+        vstengine::instrument::ResolutionStatus::resolved)
+      continue;
+    for (const auto &value : slots[slot].directParameters) {
+      const auto id = vstengine::instrument::hostparams::directId(
+          slot, slots[slot].instrumentId, value.id);
+      auto child = tree.getChildWithProperty("id", juce::String(id));
+      if (!child.isValid()) {
+        child = juce::ValueTree("PARAM");
+        child.setProperty("id", juce::String(id), nullptr);
+        tree.appendChild(child, nullptr);
+      }
+      // Change only the serialized copy. The inactive live bank remains safe
+      // for the installed descriptor; no host automation is rewritten here.
+      child.setProperty("value", value.value, nullptr);
+    }
+  }
+  tree.addChild(vstengine::rack::state::serialize(slots), -1, nullptr);
   tree.addChild(captureEffectsState(), -1, nullptr);
   tree.removeProperty("sequenceData", nullptr);
   return tree;
@@ -1738,8 +1787,6 @@ void VstEngineAudioProcessor::getStateInformation(juce::MemoryBlock &destData) {
 bool VstEngineAudioProcessor::restoreProjectState(const juce::ValueTree &tree) {
   vstengine::rack::RealtimeMutationGate::ReadScope read(mutationGate);
   if (!tree.hasType("PARAMETERS") || !hasVersion(tree, "stateSchemaVersion", 5))
-    return false;
-  if (!validateProjectParameters(tree, apvts))
     return false;
   const auto rackTree = tree.getChildWithName("RACK");
   if (!rackTree.isValid() || !hasVersion(rackTree, "schemaVersion",
@@ -1758,6 +1805,8 @@ bool VstEngineAudioProcessor::restoreProjectState(const juce::ValueTree &tree) {
                                              rackDiagnostic))
       return false;
   }
+  if (!validateProjectParameters(tree, apvts, parsedRack, instrumentRegistry))
+    return false;
   if (rackTree.isValid() && !preflightDirectState(parsedRack))
     return false;
   // Decode into local fixed-size sequences; no live publication until
@@ -1793,6 +1842,19 @@ bool VstEngineAudioProcessor::restoreProjectState(const juce::ValueTree &tree) {
     if (!extra.isValid())
       break;
     apvtsState.removeChild(extra, nullptr);
+  }
+  // A known host ID may belong to an incompatible future module. Keep its
+  // persistent named domain opaque; install only a safe current Init value in
+  // the dormant live endpoint, never an out-of-range value in today's DSP/UI.
+  for (auto child : apvtsState) {
+    if (!child.hasType("PARAM"))
+      continue;
+    const auto id = child.getProperty("id").toString();
+    if (isOpaqueSoundEndpoint(id.toStdString(), parsedRack, instrumentRegistry))
+      if (const auto *endpoint = apvts.getParameter(id))
+        child.setProperty(
+            "value", endpoint->convertFrom0to1(endpoint->getDefaultValue()),
+            nullptr);
   }
   const auto previousApvts = apvts.copyState();
   vstengine::rack::RealtimeMutationGate::ControllerScope mutation(mutationGate);
