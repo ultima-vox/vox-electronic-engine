@@ -170,7 +170,7 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
                      modulationChoice_.getSelectedItemIndex(), 6);
     };
     for (auto* button : { &ampButton_, &filterButton_, &env1Button_, &env2Button_, &lfo1Button_,
-                          &lfo2Button_, &lfo3Button_, &generate_, &mutate_, &clear_ }) {
+                          &lfo2Button_, &lfo3Button_, &stepButton_, &generate_, &mutate_, &clear_ }) {
         vstengine::ui::styleButton(*button);
         addAndMakeVisible(*button);
     }
@@ -181,7 +181,22 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
     lfo1Button_.onClick = [this] { switchLfoForTesting(1); };
     lfo2Button_.onClick = [this] { switchLfoForTesting(2); };
     lfo3Button_.onClick = [this] { switchLfoForTesting(3); };
+    stepButton_.onClick = [this] { switchStepForTesting(); };
     for (int i = 0; i < 4; ++i) addAndMakeVisible(flags_[static_cast<std::size_t>(i)]);
+    for (std::size_t step = 0; step < stepLevels_.size(); ++step) {
+        auto& slider = stepLevels_[step];
+        slider.setSliderStyle(juce::Slider::LinearVertical);
+        slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        slider.setRange(0.0, 1.0, 0.0001);
+        slider.setDoubleClickReturnValue(true, 0.5);
+        slider.setColour(juce::Slider::thumbColourId, acidAccentColour);
+        slider.setColour(juce::Slider::trackColourId, acidGreenColour);
+        slider.setColour(juce::Slider::backgroundColourId, edge);
+        slider.setTooltip("STEP modulation level " + juce::String(
+            static_cast<int>(step + 1)) + " (center = zero)");
+        slider.setVisible(false);
+        addChildComponent(slider);
+    }
     for (const auto& t : { "Classic 303", "Psy Acid", "Dark Acid",
                             "Forest Acid", "Hi-Tech Acid", "Hypnotic Acid" })
         profileChoice_.addItem(t, profileChoice_.getNumItems() + 1);
@@ -239,7 +254,12 @@ AcidPanel::AcidPanel(VstEngineAudioProcessor& processor)
     profileChoice_.setSelectedId(1, juce::dontSendNotification);
     startTimerHz(12);
 }
-AcidPanel::~AcidPanel() { stopTimer(); flagAttachments_.clear(); for (auto& c : knobs_) c.attach.reset(); }
+AcidPanel::~AcidPanel() {
+    stopTimer();
+    for (auto& a : stepLevelAttachments_) a.reset();
+    flagAttachments_.clear();
+    for (auto& k : knobs_) k.attach.reset();
+}
 std::size_t AcidPanel::attachedControlCount() const noexcept {
     std::size_t count = flagAttachments_.size();
     for (const auto& knob : knobs_)
@@ -285,6 +305,23 @@ void AcidPanel::switchLfoForTesting(int number) {
     updateModulationAttachments();
     refreshChoices();
 }
+void AcidPanel::switchStepForTesting() {
+    modSource_ = ModSource::step;
+    updateModulationAttachments();
+    refreshChoices();
+}
+std::size_t AcidPanel::attachedStepLevelsForTesting() const noexcept {
+    return static_cast<std::size_t>(std::count_if(
+        stepLevelAttachments_.begin(), stepLevelAttachments_.end(),
+        [](const auto& a) { return a != nullptr; }));
+}
+bool AcidPanel::setStepLevelForTesting(std::size_t index, double normalized) {
+    if (index >= stepLevels_.size() || !stepLevelAttachments_[index])
+        return false;
+    stepLevels_[index].setValue(juce::jlimit(0.0, 1.0, normalized),
+                                juce::sendNotificationSync);
+    return true;
+}
 std::string_view AcidPanel::selectedModTarget() const noexcept {
     switch (modSource_) {
         case ModSource::env1: return "mod_target";
@@ -292,6 +329,7 @@ std::string_view AcidPanel::selectedModTarget() const noexcept {
         case ModSource::lfo1: return "lfo1_target";
         case ModSource::lfo2: return "lfo2_target";
         case ModSource::lfo3: return "lfo3_target";
+        case ModSource::step: return "step_target";
     }
     return "mod_target";
 }
@@ -348,6 +386,7 @@ void AcidPanel::bind(std::size_t slot) {
     slot_ = juce::jlimit<std::size_t>(0, vstengine::instrument::maxSlots - 1, slot);
     for (auto& knob : knobs_) knob.attach.reset();
     flagAttachments_.clear();
+    for (auto& attachment : stepLevelAttachments_) attachment.reset();
     attachKnobs();
     constexpr std::array<const char*, 4> flagNames { "legato", "retrigger",
                                                        "vel_to_accent", "slide_on_overlap" };
@@ -395,6 +434,7 @@ void AcidPanel::updateModulationAttachments() {
         {{ "lfo2_rate", "lfo2_depth", "lfo2_wave" }},
         {{ "lfo3_rate", "lfo3_depth", "lfo3_wave" }}
     }};
+    const bool isStep = modSource_ == ModSource::step;
     const bool isLfo = modSource_ == ModSource::lfo1
                     || modSource_ == ModSource::lfo2
                     || modSource_ == ModSource::lfo3;
@@ -406,14 +446,37 @@ void AcidPanel::updateModulationAttachments() {
         // Source tabs do not share APVTS attachments, and hidden controls
         // must never retain an automation gesture for an unrelated source.
         k.attach.reset();
-        const bool active = !isLfo || index < lfoLabels.size();
+        const bool active = isStep ? index < 3
+                          : (!isLfo || index < lfoLabels.size());
         k.widget->setVisible(active);
         if (active) {
-            k.semantic = isLfo ? lfoIds[lfoIndex][index]
-                        : modSource_ == ModSource::env2
-                            ? env2Ids[index] : env1Ids[index];
-            k.widget->setLabel(isLfo ? lfoLabels[index] : envLabels[index]);
-            if (isLfo) {
+            constexpr std::array<const char*, 3> stepIds {
+                "step_amount", "step_rate", "step_smooth"
+            };
+            constexpr std::array<const char*, 3> stepLabels {
+                "Depth", "Rate", "Smooth"
+            };
+            k.semantic = isStep ? stepIds[index]
+                       : (isLfo ? lfoIds[lfoIndex][index]
+                         : (modSource_ == ModSource::env2
+                                ? env2Ids[index] : env1Ids[index]));
+            k.widget->setLabel(isStep ? stepLabels[index]
+                              : (isLfo ? lfoLabels[index] : envLabels[index]));
+            if (isStep) {
+                const auto semantic = k.semantic;
+                k.widget->getSlider().textFromValueFunction =
+                    [semantic](double value) {
+                        const auto v = static_cast<float>(juce::jlimit(0.0, 1.0, value));
+                        if (semantic == "step_rate") {
+                            constexpr std::array<const char*, 4> notes {
+                                "1/8", "1/16", "1/32", "1/8T"
+                            };
+                            return juce::String(notes[juce::jlimit(
+                                0, 3, static_cast<int>(std::round(v * 3.0f)))]);
+                        }
+                        return juce::String(v * 100.0f, 0) + "%";
+                    };
+            } else if (isLfo) {
                 const auto semantic = k.semantic;
                 k.widget->getSlider().textFromValueFunction =
                     [semantic](double norm) {
@@ -454,8 +517,25 @@ void AcidPanel::updateModulationAttachments() {
                                 juce::dontSendNotification);
     lfo3Button_.setToggleState(modSource_ == ModSource::lfo3,
                                 juce::dontSendNotification);
+    stepButton_.setToggleState(isStep, juce::dontSendNotification);
+    // Editable bar levels are independently automated APVTS parameters.
+    // Only STEP has these attachments: inactive source tabs cannot move them.
+    for (std::size_t step = 0; step < stepLevels_.size(); ++step) {
+        stepLevelAttachments_[step].reset();
+        stepLevels_[step].setVisible(isStep);
+        if (!isStep) continue;
+        const auto semantic = vstengine::acid::AcidEngine::parameterIds[
+            vstengine::acid::AcidEngine::step01 + step];
+        const auto id = hostId(semantic);
+        stepLevelAttachments_[step] = std::make_unique<
+            juce::AudioProcessorValueTreeState::SliderAttachment>(
+                processor_.parameters(), id, stepLevels_[step]);
+    }
     if (!sections_[modulation].isEmpty()) {
-        layoutKnobs(modulation, section(modulation).reduced(3).withTrimmedTop(22));
+        auto area = section(modulation).reduced(3).withTrimmedTop(22);
+        if (isStep) area.removeFromBottom(std::min(42, area.getHeight() / 2));
+        layoutKnobs(modulation, area);
+        resized();
         repaint(sections_[modulation]);
     }
 }
@@ -582,16 +662,17 @@ void AcidPanel::resized() {
     const auto modBounds = section(modulation);
     // Keep five actual source tabs and a real target selector in one row.
     // No new vertical strip: 1024x768 must preserve rotary knob hit areas.
-    const int tabWidth = 39;
+    const int tabWidth = 36;
     const int x0 = modBounds.getX() + 78;
     env1Button_.setBounds(x0, modBounds.getY() + 2, tabWidth - 1, 18);
     env2Button_.setBounds(x0 + tabWidth, modBounds.getY() + 2, tabWidth - 1, 18);
     lfo1Button_.setBounds(x0 + tabWidth * 2, modBounds.getY() + 2, tabWidth - 1, 18);
     lfo2Button_.setBounds(x0 + tabWidth * 3, modBounds.getY() + 2, tabWidth - 1, 18);
     lfo3Button_.setBounds(x0 + tabWidth * 4, modBounds.getY() + 2, tabWidth - 1, 18);
-    modulationChoice_.setBounds(x0 + tabWidth * 5 + 2, modBounds.getY() + 2,
-                                std::max(40, modBounds.getRight() -
-                                    (x0 + tabWidth * 5 + 7)), 18);
+    stepButton_.setBounds(x0 + tabWidth * 5, modBounds.getY() + 2, tabWidth - 1, 18);
+    modulationChoice_.setBounds(x0 + tabWidth * 6 + 2, modBounds.getY() + 2,
+                                std::max(35, modBounds.getRight() -
+                                    (x0 + tabWidth * 6 + 7)), 18);
     ampButton_.setBounds(section(envelope).getX() + 41,
                           section(envelope).getY() + 2, 38, 19);
     filterButton_.setBounds(section(envelope).getX() + 82,
@@ -603,7 +684,18 @@ void AcidPanel::resized() {
             inner.removeFromTop(compact ? 24 : 36);
         layoutKnobs(group, inner);
     }
-    layoutKnobs(modulation, controlArea(modulation, 0));
+    auto modControlArea = controlArea(modulation, 0);
+    const bool stepTab = modSource_ == ModSource::step;
+    if (stepTab) {
+        auto barArea = modControlArea.removeFromBottom(
+            std::min(42, modControlArea.getHeight() / 2));
+        barArea = barArea.reduced(1, 0);
+        const int width = std::max(1, barArea.getWidth() / 16);
+        for (std::size_t index = 0; index < stepLevels_.size(); ++index)
+            stepLevels_[index].setBounds(barArea.getX() + static_cast<int>(index) * width,
+                                         barArea.getY(), width - 1, barArea.getHeight());
+    }
+    layoutKnobs(modulation, modControlArea);
     layoutKnobs(performance, controlArea(performance, 0));
     auto modeArea = section(playMode).reduced(4);
     modeArea.removeFromTop(23);
