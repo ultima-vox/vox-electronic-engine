@@ -114,8 +114,17 @@ public:
     bool applyInternalEffectsPreset(std::string_view presetId) noexcept;
     void selectSlot(std::size_t index) noexcept
     {
-        selectedSlot.store(juce::jlimit<std::size_t>(0,
-            vstengine::instrument::maxSlots - 1, index));
+        const auto next = juce::jlimit<std::size_t>(
+            0, vstengine::instrument::maxSlots - 1, index);
+        if (selectedSlot.load(std::memory_order_relaxed) != next) {
+            // Preview is bound to the visible Acid slot. Changing the
+            // selection must never leave an invisible Acid playing behind
+            // the currently selected instrument. Audio thread observes
+            // these atomics and emits the regular scheduler NoteOff.
+            for (auto& requested : acidPreviewRequested)
+                requested.store(false, std::memory_order_relaxed);
+        }
+        selectedSlot.store(next, std::memory_order_relaxed);
     }
     [[nodiscard]] std::size_t selectedSlotIndex() const noexcept
     {
