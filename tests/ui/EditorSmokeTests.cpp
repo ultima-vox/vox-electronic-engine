@@ -6,6 +6,11 @@
 #include <iostream>
 #include <memory>
 
+// Protect the ordinary host/test stack footprint; moving the test instance to
+// heap alone would hide an oversized production processor object.
+static_assert(sizeof(VstEngineAudioProcessor) <= 256u * 1024u,
+              "processor inline state exceeds the reviewed host stack budget");
+
 namespace {
 juce::Component *named(juce::Component &parent, const juce::String &id) {
   for (auto *child : parent.getChildren()) {

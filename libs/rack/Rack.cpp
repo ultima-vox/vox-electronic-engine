@@ -88,7 +88,7 @@ std::array<Rack::SlotSummary, instrument::maxSlots> Rack::summaries() const {
   const std::scoped_lock lock(persistentStateMutex_);
   std::array<SlotSummary, instrument::maxSlots> result;
   for (std::size_t i = 0; i < result.size(); ++i) {
-    const auto *d = runtime_[i].descriptor;
+    const auto *d = processing_->runtime[i].descriptor;
     result[i] = {state_[i].slotId,
                  state_[i].instrumentId,
                  d ? d->name : state_[i].instrumentId,
@@ -139,21 +139,24 @@ bool Rack::prepare(const instrument::PrepareSpec& spec)
     spec_ = {};
     bool prepared = true;
     try {
-        for (auto& slot : runtime_)
-            if (slot.instance && !slot.instance->prepare(spec)) {
-                prepared = false;
-                break;
-            }
+      for (auto &slot : processing_->runtime)
+        if (slot.instance && !slot.instance->prepare(spec)) {
+          prepared = false;
+          break;
+        }
     } catch (...) {
         prepared = false;
     }
     if (prepared) {
-        for (std::size_t index = 0; index < runtime_.size(); ++index) {
-            runtime_[index].audio = std::move(audio[index]);
-            for (std::size_t channel = 0; channel < 2; ++channel)
-                runtime_[index].pointers[channel] = channel < spec.outputChannels
-                    ? runtime_[index].audio[channel].data() : nullptr;
-        }
+      for (std::size_t index = 0; index < processing_->runtime.size();
+           ++index) {
+        processing_->runtime[index].audio = std::move(audio[index]);
+        for (std::size_t channel = 0; channel < 2; ++channel)
+          processing_->runtime[index].pointers[channel] =
+              channel < spec.outputChannels
+                  ? processing_->runtime[index].audio[channel].data()
+                  : nullptr;
+      }
         spec_ = spec;
     }
     reset();
@@ -163,22 +166,22 @@ bool Rack::prepare(const instrument::PrepareSpec& spec)
 
 void Rack::reset() noexcept
 {
-    router_.reset();
-    for (auto& destination : routed_) {
-        destination.size = 0;
-        destination.dropped = 0;
-    }
+  processing_->router.reset();
+  for (auto &destination : processing_->routed) {
+    destination.size = 0;
+    destination.dropped = 0;
+  }
     for (auto& dropped : droppedMidiEvents_)
         dropped.store(0, std::memory_order_relaxed);
-    for (auto& slot : runtime_) {
-        if (slot.instance) slot.instance->reset();
-        if (slot.modulation) {
-            slot.modulation->sources = {};
-            slot.modulation->lfoPhase = {};
-            slot.modulation->randomState =
-                slot.modulation->initialRandomState;
-            slot.modulation->sampleHoldStep = -1;
-        }
+    for (auto &slot : processing_->runtime) {
+      if (slot.instance)
+        slot.instance->reset();
+      if (slot.modulation) {
+        slot.modulation->sources = {};
+        slot.modulation->lfoPhase = {};
+        slot.modulation->randomState = slot.modulation->initialRandomState;
+        slot.modulation->sampleHoldStep = -1;
+      }
     }
     // ownedNotes is reserved (always zero); reset must not mutate UI metadata.
 }
@@ -344,16 +347,17 @@ bool Rack::replaceState(
     }
   // All allocating metadata work is complete before publishing the runtime.
   static_assert(std::is_nothrow_move_assignable_v<decltype(state_)>);
-  static_assert(std::is_nothrow_move_assignable_v<decltype(runtime_)>);
+  static_assert(
+      std::is_nothrow_move_assignable_v<decltype(processing_->runtime)>);
   beginExclusive();
   state_ = std::move(replacement);
-  runtime_ = std::move(preparedRuntime);
+  processing_->runtime = std::move(preparedRuntime);
   runtimeState_ = preparedState;
-  for (std::size_t i = 0; i < runtime_.size(); ++i)
-    publishedDescriptors_[i].store(runtime_[i].descriptor,
+  for (std::size_t i = 0; i < processing_->runtime.size(); ++i)
+    publishedDescriptors_[i].store(processing_->runtime[i].descriptor,
                                    std::memory_order_release);
-  router_.reset();
-  for (auto &destination : routed_) {
+  processing_->router.reset();
+  for (auto &destination : processing_->routed) {
     destination.size = 0;
     destination.dropped = 0;
   }
@@ -421,15 +425,15 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
               parameter.preferredMacro)] = parameter.id;
     }
     beginExclusive();
-    if (runtime_[index].instance)
-      runtime_[index].instance->reset();
-    router_.forgetSlot(state_[index].slotId);
-    routed_[index].size = 0;
-    routed_[index].dropped = 0;
+    if (processing_->runtime[index].instance)
+      processing_->runtime[index].instance->reset();
+    processing_->router.forgetSlot(state_[index].slotId);
+    processing_->routed[index].size = 0;
+    processing_->routed[index].dropped = 0;
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
     state_[index] = std::move(replacement);
-    runtime_[index] = std::move(prepared);
-    publishedDescriptors_[index].store(runtime_[index].descriptor,
+    processing_->runtime[index] = std::move(prepared);
+    publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
     endExclusive();
@@ -520,14 +524,15 @@ bool Rack::applySoundPreset(std::size_t index, std::string_view presetId,
     if (prepared.descriptor)
       canonicalizeResolvedDirect(replacement, *prepared.descriptor);
     beginExclusive();
-    if (runtime_[index].instance) runtime_[index].instance->reset();
-    router_.forgetSlot(replacement.slotId);
+    if (processing_->runtime[index].instance)
+      processing_->runtime[index].instance->reset();
+    processing_->router.forgetSlot(replacement.slotId);
     state_[index] = std::move(replacement);
-    runtime_[index] = std::move(prepared);
-    publishedDescriptors_[index].store(runtime_[index].descriptor,
+    processing_->runtime[index] = std::move(prepared);
+    publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
-    routed_[index].clear();
+    processing_->routed[index].clear();
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
     endExclusive();
     diagnostic.clear();
@@ -555,18 +560,20 @@ bool Rack::configureModulation(
     std::string& diagnostic)
 {
     const std::scoped_lock persistentLock(persistentStateMutex_);
-    if (index >= runtime_.size() || !runtime_[index].modulation
-        || runtime_[index].descriptor == nullptr) {
-        diagnostic = "slot has no modulation-capable instrument";
-        return false;
+    if (index >= processing_->runtime.size() ||
+        !processing_->runtime[index].modulation ||
+        processing_->runtime[index].descriptor == nullptr) {
+      diagnostic = "slot has no modulation-capable instrument";
+      return false;
     }
-    auto& modulationRuntime = *runtime_[index].modulation;
+    auto &modulationRuntime = *processing_->runtime[index].modulation;
     modulation::ModulationMatrix candidate;
     if (candidate.prepare(modulationRuntime.registry,
-            runtime_[index].descriptor->budget.maxModulationRoutes)
-            != modulation::MatrixStatus::ok) {
-        diagnostic = "slot modulation budget invalid";
-        return false;
+                          processing_->runtime[index]
+                              .descriptor->budget.maxModulationRoutes) !=
+        modulation::MatrixStatus::ok) {
+      diagnostic = "slot modulation budget invalid";
+      return false;
     }
     for (const auto& route : routes)
         if (candidate.addRoute(route) != modulation::MatrixStatus::ok) {
@@ -733,31 +740,35 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     return;
   if (controls.size() != state_.size()) {
     for (std::size_t i = 0; i < state_.size(); ++i)
-      defaultControls_[i] = processControls(state_[i]);
-    controls = defaultControls_;
+      processing_->defaultControls[i] = processControls(state_[i]);
+    controls = processing_->defaultControls;
   }
-  router_.route(midi, controls, routed_);
-  router_.routeAudition(audition, selectedSlot, controls, routed_);
-  router_.routeGenerated(generated, controls, routed_);
-  for (auto &destination : routed_)
+  processing_->router.route(midi, controls, processing_->routed);
+  processing_->router.routeAudition(audition, selectedSlot, controls,
+                                    processing_->routed);
+  processing_->router.routeGenerated(generated, controls, processing_->routed);
+  for (auto &destination : processing_->routed)
     destination.sortBySampleOffset();
   if (audioRouting && audioControls && AudioRouting::valid(*audioControls)) {
     auto available = *audioControls;
     bool found = false;
     for (std::size_t i = 0; i < controls.size(); ++i)
-      if (controls[i].slotId == available.kickSource && runtime_[i].instance)
+      if (controls[i].slotId == available.kickSource &&
+          processing_->runtime[i].instance)
         found = true;
     if (!found)
       available.kickSource = instrument::invalidSlotId;
-    if (!audioRouting->begin(available, controls, routed_, sampleCount))
+    if (!audioRouting->begin(available, controls, processing_->routed,
+                             sampleCount))
       audioRouting = nullptr;
   } else
     audioRouting = nullptr;
   const bool anySolo = std::any_of(controls.begin(), controls.end(),
                                    [](const auto &slot) { return slot.solo; });
   for (std::size_t i = 0; i < state_.size(); ++i) {
-    auto &slot = runtime_[i];
-    droppedMidiEvents_[i].store(routed_[i].dropped, std::memory_order_relaxed);
+    auto &slot = processing_->runtime[i];
+    droppedMidiEvents_[i].store(processing_->routed[i].dropped,
+                                std::memory_order_relaxed);
     if (!slot.instance)
       continue;
     for (std::size_t channel = 0; channel < outputs.size(); ++channel)
@@ -780,13 +791,13 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
         }
       slot.instance->setParameter(direct.parameter->id, value);
     }
-    applyModulation(slot, state_[i], controls[i], routed_[i], sampleCount,
-                    spec_.sampleRate, bpm, ppq);
+    applyModulation(slot, state_[i], controls[i], processing_->routed[i],
+                    sampleCount, spec_.sampleRate, bpm, ppq);
     slot.instance->setBypassed(!controls[i].enabled || controls[i].mute ||
                                (anySolo && !controls[i].solo));
     slot.instance->process({{slot.pointers.data(), outputs.size()},
                             sampleCount,
-                            routed_[i].view(),
+                            processing_->routed[i].view(),
                             spec_.sampleRate,
                             bpm,
                             ppq,
@@ -842,7 +853,8 @@ std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(
                   snapshot[index].instrumentId, value.id);
               for (const auto &change : controls[index].directValues())
                 if (change.key == key && std::isfinite(change.value)) {
-                  const auto *descriptor = runtime_[index].descriptor;
+                  const auto *descriptor =
+                      processing_->runtime[index].descriptor;
                   const auto *parameter =
                       descriptor != nullptr
                           ? findParameter(*descriptor, value.id)
@@ -875,15 +887,17 @@ std::array<RuntimeSlotState, instrument::maxSlots> Rack::runtimeState() const no
 std::uint32_t Rack::latencySamples() const noexcept
 {
     std::uint32_t result = 0;
-    for (const auto& slot : runtime_)
-        if (slot.instance) result = std::max(result, slot.instance->latencySamples());
+    for (const auto &slot : processing_->runtime)
+      if (slot.instance)
+        result = std::max(result, slot.instance->latencySamples());
     return result;
 }
 std::uint32_t Rack::tailSamples() const noexcept
 {
     std::uint32_t result = 0;
-    for (const auto& slot : runtime_)
-        if (slot.instance) result = std::max(result, slot.instance->tailSamples());
+    for (const auto &slot : processing_->runtime)
+      if (slot.instance)
+        result = std::max(result, slot.instance->tailSamples());
     return result;
 }
 } // namespace vstengine::rack

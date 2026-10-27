@@ -64,11 +64,42 @@ migration assertion to stronger explicit rejection of1..4, with exact state-byte
 preservation, was reviewed as owner-authorized contract evolution. Regression
 thresholds are not weakened and the old-format scenario remains tested.
 
+## Windows result and stack repair
+
+Windows run [40461084884](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/40461084884),
+head3537554 (merge db9e7ad), completed Release build successfully, then failed
+CTest:35/38 PASS; RackIntegration,EditorSmoke,Reliability exited SegFault.
+**Bass rerender passed on Windows**. Visual capture/package stages were not reached;
+this is a failed required check, not an accepted deliverable.
+
+A local1MiB-stack run reproduced RackIntegration's crash. Compiled object sizes
+on Linux explained the risk: Rack932,680 bytes and Processor1,030,408 bytes.
+The fixed processing storage now lives in one construction-time heap allocation:
+Rack9,936 bytes and Processor107,664 bytes. Router ownership/MIDI/control capacities
+and persistent formats are unchanged; no linker/test stack increase was used.
+Compile-time object-size gates protect Rack64KiB/Processor256KiB limits.
+
+After repair, all38 local targets build and the full suite is again37/38 PASS
+(the same Linux Bass diagnostic only). RackIntegration97,EditorSmoke,Reliability559,552,RT33,808 (GNU heap
+wrapping),Performance202,189 checks pass under an actual1MiB Linux stack. Independent
+reviewer recompiled the size probe and independently repeated the first three
+low-stack targets successfully. Callback allocation probes remain zero. Fresh
+Windows CI for the repaired exact head is still required; low-stack reproduction
+is not a Windows crash dump or a substitute for that run.
+
+Reproduction (native local build paths):
+
+```bash
+bash -c 'ulimit -s 1024; exec build/rack-production/rack_integration_tests'
+bash -c 'ulimit -s 1024; exec build/rack-production/editor_smoke_tests'
+bash -c 'ulimit -s 1024; exec build/rack-production/reliability_stress_tests'
+```
+
 ## Delivery and milestone gates
 
 - Earlier PR #62 head e6d892c380a540bb25ce7354f31f32585f1e86b4 had successful Windows
   run40329748342. That older result does not cover this consolidated candidate.
-- Latest consolidated Windows x64 Release/full CTest/package must pass before merge.
+- Latest repaired Windows x64 Release/full CTest/package must pass before merge.
   Linux VST3 packaging is not a supported deliverable; its pre-existing non-PIC
   static dependency link problem was not changed. Local native test builds pass.
 - Workflow captures actual shell, send/return utility and scrolled ducking controls

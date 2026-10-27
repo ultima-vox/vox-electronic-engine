@@ -114,6 +114,9 @@ selection/routing tests. Full final CTest/build results and limits are recorded 
 [implementation evidence](testing/rack-production-evidence-20261027.md).
 
 The earlier PR #62 head e6d892c had successful Windows run40329748342; this does
-not verify subsequent direct/state/FX/realtime changes. Required Windows Release,
-full CTest/package, owner visual acceptance and integrated Cubase/REAPER acceptance
-remain separate gates. Do not close #53 or describe the Rack as production accepted.
+not verify subsequent direct/state/FX/realtime changes. Run40461084884 for consolidated3537554 built successfully but failed three
+Windows tests; Bass rerender passed there. The candidate repairs the reproduced
+1MiB-stack overflow risk by moving fixed Rack processing storage to construction-time
+heap allocation; all three formerly crashing cases pass independent low-stack
+repeats. Fresh repaired Windows Release/full CTest/package is still required.
+Owner visual acceptance and integrated Cubase/REAPER acceptance remain separate gates. Do not close #53 or describe the Rack as production accepted.

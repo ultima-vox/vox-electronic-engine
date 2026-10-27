@@ -107,19 +107,30 @@ private:
     std::array<RuntimeSlotState, instrument::maxSlots> runtimeState_ {};
     std::array<std::atomic<std::uint64_t>, instrument::maxSlots>
         droppedMidiEvents_ {};
-    std::array<SlotRuntime, instrument::maxSlots> runtime_ {};
+    // Large bounded processing state is constructed once off audio. Keeping it
+    // out of Rack's inline footprint leaves room on a host's 1 MiB thread
+    // stack.
+    struct ProcessingStorage {
+      std::array<SlotRuntime, instrument::maxSlots> runtime{};
+      std::array<RackRouter::DestinationBuffer, instrument::maxSlots> routed{};
+      std::array<ProcessSlotControls, instrument::maxSlots> defaultControls{};
+      RackRouter router;
+    };
+    std::unique_ptr<ProcessingStorage> processing_{
+        std::make_unique<ProcessingStorage>()};
     // Registry descriptors have process lifetime; only pointer publication is
     // mutable. UI metadata reads never race runtime replacement or lock audio.
     std::array<std::atomic<const instrument::InstrumentDescriptor *>,
                instrument::maxSlots>
         publishedDescriptors_{};
-    std::array<RackRouter::DestinationBuffer, instrument::maxSlots> routed_ {};
-    std::array<ProcessSlotControls, instrument::maxSlots> defaultControls_ {};
-    RackRouter router_;
     mutable std::atomic<bool> mutationGate_ { false };
     mutable std::atomic<std::uint32_t> activeProcessors_ { 0 };
     // Non-realtime state serialization only. Audio callback never locks.
     mutable std::mutex persistentStateMutex_;
 };
+
+static_assert(
+    sizeof(Rack) <= 64u * 1024u,
+    "Rack must leave room for nested lifecycle/callback frames on host stacks");
 
 } // namespace vstengine::rack

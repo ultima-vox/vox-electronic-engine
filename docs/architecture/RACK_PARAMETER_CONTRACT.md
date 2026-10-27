@@ -63,6 +63,13 @@ through deterministic Panic, rather than dropping a final NoteOff indefinitely.
 Deferred GUI cleanup uses controller-side `allNotesOff`, which emits queue events;
 a silent GUI reset must not erase ownership of a fresh post-Panic key.
 
+Bulk fixed processing state (Router ownership tables, routed MIDI buffers,
+slot runtime bindings and default block controls) is allocated once in Rack
+construction. Reset/process never allocate or replace that storage. Compile-time
+limits require the inline Rack object <=64 KiB and the processor object <=256 KiB;
+large objects must not consume a host's ordinary 1 MiB stack before nested calls.
+This changes placement only: capacities, IDs, payloads and state versions are unchanged.
+
 The shared native editor owns local SequenceEdit snapshots. Controller commits
 check slot/revision, rejecting stale edits after a restore or generation. Timer
 refresh follows changed revisions/module identity without republishing stale UI
