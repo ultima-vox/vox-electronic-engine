@@ -41,6 +41,10 @@ int main()
     auto& params = processor.parameters();
     // True UI->APVTS attachment checks: an Acid knob must not move another
     // physical sound parameter or bleed into the Psy Bass slot.
+    if (!editor->acidKnobTextForTesting("osc_tune").contains("st")
+        || !editor->acidKnobTextForTesting("cutoff").contains("Hz")
+        || !editor->acidKnobTextForTesting("output").contains("dB"))
+        return EXIT_FAILURE;
     const auto* tune = params.getRawParameterValue("slot02Acid_osc_tune");
     const auto* fine = params.getRawParameterValue("slot02Acid_osc_fine");
     const auto* other = params.getRawParameterValue("slot01Acid_osc_tune");
@@ -132,6 +136,8 @@ int main()
     if (!editor->setAcidLfoSyncForTesting(true)
         || sync1->load() < 0.5f || sync2->load() > 0.5f
         || std::abs(otherSync->load() - otherSyncBefore) > 0.0001f)
+        return EXIT_FAILURE;
+    if (!editor->acidKnobTextForTesting("lfo1_rate").contains("/"))
         return EXIT_FAILURE;
     editor->selectAcidLfoForTesting(2);
     if (!editor->setAcidLfoSyncForTesting(true)

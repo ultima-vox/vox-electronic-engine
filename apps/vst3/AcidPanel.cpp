@@ -284,6 +284,13 @@ int AcidPanel::modulationKnobDiameterForTesting() const noexcept {
                          knob.widget->getSlider().getHeight()));
     return minDiameter == std::numeric_limits<int>::max() ? 0 : minDiameter;
 }
+juce::String AcidPanel::knobTextForTesting(std::string_view semantic) const {
+    for (const auto& knob : knobs_)
+        if (knob.semantic == semantic && knob.attach)
+            return knob.widget->getSlider().getTextFromValue(
+                knob.widget->getSlider().getValue());
+    return {};
+}
 bool AcidPanel::setKnobForTesting(std::string_view semantic, double normalized) {
     for (auto& knob : knobs_)
         if (knob.semantic == semantic && knob.attach) {
@@ -427,8 +434,10 @@ void AcidPanel::attachKnobs() {
     for (auto& k : knobs_) {
         if (k.envelopeStage || k.group == modulation) continue;
         auto id = hostId(k.semantic);
+        auto localText = k.widget->getSlider().textFromValueFunction;
         k.attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor_.parameters(), id, k.widget->getSlider());
+        if (localText) k.widget->getSlider().textFromValueFunction = std::move(localText);
         if (auto* param = processor_.parameters().getParameter(id.c_str()))
             k.widget->setDoubleClickResetValue(param->getDefaultValue());
     }
@@ -536,9 +545,11 @@ void AcidPanel::updateModulationAttachments() {
                 };
             }
             const auto id = hostId(k.semantic);
+            auto localText = k.widget->getSlider().textFromValueFunction;
             k.attach = std::make_unique<
                 juce::AudioProcessorValueTreeState::SliderAttachment>(
                     processor_.parameters(), id, k.widget->getSlider());
+            if (localText) k.widget->getSlider().textFromValueFunction = std::move(localText);
             if (auto* p = processor_.parameters().getParameter(id.c_str()))
                 k.widget->setDoubleClickResetValue(p->getDefaultValue());
         }
@@ -606,8 +617,10 @@ void AcidPanel::updateEnvelopeAttachments() {
                 return juce::String(seconds, 2) + "s";
             };
         const auto id = hostId(k.semantic);
+        auto localText = k.widget->getSlider().textFromValueFunction;
         k.attach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor_.parameters(), id, k.widget->getSlider());
+        if (localText) k.widget->getSlider().textFromValueFunction = std::move(localText);
         if (auto* param = processor_.parameters().getParameter(id.c_str()))
             k.widget->setDoubleClickResetValue(param->getDefaultValue());
         ++stage;

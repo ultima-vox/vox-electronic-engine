@@ -23,6 +23,7 @@ public:
     [[nodiscard]] std::size_t attachedControlCount() const noexcept;
     [[nodiscard]] int modulationKnobDiameterForTesting() const noexcept;
     bool setKnobForTesting(std::string_view semantic, double normalized);
+    [[nodiscard]] juce::String knobTextForTesting(std::string_view semantic) const;
     void switchEnvelopeForTesting(bool filter);
     void switchModulationForTesting(bool lfo1);
     void switchEnv2ForTesting();

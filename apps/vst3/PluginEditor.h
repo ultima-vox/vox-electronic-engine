@@ -37,6 +37,9 @@ public:
     bool setAcidKnobForTesting(std::string_view semantic, double normalized) {
         return acidSoundPage.setKnobForTesting(semantic, normalized);
     }
+    juce::String acidKnobTextForTesting(std::string_view semantic) const {
+        return acidSoundPage.knobTextForTesting(semantic);
+    }
     void selectAcidFilterEnvelopeForTesting(bool on) {
         acidSoundPage.switchEnvelopeForTesting(on);
     }
