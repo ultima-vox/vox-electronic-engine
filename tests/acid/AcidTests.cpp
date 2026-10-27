@@ -68,8 +68,8 @@ int main()
             "Infinite sample rate must not enter the audio render path");
     REQUIRE(invalidRate.prepare(1.0e12, 512, 2),
             "finite high sample rate has a defined tail-count behavior");
-    REQUIRE(invalidRate.tailSamples() <= std::numeric_limits<std::uint32_t>::max(),
-            "tail sample count remains within uint32 range");
+    REQUIRE(invalidRate.tailSamples() == std::numeric_limits<std::uint32_t>::max(),
+            "oversized but finite tail count saturates rather than overflowing uint32");
     auto provider = acid::createAcidProvider();
     const auto compliance = tests::runInstrumentCompliance(
         *provider, acid::instrumentId);
