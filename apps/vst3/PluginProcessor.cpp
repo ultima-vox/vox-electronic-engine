@@ -484,6 +484,14 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // changes and module removal; no stuck preview notes.
             scheduler.flush(scratch, 0);
         }
+        if (isAcid && !playing && !preview) {
+            // Preview Stop must release the held note *and* rewind the local
+            // fallback play cursor. flush() deliberately retains currentStep
+            // for normal transport transitions. A newly armed Acid preview
+            // must start deterministically from step 0 with a fresh RNG seed.
+            // reset() only mutates the scheduler; scratch retains the NoteOff.
+            scheduler.reset(currentSampleRate);
+        }
     }
 
     const auto blockSamples = static_cast<std::uint32_t>(buffer.getNumSamples());
