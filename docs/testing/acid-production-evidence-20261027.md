@@ -111,6 +111,8 @@ ub-mode is available and used in this session. Its named crapper/dryer/mutator
 tools are unavailable; no metrics or mutation-test result is fabricated. Existing
 older audit text describes that earlier worker's environment, not this session.
 
-Disposition: **DO NOT MERGE / Acid not production accepted**. No DLL loader is
-introduced. Static providers remain the version1.0 design; independent content
-packs do not require independent runtime binaries.
+Disposition: **DO NOT MERGE / Acid not production accepted**. Owner decision
+27 October 2026 supersedes the former static-provider delivery design: Acid DSP,
+UI and content must ship independently of Rack. The loader and common ABI are
+not yet implemented/reviewed; this Acid branch does not modify the Rack owner's
+work. The current static integration is a candidate to adapt, not a delivery gate.

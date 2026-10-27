@@ -124,3 +124,12 @@ shell and DLL-loading architecture are not changed.
 - Remaining: exact-head full Windows/CTest/package, generic Rack parameter adapter
   integration, complete generator controls/content and exact Acid UI reference,
   musical/DAW/visual acceptance. Keep Draft; no production declaration.
+
+
+## Owner decision — independently installed Acid (27 October 2026)
+
+Acid's DSP and dedicated UI must be installed as part of its own module package,
+not embedded in Rack VST3. The common loader, automation model, versioned ABI
+and editor boundary belong to the Rack owner and need review. Adapt Acid and its
+existing panel to that boundary after it is agreed; do not ship the current static
+provider or AcidParameterBridge as the final integration. Runtime remains offline.

@@ -5,11 +5,12 @@ externally owned. InstrumentId,77 semantic IDs and v8 sound encoding are unchang
 
 ## Delivery and parameter ownership
 
-Version1.0 uses statically linked providers, not a runtime DLL loader. Sound,
-Pattern and Generator content remain distinct. Offline content packs can be
-independently installed without creating new plugin identities. A future binary
-loader requires its own ABI/version/resource/lifecycle review; this Acid task
-does not add one.
+Owner decision 27 October 2026: Acid DSP, specialized UI and content must be
+installed independently of the Rack VST3. Sound, Pattern and Generator content
+remain distinct; the DAW still loads one Rack plugin. The shared module loader,
+ABI, host automation and UI boundaries require review by the Rack owner before
+this Acid module can be packaged and connected. Current static Acid integration
+is an unmerged implementation candidate, not the delivery architecture.
 
 The current PR's slot-scoped AcidParameterBridge is an integration dependency:
 when generic Rack direct parameters land, use its reviewed single authority.
