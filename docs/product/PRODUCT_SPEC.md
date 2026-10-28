@@ -470,7 +470,8 @@ Audio callback:
 4. Sound/Pattern isolation и locks.
 5. MIDI drag/import и отсутствие double playback.
 6. Exported phrase соответствует captured preview.
-7. MIDI channel isolation, layer/splits, note ownership, Panic.
+7. Exclusive instrument MIDI channel ownership, key/velocity splits within the
+   assigned channel, note ownership and Panic; no shared-channel layer mode.
 8. Start/stop/seek/loop, смена tempo/block size/sample rate.
 9. Automation record/replay и slot mappings.
 10. Save/reopen, migration, missing samples, invalid presets.

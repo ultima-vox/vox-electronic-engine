@@ -73,7 +73,7 @@ against the actual editor rather than assuming a generic parameter list is enoug
   fallback instrument or silent data loss. Reinstallation and compatible upgrade
   must restore the original sound and pattern when the module can read them.
 
-## Host automation and project portability — unresolved gate
+## Host automation and project portability
 
 The set of VST3 host parameters is presented during plugin setup; existing hosts
 may cache that set. A module installed later or missing when a project is opened
@@ -85,31 +85,57 @@ caching, duplicate IDs, or automation for a missing module. Steinberg's
 requires a unique host parameter ID; its [communication FAQ](https://steinbergmedia.github.io/vst3_dev_portal/pages/FAQ/Communication.html)
 describes `kParamTitlesChanged` for metadata changes, not parameter-count/ID changes.
 
-Before freezing the ABI or connecting Acid, the Rack owner must design and review
-an approach that demonstrates all of the following in Cubase12–15 and REAPER:
+The selected approach is a fixed host parameter pool: 16 slots × 64 endpoints,
+`slotNN.p001` through `slotNN.p064`, independent of installed modules. The
+unmerged Rack stack #62 → #64 → #65 implements a candidate. A parameter has an
+explicit unique pool index, stable and never reused within its InstrumentId;
+descriptor order must not change the binding. Named Rack values are the restore
+authority. In the candidate, pool automation belongs to the slot: replacing an
+instrument intentionally assigns the same lane to the new instrument's parameter
+at that index. Switching instruments can therefore change a lane's meaning; the
+UI and host workflow must communicate this. This is distinct from accidental
+remapping across versions of the same instrument.
+
+The pool supports at most 64 direct parameters per slot. Acid's current branch
+has 77 engine parameters, including one packed play-mode value, and exposes four
+play-mode flags separately: 80 host-facing controls in total, eight of them using
+existing slot macros. Even treating all eight macros as additional independent
+endpoints would leave fewer endpoints than Acid currently requires. Acid integration
+remains blocked pending a reviewed
+resolution; do not silently omit, couple, or alias controls, or introduce a second
+host parameter authority.
+
+The implementation, binary ABI and host behavior remain under review. Before
+production acceptance demonstrate all of the following in Cubase12–15 and REAPER:
 
 1. A new module can be installed without replacing Rack and its parameters become
    available with a documented scan/restart/instance lifecycle.
 2. Parameter identities and units remain stable across project save/reopen,
    host restart, module updates, additional installed modules and slot selection.
 3. A project opened without its module retains module state and automation safely;
-   reinstalling the module and reopening recovers them. No automation is silently
-   reassigned to a different parameter or a different replacement instrument.
+   reinstalling the module and reopening recovers them. Same-instrument updates
+   must not remap existing parameters. Instrument replacement follows the
+   explicit slot-lane policy above.
 4. Literal and VST3 host-ID collisions reject deterministically; max slots,
    catalog/parameter/resource bounds and exhaustion behavior are explicit.
 5. Sound, Pattern and Generator remain separate, and modulation alters effective
    values without overwriting another base parameter or host automation.
 
-Candidate directions include a stable parameter catalog independent of binary
-installation, or a permanently bounded generic bank with a reviewed, persistent
-binding policy. Both require a plan for project portability and prevention of
-cross-instrument automation reassignment. Neither is selected by this packet.
-
-The existing PR #62 scheme enumerates a compiled catalog during construction.
-Whether it can satisfy dynamic installation and missing-module portability is
-**not established**. Do not claim compatibility until the reviewed design and real
-host tests prove it. Old POC projects have no required migration, but existing
-plugin identity and stable IDs remain protected unless explicitly reviewed.
+PR #65 proposes controller-side transactional append-only migration for compatible
+same-InstrumentId upgrades, including recorded pool indices and defaulting new
+parameters. Missing/incompatible snapshots remain unresolved and preserved;
+backward-opening migrated newer snapshots is not supported by the candidate.
+The candidate requires schema 6 recorded indices for migration; v1–v5 snapshots
+with unknown indices do not qualify and remain unresolved when migration is needed.
+The saved candidate snapshot does not contain the old range, unit, type or
+semantics, so these tests alone cannot prove that an upgraded descriptor preserves
+their meaning or host automation normalization. Changes to existing semantics,
+units, types or ranges are outside append-only migration and require explicit
+compatibility review and migration policy. The UI must warn that a deliberate
+instrument replacement changes the slot lane's meaning; missing modules must
+never trigger an automatic replacement.
+This does not establish module loading, ABI compatibility, or DAW acceptance.
+Old POC projects need no migration; plugin identity remains protected.
 
 ## Acid integration and exit criteria
 
@@ -136,7 +162,7 @@ Minimum measurable integration gate:
 - Pass Windows Release/full CTest/package, independent ABI/realtime review,
   and actual integrated Cubase/REAPER and owner visual/audio acceptance.
 
-Open decisions: concrete ABI entry point and UI schema; host automation discovery
-strategy and missing-module portability; package trust/signing/licensing; exact
+Open decisions: concrete ABI entry point and UI schema; the 64-versus-77 Acid
+control conflict and verified missing-module portability; package trust/signing/licensing; exact
 resource budgets; host scan/restart behavior; shared DSP distribution policy.
 None is solved solely by adding a `LoadLibrary` call.

@@ -26,7 +26,11 @@ This is an authorized product change, not evidence of a working loader. The Rack
 owner owns the shared loader/ABI/state/automation design; Acid owns its module and
 adapter. [Design packet](INDEPENDENT_INSTRUMENTS.md) specifies required review and
 measurable integration gates. Existing identifiers, realtime and missing-module
-protections remain in force; a host parameter strategy is not yet approved.
+protections remain in force. The selected automation strategy is a fixed 16 × 64
+per-slot pool, with stable explicit indices per InstrumentId; PR #65 is an
+unmerged implementation candidate, not DAW acceptance. Slot automation is
+intentionally rebound on instrument replacement. Acid currently exposes 80
+host-facing controls and cannot fit the pool without a separately reviewed resolution.
 
 ## Preserve now
 
@@ -34,7 +38,8 @@ protections remain in force; a host parameter strategy is not yet approved.
 - Provider/descriptor/factory boundary; no concrete instrument routing in the shell.
 - Stable SlotId independent of order, MIDI channel, InstrumentId and audio output.
 - NoteOff returns to the exact slot that accepted NoteOn.
-- Explicit SWAP/MOVE/LAYER semantics; no accidental duplicate-channel layering.
+- One instrument owns at most one MIDI channel, with no shared-channel layering;
+  PR #64 is the unmerged implementation candidate for this decision.
 - Sound and Pattern remain independent.
 - Transactional parse -> validate -> prepare -> commit state loads.
 - Missing/incompatible modules preserve identity and payload; no silent substitution.

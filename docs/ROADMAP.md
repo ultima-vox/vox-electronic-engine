@@ -25,8 +25,11 @@ incomplete controls or label an MVP production.
 
 Instrument DSP/UI are installed separately from the one Rack VST3. The Rack
 owner must review the [module design packet](architecture/INDEPENDENT_INSTRUMENTS.md)
-and integrate a loader, discovery, lifecycle, state and a viable DAW automation
-strategy. Acid implements the first independent module against the reviewed
+and integrate a loader, discovery, lifecycle and state. The selected automation
+strategy is a fixed 16 × 64 slot pool, implemented provisionally in stacked PR
+#65; review and actual DAW acceptance remain open. Acid's 80 host-facing controls
+exceed the 64-endpoint limit and require a reviewed resolution without silent
+parameter coupling or loss. Acid implements the first independent module against the reviewed
 boundary. Existing static-provider candidates do not satisfy this new gate.
 No project or production acceptance is implied by this documentation update.
 
