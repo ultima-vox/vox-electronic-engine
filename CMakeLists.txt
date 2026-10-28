@@ -312,6 +312,10 @@ add_executable(acid_decay_tests tests/acid/AcidDecayTests.cpp)
 target_link_libraries(acid_decay_tests PRIVATE vst_acid)
 add_test(NAME acid_decay_tests COMMAND acid_decay_tests)
 
+add_executable(acid_control_inventory_tests tests/acid/AcidControlInventoryTests.cpp)
+target_link_libraries(acid_control_inventory_tests PRIVATE vst_acid)
+add_test(NAME acid_control_inventory_tests COMMAND acid_control_inventory_tests)
+
 add_executable(acid_free_lfo_tests tests/acid/AcidFreeLfoTests.cpp)
 target_link_libraries(acid_free_lfo_tests PRIVATE vst_acid)
 add_test(NAME acid_free_lfo_tests COMMAND acid_free_lfo_tests)

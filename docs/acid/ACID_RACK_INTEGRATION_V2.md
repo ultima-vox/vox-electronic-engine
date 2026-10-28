@@ -34,6 +34,22 @@ As of PR #59, the engine has **77 semantic state fields** including packed `play
 
 **Audit required:** `AcidProvider.cpp` currently describes extended controls largely as normalized floats and a static built-in provider. Replace this interim metadata with truthful typed descriptors and a reviewed parameter normalization contract; test both plug-in GUI and host presentation. Never change existing host-normalized semantics merely by changing names.
 
+**Waveform type requires reconciliation:** the example above lists `waveform`
+as a discrete choice, while the control matrix requires a waveform selector and
+continuous morph knob as two views of the same parameter. Current
+`renderVoiceOscillator` continuously interpolates four waveforms. Advertising
+this parameter as a discrete choice would quantize and alter existing morph
+automation. Preserve the actual continuous behavior until the intended host
+contract is reviewed; LFO waveform selectors are distinct discrete controls.
+
+**Identity inventory checkpoint:** `AcidControlInventory.h` enumerates the 80
+distinct semantic IDs with explicit proposed pool indices and distinguishes the
+four flags from packed engine state. `acid_control_inventory_tests` checks
+uniqueness, coverage and engine identity. This is not the required complete
+typed manifest: units, physical ranges, choice conversion, defaults, modulation
+eligibility, host normalized-value stability and final capacity remain to be
+specified and verified. Nothing is bound to the host pool by this checkpoint.
+
 ## Automation safety and instrument replacement
 
 - Fixed `slotNN.pNNN` endpoint IDs must never change when adding instruments. Same-InstrumentId version upgrades may use #65's checked append-only migration if recorded pool indices, preserved semantics and values satisfy the contract. Incompatible/missing packages retain the original identity, named values, Sound/Pattern/Generator blobs and automation without a fallback.
