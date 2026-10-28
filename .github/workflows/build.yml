@@ -83,6 +83,8 @@ jobs:
 
       - name: Assemble Vox Demo Synth Cubase guide
         shell: powershell
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $guide = Join-Path $PWD "build\demo-guide"
           if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
@@ -92,7 +94,8 @@ jobs:
           $dll = "build\demo-packages\com.ultimavox.demo-synth.voxinst\1.0.0\module\x64\VoxDemoSynth.dll"
           foreach ($f in @($rack, $dll)) { if (-not (Test-Path $f)) { throw "missing $f" } }
           @(
-            "Commit: $env:GITHUB_SHA"
+            "Head commit: $env:HEAD_SHA"
+            "Built commit (PR merge ref): $env:GITHUB_SHA"
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             "Rack SHA-256: $((Get-FileHash -Algorithm SHA256 $rack).Hash.ToLower())"
             "VoxDemoSynth.dll SHA-256: $((Get-FileHash -Algorithm SHA256 $dll).Hash.ToLower())"
