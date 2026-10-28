@@ -69,18 +69,22 @@ void initializeDirect(PersistentSlotState &state,
   if (descriptor.directParameters && state.directParameters.empty() &&
       state.modulePayload.empty())
     for (const auto &parameter : descriptor.parameters)
-      state.directParameters.push_back({parameter.id, parameter.defaultValue});
+      state.directParameters.push_back(
+          {parameter.id, parameter.defaultValue, parameter.poolIndex});
 }
 void canonicalizeResolvedDirect(
     PersistentSlotState &state,
     const instrument::InstrumentDescriptor &descriptor) {
   if (descriptor.directParameters)
     for (auto &value : state.directParameters)
-      if (const auto *parameter = findParameter(descriptor, value.id))
+      if (const auto *parameter = findParameter(descriptor, value.id)) {
+        // A resolved slot records the endpoint each value is bound to.
+        value.poolIndex = parameter->poolIndex;
         if (std::isfinite(value.value) && value.value >= parameter->minimum &&
             value.value <= parameter->maximum)
           value.value =
               instrument::hostparams::canonicalPlain(value.value, *parameter);
+      }
 }
 } // namespace
 
@@ -235,6 +239,14 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
             value.value < parameter->minimum ||
             value.value > parameter->maximum) {
           diagnostic = "direct parameter identity or range invalid";
+          return false;
+        }
+        // A recorded endpoint must still match: a moved pool index without a
+        // version bump would silently remap automation. Unknown (-1) is the
+        // documented legacy match-by-ID policy.
+        if (value.poolIndex >= 0 && value.poolIndex != parameter->poolIndex) {
+          diagnostic = "direct parameter pool index changed without a new "
+                       "instrument version";
           return false;
         }
         target.direct[target.directCount++] = {

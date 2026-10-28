@@ -8,22 +8,58 @@ Instrument-specific parameter meanings belong to each provider descriptor.
 
 A provider opts in with `InstrumentDescriptor::directParameters = true`.
 Each base value has a stable `ParameterDescriptor.id`, name, unit, group, type,
-minimum, maximum, default and step; choices have ordered stable labels. Host IDs
-are `slotNN.sound.<InstrumentId>.<ParameterId>` (NN=01..16). Slot banks remain
-immutable; display selection never changes their automation ownership. Existing
-plugin/parameter/InstrumentId identities are retained.
+minimum, maximum, default and step; choices have ordered stable labels.
 
-Registration rejects incomplete/duplicate descriptors, ambiguous concatenated
-host IDs, runtime key collisions and VST3 parameter-ID hash collisions. The
-pinned JUCE VST3 hash policy is checked against the complete parameter layout.
+**Fixed host pool** (owner decision 27.10.2026, Kontakt model): every slot
+exposes the same 64 generic endpoints `slotNN.pKKK` (NN=01..16, KKK=001..064),
+created once at processor construction whatever the catalog contains. Loading
+an instrument binds each named parameter to the slot's pool endpoint given by
+its required, unique `ParameterDescriptor::poolIndex` (0..63), independent of
+descriptor order; a bound endpoint takes that parameter's range, name ("Slot N Name"),
+unit and value text and the host is told that parameter info changed. Unused
+and dormant endpoints are unbound ("Slot N Param KK", neutral value 0).
+Automation belongs to the slot: after replacing the instrument, the same lane
+drives the new instrument's parameter at that index. A bound endpoint also takes
+the parameter's host type: boolean (2 steps), choice (label count) and integer
+(inclusive span) are discrete; floating and unbound endpoints are continuous.
+
+Pool-index stability: a parameter's `poolIndex` never changes within one
+InstrumentId and is never reused for another parameter; reordering or inserting
+descriptor entries does not move any endpoint (regression-tested). Registration
+rejects a missing, out-of-range or duplicate pool index. Packages carry the
+same explicit index in `params.json` (instrument packages, phase 2).
+
+Upgrade policy (same InstrumentId, owner decision 28.10.2026, regression-tested
+across separate processors). Rack schema 6 records each named value's pool
+index. A revision that only reorders descriptor entries keeps
+`instrumentVersion` and restores exactly. A revision that adds parameters bumps
+`instrumentVersion`; project restore then applies **append-only migration**
+(`rack::migrateAppendOnly`) on the candidate state: accepted only when every
+saved ID still exists with its recorded pool index and a value valid under the
+current descriptor, and only the new IDs are filled from canonical defaults.
+The migrated state is validated and prepared in the same transaction; any
+failure rejects the restore without touching live state. Anything else (moved
+index, removed/renamed ID, invalidated value, missing recorded index, other
+version markers) stays unresolved with the original snapshot preserved; such
+changes need their own explicit migration. Opening a migrated snapshot in the
+older build is not supported: it stays unresolved and preserved. Changing the
+parameter set, or moving a recorded pool index, without the version bump is a
+provider error and rejects the whole restore transactionally (checked for every
+resolved slot before commit, so endpoint identity is never silently changed).
+Legacy values without a recorded index (Rack schema 1-5) match by ID only. The former per-instrument
+IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
+
+Registration rejects incomplete/duplicate descriptors, runtime key collisions
+and VST3 parameter-ID hash collisions. The pinned JUCE VST3 hash policy is
+checked against the complete parameter layout.
 All direct endpoints are automatable; `preferredMacro` must be -1. Boolean domains
 are 0/1; integer and choice bounds are exact float integers within ±16,777,215;
 choices contain at most 256 labels. Floating values use the declared range and
 step, or continuous values when step=0. Defaults must be finite and in range.
 
-Bounds: 128 direct parameters per instrument, 512 unique direct endpoints in the
-compiled catalog, replicated over at most 16 immutable host banks. Only the
-selected instrument bank's at most 128 cached atomics are read per slot/block.
+Bounds: 64 direct parameters per instrument (the pool size), 512 unique named
+parameters in the compiled catalog. Only the bound bank's at most 64 cached
+atomics are read per slot/block.
 Catalog registration and APVTS construction occur outside processing. Catalog
 changes that alter existing endpoint meaning require explicit review/versioning.
 The human generation seed is the exact integer domain 0..16,777,215; deterministic
@@ -77,29 +113,29 @@ models. Borrowed test/controller-only model access requires external serializati
 
 ## Project, scene and failure policy
 
-Engine project schema **5**, Rack schema **4**, FX schema **2**. Obsolete POC
+Engine project schema **5**, Rack schema **6**, FX schema **2**. Obsolete POC
 project/complete-scene formats are explicitly rejected; no parallel compatibility
 mode is introduced. Plugin bundle/FUID/manufacturer remain unchanged. Complete
 scenes use `format="rack-project-v5"` and the same whole-project capture/restore
 path as host state, rather than separate partial APVTS/sequence commits.
 
 Before parsing, host chunks and scene files are capped at 32 MiB. Validation
-requires unique PARAM IDs, finite numeric scalars, compatible installed endpoint ranges and
-discrete domains, and every fixed shell/routing endpoint. New `.sound.` banks
-may be absent in compatible catalog snapshots; unknown module endpoints remain
-opaque finite scalars. Rack requires its complete unique named parameter set.
+requires unique PARAM IDs, finite numeric scalars, every endpoint of the fixed
+layout (pool included) and in-range values for non-pool endpoints. Pool PARAMs
+only mirror the Rack's named values and need only be finite; the named values
+are validated strictly against the bound descriptor and win on restore. Rack
+requires its complete unique named parameter set.
 Patterns, FX and module candidates are prepared before publication; invalid
 values, construction exceptions, null factories and prepare failures reject the
 transaction. Missing/incompatible modules instead retain InstrumentId, versions
 and opaque payload in an explicitly unresolved silent slot, without substitution.
 
-A known host ID in an incompatible module still belongs to the saved module's
-parameter domain. Its finite named values and native payload remain authoritative
-in the unresolved Rack slot, even outside today's installed descriptor range.
-Dormant live APVTS endpoints receive the installed descriptor's Init value; capture
-overlays the preserved named values into the serialized copy only. No secondary
-opaque cache or automation rewrite is introduced. A compatible newer provider can
-recover the original values. Explicit module replacement discards that saved domain;
+An incompatible module keeps its parameter domain: its finite named values and
+native payload remain authoritative in the unresolved Rack slot, even outside
+today's installed descriptor range. Its pool is unbound and neutral, so no
+out-of-range value reaches today's DSP/UI. No secondary opaque cache or
+automation rewrite is introduced. A compatible newer provider rebinds the pool
+and recovers the original values. Explicit module replacement discards that saved domain;
 active compatible values and all non-finite values retain strict rejection/rollback.
 
 Rack preparation failure retains the previous committed APVTS, patterns and Rack.

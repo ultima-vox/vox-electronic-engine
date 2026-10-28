@@ -48,7 +48,8 @@ Layout: one folder per package, `<id>.voxinst/` (owner decision: folders):
 ```
 manifest.json   id, name, vendor, version, engineApi, schema
 graph.json      blocks, connections, voice policy
-params.json     package parameter -> pool index, range, unit, default
+params.json     package parameter -> explicit pool index (stable across package
+                versions; never reused for another parameter), range, unit, default
 presets/        sound presets
 patterns/       pattern presets and generator profiles
 ui.json         layout of standard VOX widgets (no custom code)
@@ -72,8 +73,10 @@ panels, knobs); it is not a separate shell.
 
 ## Phases
 
-1. Parameter pool replaces `DirectParameterBank` IDs; built-in instruments
-   become manifest + coarse block. Plugin parameter layout changes once.
+1. Parameter pool replaces `DirectParameterBank` IDs (**done** on
+   `feat/instrument-param-pool`, see [parameter contract](RACK_PARAMETER_CONTRACT.md));
+   built-in instruments become manifest + coarse block (next). Plugin parameter
+   layout changes once.
 2. Package loader/scanner, validation, missing-package handling, tests.
 3. Block graph compiler and the first fine-grained blocks.
 4. `ui.json` renderer; packaging tool.

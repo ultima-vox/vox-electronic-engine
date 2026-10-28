@@ -31,7 +31,20 @@ inline constexpr std::size_t maxSlots = 16;
 // exact.
 inline constexpr std::uint32_t maxGenerationSeed = 0x00ffffffu;
 inline constexpr std::size_t macrosPerSlot = 8;
-inline constexpr std::size_t maxDirectParameters = 128;
+// Fixed host pool (owner decision 27.10.2026): every slot exposes the same 64
+// generic endpoints; an instrument's named parameters bind to them in
+// descriptor order, so installing an instrument never changes the host layout.
+// Set for every target by the CMake cache option of the same name (64 shipped;
+// 96/128 only for capacity benchmarks). The fallback keeps non-CMake tools at 64.
+#ifndef VOX_POOL_PARAMETERS_PER_SLOT
+#define VOX_POOL_PARAMETERS_PER_SLOT 64
+#endif
+static_assert(VOX_POOL_PARAMETERS_PER_SLOT == 64 ||
+                  VOX_POOL_PARAMETERS_PER_SLOT == 96 ||
+                  VOX_POOL_PARAMETERS_PER_SLOT == 128,
+              "unsupported host parameter pool size");
+inline constexpr std::size_t poolParametersPerSlot = VOX_POOL_PARAMETERS_PER_SLOT;
+inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
 inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {
@@ -83,6 +96,11 @@ struct ParameterDescriptor {
     bool automatable { true };
     bool modulatable {};
     std::int8_t preferredMacro { -1 };
+    // Host pool endpoint (0..63) of a direct parameter. Required and unique
+    // per instrument; it must stay the same across instrument versions so
+    // recorded automation never moves to another control. Unused (-1) for
+    // instruments without direct parameters.
+    std::int16_t poolIndex { -1 };
 };
 
 struct InstrumentDescriptor {
