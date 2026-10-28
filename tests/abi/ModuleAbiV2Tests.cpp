@@ -232,6 +232,8 @@ struct Block {
   std::vector<VoxParamChangeV2> changes;
   std::vector<VoxMidiEventV2> events;
   std::uint32_t flags{};
+  VoxTransportV2 transport{sizeof(VoxTransportV2), VOX_MODULE_ABI_V2, 0, 0, 0, 0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0};
 
   VoxProcessContextV2 context() {
     return {sizeof(VoxProcessContextV2),
@@ -247,7 +249,8 @@ struct Block {
             sizeof(VoxMidiEventV2),
             flags,
             0,
-            0};
+            0,
+            &transport};
   }
   bool silent(std::uint32_t from = 0, std::uint32_t to = block) const {
     for (std::uint32_t i = from; i < to; ++i)
@@ -319,6 +322,9 @@ void layout() {
       L(VoxProcessContextV2, paramChanges), L(VoxProcessContextV2, paramChangeStride),
       L(VoxProcessContextV2, midiEvents), L(VoxProcessContextV2, midiEventStride),
       L(VoxProcessContextV2, releaseFlags), L(VoxProcessContextV2, samplePosition),
+      L(VoxProcessContextV2, transport), sizeof(VoxTransportV2), L(VoxTransportV2, flags),
+      L(VoxTransportV2, tempoBpm), L(VoxTransportV2, ppqPosition),
+      L(VoxTransportV2, loopEndPpq), L(VoxTransportV2, timeInSamples),
       sizeof(VoxModuleV2), L(VoxModuleV2, getInstrument), L(VoxModuleV2, process),
       L(VoxModuleV2, loadState), L(VoxModuleV2, content), L(VoxModuleV2, editor),
       L(VoxModuleV2, shutdown)};
@@ -524,6 +530,17 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
     c.midiEventCount = 0xFFFFFFFFu;
     REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "huge MIDI count rejected");
     REQUIRE(m.process(instance, nullptr) == VOX_E_INVALID_ARG, "null context");
+    c = x.context();
+    c.transport = nullptr;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "null transport");
+    x.transport.flags = 0x100u;
+    c = x.context();
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "unknown transport flag");
+    x.transport.flags = 0;
+    x.transport.structSize = 16;
+    c = x.context();
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "short transport struct");
+    x.transport.structSize = sizeof(VoxTransportV2);
   }
 
   // Silence without notes; NoteOn at its sample offset.

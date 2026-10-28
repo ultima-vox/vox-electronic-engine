@@ -66,6 +66,17 @@ typedef int32_t VoxResult;
 #define VOX_RELEASE_ALL_SOUND_AT_END 0x4u
 #define VOX_KNOWN_RELEASE_FLAGS 0x7u
 
+/* VoxTransportV2.flags: a value is meaningful only with its HAS_* flag. */
+#define VOX_TRANSPORT_HAS_TEMPO 0x1u
+#define VOX_TRANSPORT_HAS_PPQ 0x2u
+#define VOX_TRANSPORT_HAS_BAR_START 0x4u
+#define VOX_TRANSPORT_HAS_TIME_SIGNATURE 0x8u
+#define VOX_TRANSPORT_HAS_TIME 0x10u
+#define VOX_TRANSPORT_PLAYING 0x20u
+#define VOX_TRANSPORT_LOOPING 0x40u
+#define VOX_TRANSPORT_DISCONTINUITY 0x80u
+#define VOX_TRANSPORT_KNOWN_FLAGS 0xFFu
+
 typedef struct VoxInstanceT *VoxInstance; /* opaque, owned by the module */
 typedef struct VoxContentApiV2 VoxContentApiV2; /* reserved; NULL in slice 1 */
 typedef struct VoxEditorApiV2 VoxEditorApiV2;   /* reserved; NULL in slice 1 */
@@ -138,6 +149,24 @@ typedef struct VoxMidiEventV2 {
   uint8_t bytes[8];
 } VoxMidiEventV2;
 
+/* Host musical transport at sample 0 of the block (block-rate tempo).
+ * Modules never infer tempo or position from samplePosition or wall clock.
+ * DISCONTINUITY: first block after prepare/reset/load, start/stop, or a
+ * position jump (seek, loop wrap) larger than half a sample. */
+typedef struct VoxTransportV2 {
+  uint32_t structSize, version;
+  uint32_t flags;
+  uint32_t timeSigNumerator;
+  uint32_t timeSigDenominator;
+  uint32_t reserved0;
+  double tempoBpm;
+  double ppqPosition;
+  double barStartPpq;
+  double loopStartPpq;
+  double loopEndPpq;
+  int64_t timeInSamples;
+} VoxTransportV2;
+
 typedef struct VoxProcessContextV2 {
   uint32_t structSize, version;
   uint32_t numSamples;
@@ -152,6 +181,7 @@ typedef struct VoxProcessContextV2 {
   uint32_t releaseFlags;
   uint32_t reserved0;
   uint64_t samplePosition;
+  const VoxTransportV2 *transport; /* host-owned, never NULL */
 } VoxProcessContextV2;
 
 typedef struct VoxModuleV2 {
@@ -205,7 +235,11 @@ VOX_ABI_ASSERT(sizeof(VoxPrepareSpecV2) == 32, "VoxPrepareSpecV2 size");
 VOX_ABI_ASSERT(offsetof(VoxPrepareSpecV2, sampleRate) == 8, "sampleRate offset");
 VOX_ABI_ASSERT(sizeof(VoxParamChangeV2) == 16, "VoxParamChangeV2 size");
 VOX_ABI_ASSERT(sizeof(VoxMidiEventV2) == 16, "VoxMidiEventV2 size");
-VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 72, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(sizeof(VoxTransportV2) == 72, "VoxTransportV2 size");
+VOX_ABI_ASSERT(offsetof(VoxTransportV2, tempoBpm) == 24, "tempo offset");
+VOX_ABI_ASSERT(offsetof(VoxTransportV2, timeInSamples) == 64, "timeInSamples offset");
+VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 80, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, transport) == 72, "transport offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, outputs) == 16, "outputs pointer offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, midiEvents) == 40, "midiEvents offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, releaseFlags) == 56, "releaseFlags offset");

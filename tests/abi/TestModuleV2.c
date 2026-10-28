@@ -171,6 +171,9 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       c->structSize < sizeof(VoxProcessContextV2) || c->version != VOX_MODULE_ABI_V2 ||
       c->numSamples > s->maxBlock || c->outputChannelCount != s->outputChannels ||
       c->outputs == NULL || (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0 ||
+      c->transport == NULL || c->transport->structSize < sizeof(VoxTransportV2) ||
+      c->transport->version != VOX_MODULE_ABI_V2 ||
+      (c->transport->flags & ~VOX_TRANSPORT_KNOWN_FLAGS) != 0 ||
       /* Budgets and strides are bounded before any record is read. */
       c->paramChangeCount > s->maxParamChanges || c->midiEventCount > s->maxMidiEvents ||
       (c->paramChangeCount > 0 &&
