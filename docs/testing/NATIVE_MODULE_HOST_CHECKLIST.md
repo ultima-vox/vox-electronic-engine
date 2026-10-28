@@ -22,6 +22,13 @@ build (CI run id) and module artifact.
    **Production gate (open):** the environment-variable loader is not yet
    compiled out of release builds; it must be before production distribution.
 
+## M0+ — Vox Demo Synth (playable instrument)
+
+The Cubase procedure for the independent `VoxDemoSynth.dll` package
+(`com.ultimavox.demo-synth`, 8 controls) is in
+[demo-synth/CUBASE_TEST_GUIDE.md](demo-synth/CUBASE_TEST_GUIDE.md); CI ships it
+as the `Vox-Demo-Synth-Cubase-Guide` artifact.
+
 ## M0 — Rack + test DLL
 
 | # | Step | Expected |

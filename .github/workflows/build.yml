@@ -74,6 +74,38 @@ jobs:
             build/packages/**
           if-no-files-found: error
 
+      - name: Upload Vox Demo Synth package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Demo-Synth-Package-Windows
+          path: build/demo-packages/**
+          if-no-files-found: error
+
+      - name: Assemble Vox Demo Synth Cubase guide
+        shell: powershell
+        run: |
+          $guide = Join-Path $PWD "build\demo-guide"
+          if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
+          New-Item -ItemType Directory -Force -Path $guide | Out-Null
+          Copy-Item docs\testing\demo-synth\* $guide
+          $rack = "build\VstEngine_artefacts\Release\VST3\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
+          $dll = "build\demo-packages\com.ultimavox.demo-synth.voxinst\1.0.0\module\x64\VoxDemoSynth.dll"
+          foreach ($f in @($rack, $dll)) { if (-not (Test-Path $f)) { throw "missing $f" } }
+          @(
+            "Commit: $env:GITHUB_SHA"
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "Rack SHA-256: $((Get-FileHash -Algorithm SHA256 $rack).Hash.ToLower())"
+            "VoxDemoSynth.dll SHA-256: $((Get-FileHash -Algorithm SHA256 $dll).Hash.ToLower())"
+          ) | Set-Content (Join-Path $guide "build-info.txt")
+          Get-Content (Join-Path $guide "build-info.txt")
+
+      - name: Upload Vox Demo Synth Cubase guide
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Demo-Synth-Cubase-Guide
+          path: build/demo-guide/*
+          if-no-files-found: error
+
       - name: Package Vox Electronic Engine
         shell: powershell
         run: cmake --build build --config Release --target package

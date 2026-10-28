@@ -541,6 +541,50 @@ if(VOX_PACKAGE_ARCH)
     COMMAND module_package_tests $<TARGET_FILE:vox_abi_v2_test_module> ${VOX_DEV_PACKAGE_ROOT})
 endif()
 
+# Vox Demo Synth: a small, independent, playable V2 native instrument for DAW
+# acceptance of the Rack connector. Not linked into the Rack; shipped as its
+# own versioned package (com.ultimavox.demo-synth.voxinst/1.0.0).
+add_library(VoxDemoSynth SHARED libs/demo/VoxDemoSynth.c)
+set_target_properties(VoxDemoSynth PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(VoxDemoSynth PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(VoxDemoSynth PRIVATE m)
+endif()
+if(MSVC)
+  # Self-contained DLL: no VC++ redistributable needed on the DAW machine.
+  set_property(TARGET VoxDemoSynth PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+set(VOX_DEMO_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/demo-packages)
+if(VOX_PACKAGE_ARCH)
+  add_custom_command(TARGET VoxDemoSynth POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DMODULE_FILE=$<TARGET_FILE:VoxDemoSynth>
+      -DPACKAGE_ROOT=${VOX_DEMO_PACKAGE_ROOT}
+      -DPACK_ID=com.ultimavox.demo-synth
+      -DPACK_VERSION=1.0.0
+      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
+      -DINSTRUMENT_IDS=com.ultimavox.demo-synth
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
+    VERBATIM)
+
+  add_executable(demo_synth_tests tests/integration/DemoSynthTests.cpp)
+  target_include_directories(demo_synth_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(demo_synth_tests PRIVATE VstEngine)
+  add_dependencies(demo_synth_tests VoxDemoSynth)
+  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_sources(demo_synth_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+    target_compile_definitions(demo_synth_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+    target_link_options(demo_synth_tests PRIVATE -rdynamic)
+  endif()
+  add_test(NAME demo_synth_tests
+    COMMAND demo_synth_tests ${VOX_DEMO_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/demo-scratch)
+endif()
+
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
 target_include_directories(reliability_stress_tests PRIVATE
