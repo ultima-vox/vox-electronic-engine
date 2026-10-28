@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include "core/ResourceLimits.h"
 #include "instrument/HostParameterSchema.h"
+#include "instrument/native/ModulePackages.h"
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/MidiExport.h"
 #include "modules/BuiltInProvider.h"
@@ -115,13 +116,28 @@ vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
 
 namespace {
 // Development/test only: an explicitly configured list of trusted absolute
-// module paths (';'-separated). There is no folder scanning; production
-// discovery waits for the reviewed package and signing policy.
+// module paths (';'-separated), plus an explicitly configured absolute
+// development package root (VOX_DEV_INSTRUMENT_ROOT) resolved by version. There
+// is no default/production scanning; production discovery waits for the
+// reviewed package and signing policy.
 vstengine::instrument::native::LoadReport configuredNativeModules() {
+  namespace native = vstengine::instrument::native;
   const auto paths =
       juce::SystemStats::getEnvironmentVariable("VOX_DEV_NATIVE_MODULES", {});
-  return vstengine::instrument::native::loadConfiguredModules(
-      paths.toStdString());
+  auto report = native::loadConfiguredModules(paths.toStdString());
+  const auto root =
+      juce::SystemStats::getEnvironmentVariable("VOX_DEV_INSTRUMENT_ROOT", {})
+          .trim();
+  if (root.isNotEmpty()) {
+    const auto utf8 = root.toStdString();
+    auto packages = native::loadPackages(std::filesystem::path(std::u8string(
+        reinterpret_cast<const char8_t *>(utf8.data()), utf8.size())));
+    for (auto &provider : packages.providers)
+      report.providers.push_back(std::move(provider));
+    for (auto &diagnostic : packages.diagnostics)
+      report.diagnostics.push_back(std::move(diagnostic));
+  }
+  return report;
 }
 } // namespace
 

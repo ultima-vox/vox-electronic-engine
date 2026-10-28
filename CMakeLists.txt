@@ -55,6 +55,16 @@ add_library(vst_native STATIC
 target_include_directories(vst_native PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_native PUBLIC vst_instrument ${CMAKE_DL_LIBS})
 
+# native packages: development/test resolution of versioned instrument packages
+# (<root>/<packId>.voxinst/<MAJOR.MINOR.PATCH>/manifest.json + module/<arch>/).
+# SHA-256 is a corruption check only; no production scanning or signing policy.
+add_library(vst_native_packages STATIC
+  libs/instrument/native/ModulePackages.cpp libs/instrument/native/ModulePackages.h)
+set_target_properties(vst_native_packages PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vst_native_packages PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_native_packages
+  PUBLIC vst_native juce::juce_core juce::juce_cryptography)
+
 add_library(vst_rack STATIC
   libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
   libs/rack/RealtimeMutationGate.h
@@ -221,7 +231,7 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_native vst_rack vst_modules vst_sequence vst_parts
+  vst_core vst_instrument vst_native vst_native_packages vst_rack vst_modules vst_sequence vst_parts
   vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
 
 if(MSVC)
@@ -498,6 +508,38 @@ if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME native_rack_tests
   COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
+# Development package layout: the test module is also assembled as a versioned
+# package in the build tree. The arch string must match packageArch in
+# libs/instrument/native/ModulePackages.h.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|x64)$")
+  set(VOX_PACKAGE_ARCH "x64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  set(VOX_PACKAGE_ARCH "linux-x64")
+else()
+  set(VOX_PACKAGE_ARCH "")
+endif()
+set(VOX_DEV_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/packages)
+if(VOX_PACKAGE_ARCH)
+  add_custom_command(TARGET vox_abi_v2_test_module POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DMODULE_FILE=$<TARGET_FILE:vox_abi_v2_test_module>
+      -DPACKAGE_ROOT=${VOX_DEV_PACKAGE_ROOT}
+      -DPACK_ID=test.abi.v2.tone
+      -DPACK_VERSION=1.0.0
+      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
+      -DINSTRUMENT_IDS=test.abi.v2.tone
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
+    VERBATIM)
+
+  add_executable(module_package_tests tests/integration/ModulePackageTests.cpp)
+  target_include_directories(module_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(module_package_tests PRIVATE VstEngine)
+  add_dependencies(module_package_tests vox_abi_v2_test_module)
+  add_test(NAME module_package_tests
+    COMMAND module_package_tests $<TARGET_FILE:vox_abi_v2_test_module> ${VOX_DEV_PACKAGE_ROOT})
+endif()
 
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
