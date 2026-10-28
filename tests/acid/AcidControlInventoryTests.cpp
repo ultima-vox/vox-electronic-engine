@@ -49,6 +49,52 @@ int main() {
         c.id == "slide_on_overlap")
       check(c.engineIndex == AcidEngine::parameterCount,
             "play flag uses exact sentinel");
+  std::array<unsigned, 4> typeCounts{};
+  unsigned bipolarCount = 0;
+  for (const auto &c : controls) {
+    const auto metadata = acidControlMetadata(c);
+    ++typeCounts[static_cast<std::size_t>(metadata.type)];
+    bipolarCount += metadata.bipolar ? 1u : 0u;
+    check(metadata.normalizedDefault >= 0.0f && metadata.normalizedDefault <= 1.0f,
+          "control default lies in normalized domain");
+    check(metadata.automatable, "every Acid control is independently automatable");
+    if (c.engineIndex < AcidEngine::parameterCount)
+      check(metadata.normalizedDefault == engine.parameter(c.id),
+            "manifest default matches fresh engine");
+    if (c.id == "waveform")
+      check(metadata.type == AcidControlType::continuous, "oscillator waveform is continuous morph");
+    if (c.id == "filter_mode" || c.id == "dist_mode" || c.id == "lfo1_wave" ||
+        c.id == "lfo2_wave" || c.id == "lfo3_wave" || c.id == "step_rate")
+      check(metadata.type == AcidControlType::choice && metadata.choiceCount == 4,
+            "four-option selectors are identified");
+    if (c.id == "mod_target" || c.id == "env2_target" || c.id == "lfo1_target" ||
+        c.id == "lfo2_target" || c.id == "lfo3_target" || c.id == "step_target")
+      check(metadata.type == AcidControlType::choice && metadata.choiceCount == 6,
+            "modulation destinations have six options");
+    if (c.id == "unison_voices")
+      check(metadata.type == AcidControlType::integer && metadata.choiceCount == 4,
+            "unison voices have four integer values");
+    if (c.id == "lfo1_sync" || c.id == "lfo2_sync" || c.id == "lfo3_sync" ||
+        c.engineIndex == AcidEngine::parameterCount)
+      check(metadata.type == AcidControlType::boolean && metadata.choiceCount == 2,
+            "sync and play flags are boolean");
+    if (c.id.starts_with("step_0") || c.id.starts_with("step_1"))
+      check(metadata.type == AcidControlType::continuous && metadata.bipolar,
+            "step levels are bipolar continuous controls");
+  }
+  check(typeCounts == std::array<unsigned, 4>{60, 12, 1, 7},
+        "all 80 control types are accounted for");
+  check(bipolarCount == 19, "STEP levels, tune, fine and pan are bipolar");
+  for (const auto &c : controls) {
+    if (c.id == "legato" || c.id == "retrigger" || c.id == "vel_to_accent" || c.id == "slide_on_overlap") {
+      const auto m = acidControlMetadata(c);
+      const bool expected = c.id == "legato" ? engine.isLegatoEnabled()
+          : c.id == "retrigger" ? engine.isRetriggerEnabled()
+          : c.id == "vel_to_accent" ? engine.isVelToAccentEnabled()
+          : engine.isSlideOnOverlapEnabled();
+      check(m.normalizedDefault == (expected ? 1.0f : 0.0f), "flag default matches engine");
+    }
+  }
   const auto indexOf = [&](std::string_view id) {
     for (const auto &control : controls)
       if (control.id == id)

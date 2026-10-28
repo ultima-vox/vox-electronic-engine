@@ -42,13 +42,16 @@ this parameter as a discrete choice would quantize and alter existing morph
 automation. Preserve the actual continuous behavior until the intended host
 contract is reviewed; LFO waveform selectors are distinct discrete controls.
 
-**Identity inventory checkpoint:** `AcidControlInventory.h` enumerates the 80
+**Control inventory checkpoint:** `AcidControlInventory.h` enumerates the 80
 distinct semantic IDs with explicit proposed pool indices and distinguishes the
 four flags from packed engine state. `acid_control_inventory_tests` checks
-uniqueness, coverage and engine identity. This is not the required complete
-typed manifest: units, physical ranges, choice conversion, defaults, modulation
+uniqueness, coverage and engine identity. Candidate metadata classifies control
+types, option counts, bipolar STEP levels, tune, fine and pan, and normalized Init values against a
+fresh engine. It is not wired to host automation and is not the required complete
+typed manifest: units, physical ranges, named options and conversion, modulation
 eligibility, host normalized-value stability and final capacity remain to be
-specified and verified. Nothing is bound to the host pool by this checkpoint.
+specified and verified. Current selector decoding and host presentation must be
+reconciled before the metadata is used to change host parameters. Nothing is bound to the host pool by this checkpoint.
 
 ## Automation safety and instrument replacement
 
