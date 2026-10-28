@@ -5,6 +5,8 @@ externally owned. InstrumentId,77 semantic IDs and v8 sound encoding are unchang
 
 ## Delivery and parameter ownership
 
+**Current integration packet:** [ACID_RACK_INTEGRATION_V2.md](ACID_RACK_INTEGRATION_V2.md). The typed 80-control manifest, common Rack-owned VST3 endpoints, independent DSP module and DAW-safe replacement gates in that packet supersede the interim AcidParameterBridge integration. The current Acid source is not yet the final separately installed package.
+
 Owner decision 27 October 2026: Acid DSP, specialized UI and content must be
 installed independently of the Rack VST3. Sound, Pattern and Generator content
 remain distinct; the DAW still loads one Rack plugin. The shared module loader,
