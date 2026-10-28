@@ -66,6 +66,14 @@ bool sameStep(const vstengine::sequence::Step& left,
 }
 } // namespace
 
+// A fresh Rack starts empty (owner Cubase acceptance); this fixture loads the
+// layout it exercises explicitly: Bass in slot 1 (CH1), Acid in slot 2 (CH2).
+static bool loadBassAndAcid(VstEngineAudioProcessor &p) {
+  juce::String d;
+  return p.loadSlotInstrument(0, vstengine::modules::bassInstrumentId, d) &&
+         p.loadSlotInstrument(1, vstengine::modules::acidInstrumentId, d);
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
@@ -75,6 +83,7 @@ int main()
     auto processor = std::make_unique<VstEngineAudioProcessor>();
     processor->prepareToPlay(48000.0, 512);
     setPlain(*processor, "midiMode", 1.0f);
+    require(loadBassAndAcid(*processor), "fixture loads Bass and Acid explicitly");
     for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot)
         for (std::size_t macro = 0;
              macro < vstengine::instrument::macrosPerSlot; ++macro) {

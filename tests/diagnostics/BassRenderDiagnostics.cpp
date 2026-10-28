@@ -128,6 +128,18 @@ void writeMidiFile(const juce::File& file, const juce::MidiBuffer& buffer, doubl
     throw std::runtime_error("MIDI write failed");
 }
 
+// A fresh Rack starts empty (owner Cubase acceptance). These diagnostics
+// render Bass on CH1 next to Acid on CH2, loaded explicitly as a user would.
+std::unique_ptr<VstEngineAudioProcessor> makeStarterProcessor()
+{
+    auto proc = std::make_unique<VstEngineAudioProcessor>();
+    juce::String diagnostic;
+    if (!proc->loadSlotInstrument(0, vstengine::modules::bassInstrumentId, diagnostic)
+        || !proc->loadSlotInstrument(1, vstengine::modules::acidInstrumentId, diagnostic))
+        throw std::runtime_error("Cannot load Bass/Acid: " + diagnostic.toStdString());
+    return proc;
+}
+
 void setPlainParam(VstEngineAudioProcessor& proc, const std::string& id, float value)
 {
     auto* param = proc.parameters().getParameter(id);
@@ -186,7 +198,7 @@ ScenarioResult runHostMidiLifecycle(const std::string& outputDir)
     HostPlayHead playHead;
     playHead.reset(145.0, 0.0);
 
-    auto proc = std::make_unique<VstEngineAudioProcessor>();
+    auto proc = makeStarterProcessor();
     proc->setPlayHead(&playHead);
     proc->prepareToPlay(sampleRate, blockSize);
     setPlainParam(*proc, "midiMode", 1.0f); // Piano Roll / Host MIDI only
@@ -296,7 +308,7 @@ ScenarioResult runInternalGenerator(const std::string& outputDir)
     HostPlayHead playHead;
     playHead.reset(145.0, 0.0);
 
-    auto proc = std::make_unique<VstEngineAudioProcessor>();
+    auto proc = makeStarterProcessor();
     proc->setPlayHead(&playHead);
     proc->prepareToPlay(sampleRate, blockSize);
     setPlainParam(*proc, "midiMode", 2.0f); // Generator mode
@@ -367,7 +379,7 @@ void runProfilesAndSeeds(const std::string& outputDir, const std::string& filter
             HostPlayHead playHead;
             playHead.reset(145.0, 0.0);
 
-            auto proc = std::make_unique<VstEngineAudioProcessor>();
+            auto proc = makeStarterProcessor();
             proc->setPlayHead(&playHead);
             proc->prepareToPlay(sampleRate, blockSize);
             setPlainParam(*proc, "midiMode", 2.0f);
@@ -428,7 +440,7 @@ void runRatesAndBlocks(const std::string& outputDir, const std::string& filter, 
             HostPlayHead playHead;
             playHead.reset(145.0, 0.0);
 
-            auto proc = std::make_unique<VstEngineAudioProcessor>();
+            auto proc = makeStarterProcessor();
             proc->setPlayHead(&playHead);
             proc->prepareToPlay(sr, bs);
             setPlainParam(*proc, "midiMode", 2.0f);
@@ -478,7 +490,7 @@ ScenarioResult runTransportStopPanic(const std::string& outputDir)
     HostPlayHead playHead;
     playHead.reset(145.0, 0.0);
 
-    auto proc = std::make_unique<VstEngineAudioProcessor>();
+    auto proc = makeStarterProcessor();
     proc->setPlayHead(&playHead);
     proc->prepareToPlay(sampleRate, blockSize);
     setPlainParam(*proc, "midiMode", 2.0f);
@@ -560,7 +572,7 @@ ScenarioResult runSaveRestoreRerender(const std::string& outputDir)
     {
         HostPlayHead playHead;
         playHead.reset(145.0, 0.0);
-        auto proc1 = std::make_unique<VstEngineAudioProcessor>();
+        auto proc1 = makeStarterProcessor();
         proc1->setPlayHead(&playHead);
         proc1->prepareToPlay(sampleRate, blockSize);
         setPlainParam(*proc1, "midiMode", 2.0f);
@@ -593,7 +605,7 @@ ScenarioResult runSaveRestoreRerender(const std::string& outputDir)
     {
         HostPlayHead playHead;
         playHead.reset(145.0, 0.0);
-        auto proc2 = std::make_unique<VstEngineAudioProcessor>();
+        auto proc2 = makeStarterProcessor();
         proc2->setPlayHead(&playHead);
         proc2->prepareToPlay(sampleRate, blockSize);
         proc2->setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
@@ -656,7 +668,7 @@ ScenarioResult runRoutingChannelsAudition(const std::string& outputDir)
     HostPlayHead playHead;
     playHead.reset(145.0, 0.0);
 
-    auto proc = std::make_unique<VstEngineAudioProcessor>();
+    auto proc = makeStarterProcessor();
     proc->setPlayHead(&playHead);
     proc->prepareToPlay(sampleRate, blockSize);
     setPlainParam(*proc, "midiMode", 1.0f); // Piano roll mode
@@ -713,7 +725,7 @@ ScenarioResult runMidiExportReimport(const std::string& outputDir)
     constexpr double sampleRate = 48000.0;
     constexpr int blockSize = 512;
 
-    auto proc = std::make_unique<VstEngineAudioProcessor>();
+    auto proc = makeStarterProcessor();
     proc->prepareToPlay(sampleRate, blockSize);
     setPlainParam(*proc, "rootNote", 36.0f);
     setPlainParam(*proc, "rngSeed", 1234.0f);

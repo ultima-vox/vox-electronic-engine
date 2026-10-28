@@ -31,6 +31,13 @@ double render(VstEngineAudioProcessor &p, bool start = false) {
     }
   return result;
 }
+// A fresh Rack starts empty (owner Cubase acceptance); this fixture loads the
+// layout it exercises explicitly: Bass in slot 1 (CH1), Acid in slot 2 (CH2).
+bool loadBassAndAcid(VstEngineAudioProcessor &p) {
+  juce::String d;
+  return p.loadSlotInstrument(0, vstengine::modules::bassInstrumentId, d) &&
+         p.loadSlotInstrument(1, vstengine::modules::acidInstrumentId, d);
+}
 } // namespace
 int main() {
   juce::ScopedJuceInitialiser_GUI gui;
@@ -39,6 +46,7 @@ int main() {
   for (auto *p : {a.get(), b.get()}) {
     p->prepareToPlay(48000, 512);
     set(*p, "midiMode", 1);
+    require(loadBassAndAcid(*p), "fixture loads Bass and Acid explicitly");
     juce::String d;
     require(p->loadSlotInstrument(2, vstengine::modules::leadInstrumentId, d),
             "load real Lead fixture");

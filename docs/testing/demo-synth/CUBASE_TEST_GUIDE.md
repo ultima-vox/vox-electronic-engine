@@ -17,10 +17,12 @@ every step in the table at the end.
 1. Close Cubase.
 2. Copy the folder `Vox Electronic Engine.vst3` to
    `C:\Program Files\Common Files\VST3\` (replace an older copy).
-3. Note the Rack binary hash:
+3. Confirm you are testing this build, not an older copy:
    `Get-FileHash "C:\Program Files\Common Files\VST3\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"`
-   It must equal the "Rack SHA-256" in `build-info.txt` and must not change in
-   any later step.
+   The hash must equal "Rack SHA-256" in `build-info.txt` (which also names the
+   head commit). It must not change in any later step. If it differs, an older
+   Rack is installed (remove other copies of `Vox Electronic Engine.vst3`,
+   then let Cubase rescan).
 
 ## 2. Install the Demo Synth package
 
@@ -45,8 +47,8 @@ Manual alternative: copy the folder yourself and set the variable in
 | # | Action | Expected |
 | --- | --- | --- |
 | 1 | *Studio → VST Plug-in Manager* | "Vox Electronic Engine" listed, no error |
-| 2 | Add an Instrument track with Vox Electronic Engine; open its editor | Rack shows 16 slots; slots 1–2 hold the built-in instruments |
-| 3 | Right-click **slot 1** → *Load / replace instrument...* → **Vox Demo Synth / Ultima Vox** | Slot 1 shows Vox Demo Synth on **CH1**; the Macros page shows Wave, Gain, Attack, Decay, Sustain, Release, Cutoff, Resonance |
+| 2 | Add a **new** Instrument track with Vox Electronic Engine (no saved project, no track preset); open its editor | Rack shows **16 empty slots**; the header shows "Empty slot" and "Choose an instrument to activate this slot"; nothing sounds |
+| 3 | Click empty **slot 1** (or right-click → *Load / replace instrument...*) → **Vox Demo Synth / Ultima Vox** | Slot 1 shows Vox Demo Synth on **CH1** (first free channel); the Macros page shows Wave, Gain, Attack, Decay, Sustain, Release, Cutoff, Resonance. Loading into slot 5 instead also gives CH1 |
 | 4 | Set the track's MIDI channel to 1 (or Any with a channel-1 keyboard); play a few keys | Audible saw tone; pitch follows the keys; louder with harder velocity; key up starts a short release |
 | 5 | Import `vox-demo-synth-test-phrase.mid` onto the track (channel 1, 120 BPM) and play | Bar 1: four rising notes, rising velocity. Bar 2: A3, B3 on top, back to A3 when B3 ends. Bar 3: short E3 held by sustain pedal until beat 4. Bar 4: G2 ends with a normal release on beat 3 (CC123) |
 | 6 | Move each of the eight controls in the Rack editor while the phrase loops | Wave: Sine/Saw/Square timbre; Gain: level; Attack/Decay/Sustain/Release: envelope; Cutoff/Resonance: filter brightness/peak |
@@ -62,6 +64,12 @@ Parameter identities: slot N, endpoint K is `slotNN.pKKK`; Demo Synth uses
 `p001` Wave, `p002` Gain, `p003` Attack, `p004` Decay, `p005` Sustain,
 `p006` Release, `p007` Cutoff, `p008` Resonance. Cubase may show the generic
 name ("Slot 1 Param 007") until the instrument is bound in that slot.
+
+If a new track shows instruments already loaded, Cubase restored something:
+a project, a track/VST preset ("Default" preset), or an older Rack build
+(Rack builds up to commit `9131f50` preloaded Bass and Acid in slots 1–2; a
+layout with four instruments comes from a saved state or an even older
+build). Check the hash in step 1.3 and start from a new empty project.
 
 ## 4. Uninstall
 

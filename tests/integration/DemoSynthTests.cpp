@@ -182,6 +182,29 @@ void loadsFromDevelopmentRootLikeADaw() {
   check(energy(out, 0, 1) == 0.0 && energy(out, 2, 8) > 1.0, "MIDI NoteOn on CH1 is audible");
 }
 
+// Owner acceptance path on a fresh (empty) Rack: Demo Synth in empty slot 5
+// takes CH1 and plays; the package changes no host parameter identity.
+void freshRackSlot5AndHostIdentity() {
+  auto with = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                        native::loadPackages(packageRoot));
+  auto without = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                           native::LoadReport{});
+  with->prepareToPlay(sampleRate, blockSize);
+  const auto slot = loadDemo(*with, 4);
+  check(channelOf(*with, slot) == 1, "Demo Synth in empty slot 5 takes CH1");
+  const auto out = render(*with, 8, {{1, MidiMessage::noteOn(1, 60, 1.0f)}});
+  check(energy(out, 2, 8) > 1.0, "slot 5 Demo Synth plays MIDI on CH1");
+  const auto &a = with->getParameters();
+  const auto &b = without->getParameters();
+  bool same = a.size() == b.size();
+  for (int i = 0; same && i < a.size(); ++i) {
+    const auto *pa = dynamic_cast<const juce::AudioProcessorParameterWithID *>(a[i]);
+    const auto *pb = dynamic_cast<const juce::AudioProcessorParameterWithID *>(b[i]);
+    same = pa != nullptr && pb != nullptr && pa->paramID == pb->paramID;
+  }
+  check(same, "an installed package adds or renames no host parameter");
+}
+
 void pitchAndVelocity() {
   auto p = makeProcessor(packageRoot);
   const auto slot = loadDemo(*p, 2);
@@ -495,6 +518,7 @@ int main(int argc, char **argv) {
   const fs::path scratch = fs::absolute(argv[2]);
   juce::ScopedJuceInitialiser_GUI gui;
   loadsFromDevelopmentRootLikeADaw();
+  freshRackSlot5AndHostIdentity();
   pitchAndVelocity();
   releaseSustainAndAllOff();
   parametersReachTheDsp();
