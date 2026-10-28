@@ -2,6 +2,8 @@
 
 Reference: owner's unannotated 1024×768 screenshot (2026-10-26); annotated image defines Rack (red) / Acid (green) boundaries. This is a *future required behavior* ledger. The presence of a label or an engine ID does **not** imply the control currently works in the plugin.
 
+**Implementation authority:** [ACID_RACK_INTEGRATION_V2.md](ACID_RACK_INTEGRATION_V2.md) supersedes the Acid-specific host-ID policy recorded in this historical control ledger. Every independent control must be mapped to exactly one typed Rack-owned host endpoint in a reviewed 80-control manifest; the older AcidParameterBridge and dedicated `slotNNAcid_*` IDs are interim, not a production target.
+
 **Definitions**: `S` = current semantic `AcidEngine::parameterIds` in PR #59; `HOST` = dedicated stable per-slot VST3 parameter and automation to be implemented; `PERSIST` = Acid-local versioned state to be implemented. The old eight host macro IDs remain unchanged. `MISSING` = displayed function needs real model/DSP implementation. All rows require preset/state round-trip and real effect.
 
 ## Explicit responsibility boundary
