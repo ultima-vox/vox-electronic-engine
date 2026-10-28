@@ -22,7 +22,7 @@ struct Routing {
 };
 
 struct PersistentSlotState {
-  std::uint32_t schemaVersion{5};
+  std::uint32_t schemaVersion{6};
   instrument::SlotId slotId{instrument::invalidSlotId};
   instrument::InstrumentId instrumentId;
   std::string resolvedProviderId;
@@ -50,6 +50,9 @@ struct PersistentSlotState {
   struct DirectValue {
     instrument::ParameterId id;
     float value{};
+    // Pool endpoint the value was bound to when saved (-1: unknown, e.g. a
+    // pre-schema-6 state). Append-only migration requires it to match.
+    std::int16_t poolIndex{-1};
   };
   std::vector<DirectValue> directParameters;
 };

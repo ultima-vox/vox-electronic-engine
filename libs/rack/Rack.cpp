@@ -69,18 +69,22 @@ void initializeDirect(PersistentSlotState &state,
   if (descriptor.directParameters && state.directParameters.empty() &&
       state.modulePayload.empty())
     for (const auto &parameter : descriptor.parameters)
-      state.directParameters.push_back({parameter.id, parameter.defaultValue});
+      state.directParameters.push_back(
+          {parameter.id, parameter.defaultValue, parameter.poolIndex});
 }
 void canonicalizeResolvedDirect(
     PersistentSlotState &state,
     const instrument::InstrumentDescriptor &descriptor) {
   if (descriptor.directParameters)
     for (auto &value : state.directParameters)
-      if (const auto *parameter = findParameter(descriptor, value.id))
+      if (const auto *parameter = findParameter(descriptor, value.id)) {
+        // A resolved slot records the endpoint each value is bound to.
+        value.poolIndex = parameter->poolIndex;
         if (std::isfinite(value.value) && value.value >= parameter->minimum &&
             value.value <= parameter->maximum)
           value.value =
               instrument::hostparams::canonicalPlain(value.value, *parameter);
+      }
 }
 } // namespace
 

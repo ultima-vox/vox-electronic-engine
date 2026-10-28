@@ -111,7 +111,10 @@ bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
     }
     for (std::size_t i = 0; i < slot.directParameters.size(); ++i) {
       const auto &parameter = slot.directParameters[i];
-      if (!validStableId(parameter.id) || !std::isfinite(parameter.value)) {
+      if (!validStableId(parameter.id) || !std::isfinite(parameter.value) ||
+          parameter.poolIndex < -1 ||
+          parameter.poolIndex >=
+              static_cast<std::int16_t>(instrument::poolParametersPerSlot)) {
         diagnostic = "invalid direct parameter state";
         return false;
       }
@@ -203,6 +206,9 @@ juce::ValueTree serialize(
           juce::ValueTree direct("SOUND_PARAMETER");
           direct.setProperty("id", juce::String(parameter.id), nullptr);
           direct.setProperty("value", parameter.value, nullptr);
+          if (parameter.poolIndex >= 0)
+            direct.setProperty("pool", static_cast<int>(parameter.poolIndex),
+                               nullptr);
           child.appendChild(direct, nullptr);
         }
         root.appendChild(child, nullptr);
@@ -388,15 +394,20 @@ bool deserialize(const juce::ValueTree& root,
           }
           for (const auto direct : child) {
             float value{};
+            int pool{-1};
             if (!direct.hasType("SOUND_PARAMETER") ||
                 !validString(direct.getProperty("id"),
                              VOX_INSTRUMENT_MAX_ID_BYTES) ||
-                !readPlain(direct.getProperty("value"), value)) {
+                !readPlain(direct.getProperty("value"), value) ||
+                (direct.hasProperty("pool") &&
+                 (!readSigned(direct.getProperty("pool"), pool) || pool < 0 ||
+                  pool >= static_cast<int>(instrument::poolParametersPerSlot)))) {
               diagnostic = "invalid direct parameter encoding";
               return false;
             }
             slot.directParameters.push_back(
-                {direct.getProperty("id").toString().toStdString(), value});
+                {direct.getProperty("id").toString().toStdString(), value,
+                 static_cast<std::int16_t>(pool)});
           }
         }
         slot.schemaVersion = schemaVersion;
