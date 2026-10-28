@@ -1,0 +1,4 @@
+{
+  global: voxModuleEntryV2;
+  local: *;
+};

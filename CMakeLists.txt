@@ -86,6 +86,28 @@ target_include_directories(vst_bass PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_bass PUBLIC
   vst_instrument juce::juce_audio_basics juce::juce_audio_processors)
 
+# Independent Bass module prototype. The ABI header remains owned by Rack;
+# pass the checkout containing #67 via VOX_MODULE_ABI_V2_ROOT until integrated.
+option(VOX_BUILD_FULLON_BASS_MODULE "Build the independent Full-on Bass module" OFF)
+set(VOX_MODULE_ABI_V2_ROOT "" CACHE PATH "Root containing instrument/abi/VoxModuleAbiV2.h")
+if(VOX_BUILD_FULLON_BASS_MODULE)
+  if(NOT EXISTS "${VOX_MODULE_ABI_V2_ROOT}/instrument/abi/VoxModuleAbiV2.h")
+    message(FATAL_ERROR "VOX_MODULE_ABI_V2_ROOT must point to the shared ABI headers")
+  endif()
+  add_library(VoxFullOnBass MODULE libs/bass/module/FullOnBassModuleV2.cpp
+      libs/bass/FullOnBass.cpp libs/bass/PsyBassVoice.cpp)
+  target_include_directories(VoxFullOnBass PRIVATE ${VST_LIBS_DIR} ${VOX_MODULE_ABI_V2_ROOT})
+  target_link_libraries(VoxFullOnBass PRIVATE juce::juce_audio_basics)
+  set_target_properties(VoxFullOnBass PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+  if(UNIX AND NOT APPLE)
+    target_link_options(VoxFullOnBass PRIVATE "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libs/bass/module/exports.map")
+  endif()
+  add_executable(fullon_bass_module_tests tests/bass/module/FullOnBassModuleTests.cpp)
+  target_include_directories(fullon_bass_module_tests PRIVATE ${VOX_MODULE_ABI_V2_ROOT})
+  target_link_libraries(fullon_bass_module_tests PRIVATE ${CMAKE_DL_LIBS})
+  add_dependencies(fullon_bass_module_tests VoxFullOnBass)
+endif()
+
 # acid: self-contained 303-style DSP, deterministic generator and provider.
 add_library(vst_acid STATIC
   libs/acid/AcidEngine.cpp libs/acid/AcidEngine.h
@@ -215,6 +237,10 @@ endif()
 # integration tests for cross-module state compatibility.
 # ---------------------------------------------------------------------------
 enable_testing()
+if(VOX_BUILD_FULLON_BASS_MODULE)
+  add_test(NAME fullon_bass_module_tests
+      COMMAND fullon_bass_module_tests $<TARGET_FILE:VoxFullOnBass>)
+endif()
 
 add_executable(sequence_tests tests/sequence/SequenceTests.cpp)
 target_link_libraries(sequence_tests PRIVATE vst_sequence)
