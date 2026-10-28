@@ -1,10 +1,14 @@
 # Instrument module ABI V2 — proposal for Architecture Guard review
 
-Status: **PROPOSED**, 28.10.2026. No loader code exists. This document is the
-Rack owner's answer to the #62 architecture follow-up and builds on
+Status: **PROPOSED, NOT FROZEN**, 28.10.2026. No loader code exists. This
+document is the Rack owner's answer to the #62 architecture follow-up and builds
+on
 [independent instruments](https://github.com/ultima-vox/vox-electronic-engine/blob/docs/independent-instruments/docs/architecture/INDEPENDENT_INSTRUMENTS.md)
 (#63) and the Acid V2 integration packet (#59). It supersedes the data-only
-[instrument packages](INSTRUMENT_PACKAGES.md) proposal.
+[instrument packages](INSTRUMENT_PACKAGES.md) proposal. Revision 2 answers the
+owner's Architecture Guard-style review of `467d854`. The ABI may be called
+frozen only after the gates in [Freeze gates](#freeze-gates) pass. #63 is
+reconciled against this document once its docs merge.
 
 ## Owner decisions this design implements
 
@@ -25,75 +29,130 @@ redesign. V1 (`InstrumentAbi.h`) is not mutated; V2 is a separate header.
 ## Package layout (Windows 10/11 x64 first)
 
 ```
-<packId>.voxinst/
-  manifest.json      packId, instrumentIds, versions, abi range, arch, files + SHA-256
+<packId>.voxinst/<packVersion>/
+  manifest.json      packId, packVersion, instrumentIds, abi range, arch, files + SHA-256
   module/x64/<name>.dll
   ui/                declarative workspace (ui.json) + images/fonts
   content/           Sound presets, Pattern presets, Generator profiles
 ```
 
-Proposed roots: `%PROGRAMDATA%\Ultima Vox\Instruments` (installer) and
-`%APPDATA%\Ultima Vox\Instruments` (user); macOS equivalents later. A pack
-installs into a versioned folder and becomes active on the next Rack instance
-construction (no swap under a live instance).
+Manifest hashes detect **accidental corruption only**. Authenticity is a
+separate rule (see [Native code trust](#native-code-trust)).
 
-## ABI V2 rules
+## Binary contract
 
-- Pure C header (`VoxModuleAbiV2.h`), compilable as C11 and C++20. No STL, JUCE,
-  exceptions, `bool`, `noexcept` or C++ types in function-pointer signatures.
-- Every struct starts with `uint32_t structSize; uint32_t version;`. A reader
-  accepts a larger `structSize` (newer minor version) and rejects a smaller one.
-  New fields only append; meanings never change.
-- Every function returns `VoxResult` (`int32_t`, 0 = OK, negative = error codes);
-  a module must catch everything internally.
-- Memory: the module owns what it allocates and frees it itself. Strings and
-  arrays passed by the host are valid only during the call. Descriptor memory
-  returned by the module stays valid until the module is unloaded; the host
-  deep-copies and validates it once at scan time.
-- Thread classes are part of the contract (table below); RT functions must not
-  allocate, lock, do I/O or call back into the host except `VoxRtServicesV2`.
+### Language, calling convention, layout
+
+- One header, `VoxModuleAbiV2.h`, valid C11 and C++20 (`extern "C"` guarded).
+  No STL, JUCE, exceptions, `bool`, C++ references or C++ types cross it.
+- `VOX_CALL` is `__cdecl` on Windows (x64 has a single convention; the macro
+  makes it explicit and keeps x86/ARM64 honest). `VOX_EXPORT` is
+  `__declspec(dllexport)`; the only exported symbol is `voxModuleEntryV2`.
+- Fixed-width types only (`int32_t`, `uint32_t`, `uint64_t`, `float`,
+  `double`, pointers). Enumerations travel as `uint32_t`. Booleans are
+  `uint32_t` 0/1.
+- Natural alignment; no `#pragma pack`, no bit-fields. Field order is chosen
+  so that x64 layout has no implicit padding; every struct size is a multiple
+  of 8. Header ships `_Static_assert`/`static_assert` checks for `sizeof` and
+  `offsetof` of every field, compiled in both languages.
+- Opaque handles: `typedef struct VoxInstanceT* VoxInstance;` and
+  `typedef struct VoxEditorT* VoxEditor;`. The host never dereferences them.
+
+### Two kinds of struct
+
+1. **Versioned structs** (module table, descriptors, prepare spec, process
+   context, service tables) start with `uint32_t structSize; uint32_t version;`.
+   A reader accepts a larger `structSize` (newer minor version, trailing fields
+   ignored) and rejects a smaller one or an unknown major `version`. Fields only
+   append; meanings never change.
+2. **Flat event records** (`VoxParamChangeV2`, `VoxMidiEventV2`) carry **no
+   header**: they are elements of arrays inside a versioned struct, which also
+   carries the element stride (`paramChangeStride`, `midiEventStride`). Readers
+   step by the stride, so records may grow by appending fields in a later minor
+   version. These two records are the only header-less structs.
+
+### Results and faults
+
+- **Every function pointer returns `VoxResult`** (`int32_t`): `VOX_OK = 0`,
+  negative errors: `VOX_E_INVALID_ARG`, `VOX_E_UNSUPPORTED`,
+  `VOX_E_BUFFER_TOO_SMALL`, `VOX_E_STATE_VERSION`, `VOX_E_STATE_CORRUPT`,
+  `VOX_E_OUT_OF_MEMORY`, `VOX_E_INTERNAL`. No `void` functions and no raw
+  pointer returns; queries return through out-parameters.
+- A module catches everything internally; nothing unwinds across the boundary.
+- `process`/`reset` return codes are read on the audio thread without
+  allocation. A non-zero result silences that slot for the block, sets the
+  slot's atomic fault flag and bumps a fault counter; the message thread later
+  reports it and keeps the slot silent until reprepare. `destroy`/`shutdown`
+  errors are logged; the host still treats the object as gone.
+
+### Ownership and lifetime
+
+| Memory | Owner | Valid until |
+| --- | --- | --- |
+| Descriptors, choice arrays, strings returned by `getInstrument` | module | `shutdown` returns; host deep-copies at scan and never keeps module pointers |
+| Arguments passed by the host (strings, buffers, process context, event arrays, audio channel pointers) | host | the call returns |
+| `VoxInstance`, `VoxEditor` | module | the matching `destroy` |
+| State bytes | caller-provided buffer | the call returns |
+
+### State serialization
+
+- The descriptor declares `maxStateBytes` (≤ host `maxStateBytesPerSlot`,
+  1 MiB). The host passes a buffer of exactly that capacity, preallocated
+  off the audio thread.
+- `saveState(inst, buffer, capacity, &written, &stateVersion)`: `VOX_OK` with
+  `written ≤ capacity`, or `VOX_E_BUFFER_TOO_SMALL` with `written` = required
+  size, which the host treats as a module bug (save fails, previous state kept;
+  no retry loop).
+- `loadState(inst, stateVersion, bytes, size)`: `VOX_E_STATE_VERSION` for a
+  newer version, `VOX_E_STATE_CORRUPT` for malformed bytes; on either the slot
+  stays unresolved with its payload preserved, as today.
+- Both run on the controller thread with that slot's audio suspended.
 
 ## Entry point and module object
 
 ```c
-/* Exported by the DLL. Called once per process on the message thread. */
-VOX_EXPORT VoxResult voxModuleEntryV2(uint32_t hostAbiVersion,
-                                      const VoxHostServicesV2* host,
-                                      const VoxModuleV2** module);
+/* The only export. Called once per loaded DLL per process (see Lifecycle). */
+VOX_EXPORT VoxResult VOX_CALL voxModuleEntryV2(uint32_t hostAbiVersion,
+                                               const VoxHostServicesV2* host,
+                                               const VoxModuleV2** module);
 
 typedef struct VoxModuleV2 {
   uint32_t structSize, version;      /* VOX_MODULE_ABI_V2 = 2 */
-  uint32_t instrumentCount;
-  const VoxInstrumentDescriptorV2* (*instrumentAt)(uint32_t index);
-  VoxResult (*create)(const char* instrumentId, const VoxCreateParamsV2*,
-                      VoxInstance* out);
-  void      (*destroy)(VoxInstance);
-  VoxResult (*prepare)(VoxInstance, const VoxPrepareSpecV2*);   /* non-RT */
-  void      (*reset)(VoxInstance);                                /* RT-safe */
-  void      (*process)(VoxInstance, const VoxProcessContextV2*);  /* RT */
-  VoxResult (*saveState)(VoxInstance, uint8_t* buffer, uint32_t capacity,
-                         uint32_t* written, uint32_t* stateVersion);
-  VoxResult (*loadState)(VoxInstance, uint32_t stateVersion,
-                         const uint8_t* bytes, uint32_t size);
+  uint32_t instrumentCount, reserved0;
+  VoxResult (VOX_CALL *getInstrument)(uint32_t index,
+                                      const VoxInstrumentDescriptorV2** out);
+  VoxResult (VOX_CALL *create)(const char* instrumentId,
+                               const VoxCreateParamsV2*, VoxInstance* out);
+  VoxResult (VOX_CALL *destroy)(VoxInstance);
+  VoxResult (VOX_CALL *prepare)(VoxInstance, const VoxPrepareSpecV2*);    /* controller */
+  VoxResult (VOX_CALL *setAllParameters)(VoxInstance, const float* plain,
+                                         uint32_t count);                 /* controller */
+  VoxResult (VOX_CALL *reset)(VoxInstance);                                /* audio */
+  VoxResult (VOX_CALL *process)(VoxInstance, const VoxProcessContextV2*);  /* audio */
+  VoxResult (VOX_CALL *saveState)(VoxInstance, uint8_t* buffer, uint32_t capacity,
+                                  uint32_t* written, uint32_t* stateVersion);
+  VoxResult (VOX_CALL *loadState)(VoxInstance, uint32_t stateVersion,
+                                  const uint8_t* bytes, uint32_t size);
   const VoxContentApiV2* content;    /* presets, patterns, generator; may be NULL */
   const VoxEditorApiV2*  editor;     /* optional native editor; NULL = declarative UI */
-  void      (*shutdown)(void);       /* host teardown, after all instances died */
+  VoxResult (VOX_CALL *shutdown)(void);  /* after the last lease, before FreeLibrary */
 } VoxModuleV2;
 ```
 
 ### Descriptor
 
-`VoxInstrumentDescriptorV2` keeps V1 identity/version/budget fields and adds:
+`VoxInstrumentDescriptorV2` keeps V1 identity/version/budget fields and adds
 `latencySamples`/`tailSamples` declarations, `parameterCount` and
 
 ```c
 typedef struct VoxParameterDescriptorV2 {
   uint32_t structSize, version;
   const char* id; const char* name; const char* unit; const char* group;
+  const char* const* choices;
   uint32_t type;                 /* float, integer, boolean, choice */
+  uint32_t choiceCount;
   float minimum, maximum, defaultValue, step;
-  const char* const* choices; uint32_t choiceCount;
-  int32_t poolIndex;             /* 0..pool-1 when hostExposed, else -1 */
+  int32_t poolIndex;             /* 0..pool-1 when HOST_EXPOSED, else -1 */
   uint32_t flags;                /* HOST_EXPOSED, MODULATABLE, AUTOMATABLE */
 } VoxParameterDescriptorV2;
 ```
@@ -103,54 +162,131 @@ installed packs (conflict = both rejected, never "pick one"), unique parameter
 IDs, unique in-range `poolIndex` for host-exposed parameters, typed range rules
 already enforced for direct parameters, budgets within `HostBudgetLimits`.
 
-### Parameter path (RT)
+## Realtime parameter and event contract
 
-Parameters are addressed by **descriptor index**, resolved once off the audio
-thread; no string lookup in callbacks (fixes the per-block linear search noted
-for Acid). `VoxProcessContextV2` carries a bounded, sample-offset-sorted list of
-changed parameters for this block:
+### Accuracy (explicit)
+
+**V2 parameter changes are block-rate.** The JUCE 9.0.1 VST3 wrapper
+(`processParameterChanges`) applies only the last point of each
+`IParamValueQueue` before `processBlock`; APVTS readouts therefore do not prove
+sample-accurate automation. Every V2 change is delivered with
+`sampleOffset = 0`. The `sampleOffset` field exists so a later host path can
+become sample-accurate without an ABI break; modules must already accept any
+offset in `[0, numSamples)`. MIDI events stay sample-accurate (they carry the
+host's offsets).
+
+### Records and bounds
 
 ```c
-typedef struct VoxParamChangeV2 { uint32_t index; uint32_t sampleOffset; float plain; } VoxParamChangeV2;
+typedef struct VoxParamChangeV2 { uint32_t index; uint32_t sampleOffset; float plain; uint32_t reserved; } VoxParamChangeV2;
+typedef struct VoxMidiEventV2   { uint32_t sampleOffset; uint32_t size; uint8_t bytes[8]; } VoxMidiEventV2;
 ```
 
-The host sends only values that changed (dirty publication), in plain units of
-the descriptor. Base value, host automation and modulation stay distinct: the
-host sends base values; a module applies its own modulation internally and
-never reports values back as host edits.
+- `index` is the **descriptor index**, resolved once off the audio thread; no
+  string lookup in callbacks (fixes Acid's per-block linear search).
+- **Snapshot:** after `prepare`, `loadState`, `reset` or rearm the host calls
+  `setAllParameters` (controller thread) with every current plain value, so a
+  module never depends on having seen earlier deltas. `process` then carries
+  only deltas.
+- **Capacity:** `VoxPrepareSpecV2.maxParamChangesPerBlock = parameterCount`
+  (≤ `poolParametersPerSlot` + UI-only parameters). The host-side change array
+  is preallocated in `prepare`.
+- **Ordering and duplicates:** sorted by `(sampleOffset, index)` ascending; at
+  most one record per `(sampleOffset, index)`; the host coalesces duplicates,
+  last write wins.
+- **Overflow:** cannot occur for block-rate delivery (≤ one record per
+  parameter). For a future sample-accurate path the host coalesces each index
+  to its final value of the block when the array would overflow, so no final
+  value is ever dropped, and increments a coalescing counter. Nothing is
+  silently misapplied: an out-of-range index or non-finite value is rejected by
+  the host before the call.
+- **MIDI:** capacity `maxMidiEventsPerBlock` (descriptor budget, ≤ host 2048).
+  On overflow the host drops NoteOn and other channel messages first and never
+  drops NoteOff, All Notes Off (CC123), All Sound Off (CC120) or the Rack
+  panic; drops are counted.
+- **Base vs automation vs modulation:** the host sends base values (named
+  value or, when armed, the automation-driven endpoint value). A module applies
+  its own modulation internally and never reports values back as host edits.
 
-### Editor and UI
+### Required tests (slice 3)
 
-Default: declarative `ui.json` rendered by host-owned VOX widgets (knob, value,
-choice, toggle, pill, step sequencer, envelope graph), bound by parameter ID.
-Optional `VoxEditorApiV2` for a reviewed native editor: `create(parentHwnd,
-scale, VoxEditorHostV2*) -> handle`, `setBounds`, `setScale`, `idle`,
-`destroy`; gestures go through `VoxEditorHostV2.beginEdit/performEdit/endEdit
-(index, plain)` on the message thread only. No JUCE/C++ objects cross. The Bass
-UI uses the same instrument-page grammar as every instrument.
+Allocation probe at zero during `process`; overload test with more host edits
+than one per parameter per block asserts final values, counters and no
+allocation; MIDI overflow test asserts every NoteOff/CC120/CC123/panic
+survives; change array ordering/duplicate test.
 
 ## Threads
 
 | Call | Thread | May allocate / lock / I/O |
 | --- | --- | --- |
-| `voxModuleEntryV2`, `instrumentAt`, `content` queries, `shutdown` | message | yes |
-| `create`, `destroy`, `prepare`, `saveState`, `loadState` | controller (message), audio suspended for the slot | yes |
+| `voxModuleEntryV2`, `getInstrument`, `content` queries, `shutdown` | message | yes |
+| `create`, `destroy`, `prepare`, `setAllParameters`, `saveState`, `loadState` | controller (message), audio suspended for the slot | yes |
 | `process`, `reset` | audio | no |
 | `VoxEditorApiV2` | message | yes (not in audio) |
 
+RT functions must not allocate, lock, do I/O or call back into the host except
+`VoxRtServicesV2`.
+
 ## Lifecycle
 
-1. **Scan** (message thread, construction or explicit rescan): read manifests,
-   verify file hashes, `LoadLibrary`, call entry, deep-copy and validate
-   descriptors, register into `InstrumentRegistry`. Failures are reported per
-   pack; nothing partial is registered.
-2. **Lease**: every instance, descriptor copy and editor holds a module lease.
-   Initial policy: a module stays loaded until processor teardown; no unload while
-   any lease exists; `shutdown` then `FreeLibrary` after the last lease.
-3. **Missing / incompatible module**: existing unresolved-slot policy (identity,
-   named values, patterns and opaque payload preserved; silence; no substitution).
-4. **Update**: a new pack version is picked up by the next Rack instance; open
-   projects then use #65 append-only migration or stay unresolved.
+### Process-wide module registry
+
+Several Rack VST3 instances live in one DAW process and share each DLL.
+
+- One process-wide `ModuleRegistry` (function-local static, message thread,
+  guarded by a mutex for the rare controller-thread access). Key: canonical
+  absolute DLL path plus file identity (volume serial + file index).
+- `LoadLibrary` + `voxModuleEntryV2` happen **once per DLL per process**; later
+  Rack instances and rescans reuse the cached module table and descriptors.
+  Entry is never called twice for a loaded DLL.
+- Every Rack instance holds a registry lease; every module instance, descriptor
+  view and editor holds a module lease. `shutdown` and `FreeLibrary` run only
+  when the last lease of the last Rack instance is gone (in practice: when the
+  last Rack instance is destroyed). No hot unload.
+- **Version selection:** for each packId the newest installed `packVersion`
+  whose ABI range includes the host is chosen, deterministically. Once a
+  version is loaded it stays the version for **this process**: a newer pack
+  installed while the DAW runs is used after the DAW restarts (not by the next
+  Rack instance in the same process). Two versions of one packId are never
+  loaded side by side.
+
+### Steps
+
+1. **Scan** (message thread, first Rack instance or explicit rescan): read
+   manifests, apply the trust policy, verify hashes, load, call entry, deep-copy
+   and validate descriptors, register. Failures are reported per pack; nothing
+   partial is registered.
+2. **Missing / incompatible module**: existing unresolved-slot policy (identity,
+   named values, patterns and opaque payload preserved; silence; no
+   substitution).
+3. **Update**: after restart, open projects use #65 append-only migration or
+   stay unresolved.
+
+## Native code trust
+
+A loaded DLL runs inside the DAW process with the user's rights, so a writable
+package folder is code execution. Proposed policy (owner confirmation needed,
+see open decision 4):
+
+- **Trusted roots only.** Native DLLs load only from
+  `%PROGRAMDATA%\Ultima Vox\Instruments` (writable by an elevated installer).
+  `%APPDATA%` is scanned for content and declarative UI only, never for DLLs.
+- **Signature before load.** Before `LoadLibraryExW` the host verifies the DLL's
+  Authenticode signature with `WinVerifyTrust` and checks the signer
+  certificate against thumbprints compiled into the Rack (Ultima Vox signer).
+  An unsigned or foreign-signed DLL is rejected and reported; the slot stays
+  unresolved.
+- **Safe load.** Absolute path only, `LoadLibraryExW(path, nullptr,
+  LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)`; no search
+  path, no current directory, no symlinks/junctions outside the root.
+- **Developer opt-in.** An explicit per-machine setting (in the
+  `%PROGRAMDATA%` root, so it needs elevation) allows unsigned modules; the
+  Rack then shows a persistent "unsigned modules enabled" warning. Off by
+  default and off in release installers.
+- Licensing stays separate and out of scope.
+
+Until this policy is implemented and reviewed, general scanning stays disabled;
+only the CMake test module is loaded, and only in tests.
 
 ## Instrument replacement and automation
 
@@ -158,17 +294,42 @@ Replacing an occupied slot with a **different** InstrumentId:
 
 1. UI shows a confirmation naming the old and new instrument and stating that
    the slot's automation lanes will be inhibited.
-2. On confirm, the slot is marked `automationInhibited` (persisted). While set,
-   host writes to that slot's pool endpoints are not applied to DSP; the Rack's
-   named values drive the instrument. The slot header shows "Automation paused"
-   with a **Rearm** action.
-3. Rearm clears the flag; lanes then drive the new instrument at their indices.
-4. Missing modules never trigger replacement. Same-InstrumentId upgrades never
-   inhibit.
+2. On confirm, the slot's `automationInhibited` flag is set (persisted in Rack
+   state; needs a Rack schema bump with migration tests).
 
-Feasibility to verify in Cubase 12–15 and REAPER: hosts keep writing while
-inhibited, lanes may visually disagree with the sound until rearm; latch/touch
-gestures; save/reopen keeps the flag.
+### While inhibited
+
+- **Authority:** the Rack's named values drive DSP. Host writes to the slot's
+  pool endpoints still change the endpoint's normalized value (JUCE/VST3 give
+  the plugin no way to refuse them), but the binding does **not** forward them
+  to named values or DSP. They are not queued and are never replayed.
+- **UI gestures** go through the Rack adapter: they update the named value
+  first (DSP follows) and then the endpoint mirror with begin/perform/end
+  gestures, so the knob does not jump and a DAW in Touch/Write records them.
+- The slot header shows "Automation paused" with a **Rearm** action.
+- **Save/reopen:** the flag and named values are saved; on reopen the
+  endpoints are set from named values, the flag stays set, and DAW playback of
+  existing lanes still does not reach DSP.
+
+### Rearm (explicit, message thread)
+
+1. Each endpoint is set from its current named value (notifying the host), so
+   the mirror and the authority agree at the moment of rearm; nothing written
+   during the inhibited period is applied retroactively.
+2. The flag is cleared; `setAllParameters` re-snapshots the module.
+3. From the next block, host writes drive DSP as for any armed slot. If a lane
+   in Read mode then plays a point, the value moves to it: that is the user's
+   intent of rearm. Smoothing is the instrument's normal smoothing; no special
+   ramp is promised.
+
+Missing modules never trigger replacement. Same-InstrumentId upgrades never
+inhibit.
+
+**Not safe until proven in a DAW.** Real Cubase 12–15 and REAPER evidence is
+required before this ships: lanes in Read/Touch/Latch/Write while inhibited,
+rearm during playback and while stopped, save/reopen with the flag set, undo of
+replacement, and lane display vs sound. Automated tests cover only the Rack
+state machine.
 
 ## Parameter capacity (decision needed before freezing the VST3 layout)
 
@@ -181,10 +342,11 @@ stay independent performance assignments, not shadow copies). Options:
 | 96 | 1536 | 16 |
 | 128 | 2048 | 48 |
 
-Recommendation: decide from measurement, not intuition — processor
-construction time, VST3 parameter enumeration and project load in Cubase/REAPER
-at 1024/1536/2048, plus idle per-block cost. Parameters beyond the pool may exist
-with `HOST_EXPOSED` cleared (UI-only), never as fake host knobs.
+Decide from measurement, not intuition: the #65 processor microbenchmark
+(construction, state, idle and automated block cost at each size) plus
+Cubase/REAPER VST3 parameter enumeration and project load. Parameters beyond
+the pool may exist with `HOST_EXPOSED` cleared (UI-only), never as fake host
+knobs.
 
 ## Performance budget (to measure before optimizing)
 
@@ -193,20 +355,41 @@ kHz and 64/128/512-sample blocks: callback p95/p99/worst, allocations (must be
 0), peak memory, module creation and project restore time, host parameter
 enumeration time. No per-sample O(all host parameters) work.
 
+## Freeze gates
+
+The ABI is called frozen only when all of these hold:
+
+1. Header compiles as C11 and C++20 in CI with the `sizeof`/`offsetof` checks.
+2. A real test DLL built by CMake round-trips entry, getInstrument, create,
+   prepare, setAllParameters, process, save/load state, destroy and shutdown
+   through `LoadLibrary` on Windows x64.
+3. The RT tests above pass, including allocation probe and overload/MIDI
+   overflow tests.
+4. Two Rack instances in one process share one loaded DLL; entry runs once;
+   `shutdown` runs once after the last instance.
+5. Trust policy decided and implemented for the loader.
+6. Architecture Guard review of the header and this document.
+
 ## Delivery slices (each with tests, each reviewed)
 
-1. `VoxModuleAbiV2.h` + static validation tests (struct sizes, version rules)
-   and an in-process fake module behind the V2 table (no DLL).
-2. Test module built as a real shared library in CMake; loader scan/validate/
-   lease; missing/corrupt/conflicting pack tests.
-3. Index-based dirty parameter publication; RT allocation probe.
-4. Replacement confirmation + automation inhibit/rearm with state round-trip.
-5. Declarative `ui.json` renderer for the common widget set.
-6. Acid packaged by the Acid agent against the frozen V2 (after capacity decision).
+1. `VoxModuleAbiV2.h`; C11 and C++20 compile targets with layout asserts; a
+   test module built as a real shared library; DLL round trip (gates 1–2).
+2. Process-wide registry, leases, version selection, scan/validate;
+   missing/corrupt/conflicting pack tests; two-instance test (gate 4).
+3. Index-based dirty parameter publication, snapshot, MIDI overflow policy, RT
+   allocation probe (gate 3).
+4. Trust policy: signature check, roots, safe load, developer opt-in (gate 5).
+5. Replacement confirmation + automation inhibit/rearm with state round-trip;
+   DAW evidence checklist.
+6. Declarative `ui.json` renderer for the common widget set.
+7. Acid packaged by the Acid agent against the frozen V2 (after capacity
+   decision).
 
 ## Open decisions for the owner
 
 1. Pool capacity 64 / 96 / 128 (after measurement).
 2. Declarative UI only, or also the native editor interface for Acid's 303 view.
-3. Install roots and activation (next instance vs explicit rescan).
-4. Pack authenticity (hash only vs signing) — out of scope until asked.
+3. Install roots and activation (proposed: `%PROGRAMDATA%` for DLLs, new packs
+   after DAW restart).
+4. Trust policy: confirm signed-only + elevated developer opt-in as proposed,
+   or choose another.
