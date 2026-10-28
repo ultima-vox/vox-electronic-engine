@@ -34,7 +34,12 @@ inline constexpr std::size_t macrosPerSlot = 8;
 // Fixed host pool (owner decision 27.10.2026): every slot exposes the same 64
 // generic endpoints; an instrument's named parameters bind to them in
 // descriptor order, so installing an instrument never changes the host layout.
-inline constexpr std::size_t poolParametersPerSlot = 64;
+// Capacity benchmarks may override the size per build (VOX_POOL_PARAMETERS_PER_SLOT);
+// shipped builds use the default.
+#ifndef VOX_POOL_PARAMETERS_PER_SLOT
+#define VOX_POOL_PARAMETERS_PER_SLOT 64
+#endif
+inline constexpr std::size_t poolParametersPerSlot = VOX_POOL_PARAMETERS_PER_SLOT;
 inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
 inline constexpr std::size_t maxHostDirectParameters = 512;
 

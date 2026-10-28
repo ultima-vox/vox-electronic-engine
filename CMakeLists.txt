@@ -427,6 +427,16 @@ target_include_directories(performance_stress_tests PRIVATE
 target_link_libraries(performance_stress_tests PRIVATE VstEngine)
 add_test(NAME performance_stress_tests COMMAND performance_stress_tests)
 
+# Host-parameter pool capacity benchmark (not a CTest gate). Build in separate
+# trees with -DVOX_POOL_PARAMETERS_PER_SLOT=96/128 to compare layouts.
+add_executable(pool_capacity_bench tests/performance/PoolCapacityBench.cpp)
+target_include_directories(pool_capacity_bench PRIVATE
+  apps/vst3
+  ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode
+  ${juce_SOURCE_DIR}/modules)
+target_link_libraries(pool_capacity_bench PRIVATE VstEngine)
+
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
 target_include_directories(reliability_stress_tests PRIVATE
