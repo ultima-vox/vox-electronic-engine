@@ -105,6 +105,13 @@ int main() {
             indexOf("step_16") == 72 && indexOf("legato") == 76 &&
             indexOf("slide_on_overlap") == 79,
         "representative proposed semantic-to-index assignments are pinned");
+  // Existing DSP bins use floor(v * 3.99/5.99), not nearest choice.
+  check(acidSelectorIndex(0.20f, 4) == 0, "four-way selector first bin");
+  check(acidSelectorIndex(0.26f, 4) == 1, "four-way selector second bin");
+  check(acidSelectorIndex(0.10f, 6) == 0, "six-way selector first bin");
+  check(acidSelectorIndex(0.18f, 6) == 1, "six-way selector second bin");
+  check(acidSelectorIndex(1.0f, 4) == 3 && acidSelectorIndex(1.0f, 6) == 5,
+        "selector upper endpoint maps to last option");
   for (unsigned mask = 0; mask < 16; ++mask) {
     engine.setPlayModeOptions((mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0,
                               (mask & 8) != 0);

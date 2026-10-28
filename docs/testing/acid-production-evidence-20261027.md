@@ -170,3 +170,17 @@ work. The current static integration is a candidate to adapt, not a delivery gat
   `bass_render_diagnostics/save_restore_rerender` failed. Packaging skipped.
   This does not identify the Bass root cause. Exact-head Windows checks are
   still required for the local review follow-up.
+
+## Selector display follow-up — 28 October 2026
+
+The interim Acid editor previously rounded normalized filter, distortion and
+modulation destination values to the nearest labeled option, while the DSP
+uses four- and six-bucket floor decoding. At intermediate automation values the
+label could name a different destination or mode than the target DSP setting.
+The editor now decodes the same buckets without altering stored automation,
+selector values or DSP smoothing. Unit checks cover representative bucket
+boundaries; the editor smoke test covers actual APVTS-to-combobox updates.
+The updated editor and smoke-test translation units compile, but the editor
+smoke executable could not be linked/run in this environment because Linux GUI
+and ALSA development libraries were unavailable. All six Acid-focused CTest
+targets pass; Windows/editor and DAW validation remain required.

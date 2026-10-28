@@ -34,6 +34,9 @@ public:
     [[nodiscard]] int acidModulationDiameterForTesting() const noexcept {
         return acidSoundPage.modulationKnobDiameterForTesting();
     }
+    int acidSelectedChoiceForTesting(std::string_view semantic) {
+        return acidSoundPage.selectedChoiceForTesting(semantic);
+    }
     bool setAcidKnobForTesting(std::string_view semantic, double normalized) {
         return acidSoundPage.setKnobForTesting(semantic, normalized);
     }

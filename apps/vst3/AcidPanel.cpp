@@ -1,6 +1,7 @@
 #include "AcidPanel.h"
 #include "PluginProcessor.h"
 #include "acid/AcidEngine.h"
+#include "acid/AcidControlInventory.h"
 #include "acid/AcidParameterBridge.h"
 #include "instrument/HostParameterSchema.h"
 #include "ui/common/UiComponents.h"
@@ -666,12 +667,18 @@ void AcidPanel::changeChoice(const std::string& name, int index, int count) {
         param->setValueNotifyingHost(static_cast<float>(index) /
                                      static_cast<float>(count - 1));
 }
+int AcidPanel::selectedChoiceForTesting(std::string_view semantic) {
+    refreshChoices();
+    if (semantic == "filter_mode") return filterChoice_.getSelectedItemIndex();
+    if (semantic == "dist_mode") return distortionChoice_.getSelectedItemIndex();
+    if (semantic == selectedModTarget()) return modulationChoice_.getSelectedItemIndex();
+    return -1;
+}
 void AcidPanel::refreshChoices() {
     auto refresh = [this](juce::ComboBox& box, std::string_view semantic, int n) {
         const auto id = hostId(semantic);
         if (const auto* raw = processor_.parameters().getRawParameterValue(id.c_str())) {
-            const int selected = juce::jlimit(0, n - 1,
-                static_cast<int>(std::round(raw->load() * static_cast<float>(n - 1))));
+            const int selected = vstengine::acid::acidSelectorIndex(raw->load(), n);
             box.setSelectedId(selected + 1, juce::dontSendNotification);
         }
     };

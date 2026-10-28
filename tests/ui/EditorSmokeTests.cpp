@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "acid/AcidParameterBridge.h"
 #include "instrument/HostParameterSchema.h"
 #include <cmath>
 #include <cstdlib>
@@ -79,6 +80,20 @@ int main()
     editor->selectSlotForTesting(1);
     editor->showPageForTesting(Page::sound);
     auto& params = processor.parameters();
+    // Automation can produce intermediate values. The displayed selector
+    // must use the same bucket as the filter and modulation DSP.
+    for (const auto& item : {std::pair {"filter_mode", 0.20f},
+                             std::pair {"dist_mode", 0.20f},
+                             std::pair {"mod_target", 0.10f}}) {
+        auto* parameter = params.getParameter(
+            vstengine::acid::hostParameterId(1, item.first));
+        if (parameter == nullptr) EDITOR_SMOKE_FAIL();
+        const auto before = parameter->getValue();
+        parameter->setValueNotifyingHost(item.second);
+        if (editor->acidSelectedChoiceForTesting(item.first) != 0)
+            EDITOR_SMOKE_FAIL();
+        parameter->setValueNotifyingHost(before);
+    }
     // True UI->APVTS attachment checks: an Acid knob must not move another
     // physical sound parameter or bleed into the Psy Bass slot.
     if (!editor->acidKnobTextForTesting("osc_tune").contains("st")

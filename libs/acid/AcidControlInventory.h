@@ -1,7 +1,9 @@
 #pragma once
 
 #include "acid/AcidEngine.h"
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string_view>
 
@@ -57,6 +59,16 @@ inline constexpr std::array<AcidControlIdentity, 80> acidControlInventory{{
     {"legato", 77, 76},        {"retrigger", 77, 77},
     {"vel_to_accent", 77, 78}, {"slide_on_overlap", 77, 79},
 }};
+
+// Match the existing DSP filter/distortion and modulation-target buckets.
+// This only decodes their current normalized base value for display; it does
+// not quantize automation or alter the smoothed DSP parameter.
+inline int acidSelectorIndex(float value, int choices) noexcept {
+  if ((choices != 4 && choices != 6) || !std::isfinite(value)) return 0;
+  const float scale = choices == 4 ? 3.99f : 5.99f;
+  return std::clamp(static_cast<int>(std::clamp(value, 0.0f, 1.0f) * scale),
+                    0, choices - 1);
+}
 
 // Candidate metadata only: this is not a host parameter descriptor or a
 // frozen conversion contract. Engine values and defaults remain normalized.
