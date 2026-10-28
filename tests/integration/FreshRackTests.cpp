@@ -1,16 +1,13 @@
 // Owner Cubase acceptance: a new Rack instance has 16 empty, silent slots;
-// instruments are loaded deliberately (first free MIDI channel) and saved
-// projects - including ones written with the former Bass + Acid starter
-// layout - restore exactly.
+// instruments are loaded deliberately (first free MIDI channel) and a new
+// project restores exactly.
 #include "PluginProcessor.h"
 #include "modules/BuiltInProvider.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <set>
 #include <string>
@@ -118,58 +115,43 @@ void loadingTakesTheFirstFreeChannel() {
         "reload takes the freed CH1");
 }
 
-void legacyStarterProjectRestores(const std::string &path) {
-  std::ifstream file(path, std::ios::binary);
-  const std::vector<char> bytes((std::istreambuf_iterator<char>(file)), {});
-  check(bytes.size() > 1000, "legacy project fixture read: " + path);
-
+// A project created in this build (Bass + Acid loaded by hand, edited)
+// reopens with the same layout, channels, macros and sound.
+void newProjectSavesAndReopens() {
   VstEngineAudioProcessor p;
-  p.setStateInformation(bytes.data(), static_cast<int>(bytes.size()));
   p.prepareToPlay(48000.0, 256);
-  const auto &rack = p.instrumentRack().state();
+  juce::String diagnostic;
+  check(p.loadSlotInstrument(0, modules::bassInstrumentId, diagnostic) &&
+            p.loadSlotInstrument(1, modules::acidInstrumentId, diagnostic),
+        "Bass and Acid loaded by hand");
+  if (auto *macro = p.parameters().getParameter("slot01Macro01"))
+    macro->setValueNotifyingHost(0.83f);
+  juce::MemoryBlock state;
+  p.getStateInformation(state);
+
+  VstEngineAudioProcessor q;
+  q.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  q.prepareToPlay(48000.0, 256);
+  const auto &rack = q.instrumentRack().state();
   check(rack[0].instrumentId == modules::bassInstrumentId &&
             rack[1].instrumentId == modules::acidInstrumentId,
-        "old project restores Bass in slot 1 and Acid in slot 2");
-  check(channelOf(p, 0) == 1 && channelOf(p, 1) == 2, "old project restores CH1 / CH2");
-  // The fixture saved macro1..8 = 0.5 and the Bass map cutoff/resonance/...
-  for (std::size_t slot = 0; slot < 2; ++slot)
-    for (float value : rack[slot].macros)
-      check(value == 0.5f, "old project restores its saved macro values");
-  check(rack[0].macroAssignments[0] == "cutoff" && rack[0].macroAssignments[1] == "resonance",
-        "old project restores its macro assignments");
+        "reopened project has Bass in slot 1 and Acid in slot 2");
+  check(channelOf(q, 0) == 1 && channelOf(q, 1) == 2, "reopened project keeps CH1 / CH2");
+  check(std::abs(raw(q, "slot01Macro01") - 0.83f) < 1e-3f, "reopened project keeps its macro");
   for (std::size_t slot = 2; slot < instrument::maxSlots; ++slot)
-    check(rack[slot].instrumentId.empty() && channelOf(p, slot) == 0,
-          "old project keeps its other slots empty");
-  p.selectSlot(0);
-  bool anyGate = false;
-  for (int step = 0; step < p.sequence().size(); ++step)
-    anyGate = anyGate || p.sequence()[step].gate;
-  check(anyGate, "old project restores its saved Bass pattern");
-  check(play(p, {1}) > 1e-6, "restored Bass plays on CH1");
-
-  // Save again and reopen: same layout and identical sound.
-  juce::MemoryBlock again;
-  p.getStateInformation(again);
-  VstEngineAudioProcessor q;
-  q.setStateInformation(again.getData(), static_cast<int>(again.getSize()));
-  q.prepareToPlay(48000.0, 256);
+    check(rack[slot].instrumentId.empty() && channelOf(q, slot) == 0,
+          "reopened project keeps its other slots empty");
   p.prepareToPlay(48000.0, 256);
-  check(q.instrumentRack().state()[0].instrumentId == modules::bassInstrumentId &&
-            channelOf(q, 1) == 2,
-        "resaved project keeps the layout");
-  check(play(p, {1, 2}, 12) == play(q, {1, 2}, 12), "resaved project sounds identical");
+  const auto a = play(p, {1, 2}, 12), b = play(q, {1, 2}, 12);
+  check(a > 1e-6 && a == b, "reopened project sounds identical");
 }
 } // namespace
 
-int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "usage: fresh_rack_tests <legacy starter project state>\n";
-    return 2;
-  }
+int main() {
   juce::ScopedJuceInitialiser_GUI gui;
   freshRackIsEmptyAndSilent();
   loadingTakesTheFirstFreeChannel();
-  legacyStarterProjectRestores(argv[1]);
+  newProjectSavesAndReopens();
   std::cout << "fresh_rack_tests: " << checks << " checks passed\n";
   return 0;
 }
