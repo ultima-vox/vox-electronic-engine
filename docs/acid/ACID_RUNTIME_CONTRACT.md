@@ -46,6 +46,16 @@ not advanced; this contract does not invent elapsed time from wall-clock I/O.
 
 ## Release, sample rate and resource bounds
 
+Decay reaches Sustain at its selected duration using an exponential curve to
+-80dB of the initial distance. Progress accumulates through Decay automation.
+When Sustain moves near the deadline, the envelope settles towards the current
+target with a 4 ms time constant before entering Sustain; it never jumps to the
+new target at the deadline. The selected filter Decay applies to unaccented
+notes; accented filter notes retain the engine's separate accent timing.
+This corrects a previously overlong decay and changes existing preset sound;
+parameter IDs and serialized values are unchanged, and musical audition remains
+required.
+
 Release controls express duration to silence, not an exponential time constant.
 The released envelope progresses from its captured amplitude to -80dB and then
 exact zero by its selected duration. Progress accumulates, so Release automation

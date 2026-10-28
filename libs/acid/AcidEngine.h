@@ -253,15 +253,17 @@ private:
 
     struct AdsrState {
         EnvStage stage { EnvStage::idle };
-        float value {};
-        float releaseStartValue{};
+        double value {};
+        double releaseStartValue{};
         double releaseProgress{};
+        double decayProgress{};
 
         void reset() noexcept {
             stage = EnvStage::idle;
             value = 0.0f;
             releaseStartValue = 0.0f;
             releaseProgress = 0.0;
+            decayProgress = 0.0;
         }
 
         void trigger(bool retriggerFromZero) noexcept {

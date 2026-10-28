@@ -135,6 +135,16 @@ changed here. Fresh exact-head Windows validation remains required.
    a failing provider test. Forward the validated host root through Acid only.
 8. Reproduce free-running LFO phase freeze while idle; fix once-per-sample source
    progression, independently review it and run behavioral/sanitizer tests.
+9. Reproduce Decay duration mismatch in 18 actual-engine scenarios, then fix the
+   exponential timing. Guard review reproduced a late Sustain automation jump;
+   replace the abrupt deadline snap with a bounded smooth settle and add a
+   regression. Guard also found high-rate float precision loss; use double
+   envelope state and verify maximum Decay at nonzero Sustain. Independent
+   timing probe reaches Sustain on the nominal sample at 48/192/384 kHz for
+   four Sustain values. The fix changes preset character and needs audition.
+   Actual CMake Acid suite: 82024 checks + 667 compliance pass; Decay: 33 checks
+   pass with ASan/UBSan. Windows run40569810732 for the earlier head passed
+   32/33 tests; Bass render diagnostics failed and packaging did not run.
 
 ub-mode is available and used in this session. Its named crapper/dryer/mutator
 tools are unavailable; no metrics or mutation-test result is fabricated. Existing

@@ -47,16 +47,25 @@ float AcidEngine::AdsrState::advance(float attackSec, float decaySec,
             value += step;
             if (value >= 1.0f) {
                 value = 1.0f;
+                decayProgress = 0.0;
                 stage = EnvStage::decay;
             }
             break;
         }
 
         case EnvStage::decay: {
-            const float coeff = std::exp(
-                -1.0f / std::max(1.0f, static_cast<float>(decaySec * sampleRate)));
+            const double increment =
+                1.0 / std::max(1.0, static_cast<double>(decaySec) * sampleRate);
+            const bool settling = decayProgress >= 1.0;
+            decayProgress += increment;
+            constexpr double minus80dB = -9.210340371976184;
+            // A Sustain change near the deadline may leave a large gap.
+            // Settle that gap smoothly instead of snapping and clicking.
+            const double exponent = settling ? -1.0 / (0.004 * sampleRate)
+                                             : minus80dB * increment;
+            const double coeff = std::exp(exponent);
             value = sustainLevel + (value - sustainLevel) * coeff;
-            if (std::abs(value - sustainLevel) < 1.0e-4f) {
+            if (decayProgress >= 1.0 && std::abs(value - sustainLevel) < 1.0e-4f) {
                 value = sustainLevel;
                 stage = (sustainLevel <= 0.001f && !gateOpen) ? EnvStage::idle
                                                               : EnvStage::sustain;
@@ -88,7 +97,7 @@ float AcidEngine::AdsrState::advance(float attackSec, float decaySec,
             break;
         }
     }
-    return value;
+    return static_cast<float>(value);
 }
 
 float AcidEngine::cutoffNormalizedToHz(float norm) noexcept {
