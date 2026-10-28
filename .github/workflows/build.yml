@@ -84,7 +84,9 @@ jobs:
         shell: powershell
         run: |
           $abiRoot = Join-Path $env:GITHUB_WORKSPACE "_vox_abi_v2/libs"
-          cmake -S . -B build-bass-v2 -G "Visual Studio 17 2022" -A x64 "-DVOX_BUILD_FULLON_BASS_MODULE=ON" "-DVOX_MODULE_ABI_V2_ROOT=$abiRoot"
+          # Keep JUCE's deeply nested source paths below Windows' legacy path limit.
+          $depsRoot = Join-Path $env:RUNNER_TEMP "bass-deps-${{ github.run_id }}-${{ github.run_attempt }}"
+          cmake -S . -B build-bass-v2 -G "Visual Studio 17 2022" -A x64 "-DFETCHCONTENT_BASE_DIR=$depsRoot" "-DVOX_BUILD_FULLON_BASS_MODULE=ON" "-DVOX_MODULE_ABI_V2_ROOT=$abiRoot"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Bass DLL and ABI test
         id: bass_build
