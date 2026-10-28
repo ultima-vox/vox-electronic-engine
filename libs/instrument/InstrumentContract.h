@@ -31,7 +31,11 @@ inline constexpr std::size_t maxSlots = 16;
 // exact.
 inline constexpr std::uint32_t maxGenerationSeed = 0x00ffffffu;
 inline constexpr std::size_t macrosPerSlot = 8;
-inline constexpr std::size_t maxDirectParameters = 128;
+// Fixed host pool (owner decision 27.10.2026): every slot exposes the same 64
+// generic endpoints; an instrument's named parameters bind to them in
+// descriptor order, so installing an instrument never changes the host layout.
+inline constexpr std::size_t poolParametersPerSlot = 64;
+inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
 inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {

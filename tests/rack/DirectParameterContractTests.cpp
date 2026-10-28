@@ -103,6 +103,8 @@ int checks{};
       throw std::runtime_error(std::string(m) + " (line " +                    \
                                std::to_string(__LINE__) + ")");                \
   } while (false)
+// Last native slot, past the fixture's named parameters: opaque resource data.
+constexpr std::size_t resourceIndex = maxDirectParameters - 1;
 std::string parameterId(std::size_t index) {
   auto digits = std::to_string(index);
   return "p" + std::string(3 - digits.size(), '0') + digits;
@@ -241,8 +243,8 @@ public:
       return false;
     std::array<float, maxDirectParameters> candidate{};
     std::memcpy(candidate.data(), bytes.data(), bytes.size());
-    if (!std::isfinite(candidate[127]) || candidate[127] < 0 ||
-        candidate[127] > 1000)
+    if (!std::isfinite(candidate[resourceIndex]) || candidate[resourceIndex] < 0 ||
+        candidate[resourceIndex] > 1000)
       return false;
     o_->values = candidate;
     return true;
@@ -433,13 +435,15 @@ void identicalInstrumentSlotsStayIndependentAndMaximumCountWorks() {
         "second slot stores its different plain value");
   Fixture maximum(false, maxDirectParameters);
   auto largest = maximum.controls();
-  change(largest[0], maximum.provider->descriptor_.id, "p127", 0.625f);
+  change(largest[0], maximum.provider->descriptor_.id,
+         parameterId(maxDirectParameters - 1), 0.625f);
   maximum.render(largest);
   CHECK(
-      maximum.provider->latest->values[127] == 0.625f &&
+      maximum.provider->latest->values[maxDirectParameters - 1] == 0.625f &&
           maximum.engine->snapshotState(largest)[0].directParameters.size() ==
-              128,
-      "128th independent parameter processes and persists at exact slot bound");
+              maxDirectParameters,
+      "64th (pool-sized) independent parameter processes and persists at exact "
+      "slot bound");
 }
 
 void directModulationDoesNotOverwriteStoredBase() {
@@ -700,19 +704,19 @@ void nativePresetResourcesAreTransactionalAndNamedBasesAuthoritative() {
     std::array<float, maxDirectParameters> raw{};
     raw[0] = 9999;
     raw[1] = -999;
-    raw[127] = resource;
+    raw[resourceIndex] = resource;
     std::vector<std::byte> bytes(sizeof(raw));
     std::memcpy(bytes.data(), raw.data(), bytes.size());
     return bytes;
   };
-  // Parameter 127 is opaque native resource metadata in this 12-parameter fake
+  // The last pool index is opaque native resource metadata in this 12-parameter fake
   // instrument.
   auto initial = f.engine->snapshotState();
   initial[0].modulePayload = native(55);
   CHECK(f.engine->replaceState(initial, nullptr, f.error),
         "initial native-resource state loads");
   f.render();
-  CHECK(f.provider->latest->values[127] == 55 &&
+  CHECK(f.provider->latest->values[resourceIndex] == 55 &&
             f.provider->latest->values[0] == -6,
         "named bases override native parameter bytes without losing resource "
         "identity");
@@ -724,7 +728,7 @@ void nativePresetResourcesAreTransactionalAndNamedBasesAuthoritative() {
   CHECK(f.engine->applySoundPreset(0, content.id, nullptr, f.error),
         "absent native payload preserves existing native resources");
   f.render();
-  CHECK(f.provider->latest->values[127] == 55 &&
+  CHECK(f.provider->latest->values[resourceIndex] == 55 &&
             f.provider->latest->values[0] == -3.5f,
         "named-only preset preserves resources while replacing named bases");
   content.nativeState = native(99);
@@ -732,7 +736,7 @@ void nativePresetResourcesAreTransactionalAndNamedBasesAuthoritative() {
   CHECK(f.engine->applySoundPreset(0, content.id, nullptr, f.error),
         "versioned native-resource preset applies");
   f.render();
-  CHECK(f.provider->latest->values[127] == 99 &&
+  CHECK(f.provider->latest->values[resourceIndex] == 99 &&
             f.provider->latest->values[0] == -3.5f &&
             f.provider->latest->values[1] == 1200,
         "native resources change but opaque parameters cannot override "
@@ -745,7 +749,7 @@ void nativePresetResourcesAreTransactionalAndNamedBasesAuthoritative() {
         "automated named base plus native resources restores");
   restored.render();
   CHECK(restored.provider->latest->values[0] == -0.5f &&
-            restored.provider->latest->values[127] == 99,
+            restored.provider->latest->values[resourceIndex] == 99,
         "restored host automation wins over stale opaque parameter bytes");
   const auto before = encoded(f.engine->snapshotState());
   const auto active = f.provider->latest;
@@ -769,7 +773,7 @@ void nativePresetResourcesAreTransactionalAndNamedBasesAuthoritative() {
           "native preset rejection leaves previous complete state intact");
     const auto calls = active->processed;
     f.render();
-    CHECK(active->processed == calls + 1 && active->values[127] == 99 &&
+    CHECK(active->processed == calls + 1 && active->values[resourceIndex] == 99 &&
               active->values[0] == -3.5f,
           "native preset failure leaves original instance/resources sounding");
   }
@@ -778,7 +782,7 @@ void nativePresetResourcesAreTransactionalAndNamedBasesAuthoritative() {
   CHECK(f.engine->applySoundPreset(0, content.id, nullptr, f.error),
         "present-empty native payload explicitly resets native Init");
   f.render();
-  CHECK(f.provider->latest->values[127] == 0 &&
+  CHECK(f.provider->latest->values[resourceIndex] == 0 &&
             f.provider->latest->values[0] == -3.5f,
         "native Init reset still preserves explicit named preset bases");
 }
@@ -837,18 +841,20 @@ void metadataAndCatalogBounds() {
   }
   InstrumentRegistry registry;
   std::string error;
-  for (int i = 0; i < 4; ++i)
+  constexpr auto capacityInstruments =
+      maxHostDirectParameters / maxDirectParameters;
+  for (std::size_t i = 0; i < capacityInstruments; ++i)
     CHECK(registry.registerProvider(
               std::make_unique<Provider>(descriptor(
                   "test.capacity." + std::to_string(i), maxDirectParameters)),
               error),
-          "128 direct parameters per instrument and 512 catalog parameters "
+          "64 direct parameters per instrument and 512 catalog parameters "
           "accepted");
   CHECK(!registry.registerProvider(
             std::make_unique<Provider>(descriptor("test.capacity.overflow", 1)),
             error),
         "513th direct catalog parameter rejected");
-  CHECK(registry.descriptors().size() == 4,
+  CHECK(registry.descriptors().size() == capacityInstruments,
         "failed catalog expansion leaves prior instruments available");
   InstrumentRegistry collision;
   auto a = descriptor("test.names", 1);
@@ -858,15 +864,20 @@ void metadataAndCatalogBounds() {
   CHECK(collision.registerProvider(std::make_unique<Provider>(std::move(a)),
                                    error),
         "first unambiguous direct host name accepts");
-  CHECK(!collision.registerProvider(std::make_unique<Provider>(std::move(b)),
-                                    error),
-        "dotted instrument/parameter host-name ambiguity rejected");
+  CHECK(collision.registerProvider(std::make_unique<Provider>(std::move(b)),
+                                   error),
+        "dotted IDs cannot collide: pool endpoints bind by descriptor order, "
+        "not concatenated host names");
   CHECK(hostparams::directKey("test.a", "p000") !=
             hostparams::directKey("test.b", "p000"),
         "same parameter ID in different instruments has independent key");
-  CHECK(hostparams::directId(0, "test.a", "p000") !=
-            hostparams::directId(1, "test.a", "p000"),
-        "each slot receives independent stable host endpoint");
+  CHECK(hostparams::poolId(0, 0) == "slot01.p001" &&
+            hostparams::poolId(15, poolParametersPerSlot - 1) == "slot16.p064" &&
+            hostparams::isPoolId("slot16.p064") &&
+            !hostparams::isPoolId("slot17.p001") &&
+            !hostparams::isPoolId("slot01.p065") &&
+            !hostparams::isPoolId("slot01.send.1.pre"),
+        "each slot receives independent stable pool endpoints");
   CHECK(hostparams::macroId(0, 0) == "slot01Macro01",
         "existing macro endpoint identity unchanged");
 }

@@ -98,7 +98,7 @@ public:
   host::DirectParameterBank bank;
   juce::AudioProcessorValueTreeState::ParameterLayout layout() {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> result;
-    host::appendDirectParameters(result, catalog);
+    host::appendPoolParameters(result, catalog);
     return {result.begin(), result.end()};
   }
   Processor() : state(*this, nullptr, "DIRECT_FIXTURE", layout()) {
@@ -129,17 +129,23 @@ rack::PersistentSlotState base(const instrument::InstrumentDescriptor &d) {
     result.directParameters.push_back({p.id, p.defaultValue});
   return result;
 }
+// Pool endpoint bound to a fixture parameter: descriptor order (both fixtures
+// share one parameter list, so the module only documents the caller's intent).
+std::string poolFor(std::size_t slot, std::string_view, std::string_view name) {
+  const auto d = descriptor("index");
+  for (std::size_t i = 0; i < d.parameters.size(); ++i)
+    if (d.parameters[i].id == name)
+      return instrument::hostparams::poolId(slot, i);
+  require(false, "fixture parameter exists");
+  return {};
+}
 float raw(Processor &p, std::size_t slot, std::string_view module,
           std::string_view name) {
-  return p.state
-      .getRawParameterValue(
-          instrument::hostparams::directId(slot, module, name))
-      ->load();
+  return p.state.getRawParameterValue(poolFor(slot, module, name))->load();
 }
 void set(Processor &p, std::size_t slot, std::string_view module,
          std::string_view name, float value) {
-  auto *parameter = p.state.getParameter(
-      instrument::hostparams::directId(slot, module, name));
+  auto *parameter = p.state.getParameter(poolFor(slot, module, name));
   require(parameter != nullptr, "named parameter exists");
   parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
 }
@@ -156,26 +162,36 @@ float value(const rack::ProcessSlotControls &c, std::string_view module,
 int main() {
   juce::ScopedJuceInitialiser_GUI gui;
   Processor p;
-  const auto id = [&](std::string_view name) {
-    return instrument::hostparams::directId(0, p.first.id, name);
+  const auto param = [&](std::string_view name) {
+    return p.state.getParameter(poolFor(0, p.first.id, name));
   };
-  require(dynamic_cast<juce::AudioParameterFloat *>(
-              p.state.getParameter(id("cutoff"))) != nullptr,
-          "float host parameter type");
-  require(dynamic_cast<juce::AudioParameterInt *>(
-              p.state.getParameter(id("octave"))) != nullptr,
-          "integer host parameter type");
-  require(dynamic_cast<juce::AudioParameterBool *>(
-              p.state.getParameter(id("enabled"))) != nullptr,
-          "boolean host parameter type");
-  require(dynamic_cast<juce::AudioParameterChoice *>(
-              p.state.getParameter(id("wave"))) != nullptr,
-          "choice host parameter type");
-  require(p.state.getParameter(id("cutoff"))->getLabel() == "Hz",
-          "unit preserved");
+  require(p.getParameters().size() ==
+              static_cast<int>(instrument::maxSlots *
+                               instrument::poolParametersPerSlot),
+          "fixed pool layout: 16 x 64 endpoints, independent of the catalog");
+  require(p.state.getParameter("slot16.p064") != nullptr &&
+              p.state.getParameter("slot01.p065") == nullptr,
+          "pool IDs cover exactly slotNN.p001..p064");
+  require(param("cutoff")->getName(64) == "Slot 1 Param 02" &&
+              param("cutoff")->getLabel().isEmpty(),
+          "unbound endpoint has a neutral generic name");
   auto a = base(p.first);
   auto b = base(p.second);
   require(p.bank.selectAndRestore(0, a), "select alpha bank");
+  require(param("cutoff")->getName(64) == "Slot 1 Cutoff" &&
+              param("cutoff")->getLabel() == "Hz",
+          "bound endpoint takes the instrument name and unit");
+  require(param("wave")->getText(param("wave")->convertTo0to1(1), 32) ==
+                  "Square" &&
+              param("enabled")->getText(1.0f, 32) == "On" &&
+              param("octave")->getText(param("octave")->convertTo0to1(-2), 32) ==
+                  "-2",
+          "bound endpoint formats choice, boolean and integer values");
+  require(param("wave")->convertFrom0to1(
+              param("wave")->getValueForText("Sine")) == 2 &&
+              param("cutoff")->convertFrom0to1(
+                  param("cutoff")->getValueForText("440")) == 440,
+          "bound endpoint parses host-entered text");
   require(p.bank.selectAndRestore(1, b), "select beta bank");
   set(p, 0, p.first.id, "cutoff", 3456);
   set(p, 1, p.second.id, "gain", 0.72f);
@@ -213,6 +229,11 @@ int main() {
   p.bank.read(0, controls);
   require(controls.directParameterCount == 0,
           "missing module disables bank without substitution");
+  require(param("cutoff")->getName(64) == "Slot 1 Param 02" &&
+              param("cutoff")->getValue() == 0.0f,
+          "deactivated slot unbinds its pool to a neutral value");
+  require(p.bank.selectAndRestore(0, b) && raw(p, 0, p.second.id, "gain") == 1,
+          "another instrument rebinds the same slot pool with its own values");
   require(p.bank.selectAndRestore(0, a),
           "known bank restored after missing module");
   const auto xml = p.state.copyState().toXmlString();
@@ -229,7 +250,7 @@ int main() {
       juce::ParameterID{"BB", 1}, "B", 0, 1, 0));
   bool rejected = false;
   try {
-    host::appendDirectParameters(collision, {});
+    host::appendPoolParameters(collision, {});
   } catch (const std::invalid_argument &) {
     rejected = true;
   }

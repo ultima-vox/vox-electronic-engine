@@ -66,8 +66,9 @@ inline float canonicalPlain(float value,
 
 std::string macroId(std::size_t slotIndex, std::size_t macroIndex);
 std::string macroName(std::size_t slotIndex, std::size_t macroIndex);
-std::string directId(std::size_t slotIndex, std::string_view instrumentId,
-                     std::string_view parameterId);
+// Host ID of pool endpoint `poolIndex` (0-based) in a slot: "slotNN.pKKK".
+std::string poolId(std::size_t slotIndex, std::size_t poolIndex);
+[[nodiscard]] bool isPoolId(std::string_view id) noexcept;
 bool validateDirectCatalog(std::span<const InstrumentDescriptor *const>,
                            std::string &diagnostic);
 // Stable across platforms and catalog order. Zero is reserved for unused

@@ -72,8 +72,10 @@ panels, knobs); it is not a separate shell.
 
 ## Phases
 
-1. Parameter pool replaces `DirectParameterBank` IDs; built-in instruments
-   become manifest + coarse block. Plugin parameter layout changes once.
+1. Parameter pool replaces `DirectParameterBank` IDs (**done** on
+   `feat/instrument-param-pool`, see [parameter contract](RACK_PARAMETER_CONTRACT.md));
+   built-in instruments become manifest + coarse block (next). Plugin parameter
+   layout changes once.
 2. Package loader/scanner, validation, missing-package handling, tests.
 3. Block graph compiler and the first fine-grained blocks.
 4. `ui.json` renderer; packaging tool.

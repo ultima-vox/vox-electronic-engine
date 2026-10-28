@@ -169,8 +169,9 @@ void check(bool b, const char *message) {
     std::exit(1);
   }
 }
+// The fixture binds to the slot's pool in descriptor order: gain, tone.
 std::string id(std::size_t slot, std::string_view name) {
-  return instrument::hostparams::directId(slot, fixtureId, name);
+  return instrument::hostparams::poolId(slot, name == "gain" ? 0 : 1);
 }
 void set(VstEngineAudioProcessor &p, const std::string &key, float v) {
   auto *a = p.parameters().getParameter(key);
@@ -234,6 +235,17 @@ juce::ValueTree parameterChild(const juce::ValueTree &project,
         child.getProperty("id").toString() == juce::String(parameterId))
       return child;
   check(false, "mutated APVTS parameter exists in actual processor project");
+  return {};
+}
+
+// Named Rack value of a saved slot: the authoritative source for pool endpoints.
+juce::ValueTree namedChild(const juce::ValueTree &project, int slot,
+                           std::string_view name) {
+  for (const auto child : project.getChildWithName("RACK").getChild(slot))
+    if (child.hasType("SOUND_PARAMETER") &&
+        child.getProperty("id").toString() == juce::String(std::string(name)))
+      return child;
+  check(false, "named Rack value exists in actual processor project");
   return {};
 }
 
@@ -304,14 +316,13 @@ void malformedApvtsRollback(VstEngineAudioProcessor &target,
     std::string parameter;
     juce::var value;
   };
-  const std::array<ScalarCase, 8> invalid{
+  const std::array<ScalarCase, 7> invalid{
       {{"outputLevel", juce::String("0.4junk")},
        {"outputLevel", juce::String("NaN")},
        {"outputLevel", juce::String("inf")},
        {"outputLevel", juce::var(2.5)},
        {"outputLevel", juce::var(-0.1)},
        {id(0, "gain"), juce::String("NaN")},
-       {id(0, "gain"), juce::var(1.5)},
        {"rngSeed", juce::var(16777216)}}};
   for (const auto &test : invalid) {
     auto project = original.createCopy();
@@ -319,6 +330,14 @@ void malformedApvtsRollback(VstEngineAudioProcessor &target,
         .setProperty("value", test.value, nullptr);
     check(project.getChildWithName("RACK").toXmlString() == goodRack,
           "scalar corruption leaves the complete good Rack payload unchanged");
+    rejectedRestoreKeepsLiveState(target, encodeProject(project), before,
+                                  sound);
+  }
+  {
+    // Out-of-range named value of an active module: the authoritative source
+    // is validated against its descriptor (the pool PARAM only mirrors it).
+    auto project = original.createCopy();
+    namedChild(project, 0, "gain").setProperty("value", 1.5, nullptr);
     rejectedRestoreKeepsLiveState(target, encodeProject(project), before,
                                   sound);
   }
@@ -426,19 +445,25 @@ void futureParameterDomainRemainsOpaque(
                 static_cast<const std::byte *>(nativeBytes.getData()) +
                     nativeBytes.getSize()),
         "future native module payload remains byte-identical");
-  check(raw(*older, id(0, "gain")) == 0.25f,
-        "dormant installed endpoint retains safe Init instead of future value");
+  check(raw(*older, id(0, "gain")) == 0.0f &&
+            older->parameters().getParameter(id(0, "gain"))->getName(64) ==
+                "Slot 1 Param 01",
+        "dormant pool endpoint is unbound and neutral instead of the future "
+        "value");
   check(render(*older) == std::array<float, 2>{0, 0},
         "unresolved future-domain slot remains silent");
 
   const auto resavedBytes = capture(*older);
   const auto resaved = decodeProject(resavedBytes);
-  check(static_cast<float>(static_cast<double>(
-            parameterChild(resaved, id(0, "gain")).getProperty("value"))) ==
-            futureGain,
-        "re-save retains opaque host value outside the installed old endpoint "
-        "range");
   const auto resavedSlot = resaved.getChildWithName("RACK").getChild(0);
+  bool resavedFuture = false;
+  for (const auto child : resavedSlot)
+    resavedFuture |= child.hasType("SOUND_PARAMETER") &&
+                     child.getProperty("id").toString() == "gain" &&
+                     static_cast<float>(static_cast<double>(
+                         child.getProperty("value"))) == futureGain;
+  check(resavedFuture,
+        "re-save retains the named future value outside the installed range");
   check(resavedSlot.getProperty("modulePayload").toString() ==
             nativeBytes.toBase64Encoding(),
         "re-save retains native payload for an upgraded provider");
@@ -470,7 +495,7 @@ void futureParameterDomainRemainsOpaque(
   const auto mixedCommitted = capture(*older);
   const auto mixedSound = render(*older);
   auto badActive = mixed.createCopy();
-  parameterChild(badActive, id(1, "gain")).setProperty("value", 1.5f, nullptr);
+  namedChild(badActive, 1, "gain").setProperty("value", 1.5f, nullptr);
   rejectedRestoreKeepsLiveState(*older, encodeProject(badActive),
                                 mixedCommitted, mixedSound);
   auto malformedOpaque = mixed.createCopy();
@@ -478,6 +503,20 @@ void futureParameterDomainRemainsOpaque(
       .setProperty("value", "NaN", nullptr);
   rejectedRestoreKeepsLiveState(*older, encodeProject(malformedOpaque),
                                 mixedCommitted, mixedSound);
+  // A pool PARAM only mirrors the named value: an out-of-range mirror loads,
+  // but the live endpoint takes the validated named value.
+  auto mirrorOnly = mixed.createCopy();
+  parameterChild(mirrorOnly, id(1, "gain")).setProperty("value", 1.5f, nullptr);
+  const auto mirrorBytes = encodeProject(mirrorOnly);
+  older->setStateInformation(mirrorBytes.getData(),
+                             static_cast<int>(mirrorBytes.getSize()));
+  check(std::abs(raw(*older, id(1, "gain")) - saved(*older, 1, "gain")) < 1e-6f &&
+            raw(*older, id(1, "gain")) <= 1.0f,
+        "pool PARAM mirror cannot inject a value past the named authority");
+  check(decodeProject(capture(*older)).getChildWithName("RACK").toXmlString() ==
+                decodeProject(mixedCommitted).getChildWithName("RACK").toXmlString() &&
+            std::abs(raw(*older, id(1, "gain")) - 0.73f) < 1e-6f,
+        "mirror-only difference restores the identical committed Rack state");
 
   juce::String resetDiagnostic;
   check(older->loadSlotInstrument(0, fixtureId, resetDiagnostic),
