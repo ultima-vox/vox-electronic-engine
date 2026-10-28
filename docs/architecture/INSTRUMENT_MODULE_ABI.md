@@ -253,7 +253,10 @@ delivered".
   module silences all voices and tails immediately (no release phase), then
   processes the block's queued events normally; NoteOns later in the same block
   sound. Panic never uses the queue and does not depend on its fill level.
-  Latency from the button press is at most one callback.
+  "At most one callback" is callback sequencing, not a wall-clock bound: while
+  the host suspends processing no callback runs, which is safe (no audio is
+  produced). A pending Panic is consumed by the first callback after resume,
+  before any event queued for that callback.
 - **MIDI all-off events (CC123 All Notes Off, CC120 All Sound Off).** Queued at
   their sample offset when room exists, clearing the sounding set. CC123
   releases notes (release phase allowed); CC120 silences immediately.
