@@ -87,7 +87,8 @@ public:
 // incompatible version-2 changes: a moved pool index, a renamed (removed) ID
 // and a narrowed range that invalidates a saved value.
 enum class Revision {
-  v1, reordered, extended, extendedUnversioned, moved, renamed, narrowed
+  v1, reordered, extended, extendedUnversioned, moved, renamed, narrowed,
+  movedUnversioned // same version, IDs and count; only gain's index moves
 };
 class Provider final : public instrument::InstrumentProvider {
   instrument::InstrumentDescriptor descriptor_;
@@ -137,7 +138,8 @@ public:
     if (revision != Revision::v1)
       std::reverse(d.parameters.begin(), d.parameters.end());
     if (revision != Revision::v1 && revision != Revision::reordered &&
-        revision != Revision::extendedUnversioned)
+        revision != Revision::extendedUnversioned &&
+        revision != Revision::movedUnversioned)
       d.instrumentVersion = 2;
     if (revision == Revision::extended ||
         revision == Revision::extendedUnversioned) {
@@ -153,7 +155,7 @@ public:
       d.parameters.insert(d.parameters.begin(), drive);
     }
     auto &gainParameter = d.parameters.back(); // reversed: gain is last
-    if (revision == Revision::moved)
+    if (revision == Revision::moved || revision == Revision::movedUnversioned)
       gainParameter.poolIndex = 3;
     if (revision == Revision::narrowed)
       gainParameter.maximum = 0.5f;
@@ -710,6 +712,40 @@ void sameInstrumentUpgrade() {
   factoryFault.store(3);
   rejectedRestoreKeepsLiveState(*rollback, v1Project, rollbackBefore,
                                 rollbackSound);
+
+  // Moving a recorded pool index without a version bump would silently remap
+  // automation: the whole restore is rejected with live state rolled back.
+  auto movedSame = processorFor(Revision::movedUnversioned);
+  juce::String loadedMoved;
+  check(movedSame->loadSlotInstrument(0, fixtureId, loadedMoved),
+        "same-version moved build loads its own module");
+  set(*movedSame, instrument::hostparams::poolId(0, 3), 0.9f);
+  const auto movedBefore = capture(*movedSame);
+  const auto movedSound = render(*movedSame);
+  rejectedRestoreKeepsLiveState(*movedSame, v1Project, movedBefore, movedSound);
+  check(movedSame->parameters()
+                .getParameter(instrument::hostparams::poolId(0, 3))
+                ->getName(64) == "Slot 1 Gain",
+        "rejected same-version index drift never rebinds the saved endpoint");
+
+  // Legacy policy: a snapshot without recorded indices matches by ID only.
+  auto legacy = processorFor(Revision::movedUnversioned);
+  open(*legacy, encodeProject(unindexed));
+  check(resolved(*legacy) &&
+            std::abs(saved(*legacy, 0, "gain") - 0.6f) < 1e-6f,
+        "legacy unindexed snapshot keeps the documented match-by-ID policy");
+
+  // Duplicate named IDs never commit, including through migration.
+  for (const auto revision : {Revision::v1, Revision::extended}) {
+    auto duplicate = decodeProject(v1Project);
+    auto saved = duplicate.getChildWithName("RACK").getChild(0);
+    saved.appendChild(namedChild(duplicate, 0, "gain").createCopy(), nullptr);
+    auto target = processorFor(revision);
+    const auto targetBefore = capture(*target);
+    const auto targetSound = render(*target);
+    rejectedRestoreKeepsLiveState(*target, encodeProject(duplicate),
+                                  targetBefore, targetSound);
+  }
 
   // Changing the parameter set without a version bump is a provider error:
   // the whole project is rejected and the live state stays intact.

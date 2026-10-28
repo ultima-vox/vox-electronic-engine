@@ -43,8 +43,10 @@ index, removed/renamed ID, invalidated value, missing recorded index, other
 version markers) stays unresolved with the original snapshot preserved; such
 changes need their own explicit migration. Opening a migrated snapshot in the
 older build is not supported: it stays unresolved and preserved. Changing the
-parameter set without the version bump is a provider error and rejects the
-whole restore. The former per-instrument
+parameter set, or moving a recorded pool index, without the version bump is a
+provider error and rejects the whole restore transactionally (checked for every
+resolved slot before commit, so endpoint identity is never silently changed).
+Legacy values without a recorded index (Rack schema 1-5) match by ID only. The former per-instrument
 IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
 
 Registration rejects incomplete/duplicate descriptors, runtime key collisions

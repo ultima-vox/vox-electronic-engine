@@ -241,6 +241,14 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
           diagnostic = "direct parameter identity or range invalid";
           return false;
         }
+        // A recorded endpoint must still match: a moved pool index without a
+        // version bump would silently remap automation. Unknown (-1) is the
+        // documented legacy match-by-ID policy.
+        if (value.poolIndex >= 0 && value.poolIndex != parameter->poolIndex) {
+          diagnostic = "direct parameter pool index changed without a new "
+                       "instrument version";
+          return false;
+        }
         target.direct[target.directCount++] = {
             instrument::hostparams::directKey(state.instrumentId, value.id),
             parameter,

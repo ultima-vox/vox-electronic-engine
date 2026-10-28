@@ -34,14 +34,17 @@ DirectMigration migrateAppendOnly(PersistentSlotState &state,
       state.directParameters.empty() ||
       state.directParameters.size() > current.parameters.size())
     return DirectMigration::incompatible;
-  for (const auto &saved : state.directParameters) {
+  for (std::size_t i = 0; i < state.directParameters.size(); ++i) {
+    const auto &saved = state.directParameters[i];
     const auto *p = find(current, saved.id);
     if (p == nullptr || saved.poolIndex < 0 ||
         saved.poolIndex != p->poolIndex || !validValue(saved.value, *p))
       return DirectMigration::incompatible;
+    for (std::size_t prior = 0; prior < i; ++prior)
+      if (state.directParameters[prior].id == saved.id)
+        return DirectMigration::incompatible; // never trust caller validation
   }
-  // Duplicate saved IDs are rejected by state validation before this point;
-  // with every saved ID present, the remainder are exactly the new parameters.
+  // Every saved ID is present exactly once, so the rest are the new ones.
   auto migrated = state.directParameters;
   for (const auto &p : current.parameters) {
     bool present = false;
