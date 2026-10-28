@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.22)
 project(VstEngine VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Host parameter pool per slot. Shipped builds use 64; 96/128 exist only for
+# capacity benchmarks in separate clean build trees. One definition reaches every
+# translation unit of every target, so plugin, libraries and tests agree.
+set(VOX_POOL_PARAMETERS_PER_SLOT 64 CACHE STRING
+    "Host parameter pool size per slot (64, 96 or 128; non-64 for benchmarks only)")
+set_property(CACHE VOX_POOL_PARAMETERS_PER_SLOT PROPERTY STRINGS 64 96 128)
+if(NOT VOX_POOL_PARAMETERS_PER_SLOT MATCHES "^(64|96|128)$")
+  message(FATAL_ERROR "VOX_POOL_PARAMETERS_PER_SLOT must be 64, 96 or 128")
+endif()
+add_compile_definitions(VOX_POOL_PARAMETERS_PER_SLOT=${VOX_POOL_PARAMETERS_PER_SLOT})
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
@@ -426,6 +437,17 @@ target_include_directories(performance_stress_tests PRIVATE
   ${juce_SOURCE_DIR}/modules)
 target_link_libraries(performance_stress_tests PRIVATE VstEngine)
 add_test(NAME performance_stress_tests COMMAND performance_stress_tests)
+
+# Host-parameter pool capacity microbenchmark (not a CTest gate). Configure
+# separate clean trees with the cache option -DVOX_POOL_PARAMETERS_PER_SLOT=96
+# or 128; the binary verifies the actual endpoint layout before measuring.
+add_executable(pool_capacity_bench tests/performance/PoolCapacityBench.cpp)
+target_include_directories(pool_capacity_bench PRIVATE
+  apps/vst3
+  ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode
+  ${juce_SOURCE_DIR}/modules)
+target_link_libraries(pool_capacity_bench PRIVATE VstEngine)
 
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
