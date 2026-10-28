@@ -184,10 +184,18 @@ typedef struct VoxMidiEventV2   { uint32_t sampleOffset; uint32_t size; uint8_t 
 
 - `index` is the **descriptor index**, resolved once off the audio thread; no
   string lookup in callbacks (fixes Acid's per-block linear search).
-- **Snapshot:** after `prepare`, `loadState`, `reset` or rearm the host calls
-  `setAllParameters` (controller thread) with every current plain value, so a
-  module never depends on having seen earlier deltas. `process` then carries
-  only deltas.
+- **Snapshot:** after `prepare`, `loadState` or rearm the host calls
+  `setAllParameters` (controller thread, slot audio suspended) with every
+  current plain value, so a module never depends on having seen earlier
+  deltas. `process` then carries only deltas.
+- **`reset` keeps parameters.** `reset` (audio thread) clears DSP state only:
+  voices, envelopes, filters, delay lines, sequencer position. It must keep the
+  module's current plain parameter values, so the last snapshot plus the deltas
+  already delivered stay valid and no resnapshot is needed. If the host ever
+  needs a resnapshot from audio context, it sets a preallocated per-slot atomic
+  request; the controller thread services it with the slot suspended. Controller
+  functions are never called from `reset` or `process`. A conformance test
+  checks that output after `reset` uses the pre-reset parameter values.
 - **Capacity:** `VoxPrepareSpecV2.maxParamChangesPerBlock = parameterCount`
   (≤ `poolParametersPerSlot` + UI-only parameters). The host-side change array
   is preallocated in `prepare`.
@@ -200,20 +208,57 @@ typedef struct VoxMidiEventV2   { uint32_t sampleOffset; uint32_t size; uint8_t 
   value is ever dropped, and increments a coalescing counter. Nothing is
   silently misapplied: an out-of-range index or non-finite value is rejected by
   the host before the call.
-- **MIDI:** capacity `maxMidiEventsPerBlock` (descriptor budget, ≤ host 2048).
-  On overflow the host drops NoteOn and other channel messages first and never
-  drops NoteOff, All Notes Off (CC123), All Sound Off (CC120) or the Rack
-  panic; drops are counted.
+- **MIDI:** see [Bounded MIDI and release policy](#bounded-midi-and-release-policy).
 - **Base vs automation vs modulation:** the host sends base values (named
   value or, when armed, the automation-driven endpoint value). A module applies
   its own modulation internally and never reports values back as host edits.
 
+### Bounded MIDI and release policy
+
+A fixed queue cannot deliver an unbounded event stream exactly. The promise is
+therefore **"every owned note terminates"**, not "every release event is
+delivered".
+
+- **Ownership.** One instrument = one MIDI channel, so each event routes to at
+  most one of the 16 slots; events on unowned channels are discarded before
+  queueing. Per slot the host keeps a preallocated 128-bit *sounding set* of
+  notes it has delivered NoteOn for and not yet released (16 × 16 bytes).
+- **Queues.** Each slot has its own preallocated queue of capacity
+  `C = maxMidiEventsPerBlock` (descriptor budget, 16 ≤ C ≤ 2048; total for 16
+  slots ≤ 512 KiB). No allocation or lock in routing.
+- **Release reserve (NoteOn admission).** Invariant per slot and block:
+  `used + |sounding| + 1 ≤ C`. A NoteOn is queued only if the invariant still
+  holds after it; otherwise it is dropped and counted. Hence there is always
+  queue room for one NoteOff per sounding note plus one all-off record.
+- **NoteOff.** For a sounding note it always fits (it uses reserved room) and
+  clears the bit. For a note not sounding it is redundant, dropped and counted.
+- **All-off (CC123, CC120, Rack panic).** Queued at its offset when room
+  exists, clearing the sounding set. When it does not fit (repeated all-offs
+  in one block), the host sets a bounded per-slot flag in
+  `VoxProcessContextV2.releaseFlags` (`VOX_RELEASE_ALL_NOTES` /
+  `VOX_RELEASE_ALL_SOUND`), clears the sounding set and drops that slot's
+  remaining NoteOns for the block. The module applies the flag **after** the
+  queued events of the block. Rack panic always uses the flag path for all 16
+  slots and never consumes queue room.
+- **Guarantee.** After any block, every note a slot owns is either still
+  intentionally held (its NoteOff has not arrived) or released; a release
+  request is never lost. Only NoteOns and redundant events are dropped, all
+  counted. Other channel messages (CC, pitch bend) use free room after the
+  reserve and are coalesced to the last value per controller on overflow.
+- **Exactness.** Release events are sample-accurate when queued; the flag path
+  is block-end accurate and used only under saturation.
+
 ### Required tests (slice 3)
 
-Allocation probe at zero during `process`; overload test with more host edits
-than one per parameter per block asserts final values, counters and no
-allocation; MIDI overflow test asserts every NoteOff/CC120/CC123/panic
-survives; change array ordering/duplicate test.
+- Allocation probe at zero during `process`, plus a Linux CI interposer that
+  fails on `malloc`/`pthread_mutex_lock` from the audio thread during routing.
+- Overload: more host edits than one per parameter per block; asserts final
+  values, counters and no allocation.
+- MIDI flood above capacity on **all 16 channels**: NoteOn/NoteOff floods,
+  more than C × CC120/CC123, panic mid-flood; asserts zero sounding notes and
+  zero active voices in the test module after each release, no stuck notes on
+  following blocks, counters, and no allocation/lock.
+- Change array ordering/duplicate test; `reset` keeps parameter values.
 
 ## Threads
 
@@ -376,7 +421,7 @@ The ABI is called frozen only when all of these hold:
    test module built as a real shared library; DLL round trip (gates 1–2).
 2. Process-wide registry, leases, version selection, scan/validate;
    missing/corrupt/conflicting pack tests; two-instance test (gate 4).
-3. Index-based dirty parameter publication, snapshot, MIDI overflow policy, RT
+3. Index-based dirty parameter publication, snapshot, bounded MIDI release policy, RT
    allocation probe (gate 3).
 4. Trust policy: signature check, roots, safe load, developer opt-in (gate 5).
 5. Replacement confirmation + automation inhibit/rearm with state round-trip;
