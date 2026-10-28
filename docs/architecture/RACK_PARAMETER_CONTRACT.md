@@ -27,7 +27,15 @@ Pool-index stability: a parameter's `poolIndex` never changes within one
 InstrumentId and is never reused for another parameter; reordering or inserting
 descriptor entries does not move any endpoint (regression-tested). Registration
 rejects a missing, out-of-range or duplicate pool index. Packages carry the
-same explicit index in `params.json` (instrument packages, phase 2). The former per-instrument
+same explicit index in `params.json` (instrument packages, phase 2).
+
+Upgrade policy (same InstrumentId, regression-tested across separate
+processors): a revision that only reorders descriptor entries keeps the same
+`instrumentVersion` and restores old projects exactly on the same endpoints. A
+revision that adds or removes parameters must bump `instrumentVersion`; an older
+project then stays explicitly unresolved and silent with its values preserved
+(no automatic migration exists yet). Changing the parameter set without the
+bump is a provider error: the whole project restore is rejected. The former per-instrument
 IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
 
 Registration rejects incomplete/duplicate descriptors, runtime key collisions
