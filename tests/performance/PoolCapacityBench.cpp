@@ -4,13 +4,18 @@
 #include "PluginProcessor.h"
 #include "instrument/HostParameterSchema.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <vector>
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <psapi.h>
 #pragma comment(lib, "psapi")
@@ -31,7 +36,7 @@ double ms(Clock::duration d) {
 }
 double percentile(std::vector<double> v, double p) {
   std::sort(v.begin(), v.end());
-  return v[std::min(v.size() - 1, static_cast<std::size_t>(p * (v.size() - 1)))];
+  return v[(std::min)(v.size() - 1, static_cast<std::size_t>(p * (v.size() - 1)))];
 }
 // Resident set in KiB, or -1 where unsupported.
 long residentKiB() {
@@ -188,7 +193,7 @@ void measureBlocks(VstEngineAudioProcessor &p, const char *label, std::size_t bo
               "p99=%.1f p99.9=%.1f max=%.1f budget_us=%.0f | notify_us p50=%.1f p99=%.1f\n",
               label, instrument::poolParametersPerSlot, bound, activeSlots, rate, block,
               percentile(times, 0.5), percentile(times, 0.99), percentile(times, 0.999),
-              *std::max_element(times.begin(), times.end()), block / rate * 1.0e6,
+              *(std::max_element)(times.begin(), times.end()), block / rate * 1.0e6,
               percentile(notify, 0.5), percentile(notify, 0.99));
 }
 } // namespace
