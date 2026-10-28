@@ -55,6 +55,8 @@ void FullOnBassInstance::reset() noexcept
 {
     voice.resetDirect();
     currentNote = currentChannel = -1;
+    sustainDown.fill(false);
+    keyHeld = false;
 }
 void FullOnBassInstance::suspend() noexcept { suspended = true; reset(); }
 void FullOnBassInstance::resume() noexcept { suspended = false; }
@@ -162,15 +164,32 @@ void FullOnBassInstance::process(const instrument::ProcessBlock& block) noexcept
         if (type == 0x90 && event.data[2] != 0) {
             currentNote = event.data[1];
             currentChannel = event.data[0] & 0x0f;
+            keyHeld = true;
             voice.noteOnDirect(currentNote, event.data[2] / 127.0f);
         } else if ((type == 0x80 || type == 0x90)
                    && currentNote == event.data[1]
                    && currentChannel == (event.data[0] & 0x0f)) {
-            voice.noteOffDirect(true);
-            currentNote = -1;
-        } else if (type == 0xb0 && (event.data[1] == 120 || event.data[1] == 123)
-                   && currentChannel == (event.data[0] & 0x0f)) {
-            reset();
+            keyHeld = false;
+            if (!sustainDown[static_cast<std::size_t>(currentChannel)]) {
+                voice.noteOffDirect(true);
+                currentNote = -1;
+            }
+        } else if (type == 0xb0 && event.data[1] == 64) {
+            const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
+            sustainDown[channel] = event.data[2] >= 64;
+            if (!sustainDown[channel] && currentChannel == static_cast<int>(channel)
+                && currentNote >= 0 && !keyHeld) {
+                voice.noteOffDirect(true);
+                currentNote = -1;
+            }
+        } else if (type == 0xb0 && (event.data[1] == 120 || event.data[1] == 123)) {
+            const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
+            sustainDown[channel] = false;
+            if (currentChannel == static_cast<int>(channel)) {
+                voice.resetDirect();
+                currentNote = currentChannel = -1;
+                keyHeld = false;
+            }
         }
     }
     if (cursor < block.sampleCount)

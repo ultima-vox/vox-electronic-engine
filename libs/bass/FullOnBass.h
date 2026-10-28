@@ -50,6 +50,8 @@ private:
     PsyBassVoice voice;
     instrument::PrepareSpec spec;
     int currentNote { -1 }, currentChannel { -1 };
+    std::array<bool, 16> sustainDown {};
+    bool keyHeld {};
     bool bypassed {}, suspended {};
 };
 } // namespace vstengine::bass

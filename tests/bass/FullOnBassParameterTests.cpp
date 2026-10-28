@@ -219,6 +219,55 @@ void realtimeAllocationCheck()
     countAllocations = false;
     require(allocationCount == 0, "warmed process/setters do not call C++ new/new[]");
 }
+void sustainLifecycle()
+{
+    Render held;
+    const std::array<VoxMidiEventV1, 1> pedalDown {{{0, 3, {0xb0, 64, 127}}}};
+    const std::array<VoxMidiEventV1, 1> pedalUp {{{0, 3, {0xb0, 64, 0}}}};
+    held.next(on);
+    held.next(pedalDown);
+    held.next(off);
+    for (int i = 0; i < 80; ++i) held.next();
+    require(energy(held.next()) > 1e-8, "sustain holds released key");
+    held.next(pedalUp);
+    for (int i = 0; i < 100; ++i) held.next();
+    require(energy(held.next()) == 0, "pedal release ends held sound");
+    Render wrongChannel;
+    const std::array<VoxMidiEventV1, 1> otherPedal {{{0, 3, {0xb1, 64, 127}}}};
+    wrongChannel.next(on);
+    wrongChannel.next(otherPedal);
+    wrongChannel.next(off);
+    for (int i = 0; i < 100; ++i) wrongChannel.next();
+    require(energy(wrongChannel.next()) == 0, "other channel pedal cannot hold note");
+
+    Render clearedPedal;
+    const std::array<VoxMidiEventV1, 1> emptyAllOff {{{0, 3, {0xb0, 123, 0}}}};
+    clearedPedal.next(pedalDown);
+    clearedPedal.next(emptyAllOff);
+    clearedPedal.next(on);
+    clearedPedal.next(off);
+    for (int i = 0; i < 100; ++i) clearedPedal.next();
+    require(energy(clearedPedal.next()) == 0,
+            "all notes off clears pedal without an active note");
+
+    for (auto controller : {120, 123}) {
+        Render panic;
+        const std::array<VoxMidiEventV1, 1> allOff {{{0, 3,
+            {0xb0, static_cast<std::uint8_t>(controller), 0}}}};
+        panic.next(on);
+        panic.next(pedalDown);
+        panic.next(off);
+        panic.next(allOff);
+        require(energy(panic.next()) == 0, "all-off ends sustained voice");
+    }
+    Render retrigger;
+    retrigger.next(on);
+    retrigger.next(on);
+    retrigger.next(off);
+    for (int i = 0; i < 100; ++i) retrigger.next();
+    require(energy(retrigger.next()) == 0,
+            "one note-off releases a retriggered key");
+}
 void boundsAndLifecycle()
 {
     Render baseline, other;
@@ -270,7 +319,7 @@ void compliance()
 }
 int main()
 {
-    independence(); audioIndependence(); sustainedEdits(); boundsAndLifecycle();
+    independence(); audioIndependence(); sustainedEdits(); sustainLifecycle(); boundsAndLifecycle();
     realtimeAllocationCheck(); compliance();
     std::cout << "Full-on Bass independent parameters: " << checks << " checks PASS\n";
 }

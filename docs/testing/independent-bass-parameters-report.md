@@ -64,3 +64,20 @@ Windows Release/full CTest is required before merge. Listening, aliasing/synthes
 quality, factory presets and actual Cubase/REAPER/visual acceptance remain
 integrated-milestone gates. No sound-quality or production-readiness claim follows
 from parameter independence or test counts.
+
+## Sustain lifecycle follow-up — 28 October 2026
+
+Isolated local branch based on the PR #52 DSP core; the current built-in Bass
+and Rack are unchanged. A new behavioral test first failed because CC64 did not
+hold a released key. Per-channel sustain now defers the active mono voice's
+release until pedal-up. CC120/CC123 clear that channel's sustain state and stop
+its active voice; repeated same-key NoteOn remains a single owned key.
+
+The real FullOnBass test executable passed 4656 checks and 215 instrument
+compliance checks with project sources instrumented by ASan/UBSan. The locally
+reused JUCE dependency objects were not instrumented; leak detection was disabled.
+The test includes other-channel sustain, pedal release, both all-off controls,
+clearing a pedal before a note, and one NoteOff after repeated NoteOn. Existing
+warmed C++ new/new[] allocation probe passed. Full CMake/Windows, real DLL ABI,
+loader integration, full accepted Bass panel and DAW tests remain outstanding.
+This does not fix or diagnose the separate built-in Bass rerender failure.
