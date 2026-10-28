@@ -509,6 +509,14 @@ endif()
 add_test(NAME native_rack_tests
   COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>)
 
+# Owner Cubase acceptance: a fresh Rack is empty; old projects restore.
+add_executable(fresh_rack_tests tests/integration/FreshRackTests.cpp)
+target_include_directories(fresh_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(fresh_rack_tests PRIVATE VstEngine)
+add_test(NAME fresh_rack_tests COMMAND fresh_rack_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/legacy-starter-rack-54b4d71.bin)
+
 # Development package layout: the test module is also assembled as a versioned
 # package in the build tree. The arch string must match packageArch in
 # libs/instrument/native/ModulePackages.h.

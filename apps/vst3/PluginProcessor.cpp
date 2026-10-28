@@ -165,22 +165,11 @@ VstEngineAudioProcessor::VstEngineAudioProcessor(
       apvts(*this, nullptr, "PARAMETERS",
             createParameterLayout(instrumentRegistry.descriptors())),
       rack(instrumentRegistry), presetStore(apvts) {
+  // A fresh Rack has 16 empty slots (owner requirement): instruments are
+  // installed separately and loaded deliberately by the user. Saved
+  // projects restore their own layout through setStateInformation.
   std::string diagnostic;
   auto initialRack = rack.state();
-  if (instrumentRegistry.resolve(vstengine::modules::bassInstrumentId)) {
-    initialRack[0].instrumentId = vstengine::modules::bassInstrumentId;
-    initialRack[0].routing = { vstengine::rack::RouteMode::channel, 1,
-                               0, 127, 1, 127, 0 };
-    initialRack[0].macros = { 0.48f, 0.55f, 0.4f, 0.25f,
-                              0.32f, 0.5f, 0.0f, 0.15f };
-  }
-  if (instrumentRegistry.resolve(vstengine::modules::acidInstrumentId)) {
-    initialRack[1].instrumentId = vstengine::modules::acidInstrumentId;
-    initialRack[1].routing = { vstengine::rack::RouteMode::channel, 2,
-                               0, 127, 1, 127, 0 };
-    initialRack[1].macros = { 0.05f, 0.46f, 0.72f, 0.70f,
-                              0.48f, 0.58f, 0.30f, 0.28f };
-  }
   if (!rack.replaceState(initialRack, nullptr, diagnostic))
     throw std::invalid_argument(diagnostic);
   keyboard.addListener(this);
@@ -192,8 +181,7 @@ VstEngineAudioProcessor::VstEngineAudioProcessor(
   for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
     rackControls[slot].slotId = initialRack[slot].slotId;
 
-  // Seed initial sequence with darkPsy pattern (canonical seeded operation
-  // owned by the sequence module; same generator stream as before).
+  // No starter patterns: every slot sequence starts empty.
   seedInitialSequence();
   for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size();
        ++slot) {
@@ -1245,7 +1233,7 @@ VstEngineAudioProcessor::createParameterLayout(
     // Channel ownership is configuration, not a performance control.
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         id("MidiIn"), label + "MIDI In", midiInputs,
-        slot < 2 ? static_cast<int>(slot + 1) : 0,
+        0, // empty slots own no channel; loading takes the next free one
         juce::AudioParameterChoiceAttributes{}.withAutomatable(false)));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
         id("KeyLow"), label + "Key Low", 0, 127, 0));
@@ -1903,24 +1891,6 @@ void VstEngineAudioProcessor::setStateInformation(const void *data,
 void VstEngineAudioProcessor::seedInitialSequence()
 {
     for (auto& sequence : patternRuntime->slotSequences) sequence.clear();
-    patternRuntime->slotSequences[0].regenerateBySeed(0xD4A4u);
-    const auto acid = instrumentRegistry.resolve(
-        vstengine::modules::acidInstrumentId);
-    if (acid && acid.provider != nullptr) {
-        VoxGenerationContextV1 context {};
-        context.structSize = sizeof(context);
-        context.globalSeed = 1234;
-        context.slotId = rack.state()[1].slotId;
-        std::snprintf(context.instrumentId.bytes,
-                      sizeof(context.instrumentId.bytes), "%s",
-                      vstengine::modules::acidInstrumentId.data());
-        VoxPatternV1 pattern { sizeof(VoxPatternV1) };
-        if (acid.provider->generatePattern(vstengine::modules::acidInstrumentId,
-                "psy-acid", context, nullptr, pattern)
-                == vstengine::instrument::ContentStatus::ok)
-            (void) vstengine::sequence::fromPattern(
-                pattern, patternRuntime->slotSequences[1]);
-    }
     parts[1].enabled = false;
 }
 

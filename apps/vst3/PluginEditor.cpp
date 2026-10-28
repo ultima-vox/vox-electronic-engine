@@ -492,6 +492,8 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
     selected = slot;
     instrument.setName("rack.instrument.selector");
     preset.setName("rack.sound.preset");
+    title.setName("rack.instrument.title");
+    subtitle.setName("rack.instrument.subtitle");
     const auto state = processor.instrumentRack().snapshotState()[selected];
     const auto descriptors = processor.availableInstruments();
     int descriptorIndex = 0;
@@ -731,6 +733,9 @@ void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
                 }
         labels[macro].setText(label.toUpperCase(), juce::dontSendNotification);
         knobs[macro].setTooltip("Macro " + juce::String(static_cast<int>(macro + 1)) + ": " + label);
+        // An empty slot has nothing to control: its macros are inert.
+        knobs[macro].setName("rack." + title.getText().toLowerCase() + ".macro." + juce::String(static_cast<int>(macro + 1)));
+        knobs[macro].setEnabled(descriptor != nullptr);
         attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro), knobs[macro]));
     }

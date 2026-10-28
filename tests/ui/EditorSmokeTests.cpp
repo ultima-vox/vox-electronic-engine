@@ -215,6 +215,30 @@ int main()
     if (editor == nullptr)
         return EXIT_FAILURE;
 
+    // A fresh Rack is empty: the editor says so and offers nothing to tweak.
+    editor->refreshForTesting();
+    auto *title = dynamic_cast<juce::Label *>(named(*editor, "rack.instrument.title"));
+    auto *subtitle = dynamic_cast<juce::Label *>(named(*editor, "rack.instrument.subtitle"));
+    auto *macro = named(*editor, "rack.sound.macro.1");
+    if (title == nullptr || title->getText() != "Empty slot" || subtitle == nullptr ||
+        !subtitle->getText().contains("Choose an instrument") || macro == nullptr ||
+        macro->isEnabled()) {
+      std::cerr << "fresh Rack editor does not show the empty-slot state\n";
+      return EXIT_FAILURE;
+    }
+
+    // The rest of this smoke test exercises Bass (slot 1) and Acid (slot 2),
+    // loaded explicitly as a user would.
+    juce::String fixtureDiagnostic;
+    if (!processor.loadSlotInstrument(0, vstengine::modules::bassInstrumentId,
+                                      fixtureDiagnostic) ||
+        !processor.loadSlotInstrument(1, vstengine::modules::acidInstrumentId,
+                                      fixtureDiagnostic))
+      return EXIT_FAILURE;
+    editor->refreshForTesting();
+    if (!macro->isEnabled() || title->getText() == "Empty slot")
+      return EXIT_FAILURE;
+
     // The open editor must follow project restores without publishing its old
     // local model over the newly restored pattern.
     processor.prepareToPlay(48000, 64);
