@@ -237,7 +237,9 @@ delivered".
 - **Sustain (CC64).** CC64 is passed through. A NoteOff while sustain is down
   still clears the host key bit; the module keeps the voice until CC64 goes
   below 64. The host tracks `sustainDown` (one bit per slot) and reserves one
-  event for the CC64 release.
+  event for the CC64 release. A CC64 press is admitted under the same invariant as a
+  NoteOn; if it does not fit it is dropped (notes then release normally, so
+  nothing can hang).
 - **Release reserve (NoteOn admission).** Invariant per slot and block:
   `used + |sounding| + sustainDown + 1 ≤ C`. A NoteOn is queued only if the invariant still
   holds after it; otherwise it is dropped and counted. Hence there is always
