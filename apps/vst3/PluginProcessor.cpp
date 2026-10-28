@@ -94,7 +94,9 @@ std::string slotParameterId(std::size_t slot, std::string_view suffix)
 } // namespace
 
 vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
-    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider) {
+    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider,
+    vstengine::instrument::native::LoadReport &native,
+    std::vector<std::string> &diagnostics) {
   vstengine::instrument::HostBudgetLimits limits;
   // All shipped synths/returns are zero-latency. Reject a future latent module
   // explicitly until parallel-path compensation is implemented and reviewed.
@@ -103,17 +105,43 @@ vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
   std::string diagnostic;
   if (!registry.registerProvider(std::move(provider), diagnostic))
     throw std::invalid_argument(diagnostic);
+  diagnostics = std::move(native.diagnostics);
+  for (auto &nativeProvider : native.providers)
+    if (!registry.registerProvider(std::move(nativeProvider), diagnostic))
+      diagnostics.push_back("native module rejected: " + diagnostic);
+  native.providers.clear();
   return registry;
 }
 
+namespace {
+// Development/test only: an explicitly configured list of trusted absolute
+// module paths (';'-separated). There is no folder scanning; production
+// discovery waits for the reviewed package and signing policy.
+vstengine::instrument::native::LoadReport configuredNativeModules() {
+  const auto paths =
+      juce::SystemStats::getEnvironmentVariable("VOX_DEV_NATIVE_MODULES", {});
+  return vstengine::instrument::native::loadConfiguredModules(
+      paths.toStdString());
+}
+} // namespace
+
 VstEngineAudioProcessor::VstEngineAudioProcessor()
-    : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider()) {}
+    : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider(),
+                              configuredNativeModules()) {}
 
 VstEngineAudioProcessor::VstEngineAudioProcessor(
     std::unique_ptr<vstengine::instrument::InstrumentProvider> provider)
+    : VstEngineAudioProcessor(std::move(provider),
+                              vstengine::instrument::native::LoadReport{}) {}
+
+VstEngineAudioProcessor::VstEngineAudioProcessor(
+    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider,
+    vstengine::instrument::native::LoadReport native)
     : AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
-      instrumentRegistry(makeRegistry(std::move(provider))),
+      nativeModules(std::move(native)),
+      instrumentRegistry(
+          makeRegistry(std::move(provider), nativeModules, nativeDiagnostics)),
       apvts(*this, nullptr, "PARAMETERS",
             createParameterLayout(instrumentRegistry.descriptors())),
       rack(instrumentRegistry), presetStore(apvts) {

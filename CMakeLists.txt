@@ -47,6 +47,14 @@ add_library(vst_instrument STATIC
   libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h)
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
 
+# native: host side of the instrument module ABI V2 (controller-thread loading,
+# descriptor import, provider/instance adapters). PROPOSED, not frozen.
+add_library(vst_native STATIC
+  libs/instrument/abi/VoxModuleAbiV2.h
+  libs/instrument/native/NativeModule.cpp libs/instrument/native/NativeModule.h)
+target_include_directories(vst_native PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_native PUBLIC vst_instrument ${CMAKE_DL_LIBS})
+
 add_library(vst_rack STATIC
   libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
   libs/rack/RealtimeMutationGate.h
@@ -213,7 +221,7 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_rack vst_modules vst_sequence vst_parts
+  vst_core vst_instrument vst_native vst_rack vst_modules vst_sequence vst_parts
   vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
 
 if(MSVC)
@@ -476,6 +484,20 @@ endif()
 target_link_libraries(module_abi_v2_tests PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME module_abi_v2_tests
   COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
+# M0: the real Rack processor plays the V2 test module through a slot.
+add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
+target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(native_rack_tests PRIVATE VstEngine)
+add_dependencies(native_rack_tests vox_abi_v2_test_module)
+if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_sources(native_rack_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+  target_compile_definitions(native_rack_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+  target_link_options(native_rack_tests PRIVATE -rdynamic)
+endif()
+add_test(NAME native_rack_tests
+  COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>)
 
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
