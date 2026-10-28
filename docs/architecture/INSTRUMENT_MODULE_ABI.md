@@ -70,6 +70,13 @@ separate rule (see [Native code trust](#native-code-trust)).
    carries the element stride (`paramChangeStride`, `midiEventStride`). Readers
    step by the stride, so records may grow by appending fields in a later minor
    version. These two records are the only header-less structs.
+3. **Arrays and strides.** Every array the other side walks (parameter
+   descriptors, change and MIDI records) is passed with an element stride that
+   must be `≥ sizeof(record)`, a multiple of `alignof(record)` and at most
+   1024 bytes; the array pointer must be aligned. A versioned record's own
+   `structSize` must not exceed the stride. Counts are bounded before any
+   arithmetic or access. Readers copy header-less records out with `memcpy`
+   instead of dereferencing them in place.
 
 ### Results and faults
 
@@ -161,6 +168,14 @@ Validation at scan (all or nothing for the pack): unique instrument IDs across
 installed packs (conflict = both rejected, never "pick one"), unique parameter
 IDs, unique in-range `poolIndex` for host-exposed parameters, typed range rules
 already enforced for direct parameters, budgets within `HostBudgetLimits`.
+Typed rules: strings non-null and at most 256 bytes; finite `minimum <
+maximum`, default in range; float `step` from 0 (continuous) up to the range;
+integer, boolean and choice `step` exactly 1 with integral bounds; boolean is
+0..1; choice is `0..choiceCount-1` with `choiceCount` 2..128 checked before any
+`choices[i]` is read. `parameterCount == 0` is valid (an instrument with no
+controls); descriptor and budgets are still validated and no dummy endpoints
+are created. Stride and alignment rules above apply. Slice 1's harness
+validator implements and negative-tests these rules.
 
 ## Realtime parameter and event contract
 
@@ -298,11 +313,67 @@ delivered".
   following blocks, counters, and no allocation/lock.
 - Change array ordering/duplicate test; `reset` keeps parameter values.
 
+## Musical transport (proposed; blocker before freezing V2 for Acid)
+
+`samplePosition` alone cannot drive Acid's LFO Sync, STEP modulation or
+sequencer (#59). V2 adds one host-owned, versioned transport record per block:
+
+```c
+typedef struct VoxTransportV2 {
+  uint32_t structSize, version;
+  uint32_t flags;               /* VOX_TRANSPORT_* below */
+  uint32_t timeSigNumerator;    /* HAS_TIME_SIGNATURE */
+  uint32_t timeSigDenominator;
+  uint32_t reserved0;
+  double tempoBpm;              /* HAS_TEMPO; constant for the block */
+  double ppqPosition;           /* HAS_PPQ; at sample 0 of the block */
+  double barStartPpq;           /* HAS_BAR_START */
+  double loopStartPpq;          /* LOOPING */
+  double loopEndPpq;
+  int64_t timeInSamples;        /* HAS_TIME; host timeline at sample 0 */
+} VoxTransportV2;               /* 72 bytes, no padding */
+
+/* flags */
+HAS_TEMPO, HAS_PPQ, HAS_BAR_START, HAS_TIME_SIGNATURE, HAS_TIME,
+PLAYING, LOOPING, DISCONTINUITY
+```
+
+`VoxProcessContextV2` gains an appended `const VoxTransportV2 *transport`
+(host-owned, valid for the call, never NULL; the context grows from 72 to 80
+bytes). A module reads it only when the context's `structSize` covers it.
+
+Semantics:
+
+- **Source.** The host fills it once per callback from the DAW play head
+  (JUCE `AudioPlayHead::getPosition`, block-start values). A value the host
+  does not provide has its `HAS_*` flag clear; it is never invented.
+- **No inference.** A module never derives tempo or musical position from
+  `samplePosition` or wall-clock time. Without `HAS_TEMPO`/`HAS_PPQ`,
+  tempo-synced features stop or hold; each instrument documents which.
+- **Within a block.** Position at sample *n* is
+  `ppqPosition + n * tempoBpm / (60 * sampleRate)`; tempo is block-rate.
+- **DISCONTINUITY** is set on the first block after prepare, reset or state
+  load; on stopped→playing and playing→stopped; and when `ppqPosition` or
+  `timeInSamples` differs from the previous block's prediction by more than
+  half a sample (seek, loop wrap, tempo-map jump). A module resynchronises
+  from the new position and must not interpolate across it. A tempo change
+  alone is not a discontinuity.
+- **Loop wraps inside a block** are not representable with block-start
+  values; the wrap appears as DISCONTINUITY on the next block. This is a
+  documented V2 limitation shared with the current Rack.
+- **Determinism.** The same host timeline (offline render, same block sizes)
+  yields the same transport sequence and therefore the same output.
+
+Test when approved: a transport round trip through the test DLL with a
+ppq-derived step counter across play, stop, start, seek, loop wrap, missing
+tempo and block-size changes, asserting step positions, DISCONTINUITY
+handling and bit-identical repeat renders.
+
 ## Threads
 
 | Call | Thread | May allocate / lock / I/O |
 | --- | --- | --- |
-| `voxModuleEntryV2`, `getInstrument`, `content` queries, `shutdown` | message | yes |
+| `voxModuleEntryV2`, `getInstrument`, `content` queries, `shutdown`, `VoxHostServicesV2.log` | message | yes |
 | `create`, `destroy`, `prepare`, `setAllParameters`, `saveState`, `loadState` | controller (message), audio suspended for the slot | yes |
 | `process`, `reset` | audio | no |
 | `VoxEditorApiV2` | message | yes (not in audio) |
@@ -479,3 +550,16 @@ The ABI is called frozen only when all of these hold:
    after DAW restart).
 4. Trust policy: confirm signed-only + elevated developer opt-in as proposed,
    or choose another.
+5. Musical transport record above (blocker for Acid on V2).
+
+Owner's provisional recommendations (28.10.2026, planning constraints, not
+final release decisions): implement and test against 64 now, 128 as preferred
+final pool candidate with 96 as fallback pending Cubase/REAPER comparison;
+declarative VOX widgets first with the native editor kept as an extension
+point (the 303 step sequencer must be truly interactive); installer-owned
+versioned `%PROGRAMDATA%` root, per-DAW-process version selection, activation
+after DAW restart; production loads only approved signed code via restricted
+absolute paths, unsigned test DLLs only under a visibly warned opt-in, and
+certificate/key rotation designed before the trust scheme freezes.
+`VoxHostServicesV2.log` stays message/controller-thread only; realtime code
+reports through return codes or bounded fault flags.
