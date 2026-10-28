@@ -1,7 +1,8 @@
 # Instrument packages (proposal, needs Architecture Guard review)
 
-Status: **PROPOSED**, 27.10.2026. No code yet. Supersedes the "native module
-loader on C ABI v1" idea recorded earlier the same day.
+Status: **SUPERSEDED** 28.10.2026 by [instrument module ABI V2](INSTRUMENT_MODULE_ABI.md):
+the owner chose native modules behind a C ABI, not data-only packages. Kept for
+history; the parameter-pool parts live on in the parameter contract.
 
 ## Owner decisions (27.10.2026)
 
