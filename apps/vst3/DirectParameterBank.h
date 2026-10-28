@@ -11,7 +11,7 @@ namespace vstengine::host {
 // Fixed host pool: 16 slots x 64 generic endpoints ("slotNN.pKKK"), created
 // once at processor construction. Installing or loading an instrument never
 // changes the host parameter list; it only rebinds a slot's pool endpoints to
-// the instrument's named parameters in descriptor order (Kontakt model).
+// the instrument's named parameters at their declared poolIndex (Kontakt model).
 //
 // A bound endpoint takes the instrument parameter's range, name, unit and value
 // text. APVTS raw values therefore stay in the instrument's plain units.
@@ -173,6 +173,9 @@ class DirectParameterBank final {
     std::string instrumentId;
     std::array<Entry, instrument::maxDirectParameters> entries{};
     std::size_t count{};
+    // Binding of each pool endpoint; null where the instrument has none.
+    std::array<const PoolParameter::Binding *, instrument::poolParametersPerSlot>
+        byPool{};
   };
   struct Pool {
     std::array<PoolParameter *, instrument::poolParametersPerSlot> parameters{};
@@ -192,9 +195,7 @@ class DirectParameterBank final {
     bool changed = false;
     for (std::size_t i = 0; i < pool.parameters.size(); ++i) {
       auto *parameter = pool.parameters[i];
-      const auto *binding = bank != nullptr && i < bank->count
-                                ? &bank->entries[i].binding
-                                : nullptr;
+      const auto *binding = bank != nullptr ? bank->byPool[i] : nullptr;
       changed |= parameter->binding() != binding;
       parameter->bind(binding);
       if (binding == nullptr && parameter->getValue() != 0.0f)
@@ -230,10 +231,13 @@ public:
           for (const auto &p : d->parameters) {
             if (bank.count >= bank.entries.size())
               throw std::invalid_argument("direct bank overflow");
-            const auto id = instrument::hostparams::poolId(slot, bank.count);
+            const auto index = static_cast<std::size_t>(p.poolIndex);
+            if (index >= instrument::poolParametersPerSlot)
+              throw std::invalid_argument("direct parameter has no pool index");
+            const auto id = instrument::hostparams::poolId(slot, index);
             auto &entry = bank.entries[bank.count];
             entry.key = instrument::hostparams::directKey(d->id, p.id);
-            entry.parameter = pools_[slot].parameters[bank.count];
+            entry.parameter = pools_[slot].parameters[index];
             entry.raw = state.getRawParameterValue(id);
             entry.descriptor = &p;
             entry.binding = {{p.minimum, p.maximum,
@@ -249,6 +253,12 @@ public:
           }
           banks_[slot].push_back(std::move(bank));
         }
+      // Binding addresses are final only once the slot's vector stops growing.
+      for (auto &stored : banks_[slot])
+        for (std::size_t e = 0; e < stored.count; ++e)
+          stored.byPool[static_cast<std::size_t>(
+              stored.entries[e].descriptor->poolIndex)] =
+              &stored.entries[e].binding;
     }
     cached_ = true;
   }

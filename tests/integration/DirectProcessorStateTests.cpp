@@ -106,7 +106,8 @@ public:
                      {},
                      true,
                      true,
-                     -1},
+                     -1,
+                     0},
                     {"tone",
                      "Tone",
                      "Hz",
@@ -119,7 +120,8 @@ public:
                      {},
                      true,
                      true,
-                     -1}};
+                     -1,
+                     1}};
     if (future_) {
       d.stateVersion = 2;
       d.parameters[0].maximum = 2.0f;

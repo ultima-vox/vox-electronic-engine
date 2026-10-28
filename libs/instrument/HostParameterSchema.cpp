@@ -1,7 +1,9 @@
 #include "instrument/HostParameterSchema.h"
 #include <cstdio>
 #include <stdexcept>
+#include <array>
 #include <unordered_set>
+#include <utility>
 
 namespace vstengine::instrument::hostparams {
 namespace {
@@ -62,9 +64,15 @@ bool validateDirectCatalog(std::span<const InstrumentDescriptor *const> catalog,
         diagnostic = "direct parameter count exceeds slot bound";
         return false;
       }
+      std::array<bool, poolParametersPerSlot> pool{};
       for (const auto &parameter : descriptor->parameters) {
         if (!validDirectParameter(parameter)) {
           diagnostic = "invalid direct parameter metadata";
+          return false;
+        }
+        if (std::exchange(pool[static_cast<std::size_t>(parameter.poolIndex)],
+                          true)) {
+          diagnostic = "duplicate direct parameter pool index";
           return false;
         }
         const auto key = directKey(descriptor->id, parameter.id);

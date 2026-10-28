@@ -87,6 +87,11 @@ struct ParameterDescriptor {
     bool automatable { true };
     bool modulatable {};
     std::int8_t preferredMacro { -1 };
+    // Host pool endpoint (0..63) of a direct parameter. Required and unique
+    // per instrument; it must stay the same across instrument versions so
+    // recorded automation never moves to another control. Unused (-1) for
+    // instruments without direct parameters.
+    std::int16_t poolIndex { -1 };
 };
 
 struct InstrumentDescriptor {

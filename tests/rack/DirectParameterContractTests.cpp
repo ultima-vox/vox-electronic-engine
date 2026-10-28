@@ -123,6 +123,7 @@ ParameterDescriptor parameter(std::size_t index) {
   ParameterDescriptor p;
   p.id = parameterId(index);
   p.name = "Direct " + std::to_string(index);
+  p.poolIndex = static_cast<std::int16_t>(index);
   p.defaultValue = 0.25f;
   if (index == 0) {
     p.minimum = -24;
@@ -815,7 +816,7 @@ void unresolvedModulesPreserveNamedValuesWithBounds() {
 }
 
 void metadataAndCatalogBounds() {
-  for (int kind = 0; kind < 7; ++kind) {
+  for (int kind = 0; kind < 10; ++kind) {
     InstrumentRegistry registry;
     auto d = descriptor("test.invalid." + std::to_string(kind));
     if (kind == 0)
@@ -832,6 +833,13 @@ void metadataAndCatalogBounds() {
       d = descriptor("test.too.many", maxDirectParameters + 1);
     if (kind == 6)
       d.parameters[0].type = static_cast<ParameterType>(255);
+    if (kind == 7)
+      d.parameters[0].poolIndex = -1; // pool index is required
+    if (kind == 8)
+      d.parameters[0].poolIndex =
+          static_cast<std::int16_t>(poolParametersPerSlot);
+    if (kind == 9)
+      d.parameters[1].poolIndex = d.parameters[0].poolIndex;
     std::string error;
     CHECK(!registry.registerProvider(std::make_unique<Provider>(std::move(d)),
                                      error),

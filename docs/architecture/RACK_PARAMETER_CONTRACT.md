@@ -13,8 +13,9 @@ minimum, maximum, default and step; choices have ordered stable labels.
 **Fixed host pool** (owner decision 27.10.2026, Kontakt model): every slot
 exposes the same 64 generic endpoints `slotNN.pKKK` (NN=01..16, KKK=001..064),
 created once at processor construction whatever the catalog contains. Loading
-an instrument binds its named parameters to the slot's pool in descriptor
-order; a bound endpoint takes that parameter's range, name ("Slot N Name"),
+an instrument binds each named parameter to the slot's pool endpoint given by
+its required, unique `ParameterDescriptor::poolIndex` (0..63), independent of
+descriptor order; a bound endpoint takes that parameter's range, name ("Slot N Name"),
 unit and value text and the host is told that parameter info changed. Unused
 and dormant endpoints are unbound ("Slot N Param KK", neutral value 0).
 Automation belongs to the slot: after replacing the instrument, the same lane
@@ -22,11 +23,11 @@ drives the new instrument's parameter at that index. A bound endpoint also takes
 the parameter's host type: boolean (2 steps), choice (label count) and integer
 (inclusive span) are discrete; floating and unbound endpoints are continuous.
 
-Pool-index stability: within one InstrumentId a provider must never reorder,
-remove or insert before existing direct parameters; new parameters are appended.
-Otherwise recorded automation of an existing slot would drive a different
-control after an instrument update. Packages will carry explicit pool indices
-in `params.json` (instrument packages, phase 2). The former per-instrument
+Pool-index stability: a parameter's `poolIndex` never changes within one
+InstrumentId and is never reused for another parameter; reordering or inserting
+descriptor entries does not move any endpoint (regression-tested). Registration
+rejects a missing, out-of-range or duplicate pool index. Packages carry the
+same explicit index in `params.json` (instrument packages, phase 2). The former per-instrument
 IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
 
 Registration rejects incomplete/duplicate descriptors, runtime key collisions

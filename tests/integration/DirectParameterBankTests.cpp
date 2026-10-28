@@ -31,7 +31,8 @@ instrument::InstrumentDescriptor descriptor(std::string id) {
                    {},
                    true,
                    true,
-                   -1},
+                   -1,
+                   0},
                   {"cutoff",
                    "Cutoff",
                    "Hz",
@@ -44,7 +45,8 @@ instrument::InstrumentDescriptor descriptor(std::string id) {
                    {},
                    true,
                    true,
-                   -1},
+                   -1,
+                   1},
                   {"octave",
                    "Octave",
                    "st",
@@ -57,7 +59,8 @@ instrument::InstrumentDescriptor descriptor(std::string id) {
                    {},
                    true,
                    false,
-                   -1},
+                   -1,
+                   2},
                   {"enabled",
                    "Enabled",
                    "",
@@ -70,7 +73,8 @@ instrument::InstrumentDescriptor descriptor(std::string id) {
                    {},
                    true,
                    false,
-                   -1},
+                   -1,
+                   3},
                   {"wave",
                    "Wave",
                    "",
@@ -83,7 +87,8 @@ instrument::InstrumentDescriptor descriptor(std::string id) {
                    {"Saw", "Square", "Sine"},
                    true,
                    false,
-                   -1}};
+                   -1,
+                   4}};
   return d;
 }
 // Same pool indices as the alpha/beta fixture, different host types:
@@ -97,11 +102,29 @@ instrument::InstrumentDescriptor reshaped() {
   d.directParameters = true;
   using T = instrument::ParameterType;
   d.parameters = {
-      {"mode", "Mode", "", 0, 3, 0, 1, T::choice, "Main", {"A", "B", "C", "D"}, true, false, -1},
-      {"sync", "Sync", "", 0, 1, 0, 1, T::boolean, "Main", {}, true, false, -1},
-      {"depth", "Depth", "%", 0, 100, 50, 0, T::floating, "Main", {}, true, true, -1},
-      {"steps", "Steps", "", 0, 9, 4, 1, T::integer, "Main", {}, true, false, -1},
-      {"level", "Level", "", 0, 1, 1, 0.01f, T::floating, "Main", {}, true, true, -1}};
+      {"mode", "Mode", "", 0, 3, 0, 1, T::choice, "Main", {"A", "B", "C", "D"}, true, false, -1,
+                   0},
+      {"sync", "Sync", "", 0, 1, 0, 1, T::boolean, "Main", {}, true, false, -1,
+                   1},
+      {"depth", "Depth", "%", 0, 100, 50, 0, T::floating, "Main", {}, true, true, -1,
+                   2},
+      {"steps", "Steps", "", 0, 9, 4, 1, T::integer, "Main", {}, true, false, -1,
+                   3},
+      {"level", "Level", "", 0, 1, 1, 0.01f, T::floating, "Main", {}, true, true, -1,
+                   4}};
+  return d;
+}
+// A later revision of the alpha fixture: parameters listed in reverse order
+// and a new one inserted first. Explicit pool indices keep every existing
+// parameter on its endpoint, so recorded automation keeps its control.
+instrument::InstrumentDescriptor revised() {
+  auto d = descriptor("com.ultimavox.test.alpha.revised");
+  std::reverse(d.parameters.begin(), d.parameters.end());
+  auto drive = d.parameters.back(); // "gain" after the reverse
+  drive.id = "drive";
+  drive.name = "Drive";
+  drive.poolIndex = 5;
+  d.parameters.insert(d.parameters.begin(), drive);
   return d;
 }
 class Processor final : public juce::AudioProcessor {
@@ -110,9 +133,9 @@ public:
                                        descriptor("com.ultimavox.test.alpha"),
                                    second =
                                        descriptor("com.ultimavox.test.beta"),
-                                   third = reshaped();
-  std::array<const instrument::InstrumentDescriptor *, 3> catalog{
-      &first, &second, &third};
+                                   third = reshaped(), fourth = revised();
+  std::array<const instrument::InstrumentDescriptor *, 4> catalog{
+      &first, &second, &third, &fourth};
   juce::AudioProcessorValueTreeState state;
   host::DirectParameterBank bank;
   juce::AudioProcessorValueTreeState::ParameterLayout layout() {
@@ -238,6 +261,32 @@ void metadataFollowsBinding(Processor &p) {
   require(listener.infoChanges == 3, "unbinding notifies the host");
   p.removeListener(&listener);
 }
+void poolIndexIsStableAcrossReordering(Processor &p) {
+  constexpr std::size_t slot = 3;
+  auto state = base(p.fourth);
+  for (auto &value : state.directParameters)
+    if (value.id == "cutoff")
+      value.value = 777;
+  require(p.bank.selectAndRestore(slot, state), "bind revised fixture");
+  const auto at = [&](std::size_t index) {
+    return p.state.getParameter(instrument::hostparams::poolId(slot, index));
+  };
+  require(at(0)->getName(64) == "Slot 4 Gain" &&
+              at(1)->getName(64) == "Slot 4 Cutoff" &&
+              at(2)->getName(64) == "Slot 4 Octave" &&
+              at(3)->getName(64) == "Slot 4 Enabled" &&
+              at(4)->getName(64) == "Slot 4 Wave" &&
+              at(5)->getName(64) == "Slot 4 Drive",
+          "reordered/inserted parameters keep their declared pool endpoints");
+  require(p.state.getRawParameterValue(instrument::hostparams::poolId(slot, 1))
+                  ->load() == 777 &&
+              at(4)->getNumSteps() == 3,
+          "value and host type follow the pool index, not descriptor order");
+  rack::ProcessSlotControls controls;
+  p.bank.read(slot, controls);
+  require(value(controls, p.fourth.id, "cutoff") == 777,
+          "audio snapshot reads each parameter from its declared endpoint");
+}
 } // namespace
 int main() {
   juce::ScopedJuceInitialiser_GUI gui;
@@ -337,5 +386,6 @@ int main() {
   require(rejected,
           "VST3 hash collision rejected before host layout publication");
   metadataFollowsBinding(p);
+  poolIndexIsStableAcrossReordering(p);
   std::cout << "Direct APVTS bank tests passed (" << checks << ")\n";
 }

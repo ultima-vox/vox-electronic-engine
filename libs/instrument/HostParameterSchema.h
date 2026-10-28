@@ -24,6 +24,8 @@ inline bool validDirectParameter(const ParameterDescriptor &p) noexcept {
       static_cast<double>(p.maximum) - p.minimum >
           std::numeric_limits<float>::max() ||
       p.step > p.maximum - p.minimum || p.preferredMacro != -1 ||
+      p.poolIndex < 0 ||
+      p.poolIndex >= static_cast<std::int16_t>(poolParametersPerSlot) ||
       !p.automatable ||
       static_cast<unsigned>(p.type) >
           static_cast<unsigned>(ParameterType::choice))
