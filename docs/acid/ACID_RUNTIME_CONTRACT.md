@@ -14,9 +14,7 @@ ABI, host automation and UI boundaries require review by the Rack owner before
 this Acid module can be packaged and connected. Current static Acid integration
 is an unmerged implementation candidate, not the delivery architecture.
 
-The current PR's slot-scoped AcidParameterBridge is an integration dependency:
-when generic Rack direct parameters land, use its reviewed single authority.
-Do not deliver two automation writers or change Rack contracts in this branch.
+The current PR's slot-scoped `AcidParameterBridge` is an interim, non-production bridge. Retire it and the Acid-specific APVTS registrations only after the Rack-owned typed 80-control adapter and regression tests are integrated. Do not deliver two automation writers or modify shared Rack contracts in this Acid branch; see the linked V2 packet.
 
 ## MIDI voice policy
 
