@@ -449,6 +449,34 @@ target_include_directories(pool_capacity_bench PRIVATE
   ${juce_SOURCE_DIR}/modules)
 target_link_libraries(pool_capacity_bench PRIVATE VstEngine)
 
+# Instrument module ABI V2, slice 1 (PROPOSED, not frozen): the C11 test module
+# is a real shared library; the C++20 harness loads it by absolute path and owns
+# all loading/validation. No production loader, registry or editor hosting.
+add_library(vox_abi_v2_test_module SHARED tests/abi/TestModuleV2.c)
+set_target_properties(vox_abi_v2_test_module PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(vox_abi_v2_test_module PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(vox_abi_v2_test_module PRIVATE m)
+endif()
+
+add_executable(module_abi_v2_tests tests/abi/ModuleAbiV2Tests.cpp tests/abi/AbiLayoutC.c)
+set_target_properties(module_abi_v2_tests PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+target_include_directories(module_abi_v2_tests PRIVATE ${VST_LIBS_DIR})
+add_dependencies(module_abi_v2_tests vox_abi_v2_test_module)
+if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  # glibc interposer: counts host and module allocations during the RT probe.
+  target_sources(module_abi_v2_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+  target_compile_definitions(module_abi_v2_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+  target_link_options(module_abi_v2_tests PRIVATE -rdynamic)
+endif()
+target_link_libraries(module_abi_v2_tests PRIVATE ${CMAKE_DL_LIBS})
+add_test(NAME module_abi_v2_tests
+  COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
 target_include_directories(reliability_stress_tests PRIVATE

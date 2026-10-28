@@ -548,6 +548,9 @@ The ABI is called frozen only when all of these hold:
 
 1. `VoxModuleAbiV2.h`; C11 and C++20 compile targets with layout asserts; a
    test module built as a real shared library; DLL round trip (gates 1–2).
+   *Draft:* `libs/instrument/abi/VoxModuleAbiV2.h`, C11 test module
+   `tests/abi/TestModuleV2.c`, C++20 harness `module_abi_v2_tests`. Loading
+   and validation stay in the harness until slice 2.
 2. Process-wide registry, leases, version selection, scan/validate;
    missing/corrupt/conflicting pack tests; two-instance test (gate 4).
 3. Index-based dirty parameter publication, snapshot, bounded MIDI release policy, RT
