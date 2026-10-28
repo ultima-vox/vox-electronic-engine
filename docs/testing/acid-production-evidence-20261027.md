@@ -184,3 +184,12 @@ The updated editor and smoke-test translation units compile, but the editor
 smoke executable could not be linked/run in this environment because Linux GUI
 and ALSA development libraries were unavailable. All six Acid-focused CTest
 targets pass; Windows/editor and DAW validation remain required.
+
+## Sequence note display — 28 October 2026
+
+The Acid note grid previously clamped offsets to -24..36 for overflow safety,
+which displayed the wrong MIDI note for valid larger pattern offsets. Note text
+now adds root and the actual offset in 64-bit arithmetic and clamps the result
+to MIDI 0..127. Unit checks cover valid large offsets and INT_MIN/INT_MAX;
+all six Acid CTest targets pass and the AcidPanel translation unit compiles.
+The actual editor/Windows visual gate still needs to run.

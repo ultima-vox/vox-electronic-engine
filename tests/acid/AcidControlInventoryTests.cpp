@@ -1,6 +1,8 @@
 #include "acid/AcidControlInventory.h"
+#include "acid/AcidPatternDisplay.h"
 #include <array>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <string_view>
 
@@ -105,6 +107,13 @@ int main() {
             indexOf("step_16") == 72 && indexOf("legato") == 76 &&
             indexOf("slide_on_overlap") == 79,
         "representative proposed semantic-to-index assignments are pinned");
+  check(acidDisplayMidiNote(127, -67) == 60,
+        "sequence note display preserves valid large negative offsets");
+  check(acidDisplayMidiNote(0, 48) == 48,
+        "sequence note display preserves valid large positive offsets");
+  check(acidDisplayMidiNote(48, std::numeric_limits<int>::max()) == 127 &&
+        acidDisplayMidiNote(48, std::numeric_limits<int>::min()) == 0,
+        "invalid extreme offsets saturate without signed overflow");
   // Existing DSP bins use floor(v * 3.99/5.99), not nearest choice.
   check(acidSelectorIndex(0.20f, 4) == 0, "four-way selector first bin");
   check(acidSelectorIndex(0.26f, 4) == 1, "four-way selector second bin");

@@ -2,6 +2,7 @@
 #include "PluginProcessor.h"
 #include "acid/AcidEngine.h"
 #include "acid/AcidControlInventory.h"
+#include "acid/AcidPatternDisplay.h"
 #include "acid/AcidParameterBridge.h"
 #include "instrument/HostParameterSchema.h"
 #include "ui/common/UiComponents.h"
@@ -63,7 +64,7 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
             const bool valid = s < seq.size();
             // Other editors can place arbitrary signed offsets in Sequence.
             // abs(INT_MIN) and root + INT_MAX are undefined signed arithmetic.
-            // Bound UI reads without changing the underlying note sequence.
+            // Bound octave labels; note display uses overflow-safe wide arithmetic.
             const int displayOffset = juce::jlimit(-24, 36, step.noteOffset);
             const bool active = valid && (lane == 0 ? step.gate
                 : lane == 1 ? step.accent : lane == 2 ? step.slideDuration > 0.0f
@@ -85,7 +86,7 @@ void AcidPanel::StepGrid::paint(juce::Graphics& g) {
                 const auto root = processor_.parameters().getRawParameterValue("rootNote");
                 const int rootNote = root != nullptr
                     ? static_cast<int>(std::round(root->load())) : 48;
-                const auto note = juce::jlimit(0, 127, rootNote + displayOffset);
+                const auto note = vstengine::acid::acidDisplayMidiNote(rootNote, step.noteOffset);
                 text = step.gate ? juce::MidiMessage::getMidiNoteName(
                     note, true, true, 5) : "--";
             } else if (lane == 1) text = step.accent ? "A" : "";
