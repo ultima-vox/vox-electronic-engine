@@ -189,7 +189,8 @@ juce_generate_juce_header(VstEngine)
 
 target_sources(VstEngine PRIVATE
   apps/vst3/PluginProcessor.cpp apps/vst3/PluginProcessor.h
-  apps/vst3/PluginEditor.cpp apps/vst3/PluginEditor.h)
+  apps/vst3/PluginEditor.cpp apps/vst3/PluginEditor.h
+  apps/vst3/AcidPanel.cpp apps/vst3/AcidPanel.h)
 
 target_compile_definitions(VstEngine PUBLIC
   JUCE_WEB_BROWSER=0
@@ -298,6 +299,26 @@ add_executable(acid_tests
 target_include_directories(acid_tests PRIVATE tests ${VST_LIBS_DIR})
 target_link_libraries(acid_tests PRIVATE vst_acid vst_instrument)
 add_test(NAME acid_tests COMMAND acid_tests)
+
+add_executable(acid_midi_lifecycle_tests tests/acid/AcidMidiLifecycleTests.cpp)
+target_link_libraries(acid_midi_lifecycle_tests PRIVATE vst_acid)
+add_test(NAME acid_midi_lifecycle_tests COMMAND acid_midi_lifecycle_tests)
+
+add_executable(acid_release_tests tests/acid/AcidReleaseTests.cpp)
+target_link_libraries(acid_release_tests PRIVATE vst_acid)
+add_test(NAME acid_release_tests COMMAND acid_release_tests)
+
+add_executable(acid_decay_tests tests/acid/AcidDecayTests.cpp)
+target_link_libraries(acid_decay_tests PRIVATE vst_acid)
+add_test(NAME acid_decay_tests COMMAND acid_decay_tests)
+
+add_executable(acid_control_inventory_tests tests/acid/AcidControlInventoryTests.cpp)
+target_link_libraries(acid_control_inventory_tests PRIVATE vst_acid)
+add_test(NAME acid_control_inventory_tests COMMAND acid_control_inventory_tests)
+
+add_executable(acid_free_lfo_tests tests/acid/AcidFreeLfoTests.cpp)
+target_link_libraries(acid_free_lfo_tests PRIVATE vst_acid)
+add_test(NAME acid_free_lfo_tests COMMAND acid_free_lfo_tests)
 
 add_executable(lead_tests
   tests/lead/LeadTests.cpp

@@ -6,6 +6,8 @@
 #include "modules/BuiltInProvider.h"
 #include "preset/PresetManager.h"
 #include "sequence/PatternAdapter.h"
+#include "acid/AcidEngine.h"
+#include "acid/AcidProvider.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -28,7 +30,7 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
 {
     std::string diagnostic;
     if (!instrumentRegistry.registerProvider(
-            vstengine::modules::createBuiltInProvider(), diagnostic))
+            vstengine::modules::createBuiltInProvider(&acidHostBridge), diagnostic))
         jassertfalse;
 
     auto initialRack = rack.state();
@@ -44,8 +46,26 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
                               0.48f, 0.58f, 0.30f, 0.28f };
     (void) rack.replaceState(initialRack, nullptr, diagnostic);
     cacheRackParameterPointers();
-    for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
+    // Acid-specific host parameter IDs are additive and slot-stable. The
+    // original eight Rack host macros remain their sole DSP controllers.
+    for (std::size_t slot = 0; slot < rackControls.size(); ++slot) {
         rackControls[slot].slotId = initialRack[slot].slotId;
+        acidHostBridge.setSlotId(slot, initialRack[slot].slotId);
+        for (std::size_t p = vstengine::instrument::macrosPerSlot;
+             p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+            if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
+            const auto id = vstengine::acid::hostParameterId(
+                slot, vstengine::acid::AcidEngine::parameterIds[p]);
+            acidHostBridge.bind(slot, p, apvts.getRawParameterValue(id.c_str()));
+        }
+        constexpr std::array<std::string_view, 4> flags {
+            "legato", "retrigger", "vel_to_accent", "slide_on_overlap"
+        };
+        for (std::size_t f = 0; f < flags.size(); ++f) {
+            const auto id = vstengine::acid::hostParameterId(slot, flags[f]);
+            acidHostBridge.bindFlag(slot, f, apvts.getRawParameterValue(id.c_str()));
+        }
+    }
 
     // Seed initial sequence with darkPsy pattern (canonical seeded operation
     // owned by the sequence module; same generator stream as before).
@@ -88,6 +108,8 @@ VstEngineAudioProcessor::VstEngineAudioProcessor()
                     return false;
                 }
                 if (rack.replaceState(parsed, nullptr, diagnostic)) {
+                    for (std::size_t slot = 0; slot < parsed.size(); ++slot)
+                        acidHostBridge.setSlotId(slot, parsed[slot].slotId);
                     effectsChain = std::move(candidateEffects);
                     for (auto& scheduler : patternRuntime->schedulers)
                         scheduler.reset(currentSampleRate);
@@ -139,11 +161,15 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
     keyboardScratch.ensureSize(32768);
     for (auto& scratch : patternRuntime->generatedScratch)
         scratch.ensureSize(65536);
+    for (auto& requested : acidPreviewRequested)
+        requested.store(false, std::memory_order_relaxed);
     wasTransportPlaying = false;
 }
 
 void VstEngineAudioProcessor::releaseResources()
 {
+    for (auto& requested : acidPreviewRequested)
+        requested.store(false, std::memory_order_relaxed);
     rack.reset();
     effectsChain.reset();
     for (auto& scheduler : patternRuntime->schedulers)
@@ -406,6 +432,8 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (mode == MidiSourceMode::generator) midi.clear();
     const bool panicThisBlock = panicRequested.exchange(false);
     if (panicThisBlock) {
+        for (auto& requested : acidPreviewRequested)
+            requested.store(false, std::memory_order_relaxed);
         midi.clear();
         keyboard.reset();
         keyboardScratch.clear();
@@ -415,36 +443,55 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         rack.reset();
     }
 
-    if (!panicThisBlock && vstengine::midi::shouldRunGenerator(
-            mode, inputNotes, keyboardHasActiveNotes())) {
-        vstengine::midi::TransportFrame frame;
-        frame.playing = playing;
-        frame.havePpq = havePpq;
-        frame.ppqAtBlockStart = ppq;
-        frame.bpm = bpm;
-        const auto root = juce::jlimit(0, 127,
-            static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
-        const auto seed = static_cast<std::uint32_t>(
-            apvts.getRawParameterValue("rngSeed")->load());
-        for (std::size_t slot = 0; slot < patternRuntime->schedulers.size(); ++slot) {
-            const auto* descriptor = rack.descriptor(slot);
-            if (descriptor == nullptr
-                || (descriptor->capabilities
-                    & vstengine::instrument::Capability::sequence) == 0)
-                continue;
+    // Host playback remains the sole musical clock for normal generation.
+    // A stopped DAW can audition only an explicitly requested Acid pattern
+    // through the existing scheduler's tested free-running fallback. This
+    // never starts other slots, changes midiMode, or mutates Rack contracts.
+    const bool hostGeneration = !panicThisBlock
+        && vstengine::midi::shouldRunGenerator(
+            mode, inputNotes, keyboardHasActiveNotes());
+    const auto root = juce::jlimit(0, 127,
+        static_cast<int>(apvts.getRawParameterValue("rootNote")->load()));
+    const auto seed = static_cast<std::uint32_t>(
+        apvts.getRawParameterValue("rngSeed")->load());
+    for (std::size_t slot = 0; slot < patternRuntime->schedulers.size(); ++slot) {
+        auto& scheduler = patternRuntime->schedulers[slot];
+        auto& scratch = patternRuntime->generatedScratch[slot];
+        const auto* descriptor = rack.descriptor(slot);
+        const bool isAcid = descriptor != nullptr
+            && descriptor->id == vstengine::acid::instrumentId;
+        const bool preview = !panicThisBlock && !playing && isAcid
+            && acidPreviewRequested[slot].load(std::memory_order_relaxed);
+        if ((hostGeneration || preview) && descriptor != nullptr
+            && (descriptor->capabilities
+                & vstengine::instrument::Capability::sequence) != 0) {
+            vstengine::midi::TransportFrame frame;
+            frame.playing = playing || preview;
+            // Local preview deliberately uses the scheduler's BPM fallback,
+            // never an invented DAW PPQ position.
+            frame.havePpq = playing && havePpq;
+            frame.ppqAtBlockStart = ppq;
+            frame.bpm = bpm;
             const auto slotSeed = vstengine::instrument::generationSubSeed(
                 seed, rackControls[slot].slotId, descriptor->id);
-            patternRuntime->schedulers[slot].process(
-                patternRuntime->generatedScratch[slot],
-                patternRuntime->audioSequences[slot],
+            scheduler.process(
+                scratch, patternRuntime->audioSequences[slot],
                 frame, buffer.getNumSamples(), currentSampleRate, 1, root,
                 slotSeed);
-            patternRuntime->schedulers[slot].clearGlideRequests();
+            scheduler.clearGlideRequests();
+        } else {
+            // Mandatory NoteOff on Preview Stop, host stop, source-mode
+            // changes and module removal; no stuck preview notes.
+            scheduler.flush(scratch, 0);
         }
-    } else {
-        for (std::size_t slot = 0; slot < patternRuntime->schedulers.size(); ++slot)
-            patternRuntime->schedulers[slot].flush(
-                patternRuntime->generatedScratch[slot], 0);
+        if (isAcid && !playing && !preview) {
+            // Preview Stop must release the held note *and* rewind the local
+            // fallback play cursor. flush() deliberately retains currentStep
+            // for normal transport transitions. A newly armed Acid preview
+            // must start deterministically from step 0 with a fresh RNG seed.
+            // reset() only mutates the scheduler; scratch retains the NoteOff.
+            scheduler.reset(currentSampleRate);
+        }
     }
 
     const auto blockSamples = static_cast<std::uint32_t>(buffer.getNumSamples());
@@ -1028,6 +1075,38 @@ VstEngineAudioProcessor::createParameterLayout()
                     vstengine::instrument::hostparams::macroId(slot, macro), 1 },
                 vstengine::instrument::hostparams::macroName(slot, macro),
                 juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f }, 0.5f));
+        // Acid-only additions: independent per-slot automatable parameters.
+        // The first eight Acid controls are already stable Rack macros.
+        const vstengine::acid::AcidEngine acidDefaults;
+        for (std::size_t p = vstengine::instrument::macrosPerSlot;
+             p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+            if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
+            const auto semantic = vstengine::acid::AcidEngine::parameterIds[p];
+            if (p == vstengine::acid::AcidEngine::lfo1Sync
+                || p == vstengine::acid::AcidEngine::lfo2Sync
+                || p == vstengine::acid::AcidEngine::lfo3Sync) {
+                params.push_back(std::make_unique<juce::AudioParameterBool>(
+                    juce::ParameterID {
+                        juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                    label + "Acid " + juce::String(std::string(semantic)), false));
+            } else {
+                params.push_back(std::make_unique<juce::AudioParameterFloat>(
+                    juce::ParameterID {
+                        juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                    label + "Acid " + juce::String(std::string(semantic)),
+                    juce::NormalisableRange<float> { 0.0f, 1.0f, 0.0001f },
+                    acidDefaults.parameter(semantic)));
+            }
+        }
+        constexpr std::array<std::pair<std::string_view, bool>, 4> modes {{
+            { "legato", true }, { "retrigger", false },
+            { "vel_to_accent", true }, { "slide_on_overlap", true }
+        }};
+        for (const auto& [semantic, enabled] : modes)
+            params.push_back(std::make_unique<juce::AudioParameterBool>(
+                juce::ParameterID {
+                    juce::String(vstengine::acid::hostParameterId(slot, semantic)), 1 },
+                label + "Acid " + juce::String(std::string(semantic)), enabled));
     }
 
     return { params.begin(), params.end() };
@@ -1040,6 +1119,7 @@ bool VstEngineAudioProcessor::loadSlotInstrument(
     std::string detail;
     const bool accepted = rack.loadModule(slot, instrumentId, nullptr, detail);
     if (accepted) {
+        acidPreviewRequested[slot].store(false, std::memory_order_relaxed);
         patternRuntime->slotSequences[slot].clear();
         publishPartSequenceForAudio(static_cast<int>(slot));
         patternRuntime->schedulers[slot].reset(currentSampleRate);
@@ -1083,6 +1163,36 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
             if (auto* parameter = apvts.getParameter(
                     vstengine::instrument::hostparams::macroId(index, macro).c_str()))
                 parameter->setValueNotifyingHost(values[macro]);
+        if (rack.state()[index].instrumentId == vstengine::acid::instrumentId) {
+            // Factory Acid presets are v3 state snapshots with the original
+            // nine sound controls. Reset host-side extended defaults as well:
+            // otherwise the next process block would replay stale automation
+            // values over the just-applied preset sound.
+            const vstengine::acid::AcidEngine defaults;
+            for (std::size_t p = vstengine::instrument::macrosPerSlot;
+                 p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+                if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
+                const auto id = vstengine::acid::hostParameterId(
+                    index, vstengine::acid::AcidEngine::parameterIds[p]);
+                if (auto* param = apvts.getParameter(id.c_str())) {
+                    float value = defaults.parameter(
+                        vstengine::acid::AcidEngine::parameterIds[p]);
+                    (void) vstengine::acid::factorySoundParameterValue(
+                        presetId, vstengine::acid::AcidEngine::parameterIds[p],
+                        value);
+                    param->setValueNotifyingHost(param->convertTo0to1(value));
+                }
+            }
+            constexpr std::array<std::pair<std::string_view, float>, 4> flags {{
+                { "legato", 1.0f }, { "retrigger", 0.0f },
+                { "vel_to_accent", 1.0f }, { "slide_on_overlap", 1.0f }
+            }};
+            for (const auto& [name, value] : flags) {
+                const auto id = vstengine::acid::hostParameterId(index, name);
+                if (auto* param = apvts.getParameter(id.c_str()))
+                    param->setValueNotifyingHost(value);
+            }
+        }
     }
     suspendProcessing(false);
     diagnostic = detail;
@@ -1470,8 +1580,10 @@ void VstEngineAudioProcessor::setStateInformation(const void* data,
             return;
         }
         if (rackTree.isValid())
-            for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
+            for (std::size_t slot = 0; slot < rackControls.size(); ++slot) {
                 rackControls[slot].slotId = parsedRack[slot].slotId;
+                acidHostBridge.setSlotId(slot, parsedRack[slot].slotId);
+            }
         effectsChain = std::move(candidateEffects);
 
         if (!rackTree.isValid() && restoredParts) {
@@ -1543,6 +1655,10 @@ void VstEngineAudioProcessor::setStateInformation(const void* data,
                     vstengine::sequence::Sequence::deserialize(sequenceData);
         }
     }
+    // Audition is a transient action, not a project/preset setting.
+    // Successful state recall cancels any preview armed by the prior patch.
+    for (auto& requested : acidPreviewRequested)
+        requested.store(false, std::memory_order_relaxed);
     for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size(); ++slot)
         publishPartSequenceForAudio(static_cast<int>(slot));
     for (auto& scheduler : patternRuntime->schedulers)

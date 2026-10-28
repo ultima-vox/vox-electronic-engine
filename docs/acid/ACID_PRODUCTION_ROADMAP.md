@@ -1,0 +1,181 @@
+# Acid Synth — production delivery plan (owner reference, 2026-10-26)
+
+Status: **Acid DSP, controls and SOUND UI in progress; neither Acid nor Rack production-accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
+
+## Current integration authority (28 October 2026)
+
+**Read [ACID_RACK_INTEGRATION_V2.md](ACID_RACK_INTEGRATION_V2.md) first.** It is the current implementation and acceptance packet for independent DSP/UI delivery, 80 independently automatable Acid controls, one shared Rack parameter authority and measured pool-capacity approval. The older integration plan below records the interim 64-pool branch state; its instructions to add Acid-specific APVTS IDs and to use eight fixed macros as sound parameter authorities are **superseded**, not production guidance.
+
+## Historical integration plan and fixed-pool blocker (28 October 2026)
+
+The selected host direction is the unmerged Rack stack #62 → #64 → #65:
+16 slots, 64 direct pool endpoints per slot and one shared named-parameter
+authority. Slot automation lanes intentionally follow pool indices when replacing
+an instrument; a same-InstrumentId upgrade must preserve each explicit index.
+PR #65 proposes transactional append-only migration, subject to review and real
+host verification. Its implementation does not yet provide the independent
+binary loader, instrument-editor interface or accepted DAW behavior.
+
+The current Acid engine has 77 state parameters, including the packed
+`play_mode_flags`; the interim host bridge splits that packed value into four
+independent flags. It exposes 80 separate host-facing controls: 76 individual
+engine parameters plus four flags. Eight currently use Rack macros. A 64-entry
+direct pool cannot hold them; even counting all eight existing macros as extra
+independent endpoints gives only 72. Their actual suitability for direct Acid
+binding requires review. No control may be silently omitted, aliased, packed
+into shared automation or made ineffective to fit the pool.
+
+Before integrating, coordinate a reviewed pool-capacity/parameter contract with
+the Rack owner. Inventory every Acid control, physical unit, type, stable
+semantic ID and host endpoint; assign permanent explicit indices in the agreed
+scheme. Implement Acid's independent DSP/UI/content package against the reviewed
+versioned module and host-editor interfaces; replace `AcidParameterBridge` and
+Acid-specific APVTS registration with the single common host adapter. Preserve
+separate Sound, Pattern and Generator state, and keep missing/incompatible module
+identity and original state recoverable without substitution.
+
+Prove per-control independence, slot isolation, automation type/range, state and
+same-instrument upgrade, missing-module save/reinstall recovery, realtime bounds,
+and unchanged Rack binary hash across Acid installation/update. Windows full
+CTest/package, actual Cubase/REAPER workflow and owner visual/audio acceptance
+remain required. The interim bridge is not a release architecture. Historical
+host-ID decisions below describe the current branch only, not the selected pool.
+
+Windows run 40650814560 for `eff2c6a` built successfully and passed 33/34
+tests, including all Acid tests. The only failing case was Bass diagnostic
+`save_restore_rerender` (max difference 0.337394; RMS 0.000124604); package did
+not run. The same Bass scenario also failed before this Acid Decay change in runs
+40549369245 and 40557841966. This demonstrates a pre-existing failure, not its
+root cause. Do not weaken the test or treat the branch as production-ready.
+
+## Scope lock — Acid module ONLY (owner clarification, 2026-10-26)
+
+**Rack is not yet Production-ready (owner clarification, 2026-10-26). It is nevertheless OUT OF SCOPE for this Acid module feature branch.** Do not redesign, reconstruct, refactor, restyle, or extend Rack, its slot cards, routing UI, global project header, host transport, or shared keyboard. The red annotated region is precisely **NOT** our task. Our deliverable is only the **selected Acid Synth workspace** shown in the green annotated region, with production-grade independent controls, sound DSP, modulation, pattern and presets.
+
+Permitted integration is minimal: connect `AcidPanel` to the existing editor's selected-instrument workspace and implement necessary per-slot Acid parameter automation/state forwarding through existing host/processor extension points **without redesigning Rack or its contracts**. Rack regression tests remain acceptance guards, not feature-development tasks. Investigate their failures by fixing Acid integration and state/descriptor compatibility **inside Acid first**. If proof identifies a pre-existing Rack defect, document it separately and request explicit scope approval; do not silently touch Rack.
+
+Out-of-scope paths by default: `libs/rack/**`, `libs/instrument/InstrumentContract.h`, `libs/instrument/InstrumentAbi.h`, `libs/sequence/Sequence.*`, generic Rack rail UI, global header, global routing and product navigation. A tightly scoped bridge in `apps/vst3/PluginProcessor.*` or `apps/vst3/PluginEditor.*` is allowed only as necessary to mount and automate Acid, retaining all existing behavior. Prefer `libs/acid/**`, `libs/ui/AcidPanel.*`, Acid-specific adapter and Acid tests. Other instrument modules must remain unaffected.
+
+## Scope and authority
+
+The user provided two 1024×768 Acid reference screenshots on 2026-10-26. The unannotated screenshot is the visual target; the annotated copy makes the boundaries explicit. **Red = existing Rack/shared shell** (not a design stroke); **green = Acid instrument workspace**. Do **not** draw either marker in the product. No replacement of the entire product `PluginEditor`, no fake rack slots, no fabricated host CPU/MIDI status or fake playhead.
+
+The reference is the *target*, not an existing successful VST3 capture. The PR #43 UI Design System and Visual Reference Spec are useful architectural/component references but PR #43 is an unmerged candidate; do not merge it wholesale into this branch.
+
+The shared `instrument/InstrumentContract.h`, `VoxMidiEventV1`, `sequence::Sequence`, routing and 16-slot Rack schemas are authoritative and unchanged.
+
+## Delivery slices
+
+| Slice | Task | Acceptance / evidence |
+| --- | --- | --- |
+| 1 | Freeze scope, screen map, semantic-control manifest, ID/isolation regression tests | This doc + `ACID_UI_CONTROL_MATRIX.md` committed; every existing Acid DSP ID unique and descriptor-aligned; exact screen layout listed |
+| 2 | Acid-only DSP/Provider stabilization | Fix Acid-specific causes of the two failing Rack regression tests without modifying Rack; Windows Release and entire existing test suite green; Acid render, NoteOn/Off, release, state, parameter isolation evidence |
+| 3 | Independent parameter authority | 1 knob → exactly 1 semantic parameter; per-slot, stable VST3 host IDs and automation; no reassignment of unrelated macros; transactional/RT-safe publication into current Rack runtime; V1→V3→future version state migration |
+| 4 | Working Acid sound path | Oscillator morph/type, tune/fine/PW; filter 4 modes and key tracking; amp/filter ADSR; distortion modes/Tone/Mix; Accent/Slide/Output/Pan; measured audio-difference and envelope tests |
+| 5 | Extended modulation + performance | ENV1/ENV2, LFO1–3, STEP and separate host-BPM sync modes implemented in Acid source (v8); latest Windows sync CI pending. Sound, state and Editor Smoke verification mandatory before acceptance |
+| 6 | Pattern / generation / MIDI | Sequence ownership per selected Rack slot; 16 visible editable cells per lane; accent/slide/octave mapped to existing Step fields; Generate/Mutate/Clear/Play/Stop real; PPQ sync, swing, resolution, length, export and reimport agree |
+| 7 | Final Acid workspace UI | Keep existing Rack/outer shell/keyboard exactly as-is; implement only Acid instrument header content, 303 hero/banner, top synth cards, center sequencer, lower Mod/Performance/PlayMode inside selected Acid workspace; VOX shared components and screenshots versus owner source |
+| 8 | Production verification | Cubase and REAPER VST3; state restore, automation playback, all 16 slots, multiple Acid instances, release/no stuck notes, CPU, NaN/denorm, 1024×768 baseline and 1180×760/1500×920/125%-DPI screenshots; independent review & owner acceptance |
+
+## Hard technical decisions
+
+1. **Rack ownership (non-negotiable)**: Product Rack is not production-accepted; its routing/slots/host transport, shared keyboard and shell are external dependencies to Acid feature work. No Rack implementation or redesign; all functionality in Acid and thin existing integration points.
+2. **Control ownership**: Editor widgets send UI-thread commands to a controller/processor per slot. Do **not** bind an `AcidPanel` directly to an address of `AcidEngine` owned by the Rack: runtime instances can be replaced and processing is concurrent. A change must update host parameter authority, persistent module state and audio-thread snapshot atomically/without callback locking.
+3. **Stable host identifiers (current integration contract)**: Rack is the sole owner of stable `slotNN.pNNN` VST3 endpoints, normalized/plain conversion and automation gestures. Acid must supply 80 independent, typed, named controls with explicit permanent pool indices through a reviewed shared descriptor/adapter; do not introduce new `slotNNAcid_*` APVTS endpoints. The eight Rack macros remain optional independent performance assignments, not duplicate base parameter writers. Capacity is a shared 96-vs-128 benchmark/DAW gate; see [ACID_RACK_INTEGRATION_V2.md](ACID_RACK_INTEGRATION_V2.md).
+4. **State**: Every functional selector, knob, toggle, modulation source, sequence edit and generator setting must survive save/load, plugin reopen and preset recall. V1 Acid sound state compatibility must be tested; a migration cannot lose the first nine parameter values. Never store envelope/audio runtime state.
+5. **Mod sources**: ENV1 and ENV2 have distinct note-triggered ADSRs. LFO1/2/3 each have independent Rate, Depth, Wave, Target, phase and slot-scoped host automation. **Not complete:** manual Cubase/REAPER host checks, final Acid UI reference match and independent MIDI pattern transport Play/Stop. LFO1–3 now have separate host PPQ sync switches (v8 code pending CI), while STEP implements 16 independent PPQ-driven modulation levels. DSP additions are implemented in source but v6 Windows CI is pending; do not mark tested until it finishes.
+6. **Choice controls**: Oscillator shape, filter mode, distortion mode, root/length/resolution and play modes must be semantically bound, not look-only. AMP vs FILTER must rebind the knob value, listener and automation attachment to the correct parameter, without mutating only its label or `paramId`.
+7. **Real-time correctness**: no mutex/heap allocation or UI Component touching inside `processBlock`; no stale pointers/callbacks after slot replacement; ordered sample-offset MIDI, including velocity-zero NoteOn; test NoteOff, CC120/123 and release across audio block boundaries.
+8. **Honest status**: passing compile/CTest is necessary, not sufficient for visual match, audible Acid character or manual DAW tests. Do not claim production-ready until all gates pass.
+
+## Acceptance gate / reference viewport
+
+Primary screenshot `1024×768`: one horizontal global header; left persistent 16-slot Rack rail ~22% width, right selected Acid workspace ~78%. Within the workspace: instrument header and channel/preset, 6 navigation tabs, wide 303 Acid hero banner, seven compact top module cards (OSC/FILTER/ENVELOPE/DIST/ACCENT/SLIDE/OUTPUT), a single full-width 16-step sequencer with Note/Accent/Slide/Gate/Octave lanes, Modulation/Performance/PlayMode bottom cards, fixed keyboard footer. Avoid cropped controls and horizontal scroll. Required responsive checks: 1180×760, 1500×920 and 125% Windows scaling; control touch target, readable values, GPU/text rendering and focus order all reviewed.
+
+Gate output for each review commit: exact SHA, CI URL, failures and screenshot comparisons (target vs JUCE capture), trace evidence for every control, and explicit manual DAW status. Owner approval required before merge.
+
+## Implementation checkpoint — LFO1 slice (2026-10-26)
+
+- Acid-only v4 state adds stable semantic IDs `lfo1_rate`, `lfo1_depth`, `lfo1_wave`, `lfo1_target`; old IDs 0–35 retain ordering. Versions 1 and 3 load with LFO1 depth off, including into a previously active Acid engine. V4 save/load persists all four.
+- `AcidEngine::renderStereoSample`: LFO1 is a sample-continuous 0.05–20 Hz bipolar oscillator; four waveforms and six destinations. ENV1 and LFO1 modulation paths sum only at their own chosen destinations; no shared envelope state. No audio-thread allocations introduced.
+- Stable per-slot host IDs are registered for LFO1. `AcidParameterBridge` skips packed play-mode bitset index 35 but reads all extended Acid parameters through index 39.
+- `AcidPanel`: actual ENV1/LFO1 tab selection swaps attachments; inactive controls have no live host attachment. Waveform and Rate show semantic values, destination combobox switches host ID.
+- Tests cover v3→v4 migration, v4 LFO1 persistence, per-slot automation, UI independence, measurable audio effects from depth/rate/wave/target, and finite output. **Do not mark passed until Windows CI verifies head.**
+- UI target still owner-provided Acid 1024×768; original Rack remains out of scope. Remaining blockers: full CTest green (existing Bass save/restore diagnostic), actual screenshot comparison, ENV2/LFO2/LFO3/STEP, functional transport, DAW acceptance.
+
+
+## ENV2 checkpoint and Rack status clarification (2026-10-26)
+
+- Owner: **Rack itself is not Production-ready**. This does not authorize Rack redevelopment within Acid PR #59. Integrating with Rack is necessary for testing, but its final acceptance belongs to a separate platform effort. Acid feature acceptance and whole-plugin Production release are different gates.
+- Acid v5 appends six ENV2 params (Target, Amount, A, D, S, R) after the 40 existing params, preserving every historical host ID; default depth is zero. ENV2 is an independent note-triggered ADSR mixed only into its selected modulation destination.
+- Supports sound payload schemas v1/v3/v4/v5; older presets disable non-existent ENV2 even when loaded over an active newer instance.
+- ENV2 tab in actual AcidPanel reattaches five real parameter controls and the target selector; the existing ENV1 and LFO1 assignments are independent.
+- New audio tests for ENV2 sound response and modulation attack, state migration and editor isolation are committed. **Their Windows CI result is pending; do not claim Production acceptance.**
+- Actual `acid-actual-editor-1024x768.png` artifact from Windows run 40373368577 is confirmed. It differs materially from the owner's UI reference: 303 hero artwork absent, cramped control/value typography, modulation/pattern spacing and play transport unfinished. This is a functional intermediate UI only.
+
+## LFO2/LFO3 v6 implementation checkpoint (2026-10-26)
+
+- v6 appends eight new Acid semantic IDs at 46–53, preserving all historical parameter IDs and eight Rack host macro assignments. Each of LFO2/LFO3 has its own phase accumulator, Rate, Depth, Wave, Target and a default depth of zero.
+- Acid DSP uses one consistent four-wave bipolar generator implementation with independent target routing; VST3 APVTS and per-slot Acid bridge enumerate the new IDs automatically. No shared Rack implementation changes.
+- Performance: per-source frequency exponentials are evaluated once per audio block rather than three times per output sample; phase increment is smoothed per sample to avoid discontinuities with host automation.
+- State v6 preserves v1/v3/v4/v5, explicitly clearing previously active LFO2/LFO3 on legacy recall. Audio tests check Depth, Rate, Wave, Target and processing continuity over four 4096-frame blocks; UI tests verify independent sliders for LFO1/2/3 and v6 round-trip.
+- Five modulation tabs ENV1, ENV2, LFO1, LFO2, LFO3 are linked to actual parameter attachments and target selectors. STEP remains unimplemented; do not add a fake clickable STEP tab.
+- Windows runner currently has several older PR #59 runs in progress and the newest v6 run queued. **No full green Windows CI or Production declaration.** Latest completed pre-v6 run passed 29/30, with separate Bass save/restore diagnostics still failing. Rack itself remains not Production-ready.
+- Remaining Acid deliverables: STEP DSP/UI, generator transport and DAW synchronization, real 303 hero graphic and pixel-accurate owner UI, preset/automation DAW QA and CTest gate. Require an isolated successful latest-head build before merging any Acid PR.
+
+## STEP v7 implementation checkpoint (2026-10-27)
+
+- Acid sound state v7 appends **20 separate semantic values** at IDs 54–73: STEP Amount, Target, Rate, Smooth, and `step_01` through `step_16`. Old 54 IDs and existing Rack macros remain unchanged. Total Acid parameters: **74**.
+- Separate from the existing note/pattern sequencer: STEP produces a bipolar control signal from 16 levels, rate choices 1/8, 1/16, 1/32, 1/8 triplet, musical position supplied through the already-existing `instrument::ProcessBlock` BPM/PPQ/transport flag, and selectable destination. No new shared ABI or Rack API.
+- STEP does not advance or influence the sound while host transport is stopped. It is fully disabled (depth zero) in migrated v1/v3/v4/v5/v6 states. New v7 persists the complete curve, rate, smooth and target.
+- The selected Acid SOUND/Modulation workspace adds a sixth **STEP** source tab, 16 actual per-step APVTS-attached sliders and Depth/Rate/Smooth knobs, with independent destination dropdown. MIDI pattern StepGrid remains separate.
+- Tests added for audible STEP response across Amount/Target/Rate/Smooth/level, stopped transport, finite output, v6→v7 migration, v7 state roundtrip, independent host project save/restore and UI per-step/slot isolation. **Latest Windows CI is in progress, and these tests are not yet accepted.**
+- Remaining: green latest CI, actual 1024×768 Acid screenshot vs owner reference, robust host transport/restart/seek validation, host-tempo LFO sync, independent musical sequence Play/Stop, 303 banner artwork, manual Cubase/REAPER evaluation. Rack is independently **not Production-ready** and remains out of scope.
+
+## Per-LFO host BPM sync v8 — 2026-10-27
+
+- Acid v8 adds three stable boolean semantic host automation IDs at positions 74–76: `lfo1_sync`, `lfo2_sync`, `lfo3_sync`. Previous 74 parameters, eight historical Rack host macros and shared Instrument/MIDI contracts stay unchanged. Total: **77 Acid parameters**.
+- Each LFO retains 0.05–20 Hz free-running mode by default. When its individual SYNC is enabled, its Rate selects 1/1, 1/2, 1/4, 1/8, 1/16, 1/8T, 1/16T or 1/32; its phase is calculated directly from the host musical position in `ProcessBlock` (PPQ), with correct phase anchoring across varying block sizes, seek, loop and stop/restart. STEP continues to use the same musical clock separately from note sequencing.
+- Actual AcidPanel selected LFO now has an APVTS-attached SYNC toggle. Rate displays Hertz when free and musical note divisions when synced. Changing tab detaches the previous LFO's automation so LFO1/2/3 stay independent.
+- v8 state saves the switches; versions v1/v3/v4/v5/v6/v7 load with Sync OFF, including preset recall into an already-running instrument. The original sound behavior remains the default.
+- Added regression tests for three independent musical phases, 128/512 host block consistency, phase repeat and seek, stopped transport, v7→v8 state migration and JUCE/DAW automation round-trip. **This milestone is committed but Windows CI on the latest head has not completed.**
+- Inspected the real Windows `acid-actual-editor-1024x768.png` and `acid-step-actual-editor-1024x768.png` from CI #40460994443. Existing values under Acid knobs appeared normalized (`0.6300` etc.) despite intended physical formatting; a localized Acid-only fix restores text converters after JUCE APVTS attachment and adds an Editor Smoke regression assertion. The 303 hero and owner reference pixel match remain open.
+- Rack is independently not Production-ready. No Rack source or shared contract edit is authorized in this Acid PR. Bass diagnostic `save_restore_rerender` remains a separate whole-platform CI blocker.
+
+## Acid local Preview / Stop — 2026-10-27
+
+- Added an **Acid workspace-only** transient Preview/Stop control, distinct from the DAW transport and the separate STEP modulation source. This does not add another sequencer implementation or modify `libs/midi` / `libs/rack`.
+- When the DAW is stopped and the user explicitly arms Preview, the selected Acid slot's already-existing `GeneratedNoteScheduler` runs its musical BPM-derived fallback. Other Rack slots remain stopped, and preview cannot mutate the global MIDI source mode or DAW play state.
+- Preview Stop flushes the scheduler's held NoteOff at the next audio block; panic, host reprepare/release, slot instrument replacement and successful host state recall cancel previews. Preview selection is **transient** and intentionally not serialized, so a reopened project cannot start audible preview unexpectedly.
+- GUI: button toggles `Preview` / `Stop` on Acid SOUND sequence toolbar and rebinds with the selected slot, with explicit tooltip identifying paused-DAW behavior. The shared top bar and Rack remain unmodified.
+- Checks added: Editor Smoke validates two-slot transient state isolation; project host-state integration validates restore cannot arm Preview; a new paused-DAW `AudioPlayHead` test exercises real audio output, the neighboring Bass playhead remaining stopped, Stop's playhead release, and Panic cancellation. **These new checks are committed but not CI-verified yet.**
+- QA gate: ensure full Windows compile/CTest on latest branch, visual capture of real toolbar, and manual Cubase/REAPER verification across stopped/playing/looping host transport. **This is not global DAW transport Play/Stop**, and does not pretend to control DAW playback.
+
+
+## Current owner handoff and runtime corrections — 27 October 2026
+
+Owner transferred PR #59 / Acid to the current worker; PR #62 / generic Rack now
+belongs to another agent. Scope remains Acid-only. Existing Rack API, shared
+shell and DLL-loading architecture are not changed.
+
+- Fixed note/channel ownership, full2048-key capacity, last-key velocity fallback,
+  CC65/bend/CC120/123 isolation, malformed and out-of-block MIDI admission.
+- Corrected Release from exponential time-constant behavior to displayed duration
+  to silence; stable host tail, explicit8k..384kHz provider support and700000-sample
+  tail budget. No77 semantic IDs or v8 sound format changed.
+- [Runtime contract](ACID_RUNTIME_CONTRACT.md) and
+  [current evidence/action log](../testing/acid-production-evidence-20261027.md)
+  are the current correction record. Historical checkpoints above retain their
+  original observed CI status; they are not current acceptance claims.
+- Remaining: exact-head full Windows/CTest/package, generic Rack parameter adapter
+  integration, complete generator controls/content and exact Acid UI reference,
+  musical/DAW/visual acceptance. Keep Draft; no production declaration.
+
+
+## Owner decision — independently installed Acid (27 October 2026)
+
+Acid's DSP and dedicated UI must be installed as part of its own module package,
+not embedded in Rack VST3. The common loader, automation model, versioned ABI
+and editor boundary belong to the Rack owner and need review. Adapt Acid and its
+existing panel to that boundary after it is agreed; do not ship the current static
+provider or AcidParameterBridge as the final integration. Runtime remains offline.

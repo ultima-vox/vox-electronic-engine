@@ -23,12 +23,17 @@ jobs:
           cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag" "-DVOX_UI_BUILD_SHOWCASE=ON"
 
       - name: Build
+        id: build
         run: cmake --build build --config Release --clean-first --parallel
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Capture Visual Gate snapshots
+        # GUI evidence is useful even if an unrelated regression test fails.
+        # A failed build must still prevent capture; packaging remains gated
+        # by the normal job success path below.
+        if: ${{ always() && steps.build.outcome == 'success' }}
         shell: powershell
         run: |
           $snapshotDir = Join-Path $PWD "build\visual-gate"
@@ -47,8 +52,31 @@ jobs:
           Capture-VisualGate "psy-bass-sound-1500x920.png" "com.ultimavox.psy-bass" "sound" 1500 920
           Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
           Capture-VisualGate "psy-bass-macros-1500x920.png" "com.ultimavox.psy-bass" "macros" 1500 920
+          # Source of truth for owner screenshot review: the actual VST3 editor,
+          # not the independent showcase/capture program above.
+          $editorTest = Join-Path $PWD "build\\Release\\editor_smoke_tests.exe"
+          if (-not (Test-Path $editorTest)) { throw "Editor smoke executable missing" }
+          # Screenshot-only mode does not run/waive Editor Smoke assertions.
+          # The ordinary ctest step above still gates the Release artifact.
+          $env:VOX_UI_CAPTURE_ONLY = "1"
+          $env:VOX_UI_ACID_SNAPSHOT = Join-Path $snapshotDir "acid-actual-editor-1024x768.png"
+          & $editorTest
+          if ($LASTEXITCODE -ne 0) { throw "Acid actual editor capture failed" }
+          if (-not (Test-Path $env:VOX_UI_ACID_SNAPSHOT)) {
+            throw "Actual Acid editor snapshot not created"
+          }
+          Remove-Item Env:VOX_UI_ACID_SNAPSHOT
+          $env:VOX_UI_ACID_STEP_SNAPSHOT = Join-Path $snapshotDir "acid-step-actual-editor-1024x768.png"
+          & $editorTest
+          if ($LASTEXITCODE -ne 0) { throw "Acid STEP editor capture failed" }
+          if (-not (Test-Path $env:VOX_UI_ACID_STEP_SNAPSHOT)) {
+            throw "Actual Acid STEP editor snapshot not created"
+          }
+          Remove-Item Env:VOX_UI_ACID_STEP_SNAPSHOT
+          Remove-Item Env:VOX_UI_CAPTURE_ONLY
 
       - name: Upload Visual Gate snapshots
+        if: ${{ always() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: Vox-UI-Visual-Gate

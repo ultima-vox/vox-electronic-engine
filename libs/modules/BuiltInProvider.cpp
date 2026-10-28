@@ -126,7 +126,7 @@ private:
 
 class BuiltInProvider final : public instrument::InstrumentProvider {
 public:
-    BuiltInProvider()
+    explicit BuiltInProvider(acid::AcidParameterBridge* controls)
     {
         instrument::InstrumentDescriptor bassDescriptor;
         bassDescriptor.id = bassInstrumentId;
@@ -157,7 +157,7 @@ public:
             bassContent_.push_back({ std::string(bassInstrumentId), id, name,
                 instrument::ContentKind::generatorProfile, 1, 1,
                 VOX_SEQUENCE_ALL, VOX_PRESET_CLASS_GENERATOR });
-        acidProvider_ = acid::createAcidProvider();
+        acidProvider_ = acid::createAcidProvider(controls);
         for (const auto& descriptor : acidProvider_->descriptors())
             descriptors_.push_back(descriptor);
         leadProvider_ = lead::createLeadProvider();
@@ -261,8 +261,8 @@ private:
 };
 } // namespace
 
-std::unique_ptr<instrument::InstrumentProvider> createBuiltInProvider()
+std::unique_ptr<instrument::InstrumentProvider> createBuiltInProvider(acid::AcidParameterBridge* controls)
 {
-    return std::make_unique<BuiltInProvider>();
+    return std::make_unique<BuiltInProvider>(controls);
 }
 } // namespace vstengine::modules

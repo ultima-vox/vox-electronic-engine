@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "AcidPanel.h"
 #include "ui/GlobalHeader.h"
 #include "ui/MainNavigation.h"
 #include "ui/StepSequencer.h"
@@ -23,6 +24,49 @@ public:
     [[nodiscard]] juce::Rectangle<int> rackBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> workspaceBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> keyboardBoundsForTesting() const noexcept;
+    void selectSlotForTesting(std::size_t);
+    [[nodiscard]] bool acidWorkspaceVisibleForTesting() const noexcept {
+        return acidSoundPage.isVisible();
+    }
+    [[nodiscard]] std::size_t acidControlsForTesting() const noexcept {
+        return acidSoundPage.attachedControlCount();
+    }
+    [[nodiscard]] int acidModulationDiameterForTesting() const noexcept {
+        return acidSoundPage.modulationKnobDiameterForTesting();
+    }
+    bool setAcidKnobForTesting(std::string_view semantic, double normalized) {
+        return acidSoundPage.setKnobForTesting(semantic, normalized);
+    }
+    juce::String acidKnobTextForTesting(std::string_view semantic) const {
+        return acidSoundPage.knobTextForTesting(semantic);
+    }
+    void selectAcidFilterEnvelopeForTesting(bool on) {
+        acidSoundPage.switchEnvelopeForTesting(on);
+    }
+    void selectAcidLfo1ForTesting(bool on) {
+        acidSoundPage.switchModulationForTesting(on);
+    }
+    void selectAcidLfoForTesting(int number) {
+        acidSoundPage.switchLfoForTesting(number);
+    }
+    bool setAcidLfoSyncForTesting(bool enabled) {
+        return acidSoundPage.setCurrentLfoSyncForTesting(enabled);
+    }
+    void selectAcidEnv2ForTesting() {
+        acidSoundPage.switchEnv2ForTesting();
+    }
+    void selectAcidStepForTesting() {
+        acidSoundPage.switchStepForTesting();
+    }
+    void setAcidPreviewForTesting(bool on) {
+        acidSoundPage.setPreviewForTesting(on);
+    }
+    bool setAcidStepLevelForTesting(std::size_t step, double level) {
+        return acidSoundPage.setStepLevelForTesting(step, level);
+    }
+    [[nodiscard]] std::size_t acidStepAttachmentCountForTesting() const noexcept {
+        return acidSoundPage.attachedStepLevelsForTesting();
+    }
 
 private:
     struct SequenceCallbacks final : vstengine::ui::StepSequencer::Callbacks {
@@ -160,6 +204,7 @@ private:
     InstrumentHeader instrumentHeader;
     vstengine::ui::MainNavigation navigation;
     MacroPage soundPage;
+    AcidPanel acidSoundPage;
     PatternPage patternPage;
     RoutingPage routingPage;
     ZonesPage zonesPage;

@@ -8,6 +8,15 @@
 #include <thread>
 
 namespace {
+struct PausedDawPlayHead final : juce::AudioPlayHead {
+    juce::Optional<PositionInfo> getPosition() const override {
+        PositionInfo position;
+        position.setIsPlaying(false);
+        position.setBpm(120.0);
+        position.setPpqPosition(0.0);
+        return position;
+    }
+};
 int testsRun = 0;
 void require(bool condition, const char* message)
 {
@@ -88,6 +97,29 @@ int main()
     processor->instrumentRack().reset();
     require(renderHostNote(*processor, 2, 48) > audible,
             "CH2 renders independent ReferenceInstrument");
+    // Acid-only extended controls and independent play-mode automation must
+    // be available to VST3, without replacing any of the 8 Rack macros.
+    constexpr std::array<std::string_view, 4> acidFlags {
+        "legato", "retrigger", "vel_to_accent", "slide_on_overlap"
+    };
+    for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot) {
+        for (std::size_t p = vstengine::instrument::macrosPerSlot;
+             p < vstengine::acid::AcidEngine::parameterCount; ++p) {
+            if (p == vstengine::acid::AcidEngine::playModeFlags) continue;
+            const auto id = vstengine::acid::hostParameterId(
+                slot, vstengine::acid::AcidEngine::parameterIds[p]);
+            const auto* param = processor->parameters().getParameter(id);
+            require(param && param->isAutomatable(),
+                    "each extended Acid parameter exposed to host separately");
+        }
+        for (auto semantic : acidFlags) {
+            const auto id = vstengine::acid::hostParameterId(slot, semantic);
+            const auto* param = processor->parameters().getParameter(id);
+            require(param && param->isAutomatable(),
+                    "Acid play-mode toggle has its own VST automation ID");
+        }
+    }
+
     processor->instrumentRack().reset();
     require(renderHostNote(*processor, 3) < silent, "unassigned channel silent");
 
@@ -166,17 +198,64 @@ int main()
             "internal distortion becomes active");
     setPlain(*processor, "kickTune", 43.0f);
     setPlain(*processor, "matchBassTimingOffsetMs", 12.0f);
+    // Acid-only independent VST automation is stored in host APVTS state,
+    // not another instrument's macro or a non-durable editor component.
+    const auto acidFine = vstengine::acid::hostParameterId(1, "osc_fine");
+    const auto acidLevel = vstengine::acid::hostParameterId(1, "output");
+    const auto acidLegato = vstengine::acid::hostParameterId(1, "legato");
+    const auto acidLfo1Sync = vstengine::acid::hostParameterId(1, "lfo1_sync");
+    const auto acidLfo2Sync = vstengine::acid::hostParameterId(1, "lfo2_sync");
+    const auto acidStep0 = vstengine::acid::hostParameterId(1, "step_01");
+    const auto acidStep15 = vstengine::acid::hostParameterId(1, "step_16");
+    const auto otherAcidFine = vstengine::acid::hostParameterId(0, "osc_fine");
+    const float otherBefore = processor->parameters()
+                                  .getRawParameterValue(otherAcidFine.c_str())->load();
+    setPlain(*processor, acidFine, 0.27f);
+    setPlain(*processor, acidLevel, 0.64f);
+    setPlain(*processor, acidLegato, 0.0f);
+    setPlain(*processor, acidLfo1Sync, 1.0f);
+    setPlain(*processor, acidLfo2Sync, 0.0f);
+    setPlain(*processor, acidStep0, 0.87f);
+    setPlain(*processor, acidStep15, 0.04f);
+    require(std::abs(processor->parameters().getRawParameterValue(
+                         otherAcidFine.c_str())->load() - otherBefore) < 0.0001f,
+            "Acid host write must not affect another slot before save");
+    processor->setAcidPreview(1, true);
+    require(processor->acidPreviewEnabled(1)
+            && !processor->acidPreviewEnabled(0),
+            "only selected Acid slot can be armed for transient preview");
     juce::MemoryBlock state;
     processor->getStateInformation(state);
     require(state.getSize() > 0, "state serialization succeeds");
 
     auto restored = std::make_unique<VstEngineAudioProcessor>();
+    restored->setAcidPreview(1, true);
     restored->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    require(!restored->acidPreviewEnabled(1),
+            "project restore cannot auto-start an earlier Acid preview");
     restored->prepareToPlay(48000.0, 512);
     setPlain(*restored, "midiMode", 1.0f);
     require(restored->sequence()[3].gate
                 && restored->sequence()[3].noteOffset == 7,
             "Bass sequence round-trips");
+    require(std::abs(restored->parameters().getRawParameterValue(
+                         acidFine.c_str())->load() - 0.27f) < 0.001f
+                && std::abs(restored->parameters().getRawParameterValue(
+                         acidLevel.c_str())->load() - 0.64f) < 0.001f
+                && restored->parameters().getRawParameterValue(
+                         acidLegato.c_str())->load() < 0.5f
+                && restored->parameters().getRawParameterValue(
+                         acidLfo1Sync.c_str())->load() >= 0.5f
+                && restored->parameters().getRawParameterValue(
+                         acidLfo2Sync.c_str())->load() < 0.5f
+                && std::abs(restored->parameters().getRawParameterValue(
+                         acidStep0.c_str())->load() - 0.87f) < 0.001f
+                && std::abs(restored->parameters().getRawParameterValue(
+                         acidStep15.c_str())->load() - 0.04f) < 0.001f,
+            "Acid independent host parameter automation survives project restore");
+    require(std::abs(restored->parameters().getRawParameterValue(
+                         otherAcidFine.c_str())->load() - otherBefore) < 0.0001f,
+            "Acid saved parameter authority never bleeds between slots");
     require(restored->internalEffectsState().effects[0].enabled
                 && restored->internalEffectsState().effects[0].mix > 0.0f,
             "internal FX state round-trips");
@@ -217,6 +296,53 @@ int main()
             "concurrent host snapshots remain valid");
     require(silentBlocks == 0,
             "concurrent host snapshots never gate realtime audio");
+
+    // End-to-end Acid-only Preview/Stop: a stopped host must not start
+    // generators in any other Rack slot. Preview routes through the actual
+    // scheduler and Rack MIDI path; Stop flushes its cursor/held note.
+    {
+        PausedDawPlayHead stoppedHost;
+        auto acidPreviewProcessor = std::make_unique<VstEngineAudioProcessor>();
+        acidPreviewProcessor->prepareToPlay(48000.0, 512);
+        acidPreviewProcessor->setPlayHead(&stoppedHost);
+        require(!acidPreviewProcessor->acidPreviewEnabled(1),
+                "local Acid preview defaults off under paused DAW transport");
+        auto renderStopped = [&]() {
+            juce::AudioBuffer<float> block(2, 512);
+            juce::MidiBuffer emptyMidi;
+            acidPreviewProcessor->processBlock(block, emptyMidi);
+            return energy(block);
+        };
+        for (int block = 0; block < 8; ++block)
+            (void) renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == -1,
+                "paused DAW alone never starts the Acid sequencer");
+        acidPreviewProcessor->setAcidPreview(1, true);
+        double auditionEnergy = renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == 0,
+                "Preview begins at Acid sequence step zero on first block");
+        for (int block = 1; block < 48; ++block)
+            auditionEnergy += renderStopped();
+        require(auditionEnergy > audible,
+                "explicit Preview produces Acid pattern audio with DAW stopped");
+        require(acidPreviewProcessor->getPartPlayHeadStep(0) == -1,
+                "Acid preview never starts the neighboring Psy Bass sequence");
+        acidPreviewProcessor->setAcidPreview(1, false);
+        (void) renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == -1,
+                "Stop flushes Acid scheduler, resetting active playhead");
+        // Re-arm after Stop, not just at initial preparation. flush() alone
+        // leaves the fallback currentStep untouched; this must reset to zero.
+        acidPreviewProcessor->setAcidPreview(1, true);
+        (void) renderStopped();
+        require(acidPreviewProcessor->getPartPlayHeadStep(1) == 0,
+                "repeated Preview starts deterministically at step zero");
+        acidPreviewProcessor->requestPanic();
+        (void) renderStopped();
+        require(!acidPreviewProcessor->acidPreviewEnabled(1),
+                "panic cancels any pending Acid local preview");
+        acidPreviewProcessor->setPlayHead(nullptr);
+    }
 
     std::cout << "Plugin Rack integration tests passed (" << testsRun << ")\n";
     return EXIT_SUCCESS;

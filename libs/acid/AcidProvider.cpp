@@ -1,5 +1,6 @@
 #include "acid/AcidProvider.h"
 #include "acid/AcidEngine.h"
+#include "acid/AcidParameterBridge.h"
 #include "acid/AcidGenerator.h"
 #include <algorithm>
 #include <array>
@@ -9,10 +10,15 @@ namespace vstengine::acid {
 namespace {
 class AcidInstance final : public instrument::InstrumentInstance {
 public:
+    AcidInstance(AcidParameterBridge* controls, instrument::SlotId slotId)
+        : controls_(controls), slotId_(slotId) {}
     bool prepare(const instrument::PrepareSpec& spec) override
     {
-        return engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
-                               spec.outputChannels);
+      prepared_ = spec.sampleRate >= AcidEngine::minimumSupportedSampleRate &&
+                  spec.sampleRate <= AcidEngine::maximumSupportedSampleRate &&
+                  engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
+                                  spec.outputChannels);
+      return prepared_;
     }
     void reset() noexcept override { engine_.reset(); }
     void suspend() noexcept override { suspended_ = true; engine_.reset(); }
@@ -24,8 +30,13 @@ public:
     }
     void process(const instrument::ProcessBlock& block) noexcept override
     {
-        if (!bypassed_ && !suspended_)
-            engine_.process(block.outputs, block.sampleCount, block.midi);
+      if (prepared_ && !bypassed_ && !suspended_) {
+        if (controls_)
+          controls_->apply(slotId_, engine_);
+        engine_.setTransport(block.bpm, block.ppqPosition,
+                             block.transportPlaying);
+        engine_.process(block.outputs, block.sampleCount, block.midi);
+      }
     }
     bool setParameter(std::string_view id, float value) noexcept override
     {
@@ -50,7 +61,10 @@ public:
         return engine_.tailSamples();
     }
 private:
+    AcidParameterBridge* controls_ {};
+    instrument::SlotId slotId_ {};
     AcidEngine engine_;
+    bool prepared_{};
     bool bypassed_ {};
     bool suspended_ {};
 };
@@ -58,7 +72,7 @@ private:
 struct SoundPreset {
     const char* id;
     const char* name;
-    std::array<float, AcidEngine::parameterCount> values;
+    std::array<float, AcidEngine::legacyParameterCount> values;
 };
 
 constexpr std::array soundPresets {
@@ -88,7 +102,7 @@ AcidProfile profile(std::string_view id) noexcept
 
 class AcidProvider final : public instrument::InstrumentProvider {
 public:
-    AcidProvider()
+    explicit AcidProvider(AcidParameterBridge* controls) : controls_(controls)
     {
         descriptor_.id = std::string(instrumentId);
         descriptor_.providerId = "com.ultimavox.builtin";
@@ -102,8 +116,8 @@ public:
             | instrument::Capability::patternGenerator
             | instrument::Capability::modulation
             | instrument::Capability::standardEditor;
-        descriptor_.budget = { 1, 2048, 4096, 0, 0, 153600,
-                               64, 32, 65536 };
+        descriptor_.budget = {
+            1, 2048, 4096, 0, 0, AcidEngine::maximumTailSamples, 64, 32, 65536};
         constexpr std::array ids { "waveform", "cutoff", "resonance",
             "envelope", "decay", "accent", "slide", "drive", "output" };
         constexpr std::array names { "Waveform", "Cutoff", "Resonance",
@@ -114,6 +128,17 @@ public:
                 instrument::ParameterType::floating,
                 i == 8 ? "Output" : "Acid", {}, true, true,
                 i < instrument::macrosPerSlot ? static_cast<std::int8_t>(i) : -1 });
+        // Extended Acid sound parameters belong to this module, not to the
+        // frozen eight host macro IDs. Stable original mapping is retained.
+        const AcidEngine defaults;
+        for (std::size_t i = AcidEngine::legacyParameterCount;
+             i < AcidEngine::parameterCount; ++i) {
+            const auto id = AcidEngine::parameterIds[i];
+            descriptor_.parameters.push_back({ std::string(id), std::string(id),
+                "", 0.0f, 1.0f, defaults.parameter(id), 0.0001f,
+                instrument::ParameterType::floating, "Acid Extended",
+                {}, false, true, -1 });
+        }
 
         for (const auto& preset : soundPresets) {
             instrument::ContentDescriptor sound { std::string(instrumentId),
@@ -135,9 +160,10 @@ public:
         descriptors() const noexcept override { return { &descriptor_, 1 }; }
 
     std::unique_ptr<instrument::InstrumentInstance> create(
-        std::string_view id, const instrument::CreateContext&) override
+        std::string_view id, const instrument::CreateContext& context) override
     {
-        return id == instrumentId ? std::make_unique<AcidInstance>() : nullptr;
+        return id == instrumentId
+            ? std::make_unique<AcidInstance>(controls_, context.slotId) : nullptr;
     }
 
     std::span<const instrument::ContentDescriptor> contentDescriptors(
@@ -177,14 +203,16 @@ public:
         VoxPatternV1& output) const noexcept override
     {
         if (id != instrumentId) return instrument::ContentStatus::notFound;
-        if (context.structSize != sizeof(VoxGenerationContextV1)
-            || output.structSize != sizeof(VoxPatternV1))
-            return instrument::ContentStatus::invalidArgument;
+        if (context.structSize != sizeof(VoxGenerationContextV1) ||
+            output.structSize != sizeof(VoxPatternV1) || context.rootNote < 0 ||
+            context.rootNote > 127)
+          return instrument::ContentStatus::invalidArgument;
         const auto found = std::find_if(soundPresets.begin(), soundPresets.end(),
             [profileId](const auto& preset) { return profileId == preset.id; });
         if (found == soundPresets.end()) return instrument::ContentStatus::notFound;
-        const auto generated = AcidGenerator::generate(profile(profileId),
-            context.globalSeed, context.slotId, instrumentId);
+        const auto generated = AcidGenerator::generate(
+            profile(profileId), context.globalSeed, context.slotId,
+            instrumentId, static_cast<std::uint8_t>(context.rootNote));
         VoxPatternV1 candidate {};
         candidate.structSize = sizeof(candidate);
         candidate.schemaVersion = VOX_PATTERN_SCHEMA_V1;
@@ -206,13 +234,29 @@ public:
         return instrument::ContentStatus::ok;
     }
 private:
+    AcidParameterBridge* controls_ {};
     instrument::InstrumentDescriptor descriptor_;
     std::vector<instrument::ContentDescriptor> content_;
 };
 } // namespace
 
-std::unique_ptr<instrument::InstrumentProvider> createAcidProvider()
+std::unique_ptr<instrument::InstrumentProvider> createAcidProvider(AcidParameterBridge* controls)
 {
-    return std::make_unique<AcidProvider>();
+    return std::make_unique<AcidProvider>(controls);
+}
+
+bool factorySoundParameterValue(std::string_view presetId,
+                                std::string_view semanticId, float& value) noexcept
+{
+    for (const auto& preset : soundPresets) {
+        if (presetId != preset.id) continue;
+        for (std::size_t i = 0; i < preset.values.size(); ++i)
+            if (AcidEngine::parameterIds[i] == semanticId) {
+                value = preset.values[i];
+                return true;
+            }
+        return false;
+    }
+    return false;
 }
 } // namespace vstengine::acid
