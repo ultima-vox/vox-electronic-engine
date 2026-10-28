@@ -13,7 +13,9 @@ build (CI run id) and module artifact.
    to a fixed absolute path, e.g. `C:\VoxDev\vox_abi_v2_test_module.dll`.
 3. Set the user environment variable
    `VOX_DEV_NATIVE_MODULES=C:\VoxDev\vox_abi_v2_test_module.dll`
-   (or `VOX_DEV_INSTRUMENT_ROOT=<absolute package root>` once packages land)
+   or copy the artifact's `packages/` folder to e.g. `C:\VoxDev\packages` and
+   set `VOX_DEV_INSTRUMENT_ROOT=C:\VoxDev\packages` (versioned package with
+   manifest and SHA-256)
    and start the DAW from a fresh login/shell so it inherits it.
    This is a development opt-in; production loading waits for the reviewed
    signing and path policy.

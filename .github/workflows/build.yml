@@ -69,7 +69,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Vox-Test-Instrument-Module-Windows
-          path: build/Release/vox_abi_v2_test_module.dll
+          path: |
+            build/Release/vox_abi_v2_test_module.dll
+            build/packages/**
           if-no-files-found: error
 
       - name: Package Vox Electronic Engine
