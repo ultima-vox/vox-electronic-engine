@@ -529,8 +529,10 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
 }
 
 VstEngineAudioProcessorEditor::MacroPage::MacroPage(
-    VstEngineAudioProcessor& p, juce::String heading, std::size_t visibleCount)
-    : processor(p), count(juce::jlimit<std::size_t>(1, knobs.size(), visibleCount))
+    VstEngineAudioProcessor& p, juce::String heading, std::size_t visibleCount,
+    bool instrumentControls)
+    : processor(p), count(juce::jlimit<std::size_t>(1, knobs.size(), visibleCount)),
+      hasInstrumentControls(instrumentControls)
 {
     title.setText(heading, juce::dontSendNotification);
     description.setText(heading == "SOUND"
@@ -549,6 +551,17 @@ VstEngineAudioProcessorEditor::MacroPage::MacroPage(
         addChildComponent(knobs[i]); addChildComponent(labels[i]);
         knobs[i].setVisible(i < count); labels[i].setVisible(i < count);
     }
+    if (hasInstrumentControls) {
+        directView.setName("rack.direct.controls");
+        directView.setViewedComponent(&directContent, false);
+        directView.setScrollBarsShown(true, false);
+        addAndMakeVisible(directView);
+        directEmpty.setName("rack.direct.empty");
+        vstengine::ui::styleLabel(directEmpty, 12.0f, juce::Justification::centredLeft,
+                                  vstengine::ui::colours::mutedText);
+        directEmpty.setText("No instrument controls", juce::dontSendNotification);
+        addAndMakeVisible(directEmpty);
+    }
 }
 
 void VstEngineAudioProcessorEditor::MacroPage::paint(juce::Graphics& g)
@@ -556,6 +569,11 @@ void VstEngineAudioProcessorEditor::MacroPage::paint(juce::Graphics& g)
     panel(g, getLocalBounds());
     if (!groupBounds.isEmpty())
         vox::ui::paint::panel(g, groupBounds.toFloat(), true);
+    if (hasInstrumentControls && directBounds.getHeight() >= sectionHeader) {
+        vox::ui::paint::panel(g, directBounds.toFloat(), true);
+        vox::ui::paint::sectionTitle(g, directBounds.withHeight(sectionHeader).reduced(12, 0),
+                                     "INSTRUMENT CONTROLS", false, false);
+    }
 }
 
 void VstEngineAudioProcessorEditor::MacroPage::resized()
@@ -563,10 +581,14 @@ void VstEngineAudioProcessorEditor::MacroPage::resized()
     auto area = getLocalBounds().reduced(18);
     title.setBounds(area.removeFromTop(26)); description.setBounds(area.removeFromTop(22));
     area.removeFromTop(14);
-    const int columns = count <= 6 ? static_cast<int>(count) : 4;
+    // With instrument controls present the macro knobs take a single row so
+    // the controls section keeps at least one visible row at 1040 x 680.
+    const bool compactMacros = hasInstrumentControls && !directControls.empty();
+    const int columns = compactMacros ? static_cast<int>(count)
+                        : count <= 6 ? static_cast<int>(count) : 4;
     const int rows = static_cast<int>((count + columns - 1) / columns);
     // Knobs keep an instrument-panel scale instead of filling the page.
-    const int cellWidth = juce::jmin(150, area.getWidth() / columns);
+    const int cellWidth = juce::jmin(150, (area.getWidth() - (compactMacros ? 24 : 0)) / columns);
     const int knobSize = juce::jlimit(56, 104, cellWidth - 34);
     const int cellHeight = 26 + knobSize + 28;
     groupBounds = area.withSizeKeepingCentre(cellWidth * columns + 24, cellHeight * rows + 24)
@@ -578,6 +600,121 @@ void VstEngineAudioProcessorEditor::MacroPage::resized()
         labels[i].setBounds(cell.removeFromTop(26));
         knobs[i].setBounds(cell.withSizeKeepingCentre(juce::jmax(knobSize, 76), cell.getHeight()));
     }
+    if (!hasInstrumentControls)
+        return;
+    area.removeFromTop(juce::jmin(area.getHeight(), groupBounds.getHeight() + 10));
+    directBounds = area;
+    layoutInstrumentControls();
+}
+
+void VstEngineAudioProcessorEditor::MacroPage::layoutInstrumentControls()
+{
+    constexpr int cellWidth = 96, cellHeight = 110;
+    if (directBounds.getHeight() < sectionHeader + 24) {
+        directView.setBounds({});
+        directEmpty.setBounds({});
+        return;
+    }
+    auto body = directBounds.withTrimmedTop(sectionHeader).reduced(12, 6);
+    directEmpty.setBounds(body.withHeight(juce::jmin(24, body.getHeight())));
+    directEmpty.setVisible(directControls.empty());
+    directView.setVisible(!directControls.empty());
+    directView.setBounds(body);
+    const int width = juce::jmax(cellWidth, body.getWidth() - directView.getScrollBarThickness());
+    const int columns = juce::jmax(1, width / cellWidth);
+    const int cell = width / columns;
+    const int rows = static_cast<int>((directControls.size() + static_cast<std::size_t>(columns) - 1)
+                                      / static_cast<std::size_t>(columns));
+    directContent.setSize(width, rows * cellHeight);
+    for (std::size_t i = 0; i < directControls.size(); ++i) {
+        auto bounds = juce::Rectangle<int>(static_cast<int>(i % static_cast<std::size_t>(columns)) * cell,
+                                           static_cast<int>(i / static_cast<std::size_t>(columns)) * cellHeight,
+                                           cell, cellHeight).reduced(4, 2);
+        directLabels[i]->setBounds(bounds.removeFromTop(24));
+        auto *control = directControls[i].get();
+        if (dynamic_cast<juce::Slider *>(control) != nullptr)
+            control->setBounds(bounds.withSizeKeepingCentre(juce::jmin(bounds.getWidth(), 80),
+                                                            bounds.getHeight()));
+        else if (dynamic_cast<juce::ToggleButton *>(control) != nullptr)
+            control->setBounds(bounds.withSizeKeepingCentre(juce::jmin(bounds.getWidth(), 40), 28));
+        else
+            control->setBounds(bounds.withSizeKeepingCentre(bounds.getWidth(), 26));
+    }
+}
+
+void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_t slot)
+{
+    // Attachments capture the pool parameter's range at construction and the
+    // range follows the bound instrument, so every bind rebuilds the section.
+    directSliderAttachments.clear();
+    directButtonAttachments.clear();
+    directComboAttachments.clear();
+    directControls.clear();
+    directLabels.clear();
+    const auto *descriptor = processor.instrumentRack().descriptor(slot);
+    if (descriptor != nullptr && descriptor->directParameters) {
+        auto &state = processor.parameters();
+        for (const auto &parameter : descriptor->parameters) {
+            if (parameter.poolIndex < 0 ||
+                parameter.poolIndex >= static_cast<std::int16_t>(
+                                           vstengine::instrument::poolParametersPerSlot))
+                continue;
+            const auto id = vstengine::instrument::hostparams::poolId(
+                slot, static_cast<std::size_t>(parameter.poolIndex));
+            if (state.getParameter(id) == nullptr)
+                continue;
+            auto text = juce::String(parameter.name);
+            if (!parameter.unit.empty())
+                text << " (" << juce::String(parameter.unit) << ")";
+            auto label = std::make_unique<juce::Label>();
+            caption(*label, text.toUpperCase());
+            label->setTooltip(text);
+            std::unique_ptr<juce::Component> control;
+            switch (parameter.type) {
+            case vstengine::instrument::ParameterType::boolean: {
+                auto button = std::make_unique<juce::ToggleButton>();
+                button->setTooltip(text);
+                directButtonAttachments.push_back(
+                    std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                        state, id, *button));
+                control = std::move(button);
+                break;
+            }
+            case vstengine::instrument::ParameterType::choice: {
+                auto combo = std::make_unique<juce::ComboBox>();
+                int itemId = 1;
+                for (const auto &choice : parameter.choices)
+                    combo->addItem(juce::String(choice), itemId++);
+                combo->setTooltip(text);
+                directComboAttachments.push_back(
+                    std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+                        state, id, *combo));
+                control = std::move(combo);
+                break;
+            }
+            case vstengine::instrument::ParameterType::floating:
+            case vstengine::instrument::ParameterType::integer:
+            default: {
+                auto slider = std::make_unique<juce::Slider>();
+                knob(*slider);
+                slider->setTooltip(text);
+                directSliderAttachments.push_back(
+                    std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+                        state, id, *slider));
+                control = std::move(slider);
+                break;
+            }
+            }
+            control->setName(id);
+            directContent.addAndMakeVisible(*label);
+            directContent.addAndMakeVisible(*control);
+            directLabels.push_back(std::move(label));
+            directControls.push_back(std::move(control));
+        }
+    }
+    directView.setViewPosition(0, 0);
+    resized();
+    repaint();
 }
 
 void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
@@ -597,6 +734,8 @@ void VstEngineAudioProcessorEditor::MacroPage::bind(std::size_t slot)
         attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
             processor.parameters(), vstengine::instrument::hostparams::macroId(slot, macro), knobs[macro]));
     }
+    if (hasInstrumentControls)
+        bindInstrumentControls(slot);
 }
 
 VstEngineAudioProcessorEditor::PatternPage::PatternPage(
@@ -875,7 +1014,7 @@ VstEngineAudioProcessorEditor::VstEngineAudioProcessorEditor(
               [&p] { p.requestPanic(); }, [this] { showRackSettings(); },
               [this](int index) { loadGlobalPreset(index); }}),
       rackRail(p), instrumentHeader(p), soundPage(p, "SOUND", 6),
-      patternPage(p), routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8),
+      patternPage(p), routingPage(p), zonesPage(p), macrosPage(p, "MACROS", 8, true),
       advancedPage(p), pages{&soundPage, &patternPage, &routingPage,
                              &zonesPage, &macrosPage,  &advancedPage},
       keyboard(p.keyboardState(),

@@ -130,9 +130,14 @@ private:
 
     class MacroPage final : public juce::Component {
     public:
-        MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount);
+        // `instrumentControls` adds the generic per-instrument section: one
+        // real control per direct parameter of the bound slot.
+        MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount,
+                  bool instrumentControls = false);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
     private:
+        void bindInstrumentControls(std::size_t);
+        void layoutInstrumentControls();
         VstEngineAudioProcessor& processor;
         juce::Label title, description;
         std::array<juce::Slider, vstengine::instrument::macrosPerSlot> knobs;
@@ -140,6 +145,19 @@ private:
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
         juce::Rectangle<int> groupBounds;
         std::size_t count;
+        bool hasInstrumentControls;
+        // Instrument controls. Declaration order matters: attachments are
+        // destroyed before their controls, controls before their content
+        // holder, and the viewport before the content it views.
+        juce::Rectangle<int> directBounds;
+        juce::Component directContent;
+        juce::Viewport directView;
+        juce::Label directEmpty;
+        std::vector<std::unique_ptr<juce::Label>> directLabels;
+        std::vector<std::unique_ptr<juce::Component>> directControls;
+        std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> directSliderAttachments;
+        std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> directButtonAttachments;
+        std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> directComboAttachments;
     };
 
     class PatternPage final : public juce::Component {
