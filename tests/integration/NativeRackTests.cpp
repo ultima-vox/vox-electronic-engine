@@ -259,27 +259,33 @@ void midiOverflowFailsClosed() {
   check(after > before, "MIDI overflow is counted and visible");
 }
 
-std::uint32_t liveSlotMask() {
+// Test-only exports of the already loaded test module (same absolute path as
+// the host loader, so this never loads a second copy).
+void *testHook(const char *name) {
 #if defined(_WIN32)
-  // Same absolute path as the host loader: returns the already loaded module.
   auto *library = ::LoadLibraryExW(
       std::filesystem::weakly_canonical(std::filesystem::path(modulePath)).wstring().c_str(),
       nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-  auto fn = reinterpret_cast<std::uint32_t(VOX_CALL *)(void)>(
-      ::GetProcAddress(library, "voxTestLiveSlotMask"));
+  void *fn = reinterpret_cast<void *>(::GetProcAddress(library, name));
+  ::FreeLibrary(library); // the host's own reference keeps it loaded
 #else
   void *library = ::dlopen(modulePath.c_str(), RTLD_NOW | RTLD_NOLOAD);
-  auto fn = reinterpret_cast<std::uint32_t (*)(void)>(::dlsym(library, "voxTestLiveSlotMask"));
-#endif
-  check(fn != nullptr, "test module exports its slot hook");
-  const auto mask = fn();
-#if defined(_WIN32)
-  ::FreeLibrary(library);
-#else
+  void *fn = ::dlsym(library, name);
   ::dlclose(library);
 #endif
-  return mask;
+  check(fn != nullptr, std::string("test module exports ") + name);
+  return fn;
 }
+
+std::uint32_t liveSlotMask() {
+  return reinterpret_cast<std::uint32_t(VOX_CALL *)(void)>(testHook("voxTestLiveSlotMask"))();
+}
+
+void failNext(std::uint32_t slotIndex, std::uint32_t which) {
+  reinterpret_cast<void(VOX_CALL *)(std::uint32_t, std::uint32_t)>(
+      testHook("voxTestFailNext"))(slotIndex, which);
+}
+constexpr std::uint32_t failProcess = 1, failReset = 2;
 
 void slotIndexForwarded() {
   juce::MemoryBlock state;
@@ -295,6 +301,89 @@ void slotIndexForwarded() {
   auto restored = makeProcessor(true);
   restored->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
   check(liveSlotMask() == ((1u << 3) | (1u << 7)), "slot ordinals survive save/reload");
+}
+
+// Slot 4 and 5 hold notes; slot 4's module fails one process call in block 1
+// and would play again from block 2. Returns blocks 1..7 of the mix.
+std::vector<float> faultRun(bool playFaultySlot, bool injectFault, std::uint64_t &faults) {
+  auto p = makeProcessor(true);
+  const auto x = loadTone(*p, 4), y = loadTone(*p, 5);
+  juce::AudioBuffer<float> audio(2, blockSize);
+  juce::MidiBuffer midi;
+  if (playFaultySlot)
+    midi.addEvent(juce::MidiMessage::noteOn(channelOf(*p, x), 60, 0.9f), 0);
+  midi.addEvent(juce::MidiMessage::noteOn(channelOf(*p, y), 64, 0.9f), 0);
+  p->processBlock(audio, midi);
+  midi.clear();
+  if (injectFault)
+    failNext(4, failProcess);
+  std::vector<float> out;
+  for (int b = 1; b < 8; ++b) {
+    audio.clear();
+    p->processBlock(audio, midi);
+    out.insert(out.end(), audio.getReadPointer(0), audio.getReadPointer(0) + blockSize);
+  }
+  faults = instrument::native::totalModuleFaults();
+  return out;
+}
+
+void processFaultLatches() {
+  std::uint64_t before = 0, after = 0;
+  const auto reference = faultRun(false, false, before);
+  const auto faulted = faultRun(true, true, after);
+  double e = 0;
+  for (const float v : reference)
+    e += static_cast<double>(v) * v;
+  check(e > 1.0, "independent slot keeps sounding");
+  check(faulted == reference,
+        "a faulted module stays silent after the fault block; other slots unaffected");
+  check(after > before, "module fault is counted and visible");
+
+  // Controller-side recovery: reprepare clears the latch.
+  auto p = makeProcessor(true);
+  const auto slot = loadTone(*p, 4);
+  const int channel = channelOf(*p, slot);
+  failNext(4, failProcess);
+  check(play(*p, channel, 4, 1, -1).energy() == 0.0, "faulted slot is silent until reprepare");
+  p->releaseResources();
+  p->prepareToPlay(48000.0, blockSize);
+  check(energy(play(*p, channel, 4, 1, -1), 1, 4) > 1.0, "reprepare recovers the slot");
+}
+
+void resetFaultLatches() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  check(module != nullptr, "module acquired: " + diagnostic);
+  auto provider = instrument::native::makeProvider(module);
+  instrument::CreateContext context;
+  context.slotIndex = 11;
+  auto instance = provider->create(toneId, context);
+  check(instance != nullptr, "adapter instance created");
+  check(instance->prepare({48000.0, blockSize, 2}), "adapter prepared");
+  std::vector<float> left(blockSize), right(blockSize);
+  float *channels[] = {left.data(), right.data()};
+  auto render = [&] {
+    const VoxMidiEventV1 on{0, 3, {0x90, 60, 100}};
+    instrument::ProcessBlock block;
+    block.outputs = channels;
+    block.sampleCount = blockSize;
+    block.midi = {&on, 1};
+    block.sampleRate = 48000.0;
+    instance->process(block);
+    double sum = 0;
+    for (const float v : left)
+      sum += static_cast<double>(v) * v;
+    return sum;
+  };
+  check(render() > 1.0, "adapter instance plays");
+  const auto before = instrument::native::totalModuleFaults();
+  failNext(11, failReset);
+  instance->reset();
+  check(instrument::native::totalModuleFaults() > before, "reset fault is counted");
+  check(render() == 0.0, "failed reset latches the instance silent");
+  check(instance->prepare({48000.0, blockSize, 2}), "reprepare succeeds");
+  check(render() > 1.0, "reprepare recovers after a reset fault");
 }
 
 void noAllocationInProcess() {
@@ -343,6 +432,8 @@ int main(int argc, char **argv) {
   twoInstancesAndSlots();
   midiOverflowFailsClosed();
   slotIndexForwarded();
+  processFaultLatches();
+  resetFaultLatches();
   noAllocationInProcess();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;

@@ -68,6 +68,11 @@ makeProvider(std::shared_ptr<NativeModule> module);
 // instance at the block end). Readable from any thread.
 [[nodiscard]] std::uint64_t totalMidiOverflows() noexcept;
 
+// Process-wide count of failed native process/reset calls. A failed call
+// latches that instance silent until the controller reprepares it; other
+// instances are unaffected. Readable from any thread.
+[[nodiscard]] std::uint64_t totalModuleFaults() noexcept;
+
 // Development/test loading: absolute module paths separated by ';'. Each
 // entry is loaded independently; failures are reported, never thrown.
 struct LoadReport {

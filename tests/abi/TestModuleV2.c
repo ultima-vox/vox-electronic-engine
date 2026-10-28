@@ -49,6 +49,7 @@ struct VoxInstanceT {
   int note; /* -1 = no key sounding (one key, retrigger semantics) */
   uint32_t slotIndex; /* create-time Rack slot ordinal, for host tests */
   int prepared;
+  int failProcess, failReset; /* one-shot injected faults, for host tests */
 };
 
 static int liveInstances;
@@ -62,6 +63,19 @@ VOX_EXPORT uint32_t VOX_CALL voxTestLiveSlotMask(void) {
     if (live[i] != NULL && live[i]->slotIndex < 32)
       mask |= 1u << live[i]->slotIndex;
   return mask;
+}
+
+/* Test hook (not part of the ABI): the next process (bit 0) and/or reset
+ * (bit 1) of every live instance created for Rack slot `slotIndex` returns
+ * VOX_E_INTERNAL once; afterwards the instance would play normally again. */
+#define TEST_FAIL_PROCESS 1u
+#define TEST_FAIL_RESET 2u
+VOX_EXPORT void VOX_CALL voxTestFailNext(uint32_t slotIndex, uint32_t which) {
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex) {
+      live[i]->failProcess = (which & TEST_FAIL_PROCESS) != 0;
+      live[i]->failReset = (which & TEST_FAIL_RESET) != 0;
+    }
 }
 
 static int validValue(uint32_t index, float value) {
@@ -154,6 +168,10 @@ static VoxResult VOX_CALL setAllParameters(VoxInstance instance, const float *pl
 static VoxResult VOX_CALL reset(VoxInstance instance) {
   if (instance == NULL)
     return VOX_E_INVALID_ARG;
+  if (instance->failReset) {
+    instance->failReset = 0;
+    return VOX_E_INTERNAL;
+  }
   instance->phase = 0.0;
   instance->note = -1;
   return VOX_OK;
@@ -209,6 +227,10 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)
     if (c->outputs[ch] == NULL)
       return VOX_E_INVALID_ARG;
+  if (s->failProcess) {
+    s->failProcess = 0;
+    return VOX_E_INTERNAL;
+  }
 
   if (c->releaseFlags & VOX_PANIC_AT_START) {
     s->note = -1;

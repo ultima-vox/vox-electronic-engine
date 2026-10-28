@@ -120,6 +120,10 @@ namespace {
 // development package root (VOX_DEV_INSTRUMENT_ROOT) resolved by version. There
 // is no default/production scanning; production discovery waits for the
 // reviewed package and signing policy.
+// PRODUCTION GATE (open): this loader is active in every build when either
+// variable is set. Before any production distribution it must be compiled out
+// of normal builds or require an unmistakable explicit development opt-in;
+// manifest SHA-256 detects corruption only, it does not authenticate code.
 vstengine::instrument::native::LoadReport configuredNativeModules() {
   namespace native = vstengine::instrument::native;
   const auto paths =

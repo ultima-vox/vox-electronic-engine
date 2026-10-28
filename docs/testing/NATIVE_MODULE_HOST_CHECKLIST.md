@@ -19,6 +19,8 @@ build (CI run id) and module artifact.
    and start the DAW from a fresh login/shell so it inherits it.
    This is a development opt-in; production loading waits for the reviewed
    signing and path policy.
+   **Production gate (open):** the environment-variable loader is not yet
+   compiled out of release builds; it must be before production distribution.
 
 ## M0 — Rack + test DLL
 

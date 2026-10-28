@@ -129,6 +129,11 @@ std::atomic<std::uint64_t> &midiOverflows() noexcept {
   return count;
 }
 
+std::atomic<std::uint64_t> &moduleFaults() noexcept {
+  static std::atomic<std::uint64_t> count{};
+  return count;
+}
+
 // Process-wide cache. Intentionally never destroyed: modules are not unloaded
 // while the process lives, and unloading during static destruction (DllMain on
 // Windows) is unsafe.
@@ -164,6 +169,9 @@ public:
                               static_cast<std::uint32_t>(values_.size()),
                               midiCapacity};
     prepared_ = false;
+    // Controller-side recovery point: a successful reprepare clears a latched
+    // fault (ABI: the slot stays silent until reprepare).
+    faulted_.store(false, std::memory_order_relaxed);
     if (table_->prepare(handle_, &v2) != VOX_OK)
       return false;
     midi_.assign(midiCapacity, VoxMidiEventV2{});
@@ -182,7 +190,8 @@ public:
   }
 
   void reset() noexcept override {
-    (void)table_->reset(handle_);
+    if (table_->reset(handle_) != VOX_OK)
+      fault();
     discontinuity_ = true;
   }
   void suspend() noexcept override { suspended_ = true; }
@@ -218,7 +227,8 @@ public:
 
   void process(const ProcessBlock &block) noexcept override {
     hint_ = 0;
-    if (!prepared_ || suspended_ || block.sampleCount > maximumBlock_ ||
+    if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
+        block.sampleCount > maximumBlock_ ||
         block.outputs.size() != outputChannels_) {
       silence(block);
       return;
@@ -262,7 +272,7 @@ public:
                                       samplePosition_,
                                       &transport_};
     if (table_->process(handle_, &context) != VOX_OK) {
-      faults_.fetch_add(1, std::memory_order_relaxed);
+      fault();
       silence(block);
     } else if (bypassed_) {
       silence(block);
@@ -297,6 +307,13 @@ public:
   std::uint32_t tailSamples() const noexcept override { return descriptor_.budget.maxTailSamples; }
 
 private:
+  // Latched until the next successful prepare; never calls the module again
+  // in between. Lock- and allocation-free.
+  void fault() noexcept {
+    if (!faulted_.exchange(true, std::memory_order_relaxed))
+      moduleFaults().fetch_add(1, std::memory_order_relaxed);
+  }
+
   static void silence(const ProcessBlock &block) noexcept {
     for (auto *channel : block.outputs)
       std::fill_n(channel, block.sampleCount, 0.0f);
@@ -339,7 +356,7 @@ private:
   double sampleRate_{};
   double predictedPpq_{};
   std::uint64_t samplePosition_{};
-  std::atomic<std::uint64_t> faults_{};
+  std::atomic<bool> faulted_{};
   std::size_t hint_{};
   std::uint32_t maximumBlock_{};
   std::uint32_t outputChannels_{};
@@ -376,6 +393,10 @@ private:
 
 std::uint64_t totalMidiOverflows() noexcept {
   return midiOverflows().load(std::memory_order_relaxed);
+}
+
+std::uint64_t totalModuleFaults() noexcept {
+  return moduleFaults().load(std::memory_order_relaxed);
 }
 
 bool validModuleTable(const VoxModuleV2 *m) noexcept {
