@@ -81,3 +81,12 @@ clearing a pedal before a note, and one NoteOff after repeated NoteOn. Existing
 warmed C++ new/new[] allocation probe passed. Full CMake/Windows, real DLL ABI,
 loader integration, full accepted Bass panel and DAW tests remain outstanding.
 This does not fix or diagnose the separate built-in Bass rerender failure.
+
+## MIDI timing and reset check — 28 October 2026
+
+Extended the isolated FullOnBass test to assert CC120 and CC123 silence an
+active voice from their sample offset, and `reset` silences the voice while
+preserving the saved parameter payload. The local project-source ASan/UBSan
+run passed 4680 focused checks and 215 compliance checks; JUCE objects were
+reused without sanitizer instrumentation and leak detection was disabled.
+The ABI V2 DLL/host path and overflow handling are not exercised by this test.

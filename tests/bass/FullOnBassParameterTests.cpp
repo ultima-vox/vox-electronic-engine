@@ -260,6 +260,27 @@ void sustainLifecycle()
         panic.next(allOff);
         require(energy(panic.next()) == 0, "all-off ends sustained voice");
     }
+    for (auto controller : {120, 123}) {
+        Render timed;
+        timed.next(on);
+        const std::array<VoxMidiEventV1, 1> allOffAt64 {{{64, 3,
+            {0xb0, static_cast<std::uint8_t>(controller), 0}}}};
+        const auto audio = timed.next(allOffAt64);
+        require(std::any_of(audio.begin(), audio.begin() + 64,
+                            [](float x) { return std::abs(x) > 1e-6f; }),
+                "audio continues before all-off offset");
+        require(std::all_of(audio.begin() + 64, audio.end(),
+                            [](float x) { return x == 0.0f; }),
+                "all-off silences from its sample offset");
+    }
+    Render resetState;
+    require(resetState.bass.setParameter("filter.cutoff", 1200.0f), "edit cutoff before reset");
+    const auto beforeReset = state(resetState.bass);
+    resetState.next(on);
+    resetState.bass.reset();
+    require(state(resetState.bass) == beforeReset, "reset preserves parameter state");
+    require(energy(resetState.next()) == 0, "reset silences active voice");
+
     Render retrigger;
     retrigger.next(on);
     retrigger.next(on);
