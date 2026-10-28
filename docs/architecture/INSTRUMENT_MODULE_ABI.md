@@ -246,23 +246,33 @@ delivered".
   queue room for one NoteOff per sounding note plus one all-off record.
 - **NoteOff.** For a sounding note it always fits (it uses reserved room) and
   clears the bit. For a note not sounding it is redundant, dropped and counted.
-- **All-off (CC123, CC120, Rack panic).** Queued at its offset when room
-  exists, clearing the sounding set. When it does not fit (repeated all-offs
-  in one block), the host sets a bounded per-slot flag in
-  `VoxProcessContextV2.releaseFlags` (`VOX_RELEASE_ALL_NOTES` /
-  `VOX_RELEASE_ALL_SOUND`), clears the sounding set and drops that slot's
-  remaining NoteOns for the block. The module applies the flag **after** the
-  queued events of the block. Rack panic always uses the flag path for all 16
-  slots and never consumes queue room. Both flags and the all-off events also
-  end sustained voices (Rack semantics, stricter than MIDI CC123) and clear
-  `sustainDown`.
+- **Rack Panic (UI/host action).** Panic is asynchronous to audio: the
+  message thread sets a preallocated atomic. The next callback consumes it and
+  passes `VOX_PANIC_AT_START` in `VoxProcessContextV2.releaseFlags` to every
+  occupied slot, **before any queued event of that block** (sample 0). The
+  module silences all voices and tails immediately (no release phase), then
+  processes the block's queued events normally; NoteOns later in the same block
+  sound. Panic never uses the queue and does not depend on its fill level.
+  Latency from the button press is at most one callback.
+- **MIDI all-off events (CC123 All Notes Off, CC120 All Sound Off).** Queued at
+  their sample offset when room exists, clearing the sounding set. CC123
+  releases notes (release phase allowed); CC120 silences immediately.
+- **Saturation fallback (only when an all-off does not fit).** The host sets
+  `VOX_RELEASE_ALL_NOTES_AT_END` / `VOX_RELEASE_ALL_SOUND_AT_END`, clears the
+  sounding set and drops that slot's remaining NoteOns for the block. The
+  module applies these flags **after** the block's queued events. This is the
+  only block-end path.
+- Panic, the all-off events and both fallback flags also end sustained voices
+  (Rack semantics, stricter than MIDI CC123) and clear `sustainDown`.
 - **Guarantee.** After any block, every note a slot owns is either still
   intentionally held (its NoteOff has not arrived) or released; a release
   request is never lost. Only NoteOns and redundant events are dropped, all
   counted. Other channel messages (CC, pitch bend) use free room after the
   reserve and are coalesced to the last value per controller on overflow.
-- **Exactness.** Release events are sample-accurate when queued; the flag path
-  is block-end accurate and used only under saturation.
+- **Timing, summarized.** Queued NoteOff/CC123/CC120: exact sample offset.
+  Rack Panic: start of the next callback (sample 0), whatever the queue holds.
+  Saturation fallback: end of the current block, only when an all-off did not
+  fit.
 
 ### Required tests (slice 3)
 
@@ -274,6 +284,11 @@ delivered".
   NoteOn → single NoteOff ends the key; NoteOff under CC64 then CC64 release;
   voice stealing across keys with every key ending; panic and all-off under
   saturation with sustain down.
+- Panic timing: empty queue with an active voice, panic consumed at block
+  start and requested mid-callback (takes effect at the next block start), at
+  64- and 2048-sample blocks; asserts output silent from sample 0 of the
+  panic block, NoteOns later in that block sound, and the saturated fallback
+  still ends every key at block end.
 - MIDI flood above capacity on **all 16 channels**: NoteOn/NoteOff floods,
   more than C × CC120/CC123, panic mid-flood; asserts zero sounding notes and
   zero active voices in the test module after each release, no stuck notes on
