@@ -82,10 +82,13 @@ public:
   std::uint32_t latencySamples() const noexcept override { return 0; }
   std::uint32_t tailSamples() const noexcept override { return 0; }
 };
-// Later builds of the same InstrumentId: parameters listed in reverse order,
-// optionally with a new parameter inserted first (with or without the
-// instrumentVersion bump that a changed parameter set requires).
-enum class Revision { v1, reordered, extended, extendedUnversioned };
+// Later builds of the same InstrumentId. All list parameters in reverse order;
+// `extended*` insert "drive" first at the sparse pool index 5. The others are
+// incompatible version-2 changes: a moved pool index, a renamed (removed) ID
+// and a narrowed range that invalidates a saved value.
+enum class Revision {
+  v1, reordered, extended, extendedUnversioned, moved, renamed, narrowed
+};
 class Provider final : public instrument::InstrumentProvider {
   instrument::InstrumentDescriptor descriptor_;
   std::array<instrument::ContentDescriptor, 1> contents_;
@@ -133,6 +136,9 @@ public:
                      1}};
     if (revision != Revision::v1)
       std::reverse(d.parameters.begin(), d.parameters.end());
+    if (revision != Revision::v1 && revision != Revision::reordered &&
+        revision != Revision::extendedUnversioned)
+      d.instrumentVersion = 2;
     if (revision == Revision::extended ||
         revision == Revision::extendedUnversioned) {
       auto drive = d.parameters.front();
@@ -141,13 +147,18 @@ public:
       drive.unit = "";
       drive.minimum = 0;
       drive.maximum = 1;
-      drive.defaultValue = 0;
-      drive.step = 0;
-      drive.poolIndex = 2;
+      drive.defaultValue = 0.375f;
+      drive.step = 0.125f;
+      drive.poolIndex = 5;
       d.parameters.insert(d.parameters.begin(), drive);
-      if (revision == Revision::extended)
-        d.instrumentVersion = 2;
     }
+    auto &gainParameter = d.parameters.back(); // reversed: gain is last
+    if (revision == Revision::moved)
+      gainParameter.poolIndex = 3;
+    if (revision == Revision::narrowed)
+      gainParameter.maximum = 0.5f;
+    if (revision == Revision::renamed)
+      d.parameters.front().id = "brightness"; // was "tone"
     if (future_) {
       d.stateVersion = 2;
       d.parameters[0].maximum = 2.0f;
@@ -579,27 +590,44 @@ void futureParameterDomainRemainsOpaque(
 }
 
 // v1 -> v2 of the SAME InstrumentId across separately constructed processors.
+std::unique_ptr<VstEngineAudioProcessor> processorFor(Revision revision) {
+  auto p = std::make_unique<VstEngineAudioProcessor>(
+      std::make_unique<Provider>(false, revision));
+  p->prepareToPlay(48000, 64);
+  return p;
+}
+void open(VstEngineAudioProcessor &p, const juce::MemoryBlock &project) {
+  p.setStateInformation(project.getData(), static_cast<int>(project.getSize()));
+}
+bool resolved(const VstEngineAudioProcessor &p) {
+  return p.instrumentRack().runtimeState()[0].resolution ==
+         instrument::ResolutionStatus::resolved;
+}
+bool hasNamed(const VstEngineAudioProcessor &p, std::string_view name) {
+  for (const auto &v : p.instrumentRack().state()[0].directParameters)
+    if (v.id == name)
+      return true;
+  return false;
+}
 void sameInstrumentUpgrade() {
-  auto v1 = std::make_unique<VstEngineAudioProcessor>(std::make_unique<Provider>());
-  v1->prepareToPlay(48000, 64);
+  auto v1 = processorFor(Revision::v1);
   juce::String loaded;
   check(v1->loadSlotInstrument(0, fixtureId, loaded), "v1 module loads");
   set(*v1, id(0, "gain"), 0.6f);
   set(*v1, id(0, "tone"), 5000);
   const auto v1Sound = render(*v1);
   const auto v1Project = capture(*v1);
+  check(namedChild(decodeProject(v1Project), 0, "gain").getProperty("pool") ==
+            juce::var(0),
+        "saved named values record their pool endpoint");
 
   // Reordered descriptor, same version: exact restore on the same endpoints.
-  auto reordered = std::make_unique<VstEngineAudioProcessor>(
-      std::make_unique<Provider>(false, Revision::reordered));
-  reordered->prepareToPlay(48000, 64);
-  reordered->setStateInformation(v1Project.getData(),
-                                 static_cast<int>(v1Project.getSize()));
+  auto reordered = processorFor(Revision::reordered);
+  open(*reordered, v1Project);
   const auto *gain = reordered->parameters().getParameter(id(0, "gain"));
   const auto *tone = reordered->parameters().getParameter(id(0, "tone"));
-  check(reordered->instrumentRack().runtimeState()[0].resolution ==
-                instrument::ResolutionStatus::resolved &&
-            id(0, "gain") == "slot01.p001" && id(0, "tone") == "slot01.p002",
+  check(resolved(*reordered) && id(0, "gain") == "slot01.p001" &&
+            id(0, "tone") == "slot01.p002",
         "v1 project resolves under the reordered v2 on the original endpoint IDs");
   check(gain->getName(64) == "Slot 1 Gain" && tone->getName(64) == "Slot 1 Tone" &&
             tone->getLabel() == "Hz" && !gain->isDiscrete() && !tone->isDiscrete(),
@@ -612,39 +640,82 @@ void sameInstrumentUpgrade() {
   check(render(*reordered) == v1Sound,
         "reordered v2 restores identical audio controls");
 
-  // A changed parameter set bumps instrumentVersion. There is no automatic
-  // migration: the v1 slot stays unresolved with its values preserved.
-  auto extended = std::make_unique<VstEngineAudioProcessor>(
-      std::make_unique<Provider>(false, Revision::extended));
-  extended->prepareToPlay(48000, 64);
-  extended->setStateInformation(v1Project.getData(),
-                                static_cast<int>(v1Project.getSize()));
-  check(extended->instrumentRack().runtimeState()[0].resolution !=
-                instrument::ResolutionStatus::resolved &&
-            extended->instrumentRack().state()[0].instrumentVersion == 1,
-        "extended v2 does not pass off the v1 snapshot as a silent upgrade");
-  check(std::abs(saved(*extended, 0, "gain") - 0.6f) < 1e-6f &&
-            saved(*extended, 0, "tone") == 5000 &&
+  // Append-only addition (owner decision): v1 values keep their endpoints,
+  // the new parameter takes its canonical default at its sparse index.
+  auto extended = processorFor(Revision::extended);
+  open(*extended, v1Project);
+  const auto drive = instrument::hostparams::poolId(0, 5);
+  check(resolved(*extended) &&
+            extended->instrumentRack().state()[0].instrumentVersion == 2,
+        "append-only v2 migrates the v1 slot with version bookkeeping");
+  check(std::abs(raw(*extended, id(0, "gain")) - 0.6f) < 1e-6f &&
+            raw(*extended, id(0, "tone")) == 5000 &&
             extended->parameters().getParameter(id(0, "gain"))->getName(64) ==
-                "Slot 1 Param 01" &&
-            render(*extended) == std::array<float, 2>{0, 0},
-        "unmigrated v1 values are preserved while the slot stays silent");
-  const auto kept = capture(*extended);
-  auto back = std::make_unique<VstEngineAudioProcessor>(std::make_unique<Provider>());
-  back->prepareToPlay(48000, 64);
-  back->setStateInformation(kept.getData(), static_cast<int>(kept.getSize()));
-  check(std::abs(raw(*back, id(0, "gain")) - 0.6f) < 1e-6f &&
-            raw(*back, id(0, "tone")) == 5000,
-        "re-saving under the extended v2 keeps the v1 slot recoverable");
+                "Slot 1 Gain" &&
+            render(*extended) == v1Sound,
+        "migrated v1 values stay on their original endpoints and audio");
+  check(saved(*extended, 0, "drive") == 0.375f &&
+            raw(*extended, drive) == 0.375f &&
+            extended->parameters().getParameter(drive)->getName(64) ==
+                "Slot 1 Drive",
+        "only the new parameter is filled, from its canonical default");
+  set(*extended, drive, 0.8f);
+  const auto migratedProject = capture(*extended);
+  auto reopened = processorFor(Revision::extended);
+  open(*reopened, migratedProject);
+  check(resolved(*reopened) &&
+            std::abs(raw(*reopened, id(0, "gain")) - 0.6f) < 1e-6f &&
+            raw(*reopened, drive) == 0.75f &&
+            namedChild(decodeProject(migratedProject), 0, "drive")
+                    .getProperty("pool") == juce::var(5),
+        "migrated v2 project saves and reopens in v2 (drive quantized to 0.75)");
+
+  // Backward open of a migrated v2 snapshot in v1 is not supported: the slot
+  // stays unresolved and silent, every value preserved.
+  auto backward = processorFor(Revision::v1);
+  open(*backward, migratedProject);
+  check(!resolved(*backward) && hasNamed(*backward, "drive") &&
+            std::abs(saved(*backward, 0, "gain") - 0.6f) < 1e-6f &&
+            render(*backward) == std::array<float, 2>{0, 0},
+        "v1 keeps a migrated v2 snapshot unresolved and preserved");
+
+  // Incompatible version-2 changes are never migrated: unresolved, silent,
+  // original snapshot preserved.
+  for (const auto revision :
+       {Revision::moved, Revision::renamed, Revision::narrowed}) {
+    auto incompatible = processorFor(revision);
+    open(*incompatible, v1Project);
+    check(!resolved(*incompatible) &&
+              incompatible->instrumentRack().state()[0].instrumentVersion == 1 &&
+              std::abs(saved(*incompatible, 0, "gain") - 0.6f) < 1e-6f &&
+              saved(*incompatible, 0, "tone") == 5000 &&
+              !hasNamed(*incompatible, "brightness") &&
+              render(*incompatible) == std::array<float, 2>{0, 0},
+          "moved index, removed ID or invalidated value stays unresolved");
+  }
+
+  // A v1 snapshot without recorded pool endpoints cannot prove index
+  // stability and is not migrated.
+  auto unindexed = decodeProject(v1Project);
+  for (auto child : unindexed.getChildWithName("RACK").getChild(0))
+    child.removeProperty("pool", nullptr);
+  auto noIndex = processorFor(Revision::extended);
+  open(*noIndex, encodeProject(unindexed));
+  check(!resolved(*noIndex), "snapshot without pool indices is not migrated");
+
+  // A migration whose provider preparation fails rejects the whole restore.
+  auto rollback = processorFor(Revision::extended);
+  const auto rollbackBefore = capture(*rollback);
+  const auto rollbackSound = render(*rollback);
+  factoryFault.store(3);
+  rejectedRestoreKeepsLiveState(*rollback, v1Project, rollbackBefore,
+                                rollbackSound);
 
   // Changing the parameter set without a version bump is a provider error:
   // the whole project is rejected and the live state stays intact.
-  auto unversioned = std::make_unique<VstEngineAudioProcessor>(
-      std::make_unique<Provider>(false, Revision::extendedUnversioned));
-  unversioned->prepareToPlay(48000, 64);
+  auto unversioned = processorFor(Revision::extendedUnversioned);
   const auto before = capture(*unversioned);
-  unversioned->setStateInformation(v1Project.getData(),
-                                   static_cast<int>(v1Project.getSize()));
+  open(*unversioned, v1Project);
   check(sameBytes(capture(*unversioned), before),
         "unversioned parameter-set change rejects the v1 project transactionally");
 }

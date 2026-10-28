@@ -5,6 +5,7 @@
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/MidiExport.h"
 #include "modules/BuiltInProvider.h"
+#include "rack/RackMigration.h"
 #include "preset/PresetManager.h"
 #include "sequence/PatternAdapter.h"
 #include <charconv>
@@ -1760,6 +1761,12 @@ bool VstEngineAudioProcessor::restoreProjectState(const juce::ValueTree &tree) {
     if (!vstengine::rack::state::deserialize(rackTree, parsedRack,
                                              rackDiagnostic))
       return false;
+    // Append-only upgrades happen on this candidate copy only; the rest of
+    // the transaction validates and prepares the migrated state, and any
+    // failure leaves the live project untouched.
+    for (auto &slot : parsedRack)
+      if (const auto resolution = instrumentRegistry.resolve(slot.instrumentId))
+        (void)vstengine::rack::migrateAppendOnly(slot, *resolution.descriptor);
   }
   if (!validateProjectParameters(tree, apvts))
     return false;

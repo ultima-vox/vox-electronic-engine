@@ -29,13 +29,22 @@ descriptor entries does not move any endpoint (regression-tested). Registration
 rejects a missing, out-of-range or duplicate pool index. Packages carry the
 same explicit index in `params.json` (instrument packages, phase 2).
 
-Upgrade policy (same InstrumentId, regression-tested across separate
-processors): a revision that only reorders descriptor entries keeps the same
-`instrumentVersion` and restores old projects exactly on the same endpoints. A
-revision that adds or removes parameters must bump `instrumentVersion`; an older
-project then stays explicitly unresolved and silent with its values preserved
-(no automatic migration exists yet). Changing the parameter set without the
-bump is a provider error: the whole project restore is rejected. The former per-instrument
+Upgrade policy (same InstrumentId, owner decision 28.10.2026, regression-tested
+across separate processors). Rack schema 6 records each named value's pool
+index. A revision that only reorders descriptor entries keeps
+`instrumentVersion` and restores exactly. A revision that adds parameters bumps
+`instrumentVersion`; project restore then applies **append-only migration**
+(`rack::migrateAppendOnly`) on the candidate state: accepted only when every
+saved ID still exists with its recorded pool index and a value valid under the
+current descriptor, and only the new IDs are filled from canonical defaults.
+The migrated state is validated and prepared in the same transaction; any
+failure rejects the restore without touching live state. Anything else (moved
+index, removed/renamed ID, invalidated value, missing recorded index, other
+version markers) stays unresolved with the original snapshot preserved; such
+changes need their own explicit migration. Opening a migrated snapshot in the
+older build is not supported: it stays unresolved and preserved. Changing the
+parameter set without the version bump is a provider error and rejects the
+whole restore. The former per-instrument
 IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
 
 Registration rejects incomplete/duplicate descriptors, runtime key collisions
@@ -102,7 +111,7 @@ models. Borrowed test/controller-only model access requires external serializati
 
 ## Project, scene and failure policy
 
-Engine project schema **5**, Rack schema **4**, FX schema **2**. Obsolete POC
+Engine project schema **5**, Rack schema **6**, FX schema **2**. Obsolete POC
 project/complete-scene formats are explicitly rejected; no parallel compatibility
 mode is introduced. Plugin bundle/FUID/manufacturer remain unchanged. Complete
 scenes use `format="rack-project-v5"` and the same whole-project capture/restore

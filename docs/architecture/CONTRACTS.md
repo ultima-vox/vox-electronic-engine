@@ -26,7 +26,7 @@ explicit modulation must not rewrite other host base values.
 - One instrument = one MIDI channel (owner decision 27.10.2026). A channel has at
   most one owning slot; a loaded instrument takes the next free channel; there is
   no Layer mode and no SWAP/MOVE. Key/velocity zones and transpose filter the
-  slot's own channel. Rack schema 5 rejects layered or duplicate-channel states.
+  slot's own channel. Rack schema 5+ rejects layered or duplicate-channel states.
 - Sound and Pattern remain independent.
 - Transactional parse -> validate -> prepare -> commit state loads.
 - Missing/incompatible modules preserve identity and payload; no silent substitution.

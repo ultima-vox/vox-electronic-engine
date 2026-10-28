@@ -42,7 +42,8 @@ add_library(vst_rack STATIC
   libs/rack/RackTypes.h
   libs/rack/RackRouter.cpp libs/rack/RackRouter.h
   libs/rack/Rack.cpp libs/rack/Rack.h
-  libs/rack/RackState.cpp libs/rack/RackState.h)
+  libs/rack/RackState.cpp libs/rack/RackState.h
+  libs/rack/RackMigration.cpp libs/rack/RackMigration.h)
 target_include_directories(vst_rack PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_rack PUBLIC vst_instrument juce::juce_data_structures)
 
