@@ -48,7 +48,8 @@ Layout: one folder per package, `<id>.voxinst/` (owner decision: folders):
 ```
 manifest.json   id, name, vendor, version, engineApi, schema
 graph.json      blocks, connections, voice policy
-params.json     package parameter -> pool index, range, unit, default
+params.json     package parameter -> explicit pool index (stable across package
+                versions; never reused for another parameter), range, unit, default
 presets/        sound presets
 patterns/       pattern presets and generator profiles
 ui.json         layout of standard VOX widgets (no custom code)

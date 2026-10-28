@@ -86,14 +86,33 @@ instrument::InstrumentDescriptor descriptor(std::string id) {
                    -1}};
   return d;
 }
+// Same pool indices as the alpha/beta fixture, different host types:
+// choice, boolean, floating, integer, floating.
+instrument::InstrumentDescriptor reshaped() {
+  instrument::InstrumentDescriptor d;
+  d.id = "com.ultimavox.test.gamma";
+  d.name = "Reshaped fixture";
+  d.providerId = "com.ultimavox.test";
+  d.vendor = "Ultima Vox";
+  d.directParameters = true;
+  using T = instrument::ParameterType;
+  d.parameters = {
+      {"mode", "Mode", "", 0, 3, 0, 1, T::choice, "Main", {"A", "B", "C", "D"}, true, false, -1},
+      {"sync", "Sync", "", 0, 1, 0, 1, T::boolean, "Main", {}, true, false, -1},
+      {"depth", "Depth", "%", 0, 100, 50, 0, T::floating, "Main", {}, true, true, -1},
+      {"steps", "Steps", "", 0, 9, 4, 1, T::integer, "Main", {}, true, false, -1},
+      {"level", "Level", "", 0, 1, 1, 0.01f, T::floating, "Main", {}, true, true, -1}};
+  return d;
+}
 class Processor final : public juce::AudioProcessor {
 public:
   instrument::InstrumentDescriptor first =
                                        descriptor("com.ultimavox.test.alpha"),
                                    second =
-                                       descriptor("com.ultimavox.test.beta");
-  std::array<const instrument::InstrumentDescriptor *, 2> catalog{&first,
-                                                                  &second};
+                                       descriptor("com.ultimavox.test.beta"),
+                                   third = reshaped();
+  std::array<const instrument::InstrumentDescriptor *, 3> catalog{
+      &first, &second, &third};
   juce::AudioProcessorValueTreeState state;
   host::DirectParameterBank bank;
   juce::AudioProcessorValueTreeState::ParameterLayout layout() {
@@ -157,6 +176,67 @@ float value(const rack::ProcessSlotControls &c, std::string_view module,
       return v.value;
   require(false, "snapshot contains named key");
   return 0;
+}
+// Host-facing metadata of one pool endpoint: discrete/boolean/step count.
+struct Metadata {
+  bool discrete, boolean;
+  int steps;
+  bool operator==(const Metadata &) const = default;
+};
+Metadata metadata(const juce::AudioProcessorParameter *p) {
+  return {p->isDiscrete(), p->isBoolean(), p->getNumSteps()};
+}
+// Counts the host notifications the VST3 wrapper turns into
+// kParamTitlesChanged (title, unit, default and stepCount refresh).
+struct InfoListener final : juce::AudioProcessorListener {
+  int infoChanges{};
+  void audioProcessorParameterChanged(juce::AudioProcessor *, int, float) override {}
+  void audioProcessorChanged(juce::AudioProcessor *,
+                             const ChangeDetails &details) override {
+    infoChanges += details.parameterInfoChanged ? 1 : 0;
+  }
+};
+void metadataFollowsBinding(Processor &p) {
+  constexpr std::size_t slot = 2; // untouched by the other checks
+  const auto at = [&](std::size_t index) {
+    return p.state.getParameter(instrument::hostparams::poolId(slot, index));
+  };
+  const Metadata continuous{false, false,
+                            juce::AudioProcessorParameter::getDefaultNumParameterSteps()};
+  InfoListener listener;
+  p.addListener(&listener);
+  for (std::size_t i = 0; i < 5; ++i)
+    require(metadata(at(i)) == continuous, "unbound endpoint is continuous");
+  require(p.bank.selectAndRestore(slot, base(p.first)), "bind alpha metadata");
+  require(metadata(at(0)) == continuous && metadata(at(1)) == continuous,
+          "floating parameters keep continuous host metadata");
+  require(metadata(at(2)) == Metadata{true, false, 7},
+          "integer -3..3 is discrete with its inclusive span");
+  require(metadata(at(3)) == Metadata{true, true, 2},
+          "boolean is a two-step switch");
+  require(metadata(at(4)) == Metadata{true, false, 3},
+          "choice steps equal its label count");
+  require(listener.infoChanges == 1, "binding notifies the host once");
+  require(p.bank.selectAndRestore(slot, base(p.third)), "switch to gamma");
+  require(metadata(at(0)) == Metadata{true, false, 4} &&
+              metadata(at(1)) == Metadata{true, true, 2} &&
+              metadata(at(2)) == continuous &&
+              metadata(at(3)) == Metadata{true, false, 10} &&
+              metadata(at(4)) == continuous,
+          "instrument switch retypes the same pool indices");
+  require(at(0)->getDefaultValue() == 0.0f &&
+              std::abs(at(2)->getDefaultValue() - 0.5f) < 1e-6f,
+          "default value follows the binding");
+  require(listener.infoChanges == 2, "instrument switch notifies the host");
+  require(p.bank.selectAndRestore(slot, base(p.third)) &&
+              listener.infoChanges == 2,
+          "rebinding the same instrument does not renotify");
+  p.bank.deactivate(slot);
+  for (std::size_t i = 0; i < 5; ++i)
+    require(metadata(at(i)) == continuous,
+            "deactivated endpoint returns to continuous metadata");
+  require(listener.infoChanges == 3, "unbinding notifies the host");
+  p.removeListener(&listener);
 }
 } // namespace
 int main() {
@@ -256,5 +336,6 @@ int main() {
   }
   require(rejected,
           "VST3 hash collision rejected before host layout publication");
+  metadataFollowsBinding(p);
   std::cout << "Direct APVTS bank tests passed (" << checks << ")\n";
 }

@@ -18,7 +18,15 @@ order; a bound endpoint takes that parameter's range, name ("Slot N Name"),
 unit and value text and the host is told that parameter info changed. Unused
 and dormant endpoints are unbound ("Slot N Param KK", neutral value 0).
 Automation belongs to the slot: after replacing the instrument, the same lane
-drives the new instrument's parameter at that index. The former per-instrument
+drives the new instrument's parameter at that index. A bound endpoint also takes
+the parameter's host type: boolean (2 steps), choice (label count) and integer
+(inclusive span) are discrete; floating and unbound endpoints are continuous.
+
+Pool-index stability: within one InstrumentId a provider must never reorder,
+remove or insert before existing direct parameters; new parameters are appended.
+Otherwise recorded automation of an existing slot would drive a different
+control after an instrument update. Packages will carry explicit pool indices
+in `params.json` (instrument packages, phase 2). The former per-instrument
 IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
 
 Registration rejects incomplete/duplicate descriptors, runtime key collisions

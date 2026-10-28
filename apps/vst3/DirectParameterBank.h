@@ -55,6 +55,33 @@ public:
     const auto *b = binding();
     return (b != nullptr ? b->name : name).substring(0, maximumLength);
   }
+  // Host automation typing follows the binding (VST3 stepCount is refreshed
+  // on parameterInfoChanged): boolean/choice/integer are discrete, floating
+  // and unbound endpoints stay continuous.
+  bool isDiscrete() const override {
+    const auto *b = binding();
+    return b != nullptr &&
+           b->descriptor->type != instrument::ParameterType::floating;
+  }
+  bool isBoolean() const override {
+    const auto *b = binding();
+    return b != nullptr &&
+           b->descriptor->type == instrument::ParameterType::boolean;
+  }
+  int getNumSteps() const override {
+    const auto *b = binding();
+    if (b == nullptr || b->descriptor->type == instrument::ParameterType::floating)
+      return juce::AudioProcessorParameter::getNumSteps();
+    const auto &d = *b->descriptor;
+    switch (d.type) {
+    case instrument::ParameterType::boolean:
+      return 2;
+    case instrument::ParameterType::choice:
+      return static_cast<int>(d.choices.size());
+    default: // integer: inclusive span; validDirectParameter bounds it to 2^25.
+      return static_cast<int>(static_cast<double>(d.maximum) - d.minimum) + 1;
+    }
+  }
   juce::String getLabel() const override {
     const auto *b = binding();
     return b != nullptr ? juce::String(b->descriptor->unit) : juce::String();
