@@ -88,6 +88,20 @@ int main(int argc,char** argv) {
     CHECK(std::all_of(left2.begin(),left2.end(),[](float x){return x==0.0f;}));
     ctx.outputs=out; ctx.releaseFlags=VOX_PANIC_AT_START; CHECK(module->process(a,&ctx)==VOX_OK);
     CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    // Restore edited state after rendering, then reprepare at another rate.
+    CHECK(module->loadState(a,1,automated.data(),52)==VOX_OK);
+    CHECK(module->loadState(b,1,automated.data(),52)==VOX_OK);
+    spec.sampleRate=44100;
+    CHECK(module->prepare(a,&spec)==VOX_OK && module->prepare(b,&spec)==VOX_OK);
+    ctx.releaseFlags=0; ctx.midiEvents=&on; ctx.midiEventCount=1;
+    ctx.outputs=out; CHECK(module->process(a,&ctx)==VOX_OK);
+    ctx.outputs=out2; CHECK(module->process(b,&ctx)==VOX_OK);
+    CHECK(left==left2 && right==right2);
+    CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
+    CHECK(module->loadState(b,1,saved.data(),52)==VOX_OK);
+    CHECK(module->prepare(b,&spec)==VOX_OK);
+    CHECK(module->process(b,&ctx)==VOX_OK);
+    CHECK(left!=left2); // Original cutoff must render differently from restored edit.
 #ifdef VOX_BASS_ALLOCATION_PROBE
     ctx.releaseFlags=0; ctx.outputs=out;
     change={0,128,1200.0f,0}; ctx.paramChanges=&change; ctx.paramChangeCount=1;

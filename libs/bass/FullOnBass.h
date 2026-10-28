@@ -40,6 +40,7 @@ public:
     void setBypassed(bool) noexcept override;
     void process(const instrument::ProcessBlock&) noexcept override;
     bool setParameter(std::string_view, float) noexcept override;
+    bool setParameterByIndex(std::size_t, float) noexcept;
     bool loadState(std::uint32_t, std::span<const std::byte>) noexcept override;
     bool saveState(std::span<std::byte>, std::uint32_t&) const noexcept override;
     std::uint32_t latencySamples() const noexcept override { return 0; }
@@ -52,6 +53,7 @@ private:
     int currentNote { -1 }, currentChannel { -1 };
     std::array<bool, 16> sustainDown {};
     bool keyHeld {};
+    std::uint32_t dirtyParameters { (1u << fullOnParameters.size()) - 1u };
     bool bypassed {}, suspended {};
 };
 } // namespace vstengine::bass

@@ -80,7 +80,7 @@ VoxResult VOX_CALL prepare(VoxInstance s, const VoxPrepareSpecV2* p) {
 VoxResult VOX_CALL setAll(VoxInstance s, const float* v, uint32_t n) {
     if (!s || !v || n != count) return VOX_E_INVALID_ARG;
     for (uint32_t i=0;i<n;++i) if (!valueValid(i,v[i])) return VOX_E_INVALID_ARG;
-    for (uint32_t i=0;i<n;++i) s->engine.setParameter(fullOnParameters[i].id,v[i]);
+    for (uint32_t i=0;i<n;++i) s->engine.setParameterByIndex(i,v[i]);
     return VOX_OK;
 }
 VoxResult VOX_CALL reset(VoxInstance s) { if (!s) return VOX_E_INVALID_ARG; s->engine.reset(); return VOX_OK; }
@@ -112,7 +112,7 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
         while (pi<c->paramChangeCount) {
             const auto p=read(c->paramChanges,c->paramChangeStride,pi);
             if (p.sampleOffset!=cursor) break;
-            s->engine.setParameter(fullOnParameters[p.index].id,p.plain); ++pi;
+            s->engine.setParameterByIndex(p.index,p.plain); ++pi;
         }
         uint32_t end=c->numSamples;
         if (pi<c->paramChangeCount) end=read(c->paramChanges,c->paramChangeStride,pi).sampleOffset;
