@@ -2,6 +2,48 @@
 
 Status: **Acid DSP, controls and SOUND UI in progress; neither Acid nor Rack production-accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
 
+## Integration plan and fixed-pool blocker (28 October 2026)
+
+The selected host direction is the unmerged Rack stack #62 → #64 → #65:
+16 slots, 64 direct pool endpoints per slot and one shared named-parameter
+authority. Slot automation lanes intentionally follow pool indices when replacing
+an instrument; a same-InstrumentId upgrade must preserve each explicit index.
+PR #65 proposes transactional append-only migration, subject to review and real
+host verification. Its implementation does not yet provide the independent
+binary loader, instrument-editor interface or accepted DAW behavior.
+
+The current Acid engine has 77 state parameters, including the packed
+`play_mode_flags`; the interim host bridge splits that packed value into four
+independent flags. It exposes 80 separate host-facing controls: 76 individual
+engine parameters plus four flags. Eight currently use Rack macros. A 64-entry
+direct pool cannot hold them; even counting all eight existing macros as extra
+independent endpoints gives only 72. Their actual suitability for direct Acid
+binding requires review. No control may be silently omitted, aliased, packed
+into shared automation or made ineffective to fit the pool.
+
+Before integrating, coordinate a reviewed pool-capacity/parameter contract with
+the Rack owner. Inventory every Acid control, physical unit, type, stable
+semantic ID and host endpoint; assign permanent explicit indices in the agreed
+scheme. Implement Acid's independent DSP/UI/content package against the reviewed
+versioned module and host-editor interfaces; replace `AcidParameterBridge` and
+Acid-specific APVTS registration with the single common host adapter. Preserve
+separate Sound, Pattern and Generator state, and keep missing/incompatible module
+identity and original state recoverable without substitution.
+
+Prove per-control independence, slot isolation, automation type/range, state and
+same-instrument upgrade, missing-module save/reinstall recovery, realtime bounds,
+and unchanged Rack binary hash across Acid installation/update. Windows full
+CTest/package, actual Cubase/REAPER workflow and owner visual/audio acceptance
+remain required. The interim bridge is not a release architecture. Historical
+host-ID decisions below describe the current branch only, not the selected pool.
+
+Windows run 40650814560 for `eff2c6a` built successfully and passed 33/34
+tests, including all Acid tests. The only failing case was Bass diagnostic
+`save_restore_rerender` (max difference 0.337394; RMS 0.000124604); package did
+not run. The same Bass scenario also failed before this Acid Decay change in runs
+40549369245 and 40557841966. This demonstrates a pre-existing failure, not its
+root cause. Do not weaken the test or treat the branch as production-ready.
+
 ## Scope lock — Acid module ONLY (owner clarification, 2026-10-26)
 
 **Rack is not yet Production-ready (owner clarification, 2026-10-26). It is nevertheless OUT OF SCOPE for this Acid module feature branch.** Do not redesign, reconstruct, refactor, restyle, or extend Rack, its slot cards, routing UI, global project header, host transport, or shared keyboard. The red annotated region is precisely **NOT** our task. Our deliverable is only the **selected Acid Synth workspace** shown in the green annotated region, with production-grade independent controls, sound DSP, modulation, pattern and presets.
