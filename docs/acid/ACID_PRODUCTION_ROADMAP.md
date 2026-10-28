@@ -2,7 +2,11 @@
 
 Status: **Acid DSP, controls and SOUND UI in progress; neither Acid nor Rack production-accepted**. Work branch: `fix/acid-contract-ui-integration`; review PR #59. Never merge unfinished Acid into `main`.
 
-## Integration plan and fixed-pool blocker (28 October 2026)
+## Current integration authority (28 October 2026)
+
+**Read [ACID_RACK_INTEGRATION_V2.md](ACID_RACK_INTEGRATION_V2.md) first.** It is the current implementation and acceptance packet for independent DSP/UI delivery, 80 independently automatable Acid controls, one shared Rack parameter authority and measured pool-capacity approval. The older integration plan below records the interim 64-pool branch state; its instructions to add Acid-specific APVTS IDs and to use eight fixed macros as sound parameter authorities are **superseded**, not production guidance.
+
+## Historical integration plan and fixed-pool blocker (28 October 2026)
 
 The selected host direction is the unmerged Rack stack #62 → #64 → #65:
 16 slots, 64 direct pool endpoints per slot and one shared named-parameter
