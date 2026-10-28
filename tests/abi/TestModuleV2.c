@@ -14,6 +14,8 @@
 #define STATE_MAGIC 0x54584f56u /* "VOXT" */
 #define STATE_BYTES (8u + PARAM_COUNT * 4u)
 #define MAX_BLOCK 4096u
+#define MAX_RECORD_STRIDE 1024u
+#define MIN_MIDI_EVENTS 16u
 
 enum { P_GAIN, P_OCTAVE, P_MUTE, P_WAVE };
 
@@ -41,6 +43,8 @@ struct VoxInstanceT {
   double sampleRate;
   uint32_t maxBlock;
   uint32_t outputChannels;
+  uint32_t maxParamChanges; /* per block, fixed at prepare */
+  uint32_t maxMidiEvents;
   double phase;
   int note; /* -1 = no key sounding (one key, retrigger semantics) */
   int prepared;
@@ -98,11 +102,16 @@ static VoxResult VOX_CALL prepare(VoxInstance instance, const VoxPrepareSpecV2 *
       spec->version != VOX_MODULE_ABI_V2 || !(spec->sampleRate > 0.0) ||
       spec->sampleRate > 768000.0 || spec->maxBlockSize == 0 ||
       spec->maxBlockSize > MAX_BLOCK || spec->outputChannels == 0 ||
-      spec->outputChannels > instrument.outputChannels)
+      spec->outputChannels > instrument.outputChannels ||
+      spec->maxParamChangesPerBlock > PARAM_COUNT ||
+      spec->maxMidiEventsPerBlock < MIN_MIDI_EVENTS ||
+      spec->maxMidiEventsPerBlock > instrument.maxMidiEventsPerBlock)
     return VOX_E_INVALID_ARG;
   instance->sampleRate = spec->sampleRate;
   instance->maxBlock = spec->maxBlockSize;
   instance->outputChannels = spec->outputChannels;
+  instance->maxParamChanges = spec->maxParamChangesPerBlock;
+  instance->maxMidiEvents = spec->maxMidiEventsPerBlock;
   instance->phase = 0.0;
   instance->note = -1;
   instance->prepared = 1;
@@ -162,11 +171,15 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       c->structSize < sizeof(VoxProcessContextV2) || c->version != VOX_MODULE_ABI_V2 ||
       c->numSamples > s->maxBlock || c->outputChannelCount != s->outputChannels ||
       c->outputs == NULL || (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0 ||
+      /* Budgets and strides are bounded before any record is read. */
+      c->paramChangeCount > s->maxParamChanges || c->midiEventCount > s->maxMidiEvents ||
       (c->paramChangeCount > 0 &&
        (c->paramChanges == NULL || c->paramChangeStride < sizeof(VoxParamChangeV2) ||
+        c->paramChangeStride > MAX_RECORD_STRIDE ||
         c->paramChangeStride % _Alignof(VoxParamChangeV2) != 0)) ||
       (c->midiEventCount > 0 &&
        (c->midiEvents == NULL || c->midiEventStride < sizeof(VoxMidiEventV2) ||
+        c->midiEventStride > MAX_RECORD_STRIDE ||
         c->midiEventStride % _Alignof(VoxMidiEventV2) != 0)))
     return VOX_E_INVALID_ARG;
   for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)

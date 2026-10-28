@@ -455,6 +455,15 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
   badSpec = prepareSpec();
   badSpec.outputChannels = 3;
   REQUIRE(m.prepare(instance, &badSpec) == VOX_E_INVALID_ARG, "too many outputs");
+  badSpec = prepareSpec();
+  badSpec.maxParamChangesPerBlock = 5; // above parameterCount
+  REQUIRE(m.prepare(instance, &badSpec) == VOX_E_INVALID_ARG, "change budget above parameters");
+  badSpec = prepareSpec();
+  badSpec.maxMidiEventsPerBlock = instrument.maxMidiEventsPerBlock + 1;
+  REQUIRE(m.prepare(instance, &badSpec) == VOX_E_INVALID_ARG, "MIDI budget above descriptor");
+  badSpec = prepareSpec();
+  badSpec.maxMidiEventsPerBlock = 8;
+  REQUIRE(m.prepare(instance, &badSpec) == VOX_E_INVALID_ARG, "MIDI budget below 16");
   REQUIRE(m.prepare(nullptr, &badSpec) == VOX_E_INVALID_ARG, "null instance prepare");
   {
     Block x;
@@ -496,7 +505,24 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
     c = x.context();
     c.paramChangeStride = 18;
     REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "unaligned change stride");
+    c = x.context();
+    c.paramChangeStride = 1024 + 16;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "oversized change stride");
+    // Counts above the prepared budgets are rejected before any record is read
+    // (the backing arrays hold one record each).
+    c = x.context();
+    c.paramChangeCount = prepareSpec().maxParamChangesPerBlock + 1;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "change count above budget");
     x.changes.clear();
+    c = x.context();
+    c.midiEventStride = 1024 + 16;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "oversized MIDI stride");
+    c = x.context();
+    c.midiEventCount = prepareSpec().maxMidiEventsPerBlock + 1;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "MIDI count above budget");
+    c = x.context();
+    c.midiEventCount = 0xFFFFFFFFu;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "huge MIDI count rejected");
     REQUIRE(m.process(instance, nullptr) == VOX_E_INVALID_ARG, "null context");
   }
 
