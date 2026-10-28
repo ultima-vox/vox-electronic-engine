@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "FactoryGraphs.h"
 #include "core/ResourceLimits.h"
+#include "dspcore/GraphInstrument.h"
 #include "instrument/HostParameterSchema.h"
 #include "instrument/native/ModulePackages.h"
 #include "midi/GeneratedNoteScheduler.h"
@@ -143,11 +145,26 @@ vstengine::instrument::native::LoadReport configuredNativeModules() {
   }
   return report;
 }
+
+// Factory graph instruments (#75): graph.json patches compiled into the
+// plugin and run by the DSP Core. No DLL is loaded, so no trust gate applies.
+vstengine::instrument::native::LoadReport withFactoryGraphs(
+    vstengine::instrument::native::LoadReport report) {
+  for (const auto json : vstengine::factory::graphs) {
+    std::string why;
+    auto patch = vstengine::dspcore::loadPatch(std::string(json), why);
+    if (patch == nullptr)
+      report.diagnostics.push_back("factory graph rejected: " + why);
+    else
+      report.providers.push_back(vstengine::dspcore::makeGraphProvider(std::move(patch)));
+  }
+  return report;
+}
 } // namespace
 
 VstEngineAudioProcessor::VstEngineAudioProcessor()
     : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider(),
-                              configuredNativeModules()) {}
+                              withFactoryGraphs(configuredNativeModules())) {}
 
 VstEngineAudioProcessor::VstEngineAudioProcessor(
     std::unique_ptr<vstengine::instrument::InstrumentProvider> provider)

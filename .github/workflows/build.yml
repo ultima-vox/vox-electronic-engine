@@ -90,6 +90,7 @@ jobs:
           if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
           New-Item -ItemType Directory -Force -Path $guide | Out-Null
           Copy-Item docs\testing\demo-synth\* $guide
+          Copy-Item docs\testing\demo-synth-graph\* $guide
           $rack = "build\VstEngine_artefacts\Release\VST3\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
           $dll = "build\demo-packages\com.ultimavox.demo-synth.voxinst\1.0.0\module\x64\VoxDemoSynth.dll"
           foreach ($f in @($rack, $dll)) { if (-not (Test-Path $f)) { throw "missing $f" } }

@@ -1,0 +1,38 @@
+{
+  "graphVersion": 1,
+  "instrument": {
+    "id": "com.ultimavox.demo-synth-graph",
+    "name": "Vox Demo Synth (Graph)",
+    "vendor": "Ultima Vox",
+    "version": 1
+  },
+  "voice": { "policy": "mono-last", "ampEnvelope": "env" },
+  "parameters": [
+    { "id": "wave", "name": "Wave", "group": "Oscillator", "type": "choice",
+      "choices": ["Sine", "Saw", "Square"], "min": 0, "max": 2, "default": 1, "pool": 0 },
+    { "id": "gain", "name": "Gain", "group": "Amp", "type": "float",
+      "min": 0, "max": 1, "default": 0.7, "pool": 1, "smoothing": 0.005 },
+    { "id": "attack", "name": "Attack", "unit": "s", "group": "Envelope", "type": "float",
+      "min": 0.001, "max": 5, "default": 0.005, "pool": 2 },
+    { "id": "decay", "name": "Decay", "unit": "s", "group": "Envelope", "type": "float",
+      "min": 0.001, "max": 5, "default": 0.25, "pool": 3 },
+    { "id": "sustain", "name": "Sustain", "group": "Envelope", "type": "float",
+      "min": 0, "max": 1, "default": 0.7, "pool": 4 },
+    { "id": "release", "name": "Release", "unit": "s", "group": "Envelope", "type": "float",
+      "min": 0.001, "max": 10, "default": 0.3, "pool": 5 },
+    { "id": "cutoff", "name": "Cutoff", "unit": "Hz", "group": "Filter", "type": "float",
+      "min": 20, "max": 20000, "default": 4000, "pool": 6, "smoothing": 0.005 },
+    { "id": "resonance", "name": "Resonance", "group": "Filter", "type": "float",
+      "min": 0, "max": 1, "default": 0.2, "pool": 7 }
+  ],
+  "nodes": [
+    { "id": "env", "type": "env.adsr@1",
+      "params": { "attack": "attack", "decay": "decay", "sustain": "sustain", "release": "release" } },
+    { "id": "osc", "type": "osc.blep@1", "params": { "wave": "wave" } },
+    { "id": "flt", "type": "filter.svf.lp@1",
+      "params": { "cutoff": "cutoff", "resonance": "resonance" }, "inputs": { "in": "osc.out" } },
+    { "id": "vca", "type": "amp.vca@1", "inputs": { "in": "flt.out", "env": "env.out" } },
+    { "id": "out", "type": "amp.gain@1", "params": { "gain": "gain" }, "inputs": { "in": "vca.out" } }
+  ],
+  "output": "out.out"
+}
