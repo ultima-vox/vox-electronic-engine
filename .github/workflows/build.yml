@@ -106,6 +106,41 @@ jobs:
           path: build/demo-guide/*
           if-no-files-found: error
 
+      - name: Upload Full-on Drums package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-FullOn-Drums-Package-Windows
+          path: build/drums-packages/**
+          if-no-files-found: error
+
+      - name: Assemble Full-on Drums Cubase guide
+        shell: powershell
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $guide = Join-Path $PWD "build\drums-guide"
+          if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
+          New-Item -ItemType Directory -Force -Path $guide | Out-Null
+          Copy-Item docs\testing\fullon-drums\* $guide
+          $rack = "build\VstEngine_artefacts\Release\VST3\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
+          $dll = "build\drums-packages\com.ultimavox.fullon-drums.voxinst\0.1.0\module\x64\VoxFullOnDrums.dll"
+          foreach ($f in @($rack, $dll)) { if (-not (Test-Path $f)) { throw "missing $f" } }
+          @(
+            "Head commit: $env:HEAD_SHA"
+            "Built commit (PR merge ref): $env:GITHUB_SHA"
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "Rack SHA-256: $((Get-FileHash -Algorithm SHA256 $rack).Hash.ToLower())"
+            "VoxFullOnDrums.dll SHA-256: $((Get-FileHash -Algorithm SHA256 $dll).Hash.ToLower())"
+          ) | Set-Content (Join-Path $guide "build-info.txt")
+          Get-Content (Join-Path $guide "build-info.txt")
+
+      - name: Upload Full-on Drums Cubase guide
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-FullOn-Drums-Cubase-Guide
+          path: build/drums-guide/*
+          if-no-files-found: error
+
       - name: Package Vox Electronic Engine
         shell: powershell
         run: cmake --build build --config Release --target package

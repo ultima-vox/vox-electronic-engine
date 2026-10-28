@@ -585,6 +585,48 @@ if(VOX_PACKAGE_ARCH)
     COMMAND demo_synth_tests ${VOX_DEMO_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/demo-scratch)
 endif()
 
+# Full-on Drums (#71): independent eight-pad native drum kit. Not linked into
+# the Rack; shipped as com.ultimavox.fullon-drums.voxinst/0.1.0.
+add_library(VoxFullOnDrums SHARED libs/drums/VoxFullOnDrums.c)
+set_target_properties(VoxFullOnDrums PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(VoxFullOnDrums PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(VoxFullOnDrums PRIVATE m)
+endif()
+if(MSVC)
+  set_property(TARGET VoxFullOnDrums PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+set(VOX_DRUMS_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/drums-packages)
+if(VOX_PACKAGE_ARCH)
+  add_custom_command(TARGET VoxFullOnDrums POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DMODULE_FILE=$<TARGET_FILE:VoxFullOnDrums>
+      -DPACKAGE_ROOT=${VOX_DRUMS_PACKAGE_ROOT}
+      -DPACK_ID=com.ultimavox.fullon-drums
+      -DPACK_VERSION=0.1.0
+      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
+      -DINSTRUMENT_IDS=com.ultimavox.fullon-drums
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
+    VERBATIM)
+
+  add_executable(fullon_drums_tests tests/integration/FullOnDrumsTests.cpp)
+  target_include_directories(fullon_drums_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(fullon_drums_tests PRIVATE VstEngine)
+  add_dependencies(fullon_drums_tests VoxFullOnDrums)
+  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_sources(fullon_drums_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+    target_compile_definitions(fullon_drums_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+    target_link_options(fullon_drums_tests PRIVATE -rdynamic)
+  endif()
+  add_test(NAME fullon_drums_tests
+    COMMAND fullon_drums_tests ${VOX_DRUMS_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/drums-scratch)
+endif()
+
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
 target_include_directories(reliability_stress_tests PRIVATE
