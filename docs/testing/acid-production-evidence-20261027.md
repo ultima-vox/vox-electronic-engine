@@ -155,3 +155,18 @@ Disposition: **DO NOT MERGE / Acid not production accepted**. Owner decision
 UI and content must ship independently of Rack. The loader and common ABI are
 not yet implemented/reviewed; this Acid branch does not modify the Rack owner's
 work. The current static integration is a candidate to adapt, not a delivery gate.
+
+## Review follow-up — 28 October 2026
+
+- Re-review of `d4fb976` requests a complete typed manifest and explicitly
+  distinguishes continuous oscillator morph from discrete filter/LFO modes.
+- Local tests render the engine at two values within each selector bucket and
+  across buckets. They verify continuous oscillator morph and discrete filter
+  and LFO selection without changing DSP or serialized state.
+- The V2 integration packet now identifies oscillator waveform as continuous.
+  Type/default metadata is still a candidate, not a complete host manifest;
+  physical mappings, choice conversion, eligibility and host tests remain open.
+- Windows run 40659340113 for `d4fb976` built and passed 34/35 tests;
+  `bass_render_diagnostics/save_restore_rerender` failed. Packaging skipped.
+  This does not identify the Bass root cause. Exact-head Windows checks are
+  still required for the local review follow-up.

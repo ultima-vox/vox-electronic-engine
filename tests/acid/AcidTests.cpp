@@ -71,6 +71,44 @@ int main()
             "finite high sample rate has a defined tail-count behavior");
     REQUIRE(invalidRate.tailSamples() == std::numeric_limits<std::uint32_t>::max(),
             "oversized but finite tail count saturates rather than overflowing uint32");
+    // Neighboring normalized values within one selector bucket must keep the
+    // same sound, while oscillator morph must remain continuous within it.
+    const auto renderTypedControl = [](const char* id, float value, bool useLfo) {
+        acid::AcidEngine engine;
+        (void) engine.setParameter(id, value);
+        if (useLfo) {
+            (void) engine.setParameter("lfo1_depth", 1.0f);
+            (void) engine.setParameter("lfo1_rate", 0.75f);
+            (void) engine.setParameter("lfo1_target", 0.0f);
+        }
+        (void) engine.prepare(48000.0, 4096, 2);
+        std::array<float, 4096> left{}, right{};
+        std::array<float*, 2> outputs {left.data(), right.data()};
+        const std::array events {VoxMidiEventV1 {0, 3, {0x90, 48, 110}}};
+        engine.process(outputs, 4096, events);
+        return left;
+    };
+    const auto difference = [](const auto& a, const auto& b) {
+        double result = 0.0;
+        for (std::size_t i = 0; i < a.size(); ++i)
+            result += std::abs(static_cast<double>(a[i]) - b[i]);
+        return result;
+    };
+    REQUIRE(difference(renderTypedControl("waveform", 0.05f, false),
+                       renderTypedControl("waveform", 0.15f, false)) > 0.01,
+            "oscillator waveform changes continuously within a selector bucket");
+    REQUIRE(difference(renderTypedControl("filter_mode", 0.05f, false),
+                       renderTypedControl("filter_mode", 0.15f, false)) == 0.0,
+            "filter mode values in the same bucket select the same filter");
+    REQUIRE(difference(renderTypedControl("lfo1_wave", 0.05f, true),
+                       renderTypedControl("lfo1_wave", 0.15f, true)) == 0.0,
+            "LFO waveform values in the same bucket select the same waveform");
+    REQUIRE(difference(renderTypedControl("filter_mode", 0.05f, false),
+                       renderTypedControl("filter_mode", 0.65f, false)) > 0.01,
+            "different filter mode buckets change sound");
+    REQUIRE(difference(renderTypedControl("lfo1_wave", 0.05f, true),
+                       renderTypedControl("lfo1_wave", 0.65f, true)) > 0.01,
+            "different LFO waveform buckets change sound");
     auto provider = acid::createAcidProvider();
     const auto compliance = tests::runInstrumentCompliance(
         *provider, acid::instrumentId);
