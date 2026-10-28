@@ -26,11 +26,12 @@ This is an authorized product change, not evidence of a working loader. The Rack
 owner owns the shared loader/ABI/state/automation design; Acid owns its module and
 adapter. [Design packet](INDEPENDENT_INSTRUMENTS.md) specifies required review and
 measurable integration gates. Existing identifiers, realtime and missing-module
-protections remain in force. The selected automation strategy is a fixed 16 × 64
-per-slot pool, with stable explicit indices per InstrumentId; PR #65 is an
-unmerged implementation candidate, not DAW acceptance. Slot automation is
-intentionally rebound on instrument replacement. Acid currently exposes 80
-host-facing controls and cannot fit the pool without a separately reviewed resolution.
+protections remain in force. The selected automation strategy is a fixed pool
+with stable explicit indices per InstrumentId. PR #65's 64-per-slot pool is an
+unmerged candidate, not a frozen capacity or DAW acceptance; compare 96 versus
+128 before choosing. Replacement by a different instrument requires explicit
+confirmation and inhibition of stale automation until rearm; DAW feasibility is
+unverified. Acid exposes 80 independent host-facing controls.
 
 ## Preserve now
 

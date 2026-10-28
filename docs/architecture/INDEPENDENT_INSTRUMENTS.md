@@ -85,18 +85,21 @@ caching, duplicate IDs, or automation for a missing module. Steinberg's
 requires a unique host parameter ID; its [communication FAQ](https://steinbergmedia.github.io/vst3_dev_portal/pages/FAQ/Communication.html)
 describes `kParamTitlesChanged` for metadata changes, not parameter-count/ID changes.
 
-The selected approach is a fixed host parameter pool: 16 slots × 64 endpoints,
-`slotNN.p001` through `slotNN.p064`, independent of installed modules. The
-unmerged Rack stack #62 → #64 → #65 implements a candidate. A parameter has an
+The selected approach is a fixed host parameter pool independent of installed
+modules. The unmerged Rack stack #62 → #64 → #65 currently implements 64 per
+slot, `slotNN.p001` through `slotNN.p064`, as a candidate, not a frozen capacity.
+Benchmark 96 versus 128 on Windows and actual Cubase/REAPER before approving the
+durable layout; retain existing endpoint identities when adding capacity.
+A parameter has an
 explicit unique pool index, stable and never reused within its InstrumentId;
 descriptor order must not change the binding. Named Rack values are the restore
-authority. In the candidate, pool automation belongs to the slot: replacing an
-instrument intentionally assigns the same lane to the new instrument's parameter
-at that index. Switching instruments can therefore change a lane's meaning; the
-UI and host workflow must communicate this. This is distinct from accidental
-remapping across versions of the same instrument.
+authority. The candidate currently reuses slot lanes on instrument replacement,
+which can drive unrelated controls. Production requires explicit replacement
+confirmation and stale-automation inhibition until explicit rearm; its feasibility
+in real DAWs remains to be demonstrated. Same-instrument upgrades must not
+remap existing parameters.
 
-The pool supports at most 64 direct parameters per slot. Acid's current branch
+The current candidate supports at most 64 direct parameters per slot. Acid's current branch
 has 77 engine parameters, including one packed play-mode value, and exposes four
 play-mode flags separately: 80 host-facing controls in total, eight of them using
 existing slot macros. Even treating all eight macros as additional independent
@@ -114,8 +117,8 @@ production acceptance demonstrate all of the following in Cubase12–15 and REAP
    host restart, module updates, additional installed modules and slot selection.
 3. A project opened without its module retains module state and automation safely;
    reinstalling the module and reopening recovers them. Same-instrument updates
-   must not remap existing parameters. Instrument replacement follows the
-   explicit slot-lane policy above.
+   must not remap existing parameters. Instrument replacement must follow the
+   confirmation, inhibition and rearm policy above.
 4. Literal and VST3 host-ID collisions reject deterministically; max slots,
    catalog/parameter/resource bounds and exhaustion behavior are explicit.
 5. Sound, Pattern and Generator remain separate, and modulation alters effective
@@ -131,9 +134,8 @@ The saved candidate snapshot does not contain the old range, unit, type or
 semantics, so these tests alone cannot prove that an upgraded descriptor preserves
 their meaning or host automation normalization. Changes to existing semantics,
 units, types or ranges are outside append-only migration and require explicit
-compatibility review and migration policy. The UI must warn that a deliberate
-instrument replacement changes the slot lane's meaning; missing modules must
-never trigger an automatic replacement.
+compatibility review and migration policy. Missing modules must never trigger
+an automatic replacement or rearm stale automation.
 This does not establish module loading, ABI compatibility, or DAW acceptance.
 Old POC projects need no migration; plugin identity remains protected.
 
@@ -162,7 +164,11 @@ Minimum measurable integration gate:
 - Pass Windows Release/full CTest/package, independent ABI/realtime review,
   and actual integrated Cubase/REAPER and owner visual/audio acceptance.
 
-Open decisions: concrete ABI entry point and UI schema; the 64-versus-77 Acid
-control conflict and verified missing-module portability; package trust/signing/licensing; exact
+PR #64's data-only instrument-package proposal is superseded by the owner's
+independent native DSP requirement. PR #66 proposes ABI V2 on #65 → #64 → #62;
+it is a review draft, not an implemented loader or approved ABI.
+
+Open decisions: concrete ABI entry point and UI schema; 96 versus 128 pool capacity;
+verified missing-module portability; package trust/signing/licensing; exact
 resource budgets; host scan/restart behavior; shared DSP distribution policy.
 None is solved solely by adding a `LoadLibrary` call.

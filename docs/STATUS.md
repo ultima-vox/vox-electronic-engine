@@ -9,10 +9,11 @@ Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
 Instrument DSP and instrument UI must be independently installed and updated,
 not built into the Rack VST3. One VST3 remains the host. Current main and pending
 PR #62 still use static built-in providers; a reviewed module loader, package,
-and Acid external-module adapter do not yet exist. A fixed 16 × 64 slot automation
-pool is selected; PR #65 implements an unmerged candidate, pending review and
-real-host acceptance. Acid currently has 80 host-facing controls: the 64-endpoint
-limit is an unresolved integration blocker.
+and Acid external-module adapter do not yet exist. A fixed slot automation pool
+is selected; PR #65 implements an unmerged 16 × 64 candidate, not the final
+capacity. Compare 96 and 128 on Windows and in real DAWs before choosing. Acid
+requires 80 direct controls; stale automation after instrument replacement must
+be inhibited until explicit rearm, subject to DAW verification.
 This owner decision supersedes the previous static-only 1.0 decision. Details and
 exit gates: [independent instruments](architecture/INDEPENDENT_INSTRUMENTS.md).
 Rack / PR #62 belongs to the other agent; Acid / PR #59 is separately owned.
