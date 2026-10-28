@@ -46,6 +46,8 @@ int run = 0;
 constexpr std::size_t maxString = 256;
 constexpr std::uint32_t poolPerSlot = 64;
 constexpr std::uint32_t maxParameters = 1024;
+constexpr std::uint32_t maxParameterStride = 1024; // bounds count * stride
+constexpr std::uint32_t maxChoices = 128;
 constexpr std::uint32_t hostMaxStateBytes = 1024 * 1024;
 constexpr const char *toneId = "test.abi.v2.tone";
 
@@ -125,8 +127,14 @@ struct Instrument {
 
 bool integral(float v) { return v == std::floor(v); }
 
-bool validParameter(const VoxParameterDescriptorV2 &p) {
+template <typename T> bool aligned(const T *pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(T) == 0;
+}
+
+// `stride` is the parent array's element size; a record must fit inside it.
+bool validParameter(const VoxParameterDescriptorV2 &p, std::uint32_t stride) {
   if (!versioned(p.structSize, p.version, sizeof(VoxParameterDescriptorV2)) ||
+      p.structSize > stride ||
       !boundedString(p.id) || !boundedString(p.name) || !boundedString(p.unit, true) ||
       !boundedString(p.group, true) || p.type > VOX_PARAM_CHOICE ||
       (p.flags & ~VOX_PARAM_KNOWN_FLAGS) != 0 || !std::isfinite(p.minimum) ||
@@ -134,13 +142,18 @@ bool validParameter(const VoxParameterDescriptorV2 &p) {
       !std::isfinite(p.step) || !(p.minimum < p.maximum) || p.step < 0.0f ||
       p.defaultValue < p.minimum || p.defaultValue > p.maximum)
     return false;
+  // Float: 0 (continuous) up to the range. Discrete types step by exactly 1.
+  if (p.type == VOX_PARAM_FLOAT ? p.step > p.maximum - p.minimum : p.step != 1.0f)
+    return false;
   if (p.type != VOX_PARAM_FLOAT &&
       (!integral(p.minimum) || !integral(p.maximum) || !integral(p.defaultValue)))
     return false;
   if (p.type == VOX_PARAM_BOOLEAN && (p.minimum != 0.0f || p.maximum != 1.0f))
     return false;
   if (p.type == VOX_PARAM_CHOICE) {
-    if (p.choices == nullptr || p.minimum != 0.0f ||
+    // Bound the count before reading any choices[i].
+    if (p.choices == nullptr || !aligned(p.choices) || p.choiceCount < 2 ||
+        p.choiceCount > maxChoices || p.minimum != 0.0f ||
         static_cast<float>(p.choiceCount) != p.maximum + 1.0f)
       return false;
     for (std::uint32_t i = 0; i < p.choiceCount; ++i)
@@ -156,11 +169,13 @@ bool validParameter(const VoxParameterDescriptorV2 &p) {
 
 // Validates and deep-copies; the host never keeps module pointers.
 bool copyInstrument(const VoxInstrumentDescriptorV2 *d, Instrument &out) {
-  if (d == nullptr || !versioned(d->structSize, d->version, sizeof(VoxInstrumentDescriptorV2)) ||
+  if (d == nullptr || !aligned(d) || !versioned(d->structSize, d->version, sizeof(VoxInstrumentDescriptorV2)) ||
       !boundedString(d->id) || !boundedString(d->name) || !boundedString(d->vendor) ||
       !boundedString(d->category, true) || d->parameterCount > maxParameters ||
-      (d->parameterCount > 0 && d->parameters == nullptr) ||
-      d->parameterStride < sizeof(VoxParameterDescriptorV2) || d->maxVoices == 0 ||
+      (d->parameterCount > 0 && (d->parameters == nullptr || !aligned(d->parameters))) ||
+      d->parameterStride < sizeof(VoxParameterDescriptorV2) ||
+      d->parameterStride > maxParameterStride ||
+      d->parameterStride % alignof(VoxParameterDescriptorV2) != 0 || d->maxVoices == 0 ||
       d->maxMidiEventsPerBlock < 16 || d->maxMidiEventsPerBlock > 2048 ||
       d->maxStateBytes > hostMaxStateBytes || d->outputChannels == 0 ||
       d->outputChannels > 2)
@@ -175,7 +190,7 @@ bool copyInstrument(const VoxInstrumentDescriptorV2 *d, Instrument &out) {
   for (std::uint32_t i = 0; i < d->parameterCount; ++i) {
     const auto &p = *reinterpret_cast<const VoxParameterDescriptorV2 *>(
         bytes + static_cast<std::size_t>(i) * d->parameterStride);
-    if (!validParameter(p) || !ids.insert(p.id).second ||
+    if (!validParameter(p, d->parameterStride) || !ids.insert(p.id).second ||
         (p.poolIndex >= 0 && !pools.insert(p.poolIndex).second))
       return false;
     Parameter q{p.id, p.name, p.unit, p.group, {}, p.type, p.flags, p.minimum,
@@ -371,6 +386,27 @@ void validation(const VoxModuleV2 &m, const VoxInstrumentDescriptorV2 &d) {
   REQUIRE(!withParams([](P &p, D &) { p[3].choiceCount = 2; }), "choice count mismatch");
   REQUIRE(!withParams([](P &p, D &) { p[3].choices = nullptr; }), "missing choices");
   REQUIRE(!withParams([](P &, D &x) { x.parameterStride = 40; }), "short parameter stride");
+  // Rejected before any record is read, so no misaligned access happens.
+  REQUIRE(!withParams([](P &, D &x) { x.parameterStride = 81; }), "unaligned parameter stride");
+  REQUIRE(!withParams([](P &, D &x) { x.parameterStride = maxParameterStride + 8; }),
+          "parameter stride above limit");
+  REQUIRE(!withParams([](P &p, D &) { p[0].structSize = sizeof(VoxParameterDescriptorV2) + 8; }),
+          "record structSize larger than the parent stride");
+  REQUIRE(!withParams([](P &p, D &) { p[1].step = 0.0f; }), "integer step must be 1");
+  REQUIRE(!withParams([](P &p, D &) { p[2].step = 0.0f; }), "boolean step must be 1");
+  REQUIRE(!withParams([](P &p, D &) { p[3].step = 0.5f; }), "choice step must be 1");
+  REQUIRE(!withParams([](P &p, D &) { p[0].step = 2.0f; }), "float step above range");
+  REQUIRE(!withParams([](P &p, D &) { p[0].step = -0.1f; }), "negative float step");
+  REQUIRE(!withParams([](P &p, D &) {
+            p[3].choiceCount = 100000; // choices has 3 entries: must not be read
+            p[3].maximum = 99999.0f;
+          }),
+          "unbounded choice count rejected before reading choices");
+  REQUIRE(withParams([](P &, D &x) {
+            x.parameterCount = 0;
+            x.parameters = nullptr;
+          }),
+          "instrument without parameters is valid");
   REQUIRE(!withParams([](P &, D &x) { x.structSize = 64; }), "short descriptor struct");
   REQUIRE(!withParams([](P &, D &x) { x.maxStateBytes = hostMaxStateBytes + 1; }),
           "state budget above host limit");
@@ -392,8 +428,12 @@ void validation(const VoxModuleV2 &m, const VoxInstrumentDescriptorV2 &d) {
   wideDesc.parameters = &wide[0].p;
   wideDesc.parameterStride = sizeof(WideParameter);
   Instrument wideCopy;
+  static_assert(sizeof(WideParameter) % alignof(VoxParameterDescriptorV2) == 0);
   REQUIRE(copyInstrument(&wideDesc, wideCopy) && wideCopy.parameters[3].id == "wave",
-          "larger parameter stride accepted and stepped");
+          "larger aligned parameter stride accepted and stepped");
+  for (auto &w : wide)
+    w.p.structSize = sizeof(WideParameter) + 8;
+  REQUIRE(!copyInstrument(&wideDesc, wideCopy), "record larger than wide stride rejected");
 }
 
 void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
@@ -449,6 +489,14 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
     c = x.context();
     c.midiEventStride = 8;
     REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "short MIDI stride");
+    c = x.context();
+    c.midiEventStride = 17;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "unaligned MIDI stride");
+    x.changes.push_back({0, 0, 0.5f, 0});
+    c = x.context();
+    c.paramChangeStride = 18;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "unaligned change stride");
+    x.changes.clear();
     REQUIRE(m.process(instance, nullptr) == VOX_E_INVALID_ARG, "null context");
   }
 
@@ -507,6 +555,23 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
     auto c = x.context();
     REQUIRE(m.process(instance, &c) == VOX_OK, "process repeated key");
     REQUIRE(x.sounding(0, 40) && x.silent(40), "single NoteOff ends a retriggered key");
+  }
+
+  // A larger aligned record stride (future minor fields) is stepped correctly.
+  {
+    struct WideMidi {
+      VoxMidiEventV2 event;
+      std::uint64_t future;
+    };
+    static_assert(sizeof(WideMidi) % alignof(VoxMidiEventV2) == 0);
+    const WideMidi wide[] = {{midi(0, 0x90, 60, 100), 1}, {midi(50, 0x80, 60, 0), 2}};
+    Block x;
+    auto c = x.context();
+    c.midiEvents = &wide[0].event;
+    c.midiEventCount = 2;
+    c.midiEventStride = sizeof(WideMidi);
+    REQUIRE(m.process(instance, &c) == VOX_OK, "process wide MIDI stride");
+    REQUIRE(x.sounding(0, 50) && x.silent(50), "wide MIDI records stepped by stride");
   }
 
   // State round trip, buffer and version failures.

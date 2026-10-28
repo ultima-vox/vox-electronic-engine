@@ -163,9 +163,11 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       c->numSamples > s->maxBlock || c->outputChannelCount != s->outputChannels ||
       c->outputs == NULL || (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0 ||
       (c->paramChangeCount > 0 &&
-       (c->paramChanges == NULL || c->paramChangeStride < sizeof(VoxParamChangeV2))) ||
+       (c->paramChanges == NULL || c->paramChangeStride < sizeof(VoxParamChangeV2) ||
+        c->paramChangeStride % _Alignof(VoxParamChangeV2) != 0)) ||
       (c->midiEventCount > 0 &&
-       (c->midiEvents == NULL || c->midiEventStride < sizeof(VoxMidiEventV2))))
+       (c->midiEvents == NULL || c->midiEventStride < sizeof(VoxMidiEventV2) ||
+        c->midiEventStride % _Alignof(VoxMidiEventV2) != 0)))
     return VOX_E_INVALID_ARG;
   for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)
     if (c->outputs[ch] == NULL)
@@ -180,20 +182,21 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   uint32_t nextChange = 0, nextEvent = 0;
   for (uint32_t i = 0; i < c->numSamples; ++i) {
     while (nextChange < c->paramChangeCount) {
-      const VoxParamChangeV2 *p =
-          (const VoxParamChangeV2 *)(changes + (size_t)nextChange * c->paramChangeStride);
-      if (p->sampleOffset > i)
+      /* Header-less records are copied out, never dereferenced in place. */
+      VoxParamChangeV2 p;
+      memcpy(&p, changes + (size_t)nextChange * c->paramChangeStride, sizeof(p));
+      if (p.sampleOffset > i)
         break;
-      if (p->index < PARAM_COUNT && validValue(p->index, p->plain))
-        s->values[p->index] = p->plain;
+      if (p.index < PARAM_COUNT && validValue(p.index, p.plain))
+        s->values[p.index] = p.plain;
       ++nextChange;
     }
     while (nextEvent < c->midiEventCount) {
-      const VoxMidiEventV2 *e =
-          (const VoxMidiEventV2 *)(events + (size_t)nextEvent * c->midiEventStride);
-      if (e->sampleOffset > i)
+      VoxMidiEventV2 e;
+      memcpy(&e, events + (size_t)nextEvent * c->midiEventStride, sizeof(e));
+      if (e.sampleOffset > i)
         break;
-      applyMidi(s, e);
+      applyMidi(s, &e);
       ++nextEvent;
     }
     const float v = render(s);
