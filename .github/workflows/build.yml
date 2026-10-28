@@ -65,6 +65,13 @@ jobs:
           path: build/visual-gate/*.png
           if-no-files-found: error
 
+      - name: Upload test instrument module
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Test-Instrument-Module-Windows
+          path: build/Release/vox_abi_v2_test_module.dll
+          if-no-files-found: error
+
       - name: Package Vox Electronic Engine
         shell: powershell
         run: cmake --build build --config Release --target package
