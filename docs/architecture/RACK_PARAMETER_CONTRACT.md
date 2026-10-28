@@ -18,8 +18,10 @@ its required, unique `ParameterDescriptor::poolIndex` (0..63), independent of
 descriptor order; a bound endpoint takes that parameter's range, name ("Slot N Name"),
 unit and value text and the host is told that parameter info changed. Unused
 and dormant endpoints are unbound ("Slot N Param KK", neutral value 0).
-Automation belongs to the slot: after replacing the instrument, the same lane
-drives the new instrument's parameter at that index. A bound endpoint also takes
+Today a slot's lanes drive whatever instrument occupies it; replacing the
+instrument with a different InstrumentId will require explicit confirmation and
+inhibit stale automation until rearm (owner decision 28.10.2026, proposed in
+[instrument module ABI V2](INSTRUMENT_MODULE_ABI.md), not implemented yet). A bound endpoint also takes
 the parameter's host type: boolean (2 steps), choice (label count) and integer
 (inclusive span) are discrete; floating and unbound endpoints are continuous.
 
