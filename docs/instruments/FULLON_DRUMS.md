@@ -1,6 +1,7 @@
 # Full-on Drums — independent native drum kit (#71)
 
-Status: **D1 implemented (development package, not DAW-accepted).** Module
+Status: **D1 and the D2 sequencer core implemented (development package,
+not DAW-accepted).** Module
 `libs/drums/VoxFullOnDrums.c`, InstrumentId `com.ultimavox.fullon-drums`,
 package `com.ultimavox.fullon-drums.voxinst/0.1.0`. Loaded by the Rack's
 native V2 connector (#68); not linked into the Rack, no second VST3.
@@ -45,15 +46,50 @@ one-shots; CC120 / Rack Panic / reset stop at once; CC123 and
 | | | 46 | `kit.hat_choke` boolean |
 | | | 47 | `kit.velocity` sensitivity 0..1 |
 
-`<pad>` = kick, snare, clap, chat, ohat, tom, rim, cymbal. Pool 48–63 are
-reserved for the D2 sequencer. Pads 9–16 need the larger host layout (96/128
+`<pad>` = kick, snare, clap, chat, ohat, tom, rim, cymbal. Pool 48–62 are the
+D2 sequencer (below); 63 is free. Pads 9–16 need the larger host layout (96/128
 experiment) for their own controls; their identities and state slots are
 appended without renumbering. Parameter values are latched per hit.
 
+## D2 sequencer (pool 48–62)
+
+| Pool | Endpoint | Values |
+| --- | --- | --- |
+| 48 | `seq.mode` | Host MIDI (default) / Internal / Both |
+| 49 | `seq.pattern` | Full-on Basic, Full-on Driving, Rolling Offbeat, Breakdown, Kick & Offbeat |
+| 50 | `seq.swing` | 0..0.5 of a 16th, applied to odd 16ths |
+| 51 | `seq.accent` | 0..1 velocity boost on accented steps |
+| 52 | `seq.fill` | every 4th bar plays the pattern's fill |
+| 53 | `seq.bars` | evolution length 1 / 2 / 4 bars |
+| 54–61 | `seq.lane.<pad>` | lane on/off |
+| 62 | `seq.steps` | 1..16 steps per bar |
+
+Timing comes only from `VoxTransportV2` (tempo, ppq at sample 0, playing,
+discontinuity): 16ths on the host ppq grid (4/4), sample position
+`ceil((step_ppq − ppq0) · 60·fs/bpm)`. No wall clock or sample counting, so
+any block split gives the same hits. A step plays at most once; a backwards
+jump (loop, seek back) re-arms it; transport stop resets the Rack slot.
+
+**No double triggers.** *Host MIDI* plays only incoming notes (sequencer
+off). *Internal* plays only the sequencer and ignores incoming notes, so an
+imported clip on the same track cannot double it. *Both* is explicit. The
+Rack's own pattern generator does not drive this slot (native descriptors do
+not declare the sequence capability). A reopened project replays the same
+pattern without duplicates (tested).
+
+**Missing ABI hook (Architecture Guard).** Editing the step grid (per-step
+velocity/accent, user patterns, MIDI export of the internal pattern) needs a
+versioned content/editor table, e.g. `VoxContentV2 { getPattern(instance,
+VoxPatternV2 *out); setPattern(instance, const VoxPatternV2 *in); }` called on
+the controller thread, plus a pattern block in the module state. It is not in
+`VoxModuleAbiV2.h`; no private cross-DLL calls are used instead. Until then
+patterns are the five factory patterns selected by `seq.pattern`.
+
 ## State (module-owned, versioned, transactional)
 
-v1, 220 bytes, little endian: `"VOFD"`, parameter count (48), pad count (8),
-48 plain f32 values, 8 pad MIDI notes, 8 pad choke groups (0 = none, ≤ 4).
+v2, 280 bytes, little endian: `"VOFD"`, parameter count (63), pad count (8),
+63 plain f32 values, 8 pad MIDI notes, 8 pad choke groups (0 = none, ≤ 4).
+v1 (D1, 48 values) still loads; the sequencer values take their defaults.
 `loadState` validates everything (finite in-range values, unique notes
 < 128, choke ≤ 4) before applying anything. The Rack's named host values stay
 authoritative on restore.
@@ -76,8 +112,8 @@ editor/content hook exists:
 2. Selected-pad editor: Level, Tune, Decay, Pan, Character (+ kick page for
    pitch envelope, drive, sub, tail); note assignment and choke group.
 3. Kit strip: Kit Volume, Velocity Sens, Hat Choke, per-pad level meters.
-4. D2: step grid of 8 (→16) lanes × 16 steps with velocity/accent per step,
-   lane mute, swing, pattern slots and fills.
+4. D2 grid (needs the hook above): 8 (→16) lanes × 16 steps with
+   velocity/accent per step, lane mute, swing, pattern slots and fills.
 
 The note map and choke groups are already in the module state; editing them
 needs the editor/content hook (no private cross-DLL C++ calls).

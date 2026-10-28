@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -247,8 +248,8 @@ void loadsFromDevelopmentRootLikeADaw() {
       kit = d;
   check(kit != nullptr, "Full-on Drums offered in the slot catalog");
   check(kit->providerId == native::providerId && kit->directParameters &&
-            kit->parameters.size() == 48,
-        "48 typed host-exposed parameters (fits the 64-endpoint pool)");
+            kit->parameters.size() == 63,
+        "63 typed host-exposed parameters (fits the 64-endpoint pool)");
   for (std::size_t i = 0; i < kit->parameters.size(); ++i)
     check(kit->parameters[i].poolIndex == static_cast<int>(i), "explicit stable pool index");
   check(kit->parameters[padParam(kick, level)].id == "kick.level" &&
@@ -489,7 +490,7 @@ void projectsRestore() {
   second.channel = channelOf(*second.p, 5);
   check(second.p->instrumentRack().state()[5].instrumentId == drumsId, "slot identity restored");
   check(second.channel == first.channel, "MIDI channel restored");
-  for (int i = 0; i < 48; ++i)
+  for (int i = 0; i < 63; ++i)
     check(plainOf(second, i) == plainOf(first, i), "endpoint " + std::to_string(i) + " restored");
   const auto hits = groove(48000.0);
   const auto a = renderHits(first, 40000, hits);
@@ -555,10 +556,10 @@ void moduleRejectsInvalidState() {
   check(t.create(drumsId, &params, &s) == VOX_OK, "create");
   std::uint8_t state[512];
   std::uint32_t written = 0, version = 0;
-  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 1 &&
-            written == 12 + 48 * 4 + 16,
-        "state v1 holds parameters, note map and choke groups");
-  const std::uint32_t notesAt = 12 + 48 * 4;
+  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 2 &&
+            written == 12 + 63 * 4 + 16,
+        "state v2 holds parameters, note map and choke groups");
+  const std::uint32_t notesAt = 12 + 63 * 4;
   check(state[notesAt] == 36 && state[notesAt + 3] == 42 && state[notesAt + 8 + 3] == 1 &&
             state[notesAt + 8 + 4] == 1,
         "default note map and hat choke group are saved");
@@ -566,18 +567,20 @@ void moduleRejectsInvalidState() {
     std::uint8_t copy[512];
     std::memcpy(copy, state, written);
     copy[at] = value;
-    return t.loadState(s, 1, copy, written);
+    return t.loadState(s, 2, copy, written);
   };
   check(corrupt(notesAt + 1, 36) == VOX_E_STATE_CORRUPT, "duplicate pad note rejected");
   check(corrupt(notesAt + 2, 200) == VOX_E_STATE_CORRUPT, "invalid MIDI note rejected");
   check(corrupt(notesAt + 8, 9) == VOX_E_STATE_CORRUPT, "invalid choke group rejected");
   check(corrupt(0, 0) == VOX_E_STATE_CORRUPT, "bad magic rejected");
-  check(t.loadState(s, 2, state, written) == VOX_E_STATE_VERSION, "future version rejected");
-  check(t.loadState(s, 1, state, written) == VOX_OK, "valid state loads");
-  float values[48];
-  for (int i = 0; i < 48; ++i)
+  check(t.loadState(s, 3, state, written) == VOX_E_STATE_VERSION, "future version rejected");
+  check(t.loadState(s, 1, state, written) == VOX_E_STATE_CORRUPT,
+        "v2 bytes labelled v1 are rejected");
+  check(t.loadState(s, 2, state, written) == VOX_OK, "valid state loads");
+  float values[63];
+  for (int i = 0; i < 63; ++i)
     values[i] = 0.5f;
-  check(t.setAllParameters(s, values, 48) == VOX_E_INVALID_ARG,
+  check(t.setAllParameters(s, values, 63) == VOX_E_INVALID_ARG,
         "out-of-range snapshot rejected as a whole");
   check(t.destroy(s) == VOX_OK, "destroy");
 }
@@ -611,6 +614,247 @@ void noAllocationWhilePlaying() {
   std::cout << "allocation probe: not available on this platform\n";
 #endif
 }
+// ---------------------------------------------------------------- D2
+// The internal 16-step sequencer runs only from the Rack's VoxTransportV2.
+class TestPlayHead final : public juce::AudioPlayHead {
+public:
+  juce::Optional<PositionInfo> getPosition() const override {
+    PositionInfo info;
+    info.setBpm(bpm);
+    info.setPpqPosition(ppq);
+    info.setIsPlaying(playing);
+    info.setTimeInSamples(static_cast<juce::int64>(samples));
+    return info;
+  }
+  double bpm = 145.0, ppq = 0.0;
+  bool playing = true;
+  double samples = 0;
+};
+
+constexpr int seqMode = 48, seqPattern = 49, seqSwing = 50, seqAccent = 51, seqFill = 52,
+              seqBars = 53, seqLane0 = 54, seqSteps = 62;
+
+// Renders with a running host transport; the playhead advances per block.
+Stereo play(Rig &r, TestPlayHead &head, int samples, const std::vector<Midi> &events = {}) {
+  r.p->setPlayHead(&head);
+  Stereo out;
+  juce::AudioBuffer<float> audio(2, r.block);
+  juce::MidiBuffer midi;
+  for (int start = 0; start < samples; start += r.block) {
+    const int n = std::min(r.block, samples - start);
+    midi.clear();
+    for (const auto &e : events)
+      if (e.sample >= start && e.sample < start + n)
+        midi.addEvent(e.message, e.sample - start);
+    audio.setSize(2, n, false, false, true);
+    audio.clear();
+    r.p->processBlock(audio, midi);
+    out.l.insert(out.l.end(), audio.getReadPointer(0), audio.getReadPointer(0) + n);
+    out.r.insert(out.r.end(), audio.getReadPointer(1), audio.getReadPointer(1) + n);
+    if (head.playing) {
+      head.ppq += n * head.bpm / (60.0 * r.rate);
+      head.samples += n;
+    }
+  }
+  r.p->setPlayHead(nullptr);
+  return out;
+}
+
+void onlyLanes(Rig &r, std::initializer_list<int> pads) {
+  for (int pad = 0; pad < padCount; ++pad)
+    setPlain(r, seqLane0 + pad,
+             std::find(pads.begin(), pads.end(), pad) != pads.end() ? 1.0f : 0.0f);
+}
+
+// First sample at or after `from` whose magnitude exceeds zero, after silence.
+std::vector<int> onsets(const std::vector<float> &x, double minGapSamples) {
+  std::vector<int> found;
+  int last = -1000000;
+  for (int i = 0; i < static_cast<int>(x.size()); ++i)
+    if (x[i] != 0.0f && (i == 0 || x[i - 1] == 0.0f) && i - last > minGapSamples) {
+      found.push_back(i);
+      last = i;
+    }
+  return found;
+}
+
+void sequencerPlaysOnTheHostGrid() {
+  for (int block : {64, 256, 512}) {
+    auto r = makeRig(packageRoot, 2, 48000.0, block);
+    setPlain(r, seqMode, 1.0f); // Internal
+    setPlain(r, seqFill, 0.0f); // the fill bar drops a kick
+    onlyLanes(r, {kick});
+    setPlain(r, padParam(kick, decay), 0.08f); // short, so each onset follows silence
+    setPlain(r, kickTail, 0.03f);
+    TestPlayHead head;
+    const double spb = 60.0 / 145.0 * r.rate;
+    const auto out = play(r, head, static_cast<int>(spb * 16));
+    const auto hits = onsets(out.l, spb / 2);
+    check(hits.size() == 16, "16 kicks in 4 bars at block " + std::to_string(block) + " (got " +
+                                 std::to_string(hits.size()) + ")");
+    for (std::size_t k = 0; k < hits.size(); ++k)
+      check(std::abs(hits[k] - std::ceil(k * spb - 1e-6)) <= 1.0,
+            "kick " + std::to_string(k) + " lands on its beat");
+  }
+  auto a = makeRig(packageRoot, 2, 48000.0, 64);
+  auto b = makeRig(packageRoot, 2, 48000.0, 512);
+  for (auto *r : {&a, &b})
+    setPlain(*r, seqMode, 1.0f);
+  TestPlayHead ha, hb;
+  const int fourBars = static_cast<int>(60.0 / 145.0 * 48000.0 * 16);
+  const auto ra = play(a, ha, fourBars), rb = play(b, hb, fourBars);
+  check(ra.energy() > 10.0 && ra.finite() && ra.peak() < 1.0f,
+        "factory pattern is audible, finite and unclipped");
+  check(maxDifference(ra, rb) < 1e-6, "pattern render does not depend on block size");
+}
+
+void sequencerModesAvoidDoubleTriggers() {
+  const double spb = 60.0 / 145.0 * 48000.0;
+  const int bar = static_cast<int>(spb * 4);
+  auto r = makeRig(packageRoot);
+  TestPlayHead head;
+  check(play(r, head, bar).energy() == 0.0, "Host mode: a running transport alone is silent");
+  setPlain(r, seqMode, 1.0f);
+  onlyLanes(r, {kick});
+  TestPlayHead h1;
+  const auto internal = play(r, h1, bar);
+  r.p->releaseResources();
+  r.p->prepareToPlay(48000.0, 256);
+  TestPlayHead h2;
+  const std::vector<Midi> kicks = {{0, MidiMessage::noteOn(r.channel, 36, (juce::uint8)120)},
+                                   {1000, MidiMessage::noteOn(r.channel, 38, (juce::uint8)120)}};
+  const auto internalWithMidi = play(r, h2, bar, kicks);
+  check(internalWithMidi == internal, "Internal mode ignores incoming notes (no double kick)");
+  setPlain(r, seqMode, 2.0f); // Both
+  r.p->releaseResources();
+  r.p->prepareToPlay(48000.0, 256);
+  TestPlayHead h3;
+  check(play(r, h3, bar, kicks).energy() > internal.energy(), "Both mode adds the MIDI hits");
+
+  // Transport stop: no new steps start.
+  setPlain(r, seqMode, 1.0f);
+  TestPlayHead stopped;
+  stopped.playing = false;
+  check(play(r, stopped, bar).energy() == 0.0, "stopped transport plays nothing");
+}
+
+void sequencerFollowsLoopsSeeksAndSwing() {
+  const double spb = 60.0 / 145.0 * 48000.0;
+  auto r = makeRig(packageRoot);
+  setPlain(r, seqMode, 1.0f);
+  onlyLanes(r, {kick});
+  setPlain(r, padParam(kick, decay), 0.08f);
+  setPlain(r, kickTail, 0.03f);
+  TestPlayHead head;
+  play(r, head, static_cast<int>(spb * 4) - 256); // almost one bar
+  head.ppq = 0.0; // the host loops back to the bar start
+  const auto looped = play(r, head, static_cast<int>(spb));
+  const auto hits = onsets(looped.l, spb / 2);
+  check(!hits.empty() && hits.front() <= 1, "a loop back replays the downbeat at once");
+  head.ppq = 2.5; // seek between beats
+  const auto sought = play(r, head, static_cast<int>(spb));
+  const auto after = onsets(sought.l, spb / 2);
+  check(!after.empty() && std::abs(after.front() - std::ceil(0.5 * spb - 1e-6)) <= 1.0,
+        "after a seek the next beat lands on the grid");
+
+  onlyLanes(r, {closedHat});
+  setPlain(r, seqSwing, 0.5f);
+  setPlain(r, padParam(closedHat, decay), 0.02f);
+  TestPlayHead swung;
+  const auto out = play(r, swung, static_cast<int>(spb));
+  const auto hats = onsets(out.l, spb / 16);
+  check(hats.size() >= 3, "closed hat 16ths play");
+  check(std::abs(hats[1] - std::ceil((0.25 + 0.125) * spb - 1e-6)) <= 1.0,
+        "swing delays the odd 16th by half a 16th");
+  setPlain(r, seqSwing, 0.0f);
+}
+
+void sequencerPatternControls() {
+  const double spb = 60.0 / 145.0 * 48000.0;
+  const int bars4 = static_cast<int>(spb * 16);
+  auto render = [&](auto setup) {
+    auto r = makeRig(packageRoot);
+    setPlain(r, seqMode, 1.0f);
+    setup(r);
+    TestPlayHead head;
+    return play(r, head, bars4);
+  };
+  const auto base = render([](Rig &) {});
+  check(!(render([](Rig &r) { setPlain(r, seqPattern, 2.0f); }) == base),
+        "Seq Pattern selects another factory pattern");
+  check(!(render([](Rig &r) { setPlain(r, seqFill, 0.0f); }) == base), "Seq Fill changes bar 4");
+  check(!(render([](Rig &r) { setPlain(r, seqAccent, 0.0f); }) == base), "Seq Accent changes hits");
+  check(!(render([](Rig &r) { setPlain(r, seqBars, 0.0f); }) == base), "Seq Bars changes evolution");
+  check(!(render([](Rig &r) { setPlain(r, seqLane0 + openHat, 0.0f); }) == base),
+        "lane switch removes a pad");
+  const auto half = render([](Rig &r) {
+    onlyLanes(r, {closedHat});
+    setPlain(r, seqSteps, 8.0f);
+    setPlain(r, padParam(closedHat, decay), 0.02f);
+  });
+  const int stepSamples = static_cast<int>(spb / 4);
+  check(half.energy(0, 8 * stepSamples) > 0.0 &&
+            half.energy(9 * stepSamples, 16 * stepSamples) == 0.0,
+        "Seq Steps 8 leaves steps 9..16 silent");
+}
+
+void sequencerStateReopensWithoutDuplicates() {
+  const int bars4 = static_cast<int>(60.0 / 145.0 * 48000.0 * 16);
+  auto first = makeRig(packageRoot, 6);
+  setPlain(first, seqMode, 1.0f);
+  setPlain(first, seqPattern, 1.0f);
+  setPlain(first, seqSwing, 0.2f);
+  render(first, 512, {});
+  juce::MemoryBlock state;
+  first.p->getStateInformation(state);
+  first.p->releaseResources();
+  first.p->prepareToPlay(48000.0, 256);
+  TestPlayHead h1;
+  const auto a = play(first, h1, bars4);
+
+  Rig second;
+  second.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                       native::loadPackages(packageRoot));
+  quietBuiltIns(*second.p);
+  second.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  second.p->prepareToPlay(48000.0, 256);
+  second.slot = 6;
+  second.channel = channelOf(*second.p, 6);
+  TestPlayHead h2;
+  const auto b = play(second, h2, bars4);
+  check(a.energy() > 1.0 && a == b, "reopened project plays the same pattern, no duplicate beats");
+}
+
+void stateMigratesFromV1() {
+  const auto selection = native::resolvePackages(packageRoot);
+  std::string diagnostic;
+  auto module = native::NativeModule::acquire(selection.modules.front(), diagnostic);
+  const auto &t = module->table();
+  const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2,
+                                 VOX_SLOT_INDEX_NONE, 0};
+  VoxInstance s = nullptr;
+  check(t.create(drumsId, &params, &s) == VOX_OK, "create");
+  // A D1 (v1) state: 48 values, kick tuned down 5 st.
+  std::uint8_t v1[12 + 48 * 4 + 16];
+  std::uint8_t v2[512];
+  std::uint32_t written = 0, version = 0;
+  check(t.saveState(s, v2, sizeof(v2), &written, &version) == VOX_OK && version == 2 &&
+            written == 12 + 63 * 4 + 16,
+        "state v2 holds 63 values");
+  std::memcpy(v1, v2, 12 + 48 * 4);
+  v1[4] = 48;
+  const float tuneDown = -5.0f;
+  std::memcpy(v1 + 12 + 4 * padParam(kick, tune), &tuneDown, 4);
+  std::memcpy(v1 + 12 + 48 * 4, v2 + 12 + 63 * 4, 16);
+  check(t.loadState(s, 1, v1, sizeof(v1)) == VOX_OK, "v1 (D1) state loads");
+  check(t.saveState(s, v2, sizeof(v2), &written, &version) == VOX_OK, "save after migration");
+  float value = 0;
+  std::memcpy(&value, v2 + 12 + 4 * padParam(kick, tune), 4);
+  check(value == tuneDown, "v1 kit values survive migration");
+  std::memcpy(&value, v2 + 12 + 4 * seqMode, 4);
+  check(value == 0.0f, "new sequencer values take defaults (Host MIDI)");
+  check(t.destroy(s) == VOX_OK, "destroy");
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -630,6 +874,12 @@ int main(int argc, char **argv) {
   projectsRestore();
   deterministicOfflineRender();
   moduleRejectsInvalidState();
+  sequencerPlaysOnTheHostGrid();
+  sequencerModesAvoidDoubleTriggers();
+  sequencerFollowsLoopsSeeksAndSwing();
+  sequencerPatternControls();
+  sequencerStateReopensWithoutDuplicates();
+  stateMigratesFromV1();
   noAllocationWhilePlaying();
   std::cout << "fullon_drums_tests: " << checks << " checks passed\n";
   return 0;

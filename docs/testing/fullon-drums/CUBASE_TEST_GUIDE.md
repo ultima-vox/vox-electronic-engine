@@ -28,8 +28,9 @@ unverified until run in Cubase.
 Per pad, in order: Level, Tune (±12 st), Decay (T60, seconds), Pan, Character.
 Kit controls: `p041` Kit Volume, `p042` Kick Pitch Env, `p043` Kick Pitch
 Decay, `p044` Kick Drive, `p045` Kick Sub, `p046` Kick Tail, `p047` Hat Choke
-(closed hat cuts open hat), `p048` Velocity Sens. `p049`–`p064` are reserved
-for the D2 sequencer. Cubase note names may be one octave different depending
+(closed hat cuts open hat), `p048` Velocity Sens. Sequencer: `p049` Seq Mode (Host MIDI / Internal /
+Both), `p050` Seq Pattern, `p051` Swing, `p052` Accent, `p053` Fill, `p054`
+Bars, `p055`–`p062` lane on/off (pad order), `p063` Steps. Cubase note names may be one octave different depending
 on its "MIDI note name" display preference; the numbers are authoritative.
 
 Behaviour: one-shot voices (NoteOff and sustain are ignored), several pads
@@ -69,6 +70,11 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 | 12 | Quit Cubase, rename `...\com.ultimavox.fullon-drums.voxinst` to `.off`, reopen | Rack loads; slot 1 shows Full-on Drums missing and silent; save once |
 | 13 | Quit, rename back, reopen | Groove and values return |
 | 14 | Compare the Rack hash with step 2.1 | Unchanged |
+| 15 | Delete the MIDI clip. Set **Seq Mode = Internal**, Seq Pattern = Full-on Basic, press Play at 145 BPM | The kit plays the pattern in time with Cubase; bar 4 has a tom fill |
+| 16 | Loop bars 1–4, seek, change tempo, stop/start | Stays on the grid; downbeat replays on loop; no hits while stopped |
+| 17 | Re-import the clip with Seq Mode = Internal | No doubled hits (incoming notes are ignored); Seq Mode = Both plays both |
+| 18 | Swing 0.3, Accent 0, lane switches, Steps 8, other patterns | Audible changes as described |
+| 19 | Save with Seq Mode = Internal, reopen | Same pattern, no duplicate beats |
 
 ## 4. Results (fill in)
 

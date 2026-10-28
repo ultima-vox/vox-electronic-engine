@@ -19,7 +19,12 @@
  * trigger time (parameter moves affect the next hit), are one-shot (NoteOff
  * is ignored), and always end: by their own envelope (-80 dB), by a choke or
  * retrigger fade (3 ms), by CC123 / release-all (50 ms fade) or immediately
- * by CC120 / panic / reset. */
+ * by CC120 / panic / reset.
+ *
+ * D2: an internal 16-step, 8-lane sequencer with factory patterns, driven
+ * only by the Rack's VoxTransportV2 (tempo, ppq, playing, discontinuity).
+ * Seq Mode: Host MIDI (default; sequencer off), Internal (sequencer only,
+ * incoming notes ignored so a MIDI clip cannot double it) or Both. */
 #define VOX_BUILDING_MODULE 1
 #include "instrument/abi/VoxModuleAbiV2.h"
 
@@ -31,11 +36,14 @@
 #define PAD_COUNT 8u
 #define PAD_PARAMS 5u
 #define GLOBAL_PARAMS 8u
-#define PARAM_COUNT (PAD_COUNT * PAD_PARAMS + GLOBAL_PARAMS) /* 48 */
+#define SEQ_PARAMS 15u
+#define V1_PARAM_COUNT (PAD_COUNT * PAD_PARAMS + GLOBAL_PARAMS) /* 48 */
+#define PARAM_COUNT (V1_PARAM_COUNT + SEQ_PARAMS)              /* 63 */
 #define MAX_VOICES 16
-#define STATE_VERSION 1u
+#define STATE_VERSION 2u
 #define STATE_MAGIC 0x44464f56u /* "VOFD" */
-#define STATE_BYTES (12u + PARAM_COUNT * 4u + PAD_COUNT * 2u)
+#define STATE_BYTES_FOR(count) (12u + (count) * 4u + PAD_COUNT * 2u)
+#define STATE_BYTES STATE_BYTES_FOR(PARAM_COUNT)
 #define MAX_STATE_BYTES 4096u /* room for D2 pattern state */
 #define MAX_BLOCK 8192u
 #define MAX_RECORD_STRIDE 1024u
@@ -55,8 +63,22 @@ enum {
   G_KICK_SUB,                        /* 44 */
   G_KICK_TAIL,                       /* 45 */
   G_HAT_CHOKE,                       /* 46 */
-  G_VELOCITY                         /* 47 */
+  G_VELOCITY,                        /* 47 */
+  S_MODE,                            /* 48 Host / Internal / Both */
+  S_PATTERN,                         /* 49 */
+  S_SWING,                           /* 50 */
+  S_ACCENT,                          /* 51 */
+  S_FILL,                            /* 52 */
+  S_BARS,                            /* 53 1 / 2 / 4 */
+  S_LANE0,                           /* 54..61 lane on/off per pad */
+  S_STEPS = S_LANE0 + PAD_COUNT      /* 62 */
 };
+enum { MODE_HOST, MODE_INTERNAL, MODE_BOTH };
+#define PATTERN_COUNT 5
+#define BARS 4
+#define FILL_BAR BARS
+#define STEPS 16
+#define ACCENT 0x80u
 
 static const uint8_t defaultNotes[PAD_COUNT] = {36, 38, 39, 42, 46, 45, 37, 49};
 static const uint8_t defaultChoke[PAD_COUNT] = {0, 0, 0, 1, 1, 0, 0, 0};
@@ -76,6 +98,15 @@ static const uint8_t defaultChoke[PAD_COUNT] = {0, 0, 0, 1, 1, 0, 0, 0};
     base + 3),                                                                                \
   P(key ".character", label " " charName, "", label, VOX_PARAM_FLOAT, 0.0f, 1.0f, charDef,     \
     0.0f, base + 4)
+
+static const char *const modeChoices[] = {"Host MIDI", "Internal", "Both"};
+static const char *const patternChoices[] = {"Full-on Basic", "Full-on Driving",
+                                             "Rolling Offbeat", "Breakdown", "Kick & Offbeat"};
+static const char *const barChoices[] = {"1 bar", "2 bars", "4 bars"};
+#define C(id, name, choices, n, def, pool)                                                     \
+  {sizeof(VoxParameterDescriptorV2), VOX_MODULE_ABI_V2, id, name, "", "Sequencer", choices,    \
+   VOX_PARAM_CHOICE, n, 0.0f, (float)((n) - 1), def, 1.0f, pool, EXPOSED}
+#define LANE(id, name, pool) P(id, name, "", "Sequencer", VOX_PARAM_BOOLEAN, 0.0f, 1.0f, 1.0f, 1.0f, pool)
 
 /* Descriptor index == poolIndex. Never reorder; only append. */
 static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
@@ -97,6 +128,18 @@ static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
     P("kick.tail", "Kick Tail", "s", "Kick", VOX_PARAM_FLOAT, 0.03f, 1.5f, 0.25f, 0.0f, 45),
     P("kit.hat_choke", "Hat Choke", "", "Kit", VOX_PARAM_BOOLEAN, 0.0f, 1.0f, 1.0f, 1.0f, 46),
     P("kit.velocity", "Velocity Sens", "", "Kit", VOX_PARAM_FLOAT, 0.0f, 1.0f, 0.8f, 0.0f, 47),
+    /* D2 sequencer (appended; 63 of the 64 pool endpoints). */
+    C("seq.mode", "Seq Mode", modeChoices, 3, 0.0f, 48),
+    C("seq.pattern", "Seq Pattern", patternChoices, PATTERN_COUNT, 0.0f, 49),
+    P("seq.swing", "Seq Swing", "", "Sequencer", VOX_PARAM_FLOAT, 0.0f, 0.5f, 0.0f, 0.0f, 50),
+    P("seq.accent", "Seq Accent", "", "Sequencer", VOX_PARAM_FLOAT, 0.0f, 1.0f, 0.5f, 0.0f, 51),
+    P("seq.fill", "Seq Fill", "", "Sequencer", VOX_PARAM_BOOLEAN, 0.0f, 1.0f, 1.0f, 1.0f, 52),
+    C("seq.bars", "Seq Bars", barChoices, 3, 2.0f, 53),
+    LANE("seq.lane.kick", "Lane Kick", 54), LANE("seq.lane.snare", "Lane Snare", 55),
+    LANE("seq.lane.clap", "Lane Clap", 56), LANE("seq.lane.chat", "Lane Closed Hat", 57),
+    LANE("seq.lane.ohat", "Lane Open Hat", 58), LANE("seq.lane.tom", "Lane Tom", 59),
+    LANE("seq.lane.rim", "Lane Rim", 60), LANE("seq.lane.cymbal", "Lane Cymbal", 61),
+    P("seq.steps", "Seq Steps", "", "Sequencer", VOX_PARAM_INTEGER, 1.0f, 16.0f, 16.0f, 1.0f, 62),
 };
 
 static const VoxInstrumentDescriptorV2 instrument = {
@@ -123,6 +166,11 @@ typedef struct {
 
 struct VoxInstanceT {
   float values[PARAM_COUNT];
+  /* sequencer: the active factory pattern, rebuilt when seq.pattern changes */
+  uint8_t pattern[BARS + 1][PAD_COUNT][STEPS];
+  int patternIndex;
+  int64_t lastStep;   /* last sequenced 16th (absolute), INT64_MIN = none */
+  double lastPpqStart;
   uint8_t padNote[PAD_COUNT];
   uint8_t choke[PAD_COUNT];
   int8_t noteToPad[128];
@@ -154,6 +202,84 @@ static void rebuildNoteMap(struct VoxInstanceT *s) {
 
 static float padValue(const struct VoxInstanceT *s, int pad, int key) {
   return s->values[(uint32_t)pad * PAD_PARAMS + (uint32_t)key];
+}
+
+/* ---------------------------------------------------------- patterns */
+/* Factory patterns, 145 BPM full-on idiom. bar 0..3 = evolution bars,
+ * bar 4 = fill. Cell = velocity (1..127) | ACCENT, 0 = rest. Built into the
+ * instance on pattern change: no allocation, deterministic. */
+static void set(uint8_t (*p)[PAD_COUNT][STEPS], int bar, int pad, int step, int vel, int acc) {
+  p[bar][pad][step] = (uint8_t)(vel | (acc ? ACCENT : 0));
+}
+
+static void buildPattern(int index, uint8_t (*p)[PAD_COUNT][STEPS]) {
+  memset(p, 0, sizeof(uint8_t) * (BARS + 1) * PAD_COUNT * STEPS);
+  for (int bar = 0; bar <= BARS; ++bar) {
+    const int fill = bar == FILL_BAR;
+    for (int st = 0; st < STEPS; ++st) {
+      const int beat = st % 4 == 0, off = st % 4 == 2;
+      switch (index) {
+      case 0: /* Full-on Basic */
+      case 1: /* Full-on Driving */
+        if (beat && !(fill && st == 12))
+          set(p, bar, PAD_KICK, st, 120, st == 0);
+        if (off)
+          set(p, bar, PAD_OPEN_HAT, st, 92, 1);
+        else if (!(fill && st >= 12))
+          set(p, bar, PAD_CLOSED_HAT, st, st % 2 ? 66 : 92, 0);
+        if (st == 4 || st == 12) {
+          set(p, bar, PAD_SNARE, st, 110, 0);
+          set(p, bar, PAD_CLAP, st, 100, 0);
+        }
+        if (index == 1 && st % 4 == 3)
+          set(p, bar, PAD_RIM, st, 58, 0);
+        if ((bar == 1 || bar == 3) && st == 7)
+          set(p, bar, PAD_RIM, st, 80, 1);
+        if (bar == 0 && st == 0)
+          set(p, bar, PAD_CYMBAL, st, 96, 0);
+        if (fill && st >= 12)
+          set(p, bar, PAD_TOM, st, 84 + 10 * (st - 12), st == 15);
+        if (fill && (st == 13 || st == 14 || st == 15))
+          set(p, bar, PAD_SNARE, st, 70 + 12 * (st - 13), 0);
+        break;
+      case 2: /* Rolling Offbeat: e/a hats, clap only, ghost toms */
+        if (beat)
+          set(p, bar, PAD_KICK, st, 118, st == 0);
+        if (off)
+          set(p, bar, PAD_OPEN_HAT, st, 96, 1);
+        if (st % 2 == 1)
+          set(p, bar, PAD_CLOSED_HAT, st, 72, 0);
+        if (st == 4 || st == 12)
+          set(p, bar, PAD_CLAP, st, 104, 0);
+        if ((bar == 2 || fill) && (st == 11 || st == 15))
+          set(p, bar, PAD_TOM, st, 64, 0);
+        break;
+      case 3: /* Breakdown: no kick */
+        if (off)
+          set(p, bar, PAD_OPEN_HAT, st, 80, 0);
+        if (st % 2 == 0 && !off)
+          set(p, bar, PAD_CLOSED_HAT, st, 60, 0);
+        if (st == 12)
+          set(p, bar, PAD_CLAP, st, 90, 0);
+        if (bar == 0 && st == 0)
+          set(p, bar, PAD_CYMBAL, st, 90, 0);
+        if (fill && st >= 8 && st % 2 == 0)
+          set(p, bar, PAD_SNARE, st, 60 + 8 * (st - 8), st == 14);
+        break;
+      default: /* Kick & Offbeat: space for a rolling bass */
+        if (beat)
+          set(p, bar, PAD_KICK, st, 120, st == 0);
+        if (off)
+          set(p, bar, PAD_OPEN_HAT, st, 90, 1);
+        break;
+      }
+    }
+  }
+}
+
+static void resetSequencer(struct VoxInstanceT *s) {
+  s->lastStep = INT64_MIN;
+  s->lastPpqStart = -HUGE_VAL;
 }
 
 /* ------------------------------------------------------------- voices */
@@ -405,6 +531,9 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
   memcpy(s->padNote, defaultNotes, sizeof(defaultNotes));
   memcpy(s->choke, defaultChoke, sizeof(defaultChoke));
   rebuildNoteMap(s);
+  s->patternIndex = (int)s->values[S_PATTERN];
+  buildPattern(s->patternIndex, s->pattern);
+  resetSequencer(s);
   ++liveInstances;
   *out = s;
   return VOX_OK;
@@ -433,6 +562,7 @@ static VoxResult VOX_CALL prepare(VoxInstance s, const VoxPrepareSpecV2 *spec) {
   s->maxParamChanges = spec->maxParamChangesPerBlock;
   s->maxMidiEvents = spec->maxMidiEventsPerBlock;
   stopAll(s);
+  resetSequencer(s);
   s->prepared = 1;
   return VOX_OK;
 }
@@ -452,6 +582,7 @@ static VoxResult VOX_CALL reset(VoxInstance s) {
   if (s == NULL)
     return VOX_E_INVALID_ARG;
   stopAll(s);
+  resetSequencer(s);
   return VOX_OK;
 }
 
@@ -462,6 +593,8 @@ static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e) {
   const int data1 = e->bytes[1] & 0x7F;
   const int data2 = e->bytes[2] & 0x7F;
   if (status == 0x90u && data2 > 0) {
+    if ((int)s->values[S_MODE] == MODE_INTERNAL)
+      return; /* Internal: the sequencer alone plays; no double triggers */
     const int pad = s->noteToPad[data1];
     if (pad >= 0)
       trigger(s, pad, data2);
@@ -472,6 +605,78 @@ static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e) {
       fadeAll(s, 0.05); /* All Notes Off: bounded 50 ms tail */
   }
   /* NoteOff and sustain do not affect one-shot drum voices. */
+}
+
+/* ------------------------------------------------------- sequencer */
+#define MAX_SEQ_HITS 256
+typedef struct {
+  uint32_t offset;
+  uint8_t pad, velocity;
+} SeqHit;
+
+/* Schedules this block's internal-sequencer hits from VoxTransportV2 only
+ * (no wall clock, no sample counting). Stateless apart from lastStep, which
+ * prevents a 16th from playing twice; a backwards jump (loop, seek) clears
+ * it. Steps sit on the 16th grid of the host's ppq (4/4); odd 16ths are
+ * delayed by swing. */
+static uint32_t scheduleSequencer(struct VoxInstanceT *s, const VoxProcessContextV2 *c,
+                                  SeqHit *hits) {
+  const int mode = (int)s->values[S_MODE];
+  const VoxTransportV2 *tr = c->transport;
+  const uint32_t need = VOX_TRANSPORT_PLAYING | VOX_TRANSPORT_HAS_TEMPO | VOX_TRANSPORT_HAS_PPQ;
+  if (mode == MODE_HOST || (tr->flags & need) != need || !(tr->tempoBpm > 0.0) ||
+      tr->tempoBpm > 1000.0 || !isfinite(tr->ppqPosition) || c->numSamples == 0)
+    return 0;
+  const int index = (int)s->values[S_PATTERN];
+  if (index != s->patternIndex) {
+    buildPattern(index, s->pattern);
+    s->patternIndex = index;
+  }
+  const double ppq0 = tr->ppqPosition;
+  if ((tr->flags & VOX_TRANSPORT_DISCONTINUITY) && ppq0 < s->lastPpqStart)
+    s->lastStep = INT64_MIN; /* moved backwards: steps may play again */
+  s->lastPpqStart = ppq0;
+
+  const double samplesPerPpq = 60.0 * s->sampleRate / tr->tempoBpm;
+  const double swing = s->values[S_SWING] * 0.25;
+  const int steps = (int)s->values[S_STEPS];
+  const int bars = (int)s->values[S_BARS]; /* 0: 1 bar, 1: 2 bars, 2: 4 bars */
+  const int fill = s->values[S_FILL] >= 0.5f;
+  const double accent = s->values[S_ACCENT];
+  uint32_t count = 0;
+  for (int64_t g = (int64_t)floor(ppq0 * 4.0) - 1;; ++g) {
+    if (g < 0)
+      continue;
+    const double t = (double)g * 0.25 + ((g & 1) ? swing : 0.0);
+    const double at = ceil((t - ppq0) * samplesPerPpq - 1e-6);
+    if (at >= (double)c->numSamples)
+      break;
+    if (at < 0.0 || g <= s->lastStep)
+      continue;
+    s->lastStep = g;
+    const int step = (int)(g % STEPS);
+    if (step >= steps)
+      continue;
+    const int64_t bar = g / STEPS;
+    const int cycle = (int)(bar % 4);
+    const int dataBar = fill && cycle == 3 ? FILL_BAR
+                        : bars == 0        ? 0
+                        : bars == 1        ? (int)(bar % 2)
+                                           : cycle;
+    for (int lane = 0; lane < (int)PAD_COUNT && count < MAX_SEQ_HITS; ++lane) {
+      const uint8_t cell = s->pattern[dataBar][lane][step];
+      if (cell == 0 || s->values[S_LANE0 + lane] < 0.5f)
+        continue;
+      double velocity = cell & 0x7Fu;
+      if (cell & ACCENT)
+        velocity += accent * (127.0 - velocity);
+      hits[count].offset = (uint32_t)at;
+      hits[count].pad = (uint8_t)lane;
+      hits[count].velocity = (uint8_t)fmin(127.0, floor(velocity + 0.5));
+      ++count;
+    }
+  }
+  return count;
 }
 
 static int validRecords(const void *records, uint32_t count, uint32_t stride, size_t size,
@@ -502,7 +707,20 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
     stopAll(s);
   const uint8_t *changes = (const uint8_t *)c->paramChanges;
   const uint8_t *events = (const uint8_t *)c->midiEvents;
-  uint32_t nextChange = 0, nextEvent = 0;
+  uint32_t nextChange = 0, nextEvent = 0, nextHit = 0;
+  /* Changes at the block start apply before the sequencer is scheduled, so a
+   * mode or pattern switch takes effect on this block's first step. */
+  while (nextChange < c->paramChangeCount) {
+    VoxParamChangeV2 p;
+    memcpy(&p, changes + (size_t)nextChange * c->paramChangeStride, sizeof(p));
+    if (p.sampleOffset > 0)
+      break;
+    if (p.index < PARAM_COUNT && validValue(p.index, p.plain))
+      s->values[p.index] = p.plain;
+    ++nextChange;
+  }
+  SeqHit seq[MAX_SEQ_HITS];
+  const uint32_t seqCount = scheduleSequencer(s, c, seq);
   float *left = c->outputs[0];
   float *right = c->outputChannelCount > 1 ? c->outputs[1] : NULL;
   for (uint32_t i = 0; i < c->numSamples; ++i) {
@@ -522,6 +740,10 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
         break;
       applyMidi(s, &e);
       ++nextEvent;
+    }
+    while (nextHit < seqCount && seq[nextHit].offset <= i) {
+      trigger(s, seq[nextHit].pad, seq[nextHit].velocity);
+      ++nextHit;
     }
     double l = 0.0, r = 0.0;
     for (int k = 0; k < MAX_VOICES; ++k) {
@@ -558,8 +780,9 @@ static uint32_t get32(const uint8_t *p) {
   return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-/* State v1 (little endian): "VOFD", parameter count (48), pad count (8),
- * 48 plain f32 values, 8 pad MIDI notes, 8 pad choke groups. */
+/* State (little endian): "VOFD", parameter count, pad count (8), plain f32
+ * values, 8 pad MIDI notes, 8 pad choke groups. v1 = 48 values (D1 kit);
+ * v2 = 63 values (adds the D2 sequencer, defaults when loading v1). */
 static VoxResult VOX_CALL saveState(VoxInstance s, uint8_t *buffer, uint32_t capacity,
                                     uint32_t *written, uint32_t *stateVersion) {
   if (s == NULL || written == NULL || stateVersion == NULL)
@@ -587,17 +810,20 @@ static VoxResult VOX_CALL loadState(VoxInstance s, uint32_t version, const uint8
     return VOX_E_INVALID_ARG;
   if (version > STATE_VERSION)
     return VOX_E_STATE_VERSION;
-  if (version != STATE_VERSION || size != STATE_BYTES || get32(bytes) != STATE_MAGIC ||
-      get32(bytes + 4) != PARAM_COUNT || get32(bytes + 8) != PAD_COUNT)
+  const uint32_t count = version == 1 ? V1_PARAM_COUNT : PARAM_COUNT;
+  if (version == 0 || size != STATE_BYTES_FOR(count) || get32(bytes) != STATE_MAGIC ||
+      get32(bytes + 4) != count || get32(bytes + 8) != PAD_COUNT)
     return VOX_E_STATE_CORRUPT;
   float next[PARAM_COUNT];
-  for (uint32_t i = 0; i < PARAM_COUNT; ++i) {
+  for (uint32_t i = count; i < PARAM_COUNT; ++i)
+    next[i] = parameters[i].defaultValue; /* migration v1 -> v2 */
+  for (uint32_t i = 0; i < count; ++i) {
     const uint32_t bits = get32(bytes + 12 + 4 * i);
     memcpy(&next[i], &bits, 4);
     if (!validValue(i, next[i]))
       return VOX_E_STATE_CORRUPT;
   }
-  const uint8_t *notes = bytes + 12 + 4 * PARAM_COUNT;
+  const uint8_t *notes = bytes + 12 + 4 * count;
   const uint8_t *chokes = notes + PAD_COUNT;
   uint8_t used[128] = {0};
   for (uint32_t p = 0; p < PAD_COUNT; ++p) {
@@ -610,6 +836,7 @@ static VoxResult VOX_CALL loadState(VoxInstance s, uint32_t version, const uint8
   memcpy(s->choke, chokes, PAD_COUNT);
   rebuildNoteMap(s);
   stopAll(s);
+  resetSequencer(s);
   return VOX_OK;
 }
 
