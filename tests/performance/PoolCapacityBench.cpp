@@ -19,7 +19,11 @@
 namespace {
 using namespace vstengine;
 using Clock = std::chrono::steady_clock;
-constexpr const char *syntheticId = "test.bench.acidlike";
+constexpr const char *syntheticId = "test.bench.synthetic";
+// Scenario A isolates host-layout overhead: 64 bound parameters under every
+// layout. Scenario B is the real Acid requirement: 80 bound parameters, which
+// only fits a pool of 96 or more.
+constexpr std::size_t layoutControls = 64;
 constexpr std::size_t acidControls = 80;
 
 double ms(Clock::duration d) {
@@ -51,8 +55,8 @@ long residentKiB() {
 #endif
 }
 
-// Acid-like instrument: min(80, pool) typed direct parameters
-// (floating, integer, boolean, choice in turn) on pool indices 0..N-1.
+// Synthetic instrument with `count` typed direct parameters (floating,
+// integer, boolean, choice in turn) on pool indices 0..count-1.
 class Synthetic final : public instrument::InstrumentInstance {
   std::array<float, instrument::poolParametersPerSlot> values{};
   double phase{};
@@ -95,17 +99,16 @@ class SyntheticProvider final : public instrument::InstrumentProvider {
   instrument::InstrumentDescriptor d_;
 
 public:
-  SyntheticProvider() {
+  explicit SyntheticProvider(std::size_t count) {
     d_.id = syntheticId;
     d_.providerId = "test.bench.provider";
-    d_.name = "Acid-like bench";
+    d_.name = "Synthetic bench";
     d_.vendor = "Tests";
     d_.directParameters = true;
     d_.budget.maxVoices = 1;
     d_.budget.maxMidiEventsPerBlock = 2048;
     d_.budget.maxStateBytes = 8;
     using T = instrument::ParameterType;
-    const auto count = std::min(acidControls, instrument::poolParametersPerSlot);
     for (std::size_t i = 0; i < count; ++i) {
       instrument::ParameterDescriptor p;
       p.id = "p" + std::to_string(i);
@@ -147,39 +150,46 @@ bool verifyLayout(VstEngineAudioProcessor &p) {
   return ok;
 }
 
-void measureBlocks(VstEngineAudioProcessor &p, const char *label, int activeSlots,
-                   double rate, int block) {
+// Block timing covers processBlock only (the DSP callback). The 8 host
+// automation writes per active slot happen before it via setValueNotifyingHost
+// and are timed separately as notify_us; neither is a DAW automation-cost
+// measurement.
+void measureBlocks(VstEngineAudioProcessor &p, const char *label, std::size_t bound,
+                   int activeSlots, double rate, int block) {
   constexpr int blocks = 20000;
   p.prepareToPlay(rate, block);
   juce::AudioBuffer<float> audio(2, block);
   juce::MidiBuffer midi;
-  std::vector<double> times;
+  std::vector<double> times, notify;
   times.reserve(blocks);
+  notify.reserve(blocks);
   for (int i = 0; i < blocks; ++i) {
     midi.clear();
+    const auto notifyStart = Clock::now();
     for (int slot = 0; slot < activeSlots; ++slot) {
       if (i % 64 == 0)
         midi.addEvent(juce::MidiMessage::noteOn(slot + 1, 48, 0.8f), 0);
       if (i % 64 == 32)
         midi.addEvent(juce::MidiMessage::noteOff(slot + 1, 48), 0);
       // Host automation: 8 changed endpoints per active slot and block.
-      for (std::size_t k = 0; k < 8 && activeSlots > 0; ++k) {
-        const auto index = (static_cast<std::size_t>(i) * 8 + k) %
-                           std::min(acidControls, instrument::poolParametersPerSlot);
+      for (std::size_t k = 0; k < 8 && bound > 0; ++k) {
+        const auto index = (static_cast<std::size_t>(i) * 8 + k) % bound;
         if (auto *param = p.parameters().getParameter(
                 instrument::hostparams::poolId(static_cast<std::size_t>(slot), index)))
           param->setValueNotifyingHost(static_cast<float>((i + k) % 100) / 100.0f);
       }
     }
+    notify.push_back(ms(Clock::now() - notifyStart) * 1000.0);
     const auto start = Clock::now();
     p.processBlock(audio, midi);
     times.push_back(ms(Clock::now() - start) * 1000.0);
   }
-  std::printf("%s slots=%d rate=%.0f block=%d block_us p50=%.1f p99=%.1f p99.9=%.1f "
-              "max=%.1f budget_us=%.0f\n",
-              label, activeSlots, rate, block, percentile(times, 0.5),
-              percentile(times, 0.99), percentile(times, 0.999),
-              *std::max_element(times.begin(), times.end()), block / rate * 1.0e6);
+  std::printf("%s pool=%zu bound=%zu slots=%d rate=%.0f block=%d block_us p50=%.1f "
+              "p99=%.1f p99.9=%.1f max=%.1f budget_us=%.0f | notify_us p50=%.1f p99=%.1f\n",
+              label, instrument::poolParametersPerSlot, bound, activeSlots, rate, block,
+              percentile(times, 0.5), percentile(times, 0.99), percentile(times, 0.999),
+              *std::max_element(times.begin(), times.end()), block / rate * 1.0e6,
+              percentile(notify, 0.5), percentile(notify, 0.99));
 }
 } // namespace
 
@@ -221,21 +231,35 @@ int main() {
               rssBefore < 0 || rssAfter < 0
                   ? "n/a"
                   : std::to_string(rssAfter - rssBefore).c_str());
-  measureBlocks(*builtin, "builtin-default", 0, 48000, 128);
+  measureBlocks(*builtin, "builtin-default", 0, 0, 48000, 128);
 
-  // Acid-like instrument in 1/2/8/16 slots with host automation each block.
-  for (const int slots : {1, 2, 8, 16}) {
-    auto p = std::make_unique<VstEngineAudioProcessor>(std::make_unique<SyntheticProvider>());
-    for (int slot = 0; slot < slots; ++slot) {
-      juce::String diagnostic;
-      if (!p->loadSlotInstrument(static_cast<std::size_t>(slot), syntheticId, diagnostic)) {
-        std::printf("load failed: %s\n", diagnostic.toRawUTF8());
-        return 1;
-      }
+  // A: 64 bound (all layouts). B: 80 bound, Acid's need (pool >= 80 only).
+  // 1/2/8/16 slots with host automation each block.
+  const struct {
+    const char *label;
+    std::size_t bound;
+  } scenarios[] = {{"A-layout64", layoutControls}, {"B-acid80", acidControls}};
+  for (const auto &scenario : scenarios) {
+    if (scenario.bound > instrument::poolParametersPerSlot) {
+      std::printf("%s pool=%zu bound=%zu INCOMPATIBLE (needs %zu pool endpoints per slot)\n",
+                  scenario.label, instrument::poolParametersPerSlot, scenario.bound,
+                  scenario.bound);
+      continue;
     }
-    for (const double rate : {44100.0, 48000.0, 96000.0})
-      for (const int block : {64, 128, 512})
-        measureBlocks(*p, "acidlike", slots, rate, block);
+    for (const int slots : {1, 2, 8, 16}) {
+      auto p = std::make_unique<VstEngineAudioProcessor>(
+          std::make_unique<SyntheticProvider>(scenario.bound));
+      for (int slot = 0; slot < slots; ++slot) {
+        juce::String diagnostic;
+        if (!p->loadSlotInstrument(static_cast<std::size_t>(slot), syntheticId, diagnostic)) {
+          std::printf("load failed: %s\n", diagnostic.toRawUTF8());
+          return 1;
+        }
+      }
+      for (const double rate : {44100.0, 48000.0, 96000.0})
+        for (const int block : {64, 128, 512})
+          measureBlocks(*p, scenario.label, scenario.bound, slots, rate, block);
+    }
   }
   return 0;
 }
