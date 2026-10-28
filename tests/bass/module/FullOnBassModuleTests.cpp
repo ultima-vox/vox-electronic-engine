@@ -62,6 +62,13 @@ int main(int argc,char** argv) {
     CHECK(module->process(a,&ctx)==VOX_OK); ctx.outputs=out2; CHECK(module->process(b,&ctx)==VOX_OK);
     CHECK(left==left2 && right==right2 && left==right);
     CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
+    // Short MIDI messages can reach the Rack even when Bass does not use them.
+    // They must not fault the module or prevent subsequent notes from playing.
+    CHECK(module->reset(a)==VOX_OK);
+    std::array<VoxMidiEventV2, 3> shortMidi{{{0, 1, {0xf8}}, {1, 2, {0xc0, 4}}, {2, 3, {0x90, 36, 127}}}};
+    ctx.outputs=out; ctx.midiEvents=shortMidi.data(); ctx.midiEventCount=3;
+    CHECK(module->process(a,&ctx)==VOX_OK);
+    CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
     VoxParamChangeV2 change{0,128,1200.0f,0};
     ctx.outputs=out; ctx.midiEvents=nullptr; ctx.midiEventCount=0;
     ctx.paramChanges=&change; ctx.paramChangeCount=1;

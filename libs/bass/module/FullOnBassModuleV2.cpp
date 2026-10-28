@@ -101,7 +101,7 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
     last=0;
     for (uint32_t i=0;i<c->midiEventCount;++i) {
         const auto m=read(c->midiEvents,c->midiEventStride,i);
-        if (m.size != 3 || m.sampleOffset>=c->numSamples || (i && m.sampleOffset<last)) return VOX_E_INVALID_ARG;
+        if (m.size == 0 || m.size > sizeof(m.bytes) || m.sampleOffset>=c->numSamples || (i && m.sampleOffset<last)) return VOX_E_INVALID_ARG;
         last=m.sampleOffset;
     }
     for (uint32_t ch=0;ch<s->channels;++ch) std::fill_n(c->outputs[ch],c->numSamples,0.0f);
@@ -120,8 +120,11 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
         while (mi<c->midiEventCount) {
             const auto m=read(c->midiEvents,c->midiEventStride,mi);
             if (m.sampleOffset>=end) break;
-            midi[n].sampleOffset=m.sampleOffset-cursor; midi[n].size=3;
-            std::copy_n(m.bytes,3,midi[n].data); ++n; ++mi;
+            if (m.size == 3) {
+                midi[n].sampleOffset=m.sampleOffset-cursor; midi[n].size=3;
+                std::copy_n(m.bytes,3,midi[n].data); ++n;
+            }
+            ++mi;
         }
         std::array<float*,2> outputs{};
         for (uint32_t ch=0;ch<s->channels;++ch) outputs[ch]=c->outputs[ch]+cursor;
