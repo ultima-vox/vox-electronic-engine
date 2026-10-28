@@ -287,6 +287,11 @@ void failNext(std::uint32_t slotIndex, std::uint32_t which) {
 }
 constexpr std::uint32_t failProcess = 1, failReset = 2;
 
+std::uint32_t moduleCalls(std::uint32_t slotIndex, std::uint32_t which) {
+  return reinterpret_cast<std::uint32_t(VOX_CALL *)(std::uint32_t, std::uint32_t)>(
+      testHook("voxTestCalls"))(slotIndex, which);
+}
+
 void slotIndexForwarded() {
   juce::MemoryBlock state;
   {
@@ -386,6 +391,49 @@ void resetFaultLatches() {
   check(render() > 1.0, "reprepare recovers after a reset fault");
 }
 
+// After a fault the module is quarantined: neither reset nor process enters it
+// again, and a failed reprepare keeps the latch; only a successful one clears it.
+void faultedModuleIsNotReentered() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  auto provider = instrument::native::makeProvider(module);
+  instrument::CreateContext context;
+  context.slotIndex = 12;
+  auto instance = provider->create(toneId, context);
+  check(instance != nullptr && instance->prepare({48000.0, blockSize, 2}), "adapter prepared");
+  std::vector<float> left(blockSize), right(blockSize);
+  float *channels[] = {left.data(), right.data()};
+  auto render = [&] {
+    const VoxMidiEventV1 on{0, 3, {0x90, 60, 100}};
+    instrument::ProcessBlock block;
+    block.outputs = channels;
+    block.sampleCount = blockSize;
+    block.midi = {&on, 1};
+    block.sampleRate = 48000.0;
+    instance->process(block);
+    double sum = 0;
+    for (const float v : left)
+      sum += static_cast<double>(v) * v;
+    return sum;
+  };
+  failNext(12, failProcess);
+  check(render() == 0.0, "injected process fault silences the block");
+  const auto calls = moduleCalls(12, failProcess | failReset);
+  for (int i = 0; i < 3; ++i) {
+    instance->reset();
+    check(render() == 0.0, "faulted instance stays silent across reset");
+  }
+  check(moduleCalls(12, failProcess | failReset) == calls,
+        "no module reset/process call while faulted");
+  check(!instance->prepare({48000.0, blockSize, 0}), "invalid reprepare fails");
+  instance->reset();
+  check(render() == 0.0 && moduleCalls(12, failProcess | failReset) == calls,
+        "a failed reprepare keeps the module quarantined");
+  check(instance->prepare({48000.0, blockSize, 2}), "valid reprepare succeeds");
+  check(render() > 1.0, "successful reprepare recovers");
+}
+
 void noAllocationInProcess() {
   auto p = makeProcessor(true);
   const auto slot = loadTone(*p, 7);
@@ -434,6 +482,7 @@ int main(int argc, char **argv) {
   slotIndexForwarded();
   processFaultLatches();
   resetFaultLatches();
+  faultedModuleIsNotReentered();
   noAllocationInProcess();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;

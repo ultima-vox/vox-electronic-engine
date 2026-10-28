@@ -169,9 +169,6 @@ public:
                               static_cast<std::uint32_t>(values_.size()),
                               midiCapacity};
     prepared_ = false;
-    // Controller-side recovery point: a successful reprepare clears a latched
-    // fault (ABI: the slot stays silent until reprepare).
-    faulted_.store(false, std::memory_order_relaxed);
     if (table_->prepare(handle_, &v2) != VOX_OK)
       return false;
     midi_.assign(midiCapacity, VoxMidiEventV2{});
@@ -185,14 +182,20 @@ public:
     sent_ = values_;
     samplePosition_ = 0;
     discontinuity_ = true;
+    // Controller-side recovery point: only a fully successful reprepare
+    // (prepare + parameter snapshot) clears a latched fault.
+    faulted_.store(false, std::memory_order_relaxed);
     prepared_ = true;
     return true;
   }
 
   void reset() noexcept override {
+    discontinuity_ = true;
+    // A faulted or unprepared module is quarantined: not re-entered.
+    if (!prepared_ || faulted_.load(std::memory_order_relaxed))
+      return;
     if (table_->reset(handle_) != VOX_OK)
       fault();
-    discontinuity_ = true;
   }
   void suspend() noexcept override { suspended_ = true; }
   void resume() noexcept override {
