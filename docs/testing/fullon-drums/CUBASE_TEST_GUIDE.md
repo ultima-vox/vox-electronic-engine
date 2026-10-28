@@ -56,8 +56,8 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 
 | # | Action | Expected |
 | --- | --- | --- |
-| 1 | Instrument track with Vox Electronic Engine; open the editor | Rack with 16 slots |
-| 2 | Right-click **slot 1** → *Load / replace instrument...* → **Full-on Drums / Ultima Vox** | Slot 1 = Full-on Drums on **CH1**; the Macros page lists the 48 kit controls |
+| 1 | New Instrument track with Vox Electronic Engine (new project, no track preset); open the editor | Rack with **16 empty slots** |
+| 2 | Click empty **slot 1** (or right-click → *Load / replace instrument...*) → **Full-on Drums / Ultima Vox** | Slot 1 = Full-on Drums on **CH1** (first free channel); the Macros page lists the 63 kit and sequencer controls |
 | 3 | Track MIDI channel 1; import `fullon-drums-145bpm-4bar.mid` (set project tempo 145) and play | Kick on every beat, 16th closed hats, off-beat open hats, snare + clap on 2 and 4, rim accents, tom fill in bar 4; nothing hangs at stop |
 | 4 | Play pads from a keyboard or the piano roll (notes 36–49 above) | Each pad sounds; harder velocity is louder; several notes together all sound |
 | 5 | Open hat (46) then closed hat (42) | Closed hat cuts the open hat; switch **Hat Choke** off → open hat keeps ringing |
