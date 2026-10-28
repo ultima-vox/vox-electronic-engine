@@ -47,10 +47,22 @@ struct VoxInstanceT {
   uint32_t maxMidiEvents;
   double phase;
   int note; /* -1 = no key sounding (one key, retrigger semantics) */
+  uint32_t slotIndex; /* create-time Rack slot ordinal, for host tests */
   int prepared;
 };
 
 static int liveInstances;
+static struct VoxInstanceT *live[64];
+
+/* Test hook (not part of the ABI): bit n set = a live instance was created
+ * for Rack slot n. Lets host tests check the forwarded slot ordinal. */
+VOX_EXPORT uint32_t VOX_CALL voxTestLiveSlotMask(void) {
+  uint32_t mask = 0;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex < 32)
+      mask |= 1u << live[i]->slotIndex;
+  return mask;
+}
 
 static int validValue(uint32_t index, float value) {
   const VoxParameterDescriptorV2 *p = &parameters[index];
@@ -84,6 +96,12 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
   for (uint32_t i = 0; i < PARAM_COUNT; ++i)
     instance->values[i] = parameters[i].defaultValue;
   instance->note = -1;
+  instance->slotIndex = params->slotIndex;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] == NULL) {
+      live[i] = instance;
+      break;
+    }
   ++liveInstances;
   *out = instance;
   return VOX_OK;
@@ -92,6 +110,9 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
 static VoxResult VOX_CALL destroy(VoxInstance instance) {
   if (instance == NULL)
     return VOX_E_INVALID_ARG;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] == instance)
+      live[i] = NULL;
   free(instance);
   --liveInstances;
   return VOX_OK;

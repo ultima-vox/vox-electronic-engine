@@ -63,6 +63,11 @@ private:
 [[nodiscard]] std::unique_ptr<InstrumentProvider>
 makeProvider(std::shared_ptr<NativeModule> module);
 
+// Process-wide count of blocks in which routed MIDI exceeded a native
+// instance's prepared budget (the adapter then ends every voice of that
+// instance at the block end). Readable from any thread.
+[[nodiscard]] std::uint64_t totalMidiOverflows() noexcept;
+
 // Development/test loading: absolute module paths separated by ';'. Each
 // entry is loaded independently; failures are reported, never thrown.
 struct LoadReport {

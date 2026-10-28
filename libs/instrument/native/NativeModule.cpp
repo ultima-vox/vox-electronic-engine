@@ -124,6 +124,11 @@ VoxResult VOX_CALL hostLog(void *, std::uint32_t, const char *) { return VOX_OK;
 const VoxHostServicesV2 hostServices{sizeof(VoxHostServicesV2), VOX_MODULE_ABI_V2, nullptr,
                                      hostLog};
 
+std::atomic<std::uint64_t> &midiOverflows() noexcept {
+  static std::atomic<std::uint64_t> count{};
+  return count;
+}
+
 // Process-wide cache. Intentionally never destroyed: modules are not unloaded
 // while the process lives, and unloading during static destruction (DllMain on
 // Windows) is unsafe.
@@ -234,7 +239,12 @@ public:
       std::memcpy(event.bytes, source.data, event.size);
       midi_[i] = event;
     }
-    droppedMidi_ += block.midi.size() - midiCount;
+    // More routed events than the module's prepared budget: the tail (which
+    // may hold releases) cannot be delivered, so fail closed and end every
+    // voice of this instance at the block end instead of risking a stuck note.
+    const bool overflow = block.midi.size() > midi_.size();
+    if (overflow)
+      midiOverflows().fetch_add(1, std::memory_order_relaxed);
     fillTransport(block);
     const VoxProcessContextV2 context{sizeof(VoxProcessContextV2),
                                       VOX_MODULE_ABI_V2,
@@ -247,7 +257,7 @@ public:
                                       midi_.data(),
                                       midiCount,
                                       sizeof(VoxMidiEventV2),
-                                      0,
+                                      overflow ? VOX_RELEASE_ALL_SOUND_AT_END : 0u,
                                       0,
                                       samplePosition_,
                                       &transport_};
@@ -329,7 +339,6 @@ private:
   double sampleRate_{};
   double predictedPpq_{};
   std::uint64_t samplePosition_{};
-  std::uint64_t droppedMidi_{};
   std::atomic<std::uint64_t> faults_{};
   std::size_t hint_{};
   std::uint32_t maximumBlock_{};
@@ -345,10 +354,12 @@ public:
     return module_->descriptors();
   }
   std::unique_ptr<InstrumentInstance> create(std::string_view instrumentId,
-                                             const CreateContext &) override {
+                                             const CreateContext &context) override {
     for (const auto &descriptor : module_->descriptors())
       if (descriptor.id == instrumentId) {
-        const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2, 0, 0};
+        const auto slot =
+            context.slotIndex < maxSlots ? context.slotIndex : VOX_SLOT_INDEX_NONE;
+        const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2, slot, 0};
         VoxInstance handle{};
         if (module_->table().create(descriptor.id.c_str(), &params, &handle) != VOX_OK ||
             handle == nullptr)
@@ -362,6 +373,10 @@ private:
   std::shared_ptr<NativeModule> module_;
 };
 } // namespace
+
+std::uint64_t totalMidiOverflows() noexcept {
+  return midiOverflows().load(std::memory_order_relaxed);
+}
 
 bool validModuleTable(const VoxModuleV2 *m) noexcept {
   return m != nullptr && aligned(m) && versioned(m->structSize, m->version, sizeof(VoxModuleV2)) &&

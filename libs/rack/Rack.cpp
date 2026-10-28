@@ -213,7 +213,8 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         state.resolvedProviderId, state.instrumentVersion, state.contentVersion,
         state.modulePayload
     };
-    auto prepared = instrument::prepareModuleState(moduleState, registry_, resources);
+    auto prepared = instrument::prepareModuleState(
+        moduleState, registry_, resources, static_cast<std::uint32_t>(index));
     runtimeState.resolution = prepared.resolution.status;
     target.descriptor = prepared.resolution.descriptor;
     target.instance = std::move(prepared.instance);

@@ -120,9 +120,12 @@ typedef struct VoxInstrumentDescriptorV2 {
   uint32_t reserved0;
 } VoxInstrumentDescriptorV2;
 
+#define VOX_SLOT_INDEX_NONE 0xFFFFFFFFu
+
 typedef struct VoxCreateParamsV2 {
   uint32_t structSize, version;
-  uint32_t slotIndex;
+  uint32_t slotIndex; /* 0-based Rack slot ordinal, or VOX_SLOT_INDEX_NONE.
+                         Positional and informational; never an identity. */
   uint32_t reserved0;
 } VoxCreateParamsV2;
 

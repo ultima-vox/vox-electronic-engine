@@ -11,7 +11,16 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <filesystem>
 #include <vector>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
 extern "C" void voxProbeBegin(void);
@@ -209,6 +218,85 @@ void twoInstancesAndSlots() {
         "slot parameters are independent");
 }
 
+// More routed MIDI than the module's prepared budget (64 for the test module)
+// with the release last: the adapter must fail closed (end every voice at the
+// block end) instead of silently dropping the NoteOff. Another slot is not
+// affected.
+double holdAndOverflow(bool overflow, std::uint64_t &overflowsAfter) {
+  auto p = makeProcessor(true);
+  const auto x = loadTone(*p, 8), y = loadTone(*p, 9);
+  const int cx = channelOf(*p, x), cy = channelOf(*p, y);
+  juce::AudioBuffer<float> audio(2, blockSize);
+  juce::MidiBuffer midi;
+  if (overflow)
+    midi.addEvent(juce::MidiMessage::noteOn(cx, 60, 0.9f), 0);
+  midi.addEvent(juce::MidiMessage::noteOn(cy, 64, 0.9f), 0);
+  p->processBlock(audio, midi);
+  midi.clear();
+  if (overflow) {
+    for (int i = 0; i < 100; ++i)
+      midi.addEvent(juce::MidiMessage::controllerEvent(cx, 1, i), i);
+    midi.addEvent(juce::MidiMessage::noteOff(cx, 60), 120);
+  }
+  p->processBlock(audio, midi);
+  midi.clear();
+  audio.clear();
+  p->processBlock(audio, midi);
+  double e = 0;
+  for (int i = 0; i < blockSize; ++i)
+    e += static_cast<double>(audio.getSample(0, i)) * audio.getSample(0, i);
+  overflowsAfter = instrument::native::totalMidiOverflows();
+  return e;
+}
+
+void midiOverflowFailsClosed() {
+  std::uint64_t before = 0, after = 0;
+  const double reference = holdAndOverflow(false, before);
+  const double withOverflow = holdAndOverflow(true, after);
+  check(reference > 1.0, "other slot keeps sounding");
+  check(withOverflow == reference,
+        "release lost to the module budget does not leave a stuck note");
+  check(after > before, "MIDI overflow is counted and visible");
+}
+
+std::uint32_t liveSlotMask() {
+#if defined(_WIN32)
+  // Same absolute path as the host loader: returns the already loaded module.
+  auto *library = ::LoadLibraryExW(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)).wstring().c_str(),
+      nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+  auto fn = reinterpret_cast<std::uint32_t(VOX_CALL *)(void)>(
+      ::GetProcAddress(library, "voxTestLiveSlotMask"));
+#else
+  void *library = ::dlopen(modulePath.c_str(), RTLD_NOW | RTLD_NOLOAD);
+  auto fn = reinterpret_cast<std::uint32_t (*)(void)>(::dlsym(library, "voxTestLiveSlotMask"));
+#endif
+  check(fn != nullptr, "test module exports its slot hook");
+  const auto mask = fn();
+#if defined(_WIN32)
+  ::FreeLibrary(library);
+#else
+  ::dlclose(library);
+#endif
+  return mask;
+}
+
+void slotIndexForwarded() {
+  juce::MemoryBlock state;
+  {
+    auto p = makeProcessor(true);
+    loadTone(*p, 3);
+    loadTone(*p, 7);
+    check(liveSlotMask() == ((1u << 3) | (1u << 7)),
+          "module instances receive their 0-based Rack slot ordinals");
+    p->getStateInformation(state);
+  }
+  check(liveSlotMask() == 0, "destroyed processor leaves no instances");
+  auto restored = makeProcessor(true);
+  restored->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  check(liveSlotMask() == ((1u << 3) | (1u << 7)), "slot ordinals survive save/reload");
+}
+
 void noAllocationInProcess() {
   auto p = makeProcessor(true);
   const auto slot = loadTone(*p, 7);
@@ -253,6 +341,8 @@ int main(int argc, char **argv) {
   savesAndRestores();
   missingModuleIsPreserved();
   twoInstancesAndSlots();
+  midiOverflowFailsClosed();
+  slotIndexForwarded();
   noAllocationInProcess();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
