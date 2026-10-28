@@ -226,8 +226,20 @@ delivered".
 - **Queues.** Each slot has its own preallocated queue of capacity
   `C = maxMidiEventsPerBlock` (descriptor budget, 16 ≤ C ≤ 2048; total for 16
   slots ≤ 512 KiB). No allocation or lock in routing.
+- **Key semantics (binding for every V2 instrument).** The sounding set
+  tracks *keys* (owned channel × pitch), not voices. A NoteOn for a key that is
+  already sounding **retriggers or replaces** that key; it never stacks a second
+  same-pitch voice. One NoteOff releases the key, however many NoteOns preceded
+  it. This matches Acid today. Polyphonic modules may steal voices across
+  different keys internally; stealing never changes host key state, and a
+  stolen key still ends on its NoteOff. Overlapping same-pitch voices (a bounded
+  per-key counter) are out of scope for V2 and would need a minor version.
+- **Sustain (CC64).** CC64 is passed through. A NoteOff while sustain is down
+  still clears the host key bit; the module keeps the voice until CC64 goes
+  below 64. The host tracks `sustainDown` (one bit per slot) and reserves one
+  event for the CC64 release.
 - **Release reserve (NoteOn admission).** Invariant per slot and block:
-  `used + |sounding| + 1 ≤ C`. A NoteOn is queued only if the invariant still
+  `used + |sounding| + sustainDown + 1 ≤ C`. A NoteOn is queued only if the invariant still
   holds after it; otherwise it is dropped and counted. Hence there is always
   queue room for one NoteOff per sounding note plus one all-off record.
 - **NoteOff.** For a sounding note it always fits (it uses reserved room) and
@@ -239,7 +251,9 @@ delivered".
   `VOX_RELEASE_ALL_SOUND`), clears the sounding set and drops that slot's
   remaining NoteOns for the block. The module applies the flag **after** the
   queued events of the block. Rack panic always uses the flag path for all 16
-  slots and never consumes queue room.
+  slots and never consumes queue room. Both flags and the all-off events also
+  end sustained voices (Rack semantics, stricter than MIDI CC123) and clear
+  `sustainDown`.
 - **Guarantee.** After any block, every note a slot owns is either still
   intentionally held (its NoteOff has not arrived) or released; a release
   request is never lost. Only NoteOns and redundant events are dropped, all
@@ -254,6 +268,10 @@ delivered".
   fails on `malloc`/`pthread_mutex_lock` from the audio thread during routing.
 - Overload: more host edits than one per parameter per block; asserts final
   values, counters and no allocation.
+- Key semantics in the real test-DLL conformance suite: repeated same-pitch
+  NoteOn → single NoteOff ends the key; NoteOff under CC64 then CC64 release;
+  voice stealing across keys with every key ending; panic and all-off under
+  saturation with sustain down.
 - MIDI flood above capacity on **all 16 channels**: NoteOn/NoteOff floods,
   more than C × CC120/CC123, panic mid-flood; asserts zero sounding notes and
   zero active voices in the test module after each release, no stuck notes on
