@@ -32,25 +32,48 @@ native instruments: never renumber them.
 
 ## Blocks (slice 1)
 
-| Block | Inputs | Output | Params |
-|---|---|---|---|
-| `env.adsr@1` | — | control | attack, decay, sustain, release (s) |
-| `osc.blep@1` | — (pitch from the voice) | audio | wave (0 sine, 1 saw, 2 square) |
-| `filter.svf.lp@1` | in: audio | audio | cutoff (Hz), resonance (0..1) |
-| `amp.vca@1` | in: audio, env: control | audio | — (`in * env * velocity`) |
-| `amp.gain@1` | in: audio | audio | gain |
+Each block input has a domain. The **whole host range** `[min, max]` of the
+parameter bound to it must lie inside that domain, so no automation value can
+drive the DSP out of its stable region. The compiler enforces this; nothing is
+clamped silently at run time.
 
-A block version is a behaviour contract: a changed algorithm is a new
-version (`@2`); `@1` keeps rendering the same samples.
+| Block | Inputs | Output | Params and domains |
+|---|---|---|---|
+| `env.adsr@1` | — | control | attack, decay, release in [0.001, 60] s; sustain in [0, 1] |
+| `osc.blep@1` | — (pitch from the voice) | audio | wave in [0, 2] (0 sine, 1 saw, 2 square); int/choice only, no smoothing |
+| `filter.svf.lp@1` | in: audio | audio | cutoff in [20, 20000] Hz (also limited to 0.45 × sample rate); resonance in [0, 1] |
+| `amp.vca@1` | in: audio, env: control | audio | — (`in * env * velocity`) |
+| `amp.gain@1` | in: audio | audio | gain in [0, 4] |
+
+A block version is a behaviour contract. A changed algorithm or a widened
+domain is a new version (`@2`); `@1` keeps rendering the same samples.
 
 ## Validation (compile errors carry a reason)
 
-Unknown graph version, voice policy, block or block version; duplicate
-node/parameter id or pool index; an invalid parameter (id, range,
-default, smoothing over 1 s); an unknown
-parameter reference; a missing, dangling or wrongly typed input (control into
-audio); a cycle; a non-audio output; a missing or non-envelope `ampEnvelope`;
-more than 64 nodes; JSON over 256 KiB.
+Each of these is a compile error:
+
+- An unknown graph version, voice policy, block or block version.
+- A duplicate node id, parameter id or pool index.
+- An invalid parameter: its id, its range, a default outside the range, or smoothing over 1 s.
+- A parameter range outside the domain of the block input it is bound to.
+- A continuous parameter bound to an integral input.
+- An unknown parameter reference.
+- A missing, dangling or wrongly typed input, such as control into audio.
+- A cycle.
+- A non-audio output.
+- A missing or non-envelope `ampEnvelope`.
+- More than 64 nodes.
+- JSON over 256 KiB.
+
+The parser rejects any number before it is converted to a C++ type that cannot
+hold it:
+
+| Field | Allowed values |
+|---|---|
+| `graphVersion` | integer in 0..1000000 |
+| `instrument.version` | integer in 1..2^32-1 |
+| `pool` | integer in 0..32767 (then checked against the slot pool size) |
+| `min`, `max`, `default` | within ±FLT_MAX |
 
 ## Voice semantics (slice 1)
 

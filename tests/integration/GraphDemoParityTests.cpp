@@ -10,7 +10,9 @@
 #include "instrument/native/ModulePackages.h"
 #include "modules/BuiltInProvider.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -230,15 +232,18 @@ void factoryGraphInDefaultRack() {
 }
 
 void compilerRejectsMalformedPatches() {
-  auto rejects = [](std::string text, const std::string &from, const std::string &to,
-                    const std::string &what) {
+  auto rejectsBecause = [](std::string text, const std::string &from, const std::string &to,
+                           const std::string &what, const std::string &reason) {
     const auto at = text.find(from);
     check(at != std::string::npos, "fixture anchor for " + what);
     text.replace(at, from.size(), to);
     std::string why;
-    check(dspcore::loadPatch(text, why) == nullptr && !why.empty(),
-          what + " is rejected (" + why + ")");
+    check(dspcore::loadPatch(text, why) == nullptr && !why.empty() &&
+              why.find(reason) != std::string::npos,
+          what + " is rejected for '" + reason + "' (" + why + ")");
   };
+  auto rejects = [&](const std::string &text, const std::string &from, const std::string &to,
+                     const std::string &what) { rejectsBecause(text, from, to, what, ""); };
   rejects(graphJson, "\"env.adsr@1\"", "\"env.adsr@9\"", "unknown block version");
   rejects(graphJson, "\"osc.blep@1\"", "\"osc.fm@1\"", "unknown block");
   rejects(graphJson, "\"in\": \"osc.out\"", "\"in\": \"vca.out\"", "a cycle");
@@ -252,6 +257,113 @@ void compilerRejectsMalformedPatches() {
           "a default outside the range");
   rejects(graphJson, "\"mono-last\"", "\"poly-8\"", "an unsupported voice policy");
   rejects(graphJson, "\"graphVersion\"", "graphVersion", "malformed JSON");
+
+  struct Case {
+    const char *from, *to, *what, *reason;
+  };
+  // Block parameter domains cover the whole host range, not just the default.
+  constexpr const char *outside = "is outside";
+  constexpr const char *cutoff = "\"min\": 20, \"max\": 20000, \"default\": 4000";
+  constexpr const char *attack = "\"min\": 0.001, \"max\": 5, \"default\": 0.005";
+  constexpr const char *decay = "\"min\": 0.001, \"max\": 5, \"default\": 0.25";
+  constexpr const char *release = "\"min\": 0.001, \"max\": 10, \"default\": 0.3";
+  constexpr const char *sustain = "\"min\": 0, \"max\": 1, \"default\": 0.7, \"pool\": 4";
+  constexpr const char *resonance = "\"min\": 0, \"max\": 1, \"default\": 0.2";
+  constexpr const char *gain = "\"min\": 0, \"max\": 1, \"default\": 0.7, \"pool\": 1";
+  constexpr const char *wave = "\"Square\"], \"min\": 0, \"max\": 2";
+  // Numbers that would overflow the C++ destination type are rejected too.
+  constexpr const char *graphVersion = "\"graphVersion\": 1";
+  constexpr const char *version = "\"version\": 1";
+  constexpr const char *entries = "parameter entries need";
+  const Case cases[] = {
+      {cutoff, "\"min\": -20000, \"max\": 20000, \"default\": -12000", "a negative cutoff",
+       outside},
+      {cutoff, "\"min\": 20, \"max\": 30000, \"default\": 4000", "a cutoff over 20 kHz", outside},
+      {attack, "\"min\": 0, \"max\": 5, \"default\": 0.005", "a zero attack", outside},
+      {decay, "\"min\": -1, \"max\": 5, \"default\": 0.25", "a negative decay", outside},
+      {release, "\"min\": 0.001, \"max\": 100, \"default\": 0.3", "a release over 60 s", outside},
+      {sustain, "\"min\": 0, \"max\": 1.5, \"default\": 0.7, \"pool\": 4", "a sustain over 1",
+       outside},
+      {resonance, "\"min\": 0, \"max\": 2, \"default\": 0.2", "a resonance over 1", outside},
+      {wave, "\"Square\", \"X\"], \"min\": 0, \"max\": 3", "an unsupported wave", outside},
+      {"\"type\": \"choice\"", "\"type\": \"float\"", "a continuous wave", "needs an int"},
+      {gain, "\"min\": -1, \"max\": 1, \"default\": 0.7, \"pool\": 1", "a negative gain", outside},
+      {graphVersion, "\"graphVersion\": 1e100", "graphVersion 1e100", "graphVersion must be"},
+      {graphVersion, "\"graphVersion\": 2147483648", "graphVersion 2^31", "graphVersion must be"},
+      {graphVersion, "\"graphVersion\": -1", "graphVersion -1", "graphVersion must be"},
+      {version, "\"version\": 1e100", "instrument version 1e100", "instrument {id"},
+      {version, "\"version\": 4294967296", "instrument version 2^32", "instrument {id"},
+      {version, "\"version\": 0", "instrument version 0", "instrument {id"},
+      {"\"pool\": 7", "\"pool\": 1e100", "pool 1e100", entries},
+      {"\"default\": 0.2, \"pool\": 7", "\"default\": 1e100, \"pool\": 7",
+       "a default beyond float", entries},
+      {"\"max\": 20000", "\"max\": 1e300", "a max beyond float", entries},
+  };
+  for (const auto &c : cases)
+    rejectsBecause(graphJson, c.from, c.to, c.what, c.reason);
+  {
+    auto text = graphJson;
+    text.replace(text.find("\"version\": 1"), 12, "\"version\": 4294967295");
+    std::string why;
+    check(dspcore::loadPatch(text, why) != nullptr, "instrument version 2^32-1 accepted: " + why);
+  }
+}
+
+// Every host-reachable value stays finite: widen each parameter to its block's
+// whole domain, then hammer corners and random values with notes and CCs.
+void wholeDomainStaysFinite() {
+  dspcore::PatchSpec spec;
+  std::string why;
+  check(dspcore::parsePatchJson(graphJson, spec, why), "graph.json parses: " + why);
+  struct Range {
+    const char *id;
+    float lo, hi;
+  } domain[] = {{"wave", 0, 2},          {"gain", 0, 4},        {"attack", 0.001f, 60},
+                {"decay", 0.001f, 60},   {"sustain", 0, 1},     {"release", 0.001f, 60},
+                {"cutoff", 20, 20000},   {"resonance", 0, 1}};
+  for (auto &p : spec.parameters)
+    for (const auto &r : domain)
+      if (p.descriptor.id == r.id) {
+        p.descriptor.minimum = r.lo;
+        p.descriptor.maximum = r.hi;
+      }
+  dspcore::CompiledPatch patch;
+  check(dspcore::compilePatch(spec, patch, why), "whole-domain patch compiles: " + why);
+  for (const double rate : {8000.0, 44100.0, 192000.0}) {
+    dspcore::PatchVoice voice(patch);
+    voice.prepare(rate);
+    std::mt19937 rng(static_cast<unsigned>(rate));
+    double peak = 0;
+    bool finite = true;
+    for (int n = 0; n < 400000; ++n) {
+      if (n % 2000 == 0)
+        for (std::size_t k = 0; k < 8; ++k) {
+          const auto &r = domain[k];
+          const auto pick = rng() % 4;
+          const float t = static_cast<float>(rng() % 1000) / 1000.0f;
+          float v = pick == 0 ? r.lo : pick == 1 ? r.hi : r.lo + (r.hi - r.lo) * t;
+          if (k == 0)
+            v = std::round(v);
+          if (k == 2 || k == 3)
+            v = std::min(v, 0.05f); // keep envelopes moving inside the run
+          voice.setParameter(k, v);
+        }
+      if (n % 3000 == 0) {
+        const std::uint8_t on[3] = {0x90, static_cast<std::uint8_t>(rng() % 128),
+                                    static_cast<std::uint8_t>(1 + rng() % 127)};
+        voice.midi(on, 3);
+      }
+      if (n % 7000 == 0) {
+        const std::uint8_t off[3] = {0x80, static_cast<std::uint8_t>(rng() % 128), 0};
+        voice.midi(off, 3);
+      }
+      const double x = voice.next();
+      finite = finite && std::isfinite(x);
+      peak = std::max(peak, std::abs(x));
+    }
+    check(finite && peak < 100.0, "whole domain finite and bounded at " + std::to_string(rate) +
+                                      " Hz (peak " + std::to_string(peak) + ")");
+  }
 }
 } // namespace
 
@@ -272,6 +384,7 @@ int main(int argc, char **argv) {
   projectReopens();
   factoryGraphInDefaultRack();
   compilerRejectsMalformedPatches();
+  wholeDomainStaysFinite();
   std::cout << "graph_demo_parity_tests: " << checks << " checks passed\n";
   return 0;
 }

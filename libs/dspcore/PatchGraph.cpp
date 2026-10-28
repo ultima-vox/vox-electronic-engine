@@ -9,21 +9,37 @@ namespace {
 
 enum class PortType { audio, control };
 
+// The values a block input accepts. The whole host range [min, max] of the
+// parameter bound to it must lie inside, so no automation value can drive the
+// DSP out of its stable domain (validated at compile time, not clamped).
+struct BlockParam {
+  const char *name;
+  double lowest, highest;
+  bool integral; // needs an int/choice/bool parameter without smoothing
+};
+
 struct BlockInfo {
   const char *type;
   BlockKind kind;
-  std::vector<const char *> params; // fixed order -> CompiledNode::params
+  std::vector<BlockParam> params; // fixed order -> CompiledNode::params
   std::vector<std::pair<const char *, PortType>> inputs;
   PortType output;
 };
 
 const std::vector<BlockInfo> &blockCatalog() {
   static const std::vector<BlockInfo> catalog = {
-      {"env.adsr@1", BlockKind::envAdsr, {"attack", "decay", "sustain", "release"}, {}, PortType::control},
-      {"osc.blep@1", BlockKind::oscBlep, {"wave"}, {}, PortType::audio},
-      {"filter.svf.lp@1", BlockKind::svfLowpass, {"cutoff", "resonance"}, {{"in", PortType::audio}}, PortType::audio},
-      {"amp.vca@1", BlockKind::vca, {}, {{"in", PortType::audio}, {"env", PortType::control}}, PortType::audio},
-      {"amp.gain@1", BlockKind::gain, {"gain"}, {{"in", PortType::audio}}, PortType::audio},
+      {"env.adsr@1", BlockKind::envAdsr,
+       {{"attack", 0.001, 60.0, false}, {"decay", 0.001, 60.0, false},
+        {"sustain", 0.0, 1.0, false}, {"release", 0.001, 60.0, false}},
+       {}, PortType::control},
+      {"osc.blep@1", BlockKind::oscBlep, {{"wave", 0.0, 2.0, true}}, {}, PortType::audio},
+      {"filter.svf.lp@1", BlockKind::svfLowpass,
+       {{"cutoff", 20.0, 20000.0, false}, {"resonance", 0.0, 1.0, false}},
+       {{"in", PortType::audio}}, PortType::audio},
+      {"amp.vca@1", BlockKind::vca, {},
+       {{"in", PortType::audio}, {"env", PortType::control}}, PortType::audio},
+      {"amp.gain@1", BlockKind::gain, {{"gain", 0.0, 4.0, false}},
+       {{"in", PortType::audio}}, PortType::audio},
   };
   return catalog;
 }
@@ -105,20 +121,36 @@ bool compilePatch(const PatchSpec &spec, CompiledPatch &out, std::string &why) {
       return false;
     }
     for (const auto &[blockParam, patchParam] : node.params) {
-      if (std::find_if(block->params.begin(), block->params.end(), [&](const char *n) {
-            return blockParam == n;
-          }) == block->params.end()) {
+      const auto domain = std::find_if(block->params.begin(), block->params.end(),
+                                       [&](const BlockParam &b) { return blockParam == b.name; });
+      if (domain == block->params.end()) {
         why = "node '" + node.id + "': block has no parameter '" + blockParam + "'";
         return false;
       }
-      if (!paramIndex.count(patchParam)) {
+      const auto found = paramIndex.find(patchParam);
+      if (found == paramIndex.end()) {
         why = "node '" + node.id + "': unknown patch parameter '" + patchParam + "'";
         return false;
       }
+      const auto &bound = spec.parameters[static_cast<std::size_t>(found->second)];
+      const auto &d = bound.descriptor;
+      if (d.minimum < domain->lowest || d.maximum > domain->highest) {
+        why = "node '" + node.id + "': parameter '" + patchParam + "' range [" +
+              std::to_string(d.minimum) + ", " + std::to_string(d.maximum) + "] is outside " +
+              node.type + " " + blockParam + " [" + std::to_string(domain->lowest) + ", " +
+              std::to_string(domain->highest) + "]";
+        return false;
+      }
+      if (domain->integral &&
+          (d.type == instrument::ParameterType::floating || bound.smoothingSeconds > 0.0)) {
+        why = "node '" + node.id + "': " + blockParam +
+              " needs an int/choice parameter without smoothing";
+        return false;
+      }
     }
-    for (const char *required : block->params)
-      if (!node.params.count(required)) {
-        why = "node '" + node.id + "': parameter '" + required + "' is not mapped";
+    for (const auto &required : block->params)
+      if (!node.params.count(required.name)) {
+        why = "node '" + node.id + "': parameter '" + required.name + "' is not mapped";
         return false;
       }
   }
@@ -211,7 +243,7 @@ bool compilePatch(const PatchSpec &spec, CompiledPatch &out, std::string &why) {
     CompiledNode compiled;
     compiled.kind = block->kind;
     for (std::size_t k = 0; k < block->params.size(); ++k)
-      compiled.params[k] = paramIndex[node.params.at(block->params[k])];
+      compiled.params[k] = paramIndex[node.params.at(block->params[k].name)];
     for (std::size_t k = 0; k < block->inputs.size(); ++k) {
       std::string from, port;
       splitEndpoint(node.inputs.at(block->inputs[k].first), from, port);

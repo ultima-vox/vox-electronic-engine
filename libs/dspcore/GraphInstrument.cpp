@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace vstengine::dspcore {
 namespace {
@@ -21,6 +22,15 @@ bool readNumber(const juce::var &v, double &out) {
     return false;
   out = static_cast<double>(v);
   return std::isfinite(out);
+}
+
+// A finite number that converts to the destination without undefined behaviour.
+bool readNumberIn(const juce::var &v, double lowest, double highest, double &out) {
+  return readNumber(v, out) && out >= lowest && out <= highest;
+}
+
+bool readInteger(const juce::var &v, double lowest, double highest, double &out) {
+  return readNumberIn(v, lowest, highest, out) && out == std::floor(out);
 }
 
 bool readStringMap(const juce::var &v, std::map<std::string, std::string> &out) {
@@ -140,8 +150,8 @@ bool parsePatchJson(const std::string &text, PatchSpec &out, std::string &why) {
   }
   PatchSpec spec;
   double number = 0;
-  if (!readNumber(json["graphVersion"], number) || number != std::floor(number)) {
-    why = "graphVersion must be an integer";
+  if (!readInteger(json["graphVersion"], 0, 1000000, number)) {
+    why = "graphVersion must be an integer in 0..1000000";
     return false;
   }
   spec.graphVersion = static_cast<int>(number);
@@ -149,7 +159,7 @@ bool parsePatchJson(const std::string &text, PatchSpec &out, std::string &why) {
   if (!readString(instrument["id"], spec.instrumentId) ||
       !readString(instrument["name"], spec.name) ||
       !readString(instrument["vendor"], spec.vendor) ||
-      !readNumber(instrument["version"], number) || number < 1 || number != std::floor(number)) {
+      !readInteger(instrument["version"], 1, 4294967295.0, number)) {
     why = "instrument {id, name, vendor, version} is required";
     return false;
   }
@@ -171,10 +181,12 @@ bool parsePatchJson(const std::string &text, PatchSpec &out, std::string &why) {
     auto &d = parameter.descriptor;
     std::string type;
     double minimum = 0, maximum = 0, def = 0, pool = 0, smoothing = 0;
+    constexpr double floatMax = std::numeric_limits<float>::max();
     if (!readString(p["id"], d.id) || !readString(p["name"], d.name) ||
-        !readString(p["type"], type) || !readNumber(p["min"], minimum) ||
-        !readNumber(p["max"], maximum) || !readNumber(p["default"], def) ||
-        !readNumber(p["pool"], pool) || pool != std::floor(pool) || pool < 0 || pool > 32767) {
+        !readString(p["type"], type) || !readNumberIn(p["min"], -floatMax, floatMax, minimum) ||
+        !readNumberIn(p["max"], -floatMax, floatMax, maximum) ||
+        !readNumberIn(p["default"], -floatMax, floatMax, def) ||
+        !readInteger(p["pool"], 0, 32767, pool)) {
       why = "parameter entries need id, name, type, min, max, default and pool";
       return false;
     }
