@@ -47,10 +47,48 @@ struct VoxInstanceT {
   uint32_t maxMidiEvents;
   double phase;
   int note; /* -1 = no key sounding (one key, retrigger semantics) */
+  uint32_t slotIndex; /* create-time Rack slot ordinal, for host tests */
   int prepared;
+  int failProcess, failReset; /* one-shot injected faults, for host tests */
+  uint32_t processCalls, resetCalls; /* entry counters, for host tests */
 };
 
 static int liveInstances;
+static struct VoxInstanceT *live[64];
+
+/* Test hook (not part of the ABI): bit n set = a live instance was created
+ * for Rack slot n. Lets host tests check the forwarded slot ordinal. */
+VOX_EXPORT uint32_t VOX_CALL voxTestLiveSlotMask(void) {
+  uint32_t mask = 0;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex < 32)
+      mask |= 1u << live[i]->slotIndex;
+  return mask;
+}
+
+/* Test hook (not part of the ABI): the next process (bit 0) and/or reset
+ * (bit 1) of every live instance created for Rack slot `slotIndex` returns
+ * VOX_E_INTERNAL once; afterwards the instance would play normally again. */
+#define TEST_FAIL_PROCESS 1u
+#define TEST_FAIL_RESET 2u
+VOX_EXPORT void VOX_CALL voxTestFailNext(uint32_t slotIndex, uint32_t which) {
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex) {
+      live[i]->failProcess = (which & TEST_FAIL_PROCESS) != 0;
+      live[i]->failReset = (which & TEST_FAIL_RESET) != 0;
+    }
+}
+
+/* Test hook (not part of the ABI): number of process (bit 0) and/or reset
+ * (bit 1) entries into live instances created for Rack slot `slotIndex`. */
+VOX_EXPORT uint32_t VOX_CALL voxTestCalls(uint32_t slotIndex, uint32_t which) {
+  uint32_t total = 0;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex)
+      total += ((which & TEST_FAIL_PROCESS) ? live[i]->processCalls : 0u) +
+               ((which & TEST_FAIL_RESET) ? live[i]->resetCalls : 0u);
+  return total;
+}
 
 static int validValue(uint32_t index, float value) {
   const VoxParameterDescriptorV2 *p = &parameters[index];
@@ -84,6 +122,12 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
   for (uint32_t i = 0; i < PARAM_COUNT; ++i)
     instance->values[i] = parameters[i].defaultValue;
   instance->note = -1;
+  instance->slotIndex = params->slotIndex;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] == NULL) {
+      live[i] = instance;
+      break;
+    }
   ++liveInstances;
   *out = instance;
   return VOX_OK;
@@ -92,6 +136,9 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
 static VoxResult VOX_CALL destroy(VoxInstance instance) {
   if (instance == NULL)
     return VOX_E_INVALID_ARG;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] == instance)
+      live[i] = NULL;
   free(instance);
   --liveInstances;
   return VOX_OK;
@@ -133,6 +180,11 @@ static VoxResult VOX_CALL setAllParameters(VoxInstance instance, const float *pl
 static VoxResult VOX_CALL reset(VoxInstance instance) {
   if (instance == NULL)
     return VOX_E_INVALID_ARG;
+  ++instance->resetCalls;
+  if (instance->failReset) {
+    instance->failReset = 0;
+    return VOX_E_INTERNAL;
+  }
   instance->phase = 0.0;
   instance->note = -1;
   return VOX_OK;
@@ -167,10 +219,15 @@ static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e) {
 }
 
 static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
+  if (s != NULL)
+    ++s->processCalls;
   if (s == NULL || c == NULL || !s->prepared ||
       c->structSize < sizeof(VoxProcessContextV2) || c->version != VOX_MODULE_ABI_V2 ||
       c->numSamples > s->maxBlock || c->outputChannelCount != s->outputChannels ||
       c->outputs == NULL || (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0 ||
+      c->transport == NULL || c->transport->structSize < sizeof(VoxTransportV2) ||
+      c->transport->version != VOX_MODULE_ABI_V2 ||
+      (c->transport->flags & ~VOX_TRANSPORT_KNOWN_FLAGS) != 0 ||
       /* Budgets and strides are bounded before any record is read. */
       c->paramChangeCount > s->maxParamChanges || c->midiEventCount > s->maxMidiEvents ||
       (c->paramChangeCount > 0 &&
@@ -185,6 +242,10 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)
     if (c->outputs[ch] == NULL)
       return VOX_E_INVALID_ARG;
+  if (s->failProcess) {
+    s->failProcess = 0;
+    return VOX_E_INTERNAL;
+  }
 
   if (c->releaseFlags & VOX_PANIC_AT_START) {
     s->note = -1;

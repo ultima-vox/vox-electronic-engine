@@ -215,9 +215,15 @@ public:
     virtual std::uint32_t tailSamples() const noexcept = 0;
 };
 
+inline constexpr std::uint32_t noSlotIndex = 0xffffffffu;
+
 struct CreateContext {
     SlotId slotId {};
     ResourceResolver* resources {};
+    // 0-based Rack slot ordinal (0..maxSlots-1) the instance is created for;
+    // noSlotIndex outside a Rack. Positional only, never a durable identity
+    // (that is slotId).
+    std::uint32_t slotIndex { noSlotIndex };
 };
 
 class InstrumentProvider {

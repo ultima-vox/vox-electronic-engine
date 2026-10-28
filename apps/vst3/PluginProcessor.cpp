@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include "core/ResourceLimits.h"
 #include "instrument/HostParameterSchema.h"
+#include "instrument/native/ModulePackages.h"
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/MidiExport.h"
 #include "modules/BuiltInProvider.h"
@@ -94,7 +95,9 @@ std::string slotParameterId(std::size_t slot, std::string_view suffix)
 } // namespace
 
 vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
-    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider) {
+    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider,
+    vstengine::instrument::native::LoadReport &native,
+    std::vector<std::string> &diagnostics) {
   vstengine::instrument::HostBudgetLimits limits;
   // All shipped synths/returns are zero-latency. Reject a future latent module
   // explicitly until parallel-path compensation is implemented and reviewed.
@@ -103,36 +106,70 @@ vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
   std::string diagnostic;
   if (!registry.registerProvider(std::move(provider), diagnostic))
     throw std::invalid_argument(diagnostic);
+  diagnostics = std::move(native.diagnostics);
+  for (auto &nativeProvider : native.providers)
+    if (!registry.registerProvider(std::move(nativeProvider), diagnostic))
+      diagnostics.push_back("native module rejected: " + diagnostic);
+  native.providers.clear();
   return registry;
 }
 
+namespace {
+// Development/test only: an explicitly configured list of trusted absolute
+// module paths (';'-separated), plus an explicitly configured absolute
+// development package root (VOX_DEV_INSTRUMENT_ROOT) resolved by version. There
+// is no default/production scanning; production discovery waits for the
+// reviewed package and signing policy.
+// PRODUCTION GATE (open): this loader is active in every build when either
+// variable is set. Before any production distribution it must be compiled out
+// of normal builds or require an unmistakable explicit development opt-in;
+// manifest SHA-256 detects corruption only, it does not authenticate code.
+vstengine::instrument::native::LoadReport configuredNativeModules() {
+  namespace native = vstengine::instrument::native;
+  const auto paths =
+      juce::SystemStats::getEnvironmentVariable("VOX_DEV_NATIVE_MODULES", {});
+  auto report = native::loadConfiguredModules(paths.toStdString());
+  const auto root =
+      juce::SystemStats::getEnvironmentVariable("VOX_DEV_INSTRUMENT_ROOT", {})
+          .trim();
+  if (root.isNotEmpty()) {
+    const auto utf8 = root.toStdString();
+    auto packages = native::loadPackages(std::filesystem::path(std::u8string(
+        reinterpret_cast<const char8_t *>(utf8.data()), utf8.size())));
+    for (auto &provider : packages.providers)
+      report.providers.push_back(std::move(provider));
+    for (auto &diagnostic : packages.diagnostics)
+      report.diagnostics.push_back(std::move(diagnostic));
+  }
+  return report;
+}
+} // namespace
+
 VstEngineAudioProcessor::VstEngineAudioProcessor()
-    : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider()) {}
+    : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider(),
+                              configuredNativeModules()) {}
 
 VstEngineAudioProcessor::VstEngineAudioProcessor(
     std::unique_ptr<vstengine::instrument::InstrumentProvider> provider)
+    : VstEngineAudioProcessor(std::move(provider),
+                              vstengine::instrument::native::LoadReport{}) {}
+
+VstEngineAudioProcessor::VstEngineAudioProcessor(
+    std::unique_ptr<vstengine::instrument::InstrumentProvider> provider,
+    vstengine::instrument::native::LoadReport native)
     : AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
-      instrumentRegistry(makeRegistry(std::move(provider))),
+      nativeModules(std::move(native)),
+      instrumentRegistry(
+          makeRegistry(std::move(provider), nativeModules, nativeDiagnostics)),
       apvts(*this, nullptr, "PARAMETERS",
             createParameterLayout(instrumentRegistry.descriptors())),
       rack(instrumentRegistry), presetStore(apvts) {
+  // A fresh Rack has 16 empty slots (owner requirement): instruments are
+  // installed separately and loaded deliberately by the user. Saved
+  // projects restore their own layout through setStateInformation.
   std::string diagnostic;
   auto initialRack = rack.state();
-  if (instrumentRegistry.resolve(vstengine::modules::bassInstrumentId)) {
-    initialRack[0].instrumentId = vstengine::modules::bassInstrumentId;
-    initialRack[0].routing = { vstengine::rack::RouteMode::channel, 1,
-                               0, 127, 1, 127, 0 };
-    initialRack[0].macros = { 0.48f, 0.55f, 0.4f, 0.25f,
-                              0.32f, 0.5f, 0.0f, 0.15f };
-  }
-  if (instrumentRegistry.resolve(vstengine::modules::acidInstrumentId)) {
-    initialRack[1].instrumentId = vstengine::modules::acidInstrumentId;
-    initialRack[1].routing = { vstengine::rack::RouteMode::channel, 2,
-                               0, 127, 1, 127, 0 };
-    initialRack[1].macros = { 0.05f, 0.46f, 0.72f, 0.70f,
-                              0.48f, 0.58f, 0.30f, 0.28f };
-  }
   if (!rack.replaceState(initialRack, nullptr, diagnostic))
     throw std::invalid_argument(diagnostic);
   keyboard.addListener(this);
@@ -144,8 +181,7 @@ VstEngineAudioProcessor::VstEngineAudioProcessor(
   for (std::size_t slot = 0; slot < rackControls.size(); ++slot)
     rackControls[slot].slotId = initialRack[slot].slotId;
 
-  // Seed initial sequence with darkPsy pattern (canonical seeded operation
-  // owned by the sequence module; same generator stream as before).
+  // No starter patterns: every slot sequence starts empty.
   seedInitialSequence();
   for (std::size_t slot = 0; slot < patternRuntime->slotSequences.size();
        ++slot) {
@@ -1197,7 +1233,7 @@ VstEngineAudioProcessor::createParameterLayout(
     // Channel ownership is configuration, not a performance control.
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         id("MidiIn"), label + "MIDI In", midiInputs,
-        slot < 2 ? static_cast<int>(slot + 1) : 0,
+        0, // empty slots own no channel; loading takes the next free one
         juce::AudioParameterChoiceAttributes{}.withAutomatable(false)));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
         id("KeyLow"), label + "Key Low", 0, 127, 0));
@@ -1855,24 +1891,6 @@ void VstEngineAudioProcessor::setStateInformation(const void *data,
 void VstEngineAudioProcessor::seedInitialSequence()
 {
     for (auto& sequence : patternRuntime->slotSequences) sequence.clear();
-    patternRuntime->slotSequences[0].regenerateBySeed(0xD4A4u);
-    const auto acid = instrumentRegistry.resolve(
-        vstengine::modules::acidInstrumentId);
-    if (acid && acid.provider != nullptr) {
-        VoxGenerationContextV1 context {};
-        context.structSize = sizeof(context);
-        context.globalSeed = 1234;
-        context.slotId = rack.state()[1].slotId;
-        std::snprintf(context.instrumentId.bytes,
-                      sizeof(context.instrumentId.bytes), "%s",
-                      vstengine::modules::acidInstrumentId.data());
-        VoxPatternV1 pattern { sizeof(VoxPatternV1) };
-        if (acid.provider->generatePattern(vstengine::modules::acidInstrumentId,
-                "psy-acid", context, nullptr, pattern)
-                == vstengine::instrument::ContentStatus::ok)
-            (void) vstengine::sequence::fromPattern(
-                pattern, patternRuntime->slotSequences[1]);
-    }
     parts[1].enabled = false;
 }
 

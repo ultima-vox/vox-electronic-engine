@@ -32,6 +32,7 @@ struct PreparedModuleState {
 // after all slots validate and instantiate successfully or remain unresolved.
 PreparedModuleState prepareModuleState(const PersistentModuleState&,
                                        const InstrumentRegistry&,
-                                       ResourceResolver*);
+                                       ResourceResolver*,
+                                       std::uint32_t slotIndex = noSlotIndex);
 
 } // namespace vstengine::instrument

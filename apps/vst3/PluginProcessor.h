@@ -3,6 +3,7 @@
 #include "RackAudioParameters.h"
 #include "effects/EffectsChain.h"
 #include "instrument/InstrumentRegistry.h"
+#include "instrument/native/NativeModule.h"
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/RealtimeAuditionQueue.h"
 #include "midi/SourceSelector.h"
@@ -29,6 +30,14 @@ public:
     // Static C++ composition boundary; no DLL loading or runtime code download.
     explicit VstEngineAudioProcessor(
         std::unique_ptr<vstengine::instrument::InstrumentProvider>);
+    // Built-in provider plus native module providers already loaded on the
+    // controller thread (see instrument/native/NativeModule.h). A native
+    // provider that fails registration is reported, never fatal.
+    VstEngineAudioProcessor(
+        std::unique_ptr<vstengine::instrument::InstrumentProvider>,
+        vstengine::instrument::native::LoadReport);
+    [[nodiscard]] const std::vector<std::string> &
+    nativeModuleDiagnostics() const noexcept { return nativeDiagnostics; }
     ~VstEngineAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
@@ -204,7 +213,9 @@ private:
     };
 
     static vstengine::instrument::InstrumentRegistry makeRegistry(
-        std::unique_ptr<vstengine::instrument::InstrumentProvider>);
+        std::unique_ptr<vstengine::instrument::InstrumentProvider>,
+        vstengine::instrument::native::LoadReport &,
+        std::vector<std::string> &diagnostics);
     static juce::AudioProcessorValueTreeState::ParameterLayout
         createParameterLayout(
             std::span<
@@ -256,6 +267,8 @@ private:
     juce::MidiKeyboardState keyboard;
     vstengine::midi::RealtimeAuditionQueue auditionQueue;
     std::atomic<bool> keyboardResetRequested{};
+    vstengine::instrument::native::LoadReport nativeModules;
+    std::vector<std::string> nativeDiagnostics;
     vstengine::instrument::InstrumentRegistry instrumentRegistry;
     juce::AudioProcessorValueTreeState apvts;
     vstengine::rack::Rack rack;

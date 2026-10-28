@@ -47,6 +47,24 @@ add_library(vst_instrument STATIC
   libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h)
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
 
+# native: host side of the instrument module ABI V2 (controller-thread loading,
+# descriptor import, provider/instance adapters). PROPOSED, not frozen.
+add_library(vst_native STATIC
+  libs/instrument/abi/VoxModuleAbiV2.h
+  libs/instrument/native/NativeModule.cpp libs/instrument/native/NativeModule.h)
+target_include_directories(vst_native PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_native PUBLIC vst_instrument ${CMAKE_DL_LIBS})
+
+# native packages: development/test resolution of versioned instrument packages
+# (<root>/<packId>.voxinst/<MAJOR.MINOR.PATCH>/manifest.json + module/<arch>/).
+# SHA-256 is a corruption check only; no production scanning or signing policy.
+add_library(vst_native_packages STATIC
+  libs/instrument/native/ModulePackages.cpp libs/instrument/native/ModulePackages.h)
+set_target_properties(vst_native_packages PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vst_native_packages PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_native_packages
+  PUBLIC vst_native juce::juce_core juce::juce_cryptography)
+
 add_library(vst_rack STATIC
   libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
   libs/rack/RealtimeMutationGate.h
@@ -213,7 +231,7 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_rack vst_modules vst_sequence vst_parts
+  vst_core vst_instrument vst_native vst_native_packages vst_rack vst_modules vst_sequence vst_parts
   vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
 
 if(MSVC)
@@ -476,6 +494,103 @@ endif()
 target_link_libraries(module_abi_v2_tests PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME module_abi_v2_tests
   COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
+# M0: the real Rack processor plays the V2 test module through a slot.
+add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
+target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(native_rack_tests PRIVATE VstEngine)
+add_dependencies(native_rack_tests vox_abi_v2_test_module)
+if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_sources(native_rack_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+  target_compile_definitions(native_rack_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+  target_link_options(native_rack_tests PRIVATE -rdynamic)
+endif()
+add_test(NAME native_rack_tests
+  COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
+# Owner Cubase acceptance: a fresh Rack is empty; new projects restore.
+add_executable(fresh_rack_tests tests/integration/FreshRackTests.cpp)
+target_include_directories(fresh_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(fresh_rack_tests PRIVATE VstEngine)
+add_test(NAME fresh_rack_tests COMMAND fresh_rack_tests)
+
+# Development package layout: the test module is also assembled as a versioned
+# package in the build tree. The arch string must match packageArch in
+# libs/instrument/native/ModulePackages.h.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|x64)$")
+  set(VOX_PACKAGE_ARCH "x64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  set(VOX_PACKAGE_ARCH "linux-x64")
+else()
+  set(VOX_PACKAGE_ARCH "")
+endif()
+set(VOX_DEV_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/packages)
+if(VOX_PACKAGE_ARCH)
+  add_custom_command(TARGET vox_abi_v2_test_module POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DMODULE_FILE=$<TARGET_FILE:vox_abi_v2_test_module>
+      -DPACKAGE_ROOT=${VOX_DEV_PACKAGE_ROOT}
+      -DPACK_ID=test.abi.v2.tone
+      -DPACK_VERSION=1.0.0
+      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
+      -DINSTRUMENT_IDS=test.abi.v2.tone
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
+    VERBATIM)
+
+  add_executable(module_package_tests tests/integration/ModulePackageTests.cpp)
+  target_include_directories(module_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(module_package_tests PRIVATE VstEngine)
+  add_dependencies(module_package_tests vox_abi_v2_test_module)
+  add_test(NAME module_package_tests
+    COMMAND module_package_tests $<TARGET_FILE:vox_abi_v2_test_module> ${VOX_DEV_PACKAGE_ROOT})
+endif()
+
+# Vox Demo Synth: a small, independent, playable V2 native instrument for DAW
+# acceptance of the Rack connector. Not linked into the Rack; shipped as its
+# own versioned package (com.ultimavox.demo-synth.voxinst/1.0.0).
+add_library(VoxDemoSynth SHARED libs/demo/VoxDemoSynth.c)
+set_target_properties(VoxDemoSynth PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(VoxDemoSynth PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(VoxDemoSynth PRIVATE m)
+endif()
+if(MSVC)
+  # Self-contained DLL: no VC++ redistributable needed on the DAW machine.
+  set_property(TARGET VoxDemoSynth PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+set(VOX_DEMO_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/demo-packages)
+if(VOX_PACKAGE_ARCH)
+  add_custom_command(TARGET VoxDemoSynth POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DMODULE_FILE=$<TARGET_FILE:VoxDemoSynth>
+      -DPACKAGE_ROOT=${VOX_DEMO_PACKAGE_ROOT}
+      -DPACK_ID=com.ultimavox.demo-synth
+      -DPACK_VERSION=1.0.0
+      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
+      -DINSTRUMENT_IDS=com.ultimavox.demo-synth
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
+    VERBATIM)
+
+  add_executable(demo_synth_tests tests/integration/DemoSynthTests.cpp)
+  target_include_directories(demo_synth_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(demo_synth_tests PRIVATE VstEngine)
+  add_dependencies(demo_synth_tests VoxDemoSynth)
+  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_sources(demo_synth_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+    target_compile_definitions(demo_synth_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+    target_link_options(demo_synth_tests PRIVATE -rdynamic)
+  endif()
+  add_test(NAME demo_synth_tests
+    COMMAND demo_synth_tests ${VOX_DEMO_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/demo-scratch)
+endif()
 
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)

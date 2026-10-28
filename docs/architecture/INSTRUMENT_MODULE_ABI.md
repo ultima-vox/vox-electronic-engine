@@ -313,7 +313,7 @@ delivered".
   following blocks, counters, and no allocation/lock.
 - Change array ordering/duplicate test; `reset` keeps parameter values.
 
-## Musical transport (proposed; blocker before freezing V2 for Acid)
+## Musical transport (in the header since #68; still part of the unfrozen V2)
 
 `samplePosition` alone cannot drive Acid's LFO Sync, STEP modulation or
 sequencer (#59). V2 adds one host-owned, versioned transport record per block:
