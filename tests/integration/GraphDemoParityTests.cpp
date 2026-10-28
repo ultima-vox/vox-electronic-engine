@@ -238,8 +238,8 @@ void compilerRejectsMalformedPatches() {
     check(at != std::string::npos, "fixture anchor for " + what);
     text.replace(at, from.size(), to);
     std::string why;
-    check(dspcore::loadPatch(text, why) == nullptr && !why.empty() &&
-              why.find(reason) != std::string::npos,
+    const bool rejected = dspcore::loadPatch(text, why) == nullptr; // before reading `why`
+    check(rejected && !why.empty() && why.find(reason) != std::string::npos,
           what + " is rejected for '" + reason + "' (" + why + ")");
   };
   auto rejects = [&](const std::string &text, const std::string &from, const std::string &to,
@@ -275,6 +275,8 @@ void compilerRejectsMalformedPatches() {
   constexpr const char *graphVersion = "\"graphVersion\": 1";
   constexpr const char *version = "\"version\": 1";
   constexpr const char *entries = "parameter entries need";
+  constexpr const char *choiceShape = "choice needs min 0 and max = number of choices - 1";
+  constexpr const char *integral = "int/bool/choice needs integral";
   const Case cases[] = {
       {cutoff, "\"min\": -20000, \"max\": 20000, \"default\": -12000", "a negative cutoff",
        outside},
@@ -298,6 +300,17 @@ void compilerRejectsMalformedPatches() {
       {"\"default\": 0.2, \"pool\": 7", "\"default\": 1e100, \"pool\": 7",
        "a default beyond float", entries},
       {"\"max\": 20000", "\"max\": 1e300", "a max beyond float", entries},
+      // Choice parameters: checked without any float -> integer conversion.
+      {wave, "\"Square\"], \"min\": 0, \"max\": 1e38", "choice max 1e38", choiceShape},
+      {wave, "\"Square\"], \"min\": 0, \"max\": 1.5", "choice max 1.5", integral},
+      {wave, "\"Square\"], \"min\": 0, \"max\": 1", "choice max below the labels",
+       choiceShape},
+      {wave, "\"Square\", \"X\"], \"min\": 0, \"max\": 2", "choice max above the labels",
+       choiceShape},
+      {"[\"Sine\", \"Saw\", \"Square\"]", "[\"Sine\", \"\", \"Square\"]",
+       "an empty choice label", "labels must not be empty"},
+      {"[\"Sine\", \"Saw\", \"Square\"]", "[\"Sine\", 2, \"Square\"]",
+       "a non-string choice", "choices must be strings"},
   };
   for (const auto &c : cases)
     rejectsBecause(graphJson, c.from, c.to, c.what, c.reason);

@@ -1,6 +1,7 @@
 #include "dspcore/PatchGraph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <set>
 
@@ -60,16 +61,38 @@ bool splitEndpoint(const std::string &endpoint, std::string &node, std::string &
   return port == "out";
 }
 
-bool validParameter(const instrument::ParameterDescriptor &p) {
-  if (p.id.empty() || p.name.empty() || !std::isfinite(p.minimum) || !std::isfinite(p.maximum) ||
-      !std::isfinite(p.defaultValue) || p.minimum >= p.maximum || p.defaultValue < p.minimum ||
-      p.defaultValue > p.maximum || p.poolIndex < 0 ||
+// Empty when valid, else the reason. No float is converted to an integer
+// type here: every comparison stays in floating point, so any finite value is
+// safe to check.
+std::string parameterProblem(const PatchParameter &parameter) {
+  const auto &p = parameter.descriptor;
+  if (p.id.empty() || p.name.empty())
+    return "needs an id and a name";
+  if (!std::isfinite(p.minimum) || !std::isfinite(p.maximum) ||
+      !std::isfinite(p.defaultValue) || p.minimum >= p.maximum ||
+      p.defaultValue < p.minimum || p.defaultValue > p.maximum)
+    return "needs finite min < max with min <= default <= max";
+  if (p.poolIndex < 0 ||
       p.poolIndex >= static_cast<std::int16_t>(instrument::poolParametersPerSlot))
-    return false;
-  if (p.type == instrument::ParameterType::choice &&
-      (p.minimum != 0 || p.choices.size() != static_cast<std::size_t>(p.maximum) + 1))
-    return false;
-  return true;
+    return "pool index outside the slot pool";
+  if (!(parameter.smoothingSeconds >= 0.0) || parameter.smoothingSeconds > 1.0)
+    return "smoothing must be 0..1 s";
+  if (p.type != instrument::ParameterType::floating &&
+      (p.minimum != std::floor(p.minimum) || p.maximum != std::floor(p.maximum) ||
+       p.defaultValue != std::floor(p.defaultValue)))
+    return "int/bool/choice needs integral min, max and default";
+  if (p.type == instrument::ParameterType::boolean && (p.minimum != 0 || p.maximum != 1))
+    return "bool needs min 0 and max 1";
+  if (p.type == instrument::ParameterType::choice) {
+    // Compare in double: choices.size() is small (JSON is capped at 256 KiB).
+    if (p.choices.empty() || p.minimum != 0 ||
+        static_cast<double>(p.maximum) != static_cast<double>(p.choices.size()) - 1.0)
+      return "choice needs min 0 and max = number of choices - 1";
+    for (const auto &label : p.choices)
+      if (label.empty())
+        return "choice labels must not be empty";
+  }
+  return {};
 }
 } // namespace
 
@@ -95,9 +118,8 @@ bool compilePatch(const PatchSpec &spec, CompiledPatch &out, std::string &why) {
   std::set<std::int16_t> pools;
   for (std::size_t i = 0; i < spec.parameters.size(); ++i) {
     const auto &p = spec.parameters[i];
-    if (!validParameter(p.descriptor) || !(p.smoothingSeconds >= 0.0) ||
-        p.smoothingSeconds > 1.0) {
-      why = "invalid parameter '" + p.descriptor.id + "'";
+    if (const auto problem = parameterProblem(p); !problem.empty()) {
+      why = "invalid parameter '" + p.descriptor.id + "': " + problem;
       return false;
     }
     if (!paramIndex.emplace(p.descriptor.id, static_cast<int>(i)).second ||

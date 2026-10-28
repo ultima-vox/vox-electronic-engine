@@ -55,6 +55,13 @@ Each of these is a compile error:
 - An unknown graph version, voice policy, block or block version.
 - A duplicate node id, parameter id or pool index.
 - An invalid parameter: its id, its range, a default outside the range, or smoothing over 1 s.
+- An int, bool or choice parameter with a non-integral min, max or default.
+- A bool parameter whose range is not 0..1.
+- A choice parameter that does not have min 0 and max = number of labels - 1.
+- A choice parameter with an empty label or a non-string label.
+
+Parameters are checked in floating point, so a value such as `max: 1e38` is
+rejected; it is never converted to an integer type.
 - A parameter range outside the domain of the block input it is bound to.
 - A continuous parameter bound to an integral input.
 - An unknown parameter reference.

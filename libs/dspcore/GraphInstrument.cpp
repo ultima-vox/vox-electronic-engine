@@ -206,8 +206,13 @@ bool parsePatchJson(const std::string &text, PatchSpec &out, std::string &why) {
       return false;
     }
     if (const auto *choices = p["choices"].getArray())
-      for (const auto &choice : *choices)
+      for (const auto &choice : *choices) {
+        if (!choice.isString()) {
+          why = "parameter '" + d.id + "': choices must be strings";
+          return false;
+        }
         d.choices.push_back(choice.toString().toStdString());
+      }
     d.minimum = static_cast<float>(minimum);
     d.maximum = static_cast<float>(maximum);
     d.defaultValue = static_cast<float>(def);
