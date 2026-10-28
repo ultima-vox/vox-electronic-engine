@@ -68,3 +68,33 @@ jobs:
             build/*.exe
             build/*.zip
           if-no-files-found: error
+
+  windows-fullon-bass-v2:
+    # Experimental ABI proof; independent from the product VST3 packaging job.
+    runs-on: [self-hosted, windows]
+    steps:
+      - name: Checkout Bass source
+        uses: actions/checkout@v4
+      - name: Checkout shared proposed ABI from PR 67
+        uses: actions/checkout@v4
+        with:
+          ref: e46129be249bb4e07161b898ba2e659ea6bb075b
+          path: _vox_abi_v2
+      - name: Configure Bass DLL
+        shell: powershell
+        run: |
+          $abiRoot = Join-Path $env:GITHUB_WORKSPACE "_vox_abi_v2/libs"
+          cmake -S . -B build-bass-v2 -G "Visual Studio 17 2022" -A x64 "-DVOX_BUILD_FULLON_BASS_MODULE=ON" "-DVOX_MODULE_ABI_V2_ROOT=$abiRoot"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Bass DLL and ABI test
+        id: bass_build
+        run: cmake --build build-bass-v2 --config Release --target fullon_bass_module_tests --parallel
+      - name: Test Bass ABI DLL round trip
+        run: ctest --test-dir build-bass-v2 -C Release -R "^fullon_bass_module_tests$" --output-on-failure
+      - name: Upload experimental Bass DLL
+        if: always() && steps.bass_build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoxFullOnBass-Windows-ABI-prototype
+          path: build-bass-v2/Release/VoxFullOnBass.dll
+          if-no-files-found: error

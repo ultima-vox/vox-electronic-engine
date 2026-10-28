@@ -25,3 +25,14 @@ Rack loading/removal/reinstall, Windows CMake/full CTest, exact Bass rerender
 root cause, comprehensive automation/MIDI/saturation conformance, sound-quality
 and DAW/owner acceptance. Retain draft status. No production discovery or trust
 policy is implemented here.
+
+## Windows CI preparation
+
+The repository workflow now includes an additional `windows-fullon-bass-v2`
+job targeting `[self-hosted, windows]`. It checks out the shared proposed ABI
+from PR #67 at `e46129be249bb4e07161b898ba2e659ea6bb075b`, configures the
+opt-in Bass DLL target, builds and runs the dynamic ABI smoke test, and uploads
+the DLL as an **experimental** artifact. It does not alter the main VST3 job
+or publish an installer. Workflow YAML and runner labels were parsed locally;
+Windows compilation, actual runner execution and artifact creation remain
+unverified until the branch is published and GitHub Actions runs it.
