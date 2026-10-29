@@ -479,7 +479,26 @@ rearm during playback and while stopped, save/reopen with the flag set, undo of
 replacement, and lane display vs sound. Automated tests cover only the Rack
 state machine.
 
-## Parameter capacity (decision needed before freezing the VST3 layout)
+## Parameter capacity
+
+**Decided for 1.0: 128 per slot (2048 endpoints, `slotNN.p001..p128`).** The
+earlier 64 endpoints keep their IDs; the other 64 are appended. Acid's 80
+controls fit with a margin, and a 16-pad drum kit fits too.
+
+Processor microbenchmark (`pool_capacity_bench`, Linux, Xeon 2.8 GHz, 4
+cores, 29.10.2026; the machine was also running other builds, so the numbers
+are noisy):
+
+| Pool | Host params | Construct p50 | State | Save / restore p50 |
+| --- | --- | --- | --- | --- |
+| 64 | 1565 | 3.7 ms | 70.9 KB | 2.1 / 5.7 ms |
+| 128 | 2589 | 6.0 ms | 108.7 KB | 4.4 / 11.3 ms |
+
+The per-block callback cost did not change measurably: only the bound
+endpoints are read. Still to measure, by the owner: Cubase/REAPER enumeration
+of 2589 parameters, automation-lane listing, and project load.
+
+Earlier option table (kept for history):
 
 Acid needs 80 independent host controls; the pool gives 64 (+8 macros, which
 stay independent performance assignments, not shadow copies). Options:
