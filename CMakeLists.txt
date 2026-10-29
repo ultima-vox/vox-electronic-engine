@@ -87,13 +87,18 @@ target_include_directories(vst_vins PUBLIC ${VST_LIBS_DIR} PRIVATE ${CMAKE_BINAR
 target_link_libraries(vst_vins
   PUBLIC vst_native vst_dspcore juce::juce_core juce::juce_cryptography ${CMAKE_DL_LIBS})
 
-# The production gate refuses a release without the owner's publisher key.
-add_test(NAME vins_production_gate_refuses_dev_key
-  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_PUBLISHER_PRIVATE_KEY=
+# The release gate: a release candidate needs the owner's release PUBLIC key,
+# and no build ever accepts a private key.
+add_test(NAME vins_production_gate_refuses_without_release_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_RELEASE_PUBLIC_KEY=
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
-set_tests_properties(vins_production_gate_refuses_dev_key PROPERTIES WILL_FAIL TRUE)
-add_test(NAME vins_production_gate_accepts_release_key
-  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_PUBLISHER_PRIVATE_KEY=release.pem
+set_tests_properties(vins_production_gate_refuses_without_release_key PROPERTIES WILL_FAIL TRUE)
+add_test(NAME vins_production_gate_refuses_private_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PUBLISHER_PRIVATE_KEY=release.key
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
+set_tests_properties(vins_production_gate_refuses_private_key PROPERTIES WILL_FAIL TRUE)
+add_test(NAME vins_production_gate_accepts_release_public_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_RELEASE_PUBLIC_KEY=release.pub.pem
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
 
 # Package tool (host build): writes manifests and deterministic archives.
@@ -587,6 +592,12 @@ if(VOX_NATIVE_PLATFORM)
     ID com.ultimavox.demo-synth VERSION 1.0.0
     NAME "Vox Demo Synth" VENDOR "Ultima Vox"
     INSTRUMENTS com.ultimavox.demo-synth MODULE_TARGET VoxDemoSynth)
+endif()
+
+# The package tests need packages signed by this tree's development and test
+# keys, which only a development build produces. A release candidate is built
+# from a commit whose development build passed them.
+if(VOX_NATIVE_PLATFORM AND NOT VOX_PRODUCTION_BUILD)
   vox_add_vins(vins_test_tone KIND native
     OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone.vins
     ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
@@ -596,6 +607,15 @@ if(VOX_NATIVE_PLATFORM)
     ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
     INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module
     KEY ${VOX_UNTRUSTED_TEST_KEY} MODULUS ${VOX_UNTRUSTED_MODULUS_FILE})
+
+  add_test(NAME vins_offline_signing
+    COMMAND ${CMAKE_COMMAND} "-DTOOL=$<TARGET_FILE:vox_vins_pack>" "-DOPENSSL=${VOX_OPENSSL}"
+      "-DMAKE_VINS=${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeVins.cmake"
+      "-DMODULE=$<TARGET_FILE:vox_abi_v2_test_module>" "-DPLATFORM=${VOX_NATIVE_PLATFORM}"
+      "-DRELEASE_KEY=${VOX_UNTRUSTED_TEST_KEY}" "-DRELEASE_MODULUS=${VOX_UNTRUSTED_MODULUS_FILE}"
+      "-DOTHER_KEY=${VOX_PUBLISHER_KEY}" "-DOTHER_MODULUS=${VOX_PUBLISHER_MODULUS_FILE}"
+      "-DWORK=${CMAKE_BINARY_DIR}/offline-signing"
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/vins/OfflineSigning.cmake)
 
   add_executable(vins_package_tests tests/integration/VinsPackageTests.cpp)
   target_include_directories(vins_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
