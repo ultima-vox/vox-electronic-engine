@@ -3,7 +3,9 @@
 #include "instrument/HostParameterSchema.h"
 #include "modules/BuiltInProvider.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -86,6 +88,115 @@ Render render(VstEngineAudioProcessor& p, int midiChannel) {
     }
     return result;
 }
+
+void coexistence(std::size_t count) {
+    auto p = processor();
+    std::vector<int> channels;
+    for (std::size_t index = 0; index < count; ++index) {
+        juce::String diagnostic;
+        check(p->loadSlotInstrument(index, bassId, diagnostic),
+              "load Bass slot " + std::to_string(index) + ": " + diagnostic.toStdString());
+        char id[32];
+        std::snprintf(id, sizeof(id), "slot%02zuEnabled", index + 1);
+        auto* enabled = p->parameters().getParameter(id);
+        check(enabled != nullptr, "slot enabled endpoint");
+        enabled->setValueNotifyingHost(1.0f);
+        std::snprintf(id, sizeof(id), "slot%02zuMidiIn", index + 1);
+        const auto* midi = p->parameters().getRawParameterValue(id);
+        check(midi != nullptr && midi->load() >= 1 && midi->load() <= 16,
+              "each Bass slot has a MIDI channel");
+        const auto ch = static_cast<int>(std::lround(midi->load()));
+        check(std::find(channels.begin(), channels.end(), ch) == channels.end(),
+              "Bass slots use distinct MIDI channels");
+        channels.push_back(ch);
+    }
+    for (const auto ch : channels) {
+        const auto audio = render(*p, ch);
+        check(audio.energy(3, 19) > 1e-5, "each Bass slot produces MIDI audio");
+        check(audio.energy(70, 80) < 1e-8, "each Bass slot releases its note");
+    }
+}
+
+void hostParameterRoundTrip() {
+    auto first = processor();
+    loadBass(*first);
+    juce::String diagnostic;
+    check(first->loadSlotInstrument(3, bassId, diagnostic), "second Bass slot loads");
+    const vstengine::instrument::InstrumentDescriptor* descriptor = nullptr;
+    for (const auto* candidate : first->availableInstruments())
+        if (candidate->id == bassId) descriptor = candidate;
+    check(descriptor != nullptr && descriptor->parameters.size() == 13, "Bass descriptor for host test");
+    std::array<float, 13> expected{}, otherSlot{};
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto id = vstengine::instrument::hostparams::poolId(slot, static_cast<int>(i));
+        const auto otherId = vstengine::instrument::hostparams::poolId(3, static_cast<int>(i));
+        auto* value = first->parameters().getRawParameterValue(id);
+        auto* other = first->parameters().getRawParameterValue(otherId);
+        check(value && other, "both slots expose each Bass endpoint");
+        expected[i] = value->load(); otherSlot[i] = other->load();
+    }
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& spec = descriptor->parameters[i];
+        const auto id = vstengine::instrument::hostparams::poolId(slot, static_cast<int>(i));
+        auto* parameter = first->parameters().getParameter(id);
+        check(parameter != nullptr, "Bass host endpoint exists");
+        const float next = spec.minimum + 0.73f * (spec.maximum - spec.minimum);
+        parameter->setValueNotifyingHost(parameter->convertTo0to1(next));
+        expected[i] = next;
+        for (std::size_t j = 0; j < expected.size(); ++j) {
+            const auto otherId = vstengine::instrument::hostparams::poolId(slot, static_cast<int>(j));
+            const auto* value = first->parameters().getRawParameterValue(otherId);
+            const float tolerance = std::max(1.0e-4f, (descriptor->parameters[j].maximum - descriptor->parameters[j].minimum) * 1.0e-4f);
+            check(value && std::abs(value->load() - expected[j]) <= tolerance,
+                  "host edit changes only its Bass endpoint");
+        }
+    }
+    render(*first, channel(*first)); // Publish values before saving.
+    juce::MemoryBlock saved;
+    first->getStateInformation(saved);
+    auto restored = processor();
+    restored->setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+    check(restored->instrumentRack().state()[slot].instrumentId == bassId
+              && restored->instrumentRack().state()[3].instrumentId == bassId,
+          "both Bass identities restore");
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto id = vstengine::instrument::hostparams::poolId(slot, static_cast<int>(i));
+        const auto otherId = vstengine::instrument::hostparams::poolId(3, static_cast<int>(i));
+        const auto* value = restored->parameters().getRawParameterValue(id);
+        const auto* other = restored->parameters().getRawParameterValue(otherId);
+        const float tolerance = std::max(1.0e-4f, (descriptor->parameters[i].maximum - descriptor->parameters[i].minimum) * 1.0e-4f);
+        check(value && std::abs(value->load() - expected[i]) <= tolerance,
+              "each edited Bass host endpoint restores");
+        check(other && std::abs(other->load() - otherSlot[i]) <= tolerance,
+              "other Bass slot remains independent");
+    }
+}
+
+void hostAudioControls() {
+    for (std::size_t i = 0; i < 13; ++i) {
+        auto minimum = processor();
+        auto maximum = processor();
+        loadBass(*minimum); loadBass(*maximum);
+        const vstengine::instrument::InstrumentDescriptor* descriptor = nullptr;
+        for (const auto* candidate : minimum->availableInstruments())
+            if (candidate->id == bassId) descriptor = candidate;
+        check(descriptor && descriptor->parameters.size() == 13, "Bass descriptor for audio test");
+        const auto id = vstengine::instrument::hostparams::poolId(slot, static_cast<int>(i));
+        auto* low = minimum->parameters().getParameter(id);
+        auto* high = maximum->parameters().getParameter(id);
+        check(low && high, "host control exists for audio test");
+        low->setValueNotifyingHost(low->convertTo0to1(descriptor->parameters[i].minimum));
+        high->setValueNotifyingHost(high->convertTo0to1(descriptor->parameters[i].maximum));
+        const auto a = render(*minimum, channel(*minimum));
+        const auto b = render(*maximum, channel(*maximum));
+        check(a.samples.size() == b.samples.size(), "host control render lengths match");
+        double difference = 0.0;
+        for (std::size_t sample = 0; sample < a.samples.size(); ++sample)
+            difference += std::abs(static_cast<double>(a.samples[sample]) - b.samples[sample]);
+        check(a.energy(3, 19) + b.energy(3, 19) > 1e-5 && difference > 1e-4,
+              "host Bass endpoint changes audible DSP: " + std::to_string(i));
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -129,6 +240,9 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < a.samples.size(); ++i)
         maxDiff = std::max(maxDiff, std::abs(static_cast<double>(a.samples[i] - b.samples[i])));
     check(maxDiff < 1e-5, "restored Rack render matches original");
+    for (std::size_t count : {1u, 2u, 8u, 16u}) coexistence(count);
+    hostParameterRoundTrip();
+    hostAudioControls();
     std::cout << "Bass native Rack integration passed\n";
 }
 

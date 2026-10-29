@@ -88,11 +88,27 @@ jobs:
           $depsRoot = Join-Path $env:RUNNER_TEMP "bass-deps-${{ github.run_id }}-${{ github.run_attempt }}"
           cmake -S . -B build-bass-v2 -G "Visual Studio 17 2022" -A x64 "-DFETCHCONTENT_BASE_DIR=$depsRoot" "-DVOX_BUILD_FULLON_BASS_MODULE=ON" "-DVOX_MODULE_ABI_V2_ROOT=$abiRoot"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build Bass DLL and ABI test
+      - name: Build Bass DLL and focused tests
         id: bass_build
-        run: cmake --build build-bass-v2 --config Release --target fullon_bass_module_tests --parallel
-      - name: Test Bass ABI DLL round trip
-        run: ctest --test-dir build-bass-v2 -C Release -R "^fullon_bass_module_tests$" --output-on-failure
+        run: cmake --build build-bass-v2 --config Release --target fullon_bass_module_tests fullon_bass_parameter_tests --parallel 2
+      - name: Test Bass DSP and ABI
+        run: ctest --test-dir build-bass-v2 -C Release -R "^(fullon_bass_module_tests|fullon_bass_parameter_tests)$" --output-on-failure
+      - name: Capture Bass DSP evidence
+        shell: powershell
+        run: |
+          $evidenceDir = Join-Path $env:GITHUB_WORKSPACE "build-bass-v2/bass-evidence"
+          New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+          $env:VOX_BASS_RELEASE_WAV_DIR = $evidenceDir
+          $env:VOX_BASS_CPU_CSV = Join-Path $evidenceDir "bass-cpu.csv"
+          $env:VOX_BASS_DENSE_CPU_CSV = Join-Path $evidenceDir "bass-dense-midi-cpu.csv"
+          & "./build-bass-v2/Release/fullon_bass_parameter_tests.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload Bass DSP evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoxFullOnBass-DSP-Evidence
+          path: build-bass-v2/bass-evidence
+          if-no-files-found: error
       - name: Upload experimental Bass DLL
         if: always() && steps.bass_build.outcome == 'success'
         uses: actions/upload-artifact@v4
