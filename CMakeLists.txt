@@ -648,10 +648,16 @@ add_test(NAME bass_render_diagnostics COMMAND bass_render_diagnostics)
 
 # 7C installable product. Keep VST3 bundle name stable for upgrades; CPack
 # provides NSIS install/uninstall and ZIP artifact for CI/review environments.
+# Layout (#73/#77): <VST3>/vox music/Vox Electronic Engine.vst3 and every .vins
+# built here in <VST3>/vox music/instruments/.
 install(DIRECTORY
   "${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/$<CONFIG>/VST3/Vox Electronic Engine.vst3"
-  DESTINATION "."
+  DESTINATION "vox music"
   COMPONENT VoxPlugin)
+install(DIRECTORY "${VOX_INSTRUMENTS_DIR}/"
+  DESTINATION "vox music/instruments"
+  COMPONENT VoxPlugin
+  FILES_MATCHING PATTERN "*.vins")
 set(CPACK_PACKAGE_NAME "Vox Electronic Engine")
 set(CPACK_PACKAGE_VENDOR "Ultima Vox")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
