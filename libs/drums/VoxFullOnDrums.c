@@ -37,8 +37,7 @@
 #define PAD_PARAMS 5u
 #define GLOBAL_PARAMS 8u
 #define SEQ_PARAMS 15u
-#define V1_PARAM_COUNT (PAD_COUNT * PAD_PARAMS + GLOBAL_PARAMS) /* 48 */
-#define PARAM_COUNT (V1_PARAM_COUNT + SEQ_PARAMS)              /* 63 */
+#define PARAM_COUNT (PAD_COUNT * PAD_PARAMS + GLOBAL_PARAMS + SEQ_PARAMS) /* 63 */
 #define MAX_VOICES 16
 #define STATE_VERSION 2u
 #define STATE_MAGIC 0x44464f56u /* "VOFD" */
@@ -798,9 +797,9 @@ static uint32_t get32(const uint8_t *p) {
   return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-/* State (little endian): "VOFD", parameter count, pad count (8), plain f32
- * values, 8 pad MIDI notes, 8 pad choke groups. v1 = 48 values (D1 kit);
- * v2 = 63 values (adds the D2 sequencer, defaults when loading v1). */
+/* State (little endian): "VOFD", parameter count (63), pad count (8), plain
+ * f32 values, 8 pad MIDI notes, 8 pad choke groups. Only the current version
+ * loads; there is no migration from pre-release formats. */
 static VoxResult VOX_CALL saveState(VoxInstance s, uint8_t *buffer, uint32_t capacity,
                                     uint32_t *written, uint32_t *stateVersion) {
   if (s == NULL || written == NULL || stateVersion == NULL)
@@ -826,15 +825,13 @@ static VoxResult VOX_CALL loadState(VoxInstance s, uint32_t version, const uint8
                                     uint32_t size) {
   if (s == NULL || (bytes == NULL && size > 0))
     return VOX_E_INVALID_ARG;
-  if (version > STATE_VERSION)
+  if (version != STATE_VERSION)
     return VOX_E_STATE_VERSION;
-  const uint32_t count = version == 1 ? V1_PARAM_COUNT : PARAM_COUNT;
-  if (version == 0 || size != STATE_BYTES_FOR(count) || get32(bytes) != STATE_MAGIC ||
+  const uint32_t count = PARAM_COUNT;
+  if (size != STATE_BYTES_FOR(count) || get32(bytes) != STATE_MAGIC ||
       get32(bytes + 4) != count || get32(bytes + 8) != PAD_COUNT)
     return VOX_E_STATE_CORRUPT;
   float next[PARAM_COUNT];
-  for (uint32_t i = count; i < PARAM_COUNT; ++i)
-    next[i] = parameters[i].defaultValue; /* migration v1 -> v2 */
   for (uint32_t i = 0; i < count; ++i) {
     const uint32_t bits = get32(bytes + 12 + 4 * i);
     memcpy(&next[i], &bits, 4);

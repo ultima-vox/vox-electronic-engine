@@ -3,7 +3,8 @@
 Status: **D1 and the D2 sequencer core implemented (development package,
 not DAW-accepted).** Module
 `libs/drums/VoxFullOnDrums.c`, InstrumentId `com.ultimavox.fullon-drums`,
-package `com.ultimavox.fullon-drums.voxinst/0.1.0`. Loaded by the Rack's
+package `VoxFullOnDrums.vins` (0.1.0, signed native, see
+`docs/architecture/VINS_PACKAGES.md`). Loaded by the Rack's
 native V2 connector (#68); not linked into the Rack, no second VST3.
 
 ## Model
@@ -105,7 +106,7 @@ patterns are the five factory patterns selected by `seq.pattern`.
 
 v2, 280 bytes, little endian: `"VOFD"`, parameter count (63), pad count (8),
 63 plain f32 values, 8 pad MIDI notes, 8 pad choke groups (0 = none, ≤ 4).
-v1 (D1, 48 values) still loads; the sequencer values take their defaults.
+Only this version loads; pre-release formats are not migrated.
 `loadState` validates everything (finite in-range values, unique notes
 < 128, choke ≤ 4) before applying anything. The Rack's named host values stay
 authoritative on restore.

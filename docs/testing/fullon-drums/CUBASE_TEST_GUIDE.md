@@ -1,16 +1,19 @@
-# Full-on Drums (D1) in Vox Rack — Cubase test guide (Windows x64)
+# Full-on Drums in Vox Rack — Cubase test guide (Windows x64)
 
-Development mode only: unsigned module, environment-variable package root,
-no installer. CTest results are not DAW acceptance; mark every step below
-unverified until run in Cubase.
+You install by copying files: no installer, scripts or environment variables.
+CTest results do not count as DAW acceptance, so mark every step below as
+unverified until it has been run in Cubase.
+
+The native `.vins` packages are signed with the CI run's development
+publisher key, so a package loads only in the Rack from the same CI run.
+`build-info.txt` names the key.
 
 ## 0. Downloads (one CI run, same commit)
 
 | Artifact | Contents |
 | --- | --- |
-| `Vox-Electronic-Engine-Windows` | `VstEngine_artefacts/Release/VST3/Vox Electronic Engine.vst3` (Rack) |
-| `Vox-FullOn-Drums-Package-Windows` | `com.ultimavox.fullon-drums.voxinst/0.1.0/{manifest.json, module/x64/VoxFullOnDrums.dll}` |
-| `Vox-FullOn-Drums-Cubase-Guide` | this guide, `install-drums-package.ps1`, `fullon-drums-145bpm-4bar.mid` (one track), `fullon-drums-145bpm-8-tracks.mid` (eight named part tracks), `make_groove_midi.py`, `build-info.txt` |
+| `Vox-Music-Install-Windows` | `vox music\Vox Electronic Engine.vst3` and `vox music\instruments\VoxFullOnDrums.vins`, plus the Demo packages. This is the install layout |
+| `Vox-FullOn-Drums-Cubase-Guide` | this guide, `fullon-drums-145bpm-4bar.mid` (one track), `fullon-drums-145bpm-8-tracks.mid` (eight named part tracks), `make_groove_midi.py`, `build-info.txt` |
 
 ## 1. Pad map (one Rack slot, one MIDI channel, eight pads inside the kit)
 
@@ -39,18 +42,16 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 
 ## 2. Install
 
-1. Close Cubase. Copy `Vox Electronic Engine.vst3` to
-   `C:\Program Files\Common Files\VST3\` and note its hash
-   (`Get-FileHash "...\Contents\x86_64-win\Vox Electronic Engine.vst3"`); it
-   must equal "Rack SHA-256" in `build-info.txt` and never change below.
-2. Extract `Vox-FullOn-Drums-Package-Windows` to e.g. `C:\VoxDev\download`.
-3. `powershell -ExecutionPolicy Bypass -File install-drums-package.ps1 -PackageZipDir C:\VoxDev\download`
-   copies the package to
-   `C:\VoxDev\instruments\com.ultimavox.fullon-drums.voxinst\0.1.0\`, checks
-   its SHA-256 and sets the user variable
-   `VOX_DEV_INSTRUMENT_ROOT=C:\VoxDev\instruments` (the Demo Synth package can
-   live in the same root).
-4. Start Cubase from the Start menu (sign out/in once if the kit is missing).
+1. Close Cubase. Remove any older `Vox Electronic Engine.vst3` from
+   `C:\Program Files\Common Files\VST3\`.
+2. Copy the folder `vox music` from `Vox-Music-Install-Windows` into
+   `C:\Program Files\Common Files\VST3\`. Afterwards this file must exist:
+   `...\VST3\vox music\instruments\VoxFullOnDrums.vins`.
+3. Check the hash:
+   `Get-FileHash "...\VST3\vox music\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"`.
+   It must equal "Rack SHA-256" in `build-info.txt` and must not change in
+   any later step.
+4. Start Cubase.
 
 ## 3. Cubase procedure
 
@@ -67,8 +68,8 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 | 9 | Change several controls, save, quit Cubase, reopen | Same slot, channel, values and groove |
 | 10 | *Export → Audio Mixdown* of the 4 bars (offline), twice | Two identical files with the groove |
 | 11 | Second instrument track with another Rack + Full-on Drums | Plays independently |
-| 12 | Quit Cubase, rename `...\com.ultimavox.fullon-drums.voxinst` to `.off`, reopen | Rack loads; slot 1 shows Full-on Drums missing and silent; save once |
-| 13 | Quit, rename back, reopen | Groove and values return |
+| 12 | Quit Cubase, move `vox music\instruments\VoxFullOnDrums.vins` out of the folder, reopen | Rack loads; slot 1 shows Full-on Drums missing and silent; save once |
+| 13 | Quit, move the file back, reopen | Groove and values return |
 | 14 | Compare the Rack hash with step 2.1 | Unchanged |
 | 15 | Delete the MIDI clip. Set **Seq Mode = Internal**, Seq Pattern = Full-on Basic, press Play at 145 BPM | The kit plays the pattern in time with Cubase; bar 4 has a tom fill |
 | 16 | Loop bars 1–4, seek, change tempo, stop/start | Stays on the grid; downbeat replays on loop; no hits while stopped |

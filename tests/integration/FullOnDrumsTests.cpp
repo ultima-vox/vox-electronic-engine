@@ -1,10 +1,11 @@
-// Full-on Drums (#71 D1) through the real Rack processor: the versioned
-// package is resolved from a development package root as in a DAW and the kit
-// is played from slot MIDI. Not DAW acceptance (see the Cubase guide).
+// Full-on Drums (#71) through the real Rack processor: VoxFullOnDrums.vins is
+// loaded from an instruments folder exactly as the DAW constructor loads the
+// one next to the VST3, and the kit is played from slot MIDI. Not DAW
+// acceptance (see the Cubase guide).
 #include "PluginProcessor.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
-#include "instrument/native/ModulePackages.h"
+#include "instrument/vins/VinsPackage.h"
 #include "instrument/native/NativeModule.h"
 
 #include <algorithm>
@@ -39,7 +40,7 @@ constexpr int kitVolume = 40, kickPitch = 41, kickPitchDecay = 42, kickDrive = 4
               kickSub = 44, kickTail = 45, hatChoke = 46, velocitySens = 47;
 constexpr int padParam(int pad, int key) { return pad * 5 + key; }
 
-fs::path packageRoot;
+fs::path instrumentsDir, cacheRoot;
 int checks = 0;
 
 void check(bool ok, const std::string &message) {
@@ -50,15 +51,19 @@ void check(bool ok, const std::string &message) {
   }
 }
 
-void setEnv(const char *name, const std::string &value) {
-#if defined(_WIN32)
-  _putenv_s(name, value.c_str());
-#else
-  if (value.empty())
-    ::unsetenv(name);
-  else
-    ::setenv(name, value.c_str(), 1);
-#endif
+// What the DAW constructor does for the instruments folder next to the VST3.
+native::LoadReport installed(const fs::path &folder) {
+  instrument::vins::LoadOptions options;
+  options.cacheRoot = cacheRoot;
+  options.trusted = instrument::vins::pinnedPublisherKeys();
+  return instrument::vins::loadFolder(folder, options);
+}
+
+fs::path cachedModule() {
+  for (const auto &entry : fs::recursive_directory_iterator(cacheRoot))
+    if (entry.path().stem() == "VoxFullOnDrums" && entry.is_regular_file())
+      return entry.path();
+  return {};
 }
 
 struct Rig {
@@ -87,7 +92,7 @@ Rig makeRig(const fs::path &root, std::size_t slot = 2, double rate = 48000.0, i
   Rig r;
   r.p = std::make_unique<VstEngineAudioProcessor>(
       modules::createBuiltInProvider(),
-      root.empty() ? native::LoadReport{} : native::loadPackages(root));
+      root.empty() ? native::LoadReport{} : installed(root));
   quietBuiltIns(*r.p);
   r.p->prepareToPlay(rate, block);
   r.rate = rate;
@@ -234,11 +239,9 @@ double maxDifference(const Stereo &a, const Stereo &b) {
 }
 
 // ------------------------------------------------------------------ tests
-void loadsFromDevelopmentRootLikeADaw() {
-  setEnv("VOX_DEV_NATIVE_MODULES", "");
-  setEnv("VOX_DEV_INSTRUMENT_ROOT", packageRoot.string());
-  auto p = std::make_unique<VstEngineAudioProcessor>(); // the DAW's constructor
-  setEnv("VOX_DEV_INSTRUMENT_ROOT", "");
+void loadsFromTheInstrumentsFolder() {
+  auto p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                     installed(instrumentsDir));
   for (const auto &d : p->nativeModuleDiagnostics())
     std::cerr << "diagnostic: " << d << '\n';
   check(p->nativeModuleDiagnostics().empty(), "drum package loads without diagnostics");
@@ -260,7 +263,7 @@ void loadsFromDevelopmentRootLikeADaw() {
 }
 
 void grooveAndStems() {
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   const auto hits = groove(r.rate);
   const int length = static_cast<int>(r.rate * 60.0 / 145.0 * 4) + 24000;
   const auto mix = renderHits(r, length, hits);
@@ -299,7 +302,7 @@ void grooveAndStems() {
 }
 
 void sampleOffsetsAndSimultaneousHits() {
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   for (int offset : {0, 37, 100, 255}) {
     const auto out = renderHits(r, 4096, {{256 + offset, snare}});
     int first = -1;
@@ -345,7 +348,7 @@ void sampleOffsetsAndSimultaneousHits() {
 }
 
 void chokeAndRelease() {
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   const int at = 12000; // closed hat 250 ms after the open hat
   setPlain(r, padParam(closedHat, level), 0.0f); // only hear the open hat
   const auto choked = renderHits(r, 48000, {{0, openHat}, {at, closedHat}});
@@ -378,7 +381,7 @@ void chokeAndRelease() {
 }
 
 void midiOverflowFailsClosed() {
-  auto r = makeRig(packageRoot, 2, 48000.0, 1024);
+  auto r = makeRig(instrumentsDir, 2, 48000.0, 1024);
   const auto before = native::totalMidiOverflows();
   std::vector<Midi> flood;
   flood.push_back({0, MidiMessage::noteOn(r.channel, 49, (juce::uint8)110)});
@@ -392,7 +395,7 @@ void midiOverflowFailsClosed() {
 }
 
 void parametersAffectOnlyTheirPad() {
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   auto solo = [&](int pad) { return renderHits(r, 36000, {{100, pad}}); };
   std::vector<Stereo> base;
   for (int pad = 0; pad < padCount; ++pad)
@@ -445,9 +448,9 @@ void parametersAffectOnlyTheirPad() {
 }
 
 void instancesAndSlotsAreIndependent() {
-  auto alone = makeRig(packageRoot, 3);
-  auto a = makeRig(packageRoot, 3);
-  auto b = makeRig(packageRoot, 3);
+  auto alone = makeRig(instrumentsDir, 3);
+  auto a = makeRig(instrumentsDir, 3);
+  auto b = makeRig(instrumentsDir, 3);
   setPlain(b, padParam(kick, tune), 7.0f);
   const auto hits = groove(48000.0);
   const auto reference = renderHits(alone, 30000, hits);
@@ -455,7 +458,7 @@ void instancesAndSlotsAreIndependent() {
   renderHits(b, 30000, {{0, kick}, {5, snare}});
   check(ra == reference, "two Rack instances do not share kit state");
   // Two kits in one Rack on different channels.
-  auto two = makeRig(packageRoot, 3);
+  auto two = makeRig(instrumentsDir, 3);
   juce::String diagnostic;
   check(two.p->loadSlotInstrument(4, drumsId, diagnostic), "second kit slot");
   const int otherChannel = channelOf(*two.p, 4);
@@ -469,7 +472,7 @@ void instancesAndSlotsAreIndependent() {
 }
 
 void projectsRestore() {
-  auto first = makeRig(packageRoot, 5);
+  auto first = makeRig(instrumentsDir, 5);
   setPlain(first, padParam(kick, tune), -3.0f);
   setPlain(first, padParam(snare, character), 0.9f);
   setPlain(first, padParam(openHat, decay), 0.8f);
@@ -482,7 +485,7 @@ void projectsRestore() {
 
   auto second = makeRig({}, 5);
   second.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
-                                                       native::loadPackages(packageRoot));
+                                                       installed(instrumentsDir));
   quietBuiltIns(*second.p);
   second.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
   second.p->prepareToPlay(48000.0, 256);
@@ -512,7 +515,7 @@ void projectsRestore() {
   without.p->getStateInformation(resaved);
   Rig back;
   back.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
-                                                     native::loadPackages(packageRoot));
+                                                     installed(instrumentsDir));
   quietBuiltIns(*back.p);
   back.p->setStateInformation(resaved.getData(), static_cast<int>(resaved.getSize()));
   back.p->prepareToPlay(48000.0, 256);
@@ -525,7 +528,7 @@ void deterministicOfflineRender() {
   for (double rate : {44100.0, 48000.0, 96000.0}) {
     Stereo reference;
     for (int block : {64, 128, 512}) {
-      auto r = makeRig(packageRoot, 2, rate, block);
+      auto r = makeRig(instrumentsDir, 2, rate, block);
       const auto hits = groove(rate);
       const int length = static_cast<int>(rate * 1.8);
       const auto first = renderHits(r, length, hits);
@@ -544,10 +547,9 @@ void deterministicOfflineRender() {
 }
 
 void moduleRejectsInvalidState() {
-  const auto selection = native::resolvePackages(packageRoot);
-  check(selection.modules.size() == 1 && selection.diagnostics.empty(), "one drum package");
+  check(!cachedModule().empty(), "the drum module is in the instrument cache");
   std::string diagnostic;
-  auto module = native::NativeModule::acquire(selection.modules.front(), diagnostic);
+  auto module = native::NativeModule::acquire(cachedModule(), diagnostic);
   check(module != nullptr, "module acquired: " + diagnostic);
   const auto &t = module->table();
   const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2,
@@ -574,8 +576,8 @@ void moduleRejectsInvalidState() {
   check(corrupt(notesAt + 8, 9) == VOX_E_STATE_CORRUPT, "invalid choke group rejected");
   check(corrupt(0, 0) == VOX_E_STATE_CORRUPT, "bad magic rejected");
   check(t.loadState(s, 3, state, written) == VOX_E_STATE_VERSION, "future version rejected");
-  check(t.loadState(s, 1, state, written) == VOX_E_STATE_CORRUPT,
-        "v2 bytes labelled v1 are rejected");
+  check(t.loadState(s, 1, state, written) == VOX_E_STATE_VERSION,
+        "only the current state version loads (no pre-release migration)");
   check(t.loadState(s, 2, state, written) == VOX_OK, "valid state loads");
   float values[63];
   for (int i = 0; i < 63; ++i)
@@ -586,7 +588,7 @@ void moduleRejectsInvalidState() {
 }
 
 void noAllocationWhilePlaying() {
-  auto r = makeRig(packageRoot, 7);
+  auto r = makeRig(instrumentsDir, 7);
   juce::AudioBuffer<float> audio(2, r.block);
   juce::MidiBuffer midi;
   midi.ensureSize(4096);
@@ -680,7 +682,7 @@ std::vector<int> onsets(const std::vector<float> &x, double minGapSamples) {
 
 void sequencerPlaysOnTheHostGrid() {
   for (int block : {64, 256, 512}) {
-    auto r = makeRig(packageRoot, 2, 48000.0, block);
+    auto r = makeRig(instrumentsDir, 2, 48000.0, block);
     setPlain(r, seqMode, 1.0f); // Internal
     setPlain(r, seqFill, 0.0f); // the fill bar drops a kick
     onlyLanes(r, {kick});
@@ -696,8 +698,8 @@ void sequencerPlaysOnTheHostGrid() {
       check(std::abs(hits[k] - std::ceil(k * spb - 1e-6)) <= 1.0,
             "kick " + std::to_string(k) + " lands on its beat");
   }
-  auto a = makeRig(packageRoot, 2, 48000.0, 64);
-  auto b = makeRig(packageRoot, 2, 48000.0, 512);
+  auto a = makeRig(instrumentsDir, 2, 48000.0, 64);
+  auto b = makeRig(instrumentsDir, 2, 48000.0, 512);
   for (auto *r : {&a, &b})
     setPlain(*r, seqMode, 1.0f);
   TestPlayHead ha, hb;
@@ -711,7 +713,7 @@ void sequencerPlaysOnTheHostGrid() {
 void sequencerModesAvoidDoubleTriggers() {
   const double spb = 60.0 / 145.0 * 48000.0;
   const int bar = static_cast<int>(spb * 4);
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   TestPlayHead head;
   check(play(r, head, bar).energy() == 0.0, "Host mode: a running transport alone is silent");
   setPlain(r, seqMode, 1.0f);
@@ -740,7 +742,7 @@ void sequencerModesAvoidDoubleTriggers() {
 
 void sequencerFollowsLoopsSeeksAndSwing() {
   const double spb = 60.0 / 145.0 * 48000.0;
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   setPlain(r, seqMode, 1.0f);
   onlyLanes(r, {kick});
   setPlain(r, padParam(kick, decay), 0.08f);
@@ -773,7 +775,7 @@ void sequencerPatternControls() {
   const double spb = 60.0 / 145.0 * 48000.0;
   const int bars4 = static_cast<int>(spb * 16);
   auto render = [&](auto setup) {
-    auto r = makeRig(packageRoot);
+    auto r = makeRig(instrumentsDir);
     setPlain(r, seqMode, 1.0f);
     setup(r);
     TestPlayHead head;
@@ -800,7 +802,7 @@ void sequencerPatternControls() {
 
 void sequencerStateReopensWithoutDuplicates() {
   const int bars4 = static_cast<int>(60.0 / 145.0 * 48000.0 * 16);
-  auto first = makeRig(packageRoot, 6);
+  auto first = makeRig(instrumentsDir, 6);
   setPlain(first, seqMode, 1.0f);
   setPlain(first, seqPattern, 1.0f);
   setPlain(first, seqSwing, 0.2f);
@@ -814,7 +816,7 @@ void sequencerStateReopensWithoutDuplicates() {
 
   Rig second;
   second.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
-                                                       native::loadPackages(packageRoot));
+                                                       installed(instrumentsDir));
   quietBuiltIns(*second.p);
   second.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
   second.p->prepareToPlay(48000.0, 256);
@@ -883,7 +885,7 @@ std::vector<Midi> withoutNote(const std::vector<Midi> &events, int note) {
 }
 
 void multiTrackHostMidi(const fs::path &midiDir) {
-  auto r = makeRig(packageRoot);
+  auto r = makeRig(instrumentsDir);
   check(plainOf(r, seqMode) == 0.0f, "Seq Mode defaults to Host MIDI");
   const auto tracks = readMidiFile(midiDir / "fullon-drums-145bpm-8-tracks.mid", r.rate, r.channel);
   const auto single = readMidiFile(midiDir / "fullon-drums-145bpm-4bar.mid", r.rate, r.channel);
@@ -1019,7 +1021,7 @@ void multiTrackHostMidi(const fs::path &midiDir) {
   r.p->getStateInformation(state);
   auto reopened = makeRig({}, r.slot);
   reopened.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
-                                                         native::loadPackages(packageRoot));
+                                                         installed(instrumentsDir));
   quietBuiltIns(*reopened.p);
   reopened.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
   reopened.p->prepareToPlay(r.rate, r.block);
@@ -1029,46 +1031,18 @@ void multiTrackHostMidi(const fs::path &midiDir) {
         "reopened project plays the eight tracks bit for bit");
 }
 
-void stateMigratesFromV1() {
-  const auto selection = native::resolvePackages(packageRoot);
-  std::string diagnostic;
-  auto module = native::NativeModule::acquire(selection.modules.front(), diagnostic);
-  const auto &t = module->table();
-  const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2,
-                                 VOX_SLOT_INDEX_NONE, 0};
-  VoxInstance s = nullptr;
-  check(t.create(drumsId, &params, &s) == VOX_OK, "create");
-  // A D1 (v1) state: 48 values, kick tuned down 5 st.
-  std::uint8_t v1[12 + 48 * 4 + 16];
-  std::uint8_t v2[512];
-  std::uint32_t written = 0, version = 0;
-  check(t.saveState(s, v2, sizeof(v2), &written, &version) == VOX_OK && version == 2 &&
-            written == 12 + 63 * 4 + 16,
-        "state v2 holds 63 values");
-  std::memcpy(v1, v2, 12 + 48 * 4);
-  v1[4] = 48;
-  const float tuneDown = -5.0f;
-  std::memcpy(v1 + 12 + 4 * padParam(kick, tune), &tuneDown, 4);
-  std::memcpy(v1 + 12 + 48 * 4, v2 + 12 + 63 * 4, 16);
-  check(t.loadState(s, 1, v1, sizeof(v1)) == VOX_OK, "v1 (D1) state loads");
-  check(t.saveState(s, v2, sizeof(v2), &written, &version) == VOX_OK, "save after migration");
-  float value = 0;
-  std::memcpy(&value, v2 + 12 + 4 * padParam(kick, tune), 4);
-  check(value == tuneDown, "v1 kit values survive migration");
-  std::memcpy(&value, v2 + 12 + 4 * seqMode, 4);
-  check(value == 0.0f, "new sequencer values take defaults (Host MIDI)");
-  check(t.destroy(s) == VOX_OK, "destroy");
-}
 } // namespace
 
 int main(int argc, char **argv) {
   if (argc != 4) {
-    std::cerr << "usage: fullon_drums_tests <drum package root> <scratch dir> <midi dir>\n";
+    std::cerr << "usage: fullon_drums_tests <instruments folder> <scratch dir> <midi dir>\n";
     return 2;
   }
-  packageRoot = fs::absolute(argv[1]);
+  instrumentsDir = fs::absolute(argv[1]);
+  cacheRoot = fs::absolute(argv[2]) / "cache";
+  fs::remove_all(cacheRoot);
   juce::ScopedJuceInitialiser_GUI gui;
-  loadsFromDevelopmentRootLikeADaw();
+  loadsFromTheInstrumentsFolder();
   grooveAndStems();
   sampleOffsetsAndSimultaneousHits();
   chokeAndRelease();
@@ -1084,7 +1058,6 @@ int main(int argc, char **argv) {
   sequencerPatternControls();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
-  stateMigratesFromV1();
   noAllocationWhilePlaying();
   std::cout << "fullon_drums_tests: " << checks << " checks passed\n";
   return 0;
