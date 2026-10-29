@@ -294,55 +294,23 @@ float AcidEngine::parameter(std::string_view id) const noexcept {
 
 bool AcidEngine::loadState(std::uint32_t schemaVersion,
                            std::span<const std::byte> payload) noexcept {
-    // The existing Rack creates a newly selected instrument with an empty
-    // payload: retain factory defaults for both supported schemas.
-    // Non-empty payloads must be fully validated transactionally.
-    if (schemaVersion != legacyStateVersion
-        && schemaVersion != previousStateVersion
-        && schemaVersion != lfo1StateVersion
-        && schemaVersion != env2StateVersion
-        && schemaVersion != lfo23StateVersion
-        && schemaVersion != stepStateVersion
-        && schemaVersion != stateVersion)
+    // Current schema only. An empty payload keeps the instance as it is so a
+    // newly selected slot stays at factory defaults. Older schemas are not
+    // migrated: a rejected payload does not change targets or smoothed state.
+    if (schemaVersion != stateVersion)
         return false;
     if (payload.empty()) return true;
-    if (payload.size() < 8) return false;
+    if (payload.size() != encodedStateBytes) return false;
 
     std::uint32_t magic = 0;
     std::uint32_t version = 0;
     std::memcpy(&magic, payload.data(), sizeof(std::uint32_t));
     std::memcpy(&version, payload.data() + 4, sizeof(std::uint32_t));
-
-    if (magic != stateMagic || version != schemaVersion) {
-        return false;
-    }
-
-    // A single version table owns the serialized prefix length. v1 is a
-    // special pre-v3 payload: preserve previously configured original
-    // extension 9..35, but reset every feature appended after v3.
-    const std::size_t storedParameters =
-        schemaVersion == legacyStateVersion ? legacyParameterCount
-        : schemaVersion == previousStateVersion ? previousParameterCount
-        : schemaVersion == lfo1StateVersion ? lfo1ParameterCount
-        : schemaVersion == env2StateVersion ? env2ParameterCount
-        : schemaVersion == lfo23StateVersion ? lfo23ParameterCount
-        : schemaVersion == stepStateVersion ? stepParameterCount
-                                            : parameterCount;
-    if (payload.size() < 8 + storedParameters * sizeof(float))
+    if (magic != stateMagic || version != stateVersion)
         return false;
 
     auto parsedTargets = targets_;
-    const std::size_t factorySuffixStart =
-        schemaVersion == legacyStateVersion ? previousParameterCount
-                                           : storedParameters;
-    std::copy(factoryTargets_.begin() + static_cast<std::ptrdiff_t>(factorySuffixStart),
-              factoryTargets_.end(),
-              parsedTargets.begin() + static_cast<std::ptrdiff_t>(factorySuffixStart));
-
-    // Parse transactionally: malformed or non-finite data must never
-    // partially change the live DSP. All legacy schemas use the same
-    // validated normalized-float wire format for their stored prefix.
-    for (std::size_t i = 0; i < storedParameters; ++i) {
+    for (std::size_t i = 0; i < parameterCount; ++i) {
         float value = 0.0f;
         std::memcpy(&value, payload.data() + 8 + i * sizeof(float), sizeof(float));
         if (!std::isfinite(value)) return false;
@@ -351,8 +319,7 @@ bool AcidEngine::loadState(std::uint32_t schemaVersion,
 
     targets_ = parsedTargets;
     smoothed_ = targets_;
-    if (schemaVersion != legacyStateVersion)
-        (void) setParameter("play_mode_flags", targets_[Parameter::playModeFlags]);
+    (void) setParameter("play_mode_flags", targets_[Parameter::playModeFlags]);
     return true;
 }
 

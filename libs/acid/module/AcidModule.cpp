@@ -1,6 +1,7 @@
 #include "AcidModuleMap.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <new>
 #include <vector>
@@ -17,6 +18,10 @@ using vstengine::acid::module::plainToNorm;
 using vstengine::acid::module::stateVersion;
 
 VoxHostServicesV2 gHost{};
+std::atomic<std::uint32_t> gFault{0};
+constexpr std::uint32_t kFaultMidiOverflow = 1;
+constexpr std::uint32_t kFaultNonFiniteOutput = 2;
+constexpr std::uint32_t kFaultNonFiniteParam = 3;
 VoxParameterDescriptorV2 gParameters[parameterCount]{};
 VoxInstrumentDescriptorV2 gInstrument{};
 bool gReady = false;
@@ -291,7 +296,7 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
             continue;
         if (midiCount >= instance->midi.size()) {
             silence(context);
-            logLine(2, "VoxAcid303 midi capacity exceeded");
+            gFault.store(kFaultMidiOverflow, std::memory_order_release);
             return VOX_E_INVALID_ARG;
         }
         auto& slot = instance->midi[midiCount++];
@@ -313,27 +318,22 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
         instance->paramOrder[i] = i;
     for (std::uint32_t i = 0; i < midiCount; ++i)
         instance->midiOrder[i] = i;
-    // Insertion sort. Counts are bounded by prepare(); no heap traffic.
-    for (std::uint32_t i = 1; i < context->paramChangeCount; ++i) {
-        const std::uint32_t key = instance->paramOrder[i];
-        const std::uint32_t keyOffset = paramAt(context, key)->sampleOffset;
-        std::uint32_t j = i;
-        while (j > 0 && paramAt(context, instance->paramOrder[j - 1])->sampleOffset > keyOffset) {
-            instance->paramOrder[j] = instance->paramOrder[j - 1];
-            --j;
-        }
-        instance->paramOrder[j] = key;
-    }
-    for (std::uint32_t i = 1; i < midiCount; ++i) {
-        const std::uint32_t key = instance->midiOrder[i];
-        const std::uint32_t keyOffset = instance->midi[key].sampleOffset;
-        std::uint32_t j = i;
-        while (j > 0 && instance->midi[instance->midiOrder[j - 1]].sampleOffset > keyOffset) {
-            instance->midiOrder[j] = instance->midiOrder[j - 1];
-            --j;
-        }
-        instance->midiOrder[j] = key;
-    }
+    // Index sort with an original-index tie break. std::sort does not allocate.
+    // Equal offsets keep input order. Counts cannot exceed the prepare() cap.
+    std::sort(instance->paramOrder.begin(),
+              instance->paramOrder.begin() + context->paramChangeCount,
+              [&](std::uint32_t a, std::uint32_t b) {
+                  const std::uint32_t oa = paramAt(context, a)->sampleOffset;
+                  const std::uint32_t ob = paramAt(context, b)->sampleOffset;
+                  return oa < ob || (oa == ob && a < b);
+              });
+    std::sort(instance->midiOrder.begin(),
+              instance->midiOrder.begin() + midiCount,
+              [&](std::uint32_t a, std::uint32_t b) {
+                  const std::uint32_t oa = instance->midi[a].sampleOffset;
+                  const std::uint32_t ob = instance->midi[b].sampleOffset;
+                  return oa < ob || (oa == ob && a < b);
+              });
 
     std::uint32_t paramCursor = 0;
     std::uint32_t midiCursor = 0;
@@ -342,8 +342,12 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
         while (paramCursor < context->paramChangeCount) {
             const VoxParamChangeV2* change = paramAt(context, instance->paramOrder[paramCursor]);
             if (change->sampleOffset > sample) break;
-            if (change->sampleOffset == sample)
-                (void) applyPlain(instance->engine, change->index, change->plain);
+            if (change->sampleOffset == sample) {
+                if (!std::isfinite(change->plain))
+                    gFault.store(kFaultNonFiniteParam, std::memory_order_release);
+                else
+                    (void) applyPlain(instance->engine, change->index, change->plain);
+            }
             ++paramCursor;
         }
         std::uint32_t next = context->numSamples;
@@ -383,7 +387,7 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
         for (std::uint32_t i = 0; i < context->numSamples; ++i) {
             if (!std::isfinite(data[i])) {
                 silence(context);
-                logLine(2, "VoxAcid303 non-finite output");
+                gFault.store(kFaultNonFiniteOutput, std::memory_order_release);
                 return VOX_E_INTERNAL;
             }
         }
@@ -456,4 +460,8 @@ extern "C" VOX_EXPORT VoxResult VOX_CALL voxModuleEntryV2(
     publishDescriptors();
     *module = &gModule;
     return VOX_OK;
+}
+
+extern "C" VOX_EXPORT std::uint32_t voxAcid303FaultCode() {
+    return gFault.load(std::memory_order_acquire);
 }

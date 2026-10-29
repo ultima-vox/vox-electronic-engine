@@ -197,6 +197,16 @@ int main() {
   outside.block(malformed);
   check(outside.silent() && !outside.engine.isActive(),
         "invalid MIDI data bytes never create a voice");
+
+  // TB-303 has no sustain pedal. CC64 must not hold the gate after NoteOff.
+  Probe sustain;
+  sustain.event(0x90, 48, 100);
+  sustain.event(0xb0, 64, 127);
+  sustain.event(0x80, 48, 0);
+  sustain.settle();
+  check(sustain.silent() && !sustain.engine.isActive(),
+        "CC64 sustain does not hold an Acid note after NoteOff");
+
   std::cout << "Acid MIDI lifecycle: " << checks << " checks, " << failures
             << " failures\n";
   return failures ? 1 : 0;

@@ -1,9 +1,12 @@
 #include "acid/AcidControlInventory.h"
 #include "acid/module/AcidModuleMap.h"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -54,16 +57,23 @@ struct Library {
 
 VoxResult VOX_CALL hostLog(void*, std::uint32_t, const char*) { return VOX_OK; }
 
+std::atomic<int> gAudioLogCalls{0};
+VoxResult VOX_CALL countingLog(void*, std::uint32_t, const char*) {
+    gAudioLogCalls.fetch_add(1, std::memory_order_relaxed);
+    return VOX_OK;
+}
+
 struct Loaded {
     const VoxModuleV2* module = nullptr;
     VoxInstance instance = nullptr;
-    bool open(Library& library) {
+    bool open(Library& library,
+              VoxResult(VOX_CALL *logger)(void*, std::uint32_t, const char*) = hostLog) {
         auto* entry = reinterpret_cast<VoxModuleEntryV2Fn>(
             library.symbol(VOX_MODULE_ENTRY_V2_NAME));
         if (entry == nullptr) return false;
         const VoxResult rejected = entry(1u, nullptr, &module);
         check(rejected == VOX_E_UNSUPPORTED, "abi 1 is rejected");
-        VoxHostServicesV2 host{sizeof(VoxHostServicesV2), VOX_MODULE_ABI_V2, nullptr, hostLog};
+        VoxHostServicesV2 host{sizeof(VoxHostServicesV2), VOX_MODULE_ABI_V2, nullptr, logger};
         if (entry(VOX_MODULE_ABI_V2, &host, &module) != VOX_OK || module == nullptr)
             return false;
         VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2, 0, 0};
@@ -352,6 +362,46 @@ int main(int argc, char** argv) {
         }
     }
     check(hpEdge > lpEdge, "highpass mode is brighter than lowpass mode");
+
+    Loaded watched;
+    check(watched.open(library, countingLog), "logger instance opens");
+    VoxPrepareSpecV2 rejectedSpec{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, 1.0, 64, 2, 8, 8};
+    check(watched.module->prepare(watched.instance, &rejectedSpec) != VOX_OK,
+          "impossible sample rate is rejected");
+    check(gAudioLogCalls.load() >= 1, "prepare may report on the calling thread");
+    const int logsBeforeAudio = gAudioLogCalls.load();
+    prepare(watched.module, watched.instance, 48000.0, 128);
+    std::vector<float> guardL(128), guardR(128);
+    VoxParamChangeV2 poisoned{0, 0, std::numeric_limits<float>::quiet_NaN(), 0};
+    render(watched.module, watched.instance, guardL, guardR, &on, 1, &poisoned, 1, 0,
+           120.0, 0.0, true);
+    check(gAudioLogCalls.load() == logsBeforeAudio,
+          "process does not call the message-thread host logger");
+    auto* faultCode = reinterpret_cast<std::uint32_t (*)()>(
+        library.symbol("voxAcid303FaultCode"));
+    check(faultCode != nullptr && faultCode() == 3u,
+          "non-finite automation is latched instead of logged");
+
+    Loaded budget;
+    check(budget.open(library, countingLog), "budget instance opens");
+    VoxPrepareSpecV2 wide{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, 48000.0, 128, 2, 4096, 4096};
+    check(budget.module->prepare(budget.instance, &wide) == VOX_OK, "4096-event prepare succeeds");
+    std::vector<VoxMidiEventV2> manyMidi(4096);
+    std::vector<VoxParamChangeV2> manyParam(4096);
+    for (std::uint32_t i = 0; i < 4096; ++i) {
+        manyMidi[i] = note((4095u - i) % 128u, 0x80, static_cast<std::uint8_t>(i & 127u), 0);
+        manyParam[i] = {indexOf("output"), (i * 17u) % 128u, 0.5f, 0};
+    }
+    std::vector<float> budgetL(128), budgetR(128);
+    const auto started = std::chrono::steady_clock::now();
+    render(budget.module, budget.instance, budgetL, budgetR, manyMidi.data(), 4096,
+           manyParam.data(), 4096, 0, 120.0, 0.0, false);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    check(elapsed < std::chrono::milliseconds(100),
+          "4096 MIDI and parameter events stay inside 100 ms");
+    check(finiteBuffer(budgetL), "bounded event block stays finite");
+    check(gAudioLogCalls.load() == logsBeforeAudio,
+          "the event-budget block does not call the host logger");
 
     if (gFailures != 0)
         std::cerr << gFailures << " failure(s)\n";
