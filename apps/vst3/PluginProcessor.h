@@ -7,7 +7,6 @@
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/RealtimeAuditionQueue.h"
 #include "midi/SourceSelector.h"
-#include "parts/PartState.h"
 #include "preset/PresetManager.h"
 #include "rack/Rack.h"
 #include "rack/RackState.h"
@@ -142,11 +141,6 @@ public:
     juce::File createGeneratedMidiFile() {
       return createSlotMidiFile(selectedSlotIndex());
     }
-    [[nodiscard]] vstengine::parts::PartRegistry& partRegistry() noexcept
-    {
-        return parts;
-    }
-    [[nodiscard]] bool isPartLocked(int partIndex) const noexcept;
     [[nodiscard]] vstengine::rack::Rack& instrumentRack() noexcept { return rack; }
     [[nodiscard]] const vstengine::rack::Rack& instrumentRack() const noexcept { return rack; }
     [[nodiscard]] vstengine::effects::ChainState internalEffectsState() const noexcept
@@ -187,31 +181,6 @@ public:
     [[nodiscard]] int nextFreeChannel() const noexcept;
 
 private:
-    // APVTS bridge passed to the preset module (vstengine::PresetStateStore).
-    class ApvtsPresetStore final : public vstengine::PresetStateStore {
-    public:
-        explicit ApvtsPresetStore(juce::AudioProcessorValueTreeState& s)
-            : apvts(s) {}
-        [[nodiscard]] juce::ValueTree copyState() const override
-        {
-            return apvts.copyState();
-        }
-        void replaceState(juce::ValueTree newState) override
-        {
-            apvts.replaceState(std::move(newState));
-        }
-        [[nodiscard]] float convertTo0to1(const char* parameterId,
-                                          float plainValue) const override
-        {
-            auto* ranged = apvts.getParameter(parameterId);
-            return ranged != nullptr ? ranged->convertTo0to1(plainValue)
-                                     : plainValue;
-        }
-
-    private:
-        juce::AudioProcessorValueTreeState& apvts;
-    };
-
     static vstengine::instrument::InstrumentRegistry makeRegistry(
         std::unique_ptr<vstengine::instrument::InstrumentProvider>,
         vstengine::instrument::native::LoadReport &,
@@ -224,9 +193,6 @@ private:
     static bool containsNoteEvents(const juce::MidiBuffer& midi) noexcept;
     MidiSourceMode currentMidiMode() const noexcept;
     bool keyboardHasActiveNotes() const noexcept;
-    void syncPartControlsFromParameters(
-        vstengine::parts::PartRegistry& destination) noexcept;
-    void syncParametersFromParts();
     void syncRackControlsFromParameters() noexcept;
     void readRackControlsFromParameters(
         std::span<vstengine::rack::ProcessSlotControls>) const noexcept;
@@ -282,7 +248,6 @@ private:
     std::atomic<std::uint32_t> returnTailSamples{};
     std::atomic<float> duckReduction{};
 
-    vstengine::parts::PartRegistry parts;
     struct PatternRuntime {
       std::array<std::uint64_t, vstengine::instrument::maxSlots> revisions{};
       std::array<vstengine::sequence::Sequence, vstengine::instrument::maxSlots>
@@ -301,7 +266,6 @@ private:
     std::unique_ptr<PatternRuntime> patternRuntime {
         std::make_unique<PatternRuntime>()
     };
-    ApvtsPresetStore presetStore;
     std::unique_ptr<vstengine::PresetManager> presetManager_;
     // Generated-playback state machine (audio thread, see libs/midi).
     double currentSampleRate { 44100.0 };

@@ -60,7 +60,7 @@ deferred after Rack, tracked in #45/#58.
 Lead DSP already has8 voices and Atmos6. The missing polyphonic/long-phrase
 Sequence/Pattern/scheduler model is a separate gap. Dedicated AcidPanel is not
 in audited main, but its development is separately owned. The active Rack editor
-uses generic pages; BassPanel's presence does not mean it is the only active UI.
+uses generic pages; the unreferenced POC BassPanel has been removed.
 Full Bass acceptance requires [the entire selected VOX surface](product/FULLON_BASS_ACCEPTANCE.md),
 not the reduced13/16-control experimental panel.
 

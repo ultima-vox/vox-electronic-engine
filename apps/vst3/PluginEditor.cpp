@@ -1224,10 +1224,6 @@ void VstEngineAudioProcessorEditor::cycleGlobalPreset(int delta)
     auto* manager = processor.presetManager();
     if (manager == nullptr) return;
     auto presets = manager->getPresets();
-    for (int i = presets.size(); --i >= 0;)
-      if (presets.getReference(i).kind !=
-          vstengine::PresetManager::PresetKind::full)
-        presets.remove(i);
     if (presets.isEmpty()) return;
     int current = -1;
     for (int i = 0; i < presets.size(); ++i)
@@ -1247,10 +1243,6 @@ void VstEngineAudioProcessorEditor::loadGlobalPreset(int index)
     auto* manager = processor.presetManager();
     if (manager == nullptr) return;
     auto presets = manager->getPresets();
-    for (int i = presets.size(); --i >= 0;)
-      if (presets.getReference(i).kind !=
-          vstengine::PresetManager::PresetKind::full)
-        presets.remove(i);
     if (index < 0 || index >= presets.size()) return;
     const auto result = manager->loadPreset(presets.getReference(index));
     if (!result) {
@@ -1293,10 +1285,6 @@ void VstEngineAudioProcessorEditor::refreshGlobalPresets()
     auto* manager = processor.presetManager();
     if (manager == nullptr) return;
     auto presets = manager->getPresets();
-    for (int i = presets.size(); --i >= 0;)
-      if (presets.getReference(i).kind !=
-          vstengine::PresetManager::PresetKind::full)
-        presets.remove(i);
     juce::StringArray names;
     int selected = -1;
     for (int i = 0; i < presets.size(); ++i) {
