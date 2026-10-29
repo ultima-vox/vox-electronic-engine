@@ -29,6 +29,16 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Acid module realtime log
+        shell: powershell
+        run: |
+          $test = "build\Release\acid_module_tests.exe"
+          $dll = "build\Release\VoxAcid303.dll"
+          $hooks = "build\Release\VoxAcid303TestHooks.dll"
+          if (-not (Test-Path $test)) { throw "missing $test" }
+          & $test $dll $hooks
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload Acid 303 module
         uses: actions/upload-artifact@v4
         with:

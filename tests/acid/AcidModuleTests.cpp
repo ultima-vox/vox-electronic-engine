@@ -1,10 +1,14 @@
 #include "acid/AcidControlInventory.h"
 #include "acid/module/AcidModuleMap.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -55,6 +59,116 @@ struct Library {
     }
 };
 
+bool readModule(const char* path, std::vector<unsigned char>& file) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    in.seekg(0, std::ios::end);
+    const auto size = in.tellg();
+    if (size <= 0 || size > 64 * 1024 * 1024) return false;
+    file.resize(static_cast<std::size_t>(size));
+    in.seekg(0);
+    in.read(reinterpret_cast<char*>(file.data()), size);
+    return static_cast<std::size_t>(in.gcount()) == file.size();
+}
+
+template <typename T>
+bool take(const std::vector<unsigned char>& file, std::size_t offset, T& value) {
+    if (offset + sizeof(T) > file.size()) return false;
+    std::memcpy(&value, file.data() + offset, sizeof(T));
+    return true;
+}
+
+bool exportsExactly(const char* path, std::vector<std::string> expected) {
+    std::vector<unsigned char> file;
+    if (!readModule(path, file) || file.size() < 64) return false;
+    std::vector<std::string> found;
+    if (file[0] == 0x7f && file[1] == 'E' && file[2] == 'L' && file[3] == 'F') {
+        std::uint64_t shoff = 0;
+        std::uint16_t shentsize = 0, shnum = 0;
+        if (!take(file, 40, shoff) || !take(file, 58, shentsize) || !take(file, 60, shnum))
+            return false;
+        for (std::uint16_t section = 0; section < shnum; ++section) {
+            const std::size_t header = static_cast<std::size_t>(shoff) + static_cast<std::size_t>(section) * shentsize;
+            std::uint32_t type = 0, link = 0;
+            std::uint64_t offset = 0, size = 0, entrySize = 0;
+            if (!take(file, header + 4, type) || !take(file, header + 24, offset)
+                || !take(file, header + 32, size) || !take(file, header + 40, link)
+                || !take(file, header + 56, entrySize) || type != 11 || entrySize < 24)
+                continue;
+            const std::size_t strings = static_cast<std::size_t>(shoff) + static_cast<std::size_t>(link) * shentsize;
+            std::uint64_t stringOffset = 0, stringSize = 0;
+            if (!take(file, strings + 24, stringOffset) || !take(file, strings + 32, stringSize))
+                return false;
+            const std::size_t count = static_cast<std::size_t>(size / entrySize);
+            for (std::size_t symbol = 0; symbol < count; ++symbol) {
+                const std::size_t at = static_cast<std::size_t>(offset) + symbol * entrySize;
+                std::uint32_t name = 0;
+                std::uint16_t shndx = 0;
+                unsigned char info = 0;
+                if (!take(file, at, name) || !take(file, at + 4, info) || !take(file, at + 6, shndx))
+                    return false;
+                if (shndx == 0) continue;
+                const unsigned bind = info >> 4;
+                const unsigned kind = info & 0x0f;
+                if (bind != 1 || (kind != 1 && kind != 2)) continue;
+                const std::size_t nameAt = static_cast<std::size_t>(stringOffset) + name;
+                if (nameAt >= file.size()) return false;
+                found.emplace_back(reinterpret_cast<const char*>(file.data() + nameAt));
+            }
+        }
+    } else if (file[0] == 'M' && file[1] == 'Z') {
+        std::uint32_t lfanew = 0;
+        if (!take(file, 0x3c, lfanew) || lfanew + 24u > file.size()) return false;
+        std::uint32_t signature = 0;
+        std::uint16_t sections = 0, optionalSize = 0;
+        if (!take(file, lfanew, signature) || signature != 0x00004550u) return false;
+        if (!take(file, lfanew + 6, sections) || !take(file, lfanew + 20, optionalSize)) return false;
+        const std::size_t optional = static_cast<std::size_t>(lfanew) + 24u;
+        std::uint16_t magic = 0;
+        if (!take(file, optional, magic) || magic != 0x20bu) return false;
+        std::uint32_t exportRva = 0;
+        if (!take(file, optional + 112, exportRva) || exportRva == 0) return false;
+        const std::size_t sectionTable = optional + optionalSize;
+        auto rvaToOffset = [&](std::uint32_t rva) -> std::size_t {
+            for (std::uint16_t i = 0; i < sections; ++i) {
+                const std::size_t section = sectionTable + static_cast<std::size_t>(i) * 40u;
+                std::uint32_t virtualSize = 0, virtualAddress = 0, rawSize = 0, rawPointer = 0;
+                if (!take(file, section + 8, virtualSize) || !take(file, section + 12, virtualAddress)
+                    || !take(file, section + 16, rawSize) || !take(file, section + 20, rawPointer))
+                    return 0;
+                const std::uint32_t span = std::max(virtualSize, rawSize);
+                if (rva >= virtualAddress && rva < virtualAddress + span && rawPointer != 0)
+                    return static_cast<std::size_t>(rawPointer) + (rva - virtualAddress);
+            }
+            return 0;
+        };
+        const std::size_t directory = rvaToOffset(exportRva);
+        std::uint32_t nameCount = 0, namesRva = 0;
+        if (directory == 0 || !take(file, directory + 24, nameCount) || !take(file, directory + 32, namesRva))
+            return false;
+        const std::size_t names = rvaToOffset(namesRva);
+        if (names == 0) return false;
+        for (std::uint32_t i = 0; i < nameCount; ++i) {
+            std::uint32_t nameRva = 0;
+            if (!take(file, names + static_cast<std::size_t>(i) * 4u, nameRva)) return false;
+            const std::size_t nameAt = rvaToOffset(nameRva);
+            if (nameAt == 0 || nameAt >= file.size()) return false;
+            found.emplace_back(reinterpret_cast<const char*>(file.data() + nameAt));
+        }
+    } else {
+        return false;
+    }
+    std::sort(found.begin(), found.end());
+    std::sort(expected.begin(), expected.end());
+    if (found != expected) {
+        std::cerr << "exports of " << path << ":";
+        for (const auto& name : found) std::cerr << ' ' << name;
+        if (found.empty()) std::cerr << " <none>";
+        std::cerr << '\n';
+    }
+    return found == expected;
+}
+
 VoxResult VOX_CALL hostLog(void*, std::uint32_t, const char*) { return VOX_OK; }
 
 std::atomic<int> gAudioLogCalls{0};
@@ -92,10 +206,15 @@ std::uint32_t indexOf(std::string_view id) {
     return 999;
 }
 
-void render(const VoxModuleV2* module, VoxInstance instance, std::vector<float>& left,
-            std::vector<float>& right, const VoxMidiEventV2* midi, std::uint32_t midiCount,
-            const VoxParamChangeV2* params, std::uint32_t paramCount, std::uint32_t flags,
-            double bpm, double ppq, bool playing) {
+void prepare(const VoxModuleV2* module, VoxInstance instance, double rate, std::uint32_t block) {
+    VoxPrepareSpecV2 spec{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, rate, block, 2, 64, 64};
+    check(module->prepare(instance, &spec) == VOX_OK, "prepare accepts the spec");
+}
+
+VoxResult processResult(const VoxModuleV2* module, VoxInstance instance, std::vector<float>& left,
+                        std::vector<float>& right, const VoxMidiEventV2* midi, std::uint32_t midiCount,
+                        const VoxParamChangeV2* params, std::uint32_t paramCount, std::uint32_t flags,
+                        double bpm, double ppq, bool playing) {
     float* outputs[2] = {left.data(), right.data()};
     VoxTransportV2 transport{};
     transport.structSize = sizeof(VoxTransportV2);
@@ -118,8 +237,16 @@ void render(const VoxModuleV2* module, VoxInstance instance, std::vector<float>&
     context.midiEventStride = sizeof(VoxMidiEventV2);
     context.releaseFlags = flags;
     context.transport = &transport;
-    const VoxResult result = module->process(instance, &context);
-    check(result == VOX_OK, "process accepts a prepared block");
+    return module->process(instance, &context);
+}
+
+void render(const VoxModuleV2* module, VoxInstance instance, std::vector<float>& left,
+            std::vector<float>& right, const VoxMidiEventV2* midi, std::uint32_t midiCount,
+            const VoxParamChangeV2* params, std::uint32_t paramCount, std::uint32_t flags,
+            double bpm, double ppq, bool playing) {
+    check(processResult(module, instance, left, right, midi, midiCount, params, paramCount, flags,
+                        bpm, ppq, playing) == VOX_OK,
+          "process accepts a prepared block");
 }
 
 float peak(const std::vector<float>& buffer) {
@@ -145,18 +272,13 @@ VoxMidiEventV2 note(std::uint32_t offset, std::uint8_t status, std::uint8_t note
     return event;
 }
 
-void prepare(const VoxModuleV2* module, VoxInstance instance, double rate, std::uint32_t block) {
-    VoxPrepareSpecV2 spec{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, rate, block, 2, 64, 64};
-    check(module->prepare(instance, &spec) == VOX_OK, "prepare accepts the spec");
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
     using namespace vstengine::acid;
     using namespace vstengine::acid::module;
-    if (argc != 2) {
-        std::cerr << "usage: acid_module_tests <VoxAcid303 library>\n";
+    if (argc != 3) {
+        std::cerr << "usage: acid_module_tests <VoxAcid303> <VoxAcid303TestHooks>\n";
         return 2;
     }
 
@@ -192,8 +314,17 @@ int main(int argc, char** argv) {
     check(normToPlain(controls()[indexOf("unison_voices")], 1.0f) == 4.0f, "unison maximum is four voices");
 
     Library library(argv[1]);
+    Library hooks(argv[2]);
     check(library.handle != nullptr, "native module library opens");
-    if (library.handle == nullptr) return 1;
+    check(hooks.handle != nullptr, "test-hook module opens");
+    check(exportsExactly(argv[1], {"voxModuleEntryV2"}),
+          "production module exports only voxModuleEntryV2");
+    check(library.symbol("voxAcid303TestFault") == nullptr
+              && library.symbol("voxAcid303FaultCode") == nullptr,
+          "production module has no fault export");
+    check(exportsExactly(argv[2], {"voxModuleEntryV2", "voxAcid303TestFault"}),
+          "test hook is confined to the non-shipping module");
+    if (library.handle == nullptr || hooks.handle == nullptr) return 1;
     Loaded loaded;
     check(loaded.open(library), "module entry creates an instance");
     if (loaded.module == nullptr || loaded.instance == nullptr) return 1;
@@ -364,44 +495,125 @@ int main(int argc, char** argv) {
     check(hpEdge > lpEdge, "highpass mode is brighter than lowpass mode");
 
     Loaded watched;
+    gAudioLogCalls.store(0);
     check(watched.open(library, countingLog), "logger instance opens");
     VoxPrepareSpecV2 rejectedSpec{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, 1.0, 64, 2, 8, 8};
     check(watched.module->prepare(watched.instance, &rejectedSpec) != VOX_OK,
           "impossible sample rate is rejected");
-    check(gAudioLogCalls.load() >= 1, "prepare may report on the calling thread");
-    const int logsBeforeAudio = gAudioLogCalls.load();
+    std::uint8_t stale[316]{};
+    check(watched.module->loadState(watched.instance, 1, stale, sizeof(stale)) == VOX_E_STATE_VERSION,
+          "old state version is rejected");
+    check(watched.module->loadState(watched.instance, AcidEngine::stateVersion, stale, sizeof(stale))
+              == VOX_E_STATE_CORRUPT,
+          "corrupt current state is rejected");
     prepare(watched.module, watched.instance, 48000.0, 128);
     std::vector<float> guardL(128), guardR(128);
     VoxParamChangeV2 poisoned{0, 0, std::numeric_limits<float>::quiet_NaN(), 0};
     render(watched.module, watched.instance, guardL, guardR, &on, 1, &poisoned, 1, 0,
            120.0, 0.0, true);
-    check(gAudioLogCalls.load() == logsBeforeAudio,
-          "process does not call the message-thread host logger");
-    auto* faultCode = reinterpret_cast<std::uint32_t (*)()>(
-        library.symbol("voxAcid303FaultCode"));
-    check(faultCode != nullptr && faultCode() == 3u,
-          "non-finite automation is latched instead of logged");
+    check(gAudioLogCalls.load() == 0,
+          "entry, prepare, loadState and process do not call host.log");
+
+    auto* faultOf = reinterpret_cast<std::uint32_t (*)(VoxInstance)>(
+        hooks.symbol("voxAcid303TestFault"));
+    check(faultOf != nullptr, "test hook reads one instance");
+    Loaded slotA;
+    Loaded slotB;
+    check(slotA.open(hooks) && slotB.open(hooks), "two Acid instances open");
+    prepare(slotA.module, slotA.instance, 48000.0, 128);
+    prepare(slotB.module, slotB.instance, 48000.0, 128);
+    check(faultOf != nullptr && faultOf(slotA.instance) == 0 && faultOf(slotB.instance) == 0,
+          "a new instance starts with a clear fault");
+    std::vector<float> aL(128), aR(128), bL(128), bR(128);
+    render(slotA.module, slotA.instance, aL, aR, &on, 1, &poisoned, 1, 0, 120.0, 0.0, true);
+    render(slotB.module, slotB.instance, bL, bR, &on, 1, nullptr, 0, 0, 120.0, 0.0, true);
+    check(faultOf != nullptr && faultOf(slotA.instance) == 3 && faultOf(slotB.instance) == 0,
+          "a fault in slot A does not overwrite slot B");
+    check(slotA.module->reset(slotA.instance) == VOX_OK, "slot A reset succeeds");
+    check(faultOf != nullptr && faultOf(slotA.instance) == 0 && faultOf(slotB.instance) == 0,
+          "reset clears only that instance");
+    render(slotB.module, slotB.instance, bL, bR, nullptr, 0, &poisoned, 1, 0, 120.0, 0.0, true);
+    check(faultOf != nullptr && faultOf(slotA.instance) == 0 && faultOf(slotB.instance) == 3,
+          "slot B keeps its own fault");
+    prepare(slotB.module, slotB.instance, 48000.0, 128);
+    check(faultOf != nullptr && faultOf(slotB.instance) == 0,
+          "prepare clears that instance's fault");
+
+    VoxPrepareSpecV2 tight{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, 48000.0, 128, 2, 4, 4};
+    check(slotA.module->prepare(slotA.instance, &tight) == VOX_OK, "small event cap prepares");
+    std::vector<VoxMidiEventV2> tooManyMidi(5);
+    std::vector<VoxParamChangeV2> tooManyParam(5);
+    for (std::uint32_t i = 0; i < 5; ++i) {
+        tooManyMidi[i] = note(i, 0x80, 48, 0);
+        tooManyParam[i] = {indexOf("output"), i, 0.5f, 0};
+    }
+    std::fill(aL.begin(), aL.end(), 1.0f);
+    std::fill(aR.begin(), aR.end(), 1.0f);
+    check(processResult(slotA.module, slotA.instance, aL, aR, tooManyMidi.data(), 5, nullptr, 0, 0,
+                        120.0, 0.0, false) == VOX_E_INVALID_ARG,
+          "MIDI above the prepared cap is rejected");
+    check(faultOf != nullptr && faultOf(slotA.instance) == 1, "MIDI overflow is that instance's fault");
+    check(std::all_of(aL.begin(), aL.end(), [](float x) { return x == 0.0f; }),
+          "rejected MIDI overflow silences the block");
+    std::fill(aL.begin(), aL.end(), 1.0f);
+    check(processResult(slotA.module, slotA.instance, aL, aR, nullptr, 0, tooManyParam.data(), 5, 0,
+                        120.0, 0.0, false) == VOX_E_INVALID_ARG,
+          "parameters above the prepared cap are rejected");
+    check(faultOf != nullptr && faultOf(slotA.instance) == 4, "parameter overflow is that instance's fault");
+    check(std::all_of(aL.begin(), aL.end(), [](float x) { return x == 0.0f; }),
+          "rejected parameter overflow silences the block");
 
     Loaded budget;
-    check(budget.open(library, countingLog), "budget instance opens");
+    check(budget.open(library, countingLog), "measurement instance opens");
     VoxPrepareSpecV2 wide{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, 48000.0, 128, 2, 4096, 4096};
     check(budget.module->prepare(budget.instance, &wide) == VOX_OK, "4096-event prepare succeeds");
-    std::vector<VoxMidiEventV2> manyMidi(4096);
-    std::vector<VoxParamChangeV2> manyParam(4096);
-    for (std::uint32_t i = 0; i < 4096; ++i) {
-        manyMidi[i] = note((4095u - i) % 128u, 0x80, static_cast<std::uint8_t>(i & 127u), 0);
-        manyParam[i] = {indexOf("output"), (i * 17u) % 128u, 0.5f, 0};
-    }
-    std::vector<float> budgetL(128), budgetR(128);
-    const auto started = std::chrono::steady_clock::now();
-    render(budget.module, budget.instance, budgetL, budgetR, manyMidi.data(), 4096,
-           manyParam.data(), 4096, 0, 120.0, 0.0, false);
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    check(elapsed < std::chrono::milliseconds(100),
-          "4096 MIDI and parameter events stay inside 100 ms");
-    check(finiteBuffer(budgetL), "bounded event block stays finite");
-    check(gAudioLogCalls.load() == logsBeforeAudio,
-          "the event-budget block does not call the host logger");
+    auto measure = [&](std::uint32_t midiCount, std::uint32_t paramCount, double& minimum,
+                       double& p95, double& worst) {
+        std::vector<VoxMidiEventV2> midi(midiCount);
+        std::vector<VoxParamChangeV2> params(paramCount);
+        for (std::uint32_t i = 0; i < midiCount; ++i)
+            midi[i] = note((midiCount - 1u - i) % 128u, i == 0 ? 0x90 : 0x80,
+                           static_cast<std::uint8_t>(i & 127u), 100);
+        for (std::uint32_t i = 0; i < paramCount; ++i)
+            params[i] = {indexOf("output"), (i * 17u) % 128u, 0.5f, 0};
+        std::vector<float> left(128), right(128);
+        std::array<double, 20> samples{};
+        for (double& sample : samples) {
+            const auto started = std::chrono::steady_clock::now();
+            const VoxResult result = processResult(
+                budget.module, budget.instance, left, right, midi.data(), midiCount,
+                params.data(), paramCount, 0, 120.0, 0.0, true);
+            sample = std::chrono::duration<double, std::micro>(
+                         std::chrono::steady_clock::now() - started)
+                         .count();
+            check(result == VOX_OK, "measured block is accepted");
+        }
+        std::sort(samples.begin(), samples.end());
+        minimum = samples.front();
+        p95 = samples[18];
+        worst = samples.back();
+        check(finiteBuffer(left), "measured block stays finite");
+        check(worst < 5000000.0, "measured block did not hang");
+    };
+    double typicalMin = 0, typicalP95 = 0, typicalWorst = 0;
+    double stressMin = 0, stressP95 = 0, stressWorst = 0;
+    double capMin = 0, capP95 = 0, capWorst = 0;
+    measure(8, 8, typicalMin, typicalP95, typicalWorst);
+    measure(64, 64, stressMin, stressP95, stressWorst);
+    measure(4096, 4096, capMin, capP95, capWorst);
+    std::cout << std::fixed
+              << "ACID_RT samples=128 rate=48000 budget_us=2666.67"
+              << " typical_min_us=" << typicalMin
+              << " typical_p95_us=" << typicalP95
+              << " typical_worst_us=" << typicalWorst
+              << " stress64_min_us=" << stressMin
+              << " stress64_p95_us=" << stressP95
+              << " stress64_worst_us=" << stressWorst
+              << " cap4096_min_us=" << capMin
+              << " cap4096_p95_us=" << capP95
+              << " cap4096_worst_us=" << capWorst
+              << "\n";
+    check(gAudioLogCalls.load() == 0, "measurements do not call host.log");
 
     if (gFailures != 0)
         std::cerr << gFailures << " failure(s)\n";

@@ -18,16 +18,17 @@ using vstengine::acid::module::plainToNorm;
 using vstengine::acid::module::stateVersion;
 
 VoxHostServicesV2 gHost{};
-std::atomic<std::uint32_t> gFault{0};
 constexpr std::uint32_t kFaultMidiOverflow = 1;
 constexpr std::uint32_t kFaultNonFiniteOutput = 2;
 constexpr std::uint32_t kFaultNonFiniteParam = 3;
+constexpr std::uint32_t kFaultParamOverflow = 4;
 VoxParameterDescriptorV2 gParameters[parameterCount]{};
 VoxInstrumentDescriptorV2 gInstrument{};
 bool gReady = false;
 
 struct Instance {
     AcidEngine engine;
+    std::atomic<std::uint32_t> fault{0};
     bool prepared = false;
     std::uint32_t maxBlock = 0;
     std::uint32_t maxMidi = 0;
@@ -39,11 +40,6 @@ struct Instance {
     std::vector<std::uint32_t> paramOrder;
     std::vector<float*> outputs;
 };
-
-void logLine(std::uint32_t level, const char* message) noexcept {
-    if (gHost.log != nullptr && message != nullptr)
-        gHost.log(gHost.hostContext, level, message);
-}
 
 void silence(const VoxProcessContextV2* context) noexcept {
     if (context == nullptr || context->outputs == nullptr || context->numSamples == 0)
@@ -118,7 +114,6 @@ void publishDescriptors() noexcept {
     gInstrument.tailSamples = AcidEngine::maximumTailSamples;
     gInstrument.outputChannels = 2;
     gReady = true;
-    logLine(0, "VoxAcid303 ready: abi 2, 80 parameters, state 8, pool 0-79");
 }
 
 void currentPlayFlags(const AcidEngine& engine, bool enabled[4]) noexcept {
@@ -188,11 +183,11 @@ VoxResult VOX_CALL prepare(VoxInstance handle, const VoxPrepareSpecV2* spec) {
         || !versioned(spec->structSize, spec->version, sizeof(VoxPrepareSpecV2)))
         return VOX_E_INVALID_ARG;
     auto* instance = reinterpret_cast<Instance*>(handle);
+    instance->fault.store(0, std::memory_order_relaxed);
     if (spec->outputChannels == 0 || spec->maxBlockSize == 0
         || spec->maxMidiEventsPerBlock > 4096 || spec->maxParamChangesPerBlock > 4096
         || !instance->engine.prepare(spec->sampleRate, spec->maxBlockSize, spec->outputChannels)) {
         instance->prepared = false;
-        logLine(2, "VoxAcid303 prepare rejected");
         return VOX_E_INVALID_ARG;
     }
     try {
@@ -235,7 +230,9 @@ VoxResult VOX_CALL setAllParameters(VoxInstance handle, const float* plain, std:
 
 VoxResult VOX_CALL reset(VoxInstance handle) {
     if (handle == nullptr) return VOX_E_INVALID_ARG;
-    reinterpret_cast<Instance*>(handle)->engine.reset();
+    auto* instance = reinterpret_cast<Instance*>(handle);
+    instance->engine.reset();
+    instance->fault.store(0, std::memory_order_relaxed);
     return VOX_OK;
 }
 
@@ -259,6 +256,9 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
                       sizeof(VoxTransportV2)))
         return VOX_E_INVALID_ARG;
     auto* instance = reinterpret_cast<Instance*>(handle);
+    // Above the prepared cap the block is silenced and not rendered.
+    // 128 samples at 48 kHz last 2.67 ms; this reject is the bound, not a
+    // claim that the maximum 4096-event prepare fits that callback.
     if (!instance->prepared || context->numSamples > instance->maxBlock
         || context->outputChannelCount == 0
         || context->outputChannelCount > instance->channels
@@ -273,6 +273,10 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
             && context->midiEventStride < sizeof(VoxMidiEventV2))
         || (context->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0
         || (context->transport->flags & ~VOX_TRANSPORT_KNOWN_FLAGS) != 0) {
+        if (instance->prepared && context->midiEventCount > instance->maxMidi)
+            instance->fault.store(kFaultMidiOverflow, std::memory_order_release);
+        else if (instance->prepared && context->paramChangeCount > instance->maxParam)
+            instance->fault.store(kFaultParamOverflow, std::memory_order_release);
         silence(context);
         return VOX_E_INVALID_ARG;
     }
@@ -296,7 +300,7 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
             continue;
         if (midiCount >= instance->midi.size()) {
             silence(context);
-            gFault.store(kFaultMidiOverflow, std::memory_order_release);
+            instance->fault.store(kFaultMidiOverflow, std::memory_order_release);
             return VOX_E_INVALID_ARG;
         }
         auto& slot = instance->midi[midiCount++];
@@ -344,7 +348,7 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
             if (change->sampleOffset > sample) break;
             if (change->sampleOffset == sample) {
                 if (!std::isfinite(change->plain))
-                    gFault.store(kFaultNonFiniteParam, std::memory_order_release);
+                    instance->fault.store(kFaultNonFiniteParam, std::memory_order_release);
                 else
                     (void) applyPlain(instance->engine, change->index, change->plain);
             }
@@ -387,7 +391,7 @@ VoxResult VOX_CALL process(VoxInstance handle, const VoxProcessContextV2* contex
         for (std::uint32_t i = 0; i < context->numSamples; ++i) {
             if (!std::isfinite(data[i])) {
                 silence(context);
-                gFault.store(kFaultNonFiniteOutput, std::memory_order_release);
+                instance->fault.store(kFaultNonFiniteOutput, std::memory_order_release);
                 return VOX_E_INTERNAL;
             }
         }
@@ -413,16 +417,12 @@ VoxResult VOX_CALL saveState(VoxInstance handle, std::uint8_t* buffer, std::uint
 VoxResult VOX_CALL loadState(VoxInstance handle, std::uint32_t version,
                              const std::uint8_t* bytes, std::uint32_t size) {
     if (handle == nullptr) return VOX_E_INVALID_ARG;
-    if (version != stateVersion) {
-        logLine(2, "VoxAcid303 rejected non-current state version");
+    if (version != stateVersion)
         return VOX_E_STATE_VERSION;
-    }
     if (bytes == nullptr || size != AcidEngine::encodedStateBytes) return VOX_E_STATE_CORRUPT;
     auto* instance = reinterpret_cast<Instance*>(handle);
-    if (!instance->engine.loadState(version, {reinterpret_cast<const std::byte*>(bytes), size})) {
-        logLine(2, "VoxAcid303 rejected corrupt state");
+    if (!instance->engine.loadState(version, {reinterpret_cast<const std::byte*>(bytes), size}))
         return VOX_E_STATE_CORRUPT;
-    }
     return VOX_OK;
 }
 
@@ -457,11 +457,16 @@ extern "C" VOX_EXPORT VoxResult VOX_CALL voxModuleEntryV2(
         || host->structSize < sizeof(VoxHostServicesV2) || host->version != VOX_MODULE_ABI_V2)
         return VOX_E_UNSUPPORTED;
     gHost = *host;
+    if (gHost.version != host->version)
+        return VOX_E_UNSUPPORTED;
     publishDescriptors();
     *module = &gModule;
     return VOX_OK;
 }
 
-extern "C" VOX_EXPORT std::uint32_t voxAcid303FaultCode() {
-    return gFault.load(std::memory_order_acquire);
+#if defined(VOX_ACID_TEST_HOOKS)
+extern "C" VOX_EXPORT std::uint32_t voxAcid303TestFault(VoxInstance handle) {
+    if (handle == nullptr) return 0xffffffffu;
+    return reinterpret_cast<Instance*>(handle)->fault.load(std::memory_order_acquire);
 }
+#endif

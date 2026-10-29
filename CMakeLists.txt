@@ -335,6 +335,19 @@ set_target_properties(VoxAcid303 PROPERTIES
   OUTPUT_NAME "VoxAcid303"
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN ON)
+# Same module with a test-only fault read. Not packaged and not an ABI.
+add_library(VoxAcid303TestHooks MODULE
+  libs/acid/AcidEngine.cpp
+  libs/acid/module/AcidModule.cpp)
+target_compile_definitions(VoxAcid303TestHooks PRIVATE VOX_BUILDING_MODULE VOX_ACID_TEST_HOOKS)
+target_include_directories(VoxAcid303TestHooks PRIVATE
+  ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/libs/acid/module)
+set_target_properties(VoxAcid303TestHooks PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "VoxAcid303TestHooks"
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON)
 add_executable(acid_module_tests
   tests/acid/AcidModuleTests.cpp
   libs/acid/AcidEngine.cpp)
@@ -342,8 +355,9 @@ target_include_directories(acid_module_tests PRIVATE
   ${VST_LIBS_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/libs/acid/module)
 target_link_libraries(acid_module_tests PRIVATE ${CMAKE_DL_LIBS})
-add_dependencies(acid_module_tests VoxAcid303)
-add_test(NAME acid_module_tests COMMAND acid_module_tests $<TARGET_FILE:VoxAcid303>)
+add_dependencies(acid_module_tests VoxAcid303 VoxAcid303TestHooks)
+add_test(NAME acid_module_tests COMMAND acid_module_tests
+  $<TARGET_FILE:VoxAcid303> $<TARGET_FILE:VoxAcid303TestHooks>)
 
 add_executable(lead_tests
   tests/lead/LeadTests.cpp
