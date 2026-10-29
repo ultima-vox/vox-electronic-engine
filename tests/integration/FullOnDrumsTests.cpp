@@ -1034,6 +1034,46 @@ void exportMatchesPlayback() {
         "Host MIDI mode has no internal notes to export");
 }
 
+// The exported file always closes after its last note-off, also for short
+// steps with a late, maximally swung last hit.
+void exportEndsAfterTheLastNote() {
+  for (const auto timing : {VOX_TIMING_THIRTY_SECOND, VOX_TIMING_EIGHTH_TRIPLET}) {
+    auto r = makeRig(instrumentsDir, 5);
+    setPlain(r, seqMode, 1.0f);
+    setPlain(r, seqSwing, 0.5f);
+    auto p = std::make_unique<pattern::Pattern>(
+        pattern::emptyPattern(r.p->instrumentRack().descriptor(r.slot)->patternContent->caps));
+    p->timing = timing;
+    p->stepsPerBar = 16;
+    p->at(kick, 0, 15).flags = VOX_STEP_ON; // the last, odd (swung) step
+    setPattern(r, *p);
+    juce::MemoryBlock bytes;
+    juce::String diagnostic;
+    check(r.p->serializeSlotPatternMidi(r.slot, bytes, diagnostic),
+          "short-step pattern exports: " + diagnostic.toStdString());
+    juce::MemoryInputStream stream(bytes, false);
+    juce::MidiFile file;
+    check(file.readFrom(stream), "the exported file re-imports");
+    const double step = timing == VOX_TIMING_THIRTY_SECOND ? 0.125 : 1.0 / 3.0;
+    for (int lane = 0; lane < file.getNumTracks(); ++lane) {
+      const auto *track = file.getTrack(lane);
+      double lastOff = 0.0, end = -1.0;
+      for (int e = 0; e < track->getNumEvents(); ++e) {
+        const auto &m = track->getEventPointer(e)->message;
+        if (m.isNoteOff())
+          lastOff = std::max(lastOff, m.getTimeStamp());
+        if (m.isEndOfTrackMetaEvent())
+          end = m.getTimeStamp();
+        if (lane == kick && m.isNoteOn())
+          check(std::abs(m.getTimeStamp() / 960.0 - (15 + 0.5) * step) < 1.0 / 960.0,
+                "the swung last hit keeps its position");
+      }
+      check(end >= lastOff && end >= 16 * step * 960.0 - 1e-6,
+            "End-of-Track follows the last note-off and the pattern length");
+    }
+  }
+}
+
 // ------------------------------------------------- multi-track Host MIDI
 // Owner workflow (#72): eight Cubase MIDI tracks (one per pad) all output to
 // the same Rack instance on the kit slot's channel. The kit must sound the
@@ -1266,6 +1306,7 @@ int main(int argc, char **argv) {
   sequencerPatternEdits();
   editWhilePlaying();
   exportMatchesPlayback();
+  exportEndsAfterTheLastNote();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
   noAllocationWhilePlaying();
