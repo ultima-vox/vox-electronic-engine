@@ -117,6 +117,26 @@ jobs:
           path: build/demo-guide/*
           if-no-files-found: error
 
+      - name: Assemble Full-on Drums Cubase guide
+        shell: powershell
+        run: |
+          # VoxFullOnDrums.vins ships in Vox-Music-Install-Windows; the shared
+          # build-info.txt lists its SHA-256 and the publisher key.
+          $guide = Join-Path $PWD "build\drums-guide"
+          if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
+          New-Item -ItemType Directory -Force -Path $guide | Out-Null
+          Copy-Item docs\testing\fullon-drums\* $guide
+          if (-not (Test-Path "build\install-layout\vox music\instruments\VoxFullOnDrums.vins")) { throw "missing VoxFullOnDrums.vins" }
+          Copy-Item "build\demo-guide\build-info.txt" $guide
+          Get-Content (Join-Path $guide "build-info.txt")
+
+      - name: Upload Full-on Drums Cubase guide
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-FullOn-Drums-Cubase-Guide
+          path: build/drums-guide/*
+          if-no-files-found: error
+
       - name: Package Vox Electronic Engine
         shell: powershell
         run: cmake --build build --config Release --target package
