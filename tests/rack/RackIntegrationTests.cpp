@@ -257,11 +257,22 @@ int main()
             "overflowed raw routing integer rejected before narrowing");
 
     auto incompatiblePattern = patternedState;
-    incompatiblePattern[0].patternSchemaVersion = VOX_PATTERN_SCHEMA_V1 + 1;
+    incompatiblePattern[0].patternSchemaVersion = VOX_PATTERN_SCHEMA_V2 + 1;
     incompatiblePattern[0].patternPayload = {
         std::byte { 0xde }, std::byte { 0xad }, std::byte { 0xbe },
         std::byte { 0xef }
     };
+    {
+      // A V2 (Rack-owned INTERNAL) pattern on an instrument that does not
+      // declare INTERNAL playback is rejected, not reinterpreted.
+      auto foreign = patternedState;
+      foreign[0].patternSchemaVersion = VOX_PATTERN_SCHEMA_V2;
+      auto foreignRack = std::make_unique<rack::Rack>(registry);
+      REQUIRE(foreignRack->prepare({ 48000.0, 2048, 2 }), "foreign-pattern rack prepares");
+      REQUIRE(!foreignRack->replaceState(foreign, nullptr, diagnostic)
+                  && diagnostic.find("V2 pattern") != std::string::npos,
+              "V2 pattern on a HOST-playback instrument rejected");
+    }
     auto incompatibleRack = std::make_unique<rack::Rack>(registry);
     REQUIRE(incompatibleRack->prepare({ 48000.0, 2048, 2 }),
             "incompatible-pattern rack prepares");
@@ -273,14 +284,14 @@ int main()
                 && incompatibleRack->descriptor(0) == nullptr,
             "newer pattern schema cannot instantiate instrument silently");
     REQUIRE(incompatibleRack->state()[0].patternSchemaVersion
-                    == VOX_PATTERN_SCHEMA_V1 + 1
+                    == VOX_PATTERN_SCHEMA_V2 + 1
                 && incompatibleRack->state()[0].patternPayload
                     == incompatiblePattern[0].patternPayload,
             "incompatible pattern schema and opaque payload remain recoverable");
     const auto incompatibleEncoded = rack::state::serialize(
         incompatibleRack->state());
     REQUIRE(rack::state::deserialize(incompatibleEncoded, decoded, diagnostic)
-                && decoded[0].patternSchemaVersion == VOX_PATTERN_SCHEMA_V1 + 1
+                && decoded[0].patternSchemaVersion == VOX_PATTERN_SCHEMA_V2 + 1
                 && decoded[0].patternPayload
                     == incompatiblePattern[0].patternPayload,
             "incompatible pattern state survives canonical persistence");
