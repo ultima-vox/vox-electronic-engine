@@ -49,6 +49,13 @@ function(_vox_public_modulus key out_modulus)
   set(${out_modulus} "${modulus}" PARENT_SCOPE)
 endfunction()
 
+# A production build must be signed with the owner's release key. There is
+# no fallback: without the key a production configure fails (#77 gate 3).
+option(VOX_PRODUCTION_BUILD "Configure a production release (requires VOX_PUBLISHER_PRIVATE_KEY)" OFF)
+if(VOX_PRODUCTION_BUILD AND NOT VOX_PUBLISHER_PRIVATE_KEY)
+  message(FATAL_ERROR "VOX_PRODUCTION_BUILD requires VOX_PUBLISHER_PRIVATE_KEY (the owner's "
+    "release publisher key). Release is BLOCKED until key custody is set up.")
+endif()
 if(VOX_PUBLISHER_PRIVATE_KEY)
   set(VOX_PUBLISHER_KEY "${VOX_PUBLISHER_PRIVATE_KEY}")
   set(VOX_PUBLISHER_LABEL "release publisher key")
@@ -56,6 +63,7 @@ else()
   set(VOX_PUBLISHER_KEY ${VOX_PUBLISHER_DIR}/development-key.pem)
   _vox_generate_key(${VOX_PUBLISHER_KEY})
   set(VOX_PUBLISHER_LABEL "development key of this build tree (not a release key)")
+  message(STATUS "vins: DEVELOPMENT build - native packages are signed with a per-build key")
 endif()
 set(VOX_UNTRUSTED_TEST_KEY ${VOX_PUBLISHER_DIR}/untrusted-test-key.pem)
 _vox_generate_key(${VOX_UNTRUSTED_TEST_KEY})

@@ -136,6 +136,10 @@ compiler validates them instead.
 - **Otherwise:** a development key is generated once inside the build tree.
   Packages it signs load only in Racks built from that same tree, and both
   `build-info.txt` and the Rack label it as a development key.
+- **Production builds:** configure with `-DVOX_PRODUCTION_BUILD=ON`. CMake then
+  stops with an error unless `VOX_PUBLISHER_PRIVATE_KEY` is given; there is no
+  fallback to a development key. CI builds are development builds, and their
+  `build-info.txt` starts with "BUILD TYPE: DEVELOPMENT".
 - **Release blocker (#77 gate 3):** the owner's release key and how it is kept
   in custody are not set up yet.
 
