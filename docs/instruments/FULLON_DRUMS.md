@@ -33,6 +33,20 @@ one-shots; CC120 / Rack Panic / reset stop at once; CC123 and
 `VOX_RELEASE_ALL_NOTES_AT_END` fade within 50 ms;
 `VOX_RELEASE_ALL_SOUND_AT_END` (e.g. MIDI over the module budget) stops at once.
 
+**Same-sample hits are independent of arrival order.** Several DAW MIDI tracks
+can feed one kit slot on one channel, and the DAW may merge events from
+different tracks that fall on the same tick in any order. The module
+therefore processes each sample in a fixed way:
+
+1. Controllers (CC120, CC123) apply first.
+2. NoteOns from host MIDI and from the sequencer are then collected. Each
+   pad fires once, at the loudest velocity it received.
+3. Pads fire in pad order. For a simultaneous closed and open hat with
+   *Hat Choke* on, the open hat rings.
+
+A duplicated part therefore never doubles a hit, and *Both* mode plays a
+host note and a sequencer step on the same pad and sample as one hit.
+
 ## Parameters (48 of the 64 pool endpoints; descriptor index = pool index)
 
 | Pool | Endpoint | Pool | Endpoint |

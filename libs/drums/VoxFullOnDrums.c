@@ -586,7 +586,9 @@ static VoxResult VOX_CALL reset(VoxInstance s) {
   return VOX_OK;
 }
 
-static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e) {
+/* NoteOns are not triggered here: they are collected per sample into `hits`
+ * (the loudest velocity per pad) and triggered afterwards in pad order. */
+static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e, int hits[PAD_COUNT]) {
   if (e->size < 3)
     return;
   const uint8_t status = (uint8_t)(e->bytes[0] & 0xF0u);
@@ -596,8 +598,8 @@ static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e) {
     if ((int)s->values[S_MODE] == MODE_INTERNAL)
       return; /* Internal: the sequencer alone plays; no double triggers */
     const int pad = s->noteToPad[data1];
-    if (pad >= 0)
-      trigger(s, pad, data2);
+    if (pad >= 0 && data2 > hits[pad])
+      hits[pad] = data2;
   } else if (status == 0xB0u) {
     if (data1 == 120)
       stopAll(s); /* All Sound Off: immediate */
@@ -733,18 +735,27 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
         s->values[p.index] = p.plain;
       ++nextChange;
     }
+    /* Hits that land on the same sample (several DAW tracks merged into this
+     * slot's channel, or Host MIDI plus the sequencer) do not depend on the
+     * order they arrive in: controllers apply first, then each pad fires
+     * once, at its loudest velocity, in pad order. */
+    int hits[PAD_COUNT] = {0};
     while (nextEvent < c->midiEventCount) {
       VoxMidiEventV2 e;
       memcpy(&e, events + (size_t)nextEvent * c->midiEventStride, sizeof(e));
       if (e.sampleOffset > i)
         break;
-      applyMidi(s, &e);
+      applyMidi(s, &e, hits);
       ++nextEvent;
     }
     while (nextHit < seqCount && seq[nextHit].offset <= i) {
-      trigger(s, seq[nextHit].pad, seq[nextHit].velocity);
+      if (seq[nextHit].velocity > hits[seq[nextHit].pad])
+        hits[seq[nextHit].pad] = seq[nextHit].velocity;
       ++nextHit;
     }
+    for (int pad = 0; pad < (int)PAD_COUNT; ++pad)
+      if (hits[pad] > 0)
+        trigger(s, pad, hits[pad]);
     double l = 0.0, r = 0.0;
     for (int k = 0; k < MAX_VOICES; ++k) {
       Voice *v = &s->voices[k];
