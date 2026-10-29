@@ -1221,6 +1221,12 @@ bool VstEngineAudioProcessor::serializeSlotPatternMidi(
     diagnostic = "Invalid MIDI export parameters";
     return false;
   }
+  const auto *descriptor = rack.descriptor(index);
+  if (descriptor != nullptr && descriptor->patternContent != nullptr &&
+      descriptor->patternContent->caps.playback == VOX_PATTERN_PLAYBACK_INTERNAL)
+    return serializeInternalPatternMidi(
+        index, std::clamp(static_cast<int>(std::lround(channel)), 1, 16), destination,
+        diagnostic);
   vstengine::midiexport::Options options;
   options.channel = std::clamp(static_cast<int>(std::lround(channel)), 1, 16);
   options.rootNote = static_cast<int>(std::lround(root));
@@ -1246,6 +1252,58 @@ bool VstEngineAudioProcessor::serializeSlotPatternMidi(
       return false;
     }
   } // Trim the external MemoryBlock before publishing its encoded bytes.
+  destination = std::move(candidate);
+  diagnostic.clear();
+  return true;
+}
+
+// An INTERNAL instrument's pattern exports what it actually plays: the Rack
+// renders one pass with the slot's own module and saved values, and every
+// reported hit becomes a note. Type-1 file, one named track per lane, all on
+// the slot's channel (drag the lanes to separate DAW tracks).
+bool VstEngineAudioProcessor::serializeInternalPatternMidi(
+    std::size_t index, int channel, juce::MemoryBlock &destination,
+    juce::String &diagnostic) {
+  const auto snapshot = snapshotRackWithPatterns();
+  std::vector<vstengine::rack::Rack::RenderedHit> hits;
+  double lengthPpq = 0.0;
+  std::string why;
+  if (!rack.renderPatternHits(index, snapshot[index], hits, lengthPpq, why)) {
+    diagnostic = juce::String("Could not render the pattern: ") + why;
+    return false;
+  }
+  if (hits.empty()) {
+    diagnostic = "The internal sequencer plays nothing (Seq Mode Host MIDI, or an "
+                 "empty pattern or muted lanes)";
+    return false;
+  }
+  const auto &caps = rack.descriptor(index)->patternContent->caps;
+  constexpr int ticksPerQuarter = 960;
+  constexpr double noteLengthPpq = 0.125; // drum hits are one-shot
+  juce::MidiFile file;
+  file.setTicksPerQuarterNote(ticksPerQuarter);
+  for (std::uint32_t lane = 0; lane < caps.laneCount; ++lane) {
+    juce::MidiMessageSequence track;
+    track.addEvent(juce::MidiMessage::textMetaEvent(3, caps.laneNames[lane]), 0.0);
+    for (const auto &hit : hits)
+      if (hit.lane == lane) {
+        const double on = std::round(hit.ppq * ticksPerQuarter);
+        track.addEvent(juce::MidiMessage::noteOn(channel, hit.note, hit.velocity), on);
+        track.addEvent(juce::MidiMessage::noteOff(channel, hit.note),
+                       on + noteLengthPpq * ticksPerQuarter);
+      }
+    track.addEvent(juce::MidiMessage::endOfTrack(), lengthPpq * ticksPerQuarter);
+    track.updateMatchedPairs();
+    file.addTrack(track);
+  }
+  juce::MemoryBlock candidate;
+  {
+    juce::MemoryOutputStream stream(candidate, false);
+    if (!file.writeTo(stream, 1)) {
+      diagnostic = "Could not encode the MIDI pattern";
+      return false;
+    }
+  }
   destination = std::move(candidate);
   diagnostic.clear();
   return true;

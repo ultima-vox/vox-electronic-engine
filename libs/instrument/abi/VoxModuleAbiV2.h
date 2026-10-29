@@ -268,6 +268,31 @@ typedef struct VoxContentApiV2 {
                                          const char **name, VoxPatternV2 *pattern);
 } VoxContentApiV2;
 
+/* ---- Note output ----------------------------------------------------------
+ * Notes a module generates itself (an INTERNAL sequencer hit that sounds),
+ * reported per block so the Rack can duck, export and display them. Host MIDI
+ * the module merely receives is never reported: the Rack already knows it. */
+#define VOX_NOTE_EVENT_ACCENT 0x1u
+#define VOX_NOTE_EVENT_KNOWN_FLAGS 0x1u
+
+/* Header-less record; arrays carry their stride in VoxNoteOutputV2. */
+typedef struct VoxNoteEventV2 {
+  uint32_t sampleOffset; /* within this block, ascending */
+  uint8_t note;          /* MIDI note */
+  uint8_t velocity;      /* 1..127, as played (accent applied) */
+  uint8_t lane;          /* pattern lane */
+  uint8_t flags;         /* VOX_NOTE_EVENT_* */
+} VoxNoteEventV2;
+
+typedef struct VoxNoteOutputV2 {
+  uint32_t structSize, version;
+  uint32_t capacity;      /* host: events that fit in `events` */
+  uint32_t stride;        /* host: >= sizeof(VoxNoteEventV2) */
+  uint32_t count;         /* module: events written, <= capacity */
+  uint32_t dropped;       /* module: events that did not fit */
+  VoxNoteEventV2 *events; /* host-owned */
+} VoxNoteOutputV2;
+
 typedef struct VoxProcessContextV2 {
   uint32_t structSize, version;
   uint32_t numSamples;
@@ -287,6 +312,8 @@ typedef struct VoxProcessContextV2 {
    * every host and module accepts VOX_PROCESS_CONTEXT_V2_BASE_SIZE. */
   const VoxPatternV2 *pattern; /* host-owned snapshot for this call, or NULL */
   uint64_t patternGeneration;  /* changes whenever the snapshot content changes */
+  VoxNoteOutputV2 *noteOutput; /* host-owned; NULL = the host does not listen.
+                                  The module resets count/dropped every call. */
 } VoxProcessContextV2;
 
 /* Size of the original V2.0 process context. */
@@ -346,7 +373,11 @@ VOX_ABI_ASSERT(sizeof(VoxMidiEventV2) == 16, "VoxMidiEventV2 size");
 VOX_ABI_ASSERT(sizeof(VoxTransportV2) == 72, "VoxTransportV2 size");
 VOX_ABI_ASSERT(offsetof(VoxTransportV2, tempoBpm) == 24, "tempo offset");
 VOX_ABI_ASSERT(offsetof(VoxTransportV2, timeInSamples) == 64, "timeInSamples offset");
-VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 96, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 104, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, noteOutput) == 96, "noteOutput offset");
+VOX_ABI_ASSERT(sizeof(VoxNoteEventV2) == 8, "VoxNoteEventV2 size");
+VOX_ABI_ASSERT(sizeof(VoxNoteOutputV2) == 32, "VoxNoteOutputV2 size");
+VOX_ABI_ASSERT(offsetof(VoxNoteOutputV2, events) == 24, "note output events offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, pattern) == VOX_PROCESS_CONTEXT_V2_BASE_SIZE,
                "pattern offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, patternGeneration) == 88, "generation offset");

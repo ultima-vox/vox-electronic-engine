@@ -302,7 +302,7 @@ std::vector<float> renderPhrase(const VoxModuleV2 &m, VoxInstance instance, int 
 
 // ---------------------------------------------------------------- tests
 void layout() {
-  std::array<std::uint32_t, 64> c{};
+  std::array<std::uint32_t, 128> c{};
   const auto count = voxAbiLayoutC(c.data(), static_cast<std::uint32_t>(c.size()));
 #define L(type, field) static_cast<std::uint32_t>(offsetof(type, field))
   const std::uint32_t cpp[] = {
@@ -334,7 +334,9 @@ void layout() {
       L(VoxPatternV2, cells), sizeof(VoxPatternCapsV2), L(VoxPatternCapsV2, stepFields),
       L(VoxPatternCapsV2, laneNames), L(VoxPatternCapsV2, laneNotes),
       sizeof(VoxContentApiV2), L(VoxContentApiV2, getPatternCaps),
-      L(VoxContentApiV2, getFactoryPattern)};
+      L(VoxContentApiV2, getFactoryPattern), L(VoxProcessContextV2, noteOutput),
+      sizeof(VoxNoteEventV2), L(VoxNoteEventV2, note), L(VoxNoteEventV2, flags),
+      sizeof(VoxNoteOutputV2), L(VoxNoteOutputV2, count), L(VoxNoteOutputV2, events)};
 #undef L
   REQUIRE(count == std::size(cpp), "C and C++ layout tables have the same length");
   for (std::uint32_t i = 0; i < count; ++i)

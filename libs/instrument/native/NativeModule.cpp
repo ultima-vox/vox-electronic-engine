@@ -230,6 +230,8 @@ public:
 
   void process(const ProcessBlock &block) noexcept override {
     hint_ = 0;
+    if (block.noteOutput != nullptr) // a silent or failed block generates nothing
+      block.noteOutput->count = block.noteOutput->dropped = 0;
     if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
         block.sampleCount > maximumBlock_ ||
         block.outputs.size() != outputChannels_) {
@@ -275,13 +277,19 @@ public:
                                       samplePosition_,
                                       &transport_,
                                       block.pattern,
-                                      block.patternGeneration};
+                                      block.patternGeneration,
+                                      block.noteOutput};
     if (table_->process(handle_, &context) != VOX_OK) {
       fault();
       silence(block);
+      if (block.noteOutput != nullptr)
+        block.noteOutput->count = 0; // a failed block generated nothing
     } else if (bypassed_) {
       silence(block);
     }
+    // Never trust a module-written count beyond the host buffer.
+    if (block.noteOutput != nullptr && block.noteOutput->count > block.noteOutput->capacity)
+      block.noteOutput->count = block.noteOutput->capacity;
     samplePosition_ += block.sampleCount;
   }
 
