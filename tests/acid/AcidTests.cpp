@@ -110,6 +110,35 @@ int main()
                        renderTypedControl("lfo1_wave", 0.65f, true)) > 0.01,
             "different LFO waveform buckets change sound");
     auto provider = acid::createAcidProvider();
+    // Rack may deliver initial values before prepare or after construction on
+    // restore. The first render must start from the same authoritative values.
+    auto initial = provider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    auto restored = provider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    REQUIRE(initial && restored, "Acid initialization probes created");
+    REQUIRE(initial->setParameter("waveform", 0.05f), "initial waveform");
+    REQUIRE(initial->prepare({48000.0, 4096, 2}) && restored->prepare({48000.0, 4096, 2}),
+            "Acid initialization probes prepared");
+    REQUIRE(initial->setParameter("waveform", 0.5f) && restored->setParameter("waveform", 0.5f),
+            "same authoritative waveform delivered before first block");
+    const auto initialAudio = render(*initial);
+    const auto restoredAudio = render(*restored);
+    REQUIRE(energy(initialAudio) > 0.01 && initialAudio == restoredAudio,
+            "first render independent of pre-prepare parameter history");
+    acid::AcidParameterBridge initialBridge;
+    std::atomic<float> initialFine {0.8f};
+    initialBridge.setSlotId(0, instrument::initialSlotId(0));
+    initialBridge.bind(0, acid::AcidEngine::oscFine, &initialFine);
+    auto bridgedProvider = acid::createAcidProvider(&initialBridge);
+    auto bridgedInitial = bridgedProvider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    auto bridgedRestored = bridgedProvider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    REQUIRE(bridgedInitial && bridgedRestored, "bridged Acid probes created");
+    REQUIRE(bridgedInitial->setParameter("osc_fine", 0.2f), "initial fine tuning");
+    REQUIRE(bridgedInitial->prepare({48000.0, 4096, 2}) && bridgedRestored->prepare({48000.0, 4096, 2}),
+            "bridged Acid probes prepared");
+    const auto bridgedAudio = render(*bridgedInitial);
+    const auto bridgedRestoredAudio = render(*bridgedRestored);
+    REQUIRE(energy(bridgedAudio) > 0.01 && bridgedAudio == bridgedRestoredAudio,
+            "bridge values initialize smoothing before first audio");
     const auto compliance = tests::runInstrumentCompliance(
         *provider, acid::instrumentId);
     if (!compliance) {

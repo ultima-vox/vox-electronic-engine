@@ -18,6 +18,7 @@ public:
                   spec.sampleRate <= AcidEngine::maximumSupportedSampleRate &&
                   engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
                                   spec.outputChannels);
+      initialParameterSync_ = prepared_;
       return prepared_;
     }
     void reset() noexcept override { engine_.reset(); }
@@ -33,6 +34,12 @@ public:
       if (prepared_ && !bypassed_ && !suspended_) {
         if (controls_)
           controls_->apply(slotId_, engine_);
+        // Rack delivers its initial parameter snapshot after prepare. Start
+        // smoothing from that snapshot, including on restored instances.
+        if (initialParameterSync_) {
+          engine_.reset();
+          initialParameterSync_ = false;
+        }
         engine_.setTransport(block.bpm, block.ppqPosition,
                              block.transportPlaying);
         engine_.process(block.outputs, block.sampleCount, block.midi);
@@ -65,6 +72,7 @@ private:
     instrument::SlotId slotId_ {};
     AcidEngine engine_;
     bool prepared_{};
+    bool initialParameterSync_{};
     bool bypassed_ {};
     bool suspended_ {};
 };
