@@ -5,22 +5,17 @@ Automated tests (CTest `module_abi_v2_tests`, `native_rack_tests`,
 establish DAW behavior. Record each run below with host, version, OS, Rack
 build (CI run id) and module artifact.
 
-## Setup (development mode only)
+## Setup
 
-1. Install the Rack VST3 from the `Vox-Electronic-Engine-Windows` artifact.
-   Do not rebuild it for any later step; note its file hash.
-2. Copy `vox_abi_v2_test_module.dll` (`Vox-Test-Instrument-Module-Windows`)
-   to a fixed absolute path, e.g. `C:\VoxDev\vox_abi_v2_test_module.dll`.
-3. Set the user environment variable
-   `VOX_DEV_NATIVE_MODULES=C:\VoxDev\vox_abi_v2_test_module.dll`
-   or copy the artifact's `packages/` folder to e.g. `C:\VoxDev\packages` and
-   set `VOX_DEV_INSTRUMENT_ROOT=C:\VoxDev\packages` (versioned package with
-   manifest and SHA-256)
-   and start the DAW from a fresh login/shell so it inherits it.
-   This is a development opt-in; production loading waits for the reviewed
-   signing and path policy.
-   **Production gate (open):** the environment-variable loader is not yet
-   compiled out of release builds; it must be before production distribution.
+1. Install the `Vox-Music-Install-Windows` artifact as described in
+   [demo-synth/CUBASE_TEST_GUIDE.md](demo-synth/CUBASE_TEST_GUIDE.md):
+   copy the `vox music` folder into `C:\Program Files\Common Files\VST3\`.
+   Do not rebuild the VST3 for any later step, and note its file hash.
+2. The ABI test tone is a test fixture (`test-vins/AbiTestTone.vins` in the
+   build tree). It is not shipped. To check it in a DAW, copy that file into
+   `vox music\instruments`. It loads only in a Rack built in the same tree,
+   because it is signed with that tree's development key.
+3. No environment variables or other module roots exist.
 
 ## M0+ — Vox Demo Synth (playable instrument)
 

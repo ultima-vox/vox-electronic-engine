@@ -93,12 +93,11 @@ which is the parity oracle (`graph_demo_parity_tests`, bit for bit).
 
 ## Delivery
 
-Slice 1 embeds the graph Demo in the plugin as a **temporary factory test
-graph** (`VOX_FACTORY_GRAPHS` in CMake → `generated/FactoryGraphs.h`). This
-lets it be tested in a DAW before a loader exists. It has no `.vins` package.
-
-This is not the shipping path. The owner's final requirement (#73/#75) is a
-single graph-only `.vins` archive next to the VST3, loaded with the same
-`loadPatch`. Once that verified archive loader exists, the embedded demo stops
-being a shipping assumption and is removed. Out of scope here: polyphony, modulation matrix,
+A graph instrument ships as a graph-only `.vins` package (see
+`VINS_PACKAGES.md`). Its manifest names the patch member, for example
+`graph/instrument.json`. The package is loaded by the same loader and goes
+through the same validation as native packages; `loadPatch` compiles the
+patch, and no code is executed. The graph Demo is
+`instruments/VoxDemoSynthGraph.vins`. Nothing is built into the Rack.
+Out of scope here: polyphony, modulation matrix,
 FX blocks, sample playback, a graph editor UI.

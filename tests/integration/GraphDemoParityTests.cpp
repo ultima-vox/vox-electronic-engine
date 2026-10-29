@@ -1,13 +1,13 @@
-// #75 first slice: the Vox Demo Synth rebuilt as a graph-only patch
-// (instruments/demo-synth-graph/graph.json, no DLL) renders bit for bit like
-// the native VoxDemoSynth module through the real Rack processor: same pool
+// #75 first slice: the Vox Demo Synth rebuilt as a graph-only patch, shipped
+// as VoxDemoSynthGraph.vins (no DLL), renders bit for bit like the native
+// VoxDemoSynth.vins module through the real Rack processor: same pool
 // endpoints, MIDI routing, automation, sustain/CC120/CC123, two slots and
 // project reopen. The compiler rejects malformed patches with a reason.
 // Not DAW acceptance (see docs/testing/demo-synth-graph/CUBASE_SMOKE.md).
 #include "PluginProcessor.h"
 #include "dspcore/GraphInstrument.h"
 #include "instrument/HostParameterSchema.h"
-#include "instrument/native/ModulePackages.h"
+#include "instrument/vins/VinsPackage.h"
 #include "modules/BuiltInProvider.h"
 
 #include <algorithm>
@@ -33,7 +33,7 @@ constexpr const char *nativeId = "com.ultimavox.demo-synth";
 constexpr const char *graphId = "com.ultimavox.demo-synth-graph";
 constexpr double sampleRate = 48000.0;
 constexpr int blockSize = 256;
-fs::path packageRoot;
+fs::path instrumentsDir, cacheRoot;
 std::string graphJson;
 int checks = 0;
 
@@ -45,19 +45,15 @@ void check(bool ok, const std::string &message) {
   }
 }
 
-native::LoadReport graphReport() {
-  std::string why;
-  auto patch = dspcore::loadPatch(graphJson, why);
-  check(patch != nullptr, "graph.json compiles: " + why);
-  native::LoadReport report;
-  report.providers.push_back(dspcore::makeGraphProvider(std::move(patch)));
-  return report;
-}
-
-std::unique_ptr<VstEngineAudioProcessor> makeProcessor(bool graph) {
+// Both Demo packages, loaded as the DAW constructor loads the folder next to
+// the VST3.
+std::unique_ptr<VstEngineAudioProcessor> makeProcessor() {
+  instrument::vins::LoadOptions options;
+  options.cacheRoot = cacheRoot;
+  options.trusted = instrument::vins::pinnedPublisherKeys();
   auto p = std::make_unique<VstEngineAudioProcessor>(
-      modules::createBuiltInProvider(), graph ? graphReport() : native::loadPackages(packageRoot));
-  check(p->nativeModuleDiagnostics().empty(), "providers register without diagnostics");
+      modules::createBuiltInProvider(), instrument::vins::loadFolder(instrumentsDir, options));
+  check(p->nativeModuleDiagnostics().empty(), "both Demo packages load without diagnostics");
   p->prepareToPlay(sampleRate, blockSize);
   return p;
 }
@@ -146,8 +142,8 @@ double energy(const std::vector<float> &x) {
 
 // ------------------------------------------------------------------ tests
 void descriptorMatchesNative() {
-  auto n = makeProcessor(false);
-  auto g = makeProcessor(true);
+  auto n = makeProcessor();
+  auto g = makeProcessor();
   const instrument::InstrumentDescriptor *a = nullptr, *b = nullptr;
   for (const auto *d : n->availableInstruments())
     if (d->id == nativeId)
@@ -169,8 +165,8 @@ void descriptorMatchesNative() {
 }
 
 void bitExactPerformance() {
-  auto n = makeProcessor(false);
-  auto g = makeProcessor(true);
+  auto n = makeProcessor();
+  auto g = makeProcessor();
   load(*n, 2, nativeId);
   load(*n, 6, nativeId);
   load(*g, 2, graphId);
@@ -192,14 +188,14 @@ void bitExactPerformance() {
 }
 
 void projectReopens() {
-  auto first = makeProcessor(true);
+  auto first = makeProcessor();
   load(*first, 4, graphId);
   const float values[] = {2.0f, 0.55f, 0.02f, 0.4f, 0.35f, 0.8f, 1800.0f, 0.6f};
   for (int i = 0; i < 8; ++i)
     setPlain(*first, 4, i, values[i]);
   juce::MemoryBlock state;
   first->getStateInformation(state);
-  auto second = makeProcessor(true);
+  auto second = makeProcessor();
   second->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
   check(second->instrumentRack().state()[4].instrumentId == graphId, "slot identity restored");
   first->prepareToPlay(sampleRate, blockSize);
@@ -212,9 +208,15 @@ void projectReopens() {
 
 // What Cubase gets: the DAW's constructor offers the factory graph Demo with
 // no DLL and no install step; on a fresh Rack, empty slot 5 takes CH1 and plays.
-void factoryGraphInDefaultRack() {
-  auto p = std::make_unique<VstEngineAudioProcessor>();
-  check(p->nativeModuleDiagnostics().empty(), "factory graphs compile without diagnostics");
+// What Cubase gets: the graph Demo comes only from its .vins package (nothing
+// is embedded in the Rack); on a fresh Rack, empty slot 5 takes CH1 and plays.
+void graphPackageInAFreshRack() {
+  {
+    auto bare = std::make_unique<VstEngineAudioProcessor>(); // the DAW constructor
+    for (const auto *d : bare->availableInstruments())
+      check(d->id != graphId, "no graph Demo is built into the Rack");
+  }
+  auto p = makeProcessor();
   const instrument::InstrumentDescriptor *demo = nullptr;
   for (const auto *d : p->availableInstruments())
     if (d->id == graphId)
@@ -381,11 +383,13 @@ void wholeDomainStaysFinite() {
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc < 3) {
-    std::cerr << "usage: graph_demo_parity_tests <demo-package-root> <graph.json>\n";
+  if (argc != 4) {
+    std::cerr << "usage: graph_demo_parity_tests <instruments folder> <graph.json> <scratch>\n";
     return 2;
   }
-  packageRoot = argv[1];
+  instrumentsDir = fs::absolute(argv[1]);
+  cacheRoot = fs::absolute(argv[3]) / "cache";
+  fs::remove_all(cacheRoot);
   std::ifstream in(argv[2], std::ios::binary);
   std::stringstream text;
   text << in.rdbuf();
@@ -395,7 +399,7 @@ int main(int argc, char **argv) {
   descriptorMatchesNative();
   bitExactPerformance();
   projectReopens();
-  factoryGraphInDefaultRack();
+  graphPackageInAFreshRack();
   compilerRejectsMalformedPatches();
   wholeDomainStaysFinite();
   std::cout << "graph_demo_parity_tests: " << checks << " checks passed\n";

@@ -55,15 +55,6 @@ add_library(vst_native STATIC
 target_include_directories(vst_native PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_native PUBLIC vst_instrument ${CMAKE_DL_LIBS})
 
-# native packages: development/test resolution of versioned instrument packages
-# (<root>/<packId>.voxinst/<MAJOR.MINOR.PATCH>/manifest.json + module/<arch>/).
-# SHA-256 is a corruption check only; no production scanning or signing policy.
-add_library(vst_native_packages STATIC
-  libs/instrument/native/ModulePackages.cpp libs/instrument/native/ModulePackages.h)
-set_target_properties(vst_native_packages PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(vst_native_packages PUBLIC ${VST_LIBS_DIR})
-target_link_libraries(vst_native_packages
-  PUBLIC vst_native juce::juce_core juce::juce_cryptography)
 
 # dspcore: Vox DSP Core primitives and the per-instrument patch graph (#75):
 # graph-only instruments are data (graph.json) compiled off the audio thread
@@ -76,24 +67,30 @@ set_target_properties(vst_dspcore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(vst_dspcore PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_dspcore PUBLIC vst_instrument juce::juce_core)
 
-# Factory graph instruments compiled into the plugin (no DLL, no install):
-# instruments/<name>/graph.json -> generated/FactoryGraphs.h (byte arrays;
-# graph.json is ASCII-only, so every byte fits a char).
-set(VOX_FACTORY_GRAPHS demo-synth-graph)
-set(VOX_FACTORY_GRAPHS_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/FactoryGraphs.h)
-set(_factory_graphs "// Generated from instruments/*/graph.json. Do not edit.\n#pragma once\n#include <string_view>\nnamespace vstengine::factory {\n")
-set(_factory_list "")
-foreach(_graph IN LISTS VOX_FACTORY_GRAPHS)
-  set(_file ${CMAKE_CURRENT_SOURCE_DIR}/instruments/${_graph}/graph.json)
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_file})
-  file(READ ${_file} _hex HEX)
-  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
-  string(MAKE_C_IDENTIFIER ${_graph} _name)
-  string(APPEND _factory_graphs "inline constexpr char ${_name}[] = {${_bytes}};\n")
-  string(APPEND _factory_list "std::string_view(${_name}, sizeof(${_name})), ")
-endforeach()
-string(APPEND _factory_graphs "inline constexpr std::string_view graphs[] = {${_factory_list}};\n}\n")
-file(CONFIGURE OUTPUT ${VOX_FACTORY_GRAPHS_HEADER} CONTENT "${_factory_graphs}" @ONLY)
+# vins: the one instrument package format (#73): one ZIP archive file per
+# instrument next to the VST3, graph (DSP Core) or signed native backend.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|x64)$")
+  set(VOX_NATIVE_PLATFORM "win-x64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  set(VOX_NATIVE_PLATFORM "linux-x64")
+else()
+  set(VOX_NATIVE_PLATFORM "")
+endif()
+include(cmake/VinsPublisher.cmake)
+include(cmake/Vins.cmake)
+add_library(vst_vins STATIC
+  libs/instrument/vins/VinsZip.cpp libs/instrument/vins/VinsZip.h
+  libs/instrument/vins/VinsTrust.cpp libs/instrument/vins/VinsTrust.h
+  libs/instrument/vins/VinsPackage.cpp libs/instrument/vins/VinsPackage.h)
+set_target_properties(vst_vins PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vst_vins PUBLIC ${VST_LIBS_DIR} PRIVATE ${CMAKE_BINARY_DIR}/generated)
+target_link_libraries(vst_vins
+  PUBLIC vst_native vst_dspcore juce::juce_core juce::juce_cryptography ${CMAKE_DL_LIBS})
+
+# Package tool (host build): writes manifests and deterministic archives.
+add_executable(vox_vins_pack tools/VinsPack.cpp)
+target_link_libraries(vox_vins_pack PRIVATE vst_vins)
+target_compile_definitions(vox_vins_pack PRIVATE JUCE_STANDALONE_APPLICATION=1)
 
 add_library(vst_rack STATIC
   libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
@@ -253,7 +250,6 @@ juce_generate_juce_header(VstEngine)
 target_sources(VstEngine PRIVATE
   apps/vst3/PluginProcessor.cpp apps/vst3/PluginProcessor.h
   apps/vst3/PluginEditor.cpp apps/vst3/PluginEditor.h)
-target_include_directories(VstEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 target_compile_definitions(VstEngine PUBLIC
   JUCE_WEB_BROWSER=0
@@ -262,7 +258,7 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_native vst_native_packages vst_dspcore vst_rack vst_modules vst_sequence vst_parts
+  vst_core vst_instrument vst_native vst_vins vst_dspcore vst_rack vst_modules vst_sequence vst_parts
   vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
 
 if(MSVC)
@@ -547,41 +543,12 @@ target_include_directories(fresh_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
 target_link_libraries(fresh_rack_tests PRIVATE VstEngine)
 add_test(NAME fresh_rack_tests COMMAND fresh_rack_tests)
 
-# Development package layout: the test module is also assembled as a versioned
-# package in the build tree. The arch string must match packageArch in
-# libs/instrument/native/ModulePackages.h.
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|x64)$")
-  set(VOX_PACKAGE_ARCH "x64")
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
-  set(VOX_PACKAGE_ARCH "linux-x64")
-else()
-  set(VOX_PACKAGE_ARCH "")
-endif()
-set(VOX_DEV_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/packages)
-if(VOX_PACKAGE_ARCH)
-  add_custom_command(TARGET vox_abi_v2_test_module POST_BUILD
-    COMMAND ${CMAKE_COMMAND}
-      -DMODULE_FILE=$<TARGET_FILE:vox_abi_v2_test_module>
-      -DPACKAGE_ROOT=${VOX_DEV_PACKAGE_ROOT}
-      -DPACK_ID=test.abi.v2.tone
-      -DPACK_VERSION=1.0.0
-      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
-      -DINSTRUMENT_IDS=test.abi.v2.tone
-      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
-    VERBATIM)
+# .vins packages built in this tree. instruments/ mirrors the installed
+# layout (<product>/instruments); test-vins/ holds test fixtures.
+set(VOX_INSTRUMENTS_DIR ${CMAKE_BINARY_DIR}/instruments)
+set(VOX_TEST_VINS_DIR ${CMAKE_BINARY_DIR}/test-vins)
 
-  add_executable(module_package_tests tests/integration/ModulePackageTests.cpp)
-  target_include_directories(module_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
-      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
-  target_link_libraries(module_package_tests PRIVATE VstEngine)
-  add_dependencies(module_package_tests vox_abi_v2_test_module)
-  add_test(NAME module_package_tests
-    COMMAND module_package_tests $<TARGET_FILE:vox_abi_v2_test_module> ${VOX_DEV_PACKAGE_ROOT})
-endif()
-
-# Vox Demo Synth: a small, independent, playable V2 native instrument for DAW
-# acceptance of the Rack connector. Not linked into the Rack; shipped as its
-# own versioned package (com.ultimavox.demo-synth.voxinst/1.0.0).
+# Vox Demo Synth: a small, independent, playable V2 native instrument.
 add_library(VoxDemoSynth SHARED libs/demo/VoxDemoSynth.c)
 set_target_properties(VoxDemoSynth PROPERTIES
   PREFIX ""
@@ -596,41 +563,64 @@ if(MSVC)
   set_property(TARGET VoxDemoSynth PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
-set(VOX_DEMO_PACKAGE_ROOT ${CMAKE_BINARY_DIR}/demo-packages)
-if(VOX_PACKAGE_ARCH)
-  add_custom_command(TARGET VoxDemoSynth POST_BUILD
-    COMMAND ${CMAKE_COMMAND}
-      -DMODULE_FILE=$<TARGET_FILE:VoxDemoSynth>
-      -DPACKAGE_ROOT=${VOX_DEMO_PACKAGE_ROOT}
-      -DPACK_ID=com.ultimavox.demo-synth
-      -DPACK_VERSION=1.0.0
-      -DPACKAGE_ARCH=${VOX_PACKAGE_ARCH}
-      -DINSTRUMENT_IDS=com.ultimavox.demo-synth
-      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeInstrumentPackage.cmake
-    VERBATIM)
+
+# The graph-only Demo Synth: data for the DSP Core, no executable code.
+vox_add_vins(vins_demo_synth_graph KIND graph
+  OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxDemoSynthGraph.vins
+  ID com.ultimavox.demo-synth-graph VERSION 1.0.0
+  NAME "Vox Demo Synth (Graph)" VENDOR "Ultima Vox"
+  INSTRUMENTS com.ultimavox.demo-synth-graph
+  GRAPH graph/instrument.json ${CMAKE_CURRENT_SOURCE_DIR}/instruments/demo-synth-graph/graph.json)
+
+if(VOX_NATIVE_PLATFORM)
+  vox_add_vins(vins_demo_synth KIND native
+    OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxDemoSynth.vins
+    ID com.ultimavox.demo-synth VERSION 1.0.0
+    NAME "Vox Demo Synth" VENDOR "Ultima Vox"
+    INSTRUMENTS com.ultimavox.demo-synth MODULE_TARGET VoxDemoSynth)
+  vox_add_vins(vins_test_tone KIND native
+    OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone.vins
+    ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
+    INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module)
+  vox_add_vins(vins_test_tone_untrusted KIND native
+    OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone-untrusted.vins
+    ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
+    INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module
+    KEY ${VOX_UNTRUSTED_TEST_KEY} MODULUS ${VOX_UNTRUSTED_MODULUS_FILE})
+
+  add_executable(vins_package_tests tests/integration/VinsPackageTests.cpp)
+  target_include_directories(vins_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(vins_package_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(vins_package_tests vins_test_tone vins_test_tone_untrusted
+    vins_demo_synth vins_demo_synth_graph)
+  add_test(NAME vins_package_tests
+    COMMAND vins_package_tests ${VOX_TEST_VINS_DIR} ${VOX_INSTRUMENTS_DIR}
+      ${CMAKE_BINARY_DIR}/vins-scratch)
 
   add_executable(demo_synth_tests tests/integration/DemoSynthTests.cpp)
   target_include_directories(demo_synth_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
       ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
-  target_link_libraries(demo_synth_tests PRIVATE VstEngine)
-  add_dependencies(demo_synth_tests VoxDemoSynth)
+  target_link_libraries(demo_synth_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(demo_synth_tests vins_demo_synth)
   if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_sources(demo_synth_tests PRIVATE tests/abi/AllocationProbeLinux.c)
     target_compile_definitions(demo_synth_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
     target_link_options(demo_synth_tests PRIVATE -rdynamic)
   endif()
   add_test(NAME demo_synth_tests
-    COMMAND demo_synth_tests ${VOX_DEMO_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/demo-scratch)
+    COMMAND demo_synth_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/demo-scratch)
 
-  # #75 slice 1: graph-only Demo (no DLL) vs the native Demo, bit for bit.
+  # #75 slice 1: the graph-only Demo .vins vs the native Demo .vins, bit for bit.
   add_executable(graph_demo_parity_tests tests/integration/GraphDemoParityTests.cpp)
   target_include_directories(graph_demo_parity_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
       ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
-  target_link_libraries(graph_demo_parity_tests PRIVATE VstEngine vst_dspcore)
-  add_dependencies(graph_demo_parity_tests VoxDemoSynth)
+  target_link_libraries(graph_demo_parity_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(graph_demo_parity_tests vins_demo_synth vins_demo_synth_graph)
   add_test(NAME graph_demo_parity_tests
-    COMMAND graph_demo_parity_tests ${VOX_DEMO_PACKAGE_ROOT}
-      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/demo-synth-graph/graph.json)
+    COMMAND graph_demo_parity_tests ${VOX_INSTRUMENTS_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/demo-synth-graph/graph.json
+      ${CMAKE_BINARY_DIR}/graph-scratch)
 endif()
 
 add_executable(reliability_stress_tests
