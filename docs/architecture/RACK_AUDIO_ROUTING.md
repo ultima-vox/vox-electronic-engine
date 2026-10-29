@@ -65,12 +65,28 @@ See [parameter/state contract](RACK_PARAMETER_CONTRACT.md).
 
 ## Kick-event ducking
 
-This is an explicit routed MIDI note-lane trigger, not an audio detector. Choose
-one source slot and its routed note (after the source's transpose). Only a positive
-NoteOn for that lane triggers it. Mute/disable/solo-exclusion, missing source or
-source/note changes clear the envelope. The source itself is exempt from ducking.
-A future kit must expose a distinct kick lane; arbitrary notes/claps must not
-silently be treated as kick. Drums DSP is not introduced by this implementation.
+This is an explicit note-lane trigger, not an audio detector. Choose one source
+slot and its kick note.
+
+**Triggers:**
+- a positive routed MIDI NoteOn for that note (after the source's transpose);
+- a note of that number that the source generated itself in the same block (its internal sequencer, reported through the module note output, see [PATTERN_CONTENT_ABI](PATTERN_CONTENT_ABI.md)).
+
+When a routed and a generated kick land on the same sample, they trigger once.
+
+**What clears the envelope:** mute, disable or solo-exclusion of the source, a missing source, and source or note changes. A silent source ducks nothing, and the source itself is exempt from ducking.
+
+**Same-block, two-pass processing.** The Rack renders every slot into its own buffer first. It then builds the block's envelope from the routed MIDI and the source's generated notes, and only then mixes. As a result:
+- an internal kick at sample *k* ducks its targets at *k*, whether the source slot comes before or after them;
+- block size and sample rate make no difference;
+- there is no lookahead and no added latency.
+
+**Generated events from the module are checked by the host:**
+- out-of-order or out-of-block events are ignored;
+- a count above the buffer capacity voids that block's events.
+
+A kit must still expose a distinct kick lane; arbitrary notes or claps are never
+treated as a kick.
 
 The attack rises linearly from current envelope to 1; retrigger continues from
 the current envelope. Hold keeps 1, release falls linearly to exactly 0. Zero

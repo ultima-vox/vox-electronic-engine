@@ -926,22 +926,10 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
   processing_->router.routeGenerated(generated, controls, processing_->routed);
   for (auto &destination : processing_->routed)
     destination.sortBySampleOffset();
-  if (audioRouting && audioControls && AudioRouting::valid(*audioControls)) {
-    auto available = *audioControls;
-    bool found = false;
-    for (std::size_t i = 0; i < controls.size(); ++i)
-      if (controls[i].slotId == available.kickSource &&
-          processing_->runtime[i].instance)
-        found = true;
-    if (!found)
-      available.kickSource = instrument::invalidSlotId;
-    if (!audioRouting->begin(available, controls, processing_->routed,
-                             sampleCount))
-      audioRouting = nullptr;
-  } else
-    audioRouting = nullptr;
   const bool anySolo = std::any_of(controls.begin(), controls.end(),
                                    [](const auto &slot) { return slot.solo; });
+  // Pass 1: every slot renders into its own buffer. Notes a slot generates
+  // itself (an internal drum sequencer) exist only after this pass.
   for (std::size_t i = 0; i < state_.size(); ++i) {
     auto &slot = processing_->runtime[i];
     droppedMidiEvents_[i].store(processing_->routed[i].dropped,
@@ -991,6 +979,36 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             patternSnapshot,
                             patternGeneration,
                             slot.patterns ? &slot.noteOutput : nullptr});
+  }
+  // Pass 2: the duck envelope of this block, from the kick source's routed
+  // MIDI and its own generated notes of this same block. Render order (the
+  // source may sit after its targets) and block size do not matter, and no
+  // lookahead or block latency is added.
+  if (audioRouting && audioControls && AudioRouting::valid(*audioControls)) {
+    auto available = *audioControls;
+    std::span<const VoxNoteEventV2> generated;
+    bool found = false;
+    for (std::size_t i = 0; i < controls.size(); ++i)
+      if (controls[i].slotId == available.kickSource &&
+          processing_->runtime[i].instance) {
+        found = true;
+        const auto &source = processing_->runtime[i];
+        // A count beyond the buffer is broken output: none of it is used.
+        if (source.patterns && source.noteOutput.count <= source.noteEvents.size())
+          generated = {source.noteEvents.data(), source.noteOutput.count};
+      }
+    if (!found)
+      available.kickSource = instrument::invalidSlotId;
+    if (!audioRouting->begin(available, controls, processing_->routed,
+                             sampleCount, generated))
+      audioRouting = nullptr;
+  } else
+    audioRouting = nullptr;
+  // Pass 3: mix.
+  for (std::size_t i = 0; i < state_.size(); ++i) {
+    auto &slot = processing_->runtime[i];
+    if (!slot.instance)
+      continue;
     if (audioRouting) {
       audioRouting->mixSlot(i, {slot.pointers.data(), outputs.size()}, outputs,
                             controls[i],

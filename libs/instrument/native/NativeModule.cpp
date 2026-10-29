@@ -287,9 +287,10 @@ public:
     } else if (bypassed_) {
       silence(block);
     }
-    // Never trust a module-written count beyond the host buffer.
+    // A count beyond the host buffer means the module's output is broken: use
+    // none of this block's events rather than stale buffer contents.
     if (block.noteOutput != nullptr && block.noteOutput->count > block.noteOutput->capacity)
-      block.noteOutput->count = block.noteOutput->capacity;
+      block.noteOutput->count = 0;
     samplePosition_ += block.sampleCount;
   }
 

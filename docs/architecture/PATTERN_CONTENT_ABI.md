@@ -60,7 +60,7 @@ An INTERNAL module reports the notes it generates through the appended
 - **Buffer.** The host owns the buffer and sets its capacity and stride.
 - **Record.** The module writes `VoxNoteEventV2` records (sample offset, note, velocity as played, lane, accent) and the count.
 - **What is reported.** Only notes the module generates itself; host MIDI is never echoed.
-- **Host checks.** The host resets the count before every call and clamps a count above the capacity. A failed or silenced block reports nothing.
+- **Host checks.** The host resets the count before every call. A count above the capacity voids that block's events, so stale buffer contents are never used. A failed or silenced block reports nothing. Out-of-order or out-of-block events are ignored by the consumers.
 
 The same event path serves two consumers: same-block kick ducking (next PR) and MIDI export.
 
