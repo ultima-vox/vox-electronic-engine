@@ -29,6 +29,13 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Upload Acid 303 module
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoxAcid303-Windows
+          path: build/**/VoxAcid303.dll
+          if-no-files-found: error
+
       - name: Capture Visual Gate snapshots
         # GUI evidence is useful even if an unrelated regression test fails.
         # A failed build must still prevent capture; packaging remains gated

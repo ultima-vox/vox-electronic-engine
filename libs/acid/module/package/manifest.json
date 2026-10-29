@@ -1,0 +1,21 @@
+{
+  "schema": "vox.vins/1-input",
+  "packageId": "com.ultimavox.acid",
+  "instrumentId": "com.ultimavox.acid",
+  "name": "Acid 303",
+  "vendor": "Ultima Vox",
+  "version": "1.0.0",
+  "executionKind": "native",
+  "stateVersion": 8,
+  "parameterCount": 80,
+  "poolIndexRange": [0, 79],
+  "hostPoolRequirement": 128,
+  "native": {
+    "abi": 2,
+    "abiHeaderGitBlob": "f6b37d786eedf1face1efb0ad8e443d4fee74615",
+    "entry": "voxModuleEntryV2",
+    "windowsX64": "module/win-x64/VoxAcid303.dll"
+  },
+  "signing": "not signed — Claude owns trust, ZIP packaging and discovery",
+  "notes": "Packaging input only. Not a shippable .vins archive."
+}
