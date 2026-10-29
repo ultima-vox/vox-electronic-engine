@@ -1,11 +1,12 @@
-// Vox Demo Synth through the real Rack processor: the versioned package is
-// resolved from a development package root exactly as in a DAW, the module is
-// played via slot MIDI routing, its eight host-pool endpoints change the DSP,
-// and projects restore bit for bit. Not DAW acceptance (see the Cubase guide).
+// Vox Demo Synth through the real Rack processor: VoxDemoSynth.vins is loaded
+// from an instruments folder exactly as the DAW constructor loads the one next
+// to the VST3 (signed native package, per-user cache), the module is played
+// via slot MIDI routing, its eight host-pool endpoints change the DSP, and
+// projects restore bit for bit. Not DAW acceptance (see the Cubase guide).
 #include "PluginProcessor.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
-#include "instrument/native/ModulePackages.h"
+#include "instrument/vins/VinsPackage.h"
 #include "instrument/native/NativeModule.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ constexpr const char *demoId = "com.ultimavox.demo-synth";
 constexpr double sampleRate = 48000.0;
 constexpr int blockSize = 256;
 enum Pool { wave, gain, attack, decay, sustain, release, cutoff, resonance };
-fs::path packageRoot;
+fs::path instrumentsDir, cacheRoot;
 int checks = 0;
 
 void check(bool ok, const std::string &message) {
@@ -43,15 +44,12 @@ void check(bool ok, const std::string &message) {
   }
 }
 
-void setEnv(const char *name, const std::string &value) {
-#if defined(_WIN32)
-  _putenv_s(name, value.c_str());
-#else
-  if (value.empty())
-    ::unsetenv(name);
-  else
-    ::setenv(name, value.c_str(), 1);
-#endif
+// What the DAW constructor does for the folder next to the VST3.
+native::LoadReport installed(const fs::path &folder) {
+  instrument::vins::LoadOptions options;
+  options.cacheRoot = cacheRoot;
+  options.trusted = instrument::vins::pinnedPublisherKeys();
+  return instrument::vins::loadFolder(folder, options);
 }
 
 void quietBuiltIns(VstEngineAudioProcessor &p) {
@@ -64,7 +62,7 @@ void quietBuiltIns(VstEngineAudioProcessor &p) {
 std::unique_ptr<VstEngineAudioProcessor> makeProcessor(const fs::path &root) {
   auto p = std::make_unique<VstEngineAudioProcessor>(
       modules::createBuiltInProvider(),
-      root.empty() ? native::LoadReport{} : native::loadPackages(root));
+      root.empty() ? native::LoadReport{} : installed(root));
   quietBuiltIns(*p);
   return p;
 }
@@ -151,11 +149,11 @@ int blocksFor(double seconds) {
 using juce::MidiMessage;
 
 // ------------------------------------------------------------------ tests
-void loadsFromDevelopmentRootLikeADaw() {
-  setEnv("VOX_DEV_NATIVE_MODULES", "");
-  setEnv("VOX_DEV_INSTRUMENT_ROOT", packageRoot.string());
-  auto p = std::make_unique<VstEngineAudioProcessor>(); // the DAW's constructor
-  setEnv("VOX_DEV_INSTRUMENT_ROOT", "");
+void loadsFromTheInstrumentsFolder() {
+  check(instrument::vins::loadInstalled().providers.empty(),
+        "outside a VST3 bundle the DAW constructor finds no packages");
+  auto p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                     installed(instrumentsDir));
   check(p->nativeModuleDiagnostics().empty(), "demo package loads without diagnostics");
   const instrument::InstrumentDescriptor *demo = nullptr;
   for (const auto *d : p->availableInstruments())
@@ -171,13 +169,12 @@ void loadsFromDevelopmentRootLikeADaw() {
     check(demo->parameters[static_cast<std::size_t>(i)].id == ids[i] &&
               demo->parameters[static_cast<std::size_t>(i)].poolIndex == i,
           std::string("stable pool index for ") + ids[i]);
-  // As the guide does in the editor: replace slot 1's built-in instrument;
-  // the slot keeps CH1 and the editor enables it.
+  // As the guide does in the editor: load into slot 1, which takes CH1.
   quietBuiltIns(*p);
   const auto slot = loadDemo(*p, 0);
   if (auto *enabled = p->parameters().getParameter("slot01Enabled"))
     enabled->setValueNotifyingHost(1.0f);
-  check(channelOf(*p, slot) == 1, "replacing slot 1 keeps MIDI channel 1");
+  check(channelOf(*p, slot) == 1, "slot 1 takes MIDI channel 1");
   const auto out = render(*p, 8, {{1, MidiMessage::noteOn(1, 60, 1.0f)}});
   check(energy(out, 0, 1) == 0.0 && energy(out, 2, 8) > 1.0, "MIDI NoteOn on CH1 is audible");
 }
@@ -186,7 +183,7 @@ void loadsFromDevelopmentRootLikeADaw() {
 // takes CH1 and plays; the package changes no host parameter identity.
 void freshRackSlot5AndHostIdentity() {
   auto with = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
-                                                        native::loadPackages(packageRoot));
+                                                        installed(instrumentsDir));
   auto without = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
                                                            native::LoadReport{});
   with->prepareToPlay(sampleRate, blockSize);
@@ -206,7 +203,7 @@ void freshRackSlot5AndHostIdentity() {
 }
 
 void pitchAndVelocity() {
-  auto p = makeProcessor(packageRoot);
+  auto p = makeProcessor(instrumentsDir);
   const auto slot = loadDemo(*p, 2);
   const int ch = channelOf(*p, slot);
   setPlain(*p, slot, wave, 0.0f); // sine
@@ -237,7 +234,7 @@ void pitchAndVelocity() {
 }
 
 void releaseSustainAndAllOff() {
-  auto p = makeProcessor(packageRoot);
+  auto p = makeProcessor(instrumentsDir);
   const auto slot = loadDemo(*p, 2);
   const int ch = channelOf(*p, slot);
   const int r = blocksFor(0.3); // default release
@@ -280,7 +277,7 @@ void releaseSustainAndAllOff() {
 
 // Every endpoint, moved through the host pool, audibly changes the DSP.
 void parametersReachTheDsp() {
-  auto p = makeProcessor(packageRoot);
+  auto p = makeProcessor(instrumentsDir);
   const auto slot = loadDemo(*p, 2);
   const int ch = channelOf(*p, slot);
   auto note = [&] {
@@ -315,9 +312,9 @@ void parametersReachTheDsp() {
 }
 
 void slotsAreIndependent() {
-  auto single = makeProcessor(packageRoot);
+  auto single = makeProcessor(instrumentsDir);
   const auto a = loadDemo(*single, 3);
-  auto pair = makeProcessor(packageRoot);
+  auto pair = makeProcessor(instrumentsDir);
   loadDemo(*pair, 3);
   const auto b = loadDemo(*pair, 4);
   setPlain(*pair, b, wave, 2.0f);
@@ -331,7 +328,7 @@ void slotsAreIndependent() {
 }
 
 void projectsRestore() {
-  auto first = makeProcessor(packageRoot);
+  auto first = makeProcessor(instrumentsDir);
   const auto slot = loadDemo(*first, 5);
   const float values[] = {2.0f, 0.55f, 0.02f, 0.4f, 0.35f, 0.8f, 1800.0f, 0.6f};
   for (int i = 0; i < 8; ++i)
@@ -340,7 +337,7 @@ void projectsRestore() {
   juce::MemoryBlock state;
   first->getStateInformation(state);
 
-  auto second = makeProcessor(packageRoot);
+  auto second = makeProcessor(instrumentsDir);
   second->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
   check(second->instrumentRack().state()[slot].instrumentId == demoId, "slot identity restored");
   check(channelOf(*second, slot) == channelOf(*first, slot), "MIDI channel restored");
@@ -363,54 +360,22 @@ void projectsRestore() {
   check(energy(render(*without, 20, phrase), 0, 20) == 0.0, "missing package slot is silent");
   juce::MemoryBlock resaved;
   without->getStateInformation(resaved);
-  auto back = makeProcessor(packageRoot);
+  auto back = makeProcessor(instrumentsDir);
   back->setStateInformation(resaved.getData(), static_cast<int>(resaved.getSize()));
   back->prepareToPlay(sampleRate, blockSize);
   check(render(*back, 40, phrase) == a, "restored package recovers the same sound");
 }
 
-void malformedPackagesAreRejected(const fs::path &scratch) {
-  const auto source = native::resolvePackages(packageRoot);
-  check(source.modules.size() == 1, "one demo package in the root");
-  const auto versionDir = source.modules.front().parent_path().parent_path().parent_path();
-  auto clone = [&](const char *name) {
-    const auto root = scratch / name;
-    fs::remove_all(root);
-    const auto target = root / versionDir.parent_path().filename() / versionDir.filename();
-    fs::create_directories(target);
-    fs::copy(versionDir, target, fs::copy_options::recursive);
-    return std::make_pair(root, target);
-  };
-  {
-    auto [root, dir] = clone("bad-sha");
-    std::ifstream in(dir / "manifest.json");
-    std::string text((std::istreambuf_iterator<char>(in)), {});
-    in.close();
-    const auto at = text.find("\"sha256\": \"") + 11;
-    text[at] = text[at] == '0' ? '1' : '0';
-    std::ofstream(dir / "manifest.json", std::ios::trunc) << text;
-    const auto report = native::loadPackages(root);
-    check(report.providers.empty() && !report.diagnostics.empty(),
-          "wrong SHA-256 is rejected with a diagnostic");
-  }
-  {
-    auto [root, dir] = clone("truncated");
-    const auto module = fs::path(dir) / fs::relative(source.modules.front(), versionDir);
-    fs::resize_file(module, 512);
-    const auto report = native::loadPackages(root);
-    check(report.providers.empty() && !report.diagnostics.empty(),
-          "corrupt module is rejected with a diagnostic");
-    auto p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
-                                                       native::loadPackages(root));
-    check(!p->nativeModuleDiagnostics().empty(), "Rack still starts and reports the package");
-  }
-}
-
 // The module itself rejects malformed host input without touching state.
 void moduleRejectsInvalidInput() {
-  const auto selection = native::resolvePackages(packageRoot);
+  // The module as the Rack loads it: the verified copy in the per-user cache.
+  fs::path modulePath;
+  for (const auto &entry : fs::recursive_directory_iterator(cacheRoot))
+    if (entry.path().stem() == "VoxDemoSynth" && entry.is_regular_file())
+      modulePath = entry.path();
+  check(!modulePath.empty(), "the Demo module is in the instrument cache");
   std::string diagnostic;
-  auto module = native::NativeModule::acquire(selection.modules.front(), diagnostic);
+  auto module = native::NativeModule::acquire(modulePath, diagnostic);
   check(module != nullptr, "module acquired: " + diagnostic);
   const auto &t = module->table();
   const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2,
@@ -476,7 +441,7 @@ void moduleRejectsInvalidInput() {
 }
 
 void noAllocationWhilePlaying() {
-  auto p = makeProcessor(packageRoot);
+  auto p = makeProcessor(instrumentsDir);
   const auto slot = loadDemo(*p, 7);
   const int ch = channelOf(*p, slot);
   juce::AudioBuffer<float> audio(2, blockSize);
@@ -511,20 +476,20 @@ void noAllocationWhilePlaying() {
 
 int main(int argc, char **argv) {
   if (argc != 3) {
-    std::cerr << "usage: demo_synth_tests <demo package root> <scratch dir>\n";
+    std::cerr << "usage: demo_synth_tests <instruments folder> <scratch dir>\n";
     return 2;
   }
-  packageRoot = fs::absolute(argv[1]);
-  const fs::path scratch = fs::absolute(argv[2]);
+  instrumentsDir = fs::absolute(argv[1]);
+  cacheRoot = fs::absolute(argv[2]) / "cache";
+  fs::remove_all(cacheRoot);
   juce::ScopedJuceInitialiser_GUI gui;
-  loadsFromDevelopmentRootLikeADaw();
+  loadsFromTheInstrumentsFolder();
   freshRackSlot5AndHostIdentity();
   pitchAndVelocity();
   releaseSustainAndAllOff();
   parametersReachTheDsp();
   slotsAreIndependent();
   projectsRestore();
-  malformedPackagesAreRejected(scratch);
   moduleRejectsInvalidInput();
   noAllocationWhilePlaying();
   std::cout << "demo_synth_tests: " << checks << " checks passed\n";

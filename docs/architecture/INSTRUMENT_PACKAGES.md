@@ -2,7 +2,8 @@
 
 Status: **SUPERSEDED** 28.10.2026 by [instrument module ABI V2](INSTRUMENT_MODULE_ABI.md):
 the owner chose native modules behind a C ABI, not data-only packages. Kept for
-history; the parameter-pool parts live on in the parameter contract.
+history; the parameter-pool parts live on in the parameter contract. The
+current package format is [VINS_PACKAGES.md](VINS_PACKAGES.md).
 
 ## Owner decisions (27.10.2026)
 

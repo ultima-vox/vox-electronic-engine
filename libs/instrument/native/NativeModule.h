@@ -73,12 +73,14 @@ makeProvider(std::shared_ptr<NativeModule> module);
 // instances are unaffected. Readable from any thread.
 [[nodiscard]] std::uint64_t totalModuleFaults() noexcept;
 
-// Development/test loading: absolute module paths separated by ';'. Each
-// entry is loaded independently; failures are reported, never thrown.
+// Providers found by a loader, plus its diagnostics (never thrown). The Rack's
+// only production loader is vins::loadInstalled() (instrument/vins).
 struct LoadReport {
   std::vector<std::unique_ptr<InstrumentProvider>> providers;
   std::vector<std::string> diagnostics;
 };
+// Test harness only (native_rack_tests): absolute module paths separated by
+// ';', loaded independently. Not used by the Rack; no trust check.
 [[nodiscard]] LoadReport loadConfiguredModules(std::string_view pathList);
 
 } // namespace vstengine::instrument::native

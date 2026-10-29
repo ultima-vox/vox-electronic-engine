@@ -1,46 +1,43 @@
 # Vox Demo Synth in Vox Rack — Cubase test guide (Windows x64)
 
-Development mode only: unsigned module, environment-variable package root, no
-installer. CTest results do not count as DAW acceptance. Record the result of
-every step in the table at the end.
+Install by copying files: no installer, scripts or environment variables.
+CTest results do not count as DAW acceptance. Record the result of every step
+in the table at the end.
+
+**Signing.** CI builds sign the native `.vins` packages with a development
+publisher key that is generated in the CI build tree. A package loads only in
+the Rack from the **same CI run**; `build-info.txt` names the key. The real
+release key is not set up yet (release blocker, #77 gate 3).
 
 ## 0. Downloads (one CI run, same commit)
 
 | Artifact | Contents |
 | --- | --- |
-| `Vox-Electronic-Engine-Windows` | `VstEngine_artefacts/Release/VST3/Vox Electronic Engine.vst3` (Rack) |
-| `Vox-Demo-Synth-Package-Windows` | `com.ultimavox.demo-synth.voxinst/1.0.0/{manifest.json, module/x64/VoxDemoSynth.dll}` |
-| `Vox-Demo-Synth-Cubase-Guide` | this guide, `install-demo-package.ps1`, `vox-demo-synth-test-phrase.mid`, `build-info.txt` (commit, Rack and module SHA-256) |
+| `Vox-Music-Install-Windows` | `vox music\Vox Electronic Engine.vst3` plus `vox music\instruments\VoxDemoSynth.vins` and `VoxDemoSynthGraph.vins`, already in the install layout |
+| `Vox-Demo-Synth-Cubase-Guide` | this guide, `vox-demo-synth-test-phrase.mid`, the graph smoke guide, `build-info.txt` (commit, publisher key, SHA-256 of the Rack and of each `.vins`) |
 
-## 1. Install the Rack (once)
+## 1. Install (once)
 
 1. Close Cubase.
-2. Copy the folder `Vox Electronic Engine.vst3` to
-   `C:\Program Files\Common Files\VST3\` (replace an older copy).
-3. Confirm you are testing this build, not an older copy:
-   `Get-FileHash "C:\Program Files\Common Files\VST3\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"`
-   The hash must equal "Rack SHA-256" in `build-info.txt` (which also names the
-   head commit). It must not change in any later step. If it differs, an older
-   Rack is installed (remove other copies of `Vox Electronic Engine.vst3`,
-   then let Cubase rescan).
-
-## 2. Install the Demo Synth package
-
-1. Extract `Vox-Demo-Synth-Package-Windows` to a folder, for example
-   `C:\VoxDev\download`.
-2. Run in PowerShell:
+2. Remove any older `Vox Electronic Engine.vst3` from
+   `C:\Program Files\Common Files\VST3\`, including copies directly in that
+   folder. Cubase must find exactly one.
+3. Copy the folder `vox music` from `Vox-Music-Install-Windows` to
+   `C:\Program Files\Common Files\VST3\`. The result:
    ```
-   powershell -ExecutionPolicy Bypass -File install-demo-package.ps1 -PackageZipDir C:\VoxDev\download
+   C:\Program Files\Common Files\VST3\vox music\Vox Electronic Engine.vst3
+   C:\Program Files\Common Files\VST3\vox music\instruments\VoxDemoSynth.vins
+   C:\Program Files\Common Files\VST3\vox music\instruments\VoxDemoSynthGraph.vins
    ```
-   This copies the package to
-   `C:\VoxDev\instruments\com.ultimavox.demo-synth.voxinst\1.0.0\`, checks the
-   DLL SHA-256 against the manifest and sets the user environment variable
-   `VOX_DEV_INSTRUMENT_ROOT=C:\VoxDev\instruments`.
-3. Start Cubase **after** this (from the Start menu). If the instrument does
-   not appear in step 3, sign out and in once so Cubase inherits the variable.
+4. Confirm you are testing this build:
+   `Get-FileHash "C:\Program Files\Common Files\VST3\vox music\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"`
+   The hash must equal "Rack SHA-256" in `build-info.txt`, and it must not
+   change in any later step. The same check works for each `.vins` file.
+5. Start Cubase.
 
-Manual alternative: copy the folder yourself and set the variable in
-*System Properties → Environment Variables → User variables*.
+The Rack reads only `vox music\instruments` next to its own VST3. On first
+use it copies the verified module to
+`%LOCALAPPDATA%\Vox Music\Cache` and loads it from there.
 
 ## 3. Cubase procedure
 
@@ -56,8 +53,8 @@ Manual alternative: copy the folder yourself and set the variable in
 | 8 | Transport stop and the Rack's Panic (if the note hangs, use Cubase *Reset*) | Sound stops immediately; next note plays normally |
 | 9 | Set distinct values (e.g. Wave Square, Cutoff 1500 Hz, Release 1 s). Save the project, quit Cubase, reopen the project | Slot 1 still Vox Demo Synth on CH1; all eight values identical; the phrase sounds the same |
 | 10 | Second instance: another Instrument track with Vox Electronic Engine, Demo Synth in its slot 1, different Wave | Both tracks play independently with their own settings |
-| 11 | Quit Cubase. Rename `C:\VoxDev\instruments\com.ultimavox.demo-synth.voxinst` to `...voxinst.off`. Reopen the project | Rack loads; slot 1 still shows Vox Demo Synth (missing), silent; no crash. Save the project once |
-| 12 | Quit Cubase, rename the folder back, reopen | Sound and all eight values return |
+| 11 | Quit Cubase. Move `vox music\instruments\VoxDemoSynth.vins` out of the folder (e.g. to the Desktop). Reopen the project | Rack loads; slot 1 still shows Vox Demo Synth (missing), silent; no crash. Save the project once |
+| 12 | Quit Cubase, move the file back, reopen | Sound and all eight values return |
 | 13 | Compare the Rack binary hash with step 1.3 | Unchanged |
 
 Parameter identities: slot N, endpoint K is `slotNN.pKKK`; Demo Synth uses
@@ -73,8 +70,9 @@ build). Check the hash in step 1.3 and start from a new empty project.
 
 ## 4. Uninstall
 
-Delete `C:\VoxDev\instruments\com.ultimavox.demo-synth.voxinst` and remove the
-user variable `VOX_DEV_INSTRUMENT_ROOT`.
+- **One instrument:** delete its `.vins` file from `vox music\instruments`.
+- **Everything:** delete the `vox music` folder, and optionally
+  `%LOCALAPPDATA%\Vox Music\Cache`.
 
 ## 5. Results (fill in)
 

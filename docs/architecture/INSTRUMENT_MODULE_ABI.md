@@ -26,18 +26,12 @@ No hot DLL unload, no crash isolation (an in-process DLL failure is a DAW
 failure), no third-party plugin hosting, no licensing/encryption, no visual
 redesign. V1 (`InstrumentAbi.h`) is not mutated; V2 is a separate header.
 
-## Package layout (Windows 10/11 x64 first)
+## Package layout
 
-```
-<packId>.voxinst/<packVersion>/
-  manifest.json      packId, packVersion, instrumentIds, abi range, arch, files + SHA-256
-  module/x64/<name>.dll
-  ui/                declarative workspace (ui.json) + images/fonts
-  content/           Sound presets, Pattern presets, Generator profiles
-```
-
-Manifest hashes detect **accidental corruption only**. Authenticity is a
-separate rule (see [Native code trust](#native-code-trust)).
+Superseded by [VINS_PACKAGES.md](VINS_PACKAGES.md): one `.vins` ZIP archive
+file per instrument, next to the VST3. A native package carries
+`module/win-x64/<name>.dll` plus a publisher signature over `manifest.json`.
+The earlier `<packId>.voxinst/<version>/` folder layout no longer exists.
 
 ## Binary contract
 

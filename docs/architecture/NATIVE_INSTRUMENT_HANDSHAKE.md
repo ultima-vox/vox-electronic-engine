@@ -11,7 +11,7 @@ C++ providers linked into the Rack. M1/M2 need them as separate DLLs.
 | # | Topic | Rack proposal | Owner of the work |
 | --- | --- | --- | --- |
 | 1 | Binary | Each instrument is its own CMake shared-library target exporting only `voxModuleEntryV2` from `VoxModuleAbiV2.h`. JUCE/STL may be used inside the DLL, never across it. No Rack sources linked in. | Instrument owner |
-| 2 | Package | `<packId>.voxinst/<packVersion>/manifest.json` + `module/x64/<name>.dll` (+ `ui/`, `content/` later). `instrumentIds` in the manifest must equal the module's descriptors. | Instrument owner builds; Rack resolves |
+| 2 | Package | One signed `.vins` file ([VINS_PACKAGES.md](VINS_PACKAGES.md)): `manifest.json`, `manifest.sig`, `module/win-x64/<name>.dll` (+ resources later). The manifest's `instruments` must equal the module's descriptors. Build it with `vox_add_vins(... KIND native MODULE_TARGET <target>)`. | Instrument owner builds; Rack verifies and loads |
 | 3 | Parameters | Every host control is a typed `VoxParameterDescriptorV2` with real units, ranges, defaults, choices and an explicit `poolIndex`. Indices never move or get reused; new controls append. Proposed: Acid 0..79 (its inventory), Bass 0..12. | Instrument owner declares; Rack binds |
 | 4 | Pool size | Develop against an experimental 128-per-slot layout (Acid needs 80); `slotNN.p001..p064` stay stable. Final 96/128 only after Cubase/REAPER comparison. | Rack owner + project owner |
 | 5 | Acid specifics | `waveform`: float if the DSP blends continuously, choice only if it switches. The four packed play flags become four boolean controls; packing stays a private state detail. | Acid owner |

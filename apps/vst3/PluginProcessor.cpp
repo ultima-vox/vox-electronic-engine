@@ -1,10 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "FactoryGraphs.h"
 #include "core/ResourceLimits.h"
-#include "dspcore/GraphInstrument.h"
 #include "instrument/HostParameterSchema.h"
-#include "instrument/native/ModulePackages.h"
+#include "instrument/vins/VinsPackage.h"
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/MidiExport.h"
 #include "modules/BuiltInProvider.h"
@@ -111,60 +109,17 @@ vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
   diagnostics = std::move(native.diagnostics);
   for (auto &nativeProvider : native.providers)
     if (!registry.registerProvider(std::move(nativeProvider), diagnostic))
-      diagnostics.push_back("native module rejected: " + diagnostic);
+      diagnostics.push_back("instrument package rejected: " + diagnostic);
   native.providers.clear();
   return registry;
 }
 
-namespace {
-// Development/test only: an explicitly configured list of trusted absolute
-// module paths (';'-separated), plus an explicitly configured absolute
-// development package root (VOX_DEV_INSTRUMENT_ROOT) resolved by version. There
-// is no default/production scanning; production discovery waits for the
-// reviewed package and signing policy.
-// PRODUCTION GATE (open): this loader is active in every build when either
-// variable is set. Before any production distribution it must be compiled out
-// of normal builds or require an unmistakable explicit development opt-in;
-// manifest SHA-256 detects corruption only, it does not authenticate code.
-vstengine::instrument::native::LoadReport configuredNativeModules() {
-  namespace native = vstengine::instrument::native;
-  const auto paths =
-      juce::SystemStats::getEnvironmentVariable("VOX_DEV_NATIVE_MODULES", {});
-  auto report = native::loadConfiguredModules(paths.toStdString());
-  const auto root =
-      juce::SystemStats::getEnvironmentVariable("VOX_DEV_INSTRUMENT_ROOT", {})
-          .trim();
-  if (root.isNotEmpty()) {
-    const auto utf8 = root.toStdString();
-    auto packages = native::loadPackages(std::filesystem::path(std::u8string(
-        reinterpret_cast<const char8_t *>(utf8.data()), utf8.size())));
-    for (auto &provider : packages.providers)
-      report.providers.push_back(std::move(provider));
-    for (auto &diagnostic : packages.diagnostics)
-      report.diagnostics.push_back(std::move(diagnostic));
-  }
-  return report;
-}
-
-// Factory graph instruments (#75): graph.json patches compiled into the
-// plugin and run by the DSP Core. No DLL is loaded, so no trust gate applies.
-vstengine::instrument::native::LoadReport withFactoryGraphs(
-    vstengine::instrument::native::LoadReport report) {
-  for (const auto json : vstengine::factory::graphs) {
-    std::string why;
-    auto patch = vstengine::dspcore::loadPatch(std::string(json), why);
-    if (patch == nullptr)
-      report.diagnostics.push_back("factory graph rejected: " + why);
-    else
-      report.providers.push_back(vstengine::dspcore::makeGraphProvider(std::move(patch)));
-  }
-  return report;
-}
-} // namespace
-
+// The DAW constructor: instruments come only from the .vins packages in the
+// instruments folder next to this VST3 (graph, or native signed by a publisher
+// key pinned into this build). No environment variables, no other roots.
 VstEngineAudioProcessor::VstEngineAudioProcessor()
     : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider(),
-                              withFactoryGraphs(configuredNativeModules())) {}
+                              vstengine::instrument::vins::loadInstalled()) {}
 
 VstEngineAudioProcessor::VstEngineAudioProcessor(
     std::unique_ptr<vstengine::instrument::InstrumentProvider> provider)

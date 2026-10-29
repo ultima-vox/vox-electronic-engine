@@ -65,43 +65,51 @@ jobs:
           path: build/visual-gate/*.png
           if-no-files-found: error
 
-      - name: Upload test instrument module
-        uses: actions/upload-artifact@v4
-        with:
-          name: Vox-Test-Instrument-Module-Windows
-          path: |
-            build/Release/vox_abi_v2_test_module.dll
-            build/packages/**
-          if-no-files-found: error
-
-      - name: Upload Vox Demo Synth package
-        uses: actions/upload-artifact@v4
-        with:
-          name: Vox-Demo-Synth-Package-Windows
-          path: build/demo-packages/**
-          if-no-files-found: error
-
-      - name: Assemble Vox Demo Synth Cubase guide
+      - name: Assemble install layout and Cubase guide
         shell: powershell
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          # Install layout exactly as on the user's machine:
+          #   vox music\Vox Electronic Engine.vst3, vox music\instruments\*.vins
+          # The publisher private key (build\publisher) is never copied.
+          $layout = Join-Path $PWD "build\install-layout\vox music"
+          if (Test-Path (Join-Path $PWD "build\install-layout")) { Remove-Item -Recurse -Force (Join-Path $PWD "build\install-layout") }
+          New-Item -ItemType Directory -Force -Path (Join-Path $layout "instruments") | Out-Null
+          Copy-Item -Recurse "build\VstEngine_artefacts\Release\VST3\Vox Electronic Engine.vst3" $layout
+          $vins = Get-ChildItem "build\instruments\*.vins"
+          if ($vins.Count -lt 2) { throw "expected the Demo .vins packages in build\instruments" }
+          Copy-Item $vins (Join-Path $layout "instruments")
+          $rack = Join-Path $layout "Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
+          if (-not (Test-Path $rack)) { throw "missing $rack" }
+          $key = (& "build\Release\vox_vins_pack.exe" keyid "build\publisher\publisher.modulus")
+          if ($LASTEXITCODE -ne 0) { throw "cannot read the publisher key id" }
           $guide = Join-Path $PWD "build\demo-guide"
           if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
           New-Item -ItemType Directory -Force -Path $guide | Out-Null
           Copy-Item docs\testing\demo-synth\* $guide
           Copy-Item docs\testing\demo-synth-graph\* $guide
-          $rack = "build\VstEngine_artefacts\Release\VST3\Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
-          $dll = "build\demo-packages\com.ultimavox.demo-synth.voxinst\1.0.0\module\x64\VoxDemoSynth.dll"
-          foreach ($f in @($rack, $dll)) { if (-not (Test-Path $f)) { throw "missing $f" } }
-          @(
+          $lines = @(
             "Head commit: $env:HEAD_SHA"
             "Built commit (PR merge ref): $env:GITHUB_SHA"
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "BUILD TYPE: DEVELOPMENT - not a production artifact (no release publisher key; #77 gate 3 is BLOCKED)"
+            "Publisher key (id, bits): $key - development key of this CI build tree, not a release key; native .vins from other runs do not load"
             "Rack SHA-256: $((Get-FileHash -Algorithm SHA256 $rack).Hash.ToLower())"
-            "VoxDemoSynth.dll SHA-256: $((Get-FileHash -Algorithm SHA256 $dll).Hash.ToLower())"
-          ) | Set-Content (Join-Path $guide "build-info.txt")
+          )
+          foreach ($f in Get-ChildItem (Join-Path $layout "instruments\*.vins")) {
+            $lines += "$($f.Name) SHA-256: $((Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower())"
+          }
+          $lines | Set-Content (Join-Path $guide "build-info.txt")
+          Copy-Item (Join-Path $guide "build-info.txt") $layout
           Get-Content (Join-Path $guide "build-info.txt")
+
+      - name: Upload install layout
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Music-Install-Windows
+          path: build/install-layout/**
+          if-no-files-found: error
 
       - name: Upload Vox Demo Synth Cubase guide
         uses: actions/upload-artifact@v4
@@ -123,3 +131,10 @@ jobs:
             build/*.exe
             build/*.zip
           if-no-files-found: error
+
+      - name: Remove the development publisher key from the runner
+        if: always()
+        shell: powershell
+        run: |
+          # The per-run development private keys must not outlive the job.
+          if (Test-Path build\publisher) { Get-ChildItem build\publisher\*.pem | Remove-Item -Force }
