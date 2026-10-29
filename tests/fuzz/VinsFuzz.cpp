@@ -51,8 +51,10 @@ Bytes mutate(Bytes b, std::mt19937_64 &rng) {
     case 3: b.resize(pick(b.size() + 1)); break;
     case 4: { // duplicate a range
       const auto from = pick(b.size()), len = pick(std::min<std::size_t>(64, b.size() - from) + 1);
-      b.insert(b.begin() + static_cast<std::ptrdiff_t>(pick(b.size())), b.begin() + static_cast<std::ptrdiff_t>(from),
-               b.begin() + static_cast<std::ptrdiff_t>(from + len));
+      // Copy first: inserting a vector's own range into itself is undefined.
+      const Bytes chunk(b.begin() + static_cast<std::ptrdiff_t>(from),
+                        b.begin() + static_cast<std::ptrdiff_t>(from + len));
+      b.insert(b.begin() + static_cast<std::ptrdiff_t>(pick(b.size())), chunk.begin(), chunk.end());
       break;
     }
     case 5: b.insert(b.begin() + static_cast<std::ptrdiff_t>(pick(b.size() + 1)), pick(16) + 1,
