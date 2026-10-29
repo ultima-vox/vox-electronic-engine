@@ -10,11 +10,12 @@ A provider opts in with `InstrumentDescriptor::directParameters = true`.
 Each base value has a stable `ParameterDescriptor.id`, name, unit, group, type,
 minimum, maximum, default and step; choices have ordered stable labels.
 
-**Fixed host pool** (owner decision 27.10.2026, Kontakt model): every slot
-exposes the same 64 generic endpoints `slotNN.pKKK` (NN=01..16, KKK=001..064),
+**Fixed host pool** (Kontakt model; size fixed at 128 for 1.0, #77 gate 5):
+every slot exposes the same 128 generic endpoints `slotNN.pKKK` (NN=01..16,
+KKK=001..128, 2048 in total),
 created once at processor construction whatever the catalog contains. Loading
 an instrument binds each named parameter to the slot's pool endpoint given by
-its required, unique `ParameterDescriptor::poolIndex` (0..63), independent of
+its required, unique `ParameterDescriptor::poolIndex` (0..127), independent of
 descriptor order; a bound endpoint takes that parameter's range, name ("Slot N Name"),
 unit and value text and the host is told that parameter info changed. Unused
 and dormant endpoints are unbound ("Slot N Param KK", neutral value 0).
@@ -59,8 +60,8 @@ are 0/1; integer and choice bounds are exact float integers within ±16,777,215;
 choices contain at most 256 labels. Floating values use the declared range and
 step, or continuous values when step=0. Defaults must be finite and in range.
 
-Bounds: 64 direct parameters per instrument (the pool size), 512 unique named
-parameters in the compiled catalog. Only the bound bank's at most 64 cached
+Bounds: 128 direct parameters per instrument (the pool size), 512 unique named
+parameters in the compiled catalog. Only the bound bank's at most 128 cached
 atomics are read per slot/block.
 Catalog registration and APVTS construction occur outside processing. Catalog
 changes that alter existing endpoint meaning require explicit review/versioning.

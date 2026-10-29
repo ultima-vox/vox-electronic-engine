@@ -880,10 +880,10 @@ void metadataAndCatalogBounds() {
             hostparams::directKey("test.b", "p000"),
         "same parameter ID in different instruments has independent key");
   CHECK(hostparams::poolId(0, 0) == "slot01.p001" &&
-            hostparams::poolId(15, poolParametersPerSlot - 1) == "slot16.p064" &&
-            hostparams::isPoolId("slot16.p064") &&
+            hostparams::poolId(15, poolParametersPerSlot - 1) == "slot16.p128" &&
+            hostparams::isPoolId("slot16.p128") &&
             !hostparams::isPoolId("slot17.p001") &&
-            !hostparams::isPoolId("slot01.p065") &&
+            !hostparams::isPoolId("slot01.p129") &&
             !hostparams::isPoolId("slot01.send.1.pre"),
         "each slot receives independent stable pool endpoints");
   CHECK(hostparams::macroId(0, 0) == "slot01Macro01",
