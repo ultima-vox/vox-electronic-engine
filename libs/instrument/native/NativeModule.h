@@ -31,6 +31,11 @@ inline constexpr std::uint32_t maxChoices = 128;
 // exposed with a pool index inside this build's pool.
 [[nodiscard]] bool importDescriptor(const VoxInstrumentDescriptorV2 *descriptor,
                                     InstrumentDescriptor &out, std::string &diagnostic);
+// Reads the pattern caps and factory patterns of `descriptor.id` from a
+// module's content table into descriptor.patternContent. Strict: anything
+// malformed rejects the instrument. Controller thread.
+[[nodiscard]] bool importContent(const VoxContentApiV2 *content,
+                                 InstrumentDescriptor &descriptor, std::string &diagnostic);
 
 // One loaded module. Process-wide: the same library is loaded and entered at
 // most once per process and stays loaded until the process exits (no hot

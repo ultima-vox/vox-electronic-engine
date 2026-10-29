@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 #define TEST_ID "test.abi.v2.tone"
@@ -51,6 +52,8 @@ struct VoxInstanceT {
   int prepared;
   int failProcess, failReset; /* one-shot injected faults, for host tests */
   uint32_t processCalls, resetCalls; /* entry counters, for host tests */
+  uint64_t patternGeneration; /* last snapshot seen in process, for host tests */
+  uint32_t patternChecksum;
 };
 
 static int liveInstances;
@@ -89,6 +92,62 @@ VOX_EXPORT uint32_t VOX_CALL voxTestCalls(uint32_t slotIndex, uint32_t which) {
                ((which & TEST_FAIL_RESET) ? live[i]->resetCalls : 0u);
   return total;
 }
+
+/* Test hook (not part of the ABI): generation and checksum of the last pattern
+ * snapshot a live instance for Rack slot `slotIndex` saw in process (0 if none). */
+VOX_EXPORT uint64_t VOX_CALL voxTestPatternSeen(uint32_t slotIndex, uint32_t *checksum) {
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex) {
+      *checksum = live[i]->patternChecksum;
+      return live[i]->patternGeneration;
+    }
+  *checksum = 0;
+  return 0;
+}
+
+/* Pattern content: two lanes on notes 60/64, velocity + accent, one factory
+ * pattern. The tone plays host MIDI; the snapshot is only observed. */
+static const char *const laneNames[] = {"Low", "High"};
+static const uint8_t laneNotes[] = {60, 64};
+static const VoxPatternCapsV2 patternCaps = {
+    sizeof(VoxPatternCapsV2), VOX_MODULE_ABI_V2, VOX_PATTERN_PLAYBACK_INTERNAL, 2, 16, 2,
+    VOX_FIELD_VELOCITY | VOX_FIELD_ACCENT, 1, laneNames, laneNotes};
+
+static VoxResult VOX_CALL getPatternCaps(const char *id, const VoxPatternCapsV2 **out) {
+  if (id == NULL || out == NULL)
+    return VOX_E_INVALID_ARG;
+  *out = strcmp(id, TEST_ID) == 0 ? &patternCaps : NULL;
+  return VOX_OK;
+}
+
+static VoxResult VOX_CALL getFactoryPattern(const char *id, uint32_t index, const char **name,
+                                            VoxPatternV2 *p) {
+  if (id == NULL || strcmp(id, TEST_ID) != 0 || index != 0 || name == NULL || p == NULL ||
+      p->structSize < sizeof(VoxPatternV2) || p->version != VOX_MODULE_ABI_V2 ||
+      p->cells == NULL || p->cellStride < sizeof(VoxPatternStepV2) || p->cellCapacity < 8)
+    return VOX_E_INVALID_ARG;
+  p->laneCount = 2;
+  p->stepsPerBar = 4;
+  p->barCount = 1;
+  p->timing = VOX_TIMING_SIXTEENTH;
+  for (uint32_t i = 0; i < 8; ++i) {
+    VoxPatternStepV2 *s = (VoxPatternStepV2 *)((uint8_t *)p->cells + (size_t)i * p->cellStride);
+    memset(s, 0, sizeof(*s));
+    s->velocity = VOX_STEP_DEFAULT_VELOCITY;
+    s->gate = VOX_STEP_DEFAULT_GATE;
+    s->probability = VOX_STEP_DEFAULT_PROBABILITY;
+    s->ratchet = VOX_STEP_DEFAULT_RATCHET;
+    if (i == 0 || i == 6) {
+      s->flags = VOX_STEP_ON | (i == 0 ? VOX_STEP_ACCENT : 0u);
+      s->velocity = (uint8_t)(i == 0 ? 120 : 70);
+    }
+  }
+  *name = "Test Pulse";
+  return VOX_OK;
+}
+
+static const VoxContentApiV2 contentApi = {sizeof(VoxContentApiV2), VOX_MODULE_ABI_V2,
+                                           getPatternCaps, getFactoryPattern};
 
 static int validValue(uint32_t index, float value) {
   const VoxParameterDescriptorV2 *p = &parameters[index];
@@ -222,7 +281,7 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   if (s != NULL)
     ++s->processCalls;
   if (s == NULL || c == NULL || !s->prepared ||
-      c->structSize < sizeof(VoxProcessContextV2) || c->version != VOX_MODULE_ABI_V2 ||
+      c->structSize < VOX_PROCESS_CONTEXT_V2_BASE_SIZE || c->version != VOX_MODULE_ABI_V2 ||
       c->numSamples > s->maxBlock || c->outputChannelCount != s->outputChannels ||
       c->outputs == NULL || (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0 ||
       c->transport == NULL || c->transport->structSize < sizeof(VoxTransportV2) ||
@@ -247,6 +306,21 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
     return VOX_E_INTERNAL;
   }
 
+  /* Appended field: read only when the host's context covers it. */
+  if (c->structSize >= offsetof(VoxProcessContextV2, patternGeneration) + sizeof(uint64_t) &&
+      c->pattern != NULL && c->pattern->cells != NULL) {
+    const VoxPatternV2 *p = c->pattern;
+    const uint32_t cells = p->laneCount * p->stepsPerBar * p->barCount;
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < cells && i < p->cellCapacity; ++i) {
+      const VoxPatternStepV2 *step =
+          (const VoxPatternStepV2 *)((const uint8_t *)p->cells + (size_t)i * p->cellStride);
+      if (step->flags & VOX_STEP_ON)
+        sum += (i + 1) * step->velocity;
+    }
+    s->patternGeneration = c->patternGeneration;
+    s->patternChecksum = sum;
+  }
   if (c->releaseFlags & VOX_PANIC_AT_START) {
     s->note = -1;
     s->phase = 0.0;
@@ -333,7 +407,7 @@ static VoxResult VOX_CALL shutdown(void) {
 
 static const VoxModuleV2 moduleTable = {
     sizeof(VoxModuleV2), VOX_MODULE_ABI_V2, 1, 0, getInstrument, create, destroy, prepare,
-    setAllParameters, reset, process, saveState, loadState, NULL, NULL, shutdown};
+    setAllParameters, reset, process, saveState, loadState, &contentApi, NULL, shutdown};
 
 VOX_EXPORT VoxResult VOX_CALL voxModuleEntryV2(uint32_t hostAbiVersion,
                                                const VoxHostServicesV2 *host,

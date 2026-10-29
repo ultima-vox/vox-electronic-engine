@@ -1,5 +1,6 @@
 #pragma once
 #include "instrument/InstrumentAbi.h"
+#include "pattern/Pattern.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -114,6 +115,9 @@ struct InstrumentDescriptor {
     std::vector<ParameterDescriptor> parameters;
     // Internal host integration policy, not an extension of the external C ABI.
     bool directParameters{};
+    // Pattern capabilities and factory patterns declared through
+    // VoxContentApiV2, validated at load. Null: the instrument has no pattern.
+    std::shared_ptr<const pattern::Content> patternContent;
 };
 
 struct ParameterValue {
@@ -187,6 +191,9 @@ struct ProcessBlock {
     double bpm {};
     double ppqPosition {};
     bool transportPlaying {};
+    // Immutable pattern snapshot owned by the Rack for this call, or null.
+    const VoxPatternV2* pattern {};
+    std::uint64_t patternGeneration {};
 };
 
 class InstrumentInstance {
