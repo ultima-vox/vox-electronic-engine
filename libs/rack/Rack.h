@@ -33,6 +33,15 @@ public:
   bool updatePatternState(std::size_t slotIndex, std::string presetId,
                           std::uint32_t schemaVersion,
                           std::vector<std::byte> payload);
+  // Rack-owned V2 pattern of an INTERNAL-playback instrument (controller
+  // thread). setPattern validates against the slot's caps, stores the VPT2
+  // payload and publishes a snapshot to the audio thread; patternPreset
+  // records the factory name, or is cleared for a user edit.
+  bool setPattern(std::size_t slotIndex, const pattern::Pattern &,
+                  std::string &diagnostic);
+  bool loadFactoryPattern(std::size_t slotIndex, std::size_t factoryIndex,
+                          std::string &diagnostic);
+  [[nodiscard]] bool pattern(std::size_t slotIndex, pattern::Pattern &out) const;
   bool configureModulation(std::size_t slotIndex,
                            std::span<const modulation::Route> routes,
                            std::string &diagnostic);
@@ -89,6 +98,8 @@ private:
         };
         std::array<DirectBinding, instrument::maxDirectParameters> direct{};
         std::size_t directCount{};
+        // INTERNAL-playback instruments: snapshots of the Rack-owned pattern.
+        std::unique_ptr<pattern::SnapshotBuffer> patterns;
     };
     bool buildSlot(std::size_t, const PersistentSlotState&,
                    instrument::ResourceResolver*, SlotRuntime&,

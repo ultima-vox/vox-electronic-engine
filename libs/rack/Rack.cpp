@@ -53,6 +53,27 @@ const instrument::ParameterDescriptor* findParameter(
         if (parameter.id == id) return &parameter;
     return nullptr;
 }
+// Pattern content of an instrument whose pattern the Rack owns and the module
+// plays itself; null for HOST-playback or pattern-less instruments.
+const pattern::Content *internalPattern(
+    const instrument::InstrumentDescriptor &descriptor) noexcept {
+  const auto *content = descriptor.patternContent.get();
+  return content != nullptr &&
+                 content->caps.playback == VOX_PATTERN_PLAYBACK_INTERNAL
+             ? content
+             : nullptr;
+}
+// Init pattern of a freshly loaded INTERNAL instrument: its first factory
+// pattern, or an all-rest pattern if it ships none.
+void initializePattern(PersistentSlotState &state, const pattern::Content &content) {
+  const auto init = std::make_unique<pattern::Pattern>(
+      content.factory.empty() ? pattern::emptyPattern(content.caps)
+                              : *content.factory.front().pattern);
+  state.patternSchemaVersion = VOX_PATTERN_SCHEMA_V2;
+  pattern::encode(*init, state.patternPayload);
+  state.patternPreset = content.factory.empty() ? std::string{}
+                                                : content.factory.front().name;
+}
 void initializeDirect(PersistentSlotState &state,
                       const instrument::InstrumentDescriptor &descriptor) {
   // Never canonicalize a future/unresolved module with today's descriptor.
@@ -62,10 +83,13 @@ void initializeDirect(PersistentSlotState &state,
       (state.contentVersion != 0 &&
        state.contentVersion != descriptor.contentVersion) ||
       state.instrumentStateVersion > descriptor.stateVersion ||
-      state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V1)
+      state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V2)
     return;
   if (state.instrumentVersion == 0 && state.modulePayload.empty())
     state.instrumentStateVersion = descriptor.stateVersion;
+  if (const auto *content = internalPattern(descriptor);
+      content != nullptr && state.instrumentVersion == 0 && state.patternPayload.empty())
+    initializePattern(state, *content);
   if (descriptor.directParameters && state.directParameters.empty() &&
       state.modulePayload.empty())
     for (const auto &parameter : descriptor.parameters)
@@ -203,7 +227,7 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         runtimeState.resolution = instrument::ResolutionStatus::missingModule;
         return true;
     }
-    if (state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V1) {
+    if (state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V2) {
         runtimeState.resolution = instrument::ResolutionStatus::incompatibleSchema;
         diagnostic = "instrument pattern schema is newer than host";
         return true;
@@ -223,6 +247,22 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         return prepared.resolution.status !=
                instrument::ResolutionStatus::constructionFailed;
         // Missing/incompatible identity remains a valid unresolved slot.
+    }
+    // The Rack is the only durable owner of an INTERNAL pattern: it must be a
+    // valid V2 pattern for exactly these caps, or the slot is rejected.
+    if (const auto *content = internalPattern(*target.descriptor)) {
+      auto decoded = std::make_unique<pattern::Pattern>();
+      std::string why;
+      if (state.patternSchemaVersion != VOX_PATTERN_SCHEMA_V2 ||
+          !pattern::decode(state.patternPayload, content->caps, *decoded, why)) {
+        diagnostic = "instrument pattern invalid" + (why.empty() ? std::string{} : ": " + why);
+        return false;
+      }
+      target.patterns = std::make_unique<pattern::SnapshotBuffer>();
+      target.patterns->publish(*decoded);
+    } else if (state.patternSchemaVersion == VOX_PATTERN_SCHEMA_V2) {
+      diagnostic = "instrument does not own a V2 pattern";
+      return false;
     }
     if (target.descriptor->directParameters) {
       if (state.directParameters.size() !=
@@ -568,6 +608,68 @@ bool Rack::updatePatternState(std::size_t index, std::string presetId,
     return true;
 }
 
+bool Rack::setPattern(std::size_t index, const pattern::Pattern &edited,
+                      std::string &diagnostic) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  if (index >= state_.size()) {
+    diagnostic = "slot index out of range";
+    return false;
+  }
+  auto &runtime = processing_->runtime[index];
+  const auto *content = runtime.descriptor ? internalPattern(*runtime.descriptor) : nullptr;
+  if (content == nullptr || !runtime.patterns) {
+    diagnostic = "slot instrument has no Rack-owned pattern";
+    return false;
+  }
+  if (!pattern::validate(edited, content->caps, diagnostic))
+    return false;
+  std::vector<std::byte> payload;
+  pattern::encode(edited, payload);
+  std::string preset;
+  for (const auto &factory : content->factory)
+    if (*factory.pattern == edited) {
+      preset = factory.name;
+      break;
+    }
+  // Durable copy first, then the snapshot, so the audio thread never plays a
+  // pattern the project state does not hold. No exclusive section: the audio
+  // thread never reads these fields, and an edit must not silence a block.
+  state_[index].patternSchemaVersion = VOX_PATTERN_SCHEMA_V2;
+  state_[index].patternPayload = std::move(payload);
+  state_[index].patternPreset = std::move(preset);
+  runtime.patterns->publish(edited);
+  diagnostic.clear();
+  return true;
+}
+
+bool Rack::loadFactoryPattern(std::size_t index, std::size_t factoryIndex,
+                              std::string &diagnostic) {
+  std::shared_ptr<const pattern::Pattern> chosen;
+  {
+    const std::scoped_lock persistentLock(persistentStateMutex_);
+    const auto *descriptor =
+        index < state_.size() ? processing_->runtime[index].descriptor : nullptr;
+    const auto *content = descriptor ? internalPattern(*descriptor) : nullptr;
+    if (content == nullptr || factoryIndex >= content->factory.size()) {
+      diagnostic = "no such factory pattern for this slot";
+      return false;
+    }
+    chosen = content->factory[factoryIndex].pattern;
+  }
+  return setPattern(index, *chosen, diagnostic);
+}
+
+bool Rack::pattern(std::size_t index, pattern::Pattern &out) const {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  if (index >= state_.size() || !processing_->runtime[index].descriptor)
+    return false;
+  const auto *content = internalPattern(*processing_->runtime[index].descriptor);
+  std::string why;
+  return content != nullptr &&
+         state_[index].patternSchemaVersion == VOX_PATTERN_SCHEMA_V2 &&
+         pattern::decode(state_[index].patternPayload, content->caps, out, why);
+}
+
 bool Rack::configureModulation(
     std::size_t index, std::span<const modulation::Route> routes,
     std::string& diagnostic)
@@ -808,13 +910,24 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                     sampleCount, spec_.sampleRate, bpm, ppq);
     slot.instance->setBypassed(!controls[i].enabled || controls[i].mute ||
                                (anySolo && !controls[i].solo));
+    // The newest published pattern snapshot, held until the next block.
+    VoxPatternV2 patternView{};
+    const VoxPatternV2 *patternSnapshot = nullptr;
+    std::uint64_t patternGeneration = 0;
+    if (slot.patterns)
+      if (const auto *current = slot.patterns->acquire(patternGeneration)) {
+        patternView = current->view();
+        patternSnapshot = &patternView;
+      }
     slot.instance->process({{slot.pointers.data(), outputs.size()},
                             sampleCount,
                             processing_->routed[i].view(),
                             spec_.sampleRate,
                             bpm,
                             ppq,
-                            playing});
+                            playing,
+                            patternSnapshot,
+                            patternGeneration});
     if (audioRouting) {
       audioRouting->mixSlot(i, {slot.pointers.data(), outputs.size()}, outputs,
                             controls[i],

@@ -848,7 +848,7 @@ bool VstEngineAudioProcessor::preflightDirectState(
                resolution.descriptor->contentVersion) &&
           state[slot].instrumentStateVersion ==
               resolution.descriptor->stateVersion &&
-          state[slot].patternSchemaVersion <= VOX_PATTERN_SCHEMA_V1 &&
+          state[slot].patternSchemaVersion <= VOX_PATTERN_SCHEMA_V2 &&
           !directParameterBank.canSelectAndRestore(slot, state[slot]))
         return false;
     }
