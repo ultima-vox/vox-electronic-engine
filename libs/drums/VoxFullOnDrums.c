@@ -662,7 +662,7 @@ static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e, int hits[
 #define MAX_SEQ_HITS 256
 typedef struct {
   uint32_t offset;
-  uint8_t pad, velocity;
+  uint8_t pad, velocity, accent;
 } SeqHit;
 
 /* Schedules this block's internal-sequencer hits from VoxTransportV2 only
@@ -716,10 +716,40 @@ static uint32_t scheduleSequencer(struct VoxInstanceT *s, const VoxProcessContex
       hits[count].offset = (uint32_t)at;
       hits[count].pad = (uint8_t)lane;
       hits[count].velocity = (uint8_t)fmin(127.0, floor(velocity + 0.5));
+      hits[count].accent = (cell->flags & VOX_STEP_ACCENT) != 0;
       ++count;
     }
   }
   return count;
+}
+
+/* Reports this block's sequencer hits (they all sound: lane switches and mode
+ * were applied when scheduling) to the host's note output, if it listens. */
+static void reportHits(const VoxProcessContextV2 *c, const SeqHit *hits, uint32_t count,
+                       const uint8_t *padNote) {
+  const size_t need = offsetof(VoxProcessContextV2, noteOutput) + sizeof(VoxNoteOutputV2 *);
+  VoxNoteOutputV2 *out = c->structSize >= need ? c->noteOutput : NULL;
+  if (out == NULL || out->structSize < sizeof(VoxNoteOutputV2) ||
+      out->version != VOX_MODULE_ABI_V2 || out->stride < sizeof(VoxNoteEventV2) ||
+      out->stride > MAX_RECORD_STRIDE || out->stride % _Alignof(VoxNoteEventV2) != 0 ||
+      (out->capacity > 0 && out->events == NULL))
+    return;
+  out->count = 0;
+  out->dropped = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (out->count == out->capacity) {
+      ++out->dropped;
+      continue;
+    }
+    VoxNoteEventV2 e;
+    e.sampleOffset = hits[i].offset;
+    e.note = padNote[hits[i].pad];
+    e.velocity = hits[i].velocity;
+    e.lane = hits[i].pad;
+    e.flags = hits[i].accent ? VOX_NOTE_EVENT_ACCENT : 0u;
+    memcpy((uint8_t *)out->events + (size_t)out->count * out->stride, &e, sizeof(e));
+    ++out->count;
+  }
 }
 
 static int validRecords(const void *records, uint32_t count, uint32_t stride, size_t size,
@@ -765,6 +795,7 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   takePattern(s, c);
   SeqHit seq[MAX_SEQ_HITS];
   const uint32_t seqCount = scheduleSequencer(s, c, seq);
+  reportHits(c, seq, seqCount, s->padNote);
   float *left = c->outputs[0];
   float *right = c->outputChannelCount > 1 ? c->outputs[1] : NULL;
   for (uint32_t i = 0; i < c->numSamples; ++i) {

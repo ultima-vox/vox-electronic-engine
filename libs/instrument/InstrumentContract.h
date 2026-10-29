@@ -194,6 +194,8 @@ struct ProcessBlock {
     // Immutable pattern snapshot owned by the Rack for this call, or null.
     const VoxPatternV2* pattern {};
     std::uint64_t patternGeneration {};
+    // Host-owned buffer for notes the instrument generates itself, or null.
+    VoxNoteOutputV2* noteOutput {};
 };
 
 class InstrumentInstance {

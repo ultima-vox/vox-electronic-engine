@@ -129,6 +129,8 @@ public:
     // fader/FX or ducking. Each export owns a distinct temporary file.
     bool serializeSlotPatternMidi(std::size_t, juce::MemoryBlock &,
                                   juce::String &diagnostic);
+    bool serializeInternalPatternMidi(std::size_t, int channel, juce::MemoryBlock &,
+                                      juce::String &diagnostic);
     juce::File createSlotMidiFile(std::size_t);
     static bool writePatternMidiFile(const juce::File &,
                                      const juce::MemoryBlock &,

@@ -101,11 +101,13 @@ discontinuity):
 
 A reopened project replays the same edited pattern without duplicates (tested). A corrupt pattern payload rejects the project state as a whole.
 
-**Not yet.**
-- The editable 8×16 grid UI.
-- MIDI export of the internal pattern, derived from the hits the kit actually plays.
+**MIDI export.**
+- **What is exported.** The pattern as the kit plays it, not a re-derived grid.
+- **How.** The Rack renders one pass with the kit's own module and saved values and turns every reported hit into a note. The result is a type-1 file with eight named tracks (one per lane, kit note map) on the slot channel.
+- **Not included.** Muted lanes and Host-mode settings export nothing.
+- **Tested.** A 145 BPM replay through Host MIDI is bit-identical to the internal sequencer.
 
-Both are the next #74 slices.
+**Not yet:** the editable 8×16 grid UI (next #74 slice).
 
 ## State (module-owned, versioned, transactional)
 

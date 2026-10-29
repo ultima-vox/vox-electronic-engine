@@ -260,6 +260,10 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
       }
       target.patterns = std::make_unique<pattern::SnapshotBuffer>();
       target.patterns->publish(*decoded);
+      target.noteEvents.assign(noteEventCapacity, VoxNoteEventV2{});
+      target.noteOutput = {sizeof(VoxNoteOutputV2), VOX_MODULE_ABI_V2,
+                           static_cast<std::uint32_t>(noteEventCapacity),
+                           sizeof(VoxNoteEventV2), 0, 0, target.noteEvents.data()};
     } else if (state.patternSchemaVersion == VOX_PATTERN_SCHEMA_V2) {
       diagnostic = "instrument does not own a V2 pattern";
       return false;
@@ -670,6 +674,67 @@ bool Rack::pattern(std::size_t index, pattern::Pattern &out) const {
          pattern::decode(state_[index].patternPayload, content->caps, out, why);
 }
 
+bool Rack::renderPatternHits(std::size_t index, const PersistentSlotState &slot,
+                             std::vector<RenderedHit> &hits, double &lengthPpq,
+                             std::string &diagnostic) {
+  hits.clear();
+  lengthPpq = 0.0;
+  if (index >= state_.size()) {
+    diagnostic = "slot index out of range";
+    return false;
+  }
+  const auto resolution = registry_.resolve(slot.instrumentId);
+  const auto *content = resolution ? internalPattern(*resolution.descriptor) : nullptr;
+  if (content == nullptr) {
+    diagnostic = "slot instrument has no Rack-owned pattern";
+    return false;
+  }
+  SlotRuntime render;
+  RuntimeSlotState runtimeState;
+  if (!buildSlot(index, slot, nullptr, render, runtimeState, diagnostic) || !render.instance ||
+      !render.patterns)
+    return false;
+  // Tempo-independent result: 120 BPM at 48 kHz puts every 1/960-quarter tick
+  // on a whole number of samples, so step and swing positions convert exactly.
+  constexpr double rate = 48000.0, bpm = 120.0;
+  constexpr std::uint32_t block = 512;
+  if (!render.instance->prepare({rate, block, 2})) {
+    diagnostic = "instrument prepare failed";
+    return false;
+  }
+  std::uint64_t generation = 0;
+  const auto *snapshot = render.patterns->acquire(generation);
+  static constexpr double stepPpq[] = {0.25, 0.5, 0.125, 1.0 / 3.0};
+  lengthPpq = snapshot->barCount * snapshot->stepsPerBar * stepPpq[snapshot->timing];
+  const auto view = snapshot->view();
+  std::array<std::vector<float>, 2> audio{std::vector<float>(block), std::vector<float>(block)};
+  std::array<float *, 2> channels{audio[0].data(), audio[1].data()};
+  const double samplesPerPpq = 60.0 * rate / bpm;
+  const auto total = static_cast<std::uint64_t>(std::ceil(lengthPpq * samplesPerPpq));
+  for (std::uint64_t start = 0; start < total; start += block) {
+    const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(block, total - start));
+    const double ppq = static_cast<double>(start) / samplesPerPpq;
+    render.instance->process({{channels.data(), channels.size()}, n, {}, rate, bpm, ppq, true,
+                              &view, generation, &render.noteOutput});
+    for (std::uint32_t e = 0; e < render.noteOutput.count; ++e) {
+      const auto &event = render.noteEvents[e];
+      if (event.sampleOffset >= n)
+        continue;
+      hits.push_back({ppq + event.sampleOffset / samplesPerPpq, event.note, event.velocity,
+                      event.lane, (event.flags & VOX_NOTE_EVENT_ACCENT) != 0});
+    }
+    // Fail closed: a block whose notes overflowed or were voided as malformed
+    // (NativeModule validation) would export a wrong file.
+    if (render.noteOutput.dropped != 0) {
+      diagnostic = "instrument note output overflowed or was malformed; nothing exported";
+      hits.clear();
+      return false;
+    }
+  }
+  diagnostic.clear();
+  return true;
+}
+
 bool Rack::configureModulation(
     std::size_t index, std::span<const modulation::Route> routes,
     std::string& diagnostic)
@@ -927,7 +992,8 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             ppq,
                             playing,
                             patternSnapshot,
-                            patternGeneration});
+                            patternGeneration,
+                            slot.patterns ? &slot.noteOutput : nullptr});
     if (audioRouting) {
       audioRouting->mixSlot(i, {slot.pointers.data(), outputs.size()}, outputs,
                             controls[i],

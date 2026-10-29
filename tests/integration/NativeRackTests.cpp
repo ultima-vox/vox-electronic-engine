@@ -515,6 +515,77 @@ void patternContentImportedAndDelivered() {
   check(checksum == 1 * 120 + 7 * 70, "snapshot cells reach the module");
 }
 
+void setNoteMode(std::uint32_t slotIndex, std::uint32_t mode) {
+  reinterpret_cast<void(VOX_CALL *)(std::uint32_t, std::uint32_t)>(
+      testHook("voxTestSetNoteMode"))(slotIndex, mode);
+}
+
+// Module-written note output is validated record by record before the Rack
+// may use it; anything malformed voids the block, a silenced block reports
+// nothing.
+void noteOutputValidated() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  auto provider = instrument::native::makeProvider(module);
+  instrument::CreateContext context;
+  context.slotIndex = 14;
+  setNoteMode(14, 1);
+  auto instance = provider->create(toneId, context);
+  check(instance != nullptr && instance->prepare({48000.0, blockSize, 2}), "adapter prepared");
+  std::vector<float> left(blockSize), right(blockSize);
+  float *channels[] = {left.data(), right.data()};
+  std::array<VoxNoteEventV2, 8> events{};
+  VoxNoteOutputV2 out{sizeof(VoxNoteOutputV2), VOX_MODULE_ABI_V2, 8, sizeof(VoxNoteEventV2), 0, 0,
+                      events.data()};
+  auto render = [&] {
+    instrument::ProcessBlock block;
+    block.outputs = channels;
+    block.sampleCount = blockSize;
+    block.sampleRate = 48000.0;
+    block.noteOutput = &out;
+    out.count = 99; // stale value from a previous block
+    instance->process(block);
+  };
+  render();
+  check(out.count == 2 && out.dropped == 0 && events[0].note == 60 && events[1].lane == 1 &&
+            events[1].flags == VOX_NOTE_EVENT_ACCENT,
+        "valid notes pass unchanged");
+  const char *bad[] = {"", "", "note above 127", "velocity 0", "unknown flag", "undeclared lane",
+                       "out of order", "offset at the block end", "count above the capacity"};
+  for (std::uint32_t mode = 2; mode <= 8; ++mode) {
+    setNoteMode(14, mode);
+    const auto before = instrument::native::totalInvalidNoteReports();
+    render();
+    check(out.count == 0 && out.dropped == instrument::native::voidedNoteOutput &&
+              instrument::native::totalInvalidNoteReports() == before + 1,
+          std::string("malformed note output voids the block: ") + bad[mode]);
+  }
+  setNoteMode(14, 1);
+  instance->setBypassed(true);
+  render();
+  check(out.count == 0 && out.dropped == 0, "a bypassed instance reports no notes");
+  instance->setBypassed(false);
+  render();
+  check(out.count == 2, "unbypassed, its notes are reported again");
+  setNoteMode(14, 0);
+}
+
+// Export fails closed when the module reports malformed notes.
+void exportRejectsMalformedNotes() {
+  auto p = makeProcessor(true);
+  loadTone(*p, 4);
+  setNoteMode(4, 1);
+  juce::MemoryBlock bytes;
+  juce::String diagnostic;
+  check(p->serializeSlotPatternMidi(4, bytes, diagnostic),
+        "valid module notes export: " + diagnostic.toStdString());
+  setNoteMode(4, 2);
+  check(!p->serializeSlotPatternMidi(4, bytes, diagnostic) && diagnostic.contains("malformed"),
+        "malformed module notes export nothing: " + diagnostic.toStdString());
+  setNoteMode(4, 0);
+}
+
 // Hostile content tables reject the instrument instead of being trusted.
 namespace hostile {
 const char *const names[] = {"A", "B"};
@@ -594,6 +665,8 @@ int main(int argc, char **argv) {
   faultedModuleIsNotReentered();
   noAllocationInProcess();
   patternContentImportedAndDelivered();
+  noteOutputValidated();
+  exportRejectsMalformedNotes();
   hostileContentRejected();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;

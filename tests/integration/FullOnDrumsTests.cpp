@@ -957,6 +957,123 @@ void sequencerStateReopensWithoutDuplicates() {
         "a corrupt pattern payload is rejected transactionally");
 }
 
+// MIDI export of the internal pattern is what the kit actually plays: the
+// exported file, played back through Host MIDI, renders bit for bit like the
+// internal sequencer (145 BPM, swing, accent and edited velocities).
+void exportMatchesPlayback() {
+  const double rate = 48000.0, bpm = 145.0;
+  const double spp = 60.0 * rate / bpm; // samples per quarter
+  const int bars4 = static_cast<int>(spp * 16);
+  auto setup = [](Rig &r) {
+    // 0.25 of a step = 60 ticks: exactly representable, so the replay can be
+    // compared bit for bit (other swing values round to the nearest tick).
+    setPlain(r, seqSwing, 0.25f);
+    setPlain(r, seqAccent, 0.7f);
+    setPlain(r, seqLane0 + cymbal, 0.0f); // a muted lane exports nothing
+    auto p = slotPattern(r);
+    p->at(rim, 1, 9).flags = VOX_STEP_ON | VOX_STEP_ACCENT;
+    p->at(rim, 1, 9).velocity = 77;
+    p->at(snare, 2, 4).velocity = 41;
+    setPattern(r, *p);
+  };
+  auto internal = makeRig(instrumentsDir, 4);
+  setup(internal);
+  setPlain(internal, seqMode, 1.0f);
+  TestPlayHead h1;
+  const auto played = play(internal, h1, bars4);
+
+  juce::MemoryBlock bytes;
+  juce::String diagnostic;
+  check(internal.p->serializeSlotPatternMidi(internal.slot, bytes, diagnostic),
+        "internal pattern exports: " + diagnostic.toStdString());
+  juce::MemoryInputStream stream(bytes, false);
+  juce::MidiFile file;
+  check(file.readFrom(stream) && file.getNumTracks() == padCount &&
+            file.getTimeFormat() == 960,
+        "type-1 file with one track per lane at 960 ticks per quarter");
+  std::vector<Midi> events;
+  bool rimAccent = false, softSnare = false, cymbalNotes = false;
+  for (int lane = 0; lane < file.getNumTracks(); ++lane) {
+    const auto *track = file.getTrack(lane);
+    std::string name;
+    for (int e = 0; e < track->getNumEvents(); ++e) {
+      const auto &m = track->getEventPointer(e)->message;
+      if (m.isTrackNameEvent())
+        name = m.getTextFromTextMetaEvent().toStdString();
+      if (!m.isNoteOn())
+        continue;
+      check(m.getChannel() == internal.channel && m.getNoteNumber() == notes[lane],
+            "lane notes on the slot channel");
+      cymbalNotes = cymbalNotes || lane == cymbal;
+      const double ppq = m.getTimeStamp() / 960.0;
+      rimAccent = rimAccent || (lane == rim && std::abs(ppq - (4.0 + 9 * 0.25 + 0.0625)) < 1e-9 &&
+                                m.getVelocity() == 112); // 77 + 0.7 * (127 - 77)
+      softSnare = softSnare || (lane == snare && std::abs(ppq - (8.0 + 1.0)) < 1e-9 &&
+                                m.getVelocity() == 41);
+      events.push_back({static_cast<int>(std::ceil(ppq * spp - 1e-6)),
+                        MidiMessage::noteOn(internal.channel, m.getNoteNumber(),
+                                            static_cast<juce::uint8>(m.getVelocity()))});
+    }
+    check(name == padNames[lane], "track named after its lane: " + name);
+  }
+  check(rimAccent, "edited accented rim exported at its swung position and played velocity");
+  check(softSnare, "edited snare velocity exported");
+  check(!cymbalNotes, "a muted lane exports no notes");
+
+  auto host = makeRig(instrumentsDir, 4);
+  setup(host);
+  setPlain(host, seqMode, 0.0f); // Host MIDI: only the exported notes play
+  TestPlayHead h2;
+  const auto replayed = play(host, h2, bars4, events);
+  check(played.energy() > 1.0 && maxDifference(played, replayed) < 1e-6,
+        "the exported file replays exactly like the internal sequencer");
+
+  setPlain(internal, seqMode, 0.0f);
+  check(!internal.p->serializeSlotPatternMidi(internal.slot, bytes, diagnostic) &&
+            diagnostic.contains("plays nothing"),
+        "Host MIDI mode has no internal notes to export");
+}
+
+// The exported file always closes after its last note-off, also for short
+// steps with a late, maximally swung last hit.
+void exportEndsAfterTheLastNote() {
+  for (const auto timing : {VOX_TIMING_THIRTY_SECOND, VOX_TIMING_EIGHTH_TRIPLET}) {
+    auto r = makeRig(instrumentsDir, 5);
+    setPlain(r, seqMode, 1.0f);
+    setPlain(r, seqSwing, 0.5f);
+    auto p = std::make_unique<pattern::Pattern>(
+        pattern::emptyPattern(r.p->instrumentRack().descriptor(r.slot)->patternContent->caps));
+    p->timing = timing;
+    p->stepsPerBar = 16;
+    p->at(kick, 0, 15).flags = VOX_STEP_ON; // the last, odd (swung) step
+    setPattern(r, *p);
+    juce::MemoryBlock bytes;
+    juce::String diagnostic;
+    check(r.p->serializeSlotPatternMidi(r.slot, bytes, diagnostic),
+          "short-step pattern exports: " + diagnostic.toStdString());
+    juce::MemoryInputStream stream(bytes, false);
+    juce::MidiFile file;
+    check(file.readFrom(stream), "the exported file re-imports");
+    const double step = timing == VOX_TIMING_THIRTY_SECOND ? 0.125 : 1.0 / 3.0;
+    for (int lane = 0; lane < file.getNumTracks(); ++lane) {
+      const auto *track = file.getTrack(lane);
+      double lastOff = 0.0, end = -1.0;
+      for (int e = 0; e < track->getNumEvents(); ++e) {
+        const auto &m = track->getEventPointer(e)->message;
+        if (m.isNoteOff())
+          lastOff = std::max(lastOff, m.getTimeStamp());
+        if (m.isEndOfTrackMetaEvent())
+          end = m.getTimeStamp();
+        if (lane == kick && m.isNoteOn())
+          check(std::abs(m.getTimeStamp() / 960.0 - (15 + 0.5) * step) < 1.0 / 960.0,
+                "the swung last hit keeps its position");
+      }
+      check(end >= lastOff && end >= 16 * step * 960.0 - 1e-6,
+            "End-of-Track follows the last note-off and the pattern length");
+    }
+  }
+}
+
 // ------------------------------------------------- multi-track Host MIDI
 // Owner workflow (#72): eight Cubase MIDI tracks (one per pad) all output to
 // the same Rack instance on the kit slot's channel. The kit must sound the
@@ -1188,6 +1305,8 @@ int main(int argc, char **argv) {
   factoryPatternsAndInit();
   sequencerPatternEdits();
   editWhilePlaying();
+  exportMatchesPlayback();
+  exportEndsAfterTheLastNote();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
   noAllocationWhilePlaying();

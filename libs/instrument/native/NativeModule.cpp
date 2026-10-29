@@ -129,6 +129,34 @@ std::atomic<std::uint64_t> &midiOverflows() noexcept {
   return count;
 }
 
+std::atomic<std::uint64_t> &invalidNoteReports() noexcept {
+  static std::atomic<std::uint64_t> count{0};
+  return count;
+}
+
+// Module-written note output, checked before the Rack may use any of it: the
+// count within the buffer, and every record inside the block, in order, with
+// a MIDI note, a 1..127 velocity, a declared lane and known flags. Anything
+// else voids the whole block (fail closed) and is counted.
+bool validNoteOutput(const VoxNoteOutputV2 &out, std::uint32_t sampleCount,
+                     std::uint32_t laneLimit) noexcept {
+  if (out.count > out.capacity)
+    return false;
+  std::uint32_t previous = 0;
+  for (std::uint32_t i = 0; i < out.count; ++i) {
+    VoxNoteEventV2 e;
+    std::memcpy(&e, reinterpret_cast<const std::uint8_t *>(out.events) +
+                        static_cast<std::size_t>(i) * out.stride,
+                sizeof e);
+    if (e.sampleOffset >= sampleCount || e.sampleOffset < previous || e.note > 127 ||
+        e.velocity < 1 || e.velocity > 127 || e.lane >= laneLimit ||
+        (e.flags & ~VOX_NOTE_EVENT_KNOWN_FLAGS) != 0)
+      return false;
+    previous = e.sampleOffset;
+  }
+  return true;
+}
+
 std::atomic<std::uint64_t> &moduleFaults() noexcept {
   static std::atomic<std::uint64_t> count{};
   return count;
@@ -230,6 +258,8 @@ public:
 
   void process(const ProcessBlock &block) noexcept override {
     hint_ = 0;
+    if (block.noteOutput != nullptr) // a silent or failed block generates nothing
+      block.noteOutput->count = block.noteOutput->dropped = 0;
     if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
         block.sampleCount > maximumBlock_ ||
         block.outputs.size() != outputChannels_) {
@@ -275,12 +305,24 @@ public:
                                       samplePosition_,
                                       &transport_,
                                       block.pattern,
-                                      block.patternGeneration};
-    if (table_->process(handle_, &context) != VOX_OK) {
+                                      block.patternGeneration,
+                                      block.noteOutput};
+    const bool ok = table_->process(handle_, &context) == VOX_OK;
+    if (!ok) {
       fault();
       silence(block);
     } else if (bypassed_) {
       silence(block);
+    }
+    if (auto *out = block.noteOutput) {
+      // A failed or silenced block plays nothing, so it reports nothing.
+      if (!ok || bypassed_) {
+        out->count = out->dropped = 0;
+      } else if (!validNoteOutput(*out, block.sampleCount, noteLanes_)) {
+        out->count = 0;
+        out->dropped = voidedNoteOutput;
+        invalidNoteReports().fetch_add(1, std::memory_order_relaxed);
+      }
     }
     samplePosition_ += block.sampleCount;
   }
@@ -362,6 +404,9 @@ private:
   double predictedPpq_{};
   std::uint64_t samplePosition_{};
   std::atomic<bool> faulted_{};
+  // Lanes a reported note may name; 0 = no pattern, so no notes.
+  std::uint32_t noteLanes_{descriptor_.patternContent ? descriptor_.patternContent->caps.laneCount
+                                                      : 0u};
   std::size_t hint_{};
   std::uint32_t maximumBlock_{};
   std::uint32_t outputChannels_{};
@@ -398,6 +443,10 @@ private:
 
 std::uint64_t totalMidiOverflows() noexcept {
   return midiOverflows().load(std::memory_order_relaxed);
+}
+
+std::uint64_t totalInvalidNoteReports() noexcept {
+  return invalidNoteReports().load(std::memory_order_relaxed);
 }
 
 std::uint64_t totalModuleFaults() noexcept {
