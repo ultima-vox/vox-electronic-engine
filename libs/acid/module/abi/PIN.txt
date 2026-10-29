@@ -1,0 +1,7 @@
+source: ultima-vox/vox-electronic-engine
+ref: feat/native-module-connector
+commit: 3efc1bb30c42a35c5ea14aaed7ff89390d3d9214
+path: libs/instrument/abi/VoxModuleAbiV2.h
+git-blob: f6b37d786eedf1face1efb0ad8e443d4fee74615
+sha256: 22849d4d9f64656ea50ecdd5b41d1dc380a29a95d1bc2acc20032b4cbc2c8770
+rule: byte-for-byte pin of Claude #68. Do not edit. Not a second ABI.

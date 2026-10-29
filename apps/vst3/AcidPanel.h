@@ -17,6 +17,7 @@ public:
     explicit AcidPanel(VstEngineAudioProcessor&);
     ~AcidPanel() override;
     void bind(std::size_t slot);
+    int selectedChoiceForTesting(std::string_view semantic);
     void paint(juce::Graphics&) override;
     void resized() override;
     [[nodiscard]] std::size_t boundSlot() const noexcept { return slot_; }

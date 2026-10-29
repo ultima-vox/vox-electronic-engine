@@ -155,3 +155,41 @@ Disposition: **DO NOT MERGE / Acid not production accepted**. Owner decision
 UI and content must ship independently of Rack. The loader and common ABI are
 not yet implemented/reviewed; this Acid branch does not modify the Rack owner's
 work. The current static integration is a candidate to adapt, not a delivery gate.
+
+## Review follow-up — 28 October 2026
+
+- Re-review of `d4fb976` requests a complete typed manifest and explicitly
+  distinguishes continuous oscillator morph from discrete filter/LFO modes.
+- Local tests render the engine at two values within each selector bucket and
+  across buckets. They verify continuous oscillator morph and discrete filter
+  and LFO selection without changing DSP or serialized state.
+- The V2 integration packet now identifies oscillator waveform as continuous.
+  Type/default metadata is still a candidate, not a complete host manifest;
+  physical mappings, choice conversion, eligibility and host tests remain open.
+- Windows run 40659340113 for `d4fb976` built and passed 34/35 tests;
+  `bass_render_diagnostics/save_restore_rerender` failed. Packaging skipped.
+  This does not identify the Bass root cause. Exact-head Windows checks are
+  still required for the local review follow-up.
+
+## Selector display follow-up — 28 October 2026
+
+The interim Acid editor previously rounded normalized filter, distortion and
+modulation destination values to the nearest labeled option, while the DSP
+uses four- and six-bucket floor decoding. At intermediate automation values the
+label could name a different destination or mode than the target DSP setting.
+The editor now decodes the same buckets without altering stored automation,
+selector values or DSP smoothing. Unit checks cover representative bucket
+boundaries; the editor smoke test covers actual APVTS-to-combobox updates.
+The updated editor and smoke-test translation units compile, but the editor
+smoke executable could not be linked/run in this environment because Linux GUI
+and ALSA development libraries were unavailable. All six Acid-focused CTest
+targets pass; Windows/editor and DAW validation remain required.
+
+## Sequence note display — 28 October 2026
+
+The Acid note grid previously clamped offsets to -24..36 for overflow safety,
+which displayed the wrong MIDI note for valid larger pattern offsets. Note text
+now adds root and the actual offset in 64-bit arithmetic and clamps the result
+to MIDI 0..127. Unit checks cover valid large offsets and INT_MIN/INT_MAX;
+all six Acid CTest targets pass and the AcidPanel translation unit compiles.
+The actual editor/Windows visual gate still needs to run.

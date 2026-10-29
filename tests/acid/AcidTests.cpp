@@ -71,7 +71,74 @@ int main()
             "finite high sample rate has a defined tail-count behavior");
     REQUIRE(invalidRate.tailSamples() == std::numeric_limits<std::uint32_t>::max(),
             "oversized but finite tail count saturates rather than overflowing uint32");
+    // Neighboring normalized values within one selector bucket must keep the
+    // same sound, while oscillator morph must remain continuous within it.
+    const auto renderTypedControl = [](const char* id, float value, bool useLfo) {
+        acid::AcidEngine engine;
+        (void) engine.setParameter(id, value);
+        if (useLfo) {
+            (void) engine.setParameter("lfo1_depth", 1.0f);
+            (void) engine.setParameter("lfo1_rate", 0.75f);
+            (void) engine.setParameter("lfo1_target", 0.0f);
+        }
+        (void) engine.prepare(48000.0, 4096, 2);
+        std::array<float, 4096> left{}, right{};
+        std::array<float*, 2> outputs {left.data(), right.data()};
+        const std::array events {VoxMidiEventV1 {0, 3, {0x90, 48, 110}}};
+        engine.process(outputs, 4096, events);
+        return left;
+    };
+    const auto difference = [](const auto& a, const auto& b) {
+        double result = 0.0;
+        for (std::size_t i = 0; i < a.size(); ++i)
+            result += std::abs(static_cast<double>(a[i]) - b[i]);
+        return result;
+    };
+    REQUIRE(difference(renderTypedControl("waveform", 0.05f, false),
+                       renderTypedControl("waveform", 0.15f, false)) > 0.01,
+            "oscillator waveform changes continuously within a selector bucket");
+    REQUIRE(difference(renderTypedControl("filter_mode", 0.05f, false),
+                       renderTypedControl("filter_mode", 0.15f, false)) == 0.0,
+            "filter mode values in the same bucket select the same filter");
+    REQUIRE(difference(renderTypedControl("lfo1_wave", 0.05f, true),
+                       renderTypedControl("lfo1_wave", 0.15f, true)) == 0.0,
+            "LFO waveform values in the same bucket select the same waveform");
+    REQUIRE(difference(renderTypedControl("filter_mode", 0.05f, false),
+                       renderTypedControl("filter_mode", 0.65f, false)) > 0.01,
+            "different filter mode buckets change sound");
+    REQUIRE(difference(renderTypedControl("lfo1_wave", 0.05f, true),
+                       renderTypedControl("lfo1_wave", 0.65f, true)) > 0.01,
+            "different LFO waveform buckets change sound");
     auto provider = acid::createAcidProvider();
+    // Rack may deliver initial values before prepare or after construction on
+    // restore. The first render must start from the same authoritative values.
+    auto initial = provider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    auto restored = provider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    REQUIRE(initial && restored, "Acid initialization probes created");
+    REQUIRE(initial->setParameter("waveform", 0.05f), "initial waveform");
+    REQUIRE(initial->prepare({48000.0, 4096, 2}) && restored->prepare({48000.0, 4096, 2}),
+            "Acid initialization probes prepared");
+    REQUIRE(initial->setParameter("waveform", 0.5f) && restored->setParameter("waveform", 0.5f),
+            "same authoritative waveform delivered before first block");
+    const auto initialAudio = render(*initial);
+    const auto restoredAudio = render(*restored);
+    REQUIRE(energy(initialAudio) > 0.01 && initialAudio == restoredAudio,
+            "first render independent of pre-prepare parameter history");
+    acid::AcidParameterBridge initialBridge;
+    std::atomic<float> initialFine {0.8f};
+    initialBridge.setSlotId(0, instrument::initialSlotId(0));
+    initialBridge.bind(0, acid::AcidEngine::oscFine, &initialFine);
+    auto bridgedProvider = acid::createAcidProvider(&initialBridge);
+    auto bridgedInitial = bridgedProvider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    auto bridgedRestored = bridgedProvider->create(acid::instrumentId, {instrument::initialSlotId(0), nullptr});
+    REQUIRE(bridgedInitial && bridgedRestored, "bridged Acid probes created");
+    REQUIRE(bridgedInitial->setParameter("osc_fine", 0.2f), "initial fine tuning");
+    REQUIRE(bridgedInitial->prepare({48000.0, 4096, 2}) && bridgedRestored->prepare({48000.0, 4096, 2}),
+            "bridged Acid probes prepared");
+    const auto bridgedAudio = render(*bridgedInitial);
+    const auto bridgedRestoredAudio = render(*bridgedRestored);
+    REQUIRE(energy(bridgedAudio) > 0.01 && bridgedAudio == bridgedRestoredAudio,
+            "bridge values initialize smoothing before first audio");
     const auto compliance = tests::runInstrumentCompliance(
         *provider, acid::instrumentId);
     if (!compliance) {
@@ -204,24 +271,30 @@ int main()
     REQUIRE(patternSignature(differentSlot) != patternSignature(basePsy),
             "SlotId participates in generation domain");
 
-    // Acid-only legacy migration and malformed-state transaction checks.
+    // Empty payload carries no versioned bytes. A fresh #59 slot still uses
+    // schema 1; that must succeed and must not alter parameters. Non-empty
+    // v1–v7 blobs stay rejected.
     acid::AcidEngine soundState;
-    // Contract regression: a fresh Rack slot has no serialized module bytes.
-    // This is not an error and must not leave Acid unresolved/silent.
-    REQUIRE(soundState.loadState(acid::AcidEngine::legacyStateVersion, {}),
-            "new Acid slot accepts empty legacy module state");
     REQUIRE(soundState.loadState(acid::AcidEngine::stateVersion, {}),
             "new Acid slot accepts empty current module state");
-    REQUIRE(soundState.loadState(acid::AcidEngine::previousStateVersion, {}),
-            "new Acid slot accepts empty previous v3 module state");
-    REQUIRE(soundState.loadState(acid::AcidEngine::lfo1StateVersion, {}),
-            "new Acid slot accepts empty previous v4 module state");
-    REQUIRE(soundState.loadState(acid::AcidEngine::env2StateVersion, {}),
-            "new Acid slot accepts empty previous v5 module state");
-    REQUIRE(soundState.loadState(acid::AcidEngine::lfo23StateVersion, {}),
-            "new Acid slot accepts empty v6 module state");
-    REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion + 1u, {}),
-            "unknown future Acid schema rejected even with empty bytes");
+    const float factoryCutoff = soundState.parameter("cutoff");
+    for (const auto fresh : {
+             acid::AcidEngine::legacyStateVersion,
+             acid::AcidEngine::previousStateVersion,
+             acid::AcidEngine::lfo1StateVersion,
+             acid::AcidEngine::env2StateVersion,
+             acid::AcidEngine::lfo23StateVersion,
+             acid::AcidEngine::stepStateVersion,
+             acid::AcidEngine::stateVersion + 1u}) {
+        REQUIRE(soundState.loadState(fresh, {}),
+                "empty Acid payload is a fresh slot, not a migration");
+        REQUIRE(std::abs(soundState.parameter("cutoff") - factoryCutoff) < 0.00001f,
+                "empty payload does not change cutoff");
+    }
+    REQUIRE(soundState.setParameter("cutoff", 0.42f)
+                && soundState.loadState(acid::AcidEngine::legacyStateVersion, {})
+                && std::abs(soundState.parameter("cutoff") - 0.42f) < 0.00001f,
+            "empty legacy slot state does not reset a live Acid instance");
     constexpr std::uint32_t magic = 0x44494341u;
     constexpr std::uint32_t legacyVersion = 1u;
     const std::array<float, acid::AcidEngine::legacyParameterCount> legacyValues {
@@ -232,178 +305,33 @@ int main()
     std::memcpy(oldState.data() + 4, &legacyVersion, sizeof(legacyVersion));
     std::memcpy(oldState.data() + 8, legacyValues.data(),
                 legacyValues.size() * sizeof(float));
-    REQUIRE(soundState.loadState(legacyVersion, oldState),
-            "Acid v1 sound state migrates into current engine");
-    for (std::size_t i = 0; i < legacyValues.size(); ++i)
-        REQUIRE(std::abs(soundState.parameter(acid::AcidEngine::parameterIds[i])
-                         - legacyValues[i]) < 0.00001f,
-                "Acid v1 migration preserves all nine legacy parameters");
+    REQUIRE(!soundState.loadState(legacyVersion, oldState),
+            "Acid v1 sound state is not migrated");
+    REQUIRE(std::abs(soundState.parameter("cutoff") - 0.42f) < 0.00001f,
+            "rejected v1 payload leaves the live cutoff intact");
 
+    REQUIRE(soundState.setParameter("cutoff", 0.42f), "mark current state before save");
     std::array<std::byte, acid::AcidEngine::encodedStateBytes> encoded {};
     std::uint32_t written {};
     REQUIRE(soundState.saveState(encoded, written)
-                && written == encoded.size(), "Acid v3 save succeeds");
+                && written == encoded.size(), "current Acid state saves");
     const float originalCutoff = soundState.parameter("cutoff");
     auto malformed = encoded;
     const float nan = std::numeric_limits<float>::quiet_NaN();
     std::memcpy(malformed.data() + 8 + 25 * sizeof(float),
                 &nan, sizeof(nan));
     REQUIRE(!soundState.loadState(acid::AcidEngine::stateVersion, malformed),
-            "Acid v3 rejects NaN without applying any parameters");
+            "current Acid state rejects NaN without applying any parameters");
     REQUIRE(std::abs(soundState.parameter("cutoff") - originalCutoff) < 0.00001f,
-            "rejected Acid v3 payload cannot partially alter cutoff");
-
-    auto invalidOld = oldState;
-    std::memcpy(invalidOld.data() + 8 + 8 * sizeof(float),
-                &nan, sizeof(nan));
-    REQUIRE(!soundState.loadState(legacyVersion, invalidOld),
-            "Acid v1 migration rejects malformed float");
-    REQUIRE(std::abs(soundState.parameter("cutoff") - originalCutoff) < 0.00001f,
-            "rejected v1 migration leaves pre-existing sound values intact");
-    // Version 3 Acid sound payloads have 36 parameters and must remain
-    // loadable after the additive LFO1 v4 upgrade, preserving old automation.
-    std::array<std::byte, 8 + acid::AcidEngine::previousParameterCount
-                             * sizeof(float)> stateV3 {};
-    std::memcpy(stateV3.data(), encoded.data(), stateV3.size());
-    const auto oldVersion = acid::AcidEngine::previousStateVersion;
-    std::memcpy(stateV3.data() + 4, &oldVersion, sizeof(oldVersion));
-    acid::AcidEngine migratedV3;
-    REQUIRE(migratedV3.loadState(oldVersion, stateV3),
-            "v3 Acid state accepted by v4 DSP without shared Rack migration");
-    for (std::size_t i = 0; i < acid::AcidEngine::previousParameterCount; ++i)
-        REQUIRE(std::abs(migratedV3.parameter(acid::AcidEngine::parameterIds[i])
-                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
-                    < 0.00001f, "v3 migration preserves every original Acid parameter");
-    REQUIRE(migratedV3.parameter("lfo1_depth") == 0.0f,
-            "v3 projects migrate with LFO1 depth OFF, preserving their sound");
-    acid::AcidEngine reusedInstance;
-    REQUIRE(reusedInstance.setParameter("lfo1_depth", 0.88f)
-            && reusedInstance.loadState(oldVersion, stateV3)
-            && reusedInstance.parameter("lfo1_depth") == 0.0f,
-            "v3 recall resets stale LFO1 from an already-used Acid instance");
-    REQUIRE(reusedInstance.setParameter("lfo1_depth", 0.88f)
-            && reusedInstance.loadState(legacyVersion, oldState)
-            && reusedInstance.parameter("lfo1_depth") == 0.0f,
-            "v1 recall likewise disables previously active LFO1");
-
-    // Pin v1 compatibility before reducing migration code: the original
-    // nine serialized values overwrite indices 0-8, v3-era extension 9-35
-    // retains its existing value, and all later, missing features reset
-    // to their factory (audibly off) defaults.
-    acid::AcidEngine legacyIntoUsed;
-    REQUIRE(legacyIntoUsed.setParameter("osc_tune", 0.72f)
-            && legacyIntoUsed.setParameter("lfo1_depth", 0.97f)
-            && legacyIntoUsed.setParameter("env2_amount", 0.93f)
-            && legacyIntoUsed.setParameter("lfo3_depth", 0.89f)
-            && legacyIntoUsed.setParameter("step_amount", 0.77f)
-            && legacyIntoUsed.setParameter("step_16", 1.0f)
-            && legacyIntoUsed.setParameter("lfo2_sync", 1.0f),
-            "populate v1-absent fields before compatibility recall");
-    REQUIRE(legacyIntoUsed.loadState(legacyVersion, oldState),
-            "v1 module state accepted after newer controls were active");
-    REQUIRE(std::abs(legacyIntoUsed.parameter("output") - legacyValues[8])
-                < 0.00001f
-            && std::abs(legacyIntoUsed.parameter("osc_tune") - 0.72f)
-                < 0.00001f,
-            "v1 overrides its own nine fields while preserving v3-era values");
-    for (auto id : { "lfo1_depth", "env2_amount", "lfo3_depth",
-                     "step_amount", "lfo2_sync" })
-        REQUIRE(legacyIntoUsed.parameter(id) == 0.0f,
-                "missing post-v3 modulation source resets to factory-off");
-    REQUIRE(legacyIntoUsed.parameter("step_16") == 0.5f,
-            "v1 recall resets absent STEP curve to bipolar neutral");
-
-
-    // Legacy LFO1 (v4) payload must retain all 40 original parameters but
-    // never inherit ENV2 from an already-used instrument during recall.
-    std::array<std::byte, 8 + acid::AcidEngine::lfo1ParameterCount
-                             * sizeof(float)> stateV4 {};
-    std::memcpy(stateV4.data(), encoded.data(), stateV4.size());
-    const auto oldLfoVersion = acid::AcidEngine::lfo1StateVersion;
-    std::memcpy(stateV4.data() + 4, &oldLfoVersion, sizeof(oldLfoVersion));
-    acid::AcidEngine migratedV4;
-    REQUIRE(migratedV4.setParameter("env2_amount", 0.85f)
-            && migratedV4.loadState(oldLfoVersion, stateV4),
-            "v4 Acid sound can migrate into an already-used v5 engine");
-    for (std::size_t i = 0; i < acid::AcidEngine::lfo1ParameterCount; ++i)
-        REQUIRE(std::abs(migratedV4.parameter(acid::AcidEngine::parameterIds[i])
-                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
-                    < 0.00001f, "v4 migration retains previous 40 parameters");
-    REQUIRE(migratedV4.parameter("env2_amount") == 0.0f,
-            "v4 migration disables nonexistent ENV2, preserving previous sound");
-
-    // LFO2/LFO3 are new in v6: v5 state owns only 46 sound controls.
-    // Loading a v5 preset into an active v6 instance must never leak the
-    // destination or depth of a previously used LFO2/LFO3 source.
-    std::array<std::byte, 8 + acid::AcidEngine::env2ParameterCount
-                             * sizeof(float)> stateV5 {};
-    std::memcpy(stateV5.data(), encoded.data(), stateV5.size());
-    constexpr auto oldEnv2Version = acid::AcidEngine::env2StateVersion;
-    std::memcpy(stateV5.data() + 4, &oldEnv2Version, sizeof(oldEnv2Version));
-    acid::AcidEngine migratedV5;
-    REQUIRE(migratedV5.setParameter("lfo2_depth", 0.88f)
-            && migratedV5.setParameter("lfo3_depth", 0.91f)
-            && migratedV5.loadState(oldEnv2Version, stateV5),
-            "v5 Acid sound migrates into a previously used v6 instance");
-    for (std::size_t i = 0; i < acid::AcidEngine::env2ParameterCount; ++i)
-        REQUIRE(std::abs(migratedV5.parameter(acid::AcidEngine::parameterIds[i])
-                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
-                    < 0.00001f,
-                "v5 migration preserves all 46 earlier sound controls");
-    REQUIRE(migratedV5.parameter("lfo2_depth") == 0.0f
-            && migratedV5.parameter("lfo3_depth") == 0.0f,
-            "v5 recall disables absent LFO2/LFO3 in an active synth");
-
-    // STEP was introduced in v7. Loading a v6 preset into a previously
-    // used engine must not retain any v7 STEP amount or curve.
-    std::array<std::byte, 8 + acid::AcidEngine::lfo23ParameterCount
-                             * sizeof(float)> stateV6 {};
-    std::memcpy(stateV6.data(), encoded.data(), stateV6.size());
-    constexpr auto oldLfo23Version = acid::AcidEngine::lfo23StateVersion;
-    std::memcpy(stateV6.data() + 4, &oldLfo23Version, sizeof(oldLfo23Version));
-    acid::AcidEngine migratedV6;
-    REQUIRE(migratedV6.setParameter("step_amount", 0.9f)
-            && migratedV6.setParameter("step_01", 1.0f)
-            && migratedV6.loadState(oldLfo23Version, stateV6),
-            "v6 Acid preset migrates over an active STEP patch");
-    for (std::size_t i = 0; i < acid::AcidEngine::lfo23ParameterCount; ++i)
-        REQUIRE(std::abs(migratedV6.parameter(acid::AcidEngine::parameterIds[i])
-                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
-                    < 0.00001f, "v6 migration preserves 54 earlier parameters");
-    REQUIRE(migratedV6.parameter("step_amount") == 0.0f
-            && migratedV6.parameter("step_01") == 0.5f,
-            "v6 migration disables STEP and resets the absent curve");
-
-    // The pre-sync v7 format contains 74 fields, all of which must migrate
-    // unchanged. Recalling it into a v8 instance with SYNC already active
-    // must explicitly disable those previously nonexistent mode controls.
-    std::array<std::byte, 8 + acid::AcidEngine::stepParameterCount
-                             * sizeof(float)> stateV7 {};
-    std::memcpy(stateV7.data(), encoded.data(), stateV7.size());
-    constexpr auto oldStepVersion = acid::AcidEngine::stepStateVersion;
-    std::memcpy(stateV7.data() + 4, &oldStepVersion, sizeof(oldStepVersion));
-    acid::AcidEngine migratedV7;
-    REQUIRE(migratedV7.setParameter("lfo1_sync", 1.0f)
-            && migratedV7.setParameter("lfo2_sync", 1.0f)
-            && migratedV7.setParameter("lfo3_sync", 1.0f)
-            && migratedV7.loadState(oldStepVersion, stateV7),
-            "v7 Acid state migrates over an active v8 sync patch");
-    for (std::size_t i = 0; i < acid::AcidEngine::stepParameterCount; ++i)
-        REQUIRE(std::abs(migratedV7.parameter(acid::AcidEngine::parameterIds[i])
-                         - soundState.parameter(acid::AcidEngine::parameterIds[i]))
-                    < 0.00001f, "v7 import preserves 74 original controls");
-    REQUIRE(migratedV7.parameter("lfo1_sync") == 0.0f
-            && migratedV7.parameter("lfo2_sync") == 0.0f
-            && migratedV7.parameter("lfo3_sync") == 0.0f,
-            "legacy import disables newly introduced musical sync switches");
+            "rejected current payload cannot partially alter cutoff");
 
     acid::AcidEngine restoredSound;
     REQUIRE(restoredSound.loadState(acid::AcidEngine::stateVersion, encoded),
-            "Acid v3 save/load round-trips");
+            "current Acid state round-trips");
     for (std::size_t i = 0; i < acid::AcidEngine::parameterCount; ++i)
         REQUIRE(std::abs(restoredSound.parameter(acid::AcidEngine::parameterIds[i])
                          - soundState.parameter(acid::AcidEngine::parameterIds[i]))
-                         < 0.00001f, "Acid v3 restores every semantic parameter");
+                         < 0.00001f, "current state restores every semantic parameter");
 
     // Host automation bridge is per plugin and slot, never global.
     // Only extended Acid controls use the bridge; frozen macro IDs do not.
@@ -941,7 +869,7 @@ int main()
     auto shortBlock = provider->create(acid::instrumentId,
         { instrument::initialSlotId(7), nullptr });
     REQUIRE(shortBlock != nullptr
-            && shortBlock->loadState(acid::AcidEngine::legacyStateVersion, {})
+            && shortBlock->loadState(acid::AcidEngine::stateVersion, {})
             && shortBlock->prepare({ 48000.0, 512, 2 }),
             "fresh Acid instance loads empty Rack state and prepares");
     std::array<float, 512> shortLeft {}, shortRight {};

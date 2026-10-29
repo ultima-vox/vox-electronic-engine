@@ -1,7 +1,9 @@
 #pragma once
 
 #include "acid/AcidEngine.h"
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string_view>
 
@@ -57,5 +59,59 @@ inline constexpr std::array<AcidControlIdentity, 80> acidControlInventory{{
     {"legato", 77, 76},        {"retrigger", 77, 77},
     {"vel_to_accent", 77, 78}, {"slide_on_overlap", 77, 79},
 }};
+
+// Match the existing DSP filter/distortion and modulation-target buckets.
+// This only decodes their current normalized base value for display; it does
+// not quantize automation or alter the smoothed DSP parameter.
+inline int acidSelectorIndex(float value, int choices) noexcept {
+  if ((choices != 4 && choices != 6) || !std::isfinite(value)) return 0;
+  const float scale = choices == 4 ? 3.99f : 5.99f;
+  return std::clamp(static_cast<int>(std::clamp(value, 0.0f, 1.0f) * scale),
+                    0, choices - 1);
+}
+
+// Candidate metadata only: this is not a host parameter descriptor or a
+// frozen conversion contract. Engine values and defaults remain normalized.
+enum class AcidControlType { continuous, choice, integer, boolean };
+struct AcidControlMetadata {
+  AcidControlType type;
+  unsigned choiceCount;
+  float normalizedDefault;
+  bool automatable;
+  bool bipolar;
+};
+
+inline AcidControlMetadata acidControlMetadata(const AcidControlIdentity& c) noexcept {
+  const AcidEngine initial;
+  AcidControlMetadata result { AcidControlType::continuous, 0, 0.0f, true, false };
+  if (c.engineIndex == AcidEngine::parameterCount) {
+    result.type = AcidControlType::boolean;
+    result.choiceCount = 2;
+    if (c.id == "legato") result.normalizedDefault = initial.isLegatoEnabled();
+    else if (c.id == "retrigger") result.normalizedDefault = initial.isRetriggerEnabled();
+    else if (c.id == "vel_to_accent") result.normalizedDefault = initial.isVelToAccentEnabled();
+    else if (c.id == "slide_on_overlap") result.normalizedDefault = initial.isSlideOnOverlapEnabled();
+    return result;
+  }
+  result.normalizedDefault = initial.parameter(c.id);
+  using P = AcidEngine;
+  switch (c.engineIndex) {
+    case P::filterMode: case P::distMode: case P::lfo1Wave:
+    case P::lfo2Wave: case P::lfo3Wave: case P::stepRate:
+      result.type = AcidControlType::choice; result.choiceCount = 4; break;
+    case P::modTarget: case P::lfo1Target: case P::env2Target:
+    case P::lfo2Target: case P::lfo3Target: case P::stepTarget:
+      result.type = AcidControlType::choice; result.choiceCount = 6; break;
+    case P::unisonVoices:
+      result.type = AcidControlType::integer; result.choiceCount = 4; break;
+    case P::lfo1Sync: case P::lfo2Sync: case P::lfo3Sync:
+      result.type = AcidControlType::boolean; result.choiceCount = 2; break;
+    default: break;
+  }
+  result.bipolar = c.engineIndex == P::oscTune || c.engineIndex == P::oscFine
+      || c.engineIndex == P::pan
+      || (c.engineIndex >= P::step01 && c.engineIndex <= P::step16);
+  return result;
+}
 
 } // namespace vstengine::acid

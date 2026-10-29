@@ -26,7 +26,8 @@ As of PR #59, the engine has **77 semantic state fields** including packed `play
 | Semantic control | Host type | Domain / display |
 |---|---|---|
 | `cutoff` | continuous | frequency with correct Hz conversion |
-| `filter_mode`, `dist_mode`, `waveform` | discrete choice | exact named options; correct step count |
+| `filter_mode`, `dist_mode`, LFO waveform | discrete choice | exact named options; correct step count |
+| `waveform` | continuous | oscillator morph across four waveforms |
 | `unison_voices` | discrete integer | 1–4 voices |
 | `lfo1_sync`, `lfo2_sync`, `lfo3_sync` | boolean | Off/On, no analog interpolation |
 | `legato`, `retrigger`, `vel_to_accent`, `slide_on_overlap` | four independent boolean endpoints | packed flags are a private backward-compatible Acid state encoding only |
@@ -34,21 +35,23 @@ As of PR #59, the engine has **77 semantic state fields** including packed `play
 
 **Audit required:** `AcidProvider.cpp` currently describes extended controls largely as normalized floats and a static built-in provider. Replace this interim metadata with truthful typed descriptors and a reviewed parameter normalization contract; test both plug-in GUI and host presentation. Never change existing host-normalized semantics merely by changing names.
 
-**Waveform type requires reconciliation:** the example above lists `waveform`
-as a discrete choice, while the control matrix requires a waveform selector and
+**Waveform contract:** the control matrix requires a waveform selector and
 continuous morph knob as two views of the same parameter. Current
 `renderVoiceOscillator` continuously interpolates four waveforms. Advertising
 this parameter as a discrete choice would quantize and alter existing morph
-automation. Preserve the actual continuous behavior until the intended host
-contract is reviewed; LFO waveform selectors are distinct discrete controls.
+automation. Preserve the actual continuous behavior in the host contract; LFO
+waveform selectors are distinct discrete controls.
 
-**Identity inventory checkpoint:** `AcidControlInventory.h` enumerates the 80
+**Control inventory checkpoint:** `AcidControlInventory.h` enumerates the 80
 distinct semantic IDs with explicit proposed pool indices and distinguishes the
 four flags from packed engine state. `acid_control_inventory_tests` checks
-uniqueness, coverage and engine identity. This is not the required complete
-typed manifest: units, physical ranges, choice conversion, defaults, modulation
+uniqueness, coverage and engine identity. Candidate metadata classifies control
+types, option counts, bipolar STEP levels, tune, fine and pan, and normalized Init values against a
+fresh engine. It is not wired to host automation and is not the required complete
+typed manifest: units, physical ranges, named options and conversion, modulation
 eligibility, host normalized-value stability and final capacity remain to be
-specified and verified. Nothing is bound to the host pool by this checkpoint.
+specified and verified. Current selector decoding and host presentation must be
+reconciled before the metadata is used to change host parameters. Nothing is bound to the host pool by this checkpoint.
 
 ## Automation safety and instrument replacement
 
