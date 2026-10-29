@@ -65,6 +65,9 @@ int main()
     state[1].macros[1] = 0.7f;
     REQUIRE(rack.replaceState(state, nullptr, diagnostic),
             "rack state loads transactionally");
+    // A slot the module rejects has no descriptor: fail, never dereference.
+    REQUIRE(rack.descriptor(0) != nullptr && rack.descriptor(1) != nullptr,
+            "both slots instantiate (module accepted its persistent state)");
     REQUIRE(rack.descriptor(0)->id == modules::bassInstrumentId
                 && rack.descriptor(1)->id == modules::acidInstrumentId,
             "slots resolve through descriptor boundary");
