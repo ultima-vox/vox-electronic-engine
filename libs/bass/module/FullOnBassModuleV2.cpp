@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <new>
 #include <span>
@@ -51,6 +52,19 @@ struct VoxInstanceT {
     bool prepared{};
 };
 namespace {
+VoxResult invalidProcess(VoxInstance s, const VoxProcessContextV2* c) noexcept {
+    // Only touch buffers when the declared context, prepared channel count and
+    // sample count bound every write. Non-null channel pointers remain subject
+    // to the ABI requirement that host-provided buffers are writable.
+    if (s && s->prepared && c &&
+        c->structSize >= offsetof(VoxProcessContextV2, outputs) + sizeof(c->outputs) &&
+        c->outputChannelCount == s->channels && s->channels <= 2 &&
+        c->numSamples <= s->maxBlock && c->outputs) {
+        for (uint32_t ch=0; ch<s->channels; ++ch)
+            if (c->outputs[ch]) std::fill_n(c->outputs[ch],c->numSamples,0.0f);
+    }
+    return VOX_E_INVALID_ARG;
+}
 VoxResult VOX_CALL getInstrument(uint32_t i, const VoxInstrumentDescriptorV2** out) {
     if (!out) return VOX_E_INVALID_ARG;
     *out = i == 0 ? &instrument : nullptr;
@@ -97,18 +111,18 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
         (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) || c->paramChangeCount > s->maxChanges ||
         c->midiEventCount > s->maxMidiEvents ||
         !validArray(c->paramChanges,c->paramChangeCount,c->paramChangeStride) ||
-        !validArray(c->midiEvents,c->midiEventCount,c->midiEventStride)) return VOX_E_INVALID_ARG;
-    for (uint32_t ch=0; ch<s->channels; ++ch) if (!c->outputs[ch]) return VOX_E_INVALID_ARG;
+        !validArray(c->midiEvents,c->midiEventCount,c->midiEventStride)) return invalidProcess(s,c);
+    for (uint32_t ch=0; ch<s->channels; ++ch) if (!c->outputs[ch]) return invalidProcess(s,c);
     uint32_t last=0;
     for (uint32_t i=0;i<c->paramChangeCount;++i) {
         const auto p=read(c->paramChanges,c->paramChangeStride,i);
-        if (!valueValid(p.index,p.plain) || p.sampleOffset>=c->numSamples || (i && p.sampleOffset<last)) return VOX_E_INVALID_ARG;
+        if (!valueValid(p.index,p.plain) || p.sampleOffset>=c->numSamples || (i && p.sampleOffset<last)) return invalidProcess(s,c);
         last=p.sampleOffset;
     }
     last=0;
     for (uint32_t i=0;i<c->midiEventCount;++i) {
         const auto m=read(c->midiEvents,c->midiEventStride,i);
-        if (m.size == 0 || m.size > sizeof(m.bytes) || m.sampleOffset>=c->numSamples || (i && m.sampleOffset<last)) return VOX_E_INVALID_ARG;
+        if (m.size == 0 || m.size > sizeof(m.bytes) || m.sampleOffset>=c->numSamples || (i && m.sampleOffset<last)) return invalidProcess(s,c);
         last=m.sampleOffset;
     }
     const auto flags=c->transport->flags;
@@ -117,7 +131,7 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
     const bool playing=(flags & VOX_TRANSPORT_PLAYING) != 0;
     const double ppqPerSample=(playing && (flags & VOX_TRANSPORT_HAS_PPQ) && bpm > 0.0)
         ? (bpm / (60.0 * s->sampleRate)) : 0.0;
-    if (!std::isfinite(ppq + ppqPerSample * c->numSamples)) return VOX_E_INVALID_ARG;
+    if (!std::isfinite(ppq + ppqPerSample * c->numSamples)) return invalidProcess(s,c);
     for (uint32_t ch=0;ch<s->channels;++ch) std::fill_n(c->outputs[ch],c->numSamples,0.0f);
     if (c->releaseFlags & VOX_PANIC_AT_START) s->engine.reset();
     uint32_t cursor=0, pi=0, mi=0;

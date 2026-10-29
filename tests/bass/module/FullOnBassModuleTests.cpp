@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #if defined(_WIN32)
@@ -91,6 +92,46 @@ int main(int argc,char** argv) {
     ctx.midiEvents=&on; ctx.midiEventCount=1;
     CHECK(module->process(a,&ctx)==VOX_OK); ctx.outputs=out2; CHECK(module->process(b,&ctx)==VOX_OK);
     CHECK(left==left2 && right==right2 && left==right);
+    CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
+    // A rejected bounded block must never leave stale audio in host buffers.
+    ctx.outputs=out; ctx.midiEvents=&on; ctx.midiEventCount=1;
+    on.size=0; left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.0f;}));
+    on.size=3;
+    VoxParamChangeV2 invalidChange{13,0,1.0f,0};
+    ctx.paramChanges=&invalidChange; ctx.paramChangeCount=1;
+    left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.0f;}));
+    ctx.paramChanges=nullptr; ctx.paramChangeCount=0;
+    transport.tempoBpm=NAN; left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.0f;}));
+    transport.tempoBpm=145.0;
+    out[1]=nullptr; left.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    out[1]=right.data();
+    ctx.outputChannelCount=3; left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.75f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.75f;}));
+    ctx.outputChannelCount=2;
+    ctx.structSize=sizeof(std::uint32_t); left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.75f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.75f;}));
+    ctx.structSize=sizeof(ctx);
+    ctx.numSamples=257; left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.75f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.75f;}));
+    ctx.numSamples=256;
+    CHECK(module->reset(a)==VOX_OK && module->process(a,&ctx)==VOX_OK);
     CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
     // Short MIDI messages can reach the Rack even when Bass does not use them.
     // They must not fault the module or prevent subsequent notes from playing.
