@@ -756,6 +756,24 @@ VstEngineAudioProcessorEditor::PatternPage::PatternPage(
       &profile, &generate, &mutate, &status, &sequencer};
   for (auto *component : components)
     addAndMakeVisible(component);
+  addChildComponent(grid);
+  grid.onEdit = [this](const vstengine::pattern::Pattern &edited, juce::String &why) {
+    std::string diagnostic;
+    const bool ok = processor.instrumentRack().setPattern(processor.selectedSlotIndex(),
+                                                          edited, diagnostic);
+    why = diagnostic;
+    return ok;
+  };
+  grid.onFactory = [this](std::size_t index, juce::String &why) {
+    std::string diagnostic;
+    const bool ok = processor.instrumentRack().loadFactoryPattern(processor.selectedSlotIndex(),
+                                                                  index, diagnostic);
+    why = diagnostic;
+    return ok;
+  };
+  grid.onReload = [this](vstengine::pattern::Pattern &out) {
+    return processor.instrumentRack().pattern(processor.selectedSlotIndex(), out);
+  };
   generate.onClick =
       [this] {
         const auto index = profile.getSelectedItemIndex();
@@ -791,6 +809,10 @@ void VstEngineAudioProcessorEditor::PatternPage::resized()
     status.setBounds(tools.reduced(8, 0));
     area.removeFromTop(10);
     sequencer.setBounds(area);
+    if (gridMode) {
+      sections = {{getLocalBounds().reduced(12), "PATTERN"}};
+      grid.setBounds(getLocalBounds().reduced(12).withTrimmedTop(sectionHeader));
+    }
 }
 void VstEngineAudioProcessorEditor::PatternPage::bind(std::size_t)
 {
@@ -805,7 +827,28 @@ void VstEngineAudioProcessorEditor::PatternPage::bind(std::size_t)
 }
 void VstEngineAudioProcessorEditor::PatternPage::refresh()
 {
-    const auto* descriptor = processor.instrumentRack().descriptor(processor.selectedSlotIndex());
+    const auto slot = processor.selectedSlotIndex();
+    const auto* descriptor = processor.instrumentRack().descriptor(slot);
+    const bool internal = descriptor != nullptr && descriptor->patternContent != nullptr
+        && descriptor->patternContent->caps.playback == VOX_PATTERN_PLAYBACK_INTERNAL;
+    if (internal != gridMode || descriptor != gridDescriptor || slot != gridSlot) {
+      gridMode = internal;
+      gridDescriptor = descriptor;
+      gridSlot = slot;
+      for (auto *c : std::array<juce::Component *, 5>{&profile, &generate, &mutate, &status, &sequencer})
+        c->setVisible(!gridMode);
+      grid.setVisible(gridMode);
+      if (gridMode)
+        grid.setContent(descriptor->patternContent,
+                        processor.instrumentRack().state()[slot].patternPreset);
+      else
+        grid.setContent(nullptr, {});
+      resized();
+    } else if (gridMode) {
+      grid.reload(); // the same instrument: keep the shown bar
+    }
+    if (gridMode)
+      return;
     const bool supported = descriptor != nullptr
         && (descriptor->capabilities & vstengine::instrument::Capability::sequence) != 0;
     callbacks.edit = processor.sequenceEditSnapshot();

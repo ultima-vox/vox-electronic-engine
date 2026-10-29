@@ -75,7 +75,8 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 | 15 | Delete the MIDI clip. Set **Seq Mode = Internal** (the kit holds Full-on Basic), press Play at 145 BPM | The kit plays the pattern in time with Cubase; bar 4 has a tom fill |
 | 16 | Loop bars 1–4, seek, change tempo, stop/start | Stays on the grid; downbeat replays on loop; no hits while stopped |
 | 17 | Re-import the clip with Seq Mode = Internal | No doubled hits (incoming notes are ignored); Seq Mode = Both plays both |
-| 18 | Swing 0.3, Accent 0, lane switches | Audible changes as described (pattern choice and editing arrive with the grid UI) |
+| 18 | Swing 0.3, Accent 0, lane switches; on the **Pattern** page choose another factory pattern, click steps on/off, drag a step's velocity, shift-click an accent, set 8 steps / 2 bars | Audible changes as described; edits play from the next beat without restarting the bar |
+| 18a | Pattern page → export / drag MIDI to Cubase, put the eight lane tracks on the kit's channel, set Seq Mode = Host MIDI | The exported lanes play exactly the edited pattern (no doubled hits) |
 | 19 | Save with Seq Mode = Internal, reopen | Same pattern, no duplicate beats |
 
 ## 4. One kit, eight MIDI tracks (Kick, Snare, Hats ... on separate tracks)

@@ -2,6 +2,7 @@
 // loaded from an instruments folder exactly as the DAW constructor loads the
 // one next to the VST3, and the kit is played from slot MIDI. Not DAW
 // acceptance (see the Cubase guide).
+#include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
@@ -1080,6 +1081,98 @@ void internalKickDucksInTheSameBlock() {
   }
 }
 
+// The editor's Pattern page edits the kit's Rack pattern: an 8-lane grid,
+// clicks and velocity drags go to the Rack, factory patterns load, and the
+// controls follow what the kit declares.
+juce::MouseEvent mouse(juce::Component &target, juce::Point<int> at, bool shift = false,
+                       bool dragged = false) {
+  auto source = juce::Desktop::getInstance().getMainMouseSource();
+  const auto mods = shift ? juce::ModifierKeys::shiftModifier | juce::ModifierKeys::leftButtonModifier
+                          : juce::ModifierKeys::leftButtonModifier;
+  return {source, at.toFloat(), juce::ModifierKeys(mods), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+          &target, &target, juce::Time::getCurrentTime(), at.toFloat(),
+          juce::Time::getCurrentTime(), 1, dragged};
+}
+
+void editorDrumGrid() {
+  auto r = makeRig(instrumentsDir, 3);
+  r.p->selectSlot(r.slot);
+  std::unique_ptr<juce::AudioProcessorEditor> base(r.p->createEditor());
+  auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+  check(editor != nullptr, "editor opens");
+  editor->setSize(1500, 920);
+  r.p->selectSlot(r.slot); // the editor opens on the first slot
+  editor->showPageForTesting(ui::MainNavigation::Page::pattern);
+  editor->refreshForTesting();
+  auto &grid = editor->patternGridForTesting();
+  check(grid.isVisible() && grid.getWidth() > 400 && grid.getHeight() > 200,
+        "the Pattern page shows the drum grid for the kit");
+  check(grid.patternForTesting() == *slotPattern(r), "the grid shows the Rack pattern");
+
+  // Click an empty cell: on. Shift-click it: accent. Drag up: louder.
+  auto empty = std::make_unique<pattern::Pattern>(grid.patternForTesting());
+  std::uint32_t lane = tom, step = 2;
+  check((empty->at(lane, 0, step).flags & VOX_STEP_ON) == 0, "the chosen cell starts empty");
+  const auto cell = grid.cellBoundsForTesting(lane, step).getCentre();
+  grid.mouseDown(mouse(grid, cell));
+  grid.mouseUp(mouse(grid, cell));
+  check((slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ON) != 0,
+        "a click switches the step on in the Rack pattern");
+  grid.mouseDown(mouse(grid, cell, true));
+  check((slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ACCENT) != 0,
+        "shift-click sets the accent");
+  grid.mouseDown(mouse(grid, cell));
+  grid.mouseDrag(mouse(grid, cell.translated(0, -20), false, true));
+  grid.mouseUp(mouse(grid, cell.translated(0, -20), false, true));
+  check(slotPattern(r)->at(lane, 0, step).velocity == 120 &&
+            (slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ON) != 0,
+        "dragging up raises the velocity and keeps the step on");
+  grid.mouseDown(mouse(grid, cell));
+  grid.mouseUp(mouse(grid, cell));
+  check((slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ON) == 0,
+        "a click without dragging switches the step off");
+
+  // Bars and controls follow the kit.
+  grid.showBarForTesting(3);
+  const auto fill = grid.cellBoundsForTesting(kick, 12).getCentre();
+  grid.mouseDown(mouse(grid, fill));
+  grid.mouseUp(mouse(grid, fill));
+  check((slotPattern(r)->at(kick, 3, 12).flags & VOX_STEP_ON) != 0, "bar 4 is editable");
+  auto findBox = [&](const juce::String &name) {
+    for (auto *child : grid.getChildren())
+      if (child->getName() == name)
+        return dynamic_cast<juce::ComboBox *>(child);
+    return static_cast<juce::ComboBox *>(nullptr);
+  };
+  auto *steps = findBox("rack.pattern.steps");
+  auto *patterns = findBox("rack.pattern.factory");
+  check(steps != nullptr && steps->getNumItems() == 16 && patterns != nullptr &&
+            patterns->getNumItems() == 5,
+        "steps up to the kit's 16, five factory patterns");
+  check(patterns->getSelectedItemIndex() == -1, "an edited pattern is no factory pattern");
+  patterns->setSelectedItemIndex(3, juce::sendNotificationSync);
+  check(*slotPattern(r) == *r.p->instrumentRack().descriptor(r.slot)->patternContent->factory[3].pattern &&
+            grid.patternForTesting() == *slotPattern(r),
+        "choosing a factory pattern loads it into the Rack and the grid");
+  steps->setSelectedId(8, juce::sendNotificationSync);
+  check(slotPattern(r)->stepsPerBar == 8 && grid.patternForTesting().stepsPerBar == 8,
+        "the steps control reshapes the Rack pattern");
+
+  // Visual Gate: the actual editor with the kit's factory pattern (CI artifact
+  // for the owner's review; not an acceptance claim).
+  if (const auto *path = std::getenv("VOX_DRUMS_GRID_SNAPSHOT")) {
+    patterns->setSelectedItemIndex(0, juce::sendNotificationSync);
+    grid.showBarForTesting(3); // the fill bar
+    const auto image = editor->createComponentSnapshot(editor->getLocalBounds());
+    juce::File file(path);
+    file.deleteFile();
+    juce::FileOutputStream output(file);
+    juce::PNGImageFormat png;
+    check(output.openedOk() && png.writeImageToStream(image, output),
+          "drum grid snapshot written");
+  }
+}
+
 // ------------------------------------------------- multi-track Host MIDI
 // Owner workflow (#72): eight Cubase MIDI tracks (one per pad) all output to
 // the same Rack instance on the kit slot's channel. The kit must sound the
@@ -1313,6 +1406,7 @@ int main(int argc, char **argv) {
   editWhilePlaying();
   exportMatchesPlayback();
   internalKickDucksInTheSameBlock();
+  editorDrumGrid();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
   noAllocationWhilePlaying();

@@ -59,6 +59,13 @@ struct Pattern {
 // when the instrument supports fewer).
 [[nodiscard]] Pattern emptyPattern(const Caps &) noexcept;
 
+// The same pattern with other dimensions: every cell that exists in both
+// keeps its value; new cells are rests. Lane count is unchanged.
+void reshape(const Pattern &source, std::uint32_t stepsPerBar, std::uint32_t barCount,
+             Pattern &out) noexcept;
+// Step length of a VOX_TIMING_* value, in quarter notes.
+[[nodiscard]] double stepLengthPpq(std::uint32_t timing) noexcept;
+
 [[nodiscard]] bool validateCaps(const Caps &, std::string &why);
 // Every cell inside the dimensions is in range and holds defaults in the
 // fields the instrument does not read; cells outside are default.

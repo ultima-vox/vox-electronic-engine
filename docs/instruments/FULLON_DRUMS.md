@@ -109,7 +109,12 @@ A reopened project replays the same edited pattern without duplicates (tested). 
 
 **Kick ducking.** Internal kicks (lane notes as reported) duck the Rack's targets in the same block, at the sample they play (`rack.duck.source` = the kit's slot, note 36). This works with the kit muted to zero volume, but not with the slot muted.
 
-**Not yet:** the editable 8×16 grid UI (next #74 slice).
+**Pattern page (editor).** For the kit, the Pattern page shows the Rack pattern as an 8-lane grid:
+- **Cells.** A click switches a step on or off; dragging a sounding step up or down sets its velocity (shown as fill height); shift-click toggles the accent (outlined, with a marker).
+- **Bars.** BAR 1–4 tabs select the bar being edited.
+- **Controls.** Steps per bar (1–16), bar count (1–4), step length, Clear bar, and the factory-pattern selector. The selector shows the factory name until the first edit.
+- **Edits.** Every edit goes straight to the Rack (`Rack::setPattern`). A rejected edit shows its reason and the grid re-reads the Rack copy.
+- **Visual review.** The Windows CI Visual Gate artifact includes `drums-pattern-grid-1500x920.png`, taken from the actual editor. This is for review, not acceptance.
 
 ## State (module-owned, versioned, transactional)
 
