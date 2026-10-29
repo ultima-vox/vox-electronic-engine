@@ -723,8 +723,11 @@ bool Rack::renderPatternHits(std::size_t index, const PersistentSlotState &slot,
       hits.push_back({ppq + event.sampleOffset / samplesPerPpq, event.note, event.velocity,
                       event.lane, (event.flags & VOX_NOTE_EVENT_ACCENT) != 0});
     }
+    // Fail closed: a block whose notes overflowed or were voided as malformed
+    // (NativeModule validation) would export a wrong file.
     if (render.noteOutput.dropped != 0) {
-      diagnostic = "instrument reported more notes than the export buffer holds";
+      diagnostic = "instrument note output overflowed or was malformed; nothing exported";
+      hits.clear();
       return false;
     }
   }

@@ -1279,7 +1279,13 @@ bool VstEngineAudioProcessor::serializeInternalPatternMidi(
   }
   const auto &caps = rack.descriptor(index)->patternContent->caps;
   constexpr int ticksPerQuarter = 960;
-  constexpr double noteLengthPpq = 0.125; // drum hits are one-shot
+  // Export convention: every hit is a 1/32 note. Drum voices are one-shot and
+  // ignore NoteOff, so this is not the sound's length.
+  constexpr double noteLengthPpq = 0.125;
+  double endPpq = lengthPpq; // End-of-Track never precedes a note-off
+  for (const auto &hit : hits)
+    endPpq = std::max(endPpq, std::round(hit.ppq * ticksPerQuarter) / ticksPerQuarter +
+                                  noteLengthPpq);
   juce::MidiFile file;
   file.setTicksPerQuarterNote(ticksPerQuarter);
   for (std::uint32_t lane = 0; lane < caps.laneCount; ++lane) {
@@ -1292,7 +1298,7 @@ bool VstEngineAudioProcessor::serializeInternalPatternMidi(
         track.addEvent(juce::MidiMessage::noteOff(channel, hit.note),
                        on + noteLengthPpq * ticksPerQuarter);
       }
-    track.addEvent(juce::MidiMessage::endOfTrack(), lengthPpq * ticksPerQuarter);
+    track.addEvent(juce::MidiMessage::endOfTrack(), endPpq * ticksPerQuarter);
     track.updateMatchedPairs();
     file.addTrack(track);
   }
