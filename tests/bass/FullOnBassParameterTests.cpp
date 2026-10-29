@@ -4,9 +4,12 @@
 #include <bit>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <new>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -250,7 +253,7 @@ void sustainLifecycle()
     require(energy(clearedPedal.next()) == 0,
             "all notes off clears pedal without an active note");
 
-    for (auto controller : {120, 123}) {
+    for (auto controller : {120}) {
         Render panic;
         const std::array<VoxMidiEventV1, 1> allOff {{{0, 3,
             {0xb0, static_cast<std::uint8_t>(controller), 0}}}};
@@ -260,7 +263,7 @@ void sustainLifecycle()
         panic.next(allOff);
         require(energy(panic.next()) == 0, "all-off ends sustained voice");
     }
-    for (auto controller : {120, 123}) {
+    for (auto controller : {120}) {
         Render timed;
         timed.next(on);
         const std::array<VoxMidiEventV1, 1> allOffAt64 {{{64, 3,
@@ -273,6 +276,46 @@ void sustainLifecycle()
                             [](float x) { return x == 0.0f; }),
                 "all-off silences from its sample offset");
     }
+    Render releaseByNote, releaseByController;
+    require(releaseByNote.bass.setParameter("amp.release", 250.f)
+                && releaseByController.bass.setParameter("amp.release", 250.f),
+            "long release configured");
+    require(releaseByNote.next(on) == releaseByController.next(on), "release baseline agrees");
+    const std::array<VoxMidiEventV1, 1> noteOffAt64 {{{64, 3, {0x80, 36, 0}}}};
+    const std::array<VoxMidiEventV1, 1> allNotesAt64 {{{64, 3, {0xb0, 123, 0}}}};
+    const auto naturalRelease = releaseByNote.next(noteOffAt64);
+    const auto controllerRelease = releaseByController.next(allNotesAt64);
+    if (naturalRelease != controllerRelease)
+        for (std::size_t i = 0; i < naturalRelease.size(); ++i)
+            if (naturalRelease[i] != controllerRelease[i]) {
+                std::cerr << "release difference at " << i << ": " << naturalRelease[i] << " vs " << controllerRelease[i] << '\n';
+                break;
+            }
+    require(naturalRelease == controllerRelease, "CC123 follows NoteOff envelope at its sample offset");
+    require(std::any_of(controllerRelease.begin() + 64, controllerRelease.end(),
+                        [](float x) { return std::abs(x) > 1e-6f; }),
+            "CC123 retains audible release tail");
+    require(energy(releaseByController.next()) > 1e-8, "CC123 release continues in next block");
+    Render tailSoundOff;
+    require(tailSoundOff.bass.setParameter("amp.release", 250.f), "configure long tail");
+    tailSoundOff.next(on);
+    tailSoundOff.next(off);
+    const std::array<VoxMidiEventV1, 1> soundOffAt64 {{{64, 3, {0xb0, 120, 0}}}};
+    const auto interruptedTail = tailSoundOff.next(soundOffAt64);
+    require(std::any_of(interruptedTail.begin(), interruptedTail.begin() + 64,
+                        [](float x) { return std::abs(x) > 1e-6f; })
+                && std::all_of(interruptedTail.begin() + 64, interruptedTail.end(),
+                               [](float x) { return x == 0.0f; }),
+            "CC120 silences an existing release at its sample offset");
+    for (int i = 0; i < 60; ++i) releaseByController.next();
+    require(energy(releaseByController.next()) == 0, "CC123 release reaches silence");
+    Render pedalRelease, pedalAllNotes;
+    pedalRelease.next(on); pedalAllNotes.next(on);
+    pedalRelease.next(pedalDown); pedalAllNotes.next(pedalDown);
+    pedalRelease.next(off); pedalAllNotes.next(off);
+    const std::array<VoxMidiEventV1, 1> pedalUpAt64 {{{64, 3, {0xb0, 64, 0}}}};
+    require(pedalRelease.next(pedalUpAt64) == pedalAllNotes.next(allNotesAt64),
+            "CC123 clears sustain and releases deferred note at its offset");
     Render resetState;
     require(resetState.bass.setParameter("filter.cutoff", 1200.0f), "edit cutoff before reset");
     const auto beforeReset = state(resetState.bass);
@@ -315,6 +358,38 @@ void boundsAndLifecycle()
     require(other.bass.tailSamples() <= FullOnBassInstance::descriptor().budget.maxTailSamples,
             "tail within budget at highest rate");
 }
+
+void writeReleaseEvidence()
+{
+    const char* outputDirectory = std::getenv("VOX_BASS_RELEASE_WAV_DIR");
+    if (!outputDirectory || !*outputDirectory) return;
+    std::filesystem::create_directories(outputDirectory);
+    for (const auto& [name, status, data1] : std::array {
+             std::tuple { "note-off.wav", 0x80, 36 },
+             std::tuple { "all-notes-off.wav", 0xb0, 123 },
+             std::tuple { "all-sound-off.wav", 0xb0, 120 } }) {
+        Render voice;
+        require(voice.bass.setParameter("amp.release", 250.f), "evidence release configured");
+        std::vector<float> samples;
+        for (int block = 0; block < 80; ++block) {
+            const std::array<VoxMidiEventV1, 1> release {{{64, 3,
+                {static_cast<std::uint8_t>(status), static_cast<std::uint8_t>(data1), 0}}}};
+            const auto audio = block == 0 ? voice.next(on)
+                : block == 20 ? voice.next(release) : voice.next();
+            samples.insert(samples.end(), audio.begin(), audio.end());
+        }
+        std::ofstream file(std::filesystem::path(outputDirectory) / name, std::ios::binary);
+        require(static_cast<bool>(file), "open release evidence WAV");
+        const auto u16 = [&](std::uint16_t v) { for (unsigned n = 0; n < 2; ++n) file.put(static_cast<char>(v >> (8 * n))); };
+        const auto u32 = [&](std::uint32_t v) { for (unsigned n = 0; n < 4; ++n) file.put(static_cast<char>(v >> (8 * n))); };
+        const auto bytes = static_cast<std::uint32_t>(samples.size() * sizeof(float));
+        file.write("RIFF", 4); u32(36 + bytes); file.write("WAVEfmt ", 8);
+        u32(16); u16(3); u16(1); u32(48000); u32(48000 * 4); u16(4); u16(32);
+        file.write("data", 4); u32(bytes);
+        for (float sample : samples) u32(std::bit_cast<std::uint32_t>(sample));
+        require(static_cast<bool>(file), "write release evidence WAV");
+    }
+}
 void compliance()
 {
     // Factory adapter for the common harness; the instance is the real new DSP.
@@ -342,5 +417,6 @@ int main()
 {
     independence(); audioIndependence(); sustainedEdits(); sustainLifecycle(); boundsAndLifecycle();
     realtimeAllocationCheck(); compliance();
+    writeReleaseEvidence();
     std::cout << "Full-on Bass independent parameters: " << checks << " checks PASS\n";
 }

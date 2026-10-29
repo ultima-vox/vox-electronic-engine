@@ -132,7 +132,8 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
                            std::span<const VoxMidiEventV1>(midi.data(),n),0,120,0,false});
         cursor=end;
     }
-    if (c->releaseFlags & (VOX_RELEASE_ALL_NOTES_AT_END | VOX_RELEASE_ALL_SOUND_AT_END)) s->engine.reset();
+    if (c->releaseFlags & VOX_RELEASE_ALL_SOUND_AT_END) s->engine.reset();
+    else if (c->releaseFlags & VOX_RELEASE_ALL_NOTES_AT_END) s->engine.releaseAllNotes();
     return VOX_OK;
 }
 VoxResult VOX_CALL save(VoxInstance s, uint8_t* bytes,uint32_t capacity,uint32_t* written,uint32_t* version) {

@@ -61,6 +61,13 @@ void FullOnBassInstance::reset() noexcept
     sustainDown.fill(false);
     keyHeld = false;
 }
+void FullOnBassInstance::releaseAllNotes() noexcept
+{
+    sustainDown.fill(false);
+    if (currentNote >= 0) voice.noteOffDirect(true);
+    currentNote = -1;
+    keyHeld = false;
+}
 void FullOnBassInstance::suspend() noexcept { suspended = true; reset(); }
 void FullOnBassInstance::resume() noexcept { suspended = false; }
 void FullOnBassInstance::setBypassed(bool next) noexcept
@@ -201,8 +208,13 @@ void FullOnBassInstance::process(const instrument::ProcessBlock& block) noexcept
             const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
             sustainDown[channel] = false;
             if (currentChannel == static_cast<int>(channel)) {
-                voice.resetDirect();
-                currentNote = currentChannel = -1;
+                if (event.data[1] == 120) {
+                    voice.resetDirect();
+                    currentChannel = -1;
+                } else if (currentNote >= 0) {
+                    voice.noteOffDirect(true);
+                }
+                currentNote = -1;
                 keyHeld = false;
             }
         }

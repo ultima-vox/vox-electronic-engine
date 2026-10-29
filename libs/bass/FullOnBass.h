@@ -35,6 +35,7 @@ public:
     static instrument::InstrumentDescriptor descriptor();
     bool prepare(const instrument::PrepareSpec&) override;
     void reset() noexcept override;
+    void releaseAllNotes() noexcept;
     void suspend() noexcept override;
     void resume() noexcept override;
     void setBypassed(bool) noexcept override;

@@ -113,6 +113,32 @@ int main(int argc,char** argv) {
     const auto allocations=voxProbeEnd();
     CHECK(processOk && allocations==0);
 #endif
+    // Block-end release flags must preserve the CC123/CC120 distinction.
+    values[7]=250.0f;
+    CHECK(module->setAllParameters(a,values.data(),13)==VOX_OK);
+    CHECK(module->setAllParameters(b,values.data(),13)==VOX_OK);
+    CHECK(module->reset(a)==VOX_OK && module->reset(b)==VOX_OK);
+    std::array<VoxMidiEventV2,2> held{{{0,3,{0x90,36,127}}, {0,3,{0xb0,64,127}}}};
+    ctx.paramChanges=nullptr; ctx.paramChangeCount=0; ctx.releaseFlags=0;
+    ctx.midiEvents=held.data(); ctx.midiEventCount=2; ctx.outputs=out;
+    CHECK(module->process(a,&ctx)==VOX_OK); ctx.outputs=out2; CHECK(module->process(b,&ctx)==VOX_OK);
+    ctx.midiEvents=nullptr; ctx.midiEventCount=0; ctx.releaseFlags=VOX_RELEASE_ALL_NOTES_AT_END;
+    ctx.outputs=out; CHECK(module->process(a,&ctx)==VOX_OK);
+    ctx.releaseFlags=0; ctx.outputs=out2; CHECK(module->process(b,&ctx)==VOX_OK);
+    CHECK(left==left2);
+    ctx.outputs=out; CHECK(module->process(a,&ctx)==VOX_OK);
+    std::array<VoxMidiEventV2,2> release{{{0,3,{0x80,36,0}}, {0,3,{0xb0,64,0}}}};
+    ctx.outputs=out2; ctx.midiEvents=release.data(); ctx.midiEventCount=2;
+    CHECK(module->process(b,&ctx)==VOX_OK);
+    CHECK(left==left2 && std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
+    ctx.outputs=out; ctx.midiEvents=nullptr; ctx.midiEventCount=0;
+    ctx.releaseFlags=VOX_RELEASE_ALL_SOUND_AT_END | VOX_RELEASE_ALL_NOTES_AT_END;
+    CHECK(module->process(a,&ctx)==VOX_OK);
+    ctx.releaseFlags=0; CHECK(module->process(a,&ctx)==VOX_OK);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    ctx.midiEvents=&on; ctx.midiEventCount=1;
+    CHECK(module->process(a,&ctx)==VOX_OK);
+    CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));
     CHECK(module->destroy(a)==VOX_OK && module->destroy(b)==VOX_OK && module->shutdown()==VOX_OK);
 #if defined(_WIN32)
     CHECK(FreeLibrary(lib)!=0);
