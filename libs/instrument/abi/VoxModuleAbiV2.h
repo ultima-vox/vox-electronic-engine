@@ -313,7 +313,8 @@ typedef struct VoxProcessContextV2 {
   const VoxPatternV2 *pattern; /* host-owned snapshot for this call, or NULL */
   uint64_t patternGeneration;  /* changes whenever the snapshot content changes */
   VoxNoteOutputV2 *noteOutput; /* host-owned; NULL = the host does not listen.
-                                  The module resets count/dropped every call. */
+                                  The module resets count/dropped every call;
+                                  a count above capacity voids the block. */
 } VoxProcessContextV2;
 
 /* Size of the original V2.0 process context. */

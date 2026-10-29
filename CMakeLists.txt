@@ -283,6 +283,10 @@ target_include_directories(rack_lifecycle_tests PRIVATE tests)
 target_link_libraries(rack_lifecycle_tests PRIVATE vst_rack)
 add_test(NAME rack_lifecycle_tests COMMAND rack_lifecycle_tests)
 
+add_executable(rack_ducking_tests tests/rack/RackDuckingTests.cpp)
+target_link_libraries(rack_ducking_tests PRIVATE vst_rack)
+add_test(NAME rack_ducking_tests COMMAND rack_ducking_tests)
+
 add_executable(rack_live_controls_tests tests/rack/RackLiveControlsTests.cpp)
 target_link_libraries(rack_live_controls_tests PRIVATE vst_rack)
 add_test(NAME rack_live_controls_tests COMMAND rack_live_controls_tests)

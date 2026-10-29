@@ -107,6 +107,8 @@ A reopened project replays the same edited pattern without duplicates (tested). 
 - **Not included.** Muted lanes and Host-mode settings export nothing.
 - **Tested.** A 145 BPM replay through Host MIDI is bit-identical to the internal sequencer.
 
+**Kick ducking.** Internal kicks (lane notes as reported) duck the Rack's targets in the same block, at the sample they play (`rack.duck.source` = the kit's slot, note 36). This works with the kit muted to zero volume, but not with the slot muted.
+
 **Not yet:** the editable 8×16 grid UI (next #74 slice).
 
 ## State (module-owned, versioned, transactional)

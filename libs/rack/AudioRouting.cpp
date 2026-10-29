@@ -78,7 +78,8 @@ void AudioRouting::reset() noexcept {
 bool AudioRouting::begin(const AudioRoutingControls &controls,
                          std::span<const ProcessSlotControls> slots,
                          std::span<const RackRouter::DestinationBuffer> events,
-                         std::uint32_t count) noexcept {
+                         std::uint32_t count,
+                         std::span<const VoxNoteEventV2> generated) noexcept {
   blockReady_ = false;
   if (!prepared_ || count == 0 || count > spec_.maximumBlockSize ||
       !valid(controls) || slots.size() > instrument::maxSlots ||
@@ -94,14 +95,19 @@ bool AudioRouting::begin(const AudioRoutingControls &controls,
     for (std::size_t c = 0; c < spec_.outputChannels; ++c)
       std::fill_n(r.audio[c].data(), count, 0.0f);
   std::span<const VoxMidiEventV1> triggers;
+  bool audibleSource = false;
   const bool solo = std::any_of(slots.begin(), slots.end(),
                                 [](const auto &s) { return s.solo; });
   for (std::size_t i = 0; i < slots.size(); ++i)
     if (slots[i].slotId == controls.kickSource && slots[i].enabled &&
-        !slots[i].mute && (!solo || slots[i].solo))
+        !slots[i].mute && (!solo || slots[i].solo)) {
       triggers = events[i].view();
+      audibleSource = true;
+    }
+  if (!audibleSource)
+    generated = {}; // a silent source ducks nothing
   if (previousSource_ != controls.kickSource ||
-      previousNote_ != controls.kickNote || triggers.data() == nullptr) {
+      previousNote_ != controls.kickNote || !audibleSource) {
     phase_ = Phase::idle;
     envelope_ = 0;
   }
@@ -111,17 +117,28 @@ bool AudioRouting::begin(const AudioRoutingControls &controls,
     return static_cast<std::uint32_t>(
         std::llround(ms * 0.001 * spec_.sampleRate));
   };
-  std::size_t event = 0;
+  std::size_t event = 0, own = 0;
+  std::uint32_t lastOwn = 0;
   for (std::uint32_t s = 0; s < count; ++s) {
+    bool hit = false;
     while (event < triggers.size() && triggers[event].sampleOffset <= s) {
       const auto &e = triggers[event++];
-      if (e.sampleOffset == s && e.size >= 3 && (e.data[0] & 0xf0) == 0x90 &&
-          e.data[1] == controls.kickNote && e.data[2] > 0) {
-        attackStart_ = envelope_;
-        phasePosition_ = 0;
-        phaseLength_ = duration(controls.attackMs);
-        phase_ = Phase::attack;
-      }
+      hit = hit || (e.sampleOffset == s && e.size >= 3 && (e.data[0] & 0xf0) == 0x90 &&
+                    e.data[1] == controls.kickNote && e.data[2] > 0);
+    }
+    // Module-written: out-of-order or out-of-block events are ignored.
+    while (own < generated.size() && generated[own].sampleOffset <= s) {
+      const auto &e = generated[own++];
+      if (e.sampleOffset < lastOwn)
+        continue;
+      lastOwn = e.sampleOffset;
+      hit = hit || (e.sampleOffset == s && e.note == controls.kickNote && e.velocity > 0);
+    }
+    if (hit) { // one attack per sample, however many sources agree
+      attackStart_ = envelope_;
+      phasePosition_ = 0;
+      phaseLength_ = duration(controls.attackMs);
+      phase_ = Phase::attack;
     }
     if (phase_ == Phase::attack) {
       envelope_ = phaseLength_ ? attackStart_ +

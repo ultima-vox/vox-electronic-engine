@@ -36,9 +36,14 @@ public:
   bool prepare(const instrument::PrepareSpec &);
   void reset() noexcept;
   static bool valid(const AudioRoutingControls &) noexcept;
+  // Builds this block's duck envelope. Triggers are the kick source's routed
+  // MIDI notes and the notes it generated itself this block (`generated`,
+  // e.g. a drum module's internal sequencer), so the Rack must call this after
+  // the source has rendered. A kick that is both routed MIDI and generated at
+  // the same sample triggers once.
   bool begin(const AudioRoutingControls &, std::span<const ProcessSlotControls>,
-             std::span<const RackRouter::DestinationBuffer>,
-             std::uint32_t samples) noexcept;
+             std::span<const RackRouter::DestinationBuffer>, std::uint32_t samples,
+             std::span<const VoxNoteEventV2> generated = {}) noexcept;
   void mixSlot(std::size_t, std::span<float *>, std::span<float *>,
                const ProcessSlotControls &, bool audible,
                std::uint32_t) noexcept;

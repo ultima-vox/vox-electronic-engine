@@ -1034,6 +1034,52 @@ void exportMatchesPlayback() {
         "Host MIDI mode has no internal notes to export");
 }
 
+// Internal kicks duck another slot at the sample they play, in the same block:
+// the real kit (Internal mode, only its kick lane, silent so only the target
+// is measured) ducks a held Demo Synth note to zero at every kick, including
+// after a host loop back.
+void internalKickDucksInTheSameBlock() {
+  const double rate = 48000.0, spp = 60.0 * rate / 145.0;
+  for (const auto [kitSlot, synthSlot] : {std::pair{2u, 9u}, std::pair{9u, 2u}}) {
+    auto r = makeRig(instrumentsDir, kitSlot, rate, 128);
+    juce::String diagnostic;
+    check(r.p->loadSlotInstrument(synthSlot, "com.ultimavox.demo-synth", diagnostic),
+          "Demo Synth loads as the duck target: " + diagnostic.toStdString());
+    const int synthChannel = channelOf(*r.p, synthSlot);
+    setPlain(r, seqMode, 1.0f);
+    setPattern(r, *kickOnBeats(r));
+    setPlain(r, kitVolume, 0.0f); // the kit still plays, but adds no audio
+    auto param = [&](const juce::String &id, float plain) {
+      auto *p = r.p->parameters().getParameter(id);
+      check(p != nullptr, "routing parameter " + id.toStdString());
+      p->setValueNotifyingHost(p->convertTo0to1(plain));
+    };
+    param("rack.duck.source", static_cast<float>(kitSlot + 1));
+    param("rack.duck.note", 36.0f);
+    param("rack.duck.attack", 0.0f);
+    param("rack.duck.hold", 0.5f);
+    param("rack.duck.release", 1.0f);
+    char depth[32];
+    std::snprintf(depth, sizeof(depth), "slot%02u.duck.depth", synthSlot + 1);
+    param(depth, 1.0f);
+    TestPlayHead head;
+    head.ppq = 0.25; // start after the first beat so the synth settles
+    const std::vector<Midi> hold = {{0, MidiMessage::noteOn(synthChannel, 60, (juce::uint8)110)}};
+    const auto beat = static_cast<int>(spp);
+    const auto out = play(r, head, beat * 4, hold); // beats 2..5 (ppq 0.25..4.25)
+    for (int k = 1; k <= 4; ++k) {
+      const int at = static_cast<int>(std::ceil((k - 0.25) * spp - 1e-6));
+      check(out.l[at] == 0.0f && out.r[at] == 0.0f && std::abs(out.l[at - 1]) > 0.0f,
+            "beat " + std::to_string(k + 1) + " kick ducks the synth at its sample (kit slot " +
+                std::to_string(kitSlot + 1) + ")");
+    }
+    head.ppq = 0.0; // host loops back to the bar start
+    const auto looped = play(r, head, beat / 2, hold);
+    check(looped.l[0] == 0.0f && looped.r[0] == 0.0f,
+          "after a loop back the downbeat kick ducks at once");
+  }
+}
+
 // The exported file always closes after its last note-off, also for short
 // steps with a late, maximally swung last hit.
 void exportEndsAfterTheLastNote() {
@@ -1306,6 +1352,7 @@ int main(int argc, char **argv) {
   sequencerPatternEdits();
   editWhilePlaying();
   exportMatchesPlayback();
+  internalKickDucksInTheSameBlock();
   exportEndsAfterTheLastNote();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
