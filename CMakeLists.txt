@@ -65,6 +65,36 @@ target_include_directories(vst_native_packages PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_native_packages
   PUBLIC vst_native juce::juce_core juce::juce_cryptography)
 
+# dspcore: Vox DSP Core primitives and the per-instrument patch graph (#75):
+# graph-only instruments are data (graph.json) compiled off the audio thread
+# into a fixed plan and exposed through the normal InstrumentProvider contract.
+add_library(vst_dspcore STATIC
+  libs/dspcore/Primitives.h
+  libs/dspcore/PatchGraph.cpp libs/dspcore/PatchGraph.h
+  libs/dspcore/GraphInstrument.cpp libs/dspcore/GraphInstrument.h)
+set_target_properties(vst_dspcore PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vst_dspcore PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_dspcore PUBLIC vst_instrument juce::juce_core)
+
+# Factory graph instruments compiled into the plugin (no DLL, no install):
+# instruments/<name>/graph.json -> generated/FactoryGraphs.h (byte arrays;
+# graph.json is ASCII-only, so every byte fits a char).
+set(VOX_FACTORY_GRAPHS demo-synth-graph)
+set(VOX_FACTORY_GRAPHS_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/FactoryGraphs.h)
+set(_factory_graphs "// Generated from instruments/*/graph.json. Do not edit.\n#pragma once\n#include <string_view>\nnamespace vstengine::factory {\n")
+set(_factory_list "")
+foreach(_graph IN LISTS VOX_FACTORY_GRAPHS)
+  set(_file ${CMAKE_CURRENT_SOURCE_DIR}/instruments/${_graph}/graph.json)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_file})
+  file(READ ${_file} _hex HEX)
+  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
+  string(MAKE_C_IDENTIFIER ${_graph} _name)
+  string(APPEND _factory_graphs "inline constexpr char ${_name}[] = {${_bytes}};\n")
+  string(APPEND _factory_list "std::string_view(${_name}, sizeof(${_name})), ")
+endforeach()
+string(APPEND _factory_graphs "inline constexpr std::string_view graphs[] = {${_factory_list}};\n}\n")
+file(CONFIGURE OUTPUT ${VOX_FACTORY_GRAPHS_HEADER} CONTENT "${_factory_graphs}" @ONLY)
+
 add_library(vst_rack STATIC
   libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
   libs/rack/RealtimeMutationGate.h
@@ -223,6 +253,7 @@ juce_generate_juce_header(VstEngine)
 target_sources(VstEngine PRIVATE
   apps/vst3/PluginProcessor.cpp apps/vst3/PluginProcessor.h
   apps/vst3/PluginEditor.cpp apps/vst3/PluginEditor.h)
+target_include_directories(VstEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 target_compile_definitions(VstEngine PUBLIC
   JUCE_WEB_BROWSER=0
@@ -231,7 +262,7 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_native vst_native_packages vst_rack vst_modules vst_sequence vst_parts
+  vst_core vst_instrument vst_native vst_native_packages vst_dspcore vst_rack vst_modules vst_sequence vst_parts
   vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
 
 if(MSVC)
@@ -590,6 +621,16 @@ if(VOX_PACKAGE_ARCH)
   endif()
   add_test(NAME demo_synth_tests
     COMMAND demo_synth_tests ${VOX_DEMO_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/demo-scratch)
+
+  # #75 slice 1: graph-only Demo (no DLL) vs the native Demo, bit for bit.
+  add_executable(graph_demo_parity_tests tests/integration/GraphDemoParityTests.cpp)
+  target_include_directories(graph_demo_parity_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(graph_demo_parity_tests PRIVATE VstEngine vst_dspcore)
+  add_dependencies(graph_demo_parity_tests VoxDemoSynth)
+  add_test(NAME graph_demo_parity_tests
+    COMMAND graph_demo_parity_tests ${VOX_DEMO_PACKAGE_ROOT}
+      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/demo-synth-graph/graph.json)
 endif()
 
 add_executable(reliability_stress_tests
