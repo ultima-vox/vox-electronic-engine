@@ -271,13 +271,14 @@ int main()
     REQUIRE(patternSignature(differentSlot) != patternSignature(basePsy),
             "SlotId participates in generation domain");
 
-    // Current schema only. Empty v8 keeps a new slot at its current defaults.
-    // v1–v7 payloads are rejected and must not change a single parameter.
+    // Empty payload carries no versioned bytes. A fresh #59 slot still uses
+    // schema 1; that must succeed and must not alter parameters. Non-empty
+    // v1–v7 blobs stay rejected.
     acid::AcidEngine soundState;
     REQUIRE(soundState.loadState(acid::AcidEngine::stateVersion, {}),
             "new Acid slot accepts empty current module state");
     const float factoryCutoff = soundState.parameter("cutoff");
-    for (const auto rejected : {
+    for (const auto fresh : {
              acid::AcidEngine::legacyStateVersion,
              acid::AcidEngine::previousStateVersion,
              acid::AcidEngine::lfo1StateVersion,
@@ -285,11 +286,15 @@ int main()
              acid::AcidEngine::lfo23StateVersion,
              acid::AcidEngine::stepStateVersion,
              acid::AcidEngine::stateVersion + 1u}) {
-        REQUIRE(!soundState.loadState(rejected, {}),
-                "non-current Acid schema is rejected even when empty");
+        REQUIRE(soundState.loadState(fresh, {}),
+                "empty Acid payload is a fresh slot, not a migration");
         REQUIRE(std::abs(soundState.parameter("cutoff") - factoryCutoff) < 0.00001f,
-                "rejected empty schema does not change cutoff");
+                "empty payload does not change cutoff");
     }
+    REQUIRE(soundState.setParameter("cutoff", 0.42f)
+                && soundState.loadState(acid::AcidEngine::legacyStateVersion, {})
+                && std::abs(soundState.parameter("cutoff") - 0.42f) < 0.00001f,
+            "empty legacy slot state does not reset a live Acid instance");
     constexpr std::uint32_t magic = 0x44494341u;
     constexpr std::uint32_t legacyVersion = 1u;
     const std::array<float, acid::AcidEngine::legacyParameterCount> legacyValues {
@@ -302,8 +307,8 @@ int main()
                 legacyValues.size() * sizeof(float));
     REQUIRE(!soundState.loadState(legacyVersion, oldState),
             "Acid v1 sound state is not migrated");
-    REQUIRE(std::abs(soundState.parameter("cutoff") - factoryCutoff) < 0.00001f,
-            "rejected v1 payload leaves factory cutoff intact");
+    REQUIRE(std::abs(soundState.parameter("cutoff") - 0.42f) < 0.00001f,
+            "rejected v1 payload leaves the live cutoff intact");
 
     REQUIRE(soundState.setParameter("cutoff", 0.42f), "mark current state before save");
     std::array<std::byte, acid::AcidEngine::encodedStateBytes> encoded {};

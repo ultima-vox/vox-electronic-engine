@@ -294,12 +294,12 @@ float AcidEngine::parameter(std::string_view id) const noexcept {
 
 bool AcidEngine::loadState(std::uint32_t schemaVersion,
                            std::span<const std::byte> payload) noexcept {
-    // Current schema only. An empty payload keeps the instance as it is so a
-    // newly selected slot stays at factory defaults. Older schemas are not
-    // migrated: a rejected payload does not change targets or smoothed state.
+    // An empty payload has no versioned bytes. A fresh #59 slot still reports
+    // schema 1; accept it and leave the instance unchanged. Non-empty data is
+    // current schema 8 only and is rejected without a partial apply.
+    if (payload.empty()) return true;
     if (schemaVersion != stateVersion)
         return false;
-    if (payload.empty()) return true;
     if (payload.size() != encodedStateBytes) return false;
 
     std::uint32_t magic = 0;
