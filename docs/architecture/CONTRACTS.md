@@ -62,7 +62,13 @@ tests and Architecture Guard review before merge.
 
 ## Historical code
 
-`libs/parts/`, legacy parameter IDs and existing modules are still active build/compatibility inputs.
-They are not archived without an audit of CMake, includes, state/preset loaders and tests.
+The POC global engine layer was audited and removed (owner #78 P1; no POC
+projects require migration): `libs/parts/`, `libs/generator/`, `BassPanel`,
+`PresetBrowser`, the POC Bass/Kick/Part/MATCH host parameters and the
+global Sound-preset path. The remaining global host parameters are `midiMode`,
+`rootNote`, `rngSeed` and `outputLevel`; Rack scenes are the only user preset
+format (`VstEnginePreset` version 2, format `rack-project-v5`). Existing
+modules are still active build inputs and are not archived without an audit
+of CMake, includes, state/preset loaders and tests.
 The historical inactive source is under [archive](../../archive/README.md).
 Do not reactivate it merely because it has been preserved.

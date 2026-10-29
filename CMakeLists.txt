@@ -101,18 +101,6 @@ add_library(vst_sequence STATIC
 target_include_directories(vst_sequence PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_sequence PUBLIC juce::juce_audio_basics)
 
-# parts: authoritative multitimbral model, routing, state and mixer policy.
-add_library(vst_parts STATIC
-  libs/parts/Part.h
-  libs/parts/PartRegistry.cpp libs/parts/PartRegistry.h
-  libs/parts/PartRouter.cpp libs/parts/PartRouter.h
-  libs/parts/PartMidiDelay.cpp libs/parts/PartMidiDelay.h
-  libs/parts/PartMixer.cpp libs/parts/PartMixer.h
-  libs/parts/PartState.cpp libs/parts/PartState.h)
-target_include_directories(vst_parts PUBLIC ${VST_LIBS_DIR})
-target_link_libraries(vst_parts PUBLIC
-  juce::juce_audio_basics juce::juce_data_structures vst_sequence)
-
 # transport: pure PPQ/grid musical-time math (header-only).
 add_library(vst_transport INTERFACE)
 target_include_directories(vst_transport INTERFACE ${VST_LIBS_DIR})
@@ -187,18 +175,12 @@ target_link_libraries(vst_modules PUBLIC
   vst_instrument vst_sequence vst_bass vst_acid vst_lead vst_semantic_fx vst_atmos
   juce::juce_audio_basics)
 
-# preset: preset format, filesystem, factory/user distinction, migration.
+# preset: user Rack scene files (current format only).
 add_library(vst_preset STATIC
   libs/preset/PresetManager.cpp libs/preset/PresetManager.h)
 target_include_directories(vst_preset PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_preset
-  PUBLIC juce::juce_core juce::juce_data_structures vst_sequence vst_core)
-
-# generator: deterministic seed-based musical pattern generation.
-add_library(vst_generator STATIC
-  libs/generator/PatternGenerator.cpp libs/generator/PatternGenerator.h)
-target_include_directories(vst_generator PUBLIC ${VST_LIBS_DIR})
-target_link_libraries(vst_generator PUBLIC vst_parts)
+  PUBLIC juce::juce_core juce::juce_data_structures vst_core)
 
 # shared VOX design-system primitives. Product UI may depend on this target;
 # the shared target must never depend on product UI or DSP targets.
@@ -210,13 +192,11 @@ add_library(vst_ui STATIC
   libs/ui/ZoneRangeEditor.cpp libs/ui/ZoneRangeEditor.h
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
-  libs/ui/BassPanel.cpp libs/ui/BassPanel.h
-  libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h
-  libs/ui/PresetBrowser.cpp libs/ui/PresetBrowser.h)
+  libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h)
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_ui PUBLIC
   juce::juce_gui_basics juce::juce_audio_utils juce::juce_audio_processors
-  vox_ui vst_sequence vst_parts vst_preset)
+  vox_ui vst_sequence vst_preset)
 
 # ---------------------------------------------------------------------------
 # VST3 shell: composition + host integration only.
@@ -248,8 +228,8 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_native vst_vins vst_dspcore vst_rack vst_modules vst_sequence vst_parts
-  vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
+  vst_core vst_instrument vst_native vst_vins vst_dspcore vst_rack vst_modules vst_sequence
+  vst_transport vst_midi vst_preset vst_ui vst_effects)
 
 if(MSVC)
   # JUCE's shared-code target emits one PDB. /FS serializes concurrent compiler
@@ -319,22 +299,6 @@ target_link_libraries(generated_note_scheduler_tests PRIVATE vst_midi)
 add_test(NAME generated_note_scheduler_tests
          COMMAND generated_note_scheduler_tests)
 
-add_executable(part_router_tests tests/parts/PartRouterTests.cpp)
-target_link_libraries(part_router_tests PRIVATE vst_parts)
-add_test(NAME part_router_tests COMMAND part_router_tests)
-
-add_executable(part_state_tests tests/parts/PartStateTests.cpp)
-target_link_libraries(part_state_tests PRIVATE vst_parts)
-add_test(NAME part_state_tests COMMAND part_state_tests)
-
-add_executable(part_sequence_tests tests/parts/PartSequenceTests.cpp)
-target_link_libraries(part_sequence_tests PRIVATE vst_parts)
-add_test(NAME part_sequence_tests COMMAND part_sequence_tests)
-
-add_executable(part_mixer_tests tests/parts/PartMixerTests.cpp)
-target_link_libraries(part_mixer_tests PRIVATE vst_parts)
-add_test(NAME part_mixer_tests COMMAND part_mixer_tests)
-
 add_executable(psy_bass_tests tests/bass/PsyBassTests.cpp)
 target_link_libraries(psy_bass_tests PRIVATE vst_bass)
 add_test(NAME psy_bass_tests COMMAND psy_bass_tests)
@@ -386,16 +350,12 @@ target_link_libraries(effects_tests PRIVATE vst_effects)
 add_test(NAME effects_tests COMMAND effects_tests)
 
 add_executable(preset_tests tests/preset/PresetTests.cpp)
-target_link_libraries(preset_tests PRIVATE vst_preset vst_parts)
+target_link_libraries(preset_tests PRIVATE vst_preset)
 add_test(NAME preset_tests COMMAND preset_tests)
-
-add_executable(generator_tests tests/generator/PatternGeneratorTests.cpp)
-target_link_libraries(generator_tests PRIVATE vst_generator)
-add_test(NAME generator_tests COMMAND generator_tests)
 
 add_executable(state_round_trip_tests
   tests/integration/StateRoundTripTests.cpp)
-target_link_libraries(state_round_trip_tests PRIVATE vst_preset vst_sequence vst_parts)
+target_link_libraries(state_round_trip_tests PRIVATE vst_preset vst_sequence)
 add_test(NAME state_round_trip_tests COMMAND state_round_trip_tests)
 
 add_executable(direct_parameter_contract_tests tests/rack/DirectParameterContractTests.cpp)

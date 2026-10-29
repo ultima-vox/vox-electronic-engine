@@ -81,7 +81,7 @@ int main()
     // --- Shell project-state encoding (must stay byte-stable) --------------
     auto tree = juce::ValueTree("PARAMETERS");
     auto stateParam = juce::ValueTree("PARAM");
-    stateParam.setProperty("id", juce::var("drive"), nullptr);
+    stateParam.setProperty("id", juce::var("outputLevel"), nullptr);
     stateParam.setProperty("value", juce::var(0.42f), nullptr);
     tree.appendChild(stateParam, nullptr);
 
@@ -114,7 +114,7 @@ int main()
         require(Sequence::currentVersion == 2, "currentVersion stays 2");
     }
 
-    // --- Preset XML + sequence blob integration ----------------------------
+    // --- Rack scene preset carries the sequence blob ----------------------
     {
         const auto dir =
             juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -122,40 +122,30 @@ int main()
         dir.deleteRecursively();
         dir.createDirectory();
 
-        class Store final : public vstengine::PresetStateStore {
-        public:
-            Store()
-            {
-                state = juce::ValueTree("PARAMETERS");
-                auto parameter = juce::ValueTree("PARAM");
-                parameter.setProperty("id", "drive", nullptr);
-                parameter.setProperty("value", 0.42, nullptr);
-                state.appendChild(parameter, nullptr);
-            }
-            [[nodiscard]] juce::ValueTree copyState() const override
-            {
-                return state.createCopy();
-            }
-            void replaceState(juce::ValueTree value) override
-            {
-                state = std::move(value);
-            }
-            [[nodiscard]] float convertTo0to1(const char*,
-                                              float plainValue) const override
-            {
-                return plainValue;
-            }
-            juce::ValueTree state;
-        } store;
-
-        vstengine::PresetManager manager(store, seq, dir);
-        manager.saveFullPreset("Integration Full");
-
-        // Reload through the preset path into a fresh sequence.
         Sequence fresh(8);
-        vstengine::PresetManager loader(store, fresh, dir);
-        require(loader.loadFullPreset("Integration Full"),
-                "full preset reloads");
+        vstengine::PresetManager manager(
+            { [&seq] {
+                 juce::MemoryBlock blob;
+                 seq.serialize(blob);
+                 juce::ValueTree project("PARAMETERS");
+                 project.setProperty("sequenceData", blob.toBase64Encoding(),
+                                     nullptr);
+                 return project;
+             },
+              [&fresh](const juce::ValueTree& project) {
+                  juce::MemoryBlock blob;
+                  if (!blob.fromBase64Encoding(
+                          project.getProperty("sequenceData").toString())
+                      || !Sequence::isValidSerialization(blob))
+                      return false;
+                  fresh = Sequence::deserialize(blob);
+                  return true;
+              } },
+            dir);
+        require(manager.saveFullPreset("Integration Full"),
+                "scene preset saves");
+        require(manager.loadFullPreset("Integration Full"),
+                "scene preset reloads");
         requireEqual(seq, fresh);
 
         dir.deleteRecursively();

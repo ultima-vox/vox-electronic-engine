@@ -1,8 +1,4 @@
 #include "preset/PresetManager.h"
-#include "core/KickParameterIds.h"
-#include "core/SoundParameterIds.h"
-#include "parts/PartState.h"
-#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -19,143 +15,141 @@ int testsPassed = 0;
         ++testsPassed;                                                         \
     } while (false)
 
-class FakeStore final : public vstengine::PresetStateStore {
-public:
-    FakeStore()
+using Manager = vstengine::PresetManager;
+
+// Stand-in for the plugin's single project-state authority.
+struct Project {
+    juce::ValueTree live { "PARAMETERS" };
+    int restores = 0;
+
+    Manager::SceneCallbacks callbacks()
     {
-        state = juce::ValueTree("PARAMETERS");
-        auto add = [this](const char* id, float value) {
-            juce::ValueTree parameter("PARAM");
-            parameter.setProperty("id", id, nullptr);
-            parameter.setProperty("value", value, nullptr);
-            state.appendChild(parameter, nullptr);
-        };
-        for (const auto* id : vstengine::core::soundParameterIds) add(id, 0.5f);
-        for (const auto* id : vstengine::core::kickSoundParameterIds) add(id, 0.5f);
-        for (const auto* id : { "midiMode", "midiChannel", "rootNote",
-                                "rngSeed", "kickMidiChannel",
-                                "matchBassTimingOffsetMs" })
-            add(id, 0.0f);
+        return { [this] { return live.createCopy(); },
+                 [this](const juce::ValueTree& tree) {
+                     if (!tree.hasType("PARAMETERS")
+                         || static_cast<int>(tree.getProperty(
+                                "stateSchemaVersion", 0)) != 5)
+                         return false;
+                     live = tree.createCopy();
+                     ++restores;
+                     return true;
+                 } };
     }
-    juce::ValueTree copyState() const override { return state; }
-    void replaceState(juce::ValueTree replacement) override
-    {
-        state = std::move(replacement);
-    }
-    float convertTo0to1(const char*, float value) const override
-    {
-        return juce::jlimit(0.0f, 1.0f, value / 10.0f);
-    }
-    juce::ValueTree state;
 };
 
-float read(const juce::ValueTree& state, const char* id)
+bool containsName(const Manager& manager, const juce::String& name)
 {
-    return static_cast<float>(static_cast<double>(
-        state.getChildWithProperty("id", id).getProperty("value")));
+    for (const auto& entry : manager.getPresets())
+        if (entry.name == name)
+            return true;
+    return false;
 }
-void write(juce::ValueTree& state, const char* id, float value)
+
+void writeFile(const juce::File& file, const juce::XmlElement& xml)
 {
-    state.getChildWithProperty("id", id).setProperty("value", value, nullptr);
+    REQUIRE(file.replaceWithText(xml.toString()), "fixture written");
 }
 } // namespace
 
 int main()
 {
     const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                         .getChildFile("VoxTranceEngine7APresetTests");
+                         .getChildFile("VoxRackScenePresetTests");
     dir.deleteRecursively();
     REQUIRE(dir.createDirectory(), "test directory created");
 
-    FakeStore store;
-    vstengine::sequence::Sequence sequence(16);
-    vstengine::parts::PartRegistry parts;
-    vstengine::PresetManager manager(
-        store, sequence, dir,
-        { [&parts] { return vstengine::parts::PartState::serialize(parts); },
-          [&parts](const juce::ValueTree& state) {
-              return vstengine::parts::PartState::restore(state, parts);
-          } });
+    Project project;
+    project.live.setProperty("stateSchemaVersion", 5, nullptr);
+    project.live.setProperty("marker", "first", nullptr);
+    Manager manager(project.callbacks(), dir);
 
-    const auto factories = manager.getFactoryPresetNames();
-    REQUIRE(factories.size() == 5, "only Bass factory presets remain active");
-    for (const auto& name : { "Tight Rolling", "Dark Rolling", "Short Punch",
-                              "Deep Rolling", "Hi-Tech Tight" })
-        REQUIRE(factories.contains(name), "Bass factory preset listed");
-    REQUIRE(manager.getFactoryPresetNames(
-                vstengine::PresetManager::EngineType::kick).isEmpty(),
-            "Kick factory bank absent");
-    REQUIRE(!manager.loadFactoryPreset("Psytrance"),
-            "removed Kick factory cannot load");
+    REQUIRE(manager.getPresets().isEmpty(), "no factory content is invented");
 
-    write(store.state, "drive", 0.75f);
-    write(store.state, "kickPitchEnd", 0.35f);
-    REQUIRE(manager.saveSoundPreset("Round Trip Bass"), "Bass sound saves");
-    write(store.state, "drive", 0.1f);
-    write(store.state, "kickPitchEnd", 0.8f);
-    REQUIRE(manager.loadSoundPreset("Round Trip Bass"), "Bass sound loads");
-    REQUIRE(std::abs(read(store.state, "drive") - 0.75f) < 1.0e-6f,
-            "Bass value restored");
-    REQUIRE(read(store.state, "kickPitchEnd") == 0.8f,
-            "Bass preset cannot leak into dormant Kick state");
+    REQUIRE(manager.saveFullPreset("Scene A"), "scene saves");
+    REQUIRE(manager.getCurrentPresetName() == "Scene A", "saved name current");
+    const auto file = dir.getChildFile("Scene A.xml");
+    const auto saved = juce::parseXML(file.loadFileAsString());
+    REQUIRE(saved != nullptr
+                && saved->getIntAttribute("version")
+                       == Manager::currentPresetVersion
+                && saved->getStringAttribute("type") == "full"
+                && saved->getStringAttribute("format") == Manager::sceneFormat,
+            "scene file uses the current explicit format");
 
-    const auto saveKick = manager.saveSoundPreset(
-        "New Kick", vstengine::PresetManager::EngineType::kick);
-    REQUIRE(saveKick.error == vstengine::PresetManager::Error::wrongEngine,
-            "new Kick content rejected");
+    project.live.setProperty("marker", "second", nullptr);
+    REQUIRE(manager.loadFullPreset("Scene A"), "scene loads");
+    REQUIRE(project.live.getProperty("marker").toString() == "first",
+            "scene restores through the project authority");
 
-    juce::XmlElement legacyKick("VstEnginePreset");
-    legacyKick.setAttribute("version", 2);
-    legacyKick.setAttribute("type", "sound");
-    legacyKick.setAttribute("engine", "kick");
-    legacyKick.createNewChildElement("name")->setText("Legacy Kick");
-    auto* parameters = legacyKick.createNewChildElement("parameters")
-                           ->createNewChildElement("PARAMETERS");
-    auto* parameter = parameters->createNewChildElement("PARAM");
-    parameter->setAttribute("id", "kickPitchEnd");
-    parameter->setAttribute("value", "0.25");
-    REQUIRE(dir.getChildFile("Legacy Kick.xml").replaceWithText(
-                legacyKick.toString()),
-            "legacy Kick fixture written");
-    bool legacyKickVisible = false;
-    for (const auto& entry : manager.getPresets())
-        legacyKickVisible = legacyKickVisible || entry.name == "Legacy Kick";
-    REQUIRE(!legacyKickVisible, "legacy Kick preset hidden from active catalog");
-    REQUIRE(manager.loadSoundPreset(vstengine::PresetManager::EngineType::kick,
-                                    "Legacy Kick"),
-            "legacy Kick preset remains explicitly readable for migration");
+    REQUIRE(!manager.saveFullPreset(" bad"), "untrimmed name rejected");
+    REQUIRE(manager.saveFullPreset("Scene A").wasOk(), "same scene overwrites");
 
-    parts[0].midiChannel = 5;
-    parts[0].sequence[3].gate = true;
-    parts[1].midiChannel = 9;
-    parts[1].sequence[6].gate = true;
-    write(store.state, "matchBassTimingOffsetMs", 0.42f);
-    REQUIRE(manager.saveFullPreset("Legacy Project"), "full state saves");
-    parts = vstengine::parts::PartRegistry {};
-    write(store.state, "matchBassTimingOffsetMs", 0.0f);
-    REQUIRE(manager.loadFullPreset("Legacy Project"), "full state loads");
-    REQUIRE(parts[0].midiChannel == 5 && parts[0].sequence[3].gate,
-            "Bass part round-trips");
-    REQUIRE(parts[1].midiChannel == 9 && parts[1].sequence[6].gate,
-            "removed Kick payload retained for migration");
-    REQUIRE(std::abs(read(store.state, "matchBassTimingOffsetMs") - 0.42f)
-                < 1.0e-6f,
-            "dormant MATCH value round-trips");
+    // Anything that is not the current scene format is neither listed nor
+    // loadable: old sound presets, v1 full presets and future versions.
+    juce::XmlElement sound("VstEnginePreset");
+    sound.setAttribute("version", 2);
+    sound.setAttribute("type", "sound");
+    sound.setAttribute("engine", "bass");
+    sound.createNewChildElement("name")->setText("Old Sound");
+    sound.createNewChildElement("parameters")
+        ->createNewChildElement("PARAMETERS");
+    writeFile(dir.getChildFile("Old Sound.xml"), sound);
 
-    const auto fullFile = dir.getChildFile("Legacy Project.xml");
-    const auto before = store.state.createCopy();
-    auto xml = juce::parseXML(fullFile.loadFileAsString());
-    REQUIRE(xml != nullptr, "full fixture parses");
-    auto* sequenceElement = xml->getChildByName("sequence");
-    sequenceElement->deleteAllTextElements();
-    sequenceElement->addTextElement("not-base64");
-    REQUIRE(fullFile.replaceWithText(xml->toString()), "corrupt fixture written");
-    const auto corrupt = manager.loadFullPreset("Legacy Project");
-    REQUIRE(corrupt.error == vstengine::PresetManager::Error::invalidPreset,
-            "corrupt full preset rejected transactionally");
-    REQUIRE(std::abs(read(store.state, "matchBassTimingOffsetMs")
-                     - read(before, "matchBassTimingOffsetMs")) < 1.0e-6f,
-            "failed load leaves state unchanged");
+    juce::XmlElement v1("VstEnginePreset");
+    v1.setAttribute("version", 1);
+    v1.setAttribute("type", "full");
+    v1.createNewChildElement("name")->setText("Old Full");
+    v1.createNewChildElement("parameters")->createNewChildElement("PARAMETERS");
+    v1.createNewChildElement("sequence")->addTextElement("AAAA");
+    writeFile(dir.getChildFile("Old Full.xml"), v1);
+
+    auto future = *saved;
+    future.setAttribute("version", Manager::currentPresetVersion + 1);
+    future.getChildByName("name")->deleteAllTextElements();
+    future.getChildByName("name")->addTextElement("Future");
+    writeFile(dir.getChildFile("Future.xml"), future);
+
+    REQUIRE(!containsName(manager, "Old Sound"), "sound preset not listed");
+    REQUIRE(!containsName(manager, "Old Full"), "v1 full preset not listed");
+    REQUIRE(!containsName(manager, "Future"), "future version not listed");
+    const auto before = project.restores;
+    REQUIRE(manager.loadFullPreset("Old Sound").error
+                == Manager::Error::invalidPreset,
+            "sound preset rejected");
+    REQUIRE(manager.loadFullPreset("Old Full").error
+                == Manager::Error::unsupportedVersion,
+            "v1 full preset rejected");
+    REQUIRE(manager.loadFullPreset("Future").error
+                == Manager::Error::unsupportedVersion,
+            "future version rejected");
+    REQUIRE(project.restores == before, "rejected files never restore state");
+    REQUIRE(manager.saveFullPreset("Old Sound").error
+                == Manager::Error::alreadyExists,
+            "saving never overwrites a non-scene file");
+
+    // The project authority decides; a refused restore is a failed load.
+    auto stale = *saved;
+    stale.getChildByName("parameters")
+        ->getChildByName("PARAMETERS")
+        ->setAttribute("stateSchemaVersion", 4);
+    stale.getChildByName("name")->deleteAllTextElements();
+    stale.getChildByName("name")->addTextElement("Stale");
+    writeFile(dir.getChildFile("Stale.xml"), stale);
+    project.live.setProperty("marker", "kept", nullptr);
+    REQUIRE(manager.loadFullPreset("Stale").error
+                == Manager::Error::invalidPreset,
+            "refused project restore fails the load");
+    REQUIRE(project.live.getProperty("marker").toString() == "kept",
+            "failed load leaves live state unchanged");
+
+    REQUIRE(manager.renamePreset("Scene A", "Scene B"), "scene renames");
+    REQUIRE(!containsName(manager, "Scene A") && containsName(manager, "Scene B"),
+            "rename replaces the entry");
+    REQUIRE(manager.deletePreset("Scene B"), "scene deletes");
+    REQUIRE(!containsName(manager, "Scene B"), "deleted scene gone");
+    REQUIRE(manager.loadFullPreset("Scene B").error
+                == Manager::Error::fileNotFound,
+            "deleted scene cannot load");
 
     dir.deleteRecursively();
     std::cout << "Preset tests passed (" << testsPassed << "/" << testsRun

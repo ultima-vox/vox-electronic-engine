@@ -173,8 +173,6 @@ int main()
             "internal FX preset applies through processor");
     require(processor->internalEffectsState().effects[0].enabled,
             "internal distortion becomes active");
-    setPlain(*processor, "kickTune", 43.0f);
-    setPlain(*processor, "matchBassTimingOffsetMs", 12.0f);
     juce::MemoryBlock state;
     processor->getStateInformation(state);
     require(state.getSize() > 0, "state serialization succeeds");
@@ -189,14 +187,13 @@ int main()
     require(restored->internalEffectsState().effects[0].enabled
                 && restored->internalEffectsState().effects[0].mix > 0.0f,
             "internal FX state round-trips");
-    require(std::abs(restored->parameters().getRawParameterValue("kickTune")->load()
-                     - 43.0f) < 0.01f,
-            "dormant Kick value retained for migration");
-    require(std::abs(restored->parameters().getRawParameterValue(
-                         "matchBassTimingOffsetMs")->load() - 12.0f) < 0.01f,
-            "dormant MATCH value retained for migration");
+    for (const auto* removed : { "drive", "filterCutoff", "midiChannel",
+                                 "bassLevel", "kickTune", "kickMidiChannel",
+                                 "kickLevel", "matchBassTimingOffsetMs" })
+        require(restored->parameters().getParameter(removed) == nullptr,
+                "POC engine/Part parameter is not a host parameter");
     require(renderHostNote(*restored, 9) < silent,
-            "legacy Kick parameters never reactivate audio");
+            "an unrouted channel stays silent");
 
     // Cubase may request project state from a non-audio thread while playback
     // continues. Saving must neither mutate the audio-thread control snapshot
