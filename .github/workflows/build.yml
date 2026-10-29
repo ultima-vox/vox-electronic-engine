@@ -30,6 +30,7 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Acid module realtime log
+        if: always() && steps.build.outcome == 'success'
         shell: powershell
         run: |
           $test = "build\Release\acid_module_tests.exe"
