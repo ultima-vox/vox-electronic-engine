@@ -75,10 +75,10 @@ jobs:
     steps:
       - name: Checkout Bass source
         uses: actions/checkout@v4
-      - name: Checkout shared proposed ABI from PR 67
+      - name: Checkout canonical Rack ABI for adapter test
         uses: actions/checkout@v4
         with:
-          ref: e46129be249bb4e07161b898ba2e659ea6bb075b
+          ref: 5f3818dea1dd2e1971058010aafb3ff570822ac2
           path: _vox_abi_v2
       - name: Configure Bass DLL
         shell: powershell

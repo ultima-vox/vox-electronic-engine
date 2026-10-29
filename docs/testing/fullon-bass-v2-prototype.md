@@ -1,38 +1,30 @@
-# Full-on Bass ABI V2 prototype — 28 October 2026
+﻿# Full-on Bass V2 adapter: experimental test path
 
-Status: experimental, **not production and not a Windows package**. The module
-wraps the existing `FullOnBassInstance` and 13 named plain controls, with explicit
-pool indices 0–12. The shared header was read from PR #67 commit `e46129b`; it
-is not vendored or modified. The ABI and loader remain provisional. Sound state
-is the existing canonical 52-byte version 1 format.
+The existing adapter wraps `FullOnBassInstance`, 13 independent controls and its
+canonical 52-byte v1 state. It is a test and reference path, not a decision to
+ship a native Bass DLL. The owner requests a graph-first `.vins` decision after
+Bass-specific sound and performance comparison; Rack owns production packaging.
 
-Build option: `VOX_BUILD_FULLON_BASS_MODULE=ON`; set `VOX_MODULE_ABI_V2_ROOT`
-to the `libs` directory in a checkout of the Rack-owned ABI header. This target
-has not been configured or compiled on Windows in this environment.
+The ABI header is owned by Rack and is not copied into Bass. Once the canonical
+header is present at `libs/instrument/abi/VoxModuleAbiV2.h`, the opt-in
+`VOX_BUILD_FULLON_BASS_MODULE` target uses it by default. Until the shared
+integration lands, CI tests the adapter against the canonical header at Rack
+#80 commit `5f3818dea1dd2e1971058010aafb3ff570822ac2` via an isolated test
+checkout. This test dependency is not a production installation strategy.
 
-Local experiment: Linux x86-64, GCC 13.3, JUCE 9.0.1, glibc 2.39. The shared
-library and an independent `dlopen` harness were compiled and run. The harness
-checks identity and 13 unique indices, all 13 parameter state isolation, invalid
-parameter rejection, two-instance isolation, canonical state round trip,
-identical initial audio, actual audible stereo, sample-offset parameter edit,
-reset and panic. A Linux interposer from #67 observed no malloc/calloc/realloc
-in 1000 warmed process calls with MIDI NoteOn and a parameter change. It does
-not prove absence of every allocation method or blocking lock. `nm -D` shows
-only `voxModuleEntryV2` exported. This is not the actual Rack adapter test.
+The adapter validates V2 transport and forwards sample rate, tempo, PPQ and
+playing state to Bass. Bass currently has no transport-driven note player; the
+Rack scheduler remains the sole sequence authority. Discontinuity/loop semantics
+and the graph/content handoff need the shared integration contract.
 
-Not done: signed Windows x64 DLL, approved package format, UI and content,
-Rack loading/removal/reinstall, Windows CMake/full CTest, exact Bass rerender
-root cause, comprehensive automation/MIDI/saturation conformance, sound-quality
-and DAW/owner acceptance. Retain draft status. No production discovery or trust
-policy is implemented here.
+Windows x64 Release CI for recovered commit `32ad958` passed both the VST3 and
+adapter jobs: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/40751447890.
+The real Rack processor integration test exercises the native module, MIDI,
+host gain and state restoration; it is not Cubase or production acceptance.
+A previous Linux interposer observed no malloc/calloc/realloc during 1000 warmed
+module calls; that is not a complete proof against every allocation or lock.
 
-## Windows CI preparation
-
-The repository workflow now includes an additional `windows-fullon-bass-v2`
-job targeting `[self-hosted, windows]`. It checks out the shared proposed ABI
-from PR #67 at `e46129be249bb4e07161b898ba2e659ea6bb075b`, configures the
-opt-in Bass DLL target, builds and runs the dynamic ABI smoke test, and uploads
-the DLL as an **experimental** artifact. It does not alter the main VST3 job
-or publish an installer. Workflow YAML and runner labels were parsed locally;
-Windows compilation, actual runner execution and artifact creation remain
-unverified until the branch is published and GitHub Actions runs it.
+Outstanding: signed production `.vins` through Rack's package flow, graph versus
+native Bass parity and performance, final UI mapping, transport/automation and
+content integration, full exact-head CI, owner sound approval and Cubase/REAPER
+acceptance. Do not label this adapter production-ready.

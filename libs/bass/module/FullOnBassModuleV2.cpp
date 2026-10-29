@@ -46,6 +46,7 @@ template<class T> T read(const T* p, uint32_t stride, uint32_t i) noexcept {
 }
 struct VoxInstanceT {
     FullOnBassInstance engine;
+    double sampleRate{};
     uint32_t maxBlock{}, channels{}, maxChanges{}, maxMidiEvents{};
     bool prepared{};
 };
@@ -72,6 +73,7 @@ VoxResult VOX_CALL prepare(VoxInstance s, const VoxPrepareSpecV2* p) {
         p->maxMidiEventsPerBlock < 16 || p->maxMidiEventsPerBlock > maxMidi) return VOX_E_INVALID_ARG;
     try {
         if (!s->engine.prepare({p->sampleRate,p->maxBlockSize,p->outputChannels})) return VOX_E_INVALID_ARG;
+        s->sampleRate=p->sampleRate;
         s->maxBlock=p->maxBlockSize; s->channels=p->outputChannels;
         s->maxChanges=p->maxParamChangesPerBlock; s->maxMidiEvents=p->maxMidiEventsPerBlock;
         s->prepared=true; return VOX_OK;
@@ -85,7 +87,12 @@ VoxResult VOX_CALL setAll(VoxInstance s, const float* v, uint32_t n) {
 }
 VoxResult VOX_CALL reset(VoxInstance s) { if (!s) return VOX_E_INVALID_ARG; s->engine.reset(); return VOX_OK; }
 VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
-    if (!s || !s->prepared || !validStruct(c) || c->numSamples > s->maxBlock ||
+    if (!s || !s->prepared || !validStruct(c) || !validStruct(c->transport) ||
+        (c->transport->flags & ~VOX_TRANSPORT_KNOWN_FLAGS) ||
+        ((c->transport->flags & VOX_TRANSPORT_HAS_TEMPO) &&
+         (!std::isfinite(c->transport->tempoBpm) || c->transport->tempoBpm <= 0.0)) ||
+        ((c->transport->flags & VOX_TRANSPORT_HAS_PPQ) && !std::isfinite(c->transport->ppqPosition)) ||
+        c->numSamples > s->maxBlock ||
         c->outputChannelCount != s->channels || !c->outputs ||
         (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) || c->paramChangeCount > s->maxChanges ||
         c->midiEventCount > s->maxMidiEvents ||
@@ -104,6 +111,13 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
         if (m.size == 0 || m.size > sizeof(m.bytes) || m.sampleOffset>=c->numSamples || (i && m.sampleOffset<last)) return VOX_E_INVALID_ARG;
         last=m.sampleOffset;
     }
+    const auto flags=c->transport->flags;
+    const double bpm=(flags & VOX_TRANSPORT_HAS_TEMPO) ? c->transport->tempoBpm : 0.0;
+    const double ppq=(flags & VOX_TRANSPORT_HAS_PPQ) ? c->transport->ppqPosition : 0.0;
+    const bool playing=(flags & VOX_TRANSPORT_PLAYING) != 0;
+    const double ppqPerSample=(playing && (flags & VOX_TRANSPORT_HAS_PPQ) && bpm > 0.0)
+        ? (bpm / (60.0 * s->sampleRate)) : 0.0;
+    if (!std::isfinite(ppq + ppqPerSample * c->numSamples)) return VOX_E_INVALID_ARG;
     for (uint32_t ch=0;ch<s->channels;++ch) std::fill_n(c->outputs[ch],c->numSamples,0.0f);
     if (c->releaseFlags & VOX_PANIC_AT_START) s->engine.reset();
     uint32_t cursor=0, pi=0, mi=0;
@@ -128,8 +142,9 @@ VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2* c) {
         }
         std::array<float*,2> outputs{};
         for (uint32_t ch=0;ch<s->channels;++ch) outputs[ch]=c->outputs[ch]+cursor;
+        const double slicePpq=ppq + ppqPerSample * cursor;
         s->engine.process({std::span<float*>(outputs.data(),s->channels),end-cursor,
-                           std::span<const VoxMidiEventV1>(midi.data(),n),0,120,0,false});
+                           std::span<const VoxMidiEventV1>(midi.data(),n),s->sampleRate,bpm,slicePpq,playing});
         cursor=end;
     }
     if (c->releaseFlags & VOX_RELEASE_ALL_SOUND_AT_END) s->engine.reset();

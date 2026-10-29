@@ -4,7 +4,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -59,6 +63,32 @@ int main(int argc,char** argv) {
     std::array<float,256> left{},right{},left2{},right2{}; float* out[]{left.data(),right.data()}; float* out2[]{left2.data(),right2.data()};
     VoxMidiEventV2 on{0,3,{0x90,36,127}};
     VoxProcessContextV2 ctx{sizeof(ctx),VOX_MODULE_ABI_V2,256,2,out,nullptr,0,sizeof(VoxParamChangeV2),&on,1,sizeof(on),0,0,0};
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    VoxTransportV2 transport{};
+    transport.structSize=sizeof(transport); transport.version=VOX_MODULE_ABI_V2;
+    transport.flags=VOX_TRANSPORT_HAS_TEMPO | VOX_TRANSPORT_HAS_PPQ | VOX_TRANSPORT_PLAYING;
+    transport.tempoBpm=145.0; transport.ppqPosition=12.0;
+    ctx.transport=&transport;
+    transport.tempoBpm=NAN; CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    transport.tempoBpm=145.0;
+    transport.ppqPosition=NAN; CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    transport.ppqPosition=12.0;
+    transport.flags |= 0x100u; CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    transport.flags &= ~0x100u;
+    transport.structSize=sizeof(transport)-1; CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    transport.structSize=sizeof(transport);
+    transport.ppqPosition=std::numeric_limits<double>::max();
+    transport.tempoBpm=std::numeric_limits<double>::max();
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    transport.ppqPosition=12.0; transport.tempoBpm=145.0;
+    ctx.midiEvents=nullptr; ctx.midiEventCount=0;
+    transport.flags=0; transport.ppqPosition=NAN; transport.tempoBpm=NAN;
+    CHECK(module->process(a,&ctx)==VOX_OK);
+    transport.flags=VOX_TRANSPORT_HAS_TEMPO | VOX_TRANSPORT_HAS_PPQ;
+    transport.ppqPosition=12.0; transport.tempoBpm=145.0;
+    CHECK(module->process(a,&ctx)==VOX_OK);
+    transport.flags |= VOX_TRANSPORT_PLAYING;
+    ctx.midiEvents=&on; ctx.midiEventCount=1;
     CHECK(module->process(a,&ctx)==VOX_OK); ctx.outputs=out2; CHECK(module->process(b,&ctx)==VOX_OK);
     CHECK(left==left2 && right==right2 && left==right);
     CHECK(std::any_of(left.begin(),left.end(),[](float x){return std::abs(x)>1e-5f;}));

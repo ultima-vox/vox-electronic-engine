@@ -87,9 +87,9 @@ target_link_libraries(vst_bass PUBLIC
   vst_instrument juce::juce_audio_basics juce::juce_audio_processors)
 
 # Independent Bass module prototype. The ABI header remains owned by Rack;
-# pass the checkout containing #67 via VOX_MODULE_ABI_V2_ROOT until integrated.
+# The canonical ABI is supplied by Rack; an override supports pre-integration testing.
 option(VOX_BUILD_FULLON_BASS_MODULE "Build the independent Full-on Bass module" OFF)
-set(VOX_MODULE_ABI_V2_ROOT "" CACHE PATH "Root containing instrument/abi/VoxModuleAbiV2.h")
+set(VOX_MODULE_ABI_V2_ROOT "${VST_LIBS_DIR}" CACHE PATH "Root containing instrument/abi/VoxModuleAbiV2.h")
 if(VOX_BUILD_FULLON_BASS_MODULE)
   if(NOT EXISTS "${VOX_MODULE_ABI_V2_ROOT}/instrument/abi/VoxModuleAbiV2.h")
     message(FATAL_ERROR "VOX_MODULE_ABI_V2_ROOT must point to the shared ABI headers")
