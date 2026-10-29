@@ -59,14 +59,40 @@ void FullOnBassInstance::reset() noexcept
     voice.resetDirect();
     currentNote = currentChannel = -1;
     sustainDown.fill(false);
+    heldNotes.fill({});
+    mostRecentNote = noHeldNote;
     keyHeld = false;
 }
 void FullOnBassInstance::releaseAllNotes() noexcept
 {
     sustainDown.fill(false);
+    heldNotes.fill({});
+    mostRecentNote = noHeldNote;
     if (currentNote >= 0) voice.noteOffDirect(true);
     currentNote = -1;
     keyHeld = false;
+}
+void FullOnBassInstance::forgetHeldNote(std::size_t index) noexcept
+{
+    auto& note = heldNotes[index];
+    if (!note.active) return;
+    if (note.previous == noHeldNote) mostRecentNote = note.next;
+    else heldNotes[note.previous].next = note.next;
+    if (note.next != noHeldNote) heldNotes[note.next].previous = note.previous;
+    note = {};
+}
+void FullOnBassInstance::resumeMostRecentNote() noexcept
+{
+    if (mostRecentNote == noHeldNote) {
+        voice.noteOffDirect(true);
+        currentNote = -1;
+        keyHeld = false;
+        return;
+    }
+    currentChannel = static_cast<int>(mostRecentNote / 128);
+    currentNote = static_cast<int>(mostRecentNote % 128);
+    keyHeld = heldNotes[mostRecentNote].pressed;
+    voice.noteOnDirect(currentNote, heldNotes[mostRecentNote].velocity);
 }
 void FullOnBassInstance::suspend() noexcept { suspended = true; reset(); }
 void FullOnBassInstance::resume() noexcept { suspended = false; }
@@ -186,36 +212,49 @@ void FullOnBassInstance::process(const instrument::ProcessBlock& block) noexcept
         if (type == 0x90 && event.data[2] != 0) {
             currentNote = event.data[1];
             currentChannel = event.data[0] & 0x0f;
+            const auto index = static_cast<std::size_t>(currentChannel) * 128 + event.data[1];
+            forgetHeldNote(index);
+            auto& held = heldNotes[index];
+            held.velocity = event.data[2] / 127.0f;
+            held.next = mostRecentNote;
+            held.active = held.pressed = true;
+            if (mostRecentNote != noHeldNote) heldNotes[mostRecentNote].previous = static_cast<std::uint16_t>(index);
+            mostRecentNote = static_cast<std::uint16_t>(index);
             keyHeld = true;
             voice.noteOnDirect(currentNote, event.data[2] / 127.0f);
-        } else if ((type == 0x80 || type == 0x90)
-                   && currentNote == event.data[1]
-                   && currentChannel == (event.data[0] & 0x0f)) {
-            keyHeld = false;
-            if (!sustainDown[static_cast<std::size_t>(currentChannel)]) {
-                voice.noteOffDirect(true);
-                currentNote = -1;
+        } else if (type == 0x80 || type == 0x90) {
+            const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
+            const auto index = channel * 128 + event.data[1];
+            auto& held = heldNotes[index];
+            if (!held.active || !held.pressed) continue;
+            held.pressed = false;
+            held.sustained = sustainDown[channel];
+            if (!held.sustained) forgetHeldNote(index);
+            if (currentNote == event.data[1] && currentChannel == static_cast<int>(channel)) {
+                keyHeld = false;
+                if (!sustainDown[channel]) resumeMostRecentNote();
             }
         } else if (type == 0xb0 && event.data[1] == 64) {
             const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
             sustainDown[channel] = event.data[2] >= 64;
-            if (!sustainDown[channel] && currentChannel == static_cast<int>(channel)
-                && currentNote >= 0 && !keyHeld) {
-                voice.noteOffDirect(true);
-                currentNote = -1;
+            if (!sustainDown[channel]) {
+                for (std::size_t note = 0; note < 128; ++note) {
+                    auto& held = heldNotes[channel * 128 + note];
+                    if (!held.pressed) forgetHeldNote(channel * 128 + note);
+                }
+                if (currentChannel == static_cast<int>(channel)
+                    && currentNote >= 0 && !keyHeld) resumeMostRecentNote();
             }
         } else if (type == 0xb0 && (event.data[1] == 120 || event.data[1] == 123)) {
             const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
             sustainDown[channel] = false;
+            for (std::size_t note = 0; note < 128; ++note) forgetHeldNote(channel * 128 + note);
             if (currentChannel == static_cast<int>(channel)) {
                 if (event.data[1] == 120) {
                     voice.resetDirect();
-                    currentChannel = -1;
-                } else if (currentNote >= 0) {
-                    voice.noteOffDirect(true);
                 }
-                currentNote = -1;
-                keyHeld = false;
+                if (currentNote >= 0) resumeMostRecentNote();
+                else if (event.data[1] == 120) { currentChannel = -1; keyHeld = false; }
             }
         }
     }

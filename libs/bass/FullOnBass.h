@@ -48,11 +48,23 @@ public:
     std::uint32_t tailSamples() const noexcept override;
 private:
     void updateVoice() noexcept;
+    void resumeMostRecentNote() noexcept;
+    void forgetHeldNote(std::size_t index) noexcept;
+    static constexpr std::uint16_t noHeldNote = 16 * 128;
+    struct HeldNote {
+        float velocity {};
+        std::uint16_t previous { noHeldNote }, next { noHeldNote };
+        bool active {}, pressed {}, sustained {};
+    };
     std::array<float, fullOnParameters.size()> values {};
     PsyBassVoice voice;
     instrument::PrepareSpec spec;
     int currentNote { -1 }, currentChannel { -1 };
     std::array<bool, 16> sustainDown {};
+    // One bounded entry per MIDI channel/key; head is the last held note.
+    // Intrusive links make retrigger and fallback constant-time without allocation.
+    std::array<HeldNote, 16 * 128> heldNotes {};
+    std::uint16_t mostRecentNote { noHeldNote };
     bool keyHeld {};
     std::uint32_t dirtyParameters { (1u << fullOnParameters.size()) - 1u };
     bool bypassed {}, suspended {};

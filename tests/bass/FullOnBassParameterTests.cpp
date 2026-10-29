@@ -165,6 +165,27 @@ void audioIndependence()
             require(normal.next(on) == restored.next(on), "restored audio agrees");
         }
 }
+void eachParameterChangesAudio()
+{
+    for (const auto& parameter : fullOnParameters) {
+        Render minimum, maximum;
+        require(minimum.bass.setParameter(parameter.id, parameter.minimum)
+                    && maximum.bass.setParameter(parameter.id, parameter.maximum),
+                "set parameter endpoints for audio comparison");
+        double difference = 0.0, totalEnergy = 0.0;
+        for (int block = 0; block < 80; ++block) {
+            const auto a = block == 0 ? minimum.next(on) : block == 16 ? minimum.next(off) : minimum.next();
+            const auto b = block == 0 ? maximum.next(on) : block == 16 ? maximum.next(off) : maximum.next();
+            for (std::size_t i = 0; i < a.size(); ++i) {
+                difference += std::abs(static_cast<double>(a[i]) - b[i]);
+                totalEnergy += static_cast<double>(a[i]) * a[i] + static_cast<double>(b[i]) * b[i];
+            }
+        }
+        if (!(difference > 1.0e-4)) std::cerr << "No audio change for " << parameter.id << '\n';
+        require(totalEnergy > 1.0e-8 && difference > 1.0e-4,
+                "each independent control changes real Bass audio");
+    }
+}
 void sustainedEdits()
 {
     // JUCE ADSR/pitch duration are note-on snapshots; changing their stored
@@ -222,6 +243,21 @@ void realtimeAllocationCheck()
     }
     countAllocations = false;
     require(allocationCount == 0, "warmed process/setters do not call C++ new/new[]");
+    std::array<VoxMidiEventV1, 2048> dense {};
+    for (std::size_t i = 0; i < dense.size(); ++i) {
+        const auto note = static_cast<std::uint8_t>(36 + (i / 4) % 48);
+        dense[i] = {static_cast<std::uint32_t>(i / 8), 3,
+                    {static_cast<std::uint8_t>(i % 4 == 0 ? 0x90 : i % 4 == 1 ? 0x80 : 0xb0),
+                     static_cast<std::uint8_t>(i % 4 < 2 ? note : i % 4 == 2 ? 64 : 123),
+                     static_cast<std::uint8_t>(i % 4 == 0 || i % 4 == 2 ? 127 : 0)}};
+    }
+    allocationCount = 0;
+    countAllocations = true;
+    for (int block = 0; block < 100; ++block)
+        bass.process({ outputs, 256, dense, 48000, 145, 0, true });
+    countAllocations = false;
+    require(allocationCount == 0, "dense overlapping MIDI path does not call C++ new/new[]");
+    bass.reset();
 }
 void sustainLifecycle()
 {
@@ -333,6 +369,74 @@ void sustainLifecycle()
     require(energy(retrigger.next()) == 0,
             "one note-off releases a retriggered key");
 }
+void overlappingNotePriority()
+{
+    Render actual, reference;
+    const std::array<VoxMidiEventV1, 1> highOn {{{0, 3, {0x90, 43, 100}}}};
+    const std::array<VoxMidiEventV1, 1> highOff {{{64, 3, {0x80, 43, 0}}}};
+    const std::array<VoxMidiEventV1, 1> lowRetrigger {{{64, 3, {0x90, 36, 127}}}};
+    require(actual.next(on) == reference.next(on), "overlap baseline note agrees");
+    require(actual.next(highOn) == reference.next(highOn), "newest note takes priority");
+    require(actual.next(highOff) == reference.next(lowRetrigger),
+            "releasing newest note retriggers last held note at event offset");
+    require(energy(actual.next(off)) > 1e-8, "fallback note begins its release");
+    for (int i = 0; i < 100; ++i) actual.next();
+    require(energy(actual.next()) == 0, "overlap sequence leaves no stuck note");
+
+    Render olderReleased, newestOnly;
+    olderReleased.next(on); newestOnly.next(on);
+    olderReleased.next(highOn); newestOnly.next(highOn);
+    require(olderReleased.next(off) == newestOnly.next(),
+            "releasing a non-current note does not interrupt newest note");
+    olderReleased.next(highOff); newestOnly.next(highOff);
+    for (int i = 0; i < 100; ++i) olderReleased.next();
+    require(energy(olderReleased.next()) == 0, "released earlier note is not revived");
+
+    const std::array<VoxMidiEventV1, 1> middleOn {{{0, 3, {0x90, 40, 90}}}};
+    const std::array<VoxMidiEventV1, 1> middleOff {{{0, 3, {0x80, 40, 0}}}};
+    Render middleActual, middleReference;
+    middleActual.next(on); middleReference.next(on);
+    middleActual.next(middleOn); middleReference.next(middleOn);
+    middleActual.next(highOn); middleReference.next(highOn);
+    middleActual.next(middleOff); middleReference.next(middleOff);
+    require(middleActual.next(highOff) == middleReference.next(lowRetrigger),
+            "removing middle held note retains older fallback");
+
+    const std::array<VoxMidiEventV1, 1> pedalDown {{{0, 3, {0xb0, 64, 127}}}};
+    const std::array<VoxMidiEventV1, 1> pedalUpAt64 {{{64, 3, {0xb0, 64, 0}}}};
+    Render pedalActual, pedalReference;
+    pedalActual.next(on); pedalReference.next(on);
+    pedalActual.next(pedalDown); pedalReference.next(pedalDown);
+    pedalActual.next(highOn); pedalReference.next(highOn);
+    require(pedalActual.next(highOff) == pedalReference.next(highOff), "pedal retains newest released note");
+    require(pedalActual.next(pedalUpAt64) == pedalReference.next(lowRetrigger),
+            "pedal release returns to last still-held note at its offset");
+
+    Render pressedActual, pressedReference;
+    pressedActual.next(on); pressedReference.next(on);
+    pressedActual.next(pedalDown); pressedReference.next(pedalDown);
+    require(pressedActual.next(pedalUpAt64) == pressedReference.next(),
+            "pedal release does not retrigger a physically held note");
+
+    const std::array<VoxMidiEventV1, 1> otherHigh {{{0, 3, {0x91, 43, 100}}}};
+    const std::array<VoxMidiEventV1, 1> otherAllNotes {{{64, 3, {0xb1, 123, 0}}}};
+    Render channelActual, channelReference;
+    channelActual.next(on); channelReference.next(on);
+    channelActual.next(otherHigh); channelReference.next(otherHigh);
+    require(channelActual.next(otherAllNotes) == channelReference.next(lowRetrigger),
+            "channel all-notes-off returns to held note on another channel");
+    const std::array<VoxMidiEventV1, 1> otherSoundOff {{{64, 3, {0xb1, 120, 0}}}};
+    Render soundActual, soundReference;
+    soundActual.next(on); soundReference.next(on);
+    soundActual.next(otherHigh); soundReference.next(otherHigh);
+    require(soundActual.next(otherSoundOff) == soundReference.next(lowRetrigger),
+            "channel all-sound-off preserves a held note on another channel");
+
+    Render panic;
+    panic.next(on); panic.next(highOn); panic.bass.reset();
+    require(energy(panic.next(highOff)) == 0 && energy(panic.next()) == 0,
+            "reset clears held-note priority state");
+}
 void boundsAndLifecycle()
 {
     Render baseline, other;
@@ -432,6 +536,47 @@ void writeCpuEvidence()
             }
     require(static_cast<bool>(file), "write Bass CPU evidence");
 }
+
+void writeDenseCpuEvidence()
+{
+    const char* outputFile = std::getenv("VOX_BASS_DENSE_CPU_CSV");
+    if (!outputFile || !*outputFile) return;
+    std::ofstream file(outputFile);
+    require(static_cast<bool>(file), "open dense MIDI CPU evidence");
+    file << "sample_rate,block_size,instances,events_per_block,blocks,p95_us,p99_us,worst_us,p99_budget_percent\n";
+    for (double rate : {44100.0, 48000.0, 96000.0})
+        for (std::uint32_t blockSize : {64u, 128u, 512u}) {
+            FullOnBassInstance voice;
+            require(voice.prepare({rate, blockSize, 2}), "dense MIDI probe prepare");
+            std::array<float, 512> left{}, right{};
+            std::array<float*, 2> outputs {left.data(), right.data()};
+            std::array<VoxMidiEventV1, 2048> events {};
+            for (std::size_t i = 0; i < events.size(); ++i) {
+                const auto note = static_cast<std::uint8_t>(36 + (i / 4) % 48);
+                events[i] = {static_cast<std::uint32_t>(i * blockSize / events.size()), 3,
+                    {static_cast<std::uint8_t>(i % 4 == 0 ? 0x90 : i % 4 == 1 ? 0x80 : 0xb0),
+                     static_cast<std::uint8_t>(i % 4 < 2 ? note : i % 4 == 2 ? 64 : 123),
+                     static_cast<std::uint8_t>(i % 4 == 0 || i % 4 == 2 ? 127 : 0)}};
+            }
+            std::array<double, 100> elapsed {};
+            for (int iteration = -10; iteration < static_cast<int>(elapsed.size()); ++iteration) {
+                const auto start = std::chrono::steady_clock::now();
+                std::fill_n(left.begin(), blockSize, 0.0f);
+                std::fill_n(right.begin(), blockSize, 0.0f);
+                voice.process({outputs, blockSize, events, rate, 145, 0, true});
+                const auto end = std::chrono::steady_clock::now();
+                if (iteration >= 0)
+                    elapsed[static_cast<std::size_t>(iteration)] =
+                        std::chrono::duration<double, std::micro>(end - start).count();
+            }
+            std::sort(elapsed.begin(), elapsed.end());
+            const double p95 = elapsed[94], p99 = elapsed[98];
+            file << static_cast<int>(rate) << ',' << blockSize << ",1,2048,"
+                 << elapsed.size() << ',' << p95 << ',' << p99 << ',' << elapsed.back()
+                 << ',' << p99 * rate / (10000.0 * blockSize) << '\n';
+        }
+    require(static_cast<bool>(file), "write dense MIDI CPU evidence");
+}
 void compliance()
 {
     // Factory adapter for the common harness; the instance is the real new DSP.
@@ -457,9 +602,10 @@ void compliance()
 }
 int main()
 {
-    independence(); audioIndependence(); sustainedEdits(); sustainLifecycle(); boundsAndLifecycle();
+    independence(); audioIndependence(); eachParameterChangesAudio(); sustainedEdits(); sustainLifecycle(); overlappingNotePriority(); boundsAndLifecycle();
     realtimeAllocationCheck(); compliance();
     writeReleaseEvidence();
     writeCpuEvidence();
+    writeDenseCpuEvidence();
     std::cout << "Full-on Bass independent parameters: " << checks << " checks PASS\n";
 }
