@@ -50,6 +50,23 @@ uint32_t voxAbiLayoutC(uint32_t *out, uint32_t capacity) {
       ENTRY(VoxModuleV2, content),
       ENTRY(VoxModuleV2, editor),
       ENTRY(VoxModuleV2, shutdown),
+      ENTRY(VoxProcessContextV2, pattern),
+      ENTRY(VoxProcessContextV2, patternGeneration),
+      (uint32_t)sizeof(VoxPatternStepV2),
+      ENTRY(VoxPatternStepV2, gate),
+      ENTRY(VoxPatternStepV2, slide),
+      ENTRY(VoxPatternStepV2, probability),
+      ENTRY(VoxPatternStepV2, reserved),
+      (uint32_t)sizeof(VoxPatternV2),
+      ENTRY(VoxPatternV2, cellStride),
+      ENTRY(VoxPatternV2, cells),
+      (uint32_t)sizeof(VoxPatternCapsV2),
+      ENTRY(VoxPatternCapsV2, stepFields),
+      ENTRY(VoxPatternCapsV2, laneNames),
+      ENTRY(VoxPatternCapsV2, laneNotes),
+      (uint32_t)sizeof(VoxContentApiV2),
+      ENTRY(VoxContentApiV2, getPatternCaps),
+      ENTRY(VoxContentApiV2, getFactoryPattern),
   };
   const uint32_t count = (uint32_t)(sizeof(values) / sizeof(values[0]));
   for (uint32_t i = 0; i < count && i < capacity; ++i)

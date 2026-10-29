@@ -466,6 +466,115 @@ void noAllocationInProcess() {
 }
 } // namespace
 
+std::uint64_t patternSeen(std::uint32_t slotIndex, std::uint32_t &checksum) {
+  return reinterpret_cast<std::uint64_t(VOX_CALL *)(std::uint32_t, std::uint32_t *)>(
+      testHook("voxTestPatternSeen"))(slotIndex, &checksum);
+}
+
+// The module's pattern caps and factory pattern are imported at load, and the
+// Rack's snapshot reaches the module's process through the appended context
+// fields.
+void patternContentImportedAndDelivered() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  check(module != nullptr, "module acquired: " + diagnostic);
+  const auto descriptors = module->descriptors();
+  check(descriptors.size() == 1 && descriptors[0].patternContent != nullptr,
+        "pattern content imported");
+  const auto &content = *descriptors[0].patternContent;
+  check(content.caps.playback == VOX_PATTERN_PLAYBACK_INTERNAL && content.caps.laneCount == 2 &&
+            content.caps.laneNotes == std::vector<std::uint8_t>{60, 64} &&
+            content.caps.laneNames[1] == "High",
+        "caps copied from the module");
+  check(content.factory.size() == 1 && content.factory[0].name == "Test Pulse",
+        "factory pattern imported by name");
+  const auto &factory = *content.factory[0].pattern;
+  check(factory.laneCount == 2 && factory.stepsPerBar == 4 &&
+            factory.at(0, 0, 0).flags == (VOX_STEP_ON | VOX_STEP_ACCENT) &&
+            factory.at(1, 0, 2).velocity == 70,
+        "factory cells copied exactly");
+
+  auto provider = instrument::native::makeProvider(module);
+  instrument::CreateContext context;
+  context.slotIndex = 13;
+  auto instance = provider->create(toneId, context);
+  check(instance != nullptr && instance->prepare({48000.0, blockSize, 2}), "adapter prepared");
+  std::vector<float> left(blockSize), right(blockSize);
+  float *channels[] = {left.data(), right.data()};
+  const auto view = factory.view();
+  instrument::ProcessBlock block;
+  block.outputs = channels;
+  block.sampleCount = blockSize;
+  block.sampleRate = 48000.0;
+  block.pattern = &view;
+  block.patternGeneration = 7;
+  instance->process(block);
+  std::uint32_t checksum = 0;
+  check(patternSeen(13, checksum) == 7, "snapshot generation reaches the module");
+  check(checksum == 1 * 120 + 7 * 70, "snapshot cells reach the module");
+}
+
+// Hostile content tables reject the instrument instead of being trusted.
+namespace hostile {
+const char *const names[] = {"A", "B"};
+const std::uint8_t notes[] = {36, 38};
+VoxPatternCapsV2 caps{sizeof(VoxPatternCapsV2), VOX_MODULE_ABI_V2, VOX_PATTERN_PLAYBACK_INTERNAL,
+                      2, 16, 1, VOX_FIELD_VELOCITY, 1, names, notes};
+int mode = 0;
+VoxResult VOX_CALL getCaps(const char *, const VoxPatternCapsV2 **out) {
+  if (mode == 1)
+    return VOX_E_INTERNAL;
+  *out = &caps;
+  return VOX_OK;
+}
+VoxResult VOX_CALL getFactory(const char *, std::uint32_t, const char **name, VoxPatternV2 *p) {
+  *name = mode == 4 ? "" : "Factory";
+  p->laneCount = 2;
+  p->stepsPerBar = 4;
+  p->barCount = 1;
+  if (mode == 2)
+    return VOX_E_INTERNAL;
+  if (mode == 3)
+    p->cells[0].note = 5; // a field this instrument does not read
+  if (mode == 5)
+    p->cellCapacity = 1u << 20; // module tampers with the host buffer bounds
+  return VOX_OK;
+}
+const VoxContentApiV2 table{sizeof(VoxContentApiV2), VOX_MODULE_ABI_V2, getCaps, getFactory};
+} // namespace hostile
+
+void hostileContentRejected() {
+  instrument::InstrumentDescriptor descriptor;
+  descriptor.id = "hostile";
+  std::string diagnostic;
+  hostile::mode = 0;
+  check(instrument::native::importContent(&hostile::table, descriptor, diagnostic) &&
+            descriptor.patternContent != nullptr,
+        "well-formed content imports: " + diagnostic);
+  check(instrument::native::importContent(nullptr, descriptor, diagnostic) &&
+            descriptor.patternContent == nullptr,
+        "no content table: no pattern");
+  for (int mode : {1, 2, 3, 4, 5}) {
+    hostile::mode = mode;
+    check(!instrument::native::importContent(&hostile::table, descriptor, diagnostic) &&
+              descriptor.patternContent == nullptr,
+          "hostile content mode " + std::to_string(mode) + " rejected");
+  }
+  hostile::mode = 0;
+  hostile::caps.laneNotes = nullptr;
+  check(!instrument::native::importContent(&hostile::table, descriptor, diagnostic),
+        "INTERNAL caps without lane notes rejected");
+  hostile::caps.laneNotes = hostile::notes;
+  hostile::caps.factoryPatternCount = 2; // same name twice
+  check(!instrument::native::importContent(&hostile::table, descriptor, diagnostic) &&
+            diagnostic.find("duplicate") != std::string::npos,
+        "duplicate factory pattern names rejected");
+  hostile::caps.factoryPatternCount = 1;
+  VoxModuleV2 m{};
+  check(!instrument::native::validModuleTable(&m), "empty module table rejected");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     std::cerr << "usage: native_rack_tests <absolute test module path>\n";
@@ -484,6 +593,8 @@ int main(int argc, char **argv) {
   resetFaultLatches();
   faultedModuleIsNotReentered();
   noAllocationInProcess();
+  patternContentImportedAndDelivered();
+  hostileContentRejected();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

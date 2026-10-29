@@ -20,7 +20,7 @@ C++ providers linked into the Rack. M1/M2 need them as separate DLLs.
 | 8 | Realtime | No per-block reapplication of unchanged values (the host sends only changes), no string lookups, smoothing only where needed. Zero allocations/locks in `process`/`reset`. | Instrument owner |
 | 9 | Transport | `VoxTransportV2` every block: tempo, ppq at sample 0, playing, loop, discontinuity, with validity flags. No tempo inference from sample position or wall clock. Acid LFO sync/STEP/sequencer use it. | Both |
 | 10 | State | Module owns its binary state and its migrations (`loadState(stateVersion, bytes)` loads older versions, e.g. Acid v1, v3–v8). Rack stores bytes + version; named parameter values remain authoritative on restore. `maxStateBytes` declared honestly (Acid 4096, Bass 52). | Instrument owner |
-| 11 | Content | Sound/pattern presets and pattern generation need a versioned V2 content table (not defined yet; next ABI slice). Until then presets only via named values. | Rack owner proposes |
+| 11 | Content | Defined in V2.1: `VoxContentApiV2` (pattern caps, factory patterns) and the pattern snapshot appended to `VoxProcessContextV2`; see [PATTERN_CONTENT_ABI](PATTERN_CONTENT_ABI.md). Sound presets stay named values. | Rack owner (approved, #78) |
 | 12 | UI | Rack's generic VOX controls (already in #68) first; declarative `ui.json` layout next; a native editor interface only after a reviewed requirement (Acid 303 sequencer interactivity). | Rack owner |
 
 Please answer item by item on #68 or #59; disagreements change this table,

@@ -273,7 +273,9 @@ public:
                                       overflow ? VOX_RELEASE_ALL_SOUND_AT_END : 0u,
                                       0,
                                       samplePosition_,
-                                      &transport_};
+                                      &transport_,
+                                      block.pattern,
+                                      block.patternGeneration};
     if (table_->process(handle_, &context) != VOX_OK) {
       fault();
       silence(block);
@@ -406,7 +408,12 @@ bool validModuleTable(const VoxModuleV2 *m) noexcept {
   return m != nullptr && aligned(m) && versioned(m->structSize, m->version, sizeof(VoxModuleV2)) &&
          m->instrumentCount >= 1 && m->instrumentCount <= maxInstrumentsPerModule &&
          m->getInstrument && m->create && m->destroy && m->prepare && m->setAllParameters &&
-         m->reset && m->process && m->saveState && m->loadState && m->shutdown;
+         m->reset && m->process && m->saveState && m->loadState && m->shutdown &&
+         m->editor == nullptr &&
+         (m->content == nullptr ||
+          (aligned(m->content) &&
+           versioned(m->content->structSize, m->content->version, sizeof(VoxContentApiV2)) &&
+           m->content->getPatternCaps && m->content->getFactoryPattern));
 }
 
 bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &out,
@@ -461,6 +468,51 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
   return true;
 }
 
+bool importContent(const VoxContentApiV2 *content, InstrumentDescriptor &descriptor,
+                   std::string &diagnostic) {
+  descriptor.patternContent.reset();
+  if (content == nullptr)
+    return true;
+  const VoxPatternCapsV2 *raw = nullptr;
+  if (content->getPatternCaps(descriptor.id.c_str(), &raw) != VOX_OK) {
+    diagnostic = "native pattern caps query failed";
+    return false;
+  }
+  if (raw == nullptr)
+    return true; // this instrument has no pattern
+  auto imported = std::make_shared<pattern::Content>();
+  std::string why;
+  if (!aligned(raw) || !pattern::importCaps(raw, imported->caps, why)) {
+    diagnostic = "invalid native pattern caps: " + why;
+    return false;
+  }
+  auto buffer = std::make_unique<pattern::Pattern>();
+  for (std::uint32_t i = 0; i < raw->factoryPatternCount; ++i) {
+    buffer->cells.fill(pattern::defaultStep());
+    auto view = buffer->view();
+    view.laneCount = view.stepsPerBar = view.barCount = 0;
+    const char *name = nullptr;
+    auto stored = std::make_shared<pattern::Pattern>();
+    if (content->getFactoryPattern(descriptor.id.c_str(), i, &name, &view) != VOX_OK ||
+        !boundedString(name) || view.cells != buffer->cells.data() ||
+        view.cellStride != sizeof(VoxPatternStepV2) ||
+        view.cellCapacity != buffer->cells.size() ||
+        !pattern::fromView(view, imported->caps, *stored, why)) {
+      diagnostic = "invalid native factory pattern " + std::to_string(i) +
+                   (why.empty() ? std::string{} : ": " + why);
+      return false;
+    }
+    for (const auto &existing : imported->factory)
+      if (existing.name == name) {
+        diagnostic = "duplicate native factory pattern name";
+        return false;
+      }
+    imported->factory.push_back({name, std::move(stored)});
+  }
+  descriptor.patternContent = std::move(imported);
+  return true;
+}
+
 NativeModule::~NativeModule() = default; // never reached: modules live until exit
 
 std::shared_ptr<NativeModule> NativeModule::acquire(const std::filesystem::path &path,
@@ -499,7 +551,8 @@ std::shared_ptr<NativeModule> NativeModule::acquire(const std::filesystem::path 
       const VoxInstrumentDescriptorV2 *raw = nullptr;
       InstrumentDescriptor descriptor;
       valid = table->getInstrument(i, &raw) == VOX_OK &&
-              importDescriptor(raw, descriptor, diagnostic);
+              importDescriptor(raw, descriptor, diagnostic) &&
+              importContent(table->content, descriptor, diagnostic);
       if (valid)
         module->descriptors_.push_back(std::move(descriptor));
     }

@@ -134,8 +134,9 @@ typedef struct VoxModuleV2 {
                                   uint32_t* written, uint32_t* stateVersion);
   VoxResult (VOX_CALL *loadState)(VoxInstance, uint32_t stateVersion,
                                   const uint8_t* bytes, uint32_t size);
-  const VoxContentApiV2* content;    /* presets, patterns, generator; may be NULL */
-  const VoxEditorApiV2*  editor;     /* optional native editor; NULL = declarative UI */
+  const VoxContentApiV2* content;    /* pattern caps + factory patterns; may be NULL
+                                        (PATTERN_CONTENT_ABI.md) */
+  const VoxEditorApiV2*  editor;     /* reserved, must be NULL: UI is declarative */
   VoxResult (VOX_CALL *shutdown)(void);  /* after the last lease, before FreeLibrary */
 } VoxModuleV2;
 ```

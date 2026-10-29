@@ -36,6 +36,7 @@ add_library(vst_instrument STATIC
   libs/instrument/InstrumentRegistry.cpp libs/instrument/InstrumentRegistry.h
   libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h)
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_instrument PUBLIC vst_pattern)
 
 # native: host side of the instrument module ABI V2 (controller-thread loading,
 # descriptor import, provider/instance adapters). PROPOSED, not frozen.
@@ -100,6 +101,11 @@ add_library(vst_sequence STATIC
   libs/sequence/RealtimeSequenceBridge.h)
 target_include_directories(vst_sequence PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_sequence PUBLIC juce::juce_audio_basics)
+
+# pattern: V2 pattern contract host model (validation, encoding, snapshots).
+add_library(vst_pattern STATIC
+  libs/pattern/Pattern.cpp libs/pattern/Pattern.h)
+target_include_directories(vst_pattern PUBLIC ${VST_LIBS_DIR})
 
 # transport: pure PPQ/grid musical-time math (header-only).
 add_library(vst_transport INTERFACE)
@@ -298,6 +304,11 @@ add_executable(generated_note_scheduler_tests
 target_link_libraries(generated_note_scheduler_tests PRIVATE vst_midi)
 add_test(NAME generated_note_scheduler_tests
          COMMAND generated_note_scheduler_tests)
+
+find_package(Threads REQUIRED)
+add_executable(pattern_tests tests/pattern/PatternTests.cpp)
+target_link_libraries(pattern_tests PRIVATE vst_pattern Threads::Threads)
+add_test(NAME pattern_tests COMMAND pattern_tests)
 
 add_executable(psy_bass_tests tests/bass/PsyBassTests.cpp)
 target_link_libraries(psy_bass_tests PRIVATE vst_bass)

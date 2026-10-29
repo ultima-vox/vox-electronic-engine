@@ -354,7 +354,7 @@ static int validRecords(const void *records, uint32_t count, uint32_t stride, si
 }
 
 static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
-  if (s == NULL || c == NULL || !s->prepared || c->structSize < sizeof(VoxProcessContextV2) ||
+  if (s == NULL || c == NULL || !s->prepared || c->structSize < VOX_PROCESS_CONTEXT_V2_BASE_SIZE ||
       c->version != VOX_MODULE_ABI_V2 || c->numSamples > s->maxBlock ||
       c->outputChannelCount != s->outputChannels || c->outputs == NULL ||
       (c->releaseFlags & ~VOX_KNOWN_RELEASE_FLAGS) != 0 || c->transport == NULL ||
