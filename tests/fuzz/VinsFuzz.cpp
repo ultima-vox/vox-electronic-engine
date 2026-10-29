@@ -33,6 +33,41 @@ Bytes readFile(const fs::path &p) {
   std::exit(1);
 }
 
+// Inserts a copy of b[from, from + len) at `at`. The bytes are copied first:
+// vector::insert with a range from the same vector is undefined behavior.
+void duplicateRange(Bytes &b, std::size_t from, std::size_t len, std::size_t at) {
+  const Bytes chunk(b.begin() + static_cast<std::ptrdiff_t>(from),
+                    b.begin() + static_cast<std::ptrdiff_t>(from + len));
+  b.insert(b.begin() + static_cast<std::ptrdiff_t>(at), chunk.begin(), chunk.end());
+}
+
+// Checks duplicateRange against an independently built expectation, both
+// when the insert must reallocate and when spare capacity avoids it.
+bool duplicateRangeSelfTest() {
+  const Bytes original{1, 2, 3, 4, 5, 6, 7, 8};
+  struct Case { std::size_t from, len, at; };
+  for (const Case c : {Case{0, 8, 0}, Case{2, 3, 6}, Case{5, 3, 1}, Case{3, 0, 4},
+                       Case{0, 4, 8}, Case{6, 2, 7}}) {
+    Bytes expected(original.begin(), original.begin() + static_cast<std::ptrdiff_t>(c.at));
+    expected.insert(expected.end(), original.begin() + static_cast<std::ptrdiff_t>(c.from),
+                    original.begin() + static_cast<std::ptrdiff_t>(c.from + c.len));
+    expected.insert(expected.end(), original.begin() + static_cast<std::ptrdiff_t>(c.at),
+                    original.end());
+    for (const bool spare : {false, true}) {
+      Bytes b(original.begin(), original.end()); // capacity == size
+      if (spare)
+        b.reserve(b.size() + c.len + 16);
+      const bool reallocates = b.capacity() < b.size() + c.len;
+      if (spare == reallocates && c.len != 0)
+        return false; // the case does not exercise the intended path
+      duplicateRange(b, c.from, c.len, c.at);
+      if (b != expected)
+        return false;
+    }
+  }
+  return true;
+}
+
 Bytes mutate(Bytes b, std::mt19937_64 &rng) {
   const auto pick = [&](std::size_t n) { return n == 0 ? 0 : static_cast<std::size_t>(rng() % n); };
   static const std::uint8_t interesting[] = {0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF, 0x50, 0x4B};
@@ -51,10 +86,7 @@ Bytes mutate(Bytes b, std::mt19937_64 &rng) {
     case 3: b.resize(pick(b.size() + 1)); break;
     case 4: { // duplicate a range
       const auto from = pick(b.size()), len = pick(std::min<std::size_t>(64, b.size() - from) + 1);
-      // Copy first: inserting a vector's own range into itself is undefined.
-      const Bytes chunk(b.begin() + static_cast<std::ptrdiff_t>(from),
-                        b.begin() + static_cast<std::ptrdiff_t>(from + len));
-      b.insert(b.begin() + static_cast<std::ptrdiff_t>(pick(b.size())), chunk.begin(), chunk.end());
+      duplicateRange(b, from, len, pick(b.size()));
       break;
     }
     case 5: b.insert(b.begin() + static_cast<std::ptrdiff_t>(pick(b.size() + 1)), pick(16) + 1,
@@ -97,6 +129,10 @@ int main(int argc, char **argv) {
   if (argc != 5) {
     std::cerr << "usage: vins_fuzz <test-vins dir> <instruments dir> <iterations> <seed>\n";
     return 2;
+  }
+  if (!duplicateRangeSelfTest()) {
+    std::cerr << "duplicate-range mutation self-test failed\n";
+    return 1;
   }
   std::vector<Bytes> seeds;
   for (const fs::path dir : {fs::path(argv[1]), fs::path(argv[2])})
