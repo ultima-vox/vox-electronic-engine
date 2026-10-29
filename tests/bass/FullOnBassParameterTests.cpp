@@ -2,6 +2,7 @@
 #include "instrument/InstrumentComplianceHarness.h"
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -390,6 +391,47 @@ void writeReleaseEvidence()
         require(static_cast<bool>(file), "write release evidence WAV");
     }
 }
+
+void writeCpuEvidence()
+{
+    const char* outputFile = std::getenv("VOX_BASS_CPU_CSV");
+    if (!outputFile || !*outputFile) return;
+    std::ofstream file(outputFile);
+    require(static_cast<bool>(file), "open Bass CPU evidence");
+    file << "sample_rate,block_size,voices,blocks,p95_us,p99_us,worst_us,p99_budget_percent\n";
+    for (double rate : {44100.0, 48000.0, 96000.0})
+        for (std::uint32_t blockSize : {64u, 128u, 512u})
+            for (std::size_t voices : {1u, 2u, 8u, 16u}) {
+                std::array<FullOnBassInstance, 16> instances;
+                std::array<std::vector<float>, 16> left, right;
+                std::array<std::array<float*, 2>, 16> outputs;
+                for (std::size_t i = 0; i < voices; ++i) {
+                    left[i].resize(blockSize); right[i].resize(blockSize);
+                    outputs[i] = {left[i].data(), right[i].data()};
+                    require(instances[i].prepare({rate, blockSize, 2}), "CPU probe prepare");
+                    instances[i].process({outputs[i], blockSize, on, rate, 145, 0, true});
+                }
+                std::array<double, 200> elapsed {};
+                for (int iteration = -20; iteration < static_cast<int>(elapsed.size()); ++iteration) {
+                    const auto start = std::chrono::steady_clock::now();
+                    for (std::size_t i = 0; i < voices; ++i) {
+                        std::fill(left[i].begin(), left[i].end(), 0.0f);
+                        std::fill(right[i].begin(), right[i].end(), 0.0f);
+                        instances[i].process({outputs[i], blockSize, {}, rate, 145, 0, true});
+                    }
+                    const auto end = std::chrono::steady_clock::now();
+                    if (iteration >= 0)
+                        elapsed[static_cast<std::size_t>(iteration)] =
+                            std::chrono::duration<double, std::micro>(end - start).count();
+                }
+                std::sort(elapsed.begin(), elapsed.end());
+                const double p95 = elapsed[189], p99 = elapsed[197];
+                file << static_cast<int>(rate) << ',' << blockSize << ',' << voices << ','
+                     << elapsed.size() << ',' << p95 << ',' << p99 << ',' << elapsed.back()
+                     << ',' << p99 * rate / (10000.0 * blockSize) << '\n';
+            }
+    require(static_cast<bool>(file), "write Bass CPU evidence");
+}
 void compliance()
 {
     // Factory adapter for the common harness; the instance is the real new DSP.
@@ -418,5 +460,6 @@ int main()
     independence(); audioIndependence(); sustainedEdits(); sustainLifecycle(); boundsAndLifecycle();
     realtimeAllocationCheck(); compliance();
     writeReleaseEvidence();
+    writeCpuEvidence();
     std::cout << "Full-on Bass independent parameters: " << checks << " checks PASS\n";
 }
