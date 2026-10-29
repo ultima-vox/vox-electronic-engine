@@ -52,10 +52,7 @@ endfunction()
 # A production build must be signed with the owner's release key. There is
 # no fallback: without the key a production configure fails (#77 gate 3).
 option(VOX_PRODUCTION_BUILD "Configure a production release (requires VOX_PUBLISHER_PRIVATE_KEY)" OFF)
-if(VOX_PRODUCTION_BUILD AND NOT VOX_PUBLISHER_PRIVATE_KEY)
-  message(FATAL_ERROR "VOX_PRODUCTION_BUILD requires VOX_PUBLISHER_PRIVATE_KEY (the owner's "
-    "release publisher key). Release is BLOCKED until key custody is set up.")
-endif()
+include(${CMAKE_CURRENT_LIST_DIR}/VinsProductionGate.cmake)
 if(VOX_PUBLISHER_PRIVATE_KEY)
   set(VOX_PUBLISHER_KEY "${VOX_PUBLISHER_PRIVATE_KEY}")
   set(VOX_PUBLISHER_LABEL "release publisher key")

@@ -87,6 +87,15 @@ target_include_directories(vst_vins PUBLIC ${VST_LIBS_DIR} PRIVATE ${CMAKE_BINAR
 target_link_libraries(vst_vins
   PUBLIC vst_native vst_dspcore juce::juce_core juce::juce_cryptography ${CMAKE_DL_LIBS})
 
+# The production gate refuses a release without the owner's publisher key.
+add_test(NAME vins_production_gate_refuses_dev_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_PUBLISHER_PRIVATE_KEY=
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
+set_tests_properties(vins_production_gate_refuses_dev_key PROPERTIES WILL_FAIL TRUE)
+add_test(NAME vins_production_gate_accepts_release_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_PUBLISHER_PRIVATE_KEY=release.pem
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
+
 # Package tool (host build): writes manifests and deterministic archives.
 add_executable(vox_vins_pack tools/VinsPack.cpp)
 target_link_libraries(vox_vins_pack PRIVATE vst_vins)
@@ -597,6 +606,14 @@ if(VOX_NATIVE_PLATFORM)
   add_test(NAME vins_package_tests
     COMMAND vins_package_tests ${VOX_TEST_VINS_DIR} ${VOX_INSTRUMENTS_DIR}
       ${CMAKE_BINARY_DIR}/vins-scratch)
+
+  # Mutation fuzzing of the untrusted-input parsers (short pass in CTest).
+  add_executable(vins_fuzz tests/fuzz/VinsFuzz.cpp)
+  target_link_libraries(vins_fuzz PRIVATE vst_vins)
+  target_compile_definitions(vins_fuzz PRIVATE JUCE_STANDALONE_APPLICATION=1)
+  add_dependencies(vins_fuzz vins_test_tone vins_test_tone_untrusted vins_demo_synth
+    vins_demo_synth_graph)
+  add_test(NAME vins_fuzz COMMAND vins_fuzz ${VOX_TEST_VINS_DIR} ${VOX_INSTRUMENTS_DIR} 20000 1)
 
   add_executable(demo_synth_tests tests/integration/DemoSynthTests.cpp)
   target_include_directories(demo_synth_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}

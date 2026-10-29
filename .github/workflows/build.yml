@@ -131,3 +131,10 @@ jobs:
             build/*.exe
             build/*.zip
           if-no-files-found: error
+
+      - name: Remove the development publisher key from the runner
+        if: always()
+        shell: powershell
+        run: |
+          # The per-run development private keys must not outlive the job.
+          if (Test-Path build\publisher) { Get-ChildItem build\publisher\*.pem | Remove-Item -Force }

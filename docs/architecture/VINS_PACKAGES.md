@@ -199,3 +199,17 @@ vox_add_vins(<target> KIND graph|native OUTPUT <file.vins> ID ... VERSION ...
 
 `demo_synth_tests` and `graph_demo_parity_tests` load the real
 `VoxDemoSynth.vins` and `VoxDemoSynthGraph.vins` packages from the build.
+
+`vins_fuzz` is a deterministic mutation fuzzer. Its seeds are the real
+packages built in the tree. It mutates whole archives, manifests, signatures
+and graphs, and feeds them to `readZip`, `parseManifest`, `verifySignature`
+and the graph compiler, checking the reader's invariants on every accepted
+archive.
+- CTest runs 20,000 iterations on every platform.
+- A local ASan/UBSan campaign ran 400,000 iterations with no crash or
+  invariant violation.
+- libFuzzer is not available in this environment, so this harness takes its
+  place for now.
+
+`vins_production_gate_*` checks that a production configure without the
+owner's key fails, and that one with the key passes.
