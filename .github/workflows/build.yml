@@ -93,6 +93,7 @@ jobs:
             "Head commit: $env:HEAD_SHA"
             "Built commit (PR merge ref): $env:GITHUB_SHA"
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "BUILD TYPE: DEVELOPMENT - not a production artifact (no release publisher key; #77 gate 3 is BLOCKED)"
             "Publisher key (id, bits): $key - development key of this CI build tree, not a release key; native .vins from other runs do not load"
             "Rack SHA-256: $((Get-FileHash -Algorithm SHA256 $rack).Hash.ToLower())"
           )
@@ -150,3 +151,10 @@ jobs:
             build/*.exe
             build/*.zip
           if-no-files-found: error
+
+      - name: Remove the development publisher key from the runner
+        if: always()
+        shell: powershell
+        run: |
+          # The per-run development private keys must not outlive the job.
+          if (Test-Path build\publisher) { Get-ChildItem build\publisher\*.pem | Remove-Item -Force }
