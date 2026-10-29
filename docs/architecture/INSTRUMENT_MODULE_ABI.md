@@ -361,13 +361,33 @@ Semantics:
 - **Loop wraps inside a block** are not representable with block-start
   values; the wrap appears as DISCONTINUITY on the next block. This is a
   documented V2 limitation shared with the current Rack.
+- **Stopped.** `PLAYING` clear; the host still passes the last known
+  `ppqPosition`/`timeInSamples` and tempo with their `HAS_*` flags when the DAW
+  reports them (most do while stopped). Sequencers do not advance; free-running
+  sound continues; tempo-synced LFOs hold their phase at the reported position.
+- **Tempo unavailable.** `HAS_TEMPO` clear (for example a host without a play
+  head, or the standalone wrapper): synced LFOs and the sequencer stop at the
+  last valid phase; nothing falls back to a default BPM or wall clock. When
+  tempo returns, DISCONTINUITY is set and phase is recomputed from the ppq.
+- **Project reopen.** Transport is never part of module state. After
+  `loadState` the first block carries DISCONTINUITY and the module derives its
+  musical phase only from that block's ppq, so a reopened project at the same
+  position produces the same phase as an uninterrupted run.
+- **Block partitions.** Musical phase is a pure function of
+  `ppqPosition + n * tempoBpm / (60 * sampleRate)`, so with constant tempo the
+  output does not depend on how the host splits blocks. With tempo automation
+  the host only reports block-start tempo, so phase is exact at every block
+  start and linear within a block; renders with different block sizes can then
+  differ by at most one block's tempo slope. This is the V2 limit, stated, not
+  hidden.
 - **Determinism.** The same host timeline (offline render, same block sizes)
   yields the same transport sequence and therefore the same output.
 
 Test when approved: a transport round trip through the test DLL with a
 ppq-derived step counter across play, stop, start, seek, loop wrap, missing
-tempo and block-size changes, asserting step positions, DISCONTINUITY
-handling and bit-identical repeat renders.
+tempo, state reload and block-size changes (64/128/512 at constant tempo must
+be bit-identical), asserting step positions, DISCONTINUITY handling and
+bit-identical repeat renders. No transport UI is added.
 
 ## Threads
 
