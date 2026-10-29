@@ -825,6 +825,192 @@ void sequencerStateReopensWithoutDuplicates() {
   check(a.energy() > 1.0 && a == b, "reopened project plays the same pattern, no duplicate beats");
 }
 
+// ------------------------------------------------- multi-track Host MIDI
+// Owner workflow (#72): eight Cubase MIDI tracks (one per pad) all output to
+// the same Rack instance on the kit slot's channel. The kit must sound the
+// same as one merged clip, whatever order the DAW merges same-tick events in.
+struct Part {
+  std::string name;
+  std::vector<Midi> events;
+};
+
+// Reads a Standard MIDI File as per-track events in samples at `rate`, on the
+// kit slot's channel. Track 0 of a type-1 file (tempo, metre) has no notes.
+std::vector<Part> readMidiFile(const fs::path &file, double rate, int channel) {
+  juce::FileInputStream in(juce::File(file.string()));
+  check(in.openedOk(), "MIDI file opens: " + file.string());
+  juce::MidiFile midi;
+  check(midi.readFrom(in), "MIDI file parses: " + file.string());
+  midi.convertTimestampTicksToSeconds();
+  std::vector<Part> parts;
+  for (int t = 0; t < midi.getNumTracks(); ++t) {
+    Part part;
+    for (const auto *holder : *midi.getTrack(t)) {
+      const auto &m = holder->message;
+      if (m.isTrackNameEvent())
+        part.name = m.getTextFromTextMetaEvent().toStdString();
+      if (!m.isNoteOnOrOff())
+        continue;
+      check(m.getChannel() == 1, part.name + ": notes are on MIDI channel 1");
+      auto routed = m;
+      routed.setChannel(channel);
+      part.events.push_back(
+          {static_cast<int>(std::lround(m.getTimeStamp() * rate)), routed});
+    }
+    parts.push_back(std::move(part));
+  }
+  return parts;
+}
+
+// Merges tracks the way a DAW feeds one plugin input: per sample, tracks in
+// the given order (each track's events in its own order).
+std::vector<Midi> merge(const std::vector<Part> &parts, const std::vector<int> &order) {
+  std::vector<Midi> out;
+  for (int t : order)
+    out.insert(out.end(), parts[static_cast<std::size_t>(t)].events.begin(),
+               parts[static_cast<std::size_t>(t)].events.end());
+  std::stable_sort(out.begin(), out.end(),
+                   [](const Midi &a, const Midi &b) { return a.sample < b.sample; });
+  return out;
+}
+
+std::vector<Midi> withoutNote(const std::vector<Midi> &events, int note) {
+  std::vector<Midi> out;
+  for (const auto &e : events)
+    if (e.message.getNoteNumber() != note)
+      out.push_back(e);
+  return out;
+}
+
+void multiTrackHostMidi(const fs::path &midiDir) {
+  auto r = makeRig(packageRoot);
+  check(plainOf(r, seqMode) == 0.0f, "Seq Mode defaults to Host MIDI");
+  const auto tracks = readMidiFile(midiDir / "fullon-drums-145bpm-8-tracks.mid", r.rate, r.channel);
+  const auto single = readMidiFile(midiDir / "fullon-drums-145bpm-4bar.mid", r.rate, r.channel);
+
+  // The file: a conductor track plus eight named parts, each with only its
+  // own fixed note on channel 1; together they are exactly the 1-track groove.
+  const std::vector<std::pair<std::string, int>> expected = {
+      {"Kick", 36},       {"Rim", 37}, {"Snare", 38},    {"Clap", 39},
+      {"Closed Hat", 42}, {"Tom", 45}, {"Open Hat", 46}, {"Cymbal", 49}};
+  check(tracks.size() == 9 && tracks[0].events.empty(),
+        "type-1 file: conductor track + eight part tracks");
+  check(single.size() == 1, "the one-track groove is kept");
+  std::size_t total = 0;
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    const auto &part = tracks[i + 1];
+    check(part.name == expected[i].first, "track " + std::to_string(i + 1) + " is named " +
+                                              expected[i].first + " (" + part.name + ")");
+    bool own = !part.events.empty();
+    for (const auto &e : part.events)
+      own = own && e.message.getNoteNumber() == expected[i].second;
+    check(own, part.name + " holds only note " + std::to_string(expected[i].second));
+    total += part.events.size();
+  }
+  check(total == single[0].events.size(), "the eight parts together are the whole groove");
+
+  const int length = static_cast<int>(std::lround(4 * 4 * 60.0 / 145.0 * r.rate)) + 24000;
+  std::vector<int> order = {1, 2, 3, 4, 5, 6, 7, 8};
+  const auto groove = render(r, length, single[0].events);
+  check(groove.energy() > 1.0 && groove.finite() && groove.peak() < 1.0,
+        "the groove is audible, finite and below full scale");
+  check(render(r, length, merge(tracks, order)) == groove,
+        "eight tracks into one kit slot sound bit for bit like the merged clip");
+
+  // A DAW may merge same-tick events from different tracks in any order.
+  std::vector<int> reversed(order.rbegin(), order.rend());
+  check(render(r, length, merge(tracks, reversed)) == groove,
+        "track merge order does not change the render (reversed)");
+  check(render(r, length, merge(tracks, {5, 1, 7, 3, 8, 2, 6, 4})) == groove,
+        "track merge order does not change the render (shuffled)");
+
+  // Per-track mute and solo remove or keep exactly that part.
+  const auto mutedOpenHat = render(r, length, merge(tracks, {1, 2, 3, 4, 5, 6, 8}));
+  check(mutedOpenHat != groove &&
+            mutedOpenHat == render(r, length, withoutNote(single[0].events, 46)),
+        "muting the Open Hat track removes only the open hat");
+  const auto soloKick = render(r, length, merge(tracks, {1}));
+  check(soloKick.energy() > 0.1 && soloKick == render(r, length, tracks[1].events),
+        "soloing the Kick track plays only the kick");
+
+  // Overlap: the same part on two tracks (a duplicated track) is one hit, not two.
+  check(render(r, length, merge({tracks[0], tracks[1], tracks[1]}, {1, 2})) == soloKick,
+        "a duplicated Kick track does not double the kick");
+
+  // Simultaneous hats with Hat Choke: the result does not depend on which
+  // track arrives first (pad order decides: the open hat rings).
+  const auto hatsA = render(r, 24000, {{100, MidiMessage::noteOn(r.channel, 42, (juce::uint8)100)},
+                                       {100, MidiMessage::noteOn(r.channel, 46, (juce::uint8)100)}});
+  const auto hatsB = render(r, 24000, {{100, MidiMessage::noteOn(r.channel, 46, (juce::uint8)100)},
+                                       {100, MidiMessage::noteOn(r.channel, 42, (juce::uint8)100)}});
+  check(hatsA == hatsB && hatsA.energy(4800, 24000) > 1e-4,
+        "simultaneous closed + open hat render the same in either track order");
+
+  // CC120 / CC123 on one track at the same sample as notes on others.
+  for (const auto &cc : {MidiMessage::allSoundOff(r.channel), MidiMessage::allNotesOff(r.channel)}) {
+    const auto before = render(r, 24000, {{0, MidiMessage::noteOn(r.channel, 49, (juce::uint8)110)},
+                                          {4800, cc},
+                                          {4800, MidiMessage::noteOn(r.channel, 36, (juce::uint8)110)}});
+    const auto after = render(r, 24000, {{0, MidiMessage::noteOn(r.channel, 49, (juce::uint8)110)},
+                                         {4800, MidiMessage::noteOn(r.channel, 36, (juce::uint8)110)},
+                                         {4800, cc}});
+    check(before == after && before.energy(4800, 24000) > 0.01,
+          "a same-sample all-off and NoteOn render the same in either order (the new hit plays)");
+  }
+
+  // A stray MIDI track on another channel does not trigger this kit.
+  auto stray = tracks[1];
+  for (auto &e : stray.events)
+    e.message.setChannel(r.channel == 16 ? 1 : r.channel + 1);
+  check(render(r, length, merge({tracks[0], tracks[1], tracks[2], tracks[3], tracks[4],
+                                 tracks[5], tracks[6], tracks[7], tracks[8], stray},
+                                {1, 2, 3, 4, 5, 6, 7, 8, 9})) == groove,
+        "a stray track on another MIDI channel is ignored");
+
+  // Host MIDI plays the tracks; Internal ignores them, so nothing doubles.
+  TestPlayHead headA, headB, headC;
+  setPlain(r, seqMode, 1.0f); // Internal
+  fresh(r);
+  const auto internalOnly = play(r, headA, length);
+  fresh(r);
+  const auto internalWithTracks = play(r, headB, length, merge(tracks, order));
+  check(internalOnly.energy() > 1.0 && internalWithTracks == internalOnly,
+        "Internal mode ignores the eight tracks (no duplicate hits)");
+  setPlain(r, seqMode, 0.0f); // Host MIDI
+  fresh(r);
+  check(play(r, headC, length, merge(tracks, order)) == groove,
+        "Host MIDI with a running transport plays exactly the eight tracks");
+
+  // Loop: Cubase sends the 4-bar clips again. The second pass is the first
+  // plus only the decaying tails of the first pass's last hits.
+  const int bars4 = static_cast<int>(std::lround(4 * 4 * 60.0 / 145.0 * r.rate));
+  auto looped = merge(tracks, order);
+  for (const auto &e : merge(tracks, order))
+    looped.push_back({e.sample + bars4, e.message});
+  const auto twice = render(r, 2 * bars4, looped);
+  const auto once = render(r, bars4, merge(tracks, order));
+  double late = 0;
+  for (int i = bars4 / 2; i < bars4; ++i)
+    late = std::max({late, std::abs(static_cast<double>(twice.l[bars4 + i]) - once.l[i]),
+                     std::abs(static_cast<double>(twice.r[bars4 + i]) - once.r[i])});
+  check(late < 1e-4, "a looped second pass matches the first (max difference " +
+                         std::to_string(late) + ")");
+
+  // Save and reopen: the same eight tracks render the same.
+  juce::MemoryBlock state;
+  r.p->getStateInformation(state);
+  auto reopened = makeRig({}, r.slot);
+  reopened.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                         native::loadPackages(packageRoot));
+  quietBuiltIns(*reopened.p);
+  reopened.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  reopened.p->prepareToPlay(r.rate, r.block);
+  reopened.channel = channelOf(*reopened.p, r.slot);
+  check(reopened.channel == r.channel, "reopened kit keeps its MIDI channel");
+  check(render(reopened, length, merge(tracks, order)) == groove,
+        "reopened project plays the eight tracks bit for bit");
+}
+
 void stateMigratesFromV1() {
   const auto selection = native::resolvePackages(packageRoot);
   std::string diagnostic;
@@ -858,8 +1044,8 @@ void stateMigratesFromV1() {
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 3) {
-    std::cerr << "usage: fullon_drums_tests <drum package root> <scratch dir>\n";
+  if (argc != 4) {
+    std::cerr << "usage: fullon_drums_tests <drum package root> <scratch dir> <midi dir>\n";
     return 2;
   }
   packageRoot = fs::absolute(argv[1]);
@@ -879,6 +1065,7 @@ int main(int argc, char **argv) {
   sequencerFollowsLoopsSeeksAndSwing();
   sequencerPatternControls();
   sequencerStateReopensWithoutDuplicates();
+  multiTrackHostMidi(fs::absolute(argv[3]));
   stateMigratesFromV1();
   noAllocationWhilePlaying();
   std::cout << "fullon_drums_tests: " << checks << " checks passed\n";

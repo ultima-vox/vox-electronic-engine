@@ -632,7 +632,8 @@ if(VOX_PACKAGE_ARCH)
     target_link_options(fullon_drums_tests PRIVATE -rdynamic)
   endif()
   add_test(NAME fullon_drums_tests
-    COMMAND fullon_drums_tests ${VOX_DRUMS_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/drums-scratch)
+    COMMAND fullon_drums_tests ${VOX_DRUMS_PACKAGE_ROOT} ${CMAKE_BINARY_DIR}/drums-scratch
+      ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)
 endif()
 
 add_executable(reliability_stress_tests
