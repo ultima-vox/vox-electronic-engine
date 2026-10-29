@@ -297,10 +297,11 @@ int main() {
   require(p.getParameters().size() ==
               static_cast<int>(instrument::maxSlots *
                                instrument::poolParametersPerSlot),
-          "fixed pool layout: 16 x 64 endpoints, independent of the catalog");
-  require(p.state.getParameter("slot16.p064") != nullptr &&
-              p.state.getParameter("slot01.p065") == nullptr,
-          "pool IDs cover exactly slotNN.p001..p064");
+          "fixed pool layout: 16 x 128 endpoints, independent of the catalog");
+  require(instrument::poolParametersPerSlot == 128 &&
+              p.state.getParameter("slot16.p128") != nullptr &&
+              p.state.getParameter("slot01.p129") == nullptr,
+          "pool IDs cover exactly slotNN.p001..p128");
   require(param("cutoff")->getName(64) == "Slot 1 Param 02" &&
               param("cutoff")->getLabel().isEmpty(),
           "unbound endpoint has a neutral generic name");
