@@ -937,14 +937,32 @@ void multiTrackHostMidi(const fs::path &midiDir) {
   check(render(r, length, merge({tracks[0], tracks[1], tracks[1]}, {1, 2})) == soloKick,
         "a duplicated Kick track does not double the kick");
 
-  // Simultaneous hats with Hat Choke: the result does not depend on which
-  // track arrives first (pad order decides: the open hat rings).
-  const auto hatsA = render(r, 24000, {{100, MidiMessage::noteOn(r.channel, 42, (juce::uint8)100)},
-                                       {100, MidiMessage::noteOn(r.channel, 46, (juce::uint8)100)}});
-  const auto hatsB = render(r, 24000, {{100, MidiMessage::noteOn(r.channel, 46, (juce::uint8)100)},
-                                       {100, MidiMessage::noteOn(r.channel, 42, (juce::uint8)100)}});
-  check(hatsA == hatsB && hatsA.energy(4800, 24000) > 1e-4,
-        "simultaneous closed + open hat render the same in either track order");
+  // Coincident closed + open hat (quantized CH and OH lanes). Hat Choke on:
+  // the closed hat wins in either track order; the open hat is cut within
+  // 3 ms. Hat Choke off: both ring.
+  auto hats = [&](int first, int second) {
+    return render(r, 24000, {{100, MidiMessage::noteOn(r.channel, first, (juce::uint8)100)},
+                             {100, MidiMessage::noteOn(r.channel, second, (juce::uint8)100)}});
+  };
+  const auto closedAlone =
+      render(r, 24000, {{100, MidiMessage::noteOn(r.channel, 42, (juce::uint8)100)}});
+  const auto openAlone =
+      render(r, 24000, {{100, MidiMessage::noteOn(r.channel, 46, (juce::uint8)100)}});
+  const auto hatsA = hats(42, 46), hatsB = hats(46, 42);
+  check(hatsA == hatsB, "coincident hats render the same in either track order");
+  check(openAlone.energy(100 + 4800, 24000) > 1e-4,
+        "the open hat alone still rings 100 ms later");
+  // After the 3 ms choke fade only the closed hat is left, sample for sample.
+  bool onlyClosed = true;
+  for (int i = 100 + 200; i < 24000; ++i)
+    onlyClosed = onlyClosed && hatsA.l[i] == closedAlone.l[i] && hatsA.r[i] == closedAlone.r[i];
+  check(onlyClosed && closedAlone.energy(100, 24000) > 1e-4,
+        "Hat Choke on: the coincident closed hat cuts the open hat (only the closed hat remains)");
+  setPlain(r, hatChoke, 0.0f);
+  const auto freeA = hats(42, 46), freeB = hats(46, 42);
+  check(freeA == freeB && freeA.energy(100 + 4800, 24000) > 1e-4,
+        "Hat Choke off: coincident hats both ring, in either order");
+  setPlain(r, hatChoke, 1.0f);
 
   // CC120 / CC123 on one track at the same sample as notes on others.
   for (const auto &cc : {MidiMessage::allSoundOff(r.channel), MidiMessage::allNotesOff(r.channel)}) {

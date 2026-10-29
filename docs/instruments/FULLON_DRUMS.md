@@ -41,8 +41,10 @@ therefore processes each sample in a fixed way:
 1. Controllers (CC120, CC123) apply first.
 2. NoteOns from host MIDI and from the sequencer are then collected. Each
    pad fires once, at the loudest velocity it received.
-3. Pads fire in pad order. For a simultaneous closed and open hat with
-   *Hat Choke* on, the open hat rings.
+3. Pads fire in a fixed order, with the open hat before the closed hat. So
+   "closed hat cuts open hat" also holds for same-sample hits: with *Hat
+   Choke* on, a coincident closed hat cuts the open hat in 3 ms. With *Hat
+   Choke* off, both ring.
 
 A duplicated part therefore never doubles a hit, and *Both* mode plays a
 host note and a sequencer step on the same pad and sample as one hit.

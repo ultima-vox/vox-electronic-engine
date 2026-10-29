@@ -89,7 +89,9 @@ How the kit treats the merged input:
   result whatever order Cubase merges them in.
 - The same pad on two tracks at the same moment plays once, at the louder
   velocity.
-- A simultaneous closed and open hat leaves the open hat ringing.
+- A simultaneous closed and open hat: with Hat Choke on, the closed hat
+  cuts the open hat, whichever track comes first. With Hat Choke off, both
+  ring.
 - An all-off (CC120/123) at the same moment as a note stops what was already
   sounding, and the new note then plays.
 
@@ -158,6 +160,7 @@ by hand as above.
 | 26 | Stop with notes sounding; Rack Panic; CC120 or CC123 from a track | Silence as in steps 3.8 and 3.4 |
 | 27 | Seq Mode = Internal with the eight tracks still playing | Only the internal pattern plays (tracks ignored); back to Host MIDI → the tracks play |
 | 28 | Save, close, reopen the project (or the template) | Same eight tracks, same routing, same sound |
+| 29 | Put a Closed Hat note on the same tick as an Open Hat note (separate tracks) | With Hat Choke on, the closed hat cuts the open hat (try both track orders). With Hat Choke off, both ring |
 
 Not covered here: separate **audio** outputs per pad (stems) for the Cubase
 mixer. Eight MIDI tracks do not create separate VST3 audio returns. That is
@@ -165,6 +168,6 @@ a separate future design.
 
 ## 5. Results (fill in)
 
-| Date | Cubase version | Windows | CI run | Steps passed (1–28) | Notes |
+| Date | Cubase version | Windows | CI run | Steps passed (1–29) | Notes |
 | --- | --- | --- | --- | --- | --- |
 | | | | | | |

@@ -586,6 +586,13 @@ static VoxResult VOX_CALL reset(VoxInstance s) {
   return VOX_OK;
 }
 
+/* Order in which pads hit on the same sample fire. The open hat fires before
+ * the closed hat, so with Hat Choke on a coincident closed hat cuts the open
+ * hat ("closed hat cuts open hat" holds for same-sample hits too). With Hat
+ * Choke off both ring. */
+static const int fireOrder[PAD_COUNT] = {PAD_KICK,       PAD_SNARE, PAD_CLAP, PAD_OPEN_HAT,
+                                         PAD_CLOSED_HAT, PAD_TOM,   PAD_RIM,  PAD_CYMBAL};
+
 /* NoteOns are not triggered here: they are collected per sample into `hits`
  * (the loudest velocity per pad) and triggered afterwards in pad order. */
 static void applyMidi(struct VoxInstanceT *s, const VoxMidiEventV2 *e, int hits[PAD_COUNT]) {
@@ -738,7 +745,7 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
     /* Hits that land on the same sample (several DAW tracks merged into this
      * slot's channel, or Host MIDI plus the sequencer) do not depend on the
      * order they arrive in: controllers apply first, then each pad fires
-     * once, at its loudest velocity, in pad order. */
+     * once, at its loudest velocity, in a fixed order. */
     int hits[PAD_COUNT] = {0};
     while (nextEvent < c->midiEventCount) {
       VoxMidiEventV2 e;
@@ -753,9 +760,9 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
         hits[seq[nextHit].pad] = seq[nextHit].velocity;
       ++nextHit;
     }
-    for (int pad = 0; pad < (int)PAD_COUNT; ++pad)
-      if (hits[pad] > 0)
-        trigger(s, pad, hits[pad]);
+    for (uint32_t k = 0; k < PAD_COUNT; ++k)
+      if (hits[fireOrder[k]] > 0)
+        trigger(s, fireOrder[k], hits[fireOrder[k]]);
     double l = 0.0, r = 0.0;
     for (int k = 0; k < MAX_VOICES; ++k) {
       Voice *v = &s->voices[k];
