@@ -9,13 +9,20 @@ enum class DirectMigration {
   incompatible // left untouched; the Rack keeps it unresolved
 };
 
-// Append-only direct-parameter migration for the SAME InstrumentId (owner
-// decision 27/28.10.2026). An older snapshot is upgraded only when every saved
-// named value still exists, keeps its recorded pool index and is valid under
-// the current descriptor; only newly introduced parameters are filled from
-// their canonical defaults. Correspondence is never inferred from position.
-// Other version markers (content, native state, pattern) keep their strict
-// rules. On anything else `state` is left exactly as it was.
+// Production upgrade of a released instrument (owner decision, #78): a project
+// saved with an older version of the SAME instrument opens after a .vins
+// update, by appending the new parameters with their defaults. Allowed only
+// when all of these hold, otherwise `state` is left exactly as it was:
+//  - same InstrumentId and the same signed publisher identity;
+//  - the current version declares the upgrade (upgradeFromVersion != 0) and
+//    the saved version lies in [upgradeFromVersion, instrumentVersion);
+//  - every saved value still exists under its id, keeps its recorded pool
+//    index and parameter meaning (spec hash: type, range, step, unit,
+//    choices) and is valid; nothing was removed;
+//  - content version matches; native state, pattern and size stay within the
+//    current limits.
+// This is not a POC-format migration: pre-1.0 states have no matching
+// declaration and are rejected. Correspondence is never inferred from position.
 [[nodiscard]] DirectMigration
 migrateAppendOnly(PersistentSlotState &state,
                   const instrument::InstrumentDescriptor &current);

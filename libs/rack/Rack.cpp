@@ -102,8 +102,9 @@ void canonicalizeResolvedDirect(
   if (descriptor.directParameters)
     for (auto &value : state.directParameters)
       if (const auto *parameter = findParameter(descriptor, value.id)) {
-        // A resolved slot records the endpoint each value is bound to.
+        // A resolved slot records the endpoint and meaning of each value.
         value.poolIndex = parameter->poolIndex;
+        value.spec = instrument::hostparams::parameterSpecHash(*parameter);
         if (std::isfinite(value.value) && value.value >= parameter->minimum &&
             value.value <= parameter->maximum)
           value.value =
@@ -232,6 +233,15 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         diagnostic = "instrument pattern schema is newer than host";
         return true;
     }
+    // The same InstrumentId from another signer is another instrument: the
+    // slot stays unresolved (its state preserved) instead of loading into it.
+    if (const auto resolution = registry_.resolve(state.instrumentId);
+        resolution && state.instrumentVersion != 0 &&
+        state.publisherId != resolution.descriptor->publisherId) {
+        runtimeState.resolution = instrument::ResolutionStatus::incompatibleSchema;
+        diagnostic = "instrument publisher differs from the saved project";
+        return true;
+    }
     instrument::PersistentModuleState moduleState {
         state.instrumentStateVersion, state.slotId, state.instrumentId,
         state.resolvedProviderId, state.instrumentVersion, state.contentVersion,
@@ -292,6 +302,12 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         if (value.poolIndex >= 0 && value.poolIndex != parameter->poolIndex) {
           diagnostic = "direct parameter pool index changed without a new "
                        "instrument version";
+          return false;
+        }
+        if (value.spec != 0 &&
+            value.spec != instrument::hostparams::parameterSpecHash(*parameter)) {
+          diagnostic = "direct parameter meaning (type, range, step, unit or "
+                       "choices) changed without a new instrument version";
           return false;
         }
         target.direct[target.directCount++] = {
@@ -388,6 +404,7 @@ bool Rack::replaceState(
     if (const auto *descriptor = preparedRuntime[i].descriptor) {
       canonicalizeResolvedDirect(replacement[i], *descriptor);
       replacement[i].resolvedProviderId = descriptor->providerId;
+      replacement[i].publisherId = descriptor->publisherId;
       replacement[i].instrumentVersion = descriptor->instrumentVersion;
       replacement[i].instrumentStateVersion = descriptor->stateVersion;
       replacement[i].contentVersion = descriptor->contentVersion;
@@ -441,6 +458,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     replacement.patternPayload.clear();
     replacement.modulationPayload.clear();
     replacement.resolvedProviderId.clear();
+    replacement.publisherId.clear();
     replacement.instrumentVersion = 0;
     replacement.instrumentStateVersion = instrument::stateSchemaVersion;
     replacement.contentVersion = 0;
@@ -471,6 +489,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     if (prepared.descriptor) {
       canonicalizeResolvedDirect(replacement, *prepared.descriptor);
       replacement.resolvedProviderId = prepared.descriptor->providerId;
+      replacement.publisherId = prepared.descriptor->publisherId;
       replacement.instrumentVersion = prepared.descriptor->instrumentVersion;
       replacement.instrumentStateVersion = prepared.descriptor->stateVersion;
       replacement.contentVersion = prepared.descriptor->contentVersion;

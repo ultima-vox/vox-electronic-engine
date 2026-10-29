@@ -380,13 +380,18 @@ private:
 
 class Provider final : public InstrumentProvider {
 public:
-  explicit Provider(std::shared_ptr<NativeModule> module) : module_(std::move(module)) {}
+  Provider(std::shared_ptr<NativeModule> module, std::string publisherId)
+      : module_(std::move(module)),
+        descriptors_(module_->descriptors().begin(), module_->descriptors().end()) {
+    for (auto &descriptor : descriptors_)
+      descriptor.publisherId = publisherId;
+  }
   std::span<const InstrumentDescriptor> descriptors() const noexcept override {
-    return module_->descriptors();
+    return descriptors_;
   }
   std::unique_ptr<InstrumentInstance> create(std::string_view instrumentId,
                                              const CreateContext &context) override {
-    for (const auto &descriptor : module_->descriptors())
+    for (const auto &descriptor : descriptors_)
       if (descriptor.id == instrumentId) {
         const auto slot =
             context.slotIndex < maxSlots ? context.slotIndex : VOX_SLOT_INDEX_NONE;
@@ -402,6 +407,7 @@ public:
 
 private:
   std::shared_ptr<NativeModule> module_;
+  std::vector<InstrumentDescriptor> descriptors_; // with the package identity
 };
 } // namespace
 
@@ -438,7 +444,8 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
       d->parameterStride % alignof(VoxParameterDescriptorV2) != 0 || d->maxVoices == 0 ||
       d->maxMidiEventsPerBlock < 16 || d->maxMidiEventsPerBlock > 2048 ||
       d->outputChannels == 0 || d->outputChannels > 2 || d->instrumentVersion == 0 ||
-      d->contentVersion == 0 || d->stateVersion == 0)
+      d->contentVersion == 0 || d->stateVersion == 0 ||
+      d->upgradeFromVersion >= d->instrumentVersion)
     return false;
   InstrumentDescriptor copy;
   copy.id = d->id;
@@ -448,6 +455,7 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
   copy.instrumentVersion = d->instrumentVersion;
   copy.contentVersion = d->contentVersion;
   copy.stateVersion = d->stateVersion;
+  copy.upgradeFromVersion = d->upgradeFromVersion;
   copy.capabilities = Capability::notes | Capability::standardEditor;
   copy.budget.maxVoices = d->maxVoices;
   copy.budget.maxMidiEventsPerBlock = d->maxMidiEventsPerBlock;
@@ -581,8 +589,9 @@ std::shared_ptr<NativeModule> NativeModule::acquire(const std::filesystem::path 
   return module;
 }
 
-std::unique_ptr<InstrumentProvider> makeProvider(std::shared_ptr<NativeModule> module) {
-  return std::make_unique<Provider>(std::move(module));
+std::unique_ptr<InstrumentProvider> makeProvider(std::shared_ptr<NativeModule> module,
+                                                 std::string publisherId) {
+  return std::make_unique<Provider>(std::move(module), std::move(publisherId));
 }
 
 LoadReport loadConfiguredModules(std::string_view pathList) {

@@ -251,6 +251,9 @@ void loadsFromTheInstrumentsFolder() {
     if (d->id == drumsId)
       kit = d;
   check(kit != nullptr, "Full-on Drums offered in the slot catalog");
+  const auto trusted = instrument::vins::pinnedPublisherKeys();
+  check(!trusted.empty() && kit->publisherId == trusted.front().id && kit->upgradeFromVersion == 0,
+        "the kit carries its signed package identity and declares no upgrade");
   check(kit->providerId == native::providerId && kit->directParameters &&
             kit->parameters.size() == 59,
         "59 typed host-exposed parameters; the pattern is content, not parameters");

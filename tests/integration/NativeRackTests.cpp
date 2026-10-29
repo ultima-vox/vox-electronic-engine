@@ -573,6 +573,29 @@ void hostileContentRejected() {
   hostile::caps.factoryPatternCount = 1;
   VoxModuleV2 m{};
   check(!instrument::native::validModuleTable(&m), "empty module table rejected");
+
+  // The declared upgrade window must lie below the instrument version.
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  const VoxInstrumentDescriptorV2 *raw = nullptr;
+  check(module != nullptr && module->table().getInstrument(0, &raw) == VOX_OK && raw != nullptr,
+        "raw descriptor available");
+  auto upgrade = *raw;
+  instrument::InstrumentDescriptor imported;
+  check(instrument::native::importDescriptor(&upgrade, imported, diagnostic) &&
+            imported.upgradeFromVersion == 0,
+        "no declared upgrade imports as 0");
+  upgrade.instrumentVersion = 3;
+  upgrade.upgradeFromVersion = 2;
+  check(instrument::native::importDescriptor(&upgrade, imported, diagnostic) &&
+            imported.upgradeFromVersion == 2,
+        "a declared upgrade window imports");
+  upgrade.upgradeFromVersion = 3;
+  check(!instrument::native::importDescriptor(&upgrade, imported, diagnostic),
+        "an upgrade window at or above the instrument version is rejected");
+  check(instrument::native::makeProvider(module, "0123456789abcdef")->descriptors()[0].publisherId ==
+            "0123456789abcdef",
+        "the provider carries the package publisher identity");
 }
 
 int main(int argc, char **argv) {

@@ -66,7 +66,7 @@ private:
 
 // Adapts a loaded module to the Rack's provider contract.
 [[nodiscard]] std::unique_ptr<InstrumentProvider>
-makeProvider(std::shared_ptr<NativeModule> module);
+makeProvider(std::shared_ptr<NativeModule> module, std::string publisherId = {});
 
 // Process-wide count of blocks in which routed MIDI exceeded a native
 // instance's prepared budget (the adapter then ends every voice of that
