@@ -324,7 +324,7 @@ public:
                                       block.patternGeneration,
                                       block.noteOutput};
     const bool ok = table_->process(handle_, &context) == VOX_OK;
-    silenced_ = !ok;
+    silenced_ = !ok || bypassed_;
     if (!ok) {
       fault();
       silence(block);

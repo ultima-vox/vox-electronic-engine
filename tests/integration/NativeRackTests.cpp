@@ -587,10 +587,17 @@ void noteOutputValidated() {
         "a base-size note output gets notes and nothing beyond its 32 bytes");
   out.structSize = sizeof(VoxNoteOutputV2);
   out.routedNotes = out.reserved = 0;
+  check(!instance->blockSilenced(), "a rendered block is not silenced");
   instance->setBypassed(true);
   render();
   check(out.count == 0 && out.dropped == 0 && out.routedNotes == VOX_ROUTED_NOTES_MAY_PLAY,
         "a bypassed instance reports no notes and no routed-notes claim");
+  check(instance->blockSilenced(), "a bypassed block is reported as silenced");
+  instance->setBypassed(false);
+  render();
+  check(!instance->blockSilenced(), "after unbypass the block renders again");
+  instance->setBypassed(true);
+  render();
   setNoteMode(14, 1);
   instance->setBypassed(true);
   render();

@@ -227,8 +227,8 @@ public:
     virtual std::uint32_t tailSamples() const noexcept = 0;
     // Audio thread, right after process(): true when the adapter output
     // silence for the whole last block instead of the instrument's audio
-    // (failed, faulted, suspended or unprepared), so nothing routed to it
-    // sounded. Instances that always render report false.
+    // (failed, faulted, suspended, unprepared or bypassed), so nothing
+    // routed to it sounded. Instances that always render report false.
     virtual bool blockSilenced() const noexcept { return false; }
 };
 
