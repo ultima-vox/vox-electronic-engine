@@ -1,8 +1,11 @@
 #pragma once
 #include "instrument/InstrumentAbi.h"
+#include "instrument/SoundLayout.h"
+#include "pattern/Pattern.h"
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,7 +29,18 @@ inline constexpr std::uint32_t stateSchemaVersion =
     VOX_INSTRUMENT_STATE_SCHEMA_V1;
 inline constexpr std::uint32_t hostContractVersion = 1;
 inline constexpr std::size_t maxSlots = 16;
+// APVTS transports plain values as float. Every supported integer seed is
+// exact.
+inline constexpr std::uint32_t maxGenerationSeed = 0x00ffffffu;
 inline constexpr std::size_t macrosPerSlot = 8;
+// Fixed host pool: every slot exposes the same 128 generic endpoints
+// slotNN.p001..p128; an instrument's named parameters bind to them in
+// descriptor order, so installing an instrument never changes the host layout.
+// Final pre-release contract (#77 gate 5): 128 per slot, 2048 in total. It
+// replaces the earlier 64 (p001..p064 keep their IDs); no other size exists.
+inline constexpr std::size_t poolParametersPerSlot = 128;
+inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
+inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {
     std::uint32_t maxVoices {};
@@ -77,6 +91,11 @@ struct ParameterDescriptor {
     bool automatable { true };
     bool modulatable {};
     std::int8_t preferredMacro { -1 };
+    // Host pool endpoint (0..63) of a direct parameter. Required and unique
+    // per instrument; it must stay the same across instrument versions so
+    // recorded automation never moves to another control. Unused (-1) for
+    // instruments without direct parameters.
+    std::int16_t poolIndex { -1 };
 };
 
 struct InstrumentDescriptor {
@@ -95,6 +114,25 @@ struct InstrumentDescriptor {
     std::vector<std::uint32_t> supportedPresetSchemaVersions { 1 };
     ResourceBudget budget;
     std::vector<ParameterDescriptor> parameters;
+    // Internal host integration policy, not an extension of the external C ABI.
+    bool directParameters{};
+    // Pattern capabilities and factory patterns declared through
+    // VoxContentApiV2, validated at load. Null: the instrument has no pattern.
+    std::shared_ptr<const pattern::Content> patternContent;
+    // Signed package identity: the trusted publisher key id of the .vins that
+    // supplied this instrument; empty for built-in and unsigned graph content.
+    std::string publisherId;
+    // Oldest instrumentVersion whose saved state this version may upgrade by
+    // appending new parameters; 0 = no upgrade (only the same version loads).
+    std::uint32_t upgradeFromVersion {};
+    // Declarative SOUND page shipped by the package, validated against this
+    // descriptor at load. Null: the host shows its generic control list.
+    std::shared_ptr<const SoundLayout> soundLayout;
+};
+
+struct ParameterValue {
+  ParameterId id;
+  float value{};
 };
 
 struct ContentDescriptor {
@@ -108,6 +146,14 @@ struct ContentDescriptor {
     std::uint32_t supportedPresetClasses {};
     std::uint32_t macroValueMask {};
     std::array<float, macrosPerSlot> macroValues {};
+    // Complete, named base values for a direct-parameter sound preset. The host
+    // validates/prepares them transactionally; no live DSP read is required.
+    std::vector<ParameterValue> parameterValues;
+    // Optional versioned non-parameter sound state (e.g. resource identities).
+    // Absence preserves it; present empty payload requests native Init. Named
+    // bases remain authoritative and are applied after native preparation.
+    std::optional<std::vector<std::byte>> nativeState;
+    std::uint32_t nativeStateVersion{};
 };
 
 // Stable traversal-order-independent seed domain. SlotId is hashed as explicit
@@ -155,6 +201,30 @@ struct ProcessBlock {
     double bpm {};
     double ppqPosition {};
     bool transportPlaying {};
+    // Immutable pattern snapshot owned by the Rack for this call, or null.
+    const VoxPatternV2* pattern {};
+    std::uint64_t patternGeneration {};
+    // Host-owned buffer for notes the instrument generates itself, or null.
+    VoxNoteOutputV2* noteOutput {};
+};
+
+// VoxNoteOutputV2.dropped value the host writes when it voids a block's
+// note output (malformed records); the count is then 0. Any other non-zero
+// value is the module's own count of notes beyond the buffer.
+inline constexpr std::uint32_t voidedNoteOutput = 0xFFFFFFFFu;
+
+// Last fault an instance latched (it then stays silent until the controller
+// reprepares it). Kept after recovery as the last fault reason.
+enum class InstanceFault : std::uint8_t { none, processFailed, resetFailed };
+
+// Bounded runtime health of one instance, readable from the controller thread
+// while the audio thread runs (atomics only, never a lock or allocation).
+struct InstanceHealth {
+    bool faulted {};
+    InstanceFault lastFault { InstanceFault::none };
+    std::uint64_t faults {};             // latched faults since creation
+    std::uint64_t midiOverflowBlocks {}; // routed MIDI beyond the prepared budget
+    std::uint64_t invalidNoteBlocks {};  // module note output voided as malformed
 };
 
 class InstrumentInstance {
@@ -174,11 +244,25 @@ public:
                            std::uint32_t& bytesWritten) const noexcept = 0;
     virtual std::uint32_t latencySamples() const noexcept = 0;
     virtual std::uint32_t tailSamples() const noexcept = 0;
+    // Audio thread, right after process(): true when the adapter output
+    // silence for the whole last block instead of the instrument's audio
+    // (failed, faulted, suspended, unprepared or bypassed), so nothing
+    // routed to it sounded. Instances that always render report false.
+    virtual bool blockSilenced() const noexcept { return false; }
+
+    // Any thread. Instances without runtime faults report nothing.
+    virtual InstanceHealth health() const noexcept { return {}; }
 };
+
+inline constexpr std::uint32_t noSlotIndex = 0xffffffffu;
 
 struct CreateContext {
     SlotId slotId {};
     ResourceResolver* resources {};
+    // 0-based Rack slot ordinal (0..maxSlots-1) the instance is created for;
+    // noSlotIndex outside a Rack. Positional only, never a durable identity
+    // (that is slotId).
+    std::uint32_t slotIndex { noSlotIndex };
 };
 
 class InstrumentProvider {

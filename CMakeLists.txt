@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(VstEngine VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
@@ -33,14 +34,78 @@ add_library(vst_instrument STATIC
   libs/instrument/InstrumentContract.h
   libs/instrument/HostParameterSchema.cpp libs/instrument/HostParameterSchema.h
   libs/instrument/InstrumentRegistry.cpp libs/instrument/InstrumentRegistry.h
-  libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h)
+  libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h
+  libs/instrument/SoundLayout.cpp libs/instrument/SoundLayout.h)
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_instrument PUBLIC vst_pattern)
+
+# native: host side of the instrument module ABI V2 (controller-thread loading,
+# descriptor import, provider/instance adapters). PROPOSED, not frozen.
+add_library(vst_native STATIC
+  libs/instrument/abi/VoxModuleAbiV2.h
+  libs/instrument/native/NativeModule.cpp libs/instrument/native/NativeModule.h)
+target_include_directories(vst_native PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_native PUBLIC vst_instrument ${CMAKE_DL_LIBS})
+
+
+# dspcore: Vox DSP Core primitives and the per-instrument patch graph (#75):
+# graph-only instruments are data (graph.json) compiled off the audio thread
+# into a fixed plan and exposed through the normal InstrumentProvider contract.
+add_library(vst_dspcore STATIC
+  libs/dspcore/Primitives.h
+  libs/dspcore/PatchGraph.cpp libs/dspcore/PatchGraph.h
+  libs/dspcore/GraphInstrument.cpp libs/dspcore/GraphInstrument.h)
+set_target_properties(vst_dspcore PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vst_dspcore PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_dspcore PUBLIC vst_instrument juce::juce_core)
+
+# vins: the one instrument package format (#73): one ZIP archive file per
+# instrument next to the VST3, graph (DSP Core) or signed native backend.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|x64)$")
+  set(VOX_NATIVE_PLATFORM "win-x64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  set(VOX_NATIVE_PLATFORM "linux-x64")
+else()
+  set(VOX_NATIVE_PLATFORM "")
+endif()
+include(cmake/VinsPublisher.cmake)
+include(cmake/Vins.cmake)
+add_library(vst_vins STATIC
+  libs/instrument/vins/VinsZip.cpp libs/instrument/vins/VinsZip.h
+  libs/instrument/vins/VinsTrust.cpp libs/instrument/vins/VinsTrust.h
+  libs/instrument/vins/VinsPackage.cpp libs/instrument/vins/VinsPackage.h)
+set_target_properties(vst_vins PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vst_vins PUBLIC ${VST_LIBS_DIR} PRIVATE ${CMAKE_BINARY_DIR}/generated)
+target_link_libraries(vst_vins
+  PUBLIC vst_native vst_dspcore juce::juce_core juce::juce_cryptography ${CMAKE_DL_LIBS})
+
+# The release gate: a release candidate needs the owner's release PUBLIC key,
+# and no build ever accepts a private key.
+add_test(NAME vins_production_gate_refuses_without_release_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_RELEASE_PUBLIC_KEY=
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
+set_tests_properties(vins_production_gate_refuses_without_release_key PROPERTIES WILL_FAIL TRUE)
+add_test(NAME vins_production_gate_refuses_private_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PUBLISHER_PRIVATE_KEY=release.key
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
+set_tests_properties(vins_production_gate_refuses_private_key PROPERTIES WILL_FAIL TRUE)
+add_test(NAME vins_production_gate_accepts_release_public_key
+  COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_RELEASE_PUBLIC_KEY=release.pub.pem
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
+
+# Package tool (host build): writes manifests and deterministic archives.
+add_executable(vox_vins_pack tools/VinsPack.cpp)
+target_link_libraries(vox_vins_pack PRIVATE vst_vins)
+target_compile_definitions(vox_vins_pack PRIVATE JUCE_STANDALONE_APPLICATION=1)
 
 add_library(vst_rack STATIC
+  libs/rack/AudioRouting.cpp libs/rack/AudioRouting.h
+  libs/rack/RealtimeMutationGate.h
   libs/rack/RackTypes.h
   libs/rack/RackRouter.cpp libs/rack/RackRouter.h
   libs/rack/Rack.cpp libs/rack/Rack.h
-  libs/rack/RackState.cpp libs/rack/RackState.h)
+  libs/rack/RackState.cpp libs/rack/RackState.h
+  libs/rack/RackMigration.cpp libs/rack/RackMigration.h)
 target_include_directories(vst_rack PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_rack PUBLIC vst_instrument juce::juce_data_structures)
 
@@ -52,17 +117,10 @@ add_library(vst_sequence STATIC
 target_include_directories(vst_sequence PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_sequence PUBLIC juce::juce_audio_basics)
 
-# parts: authoritative multitimbral model, routing, state and mixer policy.
-add_library(vst_parts STATIC
-  libs/parts/Part.h
-  libs/parts/PartRegistry.cpp libs/parts/PartRegistry.h
-  libs/parts/PartRouter.cpp libs/parts/PartRouter.h
-  libs/parts/PartMidiDelay.cpp libs/parts/PartMidiDelay.h
-  libs/parts/PartMixer.cpp libs/parts/PartMixer.h
-  libs/parts/PartState.cpp libs/parts/PartState.h)
-target_include_directories(vst_parts PUBLIC ${VST_LIBS_DIR})
-target_link_libraries(vst_parts PUBLIC
-  juce::juce_audio_basics juce::juce_data_structures vst_sequence)
+# pattern: V2 pattern contract host model (validation, encoding, snapshots).
+add_library(vst_pattern STATIC
+  libs/pattern/Pattern.cpp libs/pattern/Pattern.h)
+target_include_directories(vst_pattern PUBLIC ${VST_LIBS_DIR})
 
 # transport: pure PPQ/grid musical-time math (header-only).
 add_library(vst_transport INTERFACE)
@@ -129,6 +187,7 @@ target_link_libraries(vst_rack PUBLIC vst_modulation)
 add_library(vst_effects STATIC
   libs/effects/EffectsChain.cpp libs/effects/EffectsChain.h)
 target_include_directories(vst_effects PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_rack PUBLIC vst_effects)
 
 add_library(vst_modules STATIC
   libs/modules/BuiltInProvider.cpp libs/modules/BuiltInProvider.h)
@@ -137,18 +196,12 @@ target_link_libraries(vst_modules PUBLIC
   vst_instrument vst_sequence vst_bass vst_acid vst_lead vst_semantic_fx vst_atmos
   juce::juce_audio_basics)
 
-# preset: preset format, filesystem, factory/user distinction, migration.
+# preset: user Rack scene files (current format only).
 add_library(vst_preset STATIC
   libs/preset/PresetManager.cpp libs/preset/PresetManager.h)
 target_include_directories(vst_preset PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_preset
-  PUBLIC juce::juce_core juce::juce_data_structures vst_sequence vst_core)
-
-# generator: deterministic seed-based musical pattern generation.
-add_library(vst_generator STATIC
-  libs/generator/PatternGenerator.cpp libs/generator/PatternGenerator.h)
-target_include_directories(vst_generator PUBLIC ${VST_LIBS_DIR})
-target_link_libraries(vst_generator PUBLIC vst_parts)
+  PUBLIC juce::juce_core juce::juce_data_structures vst_core)
 
 # shared VOX design-system primitives. Product UI may depend on this target;
 # the shared target must never depend on product UI or DSP targets.
@@ -160,13 +213,12 @@ add_library(vst_ui STATIC
   libs/ui/ZoneRangeEditor.cpp libs/ui/ZoneRangeEditor.h
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
-  libs/ui/BassPanel.cpp libs/ui/BassPanel.h
   libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h
-  libs/ui/PresetBrowser.cpp libs/ui/PresetBrowser.h)
+  libs/ui/PatternGrid.cpp libs/ui/PatternGrid.h)
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_ui PUBLIC
   juce::juce_gui_basics juce::juce_audio_utils juce::juce_audio_processors
-  vox_ui vst_sequence vst_parts vst_preset)
+  vox_ui vst_sequence vst_preset vst_pattern)
 
 # ---------------------------------------------------------------------------
 # VST3 shell: composition + host integration only.
@@ -198,8 +250,8 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_rack vst_modules vst_sequence vst_parts
-  vst_transport vst_midi vst_preset vst_generator vst_ui vst_effects)
+  vst_core vst_instrument vst_native vst_vins vst_dspcore vst_rack vst_modules vst_sequence
+  vst_transport vst_midi vst_preset vst_ui vst_effects)
 
 if(MSVC)
   # JUCE's shared-code target emits one PDB. /FS serializes concurrent compiler
@@ -247,6 +299,14 @@ target_include_directories(rack_lifecycle_tests PRIVATE tests)
 target_link_libraries(rack_lifecycle_tests PRIVATE vst_rack)
 add_test(NAME rack_lifecycle_tests COMMAND rack_lifecycle_tests)
 
+add_executable(rack_upgrade_tests tests/rack/RackUpgradeTests.cpp)
+target_link_libraries(rack_upgrade_tests PRIVATE vst_rack)
+add_test(NAME rack_upgrade_tests COMMAND rack_upgrade_tests)
+
+add_executable(rack_ducking_tests tests/rack/RackDuckingTests.cpp)
+target_link_libraries(rack_ducking_tests PRIVATE vst_rack)
+add_test(NAME rack_ducking_tests COMMAND rack_ducking_tests)
+
 add_executable(rack_live_controls_tests tests/rack/RackLiveControlsTests.cpp)
 target_link_libraries(rack_live_controls_tests PRIVATE vst_rack)
 add_test(NAME rack_live_controls_tests COMMAND rack_live_controls_tests)
@@ -269,21 +329,10 @@ target_link_libraries(generated_note_scheduler_tests PRIVATE vst_midi)
 add_test(NAME generated_note_scheduler_tests
          COMMAND generated_note_scheduler_tests)
 
-add_executable(part_router_tests tests/parts/PartRouterTests.cpp)
-target_link_libraries(part_router_tests PRIVATE vst_parts)
-add_test(NAME part_router_tests COMMAND part_router_tests)
-
-add_executable(part_state_tests tests/parts/PartStateTests.cpp)
-target_link_libraries(part_state_tests PRIVATE vst_parts)
-add_test(NAME part_state_tests COMMAND part_state_tests)
-
-add_executable(part_sequence_tests tests/parts/PartSequenceTests.cpp)
-target_link_libraries(part_sequence_tests PRIVATE vst_parts)
-add_test(NAME part_sequence_tests COMMAND part_sequence_tests)
-
-add_executable(part_mixer_tests tests/parts/PartMixerTests.cpp)
-target_link_libraries(part_mixer_tests PRIVATE vst_parts)
-add_test(NAME part_mixer_tests COMMAND part_mixer_tests)
+find_package(Threads REQUIRED)
+add_executable(pattern_tests tests/pattern/PatternTests.cpp)
+target_link_libraries(pattern_tests PRIVATE vst_pattern Threads::Threads)
+add_test(NAME pattern_tests COMMAND pattern_tests)
 
 add_executable(psy_bass_tests tests/bass/PsyBassTests.cpp)
 target_link_libraries(psy_bass_tests PRIVATE vst_bass)
@@ -327,22 +376,68 @@ add_executable(modulation_tests tests/modulation/ModulationTests.cpp)
 target_link_libraries(modulation_tests PRIVATE vst_modulation)
 add_test(NAME modulation_tests COMMAND modulation_tests)
 
+add_executable(effects_tail_policy_tests tests/effects/EffectsTailPolicyTests.cpp)
+target_link_libraries(effects_tail_policy_tests PRIVATE vst_effects)
+add_test(NAME effects_tail_policy_tests COMMAND effects_tail_policy_tests)
+
 add_executable(effects_tests tests/effects/EffectsChainTests.cpp)
 target_link_libraries(effects_tests PRIVATE vst_effects)
 add_test(NAME effects_tests COMMAND effects_tests)
 
 add_executable(preset_tests tests/preset/PresetTests.cpp)
-target_link_libraries(preset_tests PRIVATE vst_preset vst_parts)
+target_link_libraries(preset_tests PRIVATE vst_preset)
 add_test(NAME preset_tests COMMAND preset_tests)
-
-add_executable(generator_tests tests/generator/PatternGeneratorTests.cpp)
-target_link_libraries(generator_tests PRIVATE vst_generator)
-add_test(NAME generator_tests COMMAND generator_tests)
 
 add_executable(state_round_trip_tests
   tests/integration/StateRoundTripTests.cpp)
-target_link_libraries(state_round_trip_tests PRIVATE vst_preset vst_sequence vst_parts)
+target_link_libraries(state_round_trip_tests PRIVATE vst_preset vst_sequence)
 add_test(NAME state_round_trip_tests COMMAND state_round_trip_tests)
+
+add_executable(direct_parameter_contract_tests tests/rack/DirectParameterContractTests.cpp)
+target_link_libraries(direct_parameter_contract_tests PRIVATE vst_rack vst_modulation)
+add_test(NAME direct_parameter_contract_tests COMMAND direct_parameter_contract_tests)
+
+add_executable(realtime_mutation_gate_tests tests/rack/RealtimeMutationGateTests.cpp)
+target_include_directories(realtime_mutation_gate_tests PRIVATE ${VST_LIBS_DIR})
+add_test(NAME realtime_mutation_gate_tests COMMAND realtime_mutation_gate_tests)
+
+foreach(direct_test IN ITEMS DirectParameterBankTests DirectProcessorStateTests RackMidiExportTests)
+  if(direct_test STREQUAL "DirectParameterBankTests")
+    set(direct_target direct_parameter_bank_tests)
+  elseif(direct_test STREQUAL "DirectProcessorStateTests")
+    set(direct_target direct_processor_state_tests)
+  else()
+    set(direct_target rack_midi_export_tests)
+  endif()
+  add_executable(${direct_target} tests/integration/${direct_test}.cpp)
+  target_include_directories(${direct_target} PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(${direct_target} PRIVATE VstEngine)
+  add_test(NAME ${direct_target} COMMAND ${direct_target})
+endforeach()
+
+add_executable(rack_realtime_boundary_tests tests/integration/RackRealtimeBoundaryTests.cpp)
+target_include_directories(rack_realtime_boundary_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(rack_realtime_boundary_tests PRIVATE VstEngine)
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_definitions(rack_realtime_boundary_tests PRIVATE VOX_TEST_WRAP_MALLOC=1)
+  target_link_options(rack_realtime_boundary_tests PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
+endif()
+add_test(NAME rack_realtime_boundary_tests COMMAND rack_realtime_boundary_tests)
+
+add_executable(audio_routing_tests tests/rack/AudioRoutingTests.cpp)
+target_include_directories(audio_routing_tests PRIVATE ${VST_LIBS_DIR})
+target_link_libraries(audio_routing_tests PRIVATE vst_effects)
+# AudioRouting itself is JUCE-independent; test the same production source.
+target_sources(audio_routing_tests PRIVATE libs/rack/AudioRouting.cpp)
+add_test(NAME audio_routing_tests COMMAND audio_routing_tests)
+
+add_executable(rack_shell_integration_tests tests/integration/RackShellIntegrationTests.cpp)
+target_include_directories(rack_shell_integration_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(rack_shell_integration_tests PRIVATE VstEngine)
+add_test(NAME rack_shell_integration_tests COMMAND rack_shell_integration_tests)
 
 add_executable(editor_smoke_tests tests/ui/EditorSmokeTests.cpp)
 target_include_directories(editor_smoke_tests PRIVATE
@@ -373,6 +468,207 @@ target_include_directories(performance_stress_tests PRIVATE
 target_link_libraries(performance_stress_tests PRIVATE VstEngine)
 add_test(NAME performance_stress_tests COMMAND performance_stress_tests)
 
+# Host-parameter pool capacity microbenchmark (not a CTest gate) for the final
+# 128-per-slot layout; the binary verifies the endpoint layout before measuring.
+add_executable(pool_capacity_bench tests/performance/PoolCapacityBench.cpp)
+target_include_directories(pool_capacity_bench PRIVATE
+  apps/vst3
+  ${VST_LIBS_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode
+  ${juce_SOURCE_DIR}/modules)
+target_link_libraries(pool_capacity_bench PRIVATE VstEngine)
+
+# Instrument module ABI V2, slice 1 (PROPOSED, not frozen): the C11 test module
+# is a real shared library; the C++20 harness loads it by absolute path and owns
+# all loading/validation. No production loader, registry or editor hosting.
+add_library(vox_abi_v2_test_module SHARED tests/abi/TestModuleV2.c)
+set_target_properties(vox_abi_v2_test_module PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(vox_abi_v2_test_module PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(vox_abi_v2_test_module PRIVATE m)
+endif()
+
+add_executable(module_abi_v2_tests tests/abi/ModuleAbiV2Tests.cpp tests/abi/AbiLayoutC.c)
+set_target_properties(module_abi_v2_tests PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+target_include_directories(module_abi_v2_tests PRIVATE ${VST_LIBS_DIR})
+add_dependencies(module_abi_v2_tests vox_abi_v2_test_module)
+if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  # glibc interposer: counts host and module allocations during the RT probe.
+  target_sources(module_abi_v2_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+  target_compile_definitions(module_abi_v2_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+  target_link_options(module_abi_v2_tests PRIVATE -rdynamic)
+endif()
+target_link_libraries(module_abi_v2_tests PRIVATE ${CMAKE_DL_LIBS})
+add_test(NAME module_abi_v2_tests
+  COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
+# M0: the real Rack processor plays the V2 test module through a slot.
+add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
+target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(native_rack_tests PRIVATE VstEngine)
+add_dependencies(native_rack_tests vox_abi_v2_test_module)
+if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_sources(native_rack_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+  target_compile_definitions(native_rack_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+  target_link_options(native_rack_tests PRIVATE -rdynamic)
+endif()
+add_test(NAME native_rack_tests
+  COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+
+# Owner Cubase acceptance: a fresh Rack is empty; new projects restore.
+add_executable(fresh_rack_tests tests/integration/FreshRackTests.cpp)
+target_include_directories(fresh_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+target_link_libraries(fresh_rack_tests PRIVATE VstEngine)
+add_test(NAME fresh_rack_tests COMMAND fresh_rack_tests)
+
+# .vins packages built in this tree. instruments/ mirrors the installed
+# layout (<product>/instruments); test-vins/ holds test fixtures.
+set(VOX_INSTRUMENTS_DIR ${CMAKE_BINARY_DIR}/instruments)
+set(VOX_TEST_VINS_DIR ${CMAKE_BINARY_DIR}/test-vins)
+
+# Vox Demo Synth: a small, independent, playable V2 native instrument.
+add_library(VoxDemoSynth SHARED libs/demo/VoxDemoSynth.c)
+set_target_properties(VoxDemoSynth PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(VoxDemoSynth PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(VoxDemoSynth PRIVATE m)
+endif()
+if(MSVC)
+  # Self-contained DLL: no VC++ redistributable needed on the DAW machine.
+  set_property(TARGET VoxDemoSynth PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# The graph-only Demo Synth: data for the DSP Core, no executable code.
+vox_add_vins(vins_demo_synth_graph KIND graph
+  OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxDemoSynthGraph.vins
+  ID com.ultimavox.demo-synth-graph VERSION 1.0.0
+  NAME "Vox Demo Synth (Graph)" VENDOR "Ultima Vox"
+  INSTRUMENTS com.ultimavox.demo-synth-graph
+  GRAPH graph/instrument.json ${CMAKE_CURRENT_SOURCE_DIR}/instruments/demo-synth-graph/graph.json)
+
+if(VOX_NATIVE_PLATFORM)
+  vox_add_vins(vins_demo_synth KIND native
+    OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxDemoSynth.vins
+    ID com.ultimavox.demo-synth VERSION 1.0.0
+    NAME "Vox Demo Synth" VENDOR "Ultima Vox"
+    INSTRUMENTS com.ultimavox.demo-synth MODULE_TARGET VoxDemoSynth)
+endif()
+
+# The package tests need packages signed by this tree's development and test
+# keys, which only a development build produces. A release candidate is built
+# from a commit whose development build passed them.
+if(VOX_NATIVE_PLATFORM AND NOT VOX_PRODUCTION_BUILD)
+  vox_add_vins(vins_test_tone KIND native
+    OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone.vins
+    ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
+    INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module)
+  vox_add_vins(vins_test_tone_untrusted KIND native
+    OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone-untrusted.vins
+    ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
+    INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module
+    KEY ${VOX_UNTRUSTED_TEST_KEY} MODULUS ${VOX_UNTRUSTED_MODULUS_FILE})
+
+  add_test(NAME vins_offline_signing
+    COMMAND ${CMAKE_COMMAND} "-DTOOL=$<TARGET_FILE:vox_vins_pack>" "-DOPENSSL=${VOX_OPENSSL}"
+      "-DMAKE_VINS=${CMAKE_CURRENT_SOURCE_DIR}/cmake/MakeVins.cmake"
+      "-DMODULE=$<TARGET_FILE:vox_abi_v2_test_module>" "-DPLATFORM=${VOX_NATIVE_PLATFORM}"
+      "-DRELEASE_KEY=${VOX_UNTRUSTED_TEST_KEY}" "-DRELEASE_MODULUS=${VOX_UNTRUSTED_MODULUS_FILE}"
+      "-DOTHER_KEY=${VOX_PUBLISHER_KEY}" "-DOTHER_MODULUS=${VOX_PUBLISHER_MODULUS_FILE}"
+      "-DWORK=${CMAKE_BINARY_DIR}/offline-signing"
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/vins/OfflineSigning.cmake)
+
+  add_executable(vins_package_tests tests/integration/VinsPackageTests.cpp)
+  target_include_directories(vins_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(vins_package_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(vins_package_tests vins_test_tone vins_test_tone_untrusted
+    vins_demo_synth vins_demo_synth_graph)
+  add_test(NAME vins_package_tests
+    COMMAND vins_package_tests ${VOX_TEST_VINS_DIR} ${VOX_INSTRUMENTS_DIR}
+      ${CMAKE_BINARY_DIR}/vins-scratch)
+
+  # Mutation fuzzing of the untrusted-input parsers (short pass in CTest).
+  add_executable(vins_fuzz tests/fuzz/VinsFuzz.cpp)
+  target_link_libraries(vins_fuzz PRIVATE vst_vins)
+  target_compile_definitions(vins_fuzz PRIVATE JUCE_STANDALONE_APPLICATION=1)
+  add_dependencies(vins_fuzz vins_test_tone vins_test_tone_untrusted vins_demo_synth
+    vins_demo_synth_graph)
+  add_test(NAME vins_fuzz COMMAND vins_fuzz ${VOX_TEST_VINS_DIR} ${VOX_INSTRUMENTS_DIR} 20000 1)
+
+  add_executable(demo_synth_tests tests/integration/DemoSynthTests.cpp)
+  target_include_directories(demo_synth_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(demo_synth_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(demo_synth_tests vins_demo_synth)
+  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_sources(demo_synth_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+    target_compile_definitions(demo_synth_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+    target_link_options(demo_synth_tests PRIVATE -rdynamic)
+  endif()
+  add_test(NAME demo_synth_tests
+    COMMAND demo_synth_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/demo-scratch)
+
+  # #75 slice 1: the graph-only Demo .vins vs the native Demo .vins, bit for bit.
+  add_executable(graph_demo_parity_tests tests/integration/GraphDemoParityTests.cpp)
+  target_include_directories(graph_demo_parity_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(graph_demo_parity_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(graph_demo_parity_tests vins_demo_synth vins_demo_synth_graph)
+  add_test(NAME graph_demo_parity_tests
+    COMMAND graph_demo_parity_tests ${VOX_INSTRUMENTS_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/demo-synth-graph/graph.json
+      ${CMAKE_BINARY_DIR}/graph-scratch)
+endif()
+
+# Full-on Drums (#71): independent eight-pad native drum kit. Not linked into
+# the Rack; shipped as VoxFullOnDrums.vins.
+add_library(VoxFullOnDrums SHARED libs/drums/VoxFullOnDrums.c)
+set_target_properties(VoxFullOnDrums PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(VoxFullOnDrums PRIVATE ${VST_LIBS_DIR})
+if(UNIX)
+  target_link_libraries(VoxFullOnDrums PRIVATE m)
+endif()
+if(MSVC)
+  set_property(TARGET VoxFullOnDrums PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+if(VOX_NATIVE_PLATFORM)
+  vox_add_vins(vins_fullon_drums KIND native
+    OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxFullOnDrums.vins
+    ID com.ultimavox.fullon-drums VERSION 0.1.0
+    NAME "Full-on Drums" VENDOR "Ultima Vox"
+    INSTRUMENTS com.ultimavox.fullon-drums MODULE_TARGET VoxFullOnDrums
+    UI com.ultimavox.fullon-drums ui/sound.json
+      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/fullon-drums/sound.json)
+
+  add_executable(fullon_drums_tests tests/integration/FullOnDrumsTests.cpp)
+  target_include_directories(fullon_drums_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(fullon_drums_tests PRIVATE VstEngine vst_vins)
+  add_dependencies(fullon_drums_tests vins_fullon_drums vins_demo_synth vins_demo_synth_graph)
+  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_sources(fullon_drums_tests PRIVATE tests/abi/AllocationProbeLinux.c)
+    target_compile_definitions(fullon_drums_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+    target_link_options(fullon_drums_tests PRIVATE -rdynamic)
+  endif()
+  add_test(NAME fullon_drums_tests
+    COMMAND fullon_drums_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/drums-scratch
+      ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)
+endif()
+
 add_executable(reliability_stress_tests
   tests/reliability/ReliabilityStressTests.cpp)
 target_include_directories(reliability_stress_tests PRIVATE
@@ -398,10 +694,16 @@ add_test(NAME bass_render_diagnostics COMMAND bass_render_diagnostics)
 
 # 7C installable product. Keep VST3 bundle name stable for upgrades; CPack
 # provides NSIS install/uninstall and ZIP artifact for CI/review environments.
+# Layout (#73/#77): <VST3>/vox music/Vox Electronic Engine.vst3 and every .vins
+# built here in <VST3>/vox music/instruments/.
 install(DIRECTORY
   "${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/$<CONFIG>/VST3/Vox Electronic Engine.vst3"
-  DESTINATION "."
+  DESTINATION "vox music"
   COMPONENT VoxPlugin)
+install(DIRECTORY "${VOX_INSTRUMENTS_DIR}/"
+  DESTINATION "vox music/instruments"
+  COMPONENT VoxPlugin
+  FILES_MATCHING PATTERN "*.vins")
 set(CPACK_PACKAGE_NAME "Vox Electronic Engine")
 set(CPACK_PACKAGE_VENDOR "Ultima Vox")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")

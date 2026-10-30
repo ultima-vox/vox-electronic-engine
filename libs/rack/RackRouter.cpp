@@ -49,8 +49,7 @@ bool accepts(const ProcessSlotControls& slot, const VoxMidiEventV1& event) noexc
         || slot.routing.mode == RouteMode::off || !valid(slot.routing))
         return false;
     const auto channel = static_cast<std::uint8_t>(channelIndex(event) + 1);
-    if ((slot.routing.mode == RouteMode::channel
-         || slot.routing.mode == RouteMode::layer)
+    if (slot.routing.mode == RouteMode::channel
         && slot.routing.channel != channel)
         return false;
     if (!isNoteOn(event)) return true;

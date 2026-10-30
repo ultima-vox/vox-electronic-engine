@@ -23,7 +23,10 @@ explicit modulation must not rewrite other host base values.
 - Provider/descriptor/factory boundary; no concrete instrument routing in the shell.
 - Stable SlotId independent of order, MIDI channel, InstrumentId and audio output.
 - NoteOff returns to the exact slot that accepted NoteOn.
-- Explicit SWAP/MOVE/LAYER semantics; no accidental duplicate-channel layering.
+- One instrument = one MIDI channel (owner decision 27.10.2026). A channel has at
+  most one owning slot; a loaded instrument takes the next free channel; there is
+  no Layer mode and no SWAP/MOVE. Key/velocity zones and transpose filter the
+  slot's own channel. Rack schema 5+ rejects layered or duplicate-channel states.
 - Sound and Pattern remain independent.
 - Transactional parse -> validate -> prepare -> commit state loads.
 - Missing/incompatible modules preserve identity and payload; no silent substitution.
@@ -44,18 +47,28 @@ The new product name alone does not authorise an identity or install-path change
 | Keys and long polyphonic phrases | Pattern v2 contract, adapter/migration, scheduling and export tests |
 | Additional slot audio outputs | Stable bus topology, project migration and actual host testing |
 | Per-slot effects | Explicit routing/state/resource design; current global chain is not silently reinterpreted |
-| Send FX / return graph | Stable audio bus identities, tap points, mute/solo/tail/latency policy, state/automation, feedback rejection and bounded buffers; currently absent |
-| Internal kick ducking | Explicit source/recipient contract and event-vs-audio-detector semantics, envelope policy and effective-gain routing; currently absent |
+| Send FX / return graph | Stable audio bus identities, tap points, mute/solo/tail/latency policy, state/automation, feedback rejection and bounded buffers; candidate PR #62 |
+| Internal kick ducking | Explicit source/recipient contract and event-vs-audio-detector semantics, envelope policy and effective-gain routing; candidate PR #62 |
 | Complete direct parameter binding | Named host identities, source-of-truth/rollback, full bank/resource bounds and consolidated reviewed state changes |
 | Modular paid distribution | Offline content/entitlement policy; no hidden network dependency |
 
-No implementation in this cleanup changes those runtime contracts.
+The Rack candidate deliberately evolves project/Rack/FX schemas to 5/4/2 and
+adds the [named parameter/state contract](RACK_PARAMETER_CONTRACT.md) and
+[audio routing contract](RACK_AUDIO_ROUTING.md). It remains subject to independent
+review, required CI and the integrated host milestone; implementation presence
+alone does not establish production acceptance.
 For each future critical change record old/new versions, migration/failure behaviour,
 tests and Architecture Guard review before merge.
 
 ## Historical code
 
-`libs/parts/`, legacy parameter IDs and existing modules are still active build/compatibility inputs.
-They are not archived without an audit of CMake, includes, state/preset loaders and tests.
+The POC global engine layer was audited and removed (owner #78 P1; no POC
+projects require migration): `libs/parts/`, `libs/generator/`, `BassPanel`,
+`PresetBrowser`, the POC Bass/Kick/Part/MATCH host parameters and the
+global Sound-preset path. The remaining global host parameters are `midiMode`,
+`rootNote`, `rngSeed` and `outputLevel`; Rack scenes are the only user preset
+format (`VstEnginePreset` version 2, format `rack-project-v5`). Existing
+modules are still active build inputs and are not archived without an audit
+of CMake, includes, state/preset loaders and tests.
 The historical inactive source is under [archive](../../archive/README.md).
 Do not reactivate it merely because it has been preserved.
