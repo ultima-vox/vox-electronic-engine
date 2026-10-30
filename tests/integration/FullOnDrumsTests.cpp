@@ -1161,6 +1161,23 @@ void editorDrumGrid() {
   check(slotPattern(r)->stepsPerBar == 8 && grid.patternForTesting().stepsPerBar == 8,
         "the steps control reshapes the Rack pattern");
 
+  // The Rack pattern changes outside the grid (restore, undo): the selector
+  // follows the Rack, whichever way it changed.
+  const auto &factory = r.p->instrumentRack().descriptor(r.slot)->patternContent->factory;
+  patterns->setSelectedItemIndex(1, juce::sendNotificationSync);
+  auto edited = std::make_unique<pattern::Pattern>(*factory[1].pattern);
+  edited->at(cymbal, 2, 5).flags = VOX_STEP_ON; // not in Full-on Driving
+  setPattern(r, *edited); // not through the grid
+  editor->refreshForTesting();
+  grid.reload();
+  check(patterns->getSelectedItemIndex() == -1 && grid.patternForTesting() == *edited,
+        "an outside edit clears the factory selection; the cells match the Rack");
+  std::string why;
+  check(r.p->instrumentRack().loadFactoryPattern(r.slot, 2, why), why);
+  grid.reload();
+  check(patterns->getSelectedItemIndex() == 2 && grid.patternForTesting() == *factory[2].pattern,
+        "an outside factory restore selects that factory");
+
   // Visual Gate: the actual editor with the kit's factory pattern (CI artifact
   // for the owner's review; not an acceptance claim).
   if (const auto *path = std::getenv("VOX_DRUMS_GRID_SNAPSHOT")) {

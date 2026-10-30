@@ -21,7 +21,7 @@ public:
   std::function<bool(pattern::Pattern &out)> onReload; // the owner's current pattern
 
   // Null content: nothing to edit (the grid is hidden by its page).
-  void setContent(std::shared_ptr<const pattern::Content>, std::string_view selectedFactory);
+  void setContent(std::shared_ptr<const pattern::Content>);
   void reload();
 
   void paint(juce::Graphics &) override;
