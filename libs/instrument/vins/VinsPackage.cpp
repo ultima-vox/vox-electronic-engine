@@ -319,7 +319,7 @@ void loadNative(Candidate &c, const LoadOptions &options, LoadReport &report) {
     report.diagnostics.push_back(c.label + ": module instrument ids differ from the manifest");
     return;
   }
-  report.providers.push_back(native::makeProvider(std::move(module)));
+  report.providers.push_back(native::makeProvider(std::move(module), key->id));
 }
 } // namespace
 

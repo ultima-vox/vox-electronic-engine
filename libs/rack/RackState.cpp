@@ -167,6 +167,7 @@ juce::ValueTree serialize(
         child.setProperty("slotId", juce::String(slot.slotId), nullptr);
         child.setProperty("instrumentId", juce::String(slot.instrumentId), nullptr);
         child.setProperty("providerId", juce::String(slot.resolvedProviderId), nullptr);
+        child.setProperty("publisher", juce::String(slot.publisherId), nullptr);
         child.setProperty("instrumentVersion", static_cast<juce::int64>(slot.instrumentVersion), nullptr);
         child.setProperty("instrumentStateVersion", static_cast<juce::int64>(slot.instrumentStateVersion), nullptr);
         child.setProperty("contentVersion", static_cast<juce::int64>(slot.contentVersion), nullptr);
@@ -209,6 +210,8 @@ juce::ValueTree serialize(
           if (parameter.poolIndex >= 0)
             direct.setProperty("pool", static_cast<int>(parameter.poolIndex),
                                nullptr);
+          if (parameter.spec != 0)
+            direct.setProperty("spec", static_cast<juce::int64>(parameter.spec), nullptr);
           child.appendChild(direct, nullptr);
         }
         root.appendChild(child, nullptr);
@@ -223,8 +226,7 @@ bool deserialize(const juce::ValueTree& root,
     std::uint32_t encodedSchema {};
     if (!root.isValid() || !root.hasType(rackType)
         || !readUnsigned(root.getProperty("schemaVersion"), encodedSchema)
-        || encodedSchema < 1
-        || encodedSchema > static_cast<std::uint32_t>(schemaVersion)
+        || encodedSchema != static_cast<std::uint32_t>(schemaVersion)
         || root.getNumChildren() != static_cast<int>(instrument::maxSlots)) {
         diagnostic = "invalid rack state root";
         return false;
@@ -236,6 +238,7 @@ bool deserialize(const juce::ValueTree& root,
         if (!child.hasType(slotType)
             || !validString(child.getProperty("instrumentId"))
             || !validString(child.getProperty("providerId"))
+            || !validString(child.getProperty("publisher"))
             || !validString(child.getProperty("soundPreset"))
             || !validString(child.getProperty("patternPreset"))) {
             diagnostic = "invalid rack slot encoding";
@@ -258,6 +261,14 @@ bool deserialize(const juce::ValueTree& root,
         }
         slot.instrumentId = child.getProperty("instrumentId").toString().toStdString();
         slot.resolvedProviderId = child.getProperty("providerId").toString().toStdString();
+        slot.publisherId = child.getProperty("publisher").toString().toStdString();
+        if (!slot.publisherId.empty()
+            && (slot.publisherId.size() != 16
+                || !std::all_of(slot.publisherId.begin(), slot.publisherId.end(),
+                                [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))) {
+            diagnostic = "invalid rack publisher identity";
+            return false;
+        }
         if (!validStableId(slot.instrumentId, true)
             || !validStableId(slot.resolvedProviderId, true)) {
             diagnostic = "invalid rack stable ID";
@@ -300,14 +311,10 @@ bool deserialize(const juce::ValueTree& root,
         }
         slot.soundPreset = child.getProperty("soundPreset").toString().toStdString();
         slot.patternPreset = child.getProperty("patternPreset").toString().toStdString();
-        if (encodedSchema >= 2) {
-            if (!readUnsigned(child.getProperty("patternSchemaVersion"),
-                              slot.patternSchemaVersion)) {
-                diagnostic = "invalid pattern schema metadata";
-                return false;
-            }
-        } else {
-            slot.patternSchemaVersion = VOX_PATTERN_SCHEMA_V1;
+        if (!readUnsigned(child.getProperty("patternSchemaVersion"),
+                          slot.patternSchemaVersion)) {
+            diagnostic = "invalid pattern schema metadata";
+            return false;
         }
         if (slot.patternSchemaVersion == 0) {
             diagnostic = "invalid pattern schema metadata";
@@ -345,7 +352,7 @@ bool deserialize(const juce::ValueTree& root,
         slot.modulePayload.resize(payload.getSize());
         if (!slot.modulePayload.empty())
             std::memcpy(slot.modulePayload.data(), payload.getData(), payload.getSize());
-        if (encodedSchema >= 2) {
+        {
             const auto encodedPattern = child.getProperty("patternPayload").toString();
             constexpr auto maxEncodedPatternBytes =
                 4u * ((maxPatternPayloadBytes + 2u) / 3u);
@@ -365,7 +372,7 @@ bool deserialize(const juce::ValueTree& root,
                 std::memcpy(slot.patternPayload.data(), pattern.getData(),
                             pattern.getSize());
         }
-        if (encodedSchema >= 3) {
+        {
             const auto encodedModulation =
                 child.getProperty("modulationPayload").toString();
             constexpr auto maxEncodedModulationBytes =
@@ -386,7 +393,7 @@ bool deserialize(const juce::ValueTree& root,
                 std::memcpy(slot.modulationPayload.data(), modulation.getData(),
                             modulation.getSize());
         }
-        if (encodedSchema >= 4) {
+        {
           if (child.getNumChildren() >
               static_cast<int>(instrument::maxDirectParameters)) {
             diagnostic = "direct parameter count exceeds host limit";
@@ -395,19 +402,28 @@ bool deserialize(const juce::ValueTree& root,
           for (const auto direct : child) {
             float value{};
             int pool{-1};
+            std::uint32_t spec{};
             if (!direct.hasType("SOUND_PARAMETER") ||
                 !validString(direct.getProperty("id"),
                              VOX_INSTRUMENT_MAX_ID_BYTES) ||
                 !readPlain(direct.getProperty("value"), value) ||
                 (direct.hasProperty("pool") &&
                  (!readSigned(direct.getProperty("pool"), pool) || pool < 0 ||
-                  pool >= static_cast<int>(instrument::poolParametersPerSlot)))) {
+                  pool >= static_cast<int>(instrument::poolParametersPerSlot))) ||
+                (direct.hasProperty("spec") &&
+                 (!readUnsigned(direct.getProperty("spec"), spec) || spec == 0))) {
               diagnostic = "invalid direct parameter encoding";
+              return false;
+            }
+            // A slot that was resolved when saved records the endpoint and
+            // meaning of every value; there is no match-by-ID fallback.
+            if (slot.instrumentVersion != 0 && (pool < 0 || spec == 0)) {
+              diagnostic = "direct parameter without its pool index or meaning";
               return false;
             }
             slot.directParameters.push_back(
                 {direct.getProperty("id").toString().toStdString(), value,
-                 static_cast<std::int16_t>(pool)});
+                 static_cast<std::int16_t>(pool), spec});
           }
         }
         slot.schemaVersion = schemaVersion;

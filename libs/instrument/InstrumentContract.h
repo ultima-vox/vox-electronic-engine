@@ -118,6 +118,12 @@ struct InstrumentDescriptor {
     // Pattern capabilities and factory patterns declared through
     // VoxContentApiV2, validated at load. Null: the instrument has no pattern.
     std::shared_ptr<const pattern::Content> patternContent;
+    // Signed package identity: the trusted publisher key id of the .vins that
+    // supplied this instrument; empty for built-in and unsigned graph content.
+    std::string publisherId;
+    // Oldest instrumentVersion whose saved state this version may upgrade by
+    // appending new parameters; 0 = no upgrade (only the same version loads).
+    std::uint32_t upgradeFromVersion {};
 };
 
 struct ParameterValue {

@@ -17,7 +17,7 @@ reconciled against this document once its docs merge.
 | A new compatible DSP instrument ships without rebuilding Rack | Native module (DLL) behind a stable, versioned C ABI |
 | Rack is the only parameter authority | Modules never register host parameters; the Rack common adapter owns registration, normalized/plain conversion, gestures and state |
 | Replacing an instrument must not silently reuse automation | Explicit replacement confirmation + per-slot stale-automation inhibit, explicit rearm |
-| Same-instrument upgrades | #65 strict pool indices + append-only migration |
+| Same-instrument upgrades | Declared `upgradeFromVersion`, same publisher, unchanged pool indices and parameter meaning, append-only (RACK_PARAMETER_CONTRACT) |
 | Keep the Rack simple | 16 slots, one MIDI channel per instrument, shared rail, one instrument page, VOX widgets; no arbitrary VST hosting, no Kontakt-style complexity |
 
 ## Non-goals
@@ -408,8 +408,9 @@ Several Rack VST3 instances live in one DAW process and share each DLL.
 2. **Missing / incompatible module**: existing unresolved-slot policy (identity,
    named values, patterns and opaque payload preserved; silence; no
    substitution).
-3. **Update**: after restart, open projects use #65 append-only migration or
-   stay unresolved.
+3. **Update**: after restart, open projects use the declared append-only
+   upgrade (same publisher, `upgradeFromVersion` window, unchanged pool
+   indices and parameter meaning) or stay unresolved.
 
 ## Native code trust
 

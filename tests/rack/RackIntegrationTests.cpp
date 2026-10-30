@@ -211,28 +211,19 @@ int main()
                 == patterned.toXmlString(),
             "pattern-bearing save-load-save is canonical");
 
-    auto versionOne = patterned.createCopy();
-    versionOne.setProperty("schemaVersion", 1, nullptr);
-    for (int childIndex = 0; childIndex < versionOne.getNumChildren();
-         ++childIndex) {
-        auto child = versionOne.getChild(childIndex);
-        child.setProperty("schemaVersion", 1, nullptr);
-        child.removeProperty("patternSchemaVersion", nullptr);
-        child.removeProperty("patternPayload", nullptr);
+    // One 1.0 project format: an older Rack schema is not migrated.
+    for (const int older : {1, 6}) {
+      auto previous = patterned.createCopy();
+      previous.setProperty("schemaVersion", older, nullptr);
+      for (int childIndex = 0; childIndex < previous.getNumChildren(); ++childIndex)
+        previous.getChild(childIndex).setProperty("schemaVersion", older, nullptr);
+      REQUIRE(!rack::state::deserialize(previous, decoded, diagnostic),
+              "an older rack schema is rejected, not migrated");
     }
-    REQUIRE(rack::state::deserialize(versionOne, decoded, diagnostic),
-            "rack schema v1 migrates to current schema");
-    REQUIRE(decoded[0].schemaVersion == rack::state::schemaVersion
-                && decoded[0].patternSchemaVersion == VOX_PATTERN_SCHEMA_V1
-                && decoded[0].patternPayload.empty()
-                && decoded[0].patternPreset == "Acid Pattern A",
-            "v1 migration defaults empty v1 payload without losing reference");
-    const auto migrated = rack::state::serialize(decoded);
-    REQUIRE(static_cast<int>(migrated.getProperty("schemaVersion"))
-                    == rack::state::schemaVersion
-                && migrated.getChild(0).hasProperty("patternSchemaVersion")
-                && migrated.getChild(0).hasProperty("patternPayload"),
-            "v1 migration serializes canonical current pattern fields");
+    auto badPublisher = patterned.createCopy();
+    badPublisher.getChild(0).setProperty("publisher", "NOT-A-KEY-ID", nullptr);
+    REQUIRE(!rack::state::deserialize(badPublisher, decoded, diagnostic),
+            "a malformed publisher identity is rejected");
 
     for (const auto& [property, raw] : std::array {
              std::pair { "routeMode", -1 }, std::pair { "routeMode", 2 },

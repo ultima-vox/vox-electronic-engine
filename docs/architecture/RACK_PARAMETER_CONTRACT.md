@@ -32,25 +32,34 @@ descriptor entries does not move any endpoint (regression-tested). Registration
 rejects a missing, out-of-range or duplicate pool index. Packages carry the
 same explicit index in `params.json` (instrument packages, phase 2).
 
-Upgrade policy (same InstrumentId, owner decision 28.10.2026, regression-tested
-across separate processors). Rack schema 6 records each named value's pool
-index. A revision that only reorders descriptor entries keeps
-`instrumentVersion` and restores exactly. A revision that adds parameters bumps
-`instrumentVersion`; project restore then applies **append-only migration**
-(`rack::migrateAppendOnly`) on the candidate state: accepted only when every
-saved ID still exists with its recorded pool index and a value valid under the
-current descriptor, and only the new IDs are filled from canonical defaults.
-The migrated state is validated and prepared in the same transaction; any
-failure rejects the restore without touching live state. Anything else (moved
-index, removed/renamed ID, invalidated value, missing recorded index, other
-version markers) stays unresolved with the original snapshot preserved; such
-changes need their own explicit migration. Opening a migrated snapshot in the
-older build is not supported: it stays unresolved and preserved. Changing the
-parameter set, or moving a recorded pool index, without the version bump is a
-provider error and rejects the whole restore transactionally (checked for every
-resolved slot before commit, so endpoint identity is never silently changed).
-Legacy values without a recorded index (Rack schema 1-5) match by ID only. The former per-instrument
-IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
+**One 1.0 project format.** Rack state schema 7 is the only accepted format; older schemas are rejected as a whole and never migrated (owner: no pre-release projects exist). Every named value of a slot that was resolved when saved records:
+- its **pool index**;
+- its **meaning**: `hostparams::parameterSpecHash` over type, range, step, unit and choice labels (not the name or the default).
+
+The slot itself records the **signed package identity** (`publisher`: the trusted publisher key id of its `.vins`; empty for built-in or unsigned graph content). A value without its index or meaning is not a 1.0 project and is rejected; there is no match-by-ID fallback.
+
+**Same instrument version.** A revision that only reorders descriptor entries restores exactly. Any of the following without a version bump is a provider error and rejects the whole restore transactionally:
+- a changed parameter set;
+- a moved recorded pool index;
+- a changed parameter meaning.
+
+The same InstrumentId from **another publisher** never loads into a saved slot: the slot stays unresolved, with its identity and values preserved.
+
+**Upgrade of a released instrument** (owner decision #78 §4, `rack::migrateAppendOnly`). This is a project saved with an older version of the same instrument, opened after a `.vins` update. It is applied on the candidate state only when all of these hold:
+- **Identity:** the InstrumentId and the publisher are the same.
+- **Declared window:** the current version declares the upgrade (`upgradeFromVersion`, from `VoxInstrumentDescriptorV2.upgradeFromVersion`; 0 means none), and the saved version lies in `[upgradeFromVersion, instrumentVersion)`.
+- **Existing values unchanged:** every saved value still exists under its id, keeps its pool index and meaning, and is valid.
+- **Other markers:** the content version is unchanged.
+
+Only the new parameters are added, with their canonical defaults. The migrated state is validated and prepared in the same transaction; any failure leaves the live state untouched.
+
+Anything else stays unresolved with the original snapshot preserved:
+- an undeclared upgrade, or a version outside the window;
+- a moved index, or a removed or renamed id;
+- a changed meaning, or an invalid value;
+- another publisher, or other version markers.
+
+Opening an upgraded snapshot in the older build is not supported; it stays unresolved and preserved. The former per-instrument IDs `slotNN.sound.<InstrumentId>.<ParameterId>` are removed without migration.
 
 Registration rejects incomplete/duplicate descriptors, runtime key collisions
 and VST3 parameter-ID hash collisions. The pinned JUCE VST3 hash policy is

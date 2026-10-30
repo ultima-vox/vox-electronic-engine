@@ -119,7 +119,10 @@ typedef struct VoxInstrumentDescriptorV2 {
   uint32_t latencySamples;
   uint32_t tailSamples;
   uint32_t outputChannels;
-  uint32_t reserved0;
+  /* Oldest instrumentVersion whose saved state this version upgrades by
+   * appending new parameters with defaults (existing ids, pool indices and
+   * ranges unchanged); 0 = no upgrade. Below instrumentVersion. */
+  uint32_t upgradeFromVersion;
 } VoxInstrumentDescriptorV2;
 
 #define VOX_SLOT_INDEX_NONE 0xFFFFFFFFu
