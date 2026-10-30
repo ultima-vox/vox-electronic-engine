@@ -294,7 +294,20 @@ typedef struct VoxNoteOutputV2 {
   uint32_t count;         /* module: events written, <= capacity */
   uint32_t dropped;       /* module: events that did not fit */
   VoxNoteEventV2 *events; /* host-owned */
+  /* V2.2, appended. Read and written only when structSize covers it; every
+   * host and module accepts VOX_NOTE_OUTPUT_V2_BASE_SIZE. The host resets it
+   * to VOX_ROUTED_NOTES_MAY_PLAY before each call. */
+  uint32_t routedNotes;   /* module: VOX_ROUTED_NOTES_* for this whole block */
+  uint32_t reserved;      /* 0 */
 } VoxNoteOutputV2;
+
+/* Whether routed host NoteOns of a block sounded. Parameter changes reach a
+ * module at block boundaries only (the Rack sends sampleOffset 0), so one
+ * value per block is exact for a block-start mode; a module that sees a
+ * mid-block change of what it admits must report MAY_PLAY. */
+#define VOX_ROUTED_NOTES_MAY_PLAY 0u    /* unknown, or some may have sounded (legacy) */
+#define VOX_ROUTED_NOTES_ALL_IGNORED 1u /* no routed NoteOn of this block sounded */
+#define VOX_NOTE_OUTPUT_V2_BASE_SIZE 32u
 
 typedef struct VoxProcessContextV2 {
   uint32_t structSize, version;
@@ -380,7 +393,9 @@ VOX_ABI_ASSERT(offsetof(VoxTransportV2, timeInSamples) == 64, "timeInSamples off
 VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 104, "VoxProcessContextV2 size");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, noteOutput) == 96, "noteOutput offset");
 VOX_ABI_ASSERT(sizeof(VoxNoteEventV2) == 8, "VoxNoteEventV2 size");
-VOX_ABI_ASSERT(sizeof(VoxNoteOutputV2) == 32, "VoxNoteOutputV2 size");
+VOX_ABI_ASSERT(sizeof(VoxNoteOutputV2) == 40, "VoxNoteOutputV2 size");
+VOX_ABI_ASSERT(offsetof(VoxNoteOutputV2, routedNotes) == VOX_NOTE_OUTPUT_V2_BASE_SIZE,
+               "routedNotes offset");
 VOX_ABI_ASSERT(offsetof(VoxNoteOutputV2, events) == 24, "note output events offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, pattern) == VOX_PROCESS_CONTEXT_V2_BASE_SIZE,
                "pattern offset");

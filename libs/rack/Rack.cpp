@@ -1009,7 +1009,7 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
   if (audioRouting && audioControls && AudioRouting::valid(*audioControls)) {
     auto available = *audioControls;
     std::span<const VoxNoteEventV2> generated;
-    bool found = false;
+    bool found = false, routedIgnored = false;
     for (std::size_t i = 0; i < controls.size(); ++i)
       if (controls[i].slotId == available.kickSource &&
           processing_->runtime[i].instance) {
@@ -1018,11 +1018,14 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
         // A count beyond the buffer is broken output: none of it is used.
         if (source.patterns && source.noteOutput.count <= source.noteEvents.size())
           generated = {source.noteEvents.data(), source.noteOutput.count};
+        // Validated by the adapter; a voided or bypassed block reads MAY_PLAY.
+        routedIgnored = source.patterns &&
+                        source.noteOutput.routedNotes == VOX_ROUTED_NOTES_ALL_IGNORED;
       }
     if (!found)
       available.kickSource = instrument::invalidSlotId;
     if (!audioRouting->begin(available, controls, processing_->routed,
-                             sampleCount, generated))
+                             sampleCount, generated, routedIgnored))
       audioRouting = nullptr;
   } else
     audioRouting = nullptr;

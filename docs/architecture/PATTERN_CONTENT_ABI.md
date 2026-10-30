@@ -76,6 +76,24 @@ The same event path serves two consumers: same-block kick ducking (next PR) and 
 - **Test.** The exported file, replayed through Host MIDI at 145 BPM, renders bit for bit like the internal sequencer.
 - **Not included.** Host automation and modulation are not part of the exported pattern.
 
+## Routed-notes report (V2.2, proposed)
+
+`VoxNoteOutputV2` grows at its end (32 → 40 bytes): `routedNotes` and a
+`reserved` word, read and written only when `structSize` covers them.
+`VOX_NOTE_OUTPUT_V2_BASE_SIZE` (32) is accepted by every host and module.
+
+| Value | Meaning |
+| --- | --- |
+| `VOX_ROUTED_NOTES_MAY_PLAY` (0) | Unknown, or some routed NoteOns may have sounded. Legacy default; the host writes it before every call. |
+| `VOX_ROUTED_NOTES_ALL_IGNORED` (1) | A promise for the whole block: no routed host NoteOn sounded. |
+
+How the parts behave:
+- **Host side.** The value is reset before every call and cleared for a failed or bypassed block. Any other value, or a non-zero `reserved`, voids the block (counted like malformed notes).
+- **Timing.** The value is block-wide by design. The Rack's adapter sends every parameter change at `sampleOffset` 0, because `InstrumentInstance::setParameter` has no offset. A module that sees a mid-block change of what it admits must report `MAY_PLAY`.
+- **What is reported.** `events` stay generated-only; host MIDI is never echoed.
+
+Used by kick ducking (see [RACK_AUDIO_ROUTING](RACK_AUDIO_ROUTING.md)).
+
 ## ABI compatibility
 
 `VoxProcessContextV2` grows only at its end (80 → 104 bytes: `pattern`, `patternGeneration`, `noteOutput`):

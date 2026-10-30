@@ -74,6 +74,19 @@ slot and its kick note.
 
 When a routed and a generated kick land on the same sample, they trigger once.
 
+**Routed kicks the source did not play** (PROPOSED, V2.2, awaiting owner
+approval on #86). A source that reports `VOX_ROUTED_NOTES_ALL_IGNORED` for a
+block (validated by the native adapter) has none of that block's routed NoteOns
+count as triggers; only its generated notes do.
+- Full-on Drums reports this in Internal mode, so a stray kick clip neither
+  sounds nor ducks. Host mode keeps routed kicks; Both combines both sources,
+  and a coincident pair triggers once.
+- A legacy module, a voided or bypassed block, and any undefined report read as
+  `MAY_PLAY`: routed kicks trigger as before.
+- The value covers a whole block. The Rack sends parameter changes only at
+  block boundaries, so a mode switch takes effect on the next block. A module
+  that sees a mid-block change of what it admits reports `MAY_PLAY`.
+
 **What clears the envelope:** mute, disable or solo-exclusion of the source, a missing source, and source or note changes. A silent source ducks nothing, and the source itself is exempt from ducking.
 
 **Same-block, two-pass processing.** The Rack renders every slot into its own buffer first. It then builds the block's envelope from the routed MIDI and the source's generated notes, and only then mixes. As a result:

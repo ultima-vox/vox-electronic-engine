@@ -10,6 +10,7 @@
 #include "instrument/native/NativeModule.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1084,6 +1085,157 @@ void internalKickDucksInTheSameBlock() {
   }
 }
 
+// V2.2 routed-notes report of the real kit, called directly: ALL_IGNORED only
+// when no routed NoteOn of the whole block could sound (Internal mode from the
+// block start to its end). A mid-block mode change is reported honestly as
+// MAY_PLAY, and a V2.1 host's 32-byte note output is never written past.
+void routedNotesReport() {
+  std::string diagnostic;
+  auto module = native::NativeModule::acquire(cachedModule(), diagnostic);
+  check(module != nullptr, "module acquired: " + diagnostic);
+  const auto &t = module->table();
+  const VoxCreateParamsV2 params{sizeof(VoxCreateParamsV2), VOX_MODULE_ABI_V2,
+                                 VOX_SLOT_INDEX_NONE, 0};
+  VoxInstance s = nullptr;
+  check(t.create(drumsId, &params, &s) == VOX_OK, "create");
+  const VoxPrepareSpecV2 spec{sizeof(VoxPrepareSpecV2), VOX_MODULE_ABI_V2, 48000.0, 128, 2, 59, 256};
+  check(t.prepare(s, &spec) == VOX_OK, "prepare");
+  std::vector<float> left(128), right(128);
+  float *outputs[] = {left.data(), right.data()};
+  VoxTransportV2 transport{};
+  transport.structSize = sizeof(transport);
+  transport.version = VOX_MODULE_ABI_V2;
+  transport.flags = VOX_TRANSPORT_PLAYING | VOX_TRANSPORT_HAS_TEMPO | VOX_TRANSPORT_HAS_PPQ;
+  transport.tempoBpm = 145.0;
+  std::array<VoxNoteEventV2, 32> events{};
+  VoxNoteOutputV2 out{};
+  auto run = [&](float startMode, std::uint32_t changeAt, float changeTo,
+                 std::uint32_t size = sizeof(VoxNoteOutputV2)) {
+    VoxParamChangeV2 changes[2] = {{seqMode, 0, startMode, 0}, {seqMode, changeAt, changeTo, 0}};
+    out = {size, VOX_MODULE_ABI_V2, static_cast<std::uint32_t>(events.size()),
+           sizeof(VoxNoteEventV2), 99, 99, events.data(), 0xEEEEEEEEu, 0};
+    VoxProcessContextV2 c{};
+    c.structSize = sizeof(c);
+    c.version = VOX_MODULE_ABI_V2;
+    c.numSamples = 128;
+    c.outputChannelCount = 2;
+    c.outputs = outputs;
+    c.paramChanges = changes;
+    c.paramChangeCount = changeAt > 0 ? 2 : 1;
+    c.paramChangeStride = sizeof(VoxParamChangeV2);
+    c.midiEventStride = sizeof(VoxMidiEventV2);
+    c.transport = &transport;
+    c.noteOutput = &out;
+    check(t.process(s, &c) == VOX_OK, "process");
+    transport.ppqPosition += 128 * 145.0 / (60.0 * 48000.0);
+    return out.routedNotes;
+  };
+  constexpr float host = 0.0f, internal = 1.0f, both = 2.0f;
+  check(run(internal, 0, 0) == VOX_ROUTED_NOTES_ALL_IGNORED && out.reserved == 0 && out.count == 0,
+        "Internal for the whole block: ALL_IGNORED");
+  check(run(host, 0, 0) == VOX_ROUTED_NOTES_MAY_PLAY, "Host: MAY_PLAY");
+  check(run(both, 0, 0) == VOX_ROUTED_NOTES_MAY_PLAY, "Both: MAY_PLAY");
+  check(run(internal, 64, host) == VOX_ROUTED_NOTES_MAY_PLAY,
+        "Internal to Host at sample 64: MAY_PLAY (routed notes after it sound)");
+  check(run(internal, 64, both) == VOX_ROUTED_NOTES_MAY_PLAY, "Internal to Both mid-block: MAY_PLAY");
+  check(run(host, 64, internal) == VOX_ROUTED_NOTES_MAY_PLAY,
+        "Host to Internal at sample 64: MAY_PLAY (routed notes before it sound)");
+  check(run(internal, 64, internal) == VOX_ROUTED_NOTES_ALL_IGNORED,
+        "a mid-block change that stays Internal keeps ALL_IGNORED");
+  check(run(internal, 0, 0, VOX_NOTE_OUTPUT_V2_BASE_SIZE) == 0xEEEEEEEEu && out.count == 0 &&
+            out.dropped == 0,
+        "a V2.1 32-byte note output is filled and nothing past it is written");
+  check(t.destroy(s) == VOX_OK, "destroy");
+}
+
+// The kit's Host / Internal / Both modes as kick-duck sources, on the real
+// .vins with a stray kick (note 36) on the kit's channel half way between
+// two pattern kicks. Every rate, block size and slot order.
+void strayKickPolicy() {
+  for (const double rate : {44100.0, 48000.0, 96000.0})
+    for (const int block : {64, 128, 512})
+      for (const auto [kitSlot, synthSlot] : {std::pair{2u, 9u}, std::pair{9u, 2u}}) {
+        const auto cell = " (" + std::to_string(static_cast<int>(rate)) + " Hz, " +
+                          std::to_string(block) + ", kit slot " + std::to_string(kitSlot + 1) + ")";
+        auto r = makeRig(instrumentsDir, kitSlot, rate, block);
+        juce::String diagnostic;
+        check(r.p->loadSlotInstrument(synthSlot, "com.ultimavox.demo-synth", diagnostic),
+              "Demo Synth loads as the duck target: " + diagnostic.toStdString());
+        const int synthChannel = channelOf(*r.p, synthSlot);
+        setPattern(r, *kickOnBeats(r));
+        auto param = [&](const juce::String &id, float plain) {
+          auto *p = r.p->parameters().getParameter(id);
+          check(p != nullptr, "routing parameter " + id.toStdString());
+          p->setValueNotifyingHost(p->convertTo0to1(plain));
+        };
+        param("rack.duck.source", static_cast<float>(kitSlot + 1));
+        param("rack.duck.note", 36.0f);
+        param("rack.duck.attack", 0.0f);
+        param("rack.duck.hold", 0.5f);
+        param("rack.duck.release", 1.0f);
+        char depth[32];
+        std::snprintf(depth, sizeof(depth), "slot%02u.duck.depth", synthSlot + 1);
+        param(depth, 1.0f);
+        const double spp = 60.0 * rate / 145.0;
+        const int samples = static_cast<int>(spp * 2);
+        const int stray = static_cast<int>(std::lround(spp * 1.5));
+        const int beat2 = static_cast<int>(std::ceil(0.75 * spp - 1e-6)); // ppq 1.0
+        const Midi hold{0, MidiMessage::noteOn(synthChannel, 60, (juce::uint8)110)};
+        auto kickAt = [&](int at) { return Midi{at, MidiMessage::noteOn(r.channel, 36, (juce::uint8)120)}; };
+        auto run = [&](float mode, std::vector<Midi> extra) {
+          setPlain(r, seqMode, mode);
+          r.p->releaseResources();
+          r.p->prepareToPlay(rate, block);
+          TestPlayHead head;
+          head.ppq = 0.25;
+          extra.insert(extra.begin(), hold);
+          return play(r, head, samples, extra);
+        };
+        // Audible kit: a stray kick in Internal mode changes nothing at all,
+        // neither the kit's sound nor the duck.
+        setPlain(r, kitVolume, 0.6f);
+        check(run(1.0f, {kickAt(stray)}) == run(1.0f, {}),
+              "Internal: a stray host kick neither sounds nor ducks" + cell);
+        // Silent kit: only the synth's ducking is heard.
+        setPlain(r, kitVolume, 0.0f);
+        const auto internal = run(1.0f, {kickAt(stray)});
+        check(internal.l[beat2] == 0.0f && internal.l[beat2 - 1] != 0.0f,
+              "Internal: the pattern kick still ducks at its sample" + cell);
+        check(internal.l[stray] != 0.0f, "Internal: no duck at the stray kick" + cell);
+        const auto hostMode = run(0.0f, {kickAt(stray)});
+        check(hostMode.l[stray] == 0.0f && hostMode.l[stray - 1] != 0.0f,
+              "Host: the same kick ducks at its sample" + cell);
+        const auto both = run(2.0f, {});
+        check(run(2.0f, {kickAt(beat2)}) == both,
+              "Both: a host kick on a pattern kick triggers one duck attack" + cell);
+        check(run(2.0f, {kickAt(stray)}).l[stray] == 0.0f, "Both: a stray host kick ducks" + cell);
+        if (rate == 48000.0 && block == 128) {
+          // Mode change at a block boundary: Host, then Internal from the next block.
+          setPlain(r, seqMode, 0.0f);
+          r.p->releaseResources();
+          r.p->prepareToPlay(rate, block);
+          TestPlayHead head;
+          head.ppq = 0.25;
+          const auto first = play(r, head, stray - 10, {hold, kickAt(stray - 200)});
+          check(first.l[stray - 200] == 0.0f, "Host before the switch: the kick ducks" + cell);
+          setPlain(r, seqMode, 1.0f);
+          const auto second = play(r, head, 400, {kickAt(10)});
+          check(second.l[10] != 0.0f, "Internal from the next block: the kick does not duck" + cell);
+          // Loop back: Internal still ignores a stray kick at the loop start.
+          head.ppq = 0.25;
+          const auto looped = play(r, head, 400, {kickAt(100)});
+          check(looped.l[100] != 0.0f, "after a loop back a stray kick still does not duck" + cell);
+          // A muted source ducks nothing, even in Host mode.
+          char mute[32];
+          std::snprintf(mute, sizeof(mute), "slot%02uMute", kitSlot + 1);
+          param(mute, 1.0f);
+          const auto muted = run(0.0f, {kickAt(stray)});
+          check(muted.l[stray] != 0.0f, "a muted kit ducks nothing" + cell);
+          param(mute, 0.0f);
+        }
+      }
+}
+
 // The editor's Pattern page edits the kit's Rack pattern: an 8-lane grid,
 // clicks and velocity drags go to the Rack, factory patterns load, and the
 // controls follow what the kit declares.
@@ -1570,6 +1722,8 @@ int main(int argc, char **argv) {
   exportMatchesPlayback();
   internalKickDucksInTheSameBlock();
   editorDrumGrid();
+  routedNotesReport();
+  strayKickPolicy();
   editorSoundLayout();
   exportEndsAfterTheLastNote();
   sequencerStateReopensWithoutDuplicates();

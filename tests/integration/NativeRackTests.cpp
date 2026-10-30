@@ -561,6 +561,36 @@ void noteOutputValidated() {
               instrument::native::totalInvalidNoteReports() == before + 1,
           std::string("malformed note output voids the block: ") + bad[mode]);
   }
+  // V2.2 routed-notes report: only the defined values pass; anything else
+  // voids the block and leaves host triggers as they always were.
+  setNoteMode(14, 10);
+  render();
+  check(out.count == 2 && out.routedNotes == VOX_ROUTED_NOTES_ALL_IGNORED,
+        "ALL_IGNORED passes with the block's notes");
+  for (std::uint32_t mode : {11u, 12u}) {
+    setNoteMode(14, mode);
+    const auto before = instrument::native::totalInvalidNoteReports();
+    render();
+    check(out.count == 0 && out.dropped == instrument::native::voidedNoteOutput &&
+              out.routedNotes == VOX_ROUTED_NOTES_MAY_PLAY && out.reserved == 0 &&
+              instrument::native::totalInvalidNoteReports() == before + 1,
+          "an undefined routed-notes report voids the block (mode " + std::to_string(mode) + ")");
+  }
+  // A host with the V2.1 32-byte struct: notes still flow, nothing is written
+  // past its end.
+  setNoteMode(14, 10);
+  out.structSize = VOX_NOTE_OUTPUT_V2_BASE_SIZE;
+  out.routedNotes = 0xA5A5A5A5u;
+  out.reserved = 0x5A5A5A5Au;
+  render();
+  check(out.count == 2 && out.routedNotes == 0xA5A5A5A5u && out.reserved == 0x5A5A5A5Au,
+        "a base-size note output gets notes and nothing beyond its 32 bytes");
+  out.structSize = sizeof(VoxNoteOutputV2);
+  out.routedNotes = out.reserved = 0;
+  instance->setBypassed(true);
+  render();
+  check(out.count == 0 && out.dropped == 0 && out.routedNotes == VOX_ROUTED_NOTES_MAY_PLAY,
+        "a bypassed instance reports no notes and no routed-notes claim");
   setNoteMode(14, 1);
   instance->setBypassed(true);
   render();
@@ -693,6 +723,57 @@ std::vector<float> duckRun(std::uint32_t noteMode) {
   return {out.begin() + blockSize, out.end()}; // from the second block on
 }
 
+// Routed kick NoteOn (note 62, not one the module generates) on the source's
+// channel at sample 20 of every block: it ducks unless the source validly
+// reports that its routed notes did not sound.
+std::vector<float> routedKickRun(std::uint32_t noteMode, bool muteSource = false) {
+  setNoteMode(6, noteMode);
+  auto p = makeProcessor(true);
+  const auto source = loadTone(*p, 6), target = loadTone(*p, 7);
+  auto param = [&](const juce::String &id, float plain) {
+    auto *parameter = p->parameters().getParameter(id);
+    check(parameter != nullptr, "routing parameter " + id.toStdString());
+    parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+  };
+  param("rack.duck.source", static_cast<float>(source + 1));
+  param("rack.duck.note", 62.0f);
+  param("rack.duck.attack", 0.0f);
+  param("rack.duck.hold", 0.5f);
+  param("rack.duck.release", 1.0f);
+  param("slot08.duck.depth", 1.0f);
+  if (muteSource)
+    param("slot07Mute", 1.0f);
+  setPlain(*p, source, 0, 0.0f); // the source plays, but adds no audio
+  const int sourceChannel = channelOf(*p, source), targetChannel = channelOf(*p, target);
+  std::vector<float> out;
+  juce::AudioBuffer<float> audio(2, blockSize);
+  juce::MidiBuffer midi;
+  for (int b = 0; b < 6; ++b) {
+    midi.clear();
+    if (b == 0)
+      midi.addEvent(juce::MidiMessage::noteOn(targetChannel, 64, 0.9f), 0);
+    if (b > 0)
+      midi.addEvent(juce::MidiMessage::noteOn(sourceChannel, 62, 0.9f), 20);
+    audio.clear();
+    p->processBlock(audio, midi);
+    if (b > 0)
+      out.insert(out.end(), audio.getReadPointer(0), audio.getReadPointer(0) + blockSize);
+  }
+  setNoteMode(6, 0);
+  return out;
+}
+
+void routedNotesPolicy() {
+  const auto legacy = routedKickRun(0); // the module writes no report
+  check(legacy[20] == 0.0f && legacy[19] != 0.0f,
+        "a routed kick ducks a legacy source at its sample");
+  const auto ignored = routedKickRun(10);
+  check(ignored[20] != 0.0f, "a source reporting ALL_IGNORED: its routed kick does not duck");
+  check(routedKickRun(11)[20] == 0.0f && routedKickRun(12)[20] == 0.0f,
+        "an undefined report is voided: routed kicks duck as before");
+  check(routedKickRun(0, true)[20] != 0.0f, "a muted source ducks nothing");
+}
+
 void malformedNotesDuckNothing() {
   const auto undisturbed = duckRun(0);
   double e = 0;
@@ -729,6 +810,7 @@ int main(int argc, char **argv) {
   exportRejectsMalformedNotes();
   hostileContentRejected();
   malformedNotesDuckNothing();
+  routedNotesPolicy();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

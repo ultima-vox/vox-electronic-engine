@@ -74,6 +74,8 @@ uint32_t voxAbiLayoutC(uint32_t *out, uint32_t capacity) {
       (uint32_t)sizeof(VoxNoteOutputV2),
       ENTRY(VoxNoteOutputV2, count),
       ENTRY(VoxNoteOutputV2, events),
+      ENTRY(VoxNoteOutputV2, routedNotes),
+      ENTRY(VoxNoteOutputV2, reserved),
   };
   const uint32_t count = (uint32_t)(sizeof(values) / sizeof(values[0]));
   for (uint32_t i = 0; i < count && i < capacity; ++i)

@@ -724,18 +724,23 @@ static uint32_t scheduleSequencer(struct VoxInstanceT *s, const VoxProcessContex
 }
 
 /* Reports this block's sequencer hits (they all sound: lane switches and mode
- * were applied when scheduling) to the host's note output, if it listens. */
+ * were applied when scheduling) to the host's note output, if it listens, and
+ * whether routed host NoteOns could sound in this block (V2.2 hosts only). */
 static void reportHits(const VoxProcessContextV2 *c, const SeqHit *hits, uint32_t count,
-                       const uint8_t *padNote) {
+                       const uint8_t *padNote, int routedIgnored) {
   const size_t need = offsetof(VoxProcessContextV2, noteOutput) + sizeof(VoxNoteOutputV2 *);
   VoxNoteOutputV2 *out = c->structSize >= need ? c->noteOutput : NULL;
-  if (out == NULL || out->structSize < sizeof(VoxNoteOutputV2) ||
+  if (out == NULL || out->structSize < VOX_NOTE_OUTPUT_V2_BASE_SIZE ||
       out->version != VOX_MODULE_ABI_V2 || out->stride < sizeof(VoxNoteEventV2) ||
       out->stride > MAX_RECORD_STRIDE || out->stride % _Alignof(VoxNoteEventV2) != 0 ||
       (out->capacity > 0 && out->events == NULL))
     return;
   out->count = 0;
   out->dropped = 0;
+  if (out->structSize >= offsetof(VoxNoteOutputV2, reserved) + sizeof(out->reserved)) {
+    out->routedNotes = routedIgnored ? VOX_ROUTED_NOTES_ALL_IGNORED : VOX_ROUTED_NOTES_MAY_PLAY;
+    out->reserved = 0;
+  }
   for (uint32_t i = 0; i < count; ++i) {
     if (out->count == out->capacity) {
       ++out->dropped;
@@ -795,7 +800,17 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   takePattern(s, c);
   SeqHit seq[MAX_SEQ_HITS];
   const uint32_t seqCount = scheduleSequencer(s, c, seq);
-  reportHits(c, seq, seqCount, s->padNote);
+  /* Internal mode drops routed NoteOns (applyMidi). That holds for the whole
+   * block only if no later change in it leaves Internal mode; otherwise some
+   * routed notes may sound and the block says so. */
+  int routedIgnored = (int)s->values[S_MODE] == MODE_INTERNAL;
+  for (uint32_t k = nextChange; routedIgnored && k < c->paramChangeCount; ++k) {
+    VoxParamChangeV2 p;
+    memcpy(&p, changes + (size_t)k * c->paramChangeStride, sizeof(p));
+    if (p.index == S_MODE && validValue(p.index, p.plain) && (int)p.plain != MODE_INTERNAL)
+      routedIgnored = 0;
+  }
+  reportHits(c, seq, seqCount, s->padNote, routedIgnored);
   float *left = c->outputs[0];
   float *right = c->outputChannelCount > 1 ? c->outputs[1] : NULL;
   for (uint32_t i = 0; i < c->numSamples; ++i) {

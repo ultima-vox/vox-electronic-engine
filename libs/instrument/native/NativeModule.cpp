@@ -138,9 +138,24 @@ std::atomic<std::uint64_t> &invalidNoteReports() noexcept {
 // count within the buffer, and every record inside the block, in order, with
 // a MIDI note, a 1..127 velocity, a declared lane and known flags. Anything
 // else voids the whole block (fail closed) and is counted.
+bool coversRoutedNotes(const VoxNoteOutputV2 &out) noexcept {
+  return out.structSize >= offsetof(VoxNoteOutputV2, reserved) + sizeof(out.reserved);
+}
+
+// Nothing generated, and routed host notes count as they always did.
+void clearNoteOutput(VoxNoteOutputV2 &out) noexcept {
+  out.count = out.dropped = 0;
+  if (coversRoutedNotes(out))
+    out.routedNotes = out.reserved = 0;
+}
+
 bool validNoteOutput(const VoxNoteOutputV2 &out, std::uint32_t sampleCount,
                      std::uint32_t laneLimit) noexcept {
   if (out.count > out.capacity)
+    return false;
+  // Only the defined values: an unknown claim must not silence host triggers.
+  if (coversRoutedNotes(out) && (out.routedNotes > VOX_ROUTED_NOTES_ALL_IGNORED ||
+                                 out.reserved != 0))
     return false;
   std::uint32_t previous = 0;
   for (std::uint32_t i = 0; i < out.count; ++i) {
@@ -259,7 +274,7 @@ public:
   void process(const ProcessBlock &block) noexcept override {
     hint_ = 0;
     if (block.noteOutput != nullptr) // a silent or failed block generates nothing
-      block.noteOutput->count = block.noteOutput->dropped = 0;
+      clearNoteOutput(*block.noteOutput);
     if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
         block.sampleCount > maximumBlock_ ||
         block.outputs.size() != outputChannels_) {
@@ -317,9 +332,9 @@ public:
     if (auto *out = block.noteOutput) {
       // A failed or silenced block plays nothing, so it reports nothing.
       if (!ok || bypassed_) {
-        out->count = out->dropped = 0;
+        clearNoteOutput(*out);
       } else if (!validNoteOutput(*out, block.sampleCount, noteLanes_)) {
-        out->count = 0;
+        clearNoteOutput(*out);
         out->dropped = voidedNoteOutput;
         invalidNoteReports().fetch_add(1, std::memory_order_relaxed);
       }
