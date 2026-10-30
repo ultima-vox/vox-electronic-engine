@@ -11,8 +11,12 @@ class AcidInstance final : public instrument::InstrumentInstance {
 public:
     bool prepare(const instrument::PrepareSpec& spec) override
     {
-        return engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
-                               spec.outputChannels);
+        prepared_ = spec.sampleRate >= AcidEngine::minimumSupportedSampleRate &&
+                    spec.sampleRate <= AcidEngine::maximumSupportedSampleRate &&
+                    engine_.prepare(spec.sampleRate, spec.maximumBlockSize,
+                                    spec.outputChannels);
+        initialParameterSync_ = prepared_;
+        return prepared_;
     }
     void reset() noexcept override { engine_.reset(); }
     void suspend() noexcept override { suspended_ = true; engine_.reset(); }
@@ -24,8 +28,16 @@ public:
     }
     void process(const instrument::ProcessBlock& block) noexcept override
     {
-        if (!bypassed_ && !suspended_)
+        if (prepared_ && !bypassed_ && !suspended_) {
+            // The Rack applies the parameter snapshot after prepare. Start
+            // smoothing from that snapshot on the first block.
+            if (initialParameterSync_) {
+                engine_.reset();
+                initialParameterSync_ = false;
+            }
+            engine_.setTransport(block.bpm, block.ppqPosition, block.transportPlaying);
             engine_.process(block.outputs, block.sampleCount, block.midi);
+        }
     }
     bool setParameter(std::string_view id, float value) noexcept override
     {
@@ -51,6 +63,8 @@ public:
     }
 private:
     AcidEngine engine_;
+    bool prepared_ {};
+    bool initialParameterSync_ {};
     bool bypassed_ {};
     bool suspended_ {};
 };
@@ -58,7 +72,7 @@ private:
 struct SoundPreset {
     const char* id;
     const char* name;
-    std::array<float, AcidEngine::parameterCount> values;
+    std::array<float, 9> values;
 };
 
 constexpr std::array soundPresets {
@@ -102,18 +116,19 @@ public:
             | instrument::Capability::patternGenerator
             | instrument::Capability::modulation
             | instrument::Capability::standardEditor;
-        descriptor_.budget = { 1, 2048, 4096, 0, 0, 153600,
+        descriptor_.budget = { 1, 2048, 4096, 0, 0, AcidEngine::maximumTailSamples,
                                64, 32, 65536 };
-        constexpr std::array ids { "waveform", "cutoff", "resonance",
-            "envelope", "decay", "accent", "slide", "drive", "output" };
-        constexpr std::array names { "Waveform", "Cutoff", "Resonance",
-            "Envelope", "Decay", "Accent", "Slide", "Drive", "Output" };
-        for (std::size_t i = 0; i < ids.size(); ++i)
-            descriptor_.parameters.push_back({ ids[i], names[i], "", 0.0f,
-                1.0f, soundPresets[0].values[i], 0.0001f,
-                instrument::ParameterType::floating,
-                i == 8 ? "Output" : "Acid", {}, true, true,
-                i < instrument::macrosPerSlot ? static_cast<std::int8_t>(i) : -1 });
+        const AcidEngine defaults;
+        for (std::size_t i = 0; i < AcidEngine::parameterCount; ++i) {
+            const auto id = std::string(AcidEngine::parameterIds[i]);
+            const float value = i < soundPresets[0].values.size()
+                ? soundPresets[0].values[i] : defaults.parameter(id);
+            const auto macro = i < instrument::macrosPerSlot
+                ? static_cast<std::int8_t>(i) : static_cast<std::int8_t>(-1);
+            descriptor_.parameters.push_back({ id, id, "", 0.0f, 1.0f, value,
+                0.0001f, instrument::ParameterType::floating, "Acid", {},
+                true, true, macro });
+        }
 
         for (const auto& preset : soundPresets) {
             instrument::ContentDescriptor sound { std::string(instrumentId),
@@ -178,13 +193,15 @@ public:
     {
         if (id != instrumentId) return instrument::ContentStatus::notFound;
         if (context.structSize != sizeof(VoxGenerationContextV1)
-            || output.structSize != sizeof(VoxPatternV1))
+            || output.structSize != sizeof(VoxPatternV1)
+            || context.rootNote < 0 || context.rootNote > 127)
             return instrument::ContentStatus::invalidArgument;
         const auto found = std::find_if(soundPresets.begin(), soundPresets.end(),
             [profileId](const auto& preset) { return profileId == preset.id; });
         if (found == soundPresets.end()) return instrument::ContentStatus::notFound;
         const auto generated = AcidGenerator::generate(profile(profileId),
-            context.globalSeed, context.slotId, instrumentId);
+            context.globalSeed, context.slotId, instrumentId,
+            static_cast<std::uint8_t>(context.rootNote));
         VoxPatternV1 candidate {};
         candidate.structSize = sizeof(candidate);
         candidate.schemaVersion = VOX_PATTERN_SCHEMA_V1;

@@ -113,6 +113,7 @@ private:
         // INTERNAL-playback instruments: snapshots of the Rack-owned pattern
         // and the notes the instrument reports per block.
         std::unique_ptr<pattern::SnapshotBuffer> patterns;
+        pattern::HostPlayhead hostPlay{};
         std::vector<VoxNoteEventV2> noteEvents;
         VoxNoteOutputV2 noteOutput{};
     };

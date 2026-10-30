@@ -348,6 +348,43 @@ target_include_directories(acid_tests PRIVATE tests ${VST_LIBS_DIR})
 target_link_libraries(acid_tests PRIVATE vst_acid vst_instrument)
 add_test(NAME acid_tests COMMAND acid_tests)
 
+# Native Acid 303. Compiled against the canonical V2 ABI in
+# libs/instrument/abi, not a private copy.
+add_library(VoxAcid303 SHARED
+  libs/acid/AcidEngine.cpp
+  libs/acid/module/AcidModule.cpp)
+target_compile_definitions(VoxAcid303 PRIVATE VOX_BUILDING_MODULE)
+target_include_directories(VoxAcid303 PRIVATE ${VST_LIBS_DIR})
+set_target_properties(VoxAcid303 PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "VoxAcid303"
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON)
+if(MSVC)
+  set_property(TARGET VoxAcid303 PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_library(VoxAcid303TestHooks SHARED
+  libs/acid/AcidEngine.cpp
+  libs/acid/module/AcidModule.cpp)
+target_compile_definitions(VoxAcid303TestHooks PRIVATE VOX_BUILDING_MODULE VOX_ACID_TEST_HOOKS)
+target_include_directories(VoxAcid303TestHooks PRIVATE ${VST_LIBS_DIR})
+set_target_properties(VoxAcid303TestHooks PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "VoxAcid303TestHooks"
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON)
+if(MSVC)
+  set_property(TARGET VoxAcid303TestHooks PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_executable(acid_module_tests tests/acid/AcidModuleTests.cpp libs/acid/AcidEngine.cpp)
+target_include_directories(acid_module_tests PRIVATE ${VST_LIBS_DIR})
+target_link_libraries(acid_module_tests PRIVATE ${CMAKE_DL_LIBS})
+add_dependencies(acid_module_tests VoxAcid303 VoxAcid303TestHooks)
+add_test(NAME acid_module_tests COMMAND acid_module_tests
+  $<TARGET_FILE:VoxAcid303> $<TARGET_FILE:VoxAcid303TestHooks>)
+
 add_executable(lead_tests
   tests/lead/LeadTests.cpp
   tests/instrument/InstrumentComplianceHarness.cpp
@@ -667,6 +704,14 @@ if(VOX_NATIVE_PLATFORM)
   add_test(NAME fullon_drums_tests
     COMMAND fullon_drums_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/drums-scratch
       ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)
+
+  vox_add_vins(vins_acid303 KIND native
+    OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxAcid303.vins
+    ID com.ultimavox.acid VERSION 1.0.0
+    NAME "Acid 303" VENDOR "Ultima Vox"
+    INSTRUMENTS com.ultimavox.acid MODULE_TARGET VoxAcid303
+    UI com.ultimavox.acid ui/sound.json
+      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/acid/sound.json)
 endif()
 
 add_executable(reliability_stress_tests

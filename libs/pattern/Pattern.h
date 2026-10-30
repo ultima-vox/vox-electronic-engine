@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -88,6 +89,28 @@ void encode(const Pattern &, std::vector<std::byte> &destination);
 [[nodiscard]] bool decode(std::span<const std::byte>, const Caps &, Pattern &out,
                           std::string &why);
 [[nodiscard]] std::uint32_t fingerprint(const Pattern &) noexcept;
+
+// Rack-owned playback of a HOST pattern (Acid). No allocation. The module
+// does not sequence; the Rack turns lane 0 into MIDI before process().
+// Root is the slot root in MIDI note numbers (Acid uses 36).
+struct HostPlayhead {
+  std::int64_t lastStep{std::numeric_limits<std::int64_t>::min()};
+  double lastPpq{0.0};
+  double releasePpq{0.0};
+  bool held{false};
+  bool sliding{false};
+  std::uint8_t heldNote{0};
+};
+struct HostMidi {
+  std::uint32_t sampleOffset{};
+  std::uint8_t status{}; // 0x90 on, 0x80 off
+  std::uint8_t note{};
+  std::uint8_t velocity{};
+};
+[[nodiscard]] std::uint32_t scheduleHostPattern(
+    const Pattern &pattern, std::uint8_t rootNote, double sampleRate, double bpm,
+    double ppq, std::uint32_t sampleCount, bool playing, HostPlayhead &playhead,
+    HostMidi *out, std::uint32_t capacity, bool &overflow) noexcept;
 
 // Factory patterns an instrument ships, validated at module load.
 struct FactoryPattern {

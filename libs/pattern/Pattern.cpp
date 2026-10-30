@@ -1,4 +1,6 @@
 #include "pattern/Pattern.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <set>
 
@@ -319,6 +321,101 @@ std::uint32_t fingerprint(const Pattern &p) noexcept {
     mix(s.probability | (s.ratchet << 8));
   }
   return hash;
+}
+
+std::uint32_t scheduleHostPattern(const Pattern &pattern, std::uint8_t rootNote,
+                                 double sampleRate, double bpm, double ppq,
+                                 std::uint32_t sampleCount, bool playing,
+                                 HostPlayhead &play, HostMidi *out,
+                                 std::uint32_t capacity, bool &overflow) noexcept {
+  overflow = false;
+  std::uint32_t count = 0;
+  const auto push = [&](std::uint32_t offset, std::uint8_t status, std::uint8_t note,
+                        std::uint8_t velocity) noexcept {
+    if (out == nullptr || count >= capacity) {
+      overflow = true;
+      return;
+    }
+    out[count++] = HostMidi{offset, status, note, velocity};
+  };
+  if (!(sampleRate > 0.0) || !(bpm > 0.0) || !std::isfinite(ppq) || sampleCount == 0)
+    return 0;
+  const double samplesPerPpq = 60.0 * sampleRate / bpm;
+  const double endPpq = ppq + static_cast<double>(sampleCount) / samplesPerPpq;
+  if (!playing) {
+    if (play.held)
+      push(0, 0x80, play.heldNote, 0);
+    play = {};
+    play.lastPpq = ppq;
+    return count;
+  }
+  if (ppq + 1.0e-9 < play.lastPpq) {
+    if (play.held)
+      push(0, 0x80, play.heldNote, 0);
+    const double kept = ppq;
+    play = {};
+    play.lastPpq = kept;
+  } else {
+    play.lastPpq = ppq;
+  }
+  if (play.held && !play.sliding && play.releasePpq < endPpq && play.releasePpq >= ppq) {
+    const double at = std::ceil((play.releasePpq - ppq) * samplesPerPpq - 1.0e-6);
+    const auto sample = static_cast<std::uint32_t>(
+        std::clamp(at, 0.0, static_cast<double>(sampleCount - 1)));
+    push(sample, 0x80, play.heldNote, 0);
+    play.held = false;
+  }
+  const double step = stepLengthPpq(pattern.timing);
+  const auto steps = static_cast<std::int64_t>(pattern.stepsPerBar);
+  const auto bars = static_cast<std::int64_t>(pattern.barCount);
+  if (!(step > 0.0) || steps < 1 || bars < 1 || pattern.laneCount < 1)
+    return count;
+  const auto sampleAt = [&](double eventPpq) noexcept {
+    const double at = std::ceil((eventPpq - ppq) * samplesPerPpq - 1.0e-6);
+    return static_cast<std::uint32_t>(
+        std::clamp(at, 0.0, static_cast<double>(sampleCount - 1)));
+  };
+  for (std::int64_t g = static_cast<std::int64_t>(std::floor(ppq / step));; ++g) {
+    const double t = static_cast<double>(g) * step;
+    if (t >= endPpq - 1.0e-12)
+      break;
+    if (t < ppq - 1.0e-9 || g <= play.lastStep)
+      continue;
+    play.lastStep = g;
+    const auto stepIndex = static_cast<std::uint32_t>(g % steps);
+    const auto bar = static_cast<std::uint32_t>((g / steps) % bars);
+    const auto &cell = pattern.at(0, bar, stepIndex);
+    const auto sample = sampleAt(t);
+    const bool on = (cell.flags & VOX_STEP_ON) != 0;
+    const bool tie = (cell.flags & VOX_STEP_TIE) != 0;
+    const bool slide = (cell.flags & VOX_STEP_SLIDE) != 0;
+    if (!on) {
+      if (play.held) {
+        push(sample, 0x80, play.heldNote, 0);
+        play.held = false;
+      }
+      play.sliding = false;
+      continue;
+    }
+    if (tie && play.held) {
+      play.releasePpq = t + (static_cast<double>(cell.gate) / 256.0) * step;
+      play.sliding = slide;
+      continue;
+    }
+    if (play.held && !play.sliding)
+      push(sample, 0x80, play.heldNote, 0);
+    int pitch = static_cast<int>(rootNote) + cell.note + 12 * cell.octave;
+    pitch = std::clamp(pitch, 0, 127);
+    auto velocity = cell.velocity == 0 ? static_cast<std::uint8_t>(100) : cell.velocity;
+    if ((cell.flags & VOX_STEP_ACCENT) != 0 && velocity < 110)
+      velocity = 120;
+    push(sample, 0x90, static_cast<std::uint8_t>(pitch), velocity);
+    play.held = true;
+    play.heldNote = static_cast<std::uint8_t>(pitch);
+    play.sliding = slide;
+    play.releasePpq = t + (static_cast<double>(std::max<std::uint16_t>(cell.gate, 1)) / 256.0) * step;
+  }
+  return count;
 }
 
 SnapshotBuffer::SnapshotBuffer() : slots_(std::make_unique<std::array<Slot, 3>>()) {

@@ -367,6 +367,27 @@ void snapshotBuffer() {
   REQUIRE(torn.load() == 0, "no torn snapshot under rapid edits");
   REQUIRE(regressions.load() == 0, "generations never go backwards");
 }
+
+void hostPatternSchedulesAcidNotes() {
+  const auto caps = noteCaps();
+  auto p = make(caps, 16, 1);
+  auto &step = p->at(0, 0, 0);
+  step.flags = VOX_STEP_ON | VOX_STEP_ACCENT;
+  step.note = 7;
+  step.octave = -1;
+  step.gate = 128;
+  vp::HostPlayhead play;
+  vp::HostMidi midi[8];
+  bool overflow = false;
+  const auto count = vp::scheduleHostPattern(*p, 36, 48000.0, 120.0, 0.0, 512, true, play,
+                                            midi, 8, overflow);
+  REQUIRE(!overflow && count == 1 && midi[0].status == 0x90, "first Acid step is a note-on");
+  REQUIRE(midi[0].note == 31 && midi[0].velocity >= 110 && midi[0].sampleOffset == 0,
+          "pitch is root + note + octave and accent raises velocity");
+  const auto second = vp::scheduleHostPattern(*p, 36, 48000.0, 120.0, 0.0, 512, false, play,
+                                              midi, 8, overflow);
+  REQUIRE(second == 1 && midi[0].status == 0x80, "stop releases the sounding note");
+}
 } // namespace
 
 int main() {
@@ -377,6 +398,7 @@ int main() {
   malformedEncodings();
   moduleTables();
   snapshotBuffer();
+  hostPatternSchedulesAcidNotes();
   std::cout << "Pattern tests passed (" << passed << ")\n";
   return 0;
 }
