@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "ui/GlobalHeader.h"
 #include "ui/MainNavigation.h"
+#include "ui/PatternGrid.h"
 #include "ui/StepSequencer.h"
 #include "ui/ZoneRangeEditor.h"
 #include "vox-ui/components/VoxButton.h"
@@ -28,6 +29,9 @@ public:
     [[nodiscard]] juce::Rectangle<int> workspaceBoundsForTesting() const noexcept;
     [[nodiscard]] juce::Rectangle<int> keyboardBoundsForTesting() const noexcept;
     void refreshForTesting() { timerCallback(); }
+    [[nodiscard]] vstengine::ui::PatternGrid& patternGridForTesting() noexcept {
+      return patternPage.gridForTesting();
+    }
     [[nodiscard]] int patternLengthForTesting() const noexcept {
       return patternPage.displayedLength();
     }
@@ -169,11 +173,17 @@ private:
         [[nodiscard]] int displayedLength() const noexcept {
           return callbacks.edit.value.size();
         }
+        [[nodiscard]] vstengine::ui::PatternGrid& gridForTesting() noexcept { return grid; }
 
     private:
         VstEngineAudioProcessor& processor;
         SequenceCallbacks callbacks;
         vstengine::ui::StepSequencer sequencer;
+        // Rack-owned INTERNAL patterns (drum lanes) are edited here instead.
+        vstengine::ui::PatternGrid grid;
+        bool gridMode {};
+        const vstengine::instrument::InstrumentDescriptor* gridDescriptor {};
+        std::size_t gridSlot { vstengine::instrument::maxSlots };
         juce::ComboBox profile;
         juce::TextButton generate { "Generate" }, mutate { "Mutate Selected" };
         juce::Label status;

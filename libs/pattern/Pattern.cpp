@@ -101,6 +101,34 @@ Pattern emptyPattern(const Caps &caps) noexcept {
   return p;
 }
 
+void reshape(const Pattern &source, std::uint32_t stepsPerBar, std::uint32_t barCount,
+             Pattern &out) noexcept {
+  if (&out == &source)
+    return; // callers pass a separate destination
+  out.laneCount = source.laneCount;
+  out.timing = source.timing;
+  out.stepsPerBar = stepsPerBar;
+  out.barCount = barCount;
+  out.cells.fill(defaultStep());
+  for (std::uint32_t lane = 0; lane < source.laneCount; ++lane)
+    for (std::uint32_t bar = 0; bar < barCount && bar < source.barCount; ++bar)
+      for (std::uint32_t step = 0; step < stepsPerBar && step < source.stepsPerBar; ++step)
+        out.at(lane, bar, step) = source.at(lane, bar, step);
+}
+
+double stepLengthPpq(std::uint32_t timing) noexcept {
+  switch (timing) {
+  case VOX_TIMING_EIGHTH:
+    return 0.5;
+  case VOX_TIMING_THIRTY_SECOND:
+    return 0.125;
+  case VOX_TIMING_EIGHTH_TRIPLET:
+    return 1.0 / 3.0;
+  default:
+    return 0.25;
+  }
+}
+
 bool validateCaps(const Caps &c, std::string &why) {
   if (c.playback != VOX_PATTERN_PLAYBACK_HOST && c.playback != VOX_PATTERN_PLAYBACK_INTERNAL)
     return fail(why, "pattern playback must be HOST or INTERNAL");

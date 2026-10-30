@@ -198,11 +198,12 @@ add_library(vst_ui STATIC
   libs/ui/ZoneRangeEditor.cpp libs/ui/ZoneRangeEditor.h
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
-  libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h)
+  libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h
+  libs/ui/PatternGrid.cpp libs/ui/PatternGrid.h)
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_ui PUBLIC
   juce::juce_gui_basics juce::juce_audio_utils juce::juce_audio_processors
-  vox_ui vst_sequence vst_preset)
+  vox_ui vst_sequence vst_preset vst_pattern)
 
 # ---------------------------------------------------------------------------
 # VST3 shell: composition + host integration only.

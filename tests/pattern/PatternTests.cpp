@@ -194,6 +194,32 @@ void drumGrid() {
   REQUIRE(rejects(*bad, caps, "timing"), "unknown timing rejected");
 }
 
+void reshaping() {
+  const auto caps = drumCaps();
+  auto p = make(caps, 16, 2);
+  p->at(2, 1, 15).flags = VOX_STEP_ON;
+  p->at(2, 1, 15).velocity = 33;
+  p->at(5, 0, 3).flags = VOX_STEP_ON;
+  auto longer = std::make_unique<vp::Pattern>();
+  vp::reshape(*p, 16, 4, *longer);
+  std::string why;
+  REQUIRE(vp::validate(*longer, caps, why) && longer->at(2, 1, 15).velocity == 33 &&
+              longer->at(5, 0, 3).flags == VOX_STEP_ON && longer->at(2, 3, 15).flags == 0,
+          "more bars keep every cell and add rests");
+  auto shorter = std::make_unique<vp::Pattern>();
+  vp::reshape(*longer, 8, 1, *shorter);
+  REQUIRE(vp::validate(*shorter, caps, why) && shorter->at(5, 0, 3).flags == VOX_STEP_ON &&
+              shorter->cellCount() == 8 * 8,
+          "fewer steps and bars drop the cells outside and stay valid");
+  auto back = std::make_unique<vp::Pattern>();
+  vp::reshape(*shorter, 16, 2, *back);
+  REQUIRE(back->at(2, 1, 15).flags == 0 && back->at(5, 0, 3).flags == VOX_STEP_ON,
+          "dropped cells do not come back");
+  REQUIRE(vp::stepLengthPpq(VOX_TIMING_SIXTEENTH) == 0.25 &&
+              vp::stepLengthPpq(VOX_TIMING_EIGHTH_TRIPLET) == 1.0 / 3.0,
+          "step lengths in quarter notes");
+}
+
 void malformedEncodings() {
   const auto caps = drumCaps();
   auto p = make(caps, 16, 2);
@@ -347,6 +373,7 @@ int main() {
   capsValidation();
   acidFiveLaneWorkflow();
   drumGrid();
+  reshaping();
   malformedEncodings();
   moduleTables();
   snapshotBuffer();
