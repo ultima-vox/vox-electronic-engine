@@ -60,7 +60,11 @@ An INTERNAL module reports the notes it generates through the appended
 - **Buffer.** The host owns the buffer and sets its capacity and stride.
 - **Record.** The module writes `VoxNoteEventV2` records (sample offset, note, velocity as played, lane, accent) and the count.
 - **What is reported.** Only notes the module generates itself; host MIDI is never echoed.
-- **Host checks.** The host resets the count before every call. A count above the capacity voids that block's events, so stale buffer contents are never used. A failed or silenced block reports nothing. Out-of-order or out-of-block events are ignored by the consumers.
+- **Host checks (NativeModule, fail closed).**
+  - The host resets the count before every call.
+  - A failed, bypassed or silenced block reports nothing.
+  - Every record is validated before use: the count is within the capacity; the offset is inside the block and not before the previous record; the note is 0–127, the velocity 1–127 and the lane is one of the instrument's declared lanes; no unknown flags.
+  - A malformed block is voided: count 0, `dropped = voidedNoteOutput`, counted in `totalInvalidNoteReports()`. Neither ducking nor export can use it, and export then fails with a diagnostic.
 
 The same event path serves two consumers: same-block kick ducking (next PR) and MIDI export.
 
@@ -68,6 +72,7 @@ The same event path serves two consumers: same-block kick ducking (next PR) and 
 - **Rendering.** `Rack::renderPatternHits` creates a fresh instance of the slot's own module with the slot's saved values and the Rack pattern. It plays one pattern pass offline (120 BPM, 48 kHz, so every 1/960-quarter tick is a whole sample) and collects the reported notes.
 - **The file.** The processor writes a type-1 SMF with one named track per lane, all on the slot channel.
 - **Fidelity.** Swing, accent, lane switches and edited velocities are exactly what the kit plays. Positions round to 1/960 quarter.
+- **Note length.** Every hit is written as a 1/32 note. This is an export convention: drum voices are one-shot and ignore NoteOff. End-of-Track is placed at the pattern length or after the last note-off, whichever is later.
 - **Test.** The exported file, replayed through Host MIDI at 145 BPM, renders bit for bit like the internal sequencer.
 - **Not included.** Host automation and modulation are not part of the exported pattern.
 
