@@ -669,6 +669,43 @@ void hostileContentRejected() {
         "the provider carries the package publisher identity");
 }
 
+// Kick ducking consumes the same validated note output as export: a block of
+// malformed records (voided by the adapter) ducks nothing, valid generated
+// notes duck at once. Source: test module in slot 6 reporting notes 60/64;
+// target: a held note in slot 7.
+std::vector<float> duckRun(std::uint32_t noteMode) {
+  setNoteMode(6, noteMode);
+  auto p = makeProcessor(true);
+  const auto source = loadTone(*p, 6), target = loadTone(*p, 7);
+  auto param = [&](const juce::String &id, float plain) {
+    auto *parameter = p->parameters().getParameter(id);
+    check(parameter != nullptr, "routing parameter " + id.toStdString());
+    parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+  };
+  param("rack.duck.source", static_cast<float>(source + 1));
+  param("rack.duck.note", 60.0f);
+  param("rack.duck.attack", 0.0f);
+  param("rack.duck.hold", 0.5f);
+  param("rack.duck.release", 1.0f);
+  param("slot08.duck.depth", 1.0f);
+  const auto out = play(*p, channelOf(*p, target), 6, 0, -1, 64).left;
+  setNoteMode(6, 0);
+  return {out.begin() + blockSize, out.end()}; // from the second block on
+}
+
+void malformedNotesDuckNothing() {
+  const auto undisturbed = duckRun(0);
+  double e = 0;
+  for (const float v : undisturbed)
+    e += static_cast<double>(v) * v;
+  check(e > 1.0, "the duck target sounds");
+  const auto valid = duckRun(1);
+  check(valid[1] == 0.0f && valid != undisturbed, "valid generated kick notes duck the target");
+  for (std::uint32_t mode = 2; mode <= 8; ++mode)
+    check(duckRun(mode) == undisturbed,
+          "malformed note output (mode " + std::to_string(mode) + ") ducks nothing");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     std::cerr << "usage: native_rack_tests <absolute test module path>\n";
@@ -691,6 +728,7 @@ int main(int argc, char **argv) {
   noteOutputValidated();
   exportRejectsMalformedNotes();
   hostileContentRejected();
+  malformedNotesDuckNothing();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }
