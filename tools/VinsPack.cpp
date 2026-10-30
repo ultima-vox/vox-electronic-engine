@@ -9,6 +9,17 @@
 //     (key id; native only)
 //   vox_vins_pack zip <out.vins> <manifest.json> [sig=<manifest.sig>] member=<name>=<file>...
 //   vox_vins_pack keyid <modulus file from `openssl rsa -modulus -noout`>
+//
+// Offline release signing (docs/release/RELEASE_SIGNING.md). The private key
+// stays on the owner's offline machine; only these steps touch packages:
+//   vox_vins_pack sign-request <unsigned.vins> <manifest.json out>
+//     checks an unsigned native candidate and writes the exact manifest bytes
+//     to sign (`openssl dgst -sha256 -sign release.key -out manifest.sig ...`)
+//   vox_vins_pack attach <unsigned.vins> <manifest.sig> <modulus file> <out.vins>
+//     verifies the signature with the public key before writing the signed
+//     package; a wrong key or a tampered manifest writes nothing
+//   vox_vins_pack verify <signed.vins> <modulus file>
+#include "instrument/vins/VinsPackage.h"
 #include "instrument/vins/VinsTrust.h"
 #include "instrument/vins/VinsZip.h"
 
@@ -143,6 +154,90 @@ int keyid(char **argv) {
             << "\n";
   return 0;
 }
+namespace vins = vstengine::instrument::vins;
+
+vins::PublisherKey publicKey(const std::string &modulusFile) {
+  const auto data = readFile(modulusFile);
+  vins::PublisherKey key;
+  key.label = "release publisher (public key)";
+  if (!vins::parseModulusHex(std::string(data.begin(), data.end()), key.modulus) ||
+      key.modulus.size() * 8 < vins::minPublisherKeyBits)
+    throw std::runtime_error("not an RSA-3072+ public modulus: " + modulusFile);
+  key.id = vins::publisherKeyId(key.modulus);
+  return key;
+}
+
+// A native package as built by the release-candidate configuration: a valid
+// archive with a native manifest and no signature yet.
+std::vector<ZipMember> unsignedCandidate(const std::string &path, vins::Manifest &manifest) {
+  std::vector<ZipMember> members;
+  std::string why;
+  if (!vins::readZip(readFile(path), {}, members, why))
+    throw std::runtime_error("not a valid .vins archive: " + why);
+  if (members.empty() || members.front().name != "manifest.json")
+    throw std::runtime_error("manifest.json must be the first member");
+  for (const auto &m : members)
+    if (m.name == "manifest.sig")
+      throw std::runtime_error("the package is already signed");
+  if (!vins::parseManifest(members.front().data, manifest, why))
+    throw std::runtime_error("invalid manifest: " + why);
+  if (manifest.kind != vins::ExecutionKind::native)
+    throw std::runtime_error("only native packages are signed");
+  return members;
+}
+
+std::string sha256(const std::vector<std::uint8_t> &data) {
+  return juce::SHA256(data.data(), data.size()).toHexString().toStdString();
+}
+
+int signRequest(char **argv) {
+  vins::Manifest manifest;
+  const auto members = unsignedCandidate(argv[2], manifest);
+  writeFile(argv[3], members.front().data);
+  std::cout << "package " << manifest.packageId << " " << manifest.version << "\n"
+            << "publisher key id " << manifest.publisher << "\n"
+            << "manifest sha256 " << sha256(members.front().data) << "\n"
+            << "sign it offline: openssl dgst -sha256 -sign <release key> -out manifest.sig "
+            << argv[3] << "\n";
+  return 0;
+}
+
+int attach(char **argv) {
+  vins::Manifest manifest;
+  auto members = unsignedCandidate(argv[2], manifest);
+  const auto signature = readFile(argv[3]);
+  const auto key = publicKey(argv[4]);
+  if (key.id != manifest.publisher)
+    throw std::runtime_error("the manifest names publisher " + manifest.publisher +
+                             ", the public key is " + key.id);
+  if (!vins::verifySignature(key, members.front().data, signature))
+    throw std::runtime_error("the signature does not verify with this public key");
+  members.insert(members.begin() + 1, ZipMember{"manifest.sig", signature});
+  const auto signedArchive = vins::writeZip(members);
+  writeFile(argv[5], signedArchive);
+  std::cout << "signed " << manifest.packageId << " " << manifest.version << " sha256 "
+            << sha256(signedArchive) << "\n";
+  return 0;
+}
+
+int verify(char **argv) {
+  std::vector<ZipMember> members;
+  std::string why;
+  if (!vins::readZip(readFile(argv[2]), {}, members, why))
+    throw std::runtime_error("not a valid .vins archive: " + why);
+  if (members.size() < 2 || members[0].name != "manifest.json" ||
+      members[1].name != "manifest.sig")
+    throw std::runtime_error("not a signed package");
+  vins::Manifest manifest;
+  if (!vins::parseManifest(members[0].data, manifest, why))
+    throw std::runtime_error("invalid manifest: " + why);
+  const auto key = publicKey(argv[3]);
+  if (key.id != manifest.publisher || !vins::verifySignature(key, members[0].data, members[1].data))
+    throw std::runtime_error("signature does not verify with this public key");
+  std::cout << "verified " << manifest.packageId << " " << manifest.version << " publisher "
+            << key.id << "\n";
+  return 0;
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -154,7 +249,14 @@ int main(int argc, char **argv) {
       return zip(argc, argv);
     if (command == "keyid" && argc == 3)
       return keyid(argv);
-    std::cerr << "usage: vox_vins_pack manifest|zip|keyid ... (see tools/VinsPack.cpp)\n";
+    if (command == "sign-request" && argc == 4)
+      return signRequest(argv);
+    if (command == "attach" && argc == 6)
+      return attach(argv);
+    if (command == "verify" && argc == 4)
+      return verify(argv);
+    std::cerr << "usage: vox_vins_pack manifest|zip|keyid|sign-request|attach|verify ... "
+                 "(see tools/VinsPack.cpp)\n";
     return 2;
   } catch (const std::exception &e) {
     std::cerr << "vox_vins_pack: " << e.what() << "\n";

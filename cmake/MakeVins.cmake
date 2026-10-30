@@ -2,8 +2,9 @@
 # Inputs: TOOL (vox_vins_pack), OUTPUT, ID, VERSION, NAME, VENDOR, KIND
 # (graph|native), INSTRUMENTS (comma separated), MEMBERS ("|" separated
 # <member>=<file> pairs). graph: GRAPH_MEMBER. native: MODULE_PLATFORM,
-# MODULE_MEMBER, OPENSSL, KEY (private PEM, read only by openssl) and
-# MODULUS_FILE (its public modulus, for the publisher key id).
+# MODULE_MEMBER, OPENSSL, MODULUS_FILE (the publisher public modulus, for the
+# key id) and KEY (private PEM read only by openssl; development and test
+# keys only). An empty KEY writes an unsigned release candidate.
 cmake_minimum_required(VERSION 3.22)
 foreach(required TOOL OUTPUT ID VERSION NAME VENDOR KIND INSTRUMENTS MEMBERS)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
@@ -50,7 +51,7 @@ if(NOT rc EQUAL 0)
   message(FATAL_ERROR "MakeVins: writing the manifest failed")
 endif()
 set(sig_args "")
-if(KIND STREQUAL "native")
+if(KIND STREQUAL "native" AND NOT "${KEY}" STREQUAL "")
   execute_process(COMMAND "${OPENSSL}" dgst -sha256 -sign "${KEY}"
       -out "${staging}/manifest.sig" "${staging}/manifest.json"
     RESULT_VARIABLE rc OUTPUT_QUIET ERROR_QUIET)

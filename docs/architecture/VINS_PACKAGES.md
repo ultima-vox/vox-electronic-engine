@@ -131,17 +131,13 @@ Graph packages hold no executable code, so they need no signature. The DSP Core
 compiler validates them instead.
 
 **Build keys (`cmake/VinsPublisher.cmake`)**
-- **Release:** pass `-DVOX_PUBLISHER_PRIVATE_KEY=<pem>`. Only openssl reads the
-  key, to sign packages.
-- **Otherwise:** a development key is generated once inside the build tree.
-  Packages it signs load only in Racks built from that same tree, and both
-  `build-info.txt` and the Rack label it as a development key.
-- **Production builds:** configure with `-DVOX_PRODUCTION_BUILD=ON`. CMake then
-  stops with an error unless `VOX_PUBLISHER_PRIVATE_KEY` is given; there is no
-  fallback to a development key. CI builds are development builds, and their
-  `build-info.txt` starts with "BUILD TYPE: DEVELOPMENT".
-- **Release blocker (#77 gate 3):** the owner's release key and how it is kept
-  in custody are not set up yet.
+- **Development (default, CI):** a key generated once inside the build tree signs native packages while packaging. Packages it signs load only in Racks built from that same tree, and both `build-info.txt` (which starts with "BUILD TYPE: DEVELOPMENT") and the Rack label it as a development key.
+- **Release candidate:** configure with `-DVOX_PRODUCTION_BUILD=ON -DVOX_RELEASE_PUBLIC_KEY=<owner's public PEM>`.
+  - The Rack then pins **only** that public key.
+  - Native packages are written **unsigned** to `release-candidates/<name>.unsigned.vins`, for the owner to sign offline ([RELEASE_SIGNING](../release/RELEASE_SIGNING.md)).
+  - Without the public key, configure stops: the release is BLOCKED.
+- **Private keys never enter a build.** `VOX_PUBLISHER_PRIVATE_KEY` is refused by every configuration. No private key goes into the repository, CI secrets, the shared runners, agent worktrees or logs.
+- **Release blocker (#77 gate 3):** the owner still has to generate and provision the release key (procedure in RELEASE_SIGNING). `.vins` publisher signing is not Windows Authenticode; signing the VST3 and DLLs with Authenticode is a separate release decision.
 
 ## Cache and loading
 

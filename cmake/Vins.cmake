@@ -3,6 +3,9 @@
 #   [GRAPH <member> <file>] [MODULE_TARGET <shared library target>]
 #   [KEY <private pem> MODULUS <modulus file>] [MEMBERS <member>=<file>...])
 # Adds an ALL target that builds the package with cmake/MakeVins.cmake.
+# In a release candidate (VOX_PRODUCTION_BUILD) a native package without an
+# explicit test KEY is written unsigned to release-candidates/<name>.unsigned.vins
+# for offline signing instead of OUTPUT.
 function(vox_add_vins target)
   cmake_parse_arguments(V "" "OUTPUT;ID;VERSION;NAME;VENDOR;KIND;MODULE_TARGET;KEY;MODULUS"
     "INSTRUMENTS;GRAPH;MEMBERS" ${ARGN})
@@ -23,8 +26,12 @@ function(vox_add_vins target)
     list(APPEND members "${module_member}=$<TARGET_FILE:${V_MODULE_TARGET}>")
     list(APPEND depends ${V_MODULE_TARGET})
     if(NOT V_KEY)
-      set(V_KEY ${VOX_PUBLISHER_KEY})
+      set(V_KEY "${VOX_PUBLISHER_KEY}")
       set(V_MODULUS ${VOX_PUBLISHER_MODULUS_FILE})
+      if(VOX_PRODUCTION_BUILD)
+        get_filename_component(candidate "${V_OUTPUT}" NAME_WE)
+        set(V_OUTPUT ${CMAKE_BINARY_DIR}/release-candidates/${candidate}.unsigned.vins)
+      endif()
     endif()
     list(APPEND extra "-DMODULE_PLATFORM=${VOX_NATIVE_PLATFORM}" "-DMODULE_MEMBER=${module_member}"
       "-DOPENSSL=${VOX_OPENSSL}" "-DKEY=${V_KEY}" "-DMODULUS_FILE=${V_MODULUS}")
