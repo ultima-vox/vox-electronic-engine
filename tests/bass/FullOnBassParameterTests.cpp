@@ -464,6 +464,20 @@ void boundsAndLifecycle()
             "tail within budget at highest rate");
 }
 
+void writeEvidenceWave(const std::filesystem::path& path, const std::vector<float>& samples)
+{
+    std::ofstream file(path, std::ios::binary);
+    require(static_cast<bool>(file), "open evidence WAV");
+    const auto u16 = [&](std::uint16_t v) { for (unsigned n = 0; n < 2; ++n) file.put(static_cast<char>(v >> (8 * n))); };
+    const auto u32 = [&](std::uint32_t v) { for (unsigned n = 0; n < 4; ++n) file.put(static_cast<char>(v >> (8 * n))); };
+    const auto bytes = static_cast<std::uint32_t>(samples.size() * sizeof(float));
+    file.write("RIFF", 4); u32(36 + bytes); file.write("WAVEfmt ", 8);
+    u32(16); u16(3); u16(1); u32(48000); u32(48000 * 4); u16(4); u16(32);
+    file.write("data", 4); u32(bytes);
+    for (float sample : samples) u32(std::bit_cast<std::uint32_t>(sample));
+    require(static_cast<bool>(file), "write evidence WAV");
+}
+
 void writeReleaseEvidence()
 {
     const char* outputDirectory = std::getenv("VOX_BASS_RELEASE_WAV_DIR");
@@ -483,17 +497,53 @@ void writeReleaseEvidence()
                 : block == 20 ? voice.next(release) : voice.next();
             samples.insert(samples.end(), audio.begin(), audio.end());
         }
-        std::ofstream file(std::filesystem::path(outputDirectory) / name, std::ios::binary);
-        require(static_cast<bool>(file), "open release evidence WAV");
-        const auto u16 = [&](std::uint16_t v) { for (unsigned n = 0; n < 2; ++n) file.put(static_cast<char>(v >> (8 * n))); };
-        const auto u32 = [&](std::uint32_t v) { for (unsigned n = 0; n < 4; ++n) file.put(static_cast<char>(v >> (8 * n))); };
-        const auto bytes = static_cast<std::uint32_t>(samples.size() * sizeof(float));
-        file.write("RIFF", 4); u32(36 + bytes); file.write("WAVEfmt ", 8);
-        u32(16); u16(3); u16(1); u32(48000); u32(48000 * 4); u16(4); u16(32);
-        file.write("data", 4); u32(bytes);
-        for (float sample : samples) u32(std::bit_cast<std::uint32_t>(sample));
-        require(static_cast<bool>(file), "write release evidence WAV");
+        writeEvidenceWave(std::filesystem::path(outputDirectory) / name, samples);
     }
+}
+
+void writePlayingEvidence()
+{
+    const char* directory = std::getenv("VOX_BASS_PLAYING_WAV_DIR");
+    if (!directory || !*directory) return;
+    std::filesystem::create_directories(directory);
+    struct Event { std::uint32_t sample; std::uint8_t status, data1, data2; };
+    struct Scenario { const char* name; std::vector<Event> events; };
+    const std::array scenarios {
+        Scenario {"overlap", {{0,0x90,36,110}, {9600,0x90,43,100}, {19200,0x80,43,0}, {28800,0x80,36,0}}},
+        Scenario {"sustain", {{0,0x90,36,110}, {4800,0xb0,64,127}, {9600,0x90,43,100},
+                               {14400,0x80,43,0}, {24000,0xb0,64,0}, {33600,0x80,36,0}}},
+        Scenario {"same-key-retrigger", {{0,0x90,36,110}, {9600,0x90,36,80}, {19200,0x80,36,0}}},
+        Scenario {"note-off", {{0,0x90,36,110}, {19200,0x80,36,0}}},
+        Scenario {"cc120", {{0,0x90,36,110}, {19200,0xb0,120,0}, {38400,0x90,43,100}, {48000,0x80,43,0}}},
+        Scenario {"cc123", {{0,0x90,36,110}, {4800,0xb0,64,127}, {9600,0x80,36,0},
+                            {19200,0xb0,123,0}, {38400,0x90,43,100}, {48000,0x80,43,0}}}
+    };
+    for (const auto& scenario : scenarios)
+        for (const float release : {1.f, 250.f}) {
+            const auto stem = std::string(scenario.name) + (release == 1.f ? "-short" : "-long");
+            Render voice;
+            require(voice.bass.setParameter("amp.release", release), "playing evidence release");
+            std::ofstream eventsFile(std::filesystem::path(directory) / (stem + ".csv"));
+            require(static_cast<bool>(eventsFile), "open playing events");
+            eventsFile << "sample,status,data1,data2\n";
+            for (const auto& event : scenario.events)
+                eventsFile << event.sample << ',' << unsigned(event.status) << ','
+                           << unsigned(event.data1) << ',' << unsigned(event.data2) << '\n';
+            require(static_cast<bool>(eventsFile), "write playing events");
+            std::vector<float> samples;
+            for (std::uint32_t start = 0; start < 96000; start += 256) {
+                std::vector<VoxMidiEventV1> midi;
+                for (const auto& event : scenario.events)
+                    if (event.sample >= start && event.sample < start + 256)
+                        midi.push_back({event.sample - start, 3, {event.status, event.data1, event.data2}});
+                const auto audio = voice.next(midi);
+                samples.insert(samples.end(), audio.begin(), audio.end());
+            }
+            require(energy(samples) > 1e-5, "playing example produces audio");
+            require(std::all_of(samples.end() - 12000, samples.end(), [](float x) { return x == 0.f; }),
+                    "playing example ends in deterministic silence");
+            writeEvidenceWave(std::filesystem::path(directory) / (stem + ".wav"), samples);
+        }
 }
 
 void writeCpuEvidence()
@@ -605,6 +655,7 @@ int main()
     independence(); audioIndependence(); eachParameterChangesAudio(); sustainedEdits(); sustainLifecycle(); overlappingNotePriority(); boundsAndLifecycle();
     realtimeAllocationCheck(); compliance();
     writeReleaseEvidence();
+    writePlayingEvidence();
     writeCpuEvidence();
     writeDenseCpuEvidence();
     std::cout << "Full-on Bass independent parameters: " << checks << " checks PASS\n";
