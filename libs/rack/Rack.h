@@ -19,6 +19,27 @@ public:
     instrument::ResolutionStatus resolution{};
   };
   [[nodiscard]] std::array<SlotSummary, instrument::maxSlots> summaries() const;
+  // Per-slot runtime diagnostics for the controller thread (a support view
+  // for "silence in Cubase" reports). Counters are bounded atomics the audio
+  // thread only increments; nothing here allocates, locks or logs in
+  // process(). Counters restart when the slot's instrument is (re)built.
+  struct SlotDiagnostics {
+    instrument::SlotId slotId{};
+    std::string instrumentId, name, publisherId;
+    std::uint32_t instrumentVersion{};
+    instrument::ResolutionStatus resolution{};
+    bool active{};   // a playable instance is installed
+    bool bypassed{}; // disabled, muted or solo-excluded in the last block
+    instrument::InstanceHealth health;
+    std::uint64_t droppedMidiEvents{};        // in the last block
+    std::uint64_t droppedMidiEventsTotal{};   // since the instrument was built
+    std::uint64_t noteOutputOverflowBlocks{}; // generated notes beyond the buffer
+    // Why the last load/restore of this slot failed, or why the accepted
+    // slot stays unresolved (missing module, other publisher, ...); empty
+    // when its instrument resolved.
+    std::string lastError;
+  };
+  [[nodiscard]] std::array<SlotDiagnostics, instrument::maxSlots> diagnostics() const;
   explicit Rack(instrument::InstrumentRegistry &);
   bool prepare(const instrument::PrepareSpec &);
   void reset() noexcept;
@@ -133,6 +154,18 @@ private:
     std::array<RuntimeSlotState, instrument::maxSlots> runtimeState_ {};
     std::array<std::atomic<std::uint64_t>, instrument::maxSlots>
         droppedMidiEvents_ {};
+    struct SlotCounters {
+      std::atomic<std::uint64_t> droppedMidiEvents{}, noteOutputOverflowBlocks{};
+      std::atomic<bool> bypassed{};
+      void clear() noexcept {
+        droppedMidiEvents.store(0, std::memory_order_relaxed);
+        noteOutputOverflowBlocks.store(0, std::memory_order_relaxed);
+        bypassed.store(false, std::memory_order_relaxed);
+      }
+    };
+    std::array<SlotCounters, instrument::maxSlots> counters_{};
+    // Controller thread, under persistentStateMutex_.
+    std::array<std::string, instrument::maxSlots> lastError_{};
     // Large bounded processing state is constructed once off audio. Keeping it
     // out of Rack's inline footprint leaves room on a host's 1 MiB thread
     // stack.

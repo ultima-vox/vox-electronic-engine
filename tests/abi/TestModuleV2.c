@@ -149,6 +149,8 @@ static void writeNotes(const struct VoxInstanceT *s, const VoxProcessContextV2 *
     else if (s->noteMode == 12)
       out->reserved = 5;
   }
+  if (s->noteMode == 9) /* valid notes, three more than the buffer held */
+    out->dropped = 3;
 }
 
 /* Pattern content: two lanes on notes 60/64, velocity + accent, one factory

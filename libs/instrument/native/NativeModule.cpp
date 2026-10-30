@@ -238,7 +238,7 @@ public:
     if (!prepared_ || faulted_.load(std::memory_order_relaxed))
       return;
     if (table_->reset(handle_) != VOX_OK)
-      fault();
+      fault(InstanceFault::resetFailed);
   }
   void suspend() noexcept override { suspended_ = true; }
   void resume() noexcept override {
@@ -302,8 +302,10 @@ public:
     // may hold releases) cannot be delivered, so fail closed and end every
     // voice of this instance at the block end instead of risking a stuck note.
     const bool overflow = block.midi.size() > midi_.size();
-    if (overflow)
+    if (overflow) {
       midiOverflows().fetch_add(1, std::memory_order_relaxed);
+      midiOverflowBlocks_.fetch_add(1, std::memory_order_relaxed);
+    }
     fillTransport(block);
     const VoxProcessContextV2 context{sizeof(VoxProcessContextV2),
                                       VOX_MODULE_ABI_V2,
@@ -326,7 +328,7 @@ public:
     const bool ok = table_->process(handle_, &context) == VOX_OK;
     silenced_ = !ok || bypassed_;
     if (!ok) {
-      fault();
+      fault(InstanceFault::processFailed);
       silence(block);
     } else if (bypassed_) {
       silence(block);
@@ -339,6 +341,7 @@ public:
         clearNoteOutput(*out);
         out->dropped = voidedNoteOutput;
         invalidNoteReports().fetch_add(1, std::memory_order_relaxed);
+        invalidNoteBlocks_.fetch_add(1, std::memory_order_relaxed);
       }
     }
     samplePosition_ += block.sampleCount;
@@ -371,12 +374,23 @@ public:
   std::uint32_t tailSamples() const noexcept override { return descriptor_.budget.maxTailSamples; }
   bool blockSilenced() const noexcept override { return silenced_; }
 
+  InstanceHealth health() const noexcept override {
+    return {faulted_.load(std::memory_order_relaxed),
+            static_cast<InstanceFault>(lastFault_.load(std::memory_order_relaxed)),
+            faults_.load(std::memory_order_relaxed),
+            midiOverflowBlocks_.load(std::memory_order_relaxed),
+            invalidNoteBlocks_.load(std::memory_order_relaxed)};
+  }
+
 private:
   // Latched until the next successful prepare; never calls the module again
   // in between. Lock- and allocation-free.
-  void fault() noexcept {
-    if (!faulted_.exchange(true, std::memory_order_relaxed))
+  void fault(InstanceFault reason) noexcept {
+    lastFault_.store(static_cast<std::uint8_t>(reason), std::memory_order_relaxed);
+    if (!faulted_.exchange(true, std::memory_order_relaxed)) {
       moduleFaults().fetch_add(1, std::memory_order_relaxed);
+      faults_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
   static void silence(const ProcessBlock &block) noexcept {
@@ -423,6 +437,9 @@ private:
   std::uint64_t samplePosition_{};
   std::atomic<bool> faulted_{};
   bool silenced_{}; // audio thread: the last block was replaced by silence
+  // Health counters of this instance (relaxed: independent diagnostics).
+  std::atomic<std::uint8_t> lastFault_{};
+  std::atomic<std::uint64_t> faults_{}, midiOverflowBlocks_{}, invalidNoteBlocks_{};
   // Lanes a reported note may name; 0 = no pattern, so no notes.
   std::uint32_t noteLanes_{descriptor_.patternContent ? descriptor_.patternContent->caps.laneCount
                                                       : 0u};

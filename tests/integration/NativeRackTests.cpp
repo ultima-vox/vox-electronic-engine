@@ -836,6 +836,126 @@ void malformedNotesDuckNothing() {
           "malformed note output (mode " + std::to_string(mode) + ") ducks nothing");
 }
 
+// Per-slot runtime diagnostics (#78 hardening P1): each failure mode shows up
+// on its own slot, counters stay at zero on normal playback, and nothing in
+// process() allocates (noAllocationInProcess covers the counters).
+void setFlag(VstEngineAudioProcessor &p, std::size_t slot, const char *name, bool on) {
+  char id[32];
+  std::snprintf(id, sizeof(id), "slot%02zu%s", slot + 1, name);
+  auto *parameter = p.parameters().getParameter(id);
+  check(parameter != nullptr, std::string("slot parameter ") + id);
+  parameter->setValueNotifyingHost(on ? 1.0f : 0.0f);
+}
+
+void slotDiagnostics() {
+  auto p = makeProcessor(true);
+  setNoteMode(4, 1);
+  const auto slot = loadTone(*p, 4);
+  loadTone(*p, 5);
+  const int channel = channelOf(*p, slot);
+  auto diagnostics = [&] { return p->instrumentRack().diagnostics(); };
+  auto quiet = [](const auto &d) {
+    return d.droppedMidiEvents == 0 && d.droppedMidiEventsTotal == 0 &&
+           d.noteOutputOverflowBlocks == 0 && !d.health.faulted && d.health.faults == 0 &&
+           d.health.midiOverflowBlocks == 0 && d.health.invalidNoteBlocks == 0 &&
+           d.health.lastFault == instrument::InstanceFault::none && d.lastError.empty();
+  };
+
+  // Normal playback with generated notes: identity, nothing counted.
+  play(*p, channel, 40, 1, 30);
+  auto d = diagnostics();
+  check(d[slot].active && d[slot].resolution == instrument::ResolutionStatus::resolved &&
+            d[slot].instrumentId == toneId && d[slot].name == "ABI Test Tone" &&
+            d[slot].instrumentVersion != 0 && !d[slot].bypassed,
+        "an active slot reports its module and version");
+  check(quiet(d[slot]) && quiet(d[5]), "normal playback counts nothing");
+  check(!d[10].active && quiet(d[10]), "an empty slot is inactive and quiet");
+
+  // MIDI beyond the module budget (64): counted on this slot only.
+  {
+    juce::AudioBuffer<float> audio(2, blockSize);
+    juce::MidiBuffer midi;
+    for (int i = 0; i < 100; ++i)
+      midi.addEvent(juce::MidiMessage::controllerEvent(channel, 1, i), i);
+    p->processBlock(audio, midi);
+  }
+  d = diagnostics();
+  check(d[slot].health.midiOverflowBlocks == 1 && d[5].health.midiOverflowBlocks == 0,
+        "a module MIDI overflow is counted on its own slot");
+
+  // Generated notes beyond the host buffer, then malformed notes.
+  setNoteMode(4, 9);
+  play(*p, channel, 3, -1, -1);
+  d = diagnostics();
+  check(d[slot].noteOutputOverflowBlocks == 3 && d[slot].health.invalidNoteBlocks == 0,
+        "note output overflow is counted per block");
+  setNoteMode(4, 2);
+  play(*p, channel, 2, -1, -1);
+  d = diagnostics();
+  check(d[slot].health.invalidNoteBlocks == 2 && d[slot].noteOutputOverflowBlocks == 3,
+        "malformed note output is counted as invalid, not as overflow");
+  setNoteMode(4, 11); // an undefined V2.2 routed-notes value voids the block too
+  play(*p, channel, 1, -1, -1);
+  d = diagnostics();
+  check(d[slot].health.invalidNoteBlocks == 3 && d[slot].noteOutputOverflowBlocks == 3,
+        "an undefined routed-notes report is counted as invalid");
+  setNoteMode(4, 1);
+
+  // Bypass: muted, then solo elsewhere, then audible again.
+  setFlag(*p, slot, "Mute", true);
+  play(*p, channel, 1, -1, -1);
+  check(diagnostics()[slot].bypassed, "a muted slot reports bypassed");
+  setFlag(*p, slot, "Mute", false);
+  setFlag(*p, 5, "Solo", true);
+  play(*p, channel, 1, -1, -1);
+  check(diagnostics()[slot].bypassed && !diagnostics()[5].bypassed,
+        "a solo elsewhere bypasses this slot only");
+  setFlag(*p, 5, "Solo", false);
+  play(*p, channel, 1, -1, -1);
+  check(!diagnostics()[slot].bypassed, "unmuted, the slot is audible again");
+
+  // A process fault latches with its reason; a reprepare clears the latch but
+  // keeps the last reason.
+  failNext(4, failProcess);
+  play(*p, channel, 2, 0, -1);
+  d = diagnostics();
+  check(d[slot].health.faulted && d[slot].health.faults == 1 &&
+            d[slot].health.lastFault == instrument::InstanceFault::processFailed &&
+            !d[5].health.faulted,
+        "a process fault is reported with its reason on its own slot");
+  p->releaseResources();
+  p->prepareToPlay(48000.0, blockSize);
+  d = diagnostics();
+  check(!d[slot].health.faulted &&
+            d[slot].health.lastFault == instrument::InstanceFault::processFailed,
+        "reprepare clears the fault and keeps the last reason");
+
+  // An unknown instrument leaves the slot unresolved with the reason; a good
+  // load clears it and restarts the counters.
+  juce::String why;
+  p->loadSlotInstrument(slot, "test.no.such.instrument", why);
+  d = diagnostics();
+  check(!d[slot].active && d[slot].resolution == instrument::ResolutionStatus::missingModule &&
+            !d[slot].lastError.empty(),
+        "an unresolved slot reports why (" + d[slot].lastError + ")");
+  check(p->loadSlotInstrument(slot, toneId, why), "reload: " + why.toStdString());
+  check(quiet(diagnostics()[slot]), "a fresh load restarts the counters and clears the reason");
+
+  // Missing module after a project restore: identity kept, inactive.
+  juce::MemoryBlock state;
+  p->getStateInformation(state);
+  auto without = makeProcessor(false);
+  without->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  play(*without, channel, 4, 1, -1);
+  const auto missing = without->instrumentRack().diagnostics()[slot];
+  check(!missing.active && missing.instrumentId == toneId &&
+            missing.resolution == instrument::ResolutionStatus::missingModule &&
+            !missing.health.faulted && missing.droppedMidiEventsTotal == 0 &&
+            !missing.lastError.empty(),
+        "a missing module is reported as unresolved with its reason, not as a fault");
+  setNoteMode(4, 0);
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     std::cerr << "usage: native_rack_tests <absolute test module path>\n";
@@ -860,6 +980,7 @@ int main(int argc, char **argv) {
   hostileContentRejected();
   malformedNotesDuckNothing();
   routedNotesPolicy();
+  slotDiagnostics();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }
