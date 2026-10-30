@@ -1,0 +1,395 @@
+{
+  "voxSoundLayout": 1,
+  "sections": [
+    {
+      "title": "OSCILLATOR",
+      "controls": [
+        {
+          "parameter": "waveform",
+          "kind": "knob"
+        },
+        {
+          "parameter": "osc_tune",
+          "kind": "knob"
+        },
+        {
+          "parameter": "osc_fine",
+          "kind": "knob"
+        },
+        {
+          "parameter": "osc_pw",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "FILTER",
+      "controls": [
+        {
+          "parameter": "cutoff",
+          "kind": "knob"
+        },
+        {
+          "parameter": "resonance",
+          "kind": "knob"
+        },
+        {
+          "parameter": "envelope",
+          "kind": "knob"
+        },
+        {
+          "parameter": "decay",
+          "kind": "knob"
+        },
+        {
+          "parameter": "filter_mode",
+          "kind": "selector"
+        },
+        {
+          "parameter": "key_tracking",
+          "kind": "knob"
+        },
+        {
+          "parameter": "flt_attack",
+          "kind": "knob"
+        },
+        {
+          "parameter": "flt_sustain",
+          "kind": "knob"
+        },
+        {
+          "parameter": "flt_release",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "303",
+      "controls": [
+        {
+          "parameter": "accent",
+          "kind": "knob"
+        },
+        {
+          "parameter": "slide",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "AMP",
+      "controls": [
+        {
+          "parameter": "amp_attack",
+          "kind": "knob"
+        },
+        {
+          "parameter": "amp_decay",
+          "kind": "knob"
+        },
+        {
+          "parameter": "amp_sustain",
+          "kind": "knob"
+        },
+        {
+          "parameter": "amp_release",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "DISTORTION",
+      "controls": [
+        {
+          "parameter": "drive",
+          "kind": "knob"
+        },
+        {
+          "parameter": "dist_mode",
+          "kind": "selector"
+        },
+        {
+          "parameter": "dist_tone",
+          "kind": "knob"
+        },
+        {
+          "parameter": "dist_mix",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "MODULATION",
+      "controls": [
+        {
+          "parameter": "mod_target",
+          "kind": "selector"
+        },
+        {
+          "parameter": "mod_amount",
+          "kind": "knob"
+        },
+        {
+          "parameter": "mod_attack",
+          "kind": "knob"
+        },
+        {
+          "parameter": "mod_decay",
+          "kind": "knob"
+        },
+        {
+          "parameter": "mod_sustain",
+          "kind": "knob"
+        },
+        {
+          "parameter": "mod_release",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "ENV 2",
+      "controls": [
+        {
+          "parameter": "env2_target",
+          "kind": "selector"
+        },
+        {
+          "parameter": "env2_amount",
+          "kind": "knob"
+        },
+        {
+          "parameter": "env2_attack",
+          "kind": "knob"
+        },
+        {
+          "parameter": "env2_decay",
+          "kind": "knob"
+        },
+        {
+          "parameter": "env2_sustain",
+          "kind": "knob"
+        },
+        {
+          "parameter": "env2_release",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "LFO 1",
+      "controls": [
+        {
+          "parameter": "lfo1_rate",
+          "kind": "knob"
+        },
+        {
+          "parameter": "lfo1_depth",
+          "kind": "knob"
+        },
+        {
+          "parameter": "lfo1_wave",
+          "kind": "selector"
+        },
+        {
+          "parameter": "lfo1_target",
+          "kind": "selector"
+        },
+        {
+          "parameter": "lfo1_sync",
+          "kind": "toggle"
+        }
+      ]
+    },
+    {
+      "title": "LFO 2",
+      "controls": [
+        {
+          "parameter": "lfo2_rate",
+          "kind": "knob"
+        },
+        {
+          "parameter": "lfo2_depth",
+          "kind": "knob"
+        },
+        {
+          "parameter": "lfo2_wave",
+          "kind": "selector"
+        },
+        {
+          "parameter": "lfo2_target",
+          "kind": "selector"
+        },
+        {
+          "parameter": "lfo2_sync",
+          "kind": "toggle"
+        }
+      ]
+    },
+    {
+      "title": "LFO 3",
+      "controls": [
+        {
+          "parameter": "lfo3_rate",
+          "kind": "knob"
+        },
+        {
+          "parameter": "lfo3_depth",
+          "kind": "knob"
+        },
+        {
+          "parameter": "lfo3_wave",
+          "kind": "selector"
+        },
+        {
+          "parameter": "lfo3_target",
+          "kind": "selector"
+        },
+        {
+          "parameter": "lfo3_sync",
+          "kind": "toggle"
+        }
+      ]
+    },
+    {
+      "title": "STEP",
+      "controls": [
+        {
+          "parameter": "step_amount",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_target",
+          "kind": "selector"
+        },
+        {
+          "parameter": "step_rate",
+          "kind": "selector"
+        },
+        {
+          "parameter": "step_smooth",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_01",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_02",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_03",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_04",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_05",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_06",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_07",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_08",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_09",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_10",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_11",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_12",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_13",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_14",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_15",
+          "kind": "knob"
+        },
+        {
+          "parameter": "step_16",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "PERFORMANCE",
+      "controls": [
+        {
+          "parameter": "portamento",
+          "kind": "knob"
+        },
+        {
+          "parameter": "unison_voices",
+          "kind": "knob"
+        },
+        {
+          "parameter": "unison_detune",
+          "kind": "knob"
+        },
+        {
+          "parameter": "stereo_spread",
+          "kind": "knob"
+        }
+      ]
+    },
+    {
+      "title": "PLAY",
+      "controls": [
+        {
+          "parameter": "legato",
+          "kind": "toggle"
+        },
+        {
+          "parameter": "retrigger",
+          "kind": "toggle"
+        },
+        {
+          "parameter": "vel_to_accent",
+          "kind": "toggle"
+        },
+        {
+          "parameter": "slide_on_overlap",
+          "kind": "toggle"
+        }
+      ]
+    },
+    {
+      "title": "OUTPUT",
+      "controls": [
+        {
+          "parameter": "output",
+          "kind": "knob"
+        },
+        {
+          "parameter": "pan",
+          "kind": "knob"
+        }
+      ]
+    }
+  ]
+}

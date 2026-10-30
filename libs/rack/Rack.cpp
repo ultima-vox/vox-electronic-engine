@@ -53,8 +53,12 @@ const instrument::ParameterDescriptor* findParameter(
         if (parameter.id == id) return &parameter;
     return nullptr;
 }
-// Pattern content of an instrument whose pattern the Rack owns and the module
-// plays itself; null for HOST-playback or pattern-less instruments.
+// Pattern content the Rack stores. HOST (Acid) is scheduled here; INTERNAL
+// (Drums) is played by the module. Null when the instrument has no pattern.
+const pattern::Content *ownedPattern(
+    const instrument::InstrumentDescriptor &descriptor) noexcept {
+  return descriptor.patternContent.get();
+}
 const pattern::Content *internalPattern(
     const instrument::InstrumentDescriptor &descriptor) noexcept {
   const auto *content = descriptor.patternContent.get();
@@ -87,7 +91,7 @@ void initializeDirect(PersistentSlotState &state,
     return;
   if (state.instrumentVersion == 0 && state.modulePayload.empty())
     state.instrumentStateVersion = descriptor.stateVersion;
-  if (const auto *content = internalPattern(descriptor);
+  if (const auto *content = ownedPattern(descriptor);
       content != nullptr && state.instrumentVersion == 0 && state.patternPayload.empty())
     initializePattern(state, *content);
   if (descriptor.directParameters && state.directParameters.empty() &&
@@ -260,7 +264,7 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
     }
     // The Rack is the only durable owner of an INTERNAL pattern: it must be a
     // valid V2 pattern for exactly these caps, or the slot is rejected.
-    if (const auto *content = internalPattern(*target.descriptor)) {
+    if (const auto *content = ownedPattern(*target.descriptor)) {
       auto decoded = std::make_unique<pattern::Pattern>();
       std::string why;
       if (state.patternSchemaVersion != VOX_PATTERN_SCHEMA_V2 ||
@@ -268,6 +272,7 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         diagnostic = "instrument pattern invalid" + (why.empty() ? std::string{} : ": " + why);
         return false;
       }
+      target.hostPlay = {};
       target.patterns = std::make_unique<pattern::SnapshotBuffer>();
       target.patterns->publish(*decoded);
       target.noteEvents.assign(noteEventCapacity, VoxNoteEventV2{});
@@ -639,7 +644,7 @@ bool Rack::setPattern(std::size_t index, const pattern::Pattern &edited,
     return false;
   }
   auto &runtime = processing_->runtime[index];
-  const auto *content = runtime.descriptor ? internalPattern(*runtime.descriptor) : nullptr;
+  const auto *content = runtime.descriptor ? ownedPattern(*runtime.descriptor) : nullptr;
   if (content == nullptr || !runtime.patterns) {
     diagnostic = "slot instrument has no Rack-owned pattern";
     return false;
@@ -672,7 +677,7 @@ bool Rack::loadFactoryPattern(std::size_t index, std::size_t factoryIndex,
     const std::scoped_lock persistentLock(persistentStateMutex_);
     const auto *descriptor =
         index < state_.size() ? processing_->runtime[index].descriptor : nullptr;
-    const auto *content = descriptor ? internalPattern(*descriptor) : nullptr;
+    const auto *content = descriptor ? ownedPattern(*descriptor) : nullptr;
     if (content == nullptr || factoryIndex >= content->factory.size()) {
       diagnostic = "no such factory pattern for this slot";
       return false;
@@ -686,7 +691,7 @@ bool Rack::pattern(std::size_t index, pattern::Pattern &out) const {
   const std::scoped_lock persistentLock(persistentStateMutex_);
   if (index >= state_.size() || !processing_->runtime[index].descriptor)
     return false;
-  const auto *content = internalPattern(*processing_->runtime[index].descriptor);
+  const auto *content = ownedPattern(*processing_->runtime[index].descriptor);
   std::string why;
   return content != nullptr &&
          state_[index].patternSchemaVersion == VOX_PATTERN_SCHEMA_V2 &&
@@ -703,10 +708,45 @@ bool Rack::renderPatternHits(std::size_t index, const PersistentSlotState &slot,
     return false;
   }
   const auto resolution = registry_.resolve(slot.instrumentId);
-  const auto *content = resolution ? internalPattern(*resolution.descriptor) : nullptr;
+  const auto *content = resolution ? ownedPattern(*resolution.descriptor) : nullptr;
   if (content == nullptr) {
     diagnostic = "slot instrument has no Rack-owned pattern";
     return false;
+  }
+  if (content->caps.playback == VOX_PATTERN_PLAYBACK_HOST) {
+    pattern::Pattern decoded;
+    std::string why;
+    if (slot.patternSchemaVersion != VOX_PATTERN_SCHEMA_V2 ||
+        !pattern::decode(slot.patternPayload, content->caps, decoded, why)) {
+      diagnostic = "instrument pattern invalid" + (why.empty() ? std::string{} : ": " + why);
+      return false;
+    }
+    constexpr double rate = 48000.0, bpm = 120.0;
+    constexpr std::uint32_t block = 512;
+    lengthPpq = decoded.barCount * decoded.stepsPerBar *
+                pattern::stepLengthPpq(decoded.timing);
+    const double samplesPerPpq = 60.0 * rate / bpm;
+    const auto total = static_cast<std::uint64_t>(std::ceil(lengthPpq * samplesPerPpq));
+    pattern::HostPlayhead play;
+    for (std::uint64_t start = 0; start < total; start += block) {
+      const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(block, total - start));
+      const double ppq = static_cast<double>(start) / samplesPerPpq;
+      pattern::HostMidi midi[64];
+      bool overflow = false;
+      const auto count = pattern::scheduleHostPattern(
+          decoded, 36, rate, bpm, ppq, n, true, play, midi, 64, overflow);
+      if (overflow) {
+        diagnostic = "host pattern scheduler overflowed; nothing exported";
+        hits.clear();
+        return false;
+      }
+      for (std::uint32_t e = 0; e < count; ++e)
+        if (midi[e].status == 0x90)
+          hits.push_back({ppq + midi[e].sampleOffset / samplesPerPpq, midi[e].note,
+                          midi[e].velocity, 0, midi[e].velocity >= 110});
+    }
+    diagnostic.clear();
+    return true;
   }
   SlotRuntime render;
   RuntimeSlotState runtimeState;
@@ -990,6 +1030,29 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
       if (const auto *current = slot.patterns->acquire(patternGeneration)) {
         patternView = current->view();
         patternSnapshot = &patternView;
+        if (slot.descriptor != nullptr && slot.descriptor->patternContent &&
+            slot.descriptor->patternContent->caps.playback ==
+                VOX_PATTERN_PLAYBACK_HOST &&
+            spec_.sampleRate > 0.0) {
+          pattern::HostMidi midi[64];
+          bool overflow = false;
+          const auto count = pattern::scheduleHostPattern(
+              *current, 36, spec_.sampleRate, bpm, ppq, sampleCount, playing,
+              slot.hostPlay, midi, 64, overflow);
+          for (std::uint32_t e = 0; e < count; ++e) {
+            VoxMidiEventV1 event{};
+            event.sampleOffset = midi[e].sampleOffset;
+            event.size = 3;
+            event.data[0] = midi[e].status;
+            event.data[1] = midi[e].note;
+            event.data[2] = midi[e].velocity;
+            processing_->routed[i].push(event);
+          }
+          if (overflow)
+            ++processing_->routed[i].dropped;
+          if (count > 0)
+            processing_->routed[i].sortBySampleOffset();
+        }
       }
     slot.instance->process({{slot.pointers.data(), outputs.size()},
                             sampleCount,
