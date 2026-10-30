@@ -65,6 +65,13 @@ jobs:
           Remove-Item Env:VOX_DRUMS_GRID_SNAPSHOT
           if (-not (Test-Path (Join-Path $snapshotDir "drums-pattern-grid-1500x920.png"))) { throw "Drum grid snapshot not created" }
 
+          # Actual editor, Full-on Drums SOUND page (declarative .vins layout).
+          $env:VOX_DRUMS_SOUND_SNAPSHOT = Join-Path $snapshotDir "drums-sound-layout-1500x920.png"
+          & (Join-Path $PWD "build\Release\fullon_drums_tests.exe") (Join-Path $PWD "build\instruments") (Join-Path $PWD "build\drums-sound-scratch") (Join-Path $PWD "docs\testing\fullon-drums")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:VOX_DRUMS_SOUND_SNAPSHOT
+          if (-not (Test-Path (Join-Path $snapshotDir "drums-sound-layout-1500x920.png"))) { throw "Drum sound snapshot not created" }
+
       - name: Upload Visual Gate snapshots
         uses: actions/upload-artifact@v4
         with:

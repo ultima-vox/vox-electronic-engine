@@ -263,6 +263,66 @@ bool materialize(const Candidate &c, const fs::path &cacheRoot, fs::path &dir, s
   return true;
 }
 
+// The package's provider with its sound layouts attached to the descriptors.
+class LayoutProvider final : public InstrumentProvider {
+public:
+  LayoutProvider(std::unique_ptr<InstrumentProvider> inner,
+                 std::vector<InstrumentDescriptor> descriptors)
+      : inner_(std::move(inner)), descriptors_(std::move(descriptors)) {}
+  std::span<const InstrumentDescriptor> descriptors() const noexcept override {
+    return descriptors_;
+  }
+  std::unique_ptr<InstrumentInstance> create(std::string_view id,
+                                             const CreateContext &context) override {
+    return inner_->create(id, context);
+  }
+  std::span<const ContentDescriptor> contentDescriptors(std::string_view id) const noexcept override {
+    return inner_->contentDescriptors(id);
+  }
+  ContentStatus applySoundPreset(std::string_view id, std::string_view preset,
+                                 InstrumentInstance &instance) const noexcept override {
+    return inner_->applySoundPreset(id, preset, instance);
+  }
+  ContentStatus generatePattern(std::string_view id, std::string_view profile,
+                                const VoxGenerationContextV1 &context, const VoxPatternV1 *seed,
+                                VoxPatternV1 &out) const noexcept override {
+    return inner_->generatePattern(id, profile, context, seed, out);
+  }
+
+private:
+  std::unique_ptr<InstrumentProvider> inner_;
+  std::vector<InstrumentDescriptor> descriptors_;
+};
+
+// Offers the provider with the manifest's sound layouts. A layout that does
+// not describe its instrument exactly rejects the package (fail closed).
+void offer(const Candidate &c, std::unique_ptr<InstrumentProvider> provider, LoadReport &report) {
+  if (c.manifest.ui.empty()) {
+    report.providers.push_back(std::move(provider));
+    return;
+  }
+  auto descriptors = std::vector<InstrumentDescriptor>(provider->descriptors().begin(),
+                                                       provider->descriptors().end());
+  for (const auto &[id, memberName] : c.manifest.ui) {
+    const auto *member = findMember(c, memberName);
+    auto descriptor = std::find_if(descriptors.begin(), descriptors.end(),
+                                   [&](const InstrumentDescriptor &d) { return d.id == id; });
+    SoundLayout layout;
+    std::string why;
+    if (member == nullptr || descriptor == descriptors.end())
+      why = "layout member or instrument missing";
+    else if (parseSoundLayout(member->data, layout, why) &&
+             validateSoundLayout(layout, *descriptor, why))
+      descriptor->soundLayout = std::make_shared<const SoundLayout>(std::move(layout));
+    if (descriptor == descriptors.end() || descriptor->soundLayout == nullptr) {
+      report.diagnostics.push_back(c.label + ": ui of " + id + " rejected: " + why);
+      return;
+    }
+  }
+  report.providers.push_back(
+      std::make_unique<LayoutProvider>(std::move(provider), std::move(descriptors)));
+}
+
 void loadGraph(Candidate &c, LoadReport &report) {
   const auto *member = findMember(c, c.manifest.graph);
   std::string why;
@@ -277,7 +337,7 @@ void loadGraph(Candidate &c, LoadReport &report) {
     report.diagnostics.push_back(c.label + ": graph instrument id differs from the manifest");
     return;
   }
-  report.providers.push_back(dspcore::makeGraphProvider(std::move(patch)));
+  offer(c, dspcore::makeGraphProvider(std::move(patch)), report);
 }
 
 void loadNative(Candidate &c, const LoadOptions &options, LoadReport &report) {
@@ -319,7 +379,7 @@ void loadNative(Candidate &c, const LoadOptions &options, LoadReport &report) {
     report.diagnostics.push_back(c.label + ": module instrument ids differ from the manifest");
     return;
   }
-  report.providers.push_back(native::makeProvider(std::move(module), key->id));
+  offer(c, native::makeProvider(std::move(module), key->id), report);
 }
 } // namespace
 
@@ -336,7 +396,7 @@ bool parseManifest(std::span<const std::uint8_t> bytes, Manifest &out, std::stri
     return fail(why, "manifest.json is not a JSON object");
   static const std::set<juce::String> knownKeys = {
       "vins", "packageId", "version", "name", "vendor", "executionKind", "instruments",
-      "graph", "native", "files"};
+      "graph", "native", "files", "ui"};
   for (const auto &property : object->getProperties())
     if (knownKeys.count(property.name.toString()) == 0)
       return fail(why, "manifest: unknown key '" + property.name.toString().toStdString() + "'");
@@ -411,7 +471,81 @@ bool parseManifest(std::span<const std::uint8_t> bytes, Manifest &out, std::stri
     if (m.modules.empty())
       return fail(why, "manifest: native needs at least one module");
   }
+  if (!json["ui"].isVoid()) {
+    auto *ui = json["ui"].getDynamicObject();
+    if (ui == nullptr || ui->getProperties().isEmpty())
+      return fail(why, "manifest: ui must map instrument ids to layout members");
+    for (const auto &property : ui->getProperties()) {
+      const auto id = property.name.toString().toStdString();
+      std::string member;
+      if (!std::binary_search(m.instruments.begin(), m.instruments.end(), id) ||
+          !readString(property.value, member) || m.files.count(member) == 0)
+        return fail(why, "manifest: invalid ui entry '" + id + "'");
+      m.ui[id] = member;
+    }
+  }
   out = std::move(m);
+  return true;
+}
+
+bool parseSoundLayout(std::span<const std::uint8_t> bytes, SoundLayout &out, std::string &why) {
+  if (bytes.empty() || bytes.size() > maxSoundLayoutBytes)
+    return fail(why, "sound layout empty or larger than 64 KiB");
+  juce::var json;
+  const auto parsed = juce::JSON::parse(
+      juce::String::fromUTF8(reinterpret_cast<const char *>(bytes.data()),
+                             static_cast<int>(bytes.size())),
+      json);
+  const auto onlyKeys = [](const juce::var &v, std::initializer_list<const char *> keys) {
+    auto *object = v.getDynamicObject();
+    if (object == nullptr)
+      return false;
+    for (const auto &property : object->getProperties())
+      if (std::none_of(keys.begin(), keys.end(), [&](const char *k) {
+            return property.name.toString() == k;
+          }))
+        return false;
+    return true;
+  };
+  if (parsed.failed() || !onlyKeys(json, {"voxSoundLayout", "sections"}))
+    return fail(why, "sound layout: not a JSON object with voxSoundLayout and sections only");
+  const auto schema = json["voxSoundLayout"];
+  if (!(schema.isInt() || schema.isInt64()) ||
+      static_cast<juce::int64>(schema) != soundLayoutSchema)
+    return fail(why, "sound layout: unsupported voxSoundLayout schema (expected 1)");
+  const auto *sections = json["sections"].getArray();
+  if (sections == nullptr || sections->isEmpty() ||
+      static_cast<std::size_t>(sections->size()) > maxSoundSections)
+    return fail(why, "sound layout: sections must list 1..16 sections");
+  SoundLayout layout;
+  for (const auto &s : *sections) {
+    SoundSection section;
+    const auto *controls = s["controls"].getArray();
+    if (!onlyKeys(s, {"title", "controls"}) || !readString(s["title"], section.title) ||
+        controls == nullptr ||
+        static_cast<std::size_t>(controls->size()) > poolParametersPerSlot)
+      return fail(why, "sound layout: a section needs a title and a controls list");
+    for (const auto &c : *controls) {
+      SoundControl control;
+      std::string kind;
+      if (!onlyKeys(c, {"parameter", "kind", "label"}) ||
+          !readString(c["parameter"], control.parameter) || !readString(c["kind"], kind) ||
+          (!c["label"].isVoid() && (!readString(c["label"], control.label) ||
+                                    control.label.empty())))
+        return fail(why, "sound layout: a control needs parameter, kind and an optional label");
+      if (kind == "knob")
+        control.kind = SoundControlKind::knob;
+      else if (kind == "selector")
+        control.kind = SoundControlKind::selector;
+      else if (kind == "toggle")
+        control.kind = SoundControlKind::toggle;
+      else
+        return fail(why, "sound layout: kind must be knob, selector or toggle");
+      section.controls.push_back(std::move(control));
+    }
+    layout.sections.push_back(std::move(section));
+  }
+  out = std::move(layout);
   return true;
 }
 

@@ -57,11 +57,20 @@ struct Manifest {
   std::map<std::string, std::string> modules; // native: platform -> member
   std::string publisher;                    // native: publisher key id
   std::map<std::string, std::string> files; // member -> lowercase SHA-256 hex
+  std::map<std::string, std::string> ui;    // instrument id -> sound layout member
 };
 
 // Strict schema check of manifest.json bytes. False with a reason.
 [[nodiscard]] bool parseManifest(std::span<const std::uint8_t> bytes, Manifest &out,
                                  std::string &why);
+
+inline constexpr std::size_t maxSoundLayoutBytes = 64 * 1024;
+
+// Strict schema check of a sound layout member (docs/architecture/
+// SOUND_LAYOUT.md). Checks the shape only; validateSoundLayout then checks it
+// against the instrument it describes.
+[[nodiscard]] bool parseSoundLayout(std::span<const std::uint8_t> bytes, SoundLayout &out,
+                                    std::string &why);
 
 struct LoadOptions {
   std::filesystem::path cacheRoot;              // absolute; native extraction

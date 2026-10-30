@@ -421,6 +421,127 @@ void rejectsHostilePackages() {
   }
 }
 
+// ------------------------------------------------------ sound layout
+// The graph Demo with a sound layout member (graph packages are unsigned, so
+// layouts can be varied in memory).
+Bytes graphWithLayout(const std::string &id, const std::string &layout,
+                      const std::string &uiInstrument = "", const std::string &uiMember = "ui/sound.json") {
+  const auto graph = text(withId(demoGraphJson(), id));
+  const auto ui = text(layout);
+  const std::string manifest =
+      "{\"vins\": 1, \"packageId\": \"" + id +
+      "\", \"version\": \"1.0.0\", \"name\": \"G\", \"vendor\": \"T\", \"executionKind\": \"graph\", "
+      "\"instruments\": [\"" + id + "\"], \"graph\": \"graph/instrument.json\", \"ui\": {\"" +
+      (uiInstrument.empty() ? id : uiInstrument) + "\": \"" + uiMember +
+      "\"}, \"files\": {\"graph/instrument.json\": \"" + sha256(graph) +
+      "\", \"ui/sound.json\": \"" + sha256(ui) + "\"}}";
+  return vins::writeZip(
+      {{"manifest.json", text(manifest)}, {"graph/instrument.json", graph}, {"ui/sound.json", ui}});
+}
+
+std::string demoLayout(const std::string &oscillator, const std::string &extra = "") {
+  return "{\"voxSoundLayout\": 1, \"sections\": [{\"title\": \"OSCILLATOR\", \"controls\": [" +
+         oscillator + "]}, {\"title\": \"ENVELOPE\", \"controls\": ["
+         "{\"parameter\": \"attack\", \"kind\": \"knob\", \"label\": \"ATK\"},"
+         "{\"parameter\": \"decay\", \"kind\": \"knob\"}, {\"parameter\": \"sustain\", \"kind\": \"knob\"},"
+         "{\"parameter\": \"release\", \"kind\": \"knob\"}]}, {\"title\": \"FILTER\", \"controls\": ["
+         "{\"parameter\": \"cutoff\", \"kind\": \"knob\"}, {\"parameter\": \"resonance\", \"kind\": \"knob\"}" +
+         extra + "]}]}";
+}
+
+const std::string goodOscillator =
+    "{\"parameter\": \"wave\", \"kind\": \"selector\"}, {\"parameter\": \"gain\", \"kind\": \"knob\"}";
+
+void soundLayouts() {
+  // Shape: strict schema of the layout member itself.
+  auto parses = [](const std::string &json, const std::string &reason) {
+    instrument::SoundLayout layout;
+    std::string why;
+    const bool ok = vins::parseSoundLayout(text(json), layout, why);
+    return reason.empty() ? ok : !ok && why.find(reason) != std::string::npos;
+  };
+  check(parses(demoLayout(goodOscillator), ""), "the demo layout parses");
+  check(parses("{\"voxSoundLayout\": 2, \"sections\": []}", "schema"), "layout schema 2 rejected");
+  check(parses("[1, 2]", "JSON object"), "a layout that is no object is rejected");
+  check(parses("{\"voxSoundLayout\": 1, \"sections\": [], \"script\": \"x\"}", "voxSoundLayout and sections"),
+        "unknown top-level layout key rejected");
+  check(parses("{\"voxSoundLayout\": 1, \"sections\": []}", "1..16 sections"), "no sections rejected");
+  check(parses(demoLayout("{\"parameter\": \"wave\", \"kind\": \"slider\"}"), "kind must be"),
+        "unknown control kind rejected");
+  check(parses(demoLayout("{\"parameter\": \"wave\", \"kind\": \"selector\", \"onClick\": 1}"),
+               "a control needs"),
+        "unknown control key rejected");
+  check(parses(demoLayout("{\"parameter\": \"wave\", \"kind\": \"selector\", \"label\": \"\"}"),
+               "a control needs"),
+        "empty label rejected");
+  check(parses("{\"voxSoundLayout\": 1, \"sections\": [{\"controls\": []}]}", "a section needs"),
+        "section without title rejected");
+  check(parses(std::string(vins::maxSoundLayoutBytes + 1, ' '), "64 KiB"), "oversized layout rejected");
+
+  // A valid layout reaches the descriptor through the package provider.
+  const auto good = vins::loadFolder(
+      folderWith("ui-good", {{"G.vins", graphWithLayout("t.ui-good", demoLayout(goodOscillator))}}),
+      options());
+  check(good.providers.size() == 1 && good.diagnostics.empty(), "a package with a layout loads" + describe(good));
+  const auto &d = good.providers[0]->descriptors()[0];
+  check(d.soundLayout != nullptr && d.soundLayout->sections.size() == 3 &&
+            d.soundLayout->sections[0].title == "OSCILLATOR" &&
+            d.soundLayout->sections[0].controls[0].kind == instrument::SoundControlKind::selector &&
+            d.soundLayout->sections[1].controls[0].label == "ATK" &&
+            d.soundLayout->sections[1].controls[1].label.empty(),
+        "the layout is attached to the descriptor as declared");
+  instrument::CreateContext context;
+  check(good.providers[0]->create(d.id, context) != nullptr, "the layout package still creates the instrument");
+  const auto plain = vins::loadFolder(
+      folderWith("ui-none", {{"G.vins", readFile(instrumentsDir / "VoxDemoSynthGraph.vins")}}), options());
+  check(plain.providers.size() == 1 && plain.providers[0]->descriptors()[0].soundLayout == nullptr,
+        "a package without a layout has none");
+
+  // Against the instrument: every control is one real direct parameter of
+  // the right type, exactly once, and none is left out.
+  struct Case {
+    std::string name, layout, reason;
+  };
+  const std::vector<Case> cases = {
+      {"unknown", demoLayout(goodOscillator, ", {\"parameter\": \"drive\", \"kind\": \"knob\"}"),
+       "'drive' is not a direct parameter"},
+      {"duplicate", demoLayout(goodOscillator, ", {\"parameter\": \"gain\", \"kind\": \"knob\"}"),
+       "'gain' appears twice"},
+      {"kind", demoLayout("{\"parameter\": \"wave\", \"kind\": \"knob\"}, {\"parameter\": \"gain\", \"kind\": \"knob\"}"),
+       "does not match the type of 'wave'"},
+      {"toggle", demoLayout("{\"parameter\": \"wave\", \"kind\": \"selector\"}, {\"parameter\": \"gain\", \"kind\": \"toggle\"}"),
+       "does not match the type of 'gain'"},
+      {"missing", demoLayout("{\"parameter\": \"wave\", \"kind\": \"selector\"}"),
+       "'gain' has no control"},
+      {"empty-section", demoLayout(""), "has no controls"},
+      {"long-title", "{\"voxSoundLayout\": 1, \"sections\": [{\"title\": \"" + std::string(33, 'A') +
+                         "\", \"controls\": [" + goodOscillator + "]}]}",
+       "section title"},
+  };
+  for (const auto &c : cases) {
+    const auto id = "t.ui-" + c.name;
+    const auto r = vins::loadFolder(folderWith("ui-" + c.name, {{"G.vins", graphWithLayout(id, c.layout)}}),
+                                    options());
+    check(r.providers.empty() && hasDiagnostic(r, "ui of " + id + " rejected") &&
+              hasDiagnostic(r, c.reason),
+          "layout '" + c.name + "' rejects the package with '" + c.reason + "'" + describe(r));
+  }
+  // Manifest: the ui map names one of the package's instruments and a
+  // listed (hashed, signed) member.
+  const auto foreign = vins::loadFolder(
+      folderWith("ui-foreign", {{"G.vins", graphWithLayout("t.ui-foreign", demoLayout(goodOscillator),
+                                                           "t.other")}}),
+      options());
+  check(foreign.providers.empty() && hasDiagnostic(foreign, "invalid ui entry 't.other'"),
+        "a layout for another instrument is rejected" + describe(foreign));
+  const auto unlisted = vins::loadFolder(
+      folderWith("ui-unlisted", {{"G.vins", graphWithLayout("t.ui-unlisted", demoLayout(goodOscillator),
+                                                            "", "ui/other.json")}}),
+      options());
+  check(unlisted.providers.empty() && hasDiagnostic(unlisted, "invalid ui entry"),
+        "a layout member that is not listed is rejected" + describe(unlisted));
+}
+
 void conflictsRejectEveryone() {
   const auto tone = readFile(testVins / "AbiTestTone.vins");
   auto same = vins::loadFolder(folderWith("dup-package", {{"A.vins", tone}, {"B.vins", tone}}), options());
@@ -551,6 +672,7 @@ int main(int argc, char **argv) {
   manifestSchema();
   loadsGoodPackages();
   rejectsHostilePackages();
+  soundLayouts();
   conflictsRejectEveryone();
   notRegularFilesAreIgnored();
   cacheIsVerifiedAndReused();

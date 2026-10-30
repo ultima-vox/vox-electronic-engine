@@ -4,7 +4,8 @@
 # <member>=<file> pairs). graph: GRAPH_MEMBER. native: MODULE_PLATFORM,
 # MODULE_MEMBER, OPENSSL, MODULUS_FILE (the publisher public modulus, for the
 # key id) and KEY (private PEM read only by openssl; development and test
-# keys only). An empty KEY writes an unsigned release candidate.
+# keys only). An empty KEY writes an unsigned release candidate. Optional UI
+# ("|" separated <instrument>=<layout member> pairs).
 cmake_minimum_required(VERSION 3.22)
 foreach(required TOOL OUTPUT ID VERSION NAME VENDOR KIND INSTRUMENTS MEMBERS)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
@@ -28,6 +29,14 @@ foreach(id IN LISTS instrument_list)
   list(APPEND instrument_args "instrument=${id}")
 endforeach()
 
+set(ui_args "")
+if(DEFINED UI AND NOT UI STREQUAL "")
+  string(REPLACE "|" ";" ui_list "${UI}")
+  foreach(pair IN LISTS ui_list)
+    list(APPEND ui_args "ui=${pair}")
+  endforeach()
+endif()
+
 set(kind_args "")
 if(KIND STREQUAL "graph")
   list(APPEND kind_args "graph=${GRAPH_MEMBER}")
@@ -45,7 +54,7 @@ endif()
 
 execute_process(COMMAND "${TOOL}" manifest "${staging}/manifest.json"
     "id=${ID}" "version=${VERSION}" "name=${NAME}" "vendor=${VENDOR}" "kind=${KIND}"
-    ${instrument_args} ${kind_args} ${member_args}
+    ${instrument_args} ${kind_args} ${ui_args} ${member_args}
   RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)
   message(FATAL_ERROR "MakeVins: writing the manifest failed")

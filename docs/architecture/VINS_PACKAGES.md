@@ -106,6 +106,15 @@ used.
 - The `native` section gives the ABI (2), the publisher key id and one module
   member per platform. Platforms are `win-x64` and `linux-x64`.
 
+**SOUND layout (optional)**
+- `"ui": {"<instrument id>": "<member>"}` names, per instrument, a member
+  holding its declarative SOUND page (`SOUND_LAYOUT.md`).
+- The instrument must be one of the package's `instruments`, and the member
+  must be listed in `files`. That puts it under the hashes and, for native
+  packages, under the manifest signature.
+- A layout that does not describe its instrument exactly rejects the whole
+  package.
+
 **Identifiers**
 - `packageId` and instrument ids use `[a-z0-9._-]`, up to 128 characters.
 - `version` is MAJOR.MINOR.PATCH, with no leading zeros.
