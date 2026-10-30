@@ -358,23 +358,25 @@ std::uint32_t scheduleHostPattern(const Pattern &pattern, std::uint8_t rootNote,
   } else {
     play.lastPpq = ppq;
   }
-  if (play.held && !play.sliding && play.releasePpq < endPpq && play.releasePpq >= ppq) {
-    const double at = std::ceil((play.releasePpq - ppq) * samplesPerPpq - 1.0e-6);
-    const auto sample = static_cast<std::uint32_t>(
-        std::clamp(at, 0.0, static_cast<double>(sampleCount - 1)));
-    push(sample, 0x80, play.heldNote, 0);
-    play.held = false;
-  }
-  const double step = stepLengthPpq(pattern.timing);
-  const auto steps = static_cast<std::int64_t>(pattern.stepsPerBar);
-  const auto bars = static_cast<std::int64_t>(pattern.barCount);
-  if (!(step > 0.0) || steps < 1 || bars < 1 || pattern.laneCount < 1)
-    return count;
   const auto sampleAt = [&](double eventPpq) noexcept {
     const double at = std::ceil((eventPpq - ppq) * samplesPerPpq - 1.0e-6);
     return static_cast<std::uint32_t>(
         std::clamp(at, 0.0, static_cast<double>(sampleCount - 1)));
   };
+  // A gate that already ended (including one that fell between blocks) must
+  // still produce a NoteOff. Slide holds the note open on purpose.
+  const auto releaseIfDue = [&](double beforePpq) noexcept {
+    if (!play.held || play.sliding || play.releasePpq > beforePpq + 1.0e-12)
+      return;
+    push(sampleAt(std::max(play.releasePpq, ppq)), 0x80, play.heldNote, 0);
+    play.held = false;
+  };
+  releaseIfDue(ppq);
+  const double step = stepLengthPpq(pattern.timing);
+  const auto steps = static_cast<std::int64_t>(pattern.stepsPerBar);
+  const auto bars = static_cast<std::int64_t>(pattern.barCount);
+  if (!(step > 0.0) || steps < 1 || bars < 1 || pattern.laneCount < 1)
+    return count;
   for (std::int64_t g = static_cast<std::int64_t>(std::floor(ppq / step));; ++g) {
     const double t = static_cast<double>(g) * step;
     if (t >= endPpq - 1.0e-12)
@@ -389,6 +391,7 @@ std::uint32_t scheduleHostPattern(const Pattern &pattern, std::uint8_t rootNote,
     const bool on = (cell.flags & VOX_STEP_ON) != 0;
     const bool tie = (cell.flags & VOX_STEP_TIE) != 0;
     const bool slide = (cell.flags & VOX_STEP_SLIDE) != 0;
+    releaseIfDue(t);
     if (!on) {
       if (play.held) {
         push(sample, 0x80, play.heldNote, 0);
@@ -402,19 +405,28 @@ std::uint32_t scheduleHostPattern(const Pattern &pattern, std::uint8_t rootNote,
       play.sliding = slide;
       continue;
     }
-    if (play.held && !play.sliding)
+    if (play.held && !play.sliding) {
       push(sample, 0x80, play.heldNote, 0);
+      play.held = false;
+    }
+    const bool overlapped = play.held && play.sliding;
+    const auto previous = play.heldNote;
     int pitch = static_cast<int>(rootNote) + cell.note + 12 * cell.octave;
     pitch = std::clamp(pitch, 0, 127);
     auto velocity = cell.velocity == 0 ? static_cast<std::uint8_t>(100) : cell.velocity;
     if ((cell.flags & VOX_STEP_ACCENT) != 0 && velocity < 110)
       velocity = 120;
     push(sample, 0x90, static_cast<std::uint8_t>(pitch), velocity);
+    // Overlap starts the engine glide. The previous key is then released at
+    // the same sample so a later NoteOff cannot fall back onto it.
+    if (overlapped && previous != static_cast<std::uint8_t>(pitch))
+      push(sample, 0x80, previous, 0);
     play.held = true;
     play.heldNote = static_cast<std::uint8_t>(pitch);
     play.sliding = slide;
     play.releasePpq = t + (static_cast<double>(std::max<std::uint16_t>(cell.gate, 1)) / 256.0) * step;
   }
+  releaseIfDue(endPpq);
   return count;
 }
 

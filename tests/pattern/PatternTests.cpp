@@ -388,6 +388,63 @@ void hostPatternSchedulesAcidNotes() {
                                               midi, 8, overflow);
   REQUIRE(second == 1 && midi[0].status == 0x80, "stop releases the sounding note");
 }
+
+void hostPatternGateSlideAndNoteOff() {
+  const auto caps = noteCaps();
+  auto p = make(caps, 16, 1);
+  auto &step = p->at(0, 0, 0);
+  step.flags = VOX_STEP_ON;
+  step.gate = 1;
+  vp::HostPlayhead play;
+  vp::HostMidi midi[8];
+  bool overflow = false;
+  const auto count = vp::scheduleHostPattern(*p, 36, 48000.0, 120.0, 0.0, 512, true, play,
+                                            midi, 8, overflow);
+  REQUIRE(!overflow && count == 2 && midi[0].status == 0x90 && midi[1].status == 0x80,
+          "a short gate NoteOff is in the same block as its NoteOn");
+  REQUIRE(midi[1].sampleOffset > midi[0].sampleOffset && midi[1].note == midi[0].note,
+          "NoteOff follows its NoteOn and names the same pitch");
+  REQUIRE(!play.held, "the voice is not left held after the gate");
+
+  auto held = make(caps, 16, 1);
+  held->at(0, 0, 0).flags = VOX_STEP_ON;
+  held->at(0, 0, 0).gate = 128;
+  vp::HostPlayhead across;
+  const auto first = vp::scheduleHostPattern(*held, 36, 48000.0, 120.0, 0.0, 512, true, across,
+                                            midi, 8, overflow);
+  REQUIRE(first == 1 && midi[0].status == 0x90 && across.held, "gate longer than the block stays open");
+  const double next = 512.0 / 24000.0;
+  const auto later = vp::scheduleHostPattern(*held, 36, 48000.0, 120.0, next, 4096, true, across,
+                                            midi, 8, overflow);
+  REQUIRE(later == 1 && midi[0].status == 0x80 && !across.held,
+          "the gate NoteOff is delivered in a later block");
+
+  auto slide = make(caps, 16, 1);
+  slide->at(0, 0, 0).flags = VOX_STEP_ON | VOX_STEP_SLIDE;
+  slide->at(0, 0, 0).note = 0;
+  slide->at(0, 0, 1).flags = VOX_STEP_ON;
+  slide->at(0, 0, 1).note = 12;
+  slide->at(0, 0, 1).gate = 256;
+  vp::HostPlayhead glide;
+  vp::HostMidi events[8];
+  const auto n = vp::scheduleHostPattern(*slide, 36, 48000.0, 120.0, 0.0, 7000, true, glide,
+                                        events, 8, overflow);
+  REQUIRE(!overflow && n == 3, "slide is NoteOn, overlapping NoteOn, then the old NoteOff");
+  REQUIRE(events[0].status == 0x90 && events[0].note == 36 && events[0].sampleOffset == 0,
+          "slide starts on the source note");
+  REQUIRE(events[1].status == 0x90 && events[1].note == 48, "slide lands on the next note");
+  REQUIRE(events[2].status == 0x80 && events[2].note == 36 &&
+              events[2].sampleOffset == events[1].sampleOffset,
+          "the source key is released at the overlap, not before it");
+
+  auto intoRest = make(caps, 16, 1);
+  intoRest->at(0, 0, 0).flags = VOX_STEP_ON | VOX_STEP_SLIDE;
+  vp::HostPlayhead rest;
+  const auto cut = vp::scheduleHostPattern(*intoRest, 36, 48000.0, 120.0, 0.0, 7000, true, rest,
+                                          events, 8, overflow);
+  REQUIRE(cut == 2 && events[0].status == 0x90 && events[1].status == 0x80 && !rest.held,
+          "a rest ends a slide instead of holding the note");
+}
 } // namespace
 
 int main() {
@@ -399,6 +456,7 @@ int main() {
   moduleTables();
   snapshotBuffer();
   hostPatternSchedulesAcidNotes();
+  hostPatternGateSlideAndNoteOff();
   std::cout << "Pattern tests passed (" << passed << ")\n";
   return 0;
 }

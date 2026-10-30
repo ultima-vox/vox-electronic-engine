@@ -712,6 +712,15 @@ if(VOX_NATIVE_PLATFORM)
     INSTRUMENTS com.ultimavox.acid MODULE_TARGET VoxAcid303
     UI com.ultimavox.acid ui/sound.json
       ${CMAKE_CURRENT_SOURCE_DIR}/instruments/acid/sound.json)
+
+  if(NOT VOX_PRODUCTION_BUILD)
+    add_executable(acid_package_tests tests/acid/AcidPackageTests.cpp)
+    target_include_directories(acid_package_tests PRIVATE ${VST_LIBS_DIR})
+    target_link_libraries(acid_package_tests PRIVATE vst_vins)
+    add_dependencies(acid_package_tests vins_acid303)
+    add_test(NAME acid_package_tests COMMAND acid_package_tests
+      ${VOX_INSTRUMENTS_DIR}/VoxAcid303.vins ${CMAKE_BINARY_DIR}/acid-package-scratch)
+  endif()
 endif()
 
 add_executable(reliability_stress_tests
