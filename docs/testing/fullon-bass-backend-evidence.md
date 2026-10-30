@@ -72,6 +72,37 @@ change from the earlier single-current-note behavior and requires owner sound
 and playing acceptance. Single-note NoteOff and CC123 oracle WAVs remained
 bit-identical to the pre-change renders in the local comparison.
 
+## Verified Windows CI artifact through Rack #80
+
+[Windows CI 40945687501](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/40945687501)
+passed both jobs at Bass `75b42d406d3ffe12e128c878dbd6161fbba4a63f`.
+The downloaded `VoxFullOnBass-Windows-ABI-prototype` DLL (118272 bytes) has SHA256
+`49901E822F97A3B8B6059EB8F55E07C191986DD55775ED1318D3C0E8549106BF`.
+It passed the dynamic-module fault/recovery tests and the Bass-owned native Rack
+integration test against unmodified Rack #80 at
+`5f3818dea1dd2e1971058010aafb3ff570822ac2` on Windows x64 Release.
+
+The integration test exercises the actual Rack processor and native loader:
+MIDI NoteOn/NoteOff and rendered release, all 13 independent host controls changing
+DSP output, independent slot parameter state, save/restore with rendered maximum
+sample difference below `1e-5`, and 1/2/8/16 loaded Bass instances with distinct
+MIDI channels. This is processor-level evidence; it does not exercise a DAW,
+VST3 wrapper, editor, signed package discovery or mixed-instrument performance.
+
+Reproduce with a separate checkout of the exact Rack commit and absolute paths:
+
+```powershell
+cmake -S <rack-source> -B <rack-build> -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_PROJECT_INCLUDE=<bass-source>/tests/bass/module/BassRackTestInjection.cmake `
+  -DVOX_BASS_RACK_TEST_SOURCE=<bass-source>/tests/bass/module/BassNativeRackTests.cpp
+cmake --build <rack-build> --config Release --target bass_native_rack_tests --parallel 2
+& <rack-build>/Release/bass_native_rack_tests.exe <absolute-path-to-downloaded-DLL>
+```
+
+The CI run also supplies `VoxFullOnBass-DSP-Evidence` with release WAVs and both
+CPU CSVs. Native backend approval, approved SOUND UI/content, final signed `.vins`,
+Cubase beep reproduction and real mixed Rack performance remain open.
+
 ## SOUND surface
 
 The current independent engine has 13 stable parameters in `fullOnParameters`.

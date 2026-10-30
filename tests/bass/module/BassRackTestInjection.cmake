@@ -1,4 +1,4 @@
-﻿# Configure Rack #68 with -DCMAKE_PROJECT_INCLUDE=<absolute path to this file>
+﻿# Configure Rack #80 with -DCMAKE_PROJECT_INCLUDE=<absolute path to this file>
 # and -DVOX_BASS_RACK_TEST_SOURCE=<absolute path to BassNativeRackTests.cpp>.
 # The target is deferred until Rack has declared VstEngine and fetched JUCE.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR AND NOT DEFINED VOX_BASS_RACK_INJECTION_ADDED)

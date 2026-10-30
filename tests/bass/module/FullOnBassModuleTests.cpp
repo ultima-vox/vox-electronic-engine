@@ -100,6 +100,18 @@ int main(int argc,char** argv) {
     CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
     CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.0f;}));
     on.size=3;
+    std::array<VoxMidiEventV2,2> unordered{{{5,3,{0x90,36,127}}, {4,3,{0x80,36,0}}}};
+    ctx.midiEvents=unordered.data(); ctx.midiEventCount=2;
+    left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.0f;}));
+    unordered[0].sampleOffset=256; ctx.midiEventCount=1;
+    left.fill(0.75f); right.fill(0.75f);
+    CHECK(module->process(a,&ctx)==VOX_E_INVALID_ARG);
+    CHECK(std::all_of(left.begin(),left.end(),[](float x){return x==0.0f;}));
+    CHECK(std::all_of(right.begin(),right.end(),[](float x){return x==0.0f;}));
+    ctx.midiEvents=&on; ctx.midiEventCount=1;
     VoxParamChangeV2 invalidChange{13,0,1.0f,0};
     ctx.paramChanges=&invalidChange; ctx.paramChangeCount=1;
     left.fill(0.75f); right.fill(0.75f);
