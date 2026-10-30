@@ -78,8 +78,7 @@ PatternGrid::PatternGrid() : working(std::make_unique<pattern::Pattern>()) {
   };
 }
 
-void PatternGrid::setContent(std::shared_ptr<const pattern::Content> next,
-                             std::string_view selectedFactory) {
+void PatternGrid::setContent(std::shared_ptr<const pattern::Content> next) {
   content = std::move(next);
   factory.clear(juce::dontSendNotification);
   steps.clear(juce::dontSendNotification);
@@ -87,11 +86,8 @@ void PatternGrid::setContent(std::shared_ptr<const pattern::Content> next,
   timing.clear(juce::dontSendNotification);
   if (!content)
     return;
-  for (std::size_t i = 0; i < content->factory.size(); ++i) {
+  for (std::size_t i = 0; i < content->factory.size(); ++i)
     factory.addItem(content->factory[i].name, static_cast<int>(i + 1));
-    if (content->factory[i].name == selectedFactory)
-      factory.setSelectedItemIndex(static_cast<int>(i), juce::dontSendNotification);
-  }
   for (std::uint32_t n = 1; n <= content->caps.maxStepsPerBar; ++n)
     steps.addItem(juce::String(static_cast<int>(n)) + " steps", static_cast<int>(n));
   for (std::uint32_t n = 1; n <= content->caps.maxBars; ++n)
@@ -126,6 +122,14 @@ bool PatternGrid::reads(std::uint32_t field) const noexcept {
 }
 
 void PatternGrid::syncControls() {
+  // The selector shows a factory name only while the Rack holds exactly that
+  // factory pattern, however the pattern last changed (grid, restore, undo).
+  int selected = -1;
+  if (content)
+    for (std::size_t i = 0; i < content->factory.size(); ++i)
+      if (*content->factory[i].pattern == *working)
+        selected = static_cast<int>(i);
+  factory.setSelectedItemIndex(selected, juce::dontSendNotification);
   steps.setSelectedId(static_cast<int>(working->stepsPerBar), juce::dontSendNotification);
   bars.setSelectedId(static_cast<int>(working->barCount), juce::dontSendNotification);
   timing.setSelectedId(static_cast<int>(working->timing) + 1, juce::dontSendNotification);
@@ -150,11 +154,6 @@ void PatternGrid::commit(const pattern::Pattern &next) {
   juce::String why;
   if (onEdit && onEdit(next, why)) {
     status.setText({}, juce::dontSendNotification);
-    factory.setSelectedItemIndex(-1, juce::dontSendNotification);
-    if (content)
-      for (std::size_t i = 0; i < content->factory.size(); ++i)
-        if (*content->factory[i].pattern == next)
-          factory.setSelectedItemIndex(static_cast<int>(i), juce::dontSendNotification);
   } else {
     status.setText(why.isEmpty() ? juce::String("Edit rejected") : why,
                    juce::dontSendNotification);

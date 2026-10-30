@@ -839,10 +839,9 @@ void VstEngineAudioProcessorEditor::PatternPage::refresh()
         c->setVisible(!gridMode);
       grid.setVisible(gridMode);
       if (gridMode)
-        grid.setContent(descriptor->patternContent,
-                        processor.instrumentRack().state()[slot].patternPreset);
+        grid.setContent(descriptor->patternContent);
       else
-        grid.setContent(nullptr, {});
+        grid.setContent(nullptr);
       resized();
     } else if (gridMode) {
       grid.reload(); // the same instrument: keep the shown bar
