@@ -8,6 +8,8 @@ namespace vstengine::bass {
 namespace {
 static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);
 constexpr std::size_t stateBytes = fullOnParameters.size() * sizeof(float);
+static_assert(fullOnParameters.size() < 32);
+constexpr std::uint32_t allParameters = (1u << fullOnParameters.size()) - 1u;
 auto defaults() noexcept
 {
     std::array<float, fullOnParameters.size()> result {};
@@ -47,6 +49,7 @@ bool FullOnBassInstance::prepare(const instrument::PrepareSpec& next)
         return false;
     spec = next;
     voice.prepareDirect(spec.sampleRate);
+    dirtyParameters = allParameters;
     reset();
     return true;
 }
@@ -55,6 +58,41 @@ void FullOnBassInstance::reset() noexcept
 {
     voice.resetDirect();
     currentNote = currentChannel = -1;
+    sustainDown.fill(false);
+    heldNotes.fill({});
+    mostRecentNote = noHeldNote;
+    keyHeld = false;
+}
+void FullOnBassInstance::releaseAllNotes() noexcept
+{
+    sustainDown.fill(false);
+    heldNotes.fill({});
+    mostRecentNote = noHeldNote;
+    if (currentNote >= 0) voice.noteOffDirect(true);
+    currentNote = -1;
+    keyHeld = false;
+}
+void FullOnBassInstance::forgetHeldNote(std::size_t index) noexcept
+{
+    auto& note = heldNotes[index];
+    if (!note.active) return;
+    if (note.previous == noHeldNote) mostRecentNote = note.next;
+    else heldNotes[note.previous].next = note.next;
+    if (note.next != noHeldNote) heldNotes[note.next].previous = note.previous;
+    note = {};
+}
+void FullOnBassInstance::resumeMostRecentNote() noexcept
+{
+    if (mostRecentNote == noHeldNote) {
+        voice.noteOffDirect(true);
+        currentNote = -1;
+        keyHeld = false;
+        return;
+    }
+    currentChannel = static_cast<int>(mostRecentNote / 128);
+    currentNote = static_cast<int>(mostRecentNote % 128);
+    keyHeld = heldNotes[mostRecentNote].pressed;
+    voice.noteOnDirect(currentNote, heldNotes[mostRecentNote].velocity);
 }
 void FullOnBassInstance::suspend() noexcept { suspended = true; reset(); }
 void FullOnBassInstance::resume() noexcept { suspended = false; }
@@ -66,14 +104,22 @@ void FullOnBassInstance::setBypassed(bool next) noexcept
 
 bool FullOnBassInstance::setParameter(std::string_view id, float value) noexcept
 {
-    if (!std::isfinite(value)) return false;
     for (std::size_t i = 0; i < values.size(); ++i)
-        if (fullOnParameters[i].id == id) {
-            values[i] = std::clamp(value, fullOnParameters[i].minimum,
-                                  fullOnParameters[i].maximum);
-            return true;
-        }
+        if (fullOnParameters[i].id == id)
+            return setParameterByIndex(i, value);
     return false;
+}
+
+bool FullOnBassInstance::setParameterByIndex(std::size_t index, float value) noexcept
+{
+    if (index >= values.size() || !std::isfinite(value)) return false;
+    const auto clamped = std::clamp(value, fullOnParameters[index].minimum,
+                                    fullOnParameters[index].maximum);
+    if (values[index] != clamped) {
+        values[index] = clamped;
+        dirtyParameters |= 1u << index;
+    }
+    return true;
 }
 
 bool FullOnBassInstance::loadState(std::uint32_t schema,
@@ -95,6 +141,7 @@ bool FullOnBassInstance::loadState(std::uint32_t schema,
                 return false;
         }
     values = candidate;
+    dirtyParameters = allParameters;
     return true;
 }
 
@@ -115,20 +162,21 @@ bool FullOnBassInstance::saveState(std::span<std::byte> destination,
 
 void FullOnBassInstance::updateVoice() noexcept
 {
-    voice.setFilterCutoff(std::log(values[0] / 35.0f)
+    if (dirtyParameters & (1u << 0)) voice.setFilterCutoff(std::log(values[0] / 35.0f)
         / std::log(12000.0f / 35.0f));
-    voice.setFilterResonance(values[1]);
-    voice.setPitchEnvelopeAmount(values[2]);
-    voice.setPitchEnvelopeTime(values[3] * .001f);
-    voice.setAmpAttack(values[4] * .001f);
-    voice.setAmpDecay(values[5] * .001f);
-    voice.setAmpSustain(values[6]);
-    voice.setAmpRelease(values[7] * .001f);
-    voice.setDrive(values[8]);
-    voice.setFilterDrive(values[9]);
-    voice.setKeyTracking(values[10]);
-    voice.setOutputLevel(std::pow(10.0f, values[11] / 20.0f));
-    voice.setPitchEnvelopeCurve(values[12]);
+    if (dirtyParameters & (1u << 1)) voice.setFilterResonance(values[1]);
+    if (dirtyParameters & (1u << 2)) voice.setPitchEnvelopeAmount(values[2]);
+    if (dirtyParameters & (1u << 3)) voice.setPitchEnvelopeTime(values[3] * .001f);
+    if (dirtyParameters & (1u << 4)) voice.setAmpAttack(values[4] * .001f);
+    if (dirtyParameters & (1u << 5)) voice.setAmpDecay(values[5] * .001f);
+    if (dirtyParameters & (1u << 6)) voice.setAmpSustain(values[6]);
+    if (dirtyParameters & (1u << 7)) voice.setAmpRelease(values[7] * .001f);
+    if (dirtyParameters & (1u << 8)) voice.setDrive(values[8]);
+    if (dirtyParameters & (1u << 9)) voice.setFilterDrive(values[9]);
+    if (dirtyParameters & (1u << 10)) voice.setKeyTracking(values[10]);
+    if (dirtyParameters & (1u << 11)) voice.setOutputLevel(std::pow(10.0f, values[11] / 20.0f));
+    if (dirtyParameters & (1u << 12)) voice.setPitchEnvelopeCurve(values[12]);
+    dirtyParameters = 0;
 }
 
 std::uint32_t FullOnBassInstance::tailSamples() const noexcept
@@ -143,7 +191,9 @@ void FullOnBassInstance::process(const instrument::ProcessBlock& block) noexcept
         || block.outputs.size() != spec.outputChannels
         || block.midi.size() > 2048) return;
     for (auto* output : block.outputs) if (output == nullptr) return;
-    updateVoice();
+    if (dirtyParameters != 0) {
+        updateVoice();
+    }
     juce::AudioBuffer<float> audio(block.outputs.data(),
         static_cast<int>(block.outputs.size()), static_cast<int>(block.sampleCount));
     std::uint32_t cursor = 0;
@@ -162,15 +212,50 @@ void FullOnBassInstance::process(const instrument::ProcessBlock& block) noexcept
         if (type == 0x90 && event.data[2] != 0) {
             currentNote = event.data[1];
             currentChannel = event.data[0] & 0x0f;
+            const auto index = static_cast<std::size_t>(currentChannel) * 128 + event.data[1];
+            forgetHeldNote(index);
+            auto& held = heldNotes[index];
+            held.velocity = event.data[2] / 127.0f;
+            held.next = mostRecentNote;
+            held.active = held.pressed = true;
+            if (mostRecentNote != noHeldNote) heldNotes[mostRecentNote].previous = static_cast<std::uint16_t>(index);
+            mostRecentNote = static_cast<std::uint16_t>(index);
+            keyHeld = true;
             voice.noteOnDirect(currentNote, event.data[2] / 127.0f);
-        } else if ((type == 0x80 || type == 0x90)
-                   && currentNote == event.data[1]
-                   && currentChannel == (event.data[0] & 0x0f)) {
-            voice.noteOffDirect(true);
-            currentNote = -1;
-        } else if (type == 0xb0 && (event.data[1] == 120 || event.data[1] == 123)
-                   && currentChannel == (event.data[0] & 0x0f)) {
-            reset();
+        } else if (type == 0x80 || type == 0x90) {
+            const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
+            const auto index = channel * 128 + event.data[1];
+            auto& held = heldNotes[index];
+            if (!held.active || !held.pressed) continue;
+            held.pressed = false;
+            held.sustained = sustainDown[channel];
+            if (!held.sustained) forgetHeldNote(index);
+            if (currentNote == event.data[1] && currentChannel == static_cast<int>(channel)) {
+                keyHeld = false;
+                if (!sustainDown[channel]) resumeMostRecentNote();
+            }
+        } else if (type == 0xb0 && event.data[1] == 64) {
+            const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
+            sustainDown[channel] = event.data[2] >= 64;
+            if (!sustainDown[channel]) {
+                for (std::size_t note = 0; note < 128; ++note) {
+                    auto& held = heldNotes[channel * 128 + note];
+                    if (!held.pressed) forgetHeldNote(channel * 128 + note);
+                }
+                if (currentChannel == static_cast<int>(channel)
+                    && currentNote >= 0 && !keyHeld) resumeMostRecentNote();
+            }
+        } else if (type == 0xb0 && (event.data[1] == 120 || event.data[1] == 123)) {
+            const auto channel = static_cast<std::size_t>(event.data[0] & 0x0f);
+            sustainDown[channel] = false;
+            for (std::size_t note = 0; note < 128; ++note) forgetHeldNote(channel * 128 + note);
+            if (currentChannel == static_cast<int>(channel)) {
+                if (event.data[1] == 120) {
+                    voice.resetDirect();
+                }
+                if (currentNote >= 0) resumeMostRecentNote();
+                else if (event.data[1] == 120) { currentChannel = -1; keyHeld = false; }
+            }
         }
     }
     if (cursor < block.sampleCount)

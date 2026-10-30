@@ -1,0 +1,28 @@
+{
+  "voxSoundLayout": 1,
+  "sections": [
+    {"title": "CHARACTER", "controls": [
+      {"parameter": "osc.drive", "kind": "knob", "label": "OSCILLATOR DRIVE"}
+    ]},
+    {"title": "PITCH", "controls": [
+      {"parameter": "pitch.amount", "kind": "knob", "label": "AMOUNT"},
+      {"parameter": "pitch.time", "kind": "knob", "label": "TIME"},
+      {"parameter": "pitch.curve", "kind": "knob", "label": "CURVE"}
+    ]},
+    {"title": "FILTER", "controls": [
+      {"parameter": "filter.cutoff", "kind": "knob", "label": "CUTOFF"},
+      {"parameter": "filter.resonance", "kind": "knob", "label": "RESONANCE"},
+      {"parameter": "filter.drive", "kind": "knob", "label": "DRIVE"},
+      {"parameter": "filter.keytracking", "kind": "knob", "label": "KEY TRACKING"}
+    ]},
+    {"title": "AMPLITUDE", "controls": [
+      {"parameter": "amp.attack", "kind": "knob", "label": "ATTACK"},
+      {"parameter": "amp.decay", "kind": "knob", "label": "DECAY"},
+      {"parameter": "amp.sustain", "kind": "knob", "label": "SUSTAIN"},
+      {"parameter": "amp.release", "kind": "knob", "label": "RELEASE"}
+    ]},
+    {"title": "OUTPUT", "controls": [
+      {"parameter": "output.gain", "kind": "knob", "label": "GAIN"}
+    ]}
+  ]
+}
