@@ -53,6 +53,7 @@ struct VoxInstanceT {
   int failProcess, failReset; /* one-shot injected faults, for host tests */
   uint32_t processCalls, resetCalls; /* entry counters, for host tests */
   uint64_t patternGeneration; /* last snapshot seen in process, for host tests */
+  uint32_t noteMode;          /* note output this instance writes, for host tests */
   uint32_t patternChecksum;
 };
 
@@ -103,6 +104,41 @@ VOX_EXPORT uint64_t VOX_CALL voxTestPatternSeen(uint32_t slotIndex, uint32_t *ch
     }
   *checksum = 0;
   return 0;
+}
+
+/* Test hook (not part of the ABI): what instances for Rack slot `slotIndex`
+ * write to the host's note output, new and live: 0 nothing, 1 two valid
+ * notes, 2 note 200, 3 velocity 0, 4 unknown flag, 5 lane 2 of 2, 6 out of
+ * order, 7 offset at the block end, 8 count above the capacity. */
+static uint32_t noteModes[32];
+VOX_EXPORT void VOX_CALL voxTestSetNoteMode(uint32_t slotIndex, uint32_t mode) {
+  if (slotIndex < 32)
+    noteModes[slotIndex] = mode;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex)
+      live[i]->noteMode = mode;
+}
+
+static void writeNotes(const struct VoxInstanceT *s, const VoxProcessContextV2 *c) {
+  if (c->structSize < offsetof(VoxProcessContextV2, noteOutput) + sizeof(void *) ||
+      c->noteOutput == NULL || c->noteOutput->events == NULL || c->noteOutput->capacity < 2)
+    return;
+  VoxNoteOutputV2 *out = c->noteOutput;
+  VoxNoteEventV2 a = {1, 60, 100, 0, 0}, b = {5, 64, 90, 1, VOX_NOTE_EVENT_ACCENT};
+  switch (s->noteMode) {
+  case 2: a.note = 200; break;
+  case 3: b.velocity = 0; break;
+  case 4: b.flags = 0x80; break;
+  case 5: b.lane = 2; break;
+  case 6: a.sampleOffset = 7; break;
+  case 7: b.sampleOffset = c->numSamples; break;
+  default: break;
+  }
+  if (s->noteMode == 0)
+    return;
+  memcpy((uint8_t *)out->events, &a, sizeof(a));
+  memcpy((uint8_t *)out->events + out->stride, &b, sizeof(b));
+  out->count = s->noteMode == 8 ? out->capacity + 1 : 2;
 }
 
 /* Pattern content: two lanes on notes 60/64, velocity + accent, one factory
@@ -182,6 +218,7 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
     instance->values[i] = parameters[i].defaultValue;
   instance->note = -1;
   instance->slotIndex = params->slotIndex;
+  instance->noteMode = params->slotIndex < 32 ? noteModes[params->slotIndex] : 0;
   for (int i = 0; i < 64; ++i)
     if (live[i] == NULL) {
       live[i] = instance;
@@ -353,6 +390,7 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   }
   if (c->releaseFlags & (VOX_RELEASE_ALL_NOTES_AT_END | VOX_RELEASE_ALL_SOUND_AT_END))
     s->note = -1;
+  writeNotes(s, c);
   return VOX_OK;
 }
 
