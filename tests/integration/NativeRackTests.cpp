@@ -775,13 +775,45 @@ void routedNotesPolicy() {
   check(routedKickRun(11)[20] == 0.0f && routedKickRun(12)[20] == 0.0f,
         "an undefined report is voided: routed kicks duck as before");
   check(routedKickRun(0, true)[20] != 0.0f, "a muted source ducks nothing");
-  // A latched process fault silences the source, routed MIDI included: its
-  // routed kick ducks nothing, in the fault block and every block after it.
-  const auto faulted = routedKickRun(0, false, true);
-  bool ducked = false;
-  for (std::size_t b = 0; b < faulted.size() / blockSize; ++b)
-    ducked = ducked || faulted[b * blockSize + 20] == 0.0f;
-  check(!ducked, "a faulted source's routed kick ducks nothing");
+  // A process fault in the same block as the routed kick latches the source
+  // silent: from that block on the output is bit-identical to a muted source
+  // (no duck at all), in the fault block and every quarantined block after it.
+  check(routedKickRun(0, false, true) == routedKickRun(0, true),
+        "a faulted source's routed kick ducks nothing (bit-identical to a muted source)");
+  // Controller-side recovery: a successful reprepare restores the policy.
+  setNoteMode(6, 0);
+  auto p = makeProcessor(true);
+  const auto source = loadTone(*p, 6), target = loadTone(*p, 7);
+  for (const auto &[id, plain] : std::initializer_list<std::pair<const char *, float>>{
+           {"rack.duck.source", static_cast<float>(source + 1)}, {"rack.duck.note", 62.0f},
+           {"rack.duck.attack", 0.0f}, {"rack.duck.hold", 0.5f}, {"rack.duck.release", 1.0f},
+           {"slot08.duck.depth", 1.0f}}) {
+    auto *parameter = p->parameters().getParameter(id);
+    check(parameter != nullptr, std::string("routing parameter ") + id);
+    parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+  }
+  setPlain(*p, source, 0, 0.0f);
+  const int sourceChannel = channelOf(*p, source), targetChannel = channelOf(*p, target);
+  auto block = [&](bool hold, bool kick) {
+    juce::AudioBuffer<float> audio(2, blockSize);
+    juce::MidiBuffer midi;
+    if (hold)
+      midi.addEvent(juce::MidiMessage::noteOn(targetChannel, 64, 0.9f), 0);
+    if (kick)
+      midi.addEvent(juce::MidiMessage::noteOn(sourceChannel, 62, 0.9f), 20);
+    p->processBlock(audio, midi);
+    return std::vector<float>(audio.getReadPointer(0), audio.getReadPointer(0) + blockSize);
+  };
+  block(true, false);
+  failNext(6, failProcess);
+  check(block(false, true)[20] != 0.0f, "fault block: no duck");
+  check(block(false, true)[20] != 0.0f, "quarantined block: no duck");
+  p->releaseResources();
+  p->prepareToPlay(48000.0, blockSize);
+  block(true, false);
+  const auto recovered = block(false, true);
+  check(recovered[20] == 0.0f && recovered[19] != 0.0f,
+        "after a successful reprepare the routed kick ducks again");
 }
 
 void malformedNotesDuckNothing() {
