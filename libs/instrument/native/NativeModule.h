@@ -79,9 +79,7 @@ makeProvider(std::shared_ptr<NativeModule> module, std::string publisherId = {})
 [[nodiscard]] std::uint64_t totalModuleFaults() noexcept;
 // Blocks whose module-written note output failed validation and was voided.
 [[nodiscard]] std::uint64_t totalInvalidNoteReports() noexcept;
-// VoxNoteOutputV2.dropped value the host writes when it voids a block's
-// note output (malformed records); the count is then 0.
-inline constexpr std::uint32_t voidedNoteOutput = 0xFFFFFFFFu;
+using instrument::voidedNoteOutput;
 
 // Providers found by a loader, plus its diagnostics (never thrown). The Rack's
 // only production loader is vins::loadInstalled() (instrument/vins).

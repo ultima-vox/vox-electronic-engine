@@ -208,6 +208,25 @@ struct ProcessBlock {
     VoxNoteOutputV2* noteOutput {};
 };
 
+// VoxNoteOutputV2.dropped value the host writes when it voids a block's
+// note output (malformed records); the count is then 0. Any other non-zero
+// value is the module's own count of notes beyond the buffer.
+inline constexpr std::uint32_t voidedNoteOutput = 0xFFFFFFFFu;
+
+// Last fault an instance latched (it then stays silent until the controller
+// reprepares it). Kept after recovery as the last fault reason.
+enum class InstanceFault : std::uint8_t { none, processFailed, resetFailed };
+
+// Bounded runtime health of one instance, readable from the controller thread
+// while the audio thread runs (atomics only, never a lock or allocation).
+struct InstanceHealth {
+    bool faulted {};
+    InstanceFault lastFault { InstanceFault::none };
+    std::uint64_t faults {};             // latched faults since creation
+    std::uint64_t midiOverflowBlocks {}; // routed MIDI beyond the prepared budget
+    std::uint64_t invalidNoteBlocks {};  // module note output voided as malformed
+};
+
 class InstrumentInstance {
 public:
     virtual ~InstrumentInstance() = default;
@@ -230,6 +249,9 @@ public:
     // (failed, faulted, suspended, unprepared or bypassed), so nothing
     // routed to it sounded. Instances that always render report false.
     virtual bool blockSilenced() const noexcept { return false; }
+
+    // Any thread. Instances without runtime faults report nothing.
+    virtual InstanceHealth health() const noexcept { return {}; }
 };
 
 inline constexpr std::uint32_t noSlotIndex = 0xffffffffu;

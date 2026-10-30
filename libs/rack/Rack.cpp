@@ -396,10 +396,15 @@ bool Rack::replaceState(
     return false;
   std::array<SlotRuntime, instrument::maxSlots> preparedRuntime;
   std::array<RuntimeSlotState, instrument::maxSlots> preparedState;
+  // Per-slot reasons, including why an accepted slot stays unresolved.
+  std::array<std::string, instrument::maxSlots> slotErrors;
   for (std::size_t i = 0; i < replacement.size(); ++i)
     if (!buildSlot(i, replacement[i], resources, preparedRuntime[i],
-                   preparedState[i], diagnostic))
+                   preparedState[i], slotErrors[i])) {
+      diagnostic = slotErrors[i];
+      lastError_[i] = diagnostic;
       return false;
+    }
   for (std::size_t i = 0; i < replacement.size(); ++i)
     if (const auto *descriptor = preparedRuntime[i].descriptor) {
       canonicalizeResolvedDirect(replacement[i], *descriptor);
@@ -437,7 +442,10 @@ bool Rack::replaceState(
   }
   for (auto &dropped : droppedMidiEvents_)
     dropped.store(0, std::memory_order_relaxed);
+  for (auto &counters : counters_)
+    counters.clear();
   endExclusive();
+  lastError_ = std::move(slotErrors);
   return true;
 } catch (...) {
   diagnostic = "rack state preparation failed";
@@ -484,8 +492,14 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
             }
     SlotRuntime prepared;
     RuntimeSlotState preparedState;
-    if (!buildSlot(index, replacement, resources, prepared, preparedState,
-                   diagnostic)) return false;
+    std::string why;
+    const bool built = buildSlot(index, replacement, resources, prepared,
+                                 preparedState, why);
+    diagnostic = why;
+    if (!built) {
+      lastError_[index] = std::move(why);
+      return false;
+    }
     if (prepared.descriptor) {
       canonicalizeResolvedDirect(replacement, *prepared.descriptor);
       replacement.resolvedProviderId = prepared.descriptor->providerId;
@@ -512,7 +526,9 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
+    counters_[index].clear();
     endExclusive();
+    lastError_[index] = std::move(why); // empty when the instrument resolved
     return true;
 }
 
@@ -956,6 +972,9 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     auto &slot = processing_->runtime[i];
     droppedMidiEvents_[i].store(processing_->routed[i].dropped,
                                 std::memory_order_relaxed);
+    if (processing_->routed[i].dropped != 0)
+      counters_[i].droppedMidiEvents.fetch_add(processing_->routed[i].dropped,
+                                               std::memory_order_relaxed);
     if (!slot.instance)
       continue;
     for (std::size_t channel = 0; channel < outputs.size(); ++channel)
@@ -980,8 +999,10 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     }
     applyModulation(slot, state_[i], controls[i], processing_->routed[i],
                     sampleCount, spec_.sampleRate, bpm, ppq);
-    slot.instance->setBypassed(!controls[i].enabled || controls[i].mute ||
-                               (anySolo && !controls[i].solo));
+    const bool bypassed =
+        !controls[i].enabled || controls[i].mute || (anySolo && !controls[i].solo);
+    slot.instance->setBypassed(bypassed);
+    counters_[i].bypassed.store(bypassed, std::memory_order_relaxed);
     // The newest published pattern snapshot, held until the next block.
     VoxPatternV2 patternView{};
     const VoxPatternV2 *patternSnapshot = nullptr;
@@ -1001,6 +1022,9 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             patternSnapshot,
                             patternGeneration,
                             slot.patterns ? &slot.noteOutput : nullptr});
+    if (slot.patterns && slot.noteOutput.dropped != 0 &&
+        slot.noteOutput.dropped != instrument::voidedNoteOutput)
+      counters_[i].noteOutputOverflowBlocks.fetch_add(1, std::memory_order_relaxed);
   }
   // Pass 2: the duck envelope of this block, from the kick source's routed
   // MIDI and its own generated notes of this same block. Render order (the
@@ -1108,6 +1132,36 @@ std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(
         // DSP here would race process() or force host autosave to gate audio.
     }
     return snapshot;
+}
+
+std::array<Rack::SlotDiagnostics, instrument::maxSlots> Rack::diagnostics() const
+{
+    const std::scoped_lock persistentLock(persistentStateMutex_);
+    std::array<SlotDiagnostics, instrument::maxSlots> out;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        auto &d = out[i];
+        const auto &slot = state_[i];
+        const auto &runtime = processing_->runtime[i];
+        d.slotId = slot.slotId;
+        d.instrumentId = slot.instrumentId;
+        d.publisherId = slot.publisherId;
+        d.instrumentVersion = slot.instrumentVersion;
+        d.resolution = runtimeState_[i].resolution;
+        if (runtime.descriptor != nullptr)
+            d.name = runtime.descriptor->name;
+        // The instance stays installed while the mutex is held: every swap
+        // happens under it. health() reads atomics only.
+        d.active = runtime.instance != nullptr;
+        if (runtime.instance)
+            d.health = runtime.instance->health();
+        d.bypassed = counters_[i].bypassed.load(std::memory_order_relaxed);
+        d.droppedMidiEvents = droppedMidiEvents_[i].load(std::memory_order_relaxed);
+        d.droppedMidiEventsTotal = counters_[i].droppedMidiEvents.load(std::memory_order_relaxed);
+        d.noteOutputOverflowBlocks =
+            counters_[i].noteOutputOverflowBlocks.load(std::memory_order_relaxed);
+        d.lastError = lastError_[i];
+    }
+    return out;
 }
 
 std::array<RuntimeSlotState, instrument::maxSlots> Rack::runtimeState() const noexcept
