@@ -87,7 +87,7 @@ count as triggers; only its generated notes do.
   block boundaries, so a mode switch takes effect on the next block. A module
   that sees a mid-block change of what it admits reports `MAY_PLAY`.
 
-**What clears the envelope:** mute, disable or solo-exclusion of the source, a missing source, and source or note changes. A silent source ducks nothing, and the source itself is exempt from ducking.
+**What clears the envelope:** mute, disable or solo-exclusion of the source, a missing source, a source whose adapter silenced the block (failed, latched-faulted, suspended or unprepared; `InstrumentInstance::blockSilenced`), and source or note changes. A silent source ducks nothing, and the source itself is exempt from ducking.
 
 **Same-block, two-pass processing.** The Rack renders every slot into its own buffer first. It then builds the block's envelope from the routed MIDI and the source's generated notes, and only then mixes. As a result:
 - an internal kick at sample *k* ducks its targets at *k*, whether the source slot comes before or after them;

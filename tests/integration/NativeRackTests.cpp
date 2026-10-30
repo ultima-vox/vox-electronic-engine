@@ -726,7 +726,8 @@ std::vector<float> duckRun(std::uint32_t noteMode) {
 // Routed kick NoteOn (note 62, not one the module generates) on the source's
 // channel at sample 20 of every block: it ducks unless the source validly
 // reports that its routed notes did not sound.
-std::vector<float> routedKickRun(std::uint32_t noteMode, bool muteSource = false) {
+std::vector<float> routedKickRun(std::uint32_t noteMode, bool muteSource = false,
+                                 bool faultSource = false) {
   setNoteMode(6, noteMode);
   auto p = makeProcessor(true);
   const auto source = loadTone(*p, 6), target = loadTone(*p, 7);
@@ -754,6 +755,8 @@ std::vector<float> routedKickRun(std::uint32_t noteMode, bool muteSource = false
       midi.addEvent(juce::MidiMessage::noteOn(targetChannel, 64, 0.9f), 0);
     if (b > 0)
       midi.addEvent(juce::MidiMessage::noteOn(sourceChannel, 62, 0.9f), 20);
+    if (b == 1 && faultSource)
+      failNext(6, failProcess); // latched: the source renders nothing from here on
     audio.clear();
     p->processBlock(audio, midi);
     if (b > 0)
@@ -772,6 +775,13 @@ void routedNotesPolicy() {
   check(routedKickRun(11)[20] == 0.0f && routedKickRun(12)[20] == 0.0f,
         "an undefined report is voided: routed kicks duck as before");
   check(routedKickRun(0, true)[20] != 0.0f, "a muted source ducks nothing");
+  // A latched process fault silences the source, routed MIDI included: its
+  // routed kick ducks nothing, in the fault block and every block after it.
+  const auto faulted = routedKickRun(0, false, true);
+  bool ducked = false;
+  for (std::size_t b = 0; b < faulted.size() / blockSize; ++b)
+    ducked = ducked || faulted[b * blockSize + 20] == 0.0f;
+  check(!ducked, "a faulted source's routed kick ducks nothing");
 }
 
 void malformedNotesDuckNothing() {

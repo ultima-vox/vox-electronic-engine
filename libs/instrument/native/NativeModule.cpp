@@ -275,6 +275,7 @@ public:
     hint_ = 0;
     if (block.noteOutput != nullptr) // a silent or failed block generates nothing
       clearNoteOutput(*block.noteOutput);
+    silenced_ = true;
     if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
         block.sampleCount > maximumBlock_ ||
         block.outputs.size() != outputChannels_) {
@@ -323,6 +324,7 @@ public:
                                       block.patternGeneration,
                                       block.noteOutput};
     const bool ok = table_->process(handle_, &context) == VOX_OK;
+    silenced_ = !ok;
     if (!ok) {
       fault();
       silence(block);
@@ -367,6 +369,7 @@ public:
     return descriptor_.budget.maxLatencySamples;
   }
   std::uint32_t tailSamples() const noexcept override { return descriptor_.budget.maxTailSamples; }
+  bool blockSilenced() const noexcept override { return silenced_; }
 
 private:
   // Latched until the next successful prepare; never calls the module again
@@ -419,6 +422,7 @@ private:
   double predictedPpq_{};
   std::uint64_t samplePosition_{};
   std::atomic<bool> faulted_{};
+  bool silenced_{}; // audio thread: the last block was replaced by silence
   // Lanes a reported note may name; 0 = no pattern, so no notes.
   std::uint32_t noteLanes_{descriptor_.patternContent ? descriptor_.patternContent->caps.laneCount
                                                       : 0u};
