@@ -6,7 +6,7 @@
 //   vox_vins_pack manifest <manifest.json> key=value... member=<name>=<file>...
 //     keys: id, version, name, vendor, kind (graph|native), instrument
 //     (repeatable), graph (member), module (<platform>=<member>), publisher
-//     (key id; native only)
+//     (key id; native only), ui (<instrument>=<layout member>, repeatable)
 //   vox_vins_pack zip <out.vins> <manifest.json> [sig=<manifest.sig>] member=<name>=<file>...
 //   vox_vins_pack keyid <modulus file from `openssl rsa -modulus -noout`>
 #include "instrument/vins/VinsTrust.h"
@@ -65,7 +65,7 @@ std::vector<std::pair<std::string, std::string>> memberArgs(int argc, char **arg
 
 int manifest(int argc, char **argv) {
   std::map<std::string, std::string> keys;
-  std::vector<std::string> instruments, modules;
+  std::vector<std::string> instruments, modules, ui;
   for (int i = 3; i < argc; ++i) {
     const std::string a = argv[i];
     const auto eq = a.find('=');
@@ -76,6 +76,8 @@ int manifest(int argc, char **argv) {
       instruments.push_back(v);
     else if (k == "module")
       modules.push_back(v);
+    else if (k == "ui")
+      ui.push_back(v);
     else
       keys[k] = v;
   }
@@ -108,6 +110,17 @@ int manifest(int argc, char **argv) {
            jsonString(modules[i].substr(eq + 1));
     }
     j += "}\n  },\n";
+  }
+  if (!ui.empty()) {
+    j += "  \"ui\": {";
+    for (std::size_t i = 0; i < ui.size(); ++i) {
+      const auto eq = ui[i].find('=');
+      if (eq == std::string::npos)
+        throw std::runtime_error("ui needs <instrument>=<member>: " + ui[i]);
+      j += (i ? ", " : "") + jsonString(ui[i].substr(0, eq)) + ": " +
+           jsonString(ui[i].substr(eq + 1));
+    }
+    j += "},\n";
   }
   j += "  \"files\": {";
   std::size_t n = 0;

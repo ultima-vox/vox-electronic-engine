@@ -1,5 +1,6 @@
 #pragma once
 #include "instrument/InstrumentAbi.h"
+#include "instrument/SoundLayout.h"
 #include "pattern/Pattern.h"
 #include <array>
 #include <cstdint>
@@ -124,6 +125,9 @@ struct InstrumentDescriptor {
     // Oldest instrumentVersion whose saved state this version may upgrade by
     // appending new parameters; 0 = no upgrade (only the same version loads).
     std::uint32_t upgradeFromVersion {};
+    // Declarative SOUND page shipped by the package, validated against this
+    // descriptor at load. Null: the host shows its generic control list.
+    std::shared_ptr<const SoundLayout> soundLayout;
 };
 
 struct ParameterValue {

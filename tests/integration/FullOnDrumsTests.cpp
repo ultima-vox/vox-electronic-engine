@@ -1097,6 +1097,109 @@ juce::MouseEvent mouse(juce::Component &target, juce::Point<int> at, bool shift 
           juce::Time::getCurrentTime(), 1, dragged};
 }
 
+// The kit's declarative SOUND layout (#82): shipped in the signed package,
+// rendered on the SOUND page as exactly the kit's 59 real controls.
+juce::Component *findShown(juce::Component &root, const juce::String &name) {
+  for (auto *child : root.getChildren()) {
+    if (!child->isVisible())
+      continue;
+    if (child->getName() == name)
+      return child;
+    if (auto *found = findShown(*child, name))
+      return found;
+  }
+  return nullptr;
+}
+
+bool showsText(juce::Component &root, const juce::String &text) {
+  for (auto *child : root.getChildren()) {
+    if (!child->isVisible())
+      continue;
+    if (auto *label = dynamic_cast<juce::Label *>(child); label != nullptr && label->getText() == text)
+      return true;
+    if (showsText(*child, text))
+      return true;
+  }
+  return false;
+}
+
+void editorSoundLayout() {
+  auto r = makeRig(instrumentsDir, 3);
+  const auto *descriptor = r.p->instrumentRack().descriptor(r.slot);
+  check(descriptor != nullptr && descriptor->soundLayout != nullptr, "the kit ships a sound layout");
+  const auto &layout = *descriptor->soundLayout;
+  std::size_t controls = 0;
+  for (const auto &section : layout.sections)
+    controls += section.controls.size();
+  check(layout.sections.size() == 10 && layout.sections.front().title == "KICK" &&
+            layout.sections.back().title == "SEQUENCER" && controls == descriptor->parameters.size() &&
+            controls == 59,
+        "ten sections hold all 59 kit parameters");
+  juce::String demoDiagnostic;
+  check(r.p->loadSlotInstrument(4, "com.ultimavox.demo-synth", demoDiagnostic),
+        "Demo Synth loads next to the kit: " + demoDiagnostic.toStdString());
+  check(r.p->instrumentRack().descriptor(4)->soundLayout == nullptr, "the Demo Synth has no layout");
+
+  std::unique_ptr<juce::AudioProcessorEditor> base(r.p->createEditor());
+  auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+  check(editor != nullptr, "editor opens");
+  editor->setSize(1500, 920);
+  r.p->selectSlot(r.slot);
+  editor->showPageForTesting(ui::MainNavigation::Page::sound);
+  editor->refreshForTesting();
+  check(findShown(*editor, "rack.sound.macro.1") == nullptr,
+        "the layout replaces the SOUND macros for the kit");
+  for (const auto &section : layout.sections)
+    check(showsText(*editor, juce::String(section.title)), "section " + section.title + " is shown");
+  int lastY = -1;
+  for (const auto &section : layout.sections)
+    for (const auto &control : section.controls) {
+      const auto parameter = std::find_if(descriptor->parameters.begin(), descriptor->parameters.end(),
+                                          [&](const auto &p) { return p.id == control.parameter; });
+      const auto id = instrument::hostparams::poolId(r.slot, static_cast<std::size_t>(parameter->poolIndex));
+      auto *component = findShown(*editor, id);
+      const bool typed =
+          component != nullptr &&
+          (control.kind == instrument::SoundControlKind::knob ? dynamic_cast<juce::Slider *>(component) != nullptr
+           : control.kind == instrument::SoundControlKind::selector
+               ? dynamic_cast<juce::ComboBox *>(component) != nullptr
+               : dynamic_cast<juce::ToggleButton *>(component) != nullptr);
+      check(typed, control.parameter + " is one " + (component ? "matching" : "visible") + " control bound to " +
+                       id);
+      check(component->getBounds().getCentreY() >= lastY, control.parameter + " follows the layout order");
+      lastY = component->getBounds().getCentreY();
+    }
+  // A control drives its own parameter through the slot's pool endpoint.
+  auto *decay = dynamic_cast<juce::Slider *>(
+      findShown(*editor, instrument::hostparams::poolId(r.slot, 2)));
+  auto *parameter = r.p->parameters().getParameter(instrument::hostparams::poolId(r.slot, 2));
+  check(decay != nullptr && parameter != nullptr, "kick decay control and endpoint exist");
+  const auto before = parameter->getValue();
+  decay->setValue(decay->getMaximum(), juce::sendNotificationSync);
+  check(parameter->getValue() > before + 0.1f, "turning KICK DECAY moves the kick decay parameter");
+
+  // Visual Gate: the actual editor's SOUND page (CI artifact for the owner's
+  // review; not an acceptance claim).
+  if (const auto *path = std::getenv("VOX_DRUMS_SOUND_SNAPSHOT")) {
+    decay->setValue(parameter->getDefaultValue() * (decay->getMaximum() - decay->getMinimum()) +
+                        decay->getMinimum(),
+                    juce::sendNotificationSync);
+    const auto image = editor->createComponentSnapshot(editor->getLocalBounds());
+    juce::File file(path);
+    file.deleteFile();
+    juce::FileOutputStream output(file);
+    juce::PNGImageFormat png;
+    check(output.openedOk() && png.writeImageToStream(image, output), "sound layout snapshot written");
+  }
+
+  // An instrument without a layout keeps the macros on its SOUND page.
+  r.p->selectSlot(4);
+  editor->refreshForTesting();
+  check(findShown(*editor, "rack.sound.macro.1") != nullptr &&
+            findShown(*editor, instrument::hostparams::poolId(4, 0)) == nullptr,
+        "without a layout the SOUND page shows the macros, not a generated panel");
+}
+
 void editorDrumGrid() {
   auto r = makeRig(instrumentsDir, 3);
   r.p->selectSlot(r.slot);
@@ -1467,6 +1570,7 @@ int main(int argc, char **argv) {
   exportMatchesPlayback();
   internalKickDucksInTheSameBlock();
   editorDrumGrid();
+  editorSoundLayout();
   exportEndsAfterTheLastNote();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
