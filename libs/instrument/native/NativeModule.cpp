@@ -129,6 +129,34 @@ std::atomic<std::uint64_t> &midiOverflows() noexcept {
   return count;
 }
 
+std::atomic<std::uint64_t> &invalidNoteReports() noexcept {
+  static std::atomic<std::uint64_t> count{0};
+  return count;
+}
+
+// Module-written note output, checked before the Rack may use any of it: the
+// count within the buffer, and every record inside the block, in order, with
+// a MIDI note, a 1..127 velocity, a declared lane and known flags. Anything
+// else voids the whole block (fail closed) and is counted.
+bool validNoteOutput(const VoxNoteOutputV2 &out, std::uint32_t sampleCount,
+                     std::uint32_t laneLimit) noexcept {
+  if (out.count > out.capacity)
+    return false;
+  std::uint32_t previous = 0;
+  for (std::uint32_t i = 0; i < out.count; ++i) {
+    VoxNoteEventV2 e;
+    std::memcpy(&e, reinterpret_cast<const std::uint8_t *>(out.events) +
+                        static_cast<std::size_t>(i) * out.stride,
+                sizeof e);
+    if (e.sampleOffset >= sampleCount || e.sampleOffset < previous || e.note > 127 ||
+        e.velocity < 1 || e.velocity > 127 || e.lane >= laneLimit ||
+        (e.flags & ~VOX_NOTE_EVENT_KNOWN_FLAGS) != 0)
+      return false;
+    previous = e.sampleOffset;
+  }
+  return true;
+}
+
 std::atomic<std::uint64_t> &moduleFaults() noexcept {
   static std::atomic<std::uint64_t> count{};
   return count;
@@ -230,6 +258,8 @@ public:
 
   void process(const ProcessBlock &block) noexcept override {
     hint_ = 0;
+    if (block.noteOutput != nullptr) // a silent or failed block generates nothing
+      block.noteOutput->count = block.noteOutput->dropped = 0;
     if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
         block.sampleCount > maximumBlock_ ||
         block.outputs.size() != outputChannels_) {
@@ -273,12 +303,26 @@ public:
                                       overflow ? VOX_RELEASE_ALL_SOUND_AT_END : 0u,
                                       0,
                                       samplePosition_,
-                                      &transport_};
-    if (table_->process(handle_, &context) != VOX_OK) {
+                                      &transport_,
+                                      block.pattern,
+                                      block.patternGeneration,
+                                      block.noteOutput};
+    const bool ok = table_->process(handle_, &context) == VOX_OK;
+    if (!ok) {
       fault();
       silence(block);
     } else if (bypassed_) {
       silence(block);
+    }
+    if (auto *out = block.noteOutput) {
+      // A failed or silenced block plays nothing, so it reports nothing.
+      if (!ok || bypassed_) {
+        out->count = out->dropped = 0;
+      } else if (!validNoteOutput(*out, block.sampleCount, noteLanes_)) {
+        out->count = 0;
+        out->dropped = voidedNoteOutput;
+        invalidNoteReports().fetch_add(1, std::memory_order_relaxed);
+      }
     }
     samplePosition_ += block.sampleCount;
   }
@@ -360,6 +404,9 @@ private:
   double predictedPpq_{};
   std::uint64_t samplePosition_{};
   std::atomic<bool> faulted_{};
+  // Lanes a reported note may name; 0 = no pattern, so no notes.
+  std::uint32_t noteLanes_{descriptor_.patternContent ? descriptor_.patternContent->caps.laneCount
+                                                      : 0u};
   std::size_t hint_{};
   std::uint32_t maximumBlock_{};
   std::uint32_t outputChannels_{};
@@ -369,13 +416,18 @@ private:
 
 class Provider final : public InstrumentProvider {
 public:
-  explicit Provider(std::shared_ptr<NativeModule> module) : module_(std::move(module)) {}
+  Provider(std::shared_ptr<NativeModule> module, std::string publisherId)
+      : module_(std::move(module)),
+        descriptors_(module_->descriptors().begin(), module_->descriptors().end()) {
+    for (auto &descriptor : descriptors_)
+      descriptor.publisherId = publisherId;
+  }
   std::span<const InstrumentDescriptor> descriptors() const noexcept override {
-    return module_->descriptors();
+    return descriptors_;
   }
   std::unique_ptr<InstrumentInstance> create(std::string_view instrumentId,
                                              const CreateContext &context) override {
-    for (const auto &descriptor : module_->descriptors())
+    for (const auto &descriptor : descriptors_)
       if (descriptor.id == instrumentId) {
         const auto slot =
             context.slotIndex < maxSlots ? context.slotIndex : VOX_SLOT_INDEX_NONE;
@@ -391,11 +443,16 @@ public:
 
 private:
   std::shared_ptr<NativeModule> module_;
+  std::vector<InstrumentDescriptor> descriptors_; // with the package identity
 };
 } // namespace
 
 std::uint64_t totalMidiOverflows() noexcept {
   return midiOverflows().load(std::memory_order_relaxed);
+}
+
+std::uint64_t totalInvalidNoteReports() noexcept {
+  return invalidNoteReports().load(std::memory_order_relaxed);
 }
 
 std::uint64_t totalModuleFaults() noexcept {
@@ -406,7 +463,12 @@ bool validModuleTable(const VoxModuleV2 *m) noexcept {
   return m != nullptr && aligned(m) && versioned(m->structSize, m->version, sizeof(VoxModuleV2)) &&
          m->instrumentCount >= 1 && m->instrumentCount <= maxInstrumentsPerModule &&
          m->getInstrument && m->create && m->destroy && m->prepare && m->setAllParameters &&
-         m->reset && m->process && m->saveState && m->loadState && m->shutdown;
+         m->reset && m->process && m->saveState && m->loadState && m->shutdown &&
+         m->editor == nullptr &&
+         (m->content == nullptr ||
+          (aligned(m->content) &&
+           versioned(m->content->structSize, m->content->version, sizeof(VoxContentApiV2)) &&
+           m->content->getPatternCaps && m->content->getFactoryPattern));
 }
 
 bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &out,
@@ -422,7 +484,8 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
       d->parameterStride % alignof(VoxParameterDescriptorV2) != 0 || d->maxVoices == 0 ||
       d->maxMidiEventsPerBlock < 16 || d->maxMidiEventsPerBlock > 2048 ||
       d->outputChannels == 0 || d->outputChannels > 2 || d->instrumentVersion == 0 ||
-      d->contentVersion == 0 || d->stateVersion == 0)
+      d->contentVersion == 0 || d->stateVersion == 0 ||
+      d->upgradeFromVersion >= d->instrumentVersion)
     return false;
   InstrumentDescriptor copy;
   copy.id = d->id;
@@ -432,6 +495,7 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
   copy.instrumentVersion = d->instrumentVersion;
   copy.contentVersion = d->contentVersion;
   copy.stateVersion = d->stateVersion;
+  copy.upgradeFromVersion = d->upgradeFromVersion;
   copy.capabilities = Capability::notes | Capability::standardEditor;
   copy.budget.maxVoices = d->maxVoices;
   copy.budget.maxMidiEventsPerBlock = d->maxMidiEventsPerBlock;
@@ -458,6 +522,51 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
   }
   out = std::move(copy);
   diagnostic.clear();
+  return true;
+}
+
+bool importContent(const VoxContentApiV2 *content, InstrumentDescriptor &descriptor,
+                   std::string &diagnostic) {
+  descriptor.patternContent.reset();
+  if (content == nullptr)
+    return true;
+  const VoxPatternCapsV2 *raw = nullptr;
+  if (content->getPatternCaps(descriptor.id.c_str(), &raw) != VOX_OK) {
+    diagnostic = "native pattern caps query failed";
+    return false;
+  }
+  if (raw == nullptr)
+    return true; // this instrument has no pattern
+  auto imported = std::make_shared<pattern::Content>();
+  std::string why;
+  if (!aligned(raw) || !pattern::importCaps(raw, imported->caps, why)) {
+    diagnostic = "invalid native pattern caps: " + why;
+    return false;
+  }
+  auto buffer = std::make_unique<pattern::Pattern>();
+  for (std::uint32_t i = 0; i < raw->factoryPatternCount; ++i) {
+    buffer->cells.fill(pattern::defaultStep());
+    auto view = buffer->view();
+    view.laneCount = view.stepsPerBar = view.barCount = 0;
+    const char *name = nullptr;
+    auto stored = std::make_shared<pattern::Pattern>();
+    if (content->getFactoryPattern(descriptor.id.c_str(), i, &name, &view) != VOX_OK ||
+        !boundedString(name) || view.cells != buffer->cells.data() ||
+        view.cellStride != sizeof(VoxPatternStepV2) ||
+        view.cellCapacity != buffer->cells.size() ||
+        !pattern::fromView(view, imported->caps, *stored, why)) {
+      diagnostic = "invalid native factory pattern " + std::to_string(i) +
+                   (why.empty() ? std::string{} : ": " + why);
+      return false;
+    }
+    for (const auto &existing : imported->factory)
+      if (existing.name == name) {
+        diagnostic = "duplicate native factory pattern name";
+        return false;
+      }
+    imported->factory.push_back({name, std::move(stored)});
+  }
+  descriptor.patternContent = std::move(imported);
   return true;
 }
 
@@ -499,7 +608,8 @@ std::shared_ptr<NativeModule> NativeModule::acquire(const std::filesystem::path 
       const VoxInstrumentDescriptorV2 *raw = nullptr;
       InstrumentDescriptor descriptor;
       valid = table->getInstrument(i, &raw) == VOX_OK &&
-              importDescriptor(raw, descriptor, diagnostic);
+              importDescriptor(raw, descriptor, diagnostic) &&
+              importContent(table->content, descriptor, diagnostic);
       if (valid)
         module->descriptors_.push_back(std::move(descriptor));
     }
@@ -519,8 +629,9 @@ std::shared_ptr<NativeModule> NativeModule::acquire(const std::filesystem::path 
   return module;
 }
 
-std::unique_ptr<InstrumentProvider> makeProvider(std::shared_ptr<NativeModule> module) {
-  return std::make_unique<Provider>(std::move(module));
+std::unique_ptr<InstrumentProvider> makeProvider(std::shared_ptr<NativeModule> module,
+                                                 std::string publisherId) {
+  return std::make_unique<Provider>(std::move(module), std::move(publisherId));
 }
 
 LoadReport loadConfiguredModules(std::string_view pathList) {

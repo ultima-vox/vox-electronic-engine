@@ -2,6 +2,7 @@
 // loaded from an instruments folder exactly as the DAW constructor loads the
 // one next to the VST3, and the kit is played from slot MIDI. Not DAW
 // acceptance (see the Cubase guide).
+#include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
@@ -250,9 +251,12 @@ void loadsFromTheInstrumentsFolder() {
     if (d->id == drumsId)
       kit = d;
   check(kit != nullptr, "Full-on Drums offered in the slot catalog");
+  const auto trusted = instrument::vins::pinnedPublisherKeys();
+  check(!trusted.empty() && kit->publisherId == trusted.front().id && kit->upgradeFromVersion == 0,
+        "the kit carries its signed package identity and declares no upgrade");
   check(kit->providerId == native::providerId && kit->directParameters &&
-            kit->parameters.size() == 63,
-        "63 typed host-exposed parameters (fits the 64-endpoint pool)");
+            kit->parameters.size() == 59,
+        "59 typed host-exposed parameters; the pattern is content, not parameters");
   for (std::size_t i = 0; i < kit->parameters.size(); ++i)
     check(kit->parameters[i].poolIndex == static_cast<int>(i), "explicit stable pool index");
   check(kit->parameters[padParam(kick, level)].id == "kick.level" &&
@@ -493,7 +497,7 @@ void projectsRestore() {
   second.channel = channelOf(*second.p, 5);
   check(second.p->instrumentRack().state()[5].instrumentId == drumsId, "slot identity restored");
   check(second.channel == first.channel, "MIDI channel restored");
-  for (int i = 0; i < 63; ++i)
+  for (int i = 0; i < 59; ++i)
     check(plainOf(second, i) == plainOf(first, i), "endpoint " + std::to_string(i) + " restored");
   const auto hits = groove(48000.0);
   const auto a = renderHits(first, 40000, hits);
@@ -558,10 +562,10 @@ void moduleRejectsInvalidState() {
   check(t.create(drumsId, &params, &s) == VOX_OK, "create");
   std::uint8_t state[512];
   std::uint32_t written = 0, version = 0;
-  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 2 &&
-            written == 12 + 63 * 4 + 16,
-        "state v2 holds parameters, note map and choke groups");
-  const std::uint32_t notesAt = 12 + 63 * 4;
+  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 3 &&
+            written == 12 + 59 * 4 + 16,
+        "state v3 holds parameters, note map and choke groups (no pattern)");
+  const std::uint32_t notesAt = 12 + 59 * 4;
   check(state[notesAt] == 36 && state[notesAt + 3] == 42 && state[notesAt + 8 + 3] == 1 &&
             state[notesAt + 8 + 4] == 1,
         "default note map and hat choke group are saved");
@@ -569,20 +573,20 @@ void moduleRejectsInvalidState() {
     std::uint8_t copy[512];
     std::memcpy(copy, state, written);
     copy[at] = value;
-    return t.loadState(s, 2, copy, written);
+    return t.loadState(s, 3, copy, written);
   };
   check(corrupt(notesAt + 1, 36) == VOX_E_STATE_CORRUPT, "duplicate pad note rejected");
   check(corrupt(notesAt + 2, 200) == VOX_E_STATE_CORRUPT, "invalid MIDI note rejected");
   check(corrupt(notesAt + 8, 9) == VOX_E_STATE_CORRUPT, "invalid choke group rejected");
   check(corrupt(0, 0) == VOX_E_STATE_CORRUPT, "bad magic rejected");
-  check(t.loadState(s, 3, state, written) == VOX_E_STATE_VERSION, "future version rejected");
-  check(t.loadState(s, 1, state, written) == VOX_E_STATE_VERSION,
+  check(t.loadState(s, 4, state, written) == VOX_E_STATE_VERSION, "future version rejected");
+  check(t.loadState(s, 2, state, written) == VOX_E_STATE_VERSION,
         "only the current state version loads (no pre-release migration)");
-  check(t.loadState(s, 2, state, written) == VOX_OK, "valid state loads");
-  float values[63];
-  for (int i = 0; i < 63; ++i)
+  check(t.loadState(s, 3, state, written) == VOX_OK, "valid state loads");
+  float values[59];
+  for (int i = 0; i < 59; ++i)
     values[i] = 0.5f;
-  check(t.setAllParameters(s, values, 63) == VOX_E_INVALID_ARG,
+  check(t.setAllParameters(s, values, 59) == VOX_E_INVALID_ARG,
         "out-of-range snapshot rejected as a whole");
   check(t.destroy(s) == VOX_OK, "destroy");
 }
@@ -633,8 +637,32 @@ public:
   double samples = 0;
 };
 
-constexpr int seqMode = 48, seqPattern = 49, seqSwing = 50, seqAccent = 51, seqFill = 52,
-              seqBars = 53, seqLane0 = 54, seqSteps = 62;
+constexpr int seqMode = 48, seqSwing = 49, seqAccent = 50, seqLane0 = 51;
+
+// The slot's Rack-owned pattern; edits go through the Rack API only.
+std::unique_ptr<pattern::Pattern> slotPattern(Rig &r) {
+  auto p = std::make_unique<pattern::Pattern>();
+  check(r.p->instrumentRack().pattern(r.slot, *p), "slot holds a Rack-owned pattern");
+  return p;
+}
+void setPattern(Rig &r, const pattern::Pattern &p) {
+  std::string diagnostic;
+  check(r.p->instrumentRack().setPattern(r.slot, p, diagnostic),
+        "pattern edit accepted: " + diagnostic);
+}
+// One bar of 16ths with a single kick on the downbeat of every beat.
+std::unique_ptr<pattern::Pattern> kickOnBeats(Rig &r, std::uint32_t steps = 16,
+                                              std::uint32_t timing = VOX_TIMING_SIXTEENTH) {
+  auto p = std::make_unique<pattern::Pattern>(
+      pattern::emptyPattern(r.p->instrumentRack().descriptor(r.slot)->patternContent->caps));
+  p->stepsPerBar = steps;
+  p->timing = timing;
+  for (std::uint32_t st = 0; st < steps; st += 4) {
+    p->at(kick, 0, st).flags = VOX_STEP_ON;
+    p->at(kick, 0, st).velocity = 120;
+  }
+  return p;
+}
 
 // Renders with a running host transport; the playhead advances per block.
 Stereo play(Rig &r, TestPlayHead &head, int samples, const std::vector<Midi> &events = {}) {
@@ -684,7 +712,7 @@ void sequencerPlaysOnTheHostGrid() {
   for (int block : {64, 256, 512}) {
     auto r = makeRig(instrumentsDir, 2, 48000.0, block);
     setPlain(r, seqMode, 1.0f); // Internal
-    setPlain(r, seqFill, 0.0f); // the fill bar drops a kick
+    setPattern(r, *kickOnBeats(r)); // a kick on every beat, every bar
     onlyLanes(r, {kick});
     setPlain(r, padParam(kick, decay), 0.08f); // short, so each onset follows silence
     setPlain(r, kickTail, 0.03f);
@@ -771,7 +799,32 @@ void sequencerFollowsLoopsSeeksAndSwing() {
   setPlain(r, seqSwing, 0.0f);
 }
 
-void sequencerPatternControls() {
+void factoryPatternsAndInit() {
+  auto r = makeRig(instrumentsDir);
+  const auto *content = r.p->instrumentRack().descriptor(r.slot)->patternContent.get();
+  check(content != nullptr && content->caps.playback == VOX_PATTERN_PLAYBACK_INTERNAL &&
+            content->caps.laneCount == padCount && content->caps.maxStepsPerBar == 16 &&
+            content->caps.maxBars == 4 &&
+            content->caps.stepFields == (VOX_FIELD_VELOCITY | VOX_FIELD_ACCENT),
+        "the kit declares 8 lanes x 16 steps x 4 bars, velocity + accent");
+  check(content->caps.laneNotes == std::vector<std::uint8_t>(std::begin(notes), std::end(notes)),
+        "lane notes are the kit note map");
+  check(content->factory.size() == 5 && content->factory[0].name == "Full-on Basic" &&
+            content->factory[4].name == "Kick & Offbeat",
+        "five factory patterns exported by name");
+  const auto loaded = slotPattern(r);
+  check(*loaded == *content->factory[0].pattern &&
+            r.p->instrumentRack().state()[r.slot].patternPreset == "Full-on Basic" &&
+            r.p->instrumentRack().state()[r.slot].patternSchemaVersion == VOX_PATTERN_SCHEMA_V2,
+        "a freshly loaded kit holds Full-on Basic as its Rack pattern");
+  const auto &basic = *content->factory[0].pattern;
+  check(basic.at(kick, 0, 0).flags == (VOX_STEP_ON | VOX_STEP_ACCENT) &&
+            basic.at(kick, 0, 4).flags == VOX_STEP_ON && basic.at(kick, 3, 12).flags == 0 &&
+            basic.at(tom, 3, 15).flags == (VOX_STEP_ON | VOX_STEP_ACCENT),
+        "bar 4 of the factory pattern is the fill");
+}
+
+void sequencerPatternEdits() {
   const double spb = 60.0 / 145.0 * 48000.0;
   const int bars4 = static_cast<int>(spb * 16);
   auto render = [&](auto setup) {
@@ -782,30 +835,102 @@ void sequencerPatternControls() {
     return play(r, head, bars4);
   };
   const auto base = render([](Rig &) {});
-  check(!(render([](Rig &r) { setPlain(r, seqPattern, 2.0f); }) == base),
-        "Seq Pattern selects another factory pattern");
-  check(!(render([](Rig &r) { setPlain(r, seqFill, 0.0f); }) == base), "Seq Fill changes bar 4");
+  check(base.energy() > 1.0, "the init pattern plays");
+  check(!(render([](Rig &r) {
+          std::string diagnostic;
+          check(r.p->instrumentRack().loadFactoryPattern(r.slot, 2, diagnostic), diagnostic);
+        }) == base),
+        "another factory pattern sounds different");
+  check(!(render([](Rig &r) {
+          auto p = slotPattern(r);
+          for (int lane = 0; lane < padCount; ++lane)
+            for (std::uint32_t st = 0; st < 16; ++st)
+              p->at(lane, 3, st) = pattern::defaultStep(); // clear the fill bar
+          setPattern(r, *p);
+        }) == base),
+        "editing bar 4 changes bar 4");
   check(!(render([](Rig &r) { setPlain(r, seqAccent, 0.0f); }) == base), "Seq Accent changes hits");
-  check(!(render([](Rig &r) { setPlain(r, seqBars, 0.0f); }) == base), "Seq Bars changes evolution");
   check(!(render([](Rig &r) { setPlain(r, seqLane0 + openHat, 0.0f); }) == base),
         "lane switch removes a pad");
-  const auto half = render([](Rig &r) {
-    onlyLanes(r, {closedHat});
-    setPlain(r, seqSteps, 8.0f);
-    setPlain(r, padParam(closedHat, decay), 0.02f);
-  });
+
+  // Editing one cell changes exactly that step.
+  auto r = makeRig(instrumentsDir);
+  setPlain(r, seqMode, 1.0f);
+  onlyLanes(r, {snare});
+  setPlain(r, padParam(snare, decay), 0.05f);
+  auto p = kickOnBeats(r);
+  p->at(snare, 0, 6).flags = VOX_STEP_ON;
+  p->at(snare, 0, 6).velocity = 100;
+  setPattern(r, *p);
+  TestPlayHead head;
+  const auto one = play(r, head, static_cast<int>(spb * 4));
   const int stepSamples = static_cast<int>(spb / 4);
-  check(half.energy(0, 8 * stepSamples) > 0.0 &&
-            half.energy(9 * stepSamples, 16 * stepSamples) == 0.0,
-        "Seq Steps 8 leaves steps 9..16 silent");
+  check(one.energy(6 * stepSamples, 7 * stepSamples) > 0.0 &&
+            one.energy(0, 6 * stepSamples) == 0.0 &&
+            one.energy(8 * stepSamples, 16 * stepSamples) == 0.0,
+        "a single edited cell sounds on its step only");
+
+  // Steps per bar and timing come from the pattern.
+  onlyLanes(r, {kick});
+  setPlain(r, padParam(kick, decay), 0.08f);
+  setPlain(r, kickTail, 0.03f);
+  setPattern(r, *kickOnBeats(r, 8)); // 8-step bar: kicks on steps 0 and 4
+  TestPlayHead h8;
+  const auto eight = play(r, h8, static_cast<int>(spb * 4));
+  check(onsets(eight.l, spb / 2).size() == 4, "an 8-step bar repeats twice per 4/4 bar");
+  setPattern(r, *kickOnBeats(r, 16, VOX_TIMING_EIGHTH)); // steps 0,4,8,12 of 8ths
+  TestPlayHead he;
+  const auto eighths = play(r, he, static_cast<int>(spb * 8));
+  const auto eh = onsets(eighths.l, spb / 2);
+  check(eh.size() == 4 && std::abs(eh[1] - std::ceil(2 * spb - 1e-6)) <= 1.0,
+        "eighth-note timing doubles the step length");
+
+  // An invalid pattern is rejected and the old one stays.
+  auto bad = kickOnBeats(r);
+  bad->at(kick, 0, 0).note = 3; // drums do not read NOTE
+  std::string diagnostic;
+  const auto before = slotPattern(r);
+  check(!r.p->instrumentRack().setPattern(r.slot, *bad, diagnostic) && *slotPattern(r) == *before,
+        "an invalid edit is rejected without touching the pattern");
+}
+
+// An edit made while the transport runs applies from the next block, at the
+// current musical position: no restart from step 0, no replayed downbeat.
+void editWhilePlaying() {
+  const double spb = 60.0 / 145.0 * 48000.0;
+  auto r = makeRig(instrumentsDir);
+  setPlain(r, seqMode, 1.0f);
+  onlyLanes(r, {kick, snare});
+  setPlain(r, padParam(kick, decay), 0.08f);
+  setPlain(r, kickTail, 0.03f);
+  setPlain(r, padParam(snare, decay), 0.05f);
+  setPattern(r, *kickOnBeats(r));
+  TestPlayHead head;
+  const auto first = play(r, head, static_cast<int>(spb * 2)); // beats 1..2
+  auto p = kickOnBeats(r);
+  for (std::uint32_t st = 0; st < 16; st += 4)
+    p->at(kick, 0, st).flags = 0; // kicks out
+  p->at(snare, 0, 10).flags = VOX_STEP_ON; // a snare on the "and" of beat 3
+  setPattern(r, *p);
+  const auto second = play(r, head, static_cast<int>(spb * 2)); // beats 3..4
+  const auto kicks = onsets(first.l, spb / 2);
+  const auto snares = onsets(second.l, spb / 4);
+  check(kicks.size() == 2, "two kicks before the edit");
+  check(snares.size() == 1 && std::abs(snares[0] - std::ceil(0.5 * spb - 1e-6)) <= 1.0,
+        "after the edit only the new snare plays, at its musical position");
 }
 
 void sequencerStateReopensWithoutDuplicates() {
   const int bars4 = static_cast<int>(60.0 / 145.0 * 48000.0 * 16);
   auto first = makeRig(instrumentsDir, 6);
   setPlain(first, seqMode, 1.0f);
-  setPlain(first, seqPattern, 1.0f);
   setPlain(first, seqSwing, 0.2f);
+  auto edited = slotPattern(first);
+  edited->at(rim, 1, 9).flags = VOX_STEP_ON | VOX_STEP_ACCENT;
+  edited->at(rim, 1, 9).velocity = 77;
+  setPattern(first, *edited);
+  check(first.p->instrumentRack().state()[6].patternPreset.empty(),
+        "a user edit is no longer the factory pattern");
   render(first, 512, {});
   juce::MemoryBlock state;
   first.p->getStateInformation(state);
@@ -822,9 +947,290 @@ void sequencerStateReopensWithoutDuplicates() {
   second.p->prepareToPlay(48000.0, 256);
   second.slot = 6;
   second.channel = channelOf(*second.p, 6);
+  check(*slotPattern(second) == *edited, "the edited pattern reopens exactly");
   TestPlayHead h2;
   const auto b = play(second, h2, bars4);
   check(a.energy() > 1.0 && a == b, "reopened project plays the same pattern, no duplicate beats");
+
+  // A corrupted pattern payload rejects the project state as a whole.
+  auto slots = second.p->instrumentRack().snapshotState();
+  slots[6].patternPayload.back() ^= std::byte{0x40};
+  std::string diagnostic;
+  check(!second.p->instrumentRack().replaceState(slots, nullptr, diagnostic) &&
+            *slotPattern(second) == *edited,
+        "a corrupt pattern payload is rejected transactionally");
+}
+
+// MIDI export of the internal pattern is what the kit actually plays: the
+// exported file, played back through Host MIDI, renders bit for bit like the
+// internal sequencer (145 BPM, swing, accent and edited velocities).
+void exportMatchesPlayback() {
+  const double rate = 48000.0, bpm = 145.0;
+  const double spp = 60.0 * rate / bpm; // samples per quarter
+  const int bars4 = static_cast<int>(spp * 16);
+  auto setup = [](Rig &r) {
+    // 0.25 of a step = 60 ticks: exactly representable, so the replay can be
+    // compared bit for bit (other swing values round to the nearest tick).
+    setPlain(r, seqSwing, 0.25f);
+    setPlain(r, seqAccent, 0.7f);
+    setPlain(r, seqLane0 + cymbal, 0.0f); // a muted lane exports nothing
+    auto p = slotPattern(r);
+    p->at(rim, 1, 9).flags = VOX_STEP_ON | VOX_STEP_ACCENT;
+    p->at(rim, 1, 9).velocity = 77;
+    p->at(snare, 2, 4).velocity = 41;
+    setPattern(r, *p);
+  };
+  auto internal = makeRig(instrumentsDir, 4);
+  setup(internal);
+  setPlain(internal, seqMode, 1.0f);
+  TestPlayHead h1;
+  const auto played = play(internal, h1, bars4);
+
+  juce::MemoryBlock bytes;
+  juce::String diagnostic;
+  check(internal.p->serializeSlotPatternMidi(internal.slot, bytes, diagnostic),
+        "internal pattern exports: " + diagnostic.toStdString());
+  juce::MemoryInputStream stream(bytes, false);
+  juce::MidiFile file;
+  check(file.readFrom(stream) && file.getNumTracks() == padCount &&
+            file.getTimeFormat() == 960,
+        "type-1 file with one track per lane at 960 ticks per quarter");
+  std::vector<Midi> events;
+  bool rimAccent = false, softSnare = false, cymbalNotes = false;
+  for (int lane = 0; lane < file.getNumTracks(); ++lane) {
+    const auto *track = file.getTrack(lane);
+    std::string name;
+    for (int e = 0; e < track->getNumEvents(); ++e) {
+      const auto &m = track->getEventPointer(e)->message;
+      if (m.isTrackNameEvent())
+        name = m.getTextFromTextMetaEvent().toStdString();
+      if (!m.isNoteOn())
+        continue;
+      check(m.getChannel() == internal.channel && m.getNoteNumber() == notes[lane],
+            "lane notes on the slot channel");
+      cymbalNotes = cymbalNotes || lane == cymbal;
+      const double ppq = m.getTimeStamp() / 960.0;
+      rimAccent = rimAccent || (lane == rim && std::abs(ppq - (4.0 + 9 * 0.25 + 0.0625)) < 1e-9 &&
+                                m.getVelocity() == 112); // 77 + 0.7 * (127 - 77)
+      softSnare = softSnare || (lane == snare && std::abs(ppq - (8.0 + 1.0)) < 1e-9 &&
+                                m.getVelocity() == 41);
+      events.push_back({static_cast<int>(std::ceil(ppq * spp - 1e-6)),
+                        MidiMessage::noteOn(internal.channel, m.getNoteNumber(),
+                                            static_cast<juce::uint8>(m.getVelocity()))});
+    }
+    check(name == padNames[lane], "track named after its lane: " + name);
+  }
+  check(rimAccent, "edited accented rim exported at its swung position and played velocity");
+  check(softSnare, "edited snare velocity exported");
+  check(!cymbalNotes, "a muted lane exports no notes");
+
+  auto host = makeRig(instrumentsDir, 4);
+  setup(host);
+  setPlain(host, seqMode, 0.0f); // Host MIDI: only the exported notes play
+  TestPlayHead h2;
+  const auto replayed = play(host, h2, bars4, events);
+  check(played.energy() > 1.0 && maxDifference(played, replayed) < 1e-6,
+        "the exported file replays exactly like the internal sequencer");
+
+  setPlain(internal, seqMode, 0.0f);
+  check(!internal.p->serializeSlotPatternMidi(internal.slot, bytes, diagnostic) &&
+            diagnostic.contains("plays nothing"),
+        "Host MIDI mode has no internal notes to export");
+}
+
+// Internal kicks duck another slot at the sample they play, in the same block:
+// the real kit (Internal mode, only its kick lane, silent so only the target
+// is measured) ducks a held Demo Synth note to zero at every kick, including
+// after a host loop back.
+void internalKickDucksInTheSameBlock() {
+  const double rate = 48000.0, spp = 60.0 * rate / 145.0;
+  for (const auto [kitSlot, synthSlot] : {std::pair{2u, 9u}, std::pair{9u, 2u}}) {
+    auto r = makeRig(instrumentsDir, kitSlot, rate, 128);
+    juce::String diagnostic;
+    check(r.p->loadSlotInstrument(synthSlot, "com.ultimavox.demo-synth", diagnostic),
+          "Demo Synth loads as the duck target: " + diagnostic.toStdString());
+    const int synthChannel = channelOf(*r.p, synthSlot);
+    setPlain(r, seqMode, 1.0f);
+    setPattern(r, *kickOnBeats(r));
+    setPlain(r, kitVolume, 0.0f); // the kit still plays, but adds no audio
+    auto param = [&](const juce::String &id, float plain) {
+      auto *p = r.p->parameters().getParameter(id);
+      check(p != nullptr, "routing parameter " + id.toStdString());
+      p->setValueNotifyingHost(p->convertTo0to1(plain));
+    };
+    param("rack.duck.source", static_cast<float>(kitSlot + 1));
+    param("rack.duck.note", 36.0f);
+    param("rack.duck.attack", 0.0f);
+    param("rack.duck.hold", 0.5f);
+    param("rack.duck.release", 1.0f);
+    char depth[32];
+    std::snprintf(depth, sizeof(depth), "slot%02u.duck.depth", synthSlot + 1);
+    param(depth, 1.0f);
+    TestPlayHead head;
+    head.ppq = 0.25; // start after the first beat so the synth settles
+    const std::vector<Midi> hold = {{0, MidiMessage::noteOn(synthChannel, 60, (juce::uint8)110)}};
+    const auto beat = static_cast<int>(spp);
+    const auto out = play(r, head, beat * 4, hold); // beats 2..5 (ppq 0.25..4.25)
+    for (int k = 1; k <= 4; ++k) {
+      const int at = static_cast<int>(std::ceil((k - 0.25) * spp - 1e-6));
+      check(out.l[at] == 0.0f && out.r[at] == 0.0f && std::abs(out.l[at - 1]) > 0.0f,
+            "beat " + std::to_string(k + 1) + " kick ducks the synth at its sample (kit slot " +
+                std::to_string(kitSlot + 1) + ")");
+    }
+    head.ppq = 0.0; // host loops back to the bar start
+    const auto looped = play(r, head, beat / 2, hold);
+    check(looped.l[0] == 0.0f && looped.r[0] == 0.0f,
+          "after a loop back the downbeat kick ducks at once");
+  }
+}
+
+// The editor's Pattern page edits the kit's Rack pattern: an 8-lane grid,
+// clicks and velocity drags go to the Rack, factory patterns load, and the
+// controls follow what the kit declares.
+juce::MouseEvent mouse(juce::Component &target, juce::Point<int> at, bool shift = false,
+                       bool dragged = false) {
+  auto source = juce::Desktop::getInstance().getMainMouseSource();
+  const auto mods = shift ? juce::ModifierKeys::shiftModifier | juce::ModifierKeys::leftButtonModifier
+                          : juce::ModifierKeys::leftButtonModifier;
+  return {source, at.toFloat(), juce::ModifierKeys(mods), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+          &target, &target, juce::Time::getCurrentTime(), at.toFloat(),
+          juce::Time::getCurrentTime(), 1, dragged};
+}
+
+void editorDrumGrid() {
+  auto r = makeRig(instrumentsDir, 3);
+  r.p->selectSlot(r.slot);
+  std::unique_ptr<juce::AudioProcessorEditor> base(r.p->createEditor());
+  auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+  check(editor != nullptr, "editor opens");
+  editor->setSize(1500, 920);
+  r.p->selectSlot(r.slot); // the editor opens on the first slot
+  editor->showPageForTesting(ui::MainNavigation::Page::pattern);
+  editor->refreshForTesting();
+  auto &grid = editor->patternGridForTesting();
+  check(grid.isVisible() && grid.getWidth() > 400 && grid.getHeight() > 200,
+        "the Pattern page shows the drum grid for the kit");
+  check(grid.patternForTesting() == *slotPattern(r), "the grid shows the Rack pattern");
+
+  // Click an empty cell: on. Shift-click it: accent. Drag up: louder.
+  auto empty = std::make_unique<pattern::Pattern>(grid.patternForTesting());
+  std::uint32_t lane = tom, step = 2;
+  check((empty->at(lane, 0, step).flags & VOX_STEP_ON) == 0, "the chosen cell starts empty");
+  const auto cell = grid.cellBoundsForTesting(lane, step).getCentre();
+  grid.mouseDown(mouse(grid, cell));
+  grid.mouseUp(mouse(grid, cell));
+  check((slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ON) != 0,
+        "a click switches the step on in the Rack pattern");
+  grid.mouseDown(mouse(grid, cell, true));
+  check((slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ACCENT) != 0,
+        "shift-click sets the accent");
+  grid.mouseDown(mouse(grid, cell));
+  grid.mouseDrag(mouse(grid, cell.translated(0, -20), false, true));
+  grid.mouseUp(mouse(grid, cell.translated(0, -20), false, true));
+  check(slotPattern(r)->at(lane, 0, step).velocity == 120 &&
+            (slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ON) != 0,
+        "dragging up raises the velocity and keeps the step on");
+  grid.mouseDown(mouse(grid, cell));
+  grid.mouseUp(mouse(grid, cell));
+  check((slotPattern(r)->at(lane, 0, step).flags & VOX_STEP_ON) == 0,
+        "a click without dragging switches the step off");
+
+  // Bars and controls follow the kit.
+  grid.showBarForTesting(3);
+  const auto fill = grid.cellBoundsForTesting(kick, 12).getCentre();
+  grid.mouseDown(mouse(grid, fill));
+  grid.mouseUp(mouse(grid, fill));
+  check((slotPattern(r)->at(kick, 3, 12).flags & VOX_STEP_ON) != 0, "bar 4 is editable");
+  auto findBox = [&](const juce::String &name) {
+    for (auto *child : grid.getChildren())
+      if (child->getName() == name)
+        return dynamic_cast<juce::ComboBox *>(child);
+    return static_cast<juce::ComboBox *>(nullptr);
+  };
+  auto *steps = findBox("rack.pattern.steps");
+  auto *patterns = findBox("rack.pattern.factory");
+  check(steps != nullptr && steps->getNumItems() == 16 && patterns != nullptr &&
+            patterns->getNumItems() == 5,
+        "steps up to the kit's 16, five factory patterns");
+  check(patterns->getSelectedItemIndex() == -1, "an edited pattern is no factory pattern");
+  patterns->setSelectedItemIndex(3, juce::sendNotificationSync);
+  check(*slotPattern(r) == *r.p->instrumentRack().descriptor(r.slot)->patternContent->factory[3].pattern &&
+            grid.patternForTesting() == *slotPattern(r),
+        "choosing a factory pattern loads it into the Rack and the grid");
+  steps->setSelectedId(8, juce::sendNotificationSync);
+  check(slotPattern(r)->stepsPerBar == 8 && grid.patternForTesting().stepsPerBar == 8,
+        "the steps control reshapes the Rack pattern");
+
+  // The Rack pattern changes outside the grid (restore, undo): the selector
+  // follows the Rack, whichever way it changed.
+  const auto &factory = r.p->instrumentRack().descriptor(r.slot)->patternContent->factory;
+  patterns->setSelectedItemIndex(1, juce::sendNotificationSync);
+  auto edited = std::make_unique<pattern::Pattern>(*factory[1].pattern);
+  edited->at(cymbal, 2, 5).flags = VOX_STEP_ON; // not in Full-on Driving
+  setPattern(r, *edited); // not through the grid
+  editor->refreshForTesting();
+  grid.reload();
+  check(patterns->getSelectedItemIndex() == -1 && grid.patternForTesting() == *edited,
+        "an outside edit clears the factory selection; the cells match the Rack");
+  std::string why;
+  check(r.p->instrumentRack().loadFactoryPattern(r.slot, 2, why), why);
+  grid.reload();
+  check(patterns->getSelectedItemIndex() == 2 && grid.patternForTesting() == *factory[2].pattern,
+        "an outside factory restore selects that factory");
+
+  // Visual Gate: the actual editor with the kit's factory pattern (CI artifact
+  // for the owner's review; not an acceptance claim).
+  if (const auto *path = std::getenv("VOX_DRUMS_GRID_SNAPSHOT")) {
+    patterns->setSelectedItemIndex(0, juce::sendNotificationSync);
+    grid.showBarForTesting(3); // the fill bar
+    const auto image = editor->createComponentSnapshot(editor->getLocalBounds());
+    juce::File file(path);
+    file.deleteFile();
+    juce::FileOutputStream output(file);
+    juce::PNGImageFormat png;
+    check(output.openedOk() && png.writeImageToStream(image, output),
+          "drum grid snapshot written");
+  }
+}
+
+// The exported file always closes after its last note-off, also for short
+// steps with a late, maximally swung last hit.
+void exportEndsAfterTheLastNote() {
+  for (const auto timing : {VOX_TIMING_THIRTY_SECOND, VOX_TIMING_EIGHTH_TRIPLET}) {
+    auto r = makeRig(instrumentsDir, 5);
+    setPlain(r, seqMode, 1.0f);
+    setPlain(r, seqSwing, 0.5f);
+    auto p = std::make_unique<pattern::Pattern>(
+        pattern::emptyPattern(r.p->instrumentRack().descriptor(r.slot)->patternContent->caps));
+    p->timing = timing;
+    p->stepsPerBar = 16;
+    p->at(kick, 0, 15).flags = VOX_STEP_ON; // the last, odd (swung) step
+    setPattern(r, *p);
+    juce::MemoryBlock bytes;
+    juce::String diagnostic;
+    check(r.p->serializeSlotPatternMidi(r.slot, bytes, diagnostic),
+          "short-step pattern exports: " + diagnostic.toStdString());
+    juce::MemoryInputStream stream(bytes, false);
+    juce::MidiFile file;
+    check(file.readFrom(stream), "the exported file re-imports");
+    const double step = timing == VOX_TIMING_THIRTY_SECOND ? 0.125 : 1.0 / 3.0;
+    for (int lane = 0; lane < file.getNumTracks(); ++lane) {
+      const auto *track = file.getTrack(lane);
+      double lastOff = 0.0, end = -1.0;
+      for (int e = 0; e < track->getNumEvents(); ++e) {
+        const auto &m = track->getEventPointer(e)->message;
+        if (m.isNoteOff())
+          lastOff = std::max(lastOff, m.getTimeStamp());
+        if (m.isEndOfTrackMetaEvent())
+          end = m.getTimeStamp();
+        if (lane == kick && m.isNoteOn())
+          check(std::abs(m.getTimeStamp() / 960.0 - (15 + 0.5) * step) < 1.0 / 960.0,
+                "the swung last hit keeps its position");
+      }
+      check(end >= lastOff && end >= 16 * step * 960.0 - 1e-6,
+            "End-of-Track follows the last note-off and the pattern length");
+    }
+  }
 }
 
 // ------------------------------------------------- multi-track Host MIDI
@@ -1055,7 +1461,13 @@ int main(int argc, char **argv) {
   sequencerPlaysOnTheHostGrid();
   sequencerModesAvoidDoubleTriggers();
   sequencerFollowsLoopsSeeksAndSwing();
-  sequencerPatternControls();
+  factoryPatternsAndInit();
+  sequencerPatternEdits();
+  editWhilePlaying();
+  exportMatchesPlayback();
+  internalKickDucksInTheSameBlock();
+  editorDrumGrid();
+  exportEndsAfterTheLastNote();
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
   noAllocationWhilePlaying();

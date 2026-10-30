@@ -302,7 +302,7 @@ std::vector<float> renderPhrase(const VoxModuleV2 &m, VoxInstance instance, int 
 
 // ---------------------------------------------------------------- tests
 void layout() {
-  std::array<std::uint32_t, 64> c{};
+  std::array<std::uint32_t, 128> c{};
   const auto count = voxAbiLayoutC(c.data(), static_cast<std::uint32_t>(c.size()));
 #define L(type, field) static_cast<std::uint32_t>(offsetof(type, field))
   const std::uint32_t cpp[] = {
@@ -327,7 +327,16 @@ void layout() {
       L(VoxTransportV2, loopEndPpq), L(VoxTransportV2, timeInSamples),
       sizeof(VoxModuleV2), L(VoxModuleV2, getInstrument), L(VoxModuleV2, process),
       L(VoxModuleV2, loadState), L(VoxModuleV2, content), L(VoxModuleV2, editor),
-      L(VoxModuleV2, shutdown)};
+      L(VoxModuleV2, shutdown), L(VoxProcessContextV2, pattern),
+      L(VoxProcessContextV2, patternGeneration), sizeof(VoxPatternStepV2),
+      L(VoxPatternStepV2, gate), L(VoxPatternStepV2, slide), L(VoxPatternStepV2, probability),
+      L(VoxPatternStepV2, reserved), sizeof(VoxPatternV2), L(VoxPatternV2, cellStride),
+      L(VoxPatternV2, cells), sizeof(VoxPatternCapsV2), L(VoxPatternCapsV2, stepFields),
+      L(VoxPatternCapsV2, laneNames), L(VoxPatternCapsV2, laneNotes),
+      sizeof(VoxContentApiV2), L(VoxContentApiV2, getPatternCaps),
+      L(VoxContentApiV2, getFactoryPattern), L(VoxProcessContextV2, noteOutput),
+      sizeof(VoxNoteEventV2), L(VoxNoteEventV2, note), L(VoxNoteEventV2, flags),
+      sizeof(VoxNoteOutputV2), L(VoxNoteOutputV2, count), L(VoxNoteOutputV2, events)};
 #undef L
   REQUIRE(count == std::size(cpp), "C and C++ layout tables have the same length");
   for (std::uint32_t i = 0; i < count; ++i)
@@ -494,6 +503,13 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
     auto c = x.context();
     c.structSize = 32;
     REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "short process context");
+    c = x.context();
+    c.structSize = VOX_PROCESS_CONTEXT_V2_BASE_SIZE - 8;
+    REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "context below the V2.0 size");
+    c = x.context();
+    c.structSize = VOX_PROCESS_CONTEXT_V2_BASE_SIZE; // a V2.0 host, no pattern fields
+    c.pattern = reinterpret_cast<const VoxPatternV2 *>(std::uintptr_t{1}); // must not be read
+    REQUIRE(m.process(instance, &c) == VOX_OK, "V2.0 context accepted, appended fields ignored");
     c = x.context();
     c.numSamples = 4097;
     REQUIRE(m.process(instance, &c) == VOX_E_INVALID_ARG, "block above prepared size");
@@ -738,8 +754,19 @@ int main(int argc, char **argv) {
             "null module out rejected");
     REQUIRE(entry(VOX_MODULE_ABI_V2, &hostServices, &module) == VOX_OK, "entry");
     REQUIRE(validModule(module), "module table valid");
-    REQUIRE(module->content == nullptr && module->editor == nullptr,
-            "slice 1 module exposes no content/editor tables");
+    REQUIRE(module->editor == nullptr, "editor table stays reserved (NULL)");
+    REQUIRE(module->content != nullptr &&
+                module->content->structSize >= sizeof(VoxContentApiV2) &&
+                module->content->version == VOX_MODULE_ABI_V2 &&
+                module->content->getPatternCaps != nullptr &&
+                module->content->getFactoryPattern != nullptr,
+            "content table is versioned and complete");
+    const VoxPatternCapsV2 *caps = nullptr;
+    REQUIRE(module->content->getPatternCaps("no.such.instrument", &caps) == VOX_OK &&
+                caps == nullptr,
+            "an unknown instrument has no pattern");
+    REQUIRE(module->content->getPatternCaps(nullptr, &caps) == VOX_E_INVALID_ARG,
+            "null instrument id rejected");
 
     const VoxInstrumentDescriptorV2 *descriptor = nullptr;
     REQUIRE(module->getInstrument(1, &descriptor) == VOX_E_INVALID_ARG &&

@@ -31,6 +31,11 @@ inline constexpr std::uint32_t maxChoices = 128;
 // exposed with a pool index inside this build's pool.
 [[nodiscard]] bool importDescriptor(const VoxInstrumentDescriptorV2 *descriptor,
                                     InstrumentDescriptor &out, std::string &diagnostic);
+// Reads the pattern caps and factory patterns of `descriptor.id` from a
+// module's content table into descriptor.patternContent. Strict: anything
+// malformed rejects the instrument. Controller thread.
+[[nodiscard]] bool importContent(const VoxContentApiV2 *content,
+                                 InstrumentDescriptor &descriptor, std::string &diagnostic);
 
 // One loaded module. Process-wide: the same library is loaded and entered at
 // most once per process and stays loaded until the process exits (no hot
@@ -61,7 +66,7 @@ private:
 
 // Adapts a loaded module to the Rack's provider contract.
 [[nodiscard]] std::unique_ptr<InstrumentProvider>
-makeProvider(std::shared_ptr<NativeModule> module);
+makeProvider(std::shared_ptr<NativeModule> module, std::string publisherId = {});
 
 // Process-wide count of blocks in which routed MIDI exceeded a native
 // instance's prepared budget (the adapter then ends every voice of that
@@ -72,6 +77,11 @@ makeProvider(std::shared_ptr<NativeModule> module);
 // latches that instance silent until the controller reprepares it; other
 // instances are unaffected. Readable from any thread.
 [[nodiscard]] std::uint64_t totalModuleFaults() noexcept;
+// Blocks whose module-written note output failed validation and was voided.
+[[nodiscard]] std::uint64_t totalInvalidNoteReports() noexcept;
+// VoxNoteOutputV2.dropped value the host writes when it voids a block's
+// note output (malformed records); the count is then 0.
+inline constexpr std::uint32_t voidedNoteOutput = 0xFFFFFFFFu;
 
 // Providers found by a loader, plus its diagnostics (never thrown). The Rack's
 // only production loader is vins::loadInstalled() (instrument/vins).

@@ -58,6 +58,13 @@ jobs:
           Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
           Capture-VisualGate "psy-bass-macros-1500x920.png" "com.ultimavox.psy-bass" "macros" 1500 920
 
+          # Actual editor, Full-on Drums Pattern page (8 x 16 grid, fill bar).
+          $env:VOX_DRUMS_GRID_SNAPSHOT = Join-Path $snapshotDir "drums-pattern-grid-1500x920.png"
+          & (Join-Path $PWD "build\Release\fullon_drums_tests.exe") (Join-Path $PWD "build\instruments") (Join-Path $PWD "build\drums-snapshot-scratch") (Join-Path $PWD "docs\testing\fullon-drums")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:VOX_DRUMS_GRID_SNAPSHOT
+          if (-not (Test-Path (Join-Path $snapshotDir "drums-pattern-grid-1500x920.png"))) { throw "Drum grid snapshot not created" }
+
       - name: Upload Visual Gate snapshots
         uses: actions/upload-artifact@v4
         with:

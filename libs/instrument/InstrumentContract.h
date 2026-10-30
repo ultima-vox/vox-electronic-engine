@@ -1,5 +1,6 @@
 #pragma once
 #include "instrument/InstrumentAbi.h"
+#include "pattern/Pattern.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -114,6 +115,15 @@ struct InstrumentDescriptor {
     std::vector<ParameterDescriptor> parameters;
     // Internal host integration policy, not an extension of the external C ABI.
     bool directParameters{};
+    // Pattern capabilities and factory patterns declared through
+    // VoxContentApiV2, validated at load. Null: the instrument has no pattern.
+    std::shared_ptr<const pattern::Content> patternContent;
+    // Signed package identity: the trusted publisher key id of the .vins that
+    // supplied this instrument; empty for built-in and unsigned graph content.
+    std::string publisherId;
+    // Oldest instrumentVersion whose saved state this version may upgrade by
+    // appending new parameters; 0 = no upgrade (only the same version loads).
+    std::uint32_t upgradeFromVersion {};
 };
 
 struct ParameterValue {
@@ -187,6 +197,11 @@ struct ProcessBlock {
     double bpm {};
     double ppqPosition {};
     bool transportPlaying {};
+    // Immutable pattern snapshot owned by the Rack for this call, or null.
+    const VoxPatternV2* pattern {};
+    std::uint64_t patternGeneration {};
+    // Host-owned buffer for notes the instrument generates itself, or null.
+    VoxNoteOutputV2* noteOutput {};
 };
 
 class InstrumentInstance {

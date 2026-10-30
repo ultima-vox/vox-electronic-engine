@@ -33,6 +33,27 @@ public:
   bool updatePatternState(std::size_t slotIndex, std::string presetId,
                           std::uint32_t schemaVersion,
                           std::vector<std::byte> payload);
+  // Rack-owned V2 pattern of an INTERNAL-playback instrument (controller
+  // thread). setPattern validates against the slot's caps, stores the VPT2
+  // payload and publishes a snapshot to the audio thread; patternPreset
+  // records the factory name, or is cleared for a user edit.
+  bool setPattern(std::size_t slotIndex, const pattern::Pattern &,
+                  std::string &diagnostic);
+  bool loadFactoryPattern(std::size_t slotIndex, std::size_t factoryIndex,
+                          std::string &diagnostic);
+  [[nodiscard]] bool pattern(std::size_t slotIndex, pattern::Pattern &out) const;
+  // One pass of an INTERNAL slot's pattern, played offline by a fresh
+  // instance of the slot's own module with the slot's saved values (no
+  // automation or modulation): exactly the notes it plays. Controller thread.
+  struct RenderedHit {
+    double ppq{};
+    std::uint8_t note{}, velocity{}, lane{};
+    bool accent{};
+  };
+  bool renderPatternHits(std::size_t slotIndex, const PersistentSlotState &slot,
+                         std::vector<RenderedHit> &hits, double &lengthPpq,
+                         std::string &diagnostic);
+  static constexpr std::size_t noteEventCapacity = 512;
   bool configureModulation(std::size_t slotIndex,
                            std::span<const modulation::Route> routes,
                            std::string &diagnostic);
@@ -89,6 +110,11 @@ private:
         };
         std::array<DirectBinding, instrument::maxDirectParameters> direct{};
         std::size_t directCount{};
+        // INTERNAL-playback instruments: snapshots of the Rack-owned pattern
+        // and the notes the instrument reports per block.
+        std::unique_ptr<pattern::SnapshotBuffer> patterns;
+        std::vector<VoxNoteEventV2> noteEvents;
+        VoxNoteOutputV2 noteOutput{};
     };
     bool buildSlot(std::size_t, const PersistentSlotState&,
                    instrument::ResourceResolver*, SlotRuntime&,

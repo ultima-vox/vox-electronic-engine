@@ -63,49 +63,64 @@ host note and a sequencer step on the same pad and sample as one hit.
 | | | 46 | `kit.hat_choke` boolean |
 | | | 47 | `kit.velocity` sensitivity 0..1 |
 
-`<pad>` = kick, snare, clap, chat, ohat, tom, rim, cymbal. Pool 48–62 are the
-D2 sequencer (below); 63 is free. Pads 9–16 need the larger host layout (96/128
+`<pad>` = kick, snare, clap, chat, ohat, tom, rim, cymbal. Pool 48–58 are the
+sequencer performance controls (below); the pattern itself is Rack content,
+not parameters. Pads 9–16 need the larger host layout (96/128
 experiment) for their own controls; their identities and state slots are
 appended without renumbering. Parameter values are latched per hit.
 
-## D2 sequencer (pool 48–62)
+## Sequencer (pool 48–58)
 
 | Pool | Endpoint | Values |
 | --- | --- | --- |
 | 48 | `seq.mode` | Host MIDI (default) / Internal / Both |
-| 49 | `seq.pattern` | Full-on Basic, Full-on Driving, Rolling Offbeat, Breakdown, Kick & Offbeat |
-| 50 | `seq.swing` | 0..0.5 of a 16th, applied to odd 16ths |
-| 51 | `seq.accent` | 0..1 velocity boost on accented steps |
-| 52 | `seq.fill` | every 4th bar plays the pattern's fill |
-| 53 | `seq.bars` | evolution length 1 / 2 / 4 bars |
-| 54–61 | `seq.lane.<pad>` | lane on/off |
-| 62 | `seq.steps` | 1..16 steps per bar |
+| 49 | `seq.swing` | 0..0.5 of a step, applied to odd steps |
+| 50 | `seq.accent` | 0..1 velocity boost on accented steps |
+| 51–58 | `seq.lane.<pad>` | lane on/off |
+
+**The pattern is Rack-owned content** ([PATTERN_CONTENT_ABI](../architecture/PATTERN_CONTENT_ABI.md)):
+- **Caps.** Through `VoxContentApiV2` the kit declares INTERNAL playback: 8 lanes (pad order), up to 16 steps × 4 bars, velocity + accent, and lane notes from the default note map.
+- **Factory patterns.** Full-on Basic, Full-on Driving, Rolling Offbeat, Breakdown and Kick & Offbeat; in each, bar 4 is the fill.
+- **Fresh slot.** It starts with Full-on Basic.
+- **Storage.** The Rack stores the pattern as VPT2 in the slot's `patternPayload`, validates every edit and hands the audio thread an immutable snapshot.
+- **Runtime copy.** The module copies the snapshot when its generation changes and keeps no saved copy of its own.
+
+Steps per bar, bar count and step length (1/16, 1/8, 1/32, 1/8 triplets) all come from the pattern.
 
 Timing comes only from `VoxTransportV2` (tempo, ppq at sample 0, playing,
-discontinuity): 16ths on the host ppq grid (4/4), sample position
-`ceil((step_ppq − ppq0) · 60·fs/bpm)`. No wall clock or sample counting, so
-any block split gives the same hits. A step plays at most once; a backwards
-jump (loop, seek back) re-arms it; transport stop resets the Rack slot.
+discontinuity):
+- **Grid.** Steps sit on the host ppq grid, at sample position `ceil((step_ppq − ppq0) · 60·fs/bpm)`.
+- **Block independence.** There is no wall clock or sample counting, so any block split gives the same hits.
+- **Repeats.** A step plays at most once; a backwards jump (loop, seek back) re-arms it; transport stop resets the Rack slot.
+- **Edits while playing.** The bar of a step is its position modulo the pattern length, so an edit made while playing applies from the next block at the current position (tested), without a restart.
 
-**No double triggers.** *Host MIDI* plays only incoming notes (sequencer
-off). *Internal* plays only the sequencer and ignores incoming notes, so an
-imported clip on the same track cannot double it. *Both* is explicit. The
-Rack's own pattern generator does not drive this slot (native descriptors do
-not declare the sequence capability). A reopened project replays the same
-pattern without duplicates (tested).
+**No double triggers:**
+- *Host MIDI* plays only incoming notes; the sequencer is off.
+- *Internal* plays only the sequencer and ignores incoming notes, so an imported clip on the same track cannot double it.
+- *Both* is explicit.
 
-**Missing ABI hook (Architecture Guard).** Editing the step grid (per-step
-velocity/accent, user patterns, MIDI export of the internal pattern) needs a
-versioned content/editor table, e.g. `VoxContentV2 { getPattern(instance,
-VoxPatternV2 *out); setPattern(instance, const VoxPatternV2 *in); }` called on
-the controller thread, plus a pattern block in the module state. It is not in
-`VoxModuleAbiV2.h`; no private cross-DLL calls are used instead. Until then
-patterns are the five factory patterns selected by `seq.pattern`.
+A reopened project replays the same edited pattern without duplicates (tested). A corrupt pattern payload rejects the project state as a whole.
+
+**MIDI export.**
+- **What is exported.** The pattern as the kit plays it, not a re-derived grid.
+- **How.** The Rack renders one pass with the kit's own module and saved values and turns every reported hit into a note. The result is a type-1 file with eight named tracks (one per lane, kit note map) on the slot channel.
+- **Not included.** Muted lanes and Host-mode settings export nothing.
+- **Tested.** A 145 BPM replay through Host MIDI is bit-identical to the internal sequencer.
+
+**Kick ducking.** Internal kicks (lane notes as reported) duck the Rack's targets in the same block, at the sample they play (`rack.duck.source` = the kit's slot, note 36). This works with the kit muted to zero volume, but not with the slot muted.
+
+**Pattern page (editor).** For the kit, the Pattern page shows the Rack pattern as an 8-lane grid:
+- **Cells.** A click switches a step on or off; dragging a sounding step up or down sets its velocity (shown as fill height); shift-click toggles the accent (outlined, with a marker).
+- **Bars.** BAR 1–4 tabs select the bar being edited.
+- **Controls.** Steps per bar (1–16), bar count (1–4), step length, Clear bar, and the factory-pattern selector. The selector shows the factory name until the first edit.
+- **Edits.** Every edit goes straight to the Rack (`Rack::setPattern`). A rejected edit shows its reason and the grid re-reads the Rack copy.
+- **Visual review.** The Windows CI Visual Gate artifact includes `drums-pattern-grid-1500x920.png`, taken from the actual editor. This is for review, not acceptance.
 
 ## State (module-owned, versioned, transactional)
 
-v2, 280 bytes, little endian: `"VOFD"`, parameter count (63), pad count (8),
-63 plain f32 values, 8 pad MIDI notes, 8 pad choke groups (0 = none, ≤ 4).
+v3, 264 bytes, little endian: `"VOFD"`, parameter count (59), pad count (8),
+59 plain f32 values, 8 pad MIDI notes, 8 pad choke groups (0 = none, ≤ 4).
+The pattern is not module state (see above).
 Only this version loads; pre-release formats are not migrated.
 `loadState` validates everything (finite in-range values, unique notes
 < 128, choke ≤ 4) before applying anything. The Rack's named host values stay

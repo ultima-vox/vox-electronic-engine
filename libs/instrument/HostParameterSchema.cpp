@@ -14,6 +14,33 @@ void validate(std::size_t slotIndex, std::size_t macroIndex)
 }
 } // namespace
 
+std::uint32_t parameterSpecHash(const ParameterDescriptor &p) noexcept {
+  std::uint32_t hash = 2166136261u;
+  const auto bytes = [&hash](const void *data, std::size_t size) {
+    const auto *b = static_cast<const unsigned char *>(data);
+    for (std::size_t i = 0; i < size; ++i) {
+      hash ^= b[i];
+      hash *= 16777619u;
+    }
+  };
+  const auto text = [&](const std::string &s) {
+    const auto n = static_cast<std::uint32_t>(s.size());
+    bytes(&n, sizeof n);
+    bytes(s.data(), s.size());
+  };
+  const auto type = static_cast<std::uint32_t>(p.type);
+  bytes(&type, sizeof type);
+  bytes(&p.minimum, sizeof p.minimum);
+  bytes(&p.maximum, sizeof p.maximum);
+  bytes(&p.step, sizeof p.step);
+  text(p.unit);
+  const auto count = static_cast<std::uint32_t>(p.choices.size());
+  bytes(&count, sizeof count);
+  for (const auto &choice : p.choices)
+    text(choice);
+  return hash == 0 ? 1u : hash;
+}
+
 std::string macroId(std::size_t slotIndex, std::size_t macroIndex)
 {
     validate(slotIndex, macroIndex);

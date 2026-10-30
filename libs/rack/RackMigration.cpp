@@ -24,12 +24,13 @@ DirectMigration migrateAppendOnly(PersistentSlotState &state,
   if (state.instrumentId != current.id || state.instrumentVersion == 0 ||
       state.instrumentVersion == current.instrumentVersion)
     return DirectMigration::notNeeded;
-  if (!current.directParameters ||
+  if (!current.directParameters || current.upgradeFromVersion == 0 ||
+      state.instrumentVersion < current.upgradeFromVersion ||
       state.instrumentVersion > current.instrumentVersion ||
-      (state.contentVersion != 0 &&
-       state.contentVersion != current.contentVersion) ||
+      state.publisherId != current.publisherId ||
+      (state.contentVersion != 0 && state.contentVersion != current.contentVersion) ||
       state.instrumentStateVersion > current.stateVersion ||
-      state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V1 ||
+      state.patternSchemaVersion > VOX_PATTERN_SCHEMA_V2 ||
       state.modulePayload.size() > current.budget.maxStateBytes ||
       state.directParameters.empty() ||
       state.directParameters.size() > current.parameters.size())
@@ -37,8 +38,9 @@ DirectMigration migrateAppendOnly(PersistentSlotState &state,
   for (std::size_t i = 0; i < state.directParameters.size(); ++i) {
     const auto &saved = state.directParameters[i];
     const auto *p = find(current, saved.id);
-    if (p == nullptr || saved.poolIndex < 0 ||
-        saved.poolIndex != p->poolIndex || !validValue(saved.value, *p))
+    if (p == nullptr || saved.poolIndex < 0 || saved.poolIndex != p->poolIndex ||
+        saved.spec == 0 || saved.spec != instrument::hostparams::parameterSpecHash(*p) ||
+        !validValue(saved.value, *p))
       return DirectMigration::incompatible;
     for (std::size_t prior = 0; prior < i; ++prior)
       if (state.directParameters[prior].id == saved.id)
@@ -51,9 +53,8 @@ DirectMigration migrateAppendOnly(PersistentSlotState &state,
     for (const auto &saved : state.directParameters)
       present |= saved.id == p.id;
     if (!present)
-      migrated.push_back({p.id,
-                          instrument::hostparams::canonicalPlain(p.defaultValue, p),
-                          p.poolIndex});
+      migrated.push_back({p.id, instrument::hostparams::canonicalPlain(p.defaultValue, p),
+                          p.poolIndex, instrument::hostparams::parameterSpecHash(p)});
   }
   state.directParameters = std::move(migrated);
   state.instrumentVersion = current.instrumentVersion;

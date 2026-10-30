@@ -32,8 +32,9 @@ Per pad, in order: Level, Tune (±12 st), Decay (T60, seconds), Pan, Character.
 Kit controls: `p041` Kit Volume, `p042` Kick Pitch Env, `p043` Kick Pitch
 Decay, `p044` Kick Drive, `p045` Kick Sub, `p046` Kick Tail, `p047` Hat Choke
 (closed hat cuts open hat), `p048` Velocity Sens. Sequencer: `p049` Seq Mode (Host MIDI / Internal /
-Both), `p050` Seq Pattern, `p051` Swing, `p052` Accent, `p053` Fill, `p054`
-Bars, `p055`–`p062` lane on/off (pad order), `p063` Steps. Cubase note names may be one octave different depending
+Both), `p050` Swing, `p051` Accent, `p052`–`p059` lane on/off (pad order). The
+pattern itself is Rack content (a fresh kit holds Full-on Basic), not a
+parameter. Cubase note names may be one octave different depending
 on its "MIDI note name" display preference; the numbers are authoritative.
 
 Behaviour: one-shot voices (NoteOff and sustain are ignored), several pads
@@ -58,7 +59,7 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 | # | Action | Expected |
 | --- | --- | --- |
 | 1 | New Instrument track with Vox Electronic Engine (new project, no track preset); open the editor | Rack with **16 empty slots** |
-| 2 | Click empty **slot 1** (or right-click → *Load / replace instrument...*) → **Full-on Drums / Ultima Vox** | Slot 1 = Full-on Drums on **CH1** (first free channel); the Macros page lists the 63 kit and sequencer controls |
+| 2 | Click empty **slot 1** (or right-click → *Load / replace instrument...*) → **Full-on Drums / Ultima Vox** | Slot 1 = Full-on Drums on **CH1** (first free channel); the Macros page lists the 59 kit and sequencer controls |
 | 3 | Track MIDI channel 1; import `fullon-drums-145bpm-4bar.mid` (set project tempo 145) and play | Kick on every beat, 16th closed hats, off-beat open hats, snare + clap on 2 and 4, rim accents, tom fill in bar 4; nothing hangs at stop |
 | 4 | Play pads from a keyboard or the piano roll (notes 36–49 above) | Each pad sounds; harder velocity is louder; several notes together all sound |
 | 5 | Open hat (46) then closed hat (42) | Closed hat cuts the open hat; switch **Hat Choke** off → open hat keeps ringing |
@@ -71,10 +72,11 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 | 12 | Quit Cubase, move `vox music\instruments\VoxFullOnDrums.vins` out of the folder, reopen | Rack loads; slot 1 shows Full-on Drums missing and silent; save once |
 | 13 | Quit, move the file back, reopen | Groove and values return |
 | 14 | Compare the Rack hash with step 2.1 | Unchanged |
-| 15 | Delete the MIDI clip. Set **Seq Mode = Internal**, Seq Pattern = Full-on Basic, press Play at 145 BPM | The kit plays the pattern in time with Cubase; bar 4 has a tom fill |
+| 15 | Delete the MIDI clip. Set **Seq Mode = Internal** (the kit holds Full-on Basic), press Play at 145 BPM | The kit plays the pattern in time with Cubase; bar 4 has a tom fill |
 | 16 | Loop bars 1–4, seek, change tempo, stop/start | Stays on the grid; downbeat replays on loop; no hits while stopped |
 | 17 | Re-import the clip with Seq Mode = Internal | No doubled hits (incoming notes are ignored); Seq Mode = Both plays both |
-| 18 | Swing 0.3, Accent 0, lane switches, Steps 8, other patterns | Audible changes as described |
+| 18 | Swing 0.3, Accent 0, lane switches; on the **Pattern** page choose another factory pattern, click steps on/off, drag a step's velocity, shift-click an accent, set 8 steps / 2 bars | Audible changes as described; edits play from the next beat without restarting the bar |
+| 18a | Pattern page → export / drag MIDI to Cubase, put the eight lane tracks on the kit's channel, set Seq Mode = Host MIDI | The exported lanes play exactly the edited pattern (no doubled hits) |
 | 19 | Save with Seq Mode = Internal, reopen | Same pattern, no duplicate beats |
 
 ## 4. One kit, eight MIDI tracks (Kick, Snare, Hats ... on separate tracks)

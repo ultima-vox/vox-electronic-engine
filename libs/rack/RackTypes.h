@@ -22,10 +22,13 @@ struct Routing {
 };
 
 struct PersistentSlotState {
-  std::uint32_t schemaVersion{6};
+  std::uint32_t schemaVersion{7};
   instrument::SlotId slotId{instrument::invalidSlotId};
   instrument::InstrumentId instrumentId;
   std::string resolvedProviderId;
+  // Signed package identity of the resolved instrument (trusted publisher key
+  // id); empty for built-in and unsigned graph content.
+  std::string publisherId;
   std::uint32_t instrumentVersion{};
   std::uint32_t instrumentStateVersion{1};
   std::uint32_t contentVersion{};
@@ -50,9 +53,11 @@ struct PersistentSlotState {
   struct DirectValue {
     instrument::ParameterId id;
     float value{};
-    // Pool endpoint the value was bound to when saved (-1: unknown, e.g. a
-    // pre-schema-6 state). Append-only migration requires it to match.
+    // Pool endpoint and parameter meaning (hostparams::parameterSpecHash) the
+    // value was bound to when saved; -1 / 0 only before the slot resolves.
+    // A resolved slot and the append-only upgrade require both to match.
     std::int16_t poolIndex{-1};
+    std::uint32_t spec{};
   };
   std::vector<DirectValue> directParameters;
 };

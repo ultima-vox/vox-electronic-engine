@@ -88,7 +88,9 @@ public:
 // and a narrowed range that invalidates a saved value.
 enum class Revision {
   v1, reordered, extended, extendedUnversioned, moved, renamed, narrowed,
-  movedUnversioned // same version, IDs and count; only gain's index moves
+  movedUnversioned, // same version, IDs and count; only gain's index moves
+  extendedNoUpgrade, // version 2 adds drive but declares no upgrade path
+  restepped          // version 2: gain keeps its range, its step changes
 };
 class Provider final : public instrument::InstrumentProvider {
   instrument::InstrumentDescriptor descriptor_;
@@ -139,10 +141,14 @@ public:
       std::reverse(d.parameters.begin(), d.parameters.end());
     if (revision != Revision::v1 && revision != Revision::reordered &&
         revision != Revision::extendedUnversioned &&
-        revision != Revision::movedUnversioned)
+        revision != Revision::movedUnversioned) {
       d.instrumentVersion = 2;
+      // Version 2 declares the append-only upgrade from version 1.
+      d.upgradeFromVersion = revision == Revision::extendedNoUpgrade ? 0 : 1;
+    }
     if (revision == Revision::extended ||
-        revision == Revision::extendedUnversioned) {
+        revision == Revision::extendedUnversioned ||
+        revision == Revision::extendedNoUpgrade) {
       auto drive = d.parameters.front();
       drive.id = "drive";
       drive.name = "Drive";
@@ -159,6 +165,8 @@ public:
       gainParameter.poolIndex = 3;
     if (revision == Revision::narrowed)
       gainParameter.maximum = 0.5f;
+    if (revision == Revision::restepped)
+      gainParameter.step = 0.1f; // 0.6 stays valid; the meaning changed
     if (revision == Revision::renamed)
       d.parameters.front().id = "brightness"; // was "tone"
     if (future_) {
@@ -450,10 +458,17 @@ void futureParameterDomainRemainsOpaque(
   auto slot = future.getChildWithName("RACK").getChild(0);
   slot.setProperty("instrumentStateVersion", 2, nullptr);
   constexpr float futureGain = 1.5f;
+  // The project as the future module saved it: its value and the meaning of
+  // its own (wider) gain parameter.
+  const Provider futureProvider(true);
+  const auto futureSpec = instrument::hostparams::parameterSpecHash(
+      futureProvider.descriptors()[0].parameters[0]);
   for (auto child : slot)
     if (child.hasType("SOUND_PARAMETER") &&
-        child.getProperty("id").toString() == "gain")
+        child.getProperty("id").toString() == "gain") {
       child.setProperty("value", futureGain, nullptr);
+      child.setProperty("spec", static_cast<juce::int64>(futureSpec), nullptr);
+    }
   auto hostGain = parameterChild(future, id(0, "gain"));
   check(hostGain.isValid(),
         "future parameter fixture contains the actual installed host endpoint");
@@ -684,7 +699,8 @@ void sameInstrumentUpgrade() {
   // Incompatible version-2 changes are never migrated: unresolved, silent,
   // original snapshot preserved.
   for (const auto revision :
-       {Revision::moved, Revision::renamed, Revision::narrowed}) {
+       {Revision::moved, Revision::renamed, Revision::narrowed,
+        Revision::extendedNoUpgrade, Revision::restepped}) {
     auto incompatible = processorFor(revision);
     open(*incompatible, v1Project);
     check(!resolved(*incompatible) &&
@@ -693,7 +709,8 @@ void sameInstrumentUpgrade() {
               saved(*incompatible, 0, "tone") == 5000 &&
               !hasNamed(*incompatible, "brightness") &&
               render(*incompatible) == std::array<float, 2>{0, 0},
-          "moved index, removed ID or invalidated value stays unresolved");
+          "moved index, removed ID, changed meaning or an undeclared upgrade "
+          "stays unresolved");
   }
 
   // A v1 snapshot without recorded pool endpoints cannot prove index
@@ -702,8 +719,20 @@ void sameInstrumentUpgrade() {
   for (auto child : unindexed.getChildWithName("RACK").getChild(0))
     child.removeProperty("pool", nullptr);
   auto noIndex = processorFor(Revision::extended);
-  open(*noIndex, encodeProject(unindexed));
-  check(!resolved(*noIndex), "snapshot without pool indices is not migrated");
+  const auto noIndexBefore = capture(*noIndex);
+  const auto noIndexSound = render(*noIndex);
+  rejectedRestoreKeepsLiveState(*noIndex, encodeProject(unindexed), noIndexBefore,
+                                noIndexSound);
+  auto unspecified = decodeProject(v1Project);
+  for (auto child : unspecified.getChildWithName("RACK").getChild(0))
+    child.removeProperty("spec", nullptr);
+  auto noSpec = processorFor(Revision::v1);
+  const auto noSpecBefore = capture(*noSpec);
+  const auto noSpecSound = render(*noSpec);
+  rejectedRestoreKeepsLiveState(*noSpec, encodeProject(unspecified), noSpecBefore,
+                                noSpecSound);
+  check(namedChild(decodeProject(v1Project), 0, "gain").hasProperty("spec"),
+        "a saved value records its parameter meaning");
 
   // A migration whose provider preparation fails rejects the whole restore.
   auto rollback = processorFor(Revision::extended);
@@ -728,12 +757,12 @@ void sameInstrumentUpgrade() {
                 ->getName(64) == "Slot 1 Gain",
         "rejected same-version index drift never rebinds the saved endpoint");
 
-  // Legacy policy: a snapshot without recorded indices matches by ID only.
+  // No match-by-ID fallback: a snapshot without recorded indices is not a
+  // 1.0 project and is rejected even where IDs would match.
   auto legacy = processorFor(Revision::movedUnversioned);
-  open(*legacy, encodeProject(unindexed));
-  check(resolved(*legacy) &&
-            std::abs(saved(*legacy, 0, "gain") - 0.6f) < 1e-6f,
-        "legacy unindexed snapshot keeps the documented match-by-ID policy");
+  const auto legacyBefore = capture(*legacy);
+  const auto legacySound = render(*legacy);
+  rejectedRestoreKeepsLiveState(*legacy, encodeProject(unindexed), legacyBefore, legacySound);
 
   // Duplicate named IDs never commit, including through migration.
   for (const auto revision : {Revision::v1, Revision::extended}) {

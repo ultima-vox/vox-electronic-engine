@@ -36,6 +36,7 @@ add_library(vst_instrument STATIC
   libs/instrument/InstrumentRegistry.cpp libs/instrument/InstrumentRegistry.h
   libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h)
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_instrument PUBLIC vst_pattern)
 
 # native: host side of the instrument module ABI V2 (controller-thread loading,
 # descriptor import, provider/instance adapters). PROPOSED, not frozen.
@@ -114,6 +115,11 @@ add_library(vst_sequence STATIC
   libs/sequence/RealtimeSequenceBridge.h)
 target_include_directories(vst_sequence PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_sequence PUBLIC juce::juce_audio_basics)
+
+# pattern: V2 pattern contract host model (validation, encoding, snapshots).
+add_library(vst_pattern STATIC
+  libs/pattern/Pattern.cpp libs/pattern/Pattern.h)
+target_include_directories(vst_pattern PUBLIC ${VST_LIBS_DIR})
 
 # transport: pure PPQ/grid musical-time math (header-only).
 add_library(vst_transport INTERFACE)
@@ -206,11 +212,12 @@ add_library(vst_ui STATIC
   libs/ui/ZoneRangeEditor.cpp libs/ui/ZoneRangeEditor.h
   libs/ui/MainNavigation.cpp libs/ui/MainNavigation.h
   libs/ui/GlobalHeader.cpp libs/ui/GlobalHeader.h
-  libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h)
+  libs/ui/StepSequencer.cpp libs/ui/StepSequencer.h
+  libs/ui/PatternGrid.cpp libs/ui/PatternGrid.h)
 target_include_directories(vst_ui PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_ui PUBLIC
   juce::juce_gui_basics juce::juce_audio_utils juce::juce_audio_processors
-  vox_ui vst_sequence vst_preset)
+  vox_ui vst_sequence vst_preset vst_pattern)
 
 # ---------------------------------------------------------------------------
 # VST3 shell: composition + host integration only.
@@ -291,6 +298,14 @@ target_include_directories(rack_lifecycle_tests PRIVATE tests)
 target_link_libraries(rack_lifecycle_tests PRIVATE vst_rack)
 add_test(NAME rack_lifecycle_tests COMMAND rack_lifecycle_tests)
 
+add_executable(rack_upgrade_tests tests/rack/RackUpgradeTests.cpp)
+target_link_libraries(rack_upgrade_tests PRIVATE vst_rack)
+add_test(NAME rack_upgrade_tests COMMAND rack_upgrade_tests)
+
+add_executable(rack_ducking_tests tests/rack/RackDuckingTests.cpp)
+target_link_libraries(rack_ducking_tests PRIVATE vst_rack)
+add_test(NAME rack_ducking_tests COMMAND rack_ducking_tests)
+
 add_executable(rack_live_controls_tests tests/rack/RackLiveControlsTests.cpp)
 target_link_libraries(rack_live_controls_tests PRIVATE vst_rack)
 add_test(NAME rack_live_controls_tests COMMAND rack_live_controls_tests)
@@ -312,6 +327,11 @@ add_executable(generated_note_scheduler_tests
 target_link_libraries(generated_note_scheduler_tests PRIVATE vst_midi)
 add_test(NAME generated_note_scheduler_tests
          COMMAND generated_note_scheduler_tests)
+
+find_package(Threads REQUIRED)
+add_executable(pattern_tests tests/pattern/PatternTests.cpp)
+target_link_libraries(pattern_tests PRIVATE vst_pattern Threads::Threads)
+add_test(NAME pattern_tests COMMAND pattern_tests)
 
 add_executable(psy_bass_tests tests/bass/PsyBassTests.cpp)
 target_link_libraries(psy_bass_tests PRIVATE vst_bass)

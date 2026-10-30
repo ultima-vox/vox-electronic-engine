@@ -66,6 +66,12 @@ inline float canonicalPlain(float value,
   return std::clamp(value, parameter.minimum, parameter.maximum);
 }
 
+// Fingerprint of what a parameter means to a saved value: type, range, step,
+// unit and choice labels (not its display name or default). A saved project
+// records it per value; a different fingerprint under the same instrument
+// version, or across an upgrade, rejects the state. Never zero.
+[[nodiscard]] std::uint32_t parameterSpecHash(const ParameterDescriptor &) noexcept;
+
 std::string macroId(std::size_t slotIndex, std::size_t macroIndex);
 std::string macroName(std::size_t slotIndex, std::size_t macroIndex);
 // Host ID of pool endpoint `poolIndex` (0-based) in a slot: "slotNN.pKKK".
