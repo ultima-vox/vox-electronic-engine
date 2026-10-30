@@ -79,7 +79,8 @@ bool AudioRouting::begin(const AudioRoutingControls &controls,
                          std::span<const ProcessSlotControls> slots,
                          std::span<const RackRouter::DestinationBuffer> events,
                          std::uint32_t count,
-                         std::span<const VoxNoteEventV2> generated) noexcept {
+                         std::span<const VoxNoteEventV2> generated,
+                         bool routedIgnored) noexcept {
   blockReady_ = false;
   if (!prepared_ || count == 0 || count > spec_.maximumBlockSize ||
       !valid(controls) || slots.size() > instrument::maxSlots ||
@@ -101,7 +102,8 @@ bool AudioRouting::begin(const AudioRoutingControls &controls,
   for (std::size_t i = 0; i < slots.size(); ++i)
     if (slots[i].slotId == controls.kickSource && slots[i].enabled &&
         !slots[i].mute && (!solo || slots[i].solo)) {
-      triggers = events[i].view();
+      if (!routedIgnored)
+        triggers = events[i].view();
       audibleSource = true;
     }
   if (!audibleSource)

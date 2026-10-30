@@ -336,7 +336,8 @@ void layout() {
       sizeof(VoxContentApiV2), L(VoxContentApiV2, getPatternCaps),
       L(VoxContentApiV2, getFactoryPattern), L(VoxProcessContextV2, noteOutput),
       sizeof(VoxNoteEventV2), L(VoxNoteEventV2, note), L(VoxNoteEventV2, flags),
-      sizeof(VoxNoteOutputV2), L(VoxNoteOutputV2, count), L(VoxNoteOutputV2, events)};
+      sizeof(VoxNoteOutputV2), L(VoxNoteOutputV2, count), L(VoxNoteOutputV2, events),
+      L(VoxNoteOutputV2, routedNotes), L(VoxNoteOutputV2, reserved)};
 #undef L
   REQUIRE(count == std::size(cpp), "C and C++ layout tables have the same length");
   for (std::uint32_t i = 0; i < count; ++i)

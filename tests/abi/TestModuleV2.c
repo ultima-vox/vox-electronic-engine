@@ -139,6 +139,16 @@ static void writeNotes(const struct VoxInstanceT *s, const VoxProcessContextV2 *
   memcpy((uint8_t *)out->events, &a, sizeof(a));
   memcpy((uint8_t *)out->events + out->stride, &b, sizeof(b));
   out->count = s->noteMode == 8 ? out->capacity + 1 : 2;
+  /* V2.2 routed-notes report, written only when the host's struct has it:
+   * 10 ALL_IGNORED, 11 an undefined value, 12 a non-zero reserved word. */
+  if (out->structSize >= offsetof(VoxNoteOutputV2, reserved) + sizeof(out->reserved)) {
+    if (s->noteMode == 10)
+      out->routedNotes = VOX_ROUTED_NOTES_ALL_IGNORED;
+    else if (s->noteMode == 11)
+      out->routedNotes = 7;
+    else if (s->noteMode == 12)
+      out->reserved = 5;
+  }
 }
 
 /* Pattern content: two lanes on notes 60/64, velocity + accent, one factory

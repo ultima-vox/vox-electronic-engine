@@ -40,10 +40,13 @@ public:
   // MIDI notes and the notes it generated itself this block (`generated`,
   // e.g. a drum module's internal sequencer), so the Rack must call this after
   // the source has rendered. A kick that is both routed MIDI and generated at
-  // the same sample triggers once.
+  // the same sample triggers once. `routedIgnored`: the source reported
+  // (validated VOX_ROUTED_NOTES_ALL_IGNORED) that none of its routed NoteOns
+  // sounded this block, so only `generated` can trigger.
   bool begin(const AudioRoutingControls &, std::span<const ProcessSlotControls>,
              std::span<const RackRouter::DestinationBuffer>, std::uint32_t samples,
-             std::span<const VoxNoteEventV2> generated = {}) noexcept;
+             std::span<const VoxNoteEventV2> generated = {},
+             bool routedIgnored = false) noexcept;
   void mixSlot(std::size_t, std::span<float *>, std::span<float *>,
                const ProcessSlotControls &, bool audible,
                std::uint32_t) noexcept;
