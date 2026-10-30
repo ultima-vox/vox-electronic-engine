@@ -1,0 +1,350 @@
+{
+  "voxSoundLayout": 1,
+  "sections": [
+    {
+      "title": "KICK",
+      "controls": [
+        {
+          "parameter": "kick.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "kick.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "kick.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "kick.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "kick.character",
+          "kind": "knob",
+          "label": "CLICK"
+        },
+        {
+          "parameter": "kick.pitch_amount",
+          "kind": "knob",
+          "label": "PITCH ENV"
+        },
+        {
+          "parameter": "kick.pitch_decay",
+          "kind": "knob",
+          "label": "PITCH DECAY"
+        },
+        {
+          "parameter": "kick.drive",
+          "kind": "knob",
+          "label": "DRIVE"
+        },
+        {
+          "parameter": "kick.sub",
+          "kind": "knob",
+          "label": "SUB"
+        },
+        {
+          "parameter": "kick.tail",
+          "kind": "knob",
+          "label": "TAIL"
+        }
+      ]
+    },
+    {
+      "title": "SNARE",
+      "controls": [
+        {
+          "parameter": "snare.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "snare.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "snare.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "snare.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "snare.character",
+          "kind": "knob",
+          "label": "SNAPPY"
+        }
+      ]
+    },
+    {
+      "title": "CLAP",
+      "controls": [
+        {
+          "parameter": "clap.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "clap.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "clap.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "clap.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "clap.character",
+          "kind": "knob",
+          "label": "TONE"
+        }
+      ]
+    },
+    {
+      "title": "CLOSED HAT",
+      "controls": [
+        {
+          "parameter": "chat.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "chat.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "chat.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "chat.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "chat.character",
+          "kind": "knob",
+          "label": "TONE"
+        }
+      ]
+    },
+    {
+      "title": "OPEN HAT",
+      "controls": [
+        {
+          "parameter": "ohat.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "ohat.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "ohat.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "ohat.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "ohat.character",
+          "kind": "knob",
+          "label": "TONE"
+        }
+      ]
+    },
+    {
+      "title": "TOM",
+      "controls": [
+        {
+          "parameter": "tom.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "tom.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "tom.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "tom.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "tom.character",
+          "kind": "knob",
+          "label": "SWEEP"
+        }
+      ]
+    },
+    {
+      "title": "RIM",
+      "controls": [
+        {
+          "parameter": "rim.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "rim.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "rim.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "rim.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "rim.character",
+          "kind": "knob",
+          "label": "TONE"
+        }
+      ]
+    },
+    {
+      "title": "CYMBAL",
+      "controls": [
+        {
+          "parameter": "cymbal.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "cymbal.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "cymbal.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "cymbal.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "cymbal.character",
+          "kind": "knob",
+          "label": "TONE"
+        }
+      ]
+    },
+    {
+      "title": "KIT",
+      "controls": [
+        {
+          "parameter": "kit.volume",
+          "kind": "knob",
+          "label": "VOLUME"
+        },
+        {
+          "parameter": "kit.velocity",
+          "kind": "knob",
+          "label": "VELOCITY"
+        },
+        {
+          "parameter": "kit.hat_choke",
+          "kind": "toggle",
+          "label": "HAT CHOKE"
+        }
+      ]
+    },
+    {
+      "title": "SEQUENCER",
+      "controls": [
+        {
+          "parameter": "seq.mode",
+          "kind": "selector",
+          "label": "MODE"
+        },
+        {
+          "parameter": "seq.swing",
+          "kind": "knob",
+          "label": "SWING"
+        },
+        {
+          "parameter": "seq.accent",
+          "kind": "knob",
+          "label": "ACCENT"
+        },
+        {
+          "parameter": "seq.lane.kick",
+          "kind": "toggle",
+          "label": "KICK"
+        },
+        {
+          "parameter": "seq.lane.snare",
+          "kind": "toggle",
+          "label": "SNARE"
+        },
+        {
+          "parameter": "seq.lane.clap",
+          "kind": "toggle",
+          "label": "CLAP"
+        },
+        {
+          "parameter": "seq.lane.chat",
+          "kind": "toggle",
+          "label": "CLOSED HAT"
+        },
+        {
+          "parameter": "seq.lane.ohat",
+          "kind": "toggle",
+          "label": "OPEN HAT"
+        },
+        {
+          "parameter": "seq.lane.tom",
+          "kind": "toggle",
+          "label": "TOM"
+        },
+        {
+          "parameter": "seq.lane.rim",
+          "kind": "toggle",
+          "label": "RIM"
+        },
+        {
+          "parameter": "seq.lane.cymbal",
+          "kind": "toggle",
+          "label": "CYMBAL"
+        }
+      ]
+    }
+  ]
+}

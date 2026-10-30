@@ -134,10 +134,12 @@ private:
 
     class MacroPage final : public juce::Component {
     public:
-        // `instrumentControls` adds the generic per-instrument section: one
-        // real control per direct parameter of the bound slot.
+        // `all` adds the generic per-instrument section: one real control per
+        // direct parameter of the bound slot. `layout` shows the instrument's
+        // declarative SOUND layout in place of the macros when it ships one.
+        enum class InstrumentControls { none, all, layout };
         MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount,
-                  bool instrumentControls = false);
+                  InstrumentControls = InstrumentControls::none);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
     private:
         void bindInstrumentControls(std::size_t);
@@ -150,6 +152,8 @@ private:
         juce::Rectangle<int> groupBounds;
         std::size_t count;
         bool hasInstrumentControls;
+        bool layoutMode;
+        juce::String directHeading { "INSTRUMENT CONTROLS" };
         // Instrument controls. Declaration order matters: attachments are
         // destroyed before their controls, controls before their content
         // holder, and the viewport before the content it views.
@@ -159,6 +163,10 @@ private:
         juce::Label directEmpty;
         std::vector<std::unique_ptr<juce::Label>> directLabels;
         std::vector<std::unique_ptr<juce::Component>> directControls;
+        // Declarative SOUND layout of the bound instrument: section titles and
+        // the index of each section's first control. Empty: the generic list.
+        std::vector<std::unique_ptr<juce::Label>> directSectionTitles;
+        std::vector<std::size_t> directSectionStarts;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> directSliderAttachments;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> directButtonAttachments;
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> directComboAttachments;

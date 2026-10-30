@@ -34,7 +34,8 @@ add_library(vst_instrument STATIC
   libs/instrument/InstrumentContract.h
   libs/instrument/HostParameterSchema.cpp libs/instrument/HostParameterSchema.h
   libs/instrument/InstrumentRegistry.cpp libs/instrument/InstrumentRegistry.h
-  libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h)
+  libs/instrument/ModuleState.cpp libs/instrument/ModuleState.h
+  libs/instrument/SoundLayout.cpp libs/instrument/SoundLayout.h)
 target_include_directories(vst_instrument PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_instrument PUBLIC vst_pattern)
 
@@ -612,7 +613,9 @@ if(VOX_NATIVE_PLATFORM)
     OUTPUT ${VOX_INSTRUMENTS_DIR}/VoxFullOnDrums.vins
     ID com.ultimavox.fullon-drums VERSION 0.1.0
     NAME "Full-on Drums" VENDOR "Ultima Vox"
-    INSTRUMENTS com.ultimavox.fullon-drums MODULE_TARGET VoxFullOnDrums)
+    INSTRUMENTS com.ultimavox.fullon-drums MODULE_TARGET VoxFullOnDrums
+    UI com.ultimavox.fullon-drums ui/sound.json
+      ${CMAKE_CURRENT_SOURCE_DIR}/instruments/fullon-drums/sound.json)
 
   add_executable(fullon_drums_tests tests/integration/FullOnDrumsTests.cpp)
   target_include_directories(fullon_drums_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
