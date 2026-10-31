@@ -46,64 +46,128 @@ The problem: a slot has one stereo output, and the Rack's sends act per slot.
 Per-pad Send 1/2 and per-pad output assignment therefore cannot reach a Rack
 FX return today.
 
-The proposal is an append-only ABI V2.3, gated by size like V2.2:
+**ABI V2.3** (append-only, gated by size like V2.2):
 - **Descriptor:** a module may declare up to 8 stereo **auxiliary buses**,
   each `{ kind, target }`:
-  - `SEND` with target return 1–4: the module sums each pad's
-    `send.N × pad signal` into it;
-  - `OUTPUT` with target 2–8: an additional pad output.
+  - `SEND` with target return 1–4;
+  - `OUTPUT` with target host output 2–8.
 - **Process context:** `auxOutputs` (stereo pointers) and `auxBusCount`,
-  provided by the host and cleared by the adapter on failed, faulted,
+  provided by the host. The adapter clears all aux buses on failed, faulted,
   bypassed or silenced blocks (the same `blockSilenced` rule as #91).
-- **Rack:**
-  - adds a slot's `SEND` buses into the inputs of their returns. They follow
-    the slot's disable/mute/solo and ducking, and are not scaled by slot
-    level (like a pre-fader tap); returns keep their tails;
-  - never adds aux buses to Main, so nothing is counted twice.
-- **`OUTPUT` buses:**
-  - phase B1: summed into the slot's main output, so a pad assigned to Out 2
-    still sounds;
-  - phase B2: the Rack's additional VST3 stereo outputs, with Cubase and
-    REAPER bus activation checked (RACK_AUDIO_ROUTING today declares Main
-    only). B2 is its own owner decision.
-- **Meters:** an optional fixed `padPeaks[8]` output from the module,
-  published by the Rack through atomics for the MIXER meters. No locks and
-  no UI dependency.
 - **Old modules** see an unchanged context and declare no aux buses.
+
+**Module rule:**
+- Every pad is rendered into **exactly one** dry destination: Main, or the
+  OUTPUT bus its `pad.output` selects. Never both.
+- Independently, the module adds `send.N × pad signal` (taken after pad level
+  and pan) into SEND bus N.
+
+**Rack mixing policy, disjoint by bus kind:**
+
+| Signal | B1 (now: the VST3 exposes Main only) | B2 (host outputs active) |
+| --- | --- | --- |
+| Main | slot dry input | slot dry input |
+| OUTPUT bus k | **added once** into the slot dry input, next to Main | goes to host output k through the same slot chain (below), **not** into Main. If output k is inactive in the DAW, it falls back to the slot dry input, once, exactly as in B1 |
+| SEND bus N | only into the input of Rack return N, never into Main or any OUTPUT | same |
+
+**Slot chain** for the slot dry input and for each B2 output path: ducking,
+then slot level/pan, gated by disable/mute/solo. The slot's own pre/post sends
+tap the **sum of Main and every OUTPUT bus**, in both B1 and B2. A pad
+therefore keeps the same dry gain, ducking and slot-send contribution when
+the project moves from B1 to B2; only the physical destination changes.
+
+SEND buses follow the slot's disable/mute/solo and ducking, and are not
+scaled by slot level (like a pre-fader tap). Returns keep their tails, as
+today.
+
+**State:** `pad.output` (Main / Out 2 … Out 8) is a UI-only parameter, saved
+now. Under B1 it changes nothing audible. After B2 is enabled, the same
+project routes the pad to the host output as soon as that output is active.
+
+**Meters:** an optional fixed `padPeaks[8]` output from the module, published
+by the Rack through atomics for the MIXER meters. No locks and no UI
+dependency.
+
+**Regression tests:**
+- a pad routed to Out 2 under B1 sounds exactly once (bit-equal to the pad on
+  Main);
+- simultaneous Main + Send + Out 2: each signal appears only where the table
+  puts it;
+- the B1→B2 switch keeps dry gain, ducking and slot sends equal; an inactive
+  B2 output falls back exactly once;
+- ducking does not depend on slot order;
+- send-return tails survive mute/solo; faulted or silenced modules leave
+  every aux bus silent (no phantom send or duck).
 
 ### C. Sample hand-off (hybrid synthesis + WAV)
 
-- **Sources:**
-  - factory samples inside the signed `.vins` (`samples/*.wav`, listed with
-    their SHA-256 in the manifest);
-  - user WAV files, referenced by path, SHA-256 and length.
-- **Decoding:** off the audio thread, by the host (JUCE format readers), on a
-  bounded loader worker. It produces immutable float buffers at the file's
-  native rate, plus the peak (for Normalize) and a waveform overview for the
-  UI. Limits: per-sample length and a per-slot memory budget, both to be
-  measured and approved.
-- **ABI V2.3, an appended module entry:**
-  - `setSample(instance, sampleSlot, const VoxSampleV2 *)`, called only off
-    the audio thread. `VoxSampleV2 = { frames, channels, sampleRate, data,
-    peak, id }`;
-  - the module publishes the new pointer to its audio thread atomically at
-    the next block;
-  - the host frees a replaced buffer only after the Rack's processed-block
-    counter has advanced past the swap (no free while the audio thread may
-    read it).
-- **Playback (module):**
-  - start/end points, One Shot or Loop, and Reverse are read modes of the
-    same buffer;
-  - interpolated resampling for Tune/Fine and for the file rate;
-  - gain and Normalize (`1 / peak`);
-  - retrigger with a 3 ms fade, as the existing voices do;
-  - per-pad source: Synth, Sample, or Layer (both).
-- **State:**
-  - the slot saves sample references in the Rack slot state (a new optional
-    field, append-only);
-  - a missing or changed file (hash mismatch) leaves the pad on its synthesis
-    source, reports it in `SlotDiagnostics.lastError`, and offers Locate in
-    the UI. The project still opens.
+**Sources:**
+- factory samples inside the signed `.vins` (`samples/*.wav`, listed with
+  their SHA-256 in the manifest);
+- user WAV files, referenced by path, SHA-256 and length.
+
+**Decoding:** off the audio thread, by the host (JUCE format readers), on a
+bounded loader worker. It produces immutable float buffers at the file's
+native rate, plus the peak (for Normalize) and a waveform overview for the UI.
+Limits: per-sample length and a per-slot memory budget, both to be measured
+and approved.
+
+**Ownership and lifetime.** The host owns every decoded buffer and frees it
+only through the retirement protocol below. The module never allocates or
+frees sample memory.
+
+- **ABI V2.3, appended module entries (all called off the audio thread):**
+  - `setSample(instance, sampleSlot, const VoxSampleV2 *)` installs a buffer.
+    `VoxSampleV2 = { frames, channels, sampleRate, data, peak, id }`;
+  - `sampleInUse(instance, id) -> bool` reports whether the buffer may still
+    be read.
+- **Generations.** The module keeps a fixed table of buffer generations per
+  sample slot (current, pending, and up to 3 retiring; bounded). `setSample`
+  writes the pending entry. At the next block start, the audio thread makes it
+  current.
+- **Voices** started before the swap keep reading their old buffer (option a:
+  a ringing sample is never cut). Each generation has an audio-thread-owned
+  count of active voices. A voice's start and end only change that count:
+  nothing is freed or allocated on the audio thread.
+- **Epoch.** After updating the counts, the audio thread publishes a block
+  epoch. `sampleInUse(id)` returns false only when the generation is neither
+  current nor pending, its voice count is 0, and the epoch has advanced past
+  the block that made the count 0. So no reader can still hold it.
+- **Retirement.** The host keeps replaced buffers on a bounded retirement
+  list, polls `sampleInUse` from the controller timer, and frees a buffer only
+  when it reports false. If all retiring entries are busy (for example rapid
+  A→B→C→D swaps while A still rings), `setSample` refuses, and the UI retries
+  after the next poll. There is never an unbounded queue.
+- **Quiescing.** Reset, Panic, transport-stop reset, `prepare`, instance
+  destroy and project reload end all voices. After the next epoch every
+  non-current generation is free. On slot unload and host shutdown the host
+  destroys the instance (non-realtime) before freeing its buffers.
+
+**Playback (module):**
+- start/end points, One Shot or Loop, and Reverse are read modes of the same
+  buffer;
+- interpolated resampling for Tune/Fine and for the file rate;
+- gain and Normalize (`1 / peak`);
+- retrigger with a 3 ms fade, as the existing voices do;
+- per-pad source: Synth, Sample, or Layer (both).
+
+**State:**
+- the slot saves sample references in the Rack slot state (a new optional
+  field, append-only);
+- a missing or changed file (hash mismatch) leaves the pad on its synthesis
+  source, reports it in `SlotDiagnostics.lastError`, and offers Locate in the
+  UI. The project still opens.
+
+**Stress tests** (ASan on Linux, plus Windows CI stress; the allocation, lock
+and free probes stay at 0 in the callback):
+- replace during a long one-shot and during a loop;
+- rapid A→B→C swaps;
+- retrigger and fade across the swap;
+- slot unload, stop, Panic and project reload while voices ring;
+- instance destroy/shutdown with retiring buffers;
+- the retirement list full (refused, then accepted);
+- a deterministic oracle: output with a swap equals output without it until
+  the new voices start.
 
 ### D. Pattern content V2.1 (per-step probability)
 
