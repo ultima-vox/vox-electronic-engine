@@ -47,10 +47,24 @@ Per-pad Send 1/2 and per-pad output assignment therefore cannot reach a Rack
 FX return today.
 
 **ABI V2.3** (append-only, gated by size like V2.2):
-- **Descriptor:** a module may declare up to 8 stereo **auxiliary buses**,
-  each `{ kind, target }`:
-  - `SEND` with target return 1–4;
-  - `OUTPUT` with target host output 2–8.
+- **Descriptor:** a module may declare stereo **auxiliary buses**, each
+  `{ kind, target }`, bounded so that the full advertised topology fits at
+  once:
+  - up to **4** `SEND` buses, one per Rack return 1–4 (no two with the same
+    target);
+  - up to **7** `OUTPUT` buses, one per host output 2–8 (no two with the
+    same target);
+  - so at most **11** buses. Descriptor validation rejects more, duplicates,
+    or targets out of range, and the module is not loaded (fail closed).
+- **Full-on Drums declares 9:** `SEND` → returns 1 and 2 (pad Send 1, Send 2)
+  and `OUTPUT` → Out 2 … Out 8. Every pad output and send option shown in the
+  editor has its own bus, so all seven outputs and both sends can be active at
+  the same time. The editor offers only the targets the descriptor declared;
+  there are no phantom options.
+- **Memory:** the Rack allocates aux buffers at `prepare`, only for the buses
+  a slot's module declares: `2 × maxBlock × 4 bytes` per bus (Drums at a
+  2048-sample block: 9 × 16 KiB ≈ 147 KiB per slot). This is measured and
+  reported with the performance phase; nothing is allocated in the callback.
 - **Process context:** `auxOutputs` (stereo pointers) and `auxBusCount`,
   provided by the host. The adapter clears all aux buses on failed, faulted,
   bypassed or silenced blocks (the same `blockSilenced` rule as #91).
@@ -89,6 +103,11 @@ by the Rack through atomics for the MIXER meters. No locks and no UI
 dependency.
 
 **Regression tests:**
+- maximum topology: seven pads on Out 2 … Out 8 while every pad sends to
+  both Send 1 and Send 2, all at once; every signal is present exactly once
+  where the policy puts it, and none is aliased or dropped;
+- descriptors with 5 SEND or 8 OUTPUT buses, duplicate targets or
+  out-of-range targets are rejected deterministically;
 - a pad routed to Out 2 under B1 sounds exactly once (bit-equal to the pad on
   Main);
 - simultaneous Main + Send + Out 2: each signal appears only where the table
