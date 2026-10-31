@@ -494,6 +494,7 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
     preset.setName("rack.sound.preset");
     title.setName("rack.instrument.title");
     subtitle.setName("rack.instrument.subtitle");
+    midiIn.setName("rack.instrument.channel");
     const auto state = processor.instrumentRack().snapshotState()[selected];
     const auto descriptors = processor.availableInstruments();
     int descriptorIndex = 0;
@@ -511,13 +512,15 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
 
 void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
 {
-  const auto state = processor.instrumentRack().snapshotState()[selected];
   const auto *descriptor = processor.instrumentRack().descriptor(selected);
   title.setText(descriptor != nullptr ? descriptor->name : "Empty slot",
                 juce::dontSendNotification);
-  const int channel = state.routing.mode == vstengine::rack::RouteMode::off
-                          ? 0
-                          : state.routing.channel;
+  // The slot parameter is what the Rack routes by (as the slot rail shows);
+  // the persistent snapshot only follows it when the state is saved.
+  const int channel = juce::roundToInt(
+      processor.parameters()
+          .getRawParameterValue(slotId(selected, "MidiIn").c_str())
+          ->load());
   const auto slotText = "Slot " + juce::String(static_cast<int>(selected + 1));
   const auto channelText = channel == 0 ? juce::String("MIDI off")
                                         : "CH" + juce::String(channel);

@@ -1301,6 +1301,18 @@ void editorSoundLayout() {
   editor->refreshForTesting();
   check(findShown(*editor, "rack.sound.macro.1") == nullptr,
         "the layout replaces the SOUND macros for the kit");
+  // The header shows the slot's channel as the Rack routes it (the slot
+  // parameter), also before any audio block ran.
+  {
+    const auto expected = "CH" + juce::String(r.channel);
+    auto *subtitle = dynamic_cast<juce::Label *>(findShown(*editor, "rack.instrument.subtitle"));
+    auto *channel = dynamic_cast<juce::ComboBox *>(findShown(*editor, "rack.instrument.channel"));
+    check(r.channel > 0 && subtitle != nullptr && subtitle->getText().contains(expected) &&
+              channel != nullptr && channel->getText() == expected,
+          "the header shows the slot's channel " + expected.toStdString() + " (shown: \"" +
+              (subtitle ? subtitle->getText().toStdString() : std::string("none")) + "\", \"" +
+              (channel ? channel->getText().toStdString() : std::string("none")) + "\")");
+  }
   for (const auto &section : layout.sections)
     check(showsText(*editor, juce::String(section.title)), "section " + section.title + " is shown");
   int lastY = -1;
@@ -1320,6 +1332,13 @@ void editorSoundLayout() {
                        id);
       check(component->getBounds().getCentreY() >= lastY, control.parameter + " follows the layout order");
       lastY = component->getBounds().getCentreY();
+      // A knob shows its value as the host does, never a blank box.
+      if (auto *slider = dynamic_cast<juce::Slider *>(component)) {
+        const auto *endpoint = r.p->parameters().getParameter(id);
+        const auto shown = slider->getTextFromValue(slider->getValue());
+        check(shown.isNotEmpty() && shown == endpoint->getText(endpoint->getValue(), 128),
+              control.parameter + " shows its value (\"" + shown.toStdString() + "\")");
+      }
     }
   // A control drives its own parameter through the slot's pool endpoint.
   auto *decay = dynamic_cast<juce::Slider *>(

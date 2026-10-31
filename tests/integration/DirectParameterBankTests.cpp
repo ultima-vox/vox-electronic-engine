@@ -305,6 +305,8 @@ int main() {
   require(param("cutoff")->getName(64) == "Slot 1 Param 02" &&
               param("cutoff")->getLabel().isEmpty(),
           "unbound endpoint has a neutral generic name");
+  require(param("cutoff")->getText(0.5f, 0) == "0.500",
+          "unbound endpoint shows its value with length 0 (no limit)");
   auto a = base(p.first);
   auto b = base(p.second);
   require(p.bank.selectAndRestore(0, a), "select alpha bank");
@@ -317,6 +319,12 @@ int main() {
               param("octave")->getText(param("octave")->convertTo0to1(-2), 32) ==
                   "-2",
           "bound endpoint formats choice, boolean and integer values");
+  // JUCE editor attachments ask for the text with length 0 ("no limit").
+  require(param("wave")->getText(param("wave")->convertTo0to1(1), 0) == "Square" &&
+              param("cutoff")->getText(0.5f, 0) == param("cutoff")->getText(0.5f, 64) &&
+              param("cutoff")->getText(0.5f, 0).isNotEmpty() &&
+              param("wave")->getText(param("wave")->convertTo0to1(1), 3) == "Squ",
+          "length 0 means no limit; a positive length still truncates");
   require(param("wave")->convertFrom0to1(
               param("wave")->getValueForText("Sine")) == 2 &&
               param("cutoff")->convertFrom0to1(
