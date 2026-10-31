@@ -183,20 +183,35 @@ a separate future design.
 
 ## 5. Rack features with the kit (Cubase)
 
-Load **Vox Demo Synth** into slot 2 of the same Rack (it takes CH2) and give
-it a sustained chord on a second MIDI track on channel 2.
+**Starting state for steps 30–36** (restore it if a step changed it):
+- slot 1 = Full-on Drums on **CH1**, Seq Mode = Host MIDI, factory pattern
+  Full-on Basic; MIDI track "Kit" with `fullon-drums-145bpm-4bar.mid`, output
+  to the Rack, channel 1;
+- slot 2 = **Vox Demo Synth** on **CH2**; MIDI track "Chord" with a sustained
+  chord over the 4 bars, output to the same Rack, channel 2;
+- Settings → MIDI source = Auto; tempo 145; loop bars 1–4.
+
+Steps 30–36 all act on the kit in **slot 1**. Only step 37 moves it.
 
 | # | Action | Expected |
 | --- | --- | --- |
-| 30 | Settings → *Rack audio routing / sends / ducking...*: **Kick event source** = slot 1 (Full-on Drums), Note 36, Attack 1 ms, Hold 40 ms, Release 120 ms; **Duck depth** of slot 2 = 0.8. Play the groove (Seq Mode = Host MIDI) | The chord dips on every kick, starting with the kick itself (no lag) |
-| 31 | Same with Seq Mode = **Internal** (no MIDI clip) | The chord still dips on every internal kick |
-| 32 | Seq Mode = Internal with the 4-bar clip still on the kit's track | The chord dips only on the kicks you hear (the ignored host notes do not duck) |
-| 33 | Move the kit to slot 3 (unload slot 1, load the kit in slot 3, set the source to slot 3) | Ducking behaves the same whatever the slot order |
-| 34 | Mute slot 1 (right-click → Mute) | The kit is silent and the chord no longer dips; unmute → both return |
-| 35 | Slot 1 **Return 1** send 0.5 (Return 1 = Delay, ON), play, then stop | Delay echoes of the kit. At transport stop the kit's own voices stop at once (the Rack resets its instruments on stop), while the Return 1 echoes ring out and fade. Panic silences both |
-| 36 | Solo slot 2, then un-solo | Only the chord plays (kit and its sends silent); un-solo → all return |
-| 37 | Right-click slot 1 → *Unload instrument* while playing, then load Full-on Drums again | Unload: the kit stops, nothing hangs, the other slots keep playing. Reload: default kit on the first free channel; set Seq Mode and the channel again |
-| 38 | Edit the pattern (step 18), **Settings → Export selected pattern MIDI...**, re-import the file on the kit's channel with Seq Mode = Host MIDI, then bounce both versions offline (*Export → Audio Mixdown*) | The re-imported MIDI and the Internal pattern sound the same (same hits, velocities, accents) |
+| 30 | Settings → *Rack audio routing / sends / ducking...*: **Kick event source** = slot 1 (Full-on Drums), Note 36, Attack 1 ms, Hold 40 ms, Release 120 ms; **Duck depth** of slot 2 = 0.8. Play | The chord dips on every kick, starting with the kick itself (no lag) |
+| 31 | Mute the "Kit" track in Cubase; set slot 1 Seq Mode = **Internal**; play | The chord still dips on every internal kick |
+| 32 | Unmute the "Kit" track; keep Seq Mode = Internal; play | The chord dips only on the kicks you hear (the ignored host notes do not duck). Then set Seq Mode = Host MIDI again |
+| 33 | Right-click slot 1 → **Mute**; play; then unmute | Muted: the kit is silent and the chord no longer dips. Unmuted: both return |
+| 34 | Right-click slot 2 → **Solo**; play; then un-solo | Solo: only the chord plays (the kit and its sends are silent). Un-solo: all return |
+| 35 | Slot 1 **Return 1** send = 0.5 (Return 1 = Delay, ON); play, then stop the transport; set the send back to 0 | Delay echoes of the kit. At stop the kit's own voices stop at once (the Rack resets its instruments on stop), while the Return 1 echoes ring out and fade. Panic silences both |
+| 36 | Edit the slot 1 pattern (step 18) and set Seq Mode = Internal; **Settings → Export selected pattern MIDI...**; import the file, route its eight lane tracks to the Rack on channel 1 (section 4.2), mute the "Kit" track; bounce the Internal version offline (*Export → Audio Mixdown*); then Seq Mode = Host MIDI and bounce again | The two bounces sound the same (same hits, velocities, accents). Afterwards delete the imported lane tracks and unmute "Kit" |
+
+**Step 37 changes the slot order** and is the last Rack step. Start from the
+state above.
+
+| # | Action | Expected |
+| --- | --- | --- |
+| 37a | While playing, right-click slot 1 → **Unload instrument** | The kit stops; nothing hangs; the chord keeps playing. Slot 1 shows Empty and OFF (its channel is released) |
+| 37b | Load Full-on Drums into **slot 3** | The kit takes the first free channel, **CH1** (the header shows `Slot 3 | CH1`), so the "Kit" track on channel 1 plays it with no routing change. The kit starts from its defaults (Seq Mode = Host MIDI) |
+| 37c | Routing window: Kick event source = **slot 3**; slot 2 Duck depth still 0.8; play | The chord dips on every kick exactly as in step 30: ducking does not depend on the kit sitting before or after the chord slot |
+| 37d | Optional: unload slot 3 and load the kit into slot 1 again, source = slot 1 | Back to the starting state |
 
 ## 6. REAPER (same build, same files)
 
@@ -209,7 +224,7 @@ appear).
 | R1 | New track → *FX* → **VST3i: Vox Electronic Engine (Ultima Vox)** | Rack with 16 empty slots |
 | R2 | Load Full-on Drums in slot 1; insert `fullon-drums-145bpm-4bar.mid` on the track (tempo 145); play | The groove plays (track MIDI goes to the Rack on channel 1) |
 | R3 | Eight-track layout: insert `fullon-drums-145bpm-8-tracks.mid` as separate tracks; on each, remove its own FX and add a **send** (Routing → *MIDI: All → channel 1*, audio send off) to the Rack track | The eight tracks play the full groove into the one kit |
-| R4 | Steps 5, 6, 15–19 and 30–38 above, REAPER equivalents | As described there |
+| R4 | Steps 5, 6, 15–19 and 30–37 above, REAPER equivalents (same starting state) | As described there |
 | R5 | Automation: track envelope for **Slot 1 Kick Tune** and **Slot 1 Open Hat Decay** (*Envelopes* button); write, then Read | Sound follows the envelopes; the parameter names and values show (e.g. `Slot 1 Kick Tune`, a value in semitones) |
 | R6 | *File → Render* (offline) twice; save, close, reopen | Identical renders; same slot, channel, values and pattern |
 | R7 | Move `VoxFullOnDrums.vins` out, reopen; move it back, reopen | As steps 12–13 |
@@ -236,6 +251,6 @@ are not part of this build. The `.vins` packages are **development-signed**
 | 10 | Offline bounce, repeatable | NOT RUN | NOT RUN | |
 | 12–14 | Missing / reinstalled package | NOT RUN | NOT RUN | |
 | 15–18 | Internal pattern, transport, edits while playing | NOT RUN | NOT RUN | |
-| 18a, 38 | MIDI export → reimport parity | NOT RUN | NOT RUN | |
-| 30–33 | Same-block kick ducking, Host / Internal, slot order | NOT RUN | NOT RUN | |
-| 34–37 | Mute / solo, FX send tails, unload / reload | NOT RUN | NOT RUN | |
+| 18a, 36 | MIDI export → reimport parity | NOT RUN | NOT RUN | |
+| 30–32, 37c | Same-block kick ducking, Host / Internal, slot order | NOT RUN | NOT RUN | |
+| 33–35, 37a–b | Mute / solo, FX send tails, unload / reload | NOT RUN | NOT RUN | |
