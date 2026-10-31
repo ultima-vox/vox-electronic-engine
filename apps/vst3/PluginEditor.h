@@ -163,6 +163,8 @@ private:
         juce::Label directEmpty;
         std::vector<std::unique_ptr<juce::Label>> directLabels;
         std::vector<std::unique_ptr<juce::Component>> directControls;
+        void addUiOnly(std::size_t slot, const vstengine::instrument::ParameterDescriptor &,
+                       const std::string &caption);
         // Declarative SOUND layout of the bound instrument: section titles and
         // the index of each section's first control. Empty: the generic list.
         std::vector<std::unique_ptr<juce::Label>> directSectionTitles;

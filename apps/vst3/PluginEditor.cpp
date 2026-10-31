@@ -688,6 +688,71 @@ void VstEngineAudioProcessorEditor::MacroPage::layoutInstrumentControls()
     }
 }
 
+// A UI-only parameter has no host endpoint: its control writes through the
+// Rack (saved with the slot, applied at the next block, never automated).
+void VstEngineAudioProcessorEditor::MacroPage::addUiOnly(
+    std::size_t slot, const vstengine::instrument::ParameterDescriptor &parameter,
+    const std::string &caption_)
+{
+    float value = parameter.defaultValue;
+    for (const auto &saved : processor.instrumentRack().state()[slot].directParameters)
+        if (saved.id == parameter.id)
+            value = saved.value;
+    auto text = juce::String(parameter.name);
+    if (!parameter.unit.empty())
+        text << " (" << juce::String(parameter.unit) << ")";
+    auto label = std::make_unique<juce::Label>();
+    caption(*label, caption_.empty() ? text.toUpperCase() : juce::String(caption_));
+    label->setTooltip(text);
+    const auto set = [this, slot, id = parameter.id](float plain) {
+        juce::String why;
+        processor.setSlotParameter(slot, id, plain, why);
+    };
+    std::unique_ptr<juce::Component> control;
+    switch (parameter.type) {
+    case vstengine::instrument::ParameterType::boolean: {
+        auto button = std::make_unique<juce::ToggleButton>();
+        button->setToggleState(value >= 0.5f, juce::dontSendNotification);
+        button->onClick = [set, b = button.get()] { set(b->getToggleState() ? 1.0f : 0.0f); };
+        control = std::move(button);
+        break;
+    }
+    case vstengine::instrument::ParameterType::choice: {
+        auto combo = std::make_unique<juce::ComboBox>();
+        int itemId = 1;
+        for (const auto &choice : parameter.choices)
+            combo->addItem(juce::String(choice), itemId++);
+        combo->setSelectedId(juce::roundToInt(value) + 1, juce::dontSendNotification);
+        combo->onChange = [set, c = combo.get()] {
+            set(static_cast<float>(c->getSelectedId() - 1));
+        };
+        control = std::move(combo);
+        break;
+    }
+    case vstengine::instrument::ParameterType::floating:
+    case vstengine::instrument::ParameterType::integer:
+    default: {
+        auto slider = std::make_unique<juce::Slider>();
+        knob(*slider);
+        const double step = parameter.type == vstengine::instrument::ParameterType::integer
+                                ? 1.0
+                                : static_cast<double>(parameter.step);
+        slider->setRange(parameter.minimum, parameter.maximum, step);
+        slider->setValue(value, juce::dontSendNotification);
+        slider->onValueChange = [set, s = slider.get()] { set(static_cast<float>(s->getValue())); };
+        control = std::move(slider);
+        break;
+    }
+    }
+    if (auto *tip = dynamic_cast<juce::SettableTooltipClient *>(control.get()))
+        tip->setTooltip(text);
+    control->setName(slotId(slot, ".ui." + parameter.id));
+    directContent.addAndMakeVisible(*label);
+    directContent.addAndMakeVisible(*control);
+    directLabels.push_back(std::move(label));
+    directControls.push_back(std::move(control));
+}
+
 void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_t slot)
 {
     // Attachments capture the pool parameter's range at construction and the
@@ -701,10 +766,15 @@ void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_
     directSectionStarts.clear();
     const auto *descriptor = processor.instrumentRack().descriptor(slot);
     auto &state = processor.parameters();
-    // One real control bound to the parameter's pool endpoint; its widget
-    // follows the parameter type (a layout's kind was checked to match it).
+    // One real control bound to the parameter's pool endpoint (or, for a
+    // UI-only parameter, to the Rack); its widget follows the parameter type
+    // (a layout's kind was checked to match it).
     const auto add = [&](const vstengine::instrument::ParameterDescriptor &parameter,
                          const std::string &caption_) {
+        if (vstengine::instrument::hostparams::uiOnly(parameter)) {
+            addUiOnly(slot, parameter, caption_);
+            return;
+        }
         if (parameter.poolIndex < 0 ||
             parameter.poolIndex >= static_cast<std::int16_t>(
                                        vstengine::instrument::poolParametersPerSlot))

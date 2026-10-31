@@ -1,10 +1,12 @@
 // M0: the real Rack processor loads the V2 test module from its absolute path,
 // plays it through an existing slot's MIDI/audio routing, automates it through
 // the host pool and restores the same sound after save/reload.
+#include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <filesystem>
+#include <functional>
 #include <vector>
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -123,7 +126,7 @@ void registration() {
   bool listed = false;
   for (const auto *d : p->availableInstruments())
     listed |= d->id == toneId && d->providerId == instrument::native::providerId &&
-              d->directParameters && d->parameters.size() == 4;
+              d->directParameters && d->parameters.size() == 5;
   check(listed, "native instrument offered next to built-ins");
 
   auto bad = instrument::native::loadConfiguredModules("relative/module.so;/no/such/module.so");
@@ -179,6 +182,104 @@ void savesAndRestores() {
   const auto b = play(*second, channelOf(*second, slot), 10, 1, 7);
   check(a.energy() > 1.0, "restored comparison is audible");
   check(a.left == b.left, "reloaded project renders the same sound bit for bit");
+}
+
+// UI-only parameters (Electronic Drums phase 1): a descriptor without a host
+// endpoint is imported, edited from the controller thread, applied at the next
+// block boundary, saved with the slot and restored; it never becomes a host
+// parameter and the host cannot automate it.
+float savedValue(VstEngineAudioProcessor &p, std::size_t slot, const char *id) {
+  for (const auto &value : p.instrumentRack().state()[slot].directParameters)
+    if (value.id == id)
+      return value.value;
+  return -1.0f;
+}
+
+void uiOnlyParameters() {
+  auto p = makeProcessor(true);
+  const auto slot = loadTone(*p, 6);
+  const auto *descriptor = p->instrumentRack().descriptor(slot);
+  const auto trim = std::find_if(descriptor->parameters.begin(), descriptor->parameters.end(),
+                                 [](const auto &q) { return q.id == "trim"; });
+  check(trim != descriptor->parameters.end() && trim->poolIndex == -1 && !trim->automatable,
+        "the UI-only parameter is imported without a host endpoint");
+  check(instrument::hostparams::uiOnly(*trim) &&
+            !instrument::hostparams::uiOnly(descriptor->parameters.front()),
+        "uiOnly() tells UI-only from host parameters");
+  auto *spare = p->parameters().getParameter(instrument::hostparams::poolId(slot, 4));
+  check(spare != nullptr && spare->getName(64).contains("Param 05"),
+        "no pool endpoint is bound for the UI-only parameter");
+  check(savedValue(*p, slot, "trim") == 1.0f, "the default is saved with the slot");
+
+  const int channel = channelOf(*p, slot);
+  const auto full = play(*p, channel, 6, 1, -1);
+  juce::String why;
+  check(p->setSlotParameter(slot, "trim", 0.5f, why), "trim is set: " + why.toStdString());
+  const auto half = play(*p, channel, 6, -1, -1);
+  // The held note keeps sounding; from the next block on it is half as loud.
+  const double steady = energy(full, 4, 6);
+  check(steady > 0.0 && std::abs(energy(half, 0, 2) - 0.25 * steady) < 0.05 * steady,
+        "a UI-only change reaches the module at the next block");
+  check(savedValue(*p, slot, "trim") == 0.5f, "the slot state holds the new value");
+
+  check(!p->setSlotParameter(slot, "trim", 1.5f, why), "out of range is rejected");
+  check(!p->setSlotParameter(slot, "gain", 0.2f, why), "host parameters stay host parameters");
+  check(!p->setSlotParameter(slot, "nope", 0.2f, why), "unknown ids are rejected");
+  check(!p->setSlotParameter(2, "trim", 0.2f, why), "a slot without the parameter rejects it");
+  check(savedValue(*p, slot, "trim") == 0.5f, "rejected edits change nothing");
+
+  // The editor offers the UI-only parameter as a control that writes through
+  // the Rack (no host endpoint behind it).
+  {
+    std::unique_ptr<juce::AudioProcessorEditor> base(p->createEditor());
+    auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+    check(editor != nullptr, "editor opens");
+    editor->setSize(1500, 920);
+    p->selectSlot(slot);
+    editor->showPageForTesting(ui::MainNavigation::Page::macros);
+    editor->refreshForTesting();
+    std::function<juce::Component *(juce::Component &)> find =
+        [&](juce::Component &root) -> juce::Component * {
+      for (auto *child : root.getChildren()) {
+        if (child->getName() == "slot07.ui.trim" && child->isVisible())
+          return child;
+        if (auto *found = find(*child))
+          return found;
+      }
+      return nullptr;
+    };
+    auto *knob = dynamic_cast<juce::Slider *>(find(*editor));
+    check(knob != nullptr && knob->getValue() == 0.5,
+          "the editor shows the UI-only control with its saved value");
+    const auto gainBefore =
+        p->parameters().getRawParameterValue(instrument::hostparams::poolId(slot, 0))->load();
+    knob->setValue(0.25, juce::sendNotificationSync);
+    check(savedValue(*p, slot, "trim") == 0.25f &&
+              p->parameters().getRawParameterValue(instrument::hostparams::poolId(slot, 0))
+                      ->load() == gainBefore,
+          "turning it changes the slot value and no host parameter");
+    check(p->setSlotParameter(slot, "trim", 0.5f, why), "back to 0.5");
+  }
+
+  juce::MemoryBlock state;
+  p->getStateInformation(state);
+  auto reopened = makeProcessor(true);
+  reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  check(savedValue(*reopened, slot, "trim") == 0.5f, "the value survives save and reopen");
+  const auto restored = play(*reopened, channelOf(*reopened, slot), 6, 1, -1);
+  check(energy(restored, 2, 6) > 0.0 &&
+            std::abs(energy(restored, 2, 6) - 0.25 * energy(full, 2, 6)) <
+                0.05 * energy(full, 2, 6),
+        "the reopened slot plays with the saved trim");
+
+  auto without = makeProcessor(false);
+  without->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  juce::MemoryBlock kept;
+  without->getStateInformation(kept);
+  auto back = makeProcessor(true);
+  back->setStateInformation(kept.getData(), static_cast<int>(kept.getSize()));
+  check(savedValue(*back, slot, "trim") == 0.5f,
+        "a missing module keeps the UI-only value for when it is reinstalled");
 }
 
 void missingModuleIsPreserved() {
@@ -981,6 +1082,7 @@ int main(int argc, char **argv) {
   malformedNotesDuckNothing();
   routedNotesPolicy();
   slotDiagnostics();
+  uiOnlyParameters();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

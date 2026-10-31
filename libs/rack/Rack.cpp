@@ -105,6 +105,7 @@ void canonicalizeResolvedDirect(
         // A resolved slot records the endpoint and meaning of each value.
         value.poolIndex = parameter->poolIndex;
         value.spec = instrument::hostparams::parameterSpecHash(*parameter);
+        value.uiOnly = instrument::hostparams::uiOnly(*parameter);
         if (std::isfinite(value.value) && value.value >= parameter->minimum &&
             value.value <= parameter->maximum)
           value.value =
@@ -299,7 +300,10 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         // A recorded endpoint must still match: a moved pool index without a
         // version bump would silently remap automation. Unknown (-1) is the
         // documented legacy match-by-ID policy.
-        if (value.poolIndex >= 0 && value.poolIndex != parameter->poolIndex) {
+        if ((value.poolIndex != parameter->poolIndex &&
+             (value.poolIndex >= 0 || value.spec != 0)) ||
+            (value.spec != 0 &&
+             value.uiOnly != instrument::hostparams::uiOnly(*parameter))) {
           diagnostic = "direct parameter pool index changed without a new "
                        "instrument version";
           return false;
@@ -313,7 +317,8 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         target.direct[target.directCount++] = {
             instrument::hostparams::directKey(state.instrumentId, value.id),
             parameter,
-            instrument::hostparams::canonicalPlain(value.value, *parameter)};
+            instrument::hostparams::canonicalPlain(value.value, *parameter),
+            instrument::hostparams::uiOnly(*parameter)};
       }
     } else if (!state.directParameters.empty()) {
       diagnostic = "instrument does not accept direct parameters";
@@ -431,6 +436,8 @@ bool Rack::replaceState(
   beginExclusive();
   state_ = std::move(replacement);
   processing_->runtime = std::move(preparedRuntime);
+  for (std::size_t i = 0; i < processing_->runtime.size(); ++i)
+    publishUiValues(i);
   runtimeState_ = preparedState;
   for (std::size_t i = 0; i < processing_->runtime.size(); ++i)
     publishedDescriptors_[i].store(processing_->runtime[i].descriptor,
@@ -523,6 +530,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
     state_[index] = std::move(replacement);
     processing_->runtime[index] = std::move(prepared);
+    publishUiValues(index);
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
@@ -621,6 +629,7 @@ bool Rack::applySoundPreset(std::size_t index, std::string_view presetId,
     processing_->router.forgetSlot(replacement.slotId);
     state_[index] = std::move(replacement);
     processing_->runtime[index] = std::move(prepared);
+    publishUiValues(index);
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
@@ -905,6 +914,50 @@ void Rack::applyModulation(
                                                value.plain);
 }
 
+void Rack::publishUiValues(std::size_t index) noexcept {
+  const auto &runtime = processing_->runtime[index];
+  for (std::size_t binding = 0; binding < runtime.directCount; ++binding)
+    processing_->uiValues[index][binding].store(runtime.direct[binding].base,
+                                                std::memory_order_relaxed);
+}
+
+bool Rack::setUiParameter(std::size_t index, const instrument::ParameterId &id,
+                          float plain, std::string &diagnostic) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  const auto &runtime = index < state_.size() ? processing_->runtime[index]
+                                              : processing_->runtime[0];
+  if (index >= state_.size() || runtime.descriptor == nullptr) {
+    diagnostic = "slot holds no resolved instrument";
+    return false;
+  }
+  for (std::size_t binding = 0; binding < runtime.directCount; ++binding) {
+    const auto &direct = runtime.direct[binding];
+    if (direct.parameter->id != id)
+      continue;
+    if (!direct.uiOnly) {
+      diagnostic = "host parameters change through their host endpoint";
+      return false;
+    }
+    if (!std::isfinite(plain) || plain < direct.parameter->minimum ||
+        plain > direct.parameter->maximum) {
+      diagnostic = "value outside the parameter range";
+      return false;
+    }
+    const auto value = instrument::hostparams::canonicalPlain(plain, *direct.parameter);
+    // The audio thread reads persistent direct values only for modulation
+    // destinations; UI-only parameters are never modulatable, so writing
+    // this one float needs no exclusive section (and no dropped block).
+    for (auto &saved : state_[index].directParameters)
+      if (saved.id == id)
+        saved.value = value;
+    processing_->uiValues[index][binding].store(value, std::memory_order_relaxed);
+    diagnostic.clear();
+    return true;
+  }
+  diagnostic = "unknown parameter for this slot";
+  return false;
+}
+
 void Rack::setMacro(std::size_t slot, std::size_t macro, float value) noexcept
 {
     const std::scoped_lock persistentLock(persistentStateMutex_);
@@ -988,6 +1041,12 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     }
     for (std::size_t binding = 0; binding < slot.directCount; ++binding) {
       const auto &direct = slot.direct[binding];
+      if (direct.uiOnly) {
+        slot.instance->setParameter(
+            direct.parameter->id,
+            processing_->uiValues[i][binding].load(std::memory_order_relaxed));
+        continue;
+      }
       auto value = direct.base;
       for (const auto &change : controls[i].directValues())
         if (change.key == direct.key && std::isfinite(change.value)) {

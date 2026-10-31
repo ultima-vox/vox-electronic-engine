@@ -1,5 +1,6 @@
 #include "instrument/SoundLayout.h"
 
+#include "instrument/HostParameterSchema.h"
 #include "instrument/InstrumentContract.h"
 
 #include <set>
@@ -51,8 +52,10 @@ bool validateSoundLayout(const SoundLayout &layout, const InstrumentDescriptor &
       for (const auto &p : descriptor.parameters)
         if (p.id == control.parameter)
           parameter = &p;
-      if (parameter == nullptr || parameter->poolIndex < 0 ||
-          parameter->poolIndex >= static_cast<std::int16_t>(poolParametersPerSlot))
+      if (parameter == nullptr ||
+          (!hostparams::uiOnly(*parameter) &&
+           (parameter->poolIndex < 0 ||
+            parameter->poolIndex >= static_cast<std::int16_t>(poolParametersPerSlot))))
         return fail(why, "sound layout: '" + control.parameter +
                              "' is not a direct parameter of " + descriptor.id);
       if (!kindMatches(control.kind, parameter->type))
@@ -66,7 +69,7 @@ bool validateSoundLayout(const SoundLayout &layout, const InstrumentDescriptor &
     }
   }
   for (const auto &p : descriptor.parameters)
-    if (p.poolIndex >= 0 && seen.count(p.id) == 0)
+    if ((p.poolIndex >= 0 || hostparams::uiOnly(p)) && seen.count(p.id) == 0)
       return fail(why, "sound layout: direct parameter '" + p.id + "' has no control");
   return true;
 }

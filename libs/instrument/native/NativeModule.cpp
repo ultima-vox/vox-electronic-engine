@@ -70,9 +70,13 @@ bool importParameter(const VoxParameterDescriptorV2 &p, std::uint32_t stride,
   } else if (p.choiceCount != 0) {
     return false;
   }
-  // This slice binds every native parameter to a host pool endpoint.
-  if ((p.flags & VOX_PARAM_HOST_EXPOSED) == 0 || p.poolIndex < 0 ||
-      p.poolIndex >= static_cast<std::int32_t>(poolParametersPerSlot))
+  // A host parameter sits on a pool endpoint. A UI-only parameter has
+  // neither the host flags nor an endpoint, and is never modulated.
+  const bool hosted = (p.flags & VOX_PARAM_HOST_EXPOSED) != 0;
+  if (hosted ? p.poolIndex < 0 ||
+                   p.poolIndex >= static_cast<std::int32_t>(poolParametersPerSlot)
+             : p.poolIndex != -1 ||
+                   (p.flags & (VOX_PARAM_AUTOMATABLE | VOX_PARAM_MODULATABLE)) != 0)
     return false;
   ParameterDescriptor q;
   q.id = p.id;
@@ -550,7 +554,8 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
       diagnostic = "invalid native parameter descriptor";
       return false;
     }
-    if (!ids.insert(parameter.id).second || !pools.insert(parameter.poolIndex).second) {
+    if (!ids.insert(parameter.id).second ||
+        (parameter.poolIndex >= 0 && !pools.insert(parameter.poolIndex).second)) {
       diagnostic = "duplicate native parameter id or pool index";
       return false;
     }

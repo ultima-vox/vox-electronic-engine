@@ -40,6 +40,11 @@ inline constexpr std::size_t macrosPerSlot = 8;
 // replaces the earlier 64 (p001..p064 keep their IDs); no other size exists.
 inline constexpr std::size_t poolParametersPerSlot = 128;
 inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
+// All parameters of one direct instrument: the host ones (at most
+// maxDirectParameters, each on a pool endpoint) plus UI-only ones, which have
+// no endpoint (poolIndex -1), are not automatable and not modulatable. UI-only
+// values are saved with the slot and edited in the editor through the Rack.
+inline constexpr std::size_t maxSlotParameters = 256;
 inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {
@@ -91,10 +96,11 @@ struct ParameterDescriptor {
     bool automatable { true };
     bool modulatable {};
     std::int8_t preferredMacro { -1 };
-    // Host pool endpoint (0..63) of a direct parameter. Required and unique
-    // per instrument; it must stay the same across instrument versions so
-    // recorded automation never moves to another control. Unused (-1) for
-    // instruments without direct parameters.
+    // Host pool endpoint (0..127) of a direct parameter. Unique per
+    // instrument; it must stay the same across instrument versions so
+    // recorded automation never moves to another control. -1 for a UI-only
+    // parameter (not automatable) and for instruments without direct
+    // parameters.
     std::int16_t poolIndex { -1 };
 };
 

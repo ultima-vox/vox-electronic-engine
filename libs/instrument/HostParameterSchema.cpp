@@ -38,6 +38,12 @@ std::uint32_t parameterSpecHash(const ParameterDescriptor &p) noexcept {
   bytes(&count, sizeof count);
   for (const auto &choice : p.choices)
     text(choice);
+  // A UI-only parameter hashes differently from the same range on a host
+  // endpoint, so moving one between the pool and the UI needs a new version.
+  if (uiOnly(p)) {
+    const std::uint32_t marker = 0x55494f4eu; // "UION"
+    bytes(&marker, sizeof marker);
+  }
   return hash == 0 ? 1u : hash;
 }
 
@@ -84,10 +90,15 @@ bool isPoolId(std::string_view id) noexcept {
 bool validateDirectCatalog(std::span<const InstrumentDescriptor *const> catalog,
                            std::string &diagnostic) {
   std::unordered_set<std::uint64_t> keys;
+  std::size_t hostKeys = 0; // the catalog bound counts host endpoints only
   for (const auto *descriptor : catalog)
     if (descriptor != nullptr && descriptor->directParameters) {
+      std::size_t hosted = 0;
+      for (const auto &parameter : descriptor->parameters)
+        hosted += uiOnly(parameter) ? 0u : 1u;
       if (descriptor->parameters.empty() ||
-          descriptor->parameters.size() > maxDirectParameters) {
+          descriptor->parameters.size() > maxSlotParameters ||
+          hosted > maxDirectParameters) {
         diagnostic = "direct parameter count exceeds slot bound";
         return false;
       }
@@ -97,14 +108,15 @@ bool validateDirectCatalog(std::span<const InstrumentDescriptor *const> catalog,
           diagnostic = "invalid direct parameter metadata";
           return false;
         }
-        if (std::exchange(pool[static_cast<std::size_t>(parameter.poolIndex)],
+        if (!uiOnly(parameter) &&
+            std::exchange(pool[static_cast<std::size_t>(parameter.poolIndex)],
                           true)) {
           diagnostic = "duplicate direct parameter pool index";
           return false;
         }
         const auto key = directKey(descriptor->id, parameter.id);
-        if (key == 0 || !keys.insert(key).second ||
-            keys.size() > maxHostDirectParameters) {
+        hostKeys += uiOnly(parameter) ? 0u : 1u;
+        if (key == 0 || !keys.insert(key).second || hostKeys > maxHostDirectParameters) {
           diagnostic = "direct catalog key collision or host bound exceeded";
           return false;
         }

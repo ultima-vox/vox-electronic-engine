@@ -55,7 +55,7 @@ Resolution InstrumentRegistry::validate(InstrumentProvider& provider,
         result.diagnostic = "instrument resource budget exceeds host limit";
     } else if (descriptor.directParameters &&
                (descriptor.parameters.empty() ||
-                descriptor.parameters.size() > maxDirectParameters)) {
+                descriptor.parameters.size() > maxSlotParameters)) {
       result.status = ResolutionStatus::invalidDescriptor;
       result.diagnostic = "direct parameter count exceeds host limit";
     } else {

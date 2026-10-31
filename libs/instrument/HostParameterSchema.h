@@ -14,6 +14,12 @@ inline constexpr std::array<std::string_view, macrosPerSlot> macroLabels {
     "Drive", "Accent", "Space", "Motion"
 };
 
+// A direct parameter without a host endpoint: edited in the editor and saved
+// with the slot, never automated or modulated.
+inline bool uiOnly(const ParameterDescriptor &p) noexcept {
+  return p.poolIndex == -1 && !p.automatable;
+}
+
 inline bool validDirectParameter(const ParameterDescriptor &p) noexcept {
   if (p.id.empty() || p.id.size() >= VOX_INSTRUMENT_MAX_ID_BYTES ||
       p.name.empty() || p.name.size() > 256 || p.unit.size() > 32 ||
@@ -24,9 +30,10 @@ inline bool validDirectParameter(const ParameterDescriptor &p) noexcept {
       static_cast<double>(p.maximum) - p.minimum >
           std::numeric_limits<float>::max() ||
       p.step > p.maximum - p.minimum || p.preferredMacro != -1 ||
-      p.poolIndex < 0 ||
-      p.poolIndex >= static_cast<std::int16_t>(poolParametersPerSlot) ||
-      !p.automatable ||
+      (uiOnly(p) ? p.modulatable
+                 : p.poolIndex < 0 ||
+                       p.poolIndex >= static_cast<std::int16_t>(poolParametersPerSlot) ||
+                       !p.automatable) ||
       static_cast<unsigned>(p.type) >
           static_cast<unsigned>(ParameterType::choice))
     return false;

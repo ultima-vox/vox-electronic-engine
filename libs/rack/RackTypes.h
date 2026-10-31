@@ -58,6 +58,8 @@ struct PersistentSlotState {
     // A resolved slot and the append-only upgrade require both to match.
     std::int16_t poolIndex{-1};
     std::uint32_t spec{};
+    // A UI-only parameter (no endpoint): saved as "ui", never with a pool.
+    bool uiOnly{};
   };
   std::vector<DirectValue> directParameters;
 };
