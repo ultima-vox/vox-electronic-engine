@@ -1,8 +1,9 @@
-# Full-on Drums in Vox Rack — Cubase test guide (Windows x64)
+# Full-on Drums in Vox Rack — Cubase / REAPER test guide (Windows x64)
 
 You install by copying files: no installer, scripts or environment variables.
 CTest results do not count as DAW acceptance, so mark every step below as
-unverified until it has been run in Cubase.
+unverified until it has been run in Cubase or REAPER. Section 8 is the
+result matrix: mark each row PASS, FAIL or NOT RUN with what you observed.
 
 The native `.vins` packages are signed with the CI run's development
 publisher key, so a package loads only in the Rack from the same CI run.
@@ -54,12 +55,49 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
    any later step.
 4. Start Cubase.
 
+### Uninstall (only what this build installed)
+
+`vox music\instruments\` is the shared instrument folder: other `.vins`
+packages you installed yourself live there too. **Do not delete the whole
+`vox music` folder**; that removes every installed instrument. Delete it
+only for a dedicated test install that holds nothing else, after backing up
+its contents.
+
+Close the DAW, then delete exactly the files this artifact shipped (they are
+listed in `build-info.txt`):
+
+1. `C:\Program Files\Common Files\VST3\vox music\Vox Electronic Engine.vst3\` (the Rack bundle folder)
+2. `...\vox music\build-info.txt`
+3. `...\vox music\instruments\VoxFullOnDrums.vins`
+4. `...\vox music\instruments\VoxDemoSynth.vins`
+5. `...\vox music\instruments\VoxDemoSynthGraph.vins`
+
+Leave every other file in `instruments\` alone. The Rack also unpacks
+native packages into a per-package cache; to remove only this build's
+copies, delete `%LOCALAPPDATA%\Vox Music\Cache\com.ultimavox.fullon-drums\`
+and `%LOCALAPPDATA%\Vox Music\Cache\com.ultimavox.demo-synth\` (other
+packages have their own folders there). Nothing else is written outside the
+project files: no registry entries, installers or environment variables.
+
+Check once (DAW closed): copy any other `.vins` file, or an empty dummy
+`keep-me.vins`, into `instruments\` and uninstall as above; it must still be
+there. Remove the dummy afterwards: the Rack would report it as an invalid
+package on the next start.
+
+A later build installs the same way. Do not mix `.vins` files from another
+CI run: their development key differs, and the Rack refuses them.
+
+Keep **Settings (gear) → MIDI source = Auto** for every step. That menu is
+the Rack-wide generator switch for sequence instruments; *Internal
+patterns* there drops host MIDI for **all** slots, including the kit. The
+kit's own sequencer mode is `p049` Seq Mode.
+
 ## 3. Cubase procedure
 
 | # | Action | Expected |
 | --- | --- | --- |
 | 1 | New Instrument track with Vox Electronic Engine (new project, no track preset); open the editor | Rack with **16 empty slots** |
-| 2 | Click empty **slot 1** (or right-click → *Load / replace instrument...*) → **Full-on Drums / Ultima Vox** | Slot 1 = Full-on Drums on **CH1** (first free channel); the Macros page lists the 59 kit and sequencer controls |
+| 2 | Click empty **slot 1** (or right-click → *Load / replace instrument...*) → **Full-on Drums / Ultima Vox** | Slot 1 = Full-on Drums on **CH1** (first free channel). The header shows `Slot 1 | CH1` and Channel **CH1**. The **SOUND** page shows ten sections (Kick … Sequencer) with all 59 kit and sequencer controls, each with its current value under it (no empty value boxes) |
 | 3 | Track MIDI channel 1; import `fullon-drums-145bpm-4bar.mid` (set project tempo 145) and play | Kick on every beat, 16th closed hats, off-beat open hats, snare + clap on 2 and 4, rim accents, tom fill in bar 4; nothing hangs at stop |
 | 4 | Play pads from a keyboard or the piano roll (notes 36–49 above) | Each pad sounds; harder velocity is louder; several notes together all sound |
 | 5 | Open hat (46) then closed hat (42) | Closed hat cuts the open hat; switch **Hat Choke** off → open hat keeps ringing |
@@ -76,7 +114,7 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
 | 16 | Loop bars 1–4, seek, change tempo, stop/start | Stays on the grid; downbeat replays on loop; no hits while stopped |
 | 17 | Re-import the clip with Seq Mode = Internal | No doubled hits (incoming notes are ignored); Seq Mode = Both plays both |
 | 18 | Swing 0.3, Accent 0, lane switches; on the **Pattern** page choose another factory pattern, click steps on/off, drag a step's velocity, shift-click an accent, set 8 steps / 2 bars | Audible changes as described; edits play from the next beat without restarting the bar |
-| 18a | Pattern page → export / drag MIDI to Cubase, put the eight lane tracks on the kit's channel, set Seq Mode = Host MIDI | The exported lanes play exactly the edited pattern (no doubled hits) |
+| 18a | With slot 1 selected: **Settings (gear) → Export selected pattern MIDI...**, save the `.mid`. Import it into Cubase (*File → Import → MIDI File*), route its eight lane tracks to the Rack on the kit's channel (section 4.2), set Seq Mode = Host MIDI | The exported lanes play exactly the edited pattern of step 18 (same hits, velocities and accents; no doubled hits). Export is in the Settings menu, not on the Pattern page |
 | 19 | Save with Seq Mode = Internal, reopen | Same pattern, no duplicate beats |
 
 ## 4. One kit, eight MIDI tracks (Kick, Snare, Hats ... on separate tracks)
@@ -169,8 +207,77 @@ Not covered here: separate **audio** outputs per pad (stems) for the Cubase
 mixer. Eight MIDI tracks do not create separate VST3 audio returns. That is
 a separate future design.
 
-## 5. Results (fill in)
+## 5. Rack features with the kit (Cubase)
 
-| Date | Cubase version | Windows | CI run | Steps passed (1–29) | Notes |
+**Starting state for steps 30–36** (restore it if a step changed it):
+- slot 1 = Full-on Drums on **CH1**, Seq Mode = Host MIDI, factory pattern
+  Full-on Basic; MIDI track "Kit" with `fullon-drums-145bpm-4bar.mid`, output
+  to the Rack, channel 1;
+- slot 2 = **Vox Demo Synth** on **CH2**; MIDI track "Chord" with a sustained
+  chord over the 4 bars, output to the same Rack, channel 2;
+- Settings → MIDI source = Auto; tempo 145; loop bars 1–4.
+
+Steps 30–36 all act on the kit in **slot 1**. Only step 37 moves it.
+
+| # | Action | Expected |
+| --- | --- | --- |
+| 30 | Settings → *Rack audio routing / sends / ducking...*: **Kick event source** = slot 1 (Full-on Drums), Note 36, Attack 1 ms, Hold 40 ms, Release 120 ms; **Duck depth** of slot 2 = 0.8. Play | The chord dips on every kick, starting with the kick itself (no lag) |
+| 31 | Mute the "Kit" track in Cubase; set slot 1 Seq Mode = **Internal**; play | The chord still dips on every internal kick |
+| 32 | Unmute the "Kit" track; keep Seq Mode = Internal; play | The chord dips only on the kicks you hear (the ignored host notes do not duck). Then set Seq Mode = Host MIDI again |
+| 33 | Right-click slot 1 → **Mute**; play; then unmute | Muted: the kit is silent and the chord no longer dips. Unmuted: both return |
+| 34 | Right-click slot 2 → **Solo**; play; then un-solo | Solo: only the chord plays (the kit and its sends are silent). Un-solo: all return |
+| 35 | Slot 1 **Return 1** send = 0.5 (Return 1 = Delay, ON); play, then stop the transport; set the send back to 0 | Delay echoes of the kit. At stop the kit's own voices stop at once (the Rack resets its instruments on stop), while the Return 1 echoes ring out and fade. Panic silences both |
+| 36 | Edit the slot 1 pattern (step 18) and set Seq Mode = Internal; **Settings → Export selected pattern MIDI...**; import the file, route its eight lane tracks to the Rack on channel 1 (section 4.2), mute the "Kit" track; bounce the Internal version offline (*Export → Audio Mixdown*); then Seq Mode = Host MIDI and bounce again | The two bounces sound the same (same hits, velocities, accents). Afterwards delete the imported lane tracks and unmute "Kit" |
+
+**Step 37 changes the slot order** and is the last Rack step. Start from the
+state above.
+
+| # | Action | Expected |
+| --- | --- | --- |
+| 37a | While playing, right-click slot 1 → **Unload instrument** | The kit stops; nothing hangs; the chord keeps playing. Slot 1 shows Empty and OFF (its channel is released) |
+| 37b | Load Full-on Drums into **slot 3** | The kit takes the first free channel, **CH1** (the header shows `Slot 3 | CH1`), so the "Kit" track on channel 1 plays it with no routing change. The kit starts from its defaults (Seq Mode = Host MIDI) |
+| 37c | Routing window: Kick event source = **slot 3**; slot 2 Duck depth still 0.8; play | The chord dips on every kick exactly as in step 30: ducking does not depend on the kit sitting before or after the chord slot |
+| 37d | Optional: unload slot 3 and load the kit into slot 1 again, source = slot 1 | Back to the starting state |
+
+## 6. REAPER (same build, same files)
+
+REAPER scans `C:\Program Files\Common Files\VST3\` by default
+(*Options → Preferences → Plug-ins → VST*; *Re-scan* if the Rack does not
+appear).
+
+| # | Action | Expected |
+| --- | --- | --- |
+| R1 | New track → *FX* → **VST3i: Vox Electronic Engine (Ultima Vox)** | Rack with 16 empty slots |
+| R2 | Load Full-on Drums in slot 1; insert `fullon-drums-145bpm-4bar.mid` on the track (tempo 145); play | The groove plays (track MIDI goes to the Rack on channel 1) |
+| R3 | Eight-track layout: insert `fullon-drums-145bpm-8-tracks.mid` as separate tracks; on each, remove its own FX and add a **send** (Routing → *MIDI: All → channel 1*, audio send off) to the Rack track | The eight tracks play the full groove into the one kit |
+| R4 | Steps 5, 6, 15–19 and 30–37 above, REAPER equivalents (same starting state) | As described there |
+| R5 | Automation: track envelope for **Slot 1 Kick Tune** and **Slot 1 Open Hat Decay** (*Envelopes* button); write, then Read | Sound follows the envelopes; the parameter names and values show (e.g. `Slot 1 Kick Tune`, a value in semitones) |
+| R6 | *File → Render* (offline) twice; save, close, reopen | Identical renders; same slot, channel, values and pattern |
+| R7 | Move `VoxFullOnDrums.vins` out, reopen; move it back, reopen | As steps 12–13 |
+
+## 7. Not in this milestone
+
+Separate audio outputs per pad, a CPU / profiling view and a MIDI inspector
+are not part of this build. The `.vins` packages are **development-signed**
+(owner test only); a production build needs the owner's offline release key.
+
+## 8. Results (fill in)
+
+| Date | DAW + version | Windows | CI run | Rack SHA-256 | Notes |
 | --- | --- | --- | --- | --- | --- |
 | | | | | | |
+
+| Steps | What it checks | Cubase | REAPER | Observed / log |
+| --- | --- | --- | --- | --- |
+| 1–2 | Scan, `.vins` discovery and trust, 16 empty slots, SOUND page values, header channel | NOT RUN | NOT RUN | |
+| 2.U | Scoped uninstall keeps an unrelated `.vins` | NOT RUN | NOT RUN | |
+| 3–5, 20–29 | Playable kit, 8 pads, multi-track input, choke | NOT RUN | NOT RUN | |
+| 6–7 | 59 controls, host automation | NOT RUN | NOT RUN | |
+| 8, 26 | Stop, Panic, CC120 / CC123 | NOT RUN | NOT RUN | |
+| 9, 19, 28 | Save / reopen | NOT RUN | NOT RUN | |
+| 10 | Offline bounce, repeatable | NOT RUN | NOT RUN | |
+| 12–14 | Missing / reinstalled package | NOT RUN | NOT RUN | |
+| 15–18 | Internal pattern, transport, edits while playing | NOT RUN | NOT RUN | |
+| 18a, 36 | MIDI export → reimport parity | NOT RUN | NOT RUN | |
+| 30–32, 37c | Same-block kick ducking, Host / Internal, slot order | NOT RUN | NOT RUN | |
+| 33–35, 37a–b | Mute / solo, FX send tails, unload / reload | NOT RUN | NOT RUN | |
