@@ -55,11 +55,37 @@ CC120 stops at once, CC123 fades out within 50 ms, Rack Panic stops at once.
    any later step.
 4. Start Cubase.
 
-Uninstall: close the DAW and delete `C:\Program Files\Common Files\VST3\vox music\`.
-Nothing else is written outside the project files (no registry entries,
-installers or environment variables). A later build installs the same way;
-do not mix `.vins` files from another CI run (their development key differs,
-and the Rack refuses them).
+### Uninstall (only what this build installed)
+
+`vox music\instruments\` is the shared instrument folder: other `.vins`
+packages you installed yourself live there too. **Do not delete the whole
+`vox music` folder**; that removes every installed instrument. Delete it
+only for a dedicated test install that holds nothing else, after backing up
+its contents.
+
+Close the DAW, then delete exactly the files this artifact shipped (they are
+listed in `build-info.txt`):
+
+1. `C:\Program Files\Common Files\VST3\vox music\Vox Electronic Engine.vst3\` (the Rack bundle folder)
+2. `...\vox music\build-info.txt`
+3. `...\vox music\instruments\VoxFullOnDrums.vins`
+4. `...\vox music\instruments\VoxDemoSynth.vins`
+5. `...\vox music\instruments\VoxDemoSynthGraph.vins`
+
+Leave every other file in `instruments\` alone. The Rack also unpacks
+native packages into a per-package cache; to remove only this build's
+copies, delete `%LOCALAPPDATA%\Vox Music\Cache\com.ultimavox.fullon-drums\`
+and `%LOCALAPPDATA%\Vox Music\Cache\com.ultimavox.demo-synth\` (other
+packages have their own folders there). Nothing else is written outside the
+project files: no registry entries, installers or environment variables.
+
+Check once (DAW closed): copy any other `.vins` file, or an empty dummy
+`keep-me.vins`, into `instruments\` and uninstall as above; it must still be
+there. Remove the dummy afterwards: the Rack would report it as an invalid
+package on the next start.
+
+A later build installs the same way. Do not mix `.vins` files from another
+CI run: their development key differs, and the Rack refuses them.
 
 Keep **Settings (gear) → MIDI source = Auto** for every step. That menu is
 the Rack-wide generator switch for sequence instruments; *Internal
@@ -244,6 +270,7 @@ are not part of this build. The `.vins` packages are **development-signed**
 | Steps | What it checks | Cubase | REAPER | Observed / log |
 | --- | --- | --- | --- | --- |
 | 1–2 | Scan, `.vins` discovery and trust, 16 empty slots, SOUND page values, header channel | NOT RUN | NOT RUN | |
+| 2.U | Scoped uninstall keeps an unrelated `.vins` | NOT RUN | NOT RUN | |
 | 3–5, 20–29 | Playable kit, 8 pads, multi-track input, choke | NOT RUN | NOT RUN | |
 | 6–7 | 59 controls, host automation | NOT RUN | NOT RUN | |
 | 8, 26 | Stop, Panic, CC120 / CC123 | NOT RUN | NOT RUN | |
