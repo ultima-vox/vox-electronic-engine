@@ -1,5 +1,6 @@
 /* Minimal V2 test module (C11): one fake instrument with four typed host
- * parameters and one UI-only parameter (trim). Exists only to prove the ABI boundary through a real shared
+ * parameters and three UI-only parameters (trim, plus an inert toggle and
+ * choice for editor tests). Exists only to prove the ABI boundary through a real shared
  * library; it is not a product instrument. */
 #define VOX_BUILDING_MODULE 1
 #include "instrument/abi/VoxModuleAbiV2.h"
@@ -10,7 +11,7 @@
 #include <string.h>
 
 #define TEST_ID "test.abi.v2.tone"
-#define PARAM_COUNT 5u
+#define PARAM_COUNT 7u
 #define STATE_VERSION 1u
 #define STATE_MAGIC 0x54584f56u /* "VOXT" */
 #define STATE_BYTES (8u + PARAM_COUNT * 4u)
@@ -18,9 +19,10 @@
 #define MAX_RECORD_STRIDE 1024u
 #define MIN_MIDI_EVENTS 16u
 
-enum { P_GAIN, P_OCTAVE, P_MUTE, P_WAVE, P_TRIM };
+enum { P_GAIN, P_OCTAVE, P_MUTE, P_WAVE, P_TRIM, P_LATCH, P_SHAPE };
 
 static const char *const waveChoices[] = {"Sine", "Square", "Saw"};
+static const char *const shapeChoices[] = {"Soft", "Hard"};
 #define EXPOSED (VOX_PARAM_HOST_EXPOSED | VOX_PARAM_AUTOMATABLE)
 
 static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
@@ -35,6 +37,11 @@ static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
     /* UI-only: saved with the slot, edited in the editor, never automated. */
     {sizeof(VoxParameterDescriptorV2), VOX_MODULE_ABI_V2, "trim", "Trim", "", "Amp",
      NULL, VOX_PARAM_FLOAT, 0, 0.0f, 1.0f, 1.0f, 0.0f, -1, 0},
+    /* UI-only and inert: a toggle and a choice the editor tests edit. */
+    {sizeof(VoxParameterDescriptorV2), VOX_MODULE_ABI_V2, "latch", "Latch", "", "Ui",
+     NULL, VOX_PARAM_BOOLEAN, 0, 0.0f, 1.0f, 0.0f, 1.0f, -1, 0},
+    {sizeof(VoxParameterDescriptorV2), VOX_MODULE_ABI_V2, "shape", "Shape", "", "Ui",
+     shapeChoices, VOX_PARAM_CHOICE, 2, 0.0f, 1.0f, 0.0f, 1.0f, -1, 0},
 };
 
 static const VoxInstrumentDescriptorV2 instrument = {

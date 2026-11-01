@@ -141,6 +141,9 @@ private:
         MacroPage(VstEngineAudioProcessor&, juce::String title, std::size_t visibleCount,
                   InstrumentControls = InstrumentControls::none);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
+        // Model -> view for UI-only controls (message thread, editor timer):
+        // shows the Rack's saved value when another caller changed it.
+        void refreshUiOnly();
     private:
         void bindInstrumentControls(std::size_t);
         void layoutInstrumentControls();
@@ -165,6 +168,14 @@ private:
         std::vector<std::unique_ptr<juce::Component>> directControls;
         void addUiOnly(std::size_t slot, const vstengine::instrument::ParameterDescriptor &,
                        const std::string &caption);
+        // UI-only controls of the bound slot: they have no APVTS attachment,
+        // so refreshUiOnly() pushes Rack changes into them.
+        struct UiOnlyControl {
+            std::size_t slot;
+            vstengine::instrument::ParameterId id;
+            juce::Component *control;
+        };
+        std::vector<UiOnlyControl> uiOnlyControls;
         // Declarative SOUND layout of the bound instrument: section titles and
         // the index of each section's first control. Empty: the generic list.
         std::vector<std::unique_ptr<juce::Label>> directSectionTitles;
@@ -205,6 +216,9 @@ private:
     public:
         explicit RoutingPage(VstEngineAudioProcessor&);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
+        // Model -> view for UI-only controls (message thread, editor timer):
+        // shows the Rack's saved value when another caller changed it.
+        void refreshUiOnly();
     private:
         void assign(int channel);
         [[nodiscard]] int currentChannel() const;
@@ -223,6 +237,9 @@ private:
     public:
         explicit ZonesPage(VstEngineAudioProcessor&);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
+        // Model -> view for UI-only controls (message thread, editor timer):
+        // shows the Rack's saved value when another caller changed it.
+        void refreshUiOnly();
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, transposeLabel;
@@ -236,6 +253,9 @@ private:
     public:
         explicit AdvancedPage(VstEngineAudioProcessor&);
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
+        // Model -> view for UI-only controls (message thread, editor timer):
+        // shows the Rack's saved value when another caller changed it.
+        void refreshUiOnly();
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, description, status, seedLabel;

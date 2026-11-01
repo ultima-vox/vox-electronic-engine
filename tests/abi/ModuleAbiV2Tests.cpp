@@ -365,7 +365,7 @@ void validation(const VoxModuleV2 &m, const VoxInstrumentDescriptorV2 &d) {
 
   Instrument copy;
   REQUIRE(copyInstrument(&d, copy), "test instrument validates");
-  REQUIRE(copy.id == toneId && copy.parameters.size() == 5, "deep copy identity");
+  REQUIRE(copy.id == toneId && copy.parameters.size() == 7, "deep copy identity");
   REQUIRE(copy.parameters[4].id == "trim" && copy.parameters[4].poolIndex == -1 &&
               (copy.parameters[4].flags & (VOX_PARAM_HOST_EXPOSED | VOX_PARAM_AUTOMATABLE |
                                            VOX_PARAM_MODULATABLE)) == 0,

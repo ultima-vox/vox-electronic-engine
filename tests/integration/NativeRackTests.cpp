@@ -126,7 +126,7 @@ void registration() {
   bool listed = false;
   for (const auto *d : p->availableInstruments())
     listed |= d->id == toneId && d->providerId == instrument::native::providerId &&
-              d->directParameters && d->parameters.size() == 5;
+              d->directParameters && d->parameters.size() == 7;
   check(listed, "native instrument offered next to built-ins");
 
   auto bad = instrument::native::loadConfiguredModules("relative/module.so;/no/such/module.so");
@@ -238,17 +238,17 @@ void uiOnlyParameters() {
     p->selectSlot(slot);
     editor->showPageForTesting(ui::MainNavigation::Page::macros);
     editor->refreshForTesting();
-    std::function<juce::Component *(juce::Component &)> find =
-        [&](juce::Component &root) -> juce::Component * {
+    std::function<juce::Component *(juce::Component &, const juce::String &)> find =
+        [&](juce::Component &root, const juce::String &name) -> juce::Component * {
       for (auto *child : root.getChildren()) {
-        if (child->getName() == "slot07.ui.trim" && child->isVisible())
+        if (child->getName() == name && child->isVisible())
           return child;
-        if (auto *found = find(*child))
+        if (auto *found = find(*child, name))
           return found;
       }
       return nullptr;
     };
-    auto *knob = dynamic_cast<juce::Slider *>(find(*editor));
+    auto *knob = dynamic_cast<juce::Slider *>(find(*editor, "slot07.ui.trim"));
     check(knob != nullptr && knob->getValue() == 0.5,
           "the editor shows the UI-only control with its saved value");
     const auto gainBefore =
@@ -258,7 +258,48 @@ void uiOnlyParameters() {
               p->parameters().getRawParameterValue(instrument::hostparams::poolId(slot, 0))
                       ->load() == gainBefore,
           "turning it changes the slot value and no host parameter");
-    check(p->setSlotParameter(slot, "trim", 0.5f, why), "back to 0.5");
+
+    // Model -> view: a controller-side edit while the editor stays open on
+    // the same slot shows up at the next editor refresh, without the
+    // control writing back (owner review 5729957963).
+    int writes = 0;
+    const auto userTurn = knob->onValueChange;
+    knob->onValueChange = [&] { ++writes; userTurn(); };
+    auto *latch = dynamic_cast<juce::ToggleButton *>(find(*editor, "slot07.ui.latch"));
+    auto *shape = dynamic_cast<juce::ComboBox *>(find(*editor, "slot07.ui.shape"));
+    check(latch != nullptr && !latch->getToggleState() && shape != nullptr &&
+              shape->getSelectedId() == 1,
+          "UI-only toggle and choice controls start at their defaults");
+    const auto userClick = latch->onClick;
+    latch->onClick = [&] { ++writes; userClick(); };
+    const auto userPick = shape->onChange;
+    shape->onChange = [&] { ++writes; userPick(); };
+    check(p->setSlotParameter(slot, "trim", 0.5f, why) &&
+              p->setSlotParameter(slot, "latch", 1.0f, why) &&
+              p->setSlotParameter(slot, "shape", 1.0f, why),
+          "controller-side edits accepted: " + why.toStdString());
+    check(knob->getValue() == 0.25, "the open control has not refreshed yet");
+    editor->refreshForTesting();
+    check(knob->getValue() == 0.5 && latch->getToggleState() && shape->getSelectedId() == 2,
+          "the open editor shows the new slider, toggle and choice values");
+    check(writes == 0 && savedValue(*p, slot, "trim") == 0.5f &&
+              savedValue(*p, slot, "latch") == 1.0f && savedValue(*p, slot, "shape") == 1.0f,
+          "the refresh writes nothing back");
+    check(p->setSlotParameter(slot, "trim", 0.25f, why), "trim to 0.25 from the controller");
+    editor->refreshForTesting();
+    const auto quarter = play(*p, channelOf(*p, slot), 6, 1, -1);
+    check(knob->getValue() == 0.25 && savedValue(*p, slot, "trim") == 0.25f &&
+              std::abs(energy(quarter, 2, 6) - 0.0625 * energy(full, 2, 6)) <
+                  0.05 * 0.0625 * energy(full, 2, 6),
+          "knob, saved value and rendered audio agree on 0.25");
+    // A later user edit wins and is not reverted by the next refresh.
+    knob->setValue(0.5, juce::sendNotificationSync);
+    editor->refreshForTesting();
+    check(writes == 1 && knob->getValue() == 0.5 && savedValue(*p, slot, "trim") == 0.5f,
+          "a user edit after the refresh is kept");
+    check(p->setSlotParameter(slot, "latch", 0.0f, why) &&
+              p->setSlotParameter(slot, "shape", 0.0f, why),
+          "toggle and choice back to their defaults");
   }
 
   juce::MemoryBlock state;

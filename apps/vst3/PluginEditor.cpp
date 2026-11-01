@@ -747,10 +747,39 @@ void VstEngineAudioProcessorEditor::MacroPage::addUiOnly(
     if (auto *tip = dynamic_cast<juce::SettableTooltipClient *>(control.get()))
         tip->setTooltip(text);
     control->setName(slotId(slot, ".ui." + parameter.id));
+    uiOnlyControls.push_back({ slot, parameter.id, control.get() });
     directContent.addAndMakeVisible(*label);
     directContent.addAndMakeVisible(*control);
     directLabels.push_back(std::move(label));
     directControls.push_back(std::move(control));
+}
+
+void VstEngineAudioProcessorEditor::MacroPage::refreshUiOnly()
+{
+    if (uiOnlyControls.empty())
+        return;
+    const auto &saved = processor.instrumentRack().state()[uiOnlyControls.front().slot]
+                            .directParameters;
+    for (const auto &entry : uiOnlyControls) {
+        const auto found = std::find_if(saved.begin(), saved.end(),
+                                        [&](const auto &value) { return value.id == entry.id; });
+        if (found == saved.end())
+            continue;
+        const auto value = found->value;
+        // dontSendNotification: the view follows the model without calling
+        // the setter back (no write, no recursion).
+        if (auto *slider = dynamic_cast<juce::Slider *>(entry.control)) {
+            if (static_cast<float>(slider->getValue()) != value)
+                slider->setValue(value, juce::dontSendNotification);
+        } else if (auto *button = dynamic_cast<juce::ToggleButton *>(entry.control)) {
+            if (button->getToggleState() != (value >= 0.5f))
+                button->setToggleState(value >= 0.5f, juce::dontSendNotification);
+        } else if (auto *combo = dynamic_cast<juce::ComboBox *>(entry.control)) {
+            const int id = juce::roundToInt(value) + 1;
+            if (combo->getSelectedId() != id)
+                combo->setSelectedId(id, juce::dontSendNotification);
+        }
+    }
 }
 
 void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_t slot)
@@ -760,6 +789,7 @@ void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_
     directSliderAttachments.clear();
     directButtonAttachments.clear();
     directComboAttachments.clear();
+    uiOnlyControls.clear();
     directControls.clear();
     directLabels.clear();
     directSectionTitles.clear();
@@ -1493,6 +1523,8 @@ void VstEngineAudioProcessorEditor::timerCallback()
       state.instrumentId != boundInstrument ||
       processor.instrumentRack().descriptor(selected) != boundDescriptor)
     bindSelection(selected);
+  soundPage.refreshUiOnly();
+  macrosPage.refreshUiOnly();
   rackRail.refresh();
   instrumentHeader.refresh();
   patternPage.synchronize();
