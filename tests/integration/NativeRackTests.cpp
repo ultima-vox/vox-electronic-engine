@@ -2,6 +2,7 @@
 // plays it through an existing slot's MIDI/audio routing, automates it through
 // the host pool and restores the same sound after save/reload.
 #include "PluginProcessor.h"
+#include "RackAudioParameters.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
 
@@ -10,8 +11,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <filesystem>
+#include <functional>
 #include <vector>
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -41,6 +44,20 @@ void check(bool ok, const std::string &message) {
     std::exit(1);
   }
 }
+
+// Buffers for the test tone's 11 auxiliary buses (ABI V2.3), stereo, for
+// tests that call the adapter directly: a declared bus always gets its buffer.
+struct AuxScratch {
+  std::array<std::vector<float>, 22> channels;
+  std::array<float *, 22> pointers{};
+  AuxScratch() {
+    for (std::size_t i = 0; i < channels.size(); ++i) {
+      channels[i].assign(4096, 0.0f);
+      pointers[i] = channels[i].data();
+    }
+  }
+  std::span<float *> view() { return pointers; }
+} auxScratch;
 
 std::unique_ptr<VstEngineAudioProcessor> makeProcessor(bool withModule) {
   auto report = withModule ? instrument::native::loadConfiguredModules(modulePath)
@@ -375,6 +392,8 @@ void resetFaultLatches() {
     block.sampleCount = blockSize;
     block.midi = {&on, 1};
     block.sampleRate = 48000.0;
+    block.aux = auxScratch.view();
+  block.aux = auxScratch.view();
     instance->process(block);
     double sum = 0;
     for (const float v : left)
@@ -411,6 +430,8 @@ void faultedModuleIsNotReentered() {
     block.sampleCount = blockSize;
     block.midi = {&on, 1};
     block.sampleRate = 48000.0;
+    block.aux = auxScratch.view();
+  block.aux = auxScratch.view();
     instance->process(block);
     double sum = 0;
     for (const float v : left)
@@ -507,6 +528,7 @@ void patternContentImportedAndDelivered() {
   block.outputs = channels;
   block.sampleCount = blockSize;
   block.sampleRate = 48000.0;
+  block.aux = auxScratch.view();
   block.pattern = &view;
   block.patternGeneration = 7;
   instance->process(block);
@@ -543,6 +565,8 @@ void noteOutputValidated() {
     block.outputs = channels;
     block.sampleCount = blockSize;
     block.sampleRate = 48000.0;
+    block.aux = auxScratch.view();
+  block.aux = auxScratch.view();
     block.noteOutput = &out;
     out.count = 99; // stale value from a previous block
     instance->process(block);
@@ -956,6 +980,139 @@ void slotDiagnostics() {
   setNoteMode(4, 0);
 }
 
+// Auxiliary buses (ABI V2.3, contract B1). The test tone declares the full
+// topology: SEND 1..4 then OUTPUT 2..8.
+void setAuxMode(std::uint32_t slotIndex, std::uint32_t mode) {
+  reinterpret_cast<void(VOX_CALL *)(std::uint32_t, std::uint32_t)>(
+      testHook("voxTestSetAuxMode"))(slotIndex, mode);
+}
+
+void auxBusDescriptors() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  const VoxInstrumentDescriptorV2 *raw = nullptr;
+  check(module != nullptr && module->table().getInstrument(0, &raw) == VOX_OK && raw != nullptr,
+        "raw descriptor available");
+  instrument::InstrumentDescriptor imported;
+  check(instrument::native::importDescriptor(raw, imported, diagnostic) &&
+            imported.auxBuses.size() == 11 &&
+            imported.auxBuses[0].kind == instrument::AuxBusKind::send &&
+            imported.auxBuses[0].target == 1 &&
+            imported.auxBuses[10].kind == instrument::AuxBusKind::output &&
+            imported.auxBuses[10].target == 8,
+        "the maximum topology (4 SEND + 7 OUTPUT) imports in order");
+  auto base = *raw;
+  base.structSize = VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE;
+  check(instrument::native::importDescriptor(&base, imported, diagnostic) &&
+            imported.auxBuses.empty(),
+        "a V2.0..V2.2 descriptor size still imports, with no aux buses");
+
+  const auto rejects = [&](std::vector<VoxAuxBusV2> buses, const char *what,
+                           std::uint32_t reserved = 0, bool nullPointer = false) {
+    auto bad = *raw;
+    bad.auxBuses = nullPointer ? nullptr : buses.data();
+    bad.auxBusCount = static_cast<std::uint32_t>(buses.size());
+    bad.reserved1 = reserved;
+    check(!instrument::native::importDescriptor(&bad, imported, diagnostic),
+          std::string("aux descriptor rejected: ") + what);
+  };
+  rejects({{VOX_AUX_BUS_SEND, 1}, {VOX_AUX_BUS_SEND, 1}}, "duplicate SEND target");
+  rejects({{VOX_AUX_BUS_OUTPUT, 3}, {VOX_AUX_BUS_OUTPUT, 3}}, "duplicate OUTPUT target");
+  rejects({{VOX_AUX_BUS_SEND, 0}}, "SEND target 0");
+  rejects({{VOX_AUX_BUS_SEND, 5}}, "SEND target 5");
+  rejects({{VOX_AUX_BUS_OUTPUT, 1}}, "OUTPUT target 1 (the main output)");
+  rejects({{VOX_AUX_BUS_OUTPUT, 9}}, "OUTPUT target 9");
+  rejects({{3, 1}}, "unknown kind");
+  rejects({{VOX_AUX_BUS_SEND, 1}}, "non-zero reserved word", 1);
+  rejects({{VOX_AUX_BUS_SEND, 1}}, "count without a pointer", 0, true);
+  std::vector<VoxAuxBusV2> twelve(raw->auxBuses, raw->auxBuses + 11);
+  twelve.push_back({VOX_AUX_BUS_SEND, 1});
+  rejects(twelve, "more than 11 buses");
+}
+
+// Renders `blocks` blocks of a held note from the tone in slot 7 with the
+// given aux mode; `setup` adjusts the fresh processor first.
+std::vector<float> auxRun(std::uint32_t mode,
+                          const std::function<void(VstEngineAudioProcessor &)> &setup = {},
+                          bool fault = false) {
+  constexpr std::size_t slot = 6;
+  setAuxMode(slot, mode);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  if (setup)
+    setup(*p);
+  if (fault)
+    failNext(slot, failProcess);
+  auto out = play(*p, channelOf(*p, slot), 24, 0, -1).left;
+  setAuxMode(slot, 0);
+  return out;
+}
+
+void setRaw(VstEngineAudioProcessor &p, const std::string &id, float plain) {
+  auto *parameter = p.parameters().getParameter(id);
+  check(parameter != nullptr, "parameter " + id);
+  parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+}
+
+void auxBusMixing() {
+  const auto dry = auxRun(0);
+  double energy = 0;
+  for (const float v : dry)
+    energy += static_cast<double>(v) * v;
+  check(energy > 1.0, "the reference tone sounds");
+
+  // B1: a source routed to OUTPUT bus Out 2 sounds exactly once, bit-equal
+  // to the same source on the main outputs.
+  check(auxRun(1) == dry, "an OUTPUT bus joins the slot dry signal exactly once");
+
+  // A module SEND bus feeds only its return, after ducking and unscaled by
+  // the slot level: bit-equal to a pre-fader slot send at gain 1, and never
+  // part of Main (Main would otherwise also change).
+  const auto preSend = [](VstEngineAudioProcessor &p) {
+    setRaw(p, host::sendParameterId(6, 0, "level"), 1.0f);
+    setRaw(p, host::sendParameterId(6, 0, "pre"), 1.0f);
+  };
+  const auto sent = auxRun(2);
+  check(sent != dry, "a module send reaches its return");
+  check(sent == auxRun(0, preSend), "a module send equals a pre-fader slot send at gain 1");
+
+  // Maximum topology at once: dry split over all seven OUTPUT buses, sends
+  // into all four returns; every signal appears exactly once.
+  const auto everySend = [](VstEngineAudioProcessor &p) {
+    for (std::size_t bus = 0; bus < 4; ++bus) {
+      setRaw(p, host::sendParameterId(6, bus, "level"), 0.1f * static_cast<float>(bus + 1));
+      setRaw(p, host::sendParameterId(6, bus, "pre"), 1.0f);
+    }
+  };
+  const auto maximum = auxRun(3), reference = auxRun(0, everySend);
+  float worst = 0.0f;
+  for (std::size_t i = 0; i < maximum.size(); ++i)
+    worst = std::max(worst, std::abs(maximum[i] - reference[i]));
+  check(maximum.size() == reference.size() && worst < 1e-5f,
+        "seven OUTPUT buses and four SEND buses at once: nothing dropped or doubled (max " +
+            std::to_string(worst) + ")");
+
+  // A muted or faulted source leaves every bus silent: no dry, no send.
+  const auto silent = std::vector<float>(dry.size(), 0.0f);
+  check(auxRun(2, [](VstEngineAudioProcessor &p) { setRaw(p, "slot07Mute", 1.0f); }) == silent,
+        "a muted slot sends nothing through its module SEND bus");
+  check(auxRun(2, {}, true) == silent && auxRun(1, {}, true) == silent,
+        "a faulted module leaves its SEND and OUTPUT buses silent");
+  // A fault in the middle of a note: from the fault block on, nothing of the
+  // previous OUTPUT-bus audio is replayed (the adapter clears every aux bus).
+  setAuxMode(6, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, 6);
+  const int channel = channelOf(*p, 6);
+  const auto before = play(*p, channel, 4, 0, -1);
+  failNext(6, failProcess);
+  const auto after = play(*p, channel, 4, -1, -1);
+  setAuxMode(6, 0);
+  check(before.energy() > 1.0 && after.energy() == 0.0,
+        "a mid-note fault silences the OUTPUT bus from that block on");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     std::cerr << "usage: native_rack_tests <absolute test module path>\n";
@@ -981,6 +1138,8 @@ int main(int argc, char **argv) {
   malformedNotesDuckNothing();
   routedNotesPolicy();
   slotDiagnostics();
+  auxBusDescriptors();
+  auxBusMixing();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

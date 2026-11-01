@@ -179,7 +179,8 @@ bool AudioRouting::begin(const AudioRoutingControls &controls,
 void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
                            std::span<float *> output,
                            const ProcessSlotControls &slot, bool audible,
-                           std::uint32_t count) noexcept {
+                           std::uint32_t count,
+                           const ModuleSends *moduleSends) noexcept {
   if (!prepared_ || !blockReady_ || count != blockSamples_ ||
       index >= instrument::maxSlots || !audible ||
       input.size() != spec_.outputChannels ||
@@ -214,6 +215,9 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
         const auto &send = controls_.sends[route][bus];
         returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
       }
+      for (std::size_t bus = 0; moduleSends != nullptr && bus < sendBusCount; ++bus)
+        if (const auto *aux = (*moduleSends)[bus][c])
+          returns_[bus].audio[c][s] += aux[s] * duck;
     }
   }
 }

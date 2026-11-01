@@ -123,6 +123,13 @@ private:
         const instrument::InstrumentDescriptor* descriptor {};
         std::array<std::vector<float>, 2> audio;
         std::array<float*, 2> pointers {};
+        // Auxiliary buses the module declares (ABI V2.3), bus-major channel
+        // buffers sized at prepare; empty when it declares none.
+        std::vector<std::vector<float>> aux;
+        std::vector<float*> auxPointers;
+        // Per Rack return: channel pointers of the SEND bus that targets it.
+        std::array<std::array<const float *, 2>, 4> moduleSends{};
+        bool hasModuleSends{};
         std::unique_ptr<ModulationRuntime> modulation;
         struct DirectBinding {
           std::uint64_t key{};
@@ -137,6 +144,13 @@ private:
         std::vector<VoxNoteEventV2> noteEvents;
         VoxNoteOutputV2 noteOutput{};
     };
+public:
+    struct AuxStorage {
+        std::vector<std::vector<float>> buffers;
+        std::vector<float *> pointers;
+    };
+private:
+    static void bindAux(SlotRuntime &, AuxStorage, std::uint32_t channels) noexcept;
     bool buildSlot(std::size_t, const PersistentSlotState&,
                    instrument::ResourceResolver*, SlotRuntime&,
                    RuntimeSlotState&, std::string& diagnostic);

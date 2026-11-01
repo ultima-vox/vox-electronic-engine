@@ -98,6 +98,17 @@ struct ParameterDescriptor {
     std::int16_t poolIndex { -1 };
 };
 
+// Auxiliary stereo bus an instrument declares (ABI V2.3): a SEND bus feeds
+// only its Rack return, an OUTPUT bus is the dry signal of the sources routed
+// to that host output (folded into the slot's dry signal while the Rack has
+// one host output).
+enum class AuxBusKind : std::uint8_t { send = 1, output = 2 };
+struct AuxBus {
+    AuxBusKind kind {};
+    std::uint8_t target {}; // SEND: return 1..4; OUTPUT: host output 2..8
+};
+inline constexpr std::size_t maxAuxBuses = 11; // 4 SEND + 7 OUTPUT
+
 struct InstrumentDescriptor {
     InstrumentId id;
     std::string providerId;
@@ -128,6 +139,9 @@ struct InstrumentDescriptor {
     // Declarative SOUND page shipped by the package, validated against this
     // descriptor at load. Null: the host shows its generic control list.
     std::shared_ptr<const SoundLayout> soundLayout;
+    // Auxiliary buses (ABI V2.3), validated at import: each target once, at
+    // most 4 SEND and 7 OUTPUT. Empty for instruments without them.
+    std::vector<AuxBus> auxBuses;
 };
 
 struct ParameterValue {
@@ -206,6 +220,9 @@ struct ProcessBlock {
     std::uint64_t patternGeneration {};
     // Host-owned buffer for notes the instrument generates itself, or null.
     VoxNoteOutputV2* noteOutput {};
+    // The descriptor's auxiliary buses in order, outputs.size() channel
+    // pointers each (bus-major); empty when none. The instance overwrites them.
+    std::span<float*> aux;
 };
 
 // VoxNoteOutputV2.dropped value the host writes when it voids a block's

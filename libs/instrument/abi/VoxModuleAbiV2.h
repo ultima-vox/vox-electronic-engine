@@ -104,6 +104,22 @@ typedef struct VoxParameterDescriptorV2 {
   uint32_t flags;
 } VoxParameterDescriptorV2;
 
+/* V2.3 auxiliary stereo buses (per-pad sends and outputs). A module renders
+ * each source into exactly one dry destination: the main outputs, or one
+ * OUTPUT bus. Independently it may add send signal into SEND buses. The Rack
+ * feeds a SEND bus only into its Rack return (1..4) and never into the main
+ * mix; it adds an OUTPUT bus once into the slot's dry signal until separate
+ * host outputs exist (target 2..8 then names that host output). */
+#define VOX_AUX_BUS_SEND 1u
+#define VOX_AUX_BUS_OUTPUT 2u
+#define VOX_AUX_MAX_SEND_BUSES 4u
+#define VOX_AUX_MAX_OUTPUT_BUSES 7u
+#define VOX_AUX_MAX_BUSES (VOX_AUX_MAX_SEND_BUSES + VOX_AUX_MAX_OUTPUT_BUSES)
+typedef struct VoxAuxBusV2 {
+  uint32_t kind;   /* VOX_AUX_BUS_* */
+  uint32_t target; /* SEND: Rack return 1..4; OUTPUT: host output 2..8 */
+} VoxAuxBusV2;
+
 typedef struct VoxInstrumentDescriptorV2 {
   uint32_t structSize, version;
   const char *id;
@@ -123,7 +139,16 @@ typedef struct VoxInstrumentDescriptorV2 {
    * appending new parameters with defaults (existing ids, pool indices and
    * ranges unchanged); 0 = no upgrade. Below instrumentVersion. */
   uint32_t upgradeFromVersion;
+  /* Appended in V2.3. Read only when structSize covers it; every host
+   * accepts VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE (no auxiliary buses).
+   * Each target appears once; at most 4 SEND and 7 OUTPUT buses. */
+  const VoxAuxBusV2 *auxBuses;
+  uint32_t auxBusCount;
+  uint32_t reserved1; /* 0 */
 } VoxInstrumentDescriptorV2;
+
+/* Size of the V2.0..V2.2 instrument descriptor. */
+#define VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE 96u
 
 #define VOX_SLOT_INDEX_NONE 0xFFFFFFFFu
 
@@ -331,6 +356,13 @@ typedef struct VoxProcessContextV2 {
   VoxNoteOutputV2 *noteOutput; /* host-owned; NULL = the host does not listen.
                                   The module resets count/dropped every call;
                                   a count above capacity voids the block. */
+  /* Appended in V2.3: the module's declared auxiliary buses, in descriptor
+   * order, outputChannelCount channel pointers each (bus-major). Host-owned;
+   * the module overwrites every one it is given, like `outputs`. NULL / 0
+   * when the instrument declares none. */
+  float *const *auxOutputs;
+  uint32_t auxBusCount;
+  uint32_t reserved1; /* 0 */
 } VoxProcessContextV2;
 
 /* Size of the original V2.0 process context. */
@@ -379,7 +411,11 @@ VOX_ABI_ASSERT(sizeof(VoxParameterDescriptorV2) == 80, "VoxParameterDescriptorV2
 VOX_ABI_ASSERT(offsetof(VoxParameterDescriptorV2, type) == 48, "parameter type offset");
 VOX_ABI_ASSERT(offsetof(VoxParameterDescriptorV2, minimum) == 56, "parameter minimum offset");
 VOX_ABI_ASSERT(offsetof(VoxParameterDescriptorV2, poolIndex) == 72, "parameter pool offset");
-VOX_ABI_ASSERT(sizeof(VoxInstrumentDescriptorV2) == 96, "VoxInstrumentDescriptorV2 size");
+VOX_ABI_ASSERT(sizeof(VoxInstrumentDescriptorV2) == 112, "VoxInstrumentDescriptorV2 size");
+VOX_ABI_ASSERT(offsetof(VoxInstrumentDescriptorV2, auxBuses) ==
+                   VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE,
+               "auxBuses offset");
+VOX_ABI_ASSERT(sizeof(VoxAuxBusV2) == 8, "VoxAuxBusV2 size");
 VOX_ABI_ASSERT(offsetof(VoxInstrumentDescriptorV2, parameters) == 56, "parameters offset");
 VOX_ABI_ASSERT(offsetof(VoxInstrumentDescriptorV2, outputChannels) == 88, "outputs offset");
 VOX_ABI_ASSERT(sizeof(VoxCreateParamsV2) == 16, "VoxCreateParamsV2 size");
@@ -390,7 +426,8 @@ VOX_ABI_ASSERT(sizeof(VoxMidiEventV2) == 16, "VoxMidiEventV2 size");
 VOX_ABI_ASSERT(sizeof(VoxTransportV2) == 72, "VoxTransportV2 size");
 VOX_ABI_ASSERT(offsetof(VoxTransportV2, tempoBpm) == 24, "tempo offset");
 VOX_ABI_ASSERT(offsetof(VoxTransportV2, timeInSamples) == 64, "timeInSamples offset");
-VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 104, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 120, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, auxOutputs) == 104, "auxOutputs offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, noteOutput) == 96, "noteOutput offset");
 VOX_ABI_ASSERT(sizeof(VoxNoteEventV2) == 8, "VoxNoteEventV2 size");
 VOX_ABI_ASSERT(sizeof(VoxNoteOutputV2) == 40, "VoxNoteOutputV2 size");
