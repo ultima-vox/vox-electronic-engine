@@ -35,6 +35,7 @@ using namespace vstengine;
 constexpr const char *toneId = "test.abi.v2.tone";
 constexpr int blockSize = 128;
 std::string modulePath;
+std::string legacyModulePath; // the frozen ABI V2.2 build of the tone
 int checks = 0;
 
 void check(bool ok, const std::string &message) {
@@ -1167,12 +1168,62 @@ void auxBusMixing() {
         "a mid-note fault silences the OUTPUT bus from that block on");
 }
 
+// A real module binary built against the frozen V2.2 header (96-byte
+// descriptor, no aux fields; owner review 5730422105). The V2.3 host loads it
+// without diagnostics, gives it no aux buses, and it plays bit-equal to the
+// current build of the same tone, also after save and reopen.
+void legacyV22Binary() {
+  constexpr const char *legacyId = "test.abi.v2_2.tone";
+  constexpr std::size_t slot = 6;
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(legacyModulePath)), diagnostic);
+  const VoxInstrumentDescriptorV2 *raw = nullptr;
+  check(module != nullptr && module->table().getInstrument(0, &raw) == VOX_OK && raw != nullptr &&
+            raw->structSize == VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE,
+        "the legacy binary reports the 96-byte V2.2 descriptor");
+  const auto makeLegacy = [] {
+    auto p = std::make_unique<VstEngineAudioProcessor>(
+        modules::createBuiltInProvider(),
+        instrument::native::loadConfiguredModules(legacyModulePath));
+    for (const char *id : {"slot01Enabled", "slot02Enabled"})
+      if (auto *enabled = p->parameters().getParameter(id))
+        enabled->setValueNotifyingHost(0.0f);
+    p->prepareToPlay(48000.0, blockSize);
+    return p;
+  };
+  auto legacy = makeLegacy();
+  check(legacy->nativeModuleDiagnostics().empty(), "the V2.3 host loads the V2.2 binary");
+  juce::String why;
+  check(legacy->loadSlotInstrument(slot, legacyId, why), "legacy tone loads: " + why.toStdString());
+  const auto *descriptor = legacy->instrumentRack().descriptor(slot);
+  check(descriptor != nullptr && descriptor->auxBuses.empty(),
+        "the legacy instrument has no aux buses");
+  const auto old = play(*legacy, channelOf(*legacy, slot), 10, 1, 7);
+
+  auto current = makeProcessor(true);
+  loadTone(*current, slot);
+  const auto now = play(*current, channelOf(*current, slot), 10, 1, 7);
+  check(old.energy() > 1.0 && old.left == now.left,
+        "the V2.2 binary renders bit-equal to the current build of the tone");
+
+  juce::MemoryBlock state;
+  legacy->getStateInformation(state);
+  auto reopened = makeLegacy();
+  reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  check(reopened->instrumentRack().state()[slot].instrumentId == legacyId,
+        "the legacy slot survives save and reopen");
+  const auto again = play(*reopened, channelOf(*reopened, slot), 10, 1, 7);
+  check(again.left == old.left, "the reopened legacy slot plays the same audio");
+}
+
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "usage: native_rack_tests <absolute test module path>\n";
+  if (argc != 3) {
+    std::cerr << "usage: native_rack_tests <test module path> <legacy V2.2 module path>\n";
     return 2;
   }
   modulePath = argv[1];
+  legacyModulePath = argv[2];
   juce::ScopedJuceInitialiser_GUI gui;
   registration();
   playsAndAutomates();
@@ -1194,6 +1245,7 @@ int main(int argc, char **argv) {
   slotDiagnostics();
   auxBusDescriptors();
   auxBusMixing();
+  legacyV22Binary();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }
