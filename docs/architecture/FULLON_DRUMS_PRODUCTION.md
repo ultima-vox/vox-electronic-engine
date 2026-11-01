@@ -155,30 +155,66 @@ gives the module a single-threaded contract.
   - The module may read a buffer only during `process`, and only one listed
     in the current call's table or held by a voice it started on that buffer.
     It never allocates, frees or caches sample memory.
-- **Host (adapter, C++):**
-  - the controller installs a buffer into a per-instance pending slot;
-  - at the next block start, the audio thread publishes pending → current with
-    one atomic exchange, and records the old buffer's retirement epoch E (the
-    first block in which it is no longer current);
-  - after `process`, the audio thread copies the module's usage ids into a
-    fixed table and publishes the block epoch (release order; the controller
-    reads with acquire and a sequence check);
-  - the controller frees a retired buffer only when it has seen a usage report
-    of a block numbered after E that does not contain its id, and the report
-    did not overflow. From then on no voice references it and none can start
-    on it, because it is no longer in any table. A buffer that is current or
-    pending is never freed.
-- **Bounds:**
-  - at most 4 retiring buffers per sample slot; `setSample` refuses when they
-    are all busy, and the UI retries after the next poll;
-  - the usage capacity is `sampleSlotCount × 4`.
-  
-  There is no unbounded queue and no allocation, free, lock or I/O in the
-  callback.
-- **Quiescing:** reset, Panic, transport-stop reset and `prepare` end all
-  voices, so the next report frees every retired buffer. Slot unload, project
-  reload and shutdown destroy the instance (non-realtime) before its buffers
-  are freed.
+- **Usage report (module → host), validated per block.** The module writes
+  `sampleUsage = { count, overflow, ids[capacity] }`. The adapter marks the
+  block's report **valid** only when all of these hold:
+  - `process` returned `VOX_OK` and the block really ran (not faulted,
+    suspended or unprepared; a bypassed block runs the module and counts);
+  - `count ≤ capacity`;
+  - every id is non-zero and appears once;
+  - every id is one the host gave this instance and has not freed.
+
+  Anything else (no call, an error, a malformed report) yields **no report**
+  for that block. `overflow` yields a report that frees nothing.
+  Missing reports never read as "empty".
+- **Host (adapter, C++), data-race-free publication.**
+  - **Pending → current:** the controller writes a pending entry per sample
+    slot (an atomic pointer to an immutable host object). At block start the
+    audio thread takes it with one atomic exchange and installs it in its
+    private table.
+  - **Report:** after `process`, the audio thread fills a **report buffer it
+    alone owns**:
+
+    ```
+    { epoch N, valid, overflow,
+      current ids of every sample slot in block N,
+      usage ids }
+    ```
+
+    It then hands the buffer over through a single-writer/single-reader
+    **triple buffer**: three fixed report buffers, each owned exclusively by
+    the writer, the middle slot or the reader. Ownership changes only by an
+    atomic exchange of a small index word with acq_rel order, plus a "fresh"
+    bit. The writer never touches the reader's buffer, and neither side
+    waits, locks or allocates. The reader may see only the newest report, and
+    skipping one is safe because each report is self-contained.
+- **Free rule (controller).** A buffer X that the controller replaced or
+  cleared is freed only after it reads a report that meets all of these:
+  - it is coherent (taken by the exchange above);
+  - it is valid and non-overflowing;
+  - its epoch is strictly later than the epoch in which the controller saw
+    X's replacement applied;
+  - X is in neither its current ids nor its usage ids.
+
+  From that block on no voice holds X, and none can start on it, because X
+  is in no table and the controller never re-installs a retired buffer.
+- **Verified quiescence** is the only other path that frees buffers:
+  - `prepare` and `reset` that return `VOX_OK` end every voice and drop
+    every sample reference (module contract), and the Rack calls them inside
+    its exclusive section, with no `process` running concurrently;
+  - Panic and transport-stop reset run `reset` on the audio thread at a block
+    start; the adapter then publishes that block's report with `valid` set
+    only if `reset` returned `VOX_OK`;
+  - instance destroy (slot unload, project reload, shutdown) happens off the
+    audio thread after the Rack's exclusive section, and only then are its
+    buffers freed;
+  - a faulted instance frees nothing until a successful `prepare` (recovery)
+    or destroy.
+- **Bounds:** at most 4 retiring buffers per sample slot; `setSample` refuses
+  when they are all busy, and the UI retries after the next poll. Usage
+  capacity is `sampleSlotCount × 4`. Report buffers are preallocated at
+  `prepare`. There is no unbounded queue and no allocation, free, lock, wait
+  or I/O in the callback.
 
 **Playback (module):**
 - start/end points, One Shot or Loop, and Reverse are read modes of the same
@@ -206,9 +242,23 @@ and free probes stay at 0 in the callback):
 - a deterministic oracle: output with a swap equals output without it until
   the new voices start;
 - a usage report that overflows frees nothing;
-- a freed-buffer canary: the test buffer type poisons its samples with NaN when
-  released, and every render must stay finite. A voice that read a released
-  buffer would therefore show up even without ASan.
+- a **logical-retirement canary**: the test release hook poisons a buffer with
+  NaN and keeps its memory quarantined (never deallocated during the test).
+  Every render must stay finite, and the test asserts when each buffer was
+  released. Real deallocation is checked separately under ASan;
+- **fault injection:**
+  - process failure right after A→B;
+  - bypassed, suspended and unprepared blocks;
+  - an invalid count, a zero id, a duplicate id, an unknown id;
+  - overflow;
+  - stop and Panic;
+  - slot unload and project reload.
+
+  In each case nothing is released early, and the callback still has no
+  alloc, lock or free;
+- a **concurrent producer/consumer stress test** of the report triple
+  buffer, run under ThreadSanitizer on Linux: rapid blocks, a deliberately
+  delayed reader, forced overflows. A live id is never freed.
 
 ### D. Pattern content V2.1 (per-step probability)
 
