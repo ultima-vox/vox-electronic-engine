@@ -1099,6 +1099,60 @@ void auxBusMixing() {
         "a muted slot sends nothing through its module SEND bus");
   check(auxRun(2, {}, true) == silent && auxRun(1, {}, true) == silent,
         "a faulted module leaves its SEND and OUTPUT buses silent");
+  // Ducking: a routed kick on the source slot (slot 6) ducks the target
+  // (slot 7). The target's module SEND is ducked exactly like a pre-fader
+  // slot send, whichever slot renders first.
+  const auto ducked = [](std::uint32_t mode, bool slotSend, std::size_t source,
+                         std::size_t target, bool kicks = true) {
+    setAuxMode(static_cast<std::uint32_t>(target), mode);
+    auto p = makeProcessor(true);
+    const auto s = loadTone(*p, source), t = loadTone(*p, target);
+    setRaw(*p, "rack.duck.source", static_cast<float>(s + 1));
+    setRaw(*p, "rack.duck.note", 62.0f);
+    setRaw(*p, "rack.duck.attack", 0.0f);
+    setRaw(*p, "rack.duck.hold", 20.0f);
+    setRaw(*p, "rack.duck.release", 50.0f);
+    // A memoryless return effect, so the ducked send shows up at once.
+    setRaw(*p, host::returnParameterId(0, "type"), 0.0f);
+    char depth[32];
+    std::snprintf(depth, sizeof(depth), "slot%02zu.duck.depth", t + 1);
+    setRaw(*p, depth, 1.0f);
+    setPlain(*p, s, 0, 0.0f); // the source itself adds no audio
+    if (slotSend) {
+      setRaw(*p, host::sendParameterId(t, 0, "level"), 1.0f);
+      setRaw(*p, host::sendParameterId(t, 0, "pre"), 1.0f);
+    }
+    const int sourceChannel = channelOf(*p, s), targetChannel = channelOf(*p, t);
+    std::vector<float> out;
+    juce::AudioBuffer<float> audio(2, blockSize);
+    juce::MidiBuffer midi;
+    for (int b = 0; b < 12; ++b) {
+      midi.clear();
+      if (b == 0)
+        midi.addEvent(juce::MidiMessage::noteOn(targetChannel, 64, 0.9f), 0);
+      if (kicks && b > 0 && b % 3 == 0)
+        midi.addEvent(juce::MidiMessage::noteOn(sourceChannel, 62, 0.9f), 20);
+      audio.clear();
+      p->processBlock(audio, midi);
+      out.insert(out.end(), audio.getReadPointer(0), audio.getReadPointer(0) + blockSize);
+    }
+    setAuxMode(static_cast<std::uint32_t>(target), 0);
+    return out;
+  };
+  for (const auto &[source, target] : {std::pair<std::size_t, std::size_t>{5, 7},
+                                       std::pair<std::size_t, std::size_t>{9, 7}}) {
+    const auto withModuleSend = ducked(2, false, source, target);
+    check(withModuleSend != ducked(2, false, source, target, false),
+          "the kicks duck the target (source slot " + std::to_string(source + 1) + ")");
+    const auto reference = ducked(0, true, source, target);
+    float worst = 0.0f;
+    for (std::size_t i = 0; i < withModuleSend.size(); ++i)
+      worst = std::max(worst, std::abs(withModuleSend[i] - reference[i]));
+    check(withModuleSend == reference,
+          "a module SEND is ducked like a pre-fader slot send (source slot " +
+              std::to_string(source + 1) + ", max difference " + std::to_string(worst) + ")");
+  }
+
   // A fault in the middle of a note: from the fault block on, nothing of the
   // previous OUTPUT-bus audio is replayed (the adapter clears every aux bus).
   setAuxMode(6, 1);
