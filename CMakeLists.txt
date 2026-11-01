@@ -491,6 +491,19 @@ if(UNIX)
   target_link_libraries(vox_abi_v2_test_module PRIVATE m)
 endif()
 
+# The same test tone frozen at ABI V2.2 and built against the frozen V2.2
+# header: a real binary with the 96-byte descriptor that the host must load.
+add_library(vox_abi_v2_2_legacy_module SHARED tests/abi/legacy/TestModuleV2_2.c)
+set_target_properties(vox_abi_v2_2_legacy_module PROPERTIES
+  PREFIX ""
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+  C_VISIBILITY_PRESET hidden)
+target_include_directories(vox_abi_v2_2_legacy_module PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/legacy/v2_2)
+if(UNIX)
+  target_link_libraries(vox_abi_v2_2_legacy_module PRIVATE m)
+endif()
+
 add_executable(module_abi_v2_tests tests/abi/ModuleAbiV2Tests.cpp tests/abi/AbiLayoutC.c)
 set_target_properties(module_abi_v2_tests PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
@@ -515,14 +528,15 @@ add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
 target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
 target_link_libraries(native_rack_tests PRIVATE VstEngine)
-add_dependencies(native_rack_tests vox_abi_v2_test_module)
+add_dependencies(native_rack_tests vox_abi_v2_test_module vox_abi_v2_2_legacy_module)
 if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT VOX_SANITIZE_THREAD)
   target_sources(native_rack_tests PRIVATE tests/abi/AllocationProbeLinux.c)
   target_compile_definitions(native_rack_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
   target_link_options(native_rack_tests PRIVATE -rdynamic)
 endif()
 add_test(NAME native_rack_tests
-  COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>)
+  COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>
+          $<TARGET_FILE:vox_abi_v2_2_legacy_module>)
 
 # Owner Cubase acceptance: a fresh Rack is empty; new projects restore.
 add_executable(fresh_rack_tests tests/integration/FreshRackTests.cpp)
