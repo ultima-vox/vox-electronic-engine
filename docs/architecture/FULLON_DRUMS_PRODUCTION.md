@@ -172,6 +172,43 @@ gives the module a single-threaded contract.
     slot (an atomic pointer to an immutable host object). At block start the
     audio thread takes it with one atomic exchange and installs it in its
     private table.
+  - **Ownership of every buffer (rev. 3.1).** Each immutable buffer is in
+    exactly one state, and only the listed actor may move it on:
+
+    | State | Owner | Leaves by |
+    |---|---|---|
+    | staged (decoded, not published) | controller | publish, or free on error |
+    | pending | the pending word | **one** exchange: controller or audio |
+    | superseded (never installed) | controller | freed at once |
+    | current / used by voices | audio | a valid report shows it replaced |
+    | retiring | controller | the free rule, or verified quiescence |
+
+    - **Publish:** the controller sets `previous = pending.exchange(new,
+      acq_rel)`. Clearing a pad publishes a static "empty" sentinel that is
+      never freed.
+    - **Install:** the audio thread sets `taken = pending.exchange(null,
+      acq_rel)` at block start and installs `taken` if it is non-null.
+    - **Linearization:** both sides use exchange on the same word, so each
+      pointer stored there leaves it through exactly one exchange, the
+      controller's or the audio thread's.
+      - A non-null `previous` returned to the controller was therefore never
+        taken by audio. It was never in any table, so no voice ever saw it.
+        The controller owns it again and frees it immediately, with no epoch
+        or report.
+      - A pointer taken by audio becomes current and later follows the free
+        rule below.
+    - **Race `setSample(B)` vs `install` vs `setSample(C)`:** if audio's
+      exchange comes before C's, B is installed and later retired. If C's
+      comes first, the controller receives B and frees it, and audio
+      installs C. In both cases the last published sample wins and B is
+      freed exactly once.
+    - **Bounds:** per sample slot there is at most 1 pending, 1 current and
+      4 retiring buffers. Superseded buffers never accumulate.
+    - **Retirement needs audio progress.** A buffer becomes retiring only
+      when a block has installed its replacement. With no audio callbacks
+      (transport stopped, the DAW not processing), rapid A→B→C… browsing
+      therefore only supersedes pending buffers. It never fills the
+      retirement list and never waits for an epoch that may not arrive.
   - **Report:** after `process`, the audio thread fills a **report buffer it
     alone owns**:
 
@@ -208,6 +245,12 @@ gives the module a single-threaded contract.
   - instance destroy (slot unload, project reload, shutdown) happens off the
     audio thread after the Rack's exclusive section, and only then are its
     buffers freed;
+  - **teardown without another block** (the DAW closes or unloads the plugin
+    without calling `process` again): the host reaches the same quiescent
+    point by destroying the instance after the exclusive section, or in the
+    processor destructor, where no callback can run. Only after that does it
+    take the pending word with an exchange and free the pending buffer, the
+    current buffer and every retiring buffer, each exactly once;
   - a faulted instance frees nothing until a successful `prepare` (recovery)
     or destroy.
 - **Bounds:** at most 4 retiring buffers per sample slot; `setSample` refuses
@@ -259,6 +302,19 @@ and free probes stay at 0 in the callback):
 - a **concurrent producer/consumer stress test** of the report triple
   buffer, run under ThreadSanitizer on Linux: rapid blocks, a deliberately
   delayed reader, forced overflows. A live id is never freed.
+- **pending ownership (rev. 3.1):**
+  - 1,000 publishes A→B→C… on one pad **with no audio callback**: each
+    superseded buffer is released exactly once, at its supersede, and at
+    most 1 pending + 1 current buffer stays live per pad. Then one
+    callback installs only the last sample, and the previous current is
+    released only after a later valid report omits it;
+  - the same sequence followed by teardown with no further callback: every
+    buffer is released exactly once, with no epoch involved;
+  - a concurrent race under TSan: a controller thread publishing as fast as
+    it can while the audio thread runs blocks. At the end, every buffer
+    created is released exactly once (the release hook counts and
+    quarantines), no buffer is released while a report lists it, and the
+    callback has no alloc, lock or free.
 
 ### D. Pattern content V2.1 (per-step probability)
 
