@@ -507,12 +507,16 @@ add_test(NAME module_abi_v2_tests
   COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
 
 # M0: the real Rack processor plays the V2 test module through a slot.
+# ThreadSanitizer builds (-fsanitize=thread) intercept malloc themselves, so
+# they cannot also link the allocation probe; its zero-allocation checks are
+# then skipped in that build only (they still run in every normal build).
+option(VOX_SANITIZE_THREAD "Build is instrumented with ThreadSanitizer" OFF)
 add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
 target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
 target_link_libraries(native_rack_tests PRIVATE VstEngine)
 add_dependencies(native_rack_tests vox_abi_v2_test_module)
-if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT VOX_SANITIZE_THREAD)
   target_sources(native_rack_tests PRIVATE tests/abi/AllocationProbeLinux.c)
   target_compile_definitions(native_rack_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
   target_link_options(native_rack_tests PRIVATE -rdynamic)

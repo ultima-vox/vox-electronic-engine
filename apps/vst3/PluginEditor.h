@@ -143,7 +143,9 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
         // Model -> view for UI-only controls (message thread, editor timer):
         // shows the Rack's saved value when another caller changed it.
-        void refreshUiOnly();
+        // `current` is a locked snapshot of the bound slot; it is applied only
+        // while it still describes the slot the controls were built for.
+        void refreshUiOnly(const vstengine::rack::PersistentSlotState &current);
     private:
         void bindInstrumentControls(std::size_t);
         void layoutInstrumentControls();
@@ -167,7 +169,8 @@ private:
         std::vector<std::unique_ptr<juce::Label>> directLabels;
         std::vector<std::unique_ptr<juce::Component>> directControls;
         void addUiOnly(std::size_t slot, const vstengine::instrument::ParameterDescriptor &,
-                       const std::string &caption);
+                       const std::string &caption,
+                       const vstengine::rack::PersistentSlotState &bound);
         // UI-only controls of the bound slot: they have no APVTS attachment,
         // so refreshUiOnly() pushes Rack changes into them.
         struct UiOnlyControl {
@@ -176,6 +179,9 @@ private:
             juce::Component *control;
         };
         std::vector<UiOnlyControl> uiOnlyControls;
+        // Identity of the snapshot the UI-only controls were built from.
+        vstengine::instrument::SlotId uiOnlySlotId{};
+        std::string uiOnlyInstrument;
         // Declarative SOUND layout of the bound instrument: section titles and
         // the index of each section's first control. Empty: the generic list.
         std::vector<std::unique_ptr<juce::Label>> directSectionTitles;
@@ -218,7 +224,9 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
         // Model -> view for UI-only controls (message thread, editor timer):
         // shows the Rack's saved value when another caller changed it.
-        void refreshUiOnly();
+        // `current` is a locked snapshot of the bound slot; it is applied only
+        // while it still describes the slot the controls were built for.
+        void refreshUiOnly(const vstengine::rack::PersistentSlotState &current);
     private:
         void assign(int channel);
         [[nodiscard]] int currentChannel() const;
@@ -239,7 +247,9 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
         // Model -> view for UI-only controls (message thread, editor timer):
         // shows the Rack's saved value when another caller changed it.
-        void refreshUiOnly();
+        // `current` is a locked snapshot of the bound slot; it is applied only
+        // while it still describes the slot the controls were built for.
+        void refreshUiOnly(const vstengine::rack::PersistentSlotState &current);
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, transposeLabel;
@@ -255,7 +265,9 @@ private:
         void paint(juce::Graphics&) override; void resized() override; void bind(std::size_t);
         // Model -> view for UI-only controls (message thread, editor timer):
         // shows the Rack's saved value when another caller changed it.
-        void refreshUiOnly();
+        // `current` is a locked snapshot of the bound slot; it is applied only
+        // while it still describes the slot the controls were built for.
+        void refreshUiOnly(const vstengine::rack::PersistentSlotState &current);
     private:
         VstEngineAudioProcessor& processor;
         juce::Label title, description, status, seedLabel;
