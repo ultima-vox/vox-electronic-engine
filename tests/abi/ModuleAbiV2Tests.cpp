@@ -365,7 +365,11 @@ void validation(const VoxModuleV2 &m, const VoxInstrumentDescriptorV2 &d) {
 
   Instrument copy;
   REQUIRE(copyInstrument(&d, copy), "test instrument validates");
-  REQUIRE(copy.id == toneId && copy.parameters.size() == 4, "deep copy identity");
+  REQUIRE(copy.id == toneId && copy.parameters.size() == 7, "deep copy identity");
+  REQUIRE(copy.parameters[4].id == "trim" && copy.parameters[4].poolIndex == -1 &&
+              (copy.parameters[4].flags & (VOX_PARAM_HOST_EXPOSED | VOX_PARAM_AUTOMATABLE |
+                                           VOX_PARAM_MODULATABLE)) == 0,
+          "a UI-only parameter keeps no host flags and no pool index");
   REQUIRE(copy.parameters[3].choices.size() == 3 && copy.parameters[3].choices[2] == "Saw",
           "choices deep-copied");
   REQUIRE(copy.parameters[1].type == VOX_PARAM_INTEGER && copy.parameters[1].minimum == -2.0f,
@@ -472,7 +476,7 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
   badSpec.outputChannels = 3;
   REQUIRE(m.prepare(instance, &badSpec) == VOX_E_INVALID_ARG, "too many outputs");
   badSpec = prepareSpec();
-  badSpec.maxParamChangesPerBlock = 5; // above parameterCount
+  badSpec.maxParamChangesPerBlock = static_cast<std::uint32_t>(instrument.parameters.size()) + 1;
   REQUIRE(m.prepare(instance, &badSpec) == VOX_E_INVALID_ARG, "change budget above parameters");
   badSpec = prepareSpec();
   badSpec.maxMidiEventsPerBlock = instrument.maxMidiEventsPerBlock + 1;
@@ -494,9 +498,9 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
           "parameter count mismatch");
   auto invalid = values;
   invalid[1] = 0.5f; // integer octave
-  REQUIRE(m.setAllParameters(instance, invalid.data(), 4) == VOX_E_INVALID_ARG,
+  REQUIRE(m.setAllParameters(instance, invalid.data(), static_cast<std::uint32_t>(invalid.size())) == VOX_E_INVALID_ARG,
           "invalid snapshot rejected");
-  REQUIRE(m.setAllParameters(instance, values.data(), 4) == VOX_OK, "snapshot");
+  REQUIRE(m.setAllParameters(instance, values.data(), static_cast<std::uint32_t>(values.size())) == VOX_OK, "snapshot");
 
   // Process argument validation.
   {
@@ -679,11 +683,11 @@ void lifecycle(const VoxModuleV2 &m, const Instrument &instrument) {
     custom[0] = 0.25f; // gain
     custom[1] = 1.0f;  // octave
     custom[3] = 2.0f;  // saw
-    REQUIRE(m.setAllParameters(instance, custom.data(), 4) == VOX_OK, "custom snapshot");
+    REQUIRE(m.setAllParameters(instance, custom.data(), static_cast<std::uint32_t>(custom.size())) == VOX_OK, "custom snapshot");
     REQUIRE(m.reset(instance) == VOX_OK, "reset");
     const auto afterReset = renderPhrase(m, instance, 4);
     VoxInstance fresh = makeInstance(m, instrument);
-    REQUIRE(m.setAllParameters(fresh, custom.data(), 4) == VOX_OK, "fresh snapshot");
+    REQUIRE(m.setAllParameters(fresh, custom.data(), static_cast<std::uint32_t>(custom.size())) == VOX_OK, "fresh snapshot");
     const auto reference = renderPhrase(m, fresh, 4);
     REQUIRE(afterReset == reference, "reset keeps parameters, output deterministic");
     REQUIRE(m.destroy(fresh) == VOX_OK, "destroy fresh");

@@ -809,7 +809,7 @@ void unresolvedModulesPreserveNamedValuesWithBounds() {
       "unresolved named state roundtrips");
   CHECK(named(decoded, "p000") == -3.5f, "unknown module values remain exact");
   for (std::size_t i = decoded[0].directParameters.size();
-       i <= maxDirectParameters; ++i)
+       i <= maxSlotParameters; ++i)
     decoded[0].directParameters.push_back({parameterId(i), 0});
   CHECK(!f.engine->replaceState(decoded, nullptr, f.error),
         "missing module cannot bypass direct parameter count bound");

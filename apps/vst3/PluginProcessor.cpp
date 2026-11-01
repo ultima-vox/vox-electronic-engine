@@ -1202,6 +1202,15 @@ bool VstEngineAudioProcessor::assignSlotChannel(std::size_t slot, int channel,
   return true;
 }
 
+bool VstEngineAudioProcessor::setSlotParameter(std::size_t slot,
+                                               const std::string &parameterId,
+                                               float plain, juce::String &diagnostic) {
+  std::string why;
+  const bool ok = rack.setUiParameter(slot, parameterId, plain, why);
+  diagnostic = juce::String(why);
+  return ok;
+}
+
 bool VstEngineAudioProcessor::serializeSlotPatternMidi(
     std::size_t index, juce::MemoryBlock &destination,
     juce::String &diagnostic) {
