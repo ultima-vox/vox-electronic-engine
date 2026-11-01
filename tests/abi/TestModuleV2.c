@@ -44,10 +44,19 @@ static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
      shapeChoices, VOX_PARAM_CHOICE, 2, 0.0f, 1.0f, 0.0f, 1.0f, -1, 0},
 };
 
+/* V2.3: the maximum aux topology, 4 SEND (returns 1..4) then 7 OUTPUT (host
+ * outputs 2..8). What the tone writes there is chosen by voxTestSetAuxMode. */
+#define AUX_COUNT 11u
+static const VoxAuxBusV2 auxBuses[AUX_COUNT] = {
+    {VOX_AUX_BUS_SEND, 1},   {VOX_AUX_BUS_SEND, 2},   {VOX_AUX_BUS_SEND, 3},
+    {VOX_AUX_BUS_SEND, 4},   {VOX_AUX_BUS_OUTPUT, 2}, {VOX_AUX_BUS_OUTPUT, 3},
+    {VOX_AUX_BUS_OUTPUT, 4}, {VOX_AUX_BUS_OUTPUT, 5}, {VOX_AUX_BUS_OUTPUT, 6},
+    {VOX_AUX_BUS_OUTPUT, 7}, {VOX_AUX_BUS_OUTPUT, 8}};
+
 static const VoxInstrumentDescriptorV2 instrument = {
     sizeof(VoxInstrumentDescriptorV2), VOX_MODULE_ABI_V2, TEST_ID, "ABI Test Tone", "Tests",
     "Test", 1, 1, STATE_VERSION, PARAM_COUNT, parameters, sizeof(VoxParameterDescriptorV2),
-    1, 64, STATE_BYTES, 0, 0, 2, 0};
+    1, 64, STATE_BYTES, 0, 0, 2, 0, auxBuses, AUX_COUNT, 0};
 
 struct VoxInstanceT {
   float values[PARAM_COUNT];
@@ -64,6 +73,7 @@ struct VoxInstanceT {
   uint32_t processCalls, resetCalls; /* entry counters, for host tests */
   uint64_t patternGeneration; /* last snapshot seen in process, for host tests */
   uint32_t noteMode;          /* note output this instance writes, for host tests */
+  uint32_t auxMode;           /* aux bus routing, for host tests */
   uint32_t patternChecksum;
 };
 
@@ -127,6 +137,20 @@ VOX_EXPORT void VOX_CALL voxTestSetNoteMode(uint32_t slotIndex, uint32_t mode) {
   for (int i = 0; i < 64; ++i)
     if (live[i] != NULL && live[i]->slotIndex == slotIndex)
       live[i]->noteMode = mode;
+}
+
+/* Test hook (not part of the ABI): how instances for Rack slot `slotIndex`
+ * use their aux buses. 0: tone on the main outputs, aux silent. 1: tone only
+ * on OUTPUT bus Out 2 (main silent). 2: tone on main and the same tone into
+ * SEND 1. 3: maximum topology, tone split over all seven OUTPUT buses (1/7
+ * each, main silent) plus 0.1/0.2/0.3/0.4 x tone into SEND 1..4. */
+static uint32_t auxModes[32];
+VOX_EXPORT void VOX_CALL voxTestSetAuxMode(uint32_t slotIndex, uint32_t mode) {
+  if (slotIndex < 32)
+    auxModes[slotIndex] = mode;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex)
+      live[i]->auxMode = mode;
 }
 
 static void writeNotes(const struct VoxInstanceT *s, const VoxProcessContextV2 *c) {
@@ -241,6 +265,7 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
   instance->note = -1;
   instance->slotIndex = params->slotIndex;
   instance->noteMode = params->slotIndex < 32 ? noteModes[params->slotIndex] : 0;
+  instance->auxMode = params->slotIndex < 32 ? auxModes[params->slotIndex] : 0;
   for (int i = 0; i < 64; ++i)
     if (live[i] == NULL) {
       live[i] = instance;
@@ -384,6 +409,15 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
     s->note = -1;
     s->phase = 0.0;
   }
+  /* V2.3 aux buses: used only when the host's context carries all of ours. */
+  float *const *aux = NULL;
+  if (c->structSize >= offsetof(VoxProcessContextV2, reserved1) + sizeof(c->reserved1) &&
+      c->auxOutputs != NULL && c->auxBusCount == AUX_COUNT) {
+    aux = c->auxOutputs;
+    for (uint32_t k = 0; k < AUX_COUNT * c->outputChannelCount; ++k)
+      if (aux[k] == NULL)
+        return VOX_E_INVALID_ARG;
+  }
   const uint8_t *changes = (const uint8_t *)c->paramChanges;
   const uint8_t *events = (const uint8_t *)c->midiEvents;
   uint32_t nextChange = 0, nextEvent = 0;
@@ -407,8 +441,21 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       ++nextEvent;
     }
     const float v = render(s);
+    const float dry = s->auxMode == 1 || s->auxMode == 3 ? 0.0f : v;
     for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)
-      c->outputs[ch][i] = v;
+      c->outputs[ch][i] = dry;
+    if (aux != NULL)
+      for (uint32_t bus = 0; bus < AUX_COUNT; ++bus) {
+        float a = 0.0f;
+        if (s->auxMode == 1 && bus == 4)
+          a = v;
+        else if (s->auxMode == 2 && bus == 0)
+          a = v;
+        else if (s->auxMode == 3)
+          a = bus < 4 ? v * 0.1f * (float)(bus + 1) : v / 7.0f;
+        for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)
+          aux[bus * c->outputChannelCount + ch][i] = a;
+      }
   }
   if (c->releaseFlags & (VOX_RELEASE_ALL_NOTES_AT_END | VOX_RELEASE_ALL_SOUND_AT_END))
     s->note = -1;

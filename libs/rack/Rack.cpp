@@ -112,6 +112,20 @@ void canonicalizeResolvedDirect(
               instrument::hostparams::canonicalPlain(value.value, *parameter);
       }
 }
+// Buffers for the module's auxiliary buses, bus-major (controller thread; may
+// throw). Moving the storage later keeps every channel pointer valid.
+Rack::AuxStorage auxBuffers(const instrument::InstrumentDescriptor *descriptor,
+                            const instrument::PrepareSpec &spec) {
+  Rack::AuxStorage storage;
+  if (descriptor != nullptr)
+    for (std::size_t b = 0; b < descriptor->auxBuses.size(); ++b)
+      for (std::uint32_t c = 0; c < spec.outputChannels; ++c)
+        storage.buffers.emplace_back(spec.maximumBlockSize, 0.0f);
+  storage.pointers.reserve(storage.buffers.size());
+  for (auto &buffer : storage.buffers)
+    storage.pointers.push_back(buffer.data());
+  return storage;
+}
 } // namespace
 
 std::array<Rack::SlotSummary, instrument::maxSlots> Rack::summaries() const {
@@ -155,10 +169,13 @@ bool Rack::prepare(const instrument::PrepareSpec& spec)
         return false;
     const std::scoped_lock persistentLock(persistentStateMutex_);
     std::array<std::array<std::vector<float>, 2>, instrument::maxSlots> audio;
+    std::array<AuxStorage, instrument::maxSlots> aux;
     try {
         for (auto& slot : audio)
             for (std::size_t channel = 0; channel < spec.outputChannels; ++channel)
                 slot[channel].assign(spec.maximumBlockSize, 0.0f);
+        for (std::size_t index = 0; index < aux.size(); ++index)
+          aux[index] = auxBuffers(processing_->runtime[index].descriptor, spec);
     } catch (...) {
         return false; // No live DSP/spec/buffers were touched.
     }
@@ -186,12 +203,30 @@ bool Rack::prepare(const instrument::PrepareSpec& spec)
               channel < spec.outputChannels
                   ? processing_->runtime[index].audio[channel].data()
                   : nullptr;
+        bindAux(processing_->runtime[index], std::move(aux[index]), spec.outputChannels);
       }
         spec_ = spec;
     }
     reset();
     endExclusive();
     return prepared;
+}
+
+void Rack::bindAux(SlotRuntime &slot, AuxStorage storage, std::uint32_t channels) noexcept {
+  slot.aux = std::move(storage.buffers);
+  slot.auxPointers = std::move(storage.pointers);
+  slot.moduleSends = {};
+  slot.hasModuleSends = false;
+  if (slot.descriptor == nullptr || slot.aux.empty())
+    return;
+  for (std::size_t b = 0; b < slot.descriptor->auxBuses.size(); ++b) {
+    const auto &bus = slot.descriptor->auxBuses[b];
+    if (bus.kind != instrument::AuxBusKind::send)
+      continue;
+    for (std::uint32_t c = 0; c < channels && c < 2; ++c)
+      slot.moduleSends[bus.target - 1u][c] = slot.auxPointers[b * channels + c];
+    slot.hasModuleSends = true;
+  }
 }
 
 void Rack::reset() noexcept
@@ -337,6 +372,8 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         target.audio[channel].assign(spec_.maximumBlockSize, 0.0f);
         target.pointers[channel] = target.audio[channel].data();
     }
+    if (spec_.sampleRate > 0.0)
+      bindAux(target, auxBuffers(target.descriptor, spec_), spec_.outputChannels);
     for (std::size_t macro = 0; macro < state.macros.size(); ++macro) {
         std::string_view parameterId = state.macroAssignments[macro];
         if (parameterId.empty())
@@ -753,13 +790,17 @@ bool Rack::renderPatternHits(std::size_t index, const PersistentSlotState &slot,
   const auto view = snapshot->view();
   std::array<std::vector<float>, 2> audio{std::vector<float>(block), std::vector<float>(block)};
   std::array<float *, 2> channels{audio[0].data(), audio[1].data()};
+  // The offline instance gets its declared aux buses too (the notes do not
+  // depend on where it routes audio).
+  auto aux = auxBuffers(render.descriptor, {rate, block, 2});
   const double samplesPerPpq = 60.0 * rate / bpm;
   const auto total = static_cast<std::uint64_t>(std::ceil(lengthPpq * samplesPerPpq));
   for (std::uint64_t start = 0; start < total; start += block) {
     const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(block, total - start));
     const double ppq = static_cast<double>(start) / samplesPerPpq;
     render.instance->process({{channels.data(), channels.size()}, n, {}, rate, bpm, ppq, true,
-                              &view, generation, &render.noteOutput});
+                              &view, generation, &render.noteOutput,
+                              {aux.pointers.data(), aux.pointers.size()}});
     for (std::uint32_t e = 0; e < render.noteOutput.count; ++e) {
       const auto &event = render.noteEvents[e];
       if (event.sampleOffset >= n)
@@ -1080,7 +1121,18 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             playing,
                             patternSnapshot,
                             patternGeneration,
-                            slot.patterns ? &slot.noteOutput : nullptr});
+                            slot.patterns ? &slot.noteOutput : nullptr,
+                            {slot.auxPointers.data(), slot.auxPointers.size()}});
+    // B1: an OUTPUT bus joins the slot's dry signal once (the Rack has one
+    // host output). SEND buses go to their returns in pass 3, never here.
+    for (std::size_t b = 0; slot.descriptor && b < slot.descriptor->auxBuses.size(); ++b)
+      if (slot.descriptor->auxBuses[b].kind == instrument::AuxBusKind::output)
+        for (std::size_t c = 0; c < outputs.size(); ++c) {
+          const float *aux = slot.auxPointers[b * outputs.size() + c];
+          float *dry = slot.audio[c].data();
+          for (std::uint32_t s = 0; s < sampleCount; ++s)
+            dry[s] += aux[s];
+        }
     if (slot.patterns && slot.noteOutput.dropped != 0 &&
         slot.noteOutput.dropped != instrument::voidedNoteOutput)
       counters_[i].noteOutputOverflowBlocks.fetch_add(1, std::memory_order_relaxed);
@@ -1126,7 +1178,8 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             controls[i],
                             controls[i].enabled && !controls[i].mute &&
                                 (!anySolo || controls[i].solo),
-                            sampleCount);
+                            sampleCount,
+                            slot.hasModuleSends ? &slot.moduleSends : nullptr);
       continue;
     }
     const float left =

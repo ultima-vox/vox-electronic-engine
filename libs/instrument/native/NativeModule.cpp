@@ -282,7 +282,10 @@ public:
     silenced_ = true;
     if (!prepared_ || suspended_ || faulted_.load(std::memory_order_relaxed) ||
         block.sampleCount > maximumBlock_ ||
-        block.outputs.size() != outputChannels_) {
+        block.outputs.size() != outputChannels_ ||
+        // Declared aux buses always get their buffers; anything else would
+        // lose the sources routed to them, so the block fails closed.
+        block.aux.size() != descriptor_.auxBuses.size() * outputChannels_) {
       silence(block);
       return;
     }
@@ -328,7 +331,10 @@ public:
                                       &transport_,
                                       block.pattern,
                                       block.patternGeneration,
-                                      block.noteOutput};
+                                      block.noteOutput,
+                                      block.aux.empty() ? nullptr : block.aux.data(),
+                                      static_cast<std::uint32_t>(descriptor_.auxBuses.size()),
+                                      0};
     const bool ok = table_->process(handle_, &context) == VOX_OK;
     silenced_ = !ok || bypassed_;
     if (!ok) {
@@ -397,9 +403,13 @@ private:
     }
   }
 
+  // A silenced block is silent on every bus: no dry, no aux send, no output.
   static void silence(const ProcessBlock &block) noexcept {
     for (auto *channel : block.outputs)
       std::fill_n(channel, block.sampleCount, 0.0f);
+    for (auto *channel : block.aux)
+      if (channel != nullptr)
+        std::fill_n(channel, block.sampleCount, 0.0f);
   }
 
   void fillTransport(const ProcessBlock &block) noexcept {
@@ -511,11 +521,43 @@ bool validModuleTable(const VoxModuleV2 *m) noexcept {
            m->content->getPatternCaps && m->content->getFactoryPattern));
 }
 
+// V2.3 auxiliary buses, when the descriptor carries them: known kinds, each
+// target once and in range, at most 4 SEND and 7 OUTPUT. Anything else
+// rejects the whole instrument (fail closed).
+bool importAuxBuses(const VoxInstrumentDescriptorV2 &d, std::vector<AuxBus> &out) {
+  out.clear();
+  if (d.structSize < offsetof(VoxInstrumentDescriptorV2, reserved1) + sizeof(d.reserved1))
+    return true; // a V2.0..V2.2 descriptor declares none
+  if (d.reserved1 != 0 || d.auxBusCount > VOX_AUX_MAX_BUSES ||
+      (d.auxBusCount > 0 && (d.auxBuses == nullptr || !aligned(d.auxBuses))))
+    return false;
+  std::uint32_t sends = 0, outputs = 0, seen = 0; // seen: bit per kind/target
+  for (std::uint32_t i = 0; i < d.auxBusCount; ++i) {
+    const auto &bus = d.auxBuses[i];
+    std::uint32_t bit = 0;
+    if (bus.kind == VOX_AUX_BUS_SEND && bus.target >= 1 && bus.target <= 4) {
+      ++sends;
+      bit = 1u << (bus.target - 1);
+    } else if (bus.kind == VOX_AUX_BUS_OUTPUT && bus.target >= 2 && bus.target <= 8) {
+      ++outputs;
+      bit = 1u << (8 + bus.target);
+    } else {
+      return false;
+    }
+    if ((seen & bit) != 0)
+      return false;
+    seen |= bit;
+    out.push_back({bus.kind == VOX_AUX_BUS_SEND ? AuxBusKind::send : AuxBusKind::output,
+                   static_cast<std::uint8_t>(bus.target)});
+  }
+  return sends <= VOX_AUX_MAX_SEND_BUSES && outputs <= VOX_AUX_MAX_OUTPUT_BUSES;
+}
+
 bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &out,
                       std::string &diagnostic) {
   diagnostic = "invalid native instrument descriptor";
   if (d == nullptr || !aligned(d) ||
-      !versioned(d->structSize, d->version, sizeof(VoxInstrumentDescriptorV2)) ||
+      !versioned(d->structSize, d->version, VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE) ||
       !boundedString(d->id) || !boundedString(d->name) || !boundedString(d->vendor) ||
       !boundedString(d->category, true) || d->parameterCount > maxParametersPerInstrument ||
       (d->parameterCount > 0 && (d->parameters == nullptr || !aligned(d->parameters))) ||
@@ -543,6 +585,10 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
   copy.budget.maxLatencySamples = d->latencySamples;
   copy.budget.maxTailSamples = d->tailSamples;
   copy.directParameters = d->parameterCount > 0;
+  if (!importAuxBuses(*d, copy.auxBuses)) {
+    diagnostic = "invalid native auxiliary buses";
+    return false;
+  }
   std::set<std::string> ids;
   std::set<std::int16_t> pools;
   const auto *bytes = reinterpret_cast<const std::uint8_t *>(d->parameters);
