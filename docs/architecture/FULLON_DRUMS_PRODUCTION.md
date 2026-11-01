@@ -135,32 +135,50 @@ and approved.
 only through the retirement protocol below. The module never allocates or
 frees sample memory.
 
-- **ABI V2.3, appended module entries (all called off the audio thread):**
-  - `setSample(instance, sampleSlot, const VoxSampleV2 *)` installs a buffer.
-    `VoxSampleV2 = { frames, channels, sampleRate, data, peak, id }`;
-  - `sampleInUse(instance, id) -> bool` reports whether the buffer may still
-    be read.
-- **Generations.** The module keeps a fixed table of buffer generations per
-  sample slot (current, pending, and up to 3 retiring; bounded). `setSample`
-  writes the pending entry. At the next block start, the audio thread makes it
-  current.
-- **Voices** started before the swap keep reading their old buffer (option a:
-  a ringing sample is never cut). Each generation has an audio-thread-owned
-  count of active voices. A voice's start and end only change that count:
-  nothing is freed or allocated on the audio thread.
-- **Epoch.** After updating the counts, the audio thread publishes a block
-  epoch. `sampleInUse(id)` returns false only when the generation is neither
-  current nor pending, its voice count is 0, and the epoch has advanced past
-  the block that made the count 0. So no reader can still hold it.
-- **Retirement.** The host keeps replaced buffers on a bounded retirement
-  list, polls `sampleInUse` from the controller timer, and frees a buffer only
-  when it reports false. If all retiring entries are busy (for example rapid
-  A→B→C→D swaps while A still rings), `setSample` refuses, and the UI retries
-  after the next poll. There is never an unbounded queue.
-- **Quiescing.** Reset, Panic, transport-stop reset, `prepare`, instance
-  destroy and project reload end all voices. After the next epoch every
-  non-current generation is free. On slot unload and host shutdown the host
-  destroys the instance (non-realtime) before freeing its buffers.
+**Amendment (C rev. 2, for review).** The first revision put the
+cross-thread protocol (generations, voice counts, epoch, `sampleInUse`) inside
+the module. Native modules are C11 built with MSVC, where `<stdatomic.h>` is
+only available behind `/experimental:c11atomics`; no shipped module uses C
+atomics today. Revision 2 keeps every cross-thread step in the C++ host and
+gives the module a single-threaded contract.
+
+- **ABI V2.3, appended, size-gated:**
+  - the instrument descriptor declares `sampleSlotCount` (0..64);
+  - the process context carries `samples`, a host-owned, read-only table of
+    `sampleSlotCount` entries for this call. Each entry is
+    `VoxSampleV2 { structSize, version, id, channels, channelCount, frames,
+    sampleRate, peak }`, with `id = 0` meaning no sample;
+  - the process context also carries `sampleUsage`, a host-owned buffer of
+    `uint64_t` ids with a capacity. Before returning, the module writes the
+    ids of every buffer any of its voices still references (deduplicated) and
+    sets `overflow` if they do not fit.
+  - The module may read a buffer only during `process`, and only one listed
+    in the current call's table or held by a voice it started on that buffer.
+    It never allocates, frees or caches sample memory.
+- **Host (adapter, C++):**
+  - the controller installs a buffer into a per-instance pending slot;
+  - at the next block start, the audio thread publishes pending → current with
+    one atomic exchange, and records the old buffer's retirement epoch E (the
+    first block in which it is no longer current);
+  - after `process`, the audio thread copies the module's usage ids into a
+    fixed table and publishes the block epoch (release order; the controller
+    reads with acquire and a sequence check);
+  - the controller frees a retired buffer only when it has seen a usage report
+    of a block numbered after E that does not contain its id, and the report
+    did not overflow. From then on no voice references it and none can start
+    on it, because it is no longer in any table. A buffer that is current or
+    pending is never freed.
+- **Bounds:**
+  - at most 4 retiring buffers per sample slot; `setSample` refuses when they
+    are all busy, and the UI retries after the next poll;
+  - the usage capacity is `sampleSlotCount × 4`.
+  
+  There is no unbounded queue and no allocation, free, lock or I/O in the
+  callback.
+- **Quiescing:** reset, Panic, transport-stop reset and `prepare` end all
+  voices, so the next report frees every retired buffer. Slot unload, project
+  reload and shutdown destroy the instance (non-realtime) before its buffers
+  are freed.
 
 **Playback (module):**
 - start/end points, One Shot or Loop, and Reverse are read modes of the same
@@ -186,7 +204,11 @@ and free probes stay at 0 in the callback):
 - instance destroy/shutdown with retiring buffers;
 - the retirement list full (refused, then accepted);
 - a deterministic oracle: output with a swap equals output without it until
-  the new voices start.
+  the new voices start;
+- a usage report that overflows frees nothing;
+- a freed-buffer canary: the test buffer type poisons its samples with NaN when
+  released, and every render must stay finite. A voice that read a released
+  buffer would therefore show up even without ASan.
 
 ### D. Pattern content V2.1 (per-step probability)
 
