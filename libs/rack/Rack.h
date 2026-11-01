@@ -102,6 +102,9 @@ public:
                       float plain, std::string &diagnostic);
   // Borrowed views require caller serialization against control mutations.
   [[nodiscard]] const auto &state() const noexcept { return state_; }
+  // Controller threads: a copy of one slot's persistent state, taken under the
+  // state lock, so it is safe against concurrent replaceState/setUiParameter.
+  [[nodiscard]] PersistentSlotState snapshotSlot(std::size_t slotIndex) const;
   [[nodiscard]] std::array<PersistentSlotState, instrument::maxSlots>
   snapshotState(std::span<const ProcessSlotControls> controls = {}) const;
   // Non-realtime metadata snapshot; takes the control-state mutex.

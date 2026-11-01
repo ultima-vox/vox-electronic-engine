@@ -692,10 +692,10 @@ void VstEngineAudioProcessorEditor::MacroPage::layoutInstrumentControls()
 // Rack (saved with the slot, applied at the next block, never automated).
 void VstEngineAudioProcessorEditor::MacroPage::addUiOnly(
     std::size_t slot, const vstengine::instrument::ParameterDescriptor &parameter,
-    const std::string &caption_)
+    const std::string &caption_, const vstengine::rack::PersistentSlotState &bound)
 {
     float value = parameter.defaultValue;
-    for (const auto &saved : processor.instrumentRack().state()[slot].directParameters)
+    for (const auto &saved : bound.directParameters)
         if (saved.id == parameter.id)
             value = saved.value;
     auto text = juce::String(parameter.name);
@@ -754,12 +754,15 @@ void VstEngineAudioProcessorEditor::MacroPage::addUiOnly(
     directControls.push_back(std::move(control));
 }
 
-void VstEngineAudioProcessorEditor::MacroPage::refreshUiOnly()
+void VstEngineAudioProcessorEditor::MacroPage::refreshUiOnly(
+    const vstengine::rack::PersistentSlotState &current)
 {
-    if (uiOnlyControls.empty())
+    // A snapshot of another slot identity (state replaced, slot reloaded)
+    // is not applied; the editor timer rebinds the page instead.
+    if (uiOnlyControls.empty() || current.slotId != uiOnlySlotId ||
+        current.instrumentId != uiOnlyInstrument)
         return;
-    const auto &saved = processor.instrumentRack().state()[uiOnlyControls.front().slot]
-                            .directParameters;
+    const auto &saved = current.directParameters;
     for (const auto &entry : uiOnlyControls) {
         const auto found = std::find_if(saved.begin(), saved.end(),
                                         [&](const auto &value) { return value.id == entry.id; });
@@ -795,6 +798,11 @@ void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_
     directSectionTitles.clear();
     directSectionStarts.clear();
     const auto *descriptor = processor.instrumentRack().descriptor(slot);
+    // One locked copy of the slot: UI-only controls start from it and later
+    // refreshes compare against its identity.
+    const auto bound = processor.instrumentRack().snapshotSlot(slot);
+    uiOnlySlotId = bound.slotId;
+    uiOnlyInstrument = bound.instrumentId;
     auto &state = processor.parameters();
     // One real control bound to the parameter's pool endpoint (or, for a
     // UI-only parameter, to the Rack); its widget follows the parameter type
@@ -802,7 +810,7 @@ void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_
     const auto add = [&](const vstengine::instrument::ParameterDescriptor &parameter,
                          const std::string &caption_) {
         if (vstengine::instrument::hostparams::uiOnly(parameter)) {
-            addUiOnly(slot, parameter, caption_);
+            addUiOnly(slot, parameter, caption_, bound);
             return;
         }
         if (parameter.poolIndex < 0 ||
@@ -1300,7 +1308,7 @@ void VstEngineAudioProcessorEditor::resized()
 void VstEngineAudioProcessorEditor::bindSelection(std::size_t slot)
 {
     processor.selectSlot(slot);
-    const auto state = processor.instrumentRack().snapshotState()[slot];
+    const auto state = processor.instrumentRack().snapshotSlot(slot);
     boundSlot = slot;
     boundSlotId = state.slotId;
     boundInstrument = state.instrumentId;
@@ -1518,13 +1526,15 @@ void VstEngineAudioProcessorEditor::timerCallback()
 {
   processor.serviceKeyboardUi();
   const auto selected = processor.selectedSlotIndex();
-  const auto state = processor.instrumentRack().snapshotState()[selected];
+  // One locked snapshot of the selected slot per tick (no borrowed Rack
+  // state on the message thread).
+  const auto state = processor.instrumentRack().snapshotSlot(selected);
   if (selected != boundSlot || state.slotId != boundSlotId ||
       state.instrumentId != boundInstrument ||
       processor.instrumentRack().descriptor(selected) != boundDescriptor)
     bindSelection(selected);
-  soundPage.refreshUiOnly();
-  macrosPage.refreshUiOnly();
+  soundPage.refreshUiOnly(state);
+  macrosPage.refreshUiOnly(state);
   rackRail.refresh();
   instrumentHeader.refresh();
   patternPage.synchronize();

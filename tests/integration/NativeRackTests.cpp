@@ -14,7 +14,9 @@
 #include <memory>
 #include <string>
 #include <filesystem>
+#include <atomic>
 #include <functional>
+#include <thread>
 #include <vector>
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -321,6 +323,82 @@ void uiOnlyParameters() {
   back->setStateInformation(kept.getData(), static_cast<int>(kept.getSize()));
   check(savedValue(*back, slot, "trim") == 0.5f,
         "a missing module keeps the UI-only value for when it is reinstalled");
+}
+
+// Owner review 5730209423: the editor's UI-only refresh must not race a
+// project restore on another thread. A controller thread restores three valid
+// projects (trim 0.3, trim 0.7, the slot empty: unload and reload) over and
+// over, with UI-only edits in between, while the message thread keeps
+// refreshing an open editor. Run under
+// ThreadSanitizer this proves no data race; in every build the final UI must
+// match the final Rack state.
+void uiOnlyConcurrentRestore() {
+  constexpr std::size_t slot = 6;
+  const auto saveWith = [](float trim) {
+    auto source = makeProcessor(true);
+    loadTone(*source, slot);
+    juce::String why;
+    check(source->setSlotParameter(slot, "trim", trim, why), "trim for a saved project");
+    source->selectSlot(slot);
+    juce::MemoryBlock state;
+    source->getStateInformation(state);
+    return state;
+  };
+  const auto low = saveWith(0.3f), high = saveWith(0.7f);
+  juce::MemoryBlock empty;
+  {
+    auto source = makeProcessor(true);
+    source->selectSlot(slot);
+    source->getStateInformation(empty);
+  }
+  auto p = makeProcessor(true);
+  p->setStateInformation(high.getData(), static_cast<int>(high.getSize()));
+  std::unique_ptr<juce::AudioProcessorEditor> base(p->createEditor());
+  auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+  check(editor != nullptr, "editor opens");
+  editor->setSize(1500, 920);
+  p->selectSlot(slot);
+  editor->showPageForTesting(ui::MainNavigation::Page::macros);
+  editor->refreshForTesting();
+
+  std::atomic<bool> done{false};
+  std::thread controller([&] {
+    const juce::MemoryBlock *states[] = {&low, &high, &empty};
+    juce::String why;
+    for (int i = 0; i < 300; ++i) {
+      const auto *state = states[i % 3];
+      p->setStateInformation(state->getData(), static_cast<int>(state->getSize()));
+      // Controller-side UI-only edits between restores (rejected while the
+      // slot is empty); each writes the saved value the editor reads.
+      for (int edit = 0; edit < 50; ++edit)
+        (void)p->setSlotParameter(slot, "trim", edit % 2 == 0 ? 0.4f : 0.6f, why);
+    }
+    p->setStateInformation(low.getData(), static_cast<int>(low.getSize()));
+    done.store(true, std::memory_order_release);
+  });
+  int refreshes = 0;
+  while (!done.load(std::memory_order_acquire)) {
+    editor->refreshForTesting();
+    ++refreshes;
+  }
+  controller.join();
+  p->selectSlot(slot);
+  editor->refreshForTesting();
+  std::function<juce::Component *(juce::Component &)> find =
+      [&](juce::Component &root) -> juce::Component * {
+    for (auto *child : root.getChildren()) {
+      if (child->getName() == "slot07.ui.trim" && child->isVisible())
+        return child;
+      if (auto *found = find(*child))
+        return found;
+    }
+    return nullptr;
+  };
+  auto *knob = dynamic_cast<juce::Slider *>(find(*editor));
+  check(refreshes > 0 && knob != nullptr && savedValue(*p, slot, "trim") == 0.3f &&
+            std::abs(knob->getValue() - 0.3) < 1e-6,
+        "after concurrent restores the open editor shows the final Rack value (" +
+            std::to_string(refreshes) + " refreshes)");
 }
 
 void missingModuleIsPreserved() {
@@ -1124,6 +1202,7 @@ int main(int argc, char **argv) {
   routedNotesPolicy();
   slotDiagnostics();
   uiOnlyParameters();
+  uiOnlyConcurrentRestore();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

@@ -1152,6 +1152,12 @@ const instrument::InstrumentDescriptor* Rack::descriptor(std::size_t index) cons
              : nullptr;
 }
 
+PersistentSlotState Rack::snapshotSlot(std::size_t index) const
+{
+    const std::scoped_lock persistentLock(persistentStateMutex_);
+    return index < state_.size() ? state_[index] : PersistentSlotState{};
+}
+
 std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(
     std::span<const ProcessSlotControls> controls) const
 {
