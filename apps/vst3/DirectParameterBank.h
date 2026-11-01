@@ -89,7 +89,7 @@ public:
   juce::String getText(float normalised, int maximumLength) const override {
     const auto *b = binding();
     if (b == nullptr)
-      return juce::String(normalised, 3).substring(0, maximumLength);
+      return clip(juce::String(normalised, 3), maximumLength);
     const auto &d = *b->descriptor;
     const auto plain = instrument::hostparams::canonicalPlain(
         b->range.convertFrom0to1(normalised), d);
@@ -109,7 +109,7 @@ public:
                             : juce::String(plain, 2);
       break;
     }
-    return text.substring(0, maximumLength);
+    return clip(text, maximumLength);
   }
   float getValueForText(const juce::String &text) const override {
     const auto *b = binding();
@@ -132,6 +132,12 @@ public:
   }
 
 private:
+  // JUCE convention: a length of 0 or less means no limit (editor
+  // attachments ask with 0).
+  static juce::String clip(const juce::String &text, int maximumLength) {
+    return maximumLength > 0 ? text.substring(0, maximumLength) : text;
+  }
+
   std::atomic<float> value_{0.0f};
   std::atomic<const Binding *> binding_{nullptr};
 };
