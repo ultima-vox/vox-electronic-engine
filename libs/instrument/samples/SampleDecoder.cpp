@@ -54,14 +54,15 @@ DecodeError decodeWav(std::span<const std::uint8_t> bytes, std::string_view expe
   const auto channels = reader->numChannels;
   const auto rate = reader->sampleRate;
   if (!std::isfinite(rate) || rate < limits.minSampleRate || rate > limits.maxSampleRate ||
-      channels == 0 || channels > limits.maxChannels || frames < 0 ||
-      static_cast<std::uint64_t>(frames) > limits.maxFrames)
+      channels == 0 || channels > limits.maxChannels || frames < 0)
     return DecodeError::badFormat;
   if (frames == 0)
     return DecodeError::empty;
-  // Duration at the file's own rate, checked before any PCM is allocated.
-  // Exactly maxSeconds is accepted.
-  if (static_cast<double>(frames) > limits.maxSeconds * rate)
+  // Duration at the file's own rate, then the independent absolute frame
+  // guard; both before any PCM is allocated and both reported as too long
+  // (review 5742726611). Exactly maxSeconds is accepted.
+  if (static_cast<double>(frames) > limits.maxSeconds * rate ||
+      static_cast<std::uint64_t>(frames) > limits.maxFrames)
     return DecodeError::tooLong;
   juce::AudioBuffer<float> audio(static_cast<int>(channels), static_cast<int>(frames));
   if (!reader->read(&audio, 0, static_cast<int>(frames), 0, true, channels > 1))

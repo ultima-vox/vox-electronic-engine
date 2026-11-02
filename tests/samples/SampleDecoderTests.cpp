@@ -90,7 +90,8 @@ void rejects() {
   check(decodeWav(three, {}, limits, out) == DecodeError::badFormat, "3 channels refused");
   SampleLimits shortLimits;
   shortLimits.maxFrames = 99;
-  check(decodeWav(good, {}, shortLimits, out) == DecodeError::badFormat, "too long refused");
+  check(decodeWav(good, {}, shortLimits, out) == DecodeError::tooLong,
+        "more frames than the absolute guard is too long");
   SampleLimits tightFile;
   tightFile.maxFileBytes = good.size() - 1;
   check(decodeWav(good, {}, tightFile, out) == DecodeError::tooLarge, "too large refused");
@@ -130,6 +131,9 @@ void durationAtTheFileRate() {
   check(decode(192000.0, 30 * 192000 + 1) == DecodeError::tooLong,
         "one frame over 30 s at 192 kHz refused");
   check(decode(384000.0, 20 * 384000) == DecodeError::none, "20 s at 384 kHz accepted");
+  check(decode(384000.0, 30 * 384000) == DecodeError::none, "exactly 30 s at 384 kHz accepted");
+  check(decode(384000.0, 30 * 384000 + 1) == DecodeError::tooLong,
+        "30 s + 1 frame at 384 kHz is too long, not a format error");
   // 60 s at 44.1 kHz stereo 16-bit is ~10 MiB: refused for its duration.
   const auto stereo = makeWav(2, 60 * 44100, 44100.0, 16, [](int, int) { return 0.1f; });
   DecodedSample out;
