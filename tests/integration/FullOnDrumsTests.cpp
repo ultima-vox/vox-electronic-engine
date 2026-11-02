@@ -566,6 +566,76 @@ void sampleSources() {
   check(looped.finite() && layer.finite() && stereo.finite(), "sample renders are finite");
 }
 
+// Owner review 5741534341: reverse playback at fractional steps interpolates
+// between the frames that bracket the position (floor, floor + 1), as forward
+// playback does, including at a nonzero Start and across a reverse loop seam.
+// The expected output follows the module's position arithmetic exactly.
+void sampleReverseInterpolation() {
+  auto r = makeRig(instrumentsDir);
+  const int length = 8000;
+  setUi(r, snare, "source", 1.0f);
+  // The kit's gain for this pad at this velocity: a constant 1.0 sample.
+  giveSample(r, snare, sampleOf(std::vector<float>(1000, 1.0f), {}, 24000.0));
+  const double scale = renderHits(r, length, {{0, snare}}).l[10];
+  check(scale > 0.0, "gain reference");
+  std::vector<float> ramp(1000);
+  for (int i = 0; i < 1000; ++i)
+    ramp[i] = static_cast<float>(i) / 1000.0f;
+  const auto expectAt = [&](double pos, double begin, double end, bool loop) {
+    const double base = std::floor(pos), frac = pos - base;
+    const auto i0 = static_cast<std::size_t>(base);
+    const auto i1 = base + 1.0 < end ? i0 + 1 : (loop ? static_cast<std::size_t>(begin) : i0);
+    return ramp[i0] + (ramp[i1] - ramp[i0]) * frac;
+  };
+  // One shot, reverse, 24 -> 48 kHz (step 0.5), a fractional Fine and a
+  // nonzero Start.
+  struct Case {
+    float fine;
+    float start;
+  };
+  for (const auto c : {Case{0.0f, 0.0f}, Case{37.0f, 0.0f}, Case{-23.0f, 0.25f}}) {
+    giveSample(r, snare, sampleOf(ramp, {}, 24000.0));
+    setPlain(r, pad2(snare, fine), c.fine);
+    setUi(r, snare, "sample_start", c.start);
+    setUi(r, snare, "sample_reverse", 1.0f);
+    const auto out = renderHits(r, length, {{0, snare}});
+    const double tune = std::pow(2.0, (0.0 + c.fine / 100.0) / 12.0);
+    const double step = 24000.0 / 48000.0 * tune;
+    const double begin = std::floor(c.start * 1000.0), end = 1000.0;
+    double worst = 0;
+    int frames = 0;
+    for (double pos = end - 1.0; pos >= begin; pos -= step, ++frames)
+      worst = std::max(worst, std::abs(out.l[frames] - scale * expectAt(pos, begin, end, false)));
+    check(worst < 2e-6 && frames > 1000 && out.l[frames] == 0.0f,
+          "reverse at step " + std::to_string(step) + " from Start " + std::to_string(c.start) +
+              " follows the bracketing frames (max error " + std::to_string(worst) + ")");
+  }
+  setPlain(r, pad2(snare, fine), 0.0f);
+
+  // Reverse loop over the second half: the seam continues from the region's
+  // first frame back to its last, under the pad's decay envelope.
+  giveSample(r, snare, sampleOf(ramp, {}, 24000.0));
+  setUi(r, snare, "sample_start", 0.5f);
+  setUi(r, snare, "sample_loop", 1.0f);
+  const auto looped = renderHits(r, length, {{0, snare}});
+  const double decay = plainOf(r, padParam(snare, 2));
+  const double envMul = std::exp(-6.907755278982137 / (decay * 48000.0));
+  double env = 1.0, pos = 999.0, worst = 0;
+  const double begin = 500.0, end = 1000.0, span = end - begin;
+  for (int k = 0; k < 3000; ++k) {
+    worst = std::max(worst, std::abs(looped.l[k] - scale * expectAt(pos, begin, end, true) * env));
+    env *= envMul;
+    pos -= 0.5;
+    if (pos < begin)
+      pos += span * std::ceil((begin - pos) / span);
+  }
+  check(worst < 2e-6, "a reverse loop crosses its seam with the right frames (max error " +
+                          std::to_string(worst) + ")");
+  setUi(r, snare, "sample_loop", 0.0f);
+  setUi(r, snare, "sample_reverse", 0.0f);
+  setUi(r, snare, "sample_start", 0.0f);
+}
+
 // A ringing voice keeps its sample after a replacement (contract C); the old
 // buffer is released only after the voice ended.
 void sampleLifetimeInTheKit() {
@@ -2261,6 +2331,7 @@ int main(int argc, char **argv) {
   phase1Shaping();
   phase1BusesAndSends();
   sampleSources();
+  sampleReverseInterpolation();
   sampleLifetimeInTheKit();
   sampleVoicesInTheKit();
   sampleOffsetsAndSimultaneousHits();

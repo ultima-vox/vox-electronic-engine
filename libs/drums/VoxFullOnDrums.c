@@ -662,11 +662,12 @@ static void renderSample(Voice *v, double *l, double *r) {
   const double base = floor(pos);
   const double frac = pos - base;
   const uint64_t i0 = (uint64_t)base;
-  uint64_t i1;
-  if (v->sampleReverse)
-    i1 = base - 1.0 >= v->sampleBegin ? i0 - 1u : (v->sampleLoop ? (uint64_t)v->sampleEnd - 1u : i0);
-  else
-    i1 = base + 1.0 < v->sampleEnd ? i0 + 1u : (v->sampleLoop ? (uint64_t)v->sampleBegin : i0);
+  /* frac measures the distance from frame i0 towards i0 + 1 in both
+   * directions, so the bracketing pair is always (i0, i0 + 1). Past the
+   * region's last frame a loop continues at its first frame (the seam);
+   * a one-shot holds the last frame (owner review 5741534341). */
+  const uint64_t i1 =
+      base + 1.0 < v->sampleEnd ? i0 + 1u : (v->sampleLoop ? (uint64_t)v->sampleBegin : i0);
   const float *c0 = v->sampleData[0];
   const float *c1 = v->sampleData[v->sampleChannels > 1 ? 1 : 0];
   *l = (c0[i0] + (c0[i1] - c0[i0]) * frac) * v->sampleGain;
