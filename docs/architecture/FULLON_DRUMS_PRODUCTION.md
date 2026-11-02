@@ -142,7 +142,7 @@ only available behind `/experimental:c11atomics`; no shipped module uses C
 atomics today. Revision 2 keeps every cross-thread step in the C++ host and
 gives the module a single-threaded contract.
 
-- **ABI V2.3, appended, size-gated:**
+- **ABI V2.4, appended, size-gated** (contract B shipped first as V2.3; implemented in #98):
   - the instrument descriptor declares `sampleSlotCount` (0..64);
   - the process context carries `samples`, a host-owned, read-only table of
     `sampleSlotCount` entries for this call. Each entry is
@@ -184,8 +184,9 @@ gives the module a single-threaded contract.
     | retiring | controller | the free rule, or verified quiescence |
 
     - **Publish:** the controller sets `previous = pending.exchange(new,
-      acq_rel)`. Clearing a pad publishes a static "empty" sentinel that is
-      never freed.
+      acq_rel)`. Clearing a pad publishes an entry with no buffer and its own id
+      (the module sees `id = 0`); it holds no sample memory and is retired
+      like any other entry (#98; replaces the static sentinel).
     - **Install:** the audio thread sets `taken = pending.exchange(null,
       acq_rel)` at block start and installs `taken` if it is non-null.
     - **Linearization:** both sides use exchange on the same word, so each
