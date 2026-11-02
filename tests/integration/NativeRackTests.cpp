@@ -12,7 +12,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <filesystem>
@@ -1488,6 +1490,335 @@ void legacyV22Binary() {
   check(again.left == old.left, "the reopened legacy slot plays the same audio");
 }
 
+// ---------------------------------------------------------------- contract C
+// Sample hand-off, contract C rev. 3.1 (C1). The test tone declares two sample
+// slots; in sample mode every note-on starts a one-shot voice on slot
+// (note % 2) and the module reports the buffers its voices hold.
+void setSampleMode(std::uint32_t slotIndex, std::uint32_t mode) {
+  reinterpret_cast<void(VOX_CALL *)(std::uint32_t, std::uint32_t)>(
+      testHook("voxTestSetSampleMode"))(slotIndex, mode);
+}
+
+std::unique_ptr<instrument::SampleBuffer> constantSample(float value, std::size_t frames) {
+  auto buffer = std::make_unique<instrument::SampleBuffer>();
+  buffer->channels.push_back(std::vector<float>(frames, value));
+  buffer->sampleRate = 48000.0;
+  buffer->peak = std::abs(value);
+  return buffer;
+}
+
+// Logical retirement (the canary): a released buffer is poisoned with NaN but
+// its memory is kept, so a read after release shows up as a non-finite
+// render without undefined behaviour. Thread-safe: releases may come from any
+// controller thread.
+struct Quarantine {
+  std::mutex mutex;
+  std::vector<std::unique_ptr<instrument::SampleBuffer>> held;
+  std::size_t count() {
+    const std::scoped_lock lock(mutex);
+    return held.size();
+  }
+  instrument::SampleHost::ReleaseSink sink() {
+    return [this](std::unique_ptr<instrument::SampleBuffer> buffer) {
+      for (auto &channel : buffer->channels)
+        std::fill(channel.begin(), channel.end(), std::numeric_limits<float>::quiet_NaN());
+      const std::scoped_lock lock(mutex);
+      held.push_back(std::move(buffer));
+    };
+  }
+};
+
+bool finite(const Render &r) {
+  return std::all_of(r.left.begin(), r.left.end(), [](float v) { return std::isfinite(v); });
+}
+
+instrument::SampleStats statsOf(VstEngineAudioProcessor &p, std::size_t slot) {
+  const auto stats = p.instrumentRack().sampleStats(slot);
+  check(stats.has_value(), "slot has a sample hand-off");
+  return *stats;
+}
+
+bool publish(VstEngineAudioProcessor &p, std::size_t slot, std::uint32_t sampleSlot,
+             std::unique_ptr<instrument::SampleBuffer> buffer) {
+  std::string why;
+  return p.instrumentRack().setSlotSample(slot, sampleSlot, std::move(buffer), why);
+}
+
+// Renders blocks one at a time and collects after each, like the controller
+// timer would.
+Render playCollecting(VstEngineAudioProcessor &p, int channel, int blocks, int on = -1,
+                      int note = 60) {
+  Render out;
+  for (int b = 0; b < blocks; ++b) {
+    const auto block = play(p, channel, 1, b == on ? 0 : -1, -1, note);
+    out.left.insert(out.left.end(), block.left.begin(), block.left.end());
+    p.instrumentRack().collectSamples();
+  }
+  return out;
+}
+
+void sampleSlotsImported() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  const VoxInstrumentDescriptorV2 *raw = nullptr;
+  check(module != nullptr && module->table().getInstrument(0, &raw) == VOX_OK && raw != nullptr,
+        "raw descriptor available");
+  instrument::InstrumentDescriptor imported;
+  check(instrument::native::importDescriptor(raw, imported, diagnostic) &&
+            imported.sampleSlotCount == 2,
+        "a V2.4 descriptor imports its sample slots");
+  auto v23 = *raw;
+  v23.structSize = VOX_INSTRUMENT_DESCRIPTOR_V2_3_SIZE;
+  check(instrument::native::importDescriptor(&v23, imported, diagnostic) &&
+            imported.sampleSlotCount == 0 && imported.auxBuses.size() == 11,
+        "a V2.3 descriptor keeps its aux buses and has no sample slots");
+  auto tooMany = *raw;
+  tooMany.sampleSlotCount = VOX_SAMPLE_MAX_SLOTS + 1;
+  check(!instrument::native::importDescriptor(&tooMany, imported, diagnostic),
+        "more than 64 sample slots are rejected");
+  auto reserved = *raw;
+  reserved.reserved2 = 1;
+  check(!instrument::native::importDescriptor(&reserved, imported, diagnostic),
+        "a non-zero reserved word after sampleSlotCount is rejected");
+}
+
+// A ringing voice keeps its old buffer after a replacement; the old buffer is
+// released only after a valid report no longer lists it, exactly once, and no
+// render ever reads a released (NaN-poisoned) buffer.
+void sampleReplaceWhileRinging() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  Quarantine quarantine; // outlives the processor that calls its sink
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  check(p->instrumentRack().setSampleReleaseSinkForTesting(slot, quarantine.sink()),
+        "release sink installed");
+  const int channel = channelOf(*p, slot);
+  check(publish(*p, slot, 0, constantSample(0.25f, 20 * blockSize)), "A published");
+  const auto first = playCollecting(*p, channel, 4, 0);
+  const float a = first.left[2 * blockSize];
+  check(a != 0.0f && std::isfinite(a), "the A voice sounds");
+  check(publish(*p, slot, 0, constantSample(0.5f, 40 * blockSize)), "B published mid-note");
+  const auto ringing = playCollecting(*p, channel, 8);
+  check(std::all_of(ringing.left.begin(), ringing.left.end(), [&](float v) { return v == a; }),
+        "the ringing voice keeps playing A after B is installed");
+  check(statsOf(*p, slot).released == 0 && quarantine.count() == 0,
+        "A is not released while its voice holds it");
+  const auto rest = playCollecting(*p, channel, 12);
+  check(finite(rest) && statsOf(*p, slot).released == 1 && quarantine.count() == 1,
+        "A is released exactly once after its voice ended");
+  const auto next = playCollecting(*p, channel, 4, 0);
+  const float b = next.left[2 * blockSize];
+  check(finite(next) && std::abs(b - 2.0f * a) < 1e-6f, "a new note plays B");
+  setSampleMode(slot, 0);
+}
+
+// Browsing with no audio callback (transport stopped, DAW idle): each
+// superseded buffer comes back at once, memory stays bounded, the last
+// publish wins, and teardown without another block releases the rest.
+void sampleBrowsingWithoutCallbacks() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  Quarantine quarantine; // outlives the processor that calls its sink
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  p->instrumentRack().setSampleReleaseSinkForTesting(slot, quarantine.sink());
+  bool bounded = true;
+  for (int i = 0; i < 1000; ++i) {
+    check(publish(*p, slot, 0, constantSample(0.001f * static_cast<float>(i % 7 + 1), 256)),
+          "publish without callbacks accepted");
+    bounded &= statsOf(*p, slot).live <= 1;
+  }
+  check(bounded && statsOf(*p, slot).released == 999 && quarantine.count() == 999,
+        "1,000 publishes without a block: 999 superseded and released at once, 1 live");
+  const int channel = channelOf(*p, slot);
+  const auto played = playCollecting(*p, channel, 2, 0);
+  const float last = 0.001f * static_cast<float>(999 % 7 + 1);
+  const float heard = played.left[64];
+  check(finite(played) && heard != 0.0f, "one block installs only the last publish");
+  check(publish(*p, slot, 0, constantSample(last, 256)), "a later publish");
+  playCollecting(*p, channel, 6);
+  check(statsOf(*p, slot).released == 1000, "the replaced current is released after reports");
+  for (int i = 0; i < 5; ++i)
+    publish(*p, slot, i % 2, constantSample(0.1f, 256));
+  const auto published = statsOf(*p, slot).published;
+  juce::String why;
+  check(p->loadSlotInstrument(slot, "", why), "slot unloaded with no further block");
+  check(quarantine.count() == published,
+        "teardown without a block releases every remaining buffer exactly once (" +
+            std::to_string(quarantine.count()) + " of " + std::to_string(published) + ")");
+  setSampleMode(slot, 0);
+}
+
+// Faults: overflow, malformed reports and a failed block free nothing; a
+// successful reprepare (verified quiescence) or valid reports then do.
+void sampleFaultsFreeNothing() {
+  constexpr std::size_t slot = 6;
+  for (std::uint32_t mode = 2; mode <= 6; ++mode) {
+    setSampleMode(slot, mode);
+    Quarantine quarantine; // outlives the processor that calls its sink
+    auto p = makeProcessor(true);
+    loadTone(*p, slot);
+    p->instrumentRack().setSampleReleaseSinkForTesting(slot, quarantine.sink());
+    const int channel = channelOf(*p, slot);
+    publish(*p, slot, 0, constantSample(0.25f, 4 * blockSize));
+    playCollecting(*p, channel, 2, 0);
+    // B rings throughout (a voice is always reported, so every defect mode
+    // is present), while A's voice ends and A would be freeable.
+    publish(*p, slot, 0, constantSample(0.5f, 100 * blockSize));
+    const auto out = playCollecting(*p, channel, 12, 0);
+    const auto stats = statsOf(*p, slot);
+    check(finite(out) && stats.released == 0 && quarantine.count() == 0 &&
+              stats.reportsRejected > 0 && stats.reportsUsed == 0,
+          "defective report mode " + std::to_string(mode) + " frees nothing");
+    setSampleMode(slot, 1);
+    playCollecting(*p, channel, 3);
+    check(statsOf(*p, slot).released == 1 && quarantine.count() == 1,
+          "valid reports then release the replaced buffer (mode " + std::to_string(mode) + ")");
+    setSampleMode(slot, 0);
+  }
+
+  setSampleMode(slot, 1);
+  Quarantine quarantine; // outlives the processor that calls its sink
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  p->instrumentRack().setSampleReleaseSinkForTesting(slot, quarantine.sink());
+  const int channel = channelOf(*p, slot);
+  publish(*p, slot, 0, constantSample(0.25f, 100 * blockSize));
+  playCollecting(*p, channel, 2, 0);
+  publish(*p, slot, 0, constantSample(0.5f, 100 * blockSize));
+  // One good block installs B; its valid report marks A replaced (A's voice
+  // still holds it). The next block fails before the module reports: an
+  // empty report there must not count, or A would be freed under its voice.
+  playCollecting(*p, channel, 1);
+  failNext(slot, failProcess);
+  const auto faulted = playCollecting(*p, channel, 8);
+  check(finite(faulted) && statsOf(*p, slot).released == 0,
+        "a failed and then faulted instance frees nothing");
+  p->prepareToPlay(48000.0, blockSize); // reprepare: verified quiescence
+  check(statsOf(*p, slot).released == 1 && quarantine.count() == 1,
+        "a successful reprepare releases the replaced buffer");
+  const auto after = playCollecting(*p, channel, 3, 0);
+  check(finite(after) && after.left[64] != 0.0f, "the recovered instance plays B");
+  setSampleMode(slot, 0);
+}
+
+// Bounded memory: at most 6 live buffers per sample slot; a seventh publish
+// is refused while ringing voices hold the retiring ones, and accepted once
+// they end.
+void sampleSlotBounded() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  const int channel = channelOf(*p, slot);
+  for (int i = 0; i < 5; ++i) {
+    check(publish(*p, slot, 0, constantSample(0.01f, 30 * blockSize)), "ringing publish");
+    playCollecting(*p, channel, 1, 0); // install it and start a voice on it
+  }
+  check(publish(*p, slot, 0, constantSample(0.01f, 30 * blockSize)), "sixth publish (pending)");
+  check(statsOf(*p, slot).live == 6, "six live buffers in one sample slot");
+  check(!publish(*p, slot, 0, constantSample(0.01f, 30 * blockSize)),
+        "a seventh is refused while voices hold the retiring buffers");
+  playCollecting(*p, channel, 40);
+  check(publish(*p, slot, 0, constantSample(0.01f, 30 * blockSize)) &&
+            statsOf(*p, slot).live <= 3,
+        "accepted once the voices ended and their buffers were released");
+  setSampleMode(slot, 0);
+}
+
+// Zero allocations in the callback with sample voices and installs.
+void sampleNoAllocation() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  const int channel = channelOf(*p, slot);
+  publish(*p, slot, 0, constantSample(0.2f, 3 * blockSize));
+  publish(*p, slot, 1, constantSample(0.3f, 5 * blockSize));
+  juce::AudioBuffer<float> audio(2, blockSize);
+  juce::MidiBuffer midi;
+  midi.ensureSize(256);
+  play(*p, channel, 4, 0, -1); // warm up
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+  voxProbeBegin();
+#endif
+  for (int b = 0; b < 200; ++b) {
+    midi.clear();
+    if (b % 3 == 0)
+      midi.addEvent(juce::MidiMessage::noteOn(channel, 60 + b % 2, 0.8f), 0);
+    p->processBlock(audio, midi);
+  }
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+  const auto allocations = voxProbeEnd();
+  check(allocations == 0, "sample voices and reports allocate nothing (" +
+                              std::to_string(allocations) + ")");
+#endif
+  setSampleMode(slot, 0);
+}
+
+// Concurrency (run under ThreadSanitizer in the TSan build): a controller
+// thread publishes and collects as fast as it can while the audio thread
+// renders with sample voices; then the slot is unloaded without another block.
+// Every buffer is released exactly once and no render reads a released one.
+void sampleConcurrentStress() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  Quarantine quarantine; // outlives the processor that calls its sink
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  p->instrumentRack().setSampleReleaseSinkForTesting(slot, quarantine.sink());
+  const int channel = channelOf(*p, slot);
+  std::atomic<bool> done{false};
+  std::thread controller([&] {
+    std::string why;
+    for (int i = 0; i < 3000; ++i) {
+      (void)p->instrumentRack().setSlotSample(
+          slot, static_cast<std::uint32_t>(i % 2),
+          constantSample(0.05f, static_cast<std::size_t>(64 + (i * 37) % 2048)), why);
+      (void)p->instrumentRack().collectSamples();
+    }
+    done.store(true, std::memory_order_release);
+  });
+  juce::AudioBuffer<float> audio(2, blockSize);
+  juce::MidiBuffer midi;
+  bool allFinite = true;
+  int blocks = 0;
+  while (!done.load(std::memory_order_acquire) || blocks < 200) {
+    midi.clear();
+    if (blocks % 3 == 0)
+      midi.addEvent(juce::MidiMessage::noteOn(channel, 60 + blocks % 2, 0.8f), 0);
+    audio.clear();
+    p->processBlock(audio, midi);
+    for (int i = 0; i < blockSize; ++i)
+      allFinite &= std::isfinite(audio.getSample(0, i));
+    ++blocks;
+  }
+  controller.join();
+  const auto published = statsOf(*p, slot).published;
+  juce::String why;
+  check(p->loadSlotInstrument(slot, "", why), "slot unloaded after the stress");
+  check(allFinite, "no render read a released buffer (" + std::to_string(blocks) + " blocks)");
+  check(published > 0 && quarantine.count() == published,
+        "every published buffer released exactly once (" + std::to_string(quarantine.count()) +
+            " of " + std::to_string(published) + ")");
+  setSampleMode(slot, 0);
+}
+
+void legacyHasNoSampleSlots() {
+  auto p = std::make_unique<VstEngineAudioProcessor>(
+      modules::createBuiltInProvider(),
+      instrument::native::loadConfiguredModules(legacyModulePath));
+  p->prepareToPlay(48000.0, blockSize);
+  juce::String why;
+  check(p->loadSlotInstrument(6, "test.abi.v2_2.tone", why), "legacy tone loads");
+  std::string diagnostic;
+  check(!p->instrumentRack().setSlotSample(6, 0, constantSample(0.1f, 64), diagnostic) &&
+            !p->instrumentRack().sampleStats(6).has_value(),
+        "a V2.2 instrument has no sample hand-off");
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     std::cerr << "usage: native_rack_tests <test module path> <legacy V2.2 module path>\n";
@@ -1520,6 +1851,14 @@ int main(int argc, char **argv) {
   auxBusMixing();
   uiOnlyWithAuxBuses();
   legacyV22Binary();
+  sampleSlotsImported();
+  sampleReplaceWhileRinging();
+  sampleBrowsingWithoutCallbacks();
+  sampleFaultsFreeNothing();
+  sampleSlotBounded();
+  sampleNoAllocation();
+  sampleConcurrentStress();
+  legacyHasNoSampleSlots();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

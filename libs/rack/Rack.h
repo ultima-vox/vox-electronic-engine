@@ -4,7 +4,9 @@
 #include "rack/RackRouter.h"
 #include <array>
 #include <atomic>
+#include <memory>
 #include <mutex>
+#include <optional>
 
 namespace vstengine::rack {
 class AudioRouting;
@@ -100,6 +102,22 @@ public:
   // host parameters, unknown ids and values outside the declared range.
   bool setUiParameter(std::size_t slotIndex, const instrument::ParameterId &id,
                       float plain, std::string &diagnostic);
+  // Controller thread: sample hand-off (contract C). Publishes a decoded
+  // buffer (null: clear) into sample slot `sampleSlot` of the slot's
+  // instrument; it is installed at the next block. Fails for instruments
+  // without that sample slot or while the slot is busy (see SampleExchange).
+  bool setSlotSample(std::size_t slotIndex, std::uint32_t sampleSlot,
+                     std::unique_ptr<instrument::SampleBuffer> buffer,
+                     std::string &diagnostic);
+  // Controller thread: releases every sample buffer the instances' reports
+  // allow. Call periodically (and before publishing); returns the count.
+  std::size_t collectSamples();
+  // Controller thread: hand-off counters of one slot, or nullopt.
+  [[nodiscard]] std::optional<instrument::SampleStats>
+  sampleStats(std::size_t slotIndex) const;
+  // Tests: forwards to the slot's SampleHost.
+  bool setSampleReleaseSinkForTesting(std::size_t slotIndex,
+                                      instrument::SampleHost::ReleaseSink sink);
   // Borrowed views require caller serialization against control mutations.
   [[nodiscard]] const auto &state() const noexcept { return state_; }
   // Controller threads: a copy of one slot's persistent state, taken under the

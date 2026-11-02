@@ -336,6 +336,80 @@ scaled by slot level, never into Main. Without Rack audio routing there are no
 returns and SEND buses are not heard. B2 (separate host outputs) is a separate
 decision; see `FULLON_DRUMS_PRODUCTION.md`.
 
+## Sample hand-off (V2.4, appended; contract C rev. 3.1, C1)
+
+The owner approved contract C rev. 3.1 in #94 (comment 6569273626) as the C1
+baseline. Contract B shipped first as V2.3, so these fields are V2.4.
+
+**Descriptor.** After `reserved1` the descriptor appends `sampleSlotCount`
+(0..64) and `reserved2 = 0`, which makes it 120 bytes. A host reads them only
+when `structSize` covers them. It accepts 96 (V2.0..V2.2) and 112 (V2.3)
+descriptors with no sample slots. More than 64 slots, or a non-zero
+`reserved2`, rejects the instrument (fail closed).
+
+**Process context.** The context appends `samples`, `sampleSlotCount`,
+`reserved2` and `sampleUsage`, which makes it 144 bytes. `samples` is a
+read-only table with one `VoxSampleV2` per slot, valid for this call only:
+`{ id, channels, channelCount, frames, sampleRate, peak }`, where `id = 0`
+means the slot is empty. `sampleUsage` is the module's report:
+`{ capacity, count, ids, overflow }`. The host resets `count` and `overflow`
+every call, and the capacity is `sampleSlotCount * 4`.
+
+**Module contract (single-threaded, plain C11, no atomics):**
+- Read a buffer only inside `process`, and only one that is listed in this
+  call's table or held by a voice that started on it.
+- Before returning, write the id of every buffer a voice still holds, each
+  once. Set `overflow` if they do not all fit.
+- Never allocate, free or cache sample memory.
+- A successful `prepare` or `reset` ends every voice and drops every sample
+  reference.
+
+**Host (`SampleExchange`, per instance, C++).** Each buffer is in exactly one
+state, with one owner:
+
+| State | Owner | How it leaves |
+|---|---|---|
+| staged | controller | publish |
+| pending | the pending word | exactly one exchange |
+| superseded | controller | released at once |
+| current | audio | a valid report shows a newer install |
+| retiring | controller | the free rule or verified quiescence |
+
+- **Publish and install.** The controller publishes with
+  `previous = pending.exchange(new, acq_rel)`. If `previous` is not null,
+  audio never took it, so it is released at once. The audio thread installs
+  with `pending.exchange(null, acq_rel)` at block start.
+- **Clearing a slot** publishes an entry with no buffer. It has its own id,
+  but the module sees `id = 0`. This replaces the static sentinel from the
+  design text: the entry keeps the per-slot ordering uniform, and it holds no
+  sample memory.
+- **Reports.** After `process`, the audio thread writes a report it alone
+  owns: `{ epoch, valid, overflow, current id per slot, usage ids }`. It hands
+  the report over through a single-writer/single-reader triple buffer, with
+  one acq_rel index exchange and no waits.
+  - A report is valid only when `process` returned OK and `count ≤ capacity`.
+    Blocks the adapter does not run (faulted, suspended, unprepared, or a
+    budget mismatch) yield no report.
+  - The controller also rejects a report with overflow, a zero id, a
+    duplicate id, or an id this instance does not hold.
+- **Free rule.** Entry X is released only when both hold:
+  - a valid report at epoch E shows a newer install in X's slot;
+  - a valid, non-overflowing report with an epoch strictly later than E lists
+    X neither as current nor in usage.
+- **Verified quiescence.** A successful module `prepare` (the Rack calls it
+  only when no `process` can run) releases every entry that was installed and
+  then replaced. Instance destruction, after the module handle is destroyed,
+  releases everything once, with no further block needed.
+- **Bounds.** At most 6 live buffers per slot (1 pending, 1 current,
+  4 retiring); `publish` refuses beyond that until `collect` releases some.
+  The callback does no allocation, lock, free or I/O.
+- **Pointer table.** The channel pointer table lives in the `SampleBuffer`
+  itself, so every byte a voice can reference is released together.
+
+**Rack API (controller).** `setSlotSample(slot, sampleSlot, buffer)`,
+`collectSamples()` and `sampleStats(slot)`. Decoding, WAV and `.vins` factory
+samples are C2.
+
 ## Musical transport (in the header since #68; still part of the unfrozen V2)
 
 `samplePosition` alone cannot drive Acid's LFO Sync, STEP modulation or

@@ -47,6 +47,9 @@ static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
 /* V2.3: the maximum aux topology, 4 SEND (returns 1..4) then 7 OUTPUT (host
  * outputs 2..8). What the tone writes there is chosen by voxTestSetAuxMode. */
 #define AUX_COUNT 11u
+/* V2.4: two sample slots; a sample voice is used only in sample modes. */
+#define SAMPLE_SLOTS 2u
+#define SAMPLE_VOICES 4u
 static const VoxAuxBusV2 auxBuses[AUX_COUNT] = {
     {VOX_AUX_BUS_SEND, 1},   {VOX_AUX_BUS_SEND, 2},   {VOX_AUX_BUS_SEND, 3},
     {VOX_AUX_BUS_SEND, 4},   {VOX_AUX_BUS_OUTPUT, 2}, {VOX_AUX_BUS_OUTPUT, 3},
@@ -56,7 +59,7 @@ static const VoxAuxBusV2 auxBuses[AUX_COUNT] = {
 static const VoxInstrumentDescriptorV2 instrument = {
     sizeof(VoxInstrumentDescriptorV2), VOX_MODULE_ABI_V2, TEST_ID, "ABI Test Tone", "Tests",
     "Test", 1, 1, STATE_VERSION, PARAM_COUNT, parameters, sizeof(VoxParameterDescriptorV2),
-    1, 64, STATE_BYTES, 0, 0, 2, 0, auxBuses, AUX_COUNT, 0};
+    1, 64, STATE_BYTES, 0, 0, 2, 0, auxBuses, AUX_COUNT, 0, SAMPLE_SLOTS, 0};
 
 struct VoxInstanceT {
   float values[PARAM_COUNT];
@@ -74,6 +77,13 @@ struct VoxInstanceT {
   uint64_t patternGeneration; /* last snapshot seen in process, for host tests */
   uint32_t noteMode;          /* note output this instance writes, for host tests */
   uint32_t auxMode;           /* aux bus routing, for host tests */
+  uint32_t sampleMode;        /* sample voices and usage reports, for host tests */
+  struct {
+    uint64_t id;
+    const float *const *channels;
+    uint64_t frames, position;
+  } sampleVoices[SAMPLE_VOICES];
+  uint32_t sampleVoiceCount;
   uint32_t patternChecksum;
 };
 
@@ -151,6 +161,82 @@ VOX_EXPORT void VOX_CALL voxTestSetAuxMode(uint32_t slotIndex, uint32_t mode) {
   for (int i = 0; i < 64; ++i)
     if (live[i] != NULL && live[i]->slotIndex == slotIndex)
       live[i]->auxMode = mode;
+}
+
+/* Test hook (not part of the ABI): sample hand-off behaviour of instances
+ * for Rack slot `slotIndex`. 0: samples ignored, nothing reported. 1: every
+ * note-on starts a one-shot voice on sample slot (note % 2) that plays the
+ * buffer's first channel, one frame per sample, in place of the tone, and
+ * the usage report lists every buffer a voice holds. 2..6 report like 1 but
+ * with a defect: 2 overflow, 3 an unknown id, 4 a duplicate id, 5 a count
+ * above capacity, 6 a zero id. */
+static uint32_t sampleModes[32];
+VOX_EXPORT void VOX_CALL voxTestSetSampleMode(uint32_t slotIndex, uint32_t mode) {
+  if (slotIndex < 32)
+    sampleModes[slotIndex] = mode;
+  for (int i = 0; i < 64; ++i)
+    if (live[i] != NULL && live[i]->slotIndex == slotIndex)
+      live[i]->sampleMode = mode;
+}
+
+static void startSampleVoice(struct VoxInstanceT *s, const VoxProcessContextV2 *c,
+                             const VoxMidiEventV2 *e) {
+  if (s->sampleMode == 0 || c->samples == NULL || e->size < 3 ||
+      (e->bytes[0] & 0xF0) != 0x90 || e->bytes[2] == 0 ||
+      s->sampleVoiceCount >= SAMPLE_VOICES)
+    return;
+  const VoxSampleV2 *sample = &c->samples[e->bytes[1] % SAMPLE_SLOTS];
+  if (sample->id == 0 || sample->channels == NULL || sample->channelCount == 0 ||
+      sample->frames == 0)
+    return;
+  s->sampleVoices[s->sampleVoiceCount].id = sample->id;
+  s->sampleVoices[s->sampleVoiceCount].channels = sample->channels;
+  s->sampleVoices[s->sampleVoiceCount].frames = sample->frames;
+  s->sampleVoices[s->sampleVoiceCount].position = 0;
+  ++s->sampleVoiceCount;
+}
+
+static float renderSampleVoices(struct VoxInstanceT *s) {
+  float sum = 0.0f;
+  for (uint32_t v = 0; v < s->sampleVoiceCount;) {
+    sum += s->sampleVoices[v].channels[0][s->sampleVoices[v].position];
+    if (++s->sampleVoices[v].position >= s->sampleVoices[v].frames) {
+      s->sampleVoices[v] = s->sampleVoices[--s->sampleVoiceCount]; /* voice ended */
+    } else {
+      ++v;
+    }
+  }
+  return sum;
+}
+
+static void reportSampleUsage(const struct VoxInstanceT *s, VoxSampleUsageV2 *u) {
+  if (u == NULL || u->ids == NULL)
+    return;
+  u->count = 0;
+  u->overflow = 0;
+  for (uint32_t v = 0; v < s->sampleVoiceCount; ++v) {
+    int seen = 0;
+    for (uint32_t k = 0; k < u->count; ++k)
+      seen |= u->ids[k] == s->sampleVoices[v].id;
+    if (seen)
+      continue;
+    if (u->count == u->capacity) {
+      u->overflow = 1;
+      break;
+    }
+    u->ids[u->count++] = s->sampleVoices[v].id;
+  }
+  if (s->sampleMode == 2)
+    u->overflow = 1;
+  else if (s->sampleMode == 3 && u->count < u->capacity)
+    u->ids[u->count++] = 0xDEADull;
+  else if (s->sampleMode == 4 && u->count > 0 && u->count < u->capacity) {
+    u->ids[u->count] = u->ids[0];
+    ++u->count;
+  } else if (s->sampleMode == 5)
+    u->count = u->capacity + 1;
+  else if (s->sampleMode == 6 && u->count < u->capacity)
+    u->ids[u->count++] = 0;
 }
 
 static void writeNotes(const struct VoxInstanceT *s, const VoxProcessContextV2 *c) {
@@ -266,6 +352,7 @@ static VoxResult VOX_CALL create(const char *id, const VoxCreateParamsV2 *params
   instance->slotIndex = params->slotIndex;
   instance->noteMode = params->slotIndex < 32 ? noteModes[params->slotIndex] : 0;
   instance->auxMode = params->slotIndex < 32 ? auxModes[params->slotIndex] : 0;
+  instance->sampleMode = params->slotIndex < 32 ? sampleModes[params->slotIndex] : 0;
   for (int i = 0; i < 64; ++i)
     if (live[i] == NULL) {
       live[i] = instance;
@@ -304,6 +391,7 @@ static VoxResult VOX_CALL prepare(VoxInstance instance, const VoxPrepareSpecV2 *
   instance->maxMidiEvents = spec->maxMidiEventsPerBlock;
   instance->phase = 0.0;
   instance->note = -1;
+  instance->sampleVoiceCount = 0; /* prepare ends every voice (ABI contract) */
   instance->prepared = 1;
   return VOX_OK;
 }
@@ -330,6 +418,7 @@ static VoxResult VOX_CALL reset(VoxInstance instance) {
   }
   instance->phase = 0.0;
   instance->note = -1;
+  instance->sampleVoiceCount = 0; /* reset drops every sample reference */
   return VOX_OK;
 }
 
@@ -408,7 +497,14 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   if (c->releaseFlags & VOX_PANIC_AT_START) {
     s->note = -1;
     s->phase = 0.0;
+    s->sampleVoiceCount = 0;
   }
+  /* V2.4 sample hand-off: used only when the host's context covers it. */
+  const int samples = c->structSize >= offsetof(VoxProcessContextV2, sampleUsage) +
+                                           sizeof(void *) &&
+                      c->samples != NULL && c->sampleSlotCount == SAMPLE_SLOTS;
+  if (!samples)
+    s->sampleVoiceCount = 0;
   /* V2.3 aux buses: used only when the host's context carries all of ours. */
   float *const *aux = NULL;
   if (c->structSize >= offsetof(VoxProcessContextV2, reserved1) + sizeof(c->reserved1) &&
@@ -438,9 +534,12 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       if (e.sampleOffset > i)
         break;
       applyMidi(s, &e);
+      if (samples)
+        startSampleVoice(s, c, &e);
       ++nextEvent;
     }
-    const float v = render(s);
+    const float tone = render(s);
+    const float v = s->sampleMode != 0 ? renderSampleVoices(s) : tone;
     const float dry = s->auxMode == 1 || s->auxMode == 3 ? 0.0f : v;
     for (uint32_t ch = 0; ch < c->outputChannelCount; ++ch)
       c->outputs[ch][i] = dry;
@@ -459,6 +558,10 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   }
   if (c->releaseFlags & (VOX_RELEASE_ALL_NOTES_AT_END | VOX_RELEASE_ALL_SOUND_AT_END))
     s->note = -1;
+  if (c->releaseFlags & VOX_RELEASE_ALL_SOUND_AT_END)
+    s->sampleVoiceCount = 0;
+  if (samples)
+    reportSampleUsage(s, c->sampleUsage);
   writeNotes(s, c);
   return VOX_OK;
 }

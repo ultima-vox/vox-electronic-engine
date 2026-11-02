@@ -302,7 +302,7 @@ std::vector<float> renderPhrase(const VoxModuleV2 &m, VoxInstance instance, int 
 
 // ---------------------------------------------------------------- tests
 void layout() {
-  std::array<std::uint32_t, 128> c{};
+  std::array<std::uint32_t, 192> c{};
   const auto count = voxAbiLayoutC(c.data(), static_cast<std::uint32_t>(c.size()));
 #define L(type, field) static_cast<std::uint32_t>(offsetof(type, field))
   const std::uint32_t cpp[] = {
@@ -340,7 +340,11 @@ void layout() {
       L(VoxNoteOutputV2, routedNotes), L(VoxNoteOutputV2, reserved),
       L(VoxInstrumentDescriptorV2, auxBuses), L(VoxInstrumentDescriptorV2, auxBusCount),
       sizeof(VoxAuxBusV2), L(VoxAuxBusV2, target), L(VoxProcessContextV2, auxOutputs),
-      L(VoxProcessContextV2, auxBusCount)};
+      L(VoxProcessContextV2, auxBusCount), L(VoxInstrumentDescriptorV2, sampleSlotCount),
+      sizeof(VoxSampleV2), L(VoxSampleV2, channels), L(VoxSampleV2, frames),
+      L(VoxSampleV2, sampleRate), L(VoxSampleV2, peak), sizeof(VoxSampleUsageV2),
+      L(VoxSampleUsageV2, ids), L(VoxSampleUsageV2, overflow), L(VoxProcessContextV2, samples),
+      L(VoxProcessContextV2, sampleSlotCount), L(VoxProcessContextV2, sampleUsage)};
 #undef L
   REQUIRE(count == std::size(cpp), "C and C++ layout tables have the same length");
   for (std::uint32_t i = 0; i < count; ++i)
