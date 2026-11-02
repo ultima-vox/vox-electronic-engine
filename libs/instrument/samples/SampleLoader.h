@@ -32,7 +32,9 @@ public:
   struct Options {
     SampleLimits limits;
     std::size_t queueCapacity{64};
-    // PROPOSED decoded-memory budget per Rack slot (all its sample slots).
+    // PROPOSED cap on the sample memory one Rack slot's instrument holds:
+    // all its sample slots, pending, current and retiring buffers. A load
+    // decodes at most one more file beside it (the single worker).
     std::uint64_t slotBudgetBytes{256ull * 1024 * 1024};
   };
 
@@ -50,11 +52,15 @@ public:
     SampleRef ref;
     // Clears ref.sampleSlot instead (queued, so requests keep their order).
     bool clear{};
+    // Queued by enqueueSaved (not counted against queueCapacity).
+    bool saved{};
   };
-  // Any controller thread. False (and why) when the queue is full.
+  // Any controller thread. False (and why) when queueCapacity user requests
+  // are already waiting.
   bool enqueue(Request request, std::string &why);
   // Queues the saved references of the Rack (after a restore or a rebuild),
-  // of one slot only when `slot` is given.
+  // of one slot only when `slot` is given. Never refused: a project's saved
+  // samples all load or each reports its own error on its slot.
   std::size_t enqueueSaved(std::string &why, std::optional<std::size_t> slot = std::nullopt);
   // Tests and shutdown: blocks until the queue is empty and the worker idle.
   void waitIdle();
@@ -77,13 +83,6 @@ private:
   bool busy_{};
   bool stop_{};
   Stats stats_{};
-  // Decoded bytes per Rack slot and sample slot, for the budget; reset when
-  // the slot's instance generation changes.
-  struct SlotUse {
-    std::uint64_t generation{};
-    std::map<std::uint32_t, std::uint64_t> bytes;
-  };
-  std::map<std::size_t, SlotUse> use_;
   std::thread worker_;
 };
 

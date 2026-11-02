@@ -1024,7 +1024,7 @@ bool Rack::assignSlotSample(std::size_t index, std::uint64_t generation,
                             std::uint32_t sampleSlot,
                             std::unique_ptr<instrument::SampleBuffer> buffer,
                             const PersistentSlotState::SampleRef *ref,
-                            std::string &diagnostic) {
+                            std::string &diagnostic, std::uint64_t memoryLimitBytes) {
   const std::scoped_lock persistentLock(persistentStateMutex_);
   if (index >= state_.size() || instanceGeneration_[index] != generation) {
     diagnostic = "slot instrument changed before the sample was assigned";
@@ -1042,7 +1042,7 @@ bool Rack::assignSlotSample(std::size_t index, std::uint64_t generation,
     diagnostic = "sample buffer and reference disagree";
     return false;
   }
-  if (!host->publish(sampleSlot, std::move(buffer), diagnostic))
+  if (!host->publish(sampleSlot, std::move(buffer), diagnostic, memoryLimitBytes))
     return false;
   auto &refs = state_[index].sampleRefs;
   const auto at = std::find_if(refs.begin(), refs.end(),

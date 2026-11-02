@@ -1,5 +1,7 @@
 #include "instrument/samples/SampleLoader.h"
 
+#include <algorithm>
+
 namespace vstengine::instrument::samples {
 
 SampleLoader::SampleLoader(rack::Rack &rack, Options options, FactoryResolver factory)
@@ -20,7 +22,9 @@ SampleLoader::~SampleLoader() {
 bool SampleLoader::enqueue(Request request, std::string &why) {
   {
     const std::scoped_lock lock(mutex_);
-    if (stop_ || queue_.size() >= options_.queueCapacity) {
+    const auto queuedByUsers = static_cast<std::size_t>(
+        std::count_if(queue_.begin(), queue_.end(), [](const Request &r) { return !r.saved; }));
+    if (stop_ || queuedByUsers >= options_.queueCapacity) {
       ++stats_.refused;
       why = "sample loader queue is full";
       return false;
@@ -33,10 +37,29 @@ bool SampleLoader::enqueue(Request request, std::string &why) {
 }
 
 std::size_t SampleLoader::enqueueSaved(std::string &why, std::optional<std::size_t> slot) {
+  // Saved references are never refused: each restore replaces the saved
+  // requests still queued for its slots (they name an older instance), so
+  // they stay bounded by the Rack's own limits (maxSlots x maxSampleSlots)
+  // next to at most queueCapacity user requests.
+  auto requests = rack_.sampleLoadRequests();
   std::size_t queued = 0;
-  for (auto &saved : rack_.sampleLoadRequests())
-    if ((!slot || saved.slot == *slot) && enqueue({saved.slot, saved.generation, std::move(saved.ref)}, why))
-      ++queued;
+  {
+    const std::scoped_lock lock(mutex_);
+    if (stop_) {
+      why = "sample loader stopped";
+      return 0;
+    }
+    std::erase_if(queue_, [&](const Request &r) { return r.saved && (!slot || r.slot == *slot); });
+    for (auto &saved : requests)
+      if (!slot || saved.slot == *slot) {
+        Request request{saved.slot, saved.generation, std::move(saved.ref)};
+        request.saved = true;
+        queue_.push_back(std::move(request));
+        ++queued;
+      }
+  }
+  wake_.notify_one();
+  why.clear();
   return queued;
 }
 
@@ -82,10 +105,6 @@ void SampleLoader::load(const Request &request) {
       fail(why);
       return;
     }
-    const std::scoped_lock lock(mutex_);
-    auto &use = use_[request.slot];
-    if (use.generation == request.generation)
-      use.bytes.erase(ref.sampleSlot);
     return;
   }
   std::filesystem::path file;
@@ -121,36 +140,20 @@ void SampleLoader::load(const Request &request) {
     fail(std::string(describe(DecodeError::hashMismatch)) + ": " + ref.location);
     return;
   }
-  {
-    const std::scoped_lock lock(mutex_);
-    auto &use = use_[request.slot];
-    if (use.generation != request.generation) {
-      use.generation = request.generation;
-      use.bytes.clear();
-    }
-    std::uint64_t others = 0;
-    for (const auto &[sampleSlot, bytes] : use.bytes)
-      if (sampleSlot != ref.sampleSlot)
-        others += bytes;
-    if (others + decoded.memoryBytes() > options_.slotBudgetBytes) {
-      ++stats_.failed;
-      rack_.setSampleError(request.slot, request.generation,
-                           "sample memory budget exceeded: " + ref.location);
-      return;
-    }
-  }
   SampleRef saved = ref;
   saved.sha256 = decoded.sha256;
   saved.bytes = decoded.fileBytes;
-  const auto memory = decoded.memoryBytes();
+  // The budget covers every buffer the slot instrument's hand-off holds
+  // (pending, current and retiring ones a voice may still read); a refused
+  // publish leaves the previous sample and the saved reference as they were.
   std::string why;
   if (!rack_.assignSlotSample(request.slot, request.generation, ref.sampleSlot,
-                              std::move(decoded.buffer), &saved, why)) {
+                              std::move(decoded.buffer), &saved, why,
+                              options_.slotBudgetBytes)) {
     fail(why + ": " + ref.location);
     return;
   }
   const std::scoped_lock lock(mutex_);
-  use_[request.slot].bytes[ref.sampleSlot] = memory;
   ++stats_.loaded;
 }
 

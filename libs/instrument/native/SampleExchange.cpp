@@ -48,8 +48,24 @@ std::size_t SampleExchange::liveInSlot(std::uint32_t slot) const noexcept {
       live_.begin(), live_.end(), [&](const auto &entry) { return entry->slot == slot; }));
 }
 
+std::uint64_t SampleExchange::bytesOf(const SampleBuffer *buffer) noexcept {
+  std::uint64_t bytes = 0;
+  if (buffer != nullptr)
+    for (const auto &channel : buffer->channels)
+      bytes += channel.size() * sizeof(float);
+  return bytes;
+}
+
+std::uint64_t SampleExchange::liveBytes(const Entry *except) const noexcept {
+  std::uint64_t bytes = 0;
+  for (const auto &entry : live_)
+    if (entry.get() != except)
+      bytes += bytesOf(entry->buffer.get());
+  return bytes;
+}
+
 bool SampleExchange::publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
-                             std::string &diagnostic) {
+                             std::string &diagnostic, std::uint64_t memoryLimitBytes) {
   const std::scoped_lock lock(mutex_);
   if (slot >= slots_) {
     diagnostic = "sample slot out of range";
@@ -72,6 +88,28 @@ bool SampleExchange::publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> b
     if (liveInSlot(slot) >= maxLivePerSlot) {
       diagnostic = "sample slot busy: earlier buffers are still in use";
       return false;
+    }
+  }
+  if (memoryLimitBytes != 0) {
+    // The pending entry of this slot is superseded by this publish and
+    // released at once, so it does not count; everything else a voice may
+    // still read does. Collect first, then decide; a refusal changes nothing.
+    const auto incoming = bytesOf(buffer.get());
+    const auto over = [&] {
+      const auto *pending = pending_[slot].load(std::memory_order_acquire);
+      const auto *mine = std::find_if(live_.begin(), live_.end(), [&](const auto &e) {
+                           return e.get() == pending;
+                         }) != live_.end()
+                             ? pending
+                             : nullptr;
+      return liveBytes(mine) + incoming > memoryLimitBytes;
+    };
+    if (over()) {
+      (void)collectLocked();
+      if (over()) {
+        diagnostic = "sample memory budget exceeded: earlier buffers are still in use";
+        return false;
+      }
     }
   }
   auto entry = std::make_unique<Entry>();
@@ -186,6 +224,7 @@ SampleStats SampleExchange::stats() const {
   const std::scoped_lock lock(mutex_);
   auto copy = stats_;
   copy.live = live_.size();
+  copy.liveBytes = liveBytes();
   return copy;
 }
 

@@ -38,7 +38,7 @@ public:
   // SampleHost (controller threads).
   std::uint32_t sampleSlotCount() const noexcept override { return slots_; }
   bool publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
-               std::string &diagnostic) override;
+               std::string &diagnostic, std::uint64_t memoryLimitBytes = 0) override;
   std::size_t collect() override;
   SampleStats stats() const override;
   void setReleaseSinkForTesting(ReleaseSink sink) override;
@@ -77,6 +77,9 @@ private:
   bool acceptable(const Report &report);
   void releaseLocked(const Entry *entry);
   std::size_t liveInSlot(std::uint32_t slot) const noexcept;
+  // Sample memory of the live entries, optionally without one entry.
+  std::uint64_t liveBytes(const Entry *except = nullptr) const noexcept;
+  static std::uint64_t bytesOf(const SampleBuffer *buffer) noexcept;
 
   const std::uint32_t slots_;
   const std::uint32_t capacity_;

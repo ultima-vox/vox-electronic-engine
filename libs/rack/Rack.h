@@ -130,10 +130,13 @@ public:
   // instance generation `generation`, and records `ref` in the slot state
   // (null buffer: clears the sample slot and its reference). Clears the
   // slot's sample error on success.
+  // `memoryLimitBytes` (0: none) caps the slot instrument's live sample
+  // memory (see SampleHost::publish); a refused publish changes nothing.
   bool assignSlotSample(std::size_t slotIndex, std::uint64_t generation,
                         std::uint32_t sampleSlot,
                         std::unique_ptr<instrument::SampleBuffer> buffer,
-                        const PersistentSlotState::SampleRef *ref, std::string &diagnostic);
+                        const PersistentSlotState::SampleRef *ref, std::string &diagnostic,
+                        std::uint64_t memoryLimitBytes = 0);
   // Controller threads: records why a sample load failed, if the slot still
   // holds instance generation `generation`.
   void setSampleError(std::size_t slotIndex, std::uint64_t generation, std::string error);

@@ -426,6 +426,16 @@ state, with one owner:
     generation. The Rack bumps it whenever an instance is replaced (restore,
     instrument load, sound preset) and assigns nothing for an old generation.
   - **Budget.** Decoded memory is capped per Rack slot (256 MiB, PROPOSED).
+    The cap covers everything the slot's hand-off holds: pending, current
+    and every retiring buffer a voice may still read. It is enforced inside
+    `publish` after a collect, so a refused load changes nothing. At most one
+    more file is being decoded beside it (one worker, bounded by the decoder
+    limits).
+  - **Restore.** Saved references are queued without counting against the
+    user queue (64). Each restore replaces the saved requests still queued
+    for its slots, so they stay bounded by the Rack's own limits
+    (16 slots x 64 sample slots). A project's saved samples all load, or each
+    reports its own error on its slot.
   - **Ordering.** Clears go through the same queue, so requests stay in order.
 - **State.** Each sample slot's reference is saved in the slot state, in
   append-only `SAMPLE` children:

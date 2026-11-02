@@ -2065,6 +2065,116 @@ void sampleCollectionWhileRinging() {
   setSampleMode(slot, 0);
 }
 
+// Owner review 5739970190, P1: the per-slot budget covers every buffer the
+// slot's hand-off holds, including retiring ones that ringing voices read.
+// A publish above it is refused and leaves the previous sound and reference.
+void sampleBudgetCoversRetiringBuffers() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  const int channel = channelOf(*p, slot);
+  constexpr int frames = 30 * blockSize;
+  constexpr std::uint64_t one = frames * sizeof(float);
+  instrument::samples::SampleLoader::Options options;
+  options.slotBudgetBytes = 3 * one;
+  instrument::samples::SampleLoader loader(p->instrumentRack(), options);
+  const auto assign = [&](int i) {
+    const auto wav = writeWav("budget" + std::to_string(i) + ".wav", 0.01f * (i + 1), frames);
+    rack::PersistentSlotState::SampleRef ref;
+    ref.sampleSlot = 0;
+    ref.location = wav.string();
+    std::string why;
+    loader.enqueue({slot, p->instrumentRack().instanceGeneration(slot), ref}, why);
+    loader.waitIdle();
+    return wav.string();
+  };
+  bool bounded = true;
+  std::string last;
+  for (int i = 0; i < 3; ++i) {
+    last = assign(i);
+    play(*p, channel, 1, 0, -1); // install it; a voice holds it
+    bounded &= statsOf(*p, slot).liveBytes <= options.slotBudgetBytes;
+  }
+  check(statsOf(*p, slot).liveBytes == 3 * one && sampleErrorOf(*p, slot).empty(),
+        "three ringing samples fill the budget exactly");
+  const auto failed = loader.stats().failed;
+  const auto publishedBefore = statsOf(*p, slot).published;
+  assign(3);
+  bounded &= statsOf(*p, slot).liveBytes <= options.slotBudgetBytes;
+  check(bounded && loader.stats().failed == failed + 1 &&
+            sampleErrorOf(*p, slot).find("budget") != std::string::npos,
+        "a fourth sample while three voices ring is refused (live bytes never above the cap)");
+  const auto *ref = savedRef(*p, slot, 0);
+  check(ref != nullptr && ref->location == last &&
+            statsOf(*p, slot).published == publishedBefore,
+        "the refused load publishes nothing and keeps the previous sample and its reference");
+  for (int b = 0; b < 40; ++b) {
+    play(*p, channel, 1, -1, -1);
+    p->instrumentRack().collectSamples();
+  }
+  assign(4);
+  check(loader.stats().loaded == 4 && savedRef(*p, slot, 0)->location.find("budget4") !=
+                                          std::string::npos &&
+            statsOf(*p, slot).liveBytes <= options.slotBudgetBytes,
+        "once the voices ended the next sample loads within the cap");
+  setSampleMode(slot, 0);
+}
+
+// Owner review 5739970190, P1: restoring a project queues every saved
+// reference even while the worker is busy and user requests fill the queue.
+void savedSamplesNeverDropped() {
+  auto p = makeProcessor(true);
+  for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+    loadTone(*p, slot);
+  juce::String jwhy;
+  for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+    for (std::uint32_t sampleSlot = 0; sampleSlot < 2; ++sampleSlot) {
+      const auto wav = writeWav("saved" + std::to_string(slot) + "-" +
+                                    std::to_string(sampleSlot) + ".wav",
+                                0.02f, blockSize);
+      check(p->assignSampleFile(slot, sampleSlot, juce::File(wav.string()), jwhy),
+            "assign queued");
+      p->sampleLoaderForTesting().waitIdle(); // the processor's queue holds 64
+    }
+  check(p->instrumentRack().sampleLoadRequests().size() == 32, "32 saved references");
+  std::atomic<bool> entered{false}, release{false};
+  instrument::samples::SampleLoader::Options options;
+  options.queueCapacity = 2;
+  instrument::samples::SampleLoader loader(
+      p->instrumentRack(), options,
+      [&](std::size_t, const std::string &)
+          -> std::optional<instrument::samples::SampleLoader::FactoryFile> {
+        entered = true;
+        while (!release)
+          std::this_thread::yield();
+        return std::nullopt;
+      });
+  rack::PersistentSlotState::SampleRef blocker;
+  blocker.source = rack::PersistentSlotState::SampleRef::Source::factory;
+  blocker.location = "blocker";
+  std::string why;
+  check(loader.enqueue({3, p->instrumentRack().instanceGeneration(3), blocker}, why),
+        "a request occupies the worker");
+  while (!entered)
+    std::this_thread::yield();
+  auto user = *p->instrumentRack().state()[5].sampleRefs.begin();
+  check(loader.enqueue({5, p->instrumentRack().instanceGeneration(5), user}, why) &&
+            loader.enqueue({5, p->instrumentRack().instanceGeneration(5), user}, why) &&
+            !loader.enqueue({5, p->instrumentRack().instanceGeneration(5), user}, why),
+        "user requests fill the bounded queue");
+  const auto published = statsOf(*p, 9).published;
+  check(loader.enqueueSaved(why) == 32, "every saved reference is queued despite the full queue");
+  check(loader.enqueueSaved(why) == 32, "a second restore replaces the first batch (still 32)");
+  release = true;
+  loader.waitIdle();
+  bool clean = true;
+  for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+    clean &= sampleErrorOf(*p, slot).empty();
+  check(loader.stats().loaded == 34 && clean && statsOf(*p, 9).published == published + 2,
+        "all 32 saved samples and both user requests load; no slot reports an error");
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     std::cerr << "usage: native_rack_tests <test module path> <legacy V2.2 module path>\n";
@@ -2108,6 +2218,8 @@ int main(int argc, char **argv) {
   sampleFileAssignSaveRestore();
   sampleLoaderGuards();
   sampleCollectionWhileRinging();
+  sampleBudgetCoversRetiringBuffers();
+  savedSamplesNeverDropped();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

@@ -280,6 +280,7 @@ struct SampleStats {
     std::uint64_t published {}; // buffers accepted by publish()
     std::uint64_t released {};  // buffers released (superseded, retired or torn down)
     std::uint64_t live {};      // published and not yet released
+    std::uint64_t liveBytes {}; // sample memory of those (pending, current, retiring)
     std::uint64_t reportsUsed {};     // valid reports that decided releases
     std::uint64_t reportsRejected {}; // invalid, malformed or overflowing: freed nothing
 };
@@ -294,8 +295,11 @@ public:
     // Publishes `buffer` (null: clear the slot) to be installed at the next
     // block start; the last publish wins. Refuses when the slot already holds
     // the maximum of live buffers until retirements are collected.
+    // `memoryLimitBytes` (0: none) caps the sample memory this hand-off may
+    // hold after the publish: pending, current and every retiring buffer a
+    // voice may still read. A publish above it is refused and changes nothing.
     virtual bool publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
-                         std::string &diagnostic) = 0;
+                         std::string &diagnostic, std::uint64_t memoryLimitBytes = 0) = 0;
     // Reads the newest usage report and releases every buffer the free rule
     // allows. Returns how many were released.
     virtual std::size_t collect() = 0;
