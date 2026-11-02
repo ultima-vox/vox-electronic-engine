@@ -94,6 +94,19 @@ add_test(NAME vins_production_gate_accepts_release_public_key
   COMMAND ${CMAKE_COMMAND} -DVOX_PRODUCTION_BUILD=ON -DVOX_RELEASE_PUBLIC_KEY=release.pub.pem
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VinsProductionGate.cmake)
 
+# Contract C2: host sample decoding (WAV) and loading, off the audio thread.
+add_library(vst_samples STATIC
+  libs/instrument/samples/SampleDecoder.cpp libs/instrument/samples/SampleDecoder.h)
+target_include_directories(vst_samples PUBLIC ${VST_LIBS_DIR})
+target_link_libraries(vst_samples
+  PUBLIC vst_instrument juce::juce_audio_formats juce::juce_cryptography)
+target_compile_definitions(vst_samples PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+
+add_executable(sample_decoder_tests tests/samples/SampleDecoderTests.cpp)
+target_link_libraries(sample_decoder_tests PRIVATE vst_samples)
+target_compile_definitions(sample_decoder_tests PRIVATE JUCE_STANDALONE_APPLICATION=1)
+add_test(NAME sample_decoder_tests COMMAND sample_decoder_tests)
+
 # Package tool (host build): writes manifests and deterministic archives.
 add_executable(vox_vins_pack tools/VinsPack.cpp)
 target_link_libraries(vox_vins_pack PRIVATE vst_vins)
@@ -251,8 +264,8 @@ target_compile_definitions(VstEngine PUBLIC
 
 target_link_libraries(VstEngine PRIVATE
   juce::juce_audio_utils juce::juce_dsp
-  vst_core vst_instrument vst_native vst_vins vst_dspcore vst_rack vst_modules vst_sequence
-  vst_transport vst_midi vst_preset vst_ui vst_effects)
+  vst_core vst_instrument vst_native vst_vins vst_samples vst_dspcore vst_rack vst_modules
+  vst_sequence vst_transport vst_midi vst_preset vst_ui vst_effects)
 
 if(MSVC)
   # JUCE's shared-code target emits one PDB. /FS serializes concurrent compiler
