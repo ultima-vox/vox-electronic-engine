@@ -110,6 +110,34 @@ void rejects() {
         "NaN in float data refused");
 }
 
+// Owner review 5742565851: the 30 s limit is a duration at the file's own
+// rate, not a frame count. Every WAV here is far below the 64 MiB file cap.
+void durationAtTheFileRate() {
+  const SampleLimits limits;
+  const auto wav = [](double rate, std::int64_t frames) {
+    return makeWav(1, static_cast<int>(frames), rate, 16, [](int, int) { return 0.1f; });
+  };
+  const auto decode = [&](double rate, std::int64_t frames) {
+    const auto bytes = wav(rate, frames);
+    check(bytes.size() < limits.maxFileBytes, "test WAV is below the byte cap");
+    DecodedSample out;
+    return decodeWav(bytes, {}, limits, out);
+  };
+  check(decode(44100.0, 31 * 44100) == DecodeError::tooLong, "31 s at 44.1 kHz refused");
+  check(decode(48000.0, 31 * 48000) == DecodeError::tooLong, "31 s at 48 kHz refused");
+  check(decode(48000.0, 30 * 48000) == DecodeError::none, "exactly 30 s at 48 kHz accepted");
+  check(decode(192000.0, 30 * 192000) == DecodeError::none, "exactly 30 s at 192 kHz accepted");
+  check(decode(192000.0, 30 * 192000 + 1) == DecodeError::tooLong,
+        "one frame over 30 s at 192 kHz refused");
+  check(decode(384000.0, 20 * 384000) == DecodeError::none, "20 s at 384 kHz accepted");
+  // 60 s at 44.1 kHz stereo 16-bit is ~10 MiB: refused for its duration.
+  const auto stereo = makeWav(2, 60 * 44100, 44100.0, 16, [](int, int) { return 0.1f; });
+  DecodedSample out;
+  check(stereo.size() < limits.maxFileBytes &&
+            decodeWav(stereo, {}, limits, out) == DecodeError::tooLong && !out.buffer,
+        "60 s stereo at 44.1 kHz refused before decoding");
+}
+
 void files() {
   const auto dir = std::filesystem::temp_directory_path() /
                    ("vox-sample-decoder-" + std::to_string(std::rand()));
@@ -145,6 +173,7 @@ void files() {
 int main() {
   decodesFormats();
   rejects();
+  durationAtTheFileRate();
   files();
   std::cout << "sample_decoder_tests: " << checks << " checks passed\n";
   return 0;

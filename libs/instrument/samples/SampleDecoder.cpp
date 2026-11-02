@@ -19,6 +19,7 @@ const char *describe(DecodeError error) noexcept {
   case DecodeError::hashMismatch: return "sample file changed (SHA-256 mismatch)";
   case DecodeError::notWav: return "sample file is not a readable WAV";
   case DecodeError::badFormat: return "sample format out of range (rate, channels or length)";
+  case DecodeError::tooLong: return "sample is longer than the allowed duration (30 s)";
   case DecodeError::empty: return "sample file holds no audio";
   case DecodeError::nonFinite: return "sample data holds NaN or infinity";
   }
@@ -58,6 +59,10 @@ DecodeError decodeWav(std::span<const std::uint8_t> bytes, std::string_view expe
     return DecodeError::badFormat;
   if (frames == 0)
     return DecodeError::empty;
+  // Duration at the file's own rate, checked before any PCM is allocated.
+  // Exactly maxSeconds is accepted.
+  if (static_cast<double>(frames) > limits.maxSeconds * rate)
+    return DecodeError::tooLong;
   juce::AudioBuffer<float> audio(static_cast<int>(channels), static_cast<int>(frames));
   if (!reader->read(&audio, 0, static_cast<int>(frames), 0, true, channels > 1))
     return DecodeError::notWav;

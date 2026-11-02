@@ -16,10 +16,13 @@
 
 namespace vstengine::instrument::samples {
 
-// PROPOSED limits (contract C: "to be measured and approved").
+// Owner-approved initial Rack 1.0 limits (#99 review 5742565851): 64 MiB per
+// WAV file and 30 s per file at the file's own sample rate.
 struct SampleLimits {
   std::uint64_t maxFileBytes{64ull * 1024 * 1024}; // one WAV file
-  std::uint64_t maxFrames{30ull * 192000};         // 30 s at 192 kHz
+  double maxSeconds{30.0};                         // at the file's sample rate
+  // Absolute frame guard beside the duration: 30 s at the highest rate.
+  std::uint64_t maxFrames{30ull * 384000};
   std::uint32_t maxChannels{2};
   double minSampleRate{8000.0};
   double maxSampleRate{384000.0};
@@ -32,6 +35,7 @@ enum class DecodeError {
   hashMismatch,    // bytes differ from the expected SHA-256
   notWav,          // not a WAV the reader accepts
   badFormat,       // sample rate / channel count / length out of range
+  tooLong,         // longer than maxSeconds at its own sample rate
   empty,           // no frames
   nonFinite,       // NaN or infinity in the data
 };

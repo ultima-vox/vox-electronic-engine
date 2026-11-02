@@ -416,16 +416,21 @@ state, with one owner:
     first.
   - Decodes WAV into a float `SampleBuffer` at the file's native rate, with its
     peak.
-  - Refuses: more than 2 channels; rates outside 8..384 kHz; files longer than
-    30 s at 192 kHz or larger than 64 MiB; empty files; non-WAV or truncated
-    data; NaN or infinity.
-  - These limits are **PROPOSED**, pending measurement and owner approval.
+  - Refuses: more than 2 channels; rates outside 8..384 kHz; files larger
+    than 64 MiB; files longer than 30 s at their own sample rate (checked
+    before any PCM is allocated); empty files; non-WAV or truncated data;
+    NaN or infinity.
 - **Loader (`SampleLoader`).** One worker thread with a bounded queue (64);
   a full queue refuses the request.
   - **Instance identity.** Each request carries the slot's instance
     generation. The Rack bumps it whenever an instance is replaced (restore,
     instrument load, sound preset) and assigns nothing for an old generation.
-  - **Budget.** Decoded memory is capped per Rack slot (256 MiB, PROPOSED).
+  - **Limits (owner-approved initial Rack 1.0 policy, #99 review
+    5742565851).** 64 MiB per WAV file, 30 s per file at its own sample
+    rate, and 256 MiB of live decoded buffers per Rack slot. These are
+    per-file and per-slot safety caps, not a whole-Rack memory ceiling, and
+    decoder transients come on top and are still to be profiled.
+  - **Budget.** Decoded memory is capped per Rack slot (256 MiB).
     The cap covers everything the slot's hand-off holds: pending, current
     and every retiring buffer a voice may still read. It is enforced inside
     `publish` after a collect, so a refused load changes nothing. At most one

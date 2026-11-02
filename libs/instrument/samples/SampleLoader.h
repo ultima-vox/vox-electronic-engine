@@ -32,7 +32,7 @@ public:
   struct Options {
     SampleLimits limits;
     std::size_t queueCapacity{64};
-    // PROPOSED cap on the sample memory one Rack slot's instrument holds:
+    // Owner-approved cap on the sample memory one Rack slot's instrument holds:
     // all its sample slots, pending, current and retiring buffers. A load
     // decodes at most one more file beside it (the single worker).
     std::uint64_t slotBudgetBytes{256ull * 1024 * 1024};
