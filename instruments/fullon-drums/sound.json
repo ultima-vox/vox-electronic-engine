@@ -53,6 +53,51 @@
           "parameter": "kick.tail",
           "kind": "knob",
           "label": "TAIL"
+        },
+        {
+          "parameter": "kick.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "kick.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "kick.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "kick.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "kick.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "kick.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "kick.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "kick.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "kick.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -83,6 +128,51 @@
           "parameter": "snare.character",
           "kind": "knob",
           "label": "SNAPPY"
+        },
+        {
+          "parameter": "snare.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "snare.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "snare.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "snare.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "snare.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "snare.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "snare.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "snare.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "snare.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -113,6 +203,51 @@
           "parameter": "clap.character",
           "kind": "knob",
           "label": "TONE"
+        },
+        {
+          "parameter": "clap.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "clap.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "clap.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "clap.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "clap.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "clap.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "clap.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "clap.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "clap.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -143,6 +278,51 @@
           "parameter": "chat.character",
           "kind": "knob",
           "label": "TONE"
+        },
+        {
+          "parameter": "chat.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "chat.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "chat.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "chat.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "chat.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "chat.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "chat.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "chat.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "chat.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -173,6 +353,51 @@
           "parameter": "ohat.character",
           "kind": "knob",
           "label": "TONE"
+        },
+        {
+          "parameter": "ohat.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "ohat.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "ohat.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "ohat.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "ohat.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "ohat.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "ohat.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "ohat.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "ohat.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -203,6 +428,51 @@
           "parameter": "tom.character",
           "kind": "knob",
           "label": "SWEEP"
+        },
+        {
+          "parameter": "tom.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "tom.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "tom.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "tom.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "tom.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "tom.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "tom.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "tom.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "tom.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -233,6 +503,51 @@
           "parameter": "rim.character",
           "kind": "knob",
           "label": "TONE"
+        },
+        {
+          "parameter": "rim.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "rim.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "rim.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "rim.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "rim.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "rim.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "rim.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "rim.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "rim.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
@@ -263,6 +578,51 @@
           "parameter": "cymbal.character",
           "kind": "knob",
           "label": "TONE"
+        },
+        {
+          "parameter": "cymbal.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "cymbal.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "cymbal.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "cymbal.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "cymbal.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "cymbal.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "cymbal.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "cymbal.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "cymbal.output",
+          "kind": "selector",
+          "label": "OUTPUT"
         }
       ]
     },
