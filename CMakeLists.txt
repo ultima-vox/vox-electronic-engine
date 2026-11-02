@@ -712,6 +712,8 @@ if(VOX_NATIVE_PLATFORM)
     target_compile_definitions(fullon_drums_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
     target_link_options(fullon_drums_tests PRIVATE -rdynamic)
   endif()
+  target_compile_definitions(fullon_drums_tests PRIVATE
+    PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(NAME fullon_drums_tests
     COMMAND fullon_drums_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/drums-scratch
       ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)

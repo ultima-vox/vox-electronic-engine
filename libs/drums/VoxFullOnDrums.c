@@ -42,9 +42,17 @@
 #define PAD_PARAMS 5u
 #define GLOBAL_PARAMS 8u
 #define SEQ_PARAMS 11u
-#define PARAM_COUNT (PAD_COUNT * PAD_PARAMS + GLOBAL_PARAMS + SEQ_PARAMS) /* 59 */
+#define V1_PARAM_COUNT (PAD_COUNT * PAD_PARAMS + GLOBAL_PARAMS + SEQ_PARAMS) /* 59 */
+/* Phase 1 (appended): per pad 5 host parameters (pool 59..98) and 4 UI-only
+ * ones (no endpoint). */
+#define PAD_HOST2 5u
+#define PAD_UI 4u
+#define HOST2_BASE V1_PARAM_COUNT                         /* 59 */
+#define UI_BASE (HOST2_BASE + PAD_COUNT * PAD_HOST2)      /* 99 */
+#define PARAM_COUNT (UI_BASE + PAD_COUNT * PAD_UI)        /* 131 */
 #define MAX_VOICES 16
-#define STATE_VERSION 3u
+#define STATE_VERSION 4u
+#define V1_STATE_VERSION 3u
 #define STATE_MAGIC 0x44464f56u /* "VOFD" */
 #define STATE_BYTES_FOR(count) (12u + (count) * 4u + PAD_COUNT * 2u)
 #define STATE_BYTES STATE_BYTES_FOR(PARAM_COUNT)
@@ -74,6 +82,20 @@ enum {
   S_LANE0                            /* 51..58 lane on/off per pad */
 };
 enum { MODE_HOST, MODE_INTERNAL, MODE_BOTH };
+/* Phase 1 per-pad parameters: host (index HOST2_BASE + pad * 5 + key). */
+enum { K_SEND1, K_SEND2, K_CUTOFF, K_RESONANCE, K_FINE };
+/* UI-only (index UI_BASE + pad * 4 + key). */
+enum { U_FILTER, U_ATTACK, U_SUSTAIN, U_OUTPUT };
+enum { FILTER_OFF, FILTER_LP12, FILTER_LP24, FILTER_HP12, FILTER_HP24, FILTER_BP };
+/* Aux buses (ABI V2.3), in descriptor order: Send 1 -> Rack return 1, Send 2
+ * -> return 2, then pad outputs Out 2..Out 8. */
+#define AUX_SENDS 2u
+#define AUX_OUTPUTS 7u
+#define AUX_COUNT (AUX_SENDS + AUX_OUTPUTS)
+static const VoxAuxBusV2 auxBuses[AUX_COUNT] = {
+    {VOX_AUX_BUS_SEND, 1},   {VOX_AUX_BUS_SEND, 2},   {VOX_AUX_BUS_OUTPUT, 2},
+    {VOX_AUX_BUS_OUTPUT, 3}, {VOX_AUX_BUS_OUTPUT, 4}, {VOX_AUX_BUS_OUTPUT, 5},
+    {VOX_AUX_BUS_OUTPUT, 6}, {VOX_AUX_BUS_OUTPUT, 7}, {VOX_AUX_BUS_OUTPUT, 8}};
 #define PATTERN_COUNT 5
 #define BARS 4    /* pattern bars (the factory fill is bar 4) */
 #define FILL_BAR 3
@@ -100,6 +122,35 @@ static const uint8_t defaultChoke[PAD_COUNT] = {0, 0, 0, 1, 1, 0, 0, 0};
   P(key ".character", label " " charName, "", label, VOX_PARAM_FLOAT, 0.0f, 1.0f, charDef,     \
     0.0f, base + 4)
 
+/* Phase 1 host parameters of one pad (pool base..base+4). */
+#define PAD2(key, label, base)                                                                 \
+  P(key ".send1", label " Send 1", "", label, VOX_PARAM_FLOAT, 0.0f, 1.0f, 0.0f, 0.0f,          \
+    base + 0),                                                                                \
+  P(key ".send2", label " Send 2", "", label, VOX_PARAM_FLOAT, 0.0f, 1.0f, 0.0f, 0.0f,          \
+    base + 1),                                                                                \
+  P(key ".cutoff", label " Cutoff", "Hz", label, VOX_PARAM_FLOAT, 20.0f, 20000.0f, 20000.0f,    \
+    0.0f, base + 2),                                                                          \
+  P(key ".resonance", label " Resonance", "", label, VOX_PARAM_FLOAT, 0.0f, 1.0f, 0.0f, 0.0f,  \
+    base + 3),                                                                                \
+  P(key ".fine", label " Fine", "ct", label, VOX_PARAM_FLOAT, -100.0f, 100.0f, 0.0f, 0.0f,      \
+    base + 4)
+/* UI-only: saved with the slot, edited in the editor, never automated. */
+#define U(id, name, unit, group, choices, type, n, lo, hi, def, step)                          \
+  {sizeof(VoxParameterDescriptorV2), VOX_MODULE_ABI_V2, id, name, unit, group, choices, type, n, \
+   lo, hi, def, step, -1, 0}
+static const char *const filterChoices[] = {"Off", "LP 12", "LP 24", "HP 12", "HP 24", "BP"};
+static const char *const outputChoices[] = {"Main",  "Out 2", "Out 3", "Out 4",
+                                            "Out 5", "Out 6", "Out 7", "Out 8"};
+#define PADUI(key, label)                                                                      \
+  U(key ".filter", label " Filter", "", label, filterChoices, VOX_PARAM_CHOICE, 6, 0.0f, 5.0f,   \
+    0.0f, 1.0f),                                                                              \
+  U(key ".transient_attack", label " Attack", "", label, NULL, VOX_PARAM_FLOAT, 0, -1.0f, 1.0f, \
+    0.0f, 0.0f),                                                                              \
+  U(key ".transient_sustain", label " Sustain", "", label, NULL, VOX_PARAM_FLOAT, 0, -1.0f,     \
+    1.0f, 0.0f, 0.0f),                                                                        \
+  U(key ".output", label " Output", "", label, outputChoices, VOX_PARAM_CHOICE, 8, 0.0f, 7.0f,   \
+    0.0f, 1.0f)
+
 static const char *const modeChoices[] = {"Host MIDI", "Internal", "Both"};
 static const char *const patternNames[PATTERN_COUNT] = {
     "Full-on Basic", "Full-on Driving", "Rolling Offbeat", "Breakdown", "Kick & Offbeat"};
@@ -108,7 +159,8 @@ static const char *const patternNames[PATTERN_COUNT] = {
    VOX_PARAM_CHOICE, n, 0.0f, (float)((n) - 1), def, 1.0f, pool, EXPOSED}
 #define LANE(id, name, pool) P(id, name, "", "Sequencer", VOX_PARAM_BOOLEAN, 0.0f, 1.0f, 1.0f, 1.0f, pool)
 
-/* Descriptor index == poolIndex. Never reorder; only append. */
+/* Never reorder; only append. Host parameters 0..98 have descriptor index ==
+ * pool index; UI-only parameters (no pool) follow them. */
 static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
     PAD("kick", "Kick", 0.85f, 0.08f, 1.5f, 0.38f, 0.0f, "Click", 0.5f, 0),
     PAD("snare", "Snare", 0.6f, 0.05f, 1.0f, 0.25f, 0.0f, "Snappy", 0.6f, 5),
@@ -137,12 +189,23 @@ static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
     LANE("seq.lane.clap", "Lane Clap", 53), LANE("seq.lane.chat", "Lane Closed Hat", 54),
     LANE("seq.lane.ohat", "Lane Open Hat", 55), LANE("seq.lane.tom", "Lane Tom", 56),
     LANE("seq.lane.rim", "Lane Rim", 57), LANE("seq.lane.cymbal", "Lane Cymbal", 58),
+    /* Phase 1: sends, filter, fine (host, pool 59..98). */
+    PAD2("kick", "Kick", 59), PAD2("snare", "Snare", 64), PAD2("clap", "Clap", 69),
+    PAD2("chat", "Closed Hat", 74), PAD2("ohat", "Open Hat", 79), PAD2("tom", "Tom", 84),
+    PAD2("rim", "Rim", 89), PAD2("cymbal", "Cymbal", 94),
+    /* Phase 1: filter type, transient, pad output (UI-only). */
+    PADUI("kick", "Kick"), PADUI("snare", "Snare"), PADUI("clap", "Clap"),
+    PADUI("chat", "Closed Hat"), PADUI("ohat", "Open Hat"), PADUI("tom", "Tom"),
+    PADUI("rim", "Rim"), PADUI("cymbal", "Cymbal"),
 };
 
 static const VoxInstrumentDescriptorV2 instrument = {
     sizeof(VoxInstrumentDescriptorV2), VOX_MODULE_ABI_V2, DRUMS_ID, "Full-on Drums",
-    "Ultima Vox", "Drums", 1, 1, STATE_VERSION, PARAM_COUNT, parameters,
-    sizeof(VoxParameterDescriptorV2), MAX_VOICES, MAX_MIDI_EVENTS, MAX_STATE_BYTES, 0, 0, 2, 0};
+    "Ultima Vox", "Drums", 2, 1, STATE_VERSION, PARAM_COUNT, parameters,
+    sizeof(VoxParameterDescriptorV2), MAX_VOICES, MAX_MIDI_EVENTS, MAX_STATE_BYTES, 0, 0, 2,
+    /* upgradeFromVersion: 1.x projects gain the phase 1 parameters at their
+     * defaults, which keep the 1.x sound. */
+    1, auxBuses, AUX_COUNT, 0, 0, 0};
 
 /* 808-style metallic oscillator ratios (Hz at tune 0). */
 static const double metalHz[6] = {205.3, 304.4, 369.6, 522.7, 540.0, 800.0};
@@ -159,6 +222,13 @@ typedef struct {
   uint32_t noise;
   double lp, hp1, hp2, hpPrev1, hpPrev2, bp1, bp2;
   int fadeTotal, fadeLeft;
+  /* Phase 1, latched at trigger: pad filter (TPT state-variable, 1 or 2
+   * stages), transient shaper, destination bus and sends. */
+  int filter;
+  double fg, fk, fs1[2], fs2[2];
+  double attack, sustain, attackEnv, attackMul, sustainEnv, sustainMul;
+  int bus;            /* 0 main, 1..7 = Out 2..Out 8 */
+  double send1, send2;
 } Voice;
 
 struct VoxInstanceT {
@@ -201,6 +271,12 @@ static void rebuildNoteMap(struct VoxInstanceT *s) {
 
 static float padValue(const struct VoxInstanceT *s, int pad, int key) {
   return s->values[(uint32_t)pad * PAD_PARAMS + (uint32_t)key];
+}
+static float pad2Value(const struct VoxInstanceT *s, int pad, int key) {
+  return s->values[HOST2_BASE + (uint32_t)pad * PAD_HOST2 + (uint32_t)key];
+}
+static float padUi(const struct VoxInstanceT *s, int pad, int key) {
+  return s->values[UI_BASE + (uint32_t)pad * PAD_UI + (uint32_t)key];
 }
 
 /* ---------------------------------------------------------- patterns */
@@ -388,7 +464,24 @@ static void trigger(struct VoxInstanceT *s, int pad, int velocity) {
   const double angle = (padValue(s, pad, K_PAN) + 1.0) * 0.25 * PI;
   v->gainL = level * cos(angle) * 1.41421356237;
   v->gainR = level * sin(angle) * 1.41421356237;
-  const double tune = pow(2.0, padValue(s, pad, K_TUNE) / 12.0);
+  /* Fine is cents: at 0 the tune factor is exactly the 1.x one. */
+  const double tune =
+      pow(2.0, (padValue(s, pad, K_TUNE) + pad2Value(s, pad, K_FINE) / 100.0) / 12.0);
+  v->filter = (int)padUi(s, pad, U_FILTER);
+  if (v->filter != FILTER_OFF) {
+    const double fc = fmin((double)pad2Value(s, pad, K_CUTOFF), 0.45 * sr);
+    v->fg = tan(PI * fc / sr);
+    v->fk = 2.0 - 1.96 * pad2Value(s, pad, K_RESONANCE); /* Q 0.5 .. 25 */
+  }
+  v->attack = padUi(s, pad, U_ATTACK);
+  v->sustain = padUi(s, pad, U_SUSTAIN);
+  v->attackEnv = 1.0;
+  v->attackMul = exp(-1.0 / (0.010 * sr)); /* attack window ~10 ms */
+  v->sustainEnv = 1.0;
+  v->sustainMul = exp(-1.0 / (0.030 * sr));
+  v->bus = (int)padUi(s, pad, U_OUTPUT);
+  v->send1 = pad2Value(s, pad, K_SEND1);
+  v->send2 = pad2Value(s, pad, K_SEND2);
   const double decay = padValue(s, pad, K_DECAY);
   v->character = padValue(s, pad, K_CHARACTER);
   v->env = 1.0;
@@ -445,6 +538,43 @@ static double bandPass(double x, double *ic1, double *ic2, double fc, double k, 
   *ic1 = 2.0 * v1 - *ic1;
   *ic2 = 2.0 * v2 - *ic2;
   return v1;
+}
+
+/* Phase 1 per-pad shaping after the pad's own source: transient (attack
+ * boost/cut over ~10 ms, sustain over the body), then the pad filter. At the
+ * defaults (filter Off, transient 0) the sample is returned unchanged. */
+static double shape(Voice *v, double x) {
+  if (v->attack != 0.0 || v->sustain != 0.0) {
+    const double gain = 1.0 + v->attack * v->attackEnv + v->sustain * (1.0 - v->sustainEnv);
+    v->attackEnv *= v->attackMul;
+    v->sustainEnv *= v->sustainMul;
+    x *= gain > 0.0 ? gain : 0.0;
+  }
+  if (v->filter == FILTER_OFF)
+    return x;
+  const int stages = v->filter == FILTER_LP24 || v->filter == FILTER_HP24 ? 2 : 1;
+  const double g = v->fg, k = v->fk;
+  const double a1 = 1.0 / (1.0 + g * (g + k));
+  for (int st = 0; st < stages; ++st) {
+    const double v1 = a1 * v->fs1[st] + g * a1 * (x - v->fs2[st]);
+    const double v2 = v->fs2[st] + g * v1;
+    v->fs1[st] = 2.0 * v1 - v->fs1[st];
+    v->fs2[st] = 2.0 * v2 - v->fs2[st];
+    switch (v->filter) {
+    case FILTER_LP12:
+    case FILTER_LP24:
+      x = v2;
+      break;
+    case FILTER_HP12:
+    case FILTER_HP24:
+      x = x - k * v1 - v2;
+      break;
+    default:
+      x = v1;
+      break;
+    }
+  }
+  return x;
 }
 
 static double metal(Voice *v, double scale) {
@@ -813,6 +943,16 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   reportHits(c, seq, seqCount, s->padNote, routedIgnored);
   float *left = c->outputs[0];
   float *right = c->outputChannelCount > 1 ? c->outputs[1] : NULL;
+  /* V2.3 aux buses, used only when the host gives every one of ours. A host
+   * without them gets each pad's dry signal on main and no sends. */
+  float *const *aux = NULL;
+  if (c->structSize >= offsetof(VoxProcessContextV2, reserved1) + sizeof(c->reserved1) &&
+      c->auxOutputs != NULL && c->auxBusCount == AUX_COUNT) {
+    aux = c->auxOutputs;
+    for (uint32_t k = 0; k < AUX_COUNT * c->outputChannelCount; ++k)
+      if (aux[k] == NULL)
+        return VOX_E_INVALID_ARG;
+  }
   for (uint32_t i = 0; i < c->numSamples; ++i) {
     while (nextChange < c->paramChangeCount) {
       VoxParamChangeV2 p;
@@ -845,18 +985,33 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       if (hits[fireOrder[k]] > 0)
         trigger(s, fireOrder[k], hits[fireOrder[k]]);
     double l = 0.0, r = 0.0;
+    double busL[AUX_COUNT] = {0}, busR[AUX_COUNT] = {0};
     for (int k = 0; k < MAX_VOICES; ++k) {
       Voice *v = &s->voices[k];
       if (!v->active)
         continue;
-      double x = renderVoice(v);
+      double x = shape(v, renderVoice(v));
       if (v->fadeTotal > 0) {
         x *= (double)v->fadeLeft / (double)v->fadeTotal;
         if (--v->fadeLeft <= 0)
           v->active = 0;
       }
-      l += x * v->gainL;
-      r += x * v->gainR;
+      const double xl = x * v->gainL, xr = x * v->gainR;
+      /* One dry destination per pad (main or its output bus); sends are
+       * post level/pan and independent of it. */
+      if (aux != NULL && v->bus > 0) {
+        busL[AUX_SENDS + (uint32_t)v->bus - 1u] += xl;
+        busR[AUX_SENDS + (uint32_t)v->bus - 1u] += xr;
+      } else {
+        l += xl;
+        r += xr;
+      }
+      if (aux != NULL) {
+        busL[0] += xl * v->send1;
+        busR[0] += xr * v->send1;
+        busL[1] += xl * v->send2;
+        busR[1] += xr * v->send2;
+      }
     }
     if (right != NULL) {
       left[i] = (float)l;
@@ -864,6 +1019,15 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
     } else {
       left[i] = (float)(0.5 * (l + r));
     }
+    if (aux != NULL)
+      for (uint32_t b = 0; b < AUX_COUNT; ++b) {
+        if (right != NULL) {
+          aux[b * 2u][i] = (float)busL[b];
+          aux[b * 2u + 1u][i] = (float)busR[b];
+        } else {
+          aux[b][i] = (float)(0.5 * (busL[b] + busR[b]));
+        }
+      }
   }
   if (c->releaseFlags & VOX_RELEASE_ALL_SOUND_AT_END)
     stopAll(s);
@@ -907,13 +1071,17 @@ static VoxResult VOX_CALL loadState(VoxInstance s, uint32_t version, const uint8
                                     uint32_t size) {
   if (s == NULL || (bytes == NULL && size > 0))
     return VOX_E_INVALID_ARG;
-  if (version != STATE_VERSION)
+  /* Version 3 (1.x, 59 parameters) upgrades: the phase 1 parameters take
+   * their defaults, which keep the 1.x sound. */
+  if (version != STATE_VERSION && version != V1_STATE_VERSION)
     return VOX_E_STATE_VERSION;
-  const uint32_t count = PARAM_COUNT;
+  const uint32_t count = version == V1_STATE_VERSION ? V1_PARAM_COUNT : PARAM_COUNT;
   if (size != STATE_BYTES_FOR(count) || get32(bytes) != STATE_MAGIC ||
       get32(bytes + 4) != count || get32(bytes + 8) != PAD_COUNT)
     return VOX_E_STATE_CORRUPT;
   float next[PARAM_COUNT];
+  for (uint32_t i = 0; i < PARAM_COUNT; ++i)
+    next[i] = parameters[i].defaultValue;
   for (uint32_t i = 0; i < count; ++i) {
     const uint32_t bits = get32(bytes + 12 + 4 * i);
     memcpy(&next[i], &bits, 4);

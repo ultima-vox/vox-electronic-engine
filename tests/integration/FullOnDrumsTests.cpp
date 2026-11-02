@@ -4,6 +4,7 @@
 // acceptance (see the Cubase guide).
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "RackAudioParameters.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
 #include "instrument/vins/VinsPackage.h"
@@ -16,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -240,6 +242,238 @@ double maxDifference(const Stereo &a, const Stereo &b) {
   return d;
 }
 
+// Kit parity (Drums DSP phase 1): every pad, the full groove plus toms, rims
+// and cymbals, rendered at default settings. Its loudness per 1024-sample
+// block was recorded from the kit before phase 1 (tests/fixtures/drums/
+// kit-parity-v1.txt). New DSP at its default values must not change the
+// sound. Compared with a tolerance of 1e-6 so libm differences between
+// platforms do not matter, while any audible change does.
+std::vector<double> parityProfile(Rig &r) {
+  auto hits = groove(r.rate);
+  const double sixteenth = 60.0 / 145.0 / 4.0 * r.rate;
+  for (int step = 0; step < 16; ++step) {
+    const int at = static_cast<int>(std::lround(step * sixteenth));
+    if (step % 8 == 6)
+      hits.push_back({at, tom, 100});
+    if (step % 4 == 3)
+      hits.push_back({at, rim, 80});
+    if (step == 0)
+      hits.push_back({at, cymbal, 96});
+  }
+  const int length = static_cast<int>(r.rate * 60.0 / 145.0 * 4) + 48000;
+  const auto mix = renderHits(r, length, hits);
+  std::vector<double> profile;
+  for (std::size_t start = 0; start + 1024 <= mix.l.size(); start += 1024) {
+    double l = 0, rr = 0;
+    for (std::size_t i = start; i < start + 1024; ++i) {
+      l += static_cast<double>(mix.l[i]) * mix.l[i];
+      rr += static_cast<double>(mix.r[i]) * mix.r[i];
+    }
+    profile.push_back(std::sqrt(l / 1024));
+    profile.push_back(std::sqrt(rr / 1024));
+  }
+  return profile;
+}
+
+// A project saved with Drums 1.x (59 parameters, module state version 3)
+// opens in phase 1: the saved values stay, the new parameters take their
+// defaults, and the kit sounds as before. The 1.x project is derived from a
+// current one by removing exactly what phase 1 added.
+void upgradesVersion1Projects() {
+  auto r = makeRig(instrumentsDir);
+  setPlain(r, padParam(snare, level), 0.31f);
+  juce::MemoryBlock saved;
+  r.p->getStateInformation(saved);
+  auto xml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+  check(xml != nullptr, "project XML");
+  auto tree = juce::ValueTree::fromXml(*xml);
+  auto slot = tree.getChildWithName("RACK").getChild(static_cast<int>(r.slot));
+  check(slot.getProperty("instrumentId").toString() == juce::String(drumsId), "drum slot found");
+  check(static_cast<int>(slot.getProperty("instrumentVersion")) == 2 &&
+            static_cast<int>(slot.getProperty("instrumentStateVersion")) == 4,
+        "a phase 1 project saves version 2 / state 4");
+  slot.setProperty("instrumentVersion", 1, nullptr);
+  slot.setProperty("instrumentStateVersion", 3, nullptr);
+  int removed = 0;
+  for (int i = slot.getNumChildren(); --i >= 0;) {
+    const auto id = slot.getChild(i).getProperty("id").toString();
+    for (const char *suffix : {".send1", ".send2", ".cutoff", ".resonance", ".fine", ".filter",
+                               ".transient_attack", ".transient_sustain", ".output"})
+      if (id.endsWith(suffix)) {
+        slot.removeChild(i, nullptr);
+        ++removed;
+        break;
+      }
+  }
+  check(removed == 72, "the 72 phase 1 parameters removed (" + std::to_string(removed) + ")");
+  // A direct instrument's values live in the slot's parameters; the module
+  // payload stays empty unless a sound preset was applied (the module's own
+  // version 3 upgrade is checked in moduleRejectsInvalidState).
+  juce::MemoryBlock payload;
+  check(payload.fromBase64Encoding(slot.getProperty("modulePayload").toString()) &&
+            payload.getSize() == 0,
+        "a project without a sound preset has no module payload");
+  juce::MemoryBlock old;
+  juce::AudioProcessor::copyXmlToBinary(*tree.createXml(), old);
+
+  Rig opened;
+  opened.slot = r.slot;
+  opened.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                       installed(instrumentsDir));
+  quietBuiltIns(*opened.p);
+  opened.p->prepareToPlay(opened.rate, opened.block);
+  opened.p->setStateInformation(old.getData(), static_cast<int>(old.getSize()));
+  const auto &state = opened.p->instrumentRack().state()[r.slot];
+  check(state.instrumentId == drumsId && state.instrumentVersion == 2 &&
+            opened.p->instrumentRack().diagnostics()[r.slot].lastError.empty() &&
+            opened.p->instrumentRack().diagnostics()[r.slot].active,
+        "a 1.x project opens and upgrades to version 2");
+  opened.channel = channelOf(*opened.p, r.slot);
+  check(std::abs(plainOf(opened, padParam(snare, level)) - 0.31f) < 1e-6f,
+        "the saved 1.x value is kept");
+  setPlain(opened, padParam(snare, level), 0.6f); // the default, as in the parity fixture
+  setPlain(r, padParam(snare, level), 0.6f);
+  const auto a = parityProfile(opened), b = parityProfile(r);
+  double worst = 0;
+  for (std::size_t i = 0; i < a.size() && i < b.size(); ++i)
+    worst = std::max(worst, std::abs(a[i] - b[i]));
+  check(a.size() == b.size() && worst == 0.0,
+        "the upgraded 1.x project sounds like a fresh phase 1 kit at defaults");
+}
+
+// ------------------------------------------- DSP phase 1 (per-pad shaping)
+constexpr int pad2(int pad, int key) { return 59 + pad * 5 + key; } // send1 send2 cutoff res fine
+enum Pad2 { send1, send2, cutoff, resonance, fine };
+
+void setUi(Rig &r, int pad, const char *key, float value) {
+  static const char *const padKeys[padCount] = {"kick", "snare", "clap", "chat",
+                                                "ohat", "tom",   "rim",  "cymbal"};
+  juce::String why;
+  check(r.p->setSlotParameter(r.slot, std::string(padKeys[pad]) + "." + key, value, why),
+        std::string("UI-only ") + padKeys[pad] + "." + key + ": " + why.toStdString());
+}
+
+void setRaw(Rig &r, const std::string &id, float plain) {
+  auto *parameter = r.p->parameters().getParameter(id);
+  check(parameter != nullptr, "parameter " + id);
+  parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+}
+
+void phase1Shaping() {
+  auto r = makeRig(instrumentsDir);
+  const int length = 24000;
+  // Fine: +100 cents is exactly +1 semitone of Tune.
+  setPlain(r, padParam(kick, tune), 1.0f);
+  const auto semitone = renderHits(r, length, {{0, kick}});
+  setPlain(r, padParam(kick, tune), 0.0f);
+  setPlain(r, pad2(kick, fine), 100.0f);
+  check(renderHits(r, length, {{0, kick}}) == semitone, "Fine +100 ct equals Tune +1 st");
+  setPlain(r, pad2(kick, fine), 0.0f);
+
+  // Filter: Off by default; each type shapes the pad, 24 dB more than 12 dB.
+  const auto hat = renderHits(r, length, {{0, closedHat}});
+  setPlain(r, pad2(closedHat, cutoff), 300.0f);
+  check(renderHits(r, length, {{0, closedHat}}) == hat, "a cutoff alone changes nothing (Off)");
+  setUi(r, closedHat, "filter", 1.0f); // LP 12
+  const auto lp12 = renderHits(r, length, {{0, closedHat}});
+  setUi(r, closedHat, "filter", 2.0f); // LP 24
+  const auto lp24 = renderHits(r, length, {{0, closedHat}});
+  check(lp12.finite() && lp24.finite() && lp12.energy() < 0.1 * hat.energy() &&
+            lp24.energy() < 0.5 * lp12.energy(),
+        "LP 12 at 300 Hz cuts the hat by >10 dB, LP 24 cuts more");
+  setUi(r, closedHat, "filter", 0.0f);
+  const auto kickDry = renderHits(r, length, {{0, kick}});
+  setPlain(r, pad2(kick, cutoff), 3000.0f);
+  setUi(r, kick, "filter", 4.0f); // HP 24
+  const auto kickHp = renderHits(r, length, {{0, kick}});
+  check(kickHp.finite() && kickHp.energy() < 0.05 * kickDry.energy(),
+        "HP 24 at 3 kHz removes the kick body");
+  setUi(r, kick, "filter", 5.0f); // BP
+  const auto kickBp = renderHits(r, length, {{0, kick}});
+  setPlain(r, pad2(kick, resonance), 1.0f);
+  const auto kickBpRes = renderHits(r, length, {{0, kick}});
+  check(kickBp.finite() && kickBpRes.finite() && kickBp.energy() < kickDry.energy() &&
+            kickBpRes.peak() > kickBp.peak(),
+        "BP passes a band; resonance raises its peak");
+  setUi(r, kick, "filter", 0.0f);
+  setPlain(r, pad2(kick, resonance), 0.0f);
+  setPlain(r, pad2(kick, cutoff), 20000.0f);
+
+  // Transient: attack shapes the first ~10 ms, sustain the body.
+  const auto snareDry = renderHits(r, length, {{0, snare}});
+  const int early = 480, late = 4800;
+  setUi(r, snare, "transient_attack", 1.0f);
+  const auto punchy = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "transient_attack", -1.0f);
+  const auto soft = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "transient_attack", 0.0f);
+  check(punchy.energy(0, early) > 1.5 * snareDry.energy(0, early) &&
+            soft.energy(0, early) < 0.5 * snareDry.energy(0, early),
+        "attack boosts or cuts the first 10 ms");
+  setUi(r, snare, "transient_sustain", -1.0f);
+  const auto tight = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "transient_sustain", 0.0f);
+  check(tight.energy(late, length) < 0.2 * snareDry.energy(late, length) &&
+            std::abs(tight.energy(0, 48) - snareDry.energy(0, 48)) < 0.2 * snareDry.energy(0, 48),
+        "sustain -1 removes the body and keeps the hit");
+  check(renderHits(r, length, {{0, snare}}) == snareDry, "back at defaults the pad is unchanged");
+}
+
+// Contract B1 through the kit: a pad on Out 2 is folded once into the slot
+// (bit-equal to Main); a pad send feeds only its Rack return, exactly like a
+// pre-fader slot send of that pad alone.
+void phase1BusesAndSends() {
+  auto r = makeRig(instrumentsDir);
+  const int length = 24000;
+  const auto main = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "output", 1.0f); // Out 2
+  check(renderHits(r, length, {{0, snare}}) == main, "a pad on Out 2 sounds once, as on Main");
+  setUi(r, snare, "output", 0.0f);
+  // Only the snare plays, so its send equals the slot's own pre-fader send.
+  setRaw(r, host::returnParameterId(0, "type"), 1.0f);
+  setPlain(r, pad2(snare, send1), 1.0f);
+  const auto viaPad = renderHits(r, length, {{0, snare}});
+  setPlain(r, pad2(snare, send1), 0.0f);
+  setRaw(r, host::sendParameterId(r.slot, 0, "level"), 1.0f);
+  setRaw(r, host::sendParameterId(r.slot, 0, "pre"), 1.0f);
+  const auto viaSlot = renderHits(r, length, {{0, snare}});
+  setRaw(r, host::sendParameterId(r.slot, 0, "level"), 0.0f);
+  check(viaPad != main && viaPad.finite(), "a pad send reaches Rack return 1");
+  check(maxDifference(viaPad, viaSlot) < 1e-6,
+        "the pad send equals a pre-fader slot send of that pad alone (max " +
+            std::to_string(maxDifference(viaPad, viaSlot)) + ")");
+  setPlain(r, pad2(kick, send2), 1.0f);
+  const auto kickSend2 = renderHits(r, length, {{0, snare}});
+  setPlain(r, pad2(kick, send2), 0.0f);
+  check(kickSend2 == main, "another pad's send does nothing while that pad is silent");
+}
+
+void kitParity() {
+  auto r = makeRig(instrumentsDir);
+  const auto profile = parityProfile(r);
+  const fs::path golden = fs::path(PROJECT_SOURCE_DIR) / "tests/fixtures/drums/kit-parity-v1.txt";
+  if (const char *write = std::getenv("VOX_WRITE_DRUMS_PARITY"); write != nullptr) {
+    fs::create_directories(golden.parent_path());
+    std::ofstream out(golden);
+    out.precision(12);
+    for (const double v : profile)
+      out << v << '\n';
+    std::cout << "wrote " << golden.string() << '\n';
+    return;
+  }
+  std::ifstream in(golden);
+  std::vector<double> expected;
+  for (double v; in >> v;)
+    expected.push_back(v);
+  check(expected.size() == profile.size() && !expected.empty(),
+        "kit parity fixture matches the render length");
+  double worst = 0;
+  for (std::size_t i = 0; i < profile.size(); ++i)
+    worst = std::max(worst, std::abs(profile[i] - expected[i]) / (1e-6 + std::abs(expected[i])));
+  check(worst < 1e-6, "default kit sounds as before phase 1 (worst relative " +
+                          std::to_string(worst) + ")");
+}
+
 // ------------------------------------------------------------------ tests
 void loadsFromTheInstrumentsFolder() {
   auto p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
@@ -253,13 +487,27 @@ void loadsFromTheInstrumentsFolder() {
       kit = d;
   check(kit != nullptr, "Full-on Drums offered in the slot catalog");
   const auto trusted = instrument::vins::pinnedPublisherKeys();
-  check(!trusted.empty() && kit->publisherId == trusted.front().id && kit->upgradeFromVersion == 0,
-        "the kit carries its signed package identity and declares no upgrade");
+  // Phase 1 appended parameters: version 2 upgrades 1.x projects (checked
+  // end to end in upgradesVersion1Projects).
+  check(!trusted.empty() && kit->publisherId == trusted.front().id &&
+            kit->instrumentVersion == 2 && kit->upgradeFromVersion == 1,
+        "the kit carries its signed package identity and upgrades 1.x projects");
+  std::size_t hosted = 0, uiOnly = 0;
+  for (const auto &parameter : kit->parameters)
+    (instrument::hostparams::uiOnly(parameter) ? uiOnly : hosted) += 1;
   check(kit->providerId == native::providerId && kit->directParameters &&
-            kit->parameters.size() == 59,
-        "59 typed host-exposed parameters; the pattern is content, not parameters");
-  for (std::size_t i = 0; i < kit->parameters.size(); ++i)
-    check(kit->parameters[i].poolIndex == static_cast<int>(i), "explicit stable pool index");
+            kit->parameters.size() == 131 && hosted == 99 && uiOnly == 32,
+        "99 host parameters (pool 0..98) and 32 UI-only ones; the pattern is content, not "
+        "parameters");
+  for (std::size_t i = 0; i < 99; ++i)
+    check(kit->parameters[i].poolIndex == static_cast<std::int16_t>(i),
+          "host parameter " + std::to_string(i) + " keeps its pool index");
+  check(kit->auxBuses.size() == 9 && kit->auxBuses[0].kind == instrument::AuxBusKind::send &&
+            kit->auxBuses[1].target == 2 && kit->auxBuses[8].target == 8,
+        "the kit declares Send 1/2 and Out 2..8 aux buses");
+  for (std::size_t i = 99; i < kit->parameters.size(); ++i)
+    check(kit->parameters[i].poolIndex == -1 && !kit->parameters[i].automatable,
+          "UI-only parameter " + kit->parameters[i].id + " has no endpoint");
   check(kit->parameters[padParam(kick, level)].id == "kick.level" &&
             kit->parameters[padParam(cymbal, character)].id == "cymbal.character" &&
             kit->parameters[hatChoke].id == "kit.hat_choke" &&
@@ -498,7 +746,7 @@ void projectsRestore() {
   second.channel = channelOf(*second.p, 5);
   check(second.p->instrumentRack().state()[5].instrumentId == drumsId, "slot identity restored");
   check(second.channel == first.channel, "MIDI channel restored");
-  for (int i = 0; i < 59; ++i)
+  for (int i = 0; i < 99; ++i)
     check(plainOf(second, i) == plainOf(first, i), "endpoint " + std::to_string(i) + " restored");
   const auto hits = groove(48000.0);
   const auto a = renderHits(first, 40000, hits);
@@ -561,34 +809,61 @@ void moduleRejectsInvalidState() {
                                  VOX_SLOT_INDEX_NONE, 0};
   VoxInstance s = nullptr;
   check(t.create(drumsId, &params, &s) == VOX_OK, "create");
-  std::uint8_t state[512];
+  std::uint8_t state[1024];
   std::uint32_t written = 0, version = 0;
-  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 3 &&
-            written == 12 + 59 * 4 + 16,
-        "state v3 holds parameters, note map and choke groups (no pattern)");
-  const std::uint32_t notesAt = 12 + 59 * 4;
+  constexpr std::uint32_t count = 131;
+  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 4 &&
+            written == 12 + count * 4 + 16,
+        "state v4 holds 131 parameters, note map and choke groups (no pattern)");
+  const std::uint32_t notesAt = 12 + count * 4;
   check(state[notesAt] == 36 && state[notesAt + 3] == 42 && state[notesAt + 8 + 3] == 1 &&
             state[notesAt + 8 + 4] == 1,
         "default note map and hat choke group are saved");
   auto corrupt = [&](std::uint32_t at, std::uint8_t value) {
-    std::uint8_t copy[512];
+    std::uint8_t copy[1024];
     std::memcpy(copy, state, written);
     copy[at] = value;
-    return t.loadState(s, 3, copy, written);
+    return t.loadState(s, 4, copy, written);
   };
   check(corrupt(notesAt + 1, 36) == VOX_E_STATE_CORRUPT, "duplicate pad note rejected");
   check(corrupt(notesAt + 2, 200) == VOX_E_STATE_CORRUPT, "invalid MIDI note rejected");
   check(corrupt(notesAt + 8, 9) == VOX_E_STATE_CORRUPT, "invalid choke group rejected");
   check(corrupt(0, 0) == VOX_E_STATE_CORRUPT, "bad magic rejected");
-  check(t.loadState(s, 4, state, written) == VOX_E_STATE_VERSION, "future version rejected");
+  check(t.loadState(s, 5, state, written) == VOX_E_STATE_VERSION, "future version rejected");
   check(t.loadState(s, 2, state, written) == VOX_E_STATE_VERSION,
-        "only the current state version loads (no pre-release migration)");
-  check(t.loadState(s, 3, state, written) == VOX_OK, "valid state loads");
-  float values[59];
-  for (int i = 0; i < 59; ++i)
-    values[i] = 0.5f;
-  check(t.setAllParameters(s, values, 59) == VOX_E_INVALID_ARG,
+        "pre-release state versions do not load");
+  check(t.loadState(s, 3, state, written) == VOX_E_STATE_CORRUPT,
+        "a v4 body under version 3 is rejected");
+  check(t.loadState(s, 4, state, written) == VOX_OK, "valid state loads");
+
+  // Version 3 (1.x: 59 parameters) upgrades; phase 1 parameters take their
+  // defaults and the saved ones stay.
+  std::vector<std::uint8_t> v3(state, state + 12 + 59 * 4);
+  v3[4] = 59;
+  const float snareLevel = 0.123f;
+  std::memcpy(v3.data() + 12 + 5 * 4, &snareLevel, 4); // snare.level (index 5)
+  v3.insert(v3.end(), state + notesAt, state + notesAt + 16);
+  check(t.loadState(s, 3, v3.data(), static_cast<std::uint32_t>(v3.size())) == VOX_OK,
+        "a 1.x state (version 3) loads");
+  std::uint8_t upgraded[1024];
+  check(t.saveState(s, upgraded, sizeof(upgraded), &written, &version) == VOX_OK &&
+            version == 4 && written == 12 + count * 4 + 16,
+        "and saves as version 4");
+  float snare = 0, kickCutoff = 0, cymbalFine = 1;
+  std::memcpy(&snare, upgraded + 12 + 5 * 4, 4);
+  std::memcpy(&kickCutoff, upgraded + 12 + (59 + 2) * 4, 4);
+  std::memcpy(&cymbalFine, upgraded + 12 + (59 + 7 * 5 + 4) * 4, 4);
+  check(snare == snareLevel && kickCutoff == 20000.0f && cymbalFine == 0.0f,
+        "the upgrade keeps 1.x values and defaults the phase 1 parameters");
+  v3[4] = 60;
+  check(t.loadState(s, 3, v3.data(), static_cast<std::uint32_t>(v3.size())) ==
+            VOX_E_STATE_CORRUPT,
+        "a version 3 state with another parameter count is rejected");
+  std::vector<float> values(count, 0.5f);
+  check(t.setAllParameters(s, values.data(), count) == VOX_E_INVALID_ARG,
         "out-of-range snapshot rejected as a whole");
+  check(t.setAllParameters(s, values.data(), 59) == VOX_E_INVALID_ARG,
+        "a 1.x-sized snapshot is rejected");
   check(t.destroy(s) == VOX_OK, "destroy");
 }
 
@@ -597,6 +872,12 @@ void noAllocationWhilePlaying() {
   juce::AudioBuffer<float> audio(2, r.block);
   juce::MidiBuffer midi;
   midi.ensureSize(4096);
+  // Phase 1 shaping and buses active on some pads.
+  setUi(r, closedHat, "filter", 2.0f);
+  setUi(r, snare, "transient_attack", 0.5f);
+  setUi(r, tom, "output", 3.0f);
+  setPlain(r, pad2(clap, send1), 0.7f);
+  setPlain(r, pad2(kick, send2), 0.3f);
   renderHits(r, 2048, {{0, kick}}); // warm up
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
   voxProbeBegin();
@@ -1250,7 +1531,8 @@ juce::MouseEvent mouse(juce::Component &target, juce::Point<int> at, bool shift 
 }
 
 // The kit's declarative SOUND layout (#82): shipped in the signed package,
-// rendered on the SOUND page as exactly the kit's 59 real controls.
+// rendered on the SOUND page as exactly the kit's 131 real controls (99 on
+// host endpoints, 32 UI-only).
 juce::Component *findShown(juce::Component &root, const juce::String &name) {
   for (auto *child : root.getChildren()) {
     if (!child->isVisible())
@@ -1285,8 +1567,8 @@ void editorSoundLayout() {
     controls += section.controls.size();
   check(layout.sections.size() == 10 && layout.sections.front().title == "KICK" &&
             layout.sections.back().title == "SEQUENCER" && controls == descriptor->parameters.size() &&
-            controls == 59,
-        "ten sections hold all 59 kit parameters");
+            controls == 131,
+        "ten sections hold all 131 kit parameters");
   juce::String demoDiagnostic;
   check(r.p->loadSlotInstrument(4, "com.ultimavox.demo-synth", demoDiagnostic),
         "Demo Synth loads next to the kit: " + demoDiagnostic.toStdString());
@@ -1320,7 +1602,13 @@ void editorSoundLayout() {
     for (const auto &control : section.controls) {
       const auto parameter = std::find_if(descriptor->parameters.begin(), descriptor->parameters.end(),
                                           [&](const auto &p) { return p.id == control.parameter; });
-      const auto id = instrument::hostparams::poolId(r.slot, static_cast<std::size_t>(parameter->poolIndex));
+      // A UI-only control (no endpoint) is named slotNN.ui.<id>.
+      const bool uiOnly = instrument::hostparams::uiOnly(*parameter);
+      char uiName[96];
+      std::snprintf(uiName, sizeof(uiName), "slot%02zu.ui.%s", r.slot + 1, control.parameter.c_str());
+      const auto id = uiOnly ? std::string(uiName)
+                             : instrument::hostparams::poolId(
+                                   r.slot, static_cast<std::size_t>(parameter->poolIndex));
       auto *component = findShown(*editor, id);
       const bool typed =
           component != nullptr &&
@@ -1333,7 +1621,7 @@ void editorSoundLayout() {
       check(component->getBounds().getCentreY() >= lastY, control.parameter + " follows the layout order");
       lastY = component->getBounds().getCentreY();
       // A knob shows its value as the host does, never a blank box.
-      if (auto *slider = dynamic_cast<juce::Slider *>(component)) {
+      if (auto *slider = dynamic_cast<juce::Slider *>(component); slider != nullptr && !uiOnly) {
         const auto *endpoint = r.p->parameters().getParameter(id);
         const auto shown = slider->getTextFromValue(slider->getValue());
         check(shown.isNotEmpty() && shown == endpoint->getText(endpoint->getValue(), 128),
@@ -1724,6 +2012,10 @@ int main(int argc, char **argv) {
   juce::ScopedJuceInitialiser_GUI gui;
   loadsFromTheInstrumentsFolder();
   grooveAndStems();
+  kitParity();
+  upgradesVersion1Projects();
+  phase1Shaping();
+  phase1BusesAndSends();
   sampleOffsetsAndSimultaneousHits();
   chokeAndRelease();
   midiOverflowFailsClosed();
