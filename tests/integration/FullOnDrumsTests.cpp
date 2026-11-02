@@ -745,6 +745,71 @@ void sampleVoicesInTheKit() {
             std::to_string(maxDifference(sum, mix)) + ")");
 }
 
+// C2 loader <-> Full-on Drums: a WAV assigned through the processor's loader
+// plays on a pad set to Sample, survives save and reopen bit for bit, and a
+// missing file leaves the pad on its synthesis with a slot diagnostic.
+void loaderAssignsKitSamples() {
+  const auto dir = cacheRoot.parent_path() / "kit-samples";
+  fs::create_directories(dir);
+  const auto wav = dir / "snare.wav";
+  {
+    fs::remove(wav);
+    juce::File file(wav.string());
+    juce::WavAudioFormat format;
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        format.createWriterFor(new juce::FileOutputStream(file), 48000.0, 1, 24, {}, 0));
+    check(writer != nullptr, "test WAV writer");
+    juce::AudioBuffer<float> audio(1, 3000);
+    for (int i = 0; i < 3000; ++i)
+      audio.setSample(0, i, 0.4f * std::sin(0.05f * static_cast<float>(i)));
+    check(writer->writeFromAudioSampleBuffer(audio, 0, 3000), "test WAV written");
+  }
+  auto r = makeRig(instrumentsDir);
+  const auto synthOnly = renderHits(r, 8000, {{0, snare}});
+  setUi(r, snare, "source", 1.0f);
+  juce::String why;
+  check(r.p->assignSampleFile(r.slot, snare, juce::File(wav.string()), why),
+        "the loader takes the kit sample: " + why.toStdString());
+  r.p->sampleLoaderForTesting().waitIdle();
+  const auto &refs = r.p->instrumentRack().state()[r.slot].sampleRefs;
+  check(refs.size() == 1 && refs[0].sampleSlot == static_cast<std::uint32_t>(snare) &&
+            r.p->instrumentRack().diagnostics()[r.slot].sampleError.empty(),
+        "the snare's sample slot holds the file reference");
+  const auto played = renderHits(r, 8000, {{0, snare}});
+  check(played != synthOnly && lastSound(played) == 2999 && played.finite(),
+        "the loaded WAV plays on the pad (3000 frames)");
+  juce::MemoryBlock state;
+  r.p->getStateInformation(state);
+
+  Rig reopened;
+  reopened.slot = r.slot;
+  reopened.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                         installed(instrumentsDir));
+  quietBuiltIns(*reopened.p);
+  reopened.p->prepareToPlay(reopened.rate, reopened.block);
+  reopened.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  reopened.p->sampleLoaderForTesting().waitIdle();
+  reopened.channel = channelOf(*reopened.p, r.slot);
+  check(renderHits(reopened, 8000, {{0, snare}}) == played,
+        "the reopened project loads the kit sample again, bit for bit");
+
+  fs::remove(wav);
+  Rig missing;
+  missing.slot = r.slot;
+  missing.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(),
+                                                        installed(instrumentsDir));
+  quietBuiltIns(*missing.p);
+  missing.p->prepareToPlay(missing.rate, missing.block);
+  missing.p->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  missing.p->sampleLoaderForTesting().waitIdle();
+  missing.channel = channelOf(*missing.p, r.slot);
+  check(renderHits(missing, 8000, {{0, snare}}) == synthOnly &&
+            !missing.p->instrumentRack().diagnostics()[r.slot].sampleError.empty() &&
+            missing.p->instrumentRack().state()[r.slot].sampleRefs.size() == 1,
+        "a missing kit sample: the pad keeps its synthesis, the slot says why, the reference "
+        "stays");
+}
+
 void kitParity() {
   auto r = makeRig(instrumentsDir);
   const auto profile = parityProfile(r);
@@ -2334,6 +2399,7 @@ int main(int argc, char **argv) {
   sampleReverseInterpolation();
   sampleLifetimeInTheKit();
   sampleVoicesInTheKit();
+  loaderAssignsKitSamples();
   sampleOffsetsAndSimultaneousHits();
   chokeAndRelease();
   midiOverflowFailsClosed();
