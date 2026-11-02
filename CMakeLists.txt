@@ -96,10 +96,11 @@ add_test(NAME vins_production_gate_accepts_release_public_key
 
 # Contract C2: host sample decoding (WAV) and loading, off the audio thread.
 add_library(vst_samples STATIC
-  libs/instrument/samples/SampleDecoder.cpp libs/instrument/samples/SampleDecoder.h)
+  libs/instrument/samples/SampleDecoder.cpp libs/instrument/samples/SampleDecoder.h
+  libs/instrument/samples/SampleLoader.cpp libs/instrument/samples/SampleLoader.h)
 target_include_directories(vst_samples PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_samples
-  PUBLIC vst_instrument juce::juce_audio_formats juce::juce_cryptography)
+  PUBLIC vst_instrument vst_rack juce::juce_audio_formats juce::juce_cryptography)
 target_compile_definitions(vst_samples PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 
 add_executable(sample_decoder_tests tests/samples/SampleDecoderTests.cpp)
@@ -604,6 +605,15 @@ if(VOX_NATIVE_PLATFORM AND NOT VOX_PRODUCTION_BUILD)
     OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone.vins
     ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
     INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module)
+  # The tone with two factory samples (contract C2).
+  vox_add_vins(vins_test_tone_samples KIND native
+    OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestToneSamples.vins
+    ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
+    INSTRUMENTS test.abi.v2.tone MODULE_TARGET vox_abi_v2_test_module
+    SAMPLES test.abi.v2.tone click samples/click.wav
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/samples/click.wav
+            test.abi.v2.tone click-2 samples/sub/click-2.wav
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/samples/click.wav)
   vox_add_vins(vins_test_tone_untrusted KIND native
     OUTPUT ${VOX_TEST_VINS_DIR}/AbiTestTone-untrusted.vins
     ID test.abi.v2.tone VERSION 1.0.0 NAME "ABI Test Tone" VENDOR "Vox tests"
@@ -623,7 +633,9 @@ if(VOX_NATIVE_PLATFORM AND NOT VOX_PRODUCTION_BUILD)
   target_include_directories(vins_package_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
       ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
   target_link_libraries(vins_package_tests PRIVATE VstEngine vst_vins)
-  add_dependencies(vins_package_tests vins_test_tone vins_test_tone_untrusted
+  target_compile_definitions(vins_package_tests PRIVATE
+    PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  add_dependencies(vins_package_tests vins_test_tone vins_test_tone_untrusted vins_test_tone_samples
     vins_demo_synth vins_demo_synth_graph)
   add_test(NAME vins_package_tests
     COMMAND vins_package_tests ${VOX_TEST_VINS_DIR} ${VOX_INSTRUMENTS_DIR}

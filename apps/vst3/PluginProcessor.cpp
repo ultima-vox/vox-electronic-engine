@@ -162,6 +162,24 @@ VstEngineAudioProcessor::VstEngineAudioProcessor(
         patternRuntime->audioSequences[slot]);
   }
 
+  sampleLoader = std::make_unique<vstengine::instrument::samples::SampleLoader>(
+      rack, vstengine::instrument::samples::SampleLoader::Options{},
+      [this](std::size_t slot, const std::string &name)
+          -> std::optional<vstengine::instrument::samples::SampleLoader::FactoryFile> {
+        // Registry descriptors live for the process; the Rack publishes the
+        // slot's pointer atomically.
+        if (const auto *descriptor = rack.descriptor(slot))
+          for (const auto &sample : descriptor->factorySamples)
+            if (sample.name == name)
+              return vstengine::instrument::samples::SampleLoader::FactoryFile{
+                  std::filesystem::path(std::u8string(
+                      reinterpret_cast<const char8_t *>(sample.path.c_str()))),
+                  sample.sha256};
+        return std::nullopt;
+      });
+  sampleCollector = std::make_unique<SampleCollector>(rack);
+  sampleCollector->startTimer(100);
+
   presetManager_ = std::make_unique<vstengine::PresetManager>(
       vstengine::PresetManager::SceneCallbacks{
           [this] { return captureProjectState(); },
@@ -172,6 +190,53 @@ VstEngineAudioProcessor::VstEngineAudioProcessor(
 
 VstEngineAudioProcessor::~VstEngineAudioProcessor() {
   keyboard.removeListener(this);
+  // Stop sample work before anything it uses goes away.
+  if (sampleCollector)
+    sampleCollector->stopTimer();
+  sampleLoader.reset();
+}
+
+bool VstEngineAudioProcessor::assignSampleFile(std::size_t slot, std::uint32_t sampleSlot,
+                                               const juce::File &wav,
+                                               juce::String &diagnostic) {
+  if (!wav.isAbsolutePath(wav.getFullPathName())) {
+    diagnostic = "sample path must be absolute";
+    return false;
+  }
+  vstengine::rack::PersistentSlotState::SampleRef ref;
+  ref.sampleSlot = sampleSlot;
+  ref.source = vstengine::rack::PersistentSlotState::SampleRef::Source::file;
+  ref.location = wav.getFullPathName().toStdString();
+  std::string why;
+  const bool queued =
+      sampleLoader->enqueue({slot, rack.instanceGeneration(slot), std::move(ref)}, why);
+  diagnostic = juce::String(why);
+  return queued;
+}
+
+bool VstEngineAudioProcessor::assignFactorySample(std::size_t slot, std::uint32_t sampleSlot,
+                                                  const std::string &name,
+                                                  juce::String &diagnostic) {
+  vstengine::rack::PersistentSlotState::SampleRef ref;
+  ref.sampleSlot = sampleSlot;
+  ref.source = vstengine::rack::PersistentSlotState::SampleRef::Source::factory;
+  ref.location = name;
+  std::string why;
+  const bool queued =
+      sampleLoader->enqueue({slot, rack.instanceGeneration(slot), std::move(ref)}, why);
+  diagnostic = juce::String(why);
+  return queued;
+}
+
+bool VstEngineAudioProcessor::clearSample(std::size_t slot, std::uint32_t sampleSlot,
+                                          juce::String &diagnostic) {
+  vstengine::rack::PersistentSlotState::SampleRef ref;
+  ref.sampleSlot = sampleSlot;
+  std::string why;
+  const bool queued = sampleLoader->enqueue(
+      {slot, rack.instanceGeneration(slot), std::move(ref), true}, why);
+  diagnostic = juce::String(why);
+  return queued;
 }
 void VstEngineAudioProcessor::handleNoteOn(juce::MidiKeyboardState *,
                                            int channel, int note,
@@ -939,6 +1004,9 @@ bool VstEngineAudioProcessor::applySelectedSoundPreset(
     std::string detail;
     const bool accepted = rack.applySoundPreset(index, presetId, nullptr, detail);
     if (accepted) {
+      // The preset rebuilt the instance: its samples must be assigned again.
+      std::string why;
+      (void)sampleLoader->enqueueSaved(why, index);
       syncDirectParametersFromRack(index);
       updateReportedLatencyAndTails();
       const auto &values = rack.state()[index].macros;
@@ -1507,6 +1575,13 @@ bool VstEngineAudioProcessor::restoreProjectState(const juce::ValueTree &tree) {
     publishPartSequenceForAudio(static_cast<int>(slot));
   for (auto &scheduler : patternRuntime->schedulers)
     scheduler.reset(currentSampleRate);
+  // Samples are saved by reference: load them again for the new instances.
+  // A missing or changed file shows in the slot's diagnostics; the project
+  // still opens and the pads keep their synthesis source.
+  if (sampleLoader) {
+    std::string why;
+    (void)sampleLoader->enqueueSaved(why);
+  }
   return true;
 }
 

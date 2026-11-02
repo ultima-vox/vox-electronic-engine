@@ -40,6 +40,10 @@ public:
     // slot stays unresolved (missing module, other publisher, ...); empty
     // when its instrument resolved.
     std::string lastError;
+    // Contract C2: why the last sample load of this slot failed (missing or
+    // changed file, decode error, budget); empty after a successful load.
+    // The pad then keeps its synthesis source; the project still opens.
+    std::string sampleError;
   };
   [[nodiscard]] std::array<SlotDiagnostics, instrument::maxSlots> diagnostics() const;
   explicit Rack(instrument::InstrumentRegistry &);
@@ -109,6 +113,30 @@ public:
   bool setSlotSample(std::size_t slotIndex, std::uint32_t sampleSlot,
                      std::unique_ptr<instrument::SampleBuffer> buffer,
                      std::string &diagnostic);
+  // Controller threads: changes whenever the slot's instrument instance is
+  // replaced (project restore, instrument load, sound preset). A sample load
+  // carries the generation it was requested for and is dropped if it moved.
+  [[nodiscard]] std::uint64_t instanceGeneration(std::size_t slotIndex) const;
+  struct SampleLoadRequest {
+    std::size_t slot{};
+    std::uint64_t generation{};
+    PersistentSlotState::SampleRef ref;
+  };
+  // Controller threads: the saved references of every slot whose instance
+  // has sample slots, to (re)load after its instance was replaced.
+  [[nodiscard]] std::vector<SampleLoadRequest> sampleLoadRequests() const;
+  // Controller threads (the sample loader worker included): publishes
+  // `buffer` into sample slot `sampleSlot` only while the slot still holds
+  // instance generation `generation`, and records `ref` in the slot state
+  // (null buffer: clears the sample slot and its reference). Clears the
+  // slot's sample error on success.
+  bool assignSlotSample(std::size_t slotIndex, std::uint64_t generation,
+                        std::uint32_t sampleSlot,
+                        std::unique_ptr<instrument::SampleBuffer> buffer,
+                        const PersistentSlotState::SampleRef *ref, std::string &diagnostic);
+  // Controller threads: records why a sample load failed, if the slot still
+  // holds instance generation `generation`.
+  void setSampleError(std::size_t slotIndex, std::uint64_t generation, std::string error);
   // Controller thread: releases every sample buffer the instances' reports
   // allow. Call periodically (and before publishing); returns the count.
   std::size_t collectSamples();
@@ -208,6 +236,8 @@ private:
     std::array<SlotCounters, instrument::maxSlots> counters_{};
     // Controller thread, under persistentStateMutex_.
     std::array<std::string, instrument::maxSlots> lastError_{};
+    std::array<std::string, instrument::maxSlots> sampleError_{};
+    std::array<std::uint64_t, instrument::maxSlots> instanceGeneration_{};
     // Large bounded processing state is constructed once off audio. Keeping it
     // out of Rack's inline footprint leaves room on a host's 1 MiB thread
     // stack.

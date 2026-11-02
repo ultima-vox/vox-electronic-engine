@@ -6,7 +6,8 @@
 //   vox_vins_pack manifest <manifest.json> key=value... member=<name>=<file>...
 //     keys: id, version, name, vendor, kind (graph|native), instrument
 //     (repeatable), graph (member), module (<platform>=<member>), publisher
-//     (key id; native only), ui (<instrument>=<layout member>, repeatable)
+//     (key id; native only), ui (<instrument>=<layout member>, repeatable),
+//     sample (<instrument>=<name>=<.wav member>, repeatable; native only)
 //   vox_vins_pack zip <out.vins> <manifest.json> [sig=<manifest.sig>] member=<name>=<file>...
 //   vox_vins_pack keyid <modulus file from `openssl rsa -modulus -noout`>
 //
@@ -76,7 +77,7 @@ std::vector<std::pair<std::string, std::string>> memberArgs(int argc, char **arg
 
 int manifest(int argc, char **argv) {
   std::map<std::string, std::string> keys;
-  std::vector<std::string> instruments, modules, ui;
+  std::vector<std::string> instruments, modules, ui, samples;
   for (int i = 3; i < argc; ++i) {
     const std::string a = argv[i];
     const auto eq = a.find('=');
@@ -89,6 +90,8 @@ int manifest(int argc, char **argv) {
       modules.push_back(v);
     else if (k == "ui")
       ui.push_back(v);
+    else if (k == "sample")
+      samples.push_back(v);
     else
       keys[k] = v;
   }
@@ -130,6 +133,28 @@ int manifest(int argc, char **argv) {
         throw std::runtime_error("ui needs <instrument>=<member>: " + ui[i]);
       j += (i ? ", " : "") + jsonString(ui[i].substr(0, eq)) + ": " +
            jsonString(ui[i].substr(eq + 1));
+    }
+    j += "},\n";
+  }
+  if (!samples.empty()) {
+    // instrument -> name -> member, grouped by instrument.
+    std::map<std::string, std::map<std::string, std::string>> grouped;
+    for (const auto &entry : samples) {
+      const auto first = entry.find('=');
+      const auto second = first == std::string::npos ? first : entry.find('=', first + 1);
+      if (second == std::string::npos)
+        throw std::runtime_error("sample needs <instrument>=<name>=<member>: " + entry);
+      grouped[entry.substr(0, first)][entry.substr(first + 1, second - first - 1)] =
+          entry.substr(second + 1);
+    }
+    j += "  \"samples\": {";
+    std::size_t g = 0;
+    for (const auto &[instrument, named] : grouped) {
+      j += std::string(g++ ? ", " : "") + jsonString(instrument) + ": {";
+      std::size_t n = 0;
+      for (const auto &[name, member] : named)
+        j += std::string(n++ ? ", " : "") + jsonString(name) + ": " + jsonString(member);
+      j += "}";
     }
     j += "},\n";
   }

@@ -37,6 +37,14 @@ if(DEFINED UI AND NOT UI STREQUAL "")
   endforeach()
 endif()
 
+set(sample_args "")
+if(DEFINED SAMPLES AND NOT SAMPLES STREQUAL "")
+  string(REPLACE "|" ";" sample_list "${SAMPLES}")
+  foreach(entry IN LISTS sample_list)
+    list(APPEND sample_args "sample=${entry}")
+  endforeach()
+endif()
+
 set(kind_args "")
 if(KIND STREQUAL "graph")
   list(APPEND kind_args "graph=${GRAPH_MEMBER}")
@@ -54,7 +62,7 @@ endif()
 
 execute_process(COMMAND "${TOOL}" manifest "${staging}/manifest.json"
     "id=${ID}" "version=${VERSION}" "name=${NAME}" "vendor=${VENDOR}" "kind=${KIND}"
-    ${instrument_args} ${kind_args} ${ui_args} ${member_args}
+    ${instrument_args} ${kind_args} ${ui_args} ${sample_args} ${member_args}
   RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)
   message(FATAL_ERROR "MakeVins: writing the manifest failed")

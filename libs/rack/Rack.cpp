@@ -473,6 +473,8 @@ bool Rack::replaceState(
   beginExclusive();
   state_ = std::move(replacement);
   processing_->runtime = std::move(preparedRuntime);
+  for (auto &generation : instanceGeneration_)
+    ++generation;
   for (std::size_t i = 0; i < processing_->runtime.size(); ++i)
     publishUiValues(i);
   runtimeState_ = preparedState;
@@ -490,6 +492,7 @@ bool Rack::replaceState(
     counters.clear();
   endExclusive();
   lastError_ = std::move(slotErrors);
+  sampleError_ = {};
   return true;
 } catch (...) {
   diagnostic = "rack state preparation failed";
@@ -509,6 +512,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     replacement.patternSchemaVersion = VOX_PATTERN_SCHEMA_V1;
     replacement.patternPayload.clear();
     replacement.modulationPayload.clear();
+    replacement.sampleRefs.clear(); // samples belong to the previous instrument
     replacement.resolvedProviderId.clear();
     replacement.publisherId.clear();
     replacement.instrumentVersion = 0;
@@ -567,6 +571,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
     state_[index] = std::move(replacement);
     processing_->runtime[index] = std::move(prepared);
+    ++instanceGeneration_[index];
     publishUiValues(index);
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
@@ -574,6 +579,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     counters_[index].clear();
     endExclusive();
     lastError_[index] = std::move(why); // empty when the instrument resolved
+    sampleError_[index].clear();
     return true;
 }
 
@@ -666,6 +672,7 @@ bool Rack::applySoundPreset(std::size_t index, std::string_view presetId,
     processing_->router.forgetSlot(replacement.slotId);
     state_[index] = std::move(replacement);
     processing_->runtime[index] = std::move(prepared);
+    ++instanceGeneration_[index];
     publishUiValues(index);
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
@@ -1013,6 +1020,69 @@ bool Rack::setSlotSample(std::size_t index, std::uint32_t sampleSlot,
   return host->publish(sampleSlot, std::move(buffer), diagnostic);
 }
 
+bool Rack::assignSlotSample(std::size_t index, std::uint64_t generation,
+                            std::uint32_t sampleSlot,
+                            std::unique_ptr<instrument::SampleBuffer> buffer,
+                            const PersistentSlotState::SampleRef *ref,
+                            std::string &diagnostic) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  if (index >= state_.size() || instanceGeneration_[index] != generation) {
+    diagnostic = "slot instrument changed before the sample was assigned";
+    return false;
+  }
+  auto *host = processing_->runtime[index].instance
+                   ? processing_->runtime[index].instance->samples()
+                   : nullptr;
+  if (host == nullptr) {
+    diagnostic = "slot instrument has no sample slots";
+    return false;
+  }
+  if ((buffer == nullptr) != (ref == nullptr) ||
+      (ref != nullptr && ref->sampleSlot != sampleSlot)) {
+    diagnostic = "sample buffer and reference disagree";
+    return false;
+  }
+  if (!host->publish(sampleSlot, std::move(buffer), diagnostic))
+    return false;
+  auto &refs = state_[index].sampleRefs;
+  const auto at = std::find_if(refs.begin(), refs.end(),
+                               [&](const auto &r) { return r.sampleSlot >= sampleSlot; });
+  if (at != refs.end() && at->sampleSlot == sampleSlot) {
+    if (ref != nullptr)
+      *at = *ref;
+    else
+      refs.erase(at);
+  } else if (ref != nullptr) {
+    refs.insert(at, *ref);
+  }
+  sampleError_[index].clear();
+  return true;
+}
+
+void Rack::setSampleError(std::size_t index, std::uint64_t generation, std::string error) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  if (index < state_.size() && instanceGeneration_[index] == generation)
+    sampleError_[index] = std::move(error);
+}
+
+std::uint64_t Rack::instanceGeneration(std::size_t index) const {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  return index < instanceGeneration_.size() ? instanceGeneration_[index] : 0;
+}
+
+std::vector<Rack::SampleLoadRequest> Rack::sampleLoadRequests() const {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  std::vector<SampleLoadRequest> requests;
+  for (std::size_t i = 0; i < state_.size(); ++i) {
+    const auto &instance = processing_->runtime[i].instance;
+    if (!instance || instance->samples() == nullptr)
+      continue;
+    for (const auto &ref : state_[i].sampleRefs)
+      requests.push_back({i, instanceGeneration_[i], ref});
+  }
+  return requests;
+}
+
 std::size_t Rack::collectSamples() {
   const std::scoped_lock persistentLock(persistentStateMutex_);
   std::size_t released = 0;
@@ -1323,6 +1393,7 @@ std::array<Rack::SlotDiagnostics, instrument::maxSlots> Rack::diagnostics() cons
         d.noteOutputOverflowBlocks =
             counters_[i].noteOutputOverflowBlocks.load(std::memory_order_relaxed);
         d.lastError = lastError_[i];
+        d.sampleError = sampleError_[i];
     }
     return out;
 }

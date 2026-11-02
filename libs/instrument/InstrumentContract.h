@@ -153,6 +153,14 @@ struct InstrumentDescriptor {
     std::vector<AuxBus> auxBuses;
     // Sample slots (ABI V2.4) the instrument reads host-decoded buffers from.
     std::uint32_t sampleSlotCount {};
+    // Factory samples shipped in the instrument's signed .vins (contract C2):
+    // name, UTF-8 absolute path of the verified cached member, its SHA-256.
+    struct FactorySample {
+        std::string name;
+        std::string path;
+        std::string sha256;
+    };
+    std::vector<FactorySample> factorySamples;
 };
 
 struct ParameterValue {

@@ -656,6 +656,88 @@ void rackCatalogue() {
 }
 } // namespace
 
+// Contract C2: factory samples in a signed native package. The manifest maps
+// instrument -> sample name -> listed .wav member; after loading, the
+// descriptor names each verified cached member with its SHA-256.
+void factorySamples() {
+  const auto package = readFile(testVins / "AbiTestToneSamples.vins");
+  auto fixture = members(package);
+  const auto good = find(fixture, "manifest.json")->data;
+  vins::Manifest m;
+  std::string why;
+  check(vins::parseManifest(good, m, why) &&
+            m.samples["test.abi.v2.tone"]["click"] == "samples/click.wav" &&
+            m.samples["test.abi.v2.tone"]["click-2"] == "samples/sub/click-2.wav",
+        "the samples section parses: " + why);
+  const std::string base(good.begin(), good.end());
+  auto rejects = [&](const std::string &from, const std::string &to, const std::string &reason) {
+    auto t = base;
+    const auto at = t.find(from);
+    check(at != std::string::npos, "manifest anchor " + from);
+    t.replace(at, from.size(), to);
+    vins::Manifest out;
+    std::string w;
+    check(!vins::parseManifest(text(t), out, w) && w.find(reason) != std::string::npos,
+          "manifest rejects " + to + " (" + w + ")");
+  };
+  rejects("\"click\": \"samples/click.wav\"", "\"Click\": \"samples/click.wav\"",
+          "invalid sample");
+  rejects("\"click\": \"samples/click.wav\"", "\"click\": \"samples/none.wav\"",
+          "invalid sample");
+  rejects("\"samples\": {\"test.abi.v2.tone\"", "\"samples\": {\"other.instrument\"",
+          "invalid samples entry");
+  rejects("\"samples\": {\"test.abi.v2.tone\": {", "\"samples\": {\"test.abi.v2.tone\": {\"mod\": \"" +
+              m.modules.begin()->second + "\", ",
+          "invalid sample");
+  {
+    auto graph = members(readFile(instrumentsDir / "VoxDemoSynthGraph.vins"));
+    auto g = find(graph, "manifest.json")->data;
+    std::string t(g.begin(), g.end());
+    t.replace(t.find("\"files\""), 7, "\"samples\": {\"x\": {}}, \"files\"");
+    vins::Manifest out;
+    std::string w;
+    check(!vins::parseManifest(text(t), out, w) && w.find("native") != std::string::npos,
+          "a graph package cannot declare samples (" + w + ")");
+  }
+
+  const auto dir = folderWith("samples", {{"Tone.vins", package}});
+  const auto r = vins::loadFolder(dir, options("cache-samples"));
+  check(r.providers.size() == 1 && r.diagnostics.empty(),
+        "the package with samples loads" + describe(r));
+  const auto descriptors = r.providers.front()->descriptors();
+  check(descriptors.size() == 1 && descriptors.front().factorySamples.size() == 2,
+        "the descriptor lists both factory samples");
+  const auto click = readFile(fs::path(PROJECT_SOURCE_DIR) / "tests/fixtures/samples/click.wav");
+  const auto expected = juce::SHA256(click.data(), click.size()).toHexString().toStdString();
+  for (const auto &sample : descriptors.front().factorySamples) {
+    const fs::path path(std::u8string(reinterpret_cast<const char8_t *>(sample.path.c_str())));
+    check(path.is_absolute() && fs::is_regular_file(path) && readFile(path) == click &&
+              sample.sha256 == expected &&
+              path.lexically_relative(scratch / "cache-samples").native().rfind("..", 0) != 0,
+          "factory sample " + sample.name + " is the verified cached member");
+  }
+
+  // The Rack assigns a factory sample by name through the package.
+  auto rack = std::make_unique<VstEngineAudioProcessor>(
+      modules::createBuiltInProvider(), vins::loadFolder(dir, options("cache-samples")));
+  rack->prepareToPlay(48000.0, 256);
+  juce::String diagnostic;
+  check(rack->loadSlotInstrument(5, "test.abi.v2.tone", diagnostic), "tone loads: " +
+                                                                        diagnostic.toStdString());
+  check(rack->assignFactorySample(5, 1, "click-2", diagnostic), "factory assign queued");
+  rack->sampleLoaderForTesting().waitIdle();
+  const auto &refs = rack->instrumentRack().state()[5].sampleRefs;
+  check(refs.size() == 1 && refs[0].sampleSlot == 1 && refs[0].location == "click-2" &&
+            refs[0].sha256 == expected &&
+            rack->instrumentRack().diagnostics()[5].sampleError.empty(),
+        "a factory sample is assigned by name with the package hash");
+  check(rack->assignFactorySample(5, 0, "no-such-sample", diagnostic), "unknown name queued");
+  rack->sampleLoaderForTesting().waitIdle();
+  check(rack->instrumentRack().diagnostics()[5].sampleError.find("not found") !=
+            std::string::npos,
+        "an unknown factory sample is reported on the slot");
+}
+
 int main(int argc, char **argv) {
   if (argc != 4) {
     std::cerr << "usage: vins_package_tests <test-vins dir> <instruments dir> <scratch dir>\n";
@@ -678,6 +760,7 @@ int main(int argc, char **argv) {
   cacheIsVerifiedAndReused();
   pluginFolderResolution();
   rackCatalogue();
+  factorySamples();
   std::cout << "vins_package_tests: " << checks << " checks passed\n";
   return 0;
 }

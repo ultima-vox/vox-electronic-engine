@@ -58,7 +58,11 @@ struct Manifest {
   std::string publisher;                    // native: publisher key id
   std::map<std::string, std::string> files; // member -> lowercase SHA-256 hex
   std::map<std::string, std::string> ui;    // instrument id -> sound layout member
+  // Native only: instrument id -> (factory sample name -> listed .wav member).
+  std::map<std::string, std::map<std::string, std::string>> samples;
 };
+
+inline constexpr std::size_t maxFactorySamplesPerInstrument = 256;
 
 // Strict schema check of manifest.json bytes. False with a reason.
 [[nodiscard]] bool parseManifest(std::span<const std::uint8_t> bytes, Manifest &out,

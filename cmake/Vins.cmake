@@ -2,14 +2,15 @@
 #   VENDOR <vendor> INSTRUMENTS <id>... KIND graph|native
 #   [GRAPH <member> <file>] [MODULE_TARGET <shared library target>]
 #   [KEY <private pem> MODULUS <modulus file>] [MEMBERS <member>=<file>...]
-#   [UI <instrument> <layout member> <layout file>...])
+#   [UI <instrument> <layout member> <layout file>...]
+#   [SAMPLES <instrument> <name> <.wav member> <wav file>...])
 # Adds an ALL target that builds the package with cmake/MakeVins.cmake.
 # In a release candidate (VOX_PRODUCTION_BUILD) a native package without an
 # explicit test KEY is written unsigned to release-candidates/<name>.unsigned.vins
 # for offline signing instead of OUTPUT.
 function(vox_add_vins target)
   cmake_parse_arguments(V "" "OUTPUT;ID;VERSION;NAME;VENDOR;KIND;MODULE_TARGET;KEY;MODULUS"
-    "INSTRUMENTS;GRAPH;MEMBERS;UI" ${ARGN})
+    "INSTRUMENTS;GRAPH;MEMBERS;UI;SAMPLES" ${ARGN})
   set(members ${V_MEMBERS})
   set(depends vox_vins_pack)
   set(extra "")
@@ -53,6 +54,25 @@ function(vox_add_vins target)
     endforeach()
     list(JOIN ui_pairs "|" ui_text)
     list(APPEND extra "-DUI=${ui_text}")
+  endif()
+  set(sample_entries "")
+  list(LENGTH V_SAMPLES samples_length)
+  if(samples_length GREATER 0)
+    math(EXPR samples_last "${samples_length} - 1")
+    foreach(i RANGE 0 ${samples_last} 4)
+      math(EXPR n "${i} + 1")
+      math(EXPR m "${i} + 2")
+      math(EXPR f "${i} + 3")
+      list(GET V_SAMPLES ${i} sample_instrument)
+      list(GET V_SAMPLES ${n} sample_name)
+      list(GET V_SAMPLES ${m} sample_member)
+      list(GET V_SAMPLES ${f} sample_file)
+      list(APPEND members "${sample_member}=${sample_file}")
+      list(APPEND depends "${sample_file}")
+      list(APPEND sample_entries "${sample_instrument}=${sample_name}=${sample_member}")
+    endforeach()
+    list(JOIN sample_entries "|" sample_text)
+    list(APPEND extra "-DSAMPLES=${sample_text}")
   endif()
   list(JOIN members "|" member_text)
   list(JOIN V_INSTRUMENTS "," instrument_text)
