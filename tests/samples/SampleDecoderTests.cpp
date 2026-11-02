@@ -91,9 +91,9 @@ void rejects() {
   SampleLimits shortLimits;
   shortLimits.maxFrames = 99;
   check(decodeWav(good, {}, shortLimits, out) == DecodeError::badFormat, "too long refused");
-  SampleLimits smallFile;
-  smallFile.maxFileBytes = good.size() - 1;
-  check(decodeWav(good, {}, smallFile, out) == DecodeError::tooLarge, "too large refused");
+  SampleLimits tightFile;
+  tightFile.maxFileBytes = good.size() - 1;
+  check(decodeWav(good, {}, tightFile, out) == DecodeError::tooLarge, "too large refused");
   const auto empty = makeWav(1, 0, 48000.0, 16, [](int, int) { return 0.0f; });
   check(decodeWav(empty, {}, limits, out) == DecodeError::empty, "an empty WAV is refused");
   const auto slow = makeWav(1, 10, 4000.0, 16, [](int, int) { return 0.1f; });
@@ -134,9 +134,9 @@ void files() {
   if (!ec)
     check(decodeWavFile(dir / "link.wav", {}, limits, out) == DecodeError::unreadable,
           "a symlink is refused");
-  SampleLimits small;
-  small.maxFileBytes = 16;
-  check(decodeWavFile(wav, {}, small, out) == DecodeError::tooLarge,
+  SampleLimits tiny;
+  tiny.maxFileBytes = 16;
+  check(decodeWavFile(wav, {}, tiny, out) == DecodeError::tooLarge,
         "a file above the byte limit is refused before reading");
   std::filesystem::remove_all(dir, ec);
 }

@@ -713,7 +713,7 @@ void factorySamples() {
     const fs::path path(std::u8string(reinterpret_cast<const char8_t *>(sample.path.c_str())));
     check(path.is_absolute() && fs::is_regular_file(path) && readFile(path) == click &&
               sample.sha256 == expected &&
-              path.lexically_relative(scratch / "cache-samples").native().rfind("..", 0) != 0,
+              *path.lexically_relative(scratch / "cache-samples").begin() != fs::path(".."),
           "factory sample " + sample.name + " is the verified cached member");
   }
 

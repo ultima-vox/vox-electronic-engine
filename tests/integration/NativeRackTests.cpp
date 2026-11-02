@@ -1974,11 +1974,11 @@ void sampleLoaderGuards() {
   {
     instrument::samples::SampleLoader::Options tight;
     tight.slotBudgetBytes = 4 * blockSize * 4 - 1; // below one 4-block mono sample
-    instrument::samples::SampleLoader small(p->instrumentRack(), tight);
-    check(small.enqueue({slot, p->instrumentRack().instanceGeneration(slot), ref}, why),
+    instrument::samples::SampleLoader tightLoader(p->instrumentRack(), tight);
+    check(tightLoader.enqueue({slot, p->instrumentRack().instanceGeneration(slot), ref}, why),
           "budget request queued");
-    small.waitIdle();
-    check(small.stats().failed == 1 && savedRef(*p, slot, 0) == nullptr &&
+    tightLoader.waitIdle();
+    check(tightLoader.stats().failed == 1 && savedRef(*p, slot, 0) == nullptr &&
               sampleErrorOf(*p, slot).find("budget") != std::string::npos,
           "a sample above the slot's memory budget is refused");
     instrument::samples::SampleLoader::Options none;
