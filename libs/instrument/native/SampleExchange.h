@@ -15,6 +15,7 @@
 
 #include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -42,6 +43,9 @@ public:
   std::size_t collect() override;
   SampleStats stats() const override;
   void setReleaseSinkForTesting(ReleaseSink sink) override;
+  // Tests: called inside publish right after the pending entry was taken, to
+  // force an audio block into that point.
+  void setAfterTakeHookForTesting(std::function<void()> hook);
 
   // Controller, only while no process() can run (after a successful module
   // prepare in the Rack's exclusive section, which ends every voice):
@@ -107,6 +111,7 @@ private:
   std::vector<std::unique_ptr<Entry>> live_;
   std::vector<std::uint64_t> scratch_;
   ReleaseSink sink_;
+  std::function<void()> afterTakeForTesting_;
   SampleStats stats_{};
 };
 

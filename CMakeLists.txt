@@ -103,6 +103,10 @@ target_link_libraries(vst_samples
   PUBLIC vst_instrument vst_rack juce::juce_audio_formats juce::juce_cryptography)
 target_compile_definitions(vst_samples PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 
+add_executable(sample_exchange_tests tests/samples/SampleExchangeTests.cpp)
+target_link_libraries(sample_exchange_tests PRIVATE vst_native)
+add_test(NAME sample_exchange_tests COMMAND sample_exchange_tests)
+
 add_executable(sample_decoder_tests tests/samples/SampleDecoderTests.cpp)
 target_link_libraries(sample_decoder_tests PRIVATE vst_samples)
 target_compile_definitions(sample_decoder_tests PRIVATE JUCE_STANDALONE_APPLICATION=1)
