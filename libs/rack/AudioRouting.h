@@ -9,6 +9,9 @@ namespace vstengine::rack {
 inline constexpr std::size_t sendBusCount = 4;
 inline constexpr std::array<std::uint32_t, sendBusCount> sendBusIds{
     0x56585201, 0x56585202, 0x56585203, 0x56585204};
+// A module's own SEND buses for one slot (ABI V2.3), per Rack return: the
+// channel pointers of the bus that targets that return, or null.
+using ModuleSends = std::array<std::array<const float *, 2>, sendBusCount>;
 struct SendControls {
   float gain{};
   bool preFader{};
@@ -47,9 +50,12 @@ public:
              std::span<const RackRouter::DestinationBuffer>, std::uint32_t samples,
              std::span<const VoxNoteEventV2> generated = {},
              bool routedIgnored = false) noexcept;
+  // `moduleSends`: the slot module's SEND buses. Each goes only into its
+  // return, after the slot's ducking and gated like the slot, never scaled by
+  // the slot level and never into Main.
   void mixSlot(std::size_t, std::span<float *>, std::span<float *>,
                const ProcessSlotControls &, bool audible,
-               std::uint32_t) noexcept;
+               std::uint32_t, const ModuleSends *moduleSends = nullptr) noexcept;
   void finish(std::span<float *>, std::uint32_t) noexcept;
   [[nodiscard]] std::uint32_t tailSamples() const noexcept;
   [[nodiscard]] float gainReduction() const noexcept { return envelope_; }

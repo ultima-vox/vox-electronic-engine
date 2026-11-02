@@ -494,6 +494,7 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
     preset.setName("rack.sound.preset");
     title.setName("rack.instrument.title");
     subtitle.setName("rack.instrument.subtitle");
+    midiIn.setName("rack.instrument.channel");
     const auto state = processor.instrumentRack().snapshotState()[selected];
     const auto descriptors = processor.availableInstruments();
     int descriptorIndex = 0;
@@ -511,13 +512,15 @@ void VstEngineAudioProcessorEditor::InstrumentHeader::bind(std::size_t slot)
 
 void VstEngineAudioProcessorEditor::InstrumentHeader::refresh()
 {
-  const auto state = processor.instrumentRack().snapshotState()[selected];
   const auto *descriptor = processor.instrumentRack().descriptor(selected);
   title.setText(descriptor != nullptr ? descriptor->name : "Empty slot",
                 juce::dontSendNotification);
-  const int channel = state.routing.mode == vstengine::rack::RouteMode::off
-                          ? 0
-                          : state.routing.channel;
+  // The slot parameter is what the Rack routes by (as the slot rail shows);
+  // the persistent snapshot only follows it when the state is saved.
+  const int channel = juce::roundToInt(
+      processor.parameters()
+          .getRawParameterValue(slotId(selected, "MidiIn").c_str())
+          ->load());
   const auto slotText = "Slot " + juce::String(static_cast<int>(selected + 1));
   const auto channelText = channel == 0 ? juce::String("MIDI off")
                                         : "CH" + juce::String(channel);
@@ -688,6 +691,103 @@ void VstEngineAudioProcessorEditor::MacroPage::layoutInstrumentControls()
     }
 }
 
+// A UI-only parameter has no host endpoint: its control writes through the
+// Rack (saved with the slot, applied at the next block, never automated).
+void VstEngineAudioProcessorEditor::MacroPage::addUiOnly(
+    std::size_t slot, const vstengine::instrument::ParameterDescriptor &parameter,
+    const std::string &caption_, const vstengine::rack::PersistentSlotState &bound)
+{
+    float value = parameter.defaultValue;
+    for (const auto &saved : bound.directParameters)
+        if (saved.id == parameter.id)
+            value = saved.value;
+    auto text = juce::String(parameter.name);
+    if (!parameter.unit.empty())
+        text << " (" << juce::String(parameter.unit) << ")";
+    auto label = std::make_unique<juce::Label>();
+    caption(*label, caption_.empty() ? text.toUpperCase() : juce::String(caption_));
+    label->setTooltip(text);
+    const auto set = [this, slot, id = parameter.id](float plain) {
+        juce::String why;
+        processor.setSlotParameter(slot, id, plain, why);
+    };
+    std::unique_ptr<juce::Component> control;
+    switch (parameter.type) {
+    case vstengine::instrument::ParameterType::boolean: {
+        auto button = std::make_unique<juce::ToggleButton>();
+        button->setToggleState(value >= 0.5f, juce::dontSendNotification);
+        button->onClick = [set, b = button.get()] { set(b->getToggleState() ? 1.0f : 0.0f); };
+        control = std::move(button);
+        break;
+    }
+    case vstengine::instrument::ParameterType::choice: {
+        auto combo = std::make_unique<juce::ComboBox>();
+        int itemId = 1;
+        for (const auto &choice : parameter.choices)
+            combo->addItem(juce::String(choice), itemId++);
+        combo->setSelectedId(juce::roundToInt(value) + 1, juce::dontSendNotification);
+        combo->onChange = [set, c = combo.get()] {
+            set(static_cast<float>(c->getSelectedId() - 1));
+        };
+        control = std::move(combo);
+        break;
+    }
+    case vstengine::instrument::ParameterType::floating:
+    case vstengine::instrument::ParameterType::integer:
+    default: {
+        auto slider = std::make_unique<juce::Slider>();
+        knob(*slider);
+        const double step = parameter.type == vstengine::instrument::ParameterType::integer
+                                ? 1.0
+                                : static_cast<double>(parameter.step);
+        slider->setRange(parameter.minimum, parameter.maximum, step);
+        slider->setValue(value, juce::dontSendNotification);
+        slider->onValueChange = [set, s = slider.get()] { set(static_cast<float>(s->getValue())); };
+        control = std::move(slider);
+        break;
+    }
+    }
+    if (auto *tip = dynamic_cast<juce::SettableTooltipClient *>(control.get()))
+        tip->setTooltip(text);
+    control->setName(slotId(slot, ".ui." + parameter.id));
+    uiOnlyControls.push_back({ slot, parameter.id, control.get() });
+    directContent.addAndMakeVisible(*label);
+    directContent.addAndMakeVisible(*control);
+    directLabels.push_back(std::move(label));
+    directControls.push_back(std::move(control));
+}
+
+void VstEngineAudioProcessorEditor::MacroPage::refreshUiOnly(
+    const vstengine::rack::PersistentSlotState &current)
+{
+    // A snapshot of another slot identity (state replaced, slot reloaded)
+    // is not applied; the editor timer rebinds the page instead.
+    if (uiOnlyControls.empty() || current.slotId != uiOnlySlotId ||
+        current.instrumentId != uiOnlyInstrument)
+        return;
+    const auto &saved = current.directParameters;
+    for (const auto &entry : uiOnlyControls) {
+        const auto found = std::find_if(saved.begin(), saved.end(),
+                                        [&](const auto &value) { return value.id == entry.id; });
+        if (found == saved.end())
+            continue;
+        const auto value = found->value;
+        // dontSendNotification: the view follows the model without calling
+        // the setter back (no write, no recursion).
+        if (auto *slider = dynamic_cast<juce::Slider *>(entry.control)) {
+            if (static_cast<float>(slider->getValue()) != value)
+                slider->setValue(value, juce::dontSendNotification);
+        } else if (auto *button = dynamic_cast<juce::ToggleButton *>(entry.control)) {
+            if (button->getToggleState() != (value >= 0.5f))
+                button->setToggleState(value >= 0.5f, juce::dontSendNotification);
+        } else if (auto *combo = dynamic_cast<juce::ComboBox *>(entry.control)) {
+            const int id = juce::roundToInt(value) + 1;
+            if (combo->getSelectedId() != id)
+                combo->setSelectedId(id, juce::dontSendNotification);
+        }
+    }
+}
+
 void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_t slot)
 {
     // Attachments capture the pool parameter's range at construction and the
@@ -695,16 +795,27 @@ void VstEngineAudioProcessorEditor::MacroPage::bindInstrumentControls(std::size_
     directSliderAttachments.clear();
     directButtonAttachments.clear();
     directComboAttachments.clear();
+    uiOnlyControls.clear();
     directControls.clear();
     directLabels.clear();
     directSectionTitles.clear();
     directSectionStarts.clear();
     const auto *descriptor = processor.instrumentRack().descriptor(slot);
+    // One locked copy of the slot: UI-only controls start from it and later
+    // refreshes compare against its identity.
+    const auto bound = processor.instrumentRack().snapshotSlot(slot);
+    uiOnlySlotId = bound.slotId;
+    uiOnlyInstrument = bound.instrumentId;
     auto &state = processor.parameters();
-    // One real control bound to the parameter's pool endpoint; its widget
-    // follows the parameter type (a layout's kind was checked to match it).
+    // One real control bound to the parameter's pool endpoint (or, for a
+    // UI-only parameter, to the Rack); its widget follows the parameter type
+    // (a layout's kind was checked to match it).
     const auto add = [&](const vstengine::instrument::ParameterDescriptor &parameter,
                          const std::string &caption_) {
+        if (vstengine::instrument::hostparams::uiOnly(parameter)) {
+            addUiOnly(slot, parameter, caption_, bound);
+            return;
+        }
         if (parameter.poolIndex < 0 ||
             parameter.poolIndex >= static_cast<std::int16_t>(
                                        vstengine::instrument::poolParametersPerSlot))
@@ -1200,7 +1311,7 @@ void VstEngineAudioProcessorEditor::resized()
 void VstEngineAudioProcessorEditor::bindSelection(std::size_t slot)
 {
     processor.selectSlot(slot);
-    const auto state = processor.instrumentRack().snapshotState()[slot];
+    const auto state = processor.instrumentRack().snapshotSlot(slot);
     boundSlot = slot;
     boundSlotId = state.slotId;
     boundInstrument = state.instrumentId;
@@ -1418,11 +1529,15 @@ void VstEngineAudioProcessorEditor::timerCallback()
 {
   processor.serviceKeyboardUi();
   const auto selected = processor.selectedSlotIndex();
-  const auto state = processor.instrumentRack().snapshotState()[selected];
+  // One locked snapshot of the selected slot per tick (no borrowed Rack
+  // state on the message thread).
+  const auto state = processor.instrumentRack().snapshotSlot(selected);
   if (selected != boundSlot || state.slotId != boundSlotId ||
       state.instrumentId != boundInstrument ||
       processor.instrumentRack().descriptor(selected) != boundDescriptor)
     bindSelection(selected);
+  soundPage.refreshUiOnly(state);
+  macrosPage.refreshUiOnly(state);
   rackRail.refresh();
   instrumentHeader.refresh();
   patternPage.synchronize();

@@ -105,11 +105,26 @@ void canonicalizeResolvedDirect(
         // A resolved slot records the endpoint and meaning of each value.
         value.poolIndex = parameter->poolIndex;
         value.spec = instrument::hostparams::parameterSpecHash(*parameter);
+        value.uiOnly = instrument::hostparams::uiOnly(*parameter);
         if (std::isfinite(value.value) && value.value >= parameter->minimum &&
             value.value <= parameter->maximum)
           value.value =
               instrument::hostparams::canonicalPlain(value.value, *parameter);
       }
+}
+// Buffers for the module's auxiliary buses, bus-major (controller thread; may
+// throw). Moving the storage later keeps every channel pointer valid.
+Rack::AuxStorage auxBuffers(const instrument::InstrumentDescriptor *descriptor,
+                            const instrument::PrepareSpec &spec) {
+  Rack::AuxStorage storage;
+  if (descriptor != nullptr)
+    for (std::size_t b = 0; b < descriptor->auxBuses.size(); ++b)
+      for (std::uint32_t c = 0; c < spec.outputChannels; ++c)
+        storage.buffers.emplace_back(spec.maximumBlockSize, 0.0f);
+  storage.pointers.reserve(storage.buffers.size());
+  for (auto &buffer : storage.buffers)
+    storage.pointers.push_back(buffer.data());
+  return storage;
 }
 } // namespace
 
@@ -154,10 +169,13 @@ bool Rack::prepare(const instrument::PrepareSpec& spec)
         return false;
     const std::scoped_lock persistentLock(persistentStateMutex_);
     std::array<std::array<std::vector<float>, 2>, instrument::maxSlots> audio;
+    std::array<AuxStorage, instrument::maxSlots> aux;
     try {
         for (auto& slot : audio)
             for (std::size_t channel = 0; channel < spec.outputChannels; ++channel)
                 slot[channel].assign(spec.maximumBlockSize, 0.0f);
+        for (std::size_t index = 0; index < aux.size(); ++index)
+          aux[index] = auxBuffers(processing_->runtime[index].descriptor, spec);
     } catch (...) {
         return false; // No live DSP/spec/buffers were touched.
     }
@@ -185,12 +203,30 @@ bool Rack::prepare(const instrument::PrepareSpec& spec)
               channel < spec.outputChannels
                   ? processing_->runtime[index].audio[channel].data()
                   : nullptr;
+        bindAux(processing_->runtime[index], std::move(aux[index]), spec.outputChannels);
       }
         spec_ = spec;
     }
     reset();
     endExclusive();
     return prepared;
+}
+
+void Rack::bindAux(SlotRuntime &slot, AuxStorage storage, std::uint32_t channels) noexcept {
+  slot.aux = std::move(storage.buffers);
+  slot.auxPointers = std::move(storage.pointers);
+  slot.moduleSends = {};
+  slot.hasModuleSends = false;
+  if (slot.descriptor == nullptr || slot.aux.empty())
+    return;
+  for (std::size_t b = 0; b < slot.descriptor->auxBuses.size(); ++b) {
+    const auto &bus = slot.descriptor->auxBuses[b];
+    if (bus.kind != instrument::AuxBusKind::send)
+      continue;
+    for (std::uint32_t c = 0; c < channels && c < 2; ++c)
+      slot.moduleSends[bus.target - 1u][c] = slot.auxPointers[b * channels + c];
+    slot.hasModuleSends = true;
+  }
 }
 
 void Rack::reset() noexcept
@@ -299,7 +335,10 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         // A recorded endpoint must still match: a moved pool index without a
         // version bump would silently remap automation. Unknown (-1) is the
         // documented legacy match-by-ID policy.
-        if (value.poolIndex >= 0 && value.poolIndex != parameter->poolIndex) {
+        if ((value.poolIndex != parameter->poolIndex &&
+             (value.poolIndex >= 0 || value.spec != 0)) ||
+            (value.spec != 0 &&
+             value.uiOnly != instrument::hostparams::uiOnly(*parameter))) {
           diagnostic = "direct parameter pool index changed without a new "
                        "instrument version";
           return false;
@@ -313,7 +352,8 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         target.direct[target.directCount++] = {
             instrument::hostparams::directKey(state.instrumentId, value.id),
             parameter,
-            instrument::hostparams::canonicalPlain(value.value, *parameter)};
+            instrument::hostparams::canonicalPlain(value.value, *parameter),
+            instrument::hostparams::uiOnly(*parameter)};
       }
     } else if (!state.directParameters.empty()) {
       diagnostic = "instrument does not accept direct parameters";
@@ -332,6 +372,8 @@ bool Rack::buildSlot(std::size_t index, const PersistentSlotState& state,
         target.audio[channel].assign(spec_.maximumBlockSize, 0.0f);
         target.pointers[channel] = target.audio[channel].data();
     }
+    if (spec_.sampleRate > 0.0)
+      bindAux(target, auxBuffers(target.descriptor, spec_), spec_.outputChannels);
     for (std::size_t macro = 0; macro < state.macros.size(); ++macro) {
         std::string_view parameterId = state.macroAssignments[macro];
         if (parameterId.empty())
@@ -431,6 +473,8 @@ bool Rack::replaceState(
   beginExclusive();
   state_ = std::move(replacement);
   processing_->runtime = std::move(preparedRuntime);
+  for (std::size_t i = 0; i < processing_->runtime.size(); ++i)
+    publishUiValues(i);
   runtimeState_ = preparedState;
   for (std::size_t i = 0; i < processing_->runtime.size(); ++i)
     publishedDescriptors_[i].store(processing_->runtime[i].descriptor,
@@ -523,6 +567,7 @@ bool Rack::loadModule(std::size_t index, std::string_view instrumentId,
     droppedMidiEvents_[index].store(0, std::memory_order_relaxed);
     state_[index] = std::move(replacement);
     processing_->runtime[index] = std::move(prepared);
+    publishUiValues(index);
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
@@ -621,6 +666,7 @@ bool Rack::applySoundPreset(std::size_t index, std::string_view presetId,
     processing_->router.forgetSlot(replacement.slotId);
     state_[index] = std::move(replacement);
     processing_->runtime[index] = std::move(prepared);
+    publishUiValues(index);
     publishedDescriptors_[index].store(processing_->runtime[index].descriptor,
                                        std::memory_order_release);
     runtimeState_[index] = preparedState;
@@ -744,13 +790,17 @@ bool Rack::renderPatternHits(std::size_t index, const PersistentSlotState &slot,
   const auto view = snapshot->view();
   std::array<std::vector<float>, 2> audio{std::vector<float>(block), std::vector<float>(block)};
   std::array<float *, 2> channels{audio[0].data(), audio[1].data()};
+  // The offline instance gets its declared aux buses too (the notes do not
+  // depend on where it routes audio).
+  auto aux = auxBuffers(render.descriptor, {rate, block, 2});
   const double samplesPerPpq = 60.0 * rate / bpm;
   const auto total = static_cast<std::uint64_t>(std::ceil(lengthPpq * samplesPerPpq));
   for (std::uint64_t start = 0; start < total; start += block) {
     const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(block, total - start));
     const double ppq = static_cast<double>(start) / samplesPerPpq;
     render.instance->process({{channels.data(), channels.size()}, n, {}, rate, bpm, ppq, true,
-                              &view, generation, &render.noteOutput});
+                              &view, generation, &render.noteOutput,
+                              {aux.pointers.data(), aux.pointers.size()}});
     for (std::uint32_t e = 0; e < render.noteOutput.count; ++e) {
       const auto &event = render.noteEvents[e];
       if (event.sampleOffset >= n)
@@ -905,6 +955,50 @@ void Rack::applyModulation(
                                                value.plain);
 }
 
+void Rack::publishUiValues(std::size_t index) noexcept {
+  const auto &runtime = processing_->runtime[index];
+  for (std::size_t binding = 0; binding < runtime.directCount; ++binding)
+    processing_->uiValues[index][binding].store(runtime.direct[binding].base,
+                                                std::memory_order_relaxed);
+}
+
+bool Rack::setUiParameter(std::size_t index, const instrument::ParameterId &id,
+                          float plain, std::string &diagnostic) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  const auto &runtime = index < state_.size() ? processing_->runtime[index]
+                                              : processing_->runtime[0];
+  if (index >= state_.size() || runtime.descriptor == nullptr) {
+    diagnostic = "slot holds no resolved instrument";
+    return false;
+  }
+  for (std::size_t binding = 0; binding < runtime.directCount; ++binding) {
+    const auto &direct = runtime.direct[binding];
+    if (direct.parameter->id != id)
+      continue;
+    if (!direct.uiOnly) {
+      diagnostic = "host parameters change through their host endpoint";
+      return false;
+    }
+    if (!std::isfinite(plain) || plain < direct.parameter->minimum ||
+        plain > direct.parameter->maximum) {
+      diagnostic = "value outside the parameter range";
+      return false;
+    }
+    const auto value = instrument::hostparams::canonicalPlain(plain, *direct.parameter);
+    // The audio thread reads persistent direct values only for modulation
+    // destinations; UI-only parameters are never modulatable, so writing
+    // this one float needs no exclusive section (and no dropped block).
+    for (auto &saved : state_[index].directParameters)
+      if (saved.id == id)
+        saved.value = value;
+    processing_->uiValues[index][binding].store(value, std::memory_order_relaxed);
+    diagnostic.clear();
+    return true;
+  }
+  diagnostic = "unknown parameter for this slot";
+  return false;
+}
+
 void Rack::setMacro(std::size_t slot, std::size_t macro, float value) noexcept
 {
     const std::scoped_lock persistentLock(persistentStateMutex_);
@@ -988,6 +1082,12 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     }
     for (std::size_t binding = 0; binding < slot.directCount; ++binding) {
       const auto &direct = slot.direct[binding];
+      if (direct.uiOnly) {
+        slot.instance->setParameter(
+            direct.parameter->id,
+            processing_->uiValues[i][binding].load(std::memory_order_relaxed));
+        continue;
+      }
       auto value = direct.base;
       for (const auto &change : controls[i].directValues())
         if (change.key == direct.key && std::isfinite(change.value)) {
@@ -1021,7 +1121,18 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             playing,
                             patternSnapshot,
                             patternGeneration,
-                            slot.patterns ? &slot.noteOutput : nullptr});
+                            slot.patterns ? &slot.noteOutput : nullptr,
+                            {slot.auxPointers.data(), slot.auxPointers.size()}});
+    // B1: an OUTPUT bus joins the slot's dry signal once (the Rack has one
+    // host output). SEND buses go to their returns in pass 3, never here.
+    for (std::size_t b = 0; slot.descriptor && b < slot.descriptor->auxBuses.size(); ++b)
+      if (slot.descriptor->auxBuses[b].kind == instrument::AuxBusKind::output)
+        for (std::size_t c = 0; c < outputs.size(); ++c) {
+          const float *aux = slot.auxPointers[b * outputs.size() + c];
+          float *dry = slot.audio[c].data();
+          for (std::uint32_t s = 0; s < sampleCount; ++s)
+            dry[s] += aux[s];
+        }
     if (slot.patterns && slot.noteOutput.dropped != 0 &&
         slot.noteOutput.dropped != instrument::voidedNoteOutput)
       counters_[i].noteOutputOverflowBlocks.fetch_add(1, std::memory_order_relaxed);
@@ -1067,7 +1178,8 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             controls[i],
                             controls[i].enabled && !controls[i].mute &&
                                 (!anySolo || controls[i].solo),
-                            sampleCount);
+                            sampleCount,
+                            slot.hasModuleSends ? &slot.moduleSends : nullptr);
       continue;
     }
     const float left =
@@ -1091,6 +1203,12 @@ const instrument::InstrumentDescriptor* Rack::descriptor(std::size_t index) cons
   return index < publishedDescriptors_.size()
              ? publishedDescriptors_[index].load(std::memory_order_acquire)
              : nullptr;
+}
+
+PersistentSlotState Rack::snapshotSlot(std::size_t index) const
+{
+    const std::scoped_lock persistentLock(persistentStateMutex_);
+    return index < state_.size() ? state_[index] : PersistentSlotState{};
 }
 
 std::array<PersistentSlotState, instrument::maxSlots> Rack::snapshotState(

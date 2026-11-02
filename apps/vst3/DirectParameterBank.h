@@ -89,7 +89,7 @@ public:
   juce::String getText(float normalised, int maximumLength) const override {
     const auto *b = binding();
     if (b == nullptr)
-      return juce::String(normalised, 3).substring(0, maximumLength);
+      return clip(juce::String(normalised, 3), maximumLength);
     const auto &d = *b->descriptor;
     const auto plain = instrument::hostparams::canonicalPlain(
         b->range.convertFrom0to1(normalised), d);
@@ -109,7 +109,7 @@ public:
                             : juce::String(plain, 2);
       break;
     }
-    return text.substring(0, maximumLength);
+    return clip(text, maximumLength);
   }
   float getValueForText(const juce::String &text) const override {
     const auto *b = binding();
@@ -132,6 +132,12 @@ public:
   }
 
 private:
+  // JUCE convention: a length of 0 or less means no limit (editor
+  // attachments ask with 0).
+  static juce::String clip(const juce::String &text, int maximumLength) {
+    return maximumLength > 0 ? text.substring(0, maximumLength) : text;
+  }
+
   std::atomic<float> value_{0.0f};
   std::atomic<const Binding *> binding_{nullptr};
 };
@@ -162,6 +168,8 @@ inline void appendPoolParameters(
   }
 }
 class DirectParameterBank final {
+  // A UI-only parameter has an entry (so state validation sees every saved
+  // value) but no endpoint: parameter and raw stay null.
   struct Entry {
     std::uint64_t key{};
     PoolParameter *parameter{};
@@ -171,7 +179,7 @@ class DirectParameterBank final {
   };
   struct Bank {
     std::string instrumentId;
-    std::array<Entry, instrument::maxDirectParameters> entries{};
+    std::array<Entry, instrument::maxSlotParameters> entries{};
     std::size_t count{};
     // Binding of each pool endpoint; null where the instrument has none.
     std::array<const PoolParameter::Binding *, instrument::poolParametersPerSlot>
@@ -231,6 +239,12 @@ public:
           for (const auto &p : d->parameters) {
             if (bank.count >= bank.entries.size())
               throw std::invalid_argument("direct bank overflow");
+            if (instrument::hostparams::uiOnly(p)) {
+              auto &entry = bank.entries[bank.count++];
+              entry.key = instrument::hostparams::directKey(d->id, p.id);
+              entry.descriptor = &p;
+              continue;
+            }
             const auto index = static_cast<std::size_t>(p.poolIndex);
             if (index >= instrument::poolParametersPerSlot)
               throw std::invalid_argument("direct parameter has no pool index");
@@ -256,7 +270,8 @@ public:
       // Binding addresses are final only once the slot's vector stops growing.
       for (auto &stored : banks_[slot])
         for (std::size_t e = 0; e < stored.count; ++e)
-          stored.byPool[static_cast<std::size_t>(
+          if (stored.entries[e].parameter != nullptr)
+            stored.byPool[static_cast<std::size_t>(
               stored.entries[e].descriptor->poolIndex)] =
               &stored.entries[e].binding;
     }
@@ -271,7 +286,7 @@ public:
       if (bank.instrumentId == state.instrumentId) {
         if (bank.count != state.directParameters.size())
           return false;
-        std::array<std::uint64_t, instrument::maxDirectParameters> keys{};
+        std::array<std::uint64_t, instrument::maxSlotParameters> keys{};
         std::size_t count = 0;
         for (const auto &value : state.directParameters) {
           const auto key =
@@ -306,7 +321,7 @@ public:
         continue;
       if (bank.count != state.directParameters.size())
         return false;
-      std::array<Entry *, instrument::maxDirectParameters> prepared{};
+      std::array<Entry *, instrument::maxSlotParameters> prepared{};
       std::size_t index = 0;
       for (const auto &value : state.directParameters) {
         const auto key =
@@ -330,6 +345,8 @@ public:
       bindPool(slot, &bank);
       for (std::size_t i = 0; i < index; ++i) {
         auto *p = prepared[i]->parameter;
+        if (p == nullptr)
+          continue; // UI-only: the Rack holds its value
         p->setValueNotifyingHost(
             p->convertTo0to1(state.directParameters[i].value));
       }
@@ -357,15 +374,18 @@ public:
     if (active >= banks_[slot].size())
       return;
     const auto &bank = banks_[slot][active];
-    controls.directParameterCount = bank.count;
+    std::size_t hosted = 0;
     for (std::size_t p = 0; p < bank.count; ++p) {
       const auto &e = bank.entries[p];
+      if (e.raw == nullptr)
+        continue; // UI-only
       const auto value = e.raw->load(std::memory_order_relaxed);
-      controls.directParameters[p] = {
+      controls.directParameters[hosted++] = {
           e.key, std::isfinite(value) ? instrument::hostparams::canonicalPlain(
                                             value, *e.descriptor)
                                       : value};
     }
+    controls.directParameterCount = hosted;
   }
 };
 } // namespace vstengine::host

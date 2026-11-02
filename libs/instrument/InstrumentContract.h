@@ -40,6 +40,11 @@ inline constexpr std::size_t macrosPerSlot = 8;
 // replaces the earlier 64 (p001..p064 keep their IDs); no other size exists.
 inline constexpr std::size_t poolParametersPerSlot = 128;
 inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
+// All parameters of one direct instrument: the host ones (at most
+// maxDirectParameters, each on a pool endpoint) plus UI-only ones, which have
+// no endpoint (poolIndex -1), are not automatable and not modulatable. UI-only
+// values are saved with the slot and edited in the editor through the Rack.
+inline constexpr std::size_t maxSlotParameters = 256;
 inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {
@@ -91,12 +96,24 @@ struct ParameterDescriptor {
     bool automatable { true };
     bool modulatable {};
     std::int8_t preferredMacro { -1 };
-    // Host pool endpoint (0..63) of a direct parameter. Required and unique
-    // per instrument; it must stay the same across instrument versions so
-    // recorded automation never moves to another control. Unused (-1) for
-    // instruments without direct parameters.
+    // Host pool endpoint (0..127) of a direct parameter. Unique per
+    // instrument; it must stay the same across instrument versions so
+    // recorded automation never moves to another control. -1 for a UI-only
+    // parameter (not automatable) and for instruments without direct
+    // parameters.
     std::int16_t poolIndex { -1 };
 };
+
+// Auxiliary stereo bus an instrument declares (ABI V2.3): a SEND bus feeds
+// only its Rack return, an OUTPUT bus is the dry signal of the sources routed
+// to that host output (folded into the slot's dry signal while the Rack has
+// one host output).
+enum class AuxBusKind : std::uint8_t { send = 1, output = 2 };
+struct AuxBus {
+    AuxBusKind kind {};
+    std::uint8_t target {}; // SEND: return 1..4; OUTPUT: host output 2..8
+};
+inline constexpr std::size_t maxAuxBuses = 11; // 4 SEND + 7 OUTPUT
 
 struct InstrumentDescriptor {
     InstrumentId id;
@@ -128,6 +145,9 @@ struct InstrumentDescriptor {
     // Declarative SOUND page shipped by the package, validated against this
     // descriptor at load. Null: the host shows its generic control list.
     std::shared_ptr<const SoundLayout> soundLayout;
+    // Auxiliary buses (ABI V2.3), validated at import: each target once, at
+    // most 4 SEND and 7 OUTPUT. Empty for instruments without them.
+    std::vector<AuxBus> auxBuses;
 };
 
 struct ParameterValue {
@@ -206,6 +226,9 @@ struct ProcessBlock {
     std::uint64_t patternGeneration {};
     // Host-owned buffer for notes the instrument generates itself, or null.
     VoxNoteOutputV2* noteOutput {};
+    // The descriptor's auxiliary buses in order, outputs.size() channel
+    // pointers each (bus-major); empty when none. The instance overwrites them.
+    std::span<float*> aux;
 };
 
 // VoxNoteOutputV2.dropped value the host writes when it voids a block's

@@ -170,6 +170,11 @@ public:
     // slot is rejected (no swap/move/layer). Loading an instrument into a slot
     // without a channel takes the next free one.
     bool assignSlotChannel(std::size_t, int channel, juce::String& diagnostic);
+    // Editor: sets a UI-only parameter of the slot's instrument (no host
+    // endpoint, not automatable). Applied at the next block, saved with the
+    // project; never waits for or interrupts the audio thread.
+    bool setSlotParameter(std::size_t, const std::string& parameterId, float plain,
+                          juce::String& diagnostic);
     [[nodiscard]] bool channelAvailable(std::size_t slot, int channel) const noexcept;
     [[nodiscard]] std::span<const vstengine::instrument::ContentDescriptor>
         selectedContent() const noexcept;

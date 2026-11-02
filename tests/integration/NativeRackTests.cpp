@@ -1,17 +1,24 @@
 // M0: the real Rack processor loads the V2 test module from its absolute path,
 // plays it through an existing slot's MIDI/audio routing, automates it through
 // the host pool and restores the same sound after save/reload.
+#include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "RackAudioParameters.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <filesystem>
+#include <atomic>
+#include <functional>
+#include <thread>
 #include <vector>
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -32,6 +39,7 @@ using namespace vstengine;
 constexpr const char *toneId = "test.abi.v2.tone";
 constexpr int blockSize = 128;
 std::string modulePath;
+std::string legacyModulePath; // the frozen ABI V2.2 build of the tone
 int checks = 0;
 
 void check(bool ok, const std::string &message) {
@@ -41,6 +49,20 @@ void check(bool ok, const std::string &message) {
     std::exit(1);
   }
 }
+
+// Buffers for the test tone's 11 auxiliary buses (ABI V2.3), stereo, for
+// tests that call the adapter directly: a declared bus always gets its buffer.
+struct AuxScratch {
+  std::array<std::vector<float>, 22> channels;
+  std::array<float *, 22> pointers{};
+  AuxScratch() {
+    for (std::size_t i = 0; i < channels.size(); ++i) {
+      channels[i].assign(4096, 0.0f);
+      pointers[i] = channels[i].data();
+    }
+  }
+  std::span<float *> view() { return pointers; }
+} auxScratch;
 
 std::unique_ptr<VstEngineAudioProcessor> makeProcessor(bool withModule) {
   auto report = withModule ? instrument::native::loadConfiguredModules(modulePath)
@@ -123,7 +145,7 @@ void registration() {
   bool listed = false;
   for (const auto *d : p->availableInstruments())
     listed |= d->id == toneId && d->providerId == instrument::native::providerId &&
-              d->directParameters && d->parameters.size() == 4;
+              d->directParameters && d->parameters.size() == 7;
   check(listed, "native instrument offered next to built-ins");
 
   auto bad = instrument::native::loadConfiguredModules("relative/module.so;/no/such/module.so");
@@ -179,6 +201,221 @@ void savesAndRestores() {
   const auto b = play(*second, channelOf(*second, slot), 10, 1, 7);
   check(a.energy() > 1.0, "restored comparison is audible");
   check(a.left == b.left, "reloaded project renders the same sound bit for bit");
+}
+
+// UI-only parameters (Electronic Drums phase 1): a descriptor without a host
+// endpoint is imported, edited from the controller thread, applied at the next
+// block boundary, saved with the slot and restored; it never becomes a host
+// parameter and the host cannot automate it.
+float savedValue(VstEngineAudioProcessor &p, std::size_t slot, const char *id) {
+  for (const auto &value : p.instrumentRack().state()[slot].directParameters)
+    if (value.id == id)
+      return value.value;
+  return -1.0f;
+}
+
+void uiOnlyParameters() {
+  auto p = makeProcessor(true);
+  const auto slot = loadTone(*p, 6);
+  const auto *descriptor = p->instrumentRack().descriptor(slot);
+  const auto trim = std::find_if(descriptor->parameters.begin(), descriptor->parameters.end(),
+                                 [](const auto &q) { return q.id == "trim"; });
+  check(trim != descriptor->parameters.end() && trim->poolIndex == -1 && !trim->automatable,
+        "the UI-only parameter is imported without a host endpoint");
+  check(instrument::hostparams::uiOnly(*trim) &&
+            !instrument::hostparams::uiOnly(descriptor->parameters.front()),
+        "uiOnly() tells UI-only from host parameters");
+  auto *spare = p->parameters().getParameter(instrument::hostparams::poolId(slot, 4));
+  check(spare != nullptr && spare->getName(64).contains("Param 05"),
+        "no pool endpoint is bound for the UI-only parameter");
+  check(savedValue(*p, slot, "trim") == 1.0f, "the default is saved with the slot");
+
+  const int channel = channelOf(*p, slot);
+  const auto full = play(*p, channel, 6, 1, -1);
+  juce::String why;
+  check(p->setSlotParameter(slot, "trim", 0.5f, why), "trim is set: " + why.toStdString());
+  const auto half = play(*p, channel, 6, -1, -1);
+  // The held note keeps sounding; from the next block on it is half as loud.
+  const double steady = energy(full, 4, 6);
+  check(steady > 0.0 && std::abs(energy(half, 0, 2) - 0.25 * steady) < 0.05 * steady,
+        "a UI-only change reaches the module at the next block");
+  check(savedValue(*p, slot, "trim") == 0.5f, "the slot state holds the new value");
+
+  check(!p->setSlotParameter(slot, "trim", 1.5f, why), "out of range is rejected");
+  check(!p->setSlotParameter(slot, "gain", 0.2f, why), "host parameters stay host parameters");
+  check(!p->setSlotParameter(slot, "nope", 0.2f, why), "unknown ids are rejected");
+  check(!p->setSlotParameter(2, "trim", 0.2f, why), "a slot without the parameter rejects it");
+  check(savedValue(*p, slot, "trim") == 0.5f, "rejected edits change nothing");
+
+  // The editor offers the UI-only parameter as a control that writes through
+  // the Rack (no host endpoint behind it).
+  {
+    std::unique_ptr<juce::AudioProcessorEditor> base(p->createEditor());
+    auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+    check(editor != nullptr, "editor opens");
+    editor->setSize(1500, 920);
+    p->selectSlot(slot);
+    editor->showPageForTesting(ui::MainNavigation::Page::macros);
+    editor->refreshForTesting();
+    std::function<juce::Component *(juce::Component &, const juce::String &)> find =
+        [&](juce::Component &root, const juce::String &name) -> juce::Component * {
+      for (auto *child : root.getChildren()) {
+        if (child->getName() == name && child->isVisible())
+          return child;
+        if (auto *found = find(*child, name))
+          return found;
+      }
+      return nullptr;
+    };
+    auto *knob = dynamic_cast<juce::Slider *>(find(*editor, "slot07.ui.trim"));
+    check(knob != nullptr && knob->getValue() == 0.5,
+          "the editor shows the UI-only control with its saved value");
+    const auto gainBefore =
+        p->parameters().getRawParameterValue(instrument::hostparams::poolId(slot, 0))->load();
+    knob->setValue(0.25, juce::sendNotificationSync);
+    check(savedValue(*p, slot, "trim") == 0.25f &&
+              p->parameters().getRawParameterValue(instrument::hostparams::poolId(slot, 0))
+                      ->load() == gainBefore,
+          "turning it changes the slot value and no host parameter");
+
+    // Model -> view: a controller-side edit while the editor stays open on
+    // the same slot shows up at the next editor refresh, without the
+    // control writing back (owner review 5729957963).
+    int writes = 0;
+    const auto userTurn = knob->onValueChange;
+    knob->onValueChange = [&] { ++writes; userTurn(); };
+    auto *latch = dynamic_cast<juce::ToggleButton *>(find(*editor, "slot07.ui.latch"));
+    auto *shape = dynamic_cast<juce::ComboBox *>(find(*editor, "slot07.ui.shape"));
+    check(latch != nullptr && !latch->getToggleState() && shape != nullptr &&
+              shape->getSelectedId() == 1,
+          "UI-only toggle and choice controls start at their defaults");
+    const auto userClick = latch->onClick;
+    latch->onClick = [&] { ++writes; userClick(); };
+    const auto userPick = shape->onChange;
+    shape->onChange = [&] { ++writes; userPick(); };
+    check(p->setSlotParameter(slot, "trim", 0.5f, why) &&
+              p->setSlotParameter(slot, "latch", 1.0f, why) &&
+              p->setSlotParameter(slot, "shape", 1.0f, why),
+          "controller-side edits accepted: " + why.toStdString());
+    check(knob->getValue() == 0.25, "the open control has not refreshed yet");
+    editor->refreshForTesting();
+    check(knob->getValue() == 0.5 && latch->getToggleState() && shape->getSelectedId() == 2,
+          "the open editor shows the new slider, toggle and choice values");
+    check(writes == 0 && savedValue(*p, slot, "trim") == 0.5f &&
+              savedValue(*p, slot, "latch") == 1.0f && savedValue(*p, slot, "shape") == 1.0f,
+          "the refresh writes nothing back");
+    check(p->setSlotParameter(slot, "trim", 0.25f, why), "trim to 0.25 from the controller");
+    editor->refreshForTesting();
+    const auto quarter = play(*p, channelOf(*p, slot), 6, 1, -1);
+    check(knob->getValue() == 0.25 && savedValue(*p, slot, "trim") == 0.25f &&
+              std::abs(energy(quarter, 2, 6) - 0.0625 * energy(full, 2, 6)) <
+                  0.05 * 0.0625 * energy(full, 2, 6),
+          "knob, saved value and rendered audio agree on 0.25");
+    // A later user edit wins and is not reverted by the next refresh.
+    knob->setValue(0.5, juce::sendNotificationSync);
+    editor->refreshForTesting();
+    check(writes == 1 && knob->getValue() == 0.5 && savedValue(*p, slot, "trim") == 0.5f,
+          "a user edit after the refresh is kept");
+    check(p->setSlotParameter(slot, "latch", 0.0f, why) &&
+              p->setSlotParameter(slot, "shape", 0.0f, why),
+          "toggle and choice back to their defaults");
+  }
+
+  juce::MemoryBlock state;
+  p->getStateInformation(state);
+  auto reopened = makeProcessor(true);
+  reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  check(savedValue(*reopened, slot, "trim") == 0.5f, "the value survives save and reopen");
+  const auto restored = play(*reopened, channelOf(*reopened, slot), 6, 1, -1);
+  check(energy(restored, 2, 6) > 0.0 &&
+            std::abs(energy(restored, 2, 6) - 0.25 * energy(full, 2, 6)) <
+                0.05 * energy(full, 2, 6),
+        "the reopened slot plays with the saved trim");
+
+  auto without = makeProcessor(false);
+  without->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  juce::MemoryBlock kept;
+  without->getStateInformation(kept);
+  auto back = makeProcessor(true);
+  back->setStateInformation(kept.getData(), static_cast<int>(kept.getSize()));
+  check(savedValue(*back, slot, "trim") == 0.5f,
+        "a missing module keeps the UI-only value for when it is reinstalled");
+}
+
+// Owner review 5730209423: the editor's UI-only refresh must not race a
+// project restore on another thread. A controller thread restores three valid
+// projects (trim 0.3, trim 0.7, the slot empty: unload and reload) over and
+// over, with UI-only edits in between, while the message thread keeps
+// refreshing an open editor. Run under
+// ThreadSanitizer this proves no data race; in every build the final UI must
+// match the final Rack state.
+void uiOnlyConcurrentRestore() {
+  constexpr std::size_t slot = 6;
+  const auto saveWith = [](float trim) {
+    auto source = makeProcessor(true);
+    loadTone(*source, slot);
+    juce::String why;
+    check(source->setSlotParameter(slot, "trim", trim, why), "trim for a saved project");
+    source->selectSlot(slot);
+    juce::MemoryBlock state;
+    source->getStateInformation(state);
+    return state;
+  };
+  const auto low = saveWith(0.3f), high = saveWith(0.7f);
+  juce::MemoryBlock empty;
+  {
+    auto source = makeProcessor(true);
+    source->selectSlot(slot);
+    source->getStateInformation(empty);
+  }
+  auto p = makeProcessor(true);
+  p->setStateInformation(high.getData(), static_cast<int>(high.getSize()));
+  std::unique_ptr<juce::AudioProcessorEditor> base(p->createEditor());
+  auto *editor = dynamic_cast<VstEngineAudioProcessorEditor *>(base.get());
+  check(editor != nullptr, "editor opens");
+  editor->setSize(1500, 920);
+  p->selectSlot(slot);
+  editor->showPageForTesting(ui::MainNavigation::Page::macros);
+  editor->refreshForTesting();
+
+  std::atomic<bool> done{false};
+  std::thread controller([&] {
+    const juce::MemoryBlock *states[] = {&low, &high, &empty};
+    juce::String why;
+    for (int i = 0; i < 300; ++i) {
+      const auto *state = states[i % 3];
+      p->setStateInformation(state->getData(), static_cast<int>(state->getSize()));
+      // Controller-side UI-only edits between restores (rejected while the
+      // slot is empty); each writes the saved value the editor reads.
+      for (int edit = 0; edit < 50; ++edit)
+        (void)p->setSlotParameter(slot, "trim", edit % 2 == 0 ? 0.4f : 0.6f, why);
+    }
+    p->setStateInformation(low.getData(), static_cast<int>(low.getSize()));
+    done.store(true, std::memory_order_release);
+  });
+  int refreshes = 0;
+  while (!done.load(std::memory_order_acquire)) {
+    editor->refreshForTesting();
+    ++refreshes;
+  }
+  controller.join();
+  p->selectSlot(slot);
+  editor->refreshForTesting();
+  std::function<juce::Component *(juce::Component &)> find =
+      [&](juce::Component &root) -> juce::Component * {
+    for (auto *child : root.getChildren()) {
+      if (child->getName() == "slot07.ui.trim" && child->isVisible())
+        return child;
+      if (auto *found = find(*child))
+        return found;
+    }
+    return nullptr;
+  };
+  auto *knob = dynamic_cast<juce::Slider *>(find(*editor));
+  check(refreshes > 0 && knob != nullptr && savedValue(*p, slot, "trim") == 0.3f &&
+            std::abs(knob->getValue() - 0.3) < 1e-6,
+        "after concurrent restores the open editor shows the final Rack value (" +
+            std::to_string(refreshes) + " refreshes)");
 }
 
 void missingModuleIsPreserved() {
@@ -375,6 +612,8 @@ void resetFaultLatches() {
     block.sampleCount = blockSize;
     block.midi = {&on, 1};
     block.sampleRate = 48000.0;
+    block.aux = auxScratch.view();
+  block.aux = auxScratch.view();
     instance->process(block);
     double sum = 0;
     for (const float v : left)
@@ -411,6 +650,8 @@ void faultedModuleIsNotReentered() {
     block.sampleCount = blockSize;
     block.midi = {&on, 1};
     block.sampleRate = 48000.0;
+    block.aux = auxScratch.view();
+  block.aux = auxScratch.view();
     instance->process(block);
     double sum = 0;
     for (const float v : left)
@@ -507,6 +748,7 @@ void patternContentImportedAndDelivered() {
   block.outputs = channels;
   block.sampleCount = blockSize;
   block.sampleRate = 48000.0;
+  block.aux = auxScratch.view();
   block.pattern = &view;
   block.patternGeneration = 7;
   instance->process(block);
@@ -543,6 +785,8 @@ void noteOutputValidated() {
     block.outputs = channels;
     block.sampleCount = blockSize;
     block.sampleRate = 48000.0;
+    block.aux = auxScratch.view();
+  block.aux = auxScratch.view();
     block.noteOutput = &out;
     out.count = 99; // stale value from a previous block
     instance->process(block);
@@ -956,12 +1200,301 @@ void slotDiagnostics() {
   setNoteMode(4, 0);
 }
 
+// Auxiliary buses (ABI V2.3, contract B1). The test tone declares the full
+// topology: SEND 1..4 then OUTPUT 2..8.
+void setAuxMode(std::uint32_t slotIndex, std::uint32_t mode) {
+  reinterpret_cast<void(VOX_CALL *)(std::uint32_t, std::uint32_t)>(
+      testHook("voxTestSetAuxMode"))(slotIndex, mode);
+}
+
+void auxBusDescriptors() {
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(modulePath)), diagnostic);
+  const VoxInstrumentDescriptorV2 *raw = nullptr;
+  check(module != nullptr && module->table().getInstrument(0, &raw) == VOX_OK && raw != nullptr,
+        "raw descriptor available");
+  instrument::InstrumentDescriptor imported;
+  check(instrument::native::importDescriptor(raw, imported, diagnostic) &&
+            imported.auxBuses.size() == 11 &&
+            imported.auxBuses[0].kind == instrument::AuxBusKind::send &&
+            imported.auxBuses[0].target == 1 &&
+            imported.auxBuses[10].kind == instrument::AuxBusKind::output &&
+            imported.auxBuses[10].target == 8,
+        "the maximum topology (4 SEND + 7 OUTPUT) imports in order");
+  auto base = *raw;
+  base.structSize = VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE;
+  check(instrument::native::importDescriptor(&base, imported, diagnostic) &&
+            imported.auxBuses.empty(),
+        "a V2.0..V2.2 descriptor size still imports, with no aux buses");
+
+  const auto rejects = [&](std::vector<VoxAuxBusV2> buses, const char *what,
+                           std::uint32_t reserved = 0, bool nullPointer = false) {
+    auto bad = *raw;
+    bad.auxBuses = nullPointer ? nullptr : buses.data();
+    bad.auxBusCount = static_cast<std::uint32_t>(buses.size());
+    bad.reserved1 = reserved;
+    check(!instrument::native::importDescriptor(&bad, imported, diagnostic),
+          std::string("aux descriptor rejected: ") + what);
+  };
+  rejects({{VOX_AUX_BUS_SEND, 1}, {VOX_AUX_BUS_SEND, 1}}, "duplicate SEND target");
+  rejects({{VOX_AUX_BUS_OUTPUT, 3}, {VOX_AUX_BUS_OUTPUT, 3}}, "duplicate OUTPUT target");
+  rejects({{VOX_AUX_BUS_SEND, 0}}, "SEND target 0");
+  rejects({{VOX_AUX_BUS_SEND, 5}}, "SEND target 5");
+  rejects({{VOX_AUX_BUS_OUTPUT, 1}}, "OUTPUT target 1 (the main output)");
+  rejects({{VOX_AUX_BUS_OUTPUT, 9}}, "OUTPUT target 9");
+  rejects({{3, 1}}, "unknown kind");
+  rejects({{VOX_AUX_BUS_SEND, 1}}, "non-zero reserved word", 1);
+  rejects({{VOX_AUX_BUS_SEND, 1}}, "count without a pointer", 0, true);
+  std::vector<VoxAuxBusV2> twelve(raw->auxBuses, raw->auxBuses + 11);
+  twelve.push_back({VOX_AUX_BUS_SEND, 1});
+  rejects(twelve, "more than 11 buses");
+}
+
+// Renders `blocks` blocks of a held note from the tone in slot 7 with the
+// given aux mode; `setup` adjusts the fresh processor first.
+std::vector<float> auxRun(std::uint32_t mode,
+                          const std::function<void(VstEngineAudioProcessor &)> &setup = {},
+                          bool fault = false) {
+  constexpr std::size_t slot = 6;
+  setAuxMode(slot, mode);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  if (setup)
+    setup(*p);
+  if (fault)
+    failNext(slot, failProcess);
+  auto out = play(*p, channelOf(*p, slot), 24, 0, -1).left;
+  setAuxMode(slot, 0);
+  return out;
+}
+
+void setRaw(VstEngineAudioProcessor &p, const std::string &id, float plain) {
+  auto *parameter = p.parameters().getParameter(id);
+  check(parameter != nullptr, "parameter " + id);
+  parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+}
+
+void auxBusMixing() {
+  const auto dry = auxRun(0);
+  double energy = 0;
+  for (const float v : dry)
+    energy += static_cast<double>(v) * v;
+  check(energy > 1.0, "the reference tone sounds");
+
+  // B1: a source routed to OUTPUT bus Out 2 sounds exactly once, bit-equal
+  // to the same source on the main outputs.
+  check(auxRun(1) == dry, "an OUTPUT bus joins the slot dry signal exactly once");
+
+  // A module SEND bus feeds only its return, after ducking and unscaled by
+  // the slot level: bit-equal to a pre-fader slot send at gain 1, and never
+  // part of Main (Main would otherwise also change).
+  const auto preSend = [](VstEngineAudioProcessor &p) {
+    setRaw(p, host::sendParameterId(6, 0, "level"), 1.0f);
+    setRaw(p, host::sendParameterId(6, 0, "pre"), 1.0f);
+  };
+  const auto sent = auxRun(2);
+  check(sent != dry, "a module send reaches its return");
+  check(sent == auxRun(0, preSend), "a module send equals a pre-fader slot send at gain 1");
+
+  // Maximum topology at once: dry split over all seven OUTPUT buses, sends
+  // into all four returns; every signal appears exactly once.
+  const auto everySend = [](VstEngineAudioProcessor &p) {
+    for (std::size_t bus = 0; bus < 4; ++bus) {
+      setRaw(p, host::sendParameterId(6, bus, "level"), 0.1f * static_cast<float>(bus + 1));
+      setRaw(p, host::sendParameterId(6, bus, "pre"), 1.0f);
+    }
+  };
+  const auto maximum = auxRun(3), reference = auxRun(0, everySend);
+  float worst = 0.0f;
+  for (std::size_t i = 0; i < maximum.size(); ++i)
+    worst = std::max(worst, std::abs(maximum[i] - reference[i]));
+  check(maximum.size() == reference.size() && worst < 1e-5f,
+        "seven OUTPUT buses and four SEND buses at once: nothing dropped or doubled (max " +
+            std::to_string(worst) + ")");
+
+  // A muted or faulted source leaves every bus silent: no dry, no send.
+  const auto silent = std::vector<float>(dry.size(), 0.0f);
+  check(auxRun(2, [](VstEngineAudioProcessor &p) { setRaw(p, "slot07Mute", 1.0f); }) == silent,
+        "a muted slot sends nothing through its module SEND bus");
+  check(auxRun(2, {}, true) == silent && auxRun(1, {}, true) == silent,
+        "a faulted module leaves its SEND and OUTPUT buses silent");
+  // Ducking: a routed kick on the source slot (slot 6) ducks the target
+  // (slot 7). The target's module SEND is ducked exactly like a pre-fader
+  // slot send, whichever slot renders first.
+  const auto ducked = [](std::uint32_t mode, bool slotSend, std::size_t source,
+                         std::size_t target, bool kicks = true) {
+    setAuxMode(static_cast<std::uint32_t>(target), mode);
+    auto p = makeProcessor(true);
+    const auto s = loadTone(*p, source), t = loadTone(*p, target);
+    setRaw(*p, "rack.duck.source", static_cast<float>(s + 1));
+    setRaw(*p, "rack.duck.note", 62.0f);
+    setRaw(*p, "rack.duck.attack", 0.0f);
+    setRaw(*p, "rack.duck.hold", 20.0f);
+    setRaw(*p, "rack.duck.release", 50.0f);
+    // A memoryless return effect, so the ducked send shows up at once.
+    setRaw(*p, host::returnParameterId(0, "type"), 0.0f);
+    char depth[32];
+    std::snprintf(depth, sizeof(depth), "slot%02zu.duck.depth", t + 1);
+    setRaw(*p, depth, 1.0f);
+    setPlain(*p, s, 0, 0.0f); // the source itself adds no audio
+    if (slotSend) {
+      setRaw(*p, host::sendParameterId(t, 0, "level"), 1.0f);
+      setRaw(*p, host::sendParameterId(t, 0, "pre"), 1.0f);
+    }
+    const int sourceChannel = channelOf(*p, s), targetChannel = channelOf(*p, t);
+    std::vector<float> out;
+    juce::AudioBuffer<float> audio(2, blockSize);
+    juce::MidiBuffer midi;
+    for (int b = 0; b < 12; ++b) {
+      midi.clear();
+      if (b == 0)
+        midi.addEvent(juce::MidiMessage::noteOn(targetChannel, 64, 0.9f), 0);
+      if (kicks && b > 0 && b % 3 == 0)
+        midi.addEvent(juce::MidiMessage::noteOn(sourceChannel, 62, 0.9f), 20);
+      audio.clear();
+      p->processBlock(audio, midi);
+      out.insert(out.end(), audio.getReadPointer(0), audio.getReadPointer(0) + blockSize);
+    }
+    setAuxMode(static_cast<std::uint32_t>(target), 0);
+    return out;
+  };
+  for (const auto &[source, target] : {std::pair<std::size_t, std::size_t>{5, 7},
+                                       std::pair<std::size_t, std::size_t>{9, 7}}) {
+    const auto withModuleSend = ducked(2, false, source, target);
+    check(withModuleSend != ducked(2, false, source, target, false),
+          "the kicks duck the target (source slot " + std::to_string(source + 1) + ")");
+    const auto reference = ducked(0, true, source, target);
+    float worst = 0.0f;
+    for (std::size_t i = 0; i < withModuleSend.size(); ++i)
+      worst = std::max(worst, std::abs(withModuleSend[i] - reference[i]));
+    check(withModuleSend == reference,
+          "a module SEND is ducked like a pre-fader slot send (source slot " +
+              std::to_string(source + 1) + ", max difference " + std::to_string(worst) + ")");
+  }
+
+  // A fault in the middle of a note: from the fault block on, nothing of the
+  // previous OUTPUT-bus audio is replayed (the adapter clears every aux bus).
+  setAuxMode(6, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, 6);
+  const int channel = channelOf(*p, 6);
+  const auto before = play(*p, channel, 4, 0, -1);
+  failNext(6, failProcess);
+  const auto after = play(*p, channel, 4, -1, -1);
+  setAuxMode(6, 0);
+  check(before.energy() > 1.0 && after.energy() == 0.0,
+        "a mid-note fault silences the OUTPUT bus from that block on");
+}
+
+// Combined contract (owner review 5729963520): one native fixture declares
+// UI-only parameters (poolIndex -1) and the full aux topology at once. A
+// UI-only edit is heard on an OUTPUT bus, survives save/reopen with the same
+// spec hash, binds no host endpoint, and a fault silences every bus.
+void uiOnlyWithAuxBuses() {
+  constexpr std::size_t slot = 6;
+  setAuxMode(slot, 1); // tone only on OUTPUT bus Out 2
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  const auto *descriptor = p->instrumentRack().descriptor(slot);
+  check(descriptor != nullptr && descriptor->parameters.size() == 7 &&
+            descriptor->auxBuses.size() == 11,
+        "one descriptor carries UI-only parameters and 11 aux buses");
+  for (std::size_t pool = 4; pool < 7; ++pool) {
+    auto *spare = p->parameters().getParameter(instrument::hostparams::poolId(slot, pool));
+    check(spare != nullptr && spare->getName(64).contains("Param 0" + std::to_string(pool + 1)),
+          "no host endpoint behind UI-only parameter " + std::to_string(pool + 1));
+  }
+  const auto hashOf = [](const instrument::InstrumentDescriptor &d, const char *id) {
+    for (const auto &q : d.parameters)
+      if (q.id == id)
+        return instrument::hostparams::parameterSpecHash(q);
+    return 0u;
+  };
+  const auto trimHash = hashOf(*descriptor, "trim");
+
+  const int channel = channelOf(*p, slot);
+  const auto full = play(*p, channel, 6, 1, -1);
+  const double steady = energy(full, 4, 6);
+  juce::String why;
+  check(p->setSlotParameter(slot, "trim", 0.5f, why), "trim set: " + why.toStdString());
+  const auto half = play(*p, channel, 6, -1, -1);
+  check(steady > 0.0 && std::abs(energy(half, 0, 2) - 0.25 * steady) < 0.05 * steady,
+        "a UI-only change is heard through the OUTPUT bus at the next block");
+
+  juce::MemoryBlock state;
+  p->getStateInformation(state);
+  auto reopened = makeProcessor(true);
+  reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  const auto *again = reopened->instrumentRack().descriptor(slot);
+  check(again != nullptr && again->auxBuses.size() == 11 && hashOf(*again, "trim") == trimHash &&
+            savedValue(*reopened, slot, "trim") == 0.5f,
+        "reopen keeps the aux topology, the spec hash and the UI-only value");
+  const auto restored = play(*reopened, channelOf(*reopened, slot), 6, 1, -1);
+  check(std::abs(energy(restored, 4, 6) - 0.25 * steady) < 0.05 * steady,
+        "the reopened slot plays the saved trim through Out 2");
+  failNext(slot, failProcess);
+  const auto faulted = play(*reopened, channelOf(*reopened, slot), 4, -1, -1);
+  check(faulted.energy() == 0.0, "a fault silences main and every aux bus");
+  setAuxMode(slot, 0);
+}
+
+// A real module binary built against the frozen V2.2 header (96-byte
+// descriptor, no aux fields; owner review 5730422105). The V2.3 host loads it
+// without diagnostics, gives it no aux buses, and it plays bit-equal to the
+// current build of the same tone, also after save and reopen.
+void legacyV22Binary() {
+  constexpr const char *legacyId = "test.abi.v2_2.tone";
+  constexpr std::size_t slot = 6;
+  std::string diagnostic;
+  auto module = instrument::native::NativeModule::acquire(
+      std::filesystem::weakly_canonical(std::filesystem::path(legacyModulePath)), diagnostic);
+  const VoxInstrumentDescriptorV2 *raw = nullptr;
+  check(module != nullptr && module->table().getInstrument(0, &raw) == VOX_OK && raw != nullptr &&
+            raw->structSize == VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE,
+        "the legacy binary reports the 96-byte V2.2 descriptor");
+  const auto makeLegacy = [] {
+    auto p = std::make_unique<VstEngineAudioProcessor>(
+        modules::createBuiltInProvider(),
+        instrument::native::loadConfiguredModules(legacyModulePath));
+    for (const char *id : {"slot01Enabled", "slot02Enabled"})
+      if (auto *enabled = p->parameters().getParameter(id))
+        enabled->setValueNotifyingHost(0.0f);
+    p->prepareToPlay(48000.0, blockSize);
+    return p;
+  };
+  auto legacy = makeLegacy();
+  check(legacy->nativeModuleDiagnostics().empty(), "the V2.3 host loads the V2.2 binary");
+  juce::String why;
+  check(legacy->loadSlotInstrument(slot, legacyId, why), "legacy tone loads: " + why.toStdString());
+  const auto *descriptor = legacy->instrumentRack().descriptor(slot);
+  check(descriptor != nullptr && descriptor->auxBuses.empty(),
+        "the legacy instrument has no aux buses");
+  const auto old = play(*legacy, channelOf(*legacy, slot), 10, 1, 7);
+
+  auto current = makeProcessor(true);
+  loadTone(*current, slot);
+  const auto now = play(*current, channelOf(*current, slot), 10, 1, 7);
+  check(old.energy() > 1.0 && old.left == now.left,
+        "the V2.2 binary renders bit-equal to the current build of the tone");
+
+  juce::MemoryBlock state;
+  legacy->getStateInformation(state);
+  auto reopened = makeLegacy();
+  reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  check(reopened->instrumentRack().state()[slot].instrumentId == legacyId,
+        "the legacy slot survives save and reopen");
+  const auto again = play(*reopened, channelOf(*reopened, slot), 10, 1, 7);
+  check(again.left == old.left, "the reopened legacy slot plays the same audio");
+}
+
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "usage: native_rack_tests <absolute test module path>\n";
+  if (argc != 3) {
+    std::cerr << "usage: native_rack_tests <test module path> <legacy V2.2 module path>\n";
     return 2;
   }
   modulePath = argv[1];
+  legacyModulePath = argv[2];
   juce::ScopedJuceInitialiser_GUI gui;
   registration();
   playsAndAutomates();
@@ -981,6 +1514,12 @@ int main(int argc, char **argv) {
   malformedNotesDuckNothing();
   routedNotesPolicy();
   slotDiagnostics();
+  uiOnlyParameters();
+  uiOnlyConcurrentRestore();
+  auxBusDescriptors();
+  auxBusMixing();
+  uiOnlyWithAuxBuses();
+  legacyV22Binary();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

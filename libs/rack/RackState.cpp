@@ -105,7 +105,7 @@ bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
         diagnostic = "invalid rack pattern schema or payload exceeds host budget";
         return false;
     }
-    if (slot.directParameters.size() > instrument::maxDirectParameters) {
+    if (slot.directParameters.size() > instrument::maxSlotParameters) {
       diagnostic = "direct parameter state exceeds host limit";
       return false;
     }
@@ -114,7 +114,8 @@ bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
       if (!validStableId(parameter.id) || !std::isfinite(parameter.value) ||
           parameter.poolIndex < -1 ||
           parameter.poolIndex >=
-              static_cast<std::int16_t>(instrument::poolParametersPerSlot)) {
+              static_cast<std::int16_t>(instrument::poolParametersPerSlot) ||
+          (parameter.uiOnly && parameter.poolIndex != -1)) {
         diagnostic = "invalid direct parameter state";
         return false;
       }
@@ -210,6 +211,8 @@ juce::ValueTree serialize(
           if (parameter.poolIndex >= 0)
             direct.setProperty("pool", static_cast<int>(parameter.poolIndex),
                                nullptr);
+          if (parameter.uiOnly)
+            direct.setProperty("ui", 1, nullptr);
           if (parameter.spec != 0)
             direct.setProperty("spec", static_cast<juce::int64>(parameter.spec), nullptr);
           child.appendChild(direct, nullptr);
@@ -395,7 +398,7 @@ bool deserialize(const juce::ValueTree& root,
         }
         {
           if (child.getNumChildren() >
-              static_cast<int>(instrument::maxDirectParameters)) {
+              static_cast<int>(instrument::maxSlotParameters)) {
             diagnostic = "direct parameter count exceeds host limit";
             return false;
           }
@@ -403,7 +406,11 @@ bool deserialize(const juce::ValueTree& root,
             float value{};
             int pool{-1};
             std::uint32_t spec{};
+            int ui{};
             if (!direct.hasType("SOUND_PARAMETER") ||
+                (direct.hasProperty("ui") &&
+                 (!readSigned(direct.getProperty("ui"), ui) || ui != 1 ||
+                  direct.hasProperty("pool"))) ||
                 !validString(direct.getProperty("id"),
                              VOX_INSTRUMENT_MAX_ID_BYTES) ||
                 !readPlain(direct.getProperty("value"), value) ||
@@ -415,15 +422,17 @@ bool deserialize(const juce::ValueTree& root,
               diagnostic = "invalid direct parameter encoding";
               return false;
             }
-            // A slot that was resolved when saved records the endpoint and
-            // meaning of every value; there is no match-by-ID fallback.
-            if (slot.instrumentVersion != 0 && (pool < 0 || spec == 0)) {
+            // A slot that was resolved when saved records the meaning of every
+            // value, and the endpoint of every host parameter (a UI-only one
+            // has none); the Rack checks both against the descriptor.
+            const bool uiOnly = direct.hasProperty("ui");
+            if (slot.instrumentVersion != 0 && (spec == 0 || (pool < 0 && !uiOnly))) {
               diagnostic = "direct parameter without its pool index or meaning";
               return false;
             }
             slot.directParameters.push_back(
                 {direct.getProperty("id").toString().toStdString(), value,
-                 static_cast<std::int16_t>(pool), spec});
+                 static_cast<std::int16_t>(pool), spec, uiOnly});
           }
         }
         slot.schemaVersion = schemaVersion;

@@ -38,7 +38,10 @@ DirectMigration migrateAppendOnly(PersistentSlotState &state,
   for (std::size_t i = 0; i < state.directParameters.size(); ++i) {
     const auto &saved = state.directParameters[i];
     const auto *p = find(current, saved.id);
-    if (p == nullptr || saved.poolIndex < 0 || saved.poolIndex != p->poolIndex ||
+    // A UI-only parameter has no endpoint (-1); the spec hash marks it, so it
+    // cannot silently move to or from the host pool.
+    if (p == nullptr || saved.uiOnly != instrument::hostparams::uiOnly(*p) ||
+        (saved.poolIndex < 0 && !saved.uiOnly) || saved.poolIndex != p->poolIndex ||
         saved.spec == 0 || saved.spec != instrument::hostparams::parameterSpecHash(*p) ||
         !validValue(saved.value, *p))
       return DirectMigration::incompatible;
@@ -54,7 +57,8 @@ DirectMigration migrateAppendOnly(PersistentSlotState &state,
       present |= saved.id == p.id;
     if (!present)
       migrated.push_back({p.id, instrument::hostparams::canonicalPlain(p.defaultValue, p),
-                          p.poolIndex, instrument::hostparams::parameterSpecHash(p)});
+                          p.poolIndex, instrument::hostparams::parameterSpecHash(p),
+                          instrument::hostparams::uiOnly(p)});
   }
   state.directParameters = std::move(migrated);
   state.instrumentVersion = current.instrumentVersion;

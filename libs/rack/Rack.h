@@ -94,8 +94,17 @@ public:
                 float value) noexcept;
   void updateControls(std::size_t slotIndex, Routing, bool enabled, bool mute,
                       bool solo, bool locked, float level, float pan) noexcept;
+  // Controller thread: sets a UI-only parameter of the slot's instrument (see
+  // hostparams::uiOnly). Never waits for the audio thread: the value reaches
+  // the instrument at the next block and is saved with the slot. Rejects
+  // host parameters, unknown ids and values outside the declared range.
+  bool setUiParameter(std::size_t slotIndex, const instrument::ParameterId &id,
+                      float plain, std::string &diagnostic);
   // Borrowed views require caller serialization against control mutations.
   [[nodiscard]] const auto &state() const noexcept { return state_; }
+  // Controller threads: a copy of one slot's persistent state, taken under the
+  // state lock, so it is safe against concurrent replaceState/setUiParameter.
+  [[nodiscard]] PersistentSlotState snapshotSlot(std::size_t slotIndex) const;
   [[nodiscard]] std::array<PersistentSlotState, instrument::maxSlots>
   snapshotState(std::span<const ProcessSlotControls> controls = {}) const;
   // Non-realtime metadata snapshot; takes the control-state mutex.
@@ -123,13 +132,21 @@ private:
         const instrument::InstrumentDescriptor* descriptor {};
         std::array<std::vector<float>, 2> audio;
         std::array<float*, 2> pointers {};
+        // Auxiliary buses the module declares (ABI V2.3), bus-major channel
+        // buffers sized at prepare; empty when it declares none.
+        std::vector<std::vector<float>> aux;
+        std::vector<float*> auxPointers;
+        // Per Rack return: channel pointers of the SEND bus that targets it.
+        std::array<std::array<const float *, 2>, 4> moduleSends{};
+        bool hasModuleSends{};
         std::unique_ptr<ModulationRuntime> modulation;
         struct DirectBinding {
           std::uint64_t key{};
           const instrument::ParameterDescriptor *parameter{};
           float base{};
+          bool uiOnly{}; // value comes from uiValues, not from the host pool
         };
-        std::array<DirectBinding, instrument::maxDirectParameters> direct{};
+        std::array<DirectBinding, instrument::maxSlotParameters> direct{};
         std::size_t directCount{};
         // INTERNAL-playback instruments: snapshots of the Rack-owned pattern
         // and the notes the instrument reports per block.
@@ -137,6 +154,13 @@ private:
         std::vector<VoxNoteEventV2> noteEvents;
         VoxNoteOutputV2 noteOutput{};
     };
+public:
+    struct AuxStorage {
+        std::vector<std::vector<float>> buffers;
+        std::vector<float *> pointers;
+    };
+private:
+    static void bindAux(SlotRuntime &, AuxStorage, std::uint32_t channels) noexcept;
     bool buildSlot(std::size_t, const PersistentSlotState&,
                    instrument::ResourceResolver*, SlotRuntime&,
                    RuntimeSlotState&, std::string& diagnostic);
@@ -174,7 +198,16 @@ private:
       std::array<RackRouter::DestinationBuffer, instrument::maxSlots> routed{};
       std::array<ProcessSlotControls, instrument::maxSlots> defaultControls{};
       RackRouter router;
+      // UI-only parameter values per slot and binding: written by
+      // setUiParameter (controller thread), read at block start (audio).
+      std::array<std::array<std::atomic<float>, instrument::maxSlotParameters>,
+                 instrument::maxSlots>
+          uiValues{};
     };
+    static_assert(std::atomic<float>::is_always_lock_free);
+    // Controller thread, after a slot's runtime was published: seed its
+    // UI-only values from the bindings.
+    void publishUiValues(std::size_t slotIndex) noexcept;
     std::unique_ptr<ProcessingStorage> processing_{
         std::make_unique<ProcessingStorage>()};
     // Registry descriptors have process lifetime; only pointer publication is

@@ -308,6 +308,34 @@ delivered".
   following blocks, counters, and no allocation/lock.
 - Change array ordering/duplicate test; `reset` keeps parameter values.
 
+## Auxiliary buses (V2.3, appended)
+
+A module may declare stereo auxiliary buses after `upgradeFromVersion`
+(`auxBuses`, `auxBusCount`, `reserved1 = 0`). A host reads them only when
+`structSize` covers them and accepts `VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE`
+(96, no buses). Each bus is `{ kind, target }`:
+
+- `VOX_AUX_BUS_SEND`, target Rack return 1..4;
+- `VOX_AUX_BUS_OUTPUT`, target host output 2..8.
+
+Validation (fail closed, the instrument is not loaded): known kind, target in
+range, each target once, at most 4 SEND + 7 OUTPUT (11). The process context
+appends `auxOutputs` (bus-major, `outputChannelCount` pointers per bus, in
+descriptor order) and `auxBusCount`; the module overwrites every bus it is
+given. The adapter never runs a module that declares buses without their
+buffers, and clears every bus (with the main outputs) on failed, faulted,
+bypassed, suspended or unprepared blocks.
+
+Module rule: each source renders into exactly one dry destination, main or
+one OUTPUT bus, and independently adds its send signal into SEND buses.
+
+Rack rule (B1, one host output): an OUTPUT bus is added once into the slot's
+dry signal before ducking, level/pan and the slot's own sends; a SEND bus goes
+only into its return, after the slot's ducking, gated by disable/mute/solo, not
+scaled by slot level, never into Main. Without Rack audio routing there are no
+returns and SEND buses are not heard. B2 (separate host outputs) is a separate
+decision; see `FULLON_DRUMS_PRODUCTION.md`.
+
 ## Musical transport (in the header since #68; still part of the unfrozen V2)
 
 `samplePosition` alone cannot drive Acid's LFO Sync, STEP modulation or
