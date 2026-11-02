@@ -43,7 +43,8 @@ target_link_libraries(vst_instrument PUBLIC vst_pattern)
 # descriptor import, provider/instance adapters). PROPOSED, not frozen.
 add_library(vst_native STATIC
   libs/instrument/abi/VoxModuleAbiV2.h
-  libs/instrument/native/NativeModule.cpp libs/instrument/native/NativeModule.h)
+  libs/instrument/native/NativeModule.cpp libs/instrument/native/NativeModule.h
+  libs/instrument/native/SampleExchange.cpp libs/instrument/native/SampleExchange.h)
 target_include_directories(vst_native PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_native PUBLIC vst_instrument ${CMAKE_DL_LIBS})
 

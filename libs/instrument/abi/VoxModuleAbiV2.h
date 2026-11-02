@@ -120,6 +120,36 @@ typedef struct VoxAuxBusV2 {
   uint32_t target; /* SEND: Rack return 1..4; OUTPUT: host output 2..8 */
 } VoxAuxBusV2;
 
+/* V2.4 sample hand-off (contract C). The host decodes, owns and frees every
+ * sample buffer; the module only reads one during process. Each process call
+ * carries a read-only table with one entry per declared sample slot. */
+#define VOX_SAMPLE_MAX_SLOTS 64u
+typedef struct VoxSampleV2 {
+  uint32_t structSize, version;
+  uint64_t id;                  /* host buffer id; 0 = the slot is empty */
+  const float *const *channels; /* channelCount pointers, frames samples each */
+  uint32_t channelCount;
+  uint32_t reserved0; /* 0 */
+  uint64_t frames;
+  double sampleRate; /* the buffer's native rate */
+  float peak;        /* max |sample|, for Normalize */
+  uint32_t reserved1; /* 0 */
+} VoxSampleV2;
+
+/* Before process returns, the module writes the ids of every buffer one of
+ * its voices still references (each once) into ids[0..count) and sets
+ * overflow when they do not all fit in capacity. The host frees nothing on a
+ * report that is missing, malformed or overflowing. A voice may keep reading
+ * a buffer in later blocks only while the module keeps reporting its id. */
+typedef struct VoxSampleUsageV2 {
+  uint32_t structSize, version;
+  uint32_t capacity; /* host-set */
+  uint32_t count;    /* module-set; the host resets it to 0 every call */
+  uint64_t *ids;     /* host-owned, capacity entries */
+  uint32_t overflow; /* module-set; the host resets it to 0 every call */
+  uint32_t reserved0; /* 0 */
+} VoxSampleUsageV2;
+
 typedef struct VoxInstrumentDescriptorV2 {
   uint32_t structSize, version;
   const char *id;
@@ -145,10 +175,16 @@ typedef struct VoxInstrumentDescriptorV2 {
   const VoxAuxBusV2 *auxBuses;
   uint32_t auxBusCount;
   uint32_t reserved1; /* 0 */
+  /* Appended in V2.4. Sample slots the instrument reads (0..64); read only
+   * when structSize covers it. */
+  uint32_t sampleSlotCount;
+  uint32_t reserved2; /* 0 */
 } VoxInstrumentDescriptorV2;
 
 /* Size of the V2.0..V2.2 instrument descriptor. */
 #define VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE 96u
+/* Size of the V2.3 instrument descriptor (aux buses, no sample slots). */
+#define VOX_INSTRUMENT_DESCRIPTOR_V2_3_SIZE 112u
 
 #define VOX_SLOT_INDEX_NONE 0xFFFFFFFFu
 
@@ -363,6 +399,13 @@ typedef struct VoxProcessContextV2 {
   float *const *auxOutputs;
   uint32_t auxBusCount;
   uint32_t reserved1; /* 0 */
+  /* Appended in V2.4: sampleSlotCount entries, valid for this call only, and
+   * the module's usage report. NULL / 0 when the instrument declares no
+   * sample slots. */
+  const VoxSampleV2 *samples;
+  uint32_t sampleSlotCount;
+  uint32_t reserved2; /* 0 */
+  VoxSampleUsageV2 *sampleUsage;
 } VoxProcessContextV2;
 
 /* Size of the original V2.0 process context. */
@@ -411,7 +454,14 @@ VOX_ABI_ASSERT(sizeof(VoxParameterDescriptorV2) == 80, "VoxParameterDescriptorV2
 VOX_ABI_ASSERT(offsetof(VoxParameterDescriptorV2, type) == 48, "parameter type offset");
 VOX_ABI_ASSERT(offsetof(VoxParameterDescriptorV2, minimum) == 56, "parameter minimum offset");
 VOX_ABI_ASSERT(offsetof(VoxParameterDescriptorV2, poolIndex) == 72, "parameter pool offset");
-VOX_ABI_ASSERT(sizeof(VoxInstrumentDescriptorV2) == 112, "VoxInstrumentDescriptorV2 size");
+VOX_ABI_ASSERT(sizeof(VoxInstrumentDescriptorV2) == 120, "VoxInstrumentDescriptorV2 size");
+VOX_ABI_ASSERT(offsetof(VoxInstrumentDescriptorV2, sampleSlotCount) ==
+                   VOX_INSTRUMENT_DESCRIPTOR_V2_3_SIZE,
+               "sampleSlotCount offset");
+VOX_ABI_ASSERT(sizeof(VoxSampleV2) == 56, "VoxSampleV2 size");
+VOX_ABI_ASSERT(offsetof(VoxSampleV2, frames) == 32, "sample frames offset");
+VOX_ABI_ASSERT(sizeof(VoxSampleUsageV2) == 32, "VoxSampleUsageV2 size");
+VOX_ABI_ASSERT(offsetof(VoxSampleUsageV2, ids) == 16, "sample usage ids offset");
 VOX_ABI_ASSERT(offsetof(VoxInstrumentDescriptorV2, auxBuses) ==
                    VOX_INSTRUMENT_DESCRIPTOR_V2_BASE_SIZE,
                "auxBuses offset");
@@ -426,7 +476,9 @@ VOX_ABI_ASSERT(sizeof(VoxMidiEventV2) == 16, "VoxMidiEventV2 size");
 VOX_ABI_ASSERT(sizeof(VoxTransportV2) == 72, "VoxTransportV2 size");
 VOX_ABI_ASSERT(offsetof(VoxTransportV2, tempoBpm) == 24, "tempo offset");
 VOX_ABI_ASSERT(offsetof(VoxTransportV2, timeInSamples) == 64, "timeInSamples offset");
-VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 120, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(sizeof(VoxProcessContextV2) == 144, "VoxProcessContextV2 size");
+VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, samples) == 120, "samples offset");
+VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, sampleUsage) == 136, "sampleUsage offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, auxOutputs) == 104, "auxOutputs offset");
 VOX_ABI_ASSERT(offsetof(VoxProcessContextV2, noteOutput) == 96, "noteOutput offset");
 VOX_ABI_ASSERT(sizeof(VoxNoteEventV2) == 8, "VoxNoteEventV2 size");

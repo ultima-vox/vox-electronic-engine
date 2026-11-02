@@ -1,4 +1,5 @@
 #include "instrument/native/NativeModule.h"
+#include "instrument/native/SampleExchange.h"
 
 #include <algorithm>
 #include <atomic>
@@ -200,7 +201,10 @@ public:
            VoxInstance handle)
       : module_(std::move(module)), table_(&module_->table()), descriptor_(descriptor),
         handle_(handle), values_(descriptor.parameters.size()),
-        sent_(descriptor.parameters.size()), changes_(descriptor.parameters.size()) {
+        sent_(descriptor.parameters.size()), changes_(descriptor.parameters.size()),
+        samples_(descriptor.sampleSlotCount > 0
+                     ? std::make_unique<SampleExchange>(descriptor.sampleSlotCount)
+                     : nullptr) {
     for (std::size_t i = 0; i < values_.size(); ++i)
       values_[i] = sent_[i] = descriptor.parameters[i].defaultValue;
   }
@@ -233,6 +237,10 @@ public:
     // (prepare + parameter snapshot) clears a latched fault.
     faulted_.store(false, std::memory_order_relaxed);
     prepared_ = true;
+    // A successful prepare ended every voice and no process() runs now
+    // (Rack exclusive section): verified quiescence for the sample hand-off.
+    if (samples_)
+      samples_->quiesce();
     return true;
   }
 
@@ -314,6 +322,8 @@ public:
       midiOverflowBlocks_.fetch_add(1, std::memory_order_relaxed);
     }
     fillTransport(block);
+    if (samples_)
+      samples_->beginBlock();
     const VoxProcessContextV2 context{sizeof(VoxProcessContextV2),
                                       VOX_MODULE_ABI_V2,
                                       block.sampleCount,
@@ -334,8 +344,14 @@ public:
                                       block.noteOutput,
                                       block.aux.empty() ? nullptr : block.aux.data(),
                                       static_cast<std::uint32_t>(descriptor_.auxBuses.size()),
-                                      0};
+                                      0,
+                                      samples_ ? samples_->table() : nullptr,
+                                      samples_ ? samples_->sampleSlotCount() : 0u,
+                                      0,
+                                      samples_ ? samples_->usage() : nullptr};
     const bool ok = table_->process(handle_, &context) == VOX_OK;
+    if (samples_)
+      samples_->endBlock(ok); // a failed block yields no usable report
     silenced_ = !ok || bypassed_;
     if (!ok) {
       fault(InstanceFault::processFailed);
@@ -383,6 +399,7 @@ public:
   }
   std::uint32_t tailSamples() const noexcept override { return descriptor_.budget.maxTailSamples; }
   bool blockSilenced() const noexcept override { return silenced_; }
+  SampleHost *samples() noexcept override { return samples_.get(); }
 
   InstanceHealth health() const noexcept override {
     return {faulted_.load(std::memory_order_relaxed),
@@ -462,6 +479,9 @@ private:
   std::uint32_t outputChannels_{};
   bool prepared_{}, suspended_{}, bypassed_{}, discontinuity_{true};
   bool wasPlaying_{}, predictionValid_{};
+  // Declared last: destroyed after ~Instance() destroyed the module handle,
+  // so every sample buffer outlives the last process() call.
+  std::unique_ptr<SampleExchange> samples_;
 };
 
 class Provider final : public InstrumentProvider {
@@ -588,6 +608,14 @@ bool importDescriptor(const VoxInstrumentDescriptorV2 *d, InstrumentDescriptor &
   if (!importAuxBuses(*d, copy.auxBuses)) {
     diagnostic = "invalid native auxiliary buses";
     return false;
+  }
+  // V2.4 sample slots, read only when the descriptor is large enough.
+  if (d->structSize >= offsetof(VoxInstrumentDescriptorV2, reserved2) + sizeof(d->reserved2)) {
+    if (d->sampleSlotCount > VOX_SAMPLE_MAX_SLOTS || d->reserved2 != 0) {
+      diagnostic = "invalid native sample slots";
+      return false;
+    }
+    copy.sampleSlotCount = d->sampleSlotCount;
   }
   std::set<std::string> ids;
   std::set<std::int16_t> pools;

@@ -999,6 +999,51 @@ bool Rack::setUiParameter(std::size_t index, const instrument::ParameterId &id,
   return false;
 }
 
+bool Rack::setSlotSample(std::size_t index, std::uint32_t sampleSlot,
+                         std::unique_ptr<instrument::SampleBuffer> buffer,
+                         std::string &diagnostic) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  auto *host = index < state_.size() && processing_->runtime[index].instance
+                   ? processing_->runtime[index].instance->samples()
+                   : nullptr;
+  if (host == nullptr) {
+    diagnostic = "slot instrument has no sample slots";
+    return false;
+  }
+  return host->publish(sampleSlot, std::move(buffer), diagnostic);
+}
+
+std::size_t Rack::collectSamples() {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  std::size_t released = 0;
+  for (auto &slot : processing_->runtime)
+    if (slot.instance)
+      if (auto *host = slot.instance->samples())
+        released += host->collect();
+  return released;
+}
+
+std::optional<instrument::SampleStats> Rack::sampleStats(std::size_t index) const {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  if (index >= state_.size() || !processing_->runtime[index].instance)
+    return std::nullopt;
+  if (auto *host = processing_->runtime[index].instance->samples())
+    return host->stats();
+  return std::nullopt;
+}
+
+bool Rack::setSampleReleaseSinkForTesting(std::size_t index,
+                                          instrument::SampleHost::ReleaseSink sink) {
+  const std::scoped_lock persistentLock(persistentStateMutex_);
+  auto *host = index < state_.size() && processing_->runtime[index].instance
+                   ? processing_->runtime[index].instance->samples()
+                   : nullptr;
+  if (host == nullptr)
+    return false;
+  host->setReleaseSinkForTesting(std::move(sink));
+  return true;
+}
+
 void Rack::setMacro(std::size_t slot, std::size_t macro, float value) noexcept
 {
     const std::scoped_lock persistentLock(persistentStateMutex_);

@@ -4,6 +4,7 @@
 #include "pattern/Pattern.h"
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -114,6 +115,8 @@ struct AuxBus {
     std::uint8_t target {}; // SEND: return 1..4; OUTPUT: host output 2..8
 };
 inline constexpr std::size_t maxAuxBuses = 11; // 4 SEND + 7 OUTPUT
+// Sample slots one instrument may declare (ABI V2.4, contract C).
+inline constexpr std::size_t maxSampleSlots = 64;
 
 struct InstrumentDescriptor {
     InstrumentId id;
@@ -148,6 +151,8 @@ struct InstrumentDescriptor {
     // Auxiliary buses (ABI V2.3), validated at import: each target once, at
     // most 4 SEND and 7 OUTPUT. Empty for instruments without them.
     std::vector<AuxBus> auxBuses;
+    // Sample slots (ABI V2.4) the instrument reads host-decoded buffers from.
+    std::uint32_t sampleSlotCount {};
 };
 
 struct ParameterValue {
@@ -250,6 +255,48 @@ struct InstanceHealth {
     std::uint64_t invalidNoteBlocks {};  // module note output voided as malformed
 };
 
+// A decoded sample (contract C). Immutable once published: the host never
+// changes it while the instrument may read it, and frees it only through the
+// instance's sample hand-off.
+struct SampleBuffer {
+    std::vector<std::vector<float>> channels; // equal lengths, 1 or 2 channels
+    double sampleRate {};
+    float peak {};
+    // Filled by the hand-off on publish: the channel pointer table the
+    // instrument receives. It lives here so that every byte a voice can
+    // reference belongs to this buffer and is released with it.
+    std::vector<const float*> channelTable;
+};
+
+struct SampleStats {
+    std::uint64_t published {}; // buffers accepted by publish()
+    std::uint64_t released {};  // buffers released (superseded, retired or torn down)
+    std::uint64_t live {};      // published and not yet released
+    std::uint64_t reportsUsed {};     // valid reports that decided releases
+    std::uint64_t reportsRejected {}; // invalid, malformed or overflowing: freed nothing
+};
+
+// Controller-side sample hand-off of one instance (contract C rev. 3.1).
+// Thread-safe against the audio thread without locks on its side; controller
+// calls are serialized internally. Never called from the audio callback.
+class SampleHost {
+public:
+    virtual ~SampleHost() = default;
+    virtual std::uint32_t sampleSlotCount() const noexcept = 0;
+    // Publishes `buffer` (null: clear the slot) to be installed at the next
+    // block start; the last publish wins. Refuses when the slot already holds
+    // the maximum of live buffers until retirements are collected.
+    virtual bool publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
+                         std::string &diagnostic) = 0;
+    // Reads the newest usage report and releases every buffer the free rule
+    // allows. Returns how many were released.
+    virtual std::size_t collect() = 0;
+    virtual SampleStats stats() const = 0;
+    // Tests: receives every released buffer instead of it being deleted.
+    using ReleaseSink = std::function<void(std::unique_ptr<SampleBuffer>)>;
+    virtual void setReleaseSinkForTesting(ReleaseSink) = 0;
+};
+
 class InstrumentInstance {
 public:
     virtual ~InstrumentInstance() = default;
@@ -275,6 +322,10 @@ public:
 
     // Any thread. Instances without runtime faults report nothing.
     virtual InstanceHealth health() const noexcept { return {}; }
+
+    // Controller thread. The sample hand-off of an instrument that declares
+    // sample slots; null otherwise.
+    virtual SampleHost* samples() noexcept { return nullptr; }
 };
 
 inline constexpr std::uint32_t noSlotIndex = 0xffffffffu;
