@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -289,23 +290,25 @@ void upgradesVersion1Projects() {
   auto tree = juce::ValueTree::fromXml(*xml);
   auto slot = tree.getChildWithName("RACK").getChild(static_cast<int>(r.slot));
   check(slot.getProperty("instrumentId").toString() == juce::String(drumsId), "drum slot found");
-  check(static_cast<int>(slot.getProperty("instrumentVersion")) == 2 &&
-            static_cast<int>(slot.getProperty("instrumentStateVersion")) == 4,
-        "a phase 1 project saves version 2 / state 4");
+  check(static_cast<int>(slot.getProperty("instrumentVersion")) == 3 &&
+            static_cast<int>(slot.getProperty("instrumentStateVersion")) == 5,
+        "a current project saves version 3 / state 5");
   slot.setProperty("instrumentVersion", 1, nullptr);
   slot.setProperty("instrumentStateVersion", 3, nullptr);
   int removed = 0;
   for (int i = slot.getNumChildren(); --i >= 0;) {
     const auto id = slot.getChild(i).getProperty("id").toString();
-    for (const char *suffix : {".send1", ".send2", ".cutoff", ".resonance", ".fine", ".filter",
-                               ".transient_attack", ".transient_sustain", ".output"})
+    for (const char *suffix :
+         {".send1", ".send2", ".cutoff", ".resonance", ".fine", ".filter", ".transient_attack",
+          ".transient_sustain", ".output", ".source", ".sample_start", ".sample_end",
+          ".sample_loop", ".sample_reverse", ".sample_normalize", ".sample_level"})
       if (id.endsWith(suffix)) {
         slot.removeChild(i, nullptr);
         ++removed;
         break;
       }
   }
-  check(removed == 72, "the 72 phase 1 parameters removed (" + std::to_string(removed) + ")");
+  check(removed == 128, "the 128 phase 1 parameters removed (" + std::to_string(removed) + ")");
   // A direct instrument's values live in the slot's parameters; the module
   // payload stays empty unless a sound preset was applied (the module's own
   // version 3 upgrade is checked in moduleRejectsInvalidState).
@@ -324,10 +327,10 @@ void upgradesVersion1Projects() {
   opened.p->prepareToPlay(opened.rate, opened.block);
   opened.p->setStateInformation(old.getData(), static_cast<int>(old.getSize()));
   const auto &state = opened.p->instrumentRack().state()[r.slot];
-  check(state.instrumentId == drumsId && state.instrumentVersion == 2 &&
+  check(state.instrumentId == drumsId && state.instrumentVersion == 3 &&
             opened.p->instrumentRack().diagnostics()[r.slot].lastError.empty() &&
             opened.p->instrumentRack().diagnostics()[r.slot].active,
-        "a 1.x project opens and upgrades to version 2");
+        "a 1.x project opens and upgrades to version 3");
   opened.channel = channelOf(*opened.p, r.slot);
   check(std::abs(plainOf(opened, padParam(snare, level)) - 0.31f) < 1e-6f,
         "the saved 1.x value is kept");
@@ -448,6 +451,166 @@ void phase1BusesAndSends() {
   check(kickSend2 == main, "another pad's send does nothing while that pad is silent");
 }
 
+// ------------------------------------------- DSP phase 1, slice 2 (samples)
+std::unique_ptr<instrument::SampleBuffer> sampleOf(std::vector<float> left,
+                                                   std::vector<float> right = {},
+                                                   double rate = 48000.0) {
+  auto buffer = std::make_unique<instrument::SampleBuffer>();
+  float peak = 0;
+  for (const float v : left)
+    peak = std::max(peak, std::abs(v));
+  for (const float v : right)
+    peak = std::max(peak, std::abs(v));
+  buffer->channels.push_back(std::move(left));
+  if (!right.empty())
+    buffer->channels.push_back(std::move(right));
+  buffer->sampleRate = rate;
+  buffer->peak = peak;
+  return buffer;
+}
+
+void giveSample(Rig &r, int pad, std::unique_ptr<instrument::SampleBuffer> buffer) {
+  std::string why;
+  check(r.p->instrumentRack().setSlotSample(r.slot, static_cast<std::uint32_t>(pad),
+                                            std::move(buffer), why),
+        "sample published to pad " + std::to_string(pad) + ": " + why);
+}
+
+// Index of the last non-zero left sample (-1: silent).
+int lastSound(const Stereo &x) {
+  for (int i = static_cast<int>(x.l.size()); --i >= 0;)
+    if (x.l[i] != 0.0f)
+      return i;
+  return -1;
+}
+
+void sampleSources() {
+  auto r = makeRig(instrumentsDir);
+  const int length = 8000;
+  const auto synthOnly = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "source", 1.0f); // Sample, but no sample yet
+  check(renderHits(r, length, {{0, snare}}) == synthOnly,
+        "a pad set to Sample without a sample keeps its synthesis");
+
+  giveSample(r, snare, sampleOf(std::vector<float>(1000, 0.5f)));
+  const auto one = renderHits(r, length, {{0, snare}});
+  const float c = one.l[10];
+  bool flat = c > 0.0f;
+  for (int i = 0; i < 1000; ++i)
+    flat &= one.l[i] == c && one.r[i] == c;
+  check(flat && lastSound(one) == 999, "a one-shot plays its 1000 frames once, then ends");
+
+  giveSample(r, snare, sampleOf(std::vector<float>(1000, 0.5f), {}, 24000.0));
+  check(std::abs(lastSound(renderHits(r, length, {{0, snare}})) - 1999) <= 1,
+        "a 24 kHz sample plays at its own rate (twice as long at 48 kHz)");
+  setPlain(r, padParam(snare, tune), 12.0f);
+  check(std::abs(lastSound(renderHits(r, length, {{0, snare}})) - 999) <= 1,
+        "Tune +12 st plays it an octave up");
+  setPlain(r, padParam(snare, tune), 0.0f);
+
+  std::vector<float> ramp(1000);
+  for (int i = 0; i < 1000; ++i)
+    ramp[i] = static_cast<float>(i) / 1000.0f;
+  giveSample(r, snare, sampleOf(ramp));
+  const auto forward = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "sample_reverse", 1.0f);
+  const auto backward = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "sample_reverse", 0.0f);
+  check(forward.l[100] < forward.l[900] && backward.l[100] > backward.l[900] &&
+            std::abs(backward.l[0] - forward.l[999]) < 1e-6f,
+        "Reverse plays the region backwards");
+  setUi(r, snare, "sample_start", 0.5f);
+  const auto half = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "sample_start", 0.0f);
+  check(lastSound(half) == 499 && std::abs(half.l[0] - forward.l[500]) < 1e-6f,
+        "Start 0.5 plays the second half of the sample");
+
+  giveSample(r, snare, sampleOf(std::vector<float>(1000, 0.25f)));
+  setUi(r, snare, "sample_normalize", 1.0f);
+  const auto normalized = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "sample_normalize", 0.0f);
+  setUi(r, snare, "sample_level", 2.0f);
+  const auto doubled = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "sample_level", 1.0f);
+  check(std::abs(normalized.l[10] - 2.0f * c) < 1e-6f && std::abs(doubled.l[10] - c) < 1e-6f,
+        "Normalize scales to peak 1; Sample Level 2 doubles");
+
+  giveSample(r, snare, sampleOf(std::vector<float>(1000, 0.5f), std::vector<float>(1000, -0.5f)));
+  const auto stereo = renderHits(r, length, {{0, snare}});
+  check(stereo.l[10] > 0.0f && stereo.r[10] < 0.0f && std::abs(stereo.l[10] + stereo.r[10]) < 1e-6f,
+        "a stereo sample keeps its channels");
+
+  // Layer = synthesis + sample.
+  giveSample(r, snare, sampleOf(ramp));
+  const auto sampleAlone = renderHits(r, length, {{0, snare}});
+  setUi(r, snare, "source", 2.0f);
+  const auto layer = renderHits(r, length, {{0, snare}});
+  Stereo sum = synthOnly;
+  for (std::size_t i = 0; i < sum.l.size(); ++i) {
+    sum.l[i] += sampleAlone.l[i];
+    sum.r[i] += sampleAlone.r[i];
+  }
+  check(maxDifference(layer, sum) < 1e-6, "Layer plays the synthesis plus the sample");
+
+  // Loop: runs past the sample's end until the pad's decay fades it.
+  setUi(r, snare, "source", 1.0f);
+  giveSample(r, snare, sampleOf(std::vector<float>(100, 0.5f)));
+  setUi(r, snare, "sample_loop", 1.0f);
+  const auto looped = renderHits(r, 48000, {{0, snare}});
+  setUi(r, snare, "sample_loop", 0.0f);
+  const double decay = plainOf(r, padParam(snare, 2));
+  check(looped.l[5000] != 0.0f && lastSound(looped) < static_cast<int>(1.5 * decay * 48000.0) &&
+            lastSound(looped) > 1000,
+        "a loop runs past the sample end and ends with the pad's decay (" +
+            std::to_string(lastSound(looped)) + ")");
+  check(looped.finite() && layer.finite() && stereo.finite(), "sample renders are finite");
+}
+
+// A ringing voice keeps its sample after a replacement (contract C); the old
+// buffer is released only after the voice ended.
+void sampleLifetimeInTheKit() {
+  // Released buffers are poisoned with NaN but kept (memory-safe canary): a
+  // read after release shows up as a non-finite render.
+  std::vector<std::unique_ptr<instrument::SampleBuffer>> quarantine;
+  auto r = makeRig(instrumentsDir);
+  check(r.p->instrumentRack().setSampleReleaseSinkForTesting(
+            r.slot,
+            [&](std::unique_ptr<instrument::SampleBuffer> b) {
+              for (auto &channel : b->channels)
+                std::fill(channel.begin(), channel.end(),
+                          std::numeric_limits<float>::quiet_NaN());
+              quarantine.push_back(std::move(b));
+            }),
+        "release sink installed");
+  setUi(r, tom, "source", 1.0f);
+  giveSample(r, tom, sampleOf(std::vector<float>(20000, 0.3f)));
+  const auto first = renderHits(r, 2048, {{0, tom}});
+  giveSample(r, tom, sampleOf(std::vector<float>(20000, 0.6f)));
+  const auto ringing = render(r, 4096, {}, true);
+  r.p->instrumentRack().collectSamples();
+  const auto during = r.p->instrumentRack().sampleStats(r.slot);
+  check(during.has_value() && during->released == 0 && ringing.l[100] == first.l[100],
+        "the ringing voice keeps playing the old sample after the replacement");
+  // The old sample (20000 frames) keeps sounding unchanged to its end while
+  // the controller keeps collecting; a buffer released early would be read
+  // as NaN (the Rack then silences the slot), so the level would break.
+  const float level = first.l[100];
+  int played = 2048 + 4096, steady = 0;
+  for (int i = 0; i < 12; ++i) {
+    const auto block = render(r, 2048, {}, true);
+    for (std::size_t k = 0; k < block.l.size(); ++k, ++played)
+      if (played < 19900 && block.l[k] == level)
+        ++steady;
+    r.p->instrumentRack().collectSamples();
+  }
+  check(steady == 19900 - (2048 + 4096),
+        "the ringing voice plays the old sample unchanged to its end (" + std::to_string(steady) +
+            " frames)");
+  const auto after = r.p->instrumentRack().sampleStats(r.slot);
+  check(after.has_value() && after->released == 1 && after->live == 1,
+        "the old buffer is released once its voice ended");
+}
+
 void kitParity() {
   auto r = makeRig(instrumentsDir);
   const auto profile = parityProfile(r);
@@ -490,14 +653,16 @@ void loadsFromTheInstrumentsFolder() {
   // Phase 1 appended parameters: version 2 upgrades 1.x projects (checked
   // end to end in upgradesVersion1Projects).
   check(!trusted.empty() && kit->publisherId == trusted.front().id &&
-            kit->instrumentVersion == 2 && kit->upgradeFromVersion == 1,
-        "the kit carries its signed package identity and upgrades 1.x projects");
+            kit->instrumentVersion == 3 && kit->upgradeFromVersion == 1 &&
+            kit->sampleSlotCount == 8,
+        "the kit carries its signed package identity, upgrades 1.x projects and has a sample "
+        "slot per pad");
   std::size_t hosted = 0, uiOnly = 0;
   for (const auto &parameter : kit->parameters)
     (instrument::hostparams::uiOnly(parameter) ? uiOnly : hosted) += 1;
   check(kit->providerId == native::providerId && kit->directParameters &&
-            kit->parameters.size() == 131 && hosted == 99 && uiOnly == 32,
-        "99 host parameters (pool 0..98) and 32 UI-only ones; the pattern is content, not "
+            kit->parameters.size() == 187 && hosted == 99 && uiOnly == 88,
+        "99 host parameters (pool 0..98) and 88 UI-only ones; the pattern is content, not "
         "parameters");
   for (std::size_t i = 0; i < 99; ++i)
     check(kit->parameters[i].poolIndex == static_cast<std::int16_t>(i),
@@ -811,10 +976,10 @@ void moduleRejectsInvalidState() {
   check(t.create(drumsId, &params, &s) == VOX_OK, "create");
   std::uint8_t state[1024];
   std::uint32_t written = 0, version = 0;
-  constexpr std::uint32_t count = 131;
-  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 4 &&
+  constexpr std::uint32_t count = 187;
+  check(t.saveState(s, state, sizeof(state), &written, &version) == VOX_OK && version == 5 &&
             written == 12 + count * 4 + 16,
-        "state v4 holds 131 parameters, note map and choke groups (no pattern)");
+        "state v5 holds 187 parameters, note map and choke groups (no pattern)");
   const std::uint32_t notesAt = 12 + count * 4;
   check(state[notesAt] == 36 && state[notesAt + 3] == 42 && state[notesAt + 8 + 3] == 1 &&
             state[notesAt + 8 + 4] == 1,
@@ -823,18 +988,27 @@ void moduleRejectsInvalidState() {
     std::uint8_t copy[1024];
     std::memcpy(copy, state, written);
     copy[at] = value;
-    return t.loadState(s, 4, copy, written);
+    return t.loadState(s, 5, copy, written);
   };
   check(corrupt(notesAt + 1, 36) == VOX_E_STATE_CORRUPT, "duplicate pad note rejected");
   check(corrupt(notesAt + 2, 200) == VOX_E_STATE_CORRUPT, "invalid MIDI note rejected");
   check(corrupt(notesAt + 8, 9) == VOX_E_STATE_CORRUPT, "invalid choke group rejected");
   check(corrupt(0, 0) == VOX_E_STATE_CORRUPT, "bad magic rejected");
-  check(t.loadState(s, 5, state, written) == VOX_E_STATE_VERSION, "future version rejected");
+  check(t.loadState(s, 6, state, written) == VOX_E_STATE_VERSION, "future version rejected");
   check(t.loadState(s, 2, state, written) == VOX_E_STATE_VERSION,
         "pre-release state versions do not load");
-  check(t.loadState(s, 3, state, written) == VOX_E_STATE_CORRUPT,
-        "a v4 body under version 3 is rejected");
-  check(t.loadState(s, 4, state, written) == VOX_OK, "valid state loads");
+  check(t.loadState(s, 3, state, written) == VOX_E_STATE_CORRUPT &&
+            t.loadState(s, 4, state, written) == VOX_E_STATE_CORRUPT,
+        "a v5 body under version 3 or 4 is rejected");
+  check(t.loadState(s, 5, state, written) == VOX_OK, "valid state loads");
+  {
+    // Version 4 (2.x: 131 parameters) upgrades too.
+    std::vector<std::uint8_t> v4(state, state + 12 + 131 * 4);
+    v4[4] = 131;
+    v4.insert(v4.end(), state + notesAt, state + notesAt + 16);
+    check(t.loadState(s, 4, v4.data(), static_cast<std::uint32_t>(v4.size())) == VOX_OK,
+          "a 2.x state (version 4) loads");
+  }
 
   // Version 3 (1.x: 59 parameters) upgrades; phase 1 parameters take their
   // defaults and the saved ones stay.
@@ -847,8 +1021,8 @@ void moduleRejectsInvalidState() {
         "a 1.x state (version 3) loads");
   std::uint8_t upgraded[1024];
   check(t.saveState(s, upgraded, sizeof(upgraded), &written, &version) == VOX_OK &&
-            version == 4 && written == 12 + count * 4 + 16,
-        "and saves as version 4");
+            version == 5 && written == 12 + count * 4 + 16,
+        "and saves as version 5");
   float snare = 0, kickCutoff = 0, cymbalFine = 1;
   std::memcpy(&snare, upgraded + 12 + 5 * 4, 4);
   std::memcpy(&kickCutoff, upgraded + 12 + (59 + 2) * 4, 4);
@@ -878,6 +1052,12 @@ void noAllocationWhilePlaying() {
   setUi(r, tom, "output", 3.0f);
   setPlain(r, pad2(clap, send1), 0.7f);
   setPlain(r, pad2(kick, send2), 0.3f);
+  // Slice 2: sample voices (one-shot and loop) and a usage report.
+  setUi(r, rim, "source", 1.0f);
+  giveSample(r, rim, sampleOf(std::vector<float>(3000, 0.2f)));
+  setUi(r, cymbal, "source", 2.0f);
+  setUi(r, cymbal, "sample_loop", 1.0f);
+  giveSample(r, cymbal, sampleOf(std::vector<float>(500, 0.1f), std::vector<float>(500, 0.1f)));
   renderHits(r, 2048, {{0, kick}}); // warm up
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
   voxProbeBegin();
@@ -1531,8 +1711,8 @@ juce::MouseEvent mouse(juce::Component &target, juce::Point<int> at, bool shift 
 }
 
 // The kit's declarative SOUND layout (#82): shipped in the signed package,
-// rendered on the SOUND page as exactly the kit's 131 real controls (99 on
-// host endpoints, 32 UI-only).
+// rendered on the SOUND page as exactly the kit's 187 real controls (99 on
+// host endpoints, 88 UI-only).
 juce::Component *findShown(juce::Component &root, const juce::String &name) {
   for (auto *child : root.getChildren()) {
     if (!child->isVisible())
@@ -1567,8 +1747,8 @@ void editorSoundLayout() {
     controls += section.controls.size();
   check(layout.sections.size() == 10 && layout.sections.front().title == "KICK" &&
             layout.sections.back().title == "SEQUENCER" && controls == descriptor->parameters.size() &&
-            controls == 131,
-        "ten sections hold all 131 kit parameters");
+            controls == 187,
+        "ten sections hold all 187 kit parameters");
   juce::String demoDiagnostic;
   check(r.p->loadSlotInstrument(4, "com.ultimavox.demo-synth", demoDiagnostic),
         "Demo Synth loads next to the kit: " + demoDiagnostic.toStdString());
@@ -2016,6 +2196,8 @@ int main(int argc, char **argv) {
   upgradesVersion1Projects();
   phase1Shaping();
   phase1BusesAndSends();
+  sampleSources();
+  sampleLifetimeInTheKit();
   sampleOffsetsAndSimultaneousHits();
   chokeAndRelease();
   midiOverflowFailsClosed();

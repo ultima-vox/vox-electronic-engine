@@ -49,9 +49,14 @@
 #define PAD_UI 4u
 #define HOST2_BASE V1_PARAM_COUNT                         /* 59 */
 #define UI_BASE (HOST2_BASE + PAD_COUNT * PAD_HOST2)      /* 99 */
-#define PARAM_COUNT (UI_BASE + PAD_COUNT * PAD_UI)        /* 131 */
+#define V2_PARAM_COUNT (UI_BASE + PAD_COUNT * PAD_UI)     /* 131 */
+/* Phase 1, slice 2 (appended): per pad 7 UI-only sample controls. */
+#define PAD_SMP 7u
+#define SMP_BASE V2_PARAM_COUNT                           /* 131 */
+#define PARAM_COUNT (SMP_BASE + PAD_COUNT * PAD_SMP)      /* 187 */
 #define MAX_VOICES 16
-#define STATE_VERSION 4u
+#define STATE_VERSION 5u
+#define V2_STATE_VERSION 4u
 #define V1_STATE_VERSION 3u
 #define STATE_MAGIC 0x44464f56u /* "VOFD" */
 #define STATE_BYTES_FOR(count) (12u + (count) * 4u + PAD_COUNT * 2u)
@@ -87,6 +92,9 @@ enum { K_SEND1, K_SEND2, K_CUTOFF, K_RESONANCE, K_FINE };
 /* UI-only (index UI_BASE + pad * 4 + key). */
 enum { U_FILTER, U_ATTACK, U_SUSTAIN, U_OUTPUT };
 enum { FILTER_OFF, FILTER_LP12, FILTER_LP24, FILTER_HP12, FILTER_HP24, FILTER_BP };
+/* Sample controls (index SMP_BASE + pad * 7 + key), UI-only. */
+enum { SM_SOURCE, SM_START, SM_END, SM_LOOP, SM_REVERSE, SM_NORMALIZE, SM_LEVEL };
+enum { SOURCE_SYNTH, SOURCE_SAMPLE, SOURCE_LAYER };
 /* Aux buses (ABI V2.3), in descriptor order: Send 1 -> Rack return 1, Send 2
  * -> return 2, then pad outputs Out 2..Out 8. */
 #define AUX_SENDS 2u
@@ -141,6 +149,22 @@ static const uint8_t defaultChoke[PAD_COUNT] = {0, 0, 0, 1, 1, 0, 0, 0};
 static const char *const filterChoices[] = {"Off", "LP 12", "LP 24", "HP 12", "HP 24", "BP"};
 static const char *const outputChoices[] = {"Main",  "Out 2", "Out 3", "Out 4",
                                             "Out 5", "Out 6", "Out 7", "Out 8"};
+static const char *const sourceChoices[] = {"Synth", "Sample", "Layer"};
+#define PADSMP(key, label)                                                                     \
+  U(key ".source", label " Source", "", label, sourceChoices, VOX_PARAM_CHOICE, 3, 0.0f, 2.0f,   \
+    0.0f, 1.0f),                                                                              \
+  U(key ".sample_start", label " Start", "", label, NULL, VOX_PARAM_FLOAT, 0, 0.0f, 1.0f, 0.0f,  \
+    0.0f),                                                                                    \
+  U(key ".sample_end", label " End", "", label, NULL, VOX_PARAM_FLOAT, 0, 0.0f, 1.0f, 1.0f,      \
+    0.0f),                                                                                    \
+  U(key ".sample_loop", label " Loop", "", label, NULL, VOX_PARAM_BOOLEAN, 0, 0.0f, 1.0f, 0.0f,  \
+    1.0f),                                                                                    \
+  U(key ".sample_reverse", label " Reverse", "", label, NULL, VOX_PARAM_BOOLEAN, 0, 0.0f, 1.0f,  \
+    0.0f, 1.0f),                                                                              \
+  U(key ".sample_normalize", label " Normalize", "", label, NULL, VOX_PARAM_BOOLEAN, 0, 0.0f,    \
+    1.0f, 0.0f, 1.0f),                                                                        \
+  U(key ".sample_level", label " Sample Level", "", label, NULL, VOX_PARAM_FLOAT, 0, 0.0f, 2.0f, \
+    1.0f, 0.0f)
 #define PADUI(key, label)                                                                      \
   U(key ".filter", label " Filter", "", label, filterChoices, VOX_PARAM_CHOICE, 6, 0.0f, 5.0f,   \
     0.0f, 1.0f),                                                                              \
@@ -197,15 +221,21 @@ static const VoxParameterDescriptorV2 parameters[PARAM_COUNT] = {
     PADUI("kick", "Kick"), PADUI("snare", "Snare"), PADUI("clap", "Clap"),
     PADUI("chat", "Closed Hat"), PADUI("ohat", "Open Hat"), PADUI("tom", "Tom"),
     PADUI("rim", "Rim"), PADUI("cymbal", "Cymbal"),
+    /* Phase 1, slice 2: sample source and playback (UI-only). */
+    PADSMP("kick", "Kick"), PADSMP("snare", "Snare"), PADSMP("clap", "Clap"),
+    PADSMP("chat", "Closed Hat"), PADSMP("ohat", "Open Hat"), PADSMP("tom", "Tom"),
+    PADSMP("rim", "Rim"), PADSMP("cymbal", "Cymbal"),
 };
 
 static const VoxInstrumentDescriptorV2 instrument = {
     sizeof(VoxInstrumentDescriptorV2), VOX_MODULE_ABI_V2, DRUMS_ID, "Full-on Drums",
-    "Ultima Vox", "Drums", 2, 1, STATE_VERSION, PARAM_COUNT, parameters,
+    "Ultima Vox", "Drums", 3, 1, STATE_VERSION, PARAM_COUNT, parameters,
     sizeof(VoxParameterDescriptorV2), MAX_VOICES, MAX_MIDI_EVENTS, MAX_STATE_BYTES, 0, 0, 2,
     /* upgradeFromVersion: 1.x projects gain the phase 1 parameters at their
      * defaults, which keep the 1.x sound. */
-    1, auxBuses, AUX_COUNT, 0, 0, 0};
+    1, auxBuses, AUX_COUNT, 0,
+    /* ABI V2.4: one host sample slot per pad (contract C). */
+    PAD_COUNT, 0};
 
 /* 808-style metallic oscillator ratios (Hz at tune 0). */
 static const double metalHz[6] = {205.3, 304.4, 369.6, 522.7, 540.0, 800.0};
@@ -225,10 +255,18 @@ typedef struct {
   /* Phase 1, latched at trigger: pad filter (TPT state-variable, 1 or 2
    * stages), transient shaper, destination bus and sends. */
   int filter;
-  double fg, fk, fs1[2], fs2[2];
+  double fg, fk, fs1[2][2], fs2[2][2]; /* [channel][stage] */
   double attack, sustain, attackEnv, attackMul, sustainEnv, sustainMul;
   int bus;            /* 0 main, 1..7 = Out 2..Out 8 */
   double send1, send2;
+  /* Slice 2: the pad's synthesis and sample sources. A sample voice holds
+   * the buffer it started on (reported in the usage list while it plays). */
+  int synthOn, sampleOn;
+  uint64_t sampleId;
+  const float *const *sampleData;
+  uint32_t sampleChannels;
+  double samplePos, sampleStep, sampleBegin, sampleEnd, sampleGain;
+  int sampleLoop, sampleReverse;
 } Voice;
 
 struct VoxInstanceT {
@@ -247,6 +285,8 @@ struct VoxInstanceT {
   uint32_t maxBlock, outputChannels, maxParamChanges, maxMidiEvents;
   int prepared;
   Voice voices[MAX_VOICES];
+  /* The host's sample table, valid during one process call only. */
+  const VoxSampleV2 *samples;
 };
 
 static int liveInstances;
@@ -277,6 +317,9 @@ static float pad2Value(const struct VoxInstanceT *s, int pad, int key) {
 }
 static float padUi(const struct VoxInstanceT *s, int pad, int key) {
   return s->values[UI_BASE + (uint32_t)pad * PAD_UI + (uint32_t)key];
+}
+static float padSmp(const struct VoxInstanceT *s, int pad, int key) {
+  return s->values[SMP_BASE + (uint32_t)pad * PAD_SMP + (uint32_t)key];
 }
 
 /* ---------------------------------------------------------- patterns */
@@ -482,6 +525,36 @@ static void trigger(struct VoxInstanceT *s, int pad, int velocity) {
   v->bus = (int)padUi(s, pad, U_OUTPUT);
   v->send1 = pad2Value(s, pad, K_SEND1);
   v->send2 = pad2Value(s, pad, K_SEND2);
+  /* Source. A pad set to Sample without a usable sample keeps playing its
+   * synthesis (a missing file never silences a pad). */
+  const int source = (int)padSmp(s, pad, SM_SOURCE);
+  const VoxSampleV2 *smp = s->samples != NULL ? &s->samples[pad] : NULL;
+  int sampled = 0;
+  if (source != SOURCE_SYNTH && smp != NULL && smp->id != 0 && smp->channels != NULL &&
+      smp->channelCount > 0 && smp->frames > 1 && smp->sampleRate > 0.0) {
+    const double frames = (double)smp->frames;
+    double begin = floor((double)padSmp(s, pad, SM_START) * frames);
+    double end = ceil((double)padSmp(s, pad, SM_END) * frames);
+    if (end > frames)
+      end = frames;
+    if (end - begin >= 2.0) {
+      sampled = 1;
+      v->sampleId = smp->id;
+      v->sampleData = smp->channels;
+      v->sampleChannels = smp->channelCount > 1 ? 2u : 1u;
+      v->sampleBegin = begin;
+      v->sampleEnd = end;
+      v->sampleLoop = padSmp(s, pad, SM_LOOP) >= 0.5f;
+      v->sampleReverse = padSmp(s, pad, SM_REVERSE) >= 0.5f;
+      v->samplePos = v->sampleReverse ? end - 1.0 : begin;
+      v->sampleStep = smp->sampleRate / sr * tune;
+      v->sampleGain = padSmp(s, pad, SM_LEVEL);
+      if (padSmp(s, pad, SM_NORMALIZE) >= 0.5f && smp->peak > 0.0f)
+        v->sampleGain /= smp->peak;
+    }
+  }
+  v->sampleOn = sampled;
+  v->synthOn = !sampled || source == SOURCE_LAYER;
   const double decay = padValue(s, pad, K_DECAY);
   v->character = padValue(s, pad, K_CHARACTER);
   v->env = 1.0;
@@ -540,26 +613,30 @@ static double bandPass(double x, double *ic1, double *ic2, double fc, double k, 
   return v1;
 }
 
-/* Phase 1 per-pad shaping after the pad's own source: transient (attack
- * boost/cut over ~10 ms, sustain over the body), then the pad filter. At the
- * defaults (filter Off, transient 0) the sample is returned unchanged. */
-static double shape(Voice *v, double x) {
-  if (v->attack != 0.0 || v->sustain != 0.0) {
-    const double gain = 1.0 + v->attack * v->attackEnv + v->sustain * (1.0 - v->sustainEnv);
-    v->attackEnv *= v->attackMul;
-    v->sustainEnv *= v->sustainMul;
-    x *= gain > 0.0 ? gain : 0.0;
-  }
+/* Phase 1 per-pad shaping after the pad's sources: the transient gain (one
+ * per sample: attack boost/cut over ~10 ms, sustain over the body), then
+ * the pad filter on each channel. At the defaults (filter Off, transient 0)
+ * the samples pass unchanged. */
+static double transientGain(Voice *v) {
+  if (v->attack == 0.0 && v->sustain == 0.0)
+    return 1.0;
+  const double gain = 1.0 + v->attack * v->attackEnv + v->sustain * (1.0 - v->sustainEnv);
+  v->attackEnv *= v->attackMul;
+  v->sustainEnv *= v->sustainMul;
+  return gain > 0.0 ? gain : 0.0;
+}
+
+static double filterChannel(Voice *v, int ch, double x) {
   if (v->filter == FILTER_OFF)
     return x;
   const int stages = v->filter == FILTER_LP24 || v->filter == FILTER_HP24 ? 2 : 1;
   const double g = v->fg, k = v->fk;
   const double a1 = 1.0 / (1.0 + g * (g + k));
   for (int st = 0; st < stages; ++st) {
-    const double v1 = a1 * v->fs1[st] + g * a1 * (x - v->fs2[st]);
-    const double v2 = v->fs2[st] + g * v1;
-    v->fs1[st] = 2.0 * v1 - v->fs1[st];
-    v->fs2[st] = 2.0 * v2 - v->fs2[st];
+    const double v1 = a1 * v->fs1[ch][st] + g * a1 * (x - v->fs2[ch][st]);
+    const double v2 = v->fs2[ch][st] + g * v1;
+    v->fs1[ch][st] = 2.0 * v1 - v->fs1[ch][st];
+    v->fs2[ch][st] = 2.0 * v2 - v->fs2[ch][st];
     switch (v->filter) {
     case FILTER_LP12:
     case FILTER_LP24:
@@ -575,6 +652,43 @@ static double shape(Voice *v, double x) {
     }
   }
   return x;
+}
+
+/* One frame of the voice's sample (linear interpolation inside the region,
+ * forward or reverse, one shot or loop). Ends the sample at the region end;
+ * a loop runs until the pad's decay envelope has faded it out. */
+static void renderSample(Voice *v, double *l, double *r) {
+  const double pos = v->samplePos;
+  const double base = floor(pos);
+  const double frac = pos - base;
+  const uint64_t i0 = (uint64_t)base;
+  uint64_t i1;
+  if (v->sampleReverse)
+    i1 = base - 1.0 >= v->sampleBegin ? i0 - 1u : (v->sampleLoop ? (uint64_t)v->sampleEnd - 1u : i0);
+  else
+    i1 = base + 1.0 < v->sampleEnd ? i0 + 1u : (v->sampleLoop ? (uint64_t)v->sampleBegin : i0);
+  const float *c0 = v->sampleData[0];
+  const float *c1 = v->sampleData[v->sampleChannels > 1 ? 1 : 0];
+  *l = (c0[i0] + (c0[i1] - c0[i0]) * frac) * v->sampleGain;
+  *r = (c1[i0] + (c1[i1] - c1[i0]) * frac) * v->sampleGain;
+  const double length = v->sampleEnd - v->sampleBegin;
+  if (v->sampleReverse) {
+    v->samplePos -= v->sampleStep;
+    if (v->samplePos < v->sampleBegin) {
+      if (v->sampleLoop)
+        v->samplePos += length * ceil((v->sampleBegin - v->samplePos) / length);
+      else
+        v->sampleOn = 0;
+    }
+  } else {
+    v->samplePos += v->sampleStep;
+    if (v->samplePos >= v->sampleEnd) {
+      if (v->sampleLoop)
+        v->samplePos -= length * ceil((v->samplePos - v->sampleEnd + 1e-12) / length);
+      else
+        v->sampleOn = 0;
+    }
+  }
 }
 
 static double metal(Voice *v, double scale) {
@@ -677,7 +791,7 @@ static double renderVoice(Voice *v) {
   v->env *= v->envMul;
   v->n += 1;
   if (level < SILENCE && t > 0.005)
-    v->active = 0;
+    v->synthOn = 0;
   return x;
 }
 
@@ -943,6 +1057,19 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   reportHits(c, seq, seqCount, s->padNote, routedIgnored);
   float *left = c->outputs[0];
   float *right = c->outputChannelCount > 1 ? c->outputs[1] : NULL;
+  /* V2.4 sample table: used only when the host's context covers it and
+   * gives one entry per pad. Without it pads play their synthesis and no
+   * voice may keep a sample (it could not be reported). */
+  const int haveSamples =
+      c->structSize >= offsetof(VoxProcessContextV2, sampleUsage) + sizeof(void *) &&
+      c->samples != NULL && c->sampleSlotCount == PAD_COUNT;
+  s->samples = haveSamples ? c->samples : NULL;
+  if (!haveSamples)
+    for (int k = 0; k < MAX_VOICES; ++k) {
+      s->voices[k].sampleOn = 0;
+      if (s->voices[k].active && !s->voices[k].synthOn)
+        s->voices[k].active = 0;
+    }
   /* V2.3 aux buses, used only when the host gives every one of ours. A host
    * without them gets each pad's dry signal on main and no sends. */
   float *const *aux = NULL;
@@ -990,13 +1117,34 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       Voice *v = &s->voices[k];
       if (!v->active)
         continue;
-      double x = shape(v, renderVoice(v));
+      double sl = 0.0, sr = 0.0;
+      const double synth = v->synthOn ? renderVoice(v) : 0.0;
+      if (v->sampleOn) {
+        renderSample(v, &sl, &sr);
+        if (v->sampleLoop) { /* a loop follows the pad's decay envelope */
+          sl *= v->env;
+          sr *= v->env;
+          if (!v->synthOn)
+            v->env *= v->envMul;
+          if (v->env < SILENCE && v->n > (int64_t)(0.005 * v->sr))
+            v->sampleOn = 0;
+        }
+        if (!v->synthOn)
+          v->n += 1; /* age for voice stealing, as the synthesis does */
+      }
+      const double transient = transientGain(v);
+      double xL = filterChannel(v, 0, (synth + sl) * transient);
+      double xR = filterChannel(v, 1, (synth + sr) * transient);
       if (v->fadeTotal > 0) {
-        x *= (double)v->fadeLeft / (double)v->fadeTotal;
+        const double fade = (double)v->fadeLeft / (double)v->fadeTotal;
+        xL *= fade;
+        xR *= fade;
         if (--v->fadeLeft <= 0)
           v->active = 0;
       }
-      const double xl = x * v->gainL, xr = x * v->gainR;
+      if (!v->synthOn && !v->sampleOn)
+        v->active = 0;
+      const double xl = xL * v->gainL, xr = xR * v->gainR;
       /* One dry destination per pad (main or its output bus); sends are
        * post level/pan and independent of it. */
       if (aux != NULL && v->bus > 0) {
@@ -1033,6 +1181,28 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
     stopAll(s);
   else if (c->releaseFlags & VOX_RELEASE_ALL_NOTES_AT_END)
     fadeAll(s, 0.05);
+  /* Contract C usage report: every buffer a voice still holds, once each. */
+  if (haveSamples && c->sampleUsage != NULL && c->sampleUsage->ids != NULL) {
+    VoxSampleUsageV2 *u = c->sampleUsage;
+    u->count = 0;
+    u->overflow = 0;
+    for (int k = 0; k < MAX_VOICES; ++k) {
+      const Voice *v = &s->voices[k];
+      if (!v->active || !v->sampleOn)
+        continue;
+      int seen = 0;
+      for (uint32_t j = 0; j < u->count; ++j)
+        seen |= u->ids[j] == v->sampleId;
+      if (seen)
+        continue;
+      if (u->count == u->capacity) {
+        u->overflow = 1;
+        break;
+      }
+      u->ids[u->count++] = v->sampleId;
+    }
+  }
+  s->samples = NULL;
   return VOX_OK;
 }
 
@@ -1071,11 +1241,13 @@ static VoxResult VOX_CALL loadState(VoxInstance s, uint32_t version, const uint8
                                     uint32_t size) {
   if (s == NULL || (bytes == NULL && size > 0))
     return VOX_E_INVALID_ARG;
-  /* Version 3 (1.x, 59 parameters) upgrades: the phase 1 parameters take
-   * their defaults, which keep the 1.x sound. */
-  if (version != STATE_VERSION && version != V1_STATE_VERSION)
+  /* Versions 3 (1.x, 59 parameters) and 4 (2.x, 131) upgrade: the later
+   * parameters take their defaults, which keep the earlier sound. */
+  if (version != STATE_VERSION && version != V2_STATE_VERSION && version != V1_STATE_VERSION)
     return VOX_E_STATE_VERSION;
-  const uint32_t count = version == V1_STATE_VERSION ? V1_PARAM_COUNT : PARAM_COUNT;
+  const uint32_t count = version == V1_STATE_VERSION   ? V1_PARAM_COUNT
+                         : version == V2_STATE_VERSION ? V2_PARAM_COUNT
+                                                       : PARAM_COUNT;
   if (size != STATE_BYTES_FOR(count) || get32(bytes) != STATE_MAGIC ||
       get32(bytes + 4) != count || get32(bytes + 8) != PAD_COUNT)
     return VOX_E_STATE_CORRUPT;
