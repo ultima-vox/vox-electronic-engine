@@ -62,6 +62,20 @@ struct PersistentSlotState {
     bool uiOnly{};
   };
   std::vector<DirectValue> directParameters;
+  // Contract C2: the sample assigned to each sample slot of the instrument,
+  // by reference (the decoded audio is never saved). Kept when the file is
+  // missing or changed, so the project still names what to locate.
+  struct SampleRef {
+    enum class Source : std::uint8_t { factory = 1, file = 2 };
+    std::uint32_t sampleSlot{};
+    Source source{Source::file};
+    // factory: sample name in the instrument's signed package;
+    // file: absolute path of a user WAV.
+    std::string location;
+    std::string sha256; // lowercase hex of the file's bytes
+    std::uint64_t bytes{};
+  };
+  std::vector<SampleRef> sampleRefs; // sorted by sampleSlot, one per slot
 };
 
 struct RuntimeSlotState {

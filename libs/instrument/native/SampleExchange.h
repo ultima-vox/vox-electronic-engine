@@ -15,6 +15,7 @@
 
 #include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -38,10 +39,13 @@ public:
   // SampleHost (controller threads).
   std::uint32_t sampleSlotCount() const noexcept override { return slots_; }
   bool publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
-               std::string &diagnostic) override;
+               std::string &diagnostic, std::uint64_t memoryLimitBytes = 0) override;
   std::size_t collect() override;
   SampleStats stats() const override;
   void setReleaseSinkForTesting(ReleaseSink sink) override;
+  // Tests: called inside publish right after the pending entry was taken, to
+  // force an audio block into that point.
+  void setAfterTakeHookForTesting(std::function<void()> hook);
 
   // Controller, only while no process() can run (after a successful module
   // prepare in the Rack's exclusive section, which ends every voice):
@@ -77,6 +81,9 @@ private:
   bool acceptable(const Report &report);
   void releaseLocked(const Entry *entry);
   std::size_t liveInSlot(std::uint32_t slot) const noexcept;
+  // Sample memory of the live entries, optionally without one entry.
+  std::uint64_t liveBytes(const Entry *except = nullptr) const noexcept;
+  static std::uint64_t bytesOf(const SampleBuffer *buffer) noexcept;
 
   const std::uint32_t slots_;
   const std::uint32_t capacity_;
@@ -104,6 +111,7 @@ private:
   std::vector<std::unique_ptr<Entry>> live_;
   std::vector<std::uint64_t> scratch_;
   ReleaseSink sink_;
+  std::function<void()> afterTakeForTesting_;
   SampleStats stats_{};
 };
 

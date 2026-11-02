@@ -3,6 +3,7 @@
 // the host pool and restores the same sound after save/reload.
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "instrument/samples/SampleLoader.h"
 #include "RackAudioParameters.h"
 #include "modules/BuiltInProvider.h"
 #include "instrument/HostParameterSchema.h"
@@ -18,6 +19,8 @@
 #include <span>
 #include <string>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <atomic>
 #include <functional>
 #include <thread>
@@ -1819,6 +1822,359 @@ void legacyHasNoSampleSlots() {
         "a V2.2 instrument has no sample hand-off");
 }
 
+// ---------------------------------------------------------------- C2
+// Contract C2: decoded WAV files assigned through the loader worker, saved by
+// reference, restored, and reported when missing or changed.
+std::filesystem::path c2Dir() {
+  static const auto dir = [] {
+    auto d = std::filesystem::temp_directory_path() /
+             ("vox-c2-" + std::to_string(juce::Time::currentTimeMillis()));
+    std::filesystem::create_directories(d);
+    return d;
+  }();
+  return dir;
+}
+
+std::filesystem::path writeWav(const std::string &name, float value, int frames) {
+  const auto path = c2Dir() / name;
+  std::filesystem::remove(path);
+  juce::File file(path.string());
+  juce::WavAudioFormat wav;
+  std::unique_ptr<juce::AudioFormatWriter> writer(
+      wav.createWriterFor(new juce::FileOutputStream(file), 48000.0, 1, 24, {}, 0));
+  check(writer != nullptr, "test WAV writer for " + name);
+  juce::AudioBuffer<float> audio(1, frames);
+  for (int i = 0; i < frames; ++i)
+    audio.setSample(0, i, value);
+  check(writer->writeFromAudioSampleBuffer(audio, 0, frames), "test WAV written");
+  return path;
+}
+
+const rack::PersistentSlotState::SampleRef *savedRef(VstEngineAudioProcessor &p,
+                                                      std::size_t slot, std::uint32_t sampleSlot) {
+  for (const auto &ref : p.instrumentRack().state()[slot].sampleRefs)
+    if (ref.sampleSlot == sampleSlot)
+      return &ref;
+  return nullptr;
+}
+
+std::string sampleErrorOf(VstEngineAudioProcessor &p, std::size_t slot) {
+  return p.instrumentRack().diagnostics()[slot].sampleError;
+}
+
+void sampleFileAssignSaveRestore() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  const auto wav = writeWav("kick.wav", 0.25f, 8 * blockSize);
+  juce::MemoryBlock state;
+  Render first;
+  {
+    auto p = makeProcessor(true);
+    loadTone(*p, slot);
+    juce::String why;
+    check(p->assignSampleFile(slot, 0, juce::File(wav.string()), why), "assign queued: " +
+                                                                          why.toStdString());
+    p->sampleLoaderForTesting().waitIdle();
+    const auto *ref = savedRef(*p, slot, 0);
+    check(ref != nullptr && ref->source == rack::PersistentSlotState::SampleRef::Source::file &&
+              ref->location == wav.string() && ref->sha256.size() == 64 && ref->bytes > 0 &&
+              sampleErrorOf(*p, slot).empty(),
+          "the slot state records the file, its SHA-256 and size");
+    first = play(*p, channelOf(*p, slot), 6, 0, -1);
+    check(first.left[64] != 0.0f, "the assigned sample sounds");
+    p->getStateInformation(state);
+  }
+  {
+    auto reopened = makeProcessor(true);
+    reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    reopened->sampleLoaderForTesting().waitIdle();
+    const auto again = play(*reopened, channelOf(*reopened, slot), 6, 0, -1);
+    check(again.left == first.left && sampleErrorOf(*reopened, slot).empty(),
+          "reopening the project loads the sample again, bit-equal");
+  }
+  // Missing file: the project opens, the reference is kept, the pad stays on
+  // its synthesis source (this tone: silent in sample mode), the slot says why.
+  std::filesystem::remove(wav);
+  {
+    auto reopened = makeProcessor(true);
+    reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    reopened->sampleLoaderForTesting().waitIdle();
+    check(reopened->instrumentRack().state()[slot].instrumentId == toneId &&
+              savedRef(*reopened, slot, 0) != nullptr &&
+              !sampleErrorOf(*reopened, slot).empty(),
+          "a missing file keeps the project and the reference, and reports it");
+    check(play(*reopened, channelOf(*reopened, slot), 4, 0, -1).energy() == 0.0,
+          "no sample is assigned for a missing file");
+    juce::MemoryBlock kept;
+    reopened->getStateInformation(kept);
+    auto back = makeProcessor(true);
+    back->setStateInformation(kept.getData(), static_cast<int>(kept.getSize()));
+    back->sampleLoaderForTesting().waitIdle();
+    check(savedRef(*back, slot, 0) != nullptr, "saving again keeps the reference to locate");
+  }
+  // Changed file: same path, different bytes.
+  writeWav("kick.wav", 0.5f, 8 * blockSize);
+  {
+    auto reopened = makeProcessor(true);
+    reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    reopened->sampleLoaderForTesting().waitIdle();
+    check(sampleErrorOf(*reopened, slot).find("changed") != std::string::npos &&
+              play(*reopened, channelOf(*reopened, slot), 4, 0, -1).energy() == 0.0,
+          "a changed file is reported and not loaded");
+  }
+  setSampleMode(slot, 0);
+}
+
+void sampleLoaderGuards() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  const auto wav = writeWav("snare.wav", 0.3f, 4 * blockSize);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  auto &loader = p->sampleLoaderForTesting();
+  // A request for an instance that has since been replaced is dropped.
+  const auto stale = p->instrumentRack().instanceGeneration(slot);
+  loadTone(*p, slot);
+  check(p->instrumentRack().instanceGeneration(slot) != stale,
+        "loading an instrument changes the slot's instance generation");
+  rack::PersistentSlotState::SampleRef ref;
+  ref.sampleSlot = 0;
+  ref.location = wav.string();
+  std::string why;
+  const auto failedBefore = loader.stats().failed;
+  check(loader.enqueue({slot, stale, ref}, why), "stale request queued");
+  loader.waitIdle();
+  check(loader.stats().failed == failedBefore + 1 && savedRef(*p, slot, 0) == nullptr,
+        "a stale request assigns nothing");
+  // A relative path is refused.
+  juce::String jwhy;
+  auto relative = ref;
+  relative.location = "snare.wav";
+  check(loader.enqueue({slot, p->instrumentRack().instanceGeneration(slot), relative}, why),
+        "relative path queued");
+  loader.waitIdle();
+  check(savedRef(*p, slot, 0) == nullptr && !sampleErrorOf(*p, slot).empty(),
+        "a relative sample path is refused");
+  // Assign, then clear through the same queue.
+  check(p->assignSampleFile(slot, 1, juce::File(wav.string()), jwhy), "assign slot 1");
+  check(p->clearSample(slot, 1, jwhy), "clear slot 1 queued after it");
+  loader.waitIdle();
+  check(savedRef(*p, slot, 1) == nullptr && sampleErrorOf(*p, slot).empty(),
+        "a clear queued after an assign leaves the slot empty");
+  check(play(*p, channelOf(*p, slot), 4, 0, -1, 61).energy() == 0.0, "the cleared slot is silent");
+  // Loading another instrument drops the slot's references.
+  check(p->assignSampleFile(slot, 0, juce::File(wav.string()), jwhy), "assign slot 0");
+  loader.waitIdle();
+  check(savedRef(*p, slot, 0) != nullptr, "assigned");
+  loadTone(*p, slot);
+  check(p->instrumentRack().state()[slot].sampleRefs.empty(),
+        "a newly loaded instrument starts without sample references");
+
+  // Budget and queue bounds, with dedicated loaders on the same Rack.
+  {
+    instrument::samples::SampleLoader::Options tight;
+    tight.slotBudgetBytes = 4 * blockSize * 4 - 1; // below one 4-block mono sample
+    instrument::samples::SampleLoader tightLoader(p->instrumentRack(), tight);
+    check(tightLoader.enqueue({slot, p->instrumentRack().instanceGeneration(slot), ref}, why),
+          "budget request queued");
+    tightLoader.waitIdle();
+    check(tightLoader.stats().failed == 1 && savedRef(*p, slot, 0) == nullptr &&
+              sampleErrorOf(*p, slot).find("budget") != std::string::npos,
+          "a sample above the slot's memory budget is refused");
+    instrument::samples::SampleLoader::Options none;
+    none.queueCapacity = 0;
+    instrument::samples::SampleLoader full(p->instrumentRack(), none);
+    check(!full.enqueue({slot, 0, ref}, why) && full.stats().refused == 1,
+          "a full queue refuses the request");
+  }
+  // Factory samples resolve through the package; a hash disagreement refuses.
+  {
+    const auto bytes = [&] {
+      std::ifstream in(wav, std::ios::binary);
+      return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
+    }();
+    const auto hash = instrument::samples::sha256Hex(bytes);
+    std::string wanted = hash;
+    instrument::samples::SampleLoader factory(
+        p->instrumentRack(), {},
+        [&](std::size_t, const std::string &name)
+            -> std::optional<instrument::samples::SampleLoader::FactoryFile> {
+          if (name != "snare")
+            return std::nullopt;
+          return instrument::samples::SampleLoader::FactoryFile{wav, wanted};
+        });
+    rack::PersistentSlotState::SampleRef named;
+    named.sampleSlot = 0;
+    named.source = rack::PersistentSlotState::SampleRef::Source::factory;
+    named.location = "snare";
+    const auto generation = p->instrumentRack().instanceGeneration(slot);
+    factory.enqueue({slot, generation, named}, why);
+    factory.waitIdle();
+    const auto *saved = savedRef(*p, slot, 0);
+    check(saved != nullptr && saved->sha256 == hash &&
+              saved->source == rack::PersistentSlotState::SampleRef::Source::factory,
+          "a factory sample loads with the package hash");
+    named.location = "missing";
+    factory.enqueue({slot, generation, named}, why);
+    factory.waitIdle();
+    check(sampleErrorOf(*p, slot).find("not found") != std::string::npos,
+          "an unknown factory sample is reported");
+    named.location = "snare";
+    wanted.assign(64, '0');
+    factory.enqueue({slot, generation, named}, why);
+    factory.waitIdle();
+    check(sampleErrorOf(*p, slot).find("changed") != std::string::npos,
+          "a factory file that does not match the package hash is refused");
+  }
+  setSampleMode(slot, 0);
+}
+
+// Owner review 5739237898: collection runs on the processor's own timer
+// path, so publishes are not blocked once ringing voices have ended, without
+// anyone calling collect by hand.
+void sampleCollectionWhileRinging() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  const int channel = channelOf(*p, slot);
+  juce::String why;
+  for (int i = 0; i < 5; ++i) {
+    const auto wav = writeWav("ring" + std::to_string(i) + ".wav", 0.01f, 30 * blockSize);
+    check(p->assignSampleFile(slot, 0, juce::File(wav.string()), why), "ringing assign queued");
+    p->sampleLoaderForTesting().waitIdle();
+    play(*p, channel, 1, 0, -1); // install it and start a voice on it
+  }
+  const auto live = statsOf(*p, slot).live;
+  check(live == 5, "five ringing buffers are live (" + std::to_string(live) + ")");
+  for (int b = 0; b < 40; ++b) {
+    play(*p, channel, 1, -1, -1);
+    p->serviceSamples(); // what the 100 ms collector timer does
+  }
+  check(statsOf(*p, slot).live == 1, "the timer path released every ended voice's buffer");
+  const auto failed = p->sampleLoaderForTesting().stats().failed;
+  for (int i = 0; i < 8; ++i) {
+    const auto wav = writeWav("more" + std::to_string(i) + ".wav", 0.01f, blockSize);
+    p->assignSampleFile(slot, 0, juce::File(wav.string()), why);
+    p->sampleLoaderForTesting().waitIdle();
+    play(*p, channel, 1, -1, -1);
+    p->serviceSamples();
+  }
+  check(p->sampleLoaderForTesting().stats().failed == failed,
+        "later publishes are never refused once the voices ended");
+  setSampleMode(slot, 0);
+}
+
+// Owner review 5739970190, P1: the per-slot budget covers every buffer the
+// slot's hand-off holds, including retiring ones that ringing voices read.
+// A publish above it is refused and leaves the previous sound and reference.
+void sampleBudgetCoversRetiringBuffers() {
+  constexpr std::size_t slot = 6;
+  setSampleMode(slot, 1);
+  auto p = makeProcessor(true);
+  loadTone(*p, slot);
+  const int channel = channelOf(*p, slot);
+  constexpr int frames = 30 * blockSize;
+  constexpr std::uint64_t one = frames * sizeof(float);
+  instrument::samples::SampleLoader::Options options;
+  options.slotBudgetBytes = 3 * one;
+  instrument::samples::SampleLoader loader(p->instrumentRack(), options);
+  const auto assign = [&](int i) {
+    const auto wav = writeWav("budget" + std::to_string(i) + ".wav", 0.01f * (i + 1), frames);
+    rack::PersistentSlotState::SampleRef ref;
+    ref.sampleSlot = 0;
+    ref.location = wav.string();
+    std::string why;
+    loader.enqueue({slot, p->instrumentRack().instanceGeneration(slot), ref}, why);
+    loader.waitIdle();
+    return wav.string();
+  };
+  bool bounded = true;
+  std::string last;
+  for (int i = 0; i < 3; ++i) {
+    last = assign(i);
+    play(*p, channel, 1, 0, -1); // install it; a voice holds it
+    bounded &= statsOf(*p, slot).liveBytes <= options.slotBudgetBytes;
+  }
+  check(statsOf(*p, slot).liveBytes == 3 * one && sampleErrorOf(*p, slot).empty(),
+        "three ringing samples fill the budget exactly");
+  const auto failed = loader.stats().failed;
+  const auto publishedBefore = statsOf(*p, slot).published;
+  assign(3);
+  bounded &= statsOf(*p, slot).liveBytes <= options.slotBudgetBytes;
+  check(bounded && loader.stats().failed == failed + 1 &&
+            sampleErrorOf(*p, slot).find("budget") != std::string::npos,
+        "a fourth sample while three voices ring is refused (live bytes never above the cap)");
+  const auto *ref = savedRef(*p, slot, 0);
+  check(ref != nullptr && ref->location == last &&
+            statsOf(*p, slot).published == publishedBefore,
+        "the refused load publishes nothing and keeps the previous sample and its reference");
+  for (int b = 0; b < 40; ++b) {
+    play(*p, channel, 1, -1, -1);
+    p->instrumentRack().collectSamples();
+  }
+  assign(4);
+  check(loader.stats().loaded == 4 && savedRef(*p, slot, 0)->location.find("budget4") !=
+                                          std::string::npos &&
+            statsOf(*p, slot).liveBytes <= options.slotBudgetBytes,
+        "once the voices ended the next sample loads within the cap");
+  setSampleMode(slot, 0);
+}
+
+// Owner review 5739970190, P1: restoring a project queues every saved
+// reference even while the worker is busy and user requests fill the queue.
+void savedSamplesNeverDropped() {
+  auto p = makeProcessor(true);
+  for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+    loadTone(*p, slot);
+  juce::String jwhy;
+  for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+    for (std::uint32_t sampleSlot = 0; sampleSlot < 2; ++sampleSlot) {
+      const auto wav = writeWav("saved" + std::to_string(slot) + "-" +
+                                    std::to_string(sampleSlot) + ".wav",
+                                0.02f, blockSize);
+      check(p->assignSampleFile(slot, sampleSlot, juce::File(wav.string()), jwhy),
+            "assign queued");
+      p->sampleLoaderForTesting().waitIdle(); // the processor's queue holds 64
+    }
+  check(p->instrumentRack().sampleLoadRequests().size() == 32, "32 saved references");
+  std::atomic<bool> entered{false}, release{false};
+  instrument::samples::SampleLoader::Options options;
+  options.queueCapacity = 2;
+  instrument::samples::SampleLoader loader(
+      p->instrumentRack(), options,
+      [&](std::size_t, const std::string &)
+          -> std::optional<instrument::samples::SampleLoader::FactoryFile> {
+        entered = true;
+        while (!release)
+          std::this_thread::yield();
+        return std::nullopt;
+      });
+  rack::PersistentSlotState::SampleRef blocker;
+  blocker.source = rack::PersistentSlotState::SampleRef::Source::factory;
+  blocker.location = "blocker";
+  std::string why;
+  check(loader.enqueue({3, p->instrumentRack().instanceGeneration(3), blocker}, why),
+        "a request occupies the worker");
+  while (!entered)
+    std::this_thread::yield();
+  auto user = *p->instrumentRack().state()[5].sampleRefs.begin();
+  check(loader.enqueue({5, p->instrumentRack().instanceGeneration(5), user}, why) &&
+            loader.enqueue({5, p->instrumentRack().instanceGeneration(5), user}, why) &&
+            !loader.enqueue({5, p->instrumentRack().instanceGeneration(5), user}, why),
+        "user requests fill the bounded queue");
+  const auto published = statsOf(*p, 9).published;
+  check(loader.enqueueSaved(why) == 32, "every saved reference is queued despite the full queue");
+  check(loader.enqueueSaved(why) == 32, "a second restore replaces the first batch (still 32)");
+  release = true;
+  loader.waitIdle();
+  bool clean = true;
+  for (std::size_t slot = 0; slot < instrument::maxSlots; ++slot)
+    clean &= sampleErrorOf(*p, slot).empty();
+  check(loader.stats().loaded == 34 && clean && statsOf(*p, 9).published == published + 2,
+        "all 32 saved samples and both user requests load; no slot reports an error");
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     std::cerr << "usage: native_rack_tests <test module path> <legacy V2.2 module path>\n";
@@ -1859,6 +2215,11 @@ int main(int argc, char **argv) {
   sampleNoAllocation();
   sampleConcurrentStress();
   legacyHasNoSampleSlots();
+  sampleFileAssignSaveRestore();
+  sampleLoaderGuards();
+  sampleCollectionWhileRinging();
+  sampleBudgetCoversRetiringBuffers();
+  savedSamplesNeverDropped();
   std::cout << "native_rack_tests: " << checks << " checks passed\n";
   return 0;
 }

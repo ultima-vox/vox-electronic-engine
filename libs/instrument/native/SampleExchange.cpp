@@ -48,8 +48,24 @@ std::size_t SampleExchange::liveInSlot(std::uint32_t slot) const noexcept {
       live_.begin(), live_.end(), [&](const auto &entry) { return entry->slot == slot; }));
 }
 
+std::uint64_t SampleExchange::bytesOf(const SampleBuffer *buffer) noexcept {
+  std::uint64_t bytes = 0;
+  if (buffer != nullptr)
+    for (const auto &channel : buffer->channels)
+      bytes += channel.size() * sizeof(float);
+  return bytes;
+}
+
+std::uint64_t SampleExchange::liveBytes(const Entry *except) const noexcept {
+  std::uint64_t bytes = 0;
+  for (const auto &entry : live_)
+    if (entry.get() != except)
+      bytes += bytesOf(entry->buffer.get());
+  return bytes;
+}
+
 bool SampleExchange::publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
-                             std::string &diagnostic) {
+                             std::string &diagnostic, std::uint64_t memoryLimitBytes) {
   const std::scoped_lock lock(mutex_);
   if (slot >= slots_) {
     diagnostic = "sample slot out of range";
@@ -74,6 +90,32 @@ bool SampleExchange::publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> b
       return false;
     }
   }
+  // Take this slot's pending entry out of the pending word first. One
+  // exchange decides who owns it: if it is still there, the audio thread can
+  // no longer install it and this publish supersedes it (never installed, so
+  // it does not count against the budget); if audio took it already, it is
+  // current and counts like every other live buffer. No window remains in
+  // which audio installs a buffer this check left out (owner review
+  // 5740523896).
+  Entry *previous = pending_[slot].exchange(nullptr, std::memory_order_acq_rel);
+  if (afterTakeForTesting_)
+    afterTakeForTesting_();
+  if (memoryLimitBytes != 0) {
+    // Collect first, then decide. A refusal changes nothing: the taken entry
+    // goes back to the pending word (only this mutex holder writes non-null
+    // entries there, and audio only takes them).
+    const auto incoming = bytesOf(buffer.get());
+    const auto over = [&] { return liveBytes(previous) + incoming > memoryLimitBytes; };
+    if (over()) {
+      (void)collectLocked();
+      if (over()) {
+        if (previous != nullptr)
+          pending_[slot].store(previous, std::memory_order_release);
+        diagnostic = "sample memory budget exceeded: earlier buffers are still in use";
+        return false;
+      }
+    }
+  }
   auto entry = std::make_unique<Entry>();
   entry->id = ++nextId_;
   entry->slot = slot;
@@ -93,9 +135,11 @@ bool SampleExchange::publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> b
   auto *raw = entry.get();
   live_.push_back(std::move(entry));
   ++stats_.published;
-  // The entry is complete before the release half of this exchange, so the
-  // audio thread's acquiring exchange sees all of it.
-  if (const auto *previous = pending_[slot].exchange(raw, std::memory_order_acq_rel))
+  // The entry is complete before this release store, so the audio thread's
+  // acquiring exchange sees all of it. The word is empty: only this mutex
+  // holder writes entries into it.
+  pending_[slot].store(raw, std::memory_order_release);
+  if (previous != nullptr)
     releaseLocked(previous); // superseded: audio never took it, no voice saw it
   diagnostic.clear();
   return true;
@@ -186,7 +230,13 @@ SampleStats SampleExchange::stats() const {
   const std::scoped_lock lock(mutex_);
   auto copy = stats_;
   copy.live = live_.size();
+  copy.liveBytes = liveBytes();
   return copy;
+}
+
+void SampleExchange::setAfterTakeHookForTesting(std::function<void()> hook) {
+  const std::scoped_lock lock(mutex_);
+  afterTakeForTesting_ = std::move(hook);
 }
 
 void SampleExchange::setReleaseSinkForTesting(ReleaseSink sink) {

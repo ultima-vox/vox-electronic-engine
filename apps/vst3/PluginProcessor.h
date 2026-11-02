@@ -4,6 +4,7 @@
 #include "effects/EffectsChain.h"
 #include "instrument/InstrumentRegistry.h"
 #include "instrument/native/NativeModule.h"
+#include "instrument/samples/SampleLoader.h"
 #include "midi/GeneratedNoteScheduler.h"
 #include "midi/RealtimeAuditionQueue.h"
 #include "midi/SourceSelector.h"
@@ -175,6 +176,21 @@ public:
     // project; never waits for or interrupts the audio thread.
     bool setSlotParameter(std::size_t, const std::string& parameterId, float plain,
                           juce::String& diagnostic);
+    // Contract C2 samples, controller threads. Each queues a request for the
+    // loader worker (decode, verify, assign) and returns at once; failures
+    // appear in the slot's diagnostics (sampleError). The slot keeps its
+    // synthesis source until a sample is assigned.
+    bool assignSampleFile(std::size_t slot, std::uint32_t sampleSlot,
+                          const juce::File& wav, juce::String& diagnostic);
+    bool assignFactorySample(std::size_t slot, std::uint32_t sampleSlot,
+                             const std::string& name, juce::String& diagnostic);
+    bool clearSample(std::size_t slot, std::uint32_t sampleSlot, juce::String& diagnostic);
+    // What the timer does: release retired sample buffers.
+    std::size_t serviceSamples() { return rack.collectSamples(); }
+    [[nodiscard]] vstengine::instrument::samples::SampleLoader& sampleLoaderForTesting() noexcept
+    {
+        return *sampleLoader;
+    }
     [[nodiscard]] bool channelAvailable(std::size_t slot, int channel) const noexcept;
     [[nodiscard]] std::span<const vstengine::instrument::ContentDescriptor>
         selectedContent() const noexcept;
@@ -245,6 +261,17 @@ private:
     vstengine::instrument::InstrumentRegistry instrumentRegistry;
     juce::AudioProcessorValueTreeState apvts;
     vstengine::rack::Rack rack;
+    // Contract C2: decodes and assigns samples off the audio thread; declared
+    // after the Rack so it stops before the Rack goes away.
+    std::unique_ptr<vstengine::instrument::samples::SampleLoader> sampleLoader;
+    // Message thread: releases retired sample buffers (collectSamples) on a
+    // timer, with or without an open editor.
+    struct SampleCollector final : juce::Timer {
+      explicit SampleCollector(vstengine::rack::Rack &r) : rack(r) {}
+      void timerCallback() override { rack.collectSamples(); }
+      vstengine::rack::Rack &rack;
+    };
+    std::unique_ptr<SampleCollector> sampleCollector;
     vstengine::effects::EffectsChain effectsChain;
     vstengine::rack::AudioRouting audioRouting;
     vstengine::host::RackAudioParameterRefs audioRoutingRefs;

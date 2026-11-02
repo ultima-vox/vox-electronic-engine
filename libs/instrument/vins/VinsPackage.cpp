@@ -294,10 +294,13 @@ private:
   std::vector<InstrumentDescriptor> descriptors_;
 };
 
-// Offers the provider with the manifest's sound layouts. A layout that does
-// not describe its instrument exactly rejects the package (fail closed).
-void offer(const Candidate &c, std::unique_ptr<InstrumentProvider> provider, LoadReport &report) {
-  if (c.manifest.ui.empty()) {
+// Offers the provider with the manifest's sound layouts and, for a native
+// package materialized in `cacheDir`, its factory samples (verified cached
+// members). A layout that does not describe its instrument exactly rejects
+// the package (fail closed).
+void offer(const Candidate &c, std::unique_ptr<InstrumentProvider> provider, LoadReport &report,
+           const fs::path &cacheDir = {}) {
+  if (c.manifest.ui.empty() && c.manifest.samples.empty()) {
     report.providers.push_back(std::move(provider));
     return;
   }
@@ -318,6 +321,17 @@ void offer(const Candidate &c, std::unique_ptr<InstrumentProvider> provider, Loa
       report.diagnostics.push_back(c.label + ": ui of " + id + " rejected: " + why);
       return;
     }
+  }
+  for (const auto &[id, named] : c.manifest.samples) {
+    auto descriptor = std::find_if(descriptors.begin(), descriptors.end(),
+                                   [&](const InstrumentDescriptor &d) { return d.id == id; });
+    if (descriptor == descriptors.end() || cacheDir.empty()) {
+      report.diagnostics.push_back(c.label + ": samples of " + id + " rejected");
+      return;
+    }
+    for (const auto &[name, member] : named)
+      descriptor->factorySamples.push_back(
+          {name, utf8(cacheDir / fromUtf8(member)), c.manifest.files.at(member)});
   }
   report.providers.push_back(
       std::make_unique<LayoutProvider>(std::move(provider), std::move(descriptors)));
@@ -379,7 +393,7 @@ void loadNative(Candidate &c, const LoadOptions &options, LoadReport &report) {
     report.diagnostics.push_back(c.label + ": module instrument ids differ from the manifest");
     return;
   }
-  offer(c, native::makeProvider(std::move(module), key->id), report);
+  offer(c, native::makeProvider(std::move(module), key->id), report, dir);
 }
 } // namespace
 
@@ -396,7 +410,7 @@ bool parseManifest(std::span<const std::uint8_t> bytes, Manifest &out, std::stri
     return fail(why, "manifest.json is not a JSON object");
   static const std::set<juce::String> knownKeys = {
       "vins", "packageId", "version", "name", "vendor", "executionKind", "instruments",
-      "graph", "native", "files", "ui"};
+      "graph", "native", "files", "ui", "samples"};
   for (const auto &property : object->getProperties())
     if (knownKeys.count(property.name.toString()) == 0)
       return fail(why, "manifest: unknown key '" + property.name.toString().toStdString() + "'");
@@ -482,6 +496,36 @@ bool parseManifest(std::span<const std::uint8_t> bytes, Manifest &out, std::stri
           !readString(property.value, member) || m.files.count(member) == 0)
         return fail(why, "manifest: invalid ui entry '" + id + "'");
       m.ui[id] = member;
+    }
+  }
+  if (!json["samples"].isVoid()) {
+    // Factory samples (contract C2): only native instruments read samples.
+    auto *samples = json["samples"].getDynamicObject();
+    if (m.kind != ExecutionKind::native || samples == nullptr ||
+        samples->getProperties().isEmpty())
+      return fail(why, "manifest: samples must map native instrument ids to sample members");
+    for (const auto &property : samples->getProperties()) {
+      const auto id = property.name.toString().toStdString();
+      auto *named = property.value.getDynamicObject();
+      if (!std::binary_search(m.instruments.begin(), m.instruments.end(), id) ||
+          named == nullptr || named->getProperties().isEmpty() ||
+          static_cast<std::size_t>(named->getProperties().size()) >
+              maxFactorySamplesPerInstrument)
+        return fail(why, "manifest: invalid samples entry '" + id + "'");
+      for (const auto &sample : named->getProperties()) {
+        const auto name = sample.name.toString().toStdString();
+        std::string member;
+        const bool nameOk =
+            !name.empty() && name.size() <= 64 &&
+            std::all_of(name.begin(), name.end(), [](char c) {
+              return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+                     c == '-';
+            });
+        if (!nameOk || !readString(sample.value, member) || m.files.count(member) == 0 ||
+            member.size() < 5 || member.compare(member.size() - 4, 4, ".wav") != 0)
+          return fail(why, "manifest: invalid sample '" + name + "' of '" + id + "'");
+        m.samples[id][name] = member;
+      }
     }
   }
   out = std::move(m);

@@ -214,6 +214,57 @@ int main()
                 == patterned.toXmlString(),
             "pattern-bearing save-load-save is canonical");
 
+    // Contract C2: sample references round-trip canonically; malformed ones
+    // reject the project state (fail closed).
+    auto sampledState = patternedState;
+    using SampleRef = rack::PersistentSlotState::SampleRef;
+    sampledState[1].sampleRefs = {
+        SampleRef{0, SampleRef::Source::factory, "kick-909", std::string(64, 'a'), 1234},
+        SampleRef{3, SampleRef::Source::file, "/home/user/Samples/\xc3\xa9 snare.wav",
+                  std::string(64, 'f'), 99}};
+    const auto sampled = rack::state::serialize(sampledState);
+    REQUIRE(rack::state::deserialize(sampled, decoded, diagnostic),
+            "sample references parse: " << diagnostic);
+    REQUIRE(decoded[1].sampleRefs.size() == 2 &&
+                decoded[1].sampleRefs[1].location == sampledState[1].sampleRefs[1].location &&
+                decoded[1].sampleRefs[0].source == SampleRef::Source::factory &&
+                decoded[1].sampleRefs[1].bytes == 99,
+            "sample references round-trip, UTF-8 paths included");
+    REQUIRE(rack::state::serialize(decoded).toXmlString() == sampled.toXmlString(),
+            "sample-bearing save-load-save is canonical");
+    // Heap copies: main() already holds several Rack states on the stack.
+    // (REQUIRE returns from its function, so the helper reports a bool.)
+    const auto rejected = [&](auto edit) {
+      auto copy = std::make_unique<std::array<rack::PersistentSlotState, instrument::maxSlots>>(
+          sampledState);
+      edit((*copy)[1].sampleRefs);
+      std::string why;
+      auto out = std::make_unique<std::array<rack::PersistentSlotState, instrument::maxSlots>>();
+      return !rack::state::deserialize(rack::state::serialize(*copy), *out, why);
+    };
+    REQUIRE(rejected([](auto &r) { r[0].sampleSlot = 64; }), "sample slot 64 rejected");
+    REQUIRE(rejected([](auto &r) { r[1].sampleSlot = 0; }), "duplicate sample slot rejected");
+    REQUIRE(rejected([](auto &r) { std::swap(r[0], r[1]); }), "unsorted references rejected");
+    REQUIRE(rejected([](auto &r) { r[0].sha256 = std::string(63, 'a'); }), "short hash rejected");
+    REQUIRE(rejected([](auto &r) { r[0].sha256 = std::string(64, 'A'); }),
+            "uppercase hash rejected");
+    REQUIRE(rejected([](auto &r) { r[0].bytes = 0; }), "zero bytes rejected");
+    REQUIRE(rejected([](auto &r) { r[0].location = "Kick 909"; }),
+            "factory name outside the alphabet rejected");
+    REQUIRE(rejected([](auto &r) { r[1].location.clear(); }), "empty file path rejected");
+    REQUIRE(rejected([](auto &r) { r[1].location.assign(4097, 'x'); }), "path too long rejected");
+    {
+      auto encoded = rack::state::serialize(sampledState);
+      auto slot = encoded.getChild(1);
+      for (int i = 0; i < slot.getNumChildren(); ++i)
+        if (slot.getChild(i).hasType("SAMPLE")) {
+          slot.getChild(i).setProperty("source", "url", nullptr);
+          break;
+        }
+      REQUIRE(!rack::state::deserialize(encoded, decoded, diagnostic),
+              "an unknown sample source is rejected");
+    }
+
     // One 1.0 project format: an older Rack schema is not migrated.
     for (const int older : {1, 6}) {
       auto previous = patterned.createCopy();

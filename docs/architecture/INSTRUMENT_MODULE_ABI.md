@@ -407,8 +407,57 @@ state, with one owner:
   itself, so every byte a voice can reference is released together.
 
 **Rack API (controller).** `setSlotSample(slot, sampleSlot, buffer)`,
-`collectSamples()` and `sampleStats(slot)`. Decoding, WAV and `.vins` factory
-samples are C2.
+`collectSamples()` and `sampleStats(slot)`.
+
+**C2: host loading.** Nothing here runs on the audio thread.
+- **Decoder (`libs/instrument/samples/SampleDecoder`).**
+  - Reads a bounded regular file and refuses symlinks.
+  - Hashes the exact bytes it decodes (SHA-256) and checks the expected hash
+    first.
+  - Decodes WAV into a float `SampleBuffer` at the file's native rate, with its
+    peak.
+  - Refuses: more than 2 channels; rates outside 8..384 kHz; files larger
+    than 64 MiB; files longer than 30 s at their own sample rate (checked
+    before any PCM is allocated); empty files; non-WAV or truncated data;
+    NaN or infinity.
+- **Loader (`SampleLoader`).** One worker thread with a bounded queue (64);
+  a full queue refuses the request.
+  - **Instance identity.** Each request carries the slot's instance
+    generation. The Rack bumps it whenever an instance is replaced (restore,
+    instrument load, sound preset) and assigns nothing for an old generation.
+  - **Limits (owner-approved initial Rack 1.0 policy, #99 review
+    5742565851).** 64 MiB per WAV file, 30 s per file at its own sample
+    rate, and 256 MiB of live decoded buffers per Rack slot. These are
+    per-file and per-slot safety caps, not a whole-Rack memory ceiling, and
+    decoder transients come on top and are still to be profiled.
+  - **Budget.** Decoded memory is capped per Rack slot (256 MiB).
+    The cap covers everything the slot's hand-off holds: pending, current
+    and every retiring buffer a voice may still read. It is enforced inside
+    `publish` after a collect, so a refused load changes nothing. At most one
+    more file is being decoded beside it (one worker, bounded by the decoder
+    limits).
+  - **Restore.** Saved references are queued without counting against the
+    user queue (64). Each restore replaces the saved requests still queued
+    for its slots, so they stay bounded by the Rack's own limits
+    (16 slots x 64 sample slots). A project's saved samples all load, or each
+    reports its own error on its slot.
+  - **Ordering.** Clears go through the same queue, so requests stay in order.
+- **State.** Each sample slot's reference is saved in the slot state, in
+  append-only `SAMPLE` children:
+  - `{ slot, source factory|file, location, sha256, bytes }`;
+  - `location` is a factory name or an absolute UTF-8 path;
+  - malformed references reject the project state (fail closed).
+  - A new instrument starts without references.
+- **Restore.**
+  - After a project restore or a sound preset, every saved reference is
+    queued again.
+  - A missing or changed file, or a decode failure, sets the slot's
+    `sampleError` diagnostic. The project still opens, the reference is kept
+    so it can be located later, and the pad stays on its synthesis source.
+- **Periodic collection.** The processor calls `collectSamples()` from a
+  100 ms message-thread timer, with or without an open editor.
+- **Factory samples** come from the instrument's signed `.vins`
+  (VINS_PACKAGES.md, `samples`).
 
 ## Musical transport (in the header since #68; still part of the unfrozen V2)
 

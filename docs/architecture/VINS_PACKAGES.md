@@ -115,6 +115,19 @@ used.
 - A layout that does not describe its instrument exactly rejects the whole
   package.
 
+**Factory samples (optional, native only; contract C2)**
+- `"samples": {"<instrument id>": {"<name>": "<member>.wav"}}` names the
+  WAV samples an instrument ships.
+- The instrument must be one of the package's `instruments`. Each member must
+  be listed in `files`, so it is under the hashes and the manifest signature.
+- Names use `[a-z0-9._-]`, 1..64 characters, with at most 256 samples per
+  instrument. A graph package with `samples` is rejected.
+- After verification, the members are extracted to the package's cache entry
+  like the module. The descriptor then lists each sample's name, its cached
+  path and its SHA-256.
+- The Rack decodes a sample only from those exact bytes, checking the hash
+  again on every load. A cache file that changed afterwards is refused.
+
 **Identifiers**
 - `packageId` and instrument ids use `[a-z0-9._-]`, up to 128 characters.
 - `version` is MAJOR.MINOR.PATCH, with no leading zeros.

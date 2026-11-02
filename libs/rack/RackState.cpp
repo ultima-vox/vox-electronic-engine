@@ -23,6 +23,31 @@ bool validStableId(std::string_view id, bool allowEmpty = false)
             || c == '.' || c == '-' || c == '_';
     });
 }
+// Contract C2 sample reference: factory names use the package id alphabet;
+// file locations are absolute paths of bounded length.
+bool validSampleRef(const PersistentSlotState::SampleRef &ref)
+{
+    if (ref.sampleSlot >= instrument::maxSampleSlots || ref.sha256.size() != 64
+        || ref.bytes == 0 || ref.bytes > maxSampleRefBytes)
+        return false;
+    if (!std::all_of(ref.sha256.begin(), ref.sha256.end(), [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        }))
+        return false;
+    switch (ref.source) {
+    case PersistentSlotState::SampleRef::Source::factory:
+        return !ref.location.empty() && ref.location.size() <= 64
+            && std::all_of(ref.location.begin(), ref.location.end(), [](char c) {
+                   return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.'
+                       || c == '_' || c == '-';
+               });
+    case PersistentSlotState::SampleRef::Source::file:
+        return !ref.location.empty() && ref.location.size() <= maxSamplePathBytes
+            && ref.location.find('\0') == std::string::npos;
+    }
+    return false;
+}
+
 template <typename UInt>
 bool readUnsigned(const juce::var& value, UInt& result)
 {
@@ -125,6 +150,18 @@ bool validateSlot(const PersistentSlotState& slot, std::string& diagnostic)
           return false;
         }
     }
+    if (slot.sampleRefs.size() > instrument::maxSampleSlots) {
+      diagnostic = "sample references exceed host limit";
+      return false;
+    }
+    for (std::size_t i = 0; i < slot.sampleRefs.size(); ++i) {
+      const auto &ref = slot.sampleRefs[i];
+      if (!validSampleRef(ref) ||
+          (i > 0 && slot.sampleRefs[i - 1].sampleSlot >= ref.sampleSlot)) {
+        diagnostic = "invalid sample reference";
+        return false;
+      }
+    }
     if (!slot.directParameters.empty() &&
         std::any_of(slot.macroAssignments.begin(), slot.macroAssignments.end(),
                     [](const auto &id) { return !id.empty(); })) {
@@ -216,6 +253,19 @@ juce::ValueTree serialize(
           if (parameter.spec != 0)
             direct.setProperty("spec", static_cast<juce::int64>(parameter.spec), nullptr);
           child.appendChild(direct, nullptr);
+        }
+        for (const auto &ref : slot.sampleRefs) {
+          juce::ValueTree sample("SAMPLE");
+          sample.setProperty("slot", static_cast<int>(ref.sampleSlot), nullptr);
+          sample.setProperty("source",
+                             ref.source == PersistentSlotState::SampleRef::Source::factory
+                                 ? "factory"
+                                 : "file",
+                             nullptr);
+          sample.setProperty("location", juce::String::fromUTF8(ref.location.c_str()), nullptr);
+          sample.setProperty("sha256", juce::String(ref.sha256), nullptr);
+          sample.setProperty("bytes", static_cast<juce::int64>(ref.bytes), nullptr);
+          child.appendChild(sample, nullptr);
         }
         root.appendChild(child, nullptr);
     }
@@ -398,11 +448,39 @@ bool deserialize(const juce::ValueTree& root,
         }
         {
           if (child.getNumChildren() >
-              static_cast<int>(instrument::maxSlotParameters)) {
+              static_cast<int>(instrument::maxSlotParameters + instrument::maxSampleSlots)) {
             diagnostic = "direct parameter count exceeds host limit";
             return false;
           }
           for (const auto direct : child) {
+            if (direct.hasType("SAMPLE")) {
+              PersistentSlotState::SampleRef ref;
+              std::uint32_t sampleSlot{};
+              std::uint64_t bytes{};
+              const auto source = direct.getProperty("source").toString();
+              if (direct.getNumProperties() != 5 ||
+                  !readUnsigned(direct.getProperty("slot"), sampleSlot) ||
+                  !readUnsigned(direct.getProperty("bytes"), bytes) ||
+                  (source != "factory" && source != "file") ||
+                  !validString(direct.getProperty("location"), maxSamplePathBytes) ||
+                  !validString(direct.getProperty("sha256"), 64)) {
+                diagnostic = "invalid sample reference encoding";
+                return false;
+              }
+              ref.sampleSlot = sampleSlot;
+              ref.bytes = bytes;
+              ref.source = source == "factory"
+                               ? PersistentSlotState::SampleRef::Source::factory
+                               : PersistentSlotState::SampleRef::Source::file;
+              ref.location = direct.getProperty("location").toString().toStdString();
+              ref.sha256 = direct.getProperty("sha256").toString().toStdString();
+              slot.sampleRefs.push_back(std::move(ref));
+              continue;
+            }
+            if (slot.directParameters.size() >= instrument::maxSlotParameters) {
+              diagnostic = "direct parameter count exceeds host limit";
+              return false;
+            }
             float value{};
             int pool{-1};
             std::uint32_t spec{};
