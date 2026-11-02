@@ -611,6 +611,70 @@ void sampleLifetimeInTheKit() {
         "the old buffer is released once its voice ended");
 }
 
+// Review 5740526267 follow-ups for sample voices: choke, NoteOff, CC120/123,
+// Panic, long tails and a mixed synthesis + sample kit.
+void sampleVoicesInTheKit() {
+  auto r = makeRig(instrumentsDir);
+  const std::vector<float> long3s(3 * 48000, 0.2f);
+  // Choke: the closed hat (synthesis, level 0) cuts a sampled open hat.
+  setUi(r, openHat, "source", 1.0f);
+  giveSample(r, openHat, sampleOf(long3s));
+  setPlain(r, padParam(closedHat, level), 0.0f);
+  const int at = 12000;
+  const auto choked = renderHits(r, 48000, {{0, openHat}, {at, closedHat}});
+  check(choked.energy(0, at) > 0.1 && choked.energy(at + 200, 48000) == 0.0,
+        "the closed hat chokes a sampled open hat within 3 ms");
+  setPlain(r, padParam(closedHat, level), 0.45f);
+  // NoteOff leaves a one-shot sample ringing; it plays its full 3 s tail.
+  const auto withOff = render(r, 4 * 48000, {{0, MidiMessage::noteOn(r.channel, 46, (juce::uint8)110)},
+                                             {100, MidiMessage::noteOff(r.channel, 46)}});
+  const auto withoutOff =
+      render(r, 4 * 48000, {{0, MidiMessage::noteOn(r.channel, 46, (juce::uint8)110)}});
+  check(withOff == withoutOff && lastSound(withOff) == 3 * 48000 - 1 && withOff.finite(),
+        "NoteOff leaves the sample ringing; its 3 s tail plays to the last frame");
+  // CC120 stops at once; CC123 fades within 50 ms; Rack Panic silences.
+  const auto cc120 = render(r, 24000, {{0, MidiMessage::noteOn(r.channel, 46, (juce::uint8)110)},
+                                       {4800, MidiMessage::allSoundOff(r.channel)}});
+  check(cc120.energy(0, 4800) > 0.01 && cc120.energy(4800, 24000) == 0.0,
+        "CC120 stops a sample voice at once");
+  const auto cc123 = render(r, 24000, {{0, MidiMessage::noteOn(r.channel, 46, (juce::uint8)110)},
+                                       {4800, MidiMessage::allNotesOff(r.channel)}});
+  check(cc123.energy(4800, 4800 + 2000) > 0.0 && cc123.energy(4800 + 2500, 24000) == 0.0,
+        "CC123 fades a sample voice within 50 ms");
+  check(renderHits(r, 2048, {{0, openHat}}).energy() > 0.01, "the sample rings");
+  r.p->requestPanic();
+  check(render(r, 2048, {}, true).energy() == 0.0, "Rack Panic silences sample voices");
+
+  // Mixed kit: sampled snare and open hat, synthesized kick and closed hat.
+  // Each pad's stem adds up to the mix (independent voices).
+  setUi(r, snare, "source", 2.0f); // Layer
+  giveSample(r, snare, sampleOf(std::vector<float>(4000, 0.1f)));
+  const auto hits = groove(r.rate);
+  const int length = static_cast<int>(r.rate * 60.0 / 145.0 * 4) + 24000;
+  const auto mix = renderHits(r, length, hits);
+  Stereo sum;
+  sum.l.assign(mix.l.size(), 0.0f);
+  sum.r.assign(mix.r.size(), 0.0f);
+  for (int solo : {kick, snare, clap, closedHat, openHat}) {
+    std::vector<float> saved(padCount);
+    for (int pad = 0; pad < padCount; ++pad) {
+      saved[pad] = plainOf(r, padParam(pad, level));
+      if (pad != solo)
+        setPlain(r, padParam(pad, level), 0.0f);
+    }
+    const auto stem = renderHits(r, length, hits);
+    for (int pad = 0; pad < padCount; ++pad)
+      setPlain(r, padParam(pad, level), saved[pad]);
+    for (std::size_t i = 0; i < sum.l.size(); ++i) {
+      sum.l[i] += stem.l[i];
+      sum.r[i] += stem.r[i];
+    }
+  }
+  check(mix.finite() && maxDifference(sum, mix) < 1e-5,
+        "a mixed synthesis + sample kit: stems sum to the mix (max " +
+            std::to_string(maxDifference(sum, mix)) + ")");
+}
+
 void kitParity() {
   auto r = makeRig(instrumentsDir);
   const auto profile = parityProfile(r);
@@ -2198,6 +2262,7 @@ int main(int argc, char **argv) {
   phase1BusesAndSends();
   sampleSources();
   sampleLifetimeInTheKit();
+  sampleVoicesInTheKit();
   sampleOffsetsAndSimultaneousHits();
   chokeAndRelease();
   midiOverflowFailsClosed();
