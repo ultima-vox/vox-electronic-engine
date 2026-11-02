@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -238,6 +239,65 @@ double maxDifference(const Stereo &a, const Stereo &b) {
     d = std::max({d, std::abs(static_cast<double>(a.l[i]) - b.l[i]),
                   std::abs(static_cast<double>(a.r[i]) - b.r[i])});
   return d;
+}
+
+// Kit parity (Drums DSP phase 1): every pad, the full groove plus toms, rims
+// and cymbals, rendered at default settings. Its loudness per 1024-sample
+// block was recorded from the kit before phase 1 (tests/fixtures/drums/
+// kit-parity-v1.txt). New DSP at its default values must not change the
+// sound. Compared with a tolerance of 1e-6 so libm differences between
+// platforms do not matter, while any audible change does.
+std::vector<double> parityProfile(Rig &r) {
+  auto hits = groove(r.rate);
+  const double sixteenth = 60.0 / 145.0 / 4.0 * r.rate;
+  for (int step = 0; step < 16; ++step) {
+    const int at = static_cast<int>(std::lround(step * sixteenth));
+    if (step % 8 == 6)
+      hits.push_back({at, tom, 100});
+    if (step % 4 == 3)
+      hits.push_back({at, rim, 80});
+    if (step == 0)
+      hits.push_back({at, cymbal, 96});
+  }
+  const int length = static_cast<int>(r.rate * 60.0 / 145.0 * 4) + 48000;
+  const auto mix = renderHits(r, length, hits);
+  std::vector<double> profile;
+  for (std::size_t start = 0; start + 1024 <= mix.l.size(); start += 1024) {
+    double l = 0, rr = 0;
+    for (std::size_t i = start; i < start + 1024; ++i) {
+      l += static_cast<double>(mix.l[i]) * mix.l[i];
+      rr += static_cast<double>(mix.r[i]) * mix.r[i];
+    }
+    profile.push_back(std::sqrt(l / 1024));
+    profile.push_back(std::sqrt(rr / 1024));
+  }
+  return profile;
+}
+
+void kitParity() {
+  auto r = makeRig(instrumentsDir);
+  const auto profile = parityProfile(r);
+  const fs::path golden = fs::path(PROJECT_SOURCE_DIR) / "tests/fixtures/drums/kit-parity-v1.txt";
+  if (const char *write = std::getenv("VOX_WRITE_DRUMS_PARITY"); write != nullptr) {
+    fs::create_directories(golden.parent_path());
+    std::ofstream out(golden);
+    out.precision(12);
+    for (const double v : profile)
+      out << v << '\n';
+    std::cout << "wrote " << golden.string() << '\n';
+    return;
+  }
+  std::ifstream in(golden);
+  std::vector<double> expected;
+  for (double v; in >> v;)
+    expected.push_back(v);
+  check(expected.size() == profile.size() && !expected.empty(),
+        "kit parity fixture matches the render length");
+  double worst = 0;
+  for (std::size_t i = 0; i < profile.size(); ++i)
+    worst = std::max(worst, std::abs(profile[i] - expected[i]) / (1e-6 + std::abs(expected[i])));
+  check(worst < 1e-6, "default kit sounds as before phase 1 (worst relative " +
+                          std::to_string(worst) + ")");
 }
 
 // ------------------------------------------------------------------ tests
@@ -1724,6 +1784,7 @@ int main(int argc, char **argv) {
   juce::ScopedJuceInitialiser_GUI gui;
   loadsFromTheInstrumentsFolder();
   grooveAndStems();
+  kitParity();
   sampleOffsetsAndSimultaneousHits();
   chokeAndRelease();
   midiOverflowFailsClosed();
