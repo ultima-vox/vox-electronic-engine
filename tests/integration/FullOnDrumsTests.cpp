@@ -1745,6 +1745,120 @@ void internalKickDucksInTheSameBlock() {
   }
 }
 
+// P2: a sample-backed kick (Sample and Layer sources) ducks another slot in
+// the same block, exactly at the kick's sample, in both slot orders.
+//  - Internal and Both modes: every internal kick, including a swung one
+//    off the 16th grid, ducks the held Demo Synth note to zero exactly at
+//    the sample the exported MIDI file places it (parity with the export).
+//  - A host NoteOn of the kick at a nonzero offset inside its block ducks
+//    at that sample in Both mode and is ignored in Internal mode.
+void sampledKickDucksInTheSameBlock() {
+  const double rate = 48000.0, spp = 60.0 * rate / 145.0;
+  const int block = 128;
+  // The kick really plays its sample (a separate rig: a kit volume moved
+  // after audio has run is smoothed and would leak into the measurement).
+  for (const float source : {1.0f, 2.0f}) {
+    auto r = makeRig(instrumentsDir, 2, rate, block);
+    setUi(r, kick, "source", source);
+    giveSample(r, kick, sampleOf(std::vector<float>(6000, 0.5f)));
+    const auto hit = renderHits(r, 8000, {{0, kick}});
+    check(source == 1.0f ? lastSound(hit) == 5999 : lastSound(hit) >= 5999,
+          "the kick plays its 6000-frame sample (source " + std::to_string(source) + ")");
+  }
+  for (const float source : {1.0f, 2.0f})        // Sample, Layer
+    for (const float mode : {1.0f, 2.0f})        // Internal, Both
+      for (const auto [kitSlot, synthSlot] : {std::pair{2u, 9u}, std::pair{9u, 2u}}) {
+        const std::string what = std::string(source == 1.0f ? "Sample" : "Layer") + " kick, " +
+                                 (mode == 1.0f ? "Internal" : "Both") + ", kit slot " +
+                                 std::to_string(kitSlot + 1) + " / target slot " +
+                                 std::to_string(synthSlot + 1);
+        auto r = makeRig(instrumentsDir, kitSlot, rate, block);
+        juce::String diagnostic;
+        check(r.p->loadSlotInstrument(synthSlot, "com.ultimavox.demo-synth", diagnostic),
+              "Demo Synth loads as the duck target: " + diagnostic.toStdString());
+        const int synthChannel = channelOf(*r.p, synthSlot);
+        setUi(r, kick, "source", source);
+        giveSample(r, kick, sampleOf(std::vector<float>(6000, 0.5f)));
+        setPlain(r, seqMode, mode);
+        setPlain(r, seqSwing, 0.25f); // exactly representable: the export is exact
+        onlyLanes(r, {kick});
+        auto pattern = kickOnBeats(r);
+        pattern->at(kick, 0, 7).flags = VOX_STEP_ON; // a swung 16th, off the grid
+        pattern->at(kick, 0, 7).velocity = 100;
+        setPattern(r, *pattern);
+        setPlain(r, kitVolume, 0.0f); // the kit plays but adds no audio
+        auto param = [&](const juce::String &id, float plain) {
+          auto *p = r.p->parameters().getParameter(id);
+          check(p != nullptr, "routing parameter " + id.toStdString());
+          p->setValueNotifyingHost(p->convertTo0to1(plain));
+        };
+        param("rack.duck.source", static_cast<float>(kitSlot + 1));
+        param("rack.duck.note", 36.0f);
+        param("rack.duck.attack", 0.0f);
+        param("rack.duck.hold", 0.5f);
+        param("rack.duck.release", 1.0f);
+        char depth[32];
+        std::snprintf(depth, sizeof(depth), "slot%02u.duck.depth", synthSlot + 1);
+        param(depth, 1.0f);
+
+        // The exported file's kick positions, over two bars.
+        juce::MemoryBlock bytes;
+        check(r.p->serializeSlotPatternMidi(r.slot, bytes, diagnostic),
+              "pattern exports: " + diagnostic.toStdString());
+        juce::MemoryInputStream stream(bytes, false);
+        juce::MidiFile file;
+        check(file.readFrom(stream) && file.getTimeFormat() == 960, "export reads back");
+        std::vector<double> kickPpq;
+        for (int e = 0; e < file.getTrack(kick)->getNumEvents(); ++e) {
+          const auto &m = file.getTrack(kick)->getEventPointer(e)->message;
+          if (m.isNoteOn())
+            for (const double bar : {0.0, 4.0})
+              kickPpq.push_back(bar + m.getTimeStamp() / 960.0);
+        }
+        check(kickPpq.size() == 10, "the export holds the 5 kicks of the bar (" + what + ")");
+
+        const double startPpq = 0.25; // after the first kick so the synth settles
+        const auto beat = static_cast<int>(spp);
+        const int length = beat * 6; // ppq 0.25 .. 6.25
+        const auto toSample = [&](double ppq) {
+          return static_cast<int>(std::ceil((ppq - startPpq) * spp - 1e-6));
+        };
+        // A host kick halfway between beats 5 and 6, at a nonzero offset.
+        int hostKick = toSample(4.5);
+        if (hostKick % block == 0)
+          ++hostKick;
+        check(hostKick % block != 0, "the host kick sits at a nonzero block offset");
+        TestPlayHead head;
+        head.ppq = startPpq;
+        const auto out =
+            play(r, head, length,
+                 {{0, MidiMessage::noteOn(synthChannel, 60, (juce::uint8)110)},
+                  {hostKick, MidiMessage::noteOn(r.channel, 36, (juce::uint8)120)}});
+        int matched = 0, offGrid = 0;
+        for (const double ppq : kickPpq) {
+          const int at = toSample(ppq);
+          if (at <= 0 || at >= length)
+            continue;
+          check(out.l[at] == 0.0f && out.r[at] == 0.0f && std::abs(out.l[at - 1]) > 0.0f,
+                "the kick exported at ppq " + std::to_string(ppq) +
+                    " ducks the target exactly at its sample " + std::to_string(at) + " (" +
+                    what + ")");
+          offGrid += at % block != 0 ? 1 : 0;
+          ++matched;
+        }
+        check(matched >= 7 && offGrid >= 1,
+              "every exported kick in the window was checked, inside blocks (" + what + ")");
+        if (mode == 2.0f)
+          check(out.l[hostKick] == 0.0f && out.r[hostKick] == 0.0f &&
+                    std::abs(out.l[hostKick - 1]) > 0.0f,
+                "Both: the host kick at block offset " + std::to_string(hostKick % block) +
+                    " ducks exactly at its sample (" + what + ")");
+        else
+          check(std::abs(out.l[hostKick]) > 0.0f,
+                "Internal: the host kick is ignored and does not duck (" + what + ")");
+      }
+}
+
 // V2.2 routed-notes report of the real kit, called directly: ALL_IGNORED only
 // when no routed NoteOn of the whole block could sound (Internal mode from the
 // block start to its end). A mid-block mode change is reported honestly as
@@ -2416,6 +2530,7 @@ int main(int argc, char **argv) {
   editWhilePlaying();
   exportMatchesPlayback();
   internalKickDucksInTheSameBlock();
+  sampledKickDucksInTheSameBlock();
   editorDrumGrid();
   routedNotesReport();
   strayKickPolicy();
