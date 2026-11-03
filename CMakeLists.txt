@@ -523,35 +523,79 @@ if(UNIX)
   target_link_libraries(vox_abi_v2_2_legacy_module PRIVATE m)
 endif()
 
+# Realtime allocation probe (tests/support/AllocationProbe.h): counts the
+# allocation calls of the probing thread only. Linux: glibc interposer
+# (needs -rdynamic so loaded modules resolve to it). Windows/MSVC: import
+# table hooks in every loaded module.
+set(VOX_PROBE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(VOX_ALLOCATION_PROBE OFF)
+option(VOX_SANITIZE_THREAD "Build is instrumented with ThreadSanitizer" OFF)
+if(VOX_SANITIZE_THREAD)
+  # TSan intercepts malloc: count through the sanitizer allocator's hooks.
+  set(VOX_ALLOCATION_PROBE sanitizer)
+elseif(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  set(VOX_ALLOCATION_PROBE linux)
+elseif(WIN32 AND MSVC)
+  set(VOX_ALLOCATION_PROBE windows)
+endif()
+function(vox_add_allocation_probe target)
+  if(VOX_ALLOCATION_PROBE STREQUAL "linux")
+    target_sources(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/abi/AllocationProbeLinux.c)
+    target_link_options(${target} PRIVATE -rdynamic)
+  elseif(VOX_ALLOCATION_PROBE STREQUAL "sanitizer")
+    target_sources(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/support/AllocationProbeSanitizer.c)
+    target_compile_definitions(${target} PRIVATE VOX_PROBE_SANITIZER=1)
+  elseif(VOX_ALLOCATION_PROBE STREQUAL "windows")
+    target_sources(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/support/AllocationProbeWindows.c)
+  else()
+    return()
+  endif()
+  target_compile_definitions(${target} PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
+  target_include_directories(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/support)
+endfunction()
+
+if(VOX_ALLOCATION_PROBE)
+  # The probe proves itself first: every allocation path is counted on the
+  # probed thread (executable, standard library, a separately loaded module
+  # with its own CRT) and other threads are not.
+  add_library(vox_allocation_canary SHARED tests/allocation/AllocationCanary.c)
+  set_target_properties(vox_allocation_canary PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
+  if(MSVC)
+    set_property(TARGET vox_allocation_canary PROPERTY
+      MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
+  add_executable(allocation_probe_tests tests/allocation/AllocationProbeTests.cpp)
+  vox_add_allocation_probe(allocation_probe_tests)
+  add_dependencies(allocation_probe_tests vox_allocation_canary)
+  if(WIN32)
+    target_link_libraries(allocation_probe_tests PRIVATE ole32)
+  else()
+    target_link_libraries(allocation_probe_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+  endif()
+  add_test(NAME allocation_probe_tests
+    COMMAND allocation_probe_tests $<TARGET_FILE:vox_allocation_canary>)
+endif()
+
 add_executable(module_abi_v2_tests tests/abi/ModuleAbiV2Tests.cpp tests/abi/AbiLayoutC.c)
 set_target_properties(module_abi_v2_tests PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_include_directories(module_abi_v2_tests PRIVATE ${VST_LIBS_DIR})
 add_dependencies(module_abi_v2_tests vox_abi_v2_test_module)
-if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-  # glibc interposer: counts host and module allocations during the RT probe.
-  target_sources(module_abi_v2_tests PRIVATE tests/abi/AllocationProbeLinux.c)
-  target_compile_definitions(module_abi_v2_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
-  target_link_options(module_abi_v2_tests PRIVATE -rdynamic)
-endif()
+vox_add_allocation_probe(module_abi_v2_tests)
 target_link_libraries(module_abi_v2_tests PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME module_abi_v2_tests
   COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
 
 # M0: the real Rack processor plays the V2 test module through a slot.
-# ThreadSanitizer builds (-fsanitize=thread) intercept malloc themselves, so
-# they cannot also link the allocation probe; its zero-allocation checks are
-# then skipped in that build only (they still run in every normal build).
-option(VOX_SANITIZE_THREAD "Build is instrumented with ThreadSanitizer" OFF)
+# ThreadSanitizer builds skip its zero-allocation checks, as before (they
+# still run in every normal build).
 add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
 target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
 target_link_libraries(native_rack_tests PRIVATE VstEngine)
 add_dependencies(native_rack_tests vox_abi_v2_test_module vox_abi_v2_2_legacy_module)
-if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT VOX_SANITIZE_THREAD)
-  target_sources(native_rack_tests PRIVATE tests/abi/AllocationProbeLinux.c)
-  target_compile_definitions(native_rack_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
-  target_link_options(native_rack_tests PRIVATE -rdynamic)
+if(NOT VOX_SANITIZE_THREAD)
+  vox_add_allocation_probe(native_rack_tests)
 endif()
 add_test(NAME native_rack_tests
   COMMAND native_rack_tests $<TARGET_FILE:vox_abi_v2_test_module>
@@ -658,11 +702,7 @@ if(VOX_NATIVE_PLATFORM AND NOT VOX_PRODUCTION_BUILD)
       ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
   target_link_libraries(demo_synth_tests PRIVATE VstEngine vst_vins)
   add_dependencies(demo_synth_tests vins_demo_synth)
-  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_sources(demo_synth_tests PRIVATE tests/abi/AllocationProbeLinux.c)
-    target_compile_definitions(demo_synth_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
-    target_link_options(demo_synth_tests PRIVATE -rdynamic)
-  endif()
+  vox_add_allocation_probe(demo_synth_tests)
   add_test(NAME demo_synth_tests
     COMMAND demo_synth_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/demo-scratch)
 
@@ -707,11 +747,7 @@ if(VOX_NATIVE_PLATFORM)
       ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
   target_link_libraries(fullon_drums_tests PRIVATE VstEngine vst_vins)
   add_dependencies(fullon_drums_tests vins_fullon_drums vins_demo_synth vins_demo_synth_graph)
-  if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_sources(fullon_drums_tests PRIVATE tests/abi/AllocationProbeLinux.c)
-    target_compile_definitions(fullon_drums_tests PRIVATE VOX_TEST_INTERPOSE_MALLOC=1)
-    target_link_options(fullon_drums_tests PRIVATE -rdynamic)
-  endif()
+  vox_add_allocation_probe(fullon_drums_tests)
   target_compile_definitions(fullon_drums_tests PRIVATE
     PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(NAME fullon_drums_tests

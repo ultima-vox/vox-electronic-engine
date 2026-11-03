@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +24,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
@@ -1369,6 +1372,161 @@ std::vector<int> onsets(const std::vector<float> &x, double minGapSamples) {
   return found;
 }
 
+// P1 realtime gate: the audio thread allocates nothing while everything that
+// can run in a drum callback runs at once:
+//  - sample voices (one-shot, loop, reverse, layer) and synth voices;
+//  - filters (LP 24, BP with resonance), transients, sends and an output bus;
+//  - the internal sequencer on a running host transport, plus host notes at
+//    nonzero offsets and parameter automation;
+//  - host blocks of changing size (1..512 frames);
+//  - sample buffer swaps: a controller thread publishes new buffers and
+//    collects retired ones, and the real C2 loader decodes a WAV meanwhile.
+// The probe counts the audio thread only (allocation_probe_tests proves the
+// separation), so the controller and loader threads allocate freely.
+void realtimeAllocationsWithSampleSwaps() {
+  constexpr int maxBlock = 512;
+  auto r = makeRig(instrumentsDir, 5, 48000.0, maxBlock);
+  auto &rack = r.p->instrumentRack();
+  const auto wav = cacheRoot.parent_path() / "rt-samples" / "hit.wav";
+  fs::create_directories(wav.parent_path());
+  {
+    fs::remove(wav);
+    juce::File file(wav.string());
+    juce::WavAudioFormat format;
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        format.createWriterFor(new juce::FileOutputStream(file), 48000.0, 2, 24, {}, 0));
+    check(writer != nullptr, "test WAV writer");
+    juce::AudioBuffer<float> audio(2, 4000);
+    for (int i = 0; i < 4000; ++i)
+      for (int c = 0; c < 2; ++c)
+        audio.setSample(c, i, 0.3f * std::sin(0.03f * static_cast<float>(i + c)));
+    check(writer->writeFromAudioSampleBuffer(audio, 0, 4000), "test WAV written");
+  }
+
+  setUi(r, kick, "source", 2.0f); // Layer
+  setUi(r, snare, "source", 1.0f);
+  setUi(r, snare, "sample_reverse", 1.0f);
+  setUi(r, rim, "source", 1.0f);
+  setUi(r, rim, "sample_normalize", 1.0f);
+  setUi(r, cymbal, "source", 1.0f);
+  setUi(r, cymbal, "sample_loop", 1.0f);
+  setUi(r, closedHat, "filter", 2.0f); // LP 24
+  setPlain(r, pad2(closedHat, cutoff), 900.0f);
+  setUi(r, openHat, "filter", 5.0f); // BP
+  setPlain(r, pad2(openHat, resonance), 0.8f);
+  setUi(r, tom, "output", 3.0f);
+  setUi(r, clap, "transient_attack", 0.7f);
+  setUi(r, clap, "transient_sustain", -0.5f);
+  setPlain(r, pad2(clap, send1), 0.7f);
+  setPlain(r, pad2(snare, send2), 0.4f);
+  for (const int pad : {kick, snare, rim, cymbal})
+    giveSample(r, pad, sampleOf(std::vector<float>(3000, 0.2f), std::vector<float>(3000, 0.1f)));
+  setPlain(r, seqMode, 2.0f); // Both: internal steps and host notes
+  onlyLanes(r, {kick, closedHat});
+  setPattern(r, *kickOnBeats(r));
+
+  TestPlayHead head;
+  r.p->setPlayHead(&head);
+  const double samplesPerBeat = 60.0 / head.bpm * r.rate;
+  juce::AudioBuffer<float> storage(2, maxBlock);
+  std::array<float *, 2> channels{storage.getWritePointer(0), storage.getWritePointer(1)};
+  const std::array<int, 8> sizes{512, 64, 1, 333, 128, 511, 256, 17};
+  std::vector<juce::AudioBuffer<float>> views;
+  for (const int n : sizes)
+    views.emplace_back(channels.data(), 2, n);
+  juce::MidiBuffer midi;
+  midi.ensureSize(4096);
+  const std::array<int, padCount> notes{36, 38, 39, 42, 46, 45, 37, 49};
+  // Warm up every path once before probing.
+  for (int b = 0; b < 32; ++b) {
+    midi.clear();
+    midi.addEvent(MidiMessage::noteOn(r.channel, notes[b % padCount], (juce::uint8)100), 0);
+    r.p->processBlock(views[0], midi);
+    head.samples += maxBlock;
+    head.ppq += maxBlock / samplesPerBeat;
+  }
+  const auto statsBefore = *rack.sampleStats(r.slot);
+  const auto loadedBefore = r.p->sampleLoaderForTesting().stats().loaded;
+
+  std::atomic<bool> stop{false};
+  std::atomic<int> swaps{0}, loads{0};
+  std::thread controller([&] {
+    int k = 0;
+    while (!stop) {
+      std::string why;
+      const int pad = std::array<int, 4>{kick, snare, rim, cymbal}[k % 4];
+      if (rack.setSlotSample(r.slot, static_cast<std::uint32_t>(pad),
+                             sampleOf(std::vector<float>(2000 + 97 * (k % 7), 0.25f)), why))
+        ++swaps;
+      rack.collectSamples();
+      if (k % 8 == 0) {
+        juce::String reason;
+        if (r.p->assignSampleFile(r.slot, static_cast<std::uint32_t>(snare),
+                                  juce::File(wav.string()), reason))
+          ++loads;
+      }
+      ++k;
+      std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+  });
+
+  bool finite = true;
+  double energy = 0.0;
+  int blocks = 0;
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+  voxProbeBegin();
+#endif
+  while (blocks < 1500 || ((swaps.load() < 40 || loads.load() < 3) && blocks < 200000)) {
+    const auto n = sizes[static_cast<std::size_t>(blocks) % sizes.size()];
+    auto &view = views[static_cast<std::size_t>(blocks) % sizes.size()];
+    midi.clear();
+    for (int pad = 0; pad < padCount; ++pad)
+      if ((blocks + pad) % 5 == 0)
+        midi.addEvent(MidiMessage::noteOn(r.channel, notes[pad], (juce::uint8)(50 + pad * 9)),
+                      (pad * 37 + blocks) % n);
+    if (blocks % 3 == 0)
+      if (auto *c = r.p->parameters().getParameter(
+              instrument::hostparams::poolId(r.slot, padParam(blocks % padCount, tune))))
+        c->setValue(static_cast<float>(blocks % 10) / 10.0f);
+    r.p->processBlock(view, midi);
+    for (int i = 0; i < n; ++i) {
+      const float x = view.getSample(0, i);
+      finite = finite && std::isfinite(x);
+      energy += static_cast<double>(x) * x;
+    }
+    head.samples += n;
+    head.ppq += n / samplesPerBeat;
+    ++blocks;
+  }
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+  const auto allocations = voxProbeEnd();
+#endif
+  stop = true;
+  controller.join();
+  r.p->sampleLoaderForTesting().waitIdle();
+  rack.collectSamples();
+  r.p->setPlayHead(nullptr);
+
+  const auto statsAfter = *rack.sampleStats(r.slot);
+  check(finite && energy > 0.0, "the kit plays (finite, audible) through the probed blocks");
+  check(swaps.load() >= 40 && statsAfter.published > statsBefore.published + 40 &&
+            statsAfter.released > statsBefore.released,
+        "sample buffers were swapped and retired while the audio thread ran (" +
+            std::to_string(swaps.load()) + " publishes)");
+  check(r.p->sampleLoaderForTesting().stats().loaded > loadedBefore,
+        "the C2 loader decoded and installed a WAV while the audio thread ran");
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+  check(allocations == 0, "the audio thread allocates nothing in " + std::to_string(blocks) +
+                              " blocks with samples, filters, sends, sequencer and buffer "
+                              "swaps (" + std::to_string(allocations) + ")");
+  std::cout << "allocation probe: 0 audio-thread allocations in " << blocks
+            << " blocks (samples, filters, sends, sequencer, " << swaps.load()
+            << " buffer swaps, loader decoding)\n";
+#else
+  std::cout << "allocation probe: not available on this platform\n";
+#endif
+}
+
 void sequencerPlaysOnTheHostGrid() {
   for (int block : {64, 256, 512}) {
     auto r = makeRig(instrumentsDir, 2, 48000.0, block);
@@ -2424,6 +2582,7 @@ int main(int argc, char **argv) {
   sequencerStateReopensWithoutDuplicates();
   multiTrackHostMidi(fs::absolute(argv[3]));
   noAllocationWhilePlaying();
+  realtimeAllocationsWithSampleSwaps();
   std::cout << "fullon_drums_tests: " << checks << " checks passed\n";
   return 0;
 }

@@ -289,7 +289,8 @@ delivered".
 
 ### Required tests (slice 3)
 
-- Allocation probe at zero during `process`, plus a Linux CI interposer that
+- Allocation probe at zero during `process` (Linux and Windows, see
+  `docs/testing/realtime-allocation-probe.md`), plus a Linux CI interposer that
   fails on `malloc`/`pthread_mutex_lock` from the audio thread during routing.
 - Overload: more host edits than one per parameter per block; asserts final
   values, counters and no allocation.
