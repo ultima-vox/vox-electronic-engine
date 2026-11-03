@@ -28,8 +28,13 @@ The probe counts entry points entered, not allocations, so one `malloc` can
 count more than once (for example, the CRT and then the OS heap). A probed
 audio path must count exactly 0.
 
-In ThreadSanitizer builds (`VOX_SANITIZE_THREAD`), `native_rack_tests` does not
-link the probe, because TSan intercepts `malloc` itself.
+In ThreadSanitizer builds (`VOX_SANITIZE_THREAD`), TSan intercepts `malloc`
+itself. The probe therefore counts through the sanitizer allocator's malloc
+hook instead (`tests/support/AllocationProbeSanitizer.c`).
+- That hook does not run for `posix_memalign`, `aligned_alloc`, `memalign` or
+  `valloc`, so `allocation_probe_tests` reports those four as not covered in
+  that build only.
+- `native_rack_tests` still skips its zero-allocation checks under TSan.
 
 ## Self-test: `allocation_probe_tests`
 
@@ -45,6 +50,10 @@ It also proves that:
 - arithmetic on preallocated memory counts 0;
 - a background thread allocating all the time does not show up in the probed
   thread's count, while a background thread that probes itself does count.
+
+The multi-thread case is free of data races: its anti-elision sink is
+per-thread. A ThreadSanitizer build of `allocation_probe_tests` shows this
+(5 runs, 0 reports, after the review 5755905326 fix).
 
 ## Realtime gates that use it
 

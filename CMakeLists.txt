@@ -529,7 +529,11 @@ endif()
 # table hooks in every loaded module.
 set(VOX_PROBE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(VOX_ALLOCATION_PROBE OFF)
-if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+option(VOX_SANITIZE_THREAD "Build is instrumented with ThreadSanitizer" OFF)
+if(VOX_SANITIZE_THREAD)
+  # TSan intercepts malloc: count through the sanitizer allocator's hooks.
+  set(VOX_ALLOCATION_PROBE sanitizer)
+elseif(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   set(VOX_ALLOCATION_PROBE linux)
 elseif(WIN32 AND MSVC)
   set(VOX_ALLOCATION_PROBE windows)
@@ -538,6 +542,9 @@ function(vox_add_allocation_probe target)
   if(VOX_ALLOCATION_PROBE STREQUAL "linux")
     target_sources(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/abi/AllocationProbeLinux.c)
     target_link_options(${target} PRIVATE -rdynamic)
+  elseif(VOX_ALLOCATION_PROBE STREQUAL "sanitizer")
+    target_sources(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/support/AllocationProbeSanitizer.c)
+    target_compile_definitions(${target} PRIVATE VOX_PROBE_SANITIZER=1)
   elseif(VOX_ALLOCATION_PROBE STREQUAL "windows")
     target_sources(${target} PRIVATE ${VOX_PROBE_SOURCE_DIR}/tests/support/AllocationProbeWindows.c)
   else()
@@ -580,10 +587,8 @@ add_test(NAME module_abi_v2_tests
   COMMAND module_abi_v2_tests $<TARGET_FILE:vox_abi_v2_test_module>)
 
 # M0: the real Rack processor plays the V2 test module through a slot.
-# ThreadSanitizer builds (-fsanitize=thread) intercept malloc themselves, so
-# they cannot also link the allocation probe; its zero-allocation checks are
-# then skipped in that build only (they still run in every normal build).
-option(VOX_SANITIZE_THREAD "Build is instrumented with ThreadSanitizer" OFF)
+# ThreadSanitizer builds skip its zero-allocation checks, as before (they
+# still run in every normal build).
 add_executable(native_rack_tests tests/integration/NativeRackTests.cpp)
 target_include_directories(native_rack_tests PRIVATE apps/vst3 ${VST_LIBS_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)

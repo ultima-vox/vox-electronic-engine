@@ -40,7 +40,9 @@ void check(bool ok, const std::string &message) {
 }
 
 // Optimizers may elide a malloc/free pair; route pointers through here.
-void *volatile sink;
+// Per thread: threadsAreSeparate() calls keep() from several threads, and a
+// shared sink would be a data race (review 5755905326).
+thread_local void *volatile sink;
 void keep(void *p) { sink = p; }
 
 template <class F> unsigned long probed(F &&f) {
@@ -123,6 +125,12 @@ void platformPaths(const char *canaryPath) {
   check(cm && cr && cf && ch && chf, "canary exports");
 #else
   void *p = nullptr;
+#if defined(VOX_PROBE_SANITIZER)
+  // The sanitizer allocator runs no malloc hook for these; the normal Linux
+  // build counts them (AllocationProbeLinux.c).
+  std::cout << "sanitizer probe: posix_memalign, aligned_alloc, memalign and valloc "
+               "are not hooked by the sanitizer; covered in the normal build\n";
+#else
   counts("posix_memalign", probed([&] { check(posix_memalign(&p, 64, 256) == 0, "pm"); }));
   std::free(p);
   counts("aligned_alloc", probed([&] { keep(p = aligned_alloc(64, 256)); }));
@@ -131,6 +139,7 @@ void platformPaths(const char *canaryPath) {
   std::free(p);
   counts("valloc", probed([&] { keep(p = valloc(256)); }));
   std::free(p);
+#endif
   counts("reallocarray", probed([&] { keep(p = reallocarray(nullptr, 8, 32)); }));
   std::free(p);
 
