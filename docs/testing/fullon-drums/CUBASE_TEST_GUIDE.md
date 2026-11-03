@@ -203,9 +203,8 @@ by hand as above.
 | 28 | Save, close, reopen the project (or the template) | Same eight tracks, same routing, same sound |
 | 29 | Put a Closed Hat note on the same tick as an Open Hat note (separate tracks) | With Hat Choke on, the closed hat cuts the open hat (try both track orders). With Hat Choke off, both ring |
 
-Not covered here: separate **audio** outputs per pad (stems) for the Cubase
-mixer. Eight MIDI tracks do not create separate VST3 audio returns. That is
-a separate future design.
+Eight MIDI tracks do not create separate audio outputs. Separate audio
+outputs per pad are the host outputs of section 5b.
 
 ## 5. Rack features with the kit (Cubase)
 
@@ -239,6 +238,39 @@ state above.
 | 37c | Routing window: Kick event source = **slot 3**; slot 2 Duck depth still 0.8; play | The chord dips on every kick exactly as in step 30: ducking does not depend on the kit sitting before or after the chord slot |
 | 37d | Optional: unload slot 3 and load the kit into slot 1 again, source = slot 1 | Back to the starting state |
 
+## 5b. Separate host outputs (contract B2)
+
+The Rack offers the stereo outputs **Out 2** … **Out 8** next to the main
+**Output**. They are **off by default**: a project only gets them when you
+activate them in the host. A pad whose **Output** (SOUND page) is Out *k*
+goes to host output *k* when that output is active. Otherwise it plays on
+Main, exactly as before.
+
+On a host output a pad keeps:
+- the slot's level and pan, ducking and mute/solo;
+- the plugin's **Output Level**.
+
+The master effects stay on Main. Pad Send 1 and Send 2 and the slot sends
+still feed the Rack returns, which play on Main.
+
+**Starting state:**
+- slot 1 = Full-on Drums on CH1, Seq Mode = Host MIDI;
+- MIDI track "Kit" with `fullon-drums-145bpm-4bar.mid`;
+- Snare **Output** = Out 2;
+- Closed Hat **Output** = Out 3.
+
+| # | Action | Expected |
+| --- | --- | --- |
+| B1 | Play with no outputs activated | The full kit on the Rack's main channel, as before. Nothing is missing or doubled |
+| B2 | Cubase: *Studio → VST Instruments* (F11), on the Rack, **Activate Outputs** → Out 2 and Out 3. Play | Two new mixer channels. The snare plays only on Out 2 and the closed hat only on Out 3. Main has the rest of the kit with no snare or closed hat |
+| B3 | Deactivate Out 3 again; play | The closed hat is back on Main, once (not doubled), and still plays the same |
+| B4 | Slot 1 Level 0.5 and Pan right; then Mute slot 1 | Out 2 follows level and pan like Main; muted, Out 2 is silent too |
+| B5 | Kick event source = a Demo Synth slot (section 5, step 30) with Duck depth 0.8 on slot 1 | The snare on Out 2 dips with the kick exactly as it does on Main |
+| B6 | Slot 1 Return 1 send = 0.5 (Delay ON) | The snare's echoes are heard on **Main** (through the return), not on Out 2 |
+| B7 | All seven: pads 2–8 to Out 2 … Out 8, all activated; play | Each output carries only its own pad. Main carries only the kick |
+| B8 | Save, close and reopen the project | Same active outputs and the same routing |
+| B9 | REAPER: on the Rack track, *Routing* → track channels 16; in the FX window use the plug-in **pin connector** so output pins 3/4 (Out 2) … 15/16 (Out 8) map to track channels 3/4 … 15/16; make child tracks receive channels 3/4 etc. Repeat B2–B8 | As in Cubase |
+
 ## 6. REAPER (same build, same files)
 
 REAPER scans `C:\Program Files\Common Files\VST3\` by default
@@ -257,8 +289,7 @@ appear).
 
 ## 7. Not in this milestone
 
-Separate audio outputs per pad, a CPU / profiling view and a MIDI inspector
-are not part of this build. The `.vins` packages are **development-signed**
+A CPU / profiling view and a MIDI inspector are not part of this build. The `.vins` packages are **development-signed**
 (owner test only); a production build needs the owner's offline release key.
 
 ## 8. Results (fill in)

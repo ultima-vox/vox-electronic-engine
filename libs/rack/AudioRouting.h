@@ -56,6 +56,13 @@ public:
   void mixSlot(std::size_t, std::span<float *>, std::span<float *>,
                const ProcessSlotControls &, bool audible,
                std::uint32_t, const ModuleSends *moduleSends = nullptr) noexcept;
+  // B2: one OUTPUT bus of a slot into its host output, through the same slot
+  // chain as mixSlot (ducking, level/pan, audibility); feeds the slot's own
+  // pre/post sends, so they tap Main plus every OUTPUT bus. Module SEND buses
+  // stay with mixSlot (once per slot).
+  void mixSlotOutput(std::size_t, std::span<float *> input, std::span<float *> output,
+                     const ProcessSlotControls &, bool audible,
+                     std::uint32_t) noexcept;
   void finish(std::span<float *>, std::uint32_t) noexcept;
   [[nodiscard]] std::uint32_t tailSamples() const noexcept;
   [[nodiscard]] float gainReduction() const noexcept { return envelope_; }

@@ -221,6 +221,46 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
     }
   }
 }
+void AudioRouting::mixSlotOutput(std::size_t index, std::span<float *> input,
+                                 std::span<float *> output,
+                                 const ProcessSlotControls &slot, bool audible,
+                                 std::uint32_t count) noexcept {
+  if (!prepared_ || !blockReady_ || count != blockSamples_ ||
+      index >= instrument::maxSlots || !audible || spec_.outputChannels != 2 ||
+      input.size() != 2 || output.size() != 2 || !range(slot.level, 0, 2) ||
+      !range(slot.pan, -1, 1))
+    return;
+  for (std::size_t c = 0; c < 2; ++c)
+    if (!input[c] || !output[c])
+      return;
+  std::size_t route = instrument::maxSlots;
+  for (std::size_t i = 0; i < controls_.routeSlotIds.size(); ++i)
+    if (controls_.routeSlotIds[i] == slot.slotId &&
+        slot.slotId != instrument::invalidSlotId) {
+      route = i;
+      break;
+    }
+  const auto left = slot.pan <= 0 ? 1.0f : 1.0f - slot.pan,
+             right = slot.pan >= 0 ? 1.0f : 1.0f + slot.pan;
+  const bool source = slot.slotId == controls_.kickSource;
+  for (std::uint32_t s = 0; s < count; ++s) {
+    const auto duck =
+        source ? 1.0f
+               : 1 - (route < instrument::maxSlots ? controls_.duckDepth[route]
+                                                   : 0.0f) *
+                         envelopeBuffer_[s];
+    for (std::size_t c = 0; c < 2; ++c) {
+      const auto pre = input[c][s] * duck;
+      const auto post = pre * slot.level * (c == 0 ? left : right);
+      output[c][s] += post;
+      for (std::size_t bus = 0;
+           route < instrument::maxSlots && bus < sendBusCount; ++bus) {
+        const auto &send = controls_.sends[route][bus];
+        returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
+      }
+    }
+  }
+}
 void AudioRouting::finish(std::span<float *> outputs,
                           std::uint32_t count) noexcept {
   if (!prepared_ || !blockReady_ || count != blockSamples_ ||
