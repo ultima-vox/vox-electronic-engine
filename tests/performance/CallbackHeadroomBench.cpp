@@ -205,21 +205,23 @@ Workload makeWorkload(bool limit, double rate, int block) {
 void fillMidi(const Workload &w, juce::MidiBuffer &midi, long long blockIndex, int n) {
   midi.clear();
   if (w.limit) {
+    // Matched triples on one channel: NoteOn (ch, note) at offset o, its
+    // NoteOff (same ch, same note) at o + 1, and a CC at o. Every note
+    // starts and ends inside this block, so nothing is held across blocks
+    // (review 5777473229, P2). 682 triples + one final NoteOn/NoteOff pair =
+    // exactly 2048 events.
     int count = 0;
-    for (int e = 0; count < 2048; ++e) {
-      const auto i = static_cast<std::size_t>(e) % w.channels.size();
-      const int ch = w.channels[i];
-      const int offset = (e * 7) % n;
-      const int note = 36 + (e * 5 + static_cast<int>(blockIndex)) % 48;
-      if (e % 3 == 2)
-        midi.addEvent(MidiMessage::controllerEvent(ch, 1, (e + static_cast<int>(blockIndex)) % 128),
-                      offset);
-      else if (e % 3 == 0)
-        midi.addEvent(MidiMessage::noteOn(ch, note, (juce::uint8)(40 + e % 80)), offset);
-      else
-        midi.addEvent(MidiMessage::noteOff(ch, 36 + ((e - 1) * 5 + static_cast<int>(blockIndex)) % 48),
-                      std::min(n - 1, offset + 1));
-      ++count;
+    for (int k = 0; count + 2 <= 2048; ++k) {
+      const int ch = w.channels[static_cast<std::size_t>(k) % w.channels.size()];
+      const int note = 36 + (k * 5 + static_cast<int>(blockIndex)) % 48;
+      const int on = (k * 7) % (n - 1);
+      midi.addEvent(MidiMessage::noteOn(ch, note, (juce::uint8)(40 + k % 80)), on);
+      midi.addEvent(MidiMessage::noteOff(ch, note), on + 1);
+      count += 2;
+      if (count < 2048) {
+        midi.addEvent(MidiMessage::controllerEvent(ch, 1, (k + static_cast<int>(blockIndex)) % 128), on);
+        ++count;
+      }
     }
     return;
   }
@@ -282,6 +284,44 @@ Measurement run(bool limit, double rate, int block, double seconds) {
         automated.push_back(parameter);
   if (limit && automated.size() != poolPerSlot * 16)
     fail("expected 128 x 16 host automation endpoints, found " + std::to_string(automated.size()));
+  if (limit) {
+    // The limit stimulus must be what the report says it is: 16 distinct
+    // channels, exactly 2048 events, and every NoteOn released on its own
+    // channel and note, later in the same block.
+    std::vector<int> distinct = w.channels;
+    std::sort(distinct.begin(), distinct.end());
+    if (std::unique(distinct.begin(), distinct.end()) != distinct.end() || distinct.size() != 16)
+      fail("the 16 limit slots must listen on 16 distinct MIDI channels");
+    for (long long probe : {0LL, 1LL, 977LL}) {
+      fillMidi(w, midi, probe, block);
+      std::array<std::array<int, 128>, 17> held{};
+      std::array<std::array<int, 128>, 17> onAt{};
+      int events = 0;
+      bool ordered = true;
+      for (const auto metadata : midi) {
+        const auto m = metadata.getMessage();
+        ++events;
+        if (m.isNoteOn()) {
+          ++held[static_cast<std::size_t>(m.getChannel())][static_cast<std::size_t>(m.getNoteNumber())];
+          onAt[static_cast<std::size_t>(m.getChannel())][static_cast<std::size_t>(m.getNoteNumber())] =
+              metadata.samplePosition;
+        } else if (m.isNoteOff()) {
+          auto &h = held[static_cast<std::size_t>(m.getChannel())][static_cast<std::size_t>(m.getNoteNumber())];
+          ordered = ordered && h > 0 &&
+                    metadata.samplePosition >
+                        onAt[static_cast<std::size_t>(m.getChannel())][static_cast<std::size_t>(m.getNoteNumber())];
+          --h;
+        }
+      }
+      bool balanced = true;
+      for (const auto &channel : held)
+        for (const int h : channel)
+          balanced = balanced && h == 0;
+      if (events != 2048 || !balanced || !ordered)
+        fail("limit stimulus: " + std::to_string(events) +
+             " events, every NoteOff must follow its NoteOn on the same channel and note");
+    }
+  }
   const auto blocks = static_cast<std::size_t>(seconds * rate / block);
   const std::size_t warmup = std::max<std::size_t>(64, blocks / 20);
   std::vector<double> times;

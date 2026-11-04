@@ -26,6 +26,16 @@ Every configuration runs 4 s of audio after a warm-up. The columns are:
 - Load: p99 / budget;
 - Blocks over budget: measured blocks slower than realtime.
 
+> **Stimulus correction (review 5777473229, P2).** The tables below at
+> af28b12 and dec2057 used a flawed declared-limit stimulus. Each NoteOff
+> went to the next slot's channel, and at an unrelated offset, so many
+> notes were not released. Since the fix, each NoteOn has its NoteOff on the
+> same channel and note, later in the same block. The bench checks this:
+> 16 distinct channels, exactly 2048 events, every note balanced. The
+> earlier numbers are kept for the record only. The Windows matrix for the
+> corrected stimulus is the `Vox-Callback-Headroom` artifact of the commit
+> that carries this note.
+
 ## Local reference run (Linux container, not the release machine)
 
 Machine: shared cloud container, 4 vCPU Intel Xeon @ 2.10 GHz, GCC 13
@@ -135,6 +145,20 @@ This is a stress bound, not a musical load: 32 events per sample frame. It fails
 - (c) profile and optimise the router and voice-start path, then measure again with this bench.
 
 No timing gate was added, and no budget was widened.
+
+## Corrected stimulus, local container (declared-limit rows)
+
+The finding remains with the corrected stimulus. The per-block cost is
+higher than before (p50 about 450 µs at 96 kHz / 64), because every note
+now goes through its release path.
+
+| Rate | Block | p50 µs | p99 µs | Load p99 | Over budget |
+|---|---|---|---|---|---|
+| 96 kHz | 64 | 450.9 | 817.2 | 122.6% | 269 / 6000 |
+| 96 kHz | 128 | 636.1 | 1237.7 | 92.8% | 18 / 3000 |
+| 96 kHz | 512 | 1743.5 | 3445.6 | 64.6% | 0 / 750 |
+| 48 kHz | 64 | 453.7 | 832.9 | 62.5% | 2 / 3000 |
+| 44.1 kHz | 64 | 453.7 | 890.0 | 61.3% | 3 / 2756 |
 
 ## Not covered here
 - Real Bass and Acid builds (#70, #92) are not in staging yet. Add them to the
