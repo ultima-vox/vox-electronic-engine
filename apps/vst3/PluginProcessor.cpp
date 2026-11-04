@@ -104,13 +104,23 @@ vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
   limits.maxLatencySamples = 0;
   vstengine::instrument::InstrumentRegistry registry(limits);
   std::string diagnostic;
-  if (!registry.registerProvider(std::move(provider), diagnostic))
-    throw std::invalid_argument(diagnostic);
   diagnostics = std::move(native.diagnostics);
-  for (auto &nativeProvider : native.providers)
+  bool packagedAcid = false;
+  for (auto &nativeProvider : native.providers) {
+    bool bringsAcid = false;
+    for (const auto &descriptor : nativeProvider->descriptors())
+      if (descriptor.id == vstengine::modules::acidInstrumentId)
+        bringsAcid = true;
     if (!registry.registerProvider(std::move(nativeProvider), diagnostic))
       diagnostics.push_back("instrument package rejected: " + diagnostic);
+    else if (bringsAcid)
+      packagedAcid = true;
+  }
   native.providers.clear();
+  if (packagedAcid)
+    provider = vstengine::modules::createBuiltInProvider(false);
+  if (!registry.registerProvider(std::move(provider), diagnostic))
+    throw std::invalid_argument(diagnostic);
   return registry;
 }
 

@@ -126,7 +126,7 @@ private:
 
 class BuiltInProvider final : public instrument::InstrumentProvider {
 public:
-    BuiltInProvider()
+    explicit BuiltInProvider(bool includeAcid)
     {
         instrument::InstrumentDescriptor bassDescriptor;
         bassDescriptor.id = bassInstrumentId;
@@ -157,9 +157,11 @@ public:
             bassContent_.push_back({ std::string(bassInstrumentId), id, name,
                 instrument::ContentKind::generatorProfile, 1, 1,
                 VOX_SEQUENCE_ALL, VOX_PRESET_CLASS_GENERATOR });
+        if (includeAcid) {
         acidProvider_ = acid::createAcidProvider();
         for (const auto& descriptor : acidProvider_->descriptors())
             descriptors_.push_back(descriptor);
+        }
         leadProvider_ = lead::createLeadProvider();
         for (const auto& descriptor : leadProvider_->descriptors())
             descriptors_.push_back(descriptor);
@@ -176,7 +178,7 @@ public:
         std::string_view id, const instrument::CreateContext& context) override
     {
         if (id == bassInstrumentId) return std::make_unique<BassInstance>();
-        if (id == acid::instrumentId)
+        if (id == acid::instrumentId && acidProvider_)
             return acidProvider_->create(id, context);
         if (id == lead::instrumentId)
             return leadProvider_->create(id, context);
@@ -190,7 +192,7 @@ public:
         std::string_view id) const noexcept override
     {
         if (id == bassInstrumentId) return bassContent_;
-        if (id == acid::instrumentId)
+        if (id == acid::instrumentId && acidProvider_)
             return acidProvider_->contentDescriptors(id);
         if (id == lead::instrumentId)
             return leadProvider_->contentDescriptors(id);
@@ -204,7 +206,7 @@ public:
         std::string_view id, std::string_view preset,
         instrument::InstrumentInstance& instance) const noexcept override
     {
-        if (id == acid::instrumentId)
+        if (id == acid::instrumentId && acidProvider_)
             return acidProvider_->applySoundPreset(id, preset, instance);
         if (id == lead::instrumentId)
             return leadProvider_->applySoundPreset(id, preset, instance);
@@ -237,7 +239,7 @@ public:
                 ? instrument::ContentStatus::ok
                 : instrument::ContentStatus::invalidArgument;
         }
-        if (id == acid::instrumentId)
+        if (id == acid::instrumentId && acidProvider_)
             return acidProvider_->generatePattern(id, profile, context, input,
                                                    output);
         if (id == lead::instrumentId)
@@ -261,8 +263,8 @@ private:
 };
 } // namespace
 
-std::unique_ptr<instrument::InstrumentProvider> createBuiltInProvider()
+std::unique_ptr<instrument::InstrumentProvider> createBuiltInProvider(bool includeAcid)
 {
-    return std::make_unique<BuiltInProvider>();
+    return std::make_unique<BuiltInProvider>(includeAcid);
 }
 } // namespace vstengine::modules

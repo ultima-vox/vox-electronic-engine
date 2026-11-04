@@ -94,6 +94,7 @@ jobs:
           $vins = Get-ChildItem "build\instruments\*.vins"
           if ($vins.Count -lt 2) { throw "expected the Demo .vins packages in build\instruments" }
           Copy-Item $vins (Join-Path $layout "instruments")
+          if (-not (Test-Path (Join-Path $layout "instruments\VoxAcid303.vins"))) { throw "missing VoxAcid303.vins" }
           $rack = Join-Path $layout "Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
           if (-not (Test-Path $rack)) { throw "missing $rack" }
           $key = (& "build\Release\vox_vins_pack.exe" keyid "build\publisher\publisher.modulus")
