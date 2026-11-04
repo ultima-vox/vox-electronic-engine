@@ -349,7 +349,13 @@ Rack rule (B2, separate host outputs):
   B1 → B2 keeps dry gain, ducking and slot sends. SEND buses and the returns
   stay on Main.
 - **Master.** The master effects chain processes Main only. The plugin's
-  Output Level scales every output.
+  Output Level scales every output. A stem on Out *k* is therefore dry with
+  respect to the Rack master FX. Its send/return tails play on Main.
+- **Bus ownership.** Only the host enables or disables `Out 2` … `Out 8`.
+  The host saves that choice with its project. The plugin state does not
+  store it, and the plugin never changes it.
+- **Disabling.** Disabling an output on purpose folds that output's dry
+  signal into Main once. A pad is never missing and never doubled.
 - **Allocation.** Nothing is allocated in the callback; the host output
   pointers come from the host buffer.
 

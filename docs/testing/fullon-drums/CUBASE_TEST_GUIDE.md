@@ -268,7 +268,9 @@ still feed the Rack returns, which play on Main.
 | B5 | Kick event source = a Demo Synth slot (section 5, step 30) with Duck depth 0.8 on slot 1 | The snare on Out 2 dips with the kick exactly as it does on Main |
 | B6 | Slot 1 Return 1 send = 0.5 (Delay ON) | The snare's echoes are heard on **Main** (through the return), not on Out 2 |
 | B7 | All seven: pads 2–8 to Out 2 … Out 8, all activated; play | Each output carries only its own pad. Main carries only the kick |
-| B8 | Save, close and reopen the project | Same active outputs and the same routing |
+| B8 | Save, close and reopen the project | Same active outputs and the same routing; no pad missing or doubled |
+| B8a | Rack master effect ON (e.g. a delay); play with the snare on Out 2 | The master effect is heard on Main only; the snare on Out 2 stays dry. A pad send's return tail plays on Main |
+| B8b | Automate the plugin **Output Level**; bounce offline | Main and every active Out follow the level together; the bounce matches the realtime playback |
 | B9 | REAPER: on the Rack track, *Routing* → track channels 16; in the FX window use the plug-in **pin connector** so output pins 3/4 (Out 2) … 15/16 (Out 8) map to track channels 3/4 … 15/16; make child tracks receive channels 3/4 etc. Repeat B2–B8 | As in Cubase |
 
 ## 6. REAPER (same build, same files)
