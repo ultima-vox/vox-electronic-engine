@@ -40,8 +40,7 @@ The first instrument to finish is **Full-on Bass**; a working empty rack alone i
 | `libs/sequence/`, `libs/transport/`, `libs/midi/` | Current sequence model, host time, scheduling and MIDI export |
 | `libs/bass/`, `libs/modules/` | Existing Psy Bass implementation and built-in provider composition |
 | `libs/acid/`, `libs/lead/`, `libs/semanticfx/`, `libs/atmos/` | Existing modules still compiled and tested |
-| `libs/parts/` | Existing compatibility/Part code; retain until references and migrations are audited |
-| `libs/preset/`, `libs/modulation/`, `libs/effects/` | Presets, modulation and creative processing |
+| `libs/preset/`, `libs/modulation/`, `libs/effects/` | Rack scene presets, modulation and creative processing |
 | `libs/ui/`, `libs/vox-ui/` | Product UI and shared presentation components |
 | `tests/` | Existing regression, integration, performance and reliability suites |
 | `docs/` | Current product, engineering, UI and task documentation |

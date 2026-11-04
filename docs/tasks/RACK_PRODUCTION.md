@@ -91,6 +91,20 @@ precede merge. Actual Cubase12–15/REAPER workflow, visual and audio acceptance
 performed at the integrated Rack milestone, not after every PR. No standalone is
 required. Do not call a working Main-only mixer a completed production Rack.
 
+## Candidate integration status — 27 October 2026
+
+PR #62 consolidates graph/ducking/shell and the
+[named host/state contract](../architecture/RACK_PARAMETER_CONTRACT.md).
+The runtime contract fixes 16 immutable slot banks, four wet returns, explicit
+note-lane kick source, effective-only duck gain and zero-latency descriptor
+admission. Schemas are project5/Rack4/FX2; obsolete POC state is explicitly rejected.
+Missing/incompatible identities and opaque state remain recoverable.
+
+[Evidence](../testing/rack-production-evidence-20261027.md) separates automated
+checks, independent review, pre-existing Bass diagnostics and pending Windows/
+manual milestone gates. Do not mark the task complete merely because the
+implementation candidate exists. Acid-specific UI/DSP remains externally owned.
+
 ## Out of this task
 
 - Bass synthesis redesign/factory content and full instrument control banks.

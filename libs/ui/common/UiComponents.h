@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "vox-ui/VoxLookAndFeel.h"
 #include <memory>
 #include <vector>
 
@@ -33,16 +34,8 @@ inline const auto inactive = juce::Colour::fromRGB (10, 23, 34);        // #0A17
 inline const auto shadow = juce::Colour::fromRGBA (0, 0, 0, 88);
 }
 
-class VoxLookAndFeel final : public juce::LookAndFeel_V4 {
-public:
-    VoxLookAndFeel();
-    void drawButtonBackground(juce::Graphics&, juce::Button&,
-                              const juce::Colour&, bool, bool) override;
-    void drawRotarySlider(juce::Graphics&, int, int, int, int, float,
-                          float, float, juce::Slider&) override;
-    void drawComboBox(juce::Graphics&, int, int, bool, int, int, int, int,
-                      juce::ComboBox&) override;
-};
+// Product widgets share the single canonical VOX look.
+using VoxLookAndFeel = vox::ui::VoxLookAndFeel;
 
 class ParameterKnob final : public juce::Component {
 public:

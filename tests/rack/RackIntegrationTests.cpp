@@ -65,6 +65,9 @@ int main()
     state[1].macros[1] = 0.7f;
     REQUIRE(rack.replaceState(state, nullptr, diagnostic),
             "rack state loads transactionally");
+    // A slot the module rejects has no descriptor: fail, never dereference.
+    REQUIRE(rack.descriptor(0) != nullptr && rack.descriptor(1) != nullptr,
+            "both slots instantiate (module accepted its persistent state)");
     REQUIRE(rack.descriptor(0)->id == modules::bassInstrumentId
                 && rack.descriptor(1)->id == modules::acidInstrumentId,
             "slots resolve through descriptor boundary");
@@ -146,12 +149,26 @@ int main()
                                                      diagnostic),
             "modulation graph restores transactionally for all engines");
 
-    state[1].routing = { rack::RouteMode::layer, 1, 48, 72, 80, 127, 0 };
-    REQUIRE(rack.replaceState(state, nullptr, diagnostic), "Layer state loads");
+    // One instrument = one MIDI channel: a second owner of CH1 is rejected
+    // and the previous state stays active.
+    auto sharedChannel = state;
+    sharedChannel[1].routing = { rack::RouteMode::channel, 1, 48, 72, 80, 127, 0 };
+    REQUIRE(!rack.replaceState(sharedChannel, nullptr, diagnostic)
+                && diagnostic == "duplicate rack MIDI channel"
+                && rack.state()[1].routing.channel == 2,
+            "duplicate channel owner is rejected transactionally");
+
+    // Key/velocity zones remain a filter on the slot's own channel.
+    state[1].routing = { rack::RouteMode::channel, 2, 48, 72, 80, 127, 0 };
+    REQUIRE(rack.replaceState(state, nullptr, diagnostic), "zoned own-channel state loads");
     rack.reset();
-    const std::array layerMidi { noteOn(1, 60) };
-    REQUIRE(energy(render(rack, layerMidi)) > energy(reference) * 0.1,
-            "explicit Layer adds second module");
+    const std::array zonedMidi { noteOn(2, 60) };
+    REQUIRE(energy(render(rack, zonedMidi)) > energy(reference) * 0.1,
+            "note inside the zone renders on the slot channel");
+    rack.reset();
+    const std::array outsideZone { noteOn(2, 30) };
+    REQUIRE(energy(render(rack, outsideZone)) < 1.0e-12,
+            "note outside the zone reaches no engine");
 
     const auto beforeInvalid = rack.state()[0].instrumentId;
     auto invalid = rack.state();
@@ -197,31 +214,74 @@ int main()
                 == patterned.toXmlString(),
             "pattern-bearing save-load-save is canonical");
 
-    auto versionOne = patterned.createCopy();
-    versionOne.setProperty("schemaVersion", 1, nullptr);
-    for (int childIndex = 0; childIndex < versionOne.getNumChildren();
-         ++childIndex) {
-        auto child = versionOne.getChild(childIndex);
-        child.setProperty("schemaVersion", 1, nullptr);
-        child.removeProperty("patternSchemaVersion", nullptr);
-        child.removeProperty("patternPayload", nullptr);
+    // Contract C2: sample references round-trip canonically; malformed ones
+    // reject the project state (fail closed).
+    auto sampledState = patternedState;
+    using SampleRef = rack::PersistentSlotState::SampleRef;
+    sampledState[1].sampleRefs = {
+        SampleRef{0, SampleRef::Source::factory, "kick-909", std::string(64, 'a'), 1234},
+        SampleRef{3, SampleRef::Source::file, "/home/user/Samples/\xc3\xa9 snare.wav",
+                  std::string(64, 'f'), 99}};
+    const auto sampled = rack::state::serialize(sampledState);
+    REQUIRE(rack::state::deserialize(sampled, decoded, diagnostic),
+            "sample references parse: " << diagnostic);
+    REQUIRE(decoded[1].sampleRefs.size() == 2 &&
+                decoded[1].sampleRefs[1].location == sampledState[1].sampleRefs[1].location &&
+                decoded[1].sampleRefs[0].source == SampleRef::Source::factory &&
+                decoded[1].sampleRefs[1].bytes == 99,
+            "sample references round-trip, UTF-8 paths included");
+    REQUIRE(rack::state::serialize(decoded).toXmlString() == sampled.toXmlString(),
+            "sample-bearing save-load-save is canonical");
+    // Heap copies: main() already holds several Rack states on the stack.
+    // (REQUIRE returns from its function, so the helper reports a bool.)
+    const auto rejected = [&](auto edit) {
+      auto copy = std::make_unique<std::array<rack::PersistentSlotState, instrument::maxSlots>>(
+          sampledState);
+      edit((*copy)[1].sampleRefs);
+      std::string why;
+      auto out = std::make_unique<std::array<rack::PersistentSlotState, instrument::maxSlots>>();
+      return !rack::state::deserialize(rack::state::serialize(*copy), *out, why);
+    };
+    REQUIRE(rejected([](auto &r) { r[0].sampleSlot = 64; }), "sample slot 64 rejected");
+    REQUIRE(rejected([](auto &r) { r[1].sampleSlot = 0; }), "duplicate sample slot rejected");
+    REQUIRE(rejected([](auto &r) { std::swap(r[0], r[1]); }), "unsorted references rejected");
+    REQUIRE(rejected([](auto &r) { r[0].sha256 = std::string(63, 'a'); }), "short hash rejected");
+    REQUIRE(rejected([](auto &r) { r[0].sha256 = std::string(64, 'A'); }),
+            "uppercase hash rejected");
+    REQUIRE(rejected([](auto &r) { r[0].bytes = 0; }), "zero bytes rejected");
+    REQUIRE(rejected([](auto &r) { r[0].location = "Kick 909"; }),
+            "factory name outside the alphabet rejected");
+    REQUIRE(rejected([](auto &r) { r[1].location.clear(); }), "empty file path rejected");
+    REQUIRE(rejected([](auto &r) { r[1].location.assign(4097, 'x'); }), "path too long rejected");
+    {
+      auto encoded = rack::state::serialize(sampledState);
+      auto slot = encoded.getChild(1);
+      for (int i = 0; i < slot.getNumChildren(); ++i)
+        if (slot.getChild(i).hasType("SAMPLE")) {
+          slot.getChild(i).setProperty("source", "url", nullptr);
+          break;
+        }
+      REQUIRE(!rack::state::deserialize(encoded, decoded, diagnostic),
+              "an unknown sample source is rejected");
     }
-    REQUIRE(rack::state::deserialize(versionOne, decoded, diagnostic),
-            "rack schema v1 migrates to current schema");
-    REQUIRE(decoded[0].schemaVersion == rack::state::schemaVersion
-                && decoded[0].patternSchemaVersion == VOX_PATTERN_SCHEMA_V1
-                && decoded[0].patternPayload.empty()
-                && decoded[0].patternPreset == "Acid Pattern A",
-            "v1 migration defaults empty v1 payload without losing reference");
-    const auto migrated = rack::state::serialize(decoded);
-    REQUIRE(static_cast<int>(migrated.getProperty("schemaVersion"))
-                    == rack::state::schemaVersion
-                && migrated.getChild(0).hasProperty("patternSchemaVersion")
-                && migrated.getChild(0).hasProperty("patternPayload"),
-            "v1 migration serializes canonical current pattern fields");
+
+    // One 1.0 project format: an older Rack schema is not migrated.
+    for (const int older : {1, 6}) {
+      auto previous = patterned.createCopy();
+      previous.setProperty("schemaVersion", older, nullptr);
+      for (int childIndex = 0; childIndex < previous.getNumChildren(); ++childIndex)
+        previous.getChild(childIndex).setProperty("schemaVersion", older, nullptr);
+      REQUIRE(!rack::state::deserialize(previous, decoded, diagnostic),
+              "an older rack schema is rejected, not migrated");
+    }
+    auto badPublisher = patterned.createCopy();
+    badPublisher.getChild(0).setProperty("publisher", "NOT-A-KEY-ID", nullptr);
+    REQUIRE(!rack::state::deserialize(badPublisher, decoded, diagnostic),
+            "a malformed publisher identity is rejected");
 
     for (const auto& [property, raw] : std::array {
-             std::pair { "routeMode", -1 }, std::pair { "routeMode", 3 },
+             std::pair { "routeMode", -1 }, std::pair { "routeMode", 2 },
+             std::pair { "routeMode", 3 },
              std::pair { "channel", 0 }, std::pair { "channel", 17 },
              std::pair { "keyLow", -1 }, std::pair { "keyLow", 128 },
              std::pair { "keyHigh", -1 }, std::pair { "keyHigh", 128 },
@@ -242,11 +302,22 @@ int main()
             "overflowed raw routing integer rejected before narrowing");
 
     auto incompatiblePattern = patternedState;
-    incompatiblePattern[0].patternSchemaVersion = VOX_PATTERN_SCHEMA_V1 + 1;
+    incompatiblePattern[0].patternSchemaVersion = VOX_PATTERN_SCHEMA_V2 + 1;
     incompatiblePattern[0].patternPayload = {
         std::byte { 0xde }, std::byte { 0xad }, std::byte { 0xbe },
         std::byte { 0xef }
     };
+    {
+      // A V2 (Rack-owned INTERNAL) pattern on an instrument that does not
+      // declare INTERNAL playback is rejected, not reinterpreted.
+      auto foreign = patternedState;
+      foreign[0].patternSchemaVersion = VOX_PATTERN_SCHEMA_V2;
+      auto foreignRack = std::make_unique<rack::Rack>(registry);
+      REQUIRE(foreignRack->prepare({ 48000.0, 2048, 2 }), "foreign-pattern rack prepares");
+      REQUIRE(!foreignRack->replaceState(foreign, nullptr, diagnostic)
+                  && diagnostic.find("V2 pattern") != std::string::npos,
+              "V2 pattern on a HOST-playback instrument rejected");
+    }
     auto incompatibleRack = std::make_unique<rack::Rack>(registry);
     REQUIRE(incompatibleRack->prepare({ 48000.0, 2048, 2 }),
             "incompatible-pattern rack prepares");
@@ -258,14 +329,14 @@ int main()
                 && incompatibleRack->descriptor(0) == nullptr,
             "newer pattern schema cannot instantiate instrument silently");
     REQUIRE(incompatibleRack->state()[0].patternSchemaVersion
-                    == VOX_PATTERN_SCHEMA_V1 + 1
+                    == VOX_PATTERN_SCHEMA_V2 + 1
                 && incompatibleRack->state()[0].patternPayload
                     == incompatiblePattern[0].patternPayload,
             "incompatible pattern schema and opaque payload remain recoverable");
     const auto incompatibleEncoded = rack::state::serialize(
         incompatibleRack->state());
     REQUIRE(rack::state::deserialize(incompatibleEncoded, decoded, diagnostic)
-                && decoded[0].patternSchemaVersion == VOX_PATTERN_SCHEMA_V1 + 1
+                && decoded[0].patternSchemaVersion == VOX_PATTERN_SCHEMA_V2 + 1
                 && decoded[0].patternPayload
                     == incompatiblePattern[0].patternPayload,
             "incompatible pattern state survives canonical persistence");

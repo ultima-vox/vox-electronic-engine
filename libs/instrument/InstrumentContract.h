@@ -1,8 +1,12 @@
 #pragma once
 #include "instrument/InstrumentAbi.h"
+#include "instrument/SoundLayout.h"
+#include "pattern/Pattern.h"
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,7 +30,23 @@ inline constexpr std::uint32_t stateSchemaVersion =
     VOX_INSTRUMENT_STATE_SCHEMA_V1;
 inline constexpr std::uint32_t hostContractVersion = 1;
 inline constexpr std::size_t maxSlots = 16;
+// APVTS transports plain values as float. Every supported integer seed is
+// exact.
+inline constexpr std::uint32_t maxGenerationSeed = 0x00ffffffu;
 inline constexpr std::size_t macrosPerSlot = 8;
+// Fixed host pool: every slot exposes the same 128 generic endpoints
+// slotNN.p001..p128; an instrument's named parameters bind to them in
+// descriptor order, so installing an instrument never changes the host layout.
+// Final pre-release contract (#77 gate 5): 128 per slot, 2048 in total. It
+// replaces the earlier 64 (p001..p064 keep their IDs); no other size exists.
+inline constexpr std::size_t poolParametersPerSlot = 128;
+inline constexpr std::size_t maxDirectParameters = poolParametersPerSlot;
+// All parameters of one direct instrument: the host ones (at most
+// maxDirectParameters, each on a pool endpoint) plus UI-only ones, which have
+// no endpoint (poolIndex -1), are not automatable and not modulatable. UI-only
+// values are saved with the slot and edited in the editor through the Rack.
+inline constexpr std::size_t maxSlotParameters = 256;
+inline constexpr std::size_t maxHostDirectParameters = 512;
 
 struct ResourceBudget {
     std::uint32_t maxVoices {};
@@ -77,7 +97,26 @@ struct ParameterDescriptor {
     bool automatable { true };
     bool modulatable {};
     std::int8_t preferredMacro { -1 };
+    // Host pool endpoint (0..127) of a direct parameter. Unique per
+    // instrument; it must stay the same across instrument versions so
+    // recorded automation never moves to another control. -1 for a UI-only
+    // parameter (not automatable) and for instruments without direct
+    // parameters.
+    std::int16_t poolIndex { -1 };
 };
+
+// Auxiliary stereo bus an instrument declares (ABI V2.3): a SEND bus feeds
+// only its Rack return, an OUTPUT bus is the dry signal of the sources routed
+// to that host output (folded into the slot's dry signal while the Rack has
+// one host output).
+enum class AuxBusKind : std::uint8_t { send = 1, output = 2 };
+struct AuxBus {
+    AuxBusKind kind {};
+    std::uint8_t target {}; // SEND: return 1..4; OUTPUT: host output 2..8
+};
+inline constexpr std::size_t maxAuxBuses = 11; // 4 SEND + 7 OUTPUT
+// Sample slots one instrument may declare (ABI V2.4, contract C).
+inline constexpr std::size_t maxSampleSlots = 64;
 
 struct InstrumentDescriptor {
     InstrumentId id;
@@ -95,6 +134,38 @@ struct InstrumentDescriptor {
     std::vector<std::uint32_t> supportedPresetSchemaVersions { 1 };
     ResourceBudget budget;
     std::vector<ParameterDescriptor> parameters;
+    // Internal host integration policy, not an extension of the external C ABI.
+    bool directParameters{};
+    // Pattern capabilities and factory patterns declared through
+    // VoxContentApiV2, validated at load. Null: the instrument has no pattern.
+    std::shared_ptr<const pattern::Content> patternContent;
+    // Signed package identity: the trusted publisher key id of the .vins that
+    // supplied this instrument; empty for built-in and unsigned graph content.
+    std::string publisherId;
+    // Oldest instrumentVersion whose saved state this version may upgrade by
+    // appending new parameters; 0 = no upgrade (only the same version loads).
+    std::uint32_t upgradeFromVersion {};
+    // Declarative SOUND page shipped by the package, validated against this
+    // descriptor at load. Null: the host shows its generic control list.
+    std::shared_ptr<const SoundLayout> soundLayout;
+    // Auxiliary buses (ABI V2.3), validated at import: each target once, at
+    // most 4 SEND and 7 OUTPUT. Empty for instruments without them.
+    std::vector<AuxBus> auxBuses;
+    // Sample slots (ABI V2.4) the instrument reads host-decoded buffers from.
+    std::uint32_t sampleSlotCount {};
+    // Factory samples shipped in the instrument's signed .vins (contract C2):
+    // name, UTF-8 absolute path of the verified cached member, its SHA-256.
+    struct FactorySample {
+        std::string name;
+        std::string path;
+        std::string sha256;
+    };
+    std::vector<FactorySample> factorySamples;
+};
+
+struct ParameterValue {
+  ParameterId id;
+  float value{};
 };
 
 struct ContentDescriptor {
@@ -108,6 +179,14 @@ struct ContentDescriptor {
     std::uint32_t supportedPresetClasses {};
     std::uint32_t macroValueMask {};
     std::array<float, macrosPerSlot> macroValues {};
+    // Complete, named base values for a direct-parameter sound preset. The host
+    // validates/prepares them transactionally; no live DSP read is required.
+    std::vector<ParameterValue> parameterValues;
+    // Optional versioned non-parameter sound state (e.g. resource identities).
+    // Absence preserves it; present empty payload requests native Init. Named
+    // bases remain authoritative and are applied after native preparation.
+    std::optional<std::vector<std::byte>> nativeState;
+    std::uint32_t nativeStateVersion{};
 };
 
 // Stable traversal-order-independent seed domain. SlotId is hashed as explicit
@@ -155,6 +234,79 @@ struct ProcessBlock {
     double bpm {};
     double ppqPosition {};
     bool transportPlaying {};
+    // Immutable pattern snapshot owned by the Rack for this call, or null.
+    const VoxPatternV2* pattern {};
+    std::uint64_t patternGeneration {};
+    // Host-owned buffer for notes the instrument generates itself, or null.
+    VoxNoteOutputV2* noteOutput {};
+    // The descriptor's auxiliary buses in order, outputs.size() channel
+    // pointers each (bus-major); empty when none. The instance overwrites them.
+    std::span<float*> aux;
+};
+
+// VoxNoteOutputV2.dropped value the host writes when it voids a block's
+// note output (malformed records); the count is then 0. Any other non-zero
+// value is the module's own count of notes beyond the buffer.
+inline constexpr std::uint32_t voidedNoteOutput = 0xFFFFFFFFu;
+
+// Last fault an instance latched (it then stays silent until the controller
+// reprepares it). Kept after recovery as the last fault reason.
+enum class InstanceFault : std::uint8_t { none, processFailed, resetFailed };
+
+// Bounded runtime health of one instance, readable from the controller thread
+// while the audio thread runs (atomics only, never a lock or allocation).
+struct InstanceHealth {
+    bool faulted {};
+    InstanceFault lastFault { InstanceFault::none };
+    std::uint64_t faults {};             // latched faults since creation
+    std::uint64_t midiOverflowBlocks {}; // routed MIDI beyond the prepared budget
+    std::uint64_t invalidNoteBlocks {};  // module note output voided as malformed
+};
+
+// A decoded sample (contract C). Immutable once published: the host never
+// changes it while the instrument may read it, and frees it only through the
+// instance's sample hand-off.
+struct SampleBuffer {
+    std::vector<std::vector<float>> channels; // equal lengths, 1 or 2 channels
+    double sampleRate {};
+    float peak {};
+    // Filled by the hand-off on publish: the channel pointer table the
+    // instrument receives. It lives here so that every byte a voice can
+    // reference belongs to this buffer and is released with it.
+    std::vector<const float*> channelTable;
+};
+
+struct SampleStats {
+    std::uint64_t published {}; // buffers accepted by publish()
+    std::uint64_t released {};  // buffers released (superseded, retired or torn down)
+    std::uint64_t live {};      // published and not yet released
+    std::uint64_t liveBytes {}; // sample memory of those (pending, current, retiring)
+    std::uint64_t reportsUsed {};     // valid reports that decided releases
+    std::uint64_t reportsRejected {}; // invalid, malformed or overflowing: freed nothing
+};
+
+// Controller-side sample hand-off of one instance (contract C rev. 3.1).
+// Thread-safe against the audio thread without locks on its side; controller
+// calls are serialized internally. Never called from the audio callback.
+class SampleHost {
+public:
+    virtual ~SampleHost() = default;
+    virtual std::uint32_t sampleSlotCount() const noexcept = 0;
+    // Publishes `buffer` (null: clear the slot) to be installed at the next
+    // block start; the last publish wins. Refuses when the slot already holds
+    // the maximum of live buffers until retirements are collected.
+    // `memoryLimitBytes` (0: none) caps the sample memory this hand-off may
+    // hold after the publish: pending, current and every retiring buffer a
+    // voice may still read. A publish above it is refused and changes nothing.
+    virtual bool publish(std::uint32_t slot, std::unique_ptr<SampleBuffer> buffer,
+                         std::string &diagnostic, std::uint64_t memoryLimitBytes = 0) = 0;
+    // Reads the newest usage report and releases every buffer the free rule
+    // allows. Returns how many were released.
+    virtual std::size_t collect() = 0;
+    virtual SampleStats stats() const = 0;
+    // Tests: receives every released buffer instead of it being deleted.
+    using ReleaseSink = std::function<void(std::unique_ptr<SampleBuffer>)>;
+    virtual void setReleaseSinkForTesting(ReleaseSink) = 0;
 };
 
 class InstrumentInstance {
@@ -174,11 +326,29 @@ public:
                            std::uint32_t& bytesWritten) const noexcept = 0;
     virtual std::uint32_t latencySamples() const noexcept = 0;
     virtual std::uint32_t tailSamples() const noexcept = 0;
+    // Audio thread, right after process(): true when the adapter output
+    // silence for the whole last block instead of the instrument's audio
+    // (failed, faulted, suspended, unprepared or bypassed), so nothing
+    // routed to it sounded. Instances that always render report false.
+    virtual bool blockSilenced() const noexcept { return false; }
+
+    // Any thread. Instances without runtime faults report nothing.
+    virtual InstanceHealth health() const noexcept { return {}; }
+
+    // Controller thread. The sample hand-off of an instrument that declares
+    // sample slots; null otherwise.
+    virtual SampleHost* samples() noexcept { return nullptr; }
 };
+
+inline constexpr std::uint32_t noSlotIndex = 0xffffffffu;
 
 struct CreateContext {
     SlotId slotId {};
     ResourceResolver* resources {};
+    // 0-based Rack slot ordinal (0..maxSlots-1) the instance is created for;
+    // noSlotIndex outside a Rack. Positional only, never a durable identity
+    // (that is slotId).
+    std::uint32_t slotIndex { noSlotIndex };
 };
 
 class InstrumentProvider {

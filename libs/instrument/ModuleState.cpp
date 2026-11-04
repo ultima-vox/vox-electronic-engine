@@ -4,7 +4,8 @@
 namespace vstengine::instrument {
 PreparedModuleState prepareModuleState(const PersistentModuleState& state,
                                        const InstrumentRegistry& registry,
-                                       ResourceResolver* resources)
+                                       ResourceResolver* resources,
+                                       std::uint32_t slotIndex)
 {
     PreparedModuleState prepared;
     prepared.persistent = state;
@@ -46,7 +47,7 @@ PreparedModuleState prepareModuleState(const PersistentModuleState& state,
         return prepared;
     }
     prepared.instance = registry.create(state.instrumentId,
-        { state.slotId, resources }, prepared.resolution);
+        { state.slotId, resources, slotIndex }, prepared.resolution);
     if (prepared.instance
         && !prepared.instance->loadState(state.schemaVersion, state.payload)) {
         prepared.instance.reset();

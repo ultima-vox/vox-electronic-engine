@@ -13,6 +13,9 @@ enum : std::uint32_t {
     VOX_INSTRUMENT_STATE_SCHEMA_V1 = 1,
     VOX_INSTRUMENT_CONTENT_API_V1 = 1,
     VOX_PATTERN_SCHEMA_V1 = 1,
+    // V2 (pattern/Pattern.h, VPT2): Rack-owned pattern of an instrument that
+    // declares INTERNAL playback through VoxContentApiV2.
+    VOX_PATTERN_SCHEMA_V2 = 2,
     VOX_PATTERN_MAX_STEPS = 64,
     VOX_INSTRUMENT_MAX_ID_BYTES = 64,
     VOX_INSTRUMENT_MAX_NAME_BYTES = 96

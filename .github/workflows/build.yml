@@ -43,16 +43,113 @@ jobs:
             if (-not (Test-Path $output)) { throw "Visual Gate snapshot not created: $output" }
           }
 
+          # Capture actual shared Rack editor/utility components as well as the showcase.
+          $env:VOX_UI_SNAPSHOT = Join-Path $snapshotDir "rack-shell-native-1240x800.png"
+          $env:VOX_ROUTING_SNAPSHOT = Join-Path $snapshotDir "rack-routing-native-1040x780.png"
+          $env:VOX_DUCKING_SNAPSHOT = Join-Path $snapshotDir "rack-ducking-native-1040x780.png"
+          & (Join-Path $PWD "build\Release\editor_smoke_tests.exe")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:VOX_UI_SNAPSHOT
+          Remove-Item Env:VOX_ROUTING_SNAPSHOT
+          Remove-Item Env:VOX_DUCKING_SNAPSHOT
+
           Capture-VisualGate "psy-bass-sound-1180x760.png" "com.ultimavox.psy-bass" "sound" 1180 760
           Capture-VisualGate "psy-bass-sound-1500x920.png" "com.ultimavox.psy-bass" "sound" 1500 920
           Capture-VisualGate "acid-sound-1500x920.png" "com.ultimavox.acid" "sound" 1500 920
           Capture-VisualGate "psy-bass-macros-1500x920.png" "com.ultimavox.psy-bass" "macros" 1500 920
+
+          # Actual editor, Full-on Drums Pattern page (8 x 16 grid, fill bar).
+          $env:VOX_DRUMS_GRID_SNAPSHOT = Join-Path $snapshotDir "drums-pattern-grid-1500x920.png"
+          & (Join-Path $PWD "build\Release\fullon_drums_tests.exe") (Join-Path $PWD "build\instruments") (Join-Path $PWD "build\drums-snapshot-scratch") (Join-Path $PWD "docs\testing\fullon-drums")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:VOX_DRUMS_GRID_SNAPSHOT
+          if (-not (Test-Path (Join-Path $snapshotDir "drums-pattern-grid-1500x920.png"))) { throw "Drum grid snapshot not created" }
+
+          # Actual editor, Full-on Drums SOUND page (declarative .vins layout).
+          $env:VOX_DRUMS_SOUND_SNAPSHOT = Join-Path $snapshotDir "drums-sound-layout-1500x920.png"
+          & (Join-Path $PWD "build\Release\fullon_drums_tests.exe") (Join-Path $PWD "build\instruments") (Join-Path $PWD "build\drums-sound-scratch") (Join-Path $PWD "docs\testing\fullon-drums")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:VOX_DRUMS_SOUND_SNAPSHOT
+          if (-not (Test-Path (Join-Path $snapshotDir "drums-sound-layout-1500x920.png"))) { throw "Drum sound snapshot not created" }
 
       - name: Upload Visual Gate snapshots
         uses: actions/upload-artifact@v4
         with:
           name: Vox-UI-Visual-Gate
           path: build/visual-gate/*.png
+          if-no-files-found: error
+
+      - name: Assemble install layout and Cubase guide
+        shell: powershell
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # Install layout exactly as on the user's machine:
+          #   vox music\Vox Electronic Engine.vst3, vox music\instruments\*.vins
+          # The publisher private key (build\publisher) is never copied.
+          $layout = Join-Path $PWD "build\install-layout\vox music"
+          if (Test-Path (Join-Path $PWD "build\install-layout")) { Remove-Item -Recurse -Force (Join-Path $PWD "build\install-layout") }
+          New-Item -ItemType Directory -Force -Path (Join-Path $layout "instruments") | Out-Null
+          Copy-Item -Recurse "build\VstEngine_artefacts\Release\VST3\Vox Electronic Engine.vst3" $layout
+          $vins = Get-ChildItem "build\instruments\*.vins"
+          if ($vins.Count -lt 2) { throw "expected the Demo .vins packages in build\instruments" }
+          Copy-Item $vins (Join-Path $layout "instruments")
+          $rack = Join-Path $layout "Vox Electronic Engine.vst3\Contents\x86_64-win\Vox Electronic Engine.vst3"
+          if (-not (Test-Path $rack)) { throw "missing $rack" }
+          $key = (& "build\Release\vox_vins_pack.exe" keyid "build\publisher\publisher.modulus")
+          if ($LASTEXITCODE -ne 0) { throw "cannot read the publisher key id" }
+          $guide = Join-Path $PWD "build\demo-guide"
+          if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
+          New-Item -ItemType Directory -Force -Path $guide | Out-Null
+          Copy-Item docs\testing\demo-synth\* $guide
+          Copy-Item docs\testing\demo-synth-graph\* $guide
+          $lines = @(
+            "Head commit: $env:HEAD_SHA"
+            "Built commit (PR merge ref): $env:GITHUB_SHA"
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "BUILD TYPE: DEVELOPMENT - not a production artifact (no release publisher key; #77 gate 3 is BLOCKED)"
+            "Publisher key (id, bits): $key - development key of this CI build tree, not a release key; native .vins from other runs do not load"
+            "Rack SHA-256: $((Get-FileHash -Algorithm SHA256 $rack).Hash.ToLower())"
+          )
+          foreach ($f in Get-ChildItem (Join-Path $layout "instruments\*.vins")) {
+            $lines += "$($f.Name) SHA-256: $((Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower())"
+          }
+          $lines | Set-Content (Join-Path $guide "build-info.txt")
+          Copy-Item (Join-Path $guide "build-info.txt") $layout
+          Get-Content (Join-Path $guide "build-info.txt")
+
+      - name: Upload install layout
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Music-Install-Windows
+          path: build/install-layout/**
+          if-no-files-found: error
+
+      - name: Upload Vox Demo Synth Cubase guide
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Demo-Synth-Cubase-Guide
+          path: build/demo-guide/*
+          if-no-files-found: error
+
+      - name: Assemble Full-on Drums Cubase guide
+        shell: powershell
+        run: |
+          # VoxFullOnDrums.vins ships in Vox-Music-Install-Windows; the shared
+          # build-info.txt lists its SHA-256 and the publisher key.
+          $guide = Join-Path $PWD "build\drums-guide"
+          if (Test-Path $guide) { Remove-Item -Recurse -Force $guide }
+          New-Item -ItemType Directory -Force -Path $guide | Out-Null
+          Copy-Item docs\testing\fullon-drums\* $guide
+          if (-not (Test-Path "build\install-layout\vox music\instruments\VoxFullOnDrums.vins")) { throw "missing VoxFullOnDrums.vins" }
+          Copy-Item "build\demo-guide\build-info.txt" $guide
+          Get-Content (Join-Path $guide "build-info.txt")
+
+      - name: Upload Full-on Drums Cubase guide
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-FullOn-Drums-Cubase-Guide
+          path: build/drums-guide/*
           if-no-files-found: error
 
       - name: Package Vox Electronic Engine
@@ -68,3 +165,10 @@ jobs:
             build/*.exe
             build/*.zip
           if-no-files-found: error
+
+      - name: Remove the development publisher key from the runner
+        if: always()
+        shell: powershell
+        run: |
+          # The per-run development private keys must not outlive the job.
+          if (Test-Path build\publisher) { Get-ChildItem build\publisher\*.pem | Remove-Item -Force }

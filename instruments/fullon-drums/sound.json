@@ -1,0 +1,990 @@
+{
+  "voxSoundLayout": 1,
+  "sections": [
+    {
+      "title": "KICK",
+      "controls": [
+        {
+          "parameter": "kick.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "kick.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "kick.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "kick.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "kick.character",
+          "kind": "knob",
+          "label": "CLICK"
+        },
+        {
+          "parameter": "kick.pitch_amount",
+          "kind": "knob",
+          "label": "PITCH ENV"
+        },
+        {
+          "parameter": "kick.pitch_decay",
+          "kind": "knob",
+          "label": "PITCH DECAY"
+        },
+        {
+          "parameter": "kick.drive",
+          "kind": "knob",
+          "label": "DRIVE"
+        },
+        {
+          "parameter": "kick.sub",
+          "kind": "knob",
+          "label": "SUB"
+        },
+        {
+          "parameter": "kick.tail",
+          "kind": "knob",
+          "label": "TAIL"
+        },
+        {
+          "parameter": "kick.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "kick.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "kick.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "kick.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "kick.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "kick.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "kick.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "kick.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "kick.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "kick.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "kick.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "kick.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "kick.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "kick.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "kick.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "kick.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "SNARE",
+      "controls": [
+        {
+          "parameter": "snare.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "snare.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "snare.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "snare.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "snare.character",
+          "kind": "knob",
+          "label": "SNAPPY"
+        },
+        {
+          "parameter": "snare.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "snare.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "snare.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "snare.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "snare.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "snare.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "snare.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "snare.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "snare.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "snare.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "snare.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "snare.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "snare.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "snare.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "snare.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "snare.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "CLAP",
+      "controls": [
+        {
+          "parameter": "clap.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "clap.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "clap.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "clap.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "clap.character",
+          "kind": "knob",
+          "label": "TONE"
+        },
+        {
+          "parameter": "clap.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "clap.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "clap.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "clap.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "clap.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "clap.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "clap.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "clap.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "clap.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "clap.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "clap.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "clap.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "clap.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "clap.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "clap.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "clap.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "CLOSED HAT",
+      "controls": [
+        {
+          "parameter": "chat.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "chat.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "chat.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "chat.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "chat.character",
+          "kind": "knob",
+          "label": "TONE"
+        },
+        {
+          "parameter": "chat.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "chat.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "chat.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "chat.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "chat.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "chat.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "chat.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "chat.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "chat.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "chat.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "chat.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "chat.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "chat.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "chat.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "chat.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "chat.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "OPEN HAT",
+      "controls": [
+        {
+          "parameter": "ohat.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "ohat.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "ohat.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "ohat.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "ohat.character",
+          "kind": "knob",
+          "label": "TONE"
+        },
+        {
+          "parameter": "ohat.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "ohat.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "ohat.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "ohat.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "ohat.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "ohat.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "ohat.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "ohat.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "ohat.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "ohat.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "ohat.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "ohat.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "ohat.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "ohat.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "ohat.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "ohat.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "TOM",
+      "controls": [
+        {
+          "parameter": "tom.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "tom.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "tom.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "tom.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "tom.character",
+          "kind": "knob",
+          "label": "SWEEP"
+        },
+        {
+          "parameter": "tom.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "tom.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "tom.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "tom.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "tom.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "tom.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "tom.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "tom.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "tom.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "tom.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "tom.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "tom.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "tom.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "tom.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "tom.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "tom.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "RIM",
+      "controls": [
+        {
+          "parameter": "rim.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "rim.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "rim.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "rim.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "rim.character",
+          "kind": "knob",
+          "label": "TONE"
+        },
+        {
+          "parameter": "rim.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "rim.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "rim.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "rim.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "rim.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "rim.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "rim.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "rim.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "rim.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "rim.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "rim.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "rim.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "rim.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "rim.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "rim.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "rim.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "CYMBAL",
+      "controls": [
+        {
+          "parameter": "cymbal.level",
+          "kind": "knob",
+          "label": "LEVEL"
+        },
+        {
+          "parameter": "cymbal.tune",
+          "kind": "knob",
+          "label": "TUNE"
+        },
+        {
+          "parameter": "cymbal.decay",
+          "kind": "knob",
+          "label": "DECAY"
+        },
+        {
+          "parameter": "cymbal.pan",
+          "kind": "knob",
+          "label": "PAN"
+        },
+        {
+          "parameter": "cymbal.character",
+          "kind": "knob",
+          "label": "TONE"
+        },
+        {
+          "parameter": "cymbal.fine",
+          "kind": "knob",
+          "label": "FINE"
+        },
+        {
+          "parameter": "cymbal.filter",
+          "kind": "selector",
+          "label": "FILTER"
+        },
+        {
+          "parameter": "cymbal.cutoff",
+          "kind": "knob",
+          "label": "CUTOFF"
+        },
+        {
+          "parameter": "cymbal.resonance",
+          "kind": "knob",
+          "label": "RESO"
+        },
+        {
+          "parameter": "cymbal.transient_attack",
+          "kind": "knob",
+          "label": "ATTACK"
+        },
+        {
+          "parameter": "cymbal.transient_sustain",
+          "kind": "knob",
+          "label": "SUSTAIN"
+        },
+        {
+          "parameter": "cymbal.send1",
+          "kind": "knob",
+          "label": "SEND 1"
+        },
+        {
+          "parameter": "cymbal.send2",
+          "kind": "knob",
+          "label": "SEND 2"
+        },
+        {
+          "parameter": "cymbal.output",
+          "kind": "selector",
+          "label": "OUTPUT"
+        },
+        {
+          "parameter": "cymbal.source",
+          "kind": "selector",
+          "label": "SOURCE"
+        },
+        {
+          "parameter": "cymbal.sample_start",
+          "kind": "knob",
+          "label": "START"
+        },
+        {
+          "parameter": "cymbal.sample_end",
+          "kind": "knob",
+          "label": "END"
+        },
+        {
+          "parameter": "cymbal.sample_loop",
+          "kind": "toggle",
+          "label": "LOOP"
+        },
+        {
+          "parameter": "cymbal.sample_reverse",
+          "kind": "toggle",
+          "label": "REVERSE"
+        },
+        {
+          "parameter": "cymbal.sample_normalize",
+          "kind": "toggle",
+          "label": "NORMALIZE"
+        },
+        {
+          "parameter": "cymbal.sample_level",
+          "kind": "knob",
+          "label": "SMP LEVEL"
+        }
+      ]
+    },
+    {
+      "title": "KIT",
+      "controls": [
+        {
+          "parameter": "kit.volume",
+          "kind": "knob",
+          "label": "VOLUME"
+        },
+        {
+          "parameter": "kit.velocity",
+          "kind": "knob",
+          "label": "VELOCITY"
+        },
+        {
+          "parameter": "kit.hat_choke",
+          "kind": "toggle",
+          "label": "HAT CHOKE"
+        }
+      ]
+    },
+    {
+      "title": "SEQUENCER",
+      "controls": [
+        {
+          "parameter": "seq.mode",
+          "kind": "selector",
+          "label": "MODE"
+        },
+        {
+          "parameter": "seq.swing",
+          "kind": "knob",
+          "label": "SWING"
+        },
+        {
+          "parameter": "seq.accent",
+          "kind": "knob",
+          "label": "ACCENT"
+        },
+        {
+          "parameter": "seq.lane.kick",
+          "kind": "toggle",
+          "label": "KICK"
+        },
+        {
+          "parameter": "seq.lane.snare",
+          "kind": "toggle",
+          "label": "SNARE"
+        },
+        {
+          "parameter": "seq.lane.clap",
+          "kind": "toggle",
+          "label": "CLAP"
+        },
+        {
+          "parameter": "seq.lane.chat",
+          "kind": "toggle",
+          "label": "CLOSED HAT"
+        },
+        {
+          "parameter": "seq.lane.ohat",
+          "kind": "toggle",
+          "label": "OPEN HAT"
+        },
+        {
+          "parameter": "seq.lane.tom",
+          "kind": "toggle",
+          "label": "TOM"
+        },
+        {
+          "parameter": "seq.lane.rim",
+          "kind": "toggle",
+          "label": "RIM"
+        },
+        {
+          "parameter": "seq.lane.cymbal",
+          "kind": "toggle",
+          "label": "CYMBAL"
+        }
+      ]
+    }
+  ]
+}

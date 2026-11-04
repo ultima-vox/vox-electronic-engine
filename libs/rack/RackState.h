@@ -3,12 +3,18 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 namespace vstengine::rack::state {
-inline constexpr int schemaVersion = 3;
+// The single 1.0 project format. Older schemas are not migrated (owner
+// decision: no pre-release projects exist); they are rejected as a whole.
+inline constexpr int schemaVersion = 7;
 // Absolute host-side bound applies before module resolution. Missing modules
 // cannot bypass state resource limits by carrying an unbounded opaque payload.
 inline constexpr std::size_t maxModulePayloadBytes = 1024u * 1024u;
 inline constexpr std::size_t maxPatternPayloadBytes = 64u * 1024u;
 inline constexpr std::size_t maxModulationPayloadBytes = 64u * 1024u;
+// Contract C2 sample references: bounds of a saved reference (the decoder
+// applies its own, tighter file limit when loading).
+inline constexpr std::uint64_t maxSampleRefBytes = 1024ull * 1024 * 1024;
+inline constexpr std::size_t maxSamplePathBytes = 4096;
 // Shared control-thread preflight for typed callers and decoded projects.
 // Legal missing/newer modules keep opaque payloads, but never bypass host limits.
 bool validateSlot(const PersistentSlotState&, std::string& diagnostic);

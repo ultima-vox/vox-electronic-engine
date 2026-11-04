@@ -66,6 +66,14 @@ bool sameStep(const vstengine::sequence::Step& left,
 }
 } // namespace
 
+// A fresh Rack starts empty (owner Cubase acceptance); this fixture loads the
+// layout it exercises explicitly: Bass in slot 1 (CH1), Acid in slot 2 (CH2).
+static bool loadBassAndAcid(VstEngineAudioProcessor &p) {
+  juce::String d;
+  return p.loadSlotInstrument(0, vstengine::modules::bassInstrumentId, d) &&
+         p.loadSlotInstrument(1, vstengine::modules::acidInstrumentId, d);
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
@@ -75,6 +83,7 @@ int main()
     auto processor = std::make_unique<VstEngineAudioProcessor>();
     processor->prepareToPlay(48000.0, 512);
     setPlain(*processor, "midiMode", 1.0f);
+    require(loadBassAndAcid(*processor), "fixture loads Bass and Acid explicitly");
     for (std::size_t slot = 0; slot < vstengine::instrument::maxSlots; ++slot)
         for (std::size_t macro = 0;
              macro < vstengine::instrument::macrosPerSlot; ++macro) {
@@ -164,8 +173,6 @@ int main()
             "internal FX preset applies through processor");
     require(processor->internalEffectsState().effects[0].enabled,
             "internal distortion becomes active");
-    setPlain(*processor, "kickTune", 43.0f);
-    setPlain(*processor, "matchBassTimingOffsetMs", 12.0f);
     juce::MemoryBlock state;
     processor->getStateInformation(state);
     require(state.getSize() > 0, "state serialization succeeds");
@@ -180,14 +187,13 @@ int main()
     require(restored->internalEffectsState().effects[0].enabled
                 && restored->internalEffectsState().effects[0].mix > 0.0f,
             "internal FX state round-trips");
-    require(std::abs(restored->parameters().getRawParameterValue("kickTune")->load()
-                     - 43.0f) < 0.01f,
-            "dormant Kick value retained for migration");
-    require(std::abs(restored->parameters().getRawParameterValue(
-                         "matchBassTimingOffsetMs")->load() - 12.0f) < 0.01f,
-            "dormant MATCH value retained for migration");
+    for (const auto* removed : { "drive", "filterCutoff", "midiChannel",
+                                 "bassLevel", "kickTune", "kickMidiChannel",
+                                 "kickLevel", "matchBassTimingOffsetMs" })
+        require(restored->parameters().getParameter(removed) == nullptr,
+                "POC engine/Part parameter is not a host parameter");
     require(renderHostNote(*restored, 9) < silent,
-            "legacy Kick parameters never reactivate audio");
+            "an unrouted channel stays silent");
 
     // Cubase may request project state from a non-audio thread while playback
     // continues. Saving must neither mutate the audio-thread control snapshot

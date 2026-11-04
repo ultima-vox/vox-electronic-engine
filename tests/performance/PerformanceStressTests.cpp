@@ -166,7 +166,7 @@ std::unique_ptr<VstEngineAudioProcessor> makeDenseProcessor()
         require(processor->loadSlotInstrument(slot, ids[slot % ids.size()], diagnostic),
                 "all 16 stress slots load");
         require(processor->assignSlotChannel(slot, static_cast<int>(slot + 1),
-                    VstEngineAudioProcessor::ChannelConflictAction::reject, diagnostic),
+                    diagnostic),
                 "stress slot gets independent MIDI channel");
     }
     return processor;
@@ -195,6 +195,25 @@ int main()
             allocation_probe::active.store(false, std::memory_order_release);
             verifyFinite(instance.audio);
         }
+    }
+    // Exercise maximum 16x4 send graph with all four returns and explicit kick
+    // event ducking, not merely dry rack voices. Host automation precedes
+    // scope.
+    for (auto &instance : instances) {
+      for (std::size_t slot = 0; slot < 16; ++slot) {
+        for (std::size_t bus = 0; bus < 4; ++bus) {
+          const auto id = vstengine::host::sendParameterId(slot, bus, "level");
+          setPlain(*instance.processor, id.c_str(), 0.08f);
+        }
+        const auto id = "slot" +
+                        juce::String(static_cast<int>(slot + 1))
+                            .paddedLeft('0', 2)
+                            .toStdString() +
+                        ".duck.depth";
+        setPlain(*instance.processor, id.c_str(), 0.7f);
+      }
+      setPlain(*instance.processor, "rack.duck.source", 1);
+      setPlain(*instance.processor, "rack.duck.note", 37);
     }
     std::chrono::nanoseconds processTime {};
     double aggregateEnergy {};
@@ -259,9 +278,8 @@ int main()
         require(processor.loadSlotInstrument(slot, ids[(cycle + 1) % ids.size()], diagnostic),
                 "slot recreates after unload");
         const int channel = static_cast<int>(slot + 1);
-        require(processor.assignSlotChannel(slot, channel,
-                    VstEngineAudioProcessor::ChannelConflictAction::swap, diagnostic),
-                "channel swap remains deterministic under churn");
+        require(processor.assignSlotChannel(slot, channel, diagnostic),
+                "channel reassignment remains deterministic under churn");
     }
     processor.instrumentRack().reset();
     juce::MidiBuffer emptyMidi;
