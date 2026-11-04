@@ -73,6 +73,69 @@ artifact and, finally, the owner's DAW machine.
   - It is **not** reported as a defect: there is no Windows evidence yet, and the container is noisy.
 - **Allocations:** 0 audio-thread allocations in every configuration.
 
+## Windows CI run (self-hosted runner, Release, exact head af28b12)
+
+[Run 41919802775](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/41919802775), job 126888980695. The report with the runner CPU is the artifact `Vox-Callback-Headroom`.
+
+| Workload | Rate | Block | Budget µs | p50 µs | p95 µs | p99 µs | p99.9 µs | max µs | Load p99 | Headroom p99 | Blocks over budget | Audio-thread allocations |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| representative | 44.1 kHz | 64 | 1451 | 104.0 | 156.8 | 214.2 | 269.3 | 333.3 | 14.8% | 85.2% | 0 / 2756 | 0 |
+| representative | 44.1 kHz | 128 | 2902 | 169.9 | 253.5 | 336.9 | 415.3 | 450.1 | 11.6% | 88.4% | 0 / 1378 | 0 |
+| representative | 44.1 kHz | 512 | 11610 | 551.3 | 773.6 | 946.5 | 1143.7 | 1143.7 | 8.2% | 91.8% | 0 / 344 | 0 |
+| representative | 48.0 kHz | 64 | 1333 | 103.5 | 156.1 | 210.0 | 273.3 | 487.6 | 15.8% | 84.2% | 0 / 3000 | 0 |
+| representative | 48.0 kHz | 128 | 2667 | 167.5 | 253.0 | 324.5 | 437.1 | 458.5 | 12.2% | 87.8% | 0 / 1500 | 0 |
+| representative | 48.0 kHz | 512 | 10667 | 552.6 | 758.3 | 875.7 | 1107.3 | 1107.3 | 8.2% | 91.8% | 0 / 375 | 0 |
+| representative | 96.0 kHz | 64 | 667 | 103.0 | 151.6 | 197.9 | 244.6 | 418.1 | 29.7% | 70.3% | 0 / 6000 | 0 |
+| representative | 96.0 kHz | 128 | 1333 | 165.8 | 244.9 | 314.6 | 373.6 | 379.1 | 23.6% | 76.4% | 0 / 3000 | 0 |
+| representative | 96.0 kHz | 512 | 5333 | 554.9 | 767.8 | 913.3 | 1158.8 | 1158.8 | 17.1% | 82.9% | 0 / 750 | 0 |
+| declared-limit | 44.1 kHz | 64 | 1451 | 552.0 | 717.1 | 858.8 | 1086.7 | 1135.6 | 59.2% | 40.8% | 0 / 2756 | 0 |
+| declared-limit | 44.1 kHz | 128 | 2902 | 807.7 | 1016.0 | 1139.8 | 1549.0 | 1553.6 | 39.3% | 60.7% | 0 / 1378 | 0 |
+| declared-limit | 44.1 kHz | 512 | 11610 | 2315.5 | 2698.5 | 2921.9 | 3247.8 | 3247.8 | 25.2% | 74.8% | 0 / 344 | 0 |
+| declared-limit | 48.0 kHz | 64 | 1333 | 550.9 | 712.1 | 829.5 | 1044.1 | 1188.2 | 62.2% | 37.8% | 0 / 3000 | 0 |
+| declared-limit | 48.0 kHz | 128 | 2667 | 812.0 | 1029.4 | 1189.8 | 1483.3 | 1508.4 | 44.6% | 55.4% | 0 / 1500 | 0 |
+| declared-limit | 48.0 kHz | 512 | 10667 | 2275.6 | 2717.5 | 2954.7 | 3349.1 | 3349.1 | 27.7% | 72.3% | 0 / 375 | 0 |
+| declared-limit | 96.0 kHz | 64 | 667 | 546.8 | 710.1 | 844.9 | 1054.5 | 1140.5 | 126.7% | -26.7% | 501 / 6000 | 0 |
+| declared-limit | 96.0 kHz | 128 | 1333 | 804.9 | 1027.9 | 1274.4 | 1572.8 | 1627.6 | 95.6% | 4.4% | 19 / 3000 | 0 |
+| declared-limit | 96.0 kHz | 512 | 5333 | 2287.5 | 2707.7 | 2949.1 | 3376.8 | 3376.8 | 55.3% | 44.7% | 0 / 750 | 0 |
+
+### Reading (Windows)
+- **Representative workload:**
+  - p99 load ≤ 16% at 44.1 and 48 kHz;
+  - 17–30% at 96 kHz;
+  - **0 blocks over budget in all 9 configurations**.
+- **Declared limit, 44.1 and 48 kHz:** p99 load is 25–62%, with 0 blocks over budget.
+- **Declared limit, 96 kHz:**
+
+  | Block | p99 load | Blocks over budget |
+  |---|---|---|
+  | 512 | 55% | 0 |
+  | 128 | **96%** | 19 of 3000 |
+  | 64 | **127%** (p50 547 µs against a 667 µs budget) | **501 of 6000** |
+
+  So 96 kHz / 64 does **not** hold the declared limit on this runner.
+- **Allocations:** 0 audio-thread allocations everywhere.
+
+### Finding (reproducible): declared MIDI limit at 96 kHz with small blocks
+The per-block cost at the limit hardly depends on the block size: p50 is about 550 µs at 64 frames and about 800 µs at 128. The fixed per-block work therefore dominates.
+
+A local attribution run at 96 kHz / 64 (container) removed one part of the workload at a time:
+
+| Variant | p50 µs | p99 µs |
+|---|---|---|
+| full limit | 275 | 597 |
+| without the 2048 MIDI events | 124 | 254 |
+| without the 128 × 16 automation | 277 | 612 |
+| without both | 112 | 169 |
+
+The **2048 host MIDI events per block** account for most of the cost: about two thirds of the NoteOns start voices across the 16 slots. The automation adds little.
+
+This is a stress bound, not a musical load: 32 events per sample frame. It fails only with small blocks at 96 kHz. Owner decision, options:
+- (a) accept it as the declared worst case and document the limit per rate/block;
+- (b) lower the declared host MIDI limit for small blocks, e.g. scale it with block length (a contract change);
+- (c) profile and optimise the router and voice-start path, then measure again with this bench.
+
+No timing gate was added, and no budget was widened.
+
 ## Not covered here
 - Real Bass and Acid builds (#70, #92) are not in staging yet. Add them to the
   workloads when they land.
