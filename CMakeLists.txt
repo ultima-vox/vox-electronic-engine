@@ -750,6 +750,18 @@ if(VOX_NATIVE_PLATFORM)
   vox_add_allocation_probe(fullon_drums_tests)
   target_compile_definitions(fullon_drums_tests PRIVATE
     PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  # Release-candidate callback headroom (#77): reports per rate/block, not a
+  # timing gate. The CTest entry is a quick smoke run; CI runs the full matrix
+  # and publishes the report.
+  add_executable(callback_headroom_bench tests/performance/CallbackHeadroomBench.cpp)
+  target_include_directories(callback_headroom_bench PRIVATE apps/vst3 ${VST_LIBS_DIR}
+      ${CMAKE_CURRENT_BINARY_DIR}/VstEngine_artefacts/JuceLibraryCode ${juce_SOURCE_DIR}/modules)
+  target_link_libraries(callback_headroom_bench PRIVATE VstEngine vst_vins)
+  add_dependencies(callback_headroom_bench vins_fullon_drums vins_demo_synth vins_demo_synth_graph)
+  vox_add_allocation_probe(callback_headroom_bench)
+  add_test(NAME callback_headroom_smoke
+    COMMAND callback_headroom_bench ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/headroom-scratch
+      ${CMAKE_BINARY_DIR}/callback-headroom-smoke.md --quick)
   add_test(NAME fullon_drums_tests
     COMMAND fullon_drums_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/drums-scratch
       ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)

@@ -28,6 +28,27 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Measure callback headroom
+        shell: powershell
+        # Release-candidate evidence for #77: the full 44.1/48/96 kHz x
+        # 64/128/512 matrix, representative and declared-limit workloads.
+        # Fails only on broken output or an audio-thread allocation; timings
+        # are reported, not judged (shared runner).
+        run: |
+          & (Join-Path $PWD "build\Release\callback_headroom_bench.exe") (Join-Path $PWD "build\instruments") (Join-Path $PWD "build\headroom-scratch") (Join-Path $PWD "build\callback-headroom.md")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "Head commit: $env:HEAD_SHA" | Add-Content (Join-Path $PWD "build\callback-headroom.md")
+          "Runner: $env:RUNNER_NAME ($env:PROCESSOR_IDENTIFIER, $env:NUMBER_OF_PROCESSORS logical CPUs)" | Add-Content (Join-Path $PWD "build\callback-headroom.md")
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Upload callback headroom report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Callback-Headroom
+          path: build/callback-headroom.md
+          if-no-files-found: error
+
       - name: Capture Visual Gate snapshots
         shell: powershell
         run: |
