@@ -84,6 +84,21 @@ public:
   bool configureModulation(std::size_t slotIndex,
                            std::span<const modulation::Route> routes,
                            std::string &diagnostic);
+  // B2: the host's separate stereo outputs 2..8 (index 0 = Out 2). A slot's
+  // OUTPUT bus k goes to host output k through the slot chain (ducking, slot
+  // level/pan, disable/mute/solo) when that output is active, and is not
+  // added to Main; an inactive output falls back to the slot's dry signal
+  // once, exactly as in B1. Outputs are added into, never cleared here. Only
+  // with stereo main outputs.
+  static constexpr std::size_t hostOutputCount = 7;
+  struct HostOutputs {
+    std::array<std::array<float *, 2>, hostOutputCount> channels{};
+    std::uint8_t active{}; // bit k - 2 set: host output k is active
+    [[nodiscard]] bool isActive(std::uint8_t target) const noexcept {
+      return target >= 2 && target <= 8 && (active >> (target - 2)) & 1u &&
+             channels[target - 2][0] != nullptr && channels[target - 2][1] != nullptr;
+    }
+  };
   void process(std::span<float *> outputs, std::uint32_t sampleCount,
                std::span<const VoxMidiEventV1> midi, double bpm,
                double ppqPosition, bool playing,
@@ -92,7 +107,8 @@ public:
                std::span<const ProcessSlotControls> controls = {},
                std::span<const RackRouter::GeneratedSlotEvents> generated = {},
                AudioRouting *audioRouting = nullptr,
-               const AudioRoutingControls *audioControls = nullptr) noexcept;
+               const AudioRoutingControls *audioControls = nullptr,
+               const HostOutputs *hostOutputs = nullptr) noexcept;
   // Non-realtime defaults: may wait for an active callback. DSP applies the
   // change at the next block; explicit ProcessSlotControls take precedence.
   // Host automation uses process() block snapshots, never these setters.

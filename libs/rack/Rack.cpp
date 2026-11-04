@@ -1152,7 +1152,8 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                    std::span<const ProcessSlotControls> controls,
                    std::span<const RackRouter::GeneratedSlotEvents> generated,
                    AudioRouting *audioRouting,
-                   const AudioRoutingControls *audioControls) noexcept {
+                   const AudioRoutingControls *audioControls,
+                   const HostOutputs *hostOutputs) noexcept {
   if (mutationGate_.load(std::memory_order_seq_cst))
     return;
   const ActiveProcess active(activeProcessors_);
@@ -1175,6 +1176,9 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     destination.sortBySampleOffset();
   const bool anySolo = std::any_of(controls.begin(), controls.end(),
                                    [](const auto &slot) { return slot.solo; });
+  // B2 needs stereo main outputs and stereo aux buffers.
+  const bool b2 = hostOutputs != nullptr && hostOutputs->active != 0 &&
+                  outputs.size() == 2 && spec_.outputChannels == 2;
   // Pass 1: every slot renders into its own buffer. Notes a slot generates
   // itself (an internal drum sequencer) exist only after this pass.
   for (std::size_t i = 0; i < state_.size(); ++i) {
@@ -1238,10 +1242,13 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
                             patternGeneration,
                             slot.patterns ? &slot.noteOutput : nullptr,
                             {slot.auxPointers.data(), slot.auxPointers.size()}});
-    // B1: an OUTPUT bus joins the slot's dry signal once (the Rack has one
-    // host output). SEND buses go to their returns in pass 3, never here.
+    // B1: an OUTPUT bus joins the slot's dry signal once. B2: an OUTPUT bus
+    // whose host output is active goes there in pass 3 instead, and not
+    // into the dry signal; an inactive one falls back here, once. SEND buses
+    // go to their returns in pass 3, never here.
     for (std::size_t b = 0; slot.descriptor && b < slot.descriptor->auxBuses.size(); ++b)
-      if (slot.descriptor->auxBuses[b].kind == instrument::AuxBusKind::output)
+      if (slot.descriptor->auxBuses[b].kind == instrument::AuxBusKind::output &&
+          !(b2 && hostOutputs->isActive(slot.descriptor->auxBuses[b].target)))
         for (std::size_t c = 0; c < outputs.size(); ++c) {
           const float *aux = slot.auxPointers[b * outputs.size() + c];
           float *dry = slot.audio[c].data();
@@ -1288,13 +1295,22 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
     auto &slot = processing_->runtime[i];
     if (!slot.instance)
       continue;
+    const bool audible =
+        controls[i].enabled && !controls[i].mute && (!anySolo || controls[i].solo);
     if (audioRouting) {
       audioRouting->mixSlot(i, {slot.pointers.data(), outputs.size()}, outputs,
-                            controls[i],
-                            controls[i].enabled && !controls[i].mute &&
-                                (!anySolo || controls[i].solo),
-                            sampleCount,
+                            controls[i], audible, sampleCount,
                             slot.hasModuleSends ? &slot.moduleSends : nullptr);
+      for (std::size_t b = 0; b2 && slot.descriptor && b < slot.descriptor->auxBuses.size();
+           ++b) {
+        const auto &bus = slot.descriptor->auxBuses[b];
+        if (bus.kind != instrument::AuxBusKind::output || !hostOutputs->isActive(bus.target))
+          continue;
+        std::array<float *, 2> in{slot.auxPointers[b * 2], slot.auxPointers[b * 2 + 1]};
+        auto out = hostOutputs->channels[bus.target - 2u];
+        audioRouting->mixSlotOutput(i, {in.data(), 2}, {out.data(), 2}, controls[i],
+                                    audible, sampleCount);
+      }
       continue;
     }
     const float left =
@@ -1307,6 +1323,17 @@ void Rack::process(std::span<float *> outputs, std::uint32_t sampleCount,
       outputs[0][sample] += slot.audio[0][sample] * left;
       if (outputs.size() > 1)
         outputs[1][sample] += slot.audio[1][sample] * right;
+    }
+    for (std::size_t b = 0; b2 && slot.descriptor && b < slot.descriptor->auxBuses.size(); ++b) {
+      const auto &bus = slot.descriptor->auxBuses[b];
+      if (bus.kind != instrument::AuxBusKind::output || !hostOutputs->isActive(bus.target))
+        continue;
+      const auto &out = hostOutputs->channels[bus.target - 2u];
+      const float *inL = slot.auxPointers[b * 2], *inR = slot.auxPointers[b * 2 + 1];
+      for (std::uint32_t sample = 0; sample < sampleCount; ++sample) {
+        out[0][sample] += inL[sample] * left;
+        out[1][sample] += inR[sample] * right;
+      }
     }
   }
   if (audioRouting)

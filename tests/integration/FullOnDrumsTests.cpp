@@ -1903,6 +1903,231 @@ void internalKickDucksInTheSameBlock() {
   }
 }
 
+// ---------------------------------------------------------------- B2
+// Contract B2: separate host outputs Out 2 .. Out 8 (VST3 buses 1..7).
+struct MultiOut {
+  Stereo main;
+  std::array<Stereo, 7> outs; // Out 2 .. Out 8
+};
+
+// Enables exactly the host outputs `ks` (2..8); every other aux bus off.
+void enableOutputs(Rig &r, std::initializer_list<int> ks) {
+  r.p->releaseResources();
+  auto layout = r.p->getBusesLayout();
+  for (int b = 1; b < layout.outputBuses.size(); ++b)
+    layout.outputBuses.getReference(b) = juce::AudioChannelSet::disabled();
+  for (const int k : ks)
+    layout.outputBuses.getReference(k - 1) = juce::AudioChannelSet::stereo();
+  check(r.p->setBusesLayout(layout), "the host output layout is accepted");
+  r.p->prepareToPlay(r.rate, r.block);
+}
+
+MultiOut renderMulti(Rig &r, int samples, const std::vector<Midi> &events,
+                     unsigned long *allocations = nullptr) {
+  fresh(r);
+  MultiOut out;
+  const int total = r.p->getTotalNumOutputChannels();
+  juce::AudioBuffer<float> audio(total, r.block);
+  juce::MidiBuffer midi;
+  midi.ensureSize(4096);
+  std::array<int, 8> first{};
+  std::array<bool, 8> on{};
+  for (int b = 0; b < 8; ++b)
+    if (const auto *bus = r.p->getBus(false, b); bus && bus->isEnabled()) {
+      on[static_cast<std::size_t>(b)] = true;
+      first[static_cast<std::size_t>(b)] = bus->getChannelIndexInProcessBlockBuffer(0);
+    }
+  auto take = [&](Stereo &x, int b, int n) {
+    const int c = first[static_cast<std::size_t>(b)];
+    x.l.insert(x.l.end(), audio.getReadPointer(c), audio.getReadPointer(c) + n);
+    x.r.insert(x.r.end(), audio.getReadPointer(c + 1), audio.getReadPointer(c + 1) + n);
+  };
+  for (int start = 0; start < samples; start += r.block) {
+    const int n = std::min(r.block, samples - start);
+    midi.clear();
+    for (const auto &e : events)
+      if (e.sample >= start && e.sample < start + n)
+        midi.addEvent(e.message, e.sample - start);
+    audio.setSize(total, n, false, false, true);
+    for (int c = 0; c < total; ++c)
+      std::fill_n(audio.getWritePointer(c), n, 1.0f); // stale data the plugin must clear
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+    if (allocations)
+      voxProbeBegin();
+#endif
+    r.p->processBlock(audio, midi);
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+    if (allocations)
+      *allocations += voxProbeEnd();
+#endif
+    take(out.main, 0, n);
+    for (int b = 1; b < 8; ++b)
+      if (on[static_cast<std::size_t>(b)])
+        take(out.outs[static_cast<std::size_t>(b - 1)], b, n);
+  }
+  return out;
+}
+
+Stereo sum(const Stereo &a, const Stereo &b) {
+  Stereo x = a;
+  for (std::size_t i = 0; i < x.l.size() && i < b.l.size(); ++i) {
+    x.l[i] += b.l[i];
+    x.r[i] += b.r[i];
+  }
+  return x;
+}
+
+void hostOutputsB2() {
+  const int length = 16000;
+  // Topology: Output (main, enabled) + Out 2 .. Out 8, stereo, disabled by
+  // default, so an existing project keeps one stereo output.
+  {
+    auto r = makeRig(instrumentsDir);
+    check(r.p->getBusCount(false) == 8 && r.p->getBus(false, 0)->getName() == "Output" &&
+              r.p->getBus(false, 0)->isEnabled(),
+          "the main output keeps its name and stays enabled");
+    for (int k = 2; k <= 8; ++k) {
+      const auto *bus = r.p->getBus(false, k - 1);
+      check(bus && bus->getName() == "Out " + juce::String(k) && !bus->isEnabled() &&
+                bus->getDefaultLayout() == juce::AudioChannelSet::stereo(),
+            "Out " + std::to_string(k) + " exists, stereo, disabled by default");
+    }
+    check(r.p->getTotalNumOutputChannels() == 2, "by default the plugin has 2 output channels");
+    auto layout = r.p->getBusesLayout();
+    layout.outputBuses.getReference(1) = juce::AudioChannelSet::mono();
+    check(!r.p->checkBusesLayoutSupported(layout), "a mono host output is refused");
+    layout.outputBuses.getReference(1) = juce::AudioChannelSet::stereo();
+    check(r.p->checkBusesLayoutSupported(layout), "a stereo host output is accepted");
+    layout.outputBuses.getReference(0) = juce::AudioChannelSet::mono();
+    check(!r.p->checkBusesLayoutSupported(layout), "host outputs need a stereo main output");
+  }
+
+  // A pad on Out 2 with Out 2 active sounds there exactly as it does on Main
+  // under B1 (bit for bit), and not on Main. With Out 2 inactive it falls back
+  // to Main, once.
+  {
+    auto r = makeRig(instrumentsDir);
+    const auto onMain = renderHits(r, length, {{0, snare}});
+    setUi(r, snare, "output", 1.0f); // Out 2
+    enableOutputs(r, {2});
+    const auto b2 = renderMulti(r, length, hitsToMidi(r, {{0, snare}}));
+    check(b2.outs[0] == onMain && b2.main.energy() == 0.0,
+          "B2: the pad sounds on Out 2 bit for bit as on Main, and Main is silent");
+    enableOutputs(r, {3});
+    const auto fallback = renderMulti(r, length, hitsToMidi(r, {{0, snare}}));
+    check(fallback.main == onMain && fallback.outs[1].energy() == 0.0,
+          "an inactive Out 2 falls back to Main once; Out 3 stays silent");
+    enableOutputs(r, {});
+    check(renderHits(r, length, {{0, snare}}) == onMain, "no host outputs: B1 again");
+  }
+
+  // The plugin's master level applies to every output (the master effects
+  // chain stays on Main). A fresh rig: the skewed level range cannot be set
+  // back to exactly 1.0 through its normalized value.
+  {
+    auto r = makeRig(instrumentsDir);
+    setRaw(r, "outputLevel", 0.5f);
+    const auto halfB1 = renderHits(r, length, {{0, snare}});
+    setUi(r, snare, "output", 1.0f);
+    enableOutputs(r, {2});
+    const auto halfB2 = renderMulti(r, length, hitsToMidi(r, {{0, snare}}));
+    check(halfB2.outs[0] == halfB1 && halfB1.energy() > 0.0,
+          "the master level scales Out 2 exactly as it scales Main");
+  }
+
+  // Maximum topology: pads 2..8 on Out 2 .. Out 8, the kick on Main, every pad
+  // sending to Send 1 and Send 2 at once. Each output holds exactly its pad;
+  // the sends reach only the returns on Main; nothing is aliased or dropped.
+  {
+    auto r = makeRig(instrumentsDir);
+    for (int pad = 1; pad < padCount; ++pad)
+      setUi(r, pad, "output", static_cast<float>(pad)); // pad p -> Out p + 1
+    enableOutputs(r, {2, 3, 4, 5, 6, 7, 8});
+    std::vector<Hit> all;
+    for (int pad = 0; pad < padCount; ++pad)
+      all.push_back({0, pad});
+    unsigned long allocations = 0;
+    const auto dry = renderMulti(r, length, hitsToMidi(r, all));
+    const auto kickOnly = renderMulti(r, length, hitsToMidi(r, {{0, kick}}));
+    check(dry.main == kickOnly.main && dry.main.energy() > 0.0,
+          "max topology: Main holds only the kick");
+    for (int pad = 1; pad < padCount; ++pad) {
+      // The hats share a choke group: each is compared with both hats playing.
+      std::vector<Hit> hits{{0, pad}};
+      if (pad == closedHat || pad == openHat)
+        hits = {{0, closedHat}, {0, openHat}};
+      const auto alone = renderMulti(r, length, hitsToMidi(r, hits));
+      check(dry.outs[static_cast<std::size_t>(pad - 1)] ==
+                    alone.outs[static_cast<std::size_t>(pad - 1)] &&
+                alone.main.energy() == 0.0,
+            "max topology: Out " + std::to_string(pad + 1) + " holds exactly pad " +
+                std::to_string(pad));
+    }
+    for (int pad = 1; pad < padCount; ++pad)
+      if (pad != closedHat && pad != openHat)
+        check(dry.outs[static_cast<std::size_t>(pad - 1)].energy() > 0.0,
+              "Out " + std::to_string(pad + 1) + " sounds");
+    check(dry.outs[closedHat - 1].energy() > 0.0, "the closed hat sounds on Out 4");
+    setRaw(r, host::returnParameterId(0, "type"), 1.0f);
+    setRaw(r, host::returnParameterId(1, "type"), 1.0f);
+    for (int pad = 0; pad < padCount; ++pad) {
+      setPlain(r, pad2(pad, send1), 0.5f);
+      setPlain(r, pad2(pad, send2), 0.3f);
+    }
+    const auto sent = renderMulti(r, length, hitsToMidi(r, all), &allocations);
+    for (int k = 0; k < 7; ++k)
+      check(sent.outs[static_cast<std::size_t>(k)] == dry.outs[static_cast<std::size_t>(k)],
+            "pad sends never leak into Out " + std::to_string(k + 2));
+    check(sent.main != dry.main && sent.main.finite(), "pad sends reach the returns on Main");
+#if defined(VOX_TEST_INTERPOSE_MALLOC)
+    check(allocations == 0, "B2 with all 7 outputs and both sends allocates nothing (" +
+                                std::to_string(allocations) + ")");
+    std::cout << "allocation probe: 0 audio-thread allocations with 7 host outputs and sends\n";
+#endif
+  }
+
+  // B1 -> B2 keeps dry gain, ducking and slot sends: with a duck source,
+  // slot level and pan and a post-fader slot send, Main + Out 2 under B2
+  // equals Main under B1. Muting the slot silences its host output too.
+  {
+    auto r = makeRig(instrumentsDir);
+    juce::String diagnostic;
+    check(r.p->loadSlotInstrument(9, "com.ultimavox.demo-synth", diagnostic),
+          "Demo Synth loads as the duck source: " + diagnostic.toStdString());
+    const int synthChannel = channelOf(*r.p, 9);
+    setRaw(r, "rack.duck.source", 10.0f);
+    setRaw(r, "rack.duck.note", 36.0f);
+    setRaw(r, "rack.duck.attack", 0.0f);
+    setRaw(r, "rack.duck.hold", 20.0f);
+    setRaw(r, "rack.duck.release", 50.0f);
+    char depth[32];
+    std::snprintf(depth, sizeof(depth), "slot%02zu.duck.depth", r.slot + 1);
+    setRaw(r, depth, 0.8f);
+    char id[32];
+    std::snprintf(id, sizeof(id), "slot%02zuLevel", r.slot + 1);
+    setRaw(r, id, 0.7f);
+    std::snprintf(id, sizeof(id), "slot%02zuPan", r.slot + 1);
+    setRaw(r, id, 0.3f);
+    setRaw(r, host::returnParameterId(0, "type"), 1.0f);
+    setRaw(r, host::sendParameterId(r.slot, 0, "level"), 0.6f);
+    setUi(r, snare, "output", 1.0f);
+    auto events = hitsToMidi(r, {{0, snare}, {0, closedHat}, {3000, snare}, {3000, closedHat}});
+    events.push_back({1500, MidiMessage::noteOn(synthChannel, 36, (juce::uint8)110)});
+    events.push_back({4000, MidiMessage::noteOff(synthChannel, 36)});
+    const auto b1 = render(r, length, events);
+    enableOutputs(r, {2});
+    const auto b2 = renderMulti(r, length, events);
+    const auto both = sum(b2.main, b2.outs[0]);
+    check(b2.outs[0].energy() > 0.0 && maxDifference(both, b1) < 1e-5,
+          "B1 -> B2 keeps dry gain, ducking and slot sends (max " +
+              std::to_string(maxDifference(both, b1)) + ")");
+    std::snprintf(id, sizeof(id), "slot%02zuMute", r.slot + 1);
+    setRaw(r, id, 1.0f);
+    const auto muted = renderMulti(r, length, events);
+    check(muted.outs[0].energy() == 0.0, "a muted slot is silent on its host output too");
+  }
+}
+
 // P2: a sample-backed kick (Sample and Layer sources) ducks another slot in
 // the same block, exactly at the kick's sample, in both slot orders.
 //  - Internal and Both modes: every internal kick, including a swung one
@@ -2689,6 +2914,7 @@ int main(int argc, char **argv) {
   exportMatchesPlayback();
   internalKickDucksInTheSameBlock();
   sampledKickDucksInTheSameBlock();
+  hostOutputsB2();
   editorDrumGrid();
   routedNotesReport();
   strayKickPolicy();

@@ -204,6 +204,7 @@ public:
     [[nodiscard]] int nextFreeChannel() const noexcept;
 
 private:
+    static BusesProperties makeBuses();
     static vstengine::instrument::InstrumentRegistry makeRegistry(
         std::unique_ptr<vstengine::instrument::InstrumentProvider>,
         vstengine::instrument::native::LoadReport &,

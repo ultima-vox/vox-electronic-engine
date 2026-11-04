@@ -334,8 +334,32 @@ Rack rule (B1, one host output): an OUTPUT bus is added once into the slot's
 dry signal before ducking, level/pan and the slot's own sends; a SEND bus goes
 only into its return, after the slot's ducking, gated by disable/mute/solo, not
 scaled by slot level, never into Main. Without Rack audio routing there are no
-returns and SEND buses are not heard. B2 (separate host outputs) is a separate
-decision; see `FULLON_DRUMS_PRODUCTION.md`.
+returns and SEND buses are not heard.
+
+Rack rule (B2, separate host outputs):
+- **Buses.** The VST3 has the main stereo `Output` (bus 0, unchanged) and
+  `Out 2` … `Out 8` (buses 1–7, stereo, **disabled by default**). Host outputs
+  need a stereo main output; a mono host output is refused.
+- **Active output.** An OUTPUT bus *k* whose host output *k* is active goes
+  there through the same slot chain as the dry signal: ducking, slot
+  level/pan, disable/mute/solo. It is not added to Main.
+- **Inactive output.** The bus falls back to the slot's dry signal once, as in
+  B1.
+- **Sends.** The slot's own pre/post sends tap Main plus every OUTPUT bus, so
+  B1 → B2 keeps dry gain, ducking and slot sends. SEND buses and the returns
+  stay on Main.
+- **Master.** The master effects chain processes Main only. The plugin's
+  Output Level scales every output. A stem on Out *k* is therefore dry with
+  respect to the Rack master FX. Its send/return tails play on Main.
+- **Bus ownership.** Only the host enables or disables `Out 2` … `Out 8`.
+  The host saves that choice with its project. The plugin state does not
+  store it, and the plugin never changes it.
+- **Disabling.** Disabling an output on purpose folds that output's dry
+  signal into Main once. A pad is never missing and never doubled.
+- **Allocation.** Nothing is allocated in the callback; the host output
+  pointers come from the host buffer.
+
+Tests: `fullon_drums_tests` `hostOutputsB2`.
 
 ## Sample hand-off (V2.4, appended; contract C rev. 3.1, C1)
 

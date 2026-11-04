@@ -117,6 +117,17 @@ vstengine::instrument::InstrumentRegistry VstEngineAudioProcessor::makeRegistry(
 // The DAW constructor: instruments come only from the .vins packages in the
 // instruments folder next to this VST3 (graph, or native signed by a publisher
 // key pinned into this build). No environment variables, no other roots.
+// B2 bus topology: the main stereo "Output" (unchanged identity, bus 0) and
+// the separate host outputs "Out 2" .. "Out 8" (stereo, disabled by default,
+// so existing projects and hosts keep one output until the user enables
+// them). Out k is the target of an instrument's OUTPUT bus k.
+juce::AudioProcessor::BusesProperties VstEngineAudioProcessor::makeBuses() {
+  auto buses = BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true);
+  for (int k = 2; k <= 8; ++k)
+    buses = buses.withOutput("Out " + juce::String(k), juce::AudioChannelSet::stereo(), false);
+  return buses;
+}
+
 VstEngineAudioProcessor::VstEngineAudioProcessor()
     : VstEngineAudioProcessor(vstengine::modules::createBuiltInProvider(),
                               vstengine::instrument::vins::loadInstalled()) {}
@@ -129,8 +140,7 @@ VstEngineAudioProcessor::VstEngineAudioProcessor(
 VstEngineAudioProcessor::VstEngineAudioProcessor(
     std::unique_ptr<vstengine::instrument::InstrumentProvider> provider,
     vstengine::instrument::native::LoadReport native)
-    : AudioProcessor(BusesProperties().withOutput(
-          "Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor(makeBuses()),
       nativeModules(std::move(native)),
       instrumentRegistry(
           makeRegistry(std::move(provider), nativeModules, nativeDiagnostics)),
@@ -270,15 +280,15 @@ void VstEngineAudioProcessor::prepareToPlay(const double sampleRate,
   rackAudioReady.store(false);
   if (!std::isfinite(sampleRate) || sampleRate < 8000.0 ||
       sampleRate > 384000.0 || samplesPerBlock <= 0 ||
-      samplesPerBlock > 65536 || getTotalNumOutputChannels() < 1 ||
-      getTotalNumOutputChannels() > 2)
+      samplesPerBlock > 65536 || getMainBusNumOutputChannels() < 1 ||
+      getMainBusNumOutputChannels() > 2)
     return;
   try {
     currentSampleRate = sampleRate;
     currentMaximumBlockSize = static_cast<std::uint32_t>(samplesPerBlock);
     const vstengine::instrument::PrepareSpec spec{
         sampleRate, currentMaximumBlockSize,
-        static_cast<std::uint32_t>(getTotalNumOutputChannels())};
+        static_cast<std::uint32_t>(getMainBusNumOutputChannels())};
     if (!audioRouting.prepare(spec) || !rack.prepare(spec) ||
         !effectsChain.prepare(sampleRate, currentMaximumBlockSize,
                               spec.outputChannels))
@@ -329,8 +339,18 @@ void VstEngineAudioProcessor::releaseResources()
 bool VstEngineAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     const auto output = layouts.getMainOutputChannelSet();
-    return output == juce::AudioChannelSet::mono()
-        || output == juce::AudioChannelSet::stereo();
+    if (output != juce::AudioChannelSet::mono() && output != juce::AudioChannelSet::stereo())
+        return false;
+    // Out 2 .. Out 8: disabled, or stereo next to a stereo main output.
+    for (int bus = 1; bus < layouts.outputBuses.size(); ++bus) {
+        const auto& set = layouts.outputBuses.getReference(bus);
+        if (!set.isDisabled()
+            && (set != juce::AudioChannelSet::stereo()
+                || output != juce::AudioChannelSet::stereo()))
+            return false;
+    }
+    return layouts.outputBuses.size() <= 1 + static_cast<int>(
+        vstengine::rack::Rack::hostOutputCount);
 }
 
 void VstEngineAudioProcessor::updateReportedLatencyAndTails() noexcept {
@@ -384,7 +404,7 @@ bool VstEngineAudioProcessor::prepareEffectsState(
 {
     if (!destination.prepare(currentSampleRate, currentMaximumBlockSize,
             static_cast<std::uint32_t>(
-                juce::jmax(1, getTotalNumOutputChannels()))))
+                juce::jmax(1, getMainBusNumOutputChannels()))))
         return false;
     if (!state.isValid())
       return false;
@@ -411,7 +431,8 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     buffer.clear();
     return;
   }
-  if (buffer.getNumChannels() < 1 || buffer.getNumChannels() > 2 ||
+  const int mainChannels = getMainBusNumOutputChannels();
+  if (mainChannels < 1 || mainChannels > 2 || buffer.getNumChannels() < mainChannels ||
       buffer.getNumSamples() == 0) {
     buffer.clear();
     return;
@@ -547,10 +568,22 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
     std::array<float*, 2> outputs {
         buffer.getWritePointer(0),
-        buffer.getNumChannels() > 1 ? buffer.getWritePointer(1)
-                                    : buffer.getWritePointer(0)
+        mainChannels > 1 ? buffer.getWritePointer(1) : buffer.getWritePointer(0)
     };
-    const auto channels = static_cast<std::size_t>(buffer.getNumChannels());
+    const auto channels = static_cast<std::size_t>(mainChannels);
+    // B2: the enabled stereo host outputs Out 2 .. Out 8 (already cleared).
+    vstengine::rack::Rack::HostOutputs hostOutputs;
+    if (mainChannels == 2)
+        for (int k = 0; k < static_cast<int>(vstengine::rack::Rack::hostOutputCount); ++k)
+            if (const auto* bus = getBus(false, k + 1);
+                bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() == 2) {
+                const int first = bus->getChannelIndexInProcessBlockBuffer(0);
+                if (first + 1 >= buffer.getNumChannels())
+                    continue;
+                hostOutputs.channels[static_cast<std::size_t>(k)] = {
+                    buffer.getWritePointer(first), buffer.getWritePointer(first + 1)};
+                hostOutputs.active = static_cast<std::uint8_t>(hostOutputs.active | (1u << k));
+            }
     const auto selected = selectedSlot.load();
     const auto audioControls = audioRoutingRefs.read(rackControls);
     rack.process({outputs.data(), channels},
@@ -558,7 +591,8 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                  {hostEvents.data(), hostCount}, bpm, ppq, playing,
                  {auditionEvents.data(), auditionCount},
                  rackControls[selected].slotId, rackControls, generatedStreams,
-                 &audioRouting, &audioControls);
+                 &audioRouting, &audioControls,
+                 hostOutputs.active != 0 ? &hostOutputs : nullptr);
     returnTailSamples.store(audioRouting.tailSamples(),
                             std::memory_order_relaxed);
     declaredTailSeconds.store(
@@ -586,6 +620,12 @@ void VstEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         outputs[c][sample] *= gain;
         peaks[c] = std::max(peaks[c], std::abs(outputs[c][sample]));
       }
+      // B2: the plugin's master level applies to every output; the master
+      // effects chain stays on Main only.
+      for (std::size_t k = 0; hostOutputs.active != 0 && k < hostOutputs.channels.size(); ++k)
+        if ((hostOutputs.active >> k) & 1u)
+          for (auto* channel : hostOutputs.channels[k])
+            channel[sample] *= gain;
     }
     if (channels == 1)
       peaks[1] = peaks[0];
