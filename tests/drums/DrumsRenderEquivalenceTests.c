@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 VoxResult VOX_CALL drumsReferenceEntryV2(uint32_t, const VoxHostServicesV2 *, const VoxModuleV2 **);
 VoxResult VOX_CALL drumsCurrentEntryV2(uint32_t, const VoxHostServicesV2 *, const VoxModuleV2 **);
@@ -107,6 +108,15 @@ static float sampleL[SAMPLE_FRAMES], sampleR[SAMPLE_FRAMES];
 static const float *sampleChannels[2] = {sampleL, sampleR};
 
 static uint32_t rng;
+
+/* Wall time spent inside process() by the last render (informational: the
+ * same scenarios, same process and machine, reference versus current). */
+static double processSeconds;
+static double now(void) {
+  struct timespec t;
+  timespec_get(&t, TIME_UTC);
+  return (double)t.tv_sec + 1e-9 * (double)t.tv_nsec;
+}
 static uint32_t rnd(void) {
   rng ^= rng << 13;
   rng ^= rng >> 17;
@@ -173,6 +183,7 @@ static float *render(const Module *m, const Scenario *sc, uint32_t *outputCount)
   for (uint32_t k = 0; k < AUX * sc->channels; ++k)
     aux[k] = block + (size_t)(sc->channels + k) * sc->block;
   rng = 12345u + (uint32_t)sc->config * 77u + sc->block;
+  processSeconds = 0.0;
   const double every = sc->config == DENSE ? 0.0004 : 0.031; /* seconds between hits */
   const uint64_t period = (uint64_t)(every * sc->rate) + 1;
   for (uint64_t pos = 0; pos < sc->frames;) {
@@ -225,7 +236,10 @@ static float *render(const Module *m, const Scenario *sc, uint32_t *outputCount)
     c.sampleUsage = &usage;
     if (pos >= sc->frames / 2 && pos < sc->frames / 2 + n)
       c.releaseFlags = VOX_RELEASE_ALL_NOTES_AT_END; /* tails, then new hits */
-    check(m->module->process(s, &c) == VOX_OK, "process");
+    const double t0 = now();
+    const VoxResult processed = m->module->process(s, &c);
+    processSeconds += now() - t0;
+    check(processed == VOX_OK, "process");
     for (uint32_t k = 0; k < outputs; ++k)
       memcpy(out + (size_t)k * sc->frames + pos, block + (size_t)k * sc->block,
              sizeof(float) * n);
@@ -263,7 +277,8 @@ int main(void) {
     return 1;
   const double rates[3] = {44100.0, 48000.0, 96000.0};
   const uint32_t blocks[3] = {64, 128, 512};
-  double worstDb = -999.0, auxPeak = 0.0;
+  double worstDb = -999.0, auxPeak = 0.0, refTotal = 0.0, curTotal = 0.0;
+  double ref96[CONFIGS] = {0}, cur96[CONFIGS] = {0};
   unsigned long long compared = 0, differing = 0;
   int scenarios = 0;
   for (int config = 0; config < CONFIGS; ++config)
@@ -274,9 +289,21 @@ int main(void) {
           const Scenario sc = {config, rates[r], blocks[b], layout ? 2u : 1u, layout,
                                (uint64_t)(rates[r] * (config == DENSE ? 0.6 : 1.5))};
           uint32_t na = 0, nb = 0, nc = 0;
+          /* Interleaved, best of two each, for the timing below. */
           float *a = render(&reference, &sc, &na);
+          double tRef = processSeconds;
           float *bb = render(&current, &sc, &nb);
+          double tCur = processSeconds;
+          free(render(&reference, &sc, &na));
+          tRef = processSeconds < tRef ? processSeconds : tRef;
           float *again = render(&current, &sc, &nc);
+          tCur = processSeconds < tCur ? processSeconds : tCur;
+          refTotal += tRef;
+          curTotal += tCur;
+          if (r == 2 && b == 0 && layout) {
+            ref96[config] = tRef / (double)sc.frames;
+            cur96[config] = tCur / (double)sc.frames;
+          }
           check(na == nb && nb == nc, "same output count");
           const size_t total = (size_t)na * sc.frames;
           double peak = 0.0, maxd = 0.0;
@@ -310,6 +337,12 @@ int main(void) {
           ++scenarios;
         }
   check(auxPeak > 0.0, "aux buses carry signal");
+  printf("module process() time, reference -> current (best of 2, same process):\n");
+  for (int config = 0; config < CONFIGS; ++config)
+    printf("  %-10s 96 kHz/64 stereo+aux: %7.1f -> %7.1f ns/frame (%+.0f%%)\n", configNames[config],
+           1e9 * ref96[config], 1e9 * cur96[config], 100.0 * (cur96[config] / ref96[config] - 1.0));
+  printf("  all %d scenarios: %.3f s -> %.3f s (%+.0f%%)\n", scenarios, refTotal, curTotal,
+         100.0 * (curTotal / refTotal - 1.0));
   printf("drums render equivalence: %d scenarios, %llu samples, %llu differ, worst %.1f dB "
          "re scenario peak\n",
          scenarios, compared, differing, worstDb);
