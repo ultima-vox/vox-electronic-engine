@@ -319,6 +319,8 @@ add_test(NAME routing_equivalence_tests COMMAND routing_equivalence_tests)
 # (tests/drums/reference): every bus, rates, block sizes and kit states.
 add_executable(drums_render_equivalence_tests tests/drums/DrumsRenderEquivalenceTests.c
   tests/drums/DrumsCurrentModule.c tests/drums/reference/DrumsReferenceModule.c)
+set_target_properties(drums_render_equivalence_tests PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_include_directories(drums_render_equivalence_tests PRIVATE ${VST_LIBS_DIR})
 if(NOT WIN32)
   target_link_libraries(drums_render_equivalence_tests PRIVATE m)
