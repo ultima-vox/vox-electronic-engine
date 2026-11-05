@@ -43,20 +43,40 @@ int findSlot(std::span<const ProcessSlotControls> slots,
         if (slots[i].slotId == id) return static_cast<int>(i);
     return -1;
 }
-bool accepts(const ProcessSlotControls& slot, const VoxMidiEventV1& event) noexcept
+// The slots that can accept anything on each MIDI channel this block, in slot
+// order: enabled, a real slot, channel routing, valid routing. Built once per
+// route() so each event is compared with its channel's listeners only, not
+// with all 16 slots (at 2048 events per block that per-slot scan was 40% of
+// the callback, docs/testing/callback-headroom-20261105.md).
+struct ChannelListeners {
+    std::array<std::array<std::uint8_t, instrument::maxSlots>, 16> slot {};
+    std::array<std::uint8_t, 16> count {};
+};
+bool listens(const ProcessSlotControls& slot) noexcept
 {
-    if (!slot.enabled || slot.slotId == instrument::invalidSlotId
-        || slot.routing.mode == RouteMode::off || !valid(slot.routing))
-        return false;
-    const auto channel = static_cast<std::uint8_t>(channelIndex(event) + 1);
-    if (slot.routing.mode == RouteMode::channel
-        && slot.routing.channel != channel)
-        return false;
-    if (!isNoteOn(event)) return true;
-    return event.data[1] >= slot.routing.keyLow
-        && event.data[1] <= slot.routing.keyHigh
-        && event.data[2] >= slot.routing.velocityLow
-        && event.data[2] <= slot.routing.velocityHigh;
+    return slot.enabled && slot.slotId != instrument::invalidSlotId
+        && slot.routing.mode == RouteMode::channel && valid(slot.routing);
+}
+void buildListeners(std::span<const ProcessSlotControls> slots,
+                    ChannelListeners& listeners) noexcept
+{
+    listeners.count.fill(0);
+    for (std::size_t i = 0; i < slots.size(); ++i)
+        if (listens(slots[i])) {
+            const auto channel = static_cast<std::size_t>(slots[i].routing.channel - 1);
+            listeners.slot[channel][listeners.count[channel]++] =
+                static_cast<std::uint8_t>(i);
+        }
+}
+// The event-dependent part for a listening slot: the NoteOn key/velocity
+// window (every other event on the channel is accepted).
+bool inWindow(const ProcessSlotControls& slot, const VoxMidiEventV1& event) noexcept
+{
+    return !isNoteOn(event)
+        || (event.data[1] >= slot.routing.keyLow
+            && event.data[1] <= slot.routing.keyHigh
+            && event.data[2] >= slot.routing.velocityLow
+            && event.data[2] <= slot.routing.velocityHigh);
 }
 } // namespace
 
@@ -302,14 +322,18 @@ void RackRouter::route(
     slots = slots.first(std::min(slots.size(), instrument::maxSlots));
     for (auto& destination : output) destination.clear();
     flushReleaseRecovery(slots, output);
+    ChannelListeners listeners;
+    buildListeners(slots, listeners);
     for (const auto& source : input) {
         if (!validChannelEvent(source)) continue;
         const auto channel = channelIndex(source);
         const auto note = source.size >= 2 ? source.data[1] : 0;
+        const auto& candidates = listeners.slot[channel];
+        const auto candidateCount = listeners.count[channel];
         if (isChannelPanic(source)) {
             std::array<bool, instrument::maxSlots> targets {};
-            for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex)
-                targets[slotIndex] = accepts(slots[slotIndex], source);
+            for (std::uint8_t c = 0; c < candidateCount; ++c)
+                targets[candidates[c]] = inWindow(slots[candidates[c]], source);
             for (const auto& owners : ownership_[channel])
                 for (std::uint8_t ownerIndex = 0; ownerIndex < owners.size;
                      ++ownerIndex) {
@@ -361,9 +385,10 @@ void RackRouter::route(
             }
             previous.size = retained;
         }
-        for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
+        for (std::uint8_t c = 0; c < candidateCount; ++c) {
+            const std::size_t slotIndex = candidates[c];
             const auto& slot = slots[slotIndex];
-            if (!accepts(slot, source)) continue;
+            if (!inWindow(slot, source)) continue;
             if (isNoteOn(source) && recoveryPending(slot.slotId)) {
                 ++output[slotIndex].dropped;
                 continue;

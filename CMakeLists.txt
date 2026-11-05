@@ -307,6 +307,14 @@ add_executable(rack_router_tests tests/rack/RackRouterTests.cpp)
 target_link_libraries(rack_router_tests PRIVATE vst_rack)
 add_test(NAME rack_router_tests COMMAND rack_router_tests)
 
+# #107: the optimised router and send mixing against frozen pre-optimisation
+# copies (tests/rack/reference), randomized and bit for bit.
+add_executable(routing_equivalence_tests tests/rack/RoutingEquivalenceTests.cpp
+  tests/rack/reference/RackRouterV1.cpp tests/rack/reference/AudioRoutingV1.cpp)
+target_include_directories(routing_equivalence_tests PRIVATE tests/rack/reference)
+target_link_libraries(routing_equivalence_tests PRIVATE vst_rack)
+add_test(NAME routing_equivalence_tests COMMAND routing_equivalence_tests)
+
 add_executable(rack_integration_tests tests/rack/RackIntegrationTests.cpp)
 target_link_libraries(rack_integration_tests PRIVATE vst_rack vst_modules)
 add_test(NAME rack_integration_tests COMMAND rack_integration_tests)
