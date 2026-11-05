@@ -251,6 +251,12 @@ typedef struct {
   double phase[6];
   uint32_t noise;
   double lp, hp1, hp2, hpPrev1, hpPrev2, bp1, bp2;
+  /* Per-voice constants of the per-sample filters and oscillators, computed
+   * once at trigger with exactly the expressions the render loop used to
+   * evaluate every sample (bit-identical output). */
+  double hpA;          /* one-pole high-pass coefficient of this pad's cutoff */
+  double bpG, bpA1;    /* clap band-pass g and a1 */
+  double metalInc[6];  /* hats/cymbal partial increments */
   int fadeTotal, fadeLeft;
   /* Phase 1, latched at trigger: pad filter (TPT state-variable, 1 or 2
    * stages), transient shaper, destination bus and sends. */
@@ -592,20 +598,42 @@ static void trigger(struct VoxInstanceT *s, int pad, int velocity) {
     v->f0 = 3.1 * tune;
     break;
   }
+  switch (pad) {
+  case PAD_SNARE:
+    v->hpA = exp(-2.0 * PI * 900.0 / sr);
+    break;
+  case PAD_RIM:
+    v->hpA = exp(-2.0 * PI * 2000.0 / sr);
+    break;
+  case PAD_CLAP: {
+    const double g = tan(PI * fmin(v->f0, 0.45 * sr) / sr);
+    v->bpG = g;
+    v->bpA1 = 1.0 / (1.0 + g * (g + 0.7));
+    break;
+  }
+  case PAD_CLOSED_HAT:
+  case PAD_OPEN_HAT:
+  case PAD_CYMBAL: {
+    const double cut = (pad == PAD_CYMBAL ? 3500.0 : 5500.0) + 3000.0 * v->character;
+    v->hpA = exp(-2.0 * PI * cut / sr);
+    for (int i = 0; i < 6; ++i)
+      v->metalInc[i] = metalHz[i] * v->f0 * 1.0 / sr;
+    break;
+  }
+  default:
+    break;
+  }
 }
 
-/* One-pole high-pass, coefficient from cutoff. */
-static double highPass(double x, double *prev, double *state, double cutoff, double sr) {
-  const double a = exp(-2.0 * PI * cutoff / sr);
+/* One-pole high-pass with a precomputed coefficient a = exp(-2 pi fc / sr). */
+static double highPass(double x, double *prev, double *state, double a) {
   *state = a * (*state + x - *prev);
   *prev = x;
   return *state;
 }
 
-/* TPT state-variable band-pass. */
-static double bandPass(double x, double *ic1, double *ic2, double fc, double k, double sr) {
-  const double g = tan(PI * fmin(fc, 0.45 * sr) / sr);
-  const double a1 = 1.0 / (1.0 + g * (g + k));
+/* TPT state-variable band-pass with precomputed g and a1. */
+static double bandPass(double x, double *ic1, double *ic2, double g, double a1) {
   const double v1 = a1 * *ic1 + g * a1 * (x - *ic2);
   const double v2 = *ic2 + g * v1;
   *ic1 = 2.0 * v1 - *ic1;
@@ -692,10 +720,10 @@ static void renderSample(Voice *v, double *l, double *r) {
   }
 }
 
-static double metal(Voice *v, double scale) {
+static double metal(Voice *v) {
   double sum = 0.0;
   for (int i = 0; i < 6; ++i) {
-    v->phase[i] += metalHz[i] * v->f0 * scale / v->sr;
+    v->phase[i] += v->metalInc[i];
     v->phase[i] -= floor(v->phase[i]);
     sum += v->phase[i] < 0.5 ? 1.0 : -1.0;
   }
@@ -712,7 +740,8 @@ static double renderVoice(Voice *v) {
     const double attack = fmin(1.0, t / 0.0025);
     const double u = fmin(1.0, t / v->kickPitchDecay);
     const double sweep = v->kickPitch * (1.0 - u) * (1.0 - u);
-    const double inc = 2.0 * PI * v->f0 * pow(2.0, sweep / 12.0) / sr;
+    /* After the sweep, pow(2, 0) is exactly 1: skip the call. */
+    const double inc = 2.0 * PI * v->f0 * (sweep == 0.0 ? 1.0 : pow(2.0, sweep / 12.0)) / sr;
     v->phase[0] += inc;
     if (v->phase[0] >= 2.0 * PI)
       v->phase[0] -= 2.0 * PI;
@@ -736,7 +765,7 @@ static double renderVoice(Voice *v) {
     v->phase[1] += 1.78 * v->f0 * drop / sr;
     v->phase[1] -= floor(v->phase[1]);
     const double tone = 0.6 * sin(2.0 * PI * v->phase[0]) + 0.4 * sin(2.0 * PI * v->phase[1]);
-    double n = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, 900.0, sr);
+    double n = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, v->hpA);
     v->lp += (n - v->lp) * 0.7;
     n = v->lp;
     x = tone * v->env2 * (1.0 - 0.7 * v->character) + n * v->env * 1.3 * v->character;
@@ -746,14 +775,14 @@ static double renderVoice(Voice *v) {
   }
   case PAD_CLAP: {
     double burst = 0.0;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; t < 0.03 && i < 3; ++i) { /* only used for the first 30 ms */
       const double start = 0.010 * i;
       if (t >= start)
         burst = fmax(burst, exp(-(t - start) / 0.008));
     }
     /* Three hand-clap bursts 10 ms apart, then the decaying room tail. */
     const double env = t < 0.03 ? burst : v->env;
-    const double n = bandPass(noise(&v->noise), &v->bp1, &v->bp2, v->f0, 0.7, sr);
+    const double n = bandPass(noise(&v->noise), &v->bp1, &v->bp2, v->bpG, v->bpA1);
     x = 2.2 * n * env;
     level = t < 0.03 ? 1.0 : v->env;
     break;
@@ -761,11 +790,10 @@ static double renderVoice(Voice *v) {
   case PAD_CLOSED_HAT:
   case PAD_OPEN_HAT:
   case PAD_CYMBAL: {
-    const double m = metal(v, 1.0);
+    const double m = metal(v);
     const double mix = (1.0 - 0.5 * v->character) * m + 0.5 * v->character * noise(&v->noise);
-    const double cut = (v->pad == PAD_CYMBAL ? 3500.0 : 5500.0) + 3000.0 * v->character;
-    double y = highPass(mix, &v->hpPrev1, &v->hp1, cut, sr);
-    y = highPass(y, &v->hpPrev2, &v->hp2, cut, sr);
+    double y = highPass(mix, &v->hpPrev1, &v->hp1, v->hpA);
+    y = highPass(y, &v->hpPrev2, &v->hp2, v->hpA);
     x = 5.0 * y * v->env;
     break;
   }
@@ -783,7 +811,7 @@ static double renderVoice(Voice *v) {
     v->phase[1] += 3.3 * v->f0 / sr;
     v->phase[1] -= floor(v->phase[1]);
     const double tone = 0.5 * sin(2.0 * PI * v->phase[0]) + 0.5 * sin(2.0 * PI * v->phase[1]);
-    const double click = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, 2000.0, sr) * v->env2;
+    const double click = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, v->hpA) * v->env2;
     x = (tone * v->character + click * (1.0 - v->character) * 1.5) * v->env;
     v->env2 *= v->env2Mul;
     break;
