@@ -9,7 +9,8 @@
 //    velocity-0 NoteOns, non-note messages and invalid events;
 //  - audio routing: Main, an active B2 host output, every return (after
 //    finish(), FX tails included), bit for bit, with random slot send gains
-//    (0, -0, non-zero), pre/post, audibility, ducking and module sends.
+//    (0, -0, non-zero), pre/post, audibility, ducking and module sends, and
+//    silent blocks (+0/-0 only) on the slot, its output bus and module sends.
 #include "RackRouterV1.h"
 #include "AudioRoutingV1.h"
 #include "rack/AudioRouting.h"
@@ -221,7 +222,7 @@ void audioEquivalence() {
   std::array<std::array<std::vector<float>, 2>, rack::sendBusCount> moduleBus;
   for (auto &bus : moduleBus)
     bus = {buffer(maxBlock), buffer(maxBlock)};
-  std::size_t blocks = 0, zeroGainSends = 0;
+  std::size_t blocks = 0, zeroGainSends = 0, silentBlocks = 0;
   for (int block = 0; block < 4000; ++block, ++blocks) {
     const auto n = static_cast<std::uint32_t>(uniform(1, static_cast<int>(maxBlock)));
     if (block % 50 == 0) { // new controls now and then
@@ -253,13 +254,30 @@ void audioEquivalence() {
       for (auto &c : *v)
         std::fill(c.begin(), c.end(), 0.0f);
     for (std::size_t slot = 0; slot < 6; ++slot) {
+      // Some signals are silent this block (+0 / -0 only): the optimised mix
+      // skips them, the reference adds them.
+      // 0: sound, 1: silent (+0/-0 only), 2: tiny but not silent (a mix that
+      // skipped "almost silent" blocks would differ).
+      auto kind = [] { return uniform(0, 9) < 3 ? 1 : uniform(0, 9) < 2 ? 2 : 0; };
+      const int quietInKind = kind(), quietAuxKind = kind();
+      const bool quietIn = quietInKind == 1, quietAux = quietAuxKind == 1;
+      std::array<int, rack::sendBusCount> quietBus{};
+      for (auto &q : quietBus)
+        q = kind();
+      auto value = [](int k) {
+        if (k == 1)
+          return chance(0.5) ? 0.0f : -0.0f;
+        const float x = static_cast<float>(uniform(-1000, 1000)) / 1000.0f;
+        return k == 2 ? x * 1e-6f : x;
+      };
       for (std::size_t s = 0; s < n; ++s)
         for (std::size_t c = 0; c < 2; ++c) {
-          in[c][s] = static_cast<float>(uniform(-1000, 1000)) / 1000.0f;
-          aux[c][s] = static_cast<float>(uniform(-1000, 1000)) / 1000.0f;
-          for (auto &bus : moduleBus)
-            bus[c][s] = static_cast<float>(uniform(-1000, 1000)) / 1000.0f;
+          in[c][s] = value(quietInKind);
+          aux[c][s] = value(quietAuxKind);
+          for (std::size_t b = 0; b < moduleBus.size(); ++b)
+            moduleBus[b][c][s] = value(quietBus[b]);
         }
+      silentBlocks += (quietIn ? 1 : 0) + (quietAux ? 1 : 0);
       ProcessSlotControls control = slots[slot];
       control.level = static_cast<float>(uniform(0, 200)) / 100.0f;
       control.pan = static_cast<float>(uniform(-100, 100)) / 100.0f;
@@ -287,7 +305,8 @@ void audioEquivalence() {
     check(same, "Main (returns and tails included) and the B2 host output are bit-identical, block " +
                     std::to_string(block));
   }
-  check(zeroGainSends > 0, "zero-gain sends were exercised");
+  check(zeroGainSends > 0 && silentBlocks > 1000,
+        "zero-gain sends and silent (+/-0) slot, output and module-send blocks were exercised");
   std::cout << "audio routing: " << blocks
             << " blocks bit-identical to the pre-optimisation mix (Main, returns, B2)\n";
 }

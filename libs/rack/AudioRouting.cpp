@@ -3,6 +3,15 @@
 #include <cmath>
 namespace vstengine::rack {
 namespace {
+// True when every sample is +0 or -0 (NaN and every other value count as
+// sound). Mixing such a block adds only +/-0 to sums that start at +0, which
+// never changes them, so skipping it is bit-exact.
+bool silent(const float *x, std::uint32_t n) noexcept {
+  for (std::uint32_t s = 0; s < n; ++s)
+    if (x[s] != 0.0f)
+      return false;
+  return true;
+}
 bool range(float v, float lo, float hi) noexcept {
   return std::isfinite(v) && v >= lo && v <= hi;
 }
@@ -203,6 +212,20 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
   // Only the sends that add something: a zero-gain slot send adds +/-0, which
   // never changes a sum, so skipping it keeps the output bit for bit.
   const auto sends = activeSends(route);
+  // Silent signals (all +/-0 this block) are skipped: bit-exact, see silent().
+  bool dry = false;
+  for (std::size_t c = 0; c < input.size(); ++c)
+    dry = dry || !silent(input[c], count);
+  ModuleSends audibleSends{};
+  bool anyModuleSend = false;
+  for (std::size_t bus = 0; moduleSends != nullptr && bus < sendBusCount; ++bus)
+    for (std::size_t c = 0; c < output.size(); ++c)
+      if (const auto *aux = (*moduleSends)[bus][c]; aux != nullptr && !silent(aux, count)) {
+        audibleSends[bus][c] = aux;
+        anyModuleSend = true;
+      }
+  if (!dry && !anyModuleSend)
+    return;
   for (std::uint32_t s = 0; s < count; ++s) {
     const auto duck =
         source ? 1.0f
@@ -210,16 +233,18 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
                                                    : 0.0f) *
                          envelopeBuffer_[s];
     for (std::size_t c = 0; c < output.size(); ++c) {
-      const auto pre = input[c][s] * duck;
-      const auto post = pre * slot.level * (c == 0 ? left : right);
-      output[c][s] += post;
-      for (std::uint8_t k = 0; k < sends.count; ++k) {
-        const auto bus = sends.bus[k];
-        const auto &send = controls_.sends[route][bus];
-        returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
+      if (dry) {
+        const auto pre = input[c][s] * duck;
+        const auto post = pre * slot.level * (c == 0 ? left : right);
+        output[c][s] += post;
+        for (std::uint8_t k = 0; k < sends.count; ++k) {
+          const auto bus = sends.bus[k];
+          const auto &send = controls_.sends[route][bus];
+          returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
+        }
       }
-      for (std::size_t bus = 0; moduleSends != nullptr && bus < sendBusCount; ++bus)
-        if (const auto *aux = (*moduleSends)[bus][c])
+      for (std::size_t bus = 0; anyModuleSend && bus < sendBusCount; ++bus)
+        if (const auto *aux = audibleSends[bus][c])
           returns_[bus].audio[c][s] += aux[s] * duck;
     }
   }
@@ -243,6 +268,9 @@ void AudioRouting::mixSlotOutput(std::size_t index, std::span<float *> input,
   for (std::size_t c = 0; c < 2; ++c)
     if (!input[c] || !output[c])
       return;
+  // A silent OUTPUT bus (all +/-0 this block) adds nothing anywhere.
+  if (silent(input[0], count) && silent(input[1], count))
+    return;
   std::size_t route = instrument::maxSlots;
   for (std::size_t i = 0; i < controls_.routeSlotIds.size(); ++i)
     if (controls_.routeSlotIds[i] == slot.slotId &&
