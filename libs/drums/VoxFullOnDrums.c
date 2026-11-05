@@ -257,6 +257,7 @@ typedef struct {
   double hpA;          /* one-pole high-pass coefficient of this pad's cutoff */
   double bpG, bpA1;    /* clap band-pass g and a1 */
   double metalInc[6];  /* hats/cymbal partial increments */
+  double expEnv, expMul; /* exp(-t / tau) of the snare drop / tom sweep, by recurrence */
   int fadeTotal, fadeLeft;
   /* Phase 1, latched at trigger: pad filter (TPT state-variable, 1 or 2
    * stages), transient shaper, destination bus and sends. */
@@ -589,12 +590,16 @@ static void trigger(struct VoxInstanceT *s, int pad, int velocity) {
   case PAD_SNARE:
     v->f0 = 185.0 * tune;
     v->env2Mul = t60(0.5 * decay, sr); /* tone body */
+    v->expEnv = 1.0;
+    v->expMul = exp(-1.0 / (0.01 * sr)); /* pitch drop, tau 10 ms */
     break;
   case PAD_CLAP:
     v->f0 = 1200.0 * tune * (0.6 + 0.8 * v->character);
     break;
   case PAD_TOM:
     v->f0 = 120.0 * tune;
+    v->expEnv = 1.0;
+    v->expMul = exp(-1.0 / (0.04 * sr)); /* pitch sweep, tau 40 ms */
     break;
   case PAD_RIM:
     v->f0 = 520.0 * tune;
@@ -733,6 +738,28 @@ static void renderSample(Voice *v, double *l, double *r) {
  * the floor call (an out-of-line libm call on baseline x86-64) is needed
  * only past 1.0; the result equals phase - floor(phase) exactly. */
 static double wrap1(double phase) { return phase >= 1.0 ? phase - floor(phase) : phase; }
+/* sin(x) for x in [0, 2 pi] (every oscillator phase here): folded to
+ * [-pi/2, pi/2] and evaluated by its Taylor series to x^17, whose
+ * truncation error there is below 5e-14 (about -290 dB): replaces a libm
+ * call per oscillator per sample. Same result on every platform. */
+static double sinRad(double x) {
+  if (x > PI)
+    x -= 2.0 * PI;
+  if (x > 0.5 * PI)
+    x = PI - x;
+  else if (x < -0.5 * PI)
+    x = -PI - x;
+  const double x2 = x * x;
+  return x * (1.0 +
+              x2 * (-1.0 / 6.0 +
+                    x2 * (1.0 / 120.0 +
+                          x2 * (-1.0 / 5040.0 +
+                                x2 * (1.0 / 362880.0 +
+                                      x2 * (-1.0 / 39916800.0 +
+                                            x2 * (1.0 / 6227020800.0 +
+                                                  x2 * (-1.0 / 1307674368000.0 +
+                                                        x2 * (1.0 / 355687428096000.0)))))))));
+}
 static double minOf(double a, double b) { return a < b ? a : b; }
 static double maxOf(double a, double b) { return a > b ? a : b; }
 
@@ -767,7 +794,7 @@ static double renderVoice(Voice *v) {
     const double n = noise(&v->noise);
     v->lp += (n - v->lp) * 0.3;
     const double click = t < 0.004 ? (1.0 - t / 0.004) * (0.6 * n + 0.4 * v->lp) : 0.0;
-    x = sin(v->phase[0]) * v->env + sin(v->phase[1]) * v->kickSub * v->env2 +
+    x = sinRad(v->phase[0]) * v->env + sinRad(v->phase[1]) * v->kickSub * v->env2 +
         click * v->character;
     x = tanh(x * attack * v->kickDrive) / v->kickDriveNorm;
     level = maxOf(v->env, v->env2 * v->kickSub);
@@ -775,12 +802,13 @@ static double renderVoice(Voice *v) {
     break;
   }
   case PAD_SNARE: {
-    const double drop = 1.0 + 0.3 * exp(-t / 0.01);
+    const double drop = 1.0 + 0.3 * v->expEnv;
+    v->expEnv *= v->expMul;
     v->phase[0] += v->f0 * drop / sr;
     v->phase[0] = wrap1(v->phase[0]);
     v->phase[1] += 1.78 * v->f0 * drop / sr;
     v->phase[1] = wrap1(v->phase[1]);
-    const double tone = 0.6 * sin(2.0 * PI * v->phase[0]) + 0.4 * sin(2.0 * PI * v->phase[1]);
+    const double tone = 0.6 * sinRad(2.0 * PI * v->phase[0]) + 0.4 * sinRad(2.0 * PI * v->phase[1]);
     double n = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, v->hpA);
     v->lp += (n - v->lp) * 0.7;
     n = v->lp;
@@ -814,11 +842,12 @@ static double renderVoice(Voice *v) {
     break;
   }
   case PAD_TOM: {
-    const double f = v->f0 * (1.0 + 1.5 * v->character * exp(-t / 0.04));
+    const double f = v->f0 * (1.0 + 1.5 * v->character * v->expEnv);
+    v->expEnv *= v->expMul;
     v->phase[0] += f / sr;
     v->phase[0] = wrap1(v->phase[0]);
     const double click = t < 0.002 ? (1.0 - t / 0.002) * noise(&v->noise) * 0.3 : 0.0;
-    x = sin(2.0 * PI * v->phase[0]) * v->env + click;
+    x = sinRad(2.0 * PI * v->phase[0]) * v->env + click;
     break;
   }
   default: { /* rim / perc */
@@ -826,7 +855,7 @@ static double renderVoice(Voice *v) {
     v->phase[0] = wrap1(v->phase[0]);
     v->phase[1] += 3.3 * v->f0 / sr;
     v->phase[1] = wrap1(v->phase[1]);
-    const double tone = 0.5 * sin(2.0 * PI * v->phase[0]) + 0.5 * sin(2.0 * PI * v->phase[1]);
+    const double tone = 0.5 * sinRad(2.0 * PI * v->phase[0]) + 0.5 * sinRad(2.0 * PI * v->phase[1]);
     const double click = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, v->hpA) * v->env2;
     x = (tone * v->character + click * (1.0 - v->character) * 1.5) * v->env;
     v->env2 *= v->env2Mul;
