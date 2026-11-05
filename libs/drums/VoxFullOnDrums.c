@@ -261,7 +261,7 @@ typedef struct {
   /* Phase 1, latched at trigger: pad filter (TPT state-variable, 1 or 2
    * stages), transient shaper, destination bus and sends. */
   int filter;
-  double fg, fk, fs1[2][2], fs2[2][2]; /* [channel][stage] */
+  double fg, fk, fa1, fs1[2][2], fs2[2][2]; /* [channel][stage] */
   double attack, sustain, attackEnv, attackMul, sustainEnv, sustainMul;
   int bus;            /* 0 main, 1..7 = Out 2..Out 8 */
   double send1, send2;
@@ -274,6 +274,14 @@ typedef struct {
   double samplePos, sampleStep, sampleBegin, sampleEnd, sampleGain;
   int sampleLoop, sampleReverse;
 } Voice;
+
+/* Segment mix: main (0) and the aux buses (1 + bus index), in double as
+ * the per-sample sums always were. */
+#define SEGMENT 64u
+typedef struct {
+  double l[1 + AUX_COUNT][SEGMENT], r[1 + AUX_COUNT][SEGMENT];
+  uint32_t used; /* aux buses written in this segment */
+} Mix;
 
 struct VoxInstanceT {
   float values[PARAM_COUNT];
@@ -293,6 +301,7 @@ struct VoxInstanceT {
   Voice voices[MAX_VOICES];
   /* The host's sample table, valid during one process call only. */
   const VoxSampleV2 *samples;
+  Mix mix; /* process scratch */
 };
 
 static int liveInstances;
@@ -521,6 +530,7 @@ static void trigger(struct VoxInstanceT *s, int pad, int velocity) {
     const double fc = fmin((double)pad2Value(s, pad, K_CUTOFF), 0.45 * sr);
     v->fg = tan(PI * fc / sr);
     v->fk = 2.0 - 1.96 * pad2Value(s, pad, K_RESONANCE); /* Q 0.5 .. 25 */
+    v->fa1 = 1.0 / (1.0 + v->fg * (v->fg + v->fk));
   }
   v->attack = padUi(s, pad, U_ATTACK);
   v->sustain = padUi(s, pad, U_SUSTAIN);
@@ -658,8 +668,7 @@ static double filterChannel(Voice *v, int ch, double x) {
   if (v->filter == FILTER_OFF)
     return x;
   const int stages = v->filter == FILTER_LP24 || v->filter == FILTER_HP24 ? 2 : 1;
-  const double g = v->fg, k = v->fk;
-  const double a1 = 1.0 / (1.0 + g * (g + k));
+  const double g = v->fg, k = v->fk, a1 = v->fa1;
   for (int st = 0; st < stages; ++st) {
     const double v1 = a1 * v->fs1[ch][st] + g * a1 * (x - v->fs2[ch][st]);
     const double v2 = v->fs2[ch][st] + g * v1;
@@ -686,10 +695,10 @@ static double filterChannel(Voice *v, int ch, double x) {
  * forward or reverse, one shot or loop). Ends the sample at the region end;
  * a loop runs until the pad's decay envelope has faded it out. */
 static void renderSample(Voice *v, double *l, double *r) {
-  const double pos = v->samplePos;
-  const double base = floor(pos);
+  const double pos = v->samplePos; /* in [begin, end): never negative */
+  const uint64_t i0 = (uint64_t)pos; /* floor for pos >= 0, without the call */
+  const double base = (double)i0;
   const double frac = pos - base;
-  const uint64_t i0 = (uint64_t)base;
   /* frac measures the distance from frame i0 towards i0 + 1 in both
    * directions, so the bracketing pair is always (i0, i0 + 1). Past the
    * region's last frame a loop continues at its first frame (the seam);
@@ -720,11 +729,18 @@ static void renderSample(Voice *v, double *l, double *r) {
   }
 }
 
+/* Phase wrap to [0, 1). Phases only grow by increments below one cycle, so
+ * the floor call (an out-of-line libm call on baseline x86-64) is needed
+ * only past 1.0; the result equals phase - floor(phase) exactly. */
+static double wrap1(double phase) { return phase >= 1.0 ? phase - floor(phase) : phase; }
+static double minOf(double a, double b) { return a < b ? a : b; }
+static double maxOf(double a, double b) { return a > b ? a : b; }
+
 static double metal(Voice *v) {
   double sum = 0.0;
   for (int i = 0; i < 6; ++i) {
     v->phase[i] += v->metalInc[i];
-    v->phase[i] -= floor(v->phase[i]);
+    v->phase[i] = wrap1(v->phase[i]);
     sum += v->phase[i] < 0.5 ? 1.0 : -1.0;
   }
   return sum / 6.0;
@@ -737,8 +753,8 @@ static double renderVoice(Voice *v) {
   double x = 0.0, level = v->env;
   switch (v->pad) {
   case PAD_KICK: { /* port of KickSynth (Checkpoint 7A) */
-    const double attack = fmin(1.0, t / 0.0025);
-    const double u = fmin(1.0, t / v->kickPitchDecay);
+    const double attack = minOf(1.0, t / 0.0025);
+    const double u = minOf(1.0, t / v->kickPitchDecay);
     const double sweep = v->kickPitch * (1.0 - u) * (1.0 - u);
     /* After the sweep, pow(2, 0) is exactly 1: skip the call. */
     const double inc = 2.0 * PI * v->f0 * (sweep == 0.0 ? 1.0 : pow(2.0, sweep / 12.0)) / sr;
@@ -754,22 +770,22 @@ static double renderVoice(Voice *v) {
     x = sin(v->phase[0]) * v->env + sin(v->phase[1]) * v->kickSub * v->env2 +
         click * v->character;
     x = tanh(x * attack * v->kickDrive) / v->kickDriveNorm;
-    level = fmax(v->env, v->env2 * v->kickSub);
+    level = maxOf(v->env, v->env2 * v->kickSub);
     v->env2 *= v->env2Mul;
     break;
   }
   case PAD_SNARE: {
     const double drop = 1.0 + 0.3 * exp(-t / 0.01);
     v->phase[0] += v->f0 * drop / sr;
-    v->phase[0] -= floor(v->phase[0]);
+    v->phase[0] = wrap1(v->phase[0]);
     v->phase[1] += 1.78 * v->f0 * drop / sr;
-    v->phase[1] -= floor(v->phase[1]);
+    v->phase[1] = wrap1(v->phase[1]);
     const double tone = 0.6 * sin(2.0 * PI * v->phase[0]) + 0.4 * sin(2.0 * PI * v->phase[1]);
     double n = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, v->hpA);
     v->lp += (n - v->lp) * 0.7;
     n = v->lp;
     x = tone * v->env2 * (1.0 - 0.7 * v->character) + n * v->env * 1.3 * v->character;
-    level = fmax(v->env, v->env2);
+    level = maxOf(v->env, v->env2);
     v->env2 *= v->env2Mul;
     break;
   }
@@ -778,7 +794,7 @@ static double renderVoice(Voice *v) {
     for (int i = 0; t < 0.03 && i < 3; ++i) { /* only used for the first 30 ms */
       const double start = 0.010 * i;
       if (t >= start)
-        burst = fmax(burst, exp(-(t - start) / 0.008));
+        burst = maxOf(burst, exp(-(t - start) / 0.008));
     }
     /* Three hand-clap bursts 10 ms apart, then the decaying room tail. */
     const double env = t < 0.03 ? burst : v->env;
@@ -800,16 +816,16 @@ static double renderVoice(Voice *v) {
   case PAD_TOM: {
     const double f = v->f0 * (1.0 + 1.5 * v->character * exp(-t / 0.04));
     v->phase[0] += f / sr;
-    v->phase[0] -= floor(v->phase[0]);
+    v->phase[0] = wrap1(v->phase[0]);
     const double click = t < 0.002 ? (1.0 - t / 0.002) * noise(&v->noise) * 0.3 : 0.0;
     x = sin(2.0 * PI * v->phase[0]) * v->env + click;
     break;
   }
   default: { /* rim / perc */
     v->phase[0] += v->f0 / sr;
-    v->phase[0] -= floor(v->phase[0]);
+    v->phase[0] = wrap1(v->phase[0]);
     v->phase[1] += 3.3 * v->f0 / sr;
-    v->phase[1] -= floor(v->phase[1]);
+    v->phase[1] = wrap1(v->phase[1]);
     const double tone = 0.5 * sin(2.0 * PI * v->phase[0]) + 0.5 * sin(2.0 * PI * v->phase[1]);
     const double click = highPass(noise(&v->noise), &v->hpPrev1, &v->hp1, v->hpA) * v->env2;
     x = (tone * v->character + click * (1.0 - v->character) * 1.5) * v->env;
@@ -1036,6 +1052,97 @@ static int validRecords(const void *records, uint32_t count, uint32_t stride, si
                         stride % align == 0);
 }
 
+/* One frame of a voice: its sources, transient, filter and fade, before
+ * level/pan. Ends the voice when its sources end or its fade completes. */
+static void voiceFrame(Voice *v, double *outL, double *outR) {
+  double sl = 0.0, sr = 0.0;
+  const double synth = v->synthOn ? renderVoice(v) : 0.0;
+  if (v->sampleOn) {
+    renderSample(v, &sl, &sr);
+    if (v->sampleLoop) { /* a loop follows the pad's decay envelope */
+      sl *= v->env;
+      sr *= v->env;
+      if (!v->synthOn)
+        v->env *= v->envMul;
+      if (v->env < SILENCE && v->n > (int64_t)(0.005 * v->sr))
+        v->sampleOn = 0;
+    }
+    if (!v->synthOn)
+      v->n += 1; /* age for voice stealing, as the synthesis does */
+  }
+  const double transient = transientGain(v);
+  double xL = filterChannel(v, 0, (synth + sl) * transient);
+  double xR = filterChannel(v, 1, (synth + sr) * transient);
+  if (v->fadeTotal > 0) {
+    const double fade = (double)v->fadeLeft / (double)v->fadeTotal;
+    xL *= fade;
+    xR *= fade;
+    if (--v->fadeLeft <= 0)
+      v->active = 0;
+  }
+  if (!v->synthOn && !v->sampleOn)
+    v->active = 0;
+  *outL = xL * v->gainL;
+  *outR = xR * v->gainR;
+}
+
+/* Starts bus b of the segment's mix at silence the first time a voice
+ * writes it; an unwritten bus outputs exact zeros. */
+static void useBus(Mix *m, uint32_t b, uint32_t frames) {
+  if ((m->used >> b) & 1u)
+    return;
+  m->used |= 1u << b;
+  for (uint32_t j = 0; j < frames; ++j) {
+    m->l[1 + b][j] = 0.0;
+    m->r[1 + b][j] = 0.0;
+  }
+}
+
+/* Renders `frames` frames of every active voice into s->mix (main and, with
+ * aux, the dry output buses and both sends). One dry destination per pad
+ * (main or its output bus); sends are post level/pan and independent of
+ * it. A send at 0 adds exact zeros, so it is skipped. */
+static void renderSegment(struct VoxInstanceT *s, int aux, uint32_t frames) {
+  Mix *m = &s->mix;
+  m->used = 0;
+  for (uint32_t j = 0; j < frames; ++j) {
+    m->l[0][j] = 0.0;
+    m->r[0][j] = 0.0;
+  }
+  for (int k = 0; k < MAX_VOICES; ++k) {
+    Voice *v = &s->voices[k];
+    if (!v->active)
+      continue;
+    uint32_t dry = 0;
+    if (aux && v->bus > 0) {
+      dry = 1u + AUX_SENDS + (uint32_t)v->bus - 1u;
+      useBus(m, dry - 1u, frames);
+    }
+    const int send1 = aux && v->send1 != 0.0, send2 = aux && v->send2 != 0.0;
+    if (send1)
+      useBus(m, 0, frames);
+    if (send2)
+      useBus(m, 1, frames);
+    double *dl = m->l[dry], *dr = m->r[dry];
+    for (uint32_t j = 0; j < frames; ++j) {
+      double xl, xr;
+      voiceFrame(v, &xl, &xr);
+      dl[j] += xl;
+      dr[j] += xr;
+      if (send1) {
+        m->l[1][j] += xl * v->send1;
+        m->r[1][j] += xr * v->send1;
+      }
+      if (send2) {
+        m->l[2][j] += xl * v->send2;
+        m->r[2][j] += xr * v->send2;
+      }
+      if (!v->active)
+        break;
+    }
+  }
+}
+
 static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
   if (s == NULL || c == NULL || !s->prepared || c->structSize < VOX_PROCESS_CONTEXT_V2_BASE_SIZE ||
       c->version != VOX_MODULE_ABI_V2 || c->numSamples > s->maxBlock ||
@@ -1109,7 +1216,13 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
       if (aux[k] == NULL)
         return VOX_E_INVALID_ARG;
   }
-  for (uint32_t i = 0; i < c->numSamples; ++i) {
+  /* The block renders in segments between events (parameter changes, MIDI,
+   * sequencer hits): every event applies at its sample, before that sample
+   * renders, exactly as a per-sample loop would. Inside a segment each
+   * voice renders all its frames in one run (voice outer, frames inner) and
+   * adds them to the mix in voice order, so every output sample is the same
+   * sum, in the same order, as the per-sample loop (bit-identical). */
+  for (uint32_t i = 0; i < c->numSamples;) {
     while (nextChange < c->paramChangeCount) {
       VoxParamChangeV2 p;
       memcpy(&p, changes + (size_t)nextChange * c->paramChangeStride, sizeof(p));
@@ -1123,88 +1236,69 @@ static VoxResult VOX_CALL process(VoxInstance s, const VoxProcessContextV2 *c) {
      * slot's channel, or Host MIDI plus the sequencer) do not depend on the
      * order they arrive in: controllers apply first, then each pad fires
      * once, at its loudest velocity, in a fixed order. */
-    int hits[PAD_COUNT] = {0};
+    int hits[PAD_COUNT] = {0}, anyHit = 0;
     while (nextEvent < c->midiEventCount) {
       VoxMidiEventV2 e;
       memcpy(&e, events + (size_t)nextEvent * c->midiEventStride, sizeof(e));
       if (e.sampleOffset > i)
         break;
       applyMidi(s, &e, hits);
+      anyHit = 1;
       ++nextEvent;
     }
     while (nextHit < seqCount && seq[nextHit].offset <= i) {
       if (seq[nextHit].velocity > hits[seq[nextHit].pad])
         hits[seq[nextHit].pad] = seq[nextHit].velocity;
+      anyHit = 1;
       ++nextHit;
     }
-    for (uint32_t k = 0; k < PAD_COUNT; ++k)
+    for (uint32_t k = 0; anyHit && k < PAD_COUNT; ++k)
       if (hits[fireOrder[k]] > 0)
         trigger(s, fireOrder[k], hits[fireOrder[k]]);
-    double l = 0.0, r = 0.0;
-    double busL[AUX_COUNT] = {0}, busR[AUX_COUNT] = {0};
-    for (int k = 0; k < MAX_VOICES; ++k) {
-      Voice *v = &s->voices[k];
-      if (!v->active)
-        continue;
-      double sl = 0.0, sr = 0.0;
-      const double synth = v->synthOn ? renderVoice(v) : 0.0;
-      if (v->sampleOn) {
-        renderSample(v, &sl, &sr);
-        if (v->sampleLoop) { /* a loop follows the pad's decay envelope */
-          sl *= v->env;
-          sr *= v->env;
-          if (!v->synthOn)
-            v->env *= v->envMul;
-          if (v->env < SILENCE && v->n > (int64_t)(0.005 * v->sr))
-            v->sampleOn = 0;
-        }
-        if (!v->synthOn)
-          v->n += 1; /* age for voice stealing, as the synthesis does */
-      }
-      const double transient = transientGain(v);
-      double xL = filterChannel(v, 0, (synth + sl) * transient);
-      double xR = filterChannel(v, 1, (synth + sr) * transient);
-      if (v->fadeTotal > 0) {
-        const double fade = (double)v->fadeLeft / (double)v->fadeTotal;
-        xL *= fade;
-        xR *= fade;
-        if (--v->fadeLeft <= 0)
-          v->active = 0;
-      }
-      if (!v->synthOn && !v->sampleOn)
-        v->active = 0;
-      const double xl = xL * v->gainL, xr = xR * v->gainR;
-      /* One dry destination per pad (main or its output bus); sends are
-       * post level/pan and independent of it. */
-      if (aux != NULL && v->bus > 0) {
-        busL[AUX_SENDS + (uint32_t)v->bus - 1u] += xl;
-        busR[AUX_SENDS + (uint32_t)v->bus - 1u] += xr;
-      } else {
-        l += xl;
-        r += xr;
-      }
-      if (aux != NULL) {
-        busL[0] += xl * v->send1;
-        busR[0] += xr * v->send1;
-        busL[1] += xl * v->send2;
-        busR[1] += xr * v->send2;
-      }
+    /* The segment ends at the next pending event (each is past i now) or
+     * after SEGMENT frames. */
+    uint32_t end = c->numSamples - i > SEGMENT ? i + SEGMENT : c->numSamples;
+    if (nextChange < c->paramChangeCount) {
+      VoxParamChangeV2 p;
+      memcpy(&p, changes + (size_t)nextChange * c->paramChangeStride, sizeof(p));
+      if (p.sampleOffset < end)
+        end = p.sampleOffset;
     }
-    if (right != NULL) {
-      left[i] = (float)l;
-      right[i] = (float)r;
-    } else {
-      left[i] = (float)(0.5 * (l + r));
+    if (nextEvent < c->midiEventCount) {
+      VoxMidiEventV2 e;
+      memcpy(&e, events + (size_t)nextEvent * c->midiEventStride, sizeof(e));
+      if (e.sampleOffset < end)
+        end = e.sampleOffset;
+    }
+    if (nextHit < seqCount && seq[nextHit].offset < end)
+      end = seq[nextHit].offset;
+    renderSegment(s, aux != NULL, end - i);
+    const Mix *m = &s->mix;
+    for (uint32_t j = 0; j < end - i; ++j) {
+      if (right != NULL) {
+        left[i + j] = (float)m->l[0][j];
+        right[i + j] = (float)m->r[0][j];
+      } else {
+        left[i + j] = (float)(0.5 * (m->l[0][j] + m->r[0][j]));
+      }
     }
     if (aux != NULL)
       for (uint32_t b = 0; b < AUX_COUNT; ++b) {
+        const int used = (m->used >> b) & 1u;
+        const double *bl = m->l[1 + b], *br = m->r[1 + b];
         if (right != NULL) {
-          aux[b * 2u][i] = (float)busL[b];
-          aux[b * 2u + 1u][i] = (float)busR[b];
+          float *ol = aux[b * 2u] + i, *orr = aux[b * 2u + 1u] + i;
+          for (uint32_t j = 0; j < end - i; ++j) {
+            ol[j] = used ? (float)bl[j] : 0.0f;
+            orr[j] = used ? (float)br[j] : 0.0f;
+          }
         } else {
-          aux[b][i] = (float)(0.5 * (busL[b] + busR[b]));
+          float *o = aux[b] + i;
+          for (uint32_t j = 0; j < end - i; ++j)
+            o[j] = used ? (float)(0.5 * (bl[j] + br[j])) : 0.0f;
         }
       }
+    i = end;
   }
   if (c->releaseFlags & VOX_RELEASE_ALL_SOUND_AT_END)
     stopAll(s);
