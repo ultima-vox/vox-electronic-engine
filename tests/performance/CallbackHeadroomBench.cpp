@@ -45,8 +45,30 @@
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
 #include "AllocationProbe.h"
 #endif
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 namespace {
+// CPU time of the calling thread, in ticks: cycles on Windows
+// (QueryThreadCycleTime), nanoseconds elsewhere (CLOCK_THREAD_CPUTIME_ID).
+std::uint64_t threadTicks() noexcept {
+#if defined(_WIN32)
+  ULONG64 cycles = 0;
+  QueryThreadCycleTime(GetCurrentThread(), &cycles);
+  return cycles;
+#else
+  timespec t{};
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+  return static_cast<std::uint64_t>(t.tv_sec) * 1000000000ull + static_cast<std::uint64_t>(t.tv_nsec);
+#endif
+}
 using namespace vstengine;
 namespace fs = std::filesystem;
 using juce::MidiMessage;
@@ -115,6 +137,7 @@ struct Workload {
   std::vector<int> channels;           // their MIDI channels
   std::vector<std::string> kinds;      // instrument per slot
   bool limit{};
+  bool hostOutputs{};                  // B2 Out 2 .. Out 8 active
 };
 
 void load(Workload &w, std::size_t slot, const char *id) {
@@ -153,12 +176,16 @@ void configureDrums(Workload &w, std::size_t slot, bool hostOutputs) {
       setUi(*w.p, slot, pad, "output", static_cast<float>(pad));
 }
 
-Workload makeWorkload(bool limit, double rate, int block) {
+// drumSlots == 0: the mixed workloads (Drums, Demo, Graph). drumSlots > 0:
+// the production-scope Rack + Drums 1.0 load, N Full-on Drums kits.
+Workload makeWorkload(bool limit, int drumSlots, double rate, int block) {
   Workload w;
   w.limit = limit;
-  w.name = limit ? "declared-limit" : "representative";
+  w.hostOutputs = limit || drumSlots > 0;
+  w.name = drumSlots > 0 ? "drums x" + std::to_string(drumSlots) + (limit ? " limit" : "")
+                         : (limit ? "declared-limit" : "representative");
   w.p = std::make_unique<VstEngineAudioProcessor>(modules::createBuiltInProvider(), installed());
-  if (limit) {
+  if (w.hostOutputs) {
     // B2: every host output on before prepare.
     auto layout = w.p->getBusesLayout();
     for (int b = 1; b < layout.outputBuses.size(); ++b)
@@ -167,7 +194,10 @@ Workload makeWorkload(bool limit, double rate, int block) {
       fail("B2 layout");
   }
   w.p->prepareToPlay(rate, block);
-  if (limit) {
+  if (drumSlots > 0) {
+    for (std::size_t s = 0; s < static_cast<std::size_t>(drumSlots); ++s)
+      load(w, s, drumsId);
+  } else if (limit) {
     for (std::size_t s = 0; s < 16; ++s)
       load(w, s, s % 4 == 0 ? drumsId : (s % 2 ? demoId : graphId));
   } else {
@@ -181,15 +211,19 @@ Workload makeWorkload(bool limit, double rate, int block) {
   for (const auto slot : w.slots)
     w.channels.push_back(channelOf(*w.p, slot));
   for (std::size_t i = 0; i < w.slots.size(); ++i)
-    if (w.kinds[i] == drumsId)
-      configureDrums(w, w.slots[i], limit);
+    if (w.kinds[i] == drumsId) {
+      configureDrums(w, w.slots[i], w.hostOutputs);
+      // Drums-only limit: host notes must sound too (Both), not be ignored.
+      if (drumSlots > 0 && limit)
+        setRaw(*w.p, instrument::hostparams::poolId(w.slots[i], 48), 2.0f);
+    }
   // Returns, sends and kick ducking from the first kit.
   setRaw(*w.p, host::returnParameterId(0, "type"), 1.0f);
   setRaw(*w.p, host::returnParameterId(1, "type"), 2.0f);
   setRaw(*w.p, "rack.duck.source", static_cast<float>(w.slots.front() + 1));
   setRaw(*w.p, "rack.duck.note", 36.0f);
   for (std::size_t i = 0; i < w.slots.size(); ++i)
-    if (w.kinds[i] != drumsId) {
+    if (w.kinds[i] != drumsId || (drumSlots > 0 && i > 0)) {
       char depth[32];
       std::snprintf(depth, sizeof(depth), "slot%02zu.duck.depth", w.slots[i] + 1);
       setRaw(*w.p, depth, 0.7f);
@@ -256,6 +290,7 @@ struct Measurement {
   std::size_t blocks{};
   double budgetUs{}, p50{}, p95{}, p99{}, p999{}, max{};
   std::size_t overBudget{}; // measured blocks slower than realtime
+  std::size_t overWork{}, overPreempted{}; // of those: own CPU time over budget / not
   unsigned long allocations{};
   bool allocationProbe{};
 };
@@ -266,8 +301,9 @@ double percentile(std::vector<double> v, double q) {
   return v[std::min(index, v.size() - 1)];
 }
 
-Measurement run(bool limit, double rate, int block, double seconds) {
-  auto w = makeWorkload(limit, rate, block);
+Measurement run(bool limit, int drumSlots, double rate, int block, double seconds,
+                const std::string &label = {}) {
+  auto w = makeWorkload(limit, drumSlots, rate, block);
   PlayHead head;
   w.p->setPlayHead(&head);
   const int total = w.p->getTotalNumOutputChannels();
@@ -282,16 +318,18 @@ Measurement run(bool limit, double rate, int block, double seconds) {
       if (auto *parameter =
               w.p->parameters().getParameter(instrument::hostparams::poolId(w.slots[i], k)))
         automated.push_back(parameter);
-  if (limit && automated.size() != poolPerSlot * 16)
-    fail("expected 128 x 16 host automation endpoints, found " + std::to_string(automated.size()));
+  if (limit && automated.size() != poolPerSlot * w.slots.size())
+    fail("expected 128 host automation endpoints per slot, found " +
+         std::to_string(automated.size()));
   if (limit) {
     // The limit stimulus must be what the report says it is: 16 distinct
     // channels, exactly 2048 events, and every NoteOn released on its own
     // channel and note, later in the same block.
     std::vector<int> distinct = w.channels;
     std::sort(distinct.begin(), distinct.end());
-    if (std::unique(distinct.begin(), distinct.end()) != distinct.end() || distinct.size() != 16)
-      fail("the 16 limit slots must listen on 16 distinct MIDI channels");
+    if (std::unique(distinct.begin(), distinct.end()) != distinct.end() ||
+        distinct.size() != w.slots.size())
+      fail("the limit slots must listen on distinct MIDI channels");
     for (long long probe : {0LL, 1LL, 977LL}) {
       fillMidi(w, midi, probe, block);
       std::array<std::array<int, 128>, 17> held{};
@@ -324,12 +362,13 @@ Measurement run(bool limit, double rate, int block, double seconds) {
   }
   const auto blocks = static_cast<std::size_t>(seconds * rate / block);
   const std::size_t warmup = std::max<std::size_t>(64, blocks / 20);
-  std::vector<double> times;
+  std::vector<double> times, ticks;
   times.reserve(blocks);
+  ticks.reserve(blocks);
   double energy = 0.0, hostOutputEnergy = 0.0;
   bool finite = true;
   Measurement r;
-  r.workload = w.name;
+  r.workload = label.empty() ? w.name : w.name + " " + label;
   r.rate = rate;
   r.block = block;
   r.blocks = blocks;
@@ -343,9 +382,11 @@ Measurement run(bool limit, double rate, int block, double seconds) {
     if (measured)
       voxProbeBegin();
 #endif
+    const auto tick0 = threadTicks();
     const auto start = std::chrono::steady_clock::now();
     w.p->processBlock(audio, midi);
     const auto end = std::chrono::steady_clock::now();
+    const auto tick1 = threadTicks();
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
     if (measured)
       r.allocations += voxProbeEnd();
@@ -353,6 +394,7 @@ Measurement run(bool limit, double rate, int block, double seconds) {
 #endif
     if (measured) {
       times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+      ticks.push_back(static_cast<double>(tick1 - tick0));
       for (int c = 0; c < total; ++c)
         for (int s = 0; s < block; ++s) {
           const float x = audio.getSample(c, s);
@@ -370,7 +412,7 @@ Measurement run(bool limit, double rate, int block, double seconds) {
     fail(r.workload + ": non-finite output");
   if (!(energy > 0.0))
     fail(r.workload + ": silent output");
-  if (limit && !(hostOutputEnergy > 0.0))
+  if (w.hostOutputs && !(hostOutputEnergy > 0.0))
     fail(r.workload + ": the B2 host outputs are silent");
   // The declared limit is a limit, not an overload: nothing may be dropped.
   const auto &diagnostics = w.p->instrumentRack().diagnostics();
@@ -385,6 +427,23 @@ Measurement run(bool limit, double rate, int block, double seconds) {
   r.max = *std::max_element(times.begin(), times.end());
   r.overBudget = static_cast<std::size_t>(
       std::count_if(times.begin(), times.end(), [&](double t) { return t > r.budgetUs; }));
+  // Jitter versus work: thread CPU ticks are converted to microseconds with
+  // the median ticks-per-microsecond of this run (most blocks are not
+  // preempted). A late block whose own CPU time fits the budget was delayed
+  // by the scheduler; one whose CPU time exceeds it did too much work.
+  std::vector<double> rate_;
+  for (std::size_t i = 0; i < times.size(); ++i)
+    if (times[i] > 0.0)
+      rate_.push_back(ticks[i] / times[i]);
+  const double ticksPerUs = rate_.empty() ? 0.0 : percentile(rate_, 0.5);
+  for (std::size_t i = 0; i < times.size(); ++i)
+    if (times[i] > r.budgetUs) {
+      const double cpuUs = ticksPerUs > 0.0 ? ticks[i] / ticksPerUs : times[i];
+      if (cpuUs > r.budgetUs)
+        ++r.overWork;
+      else
+        ++r.overPreempted;
+    }
   return r;
 }
 } // namespace
@@ -405,21 +464,34 @@ int main(int argc, char **argv) {
   for (const bool limit : {false, true})
     for (const double rate : rates)
       for (const int block : blockSizes)
-        results.push_back(run(limit, rate, block, seconds));
+        results.push_back(run(limit, 0, rate, block, seconds));
+  // Rack + Drums 1.0 production scope: 1 / 2 / 8 / 16 Full-on Drums kits.
+  for (const int kits : quick ? std::vector<int>{2} : std::vector<int>{1, 2, 8, 16})
+    for (const bool limit : {false, true})
+      for (const double rate : rates)
+        for (const int block : blockSizes)
+          results.push_back(run(limit, kits, rate, block, quick ? 0.3 : 3.0));
+  // Repeats of the tight declared-limit cases on the same machine, in the
+  // same process (#106 P1: tail stability, jitter versus work).
+  if (!quick)
+    for (int k = 1; k <= 3; ++k)
+      for (const int block : {64, 128})
+        results.push_back(run(true, 0, 96000.0, block, seconds, "(repeat " + std::to_string(k) + ")"));
 
   std::ostringstream md;
   md << "| Workload | Rate | Block | Budget µs | p50 µs | p95 µs | p99 µs | p99.9 µs | max µs "
-        "| Load p99 | Headroom p99 | Blocks over budget | Audio-thread allocations |\n"
-     << "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+        "| Load p99 | Headroom p99 | Blocks over budget | of which work / preempted | Audio-thread allocations |\n"
+     << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
   bool allocated = false;
   for (const auto &r : results) {
     char line[512];
     const double load = r.p99 / r.budgetUs;
     std::snprintf(line, sizeof(line),
                   "| %s | %.1f kHz | %d | %.0f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f%% | "
-                  "%.1f%% | %zu / %zu | %s |\n",
+                  "%.1f%% | %zu / %zu | %zu / %zu | %s |\n",
                   r.workload.c_str(), r.rate / 1000.0, r.block, r.budgetUs, r.p50, r.p95, r.p99,
                   r.p999, r.max, 100.0 * load, 100.0 * (1.0 - load), r.overBudget, r.blocks,
+                  r.overWork, r.overPreempted,
                   r.allocationProbe ? std::to_string(r.allocations).c_str() : "not probed");
     md << line;
     allocated = allocated || r.allocations != 0;
