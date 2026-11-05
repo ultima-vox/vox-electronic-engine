@@ -115,3 +115,102 @@ page**.
    or chat.
 4. **Deferral decisions** (#77): MIDI Learn, per-pad velocity layers,
    user-configurable voice count.
+
+## GENRE-NEUTRAL SOUND DESIGN (VOX Drums, owner correction 6650325551)
+
+The instrument is one genre-neutral drum machine. Full-on, Psy, Goa,
+House/Techno and Hip-hop/Breaks are kit, sound and pattern presets.
+
+### Where synthesis is tied to the pad role (f9c8bc6)
+
+| Location in `libs/drums/VoxFullOnDrums.c` | What is bound to the pad index |
+|---|---|
+| `trigger()` → `switch (pad)` (≈ l.563) | base pitch per role: kick 50 Hz, snare 185, clap 1200 (scaled by character), tom 120, rim 520, hats 1.7× ratio, cymbal 3.1×; kick-only latching of `G_KICK_*` |
+| `renderVoice()` → `switch (v->pad)` (≈ l.710) | one fixed algorithm per pad. Kick: KickSynth port (swept sine + sub + click, tanh drive). Snare: 2 sines + HP noise. Clap: noise bursts through BP. Hats/cymbal: metallic partials + noise through HP (cutoff differs by `v->pad == PAD_CYMBAL`). Tom: swept sine + click. Rim: 2 sines + HP click |
+| `parameters[]`: `PAD("kick", …, "Click")`, `"Snappy"`, … and `G_KICK_PITCH/PITCH_DECAY/DRIVE/SUB/TAIL` (41..45) | the meaning of `character` per role; five kick-only global parameters |
+| `defaultNotes`, `defaultChoke` | GM note map and hat choke (both stored in state, see above) |
+
+### What already varies without new DSP
+
+| Means | State | Evidence |
+|---|---|---|
+| Per-pad Tune ±12 st, Fine ±100 ct, Decay, Level, Pan, Character, Filter type/Cutoff/Resonance, Transient Attack/Sustain, Sends, Output | WORKING+TEST | see SOUND above |
+| **Sample** source per pad (any WAV, start/end/loop/reverse/normalize/level) | WORKING+TEST (backend); UI missing | `sampleSources`, `sampleReverseInterpolation`, `loaderAssignsKitSamples` |
+| **Layer**: the pad's synth algorithm plus a sample | WORKING+TEST | `sampleSources`, `sampledKickDucksInTheSameBlock` |
+| Note map / choke groups (stored in state) | BACKEND ONLY / UI MISSING | `loadState` validation |
+
+So a sample-based kit of any style is possible today through the backend. It
+is **not** true that every pad can synthesise every timbre: a pad can run only
+its own algorithm, and the kick specials belong to the kick pad.
+
+### Proposal: per-pad synth model (PROPOSE, owner decision for v1.0)
+
+Make the algorithm a per-pad choice. Keep the eight verified algorithms
+exactly as they are; this is not a DSP rewrite.
+
+- **Descriptors.** Append 8 UI-only CHOICE parameters `<pad>.model`, with
+  choices Kick, Snare, Clap, Closed Hat, Open Hat, Tom, Rim, Cymbal. Each
+  pad's **default is its own role**.
+  - Host pool unchanged: 0..98.
+  - UI-only becomes 99..194; the descriptor count goes 187 → 195.
+  - `instrumentVersion` 3 → 4, with the Rack's append-only upgrade.
+- **DSP.** `trigger()` and `renderVoice()` switch on `v->model` instead of
+  `v->pad`.
+  - The hat/cymbal cutoff test becomes `model == Cymbal`.
+  - The kick specials (41..45) apply to every pad whose model is Kick. They
+    are shared across those pads, a documented limitation. Per-pad kick
+    parameters can be appended later if needed.
+- **State.** Module state v5 → v6. v5 still loads, with model = role.
+- **Bit-exact at defaults.** With every model left at its role, the
+  arithmetic is unchanged, so `kitParity` (1e-6 against the 1.x fixture) and
+  all existing tests must stay green. Rollback means setting the models back
+  to their roles.
+- **Tests:**
+  - parity at defaults;
+  - a pad running another model equals that model's pad at the same
+    tune/decay/character (bit-equal for the same latched values);
+  - state v5 → v6 upgrade;
+  - choke and note map unchanged;
+  - same-block kick ducking from a non-kick pad running the Kick model (the
+    duck note is the pad's note);
+  - allocation probe.
+- **CPU.** The cost per voice is the cost of the chosen algorithm, so the
+  worst case is 16 voices all running Kick. That is bounded by
+  `MAX_VOICES 16` and is measured by `callback_headroom_bench`; I will add a
+  "16 voices, all Kick model" case at 96 kHz / 64.
+- **Recommendation.** Include it in 1.0. It is a small change, bit-exact at
+  defaults, and it gives real genre neutrality for synthesised kits. The
+  owner decides.
+
+### Kits that sound different (owner item 3)
+
+At least three distinct kits/patterns with real sound need both of these:
+- **Synth-only kits**, possible now with existing DSP plus the model choice.
+  I can render audio evidence: Full-on/Psy, House/Techno, Hip-hop/Breaks
+  presets of real parameter values and patterns, each with rendered WAVs and
+  a test that they differ.
+- **Licensed samples**: no redistributable WAVs exist in the repo. The owner
+  must supply or approve sources. Each shipped sample needs a licence, a
+  source, attribution and a SHA-256 in the package manifest.
+
+## Pre-release rename impact: "Full-on Drums" → **VOX Drums** (analysis only, no rename)
+
+| Identifier | Where | Effect of renaming |
+|---|---|---|
+| InstrumentId `com.ultimavox.fullon-drums` | `DRUMS_ID` in the module; `vox_add_vins … ID / INSTRUMENTS / UI` in `CMakeLists.txt`; tests (`drumsId`) | **project state**: saved slots store the InstrumentId, and `directKey(instrumentId, id)` hashes it into the direct-parameter keys. Every saved project and fixture with the old id stops resolving. This is acceptable **only before 1.0**, because there are no user projects (owner confirmation in AGENTS.md). Host endpoint ids `slotNN.pKKK` do **not** change |
+| Package `VoxFullOnDrums.vins` and its manifest id / signature | `CMakeLists.txt` l.737–743, CI install layout, `build-info.txt` | repackage and re-sign. The signature covers the manifest, so it must be the production signature after the rename |
+| Module target / DLL `VoxFullOnDrums` | `CMakeLists.txt` l.723–735, `.vins` `MODULE_TARGET` | file name only, no ABI effect |
+| Source paths `libs/drums/VoxFullOnDrums.c`, `instruments/fullon-drums/`, `docs/testing/fullon-drums/`, `tests/integration/FullOnDrumsTests.cpp` | CMake, workflow (5 lines), tests | paths only |
+| Display name "Full-on Drums" | `.vins NAME`, the descriptor name, editor and DAW display | user-visible only |
+| Cache directory `cache/com.ultimavox.fullon-drums/…` | vins loader | derived from the id; a new cache |
+| Fixtures `tests/fixtures/drums/kit-parity-v1.txt` | kit parity | content does not depend on the id; it stays |
+
+**Recommended stable IDs:**
+- `com.ultimavox.drums`;
+- package `VoxDrums.vins`, module `VoxDrums`;
+- display name **VOX Drums**.
+
+The rename should be done once, in one reviewed PR, **before** the RC and
+before production signing, with no alias and no dual loader. Its acceptance
+is a full test pass with the new id, plus a check that no `fullon-drums`
+identifier remains outside the kit/preset names.
