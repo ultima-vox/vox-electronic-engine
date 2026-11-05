@@ -68,6 +68,12 @@ public:
   [[nodiscard]] float gainReduction() const noexcept { return envelope_; }
 
 private:
+  struct ActiveSends {
+    std::array<std::uint8_t, sendBusCount> bus{};
+    std::uint8_t count{};
+  };
+  // The slot sends of `route` with a non-zero gain, in bus order.
+  ActiveSends activeSends(std::size_t route) const noexcept;
   struct ReturnRuntime {
     effects::EffectsChain chain;
     std::array<std::vector<float>, 2> audio;

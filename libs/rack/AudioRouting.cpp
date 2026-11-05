@@ -200,6 +200,9 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
   const auto left = slot.pan <= 0 ? 1.0f : 1.0f - slot.pan,
              right = slot.pan >= 0 ? 1.0f : 1.0f + slot.pan;
   const bool source = slot.slotId == controls_.kickSource;
+  // Only the sends that add something: a zero-gain slot send adds +/-0, which
+  // never changes a sum, so skipping it keeps the output bit for bit.
+  const auto sends = activeSends(route);
   for (std::uint32_t s = 0; s < count; ++s) {
     const auto duck =
         source ? 1.0f
@@ -210,8 +213,8 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
       const auto pre = input[c][s] * duck;
       const auto post = pre * slot.level * (c == 0 ? left : right);
       output[c][s] += post;
-      for (std::size_t bus = 0;
-           route < instrument::maxSlots && bus < sendBusCount; ++bus) {
+      for (std::uint8_t k = 0; k < sends.count; ++k) {
+        const auto bus = sends.bus[k];
         const auto &send = controls_.sends[route][bus];
         returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
       }
@@ -220,6 +223,13 @@ void AudioRouting::mixSlot(std::size_t index, std::span<float *> input,
           returns_[bus].audio[c][s] += aux[s] * duck;
     }
   }
+}
+AudioRouting::ActiveSends AudioRouting::activeSends(std::size_t route) const noexcept {
+  ActiveSends sends;
+  for (std::size_t bus = 0; route < instrument::maxSlots && bus < sendBusCount; ++bus)
+    if (controls_.sends[route][bus].gain != 0.0f)
+      sends.bus[sends.count++] = static_cast<std::uint8_t>(bus);
+  return sends;
 }
 void AudioRouting::mixSlotOutput(std::size_t index, std::span<float *> input,
                                  std::span<float *> output,
@@ -243,6 +253,7 @@ void AudioRouting::mixSlotOutput(std::size_t index, std::span<float *> input,
   const auto left = slot.pan <= 0 ? 1.0f : 1.0f - slot.pan,
              right = slot.pan >= 0 ? 1.0f : 1.0f + slot.pan;
   const bool source = slot.slotId == controls_.kickSource;
+  const auto sends = activeSends(route);
   for (std::uint32_t s = 0; s < count; ++s) {
     const auto duck =
         source ? 1.0f
@@ -253,8 +264,8 @@ void AudioRouting::mixSlotOutput(std::size_t index, std::span<float *> input,
       const auto pre = input[c][s] * duck;
       const auto post = pre * slot.level * (c == 0 ? left : right);
       output[c][s] += post;
-      for (std::size_t bus = 0;
-           route < instrument::maxSlots && bus < sendBusCount; ++bus) {
+      for (std::uint8_t k = 0; k < sends.count; ++k) {
+        const auto bus = sends.bus[k];
         const auto &send = controls_.sends[route][bus];
         returns_[bus].audio[c][s] += (send.preFader ? pre : post) * send.gain;
       }
