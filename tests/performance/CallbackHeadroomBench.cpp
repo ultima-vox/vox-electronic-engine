@@ -40,6 +40,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
@@ -68,6 +69,81 @@ std::uint64_t threadTicks() noexcept {
   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
   return static_cast<std::uint64_t>(t.tv_sec) * 1000000000ull + static_cast<std::uint64_t>(t.tv_nsec);
 #endif
+}
+
+// Thread CPU time of the calling thread in microseconds, from an
+// independent clock: GetThreadTimes (kernel + user, 100 ns units, coarse
+// granularity) on Windows, CLOCK_THREAD_CPUTIME_ID elsewhere.
+double threadCpuUs() noexcept {
+#if defined(_WIN32)
+  FILETIME created, exited, kernel, user;
+  if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user))
+    return 0.0;
+  auto value = [](const FILETIME &f) {
+    return (static_cast<std::uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
+  };
+  return static_cast<double>(value(kernel) + value(user)) / 10.0;
+#else
+  return static_cast<double>(threadTicks()) / 1000.0;
+#endif
+}
+
+// How per-block thread CPU ticks convert to microseconds, and how far that
+// conversion can be trusted. Linux: ticks are thread-CPU nanoseconds
+// (exact, 1000 per microsecond). Windows: cycles, calibrated against
+// GetThreadTimes over each half of the run; valid only when each half is
+// long enough for the coarse clock (>= 0.5 s of thread CPU) and both halves
+// agree within 5% (no frequency or core change between them).
+struct CpuCalibration {
+  bool valid{};
+  double ticksPerUs{};
+  double uncertainty{1.0}; // relative
+  std::string describe() const {
+    char text[96];
+#if defined(_WIN32)
+    if (!valid)
+      return "invalid (UNKNOWN)";
+    std::snprintf(text, sizeof(text), "%.0f cyc/us ±%.1f%%", ticksPerUs, 100.0 * uncertainty);
+#else
+    std::snprintf(text, sizeof(text), "thread CPU ns");
+#endif
+    return text;
+  }
+};
+
+CpuCalibration calibrate(double ticks1, double us1, double ticks2, double us2) {
+  CpuCalibration c;
+#if defined(_WIN32)
+  if (us1 < 500000.0 || us2 < 500000.0 || ticks1 <= 0.0 || ticks2 <= 0.0)
+    return c;
+  const double a = ticks1 / us1, b = ticks2 / us2, mean = 0.5 * (a + b);
+  const double drift = std::abs(a - b) / mean;
+  const double granularity = 15625.0 / std::min(us1, us2); // one 15.6 ms tick
+  c.uncertainty = std::max(drift, granularity);
+  c.valid = drift <= 0.05;
+  c.ticksPerUs = (ticks1 + ticks2) / (us1 + us2);
+#else
+  (void)ticks1, (void)us1, (void)ticks2, (void)us2;
+  c.valid = true;
+  c.ticksPerUs = 1000.0;
+  c.uncertainty = 0.01; // clock read placement around the call
+#endif
+  return c;
+}
+
+enum class LateCause { work, preempted, unknown };
+// A late block is `work` when its own CPU time exceeds the budget beyond the
+// calibration's uncertainty, `preempted` when it is clearly below, and
+// `unknown` otherwise or when the calibration is invalid.
+LateCause classify(double ticks, double budgetUs, const CpuCalibration &c) {
+  if (!c.valid || c.ticksPerUs <= 0.0)
+    return LateCause::unknown;
+  const double cpuUs = ticks / c.ticksPerUs;
+  if (cpuUs > budgetUs * (1.0 + c.uncertainty))
+    return LateCause::work;
+  if (cpuUs < budgetUs * (1.0 - c.uncertainty))
+    return LateCause::preempted;
+  return LateCause::unknown;
 }
 using namespace vstengine;
 namespace fs = std::filesystem;
@@ -290,7 +366,8 @@ struct Measurement {
   std::size_t blocks{};
   double budgetUs{}, p50{}, p95{}, p99{}, p999{}, max{};
   std::size_t overBudget{}; // measured blocks slower than realtime
-  std::size_t overWork{}, overPreempted{}; // of those: own CPU time over budget / not
+  std::size_t overWork{}, overPreempted{}, overUnknown{}; // of those, by cause
+  std::string calibration;
   unsigned long allocations{};
   bool allocationProbe{};
 };
@@ -373,7 +450,13 @@ Measurement run(bool limit, int drumSlots, double rate, int block, double second
   r.block = block;
   r.blocks = blocks;
   r.budgetUs = 1e6 * block / rate;
+  double calTicks[3]{}, calUs[3]{};
   for (std::size_t b = 0; b < warmup + blocks; ++b) {
+    if (b == warmup || b == warmup + blocks / 2) {
+      const int k = b == warmup ? 0 : 1;
+      calTicks[k] = static_cast<double>(threadTicks());
+      calUs[k] = threadCpuUs();
+    }
     fillMidi(w, midi, static_cast<long long>(b), block);
     for (std::size_t k = 0; k < automated.size(); ++k)
       automated[k]->setValue(static_cast<float>((b + k) % 100) / 100.0f);
@@ -407,6 +490,8 @@ Measurement run(bool limit, int drumSlots, double rate, int block, double second
     head.samples += block;
     head.ppq += block * 145.0 / (60.0 * rate);
   }
+  calTicks[2] = static_cast<double>(threadTicks());
+  calUs[2] = threadCpuUs();
   w.p->setPlayHead(nullptr);
   if (!finite)
     fail(r.workload + ": non-finite output");
@@ -427,23 +512,18 @@ Measurement run(bool limit, int drumSlots, double rate, int block, double second
   r.max = *std::max_element(times.begin(), times.end());
   r.overBudget = static_cast<std::size_t>(
       std::count_if(times.begin(), times.end(), [&](double t) { return t > r.budgetUs; }));
-  // Jitter versus work: thread CPU ticks are converted to microseconds with
-  // the median ticks-per-microsecond of this run (most blocks are not
-  // preempted). A late block whose own CPU time fits the budget was delayed
-  // by the scheduler; one whose CPU time exceeds it did too much work.
-  std::vector<double> rate_;
+  // Cause of each late block from its own thread CPU time (see classify);
+  // the calibration comes from an independent clock, not from wall time.
+  const auto calibration = calibrate(calTicks[1] - calTicks[0], calUs[1] - calUs[0],
+                                     calTicks[2] - calTicks[1], calUs[2] - calUs[1]);
+  r.calibration = calibration.describe();
   for (std::size_t i = 0; i < times.size(); ++i)
-    if (times[i] > 0.0)
-      rate_.push_back(ticks[i] / times[i]);
-  const double ticksPerUs = rate_.empty() ? 0.0 : percentile(rate_, 0.5);
-  for (std::size_t i = 0; i < times.size(); ++i)
-    if (times[i] > r.budgetUs) {
-      const double cpuUs = ticksPerUs > 0.0 ? ticks[i] / ticksPerUs : times[i];
-      if (cpuUs > r.budgetUs)
-        ++r.overWork;
-      else
-        ++r.overPreempted;
-    }
+    if (times[i] > r.budgetUs)
+      switch (classify(ticks[i], r.budgetUs, calibration)) {
+      case LateCause::work: ++r.overWork; break;
+      case LateCause::preempted: ++r.overPreempted; break;
+      case LateCause::unknown: ++r.overUnknown; break;
+      }
   return r;
 }
 } // namespace
@@ -456,6 +536,49 @@ int main(int argc, char **argv) {
   fs::create_directories(cacheRoot);
   const bool quick = argc > 4 && std::string(argv[4]) == "--quick";
   juce::ScopedJuceInitialiser_GUI juce;
+  std::ostringstream md;
+  {
+    // Classifier self-test against a 1 ms budget, with its own calibration
+    // over 1.2 s of busy work (two halves): a 3 ms busy loop must read as
+    // work, a 3 ms sleep as preempted. Plus the cost of the timing calls.
+    auto spin = [](double us) {
+      const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double, std::micro>(us);
+      volatile double x = 1.0;
+      while (std::chrono::steady_clock::now() < until)
+        x = x * 1.0000001 + 1e-9;
+    };
+    const double t0 = static_cast<double>(threadTicks()), u0 = threadCpuUs();
+    spin(600000.0);
+    const double t1 = static_cast<double>(threadTicks()), u1 = threadCpuUs();
+    spin(600000.0);
+    const double t2 = static_cast<double>(threadTicks()), u2 = threadCpuUs();
+    const auto cal = calibrate(t1 - t0, u1 - u0, t2 - t1, u2 - u1);
+    const double a0 = static_cast<double>(threadTicks());
+    spin(3000.0);
+    const auto busy = classify(static_cast<double>(threadTicks()) - a0, 1000.0, cal);
+    const double b0 = static_cast<double>(threadTicks());
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    const auto slept = classify(static_cast<double>(threadTicks()) - b0, 1000.0, cal);
+    std::vector<double> cost;
+    for (int k = 0; k < 2000; ++k) {
+      const auto s0 = std::chrono::steady_clock::now();
+      (void)threadTicks();
+      (void)threadTicks();
+      cost.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - s0).count());
+    }
+    auto name = [](LateCause c) {
+      return c == LateCause::work ? "work" : c == LateCause::preempted ? "preempted" : "UNKNOWN";
+    };
+    char text[256];
+    std::snprintf(text, sizeof(text),
+                  "Classifier self-test (1 ms budget, calibration %s): 3 ms busy loop -> %s, "
+                  "3 ms sleep -> %s; timing overhead per block (2 thread-clock reads) median "
+                  "%.2f us\n\n",
+                  cal.describe().c_str(), name(busy), name(slept), percentile(cost, 0.5));
+    md << text;
+    if (cal.valid && (busy != LateCause::work || slept != LateCause::preempted))
+      md << "**Classifier self-test FAILED: treat every work/preempted count below as UNKNOWN.**\n\n";
+  }
   std::vector<Measurement> results;
   const std::vector<double> rates = quick ? std::vector<double>{48000.0}
                                           : std::vector<double>{44100.0, 48000.0, 96000.0};
@@ -478,20 +601,19 @@ int main(int argc, char **argv) {
       for (const int block : {64, 128})
         results.push_back(run(true, 0, 96000.0, block, seconds, "(repeat " + std::to_string(k) + ")"));
 
-  std::ostringstream md;
   md << "| Workload | Rate | Block | Budget µs | p50 µs | p95 µs | p99 µs | p99.9 µs | max µs "
-        "| Load p99 | Headroom p99 | Blocks over budget | of which work / preempted | Audio-thread allocations |\n"
-     << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+        "| Load p99 | Headroom p99 | Blocks over budget | of which work / preempted / unknown | CPU clock | Audio-thread allocations |\n"
+     << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
   bool allocated = false;
   for (const auto &r : results) {
     char line[512];
     const double load = r.p99 / r.budgetUs;
     std::snprintf(line, sizeof(line),
                   "| %s | %.1f kHz | %d | %.0f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f%% | "
-                  "%.1f%% | %zu / %zu | %zu / %zu | %s |\n",
+                  "%.1f%% | %zu / %zu | %zu / %zu / %zu | %s | %s |\n",
                   r.workload.c_str(), r.rate / 1000.0, r.block, r.budgetUs, r.p50, r.p95, r.p99,
                   r.p999, r.max, 100.0 * load, 100.0 * (1.0 - load), r.overBudget, r.blocks,
-                  r.overWork, r.overPreempted,
+                  r.overWork, r.overPreempted, r.overUnknown, r.calibration.c_str(),
                   r.allocationProbe ? std::to_string(r.allocations).c_str() : "not probed");
     md << line;
     allocated = allocated || r.allocations != 0;
