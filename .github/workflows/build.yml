@@ -39,6 +39,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "Head commit: $env:HEAD_SHA" | Add-Content (Join-Path $PWD "build\callback-headroom.md")
           "Runner: $env:RUNNER_NAME ($env:PROCESSOR_IDENTIFIER, $env:NUMBER_OF_PROCESSORS logical CPUs)" | Add-Content (Join-Path $PWD "build\callback-headroom.md")
+          # Same-process A/B of the Drums module against its frozen
+          # pre-optimisation reference (timing informational).
+          "" | Add-Content (Join-Path $PWD "build\callback-headroom.md")
+          "Drums module A/B (drums_render_equivalence_tests):" | Add-Content (Join-Path $PWD "build\callback-headroom.md")
+          & (Join-Path $PWD "build\Release\drums_render_equivalence_tests.exe") | Add-Content (Join-Path $PWD "build\callback-headroom.md")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
