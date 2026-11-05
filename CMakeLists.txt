@@ -315,6 +315,16 @@ target_include_directories(routing_equivalence_tests PRIVATE tests/rack/referenc
 target_link_libraries(routing_equivalence_tests PRIVATE vst_rack)
 add_test(NAME routing_equivalence_tests COMMAND routing_equivalence_tests)
 
+# The optimised Drums DSP against the frozen pre-optimisation module
+# (tests/drums/reference): every bus, rates, block sizes and kit states.
+add_executable(drums_render_equivalence_tests tests/drums/DrumsRenderEquivalenceTests.c
+  tests/drums/DrumsCurrentModule.c tests/drums/reference/DrumsReferenceModule.c)
+target_include_directories(drums_render_equivalence_tests PRIVATE ${VST_LIBS_DIR})
+if(NOT WIN32)
+  target_link_libraries(drums_render_equivalence_tests PRIVATE m)
+endif()
+add_test(NAME drums_render_equivalence_tests COMMAND drums_render_equivalence_tests)
+
 add_executable(rack_integration_tests tests/rack/RackIntegrationTests.cpp)
 target_link_libraries(rack_integration_tests PRIVATE vst_rack vst_modules)
 add_test(NAME rack_integration_tests COMMAND rack_integration_tests)
