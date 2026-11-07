@@ -782,6 +782,9 @@ if(VOX_NATIVE_PLATFORM)
   add_test(NAME callback_headroom_smoke
     COMMAND callback_headroom_bench ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/headroom-scratch
       ${CMAKE_BINARY_DIR}/callback-headroom-smoke.md --quick)
+  add_test(NAME callback_headroom_music_smoke
+    COMMAND callback_headroom_bench ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/headroom-music-scratch
+      ${CMAKE_BINARY_DIR}/callback-headroom-music-smoke.md --quick --music)
   add_test(NAME fullon_drums_tests
     COMMAND fullon_drums_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/drums-scratch
       ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)
