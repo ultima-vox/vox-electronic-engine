@@ -1,0 +1,136 @@
+name: perf-ab
+
+# Same-runner A/B of the full Rack callback benchmark (#109 review
+# 6678128044): baseline and candidate are built and measured inside ONE job,
+# so both run on the same named runner with the same MSVC Release
+# configuration, power plan and stimulus. Passes alternate A B A B to expose
+# drift. Runs only when the `perf-ab` label is added to a pull request; it
+# never gates a merge. Timings are evidence, judged by people.
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  same-runner-ab:
+    if: github.event.label.name == 'perf-ab'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 300
+    env:
+      CMAKE_GENERATOR: Visual Studio 17 2022
+      # The commit the candidate is compared against: #107 head, the last
+      # commit before the Drums DSP optimisation.
+      BASELINE_SHA: 15456c69b094af7f10efbaac297ae1d469ada1df
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+
+    steps:
+      - name: Checkout baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASELINE_SHA }}
+          path: A
+
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: B
+
+      - name: Use the candidate's benchmark source on both sides
+        shell: powershell
+        run: |
+          # Test code only: the baseline gets the candidate's
+          # CallbackHeadroomBench.cpp, so both sides run the same E2 (--music)
+          # workloads; its default suite is identical to the baseline's own.
+          # Everything else (Rack, Drums module, ABI) stays the baseline's.
+          Copy-Item -Force B\tests\performance\CallbackHeadroomBench.cpp A\tests\performance\CallbackHeadroomBench.cpp
+          "Benchmark source on both sides: $((Get-FileHash -Algorithm SHA256 B\tests\performance\CallbackHeadroomBench.cpp).Hash.ToLower())" | Out-File -Encoding utf8 bench-source.txt
+
+      - name: Build both (Release, identical configuration)
+        shell: powershell
+        run: |
+          foreach ($side in "A", "B") {
+            cmake -S $side -B "$side\build" -A x64
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build "$side\build" --config Release --parallel --target callback_headroom_bench
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          cmake --build "B\build" --config Release --parallel --target drums_render_equivalence_tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Record environment and binaries
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path ab | Out-Null
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $lines = @(
+            "Runner: $env:RUNNER_NAME",
+            "CPU: $($cpu.Name) ($($cpu.NumberOfCores) cores, $($cpu.NumberOfLogicalProcessors) logical, max $($cpu.MaxClockSpeed) MHz)",
+            "Power plan: $((powercfg /getactivescheme) -join ' ')",
+            "OS: $((Get-CimInstance Win32_OperatingSystem).Caption) $((Get-CimInstance Win32_OperatingSystem).Version)",
+            "Baseline (A): $env:BASELINE_SHA",
+            "Candidate (B): $env:CANDIDATE_SHA",
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          )
+          foreach ($side in "A", "B") {
+            foreach ($f in @("$side\build\Release\callback_headroom_bench.exe", "$side\build\Release\VoxFullOnDrums.dll") + (Get-ChildItem "$side\build\instruments\*.vins" | ForEach-Object FullName)) {
+              $lines += "$side SHA-256 $(Split-Path -Leaf $f): $((Get-FileHash -Algorithm SHA256 $f).Hash.ToLower())"
+            }
+          }
+          $lines += Get-Content bench-source.txt
+          $lines | Set-Content ab\environment.txt
+          Get-Content ab\environment.txt
+
+      - name: Measure A B A B
+        shell: powershell
+        run: |
+          # Before and after every pass: other job workers on this machine
+          # (the second runner shares the host) and total CPU load. A pass
+          # with a concurrent worker or high background load is flagged, and
+          # its tails are inconclusive.
+          function Probe($label) {
+            $workers = @(Get-Process -Name Runner.Worker -ErrorAction SilentlyContinue).Count
+            $load = "n/a"
+            try {
+              $samples = (Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 2 -MaxSamples 3).CounterSamples.CookedValue
+              $load = [math]::Round(($samples | Measure-Object -Average).Average, 1)
+            } catch {}
+            "$label : Runner.Worker processes on host = $workers (1 = this job only), total CPU % (6 s avg) = $load" | Add-Content ab\environment.txt
+          }
+          $passes = @("A", "B", "A", "B")
+          for ($i = 0; $i -lt $passes.Count; $i++) {
+            $side = $passes[$i]
+            $name = "pass$($i + 1)-$side"
+            Probe "$name before"
+            & (Join-Path $PWD "$side\build\Release\callback_headroom_bench.exe") (Join-Path $PWD "$side\build\instruments") (Join-Path $PWD "$side\build\headroom-scratch-$i") (Join-Path $PWD "ab\$name.md")
+            if ($LASTEXITCODE -ne 0) { "$name FAILED with exit code $LASTEXITCODE" | Add-Content ab\environment.txt; exit $LASTEXITCODE }
+            Probe "$name after"
+          }
+          # E2 musical-density workloads (--music), A B A B as well.
+          for ($i = 0; $i -lt $passes.Count; $i++) {
+            $side = $passes[$i]
+            $name = "music-pass$($i + 1)-$side"
+            Probe "$name before"
+            & (Join-Path $PWD "$side\build\Release\callback_headroom_bench.exe") (Join-Path $PWD "$side\build\instruments") (Join-Path $PWD "$side\build\music-scratch-$i") (Join-Path $PWD "ab\$name.md") --music
+            if ($LASTEXITCODE -ne 0) { "$name FAILED with exit code $LASTEXITCODE" | Add-Content ab\environment.txt; exit $LASTEXITCODE }
+            Probe "$name after"
+          }
+          & (Join-Path $PWD "B\build\Release\drums_render_equivalence_tests.exe") | Set-Content ab\drums-render-equivalence.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content ab\environment.txt
+
+      - name: Upload A/B report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vox-Callback-Headroom-AB
+          path: ab
+          if-no-files-found: error
+
+      - name: Remove the development publisher keys from the runner
+        if: always()
+        shell: powershell
+        run: |
+          # The per-run development private keys must not outlive the job.
+          foreach ($side in "A", "B") {
+            if (Test-Path "$side\build\publisher") { Get-ChildItem "$side\build\publisher\*.pem" | Remove-Item -Force }
+          }

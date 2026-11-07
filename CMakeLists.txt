@@ -315,6 +315,18 @@ target_include_directories(routing_equivalence_tests PRIVATE tests/rack/referenc
 target_link_libraries(routing_equivalence_tests PRIVATE vst_rack)
 add_test(NAME routing_equivalence_tests COMMAND routing_equivalence_tests)
 
+# The optimised Drums DSP against the frozen pre-optimisation module
+# (tests/drums/reference): every bus, rates, block sizes and kit states.
+add_executable(drums_render_equivalence_tests tests/drums/DrumsRenderEquivalenceTests.c
+  tests/drums/DrumsCurrentModule.c tests/drums/reference/DrumsReferenceModule.c)
+set_target_properties(drums_render_equivalence_tests PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+target_include_directories(drums_render_equivalence_tests PRIVATE ${VST_LIBS_DIR})
+if(NOT WIN32)
+  target_link_libraries(drums_render_equivalence_tests PRIVATE m)
+endif()
+add_test(NAME drums_render_equivalence_tests COMMAND drums_render_equivalence_tests)
+
 add_executable(rack_integration_tests tests/rack/RackIntegrationTests.cpp)
 target_link_libraries(rack_integration_tests PRIVATE vst_rack vst_modules)
 add_test(NAME rack_integration_tests COMMAND rack_integration_tests)
@@ -770,6 +782,9 @@ if(VOX_NATIVE_PLATFORM)
   add_test(NAME callback_headroom_smoke
     COMMAND callback_headroom_bench ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/headroom-scratch
       ${CMAKE_BINARY_DIR}/callback-headroom-smoke.md --quick)
+  add_test(NAME callback_headroom_music_smoke
+    COMMAND callback_headroom_bench ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/headroom-music-scratch
+      ${CMAKE_BINARY_DIR}/callback-headroom-music-smoke.md --quick --music)
   add_test(NAME fullon_drums_tests
     COMMAND fullon_drums_tests ${VOX_INSTRUMENTS_DIR} ${CMAKE_BINARY_DIR}/drums-scratch
       ${CMAKE_CURRENT_SOURCE_DIR}/docs/testing/fullon-drums)
