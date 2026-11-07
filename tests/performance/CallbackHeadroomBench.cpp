@@ -737,12 +737,57 @@ void configureMusicKit(VstEngineAudioProcessor &p, std::size_t slot, int mode, b
       setUi(p, slot, pad, "output", static_cast<float>(pad));
 }
 
+// Fixture MIDI in musical time (review 6703842178, P1): scheduled from the
+// transport's ppq and tempo with the same step expression as the Drums host
+// grid, so the density per bar is the same at every rate and tempo.
+//  - Demo Synth native: a 4-note chord on every bar (4 quarters), held
+//    legato until the next chord (NoteOffs of the previous chord at the
+//    new onset). Roots cycle 48, 50, 52, 54, 56.
+//  - Demo Synth graph: a bass note on every 16th (0.25 ppq), legato,
+//    notes cycle 36..43.
+struct FixtureSchedule {
+  int channel{};
+  bool chords{};
+  std::int64_t lastStep{std::numeric_limits<std::int64_t>::min()};
+  std::vector<int> held;
+  std::size_t onsets{}; // steps started (chords or bass notes)
+  double step() const { return chords ? 4.0 : 0.25; }
+  void fill(juce::MidiBuffer &midi, double ppq0, double rate, double bpm, int n) {
+    const double samplesPerPpq = 60.0 * rate / bpm;
+    for (auto g = static_cast<std::int64_t>(std::floor(ppq0 / step())) - 1;; ++g) {
+      if (g < 0)
+        continue;
+      const double at = std::ceil((static_cast<double>(g) * step() - ppq0) * samplesPerPpq - 1e-6);
+      if (at >= static_cast<double>(n))
+        break;
+      if (at < 0.0 || g <= lastStep)
+        continue;
+      lastStep = g;
+      const int s = static_cast<int>(at);
+      for (const int note : held)
+        midi.addEvent(MidiMessage::noteOff(channel, note), s);
+      held.clear();
+      if (chords) {
+        const int root = 48 + static_cast<int>(g % 5) * 2;
+        for (const int interval : {0, 4, 7, 11})
+          held.push_back(root + interval);
+      } else {
+        held.push_back(36 + static_cast<int>(g % 8));
+      }
+      for (const int note : held)
+        midi.addEvent(MidiMessage::noteOn(channel, note, (juce::uint8)(chords ? 90 : 100)), s);
+      ++onsets;
+    }
+  }
+};
+
 struct MusicRig {
   std::unique_ptr<VstEngineAudioProcessor> p;
   MusicLayout layout;
   std::vector<int> drumModes;
   std::vector<HostGrid> grids;          // per Drums slot (used by Host / Both)
   std::vector<int> fixtureChannels;
+  std::vector<FixtureSchedule> fixtureSchedules;
   std::vector<const char *> fixtureIds;
   std::size_t hitsPerPass{};
   std::string slotMap;
@@ -786,6 +831,10 @@ MusicRig makeMusicRig(const MusicSpec &m, double rate, int block, bool b2) {
   }
   for (std::size_t i = 0; i < r.layout.fixtureSlots.size(); ++i) {
     r.fixtureChannels.push_back(channelOf(*r.p, r.layout.fixtureSlots[i]));
+    FixtureSchedule f;
+    f.channel = r.fixtureChannels.back();
+    f.chords = r.fixtureIds[i] == demoId;
+    r.fixtureSchedules.push_back(f);
     map << ", slot " << r.layout.fixtureSlots[i] + 1
         << (r.fixtureIds[i] == demoId ? " Demo Synth native (FIXTURE)" : " Demo Synth graph (FIXTURE)");
   }
@@ -808,30 +857,6 @@ MusicRig makeMusicRig(const MusicSpec &m, double rate, int block, bool b2) {
     setRaw(*r.p, host::sendParameterId(slot, 0, "level"), 0.3f);
   r.p->prepareToPlay(rate, block);
   return r;
-}
-
-// Fixture MIDI as in `representative`: Demo chords, graph bass in 16ths.
-void fixtureMidi(const MusicRig &r, juce::MidiBuffer &midi, long long sampleStart, int n,
-                 int fixtures) {
-  const long long period = 6000;
-  for (int i = 0; i < fixtures; ++i) {
-    const int ch = r.fixtureChannels[static_cast<std::size_t>(i)];
-    for (int s = 0; s < n; ++s) {
-      const long long t = sampleStart + s;
-      if (r.fixtureIds[static_cast<std::size_t>(i)] == demoId && t % period == 0) {
-        const int root = 48 + static_cast<int>((t / period) % 5) * 2;
-        for (const int interval : {0, 4, 7, 11}) {
-          midi.addEvent(MidiMessage::noteOff(ch, root - 2 + interval), s);
-          midi.addEvent(MidiMessage::noteOn(ch, root + interval, (juce::uint8)90), s);
-        }
-      }
-      if (r.fixtureIds[static_cast<std::size_t>(i)] == graphId && t % (period / 4) == 0) {
-        const int note = 36 + static_cast<int>((t / (period / 4)) % 8);
-        midi.addEvent(MidiMessage::noteOff(ch, note - 1), s);
-        midi.addEvent(MidiMessage::noteOn(ch, note, (juce::uint8)100), s);
-      }
-    }
-  }
 }
 
 struct Render {
@@ -1059,6 +1084,9 @@ std::string preflightDucking(const MusicSpec &m, double rate, int block) {
 struct MusicMeasurement {
   Measurement m;
   double eventsMean{}, eventsMax{}; // host MIDI events per slot channel per block
+  // Fixture steps started in the measured blocks vs. musical steps the
+  // transport crossed, summed over the fixtures of each kind.
+  double chordSteps{}, chordExpected{}, bassSteps{}, bassExpected{};
   std::string slotMap;
   std::size_t hitsPerPass{};
 };
@@ -1108,6 +1136,8 @@ MusicMeasurement runMusic(const MusicSpec &spec, double rate, int block, double 
   r.budgetUs = 1e6 * block / rate;
   double calTicks[3]{}, calUs[3]{};
   std::array<int, 17> perChannel{};
+  double measuredPpqStart = 0.0;
+  std::vector<std::size_t> onsetsAtWarmup;
   for (std::size_t b = 0; b < warmup + blocks; ++b) {
     if (b == warmup || b == warmup + blocks / 2) {
       const int k = b == warmup ? 0 : 1;
@@ -1118,7 +1148,13 @@ MusicMeasurement runMusic(const MusicSpec &spec, double rate, int block, double 
     for (std::size_t j = 0; j < rig.grids.size(); ++j)
       if (rig.drumModes[j] != 1)
         rig.grids[j].fill(midi, head.ppq, rate, head.bpm, block);
-    fixtureMidi(rig, midi, static_cast<long long>(head.samples), block, spec.fixtures);
+    if (b == warmup) {
+      measuredPpqStart = head.ppq;
+      for (auto &f : rig.fixtureSchedules)
+        onsetsAtWarmup.push_back(f.onsets);
+    }
+    for (auto &f : rig.fixtureSchedules)
+      f.fill(midi, head.ppq, rate, head.bpm, block);
     for (std::size_t k = 0; k < automated.size(); ++k)
       automated[k]->setValue(static_cast<float>((b / 8 + k * 7) % 100) / 100.0f);
     const bool measured = b >= warmup;
@@ -1163,6 +1199,20 @@ MusicMeasurement runMusic(const MusicSpec &spec, double rate, int block, double 
   calTicks[2] = static_cast<double>(threadTicks());
   calUs[2] = threadCpuUs();
   rig.p->setPlayHead(nullptr);
+  // Fixture onsets in the measured blocks must be the musical steps the
+  // transport crossed (at most one step off at either edge).
+  const double measuredQuarters = head.ppq - measuredPpqStart;
+  for (std::size_t i = 0; i < rig.fixtureSchedules.size(); ++i) {
+    const auto &f = rig.fixtureSchedules[i];
+    const double onsets = static_cast<double>(f.onsets - onsetsAtWarmup[i]);
+    const double expected = std::floor(head.ppq / f.step()) - std::floor(measuredPpqStart / f.step());
+    if (std::abs(onsets - expected) > 1.0)
+      fail(r.workload + ": fixture " + std::to_string(i + 1) + " started " +
+           std::to_string(onsets) + " steps, the transport crossed " + std::to_string(expected));
+    (f.chords ? out.chordSteps : out.bassSteps) += onsets;
+    (f.chords ? out.chordExpected : out.bassExpected) += expected;
+  }
+  (void)measuredQuarters;
   if (!finite)
     fail(r.workload + ": non-finite output");
   if (!(energy > 0.0))
@@ -1200,6 +1250,53 @@ MusicMeasurement runMusic(const MusicSpec &spec, double rate, int block, double 
   return out;
 }
 
+std::string onsetText(const MusicMeasurement &x) {
+  char t[96];
+  std::snprintf(t, sizeof(t), "%.0f/%.0f, %.0f/%.0f", x.chordSteps, x.chordExpected, x.bassSteps,
+                x.bassExpected);
+  return t;
+}
+
+// Pre-flight 3: the fixture generators alone over exactly four 4/4 bars
+// produce 4 chords and 64 bass notes at every rate, block and tempo, at the
+// samples ceil(step x samples-per-quarter) (density in musical time, not
+// in samples).
+std::string preflightFixtures(double rate, int block) {
+  std::string text;
+  for (const double bpm : {145.0, 175.0}) {
+    FixtureSchedule chords, bass;
+    chords.chords = true;
+    const double spp = 60.0 * rate / bpm;
+    const int samples = static_cast<int>(16.0 * spp);
+    std::vector<int> chordAt, bassAt;
+    juce::MidiBuffer midi;
+    double ppq = 0.0;
+    for (int start = 0; start < samples; start += block) {
+      const int n = std::min(block, samples - start);
+      for (auto *f : {&chords, &bass}) {
+        midi.clear();
+        f->fill(midi, ppq, rate, bpm, n);
+        for (const auto meta : midi)
+          if (meta.getMessage().isNoteOn())
+            (f == &chords ? chordAt : bassAt).push_back(start + meta.samplePosition);
+      }
+      ppq += n * bpm / (60.0 * rate);
+    }
+    if (chords.onsets != 4 || bass.onsets != 64 || chordAt.size() != 16 || bassAt.size() != 64)
+      fail("fixture pre-flight: " + std::to_string(chords.onsets) + " chords and " +
+           std::to_string(bass.onsets) + " bass notes in 4 bars at " + std::to_string(bpm) + " BPM");
+    for (std::size_t k = 0; k < bassAt.size(); ++k)
+      if (std::abs(bassAt[k] - static_cast<int>(std::ceil(0.25 * static_cast<double>(k) * spp - 1e-6))) > 1)
+        fail("fixture pre-flight: bass note " + std::to_string(k) + " off its 16th");
+    char line[96];
+    std::snprintf(line, sizeof(line), "%s%.0f BPM: 4 chords + 64 bass notes in 4 bars", text.empty() ? "" : "; ", bpm);
+    text += line;
+  }
+  char head[48];
+  std::snprintf(head, sizeof(head), "fixtures @ %.1f kHz/%d: ", rate / 1000.0, block);
+  return head + text;
+}
+
 int runMusicSuite(bool quick, const char *reportPath, std::ostringstream &md) {
   std::vector<MusicSpec> specs;
   for (const bool peak : {false, true}) {
@@ -1215,25 +1312,30 @@ int runMusicSuite(bool quick, const char *reportPath, std::ostringstream &md) {
       for (const bool last : {false, true})
         specs.push_back({peak, n, f, last});
   }
-  const std::vector<std::pair<double, int>> preflightConfigs =
-      quick ? std::vector<std::pair<double, int>>{{48000.0, 128}}
-            : std::vector<std::pair<double, int>>{{48000.0, 128}, {96000.0, 64}};
+  const std::vector<double> rates = quick ? std::vector<double>{48000.0}
+                                          : std::vector<double>{44100.0, 48000.0, 96000.0};
+  const std::vector<int> blockSizes = quick ? std::vector<int>{128} : std::vector<int>{64, 128, 512};
+  // Pre-flight in every measured rate/block cell (review 6703842178, P2).
+  std::vector<std::pair<double, int>> preflightConfigs;
+  for (const double rate : rates)
+    for (const int block : blockSizes)
+      preflightConfigs.push_back({rate, block});
   md << "## E2 musical-density workloads\n\n"
         "The factory pattern Full-on Driving (typical, 145 BPM) and a synthetic 32nd grid (peak, "
         "175 BPM) do **not** establish a realtime guarantee for every VOX Drums kit. Demo Synth "
         "native and graph slots are **test fixtures**, not shipped instruments. The declared-limit "
-        "suite (2048 events + 128x16) is a separate run.\n\nPre-flight (fails the run on "
-        "mismatch):\n\n";
+        "suite (2048 events + 128x16) is a separate run. Fixture MIDI is scheduled in musical time "
+        "(a chord per bar, bass in 16ths) and checked per cell. Pre-flight runs in every measured "
+        "rate/block cell. Calibration-invalid cells: late-block causes and tails are "
+        "**inconclusive**.\n\nPre-flight (fails the run on mismatch):\n\n";
   for (const auto &[rate, block] : preflightConfigs) {
     for (const bool peak : {false, true})
       md << "- " << preflightStimulus(peak, rate, block) << "\n";
+    md << "- " << preflightFixtures(rate, block) << "\n";
     for (const auto &s : specs)
       if (s.fixtures > 0)
         md << "- ducking " << preflightDucking(s, rate, block) << "\n";
   }
-  const std::vector<double> rates = quick ? std::vector<double>{48000.0}
-                                          : std::vector<double>{44100.0, 48000.0, 96000.0};
-  const std::vector<int> blockSizes = quick ? std::vector<int>{128} : std::vector<int>{64, 128, 512};
   std::vector<MusicMeasurement> results;
   for (const auto &s : specs)
     for (const double rate : rates)
@@ -1249,19 +1351,22 @@ int runMusicSuite(bool quick, const char *reportPath, std::ostringstream &md) {
     }
   md << "\n| Workload | Rate | Block | Budget µs | p50 µs | p95 µs | p99 µs | p99.9 µs | max µs "
         "| Load p99 | Blocks over budget | of which work / preempted / unknown | CPU clock | "
-        "Host events/slot/block mean / max | Audio-thread allocations |\n"
-     << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+        "Host events/slot/block mean / max | Fixture steps started/crossed: chords, bass | Audio-thread allocations |\n"
+     << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
   bool allocated = false;
   for (const auto &x : results) {
     const auto &r = x.m;
     char line[512];
     std::snprintf(line, sizeof(line),
                   "| %s | %.1f kHz | %d | %.0f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f%% | "
-                  "%zu / %zu | %zu / %zu / %zu | %s | %.3f / %.0f | %s |\n",
+                  "%zu / %zu | %zu / %zu / %zu | %s | %.3f / %.0f | %s | %s |\n",
                   r.workload.c_str(), r.rate / 1000.0, r.block, r.budgetUs, r.p50, r.p95, r.p99,
                   r.p999, r.max, 100.0 * r.p99 / r.budgetUs, r.overBudget, r.blocks, r.overWork,
-                  r.overPreempted, r.overUnknown, r.calibration.c_str(), x.eventsMean,
-                  x.eventsMax, r.allocationProbe ? std::to_string(r.allocations).c_str() : "not probed");
+                  r.overPreempted, r.overUnknown,
+                  (r.calibration + (r.calibration.find("invalid") != std::string::npos
+                                        ? " - tails inconclusive" : "")).c_str(),
+                  x.eventsMean, x.eventsMax, onsetText(x).c_str(),
+                  r.allocationProbe ? std::to_string(r.allocations).c_str() : "not probed");
     md << line;
     allocated = allocated || r.allocations != 0;
   }
