@@ -35,6 +35,16 @@ jobs:
           ref: ${{ env.CANDIDATE_SHA }}
           path: B
 
+      - name: Use the candidate's benchmark source on both sides
+        shell: powershell
+        run: |
+          # Test code only: the baseline gets the candidate's
+          # CallbackHeadroomBench.cpp, so both sides run the same E2 (--music)
+          # workloads; its default suite is identical to the baseline's own.
+          # Everything else (Rack, Drums module, ABI) stays the baseline's.
+          Copy-Item -Force B\tests\performance\CallbackHeadroomBench.cpp A\tests\performance\CallbackHeadroomBench.cpp
+          "Benchmark source on both sides: $((Get-FileHash -Algorithm SHA256 B\tests\performance\CallbackHeadroomBench.cpp).Hash.ToLower())" | Out-File -Encoding utf8 bench-source.txt
+
       - name: Build both (Release, identical configuration)
         shell: powershell
         run: |
@@ -66,6 +76,7 @@ jobs:
               $lines += "$side SHA-256 $(Split-Path -Leaf $f): $((Get-FileHash -Algorithm SHA256 $f).Hash.ToLower())"
             }
           }
+          $lines += Get-Content bench-source.txt
           $lines | Set-Content ab\environment.txt
           Get-Content ab\environment.txt
 
@@ -91,6 +102,15 @@ jobs:
             $name = "pass$($i + 1)-$side"
             Probe "$name before"
             & (Join-Path $PWD "$side\build\Release\callback_headroom_bench.exe") (Join-Path $PWD "$side\build\instruments") (Join-Path $PWD "$side\build\headroom-scratch-$i") (Join-Path $PWD "ab\$name.md")
+            if ($LASTEXITCODE -ne 0) { "$name FAILED with exit code $LASTEXITCODE" | Add-Content ab\environment.txt; exit $LASTEXITCODE }
+            Probe "$name after"
+          }
+          # E2 musical-density workloads (--music), A B A B as well.
+          for ($i = 0; $i -lt $passes.Count; $i++) {
+            $side = $passes[$i]
+            $name = "music-pass$($i + 1)-$side"
+            Probe "$name before"
+            & (Join-Path $PWD "$side\build\Release\callback_headroom_bench.exe") (Join-Path $PWD "$side\build\instruments") (Join-Path $PWD "$side\build\music-scratch-$i") (Join-Path $PWD "ab\$name.md") --music
             if ($LASTEXITCODE -ne 0) { "$name FAILED with exit code $LASTEXITCODE" | Add-Content ab\environment.txt; exit $LASTEXITCODE }
             Probe "$name after"
           }
