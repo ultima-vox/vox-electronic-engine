@@ -72,6 +72,28 @@ vox_suite_add_allocation_probe(suite_effects_golden_tests)
 add_test(NAME suite_effects_golden_tests
   COMMAND suite_effects_golden_tests ${CMAKE_CURRENT_SOURCE_DIR}/golden/effects-chain-v1.csv)
 
+
+# DRM-00: golden corpus of the legacy 8-pad Drums module at f9c8bc6 (owner
+# decision D3). The module and its C ABI header are byte-identical, test-only
+# copies (PROVENANCE.csv); no product or library may link this target
+# (suite_boundaries).
+add_library(vox_legacy_drums_reference STATIC
+  legacy-reference/drums-f9c8bc6/VoxFullOnDrums.c)
+target_include_directories(vox_legacy_drums_reference PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/legacy-reference/drums-f9c8bc6)
+set_target_properties(vox_legacy_drums_reference PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+if(UNIX)
+  target_link_libraries(vox_legacy_drums_reference PUBLIC m)
+endif()
+
+add_executable(suite_drums_legacy_golden_tests DrumsLegacyGoldenTests.cpp)
+target_link_libraries(suite_drums_legacy_golden_tests PRIVATE vox_legacy_drums_reference vox_testkit)
+add_test(NAME suite_drums_legacy_golden_tests
+  COMMAND suite_drums_legacy_golden_tests
+          ${CMAKE_CURRENT_SOURCE_DIR}/golden/drums-legacy-f9c8bc6-v1.csv
+          --parameters ${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/legacy-parameters-f9c8bc6.csv)
+
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)
 
