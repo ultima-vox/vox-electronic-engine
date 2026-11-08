@@ -27,64 +27,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Infrastructure: cloning JUCE through FetchContent on this runner broke
-      # off three times on 2026-11-08 (RPC failed / early EOF). Keep one
-      # verified copy per pinned commit in the runner tool cache, fetch it with
-      # retries only when missing, and refuse a copy at any other commit or
-      # with local modifications. CMake re-verifies the commit at configure.
+      # Infrastructure: FetchContent's JUCE clone broke off repeatedly on this
+      # runner. Use verified copies of the pinned commits from the runner tool
+      # cache (fetched with retries only when missing); CMake re-verifies JUCE.
       - name: Provide verified JUCE and VST3 SDK copies
         shell: powershell
         run: |
-          # Exit codes are checked explicitly: Windows PowerShell turns native
-          # stderr into terminating errors under ErrorActionPreference=Stop.
-          $cache = Join-Path $env:RUNNER_TOOL_CACHE 'vox-suite'
-          New-Item -ItemType Directory -Force -Path $cache | Out-Null
-
-          function Get-Head($dir) {
-            if (Test-Path (Join-Path $dir '.git')) { return (git -C $dir rev-parse HEAD 2>$null) }
-            return ''
-          }
-
-          function Use-Pinned($name, $repository, $ref, $commit, $submodules) {
-            $dir = Join-Path $cache "$name-$commit"
-            if ((Get-Head $dir) -ne $commit) {
-              if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
-              $tmp = "$dir.partial"
-              $ok = $false
-              for ($attempt = 1; $attempt -le 4 -and -not $ok; $attempt++) {
-                if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-                git -c advice.detachedHead=false clone --quiet --depth 1 --branch $ref $repository $tmp
-                if ($LASTEXITCODE -eq 0 -and (Get-Head $tmp) -eq $commit) {
-                  $ok = $true
-                  foreach ($module in $submodules) {
-                    git -C $tmp submodule update --quiet --init --depth 1 $module
-                    if ($LASTEXITCODE -ne 0) { $ok = $false }
-                  }
-                }
-                if (-not $ok) {
-                  Write-Host "$name fetch attempt $attempt failed (infrastructure); retrying"
-                  Start-Sleep -Seconds ([math]::Pow(2, $attempt))
-                }
-              }
-              if (-not $ok) { throw "INFRASTRUCTURE: could not fetch $name $commit" }
-              Move-Item $tmp $dir
-              if ((Get-Head $dir) -ne $commit) { throw "could not place $name at $dir" }
-            }
-            $dirty = git -C $dir status --porcelain --ignore-submodules=none
-            if ($dirty) { throw "cached $name copy at $dir has local modifications" }
-            Write-Host "$name verified at $(Get-Head $dir) ($dir)"
-            return $dir
-          }
-
-          $juce = Use-Pinned 'juce' $env:JUCE_REPOSITORY '9.0.1' $env:JUCE_COMMIT @()
-          $sdk = Use-Pinned 'vst3sdk' $env:VST3SDK_REPOSITORY $env:VST3SDK_TAG $env:VST3SDK_COMMIT @('base', 'pluginterfaces', 'public.sdk', 'cmake')
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository $env:JUCE_REPOSITORY -Ref 9.0.1 -Commit $env:JUCE_COMMIT
+          if (-not $juce) { exit 1 }
+          $sdk = & .github\scripts\Use-PinnedCheckout.ps1 -Name vst3sdk -Repository $env:VST3SDK_REPOSITORY -Ref $env:VST3SDK_TAG -Commit $env:VST3SDK_COMMIT -Submodules base,pluginterfaces,public.sdk,cmake
+          if (-not $sdk) { exit 1 }
           "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "VST3SDK_DIR=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Build the Steinberg VST3 validator (cached per SDK commit)
         shell: powershell
         run: |
-          $build = Join-Path $env:RUNNER_TOOL_CACHE "vox-suite\vst3sdk-build-$env:VST3SDK_COMMIT"
+          $build = Join-Path $env:RUNNER_TOOL_CACHE "vox-pinned\vst3sdk-build-$env:VST3SDK_COMMIT"
           $validator = Join-Path $build 'bin\Release\validator.exe'
           if (-not (Test-Path $validator)) {
             cmake -S $env:VST3SDK_DIR -B $build -A x64 -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF

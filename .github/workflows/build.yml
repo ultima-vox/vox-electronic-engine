@@ -15,12 +15,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Infrastructure: FetchContent's JUCE clone broke off repeatedly on this
+      # runner. Configure from a verified copy of the pinned JUCE 9.0.1 commit
+      # in the runner tool cache; CMake re-verifies the commit.
+      - name: Provide verified JUCE copy
+        shell: powershell
+        run: |
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository https://github.com/juce-framework/JUCE.git -Ref 9.0.1 -Commit e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+          if (-not $juce) { exit 1 }
+          "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Configure
         shell: powershell
         run: |
           $nsis = Get-Command makensis -ErrorAction SilentlyContinue
           $flag = if ($null -ne $nsis) { "ON" } else { "OFF" }
-          cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag" "-DVOX_UI_BUILD_SHOWCASE=ON"
+          cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag" "-DVOX_UI_BUILD_SHOWCASE=ON" "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
         run: cmake --build build --config Release --clean-first --parallel
