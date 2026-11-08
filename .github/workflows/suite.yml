@@ -43,7 +43,7 @@ jobs:
       - name: Build the Steinberg VST3 validator (cached per SDK commit)
         shell: powershell
         run: |
-          $build = Join-Path $env:RUNNER_TOOL_CACHE "vox-pinned\vst3sdk-build-$env:VST3SDK_COMMIT"
+          $build = Join-Path $env:RUNNER_TOOL_CACHE "vox-pinned\vst3sdk-build-$($env:VST3SDK_COMMIT.Substring(0, 12))"
           $validator = Join-Path $build 'bin\Release\validator.exe'
           if (-not (Test-Path $validator)) {
             cmake -S $env:VST3SDK_DIR -B $build -A x64 -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF
