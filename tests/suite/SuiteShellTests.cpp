@@ -4,6 +4,10 @@
 // transactional VOXS state contract.
 #include "Processor.h"
 
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+#include "AllocationProbe.h"
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +15,7 @@
 
 namespace {
 int failures = 0;
+unsigned long probedAllocations = 0;
 
 void check (bool condition, const juce::String& what)
 {
@@ -100,7 +105,13 @@ void testLifecycle()
                     midi.addEvent (juce::MidiMessage::allSoundOff (1), size / 2);
                     sent += 4;
                 }
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+                voxProbeBegin();
                 p->processBlock (buffer, midi);
+                probedAllocations += voxProbeEnd();
+#else
+                p->processBlock (buffer, midi);
+#endif
 
                 bool silentAndFinite = true;
                 for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
@@ -114,6 +125,11 @@ void testLifecycle()
             p->releaseResources();
         }
     }
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+    if (voxProbeAvailable())
+        check (probedAllocations == 0, "processBlock allocates nothing on the audio thread ("
+                                           + juce::String (static_cast<juce::int64> (probedAllocations)) + " calls)");
+#endif
 }
 
 void testEditor()

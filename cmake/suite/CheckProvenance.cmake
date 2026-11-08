@@ -1,0 +1,35 @@
+# cmake -DROOT=<repo> -DCSV=<PROVENANCE.csv> -P CheckProvenance.cmake
+# Every file copied from legacy sources must still be byte-identical to the
+# reviewed source (SHA-256 recorded at port time). An intended change to a
+# ported file updates its row in the same reviewed commit, with before/after
+# golden evidence.
+file(STRINGS "${CSV}" rows)
+list(POP_FRONT rows)   # header
+set(errors "")
+set(count 0)
+foreach(row IN LISTS rows)
+  string(REPLACE "," ";" fields "${row}")
+  list(LENGTH fields n)
+  if(NOT n EQUAL 4)
+    list(APPEND errors "malformed row: ${row}")
+    continue()
+  endif()
+  list(GET fields 0 destination)
+  list(GET fields 1 source)
+  list(GET fields 2 commit)
+  list(GET fields 3 expected)
+  if(NOT EXISTS "${ROOT}/${destination}")
+    list(APPEND errors "${destination}: missing")
+    continue()
+  endif()
+  file(SHA256 "${ROOT}/${destination}" actual)
+  if(NOT actual STREQUAL expected)
+    list(APPEND errors "${destination}: SHA-256 ${actual} differs from ${source}@${commit} (${expected})")
+  endif()
+  math(EXPR count "${count} + 1")
+endforeach()
+if(errors)
+  list(JOIN errors "\n" text)
+  message(FATAL_ERROR "${text}")
+endif()
+message(STATUS "provenance: ${count} files identical to their reviewed sources")
