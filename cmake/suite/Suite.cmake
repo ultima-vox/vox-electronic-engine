@@ -8,5 +8,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/SuiteIdentity.cmake)
 set_target_properties(vox_ui PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(libs/vox-preset)
+add_subdirectory(libs/vox-dsp)
+add_subdirectory(libs/vox-testkit)
 add_subdirectory(products)
 add_subdirectory(tests/suite)

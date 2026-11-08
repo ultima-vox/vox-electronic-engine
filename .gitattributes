@@ -1,0 +1,7 @@
+# Files whose SHA-256 is recorded in docs/ultima-vox-music/PROVENANCE.csv must
+# check out byte-identical on every OS (no CRLF conversion on Windows), or
+# suite_provenance cannot prove they equal their reviewed sources.
+libs/vox-dsp/** text eol=lf
+libs/vox-testkit/probe/** text eol=lf
+libs/vox-ui/** text eol=lf
+tests/suite/donor/** text eol=lf

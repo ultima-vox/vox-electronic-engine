@@ -1,7 +1,7 @@
 # cmake -DROOT=<repo> -P CheckBoundaries.cmake
 # Suite code must not include legacy Rack / instrument ABI / .vins headers or
 # the legacy plugin shell (06_CLAUDE_EXECUTION_BRIEF.md §1, FOUND-00 §3.2).
-set(dirs products libs/vox-preset tests/suite)
+set(dirs products libs/vox-preset libs/vox-dsp libs/vox-testkit tests/suite)
 set(forbidden
   "rack/" "instrument/" "vins/" "native/" "VoxModuleAbi" "InstrumentAbi"
   "apps/vst3" "PluginProcessor.h" "PluginEditor.h")

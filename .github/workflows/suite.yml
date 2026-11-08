@@ -63,7 +63,13 @@ jobs:
         run: cmake --build build-suite --config Release --clean-first --parallel
 
       - name: Test (label suite)
-        run: ctest --test-dir build-suite -C Release -L suite --output-on-failure
+        shell: powershell
+        run: |
+          # Golden renders are also written as WAV files for listening (artifact).
+          New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
+          $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          ctest --test-dir build-suite -C Release -L suite --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Steinberg VST3 validator
         shell: powershell

@@ -25,6 +25,53 @@ add_test(NAME suite_identity_doc
   COMMAND ${CMAKE_COMMAND} "-DDOC=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/IDENTITY.md"
           "-DEXPECTED=${identity_expected}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckIdentityDoc.cmake)
 
+add_test(NAME suite_provenance
+  COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}"
+          "-DCSV=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/PROVENANCE.csv"
+          -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckProvenance.cmake)
+
+# Donor tests, byte-identical to f9c8bc6 (PROVENANCE.csv), now run against
+# the vox_dsp copy.
+add_executable(suite_effects_tests donor/EffectsChainTests.cpp)
+target_link_libraries(suite_effects_tests PRIVATE vox_dsp)
+add_test(NAME suite_effects_tests COMMAND suite_effects_tests)
+
+add_executable(suite_effects_tail_policy_tests donor/EffectsTailPolicyTests.cpp)
+target_link_libraries(suite_effects_tail_policy_tests PRIVATE vox_dsp)
+add_test(NAME suite_effects_tail_policy_tests COMMAND suite_effects_tail_policy_tests)
+
+# The allocation probe proves itself first (every allocation path on the
+# probed thread is counted, other threads are not), then measures.
+if(VOX_SUITE_ALLOCATION_PROBE)
+  add_library(vox_suite_allocation_canary SHARED donor/AllocationCanary.c)
+  set_target_properties(vox_suite_allocation_canary PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
+  if(MSVC)
+    set_property(TARGET vox_suite_allocation_canary PROPERTY
+      MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
+  add_executable(suite_allocation_probe_tests donor/AllocationProbeTests.cpp)
+  vox_suite_add_allocation_probe(suite_allocation_probe_tests)
+  add_dependencies(suite_allocation_probe_tests vox_suite_allocation_canary)
+  if(WIN32)
+    target_link_libraries(suite_allocation_probe_tests PRIVATE ole32)
+  else()
+    find_package(Threads REQUIRED)
+    target_link_libraries(suite_allocation_probe_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+  endif()
+  add_test(NAME suite_allocation_probe_tests
+    COMMAND suite_allocation_probe_tests $<TARGET_FILE:vox_suite_allocation_canary>)
+endif()
+
+add_executable(suite_primitives_tests PrimitivesTests.cpp)
+target_link_libraries(suite_primitives_tests PRIVATE vox_dsp vox_testkit)
+add_test(NAME suite_primitives_tests COMMAND suite_primitives_tests)
+
+add_executable(suite_effects_golden_tests EffectsGoldenTests.cpp)
+target_link_libraries(suite_effects_golden_tests PRIVATE vox_dsp vox_testkit)
+vox_suite_add_allocation_probe(suite_effects_golden_tests)
+add_test(NAME suite_effects_golden_tests
+  COMMAND suite_effects_golden_tests ${CMAKE_CURRENT_SOURCE_DIR}/golden/effects-chain-v1.csv)
+
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)
 
@@ -33,6 +80,7 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
   set(test suite_shell_tests_${key})
   add_executable(${test} SuiteShellTests.cpp)
   target_link_libraries(${test} PRIVATE ${product})
+  vox_suite_add_allocation_probe(${test})
   # The plugin shared-code library already contains the JUCE modules; the
   # test only needs their headers (same pattern as the legacy shell tests).
   target_include_directories(${test} PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
