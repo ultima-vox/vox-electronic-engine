@@ -7,7 +7,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
+#include <barrier>
 #include <memory>
+#include <thread>
 
 namespace {
 int failures = 0;
@@ -203,6 +206,88 @@ void testState()
     check (extra != nullptr && extra->data.size() == 1 && extra->data[0] == std::byte { 7 },
            "unknown section preserved on save");
 }
+
+// Review 6724525306 P1: concurrent restore (A/B), editor resize and save.
+// Every saved document must be one committed state: the UI pair and the
+// extension section of A or B as restored, or a resize pair (both values from
+// one resize) with whichever extension was committed. No torn width/height,
+// no UI of A with the extension of B, and every save round-trips exactly.
+void testConcurrentState()
+{
+    const auto tag = vox::preset::makeTag (VOX_TEST_STATE_TAG);
+    const auto withExtension = [&] (std::uint32_t w, std::uint32_t h, std::byte marker) {
+        auto document = documentWithUi (tag, 1, w, h);
+        document.sections.push_back ({ vox::preset::makeTag ("ZZZZ"), { marker } });
+        return encoded (document);
+    };
+    const auto stateA = withExtension (1400, 900, std::byte { 0xA });
+    const auto stateB = withExtension (1100, 720, std::byte { 0xB });
+
+    auto p = makeProcessor();
+    p->setStateInformation (stateA.getData(), static_cast<int> (stateA.getSize()));
+
+    constexpr int rounds = 20000;
+    std::atomic<bool> stop { false };
+    std::barrier start (3);
+    std::thread restorer ([&] {
+        start.arrive_and_wait();
+        for (int i = 0; i < rounds && ! stop; ++i)
+        {
+            const auto& blob = (i & 1) ? stateB : stateA;
+            p->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+        }
+    });
+    std::thread resizer ([&] {
+        start.arrive_and_wait();
+        for (int i = 0; i < rounds && ! stop; ++i)
+            p->setEditorSize ((i & 1) ? 1250 : 1300, (i & 1) ? 780 : 800);
+    });
+
+    start.arrive_and_wait();
+    int bad = 0, saves = 0;
+    auto fresh = makeProcessor();
+    for (; saves < rounds && bad == 0; ++saves)
+    {
+        const auto saved = stateOf (*p);
+        const auto doc = vox::preset::decode (
+            std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()), tag, 1);
+        const auto* ui = doc.ok() ? doc.document.find (vox::suite::uiSectionTag) : nullptr;
+        const auto* extra = doc.ok() ? doc.document.find (vox::preset::makeTag ("ZZZZ")) : nullptr;
+        if (ui == nullptr || extra == nullptr || extra->data.size() != 1)
+        {
+            ++bad;
+            break;
+        }
+        std::uint32_t w = 0, h = 0;
+        for (std::size_t i = 0; i < 4; ++i)
+        {
+            w |= std::to_integer<std::uint32_t> (ui->data[i]) << (8 * i);
+            h |= std::to_integer<std::uint32_t> (ui->data[4 + i]) << (8 * i);
+        }
+        const auto marker = extra->data[0];
+        const bool restoredA = w == 1400 && h == 900 && marker == std::byte { 0xA };
+        const bool restoredB = w == 1100 && h == 720 && marker == std::byte { 0xB };
+        const bool resized = ((w == 1300 && h == 800) || (w == 1250 && h == 780))
+                          && (marker == std::byte { 0xA } || marker == std::byte { 0xB });
+        if (! (restoredA || restoredB || resized))
+        {
+            std::printf ("torn state saved: %u x %u with extension %X\n", w, h,
+                         std::to_integer<unsigned> (marker));
+            ++bad;
+        }
+        if ((saves & 63) == 0)
+        {
+            fresh->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+            if (fresh->lastStateError().isNotEmpty() || stateOf (*fresh) != saved)
+                ++bad;
+        }
+    }
+    stop = true;
+    restorer.join();
+    resizer.join();
+    check (bad == 0, "concurrent restore/resize/save produced only committed states ("
+                         + juce::String (saves) + " saves)");
+}
 } // namespace
 
 int main()
@@ -212,6 +297,7 @@ int main()
     testLifecycle();
     testEditor();
     testState();
+    testConcurrentState();
     if (failures == 0)
         std::printf ("%s shell tests passed\n", VOX_TEST_PRODUCT_NAME);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

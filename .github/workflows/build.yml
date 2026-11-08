@@ -30,7 +30,7 @@ jobs:
         run: |
           $nsis = Get-Command makensis -ErrorAction SilentlyContinue
           $flag = if ($null -ne $nsis) { "ON" } else { "OFF" }
-          cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag" "-DVOX_UI_BUILD_SHOWCASE=ON" "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          cmake -S . -B build -A x64 "-DVOX_ENABLE_NSIS=$flag" "-DVOX_UI_BUILD_SHOWCASE=ON" -DVOX_BUILD_LEGACY=ON -DVOX_BUILD_SUITE=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build

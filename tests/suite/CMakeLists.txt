@@ -55,5 +55,18 @@ endforeach()
 add_test(NAME suite_moduleinfo
   COMMAND ${CMAKE_COMMAND} "-DBUNDLES=${bundles}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckModuleInfo.cmake)
 
+
+# Review 6724525306 P2: the pinned-dependency check. Strict mode refuses a
+# wrong commit and an unverifiable source; non-strict refuses a wrong commit
+# and only warns for an unverifiable one.
+foreach(case strict-pinned strict-wrong-commit strict-no-metadata relaxed-no-metadata relaxed-wrong-commit)
+  add_test(NAME suite_verify_juce_${case}
+    COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -DCASE=${case}
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/verify-fixtures" "-DJUCE_DIR=${juce_SOURCE_DIR}"
+            -DCOMMIT=${VOX_JUCE_COMMIT} -P ${CMAKE_CURRENT_SOURCE_DIR}/VerifyPinnedSourceCase.cmake)
+endforeach()
+set_tests_properties(suite_verify_juce_strict-wrong-commit suite_verify_juce_strict-no-metadata
+                     suite_verify_juce_relaxed-wrong-commit PROPERTIES WILL_FAIL TRUE)
+
 get_property(suite_tests DIRECTORY PROPERTY TESTS)
 set_tests_properties(${suite_tests} PROPERTIES LABELS suite)
