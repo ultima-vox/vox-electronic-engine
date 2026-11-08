@@ -11,6 +11,45 @@ FetchContent_Declare(JUCE
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# The JUCE checkout must be exactly the reviewed 9.0.1 commit, whether it was
+# cloned by FetchContent or supplied through FETCHCONTENT_SOURCE_DIR_JUCE (the
+# suite CI uses a verified local copy on the runner). A tag can move; a commit
+# cannot.
+set(VOX_JUCE_COMMIT e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8)
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${juce_SOURCE_DIR}/.git")
+  execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${juce_SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE vox_juce_head OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE vox_juce_rev_result)
+  if(NOT vox_juce_rev_result EQUAL 0 OR NOT vox_juce_head STREQUAL VOX_JUCE_COMMIT)
+    message(FATAL_ERROR "JUCE at ${juce_SOURCE_DIR} is '${vox_juce_head}', expected ${VOX_JUCE_COMMIT}")
+  endif()
+  message(STATUS "JUCE commit verified: ${vox_juce_head}")
+else()
+  message(WARNING "JUCE commit not verified: git or ${juce_SOURCE_DIR}/.git missing")
+endif()
+
+# Two independent builds share this tree:
+#  - VOX_BUILD_LEGACY: the archived Vox Electronic Engine / Rack shell and its
+#    tests, unchanged (CI: .github/workflows/build.yml).
+#  - VOX_BUILD_SUITE: the three standalone ULTIMA VOX MUSIC VST3 instruments
+#    (CI: .github/workflows/suite.yml, configured with VOX_BUILD_LEGACY=OFF).
+# Legacy sources are not moved; the suite never links a legacy target.
+option(VOX_BUILD_LEGACY "Build the legacy Vox Electronic Engine and its tests" ON)
+option(VOX_BUILD_SUITE "Build the ULTIMA VOX MUSIC standalone plugins" ON)
+
+enable_testing()
+
+# Shared VOX design-system primitives, used by both builds. It must never
+# depend on product UI or DSP targets.
+add_subdirectory(libs/vox-ui)
+
+if(VOX_BUILD_SUITE)
+  include(cmake/suite/Suite.cmake)
+endif()
+
+if(VOX_BUILD_LEGACY)
+
 # ---------------------------------------------------------------------------
 # Modular architecture (issue #11).
 #
@@ -150,9 +189,7 @@ add_library(vst_generator STATIC
 target_include_directories(vst_generator PUBLIC ${VST_LIBS_DIR})
 target_link_libraries(vst_generator PUBLIC vst_parts)
 
-# shared VOX design-system primitives. Product UI may depend on this target;
-# the shared target must never depend on product UI or DSP targets.
-add_subdirectory(libs/vox-ui)
+# libs/vox-ui is added above, before the legacy block.
 
 # ui: reusable JUCE components and tab pages.
 add_library(vst_ui STATIC
@@ -422,3 +459,5 @@ set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64/Common Files/VST3")
 include(CPack)
+
+endif() # VOX_BUILD_LEGACY

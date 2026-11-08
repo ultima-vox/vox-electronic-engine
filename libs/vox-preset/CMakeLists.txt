@@ -1,0 +1,10 @@
+# vox_preset: versioned, product-tagged state container (VOXS). JUCE-free.
+add_library(vox_preset STATIC StateContainer.cpp StateContainer.h)
+target_include_directories(vox_preset PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(vox_preset PUBLIC cxx_std_20)
+set_target_properties(vox_preset PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+  target_compile_options(vox_preset PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(vox_preset PRIVATE -Wall -Wextra -Wpedantic)
+endif()

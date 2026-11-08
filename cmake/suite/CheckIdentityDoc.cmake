@@ -1,0 +1,17 @@
+# cmake -DDOC=<IDENTITY.md> -DEXPECTED="code|bundle|cid;..." -P CheckIdentityDoc.cmake
+# IDENTITY.md must state exactly the frozen values from SuiteIdentity.cmake.
+file(READ "${DOC}" text)
+set(missing "")
+foreach(entry IN LISTS EXPECTED)
+  string(REPLACE "|" ";" fields "${entry}")
+  foreach(value IN LISTS fields)
+    string(FIND "${text}" "${value}" at)
+    if(at EQUAL -1)
+      list(APPEND missing "${value}")
+    endif()
+  endforeach()
+endforeach()
+if(missing)
+  message(FATAL_ERROR "IDENTITY.md does not state: ${missing}")
+endif()
+message(STATUS "IDENTITY.md matches SuiteIdentity.cmake")
