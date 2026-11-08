@@ -1,0 +1,52 @@
+Product,Requirement,Planned_implementation,Acceptance_evidence,Priority,Status
+COMMON,Three independent VST3 products,"3 juce_add_plugin targets, unique identities",VST3 validator + host scan loads three products independently,P0,PROPOSED
+COMMON,No Rack runtime,No 16-slot graph/.vins loader/host-only ABI in new processors,Linkage and dependency inspection,P0,PROPOSED
+COMMON,Reusable C++20 DSP,JUCE-free common libs statically linked,"C++ core unit tests, golden render",P0,PROPOSED
+COMMON,Realtime safety,"Preallocate, bounded queues, no malloc/free/lock/IO in process",Windows callback allocation probe + stress,P0,PROPOSED
+COMMON,Safe state handoff,Immutable prepared snapshots/deferred retirement,Concurrent program/sample swap under render + ASan/TSan where possible,P0,PROPOSED
+COMMON,MIDI lifecycle,"Own notes, NoteOff, CC120, CC123, Stop/seek/loop",Host+unit tests on all note paths,P0,PROPOSED
+COMMON,Host parameter compatibility,Stable IDs and verified begin/change/end gestures,DAW automation write/read/reload,P0,PROPOSED
+COMMON,State versioning,Transactional load/restore by schema and product,Invalid/newer state rejection + valid roundtrip,P0,PROPOSED
+COMMON,No misleading UI,Every control real behavior + telemetry,"Control-DSP trace, Visual Gate and UI tests",P0,PROPOSED
+COMMON,RT performance,"p50/p95/p99/p99.9/max and deadlines, actual target CPU",Controlled Windows benchmark + exact run SHAs,P1,PROPOSED
+COMMON,Signing/licences,"JUCE review, code signing, legal content manifest","Release checklist, binary signature + SPDX",P0,PROPOSED
+COMMON,Custom JUCE LookAndFeel,Shared VoxLookAndFeel + product-specific editors,Default JUCE widgets visually absent in screenshots,P1,PROPOSED
+COMMON,Editor DPI scaling,responsive layout 100/125/150/200%,Automated screenshots and manual interaction,P1,PROPOSED
+COMMON,Legacy source preservation,Archive tag + donor source SHA audit,"Tag ref, reuse matrix, no deleted PR bases",P0,PROPOSED
+SYNTHESIS,Two-part synthesizer,"A/B parts, modes VA/PsyBass/Acid",A/B independent voice and render tests,P0,PROPOSED
+SYNTHESIS,Oscillator specification,3 VA osc + sub + noise per voice,Waveform alias and detune A/B renders,P0,PROPOSED
+SYNTHESIS,Dual filters,2 multimode filters per VA voice,Cutoff sweep resonance stress stable,P0,PROPOSED
+SYNTHESIS,Acid 303 mode,Mono 1-osc accent/slide filter engine,Acid render/NoteOff/legato regression,P0,PROPOSED
+SYNTHESIS,Psy Bass mode,Reuse FullOnBass/PsyBassVoice with parity,Golden bass render and no stuck beep,P0,PROPOSED
+SYNTHESIS,Voices/unison,"16 default up to32 notes, 1-4 unison",Voice steal/memory/CPU stress,P0,PROPOSED
+SYNTHESIS,Modulation,4 LFO/part + 4 env/part +32 routes/part,Mod/no host-base overwrite tests,P0,PROPOSED
+SYNTHESIS,Sequencer,"2 lanes, max64 steps/bar, max4 bars",MIDI render/export and Stop/loop parity,P0,PROPOSED
+SYNTHESIS,Sound generation,Seeded style/role patches + locks,Same seed same patch/output; audible taxonomy,P0,PROPOSED
+SYNTHESIS,Pattern generator,Stylistic bass/acid/leads/keys generation,Phrase/music rule tests + SMF validator,P0,PROPOSED
+SYNTHESIS,Factory patches,"48 audible presets, 20 phrases","Audio renders, license manifest, review",P1,PROPOSED
+SYNTHESIS,UI workspaces,Bass/Acid/Synth/Seq/Mod/FX/Presets,Real editor Control-DSP trace,P0,PROPOSED
+DRUMS,16 working pads,"Extend proven 8→16, all audible",All pad note-map and output tests,P0,PROPOSED
+DRUMS,Eight per-pad algorithms,Kick/Snare/Clap/Hat/Tom/Rim/Cymbal/Perc,8 model ×16 pad render matrix,P0,PROPOSED
+DRUMS,Pad synthesis,2 tonal + noise + transient,Pitch/transient/filter render tests,P0,PROPOSED
+DRUMS,Two sample layers,Sample A/B velocity mix + Synth/Sample/Layer,Sample swap lifetime/recall tests,P0,PROPOSED
+DRUMS,64 global voices,Bounded max64 and 8 per pad,Overflow/steal deterministic tests,P0,PROPOSED
+DRUMS,Pad filter,1 multimode/pad,Sweep and automation tests,P0,PROPOSED
+DRUMS,Drum sequencer,"16 lanes, max64 steps/bar x4 bars",Ratchet/velocity/probability/export parity,P0,PROPOSED
+DRUMS,Pattern generator,"7 genre profiles, locks/fills/humanize",Distinct generated patterns from seed,P0,PROPOSED
+DRUMS,Multiout,Main+8 stereo outs,Cubase/REAPER bus activation/offline bounce,P0,PROPOSED
+DRUMS,FX sends/returns,2 shared returns and tails,Mute/solo send/return tail tests,P0,PROPOSED
+DRUMS,Legal kits,3 distinct styles min + licensed assets,Render musical review + asset manifest,P1,PROPOSED
+DRUMS,Drums GUI,"4x4 pad editor, sample waveform, mixer, pattern",16-pad interaction and DPI audit,P0,PROPOSED
+FX,12 sound families,Separate verified DSP algorithms,12-family golden render and spectrum analysis,P0,PROPOSED
+FX,4 sound layers,4 parallel layers with typed curves,Independent layer audition and restorable timeline,P0,PROPOSED
+FX,8 active events,"Bounded event allocator, retrigger modes",Steal/Panic/NoteOff exact timing tests,P0,PROPOSED
+FX,Oscillators/filters,Up to 2 bandlimited osc+sub+noise and2 filters/layer,Aliasing/stability and CPU tests,P0,PROPOSED
+FX,20 editable envelopes,16 nodes max; exp/smoothstep/linear/hold,Correct interpolation/undo/reopen,P0,PROPOSED
+FX,64 global grains,Shared preallocated granular pool,Max-load/ownership/denormal tests,P0,PROPOSED
+FX,64 modulation routes,Per-source typed bounded target mappings,No cycle and correct modulation tests,P0,PROPOSED
+FX,4 FX stages,Real reverb/delay/drive/mod effects,"No fake bypass, tails, latency tested",P0,PROPOSED
+FX,Seeded Generate,Category/energy/complexity/time/locks,Repeatable program and audio render,P0,PROPOSED
+FX,48 factory programs,">=4 per each family, audible",Non-silent distinct golden renders,P1,PROPOSED
+FX,Timeline and meters,"Custom JUCE curve/timeline, real telemetry",Actual DSP state integration checks,P0,PROPOSED
+FX,Offline WAV export,Same DSP offline render with correct tail,Waveform compare to playback,P0,PROPOSED
+FX,MIDI trigger/export,One timing source and NoteOn/Off parity,Export/host loop/seek tests,P0,PROPOSED
