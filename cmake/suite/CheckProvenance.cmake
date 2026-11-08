@@ -24,14 +24,22 @@ foreach(row IN LISTS rows)
   endif()
   file(SHA256 "${ROOT}/${destination}" actual)
   if(NOT actual STREQUAL expected)
-    # Distinguish a checkout that converted line endings from a real change.
-    file(READ "${ROOT}/${destination}" content HEX)
-    string(REPLACE "0d0a" "0a" lf "${content}")
-    set(hint "")
-    if(NOT lf STREQUAL content)
-      set(hint " (the file has CRLF line endings: the checkout converted them; .gitattributes must keep this path eol=lf)")
+    # A checkout may have written this text file with CRLF (Windows
+    # core.autocrlf on a working tree created before .gitattributes pinned
+    # eol=lf: git does not rewrite files whose blob is unchanged). The
+    # repository content is LF; every donor is stored without CR (git
+    # ls-files --eol: i/lf). Normalising CRLF to LF therefore recovers exactly
+    # the repository bytes, and any real edit still changes the hash.
+    file(READ "${ROOT}/${destination}" content)
+    string(REPLACE "\r\n" "\n" lf "${content}")
+    string(SHA256 normalized "${lf}")
+    if(normalized STREQUAL expected)
+      message(STATUS "${destination}: identical to ${source}@${commit} after CRLF->LF (checkout line endings)")
+      set(actual "${expected}")
     endif()
-    list(APPEND errors "${destination}: SHA-256 ${actual} differs from ${source}@${commit} (${expected})${hint}")
+  endif()
+  if(NOT actual STREQUAL expected)
+    list(APPEND errors "${destination}: SHA-256 ${actual} differs from ${source}@${commit} (${expected})")
   endif()
   math(EXPR count "${count} + 1")
 endforeach()
