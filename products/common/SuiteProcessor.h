@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace vox::suite {
@@ -96,23 +97,31 @@ public:
     //==========================================================================
     // State schema 1: UIST (u32 width, u32 height). Unknown sections are kept
     // and written back unchanged, so a newer minor writer loses nothing.
+    //
+    // Every saveable field lives in one SaveableState guarded by stateLock_
+    // (message/host threads only, never the audio thread). Save copies the
+    // whole state in one critical section; restore and editor resize commit
+    // in one critical section. A saved document is therefore always one
+    // committed state, never a mix of two (review 6724525306, P1).
     void getStateInformation (juce::MemoryBlock& destination) override
     {
+        SaveableState snapshot;
+        {
+            const juce::ScopedLock lock (stateLock_);
+            snapshot = saved_;
+        }
+
         preset::StateDocument document;
         document.product = info_.stateTag;
         document.schema = info_.stateSchema;
 
         preset::Section ui;
         ui.tag = uiSectionTag;
-        appendU32 (ui.data, static_cast<std::uint32_t> (editorWidth_.load()));
-        appendU32 (ui.data, static_cast<std::uint32_t> (editorHeight_.load()));
+        appendU32 (ui.data, static_cast<std::uint32_t> (snapshot.editorWidth));
+        appendU32 (ui.data, static_cast<std::uint32_t> (snapshot.editorHeight));
         document.sections.push_back (std::move (ui));
-
-        {
-            const juce::ScopedLock lock (stateLock_);
-            for (const auto& section : preservedSections_)
-                document.sections.push_back (section);
-        }
+        for (auto& section : snapshot.preserved)
+            document.sections.push_back (std::move (section));
 
         if (const auto bytes = preset::encode (document))
             destination.replaceAll (bytes->data(), bytes->size());
@@ -148,17 +157,20 @@ public:
             return;
         }
 
-        std::vector<preset::Section> preserved;
+        SaveableState next;
+        next.editorWidth = static_cast<int> (width);
+        next.editorHeight = static_cast<int> (height);
         for (auto& section : decoded.document.sections)
             if (section.tag != uiSectionTag)
-                preserved.push_back (std::move (section));
+                next.preserved.push_back (std::move (section));
 
-        // Commit.
-        editorWidth_.store (static_cast<int> (width));
-        editorHeight_.store (static_cast<int> (height));
-        const juce::ScopedLock lock (stateLock_);
-        preservedSections_ = std::move (preserved);
-        lastStateError_.clear();
+        // Commit: one critical section; the previous state is destroyed after
+        // the lock is released.
+        {
+            const juce::ScopedLock lock (stateLock_);
+            std::swap (saved_, next);
+            lastStateError_.clear();
+        }
     }
 
     //==========================================================================
@@ -172,16 +184,23 @@ public:
     double preparedSampleRate() const noexcept { return preparedSampleRate_; }
     int preparedBlockSize() const noexcept { return preparedBlockSize_; }
 
-    int editorWidth() const noexcept { return editorWidth_.load(); }
-    int editorHeight() const noexcept { return editorHeight_.load(); }
-
-    void setEditorSize (int width, int height) noexcept
+    // Width and height are read and written as one pair.
+    std::pair<int, int> editorSize() const
     {
-        if (EditorLimits::valid (static_cast<std::uint32_t> (width), static_cast<std::uint32_t> (height)))
-        {
-            editorWidth_.store (width);
-            editorHeight_.store (height);
-        }
+        const juce::ScopedLock lock (stateLock_);
+        return { saved_.editorWidth, saved_.editorHeight };
+    }
+
+    int editorWidth() const { return editorSize().first; }
+    int editorHeight() const { return editorSize().second; }
+
+    void setEditorSize (int width, int height)
+    {
+        if (! EditorLimits::valid (static_cast<std::uint32_t> (width), static_cast<std::uint32_t> (height)))
+            return;
+        const juce::ScopedLock lock (stateLock_);
+        saved_.editorWidth = width;
+        saved_.editorHeight = height;
     }
 
 private:
@@ -209,12 +228,15 @@ private:
     double preparedSampleRate_ = 0.0;
     int preparedBlockSize_ = 0;
     std::atomic<std::uint64_t> midiEventsSeen_ { 0 };
-    std::atomic<int> editorWidth_ { EditorLimits::defaultWidth };
-    std::atomic<int> editorHeight_ { EditorLimits::defaultHeight };
+    struct SaveableState {
+        int editorWidth = EditorLimits::defaultWidth;
+        int editorHeight = EditorLimits::defaultHeight;
+        std::vector<preset::Section> preserved;
+    };
 
-    // Message/host thread only; never taken on the audio thread.
+    // Message/host threads only; never taken on the audio thread.
     juce::CriticalSection stateLock_;
-    std::vector<preset::Section> preservedSections_;
+    SaveableState saved_;
     juce::String lastStateError_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuiteProcessor)
@@ -243,7 +265,8 @@ inline vox::suite::SuiteEditor::SuiteEditor (SuiteProcessor& owner)
     setResizable (true, true);
     setResizeLimits (EditorLimits::minWidth, EditorLimits::minHeight,
                      EditorLimits::maxWidth, EditorLimits::maxHeight);
-    setSize (owner.editorWidth(), owner.editorHeight());
+    const auto [width, height] = owner.editorSize();
+    setSize (width, height);
 }
 
 inline void vox::suite::SuiteEditor::resized()

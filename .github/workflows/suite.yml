@@ -56,7 +56,7 @@ jobs:
       - name: Configure (suite only)
         shell: powershell
         run: |
-          cmake -S . -B build-suite -A x64 -DVOX_BUILD_LEGACY=OFF "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build

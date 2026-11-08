@@ -12,31 +12,29 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 # The JUCE checkout must be exactly the reviewed 9.0.1 commit, whether it was
-# cloned by FetchContent or supplied through FETCHCONTENT_SOURCE_DIR_JUCE (the
-# suite CI uses a verified local copy on the runner). A tag can move; a commit
-# cannot.
+# cloned by FetchContent or supplied through FETCHCONTENT_SOURCE_DIR_JUCE (CI
+# uses a verified local copy on the runner). A tag can move; a commit cannot.
+# CI and release builds use VOX_STRICT_DEPENDENCIES=ON, which also refuses a
+# source that cannot be verified (no git, no .git metadata).
+option(VOX_STRICT_DEPENDENCIES "Refuse dependency sources that cannot be verified against their pinned commit" OFF)
 set(VOX_JUCE_COMMIT e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8)
-find_package(Git QUIET)
-if(GIT_FOUND AND EXISTS "${juce_SOURCE_DIR}/.git")
-  execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${juce_SOURCE_DIR}" rev-parse HEAD
-    OUTPUT_VARIABLE vox_juce_head OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE vox_juce_rev_result)
-  if(NOT vox_juce_rev_result EQUAL 0 OR NOT vox_juce_head STREQUAL VOX_JUCE_COMMIT)
-    message(FATAL_ERROR "JUCE at ${juce_SOURCE_DIR} is '${vox_juce_head}', expected ${VOX_JUCE_COMMIT}")
-  endif()
-  message(STATUS "JUCE commit verified: ${vox_juce_head}")
-else()
-  message(WARNING "JUCE commit not verified: git or ${juce_SOURCE_DIR}/.git missing")
-endif()
+include(cmake/suite/VerifyPinnedSource.cmake)
+vox_verify_pinned_source(JUCE "${juce_SOURCE_DIR}" ${VOX_JUCE_COMMIT} ${VOX_STRICT_DEPENDENCIES})
 
-# Two independent builds share this tree:
-#  - VOX_BUILD_LEGACY: the archived Vox Electronic Engine / Rack shell and its
-#    tests, unchanged (CI: .github/workflows/build.yml).
-#  - VOX_BUILD_SUITE: the three standalone ULTIMA VOX MUSIC VST3 instruments
-#    (CI: .github/workflows/suite.yml, configured with VOX_BUILD_LEGACY=OFF).
-# Legacy sources are not moved; the suite never links a legacy target.
-option(VOX_BUILD_LEGACY "Build the legacy Vox Electronic Engine and its tests" ON)
+# Two independent builds share this tree (docs/ultima-vox-music/BUILD.md):
+#  - VOX_BUILD_SUITE (default ON): the three standalone ULTIMA VOX MUSIC VST3
+#    instruments. CI: .github/workflows/suite.yml (suite ON, legacy OFF).
+#  - VOX_BUILD_LEGACY (default OFF): the archived Vox Electronic Engine / Rack
+#    shell and its tests, unchanged. CI: .github/workflows/build.yml (legacy
+#    ON, suite OFF).
+# Each CI job builds and tests exactly one of them, so a failure in one never
+# fails the other. Legacy sources are not moved; the suite never links a
+# legacy target.
 option(VOX_BUILD_SUITE "Build the ULTIMA VOX MUSIC standalone plugins" ON)
+option(VOX_BUILD_LEGACY "Build the legacy Vox Electronic Engine and its tests" OFF)
+if(NOT VOX_BUILD_SUITE AND NOT VOX_BUILD_LEGACY)
+  message(FATAL_ERROR "Nothing to build: enable VOX_BUILD_SUITE and/or VOX_BUILD_LEGACY")
+endif()
 
 enable_testing()
 
