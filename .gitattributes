@@ -5,3 +5,4 @@ libs/vox-dsp/** text eol=lf
 libs/vox-testkit/probe/** text eol=lf
 libs/vox-ui/** text eol=lf
 tests/suite/donor/** text eol=lf
+tests/suite/legacy-reference/** text eol=lf
