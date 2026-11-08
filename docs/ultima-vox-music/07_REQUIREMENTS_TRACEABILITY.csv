@@ -1,4 +1,4 @@
-Product,Requirement,Planned_implementation,Acceptance_evidence,Priority,Status
+﻿Product,Requirement,Planned_implementation,Acceptance_evidence,Priority,Status
 COMMON,Three independent VST3 products,"3 juce_add_plugin targets, unique identities",VST3 validator + host scan loads three products independently,P0,PROPOSED
 COMMON,No Rack runtime,No 16-slot graph/.vins loader/host-only ABI in new processors,Linkage and dependency inspection,P0,PROPOSED
 COMMON,Reusable C++20 DSP,JUCE-free common libs statically linked,"C++ core unit tests, golden render",P0,PROPOSED
