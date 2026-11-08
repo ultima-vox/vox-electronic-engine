@@ -1,0 +1,129 @@
+pool,id,name,unit,type,min,max,default,group,choices,description
+0,global.output,Output,dB,float,-48,6,0,Global,,Post-protection output trim of the instrument
+1,event.length_bars,Length (bars),bar,float,0.25,8,2,Global,,Event length when Sync = Bars
+2,event.length_seconds,Length (s),s,float,0.05,32,4,Global,,Event length when Sync = Seconds; event+tail capped by host tail limit (FX-00 C8)
+3,event.sync,Sync,,choice,0,1,0,Global,Bars|Seconds,Length unit
+4,trigger.retrigger,Retrigger,,choice,0,2,0,Global,Restart|Overlap|Ignore,A new NoteOn while an event plays
+5,trigger.noteoff,NoteOff,,choice,0,1,0,Global,One-shot|Gate,One-shot plays to its end; Gate releases on NoteOff
+6,trigger.velocity,Velocity Sens,,float,0,1,0.7,Global,,Velocity to event intensity
+7,pitch.transpose,Transpose,st,float,-24,24,0,Global,,Transposes pitched layers
+8,pitch.keytrack,Key Track,,float,0,1,1,Global,,How far the MIDI note moves pitched layers (0 = fixed)
+9,global.energy,Energy,,float,0,1,0.5,Global,,"Scales sweep depth, drive and brightness of all layers"
+10,tone.tilt,Tilt,,float,-1,1,0,Global,,Spectral tilt of the layer mix
+11,tone.lowcut,Low Cut,Hz,float,20,2000,20,Global,,High-pass on the layer mix
+12,tone.highcut,High Cut,Hz,float,1000,20000,20000,Global,,Low-pass on the layer mix
+13,global.width,Width,,float,0,2,1,Global,,Stereo width of the mix (1 = unchanged)
+14,global.drive,Drive,,float,0,1,0,Global,,Mix saturation before the insert chain
+15,global.curve_bias,Curve Bias,,float,-1,1,0,Global,,Bends every time curve earlier/later
+16,global.release,Release,s,float,0.005,10,0.25,Global,,Release time in Gate mode and on retrigger fades
+17,pump.depth,Pump Depth,,float,0,1,0,Global,,Tempo-synced volume pump on the mix
+18,pump.division,Pump Rate,,choice,0,5,2,Global,1/2|1/4|1/8|1/16|1/4T|1/8T,Pump period
+19,output.protect,Protection,,boolean,0,1,1,Global,,DC blocker + soft clipper; off = true bypass
+20,global.drift,Stereo Drift,,float,0,1,0.2,Global,,Slow seeded L/R movement
+21,global.motion,Motion,,float,0,1,1,Global,,Master depth of all modulation routes
+22,event.start,Start Position,,float,0,0.99,0,Global,,Event starts at this fraction of its timeline
+23,fx.tail,Tail,s,float,0,20,4,Global,,Insert-chain tail kept after the event ends; capped by the host tail limit
+24,a.on,A On,,boolean,0,1,1,Layer A,,Layer enable
+25,a.gain,A Gain,dB,float,-48,12,0,Layer A,,Layer level
+26,a.pan,A Pan,,float,-1,1,0,Layer A,,Layer pan (pan curve adds to it)
+27,a.width,A Width,,float,0,2,1,Layer A,,Layer stereo width
+28,a.pitch,A Pitch,st,float,-48,48,0,Layer A,,Layer pitch offset (pitch curve adds to it)
+29,a.fine,A Fine,ct,float,-100,100,0,Layer A,,Fine tune
+30,a.attack,A Attack,s,float,0,10,0.005,Layer A,,Amplitude attack (multiplies the amplitude curve)
+31,a.release,A Release,s,float,0.005,10,0.2,Layer A,,Amplitude release
+32,a.cutoff,A Cutoff,Hz,float,20,20000,20000,Layer A,,Layer filter cutoff (cutoff curve scales it)
+33,a.resonance,A Resonance,,float,0,1,0,Layer A,,"Layer filter resonance, bounded"
+34,a.sweep,A Sweep,,float,-1,1,0.5,Layer A,,Depth of the layer's family trajectory (rise/fall/chirp/pass-by)
+35,a.filter_env,A Filter Env,,float,-1,1,0,Layer A,,Cutoff curve depth
+36,a.offset,A Offset,,float,0,1,0,Layer A,,Layer start as a fraction of the event length (no pre-roll)
+37,a.length,A Length,,float,0.01,1,1,Layer A,,Layer duration as a fraction of the event length
+38,a.character,A Character,,float,0,1,0.5,Layer A,,"The family's primary colour control (fixed meaning per family, listed in FX-01 docs)"
+39,a.fx_send,A FX Send,,float,0,1,1,Layer A,,Share of the layer routed through the insert chain (rest bypasses it)
+40,b.on,B On,,boolean,0,1,0,Layer B,,Layer enable
+41,b.gain,B Gain,dB,float,-48,12,0,Layer B,,Layer level
+42,b.pan,B Pan,,float,-1,1,0,Layer B,,Layer pan (pan curve adds to it)
+43,b.width,B Width,,float,0,2,1,Layer B,,Layer stereo width
+44,b.pitch,B Pitch,st,float,-48,48,0,Layer B,,Layer pitch offset (pitch curve adds to it)
+45,b.fine,B Fine,ct,float,-100,100,0,Layer B,,Fine tune
+46,b.attack,B Attack,s,float,0,10,0.005,Layer B,,Amplitude attack (multiplies the amplitude curve)
+47,b.release,B Release,s,float,0.005,10,0.2,Layer B,,Amplitude release
+48,b.cutoff,B Cutoff,Hz,float,20,20000,20000,Layer B,,Layer filter cutoff (cutoff curve scales it)
+49,b.resonance,B Resonance,,float,0,1,0,Layer B,,"Layer filter resonance, bounded"
+50,b.sweep,B Sweep,,float,-1,1,0.5,Layer B,,Depth of the layer's family trajectory (rise/fall/chirp/pass-by)
+51,b.filter_env,B Filter Env,,float,-1,1,0,Layer B,,Cutoff curve depth
+52,b.offset,B Offset,,float,0,1,0,Layer B,,Layer start as a fraction of the event length (no pre-roll)
+53,b.length,B Length,,float,0.01,1,1,Layer B,,Layer duration as a fraction of the event length
+54,b.character,B Character,,float,0,1,0.5,Layer B,,"The family's primary colour control (fixed meaning per family, listed in FX-01 docs)"
+55,b.fx_send,B FX Send,,float,0,1,1,Layer B,,Share of the layer routed through the insert chain (rest bypasses it)
+56,c.on,C On,,boolean,0,1,0,Layer C,,Layer enable
+57,c.gain,C Gain,dB,float,-48,12,0,Layer C,,Layer level
+58,c.pan,C Pan,,float,-1,1,0,Layer C,,Layer pan (pan curve adds to it)
+59,c.width,C Width,,float,0,2,1,Layer C,,Layer stereo width
+60,c.pitch,C Pitch,st,float,-48,48,0,Layer C,,Layer pitch offset (pitch curve adds to it)
+61,c.fine,C Fine,ct,float,-100,100,0,Layer C,,Fine tune
+62,c.attack,C Attack,s,float,0,10,0.005,Layer C,,Amplitude attack (multiplies the amplitude curve)
+63,c.release,C Release,s,float,0.005,10,0.2,Layer C,,Amplitude release
+64,c.cutoff,C Cutoff,Hz,float,20,20000,20000,Layer C,,Layer filter cutoff (cutoff curve scales it)
+65,c.resonance,C Resonance,,float,0,1,0,Layer C,,"Layer filter resonance, bounded"
+66,c.sweep,C Sweep,,float,-1,1,0.5,Layer C,,Depth of the layer's family trajectory (rise/fall/chirp/pass-by)
+67,c.filter_env,C Filter Env,,float,-1,1,0,Layer C,,Cutoff curve depth
+68,c.offset,C Offset,,float,0,1,0,Layer C,,Layer start as a fraction of the event length (no pre-roll)
+69,c.length,C Length,,float,0.01,1,1,Layer C,,Layer duration as a fraction of the event length
+70,c.character,C Character,,float,0,1,0.5,Layer C,,"The family's primary colour control (fixed meaning per family, listed in FX-01 docs)"
+71,c.fx_send,C FX Send,,float,0,1,1,Layer C,,Share of the layer routed through the insert chain (rest bypasses it)
+72,d.on,D On,,boolean,0,1,0,Layer D,,Layer enable
+73,d.gain,D Gain,dB,float,-48,12,0,Layer D,,Layer level
+74,d.pan,D Pan,,float,-1,1,0,Layer D,,Layer pan (pan curve adds to it)
+75,d.width,D Width,,float,0,2,1,Layer D,,Layer stereo width
+76,d.pitch,D Pitch,st,float,-48,48,0,Layer D,,Layer pitch offset (pitch curve adds to it)
+77,d.fine,D Fine,ct,float,-100,100,0,Layer D,,Fine tune
+78,d.attack,D Attack,s,float,0,10,0.005,Layer D,,Amplitude attack (multiplies the amplitude curve)
+79,d.release,D Release,s,float,0.005,10,0.2,Layer D,,Amplitude release
+80,d.cutoff,D Cutoff,Hz,float,20,20000,20000,Layer D,,Layer filter cutoff (cutoff curve scales it)
+81,d.resonance,D Resonance,,float,0,1,0,Layer D,,"Layer filter resonance, bounded"
+82,d.sweep,D Sweep,,float,-1,1,0.5,Layer D,,Depth of the layer's family trajectory (rise/fall/chirp/pass-by)
+83,d.filter_env,D Filter Env,,float,-1,1,0,Layer D,,Cutoff curve depth
+84,d.offset,D Offset,,float,0,1,0,Layer D,,Layer start as a fraction of the event length (no pre-roll)
+85,d.length,D Length,,float,0.01,1,1,Layer D,,Layer duration as a fraction of the event length
+86,d.character,D Character,,float,0,1,0.5,Layer D,,"The family's primary colour control (fixed meaning per family, listed in FX-01 docs)"
+87,d.fx_send,D FX Send,,float,0,1,1,Layer D,,Share of the layer routed through the insert chain (rest bypasses it)
+88,fx1.on,FX1 On,,boolean,0,1,0,FX 1,,Slot enable (true bypass when off)
+89,fx1.type,FX1 Type,,choice,0,10,0,FX 1,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+90,fx1.mix,FX1 Mix,,float,0,1,0.3,FX 1,,Wet/dry
+91,fx1.trim,FX1 Output,dB,float,-24,12,0,FX 1,,Slot output trim
+92,fx2.on,FX2 On,,boolean,0,1,0,FX 2,,Slot enable (true bypass when off)
+93,fx2.type,FX2 Type,,choice,0,10,1,FX 2,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+94,fx2.mix,FX2 Mix,,float,0,1,0.3,FX 2,,Wet/dry
+95,fx2.trim,FX2 Output,dB,float,-24,12,0,FX 2,,Slot output trim
+96,fx3.on,FX3 On,,boolean,0,1,0,FX 3,,Slot enable (true bypass when off)
+97,fx3.type,FX3 Type,,choice,0,10,6,FX 3,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+98,fx3.mix,FX3 Mix,,float,0,1,0.3,FX 3,,Wet/dry
+99,fx3.trim,FX3 Output,dB,float,-24,12,0,FX 3,,Slot output trim
+100,fx4.on,FX4 On,,boolean,0,1,0,FX 4,,Slot enable (true bypass when off)
+101,fx4.type,FX4 Type,,choice,0,10,7,FX 4,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+102,fx4.mix,FX4 Mix,,float,0,1,0.3,FX 4,,Wet/dry
+103,fx4.trim,FX4 Output,dB,float,-24,12,0,FX 4,,Slot output trim
+104,lfo1.rate,LFO1 Rate,Hz,float,0.01,40,1,LFO 1,,Rate when Sync = Free
+105,lfo1.sync,LFO1 Sync,,choice,0,9,4,LFO 1,Free|1/1|1/2|1/4|1/8|1/16|1/32|1/4T|1/8T|1/16T,Tempo division (Free uses Rate)
+106,lfo1.depth,LFO1 Depth,,float,0,1,0,LFO 1,,Source scale applied to all its routes
+107,lfo1.shape,LFO1 Shape,,choice,0,4,0,LFO 1,Sine|Triangle|Saw Up|Saw Down|Square,Waveform
+108,lfo2.rate,LFO2 Rate,Hz,float,0.01,40,1,LFO 2,,Rate when Sync = Free
+109,lfo2.sync,LFO2 Sync,,choice,0,9,4,LFO 2,Free|1/1|1/2|1/4|1/8|1/16|1/32|1/4T|1/8T|1/16T,Tempo division (Free uses Rate)
+110,lfo2.depth,LFO2 Depth,,float,0,1,0,LFO 2,,Source scale applied to all its routes
+111,lfo2.shape,LFO2 Shape,,choice,0,4,0,LFO 2,Sine|Triangle|Saw Up|Saw Down|Square,Waveform
+112,step.division,Step Rate,,choice,0,9,5,Step Env,Free|1/1|1/2|1/4|1/8|1/16|1/32|1/4T|1/8T|1/16T,Step envelope division
+113,step.depth,Step Depth,,float,0,1,0,Step Env,,Step envelope source scale
+114,step.smooth,Step Smooth,,float,0,1,0.1,Step Env,,Glide between steps
+115,random.rate,Random Rate,,choice,0,9,5,Random,Free|1/1|1/2|1/4|1/8|1/16|1/32|1/4T|1/8T|1/16T,Sample&hold clock
+116,random.depth,Random Depth,,float,0,1,0,Random,,S&H source scale
+117,random.smooth,Random Smooth,,float,0,1,0,Random,,Slew of the held value
+118,follow.amount,Follower,,float,0,1,0,Follower,,Envelope follower of the generated mix (no external input)
+119,mod.amount,Mod Amount,,float,0,1,1,Modulation,,Global scale of modulation routes (with Motion)
+120,macro1,Macro 1,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+121,macro2,Macro 2,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+122,macro3,Macro 3,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+123,macro4,Macro 4,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+124,macro5,Macro 5,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+125,macro6,Macro 6,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+126,macro7,Macro 7,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
+127,macro8,Macro 8,,float,0,1,0,Macros,,"Macro value; destinations, ranges and curves in Program content"
