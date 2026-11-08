@@ -1,6 +1,9 @@
 # VOX FX — FX-00 audit and architecture proposal
 
-Status: **proposal for independent Architecture Guard / owner review**. No
+Status: **proposal for independent Architecture Guard / owner review**,
+revision 2. Revision 2 addresses Architecture Guard review 6721603471:
+separate input/output types (§4.1), snapshot lifetime and transactions
+(§4.6), a single tail policy (§4.7) and FX-type switching (§6.4). No
 production code. This is not a merge authorization and does not touch the
 Rack + VOX Drums 1.0 release scope (#77, #78).
 
@@ -71,13 +74,13 @@ Each conflict gives the evidence, the risk and a recommended resolution.
 | C | Brief says | Conflict (evidence) | Risk if ignored | Recommended resolution |
 |---|---|---|---|---|
 | C1 | Real curve/timeline editor, modulation matrix, FX internals (§4, §5) | No module editor (F1). SOUND layout cannot express curves or pages (F10). UI-only scalars are capped at 128 per slot (F6) | Fake UI, or curve data with no path to DSP | **Rack-owned Program content** (§4.1): versioned, typed, bounded. Edited by a host editor model and published to the module as an immutable snapshot, exactly like patterns (F12) |
-| C2 | 128-index map with "dynamic type-specific state" in UI-only/module state (§5) | Only 128 UI-only slots remain (F6). The FX program needs far more: about 1000 scalars plus curves (§5.3) | Truncated features or a silent cap | Keep the 128 pool endpoints for automation (§5.1). Put all non-automatable program data in Program content (§4.1), not in UI-only parameters. Do **not** raise `maxSlotParameters` (rejected alternative, §4.4) |
+| C2 | 128-index map with "dynamic type-specific state" in UI-only/module state (§5) | Only 128 UI-only slots remain (F6). The FX program needs far more: about 1000 scalars plus curves (§5.3) | Truncated features or a silent cap | Keep the 128 pool endpoints for automation (§5.1). Put all non-automatable program data in Program content (§4.1), not in UI-only parameters. Do **not** raise `maxSlotParameters` (rejected alternative, §4.8) |
 | C3 | 8 macros in pool 120–127 (§5) | The Rack already has 8 slot macro endpoints, but they cannot target direct instruments (F8) | Two "macro" concepts in one UI; the Rack macros do nothing for FX | Use module-owned macros on pool 120–127 as the brief proposes, with multi-destination mappings in Program content. The FX editor hides the inert Rack slot-macro strip for direct instruments (to verify in FX-04). No change to Rack macros |
 | C4 | Modulation matrix, LFOs, S&H, envelope follower (§4 MOTION) | The Rack modulation engine is not available to native modules (F9) | — | Implement modulation inside the module, with bases from pool 104–119 and routes in Program content. No change to the Rack engine |
 | C5 | ≥48 factory programs, user bank, import/export (§6) | The native ABI cannot provide sound presets (F3, F4). The `.vins` manifest has no preset section (`docs/architecture/VINS_PACKAGES.md`) | No factory content delivery path | Additive content API: `getProgramCaps`, `getFactoryProgram(index)`. Factory programs stay inside the signed module. The user bank is a Rack-owned file store of Program + pool values, following the existing sound-preset model (F4) |
 | C6 | Generate / Mutate, seeded and deterministic (§3) | No generation entry point for native modules (F3) | Generator logic ends up in the host, or does not exist | Additive content API `generateProgram(seed, category, complexity, energy, tonality, length, locks, out)`. It runs on the message thread, outside the callback, and its result goes through the normal Program edit transaction |
 | C7 | Per-layer meters, event playhead, voice/grain/clip indicators "from genuine diagnostics" (§4) | No module→host telemetry in `VoxProcessContextV2` (F2). Rack diagnostics are per-slot counters only | Fake meters | Additive `VoxTelemetryV2` out-struct: a bounded set of floats/ints the module writes per block. The Rack copies it to a lock-free per-slot snapshot for the UI, the same pattern as the RT-safe slot diagnostics |
-| C8 | Event length 0.05–32 s plus FX tails (§2) | Host tail cap is 1 920 000 samples (F15): 20 s at 96 kHz | The descriptor is rejected at load, or tails are cut | Option A (recommended): cap `event length + tail ≤ 1 920 000 / sampleRate`, i.e. 20 s at 96 kHz and 40 s at 48 kHz, enforced and shown in the UI. Option B: raise the host limit (host change, owner decision) |
+| C8 | Event length 0.05–32 s plus FX tails (§2) | Host tail cap is 1 920 000 samples (F15): 20 s at 96 kHz, below the 32 s event alone | The descriptor is rejected at load, or tails are cut | **One policy (§4.7):** a rate-independent `tailMilliseconds` descriptor field with a host cap of 64 000 ms; VoxFX declares 62 000 ms. Event duration is latched at trigger. Bars mode is limited to 32 s as a documented DSP rule. No runtime or UI clamp of an automatable value |
 | C9 | Process audio from other tracks (§0) | No audio input (F2) | — | Agrees with the brief: not supported. Granular and Glitch read only host-owned samples (F13) or the module's own generated audio |
 | C10 | Layer "sound family" and FX "type" as automatable pool parameters (§5 table) | Not a conflict with code but with §5's own rule "never reinterpret a parameter by type". Switching family or type changes the DSP topology mid-event | Clicks, stale state, preallocation of all variants | Family is a **Program field, not automatable**; a change applies to the next event only. FX slot type stays automatable as the brief asks (88–103), with every type preallocated per slot and a 10 ms crossfade (§6.3). Owner to confirm the family deviation |
 | C11 | Production completeness, Cubase/REAPER acceptance (§0, §9) | Open realtime P1 (F19); FX adds CPU load to the same callback | A FX + Drums set misses deadlines at 96 kHz/64 | Measure FX in the same bench (FX workloads in E2 style) and declare its envelope. No claim beyond measured cells |
@@ -122,38 +125,86 @@ typedef struct VoxProgramCapsV2 {
 } VoxProgramCapsV2;
 ```
 
-The program value is a **host-validated POD snapshot**:
+Fixed upper bounds are part of the contract, enforced by the host at load
+and by the module defensively:
+
+| Bound | Value | Bytes |
+|---|---|---|
+| `VOX_PROGRAM_MAX_FIELDS` | 2048 | 8 192 (float) |
+| `VOX_PROGRAM_MAX_CURVES` | 64 | 256 (node counts) |
+| `VOX_PROGRAM_MAX_CURVE_NODES` | 16 per curve | 64 × 16 × 16 = 16 384 |
+| `VOX_PROGRAM_MAX_ROUTES` | 64 | 64 × 16 = 1 024 |
+| Header | | 32 |
+| **Max serialized program (`VPR1` payload)** | | **25 888 → limit 32 768** |
+
+Two distinct types: an **immutable input snapshot**, which the module only
+reads, and a **mutable output buffer** with capacities, which the module
+fills (review 6721603471, P1-1).
 
 ```c
-typedef struct VoxCurveNodeV2 { float time, value; uint32_t shape; uint32_t reserved; } VoxCurveNodeV2;
-typedef struct VoxRouteV2 { uint16_t source, target; float amount; uint8_t flags; uint8_t reserved[7]; } VoxRouteV2;
+typedef struct VoxCurveNodeV2 { float time, value; uint32_t shape, reserved; } VoxCurveNodeV2; /* 16 B, align 4 */
+typedef struct VoxRouteV2 {
+  uint16_t source, target; float amount;
+  uint16_t flags;          /* polarity, quantize */
+  uint16_t smoothingMs; uint32_t reserved;
+} VoxRouteV2;              /* 16 B, align 4 */
+
+/* INPUT: read-only snapshot. Host-owned; valid for the duration of the call
+   it is passed to (process: the whole block; content API: the call). */
 typedef struct VoxProgramV2 {
   uint32_t structSize, version, schemaVersion, reserved0;
-  const float *fields;            uint32_t fieldCount, reserved1;
-  const VoxCurveNodeV2 *nodes;    const uint32_t *curveNodeCounts; uint32_t curveCount, nodeStride;
-  const VoxRouteV2 *routes;       uint32_t routeCount, reserved2;
+  const float *fields;               uint32_t fieldCount, fieldStride;        /* stride >= 4 */
+  const uint32_t *curveNodeCounts;   uint32_t curveCount, reserved1;
+  const VoxCurveNodeV2 *nodes;       uint32_t nodeStride, nodesPerCurve;      /* curve c, node n: nodes[c * nodesPerCurve + n] */
+  const VoxRouteV2 *routes;          uint32_t routeCount, routeStride;
 } VoxProgramV2;
+
+/* OUTPUT: host-owned, mutable, sized from the caps before the call. */
+typedef struct VoxProgramBufferV2 {
+  uint32_t structSize, version;
+  uint32_t schemaVersion;            /* module writes */
+  float *fields;           uint32_t fieldCapacity, fieldCount;        /* module writes count <= capacity */
+  uint32_t *curveNodeCounts; uint32_t curveCapacity, curveCount;
+  VoxCurveNodeV2 *nodes;   uint32_t nodesPerCurve, nodeStride;
+  VoxRouteV2 *routes;      uint32_t routeCapacity, routeCount;
+  float *poolValues;       uint32_t poolCapacity, poolCount;          /* 128 */
+  uint32_t overflow;                 /* module sets 1 if anything did not fit; result is then VOX_E_BUFFER_TOO_SMALL */
+} VoxProgramBufferV2;
 ```
+
+Output rules:
+- The module never writes past any `*Capacity`.
+- If the content does not fit, it writes nothing further, sets `overflow`,
+  returns `VOX_E_BUFFER_TOO_SMALL` (already defined, `VoxModuleAbiV2.h:49`), and the host discards the whole buffer.
+- Partial results are never used.
+- Arrays must be aligned to 4 bytes, and strides must be at least the element
+  size and multiples of 4; otherwise the call returns `VOX_E_INVALID_ARG`.
+- No pointer in an output buffer may be retained after the call.
+
+Tests (FX-00b):
+- C11 and C++ compile/layout tests (`sizeof`, `offsetof`, alignment);
+- undersized buffers: every capacity at 0 and at need − 1, with a canary after
+  each array;
+- wrong `structSize` or `version`;
+- NULL arrays with non-zero capacity;
+- strides below the element size.
 
 How it works:
 
 - **Process context.** Appended fields: `const VoxProgramV2 *program;
   uint64_t programGeneration;`. The module copies the snapshot only when the
-  generation changes, inside fixed bounds and with no allocation. This is the
+  generation changes, into fixed bounds and with no allocation. This is the
   same rule Drums applies to patterns in `takePattern`, `libs/drums/VoxFullOnDrums.c`.
-- **Rack side.** One more snapshot channel next to patterns, using the same
-  acquire/retire mechanism (F12).
-- **Editing.** On the controller thread: validate → build a new immutable
-  snapshot → publish. The audio thread never waits.
-- **Persistence.** In the slot state as a versioned payload (`VPR1`), parsed
-  and validated transactionally like `VPT2`. A malformed payload leaves the
-  live slot untouched and keeps the unresolved bytes.
+- **Editing.** Controller thread: validate, then publish a new snapshot
+  (§4.6). The audio thread never waits.
+- **Persistence.** In the slot state as a versioned `VPR1` payload of at most
+  32 768 bytes, parsed and validated transactionally like `VPT2` (§4.6).
 - **Host validation.** Finite values, field ranges, choice indices, curve
   times sorted in `[0, 1]`, node counts within caps, route indices within
   caps. The module re-validates defensively and never reads past the counts.
 - **Editor model.** Host-side and generic: Undo/Redo and A/B over (pool values
-  + Program), transactional. Curve and timeline widgets are driven by
-  `VoxCurveCapsV2`, the matrix widget by the route caps.
+  + Program). Curve and timeline widgets are driven by `VoxCurveCapsV2`, the
+  matrix widget by the route caps.
 
 ### 4.2 Content API additions (message thread, never realtime)
 
@@ -162,10 +213,11 @@ Appended to `VoxContentApiV2`:
 ```c
 VoxResult (VOX_CALL *getProgramCaps)(const char *id, const VoxProgramCapsV2 **out);
 VoxResult (VOX_CALL *getFactoryProgram)(const char *id, uint32_t index,
-          const char **name, const char **category, VoxProgramV2 *outProgram,
-          float *outPoolValues /* 128 */);
+          const char **name, const char **category,
+          VoxProgramBufferV2 *out);                       /* program + 128 pool values */
 VoxResult (VOX_CALL *generateProgram)(const char *id, const VoxGenerateRequestV2 *request,
-          const VoxProgramV2 *current, VoxProgramV2 *out, float *outPoolValues);
+          const VoxProgramV2 *current,                   /* input, may be NULL for Generate */
+          VoxProgramBufferV2 *out);
 ```
 
 - `VoxGenerateRequestV2` carries: seed, category, complexity, energy,
@@ -188,7 +240,105 @@ The Rack copies the values into a per-slot lock-free snapshot that the UI
 polls. This is the same pattern as the RT-safe slot diagnostics (#77 P1 item,
 done earlier).
 
-### 4.4 Rejected alternative
+### 4.6 Snapshot lifetime, bounds and transactions (review 6721603471, P1-2)
+
+**Live edits (single field, curve or route changes).** These use the existing
+Rack triple buffer, `pattern::SnapshotBuffer` (`libs/pattern/Pattern.h:107-131`,
+`Pattern.cpp:324-345`), instantiated for a fixed-size Program value type.
+
+- Exactly **3 preallocated buffers per slot** (3 × 32 KiB = 96 KiB, and only
+  for slots whose instrument declares program caps).
+- The writer (controller thread) fills the back buffer and swaps it with the
+  middle one. The reader (audio thread) takes the newest at block start and
+  **holds that buffer until its next acquire**, i.e. for the whole callback.
+  The writer can never touch the front buffer.
+- No heap snapshot, no retirement queue and **no unbounded growth**. Rapid
+  edits coalesce (latest wins), so at most one pending generation exists.
+  Publication never allocates or blocks on either side, as for patterns
+  today.
+
+**Multi-part changes** (preset load, Generate/Mutate result, A/B swap,
+Undo/Redo across pool values, project restore). These must bind together the
+Program, the 128 pool values, sample references, the pattern and the
+instrument identity, so they use the **existing transactional slot
+replacement** (`Rack::replaceState` / `applySoundPreset`, `libs/rack/Rack.h:52-59`;
+`ModuleState.h` "prepares replacement state without touching live state"):
+
+1. On the controller thread: parse and validate everything.
+2. Create and prepare a new instance with the pool values, Program, sample
+   references and pattern.
+3. Swap it in at one block boundary.
+
+On any failure nothing live changes, and the unresolved payload is preserved
+(the current Rack rule for slot state). The old instance is retired by the
+existing slot-replacement path. Consequence, documented in the UI: a preset
+load or Generate result starts from silence, and the old instance's active
+events and tails stop at the swap. The Rack has **no crossfade on instance
+replacement today** (no fade in `libs/rack/Rack.cpp`). A click-free swap
+therefore needs a host-side 10 ms fade-out of the outgoing instance. That
+fade is part of FX-H1, with a click test; I do not assume it exists.
+
+**Pool values versus automation.** On a transactional swap, the new pool
+values are written to the host parameters on the message thread, with host
+gestures, in the same transaction. Automation lanes that the DAW is playing
+override them afterwards, which is normal DAW behaviour. Program fields are
+never automated, so they cannot be clobbered.
+
+**Restore.** The Program travels inside the slot's persistent state next to
+`VPT2`. `replaceState` validates all 16 slots before swapping any of them
+(current behaviour). An invalid Program means the whole replacement is
+rejected, or the slot is kept unresolved with its bytes preserved. The live
+slot is never partially modified.
+
+**Tests (FX-H1):**
+- concurrent editor publish at 1 kHz while process runs;
+- edit during load, close and reprepare;
+- restore with an invalid `VPR1` (wrong schema, out-of-range field, unsorted
+  curve, route out of caps, oversize payload): rejected with no change to the
+  live state;
+- allocation probe on the audio thread during publication storms;
+- 10 000 edit and restore cycles with no memory growth;
+- TSan build.
+
+### 4.7 Tail policy (review 6721603471, P1-3): one policy, no runtime clamp
+
+**Chosen policy: a rate-independent descriptor tail with a host cap that
+covers the worst case.**
+
+- Additive V2.5 descriptor field `uint32_t tailMilliseconds`. The host
+  converts it to samples at prepare. A new host limit `maxTailMilliseconds =
+  64 000` sits next to the existing `maxTailSamples`, which stays in force for
+  V2.4 modules.
+- VoxFX declares `tailMilliseconds = 62 000`. That is the maximum event length
+  (32 000 ms) plus the maximum layer release (10 000 ms) plus the maximum
+  insert tail (20 000 ms).
+- This covers every supported rate. The bound is a fixed number of
+  milliseconds, independent of rate.
+
+Event duration is **latched at trigger**. Changes to the length, sync and
+tempo parameters after a NoteOn affect the next event only. A running event
+therefore never outlives the declared tail, whatever host automation,
+project restore or tempo changes do.
+
+In **Bars** mode the length (≤ 8 bars) would exceed 32 s below 60 BPM in 4/4.
+The rule is part of the DSP specification, not a UI clamp: the latched event
+duration is `min(bars × beat length, 32 s)`. The UI shows the resulting
+length in seconds and a "limited to 32 s" badge from telemetry. The rule is
+deterministic, documented in the parameter map and tested at 40/60/145 BPM.
+
+The rejected option (keeping the 1 920 000-sample cap) would need lengths
+≤ 12 s and tails ≤ 8 s to stay within 20 s at 96 kHz. That cuts the brief's
+32 s / 20 s ranges.
+
+**Tests (FX-01/FX-03):**
+- 44.1/48/96 kHz at maximum length + release + tail: the last non-zero output
+  sample falls inside the declared tail;
+- NoteOff (Gate), Panic (CC120: immediate; CC123: bounded release), DAW stop
+  and tail expiry;
+- length automation during an event leaves that event unchanged;
+- tempo change during a Bars event leaves the latched length unchanged.
+
+### 4.8 Rejected alternative
 
 Rejected: raising `maxSlotParameters` to 1024, encoding curves as UI-only
 scalars and adding a "curve" control kind to SOUND layout.
@@ -200,7 +350,7 @@ scalars and adding a "curve" control kind to SOUND layout.
   - it still provides no presets, generation or telemetry, so C5–C7 remain;
   - it abuses "parameter" semantics the contract keeps for automation.
 
-### 4.5 Rejected alternative
+### 4.9 Rejected alternative
 
 Rejected: filling in `VoxEditorApiV2` and letting the module draw its own UI.
 It would put plugin-in-plugin UI, threading and DPI handling into every module.
@@ -289,6 +439,56 @@ test.
 - **Output protection:** DC blocker, then a calibrated soft clipper with true
   bypass and no latency.
 
+### 6.4 Effect-type switching and bypass (review 6721603471, P2)
+
+**Instances**
+- Each insert slot owns one **preallocated instance of every type** (11
+  instances; at most 2 run at a time).
+- No construction, destruction or allocation happens on the audio thread.
+
+**A type change** applies at its sample offset:
+1. The previous instance becomes **outgoing**.
+2. Its input is crossfaded to zero over 10 ms. It then keeps processing silent
+   input, so a delay or reverb **rings out**, until its output stays below
+   −90 dBFS for 50 ms or `fx.tail` elapses, whichever comes first.
+3. The new type becomes **current**, starts from a reset state and fades in
+   over 10 ms.
+
+**Bounds**
+- At most **2 active instances per slot**: current and one outgoing.
+- If another change arrives while an outgoing instance is still ringing, that
+  outgoing instance is **cut with a 2 ms fade**, the current one becomes
+  outgoing, and the new type becomes current.
+- If the type switched back to is still ringing as the outgoing instance,
+  that same instance becomes current again and its input resumes, with no
+  reset. This is continuous and needs no extra instance.
+- Several changes inside one block are applied in sample-offset order; each
+  is one deterministic step of the above.
+
+**Bypass**
+- `fx.on` 1 → 0: the effect's input stops at that sample with a 10 ms fade.
+  Its wet tail rings out under the same rule. The dry signal passes unchanged.
+- Once the tail has ended, the slot is a true bypass: the output equals the
+  input bit for bit.
+- 0 → 1: the instance starts from a reset state.
+
+**Restore and reprepare.** All instances are reset; there are no tails across
+a restore.
+
+**Determinism.** Offline renders are identical across block sizes, because
+every transition happens at a sample offset and its length is counted in
+samples.
+
+**Tests (FX-03)**
+- automated type sweeps, including several changes inside one block and
+  within 10 ms;
+- A → B → A while A is still ringing;
+- rapid on/off toggles;
+- project restore during a tail;
+- finite output and the true-bypass identity after a tail;
+- 0 allocations;
+- block sizes 64/128/512 rendering identically.
+
 ## 7. Draft PR plan (dependency-ordered)
 
 All PRs are Draft and stacked. Base branch: **`fx/base`**, created from
@@ -333,8 +533,8 @@ dates.
 1. Approve the additive **V2.5 Program / Content / Telemetry** extension
    (§4), or choose an alternative.
 2. Approve **family as a non-automatable Program field** (C10).
-3. Choose the **tail cap**: event length plus tail limited to the host's
-   1 920 000 samples (C8, option A), or raise the host limit (option B).
+3. Approve the **tail policy** of §4.7: a `tailMilliseconds` descriptor field
+   with a 64 000 ms host cap and the event length latched at trigger.
 4. Approve the **`fx/base` branch** and that the VOX FX host work targets a
    post-1.0 Rack.
 5. Confirm the identity: `com.ultimavox.vox-fx`, package `VoxFX.vins`,

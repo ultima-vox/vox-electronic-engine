@@ -1,8 +1,8 @@
 pool,id,name,unit,type,min,max,default,group,choices,description
 0,global.output,Output,dB,float,-48,6,0,Global,,Post-protection output trim of the instrument
-1,event.length_bars,Length (bars),bar,float,0.25,8,2,Global,,Event length when Sync = Bars
-2,event.length_seconds,Length (s),s,float,0.05,32,4,Global,,Event length when Sync = Seconds; event+tail capped by host tail limit (FX-00 C8)
-3,event.sync,Sync,,choice,0,1,0,Global,Bars|Seconds,Length unit
+1,event.length_bars,Length (bars),bar,float,0.25,8,2,Global,,"Event length when Sync = Bars; latched at trigger; latched duration = min(bars x beat, 32 s) (FX-00 §4.7)"
+2,event.length_seconds,Length (s),s,float,0.05,32,4,Global,,Event length when Sync = Seconds; latched at trigger (FX-00 §4.7)
+3,event.sync,Sync,,choice,0,1,0,Global,Bars|Seconds,Length unit; latched at trigger
 4,trigger.retrigger,Retrigger,,choice,0,2,0,Global,Restart|Overlap|Ignore,A new NoteOn while an event plays
 5,trigger.noteoff,NoteOff,,choice,0,1,0,Global,One-shot|Gate,One-shot plays to its end; Gate releases on NoteOff
 6,trigger.velocity,Velocity Sens,,float,0,1,0.7,Global,,Velocity to event intensity
@@ -15,14 +15,14 @@ pool,id,name,unit,type,min,max,default,group,choices,description
 13,global.width,Width,,float,0,2,1,Global,,Stereo width of the mix (1 = unchanged)
 14,global.drive,Drive,,float,0,1,0,Global,,Mix saturation before the insert chain
 15,global.curve_bias,Curve Bias,,float,-1,1,0,Global,,Bends every time curve earlier/later
-16,global.release,Release,s,float,0.005,10,0.25,Global,,Release time in Gate mode and on retrigger fades
+16,global.release,Release,s,float,0.005,10,0.25,Global,,Release in Gate mode and on retrigger fades; part of the declared 62 000 ms tail
 17,pump.depth,Pump Depth,,float,0,1,0,Global,,Tempo-synced volume pump on the mix
 18,pump.division,Pump Rate,,choice,0,5,2,Global,1/2|1/4|1/8|1/16|1/4T|1/8T,Pump period
 19,output.protect,Protection,,boolean,0,1,1,Global,,DC blocker + soft clipper; off = true bypass
 20,global.drift,Stereo Drift,,float,0,1,0.2,Global,,Slow seeded L/R movement
 21,global.motion,Motion,,float,0,1,1,Global,,Master depth of all modulation routes
 22,event.start,Start Position,,float,0,0.99,0,Global,,Event starts at this fraction of its timeline
-23,fx.tail,Tail,s,float,0,20,4,Global,,Insert-chain tail kept after the event ends; capped by the host tail limit
+23,fx.tail,Tail,s,float,0,20,4,Global,,"Maximum ring-out of insert tails after the event (and of an outgoing FX type, §6.4); part of the declared tail"
 24,a.on,A On,,boolean,0,1,1,Layer A,,Layer enable
 25,a.gain,A Gain,dB,float,-48,12,0,Layer A,,Layer level
 26,a.pan,A Pan,,float,-1,1,0,Layer A,,Layer pan (pan curve adds to it)
@@ -87,20 +87,20 @@ pool,id,name,unit,type,min,max,default,group,choices,description
 85,d.length,D Length,,float,0.01,1,1,Layer D,,Layer duration as a fraction of the event length
 86,d.character,D Character,,float,0,1,0.5,Layer D,,"The family's primary colour control (fixed meaning per family, listed in FX-01 docs)"
 87,d.fx_send,D FX Send,,float,0,1,1,Layer D,,Share of the layer routed through the insert chain (rest bypasses it)
-88,fx1.on,FX1 On,,boolean,0,1,0,FX 1,,Slot enable (true bypass when off)
-89,fx1.type,FX1 Type,,choice,0,10,0,FX 1,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+88,fx1.on,FX1 On,,boolean,0,1,0,FX 1,,"Slot enable; off = input stops with 10 ms fade, wet tail rings out, then true bypass (FX-00 §6.4)"
+89,fx1.type,FX1 Type,,choice,0,10,0,FX 1,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; every type preallocated; switch = 10 ms crossfade, outgoing instance rings out, max 2 active per slot (FX-00 §6.4)"
 90,fx1.mix,FX1 Mix,,float,0,1,0.3,FX 1,,Wet/dry
 91,fx1.trim,FX1 Output,dB,float,-24,12,0,FX 1,,Slot output trim
-92,fx2.on,FX2 On,,boolean,0,1,0,FX 2,,Slot enable (true bypass when off)
-93,fx2.type,FX2 Type,,choice,0,10,1,FX 2,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+92,fx2.on,FX2 On,,boolean,0,1,0,FX 2,,"Slot enable; off = input stops with 10 ms fade, wet tail rings out, then true bypass (FX-00 §6.4)"
+93,fx2.type,FX2 Type,,choice,0,10,1,FX 2,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; every type preallocated; switch = 10 ms crossfade, outgoing instance rings out, max 2 active per slot (FX-00 §6.4)"
 94,fx2.mix,FX2 Mix,,float,0,1,0.3,FX 2,,Wet/dry
 95,fx2.trim,FX2 Output,dB,float,-24,12,0,FX 2,,Slot output trim
-96,fx3.on,FX3 On,,boolean,0,1,0,FX 3,,Slot enable (true bypass when off)
-97,fx3.type,FX3 Type,,choice,0,10,6,FX 3,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+96,fx3.on,FX3 On,,boolean,0,1,0,FX 3,,"Slot enable; off = input stops with 10 ms fade, wet tail rings out, then true bypass (FX-00 §6.4)"
+97,fx3.type,FX3 Type,,choice,0,10,6,FX 3,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; every type preallocated; switch = 10 ms crossfade, outgoing instance rings out, max 2 active per slot (FX-00 §6.4)"
 98,fx3.mix,FX3 Mix,,float,0,1,0.3,FX 3,,Wet/dry
 99,fx3.trim,FX3 Output,dB,float,-24,12,0,FX 3,,Slot output trim
-100,fx4.on,FX4 On,,boolean,0,1,0,FX 4,,Slot enable (true bypass when off)
-101,fx4.type,FX4 Type,,choice,0,10,7,FX 4,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; all types preallocated, 10 ms crossfade on change"
+100,fx4.on,FX4 On,,boolean,0,1,0,FX 4,,"Slot enable; off = input stops with 10 ms fade, wet tail rings out, then true bypass (FX-00 §6.4)"
+101,fx4.type,FX4 Type,,choice,0,10,7,FX 4,Filter/EQ|Saturation|Wavefolder|Phaser|Flanger|Chorus|Delay|Reverb|Bitcrush|Ring Mod|Trance Gate,"Effect type; every type preallocated; switch = 10 ms crossfade, outgoing instance rings out, max 2 active per slot (FX-00 §6.4)"
 102,fx4.mix,FX4 Mix,,float,0,1,0.3,FX 4,,Wet/dry
 103,fx4.trim,FX4 Output,dB,float,-24,12,0,FX 4,,Slot output trim
 104,lfo1.rate,LFO1 Rate,Hz,float,0.01,40,1,LFO 1,,Rate when Sync = Free
