@@ -61,6 +61,17 @@ struct FactoryStep {
     std::uint8_t velocity = 0;
 };
 
+// What the last process() call did with its MIDI (tests, diagnostics).
+struct ProcessStats {
+    std::uint32_t eventsIn = 0;        // events passed to process()
+    std::uint32_t delivered = 0;       // events handed to the engine
+    std::uint32_t folded = 0;          // events folded into others (same sample, > maxEventsPerCall)
+    std::uint32_t calls = 0;           // engine calls
+    std::uint32_t maxEventsInCall = 0;
+    std::uint32_t rejected = 0;        // engine calls that failed validation
+    bool offsetsValid = true;          // every delivered offset inside its call, ascending
+};
+
 class DrumEngine {
 public:
     DrumEngine();
@@ -89,6 +100,8 @@ public:
                   const MidiEvent* events, std::uint32_t eventCount,
                   const Transport& transport, int patternIndex, bool panic) noexcept;
 
+    const ProcessStats& lastStats() const noexcept { return stats_; }
+
     // Pads the internal sequencer triggered during the last process() call
     // (bit n = pad n).
     std::uint32_t sequencerHitMask() const noexcept { return hitMask_; }
@@ -100,6 +113,7 @@ private:
     std::unique_ptr<Impl> impl_;
     bool prepared_ = false;
     std::uint32_t hitMask_ = 0;
+    ProcessStats stats_;
 };
 
 } // namespace vox::drums

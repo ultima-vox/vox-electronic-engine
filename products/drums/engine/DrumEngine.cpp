@@ -72,6 +72,76 @@ const FactoryPatterns& factory()
 
 constexpr std::uint32_t maxNoteOutput = 256;
 
+void put (VoxMidiEventV2& e, const MidiEvent& in, std::uint32_t offset) noexcept
+{
+    e = {};
+    e.sampleOffset = offset;
+    e.size = std::min<std::uint32_t> (in.size, 3u);
+    std::memcpy (e.bytes, in.bytes, 3);
+}
+
+// More than maxEventsPerCall events on one sample. The engine resolves a
+// sample's events as a set: each pad fires once, at the loudest NoteOn
+// velocity it received on that sample (in fixed pad order, after all of the
+// sample's events), CC120 stops every voice and CC123 fades them; it ignores
+// every other message. The group therefore folds, without changing what
+// sounds, into at most 10 events: one CC120 and one CC123 if any were
+// present, then the loudest NoteOn per pad. (Repeated CC123 on one sample
+// become one; the engine would restart the same 50 ms fade.)
+std::uint32_t foldGroup (const MidiEvent* in, std::uint32_t count, std::uint32_t offset, VoxMidiEventV2* out) noexcept
+{
+    const auto& notes = DrumEngine::padNotes();
+    std::array<std::uint8_t, padCount> velocity {};
+    std::array<std::uint8_t, padCount> status {};
+    bool allSoundOff = false, allNotesOff = false;
+    std::uint8_t ccStatus = 0xB0u;
+    for (std::uint32_t k = 0; k < count; ++k)
+    {
+        const auto& e = in[k];
+        if (e.size < 3)
+            continue;
+        const std::uint8_t kind = e.bytes[0] & 0xF0u;
+        if (kind == 0x90u && (e.bytes[2] & 0x7Fu) > 0)
+        {
+            for (int pad = 0; pad < padCount; ++pad)
+                if (notes[static_cast<std::size_t> (pad)] == (e.bytes[1] & 0x7Fu)
+                    && (e.bytes[2] & 0x7Fu) > velocity[static_cast<std::size_t> (pad)])
+                {
+                    velocity[static_cast<std::size_t> (pad)] = e.bytes[2] & 0x7Fu;
+                    status[static_cast<std::size_t> (pad)] = e.bytes[0];
+                }
+        }
+        else if (kind == 0xB0u && (e.bytes[1] & 0x7Fu) == 120)
+        {
+            allSoundOff = true;
+            ccStatus = e.bytes[0];
+        }
+        else if (kind == 0xB0u && (e.bytes[1] & 0x7Fu) == 123)
+        {
+            allNotesOff = true;
+            ccStatus = e.bytes[0];
+        }
+    }
+    std::uint32_t n = 0;
+    const auto emit = [&] (std::uint8_t b0, std::uint8_t b1, std::uint8_t b2) {
+        MidiEvent e;
+        e.size = 3;
+        e.bytes[0] = b0;
+        e.bytes[1] = b1;
+        e.bytes[2] = b2;
+        put (out[n++], e, offset);
+    };
+    if (allSoundOff)
+        emit (ccStatus, 120, 0);
+    if (allNotesOff)
+        emit (ccStatus, 123, 0);
+    for (int pad = 0; pad < padCount; ++pad)
+        if (velocity[static_cast<std::size_t> (pad)] > 0)
+            emit (status[static_cast<std::size_t> (pad)], notes[static_cast<std::size_t> (pad)],
+                  velocity[static_cast<std::size_t> (pad)]);
+    return n;
+}
+
 } // namespace
 
 FactoryStep DrumEngine::factoryStep (int pattern, int lane, int bar, int step) noexcept
@@ -246,33 +316,48 @@ bool DrumEngine::process (float* left, float* right, std::uint32_t frames,
         impl_->changes[i] = { changes[i].index, 0u, changes[i].value, 0u };
 
     hitMask_ = 0;
+    stats_ = {};
+    stats_.eventsIn = eventCount;
     bool ok = true;
     std::uint32_t done = 0, nextEvent = 0;
     bool first = true;
     while (done < frames || first)
     {
-        // A sub-block ends at the engine's block limit, or before the event
-        // that would exceed maxEventsPerCall.
+        // A sub-block ends at the engine's block limit, or before the group
+        // of same-sample events that would exceed maxEventsPerCall. A group
+        // that alone exceeds it is folded (see foldGroup), so every event is
+        // delivered at its own sample and no offset is ever before the
+        // sub-block start (review 6734386412).
         std::uint32_t end = std::min (frames, done + impl_->maxBlock);
-        std::uint32_t count = 0;
-        while (nextEvent + count < eventCount && events[nextEvent + count].offset < end)
+        std::uint32_t taken = 0;
+        const auto offsetOf = [&] (std::uint32_t k) {
+            return std::max (done, std::min (events[k].offset, frames == 0 ? 0u : frames - 1));
+        };
+        while (nextEvent < eventCount && offsetOf (nextEvent) < end)
         {
-            if (count == maxEventsPerCall)
+            const std::uint32_t at = offsetOf (nextEvent);
+            std::uint32_t groupEnd = nextEvent + 1;
+            while (groupEnd < eventCount && offsetOf (groupEnd) == at)
+                ++groupEnd;
+            const std::uint32_t group = groupEnd - nextEvent;
+            if (taken + group <= maxEventsPerCall)
             {
-                end = std::max (done + 1, events[nextEvent + count].offset);
+                for (std::uint32_t k = nextEvent; k < groupEnd; ++k)
+                    put (impl_->midi[taken++], events[k], at - done);
+            }
+            else if (taken > 0)
+            {
+                end = at;   // > done: an earlier group of this call lies before it
                 break;
             }
-            ++count;
+            else
+            {
+                taken = foldGroup (events + nextEvent, group, at - done, impl_->midi.data());
+                stats_.folded += group - taken;
+            }
+            nextEvent = groupEnd;
         }
-        std::uint32_t taken = 0;
-        for (; taken < count && events[nextEvent + taken].offset < end; ++taken)
-        {
-            auto& e = impl_->midi[taken];
-            e = {};
-            e.sampleOffset = events[nextEvent + taken].offset - done;
-            e.size = std::min<std::uint32_t> (events[nextEvent + taken].size, 3u);
-            std::memcpy (e.bytes, events[nextEvent + taken].bytes, 3);
-        }
+        stats_.delivered += taken;
         const std::uint32_t n = end - done;
 
         // Musical position at the first sample of this sub-block.
@@ -301,12 +386,18 @@ bool DrumEngine::process (float* left, float* right, std::uint32_t frames,
         c.noteOutput = &impl_->noteOutput;
         if (n > 0 || first)
         {
-            ok = module().table->process (impl_->instance, &c) == VOX_OK && ok;
+            ++stats_.calls;
+            for (std::uint32_t k = 0; k < taken; ++k)
+                stats_.offsetsValid = stats_.offsetsValid && impl_->midi[k].sampleOffset < std::max (n, 1u)
+                                   && (k == 0 || impl_->midi[k].sampleOffset >= impl_->midi[k - 1].sampleOffset);
+            stats_.maxEventsInCall = std::max (stats_.maxEventsInCall, taken);
+            const bool accepted = module().table->process (impl_->instance, &c) == VOX_OK;
+            stats_.rejected += accepted ? 0u : 1u;
+            ok = accepted && ok;
             for (std::uint32_t i = 0; i < impl_->noteOutput.count && i < maxNoteOutput; ++i)
                 if (impl_->notes[i].lane < padCount)
                     hitMask_ |= 1u << impl_->notes[i].lane;
         }
-        nextEvent += taken;
         done = end;
         first = false;
         if (frames == 0)

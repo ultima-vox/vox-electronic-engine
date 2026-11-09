@@ -93,7 +93,17 @@ Realtime contract:
   at construction.
 - Parameter changes apply at block start.
 - Host blocks larger than 8192 frames, and blocks with more than 512 events
-  per engine call, are split.
+  per engine call, are split at sample boundaries. Every event is delivered
+  at its own sample, never before the start of its engine call (review
+  6734386412).
+- More than 512 events on a single sample are folded into at most 10:
+  - one CC120 if any, one CC123 if any;
+  - the loudest NoteOn per pad.
+
+  This is exactly how the engine resolves one sample's events, so the
+  result sounds the same. The one difference: repeated CC123 on that sample
+  become a single one. Messages the engine ignores (NoteOff, other CCs) are
+  counted as folded.
 - At most 4096 MIDI events are accepted per host block; the rest are counted
   as dropped.
 - `reset()` silences all voices.
