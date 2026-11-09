@@ -11,7 +11,7 @@ set(forbidden
 # K5 option a), whose C interface only DrumEngine.cpp sees. DRM-03 removes
 # the second exception.
 set(legacy_allowed "/tests/suite/legacy-reference/" "/tests/suite/DrumsLegacyGoldenTests.cpp"
-  "/tests/suite/DrumsParityTests.cpp"
+  "/tests/suite/DrumsParityTests.cpp" "/tests/suite/DrumsKitParityTests.cpp"
   "/products/drums/engine/legacy8/" "/products/drums/engine/DrumEngine.cpp")
 set(violations "")
 foreach(dir IN LISTS dirs)
