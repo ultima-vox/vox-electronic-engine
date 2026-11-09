@@ -482,6 +482,8 @@ void testEditorBindings()
     p->editorBeingDeleted (editor.get());
 }
 
+juce::MemoryBlock stateOf (DrumsProcessor& p);
+
 //==============================================================================
 void testSound()
 {
@@ -534,6 +536,70 @@ void testSound()
                        + " from its reassigned note");
         }
 
+    // Owner decision (#120): pads 9-16 are full instruments with the
+    // factory defaults Perc on notes 50-57: each sounds from the editor
+    // audition and from its host note, alone, and keeps its settings over a
+    // save and restore.
+    for (int pad = 8; pad < padCount; ++pad)
+    {
+        const auto& d = vox::drums::defaultKit().pads[static_cast<std::size_t> (pad)];
+        const juce::String name = "pad " + juce::String (pad + 1);
+        check (d.model == kit::Model::perc && d.note == 50 + (pad - 8) && vox::drums::padName (pad) == "Perc " + juce::String (pad - 7),
+               name + ": factory default Perc on note " + juce::String (50 + pad - 8));
+        auto p = makeProcessor();
+        p->audition (pad, 110);
+        const auto heard = render (*p, 30, 256, nullptr, 120.0, noMidi);
+        check (heard.finite && heard.peak > 1.0e-3 && p->takeHitMask() == (1u << pad), name + ": audition sounds and lights only it");
+        auto q = makeProcessor();
+        const auto fromNote = render (*q, 30, 256, nullptr, 120.0, [&] (int b, juce::MidiBuffer& m) {
+            if (b == 0)
+                m.addEvent (juce::MidiMessage::noteOn (1, d.note, static_cast<juce::uint8> (110)), 0);
+        });
+        check (fromNote.peak > 1.0e-3 && q->takeHitMask() == (1u << pad), name + ": its host note plays it alone");
+    }
+    {
+        // Distinct settings on pads 9-16 survive save and restore and play.
+        auto source = makeProcessor();
+        for (int pad = 8; pad < padCount; ++pad)
+        {
+            auto ps = source->kitStore().pad (pad);
+            ps.model = static_cast<kit::Model> (pad % kit::modelCount);
+            ps.note = static_cast<std::uint8_t> (70 + pad);
+            ps.character = 0.1f * static_cast<float> (pad - 7);
+            ps.polyphony = static_cast<std::uint8_t> (1 + pad % 8);
+            source->kitStore().setPad (pad, ps);
+            setPlain (*source, juce::String (vox::drums::padPrefix (pad)) + ".tune", static_cast<float> (pad - 12));
+            setPlain (*source, juce::String (vox::drums::padPrefix (pad)) + ".level", 0.5f + 0.03f * static_cast<float> (pad - 8));
+        }
+        const auto blob = stateOf (*source);
+        auto target = makeProcessor();
+        target->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+        bool same = target->lastStateError().isEmpty();
+        for (int pad = 8; pad < padCount; ++pad)
+        {
+            const auto a = source->kitStore().pad (pad), b = target->kitStore().pad (pad);
+            same = same && a.model == b.model && a.note == b.note && juce::exactlyEqual (a.character, b.character) && a.polyphony == b.polyphony;
+            for (const auto* field : { ".tune", ".level" })
+            {
+                const auto id = juce::String (vox::drums::padPrefix (pad)) + field;
+                same = same && std::abs (plainOf (*source, id) - plainOf (*target, id)) < 1.0e-5f;
+            }
+        }
+        check (same, "pads 9-16: structure and host values survive save and restore");
+        bool play = true;
+        for (int pad = 8; pad < padCount; ++pad)
+        {
+            target->reset();
+            target->takeHitMask();
+            const auto r = render (*target, 20, 256, nullptr, 120.0, [&] (int b, juce::MidiBuffer& m) {
+                if (b == 0)
+                    m.addEvent (juce::MidiMessage::noteOn (1, 70 + pad, static_cast<juce::uint8> (110)), 0);
+            });
+            play = play && r.peak > 1.0e-3 && target->takeHitMask() == (1u << pad);
+        }
+        check (play, "pads 9-16: each restored pad plays from its restored note");
+    }
+
     // Review 6743099574: an editor audition plays the pad it names, also
     // when two pads share a note and in Internal mode; external MIDI on the
     // shared note follows the lowest-pad rule.
@@ -578,7 +644,7 @@ void testSound()
         };
         for (const float mode : { 0.0f, 1.0f })   // Host MIDI, Internal (transport stopped)
         {
-            const juce::String m = mode == 0.0f ? " (Host MIDI)" : " (Internal)";
+            const juce::String m = juce::exactlyEqual (mode, 0.0f) ? " (Host MIDI)" : " (Internal)";
             for (const int pad : { 9, 10 })
             {
                 const int other = pad == 9 ? 10 : 9;
@@ -866,7 +932,7 @@ void testState()
                    && juce::exactlyEqual (k.pads[5].players[0].end, 0.75f) && juce::exactlyEqual (k.pads[5].players[0].level, 1.5f)
                    && k.pads[6].players[0].loop && k.pads[7].players[0].reverse && k.pads[7].players[0].normalize,
                "sample source and player A settings migrate");
-        check (k.pads[5].players[1].start == d.pads[5].players[1].start && k.pads[12].model == d.pads[12].model
+        check (juce::exactlyEqual (k.pads[5].players[1].start, d.pads[5].players[1].start) && k.pads[12].model == d.pads[12].model
                    && k.pads[12].note == d.pads[12].note,
                "player B and pads 9-16 keep their defaults");
         check (std::abs (plainOf (*migrated, "drm.p01.level") - 0.4f) < 1.0e-6f && plainOf (*migrated, "drm.seq.lane.p08") < 0.5f,

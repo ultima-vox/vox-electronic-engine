@@ -898,6 +898,52 @@ void testNoCallbackLifetime()
                "budget: after reclamation the load fits");
     }
 
+    // 5b. Owner decision (#120): the 512 MiB budget covers both players of
+    //     every pad; a load that does not fit is refused cleanly and the
+    //     live assignment of its slot (buffer, reference, sound) is kept.
+    {
+        check (vox::drums::SampleLimits::maxTotalBytes == std::size_t (512) * 1024 * 1024, "the decoded budget is 512 MiB");
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        check (library.budget() == vox::drums::SampleLimits::maxTotalBytes, "a new instrument uses the 512 MiB budget");
+        const auto size = decode (a)->bytes();
+        library.setBudgetForTesting (size + size / 2);   // room for one buffer, not two
+        library.assign (vox::drums::slotOf (0, 0), decode (a), a);
+        setPlain (*p, "drm.p01.source", 1.0f);
+        const auto liveBuffer = library.pad (vox::drums::slotOf (0, 0)).buffer;
+        const auto liveRef = library.pad (vox::drums::slotOf (0, 0)).reference;
+        p->reset();   // panic: each render starts from silence
+        const auto before = render (*p, 20);
+        std::vector<juce::String> results;
+        std::vector<std::function<void()>> held;
+        library.setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+        const auto run = [&] {
+            library.waitForPendingDecodes();
+            for (auto& f : held)
+                f();
+            held.clear();
+        };
+        // Player B of the same pad counts against the same budget.
+        library.loadAsync (vox::drums::slotOf (0, 1), b, [&] (const juce::String& e) { results.push_back (e); });
+        run();
+        check (results.size() == 1 && results[0].contains ("budget") && ! library.pad (vox::drums::slotOf (0, 1)).reference,
+               "budget: player B does not fit next to player A and is refused");
+        // A replacement of the occupied slot that does not fit (even with
+        // the slot's current buffer released) keeps it.
+        const auto big = writeWav ("own-big.wav", 48000.0, 1, 16, 4.0);   // twice A
+        library.loadAsync (vox::drums::slotOf (0, 0), big, [&] (const juce::String& e) { results.push_back (e); });
+        run();
+        const auto after = library.pad (vox::drums::slotOf (0, 0));
+        check (results.size() == 2 && results[1].contains ("budget"), "budget: an over-budget replacement is refused: "
+                                                                          + (results.size() < 2 ? juce::String() : results[1]));
+        check (after.buffer == liveBuffer && after.reference.has_value() && liveRef.has_value()
+                   && after.reference->sha256 == liveRef->sha256,
+               "budget: the refused replacement keeps the live buffer and reference");
+        p->reset();
+        check (render (*p, 20) == before, "budget: the pad still sounds exactly as before");
+        library.setCompletionDispatcherForTesting (nullptr);
+    }
+
     // 6. Concurrent stress: an audio thread renders with looping voices on
     //    every pad while the message thread replaces, clears and collects
     //    (ASan / TSan in the PR evidence).

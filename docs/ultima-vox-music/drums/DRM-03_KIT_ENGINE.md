@@ -150,9 +150,45 @@ note 60 with different models, each audition equals a render with the other
 pad silenced, in Host MIDI and Internal mode; external note 60 plays only
 pad 10. With the old routing 3 of these checks fail.
 
-## Open decisions (owner)
+## Owner decisions (#120, comment 6749703618)
 
-- **Default kit for pads 9–16.** Currently Perc on notes 50–57, labels
-  "Perc 1".."Perc 8": a placeholder (03 §9).
-- **Sample memory budget** (unchanged from DRM-02).
-- Acceptance of the parameter-map change above (Architecture Guard).
+1. **Host automation contract accepted: 119 parameters.**
+   - `products/drums/parameters.csv` is the 1.0 contract. Its IDs, ranges,
+     normalisation, order and the state format (DPRM, DPAD v1, DSMP v2) are
+     frozen before DAW acceptance. A later breaking change needs a versioned
+     migration.
+   - The 109 former IDs stay structural `DPAD` state. They are not dummy
+     host parameters.
+   - DRM-01/02 saved states migrate deterministically from `DPRM` to `DPAD`.
+   - **Not compatible:** *normalised host automation* written against
+     DRM-01/02 is not compatible for the removed IDs (they no longer exist
+     as host parameters) or for Tune and Decay (their ranges changed). Saved
+     plain values of every kept parameter restore exactly.
+   - Covered by tests: the golden `parameters.csv`, 119 unique IDs with
+     their defaults, the DRM-01 IDs kept, state round trip and DRM-01/02
+     migration (`suite_drums_product_tests`).
+2. **Pads 9–16 accepted** with the factory defaults Perc on notes 50–57,
+   named "Perc 1".."Perc 8". They are full instruments. Covered by tests:
+   - each one's audition sounds and lights only that pad;
+   - its host note plays it alone;
+   - distinct structure and host values survive save and restore, and each
+     restored pad plays from its restored note.
+
+   The export of these pads is tested in DRM-04a.
+3. **Decoded sample budget kept at 512 MiB**
+   (`SampleLimits::maxTotalBytes`). It covers both players of every pad and
+   the retired buffers still waiting to be reclaimed.
+   - A load that does not fit is refused cleanly. The slot's live buffer,
+     its reference and its sound stay unchanged
+     (`suite_drums_sample_tests` 5b; budget tests 5 and 6 cover held retired
+     buffers and concurrent replacement).
+   - **Accounting detail:** a replacement is checked against the budget
+     minus the other slots and the retired buffers. The buffer it replaces
+     is not counted, because it is released by the commit. Until that
+     buffer is reclaimed (after the last voice using it ends), the decoded
+     memory can exceed 512 MiB by at most the replaced slot's size. A
+     project restore can likewise exceed it transiently by up to the
+     buffers it replaces (at most twice the budget).
+   - This bound is finite and documented. A strict "never above 512 MiB",
+     counting the replaced buffer too, would refuse replacing a large
+     sample with one of the same size. That choice is left to the owner.
