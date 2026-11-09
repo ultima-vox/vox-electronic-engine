@@ -81,6 +81,17 @@ struct SampleUsage {
     bool overflow = false;   // incomplete: free nothing on this report
 };
 
+// What the last process() call did with its MIDI (tests, diagnostics).
+struct ProcessStats {
+    std::uint32_t eventsIn = 0;        // events passed to process()
+    std::uint32_t delivered = 0;       // events handed to the engine
+    std::uint32_t folded = 0;          // events folded into others (same sample, > maxEventsPerCall)
+    std::uint32_t calls = 0;           // engine calls
+    std::uint32_t maxEventsInCall = 0;
+    std::uint32_t rejected = 0;        // engine calls that failed validation
+    bool offsetsValid = true;          // every delivered offset inside its call, ascending
+};
+
 class DrumEngine {
 public:
     DrumEngine();
@@ -120,6 +131,8 @@ public:
     // The buffers voices still hold after the last process() call.
     const SampleUsage& sampleUsage() const noexcept { return usage_; }
 
+    const ProcessStats& lastStats() const noexcept { return stats_; }
+
     // Pads the internal sequencer triggered during the last process() call
     // (bit n = pad n).
     std::uint32_t sequencerHitMask() const noexcept { return hitMask_; }
@@ -132,6 +145,7 @@ private:
     bool prepared_ = false;
     std::uint32_t hitMask_ = 0;
     SampleUsage usage_;
+    ProcessStats stats_;
 };
 
 } // namespace vox::drums

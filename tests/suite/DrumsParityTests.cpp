@@ -333,6 +333,173 @@ void run (const Scenario& sc, double rate, int block)
                                 + " samples differ, first at " + std::to_string (firstMismatch) + ")");
 }
 
+// Review 6734386412: bursts of more than 512 events on one sample. The
+// engine resolves a sample's events as a set (loudest NoteOn per pad; CC120;
+// CC123), so a burst made of repeated copies of a base set must sound exactly
+// like the reference module given the base set once. A dense block that only
+// exceeds 512 events across samples must match the reference given the same
+// events in two calls split at a sample boundary (the module is block-size
+// invariant, DRM-00).
+void testMidiBursts()
+{
+    using vox::drums::DrumEngine;
+    using vox::drums::MidiEvent;
+    const double rate = 48000.0;
+    const std::uint32_t block = 256;
+    const auto& notes = DrumEngine::padNotes();
+    const auto midi3 = [] (std::uint32_t offset, std::uint8_t b0, std::uint8_t b1, std::uint8_t b2) {
+        MidiEvent e;
+        e.offset = offset;
+        e.size = 3;
+        e.bytes[0] = b0;
+        e.bytes[1] = b1;
+        e.bytes[2] = b2;
+        return e;
+    };
+    const auto toRef = [] (const std::vector<MidiEvent>& events, std::uint32_t base) {
+        std::vector<VoxMidiEventV2> out;
+        for (const auto& e : events)
+        {
+            VoxMidiEventV2 v {};
+            v.sampleOffset = e.offset - base;
+            v.size = 3;
+            std::memcpy (v.bytes, e.bytes, 3);
+            out.push_back (v);
+        }
+        return out;
+    };
+    juce::AudioPlayHead::PositionInfo stopped;
+    stopped.setIsPlaying (false);
+    stopped.setBpm (120.0);
+    stopped.setPpqPosition (0.0);
+    stopped.setPpqPositionOfLastBarStart (0.0);
+    stopped.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+    vox::drums::Transport transport;
+    transport.hasTempo = transport.hasPpq = transport.hasBarStart = transport.hasTimeSignature = true;
+    transport.bpm = 120.0;
+
+    struct Case {
+        const char* name;
+        std::vector<MidiEvent> burst;      // what the plugin's engine gets
+        std::vector<MidiEvent> base;       // what the reference gets (one call)
+    };
+    std::vector<Case> cases;
+    for (const std::uint32_t at : { 0u, 100u })
+    {
+        // Base set: one NoteOn per pad, a CC123 (once), and a CC120 at the
+        // first burst only.
+        std::vector<MidiEvent> base;
+        if (at == 100)
+            base.push_back (midi3 (at, 0xB0, 120, 0));
+        for (int pad = 0; pad < 8; ++pad)
+            base.push_back (midi3 (at, 0x99, notes[static_cast<std::size_t> (pad)], static_cast<std::uint8_t> (40 + pad * 10)));
+        base.push_back (midi3 (at, 0xB0, 123, 0));
+        // Burst: 600 events; copies of the base NoteOns at lower velocities,
+        // NoteOffs and unrelated CCs first, the base set last (beyond the
+        // 512th event, where a chunker that drops or misplaces the rest
+        // changes the sound).
+        std::vector<MidiEvent> burst;
+        int k = 0;
+        while (burst.size() + base.size() < 600)
+        {
+            const int pad = k % 8;
+            switch ((k / 8) % 3)
+            {
+                case 0: burst.push_back (midi3 (at, 0x99, notes[static_cast<std::size_t> (pad)], static_cast<std::uint8_t> (1 + (k % (40 + pad * 10))))); break;
+                case 1: burst.push_back (midi3 (at, 0x89, notes[static_cast<std::size_t> (pad)], 0)); break;
+                default: burst.push_back (midi3 (at, 0xB0, 7, static_cast<std::uint8_t> (k % 128))); break;
+            }
+            ++k;
+        }
+        burst.insert (burst.end(), base.begin(), base.end());
+        cases.push_back ({ at == 0 ? "600 events at sample 0" : "600 events at sample 100 (with CC120 and CC123)",
+                           burst, base });
+    }
+
+    for (const auto& c : cases)
+    {
+        DrumEngine engine;
+        engine.prepare (rate, block);
+        std::vector<float> values;
+        for (const auto& p : DrumEngine::parameters())
+            values.push_back (p.defaultValue);
+        engine.setAllParameters (values.data(), static_cast<std::uint32_t> (values.size()));
+        Reference reference (rate, block);
+        reference.setAll();
+
+        std::vector<float> l (block), r (block), rl (block), rr (block);
+        bool identical = true;
+        double peak = 0.0;
+        for (int b = 0; b < 40; ++b)
+        {
+            const auto& events = b == 0 ? c.burst : std::vector<MidiEvent> {};
+            engine.process (l.data(), r.data(), block, nullptr, 0, events.data(), static_cast<std::uint32_t> (events.size()),
+                            transport, -1, false);
+            if (b == 0)
+            {
+                const auto& st = engine.lastStats();
+                check (st.offsetsValid, std::string (c.name) + ": every delivered offset lies inside its engine call");
+                check (st.rejected == 0, std::string (c.name) + ": no engine call rejected");
+                check (st.maxEventsInCall <= 512, std::string (c.name) + ": at most 512 events per engine call");
+                check (st.eventsIn == 600 && st.delivered + st.folded == st.eventsIn,
+                       std::string (c.name) + ": every event delivered or folded (" + std::to_string (st.delivered) + " + "
+                           + std::to_string (st.folded) + ")");
+            }
+            reference.process (rl.data(), rr.data(), block, {}, b == 0 ? toRef (c.base, 0) : std::vector<VoxMidiEventV2> {},
+                               stopped, 0);
+            for (std::uint32_t i = 0; i < block; ++i)
+            {
+                identical = identical && std::memcmp (&l[i], &rl[i], 4) == 0 && std::memcmp (&r[i], &rr[i], 4) == 0;
+                peak = std::max (peak, static_cast<double> (std::abs (l[i])));
+            }
+        }
+        check (peak > 1.0e-3, std::string (c.name) + ": the burst sounds");
+        check (identical, std::string (c.name) + ": bit-identical to the reference given the base set once");
+    }
+
+    // 600 events across two samples (300 at 0, 300 at 10): split at sample
+    // 10, nothing folded, identical to the reference in two calls.
+    {
+        std::vector<MidiEvent> events;
+        for (int i = 0; i < 600; ++i)
+            events.push_back (midi3 (i < 300 ? 0u : 10u, 0x99, notes[static_cast<std::size_t> (i % 8)], static_cast<std::uint8_t> (1 + i % 127)));
+        DrumEngine engine;
+        engine.prepare (rate, block);
+        std::vector<float> values;
+        for (const auto& p : DrumEngine::parameters())
+            values.push_back (p.defaultValue);
+        engine.setAllParameters (values.data(), static_cast<std::uint32_t> (values.size()));
+        Reference reference (rate, block);
+        reference.setAll();
+        std::vector<float> l (block), r (block), rl (block), rr (block);
+        engine.process (l.data(), r.data(), block, nullptr, 0, events.data(), 600, transport, -1, false);
+        const auto st = engine.lastStats();
+        check (st.folded == 0 && st.delivered == 600 && st.calls == 2 && st.offsetsValid && st.rejected == 0,
+               "300 + 300 events: two engine calls, nothing folded");
+        const std::vector<MidiEvent> first (events.begin(), events.begin() + 300), second (events.begin() + 300, events.end());
+        reference.process (rl.data(), rr.data(), 10, {}, toRef (first, 0), stopped, 0);
+        reference.process (rl.data() + 10, rr.data() + 10, block - 10, {}, toRef (second, 10), stopped, 0);
+        bool identical = true;
+        for (std::uint32_t i = 0; i < block; ++i)
+            identical = identical && std::memcmp (&l[i], &rl[i], 4) == 0 && std::memcmp (&r[i], &rr[i], 4) == 0;
+        check (identical, "300 + 300 events: bit-identical to the reference split at the same sample");
+    }
+
+    // Through the plugin: a 600-event burst at sample 0 is not dropped and sounds.
+    {
+        DrumsProcessor plugin;
+        plugin.setRateAndBufferSizeDetails (rate, static_cast<int> (block));
+        plugin.prepareToPlay (rate, static_cast<int> (block));
+        juce::AudioBuffer<float> buffer (2, static_cast<int> (block));
+        juce::MidiBuffer midi;
+        for (const auto& e : cases[0].burst)
+            midi.addEvent (e.bytes, 3, 0);
+        plugin.processBlock (buffer, midi);
+        check (plugin.droppedMidiEvents() == 0 && buffer.getMagnitude (0, 0, static_cast<int> (block)) > 1.0e-3f,
+               "plugin: a 600-event burst at sample 0 sounds and nothing is dropped");
+    }
+}
+
 } // namespace
 
 int main()
@@ -369,6 +536,7 @@ int main()
         { "samples, host MIDI, automation", 0, 0, true, true, false, true },
         { "samples, both, Full-on Driving", 2, 1, true, false, true, true },
     };
+    testMidiBursts();
     int runs = 0;
     for (const auto& sc : scenarios)
         for (double rate : { 44100.0, 48000.0, 96000.0 })
