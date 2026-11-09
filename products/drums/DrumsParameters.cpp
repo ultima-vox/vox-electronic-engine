@@ -14,8 +14,7 @@ constexpr std::array<const char*, padCount> legacyPadKeys { "kick", "snare", "cl
 // Engine features that arrive in later Drums PRs; not host parameters yet.
 bool deferred (const std::string& name)
 {
-    return name == "source" || name == "output" || name == "send1" || name == "send2"
-        || name.rfind ("sample_", 0) == 0;
+    return name == "output" || name == "send1" || name == "send2";
 }
 
 int padIndex (const std::string& key)
@@ -54,6 +53,8 @@ juce::String formatValue (const EngineParameter& p, float v)
         const int amount = juce::roundToInt (std::abs (v) * 100.0f);
         return amount == 0 ? juce::String ("C") : (v < 0.0f ? "L " : "R ") + juce::String (amount);
     }
+    if (id.endsWith (".sample_level"))
+        return juce::String (juce::roundToInt (v * 100.0f)) + " %";
     if (id.endsWith (".drive"))
         return "x" + juce::String (v, 2);
     if (p.minimum < 0.0f)
@@ -74,6 +75,8 @@ float parseValue (const EngineParameter& p, const juce::String& text)
         return number;
     if (juce::String (p.legacyId).endsWith (".pan"))
         return t.startsWithIgnoreCase ("L") ? -number / 100.0f : number / 100.0f;
+    if (juce::String (p.legacyId).endsWith (".sample_level"))
+        return number / 100.0f;
     if (p.minimum < 0.0f)
         return number / 100.0f;
     return number / 100.0f * p.maximum;

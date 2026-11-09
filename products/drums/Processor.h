@@ -3,6 +3,7 @@
 #include "common/SuiteProcessor.h"
 
 #include "DrumsParameters.h"
+#include "SampleLibrary.h"
 #include "engine/DrumEngine.h"
 
 #include <array>
@@ -31,6 +32,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
 
     juce::AudioProcessorValueTreeState& state() noexcept { return parameters_; }
+    SampleLibrary& samples() noexcept { return samples_; }
 
     // Message thread: plays pad `pad` at the start of the next block.
     // Returns false when the queue is full.
@@ -48,11 +50,15 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == parameterSectionTag; }
+    bool isProductSection (preset::Tag tag) const override
+    {
+        return tag == parameterSectionTag || tag == sampleSectionTag;
+    }
 
 private:
     juce::AudioProcessorValueTreeState parameters_;
     DrumEngine engine_;
+    SampleLibrary samples_;
 
     struct Binding {
         std::atomic<float>* value = nullptr;   // plugin parameter, or null (engine default)

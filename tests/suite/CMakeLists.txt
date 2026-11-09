@@ -108,6 +108,13 @@ endif()
 add_test(NAME suite_drums_product_tests
   COMMAND suite_drums_product_tests ${PROJECT_SOURCE_DIR}/products/drums/parameters.csv)
 
+# DRM-02: pad samples (decode, sound, ownership, realtime, state, editor).
+add_executable(suite_drums_sample_tests DrumsSampleTests.cpp)
+target_link_libraries(suite_drums_sample_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_sample_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+vox_suite_add_allocation_probe(suite_drums_sample_tests)
+add_test(NAME suite_drums_sample_tests COMMAND suite_drums_sample_tests)
+
 # DRM-01 parity: the plugin against the DRM-00 reference module. The only
 # other test allowed to drive the legacy C ABI (suite_boundaries).
 add_executable(suite_drums_parity_tests DrumsParityTests.cpp)

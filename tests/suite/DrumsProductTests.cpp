@@ -163,21 +163,20 @@ void testParameterContract()
     check (static_cast<int> (ids.size()) == p.getParameters().size(), "every host parameter is in the table");
 
     // Every engine parameter is exposed, or deferred to the PR that adds its
-    // feature (source/sample settings: DRM-02; sends/outputs: DRM-06).
+    // feature (sends/outputs: DRM-06).
     int deferred = 0;
     for (const auto& e : DrumEngine::parameters())
     {
         if (! vox::drums::pluginIdFor (e.legacyId).empty())
             continue;
         const juce::String name (e.legacyId);
-        const bool known = name.endsWith (".source") || name.endsWith (".output") || name.endsWith (".send1")
-                        || name.endsWith (".send2") || name.contains (".sample_");
+        const bool known = name.endsWith (".output") || name.endsWith (".send1") || name.endsWith (".send2");
         check (known, "engine parameter " + name + " is exposed or explicitly deferred");
         ++deferred;
     }
-    check (deferred == 80, "80 deferred engine parameters (got " + juce::String (deferred) + ")");
+    check (deferred == 24, "24 deferred engine parameters (got " + juce::String (deferred) + ")");
     check (DrumEngine::parameterCount() == 187, "the engine has 187 parameters");
-    check (ids.size() == 108, "108 plugin parameters (got " + juce::String (static_cast<int> (ids.size())) + ")");
+    check (ids.size() == 164, "164 plugin parameters (got " + juce::String (static_cast<int> (ids.size())) + ")");
 
     auto* pattern = dynamic_cast<juce::AudioParameterChoice*> (p.state().getParameter (vox::drums::patternParameterId));
     check (pattern != nullptr && pattern->choices.size() == 5, "five factory patterns");

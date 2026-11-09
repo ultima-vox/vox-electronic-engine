@@ -18,7 +18,9 @@ namespace vox::drums {
 
 class DrumsProcessor;
 
-class DrumsPanel final : public juce::Component, private juce::Timer {
+class DrumsPanel final : public juce::Component,
+                         public juce::FileDragAndDropTarget,
+                         private juce::Timer {
 public:
     explicit DrumsPanel (DrumsProcessor& processor);
     ~DrumsPanel() override;
@@ -34,6 +36,14 @@ public:
     juce::Button* buttonFor (const juce::String& id);
     juce::ComboBox* comboFor (const juce::String& id);
     juce::Button* padButton (int pad);
+    juce::Button* sampleButton (const juce::String& name);   // "load", "clear", "library"
+    juce::String sampleStatus() const;
+
+    // Drop audio files on a pad (or on the waveform for the selected pad).
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+    // Loads a file into a pad (decoded off the message thread).
+    void loadSample (int pad, const juce::File& file);
 
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -59,6 +69,7 @@ private:
 
     class PadButton;
     class StepView;
+    class WaveformView;
 
     void timerCallback() override;
     BoundKnob makeKnob (const juce::String& id, const juce::String& label);
@@ -76,6 +87,20 @@ private:
     std::vector<BoundKnob> padKnobs_;
     BoundCombo padFilter_;
     std::vector<BoundKnob> kickKnobs_;      // kick only (pad 1)
+
+    // Sample of the selected pad.
+    vox::ui::VoxPanel samplePanel_ { "SAMPLE" };
+    BoundCombo padSource_;
+    std::vector<BoundKnob> sampleKnobs_;
+    std::vector<BoundToggle> sampleToggles_;
+    std::unique_ptr<vox::ui::VoxButton> loadButton_, clearButton_, libraryButton_;
+    std::unique_ptr<juce::Label> sampleStatus_;
+    std::unique_ptr<WaveformView> waveform_;
+    std::unique_ptr<juce::FileChooser> chooser_;
+    std::uint64_t shownGeneration_ = 0;
+    float shownStart_ = -1.0f, shownEnd_ = -1.0f;
+    juce::String loadMessage_;
+    void refreshSample();
 
     std::vector<BoundKnob> kitKnobs_;
     BoundToggle hatChoke_;
