@@ -28,7 +28,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -324,16 +328,24 @@ void testOwnership()
     setPlain (*p, "drm.p01.sample_loop", 1.0f);
     setPlain (*p, "drm.p01.decay", 1.5f);
 
-    // No report yet: nothing is freed.
+    // Before any block has run no voice can hold a buffer: a replaced one is
+    // freed at once (review 6735498337). While a block runs, it is not.
     {
         library.assign (0, decode (a), a);
         std::weak_ptr<const vox::drums::SampleBuffer> first = library.pad (0).buffer;
         library.assign (0, decode (b), b);
+        check (first.expired(), "before any block, a replaced buffer is freed at once");
+
+        library.assign (0, decode (a), a);
+        std::weak_ptr<const vox::drums::SampleBuffer> second = library.pad (0).buffer;
+        library.acquire();                       // a block is running on the table with it
+        library.assign (0, decode (b), b);
         library.collect();
-        check (! first.expired(), "a replaced buffer is not freed before the audio thread reports");
-        render (*p, 1, -1);   // one block on the new table, no voice holds the old buffer
+        check (! second.expired(), "a replaced buffer is not freed while a block runs on its table");
+        vox::drums::SampleUsage none;
+        library.report (none);                   // the block ends, holding nothing
         library.collect();
-        check (first.expired(), "the replaced buffer is freed after a report on the newer table");
+        check (second.expired(), "the replaced buffer is freed after that block reports");
     }
 
     // A voice holds the buffer: it stays alive until the voice ends.
@@ -652,6 +664,186 @@ void testStaleLoads()
 }
 
 //==============================================================================
+// Review 6735498337 P1: retired tables and buffers stay bounded when the
+// host runs no audio callback (editor open, transport stopped), without ever
+// freeing what a running block or a voice can still read.
+void testNoCallbackLifetime()
+{
+    const auto a = writeWav ("idle-a.wav", 48000.0, 2, 16, 1.0);
+    const auto b = writeWav ("idle-b.wav", 48000.0, 2, 16, 1.0);
+    const auto c = writeWav ("idle-c.wav", 48000.0, 1, 16, 1.0);
+    const auto files = std::array<juce::File, 3> { a, b, c };
+
+    // 1. Prepared, no processBlock ever: 1000 replacements and clears.
+    {
+        const auto liveBefore = vox::drums::SampleBuffer::live.load();
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        std::size_t peakRetired = 0, peakBytes = 0;
+        std::int64_t peakLive = 0;
+        for (int i = 0; i < 1000; ++i)
+        {
+            const int pad = i % 3;
+            if (i % 7 == 6)
+                library.clear (pad);
+            else
+                library.assign (pad, decode (files[static_cast<std::size_t> (i % 3)]), files[static_cast<std::size_t> (i % 3)]);
+            peakRetired = std::max (peakRetired, library.retiredCount());
+            peakBytes = std::max (peakBytes, library.retiredBytes());
+            peakLive = std::max (peakLive, vox::drums::SampleBuffer::live.load() - liveBefore);
+        }
+        check (peakRetired == 0, "no callback: nothing stays retired (peak " + juce::String (static_cast<int> (peakRetired)) + ")");
+        check (peakBytes == 0, "no callback: no retired bytes held");
+        check (peakLive <= 4, "no callback: at most the 3 assigned buffers + 1 decoding are alive (peak "
+                                  + juce::String (static_cast<juce::int64> (peakLive)) + ")");
+        p.reset();
+        check (vox::drums::SampleBuffer::live.load() == liveBefore, "teardown without a callback frees every buffer");
+    }
+
+    // 2. A looping voice holds its buffer: idle reclamation keeps it until a
+    //    later report no longer lists it.
+    {
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        setPlain (*p, "drm.p01.source", 1.0f);
+        setPlain (*p, "drm.p01.sample_loop", 1.0f);
+        setPlain (*p, "drm.p01.decay", 1.0f);
+        library.assign (0, decode (a), a);
+        std::weak_ptr<const vox::drums::SampleBuffer> held = library.pad (0).buffer;
+        render (*p, 4);                        // a looping voice plays A
+        for (int i = 0; i < 50; ++i)           // the host stops calling; the user replaces 50 times
+            library.assign (0, decode (i % 2 ? b : c), i % 2 ? b : c);
+        library.collect();
+        check (! held.expired(), "idle: the buffer a voice holds is kept");
+        check (library.retiredCount() == 1, "idle: only the held buffer stays retired ("
+                                                + juce::String (static_cast<int> (library.retiredCount())) + ")");
+        for (int i = 0; i < 1000 && ! held.expired(); ++i)
+            render (*p, 1, -1);                // the voice ends; reports stop listing A
+        library.collect();
+        check (held.expired() && library.retiredCount() == 0, "the held buffer is freed once no voice holds it");
+    }
+
+    // 3. A block in progress (acquire() without report()): nothing it can
+    //    still read is freed, idle or not.
+    {
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        library.assign (0, decode (a), a);
+        std::weak_ptr<const vox::drums::SampleBuffer> current = library.pad (0).buffer;
+        const auto* views = library.acquire();   // a block starts and takes the table
+        library.assign (0, decode (b), b);       // A leaves the table
+        library.collect();
+        check (! current.expired() && views[0].channels != nullptr && juce::exactlyEqual (views[0].channels[0][0], current.lock()->data[0][0]),
+               "a running block's table and buffer stay valid");
+        vox::drums::SampleUsage usage;
+        library.report (usage);                  // the block ends, holding nothing
+        library.collect();
+        check (current.expired() && library.retiredCount() == 0, "freed after the block ends");
+    }
+
+    // 4. An abandoned block (no usage) frees nothing until a complete report.
+    {
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        library.assign (0, decode (a), a);
+        render (*p, 1, -1);
+        library.acquire();
+        library.abandon();
+        std::weak_ptr<const vox::drums::SampleBuffer> old = library.pad (0).buffer;
+        library.assign (0, decode (b), b);
+        check (! old.expired(), "an incomplete report frees nothing");
+        render (*p, 1, -1);
+        library.collect();
+        check (old.expired(), "the next complete report frees it");
+    }
+
+    // 5. The budget counts retired buffers: while a voice holds a retired
+    //    buffer, a load that fits only without it is refused.
+    {
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        const auto size = decode (a)->bytes();
+        library.setBudgetForTesting (size + size / 2);   // room for one buffer, not two
+        setPlain (*p, "drm.p01.source", 1.0f);
+        setPlain (*p, "drm.p01.sample_loop", 1.0f);
+        setPlain (*p, "drm.p01.decay", 1.0f);
+        library.assign (0, decode (a), a);
+        render (*p, 4);                          // a looping voice holds A
+        library.clear (0);                        // A is retired, still held
+        check (library.retiredBytes() == size, "budget: the held buffer is counted as retired bytes");
+        std::vector<juce::String> results;
+        std::vector<std::function<void()>> held;
+        library.setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+        library.loadAsync (1, b, [&] (const juce::String& e) { results.push_back (e); });
+        library.waitForPendingDecodes();
+        for (auto& f : held)
+            f();
+        held.clear();
+        check (results.size() == 1 && results[0].contains ("budget") && library.pad (1).buffer == nullptr,
+               "budget: a load that needs the retired bytes is refused: " + (results.empty() ? juce::String() : results[0]));
+        for (int i = 0; i < 1000 && library.retiredCount() > 0; ++i)
+            render (*p, 1, -1);                  // the voice ends; A is reclaimed
+        library.collect();
+        library.loadAsync (1, b, [&] (const juce::String& e) { results.push_back (e); });
+        library.waitForPendingDecodes();
+        for (auto& f : held)
+            f();
+        check (results.size() == 2 && results[1].isEmpty() && library.pad (1).buffer != nullptr,
+               "budget: after reclamation the load fits");
+    }
+
+    // 6. Concurrent stress: an audio thread renders with looping voices on
+    //    every pad while the message thread replaces, clears and collects
+    //    (ASan / TSan in the PR evidence).
+    {
+        auto p = makeProcessor (48000.0, 128);
+        auto& library = p->samples();
+        for (int pad = 0; pad < vox::drums::padCount; ++pad)
+        {
+            setPlain (*p, juce::String (vox::drums::padPrefix (pad)) + ".source", 2.0f);
+            setPlain (*p, juce::String (vox::drums::padPrefix (pad)) + ".sample_loop", pad % 2 == 0 ? 1.0f : 0.0f);
+        }
+        std::atomic<bool> stop { false };
+        std::thread audio ([&] {
+            juce::AudioBuffer<float> buffer (2, 128);
+            const auto& notes = vox::drums::DrumEngine::padNotes();
+            for (int k = 0; ! stop.load(); ++k)
+            {
+                juce::MidiBuffer midi;
+                if (k % 3 == 0)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, notes[static_cast<std::size_t> (k % 8)], static_cast<juce::uint8> (100)), 5);
+                p->processBlock (buffer, midi);
+                if (k % 50 == 49)
+                    std::this_thread::sleep_for (std::chrono::milliseconds (2));   // gaps: idle collections happen
+            }
+        });
+        std::vector<std::shared_ptr<vox::drums::SampleBuffer>> pool;
+        for (const auto& f : files)
+            pool.push_back (decode (f));
+        for (int i = 0; i < 1500; ++i)
+        {
+            const int pad = i % vox::drums::padCount;
+            if (i % 11 == 10)
+                library.clear (pad);
+            else
+                library.assign (pad, decode (files[static_cast<std::size_t> (i % 3)]), files[static_cast<std::size_t> (i % 3)]);
+            if (i % 5 == 0)
+                library.collect();
+        }
+        stop = true;
+        audio.join();
+        for (int pad = 0; pad < vox::drums::padCount; ++pad)
+            library.clear (pad);
+        for (int i = 0; i < 2000 && library.retiredCount() > 0; ++i)
+        {
+            render (*p, 1, -1);
+            library.collect();
+        }
+        check (library.retiredCount() == 0, "stress: everything retired is reclaimed exactly once");
+    }
+}
+
+//==============================================================================
 void testEditor()
 {
     const auto file = writeWav ("editor-kick.wav", 48000.0, 2, 16, 0.3);
@@ -720,6 +912,7 @@ int main()
     testRealtime();
     testState();
     testStaleLoads();
+    testNoCallbackLifetime();
     testEditor();
 
     scratch.deleteRecursively();

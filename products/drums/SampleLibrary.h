@@ -99,8 +99,10 @@ public:
     // The pads' current sample views; valid until the next acquire() of the
     // same thread (the table is retired only after a newer report).
     const SampleView* acquire() noexcept;
-    // The engine's usage after the block that used acquire()'s table.
+    // The engine's usage after the block that used acquire()'s table. Every
+    // acquire() is followed by exactly one report() or abandon().
     void report (const SampleUsage& usage) noexcept;
+    void abandon() noexcept;
 
     //== message / host threads ===============================================
     struct PadInfo {
@@ -141,7 +143,8 @@ public:
         std::array<PadInfo, padCount> pads;
         juce::String diagnostics;   // one line per missing or changed sample
     };
-    static bool readState (const preset::Section* section, Restore& out, juce::String& error);
+    static bool readState (const preset::Section* section, Restore& out, juce::String& error,
+                           std::size_t budgetBytes = SampleLimits::maxTotalBytes);
     void apply (Restore restore);
 
     // Every pad's diagnostics after the last restore or load ("" if none).
@@ -156,6 +159,11 @@ public:
 
     std::size_t totalBytes() const;
     std::size_t retiredCount() const;
+    std::size_t retiredBytes() const;
+    // The decoded-memory budget (default SampleLimits::maxTotalBytes); it
+    // covers assigned and retired buffers.
+    std::size_t budget() const;
+    void setBudgetForTesting (std::size_t bytes);
     // Changes with every published table (editor refresh).
     std::uint64_t generation() const;
 
@@ -185,6 +193,9 @@ private:
     std::atomic<bool> reportOverflow_ { true };
     std::array<std::atomic<std::uint64_t>, maxSampleUsage> reportIds_ {};
     const Table* inUse_ = nullptr;          // audio thread only
+    std::atomic<bool> busy_ { false };      // a block is between acquire() and report()
+    std::size_t budget_ = SampleLimits::maxTotalBytes;   // lock_
+    std::size_t retiredBytesLocked() const;
 
     juce::ThreadPool decoder_ { 1 };
 

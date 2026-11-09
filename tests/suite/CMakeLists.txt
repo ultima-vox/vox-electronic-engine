@@ -113,6 +113,10 @@ add_executable(suite_drums_sample_tests DrumsSampleTests.cpp)
 target_link_libraries(suite_drums_sample_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_sample_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 vox_suite_add_allocation_probe(suite_drums_sample_tests)
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(suite_drums_sample_tests PRIVATE Threads::Threads)
+endif()
 add_test(NAME suite_drums_sample_tests COMMAND suite_drums_sample_tests)
 
 # DRM-03: what the kit engine adds (models, 16 pads, polyphony, players).
