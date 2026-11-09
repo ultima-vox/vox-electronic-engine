@@ -1645,6 +1645,273 @@ void testPatterns()
     }
 }
 
+
+//==============================================================================
+// Lead decision (#121, 6749717308): end-to-end parity of Internal playback
+// and the exported Standard MIDI File, on one saved and restored pattern and
+// kit. Playback is observed as the triggers the processor's engine actually
+// scheduled in each processBlock (not a second call of stepHits); the SMF
+// is parsed here byte by byte, independently of juce::MidiFile.
+//
+// Tolerance: a hit at musical position t plays at frame
+// ceil((t - blockPpq) * samplesPerPpq - 1e-6) of its block, i.e. up to one
+// frame late; the export writes round(t * 960). One frame is at most
+// 960 * bpm / 60 / rate = 0.06 tick here (133 BPM, 44.1 kHz), the tick
+// rounding 0.5 tick, and the block position (accumulated in double) adds
+// < 1e-6 tick: a played hit must be within 1 tick of its exported Note On.
+struct SmfEvent {
+    long long tick;
+    int status, data1, data2;
+};
+
+bool parseSmf (const juce::MemoryBlock& blob, int& division, std::vector<SmfEvent>& out, double& bpm)
+{
+    const auto* d = static_cast<const std::uint8_t*> (blob.getData());
+    const std::size_t n = blob.getSize();
+    std::size_t at = 0;
+    const auto be = [&] (int bytes) {
+        std::uint32_t v = 0;
+        for (int i = 0; i < bytes; ++i)
+            v = (v << 8) | (at < n ? d[at++] : 0u);
+        return v;
+    };
+    if (n < 22 || std::memcmp (d, "MThd", 4) != 0)
+        return false;
+    at = 4;
+    if (be (4) != 6 || be (2) != 0 || be (2) != 1)
+        return false;   // format 0, one track
+    division = static_cast<int> (be (2));
+    if (std::memcmp (d + at, "MTrk", 4) != 0)
+        return false;
+    at += 4;
+    const std::size_t end = at + be (4);
+    if (end != n)
+        return false;
+    long long tick = 0;
+    bool ended = false;
+    while (at < end)
+    {
+        std::uint32_t delta = 0;
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto b = d[at++];
+            delta = (delta << 7) | (b & 0x7fu);
+            if ((b & 0x80u) == 0)
+                break;
+        }
+        tick += delta;
+        const int status = d[at++];
+        if (status == 0xff)
+        {
+            const int type = d[at++];
+            const int len = d[at++];
+            if (type == 0x51 && len == 3)
+                bpm = 60000000.0 / static_cast<double> ((d[at] << 16) | (d[at + 1] << 8) | d[at + 2]);
+            if (type == 0x2f)
+                ended = true;
+            at += static_cast<std::size_t> (len);
+            continue;
+        }
+        if ((status & 0xf0) != 0x80 && (status & 0xf0) != 0x90)
+            return false;   // only notes are expected
+        out.push_back ({ tick, status, d[at], d[at + 1] });
+        at += 2;
+    }
+    return ended && at == end;
+}
+
+void testExportPlaybackParity()
+{
+    using vox::drums::StoredPattern;
+    std::mt19937 random (6749717);
+    // The saved project: a 32-step, 2-bar pattern with every step feature,
+    // swing, accent, a disabled lane and remapped notes on all 16 pads.
+    juce::MemoryBlock project;
+    StoredPattern pattern;
+    {
+        auto source = makeProcessor();
+        pattern.steps = 32;
+        pattern.bars = 2;
+        pattern.seed = 4242;
+        bool microPlus = false, microMinus = false, ratchets = false, chance = false, accents = false;
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int bar = 0; bar < 2; ++bar)
+                for (int st = 0; st < 32; ++st)
+                    if (random() % 5 == 0)
+                    {
+                        auto& c = pattern.cell (lane, bar, st);
+                        c.on = true;
+                        c.velocity = static_cast<std::uint8_t> (20 + random() % 100);
+                        c.accent = random() % 4 == 0;
+                        c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 20 + random() % 70 : 100);
+                        c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 2 + random() % 7 : 1);
+                        c.micro = static_cast<std::int8_t> (random() % 3 == 0 ? static_cast<int> (random() % 101) - 50 : 0);
+                        microPlus = microPlus || c.micro > 0;
+                        microMinus = microMinus || c.micro < 0;
+                        ratchets = ratchets || c.ratchet > 1;
+                        chance = chance || c.probability < 100;
+                        accents = accents || c.accent;
+                    }
+        check (microPlus && microMinus && ratchets && chance && accents, "parity pattern uses +/- micro, ratchets, probability and accents");
+        source->patterns().setSlot (3, pattern);
+        for (int pad = 0; pad < padCount; ++pad)
+        {
+            auto ps = source->kitStore().pad (pad);
+            ps.note = static_cast<std::uint8_t> (90 - pad * 2);   // remapped, unique
+            ps.polyphony = 8;
+            source->kitStore().setPad (pad, ps);
+        }
+        setPlain (*source, "drm.seq.swing", 0.27f);
+        setPlain (*source, "drm.seq.accent", 0.65f);
+        setPlain (*source, "drm.seq.lane.p06", 0.0f);   // disabled lane
+        setPlain (*source, "drm.seq.mode", 1.0f);       // Internal
+        setPlain (*source, vox::drums::patternParameterId, 3.0f);
+        project = stateOf (*source);
+    }
+    const double bpm = 133.0;
+    const int passes = 2;
+    const double patternPpq = 2 * 4.0;
+    bool audible = false;
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        for (const int block : { 64, 333, 512 })
+        {
+            const juce::String label = juce::String (static_cast<int> (rate)) + " Hz / " + juce::String (block) + ": ";
+            auto p = makeProcessor (rate, block);
+            p->setStateInformation (project.getData(), static_cast<int> (project.getSize()));
+            check (p->lastStateError().isEmpty() && p->patterns().slot (3) == pattern, label + "the saved pattern is restored");
+            // Export from the restored instrument.
+            int division = 0;
+            double fileBpm = 0.0;
+            std::vector<SmfEvent> smf;
+            const bool parsed = parseSmf (p->exportPatternMidi (3, passes, bpm), division, smf, fileBpm);
+            check (parsed && division == 960 && std::abs (fileBpm - bpm) < 0.01, label + "the export is a format-0 SMF, 960 tpq, at the tempo");
+            if (! parsed)
+                continue;
+            // SMF order and note pairing.
+            bool ordered = true, overlap = false, offsFirst = true, channel = true;
+            std::map<int, long long> open;
+            for (std::size_t i = 0; i < smf.size(); ++i)
+            {
+                const auto& e = smf[i];
+                ordered = ordered && (i == 0 || smf[i - 1].tick <= e.tick);
+                channel = channel && (e.status & 0x0f) == 9;
+                const bool on = (e.status & 0xf0) == 0x90 && e.data2 > 0;
+                if (on)
+                {
+                    overlap = overlap || open.count (e.data1) != 0;
+                    open[e.data1] = e.tick;
+                }
+                else
+                {
+                    offsFirst = offsFirst && ! (i > 0 && smf[i - 1].tick == e.tick && (smf[i - 1].status & 0xf0) == 0x90);
+                    open.erase (e.data1);
+                }
+            }
+            check (ordered && offsFirst && channel, label + "events in time order, Note Offs before Note Ons at a tick, channel 10");
+            check (! overlap && open.empty(), label + "no overlapping same-note pairs; every note ends");
+            // Exported Note Ons as (tick, pad, velocity).
+            std::map<int, int> padOfNote;
+            for (int pad = 0; pad < padCount; ++pad)
+                padOfNote[p->kitStore().pad (pad).note] = pad;
+            std::vector<std::tuple<long long, int, int>> exported;
+            for (const auto& e : smf)
+                if ((e.status & 0xf0) == 0x90 && e.data2 > 0)
+                    exported.emplace_back (e.tick, padOfNote.count (e.data1) ? padOfNote[e.data1] : -1, e.data2);
+
+            // Play: passes from 0, then a restart (loop back to 0) for one
+            // more pass; the restart must replay pass 1 identically.
+            TestPlayHead head;
+            p->setPlayHead (&head);
+            const double samplesPerPpq = 60.0 * rate / bpm;
+            const auto playSegment = [&] (double fromPpq, double lengthPpq, double& peak) {
+                std::map<std::pair<long long, int>, int> hits;   // (frame from fromPpq, pad) -> velocity
+                juce::AudioBuffer<float> buffer (2, block);
+                double ppq = fromPpq;
+                long long frame = 0;
+                while (ppq < fromPpq + lengthPpq)
+                {
+                    head.set (true, bpm, ppq);
+                    juce::MidiBuffer midi;
+                    buffer.clear();
+                    p->processBlock (buffer, midi);
+                    peak = std::max (peak, static_cast<double> (buffer.getMagnitude (0, block)));
+                    const auto& engine = p->engineForTesting();
+                    for (int k = 0; k < engine.scheduledCount(); ++k)
+                    {
+                        std::uint32_t offset;
+                        std::uint8_t pad, velocity;
+                        engine.scheduled (k, offset, pad, velocity);
+                        // One trigger per pad and frame (the engine merges coincident hits).
+                        auto& v = hits[{ frame + offset, pad }];
+                        v = std::max (v, static_cast<int> (velocity));
+                    }
+                    ppq += block / samplesPerPpq;
+                    frame += block;
+                }
+                return hits;
+            };
+            double peak = 0.0;
+            const auto first = playSegment (0.0, passes * patternPpq, peak);
+            const auto again = playSegment (0.0, patternPpq, peak);
+            p->setPlayHead (nullptr);
+            audible = audible || peak > 1.0e-3;
+
+            // Compare with the export: every played trigger within 1 tick of
+            // a Note On of the same pad and velocity, one to one.
+            const auto compare = [&] (const std::map<std::pair<long long, int>, int>& played, double lengthPpq, const juce::String& what) {
+                // The window: both sides up to 2 ticks before the end (the
+                // last block runs past the end into the next pass, which an
+                // export of N passes does not contain).
+                const double limit = lengthPpq * 960.0 - 2.0;
+                std::vector<std::tuple<long long, int, int>> want;
+                for (const auto& e : exported)
+                    if (static_cast<double> (std::get<0> (e)) < limit)
+                        want.push_back (e);
+                std::vector<bool> used (want.size(), false);
+                int matched = 0, unmatched = 0;
+                for (const auto& [key, velocity] : played)
+                {
+                    const double tick = static_cast<double> (key.first) / samplesPerPpq * 960.0;
+                    if (tick >= limit + 1.0)
+                        continue;
+                    bool found = false;
+                    for (std::size_t i = 0; i < want.size() && ! found; ++i)
+                        if (! used[i] && std::get<1> (want[i]) == key.second && std::get<2> (want[i]) == velocity
+                            && std::abs (static_cast<double> (std::get<0> (want[i])) - tick) <= 1.0)
+                        {
+                            used[i] = true;
+                            found = true;
+                        }
+                    matched += found ? 1 : 0;
+                    unmatched += found ? 0 : 1;
+                    if (! found && std::getenv ("VOX_PARITY_DEBUG") != nullptr)
+                    {
+                        std::printf ("  unmatched %s: tick %.3f pad %d vel %d; exported near:", what.toRawUTF8(), tick, key.second, velocity);
+                        for (const auto& w : want)
+                            if (std::abs (static_cast<double> (std::get<0> (w)) - tick) < 40.0)
+                                std::printf (" (%lld p%d v%d)", std::get<0> (w), std::get<1> (w), std::get<2> (w));
+                        std::printf ("\n");
+                    }
+                }
+                const auto missing = std::count (used.begin(), used.end(), false);
+                check (matched > 100 && unmatched == 0 && missing == 0,
+                       label + what + ": playback triggers equal exported Note Ons (" + juce::String (matched) + " matched, "
+                           + juce::String (unmatched) + " played but not exported, " + juce::String (static_cast<int> (missing))
+                           + " exported but not played)");
+            };
+            compare (first, passes * patternPpq, "2 passes from 0");
+            compare (again, patternPpq, "restart at 0");
+            bool lane6 = false, upper = false;
+            for (const auto& e : exported)
+            {
+                lane6 = lane6 || std::get<1> (e) == 5;
+                upper = upper || std::get<1> (e) >= 8;
+            }
+            check (! lane6 && upper, label + "the disabled lane is absent; pads 9-16 are exported on their remapped notes");
+        }
+    check (audible, "the parity kit is audible");
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -1662,6 +1929,7 @@ int main (int argc, char** argv)
     testState();
     testStateReentrancy();
     testPatterns();
+    testExportPlaybackParity();
     testRealtime();
     if (failures == 0)
         std::printf ("VOX Drums product tests passed\n");

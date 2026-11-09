@@ -37,6 +37,9 @@ public:
     SampleLibrary& samples() noexcept { return samples_; }
     KitStore& kitStore() noexcept { return store_; }
     PatternStore& patterns() noexcept { return patternStore_; }
+    // Tests: the engine, to read what the last processBlock triggered
+    // (same thread as processBlock, after it returns).
+    const kit::KitEngine& engineForTesting() const noexcept { return engine_; }
 
     // Message thread: pattern slot `slot` as a Standard MIDI File with the
     // current swing, accent, lanes and pad notes (what the sequencer plays

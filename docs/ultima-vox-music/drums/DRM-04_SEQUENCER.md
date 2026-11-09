@@ -108,3 +108,65 @@ with a unique name they pass.
 
 If the failure shows up again (locally or in CI), it is to be investigated
 as a real failure.
+
+## End-to-end parity: playback = exported SMF (lead decision 6749717308)
+
+`testExportPlaybackParity` (`suite_drums_product_tests`) works on one saved
+project.
+
+**The project**
+- A 32-step, 2-bar pattern with ±microtiming, ratchets, probability and
+  accents.
+- Swing 0.27 and accent 0.65.
+- Lane 6 disabled.
+- All 16 pads remapped to unique notes (90, 88, …), so pads 9–16 are
+  included.
+- Internal mode, slot 4.
+
+**The run.** The project is saved, then restored into a new processor at
+44.1, 48 and 96 kHz × 64, 333 and 512 frames. Then:
+- **Export.** `exportPatternMidi (3, 2 passes, 133 BPM)` is parsed byte by
+  byte by the test's own SMF reader, not juce::MidiFile.
+- **SMF checks:**
+  - format 0, 960 ticks per quarter, the tempo;
+  - events in tick order, on channel 10;
+  - at one tick, Note Offs come before Note Ons;
+  - no same-note overlap, and every note ends.
+- **Playback.** `processBlock` runs from position 0 for 2 passes, then
+  restarts at 0 for one more pass. Playback is observed as the triggers the
+  processor's engine actually scheduled in each block
+  (`engineForTesting()`). It is not a second call of `stepHits`. Hits on one
+  pad at one frame are merged, as the engine merges them into one trigger.
+- **Comparison.** Every played trigger must match an exported Note On one to
+  one: same pad (through the note), same velocity, within 1 tick. No played
+  trigger may be missing from the export, and no Note On may be missing from
+  playback. This holds both for the 2 passes and after the restart.
+- **Also checked:** the disabled lane is absent, pads 9–16 are present, and
+  the kit is audible.
+
+**Tolerance.**
+- A hit at musical position *t* plays up to one frame late, at
+  `ceil((t − blockPpq) × samplesPerPpq − 1e-6)`. That is at most 0.06 tick
+  at 133 BPM and 44.1 kHz.
+- The export writes `round(t × 960)`, which is at most 0.5 tick off.
+- The block position is accumulated in double, which adds less than 1e-6
+  tick.
+- Hence the 1-tick bound.
+
+**Window.** Both sides are compared up to 2 ticks before the end. The last
+block runs past the end into the next pass, which an N-pass export does not
+contain; the first version of the test reported exactly those hits as
+unmatched.
+
+**Mutation checks**
+- Export without swing: 18 failures.
+- Disabled lane exported anyway: 27 failures.
+- Engine ignoring the lane switches: 18 failures.
+
+**Limit.** A wrong Note Off gate length is not detected, because the export
+clips each note at the same note's next Note On. Drum hits are one-shots, so
+the gate does not change the sound.
+
+**Realtime.** `processBlock` is unchanged: `engineForTesting()` is a const
+accessor that the test calls after the block. The allocation probe still
+counts 0 allocations.
