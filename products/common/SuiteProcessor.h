@@ -2,9 +2,9 @@
 
 // FOUND-01 shell shared by the three ULTIMA VOX MUSIC plugins: a plain JUCE
 // AudioProcessor with a stereo main output, MIDI input, a versioned VOXS state
-// and a VOX-styled editor. There is no sound engine yet: the processor outputs
-// silence. Product DSP, parameters and editors arrive in DRM-01 / SYN-01 /
-// FX-01. Header-only so each product compiles it into its own plugin; the
+// and a VOX-styled editor. A product without an engine outputs silence; a
+// product with one overrides processBlock and the product-state hooks below
+// (DRM-01 for Drums; SYN-01 / FX-01 follow). Header-only so each product compiles it into its own plugin; the
 // products share no runtime code or DLL.
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -72,8 +73,7 @@ public:
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
     {
         juce::ScopedNoDenormals noDenormals;
-        midiEventsSeen_.fetch_add (static_cast<std::uint64_t> (midi.getNumEvents()),
-                                   std::memory_order_relaxed);
+        noteMidiSeen (midi);
         buffer.clear();
     }
 
@@ -109,6 +109,7 @@ public:
         {
             const juce::ScopedLock lock (stateLock_);
             snapshot = saved_;
+            writeProductState (snapshot.product);
         }
 
         preset::StateDocument document;
@@ -120,6 +121,8 @@ public:
         appendU32 (ui.data, static_cast<std::uint32_t> (snapshot.editorWidth));
         appendU32 (ui.data, static_cast<std::uint32_t> (snapshot.editorHeight));
         document.sections.push_back (std::move (ui));
+        for (auto& section : snapshot.product)
+            document.sections.push_back (std::move (section));
         for (auto& section : snapshot.preserved)
             document.sections.push_back (std::move (section));
 
@@ -157,18 +160,27 @@ public:
             return;
         }
 
+        juce::String productError;
+        auto commitProduct = readProductState (decoded.document, productError);
+        if (! commitProduct)
+        {
+            rejectState (productError.isNotEmpty() ? productError : juce::String ("malformed product state"));
+            return;
+        }
+
         SaveableState next;
         next.editorWidth = static_cast<int> (width);
         next.editorHeight = static_cast<int> (height);
         for (auto& section : decoded.document.sections)
-            if (section.tag != uiSectionTag)
+            if (section.tag != uiSectionTag && ! isProductSection (section.tag))
                 next.preserved.push_back (std::move (section));
 
-        // Commit: one critical section; the previous state is destroyed after
-        // the lock is released.
+        // Commit: one critical section for the UI state and the product
+        // state; the previous state is destroyed after the lock is released.
         {
             const juce::ScopedLock lock (stateLock_);
             std::swap (saved_, next);
+            commitProduct();
             lastStateError_.clear();
         }
     }
@@ -203,6 +215,33 @@ public:
         saved_.editorHeight = height;
     }
 
+protected:
+    //==========================================================================
+    // Product state hooks (message/host threads, called with the state lock
+    // held, never on the audio thread).
+    //
+    // writeProductState appends the product's sections to a document being
+    // saved. readProductState validates the product sections of a decoded
+    // document without changing anything and returns the commit step, or an
+    // empty function and an error when the document is rejected; the commit
+    // runs in the same critical section as the UI state. A product section is
+    // never kept as an unknown section.
+    virtual void writeProductState (std::vector<preset::Section>&) const {}
+
+    virtual std::function<void()> readProductState (const preset::StateDocument&, juce::String&)
+    {
+        return [] {};
+    }
+
+    virtual bool isProductSection (preset::Tag) const { return false; }
+
+    // Realtime safe.
+    void noteMidiSeen (const juce::MidiBuffer& midi) noexcept
+    {
+        midiEventsSeen_.fetch_add (static_cast<std::uint64_t> (midi.getNumEvents()),
+                                   std::memory_order_relaxed);
+    }
+
 private:
     static void appendU32 (std::vector<std::byte>& out, std::uint32_t value)
     {
@@ -231,6 +270,7 @@ private:
     struct SaveableState {
         int editorWidth = EditorLimits::defaultWidth;
         int editorHeight = EditorLimits::defaultHeight;
+        std::vector<preset::Section> product;     // filled only while saving
         std::vector<preset::Section> preserved;
     };
 
@@ -272,4 +312,6 @@ inline vox::suite::SuiteEditor::SuiteEditor (SuiteProcessor& owner)
 inline void vox::suite::SuiteEditor::resized()
 {
     processor_.setEditorSize (getWidth(), getHeight());
+    if (content_ != nullptr)
+        content_->setBounds (getLocalBounds().withTrimmedTop (headerHeight).withTrimmedBottom (footerHeight));
 }
