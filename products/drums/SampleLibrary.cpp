@@ -108,6 +108,16 @@ juce::String hexOf (const std::array<std::uint8_t, 32>& sha)
 
 DecodeResult decodeSampleFile (const juce::File& file, std::size_t budgetBytes)
 {
+    return decodeSampleFile (file, [budgetBytes] (std::size_t needed) { return needed <= budgetBytes; });
+}
+
+std::size_t decodedBytes (const SampleReference& reference) noexcept
+{
+    return static_cast<std::size_t> (reference.frames) * std::min<std::size_t> (reference.channels, 2u) * sizeof (float);
+}
+
+DecodeResult decodeSampleFile (const juce::File& file, const std::function<bool (std::size_t)>& reserve)
+{
     DecodeResult result;
     if (! file.existsAsFile())
     {
@@ -158,17 +168,19 @@ DecodeResult decodeSampleFile (const juce::File& file, std::size_t budgetBytes)
     }
     const int channels = static_cast<int> (std::min<unsigned int> (reader->numChannels, 2u));
     const auto needed = static_cast<std::size_t> (frames) * static_cast<std::size_t> (channels) * sizeof (float);
-    if (needed > budgetBytes)
+    if (! reserve (needed))
     {
         result.error = "sample memory budget exceeded (" + juce::String (static_cast<juce::int64> (needed >> 20))
                      + " MiB needed): " + file.getFileName();
         return result;
     }
+    result.reserved = needed;
 
     auto buffer = std::make_shared<SampleBuffer>();
     buffer->frames = static_cast<std::uint64_t> (frames);
     buffer->sampleRate = rate;
     buffer->data.assign (static_cast<std::size_t> (channels), std::vector<float> (static_cast<std::size_t> (frames)));
+    buffer->account();
     {
         // Read in chunks into the float channels (the reader handles every
         // bit depth and float format).
@@ -392,6 +404,7 @@ std::size_t SampleLibrary::collect()
     // Freed here, on the message thread, outside the lock.
     tablesToFree.clear();
     toFree.clear();
+    resumeDeferred();   // freed memory may let deferred restored samples load
     return waiting;
 }
 
@@ -418,6 +431,47 @@ std::size_t SampleLibrary::retiredBytesLocked() const
     for (const auto& r : retiredBuffers_)
         bytes += r.buffer->bytes();
     return bytes;
+}
+
+std::size_t SampleLibrary::committedLocked() const
+{
+    // Each buffer once: a buffer can sit in several slots (a restore reuses
+    // one decoded copy) and is never both live and retired.
+    std::vector<std::uint64_t> seen;
+    std::size_t bytes = reserved_;
+    const auto add = [&] (const std::shared_ptr<const SampleBuffer>& b) {
+        if (b != nullptr && std::find (seen.begin(), seen.end(), b->id) == seen.end())
+        {
+            seen.push_back (b->id);
+            bytes += b->bytes();
+        }
+    };
+    for (const auto& p : pads_)
+        add (p.buffer);
+    for (const auto& r : retiredBuffers_)
+        add (r.buffer);
+    return bytes;
+}
+
+bool SampleLibrary::reserveLocked (std::size_t bytes)
+{
+    const auto used = committedLocked();
+    if (used > budget_ || bytes > budget_ - used)
+        return false;
+    reserved_ += bytes;
+    return true;
+}
+
+void SampleLibrary::release (std::size_t bytes)
+{
+    const juce::ScopedLock sl (lock_);
+    reserved_ -= std::min (reserved_, bytes);
+}
+
+std::size_t SampleLibrary::committedBytes() const
+{
+    const juce::ScopedLock sl (lock_);
+    return committedLocked();
 }
 
 std::size_t SampleLibrary::budget() const
@@ -502,20 +556,12 @@ void SampleLibrary::clear (int pad)
 
 void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<void (const juce::String&)> done)
 {
-    // The budget covers what stays allocated while the new file decodes:
-    // the other pads' samples and every retired buffer still waiting for
-    // reclamation (they are memory too).
+    // Hard cap: the decode reserves its size against everything held now
+    // (every slot's buffer, the one it will replace included, retired
+    // buffers and other decodes in flight) before it allocates. The
+    // replaced buffer is retired at commit and still counts until it is
+    // reclaimed, so the total never exceeds the budget.
     collect();
-    std::size_t budget = 0;
-    {
-        const juce::ScopedLock sl (lock_);
-        budget = budget_;
-        std::size_t used = retiredBytesLocked();
-        for (int i = 0; i < slotCount; ++i)
-            if (i != pad && pads_[static_cast<std::size_t> (i)].buffer != nullptr)
-                used += pads_[static_cast<std::size_t> (i)].buffer->bytes();
-        budget = used < budget ? budget - used : 0;
-    }
     if (pad < 0 || pad >= slotCount)
         return;
     std::uint64_t token = 0;
@@ -526,8 +572,13 @@ void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<vo
         dispatch = dispatch_;
     }
     juce::WeakReference<SampleLibrary> weak (this);
-    decoder_.addJob ([weak, pad, file, budget, token, dispatch, done = std::move (done)] {
-        auto decoded = decodeSampleFile (file, budget);
+    // The decoder pool is drained before this library is destroyed, so the
+    // job may use `this` for its reservation.
+    decoder_.addJob ([this, weak, pad, file, token, dispatch, done = std::move (done)] {
+        auto decoded = decodeSampleFile (file, [this] (std::size_t bytes) {
+            const juce::ScopedLock sl (lock_);
+            return reserveLocked (bytes);
+        });
         std::function<void()> complete = [weak, pad, file, token, decoded = std::move (decoded), done] () mutable {
             auto* self = weak.get();
             if (self == nullptr)
@@ -537,8 +588,16 @@ void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<vo
                 const juce::ScopedLock sl (self->lock_);
                 current = self->requests_[static_cast<std::size_t> (pad)] == token;
                 if (current && decoded.buffer != nullptr)
+                {
+                    // The reservation becomes the slot's buffer.
+                    self->reserved_ -= std::min (self->reserved_, decoded.reserved);
+                    decoded.reserved = 0;
                     self->setPadLocked (pad, std::move (decoded.buffer), file);
+                }
             }
+            // Not committed: free the buffer first, then its reservation.
+            decoded.buffer.reset();
+            self->release (decoded.reserved);
             self->collect();
             if (done)
                 done (current ? decoded.error : juce::String ("Load of " + file.getFileName() + " superseded by a later action"));
@@ -618,9 +677,13 @@ preset::Section SampleLibrary::encodeState (const std::array<PadInfo, slotCount>
     return section;
 }
 
-bool SampleLibrary::readState (const preset::Section* section, Restore& out, juce::String& error, std::size_t budgetBytes)
+bool SampleLibrary::readState (const preset::Section* section, Restore& out, juce::String& error)
 {
-    out = {};
+    out.pads = {};
+    out.diagnostics.clear();
+    release (out.reserved);
+    out.reserved = 0;
+    out.owner = this;
     if (section == nullptr)
         return true;   // no samples assigned (an older document)
     Reader in { section->data };
@@ -671,9 +734,22 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
         return false;
     }
 
-    // Resolve: the assigned path, then the user library by content hash. A
-    // file whose content changed is never used in place of the original.
-    std::size_t budget = budgetBytes;
+    // Resolve each reference: a buffer the library already holds with the
+    // same content (no new memory: a restore of the current project, or the
+    // same sample on two slots), then the assigned path, then the user
+    // library by content hash. A file whose content changed is never used in
+    // place of the original. New decodes reserve their size against
+    // everything held now; one that does not fit is deferred.
+    collect();
+    std::vector<std::shared_ptr<const SampleBuffer>> held;
+    {
+        const juce::ScopedLock sl (lock_);
+        for (const auto& p : pads_)
+            if (p.buffer != nullptr)
+                held.push_back (p.buffer);
+        for (const auto& r : retiredBuffers_)
+            held.push_back (r.buffer);
+    }
     juce::StringArray diagnostics;
     for (int pad = 0; pad < slotCount; ++pad)
     {
@@ -682,40 +758,100 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
         if (! ref)
             continue;
         p.reference = ref;
-        juce::Array<juce::File> candidates;
-        const juce::File assigned (ref->path);
-        if (juce::File::isAbsolutePath (ref->path) && assigned.existsAsFile())
-            candidates.add (assigned);
-        for (const auto& f : libraryFolder().findChildFiles (juce::File::findFiles, false, hexOf (ref->sha256) + ".*"))
-            candidates.addIfNotAlreadyThere (f);
-        juce::String problem = candidates.isEmpty() ? "not found" : juce::String();
-        for (const auto& candidate : candidates)
+        const auto same = [&] (const std::shared_ptr<const SampleBuffer>& b) { return b != nullptr && b->sha256 == ref->sha256; };
+        auto found = std::find_if (held.begin(), held.end(), same);
+        if (found == held.end())
+            for (int other = 0; other < pad && found == held.end(); ++other)
+                if (same (out.pads[static_cast<std::size_t> (other)].buffer))
+                {
+                    held.push_back (out.pads[static_cast<std::size_t> (other)].buffer);
+                    found = held.end() - 1;
+                }
+        if (found != held.end())
         {
-            auto decoded = decodeSampleFile (candidate, budget);
-            if (decoded.buffer == nullptr)
-            {
-                problem = decoded.error;
-                continue;
-            }
-            if (decoded.buffer->sha256 != ref->sha256)
-            {
-                problem = "file content changed since it was assigned";
-                continue;
-            }
-            budget -= std::min (budget, decoded.buffer->bytes());
+            p.buffer = *found;
+            continue;
+        }
+        const auto needed = decodedBytes (*ref);
+        bool fits = false;
+        {
+            const juce::ScopedLock sl (lock_);
+            const auto used = committedLocked();
+            fits = used <= budget_ && needed <= budget_ - used;
+        }
+        if (! fits)
+        {
+            p.deferred = true;
+            p.status = "waiting for memory";
+            diagnostics.add (padLabel (pad) + ": '" + ref->name + "' waits for sample memory (" + juce::String (static_cast<juce::int64> (needed >> 20))
+                             + " MiB); it loads when the samples it replaces are released");
+            continue;
+        }
+        auto decoded = resolve (*ref, [this] (std::size_t bytes) {
+            const juce::ScopedLock sl (lock_);
+            return reserveLocked (bytes);
+        });
+        if (decoded.buffer != nullptr)
+        {
+            out.reserved += decoded.reserved;
             p.buffer = std::move (decoded.buffer);
-            problem.clear();
-            break;
+            held.push_back (p.buffer);
+            continue;
         }
-        if (p.buffer == nullptr)
+        release (decoded.reserved);
+        if (decoded.error.contains ("sample memory budget"))
         {
-            p.status = problem;
-            diagnostics.add (padLabel (pad) + ": '" + ref->name + "' " + problem + " (" + ref->path + ", sha256 "
-                             + hexOf (ref->sha256).substring (0, 12) + "); the pad plays its synthesis");
+            p.deferred = true;
+            p.status = "waiting for memory";
+            diagnostics.add (padLabel (pad) + ": '" + ref->name + "' waits for sample memory; it loads when the samples it replaces are released");
+            continue;
         }
+        p.status = decoded.error;
+        diagnostics.add (padLabel (pad) + ": '" + ref->name + "' " + decoded.error + " (" + ref->path + ", sha256 "
+                         + hexOf (ref->sha256).substring (0, 12) + "); the pad plays its synthesis");
     }
     out.diagnostics = diagnostics.joinIntoString ("\n");
     return true;
+}
+
+DecodeResult SampleLibrary::resolve (const SampleReference& ref, const std::function<bool (std::size_t)>& reserve)
+{
+    juce::Array<juce::File> candidates;
+    const juce::File assigned (ref.path);
+    if (juce::File::isAbsolutePath (ref.path) && assigned.existsAsFile())
+        candidates.add (assigned);
+    for (const auto& f : libraryFolder().findChildFiles (juce::File::findFiles, false, hexOf (ref.sha256) + ".*"))
+        candidates.addIfNotAlreadyThere (f);
+    DecodeResult result;
+    result.error = candidates.isEmpty() ? "not found" : juce::String();
+    for (const auto& candidate : candidates)
+    {
+        auto decoded = decodeSampleFile (candidate, reserve);
+        if (decoded.buffer == nullptr)
+        {
+            result.error = decoded.error;
+            if (decoded.error.contains ("sample memory budget"))
+                return result;   // the next candidate would not fit either
+            continue;
+        }
+        if (decoded.buffer->sha256 != ref.sha256)
+        {
+            // Free the wrong buffer, then its reservation, and try the next.
+            decoded.buffer.reset();
+            release (decoded.reserved);
+            result.error = "file content changed since it was assigned";
+            continue;
+        }
+        decoded.error.clear();
+        return decoded;
+    }
+    return result;
+}
+
+SampleLibrary::Restore::~Restore()
+{
+    if (owner != nullptr && reserved > 0)
+        owner->release (reserved);
 }
 
 void SampleLibrary::setCompletionDispatcherForTesting (std::function<void (std::function<void()>)> dispatch)
@@ -730,18 +866,88 @@ void SampleLibrary::waitForPendingDecodes()
         juce::Thread::sleep (2);
 }
 
-void SampleLibrary::apply (Restore restore)
+void SampleLibrary::apply (Restore& restore)
 {
     {
         const juce::ScopedLock sl (lock_);
         for (int pad = 0; pad < slotCount; ++pad)
         {
             ++requests_[static_cast<std::size_t> (pad)];   // a restore supersedes pending loads
+            deferredLoading_[static_cast<std::size_t> (pad)] = false;
             pads_[static_cast<std::size_t> (pad)] = std::move (restore.pads[static_cast<std::size_t> (pad)]);
         }
+        // The reserved decodes are now slot buffers; the replaced ones are
+        // retired by the publish and count until they are reclaimed.
+        reserved_ -= std::min (reserved_, restore.reserved);
+        restore.reserved = 0;
         publishLocked();
     }
-    collect();
+    collect();   // reclaims what it can and starts deferred loads that fit
+}
+
+void SampleLibrary::resumeDeferred()
+{
+    struct Job { int slot; SampleReference ref; std::uint64_t token; };
+    std::vector<Job> jobs;
+    std::function<void (std::function<void()>)> dispatch;
+    {
+        const juce::ScopedLock sl (lock_);
+        dispatch = dispatch_;
+        for (int slot = 0; slot < slotCount; ++slot)
+        {
+            auto& p = pads_[static_cast<std::size_t> (slot)];
+            if (! p.deferred || ! p.reference || deferredLoading_[static_cast<std::size_t> (slot)])
+                continue;
+            // Start only when it fits now (no file is read just to be refused).
+            const auto needed = decodedBytes (*p.reference);
+            if (! reserveLocked (needed))
+                continue;
+            reserved_ -= needed;   // the decode reserves its exact size itself
+            deferredLoading_[static_cast<std::size_t> (slot)] = true;
+            jobs.push_back ({ slot, *p.reference, requests_[static_cast<std::size_t> (slot)] });
+        }
+    }
+    juce::WeakReference<SampleLibrary> weak (this);
+    for (auto& job : jobs)
+    {
+        decoder_.addJob ([this, weak, job, dispatch] {
+            auto decoded = resolve (job.ref, [this] (std::size_t bytes) {
+                const juce::ScopedLock sl (lock_);
+                return reserveLocked (bytes);
+            });
+            std::function<void()> complete = [weak, job, decoded = std::move (decoded)] () mutable {
+                auto* self = weak.get();
+                if (self == nullptr)
+                    return;
+                {
+                    const juce::ScopedLock sl (self->lock_);
+                    auto& p = self->pads_[static_cast<std::size_t> (job.slot)];
+                    self->deferredLoading_[static_cast<std::size_t> (job.slot)] = false;
+                    const bool current = self->requests_[static_cast<std::size_t> (job.slot)] == job.token && p.deferred;
+                    if (current && decoded.buffer != nullptr)
+                    {
+                        self->reserved_ -= std::min (self->reserved_, decoded.reserved);
+                        decoded.reserved = 0;
+                        p.buffer = std::move (decoded.buffer);
+                        p.deferred = false;
+                        p.status.clear();
+                        self->publishLocked();
+                    }
+                    else if (current && ! decoded.error.contains ("sample memory budget"))
+                    {
+                        p.deferred = false;   // missing or changed now: a plain diagnostic
+                        p.status = decoded.error;
+                    }
+                }
+                decoded.buffer.reset();
+                self->release (decoded.reserved);
+            };
+            if (dispatch)
+                dispatch (std::move (complete));
+            else
+                juce::MessageManager::callAsync (std::move (complete));
+        });
+    }
 }
 
 juce::String SampleLibrary::diagnostics() const
