@@ -27,7 +27,11 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 #include <fstream>
+#include <future>
+#include <thread>
+#include <atomic>
 #include <limits>
 #include <map>
 #include <memory>
@@ -538,6 +542,150 @@ void testState()
 }
 
 //==============================================================================
+// Review 6733006001 P1: no host notification or listener callback runs under
+// the state lock, and every document saved while a restore is in flight is
+// the old or the new state, never a mix.
+struct Doc {
+    std::vector<std::byte> ui, params;
+};
+
+Doc sectionsOf (const juce::MemoryBlock& blob, vox::preset::Tag tag)
+{
+    Doc d;
+    const auto decoded = vox::preset::decode (std::span (static_cast<const std::byte*> (blob.getData()), blob.getSize()), tag, 1);
+    if (! decoded.ok())
+        return d;
+    if (const auto* ui = decoded.document.find (vox::suite::uiSectionTag))
+        d.ui = ui->data;
+    if (const auto* params = decoded.document.find (vox::drums::parameterSectionTag))
+        d.params = params->data;
+    return d;
+}
+
+// Two distinct full states (UI size and every parameter differ).
+std::pair<juce::MemoryBlock, juce::MemoryBlock> twoStates()
+{
+    std::mt19937 random (99);
+    std::uniform_real_distribution<float> unit (0.05f, 0.95f);
+    juce::MemoryBlock states[2];
+    for (int k = 0; k < 2; ++k)
+    {
+        auto p = makeProcessor();
+        p->setEditorSize (k == 0 ? 1400 : 1100, k == 0 ? 900 : 720);
+        for (const auto& entry : vox::drums::pluginParameters())
+            parameter (*p, entry.id).setValueNotifyingHost (k == 0 ? unit (random) : 1.0f - unit (random));
+        p->getStateInformation (states[k]);
+    }
+    return { states[0], states[1] };
+}
+
+class SavingListener final : public juce::AudioProcessorParameter::Listener {
+public:
+    SavingListener (DrumsProcessor& p, bool otherThread) : processor (p), crossThread (otherThread) {}
+
+    void parameterValueChanged (int, float) override
+    {
+        juce::MemoryBlock blob;
+        if (crossThread)
+        {
+            // The listener waits for another thread that saves: with the
+            // state lock held across notifications this deadlocks.
+            auto future = std::async (std::launch::async, [this] {
+                juce::MemoryBlock b;
+                processor.getStateInformation (b);
+                return b;
+            });
+            if (future.wait_for (std::chrono::seconds (10)) != std::future_status::ready)
+            {
+                std::printf ("FAIL [VOX Drums]: a save from another thread during restore deadlocked\n");
+                std::fflush (stdout);
+                std::_Exit (EXIT_FAILURE);
+            }
+            blob = future.get();
+        }
+        else
+        {
+            processor.getStateInformation (blob);
+        }
+        saves.push_back (blob);
+    }
+    void parameterGestureChanged (int, bool) override {}
+
+    DrumsProcessor& processor;
+    bool crossThread;
+    std::vector<juce::MemoryBlock> saves;
+};
+
+void testStateReentrancy()
+{
+    const auto [stateA, stateB] = twoStates();
+    const auto tag = vox::preset::makeTag (VOX_TEST_STATE_TAG);
+    const auto a = sectionsOf (stateA, tag), b = sectionsOf (stateB, tag);
+    check (! a.params.empty() && a.params != b.params && a.ui != b.ui, "two distinct states");
+
+    for (const bool crossThread : { false, true })
+    {
+        const juce::String mode = crossThread ? "listener waits on another thread's save" : "listener saves";
+        auto p = makeProcessor();
+        p->setStateInformation (stateA.getData(), static_cast<int> (stateA.getSize()));
+        SavingListener listener (*p, crossThread);
+        std::vector<juce::AudioProcessorParameter*> watched;
+        for (const auto* id : { "drm.p01.level", "drm.p05.decay", "drm.seq.pattern" })
+        {
+            watched.push_back (p->state().getParameter (id));
+            watched.back()->addListener (&listener);
+        }
+        p->setStateInformation (stateB.getData(), static_cast<int> (stateB.getSize()));
+        for (auto* w : watched)
+            w->removeListener (&listener);
+
+        check (p->lastStateError().isEmpty(), mode + ": restore completes");
+        check (listener.saves.size() == watched.size(), mode + ": the listener saved during restore ("
+                                                           + juce::String (static_cast<int> (listener.saves.size())) + ")");
+        for (const auto& blob : listener.saves)
+        {
+            const auto d = sectionsOf (blob, tag);
+            check (d.ui == b.ui && d.params == b.params, mode + ": a save during restore is the restored state");
+        }
+        juce::MemoryBlock after;
+        p->getStateInformation (after);
+        const auto d = sectionsOf (after, tag);
+        check (d.ui == b.ui && d.params == b.params, mode + ": after restore the saved state is the restored state");
+    }
+
+    // Concurrent restore (A/B) and save: every save is A or B as a whole.
+    {
+        auto p = makeProcessor();
+        p->setStateInformation (stateA.getData(), static_cast<int> (stateA.getSize()));
+        std::atomic<bool> done { false };
+        std::thread restorer ([&] {
+            for (int i = 0; i < 300; ++i)
+            {
+                const auto& blob = (i & 1) ? stateB : stateA;
+                p->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+            }
+            done = true;
+        });
+        int saves = 0, torn = 0;
+        while (! done)
+        {
+            juce::MemoryBlock blob;
+            p->getStateInformation (blob);
+            const auto d = sectionsOf (blob, tag);
+            const bool isA = d.ui == a.ui && d.params == a.params;
+            const bool isB = d.ui == b.ui && d.params == b.params;
+            if (! (isA || isB))
+                ++torn;
+            ++saves;
+        }
+        restorer.join();
+        check (torn == 0, "concurrent restore/save: " + juce::String (torn) + " of " + juce::String (saves)
+                              + " saves mixed two states");
+        check (saves > 0, "concurrent restore/save: saves happened");
+    }
+}
+
+//==============================================================================
 void testRealtime()
 {
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -593,6 +741,7 @@ int main (int argc, char** argv)
     testEditorBindings();
     testSound();
     testState();
+    testStateReentrancy();
     testRealtime();
     if (failures == 0)
         std::printf ("VOX Drums product tests passed\n");

@@ -103,13 +103,31 @@ public:
     // whole state in one critical section; restore and editor resize commit
     // in one critical section. A saved document is therefore always one
     // committed state, never a mix of two (review 6724525306, P1).
+    //
+    // No host notification or listener callback ever runs under stateLock_
+    // (review 6733006001, P1). Product parameters are restored in three
+    // ordered steps:
+    //   1. commit (stateLock_): the UI state and the restored document's
+    //      product sections are published together and the restore is
+    //      marked in flight;
+    //   2. apply (no stateLock_): the product sets its parameters, which
+    //      notifies the host and listeners; they may save or read state;
+    //   3. settle (stateLock_): the product records what it applied and the
+    //      in-flight mark is cleared.
+    // A save while a restore is in flight writes the state being restored
+    // (the product sections it will write once settled, published in step 1),
+    // so it is never a mix of the old and new parameters. Restores are serialised by restoreLock_,
+    // which getStateInformation never takes.
     void getStateInformation (juce::MemoryBlock& destination) override
     {
         SaveableState snapshot;
         {
             const juce::ScopedLock lock (stateLock_);
             snapshot = saved_;
-            writeProductState (snapshot.product);
+            if (restoring_)
+                snapshot.product = restoringProduct_;
+            else
+                writeProductState (snapshot.product);
         }
 
         preset::StateDocument document;
@@ -136,6 +154,7 @@ public:
     // changed only when the whole blob is accepted.
     void setStateInformation (const void* data, int sizeInBytes) override
     {
+        const juce::ScopedLock serialise (restoreLock_);
         const auto bytes = std::span<const std::byte> (static_cast<const std::byte*> (data),
                                                        data != nullptr && sizeInBytes > 0
                                                            ? static_cast<std::size_t> (sizeInBytes) : 0u);
@@ -161,8 +180,8 @@ public:
         }
 
         juce::String productError;
-        auto commitProduct = readProductState (decoded.document, productError);
-        if (! commitProduct)
+        auto product = readProductState (decoded.document, productError);
+        if (! product.apply || ! product.settle)
         {
             rejectState (productError.isNotEmpty() ? productError : juce::String ("malformed product state"));
             return;
@@ -171,17 +190,28 @@ public:
         SaveableState next;
         next.editorWidth = static_cast<int> (width);
         next.editorHeight = static_cast<int> (height);
+        auto productSections = std::move (product.sections);
         for (auto& section : decoded.document.sections)
             if (section.tag != uiSectionTag && ! isProductSection (section.tag))
                 next.preserved.push_back (std::move (section));
 
-        // Commit: one critical section for the UI state and the product
-        // state; the previous state is destroyed after the lock is released.
+        // 1. Commit: the UI state and the restored product sections, in one
+        // critical section; previous values are destroyed after it.
         {
             const juce::ScopedLock lock (stateLock_);
             std::swap (saved_, next);
-            commitProduct();
+            std::swap (restoringProduct_, productSections);
+            restoring_ = true;
             lastStateError_.clear();
+        }
+        // 2. Apply: host and listener notifications, without stateLock_.
+        product.apply();
+        // 3. Settle.
+        {
+            const juce::ScopedLock lock (stateLock_);
+            product.settle();
+            restoring_ = false;
+            std::swap (restoringProduct_, productSections);
         }
     }
 
@@ -217,20 +247,29 @@ public:
 
 protected:
     //==========================================================================
-    // Product state hooks (message/host threads, called with the state lock
-    // held, never on the audio thread).
+    // Product state hooks (message/host threads, never the audio thread).
     //
     // writeProductState appends the product's sections to a document being
-    // saved. readProductState validates the product sections of a decoded
-    // document without changing anything and returns the commit step, or an
-    // empty function and an error when the document is rejected; the commit
-    // runs in the same critical section as the UI state. A product section is
-    // never kept as an unknown section.
+    // saved; it runs under stateLock_ and must not call out (no notification,
+    // no listener). readProductState validates the product sections of a
+    // decoded document without changing anything (no lock held) and returns
+    // the restore steps, or empty steps and an error when the document is
+    // rejected: `apply` runs without stateLock_ and may notify the host;
+    // `settle` runs under stateLock_ and must not call out. A product section
+    // is never kept as an unknown section.
+    struct ProductRestore {
+        std::function<void()> apply;
+        std::function<void()> settle;
+        // What writeProductState will write once the restore has settled;
+        // saved for the product while the restore is in flight.
+        std::vector<preset::Section> sections;
+    };
+
     virtual void writeProductState (std::vector<preset::Section>&) const {}
 
-    virtual std::function<void()> readProductState (const preset::StateDocument&, juce::String&)
+    virtual ProductRestore readProductState (const preset::StateDocument&, juce::String&)
     {
-        return [] {};
+        return { [] {}, [] {}, {} };
     }
 
     virtual bool isProductSection (preset::Tag) const { return false; }
@@ -276,7 +315,10 @@ private:
 
     // Message/host threads only; never taken on the audio thread.
     juce::CriticalSection stateLock_;
+    juce::CriticalSection restoreLock_;   // serialises restores; never taken by save
     SaveableState saved_;
+    bool restoring_ = false;                          // stateLock_
+    std::vector<preset::Section> restoringProduct_;   // stateLock_
     juce::String lastStateError_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuiteProcessor)

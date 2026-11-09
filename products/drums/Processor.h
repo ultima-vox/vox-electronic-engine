@@ -47,7 +47,7 @@ public:
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
-    std::function<void()> readProductState (const preset::StateDocument&, juce::String&) override;
+    ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     bool isProductSection (preset::Tag tag) const override { return tag == parameterSectionTag; }
 
 private:

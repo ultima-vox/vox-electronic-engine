@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <memory>
 
 namespace vox::drums {
 namespace {
@@ -229,31 +230,45 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 // DPRM section: u32 count, then per parameter u32 id length, id bytes (UTF-8),
 // f32 plain value (little endian bit pattern). Unknown IDs are ignored (a
 // newer writer); missing ones take their defaults.
-void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
+namespace {
+
+// One DPRM section from plain values in pluginParameters() order.
+preset::Section encodeParameters (const std::vector<float>& plain)
 {
     preset::Section section;
     section.tag = parameterSectionTag;
     const auto& entries = pluginParameters();
     putU32 (section.data, static_cast<std::uint32_t> (entries.size()));
-    for (const auto& entry : entries)
+    for (std::size_t i = 0; i < entries.size(); ++i)
+    {
+        putU32 (section.data, static_cast<std::uint32_t> (entries[i].id.size()));
+        for (const char c : entries[i].id)
+            section.data.push_back (static_cast<std::byte> (c));
+        std::uint32_t bits = 0;
+        std::memcpy (&bits, &plain[i], sizeof bits);
+        putU32 (section.data, bits);
+    }
+    return section;
+}
+
+} // namespace
+
+void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
+{
+    const auto& entries = pluginParameters();
+    std::vector<float> plain (entries.size());
+    for (std::size_t i = 0; i < entries.size(); ++i)
     {
         // A value restored from a state and not moved since is written back
         // as it was loaded: a skewed range cannot represent every float, so
         // the parameter may hold the nearest value instead.
-        const auto i = static_cast<std::size_t> (&entry - entries.data());
-        const float current = plainValueOf (*parameters_.getParameter (entry.id));
-        const float plain = juce::exactlyEqual (current, restored_[i].held) ? restored_[i].loaded : current;
-        putU32 (section.data, static_cast<std::uint32_t> (entry.id.size()));
-        for (const char c : entry.id)
-            section.data.push_back (static_cast<std::byte> (c));
-        std::uint32_t bits = 0;
-        std::memcpy (&bits, &plain, sizeof bits);
-        putU32 (section.data, bits);
+        const float current = plainValueOf (*parameters_.getParameter (entries[i].id));
+        plain[i] = juce::exactlyEqual (current, restored_[i].held) ? restored_[i].loaded : current;
     }
-    out.push_back (std::move (section));
+    out.push_back (encodeParameters (plain));
 }
 
-std::function<void()> DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
+DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
 {
     std::map<std::string, float> values;
     if (const auto* section = document.find (parameterSectionTag))
@@ -307,14 +322,31 @@ std::function<void()> DrumsProcessor::readProductState (const preset::StateDocum
             found != values.end() ? found->second : parameter->convertFrom0to1 (parameter->getDefaultValue()));
         next.emplace_back (parameter, plain);
     }
-    return [this, next = std::move (next)] {
-        for (std::size_t i = 0; i < next.size(); ++i)
+    // Apply notifies the host (no state lock held); settle records, under
+    // the state lock, what each parameter now holds so an unmoved value saves
+    // back exactly as loaded.
+    auto shared = std::make_shared<decltype (next)> (std::move (next));
+    auto held = std::make_shared<std::vector<float>> (shared->size(), 0.0f);
+    ProductRestore restore;
+    {
+        std::vector<float> plain;
+        for (const auto& entry : *shared)
+            plain.push_back (entry.second);
+        restore.sections.push_back (encodeParameters (plain));   // = writeProductState after settle
+    }
+    restore.apply = [shared, held] {
+        for (std::size_t i = 0; i < shared->size(); ++i)
         {
-            auto* parameter = next[i].first;
-            parameter->setValueNotifyingHost (parameter->convertTo0to1 (next[i].second));
-            restored_[i] = { next[i].second, plainValueOf (*parameter) };
+            auto* parameter = (*shared)[i].first;
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 ((*shared)[i].second));
+            (*held)[i] = plainValueOf (*parameter);
         }
     };
+    restore.settle = [this, shared, held] {
+        for (std::size_t i = 0; i < shared->size(); ++i)
+            restored_[i] = { (*shared)[i].second, (*held)[i] };
+    };
+    return restore;
 }
 
 juce::AudioProcessorEditor* DrumsProcessor::createEditor()

@@ -100,6 +100,11 @@ add_executable(suite_drums_product_tests DrumsProductTests.cpp)
 target_link_libraries(suite_drums_product_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 vox_suite_add_allocation_probe(suite_drums_product_tests)
+target_compile_definitions(suite_drums_product_tests PRIVATE VOX_TEST_STATE_TAG="${VOX_SUITE_drm_STATE_TAG}")
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(suite_drums_product_tests PRIVATE Threads::Threads)
+endif()
 add_test(NAME suite_drums_product_tests
   COMMAND suite_drums_product_tests ${PROJECT_SOURCE_DIR}/products/drums/parameters.csv)
 
