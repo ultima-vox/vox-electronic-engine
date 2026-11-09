@@ -514,7 +514,8 @@ void testMidiBurst()
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
-    sampleFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-parity-sample.wav");
+    sampleFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-parity-sample-" + juce::String (juce::Time::currentTimeMillis()) + "-"
+                                                                     + juce::String (juce::Random::getSystemRandom().nextInt()) + ".wav");
     {
         const int frames = 22050;
         juce::AudioBuffer<float> b (2, frames);

@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "PatternExport.h"
 
 #include "DrumsEditor.h"
 
@@ -68,8 +69,6 @@ DrumsProcessor::DrumsProcessor()
     swing_ = parameters_.getRawParameterValue ("drm.seq.swing");
     accent_ = parameters_.getRawParameterValue ("drm.seq.accent");
     pattern_ = parameters_.getRawParameterValue (patternParameterId);
-    for (int i = 0; i < kit::factoryPatternCount; ++i)
-        patterns_[static_cast<std::size_t> (i)] = kit::factoryPattern (i, patternCells_[static_cast<std::size_t> (i)]);
     events_.resize (midiCapacity);
     live_ = defaultKit();
     for (const auto& entry : pluginParameters())
@@ -225,12 +224,13 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     if (transport.hasPpq)
         lastPpq_.store (transport.ppq, std::memory_order_relaxed);
 
-    const int pattern = std::clamp (static_cast<int> (std::lround (load (pattern_))), 0, kit::factoryPatternCount - 1);
+    const int slot = std::clamp (static_cast<int> (std::lround (load (pattern_))), 0, PatternStore::slotCount - 1);
+    const auto& pattern = patternStore_.pull (slot, livePattern_);
     const bool panic = panicPending_.exchange (false, std::memory_order_acq_rel);
     const auto* sampleViews = samples_.acquire();
     const kit::Outputs out { buffer.getWritePointer (0), buffer.getWritePointer (1), nullptr };
     engine_.process (live_, out, static_cast<std::uint32_t> (frames), events_.data(), static_cast<std::uint32_t> (eventCount),
-                     transport, &patterns_[static_cast<std::size_t> (pattern)], sampleViews, panic);
+                     transport, &pattern, sampleViews, panic);
     samples_.report (engine_.usage());
     pads |= engine_.sequencerHits();
     for (int pad = 0; pad < padCount; ++pad)   // a muted pad does not play, so it does not light
@@ -282,6 +282,28 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodeParameters (plain));
     out.push_back (KitStore::encode (store_.snapshot()));
     out.push_back (samples_.writeState());
+    out.push_back (PatternStore::encode (patternStore_.all()));
+}
+
+juce::MemoryBlock DrumsProcessor::exportPatternMidi (int slot, int passes, double bpm)
+{
+    const auto stored = patternStore_.slot (slot);
+    kit::StepContext context;
+    context.swing = parameters_.getRawParameterValue ("drm.seq.swing")->load();
+    context.accent = parameters_.getRawParameterValue ("drm.seq.accent")->load();
+    context.laneMask = 0;
+    const auto kit = store_.snapshot();
+    std::array<std::uint8_t, kit::padCount> notes {};
+    for (int pad = 0; pad < padCount; ++pad)
+    {
+        if (parameters_.getRawParameterValue ("drm.seq.lane." + padPrefix (pad).substr (4))->load() >= 0.5f)
+            context.laneMask |= 1u << pad;
+        notes[static_cast<std::size_t> (pad)] = kit.pads[static_cast<std::size_t> (pad)].note;
+    }
+    ExportOptions options;
+    options.passes = passes;
+    options.bpm = bpm;
+    return exportMidi (stored.view(), context, notes, options, "VOX Drums Pattern " + juce::String (slot + 1));
 }
 
 DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
@@ -352,6 +374,14 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
     else
         KitStore::migrateLegacyParameters (values, *kitRestore);
 
+    // Patterns: the DSEQ section; factory patterns otherwise (DRM-01..03).
+    auto patternRestore = std::make_shared<std::array<StoredPattern, PatternStore::slotCount>> (PatternStore::factorySlots());
+    if (const auto* seq = document.find (sequenceSectionTag))
+    {
+        if (! PatternStore::decode (*seq, *patternRestore, error))
+            return {};
+    }
+
     std::vector<std::pair<juce::RangedAudioParameter*, float>> next;
     for (const auto& entry : pluginParameters())
     {
@@ -374,9 +404,11 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (encodeParameters (plain));   // = writeProductState after settle
         restore.sections.push_back (KitStore::encode (*kitRestore));
         restore.sections.push_back (SampleLibrary::encodeState (sampleRestore->pads));
+        restore.sections.push_back (PatternStore::encode (*patternRestore));
     }
-    restore.apply = [this, shared, held, sampleRestore, kitRestore] {
+    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore] {
         store_.setAll (*kitRestore);
+        patternStore_.setAll (*patternRestore);
         samples_.apply (std::move (*sampleRestore));
         for (std::size_t i = 0; i < shared->size(); ++i)
         {

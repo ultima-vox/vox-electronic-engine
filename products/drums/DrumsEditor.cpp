@@ -75,27 +75,31 @@ private:
 };
 
 //==============================================================================
-// Read-only view of the selected factory pattern (bar of the playhead, 8
-// lanes) with the step under the playhead; pattern editing is DRM-04.
+// Read-only view of the selected pattern slot (bar of the playhead, 16
+// lanes) with the step under the playhead; the step editor is DRM-04b.
 class DrumsPanel::StepView final : public juce::Component {
 public:
-    StepView (DrumsProcessor& p, juce::Colour accent) : processor_ (p), accent_ (accent)
-    {
-        for (int i = 0; i < kit::factoryPatternCount; ++i)
-            kit::factoryPattern (i, cells_[static_cast<std::size_t> (i)]);
-    }
+    StepView (DrumsProcessor& p, juce::Colour accent) : processor_ (p), accent_ (accent) {}
 
     void update (bool repaintIfChanged = true)
     {
         const int index = std::clamp (static_cast<int> (std::lround (processor_.state().getRawParameterValue (patternParameterId)->load())),
-                                      0, kit::factoryPatternCount - 1);
-        const double ppq = processor_.lastPpq();
-        const auto g = static_cast<long long> (std::floor (ppq / 0.25));
-        const int step = processor_.transportPlaying() && g >= 0 ? static_cast<int> (g % 16) : -1;
-        const int bar = g >= 0 ? static_cast<int> ((g / 16) % 4) : 0;
-        if (index != pattern_ || step != step_ || bar != bar_)
+                                      0, PatternStore::slotCount - 1);
+        bool changed = false;
+        if (index != pattern_ || processor_.patterns().generation() != generation_)
         {
+            generation_ = processor_.patterns().generation();
             pattern_ = index;
+            shown_ = processor_.patterns().slot (index);
+            changed = true;
+        }
+        const double ppq = processor_.lastPpq();
+        const double stepPpq = 4.0 / shown_.steps;
+        const auto g = static_cast<long long> (std::floor (ppq / stepPpq));
+        const int step = processor_.transportPlaying() && g >= 0 ? static_cast<int> (g % shown_.steps) : -1;
+        const int bar = g >= 0 ? static_cast<int> ((g / shown_.steps) % shown_.bars) : 0;
+        if (changed || step != step_ || bar != bar_)
+        {
             step_ = step;
             bar_ = bar;
             if (repaintIfChanged)
@@ -109,31 +113,34 @@ public:
         auto area = getLocalBounds();
         g.setColour (c::textMuted);
         g.setFont (vox::ui::typography::valueText());
-        g.drawText ("Bar " + juce::String (bar_ + 1) + " / 4", area.removeFromTop (16), juce::Justification::centredLeft);
+        g.drawText ("Bar " + juce::String (bar_ + 1) + " / " + juce::String (shown_.bars) + "   " + juce::String (shown_.steps) + " steps",
+                    area.removeFromTop (16), juce::Justification::centredLeft);
         const int nameWidth = 78;
-        const float cellW = static_cast<float> (area.getWidth() - nameWidth) / 16.0f;
-        const float cellH = static_cast<float> (area.getHeight()) / 8.0f;
-        for (int lane = 0; lane < 8; ++lane)
+        const int steps = shown_.steps;
+        const float cellW = static_cast<float> (area.getWidth() - nameWidth) / static_cast<float> (steps);
+        const float cellH = static_cast<float> (area.getHeight()) / static_cast<float> (padCount);
+        g.setFont (vox::ui::typography::valueText().withHeight (juce::jmin (13.0f, cellH * 0.8f)));
+        for (int lane = 0; lane < padCount; ++lane)
         {
             const float y = static_cast<float> (area.getY()) + cellH * static_cast<float> (lane);
             g.setColour (c::textSecondary);
             g.drawText (padName (lane), juce::Rectangle<float> (static_cast<float> (area.getX()), y, nameWidth - 4.0f, cellH),
                         juce::Justification::centredLeft);
-            for (int s = 0; s < 16; ++s)
+            for (int s = 0; s < steps; ++s)
             {
-                const auto& cell = cells_[static_cast<std::size_t> (pattern_)][static_cast<std::size_t> ((lane * 4 + bar_) * 16 + s)];
+                const auto& cell = shown_.cell (lane, bar_, s);
                 auto r = juce::Rectangle<float> (static_cast<float> (area.getX() + nameWidth) + cellW * static_cast<float> (s), y, cellW, cellH)
-                             .reduced (1.5f);
-                g.setColour (s == step_ ? c::panelRaised.brighter (0.3f) : (s % 4 == 0 ? c::panelRaised : c::control));
-                g.fillRoundedRectangle (r, 2.0f);
+                             .reduced (cellW > 8.0f ? 1.0f : 0.5f);
+                g.setColour (s == step_ ? c::panelRaised.brighter (0.3f) : (s % (steps / 4) == 0 ? c::panelRaised : c::control));
+                g.fillRect (r);
                 if (cell.on)
                 {
                     g.setColour (accent_.withAlpha (0.35f + 0.65f * static_cast<float> (cell.velocity) / 127.0f));
-                    g.fillRoundedRectangle (r.reduced (2.0f), 2.0f);
+                    g.fillRect (r.reduced (1.0f));
                     if (cell.accent)
                     {
                         g.setColour (c::text);
-                        g.fillEllipse (r.getCentreX() - 2.0f, r.getCentreY() - 2.0f, 4.0f, 4.0f);
+                        g.fillEllipse (r.getCentreX() - 1.5f, r.getCentreY() - 1.5f, 3.0f, 3.0f);
                     }
                 }
             }
@@ -143,8 +150,9 @@ public:
 private:
     DrumsProcessor& processor_;
     juce::Colour accent_;
-    std::array<std::array<kit::PatternStep, 8 * 4 * 16>, kit::factoryPatternCount> cells_ {};
-    int pattern_ = 0, step_ = -1, bar_ = 0;
+    StoredPattern shown_;
+    std::uint64_t generation_ = 0;
+    int pattern_ = -1, step_ = -1, bar_ = 0;
 };
 
 //==============================================================================

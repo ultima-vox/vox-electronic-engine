@@ -16,7 +16,7 @@ namespace {
 constexpr double pi = 3.14159265358979323846;
 constexpr double silence = 1e-4;   // -80 dB: a voice ends below this
 constexpr std::uint32_t maxChunk = 8192;
-constexpr int maxSequencerHits = 256 * 4;
+constexpr int maxSequencerHits = 4096;
 
 // 808-style metallic oscillator ratios (Hz at tune 0).
 constexpr double metalHz[6] = { 205.3, 304.4, 369.6, 522.7, 540.0, 800.0 };
@@ -506,14 +506,80 @@ Pattern factoryPattern (int index, std::array<PatternStep, 8 * 4 * 16>& cells) n
 }
 
 //==============================================================================
+double stepLength (const Pattern& pattern) noexcept
+{
+    static constexpr double stepPpq[5] = { 0.25, 0.5, 0.125, 1.0 / 3.0, 0.0625 };
+    return stepPpq[std::min<std::uint32_t> (pattern.timing, 4u)];
+}
+
+namespace {
+// Deterministic 0..99 from the seed, the absolute step and the lane.
+int chance (std::uint32_t seed, std::int64_t g, std::uint32_t lane) noexcept
+{
+    std::uint64_t x = (static_cast<std::uint64_t> (seed) << 32) ^ static_cast<std::uint64_t> (g) * 0x9E3779B97F4A7C15ull
+                    ^ static_cast<std::uint64_t> (lane) * 0xD1B54A32D192ED03ull;
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBull;
+    x ^= x >> 31;
+    return static_cast<int> (x % 100u);
+}
+} // namespace
+
+int stepHits (const Pattern& pattern, const StepContext& context, std::int64_t g, ScheduledHit* out) noexcept
+{
+    if (g < 0 || pattern.cells == nullptr || pattern.lanes == 0 || pattern.steps == 0 || pattern.bars == 0)
+        return 0;
+    const double step = stepLength (pattern);
+    // The legacy rule: odd steps late by swing; accent raises the velocity
+    // towards 127 by the accent amount.
+    const double t = static_cast<double> (g) * step + ((g & 1) ? context.swing * step : 0.0);
+    const auto steps = static_cast<std::int64_t> (pattern.steps);
+    const auto bars = static_cast<std::int64_t> (pattern.bars);
+    const auto st = static_cast<std::uint32_t> (g % steps);
+    const auto bar = static_cast<std::uint32_t> ((g / steps) % bars);
+    const auto lanes = std::min<std::uint32_t> (pattern.lanes, padCount);
+    int count = 0;
+    for (std::uint32_t lane = 0; lane < lanes; ++lane)
+    {
+        const auto& cell = pattern.cells[(lane * pattern.bars + bar) * pattern.steps + st];
+        if (! cell.on || ((context.laneMask >> lane) & 1u) == 0)
+            continue;
+        const int probability = std::clamp<int> (cell.probability, 0, 100);
+        if (probability < 100 && chance (pattern.seed, g, lane) >= probability)
+            continue;
+        double velocity = cell.velocity;
+        if (cell.accent)
+            velocity += context.accent * (127.0 - velocity);
+        const auto v = static_cast<std::uint8_t> (std::fmin (127.0, std::floor (velocity + 0.5)));
+        const int ratchet = std::clamp<int> (cell.ratchet, 1, maxRatchet);
+        const int microPercent = std::clamp<int> (cell.micro, -50, 50);
+        const double micro = microPercent * 0.01 * step;
+        for (int k = 0; k < ratchet; ++k)
+        {
+            // The first hit without micro is exactly the legacy time.
+            out[count].ppq = k == 0 && microPercent == 0 ? t : t + micro + static_cast<double> (k) * step / ratchet;
+            out[count].pad = static_cast<std::uint8_t> (lane);
+            out[count].velocity = v;
+            ++count;
+        }
+    }
+    return count;
+}
+
+//==============================================================================
 struct KitEngine::Impl {
     KitSettings safe;   // this block's settings, in range (sanitize)
     double sampleRate = 48000.0;
     int voiceLimit = maxVoices;
     std::array<Voice, maxVoices> voices {};
-    // Sequencer (scheduleSequencer, legacy): position state only.
-    std::int64_t lastStep = std::numeric_limits<std::int64_t>::min();
+    // Sequencer: position state only. `horizon` is the latest hit time
+    // already played; a block plays the hits after it that fall in the block.
+    double horizon = -HUGE_VAL;
     double lastPpqStart = -HUGE_VAL;
+    int scheduledCount = 0;           // hits of the last chunk (tests)
+    std::uint32_t scheduledBase = 0;  // its first frame in the block
     double lastPpqSeen = -1.0e300;
     struct Hit {
         std::uint32_t offset;
@@ -537,8 +603,9 @@ struct KitEngine::Impl {
 
     void resetSequencer() noexcept
     {
-        lastStep = std::numeric_limits<std::int64_t>::min();
+        horizon = -HUGE_VAL;
         lastPpqStart = -HUGE_VAL;
+        scheduledCount = 0;
     }
 
     // Pads hit on the same sample fire in pad order, except that the members
@@ -747,7 +814,10 @@ struct KitEngine::Impl {
         }
     }
 
-    // scheduleSequencer (legacy), lanes 1..16.
+    // The sequencer for one chunk: every hit of stepHits() whose frame
+    // offset (legacy rounding) is in [0, frames) and that is later than the
+    // horizon. Hits are ordered by offset (stable: lane order within a step,
+    // as the legacy module).
     int schedule (const KitSettings& kit, const Pattern* pattern, const Transport& tr, double ppq0, bool discontinuity,
                   std::uint32_t frames) noexcept
     {
@@ -756,48 +826,66 @@ struct KitEngine::Impl {
             || ! (tr.bpm > 0.0) || tr.bpm > 1000.0 || ! std::isfinite (ppq0) || frames == 0)
             return 0;
         if (discontinuity && ppq0 < lastPpqStart)
-            lastStep = std::numeric_limits<std::int64_t>::min();   // moved backwards: steps may play again
+            horizon = -HUGE_VAL;   // moved backwards: hits may play again
         lastPpqStart = ppq0;
 
-        static constexpr double stepPpq[4] = { 0.25, 0.5, 0.125, 1.0 / 3.0 };
-        const double step = stepPpq[std::min<std::uint32_t> (pattern->timing, 3u)];
+        const double step = stepLength (*pattern);
         const double samplesPerPpq = 60.0 * sampleRate / tr.bpm;
-        const double swing = kit.swing * step;
-        const double accent = kit.accent;
-        const auto steps = static_cast<std::int64_t> (pattern->steps);
-        const auto bars = static_cast<std::int64_t> (pattern->bars);
-        const auto lanes = std::min<std::uint32_t> (pattern->lanes, padCount);
+        StepContext context;
+        context.swing = kit.swing;
+        context.accent = kit.accent;
+        context.laneMask = 0;
+        for (int lane = 0; lane < padCount; ++lane)
+            if (kit.pads[static_cast<std::size_t> (lane)].laneOn)
+                context.laneMask |= 1u << lane;
+        const auto offsetOf = [&] (double t) { return std::ceil ((t - ppq0) * samplesPerPpq - 1e-6); };
         int count = 0;
-        for (std::int64_t g = static_cast<std::int64_t> (std::floor (ppq0 / step)) - 1;; ++g)
+        double latest = horizon;
+        std::array<ScheduledHit, padCount * maxRatchet> stepOut;
+        // A step's hits lie within [g - 0.5, g + 2) steps of its grid time
+        // (micro, swing, ratchets), so start 3 steps back and stop once a
+        // step cannot reach this chunk.
+        for (std::int64_t g = static_cast<std::int64_t> (std::floor (ppq0 / step)) - 3;; ++g)
         {
-            if (g < 0)
-                continue;
-            const double t = static_cast<double> (g) * step + ((g & 1) ? swing : 0.0);
-            const double at = std::ceil ((t - ppq0) * samplesPerPpq - 1e-6);
-            if (at >= static_cast<double> (frames))
+            if (offsetOf ((static_cast<double> (g) - 0.5) * step) >= static_cast<double> (frames))
                 break;
-            if (at < 0.0 || g <= lastStep)
-                continue;
-            lastStep = g;
-            const auto st = static_cast<std::uint32_t> (g % steps);
-            const auto bar = static_cast<std::uint32_t> ((g / steps) % bars);
-            for (std::uint32_t lane = 0; lane < lanes && count < maxSequencerHits; ++lane)
+            const int n = stepHits (*pattern, context, g, stepOut.data());
+            for (int k = 0; k < n && count < maxSequencerHits; ++k)
             {
-                const auto& cell = pattern->cells[(lane * pattern->bars + bar) * pattern->steps + st];
-                if (! cell.on || ! kit.pads[lane].laneOn)
+                const auto& h = stepOut[static_cast<std::size_t> (k)];
+                const double at = offsetOf (h.ppq);
+                if (at < 0.0 || at >= static_cast<double> (frames) || ! (h.ppq > horizon))
                     continue;
-                double velocity = cell.velocity;
-                if (cell.accent)
-                    velocity += accent * (127.0 - velocity);
-                hits[static_cast<std::size_t> (count)].offset = static_cast<std::uint32_t> (at);
-                hits[static_cast<std::size_t> (count)].pad = static_cast<std::uint8_t> (lane);
-                hits[static_cast<std::size_t> (count)].velocity = static_cast<std::uint8_t> (std::fmin (127.0, std::floor (velocity + 0.5)));
+                // Insert by offset after equal offsets (stable).
+                int pos = count;
+                const auto offset = static_cast<std::uint32_t> (at);
+                while (pos > 0 && hits[static_cast<std::size_t> (pos - 1)].offset > offset)
+                {
+                    hits[static_cast<std::size_t> (pos)] = hits[static_cast<std::size_t> (pos - 1)];
+                    --pos;
+                }
+                hits[static_cast<std::size_t> (pos)] = { offset, h.pad, h.velocity };
                 ++count;
+                latest = std::fmax (latest, h.ppq);
             }
         }
+        horizon = latest;
         return count;
     }
 };
+
+int KitEngine::scheduledCount() const noexcept
+{
+    return impl_->scheduledCount;
+}
+
+void KitEngine::scheduled (int i, std::uint32_t& offset, std::uint8_t& pad, std::uint8_t& velocity) const noexcept
+{
+    const auto& h = impl_->hits[static_cast<std::size_t> (std::clamp (i, 0, maxSequencerHits - 1))];
+    offset = impl_->scheduledBase + h.offset;
+    pad = h.pad;
+    velocity = h.velocity;
+}
 
 KitEngine::KitEngine() : impl_ (std::make_unique<Impl>()) {}
 KitEngine::~KitEngine() = default;
@@ -855,6 +943,8 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
         const std::uint32_t n = std::min (maxChunk, frames - done);
         const double ppq0 = transport.ppq + (transport.hasTempo ? static_cast<double> (done) * transport.bpm / 60.0 / s.sampleRate : 0.0);
         const int seqCount = s.schedule (kit, pattern, transport, ppq0, discontinuity && done == 0, n);
+        s.scheduledCount = seqCount;
+        s.scheduledBase = done;
         int nextHit = 0;
         for (int k = 0; k < seqCount; ++k)
             sequencerHits_ |= 1u << s.hits[static_cast<std::size_t> (k)].pad;
