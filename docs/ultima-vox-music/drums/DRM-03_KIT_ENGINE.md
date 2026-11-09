@@ -33,6 +33,20 @@ noisy zap; the FM index decays and is capped.
 every loop is bounded. Settings are plain structs, copied by the caller
 between blocks.
 
+**Settings are sanitised** (review 6737829467). At each block start the
+engine copies the settings into a fixed-size member and brings every field
+into range:
+- In-range values stay bit-identical, so the parity results do not change.
+- NaN takes the default; infinities and other out-of-range numbers are
+  clamped to the nearest bound.
+- An enum outside its set takes its first value.
+- An output bus outside 0..7 plays on **Main**.
+- A sample region is clamped to 0..1.
+
+The aux index is also bounds-checked at the write. The original defect was
+that `output = 8` wrote past the stack bus array: ASan reported a
+stack-buffer-overflow.
+
 ## Evidence (local, Linux GCC 13 Release): 26/26 suite tests pass
 
 | Test | Proves |

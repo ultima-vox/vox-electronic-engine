@@ -312,6 +312,66 @@ void startFade (Voice& v, double sampleRate, double seconds)
     v.fadeLeft = total;
 }
 
+// Every setting into its documented range (review 6737829467). Values in
+// range are returned unchanged, bit for bit, so a valid kit renders exactly
+// as before; NaN takes the fallback; enums outside their set take the first
+// value; an output bus outside 0..7 plays on Main.
+float clampOr (float v, float lo, float hi, float fallback) noexcept
+{
+    if (! std::isfinite (v))
+        return fallback;
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+template <typename E>
+E enumOr (E v, int count) noexcept
+{
+    return static_cast<int> (v) >= 0 && static_cast<int> (v) < count ? v : E {};
+}
+
+void sanitize (KitSettings& k) noexcept
+{
+    k.volume = clampOr (k.volume, 0.0f, 1.0f, 0.6f);
+    k.velocitySensitivity = clampOr (k.velocitySensitivity, 0.0f, 1.0f, 0.8f);
+    k.sequencerMode = k.sequencerMode <= 2 ? k.sequencerMode : std::uint8_t { 0 };
+    k.swing = clampOr (k.swing, 0.0f, 0.5f, 0.0f);
+    k.accent = clampOr (k.accent, 0.0f, 1.0f, 0.5f);
+    for (auto& p : k.pads)
+    {
+        p.model = enumOr (p.model, modelCount);
+        p.note &= 0x7f;
+        p.polyphony = static_cast<std::uint8_t> (std::clamp<int> (p.polyphony, 1, maxVoicesPerPad));
+        p.level = clampOr (p.level, 0.0f, 1.0f, 0.0f);
+        p.tune = clampOr (p.tune, -24.0f, 24.0f, 0.0f);
+        p.fine = clampOr (p.fine, -100.0f, 100.0f, 0.0f);
+        p.decay = clampOr (p.decay, 0.005f, 10.0f, 0.3f);
+        p.pan = clampOr (p.pan, -1.0f, 1.0f, 0.0f);
+        p.character = clampOr (p.character, 0.0f, 1.0f, 0.5f);
+        p.filter = enumOr (p.filter, 6);
+        p.cutoff = clampOr (p.cutoff, 20.0f, 20000.0f, 20000.0f);
+        p.resonance = clampOr (p.resonance, 0.0f, 1.0f, 0.0f);
+        p.attack = clampOr (p.attack, -1.0f, 1.0f, 0.0f);
+        p.sustain = clampOr (p.sustain, -1.0f, 1.0f, 0.0f);
+        p.output = p.output <= auxOutputs ? p.output : std::uint8_t { 0 };
+        p.send1 = clampOr (p.send1, 0.0f, 1.0f, 0.0f);
+        p.send2 = clampOr (p.send2, 0.0f, 1.0f, 0.0f);
+        p.pitchAmount = clampOr (p.pitchAmount, 0.0f, 48.0f, 24.0f);
+        p.pitchDecay = clampOr (p.pitchDecay, 0.005f, 0.2f, 0.035f);
+        p.drive = clampOr (p.drive, 1.0f, 8.0f, 1.6f);
+        p.sub = clampOr (p.sub, 0.0f, 1.0f, 0.3f);
+        p.tail = clampOr (p.tail, 0.03f, 1.5f, 0.25f);
+        p.source = enumOr (p.source, 3);
+        p.sampleMode = enumOr (p.sampleMode, 3);
+        p.velocitySplit = static_cast<std::uint8_t> (std::clamp<int> (p.velocitySplit, 1, 127));
+        for (auto& pl : p.players)
+        {
+            pl.start = clampOr (pl.start, 0.0f, 1.0f, 0.0f);
+            pl.end = clampOr (pl.end, 0.0f, 1.0f, 1.0f);
+            pl.level = clampOr (pl.level, 0.0f, 2.0f, 1.0f);
+        }
+    }
+}
+
 } // namespace
 
 //==============================================================================
@@ -357,6 +417,7 @@ KitSettings legacyKit()
 
 //==============================================================================
 struct KitEngine::Impl {
+    KitSettings safe;   // this block's settings, in range (sanitize)
     double sampleRate = 48000.0;
     int voiceLimit = maxVoices;
     std::array<Voice, maxVoices> voices {};
@@ -678,11 +739,14 @@ int KitEngine::activeVoices() const noexcept
     return n;
 }
 
-void KitEngine::process (const KitSettings& kit, const Outputs& out, std::uint32_t frames,
+void KitEngine::process (const KitSettings& settings, const Outputs& out, std::uint32_t frames,
                          const Event* events, std::uint32_t eventCount, const Transport& transport,
                          const Pattern* pattern, const Sample* samples, bool panic, Release release) noexcept
 {
     auto& s = *impl_;
+    s.safe = settings;   // fixed-size copy, no allocation
+    sanitize (s.safe);
+    const KitSettings& kit = s.safe;
     sequencerHits_ = 0;
     if (panic)
         s.stopAll();
@@ -805,7 +869,7 @@ void KitEngine::process (const KitSettings& kit, const Outputs& out, std::uint32
                 const double xl = xL * v.gainL, xr = xR * v.gainR;
                 // One dry destination per pad (main or its output bus); sends
                 // are post level/pan and independent of it.
-                if (out.aux != nullptr && v.bus > 0)
+                if (out.aux != nullptr && v.bus > 0 && v.bus <= auxOutputs)   // defensive: sanitize keeps 0..7
                 {
                     busL[auxSends + v.bus - 1] += xl;
                     busR[auxSends + v.bus - 1] += xr;

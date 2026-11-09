@@ -16,7 +16,10 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
+#include <random>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -324,6 +327,115 @@ void testBlockInvariance()
     }
 }
 
+// Review 6737829467: invalid settings never index out of range. Output bus
+// 7 plays on Out 8; 8 and 255 play on Main (exactly once); garbage in every
+// field (NaN, infinities, huge, negative, enums out of range, sample regions
+// outside 0..1) renders finite audio without touching memory outside the
+// buses and buffers (run under ASan/UBSan in the PR evidence).
+void testInvalidSettings()
+{
+    std::vector<std::vector<float>> bus (20, std::vector<float> (256));
+    std::array<float*, kit::auxBuses * 2> aux {};
+    for (int b = 0; b < kit::auxBuses * 2; ++b)
+        aux[static_cast<std::size_t> (b)] = bus[static_cast<std::size_t> (b + 2)].data();
+    const auto renderTo = [&] (const kit::KitSettings& settings, int noteNumber) {
+        for (auto& b : bus)
+            std::fill (b.begin(), b.end(), 0.0f);
+        kit::KitEngine engine;
+        engine.prepare (48000.0);
+        const auto e = note (0, noteNumber, 120);
+        kit::Transport tr;
+        kit::Outputs out { bus[0].data(), bus[1].data(), &aux };
+        engine.process (settings, out, 256, &e, 1, tr, nullptr, nullptr, false);
+        std::array<double, 10> energy {};
+        for (int b = 0; b < 10; ++b)
+            for (int i = 0; i < 256; ++i)
+                energy[static_cast<std::size_t> (b)] += std::abs (bus[static_cast<std::size_t> (b * 2)][static_cast<std::size_t> (i)]);
+        return energy;   // [0] main, [1] send 1, [2] send 2, [3..9] Out 2..8
+    };
+    for (const int output : { 0, 7, 8, 255 })
+    {
+        auto settings = kit::legacyKit();
+        settings.pads[0].output = static_cast<std::uint8_t> (output);
+        const auto e = renderTo (settings, 36);
+        const int expected = output == 7 ? 9 : 0;   // Out 8 is bus pair 9; invalid -> Main
+        int carrying = 0;
+        for (int b = 0; b < 10; ++b)
+            if (b != 1 && b != 2 && e[static_cast<std::size_t> (b)] > 0.0)
+                ++carrying;
+        check (e[static_cast<std::size_t> (expected)] > 1.0e-3 && carrying == 1,
+               "output " + std::to_string (output) + " plays exactly once on " + (expected == 0 ? "Main" : "Out 8"));
+    }
+
+    // Garbage in every field.
+    std::mt19937 rng (42);
+    const float specials[] = { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                               -std::numeric_limits<float>::infinity(), -1.0e30f, 1.0e30f, -5.0f, 0.0f, 7.0f };
+    std::vector<float> sampleData (1000, 0.5f);
+    std::vector<const float*> sampleChannels { sampleData.data() };
+    std::array<kit::Sample, kit::sampleSlots> samples {};
+    for (int i = 0; i < kit::sampleSlots; ++i)
+        samples[static_cast<std::size_t> (i)] = { static_cast<std::uint64_t> (i + 1), sampleChannels.data(), 1, sampleData.size(), 44100.0, 0.5f };
+    for (int round = 0; round < 200; ++round)
+    {
+        kit::KitSettings k = kit::legacyKit();
+        const auto f = [&] { return specials[rng() % 8]; };
+        const auto byte = [&] { return static_cast<std::uint8_t> (rng() % 256); };
+        k.volume = f();
+        k.velocitySensitivity = f();
+        k.sequencerMode = byte();
+        k.swing = f();
+        k.accent = f();
+        for (auto& p : k.pads)
+        {
+            p.model = static_cast<kit::Model> (byte());
+            p.note = byte();
+            p.chokeGroup = byte();
+            p.polyphony = byte();
+            p.level = f(); p.tune = f(); p.fine = f(); p.decay = f(); p.pan = f(); p.character = f();
+            p.filter = static_cast<kit::Filter> (byte());
+            p.cutoff = f(); p.resonance = f(); p.attack = f(); p.sustain = f();
+            p.output = byte();
+            p.send1 = f(); p.send2 = f();
+            p.pitchAmount = f(); p.pitchDecay = f(); p.drive = f(); p.sub = f(); p.tail = f();
+            p.source = static_cast<kit::Source> (byte());
+            p.sampleMode = static_cast<kit::SampleMode> (byte());
+            p.velocitySplit = byte();
+            for (auto& pl : p.players)
+            {
+                pl.start = f();
+                pl.end = f();
+                pl.level = f();
+                pl.loop = rng() % 2;
+                pl.reverse = rng() % 2;
+                pl.normalize = rng() % 2;
+            }
+        }
+        kit::KitEngine engine;
+        engine.prepare (48000.0);
+        engine.setMaxVoices (64);
+        std::vector<kit::Event> events;
+        for (int n = 0; n < 128; n += 3)
+            events.push_back (note (static_cast<std::uint32_t> (n), n, 1 + n % 127));
+        kit::Transport tr;
+        kit::Outputs out { bus[0].data(), bus[1].data(), &aux };
+        bool finite = true;
+        for (int b = 0; b < 4; ++b)
+        {
+            engine.process (k, out, 256, b == 0 ? events.data() : nullptr, b == 0 ? static_cast<std::uint32_t> (events.size()) : 0u,
+                            tr, nullptr, samples.data(), false);
+            for (const auto& ch : bus)
+                for (auto x : ch)
+                    finite = finite && std::isfinite (x);
+        }
+        if (! finite)
+        {
+            check (false, "garbage settings round " + std::to_string (round) + " renders finite audio");
+            break;
+        }
+    }
+}
+
 void testRealtime()
 {
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -371,6 +483,7 @@ int main()
     testPolyphony();
     testSamplePlayers();
     testBlockInvariance();
+    testInvalidSettings();
     testRealtime();
     if (failures == 0)
         std::printf ("VOX Drums kit engine tests passed\n");
