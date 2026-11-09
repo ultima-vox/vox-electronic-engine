@@ -61,6 +61,26 @@ struct FactoryStep {
     std::uint8_t velocity = 0;
 };
 
+// One pad's sample as the engine reads it during process(): host-owned,
+// immutable while published. id 0 = no sample.
+struct SampleView {
+    std::uint64_t id = 0;
+    const float* const* channels = nullptr;   // channelCount pointers
+    std::uint32_t channelCount = 0;
+    std::uint64_t frames = 0;
+    double sampleRate = 0.0;
+    float peak = 0.0f;
+};
+
+// Sample buffers voices still read after the last process() call: a buffer
+// may be freed only once it is absent from a complete report.
+inline constexpr std::uint32_t maxSampleUsage = 32;
+struct SampleUsage {
+    std::array<std::uint64_t, maxSampleUsage> ids {};
+    std::uint32_t count = 0;
+    bool overflow = false;   // incomplete: free nothing on this report
+};
+
 // What the last process() call did with its MIDI (tests, diagnostics).
 struct ProcessStats {
     std::uint32_t eventsIn = 0;        // events passed to process()
@@ -100,6 +120,17 @@ public:
                   const MidiEvent* events, std::uint32_t eventCount,
                   const Transport& transport, int patternIndex, bool panic) noexcept;
 
+    // As above with the pads' samples (padCount entries; null = none). A
+    // voice keeps reading the buffer it started with until it ends.
+    bool process (float* left, float* right, std::uint32_t frames,
+                  const ParameterChange* changes, std::uint32_t changeCount,
+                  const MidiEvent* events, std::uint32_t eventCount,
+                  const Transport& transport, int patternIndex, bool panic,
+                  const SampleView* samples) noexcept;
+
+    // The buffers voices still hold after the last process() call.
+    const SampleUsage& sampleUsage() const noexcept { return usage_; }
+
     const ProcessStats& lastStats() const noexcept { return stats_; }
 
     // Pads the internal sequencer triggered during the last process() call
@@ -113,6 +144,7 @@ private:
     std::unique_ptr<Impl> impl_;
     bool prepared_ = false;
     std::uint32_t hitMask_ = 0;
+    SampleUsage usage_;
     ProcessStats stats_;
 };
 

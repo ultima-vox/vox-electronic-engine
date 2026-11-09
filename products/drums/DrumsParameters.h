@@ -6,7 +6,7 @@
 // a test checks the layout against it. IDs are append-only.
 //
 // Engine parameters are exposed except the ones whose feature is not in this
-// build yet (pad source/sample settings: DRM-02; sends and outputs: DRM-06);
+// build yet (sends and outputs: DRM-06);
 // those stay at their engine defaults.
 
 #include <juce_audio_processors/juce_audio_processors.h>

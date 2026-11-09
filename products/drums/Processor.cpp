@@ -75,6 +75,7 @@ DrumsProcessor::DrumsProcessor()
 void DrumsProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
 {
     vox::suite::SuiteProcessor::prepareToPlay (sampleRate, maximumBlockSize);
+    samples_.collectAllStopped();   // the audio thread is not running here
     if (! engine_.prepare (sampleRate, static_cast<std::uint32_t> (juce::jmax (1, maximumBlockSize))))
         return;
     for (std::size_t i = 0; i < bindings_.size(); ++i)
@@ -218,9 +219,13 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     const int pattern = pattern_ != nullptr ? static_cast<int> (std::lround (pattern_->load (std::memory_order_relaxed))) : 0;
     const bool panic = panicPending_.exchange (false, std::memory_order_acq_rel);
-    engine_.process (buffer.getWritePointer (0), buffer.getWritePointer (1), static_cast<std::uint32_t> (frames),
-                     changes_.data(), changeCount, events_.data(), static_cast<std::uint32_t> (eventCount),
-                     transport, pattern, panic);
+    const auto* sampleViews = samples_.acquire();
+    if (engine_.process (buffer.getWritePointer (0), buffer.getWritePointer (1), static_cast<std::uint32_t> (frames),
+                         changes_.data(), changeCount, events_.data(), static_cast<std::uint32_t> (eventCount),
+                         transport, pattern, panic, sampleViews))
+        samples_.report (engine_.sampleUsage());
+    else
+        samples_.abandon();
     pads |= engine_.sequencerHitMask();
     if (pads != 0)
         hitMask_.fetch_or (pads, std::memory_order_acq_rel);
@@ -266,10 +271,23 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
         plain[i] = juce::exactlyEqual (current, restored_[i].held) ? restored_[i].loaded : current;
     }
     out.push_back (encodeParameters (plain));
+    out.push_back (samples_.writeState());
 }
 
 DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
 {
+    // Samples first: validation and decoding, before anything changes.
+    auto sampleRestore = std::make_shared<SampleLibrary::Restore>();
+    // The restored samples may use what the retired ones leave of the budget;
+    // the pads they replace are retired afterwards (transiently at most
+    // twice the budget until they are reclaimed).
+    samples_.collect();
+    const auto retired = samples_.retiredBytes();
+    const auto limit = samples_.budget();
+    const auto budget = retired < limit ? limit - retired : 0;
+    if (! SampleLibrary::readState (document.find (sampleSectionTag), *sampleRestore, error, budget))
+        return {};
+
     std::map<std::string, float> values;
     if (const auto* section = document.find (parameterSectionTag))
     {
@@ -333,8 +351,10 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         for (const auto& entry : *shared)
             plain.push_back (entry.second);
         restore.sections.push_back (encodeParameters (plain));   // = writeProductState after settle
+        restore.sections.push_back (SampleLibrary::encodeState (sampleRestore->pads));
     }
-    restore.apply = [shared, held] {
+    restore.apply = [this, shared, held, sampleRestore] {
+        samples_.apply (std::move (*sampleRestore));
         for (std::size_t i = 0; i < shared->size(); ++i)
         {
             auto* parameter = (*shared)[i].first;

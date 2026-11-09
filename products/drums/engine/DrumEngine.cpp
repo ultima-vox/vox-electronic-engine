@@ -172,6 +172,9 @@ struct DrumEngine::Impl {
     std::vector<VoxPatternV2> patterns;      // views of the factory cells, one per pattern
     std::array<VoxNoteEventV2, maxNoteOutput> notes {};
     VoxNoteOutputV2 noteOutput {};
+    std::array<VoxSampleV2, padCount> samples {};
+    std::array<std::uint64_t, maxSampleUsage> usageIds {};
+    VoxSampleUsageV2 usage {};
 };
 
 DrumEngine::DrumEngine() : impl_ (std::make_unique<Impl>())
@@ -188,6 +191,15 @@ DrumEngine::DrumEngine() : impl_ (std::make_unique<Impl>())
     impl_->noteOutput.capacity = maxNoteOutput;
     impl_->noteOutput.stride = sizeof (VoxNoteEventV2);
     impl_->noteOutput.events = impl_->notes.data();
+    for (auto& sample : impl_->samples)
+    {
+        sample.structSize = sizeof (VoxSampleV2);
+        sample.version = VOX_MODULE_ABI_V2;
+    }
+    impl_->usage.structSize = sizeof (VoxSampleUsageV2);
+    impl_->usage.version = VOX_MODULE_ABI_V2;
+    impl_->usage.capacity = maxSampleUsage;
+    impl_->usage.ids = impl_->usageIds.data();
     for (const auto& cells : factory().cells)
         impl_->patterns.push_back ({ sizeof (VoxPatternV2), VOX_MODULE_ABI_V2, lanes, steps, bars,
                                      VOX_TIMING_SIXTEENTH, sizeof (VoxPatternStepV2), cellCount,
@@ -288,8 +300,33 @@ bool DrumEngine::process (float* left, float* right, std::uint32_t frames,
                           const MidiEvent* events, std::uint32_t eventCount,
                           const Transport& transport, int patternIndex, bool panic) noexcept
 {
+    return process (left, right, frames, changes, changeCount, events, eventCount, transport, patternIndex, panic,
+                    nullptr);
+}
+
+bool DrumEngine::process (float* left, float* right, std::uint32_t frames,
+                          const ParameterChange* changes, std::uint32_t changeCount,
+                          const MidiEvent* events, std::uint32_t eventCount,
+                          const Transport& transport, int patternIndex, bool panic,
+                          const SampleView* samples) noexcept
+{
     if (! prepared_ || left == nullptr || right == nullptr)
         return false;
+
+    // The engine always gets the full sample table (an empty slot has id 0):
+    // without one it would drop every sample voice.
+    for (int pad = 0; pad < padCount; ++pad)
+    {
+        auto& slot = impl_->samples[static_cast<std::size_t> (pad)];
+        const SampleView* view = samples != nullptr ? &samples[pad] : nullptr;
+        const bool usable = view != nullptr && view->id != 0 && view->channels != nullptr && view->channelCount > 0;
+        slot.id = usable ? view->id : 0u;
+        slot.channels = usable ? view->channels : nullptr;
+        slot.channelCount = usable ? view->channelCount : 0u;
+        slot.frames = usable ? view->frames : 0u;
+        slot.sampleRate = usable ? view->sampleRate : 0.0;
+        slot.peak = usable ? view->peak : 0.0f;
+    }
 
     VoxTransportV2 tr {};
     tr.structSize = sizeof tr;
@@ -384,6 +421,9 @@ bool DrumEngine::process (float* left, float* right, std::uint32_t frames,
         c.patternGeneration = static_cast<std::uint64_t> (patternIndex + 1);
         c.releaseFlags = (first && panic) ? VOX_PANIC_AT_START : 0u;
         c.noteOutput = &impl_->noteOutput;
+        c.samples = impl_->samples.data();
+        c.sampleSlotCount = padCount;
+        c.sampleUsage = &impl_->usage;
         if (n > 0 || first)
         {
             ++stats_.calls;
@@ -403,6 +443,11 @@ bool DrumEngine::process (float* left, float* right, std::uint32_t frames,
         if (frames == 0)
             break;
     }
+    // The report of the last call covers every voice still sounding.
+    usage_.count = std::min<std::uint32_t> (impl_->usage.count, maxSampleUsage);
+    usage_.overflow = impl_->usage.overflow != 0 || ! ok;
+    for (std::uint32_t i = 0; i < usage_.count; ++i)
+        usage_.ids[i] = impl_->usageIds[i];
     if (! ok)
     {
         std::fill (left, left + frames, 0.0f);

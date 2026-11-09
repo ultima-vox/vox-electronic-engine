@@ -66,7 +66,7 @@ are not host parameters yet:
 
 | Feature | Engine parameters | Arrives in |
 |---|---|---|
-| Pad source and sample settings (Synth / Sample / Layer, sample start/end/loop/reverse/normalize/level) | `*.source`, `*.sample_*` | DRM-02 |
+| Pad source and sample settings | `*.source`, `*.sample_*` | DRM-02: done, see `DRM-02_SAMPLES.md` |
 | Sends and separate outputs | `*.send1`, `*.send2`, `*.output` | DRM-06 |
 | 16 pads, 8 models, 2 samples per pad | — | DRM-03 |
 | Pattern editing, MIDI export | — | DRM-04 |
