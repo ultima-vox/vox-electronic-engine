@@ -140,22 +140,39 @@ StoredPattern PatternStore::slot (int index) const
     return slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
+StoredPattern PatternStore::slot (int index, std::uint64_t& generation) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    generation = generation_.load();
+    return slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+}
+
+// The generation moves under the lock, together with the data it counts:
+// whoever sees the new generation (outside the lock) finds the new data on
+// its next locked read, and a locked read returns data and generation that
+// belong together.
 void PatternStore::setSlot (int index, const StoredPattern& pattern)
 {
     if (index < 0 || index >= slotCount)
         return;
-    const auto g = generation_.fetch_add (1) + 1;
+    if (beforeCommitForTesting)
+        beforeCommitForTesting();
     const juce::SpinLock::ScopedLockType sl (lock_);
+    const auto g = generation_.load() + 1;
     slots_[static_cast<std::size_t> (index)] = pattern;
     slotGeneration_[static_cast<std::size_t> (index)] = g;
+    generation_.store (g);
 }
 
 void PatternStore::setAll (const std::array<StoredPattern, slotCount>& slots)
 {
-    const auto g = generation_.fetch_add (1) + 1;
+    if (beforeCommitForTesting)
+        beforeCommitForTesting();
     const juce::SpinLock::ScopedLockType sl (lock_);
+    const auto g = generation_.load() + 1;
     slots_ = slots;
     slotGeneration_.fill (g);
+    generation_.store (g);
 }
 
 std::array<StoredPattern, PatternStore::slotCount> PatternStore::all() const

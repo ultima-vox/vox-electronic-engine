@@ -27,6 +27,21 @@ copies the selected slot with a try-lock, only when that slot changed or
 another slot was selected. It never waits; if the lock is busy, it keeps
 playing what it has.
 
+**Review 6745483562 (fixed):**
+- **The defect.** `setSlot` and `setAll` bumped the generation before they
+  committed the slot. An editor poll that ran in that window cached the new
+  generation together with the old cells, and the display then stayed stale.
+- **The fix.** The generation now moves under the lock, together with the
+  data. `slot (index, generation)` reads both together, and the step view
+  uses it.
+- **Regression tests.**
+  - A test hook polls the editor inside the write window; the next poll
+    shows the committed pattern, for both `setSlot` and `setAll`.
+  - A concurrent writer and reader check that every slot read with its
+    generation holds the cells committed with it.
+- **Mutation check.** With the old order, all 3 checks fail (329 637 of
+  371 101 reads were torn).
+
 ## One rule for playback and export
 
 `kit::stepHits (pattern, context, g)` gives the hits of grid step `g` (an

@@ -88,9 +88,9 @@ public:
         bool changed = false;
         if (index != pattern_ || processor_.patterns().generation() != generation_)
         {
-            generation_ = processor_.patterns().generation();
+            // Cells and generation read together (review 6745483562).
+            shown_ = processor_.patterns().slot (index, generation_);
             pattern_ = index;
-            shown_ = processor_.patterns().slot (index);
             changed = true;
         }
         const double ppq = processor_.lastPpq();
@@ -146,6 +146,8 @@ public:
             }
         }
     }
+
+    const StoredPattern& shown() const noexcept { return shown_; }
 
 private:
     DrumsProcessor& processor_;
@@ -823,6 +825,11 @@ void DrumsPanel::timerCallback()
     if (processor_.samples().generation() != shownSamples_)
         refreshSample();
     steps_->update();
+}
+
+const StoredPattern& DrumsPanel::shownPattern() const
+{
+    return steps_->shown();
 }
 
 juce::Slider* DrumsPanel::sliderFor (const juce::String& id)

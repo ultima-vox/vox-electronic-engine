@@ -19,6 +19,7 @@
 
 #include <array>
 #include <atomic>
+#include <functional>
 
 namespace vox::drums {
 
@@ -59,10 +60,18 @@ public:
 
     //== message / host threads
     StoredPattern slot (int index) const;
+    // The slot and the store generation it belongs to, read together (a
+    // view caching `generation` then never holds older cells under a newer
+    // generation; review 6745483562).
+    StoredPattern slot (int index, std::uint64_t& generation) const;
     void setSlot (int index, const StoredPattern& pattern);
     void setAll (const std::array<StoredPattern, slotCount>& slots);
     std::array<StoredPattern, slotCount> all() const;
+    // Changes after the change it counts is committed (under the lock).
     std::uint64_t generation() const noexcept { return generation_.load(); }
+    // Tests: runs at the start of setSlot/setAll, before anything is
+    // committed (message thread only).
+    std::function<void()> beforeCommitForTesting;
 
     static preset::Section encode (const std::array<StoredPattern, slotCount>& slots);
     // Strict: an unknown version, a wrong size or slot count, or any value

@@ -1451,6 +1451,79 @@ void testPatterns()
         }
     }
 
+    // Review 6745483562: the editor never caches a generation newer than the
+    // cells it shows. The editor polls in the window between a write's start
+    // and its commit; the next poll must show the committed pattern.
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+        auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+        auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
+        check (panel != nullptr, "Drums panel for the pattern view");
+        if (panel != nullptr)
+        {
+            setPlain (*p, vox::drums::patternParameterId, 2.0f);
+            panel->pollForTesting();
+            check (panel->shownPattern() == p->patterns().slot (2), "the step view shows the selected slot");
+            auto edited = randomPattern (random, 32, 2);
+            p->patterns().beforeCommitForTesting = [panel] { panel->pollForTesting(); };
+            p->patterns().setSlot (2, edited);
+            p->patterns().beforeCommitForTesting = nullptr;
+            panel->pollForTesting();
+            check (panel->shownPattern() == edited, "an edit committed after a poll in its window is shown on the next poll (setSlot)");
+            auto all = PatternStore::factorySlots();
+            all[2] = randomPattern (random, 64, 1);
+            p->patterns().beforeCommitForTesting = [panel] { panel->pollForTesting(); };
+            p->patterns().setAll (all);
+            p->patterns().beforeCommitForTesting = nullptr;
+            panel->pollForTesting();
+            check (panel->shownPattern() == all[2], "a restore committed after a poll in its window is shown on the next poll (setAll)");
+        }
+        p->editorBeingDeleted (editor.get());
+    }
+    // Concurrent writers and readers: a slot read with its generation always
+    // holds the cells committed with that generation (the writer stores the
+    // generation it expects in the seed).
+    {
+        PatternStore store;
+        std::atomic<bool> stop { false };
+        std::atomic<int> torn { 0 }, reads { 0 };
+        std::thread writer ([&] {
+            StoredPattern p;
+            p.steps = 16;
+            p.bars = 1;
+            for (int i = 0; i < 20000; ++i)
+            {
+                p.seed = static_cast<std::uint32_t> (store.generation() + 1);   // single writer: the next generation
+                p.cell (i % padCount, 0, i % 16).on ^= true;
+                if (i % 7 == 0)
+                {
+                    auto all = store.all();
+                    for (auto& slot : all)
+                        slot = p;
+                    store.setAll (all);
+                }
+                else
+                    store.setSlot (1, p);
+            }
+            stop = true;
+        });
+        std::thread reader ([&] {
+            while (! stop)
+            {
+                std::uint64_t g = 0;
+                const auto p = store.slot (1, g);
+                if (g > 1 && p.seed != g)
+                    ++torn;
+                ++reads;
+            }
+        });
+        writer.join();
+        reader.join();
+        check (torn == 0 && reads > 0, "slot and generation are read together (" + juce::String (torn.load()) + " torn of "
+                                           + juce::String (reads.load()) + ")");
+    }
+
     // resize keeps what fits on the new grid.
     {
         StoredPattern p;
