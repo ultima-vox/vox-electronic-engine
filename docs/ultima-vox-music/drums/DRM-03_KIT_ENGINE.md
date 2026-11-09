@@ -175,20 +175,54 @@ pad 10. With the old routing 3 of these checks fail.
      restored pad plays from its restored note.
 
    The export of these pads is tested in DRM-04a.
-3. **Decoded sample budget kept at 512 MiB**
-   (`SampleLimits::maxTotalBytes`). It covers both players of every pad and
-   the retired buffers still waiting to be reclaimed.
-   - A load that does not fit is refused cleanly. The slot's live buffer,
-     its reference and its sound stay unchanged
-     (`suite_drums_sample_tests` 5b; budget tests 5 and 6 cover held retired
-     buffers and concurrent replacement).
-   - **Accounting detail:** a replacement is checked against the budget
-     minus the other slots and the retired buffers. The buffer it replaces
-     is not counted, because it is released by the commit. Until that
-     buffer is reclaimed (after the last voice using it ends), the decoded
-     memory can exceed 512 MiB by at most the replaced slot's size. A
-     project restore can likewise exceed it transiently by up to the
-     buffers it replaces (at most twice the budget).
-   - This bound is finite and documented. A strict "never above 512 MiB",
-     counting the replaced buffer too, would refuse replacing a large
-     sample with one of the same size. That choice is left to the owner.
+3. **Decoded sample budget: a hard cap of 512 MiB**
+   (`SampleLimits::maxTotalBytes`). This follows review 6750424931 (P1),
+   which found that the earlier version allowed a bounded overshoot.
+
+   **What counts.** At every moment, `committedBytes()` is the sum of:
+   - every slot's buffer, counted once, including the slot a load will
+     replace;
+   - every retired buffer a voice may still read;
+   - the reservations of decodes in flight.
+
+   It never exceeds the budget.
+
+   **How each operation stays inside it**
+   - **Load.** A decode reserves its exact size against `committedBytes()`
+     *before* it allocates. The replaced buffer is retired at commit and
+     still counts until it is reclaimed. A load that does not fit is
+     refused, and the slot keeps its buffer, reference and sound.
+     Consequence: replacing a sample needs room for both copies, or a Clear
+     first.
+   - **Restore.**
+     - A sample the library already holds with the same content is reused
+       with no new memory: restoring the current project costs nothing, and
+       neither does the same sample on two slots.
+     - Other samples reserve their memory next to the current generation.
+     - A sample that does not fit is **deferred**: its reference is kept and
+       saved back unchanged, its status is "waiting for memory", and the pad
+       plays its synthesis meanwhile. It loads in the background once the
+       replaced samples are reclaimed (`collect()`, every 100 ms).
+     - A restore rejected later (for example a malformed `DPAD`) releases
+       its reservation.
+   - **Audio callback.** Unchanged: no allocation, lock or I/O.
+
+   **Tests** (`suite_drums_sample_tests`, `testHardBudget`). Peak decoded
+   memory is measured as the process-wide high-water mark of decoded bytes:
+   - **Same-size replacement with a held voice:** refused, sound unchanged,
+     peak within the cap. After Clear and reclamation the new sample loads.
+   - **Full project restore while voices hold the old generation:** one
+     sample loads, one is deferred and reported. The project saves back
+     byte-identically. When the voices end, the deferred sample loads. Peak
+     stays within the cap throughout.
+   - **Restoring the loaded project:** no decode, no new memory.
+   - **Concurrent loads:** of two that fit only one at a time, exactly one
+     commits (20 rounds).
+   - **Rejected restore:** its reservation is released.
+
+   **Mutation checks**
+   - Reservations not counted: 25 failures.
+   - Rejected restore not releasing its reservation: 1 failure.
+   - Removing the restore's size pre-check alone is still caught by the
+     decode reservation. The pre-check only avoids reading a file that would
+     be refused.

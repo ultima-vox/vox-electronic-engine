@@ -20,6 +20,7 @@
 #include "DrumsEditor.h"
 #include "SampleLibrary.h"
 #include "DrumsParameters.h"
+#include "KitStore.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -995,6 +996,194 @@ void testNoCallbackLifetime()
     }
 }
 
+
+//==============================================================================
+// Review 6750424931 (P1): the decoded budget is a hard cap. Peak decoded
+// memory (SampleBuffer::peakLiveBytes over a baseline) never exceeds it:
+// same-size replacement with a held voice, a full project restore while
+// voices hold the old generation (deferred samples load once it is
+// released), concurrent loads, and a restore that is rejected later.
+void testHardBudget()
+{
+    // Distinct contents (lengths) so that no restore can reuse one for another.
+    const auto x = writeWav ("cap-x.wav", 48000.0, 1, 16, 2.00);
+    const auto y = writeWav ("cap-y.wav", 48000.0, 1, 16, 2.01);
+    const auto u = writeWav ("cap-u.wav", 48000.0, 1, 16, 2.02);
+    const auto v = writeWav ("cap-v.wav", 48000.0, 1, 16, 2.03);
+    const auto size = decode (x)->bytes();              // the smallest
+    const auto largest = decode (v)->bytes();
+    const auto shaU = decode (u)->sha256, shaV = decode (v)->sha256;   // before any peak is measured
+    check (decode (x)->sha256 != decode (y)->sha256 && shaU != shaV, "cap: the test samples differ");
+    std::vector<std::function<void()>> held;
+    const auto runHeld = [&] (vox::drums::SampleLibrary& library) {
+        library.waitForPendingDecodes();
+        auto pending = std::move (held);
+        held.clear();
+        for (auto& f : pending)
+            f();
+    };
+    const auto loopPad = [] (DrumsProcessor& p, int pad) {
+        const auto prefix = juce::String (vox::drums::padPrefix (pad));
+        setPlain (p, prefix + ".source", 1.0f);
+        setPlain (p, prefix + ".sample_loop", 1.0f);
+        setPlain (p, prefix + ".decay", 10.0f);
+    };
+    const auto overCap = [] (std::int64_t baseline, std::size_t cap) {
+        return vox::drums::SampleBuffer::peakLiveBytes.load() - baseline > static_cast<std::int64_t> (cap);
+    };
+
+    // 1. Same-size replacement while a voice holds the current buffer.
+    {
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        const auto cap = size + size / 2;
+        library.setBudgetForTesting (cap);
+        const auto baseline = vox::drums::SampleBuffer::liveBytes.load();
+        vox::drums::SampleBuffer::resetPeakForTesting();
+        library.setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+        juce::String result;
+        library.loadAsync (0, x, [&] (const juce::String& e) { result = e; });
+        runHeld (library);
+        loopPad (*p, 0);
+        p->reset();
+        const auto before = render (*p, 8);   // a looping voice now holds X
+        auto live = library.pad (0).buffer;
+        library.loadAsync (0, y, [&] (const juce::String& e) { result = e; });
+        runHeld (library);
+        check (result.contains ("budget") && library.pad (0).buffer == live, "cap: a same-size replacement that would hold two copies is refused");
+        p->reset();
+        check (render (*p, 8) == before, "cap: the refused replacement keeps the pad's sound");
+        live.reset();   // the test's own reference would keep X alive
+        check (! overCap (baseline, cap) && library.committedBytes() <= cap, "cap: peak decoded memory stays within the cap (replacement)");
+        // Clear, then load: fits once X is reclaimed (no voice, idle).
+        library.clear (0);
+        for (int i = 0; i < 400 && library.retiredBytes() > 0; ++i)
+        {
+            p->reset();
+            render (*p, 1, -1);
+            library.collect();
+        }
+        library.loadAsync (0, y, [&] (const juce::String& e) { result = e; });
+        runHeld (library);
+        check (result.isEmpty() && library.pad (0).buffer != nullptr, "cap: after clear and reclamation the new sample loads");
+        check (! overCap (baseline, cap), "cap: peak within the cap after the reload");
+        library.setCompletionDispatcherForTesting (nullptr);
+    }
+
+    // 2. Project restore while voices hold the old generation.
+    {
+        juce::MemoryBlock projectXY, projectUV;
+        {
+            auto s = makeProcessor();
+            s->samples().assign (vox::drums::slotOf (0, 0), decode (x), x);
+            s->samples().assign (vox::drums::slotOf (1, 0), decode (y), y);
+            projectXY = stateOf (*s);
+            s->samples().assign (vox::drums::slotOf (0, 0), decode (u), u);
+            s->samples().assign (vox::drums::slotOf (1, 0), decode (v), v);
+            projectUV = stateOf (*s);
+        }
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        const auto cap = 3 * largest;   // one generation and one more sample, not two generations
+        library.setBudgetForTesting (cap);
+        library.setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+        const auto baseline = vox::drums::SampleBuffer::liveBytes.load();
+        vox::drums::SampleBuffer::resetPeakForTesting();
+        p->setStateInformation (projectXY.getData(), static_cast<int> (projectXY.getSize()));
+        check (p->lastStateError().isEmpty() && library.pad (0).buffer != nullptr && library.pad (2).buffer != nullptr,
+               "cap: project XY loads (2 samples)");
+        loopPad (*p, 0);
+        loopPad (*p, 1);
+        render (*p, 4);                          // voices hold X
+        render (*p, 4, 38);                      // and Y
+        // Restore UV: one sample fits next to X and Y, the other waits.
+        p->setStateInformation (projectUV.getData(), static_cast<int> (projectUV.getSize()));
+        check (p->lastStateError().isEmpty(), "cap: restoring UV over a playing XY is accepted");
+        const auto a = library.pad (0), b = library.pad (2);
+        const int loaded = (a.buffer != nullptr ? 1 : 0) + (b.buffer != nullptr ? 1 : 0);
+        const int deferred = (a.deferred ? 1 : 0) + (b.deferred ? 1 : 0);
+        check (loaded == 1 && deferred == 1, "cap: one restored sample loads now, one waits for memory (" + juce::String (loaded) + " loaded, "
+                                                 + juce::String (deferred) + " deferred)");
+        check (library.diagnostics().contains ("waiting for memory") || library.diagnostics().contains ("waits"), "cap: the waiting sample is reported");
+        check (stateOf (*p) == projectUV, "cap: the restored project saves back byte-identically while a sample waits");
+        check (! overCap (baseline, cap) && library.committedBytes() <= cap, "cap: peak decoded memory stays within the cap (restore)");
+        // The old voices end; the deferred sample then loads.
+        for (int i = 0; i < 2000 && (library.pad (0).deferred || library.pad (2).deferred); ++i)
+        {
+            p->reset();                          // stop the voices holding X and Y
+            render (*p, 1, -1);
+            library.collect();
+            runHeld (library);
+        }
+        check (library.pad (0).buffer != nullptr && library.pad (2).buffer != nullptr && ! library.pad (0).deferred
+                   && ! library.pad (2).deferred && library.diagnostics().isEmpty(),
+               "cap: once the old generation is released the deferred sample loads");
+        check (library.pad (0).buffer->sha256 == shaU && library.pad (2).buffer->sha256 == shaV,
+               "cap: the slots hold project UV's samples");
+        check (! overCap (baseline, cap), "cap: peak within the cap through the deferred load");
+        check (stateOf (*p) == projectUV, "cap: and the project still saves back byte-identically");
+
+        // 3. Restoring the project already loaded reuses its buffers: no decode.
+        const auto liveBuffers = vox::drums::SampleBuffer::live.load();
+        const auto committed = library.committedBytes();
+        p->setStateInformation (projectUV.getData(), static_cast<int> (projectUV.getSize()));
+        check (vox::drums::SampleBuffer::live.load() == liveBuffers && library.committedBytes() == committed
+                   && library.pad (0).buffer != nullptr && library.pad (2).buffer != nullptr,
+               "cap: restoring the loaded project reuses its decoded samples");
+        library.setCompletionDispatcherForTesting (nullptr);
+    }
+
+    // 4. Concurrent loads reserve before allocating: two that each fit alone
+    //    but not together cannot both commit.
+    {
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        const auto cap = size + size / 2;
+        library.setBudgetForTesting (cap);
+        library.setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+        const auto baseline = vox::drums::SampleBuffer::liveBytes.load();
+        vox::drums::SampleBuffer::resetPeakForTesting();
+        std::vector<juce::String> results;
+        for (int round = 0; round < 20; ++round)
+        {
+            library.clear (0);
+            library.clear (2);
+            library.collect();
+            results.clear();
+            library.loadAsync (0, x, [&] (const juce::String& e) { results.push_back (e); });
+            library.loadAsync (2, y, [&] (const juce::String& e) { results.push_back (e); });
+            runHeld (library);
+            const int ok = (results.size() == 2 && results[0].isEmpty() ? 1 : 0) + (results.size() == 2 && results[1].isEmpty() ? 1 : 0);
+            check (ok == 1, "cap: of two concurrent loads that only fit one at a time, exactly one commits (round " + juce::String (round) + ")");
+        }
+        check (! overCap (baseline, cap) && library.committedBytes() <= cap, "cap: peak within the cap with concurrent loads");
+        library.setCompletionDispatcherForTesting (nullptr);
+    }
+
+    // 5. A restore rejected after its samples were read releases their
+    //    reservation (nothing stays counted).
+    {
+        juce::MemoryBlock project;
+        {
+            auto s = makeProcessor();
+            s->samples().assign (vox::drums::slotOf (0, 0), decode (x), x);
+            project = stateOf (*s);
+        }
+        auto p = makeProcessor();
+        auto& library = p->samples();
+        // Same document with a malformed pad section (read after the samples).
+        auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (project.getData()), project.getSize()),
+                                             p->product().stateTag, 1).document;
+        for (auto& sec : document.sections)
+            if (sec.tag == vox::drums::padSectionTag)
+                sec.data.push_back (std::byte {});
+        const auto bytes = vox::preset::encode (document);
+        p->setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
+        check (p->lastStateError().isNotEmpty() && library.committedBytes() == 0 && ! library.pad (0).reference,
+               "cap: a rejected restore releases its sample reservation and changes nothing");
+    }
+}
+
 //==============================================================================
 void testEditor()
 {
@@ -1091,6 +1280,7 @@ int main()
     testDecode();
     testSound();
     testOwnership();
+    testHardBudget();
     testRealtime();
     testState();
     testStaleLoads();

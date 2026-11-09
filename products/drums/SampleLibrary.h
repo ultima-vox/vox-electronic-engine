@@ -27,6 +27,7 @@
 #include "StateContainer.h"
 
 #include <array>
+#include <functional>
 #include <tuple>
 #include <atomic>
 #include <cstdint>
@@ -46,9 +47,12 @@ inline constexpr std::uint32_t maxSampleUsage = static_cast<std::uint32_t> (std:
 
 inline constexpr preset::Tag sampleSectionTag = preset::makeTag ("DSMP");
 
-// Decode limits. Provisional values (the decoded-memory budget is an open
-// owner decision, 03_VOX_DRUMS_SPEC §9): one file at most 60 s at its own
-// rate (and at most 192 kHz); all pads together at most 512 MiB decoded.
+// Decode limits: one file at most 60 s at its own rate (and at most
+// 192 kHz). Decoded memory is a hard cap of 512 MiB (owner decision, #120):
+// every decoded buffer the library holds counts against it at all times:
+// the slots' buffers, retired buffers a voice may still read, and decodes
+// in flight (reserved before they allocate). A load or restore that does
+// not fit is refused or deferred; it never displaces the live state first.
 struct SampleLimits {
     static constexpr double maxSeconds = 60.0;
     static constexpr double maxSampleRate = 192000.0;
@@ -59,10 +63,23 @@ struct SampleLimits {
 // One decoded sample: float channels (1 or 2) at the file's native rate.
 struct SampleBuffer {
     SampleBuffer() noexcept { live.fetch_add (1); }
-    ~SampleBuffer() { live.fetch_sub (1); }
+    ~SampleBuffer() { live.fetch_sub (1); liveBytes.fetch_sub (static_cast<std::int64_t> (accounted)); }
     SampleBuffer (const SampleBuffer&) = delete;
     SampleBuffer& operator= (const SampleBuffer&) = delete;
-    static inline std::atomic<std::int64_t> live { 0 };   // buffers alive in this process
+    static inline std::atomic<std::int64_t> live { 0 };        // buffers alive in this process
+    // Decoded bytes alive in this process and their high-water mark (tests).
+    static inline std::atomic<std::int64_t> liveBytes { 0 };
+    static inline std::atomic<std::int64_t> peakLiveBytes { 0 };
+    static void resetPeakForTesting() noexcept { peakLiveBytes.store (liveBytes.load()); }
+    // Called by the decoder once `data` is allocated.
+    void account() noexcept
+    {
+        accounted = data.size() * static_cast<std::size_t> (frames) * sizeof (float);
+        const auto now = liveBytes.fetch_add (static_cast<std::int64_t> (accounted)) + static_cast<std::int64_t> (accounted);
+        auto high = peakLiveBytes.load();
+        while (now > high && ! peakLiveBytes.compare_exchange_weak (high, now)) {}
+    }
+    std::size_t accounted = 0;
 
     std::uint64_t id = 0;                    // process-unique, never 0
     std::vector<std::vector<float>> data;    // channels
@@ -90,11 +107,17 @@ struct SampleReference {
 struct DecodeResult {
     std::shared_ptr<SampleBuffer> buffer;
     juce::String error;      // set when buffer is null
+    std::size_t reserved = 0;   // bytes `reserve` granted (0 if it was not asked)
 };
 
 // Decodes one file (WAV, AIFF, FLAC, Ogg). Deterministic errors for a missing,
-// empty, unreadable, corrupt, too long or too large file.
+// empty, unreadable, corrupt, too long or too large file. `reserve` is asked
+// for the decoded size before anything is allocated; false refuses the file
+// with a "sample memory budget" error.
+DecodeResult decodeSampleFile (const juce::File& file, const std::function<bool (std::size_t)>& reserve);
 DecodeResult decodeSampleFile (const juce::File& file, std::size_t budgetBytes = SampleLimits::maxTotalBytes);
+// Decoded size of a referenced sample (what a restore will need).
+std::size_t decodedBytes (const SampleReference& reference) noexcept;
 
 juce::String hexOf (const std::array<std::uint8_t, 32>& sha);
 
@@ -115,8 +138,9 @@ public:
     //== message / host threads ===============================================
     struct PadInfo {
         std::optional<SampleReference> reference;   // empty: no sample assigned
-        std::shared_ptr<const SampleBuffer> buffer; // null when missing or none
+        std::shared_ptr<const SampleBuffer> buffer; // null when missing, deferred or none
         juce::String status;                        // "", or why it is missing
+        bool deferred = false;                      // restored but waiting for memory
     };
     PadInfo pad (int pad) const;
 
@@ -143,17 +167,31 @@ public:
     static juce::File libraryFolder();
 
     // Project state. Save writes the references (never sample data).
-    // Restore resolves every reference first (path, then library by hash),
-    // decoding synchronously on the calling thread; `apply` then publishes.
+    // Restore resolves every reference first (a buffer the library already
+    // holds with the same content, the path, then the user library by
+    // hash), decoding synchronously on the calling thread into memory it
+    // reserves; a sample that does not fit next to what is held now is
+    // deferred (reference kept, "waiting for memory") and loaded once the
+    // replaced samples are reclaimed. `apply` then publishes. A Restore
+    // dropped without apply releases its reservation.
     preset::Section writeState() const;
     static preset::Section encodeState (const std::array<PadInfo, slotCount>& pads);
     struct Restore {
+        Restore() = default;
+        ~Restore();
+        Restore (const Restore&) = delete;
+        Restore& operator= (const Restore&) = delete;
         std::array<PadInfo, slotCount> pads;
-        juce::String diagnostics;   // one line per missing or changed sample
+        juce::String diagnostics;   // one line per missing, changed or deferred sample
+        SampleLibrary* owner = nullptr;
+        std::size_t reserved = 0;   // decoded bytes of `pads` not yet held by the library
     };
-    static bool readState (const preset::Section* section, Restore& out, juce::String& error,
-                           std::size_t budgetBytes = SampleLimits::maxTotalBytes);
-    void apply (Restore restore);
+    bool readState (const preset::Section* section, Restore& out, juce::String& error);
+    void apply (Restore& restore);
+
+    // Starts loading deferred restored samples that now fit (message
+    // thread; also called by collect() and the timer).
+    void resumeDeferred();
 
     // Every pad's diagnostics after the last restore or load ("" if none).
     juce::String diagnostics() const;
@@ -168,8 +206,11 @@ public:
     std::size_t totalBytes() const;
     std::size_t retiredCount() const;
     std::size_t retiredBytes() const;
-    // The decoded-memory budget (default SampleLimits::maxTotalBytes); it
-    // covers assigned and retired buffers.
+    // Every decoded byte counted against the budget: slot buffers (each
+    // buffer once), retired buffers and reservations of decodes in flight.
+    std::size_t committedBytes() const;
+    // The decoded-memory budget (default SampleLimits::maxTotalBytes), a
+    // hard cap on committedBytes().
     std::size_t budget() const;
     void setBudgetForTesting (std::size_t bytes);
     // Changes with every published table (editor refresh).
@@ -177,7 +218,7 @@ public:
 
 private:
     struct Table;
-    void timerCallback() override { collect(); }
+    void timerCallback() override { collect(); }   // collect() also resumes deferred loads
     void publishLocked();
 
     mutable juce::CriticalSection lock_;
@@ -203,7 +244,15 @@ private:
     const Table* inUse_ = nullptr;          // audio thread only
     std::atomic<bool> busy_ { false };      // a block is between acquire() and report()
     std::size_t budget_ = SampleLimits::maxTotalBytes;   // lock_
+    std::size_t reserved_ = 0;                            // lock_: decodes in flight
+    std::array<bool, slotCount> deferredLoading_ {};      // lock_: a deferred slot's load runs
     std::size_t retiredBytesLocked() const;
+    std::size_t committedLocked() const;
+    bool reserveLocked (std::size_t bytes);
+    void release (std::size_t bytes);
+    // Resolves a reference to a decoded buffer (path, then library by hash,
+    // content-checked) with `reserve`; empty buffer and the problem otherwise.
+    DecodeResult resolve (const SampleReference& reference, const std::function<bool (std::size_t)>& reserve);
 
     juce::ThreadPool decoder_ { 1 };
 

@@ -287,15 +287,12 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
 DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
 {
     // Samples first: validation and decoding, before anything changes.
+    // Hard cap (owner decision, #120): the restored samples reserve their
+    // memory next to everything held now; what does not fit is deferred and
+    // loads once the samples it replaces are reclaimed. A restore that is
+    // rejected later releases its reservation with sampleRestore.
     auto sampleRestore = std::make_shared<SampleLibrary::Restore>();
-    // The restored samples may use what the retired ones leave of the budget;
-    // the pads they replace are retired afterwards (transiently at most
-    // twice the budget until they are reclaimed).
-    samples_.collect();
-    const auto retired = samples_.retiredBytes();
-    const auto limit = samples_.budget();
-    const auto budget = retired < limit ? limit - retired : 0;
-    if (! SampleLibrary::readState (document.find (sampleSectionTag), *sampleRestore, error, budget))
+    if (! samples_.readState (document.find (sampleSectionTag), *sampleRestore, error))
         return {};
 
     std::map<std::string, float> values;
@@ -377,7 +374,7 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
     }
     restore.apply = [this, shared, held, sampleRestore, kitRestore] {
         store_.setAll (*kitRestore);
-        samples_.apply (std::move (*sampleRestore));
+        samples_.apply (*sampleRestore);
         for (std::size_t i = 0; i < shared->size(); ++i)
         {
             auto* parameter = (*shared)[i].first;
