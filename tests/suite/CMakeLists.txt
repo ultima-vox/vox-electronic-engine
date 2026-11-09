@@ -115,6 +115,17 @@ target_include_directories(suite_drums_sample_tests PRIVATE ${juce_SOURCE_DIR}/m
 vox_suite_add_allocation_probe(suite_drums_sample_tests)
 add_test(NAME suite_drums_sample_tests COMMAND suite_drums_sample_tests)
 
+# DRM-03: what the kit engine adds (models, 16 pads, polyphony, players).
+add_executable(suite_drums_kit_engine_tests DrumsKitEngineTests.cpp)
+target_link_libraries(suite_drums_kit_engine_tests PRIVATE vox_drums_engine)
+vox_suite_add_allocation_probe(suite_drums_kit_engine_tests)
+add_test(NAME suite_drums_kit_engine_tests COMMAND suite_drums_kit_engine_tests)
+
+# DRM-03: the C++ kit engine against the DRM-00 reference (all buses).
+add_executable(suite_drums_kit_parity_tests DrumsKitParityTests.cpp)
+target_link_libraries(suite_drums_kit_parity_tests PRIVATE vox_drums_engine vox_legacy_drums_reference)
+add_test(NAME suite_drums_kit_parity_tests COMMAND suite_drums_kit_parity_tests)
+
 # DRM-01 parity: the plugin against the DRM-00 reference module. The only
 # other test allowed to drive the legacy C ABI (suite_boundaries).
 add_executable(suite_drums_parity_tests DrumsParityTests.cpp)

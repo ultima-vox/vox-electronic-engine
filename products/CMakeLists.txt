@@ -45,6 +45,7 @@ endfunction()
 # DrumEngine wrapper. Its entry point is renamed so it can never clash with
 # another copy (the DRM-00 test reference). Replaced by DRM-03.
 add_library(vox_drums_engine STATIC
+  drums/engine/KitEngine.cpp drums/engine/KitEngine.h
   drums/engine/DrumEngine.cpp drums/engine/DrumEngine.h
   drums/engine/legacy8/VoxFullOnDrums.c)
 target_include_directories(vox_drums_engine
