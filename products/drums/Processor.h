@@ -3,8 +3,9 @@
 #include "common/SuiteProcessor.h"
 
 #include "DrumsParameters.h"
+#include "KitStore.h"
 #include "SampleLibrary.h"
-#include "engine/DrumEngine.h"
+#include "engine/KitEngine.h"
 
 #include <array>
 #include <atomic>
@@ -16,9 +17,9 @@ namespace vox::drums {
 // Product state section of schema 1: the plugin parameter values by ID.
 inline constexpr preset::Tag parameterSectionTag = preset::makeTag ("DPRM");
 
-// VOX Drums (DRM-01): eight synthesized pads played by host MIDI (pad notes
-// 36 38 39 42 46 45 37 49) and/or the internal sequencer with the factory
-// patterns, stereo main output.
+// VOX Drums (DRM-03b): 16 pads, each any of 8 models with two sample
+// players, played by host MIDI on assignable notes and/or the internal
+// sequencer with the factory patterns; stereo main output.
 class DrumsProcessor final : public vox::suite::SuiteProcessor {
 public:
     DrumsProcessor();
@@ -33,6 +34,7 @@ public:
 
     juce::AudioProcessorValueTreeState& state() noexcept { return parameters_; }
     SampleLibrary& samples() noexcept { return samples_; }
+    KitStore& kitStore() noexcept { return store_; }
 
     // Message thread: plays pad `pad` at the start of the next block.
     // Returns false when the queue is full.
@@ -47,28 +49,42 @@ public:
 
     static constexpr std::size_t midiCapacity = 4096;   // events per host block
 
+    // Tests: the voice pool size applied at the next prepareToPlay (the
+    // product uses kit::maxVoices; the DRM-00 reference used 16).
+    void setVoiceLimitForTesting (int voices) noexcept { voiceLimit_ = voices; }
+
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     bool isProductSection (preset::Tag tag) const override
     {
-        return tag == parameterSectionTag || tag == sampleSectionTag;
+        return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag;
     }
 
 private:
     juce::AudioProcessorValueTreeState parameters_;
-    DrumEngine engine_;
+    kit::KitEngine engine_;
+    KitStore store_;
     SampleLibrary samples_;
+    bool prepared_ = false;
+    int voiceLimit_ = kit::maxVoices;
 
-    struct Binding {
-        std::atomic<float>* value = nullptr;   // plugin parameter, or null (engine default)
-        float fallback = 0.0f;
-    };
-    std::vector<Binding> bindings_;            // per engine parameter index
-    std::vector<float> sent_;                  // values the engine has
-    std::vector<ParameterChange> changes_;
-    std::vector<MidiEvent> events_;
+    // Host parameters, read once per block into live_.
+    struct PadRefs { std::atomic<float>* level; std::atomic<float>* tune; std::atomic<float>* decay;
+                     std::atomic<float>* pan; std::atomic<float>* cutoff; std::atomic<float>* mute;
+                     std::atomic<float>* lane; };
+    std::array<PadRefs, padCount> padRefs_ {};
+    std::atomic<float>* volume_ = nullptr;
+    std::atomic<float>* velocity_ = nullptr;
+    std::atomic<float>* choke_ = nullptr;
+    std::atomic<float>* mode_ = nullptr;
+    std::atomic<float>* swing_ = nullptr;
+    std::atomic<float>* accent_ = nullptr;
     std::atomic<float>* pattern_ = nullptr;
+    kit::KitSettings live_;                    // audio thread
+    std::vector<kit::Event> events_;
+    std::array<std::array<kit::PatternStep, 8 * 4 * 16>, kit::factoryPatternCount> patternCells_ {};
+    std::array<kit::Pattern, kit::factoryPatternCount> patterns_ {};
 
     struct Audition { std::uint8_t pad = 0, velocity = 0; };
     juce::AbstractFifo auditionFifo_ { 64 };

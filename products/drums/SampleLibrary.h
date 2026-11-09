@@ -23,10 +23,11 @@
 #include <juce_cryptography/juce_cryptography.h>
 #include <juce_events/juce_events.h>
 
-#include "engine/DrumEngine.h"
+#include "engine/KitEngine.h"
 #include "StateContainer.h"
 
 #include <array>
+#include <tuple>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -35,6 +36,13 @@
 #include <vector>
 
 namespace vox::drums {
+
+// Sample slots: pad * 2 + player (A = 0, B = 1), 16 pads.
+inline constexpr int slotCount = kit::sampleSlots;
+inline constexpr int slotOf (int pad, int player) noexcept { return pad * kit::samplesPerPad + player; }
+using SampleView = kit::Sample;
+using SampleUsage = kit::Usage;
+inline constexpr std::uint32_t maxSampleUsage = static_cast<std::uint32_t> (std::tuple_size_v<decltype (kit::Usage::ids)>);
 
 inline constexpr preset::Tag sampleSectionTag = preset::makeTag ("DSMP");
 
@@ -138,9 +146,9 @@ public:
     // Restore resolves every reference first (path, then library by hash),
     // decoding synchronously on the calling thread; `apply` then publishes.
     preset::Section writeState() const;
-    static preset::Section encodeState (const std::array<PadInfo, padCount>& pads);
+    static preset::Section encodeState (const std::array<PadInfo, slotCount>& pads);
     struct Restore {
-        std::array<PadInfo, padCount> pads;
+        std::array<PadInfo, slotCount> pads;
         juce::String diagnostics;   // one line per missing or changed sample
     };
     static bool readState (const preset::Section* section, Restore& out, juce::String& error,
@@ -173,8 +181,8 @@ private:
     void publishLocked();
 
     mutable juce::CriticalSection lock_;
-    std::array<PadInfo, padCount> pads_;
-    std::array<std::uint64_t, padCount> requests_ {};   // per pad: latest action (lock_)
+    std::array<PadInfo, slotCount> pads_;
+    std::array<std::uint64_t, slotCount> requests_ {};   // per slot: latest action (lock_)
     std::function<void (std::function<void()>)> dispatch_;
     void setPadLocked (int pad, std::shared_ptr<SampleBuffer> buffer, const juce::File& source);
     std::atomic<const Table*> current_ { nullptr };

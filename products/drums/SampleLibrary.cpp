@@ -94,9 +94,9 @@ juce::AudioFormatManager& formats()
     return manager;
 }
 
-juce::String padLabel (int pad)
+juce::String padLabel (int slot)
 {
-    return "Pad " + juce::String (pad + 1) + " (" + juce::String (DrumEngine::padNames()[static_cast<std::size_t> (pad)]) + ")";
+    return "Pad " + juce::String (slot / kit::samplesPerPad + 1) + (slot % kit::samplesPerPad == 0 ? " A" : " B");
 }
 
 } // namespace
@@ -226,8 +226,8 @@ DecodeResult decodeSampleFile (const juce::File& file, std::size_t budgetBytes)
 //==============================================================================
 struct SampleLibrary::Table {
     std::uint64_t generation = 0;
-    std::array<SampleView, padCount> views {};
-    std::array<std::shared_ptr<const SampleBuffer>, padCount> buffers {};
+    std::array<SampleView, slotCount> views {};
+    std::array<std::shared_ptr<const SampleBuffer>, slotCount> buffers {};
 };
 
 SampleLibrary::SampleLibrary()
@@ -285,7 +285,7 @@ void SampleLibrary::publishLocked()
 {
     auto table = std::make_unique<Table>();
     table->generation = ++generation_;
-    for (int pad = 0; pad < padCount; ++pad)
+    for (int pad = 0; pad < slotCount; ++pad)
     {
         const auto& buffer = pads_[static_cast<std::size_t> (pad)].buffer;
         auto& view = table->views[static_cast<std::size_t> (pad)];
@@ -447,7 +447,7 @@ std::size_t SampleLibrary::retiredCount() const
 SampleLibrary::PadInfo SampleLibrary::pad (int pad) const
 {
     const juce::ScopedLock sl (lock_);
-    return pad >= 0 && pad < padCount ? pads_[static_cast<std::size_t> (pad)] : PadInfo {};
+    return pad >= 0 && pad < slotCount ? pads_[static_cast<std::size_t> (pad)] : PadInfo {};
 }
 
 std::size_t SampleLibrary::totalBytes() const
@@ -462,7 +462,7 @@ std::size_t SampleLibrary::totalBytes() const
 
 void SampleLibrary::assign (int pad, std::shared_ptr<SampleBuffer> buffer, const juce::File& source)
 {
-    if (pad < 0 || pad >= padCount)
+    if (pad < 0 || pad >= slotCount)
         return;
     {
         const juce::ScopedLock sl (lock_);
@@ -511,12 +511,12 @@ void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<vo
         const juce::ScopedLock sl (lock_);
         budget = budget_;
         std::size_t used = retiredBytesLocked();
-        for (int i = 0; i < padCount; ++i)
+        for (int i = 0; i < slotCount; ++i)
             if (i != pad && pads_[static_cast<std::size_t> (i)].buffer != nullptr)
                 used += pads_[static_cast<std::size_t> (i)].buffer->bytes();
         budget = used < budget ? budget - used : 0;
     }
-    if (pad < 0 || pad >= padCount)
+    if (pad < 0 || pad >= slotCount)
         return;
     std::uint64_t token = 0;
     std::function<void (std::function<void()>)> dispatch;
@@ -583,7 +583,8 @@ juce::Result SampleLibrary::copyIntoLibrary (int pad)
 }
 
 //==============================================================================
-// DSMP: u32 version (1), u32 pad count (8), then per pad u8 assigned and, if
+// DSMP: u32 version (2), u32 slot count (32, pad * 2 + player), then per slot
+// u8 assigned and, if
 // assigned: 32-byte SHA-256, u64 frames, u32 channels, u64 sample-rate bits,
 // path, name (u32 length + UTF-8). No sample data.
 preset::Section SampleLibrary::writeState() const
@@ -592,12 +593,12 @@ preset::Section SampleLibrary::writeState() const
     return encodeState (pads_);
 }
 
-preset::Section SampleLibrary::encodeState (const std::array<PadInfo, padCount>& pads)
+preset::Section SampleLibrary::encodeState (const std::array<PadInfo, slotCount>& pads)
 {
     preset::Section section;
     section.tag = sampleSectionTag;
-    putU32 (section.data, 1);
-    putU32 (section.data, padCount);
+    putU32 (section.data, 2);
+    putU32 (section.data, slotCount);
     for (const auto& p : pads)
     {
         section.data.push_back (std::byte { p.reference ? std::uint8_t { 1 } : std::uint8_t { 0 } });
@@ -625,12 +626,14 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
     Reader in { section->data };
     const auto version = in.u32();
     const auto count = in.u32();
-    if (! in.ok || version != 1 || count != padCount)
+    // Version 1 (DRM-02): 8 pads, one sample each -> player A of pads 1-8.
+    // Version 2 (DRM-03): 32 slots, pad * 2 + player.
+    if (! in.ok || ! ((version == 1 && count == 8) || (version == 2 && count == static_cast<std::uint32_t> (slotCount))))
     {
         error = "unsupported sample section";
         return false;
     }
-    std::array<std::optional<SampleReference>, padCount> refs;
+    std::array<std::optional<SampleReference>, slotCount> refs;
     for (std::uint32_t pad = 0; pad < count; ++pad)
     {
         const auto assigned = in.u8();
@@ -660,7 +663,7 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
             error = "malformed sample section";
             return false;
         }
-        refs[pad] = r;
+        refs[version == 1 ? static_cast<std::uint32_t> (slotOf (static_cast<int> (pad), 0)) : pad] = r;
     }
     if (in.at != section->data.size())
     {
@@ -672,7 +675,7 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
     // file whose content changed is never used in place of the original.
     std::size_t budget = budgetBytes;
     juce::StringArray diagnostics;
-    for (int pad = 0; pad < padCount; ++pad)
+    for (int pad = 0; pad < slotCount; ++pad)
     {
         auto& p = out.pads[static_cast<std::size_t> (pad)];
         const auto& ref = refs[static_cast<std::size_t> (pad)];
@@ -731,7 +734,7 @@ void SampleLibrary::apply (Restore restore)
 {
     {
         const juce::ScopedLock sl (lock_);
-        for (int pad = 0; pad < padCount; ++pad)
+        for (int pad = 0; pad < slotCount; ++pad)
         {
             ++requests_[static_cast<std::size_t> (pad)];   // a restore supersedes pending loads
             pads_[static_cast<std::size_t> (pad)] = std::move (restore.pads[static_cast<std::size_t> (pad)]);
@@ -745,7 +748,7 @@ juce::String SampleLibrary::diagnostics() const
 {
     const juce::ScopedLock sl (lock_);
     juce::StringArray lines;
-    for (int pad = 0; pad < padCount; ++pad)
+    for (int pad = 0; pad < slotCount; ++pad)
     {
         const auto& p = pads_[static_cast<std::size_t> (pad)];
         if (p.reference && p.buffer == nullptr)

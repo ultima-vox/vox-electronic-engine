@@ -416,6 +416,96 @@ KitSettings legacyKit()
 }
 
 //==============================================================================
+// buildPattern (legacy module), unchanged: bars 1..3 evolve, bar 4 is the fill.
+namespace {
+constexpr int padKick = 0, padSnare = 1, padClap = 2, padClosedHat = 3, padOpenHat = 4, padTom = 5, padRim = 6, padCymbal = 7;
+constexpr int bars = 4, fillBar = 3, steps = 16;
+constexpr const char* patternNames[factoryPatternCount] = { "Full-on Basic", "Full-on Driving", "Rolling Offbeat",
+                                                            "Breakdown", "Kick & Offbeat" };
+} // namespace
+
+const char* factoryPatternName (int index) noexcept
+{
+    return index >= 0 && index < factoryPatternCount ? patternNames[index] : "";
+}
+
+Pattern factoryPattern (int index, std::array<PatternStep, 8 * 4 * 16>& cells) noexcept
+{
+    cells.fill ({});
+    const auto set = [&] (int bar, int pad, int st, int vel, bool acc) {
+        cells[static_cast<std::size_t> ((pad * bars + bar) * steps + st)] = { true, acc, static_cast<std::uint8_t> (vel) };
+    };
+    index = std::clamp (index, 0, factoryPatternCount - 1);
+    for (int bar = 0; bar < bars; ++bar)
+    {
+        const bool fill = bar == fillBar;
+        const int evo = fill ? bars : bar;   // the fill is not an evolution bar
+        for (int st = 0; st < steps; ++st)
+        {
+            const bool beat = st % 4 == 0, off = st % 4 == 2;
+            switch (index)
+            {
+                case 0:   // Full-on Basic
+                case 1:   // Full-on Driving
+                    if (beat && ! (fill && st == 12))
+                        set (bar, padKick, st, 120, st == 0);
+                    if (off)
+                        set (bar, padOpenHat, st, 92, true);
+                    else if (! (fill && st >= 12))
+                        set (bar, padClosedHat, st, st % 2 ? 66 : 92, false);
+                    if (st == 4 || st == 12)
+                    {
+                        set (bar, padSnare, st, 110, false);
+                        set (bar, padClap, st, 100, false);
+                    }
+                    if (index == 1 && st % 4 == 3)
+                        set (bar, padRim, st, 58, false);
+                    if (evo == 1 && st == 7)
+                        set (bar, padRim, st, 80, true);
+                    if (evo == 0 && st == 0)
+                        set (bar, padCymbal, st, 96, false);
+                    if (fill && st >= 12)
+                        set (bar, padTom, st, 84 + 10 * (st - 12), st == 15);
+                    if (fill && (st == 13 || st == 14 || st == 15))
+                        set (bar, padSnare, st, 70 + 12 * (st - 13), false);
+                    break;
+                case 2:   // Rolling Offbeat: e/a hats, clap only, ghost toms
+                    if (beat)
+                        set (bar, padKick, st, 118, st == 0);
+                    if (off)
+                        set (bar, padOpenHat, st, 96, true);
+                    if (st % 2 == 1)
+                        set (bar, padClosedHat, st, 72, false);
+                    if (st == 4 || st == 12)
+                        set (bar, padClap, st, 104, false);
+                    if ((evo == 2 || fill) && (st == 11 || st == 15))
+                        set (bar, padTom, st, 64, false);
+                    break;
+                case 3:   // Breakdown: no kick
+                    if (off)
+                        set (bar, padOpenHat, st, 80, false);
+                    if (st % 2 == 0 && ! off)
+                        set (bar, padClosedHat, st, 60, false);
+                    if (st == 12)
+                        set (bar, padClap, st, 90, false);
+                    if (evo == 0 && st == 0)
+                        set (bar, padCymbal, st, 90, false);
+                    if (fill && st >= 8 && st % 2 == 0)
+                        set (bar, padSnare, st, 60 + 8 * (st - 8), st == 14);
+                    break;
+                default:   // Kick & Offbeat: space for a rolling bass
+                    if (beat)
+                        set (bar, padKick, st, 120, st == 0);
+                    if (off)
+                        set (bar, padOpenHat, st, 90, true);
+                    break;
+            }
+        }
+    }
+    return Pattern { 8, steps, bars, 0, cells.data() };
+}
+
+//==============================================================================
 struct KitEngine::Impl {
     KitSettings safe;   // this block's settings, in range (sanitize)
     double sampleRate = 48000.0;
@@ -807,7 +897,7 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
             for (int k = 0; k < padCount; ++k)
             {
                 const int pad = s.fireOrder[static_cast<std::size_t> (k)];
-                if (hits[pad] > 0)
+                if (hits[pad] > 0 && ! kit.pads[static_cast<std::size_t> (pad)].mute)
                     s.trigger (kit, samples, pad, hits[pad]);
             }
 

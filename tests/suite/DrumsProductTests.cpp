@@ -1,22 +1,26 @@
-// DRM-01: VOX Drums product tests, against the plugin's shared code.
+// VOX Drums product tests (DRM-01..03b), against the plugin's shared code.
 //
 //  - parameter contract: the APVTS layout matches products/drums/parameters.csv
-//    (VOX_GOLDEN_UPDATE=1 rewrites it), IDs unique, every engine parameter
-//    either exposed or deferred to a named later PR;
+//    (VOX_GOLDEN_UPDATE=1 rewrites it), 119 unique IDs, host defaults are
+//    the default kit's values;
 //  - editor: every plugin parameter is reachable from a bound control, and
-//    controls and parameters move together both ways;
+//    controls and parameters move together both ways; every structural
+//    control moves the kit store and follows it;
 //  - sound: every pad sounds from its MIDI note and from the editor
 //    audition, the internal sequencer plays each factory pattern only while
 //    the host transport runs, Internal mode ignores host notes, Host mode
 //    ignores the transport, huge blocks and MIDI floods are safe;
-//  - state: parameter values round-trip exactly, a document without the
-//    parameter section restores defaults, malformed sections are rejected
-//    without touching the live state, unknown IDs are ignored;
+//  - state: parameter values and pad structure (DPAD) round-trip exactly, a
+//    document without the parameter section restores defaults, a DRM-01/02
+//    document migrates its former structural parameters onto pads 1-8,
+//    malformed sections are rejected without touching the live state,
+//    unknown IDs are ignored;
 //  - realtime: processBlock allocates nothing (allocation probe), with
 //    transport, sequencer, MIDI, automation and audition all active.
 #include "Processor.h"
 #include "DrumsEditor.h"
 #include "DrumsParameters.h"
+#include "KitStore.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -34,6 +38,7 @@
 #include <atomic>
 #include <limits>
 #include <map>
+#include <array>
 #include <memory>
 #include <random>
 #include <set>
@@ -43,7 +48,7 @@
 namespace {
 
 using vox::drums::DrumsProcessor;
-using vox::drums::DrumEngine;
+namespace kit = vox::drums::kit;
 using vox::drums::padCount;
 
 int failures = 0;
@@ -147,36 +152,50 @@ void testParameterContract()
     const auto text = vox::drums::describeLayout (p.state());
 
     std::set<std::string> ids;
+    const auto& kitDefaults = vox::drums::defaultKit();
+    int perPad[padCount] {};
     for (const auto& entry : vox::drums::pluginParameters())
     {
         check (ids.insert (entry.id).second, "parameter ID is unique: " + juce::String (entry.id));
         check (juce::String (entry.id).startsWith ("drm."), "parameter ID uses the drm. namespace: " + juce::String (entry.id));
         check (p.state().getParameter (entry.id) != nullptr, "layout has " + juce::String (entry.id));
-        if (entry.engine != nullptr)
+        if (entry.pad >= 0 && entry.field != vox::drums::Field::seqLane)
+            ++perPad[entry.pad];
+        auto& param = parameter (p, entry.id);
+        const float def = param.convertFrom0to1 (param.getDefaultValue());
+        float expected = def;
+        const auto* pad = entry.pad >= 0 ? &kitDefaults.pads[static_cast<std::size_t> (entry.pad)] : nullptr;
+        using vox::drums::Field;
+        switch (entry.field)
         {
-            auto& param = parameter (p, entry.id);
-            const float def = param.convertFrom0to1 (param.getDefaultValue());
-            check (std::abs (def - entry.engine->defaultValue) <= 1.0e-5f * std::max (1.0f, std::abs (def)),
-                   "host default equals the engine default: " + juce::String (entry.id));
+            case Field::level: expected = pad->level; break;
+            case Field::tune: expected = pad->tune; break;
+            case Field::decay: expected = pad->decay; break;
+            case Field::pan: expected = pad->pan; break;
+            case Field::cutoff: expected = pad->cutoff; break;
+            case Field::mute: expected = 0.0f; break;
+            case Field::kitVolume: expected = kitDefaults.volume; break;
+            case Field::kitVelocity: expected = kitDefaults.velocitySensitivity; break;
+            case Field::kitChoke: expected = kitDefaults.chokeEnabled ? 1.0f : 0.0f; break;
+            case Field::seqMode: expected = 0.0f; break;
+            case Field::seqPattern: expected = 0.0f; break;
+            case Field::seqSwing: expected = kitDefaults.swing; break;
+            case Field::seqAccent: expected = kitDefaults.accent; break;
+            case Field::seqLane: expected = 1.0f; break;
         }
+        check (std::abs (def - expected) <= 1.0e-4f * std::max (1.0f, std::abs (def)),
+               "host default equals the default kit: " + juce::String (entry.id));
     }
     check (static_cast<int> (ids.size()) == p.getParameters().size(), "every host parameter is in the table");
-
-    // Every engine parameter is exposed, or deferred to the PR that adds its
-    // feature (sends/outputs: DRM-06).
-    int deferred = 0;
-    for (const auto& e : DrumEngine::parameters())
-    {
-        if (! vox::drums::pluginIdFor (e.legacyId).empty())
-            continue;
-        const juce::String name (e.legacyId);
-        const bool known = name.endsWith (".output") || name.endsWith (".send1") || name.endsWith (".send2");
-        check (known, "engine parameter " + name + " is exposed or explicitly deferred");
-        ++deferred;
-    }
-    check (deferred == 24, "24 deferred engine parameters (got " + juce::String (deferred) + ")");
-    check (DrumEngine::parameterCount() == 187, "the engine has 187 parameters");
-    check (ids.size() == 164, "164 plugin parameters (got " + juce::String (static_cast<int> (ids.size())) + ")");
+    check (ids.size() == 119, "119 plugin parameters (got " + juce::String (static_cast<int> (ids.size())) + ")");
+    for (int pad = 0; pad < padCount; ++pad)
+        check (perPad[pad] == 6, "pad " + juce::String (pad + 1) + " has level, tune, decay, pan, cutoff and mute");
+    // DRM-01/02 host IDs of pads 1-8, kit and sequencer keep their identity.
+    for (const auto* id : { "drm.p01.level", "drm.p08.cutoff", "drm.kit.volume", "drm.kit.velocity", "drm.kit.hat_choke",
+                            "drm.seq.mode", "drm.seq.pattern", "drm.seq.swing", "drm.seq.accent", "drm.seq.lane.p08" })
+        check (ids.count (id) == 1, juce::String ("DRM-01 ID kept: ") + id);
+    check (parameter (p, "drm.p01.level").getName (64) == "Pad 1 Level" && parameter (p, "drm.p16.mute").getName (64) == "Pad 16 Mute",
+           "host names are pad-numbered");
 
     auto* pattern = dynamic_cast<juce::AudioParameterChoice*> (p.state().getParameter (vox::drums::patternParameterId));
     check (pattern != nullptr && pattern->choices.size() == 5, "five factory patterns");
@@ -198,6 +217,40 @@ void testParameterContract()
     check (expected == text, "the parameter layout matches products/drums/parameters.csv "
                              "(intended changes: VOX_GOLDEN_UPDATE=1 in a reviewed commit)");
 }
+
+// Writes one structural setting by its editor name (the test's own
+// mapping, independent of the editor's).
+struct StructuralContextSetter {
+    static void set (kit::PadSettings& ps, int player, const juce::String& name, float v)
+    {
+        auto& pl = ps.players[static_cast<std::size_t> (player)];
+        const int i = juce::roundToInt (v);
+        if (name == "model") ps.model = static_cast<kit::Model> (i);
+        else if (name == "note") ps.note = static_cast<std::uint8_t> (i);
+        else if (name == "choke") ps.chokeGroup = static_cast<std::uint8_t> (i);
+        else if (name == "poly") ps.polyphony = static_cast<std::uint8_t> (i + 1);
+        else if (name == "filter") ps.filter = static_cast<kit::Filter> (i);
+        else if (name == "source") ps.source = static_cast<kit::Source> (i);
+        else if (name == "sample_mode") ps.sampleMode = static_cast<kit::SampleMode> (i);
+        else if (name == "fine") ps.fine = v;
+        else if (name == "character") ps.character = v;
+        else if (name == "resonance") ps.resonance = v;
+        else if (name == "attack") ps.attack = v;
+        else if (name == "sustain") ps.sustain = v;
+        else if (name == "pitch_amount") ps.pitchAmount = v;
+        else if (name == "pitch_decay") ps.pitchDecay = v;
+        else if (name == "drive") ps.drive = v;
+        else if (name == "sub") ps.sub = v;
+        else if (name == "tail") ps.tail = v;
+        else if (name == "split") ps.velocitySplit = static_cast<std::uint8_t> (i);
+        else if (name == "start") pl.start = v;
+        else if (name == "end") pl.end = v;
+        else if (name == "sample_level") pl.level = v;
+        else if (name == "loop") pl.loop = v >= 0.5f;
+        else if (name == "reverse") pl.reverse = v >= 0.5f;
+        else if (name == "normalize") pl.normalize = v >= 0.5f;
+    }
+};
 
 //==============================================================================
 void testEditorBindings()
@@ -255,6 +308,131 @@ void testEditorBindings()
     for (const auto& entry : vox::drums::pluginParameters())
         check (reachable.count (entry.id) == 1, "editor control for " + juce::String (entry.id));
 
+    // Structural controls: each moves the selected pad's (player's) setting
+    // in the kit store, and follows a change made elsewhere (restore,
+    // another view) on the next editor tick.
+    {
+        const auto read = [&] (const juce::String& name, int pad, int player) -> float {
+            const auto ps = p->kitStore().pad (pad);
+            const auto& pl = ps.players[static_cast<std::size_t> (player)];
+            if (name == "model") return static_cast<float> (ps.model);
+            if (name == "note") return ps.note;
+            if (name == "choke") return ps.chokeGroup;
+            if (name == "poly") return static_cast<float> (ps.polyphony - 1);
+            if (name == "filter") return static_cast<float> (ps.filter);
+            if (name == "source") return static_cast<float> (ps.source);
+            if (name == "sample_mode") return static_cast<float> (ps.sampleMode);
+            if (name == "fine") return ps.fine;
+            if (name == "character") return ps.character;
+            if (name == "resonance") return ps.resonance;
+            if (name == "attack") return ps.attack;
+            if (name == "sustain") return ps.sustain;
+            if (name == "pitch_amount") return ps.pitchAmount;
+            if (name == "pitch_decay") return ps.pitchDecay;
+            if (name == "drive") return ps.drive;
+            if (name == "sub") return ps.sub;
+            if (name == "tail") return ps.tail;
+            if (name == "split") return ps.velocitySplit;
+            if (name == "start") return pl.start;
+            if (name == "end") return pl.end;
+            if (name == "sample_level") return pl.level;
+            if (name == "loop") return pl.loop ? 1.0f : 0.0f;
+            if (name == "reverse") return pl.reverse ? 1.0f : 0.0f;
+            if (name == "normalize") return pl.normalize ? 1.0f : 0.0f;
+            return -12345.0f;
+        };
+        const char* sliders[] = { "fine", "character", "resonance", "attack", "sustain", "pitch_amount", "pitch_decay",
+                                  "drive", "sub", "tail", "split", "start", "end", "sample_level" };
+        const char* combos[] = { "model", "note", "choke", "poly", "filter", "source", "sample_mode" };
+        const char* toggles[] = { "loop", "reverse", "normalize" };
+        for (const int pad : { 0, 6, 13 })
+            for (const int player : { 0, 1 })
+            {
+                panel->selectPad (pad);
+                panel->selectPlayer (player);
+                const juce::String where = " (pad " + juce::String (pad + 1) + (player == 0 ? " A)" : " B)");
+                const auto other = 1 - player;
+                for (const auto* name : sliders)
+                {
+                    auto* slider = panel->structuralSlider (name);
+                    check (slider != nullptr, juce::String ("structural knob ") + name);
+                    if (slider == nullptr)
+                        continue;
+                    const double target = slider->proportionOfLengthToValue (0.37);
+                    const float otherBefore = read (name, pad, other);
+                    slider->setValue (target, juce::sendNotificationSync);
+                    const double shown = slider->getValue();
+                    check (std::abs (read (name, pad, player) - shown) <= 1.0e-5 * std::max (1.0, std::abs (shown)),
+                           juce::String ("knob moves the store: ") + name + where);
+                    const bool perPlayer = juce::String (name) == "start" || juce::String (name) == "end" || juce::String (name) == "sample_level";
+                    if (perPlayer)
+                        check (juce::exactlyEqual (read (name, pad, other), otherBefore), juce::String ("the other player is untouched: ") + name + where);
+                    // The store moves the knob.
+                    auto ps = p->kitStore().pad (pad);
+                    const double back = slider->proportionOfLengthToValue (0.81);
+                    StructuralContextSetter::set (ps, player, name, static_cast<float> (slider->snapValue (back, juce::Slider::notDragging)));
+                    p->kitStore().setPad (pad, ps);
+                    panel->pollForTesting();
+                    check (std::abs (slider->getValue() - read (name, pad, player)) <= 1.0e-5 * std::max (1.0, std::abs (slider->getValue())),
+                           juce::String ("the store moves the knob: ") + name + where);
+                }
+                for (const auto* name : combos)
+                {
+                    auto* combo = panel->structuralCombo (name);
+                    check (combo != nullptr, juce::String ("structural combo ") + name);
+                    if (combo == nullptr)
+                        continue;
+                    const int last = combo->getNumItems() - 1;
+                    combo->setSelectedItemIndex (last, juce::sendNotificationSync);
+                    check (juce::roundToInt (read (name, pad, player)) == last, juce::String ("combo moves the store: ") + name + where);
+                    auto ps = p->kitStore().pad (pad);
+                    StructuralContextSetter::set (ps, player, name, 1.0f);
+                    p->kitStore().setPad (pad, ps);
+                    panel->pollForTesting();
+                    check (combo->getSelectedItemIndex() == 1, juce::String ("the store moves the combo: ") + name + where);
+                }
+                for (const auto* name : toggles)
+                {
+                    auto* toggle = panel->structuralToggle (name);
+                    check (toggle != nullptr, juce::String ("structural toggle ") + name);
+                    if (toggle == nullptr)
+                        continue;
+                    const float otherBefore = read (name, pad, other);
+                    toggle->setToggleState (! toggle->getToggleState(), juce::sendNotificationSync);
+                    check ((read (name, pad, player) >= 0.5f) == toggle->getToggleState(), juce::String ("toggle moves the store: ") + name + where);
+                    check (juce::exactlyEqual (read (name, pad, other), otherBefore), juce::String ("the other player is untouched: ") + name + where);
+                    auto ps = p->kitStore().pad (pad);
+                    StructuralContextSetter::set (ps, player, name, toggle->getToggleState() ? 0.0f : 1.0f);
+                    p->kitStore().setPad (pad, ps);
+                    panel->pollForTesting();
+                    check ((read (name, pad, player) >= 0.5f) == toggle->getToggleState(), juce::String ("the store moves the toggle: ") + name + where);
+                }
+            }
+        // The kick body row shows only for the Kick model (the knob holding
+        // the slider is what hides).
+        const auto shown = [panel] (juce::Component* c) {
+            for (; c != nullptr && c != panel; c = c->getParentComponent())
+                if (! c->isVisible())
+                    return false;
+            return c == panel;
+        };
+        p->kitStore().setAll (vox::drums::defaultKit());
+        panel->selectPad (0);
+        panel->pollForTesting();
+        check (panel->bodyVisible() && shown (panel->structuralSlider ("drive")), "kick body shows for a Kick pad");
+        panel->structuralCombo ("model")->setSelectedItemIndex (static_cast<int> (kit::Model::tom), juce::sendNotificationSync);
+        check (! panel->bodyVisible(), "a Tom pad has no kick body");
+        check (! shown (panel->structuralSlider ("drive")), "kick body hides for a Tom pad");
+        p->kitStore().setAll (vox::drums::defaultKit());
+        panel->pollForTesting();
+        check (shown (panel->structuralSlider ("drive")), "kick body returns when a restore makes the pad a Kick again");
+        // Host parameters bind to the selected pad.
+        panel->selectPad (11);
+        check (panel->sliderFor ("drm.p12.level") != nullptr && panel->sliderFor ("drm.p01.level") == nullptr
+                   && panel->buttonFor ("drm.p12.mute") != nullptr,
+               "pad knobs follow the selected pad");
+    }
+
     // Pad buttons audition their pad and light up.
     p->takeHitMask();
     for (int pad = 0; pad < padCount; ++pad)
@@ -269,7 +447,7 @@ void testEditorBindings()
     juce::MidiBuffer midi;
     p->processBlock (buffer, midi);
     check (buffer.getMagnitude (0, 256) > 1.0e-4f, "auditioned pads sound");
-    check (p->takeHitMask() == 0xffu, "every auditioned pad is reported as hit");
+    check (p->takeHitMask() == 0xffffu, "every auditioned pad is reported as hit");
 
     juce::Image image (juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
     juce::Graphics g (image);
@@ -306,7 +484,9 @@ void testEditorBindings()
 //==============================================================================
 void testSound()
 {
-    const auto& notes = DrumEngine::padNotes();
+    std::array<std::uint8_t, padCount> notes {};
+    for (int pad = 0; pad < padCount; ++pad)
+        notes[static_cast<std::size_t> (pad)] = vox::drums::defaultKit().pads[static_cast<std::size_t> (pad)].note;
     for (int pad = 0; pad < padCount; ++pad)
     {
         auto p = makeProcessor();
@@ -324,6 +504,59 @@ void testSound()
                 m.addEvent (juce::MidiMessage::noteOn (1, notes[static_cast<std::size_t> (pad)], static_cast<juce::uint8> (110)), 17);
         });
         check (muted.peak < 1.0e-6, "pad " + juce::String (pad + 1) + " level 0 is silent");
+        // Its mute parameter silences it.
+        auto m = makeProcessor();
+        setPlain (*m, juce::String (vox::drums::padPrefix (pad)) + ".mute", 1.0f);
+        const auto mutedByMute = render (*m, 40, 256, nullptr, 120.0, [&] (int b, juce::MidiBuffer& mb) {
+            if (b == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, notes[static_cast<std::size_t> (pad)], static_cast<juce::uint8> (110)), 17);
+        });
+        check (mutedByMute.peak <= 0.0 && m->takeHitMask() == 0, "pad " + juce::String (pad + 1) + " mute is silent");
+    }
+
+    // Every model sounds on every kind of pad slot, and a reassigned note
+    // follows the kit store.
+    for (int model = 0; model < kit::modelCount; ++model)
+        for (const int pad : { 2, 12 })
+        {
+            auto p = makeProcessor();
+            auto ps = p->kitStore().pad (pad);
+            ps.model = static_cast<kit::Model> (model);
+            ps.note = 72;
+            p->kitStore().setPad (pad, ps);
+            const auto r = render (*p, 60, 256, nullptr, 120.0, [] (int b, juce::MidiBuffer& mb) {
+                if (b == 0)
+                    mb.addEvent (juce::MidiMessage::noteOn (1, 72, static_cast<juce::uint8> (120)), 0);
+            });
+            check (r.finite && r.peak > 1.0e-3 && p->takeHitMask() == (1u << pad),
+                   "model " + vox::drums::modelName (static_cast<kit::Model> (model)) + " sounds on pad " + juce::String (pad + 1)
+                       + " from its reassigned note");
+        }
+
+    // Pads sharing a choke group cut each other (Closed/Open Hat style) only
+    // while Choke Groups is on.
+    for (const bool chokeOn : { true, false })
+    {
+        auto p = makeProcessor();
+        setPlain (*p, "drm.kit.hat_choke", chokeOn ? 1.0f : 0.0f);
+        auto a = p->kitStore().pad (9), b = p->kitStore().pad (10);
+        a.model = kit::Model::cymbal;
+        a.chokeGroup = b.chokeGroup = 5;
+        p->kitStore().setPad (9, a);
+        p->kitStore().setPad (10, b);
+        setPlain (*p, juce::String (vox::drums::padPrefix (9)) + ".decay", 6.0f);
+        setPlain (*p, juce::String (vox::drums::padPrefix (10)) + ".level", 0.0f);   // the choker itself is silent
+        const auto r = render (*p, 80, 256, nullptr, 120.0, [&] (int blk, juce::MidiBuffer& mb) {
+            if (blk == 0)
+                mb.addEvent (juce::MidiMessage::noteOn (1, notes[9], static_cast<juce::uint8> (120)), 0);
+            if (blk == 20)
+                mb.addEvent (juce::MidiMessage::noteOn (1, notes[10], static_cast<juce::uint8> (120)), 0);
+        });
+        const auto tail = render (*p, 10, 256, nullptr, 120.0, noMidi);
+        if (chokeOn)
+            check (r.peak > 1.0e-3 && tail.peak < 1.0e-5, "a choke group member cuts the other's ring");
+        else
+            check (tail.peak > 1.0e-4, "with Choke Groups off the ring continues");
     }
 
     // Kit volume and a note outside the kit.
@@ -455,6 +688,192 @@ void testState()
     check (equal, "every parameter value is restored");
     check (stateOf (*target) == saved, "restored parameters save back byte-identically");
 
+    // Pad structure (DPAD): a randomised kit round-trips exactly and saves
+    // back byte-identically; the engine plays the restored structure.
+    {
+        auto kitSource = makeProcessor();
+        auto k = kitSource->kitStore().snapshot();
+        std::mt19937 r2 (77);
+        std::uniform_real_distribution<float> u (0.0f, 1.0f);
+        for (int pad = 0; pad < padCount; ++pad)
+        {
+            auto& ps = k.pads[static_cast<std::size_t> (pad)];
+            ps.model = static_cast<kit::Model> (r2() % kit::modelCount);
+            ps.note = static_cast<std::uint8_t> (30 + pad * 3);
+            ps.chokeGroup = static_cast<std::uint8_t> (r2() % 9);
+            ps.polyphony = static_cast<std::uint8_t> (1 + r2() % kit::maxVoicesPerPad);
+            ps.filter = static_cast<kit::Filter> (r2() % 6);
+            ps.source = static_cast<kit::Source> (r2() % 3);
+            ps.sampleMode = static_cast<kit::SampleMode> (r2() % 3);
+            ps.velocitySplit = static_cast<std::uint8_t> (1 + r2() % 127);
+            ps.fine = -100.0f + 200.0f * u (r2);
+            ps.character = u (r2);
+            ps.resonance = u (r2);
+            ps.attack = -1.0f + 2.0f * u (r2);
+            ps.sustain = -1.0f + 2.0f * u (r2);
+            ps.pitchAmount = 48.0f * u (r2);
+            ps.pitchDecay = 0.005f + 0.195f * u (r2);
+            ps.drive = 1.0f + 7.0f * u (r2);
+            ps.sub = u (r2);
+            ps.tail = 0.03f + 1.47f * u (r2);
+            for (auto& pl : ps.players)
+            {
+                pl.start = 0.5f * u (r2);
+                pl.end = 0.5f + 0.5f * u (r2);
+                pl.level = 2.0f * u (r2);
+                pl.loop = r2() % 2 != 0;
+                pl.reverse = r2() % 2 != 0;
+                pl.normalize = r2() % 2 != 0;
+            }
+        }
+        kitSource->kitStore().setAll (k);
+        const auto kitSaved = stateOf (*kitSource);
+        auto kitTarget = makeProcessor();
+        kitTarget->setStateInformation (kitSaved.getData(), static_cast<int> (kitSaved.getSize()));
+        check (kitTarget->lastStateError().isEmpty(), "pad structure accepted");
+        const auto a = vox::drums::KitStore::encode (k), b = vox::drums::KitStore::encode (kitTarget->kitStore().snapshot());
+        check (a.data == b.data, "every pad structure field is restored");
+        check (stateOf (*kitTarget) == kitSaved, "restored pad structure saves back byte-identically");
+        // The restored note map plays: pad 16's note sounds pad 16.
+        const auto r = render (*kitTarget, 40, 256, nullptr, 120.0, [&] (int blk, juce::MidiBuffer& m) {
+            if (blk == 0)
+                m.addEvent (juce::MidiMessage::noteOn (1, k.pads[15].note, static_cast<juce::uint8> (120)), 0);
+        });
+        check ((kitTarget->takeHitMask() & (1u << 15)) != 0 && r.finite, "a restored note assignment plays its pad");
+    }
+
+    // A DRM-01/02 document (no DPAD, structural values as parameters)
+    // migrates them onto pads 1-8 and player A; host values stay.
+    {
+        auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
+                                             target->product().stateTag, 1).document;
+        std::erase_if (document.sections, [] (const auto& sec) { return sec.tag == vox::drums::padSectionTag; });
+        std::vector<std::pair<std::string, float>> old = {
+            { "drm.p01.level", 0.4f }, { "drm.p01.character", 0.9f }, { "drm.p01.fine", -33.0f }, { "drm.p01.drive", 5.5f },
+            { "drm.p01.pitch_amount", 12.0f }, { "drm.p01.tail", 1.2f }, { "drm.p03.filter", 3.0f },
+            { "drm.p03.resonance", 0.7f }, { "drm.p04.transient_attack", -0.5f }, { "drm.p05.transient_sustain", 0.25f },
+            { "drm.p06.source", 2.0f }, { "drm.p06.sample_start", 0.125f }, { "drm.p06.sample_end", 0.75f },
+            { "drm.p06.sample_level", 1.5f }, { "drm.p07.sample_loop", 1.0f }, { "drm.p08.sample_reverse", 1.0f },
+            { "drm.p08.sample_normalize", 1.0f }, { "drm.seq.lane.p08", 0.0f },
+        };
+        std::vector<std::byte> data;
+        const auto put = [&] (std::uint32_t v) {
+            for (int sh = 0; sh < 32; sh += 8)
+                data.push_back (static_cast<std::byte> ((v >> sh) & 0xffu));
+        };
+        put (static_cast<std::uint32_t> (old.size()));
+        for (const auto& [id, value] : old)
+        {
+            put (static_cast<std::uint32_t> (id.size()));
+            for (char c : id)
+                data.push_back (static_cast<std::byte> (c));
+            std::uint32_t bits;
+            std::memcpy (&bits, &value, 4);
+            put (bits);
+        }
+        for (auto& sec : document.sections)
+            if (sec.tag == vox::drums::parameterSectionTag)
+                sec.data = data;
+        const auto bytes = vox::preset::encode (document);
+        auto migrated = makeProcessor();
+        migrated->setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
+        check (migrated->lastStateError().isEmpty(), "a DRM-01/02 document is accepted");
+        const auto k = migrated->kitStore().snapshot();
+        const auto& d = vox::drums::defaultKit();
+        check (juce::exactlyEqual (k.pads[0].character, 0.9f) && juce::exactlyEqual (k.pads[0].fine, -33.0f)
+                   && juce::exactlyEqual (k.pads[0].drive, 5.5f) && juce::exactlyEqual (k.pads[0].pitchAmount, 12.0f)
+                   && juce::exactlyEqual (k.pads[0].tail, 1.2f),
+               "kick character, fine and body migrate");
+        check (k.pads[2].filter == kit::Filter::hp12 && juce::exactlyEqual (k.pads[2].resonance, 0.7f)
+                   && juce::exactlyEqual (k.pads[3].attack, -0.5f) && juce::exactlyEqual (k.pads[4].sustain, 0.25f),
+               "filter, resonance and transient migrate");
+        check (k.pads[5].source == kit::Source::layer && juce::exactlyEqual (k.pads[5].players[0].start, 0.125f)
+                   && juce::exactlyEqual (k.pads[5].players[0].end, 0.75f) && juce::exactlyEqual (k.pads[5].players[0].level, 1.5f)
+                   && k.pads[6].players[0].loop && k.pads[7].players[0].reverse && k.pads[7].players[0].normalize,
+               "sample source and player A settings migrate");
+        check (k.pads[5].players[1].start == d.pads[5].players[1].start && k.pads[12].model == d.pads[12].model
+                   && k.pads[12].note == d.pads[12].note,
+               "player B and pads 9-16 keep their defaults");
+        check (std::abs (plainOf (*migrated, "drm.p01.level") - 0.4f) < 1.0e-6f && plainOf (*migrated, "drm.seq.lane.p08") < 0.5f,
+               "host values of a DRM-01/02 document are restored");
+        // Saved again it carries DPAD and loads identically.
+        const auto again = stateOf (*migrated);
+        auto reloaded = makeProcessor();
+        reloaded->setStateInformation (again.getData(), static_cast<int> (again.getSize()));
+        check (vox::drums::KitStore::encode (reloaded->kitStore().snapshot()).data == vox::drums::KitStore::encode (k).data,
+               "a migrated project saves and reloads its structure");
+    }
+
+    // Malformed or invalid DPAD sections are rejected; nothing changes.
+    {
+        auto holder = makeProcessor();
+        holder->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        const auto before = stateOf (*holder);
+        const auto withPads = [&] (std::vector<std::byte> data) {
+            auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
+                                                 holder->product().stateTag, 1).document;
+            for (auto& sec : document.sections)
+                if (sec.tag == vox::drums::padSectionTag)
+                    sec.data = std::move (data);
+            const auto bytes = vox::preset::encode (document);
+            return juce::MemoryBlock (bytes->data(), bytes->size());
+        };
+        const auto good = vox::drums::KitStore::encode (vox::drums::defaultKit()).data;
+        const auto bad = [&] (std::vector<std::byte> data, const juce::String& what) {
+            const auto blob = withPads (std::move (data));
+            holder->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+            check (holder->lastStateError().isNotEmpty(), "DPAD " + what + ": rejected");
+            check (stateOf (*holder) == before, "DPAD " + what + ": live state unchanged");
+        };
+        bad ({}, "empty");
+        {
+            auto d = good;
+            d[0] = std::byte { 2 };
+            bad (d, "unknown version");
+        }
+        {
+            auto d = good;
+            d[4] = std::byte { 8 };
+            bad (d, "8 pads");
+        }
+        {
+            auto d = good;
+            d.pop_back();
+            bad (d, "truncated");
+        }
+        {
+            auto d = good;
+            d.push_back (std::byte { 0 });
+            bad (d, "trailing byte");
+        }
+        {
+            auto d = good;
+            d[8] = std::byte { 8 };   // pad 1 model
+            bad (d, "unknown model");
+        }
+        {
+            auto d = good;
+            d[11] = std::byte { 9 };   // pad 1 polyphony
+            bad (d, "polyphony 9");
+        }
+        {
+            auto d = good;
+            const float nan = std::numeric_limits<float>::quiet_NaN();
+            std::memcpy (&d[16], &nan, 4);   // pad 1 fine
+            bad (d, "NaN fine");
+        }
+        {
+            auto d = good;
+            const float big = 3.0f;
+            std::memcpy (&d[20], &big, 4);   // pad 1 character
+            bad (d, "character above its range");
+        }
+        // Sanity: the unmodified section is accepted.
+        const auto ok = withPads (good);
+        holder->setStateInformation (ok.getData(), static_cast<int> (ok.getSize()));
+        check (holder->lastStateError().isEmpty(), "the default DPAD section is accepted");
+    }
+
     // A document without the parameter section (FOUND-01 Drums) restores
     // defaults.
     {
@@ -536,7 +955,7 @@ void testState()
         target->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
         check (target->lastStateError().isEmpty(), "unknown parameter IDs are ignored");
         check (std::abs (plainOf (*target, "drm.p01.level") - 0.25f) < 1.0e-5f, "known value restored next to an unknown one");
-        check (std::abs (plainOf (*target, "drm.p02.decay") - 1.0f) < 1.0e-5f, "out-of-range value clamps to the range");
+        check (std::abs (plainOf (*target, "drm.p02.decay") - 10.0f) < 1.0e-5f, "out-of-range value clamps to the range");
     }
 }
 

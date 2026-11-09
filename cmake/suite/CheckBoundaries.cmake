@@ -5,14 +5,12 @@ set(dirs products libs/vox-preset libs/vox-dsp libs/vox-testkit tests/suite)
 set(forbidden
   "rack/" "instrument/" "vins/" "native/" "VoxModuleAbi" "InstrumentAbi"
   "apps/vst3" "PluginProcessor.h" "PluginEditor.h")
-# Exceptions: the frozen legacy Drums reference (DRM-00) and the two tests
-# that drive it through the legacy C ABI (golden corpus, DRM-01 parity;
-# products and libraries must never reference it); and the transitional VOX Drums engine copy (DRM-01, FOUND-00
-# K5 option a), whose C interface only DrumEngine.cpp sees. DRM-03 removes
-# the second exception.
+# Exception: the frozen legacy Drums reference (DRM-00) and the tests that
+# drive it through the legacy C ABI (golden corpus, plugin parity, kit engine
+# parity). Products and libraries must never reference it. (The DRM-01/02
+# transitional engine copy is gone since DRM-03b.)
 set(legacy_allowed "/tests/suite/legacy-reference/" "/tests/suite/DrumsLegacyGoldenTests.cpp"
-  "/tests/suite/DrumsParityTests.cpp" "/tests/suite/DrumsKitParityTests.cpp"
-  "/products/drums/engine/legacy8/" "/products/drums/engine/DrumEngine.cpp")
+  "/tests/suite/DrumsParityTests.cpp" "/tests/suite/DrumsKitParityTests.cpp")
 set(violations "")
 foreach(dir IN LISTS dirs)
   file(GLOB_RECURSE files "${ROOT}/${dir}/*.h" "${ROOT}/${dir}/*.hpp" "${ROOT}/${dir}/*.c" "${ROOT}/${dir}/*.cpp")

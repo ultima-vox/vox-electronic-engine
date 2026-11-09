@@ -66,15 +66,84 @@ The 12 parity scenarios:
 **Mutation checks:** a factor of 1.0000001 on the Send 1 path makes 54
 renders fail; a change of the tom click constant makes 72 renders fail.
 
-## Open decisions, for DRM-03b
+## DRM-03b: the plugin on the kit engine
 
-- **Plugin parameter map for 16 pads.** The spec targets 160–240 host
-  parameters (§6) and keeps structural data in versioned state. This needs a
-  reviewed change of the DRM-01/02 map: 164 parameters, append-only IDs, not
-  yet released. Proposal for DRM-03b:
-  - host parameters per pad: level, tune, decay, pan, cutoff, send 1,
-    send 2 and mute (8 × 16 = 128), plus kit and sequencer;
-  - model, note, choke, polyphony, filter type, transient, body and
-    sample-player settings move to the versioned `DPAD` state section.
-- **Default kit for pads 9–16.** Currently Perc on notes 50–57, a
-  placeholder. The final note map and labels are an open decision (03 §9).
+Status: on `drm/03b-plugin`, stacked on DRM-03a. The processor now runs
+`kit::KitEngine` (64 voices); the wrapped legacy module, `DrumEngine` and
+`engine/legacy8/` are removed (the frozen reference stays under
+`tests/suite/legacy-reference/` for the parity tests only).
+
+### Parameter map (contract change, needs Architecture Guard review)
+
+**119 host parameters** (`products/drums/parameters.csv`, regenerated):
+
+| Scope | Parameters | Count |
+|---|---|---|
+| per pad 1–16 | Level, Tune (±24 st), Decay (0.01–10 s, log), Pan, Cutoff (20 Hz–20 kHz, log), Mute | 96 |
+| kit | Kit Volume, Velocity Sens, Choke Groups | 3 |
+| sequencer | Seq Mode, Pattern, Seq Swing, Seq Accent, Lane 1–16 | 20 |
+
+Host names are pad-numbered ("Pad 1 Level"), since a pad's model can
+change. Every DRM-01/02 ID that stays keeps its identity (`drm.p01.level`,
+`drm.kit.*`, `drm.seq.*`, `drm.seq.lane.p01`..`p08`).
+
+What changes against DRM-01/02 (not released; no merge to main yet):
+- **109 of the 164 IDs leave the host map** (55 stay): character, fine,
+  resonance, filter, transient attack/sustain, source and the six
+  `sample_*` of pads 1–8 (13 × 8), and
+  the kick body (`drm.p01.pitch_amount`, `pitch_decay`, `drive`, `sub`,
+  `tail`). They are now structural settings of a pad (versioned section
+  `DPAD`), edited in the editor; a DRM-01/02 project migrates them (below).
+- **Ranges widen**: Tune ±12 → ±24 st, Decay 0.08–1.5 → 0.01–10 s (all
+  models share one range). Saved plain values restore exactly; host
+  automation written against DRM-01/02 normalised values would map
+  differently. There is no released automation to keep.
+- **Sends** (`send1`, `send2`) are deferred to DRM-06 with the FX returns:
+  without returns they would be dead controls. Output-bus routing is DRM-06
+  as well (the engine already supports both).
+
+### State
+
+| Section | Content |
+|---|---|
+| `DPRM` (unchanged format) | host parameter plain values by ID; unknown IDs ignored |
+| `DPAD` v1 (new) | per pad: model, note, choke group, polyphony, filter, source, sample mode, velocity split, fine, character, resonance, attack, sustain, kick body; players A and B (start, end, level, loop, reverse, normalize). Strict: a wrong version or size, NaN, or any value outside its range rejects the document; the live state is kept. |
+| `DSMP` v2 | 32 sample slots (pad × 2 + player). v1 (DRM-02: 8 pads) is read onto player A of pads 1–8. |
+
+A document without `DPAD` (DRM-01/02) takes the default kit and migrates
+the former structural parameter values of pads 1–8 from `DPRM` onto the
+pads and player A. Restore stays three-phase (review 6733006001): sections
+are committed under the state lock, host notifications run without it.
+
+**Threads:** structural settings live in `KitStore` behind a SpinLock held
+for a struct copy. The audio thread takes them with a try-lock only when
+they changed; if the lock is busy it keeps the previous block's settings.
+
+### Editor
+
+4 × 4 pad grid (model, note, M when muted; click auditions and selects).
+Pad panel: model, note, choke group, voices, mute; level, tune, fine,
+decay, pan, character; filter, cutoff, resonance, attack, sustain; kick
+body row only for the Kick model. Sample panel: source, players mode, A/B,
+load / clear / to library, waveform, start, end, level, split, loop,
+reverse, normalize. Kit and sequencer controls; 16 lanes. The final skin is
+DRM-07.
+
+### Evidence (local, Linux GCC 13 Release): 26/26 suite tests pass
+
+| Test | Proves |
+|---|---|
+| `suite_drums_parity_tests` | **81 plugin renders bit-identical to the DRM-00 reference** (9 scenarios × 44.1/48/96 kHz × 64/333/512 frames: host MIDI, automation of every shared host parameter, every pattern Internal/Both, loop back, samples on pads 1–8 with loop/reverse/normalize). The reference values come from the plugin's host parameters plus its `KitStore`. The voice pool is set to the reference's 16 (`setVoiceLimitForTesting`); with 64 voices, dense 96 kHz/64-frame scenarios differ by design (no stealing). Also: the 5 ported factory patterns equal the reference's content API cell by cell; a 600-event burst on one sample. |
+| `suite_drums_product_tests` | 119-parameter contract and golden CSV; host defaults = default kit. Editor: every host parameter bound both ways; every structural control moves `KitStore` and follows it on the next editor tick (pads 1, 7, 14, players A and B); kick body row shows only for Kick. Sound: all 16 pads from their notes; level 0 and Mute silent (and not lit); 8 models on pads 3 and 13 from a reassigned note; a choke group on pads 10/11 with Choke Groups on/off. State: random `DPAD` round trip byte-identical and played; DRM-01/02 document migration; 9 malformed `DPAD` variants rejected with the live state kept; reentrancy and concurrent restore/save. Allocation probe. |
+| `suite_drums_sample_tests` | Slot API (pad × 2 + player); player B restored as its own sample; DSMP v1 onto player A; editor A/B: load, status, start knob and Clear act on the selected player only; retirement, stale loads, budget, stress. |
+| `suite_vst3_host_tests` | the built VST3 through JUCE's VST3 host: note sounds, "Pad 1 Level" at 0 silences, state round trip. |
+
+**Defect found by the new tests and fixed:** a muted pad still lit its pad
+button (the hit mask ignored Mute).
+
+## Open decisions (owner)
+
+- **Default kit for pads 9–16.** Currently Perc on notes 50–57, labels
+  "Perc 1".."Perc 8": a placeholder (03 §9).
+- **Sample memory budget** (unchanged from DRM-02).
+- Acceptance of the parameter-map change above (Architecture Guard).

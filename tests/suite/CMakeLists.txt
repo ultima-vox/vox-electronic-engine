@@ -182,7 +182,7 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
   set(level "-")
   if(key STREQUAL "drm")
     set(engine 1)
-    set(level "Kick Level")
+    set(level "Pad 1 Level")
   endif()
   list(APPEND host_bundles
     "$<TARGET_FILE_DIR:${VOX_SUITE_${key}_TARGET}_VST3>/../..|${VOX_SUITE_${key}_NAME}|${engine}|${level}")

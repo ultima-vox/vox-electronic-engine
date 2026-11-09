@@ -63,6 +63,7 @@ struct PadSettings {
     std::uint8_t velocitySplit = 64;       // velocitySwitch: B from this velocity
     std::array<SamplePlayer, samplesPerPad> players {};
     bool laneOn = true;                    // internal sequencer lane
+    bool mute = false;                     // a muted pad ignores new hits (running ones ring out)
 };
 
 struct KitSettings {
@@ -77,6 +78,7 @@ struct KitSettings {
 // The legacy 8-pad kit with its defaults on pads 1-8 (pads 9-16 empty Perc
 // pads on notes 50..57, level 0.6).
 KitSettings legacyKit();
+
 
 struct Event {
     std::uint32_t offset = 0;   // sample in the block, ascending
@@ -101,6 +103,13 @@ struct Pattern {
     const PatternStep* cells = nullptr;
 };
 
+// Factory patterns (the legacy module's buildPattern, 145 BPM full-on idiom):
+// 8 lanes x 16 steps x 4 bars, cell (lane * 4 + bar) * 16 + step.
+inline constexpr int factoryPatternCount = 5;
+const char* factoryPatternName (int index) noexcept;
+// Fills cells (8 * 4 * 16) for pattern `index`; returns the pattern view.
+Pattern factoryPattern (int index, std::array<PatternStep, 8 * 4 * 16>& cells) noexcept;
+
 struct Sample {
     std::uint64_t id = 0;
     const float* const* channels = nullptr;
@@ -113,6 +122,7 @@ struct Sample {
 struct Usage {
     std::array<std::uint64_t, maxVoices * samplesPerPad> ids {};
     std::uint32_t count = 0;
+    bool overflow = false;   // cannot happen (ids holds every player); kept for the report contract
 };
 
 struct Outputs {

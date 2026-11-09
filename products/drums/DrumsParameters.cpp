@@ -1,6 +1,5 @@
 #include "DrumsParameters.h"
 
-#include <array>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -8,81 +7,46 @@
 namespace vox::drums {
 namespace {
 
-constexpr std::array<const char*, padCount> legacyPadKeys { "kick", "snare", "clap", "chat",
-                                                            "ohat", "tom", "rim", "cymbal" };
-
-// Engine features that arrive in later Drums PRs; not host parameters yet.
-bool deferred (const std::string& name)
+juce::String formatSeconds (float v)
 {
-    return name == "output" || name == "send1" || name == "send2";
+    return v < 1.0f ? juce::String (v * 1000.0f, v < 0.1f ? 1 : 0) + " ms" : juce::String (v, 2) + " s";
 }
 
-int padIndex (const std::string& key)
+float parseSeconds (const juce::String& t)
 {
-    for (int i = 0; i < padCount; ++i)
-        if (key == legacyPadKeys[static_cast<std::size_t> (i)])
-            return i;
-    return -1;
+    const float n = t.retainCharacters ("+-.0123456789").getFloatValue();
+    return t.trim().endsWithIgnoreCase ("ms") ? n / 1000.0f : n;
 }
 
-juce::NormalisableRange<float> rangeFor (const EngineParameter& p)
+juce::NormalisableRange<float> logRange (float lo, float hi)
 {
-    juce::NormalisableRange<float> range (p.minimum, p.maximum);
-    // Frequencies and times are heard logarithmically: put the geometric
-    // mean at the knob centre.
-    if ((p.unit == "Hz" || p.unit == "s") && p.minimum > 0.0f)
-        range.setSkewForCentre (std::sqrt (p.minimum * p.maximum));
-    return range;
-}
-
-// Host and editor value text: units a musician reads, not raw floats.
-juce::String formatValue (const EngineParameter& p, float v)
-{
-    const auto& u = p.unit;
-    const juce::String id (p.legacyId);
-    if (u == "Hz")
-        return v >= 1000.0f ? juce::String (v / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
-    if (u == "s")
-        return v < 1.0f ? juce::String (v * 1000.0f, v < 0.1f ? 1 : 0) + " ms" : juce::String (v, 2) + " s";
-    if (u == "st")
-        return (v > 0.0f ? "+" : "") + juce::String (v, 1) + " st";
-    if (u == "ct")
-        return (v > 0.0f ? "+" : "") + juce::String (juce::roundToInt (v)) + " ct";
-    if (id.endsWith (".pan"))
-    {
-        const int amount = juce::roundToInt (std::abs (v) * 100.0f);
-        return amount == 0 ? juce::String ("C") : (v < 0.0f ? "L " : "R ") + juce::String (amount);
-    }
-    if (id.endsWith (".sample_level"))
-        return juce::String (juce::roundToInt (v * 100.0f)) + " %";
-    if (id.endsWith (".drive"))
-        return "x" + juce::String (v, 2);
-    if (p.minimum < 0.0f)
-        return (v > 0.0f ? "+" : "") + juce::String (juce::roundToInt (v * 100.0f)) + " %";
-    return juce::String (juce::roundToInt (v * 100.0f / juce::jmax (1.0e-6f, p.maximum))) + " %";
-}
-
-// Inverse for typed values: the leading number in the unit formatValue uses.
-float parseValue (const EngineParameter& p, const juce::String& text)
-{
-    const auto t = text.trim();
-    const float number = t.retainCharacters ("+-.0123456789").getFloatValue();
-    if (p.unit == "Hz")
-        return t.containsIgnoreCase ("k") ? number * 1000.0f : number;
-    if (p.unit == "s")
-        return t.endsWithIgnoreCase ("ms") ? number / 1000.0f : number;
-    if (p.unit == "st" || p.unit == "ct" || juce::String (p.legacyId).endsWith (".drive"))
-        return number;
-    if (juce::String (p.legacyId).endsWith (".pan"))
-        return t.startsWithIgnoreCase ("L") ? -number / 100.0f : number / 100.0f;
-    if (juce::String (p.legacyId).endsWith (".sample_level"))
-        return number / 100.0f;
-    if (p.minimum < 0.0f)
-        return number / 100.0f;
-    return number / 100.0f * p.maximum;
+    juce::NormalisableRange<float> r (lo, hi);
+    r.setSkewForCentre (std::sqrt (lo * hi));
+    return r;
 }
 
 } // namespace
+
+const kit::KitSettings& defaultKit()
+{
+    static const kit::KitSettings k = kit::legacyKit();
+    return k;
+}
+
+juce::String modelName (kit::Model model)
+{
+    static const char* names[kit::modelCount] = { "Kick", "Snare", "Clap", "Hat", "Tom", "Rim", "Cymbal", "Perc" };
+    const int i = static_cast<int> (model);
+    return i >= 0 && i < kit::modelCount ? names[i] : "?";
+}
+
+juce::String padName (int pad)
+{
+    static const char* legacy[8] = { "Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Tom", "Rim", "Cymbal" };
+    if (pad >= 0 && pad < 8)
+        return legacy[pad];
+    return "Perc " + juce::String (pad - 7);
+}
 
 std::string padPrefix (int pad)
 {
@@ -91,42 +55,31 @@ std::string padPrefix (int pad)
     return s.str();
 }
 
-std::string pluginIdFor (const std::string& legacyId)
-{
-    const auto dot = legacyId.find ('.');
-    if (dot == std::string::npos)
-        return {};
-    const auto scope = legacyId.substr (0, dot);
-    const auto name = legacyId.substr (dot + 1);
-    if (scope == "kit")
-        return "drm.kit." + name;
-    if (scope == "seq")
-    {
-        if (name.rfind ("lane.", 0) == 0)
-        {
-            const int pad = padIndex (name.substr (5));
-            return pad < 0 ? std::string {} : "drm.seq.lane." + padPrefix (pad).substr (4);
-        }
-        return "drm.seq." + name;
-    }
-    const int pad = padIndex (scope);
-    if (pad < 0 || deferred (name))
-        return {};
-    return padPrefix (pad) + "." + name;
-}
-
 const std::vector<PluginParameter>& pluginParameters()
 {
     static const std::vector<PluginParameter> table = [] {
-        std::vector<PluginParameter> result;
-        for (const auto& p : DrumEngine::parameters())
+        std::vector<PluginParameter> t;
+        for (int pad = 0; pad < padCount; ++pad)
         {
-            auto id = pluginIdFor (p.legacyId);
-            if (! id.empty())
-                result.push_back ({ std::move (id), static_cast<int> (p.index), &p });
+            const auto prefix = padPrefix (pad);
+            const auto label = "Pad " + std::to_string (pad + 1) + " ";
+            t.push_back ({ prefix + ".level", label + "Level", Field::level, pad });
+            t.push_back ({ prefix + ".tune", label + "Tune", Field::tune, pad });
+            t.push_back ({ prefix + ".decay", label + "Decay", Field::decay, pad });
+            t.push_back ({ prefix + ".pan", label + "Pan", Field::pan, pad });
+            t.push_back ({ prefix + ".cutoff", label + "Cutoff", Field::cutoff, pad });
+            t.push_back ({ prefix + ".mute", label + "Mute", Field::mute, pad });
         }
-        result.push_back ({ patternParameterId.toStdString(), -1, nullptr });
-        return result;
+        t.push_back ({ "drm.kit.volume", "Kit Volume", Field::kitVolume });
+        t.push_back ({ "drm.kit.velocity", "Velocity Sens", Field::kitVelocity });
+        t.push_back ({ "drm.kit.hat_choke", "Choke Groups", Field::kitChoke });
+        t.push_back ({ "drm.seq.mode", "Seq Mode", Field::seqMode });
+        t.push_back ({ patternParameterId.toStdString(), "Pattern", Field::seqPattern });
+        t.push_back ({ "drm.seq.swing", "Seq Swing", Field::seqSwing });
+        t.push_back ({ "drm.seq.accent", "Seq Accent", Field::seqAccent });
+        for (int pad = 0; pad < padCount; ++pad)
+            t.push_back ({ "drm.seq.lane." + padPrefix (pad).substr (4), "Lane " + std::to_string (pad + 1), Field::seqLane, pad });
+        return t;
     }();
     return table;
 }
@@ -134,46 +87,83 @@ const std::vector<PluginParameter>& pluginParameters()
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
-    for (const auto& entry : pluginParameters())
+    const auto& kit = defaultKit();
+    const auto floatParam = [&] (const PluginParameter& e, juce::NormalisableRange<float> range, float def,
+                                 std::function<juce::String (float, int)> toText,
+                                 std::function<float (const juce::String&)> fromText) {
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { e.id, 1 }, e.name, range, def,
+            juce::AudioParameterFloatAttributes().withStringFromValueFunction (std::move (toText)).withValueFromStringFunction (std::move (fromText))));
+    };
+    const auto percent = [] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + " %"; };
+    const auto fromPercent = [] (const juce::String& t) { return t.retainCharacters ("+-.0123456789").getFloatValue() / 100.0f; };
+    for (const auto& e : pluginParameters())
     {
-        const juce::ParameterID id { entry.id, 1 };
-        if (entry.engine == nullptr)
+        const auto* pad = e.pad >= 0 ? &kit.pads[static_cast<std::size_t> (e.pad)] : nullptr;
+        switch (e.field)
         {
-            juce::StringArray names;
-            for (const auto& name : DrumEngine::factoryPatternNames())
-                names.add (name);
-            layout.add (std::make_unique<juce::AudioParameterChoice> (
-                id, "Pattern", names, 0, juce::AudioParameterChoiceAttributes().withLabel ("")));
-            continue;
-        }
-        const auto& p = *entry.engine;
-        switch (p.type)
-        {
-            case EngineParameter::Type::toggle:
-                layout.add (std::make_unique<juce::AudioParameterBool> (
-                    id, p.name, p.defaultValue >= 0.5f,
-                    juce::AudioParameterBoolAttributes().withAutomatable (p.automatable)));
+            case Field::level:
+                floatParam (e, { 0.0f, 1.0f }, pad->level, percent, fromPercent);
                 break;
-            case EngineParameter::Type::choice:
+            case Field::tune:
+                floatParam (e, { -24.0f, 24.0f }, pad->tune,
+                            [] (float v, int) { return (v > 0.0f ? "+" : "") + juce::String (v, 1) + " st"; },
+                            [] (const juce::String& t) { return t.retainCharacters ("+-.0123456789").getFloatValue(); });
+                break;
+            case Field::decay:
+                floatParam (e, logRange (0.01f, 10.0f), pad->decay, [] (float v, int) { return formatSeconds (v); }, parseSeconds);
+                break;
+            case Field::pan:
+                floatParam (e, { -1.0f, 1.0f }, pad->pan,
+                            [] (float v, int) {
+                                const int a = juce::roundToInt (std::abs (v) * 100.0f);
+                                return a == 0 ? juce::String ("C") : (v < 0.0f ? "L " : "R ") + juce::String (a);
+                            },
+                            [] (const juce::String& t) {
+                                const float n = t.retainCharacters (".0123456789").getFloatValue() / 100.0f;
+                                return t.trim().startsWithIgnoreCase ("L") ? -n : n;
+                            });
+                break;
+            case Field::cutoff:
+                floatParam (e, logRange (20.0f, 20000.0f), pad->cutoff,
+                            [] (float v, int) { return v >= 1000.0f ? juce::String (v / 1000.0f, 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz"; },
+                            [] (const juce::String& t) {
+                                const float n = t.retainCharacters ("+-.0123456789").getFloatValue();
+                                return t.containsIgnoreCase ("k") ? n * 1000.0f : n;
+                            });
+                break;
+            case Field::mute:
+                layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { e.id, 1 }, e.name, false));
+                break;
+            case Field::kitVolume:
+                floatParam (e, { 0.0f, 1.0f }, kit.volume, percent, fromPercent);
+                break;
+            case Field::kitVelocity:
+                floatParam (e, { 0.0f, 1.0f }, kit.velocitySensitivity, percent, fromPercent);
+                break;
+            case Field::kitChoke:
+                layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { e.id, 1 }, e.name, kit.chokeEnabled));
+                break;
+            case Field::seqMode:
+                layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { e.id, 1 }, e.name,
+                                                                          juce::StringArray { "Host MIDI", "Internal", "Both" }, 0));
+                break;
+            case Field::seqPattern:
             {
                 juce::StringArray names;
-                for (const auto& c : p.choices)
-                    names.add (c);
-                layout.add (std::make_unique<juce::AudioParameterChoice> (
-                    id, p.name, names, static_cast<int> (std::lround (p.defaultValue)),
-                    juce::AudioParameterChoiceAttributes().withAutomatable (p.automatable)));
+                for (int i = 0; i < kit::factoryPatternCount; ++i)
+                    names.add (kit::factoryPatternName (i));
+                layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { e.id, 1 }, e.name, names, 0));
                 break;
             }
-            case EngineParameter::Type::continuous:
-            {
-                const auto* engine = &p;
-                layout.add (std::make_unique<juce::AudioParameterFloat> (
-                    id, p.name, rangeFor (p), p.defaultValue,
-                    juce::AudioParameterFloatAttributes()
-                        .withAutomatable (p.automatable)
-                        .withStringFromValueFunction ([engine] (float v, int) { return formatValue (*engine, v); })
-                        .withValueFromStringFunction ([engine] (const juce::String& t) { return parseValue (*engine, t); })));
-            }
+            case Field::seqSwing:
+                floatParam (e, { 0.0f, 0.5f }, kit.swing, percent, fromPercent);
+                break;
+            case Field::seqAccent:
+                floatParam (e, { 0.0f, 1.0f }, kit.accent, percent, fromPercent);
+                break;
+            case Field::seqLane:
+                layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { e.id, 1 }, e.name, true));
                 break;
         }
     }
@@ -183,7 +173,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 std::string describeLayout (juce::AudioProcessorValueTreeState& state)
 {
     std::ostringstream out;
-    out << "id,legacy_id,name,type,minimum,maximum,default,automatable,choices\n";
+    out << "id,name,type,minimum,maximum,default,automatable,choices\n";
     out << std::setprecision (9);
     for (const auto& entry : pluginParameters())
     {
@@ -195,13 +185,39 @@ std::string describeLayout (juce::AudioProcessorValueTreeState& state)
         std::string choices;
         if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (parameter))
             choices = choice->choices.joinIntoString ("|").toStdString();
+        // The default as declared (the default kit's value), not its round trip
+        // through a skewed 0..1 range, whose last digit can differ between C
+        // runtimes.
+        float def = 0.0f;
+        if (dynamic_cast<juce::AudioParameterFloat*> (parameter) != nullptr)
+        {
+            const auto& kit = defaultKit();
+            const auto* pad = entry.pad >= 0 ? &kit.pads[static_cast<std::size_t> (entry.pad)] : nullptr;
+            switch (entry.field)
+            {
+                case Field::level: def = pad->level; break;
+                case Field::tune: def = pad->tune; break;
+                case Field::decay: def = pad->decay; break;
+                case Field::pan: def = pad->pan; break;
+                case Field::cutoff: def = pad->cutoff; break;
+                case Field::kitVolume: def = kit.volume; break;
+                case Field::kitVelocity: def = kit.velocitySensitivity; break;
+                case Field::seqSwing: def = kit.swing; break;
+                case Field::seqAccent: def = kit.accent; break;
+                case Field::mute:
+                case Field::kitChoke:
+                case Field::seqMode:
+                case Field::seqPattern:
+                case Field::seqLane:
+                    def = ranged->convertFrom0to1 (ranged->getDefaultValue());
+                    break;
+            }
+        }
+        else
+            def = ranged->convertFrom0to1 (ranged->getDefaultValue());
         const auto& range = ranged->getNormalisableRange();
-        out << entry.id << ',' << (entry.engine != nullptr ? entry.engine->legacyId : "") << ",\""
-            << parameter->getName (128) << "\"," << type << ',' << range.start << ',' << range.end << ','
-            // The engine's default, not its round trip through a skewed 0..1
-            // range (that last digit can differ between C runtimes).
-            << (entry.engine != nullptr ? entry.engine->defaultValue : 0.0f) << ','
-            << (parameter->isAutomatable() ? 1 : 0) << ",\"" << choices << "\"\n";
+        out << entry.id << ",\"" << parameter->getName (128) << "\"," << type << ',' << range.start << ',' << range.end << ','
+            << def << ',' << (parameter->isAutomatable() ? 1 : 0) << ",\"" << choices << "\"\n";
     }
     return out.str();
 }

@@ -19,6 +19,7 @@
 #include "Processor.h"
 #include "DrumsEditor.h"
 #include "SampleLibrary.h"
+#include "DrumsParameters.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -97,15 +98,50 @@ std::unique_ptr<DrumsProcessor> makeProcessor (double rate = 48000.0, int block 
     return p;
 }
 
+// A host parameter by ID, or (DRM-03b) a structural setting of the kit
+// store by its former parameter ID ("drm.pNN.source", ".sample_start",
+// ".sample_end", ".sample_level", ".sample_loop", ".sample_reverse",
+// ".sample_normalize": player A).
 void setPlain (DrumsProcessor& p, const juce::String& id, float plain)
 {
-    auto* param = dynamic_cast<juce::RangedAudioParameter*> (p.state().getParameter (id));
-    if (param == nullptr)
+    if (auto* param = dynamic_cast<juce::RangedAudioParameter*> (p.state().getParameter (id)))
+    {
+        param->setValueNotifyingHost (param->convertTo0to1 (plain));
+        return;
+    }
+    const int pad = id.fromFirstOccurrenceOf ("drm.p", false, false).upToFirstOccurrenceOf (".", false, false).getIntValue() - 1;
+    const auto field = id.fromLastOccurrenceOf (".", false, false);
+    if (! id.startsWith ("drm.p") || pad < 0 || pad >= vox::drums::padCount)
     {
         std::printf ("no parameter %s\n", id.toRawUTF8());
         std::exit (EXIT_FAILURE);
     }
-    param->setValueNotifyingHost (param->convertTo0to1 (plain));
+    auto ps = p.kitStore().pad (pad);
+    auto& a = ps.players[0];
+    if (field == "source") ps.source = static_cast<vox::drums::kit::Source> (juce::roundToInt (plain));
+    else if (field == "sample_start") a.start = plain;
+    else if (field == "sample_end") a.end = plain;
+    else if (field == "sample_level") a.level = plain;
+    else if (field == "sample_loop") a.loop = plain >= 0.5f;
+    else if (field == "sample_reverse") a.reverse = plain >= 0.5f;
+    else if (field == "sample_normalize") a.normalize = plain >= 0.5f;
+    else
+    {
+        std::printf ("no parameter or structural setting %s\n", id.toRawUTF8());
+        std::exit (EXIT_FAILURE);
+    }
+    p.kitStore().setPad (pad, ps);
+}
+
+const std::array<std::uint8_t, vox::drums::padCount>& padNotes()
+{
+    static const auto notes = [] {
+        std::array<std::uint8_t, vox::drums::padCount> n {};
+        for (int pad = 0; pad < vox::drums::padCount; ++pad)
+            n[static_cast<std::size_t> (pad)] = vox::drums::defaultKit().pads[static_cast<std::size_t> (pad)].note;
+        return n;
+    }();
+    return notes;
 }
 
 std::shared_ptr<vox::drums::SampleBuffer> decode (const juce::File& file)
@@ -304,10 +340,10 @@ void testSound()
     // Every pad plays its own sample.
     {
         auto p = makeProcessor();
-        const auto& notes = vox::drums::DrumEngine::padNotes();
+        const auto& notes = padNotes();
         for (int pad = 0; pad < vox::drums::padCount; ++pad)
         {
-            p->samples().assign (pad, decode (file), file);
+            p->samples().assign (vox::drums::slotOf (pad, 0), decode (file), file);
             setPlain (*p, juce::String (vox::drums::padPrefix (pad)) + ".source", 1.0f);
         }
         for (int pad = 0; pad < vox::drums::padCount; ++pad)
@@ -368,8 +404,8 @@ void testOwnership()
 
     // Replace storm with voices on every pad; at the end nothing is left.
     {
-        for (int pad = 0; pad < vox::drums::padCount; ++pad)
-            library.clear (pad);
+        for (int slot = 0; slot < vox::drums::slotCount; ++slot)
+            library.clear (slot);
         for (int i = 0; i < 1500 && library.retiredCount() > 0; ++i)
         {
             render (*p, 1, -1);
@@ -379,12 +415,12 @@ void testOwnership()
         std::vector<std::shared_ptr<vox::drums::SampleBuffer>> pool;
         for (int i = 0; i < 4; ++i)
             pool.push_back (decode (i % 2 == 0 ? a : b));
-        const auto& notes = vox::drums::DrumEngine::padNotes();
+        const auto& notes = padNotes();
         juce::AudioBuffer<float> buffer (2, 128);
         for (int round = 0; round < 400; ++round)
         {
             // Fresh buffers (each decode is a new id) so retirement is exercised.
-            library.assign (round % vox::drums::padCount, decode (round % 3 == 0 ? a : b), a);
+            library.assign (round % vox::drums::slotCount, decode (round % 3 == 0 ? a : b), a);
             juce::MidiBuffer midi;
             for (int k = 0; k < 4; ++k)
                 midi.addEvent (juce::MidiMessage::noteOn (1, notes[static_cast<std::size_t> ((round + k) % 8)],
@@ -395,8 +431,8 @@ void testOwnership()
             if (round % 5 == 0)
                 library.collect();
         }
-        for (int pad = 0; pad < vox::drums::padCount; ++pad)
-            library.clear (pad);
+        for (int slot = 0; slot < vox::drums::slotCount; ++slot)
+            library.clear (slot);
         juce::MidiBuffer none;
         for (int i = 0; i < 1500; ++i)   // all voices end (~8 s at 128 frames)
         {
@@ -420,7 +456,7 @@ void testRealtime()
     auto p = makeProcessor (48000.0, 256);
     for (int pad = 0; pad < vox::drums::padCount; ++pad)
         setPlain (*p, juce::String (vox::drums::padPrefix (pad)) + ".source", 2.0f);
-    const auto& notes = vox::drums::DrumEngine::padNotes();
+    const auto& notes = padNotes();
     juce::AudioBuffer<float> buffer (2, 256);
     juce::MidiBuffer midi;
     midi.ensureSize (4096);
@@ -486,6 +522,71 @@ void testState()
         check (close (render (*target, 30), render (*ref, 30)), "the restored kit sounds like the original");
     }
 
+    // Player B (slot 1 = pad 1 B) is its own sample.
+    {
+        auto target = makeProcessor();
+        target->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        check (target->samples().pad (vox::drums::slotOf (0, 1)).buffer != nullptr
+                   && target->samples().pad (vox::drums::slotOf (0, 1)).buffer->sha256
+                          == source->samples().pad (vox::drums::slotOf (0, 1)).buffer->sha256,
+               "pad 1 player B restored as its own sample");
+    }
+
+    // A DRM-02 document (DSMP version 1: 8 pads, one sample each) maps pad n
+    // onto player A of pad n.
+    {
+        const auto v2 = sampleSection (saved, *source);
+        // Split the version 2 section into its 32 slot entries.
+        std::vector<std::vector<std::byte>> entries;
+        std::size_t at = 8;
+        const auto u32At = [&] (std::size_t i) {
+            std::uint32_t v = 0;
+            for (int k = 0; k < 4; ++k)
+                v |= static_cast<std::uint32_t> (std::to_integer<std::uint8_t> (v2[i + static_cast<std::size_t> (k)])) << (8 * k);
+            return v;
+        };
+        for (int slot = 0; slot < vox::drums::slotCount; ++slot)
+        {
+            const auto begin = at;
+            if (std::to_integer<int> (v2[at++]) == 1)
+            {
+                at += 32 + 8 + 4 + 8;
+                for (int str = 0; str < 2; ++str)
+                    at += 4 + u32At (at);
+            }
+            entries.emplace_back (v2.begin() + static_cast<std::ptrdiff_t> (begin), v2.begin() + static_cast<std::ptrdiff_t> (at));
+        }
+        check (at == v2.size(), "the version 2 sample section has 32 slot entries");
+        std::vector<std::byte> v1 { std::byte { 1 }, std::byte {}, std::byte {}, std::byte {},
+                                    std::byte { 8 }, std::byte {}, std::byte {}, std::byte {} };
+        const auto empty = std::vector<std::byte> { std::byte { 0 } };
+        for (int pad = 0; pad < 8; ++pad)
+        {
+            // v1 pad 3 holds the kick (slot 0's entry), pad 6 the snare (slot 1's).
+            const auto& e = pad == 3 ? entries[0] : pad == 6 ? entries[1] : empty;
+            v1.insert (v1.end(), e.begin(), e.end());
+        }
+        auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
+                                             source->product().stateTag, 1).document;
+        for (auto& sec : document.sections)
+            if (sec.tag == vox::drums::sampleSectionTag)
+                sec.data = v1;
+        const auto bytes = vox::preset::encode (document);
+        auto target = makeProcessor();
+        target->setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
+        check (target->lastStateError().isEmpty(), "a version 1 sample section is accepted");
+        const auto& lib = target->samples();
+        check (lib.pad (vox::drums::slotOf (3, 0)).buffer != nullptr
+                   && lib.pad (vox::drums::slotOf (3, 0)).buffer->sha256 == source->samples().pad (0).buffer->sha256
+                   && lib.pad (vox::drums::slotOf (6, 0)).buffer != nullptr
+                   && lib.pad (vox::drums::slotOf (6, 0)).buffer->sha256 == source->samples().pad (1).buffer->sha256,
+               "version 1 pads 4 and 7 land on player A of pads 4 and 7");
+        int assigned = 0;
+        for (int slot = 0; slot < vox::drums::slotCount; ++slot)
+            assigned += lib.pad (slot).reference ? 1 : 0;
+        check (assigned == 2, "nothing else is assigned from a version 1 section");
+    }
+
     // Missing file: the assignment and the reference survive, with a
     // deterministic diagnostic; the pad plays its synthesis.
     {
@@ -498,7 +599,7 @@ void testState()
         const auto info = target->samples().pad (0);
         check (info.reference.has_value() && info.buffer == nullptr && info.status == "not found", "missing sample keeps its assignment");
         const auto diag = target->samples().diagnostics();
-        check (diag.contains ("Pad 1 (Kick)") && diag.contains ("state-kick.wav") && diag.contains ("not found"),
+        check (diag.contains ("Pad 1 A") && diag.contains ("state-kick.wav") && diag.contains ("not found"),
                "missing sample diagnostic names pad and file: " + diag);
         check (sampleSection (stateOf (*target), *target) == sampleSection (saved, *source), "the missing reference saves back unchanged");
         auto synthOnly = makeProcessor();
@@ -559,8 +660,13 @@ void testState()
         rejected ({}, "empty sample section");
         {
             auto d = good;
-            d[0] = std::byte { 2 };
+            d[0] = std::byte { 3 };
             rejected (d, "unknown sample section version");
+        }
+        {
+            auto d = good;
+            d[4] = std::byte { 8 };   // version 2 with 8 slots
+            rejected (d, "version 2 with a version 1 slot count");
         }
         {
             auto d = good;
@@ -653,8 +759,8 @@ void testStaleLoads()
 
     // Superseded decodes are freed (nothing held by the library or voices).
     library.setCompletionDispatcherForTesting (nullptr);
-    for (int pad = 0; pad < vox::drums::padCount; ++pad)
-        library.clear (pad);
+    for (int slot = 0; slot < vox::drums::slotCount; ++slot)
+        library.clear (slot);
     for (int i = 0; i < 10 && library.retiredCount() > 0; ++i)
     {
         render (*p, 1, -1);
@@ -806,7 +912,7 @@ void testNoCallbackLifetime()
         std::atomic<bool> stop { false };
         std::thread audio ([&] {
             juce::AudioBuffer<float> buffer (2, 128);
-            const auto& notes = vox::drums::DrumEngine::padNotes();
+            const auto& notes = padNotes();
             for (int k = 0; ! stop.load(); ++k)
             {
                 juce::MidiBuffer midi;
@@ -822,7 +928,7 @@ void testNoCallbackLifetime()
             pool.push_back (decode (f));
         for (int i = 0; i < 1500; ++i)
         {
-            const int pad = i % vox::drums::padCount;
+            const int pad = i % vox::drums::slotCount;
             if (i % 11 == 10)
                 library.clear (pad);
             else
@@ -832,8 +938,8 @@ void testNoCallbackLifetime()
         }
         stop = true;
         audio.join();
-        for (int pad = 0; pad < vox::drums::padCount; ++pad)
-            library.clear (pad);
+        for (int slot = 0; slot < vox::drums::slotCount; ++slot)
+            library.clear (slot);
         for (int i = 0; i < 2000 && library.retiredCount() > 0; ++i)
         {
             render (*p, 1, -1);
@@ -863,9 +969,39 @@ void testEditor()
     panel->selectPad (0);
     check (panel->sampleStatus().startsWith ("editor-kick.wav") && panel->sampleStatus().contains ("stereo"),
            "status shows the sample: " + panel->sampleStatus());
-    check (panel->sampleButton ("clear")->isEnabled() && panel->sampleButton ("library")->isEnabled(), "Clear and To library enabled");
+    check (panel->sampleButton ("clear")->isEnabled() && panel->sampleButton ("library")->isEnabled(), "Clear and Library enabled");
     panel->sampleButton ("clear")->onClick();
     check (! p->samples().pad (0).reference, "Clear removes the assignment");
+
+    // Player B: the A/B buttons select the slot the panel loads, shows and
+    // clears; the store edits of the B player leave A alone.
+    {
+        std::vector<std::function<void()>> held;
+        p->samples().setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+        panel->selectPad (9);
+        panel->sampleButton ("B")->onClick();
+        check (panel->selectedPlayer() == 1 && panel->sampleButton ("B")->getToggleState() && ! panel->sampleButton ("A")->getToggleState(),
+               "B selects player B");
+        panel->loadSample (9, 1, file);
+        p->samples().waitForPendingDecodes();
+        for (auto& f : held)
+            f();
+        held.clear();
+        p->samples().setCompletionDispatcherForTesting (nullptr);
+        check (p->samples().pad (vox::drums::slotOf (9, 1)).buffer != nullptr && ! p->samples().pad (vox::drums::slotOf (9, 0)).reference,
+               "loading with B selected fills pad 10 player B only");
+        check (panel->sampleStatus().startsWith ("editor-kick.wav"), "the status shows player B's sample: " + panel->sampleStatus());
+        panel->structuralSlider ("start")->setValue (0.25, juce::sendNotificationSync);
+        check (juce::exactlyEqual (p->kitStore().pad (9).players[1].start, 0.25f) && juce::exactlyEqual (p->kitStore().pad (9).players[0].start, 0.0f),
+               "the start knob edits player B");
+        panel->sampleButton ("A")->onClick();
+        check (panel->sampleStatus() == "No sample" && ! panel->sampleButton ("clear")->isEnabled(), "A shows its own empty slot");
+        check (juce::exactlyEqual (panel->structuralSlider ("start")->getValue(), 0.0), "the start knob shows player A");
+        panel->sampleButton ("B")->onClick();
+        panel->sampleButton ("clear")->onClick();
+        check (! p->samples().pad (vox::drums::slotOf (9, 1)).reference, "Clear with B selected clears player B");
+        panel->sampleButton ("A")->onClick();
+    }
 
     juce::Image image (juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
     juce::Graphics g (image);

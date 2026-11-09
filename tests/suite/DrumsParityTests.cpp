@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <random>
 #include <string>
 #include <vector>
@@ -89,6 +90,7 @@ public:
     void setAll() { module_->setAllParameters (instance_, values_.data(), static_cast<std::uint32_t> (values_.size())); }
 
     std::vector<float>& values() { return values_; }
+    std::uint32_t count() const { return descriptor_->parameterCount; }
 
     void setSamples (const std::array<std::shared_ptr<vox::drums::SampleBuffer>, 8>& buffers)
     {
@@ -182,10 +184,81 @@ struct Scenario {
     bool hostNotes;
     bool automation;
     bool loopBack;
-    bool samples = false;   // every pad: even Sample, odd Layer
+    bool samples = false;   // every pad 1-8: even Sample, odd Layer
 };
 
 juce::File sampleFile;
+constexpr const char* padKeys[8] = { "kick", "snare", "clap", "chat", "ohat", "tom", "rim", "cymbal" };
+
+float raw (DrumsProcessor& p, const std::string& id)
+{
+    return p.state().getRawParameterValue (id)->load();
+}
+
+// What the plugin's engine holds, as legacy parameter values by legacy index:
+// host parameters (raw values) and structural settings (the kit store).
+std::vector<float> legacyValues (DrumsProcessor& plugin, const Reference& reference)
+{
+    std::map<std::string, float> v;
+    const auto kit = plugin.kitStore().snapshot();
+    for (int pad = 0; pad < 8; ++pad)
+    {
+        const std::string key = padKeys[pad];
+        const auto prefix = vox::drums::padPrefix (pad);
+        const auto& ps = kit.pads[static_cast<std::size_t> (pad)];
+        v[key + ".level"] = raw (plugin, prefix + ".level");
+        v[key + ".tune"] = raw (plugin, prefix + ".tune");
+        v[key + ".decay"] = raw (plugin, prefix + ".decay");
+        v[key + ".pan"] = raw (plugin, prefix + ".pan");
+        v[key + ".cutoff"] = raw (plugin, prefix + ".cutoff");
+        v[key + ".character"] = ps.character;
+        v[key + ".fine"] = ps.fine;
+        v[key + ".resonance"] = ps.resonance;
+        v[key + ".filter"] = static_cast<float> (ps.filter);
+        v[key + ".transient_attack"] = ps.attack;
+        v[key + ".transient_sustain"] = ps.sustain;
+        v[key + ".send1"] = ps.send1;
+        v[key + ".send2"] = ps.send2;
+        v[key + ".output"] = static_cast<float> (ps.output);
+        v[key + ".source"] = static_cast<float> (ps.source);
+        v[key + ".sample_start"] = ps.players[0].start;
+        v[key + ".sample_end"] = ps.players[0].end;
+        v[key + ".sample_loop"] = ps.players[0].loop ? 1.0f : 0.0f;
+        v[key + ".sample_reverse"] = ps.players[0].reverse ? 1.0f : 0.0f;
+        v[key + ".sample_normalize"] = ps.players[0].normalize ? 1.0f : 0.0f;
+        v[key + ".sample_level"] = ps.players[0].level;
+        v["seq.lane." + key] = raw (plugin, "drm.seq.lane." + prefix.substr (4));
+    }
+    v["kick.pitch_amount"] = kit.pads[0].pitchAmount;
+    v["kick.pitch_decay"] = kit.pads[0].pitchDecay;
+    v["kick.drive"] = kit.pads[0].drive;
+    v["kick.sub"] = kit.pads[0].sub;
+    v["kick.tail"] = kit.pads[0].tail;
+    v["kit.volume"] = raw (plugin, "drm.kit.volume");
+    v["kit.velocity"] = raw (plugin, "drm.kit.velocity");
+    v["kit.hat_choke"] = raw (plugin, "drm.kit.hat_choke");
+    v["seq.mode"] = raw (plugin, "drm.seq.mode");
+    v["seq.swing"] = raw (plugin, "drm.seq.swing");
+    v["seq.accent"] = raw (plugin, "drm.seq.accent");
+    std::vector<float> out (reference.count());
+    for (std::uint32_t i = 0; i < reference.count(); ++i)
+    {
+        const auto it = v.find (reference.parameter (i).id);
+        if (it == v.end())
+        {
+            std::printf ("FAIL: legacy parameter %s has no plugin counterpart\n", reference.parameter (i).id);
+            std::exit (EXIT_FAILURE);
+        }
+        out[i] = it->second;
+    }
+    return out;
+}
+
+void setPlain (DrumsProcessor& plugin, const std::string& id, float plain)
+{
+    auto* p = dynamic_cast<juce::RangedAudioParameter*> (plugin.state().getParameter (id));
+    p->setValueNotifyingHost (p->convertTo0to1 (plain));
+}
 
 void run (const Scenario& sc, double rate, int block)
 {
@@ -195,54 +268,67 @@ void run (const Scenario& sc, double rate, int block)
     TestPlayHead head;
     plugin.setPlayHead (&head);
     plugin.setRateAndBufferSizeDetails (rate, block);
-
-    const auto setPlain = [&] (const std::string& id, float plain) {
-        auto* p = dynamic_cast<juce::RangedAudioParameter*> (plugin.state().getParameter (id));
-        p->setValueNotifyingHost (p->convertTo0to1 (plain));
-    };
-    setPlain ("drm.seq.mode", static_cast<float> (sc.mode));
-    setPlain (vox::drums::patternParameterId.toStdString(), static_cast<float> (sc.pattern));
+    setPlain (plugin, "drm.seq.mode", static_cast<float> (sc.mode));
+    setPlain (plugin, vox::drums::patternParameterId.toStdString(), static_cast<float> (sc.pattern));
     if (sc.mode != 0)
     {
-        setPlain ("drm.seq.swing", 0.18f);
-        setPlain ("drm.seq.accent", 0.8f);
+        setPlain (plugin, "drm.seq.swing", 0.18f);
+        setPlain (plugin, "drm.seq.accent", 0.8f);
     }
+
     std::array<std::shared_ptr<vox::drums::SampleBuffer>, 8> buffers {};
     if (sc.samples)
     {
+        auto kit = plugin.kitStore().snapshot();
         for (int pad = 0; pad < 8; ++pad)
         {
             auto decoded = vox::drums::decodeSampleFile (sampleFile);
             check (decoded.buffer != nullptr, "decode the parity sample: " + decoded.error.toStdString());
             buffers[static_cast<std::size_t> (pad)] = decoded.buffer;
-            plugin.samples().assign (pad, decoded.buffer, sampleFile);
-            setPlain (vox::drums::padPrefix (pad) + ".source", pad % 2 == 0 ? 1.0f : 2.0f);
-            setPlain (vox::drums::padPrefix (pad) + ".sample_loop", pad == 3 ? 1.0f : 0.0f);
-            setPlain (vox::drums::padPrefix (pad) + ".sample_reverse", pad == 5 ? 1.0f : 0.0f);
-            setPlain (vox::drums::padPrefix (pad) + ".sample_normalize", pad == 6 ? 1.0f : 0.0f);
+            plugin.samples().assign (vox::drums::slotOf (pad, 0), decoded.buffer, sampleFile);
+            auto& p = kit.pads[static_cast<std::size_t> (pad)];
+            p.source = pad % 2 == 0 ? vox::drums::kit::Source::sample : vox::drums::kit::Source::layer;
+            p.players[0].loop = pad == 3;
+            p.players[0].reverse = pad == 5;
+            p.players[0].normalize = pad == 6;
         }
+        plugin.kitStore().setAll (kit);
     }
+    plugin.setVoiceLimitForTesting (16);   // the reference's voice pool
     plugin.prepareToPlay (rate, block);
 
     Reference reference (rate, static_cast<std::uint32_t> (block));
     reference.setSamples (buffers);
-    // The reference starts from exactly what the plugin's engine holds.
-    const auto engineValue = [&] (std::uint32_t index) -> float {
-        for (const auto& entry : vox::drums::pluginParameters())
-            if (entry.engineIndex == static_cast<int> (index))
-                return plugin.state().getRawParameterValue (entry.id)->load();
-        return reference.parameter (index).defaultValue;
-    };
-    for (std::uint32_t i = 0; i < reference.values().size(); ++i)
-        reference.values()[i] = engineValue (i);
+    reference.values() = legacyValues (plugin, reference);
     reference.setAll();
 
     std::mt19937 random (static_cast<unsigned> (block * 7 + static_cast<int> (rate) + sc.mode * 31 + sc.pattern));
     std::uniform_real_distribution<float> unit (0.0f, 1.0f);
-    const auto& notes = vox::drums::DrumEngine::padNotes();
+    // Host parameters that exist in both, with the legacy range to draw from.
+    struct Automatable { std::string id; float lo, hi; };
+    std::vector<Automatable> automatable;
+    for (int pad = 0; pad < 8; ++pad)
+    {
+        const auto prefix = vox::drums::padPrefix (pad);
+        const std::string key = padKeys[pad];
+        for (const auto* name : { "level", "tune", "decay", "pan", "cutoff" })
+        {
+            for (std::uint32_t i = 0; i < reference.count(); ++i)
+                if (key + "." + name == reference.parameter (i).id)
+                {
+                    const auto& d = reference.parameter (i);
+                    const float margin = 0.01f * (d.maximum - d.minimum);
+                    automatable.push_back ({ prefix + "." + name, d.minimum + margin, d.maximum - margin });
+                }
+        }
+    }
+    automatable.push_back ({ "drm.kit.volume", 0.05f, 0.95f });
+    automatable.push_back ({ "drm.kit.velocity", 0.05f, 0.95f });
+    automatable.push_back ({ "drm.seq.accent", 0.05f, 0.95f });
 
+    const auto& notes = std::array<std::uint8_t, 8> { 36, 38, 39, 42, 46, 45, 37, 49 };
     const double bpm = 145.0;
-    const int total = static_cast<int> (rate * 6.0);   // > 3 bars at 145 bpm
+    const int total = static_cast<int> (rate * 6.0);
     juce::AudioBuffer<float> buffer (2, block);
     std::vector<float> refL (static_cast<std::size_t> (block)), refR (static_cast<std::size_t> (block));
     double ppq = 0.0;
@@ -253,7 +339,7 @@ void run (const Scenario& sc, double rate, int block)
     {
         if (sc.loopBack && ! jumped && ppq >= 6.0)
         {
-            ppq = 2.0;   // loop back two bars' worth of beats
+            ppq = 2.0;
             jumped = true;
         }
         head.info = {};
@@ -263,29 +349,22 @@ void run (const Scenario& sc, double rate, int block)
         head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
         head.info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
 
-        // Automation: every few blocks move a random exposed parameter.
         if (sc.automation && b % 3 == 1)
-        {
-            const auto& entries = vox::drums::pluginParameters();
             for (int k = 0; k < 3; ++k)
             {
-                const auto& entry = entries[static_cast<std::size_t> (random() % entries.size())];
-                if (entry.engineIndex < 0 || entry.id == "drm.seq.mode")
-                    continue;
-                auto* p = plugin.state().getParameter (entry.id);
-                p->setValueNotifyingHost (unit (random));
+                const auto& a = automatable[random() % automatable.size()];
+                setPlain (plugin, a.id, a.lo + unit (random) * (a.hi - a.lo));
             }
-        }
+        if (sc.automation && b % 17 == 5)
+            setPlain (plugin, "drm.kit.hat_choke", random() % 2 ? 1.0f : 0.0f);
+        const auto now = legacyValues (plugin, reference);
         std::vector<VoxParamChangeV2> changes;
-        for (std::uint32_t i = 0; i < reference.values().size(); ++i)
-        {
-            const float v = engineValue (i);
-            if (! juce::exactlyEqual (v, reference.values()[i]))
+        for (std::uint32_t i = 0; i < reference.count(); ++i)
+            if (! juce::exactlyEqual (now[i], reference.values()[i]))
             {
-                reference.values()[i] = v;
-                changes.push_back ({ i, 0u, v, 0u });
+                reference.values()[i] = now[i];
+                changes.push_back ({ i, 0u, now[i], 0u });
             }
-        }
 
         juce::MidiBuffer midi;
         std::vector<VoxMidiEventV2> refMidi;
@@ -312,18 +391,15 @@ void run (const Scenario& sc, double rate, int block)
 
         buffer.clear();
         plugin.processBlock (buffer, midi);
-        reference.process (refL.data(), refR.data(), static_cast<std::uint32_t> (block), changes, refMidi, head.info,
-                           sc.pattern);
+        reference.process (refL.data(), refR.data(), static_cast<std::uint32_t> (block), changes, refMidi, head.info, sc.pattern);
         for (int i = 0; i < block; ++i)
         {
             const float pl = buffer.getSample (0, i), pr = buffer.getSample (1, i);
             peak = std::max (peak, static_cast<double> (std::abs (pl)));
-            if (std::memcmp (&pl, &refL[static_cast<std::size_t> (i)], 4) != 0
-                || std::memcmp (&pr, &refR[static_cast<std::size_t> (i)], 4) != 0)
-            {
-                if (mismatches++ == 0)
-                    firstMismatch = static_cast<std::size_t> (done + i);
-            }
+            if ((std::memcmp (&pl, &refL[static_cast<std::size_t> (i)], 4) != 0
+                 || std::memcmp (&pr, &refR[static_cast<std::size_t> (i)], 4) != 0)
+                && mismatches++ == 0)
+                firstMismatch = static_cast<std::size_t> (done + i);
         }
         ppq += block / rate * bpm / 60.0;
     }
@@ -333,170 +409,103 @@ void run (const Scenario& sc, double rate, int block)
                                 + " samples differ, first at " + std::to_string (firstMismatch) + ")");
 }
 
-// Review 6734386412: bursts of more than 512 events on one sample. The
-// engine resolves a sample's events as a set (loudest NoteOn per pad; CC120;
-// CC123), so a burst made of repeated copies of a base set must sound exactly
-// like the reference module given the base set once. A dense block that only
-// exceeds 512 events across samples must match the reference given the same
-// events in two calls split at a sample boundary (the module is block-size
-// invariant, DRM-00).
-void testMidiBursts()
+// Factory patterns ported into the kit engine equal the reference module's.
+void testFactoryPatterns()
 {
-    using vox::drums::DrumEngine;
-    using vox::drums::MidiEvent;
-    const double rate = 48000.0;
-    const std::uint32_t block = 256;
-    const auto& notes = DrumEngine::padNotes();
-    const auto midi3 = [] (std::uint32_t offset, std::uint8_t b0, std::uint8_t b1, std::uint8_t b2) {
-        MidiEvent e;
-        e.offset = offset;
-        e.size = 3;
-        e.bytes[0] = b0;
-        e.bytes[1] = b1;
-        e.bytes[2] = b2;
-        return e;
-    };
-    const auto toRef = [] (const std::vector<MidiEvent>& events, std::uint32_t base) {
-        std::vector<VoxMidiEventV2> out;
-        for (const auto& e : events)
-        {
-            VoxMidiEventV2 v {};
-            v.sampleOffset = e.offset - base;
-            v.size = 3;
-            std::memcpy (v.bytes, e.bytes, 3);
-            out.push_back (v);
-        }
-        return out;
-    };
-    juce::AudioPlayHead::PositionInfo stopped;
-    stopped.setIsPlaying (false);
-    stopped.setBpm (120.0);
-    stopped.setPpqPosition (0.0);
-    stopped.setPpqPositionOfLastBarStart (0.0);
-    stopped.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
-    vox::drums::Transport transport;
-    transport.hasTempo = transport.hasPpq = transport.hasBarStart = transport.hasTimeSignature = true;
-    transport.bpm = 120.0;
-
-    struct Case {
-        const char* name;
-        std::vector<MidiEvent> burst;      // what the plugin's engine gets
-        std::vector<MidiEvent> base;       // what the reference gets (one call)
-    };
-    std::vector<Case> cases;
-    for (const std::uint32_t at : { 0u, 100u })
+    static const VoxHostServicesV2 services = { sizeof (VoxHostServicesV2), VOX_MODULE_ABI_V2, nullptr, nullptr };
+    const VoxModuleV2* module = nullptr;
+    voxModuleEntryV2 (VOX_MODULE_ABI_V2, &services, &module);
+    for (int index = 0; index < vox::drums::kit::factoryPatternCount; ++index)
     {
-        // Base set: one NoteOn per pad, a CC123 (once), and a CC120 at the
-        // first burst only.
-        std::vector<MidiEvent> base;
-        if (at == 100)
-            base.push_back (midi3 (at, 0xB0, 120, 0));
-        for (int pad = 0; pad < 8; ++pad)
-            base.push_back (midi3 (at, 0x99, notes[static_cast<std::size_t> (pad)], static_cast<std::uint8_t> (40 + pad * 10)));
-        base.push_back (midi3 (at, 0xB0, 123, 0));
-        // Burst: 600 events; copies of the base NoteOns at lower velocities,
-        // NoteOffs and unrelated CCs first, the base set last (beyond the
-        // 512th event, where a chunker that drops or misplaces the rest
-        // changes the sound).
-        std::vector<MidiEvent> burst;
-        int k = 0;
-        while (burst.size() + base.size() < 600)
-        {
-            const int pad = k % 8;
-            switch ((k / 8) % 3)
-            {
-                case 0: burst.push_back (midi3 (at, 0x99, notes[static_cast<std::size_t> (pad)], static_cast<std::uint8_t> (1 + (k % (40 + pad * 10))))); break;
-                case 1: burst.push_back (midi3 (at, 0x89, notes[static_cast<std::size_t> (pad)], 0)); break;
-                default: burst.push_back (midi3 (at, 0xB0, 7, static_cast<std::uint8_t> (k % 128))); break;
-            }
-            ++k;
-        }
-        burst.insert (burst.end(), base.begin(), base.end());
-        cases.push_back ({ at == 0 ? "600 events at sample 0" : "600 events at sample 100 (with CC120 and CC123)",
-                           burst, base });
+        std::array<VoxPatternStepV2, 8 * 4 * 16> refCells {};
+        VoxPatternV2 pattern = { sizeof pattern, VOX_MODULE_ABI_V2, 0, 0, 0, 0, sizeof (VoxPatternStepV2),
+                                 static_cast<std::uint32_t> (refCells.size()), refCells.data() };
+        const char* name = nullptr;
+        module->content->getFactoryPattern (drumsId, static_cast<std::uint32_t> (index), &name, &pattern);
+        std::array<vox::drums::kit::PatternStep, 8 * 4 * 16> cells {};
+        const auto kitPattern = vox::drums::kit::factoryPattern (index, cells);
+        bool equal = std::string (name) == vox::drums::kit::factoryPatternName (index) && kitPattern.lanes == pattern.laneCount
+                  && kitPattern.steps == pattern.stepsPerBar && kitPattern.bars == pattern.barCount && kitPattern.timing == pattern.timing;
+        for (std::size_t i = 0; i < cells.size(); ++i)
+            equal = equal && cells[i].on == ((refCells[i].flags & VOX_STEP_ON) != 0)
+                 && (! cells[i].on || (cells[i].accent == ((refCells[i].flags & VOX_STEP_ACCENT) != 0) && cells[i].velocity == refCells[i].velocity));
+        check (equal, std::string ("factory pattern ") + std::to_string (index + 1) + " equals the reference");
     }
+}
 
-    for (const auto& c : cases)
+// A burst of 600 events on one sample through the plugin sounds exactly like
+// the reference given the burst's base set (the engine resolves a sample's
+// events as a set: loudest NoteOn per pad, CC120, CC123).
+void testMidiBurst()
+{
+    const double rate = 48000.0;
+    const int block = 256;
+    const auto& notes = std::array<std::uint8_t, 8> { 36, 38, 39, 42, 46, 45, 37, 49 };
+    for (const int at : { 0, 100 })
     {
-        DrumEngine engine;
-        engine.prepare (rate, block);
-        std::vector<float> values;
-        for (const auto& p : DrumEngine::parameters())
-            values.push_back (p.defaultValue);
-        engine.setAllParameters (values.data(), static_cast<std::uint32_t> (values.size()));
+        DrumsProcessor plugin;
+        TestPlayHead head;
+        head.info.setIsPlaying (false);
+        head.info.setBpm (120.0);
+        head.info.setPpqPosition (0.0);
+        head.info.setPpqPositionOfLastBarStart (0.0);
+        plugin.setPlayHead (&head);
+        plugin.setRateAndBufferSizeDetails (rate, block);
+        plugin.setVoiceLimitForTesting (16);
+        plugin.prepareToPlay (rate, block);
         Reference reference (rate, block);
+        reference.values() = legacyValues (plugin, reference);
         reference.setAll();
 
-        std::vector<float> l (block), r (block), rl (block), rr (block);
+        std::vector<std::array<std::uint8_t, 3>> base;
+        if (at == 100)
+            base.push_back ({ 0xB0, 120, 0 });
+        for (int pad = 0; pad < 8; ++pad)
+            base.push_back ({ 0x99, notes[static_cast<std::size_t> (pad)], static_cast<std::uint8_t> (40 + pad * 10) });
+        base.push_back ({ 0xB0, 123, 0 });
+        juce::MidiBuffer burst;
+        int k = 0;
+        for (; k + static_cast<int> (base.size()) < 600; ++k)
+        {
+            const int pad = k % 8;
+            const std::uint8_t ev[3] = { static_cast<std::uint8_t> ((k / 8) % 2 ? 0x89 : 0x99), notes[static_cast<std::size_t> (pad)],
+                                         static_cast<std::uint8_t> ((k / 8) % 2 ? 0 : 1 + k % (40 + pad * 10)) };
+            burst.addEvent (ev, 3, at);
+        }
+        for (const auto& e : base)
+            burst.addEvent (e.data(), 3, at);
+        std::vector<VoxMidiEventV2> refMidi;
+        for (const auto& e : base)
+        {
+            VoxMidiEventV2 v {};
+            v.sampleOffset = static_cast<std::uint32_t> (at);
+            v.size = 3;
+            std::memcpy (v.bytes, e.data(), 3);
+            refMidi.push_back (v);
+        }
+        juce::AudioBuffer<float> buffer (2, block);
+        std::vector<float> rl (block), rr (block);
         bool identical = true;
         double peak = 0.0;
         for (int b = 0; b < 40; ++b)
         {
-            const auto& events = b == 0 ? c.burst : std::vector<MidiEvent> {};
-            engine.process (l.data(), r.data(), block, nullptr, 0, events.data(), static_cast<std::uint32_t> (events.size()),
-                            transport, -1, false);
+            juce::MidiBuffer midi;
             if (b == 0)
+                midi = burst;
+            buffer.clear();
+            plugin.processBlock (buffer, midi);
+            reference.process (rl.data(), rr.data(), block, {}, b == 0 ? refMidi : std::vector<VoxMidiEventV2> {}, head.info, 0);
+            for (int i = 0; i < block; ++i)
             {
-                const auto& st = engine.lastStats();
-                check (st.offsetsValid, std::string (c.name) + ": every delivered offset lies inside its engine call");
-                check (st.rejected == 0, std::string (c.name) + ": no engine call rejected");
-                check (st.maxEventsInCall <= 512, std::string (c.name) + ": at most 512 events per engine call");
-                check (st.eventsIn == 600 && st.delivered + st.folded == st.eventsIn,
-                       std::string (c.name) + ": every event delivered or folded (" + std::to_string (st.delivered) + " + "
-                           + std::to_string (st.folded) + ")");
-            }
-            reference.process (rl.data(), rr.data(), block, {}, b == 0 ? toRef (c.base, 0) : std::vector<VoxMidiEventV2> {},
-                               stopped, 0);
-            for (std::uint32_t i = 0; i < block; ++i)
-            {
-                identical = identical && std::memcmp (&l[i], &rl[i], 4) == 0 && std::memcmp (&r[i], &rr[i], 4) == 0;
-                peak = std::max (peak, static_cast<double> (std::abs (l[i])));
+                const float l = buffer.getSample (0, i), r = buffer.getSample (1, i);
+                identical = identical && std::memcmp (&l, &rl[static_cast<std::size_t> (i)], 4) == 0
+                         && std::memcmp (&r, &rr[static_cast<std::size_t> (i)], 4) == 0;
+                peak = std::max (peak, static_cast<double> (std::abs (l)));
             }
         }
-        check (peak > 1.0e-3, std::string (c.name) + ": the burst sounds");
-        check (identical, std::string (c.name) + ": bit-identical to the reference given the base set once");
-    }
-
-    // 600 events across two samples (300 at 0, 300 at 10): split at sample
-    // 10, nothing folded, identical to the reference in two calls.
-    {
-        std::vector<MidiEvent> events;
-        for (int i = 0; i < 600; ++i)
-            events.push_back (midi3 (i < 300 ? 0u : 10u, 0x99, notes[static_cast<std::size_t> (i % 8)], static_cast<std::uint8_t> (1 + i % 127)));
-        DrumEngine engine;
-        engine.prepare (rate, block);
-        std::vector<float> values;
-        for (const auto& p : DrumEngine::parameters())
-            values.push_back (p.defaultValue);
-        engine.setAllParameters (values.data(), static_cast<std::uint32_t> (values.size()));
-        Reference reference (rate, block);
-        reference.setAll();
-        std::vector<float> l (block), r (block), rl (block), rr (block);
-        engine.process (l.data(), r.data(), block, nullptr, 0, events.data(), 600, transport, -1, false);
-        const auto st = engine.lastStats();
-        check (st.folded == 0 && st.delivered == 600 && st.calls == 2 && st.offsetsValid && st.rejected == 0,
-               "300 + 300 events: two engine calls, nothing folded");
-        const std::vector<MidiEvent> first (events.begin(), events.begin() + 300), second (events.begin() + 300, events.end());
-        reference.process (rl.data(), rr.data(), 10, {}, toRef (first, 0), stopped, 0);
-        reference.process (rl.data() + 10, rr.data() + 10, block - 10, {}, toRef (second, 10), stopped, 0);
-        bool identical = true;
-        for (std::uint32_t i = 0; i < block; ++i)
-            identical = identical && std::memcmp (&l[i], &rl[i], 4) == 0 && std::memcmp (&r[i], &rr[i], 4) == 0;
-        check (identical, "300 + 300 events: bit-identical to the reference split at the same sample");
-    }
-
-    // Through the plugin: a 600-event burst at sample 0 is not dropped and sounds.
-    {
-        DrumsProcessor plugin;
-        plugin.setRateAndBufferSizeDetails (rate, static_cast<int> (block));
-        plugin.prepareToPlay (rate, static_cast<int> (block));
-        juce::AudioBuffer<float> buffer (2, static_cast<int> (block));
-        juce::MidiBuffer midi;
-        for (const auto& e : cases[0].burst)
-            midi.addEvent (e.bytes, 3, 0);
-        plugin.processBlock (buffer, midi);
-        check (plugin.droppedMidiEvents() == 0 && buffer.getMagnitude (0, 0, static_cast<int> (block)) > 1.0e-3f,
-               "plugin: a 600-event burst at sample 0 sounds and nothing is dropped");
+        plugin.setPlayHead (nullptr);
+        check (plugin.droppedMidiEvents() == 0 && peak > 1.0e-3, "burst at " + std::to_string (at) + ": sounds, nothing dropped");
+        check (identical, "burst of 600 events at sample " + std::to_string (at) + ": bit-identical to the reference given its base set");
     }
 }
 
@@ -505,7 +514,6 @@ void testMidiBursts()
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
-    // A stereo 44.1 kHz sample (resampled by the engine at every host rate).
     sampleFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-parity-sample.wav");
     {
         const int frames = 22050;
@@ -525,6 +533,8 @@ int main()
         JUCE_END_IGNORE_WARNINGS_GCC_LIKE
         writer->writeFromAudioSampleBuffer (b, 0, frames);
     }
+    testFactoryPatterns();
+    testMidiBurst();
     const Scenario scenarios[] = {
         { "host MIDI, defaults", 0, 0, true, false, false },
         { "host MIDI, automation", 0, 0, true, true, false },
@@ -536,7 +546,6 @@ int main()
         { "samples, host MIDI, automation", 0, 0, true, true, false, true },
         { "samples, both, Full-on Driving", 2, 1, true, false, true, true },
     };
-    testMidiBursts();
     int runs = 0;
     for (const auto& sc : scenarios)
         for (double rate : { 44100.0, 48000.0, 96000.0 })
@@ -547,6 +556,6 @@ int main()
             }
     sampleFile.deleteFile();
     if (failures == 0)
-        std::printf ("VOX Drums parity: %d renders bit-identical to the DRM-00 reference\n", runs);
+        std::printf ("VOX Drums parity: %d plugin renders bit-identical to the DRM-00 reference\n", runs);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

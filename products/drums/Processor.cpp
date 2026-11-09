@@ -49,39 +49,43 @@ DrumsProcessor::DrumsProcessor()
                                     juce::Colour::fromString ("FFEF805D") }),
       parameters_ (*this, nullptr, "VOXDRUMS", createParameterLayout())
 {
-    const auto& engineParameters = DrumEngine::parameters();
-    bindings_.resize (engineParameters.size());
-    for (const auto& p : engineParameters)
-        bindings_[p.index].fallback = p.defaultValue;
-    for (const auto& entry : pluginParameters())
-        if (entry.engineIndex >= 0)
-            bindings_[static_cast<std::size_t> (entry.engineIndex)].value = parameters_.getRawParameterValue (entry.id);
+    for (int pad = 0; pad < padCount; ++pad)
+    {
+        const auto prefix = padPrefix (pad);
+        auto& r = padRefs_[static_cast<std::size_t> (pad)];
+        r.level = parameters_.getRawParameterValue (prefix + ".level");
+        r.tune = parameters_.getRawParameterValue (prefix + ".tune");
+        r.decay = parameters_.getRawParameterValue (prefix + ".decay");
+        r.pan = parameters_.getRawParameterValue (prefix + ".pan");
+        r.cutoff = parameters_.getRawParameterValue (prefix + ".cutoff");
+        r.mute = parameters_.getRawParameterValue (prefix + ".mute");
+        r.lane = parameters_.getRawParameterValue ("drm.seq.lane." + prefix.substr (4));
+    }
+    volume_ = parameters_.getRawParameterValue ("drm.kit.volume");
+    velocity_ = parameters_.getRawParameterValue ("drm.kit.velocity");
+    choke_ = parameters_.getRawParameterValue ("drm.kit.hat_choke");
+    mode_ = parameters_.getRawParameterValue ("drm.seq.mode");
+    swing_ = parameters_.getRawParameterValue ("drm.seq.swing");
+    accent_ = parameters_.getRawParameterValue ("drm.seq.accent");
     pattern_ = parameters_.getRawParameterValue (patternParameterId);
-    sent_.assign (bindings_.size(), 0.0f);
-    changes_.resize (bindings_.size());
+    for (int i = 0; i < kit::factoryPatternCount; ++i)
+        patterns_[static_cast<std::size_t> (i)] = kit::factoryPattern (i, patternCells_[static_cast<std::size_t> (i)]);
     events_.resize (midiCapacity);
+    live_ = defaultKit();
     for (const auto& entry : pluginParameters())
     {
         const float plain = plainValueOf (*parameters_.getParameter (entry.id));
         restored_.push_back ({ plain, plain });
     }
-
-    padForNote_.fill (-1);
-    const auto& notes = DrumEngine::padNotes();
-    for (int pad = 0; pad < padCount; ++pad)
-        padForNote_[notes[static_cast<std::size_t> (pad)] & 0x7f] = pad;
 }
 
 void DrumsProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
 {
     vox::suite::SuiteProcessor::prepareToPlay (sampleRate, maximumBlockSize);
     samples_.collectAllStopped();   // the audio thread is not running here
-    if (! engine_.prepare (sampleRate, static_cast<std::uint32_t> (juce::jmax (1, maximumBlockSize))))
-        return;
-    for (std::size_t i = 0; i < bindings_.size(); ++i)
-        sent_[i] = bindings_[i].value != nullptr ? bindings_[i].value->load (std::memory_order_relaxed)
-                                                 : bindings_[i].fallback;
-    engine_.setAllParameters (sent_.data(), static_cast<std::uint32_t> (sent_.size()));
+    engine_.prepare (sampleRate);
+    engine_.setMaxVoices (voiceLimit_);
+    prepared_ = true;
 }
 
 void DrumsProcessor::releaseResources()
@@ -96,7 +100,7 @@ void DrumsProcessor::reset()
 
 double DrumsProcessor::getTailLengthSeconds() const
 {
-    return 6.5;   // longest pad: cymbal decay 6 s, plus the -80 dB tail
+    return 10.5;   // longest decay (10 s) plus the -80 dB tail
 }
 
 bool DrumsProcessor::audition (int pad, std::uint8_t velocity)
@@ -112,13 +116,14 @@ bool DrumsProcessor::audition (int pad, std::uint8_t velocity)
 }
 
 // Realtime: no allocation, lock or I/O. All buffers are sized in the
-// constructor; the playhead query is the host's.
+// constructor; the structural settings come wait-free from the store; the
+// playhead query is the host's.
 void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     noteMidiSeen (midi);
     const int frames = buffer.getNumSamples();
-    if (! engine_.isPrepared() || buffer.getNumChannels() < 2 || frames <= 0)
+    if (! prepared_ || buffer.getNumChannels() < 2 || frames <= 0)
     {
         buffer.clear();
         return;
@@ -126,21 +131,33 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     for (int ch = 2; ch < buffer.getNumChannels(); ++ch)
         buffer.clear (ch, 0, frames);
 
-    // Parameter changes since the previous block, applied at its start.
-    std::uint32_t changeCount = 0;
-    for (std::size_t i = 0; i < bindings_.size(); ++i)
+    // Settings: structure from the store, host parameters on top.
+    store_.pull (live_);
+    const auto load = [] (std::atomic<float>* a) { return a->load (std::memory_order_relaxed); };
+    for (int pad = 0; pad < padCount; ++pad)
     {
-        if (bindings_[i].value == nullptr)
-            continue;
-        const float v = bindings_[i].value->load (std::memory_order_relaxed);
-        if (! juce::exactlyEqual (v, sent_[i]))
-        {
-            sent_[i] = v;
-            changes_[changeCount++] = { static_cast<std::uint32_t> (i), v };
-        }
+        auto& p = live_.pads[static_cast<std::size_t> (pad)];
+        const auto& r = padRefs_[static_cast<std::size_t> (pad)];
+        p.level = load (r.level);
+        p.tune = load (r.tune);
+        p.decay = load (r.decay);
+        p.pan = load (r.pan);
+        p.cutoff = load (r.cutoff);
+        p.mute = load (r.mute) >= 0.5f;
+        p.laneOn = load (r.lane) >= 0.5f;
     }
+    live_.volume = load (volume_);
+    live_.velocitySensitivity = load (velocity_);
+    live_.chokeEnabled = load (choke_) >= 0.5f;
+    live_.sequencerMode = static_cast<std::uint8_t> (std::lround (load (mode_)));
+    live_.swing = load (swing_);
+    live_.accent = load (accent_);
 
     // Pad auditions from the editor first (offset 0), then host MIDI.
+    std::array<int, 128> padForNote {};
+    padForNote.fill (-1);
+    for (int pad = padCount - 1; pad >= 0; --pad)
+        padForNote[live_.pads[static_cast<std::size_t> (pad)].note & 0x7f] = pad;
     std::uint32_t pads = 0;
     std::size_t eventCount = 0;
     {
@@ -149,8 +166,16 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             for (int i = 0; i < count && eventCount < events_.size(); ++i)
             {
                 const auto& a = auditions_[static_cast<std::size_t> (start + i)];
-                const auto note = DrumEngine::padNotes()[a.pad];
-                events_[eventCount++] = { 0u, 3u, { 0x90u, note, a.velocity } };
+                const auto note = live_.pads[a.pad].note;
+                // An audition plays the pad even in Internal mode and on a
+                // shared note: it goes to the pad's own note.
+                kit::Event e;
+                e.offset = 0;
+                e.size = 3;
+                e.bytes[0] = 0x90u;
+                e.bytes[1] = note;
+                e.bytes[2] = a.velocity;
+                events_[eventCount++] = e;
                 pads |= 1u << a.pad;
             }
         };
@@ -168,18 +193,19 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             ++dropped;
             continue;
         }
-        MidiEvent e;
+        kit::Event e;
         e.offset = static_cast<std::uint32_t> (juce::jlimit (0, frames - 1, metadata.samplePosition));
         e.size = static_cast<std::uint8_t> (size);
         std::memcpy (e.bytes, metadata.data, static_cast<std::size_t> (size));
-        if ((e.bytes[0] & 0xf0u) == 0x90u && size == 3 && e.bytes[2] > 0 && padForNote_[e.bytes[1] & 0x7f] >= 0)
-            pads |= 1u << padForNote_[e.bytes[1] & 0x7f];
+        if ((e.bytes[0] & 0xf0u) == 0x90u && size == 3 && e.bytes[2] > 0 && padForNote[e.bytes[1] & 0x7f] >= 0
+            && live_.sequencerMode != 1)
+            pads |= 1u << padForNote[e.bytes[1] & 0x7f];
         events_[eventCount++] = e;
     }
     if (dropped > 0)
         droppedMidi_.fetch_add (dropped, std::memory_order_relaxed);
 
-    Transport transport;
+    kit::Transport transport;
     if (auto* host = getPlayHead())
     {
         if (const auto position = host->getPosition())
@@ -195,38 +221,23 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 transport.hasPpq = true;
                 transport.ppq = *ppq;
             }
-            if (const auto bar = position->getPpqPositionOfLastBarStart())
-            {
-                transport.hasBarStart = true;
-                transport.barStartPpq = *bar;
-            }
-            if (const auto sig = position->getTimeSignature())
-            {
-                transport.hasTimeSignature = true;
-                transport.numerator = static_cast<std::uint32_t> (juce::jmax (1, sig->numerator));
-                transport.denominator = static_cast<std::uint32_t> (juce::jmax (1, sig->denominator));
-            }
-            if (const auto samples = position->getTimeInSamples())
-            {
-                transport.hasTime = true;
-                transport.timeInSamples = *samples;
-            }
         }
     }
     playing_.store (transport.playing, std::memory_order_relaxed);
     if (transport.hasPpq)
         lastPpq_.store (transport.ppq, std::memory_order_relaxed);
 
-    const int pattern = pattern_ != nullptr ? static_cast<int> (std::lround (pattern_->load (std::memory_order_relaxed))) : 0;
+    const int pattern = std::clamp (static_cast<int> (std::lround (load (pattern_))), 0, kit::factoryPatternCount - 1);
     const bool panic = panicPending_.exchange (false, std::memory_order_acq_rel);
     const auto* sampleViews = samples_.acquire();
-    if (engine_.process (buffer.getWritePointer (0), buffer.getWritePointer (1), static_cast<std::uint32_t> (frames),
-                         changes_.data(), changeCount, events_.data(), static_cast<std::uint32_t> (eventCount),
-                         transport, pattern, panic, sampleViews))
-        samples_.report (engine_.sampleUsage());
-    else
-        samples_.abandon();
-    pads |= engine_.sequencerHitMask();
+    const kit::Outputs out { buffer.getWritePointer (0), buffer.getWritePointer (1), nullptr };
+    engine_.process (live_, out, static_cast<std::uint32_t> (frames), events_.data(), static_cast<std::uint32_t> (eventCount),
+                     transport, &patterns_[static_cast<std::size_t> (pattern)], sampleViews, panic);
+    samples_.report (engine_.usage());
+    pads |= engine_.sequencerHits();
+    for (int pad = 0; pad < padCount; ++pad)   // a muted pad does not play, so it does not light
+        if (live_.pads[static_cast<std::size_t> (pad)].mute)
+            pads &= ~(1u << pad);
     if (pads != 0)
         hitMask_.fetch_or (pads, std::memory_order_acq_rel);
 }
@@ -271,6 +282,7 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
         plain[i] = juce::exactlyEqual (current, restored_[i].held) ? restored_[i].loaded : current;
     }
     out.push_back (encodeParameters (plain));
+    out.push_back (KitStore::encode (store_.snapshot()));
     out.push_back (samples_.writeState());
 }
 
@@ -331,6 +343,17 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         }
     }
 
+    // Pad structure: the DPAD section, or (DRM-01/02 projects) the former
+    // parameters migrated onto pads 1-8; defaults otherwise.
+    auto kitRestore = std::make_shared<kit::KitSettings> (defaultKit());
+    if (const auto* pads = document.find (padSectionTag))
+    {
+        if (! KitStore::decode (*pads, *kitRestore, error))
+            return {};
+    }
+    else
+        KitStore::migrateLegacyParameters (values, *kitRestore);
+
     std::vector<std::pair<juce::RangedAudioParameter*, float>> next;
     for (const auto& entry : pluginParameters())
     {
@@ -351,9 +374,11 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         for (const auto& entry : *shared)
             plain.push_back (entry.second);
         restore.sections.push_back (encodeParameters (plain));   // = writeProductState after settle
+        restore.sections.push_back (KitStore::encode (*kitRestore));
         restore.sections.push_back (SampleLibrary::encodeState (sampleRestore->pads));
     }
-    restore.apply = [this, shared, held, sampleRestore] {
+    restore.apply = [this, shared, held, sampleRestore, kitRestore] {
+        store_.setAll (*kitRestore);
         samples_.apply (std::move (*sampleRestore));
         for (std::size_t i = 0; i < shared->size(); ++i)
         {
