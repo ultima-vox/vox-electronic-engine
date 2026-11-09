@@ -305,9 +305,10 @@ void testBlockInvariance()
     auto settings = kit::legacyKit();
     for (int p = 8; p < kit::padCount; ++p)
         settings.pads[static_cast<std::size_t> (p)].model = static_cast<kit::Model> (p % kit::modelCount);
+    constexpr int legacyNotes[8] = { 36, 38, 39, 42, 46, 45, 37, 49 };
     std::vector<kit::Event> events;
     for (int k = 0; k < 80; ++k)
-        events.push_back (note (static_cast<std::uint32_t> (k * 457 + (k % 3)), k % 2 ? 50 + k % 8 : (int[]) { 36, 38, 39, 42, 46, 45, 37, 49 }[k % 8], 30 + k % 90));
+        events.push_back (note (static_cast<std::uint32_t> (k * 457 + (k % 3)), k % 2 ? 50 + k % 8 : legacyNotes[k % 8], 30 + k % 90));
     std::sort (events.begin(), events.end(), [] (const auto& a, const auto& b) { return a.offset < b.offset; });
     std::vector<float> reference;
     for (std::uint32_t block : { 64u, 512u, 20000u, 37000u })
