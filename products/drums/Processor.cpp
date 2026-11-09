@@ -212,6 +212,7 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             {
                 transport.hasTempo = true;
                 transport.bpm = *bpm;
+                lastBpm_.store (*bpm, std::memory_order_relaxed);
             }
             if (const auto ppq = position->getPpqPosition())
             {
@@ -282,7 +283,7 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodeParameters (plain));
     out.push_back (KitStore::encode (store_.snapshot()));
     out.push_back (samples_.writeState());
-    out.push_back (PatternStore::encode (patternStore_.all()));
+    out.push_back (PatternStore::encode (patternStore_.all(), patternStore_.alternates()));
 }
 
 juce::MemoryBlock DrumsProcessor::exportPatternMidi (int slot, int passes, double bpm)
@@ -373,9 +374,10 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
 
     // Patterns: the DSEQ section; factory patterns otherwise (DRM-01..03).
     auto patternRestore = std::make_shared<std::array<StoredPattern, PatternStore::slotCount>> (PatternStore::factorySlots());
+    auto alternateRestore = std::make_shared<std::array<StoredPattern, PatternStore::slotCount>> (*patternRestore);
     if (const auto* seq = document.find (sequenceSectionTag))
     {
-        if (! PatternStore::decode (*seq, *patternRestore, error))
+        if (! PatternStore::decode (*seq, *patternRestore, *alternateRestore, error))
             return {};
     }
 
@@ -401,11 +403,13 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (encodeParameters (plain));   // = writeProductState after settle
         restore.sections.push_back (KitStore::encode (*kitRestore));
         restore.sections.push_back (SampleLibrary::encodeState (sampleRestore->pads));
-        restore.sections.push_back (PatternStore::encode (*patternRestore));
+        restore.sections.push_back (PatternStore::encode (*patternRestore, *alternateRestore));
     }
-    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore] {
+    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore] {
         store_.setAll (*kitRestore);
         patternStore_.setAll (*patternRestore);
+        patternStore_.setAlternates (*alternateRestore);
+        patternEpoch_.fetch_add (1);   // the editor's undo history ends here
         samples_.apply (*sampleRestore);
         for (std::size_t i = 0; i < shared->size(); ++i)
         {

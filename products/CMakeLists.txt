@@ -56,5 +56,6 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/DrumsEditor.cpp drums/DrumsEditor.h
   drums/SampleLibrary.cpp drums/SampleLibrary.h
   drums/KitStore.cpp drums/KitStore.h
-  drums/PatternStore.cpp drums/PatternStore.h drums/PatternExport.cpp drums/PatternExport.h)
+  drums/PatternStore.cpp drums/PatternStore.h drums/PatternExport.cpp drums/PatternExport.h
+  drums/PatternEditor.cpp drums/PatternEditor.h)
 target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juce_cryptography)

@@ -23,6 +23,7 @@
 #include "KitStore.h"
 #include "PatternExport.h"
 #include "PatternStore.h"
+#include "PatternEditor.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -1366,7 +1367,7 @@ void testPatterns()
     {
         target->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         const auto before = stateOf (*target);
-        const auto good = PatternStore::encode (source->patterns().all()).data;
+        const auto good = PatternStore::encode (source->patterns().all(), source->patterns().alternates()).data;
         const auto with = [&] (std::vector<std::byte> data) {
             auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
                                                  target->product().stateTag, 1).document;
@@ -1389,7 +1390,7 @@ void testPatterns()
         };
         // Slot 1 header at 8: steps, bars, seed (4); first cell at 14.
         bad ({}, "empty");
-        bad (edit (0, 2), "unknown version");
+        bad (edit (0, 3), "unknown version");
         bad (edit (4, 4), "4 slots");
         bad (edit (8, 24), "24 steps");
         bad (edit (9, 0), "0 bars");
@@ -1912,6 +1913,175 @@ void testExportPlaybackParity()
     check (audible, "the parity kit is audible");
 }
 
+
+//==============================================================================
+// DRM-04b: the step editor edits the selected slot through undoable steps.
+void testPatternEditorUi()
+{
+    using vox::drums::PatternStore;
+    using vox::drums::StoredPattern;
+    auto p = makeProcessor();
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
+    check (panel != nullptr, "step editor: Drums panel");
+    if (panel == nullptr)
+        return;
+    auto& ed = panel->patternEditor();
+    auto& store = p->patterns();
+    auto& history = p->patternHistory();
+    setPlain (*p, vox::drums::patternParameterId, 2.0f);
+    panel->pollForTesting();
+    check (ed.slot() == 2 && ed.shown() == store.slot (2), "step editor: shows the selected slot");
+    const auto original = store.slot (2);
+
+    // Toggle a step on and off.
+    const bool wasOn = store.slot (2).cell (12, 0, 3).on;
+    ed.clickCell (12, 3);
+    check (store.slot (2).cell (12, 0, 3).on != wasOn && ed.selectedLane() == 12 && ed.selectedStep() == 3,
+           "step editor: a click toggles the step and selects it");
+    check (! wasOn && store.slot (2).cell (12, 0, 3).velocity == 100, "step editor: a new step has velocity 100");
+    ed.clickCell (12, 3);
+    check (store.slot (2).cell (12, 0, 3).on == wasOn, "step editor: a second click toggles it back");
+    ed.clickCell (12, 3);
+
+    // Inspector: each value moves the selected step; a drag is one undo step.
+    const auto steps = history.size();
+    auto* velocity = ed.inspector ("velocity");
+    velocity->onDragStart();
+    for (int v : { 40, 50, 60, 70 })
+        velocity->setValue (v, juce::sendNotificationSync);
+    velocity->onDragEnd();
+    check (store.slot (2).cell (12, 0, 3).velocity == 70 && history.size() == steps + 1,
+           "step editor: a velocity drag sets the step and is one undo step");
+    ed.inspector ("probability")->setValue (35, juce::sendNotificationSync);
+    ed.inspector ("ratchet")->setValue (4, juce::sendNotificationSync);
+    ed.inspector ("micro")->setValue (-20, juce::sendNotificationSync);
+    ed.accentToggle()->setToggleState (true, juce::sendNotificationSync);
+    {
+        const auto c = store.slot (2).cell (12, 0, 3);
+        check (c.probability == 35 && c.ratchet == 4 && c.micro == -20 && c.accent, "step editor: chance, ratchet, micro and accent set the step");
+    }
+    // Undo walks back one edit at a time; redo forward; a new edit clears redo.
+    ed.button ("undo")->onClick();
+    check (! store.slot (2).cell (12, 0, 3).accent && store.slot (2).cell (12, 0, 3).micro == -20, "step editor: undo reverts the last edit only");
+    ed.button ("undo")->onClick();
+    ed.button ("undo")->onClick();
+    ed.button ("undo")->onClick();
+    ed.button ("undo")->onClick();
+    check (store.slot (2).cell (12, 0, 3).velocity == 100 && store.slot (2).cell (12, 0, 3).probability == 100,
+           "step editor: undo of the velocity drag returns to the value before the drag");
+    ed.button ("redo")->onClick();
+    check (store.slot (2).cell (12, 0, 3).velocity == 70, "step editor: redo replays the drag");
+    ed.inspector ("velocity")->setValue (90, juce::sendNotificationSync);
+    check (! history.canRedo(), "step editor: a new edit clears redo");
+
+    // Bars and grid.
+    ed.combo ("bars")->setSelectedItemIndex (1, juce::sendNotificationSync);   // 2 bars
+    check (store.slot (2).bars == 2, "step editor: bars combo resizes the pattern");
+    ed.combo ("steps")->setSelectedItemIndex (1, juce::sendNotificationSync);  // 32 steps
+    check (store.slot (2).steps == 32 && store.slot (2).cell (12, 0, 6).velocity == 90,
+           "step editor: 32 steps keep each step at its position");
+    ed.selectBar (0);
+    ed.clickCell (2, 31);
+    ed.button ("dup")->onClick();
+    {
+        const auto q = store.slot (2);
+        bool same = true;
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int st = 0; st < q.steps; ++st)
+            {
+                const auto& a = q.cell (lane, 0, st);
+                const auto& b = q.cell (lane, 1, st);
+                same = same && a.on == b.on && a.velocity == b.velocity && a.ratchet == b.ratchet;
+            }
+        check (same && ed.bar() == 1, "step editor: Dup copies bar 1 to bar 2 and shows bar 2");
+    }
+    ed.button ("clear")->onClick();
+    {
+        const auto q = store.slot (2);
+        bool empty = true;
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int st = 0; st < q.steps; ++st)
+                empty = empty && ! q.cell (lane, 1, st).on;
+        check (empty && q.cell (12, 0, 6).on, "step editor: Clear empties only the shown bar");
+    }
+    const auto seed = store.slot (2).seed;
+    ed.button ("seed")->onClick();
+    check (store.slot (2).seed != seed, "step editor: Seed changes the probability seed");
+
+    // A/B.
+    const auto a = store.slot (2);
+    ed.button ("copyB")->onClick();
+    check (store.alternate (2) == a, "step editor: A>B copies the pattern to B");
+    ed.clickCell (0, 0);
+    const auto edited = store.slot (2);
+    ed.button ("swap")->onClick();
+    check (store.slot (2) == a && store.alternate (2) == edited, "step editor: A/B swaps the pattern and its variation");
+    ed.button ("undo")->onClick();
+    check (store.slot (2) == edited && store.alternate (2) == a, "step editor: undo reverts the swap");
+
+    // State: alternates are saved (DSEQ v2) and restored; a v1 section reads
+    // B = A; a restore clears the history.
+    {
+        const auto saved = stateOf (*p);
+        auto other = makeProcessor();
+        other->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        check (other->lastStateError().isEmpty() && other->patterns().slot (2) == edited && other->patterns().alternate (2) == a,
+               "step editor: slots and variations survive save and restore");
+        // v1: header + the 5 slots only.
+        auto v2 = PatternStore::encode (other->patterns().all(), other->patterns().all()).data;
+        auto v1 = std::vector<std::byte> (v2.begin(), v2.begin() + static_cast<std::ptrdiff_t> (8 + (v2.size() - 8) / 2));
+        v1[0] = std::byte { 1 };
+        vox::preset::Section section;
+        section.tag = vox::drums::sequenceSectionTag;
+        section.data = v1;
+        std::array<StoredPattern, PatternStore::slotCount> slots, alternates;
+        juce::String error;
+        check (PatternStore::decode (section, slots, alternates, error) && slots[2] == edited && alternates[2] == edited,
+               "step editor: a DSEQ v1 section reads each variation as a copy of its slot");
+        check (history.canUndo(), "step editor: history before a restore");
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        panel->pollForTesting();
+        check (! history.canUndo() && ! history.canRedo(), "step editor: a project restore clears the undo history");
+    }
+
+    // MIDI export of the shown slot (what a drag drops).
+    {
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-editor-export.mid");
+        check (ed.writeMidi (file), "step editor: the MIDI file is written");
+        juce::MemoryBlock written;
+        file.loadFileAsData (written);
+        check (written == p->exportPatternMidi (2, 1, p->lastBpm()), "step editor: the file is the export of the shown slot");
+        check (ed.dragFile().getFileName() == "VOX Drums Pattern 3.mid", "step editor: the drag file is named after the slot");
+        file.deleteFile();
+    }
+
+    // A real mouse click on a cell (lane page 2 when the grid is small).
+    {
+        ed.selectCell (13, 5);
+        const auto r = ed.cellBounds (13, 5);
+        check (! r.isEmpty(), "step editor: a selected lane is on the shown page");
+        juce::Component* target = nullptr;
+        for (auto* child : ed.getChildren())
+            if (child->getName() == "pattern grid")
+                target = child;
+        check (target != nullptr, "step editor: grid component");
+        if (target != nullptr)
+        {
+            const bool before = store.slot (2).cell (13, ed.bar(), 5).on;
+            auto source = juce::Desktop::getInstance().getMainMouseSource();
+            const auto pos = (r.getCentre() - target->getPosition()).toFloat();
+            const juce::MouseEvent e (source, pos, juce::ModifierKeys(), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, target, target,
+                                      juce::Time::getCurrentTime(), pos, juce::Time::getCurrentTime(), 1, false);
+            target->mouseDown (e);
+            check (store.slot (2).cell (13, ed.bar(), 5).on != before, "step editor: a mouse click on the cell toggles exactly that step");
+        }
+    }
+    check (store.slot (2) != original, "step editor: the slot was edited");
+    p->editorBeingDeleted (editor.get());
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -1930,6 +2100,7 @@ int main (int argc, char** argv)
     testStateReentrancy();
     testPatterns();
     testExportPlaybackParity();
+    testPatternEditorUi();
     testRealtime();
     if (failures == 0)
         std::printf ("VOX Drums product tests passed\n");

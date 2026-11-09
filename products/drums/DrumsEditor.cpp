@@ -2,6 +2,7 @@
 
 #include "DrumsParameters.h"
 #include "Processor.h"
+#include "PatternEditor.h"
 #include "Tokens.h"
 #include "Typography.h"
 
@@ -72,89 +73,6 @@ private:
     juce::Colour accent_;
     float level_ = 0.0f;
     bool selected_ = false;
-};
-
-//==============================================================================
-// Read-only view of the selected pattern slot (bar of the playhead, 16
-// lanes) with the step under the playhead; the step editor is DRM-04b.
-class DrumsPanel::StepView final : public juce::Component {
-public:
-    StepView (DrumsProcessor& p, juce::Colour accent) : processor_ (p), accent_ (accent) {}
-
-    void update (bool repaintIfChanged = true)
-    {
-        const int index = std::clamp (static_cast<int> (std::lround (processor_.state().getRawParameterValue (patternParameterId)->load())),
-                                      0, PatternStore::slotCount - 1);
-        bool changed = false;
-        if (index != pattern_ || processor_.patterns().generation() != generation_)
-        {
-            // Cells and generation read together (review 6745483562).
-            shown_ = processor_.patterns().slot (index, generation_);
-            pattern_ = index;
-            changed = true;
-        }
-        const double ppq = processor_.lastPpq();
-        const double stepPpq = 4.0 / shown_.steps;
-        const auto g = static_cast<long long> (std::floor (ppq / stepPpq));
-        const int step = processor_.transportPlaying() && g >= 0 ? static_cast<int> (g % shown_.steps) : -1;
-        const int bar = g >= 0 ? static_cast<int> ((g / shown_.steps) % shown_.bars) : 0;
-        if (changed || step != step_ || bar != bar_)
-        {
-            step_ = step;
-            bar_ = bar;
-            if (repaintIfChanged)
-                repaint();
-        }
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        update (false);
-        auto area = getLocalBounds();
-        g.setColour (c::textMuted);
-        g.setFont (vox::ui::typography::valueText());
-        g.drawText ("Bar " + juce::String (bar_ + 1) + " / " + juce::String (shown_.bars) + "   " + juce::String (shown_.steps) + " steps",
-                    area.removeFromTop (16), juce::Justification::centredLeft);
-        const int nameWidth = 78;
-        const int steps = shown_.steps;
-        const float cellW = static_cast<float> (area.getWidth() - nameWidth) / static_cast<float> (steps);
-        const float cellH = static_cast<float> (area.getHeight()) / static_cast<float> (padCount);
-        g.setFont (vox::ui::typography::valueText().withHeight (juce::jmin (13.0f, cellH * 0.8f)));
-        for (int lane = 0; lane < padCount; ++lane)
-        {
-            const float y = static_cast<float> (area.getY()) + cellH * static_cast<float> (lane);
-            g.setColour (c::textSecondary);
-            g.drawText (padName (lane), juce::Rectangle<float> (static_cast<float> (area.getX()), y, nameWidth - 4.0f, cellH),
-                        juce::Justification::centredLeft);
-            for (int s = 0; s < steps; ++s)
-            {
-                const auto& cell = shown_.cell (lane, bar_, s);
-                auto r = juce::Rectangle<float> (static_cast<float> (area.getX() + nameWidth) + cellW * static_cast<float> (s), y, cellW, cellH)
-                             .reduced (cellW > 8.0f ? 1.0f : 0.5f);
-                g.setColour (s == step_ ? c::panelRaised.brighter (0.3f) : (s % (steps / 4) == 0 ? c::panelRaised : c::control));
-                g.fillRect (r);
-                if (cell.on)
-                {
-                    g.setColour (accent_.withAlpha (0.35f + 0.65f * static_cast<float> (cell.velocity) / 127.0f));
-                    g.fillRect (r.reduced (1.0f));
-                    if (cell.accent)
-                    {
-                        g.setColour (c::text);
-                        g.fillEllipse (r.getCentreX() - 1.5f, r.getCentreY() - 1.5f, 3.0f, 3.0f);
-                    }
-                }
-            }
-        }
-    }
-
-    const StoredPattern& shown() const noexcept { return shown_; }
-
-private:
-    DrumsProcessor& processor_;
-    juce::Colour accent_;
-    StoredPattern shown_;
-    std::uint64_t generation_ = 0;
-    int pattern_ = -1, step_ = -1, bar_ = 0;
 };
 
 //==============================================================================
@@ -391,7 +309,7 @@ DrumsPanel::DrumsPanel (DrumsProcessor& processor) : processor_ (processor)
         lanes_.emplace_back();
         toggle (lanes_.back(), "drm.seq.lane." + juce::String (padPrefix (pad).substr (4)), juce::String (pad + 1));
     }
-    steps_ = std::make_unique<StepView> (processor_, accent);
+    steps_ = std::make_unique<PatternEditor> (processor_, accent);
     addAndMakeVisible (*steps_);
 
     selectPad (0);
@@ -579,7 +497,7 @@ void DrumsPanel::paint (juce::Graphics& g)
 void DrumsPanel::resized()
 {
     auto area = getLocalBounds().reduced (sp::xxl, sp::lg);
-    auto top = area.removeFromTop (juce::jmax (310, area.getHeight() * 58 / 100));
+    auto top = area.removeFromTop (juce::jmax (310, area.getHeight() * 54 / 100));
     const int width = top.getWidth();
     auto left = top.removeFromLeft (juce::jlimit (240, 330, width / 4));
     auto sampleArea = top.removeFromRight (juce::jlimit (250, 330, width * 26 / 100));
@@ -695,7 +613,7 @@ void DrumsPanel::resized()
     area.removeFromTop (sp::md);
     sequencerPanel_.setBounds (area);
     auto seq = sequencerPanel_.getContentBounds() + sequencerPanel_.getPosition();
-    auto controls = seq.removeFromLeft (juce::jmin (420, seq.getWidth() * 40 / 100));
+    auto controls = seq.removeFromLeft (juce::jmin (360, seq.getWidth() * 30 / 100));
     {
         auto row = controls.removeFromTop (48);
         for (auto* target : { &seqMode_, &seqPattern_ })

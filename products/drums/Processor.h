@@ -37,6 +37,12 @@ public:
     SampleLibrary& samples() noexcept { return samples_; }
     KitStore& kitStore() noexcept { return store_; }
     PatternStore& patterns() noexcept { return patternStore_; }
+    // Message thread: undo/redo of pattern edits. patternEpoch() changes
+    // with every project restore; the editor clears the history then.
+    PatternHistory& patternHistory() noexcept { return patternHistory_; }
+    std::uint64_t patternEpoch() const noexcept { return patternEpoch_.load(); }
+    // The host tempo of the last block (120 before any), for MIDI export.
+    double lastBpm() const noexcept { return lastBpm_.load (std::memory_order_relaxed); }
     // Tests: the engine, to read what the last processBlock triggered
     // (same thread as processBlock, after it returns).
     const kit::KitEngine& engineForTesting() const noexcept { return engine_; }
@@ -94,6 +100,9 @@ private:
     kit::KitSettings live_;                    // audio thread
     std::vector<kit::Event> events_;
     PatternStore patternStore_;
+    PatternHistory patternHistory_;
+    std::atomic<std::uint64_t> patternEpoch_ { 0 };
+    std::atomic<double> lastBpm_ { 120.0 };
     PatternStore::Live livePattern_;   // audio thread
 
     struct Audition { std::uint8_t pad = 0, velocity = 0; };

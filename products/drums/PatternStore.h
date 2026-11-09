@@ -20,6 +20,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 namespace vox::drums {
 
@@ -67,16 +68,27 @@ public:
     void setSlot (int index, const StoredPattern& pattern);
     void setAll (const std::array<StoredPattern, slotCount>& slots);
     std::array<StoredPattern, slotCount> all() const;
+
+    // DRM-04b: each slot has a second variation (B). The sequencer plays the
+    // slot (A); swapping exchanges A and B. Saved with the slots (DSEQ v2).
+    StoredPattern alternate (int index) const;
+    void setAlternate (int index, const StoredPattern& pattern);
+    std::array<StoredPattern, slotCount> alternates() const;
+    void setAlternates (const std::array<StoredPattern, slotCount>& alternates);
     // Changes after the change it counts is committed (under the lock).
     std::uint64_t generation() const noexcept { return generation_.load(); }
     // Tests: runs at the start of setSlot/setAll, before anything is
     // committed (message thread only).
     std::function<void()> beforeCommitForTesting;
 
-    static preset::Section encode (const std::array<StoredPattern, slotCount>& slots);
+    // DSEQ v2: the slots, then their alternates. v1 (DRM-04a) has no
+    // alternates: each reads as a copy of its slot.
+    static preset::Section encode (const std::array<StoredPattern, slotCount>& slots,
+                                   const std::array<StoredPattern, slotCount>& alternates);
     // Strict: an unknown version, a wrong size or slot count, or any value
     // outside its range rejects the section (error set, false returned).
-    static bool decode (const preset::Section& section, std::array<StoredPattern, slotCount>& out, juce::String& error);
+    static bool decode (const preset::Section& section, std::array<StoredPattern, slotCount>& out,
+                        std::array<StoredPattern, slotCount>& alternates, juce::String& error);
     static std::array<StoredPattern, slotCount> factorySlots();
 
     //== audio thread (wait-free)
@@ -93,8 +105,40 @@ public:
 private:
     mutable juce::SpinLock lock_;
     std::array<StoredPattern, slotCount> slots_;
+    std::array<StoredPattern, slotCount> alternates_;
     std::array<std::uint64_t, slotCount> slotGeneration_ {};
     std::atomic<std::uint64_t> generation_ { 1 };
+};
+
+// Undo/redo of pattern edits (message thread). Each entry is a whole
+// slot before and after one edit; at most `capacity` entries are kept.
+class PatternHistory {
+public:
+    static constexpr std::size_t capacity = 100;
+    struct Entry {
+        int slot = 0;
+        bool alternate = false;   // the entry also swapped A and B
+        StoredPattern before, after;
+        StoredPattern beforeB, afterB;
+    };
+    void push (Entry entry);
+    // Replaces the newest entry's result (one knob drag = one undo step);
+    // false if there is none for `slot` or it can be redone instead.
+    bool amendLast (int slot, const StoredPattern& after);
+    bool canUndo() const noexcept { return ! undo_.empty(); }
+    bool canRedo() const noexcept { return ! redo_.empty(); }
+    // Applies to `store` and returns the slot it changed (-1 if nothing).
+    int undo (PatternStore& store);
+    int redo (PatternStore& store);
+    void clear() noexcept
+    {
+        undo_.clear();
+        redo_.clear();
+    }
+    std::size_t size() const noexcept { return undo_.size(); }
+
+private:
+    std::vector<Entry> undo_, redo_;
 };
 
 } // namespace vox::drums
