@@ -1590,6 +1590,44 @@ void testPatterns()
                                            + juce::String (reads.load()) + ")");
     }
 
+    // Owner decision (#120): pads 9-16 export like pads 1-8. One hit per
+    // lane 9-16 at its own step; the export carries each pad's note (50-57
+    // by default) and nothing else, and those hits play (sequencer lights
+    // the same pads).
+    {
+        auto p = makeProcessor();
+        StoredPattern upper;
+        upper.steps = 16;
+        upper.bars = 1;
+        for (int pad = 8; pad < padCount; ++pad)
+            upper.cell (pad, 0, pad - 8) = { true, false, static_cast<std::uint8_t> (60 + pad) };
+        p->patterns().setSlot (4, upper);
+        const auto blob = p->exportPatternMidi (4, 1, 120.0);
+        juce::MidiFile file;
+        juce::MemoryInputStream in (blob, false);
+        std::vector<std::tuple<long long, int, int>> ons;
+        if (file.readFrom (in) && file.getNumTracks() == 1)
+            for (int i = 0; i < file.getTrack (0)->getNumEvents(); ++i)
+            {
+                const auto& m = file.getTrack (0)->getEventPointer (i)->message;
+                if (m.isNoteOn())
+                    ons.emplace_back (std::llround (m.getTimeStamp()), m.getNoteNumber(), m.getVelocity());
+            }
+        std::vector<std::tuple<long long, int, int>> expected;
+        for (int pad = 8; pad < padCount; ++pad)
+            expected.emplace_back (static_cast<long long> ((pad - 8) * 240), 50 + (pad - 8), 60 + pad);
+        check (ons == expected, "pads 9-16: each lane exports one note on its pad's note (50-57) at its step");
+        TestPlayHead head;
+        head.set (true, 120.0, 0.0);
+        p->setPlayHead (&head);
+        setPlain (*p, "drm.seq.mode", 1.0f);
+        setPlain (*p, vox::drums::patternParameterId, 4.0f);
+        p->takeHitMask();
+        const auto r = render (*p, 200, 256, &head, 120.0, noMidi);   // ~1.07 s: steps 0-7 (0.875 s) at 120 BPM, within one bar
+        check (r.peak > 1.0e-3 && p->takeHitMask() == 0xff00u, "pads 9-16: the exported lanes play on pads 9-16");
+        p->setPlayHead (nullptr);
+    }
+
     // resize keeps what fits on the new grid.
     {
         StoredPattern p;
