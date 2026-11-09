@@ -166,15 +166,13 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             for (int i = 0; i < count && eventCount < events_.size(); ++i)
             {
                 const auto& a = auditions_[static_cast<std::size_t> (start + i)];
-                const auto note = live_.pads[a.pad].note;
-                // An audition plays the pad even in Internal mode and on a
-                // shared note: it goes to the pad's own note.
+                // An audition triggers the pad itself (review 6743099574):
+                // not through the note map, where a shared note goes to the
+                // lowest pad, and also in Internal mode.
                 kit::Event e;
                 e.offset = 0;
-                e.size = 3;
-                e.bytes[0] = 0x90u;
-                e.bytes[1] = note;
                 e.bytes[2] = a.velocity;
+                e.pad = static_cast<std::int8_t> (a.pad);
                 events_[eventCount++] = e;
                 pads |= 1u << a.pad;
             }

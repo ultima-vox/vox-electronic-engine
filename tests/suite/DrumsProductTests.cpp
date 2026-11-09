@@ -43,6 +43,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <vector>
 #include <string>
 
 namespace {
@@ -532,6 +533,80 @@ void testSound()
                    "model " + vox::drums::modelName (static_cast<kit::Model> (model)) + " sounds on pad " + juce::String (pad + 1)
                        + " from its reassigned note");
         }
+
+    // Review 6743099574: an editor audition plays the pad it names, also
+    // when two pads share a note and in Internal mode; external MIDI on the
+    // shared note follows the lowest-pad rule.
+    {
+        // Pads 10 and 11 on note 60, different models; `silent` sets one
+        // pad's level to 0 (its contribution removed) for the comparison.
+        const auto make = [] (int silent, float mode) {
+            auto p = makeProcessor();
+            auto a = p->kitStore().pad (9), b = p->kitStore().pad (10);
+            a.model = kit::Model::kick;
+            b.model = kit::Model::cymbal;
+            a.note = b.note = 60;
+            p->kitStore().setPad (9, a);
+            p->kitStore().setPad (10, b);
+            setPlain (*p, "drm.seq.mode", mode);
+            if (silent >= 0)
+                setPlain (*p, juce::String (vox::drums::padPrefix (silent)) + ".level", 0.0f);
+            return p;
+        };
+        const auto take = [] (DrumsProcessor& p, int auditionPad, bool externalNote) {
+            std::vector<float> out;
+            juce::AudioBuffer<float> buffer (2, 256);
+            for (int blk = 0; blk < 30; ++blk)
+            {
+                juce::MidiBuffer midi;
+                if (blk == 0 && auditionPad >= 0)
+                    p.audition (auditionPad, 110);
+                if (blk == 0 && externalNote)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (110)), 0);
+                buffer.clear();
+                p.processBlock (buffer, midi);
+                for (int ch = 0; ch < 2; ++ch)
+                    out.insert (out.end(), buffer.getReadPointer (ch), buffer.getReadPointer (ch) + 256);
+            }
+            return out;
+        };
+        const auto peakOf = [] (const std::vector<float>& v) {
+            float m = 0.0f;
+            for (float x : v)
+                m = std::max (m, std::abs (x));
+            return m;
+        };
+        for (const float mode : { 0.0f, 1.0f })   // Host MIDI, Internal (transport stopped)
+        {
+            const juce::String m = mode == 0.0f ? " (Host MIDI)" : " (Internal)";
+            for (const int pad : { 9, 10 })
+            {
+                const int other = pad == 9 ? 10 : 9;
+                auto p = make (-1, mode);
+                const auto heard = take (*p, pad, false);
+                check (p->takeHitMask() == (1u << pad), "audition of pad " + juce::String (pad + 1) + " lights only that pad" + m);
+                auto only = make (other, mode);   // the other pad silenced
+                const auto expected = take (*only, pad, false);
+                check (peakOf (heard) > 1.0e-3 && heard == expected,
+                       "audition of pad " + juce::String (pad + 1) + " on a shared note plays only that pad" + m);
+            }
+        }
+        // External note 60: the lowest pad (10) plays, pad 11 does not.
+        {
+            auto p = make (-1, 0.0f);
+            const auto heard = take (*p, -1, true);
+            check (p->takeHitMask() == (1u << 9), "external shared note lights the lowest pad");
+            auto only = make (10, 0.0f);
+            check (peakOf (heard) > 1.0e-3 && heard == take (*only, -1, true), "external shared note plays the lowest pad only");
+            auto lowSilent = make (9, 0.0f);
+            check (peakOf (take (*lowSilent, -1, true)) <= 0.0f, "external shared note does not reach the higher pad");
+        }
+        // Internal mode still ignores external notes, auditions or not.
+        {
+            auto p = make (-1, 1.0f);
+            check (peakOf (take (*p, -1, true)) <= 0.0f, "Internal mode ignores an external note on the shared note");
+        }
+    }
 
     // Pads sharing a choke group cut each other (Closed/Open Hat style) only
     // while Choke Groups is on.

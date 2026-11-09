@@ -84,6 +84,10 @@ struct Event {
     std::uint32_t offset = 0;   // sample in the block, ascending
     std::uint8_t size = 0;
     std::uint8_t bytes[3] {};
+    // >= 0: a direct trigger of this pad (editor audition) with velocity
+    // bytes[2]; it bypasses the note map (shared notes) and the sequencer
+    // mode. -1: a MIDI message (bytes, size).
+    std::int8_t pad = -1;
 };
 
 struct Transport {

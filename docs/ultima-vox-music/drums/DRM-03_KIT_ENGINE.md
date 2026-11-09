@@ -141,6 +141,15 @@ DRM-07.
 **Defect found by the new tests and fixed:** a muted pad still lit its pad
 button (the hit mask ignored Mute).
 
+**Review 6743099574 (fixed):** an editor audition was sent as a Note On of
+the pad's note, so on a shared note it played the lowest pad of that note,
+and in Internal mode it was dropped. An audition is now a direct pad
+trigger (`kit::Event::pad`): it bypasses the note map and the sequencer
+mode; external MIDI keeps the lowest-pad rule. Regression: pads 10/11 on
+note 60 with different models, each audition equals a render with the other
+pad silenced, in Host MIDI and Internal mode; external note 60 plays only
+pad 10. With the old routing 3 of these checks fail.
+
 ## Open decisions (owner)
 
 - **Default kit for pads 9–16.** Currently Perc on notes 50–57, labels

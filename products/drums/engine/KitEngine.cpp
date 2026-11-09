@@ -866,6 +866,13 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
             while (nextEvent < eventCount && events[nextEvent].offset <= at)
             {
                 const auto& e = events[nextEvent++];
+                if (e.pad >= 0)
+                {
+                    const int velocity = e.bytes[2] & 0x7F;
+                    if (e.pad < padCount && velocity > hits[e.pad])
+                        hits[e.pad] = velocity;
+                    continue;
+                }
                 if (e.size < 3)
                     continue;
                 const std::uint8_t status = e.bytes[0] & 0xF0u;
