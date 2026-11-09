@@ -94,6 +94,27 @@ add_test(NAME suite_drums_legacy_golden_tests
           ${CMAKE_CURRENT_SOURCE_DIR}/golden/drums-legacy-f9c8bc6-v1.csv
           --parameters ${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/legacy-parameters-f9c8bc6.csv)
 
+# DRM-01: VOX Drums product tests (parameter contract, editor bindings,
+# sound, state, realtime).
+add_executable(suite_drums_product_tests DrumsProductTests.cpp)
+target_link_libraries(suite_drums_product_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+vox_suite_add_allocation_probe(suite_drums_product_tests)
+target_compile_definitions(suite_drums_product_tests PRIVATE VOX_TEST_STATE_TAG="${VOX_SUITE_drm_STATE_TAG}")
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(suite_drums_product_tests PRIVATE Threads::Threads)
+endif()
+add_test(NAME suite_drums_product_tests
+  COMMAND suite_drums_product_tests ${PROJECT_SOURCE_DIR}/products/drums/parameters.csv)
+
+# DRM-01 parity: the plugin against the DRM-00 reference module. The only
+# other test allowed to drive the legacy C ABI (suite_boundaries).
+add_executable(suite_drums_parity_tests DrumsParityTests.cpp)
+target_link_libraries(suite_drums_parity_tests PRIVATE ${VOX_SUITE_drm_TARGET} vox_legacy_drums_reference)
+target_include_directories(suite_drums_parity_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_parity_tests COMMAND suite_drums_parity_tests)
+
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)
 
@@ -114,11 +135,37 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
     VOX_TEST_PRODUCT_NAME="${VOX_SUITE_${key}_NAME}"
     VOX_TEST_STATE_TAG="${VOX_SUITE_${key}_STATE_TAG}"
     VOX_TEST_FOREIGN_TAG="${VOX_SUITE_${otherKey}_STATE_TAG}")
+  # Products with a sound engine (others must stay silent).
+  if(key STREQUAL "drm")
+    target_compile_definitions(${test} PRIVATE VOX_TEST_HAS_ENGINE=1)
+  endif()
   add_test(NAME ${test} COMMAND ${test})
 
   list(APPEND bundles
     "$<TARGET_FILE_DIR:${product}_VST3>/../..|${VOX_SUITE_${key}_CID}|${VOX_SUITE_${key}_NAME}")
 endforeach()
+
+# Mini-host: loads every built bundle through JUCE's VST3 host (DRM-01).
+juce_add_console_app(suite_vst3_host_tests PRODUCT_NAME "suite_vst3_host_tests")
+target_sources(suite_vst3_host_tests PRIVATE Vst3HostTests.cpp)
+target_compile_definitions(suite_vst3_host_tests PRIVATE
+  JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+  VOX_TEST_COMPANY="${VOX_SUITE_COMPANY_NAME}")
+target_link_libraries(suite_vst3_host_tests PRIVATE
+  juce::juce_audio_processors juce::juce_recommended_config_flags)
+set(host_bundles "")
+foreach(key IN LISTS VOX_SUITE_PRODUCTS)
+  add_dependencies(suite_vst3_host_tests ${VOX_SUITE_${key}_TARGET}_VST3)
+  set(engine 0)
+  set(level "-")
+  if(key STREQUAL "drm")
+    set(engine 1)
+    set(level "Kick Level")
+  endif()
+  list(APPEND host_bundles
+    "$<TARGET_FILE_DIR:${VOX_SUITE_${key}_TARGET}_VST3>/../..|${VOX_SUITE_${key}_NAME}|${engine}|${level}")
+endforeach()
+add_test(NAME suite_vst3_host_tests COMMAND suite_vst3_host_tests ${host_bundles})
 
 # moduleinfo.json is written into each bundle by JUCE's VST3 manifest helper
 # after the plugin is linked; it carries the class ID a DAW will see.

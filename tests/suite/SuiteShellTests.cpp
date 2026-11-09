@@ -93,6 +93,7 @@ void testLifecycle()
 
             const auto before = p->midiEventsSeen();
             int sent = 0;
+            [[maybe_unused]] bool sounded = false;
             for (int size : { block, block / 3, 0, 1, block })
             {
                 juce::AudioBuffer<float> buffer (2, size);
@@ -116,15 +117,30 @@ void testLifecycle()
                 p->processBlock (buffer, midi);
 #endif
 
-                bool silentAndFinite = true;
+                bool finite = true, silent = true;
                 for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
                     for (int i = 0; i < size; ++i)
-                        silentAndFinite = silentAndFinite && std::isfinite (buffer.getSample (ch, i))
-                                       && std::fpclassify (buffer.getSample (ch, i)) == FP_ZERO;
-                check (silentAndFinite, "shell output is silent and finite at "
-                                          + juce::String (rate) + " Hz, block " + juce::String (size));
+                    {
+                        finite = finite && std::isfinite (buffer.getSample (ch, i));
+                        silent = silent && std::fpclassify (buffer.getSample (ch, i)) == FP_ZERO;
+                    }
+                check (finite, "output is finite at " + juce::String (rate) + " Hz, block " + juce::String (size));
+#if VOX_TEST_HAS_ENGINE
+                // The input buffer (all 1.0) is overwritten, never mixed in.
+                sounded = sounded || ! silent;
+                bool overwritten = true;
+                for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                    for (int i = 0; i < size; ++i)
+                        overwritten = overwritten && std::abs (buffer.getSample (ch, i)) < 0.999f;
+                check (overwritten, "the output overwrites the host buffer at " + juce::String (rate) + " Hz");
+#else
+                check (silent, "shell output is silent at " + juce::String (rate) + " Hz, block " + juce::String (size));
+#endif
             }
             check (p->midiEventsSeen() - before == static_cast<std::uint64_t> (sent), "every MIDI event is seen");
+#if VOX_TEST_HAS_ENGINE
+            check (sounded, "a pad note sounds at " + juce::String (rate) + " Hz, block " + juce::String (block));
+#endif
             p->releaseResources();
         }
     }

@@ -40,6 +40,29 @@ function(vox_add_suite_plugin key)
   endif()
 endfunction()
 
+# VOX Drums engine (DRM-01): the reviewed legacy 8-pad module, compiled in
+# statically from a byte-identical copy (PROVENANCE.csv) behind the private
+# DrumEngine wrapper. Its entry point is renamed so it can never clash with
+# another copy (the DRM-00 test reference). Replaced by DRM-03.
+add_library(vox_drums_engine STATIC
+  drums/engine/DrumEngine.cpp drums/engine/DrumEngine.h
+  drums/engine/legacy8/VoxFullOnDrums.c)
+target_include_directories(vox_drums_engine
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/drums
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/drums/engine/legacy8)
+target_compile_definitions(vox_drums_engine PRIVATE voxModuleEntryV2=voxDrumsLegacy8EntryV2)
+target_compile_features(vox_drums_engine PUBLIC cxx_std_20)
+set_target_properties(vox_drums_engine PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+if(NOT MSVC)
+  target_link_libraries(vox_drums_engine PUBLIC m)
+endif()
+
 foreach(key IN LISTS VOX_SUITE_PRODUCTS)
   vox_add_suite_plugin(${key})
 endforeach()
+
+target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
+  drums/DrumsParameters.cpp drums/DrumsParameters.h
+  drums/DrumsEditor.cpp drums/DrumsEditor.h)
+target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine)
