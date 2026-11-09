@@ -400,6 +400,12 @@ void SampleLibrary::assign (int pad, std::shared_ptr<SampleBuffer> buffer, const
     if (pad < 0 || pad >= padCount)
         return;
     const juce::ScopedLock sl (lock_);
+    ++requests_[static_cast<std::size_t> (pad)];   // supersedes a pending load
+    setPadLocked (pad, std::move (buffer), source);
+}
+
+void SampleLibrary::setPadLocked (int pad, std::shared_ptr<SampleBuffer> buffer, const juce::File& source)
+{
     auto& info = pads_[static_cast<std::size_t> (pad)];
     if (buffer == nullptr)
     {
@@ -437,18 +443,36 @@ void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<vo
                 others += pads_[static_cast<std::size_t> (i)].buffer->bytes();
         budget = others < budget ? budget - others : 0;
     }
+    if (pad < 0 || pad >= padCount)
+        return;
+    std::uint64_t token = 0;
+    std::function<void (std::function<void()>)> dispatch;
+    {
+        const juce::ScopedLock sl (lock_);
+        token = ++requests_[static_cast<std::size_t> (pad)];
+        dispatch = dispatch_;
+    }
     juce::WeakReference<SampleLibrary> weak (this);
-    decoder_.addJob ([weak, pad, file, budget, done = std::move (done)] {
+    decoder_.addJob ([weak, pad, file, budget, token, dispatch, done = std::move (done)] {
         auto decoded = decodeSampleFile (file, budget);
-        juce::MessageManager::callAsync ([weak, pad, file, decoded = std::move (decoded), done] () mutable {
+        std::function<void()> complete = [weak, pad, file, token, decoded = std::move (decoded), done] () mutable {
             auto* self = weak.get();
             if (self == nullptr)
                 return;
-            if (decoded.buffer != nullptr)
-                self->assign (pad, std::move (decoded.buffer), file);
+            bool current = false;
+            {
+                const juce::ScopedLock sl (self->lock_);
+                current = self->requests_[static_cast<std::size_t> (pad)] == token;
+                if (current && decoded.buffer != nullptr)
+                    self->setPadLocked (pad, std::move (decoded.buffer), file);
+            }
             if (done)
-                done (decoded.error);
-        });
+                done (current ? decoded.error : juce::String ("Load of " + file.getFileName() + " superseded by a later action"));
+        };
+        if (dispatch)
+            dispatch (std::move (complete));
+        else
+            juce::MessageManager::callAsync (std::move (complete));
     });
 }
 
@@ -617,11 +641,26 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
     return true;
 }
 
+void SampleLibrary::setCompletionDispatcherForTesting (std::function<void (std::function<void()>)> dispatch)
+{
+    const juce::ScopedLock sl (lock_);
+    dispatch_ = std::move (dispatch);
+}
+
+void SampleLibrary::waitForPendingDecodes()
+{
+    while (decoder_.getNumJobs() > 0)
+        juce::Thread::sleep (2);
+}
+
 void SampleLibrary::apply (Restore restore)
 {
     const juce::ScopedLock sl (lock_);
     for (int pad = 0; pad < padCount; ++pad)
+    {
+        ++requests_[static_cast<std::size_t> (pad)];   // a restore supersedes pending loads
         pads_[static_cast<std::size_t> (pad)] = std::move (restore.pads[static_cast<std::size_t> (pad)]);
+    }
     publishLocked();
 }
 

@@ -28,6 +28,17 @@ instrument (DRM-08).
 - **When a sample is missing:** the pad plays its synthesis. The project is
   never silenced and no other file is substituted.
 
+**Later action wins** (review 6734821926):
+- Every pad keeps a request counter.
+- These invalidate a pending load of that pad:
+  - Clear;
+  - a direct assignment;
+  - a newer load;
+  - a project restore.
+- A decoded result is committed only if its request is still the pad's
+  latest. Otherwise it is discarded, and the editor shows "superseded by a
+  later action".
+
 ## Ownership and realtime (03_VOX_DRUMS_SPEC §5)
 
 ```
@@ -90,7 +101,11 @@ invalid flag, bad UTF-8 and an invalid channel count.
 
 | Test | Proves |
 |---|---|
-| `suite_drums_sample_tests` | **Decoding:** 18 formats (16/24/32-bit × mono/stereo × 44.1/48/96 kHz) decode with exact values (within quantisation), frame count, rate and SHA-256. Errors are deterministic for a missing, empty or foreign file, a 61 s file, a 4 kHz file and an exceeded budget; a truncated file gives its finite readable part or an error. **Sound:** Sample without a sample is bit-identical to the synthesis; Synth ignores the sample; Sample follows the waveform (correlation > 0.95); Layer works; level 0 is silent; start and reverse work; all 8 pads play samples. **Ownership:** nothing is freed without a report; a buffer is freed after a report on the newer table; a buffer a looping voice plays stays alive until the voice ends; a storm of 400 replacements with voices on all pads leaves 0 retired items and 0 leaked buffers. **Realtime:** 0 allocations in `processBlock` with samples while samples are replaced between blocks. **State:** round trip; a missing file keeps its assignment, gives a diagnostic and saves back unchanged; a changed file is not used; library lookup by hash; 5 malformed sections rejected. **Editor:** status, buttons, drag targets, Clear. |
+| `suite_drums_sample_tests` | **Decoding:** 18 formats (16/24/32-bit × mono/stereo × 44.1/48/96 kHz) decode with exact values (within quantisation), frame count, rate and SHA-256. Errors are deterministic for a missing, empty or foreign file, a 61 s file, a 4 kHz file and an exceeded budget; a truncated file gives its finite readable part or an error. **Sound:** Sample without a sample is bit-identical to the synthesis; Synth ignores the sample; Sample follows the waveform (correlation > 0.95); Layer works; level 0 is silent; start and reverse work; all 8 pads play samples. **Ownership:** nothing is freed without a report; a buffer is freed after a report on the newer table; a buffer a looping voice plays stays alive until the voice ends; a storm of 400 replacements with voices on all pads leaves 0 retired items and 0 leaked buffers. **Realtime:** 0 allocations in `processBlock` with samples while samples are replaced between blocks. **State:** round trip; a missing file keeps its assignment, gives a diagnostic and saves back unchanged; a changed file is not used; library lookup by hash; 5 malformed sections rejected. **Editor:** status, buttons, drag targets, Clear. **Stale loads:** completions are held until after the later action, and the later action wins:
+- Clear;
+- a newer load, with completions in either order;
+- a direct assignment;
+- a project restore of an assigned pad and of an empty pad. |
 | `suite_drums_parity_tests` | 81 renders **bit-identical** to the DRM-00 reference. New: 18 renders with samples on every pad (Sample and Layer, loop, reverse, normalize, automation of every parameter, a 44.1 kHz sample at 44.1/48/96 kHz hosts). The plugin's table, IDs and usage reports reach the engine exactly as the reference ABI does. |
 | `suite_drums_product_tests` | Parameter contract with 164 parameters; every parameter, including the new sample ones, reachable through a bound control. |
 

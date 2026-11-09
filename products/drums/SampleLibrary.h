@@ -115,8 +115,17 @@ public:
     void clear (int pad);
 
     // Starts decoding `file` off the message thread; `done` runs on the
-    // message thread with the error text (empty on success).
+    // message thread with the error text (empty on success, or a note when
+    // a later action superseded the load). Every assign, clear, restore and
+    // newer load of the pad invalidates a pending load: its result is
+    // committed only if it is still the pad's latest request (review
+    // 6734821926).
     void loadAsync (int pad, const juce::File& file, std::function<void (const juce::String&)> done);
+
+    // Tests: deliver load completions through `dispatch` instead of the
+    // message loop, and wait until no decode is running.
+    void setCompletionDispatcherForTesting (std::function<void (std::function<void()>)> dispatch);
+    void waitForPendingDecodes();
 
     // Copies the pad's file into the user sample library, named by content
     // hash, and points the reference at the copy.
@@ -157,6 +166,9 @@ private:
 
     mutable juce::CriticalSection lock_;
     std::array<PadInfo, padCount> pads_;
+    std::array<std::uint64_t, padCount> requests_ {};   // per pad: latest action (lock_)
+    std::function<void (std::function<void()>)> dispatch_;
+    void setPadLocked (int pad, std::shared_ptr<SampleBuffer> buffer, const juce::File& source);
     std::atomic<const Table*> current_ { nullptr };
     std::uint64_t generation_ = 0;
     struct RetiredTable { std::unique_ptr<const Table> table; std::uint64_t until; };

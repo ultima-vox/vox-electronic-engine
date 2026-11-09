@@ -27,7 +27,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -567,6 +569,89 @@ void testState()
 }
 
 //==============================================================================
+// Review 6734821926: a pending asynchronous load must never overwrite a later
+// action. Completions are held (test dispatcher) until after Clear, a newer
+// load, or a project restore; the later action wins.
+void testStaleLoads()
+{
+    const auto a = writeWav ("async-a.wav", 48000.0, 1, 16, 0.3);
+    const auto b = writeWav ("async-b.wav", 48000.0, 2, 16, 0.2);
+    auto p = makeProcessor();
+    auto& library = p->samples();
+    std::vector<std::function<void()>> held;
+    library.setCompletionDispatcherForTesting ([&] (std::function<void()> f) { held.push_back (std::move (f)); });
+    std::vector<juce::String> results;
+    const auto record = [&] (const juce::String& e) { results.push_back (e); };
+    const auto shaOf = [] (const juce::File& f) { return decode (f)->sha256; };
+    const auto runHeld = [&] (bool reverse) {
+        library.waitForPendingDecodes();
+        if (reverse)
+            std::reverse (held.begin(), held.end());
+        auto pending = std::move (held);
+        held.clear();
+        for (auto& f : pending)
+            f();
+    };
+
+    // Normal load commits.
+    library.loadAsync (0, a, record);
+    runHeld (false);
+    check (library.pad (0).buffer != nullptr && library.pad (0).buffer->sha256 == shaOf (a) && results.back().isEmpty(),
+           "an asynchronous load commits when nothing intervened");
+
+    // Clear after the load started: the pad stays empty.
+    library.loadAsync (1, a, record);
+    library.waitForPendingDecodes();   // the decode is finished, its completion is held
+    library.clear (1);
+    runHeld (false);
+    check (! library.pad (1).reference && library.pad (1).buffer == nullptr, "Clear wins over a pending load");
+    check (results.back().contains ("superseded"), "the stale load reports that it was superseded: " + results.back());
+
+    // Two loads: the later request wins, whatever order the decodes finish in.
+    for (const bool reverse : { false, true })
+    {
+        library.loadAsync (2, a, record);
+        library.loadAsync (2, b, record);
+        runHeld (reverse);
+        check (library.pad (2).buffer != nullptr && library.pad (2).buffer->sha256 == shaOf (b),
+               juce::String ("the newer load wins") + (reverse ? " (completions in reverse order)" : ""));
+    }
+
+    // A synchronous assign after the load started wins.
+    library.loadAsync (3, a, record);
+    library.assign (3, decode (b), b);
+    runHeld (false);
+    check (library.pad (3).buffer->sha256 == shaOf (b), "an assignment after the load started wins");
+
+    // A project restore after the load started wins.
+    juce::MemoryBlock saved;
+    {
+        auto source = makeProcessor();
+        source->samples().assign (4, decode (b), b);
+        source->getStateInformation (saved);
+    }
+    library.loadAsync (4, a, record);
+    library.loadAsync (5, a, record);
+    library.waitForPendingDecodes();
+    p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (p->lastStateError().isEmpty(), "restore accepted");
+    runHeld (false);
+    check (library.pad (4).buffer != nullptr && library.pad (4).buffer->sha256 == shaOf (b), "a restore wins over a pending load (assigned pad)");
+    check (! library.pad (5).reference, "a restore wins over a pending load (pad empty in the project)");
+
+    // Superseded decodes are freed (nothing held by the library or voices).
+    library.setCompletionDispatcherForTesting (nullptr);
+    for (int pad = 0; pad < vox::drums::padCount; ++pad)
+        library.clear (pad);
+    for (int i = 0; i < 10 && library.retiredCount() > 0; ++i)
+    {
+        render (*p, 1, -1);
+        library.collect();
+    }
+    check (library.retiredCount() == 0, "superseded and cleared samples are released");
+}
+
+//==============================================================================
 void testEditor()
 {
     const auto file = writeWav ("editor-kick.wav", 48000.0, 2, 16, 0.3);
@@ -634,6 +719,7 @@ int main()
     testOwnership();
     testRealtime();
     testState();
+    testStaleLoads();
     testEditor();
 
     scratch.deleteRecursively();
