@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <mutex>
 
 namespace vox::drums {
@@ -245,8 +246,24 @@ SampleLibrary::~SampleLibrary()
 
 const SampleView* SampleLibrary::acquire() noexcept
 {
-    inUse_ = current_.load (std::memory_order_acquire);
+    // Mark the block as running before taking the table (sequentially
+    // consistent with publish and collect): a collector that sees no block
+    // running knows every later block takes the newest table.
+    busy_.store (true, std::memory_order_seq_cst);
+    inUse_ = current_.load (std::memory_order_seq_cst);
     return inUse_ != nullptr ? inUse_->views.data() : nullptr;
+}
+
+void SampleLibrary::abandon() noexcept
+{
+    // The block could not report its usage: mark the report incomplete so
+    // nothing is freed until a complete one arrives.
+    const auto seq = reportSeq_.load (std::memory_order_relaxed);
+    reportSeq_.store (seq + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence (std::memory_order_release);
+    reportOverflow_.store (true, std::memory_order_relaxed);
+    reportSeq_.store (seq + 2, std::memory_order_release);
+    busy_.store (false, std::memory_order_seq_cst);
 }
 
 void SampleLibrary::report (const SampleUsage& usage) noexcept
@@ -261,6 +278,7 @@ void SampleLibrary::report (const SampleUsage& usage) noexcept
     for (std::uint32_t i = 0; i < count; ++i)
         reportIds_[i].store (usage.ids[i], std::memory_order_relaxed);
     reportSeq_.store (seq + 2, std::memory_order_release);
+    busy_.store (false, std::memory_order_seq_cst);
 }
 
 void SampleLibrary::publishLocked()
@@ -292,7 +310,7 @@ void SampleLibrary::publishLocked()
                 retiredBuffers_.push_back ({ old, table->generation });
     }
     const auto* published = table.get();
-    current_.store (published, std::memory_order_release);
+    current_.store (published, std::memory_order_seq_cst);
     if (owned_ != nullptr)
         retiredTables_.push_back ({ std::move (owned_), table->generation });
     owned_ = std::move (table);
@@ -300,11 +318,19 @@ void SampleLibrary::publishLocked()
 
 std::size_t SampleLibrary::collect()
 {
+    // No block running (review 6735498337): every later block takes the
+    // newest table, and the only old buffers voices can still read are the
+    // ones the last complete report listed. Then every retired table, and
+    // every retired buffer not in that report, can go now, even if no audio
+    // callback ever comes again. While a block runs, the generation rule
+    // below applies.
+    const bool idle = ! busy_.load (std::memory_order_seq_cst);
     std::uint64_t generation = 0;
     std::uint32_t count = 0;
     bool overflow = true;
     std::array<std::uint64_t, maxSampleUsage> ids {};
     bool consistent = false;
+    bool neverReported = false;
     for (int attempt = 0; attempt < 8 && ! consistent; ++attempt)
     {
         const auto before = reportSeq_.load (std::memory_order_acquire);
@@ -317,7 +343,20 @@ std::size_t SampleLibrary::collect()
             ids[i] = reportIds_[i].load (std::memory_order_relaxed);
         std::atomic_thread_fence (std::memory_order_acquire);
         consistent = before != 0 && reportSeq_.load (std::memory_order_relaxed) == before;
+        if (before == 0)
+        {
+            neverReported = true;   // no block has run: no voice holds anything
+            break;
+        }
     }
+    if (idle && neverReported)
+    {
+        consistent = true;
+        overflow = false;
+        count = 0;
+    }
+    if (idle && consistent)
+        generation = std::numeric_limits<std::uint64_t>::max();
 
     std::vector<std::shared_ptr<const SampleBuffer>> toFree;
     std::vector<std::unique_ptr<const Table>> tablesToFree;
@@ -373,6 +412,32 @@ std::uint64_t SampleLibrary::generation() const
     return generation_;
 }
 
+std::size_t SampleLibrary::retiredBytesLocked() const
+{
+    std::size_t bytes = 0;
+    for (const auto& r : retiredBuffers_)
+        bytes += r.buffer->bytes();
+    return bytes;
+}
+
+std::size_t SampleLibrary::budget() const
+{
+    const juce::ScopedLock sl (lock_);
+    return budget_;
+}
+
+void SampleLibrary::setBudgetForTesting (std::size_t bytes)
+{
+    const juce::ScopedLock sl (lock_);
+    budget_ = bytes;
+}
+
+std::size_t SampleLibrary::retiredBytes() const
+{
+    const juce::ScopedLock sl (lock_);
+    return retiredBytesLocked();
+}
+
 std::size_t SampleLibrary::retiredCount() const
 {
     const juce::ScopedLock sl (lock_);
@@ -399,9 +464,12 @@ void SampleLibrary::assign (int pad, std::shared_ptr<SampleBuffer> buffer, const
 {
     if (pad < 0 || pad >= padCount)
         return;
-    const juce::ScopedLock sl (lock_);
-    ++requests_[static_cast<std::size_t> (pad)];   // supersedes a pending load
-    setPadLocked (pad, std::move (buffer), source);
+    {
+        const juce::ScopedLock sl (lock_);
+        ++requests_[static_cast<std::size_t> (pad)];   // supersedes a pending load
+        setPadLocked (pad, std::move (buffer), source);
+    }
+    collect();   // reclaim at once what no block can reach any more
 }
 
 void SampleLibrary::setPadLocked (int pad, std::shared_ptr<SampleBuffer> buffer, const juce::File& source)
@@ -434,14 +502,19 @@ void SampleLibrary::clear (int pad)
 
 void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<void (const juce::String&)> done)
 {
-    std::size_t budget = SampleLimits::maxTotalBytes;
+    // The budget covers what stays allocated while the new file decodes:
+    // the other pads' samples and every retired buffer still waiting for
+    // reclamation (they are memory too).
+    collect();
+    std::size_t budget = 0;
     {
         const juce::ScopedLock sl (lock_);
-        std::size_t others = 0;
+        budget = budget_;
+        std::size_t used = retiredBytesLocked();
         for (int i = 0; i < padCount; ++i)
             if (i != pad && pads_[static_cast<std::size_t> (i)].buffer != nullptr)
-                others += pads_[static_cast<std::size_t> (i)].buffer->bytes();
-        budget = others < budget ? budget - others : 0;
+                used += pads_[static_cast<std::size_t> (i)].buffer->bytes();
+        budget = used < budget ? budget - used : 0;
     }
     if (pad < 0 || pad >= padCount)
         return;
@@ -466,6 +539,7 @@ void SampleLibrary::loadAsync (int pad, const juce::File& file, std::function<vo
                 if (current && decoded.buffer != nullptr)
                     self->setPadLocked (pad, std::move (decoded.buffer), file);
             }
+            self->collect();
             if (done)
                 done (current ? decoded.error : juce::String ("Load of " + file.getFileName() + " superseded by a later action"));
         };
@@ -543,7 +617,7 @@ preset::Section SampleLibrary::encodeState (const std::array<PadInfo, padCount>&
     return section;
 }
 
-bool SampleLibrary::readState (const preset::Section* section, Restore& out, juce::String& error)
+bool SampleLibrary::readState (const preset::Section* section, Restore& out, juce::String& error, std::size_t budgetBytes)
 {
     out = {};
     if (section == nullptr)
@@ -596,7 +670,7 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
 
     // Resolve: the assigned path, then the user library by content hash. A
     // file whose content changed is never used in place of the original.
-    std::size_t budget = SampleLimits::maxTotalBytes;
+    std::size_t budget = budgetBytes;
     juce::StringArray diagnostics;
     for (int pad = 0; pad < padCount; ++pad)
     {
@@ -655,13 +729,16 @@ void SampleLibrary::waitForPendingDecodes()
 
 void SampleLibrary::apply (Restore restore)
 {
-    const juce::ScopedLock sl (lock_);
-    for (int pad = 0; pad < padCount; ++pad)
     {
-        ++requests_[static_cast<std::size_t> (pad)];   // a restore supersedes pending loads
-        pads_[static_cast<std::size_t> (pad)] = std::move (restore.pads[static_cast<std::size_t> (pad)]);
+        const juce::ScopedLock sl (lock_);
+        for (int pad = 0; pad < padCount; ++pad)
+        {
+            ++requests_[static_cast<std::size_t> (pad)];   // a restore supersedes pending loads
+            pads_[static_cast<std::size_t> (pad)] = std::move (restore.pads[static_cast<std::size_t> (pad)]);
+        }
+        publishLocked();
     }
-    publishLocked();
+    collect();
 }
 
 juce::String SampleLibrary::diagnostics() const

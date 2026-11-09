@@ -58,6 +58,27 @@ collect() (timer, 10 Hz):            (wait-free, fixed size, no allocation)
 - `prepareToPlay` frees every retired item, because the audio thread is
   stopped then.
 
+**No audio callback** (review 6735498337).
+- The audio thread marks each block as running: one atomic store in
+  `acquire()`, cleared by `report()` or `abandon()`.
+- When the collector sees no block running, every later block takes the
+  newest table. The only old buffers a voice can still read are those listed
+  in the last complete report. So every retired table, and every retired
+  buffer not in that report, is freed at once, with no future callback
+  needed. Before any block has run, nothing is held.
+- While a block runs, the generation rule above applies.
+- `assign`, `clear`, restore and each load collect eagerly.
+- An editor that stays open with the transport stopped therefore keeps at
+  most the assigned buffers, plus those still held by voices.
+
+**Budget.**
+- The decoded-memory budget covers assigned buffers **and** retired buffers
+  still waiting.
+- A load that fits only without them is refused.
+- A project restore may use the budget minus the retired bytes. The pads it
+  replaces are retired afterwards and reclaimed as above, so during a
+  restore the total is at most twice the budget.
+
 **Limits (provisional):**
 - 60 s per file, at most 192 kHz;
 - 512 MiB decoded in total;

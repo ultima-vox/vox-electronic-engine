@@ -224,6 +224,8 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                          changes_.data(), changeCount, events_.data(), static_cast<std::uint32_t> (eventCount),
                          transport, pattern, panic, sampleViews))
         samples_.report (engine_.sampleUsage());
+    else
+        samples_.abandon();
     pads |= engine_.sequencerHitMask();
     if (pads != 0)
         hitMask_.fetch_or (pads, std::memory_order_acq_rel);
@@ -276,7 +278,14 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
 {
     // Samples first: validation and decoding, before anything changes.
     auto sampleRestore = std::make_shared<SampleLibrary::Restore>();
-    if (! SampleLibrary::readState (document.find (sampleSectionTag), *sampleRestore, error))
+    // The restored samples may use what the retired ones leave of the budget;
+    // the pads they replace are retired afterwards (transiently at most
+    // twice the budget until they are reclaimed).
+    samples_.collect();
+    const auto retired = samples_.retiredBytes();
+    const auto limit = samples_.budget();
+    const auto budget = retired < limit ? limit - retired : 0;
+    if (! SampleLibrary::readState (document.find (sampleSectionTag), *sampleRestore, error, budget))
         return {};
 
     std::map<std::string, float> values;
