@@ -207,7 +207,7 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
     };
     button (midi_, "MIDI", "Click: save the pattern as a MIDI file. Drag: drop it into your DAW.", vox::ui::VoxButton::Type::Primary);
     midi_->onClick = [this] {
-        chooser_ = std::make_unique<juce::FileChooser> ("Save the pattern as MIDI", dragFile(), "*.mid");
+        chooser_ = std::make_unique<juce::FileChooser> ("Save the pattern as MIDI", saveAsDefault(), "*.mid");
         chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                    | juce::FileBrowserComponent::warnAboutOverwriting,
                                [this] (const juce::FileChooser& fc) {
@@ -472,23 +472,80 @@ juce::Button* PatternEditor::barButton (int bar)
     return bar >= 0 && bar < kit::maxPatternBars ? bars_[static_cast<std::size_t> (bar)].get() : nullptr;
 }
 
-juce::File PatternEditor::dragFile() const
+juce::String PatternEditor::fileName() const
 {
-    return juce::File::getSpecialLocation (juce::File::tempDirectory)
-        .getChildFile ("VOX Drums Pattern " + juce::String (juce::jmax (0, slot_) + 1) + ".mid");
+    return "VOX Drums Pattern " + juce::String (juce::jmax (0, slot_) + 1) + ".mid";
+}
+
+juce::File PatternEditor::saveAsDefault() const
+{
+    // Save-as is the user's own file: suggested in Documents, never the
+    // drag files below.
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (fileName());
+}
+
+juce::File PatternEditor::dragRoot()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VOX Drums MIDI drags");
+}
+
+juce::File PatternEditor::newDragFile()
+{
+    // Review 6753052108: every drag gets its own folder, unique per editor
+    // instance (and process) and per drag, so no other export, from this
+    // or another instance or process, can replace a file a DAW is still
+    // importing. The file name stays readable.
+    cleanupDragFiles (juce::Time::getCurrentTime());
+    const auto folder = dragRoot().getChildFile (instanceId_).getChildFile (juce::String (++dragCount_) + "-" + juce::Uuid().toString().substring (0, 12));
+    folder.createDirectory();
+    return folder.getChildFile (fileName());
+}
+
+void PatternEditor::cleanupDragFiles (juce::Time now)
+{
+    // Bounded: this instance keeps its newest drag and any younger than
+    // dragLifetime (time for a DAW to import a drop); folders other
+    // instances left behind are removed only after staleLifetime (a crash
+    // or a closed host). Never the newest drag of this instance.
+    const auto mine = dragRoot().getChildFile (instanceId_);
+    auto drags = mine.findChildFiles (juce::File::findDirectories, false);
+    std::sort (drags.begin(), drags.end(), [] (const juce::File& a, const juce::File& b) {
+        return a.getLastModificationTime() < b.getLastModificationTime();
+    });
+    for (int i = 0; i + 1 < drags.size(); ++i)
+        if (now - drags[i].getLastModificationTime() > dragLifetime)
+            drags[i].deleteRecursively();
+    for (const auto& other : dragRoot().findChildFiles (juce::File::findDirectories, false))
+        if (other != mine && now - other.getLastModificationTime() > staleLifetime)
+        {
+            bool fresh = false;
+            for (const auto& drag : other.findChildFiles (juce::File::findDirectories, false))
+                fresh = fresh || now - drag.getLastModificationTime() <= staleLifetime;
+            if (! fresh)
+                other.deleteRecursively();
+        }
 }
 
 bool PatternEditor::writeMidi (const juce::File& file) const
 {
     const auto blob = processor_.exportPatternMidi (juce::jmax (0, slot_), 1, processor_.lastBpm());
-    file.deleteFile();
     return file.replaceWithData (blob.getData(), blob.getSize());
+}
+
+juce::File PatternEditor::exportForDrag()
+{
+    const auto file = newDragFile();
+    if (! writeMidi (file))
+        return {};
+    // Folder time = the drag's time (cleanup reads it).
+    file.getParentDirectory().setLastModificationTime (juce::Time::getCurrentTime());
+    return file;
 }
 
 void PatternEditor::startDrag()
 {
-    const auto file = dragFile();
-    if (! writeMidi (file))
+    const auto file = exportForDrag();
+    if (file == juce::File())
         return;
     if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
         container->performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);

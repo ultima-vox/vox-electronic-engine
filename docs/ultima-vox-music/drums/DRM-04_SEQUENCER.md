@@ -214,6 +214,17 @@ step.
 - A click saves the pattern as a `.mid` file (file dialog).
 - A drag drops `VOX Drums Pattern N.mid` (1 pass, at the host's last tempo)
   into the DAW, through `performExternalDragDropOfFiles`.
+- **Drag files (review 6753052108).** Each drag writes to its own folder:
+  `<temp>/VOX Drums MIDI drags/<editor instance UUID>/<n>-<UUID>/`. No other
+  export can replace a file a DAW is still importing, whether it comes from
+  this instance, another instance or another process.
+- **Drag cleanup is bounded.**
+  - This instance's drag folders older than 10 minutes are removed, but
+    never the newest one.
+  - Other instances' folders are removed after a day: leftovers of a crash
+    or of a closed host.
+- **Save as** is separate from drag files. It suggests the pattern's name in
+  Documents.
 
 **Tests** (`testPatternEditorUi`)
 - Click toggles the step and selects it.
@@ -226,6 +237,11 @@ step.
 - Variations survive save and restore; `DSEQ` v1 → v2.
 - A restore clears the history.
 - The MIDI file equals `exportPatternMidi` of the shown slot.
+- Two instances on the same slot index with different notes, plus a
+  repeated drag: three distinct paths, and each file still holds its own
+  export after the others were written. Cleanup removes old drags but keeps
+  the newest, and removes another instance's folder only when it is stale.
+  With the old fixed path, 4 checks fail.
 - A real mouse event on lane 14 (page 2) toggles exactly that step.
 - Mutations (new-step velocity, no drag merge, no history clear on
   restore) fail 2, 2 and 1 checks.

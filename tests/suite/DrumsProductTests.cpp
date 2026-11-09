@@ -2053,8 +2053,65 @@ void testPatternEditorUi()
         juce::MemoryBlock written;
         file.loadFileAsData (written);
         check (written == p->exportPatternMidi (2, 1, p->lastBpm()), "step editor: the file is the export of the shown slot");
-        check (ed.dragFile().getFileName() == "VOX Drums Pattern 3.mid", "step editor: the drag file is named after the slot");
+        check (ed.saveAsDefault().getFileName() == "VOX Drums Pattern 3.mid"
+                   && ed.saveAsDefault().getParentDirectory() == juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+               "step editor: save-as suggests the pattern's name in Documents");
         file.deleteFile();
+    }
+
+    // Review 6753052108: drag files are unique per instance and per drag;
+    // another export never replaces a handed-off file; cleanup is bounded
+    // and never removes the newest drag.
+    {
+        const auto loadFile = [] (const juce::File& f) {
+            juce::MemoryBlock b;
+            f.loadFileAsData (b);
+            return b;
+        };
+        // Instance B: same slot index (3), different notes.
+        auto q = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> editorB (q->createEditorAndMakeActive());
+        auto* panelB = dynamic_cast<vox::drums::DrumsPanel*> (dynamic_cast<vox::suite::SuiteEditor*> (editorB.get())->content());
+        setPlain (*q, vox::drums::patternParameterId, 2.0f);
+        StoredPattern other;
+        other.steps = 16;
+        other.bars = 1;
+        other.cell (15, 0, 7) = { true, false, 77 };
+        q->patterns().setSlot (2, other);
+        panelB->pollForTesting();
+        auto& edB = panelB->patternEditor();
+        const auto expectA = p->exportPatternMidi (2, 1, p->lastBpm());
+        const auto expectB = q->exportPatternMidi (2, 1, q->lastBpm());
+        check (expectA != expectB, "drag: the two instances export different content");
+        const auto a1 = ed.exportForDrag();
+        const auto b1 = edB.exportForDrag();
+        const auto a2 = ed.exportForDrag();   // a repeated drag
+        check (a1 != juce::File() && b1 != juce::File() && a2 != juce::File() && a1 != b1 && a1 != a2 && b1 != a2,
+               "drag: every drag gets its own path (instances and repeats)");
+        check (a1.getFileName() == "VOX Drums Pattern 3.mid" && b1.getFileName() == "VOX Drums Pattern 3.mid",
+               "drag: the dropped file keeps the readable name");
+        check (loadFile (a1) == expectA && loadFile (a2) == expectA && loadFile (b1) == expectB,
+               "drag: each handed-off file still holds its own instance's export after the others");
+        // Cleanup: old drags of this instance go, the newest stays even if
+        // old; another instance's folder goes only when stale.
+        const auto now = juce::Time::getCurrentTime();
+        const auto old = now - vox::drums::PatternEditor::dragLifetime - juce::RelativeTime::minutes (1);
+        a1.getParentDirectory().setLastModificationTime (old);
+        a2.getParentDirectory().setLastModificationTime (old + juce::RelativeTime::seconds (1));   // newest, also old
+        ed.cleanupDragFiles (now);
+        check (! a1.exists() && a2.exists(), "drag: cleanup removes old drags but never the newest");
+        check (b1.exists(), "drag: another instance's recent drag is kept");
+        const auto bInstance = b1.getParentDirectory().getParentDirectory();
+        b1.getParentDirectory().setLastModificationTime (now - vox::drums::PatternEditor::staleLifetime - juce::RelativeTime::hours (1));
+        bInstance.setLastModificationTime (now - vox::drums::PatternEditor::staleLifetime - juce::RelativeTime::hours (1));
+        ed.cleanupDragFiles (now);
+        check (! b1.exists() && a2.exists(), "drag: another instance's stale folder (a day old) is removed");
+        q->editorBeingDeleted (editorB.get());
+        // Remove this test's drag folder, and only a folder inside the drag
+        // root (never anything above it, whatever the paths turned out to be).
+        const auto instanceDir = a2.getParentDirectory().getParentDirectory();
+        if (instanceDir.isAChildOf (vox::drums::PatternEditor::dragRoot()))
+            instanceDir.deleteRecursively();
     }
 
     // A real mouse click on a cell (lane page 2 when the grid is small).

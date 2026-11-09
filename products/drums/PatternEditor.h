@@ -56,9 +56,19 @@ public:
     juce::Button* button (const juce::String& name);      // "dup", "clear", "swap", "copyB", "seed", "undo", "redo", "midi", "lanes"
     juce::ComboBox* combo (const juce::String& name);     // "steps", "bars"
     juce::Button* barButton (int bar);
-    // Writes the MIDI export of the shown slot to `file` (what a drag drops).
+    // Writes the MIDI export of the shown slot to `file`.
     bool writeMidi (const juce::File& file) const;
-    juce::File dragFile() const;
+    // What a drag drops: the export in a new folder unique to this editor
+    // instance and this drag (review 6753052108); empty on failure.
+    juce::File exportForDrag();
+    // Removes this instance's drag folders older than dragLifetime (never
+    // its newest) and other instances' folders older than staleLifetime.
+    void cleanupDragFiles (juce::Time now);
+    static juce::File dragRoot();
+    static inline const juce::RelativeTime dragLifetime = juce::RelativeTime::minutes (10);
+    static inline const juce::RelativeTime staleLifetime = juce::RelativeTime::days (1);
+    juce::String fileName() const;        // "VOX Drums Pattern N.mid"
+    juce::File saveAsDefault() const;     // the save dialog's suggestion (Documents)
 
 private:
     class Grid;
@@ -67,6 +77,9 @@ private:
     void refreshControls();
     void checkEpoch();
     void startDrag();
+    juce::File newDragFile();
+    const juce::String instanceId_ = juce::Uuid().toString();
+    int dragCount_ = 0;
 
     DrumsProcessor& processor_;
     juce::Colour accent_;
