@@ -98,14 +98,45 @@ struct Transport {
 struct PatternStep {
     bool on = false, accent = false;
     std::uint8_t velocity = 0;
+    // DRM-04. Defaults keep the legacy behaviour.
+    std::uint8_t probability = 100;   // 1..100 %: plays on this share of passes, decided by
+                                      // the pattern seed and the step's absolute position
+    std::uint8_t ratchet = 1;         // 1..8 hits, evenly spaced within the step
+    std::int8_t micro = 0;            // -50..+50: offset in percent of a step
 };
 
 // Lanes x bars x steps, cell (lane * bars + bar) * steps + step.
 struct Pattern {
     std::uint32_t lanes = 0, steps = 16, bars = 1;
-    std::uint32_t timing = 0;   // 0 1/16, 1 1/8, 2 1/32, 3 1/8 triplets
+    std::uint32_t timing = 0;   // 0 1/16, 1 1/8, 2 1/32, 3 1/8 triplets, 4 1/64
     const PatternStep* cells = nullptr;
+    std::uint32_t seed = 0;     // probability decisions
 };
+
+inline constexpr int maxPatternSteps = 64;
+inline constexpr int maxPatternBars = 4;
+inline constexpr int maxRatchet = 8;
+
+// One hit of the sequencer at a musical position (quarter notes from 0).
+struct ScheduledHit {
+    double ppq = 0.0;
+    std::uint8_t pad = 0, velocity = 0;
+};
+
+// What, besides the pattern, decides the hits: swing (0..0.5 of a step,
+// odd steps), accent amount and the enabled lanes (bit n = lane n).
+struct StepContext {
+    double swing = 0.0, accent = 0.5;
+    std::uint32_t laneMask = 0xffffu;
+};
+
+// The canonical sequencer rule (DRM-04): the hits of grid step `g` (absolute
+// step index from ppq 0) in time order of lanes and ratchets. Playback and
+// MIDI export both use it, so what is exported is what plays. Writes at
+// most padCount * maxRatchet hits; returns their count.
+int stepHits (const Pattern& pattern, const StepContext& context, std::int64_t g, ScheduledHit* out) noexcept;
+// Length of one grid step in quarter notes.
+double stepLength (const Pattern& pattern) noexcept;
 
 // Factory patterns (the legacy module's buildPattern, 145 BPM full-on idiom):
 // 8 lanes x 16 steps x 4 bars, cell (lane * 4 + bar) * 16 + step.
@@ -159,6 +190,11 @@ public:
 
     // Pads triggered by the sequencer in the last process() (bit n = pad n).
     std::uint32_t sequencerHits() const noexcept { return sequencerHits_; }
+    // The sequencer hits of the last process() call, by frame offset (tests,
+    // export parity): count and hit i. A block over 8192 frames reports its
+    // last 8192-frame chunk only.
+    int scheduledCount() const noexcept;
+    void scheduled (int i, std::uint32_t& offset, std::uint8_t& pad, std::uint8_t& velocity) const noexcept;
     // Buffers voices still play after the last process().
     const Usage& usage() const noexcept { return usage_; }
     int activeVoices() const noexcept;

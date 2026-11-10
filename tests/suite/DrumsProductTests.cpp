@@ -21,6 +21,8 @@
 #include "DrumsEditor.h"
 #include "DrumsParameters.h"
 #include "KitStore.h"
+#include "PatternExport.h"
+#include "PatternStore.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -43,6 +45,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <vector>
 #include <string>
 
@@ -1257,6 +1260,8 @@ void testRealtime()
             head.set (true, 145.0, 0.0);
             p->setPlayHead (&head);
             setPlain (*p, "drm.seq.mode", 2.0f);   // Both
+            auto edited = vox::drums::factorySlot (1);
+            edited.resize (64, 4);
             juce::AudioBuffer<float> buffer (2, block);
             juce::MidiBuffer midi;
             midi.ensureSize (8192);
@@ -1271,6 +1276,14 @@ void testRealtime()
                     p->audition (b % padCount, 90);
                 if (b % 5 == 0)
                     setPlain (*p, "drm.p01.decay", 0.1f + 0.01f * static_cast<float> (b % 30));
+                if (b % 9 == 0)   // pattern edits and slot changes between blocks
+                {
+                    edited.cell (b % padCount, 0, b % edited.steps).on ^= true;
+                    edited.cell (b % padCount, 0, b % edited.steps).velocity = 100;
+                    edited.cell (b % padCount, 0, b % edited.steps).ratchet = static_cast<std::uint8_t> (1 + b % 8);
+                    p->patterns().setSlot (b % vox::drums::PatternStore::slotCount, edited);
+                    setPlain (*p, vox::drums::patternParameterId, static_cast<float> (b % vox::drums::PatternStore::slotCount));
+                }
                 voxProbeBegin();
                 p->processBlock (buffer, midi);
                 allocations += voxProbeEnd();
@@ -1283,6 +1296,620 @@ void testRealtime()
     else
         std::printf ("allocation probe unavailable on this platform\n");
 #endif
+}
+
+
+//==============================================================================
+// DRM-04: user patterns (DSEQ) and MIDI export.
+vox::drums::StoredPattern randomPattern (std::mt19937& random, int steps, int bars)
+{
+    vox::drums::StoredPattern p;
+    p.steps = static_cast<std::uint8_t> (steps);
+    p.bars = static_cast<std::uint8_t> (bars);
+    p.seed = static_cast<std::uint32_t> (random());
+    for (int lane = 0; lane < padCount; ++lane)
+        for (int bar = 0; bar < bars; ++bar)
+            for (int st = 0; st < steps; ++st)
+                if (random() % 6 == 0)
+                {
+                    auto& c = p.cell (lane, bar, st);
+                    c.on = true;
+                    c.accent = random() % 3 == 0;
+                    c.velocity = static_cast<std::uint8_t> (1 + random() % 127);
+                    c.probability = static_cast<std::uint8_t> (random() % 2 ? 100 : 1 + random() % 100);
+                    c.ratchet = static_cast<std::uint8_t> (1 + random() % 8);
+                    c.micro = static_cast<std::int8_t> (static_cast<int> (random() % 101) - 50);
+                }
+    return p;
+}
+
+void testPatterns()
+{
+    using vox::drums::PatternStore;
+    using vox::drums::StoredPattern;
+    // A new instrument holds the factory patterns.
+    {
+        auto p = makeProcessor();
+        bool factory = true;
+        for (int i = 0; i < PatternStore::slotCount; ++i)
+            factory = factory && p->patterns().slot (i) == vox::drums::factorySlot (i);
+        check (factory, "new instrument: slots hold the factory patterns");
+    }
+    // DSEQ round trip, byte-identical save back.
+    std::mt19937 random (404);
+    auto source = makeProcessor();
+    const int shapes[5][2] = { { 16, 1 }, { 32, 2 }, { 64, 4 }, { 16, 4 }, { 64, 1 } };
+    for (int i = 0; i < PatternStore::slotCount; ++i)
+        source->patterns().setSlot (i, randomPattern (random, shapes[i][0], shapes[i][1]));
+    const auto saved = stateOf (*source);
+    auto target = makeProcessor();
+    target->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (target->lastStateError().isEmpty(), "pattern state accepted");
+    bool equal = true;
+    for (int i = 0; i < PatternStore::slotCount; ++i)
+        equal = equal && target->patterns().slot (i) == source->patterns().slot (i);
+    check (equal, "every pattern slot is restored (16/32/64 steps, 1-4 bars, all step fields, seed)");
+    check (stateOf (*target) == saved, "restored patterns save back byte-identically");
+
+    // A document without DSEQ (DRM-01..03) restores the factory patterns.
+    {
+        auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
+                                             target->product().stateTag, 1).document;
+        std::erase_if (document.sections, [] (const auto& sec) { return sec.tag == vox::drums::sequenceSectionTag; });
+        const auto bytes = vox::preset::encode (document);
+        target->setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
+        check (target->lastStateError().isEmpty() && target->patterns().slot (2) == vox::drums::factorySlot (2),
+               "a document without patterns restores the factory patterns");
+    }
+
+    // Malformed DSEQ sections are rejected; nothing changes.
+    {
+        target->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        const auto before = stateOf (*target);
+        const auto good = PatternStore::encode (source->patterns().all()).data;
+        const auto with = [&] (std::vector<std::byte> data) {
+            auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
+                                                 target->product().stateTag, 1).document;
+            for (auto& sec : document.sections)
+                if (sec.tag == vox::drums::sequenceSectionTag)
+                    sec.data = std::move (data);
+            const auto bytes = vox::preset::encode (document);
+            return juce::MemoryBlock (bytes->data(), bytes->size());
+        };
+        const auto bad = [&] (std::vector<std::byte> data, const juce::String& what) {
+            const auto blob = with (std::move (data));
+            target->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+            check (target->lastStateError().isNotEmpty(), "DSEQ " + what + ": rejected");
+            check (stateOf (*target) == before, "DSEQ " + what + ": live state unchanged");
+        };
+        const auto edit = [&] (std::size_t at, std::uint8_t v) {
+            auto d = good;
+            d[at] = std::byte { v };
+            return d;
+        };
+        // Slot 1 header at 8: steps, bars, seed (4); first cell at 14.
+        bad ({}, "empty");
+        bad (edit (0, 2), "unknown version");
+        bad (edit (4, 4), "4 slots");
+        bad (edit (8, 24), "24 steps");
+        bad (edit (9, 0), "0 bars");
+        bad (edit (9, 5), "5 bars");
+        bad (edit (14, 4), "unknown flag");
+        bad (edit (15, 128), "velocity 128");
+        bad (edit (16, 0), "probability 0");
+        bad (edit (16, 101), "probability 101");
+        bad (edit (17, 0), "ratchet 0");
+        bad (edit (17, 9), "ratchet 9");
+        bad (edit (18, 51), "micro +51");
+        bad (edit (18, static_cast<std::uint8_t> (-51)), "micro -51");
+        {
+            auto d = good;
+            d.pop_back();
+            bad (d, "truncated");
+        }
+        {
+            auto d = good;
+            d.push_back (std::byte {});
+            bad (d, "trailing byte");
+        }
+    }
+
+    // The sequencer plays the edited slot: an empty slot is silent, one hit
+    // sounds, and an edit made while playing is heard.
+    {
+        auto p = makeProcessor();
+        TestPlayHead head;
+        head.set (true, 140.0, 0.0);
+        p->setPlayHead (&head);
+        setPlain (*p, "drm.seq.mode", 1.0f);
+        setPlain (*p, vox::drums::patternParameterId, 3.0f);
+        StoredPattern empty;
+        empty.steps = 16;
+        empty.bars = 1;
+        p->patterns().setSlot (3, empty);
+        check (render (*p, 200, 256, &head, 140.0, noMidi).peak <= 0.0, "an empty pattern slot is silent");
+        auto one = empty;
+        one.cell (12, 0, 0) = { true, false, 120 };   // pad 13 on beat 1
+        p->patterns().setSlot (3, one);
+        p->takeHitMask();
+        const auto r = render (*p, 200, 256, &head, 140.0, noMidi);
+        check (r.peak > 1.0e-3 && p->takeHitMask() == (1u << 12), "an edit while playing is heard on its pad");
+        p->setPlayHead (nullptr);
+    }
+
+    // MIDI export equals the canonical hit list (what plays from 0).
+    {
+        auto p = makeProcessor();
+        auto pattern = randomPattern (random, 32, 2);
+        p->patterns().setSlot (1, pattern);
+        setPlain (*p, "drm.seq.swing", 0.25f);
+        setPlain (*p, "drm.seq.accent", 0.6f);
+        setPlain (*p, "drm.seq.lane.p05", 0.0f);
+        auto ps = p->kitStore().pad (12);
+        ps.note = 77;
+        p->kitStore().setPad (12, ps);
+        const auto blob = p->exportPatternMidi (1, 3, 141.0);
+        juce::MidiFile file;
+        juce::MemoryInputStream in (blob, false);
+        check (file.readFrom (in) && file.getNumTracks() == 1 && file.getTimeFormat() == 960, "the export is a readable SMF, 960 ticks per quarter");
+        if (file.getNumTracks() == 1)
+        {
+            const auto& track = *file.getTrack (0);
+            double tempo = 0.0;
+            std::vector<std::tuple<long long, int, int>> ons;
+            std::map<int, long long> openSince;
+            bool overlaps = false;
+            for (int i = 0; i < track.getNumEvents(); ++i)
+            {
+                const auto& m = track.getEventPointer (i)->message;
+                const auto tick = static_cast<long long> (std::llround (m.getTimeStamp()));
+                if (m.isTempoMetaEvent())
+                    tempo = 60.0 / m.getTempoSecondsPerQuarterNote();
+                if (m.isNoteOn())
+                {
+                    overlaps = overlaps || openSince.count (m.getNoteNumber()) != 0;
+                    openSince[m.getNoteNumber()] = tick;
+                    check (m.getChannel() == 10, "notes on channel 10");
+                    ons.emplace_back (tick, m.getNoteNumber(), m.getVelocity());
+                }
+                else if (m.isNoteOff())
+                    openSince.erase (m.getNoteNumber());
+            }
+            check (std::abs (tempo - 141.0) < 0.01, "the export carries the tempo");
+            check (! overlaps && openSince.empty(), "every note ends before the same note starts again, and all end");
+            // Canonical list, 3 passes.
+            vox::drums::kit::StepContext ctx;
+            ctx.swing = 0.25;
+            ctx.accent = plainOf (*p, "drm.seq.accent");
+            ctx.laneMask = 0xffffu & ~(1u << 4);
+            std::vector<std::tuple<long long, int, int>> expected;
+            const auto view = pattern.view();
+            std::array<vox::drums::kit::ScheduledHit, vox::drums::kit::padCount * vox::drums::kit::maxRatchet> out {};
+            std::map<std::pair<long long, int>, int> merged;
+            for (std::int64_t g = 0; g < 32 * 2 * 3; ++g)
+            {
+                const int n = vox::drums::kit::stepHits (view, ctx, g, out.data());
+                for (int k = 0; k < n; ++k)
+                {
+                    const auto& h = out[static_cast<std::size_t> (k)];
+                    if (h.ppq < 0.0)
+                        continue;
+                    const int noteNumber = p->kitStore().pad (h.pad).note;
+                    auto& v = merged[{ std::llround (h.ppq * 960.0), noteNumber }];
+                    v = std::max (v, static_cast<int> (h.velocity));
+                }
+            }
+            for (const auto& [key, v] : merged)
+                expected.emplace_back (key.first, key.second, v);
+            auto got = ons;
+            std::sort (got.begin(), got.end());
+            check (expected.size() > 100, "the exported pattern has notes (" + juce::String (static_cast<int> (expected.size())) + ")");
+            check (got == expected, "exported Note Ons equal the canonical hits (tick, note, velocity): "
+                                        + juce::String (static_cast<int> (got.size())) + " vs " + juce::String (static_cast<int> (expected.size())));
+            bool pad13 = false, lane5 = false;
+            for (const auto& e : got)
+            {
+                pad13 = pad13 || std::get<1> (e) == 77;
+                lane5 = lane5 || std::get<1> (e) == vox::drums::defaultKit().pads[4].note;
+            }
+            check (pad13, "a pad's reassigned note is exported");
+            check (! lane5 || vox::drums::defaultKit().pads[4].note == 77, "a disabled lane is not exported");
+        }
+    }
+
+    // Review 6745483562: the editor never caches a generation newer than the
+    // cells it shows. The editor polls in the window between a write's start
+    // and its commit; the next poll must show the committed pattern.
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+        auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+        auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
+        check (panel != nullptr, "Drums panel for the pattern view");
+        if (panel != nullptr)
+        {
+            setPlain (*p, vox::drums::patternParameterId, 2.0f);
+            panel->pollForTesting();
+            check (panel->shownPattern() == p->patterns().slot (2), "the step view shows the selected slot");
+            auto edited = randomPattern (random, 32, 2);
+            p->patterns().beforeCommitForTesting = [panel] { panel->pollForTesting(); };
+            p->patterns().setSlot (2, edited);
+            p->patterns().beforeCommitForTesting = nullptr;
+            panel->pollForTesting();
+            check (panel->shownPattern() == edited, "an edit committed after a poll in its window is shown on the next poll (setSlot)");
+            auto all = PatternStore::factorySlots();
+            all[2] = randomPattern (random, 64, 1);
+            p->patterns().beforeCommitForTesting = [panel] { panel->pollForTesting(); };
+            p->patterns().setAll (all);
+            p->patterns().beforeCommitForTesting = nullptr;
+            panel->pollForTesting();
+            check (panel->shownPattern() == all[2], "a restore committed after a poll in its window is shown on the next poll (setAll)");
+        }
+        p->editorBeingDeleted (editor.get());
+    }
+    // Concurrent writers and readers: a slot read with its generation always
+    // holds the cells committed with that generation (the writer stores the
+    // generation it expects in the seed).
+    {
+        PatternStore store;
+        std::atomic<bool> stop { false };
+        std::atomic<int> torn { 0 }, reads { 0 };
+        std::thread writer ([&] {
+            StoredPattern p;
+            p.steps = 16;
+            p.bars = 1;
+            for (int i = 0; i < 20000; ++i)
+            {
+                p.seed = static_cast<std::uint32_t> (store.generation() + 1);   // single writer: the next generation
+                p.cell (i % padCount, 0, i % 16).on ^= true;
+                if (i % 7 == 0)
+                {
+                    auto all = store.all();
+                    for (auto& slot : all)
+                        slot = p;
+                    store.setAll (all);
+                }
+                else
+                    store.setSlot (1, p);
+            }
+            stop = true;
+        });
+        std::thread reader ([&] {
+            while (! stop)
+            {
+                std::uint64_t g = 0;
+                const auto p = store.slot (1, g);
+                if (g > 1 && p.seed != g)
+                    ++torn;
+                ++reads;
+            }
+        });
+        writer.join();
+        reader.join();
+        check (torn == 0 && reads > 0, "slot and generation are read together (" + juce::String (torn.load()) + " torn of "
+                                           + juce::String (reads.load()) + ")");
+    }
+
+    // Owner decision (#120): pads 9-16 export like pads 1-8. One hit per
+    // lane 9-16 at its own step; the export carries each pad's note (50-57
+    // by default) and nothing else, and those hits play (sequencer lights
+    // the same pads).
+    {
+        auto p = makeProcessor();
+        StoredPattern upper;
+        upper.steps = 16;
+        upper.bars = 1;
+        for (int pad = 8; pad < padCount; ++pad)
+            upper.cell (pad, 0, pad - 8) = { true, false, static_cast<std::uint8_t> (60 + pad) };
+        p->patterns().setSlot (4, upper);
+        const auto blob = p->exportPatternMidi (4, 1, 120.0);
+        juce::MidiFile file;
+        juce::MemoryInputStream in (blob, false);
+        std::vector<std::tuple<long long, int, int>> ons;
+        if (file.readFrom (in) && file.getNumTracks() == 1)
+            for (int i = 0; i < file.getTrack (0)->getNumEvents(); ++i)
+            {
+                const auto& m = file.getTrack (0)->getEventPointer (i)->message;
+                if (m.isNoteOn())
+                    ons.emplace_back (std::llround (m.getTimeStamp()), m.getNoteNumber(), m.getVelocity());
+            }
+        std::vector<std::tuple<long long, int, int>> expected;
+        for (int pad = 8; pad < padCount; ++pad)
+            expected.emplace_back (static_cast<long long> ((pad - 8) * 240), 50 + (pad - 8), 60 + pad);
+        check (ons == expected, "pads 9-16: each lane exports one note on its pad's note (50-57) at its step");
+        TestPlayHead head;
+        head.set (true, 120.0, 0.0);
+        p->setPlayHead (&head);
+        setPlain (*p, "drm.seq.mode", 1.0f);
+        setPlain (*p, vox::drums::patternParameterId, 4.0f);
+        p->takeHitMask();
+        const auto r = render (*p, 200, 256, &head, 120.0, noMidi);   // ~1.07 s: steps 0-7 (0.875 s) at 120 BPM, within one bar
+        check (r.peak > 1.0e-3 && p->takeHitMask() == 0xff00u, "pads 9-16: the exported lanes play on pads 9-16");
+        p->setPlayHead (nullptr);
+    }
+
+    // resize keeps what fits on the new grid.
+    {
+        StoredPattern p;
+        p.steps = 16;
+        p.bars = 2;
+        p.cell (0, 0, 4) = { true, true, 99 };
+        p.cell (1, 1, 15) = { true, false, 50 };
+        auto q = p;
+        q.resize (64, 4);
+        check (q.steps == 64 && q.bars == 4 && q.cell (0, 0, 16).on && q.cell (0, 0, 16).velocity == 99 && q.cell (1, 1, 60).on
+                   && q.cell (0, 2, 16).on && ! q.cell (1, 2, 60).on,
+               "16 -> 64 steps keeps positions; added bars repeat bar 1");
+        q.resize (16, 1);
+        check (q.steps == 16 && q.bars == 1 && q.cell (0, 0, 4).on && ! q.cell (1, 0, 15).on, "back to 16 steps x 1 bar");
+    }
+}
+
+
+//==============================================================================
+// Lead decision (#121, 6749717308): end-to-end parity of Internal playback
+// and the exported Standard MIDI File, on one saved and restored pattern and
+// kit. Playback is observed as the triggers the processor's engine actually
+// scheduled in each processBlock (not a second call of stepHits); the SMF
+// is parsed here byte by byte, independently of juce::MidiFile.
+//
+// Tolerance: a hit at musical position t plays at frame
+// ceil((t - blockPpq) * samplesPerPpq - 1e-6) of its block, i.e. up to one
+// frame late; the export writes round(t * 960). One frame is at most
+// 960 * bpm / 60 / rate = 0.06 tick here (133 BPM, 44.1 kHz), the tick
+// rounding 0.5 tick, and the block position (accumulated in double) adds
+// < 1e-6 tick: a played hit must be within 1 tick of its exported Note On.
+struct SmfEvent {
+    long long tick;
+    int status, data1, data2;
+};
+
+bool parseSmf (const juce::MemoryBlock& blob, int& division, std::vector<SmfEvent>& out, double& bpm)
+{
+    const auto* d = static_cast<const std::uint8_t*> (blob.getData());
+    const std::size_t n = blob.getSize();
+    std::size_t at = 0;
+    const auto be = [&] (int bytes) {
+        std::uint32_t v = 0;
+        for (int i = 0; i < bytes; ++i)
+            v = (v << 8) | (at < n ? d[at++] : 0u);
+        return v;
+    };
+    if (n < 22 || std::memcmp (d, "MThd", 4) != 0)
+        return false;
+    at = 4;
+    if (be (4) != 6 || be (2) != 0 || be (2) != 1)
+        return false;   // format 0, one track
+    division = static_cast<int> (be (2));
+    if (std::memcmp (d + at, "MTrk", 4) != 0)
+        return false;
+    at += 4;
+    const std::size_t end = at + be (4);
+    if (end != n)
+        return false;
+    long long tick = 0;
+    bool ended = false;
+    while (at < end)
+    {
+        std::uint32_t delta = 0;
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto b = d[at++];
+            delta = (delta << 7) | (b & 0x7fu);
+            if ((b & 0x80u) == 0)
+                break;
+        }
+        tick += delta;
+        const int status = d[at++];
+        if (status == 0xff)
+        {
+            const int type = d[at++];
+            const int len = d[at++];
+            if (type == 0x51 && len == 3)
+                bpm = 60000000.0 / static_cast<double> ((d[at] << 16) | (d[at + 1] << 8) | d[at + 2]);
+            if (type == 0x2f)
+                ended = true;
+            at += static_cast<std::size_t> (len);
+            continue;
+        }
+        if ((status & 0xf0) != 0x80 && (status & 0xf0) != 0x90)
+            return false;   // only notes are expected
+        out.push_back ({ tick, status, d[at], d[at + 1] });
+        at += 2;
+    }
+    return ended && at == end;
+}
+
+void testExportPlaybackParity()
+{
+    using vox::drums::StoredPattern;
+    std::mt19937 random (6749717);
+    // The saved project: a 32-step, 2-bar pattern with every step feature,
+    // swing, accent, a disabled lane and remapped notes on all 16 pads.
+    juce::MemoryBlock project;
+    StoredPattern pattern;
+    {
+        auto source = makeProcessor();
+        pattern.steps = 32;
+        pattern.bars = 2;
+        pattern.seed = 4242;
+        bool microPlus = false, microMinus = false, ratchets = false, chance = false, accents = false;
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int bar = 0; bar < 2; ++bar)
+                for (int st = 0; st < 32; ++st)
+                    if (random() % 5 == 0)
+                    {
+                        auto& c = pattern.cell (lane, bar, st);
+                        c.on = true;
+                        c.velocity = static_cast<std::uint8_t> (20 + random() % 100);
+                        c.accent = random() % 4 == 0;
+                        c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 20 + random() % 70 : 100);
+                        c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 2 + random() % 7 : 1);
+                        c.micro = static_cast<std::int8_t> (random() % 3 == 0 ? static_cast<int> (random() % 101) - 50 : 0);
+                        microPlus = microPlus || c.micro > 0;
+                        microMinus = microMinus || c.micro < 0;
+                        ratchets = ratchets || c.ratchet > 1;
+                        chance = chance || c.probability < 100;
+                        accents = accents || c.accent;
+                    }
+        check (microPlus && microMinus && ratchets && chance && accents, "parity pattern uses +/- micro, ratchets, probability and accents");
+        source->patterns().setSlot (3, pattern);
+        for (int pad = 0; pad < padCount; ++pad)
+        {
+            auto ps = source->kitStore().pad (pad);
+            ps.note = static_cast<std::uint8_t> (90 - pad * 2);   // remapped, unique
+            ps.polyphony = 8;
+            source->kitStore().setPad (pad, ps);
+        }
+        setPlain (*source, "drm.seq.swing", 0.27f);
+        setPlain (*source, "drm.seq.accent", 0.65f);
+        setPlain (*source, "drm.seq.lane.p06", 0.0f);   // disabled lane
+        setPlain (*source, "drm.seq.mode", 1.0f);       // Internal
+        setPlain (*source, vox::drums::patternParameterId, 3.0f);
+        project = stateOf (*source);
+    }
+    const double bpm = 133.0;
+    const int passes = 2;
+    const double patternPpq = 2 * 4.0;
+    bool audible = false;
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        for (const int block : { 64, 333, 512 })
+        {
+            const juce::String label = juce::String (static_cast<int> (rate)) + " Hz / " + juce::String (block) + ": ";
+            auto p = makeProcessor (rate, block);
+            p->setStateInformation (project.getData(), static_cast<int> (project.getSize()));
+            check (p->lastStateError().isEmpty() && p->patterns().slot (3) == pattern, label + "the saved pattern is restored");
+            // Export from the restored instrument.
+            int division = 0;
+            double fileBpm = 0.0;
+            std::vector<SmfEvent> smf;
+            const bool parsed = parseSmf (p->exportPatternMidi (3, passes, bpm), division, smf, fileBpm);
+            check (parsed && division == 960 && std::abs (fileBpm - bpm) < 0.01, label + "the export is a format-0 SMF, 960 tpq, at the tempo");
+            if (! parsed)
+                continue;
+            // SMF order and note pairing.
+            bool ordered = true, overlap = false, offsFirst = true, channel = true;
+            std::map<int, long long> open;
+            for (std::size_t i = 0; i < smf.size(); ++i)
+            {
+                const auto& e = smf[i];
+                ordered = ordered && (i == 0 || smf[i - 1].tick <= e.tick);
+                channel = channel && (e.status & 0x0f) == 9;
+                const bool on = (e.status & 0xf0) == 0x90 && e.data2 > 0;
+                if (on)
+                {
+                    overlap = overlap || open.count (e.data1) != 0;
+                    open[e.data1] = e.tick;
+                }
+                else
+                {
+                    offsFirst = offsFirst && ! (i > 0 && smf[i - 1].tick == e.tick && (smf[i - 1].status & 0xf0) == 0x90);
+                    open.erase (e.data1);
+                }
+            }
+            check (ordered && offsFirst && channel, label + "events in time order, Note Offs before Note Ons at a tick, channel 10");
+            check (! overlap && open.empty(), label + "no overlapping same-note pairs; every note ends");
+            // Exported Note Ons as (tick, pad, velocity).
+            std::map<int, int> padOfNote;
+            for (int pad = 0; pad < padCount; ++pad)
+                padOfNote[p->kitStore().pad (pad).note] = pad;
+            std::vector<std::tuple<long long, int, int>> exported;
+            for (const auto& e : smf)
+                if ((e.status & 0xf0) == 0x90 && e.data2 > 0)
+                    exported.emplace_back (e.tick, padOfNote.count (e.data1) ? padOfNote[e.data1] : -1, e.data2);
+
+            // Play: passes from 0, then a restart (loop back to 0) for one
+            // more pass; the restart must replay pass 1 identically.
+            TestPlayHead head;
+            p->setPlayHead (&head);
+            const double samplesPerPpq = 60.0 * rate / bpm;
+            const auto playSegment = [&] (double fromPpq, double lengthPpq, double& peak) {
+                std::map<std::pair<long long, int>, int> hits;   // (frame from fromPpq, pad) -> velocity
+                juce::AudioBuffer<float> buffer (2, block);
+                double ppq = fromPpq;
+                long long frame = 0;
+                while (ppq < fromPpq + lengthPpq)
+                {
+                    head.set (true, bpm, ppq);
+                    juce::MidiBuffer midi;
+                    buffer.clear();
+                    p->processBlock (buffer, midi);
+                    peak = std::max (peak, static_cast<double> (buffer.getMagnitude (0, block)));
+                    const auto& engine = p->engineForTesting();
+                    for (int k = 0; k < engine.scheduledCount(); ++k)
+                    {
+                        std::uint32_t offset;
+                        std::uint8_t pad, velocity;
+                        engine.scheduled (k, offset, pad, velocity);
+                        // One trigger per pad and frame (the engine merges coincident hits).
+                        auto& v = hits[{ frame + offset, pad }];
+                        v = std::max (v, static_cast<int> (velocity));
+                    }
+                    ppq += block / samplesPerPpq;
+                    frame += block;
+                }
+                return hits;
+            };
+            double peak = 0.0;
+            const auto first = playSegment (0.0, passes * patternPpq, peak);
+            const auto again = playSegment (0.0, patternPpq, peak);
+            p->setPlayHead (nullptr);
+            audible = audible || peak > 1.0e-3;
+
+            // Compare with the export: every played trigger within 1 tick of
+            // a Note On of the same pad and velocity, one to one.
+            const auto compare = [&] (const std::map<std::pair<long long, int>, int>& played, double lengthPpq, const juce::String& what) {
+                // The window: both sides up to 2 ticks before the end (the
+                // last block runs past the end into the next pass, which an
+                // export of N passes does not contain).
+                const double limit = lengthPpq * 960.0 - 2.0;
+                std::vector<std::tuple<long long, int, int>> want;
+                for (const auto& e : exported)
+                    if (static_cast<double> (std::get<0> (e)) < limit)
+                        want.push_back (e);
+                std::vector<bool> used (want.size(), false);
+                int matched = 0, unmatched = 0;
+                for (const auto& [key, velocity] : played)
+                {
+                    const double tick = static_cast<double> (key.first) / samplesPerPpq * 960.0;
+                    if (tick >= limit + 1.0)
+                        continue;
+                    bool found = false;
+                    for (std::size_t i = 0; i < want.size() && ! found; ++i)
+                        if (! used[i] && std::get<1> (want[i]) == key.second && std::get<2> (want[i]) == velocity
+                            && std::abs (static_cast<double> (std::get<0> (want[i])) - tick) <= 1.0)
+                        {
+                            used[i] = true;
+                            found = true;
+                        }
+                    matched += found ? 1 : 0;
+                    unmatched += found ? 0 : 1;
+                    if (! found && std::getenv ("VOX_PARITY_DEBUG") != nullptr)
+                    {
+                        std::printf ("  unmatched %s: tick %.3f pad %d vel %d; exported near:", what.toRawUTF8(), tick, key.second, velocity);
+                        for (const auto& w : want)
+                            if (std::abs (static_cast<double> (std::get<0> (w)) - tick) < 40.0)
+                                std::printf (" (%lld p%d v%d)", std::get<0> (w), std::get<1> (w), std::get<2> (w));
+                        std::printf ("\n");
+                    }
+                }
+                const auto missing = std::count (used.begin(), used.end(), false);
+                check (matched > 100 && unmatched == 0 && missing == 0,
+                       label + what + ": playback triggers equal exported Note Ons (" + juce::String (matched) + " matched, "
+                           + juce::String (unmatched) + " played but not exported, " + juce::String (static_cast<int> (missing))
+                           + " exported but not played)");
+            };
+            compare (first, passes * patternPpq, "2 passes from 0");
+            compare (again, patternPpq, "restart at 0");
+            bool lane6 = false, upper = false;
+            for (const auto& e : exported)
+            {
+                lane6 = lane6 || std::get<1> (e) == 5;
+                upper = upper || std::get<1> (e) >= 8;
+            }
+            check (! lane6 && upper, label + "the disabled lane is absent; pads 9-16 are exported on their remapped notes");
+        }
+    check (audible, "the parity kit is audible");
 }
 
 } // namespace
@@ -1301,6 +1928,8 @@ int main (int argc, char** argv)
     testSound();
     testState();
     testStateReentrancy();
+    testPatterns();
+    testExportPlaybackParity();
     testRealtime();
     if (failures == 0)
         std::printf ("VOX Drums product tests passed\n");

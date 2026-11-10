@@ -11,6 +11,7 @@
 
 #include "VoxComponents.h"
 #include "engine/KitEngine.h"
+#include "PatternStore.h"
 
 #include <array>
 #include <functional>
@@ -62,6 +63,7 @@ public:
     juce::String sampleStatus() const;
     bool bodyVisible() const;
     void pollForTesting() { timerCallback(); }   // one editor timer tick
+    const StoredPattern& shownPattern() const;    // the step view's pattern (tests)
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;

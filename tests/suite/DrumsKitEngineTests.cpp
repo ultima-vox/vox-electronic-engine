@@ -8,7 +8,11 @@
 //  - sample players A and B: A only, velocity switch at the split, mix;
 //    usage reports every held buffer;
 //  - block-size invariance (bit-identical for 64 / 512 / 20000 frames);
-//  - process() allocates nothing (allocation probe).
+//  - process() allocates nothing (allocation probe);
+//  - DRM-04: the step rule (ratchet, microtiming, swing, accent, lanes,
+//    probability by seed and position, 1/64 grid) and that the sequencer
+//    plays exactly the canonical hit list (no miss, no double) across block
+//    sizes, rates and a loop back.
 #include "engine/KitEngine.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -19,6 +23,9 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <set>
+#include <tuple>
 #include <random>
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +45,11 @@ void check (bool ok, const std::string& what)
         std::printf ("FAIL [kit engine]: %s\n", what.c_str());
         ++failures;
     }
+}
+
+bool juce_exact (double a, double b)
+{
+    return std::memcmp (&a, &b, sizeof a) == 0;
 }
 
 kit::Event note (std::uint32_t offset, int noteNumber, int velocity)
@@ -476,6 +488,195 @@ void testRealtime()
 
 } // namespace
 
+
+//==============================================================================
+void testStepRules()
+{
+    std::vector<kit::PatternStep> cells (16 * 16);
+    const auto at = [&] (int lane, int st) -> kit::PatternStep& { return cells[static_cast<std::size_t> (lane * 16 + st)]; };
+    at (0, 0) = { true, false, 100 };
+    at (0, 0).ratchet = 4;
+    at (1, 1) = { true, false, 90 };
+    at (1, 1).micro = 50;
+    at (2, 1) = { true, false, 80 };
+    at (3, 2) = { true, true, 60 };
+    at (4, 2) = { true, false, 70 };
+    at (5, 3) = { true, false, 70 };
+    at (5, 3).micro = -50;
+    kit::Pattern pattern { 16, 16, 1, 0, cells.data() };
+    kit::StepContext ctx;
+    ctx.swing = 0.0;
+    ctx.accent = 0.5;
+    std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> out {};
+    int n = kit::stepHits (pattern, ctx, 0, out.data());
+    check (n == 4 && juce_exact (out[0].ppq, 0.0) && std::abs (out[1].ppq - 0.0625) < 1e-12 && std::abs (out[3].ppq - 0.1875) < 1e-12
+               && out[3].pad == 0 && out[3].velocity == 100,
+           "ratchet 4: four hits evenly in the step");
+    n = kit::stepHits (pattern, ctx, 1, out.data());
+    check (n == 2 && out[0].pad == 1 && std::abs (out[0].ppq - 0.375) < 1e-12 && out[1].pad == 2 && juce_exact (out[1].ppq, 0.25),
+           "micro +50 % moves a hit half a step later");
+    ctx.swing = 0.3;
+    n = kit::stepHits (pattern, ctx, 1, out.data());
+    check (n == 2 && std::abs (out[1].ppq - (0.25 + 0.3 * 0.25)) < 1e-12 && std::abs (out[0].ppq - (0.25 + 0.075 + 0.125)) < 1e-12,
+           "swing delays odd steps, micro adds to it");
+    n = kit::stepHits (pattern, ctx, 2, out.data());
+    check (n == 2 && out[0].velocity == 94 && out[1].velocity == 70, "accent raises velocity towards 127 by the accent amount");
+    ctx.laneMask = ~(1u << 3);
+    n = kit::stepHits (pattern, ctx, 2, out.data());
+    check (n == 1 && out[0].pad == 4, "a disabled lane plays nothing");
+    ctx.laneMask = 0xffffu;
+    n = kit::stepHits (pattern, ctx, 3, out.data());
+    check (n == 1 && std::abs (out[0].ppq - (0.75 + 0.3 * 0.25 - 0.125)) < 1e-12, "micro -50 % moves a hit half a step earlier");
+    check (kit::stepHits (pattern, ctx, -1, out.data()) == 0, "negative steps have no hits");
+
+    // Probability: deterministic per seed and absolute position, about the
+    // stated share, different seeds decide differently.
+    std::vector<kit::PatternStep> pc (16);
+    pc[0] = { true, false, 100 };
+    pc[0].probability = 30;
+    kit::Pattern prob { 1, 16, 1, 0, pc.data(), 7 };
+    int played = 0, same = 0, differ = 0;
+    kit::Pattern other = prob;
+    other.seed = 8;
+    for (std::int64_t pass = 0; pass < 4000; ++pass)
+    {
+        const std::int64_t g = pass * 16;
+        const int a = kit::stepHits (prob, ctx, g, out.data());
+        const int b = kit::stepHits (prob, ctx, g, out.data());
+        const int c = kit::stepHits (other, ctx, g, out.data());
+        played += a;
+        same += a == b ? 1 : 0;
+        differ += a != c ? 1 : 0;
+    }
+    check (same == 4000, "probability is deterministic for a seed and position");
+    check (played > 1100 && played < 1300, "probability 30 % plays about 30 % of passes (" + std::to_string (played) + " / 4000)");
+    check (differ > 500, "another seed decides differently");
+
+    // 1/64 grid.
+    kit::Pattern fine { 16, 64, 1, 4, cells.data() };
+    check (juce_exact (kit::stepLength (fine), 0.0625) && juce_exact (kit::stepLength (pattern), 0.25), "step lengths 1/64 and 1/16");
+}
+
+// The sequencer plays exactly the canonical hit list: every hit of
+// stepHits() once, at its sample (legacy rounding), none twice, across
+// rates, block sizes (also odd) and a loop back.
+void testSchedulerEqualsCanonical()
+{
+    std::mt19937 random (2024);
+    std::vector<kit::PatternStep> cells (16 * 32 * 2);
+    for (auto& c : cells)
+        if (random() % 5 == 0)
+        {
+            c.on = true;
+            c.velocity = static_cast<std::uint8_t> (1 + random() % 127);
+            c.accent = random() % 4 == 0;
+            c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 1 + random() % 100 : 100);
+            c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 1 + random() % 8 : 1);
+            c.micro = static_cast<std::int8_t> (random() % 3 == 0 ? static_cast<int> (random() % 101) - 50 : 0);
+        }
+    const kit::Pattern pattern { 16, 32, 2, 2, cells.data(), 1234 };
+    auto settings = kit::legacyKit();
+    settings.sequencerMode = 1;
+    settings.swing = 0.2f;
+    settings.accent = 0.7f;
+    settings.pads[6].laneOn = false;
+    kit::StepContext ctx;
+    ctx.swing = settings.swing;
+    ctx.accent = settings.accent;
+    ctx.laneMask = 0xffffu & ~(1u << 6);
+    const double bpm = 138.0;
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        for (const int block : { 64, 333, 512, 4096 })
+        {
+            kit::KitEngine engine;
+            engine.prepare (rate);
+            const double spp = 60.0 * rate / bpm;   // samples per quarter
+            // Played: (pad, velocity) -> global sample indices.
+            std::multiset<std::tuple<long long, int, int>> played;
+            kit::Transport tr;
+            tr.playing = tr.hasTempo = tr.hasPpq = true;
+            tr.bpm = bpm;
+            double ppq = 0.0;
+            long long sample = 0;
+            const double jumpAt = 9.3, jumpTo = 2.6, end = 14.0;
+            long long jumpSample = -1;
+            std::vector<float> l (static_cast<std::size_t> (block)), r (static_cast<std::size_t> (block));
+            while (ppq < end)
+            {
+                if (jumpSample < 0 && ppq >= jumpAt)
+                {
+                    jumpSample = sample;
+                    ppq = jumpTo;
+                }
+                tr.ppq = ppq;
+                kit::Outputs o { l.data(), r.data(), nullptr };
+                engine.process (settings, o, static_cast<std::uint32_t> (block), nullptr, 0, tr, &pattern, nullptr, false);
+                for (int i = 0; i < engine.scheduledCount(); ++i)
+                {
+                    std::uint32_t off;
+                    std::uint8_t pad, vel;
+                    engine.scheduled (i, off, pad, vel);
+                    played.insert ({ sample + off, pad, vel });
+                }
+                ppq += block / spp;
+                sample += block;
+            }
+            // Canonical: segment 1 [0, ppqAtJump), segment 2 from jumpTo on.
+            const double ppqAtJump = static_cast<double> (jumpSample) / spp;
+            std::multiset<std::tuple<long long, int, int>> canonical;
+            std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> out {};
+            long long ambiguous = 0;
+            const auto add = [&] (double from, double to, long long base, double origin) {
+                for (std::int64_t g = 0; g * kit::stepLength (pattern) < to + 1.0; ++g)
+                {
+                    const int n = kit::stepHits (pattern, ctx, g, out.data());
+                    for (int k = 0; k < n; ++k)
+                    {
+                        const auto& h = out[static_cast<std::size_t> (k)];
+                        if (h.ppq < from || h.ppq >= to)
+                            continue;
+                        const double exact = (h.ppq - origin) * spp;
+                        // Block-wise rounding can move a hit right at a
+                        // segment edge across it: such hits are skipped.
+                        if (h.ppq - from < 2.0 / spp || to - h.ppq < 2.0 / spp)
+                        {
+                            ++ambiguous;
+                            continue;
+                        }
+                        canonical.insert ({ base + static_cast<long long> (std::ceil (exact - 1e-6)), h.pad, h.velocity });
+                    }
+                }
+            };
+            add (0.0, ppqAtJump, 0, 0.0);
+            add (jumpTo, jumpTo + (static_cast<double> (sample - jumpSample) / spp), jumpSample, jumpTo);
+            // Compare, allowing 1 sample of accumulated position rounding.
+            std::size_t matched = 0;
+            auto pool = played;
+            for (const auto& c : canonical)
+            {
+                bool found = false;
+                for (long long d : { 0LL, -1LL, 1LL })
+                {
+                    auto it = pool.find ({ std::get<0> (c) + d, std::get<1> (c), std::get<2> (c) });
+                    if (it != pool.end())
+                    {
+                        pool.erase (it);
+                        found = true;
+                        break;
+                    }
+                }
+                matched += found ? 1 : 0;
+            }
+            const std::string label = std::to_string (static_cast<int> (rate)) + " Hz / " + std::to_string (block);
+            check (canonical.size() > 300, label + ": the pattern has hits (" + std::to_string (canonical.size()) + ")");
+            check (matched == canonical.size(), label + ": every canonical hit played at its sample (" + std::to_string (matched) + " / "
+                                                    + std::to_string (canonical.size()) + ")");
+            check (static_cast<long long> (pool.size()) <= ambiguous,
+                   label + ": nothing played twice or outside the list (" + std::to_string (pool.size()) + " extra, "
+                       + std::to_string (ambiguous) + " edge hits)");
+        }
+}
+
 int main()
 {
     testModels();
@@ -485,6 +686,8 @@ int main()
     testBlockInvariance();
     testInvalidSettings();
     testRealtime();
+    testStepRules();
+    testSchedulerEqualsCanonical();
     if (failures == 0)
         std::printf ("VOX Drums kit engine tests passed\n");
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -4,6 +4,7 @@
 
 #include "DrumsParameters.h"
 #include "KitStore.h"
+#include "PatternStore.h"
 #include "SampleLibrary.h"
 #include "engine/KitEngine.h"
 
@@ -35,6 +36,15 @@ public:
     juce::AudioProcessorValueTreeState& state() noexcept { return parameters_; }
     SampleLibrary& samples() noexcept { return samples_; }
     KitStore& kitStore() noexcept { return store_; }
+    PatternStore& patterns() noexcept { return patternStore_; }
+    // Tests: the engine, to read what the last processBlock triggered
+    // (same thread as processBlock, after it returns).
+    const kit::KitEngine& engineForTesting() const noexcept { return engine_; }
+
+    // Message thread: pattern slot `slot` as a Standard MIDI File with the
+    // current swing, accent, lanes and pad notes (what the sequencer plays
+    // from song position 0), `passes` cycles at `bpm`.
+    juce::MemoryBlock exportPatternMidi (int slot, int passes, double bpm);
 
     // Message thread: plays pad `pad` at the start of the next block.
     // Returns false when the queue is full.
@@ -58,7 +68,7 @@ protected:
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     bool isProductSection (preset::Tag tag) const override
     {
-        return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag;
+        return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag;
     }
 
 private:
@@ -83,8 +93,8 @@ private:
     std::atomic<float>* pattern_ = nullptr;
     kit::KitSettings live_;                    // audio thread
     std::vector<kit::Event> events_;
-    std::array<std::array<kit::PatternStep, 8 * 4 * 16>, kit::factoryPatternCount> patternCells_ {};
-    std::array<kit::Pattern, kit::factoryPatternCount> patterns_ {};
+    PatternStore patternStore_;
+    PatternStore::Live livePattern_;   // audio thread
 
     struct Audition { std::uint8_t pad = 0, velocity = 0; };
     juce::AbstractFifo auditionFifo_ { 64 };
