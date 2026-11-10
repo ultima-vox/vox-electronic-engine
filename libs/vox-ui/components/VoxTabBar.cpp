@@ -91,7 +91,7 @@ void VoxTabBar::paint (juce::Graphics& g)
         auto fill = active ? tokens::colour::accent : tokens::colour::control;
         auto border = active ? tokens::colour::accent
                              : (hovered ? tokens::colour::accentDim : tokens::colour::border);
-        auto text = active ? tokens::colour::background
+        auto text = active ? tokens::colour::text
                            : (hovered ? tokens::colour::text : tokens::colour::textSecondary);
 
         if (! tab.enabled)
@@ -101,11 +101,22 @@ void VoxTabBar::paint (juce::Graphics& g)
             text = tokens::colour::textMuted;
         }
 
-        g.setColour (fill);
+        if (active)
+            g.setGradientFill (juce::ColourGradient (tokens::colour::accent.withAlpha (0.95f),
+                                                     bounds.getX(), bounds.getY(),
+                                                     tokens::colour::accentDim,
+                                                     bounds.getX(), bounds.getBottom(), false));
+        else
+            g.setGradientFill (juce::ColourGradient (tokens::colour::panelRaised, bounds.getX(),
+                                                     bounds.getY(), fill, bounds.getX(),
+                                                     bounds.getBottom(), false));
+        if (! tab.enabled)
+            g.setOpacity (0.35f);
         g.fillRoundedRectangle (bounds, tokens::radius::small);
+        g.setOpacity (1.0f);
         g.setColour (border);
         g.drawRoundedRectangle (bounds, tokens::radius::small, 1.0f);
-        g.setFont (typography::sectionTitle());
+        g.setFont (typography::sectionTitle().withExtraKerningFactor (0.06f));
         g.setColour (text);
         g.drawText (tab.title.toUpperCase(), bounds.toNearestInt(),
                     juce::Justification::centred, true);

@@ -1,0 +1,116 @@
+name: suite
+
+# ULTIMA VOX MUSIC standalone plugins (FOUND-01). Builds only the suite
+# (VOX_BUILD_LEGACY=OFF), runs the CTest label "suite", runs the Steinberg
+# VST3 validator on all three bundles and publishes the bundles with SHA-256.
+# The legacy engine keeps its own workflow (build.yml), unchanged.
+on:
+  pull_request:
+  push:
+    branches: [next/standalone-suite]
+  workflow_dispatch:
+
+jobs:
+  windows-suite:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 120
+    env:
+      CMAKE_GENERATOR: Visual Studio 17 2022
+      # Reviewed dependency pins. A tag can move; these commits cannot.
+      JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8   # JUCE 9.0.1
+      VST3SDK_REPOSITORY: https://github.com/steinbergmedia/vst3sdk.git
+      VST3SDK_TAG: v3.8.0_build_66                             # SDK bundled by JUCE 9.0.1
+      VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Infrastructure: FetchContent's JUCE clone broke off repeatedly on this
+      # runner. Use verified copies of the pinned commits from the runner tool
+      # cache (fetched with retries only when missing); CMake re-verifies JUCE.
+      - name: Provide verified JUCE and VST3 SDK copies
+        shell: powershell
+        run: |
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository $env:JUCE_REPOSITORY -Ref 9.0.1 -Commit $env:JUCE_COMMIT
+          if (-not $juce) { exit 1 }
+          $sdk = & .github\scripts\Use-PinnedCheckout.ps1 -Name vst3sdk -Repository $env:VST3SDK_REPOSITORY -Ref $env:VST3SDK_TAG -Commit $env:VST3SDK_COMMIT -Submodules base,pluginterfaces,public.sdk,cmake
+          if (-not $sdk) { exit 1 }
+          "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VST3SDK_DIR=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build the Steinberg VST3 validator (cached per SDK commit)
+        shell: powershell
+        run: |
+          $build = Join-Path $env:RUNNER_TOOL_CACHE "vox-pinned\vst3sdk-build-$($env:VST3SDK_COMMIT.Substring(0, 12))"
+          $validator = Join-Path $build 'bin\Release\validator.exe'
+          if (-not (Test-Path $validator)) {
+            cmake -S $env:VST3SDK_DIR -B $build -A x64 -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build $build --config Release --target validator --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          "VST3_VALIDATOR=$validator" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure (suite only)
+        shell: powershell
+        run: |
+          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        run: cmake --build build-suite --config Release --clean-first --parallel
+
+      - name: Test (label suite)
+        shell: powershell
+        run: |
+          # Golden renders are also written as WAV files for listening (artifact).
+          New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
+          $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          ctest --test-dir build-suite -C Release -L suite --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Steinberg VST3 validator
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\validator | Out-Null
+          $failed = @()
+          foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory) {
+            $log = Join-Path 'suite-out\validator' "$($bundle.BaseName).txt"
+            & $env:VST3_VALIDATOR $bundle.FullName *> $log
+            $code = $LASTEXITCODE
+            Get-Content $log | Select-String -Pattern 'Result:|ERROR' | ForEach-Object { "$($bundle.Name): $_" }
+            if ($code -ne 0) { $failed += $bundle.Name }
+          }
+          if ($failed.Count -gt 0) { throw "VST3 validator failed: $($failed -join ', ')" }
+
+      - name: Record binaries and environment
+        if: always()
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\VST3 | Out-Null
+          $lines = @(
+            "Commit: $env:GITHUB_SHA",
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
+            "Runner: $env:RUNNER_NAME",
+            "JUCE: $env:JUCE_COMMIT",
+            "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
+          )
+          foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory -ErrorAction SilentlyContinue) {
+            Copy-Item -Recurse -Force $bundle.FullName suite-out\VST3\
+            foreach ($file in Get-ChildItem $bundle.FullName -Recurse -File) {
+              $relative = $file.FullName.Substring($bundle.Parent.FullName.Length + 1)
+              $lines += "SHA-256 $relative : $((Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower())"
+            }
+          }
+          $lines | Set-Content suite-out\manifest.txt
+          Get-Content suite-out\manifest.txt
+
+      - name: Upload suite bundles and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-Suite-VST3
+          path: suite-out
+          if-no-files-found: error

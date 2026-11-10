@@ -1,0 +1,188 @@
+index,id,name,unit,group,type,choices,minimum,maximum,default,step,poolIndex,flags
+0,kick.level,"Kick Level","","Kick",0,"",0,1,0.85,0,0,3
+1,kick.tune,"Kick Tune","st","Kick",0,"",-12,12,0,0,1,3
+2,kick.decay,"Kick Decay","s","Kick",0,"",0.08,1.5,0.38,0,2,3
+3,kick.pan,"Kick Pan","","Kick",0,"",-1,1,0,0,3,3
+4,kick.character,"Kick Click","","Kick",0,"",0,1,0.5,0,4,3
+5,snare.level,"Snare Level","","Snare",0,"",0,1,0.6,0,5,3
+6,snare.tune,"Snare Tune","st","Snare",0,"",-12,12,0,0,6,3
+7,snare.decay,"Snare Decay","s","Snare",0,"",0.05,1,0.25,0,7,3
+8,snare.pan,"Snare Pan","","Snare",0,"",-1,1,0,0,8,3
+9,snare.character,"Snare Snappy","","Snare",0,"",0,1,0.6,0,9,3
+10,clap.level,"Clap Level","","Clap",0,"",0,1,0.55,0,10,3
+11,clap.tune,"Clap Tune","st","Clap",0,"",-12,12,0,0,11,3
+12,clap.decay,"Clap Decay","s","Clap",0,"",0.08,1.5,0.35,0,12,3
+13,clap.pan,"Clap Pan","","Clap",0,"",-1,1,-0.1,0,13,3
+14,clap.character,"Clap Tone","","Clap",0,"",0,1,0.5,0,14,3
+15,chat.level,"Closed Hat Level","","Closed Hat",0,"",0,1,0.5,0,15,3
+16,chat.tune,"Closed Hat Tune","st","Closed Hat",0,"",-12,12,0,0,16,3
+17,chat.decay,"Closed Hat Decay","s","Closed Hat",0,"",0.02,0.5,0.07,0,17,3
+18,chat.pan,"Closed Hat Pan","","Closed Hat",0,"",-1,1,0.2,0,18,3
+19,chat.character,"Closed Hat Tone","","Closed Hat",0,"",0,1,0.6,0,19,3
+20,ohat.level,"Open Hat Level","","Open Hat",0,"",0,1,0.45,0,20,3
+21,ohat.tune,"Open Hat Tune","st","Open Hat",0,"",-12,12,0,0,21,3
+22,ohat.decay,"Open Hat Decay","s","Open Hat",0,"",0.1,3,0.45,0,22,3
+23,ohat.pan,"Open Hat Pan","","Open Hat",0,"",-1,1,0.2,0,23,3
+24,ohat.character,"Open Hat Tone","","Open Hat",0,"",0,1,0.6,0,24,3
+25,tom.level,"Tom Level","","Tom",0,"",0,1,0.6,0,25,3
+26,tom.tune,"Tom Tune","st","Tom",0,"",-12,12,0,0,26,3
+27,tom.decay,"Tom Decay","s","Tom",0,"",0.08,2,0.5,0,27,3
+28,tom.pan,"Tom Pan","","Tom",0,"",-1,1,-0.25,0,28,3
+29,tom.character,"Tom Sweep","","Tom",0,"",0,1,0.4,0,29,3
+30,rim.level,"Rim Level","","Rim",0,"",0,1,0.5,0,30,3
+31,rim.tune,"Rim Tune","st","Rim",0,"",-12,12,0,0,31,3
+32,rim.decay,"Rim Decay","s","Rim",0,"",0.02,0.5,0.08,0,32,3
+33,rim.pan,"Rim Pan","","Rim",0,"",-1,1,0.3,0,33,3
+34,rim.character,"Rim Tone","","Rim",0,"",0,1,0.5,0,34,3
+35,cymbal.level,"Cymbal Level","","Cymbal",0,"",0,1,0.4,0,35,3
+36,cymbal.tune,"Cymbal Tune","st","Cymbal",0,"",-12,12,0,0,36,3
+37,cymbal.decay,"Cymbal Decay","s","Cymbal",0,"",0.3,6,1.8,0,37,3
+38,cymbal.pan,"Cymbal Pan","","Cymbal",0,"",-1,1,-0.3,0,38,3
+39,cymbal.character,"Cymbal Tone","","Cymbal",0,"",0,1,0.5,0,39,3
+40,kit.volume,"Kit Volume","","Kit",0,"",0,1,0.6,0,40,3
+41,kick.pitch_amount,"Kick Pitch Env","st","Kick",0,"",0,48,24,0,41,3
+42,kick.pitch_decay,"Kick Pitch Decay","s","Kick",0,"",0.005,0.2,0.035,0,42,3
+43,kick.drive,"Kick Drive","","Kick",0,"",1,8,1.6,0,43,3
+44,kick.sub,"Kick Sub","","Kick",0,"",0,1,0.3,0,44,3
+45,kick.tail,"Kick Tail","s","Kick",0,"",0.03,1.5,0.25,0,45,3
+46,kit.hat_choke,"Hat Choke","","Kit",2,"",0,1,1,1,46,3
+47,kit.velocity,"Velocity Sens","","Kit",0,"",0,1,0.8,0,47,3
+48,seq.mode,"Seq Mode","","Sequencer",3,"Host MIDI|Internal|Both",0,2,0,1,48,3
+49,seq.swing,"Seq Swing","","Sequencer",0,"",0,0.5,0,0,49,3
+50,seq.accent,"Seq Accent","","Sequencer",0,"",0,1,0.5,0,50,3
+51,seq.lane.kick,"Lane Kick","","Sequencer",2,"",0,1,1,1,51,3
+52,seq.lane.snare,"Lane Snare","","Sequencer",2,"",0,1,1,1,52,3
+53,seq.lane.clap,"Lane Clap","","Sequencer",2,"",0,1,1,1,53,3
+54,seq.lane.chat,"Lane Closed Hat","","Sequencer",2,"",0,1,1,1,54,3
+55,seq.lane.ohat,"Lane Open Hat","","Sequencer",2,"",0,1,1,1,55,3
+56,seq.lane.tom,"Lane Tom","","Sequencer",2,"",0,1,1,1,56,3
+57,seq.lane.rim,"Lane Rim","","Sequencer",2,"",0,1,1,1,57,3
+58,seq.lane.cymbal,"Lane Cymbal","","Sequencer",2,"",0,1,1,1,58,3
+59,kick.send1,"Kick Send 1","","Kick",0,"",0,1,0,0,59,3
+60,kick.send2,"Kick Send 2","","Kick",0,"",0,1,0,0,60,3
+61,kick.cutoff,"Kick Cutoff","Hz","Kick",0,"",20,20000,20000,0,61,3
+62,kick.resonance,"Kick Resonance","","Kick",0,"",0,1,0,0,62,3
+63,kick.fine,"Kick Fine","ct","Kick",0,"",-100,100,0,0,63,3
+64,snare.send1,"Snare Send 1","","Snare",0,"",0,1,0,0,64,3
+65,snare.send2,"Snare Send 2","","Snare",0,"",0,1,0,0,65,3
+66,snare.cutoff,"Snare Cutoff","Hz","Snare",0,"",20,20000,20000,0,66,3
+67,snare.resonance,"Snare Resonance","","Snare",0,"",0,1,0,0,67,3
+68,snare.fine,"Snare Fine","ct","Snare",0,"",-100,100,0,0,68,3
+69,clap.send1,"Clap Send 1","","Clap",0,"",0,1,0,0,69,3
+70,clap.send2,"Clap Send 2","","Clap",0,"",0,1,0,0,70,3
+71,clap.cutoff,"Clap Cutoff","Hz","Clap",0,"",20,20000,20000,0,71,3
+72,clap.resonance,"Clap Resonance","","Clap",0,"",0,1,0,0,72,3
+73,clap.fine,"Clap Fine","ct","Clap",0,"",-100,100,0,0,73,3
+74,chat.send1,"Closed Hat Send 1","","Closed Hat",0,"",0,1,0,0,74,3
+75,chat.send2,"Closed Hat Send 2","","Closed Hat",0,"",0,1,0,0,75,3
+76,chat.cutoff,"Closed Hat Cutoff","Hz","Closed Hat",0,"",20,20000,20000,0,76,3
+77,chat.resonance,"Closed Hat Resonance","","Closed Hat",0,"",0,1,0,0,77,3
+78,chat.fine,"Closed Hat Fine","ct","Closed Hat",0,"",-100,100,0,0,78,3
+79,ohat.send1,"Open Hat Send 1","","Open Hat",0,"",0,1,0,0,79,3
+80,ohat.send2,"Open Hat Send 2","","Open Hat",0,"",0,1,0,0,80,3
+81,ohat.cutoff,"Open Hat Cutoff","Hz","Open Hat",0,"",20,20000,20000,0,81,3
+82,ohat.resonance,"Open Hat Resonance","","Open Hat",0,"",0,1,0,0,82,3
+83,ohat.fine,"Open Hat Fine","ct","Open Hat",0,"",-100,100,0,0,83,3
+84,tom.send1,"Tom Send 1","","Tom",0,"",0,1,0,0,84,3
+85,tom.send2,"Tom Send 2","","Tom",0,"",0,1,0,0,85,3
+86,tom.cutoff,"Tom Cutoff","Hz","Tom",0,"",20,20000,20000,0,86,3
+87,tom.resonance,"Tom Resonance","","Tom",0,"",0,1,0,0,87,3
+88,tom.fine,"Tom Fine","ct","Tom",0,"",-100,100,0,0,88,3
+89,rim.send1,"Rim Send 1","","Rim",0,"",0,1,0,0,89,3
+90,rim.send2,"Rim Send 2","","Rim",0,"",0,1,0,0,90,3
+91,rim.cutoff,"Rim Cutoff","Hz","Rim",0,"",20,20000,20000,0,91,3
+92,rim.resonance,"Rim Resonance","","Rim",0,"",0,1,0,0,92,3
+93,rim.fine,"Rim Fine","ct","Rim",0,"",-100,100,0,0,93,3
+94,cymbal.send1,"Cymbal Send 1","","Cymbal",0,"",0,1,0,0,94,3
+95,cymbal.send2,"Cymbal Send 2","","Cymbal",0,"",0,1,0,0,95,3
+96,cymbal.cutoff,"Cymbal Cutoff","Hz","Cymbal",0,"",20,20000,20000,0,96,3
+97,cymbal.resonance,"Cymbal Resonance","","Cymbal",0,"",0,1,0,0,97,3
+98,cymbal.fine,"Cymbal Fine","ct","Cymbal",0,"",-100,100,0,0,98,3
+99,kick.filter,"Kick Filter","","Kick",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+100,kick.transient_attack,"Kick Attack","","Kick",0,"",-1,1,0,0,-1,0
+101,kick.transient_sustain,"Kick Sustain","","Kick",0,"",-1,1,0,0,-1,0
+102,kick.output,"Kick Output","","Kick",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+103,snare.filter,"Snare Filter","","Snare",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+104,snare.transient_attack,"Snare Attack","","Snare",0,"",-1,1,0,0,-1,0
+105,snare.transient_sustain,"Snare Sustain","","Snare",0,"",-1,1,0,0,-1,0
+106,snare.output,"Snare Output","","Snare",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+107,clap.filter,"Clap Filter","","Clap",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+108,clap.transient_attack,"Clap Attack","","Clap",0,"",-1,1,0,0,-1,0
+109,clap.transient_sustain,"Clap Sustain","","Clap",0,"",-1,1,0,0,-1,0
+110,clap.output,"Clap Output","","Clap",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+111,chat.filter,"Closed Hat Filter","","Closed Hat",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+112,chat.transient_attack,"Closed Hat Attack","","Closed Hat",0,"",-1,1,0,0,-1,0
+113,chat.transient_sustain,"Closed Hat Sustain","","Closed Hat",0,"",-1,1,0,0,-1,0
+114,chat.output,"Closed Hat Output","","Closed Hat",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+115,ohat.filter,"Open Hat Filter","","Open Hat",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+116,ohat.transient_attack,"Open Hat Attack","","Open Hat",0,"",-1,1,0,0,-1,0
+117,ohat.transient_sustain,"Open Hat Sustain","","Open Hat",0,"",-1,1,0,0,-1,0
+118,ohat.output,"Open Hat Output","","Open Hat",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+119,tom.filter,"Tom Filter","","Tom",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+120,tom.transient_attack,"Tom Attack","","Tom",0,"",-1,1,0,0,-1,0
+121,tom.transient_sustain,"Tom Sustain","","Tom",0,"",-1,1,0,0,-1,0
+122,tom.output,"Tom Output","","Tom",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+123,rim.filter,"Rim Filter","","Rim",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+124,rim.transient_attack,"Rim Attack","","Rim",0,"",-1,1,0,0,-1,0
+125,rim.transient_sustain,"Rim Sustain","","Rim",0,"",-1,1,0,0,-1,0
+126,rim.output,"Rim Output","","Rim",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+127,cymbal.filter,"Cymbal Filter","","Cymbal",3,"Off|LP 12|LP 24|HP 12|HP 24|BP",0,5,0,1,-1,0
+128,cymbal.transient_attack,"Cymbal Attack","","Cymbal",0,"",-1,1,0,0,-1,0
+129,cymbal.transient_sustain,"Cymbal Sustain","","Cymbal",0,"",-1,1,0,0,-1,0
+130,cymbal.output,"Cymbal Output","","Cymbal",3,"Main|Out 2|Out 3|Out 4|Out 5|Out 6|Out 7|Out 8",0,7,0,1,-1,0
+131,kick.source,"Kick Source","","Kick",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+132,kick.sample_start,"Kick Start","","Kick",0,"",0,1,0,0,-1,0
+133,kick.sample_end,"Kick End","","Kick",0,"",0,1,1,0,-1,0
+134,kick.sample_loop,"Kick Loop","","Kick",2,"",0,1,0,1,-1,0
+135,kick.sample_reverse,"Kick Reverse","","Kick",2,"",0,1,0,1,-1,0
+136,kick.sample_normalize,"Kick Normalize","","Kick",2,"",0,1,0,1,-1,0
+137,kick.sample_level,"Kick Sample Level","","Kick",0,"",0,2,1,0,-1,0
+138,snare.source,"Snare Source","","Snare",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+139,snare.sample_start,"Snare Start","","Snare",0,"",0,1,0,0,-1,0
+140,snare.sample_end,"Snare End","","Snare",0,"",0,1,1,0,-1,0
+141,snare.sample_loop,"Snare Loop","","Snare",2,"",0,1,0,1,-1,0
+142,snare.sample_reverse,"Snare Reverse","","Snare",2,"",0,1,0,1,-1,0
+143,snare.sample_normalize,"Snare Normalize","","Snare",2,"",0,1,0,1,-1,0
+144,snare.sample_level,"Snare Sample Level","","Snare",0,"",0,2,1,0,-1,0
+145,clap.source,"Clap Source","","Clap",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+146,clap.sample_start,"Clap Start","","Clap",0,"",0,1,0,0,-1,0
+147,clap.sample_end,"Clap End","","Clap",0,"",0,1,1,0,-1,0
+148,clap.sample_loop,"Clap Loop","","Clap",2,"",0,1,0,1,-1,0
+149,clap.sample_reverse,"Clap Reverse","","Clap",2,"",0,1,0,1,-1,0
+150,clap.sample_normalize,"Clap Normalize","","Clap",2,"",0,1,0,1,-1,0
+151,clap.sample_level,"Clap Sample Level","","Clap",0,"",0,2,1,0,-1,0
+152,chat.source,"Closed Hat Source","","Closed Hat",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+153,chat.sample_start,"Closed Hat Start","","Closed Hat",0,"",0,1,0,0,-1,0
+154,chat.sample_end,"Closed Hat End","","Closed Hat",0,"",0,1,1,0,-1,0
+155,chat.sample_loop,"Closed Hat Loop","","Closed Hat",2,"",0,1,0,1,-1,0
+156,chat.sample_reverse,"Closed Hat Reverse","","Closed Hat",2,"",0,1,0,1,-1,0
+157,chat.sample_normalize,"Closed Hat Normalize","","Closed Hat",2,"",0,1,0,1,-1,0
+158,chat.sample_level,"Closed Hat Sample Level","","Closed Hat",0,"",0,2,1,0,-1,0
+159,ohat.source,"Open Hat Source","","Open Hat",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+160,ohat.sample_start,"Open Hat Start","","Open Hat",0,"",0,1,0,0,-1,0
+161,ohat.sample_end,"Open Hat End","","Open Hat",0,"",0,1,1,0,-1,0
+162,ohat.sample_loop,"Open Hat Loop","","Open Hat",2,"",0,1,0,1,-1,0
+163,ohat.sample_reverse,"Open Hat Reverse","","Open Hat",2,"",0,1,0,1,-1,0
+164,ohat.sample_normalize,"Open Hat Normalize","","Open Hat",2,"",0,1,0,1,-1,0
+165,ohat.sample_level,"Open Hat Sample Level","","Open Hat",0,"",0,2,1,0,-1,0
+166,tom.source,"Tom Source","","Tom",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+167,tom.sample_start,"Tom Start","","Tom",0,"",0,1,0,0,-1,0
+168,tom.sample_end,"Tom End","","Tom",0,"",0,1,1,0,-1,0
+169,tom.sample_loop,"Tom Loop","","Tom",2,"",0,1,0,1,-1,0
+170,tom.sample_reverse,"Tom Reverse","","Tom",2,"",0,1,0,1,-1,0
+171,tom.sample_normalize,"Tom Normalize","","Tom",2,"",0,1,0,1,-1,0
+172,tom.sample_level,"Tom Sample Level","","Tom",0,"",0,2,1,0,-1,0
+173,rim.source,"Rim Source","","Rim",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+174,rim.sample_start,"Rim Start","","Rim",0,"",0,1,0,0,-1,0
+175,rim.sample_end,"Rim End","","Rim",0,"",0,1,1,0,-1,0
+176,rim.sample_loop,"Rim Loop","","Rim",2,"",0,1,0,1,-1,0
+177,rim.sample_reverse,"Rim Reverse","","Rim",2,"",0,1,0,1,-1,0
+178,rim.sample_normalize,"Rim Normalize","","Rim",2,"",0,1,0,1,-1,0
+179,rim.sample_level,"Rim Sample Level","","Rim",0,"",0,2,1,0,-1,0
+180,cymbal.source,"Cymbal Source","","Cymbal",3,"Synth|Sample|Layer",0,2,0,1,-1,0
+181,cymbal.sample_start,"Cymbal Start","","Cymbal",0,"",0,1,0,0,-1,0
+182,cymbal.sample_end,"Cymbal End","","Cymbal",0,"",0,1,1,0,-1,0
+183,cymbal.sample_loop,"Cymbal Loop","","Cymbal",2,"",0,1,0,1,-1,0
+184,cymbal.sample_reverse,"Cymbal Reverse","","Cymbal",2,"",0,1,0,1,-1,0
+185,cymbal.sample_normalize,"Cymbal Normalize","","Cymbal",2,"",0,1,0,1,-1,0
+186,cymbal.sample_level,"Cymbal Sample Level","","Cymbal",0,"",0,2,1,0,-1,0

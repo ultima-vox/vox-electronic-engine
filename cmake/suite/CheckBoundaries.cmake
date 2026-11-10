@@ -1,0 +1,52 @@
+# cmake -DROOT=<repo> -P CheckBoundaries.cmake
+# Suite code must not include legacy Rack / instrument ABI / .vins headers or
+# the legacy plugin shell (06_CLAUDE_EXECUTION_BRIEF.md §1, FOUND-00 §3.2).
+set(dirs products libs/vox-preset libs/vox-dsp libs/vox-testkit tests/suite)
+set(forbidden
+  "rack/" "instrument/" "vins/" "native/" "VoxModuleAbi" "InstrumentAbi"
+  "apps/vst3" "PluginProcessor.h" "PluginEditor.h")
+# Exception: the frozen legacy Drums reference (DRM-00) and the tests that
+# drive it through the legacy C ABI (golden corpus, plugin parity, kit engine
+# parity). Products and libraries must never reference it. (The DRM-01/02
+# transitional engine copy is gone since DRM-03b.)
+set(legacy_allowed "/tests/suite/legacy-reference/" "/tests/suite/DrumsLegacyGoldenTests.cpp"
+  "/tests/suite/DrumsParityTests.cpp" "/tests/suite/DrumsKitParityTests.cpp")
+set(violations "")
+foreach(dir IN LISTS dirs)
+  file(GLOB_RECURSE files "${ROOT}/${dir}/*.h" "${ROOT}/${dir}/*.hpp" "${ROOT}/${dir}/*.c" "${ROOT}/${dir}/*.cpp")
+  foreach(file IN LISTS files)
+    set(allowed FALSE)
+    foreach(path IN LISTS legacy_allowed)
+      string(FIND "${file}" "${path}" at)
+      if(NOT at EQUAL -1)
+        set(allowed TRUE)
+      endif()
+    endforeach()
+    if(allowed)
+      continue()
+    endif()
+    file(STRINGS "${file}" includes REGEX "^[ \t]*#[ \t]*include")
+    foreach(line IN LISTS includes)
+      foreach(pattern IN LISTS forbidden)
+        string(FIND "${line}" "${pattern}" at)
+        if(NOT at EQUAL -1)
+          list(APPEND violations "${file}: ${line}")
+        endif()
+      endforeach()
+    endforeach()
+  endforeach()
+endforeach()
+foreach(dir IN ITEMS products libs/vox-preset libs/vox-dsp libs/vox-testkit libs/vox-ui)
+  file(GLOB_RECURSE files "${ROOT}/${dir}/*")
+  foreach(file IN LISTS files)
+    file(STRINGS "${file}" hits REGEX "legacy-reference|vox_legacy_drums_reference")
+    if(hits)
+      list(APPEND violations "${file}: references the test-only legacy reference")
+    endif()
+  endforeach()
+endforeach()
+if(violations)
+  list(JOIN violations "\n" text)
+  message(FATAL_ERROR "Suite code includes legacy headers:\n${text}")
+endif()
+message(STATUS "suite boundaries: ok")
