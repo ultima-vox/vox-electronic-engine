@@ -31,8 +31,11 @@ struct StructuralContext {
     const kit::SamplePlayer& sample() const { return pad.players[static_cast<std::size_t> (player)]; }
 };
 
+class PatternEditor;
+
 class DrumsPanel final : public juce::Component,
                          public juce::FileDragAndDropTarget,
+                         public juce::DragAndDropContainer,   // MIDI export drag
                          private juce::Timer {
 public:
     explicit DrumsPanel (DrumsProcessor& processor);
@@ -63,7 +66,8 @@ public:
     juce::String sampleStatus() const;
     bool bodyVisible() const;
     void pollForTesting() { timerCallback(); }   // one editor timer tick
-    const StoredPattern& shownPattern() const;    // the step view's pattern (tests)
+    const StoredPattern& shownPattern() const;    // the step editor's pattern (tests)
+    PatternEditor& patternEditor() { return *steps_; }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
@@ -102,7 +106,7 @@ private:
     };
 
     class PadButton;
-    class StepView;
+
     class WaveformView;
 
     void timerCallback() override;
@@ -146,7 +150,7 @@ private:
     HostCombo seqMode_, seqPattern_;
     std::vector<HostKnob> seqKnobs_;
     std::vector<HostToggle> lanes_;
-    std::unique_ptr<StepView> steps_;
+    std::unique_ptr<PatternEditor> steps_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DrumsPanel)
 };

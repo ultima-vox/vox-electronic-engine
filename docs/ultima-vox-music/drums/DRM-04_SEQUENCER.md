@@ -170,3 +170,78 @@ the gate does not change the sound.
 **Realtime.** `processBlock` is unchanged: `engineForTesting()` is a const
 accessor that the test calls after the block. The allocation probe still
 counts 0 allocations.
+
+## DRM-04b: the step editor
+
+`PatternEditor` replaces the read-only step view in the sequencer panel. It
+edits the slot that `drm.seq.pattern` selects.
+
+**Toolbar**
+- Bar selector 1–4.
+- Steps per bar: 16, 32 or 64. Bars: 1–4 (`resize` keeps grid positions;
+  added bars repeat bar 1).
+- **Dup** copies the shown bar to the next one; **Clear** empties the shown
+  bar.
+- **Seed** draws a new probability seed.
+- The position (pattern, lane, bar, step).
+- **1-8 / 9-16** pages the lanes when the grid is shorter than 16 × 11 px,
+  which is the case at the default size.
+
+**Grid**
+- 16 lanes × the bar's steps.
+- A click toggles a step (new steps start at velocity 100) and selects it.
+  Shift- or right-click only selects.
+- Each cell shows:
+  - velocity as opacity;
+  - probability as fill height;
+  - microtiming as a horizontal shift;
+  - ratchets as dividers;
+  - accent as a dot.
+- The playhead step is highlighted.
+
+**Inspector:** Velocity, Chance, Ratchet, Micro and Accent of the selected
+step.
+
+**A/B and history**
+- **A/B** swaps the pattern with its variation B; **A>B** copies it to B.
+- B is saved with the slots: `DSEQ` v2. A v1 section reads B as a copy of
+  its slot.
+- **Undo / Redo** keep up to 100 steps per instrument (message thread). A
+  knob drag is one step. A project restore clears the history, so an undo
+  never reaches into another project.
+
+**MIDI**
+- A click saves the pattern as a `.mid` file (file dialog).
+- A drag drops `VOX Drums Pattern N.mid` (1 pass, at the host's last tempo)
+  into the DAW, through `performExternalDragDropOfFiles`.
+- **Drag files (review 6753052108).** Each drag writes to its own folder:
+  `<temp>/VOX Drums MIDI drags/<editor instance UUID>/<n>-<UUID>/`. No other
+  export can replace a file a DAW is still importing, whether it comes from
+  this instance, another instance or another process.
+- **Drag cleanup is bounded.**
+  - This instance's drag folders older than 10 minutes are removed, but
+    never the newest one.
+  - Other instances' folders are removed after a day: leftovers of a crash
+    or of a closed host.
+- **Save as** is separate from drag files. It suggests the pattern's name in
+  Documents.
+
+**Tests** (`testPatternEditorUi`)
+- Click toggles the step and selects it.
+- Inspector values set the step; a velocity drag is one undo step.
+- Undo, redo, and redo cleared by a new edit.
+- Bars and steps combos.
+- Dup and Clear.
+- Seed.
+- A>B, A/B, and undo of A/B.
+- Variations survive save and restore; `DSEQ` v1 → v2.
+- A restore clears the history.
+- The MIDI file equals `exportPatternMidi` of the shown slot.
+- Two instances on the same slot index with different notes, plus a
+  repeated drag: three distinct paths, and each file still holds its own
+  export after the others were written. Cleanup removes old drags but keeps
+  the newest, and removes another instance's folder only when it is stale.
+  With the old fixed path, 4 checks fail.
+- A real mouse event on lane 14 (page 2) toggles exactly that step.
+- Mutations (new-step velocity, no drag merge, no history clear on
+  restore) fail 2, 2 and 1 checks.

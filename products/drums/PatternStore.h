@@ -20,6 +20,8 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <memory>
+#include <vector>
 
 namespace vox::drums {
 
@@ -49,8 +51,14 @@ struct StoredPattern {
     bool operator== (const StoredPattern& other) const noexcept;
 };
 
+// A StoredPattern is ~24 KB. Code that may run on a host thread with a small
+// stack (constructors, state save/restore, editor actions) copies them into
+// existing objects or the heap, never into stack temporaries (Windows CI:
+// a 1 MB main-thread stack overflowed).
+
 // Factory pattern `index` as a 16-lane slot (lanes 9-16 empty).
-StoredPattern factorySlot (int index) noexcept;
+void factorySlot (int index, StoredPattern& out) noexcept;
+StoredPattern factorySlot (int index) noexcept;   // tests
 
 class PatternStore {
 public:
@@ -59,31 +67,48 @@ public:
     PatternStore();
 
     //== message / host threads
-    StoredPattern slot (int index) const;
+    StoredPattern slot (int index) const;   // tests and small callers
+    void copySlot (int index, StoredPattern& out) const;
     // The slot and the store generation it belongs to, read together (a
     // view caching `generation` then never holds older cells under a newer
     // generation; review 6745483562).
-    StoredPattern slot (int index, std::uint64_t& generation) const;
+    void copySlot (int index, StoredPattern& out, std::uint64_t& generation) const;
     void setSlot (int index, const StoredPattern& pattern);
     void setAll (const std::array<StoredPattern, slotCount>& slots);
-    std::array<StoredPattern, slotCount> all() const;
+    void copyAll (std::array<StoredPattern, slotCount>& out) const;
+
+    // DRM-04b: each slot has a second variation (B). The sequencer plays the
+    // slot (A); swapping exchanges A and B. Saved with the slots (DSEQ v2).
+    StoredPattern alternate (int index) const;   // tests
+    void copyAlternate (int index, StoredPattern& out) const;
+    void setAlternate (int index, const StoredPattern& pattern);
+    void copyAlternates (std::array<StoredPattern, slotCount>& out) const;
+    void setAlternates (const std::array<StoredPattern, slotCount>& alternates);
+    // DSEQ of the current slots and alternates, encoded under the lock (no
+    // copy of the 10 patterns).
+    preset::Section encodeCurrent() const;
     // Changes after the change it counts is committed (under the lock).
     std::uint64_t generation() const noexcept { return generation_.load(); }
     // Tests: runs at the start of setSlot/setAll, before anything is
     // committed (message thread only).
     std::function<void()> beforeCommitForTesting;
 
-    static preset::Section encode (const std::array<StoredPattern, slotCount>& slots);
+    // DSEQ v2: the slots, then their alternates. v1 (DRM-04a) has no
+    // alternates: each reads as a copy of its slot.
+    static preset::Section encode (const std::array<StoredPattern, slotCount>& slots,
+                                   const std::array<StoredPattern, slotCount>& alternates);
     // Strict: an unknown version, a wrong size or slot count, or any value
     // outside its range rejects the section (error set, false returned).
-    static bool decode (const preset::Section& section, std::array<StoredPattern, slotCount>& out, juce::String& error);
-    static std::array<StoredPattern, slotCount> factorySlots();
+    static bool decode (const preset::Section& section, std::array<StoredPattern, slotCount>& out,
+                        std::array<StoredPattern, slotCount>& alternates, juce::String& error);
+    static void factorySlots (std::array<StoredPattern, slotCount>& out);
 
     //== audio thread (wait-free)
     // Copies slot `index` into `live` if it changed or `index` differs from
     // what `live` holds and the lock is free. Returns the pattern to play.
     struct Live {
-        StoredPattern pattern;
+        // Allocated once with the processor; pull() copies into it.
+        std::unique_ptr<StoredPattern> pattern = std::make_unique<StoredPattern>();
         int index = -1;
         std::uint64_t generation = 0;
         kit::Pattern view {};
@@ -92,9 +117,47 @@ public:
 
 private:
     mutable juce::SpinLock lock_;
-    std::array<StoredPattern, slotCount> slots_;
+    // On the heap (~250 KB): an object holding a PatternStore (the
+    // processor) stays small.
+    struct Data {
+        std::array<StoredPattern, slotCount> slots, alternates;
+    };
+    std::unique_ptr<Data> data_ = std::make_unique<Data>();
+    std::array<StoredPattern, slotCount>& slots_ = data_->slots;
+    std::array<StoredPattern, slotCount>& alternates_ = data_->alternates;
     std::array<std::uint64_t, slotCount> slotGeneration_ {};
     std::atomic<std::uint64_t> generation_ { 1 };
+};
+
+// Undo/redo of pattern edits (message thread). Each entry is a whole
+// slot before and after one edit; at most `capacity` entries are kept.
+class PatternHistory {
+public:
+    static constexpr std::size_t capacity = 100;
+    struct Entry {
+        int slot = 0;
+        bool alternate = false;   // the entry also swapped A and B
+        StoredPattern before, after;
+        StoredPattern beforeB, afterB;
+    };
+    void push (std::unique_ptr<Entry> entry);
+    // Replaces the newest entry's result (one knob drag = one undo step);
+    // false if there is none for `slot` or it can be redone instead.
+    bool amendLast (int slot, const StoredPattern& after);
+    bool canUndo() const noexcept { return ! undo_.empty(); }
+    bool canRedo() const noexcept { return ! redo_.empty(); }
+    // Applies to `store` and returns the slot it changed (-1 if nothing).
+    int undo (PatternStore& store);
+    int redo (PatternStore& store);
+    void clear() noexcept
+    {
+        undo_.clear();
+        redo_.clear();
+    }
+    std::size_t size() const noexcept { return undo_.size(); }
+
+private:
+    std::vector<std::unique_ptr<Entry>> undo_, redo_;
 };
 
 } // namespace vox::drums

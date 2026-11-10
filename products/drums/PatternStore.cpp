@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 namespace vox::drums {
 namespace {
@@ -49,7 +50,7 @@ struct Reader {
     }
 };
 
-constexpr std::uint32_t sectionVersion = 1;
+constexpr std::uint32_t sectionVersion = 2;
 
 } // namespace
 
@@ -70,7 +71,8 @@ void StoredPattern::resize (int newSteps, int newBars) noexcept
     if (! validSteps (newSteps))
         newSteps = steps;
     newBars = std::clamp (newBars, 1, kit::maxPatternBars);
-    const StoredPattern old = *this;
+    const auto copy = std::make_unique<StoredPattern> (*this);   // heap: ~24 KB
+    const StoredPattern& old = *copy;
     cells.fill ({});
     steps = static_cast<std::uint8_t> (newSteps);
     bars = static_cast<std::uint8_t> (newBars);
@@ -107,9 +109,16 @@ bool StoredPattern::operator== (const StoredPattern& o) const noexcept
 
 StoredPattern factorySlot (int index) noexcept
 {
-    std::array<kit::PatternStep, 8 * 4 * 16> legacy {};
-    const auto view = kit::factoryPattern (index, legacy);
     StoredPattern p;
+    factorySlot (index, p);
+    return p;
+}
+
+void factorySlot (int index, StoredPattern& p) noexcept
+{
+    std::array<kit::PatternStep, 8 * 4 * 16> legacy {};   // 3 KB
+    const auto view = kit::factoryPattern (index, legacy);
+    p.cells.fill ({});
     p.steps = static_cast<std::uint8_t> (view.steps);
     p.bars = static_cast<std::uint8_t> (view.bars);
     p.seed = 1;
@@ -118,20 +127,52 @@ StoredPattern factorySlot (int index) noexcept
             for (std::uint32_t st = 0; st < view.steps; ++st)
                 p.cell (static_cast<int> (lane), static_cast<int> (bar), static_cast<int> (st))
                     = legacy[(lane * view.bars + bar) * view.steps + st];
-    return p;
 }
 
-std::array<StoredPattern, PatternStore::slotCount> PatternStore::factorySlots()
+void PatternStore::factorySlots (std::array<StoredPattern, slotCount>& out)
 {
-    std::array<StoredPattern, slotCount> slots;
     for (int i = 0; i < slotCount; ++i)
-        slots[static_cast<std::size_t> (i)] = factorySlot (i);
-    return slots;
+        factorySlot (i, out[static_cast<std::size_t> (i)]);
 }
 
 PatternStore::PatternStore()
 {
-    slots_ = factorySlots();
+    factorySlots (slots_);
+    alternates_ = slots_;
+}
+
+void PatternStore::copyAlternate (int index, StoredPattern& out) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    out = alternates_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+}
+
+StoredPattern PatternStore::alternate (int index) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    return alternates_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+}
+
+void PatternStore::setAlternate (int index, const StoredPattern& pattern)
+{
+    if (index < 0 || index >= slotCount)
+        return;
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    alternates_[static_cast<std::size_t> (index)] = pattern;
+    generation_.store (generation_.load() + 1);   // the editor shows A/B state
+}
+
+void PatternStore::copyAlternates (std::array<StoredPattern, slotCount>& out) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    out = alternates_;
+}
+
+void PatternStore::setAlternates (const std::array<StoredPattern, slotCount>& alternates)
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    alternates_ = alternates;
+    generation_.store (generation_.load() + 1);
 }
 
 StoredPattern PatternStore::slot (int index) const
@@ -140,11 +181,17 @@ StoredPattern PatternStore::slot (int index) const
     return slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
-StoredPattern PatternStore::slot (int index, std::uint64_t& generation) const
+void PatternStore::copySlot (int index, StoredPattern& out) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    out = slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+}
+
+void PatternStore::copySlot (int index, StoredPattern& out, std::uint64_t& generation) const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
     generation = generation_.load();
-    return slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+    out = slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
 // The generation moves under the lock, together with the data it counts:
@@ -175,10 +222,18 @@ void PatternStore::setAll (const std::array<StoredPattern, slotCount>& slots)
     generation_.store (g);
 }
 
-std::array<StoredPattern, PatternStore::slotCount> PatternStore::all() const
+void PatternStore::copyAll (std::array<StoredPattern, slotCount>& out) const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
-    return slots_;
+    out = slots_;
+}
+
+preset::Section PatternStore::encodeCurrent() const
+{
+    // Message/host thread; the audio thread only try-locks, so encoding
+    // under the lock never makes it wait.
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    return encode (slots_, alternates_);
 }
 
 const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
@@ -190,10 +245,10 @@ const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
         const auto g = slotGeneration_[static_cast<std::size_t> (index)];
         if (live.index != index || live.generation != g)
         {
-            live.pattern = slots_[static_cast<std::size_t> (index)];
+            *live.pattern = slots_[static_cast<std::size_t> (index)];
             live.index = index;
             live.generation = g;
-            live.view = live.pattern.view();
+            live.view = live.pattern->view();
         }
     }
     return live.view;
@@ -204,76 +259,150 @@ const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
 // u32 seed, then 16 lanes x bars x steps cells in storage order: u8 flags
 // (bit 0 on, bit 1 accent), u8 velocity, u8 probability, u8 ratchet,
 // u8 micro (two's complement).
-preset::Section PatternStore::encode (const std::array<StoredPattern, slotCount>& slots)
+namespace {
+
+void encodePattern (std::vector<std::byte>& out, const StoredPattern& p)
+{
+    putU8 (out, p.steps);
+    putU8 (out, p.bars);
+    putU32 (out, p.seed);
+    const int n = kit::padCount * p.steps * p.bars;
+    for (int i = 0; i < n; ++i)
+    {
+        const auto& c = p.cells[static_cast<std::size_t> (i)];
+        putU8 (out, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0)));
+        putU8 (out, c.velocity);
+        putU8 (out, c.probability);
+        putU8 (out, c.ratchet);
+        putU8 (out, static_cast<std::uint8_t> (c.micro));
+    }
+}
+
+bool decodePattern (Reader& in, StoredPattern& p)
+{
+    p = {};
+    const int steps = in.u8(), bars = in.u8();
+    p.seed = in.u32();
+    if (! in.ok || ! validSteps (steps) || bars < 1 || bars > kit::maxPatternBars)
+        return false;
+    p.steps = static_cast<std::uint8_t> (steps);
+    p.bars = static_cast<std::uint8_t> (bars);
+    const int n = kit::padCount * steps * bars;
+    for (int i = 0; i < n; ++i)
+    {
+        auto& c = p.cells[static_cast<std::size_t> (i)];
+        const auto flags = in.u8();
+        c.velocity = in.u8();
+        c.probability = in.u8();
+        c.ratchet = in.u8();
+        c.micro = static_cast<std::int8_t> (in.u8());
+        c.on = (flags & 1u) != 0;
+        c.accent = (flags & 2u) != 0;
+        if (! in.ok || flags > 3 || c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1
+            || c.ratchet > kit::maxRatchet || c.micro < -50 || c.micro > 50)
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+//==============================================================================
+// DSEQ: u32 version, u32 slot count (5); per slot: u8 steps, u8 bars,
+// u32 seed, then 16 lanes x bars x steps cells in storage order: u8 flags
+// (bit 0 on, bit 1 accent), u8 velocity, u8 probability, u8 ratchet,
+// u8 micro (two's complement). Version 2 (DRM-04b) follows the 5 slots with
+// their 5 alternates (B) in the same layout; version 1 (DRM-04a) has none.
+preset::Section PatternStore::encode (const std::array<StoredPattern, slotCount>& slots,
+                                      const std::array<StoredPattern, slotCount>& alternates)
 {
     preset::Section s;
     s.tag = sequenceSectionTag;
     putU32 (s.data, sectionVersion);
     putU32 (s.data, slotCount);
     for (const auto& p : slots)
-    {
-        putU8 (s.data, p.steps);
-        putU8 (s.data, p.bars);
-        putU32 (s.data, p.seed);
-        const int n = kit::padCount * p.steps * p.bars;
-        for (int i = 0; i < n; ++i)
-        {
-            const auto& c = p.cells[static_cast<std::size_t> (i)];
-            putU8 (s.data, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0)));
-            putU8 (s.data, c.velocity);
-            putU8 (s.data, c.probability);
-            putU8 (s.data, c.ratchet);
-            putU8 (s.data, static_cast<std::uint8_t> (c.micro));
-        }
-    }
+        encodePattern (s.data, p);
+    for (const auto& p : alternates)
+        encodePattern (s.data, p);
     return s;
 }
 
-bool PatternStore::decode (const preset::Section& section, std::array<StoredPattern, slotCount>& out, juce::String& error)
+bool PatternStore::decode (const preset::Section& section, std::array<StoredPattern, slotCount>& out,
+                           std::array<StoredPattern, slotCount>& alternates, juce::String& error)
 {
     Reader in { section.data };
-    if (in.u32() != sectionVersion || in.u32() != static_cast<std::uint32_t> (slotCount) || ! in.ok)
+    const auto version = in.u32();
+    if ((version != 1 && version != 2) || in.u32() != static_cast<std::uint32_t> (slotCount) || ! in.ok)
     {
         error = "unsupported pattern section";
         return false;
     }
     for (auto& p : out)
-    {
-        p = {};
-        const int steps = in.u8(), bars = in.u8();
-        p.seed = in.u32();
-        if (! in.ok || ! validSteps (steps) || bars < 1 || bars > kit::maxPatternBars)
+        if (! decodePattern (in, p))
         {
             error = "invalid pattern section";
             return false;
         }
-        p.steps = static_cast<std::uint8_t> (steps);
-        p.bars = static_cast<std::uint8_t> (bars);
-        const int n = kit::padCount * steps * bars;
-        for (int i = 0; i < n; ++i)
-        {
-            auto& c = p.cells[static_cast<std::size_t> (i)];
-            const auto flags = in.u8();
-            c.velocity = in.u8();
-            c.probability = in.u8();
-            c.ratchet = in.u8();
-            c.micro = static_cast<std::int8_t> (in.u8());
-            c.on = (flags & 1u) != 0;
-            c.accent = (flags & 2u) != 0;
-            if (! in.ok || flags > 3 || c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1
-                || c.ratchet > kit::maxRatchet || c.micro < -50 || c.micro > 50)
+    if (version == 1)
+        alternates = out;
+    else
+        for (auto& p : alternates)
+            if (! decodePattern (in, p))
             {
                 error = "invalid pattern section";
                 return false;
             }
-        }
-    }
     if (in.at != section.data.size())
     {
         error = "invalid pattern section";
         return false;
     }
     return true;
+}
+
+//==============================================================================
+void PatternHistory::push (std::unique_ptr<Entry> entry)
+{
+    undo_.push_back (std::move (entry));
+    if (undo_.size() > capacity)
+        undo_.erase (undo_.begin());
+    redo_.clear();
+}
+
+bool PatternHistory::amendLast (int slot, const StoredPattern& after)
+{
+    if (undo_.empty() || ! redo_.empty() || undo_.back()->slot != slot || undo_.back()->alternate)
+        return false;
+    undo_.back()->after = after;
+    return true;
+}
+
+int PatternHistory::undo (PatternStore& store)
+{
+    if (undo_.empty())
+        return -1;
+    auto e = std::move (undo_.back());
+    undo_.pop_back();
+    store.setSlot (e->slot, e->before);
+    if (e->alternate)
+        store.setAlternate (e->slot, e->beforeB);
+    const int slot = e->slot;
+    redo_.push_back (std::move (e));
+    return slot;
+}
+
+int PatternHistory::redo (PatternStore& store)
+{
+    if (redo_.empty())
+        return -1;
+    auto e = std::move (redo_.back());
+    redo_.pop_back();
+    store.setSlot (e->slot, e->after);
+    if (e->alternate)
+        store.setAlternate (e->slot, e->afterB);
+    const int slot = e->slot;
+    undo_.push_back (std::move (e));
+    return slot;
 }
 
 } // namespace vox::drums

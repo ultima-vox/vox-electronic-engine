@@ -23,6 +23,7 @@
 #include "KitStore.h"
 #include "PatternExport.h"
 #include "PatternStore.h"
+#include "PatternEditor.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -114,6 +115,31 @@ float plainOf (DrumsProcessor& p, const juce::String& id)
     return p.state().getRawParameterValue (id)->load();
 }
 
+// Patterns are ~24 KB: tests keep copies on the heap so that the test
+// frames stay small (Windows main-thread stack: 1 MB).
+std::unique_ptr<vox::drums::StoredPattern> heapSlot (vox::drums::PatternStore& store, int index)
+{
+    auto p = std::make_unique<vox::drums::StoredPattern>();
+    store.copySlot (index, *p);
+    return p;
+}
+
+std::unique_ptr<vox::drums::StoredPattern> heapAlternate (vox::drums::PatternStore& store, int index)
+{
+    auto p = std::make_unique<vox::drums::StoredPattern>();
+    store.copyAlternate (index, *p);
+    return p;
+}
+
+std::unique_ptr<vox::drums::StoredPattern> heapFactory (int index)
+{
+    auto p = std::make_unique<vox::drums::StoredPattern>();
+    vox::drums::factorySlot (index, *p);
+    return p;
+}
+
+using SlotArray = std::array<vox::drums::StoredPattern, vox::drums::PatternStore::slotCount>;
+
 struct Render {
     double peak = 0.0, energy = 0.0;
     bool finite = true;
@@ -152,6 +178,14 @@ auto noMidi = [] (int, juce::MidiBuffer&) {};
 //==============================================================================
 void testParameterContract()
 {
+    // Windows CI (4230385): a 1 MB main-thread stack overflowed. Objects a
+    // host or test may hold on the stack stay small; ~24 KB patterns live
+    // on the heap. These bounds catch a regression on any compiler.
+    check (sizeof (vox::drums::PatternStore) <= 1024, "PatternStore keeps its patterns on the heap ("
+                                                         + juce::String (static_cast<int> (sizeof (vox::drums::PatternStore))) + " bytes)");
+    check (sizeof (DrumsProcessor) <= 64 * 1024, "DrumsProcessor stays under 64 KB ("
+                                                    + juce::String (static_cast<int> (sizeof (DrumsProcessor))) + " bytes)");
+
     DrumsProcessor p;
     const auto text = vox::drums::describeLayout (p.state());
 
@@ -1260,7 +1294,8 @@ void testRealtime()
             head.set (true, 145.0, 0.0);
             p->setPlayHead (&head);
             setPlain (*p, "drm.seq.mode", 2.0f);   // Both
-            auto edited = vox::drums::factorySlot (1);
+            const auto editedHeap = heapFactory (1);
+            auto& edited = *editedHeap;
             edited.resize (64, 4);
             juce::AudioBuffer<float> buffer (2, block);
             juce::MidiBuffer midi;
@@ -1301,9 +1336,10 @@ void testRealtime()
 
 //==============================================================================
 // DRM-04: user patterns (DSEQ) and MIDI export.
-vox::drums::StoredPattern randomPattern (std::mt19937& random, int steps, int bars)
+std::unique_ptr<vox::drums::StoredPattern> randomPattern (std::mt19937& random, int steps, int bars)
 {
-    vox::drums::StoredPattern p;
+    auto heap = std::make_unique<vox::drums::StoredPattern>();
+    auto& p = *heap;
     p.steps = static_cast<std::uint8_t> (steps);
     p.bars = static_cast<std::uint8_t> (bars);
     p.seed = static_cast<std::uint32_t> (random());
@@ -1320,7 +1356,7 @@ vox::drums::StoredPattern randomPattern (std::mt19937& random, int steps, int ba
                     c.ratchet = static_cast<std::uint8_t> (1 + random() % 8);
                     c.micro = static_cast<std::int8_t> (static_cast<int> (random() % 101) - 50);
                 }
-    return p;
+    return heap;
 }
 
 void testPatterns()
@@ -1332,7 +1368,7 @@ void testPatterns()
         auto p = makeProcessor();
         bool factory = true;
         for (int i = 0; i < PatternStore::slotCount; ++i)
-            factory = factory && p->patterns().slot (i) == vox::drums::factorySlot (i);
+            factory = factory && (*heapSlot (p->patterns(), i)) == (*heapFactory (i));
         check (factory, "new instrument: slots hold the factory patterns");
     }
     // DSEQ round trip, byte-identical save back.
@@ -1340,14 +1376,14 @@ void testPatterns()
     auto source = makeProcessor();
     const int shapes[5][2] = { { 16, 1 }, { 32, 2 }, { 64, 4 }, { 16, 4 }, { 64, 1 } };
     for (int i = 0; i < PatternStore::slotCount; ++i)
-        source->patterns().setSlot (i, randomPattern (random, shapes[i][0], shapes[i][1]));
+        source->patterns().setSlot (i, *randomPattern (random, shapes[i][0], shapes[i][1]));
     const auto saved = stateOf (*source);
     auto target = makeProcessor();
     target->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
     check (target->lastStateError().isEmpty(), "pattern state accepted");
     bool equal = true;
     for (int i = 0; i < PatternStore::slotCount; ++i)
-        equal = equal && target->patterns().slot (i) == source->patterns().slot (i);
+        equal = equal && (*heapSlot (target->patterns(), i)) == (*heapSlot (source->patterns(), i));
     check (equal, "every pattern slot is restored (16/32/64 steps, 1-4 bars, all step fields, seed)");
     check (stateOf (*target) == saved, "restored patterns save back byte-identically");
 
@@ -1358,7 +1394,7 @@ void testPatterns()
         std::erase_if (document.sections, [] (const auto& sec) { return sec.tag == vox::drums::sequenceSectionTag; });
         const auto bytes = vox::preset::encode (document);
         target->setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
-        check (target->lastStateError().isEmpty() && target->patterns().slot (2) == vox::drums::factorySlot (2),
+        check (target->lastStateError().isEmpty() && (*heapSlot (target->patterns(), 2)) == (*heapFactory (2)),
                "a document without patterns restores the factory patterns");
     }
 
@@ -1366,7 +1402,7 @@ void testPatterns()
     {
         target->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         const auto before = stateOf (*target);
-        const auto good = PatternStore::encode (source->patterns().all()).data;
+        const auto good = source->patterns().encodeCurrent().data;
         const auto with = [&] (std::vector<std::byte> data) {
             auto document = vox::preset::decode (std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
                                                  target->product().stateTag, 1).document;
@@ -1389,7 +1425,7 @@ void testPatterns()
         };
         // Slot 1 header at 8: steps, bars, seed (4); first cell at 14.
         bad ({}, "empty");
-        bad (edit (0, 2), "unknown version");
+        bad (edit (0, 3), "unknown version");
         bad (edit (4, 4), "4 slots");
         bad (edit (8, 24), "24 steps");
         bad (edit (9, 0), "0 bars");
@@ -1423,12 +1459,14 @@ void testPatterns()
         p->setPlayHead (&head);
         setPlain (*p, "drm.seq.mode", 1.0f);
         setPlain (*p, vox::drums::patternParameterId, 3.0f);
-        StoredPattern empty;
+        const auto emptyHeap = std::make_unique<StoredPattern>();
+        auto& empty = *emptyHeap;
         empty.steps = 16;
         empty.bars = 1;
         p->patterns().setSlot (3, empty);
         check (render (*p, 200, 256, &head, 140.0, noMidi).peak <= 0.0, "an empty pattern slot is silent");
-        auto one = empty;
+        const auto oneHeap = std::make_unique<StoredPattern> (empty);
+        auto& one = *oneHeap;
         one.cell (12, 0, 0) = { true, false, 120 };   // pad 13 on beat 1
         p->patterns().setSlot (3, one);
         p->takeHitMask();
@@ -1440,7 +1478,8 @@ void testPatterns()
     // MIDI export equals the canonical hit list (what plays from 0).
     {
         auto p = makeProcessor();
-        auto pattern = randomPattern (random, 32, 2);
+        const auto patternHeap = randomPattern (random, 32, 2);
+        auto& pattern = *patternHeap;
         p->patterns().setSlot (1, pattern);
         setPlain (*p, "drm.seq.swing", 0.25f);
         setPlain (*p, "drm.seq.accent", 0.6f);
@@ -1530,15 +1569,18 @@ void testPatterns()
         {
             setPlain (*p, vox::drums::patternParameterId, 2.0f);
             panel->pollForTesting();
-            check (panel->shownPattern() == p->patterns().slot (2), "the step view shows the selected slot");
-            auto edited = randomPattern (random, 32, 2);
+            check (panel->shownPattern() == (*heapSlot (p->patterns(), 2)), "the step view shows the selected slot");
+            const auto editedHeap = randomPattern (random, 32, 2);
+            auto& edited = *editedHeap;
             p->patterns().beforeCommitForTesting = [panel] { panel->pollForTesting(); };
             p->patterns().setSlot (2, edited);
             p->patterns().beforeCommitForTesting = nullptr;
             panel->pollForTesting();
             check (panel->shownPattern() == edited, "an edit committed after a poll in its window is shown on the next poll (setSlot)");
-            auto all = PatternStore::factorySlots();
-            all[2] = randomPattern (random, 64, 1);
+            const auto allHeap = std::make_unique<SlotArray>();
+            auto& all = *allHeap;
+            PatternStore::factorySlots (all);
+            all[2] = *randomPattern (random, 64, 1);
             p->patterns().beforeCommitForTesting = [panel] { panel->pollForTesting(); };
             p->patterns().setAll (all);
             p->patterns().beforeCommitForTesting = nullptr;
@@ -1551,20 +1593,24 @@ void testPatterns()
     // holds the cells committed with that generation (the writer stores the
     // generation it expects in the seed).
     {
-        PatternStore store;
+        const auto storeHeap = std::make_unique<PatternStore>();   // ~250 KB
+        auto& store = *storeHeap;
         std::atomic<bool> stop { false };
         std::atomic<int> torn { 0 }, reads { 0 };
         std::thread writer ([&] {
-            StoredPattern p;
+            const auto pHeap = std::make_unique<StoredPattern>();
+            auto& p = *pHeap;
             p.steps = 16;
             p.bars = 1;
+            const auto allHeap = std::make_unique<SlotArray>();
             for (int i = 0; i < 20000; ++i)
             {
                 p.seed = static_cast<std::uint32_t> (store.generation() + 1);   // single writer: the next generation
                 p.cell (i % padCount, 0, i % 16).on ^= true;
                 if (i % 7 == 0)
                 {
-                    auto all = store.all();
+                    auto& all = *allHeap;
+                    store.copyAll (all);
                     for (auto& slot : all)
                         slot = p;
                     store.setAll (all);
@@ -1574,11 +1620,13 @@ void testPatterns()
             }
             stop = true;
         });
+        const auto readHeap = std::make_unique<StoredPattern>();
         std::thread reader ([&] {
             while (! stop)
             {
                 std::uint64_t g = 0;
-                const auto p = store.slot (1, g);
+                store.copySlot (1, *readHeap, g);
+                const auto& p = *readHeap;
                 if (g > 1 && p.seed != g)
                     ++torn;
                 ++reads;
@@ -1596,7 +1644,8 @@ void testPatterns()
     // the same pads).
     {
         auto p = makeProcessor();
-        StoredPattern upper;
+        const auto upperHeap = std::make_unique<StoredPattern>();
+        auto& upper = *upperHeap;
         upper.steps = 16;
         upper.bars = 1;
         for (int pad = 8; pad < padCount; ++pad)
@@ -1630,12 +1679,14 @@ void testPatterns()
 
     // resize keeps what fits on the new grid.
     {
-        StoredPattern p;
+        const auto pHeap = std::make_unique<StoredPattern>();
+        auto& p = *pHeap;
         p.steps = 16;
         p.bars = 2;
         p.cell (0, 0, 4) = { true, true, 99 };
         p.cell (1, 1, 15) = { true, false, 50 };
-        auto q = p;
+        const auto qHeap = std::make_unique<StoredPattern> (p);
+        auto& q = *qHeap;
         q.resize (64, 4);
         check (q.steps == 64 && q.bars == 4 && q.cell (0, 0, 16).on && q.cell (0, 0, 16).velocity == 99 && q.cell (1, 1, 60).on
                    && q.cell (0, 2, 16).on && ! q.cell (1, 2, 60).on,
@@ -1727,7 +1778,8 @@ void testExportPlaybackParity()
     // The saved project: a 32-step, 2-bar pattern with every step feature,
     // swing, accent, a disabled lane and remapped notes on all 16 pads.
     juce::MemoryBlock project;
-    StoredPattern pattern;
+    const auto patternHeap = std::make_unique<StoredPattern>();
+    auto& pattern = *patternHeap;
     {
         auto source = makeProcessor();
         pattern.steps = 32;
@@ -1778,7 +1830,7 @@ void testExportPlaybackParity()
             const juce::String label = juce::String (static_cast<int> (rate)) + " Hz / " + juce::String (block) + ": ";
             auto p = makeProcessor (rate, block);
             p->setStateInformation (project.getData(), static_cast<int> (project.getSize()));
-            check (p->lastStateError().isEmpty() && p->patterns().slot (3) == pattern, label + "the saved pattern is restored");
+            check (p->lastStateError().isEmpty() && (*heapSlot (p->patterns(), 3)) == pattern, label + "the saved pattern is restored");
             // Export from the restored instrument.
             int division = 0;
             double fileBpm = 0.0;
@@ -1912,6 +1964,239 @@ void testExportPlaybackParity()
     check (audible, "the parity kit is audible");
 }
 
+
+//==============================================================================
+// DRM-04b: the step editor edits the selected slot through undoable steps.
+void testPatternEditorUi()
+{
+    using vox::drums::PatternStore;
+    using vox::drums::StoredPattern;
+    auto p = makeProcessor();
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
+    check (panel != nullptr, "step editor: Drums panel");
+    if (panel == nullptr)
+        return;
+    auto& ed = panel->patternEditor();
+    auto& store = p->patterns();
+    auto& history = p->patternHistory();
+    setPlain (*p, vox::drums::patternParameterId, 2.0f);
+    panel->pollForTesting();
+    check (ed.slot() == 2 && ed.shown() == (*heapSlot (store, 2)), "step editor: shows the selected slot");
+    const auto originalHeap = heapSlot (store, 2);
+    const auto& original = *originalHeap;
+
+    // Toggle a step on and off.
+    const bool wasOn = (*heapSlot (store, 2)).cell (12, 0, 3).on;
+    ed.clickCell (12, 3);
+    check ((*heapSlot (store, 2)).cell (12, 0, 3).on != wasOn && ed.selectedLane() == 12 && ed.selectedStep() == 3,
+           "step editor: a click toggles the step and selects it");
+    check (! wasOn && (*heapSlot (store, 2)).cell (12, 0, 3).velocity == 100, "step editor: a new step has velocity 100");
+    ed.clickCell (12, 3);
+    check ((*heapSlot (store, 2)).cell (12, 0, 3).on == wasOn, "step editor: a second click toggles it back");
+    ed.clickCell (12, 3);
+
+    // Inspector: each value moves the selected step; a drag is one undo step.
+    const auto steps = history.size();
+    auto* velocity = ed.inspector ("velocity");
+    velocity->onDragStart();
+    for (int v : { 40, 50, 60, 70 })
+        velocity->setValue (v, juce::sendNotificationSync);
+    velocity->onDragEnd();
+    check ((*heapSlot (store, 2)).cell (12, 0, 3).velocity == 70 && history.size() == steps + 1,
+           "step editor: a velocity drag sets the step and is one undo step");
+    ed.inspector ("probability")->setValue (35, juce::sendNotificationSync);
+    ed.inspector ("ratchet")->setValue (4, juce::sendNotificationSync);
+    ed.inspector ("micro")->setValue (-20, juce::sendNotificationSync);
+    ed.accentToggle()->setToggleState (true, juce::sendNotificationSync);
+    {
+        const auto c = (*heapSlot (store, 2)).cell (12, 0, 3);
+        check (c.probability == 35 && c.ratchet == 4 && c.micro == -20 && c.accent, "step editor: chance, ratchet, micro and accent set the step");
+    }
+    // Undo walks back one edit at a time; redo forward; a new edit clears redo.
+    ed.button ("undo")->onClick();
+    check (! (*heapSlot (store, 2)).cell (12, 0, 3).accent && (*heapSlot (store, 2)).cell (12, 0, 3).micro == -20, "step editor: undo reverts the last edit only");
+    ed.button ("undo")->onClick();
+    ed.button ("undo")->onClick();
+    ed.button ("undo")->onClick();
+    ed.button ("undo")->onClick();
+    check ((*heapSlot (store, 2)).cell (12, 0, 3).velocity == 100 && (*heapSlot (store, 2)).cell (12, 0, 3).probability == 100,
+           "step editor: undo of the velocity drag returns to the value before the drag");
+    ed.button ("redo")->onClick();
+    check ((*heapSlot (store, 2)).cell (12, 0, 3).velocity == 70, "step editor: redo replays the drag");
+    ed.inspector ("velocity")->setValue (90, juce::sendNotificationSync);
+    check (! history.canRedo(), "step editor: a new edit clears redo");
+
+    // Bars and grid.
+    ed.combo ("bars")->setSelectedItemIndex (1, juce::sendNotificationSync);   // 2 bars
+    check ((*heapSlot (store, 2)).bars == 2, "step editor: bars combo resizes the pattern");
+    ed.combo ("steps")->setSelectedItemIndex (1, juce::sendNotificationSync);  // 32 steps
+    check ((*heapSlot (store, 2)).steps == 32 && (*heapSlot (store, 2)).cell (12, 0, 6).velocity == 90,
+           "step editor: 32 steps keep each step at its position");
+    ed.selectBar (0);
+    ed.clickCell (2, 31);
+    ed.button ("dup")->onClick();
+    {
+        const auto qHeap = heapSlot (store, 2);
+    const auto& q = *qHeap;
+        bool same = true;
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int st = 0; st < q.steps; ++st)
+            {
+                const auto& a = q.cell (lane, 0, st);
+                const auto& b = q.cell (lane, 1, st);
+                same = same && a.on == b.on && a.velocity == b.velocity && a.ratchet == b.ratchet;
+            }
+        check (same && ed.bar() == 1, "step editor: Dup copies bar 1 to bar 2 and shows bar 2");
+    }
+    ed.button ("clear")->onClick();
+    {
+        const auto qHeap = heapSlot (store, 2);
+    const auto& q = *qHeap;
+        bool empty = true;
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int st = 0; st < q.steps; ++st)
+                empty = empty && ! q.cell (lane, 1, st).on;
+        check (empty && q.cell (12, 0, 6).on, "step editor: Clear empties only the shown bar");
+    }
+    const auto seed = (*heapSlot (store, 2)).seed;
+    ed.button ("seed")->onClick();
+    check ((*heapSlot (store, 2)).seed != seed, "step editor: Seed changes the probability seed");
+
+    // A/B.
+    const auto aHeap = heapSlot (store, 2);
+    const auto& a = *aHeap;
+    ed.button ("copyB")->onClick();
+    check ((*heapAlternate (store, 2)) == a, "step editor: A>B copies the pattern to B");
+    ed.clickCell (0, 0);
+    const auto editedHeap = heapSlot (store, 2);
+    const auto& edited = *editedHeap;
+    ed.button ("swap")->onClick();
+    check ((*heapSlot (store, 2)) == a && (*heapAlternate (store, 2)) == edited, "step editor: A/B swaps the pattern and its variation");
+    ed.button ("undo")->onClick();
+    check ((*heapSlot (store, 2)) == edited && (*heapAlternate (store, 2)) == a, "step editor: undo reverts the swap");
+
+    // State: alternates are saved (DSEQ v2) and restored; a v1 section reads
+    // B = A; a restore clears the history.
+    {
+        const auto saved = stateOf (*p);
+        auto other = makeProcessor();
+        other->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        check (other->lastStateError().isEmpty() && (*heapSlot (other->patterns(), 2)) == edited && (*heapAlternate (other->patterns(), 2)) == a,
+               "step editor: slots and variations survive save and restore");
+        // v1: header + the 5 slots only.
+        const auto allHeap = std::make_unique<SlotArray>();
+        other->patterns().copyAll (*allHeap);
+        auto v2 = PatternStore::encode (*allHeap, *allHeap).data;
+        auto v1 = std::vector<std::byte> (v2.begin(), v2.begin() + static_cast<std::ptrdiff_t> (8 + (v2.size() - 8) / 2));
+        v1[0] = std::byte { 1 };
+        vox::preset::Section section;
+        section.tag = vox::drums::sequenceSectionTag;
+        section.data = v1;
+        const auto slotsHeap = std::make_unique<SlotArray>(), alternatesHeap = std::make_unique<SlotArray>();
+        auto& slots = *slotsHeap;
+        auto& alternates = *alternatesHeap;
+        juce::String error;
+        check (PatternStore::decode (section, slots, alternates, error) && slots[2] == edited && alternates[2] == edited,
+               "step editor: a DSEQ v1 section reads each variation as a copy of its slot");
+        check (history.canUndo(), "step editor: history before a restore");
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        panel->pollForTesting();
+        check (! history.canUndo() && ! history.canRedo(), "step editor: a project restore clears the undo history");
+    }
+
+    // MIDI export of the shown slot (what a drag drops).
+    {
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-editor-export.mid");
+        check (ed.writeMidi (file), "step editor: the MIDI file is written");
+        juce::MemoryBlock written;
+        file.loadFileAsData (written);
+        check (written == p->exportPatternMidi (2, 1, p->lastBpm()), "step editor: the file is the export of the shown slot");
+        check (ed.saveAsDefault().getFileName() == "VOX Drums Pattern 3.mid"
+                   && ed.saveAsDefault().getParentDirectory() == juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+               "step editor: save-as suggests the pattern's name in Documents");
+        file.deleteFile();
+    }
+
+    // Review 6753052108: drag files are unique per instance and per drag;
+    // another export never replaces a handed-off file; cleanup is bounded
+    // and never removes the newest drag.
+    {
+        const auto loadFile = [] (const juce::File& f) {
+            juce::MemoryBlock b;
+            f.loadFileAsData (b);
+            return b;
+        };
+        const auto testRoot = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                  .getChildFile ("vox-drums-drag-test-" + juce::Uuid().toString());
+        vox::drums::PatternEditor::setDragRootForTesting (testRoot);
+        // Instance B: same slot index (3), different notes.
+        auto q = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> editorB (q->createEditorAndMakeActive());
+        auto* panelB = dynamic_cast<vox::drums::DrumsPanel*> (dynamic_cast<vox::suite::SuiteEditor*> (editorB.get())->content());
+        setPlain (*q, vox::drums::patternParameterId, 2.0f);
+        const auto otherHeap = std::make_unique<StoredPattern>();
+        auto& other = *otherHeap;
+        other.steps = 16;
+        other.bars = 1;
+        other.cell (15, 0, 7) = { true, false, 77 };
+        q->patterns().setSlot (2, other);
+        panelB->pollForTesting();
+        auto& edB = panelB->patternEditor();
+        const auto expectA = p->exportPatternMidi (2, 1, p->lastBpm());
+        const auto expectB = q->exportPatternMidi (2, 1, q->lastBpm());
+        check (expectA != expectB, "drag: the two instances export different content");
+        const auto a1 = ed.exportForDrag();
+        const auto b1 = edB.exportForDrag();
+        const auto a2 = ed.exportForDrag();   // a repeated drag
+        check (a1 != juce::File() && b1 != juce::File() && a2 != juce::File() && a1 != b1 && a1 != a2 && b1 != a2,
+               "drag: every drag gets its own path (instances and repeats)");
+        check (a1.getFileName() == "VOX Drums Pattern 3.mid" && b1.getFileName() == "VOX Drums Pattern 3.mid",
+               "drag: the dropped file keeps the readable name");
+        check (loadFile (a1) == expectA && loadFile (a2) == expectA && loadFile (b1) == expectB,
+               "drag: each handed-off file still holds its own instance's export after the others");
+        // Cleanup, at later clock times (ages come from the folder names):
+        // this instance's old drags go, its newest stays even when old;
+        // another instance's folder goes only once it is stale.
+        const auto now = juce::Time::getCurrentTime();
+        ed.cleanupDragFiles (now + vox::drums::PatternEditor::dragLifetime + juce::RelativeTime::minutes (1));
+        check (! a1.exists() && a2.exists(), "drag: cleanup removes old drags but never the newest");
+        check (b1.exists(), "drag: another instance's recent drag is kept");
+        ed.cleanupDragFiles (now + vox::drums::PatternEditor::staleLifetime + juce::RelativeTime::hours (1));
+        check (! b1.exists() && a2.exists(), "drag: another instance's stale folder (a day old) is removed");
+        q->editorBeingDeleted (editorB.get());
+        // Remove this test's private drag root (only that folder, by name).
+        if (testRoot.getFileName().startsWith ("vox-drums-drag-test-") && testRoot == vox::drums::PatternEditor::dragRoot())
+            testRoot.deleteRecursively();
+        vox::drums::PatternEditor::setDragRootForTesting ({});
+    }
+
+    // A real mouse click on a cell (lane page 2 when the grid is small).
+    {
+        ed.selectCell (13, 5);
+        const auto r = ed.cellBounds (13, 5);
+        check (! r.isEmpty(), "step editor: a selected lane is on the shown page");
+        juce::Component* target = nullptr;
+        for (auto* child : ed.getChildren())
+            if (child->getName() == "pattern grid")
+                target = child;
+        check (target != nullptr, "step editor: grid component");
+        if (target != nullptr)
+        {
+            const bool before = (*heapSlot (store, 2)).cell (13, ed.bar(), 5).on;
+            auto source = juce::Desktop::getInstance().getMainMouseSource();
+            const auto pos = (r.getCentre() - target->getPosition()).toFloat();
+            const juce::MouseEvent e (source, pos, juce::ModifierKeys(), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, target, target,
+                                      juce::Time::getCurrentTime(), pos, juce::Time::getCurrentTime(), 1, false);
+            target->mouseDown (e);
+            check ((*heapSlot (store, 2)).cell (13, ed.bar(), 5).on != before, "step editor: a mouse click on the cell toggles exactly that step");
+        }
+    }
+    check ((*heapSlot (store, 2)) != original, "step editor: the slot was edited");
+    p->editorBeingDeleted (editor.get());
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -1930,6 +2215,7 @@ int main (int argc, char** argv)
     testStateReentrancy();
     testPatterns();
     testExportPlaybackParity();
+    testPatternEditorUi();
     testRealtime();
     if (failures == 0)
         std::printf ("VOX Drums product tests passed\n");
