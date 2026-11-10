@@ -184,7 +184,15 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         });
     };
     button (swap_, "A/B", "Swap this pattern with its variation B");
-    swap_->onClick = [this] { editBoth ([] (StoredPattern& a, StoredPattern& b) { std::swap (a, b); }); };
+    swap_->onClick = [this] {
+        editBoth ([] (StoredPattern& a, StoredPattern& b) {
+            // Member-wise: std::swap would put a ~24 KB temporary on the stack.
+            a.cells.swap (b.cells);
+            std::swap (a.steps, b.steps);
+            std::swap (a.bars, b.bars);
+            std::swap (a.seed, b.seed);
+        });
+    };
     button (copyB_, "A>B", "Copy this pattern to its variation B");
     copyB_->onClick = [this] { editBoth ([] (StoredPattern& a, StoredPattern& b) { b = a; }); };
     button (seed_, "Seed", "New seed: steps below 100 % probability decide differently");
@@ -292,18 +300,21 @@ void PatternEditor::edit (const juce::String& key, const std::function<void (Sto
     if (slot_ < 0)
         return;
     auto& store = processor_.patterns();
-    const auto before = store.slot (slot_);
-    auto after = before;
-    change (after);
-    if (after == before)
+    // On the heap: an entry holds ~100 KB of patterns (small host stacks).
+    auto e = std::make_unique<PatternHistory::Entry>();
+    e->slot = slot_;
+    store.copySlot (slot_, e->before);
+    e->after = e->before;
+    change (e->after);
+    if (e->after == e->before)
         return;
+    store.setSlot (slot_, e->after);
     auto& history = processor_.patternHistory();
     // One knob drag is one undo step: later changes of the same drag amend it.
-    const bool amended = gesture_ && key == lastKey_ && history.amendLast (slot_, after);
+    const bool amended = gesture_ && key == lastKey_ && history.amendLast (slot_, e->after);
     if (! amended)
-        history.push ({ slot_, false, before, after, {}, {} });
+        history.push (std::move (e));
     lastKey_ = gesture_ ? key : juce::String();
-    store.setSlot (slot_, after);
     update();
 }
 
@@ -313,18 +324,18 @@ void PatternEditor::editBoth (const std::function<void (StoredPattern& a, Stored
     if (slot_ < 0)
         return;
     auto& store = processor_.patterns();
-    PatternHistory::Entry e;
-    e.slot = slot_;
-    e.alternate = true;
-    e.before = store.slot (slot_);
-    e.beforeB = store.alternate (slot_);
-    e.after = e.before;
-    e.afterB = e.beforeB;
-    change (e.after, e.afterB);
-    if (e.after == e.before && e.afterB == e.beforeB)
+    auto e = std::make_unique<PatternHistory::Entry>();
+    e->slot = slot_;
+    e->alternate = true;
+    store.copySlot (slot_, e->before);
+    store.copyAlternate (slot_, e->beforeB);
+    e->after = e->before;
+    e->afterB = e->beforeB;
+    change (e->after, e->afterB);
+    if (e->after == e->before && e->afterB == e->beforeB)
         return;
-    store.setSlot (slot_, e.after);
-    store.setAlternate (slot_, e.afterB);
+    store.setSlot (slot_, e->after);
+    store.setAlternate (slot_, e->afterB);
     processor_.patternHistory().push (std::move (e));
     lastKey_.clear();
     update();
@@ -338,7 +349,7 @@ void PatternEditor::update (bool repaintIfChanged)
     bool changed = false;
     if (index != slot_ || processor_.patterns().generation() != generation_)
     {
-        shown_ = processor_.patterns().slot (index, generation_);   // read together (review 6745483562)
+        processor_.patterns().copySlot (index, shown_, generation_);   // read together (review 6745483562)
         if (index != slot_)
             lastKey_.clear();
         slot_ = index;

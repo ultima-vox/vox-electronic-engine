@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 namespace vox::drums {
 namespace {
@@ -70,7 +71,8 @@ void StoredPattern::resize (int newSteps, int newBars) noexcept
     if (! validSteps (newSteps))
         newSteps = steps;
     newBars = std::clamp (newBars, 1, kit::maxPatternBars);
-    const StoredPattern old = *this;
+    const auto copy = std::make_unique<StoredPattern> (*this);   // heap: ~24 KB
+    const StoredPattern& old = *copy;
     cells.fill ({});
     steps = static_cast<std::uint8_t> (newSteps);
     bars = static_cast<std::uint8_t> (newBars);
@@ -107,9 +109,16 @@ bool StoredPattern::operator== (const StoredPattern& o) const noexcept
 
 StoredPattern factorySlot (int index) noexcept
 {
-    std::array<kit::PatternStep, 8 * 4 * 16> legacy {};
-    const auto view = kit::factoryPattern (index, legacy);
     StoredPattern p;
+    factorySlot (index, p);
+    return p;
+}
+
+void factorySlot (int index, StoredPattern& p) noexcept
+{
+    std::array<kit::PatternStep, 8 * 4 * 16> legacy {};   // 3 KB
+    const auto view = kit::factoryPattern (index, legacy);
+    p.cells.fill ({});
     p.steps = static_cast<std::uint8_t> (view.steps);
     p.bars = static_cast<std::uint8_t> (view.bars);
     p.seed = 1;
@@ -118,21 +127,24 @@ StoredPattern factorySlot (int index) noexcept
             for (std::uint32_t st = 0; st < view.steps; ++st)
                 p.cell (static_cast<int> (lane), static_cast<int> (bar), static_cast<int> (st))
                     = legacy[(lane * view.bars + bar) * view.steps + st];
-    return p;
 }
 
-std::array<StoredPattern, PatternStore::slotCount> PatternStore::factorySlots()
+void PatternStore::factorySlots (std::array<StoredPattern, slotCount>& out)
 {
-    std::array<StoredPattern, slotCount> slots;
     for (int i = 0; i < slotCount; ++i)
-        slots[static_cast<std::size_t> (i)] = factorySlot (i);
-    return slots;
+        factorySlot (i, out[static_cast<std::size_t> (i)]);
 }
 
 PatternStore::PatternStore()
 {
-    slots_ = factorySlots();
+    factorySlots (slots_);
     alternates_ = slots_;
+}
+
+void PatternStore::copyAlternate (int index, StoredPattern& out) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    out = alternates_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
 StoredPattern PatternStore::alternate (int index) const
@@ -150,10 +162,10 @@ void PatternStore::setAlternate (int index, const StoredPattern& pattern)
     generation_.store (generation_.load() + 1);   // the editor shows A/B state
 }
 
-std::array<StoredPattern, PatternStore::slotCount> PatternStore::alternates() const
+void PatternStore::copyAlternates (std::array<StoredPattern, slotCount>& out) const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
-    return alternates_;
+    out = alternates_;
 }
 
 void PatternStore::setAlternates (const std::array<StoredPattern, slotCount>& alternates)
@@ -169,11 +181,17 @@ StoredPattern PatternStore::slot (int index) const
     return slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
-StoredPattern PatternStore::slot (int index, std::uint64_t& generation) const
+void PatternStore::copySlot (int index, StoredPattern& out) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    out = slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+}
+
+void PatternStore::copySlot (int index, StoredPattern& out, std::uint64_t& generation) const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
     generation = generation_.load();
-    return slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+    out = slots_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
 // The generation moves under the lock, together with the data it counts:
@@ -204,10 +222,18 @@ void PatternStore::setAll (const std::array<StoredPattern, slotCount>& slots)
     generation_.store (g);
 }
 
-std::array<StoredPattern, PatternStore::slotCount> PatternStore::all() const
+void PatternStore::copyAll (std::array<StoredPattern, slotCount>& out) const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
-    return slots_;
+    out = slots_;
+}
+
+preset::Section PatternStore::encodeCurrent() const
+{
+    // Message/host thread; the audio thread only try-locks, so encoding
+    // under the lock never makes it wait.
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    return encode (slots_, alternates_);
 }
 
 const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
@@ -219,10 +245,10 @@ const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
         const auto g = slotGeneration_[static_cast<std::size_t> (index)];
         if (live.index != index || live.generation != g)
         {
-            live.pattern = slots_[static_cast<std::size_t> (index)];
+            *live.pattern = slots_[static_cast<std::size_t> (index)];
             live.index = index;
             live.generation = g;
-            live.view = live.pattern.view();
+            live.view = live.pattern->view();
         }
     }
     return live.view;
@@ -335,7 +361,7 @@ bool PatternStore::decode (const preset::Section& section, std::array<StoredPatt
 }
 
 //==============================================================================
-void PatternHistory::push (Entry entry)
+void PatternHistory::push (std::unique_ptr<Entry> entry)
 {
     undo_.push_back (std::move (entry));
     if (undo_.size() > capacity)
@@ -345,9 +371,9 @@ void PatternHistory::push (Entry entry)
 
 bool PatternHistory::amendLast (int slot, const StoredPattern& after)
 {
-    if (undo_.empty() || ! redo_.empty() || undo_.back().slot != slot || undo_.back().alternate)
+    if (undo_.empty() || ! redo_.empty() || undo_.back()->slot != slot || undo_.back()->alternate)
         return false;
-    undo_.back().after = after;
+    undo_.back()->after = after;
     return true;
 }
 
@@ -357,10 +383,10 @@ int PatternHistory::undo (PatternStore& store)
         return -1;
     auto e = std::move (undo_.back());
     undo_.pop_back();
-    store.setSlot (e.slot, e.before);
-    if (e.alternate)
-        store.setAlternate (e.slot, e.beforeB);
-    const int slot = e.slot;
+    store.setSlot (e->slot, e->before);
+    if (e->alternate)
+        store.setAlternate (e->slot, e->beforeB);
+    const int slot = e->slot;
     redo_.push_back (std::move (e));
     return slot;
 }
@@ -371,10 +397,10 @@ int PatternHistory::redo (PatternStore& store)
         return -1;
     auto e = std::move (redo_.back());
     redo_.pop_back();
-    store.setSlot (e.slot, e.after);
-    if (e.alternate)
-        store.setAlternate (e.slot, e.afterB);
-    const int slot = e.slot;
+    store.setSlot (e->slot, e->after);
+    if (e->alternate)
+        store.setAlternate (e->slot, e->afterB);
+    const int slot = e->slot;
     undo_.push_back (std::move (e));
     return slot;
 }

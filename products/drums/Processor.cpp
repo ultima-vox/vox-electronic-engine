@@ -283,12 +283,13 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodeParameters (plain));
     out.push_back (KitStore::encode (store_.snapshot()));
     out.push_back (samples_.writeState());
-    out.push_back (PatternStore::encode (patternStore_.all(), patternStore_.alternates()));
+    out.push_back (patternStore_.encodeCurrent());
 }
 
 juce::MemoryBlock DrumsProcessor::exportPatternMidi (int slot, int passes, double bpm)
 {
-    const auto stored = patternStore_.slot (slot);
+    const auto stored = std::make_unique<StoredPattern>();   // heap: ~24 KB
+    patternStore_.copySlot (slot, *stored);
     kit::StepContext context;
     context.swing = parameters_.getRawParameterValue ("drm.seq.swing")->load();
     context.accent = parameters_.getRawParameterValue ("drm.seq.accent")->load();
@@ -304,7 +305,7 @@ juce::MemoryBlock DrumsProcessor::exportPatternMidi (int slot, int passes, doubl
     ExportOptions options;
     options.passes = passes;
     options.bpm = bpm;
-    return exportMidi (stored.view(), context, notes, options, "VOX Drums Pattern " + juce::String (slot + 1));
+    return exportMidi (stored->view(), context, notes, options, "VOX Drums Pattern " + juce::String (slot + 1));
 }
 
 DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
@@ -373,7 +374,8 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         KitStore::migrateLegacyParameters (values, *kitRestore);
 
     // Patterns: the DSEQ section; factory patterns otherwise (DRM-01..03).
-    auto patternRestore = std::make_shared<std::array<StoredPattern, PatternStore::slotCount>> (PatternStore::factorySlots());
+    auto patternRestore = std::make_shared<std::array<StoredPattern, PatternStore::slotCount>>();
+    PatternStore::factorySlots (*patternRestore);
     auto alternateRestore = std::make_shared<std::array<StoredPattern, PatternStore::slotCount>> (*patternRestore);
     if (const auto* seq = document.find (sequenceSectionTag))
     {
