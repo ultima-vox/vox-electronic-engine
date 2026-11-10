@@ -65,6 +65,9 @@ public:
     // its newest) and other instances' folders older than staleLifetime.
     void cleanupDragFiles (juce::Time now);
     static juce::File dragRoot();
+    // Tests: a private root, so a test's cleanup (with a simulated later
+    // clock) never touches another process's drags in the shared temp folder.
+    static void setDragRootForTesting (const juce::File& root);
     static inline const juce::RelativeTime dragLifetime = juce::RelativeTime::minutes (10);
     static inline const juce::RelativeTime staleLifetime = juce::RelativeTime::days (1);
     juce::String fileName() const;        // "VOX Drums Pattern N.mid"
@@ -78,7 +81,8 @@ private:
     void checkEpoch();
     void startDrag();
     juce::File newDragFile();
-    const juce::String instanceId_ = juce::Uuid().toString();
+    // "<creation ms>-<UUID>": the age of this instance's folder for others' cleanup.
+    const juce::String instanceId_ = juce::String (juce::Time::currentTimeMillis()) + "-" + juce::Uuid().toString();
     int dragCount_ = 0;
 
     DrumsProcessor& processor_;

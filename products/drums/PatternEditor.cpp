@@ -495,10 +495,43 @@ juce::File PatternEditor::saveAsDefault() const
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (fileName());
 }
 
+namespace {
+juce::File& dragRootOverride()
+{
+    static juce::File root;
+    return root;
+}
+} // namespace
+
 juce::File PatternEditor::dragRoot()
 {
+    if (dragRootOverride() != juce::File())
+        return dragRootOverride();
     return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VOX Drums MIDI drags");
 }
+
+void PatternEditor::setDragRootForTesting (const juce::File& root)
+{
+    dragRootOverride() = root;
+}
+
+namespace {
+
+// Drag and instance folders carry their creation time in the name,
+// "<ms since epoch>-<...>": file and folder modification times are not
+// reliable (directory times change with their content, and setting them
+// fails on Windows).
+juce::int64 createdMs (const juce::File& folder)
+{
+    return folder.getFileName().upToFirstOccurrenceOf ("-", false, false).getLargeIntValue();
+}
+
+int dragNumber (const juce::File& folder)
+{
+    return folder.getFileName().fromFirstOccurrenceOf ("-", false, false).upToFirstOccurrenceOf ("-", false, false).getIntValue();
+}
+
+} // namespace
 
 juce::File PatternEditor::newDragFile()
 {
@@ -506,8 +539,10 @@ juce::File PatternEditor::newDragFile()
     // instance (and process) and per drag, so no other export, from this
     // or another instance or process, can replace a file a DAW is still
     // importing. The file name stays readable.
-    cleanupDragFiles (juce::Time::getCurrentTime());
-    const auto folder = dragRoot().getChildFile (instanceId_).getChildFile (juce::String (++dragCount_) + "-" + juce::Uuid().toString().substring (0, 12));
+    const auto now = juce::Time::getCurrentTime();
+    cleanupDragFiles (now);
+    const auto folder = dragRoot().getChildFile (instanceId_).getChildFile (
+        juce::String (now.toMilliseconds()) + "-" + juce::String (++dragCount_) + "-" + juce::Uuid().toString().substring (0, 12));
     folder.createDirectory();
     return folder.getChildFile (fileName());
 }
@@ -516,25 +551,28 @@ void PatternEditor::cleanupDragFiles (juce::Time now)
 {
     // Bounded: this instance keeps its newest drag and any younger than
     // dragLifetime (time for a DAW to import a drop); folders other
-    // instances left behind are removed only after staleLifetime (a crash
-    // or a closed host). Never the newest drag of this instance.
+    // instances left behind are removed only when they and all their drags
+    // are older than staleLifetime (a crash or a closed host). Never the
+    // newest drag of this instance. Ages come from the folder names.
+    const auto nowMs = now.toMilliseconds();
     const auto mine = dragRoot().getChildFile (instanceId_);
     auto drags = mine.findChildFiles (juce::File::findDirectories, false);
     std::sort (drags.begin(), drags.end(), [] (const juce::File& a, const juce::File& b) {
-        return a.getLastModificationTime() < b.getLastModificationTime();
+        return createdMs (a) != createdMs (b) ? createdMs (a) < createdMs (b) : dragNumber (a) < dragNumber (b);
     });
     for (int i = 0; i + 1 < drags.size(); ++i)
-        if (now - drags[i].getLastModificationTime() > dragLifetime)
+        if (nowMs - createdMs (drags[i]) > dragLifetime.inMilliseconds())
             drags[i].deleteRecursively();
     for (const auto& other : dragRoot().findChildFiles (juce::File::findDirectories, false))
-        if (other != mine && now - other.getLastModificationTime() > staleLifetime)
-        {
-            bool fresh = false;
-            for (const auto& drag : other.findChildFiles (juce::File::findDirectories, false))
-                fresh = fresh || now - drag.getLastModificationTime() <= staleLifetime;
-            if (! fresh)
-                other.deleteRecursively();
-        }
+    {
+        if (other == mine)
+            continue;
+        auto newest = createdMs (other);
+        for (const auto& drag : other.findChildFiles (juce::File::findDirectories, false))
+            newest = std::max (newest, createdMs (drag));
+        if (nowMs - newest > staleLifetime.inMilliseconds())
+            other.deleteRecursively();
+    }
 }
 
 bool PatternEditor::writeMidi (const juce::File& file) const
@@ -548,8 +586,6 @@ juce::File PatternEditor::exportForDrag()
     const auto file = newDragFile();
     if (! writeMidi (file))
         return {};
-    // Folder time = the drag's time (cleanup reads it).
-    file.getParentDirectory().setLastModificationTime (juce::Time::getCurrentTime());
     return file;
 }
 

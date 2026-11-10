@@ -2128,6 +2128,9 @@ void testPatternEditorUi()
             f.loadFileAsData (b);
             return b;
         };
+        const auto testRoot = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                  .getChildFile ("vox-drums-drag-test-" + juce::Uuid().toString());
+        vox::drums::PatternEditor::setDragRootForTesting (testRoot);
         // Instance B: same slot index (3), different notes.
         auto q = makeProcessor();
         std::unique_ptr<juce::AudioProcessorEditor> editorB (q->createEditorAndMakeActive());
@@ -2153,26 +2156,20 @@ void testPatternEditorUi()
                "drag: the dropped file keeps the readable name");
         check (loadFile (a1) == expectA && loadFile (a2) == expectA && loadFile (b1) == expectB,
                "drag: each handed-off file still holds its own instance's export after the others");
-        // Cleanup: old drags of this instance go, the newest stays even if
-        // old; another instance's folder goes only when stale.
+        // Cleanup, at later clock times (ages come from the folder names):
+        // this instance's old drags go, its newest stays even when old;
+        // another instance's folder goes only once it is stale.
         const auto now = juce::Time::getCurrentTime();
-        const auto old = now - vox::drums::PatternEditor::dragLifetime - juce::RelativeTime::minutes (1);
-        a1.getParentDirectory().setLastModificationTime (old);
-        a2.getParentDirectory().setLastModificationTime (old + juce::RelativeTime::seconds (1));   // newest, also old
-        ed.cleanupDragFiles (now);
+        ed.cleanupDragFiles (now + vox::drums::PatternEditor::dragLifetime + juce::RelativeTime::minutes (1));
         check (! a1.exists() && a2.exists(), "drag: cleanup removes old drags but never the newest");
         check (b1.exists(), "drag: another instance's recent drag is kept");
-        const auto bInstance = b1.getParentDirectory().getParentDirectory();
-        b1.getParentDirectory().setLastModificationTime (now - vox::drums::PatternEditor::staleLifetime - juce::RelativeTime::hours (1));
-        bInstance.setLastModificationTime (now - vox::drums::PatternEditor::staleLifetime - juce::RelativeTime::hours (1));
-        ed.cleanupDragFiles (now);
+        ed.cleanupDragFiles (now + vox::drums::PatternEditor::staleLifetime + juce::RelativeTime::hours (1));
         check (! b1.exists() && a2.exists(), "drag: another instance's stale folder (a day old) is removed");
         q->editorBeingDeleted (editorB.get());
-        // Remove this test's drag folder, and only a folder inside the drag
-        // root (never anything above it, whatever the paths turned out to be).
-        const auto instanceDir = a2.getParentDirectory().getParentDirectory();
-        if (instanceDir.isAChildOf (vox::drums::PatternEditor::dragRoot()))
-            instanceDir.deleteRecursively();
+        // Remove this test's private drag root (only that folder, by name).
+        if (testRoot.getFileName().startsWith ("vox-drums-drag-test-") && testRoot == vox::drums::PatternEditor::dragRoot())
+            testRoot.deleteRecursively();
+        vox::drums::PatternEditor::setDragRootForTesting ({});
     }
 
     // A real mouse click on a cell (lane page 2 when the grid is small).
