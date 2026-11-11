@@ -344,6 +344,13 @@ void buildSong (DrumsProcessor& p)
             on (cells, 10, st, 40 + st, 2, st % 2 == 0 ? -20 : 25, 70, st % 3 == 0);
     });
     p.patterns().setEverything (*all);
+    // Host-note remaps: pads 10, 12 and 16 on notes far from their defaults.
+    for (const auto& [pad, note] : { std::pair { 9, 71 }, std::pair { 11, 28 }, std::pair { 15, 101 } })
+    {
+        auto settings = p.kitStore().pad (pad);
+        settings.note = static_cast<std::uint8_t> (note);
+        p.kitStore().setPad (pad, settings);
+    }
 }
 
 std::vector<Hit> exportHits (const juce::MemoryBlock& midi, ParsedMidi* parsed = nullptr)
@@ -430,6 +437,21 @@ void testSongParity()
                                 [&] (const Hit& h) { return h.note == note && h.velocity == velocity && h.tick >= fromTick; });
         };
         check (has (notes[15], 77, 255.9 * 960.0), "song export: the last step of bar 64 is exported");
+        check (notes[9] == 71 && notes[11] == 28 && notes[15] == 101, "song export: remapped pad notes are used");
+        {
+            // A write that cannot succeed is reported, not silent.
+            std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+            auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+            auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
+            if (panel != nullptr)
+            {
+                auto& ed = panel->patternEditor();
+                const auto impossible = workFolder.getChildFile ("no-such-folder").getChildFile ("deeper").getChildFile ("x.mid");
+                check (! ed.writeMidi (impossible) && ed.exportMessage().contains ("failed"), "export: a failed write is reported (" + ed.exportMessage() + ")");
+                check (ed.writeMidi (workFolder.getChildFile ("ok.mid")) && ed.exportMessage().isEmpty(), "export: a later success clears the message");
+            }
+            p->editorBeingDeleted (editor.get());
+        }
         int ratchets = 0;
         for (const auto& h : expected)
             if (h.note == notes[9] && h.velocity == 99 && h.tick >= 255.8 * 960.0)

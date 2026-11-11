@@ -120,6 +120,14 @@ endif()
 add_test(NAME suite_drums_candidate_tests
   COMMAND suite_drums_candidate_tests ${PROJECT_SOURCE_DIR}/products/drums/factory-content.csv)
 
+# Callback timing of a heavy scene (reports p50/p95/p99/p99.9/worst; does
+# not gate on the numbers).
+add_executable(suite_drums_callback_bench DrumsCallbackBench.cpp)
+target_link_libraries(suite_drums_callback_bench PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_callback_bench PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_callback_bench
+  COMMAND suite_drums_callback_bench ${CMAKE_BINARY_DIR}/vox-drums-callback-timing.csv)
+
 # DRM-02: pad samples (decode, sound, ownership, realtime, state, editor).
 add_executable(suite_drums_sample_tests DrumsSampleTests.cpp)
 target_link_libraries(suite_drums_sample_tests PRIVATE ${VOX_SUITE_drm_TARGET})

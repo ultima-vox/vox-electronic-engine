@@ -64,7 +64,9 @@ public:
     juce::ComboBox* combo (const juce::String& name);     // "steps", "bars"
     juce::Button* barButton (int bar);
     // Writes the MIDI export of the shown slot to `file`.
-    bool writeMidi (const juce::File& file) const;
+    bool writeMidi (const juce::File& file);
+    // "" or why the last export failed (also shown next to the toolbar).
+    juce::String exportMessage() const { return exportMessage_; }
     // What a click or a drag exports now (the scope chosen in the editor
     // state: Pattern or Entire Song), frozen; both write it with writeSnapshot.
     std::shared_ptr<const ExportSnapshot> snapshot() const;
@@ -103,7 +105,8 @@ private:
     int slot_ = -1, bar_ = 0, playStep_ = -1, playBar_ = -1, songBar_ = -1, shownSongBar_ = -1;
     int lane_ = 0, step_ = 0, lanePage_ = 0;
     bool refreshing_ = false, gesture_ = false, dragging_ = false;
-    juce::String lastKey_;
+    juce::String lastKey_, exportMessage_;
+    void exported (bool ok, const juce::File& file);
 
     std::array<std::unique_ptr<vox::ui::VoxButton>, kit::maxPatternBars> bars_;
     std::unique_ptr<vox::ui::VoxComboBox> steps_, barCount_;

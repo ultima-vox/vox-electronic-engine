@@ -221,9 +221,13 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         chooser_ = std::make_unique<juce::FileChooser> ("Save as MIDI", saveAsDefault(), "*.mid");
         chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                    | juce::FileBrowserComponent::warnAboutOverwriting,
-                               [frozen] (const juce::FileChooser& fc) {
-                                   if (fc.getResult() != juce::File())
-                                       writeSnapshot (*frozen, fc.getResult().withFileExtension ("mid"));
+                               [frozen, safe = juce::Component::SafePointer<PatternEditor> (this)] (const juce::FileChooser& fc) {
+                                   if (fc.getResult() == juce::File())
+                                       return;
+                                   const auto file = fc.getResult().withFileExtension ("mid");
+                                   const bool ok = writeSnapshot (*frozen, file);
+                                   if (safe != nullptr)
+                                       safe->exported (ok, file);
                                });
     };
     midi_->addMouseListener (this, false);
@@ -449,8 +453,9 @@ void PatternEditor::refreshControls()
     lanes_->setVisible (grid_ != nullptr && grid_->rows() < padCount);
     undo_->setEnabled (processor_.patternHistory().canUndo());
     redo_->setEnabled (processor_.patternHistory().canRedo());
-    abLabel_->setText ((songBar_ >= 0 ? "Song bar " + juce::String (songBar_ + 1) : "Pattern " + juce::String (slot_ + 1)) + "  " + juce::String (lane_ + 1) + "." + juce::String (bar_ + 1) + "."
-                           + juce::String (step_ + 1),
+    abLabel_->setColour (juce::Label::textColourId, exportMessage_.isEmpty() ? c::textMuted : juce::Colours::orange);
+    abLabel_->setText (exportMessage_.isNotEmpty() ? exportMessage_ : ((songBar_ >= 0 ? "Song bar " + juce::String (songBar_ + 1) : "Pattern " + juce::String (slot_ + 1)) + "  " + juce::String (lane_ + 1) + "." + juce::String (bar_ + 1) + "."
+                           + juce::String (step_ + 1)),
                        juce::dontSendNotification);
     refreshing_ = false;
 }
@@ -650,9 +655,19 @@ bool PatternEditor::writeSnapshot (const ExportSnapshot& snapshot, const juce::F
     return blob.getSize() > 0 && file.replaceWithData (blob.getData(), blob.getSize());
 }
 
-bool PatternEditor::writeMidi (const juce::File& file) const
+bool PatternEditor::writeMidi (const juce::File& file)
 {
-    return writeSnapshot (*snapshot(), file);
+    const bool ok = writeSnapshot (*snapshot(), file);
+    exported (ok, file);
+    return ok;
+}
+
+// A failed export is shown, never silent (and never an empty or partial file
+// presented as the song).
+void PatternEditor::exported (bool ok, const juce::File& file)
+{
+    exportMessage_ = ok ? juce::String() : "MIDI export failed: cannot write " + file.getFullPathName();
+    refreshControls();
 }
 
 juce::File PatternEditor::exportForDrag()
