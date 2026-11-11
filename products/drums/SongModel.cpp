@@ -194,6 +194,110 @@ void buildSongView (const SongTable& table, const StoredPattern* slots, const St
 }
 
 //==============================================================================
+namespace songedit {
+namespace {
+void range (const SongData& song, int& from, int& count) noexcept
+{
+    from = std::clamp (from, 0, song.length - 1);
+    count = std::clamp (count, 0, song.length - from);
+}
+} // namespace
+
+SongData insertEmpty (const SongData& song, int from, int count)
+{
+    range (song, from, count);
+    SongData out = song;
+    for (int i = song.length - 1; i >= from; --i)
+        out.bars[static_cast<std::size_t> (i)] = i - count >= from ? song.bars[static_cast<std::size_t> (i - count)] : SongBar {};
+    return out;
+}
+
+SongData removeBars (const SongData& song, int from, int count)
+{
+    range (song, from, count);
+    SongData out = song;
+    for (int i = from; i < song.length; ++i)
+        out.bars[static_cast<std::size_t> (i)] = i + count < song.length ? song.bars[static_cast<std::size_t> (i + count)] : SongBar {};
+    return out;
+}
+
+SongData duplicate (const SongData& song, int from, int count)
+{
+    range (song, from, count);
+    return paste (song, from + count, copy (song, from, count));
+}
+
+SongData clear (const SongData& song, int from, int count)
+{
+    range (song, from, count);
+    SongData out = song;
+    for (int i = from; i < from + count; ++i)
+        out.bars[static_cast<std::size_t> (i)] = {};
+    return out;
+}
+
+std::vector<SongBar> copy (const SongData& song, int from, int count)
+{
+    range (song, from, count);
+    return { song.bars.begin() + from, song.bars.begin() + from + count };
+}
+
+SongData paste (const SongData& song, int at, const std::vector<SongBar>& bars)
+{
+    SongData out = song;
+    for (std::size_t i = 0; i < bars.size(); ++i)
+    {
+        const int to = at + static_cast<int> (i);
+        if (to >= 0 && to < song.length)
+            out.bars[static_cast<std::size_t> (to)] = bars[i];
+    }
+    return out;
+}
+
+SongData makeUnique (const SongData& song, int from, int count, const std::array<StoredPattern, slotCountForSong>& slots,
+                     const std::array<StoredPattern, slotCountForSong>& alternates)
+{
+    range (song, from, count);
+    SongData out = song;
+    for (int i = from; i < from + count; ++i)
+    {
+        auto& bar = out.bars[static_cast<std::size_t> (i)];
+        if (bar.kind != SongBar::Kind::pattern)
+            continue;
+        bar.cells = resolveBar (bar, slots, alternates);
+        bar.kind = SongBar::Kind::unique;
+        bar.slot = bar.variation = bar.patternBar = 0;
+    }
+    return out;
+}
+
+void barToPattern (const std::shared_ptr<const BarCells>& bar, StoredPattern& out)
+{
+    out.cells.fill ({});
+    out.bars = 1;
+    out.steps = bar != nullptr ? bar->steps : std::uint8_t { 16 };
+    out.seed = bar != nullptr ? bar->seed : 1u;
+    if (bar != nullptr)
+        for (int lane = 0; lane < kit::padCount; ++lane)
+            for (int st = 0; st < bar->steps; ++st)
+                out.cell (lane, 0, st) = bar->cell (lane, st);
+}
+
+std::shared_ptr<const BarCells> patternToBar (const StoredPattern& pattern)
+{
+    auto cells = std::make_shared<BarCells>();
+    cells->id = BarCells::nextId();
+    cells->steps = pattern.steps;
+    cells->seed = pattern.seed;
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int st = 0; st < pattern.steps; ++st)
+            cells->cell (lane, st) = pattern.cell (lane, 0, st);
+    return cells;
+}
+
+} // namespace songedit
+
+//==============================================================================
 preset::Section encodeSong (const SongData& song)
 {
     preset::Section s;
@@ -323,6 +427,33 @@ SongData PatternStore::song() const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
     return song_;
+}
+
+void PatternStore::copySongBar (int bar, StoredPattern& out, std::uint64_t& generation) const
+{
+    std::shared_ptr<const BarCells> cells;
+    {
+        const juce::SpinLock::ScopedLockType sl (lock_);
+        generation = generation_.load();
+        const auto& b = song_.bars[static_cast<std::size_t> (std::clamp (bar, 0, kit::maxSongBars - 1))];
+        if (b.kind == SongBar::Kind::unique)
+            cells = b.cells;
+        else if (b.kind == SongBar::Kind::pattern)
+        {
+            // Copied under the lock into `out` directly (no allocation here).
+            const auto& p = (b.variation != 0 ? alternates_ : slots_)[std::min<std::size_t> (b.slot, slotCount - 1)];
+            const int pb = b.patternBar % std::max<int> (1, p.bars);
+            out.cells.fill ({});
+            out.bars = 1;
+            out.steps = p.steps;
+            out.seed = p.seed;
+            for (int lane = 0; lane < kit::padCount; ++lane)
+                for (int st = 0; st < p.steps; ++st)
+                    out.cell (lane, 0, st) = p.cell (lane, pb, st);
+            return;
+        }
+    }
+    songedit::barToPattern (cells, out);
 }
 
 void PatternStore::setSong (const SongData& song)

@@ -151,6 +151,24 @@ SongTable tableOf (const SongData& song) noexcept;
 // u8 patternBar; unique: u8 steps, u32 seed, 16 x steps cells (lane-major)
 // of u8 flags (on, accent, locked), velocity, probability, ratchet, micro.
 // Strict: anything out of range rejects the section.
+// Timeline edits (message thread). Each returns the edited copy; `from` and
+// `count` are clamped to the song. Bars pushed past the end are dropped.
+namespace songedit {
+SongData insertEmpty (const SongData& song, int from, int count);                 // shifts the rest right
+SongData removeBars (const SongData& song, int from, int count);                  // shifts the rest left
+SongData duplicate (const SongData& song, int from, int count);                   // copies the range after itself
+SongData clear (const SongData& song, int from, int count);
+SongData paste (const SongData& song, int at, const std::vector<SongBar>& bars);  // replaces
+std::vector<SongBar> copy (const SongData& song, int from, int count);
+// Every pattern bar in the range becomes unique: its own copy of the cells
+// it references now (later pattern edits no longer reach it).
+SongData makeUnique (const SongData& song, int from, int count, const std::array<StoredPattern, slotCountForSong>& slots,
+                     const std::array<StoredPattern, slotCountForSong>& alternates);
+// One bar as a one-bar pattern (for the step editor) and back.
+void barToPattern (const std::shared_ptr<const BarCells>& bar, StoredPattern& out);
+std::shared_ptr<const BarCells> patternToBar (const StoredPattern& pattern);
+} // namespace songedit
+
 preset::Section encodeSong (const SongData& song);
 bool decodeSong (const preset::Section& section, SongData& out, juce::String& error);
 
@@ -186,6 +204,9 @@ public:
 
     //== DRM-05 song (message / host threads)
     SongData song() const;
+    // Song bar `bar` as it plays now (a reference resolved, empty: 16 empty
+    // steps) as a one-bar pattern, with the generation it belongs to.
+    void copySongBar (int bar, StoredPattern& out, std::uint64_t& generation) const;
     void setSong (const SongData& song);
     // The slots, alternates and song as they are together (one lock).
     struct Everything {
@@ -275,6 +296,7 @@ public:
     // Replaces the newest entry's result (one knob drag = one undo step);
     // false if there is none for `slot` or it can be redone instead.
     bool amendLast (int slot, const StoredPattern& after);
+    bool amendLastSong (const SongData& after);   // the same for a song edit
     bool canUndo() const noexcept { return ! undo_.empty(); }
     bool canRedo() const noexcept { return ! redo_.empty(); }
     // Applies to `store` and returns the slot it changed (-1 if nothing).

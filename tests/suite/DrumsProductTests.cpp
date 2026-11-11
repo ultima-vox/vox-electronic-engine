@@ -479,6 +479,7 @@ void testEditorBindings()
             return c == panel;
         };
         p->kitStore().setAll (vox::drums::defaultKit());
+        panel->showPage (1);   // SOUND (DRM-07: the pad controls are on their own page)
         panel->selectPad (0);
         panel->pollForTesting();
         check (panel->bodyVisible() && shown (panel->structuralSlider ("drive")), "kick body shows for a Kick pad");
@@ -490,9 +491,19 @@ void testEditorBindings()
         check (shown (panel->structuralSlider ("drive")), "kick body returns when a restore makes the pad a Kick again");
         // Host parameters bind to the selected pad.
         panel->selectPad (11);
-        check (panel->sliderFor ("drm.p12.level") != nullptr && panel->sliderFor ("drm.p01.level") == nullptr
-                   && panel->buttonFor ("drm.p12.mute") != nullptr,
-               "pad knobs follow the selected pad");
+        // DRM-07: the mixer page also holds every pad's level, so the SOUND
+        // page's knob is checked by what it moves.
+        {
+            auto* level = panel->selectedPadSlider ("level");
+            check (level != nullptr && panel->buttonFor ("drm.p12.mute") != nullptr, "pad knobs follow the selected pad");
+            if (level != nullptr)
+            {
+                const float p1 = plainOf (*p, "drm.p01.level");
+                level->setValue (0.37, juce::sendNotificationSync);
+                check (std::abs (plainOf (*p, "drm.p12.level") - 0.37f) < 1.0e-4f && juce::exactlyEqual (plainOf (*p, "drm.p01.level"), p1),
+                       "the SOUND page's level knob moves the selected pad only");
+            }
+        }
     }
 
     // Pad buttons audition their pad and light up.
@@ -2000,6 +2011,8 @@ void testPatternEditorUi()
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
     check (panel != nullptr, "step editor: Drums panel");
+    if (panel != nullptr)
+        panel->showPage (2);   // PATTERN/SONG (DRM-07)
     if (panel == nullptr)
         return;
     auto& ed = panel->patternEditor();

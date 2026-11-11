@@ -2,6 +2,7 @@
 #include "PatternExport.h"
 
 #include "DrumsEditor.h"
+#include "Presets.h"
 
 #include <cmath>
 #include <cstring>
@@ -170,6 +171,21 @@ int DrumsProcessor::currentSlot() const
                        PatternStore::slotCount - 1);
 }
 
+bool DrumsProcessor::editSong (const std::function<void (SongData&)>& change)
+{
+    auto e = std::make_unique<PatternHistory::Entry>();
+    e->slot = -1;
+    e->hasSong = true;
+    e->songBefore = patternStore_.song();
+    e->songAfter = e->songBefore;
+    change (e->songAfter);
+    if (e->songAfter == e->songBefore)
+        return false;
+    patternStore_.setSong (e->songAfter);
+    patternHistory_.push (std::move (e));
+    return true;
+}
+
 bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSeed, int bar)
 {
     auto g = generator();
@@ -267,6 +283,7 @@ DrumsProcessor::DrumsProcessor()
     reverbSize_ = parameters_.getRawParameterValue ("drm.fx.reverb.size");
     reverbDamp_ = parameters_.getRawParameterValue ("drm.fx.reverb.damp");
     reverbLevel_ = parameters_.getRawParameterValue ("drm.fx.reverb.level");
+    presets_ = std::make_unique<Presets> (*this);
     events_.resize (midiCapacity);
     live_ = defaultKit();
     for (const auto& entry : pluginParameters())
@@ -275,6 +292,8 @@ DrumsProcessor::DrumsProcessor()
         restored_.push_back ({ plain, plain });
     }
 }
+
+DrumsProcessor::~DrumsProcessor() = default;
 
 void DrumsProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
 {

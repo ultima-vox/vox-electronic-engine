@@ -71,9 +71,14 @@ struct ExportSnapshot {
 // and Send 2 (reverb). Both returns go to Main only. A pad routed to a bus
 // the host has disabled plays on Main. The two send pairs are internal
 // buffers; they are never host buses.
+class Presets;
+
 class DrumsProcessor final : public vox::suite::SuiteProcessor {
 public:
     DrumsProcessor();
+    ~DrumsProcessor() override;
+    // Message thread: preset files, factory content, Undo Load.
+    Presets& presets() noexcept { return *presets_; }
 
     void prepareToPlay (double sampleRate, int maximumBlockSize) override;
     void releaseResources() override;
@@ -122,6 +127,9 @@ public:
     enum class Generate { pattern, song, mutate, fill, variation };
     bool generate (Generate what, std::uint32_t laneMask = 0xffffu, bool newSeed = true, int bar = -1);
     int currentSlot() const;
+    // Message thread: one undoable change of the song (timeline, length,
+    // loop, mode). False when `change` left it as it was.
+    bool editSong (const std::function<void (SongData&)>& change);
 
     //== mixer (DRM-06), any thread
     // Peak since the last call: pad post-fader, Main after the returns.
@@ -207,6 +215,7 @@ private:
     std::atomic<double> lastBpm_ { 120.0 };
     PatternStore::Live livePattern_;   // audio thread
     PatternStore::SongLive liveSong_;  // audio thread
+    std::unique_ptr<Presets> presets_;
     mutable juce::SpinLock settingsLock_;   // generator_, ui_
     GeneratorSettings generator_;
     UiState ui_;

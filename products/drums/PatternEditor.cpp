@@ -215,12 +215,15 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
     };
     button (midi_, "MIDI", "Click: save the pattern as a MIDI file. Drag: drop it into your DAW.", vox::ui::VoxButton::Type::Primary);
     midi_->onClick = [this] {
-        chooser_ = std::make_unique<juce::FileChooser> ("Save the pattern as MIDI", saveAsDefault(), "*.mid");
+        // Frozen at the click: what is saved is what was there when the
+        // button was pressed, whatever changes while the dialog is open.
+        const auto frozen = snapshot();
+        chooser_ = std::make_unique<juce::FileChooser> ("Save as MIDI", saveAsDefault(), "*.mid");
         chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                    | juce::FileBrowserComponent::warnAboutOverwriting,
-                               [this] (const juce::FileChooser& fc) {
+                               [frozen] (const juce::FileChooser& fc) {
                                    if (fc.getResult() != juce::File())
-                                       writeMidi (fc.getResult().withFileExtension ("mid"));
+                                       writeSnapshot (*frozen, fc.getResult().withFileExtension ("mid"));
                                });
     };
     midi_->addMouseListener (this, false);
@@ -272,6 +275,16 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         edit ("accent", [lane, bar, step, on] (StoredPattern& p) { p.cell (lane, bar, step).accent = on; });
     };
     addAndMakeVisible (*accentButton_);
+    lockButton_ = std::make_unique<juce::ToggleButton> ("Lock");
+    lockButton_->setTooltip ("A locked step is left as it is by the generator");
+    lockButton_->onClick = [this] {
+        if (refreshing_)
+            return;
+        const int lane = lane_, bar = bar_, step = step_;
+        const bool on = lockButton_->getToggleState();
+        edit ("lock", [lane, bar, step, on] (StoredPattern& p) { p.cell (lane, bar, step).locked = on; });
+    };
+    addAndMakeVisible (*lockButton_);
 
     epoch_ = processor_.patternEpoch();
     update (false);
@@ -302,6 +315,33 @@ void PatternEditor::edit (const juce::String& key, const std::function<void (Sto
     auto& store = processor_.patterns();
     // On the heap: an entry holds ~100 KB of patterns (small host stacks).
     auto e = std::make_unique<PatternHistory::Entry>();
+    if (songBar_ >= 0)
+    {
+        // The bar as it plays now, changed, becomes the bar's own cells.
+        std::uint64_t generation = 0;
+        store.copySongBar (songBar_, e->before, generation);
+        e->after = e->before;
+        change (e->after);
+        e->after.resize (e->after.steps, 1);
+        if (e->after == e->before)
+            return;
+        e->slot = -1;
+        e->hasSong = true;
+        e->songBefore = store.song();
+        e->songAfter = e->songBefore;
+        auto& bar = e->songAfter.bars[static_cast<std::size_t> (songBar_)];
+        bar = {};
+        bar.kind = SongBar::Kind::unique;
+        bar.cells = songedit::patternToBar (e->after);
+        store.setSong (e->songAfter);
+        auto& songHistory = processor_.patternHistory();
+        const bool amendedSong = gesture_ && key == lastKey_ && songHistory.amendLastSong (e->songAfter);
+        if (! amendedSong)
+            songHistory.push (std::move (e));
+        lastKey_ = gesture_ ? key : juce::String();
+        update();
+        return;
+    }
     e->slot = slot_;
     store.copySlot (slot_, e->before);
     e->after = e->before;
@@ -321,7 +361,7 @@ void PatternEditor::edit (const juce::String& key, const std::function<void (Sto
 void PatternEditor::editBoth (const std::function<void (StoredPattern& a, StoredPattern& b)>& change)
 {
     checkEpoch();
-    if (slot_ < 0)
+    if (slot_ < 0 || songBar_ >= 0)   // a song bar has no variation
         return;
     auto& store = processor_.patterns();
     auto e = std::make_unique<PatternHistory::Entry>();
@@ -347,9 +387,13 @@ void PatternEditor::update (bool repaintIfChanged)
     const int index = std::clamp (static_cast<int> (std::lround (processor_.state().getRawParameterValue (patternParameterId)->load())), 0,
                                   PatternStore::slotCount - 1);
     bool changed = false;
-    if (index != slot_ || processor_.patterns().generation() != generation_)
+    if (index != slot_ || songBar_ != shownSongBar_ || processor_.patterns().generation() != generation_)
     {
-        processor_.patterns().copySlot (index, shown_, generation_);   // read together (review 6745483562)
+        if (songBar_ >= 0)
+            processor_.patterns().copySongBar (songBar_, shown_, generation_);
+        else
+            processor_.patterns().copySlot (index, shown_, generation_);   // read together (review 6745483562)
+        shownSongBar_ = songBar_;
         if (index != slot_)
             lastKey_.clear();
         slot_ = index;
@@ -359,8 +403,10 @@ void PatternEditor::update (bool repaintIfChanged)
     }
     const double stepPpq = 4.0 / shown_.steps;
     const auto g = static_cast<long long> (std::floor (processor_.lastPpq() / stepPpq));
-    const int play = processor_.transportPlaying() && g >= 0 ? static_cast<int> (g % shown_.steps) : -1;
-    const int playBar = g >= 0 ? static_cast<int> ((g / shown_.steps) % shown_.bars) : -1;
+    // A song bar shows the playhead only while that bar plays.
+    const bool here = songBar_ < 0 || processor_.songBarPlaying() == songBar_;
+    const int play = processor_.transportPlaying() && g >= 0 && here ? static_cast<int> (g % shown_.steps) : -1;
+    const int playBar = g >= 0 && here ? static_cast<int> ((g / shown_.steps) % shown_.bars) : -1;
     if (play != playStep_ || playBar != playBar_)
     {
         playStep_ = play;
@@ -395,14 +441,30 @@ void PatternEditor::refreshControls()
     for (auto* k : { velocity_.get(), probability_.get(), ratchet_.get(), micro_.get() })
         k->setEnabled (c.on);
     accentButton_->setEnabled (c.on);
+    lockButton_->setToggleState (c.locked, juce::dontSendNotification);
+    for (auto* b : { swap_.get(), copyB_.get(), dup_.get() })
+        b->setEnabled (songBar_ < 0);
+    barCount_->setEnabled (songBar_ < 0);
     lanes_->setButtonText (lanePage_ == 0 ? "1-8" : "9-16");
     lanes_->setVisible (grid_ != nullptr && grid_->rows() < padCount);
     undo_->setEnabled (processor_.patternHistory().canUndo());
     redo_->setEnabled (processor_.patternHistory().canRedo());
-    abLabel_->setText ("Pattern " + juce::String (slot_ + 1) + "  " + juce::String (lane_ + 1) + "." + juce::String (bar_ + 1) + "."
+    abLabel_->setText ((songBar_ >= 0 ? "Song bar " + juce::String (songBar_ + 1) : "Pattern " + juce::String (slot_ + 1)) + "  " + juce::String (lane_ + 1) + "." + juce::String (bar_ + 1) + "."
                            + juce::String (step_ + 1),
                        juce::dontSendNotification);
     refreshing_ = false;
+}
+
+void PatternEditor::editSongBar (int bar)
+{
+    songBar_ = bar >= 0 && bar < kit::maxSongBars ? bar : -1;
+    lastKey_.clear();
+    update();
+}
+
+juce::Button* PatternEditor::lockToggle()
+{
+    return lockButton_.get();
 }
 
 void PatternEditor::selectBar (int bar)
@@ -485,6 +547,8 @@ juce::Button* PatternEditor::barButton (int bar)
 
 juce::String PatternEditor::fileName() const
 {
+    if (processor_.uiState().exportScope == 1)
+        return "VOX Drums Song.mid";
     return "VOX Drums Pattern " + juce::String (juce::jmax (0, slot_) + 1) + ".mid";
 }
 
@@ -575,10 +639,20 @@ void PatternEditor::cleanupDragFiles (juce::Time now)
     }
 }
 
+std::shared_ptr<const ExportSnapshot> PatternEditor::snapshot() const
+{
+    return processor_.captureExport (processor_.uiState().exportScope == 1 ? ExportSnapshot::Scope::song : ExportSnapshot::Scope::pattern);
+}
+
+bool PatternEditor::writeSnapshot (const ExportSnapshot& snapshot, const juce::File& file)
+{
+    const auto blob = DrumsProcessor::renderExport (snapshot);
+    return blob.getSize() > 0 && file.replaceWithData (blob.getData(), blob.getSize());
+}
+
 bool PatternEditor::writeMidi (const juce::File& file) const
 {
-    const auto blob = processor_.exportPatternMidi (juce::jmax (0, slot_), 1, processor_.lastBpm());
-    return file.replaceWithData (blob.getData(), blob.getSize());
+    return writeSnapshot (*snapshot(), file);
 }
 
 juce::File PatternEditor::exportForDrag()
@@ -639,7 +713,11 @@ void PatternEditor::resized()
     const int kw = juce::jlimit (48, 66, bottom.getWidth() / 11);
     for (auto* k : { velocity_.get(), probability_.get(), ratchet_.get(), micro_.get() })
         k->setBounds (bottom.removeFromLeft (kw));
-    accentButton_->setBounds (bottom.removeFromLeft (84).withSizeKeepingCentre (80, 26));
+    {
+        auto toggles = bottom.removeFromLeft (84);
+        accentButton_->setBounds (toggles.removeFromTop (toggles.getHeight() / 2).withSizeKeepingCentre (80, 24));
+        lockButton_->setBounds (toggles.withSizeKeepingCentre (80, 24));
+    }
     midi_->setBounds (bottom.removeFromRight (64).withSizeKeepingCentre (62, 30));
     for (auto* b : { redo_.get(), undo_.get(), copyB_.get(), swap_.get() })
         b->setBounds (bottom.removeFromRight (56).withSizeKeepingCentre (54, 30));

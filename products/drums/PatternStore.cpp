@@ -384,6 +384,14 @@ bool PatternHistory::amendLast (int slot, const StoredPattern& after)
     return true;
 }
 
+bool PatternHistory::amendLastSong (const SongData& after)
+{
+    if (undo_.empty() || ! redo_.empty() || ! undo_.back()->hasSong || undo_.back()->slot >= 0 || undo_.back()->allBefore != nullptr)
+        return false;
+    undo_.back()->songAfter = after;
+    return true;
+}
+
 int PatternHistory::undo (PatternStore& store)
 {
     if (undo_.empty())
