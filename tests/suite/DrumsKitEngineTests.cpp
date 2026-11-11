@@ -771,8 +771,9 @@ void testSongScheduler()
     check (kit::songBarAt (song, 0) == 0 && kit::songBarAt (song, 63) == 63 && kit::songBarAt (song, 64) == 0 && kit::songBarAt (song, 130) == 2,
            "song bars wrap at the song length");
     kit::Song looped { bars, views.data(), 8, 4 };
-    check (kit::songBarAt (looped, 0) == 8 && kit::songBarAt (looped, 3) == 11 && kit::songBarAt (looped, 4) == 8 && kit::songBarAt (looped, 9) == 9,
-           "a loop region maps the absolute bar into [start, start + length)");
+    check (kit::songBarAt (looped, 0) == 0 && kit::songBarAt (looped, 7) == 7 && kit::songBarAt (looped, 8) == 8 && kit::songBarAt (looped, 11) == 11
+               && kit::songBarAt (looped, 12) == 8 && kit::songBarAt (looped, 21) == 9,
+           "a loop region plays the bars before it once, then repeats [start, start + length) from its first bar");
 
     auto settings = kit::legacyKit();
     settings.sequencerMode = 1;
@@ -899,6 +900,102 @@ void testSongScheduler()
     }
 }
 
+// Review 6795902654: the loop region is entered at its first bar when the
+// host reaches it (bars before the region play once, in order), and repeats
+// in order for any start and length. Every bar has one hit that names it.
+void testSongLoopRegion()
+{
+    constexpr int bars = 16;
+    std::vector<std::vector<kit::PatternStep>> cells (bars, std::vector<kit::PatternStep> (16 * 16));
+    std::array<kit::SongBarView, bars> views {};
+    for (int b = 0; b < bars; ++b)
+    {
+        auto& c = cells[static_cast<std::size_t> (b)][static_cast<std::size_t> ((b % 16) * 16)];   // lane b, step 0
+        c.on = true;
+        c.velocity = static_cast<std::uint8_t> (20 + b);
+        views[static_cast<std::size_t> (b)] = { cells[static_cast<std::size_t> (b)].data(), 16, 16, 1 };
+    }
+    const auto expect = [&] (std::uint32_t start, std::uint32_t length, std::initializer_list<int> sequence, const std::string& what) {
+        kit::Song song { bars, views.data(), start, length };
+        std::int64_t absolute = 0;
+        bool ok = true;
+        std::string got;
+        for (const int bar : sequence)
+        {
+            got += std::to_string (kit::songBarAt (song, absolute)) + " ";
+            ok = ok && kit::songBarAt (song, absolute) == static_cast<std::uint32_t> (bar);
+            ++absolute;
+        }
+        check (ok, "loop region " + what + ": bars " + got);
+    };
+    expect (4, 3, { 0, 1, 2, 3, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4 }, "start 5, length 3");
+    expect (4, 4, { 0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 4 }, "start 5, length 4");
+    expect (0, 4, { 0, 1, 2, 3, 0, 1, 2, 3, 0 }, "start 1, length 4");
+    expect (13, 3, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 13, 14, 15, 13 }, "the last three bars");
+    expect (15, 1, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 15 }, "one bar");
+    expect (0, 0, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1 }, "disabled: the song repeats");
+    {
+        kit::Song song { bars, views.data(), 4, 3 };
+        check (kit::songBarAt (song, 30) == 6 && kit::songBarAt (song, 31) == 4 && kit::songBarAt (song, 1) == 1 && kit::songBarAt (song, 1000) == 4,
+               "loop region: a seek far into the loop, and back before it, uses the same mapping");
+    }
+
+    // The engine plays that mapping: which bar's hit sounds at each absolute bar.
+    auto settings = kit::legacyKit();
+    settings.sequencerMode = 1;
+    const double rate = 48000.0, bpm = 480.0;   // one bar = 0.5 s = 24000 frames
+    const auto play = [&] (const kit::Song& song, std::int64_t fromBar, std::int64_t toBar) {
+        kit::KitEngine engine;
+        engine.prepare (rate);
+        std::vector<float> left (512), right (512);
+        std::vector<int> sequence;
+        const double perFrame = bpm / (60.0 * rate);
+        for (double ppq = 4.0 * static_cast<double> (fromBar); ppq < 4.0 * static_cast<double> (toBar); ppq += 512 * perFrame)
+        {
+            kit::Transport transport;
+            transport.playing = transport.hasTempo = transport.hasPpq = true;
+            transport.bpm = bpm;
+            transport.ppq = ppq;
+            engine.process (settings, { left.data(), right.data(), nullptr }, 512, nullptr, 0, transport, nullptr, nullptr, false,
+                            kit::KitEngine::Release::none, &song);
+            for (int i = 0; i < engine.scheduledCount(); ++i)
+            {
+                std::uint32_t offset = 0;
+                std::uint8_t pad = 0, velocity = 0;
+                engine.scheduled (i, offset, pad, velocity);
+                if (ppq + offset * perFrame < 4.0 * static_cast<double> (toBar) - 1.0e-6)   // the last block ends past toBar
+                    sequence.push_back (velocity - 20);   // the bar that hit belongs to
+            }
+        }
+        return sequence;
+    };
+    const auto text = [] (const std::vector<int>& v) {
+        std::string s;
+        for (const int x : v)
+            s += std::to_string (x) + " ";
+        return s;
+    };
+    {
+        const kit::Song song { bars, views.data(), 4, 3 };
+        const auto played = play (song, 0, 12);
+        check (played == std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 4, 5, 6, 4, 5 }, "loop region: the engine plays the intro once, then bars 5-7 in order: " + text (played));
+        const auto into = play (song, 9, 12);   // a seek into the loop
+        check (into == std::vector<int> { 6, 4, 5 }, "loop region: playback started inside the loop is in phase: " + text (into));
+        const auto before = play (song, 2, 6);  // a seek back before the loop
+        check (before == std::vector<int> { 2, 3, 4, 5 }, "loop region: playback started before the loop enters it at its first bar: " + text (before));
+    }
+    {
+        const kit::Song song { bars, views.data(), 4, 4 };
+        const auto played = play (song, 0, 13);
+        check (played == std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 4 }, "loop region: start 5, length 4 in the engine: " + text (played));
+    }
+    {
+        const kit::Song song { bars, views.data(), 0, 0 };
+        const auto played = play (song, 14, 18);
+        check (played == std::vector<int> { 14, 15, 0, 1 }, "loop region: without a loop the song repeats after its last bar: " + text (played));
+    }
+}
+
 int main()
 {
     testModels();
@@ -910,6 +1007,7 @@ int main()
     testRealtime();
     testMixerGateAndMeters();
     testSongScheduler();
+    testSongLoopRegion();
     testStepRules();
     testSchedulerEqualsCanonical();
     if (failures == 0)

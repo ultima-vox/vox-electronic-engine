@@ -167,6 +167,10 @@ void buildSongView (const SongTable& table, const StoredPattern* slots, const St
         const auto& bar = table.bars[static_cast<std::size_t> (i)];
         if (bar.kind == SongBar::Kind::pattern)
         {
+            // Keep the index in a named variable. GCC 13.3 miscompiles
+            // `(c ? a : b)[std::min<int> (x, y)]` with pointer operands: the
+            // false arm reads uninitialised temporaries (reproduced at -O0;
+            // clang is correct), which made every A bar read the first slot.
             const int index = bar.slot < slotCountForSong ? static_cast<int> (bar.slot) : slotCountForSong - 1;
             const StoredPattern& p = bar.variation != 0 ? alternates[index] : slots[index];
             if (p.bars == 0 || p.steps == 0)

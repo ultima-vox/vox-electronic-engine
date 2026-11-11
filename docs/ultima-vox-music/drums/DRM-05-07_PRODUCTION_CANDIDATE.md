@@ -40,7 +40,12 @@ DRM-08 stays on HOLD until the owner completes
   pattern bar the pattern no longer has plays that index modulo the pattern's bar count.
 - Unique bars: Make Unique, or any edit of the bar in the step grid. All 64 bars can be
   unique.
-- Loop region (Song mode): the host's absolute bar maps to `loopStart + B mod loopLength`.
+- Loop region (Song mode): the bars before the region play once, in order (absolute bar
+  *B* < `loopStart` plays song bar *B*). From the bar where the host reaches the region,
+  *B* plays `loopStart + (B − loopStart) mod loopLength`: the region is entered at its
+  first bar and repeats in order, for any start and length. A seek uses the same mapping,
+  so the position alone decides the bar. Bars after the region are not reached while the
+  loop is on. The timeline playhead uses the same function (`kit::songBarAt`).
   Without a loop the song repeats after its last bar.
 - Entire Song export: one pass from bar 1 to the last bar; the loop region is ignored.
   End of Track is at the end of bar 16, 32 or 64. A hit before position 0 (negative
@@ -101,9 +106,17 @@ pad voice -> level/pan (at trigger) -> mute/solo gate (3 ms ramp) -+-> ONE dry d
 
 ## 5. Defect found and fixed during this work
 
-The 64-bar parity test showed playback diverging from the export from bar 5 on: the
-audio thread's song view resolved a bar's pattern slot to the first slot. Fixed in
-`SongModel.cpp` (`buildSongView`); the parity test is its regression test.
+1. The 64-bar parity test showed playback diverging from the export from bar 5 on: the
+   audio thread's song view resolved an A bar's pattern slot to the first slot. Root
+   cause: GCC 13.3 generates wrong code for `(c ? a : b)[std::min<int> (x, y)]` with
+   pointer operands (the false arm reads uninitialised temporaries; reproduced in a
+   12-line file at `-O0`, clang compiles it correctly). The source was valid C++; the
+   expression is now written with a named index and carries a comment. Builds with other
+   compilers were not shown to have the defect. The parity test is the regression test.
+2. Review 6795902654: the loop region was out of phase for a nonzero start
+   (`loopStart + B mod length`). It now follows the mapping in section 2;
+   `DrumsKitEngineTests.cpp` `testSongLoopRegion` covers starts and lengths that do not
+   divide, seeks into and out of the region, the disabled loop and the engine's playback.
 
 ## 6. Limits of the automated evidence
 

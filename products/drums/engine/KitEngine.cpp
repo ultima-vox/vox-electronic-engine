@@ -583,8 +583,13 @@ std::uint32_t songBarAt (const Song& song, std::int64_t absoluteBar) noexcept
     const auto bars = static_cast<std::int64_t> (std::min<std::uint32_t> (song.bars, maxSongBars));
     if (song.loopLength > 0 && song.loopStart < song.bars)
     {
+        // The bars before the region play once, in order. From the bar where
+        // the host reaches the region it repeats, starting at its first bar.
+        const auto start = static_cast<std::int64_t> (song.loopStart);
+        if (absoluteBar < start)
+            return static_cast<std::uint32_t> (absoluteBar);
         const auto length = static_cast<std::int64_t> (std::min<std::uint32_t> (song.loopLength, song.bars - song.loopStart));
-        return static_cast<std::uint32_t> (song.loopStart + absoluteBar % length);
+        return static_cast<std::uint32_t> (start + (absoluteBar - start) % length);
     }
     return static_cast<std::uint32_t> (absoluteBar % bars);
 }

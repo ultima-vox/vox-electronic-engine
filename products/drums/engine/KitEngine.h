@@ -161,7 +161,10 @@ struct SongBarView {
 struct Song {
     std::uint32_t bars = 0;               // 16, 32 or 64 (any 1..64 is played)
     const SongBarView* views = nullptr;   // `bars` entries
-    // Loop region [loopStart, loopStart + loopLength) in bars; 0 length = the
+    // Loop region [loopStart, loopStart + loopLength) in bars: the host's
+    // absolute bar B plays song bar B while B < loopStart (the bars before
+    // the region play once), then loopStart + (B - loopStart) mod loopLength:
+    // the region is entered at its first bar and repeats in order. 0 length = the
     // whole song. Playback maps the host's absolute bar into the region.
     std::uint32_t loopStart = 0, loopLength = 0;
 };

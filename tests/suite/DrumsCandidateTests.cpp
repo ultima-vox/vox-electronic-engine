@@ -524,7 +524,8 @@ void testSongParity()
         bool mapped = true;
         for (std::int64_t bar = 0; bar < 24; ++bar)
         {
-            mapped = mapped && kit::songBarAt (song, bar) == static_cast<std::uint32_t> (8 + bar % 4);
+            // Bars 1-8 play once, then bars 9-12 repeat from bar 9 (review 6795902654).
+            mapped = mapped && kit::songBarAt (song, bar) == static_cast<std::uint32_t> (bar < 8 ? bar : 8 + (bar - 8) % 4);
             const auto& view = views[kit::songBarAt (song, bar)];
             for (std::uint32_t st = 0; st < view.steps; ++st)
             {
@@ -534,7 +535,31 @@ void testSongParity()
                                         buffer[static_cast<std::size_t> (k)].velocity });
             }
         }
-        check (mapped, "song loop: absolute bars map into the loop region");
+        check (mapped, "song loop: bars before the region play once, then the region repeats from its first bar");
+        // The playhead the editor shows uses the same mapping as the audio.
+        {
+            TestPlayHead at;
+            p->setPlayHead (&at);
+            juce::AudioBuffer<float> one (2, 64);
+            juce::MidiBuffer none;
+            bool playhead = true;
+            for (const auto& [absolute, bar] : { std::pair { 3, 3 }, std::pair { 8, 8 }, std::pair { 11, 11 }, std::pair { 12, 8 }, std::pair { 17, 9 } })
+            {
+                at.set (true, 300.0, 4.0 * absolute + 0.5);
+                p->processBlock (one, none);
+                playhead = playhead && p->songBarPlaying() == bar;
+            }
+            p->editSong ([] (SongData& s) { s.loopStart = 4; s.loopLength = 3; });
+            for (const auto& [absolute, bar] : { std::pair { 0, 0 }, std::pair { 4, 4 }, std::pair { 6, 6 }, std::pair { 7, 4 }, std::pair { 9, 6 } })
+            {
+                at.set (true, 300.0, 4.0 * absolute + 0.5);
+                p->processBlock (one, none);
+                playhead = playhead && p->songBarPlaying() == bar;
+            }
+            p->editSong ([] (SongData& s) { s.loopStart = 8; s.loopLength = 4; });
+            p->setPlayHead (nullptr);
+            check (playhead, "song loop: the playhead bar follows the same mapping as playback");
+        }
         const auto loopPlayed = playHits (*p, 48000.0, 256, 20.0, 80.0, constant, notes);
         same = sameHits (window (loopPlayed, 20.05, 79.9), window (looped, 20.05, 79.9), why);
         check (same, "song loop: playback follows the loop region: " + why);
