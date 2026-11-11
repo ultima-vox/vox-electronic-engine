@@ -104,6 +104,11 @@ jobs:
               $lines += "SHA-256 $relative : $((Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower())"
             }
           }
+          # VOX Drums callback timing (written by the suite_drums_callback_bench test).
+          if (Test-Path build-suite\vox-drums-callback-timing.csv) {
+            Copy-Item -Force build-suite\vox-drums-callback-timing.csv suite-out\
+            $lines += "Callback timing: vox-drums-callback-timing.csv (us; measured on $env:RUNNER_NAME)"
+          }
           $lines | Set-Content suite-out\manifest.txt
           Get-Content suite-out\manifest.txt
 

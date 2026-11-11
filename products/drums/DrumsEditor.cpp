@@ -3,6 +3,8 @@
 #include "DrumsParameters.h"
 #include "Processor.h"
 #include "PatternEditor.h"
+#include "FactoryContent.h"
+#include "Presets.h"
 #include "Tokens.h"
 #include "Typography.h"
 
@@ -356,6 +358,22 @@ DrumsPanel::DrumsPanel (DrumsProcessor& processor) : processor_ (processor)
             swap->onClick();
     };
     addAndMakeVisible (*variation_);
+    kitSelectLabel_ = label ("Load factory kit");
+    addAndMakeVisible (*kitSelectLabel_);
+    kitSelect_ = std::make_unique<vox::ui::VoxComboBox>();
+    for (int kit = 0; kit < factoryKitCount; ++kit)
+        kitSelect_->addItem (juce::String (factoryKitInfo (kit).name) + "  (" + factoryKitInfo (kit).family + ")", kit + 1);
+    kitSelect_->setTextWhenNothingSelected ("Choose...");
+    kitSelect_->setTooltip ("Loads the kit's pads, mix and returns. User kits and Undo Load are on the PRESETS page.");
+    kitSelect_->onChange = [this] {
+        const int kit = kitSelect_->getSelectedItemIndex();
+        if (kit < 0)
+            return;
+        const auto result = processor_.presets().loadFactoryKit (kit);
+        if (result.failed())
+            kitSelect_->setSelectedItemIndex (-1, juce::dontSendNotification);
+    };
+    addAndMakeVisible (*kitSelect_);
     song_ = std::make_unique<SongStrip> (processor_, accent);
     song_->onEditBar = [this] (int bar) { steps_->editSongBar (bar); };
     addAndMakeVisible (*song_);
@@ -603,6 +621,8 @@ void DrumsPanel::applyVisibility()
         target->combo->setVisible (performance);
     }
     transport_->setVisible (performance);
+    kitSelect_->setVisible (performance);
+    kitSelectLabel_->setVisible (performance);
     songMode_->setVisible (performance);
     variation_->setVisible (performance);
 
@@ -700,7 +720,10 @@ void DrumsPanel::layoutPerformance (juce::Rectangle<int> area)
         variation_->setBounds (row.removeFromLeft (bw).reduced (2, 0));
         choke_.button->setBounds (row.reduced (4, 2));
         t.removeFromTop (sp::sm);
-        transport_->setBounds (t.removeFromTop (juce::jmin (40, t.getHeight())));
+        transport_->setBounds (t.removeFromTop (juce::jmin (24, t.getHeight())));
+        t.removeFromTop (sp::xs);
+        kitSelectLabel_->setBounds (t.removeFromTop (16));
+        kitSelect_->setBounds (t.removeFromTop (vox::ui::tokens::size::controlHeight).withTrimmedRight (sp::sm));
     }
 }
 

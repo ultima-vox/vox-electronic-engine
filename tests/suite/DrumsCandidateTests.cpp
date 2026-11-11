@@ -555,6 +555,31 @@ void testSongParity()
             whileStopped += p->engineForTesting().scheduledCount();
         }
         check (whileStopped == 0, "song: nothing is scheduled while the host is stopped");
+        // Host MIDI mode: the song does not play (a clip exported from it,
+        // played back into the plugin, is then the only source of hits).
+        setPlain (*p, "drm.seq.mode", 0.0f);
+        p->takeHitMask();   // hits of the playback above
+        int inHostMode = 0;
+        std::uint32_t lit = 0;
+        for (int b = 0; b < 60; ++b)
+        {
+            head.set (true, 300.0, 80.0 + b * 256.0 * 300.0 / (60.0 * 48000.0));
+            p->processBlock (audio, midi);
+            inHostMode += p->engineForTesting().scheduledCount();
+            lit |= p->takeHitMask();
+        }
+        check (inHostMode == 0 && lit == 0, "song: Host MIDI mode schedules nothing from the song (no doubled hits with an imported clip)");
+        // Internal mode: host notes do not play, only the song does.
+        setPlain (*p, "drm.seq.mode", 1.0f);
+        p->reset();
+        p->processBlock (audio, midi);
+        p->takeHitMask();
+        head.set (false, 300.0, 80.0);
+        midi.addEvent (juce::MidiMessage::noteOn (10, 36, static_cast<juce::uint8> (100)), 0);
+        p->processBlock (audio, midi);
+        midi.clear();
+        check (p->takeHitMask() == 0 && p->activeVoices() == 0, "song: Internal mode ignores host notes");
+        setPlain (*p, "drm.seq.mode", 1.0f);
         // Pattern <-> Song while playing: both directions keep playing, finite output.
         bool finite = true;
         int hitsPattern = 0, hitsSong = 0;
@@ -1316,8 +1341,8 @@ void testPresets()
             // A tampered archive: a sample that does not match its name, or an unexpected file.
             {
                 juce::ZipFile::Builder builder;
-                builder.addEntry (new juce::MemoryInputStream (kitOnly, true), 9, "kit.voxkitpreset", juce::Time());
-                builder.addEntry (new juce::MemoryInputStream ("not the audio", 13, true), 0, "samples/" + hash + ".wav", juce::Time());
+                builder.addEntry (std::make_unique<juce::MemoryInputStream> (kitOnly, true), 9, "kit.voxkitpreset", juce::Time());
+                builder.addEntry (std::make_unique<juce::MemoryInputStream> ("not the audio", 13, true), 0, "samples/" + hash + ".wav", juce::Time());
                 const auto bad = workFolder.getChildFile ("Tampered.voxkit");
                 bad.deleteFile();
                 {
@@ -1328,8 +1353,8 @@ void testPresets()
                 const auto before = stateOf (*other);
                 check (other->presets().importPortableKit (bad).failed() && stateOf (*other) == before, "portable kit: a sample that does not match its hash is refused");
                 juce::ZipFile::Builder traversal;
-                traversal.addEntry (new juce::MemoryInputStream (kitOnly, true), 9, "kit.voxkitpreset", juce::Time());
-                traversal.addEntry (new juce::MemoryInputStream ("x", 1, true), 0, "samples/../../evil.wav", juce::Time());
+                traversal.addEntry (std::make_unique<juce::MemoryInputStream> (kitOnly, true), 9, "kit.voxkitpreset", juce::Time());
+                traversal.addEntry (std::make_unique<juce::MemoryInputStream> ("x", 1, true), 0, "samples/../../evil.wav", juce::Time());
                 const auto evil = workFolder.getChildFile ("Traversal.voxkit");
                 evil.deleteFile();
                 {
@@ -1618,6 +1643,26 @@ void testEditor()
         check (panel->page() == 3 && panel->selectedPad() == 9, "editor: a restored state selects its page and pad");
     }
 
+    // PERFORMANCE: the kit selector loads a factory kit; macros are bound.
+    {
+        panel->showPage (0);
+        auto* kits = panel->kitSelector();
+        check (kits != nullptr && kits->getNumItems() == factoryKitCount, "performance: factory kit selector");
+        if (kits != nullptr)
+        {
+            const auto before = stateOf (*p);
+            kits->setSelectedItemIndex (2, juce::sendNotificationSync);
+            check (stateOf (*p) != before && p->kitStore().pad (11).model == factoryKit (2).pads[11].model
+                       && std::abs (plainOf (*p, "drm.p01.decay") - factoryKit (2).pads[0].decay) < 1.0e-4f,
+                   "performance: choosing a factory kit loads it");
+            check (p->presets().undoLoad().wasOk() && stateOf (*p) == before, "performance: the kit load can be undone");
+        }
+        for (const auto* id : { "drm.kit.volume", "drm.kit.velocity", "drm.seq.swing", "drm.seq.accent", "drm.fx.delay.feedback",
+                                "drm.fx.delay.level", "drm.fx.reverb.size", "drm.fx.reverb.level" })
+            check (panel->sliderFor (id) != nullptr && panel->sliderFor (id)->getParentComponent()->isVisible(),
+                   juce::String ("performance: macro ") + id);
+        check (panel->comboFor ("drm.seq.mode") != nullptr && panel->comboFor ("drm.seq.pattern") != nullptr, "performance: mode and pattern");
+    }
     // MIXER: meters follow the audio; routing labels follow the store and the host.
     {
         panel->showPage (3);

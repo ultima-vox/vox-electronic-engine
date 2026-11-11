@@ -57,6 +57,8 @@ public:
     // Pages 3..7 (MIXER .. ADVANCED); null for the pages built into the panel.
     Page* pageComponent (int page) { return page >= 0 && page < pageCount ? pages_[static_cast<std::size_t> (page)].get() : nullptr; }
     SongStrip& songStrip() { return *song_; }
+    // PERFORMANCE: loads the chosen factory kit (Undo Load is on PRESETS).
+    juce::ComboBox* kitSelector() { return kitSelect_.get(); }
     // Visible controls of the current page that overlap another one (tests).
     juce::StringArray overlappingControls() const;
 
@@ -184,6 +186,8 @@ private:
     std::unique_ptr<vox::ui::VoxComboBox> padSelect_;   // SOUND: the pad to edit
     std::unique_ptr<juce::Label> padSelectLabel_, transport_;
     std::unique_ptr<vox::ui::VoxButton> songMode_, variation_;
+    std::unique_ptr<vox::ui::VoxComboBox> kitSelect_;   // PERFORMANCE: load a factory kit
+    std::unique_ptr<juce::Label> kitSelectLabel_;
     std::uint8_t shownUiPad_ = 255;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DrumsPanel)

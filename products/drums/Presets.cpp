@@ -79,8 +79,14 @@ bool kitScope (const std::string& id, int pad = -1)
             case Field::reverbDamp:
             case Field::reverbLevel:
                 return pad < 0;
-            default:
-                return false;
+            case Field::mute:
+            case Field::solo:
+            case Field::seqMode:
+            case Field::seqPattern:
+            case Field::seqSwing:
+            case Field::seqAccent:
+            case Field::seqLane:
+                return false;   // performance state, not part of a kit
         }
     }
     return false;
@@ -413,7 +419,7 @@ juce::Result Presets::exportPortableKit (const juce::File& zip, const juce::Stri
     if (block.getSize() == 0)
         return juce::Result::fail ("the kit is too large");
     juce::ZipFile::Builder builder;
-    builder.addEntry (new juce::MemoryInputStream (block, true), 9, "kit.voxkitpreset", juce::Time());
+    builder.addEntry (std::make_unique<juce::MemoryInputStream> (block, true), 9, "kit.voxkitpreset", juce::Time());
     juce::StringArray added;
     for (int slot = 0; slot < slotCount; ++slot)
     {
@@ -433,7 +439,7 @@ juce::Result Presets::exportPortableKit (const juce::File& zip, const juce::Stri
             return juce::Result::fail ("sample file is missing: " + info.reference->name);
         if (juce::SHA256 (bytes).toHexString() != hex)
             return juce::Result::fail ("sample file changed since it was assigned: " + info.reference->name);
-        builder.addEntry (new juce::MemoryInputStream (bytes, true), 0, "samples/" + hex + source.getFileExtension().toLowerCase(),
+        builder.addEntry (std::make_unique<juce::MemoryInputStream> (bytes, true), 0, "samples/" + hex + source.getFileExtension().toLowerCase(),
                           juce::Time());
         added.add (hex);
     }
