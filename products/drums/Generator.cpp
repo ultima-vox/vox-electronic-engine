@@ -194,8 +194,10 @@ void put (const GeneratorSettings& g, StoredPattern& p, int lane, int bar, int s
     cell = value;
 }
 
-void generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& p)
+// Returns whether any cell was open to the generator (not locked).
+bool generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& p)
 {
+    bool open = false;
     const int scale = p.steps / 16;   // the styles are written on 16ths
     for (int lane = 0; lane < kit::padCount; ++lane)
     {
@@ -209,10 +211,12 @@ void generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPa
                 kit::PatternStep value;
                 if (step % scale == 0)
                     value = toStep (c, lane, step / scale, styleHit (c, lane, step / scale));
+                open = open || ! (p.cell (lane, bar, step).locked || (g.laneLocks & (1u << lane)) != 0);
                 put (g, p, lane, bar, step, value);
             }
         }
     }
+    return open;
 }
 
 int fillLane (Style style, int index) noexcept
@@ -250,8 +254,10 @@ bool GeneratorSettings::operator== (const GeneratorSettings& o) const noexcept
 
 void generatePattern (const GeneratorSettings& g, StoredPattern& pattern)
 {
-    generateLanes (g, 0xffffu, pattern);
-    pattern.seed = g.seed;
+    // The probability seed follows the generator's only when the generator
+    // wrote something: a fully locked pattern stays exactly as it is.
+    if (generateLanes (g, 0xffffu, pattern))
+        pattern.seed = g.seed;
     if (g.fills > 0.05f && pattern.bars > 1)
         generateFill (g, pattern, -1);
 }

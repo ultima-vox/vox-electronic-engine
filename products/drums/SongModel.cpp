@@ -129,7 +129,8 @@ std::shared_ptr<const BarCells> resolveBar (const SongBar& bar, const std::array
         return bar.cells;
     if (bar.kind != SongBar::Kind::pattern)
         return nullptr;
-    const auto& p = (bar.variation != 0 ? alternates : slots)[static_cast<std::size_t> (std::min<int> (bar.slot, slotCountForSong - 1))];
+    const auto index = static_cast<std::size_t> (bar.slot < slotCountForSong ? static_cast<int> (bar.slot) : slotCountForSong - 1);
+    const StoredPattern& p = bar.variation != 0 ? alternates[index] : slots[index];
     auto cells = std::make_shared<BarCells>();
     cells->id = BarCells::nextId();
     cells->steps = p.steps;
@@ -166,7 +167,8 @@ void buildSongView (const SongTable& table, const StoredPattern* slots, const St
         const auto& bar = table.bars[static_cast<std::size_t> (i)];
         if (bar.kind == SongBar::Kind::pattern)
         {
-            const auto& p = (bar.variation != 0 ? alternates : slots)[std::min<int> (bar.slot, slotCountForSong - 1)];
+            const int index = bar.slot < slotCountForSong ? static_cast<int> (bar.slot) : slotCountForSong - 1;
+            const StoredPattern& p = bar.variation != 0 ? alternates[index] : slots[index];
             if (p.bars == 0 || p.steps == 0)
                 continue;
             const int pb = bar.patternBar % p.bars;
@@ -441,7 +443,8 @@ void PatternStore::copySongBar (int bar, StoredPattern& out, std::uint64_t& gene
         else if (b.kind == SongBar::Kind::pattern)
         {
             // Copied under the lock into `out` directly (no allocation here).
-            const auto& p = (b.variation != 0 ? alternates_ : slots_)[std::min<std::size_t> (b.slot, slotCount - 1)];
+            const auto index = static_cast<std::size_t> (b.slot < slotCount ? static_cast<int> (b.slot) : slotCount - 1);
+            const StoredPattern& p = b.variation != 0 ? alternates_[index] : slots_[index];
             const int pb = b.patternBar % std::max<int> (1, p.bars);
             out.cells.fill ({});
             out.bars = 1;
