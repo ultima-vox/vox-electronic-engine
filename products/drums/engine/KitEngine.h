@@ -26,7 +26,9 @@ inline constexpr int maxVoices = 64;
 inline constexpr int maxVoicesPerPad = 8;
 inline constexpr int samplesPerPad = 2;                 // players A and B
 inline constexpr int sampleSlots = padCount * samplesPerPad;
-inline constexpr int auxSends = 2, auxOutputs = 7, auxBuses = auxSends + auxOutputs;
+// Aux buses: Send 1, Send 2, then Out 2..Out 9 (DRM-06: eight assignable
+// stereo outputs next to Main; the legacy module had seven).
+inline constexpr int auxSends = 2, auxOutputs = 8, auxBuses = auxSends + auxOutputs;
 inline constexpr int laneCount = padCount;
 inline constexpr int maxStepsPerBar = 16, maxBars = 4;
 inline constexpr int maxPatternCells = laneCount * maxBars * maxStepsPerBar;
@@ -54,7 +56,7 @@ struct PadSettings {
     Filter filter = Filter::off;
     float cutoff = 20000.0f, resonance = 0.0f;
     float attack = 0.0f, sustain = 0.0f;   // transient shaper, -1..1
-    std::uint8_t output = 0;               // 0 main, 1..7 = Out 2..Out 8
+    std::uint8_t output = 0;               // 0 main, 1..8 = Out 2..Out 9
     float send1 = 0.0f, send2 = 0.0f;
     // Body (kick and the kick-like models): pitch envelope, drive, sub, tail.
     float pitchAmount = 24.0f, pitchDecay = 0.035f, drive = 1.6f, sub = 0.3f, tail = 0.25f;
@@ -63,7 +65,7 @@ struct PadSettings {
     std::uint8_t velocitySplit = 64;       // velocitySwitch: B from this velocity
     std::array<SamplePlayer, samplesPerPad> players {};
     bool laneOn = true;                    // internal sequencer lane
-    bool mute = false;                     // a muted pad ignores new hits (running ones ring out)
+    bool mute = false;                     // a muted pad ignores new hits; its running voices fade out in ~3 ms (DRM-06)
 };
 
 struct KitSettings {
@@ -103,6 +105,7 @@ struct PatternStep {
                                       // the pattern seed and the step's absolute position
     std::uint8_t ratchet = 1;         // 1..8 hits, evenly spaced within the step
     std::int8_t micro = 0;            // -50..+50: offset in percent of a step
+    bool locked = false;              // DRM-05: the generator leaves a locked step as it is (no effect on playback)
 };
 
 // Lanes x bars x steps, cell (lane * bars + bar) * steps + step.
@@ -137,6 +140,34 @@ struct StepContext {
 int stepHits (const Pattern& pattern, const StepContext& context, std::int64_t g, ScheduledHit* out) noexcept;
 // Length of one grid step in quarter notes.
 double stepLength (const Pattern& pattern) noexcept;
+
+// DRM-05 Song mode: a timeline of bars in 4/4. Each bar has its own grid
+// (16/32/64 steps), seed and cells; `cells` null is an empty bar. Cell
+// (lane, step) is cells[lane * laneStride + step], so a bar can point into
+// a pattern slot (laneStride = bars * steps) or into its own storage.
+struct SongBarView {
+    const PatternStep* cells = nullptr;
+    std::uint32_t laneStride = 0, steps = 16, seed = 0;
+};
+
+struct Song {
+    std::uint32_t bars = 0;               // 16, 32 or 64 (any 1..64 is played)
+    const SongBarView* views = nullptr;   // `bars` entries
+    // Loop region [loopStart, loopStart + loopLength) in bars; 0 length = the
+    // whole song. Playback maps the host's absolute bar into the region.
+    std::uint32_t loopStart = 0, loopLength = 0;
+};
+
+inline constexpr int maxSongBars = 64;
+
+// The song bar that plays at the host's absolute bar (from ppq 0).
+std::uint32_t songBarAt (const Song& song, std::int64_t absoluteBar) noexcept;
+// The canonical rule for Song mode: the hits of step `step` of the bar at
+// `absoluteBar`, by the same cell rule as stepHits (swing on odd steps,
+// accent, micro, ratchet, lanes; probability from the bar's seed, the
+// absolute bar and the step). Bar B starts at ppq 4 * B.
+int songHits (const Song& song, const StepContext& context, std::int64_t absoluteBar, std::uint32_t step,
+              ScheduledHit* out) noexcept;
 
 // Factory patterns (the legacy module's buildPattern, 145 BPM full-on idiom):
 // 8 lanes x 16 steps x 4 bars, cell (lane * 4 + bar) * 16 + step.
@@ -186,7 +217,14 @@ public:
     void process (const KitSettings& settings, const Outputs& out, std::uint32_t frames,
                   const Event* events, std::uint32_t eventCount, const Transport& transport,
                   const Pattern* pattern, const Sample* samples, bool panic,
-                  Release release = Release::none) noexcept;
+                  Release release = Release::none, const Song* song = nullptr) noexcept;
+    // `song` non-null plays the song instead of `pattern` (Song mode).
+
+    // Post-fader peak of each pad in the last process() (mixer meters), and
+    // whether it saw All Sound Off (CC120) or a panic (the caller clears its
+    // FX tails then).
+    float padPeak (int pad) const noexcept { return padPeak_[static_cast<std::size_t> (pad & 15)]; }
+    bool soundOffSeen() const noexcept { return soundOff_; }
 
     // Pads triggered by the sequencer in the last process() (bit n = pad n).
     std::uint32_t sequencerHits() const noexcept { return sequencerHits_; }
@@ -203,6 +241,8 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::uint32_t sequencerHits_ = 0;
+    std::array<float, padCount> padPeak_ {};
+    bool soundOff_ = false;
     Usage usage_;
 };
 
