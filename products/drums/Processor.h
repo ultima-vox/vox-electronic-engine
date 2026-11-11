@@ -3,6 +3,7 @@
 #include "common/SuiteProcessor.h"
 
 #include "DrumsParameters.h"
+#include "Generator.h"
 #include "KitStore.h"
 #include "PatternStore.h"
 #include "SampleLibrary.h"
@@ -12,12 +13,36 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <map>
+#include <string>
 #include <vector>
 
 namespace vox::drums {
 
 // Product state section of schema 1: the plugin parameter values by ID.
 inline constexpr preset::Tag parameterSectionTag = preset::makeTag ("DPRM");
+
+// DPRM: plain parameter values by host ID. decode is strict about the
+// layout and rejects NaN and duplicates; unknown IDs are kept in the map
+// (the caller ignores them).
+bool decodeParameterValues (const preset::Section& section, std::map<std::string, float>& values, juce::String& error);
+preset::Section encodeParameterValues (const std::map<std::string, float>& values);
+
+// Editor state saved with the project (section DUIS): where the user was.
+inline constexpr preset::Tag uiStateSectionTag = preset::makeTag ("DUIS");
+struct UiState {
+    std::uint8_t page = 0;         // 0..7: PERFORMANCE .. ADVANCED
+    std::uint8_t pad = 0;          // selected pad 0..15
+    std::uint8_t songBar = 0;      // selected song bar 0..63
+    std::uint8_t patternBar = 0;   // shown pattern bar 0..3
+    std::uint8_t exportScope = 0;  // 0 Pattern, 1 Entire Song
+    bool operator== (const UiState& o) const noexcept
+    {
+        return page == o.page && pad == o.pad && songBar == o.songBar && patternBar == o.patternBar && exportScope == o.exportScope;
+    }
+};
+preset::Section encodeUiState (const UiState&);
+bool decodeUiState (const preset::Section&, UiState& out, juce::String& error);
 
 // What a MIDI export writes, frozen on the message thread at the click or
 // at the start of the drag (DRM-05): both paths render the same snapshot
@@ -84,6 +109,20 @@ public:
     std::shared_ptr<const ExportSnapshot> captureExport (ExportSnapshot::Scope scope, int passes = 1);
     static juce::MemoryBlock renderExport (const ExportSnapshot&);
 
+    //== generator (DRM-05), message thread
+    GeneratorSettings generator() const;
+    void setGenerator (const GeneratorSettings&);
+    UiState uiState() const;
+    void setUiState (const UiState&);
+    // Runs the generator on the slot the sequencer plays (pattern, mutate
+    // `laneMask`, fill in `bar`, variation: B from A) or on everything
+    // (song). With `newSeed` the seed advances first, so every press gives
+    // new data; without it the stored seed reproduces its result. One undo
+    // step in patternHistory(). Returns false when nothing changed.
+    enum class Generate { pattern, song, mutate, fill, variation };
+    bool generate (Generate what, std::uint32_t laneMask = 0xffffu, bool newSeed = true, int bar = -1);
+    int currentSlot() const;
+
     //== mixer (DRM-06), any thread
     // Peak since the last call: pad post-fader, Main after the returns.
     float takePadMeter (int pad) noexcept { return padMeter_[static_cast<std::size_t> (pad & 15)].exchange (0.0f, std::memory_order_relaxed); }
@@ -117,7 +156,7 @@ protected:
     bool isProductSection (preset::Tag tag) const override
     {
         return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag
-            || tag == songSectionTag;
+            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag;
     }
 
 private:
@@ -168,6 +207,9 @@ private:
     std::atomic<double> lastBpm_ { 120.0 };
     PatternStore::Live livePattern_;   // audio thread
     PatternStore::SongLive liveSong_;  // audio thread
+    mutable juce::SpinLock settingsLock_;   // generator_, ui_
+    GeneratorSettings generator_;
+    UiState ui_;
 
     struct Audition { std::uint8_t pad = 0, velocity = 0; };
     juce::AbstractFifo auditionFifo_ { 64 };

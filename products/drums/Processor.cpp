@@ -42,6 +42,188 @@ float plainValueOf (juce::AudioProcessorParameter& parameter)
 
 } // namespace
 
+bool decodeParameterValues (const preset::Section& section, std::map<std::string, float>& values, juce::String& error)
+{
+    values.clear();
+    const auto& data = section.data;
+    std::size_t at = 0;
+    std::uint32_t count = 0;
+    if (! takeU32 (data, at, count) || count > 4096)
+    {
+        error = "malformed parameter section";
+        return false;
+    }
+    for (std::uint32_t i = 0; i < count; ++i)
+    {
+        std::uint32_t length = 0, bits = 0;
+        if (! takeU32 (data, at, length) || length == 0 || length > 64 || data.size() - at < length + 4u)
+        {
+            error = "malformed parameter section";
+            return false;
+        }
+        std::string id (length, '\0');
+        for (std::uint32_t c = 0; c < length; ++c)
+            id[c] = static_cast<char> (data[at + c]);
+        at += length;
+        float plain = 0.0f;
+        if (! takeU32 (data, at, bits))
+        {
+            error = "malformed parameter section";
+            return false;
+        }
+        std::memcpy (&plain, &bits, sizeof plain);
+        if (! std::isfinite (plain) || ! values.emplace (std::move (id), plain).second)
+        {
+            error = "invalid or duplicate parameter value";
+            return false;
+        }
+    }
+    if (at != data.size())
+    {
+        error = "malformed parameter section";
+        return false;
+    }
+    return true;
+}
+
+preset::Section encodeParameterValues (const std::map<std::string, float>& values)
+{
+    preset::Section section;
+    section.tag = parameterSectionTag;
+    putU32 (section.data, static_cast<std::uint32_t> (values.size()));
+    for (const auto& [id, plain] : values)
+    {
+        putU32 (section.data, static_cast<std::uint32_t> (id.size()));
+        for (const char c : id)
+            section.data.push_back (static_cast<std::byte> (c));
+        std::uint32_t bits = 0;
+        std::memcpy (&bits, &plain, sizeof bits);
+        putU32 (section.data, bits);
+    }
+    return section;
+}
+
+// DUIS: u32 version (1), u8 page, pad, song bar, pattern bar, export scope.
+preset::Section encodeUiState (const UiState& ui)
+{
+    preset::Section section;
+    section.tag = uiStateSectionTag;
+    putU32 (section.data, 1);
+    for (auto v : { ui.page, ui.pad, ui.songBar, ui.patternBar, ui.exportScope })
+        section.data.push_back (static_cast<std::byte> (v));
+    return section;
+}
+
+bool decodeUiState (const preset::Section& section, UiState& out, juce::String& error)
+{
+    const auto& d = section.data;
+    std::size_t at = 0;
+    std::uint32_t version = 0;
+    if (! takeU32 (d, at, version) || version != 1 || d.size() != 9)
+    {
+        error = "unsupported editor state section";
+        return false;
+    }
+    UiState ui;
+    ui.page = std::to_integer<std::uint8_t> (d[4]);
+    ui.pad = std::to_integer<std::uint8_t> (d[5]);
+    ui.songBar = std::to_integer<std::uint8_t> (d[6]);
+    ui.patternBar = std::to_integer<std::uint8_t> (d[7]);
+    ui.exportScope = std::to_integer<std::uint8_t> (d[8]);
+    if (ui.page > 7 || ui.pad >= padCount || ui.songBar >= kit::maxSongBars || ui.patternBar >= kit::maxPatternBars
+        || ui.exportScope > 1)
+    {
+        error = "invalid editor state section";
+        return false;
+    }
+    out = ui;
+    return true;
+}
+
+GeneratorSettings DrumsProcessor::generator() const
+{
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    return generator_;
+}
+
+void DrumsProcessor::setGenerator (const GeneratorSettings& g)
+{
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    generator_ = g;
+}
+
+UiState DrumsProcessor::uiState() const
+{
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    return ui_;
+}
+
+void DrumsProcessor::setUiState (const UiState& ui)
+{
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    ui_ = ui;
+}
+
+int DrumsProcessor::currentSlot() const
+{
+    return std::clamp (static_cast<int> (std::lround (parameters_.getRawParameterValue (patternParameterId)->load())), 0,
+                       PatternStore::slotCount - 1);
+}
+
+bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSeed, int bar)
+{
+    auto g = generator();
+    if (newSeed)
+    {
+        g.seed = g.seed * 1664525u + 1013904223u;
+        setGenerator (g);
+    }
+    const int slot = currentSlot();
+    auto e = std::make_unique<PatternHistory::Entry>();   // heap: patterns are ~24 KB
+    if (what == Generate::song)
+    {
+        e->slot = -1;
+        e->allBefore = std::make_unique<PatternStore::Everything>();
+        patternStore_.copyEverything (*e->allBefore);
+        e->allAfter = std::make_unique<PatternStore::Everything> (*e->allBefore);
+        generateSong (g, *e->allAfter);
+        if (e->allAfter->slots == e->allBefore->slots && e->allAfter->alternates == e->allBefore->alternates
+            && e->allAfter->song == e->allBefore->song)
+            return false;
+        patternStore_.setEverything (*e->allAfter);
+    }
+    else if (what == Generate::variation)
+    {
+        e->slot = slot;
+        e->alternate = true;
+        patternStore_.copySlot (slot, e->before);
+        e->after = e->before;
+        patternStore_.copyAlternate (slot, e->beforeB);
+        e->afterB = e->beforeB;
+        generateVariation (g, e->before, e->afterB);
+        if (e->afterB == e->beforeB)
+            return false;
+        patternStore_.setAlternate (slot, e->afterB);
+    }
+    else
+    {
+        e->slot = slot;
+        patternStore_.copySlot (slot, e->before);
+        e->after = e->before;
+        if (what == Generate::pattern)
+            generatePattern (g, e->after);
+        else if (what == Generate::mutate)
+            mutateLanes (g, laneMask, e->after);
+        else
+            generateFill (g, e->after, bar);
+        if (e->after == e->before)
+            return false;
+        patternStore_.setSlot (slot, e->after);
+    }
+    patternHistory_.push (std::move (e));
+    return true;
+}
+
 // Accent: Copper (05_ULTIMA_VOX_UI_JUCE_SKIN.md §3).
 DrumsProcessor::DrumsProcessor()
     : vox::suite::SuiteProcessor ({ JucePlugin_Name,
@@ -438,6 +620,8 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (samples_.writeState());
     out.push_back (patternStore_.encodeCurrent());
     out.push_back (encodeSong (patternStore_.song()));
+    out.push_back (encodeGenerator (generator()));
+    out.push_back (encodeUiState (uiState()));
 }
 
 std::shared_ptr<const ExportSnapshot> DrumsProcessor::captureExport (ExportSnapshot::Scope scope, int passes)
@@ -517,44 +701,8 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
     std::map<std::string, float> values;
     if (const auto* section = document.find (parameterSectionTag))
     {
-        const auto& data = section->data;
-        std::size_t at = 0;
-        std::uint32_t count = 0;
-        if (! takeU32 (data, at, count) || count > 4096)
-        {
-            error = "malformed parameter section";
+        if (! decodeParameterValues (*section, values, error))
             return {};
-        }
-        for (std::uint32_t i = 0; i < count; ++i)
-        {
-            std::uint32_t length = 0, bits = 0;
-            if (! takeU32 (data, at, length) || length == 0 || length > 64 || data.size() - at < length + 4u)
-            {
-                error = "malformed parameter section";
-                return {};
-            }
-            std::string id (length, '\0');
-            for (std::uint32_t c = 0; c < length; ++c)
-                id[c] = static_cast<char> (data[at + c]);
-            at += length;
-            float plain = 0.0f;
-            if (! takeU32 (data, at, bits))
-            {
-                error = "malformed parameter section";
-                return {};
-            }
-            std::memcpy (&plain, &bits, sizeof plain);
-            if (! std::isfinite (plain) || ! values.emplace (std::move (id), plain).second)
-            {
-                error = "invalid or duplicate parameter value";
-                return {};
-            }
-        }
-        if (at != data.size())
-        {
-            error = "malformed parameter section";
-            return {};
-        }
     }
 
     // Pad structure: the DPAD section, or (DRM-01/02 projects) the former
@@ -586,6 +734,20 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
             return {};
     }
 
+    // Generator settings and editor state: defaults in older projects.
+    auto generatorRestore = std::make_shared<GeneratorSettings>();
+    if (const auto* section = document.find (generatorSectionTag))
+    {
+        if (! decodeGenerator (*section, *generatorRestore, error))
+            return {};
+    }
+    auto uiRestore = std::make_shared<UiState>();
+    if (const auto* section = document.find (uiStateSectionTag))
+    {
+        if (! decodeUiState (*section, *uiRestore, error))
+            return {};
+    }
+
     std::vector<std::pair<juce::RangedAudioParameter*, float>> next;
     for (const auto& entry : pluginParameters())
     {
@@ -610,8 +772,13 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (SampleLibrary::encodeState (sampleRestore->pads));
         restore.sections.push_back (PatternStore::encode (*patternRestore, *alternateRestore));
         restore.sections.push_back (encodeSong (*songRestore));
+        restore.sections.push_back (encodeGenerator (*generatorRestore));
+        restore.sections.push_back (encodeUiState (*uiRestore));
     }
-    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore] {
+    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore, generatorRestore,
+                     uiRestore] {
+        setGenerator (*generatorRestore);
+        setUiState (*uiRestore);
         store_.setAll (*kitRestore);
         patternStore_.setAll (*patternRestore);
         patternStore_.setAlternates (*alternateRestore);
