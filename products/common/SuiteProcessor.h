@@ -48,6 +48,10 @@ public:
     {
     }
 
+    // A product with more than the Main stereo output declares its buses
+    // and overrides isBusesLayoutSupported.
+    SuiteProcessor (ProductInfo info, const BusesProperties& buses) : juce::AudioProcessor (buses), info_ (std::move (info)) {}
+
     const ProductInfo& product() const noexcept { return info_; }
 
     //==========================================================================

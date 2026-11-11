@@ -47,7 +47,13 @@ DrumsProcessor::DrumsProcessor()
     : vox::suite::SuiteProcessor ({ JucePlugin_Name,
                                     vox::preset::makeTag (VOX_SUITE_STATE_TAG),
                                     1,
-                                    juce::Colour::fromString ("FFEF805D") }),
+                                    juce::Colour::fromString ("FFEF805D") },
+                                  [] {
+                                      auto buses = BusesProperties().withOutput ("Main", juce::AudioChannelSet::stereo(), true);
+                                      for (int out = 2; out <= kit::hostOutputBuses; ++out)
+                                          buses = buses.withOutput ("Out " + juce::String (out), juce::AudioChannelSet::stereo(), false);
+                                      return buses;
+                                  }()),
       parameters_ (*this, nullptr, "VOXDRUMS", createParameterLayout())
 {
     for (int pad = 0; pad < padCount; ++pad)
@@ -61,6 +67,9 @@ DrumsProcessor::DrumsProcessor()
         r.cutoff = parameters_.getRawParameterValue (prefix + ".cutoff");
         r.mute = parameters_.getRawParameterValue (prefix + ".mute");
         r.lane = parameters_.getRawParameterValue ("drm.seq.lane." + prefix.substr (4));
+        r.send1 = parameters_.getRawParameterValue (prefix + ".send1");
+        r.send2 = parameters_.getRawParameterValue (prefix + ".send2");
+        r.solo = parameters_.getRawParameterValue (prefix + ".solo");
     }
     volume_ = parameters_.getRawParameterValue ("drm.kit.volume");
     velocity_ = parameters_.getRawParameterValue ("drm.kit.velocity");
@@ -69,6 +78,13 @@ DrumsProcessor::DrumsProcessor()
     swing_ = parameters_.getRawParameterValue ("drm.seq.swing");
     accent_ = parameters_.getRawParameterValue ("drm.seq.accent");
     pattern_ = parameters_.getRawParameterValue (patternParameterId);
+    delayTime_ = parameters_.getRawParameterValue ("drm.fx.delay.time");
+    delayFeedback_ = parameters_.getRawParameterValue ("drm.fx.delay.feedback");
+    delayTone_ = parameters_.getRawParameterValue ("drm.fx.delay.tone");
+    delayLevel_ = parameters_.getRawParameterValue ("drm.fx.delay.level");
+    reverbSize_ = parameters_.getRawParameterValue ("drm.fx.reverb.size");
+    reverbDamp_ = parameters_.getRawParameterValue ("drm.fx.reverb.damp");
+    reverbLevel_ = parameters_.getRawParameterValue ("drm.fx.reverb.level");
     events_.resize (midiCapacity);
     live_ = defaultKit();
     for (const auto& entry : pluginParameters())
@@ -83,13 +99,34 @@ void DrumsProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
     vox::suite::SuiteProcessor::prepareToPlay (sampleRate, maximumBlockSize);
     samples_.collectAllStopped();   // the audio thread is not running here
     engine_.prepare (sampleRate);
-    engine_.setMaxVoices (voiceLimit_);
+    voiceLimitApplied_ = voiceLimitOverride_ > 0 ? voiceLimitOverride_ : static_cast<int> (store_.snapshot().voiceLimit);
+    engine_.setMaxVoices (voiceLimitApplied_);
+    fx_.prepare (sampleRate);
+    // The engine's internal buses. A host may not exceed maximumBlockSize;
+    // a block that does anyway is rendered in chunks of scratchFrames_.
+    scratchFrames_ = std::max (maximumBlockSize, 1024);
+    scratch_.assign (static_cast<std::size_t> (scratchFrames_) * kit::auxBuses * 2, 0.0f);
+    for (std::size_t i = 0; i < scratchPointers_.size(); ++i)
+        scratchPointers_[i] = scratch_.data() + i * static_cast<std::size_t> (scratchFrames_);
     prepared_ = true;
 }
 
 void DrumsProcessor::releaseResources()
 {
     engine_.reset();
+    fx_.reset();
+}
+
+// Main stereo, then Out 2..9: each stereo or disabled, nothing else.
+bool DrumsProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    if (! layouts.inputBuses.isEmpty() || layouts.outputBuses.size() < 1 || layouts.outputBuses.size() > kit::hostOutputBuses
+        || layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+    for (int bus = 1; bus < layouts.outputBuses.size(); ++bus)
+        if (! layouts.outputBuses[bus].isDisabled() && layouts.outputBuses[bus] != juce::AudioChannelSet::stereo())
+            return false;
+    return true;
 }
 
 void DrumsProcessor::reset()
@@ -99,7 +136,7 @@ void DrumsProcessor::reset()
 
 double DrumsProcessor::getTailLengthSeconds() const
 {
-    return 10.5;   // longest decay (10 s) plus the -80 dB tail
+    return 30.0;   // longest pad decay (10 s) plus the delay and reverb returns
 }
 
 bool DrumsProcessor::audition (int pad, std::uint8_t velocity)
@@ -127,12 +164,12 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         buffer.clear();
         return;
     }
-    for (int ch = 2; ch < buffer.getNumChannels(); ++ch)
-        buffer.clear (ch, 0, frames);
+    buffer.clear();
 
     // Settings: structure from the store, host parameters on top.
     store_.pull (live_);
     const auto load = [] (std::atomic<float>* a) { return a->load (std::memory_order_relaxed); };
+    bool anySolo = false;
     for (int pad = 0; pad < padCount; ++pad)
     {
         auto& p = live_.pads[static_cast<std::size_t> (pad)];
@@ -144,6 +181,22 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         p.cutoff = load (r.cutoff);
         p.mute = load (r.mute) >= 0.5f;
         p.laneOn = load (r.lane) >= 0.5f;
+        p.send1 = load (r.send1);
+        p.send2 = load (r.send2);
+        anySolo = anySolo || load (r.solo) >= 0.5f;
+    }
+    // Solo: while any pad is soloed, the others are muted.
+    if (anySolo)
+        for (int pad = 0; pad < padCount; ++pad)
+            if (load (padRefs_[static_cast<std::size_t> (pad)].solo) < 0.5f)
+                live_.pads[static_cast<std::size_t> (pad)].mute = true;
+    {
+        const int want = voiceLimitOverride_ > 0 ? voiceLimitOverride_ : static_cast<int> (live_.voiceLimit);
+        if (want != voiceLimitApplied_)
+        {
+            engine_.setMaxVoices (want);   // stops the voices; no allocation
+            voiceLimitApplied_ = want;
+        }
     }
     live_.volume = load (volume_);
     live_.velocitySensitivity = load (velocity_);
@@ -227,13 +280,113 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     const int slot = std::clamp (static_cast<int> (std::lround (load (pattern_))), 0, PatternStore::slotCount - 1);
     const auto& pattern = patternStore_.pull (slot, livePattern_);
+    const kit::Song* song = patternStore_.pullSong (liveSong_);
+    songBar_.store (song != nullptr && transport.hasPpq
+                        ? static_cast<int> (kit::songBarAt (*song, static_cast<std::int64_t> (std::floor (transport.ppq / 4.0))))
+                        : -1,
+                    std::memory_order_relaxed);
     const bool panic = panicPending_.exchange (false, std::memory_order_acq_rel);
     const auto* sampleViews = samples_.acquire();
-    const kit::Outputs out { buffer.getWritePointer (0), buffer.getWritePointer (1), nullptr };
-    engine_.process (live_, out, static_cast<std::uint32_t> (frames), events_.data(), static_cast<std::uint32_t> (eventCount),
-                     transport, &pattern, sampleViews, panic);
+
+    // Host buses: Main, then Out 2..9 where the host enabled them. A bus is
+    // usable when it has both of its channels in this buffer.
+    std::array<float*, kit::hostOutputBuses * 2> host {};
+    std::uint32_t active = 0;
+    for (int bus = 0; bus < std::min (getBusCount (false), kit::hostOutputBuses); ++bus)
+    {
+        if (getChannelCountOfBus (false, bus) != 2)
+            continue;
+        const int first = getChannelIndexInProcessBlockBuffer (false, bus, 0);
+        if (first < 0 || first + 1 >= buffer.getNumChannels())
+            continue;
+        host[static_cast<std::size_t> (bus * 2)] = buffer.getWritePointer (first);
+        host[static_cast<std::size_t> (bus * 2 + 1)] = buffer.getWritePointer (first + 1);
+        active |= 1u << bus;
+    }
+    if ((active & 1u) == 0)   // no stereo Main: nothing to render into
+    {
+        samples_.report (engine_.usage());
+        return;
+    }
+    activeOutputs_.store (active, std::memory_order_relaxed);
+
+    kit::FxSettings fx;
+    fx.delaySeconds = delayTimeQuarters (static_cast<int> (std::lround (load (delayTime_)))) * 60.0
+                    / std::clamp (transport.hasTempo ? transport.bpm : 120.0, 20.0, 999.0);
+    fx.delayFeedback = load (delayFeedback_);
+    fx.delayTone = load (delayTone_);
+    fx.delayLevel = load (delayLevel_);
+    fx.reverbSize = load (reverbSize_);
+    fx.reverbDamp = load (reverbDamp_);
+    fx.reverbLevel = load (reverbLevel_);
+
+    // Rendered in chunks no longer than the internal buses (one chunk for
+    // any block within the prepared maximum).
+    const double ppqPerFrame = transport.hasTempo && getSampleRate() > 0.0 ? transport.bpm / (60.0 * getSampleRate()) : 0.0;
+    std::array<float, padCount> padPeak {};
+    float mainPeak[2] = { 0.0f, 0.0f };
+    std::size_t nextEvent = 0;
+    for (int start = 0; start < frames;)
+    {
+        const int n = std::min (frames - start, scratchFrames_);
+        std::size_t lastEvent = nextEvent;
+        while (lastEvent < eventCount && static_cast<int> (events_[lastEvent].offset) < start + n)
+        {
+            events_[lastEvent].offset -= static_cast<std::uint32_t> (start);
+            ++lastEvent;
+        }
+        kit::Transport chunk = transport;
+        if (chunk.hasPpq)
+            chunk.ppq += start * ppqPerFrame;
+        float* const mainL = host[0] + start;
+        float* const mainR = host[1] + start;
+        const kit::Outputs out { mainL, mainR, &scratchPointers_ };
+        engine_.process (live_, out, static_cast<std::uint32_t> (n), events_.data() + nextEvent,
+                         static_cast<std::uint32_t> (lastEvent - nextEvent), chunk, &pattern, sampleViews, panic && start == 0,
+                         kit::KitEngine::Release::none, song);
+        nextEvent = lastEvent;
+        pads |= engine_.sequencerHits();
+        for (int pad = 0; pad < padCount; ++pad)
+            padPeak[static_cast<std::size_t> (pad)] = std::max (padPeak[static_cast<std::size_t> (pad)], engine_.padPeak (pad));
+        if (engine_.soundOffSeen())
+            fx_.reset();   // All Sound Off / panic also ends the returns' tails
+        // Out 2..9: to the host bus, or to Main when the host disabled it.
+        for (int bus = 1; bus <= kit::auxOutputs; ++bus)
+        {
+            const float* fromL = scratchPointers_[static_cast<std::size_t> ((kit::auxSends + bus - 1) * 2)];
+            const float* fromR = scratchPointers_[static_cast<std::size_t> ((kit::auxSends + bus - 1) * 2 + 1)];
+            if ((active & (1u << bus)) != 0)
+            {
+                std::memcpy (host[static_cast<std::size_t> (bus * 2)] + start, fromL, sizeof (float) * static_cast<std::size_t> (n));
+                std::memcpy (host[static_cast<std::size_t> (bus * 2 + 1)] + start, fromR, sizeof (float) * static_cast<std::size_t> (n));
+            }
+            else
+                for (int i = 0; i < n; ++i)
+                {
+                    mainL[i] += fromL[i];
+                    mainR[i] += fromR[i];
+                }
+        }
+        // Send 1 -> delay, Send 2 -> reverb; both return to Main only.
+        fx_.process (fx, scratchPointers_[0], scratchPointers_[1], scratchPointers_[2], scratchPointers_[3], mainL, mainR,
+                     static_cast<std::uint32_t> (n));
+        for (int i = 0; i < n; ++i)
+        {
+            mainPeak[0] = std::max (mainPeak[0], std::fabs (mainL[i]));
+            mainPeak[1] = std::max (mainPeak[1], std::fabs (mainR[i]));
+        }
+        start += n;
+    }
     samples_.report (engine_.usage());
-    pads |= engine_.sequencerHits();
+    activeVoices_.store (engine_.activeVoices(), std::memory_order_relaxed);
+    const auto raise = [] (std::atomic<float>& meter, float peak) {
+        if (peak > meter.load (std::memory_order_relaxed))
+            meter.store (peak, std::memory_order_relaxed);
+    };
+    for (int pad = 0; pad < padCount; ++pad)
+        raise (padMeter_[static_cast<std::size_t> (pad)], padPeak[static_cast<std::size_t> (pad)]);
+    raise (mainMeter_[0], mainPeak[0]);
+    raise (mainMeter_[1], mainPeak[1]);
     for (int pad = 0; pad < padCount; ++pad)   // a muted pad does not play, so it does not light
         if (live_.pads[static_cast<std::size_t> (pad)].mute)
             pads &= ~(1u << pad);
@@ -284,28 +437,70 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (KitStore::encode (store_.snapshot()));
     out.push_back (samples_.writeState());
     out.push_back (patternStore_.encodeCurrent());
+    out.push_back (encodeSong (patternStore_.song()));
+}
+
+std::shared_ptr<const ExportSnapshot> DrumsProcessor::captureExport (ExportSnapshot::Scope scope, int passes)
+{
+    auto snapshot = std::make_shared<ExportSnapshot>();   // heap: a pattern is ~24 KB
+    snapshot->scope = scope;
+    snapshot->passes = std::max (1, passes);
+    snapshot->bpm = lastBpm();
+    snapshot->slot = std::clamp (static_cast<int> (std::lround (parameters_.getRawParameterValue (patternParameterId)->load())), 0,
+                                 PatternStore::slotCount - 1);
+    snapshot->context.swing = parameters_.getRawParameterValue ("drm.seq.swing")->load();
+    snapshot->context.accent = parameters_.getRawParameterValue ("drm.seq.accent")->load();
+    snapshot->context.laneMask = 0;
+    const auto kit = store_.snapshot();
+    for (int pad = 0; pad < padCount; ++pad)
+    {
+        if (parameters_.getRawParameterValue ("drm.seq.lane." + padPrefix (pad).substr (4))->load() >= 0.5f)
+            snapshot->context.laneMask |= 1u << pad;
+        snapshot->notes[static_cast<std::size_t> (pad)] = kit.pads[static_cast<std::size_t> (pad)].note;
+    }
+    if (scope == ExportSnapshot::Scope::pattern)
+    {
+        patternStore_.copySlot (snapshot->slot, snapshot->pattern);
+        snapshot->trackName = "VOX Drums Pattern " + juce::String (snapshot->slot + 1);
+    }
+    else
+    {
+        const auto all = std::make_unique<PatternStore::Everything>();
+        patternStore_.copyEverything (*all);
+        snapshot->songLength = all->song.length;
+        for (int bar = 0; bar < all->song.length; ++bar)
+            snapshot->bars[static_cast<std::size_t> (bar)] =
+                resolveBar (all->song.bars[static_cast<std::size_t> (bar)], all->slots, all->alternates);
+        snapshot->trackName = "VOX Drums Song";
+    }
+    return snapshot;
+}
+
+juce::MemoryBlock DrumsProcessor::renderExport (const ExportSnapshot& snapshot)
+{
+    ExportOptions options;
+    options.passes = snapshot.passes;
+    options.bpm = snapshot.bpm;
+    if (snapshot.scope == ExportSnapshot::Scope::pattern)
+        return exportMidi (snapshot.pattern.view(), snapshot.context, snapshot.notes, options, snapshot.trackName);
+    std::array<kit::SongBarView, kit::maxSongBars> views {};
+    for (int bar = 0; bar < snapshot.songLength; ++bar)
+        if (const auto& cells = snapshot.bars[static_cast<std::size_t> (bar)])
+            views[static_cast<std::size_t> (bar)] = { cells->cells.data(), BarCells::stride, cells->steps, cells->seed };
+    kit::Song song;
+    song.bars = static_cast<std::uint32_t> (snapshot.songLength);
+    song.views = views.data();
+    return exportSongMidi (song, snapshot.context, snapshot.notes, options, snapshot.trackName);
 }
 
 juce::MemoryBlock DrumsProcessor::exportPatternMidi (int slot, int passes, double bpm)
 {
-    const auto stored = std::make_unique<StoredPattern>();   // heap: ~24 KB
-    patternStore_.copySlot (slot, *stored);
-    kit::StepContext context;
-    context.swing = parameters_.getRawParameterValue ("drm.seq.swing")->load();
-    context.accent = parameters_.getRawParameterValue ("drm.seq.accent")->load();
-    context.laneMask = 0;
-    const auto kit = store_.snapshot();
-    std::array<std::uint8_t, kit::padCount> notes {};
-    for (int pad = 0; pad < padCount; ++pad)
-    {
-        if (parameters_.getRawParameterValue ("drm.seq.lane." + padPrefix (pad).substr (4))->load() >= 0.5f)
-            context.laneMask |= 1u << pad;
-        notes[static_cast<std::size_t> (pad)] = kit.pads[static_cast<std::size_t> (pad)].note;
-    }
-    ExportOptions options;
-    options.passes = passes;
-    options.bpm = bpm;
-    return exportMidi (stored->view(), context, notes, options, "VOX Drums Pattern " + juce::String (slot + 1));
+    auto snapshot = std::make_shared<ExportSnapshot> (*captureExport (ExportSnapshot::Scope::pattern, passes));
+    snapshot->slot = std::clamp (slot, 0, PatternStore::slotCount - 1);
+    patternStore_.copySlot (snapshot->slot, snapshot->pattern);
+    snapshot->trackName = "VOX Drums Pattern " + juce::String (snapshot->slot + 1);
+    snapshot->bpm = bpm;
+    return renderExport (*snapshot);
 }
 
 DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
@@ -383,6 +578,14 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
             return {};
     }
 
+    // Song: the DSNG section; the initial song otherwise (projects before DRM-05).
+    auto songRestore = std::make_shared<SongData> (SongData::initial());
+    if (const auto* songSection = document.find (songSectionTag))
+    {
+        if (! decodeSong (*songSection, *songRestore, error))
+            return {};
+    }
+
     std::vector<std::pair<juce::RangedAudioParameter*, float>> next;
     for (const auto& entry : pluginParameters())
     {
@@ -406,11 +609,13 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (KitStore::encode (*kitRestore));
         restore.sections.push_back (SampleLibrary::encodeState (sampleRestore->pads));
         restore.sections.push_back (PatternStore::encode (*patternRestore, *alternateRestore));
+        restore.sections.push_back (encodeSong (*songRestore));
     }
-    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore] {
+    restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore] {
         store_.setAll (*kitRestore);
         patternStore_.setAll (*patternRestore);
         patternStore_.setAlternates (*alternateRestore);
+        patternStore_.setSong (*songRestore);
         patternEpoch_.fetch_add (1);   // the editor's undo history ends here
         samples_.apply (*sampleRestore);
         for (std::size_t i = 0; i < shared->size(); ++i)

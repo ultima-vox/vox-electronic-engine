@@ -28,7 +28,14 @@ inline constexpr int samplesPerPad = 2;                 // players A and B
 inline constexpr int sampleSlots = padCount * samplesPerPad;
 // Aux buses: Send 1, Send 2, then Out 2..Out 9 (DRM-06: eight assignable
 // stereo outputs next to Main; the legacy module had seven).
+// Bus contract (DRM-06). Host-visible: Main + auxOutputs = 9 stereo buses
+// (18 channels). Internal only: auxSends stereo pairs feeding the shared
+// delay/reverb; they are never declared to the host. The engine's aux
+// array holds both: pairs [0, auxSends) are the sends, pairs
+// [auxSends, auxBuses) are Out 2..Out 9.
 inline constexpr int auxSends = 2, auxOutputs = 8, auxBuses = auxSends + auxOutputs;
+inline constexpr int hostOutputBuses = 1 + auxOutputs, hostOutputChannels = hostOutputBuses * 2;
+static_assert (hostOutputBuses == 9 && hostOutputChannels == 18 && auxBuses == 10);
 inline constexpr int laneCount = padCount;
 inline constexpr int maxStepsPerBar = 16, maxBars = 4;
 inline constexpr int maxPatternCells = laneCount * maxBars * maxStepsPerBar;
@@ -74,6 +81,7 @@ struct KitSettings {
     bool chokeEnabled = true;          // choke groups (legacy "Hat Choke")
     std::uint8_t sequencerMode = 0;    // 0 Host MIDI, 1 Internal, 2 Both
     float swing = 0.0f, accent = 0.5f;
+    std::uint8_t voiceLimit = 64;      // voice pool: 16, 32 or 64 (the caller applies it with setMaxVoices)
     std::array<PadSettings, padCount> pads {};
 };
 
@@ -194,7 +202,7 @@ struct Usage {
 struct Outputs {
     float* left = nullptr;
     float* right = nullptr;
-    // Optional: auxBuses stereo pairs (Send 1, Send 2, Out 2..Out 8). When
+    // Optional: auxBuses stereo pairs (Send 1, Send 2, Out 2..Out 9). When
     // null, every pad plays dry on main and the sends are silent.
     std::array<float*, auxBuses * 2>* aux = nullptr;
 };

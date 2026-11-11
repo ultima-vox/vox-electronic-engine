@@ -33,6 +33,7 @@ public:
     void setPad (int pad, const kit::PadSettings& settings);   // structural fields only
     kit::KitSettings snapshot() const;
     void setAll (const kit::KitSettings& settings);           // structural fields only
+    void setVoiceLimit (int voices);                          // 16, 32 or 64
     std::uint64_t generation() const noexcept { return generation_.load(); }
 
     static preset::Section encode (const kit::KitSettings& settings);

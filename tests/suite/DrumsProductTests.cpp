@@ -220,14 +220,38 @@ void testParameterContract()
             case Field::seqSwing: expected = kitDefaults.swing; break;
             case Field::seqAccent: expected = kitDefaults.accent; break;
             case Field::seqLane: expected = 1.0f; break;
+            // DRM-06 (appended): dry by default, the returns at their documented defaults.
+            case Field::send1:
+            case Field::send2:
+            case Field::solo: expected = 0.0f; break;
+            case Field::delayTime: expected = 3.0f; break;
+            case Field::delayFeedback: expected = 0.35f; break;
+            case Field::delayTone:
+            case Field::reverbSize:
+            case Field::reverbDamp: expected = 0.5f; break;
+            case Field::delayLevel:
+            case Field::reverbLevel: expected = 0.8f; break;
         }
         check (std::abs (def - expected) <= 1.0e-4f * std::max (1.0f, std::abs (def)),
                "host default equals the default kit: " + juce::String (entry.id));
     }
     check (static_cast<int> (ids.size()) == p.getParameters().size(), "every host parameter is in the table");
-    check (ids.size() == 119, "119 plugin parameters (got " + juce::String (static_cast<int> (ids.size())) + ")");
+    // DRM-06 appended 55 parameters (16 x send 1, send 2, solo; 7 for the
+    // returns) after the 119 of DRM-03b/04, whose order and IDs are frozen.
+    check (ids.size() == 174, "174 plugin parameters (got " + juce::String (static_cast<int> (ids.size())) + ")");
     for (int pad = 0; pad < padCount; ++pad)
-        check (perPad[pad] == 6, "pad " + juce::String (pad + 1) + " has level, tune, decay, pan, cutoff and mute");
+        check (perPad[pad] == 9, "pad " + juce::String (pad + 1) + " has level, tune, decay, pan, cutoff, mute, sends and solo");
+    {
+        const auto& table = vox::drums::pluginParameters();
+        bool frozen = table.size() >= 119 && table[0].id == "drm.p01.level" && table[95].id == "drm.p16.mute"
+                   && table[96].id == "drm.kit.volume" && table[102].id == "drm.seq.accent" && table[103].id == "drm.seq.lane.p01"
+                   && table[118].id == "drm.seq.lane.p16";
+        for (std::size_t i = 0; i < 119 && frozen; ++i)
+            frozen = table[i].field <= vox::drums::Field::seqLane;
+        for (std::size_t i = 119; i < table.size() && frozen; ++i)
+            frozen = table[i].field > vox::drums::Field::seqLane;
+        check (frozen, "the 119 DRM-03b/04 parameters keep their order; DRM-06 parameters follow them");
+    }
     // DRM-01/02 host IDs of pads 1-8, kit and sequencer keep their identity.
     for (const auto* id : { "drm.p01.level", "drm.p08.cutoff", "drm.kit.volume", "drm.kit.velocity", "drm.kit.hat_choke",
                             "drm.seq.mode", "drm.seq.pattern", "drm.seq.swing", "drm.seq.accent", "drm.seq.lane.p08" })
@@ -1006,7 +1030,7 @@ void testState()
         bad ({}, "empty");
         {
             auto d = good;
-            d[0] = std::byte { 2 };
+            d[0] = std::byte { 3 };   // 2 is DRM-06 (outputs and the voice limit appended)
             bad (d, "unknown version");
         }
         {
@@ -1425,12 +1449,12 @@ void testPatterns()
         };
         // Slot 1 header at 8: steps, bars, seed (4); first cell at 14.
         bad ({}, "empty");
-        bad (edit (0, 3), "unknown version");
+        bad (edit (0, 4), "unknown version");   // 3 is DRM-05 (step lock)
         bad (edit (4, 4), "4 slots");
         bad (edit (8, 24), "24 steps");
         bad (edit (9, 0), "0 bars");
         bad (edit (9, 5), "5 bars");
-        bad (edit (14, 4), "unknown flag");
+        bad (edit (14, 8), "unknown flag");   // bit 2 (4) is the step lock since DSEQ v3
         bad (edit (15, 128), "velocity 128");
         bad (edit (16, 0), "probability 0");
         bad (edit (16, 101), "probability 101");

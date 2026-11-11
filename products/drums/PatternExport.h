@@ -33,6 +33,20 @@ struct ExportedNote {
 std::vector<ExportedNote> exportNotes (const kit::Pattern& pattern, const kit::StepContext& context,
                                       const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options);
 
+// Shared by both exports: time order, one note per (tick, note), no overlaps.
+void finishNotes (std::vector<ExportedNote>& notes);
+
+// DRM-05, scope Entire Song: one pass of the song from bar 1 to its last
+// bar, by kit::songHits (what Song mode plays from position 0). The loop
+// region is not applied. A hit before position 0 (negative microtiming on
+// the first step) is not exported, as in a pattern export.
+std::vector<ExportedNote> exportSongNotes (const kit::Song& song, const kit::StepContext& context,
+                                          const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options);
+// End of Track is at the end of the last bar (bar 16, 32 or 64).
+juce::MemoryBlock exportSongMidi (const kit::Song& song, const kit::StepContext& context,
+                                  const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options,
+                                  const juce::String& trackName);
+
 // SMF format 0, one track: tempo, 4/4, track name, then the notes.
 juce::MemoryBlock exportMidi (const kit::Pattern& pattern, const kit::StepContext& context,
                               const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options,
