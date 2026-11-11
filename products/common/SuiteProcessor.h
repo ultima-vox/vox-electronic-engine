@@ -145,13 +145,31 @@ public:
         document.sections.push_back (std::move (ui));
         for (auto& section : snapshot.product)
             document.sections.push_back (std::move (section));
+        const auto ownSections = document.sections.size();
         for (auto& section : snapshot.preserved)
             document.sections.push_back (std::move (section));
 
-        if (const auto bytes = preset::encode (document))
+        // Never an empty block for a state that can be saved: if the whole
+        // document does not fit the container, the product's own state is
+        // saved without the sections of unknown writers (and that is
+        // reported). Restore keeps those within a budget so this is not
+        // reached through a project the plugin itself accepted.
+        auto bytes = preset::encode (document);
+        if (! bytes && document.sections.size() > ownSections)
+        {
+            document.sections.resize (ownSections);
+            bytes = preset::encode (document);
+            const juce::ScopedLock lock (stateLock_);
+            lastStateNotice_ = "The project state was too large with the sections of an unknown writer; they were not saved.";
+        }
+        if (bytes)
             destination.replaceAll (bytes->data(), bytes->size());
         else
+        {
             destination.reset();
+            const juce::ScopedLock lock (stateLock_);
+            lastStateError_ = "the state is too large to save";
+        }
     }
 
     // Transactional: decode and validate everything first; the live state is
@@ -195,9 +213,31 @@ public:
         next.editorWidth = static_cast<int> (width);
         next.editorHeight = static_cast<int> (height);
         auto productSections = std::move (product.sections);
+        // Sections of an unknown (newer) writer are kept for the next save,
+        // within what the container has left after the product's own
+        // worst-case state: more would make the project unsaveable later.
+        const std::size_t reserve = productStateReserve() + 4096;
+        std::size_t budget = preset::maxStateBytes > reserve ? preset::maxStateBytes - reserve : 0;
+        std::size_t dropped = 0, droppedBytes = 0;
         for (auto& section : decoded.document.sections)
             if (section.tag != uiSectionTag && ! isProductSection (section.tag))
-                next.preserved.push_back (std::move (section));
+            {
+                const std::size_t cost = section.data.size() + 16;
+                if (cost <= budget)
+                {
+                    budget -= cost;
+                    next.preserved.push_back (std::move (section));
+                }
+                else
+                {
+                    ++dropped;
+                    droppedBytes += section.data.size();
+                }
+            }
+        const juce::String notice = dropped == 0 ? juce::String()
+                                                 : juce::String (static_cast<int> (dropped)) + " section(s) of an unknown writer ("
+                                                       + juce::String (static_cast<juce::int64> (droppedBytes))
+                                                       + " bytes) were not kept: they would leave too little room to save this project.";
 
         // 1. Commit: the UI state and the restored product sections, in one
         // critical section; previous values are destroyed after it.
@@ -207,6 +247,7 @@ public:
             std::swap (restoringProduct_, productSections);
             restoring_ = true;
             lastStateError_.clear();
+            lastStateNotice_ = notice;
         }
         // 2. Apply: host and listener notifications, without stateLock_.
         product.apply();
@@ -224,6 +265,13 @@ public:
     {
         const juce::ScopedLock lock (stateLock_);
         return lastStateError_;
+    }
+
+    // Not an error: what the last restore or save had to leave out ("" if nothing).
+    juce::String lastStateNotice() const
+    {
+        const juce::ScopedLock lock (stateLock_);
+        return lastStateNotice_;
     }
 
     std::uint64_t midiEventsSeen() const noexcept { return midiEventsSeen_.load (std::memory_order_relaxed); }
@@ -277,6 +325,8 @@ protected:
     }
 
     virtual bool isProductSection (preset::Tag) const { return false; }
+    // Upper bound of the product's own sections in bytes (0: no bound known).
+    virtual std::size_t productStateReserve() const { return 0; }
 
     // Realtime safe.
     void noteMidiSeen (const juce::MidiBuffer& midi) noexcept
@@ -323,7 +373,7 @@ private:
     SaveableState saved_;
     bool restoring_ = false;                          // stateLock_
     std::vector<preset::Section> restoringProduct_;   // stateLock_
-    juce::String lastStateError_;
+    mutable juce::String lastStateError_, lastStateNotice_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuiteProcessor)
 };

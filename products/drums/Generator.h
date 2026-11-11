@@ -49,7 +49,9 @@ void generatePattern (const GeneratorSettings&, StoredPattern& pattern);
 void mutateLanes (const GeneratorSettings&, std::uint32_t laneMask, StoredPattern& pattern);
 // Writes a fill into the end of bar `bar` (the last bar: -1).
 void generateFill (const GeneratorSettings&, StoredPattern& pattern, int bar = -1);
-// B from A: A with `variation` applied and a fill in its last bar.
+// B from A: A with `variation` applied and a fill in its last bar. B takes
+// A's grid; B's locked steps and lanes are kept. If B has another grid than
+// A and holds a locked step or a hit on a locked lane, B is not changed.
 void generateVariation (const GeneratorSettings&, const StoredPattern& a, StoredPattern& b);
 // A whole song of the current length: the five slots (intro, main, lift,
 // break, peak) with their B variations, arranged on the timeline in

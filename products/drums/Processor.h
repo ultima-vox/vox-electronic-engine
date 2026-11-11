@@ -95,7 +95,19 @@ public:
     PatternStore& patterns() noexcept { return patternStore_; }
     // Message thread: undo/redo of pattern edits. patternEpoch() changes
     // with every project restore; the editor clears the history then.
-    PatternHistory& patternHistory() noexcept { return patternHistory_; }
+    // A successful project restore ends the history: the first access after
+    // it (with or without an editor) finds it empty, so no entry of another
+    // project can be undone into this one. A rejected restore keeps it.
+    PatternHistory& patternHistory() noexcept
+    {
+        const auto epoch = patternEpoch_.load();
+        if (historyEpoch_ != epoch)
+        {
+            patternHistory_.clear();
+            historyEpoch_ = epoch;
+        }
+        return patternHistory_;
+    }
     std::uint64_t patternEpoch() const noexcept { return patternEpoch_.load(); }
     // The host tempo of the last block (120 before any), for MIDI export.
     double lastBpm() const noexcept { return lastBpm_.load (std::memory_order_relaxed); }
@@ -161,6 +173,11 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
+    // The most the product's own sections can take (ten 4 x 64 patterns, 64
+    // unique 64-step bars, 32 sample references with the longest paths:
+    // about 705 KB), so that much of the container is never given to
+    // sections of an unknown writer.
+    std::size_t productStateReserve() const override { return 736u * 1024u; }
     bool isProductSection (preset::Tag tag) const override
     {
         return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag
@@ -211,6 +228,7 @@ private:
     std::vector<kit::Event> events_;
     PatternStore patternStore_;
     PatternHistory patternHistory_;
+    std::uint64_t historyEpoch_ = 0;   // message thread: the epoch patternHistory_ belongs to
     std::atomic<std::uint64_t> patternEpoch_ { 0 };
     std::atomic<double> lastBpm_ { 120.0 };
     PatternStore::Live livePattern_;   // audio thread

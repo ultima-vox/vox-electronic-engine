@@ -236,6 +236,9 @@ public:
     // FX tails then).
     float padPeak (int pad) const noexcept { return padPeak_[static_cast<std::size_t> (pad & 15)]; }
     bool soundOffSeen() const noexcept { return soundOff_; }
+    // The frame of the last All Sound Off (or 0 for a panic) in the last
+    // process(), -1 if none: sends before it belong to the cleared tails.
+    int soundOffFrame() const noexcept { return soundOffFrame_; }
 
     // Pads triggered by the sequencer in the last process() (bit n = pad n).
     std::uint32_t sequencerHits() const noexcept { return sequencerHits_; }
@@ -254,6 +257,7 @@ private:
     std::uint32_t sequencerHits_ = 0;
     std::array<float, padCount> padPeak_ {};
     bool soundOff_ = false;
+    int soundOffFrame_ = -1;
     Usage usage_;
 };
 

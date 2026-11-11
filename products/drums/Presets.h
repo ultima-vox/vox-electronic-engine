@@ -26,6 +26,8 @@
 
 #include "Processor.h"
 
+#include <optional>
+
 namespace vox::drums {
 
 inline constexpr preset::Tag presetTypeSectionTag = preset::makeTag ("DPTY");
@@ -55,11 +57,18 @@ public:
 
     // Applies a preset; `target`: the pad a pad preset loads onto, the slot
     // a pattern preset loads into (-1: its source pad / the current slot).
-    juce::Result apply (const void* data, std::size_t size, int target = -1);
+    // `expected`: the kind the user chose (the list or dialog the file came
+    // from). A file of another kind is refused, whatever its name: a song
+    // preset renamed to a pad preset cannot replace the song.
+    juce::Result apply (const void* data, std::size_t size, int target = -1, std::optional<PresetType> expected = {});
     juce::Result save (PresetType type, const juce::String& name, const juce::File& file, int index = 0) const;
-    juce::Result load (const juce::File& file, int target = -1);
+    juce::Result load (const juce::File& file, PresetType expected, int target = -1);
+    // Whether `document` holds everything a preset of `type` needs.
+    static bool complete (const preset::StateDocument& document, PresetType type);
 
-    bool canUndoLoad() const noexcept { return previous_.getSize() > 0; }
+    // Undo Load belongs to the project state the load produced: a later
+    // project restore by the host ends it.
+    bool canUndoLoad() const noexcept;
     juce::Result undoLoad();
 
     // Factory content, through the same path as a preset file.
@@ -71,9 +80,10 @@ public:
     juce::Result importPortableKit (const juce::File& zip);
 
 private:
-    juce::Result applyDocument (preset::StateDocument&& preset, int target);
+    juce::Result applyDocument (preset::StateDocument&& preset, int target, std::optional<PresetType> expected = {});
     DrumsProcessor& processor_;
     juce::MemoryBlock previous_;
+    std::uint64_t previousEpoch_ = 0;   // the processor's restore epoch right after the load
 };
 
 } // namespace vox::drums

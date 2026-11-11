@@ -800,7 +800,7 @@ private:
             report (type() == PresetType::kit ? presets.loadFactoryKit (item.factory) : presets.loadFactoryPatterns (item.factory),
                     "Loaded " + item.label);
         else
-            report (presets.load (item.file, type() == PresetType::pad ? selectedPad_() : -1), "Loaded " + item.label);
+            report (presets.load (item.file, type(), type() == PresetType::pad ? selectedPad_() : -1), "Loaded " + item.label);
     }
     void saveCurrent()
     {
@@ -893,6 +893,9 @@ public:
         const auto error = processor_.lastStateError();
         if (error.isNotEmpty())
             text << "\nLast rejected state: " << error;
+        const auto notice = processor_.lastStateNotice();
+        if (notice.isNotEmpty())
+            text << "\nState: " << notice;
         if (diagnostics_->getText() != text)
             diagnostics_->setText (text, juce::dontSendNotification);
     }

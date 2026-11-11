@@ -1237,7 +1237,7 @@ void testPresets()
         setPlain (*p, "drm.seq.swing", 0.33f);
         setPlain (*p, "drm.p03.mute", 1.0f);
         const auto changed = stateOf (*p);
-        check (presets.load (file).wasOk(), "kit preset: loaded");
+        check (presets.load (file, PresetType::kit).wasOk(), "kit preset: loaded");
         const auto loaded = p->kitStore().pad (2);
         check (loaded.model == kit::Model::tom && std::abs (loaded.character - 0.91f) < 1.0e-6f && loaded.output == 4,
                "kit preset: pad structure and output restored");
@@ -1324,7 +1324,25 @@ void testPresets()
             rejects (juce::MemoryBlock (bytes->data(), bytes->size()), "invalid pad section");
         }
         const auto missing = workFolder.getChildFile ("does-not-exist.voxkitpreset");
-        check (presets.load (missing).failed() && stateOf (*p) == before, "preset file missing: rejected");
+        check (presets.load (missing, PresetType::kit).failed() && stateOf (*p) == before, "preset file missing: rejected");
+        // S5: the kind the user chose must be the kind in the file.
+        {
+            const auto song = Presets::userFolder (PresetType::pad).getChildFile ("renamed-song.voxpad");
+            check (presets.save (PresetType::song, "A song", song).wasOk(), "preset kind: a song preset saved under a pad name");
+            const auto result = presets.load (song, PresetType::pad, 3);
+            check (result.failed() && result.getErrorMessage().contains ("Song") && stateOf (*p) == before,
+                   "preset kind: a song preset in the pad list is refused and nothing changes (" + result.getErrorMessage() + ")");
+            const auto pattern = presets.capture (PresetType::pattern, "A pattern", 0);
+            check (presets.apply (pattern.getData(), pattern.getSize(), 3, PresetType::pad).failed() && stateOf (*p) == before,
+                   "preset kind: a pattern preset is not applied as a pad preset");
+            check (presets.load (song, PresetType::song).wasOk(), "preset kind: the same file loads as what it is");
+            presets.undoLoad();
+            // An incomplete preset is neither applied nor written.
+            vox::preset::StateDocument empty;
+            check (! Presets::complete (empty, PresetType::kit) && ! Presets::complete (empty, PresetType::song)
+                       && ! Presets::complete (empty, PresetType::pattern) && ! Presets::complete (empty, PresetType::pad),
+                   "preset completeness: a document without the sections of its kind is incomplete");
+        }
         auto fresh = makeProcessor();
         check (fresh->presets().apply (truncated.getData(), truncated.getSize()).failed() && ! fresh->presets().canUndoLoad(),
                "a rejected load leaves nothing to undo");
@@ -1971,6 +1989,353 @@ void testEditor()
 }
 
 //==============================================================================
+// Findings of the independent reviews of HEAD a214816 (PR 125 comments
+// 6805252037 and the realtime review), one block per finding.
+void testReviewFindings()
+{
+    const auto everything = [] (DrumsProcessor& p) {
+        auto all = std::make_unique<PatternStore::Everything>();
+        p.patterns().copyEverything (*all);
+        return all;
+    };
+    // S1: a project restore ends the undo history, with or without an editor.
+    {
+        auto p = makeProcessor();
+        const auto saved = stateOf (*p);
+        check (p->generate (DrumsProcessor::Generate::pattern) && p->generate (DrumsProcessor::Generate::song)
+                   && p->editSong ([] (SongData& s) { s.length = 32; }) && p->patternHistory().canUndo(),
+               "history: edits are recorded");
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        check (p->lastStateError().isEmpty() && ! p->patternHistory().canUndo() && ! p->patternHistory().canRedo(),
+               "history: a successful restore ends the undo history without an editor");
+        check (p->patternHistory().undo (p->patterns()) == -1 && p->patternHistory().redo (p->patterns()) == -1 && stateOf (*p) == saved,
+               "history: undo after a restore changes nothing");
+        // Through the editor's buttons (Generate page and step editor), after close and reopen.
+        p->generate (DrumsProcessor::Generate::song);
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        const auto restored = everything (*p);   // (the editor below changes the saved page, not this)
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+        auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+        auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
+        if (panel != nullptr)
+        {
+            panel->showPage (4);
+            for (const auto* name : { "undo", "redo" })
+                if (auto* b = dynamic_cast<juce::Button*> (panel->pageComponent (4)->named (name)))
+                    b->onClick();
+            panel->showPage (2);
+            for (const auto* name : { "undo", "redo" })
+                if (auto* b = panel->patternEditor().button (name))
+                    b->onClick();
+        }
+        {
+            const auto now = everything (*p);
+            check (panel != nullptr && now->slots == restored->slots && now->alternates == restored->alternates && now->song == restored->song,
+                   "history: Undo and Redo in a new editor cannot bring back another project's edits");
+        }
+        p->editorBeingDeleted (editor.get());
+        editor.reset();
+        // A rejected restore leaves the history as it was.
+        p->generate (DrumsProcessor::Generate::pattern);
+        const auto before = stateOf (*p);
+        p->setStateInformation ("garbage", 7);
+        check (p->lastStateError().isNotEmpty() && p->patternHistory().canUndo() && stateOf (*p) == before, "history: a rejected restore keeps the history");
+        check (p->patternHistory().undo (p->patterns()) == 0 && stateOf (*p) != before, "history: undo still works after a rejected restore");
+    }
+    // S3: the song store keeps the invariants its decoder requires.
+    {
+        auto p = makeProcessor();
+        p->editSong ([] (SongData& s) {
+            s.loopStart = 40;
+            s.loopLength = 8;
+        });
+        auto song = p->patterns().song();
+        check (song.length == 16 && song.loopStart < 16 && song.loopLength >= 1 && song.loopStart + song.loopLength <= 16,
+               "song invariants: a loop region outside the song is brought inside it (" + juce::String (song.loopStart) + "+"
+                   + juce::String (song.loopLength) + ")");
+        SongData wild;
+        wild.length = 23;
+        wild.loopStart = 200;
+        wild.loopLength = 0;
+        wild.bars[2].kind = SongBar::Kind::pattern;
+        wild.bars[2].slot = 9;
+        wild.bars[2].variation = 7;
+        wild.bars[2].patternBar = 12;
+        wild.bars[3].kind = SongBar::Kind::unique;   // unique without cells
+        p->patterns().setSong (wild);
+        auto q = makeProcessor();
+        const auto blob = stateOf (*p);
+        q->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+        check (blob.getSize() > 0 && q->lastStateError().isEmpty() && stateOf (*q) == blob,
+               "song invariants: whatever is published through the store saves and restores (" + q->lastStateError() + ")");
+        song = p->patterns().song();
+        check (SongData::validLength (song.length) && song.bars[2].slot < 5 && song.bars[2].variation <= 1 && song.bars[2].patternBar < 4
+                   && song.bars[3].kind == SongBar::Kind::empty,
+               "song invariants: length, slot, variation, pattern bar and unique bars are valid after any publish");
+        auto all = everything (*p);
+        all->song.loopStart = 77;
+        p->patterns().setEverything (*all);
+        check (p->patterns().song().loopStart < p->patterns().song().length, "song invariants: setEverything normalises too");
+    }
+    // S6: Undo Load belongs to the project it was made in.
+    {
+        auto p = makeProcessor();
+        const auto other = stateOf (*p);
+        check (p->presets().loadFactoryKit (1).wasOk() && p->presets().canUndoLoad(), "undo load: offered after a load");
+        p->setStateInformation ("garbage", 7);
+        check (p->presets().canUndoLoad(), "undo load: a rejected host restore keeps it");
+        setPlain (*p, "drm.kit.volume", 0.11f);
+        const auto project = stateOf (*p);
+        p->setStateInformation (other.getData(), static_cast<int> (other.getSize()));
+        check (! p->presets().canUndoLoad(), "undo load: a host project restore ends it");
+        check (p->presets().undoLoad().failed() && stateOf (*p) == other, "undo load: it cannot replace the restored project");
+        juce::ignoreUnused (project);
+        check (p->presets().loadFactoryKit (2).wasOk() && p->presets().undoLoad().wasOk() && stateOf (*p) == other, "undo load: an ordinary load is still undone");
+    }
+    // S7: Variation never destroys locked content of B.
+    {
+        auto p = makeProcessor();
+        auto& store = p->patterns();
+        auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
+        store.copySlot (0, *a);
+        a->resize (32, 2);
+        store.setSlot (0, *a);
+        store.copyAlternate (0, *b);
+        b->resize (16, 4);
+        b->cell (5, 3, 7) = {};
+        b->cell (5, 3, 7).on = true;
+        b->cell (5, 3, 7).velocity = 44;
+        b->cell (5, 3, 7).locked = true;
+        store.setAlternate (0, *b);
+        const bool changed = p->generate (DrumsProcessor::Generate::variation);
+        auto after = std::make_unique<StoredPattern>();
+        store.copyAlternate (0, *after);
+        check (! changed && *after == *b, "variation: B with a locked step and another grid than A is left as it is");
+        b->cell (5, 3, 7).locked = false;
+        store.setAlternate (0, *b);
+        auto g = p->generator();
+        g.laneLocks = 1u << 5;
+        p->setGenerator (g);
+        check (! p->generate (DrumsProcessor::Generate::variation), "variation: B with a locked lane and another grid than A is left as it is");
+        store.copyAlternate (0, *after);
+        check (*after == *b, "variation: the locked lane's B is unchanged");
+        g.laneLocks = 0;
+        p->setGenerator (g);
+        check (p->generate (DrumsProcessor::Generate::variation), "variation: without locks B takes A's grid");
+        store.copyAlternate (0, *after);
+        check (after->steps == 32 && after->bars == 2, "variation: B has A's grid");
+    }
+    // S4: a failed portable-kit import leaves the sample library unchanged.
+    {
+        const auto library = workFolder.getChildFile ("library-s4");
+        library.createDirectory();
+        setEnvironment ("VOX_DRUMS_SAMPLE_LIBRARY", library.getFullPathName());
+        auto p = makeProcessor();
+        const auto wav = writeWav ("s4.wav", 330.0);
+        juce::MemoryBlock audio;
+        wav.loadFileAsData (audio);
+        const auto hash = juce::SHA256 (audio).toHexString();
+        // A kit document without its pad section, with a hash-correct sample.
+        const auto good = p->presets().capture (PresetType::kit, "No pads");
+        auto decoded = vox::preset::decode ({ static_cast<const std::byte*> (good.getData()), good.getSize() }, p->product().stateTag,
+                                            p->product().stateSchema);
+        auto doc = decoded.document;
+        doc.sections.erase (std::remove_if (doc.sections.begin(), doc.sections.end(),
+                                            [] (const vox::preset::Section& s) { return s.tag == padSectionTag; }),
+                            doc.sections.end());
+        const auto bytes = vox::preset::encode (doc);
+        juce::ZipFile::Builder builder;
+        builder.addEntry (std::make_unique<juce::MemoryInputStream> (bytes->data(), bytes->size(), true), 9, "kit.voxkitpreset", juce::Time());
+        builder.addEntry (std::make_unique<juce::MemoryInputStream> (audio, true), 0, "samples/" + hash + ".wav", juce::Time());
+        const auto zip = workFolder.getChildFile ("NoPads.voxkit");
+        zip.deleteFile();
+        {
+            juce::FileOutputStream out (zip);
+            builder.writeToStream (out, nullptr);
+        }
+        const auto before = stateOf (*p);
+        check (p->presets().importPortableKit (zip).failed() && stateOf (*p) == before, "portable kit: an incomplete kit is refused");
+        check (library.getNumberOfChildFiles (juce::File::findFiles) == 0, "portable kit: a refused import writes nothing into the sample library");
+        // A valid kit: only the samples it references are stored.
+        juce::ZipFile::Builder extra;
+        extra.addEntry (std::make_unique<juce::MemoryInputStream> (good, true), 9, "kit.voxkitpreset", juce::Time());
+        extra.addEntry (std::make_unique<juce::MemoryInputStream> (audio, true), 0, "samples/" + hash + ".wav", juce::Time());
+        const auto zip2 = workFolder.getChildFile ("Unreferenced.voxkit");
+        zip2.deleteFile();
+        {
+            juce::FileOutputStream out (zip2);
+            extra.writeToStream (out, nullptr);
+        }
+        check (p->presets().importPortableKit (zip2).wasOk(), "portable kit: a kit with an unreferenced sample still imports");
+        check (library.getNumberOfChildFiles (juce::File::findFiles) == 0, "portable kit: a sample the kit does not reference is not stored");
+        setEnvironment ("VOX_DRUMS_SAMPLE_LIBRARY", workFolder.getChildFile ("library").getFullPathName());
+    }
+    // S2: a state too large to save is never returned as an empty project.
+    {
+        auto p = makeProcessor();
+        const auto base = stateOf (*p);
+        auto decoded = vox::preset::decode ({ static_cast<const std::byte*> (base.getData()), base.getSize() }, p->product().stateTag,
+                                            p->product().stateSchema);
+        const auto withUnknown = [&] (std::size_t size) {
+            auto doc = decoded.document;
+            vox::preset::Section unknown;
+            unknown.tag = vox::preset::makeTag ("XXXX");
+            unknown.data.assign (size, std::byte { 0x5a });
+            doc.sections.push_back (unknown);
+            const auto bytes = vox::preset::encode (doc);
+            return juce::MemoryBlock (bytes->data(), bytes->size());
+        };
+        // The worst legitimate content: ten 4 x 64 patterns, 64 unique 64-step bars.
+        const auto fill = [&] (DrumsProcessor& q) {
+            auto all = everything (q);
+            for (auto* set : { &all->slots, &all->alternates })
+                for (auto& pattern : *set)
+                    pattern.resize (64, 4);
+            all->song.length = 64;
+            for (auto& bar : all->song.bars)
+            {
+                auto cells = std::make_shared<BarCells>();
+                cells->id = BarCells::nextId();
+                cells->steps = 64;
+                bar = {};
+                bar.kind = SongBar::Kind::unique;
+                bar.cells = cells;
+            }
+            q.patterns().setEverything (*all);
+        };
+        {
+            const auto small = withUnknown (100 * 1024);
+            p->setStateInformation (small.getData(), static_cast<int> (small.getSize()));
+            check (p->lastStateError().isEmpty(), "large state: a state with a 100 KB unknown section loads");
+            fill (*p);
+            const auto saved = stateOf (*p);
+            auto q = makeProcessor();
+            q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+            const auto kept = vox::preset::decode ({ static_cast<const std::byte*> (saved.getData()), saved.getSize() }, p->product().stateTag,
+                                                  p->product().stateSchema);
+            check (saved.getSize() > 0 && q->lastStateError().isEmpty() && kept.ok() && kept.document.find (vox::preset::makeTag ("XXXX")) != nullptr
+                       && q->patterns().song().length == 64,
+                   "large state: the worst song saves next to a 100 KB unknown section, which is kept (" + juce::String (static_cast<int> (saved.getSize()))
+                       + " bytes)");
+        }
+        {
+            auto r = makeProcessor();
+            const auto large = withUnknown (600 * 1024);
+            r->setStateInformation (large.getData(), static_cast<int> (large.getSize()));
+            check (r->lastStateError().isEmpty(), "large state: a state with a 600 KB unknown section loads");
+            check (r->lastStateNotice().contains ("not kept"), "large state: what was left out is reported (" + r->lastStateNotice() + ")");
+            fill (*r);
+            const auto saved = stateOf (*r);
+            auto q = makeProcessor();
+            q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+            check (saved.getSize() > 0 && q->lastStateError().isEmpty() && q->patterns().song().length == 64
+                       && q->patterns().song().bars[63].kind == SongBar::Kind::unique,
+                   "large state: the project still saves and reopens when unknown sections left too little room (" + juce::String (static_cast<int> (saved.getSize()))
+                       + " bytes)");
+            const auto file = workFolder.getChildFile ("large-kit.voxkitpreset");
+            check (r->presets().save (PresetType::kit, "Large", file).wasOk() && r->presets().load (file, PresetType::kit).wasOk(),
+                   "large state: a kit preset still saves and loads");
+            // The reserve really covers the product's own worst case (plus the longest sample references).
+            auto own = makeProcessor();
+            fill (*own);
+            check (stateOf (*own).getSize() + 166u * 1024u <= 736u * 1024u,
+                   "large state: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (stateOf (*own).getSize())) + " bytes without samples)");
+        }
+    }
+    // R1: the first hit after unmute is not faded in.
+    {
+        auto p = makeProcessor();
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        const auto reference = hitPad (*p, 0);
+        p->reset();
+        p->processBlock (buffer, midi);
+        setPlain (*p, "drm.p01.mute", 1.0f);
+        p->processBlock (buffer, midi);
+        p->processBlock (buffer, midi);
+        setPlain (*p, "drm.p01.mute", 0.0f);
+        const auto after = hitPad (*p, 0);
+        bool same = true;
+        for (int i = 0; i < 256; ++i)
+            same = same && std::abs (after.getSample (0, i) - reference.getSample (0, i)) <= 1.0e-6f;
+        check (same && energy (reference, 0) > 1.0e-3f, "mute: a hit in the block where the pad is unmuted has its full attack");
+        // Solo released the same way.
+        p->reset();
+        p->processBlock (buffer, midi);
+        setPlain (*p, "drm.p05.solo", 1.0f);
+        p->processBlock (buffer, midi);
+        p->processBlock (buffer, midi);
+        setPlain (*p, "drm.p05.solo", 0.0f);
+        const auto unsoloed = hitPad (*p, 0);
+        same = true;
+        for (int i = 0; i < 256; ++i)
+            same = same && std::abs (unsoloed.getSample (0, i) - reference.getSample (0, i)) <= 1.0e-6f;
+        check (same, "solo: a hit in the block where solo is released has its full attack");
+    }
+    // R2: All Sound Off in the middle of a block leaves no echo.
+    {
+        auto p = makeProcessor();
+        setPlain (*p, "drm.p08.send1", 1.0f);   // the cymbal: still sounding at the CC
+        setPlain (*p, "drm.p08.send2", 1.0f);
+        setPlain (*p, "drm.fx.delay.feedback", 0.85f);
+        setPlain (*p, "drm.fx.delay.time", 0.0f);
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        p->audition (7, 127);
+        for (int b = 0; b < 30; ++b)
+            p->processBlock (buffer, midi);
+        check (energy (buffer, 0) > 1.0e-4f, "sound off: the pad and its returns are sounding before the CC");
+        midi.addEvent (juce::MidiMessage::allSoundOff (10), 300);
+        p->processBlock (buffer, midi);
+        midi.clear();
+        float after = 0.0f;
+        for (int b = 0; b < 200; ++b)
+        {
+            p->processBlock (buffer, midi);
+            after = std::max (after, std::max (energy (buffer, 0), energy (buffer, 1)));
+        }
+        check (juce::exactlyEqual (after, 0.0f), "sound off: All Sound Off at sample 300 of a block leaves no echo (" + juce::String (after, 9) + ")");
+    }
+    // R3: the reported tail covers the delay return at its longest setting.
+    {
+        auto p = makeProcessor();
+        TestPlayHead head;
+        p->setPlayHead (&head);
+        setPlain (*p, "drm.p02.send1", 1.0f);
+        setPlain (*p, "drm.fx.delay.feedback", 0.85f);
+        setPlain (*p, "drm.fx.delay.tone", 1.0f);
+        setPlain (*p, "drm.fx.delay.time", 6.0f);   // 1/2 note: 2 s at 60 BPM
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        head.set (false, 60.0, 0.0);
+        p->processBlock (buffer, midi);
+        p->audition (1, 127);
+        const double tail = p->getTailLengthSeconds();
+        float peak = 0.0f, atTail = 0.0f, at31 = 0.0f;
+        const int blocks = static_cast<int> ((tail + 2.0) * 48000.0 / 512.0);
+        for (int b = 0; b < blocks; ++b)
+        {
+            p->processBlock (buffer, midi);
+            const float e = std::max (energy (buffer, 0), energy (buffer, 1));
+            const double t = b * 512.0 / 48000.0;
+            if (t > 1.9 && t < 2.6)
+                peak = std::max (peak, e);   // the first repeat
+            if (t >= 31.0 && t < 33.5)
+                at31 = std::max (at31, e);
+            if (t >= tail)
+                atTail = std::max (atTail, e);
+        }
+        check (peak > 1.0e-3f && at31 > peak * 0.01f, "tail: the delay return is still audible after 31 s at this setting");
+        check (tail > 33.5 && atTail <= peak * 0.001f, "tail: the reported tail (" + juce::String (tail, 1) + " s) covers the return down to -60 dB ("
+                                                          + juce::String (atTail / std::max (peak, 1.0e-9f), 6) + " of the first repeat)");
+        setPlain (*p, "drm.fx.delay.feedback", 0.0f);
+        setPlain (*p, "drm.fx.reverb.size", 0.0f);
+        check (p->getTailLengthSeconds() < tail && p->getTailLengthSeconds() >= 10.5, "tail: a short setting reports a shorter tail, never below the pads' own");
+        p->setPlayHead (nullptr);
+    }
+}
+
+//==============================================================================
 void testRealtime()
 {
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -2047,6 +2412,7 @@ int main (int argc, char** argv)
     testPresets();
     testState();
     testEditor();
+    testReviewFindings();
     testRealtime();
     if (workFolder.getFileName().startsWith ("vox-drums-candidate-") && workFolder.isDirectory())
         workFolder.deleteRecursively();

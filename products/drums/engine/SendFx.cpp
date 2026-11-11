@@ -38,11 +38,17 @@ void SendFx::prepare (double sampleRate)
     delayTail_ = static_cast<std::uint32_t> (sampleRate_ * maxDelaySeconds) + 64;
     reverbTail_ = static_cast<std::uint32_t> (sampleRate_ * 0.25);
     delayNow_ = 0.0;
+    dirty_ = true;
     reset();
 }
 
 void SendFx::reset() noexcept
 {
+    // Nothing was fed since the last reset: already silent. This keeps a
+    // stream of All Sound Off messages from clearing megabytes every block.
+    if (! dirty_)
+        return;
+    dirty_ = false;
     for (auto& d : delay_)
         clear (d);
     delayLp_ = {};
@@ -91,6 +97,7 @@ void SendFx::process (const FxSettings& s, const float* dl, const float* dr, con
                     continue;
                 delayIdle_ = false;
                 delayQuiet_ = 0;
+                dirty_ = true;
             }
             delayNow_ += (target - delayNow_) * glide;
             double read = static_cast<double> (delayAt_) - delayNow_;
@@ -114,14 +121,8 @@ void SendFx::process (const FxSettings& s, const float* dl, const float* dr, con
             if (peak < quiet)
             {
                 if (++delayQuiet_ > delayTail_)
-                {
-                    // Everything in the line is below -120 dB: clear it so a
-                    // later hit starts from silence.
-                    delayIdle_ = true;
-                    clear (delay_[0]);
-                    clear (delay_[1]);
-                    delayLp_ = {};
-                }
+                    delayIdle_ = true;   // everything in the line is below -120 dB; it is not cleared here
+                                         // (megabytes, on the audio thread): a later hit plays over it
             }
             else
                 delayQuiet_ = 0;
@@ -145,6 +146,7 @@ void SendFx::process (const FxSettings& s, const float* dl, const float* dr, con
                     continue;
                 reverbIdle_ = false;
                 reverbQuiet_ = 0;
+                dirty_ = true;
             }
             float peak = 0.0f;
             for (int ch = 0; ch < 2; ++ch)
@@ -172,18 +174,7 @@ void SendFx::process (const FxSettings& s, const float* dl, const float* dr, con
             if (peak < quiet)
             {
                 if (++reverbQuiet_ > reverbTail_)
-                {
-                    reverbIdle_ = true;
-                    for (auto& channel : combs_)
-                        for (auto& c : channel)
-                        {
-                            clear (c.buffer);
-                            c.store = 0.0f;
-                        }
-                    for (auto& channel : allPasses_)
-                        for (auto& a : channel)
-                            clear (a.buffer);
-                }
+                    reverbIdle_ = true;   // below -120 dB; left as it is (see the delay)
             }
             else
                 reverbQuiet_ = 0;

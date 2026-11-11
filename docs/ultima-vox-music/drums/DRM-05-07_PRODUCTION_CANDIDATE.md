@@ -83,7 +83,12 @@ pad voice -> level/pan (at trigger) -> mute/solo gate (3 ms ramp) -+-> ONE dry d
   fade running voices.
 - Tails: the returns continue after the voices end and stop by themselves (delay
   feedback ≤ 85 %, delay ≤ 2 s). All Sound Off (CC120), panic and `reset()` clear them.
-  `getTailLengthSeconds()` reports 30 s.
+  All Sound Off inside a block cuts at its frame: what was sent before it does not echo
+  after it. `getTailLengthSeconds()` reports the pads' longest decay (10.5 s) plus the
+  returns down to -60 dB at the current settings (delay: ln 0.001 / ln feedback repeats
+  of its time at the last tempo seen; up to about 97 s at 85 % feedback and 2 s).
+- A pad that is silent when it is unmuted (or when solo is released) opens at once, so
+  its next hit keeps its attack; the 3 ms ramp applies to voices still sounding.
 - Level, pan and sends are read when a hit starts (as before this release).
 
 ## 4. Compatibility decisions
@@ -117,6 +122,28 @@ pad voice -> level/pan (at trigger) -> mute/solo gate (3 ms ramp) -+-> ONE dry d
    (`loopStart + B mod length`). It now follows the mapping in section 2;
    `DrumsKitEngineTests.cpp` `testSongLoopRegion` covers starts and lengths that do not
    divide, seeks into and out of the region, the disabled loop and the engine's playback.
+
+3. Reviews of HEAD `a214816` (PR comment 6805252037 and the realtime review), each with a
+   regression test in `DrumsCandidateTests.cpp` `testReviewFindings` written first and
+   seen failing:
+   - Undo history ended by every successful project restore, with or without an editor
+     (`Processor.h` `patternHistory()`); a rejected restore keeps it.
+   - A state that does not fit the container is never saved as an empty block: unknown
+     writers' sections are kept on restore only within what is left after the product's
+     reserve (736 KiB), and what is left out is reported (`SuiteProcessor.h`,
+     `lastStateNotice()`, shown on ADVANCED). An incomplete preset is neither written nor
+     applied (`Presets::complete`).
+   - `PatternStore` normalises every published song (`SongData::normalise`): length, loop
+     region inside the song, slot/variation/pattern bar, unique bars; what is saved always
+     loads.
+   - Portable kit import validates the kit before writing, stores only referenced samples
+     and removes what it wrote if the kit is refused.
+   - A preset is applied only as the kind the user chose (`Presets::load (file, expected)`).
+   - Undo Load ends with a host project restore.
+   - Variation A>B leaves B unchanged when B has another grid and holds locked content.
+   - First hit after unmute keeps its attack; All Sound Off mid-block leaves no echo; the
+     reported tail covers the delay; the returns no longer clear megabytes of buffer on
+     the audio thread when they fall idle, and `reset()` is free while nothing was fed.
 
 ## 6. Limits of the automated evidence
 

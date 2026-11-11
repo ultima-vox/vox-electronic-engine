@@ -95,6 +95,28 @@ bool SongData::operator== (const SongData& o) const noexcept
     return true;
 }
 
+void SongData::normalise() noexcept
+{
+    if (! validLength (length))
+        length = 16;
+    loopStart = static_cast<std::uint8_t> (std::min<int> (loopStart, length - 1));
+    loopLength = static_cast<std::uint8_t> (std::clamp<int> (loopLength, 1, length - loopStart));
+    for (auto& bar : bars)
+    {
+        if (bar.kind == SongBar::Kind::pattern)
+        {
+            bar.slot = static_cast<std::uint8_t> (std::min<int> (bar.slot, slotCountForSong - 1));
+            bar.variation = bar.variation != 0 ? 1 : 0;
+            bar.patternBar = static_cast<std::uint8_t> (std::min<int> (bar.patternBar, kit::maxPatternBars - 1));
+            bar.cells.reset();
+        }
+        else if (bar.kind == SongBar::Kind::unique && bar.cells != nullptr && validSteps (bar.cells->steps))
+            bar.slot = bar.variation = bar.patternBar = 0;
+        else
+            bar = {};
+    }
+}
+
 SongData SongData::initial()
 {
     SongData s;
@@ -466,6 +488,7 @@ void PatternStore::copySongBar (int bar, StoredPattern& out, std::uint64_t& gene
 void PatternStore::setSong (const SongData& song)
 {
     SongData next = song;   // copied (and the old one destroyed) outside the lock
+    next.normalise();
     {
         const juce::SpinLock::ScopedLockType sl (lock_);
         std::swap (song_, next);
@@ -488,6 +511,7 @@ void PatternStore::setEverything (const Everything& in)
     if (beforeCommitForTesting)
         beforeCommitForTesting();
     SongData next = in.song;
+    next.normalise();
     {
         const juce::SpinLock::ScopedLockType sl (lock_);
         const auto g = generation_.load() + 1;

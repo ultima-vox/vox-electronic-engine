@@ -179,10 +179,11 @@ bool DrumsProcessor::editSong (const std::function<void (SongData&)>& change)
     e->songBefore = patternStore_.song();
     e->songAfter = e->songBefore;
     change (e->songAfter);
+    e->songAfter.normalise();   // what the store will hold
     if (e->songAfter == e->songBefore)
         return false;
     patternStore_.setSong (e->songAfter);
-    patternHistory_.push (std::move (e));
+    patternHistory().push (std::move (e));
     return true;
 }
 
@@ -236,7 +237,7 @@ bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSe
             return false;
         patternStore_.setSlot (slot, e->after);
     }
-    patternHistory_.push (std::move (e));
+    patternHistory().push (std::move (e));
     return true;
 }
 
@@ -337,7 +338,21 @@ void DrumsProcessor::reset()
 
 double DrumsProcessor::getTailLengthSeconds() const
 {
-    return 30.0;   // longest pad decay (10 s) plus the delay and reverb returns
+    // The longest pad decay (10 s plus its -80 dB tail) and then the
+    // returns down to -60 dB at the current settings: the delay needs
+    // ln(0.001) / ln(feedback) repeats of its time (at most 2 s, at the last
+    // tempo seen); the reverb's longest comb (36.7 ms) decays by its
+    // feedback 0.7 + 0.28 * size.
+    const auto load = [] (const std::atomic<float>* a) { return static_cast<double> (a->load (std::memory_order_relaxed)); };
+    const double feedback = std::clamp (load (delayFeedback_), 0.0, 0.85);
+    const double delaySeconds = std::clamp (delayTimeQuarters (static_cast<int> (std::lround (load (delayTime_)))) * 60.0
+                                                / std::clamp (lastBpm_.load (std::memory_order_relaxed), 20.0, 999.0),
+                                            0.01, kit::SendFx::maxDelaySeconds);
+    const double repeats = feedback > 0.001 ? std::log (0.001) / std::log (feedback) : 1.0;
+    const double delayTail = delaySeconds * (repeats + 1.0);
+    const double reverbFeedback = 0.7 + 0.28 * std::clamp (load (reverbSize_), 0.0, 1.0);
+    const double reverbTail = -3.0 * 0.0367 / std::log10 (reverbFeedback) + 0.1;
+    return 10.5 + std::max (delayTail, reverbTail);
 }
 
 bool DrumsProcessor::audition (int pad, std::uint8_t velocity)
@@ -549,8 +564,7 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         pads |= engine_.sequencerHits();
         for (int pad = 0; pad < padCount; ++pad)
             padPeak[static_cast<std::size_t> (pad)] = std::max (padPeak[static_cast<std::size_t> (pad)], engine_.padPeak (pad));
-        if (engine_.soundOffSeen())
-            fx_.reset();   // All Sound Off / panic also ends the returns' tails
+
         // Out 2..9: to the host bus, or to Main when the host disabled it.
         for (int bus = 1; bus <= kit::auxOutputs; ++bus)
         {
@@ -569,8 +583,18 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 }
         }
         // Send 1 -> delay, Send 2 -> reverb; both return to Main only.
-        fx_.process (fx, scratchPointers_[0], scratchPointers_[1], scratchPointers_[2], scratchPointers_[3], mainL, mainR,
-                     static_cast<std::uint32_t> (n));
+        // All Sound Off / panic also ends the returns' tails, at its frame:
+        // what was sent before it is played into the old tail and cleared
+        // with it, so nothing sounded before the message echoes after it.
+        const int cut = std::clamp (engine_.soundOffFrame(), -1, n);
+        if (cut > 0)
+            fx_.process (fx, scratchPointers_[0], scratchPointers_[1], scratchPointers_[2], scratchPointers_[3], mainL, mainR,
+                         static_cast<std::uint32_t> (cut));
+        if (cut >= 0)
+            fx_.reset();
+        const int rest = std::max (cut, 0);
+        fx_.process (fx, scratchPointers_[0] + rest, scratchPointers_[1] + rest, scratchPointers_[2] + rest, scratchPointers_[3] + rest,
+                     mainL + rest, mainR + rest, static_cast<std::uint32_t> (n - rest));
         for (int i = 0; i < n; ++i)
         {
             mainPeak[0] = std::max (mainPeak[0], std::fabs (mainL[i]));

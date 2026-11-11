@@ -121,6 +121,12 @@ struct SongData {
     int place (int bar, int slot, int variation, int patternBars);
     void clearBar (int bar) { bars[static_cast<std::size_t> (bar)] = {}; }
     static bool validLength (int length) noexcept { return length == 16 || length == 32 || length == 64; }
+    // Brings the song into the form every reader (the audio thread, the
+    // state decoder) requires: a valid length (else 16), the loop region
+    // inside the song (start clamped, then length), slot, variation and
+    // pattern bar in range, and a unique bar with valid cells (else empty).
+    // PatternStore applies it to everything published.
+    void normalise() noexcept;
 };
 
 // The unique cells a reference bar would become (Make Unique), or the

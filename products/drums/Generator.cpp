@@ -300,6 +300,19 @@ void generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
     // B keeps its own locked cells: build from A, then put B's locked cells back.
     auto locked = std::make_unique<StoredPattern> (b);
     const bool sameGrid = b.steps == a.steps && b.bars == a.bars;
+    if (! sameGrid)
+    {
+        // B would take A's grid, where its locked cells have no place: with
+        // anything locked in B, B is left exactly as it is.
+        bool anyLocked = false;
+        for (int lane = 0; lane < kit::padCount && ! anyLocked; ++lane)
+            for (int bar = 0; bar < b.bars && ! anyLocked; ++bar)
+                for (int step = 0; step < b.steps && ! anyLocked; ++step)
+                    anyLocked = b.cell (lane, bar, step).locked
+                             || ((g.laneLocks & (1u << lane)) != 0 && b.cell (lane, bar, step).on);
+        if (anyLocked)
+            return;
+    }
     b = a;
     GeneratorSettings v = g;
     v.seed = g.seed * 2654435761u + 0x9E3779B9u;

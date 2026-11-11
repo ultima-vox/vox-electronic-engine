@@ -129,13 +129,15 @@ juce::MemoryBlock encodeBlob (const preset::StateDocument& doc)
     return block;
 }
 
-preset::StateDocument currentDocument (DrumsProcessor& processor)
+// The current project state, or nothing when it cannot be read back.
+std::optional<preset::StateDocument> currentDocument (DrumsProcessor& processor)
 {
     juce::MemoryBlock block;
     processor.getStateInformation (block);
     preset::StateDocument doc;
     juce::String error;
-    decodeBlob (block.getData(), block.getSize(), processor, doc, error);
+    if (block.getSize() == 0 || ! decodeBlob (block.getData(), block.getSize(), processor, doc, error))
+        return std::nullopt;
     return doc;
 }
 
@@ -185,7 +187,10 @@ bool Presets::describe (const void* data, std::size_t size, const DrumsProcessor
 
 juce::MemoryBlock Presets::capture (PresetType type, const juce::String& name, int index) const
 {
-    const auto current = currentDocument (processor_);
+    const auto read = currentDocument (processor_);
+    if (! read)
+        return {};   // never a preset made from a state that could not be read
+    const auto& current = *read;
     preset::StateDocument doc;
     doc.product = processor_.product().stateTag;
     doc.schema = processor_.product().stateSchema;
@@ -225,15 +230,49 @@ juce::MemoryBlock Presets::capture (PresetType type, const juce::String& name, i
         copy (songSectionTag);
         copy (generatorSectionTag);
     }
+    if (! complete (doc, type))
+        return {};   // an incomplete preset is not written
     return encodeBlob (doc);
 }
 
-juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target)
+bool Presets::complete (const preset::StateDocument& document, PresetType type)
+{
+    const auto has = [&] (preset::Tag tag) {
+        const auto* s = document.find (tag);
+        return s != nullptr && ! s->data.empty();
+    };
+    switch (type)
+    {
+        case PresetType::kit:
+        case PresetType::pad:
+        {
+            std::map<std::string, float> values;
+            juce::String error;
+            const auto* parameters = document.find (parameterSectionTag);
+            return has (padSectionTag) && parameters != nullptr && decodeParameterValues (*parameters, values, error) && ! values.empty();
+        }
+        case PresetType::pattern: return has (sequenceSectionTag);
+        case PresetType::song: return has (sequenceSectionTag) && has (songSectionTag);
+    }
+    return false;
+}
+
+bool Presets::canUndoLoad() const noexcept
+{
+    return previous_.getSize() > 0 && processor_.patternEpoch() == previousEpoch_;
+}
+
+juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target, std::optional<PresetType> expected)
 {
     PresetInfo info;
     const auto* infoSection = preset.find (presetTypeSectionTag);
     if (infoSection == nullptr || ! decodeInfo (*infoSection, info))
         return juce::Result::fail ("not a VOX Drums preset");
+    if (expected && info.type != *expected)
+        return juce::Result::fail (juce::String ("this file is a ") + presetTypeName (info.type) + " preset, not a "
+                                   + presetTypeName (*expected) + " preset");
+    if (! complete (preset, info.type))
+        return juce::Result::fail ("the preset is incomplete");
 
     juce::MemoryBlock before;
     processor_.getStateInformation (before);
@@ -336,16 +375,17 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target)
     if (rejected.isNotEmpty())
         return juce::Result::fail (rejected);   // nothing changed
     previous_ = std::move (before);
+    previousEpoch_ = processor_.patternEpoch();
     return juce::Result::ok();
 }
 
-juce::Result Presets::apply (const void* data, std::size_t size, int target)
+juce::Result Presets::apply (const void* data, std::size_t size, int target, std::optional<PresetType> expected)
 {
     preset::StateDocument doc;
     juce::String error;
     if (! decodeBlob (data, size, processor_, doc, error))
         return juce::Result::fail ("not a VOX Drums preset: " + error);
-    return applyDocument (std::move (doc), target);
+    return applyDocument (std::move (doc), target, expected);
 }
 
 juce::Result Presets::save (PresetType type, const juce::String& name, const juce::File& file, int index) const
@@ -362,18 +402,21 @@ juce::Result Presets::save (PresetType type, const juce::String& name, const juc
     return juce::Result::ok();
 }
 
-juce::Result Presets::load (const juce::File& file, int target)
+juce::Result Presets::load (const juce::File& file, PresetType expected, int target)
 {
     juce::MemoryBlock block;
     if (! file.existsAsFile() || file.getSize() > static_cast<juce::int64> (preset::maxStateBytes) || ! file.loadFileAsData (block))
         return juce::Result::fail ("cannot read " + file.getFullPathName());
-    return apply (block.getData(), block.getSize(), target);
+    return apply (block.getData(), block.getSize(), target, expected);
 }
 
 juce::Result Presets::undoLoad()
 {
     if (! canUndoLoad())
+    {
+        previous_.reset();   // of another project state: gone for good
         return juce::Result::fail ("nothing to undo");
+    }
     processor_.setStateInformation (previous_.getData(), static_cast<int> (previous_.getSize()));
     const auto rejected = processor_.lastStateError();
     if (rejected.isNotEmpty())
@@ -511,27 +554,52 @@ juce::Result Presets::importPortableKit (const juce::File& zip)
         if (! SampleLibrary::decodeReferences (*s, refs, error))
             return juce::Result::fail (error);
 
-    // Samples into the user library (by hash, existing files are kept),
-    // then the references point at them.
+    // The whole kit is checked before anything is written: its pad section
+    // and parameters must decode (the rest is checked by the transactional
+    // apply below, which rolls the files back if it refuses).
+    {
+        if (! complete (doc, PresetType::kit))
+            return juce::Result::fail ("the portable kit holds no complete kit");
+        auto kit = std::make_unique<kit::KitSettings> (defaultKit());
+        if (! KitStore::decode (*doc.find (padSectionTag), *kit, error))
+            return juce::Result::fail ("the portable kit holds no valid kit: " + error);
+    }
+    // Only the samples the kit references go into the user library (by
+    // hash; existing files are kept), then the references point at them.
     const auto folder = SampleLibrary::libraryFolder();
-    if (! samples.empty() && ! folder.createDirectory())
-        return juce::Result::fail ("cannot create " + folder.getFullPathName());
+    std::vector<juce::File> written;
+    const auto rollBack = [&written] {
+        for (const auto& file : written)
+            file.deleteFile();
+    };
     for (const auto& sample : samples)
     {
+        bool referenced = false;
+        for (const auto& ref : refs)
+            referenced = referenced || (ref && hexOf (ref->sha256) == sample.hex);
+        if (! referenced)
+            continue;
         const auto target = folder.getChildFile (sample.hex + sample.extension);
         if (! target.existsAsFile())
         {
             juce::TemporaryFile temp (target);
-            if (! temp.getFile().replaceWithData (sample.bytes.getData(), sample.bytes.getSize())
+            if (! folder.createDirectory() || ! temp.getFile().replaceWithData (sample.bytes.getData(), sample.bytes.getSize())
                 || ! temp.overwriteTargetFileWithTemporary())
+            {
+                rollBack();
                 return juce::Result::fail ("cannot write " + target.getFullPathName());
+            }
+            written.push_back (target);
         }
         for (auto& ref : refs)
             if (ref && hexOf (ref->sha256) == sample.hex)
                 ref->path = target.getFullPathName();
     }
     replaceSection (doc, SampleLibrary::encodeReferences (refs));
-    return applyDocument (std::move (doc), -1);
+    const auto result = applyDocument (std::move (doc), -1, PresetType::kit);
+    if (result.failed())
+        rollBack();   // a refused kit leaves the library as it was
+    return result;
 }
 
 } // namespace vox::drums

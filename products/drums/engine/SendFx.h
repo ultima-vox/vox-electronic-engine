@@ -37,6 +37,7 @@ public:
     void process (const FxSettings& settings, const float* delayL, const float* delayR, const float* reverbL,
                   const float* reverbR, float* mainL, float* mainR, std::uint32_t frames) noexcept;
 
+    // reset() is a no-op while nothing was fed since the previous one.
     // True when neither effect holds an audible tail (below -120 dB).
     bool idle() const noexcept { return delayIdle_ && reverbIdle_; }
 
@@ -58,6 +59,7 @@ private:
     std::array<std::array<Comb, 8>, 2> combs_;
     std::array<std::array<AllPass, 4>, 2> allPasses_;
     bool delayIdle_ = true, reverbIdle_ = true;
+    bool dirty_ = false;   // something was fed since the last reset()
     std::uint32_t delayQuiet_ = 0, reverbQuiet_ = 0;
     std::uint32_t delayTail_ = 0, reverbTail_ = 0;   // quiet samples before idle
 };

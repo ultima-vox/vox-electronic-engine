@@ -1009,6 +1009,7 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
     sequencerHits_ = 0;
     padPeak_.fill (0.0f);
     soundOff_ = panic;
+    soundOffFrame_ = panic ? 0 : -1;
     if (panic)
         s.stopAll();
     // Mute gate: 3 ms linear ramp per pad (exactly 1 while open, so an
@@ -1068,6 +1069,7 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
                     {
                         s.stopAll();   // All Sound Off: immediate
                         soundOff_ = true;
+                        soundOffFrame_ = static_cast<int> (done + i);
                     }
                     else if (data1 == 123)
                         s.fadeAll (0.05);   // All Notes Off: bounded 50 ms tail
@@ -1084,7 +1086,22 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
             {
                 const int pad = s.fireOrder[static_cast<std::size_t> (k)];
                 if (hits[pad] > 0 && ! kit.pads[static_cast<std::size_t> (pad)].mute)
+                {
+                    // A pad that is silent when it is unmuted has nothing to
+                    // fade in: its gate opens at once, so the first hit after
+                    // unmute (or solo release) keeps its attack. The ramp is
+                    // for voices still sounding from before.
+                    auto& g = s.gate[static_cast<std::size_t> (pad)];
+                    if (g < 1.0)
+                    {
+                        bool sounding = false;
+                        for (int k2 = 0; k2 < s.voiceLimit && ! sounding; ++k2)
+                            sounding = s.voices[static_cast<std::size_t> (k2)].active && s.voices[static_cast<std::size_t> (k2)].pad == pad;
+                        if (! sounding)
+                            g = 1.0;
+                    }
                     s.trigger (kit, samples, pad, hits[pad]);
+                }
             }
 
             for (int pad = 0; pad < padCount; ++pad)
