@@ -277,7 +277,7 @@ void run (const Scenario& sc, double rate, std::uint32_t block)
     engine.setMaxVoices (16);
     auto settings = toKit (values);
 
-    std::vector<std::vector<float>> refBus (20, std::vector<float> (block)), kitBus (20, std::vector<float> (block));
+    std::vector<std::vector<float>> refBus (22, std::vector<float> (block)), kitBus (22, std::vector<float> (block));
     std::array<float*, kit::auxBuses * 2> kitAux {};
     for (int b = 0; b < kit::auxBuses * 2; ++b)
         kitAux[static_cast<std::size_t> (b)] = kitBus[static_cast<std::size_t> (b + 2)].data();

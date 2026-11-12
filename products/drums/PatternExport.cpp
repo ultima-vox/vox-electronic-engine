@@ -37,26 +37,88 @@ std::vector<ExportedNote> exportNotes (const kit::Pattern& pattern, const kit::S
             out.push_back (e);
         }
     }
+    finishNotes (out);
+    return out;
+}
+
+// Time order, one MIDI note per (tick, note), and no overlap: a note
+// sounding again ends the previous one first. Linear in the note count.
+void finishNotes (std::vector<ExportedNote>& out)
+{
     std::stable_sort (out.begin(), out.end(), [] (const ExportedNote& a, const ExportedNote& b) { return a.tick < b.tick; });
-    // Two lanes on one note at one tick are one MIDI note (the louder).
     std::vector<ExportedNote> merged;
+    merged.reserve (out.size());
+    std::array<std::ptrdiff_t, 128> last;   // index in merged of the latest note on this pitch
+    last.fill (-1);
     for (const auto& e : out)
     {
-        auto it = std::find_if (merged.rbegin(), merged.rend(), [&] (const ExportedNote& m) { return m.tick == e.tick && m.note == e.note; });
-        if (it != merged.rend() && it->tick == e.tick)
+        const auto note = static_cast<std::size_t> (e.note & 0x7f);
+        if (last[note] >= 0)
         {
-            it->velocity = std::max (it->velocity, e.velocity);
-            it->offTick = std::max (it->offTick, e.offTick);
+            auto& previous = merged[static_cast<std::size_t> (last[note])];
+            if (previous.tick == e.tick)
+            {
+                // Two lanes on one note at one tick are one MIDI note (the louder).
+                previous.velocity = std::max (previous.velocity, e.velocity);
+                previous.offTick = std::max (previous.offTick, e.offTick);
+                continue;
+            }
         }
-        else
-            merged.push_back (e);
+        last[note] = static_cast<std::ptrdiff_t> (merged.size());
+        merged.push_back (e);
+    }
+    last.fill (-1);
+    for (std::size_t i = 0; i < merged.size(); ++i)
+    {
+        const auto note = static_cast<std::size_t> (merged[i].note & 0x7f);
+        if (last[note] >= 0)
+        {
+            auto& previous = merged[static_cast<std::size_t> (last[note])];
+            if (merged[i].tick < previous.offTick)
+                previous.offTick = std::max (previous.tick, merged[i].tick);
+        }
+        last[note] = static_cast<std::ptrdiff_t> (i);
     }
     out = std::move (merged);
-    // A note sounding again ends the previous one first.
-    for (std::size_t i = 0; i < out.size(); ++i)
-        for (std::size_t j = i + 1; j < out.size() && out[j].tick < out[i].offTick; ++j)
-            if (out[j].note == out[i].note)
-                out[i].offTick = std::max (out[i].tick, out[j].tick);
+}
+
+std::vector<ExportedNote> exportSongNotes (const kit::Song& song, const kit::StepContext& context,
+                                          const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options)
+{
+    std::vector<ExportedNote> out;
+    if (song.views == nullptr || song.bars == 0)
+        return out;
+    kit::Song once = song;   // Entire Song: one pass from bar 1, the loop region is not applied
+    once.loopStart = once.loopLength = 0;
+    const double tpq = options.ticksPerQuarter;
+    std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> hits;
+    for (std::uint32_t bar = 0; bar < once.bars; ++bar)
+    {
+        const auto& view = once.views[bar];
+        if (view.cells == nullptr || view.steps == 0)
+            continue;
+        const double step = 4.0 / view.steps;
+        for (std::uint32_t st = 0; st < view.steps; ++st)
+        {
+            const int n = kit::songHits (once, context, bar, st, hits.data());
+            for (int k = 0; k < n; ++k)
+            {
+                const auto& h = hits[static_cast<std::size_t> (k)];
+                if (h.ppq < 0.0)
+                    continue;
+                const auto& cell = view.cells[h.pad * view.laneStride + st];
+                const int ratchet = std::clamp<int> (cell.ratchet, 1, kit::maxRatchet);
+                ExportedNote e;
+                e.tick = static_cast<std::int64_t> (std::llround (h.ppq * tpq));
+                e.offTick = e.tick + std::max<std::int64_t> (1, std::llround (0.5 * step / ratchet * tpq));
+                e.note = notes[h.pad];
+                e.velocity = std::max (1, static_cast<int> (h.velocity));
+                e.pad = h.pad;
+                out.push_back (e);
+            }
+        }
+    }
+    finishNotes (out);
     return out;
 }
 
@@ -81,11 +143,11 @@ void putBE (std::vector<std::uint8_t>& t, std::uint32_t v, int bytes)
 
 } // namespace
 
-juce::MemoryBlock exportMidi (const kit::Pattern& pattern, const kit::StepContext& context,
-                              const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options,
-                              const juce::String& trackName)
+namespace {
+
+juce::MemoryBlock writeSmf (const std::vector<ExportedNote>& list, std::int64_t endTick, const ExportOptions& options,
+                            const juce::String& trackName)
 {
-    const auto list = exportNotes (pattern, context, notes, options);
     struct Ev {
         std::int64_t tick;
         int order;   // at one tick: offs (0) before ons (1)
@@ -119,10 +181,8 @@ juce::MemoryBlock exportMidi (const kit::Pattern& pattern, const kit::StepContex
         last = e.tick;
         track.insert (track.end(), { e.status, e.data1, e.data2 });
     }
-    // End of track at the pattern's end (or the last event).
-    const double step = kit::stepLength (pattern);
-    const auto end = std::max<std::int64_t> (
-        last, std::llround (static_cast<double> (pattern.steps) * pattern.bars * options.passes * step * options.ticksPerQuarter));
+    // End of track at the end of the last bar (or the last event).
+    const auto end = std::max<std::int64_t> (last, endTick);
     putVarLen (track, static_cast<std::uint32_t> (end - last));
     track.insert (track.end(), { 0xFF, 0x2F, 0x00 });
 
@@ -135,6 +195,27 @@ juce::MemoryBlock exportMidi (const kit::Pattern& pattern, const kit::StepContex
     putBE (file, static_cast<std::uint32_t> (track.size()), 4);
     file.insert (file.end(), track.begin(), track.end());
     return juce::MemoryBlock (file.data(), file.size());
+}
+
+} // namespace
+
+juce::MemoryBlock exportMidi (const kit::Pattern& pattern, const kit::StepContext& context,
+                              const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options,
+                              const juce::String& trackName)
+{
+    const double step = kit::stepLength (pattern);
+    return writeSmf (exportNotes (pattern, context, notes, options),
+                     std::llround (static_cast<double> (pattern.steps) * pattern.bars * std::max (0, options.passes) * step
+                                   * options.ticksPerQuarter),
+                     options, trackName);
+}
+
+juce::MemoryBlock exportSongMidi (const kit::Song& song, const kit::StepContext& context,
+                                  const std::array<std::uint8_t, kit::padCount>& notes, const ExportOptions& options,
+                                  const juce::String& trackName)
+{
+    return writeSmf (exportSongNotes (song, context, notes, options),
+                     static_cast<std::int64_t> (song.bars) * 4 * options.ticksPerQuarter, options, trackName);
 }
 
 } // namespace vox::drums

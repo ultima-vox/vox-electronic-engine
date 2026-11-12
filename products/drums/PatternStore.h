@@ -60,6 +60,124 @@ struct StoredPattern {
 void factorySlot (int index, StoredPattern& out) noexcept;
 StoredPattern factorySlot (int index) noexcept;   // tests
 
+//==============================================================================
+// DRM-05 Song mode (docs/ultima-vox-music/drums/DRM-05_SONG_MODE.md).
+//
+// A song is a timeline of 16, 32 or 64 bars in 4/4. Each bar is empty, a
+// reference to one bar of a pattern slot's A or B variation (it follows
+// later edits of that pattern), or unique: its own cells, grid and seed
+// (Make Unique, or any edit of the bar in the song view). Every bar can be
+// unique, so all 64 bars can differ.
+//
+// A pattern placed on the timeline occupies one bar per pattern bar; bars
+// past the end of the song are not placed (the same in playback and
+// export). A reference to a pattern bar the pattern no longer has plays
+// that index modulo the pattern's bar count.
+inline constexpr preset::Tag songSectionTag = preset::makeTag ("DSNG");
+inline constexpr int slotCountForSong = kit::factoryPatternCount;
+
+// The cells of one unique bar: 16 lanes x up to 64 steps, lane * 64 + step.
+// Immutable once it is in a SongData (shared between copies and undo
+// entries); `id` is unique per content version in this process.
+struct BarCells {
+    static constexpr int stride = kit::maxPatternSteps;
+    std::uint64_t id = 0;
+    std::uint8_t steps = 16;   // 16, 32 or 64
+    std::uint32_t seed = 1;
+    std::array<kit::PatternStep, kit::padCount * stride> cells {};
+
+    kit::PatternStep& cell (int lane, int step) noexcept { return cells[static_cast<std::size_t> (lane * stride + step)]; }
+    const kit::PatternStep& cell (int lane, int step) const noexcept { return cells[static_cast<std::size_t> (lane * stride + step)]; }
+    bool sameContent (const BarCells& other) const noexcept;
+    static std::uint64_t nextId() noexcept;
+};
+
+struct SongBar {
+    enum class Kind : std::uint8_t { empty, pattern, unique };
+    Kind kind = Kind::empty;
+    std::uint8_t slot = 0;         // pattern: 0..4
+    std::uint8_t variation = 0;    // pattern: 0 = A, 1 = B
+    std::uint8_t patternBar = 0;   // pattern: 0..3
+    std::shared_ptr<const BarCells> cells;   // unique
+
+    bool operator== (const SongBar& other) const noexcept;
+};
+
+// Message-thread value: cheap to copy (unique bars are shared).
+struct SongData {
+    bool songMode = false;         // the sequencer plays the song instead of the selected pattern
+    std::uint8_t length = 16;      // 16, 32 or 64 bars
+    bool loopOn = false;
+    std::uint8_t loopStart = 0, loopLength = 4;   // bars; inside [0, length)
+    std::array<SongBar, kit::maxSongBars> bars;
+
+    bool operator== (const SongData& other) const noexcept;
+    bool operator!= (const SongData& other) const noexcept { return ! (*this == other); }
+
+    // A new instrument: 16 bars cycling the four bars of pattern slot 1 A.
+    static SongData initial();
+    // Places pattern `slot`/`variation` (with `patternBars` bars) from
+    // `bar` on; bars beyond the song are not placed. Returns bars placed.
+    int place (int bar, int slot, int variation, int patternBars);
+    void clearBar (int bar) { bars[static_cast<std::size_t> (bar)] = {}; }
+    static bool validLength (int length) noexcept { return length == 16 || length == 32 || length == 64; }
+    // Brings the song into the form every reader (the audio thread, the
+    // state decoder) requires: a valid length (else 16), the loop region
+    // inside the song (start clamped, then length), slot, variation and
+    // pattern bar in range, and a unique bar with valid cells (else empty).
+    // PatternStore applies it to everything published.
+    void normalise() noexcept;
+};
+
+// The unique cells a reference bar would become (Make Unique), or the
+// bar's own cells; null for an empty bar.
+std::shared_ptr<const BarCells> resolveBar (const SongBar& bar, const std::array<StoredPattern, slotCountForSong>& slots,
+                                           const std::array<StoredPattern, slotCountForSong>& alternates);
+
+// The engine's view of a song: one SongBarView per bar, pointing into
+// `slots`, `alternates` and `unique` (which must outlive the view).
+// `unique[i]` is the cells of bar i when it is unique.
+struct SongView {
+    std::array<kit::SongBarView, kit::maxSongBars> views {};
+    kit::Song song {};
+};
+struct SongTable {   // a SongData without ownership (what the audio thread keeps)
+    struct Bar { SongBar::Kind kind = SongBar::Kind::empty; std::uint8_t slot = 0, variation = 0, patternBar = 0; };
+    std::uint8_t length = 16;
+    bool loopOn = false;
+    std::uint8_t loopStart = 0, loopLength = 4;
+    std::array<Bar, kit::maxSongBars> bars {};
+};
+void buildSongView (const SongTable& table, const StoredPattern* slots, const StoredPattern* alternates,
+                    const BarCells* const* unique, bool applyLoop, SongView& out) noexcept;
+SongTable tableOf (const SongData& song) noexcept;
+
+// DSNG v1: u32 version, u8 songMode, u8 length, u8 loopOn, u8 loopStart,
+// u8 loopLength, then 64 bars: u8 kind; pattern: u8 slot, u8 variation,
+// u8 patternBar; unique: u8 steps, u32 seed, 16 x steps cells (lane-major)
+// of u8 flags (on, accent, locked), velocity, probability, ratchet, micro.
+// Strict: anything out of range rejects the section.
+// Timeline edits (message thread). Each returns the edited copy; `from` and
+// `count` are clamped to the song. Bars pushed past the end are dropped.
+namespace songedit {
+SongData insertEmpty (const SongData& song, int from, int count);                 // shifts the rest right
+SongData removeBars (const SongData& song, int from, int count);                  // shifts the rest left
+SongData duplicate (const SongData& song, int from, int count);                   // copies the range after itself
+SongData clear (const SongData& song, int from, int count);
+SongData paste (const SongData& song, int at, const std::vector<SongBar>& bars);  // replaces
+std::vector<SongBar> copy (const SongData& song, int from, int count);
+// Every pattern bar in the range becomes unique: its own copy of the cells
+// it references now (later pattern edits no longer reach it).
+SongData makeUnique (const SongData& song, int from, int count, const std::array<StoredPattern, slotCountForSong>& slots,
+                     const std::array<StoredPattern, slotCountForSong>& alternates);
+// One bar as a one-bar pattern (for the step editor) and back.
+void barToPattern (const std::shared_ptr<const BarCells>& bar, StoredPattern& out);
+std::shared_ptr<const BarCells> patternToBar (const StoredPattern& pattern);
+} // namespace songedit
+
+preset::Section encodeSong (const SongData& song);
+bool decodeSong (const preset::Section& section, SongData& out, juce::String& error);
+
 class PatternStore {
 public:
     static constexpr int slotCount = kit::factoryPatternCount;
@@ -89,6 +207,20 @@ public:
     preset::Section encodeCurrent() const;
     // Changes after the change it counts is committed (under the lock).
     std::uint64_t generation() const noexcept { return generation_.load(); }
+
+    //== DRM-05 song (message / host threads)
+    SongData song() const;
+    // Song bar `bar` as it plays now (a reference resolved, empty: 16 empty
+    // steps) as a one-bar pattern, with the generation it belongs to.
+    void copySongBar (int bar, StoredPattern& out, std::uint64_t& generation) const;
+    void setSong (const SongData& song);
+    // The slots, alternates and song as they are together (one lock).
+    struct Everything {
+        std::array<StoredPattern, slotCount> slots, alternates;
+        SongData song;
+    };
+    void copyEverything (Everything& out) const;
+    void setEverything (const Everything& in);
     // Tests: runs at the start of setSlot/setAll, before anything is
     // committed (message thread only).
     std::function<void()> beforeCommitForTesting;
@@ -115,17 +247,38 @@ public:
     };
     const kit::Pattern& pull (int index, Live& live) noexcept;
 
+    // Song mode: the audio thread's own copy of the slots, alternates and
+    // unique bars (allocated once, ~0.7 MB), refreshed with tryEnter for
+    // what changed. Returns the song to play, or null in Pattern mode.
+    struct SongLive {
+        SongLive();
+        std::unique_ptr<std::array<StoredPattern, slotCount>> slots, alternates;
+        std::unique_ptr<std::array<BarCells, kit::maxSongBars>> unique;
+        std::array<const BarCells*, kit::maxSongBars> uniquePointers {};
+        std::array<std::uint64_t, slotCount> slotGeneration {}, alternateGeneration {};
+        std::uint64_t songGeneration = 0;
+        bool anySlotCopied = false;
+        SongTable table;
+        bool songMode = false;
+        SongView view;
+    };
+    const kit::Song* pullSong (SongLive& live) noexcept;
+
 private:
     mutable juce::SpinLock lock_;
     // On the heap (~250 KB): an object holding a PatternStore (the
     // processor) stays small.
     struct Data {
         std::array<StoredPattern, slotCount> slots, alternates;
+        SongData song = SongData::initial();
     };
     std::unique_ptr<Data> data_ = std::make_unique<Data>();
     std::array<StoredPattern, slotCount>& slots_ = data_->slots;
     std::array<StoredPattern, slotCount>& alternates_ = data_->alternates;
     std::array<std::uint64_t, slotCount> slotGeneration_ {};
+    std::array<std::uint64_t, slotCount> alternateGeneration_ {};
+    SongData& song_ = data_->song;          // lock_
+    std::uint64_t songGeneration_ = 1;      // lock_
     std::atomic<std::uint64_t> generation_ { 1 };
 };
 
@@ -139,11 +292,17 @@ public:
         bool alternate = false;   // the entry also swapped A and B
         StoredPattern before, after;
         StoredPattern beforeB, afterB;
+        // DRM-05: a song edit (slot = -1 when no pattern slot changed), or
+        // everything (Generate Song: all slots, variations and the song).
+        bool hasSong = false;
+        SongData songBefore, songAfter;
+        std::unique_ptr<PatternStore::Everything> allBefore, allAfter;
     };
     void push (std::unique_ptr<Entry> entry);
     // Replaces the newest entry's result (one knob drag = one undo step);
     // false if there is none for `slot` or it can be redone instead.
     bool amendLast (int slot, const StoredPattern& after);
+    bool amendLastSong (const SongData& after);   // the same for a song edit
     bool canUndo() const noexcept { return ! undo_.empty(); }
     bool canRedo() const noexcept { return ! redo_.empty(); }
     // Applies to `store` and returns the slot it changed (-1 if nothing).

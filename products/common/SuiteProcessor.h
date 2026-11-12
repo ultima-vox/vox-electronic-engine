@@ -48,6 +48,10 @@ public:
     {
     }
 
+    // A product with more than the Main stereo output declares its buses
+    // and overrides isBusesLayoutSupported.
+    SuiteProcessor (ProductInfo info, const BusesProperties& buses) : juce::AudioProcessor (buses), info_ (std::move (info)) {}
+
     const ProductInfo& product() const noexcept { return info_; }
 
     //==========================================================================
@@ -144,10 +148,19 @@ public:
         for (auto& section : snapshot.preserved)
             document.sections.push_back (std::move (section));
 
+        // Sections of an unknown writer are saved as they were restored,
+        // always: never a stripped state. Restore accepts them only while
+        // the product's largest own state still fits next to them, so this
+        // encode cannot fail for a state the plugin accepted. If it fails
+        // anyway the host gets no state and the error is recorded.
         if (const auto bytes = preset::encode (document))
             destination.replaceAll (bytes->data(), bytes->size());
         else
+        {
             destination.reset();
+            const juce::ScopedLock lock (stateLock_);
+            lastStateError_ = "the state is too large to save";
+        }
     }
 
     // Transactional: decode and validate everything first; the live state is
@@ -191,9 +204,29 @@ public:
         next.editorWidth = static_cast<int> (width);
         next.editorHeight = static_cast<int> (height);
         auto productSections = std::move (product.sections);
+        // Sections of an unknown (newer) writer are kept byte for byte and
+        // written back by every save: opening and saving a project never
+        // destroys data this plugin does not understand. They are accepted
+        // only if the state stays saveable, i.e. they fit the container
+        // next to the product's largest own state (productStateReserve).
+        // Otherwise the whole restore is refused and nothing changes.
         for (auto& section : decoded.document.sections)
             if (section.tag != uiSectionTag && ! isProductSection (section.tag))
                 next.preserved.push_back (std::move (section));
+        {
+            std::size_t unknownBytes = 0;
+            for (const auto& section : next.preserved)
+                unknownBytes += section.data.size() + 16;
+            const std::size_t reserve = productStateReserve() + 4096;
+            const std::size_t room = preset::maxStateBytes > reserve ? preset::maxStateBytes - reserve : 0;
+            if (unknownBytes > room)
+            {
+                rejectState ("the state holds " + juce::String (static_cast<juce::int64> (unknownBytes))
+                             + " bytes in sections of an unknown writer: too large to keep and still save this project (room for "
+                             + juce::String (static_cast<juce::int64> (room)) + "); nothing was restored");
+                return;
+            }
+        }
 
         // 1. Commit: the UI state and the restored product sections, in one
         // critical section; previous values are destroyed after it.
@@ -273,6 +306,8 @@ protected:
     }
 
     virtual bool isProductSection (preset::Tag) const { return false; }
+    // Upper bound of the product's own sections in bytes (0: no bound known).
+    virtual std::size_t productStateReserve() const { return 0; }
 
     // Realtime safe.
     void noteMidiSeen (const juce::MidiBuffer& midi) noexcept

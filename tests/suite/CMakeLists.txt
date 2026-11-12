@@ -108,6 +108,26 @@ endif()
 add_test(NAME suite_drums_product_tests
   COMMAND suite_drums_product_tests ${PROJECT_SOURCE_DIR}/products/drums/parameters.csv)
 
+# Production candidate (DRM-05/06/07, presets): song and MIDI parity, the
+# nine outputs, generator, presets, state, editor pages, realtime.
+add_executable(suite_drums_candidate_tests DrumsCandidateTests.cpp)
+target_link_libraries(suite_drums_candidate_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_cryptography)
+target_include_directories(suite_drums_candidate_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+vox_suite_add_allocation_probe(suite_drums_candidate_tests)
+if(NOT WIN32)
+  target_link_libraries(suite_drums_candidate_tests PRIVATE Threads::Threads)
+endif()
+add_test(NAME suite_drums_candidate_tests
+  COMMAND suite_drums_candidate_tests ${PROJECT_SOURCE_DIR}/products/drums/factory-content.csv)
+
+# Callback timing of a heavy scene (reports p50/p95/p99/p99.9/worst; does
+# not gate on the numbers).
+add_executable(suite_drums_callback_bench DrumsCallbackBench.cpp)
+target_link_libraries(suite_drums_callback_bench PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_callback_bench PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_callback_bench
+  COMMAND suite_drums_callback_bench ${CMAKE_BINARY_DIR}/vox-drums-callback-timing.csv)
+
 # DRM-02: pad samples (decode, sound, ownership, realtime, state, editor).
 add_executable(suite_drums_sample_tests DrumsSampleTests.cpp)
 target_link_libraries(suite_drums_sample_tests PRIVATE ${VOX_SUITE_drm_TARGET})

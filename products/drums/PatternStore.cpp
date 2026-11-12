@@ -50,7 +50,7 @@ struct Reader {
     }
 };
 
-constexpr std::uint32_t sectionVersion = 2;
+constexpr std::uint32_t sectionVersion = 3;
 
 } // namespace
 
@@ -101,7 +101,7 @@ bool StoredPattern::operator== (const StoredPattern& o) const noexcept
         const auto& a = cells[static_cast<std::size_t> (i)];
         const auto& b = o.cells[static_cast<std::size_t> (i)];
         if (a.on != b.on || a.accent != b.accent || a.velocity != b.velocity || a.probability != b.probability
-            || a.ratchet != b.ratchet || a.micro != b.micro)
+            || a.ratchet != b.ratchet || a.micro != b.micro || a.locked != b.locked)
             return false;
     }
     return true;
@@ -159,7 +159,9 @@ void PatternStore::setAlternate (int index, const StoredPattern& pattern)
         return;
     const juce::SpinLock::ScopedLockType sl (lock_);
     alternates_[static_cast<std::size_t> (index)] = pattern;
-    generation_.store (generation_.load() + 1);   // the editor shows A/B state
+    const auto g = generation_.load() + 1;
+    alternateGeneration_[static_cast<std::size_t> (index)] = g;
+    generation_.store (g);   // the editor shows A/B state
 }
 
 void PatternStore::copyAlternates (std::array<StoredPattern, slotCount>& out) const
@@ -172,7 +174,9 @@ void PatternStore::setAlternates (const std::array<StoredPattern, slotCount>& al
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
     alternates_ = alternates;
-    generation_.store (generation_.load() + 1);
+    const auto g = generation_.load() + 1;
+    alternateGeneration_.fill (g);
+    generation_.store (g);
 }
 
 StoredPattern PatternStore::slot (int index) const
@@ -270,7 +274,7 @@ void encodePattern (std::vector<std::byte>& out, const StoredPattern& p)
     for (int i = 0; i < n; ++i)
     {
         const auto& c = p.cells[static_cast<std::size_t> (i)];
-        putU8 (out, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0)));
+        putU8 (out, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0) | (c.locked ? 4 : 0)));
         putU8 (out, c.velocity);
         putU8 (out, c.probability);
         putU8 (out, c.ratchet);
@@ -278,7 +282,7 @@ void encodePattern (std::vector<std::byte>& out, const StoredPattern& p)
     }
 }
 
-bool decodePattern (Reader& in, StoredPattern& p)
+bool decodePattern (Reader& in, StoredPattern& p, std::uint32_t version)
 {
     p = {};
     const int steps = in.u8(), bars = in.u8();
@@ -298,7 +302,8 @@ bool decodePattern (Reader& in, StoredPattern& p)
         c.micro = static_cast<std::int8_t> (in.u8());
         c.on = (flags & 1u) != 0;
         c.accent = (flags & 2u) != 0;
-        if (! in.ok || flags > 3 || c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1
+        c.locked = (flags & 4u) != 0;
+        if (! in.ok || flags > (version >= 3 ? 7u : 3u) || c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1
             || c.ratchet > kit::maxRatchet || c.micro < -50 || c.micro > 50)
             return false;
     }
@@ -313,6 +318,7 @@ bool decodePattern (Reader& in, StoredPattern& p)
 // (bit 0 on, bit 1 accent), u8 velocity, u8 probability, u8 ratchet,
 // u8 micro (two's complement). Version 2 (DRM-04b) follows the 5 slots with
 // their 5 alternates (B) in the same layout; version 1 (DRM-04a) has none.
+// Version 3 (DRM-05) adds flag bit 2: the step is locked for the generator.
 preset::Section PatternStore::encode (const std::array<StoredPattern, slotCount>& slots,
                                       const std::array<StoredPattern, slotCount>& alternates)
 {
@@ -332,13 +338,13 @@ bool PatternStore::decode (const preset::Section& section, std::array<StoredPatt
 {
     Reader in { section.data };
     const auto version = in.u32();
-    if ((version != 1 && version != 2) || in.u32() != static_cast<std::uint32_t> (slotCount) || ! in.ok)
+    if ((version < 1 || version > 3) || in.u32() != static_cast<std::uint32_t> (slotCount) || ! in.ok)
     {
         error = "unsupported pattern section";
         return false;
     }
     for (auto& p : out)
-        if (! decodePattern (in, p))
+        if (! decodePattern (in, p, version))
         {
             error = "invalid pattern section";
             return false;
@@ -347,7 +353,7 @@ bool PatternStore::decode (const preset::Section& section, std::array<StoredPatt
         alternates = out;
     else
         for (auto& p : alternates)
-            if (! decodePattern (in, p))
+            if (! decodePattern (in, p, version))
             {
                 error = "invalid pattern section";
                 return false;
@@ -371,9 +377,18 @@ void PatternHistory::push (std::unique_ptr<Entry> entry)
 
 bool PatternHistory::amendLast (int slot, const StoredPattern& after)
 {
-    if (undo_.empty() || ! redo_.empty() || undo_.back()->slot != slot || undo_.back()->alternate)
+    if (undo_.empty() || ! redo_.empty() || undo_.back()->slot != slot || undo_.back()->alternate || undo_.back()->hasSong
+        || undo_.back()->allBefore != nullptr)
         return false;
     undo_.back()->after = after;
+    return true;
+}
+
+bool PatternHistory::amendLastSong (const SongData& after)
+{
+    if (undo_.empty() || ! redo_.empty() || ! undo_.back()->hasSong || undo_.back()->slot >= 0 || undo_.back()->allBefore != nullptr)
+        return false;
+    undo_.back()->songAfter = after;
     return true;
 }
 
@@ -383,9 +398,14 @@ int PatternHistory::undo (PatternStore& store)
         return -1;
     auto e = std::move (undo_.back());
     undo_.pop_back();
-    store.setSlot (e->slot, e->before);
-    if (e->alternate)
+    if (e->allBefore != nullptr)
+        store.setEverything (*e->allBefore);
+    if (e->slot >= 0)
+        store.setSlot (e->slot, e->before);
+    if (e->slot >= 0 && e->alternate)
         store.setAlternate (e->slot, e->beforeB);
+    if (e->hasSong)
+        store.setSong (e->songBefore);
     const int slot = e->slot;
     redo_.push_back (std::move (e));
     return slot;
@@ -397,9 +417,14 @@ int PatternHistory::redo (PatternStore& store)
         return -1;
     auto e = std::move (redo_.back());
     redo_.pop_back();
-    store.setSlot (e->slot, e->after);
-    if (e->alternate)
+    if (e->allAfter != nullptr)
+        store.setEverything (*e->allAfter);
+    if (e->slot >= 0)
+        store.setSlot (e->slot, e->after);
+    if (e->slot >= 0 && e->alternate)
         store.setAlternate (e->slot, e->afterB);
+    if (e->hasSong)
+        store.setSong (e->songAfter);
     const int slot = e->slot;
     undo_.push_back (std::move (e));
     return slot;

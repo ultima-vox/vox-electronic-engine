@@ -3,6 +3,8 @@
 #include "DrumsParameters.h"
 #include "Processor.h"
 #include "PatternEditor.h"
+#include "FactoryContent.h"
+#include "Presets.h"
 #include "Tokens.h"
 #include "Typography.h"
 
@@ -133,6 +135,16 @@ DrumsPanel::DrumsPanel (DrumsProcessor& processor) : processor_ (processor)
     const auto accent = processor.product().accent;
     for (auto* panel : { &padsPanel_, &padPanel_, &samplePanel_, &kitPanel_, &sequencerPanel_ })
         addAndMakeVisible (*panel);
+    kitPanel_.setTitle ("MACROS");
+    sequencerPanel_.setTitle ("TRANSPORT");
+    {
+        std::vector<vox::ui::VoxTabBar::Tab> tabs;
+        for (int i = 0; i < pageCount; ++i)
+            tabs.push_back ({ juce::String (pageName (i)).toLowerCase(), pageName (i), true });
+        tabs_.setTabs (std::move (tabs));
+        tabs_.onTabChanged = [this] (int index) { showPage (index); };
+        addAndMakeVisible (tabs_);
+    }
 
     for (int pad = 0; pad < padCount; ++pad)
     {
@@ -312,7 +324,74 @@ DrumsPanel::DrumsPanel (DrumsProcessor& processor) : processor_ (processor)
     steps_ = std::make_unique<PatternEditor> (processor_, accent);
     addAndMakeVisible (*steps_);
 
-    selectPad (0);
+    // DRM-07: macros 5-8, the pages, the song timeline, selectors.
+    for (const auto& [id, text] : { std::pair { "drm.fx.delay.feedback", "Dly Fbk" }, std::pair { "drm.fx.delay.level", "Delay" },
+                                    std::pair { "drm.fx.reverb.size", "Rev Size" }, std::pair { "drm.fx.reverb.level", "Reverb" } })
+        fxMacros_.push_back (makeHostKnob (id, text));
+    combo (patternSelect_, patternParameterId, "Pattern");
+    padSelectLabel_ = label ("Pad");
+    addAndMakeVisible (*padSelectLabel_);
+    padSelect_ = std::make_unique<vox::ui::VoxComboBox>();
+    for (int pad = 0; pad < padCount; ++pad)
+        padSelect_->addItem (juce::String (pad + 1) + "  " + padName (pad), pad + 1);
+    padSelect_->onChange = [this] {
+        if (! refreshing_ && padSelect_->getSelectedItemIndex() != selectedPad_)
+            selectPad (padSelect_->getSelectedItemIndex());
+    };
+    addAndMakeVisible (*padSelect_);
+    transport_ = label ("");
+    transport_->setFont (vox::ui::typography::valueText());
+    transport_->setColour (juce::Label::textColourId, c::text);
+    addAndMakeVisible (*transport_);
+    songMode_ = std::make_unique<vox::ui::VoxButton> ("Song Mode", vox::ui::VoxButton::Type::Toggle);
+    songMode_->setClickingTogglesState (true);
+    songMode_->setTooltip ("On: the sequencer plays the song timeline. Off: it plays the selected pattern.");
+    songMode_->onClick = [this] {
+        const bool on = songMode_->getToggleState();
+        processor_.editSong ([on] (SongData& s) { s.songMode = on; });
+    };
+    addAndMakeVisible (*songMode_);
+    variation_ = std::make_unique<vox::ui::VoxButton> ("Swap A/B");
+    variation_->setTooltip ("Swap the selected pattern with its variation B");
+    variation_->onClick = [this] {
+        if (auto* swap = steps_->button ("swap"))
+            swap->onClick();
+    };
+    addAndMakeVisible (*variation_);
+    kitSelectLabel_ = label ("Load factory kit");
+    addAndMakeVisible (*kitSelectLabel_);
+    kitSelect_ = std::make_unique<vox::ui::VoxComboBox>();
+    for (int kit = 0; kit < factoryKitCount; ++kit)
+        kitSelect_->addItem (juce::String (factoryKitInfo (kit).name) + "  (" + factoryKitInfo (kit).family + ")", kit + 1);
+    kitSelect_->setTextWhenNothingSelected ("Choose...");
+    kitSelect_->setTooltip ("Loads the kit's pads, mix and returns. User kits and Undo Load are on the PRESETS page.");
+    kitSelect_->onChange = [this] {
+        const int kit = kitSelect_->getSelectedItemIndex();
+        if (kit < 0)
+            return;
+        const auto result = processor_.presets().loadFactoryKit (kit);
+        if (result.failed())
+            kitSelect_->setSelectedItemIndex (-1, juce::dontSendNotification);
+    };
+    addAndMakeVisible (*kitSelect_);
+    song_ = std::make_unique<SongStrip> (processor_, accent);
+    song_->onEditBar = [this] (int bar) { steps_->editSongBar (bar); };
+    addAndMakeVisible (*song_);
+    pages_[3] = makeMixerPage (processor_);
+    pages_[4] = makeGeneratePage (processor_);
+    pages_[5] = makeRoutingPage (processor_);
+    pages_[6] = makePresetsPage (processor_, [this] { return selectedPad_; });
+    pages_[7] = makeAdvancedPage (processor_);
+    for (auto& page : pages_)
+        if (page != nullptr)
+            addChildComponent (*page);
+
+    const auto ui = processor_.uiState();
+    page_ = juce::jlimit (0, pageCount - 1, static_cast<int> (ui.page));
+    tabs_.setSelectedIndex (page_);
+    song_->select (ui.songBar, 1);
+    steps_->selectBar (ui.patternBar);
+    selectPad (juce::jlimit (0, padCount - 1, static_cast<int> (ui.pad)));
     startTimerHz (30);
 }
 
@@ -445,6 +524,14 @@ void DrumsPanel::selectPad (int pad)
     if (pad < 0 || pad >= padCount)
         return;
     selectedPad_ = pad;
+    if (padSelect_ != nullptr)
+    {
+        padSelect_->setSelectedItemIndex (pad, juce::dontSendNotification);
+        auto ui = processor_.uiState();
+        ui.pad = static_cast<std::uint8_t> (pad);
+        processor_.setUiState (ui);
+        shownUiPad_ = ui.pad;
+    }
     for (int i = 0; i < padCount; ++i)
         pads_[static_cast<std::size_t> (i)]->setSelected (i == pad);
     bindPadControls();
@@ -494,34 +581,162 @@ void DrumsPanel::paint (juce::Graphics& g)
     g.fillAll (c::background);
 }
 
+const char* DrumsPanel::pageName (int page) noexcept
+{
+    static const char* names[pageCount] = { "PERFORMANCE", "SOUND", "PATTERN/SONG", "MIXER", "GENERATE", "ROUTING", "PRESETS", "ADVANCED" };
+    return page >= 0 && page < pageCount ? names[page] : "";
+}
+
+void DrumsPanel::showPage (int page)
+{
+    page_ = juce::jlimit (0, pageCount - 1, page);
+    if (tabs_.getSelectedIndex() != page_)
+        tabs_.setSelectedIndex (page_);
+    auto ui = processor_.uiState();
+    ui.page = static_cast<std::uint8_t> (page_);
+    processor_.setUiState (ui);
+    resized();
+    if (auto* p = pages_[static_cast<std::size_t> (page_)].get())
+        p->update();
+    repaint();
+}
+
+// Which controls belong to the page shown. Controls of other pages stay
+// alive (their attachments keep following the parameters) but hidden.
+void DrumsPanel::applyVisibility()
+{
+    const bool performance = page_ == 0, sound = page_ == 1, pattern = page_ == 2;
+    padsPanel_.setVisible (performance);
+    kitPanel_.setVisible (performance);
+    sequencerPanel_.setVisible (performance);
+    for (auto& p : pads_)
+        p->setVisible (performance);
+    for (auto* list : { &kitKnobs_, &seqKnobs_, &fxMacros_ })
+        for (auto& k : *list)
+            k.knob->setVisible (performance);
+    choke_.button->setVisible (performance);
+    for (auto* target : { &seqMode_, &seqPattern_ })
+    {
+        target->label->setVisible (performance);
+        target->combo->setVisible (performance);
+    }
+    transport_->setVisible (performance);
+    kitSelect_->setVisible (performance);
+    kitSelectLabel_->setVisible (performance);
+    songMode_->setVisible (performance);
+    variation_->setVisible (performance);
+
+    padPanel_.setVisible (sound);
+    samplePanel_.setVisible (sound);
+    padSelect_->setVisible (sound);
+    padSelectLabel_->setVisible (sound);
+    for (auto& k : padKnobs_)
+        k.knob->setVisible (sound);
+    if (mute_.button != nullptr)
+        mute_.button->setVisible (sound);
+    const bool body = bodyVisible();
+    for (auto& s : structural_)
+    {
+        const bool bodyKnob = s->name == "pitch_amount" || s->name == "pitch_decay" || s->name == "drive" || s->name == "sub"
+                           || s->name == "tail";
+        for (auto* comp : std::initializer_list<juce::Component*> { s->knob.get(), s->label.get(), s->combo.get(), s->toggle.get() })
+            if (comp != nullptr)
+                comp->setVisible (sound && (! bodyKnob || body));
+    }
+    for (auto* b : { playerA_.get(), playerB_.get(), loadButton_.get(), clearButton_.get(), libraryButton_.get() })
+        b->setVisible (sound);
+    sampleStatus_->setVisible (sound);
+    waveform_->setVisible (sound);
+
+    steps_->setVisible (pattern);
+    song_->setVisible (pattern);
+    patternSelect_.label->setVisible (pattern);
+    patternSelect_.combo->setVisible (pattern);
+    for (auto& lane : lanes_)
+        lane.button->setVisible (pattern);
+
+    for (int i = 0; i < pageCount; ++i)
+        if (auto* p = pages_[static_cast<std::size_t> (i)].get())
+            p->setVisible (i == page_);
+}
+
 void DrumsPanel::resized()
 {
-    auto area = getLocalBounds().reduced (sp::xxl, sp::lg);
-    auto top = area.removeFromTop (juce::jmax (310, area.getHeight() * 54 / 100));
-    const int width = top.getWidth();
-    auto left = top.removeFromLeft (juce::jlimit (240, 330, width / 4));
-    auto sampleArea = top.removeFromRight (juce::jlimit (250, 330, width * 26 / 100));
-    top.removeFromRight (sp::lg);
-    left.removeFromRight (sp::lg);
-    padsPanel_.setBounds (left.removeFromTop (left.getHeight() - 124));
-    left.removeFromTop (sp::md);
-    kitPanel_.setBounds (left);
-    padPanel_.setBounds (top);
-    samplePanel_.setBounds (sampleArea);
+    if (song_ == nullptr)
+        return;   // still constructing
+    applyVisibility();
+    auto area = getLocalBounds();
+    tabs_.setBounds (area.removeFromTop (vox::ui::tokens::size::tabHeight));
+    area = area.reduced (sp::xxl, sp::md);
+    if (page_ == 0)
+        layoutPerformance (area);
+    else if (page_ == 1)
+        layoutSound (area);
+    else if (page_ == 2)
+        layoutPattern (area);
+    else if (auto* p = pages_[static_cast<std::size_t> (page_)].get())
+        p->setBounds (area);
+}
 
+void DrumsPanel::layoutPerformance (juce::Rectangle<int> area)
+{
+    // Pads on the left (4 x 4); macros and transport on the right.
+    auto left = area.removeFromLeft (juce::jlimit (420, 640, area.getWidth() * 58 / 100));
+    area.removeFromLeft (sp::lg);
+    padsPanel_.setBounds (left);
     {
         auto grid = padsPanel_.getContentBounds() + padsPanel_.getPosition();
         const int w = grid.getWidth() / 4, h = grid.getHeight() / 4;
         for (int pad = 0; pad < padCount; ++pad)
             pads_[static_cast<std::size_t> (pad)]->setBounds (grid.getX() + (pad % 4) * w, grid.getY() + (pad / 4) * h, w, h);
     }
+    kitPanel_.setBounds (area.removeFromTop (juce::jlimit (210, 260, area.getHeight() / 2)));
+    area.removeFromTop (sp::md);
+    sequencerPanel_.setBounds (area);
     {
-        auto kit = kitPanel_.getContentBounds() + kitPanel_.getPosition();
-        const int kw = juce::jmin (72, kit.getWidth() / 3);
-        for (auto& k : kitKnobs_)
-            k.knob->setBounds (kit.removeFromLeft (kw));
-        choke_.button->setBounds (kit.withSizeKeepingCentre (kit.getWidth(), 28));
+        // Eight macros, 2 x 4: volume, velocity, swing, accent; delay feedback and return, reverb size and return.
+        auto macros = kitPanel_.getContentBounds() + kitPanel_.getPosition();
+        std::vector<vox::ui::VoxKnob*> knobs;
+        for (auto* list : { &kitKnobs_, &seqKnobs_, &fxMacros_ })
+            for (auto& k : *list)
+                knobs.push_back (k.knob.get());
+        const int w = macros.getWidth() / 4, h = macros.getHeight() / 2;
+        for (std::size_t i = 0; i < knobs.size(); ++i)
+            knobs[i]->setBounds (macros.getX() + static_cast<int> (i % 4) * w, macros.getY() + static_cast<int> (i / 4) * h, w, h);
     }
+    {
+        auto t = sequencerPanel_.getContentBounds() + sequencerPanel_.getPosition();
+        auto row = t.removeFromTop (48);
+        for (auto* target : { &seqMode_, &seqPattern_ })
+        {
+            auto cell = row.removeFromLeft (row.getWidth() / (target == &seqMode_ ? 2 : 1));
+            target->label->setBounds (cell.removeFromTop (16));
+            target->combo->setBounds (cell.removeFromTop (vox::ui::tokens::size::controlHeight).withTrimmedRight (sp::sm));
+        }
+        t.removeFromTop (sp::sm);
+        row = t.removeFromTop (32);
+        const int bw = row.getWidth() / 3;
+        songMode_->setBounds (row.removeFromLeft (bw).reduced (2, 0));
+        variation_->setBounds (row.removeFromLeft (bw).reduced (2, 0));
+        choke_.button->setBounds (row.reduced (4, 2));
+        t.removeFromTop (sp::sm);
+        transport_->setBounds (t.removeFromTop (juce::jmin (24, t.getHeight())));
+        t.removeFromTop (sp::xs);
+        kitSelectLabel_->setBounds (t.removeFromTop (16));
+        kitSelect_->setBounds (t.removeFromTop (vox::ui::tokens::size::controlHeight).withTrimmedRight (sp::sm));
+    }
+}
+
+void DrumsPanel::layoutSound (juce::Rectangle<int> area)
+{
+    auto select = area.removeFromTop (30);
+    padSelectLabel_->setBounds (select.removeFromLeft (40));
+    padSelect_->setBounds (select.removeFromLeft (200).reduced (0, 1));
+    area.removeFromTop (sp::sm);
+    auto sampleArea = area.removeFromRight (juce::jlimit (280, 380, area.getWidth() * 36 / 100));
+    area.removeFromRight (sp::lg);
+    padPanel_.setBounds (area);
+    samplePanel_.setBounds (sampleArea);
 
     const auto place = [] (Structural* s, juce::Rectangle<int> r) {
         if (s == nullptr)
@@ -540,8 +755,8 @@ void DrumsPanel::resized()
         auto pad = padPanel_.getContentBounds() + padPanel_.getPosition();
         const bool body = bodyVisible();
         const int rows = body ? 3 : 2;
-        knobHeight = juce::jlimit (60, 80, (pad.getHeight() - 50 - sp::xs * rows) / rows);
-        knobWidth = juce::jlimit (56, 76, pad.getWidth() / 6);
+        knobHeight = juce::jlimit (60, 96, (pad.getHeight() - 50 - sp::xs * rows) / rows);
+        knobWidth = juce::jlimit (56, 96, pad.getWidth() / 6);
         // Row 0: model, note, choke, voices, mute.
         auto row = pad.removeFromTop (48);
         const int cw = row.getWidth() / 5;
@@ -565,9 +780,6 @@ void DrumsPanel::resized()
         for (const auto* name : { "resonance", "attack", "sustain" })
             place (findStructural (name), row.removeFromLeft (knobWidth));
         // Row 3: kick body (Kick model only).
-        for (const auto* name : { "pitch_amount", "pitch_decay", "drive", "sub", "tail" })
-            if (auto* s = findStructural (name))
-                s->knob->setVisible (body);
         if (body)
         {
             pad.removeFromTop (sp::xs);
@@ -609,31 +821,58 @@ void DrumsPanel::resized()
         for (const auto* name : { "loop", "reverse", "normalize" })
             place (findStructural (name), toggles.removeFromLeft (tw));
     }
+}
 
-    area.removeFromTop (sp::md);
-    sequencerPanel_.setBounds (area);
-    auto seq = sequencerPanel_.getContentBounds() + sequencerPanel_.getPosition();
-    auto controls = seq.removeFromLeft (juce::jmin (360, seq.getWidth() * 30 / 100));
+void DrumsPanel::layoutPattern (juce::Rectangle<int> area)
+{
+    // The song timeline on top; below it the lane switches and the step grid.
+    song_->setBounds (area.removeFromTop (song_->preferredHeight()));
+    area.removeFromTop (sp::sm);
+    auto left = area.removeFromLeft (124);
+    area.removeFromLeft (sp::md);
+    patternSelect_.label->setBounds (left.removeFromTop (16));
+    patternSelect_.combo->setBounds (left.removeFromTop (vox::ui::tokens::size::controlHeight).withTrimmedRight (sp::xs));
+    left.removeFromTop (sp::sm);
+    // 16 lane switches, 2 columns x 8.
+    const int lw = left.getWidth() / 2, lh = juce::jlimit (18, 30, left.getHeight() / 8);
+    for (int pad = 0; pad < padCount; ++pad)
+        lanes_[static_cast<std::size_t> (pad)].button->setBounds (left.getX() + (pad / 8) * lw, left.getY() + (pad % 8) * lh, lw, lh);
+    steps_->setBounds (area);
+}
+
+juce::StringArray DrumsPanel::overlappingControls() const
+{
+    // Leaf controls of the page: the panel's own visible children except
+    // the panels (backgrounds) and, for a page component, its children.
+    std::vector<const juce::Component*> leaves;
+    const auto isBackground = [this] (const juce::Component* comp) {
+        return comp == &padsPanel_ || comp == &padPanel_ || comp == &samplePanel_ || comp == &kitPanel_ || comp == &sequencerPanel_;
+    };
+    for (const auto* child : getChildren())
     {
-        auto row = controls.removeFromTop (48);
-        for (auto* target : { &seqMode_, &seqPattern_ })
-        {
-            auto cell = row.removeFromLeft (row.getWidth() / (target == &seqMode_ ? 2 : 1));
-            target->label->setBounds (cell.removeFromTop (16));
-            target->combo->setBounds (cell.removeFromTop (vox::ui::tokens::size::controlHeight).withTrimmedRight (sp::sm));
-        }
-        controls.removeFromTop (sp::xs);
-        auto knobRow = controls.removeFromLeft (juce::jmin (150, controls.getWidth() / 3));
-        const int kh = juce::jmin (78, knobRow.getHeight());
-        for (auto& k : seqKnobs_)
-            k.knob->setBounds (knobRow.removeFromLeft (knobRow.getWidth() / (&k == &seqKnobs_.front() ? 2 : 1)).withHeight (kh));
-        // 16 lane switches, 4 x 4.
-        const int lw = controls.getWidth() / 4, lh = juce::jmax (18, controls.getHeight() / 4);
-        for (int pad = 0; pad < padCount; ++pad)
-            lanes_[static_cast<std::size_t> (pad)].button->setBounds (controls.getX() + (pad % 4) * lw, controls.getY() + (pad / 4) * lh, lw, lh);
+        if (! child->isVisible() || isBackground (child))
+            continue;
+        if (dynamic_cast<const Page*> (child) != nullptr)
+            for (const auto* inner : child->getChildren())
+            {
+                if (inner->isVisible())
+                    leaves.push_back (inner);
+            }
+        else
+            leaves.push_back (child);
     }
-    seq.removeFromLeft (sp::lg);
-    steps_->setBounds (seq);
+    juce::StringArray out;
+    const auto boundsOf = [this] (const juce::Component* comp) { return getLocalArea (comp->getParentComponent(), comp->getBounds()); };
+    for (std::size_t i = 0; i < leaves.size(); ++i)
+    {
+        const auto a = boundsOf (leaves[i]);
+        if (a.isEmpty() || ! getLocalBounds().contains (a))
+            out.add ("outside or empty: " + leaves[i]->getName() + " " + a.toString());
+        for (std::size_t j = i + 1; j < leaves.size(); ++j)
+            if (a.intersects (boundsOf (leaves[j])))
+                out.add (leaves[i]->getName() + " " + a.toString() + " x " + leaves[j]->getName() + " " + boundsOf (leaves[j]).toString());
+    }
+    return out;
 }
 
 void DrumsPanel::refreshSample()
@@ -735,7 +974,7 @@ void DrumsPanel::timerCallback()
     {
         const bool body = bodyVisible();
         refreshStructure();
-        if (body != findStructural ("drive")->knob->isVisible())
+        if (page_ == 1 && body != findStructural ("drive")->knob->isVisible())
             resized();
         for (auto& p : pads_)
             p->repaint();
@@ -743,6 +982,31 @@ void DrumsPanel::timerCallback()
     if (processor_.samples().generation() != shownSamples_)
         refreshSample();
     steps_->update();
+    song_->update();
+    if (auto* p = pages_[static_cast<std::size_t> (page_)].get())
+        p->update();
+    // A restored project: its page, pad and song bar.
+    const auto ui = processor_.uiState();
+    if (ui.page != page_)
+        showPage (ui.page);
+    if (ui.pad != selectedPad_ && ui.pad != shownUiPad_)
+        selectPad (ui.pad);
+    shownUiPad_ = ui.pad;
+    {
+        auto next = ui;
+        next.patternBar = static_cast<std::uint8_t> (steps_->bar());
+        if (! (next == ui))
+            processor_.setUiState (next);
+    }
+    const bool songOn = processor_.patterns().song().songMode;
+    if (songMode_->getToggleState() != songOn)
+        songMode_->setToggleState (songOn, juce::dontSendNotification);
+    const int bar = processor_.songBarPlaying();
+    const auto text = juce::String (processor_.transportPlaying() ? "Playing" : "Stopped") + "  " + juce::String (processor_.lastBpm(), 1)
+                    + " BPM  " + (songOn ? "Song" + (bar >= 0 ? " bar " + juce::String (bar + 1) : juce::String()) : juce::String ("Pattern"))
+                    + "  voices " + juce::String (processor_.activeVoices());
+    if (transport_->getText() != text)
+        transport_->setText (text, juce::dontSendNotification);
 }
 
 const StoredPattern& DrumsPanel::shownPattern() const
@@ -752,10 +1016,22 @@ const StoredPattern& DrumsPanel::shownPattern() const
 
 juce::Slider* DrumsPanel::sliderFor (const juce::String& id)
 {
-    for (auto* list : { &padKnobs_, &kitKnobs_, &seqKnobs_ })
+    for (auto* list : { &padKnobs_, &kitKnobs_, &seqKnobs_, &fxMacros_ })
         for (auto& k : *list)
             if (k.id == id)
                 return &k.knob->getSlider();
+    for (auto& page : pages_)
+        if (page != nullptr)
+            if (auto* s = page->slider (id))
+                return s;
+    return nullptr;
+}
+
+juce::Slider* DrumsPanel::selectedPadSlider (const juce::String& name)
+{
+    for (auto& k : padKnobs_)
+        if (k.id.endsWith ("." + name))
+            return &k.knob->getSlider();
     return nullptr;
 }
 
@@ -768,6 +1044,10 @@ juce::Button* DrumsPanel::buttonFor (const juce::String& id)
     for (auto& t : lanes_)
         if (t.id == id)
             return t.button.get();
+    for (auto& page : pages_)
+        if (page != nullptr)
+            if (auto* b = page->button (id))
+                return b;
     return nullptr;
 }
 
@@ -776,6 +1056,10 @@ juce::ComboBox* DrumsPanel::comboFor (const juce::String& id)
     for (auto* target : { &seqMode_, &seqPattern_ })
         if (target->id == id)
             return target->combo.get();
+    for (auto& page : pages_)
+        if (page != nullptr)
+            if (auto* b = page->combo (id))
+                return b;
     return nullptr;
 }
 

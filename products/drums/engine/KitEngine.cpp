@@ -315,7 +315,7 @@ void startFade (Voice& v, double sampleRate, double seconds)
 // Every setting into its documented range (review 6737829467). Values in
 // range are returned unchanged, bit for bit, so a valid kit renders exactly
 // as before; NaN takes the fallback; enums outside their set take the first
-// value; an output bus outside 0..7 plays on Main.
+// value; an output bus outside 0..8 plays on Main.
 float clampOr (float v, float lo, float hi, float fallback) noexcept
 {
     if (! std::isfinite (v))
@@ -527,6 +527,36 @@ int chance (std::uint32_t seed, std::int64_t g, std::uint32_t lane) noexcept
 }
 } // namespace
 
+namespace {
+// The one cell rule (pattern and song): the hits of `cell` on `lane` at grid
+// time `t` (swing included) with step length `step`; probability decided
+// by (seed, key, lane).
+inline void cellHits (const PatternStep& cell, std::uint32_t lane, double t, double step, std::uint32_t seed,
+                      std::int64_t key, const StepContext& context, ScheduledHit* out, int& count) noexcept
+{
+    if (! cell.on || ((context.laneMask >> lane) & 1u) == 0)
+        return;
+    const int probability = std::clamp<int> (cell.probability, 0, 100);
+    if (probability < 100 && chance (seed, key, lane) >= probability)
+        return;
+    double velocity = cell.velocity;
+    if (cell.accent)
+        velocity += context.accent * (127.0 - velocity);
+    const auto v = static_cast<std::uint8_t> (std::fmin (127.0, std::floor (velocity + 0.5)));
+    const int ratchet = std::clamp<int> (cell.ratchet, 1, maxRatchet);
+    const int microPercent = std::clamp<int> (cell.micro, -50, 50);
+    const double micro = microPercent * 0.01 * step;
+    for (int k = 0; k < ratchet; ++k)
+    {
+        // The first hit without micro is exactly the legacy time.
+        out[count].ppq = k == 0 && microPercent == 0 ? t : t + micro + static_cast<double> (k) * step / ratchet;
+        out[count].pad = static_cast<std::uint8_t> (lane);
+        out[count].velocity = v;
+        ++count;
+    }
+}
+} // namespace
+
 int stepHits (const Pattern& pattern, const StepContext& context, std::int64_t g, ScheduledHit* out) noexcept
 {
     if (g < 0 || pattern.cells == nullptr || pattern.lanes == 0 || pattern.steps == 0 || pattern.bars == 0)
@@ -542,29 +572,42 @@ int stepHits (const Pattern& pattern, const StepContext& context, std::int64_t g
     const auto lanes = std::min<std::uint32_t> (pattern.lanes, padCount);
     int count = 0;
     for (std::uint32_t lane = 0; lane < lanes; ++lane)
+        cellHits (pattern.cells[(lane * pattern.bars + bar) * pattern.steps + st], lane, t, step, pattern.seed, g, context, out, count);
+    return count;
+}
+
+std::uint32_t songBarAt (const Song& song, std::int64_t absoluteBar) noexcept
+{
+    if (song.bars == 0 || absoluteBar < 0)
+        return 0;
+    const auto bars = static_cast<std::int64_t> (std::min<std::uint32_t> (song.bars, maxSongBars));
+    if (song.loopLength > 0 && song.loopStart < song.bars)
     {
-        const auto& cell = pattern.cells[(lane * pattern.bars + bar) * pattern.steps + st];
-        if (! cell.on || ((context.laneMask >> lane) & 1u) == 0)
-            continue;
-        const int probability = std::clamp<int> (cell.probability, 0, 100);
-        if (probability < 100 && chance (pattern.seed, g, lane) >= probability)
-            continue;
-        double velocity = cell.velocity;
-        if (cell.accent)
-            velocity += context.accent * (127.0 - velocity);
-        const auto v = static_cast<std::uint8_t> (std::fmin (127.0, std::floor (velocity + 0.5)));
-        const int ratchet = std::clamp<int> (cell.ratchet, 1, maxRatchet);
-        const int microPercent = std::clamp<int> (cell.micro, -50, 50);
-        const double micro = microPercent * 0.01 * step;
-        for (int k = 0; k < ratchet; ++k)
-        {
-            // The first hit without micro is exactly the legacy time.
-            out[count].ppq = k == 0 && microPercent == 0 ? t : t + micro + static_cast<double> (k) * step / ratchet;
-            out[count].pad = static_cast<std::uint8_t> (lane);
-            out[count].velocity = v;
-            ++count;
-        }
+        // The bars before the region play once, in order. From the bar where
+        // the host reaches the region it repeats, starting at its first bar.
+        const auto start = static_cast<std::int64_t> (song.loopStart);
+        if (absoluteBar < start)
+            return static_cast<std::uint32_t> (absoluteBar);
+        const auto length = static_cast<std::int64_t> (std::min<std::uint32_t> (song.loopLength, song.bars - song.loopStart));
+        return static_cast<std::uint32_t> (start + (absoluteBar - start) % length);
     }
+    return static_cast<std::uint32_t> (absoluteBar % bars);
+}
+
+int songHits (const Song& song, const StepContext& context, std::int64_t absoluteBar, std::uint32_t step, ScheduledHit* out) noexcept
+{
+    if (absoluteBar < 0 || song.views == nullptr || song.bars == 0)
+        return 0;
+    const auto& bar = song.views[songBarAt (song, absoluteBar)];
+    if (bar.cells == nullptr || bar.steps == 0 || step >= bar.steps)
+        return 0;
+    const double length = 4.0 / static_cast<double> (bar.steps);
+    const double t = 4.0 * static_cast<double> (absoluteBar) + static_cast<double> (step) * length
+                   + ((step & 1u) ? context.swing * length : 0.0);
+    int count = 0;
+    for (std::uint32_t lane = 0; lane < static_cast<std::uint32_t> (padCount); ++lane)
+        cellHits (bar.cells[lane * bar.laneStride + step], lane, t, length, bar.seed,
+                  absoluteBar * 128 + static_cast<std::int64_t> (step), context, out, count);
     return count;
 }
 
@@ -588,6 +631,7 @@ struct KitEngine::Impl {
     std::array<Hit, maxSequencerHits> hits {};
     std::array<std::int8_t, 128> noteToPad {};
     std::array<int, padCount> fireOrder {};
+    std::array<double, padCount> gate {};   // mute gate per pad, 1 = open (set in the constructor)
 
     void stopAll() noexcept
     {
@@ -814,22 +858,24 @@ struct KitEngine::Impl {
         }
     }
 
-    // The sequencer for one chunk: every hit of stepHits() whose frame
-    // offset (legacy rounding) is in [0, frames) and that is later than the
+    // The sequencer for one chunk: every hit of the canonical rule
+    // (stepHits for a pattern, songHits for a song) whose frame offset
+    // (legacy rounding) is in [0, frames) and that is later than the
     // horizon. Hits are ordered by offset (stable: lane order within a step,
-    // as the legacy module).
-    int schedule (const KitSettings& kit, const Pattern* pattern, const Transport& tr, double ppq0, bool discontinuity,
-                  std::uint32_t frames) noexcept
+    // as the legacy module). Bounded: at most 4 bars x 64 steps are looked at.
+    int schedule (const KitSettings& kit, const Pattern* pattern, const Song* song, const Transport& tr, double ppq0,
+                  bool discontinuity, std::uint32_t frames) noexcept
     {
-        if (kit.sequencerMode == 0 || pattern == nullptr || pattern->cells == nullptr || pattern->lanes == 0
-            || pattern->steps == 0 || pattern->bars == 0 || ! tr.playing || ! tr.hasTempo || ! tr.hasPpq
+        const bool hasSong = song != nullptr && song->views != nullptr && song->bars > 0;
+        const bool hasPattern = pattern != nullptr && pattern->cells != nullptr && pattern->lanes != 0 && pattern->steps != 0
+                             && pattern->bars != 0;
+        if (kit.sequencerMode == 0 || ! (hasSong || hasPattern) || ! tr.playing || ! tr.hasTempo || ! tr.hasPpq
             || ! (tr.bpm > 0.0) || tr.bpm > 1000.0 || ! std::isfinite (ppq0) || frames == 0)
             return 0;
         if (discontinuity && ppq0 < lastPpqStart)
             horizon = -HUGE_VAL;   // moved backwards: hits may play again
         lastPpqStart = ppq0;
 
-        const double step = stepLength (*pattern);
         const double samplesPerPpq = 60.0 * sampleRate / tr.bpm;
         StepContext context;
         context.swing = kit.swing;
@@ -842,14 +888,7 @@ struct KitEngine::Impl {
         int count = 0;
         double latest = horizon;
         std::array<ScheduledHit, padCount * maxRatchet> stepOut;
-        // A step's hits lie within [g - 0.5, g + 2) steps of its grid time
-        // (micro, swing, ratchets), so start 3 steps back and stop once a
-        // step cannot reach this chunk.
-        for (std::int64_t g = static_cast<std::int64_t> (std::floor (ppq0 / step)) - 3;; ++g)
-        {
-            if (offsetOf ((static_cast<double> (g) - 0.5) * step) >= static_cast<double> (frames))
-                break;
-            const int n = stepHits (*pattern, context, g, stepOut.data());
+        const auto take = [&] (int n) {
             for (int k = 0; k < n && count < maxSequencerHits; ++k)
             {
                 const auto& h = stepOut[static_cast<std::size_t> (k)];
@@ -867,6 +906,44 @@ struct KitEngine::Impl {
                 hits[static_cast<std::size_t> (pos)] = { offset, h.pad, h.velocity };
                 ++count;
                 latest = std::fmax (latest, h.ppq);
+            }
+        };
+        if (hasSong)
+        {
+            // A step's hits lie within [s - 0.5, s + 2) steps of its grid
+            // time, so look 3 steps back and 1 ahead of the chunk, across
+            // bar lines (each bar has its own step length).
+            const double ppqEnd = ppq0 + static_cast<double> (frames) / samplesPerPpq;
+            const auto firstBar = static_cast<std::int64_t> (std::floor (ppq0 / 4.0)) - 1;
+            // The next bar's first step can sound up to half a (1/16) step
+            // before the bar line (negative microtiming).
+            const auto lastBar = static_cast<std::int64_t> (std::floor ((ppqEnd + 0.125) / 4.0));
+            for (std::int64_t bar = std::max<std::int64_t> (0, firstBar); bar <= lastBar; ++bar)
+            {
+                const auto& view = song->views[songBarAt (*song, bar)];
+                if (view.cells == nullptr || view.steps == 0)
+                    continue;
+                const double length = 4.0 / static_cast<double> (view.steps);
+                const double barPpq = 4.0 * static_cast<double> (bar);
+                const auto from = static_cast<std::int64_t> (std::floor ((ppq0 - barPpq) / length)) - 3;
+                const auto to = static_cast<std::int64_t> (std::floor ((ppqEnd - barPpq) / length)) + 1;
+                const auto lo = std::max<std::int64_t> (0, from);
+                const auto hi = std::min<std::int64_t> (static_cast<std::int64_t> (view.steps) - 1, to);
+                for (std::int64_t st = lo; st <= hi; ++st)
+                    take (songHits (*song, context, bar, static_cast<std::uint32_t> (st), stepOut.data()));
+            }
+        }
+        else
+        {
+            const double step = stepLength (*pattern);
+            // A step's hits lie within [g - 0.5, g + 2) steps of its grid time
+            // (micro, swing, ratchets), so start 3 steps back and stop once a
+            // step cannot reach this chunk.
+            for (std::int64_t g = static_cast<std::int64_t> (std::floor (ppq0 / step)) - 3;; ++g)
+            {
+                if (offsetOf ((static_cast<double> (g) - 0.5) * step) >= static_cast<double> (frames))
+                    break;
+                take (stepHits (*pattern, context, g, stepOut.data()));
             }
         }
         horizon = latest;
@@ -887,7 +964,10 @@ void KitEngine::scheduled (int i, std::uint32_t& offset, std::uint8_t& pad, std:
     velocity = h.velocity;
 }
 
-KitEngine::KitEngine() : impl_ (std::make_unique<Impl>()) {}
+KitEngine::KitEngine() : impl_ (std::make_unique<Impl>())
+{
+    impl_->gate.fill (1.0);
+}
 KitEngine::~KitEngine() = default;
 
 void KitEngine::prepare (double sampleRate)
@@ -919,15 +999,22 @@ int KitEngine::activeVoices() const noexcept
 
 void KitEngine::process (const KitSettings& settings, const Outputs& out, std::uint32_t frames,
                          const Event* events, std::uint32_t eventCount, const Transport& transport,
-                         const Pattern* pattern, const Sample* samples, bool panic, Release release) noexcept
+                         const Pattern* pattern, const Sample* samples, bool panic, Release release,
+                         const Song* song) noexcept
 {
     auto& s = *impl_;
     s.safe = settings;   // fixed-size copy, no allocation
     sanitize (s.safe);
     const KitSettings& kit = s.safe;
     sequencerHits_ = 0;
+    padPeak_.fill (0.0f);
+    soundOff_ = panic;
+    soundOffFrame_ = panic ? 0 : -1;
     if (panic)
         s.stopAll();
+    // Mute gate: 3 ms linear ramp per pad (exactly 1 while open, so an
+    // unmuted kit renders as before).
+    const double gateStep = 1.0 / std::max (1.0, 0.003 * s.sampleRate);
     s.buildNoteMap (kit);
     s.buildOrder (kit);
 
@@ -942,7 +1029,7 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
     {
         const std::uint32_t n = std::min (maxChunk, frames - done);
         const double ppq0 = transport.ppq + (transport.hasTempo ? static_cast<double> (done) * transport.bpm / 60.0 / s.sampleRate : 0.0);
-        const int seqCount = s.schedule (kit, pattern, transport, ppq0, discontinuity && done == 0, n);
+        const int seqCount = s.schedule (kit, pattern, song, transport, ppq0, discontinuity && done == 0, n);
         s.scheduledCount = seqCount;
         s.scheduledBase = done;
         int nextHit = 0;
@@ -979,7 +1066,11 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
                 else if (status == 0xB0u)
                 {
                     if (data1 == 120)
+                    {
                         s.stopAll();   // All Sound Off: immediate
+                        soundOff_ = true;
+                        soundOffFrame_ = static_cast<int> (done + i);
+                    }
                     else if (data1 == 123)
                         s.fadeAll (0.05);   // All Notes Off: bounded 50 ms tail
                 }
@@ -995,9 +1086,32 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
             {
                 const int pad = s.fireOrder[static_cast<std::size_t> (k)];
                 if (hits[pad] > 0 && ! kit.pads[static_cast<std::size_t> (pad)].mute)
+                {
+                    // A pad that is silent when it is unmuted has nothing to
+                    // fade in: its gate opens at once, so the first hit after
+                    // unmute (or solo release) keeps its attack. The ramp is
+                    // for voices still sounding from before.
+                    auto& g = s.gate[static_cast<std::size_t> (pad)];
+                    if (g < 1.0)
+                    {
+                        bool sounding = false;
+                        for (int k2 = 0; k2 < s.voiceLimit && ! sounding; ++k2)
+                            sounding = s.voices[static_cast<std::size_t> (k2)].active && s.voices[static_cast<std::size_t> (k2)].pad == pad;
+                        if (! sounding)
+                            g = 1.0;
+                    }
                     s.trigger (kit, samples, pad, hits[pad]);
+                }
             }
 
+            for (int pad = 0; pad < padCount; ++pad)
+            {
+                auto& g = s.gate[static_cast<std::size_t> (pad)];
+                if (kit.pads[static_cast<std::size_t> (pad)].mute)
+                    g = g > gateStep ? g - gateStep : 0.0;
+                else if (g < 1.0)
+                    g = g + gateStep < 1.0 ? g + gateStep : 1.0;
+            }
             double l = 0.0, r = 0.0;
             double busL[auxBuses] = {}, busR[auxBuses] = {};
             for (int k = 0; k < s.voiceLimit; ++k)
@@ -1053,10 +1167,16 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
                 }
                 if (! v.synthOn && ! sampleOn (v))
                     v.active = false;
-                const double xl = xL * v.gainL, xr = xR * v.gainR;
+                const double gate = s.gate[static_cast<std::size_t> (v.pad)];
+                const double xl = xL * v.gainL * gate, xr = xR * v.gainR * gate;
+                {
+                    const auto peak = static_cast<float> (std::fmax (std::fabs (xl), std::fabs (xr)));
+                    if (peak > padPeak_[static_cast<std::size_t> (v.pad)])
+                        padPeak_[static_cast<std::size_t> (v.pad)] = peak;
+                }
                 // One dry destination per pad (main or its output bus); sends
                 // are post level/pan and independent of it.
-                if (out.aux != nullptr && v.bus > 0 && v.bus <= auxOutputs)   // defensive: sanitize keeps 0..7
+                if (out.aux != nullptr && v.bus > 0 && v.bus <= auxOutputs)   // defensive: sanitize keeps 0..8
                 {
                     busL[auxSends + v.bus - 1] += xl;
                     busR[auxSends + v.bus - 1] += xr;
