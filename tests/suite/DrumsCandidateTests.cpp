@@ -2203,43 +2203,87 @@ void testReviewFindings()
             }
             q.patterns().setEverything (*all);
         };
+        // Owner decision 6814720707: sections of an unknown writer are kept
+        // byte for byte, or the whole restore is refused. Never dropped.
+        const auto unknownOf = [&] (const juce::MemoryBlock& blob) {
+            const auto d = vox::preset::decode ({ static_cast<const std::byte*> (blob.getData()), blob.getSize() }, p->product().stateTag,
+                                                p->product().stateSchema);
+            const auto* section = d.ok() ? d.document.find (vox::preset::makeTag ("XXXX")) : nullptr;
+            return section != nullptr ? section->data : std::vector<std::byte>();
+        };
         {
+            // Positive: kept through restore, the largest own state, save and reopen.
             const auto small = withUnknown (100 * 1024);
             p->setStateInformation (small.getData(), static_cast<int> (small.getSize()));
-            check (p->lastStateError().isEmpty(), "large state: a state with a 100 KB unknown section loads");
+            check (p->lastStateError().isEmpty(), "unknown sections: a state with a 100 KB unknown section loads");
             fill (*p);
             const auto saved = stateOf (*p);
             auto q = makeProcessor();
             q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
-            const auto kept = vox::preset::decode ({ static_cast<const std::byte*> (saved.getData()), saved.getSize() }, p->product().stateTag,
-                                                  p->product().stateSchema);
-            check (saved.getSize() > 0 && q->lastStateError().isEmpty() && kept.ok() && kept.document.find (vox::preset::makeTag ("XXXX")) != nullptr
-                       && q->patterns().song().length == 64,
-                   "large state: the worst song saves next to a 100 KB unknown section, which is kept (" + juce::String (static_cast<int> (saved.getSize()))
-                       + " bytes)");
+            const auto kept = unknownOf (saved);
+            check (saved.getSize() > 0 && q->lastStateError().isEmpty() && kept.size() == 100u * 1024u
+                       && std::all_of (kept.begin(), kept.end(), [] (std::byte b) { return b == std::byte { 0x5a }; })
+                       && q->patterns().song().length == 64 && q->patterns().song().bars[63].kind == SongBar::Kind::unique,
+                   "unknown sections: kept byte for byte next to the largest song, through save and reopen ("
+                       + juce::String (static_cast<int> (saved.getSize())) + " bytes)");
+            check (unknownOf (stateOf (*q)) == kept && stateOf (*q) == saved, "unknown sections: a second save is identical");
         }
         {
+            // Negative: too large to stay saveable: the restore is refused whole.
             auto r = makeProcessor();
+            r->generate (DrumsProcessor::Generate::song);
+            setPlain (*r, "drm.kit.volume", 0.23f);
+            const auto before = stateOf (*r);
+            const auto beforeAll = everything (*r);
             const auto large = withUnknown (600 * 1024);
             r->setStateInformation (large.getData(), static_cast<int> (large.getSize()));
-            check (r->lastStateError().isEmpty(), "large state: a state with a 600 KB unknown section loads");
-            check (r->lastStateNotice().contains ("not kept"), "large state: what was left out is reported (" + r->lastStateNotice() + ")");
-            fill (*r);
-            const auto saved = stateOf (*r);
+            const auto error = r->lastStateError();
+            check (error.contains ("unknown") && error.contains ("too large"), "unknown sections: an over-budget state is refused with a clear error (" + error + ")");
+            const auto afterAll = everything (*r);
+            check (stateOf (*r) == before && afterAll->slots == beforeAll->slots && afterAll->song == beforeAll->song
+                       && std::abs (plainOf (*r, "drm.kit.volume") - 0.23f) < 1.0e-6f,
+                   "unknown sections: the refused restore leaves the live instrument unchanged");
+            check (r->patternHistory().canUndo(), "unknown sections: a refused restore keeps the undo history");
             auto q = makeProcessor();
-            q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
-            check (saved.getSize() > 0 && q->lastStateError().isEmpty() && q->patterns().song().length == 64
-                       && q->patterns().song().bars[63].kind == SongBar::Kind::unique,
-                   "large state: the project still saves and reopens when unknown sections left too little room (" + juce::String (static_cast<int> (saved.getSize()))
-                       + " bytes)");
-            const auto file = workFolder.getChildFile ("large-kit.voxkitpreset");
-            check (r->presets().save (PresetType::kit, "Large", file).wasOk() && r->presets().load (file, PresetType::kit).wasOk(),
-                   "large state: a kit preset still saves and loads");
+            const auto again = stateOf (*r);
+            q->setStateInformation (again.getData(), static_cast<int> (again.getSize()));
+            check (again == before && q->lastStateError().isEmpty() && stateOf (*q) == before, "unknown sections: the instrument still saves and reopens after the refusal");
+            // The error is visible in the editor (ADVANCED diagnostics).
+            std::unique_ptr<juce::AudioProcessorEditor> editor (r->createEditorAndMakeActive());
+            auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+            auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
+            if (panel != nullptr)
+            {
+                panel->showPage (7);
+                panel->pollForTesting();
+                auto* diagnostics = dynamic_cast<juce::Label*> (panel->pageComponent (7)->named ("diagnostics"));
+                check (diagnostics != nullptr && diagnostics->getText().contains ("too large"), "unknown sections: the refusal is shown on ADVANCED");
+            }
+            r->editorBeingDeleted (editor.get());
+        }
+        {
+            // The boundary: what fits the budget is accepted and stays saveable; one byte more is refused.
+            const std::size_t budget = vox::preset::maxStateBytes - (736u * 1024u + 4096u) - 16u;
+            auto fits = makeProcessor();
+            const auto atLimit = withUnknown (budget);
+            fits->setStateInformation (atLimit.getData(), static_cast<int> (atLimit.getSize()));
+            check (fits->lastStateError().isEmpty(), "unknown sections: a section exactly at the budget is accepted");
+            fill (*fits);
+            check (unknownOf (stateOf (*fits)).size() == budget, "unknown sections: at the budget the largest own state still saves with it");
+            auto over = makeProcessor();
+            const auto above = withUnknown (budget + 1);
+            over->setStateInformation (above.getData(), static_cast<int> (above.getSize()));
+            check (over->lastStateError().isNotEmpty(), "unknown sections: one byte over the budget is refused");
             // The reserve really covers the product's own worst case (plus the longest sample references).
             auto own = makeProcessor();
             fill (*own);
             check (stateOf (*own).getSize() + 166u * 1024u <= 736u * 1024u,
-                   "large state: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (stateOf (*own).getSize())) + " bytes without samples)");
+                   "unknown sections: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (stateOf (*own).getSize()))
+                       + " bytes without samples)");
+            const auto file = workFolder.getChildFile ("large-kit.voxkitpreset");
+            check (fits->presets().save (PresetType::kit, "Large", file).wasOk() && fits->presets().load (file, PresetType::kit).wasOk()
+                       && unknownOf (stateOf (*fits)).size() == budget,
+                   "unknown sections: a preset load keeps them too");
         }
     }
     // R1: the first hit after unmute is not faded in.

@@ -893,9 +893,7 @@ public:
         const auto error = processor_.lastStateError();
         if (error.isNotEmpty())
             text << "\nLast rejected state: " << error;
-        const auto notice = processor_.lastStateNotice();
-        if (notice.isNotEmpty())
-            text << "\nState: " << notice;
+
         if (diagnostics_->getText() != text)
             diagnostics_->setText (text, juce::dontSendNotification);
     }

@@ -128,11 +128,15 @@ pad voice -> level/pan (at trigger) -> mute/solo gate (3 ms ramp) -+-> ONE dry d
    seen failing:
    - Undo history ended by every successful project restore, with or without an editor
      (`Processor.h` `patternHistory()`); a rejected restore keeps it.
-   - A state that does not fit the container is never saved as an empty block: unknown
-     writers' sections are kept on restore only within what is left after the product's
-     reserve (736 KiB), and what is left out is reported (`SuiteProcessor.h`,
-     `lastStateNotice()`, shown on ADVANCED). An incomplete preset is neither written nor
-     applied (`Presets::complete`).
+   - Unknown sections (owner decision 6814720707): sections of an unknown writer are kept
+     byte for byte and written back by every save. A state whose unknown sections would
+     not fit the 1 MiB container next to the product's largest own state (reserve
+     736 KiB; room 307,200 bytes including 16 per section) is **refused whole**: the live
+     instrument, its undo history and the next save are unchanged, and
+     `lastStateError()` says why (shown on ADVANCED as "Last rejected state"). A host
+     that restores such a project therefore keeps the plugin in its previous state.
+     Nothing is ever dropped (`SuiteProcessor.h`). An incomplete preset is neither
+     written nor applied (`Presets::complete`).
    - `PatternStore` normalises every published song (`SongData::normalise`): length, loop
      region inside the song, slot/variation/pattern bar, unique bars; what is saved always
      loads.
