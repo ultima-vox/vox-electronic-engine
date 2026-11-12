@@ -5,6 +5,32 @@ the CI artifact of the PR's final HEAD (check the SHA-256 in the artifact manife
 Record host version, sample rate, buffer size and the result of each line.
 **DRM-08 stays on HOLD until every line is accepted.**
 
+## Candidate and evidence index
+
+**Candidate:** the `VOX Drums.vst3` bundle in the `VOX-Suite-VST3` artifact of the
+`suite` workflow run on the final HEAD of PR 125. The PR description names that HEAD,
+the run, the artifact ID and its SHA-256; `manifest.txt` inside the artifact lists the
+SHA-256 of every file (a commit cannot name its own hash, so they are not repeated here).
+Install only that bundle; check `VOX Drums.vst3\Contents\x86_64-win\VOX Drums.vst3`
+against the manifest before testing.
+
+What automation already established for each section (so the manual pass can
+concentrate on what only a host and ears can show). Tests are in `tests/suite/`.
+
+| Section | Automated evidence | Left to the manual pass |
+|---|---|---|
+| A Load | Steinberg validator; `suite_vst3_host_tests`; `DrumsProductTests` state tests (older states load) | real host scan, a real DRM-04b project |
+| B Outputs | `DrumsCandidateTests` `testOutputs`: 9 buses, each alone, disabled bus on Main bit-identically, sparse layouts, oversized blocks | the host's own output activation and routing UI |
+| C Mixer | `testOutputs`: level, pan, mute, solo, meters, sends, returns, tails, All Sound Off; `testReviewFindings`: attack after unmute, no echo after All Sound Off, reported tail | how it sounds; host panic |
+| D Song | `DrumsKitEngineTests` `testSongScheduler`, `testSongLoopRegion`; `testSongParity`: 64 bars at 44.1/48/96 kHz x 64/333/512, tempo changes, seek, loop, stop, mode switch | host transport, cycle, tempo track |
+| E MIDI export | `testSongParity`, `testExport`: playback equals the file within 1 tick, click and drag byte-identical, End of Track at 16/32/64 bars | drop onto a host track; the host's import |
+| F Generator | `testGenerator`: seven distinct styles, every action changes data, locks, undo | whether the grooves are musically good |
+| G Presets | `testPresets`, `testReviewFindings`: kinds, Undo Load, malformed files, missing samples, portable kit, factory hashes | file dialogs; a second machine |
+| H State | `testState`, `testReviewFindings`: round trip, malformed sections, unknown sections kept or the restore refused, history ends at a restore | host project save/reopen, automation lanes, freeze |
+| I Editor | `testEditor`: eight pages, no overlap at min and large size, rendered at 100-200 %, bound controls, gestures | real window scaling, look |
+| J Performance | allocation probe (0 allocations); `suite_drums_callback_bench` table in the CI log and artifact | dropouts on the owner's machine and buffer |
+| K Sound | none | entirely manual |
+
 ## A. Load and identity
 - [ ] The plugin scans and loads as "VOX Drums" (instrument). No crash on insert, remove, duplicate track.
 - [ ] A project saved with the previous build (DRM-04b) opens: same sound, same patterns, Pattern mode, automation still attached.
