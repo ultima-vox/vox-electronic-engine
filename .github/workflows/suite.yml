@@ -108,6 +108,10 @@ jobs:
           if (Test-Path build-suite\vox-drums-callback-timing.csv) {
             Copy-Item -Force build-suite\vox-drums-callback-timing.csv suite-out\
             $lines += "Callback timing: vox-drums-callback-timing.csv (us; measured on $env:RUNNER_NAME)"
+            # The machine and the table, in the log and the manifest (evidence for the PR).
+            $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+            $lines += "Machine: $($cpu.Name.Trim()), $($cpu.NumberOfCores) cores / $($cpu.NumberOfLogicalProcessors) threads, $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)) GB RAM, $((Get-CimInstance Win32_OperatingSystem).Caption)"
+            $lines += Get-Content build-suite\vox-drums-callback-timing.csv
           }
           $lines | Set-Content suite-out\manifest.txt
           Get-Content suite-out\manifest.txt
