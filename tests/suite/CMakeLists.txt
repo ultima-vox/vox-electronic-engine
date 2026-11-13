@@ -120,6 +120,14 @@ endif()
 add_test(NAME suite_drums_candidate_tests
   COMMAND suite_drums_candidate_tests ${PROJECT_SOURCE_DIR}/products/drums/factory-content.csv)
 
+# Generator style fidelity (issue 128): rhythm grammar per style over a
+# settings matrix, audible roles on the factory kits, reproducibility.
+add_executable(suite_drums_generator_style_tests DrumsGeneratorStyleTests.cpp)
+target_link_libraries(suite_drums_generator_style_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_generator_style_tests PRIVATE ${juce_SOURCE_DIR}/modules)
+add_test(NAME suite_drums_generator_style_tests
+  COMMAND suite_drums_generator_style_tests ${CMAKE_BINARY_DIR}/vox-drums-generator-style-audit.md ${CMAKE_BINARY_DIR}/vox-drums-generator-midi)
+
 # Callback timing of a heavy scene (reports p50/p95/p99/p99.9/worst; does
 # not gate on the numbers).
 add_executable(suite_drums_callback_bench DrumsCallbackBench.cpp)

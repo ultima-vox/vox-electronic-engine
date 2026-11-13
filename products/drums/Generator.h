@@ -7,7 +7,10 @@
 //
 // Lane roles follow the pad layout of the default and factory kits: 1 kick,
 // 2 snare, 3 clap, 4 closed hat, 5 open hat, 6 tom, 7 rim, 8 cymbal, 9-16
-// percussion.
+// percussion. The styles write percussion only to lanes 9-10: on lanes 11-16
+// the factory kits hold other instruments (a clap, a snare, a kick).
+// Generation does not read the kit: on a user kit whose pads are arranged
+// differently, the rhythm is the style's but other instruments play it.
 //
 // Locks: a locked step (PatternStep::locked) and every step of a locked
 // lane (laneLocks) are left exactly as they are by every function here.
