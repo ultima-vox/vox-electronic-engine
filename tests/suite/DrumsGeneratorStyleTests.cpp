@@ -11,6 +11,11 @@
 //     a different core instrument (kick, snare, clap) than the lane's role must
 //     receive no hits. A user kit with swapped pads is reported, not asserted:
 //     the generator has no other role information than the pad model.
+// (d) Mutate Lanes: only the selected, unlocked lanes change; they get the
+//     selected style's lanes; locked steps and lanes, laneMask 0 and a
+//     fully locked kit are no-ops; equal input gives equal output.
+// (e) MIDI examples: written files are read back with juce::MidiFile and
+//     match the exported note list (ticks, notes, velocities, channel 10).
 // (c) Reproducibility: same settings + seed + input give the same pattern;
 //     a pattern's previous content (unlocked) does not change the result.
 //
@@ -20,6 +25,7 @@
 #include "Generator.h"
 #include "PatternExport.h"
 
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 
 #include <algorithm>
@@ -375,6 +381,107 @@ void testKitRoles()
 }
 
 // Listening examples: 3 seeds per style, 4 bars at 16 steps, factory note map.
+bool sameStep (const kit::PatternStep& a, const kit::PatternStep& b)
+{
+    return a.on == b.on && a.accent == b.accent && a.velocity == b.velocity && a.probability == b.probability
+        && a.ratchet == b.ratchet && a.micro == b.micro && a.locked == b.locked;
+}
+
+void testMutate()
+{
+    auto p = std::make_unique<StoredPattern>();
+    auto before = std::make_unique<StoredPattern>();
+    auto again = std::make_unique<StoredPattern>();
+    auto reference = std::make_unique<StoredPattern>();
+    const std::uint32_t masks[] = { 0u, 1u << closedHat, (1u << openHat) | (1u << perc1), (1u << kick) | (1u << snare), 0xffffu };
+    const std::uint16_t lockSets[] = { 0, static_cast<std::uint16_t> (1u << snare), 0xffff };
+    long cases = 0, wrong = 0;
+    std::string first;
+    for (int style = 0; style < styleCount; ++style)
+        for (std::uint32_t seed = 1; seed <= 6; ++seed)
+            for (std::uint32_t mask : masks)
+                for (std::uint16_t locks : lockSets)
+                {
+                    // A baseline in another style and seed, with two locked steps.
+                    GeneratorSettings g0;
+                    g0.style = static_cast<Style> ((style + 3) % styleCount);
+                    g0.seed = seed + 100u;
+                    p->cells.fill ({});
+                    p->resize (16, 4);
+                    generatePattern (g0, *p);
+                    p->cell (closedHat, 1, 3).on = true;
+                    p->cell (closedHat, 1, 3).locked = true;
+                    p->cell (kick, 2, 5).locked = true;
+                    GeneratorSettings g;
+                    g.style = static_cast<Style> (style);
+                    g.seed = seed;
+                    g.fills = 0.0f;
+                    g.laneLocks = locks;
+                    *before = *p;
+                    mutateLanes (g, mask, *p);
+                    *again = *before;
+                    mutateLanes (g, mask, *again);
+                    // The selected style's lanes: a fresh pattern with no fill and no locks.
+                    auto r = g;
+                    r.laneLocks = 0;
+                    reference->cells.fill ({});
+                    reference->resize (16, 4);
+                    generatePattern (r, *reference);
+                    ++cases;
+                    bool ok = *again == *p;
+                    for (int lane = 0; lane < kit::padCount; ++lane)
+                        for (int bar = 0; bar < p->bars; ++bar)
+                            for (int step = 0; step < p->steps; ++step)
+                            {
+                                const auto& now = p->cell (lane, bar, step);
+                                const auto& was = before->cell (lane, bar, step);
+                                const bool selected = (mask & (1u << lane)) != 0 && (locks & (1u << lane)) == 0;
+                                ok = ok && (selected && ! was.locked ? sameStep (now, reference->cell (lane, bar, step)) : sameStep (now, was));
+                            }
+                    if (! ok)
+                    {
+                        ++wrong;
+                        if (first.empty())
+                            first = std::string (styleName (g.style)) + " seed " + std::to_string (seed) + " mask " + std::to_string (mask) + " locks " + std::to_string (locks);
+                    }
+                }
+    check (wrong == 0, "generator: mutate lanes changes only the selected unlocked lanes, in the selected style, deterministically (" + std::to_string (wrong) + " of " + std::to_string (cases) + " wrong" + (first.empty() ? "" : ", first: " + first) + ")");
+    report << "Mutate Lanes: " << cases << " cases (7 styles x 6 seeds x masks {none, closed hat, open hat + perc 1, kick + snare, all} x locks {none, snare lane, all}), " << wrong << " wrong.\n\n";
+}
+
+// Exports a pattern, writes it, reads it back with juce::MidiFile and compares it with the note list.
+void checkMidiRoundTrip (const StoredPattern& p, const std::array<std::uint8_t, kit::padCount>& notes, double bpm, const juce::File& file, const std::string& name)
+{
+    kit::StepContext context;
+    ExportOptions options;
+    options.bpm = bpm;
+    const auto midi = exportMidi (p.view(), context, notes, options, name);
+    auto expected = exportNotes (p.view(), context, notes, options);
+    finishNotes (expected);
+    const bool written = midi.getSize() > 0 && file.replaceWithData (midi.getData(), midi.getSize());
+    juce::MidiFile parsed;
+    juce::FileInputStream in (file);
+    const bool read = written && in.openedOk() && parsed.readFrom (in) && parsed.getNumTracks() == 1 && parsed.getTimeFormat() == options.ticksPerQuarter;
+    std::vector<std::tuple<long long, int, int, int>> ons;
+    if (read)
+    {
+        const auto& track = *parsed.getTrack (0);
+        for (int i = 0; i < track.getNumEvents(); ++i)
+        {
+            const auto& m = track.getEventPointer (i)->message;
+            if (m.isNoteOn())
+                ons.emplace_back (std::llround (m.getTimeStamp()), m.getNoteNumber(), m.getVelocity(), m.getChannel());
+        }
+    }
+    bool same = read && ! expected.empty() && ons.size() == expected.size();
+    const long long end = static_cast<long long> (p.bars) * 4 * options.ticksPerQuarter;
+    for (std::size_t i = 0; same && i < ons.size(); ++i)
+        same = std::get<0> (ons[i]) == expected[i].tick && std::get<1> (ons[i]) == expected[i].note && std::get<2> (ons[i]) == expected[i].velocity
+            && std::get<3> (ons[i]) == 10 && expected[i].tick >= 0 && expected[i].tick < end;
+    check (same, "generator: MIDI example " + name + " is written, reads back as SMF and matches the exported notes ("
+                     + std::to_string (ons.size()) + " of " + std::to_string (expected.size()) + " notes)");
+}
+
 void writeMidiExamples (const juce::File& folder)
 {
     folder.createDirectory();
@@ -404,7 +511,8 @@ void writeMidiExamples (const juce::File& folder)
             ExportOptions options;
             options.bpm = bpm[style];
             const auto midi = exportMidi (p->view(), context, notes, options, juce::String (styleName (g.style)) + " seed " + juce::String (seed));
-            folder.getChildFile (juce::String (file[style]) + "-seed" + juce::String (seed) + ".mid").replaceWithData (midi.getData(), midi.getSize());
+            const auto out = folder.getChildFile (juce::String (file[style]) + "-seed" + juce::String (seed) + ".mid");
+            check (midi.getSize() > 0 && out.replaceWithData (midi.getData(), midi.getSize()), "generator: writes " + out.getFileName().toStdString());
         }
 }
 
@@ -460,6 +568,32 @@ int main (int argc, char** argv)
     testSongs();
     testFills();
     testKitRoles();
+    testMutate();
+    {
+        // Two examples round-trip through a file even without a report folder.
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-generator-" + juce::Uuid().toString());
+        folder.createDirectory();
+        const auto kitSettings = factoryKit (0);
+        std::array<std::uint8_t, kit::padCount> notes {};
+        for (int i = 0; i < kit::padCount; ++i)
+            notes[static_cast<std::size_t> (i)] = kitSettings.pads[static_cast<std::size_t> (i)].note;
+        auto p = std::make_unique<StoredPattern>();
+        for (const auto style : { Style::fullOn, Style::trap })
+        {
+            GeneratorSettings g;
+            g.style = style;
+            g.seed = 1;
+            g.density = 0.6f;
+            g.complexity = 0.5f;
+            g.syncopation = 0.4f;
+            p->cells.fill ({});
+            p->resize (16, 4);
+            generatePattern (g, *p);
+            checkMidiRoundTrip (*p, notes, 140.0, folder.getChildFile (juce::String (styleName (style)).retainCharacters ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") + ".mid"), styleName (style));
+        }
+        if (folder.getFileName().startsWith ("vox-drums-generator-"))
+            folder.deleteRecursively();
+    }
     for (const auto& [key, t] : tallies)
         check (t.violations == 0, "generator grammar: " + key + ": " + std::to_string (t.violations) + " violations"
                                       + (t.examples.empty() ? std::string() : " (first: " + t.examples.front() + ")"));

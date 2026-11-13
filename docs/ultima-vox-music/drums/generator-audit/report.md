@@ -81,6 +81,8 @@ Rows appear only where model and role differ and the lane receives hits.
 
 Psy Full-on kit with pad 1 = snare model and pad 2 = kick model; Full-on / Psy, seed 1, 4 bars: lane 1 gets 16 hits (the four-on-the-floor), lane 2 gets 2. The rhythm grammar (a) holds; the audible roles (b) do not: the snare model plays the kick pattern. The generator receives no kit information. The only role data in the state is the pad model; a user sample on a pad says nothing about its sound.
 
+Mutate Lanes: 630 cases (7 styles x 6 seeds x masks {none, closed hat, open hat + perc 1, kick + snare, all} x locks {none, snare lane, all}), 0 wrong.
+
 ## Listening examples
 
 `generator-audit/midi/<style>-seed<n>.mid`: 3 seeds per style, density 0.6, complexity 0.5, syncopation 0.4, fills 0.5, 16 steps x 4 bars, factory note map (36 kick, 38 snare, 39 clap, 42/46 hats, ...), channel 10, one pass. Tempo is written only for listening. Musical quality needs the owner's listening review.
