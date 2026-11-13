@@ -1,7 +1,9 @@
 # VOX Drums: semantic pad roles (option B) — Architecture Guard proposal
 
-Status: **design for Architecture Guard review; implementation follows after approval** in this
-Draft PR's branch. Task order: issue #127 comment 6863921664, priority 3. Decision: option B
+Status: **revision 2, after Architecture Guard review 6864585514** on PR #132. That review
+approved the direction and decided Q1, Q2, Q4 and Q5, and Q3 with conditions (§7). This revision
+specifies pad-preset mapping (P1), selected-lane-only Mutate (P1) and the model-role preview
+(P2). Implementation still waits for re-review, in this Draft PR's branch. Task order: issue #127 comment 6863921664, priority 3. Decision: option B
 (PR #129 review, issue #128).
 
 Baseline: `drm/production-candidate` @ `c7c29bbbd6101dfb5e0cb2418a071d11caeb15b2`.
@@ -66,17 +68,37 @@ The section is always 21 bytes.
     That is acceptable; nothing else changes.
 - **Factory kits:** no `DROL` in the factory tables, so the identity roles apply. The manifest
   and hashes are unchanged (C2).
-- **Presets:** kit presets copy `DROL`. A pad preset carries the same 21-byte `DROL`. On load
-  only the entry of the preset's source pad (its `PresetInfo.source`) is used, and it goes to the
-  target pad. **Alternative for review:** pad presets do not carry roles (§7 Q3).
-- `productStateReserve()` +64 bytes.
+- **Kit presets** replace the whole kit, so they replace the roles.
+  - **With `DROL`:** the roles become the preset's roles.
+  - **Without `DROL`** (legacy, factory): the roles become the identity, because a legacy kit
+    *is* the default layout. When this replaces explicit roles, the Library status line says
+    "Roles set to the default layout of this kit".
+  - **Undo Load** restores the previous roles with the previous kit.
+- **Pad presets** (source pad N in the preset, loaded into target pad M):
+  - **Without `DROL`** (legacy): the **target pad keeps its role**.
+  - **With `DROL`:** loading still keeps the target's role. Only entry N is read. If it differs
+    from M's role, the Inspector shows "Preset role: Kick — Apply". The role changes only on
+    that explicit click, which is undoable. Other pads' roles are never read or changed.
+  - **Saving** a pad preset writes `DROL` only when the kit has explicit roles. Entry N holds
+    the pad's role; the other 15 entries are none and ignored on load.
+- **Written only when explicit.** `DROL` is saved only after the user has set roles
+  (explicit = 1). A project or preset that never had explicit roles saves without `DROL`, so
+  existing projects and presets round-trip with the same sections as today.
+- **Budget:** no change to `productStateReserve()`. 37 bytes fit the existing headroom; this
+  is checked by boundary fixture T21 in the DUIS contract (PR #130).
 
 ### 3.3 Defaults and the explicit action
 
 - **Identity roles** (default and factory): lanes 1–8 take roles 1–8; lanes 9–16 take
   percussion.
-- **"Set roles from pad models"** is an explicit user action in the Inspector or Sound Editor
-  role menu. Never automatic. It maps models as follows:
+- **"Set roles from pad models…"** is an explicit user action in the Inspector or Sound Editor
+  role menu. Never automatic, and never on load.
+  - It opens a **preview**: 16 rows with pad, model, note, current role and proposed role.
+  - Rows that need a decision are marked "?" and must be chosen before **Apply**. Nothing is
+    written until Apply; Cancel changes nothing.
+  - Apply is one undoable edit.
+
+  Proposed roles by model:
 
   | Model | Role |
   |---|---|
@@ -89,9 +111,13 @@ The section is always 21 bytes.
   | perc | percussion |
   | hat | closed or open hat (see below) |
 
-  For each hat-model pad: note 42 or 44 → closed hat, note 46 → open hat. If the notes do not
-  decide, the shorter decay is closed and the longer one open. If it is still ambiguous, the
-  role is "closed hat" and the UI flags it.
+  For each hat-model pad, the closed/open proposal is only a hint shown in the preview:
+  - note 42 or 44 → closed hat;
+  - note 46 → open hat;
+  - otherwise, the shorter decay is closed and the longer one open.
+
+  If two hat pads still tie, or a custom sample could make the proposal wrong, the row is "?"
+  and the user must choose. A role is **never silently rewritten**.
 - **Undo:** setting a role is an undoable kit edit.
 - **Pad moves:** if a future feature moves a pad, its role moves with it.
 
@@ -104,19 +130,27 @@ The section is always 21 bytes.
   - With identity roles the map is the identity, and the output is byte-identical (tested).
 - **Writes.** The style rules (`styleHit`, `fillLane`, variation decor mask, fill thinning,
   song break-slot kick removal) work on role slots. Results are written to the mapped lanes.
-- **Lanes that receive nothing:** a lane whose role is none, or a second pad with an
-  already-filled role, keeps today's behaviour for an unused lane: it is **cleared unless
-  locked**.
-  - **Alternative for review:** leave such lanes untouched (§7 Q2). This differs from today, so
-    it is not the default.
+- **Full generation (Generate Pattern, Variation, Song):** the result is built in a scratch
+  pattern S.
+  - Mapped lanes get their role's content.
+  - Lanes with role none, or the second pad of a duplicate role, get nothing.
+  - Every unlocked cell of every lane takes S (unmapped lanes are therefore **cleared**,
+    decision Q2).
+  - Locked steps and locked lanes are kept.
 - **Missing role:** a style needs a role (e.g. closed hat) that no pad has. Those hits are not
   written. The Generator panel lists "No closed-hat pad: hats not generated". No substitution.
 - **Duplicate role:** two pads with the same core role. The first is used, and the panel lists
   "Two kick pads: pad 1 used".
 - **Unchanged:**
   - Locks: lane locks and step locks stay lane-based (C5).
-  - `mutateLanes`: the mask selects lanes, and the selected lanes are regenerated with the
-    role their pad has.
+  - **Mutate Lanes (physical lanes only, decision Q2/P1):**
+    - The mask M is the set of **physical lanes** the user selected. It is never translated
+      through the default layout.
+    - S is built exactly as for full generation, from the current roles.
+    - Then, for each lane L in M only, every unlocked cell of L takes S's lane L. A selected
+      lane whose role is none or a duplicate is therefore cleared, unless locked.
+    - Lanes not in M are **not touched**, even when they are the mapped lane of a role.
+    - M = 0 changes nothing.
   - Formats: `DGEN`, pattern and song formats, MIDI export, scheduler, host parameters.
   - Real-time path: no audio-thread change.
 
@@ -155,23 +189,35 @@ The section is always 21 bytes.
     are unchanged.
   - **R8** Duplicate kick role: the first pad is used and the notice is present.
   - **R9** Percussion ordinals follow pad order.
-  - **R10** A role of none: the lane is cleared unless locked (or untouched, per Q2).
+  - **R10** Full generation: lanes with role none or duplicate are cleared, except locked cells.
 - **Locks and actions:**
   - **R11** Lane and step locks with remapped roles: locked cells unchanged.
-  - **R12** Mutate Lanes with remapped roles: only the selected lanes change.
+  - **R12** Mutate Lanes, all 7 styles. Role sets: reordered, duplicate, missing, with none
+    roles, and identity. Masks: 0, one lane, two lanes, all. Two locked steps. Checks: every
+    unselected lane is byte-identical; selected lanes equal S except locked cells; mask 0 is a
+    no-op; deterministic. Plus a negative test showing that the default-layout mask is never
+    used (selecting physical lane 1 when kick is on pad 2 changes only lane 1).
   - **R13** Fill, Variation and Song (break slot) use the mapped kick lane.
 - **Determinism and parity:**
   - **R14** The same roles, settings and seed give the same output.
   - **R15** MIDI export parity of a remapped pattern (notes come from the pads' notes,
     unchanged).
 - **Presets and old builds:**
-  - **R16** A kit preset carries roles. A pad preset follows Q3. Presets without `DROL` load
-    identity roles.
+  - **R16a** A kit preset with `DROL` replaces the roles. A legacy kit preset sets identity roles
+    and shows the notice. Undo Load restores the previous roles.
+  - **R16b** A legacy pad preset (no `DROL`) loaded from source N into target M ≠ N: M keeps its
+    role, and no other role changes.
+  - **R16c** A modern pad preset from N into M: M keeps its role on load. The "Apply" offer
+    appears when the roles differ. Apply sets only M; undo and redo restore and reapply it.
+  - **R16d** A project without explicit roles saves without `DROL`: the same section set as
+    today. Factory manifest hashes are unchanged.
   - **R17** A project written by the new build and decoded with the `c7c29bb` rules: accepted,
     `DROL` kept as unknown.
 - **Set roles from pad models:**
-  - **R18** Each factory kit gives roles consistent with its models.
-  - **R19** Hat notes 42/46, then decay, then ambiguity flagged.
+  - **R18** The preview proposes, for each factory kit, roles consistent with its models.
+    Nothing is written before Apply; Cancel is a no-op.
+  - **R19** Hat proposals by note 42/44/46, then decay. A tie or doubt is marked "?" and blocks
+    Apply until chosen. Apply is one undo step.
 
 ## 6. What this does not do
 
@@ -180,11 +226,15 @@ The section is always 21 bytes.
 - It does not change the Ambient fix in #129, styles, rhythms, `DGEN` or presets beyond `DROL`.
 - It does not auto-remap existing projects. Identity holds until the user sets roles.
 
-## 7. Decisions requested from Architecture Guard
+## 7. Architecture Guard decisions (review 6864585514)
 
-1. **Q1** New section `DROL` v1 instead of `DPAD` v3 (C1, C2).
-2. **Q2** A lane with role none (or a duplicate): cleared, as today, or left untouched.
-3. **Q3** Pad presets carry the pad's role, or not.
-4. **Q4** "Set roles from pad models" as an explicit action only; never automatic on load.
-5. **Q5** Strict decode for `DROL` (reject the restore on a malformed section), like the other
-   musical sections.
+1. **Q1** `DROL` v1 instead of `DPAD` v3 — **approved**.
+2. **Q2** Full generation clears unlocked unmapped or duplicate-role lanes and keeps locked cells
+   — **approved**. Mutate Lanes touches only the selected physical lanes (§3.4).
+3. **Q3** Pad presets carry the role — **approved with conditions**, now specified in §3.2:
+   the target keeps its role; Apply is explicit; legacy presets keep the target role.
+4. **Q4** Model-based roles are an explicit action only — **approved**. Now a preview with
+   confirmation (§3.3).
+5. **Q5** Strict decode — **approved**.
+
+Requested: re-review of this revision before implementation starts.
