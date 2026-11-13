@@ -153,7 +153,8 @@ Hit styleHit (const Context& c, int lane, int pos) noexcept
             if (lane == rim && (pos == 4 || pos == 12)) ghost (0.2 + 0.5 * d, 0.45f);
             if (lane == closedHat && pos % 4 == 2) ghost (0.15 + 0.6 * d, 0.35f);
             if (lane == cymbal && pos == 0 && c.bar % 2 == 0) ghost (0.3 + 0.4 * d, 0.5f);
-            if (lane >= perc1 && lane <= perc4 && pos % 2 == (lane % 2)) ghost (0.04 + 0.2 * d + 0.1 * sy, 0.4f, lane);
+            // Percussion only on lanes 9-10: the factory kits put a clap, snare or kick on 11-12 (issue 128).
+            if ((lane == perc1 || lane == perc2) && pos % 2 == (lane % 2)) ghost (0.04 + 0.2 * d + 0.1 * sy, 0.4f, lane);
             if (h.on && lane != kick)
                 h.probability = std::clamp (static_cast<int> (std::lround (90.0 - 50.0 * cx)), 30, 100);
             break;
