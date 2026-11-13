@@ -1,6 +1,8 @@
-# VOX Drums UI/UX v3 — Gate 1 visual proposal
+# VOX Drums UI/UX v3 — Gate 1 visual proposal (revision 3.1)
 
-Status: **proposal for owner visual sign-off** (issue #127, spec v3, section 7 Gate 1).
+Status: **v3 concept approved with targeted visual changes** (owner decision on issue #127,
+2026-11-13). This revision applies those changes for **final visual sign-off**; native JUCE
+implementation stays on HOLD until then (spec v3, section 7 Gate 1).
 Architecture is the approved spec v3; this folder proposes only the visual language,
 the control migration and the interaction details. No C++ is changed. PR #125 and its
 Gate B are not touched. Native JUCE implementation starts only after sign-off, in a
@@ -10,12 +12,49 @@ Base: `drm/production-candidate` @ `c7c29bbbd6101dfb5e0cb2418a071d11caeb15b2`.
 Data in the renders comes from that commit: pad names/notes, factory kit names,
 parameter defaults (`products/drums/parameters.csv`), choice lists, generator settings.
 
+## 0. Change log 3.1 (against `843ed0f`)
+
+Architecture, palette, panels and workspace presets are unchanged. Changes:
+
+1. **One tactile control system** for every live control: matte knob bodies on a recessed
+   bezel with a separate value arc and a light pointer; level faders with a recessed slot,
+   intensity fill and metal cap; raised buttons/toggles with pressed (inset) state and lit
+   LED for "on"; recessed meters; rubber pads. Normal, hover, keyboard focus, pressed,
+   active and disabled states are defined for each (`08-tokens-components.png`). Material
+   tokens are shared, for Drums, Synth and FX (§5).
+2. **Pad Rack Grid**: 16 equal square rubber pads (≥ 80 px; below that the zone uses List).
+   Top strip = number and note (select without sound); strike surface = audition; name
+   centred; M/S compact and uniform; measured peak bar on the right edge; selected (white
+   ring outside the pad), muted, solo, missing and OVER states keep the geometry. Routing
+   details moved out of the pad (Inspector, List, Mixer).
+3. **Intensity scales**: amount controls (level, velocity, drive, sends, feedback, …) use
+   a green → yellow → orange → red arc; value controls (cutoff, decay, tone, size, …) a
+   neutral steel arc with units; bipolar controls (pan, tune, transient, microtiming) a steel
+   arc from the centre detent. Velocity lane bars use the amount scale.
+4. **Overload is separate from every gradient**: measured meters (green/yellow/orange,
+   no red), a −1 dB near-threshold lamp, a latched **OVER** lamp for pad post-fader peaks
+   ≥ 0 dBFS and a latched **CLIP** lamp for the plugin's Main output, with Reset peaks. What
+   each indicator measures is listed in §6.
+5. **Mixer viewport**: all 16 strips only when each gets its minimum width (Compact 80 px,
+   Expanded 108 px); otherwise a bank of 8 (1–8 / 9–16); below 8 a horizontal scroll.
+   1600 px Compact shows 16; 1440 px shows a bank of 8. Mixer M/S hit areas are ≥ 32 × 32 px.
+6. **Hit targets**: ≥ 32 px for regularly used controls; dense step grid and pad M/S are the
+   documented exceptions with keyboard and alternative-panel equivalents (§5). Lane M/S
+   buttons removed from the step lane headers (Pad Rack, Mixer and Inspector keep them).
+7. **Parameter-lane rule fixed** (was contradictory): by Step editor height — 2 lanes at
+   ≥ 560 px, 1 at 420–559 px, hidden below 420 px. 1040×700 (608 px) shows 2; 1280×720
+   (508 px) shows 1; Mixing (398 px) shows none.
+8. **Legibility**: labels and values 12 px, captions 11 px, 10 px only inside lamps;
+   `screens/01-beatmaking@1x.png` is a 100 % render.
+9. Beatmaking: left zone 392 px (Pad Rack Grid with Library stacked below), right zone
+   280 px, Mixer Compact 184 px. Sound Design: left 380 px, right 250 px.
+
 ## 1. Deliverables
 
 | Gate 1 item (spec v3 §7) | File |
 |---|---|
 | 1. Default docking zones and responsive degradation | `screens/00-docking-schematic.png`, `screens/06-beatmaking-{1040x700,1280x720,1600x1000}.png` |
-| 2. Beatmaking (Step + dock mixer) | `screens/01-beatmaking.png` |
+| 2. Beatmaking (Step + dock mixer) | `screens/01-beatmaking.png`, 100 % view `screens/01-beatmaking@1x.png` |
 | 2. Composition (Song + Step) | `screens/02-composition.png` |
 | 2. Sound Design (Pad Rack + Full Sound Editor) | `screens/03-sound-design.png` |
 | 2. Expanded Mixer with FX | `screens/04-mixing.png` |
@@ -23,19 +62,21 @@ parameter defaults (`products/drums/parameters.csv`), choice lists, generator se
 | 3. Control migration inventory and interactions | this README §3–§4, `screens/07-states.png` |
 | 3. Key states: pinned Inspector, 3 Mixer states, split editors, dock-target previews | `screens/07-states.png` |
 | 4. Design tokens and component behavior | `screens/08-tokens-components.png`, §5 |
-| 4. Feasibility / compatibility checklist | §7 |
+| 4. Feasibility / compatibility checklist, telemetry and overload | §6, §8 |
 
 Regenerate: `cd source && python3 gen.py && python3 sheets.py && node shot.js`
 (Playwright + Chromium; output in `source/html` and `source/png`).
 
 ## 2. Visual decision in one paragraph
 
-Dark, flat workstation using the family surface tokens of `libs/vox-ui/Tokens.h`.
+Dark workstation using the family surface tokens of `libs/vox-ui/Tokens.h`, with
+restrained hardware-like controls (matte bodies, subtle bevel, recessed tracks, one light
+direction from the top left; no gloss, no decorative 3D, no animation beyond hit flashes).
 Panels sit on a dark gutter with 6 px gaps and a 30 px header (grip, title or tabs,
 actions). Two accent roles only: **cyan** = focus, activity, host transport, active
 toggles, playhead, loop; **copper** (Drums accent) = the primary musical action of a
 panel (Drag MIDI, Generate Pattern, Load) and the selected tab/segment underline.
-Pad identity colours appear only as a thin bar, step fill and meter. Sound shaping,
+Pad identity colours appear only as a thin bar, LED and step fill. Sound shaping,
 Pan and sends are 270° rotary knobs with label above and value below; levels are
 vertical faders with meters; sample range uses graphical handles on the waveform.
 Every state that matters (selected, muted, missing, disabled, fallback routing,
@@ -78,7 +119,7 @@ navigation with no state.
 | Source (Synth / Sample / Layer), Players (A only / Velocity A/B / A + B) | DPAD | Sound Editor: 1 · Source |
 | Player A / B, Start, End, Sample level, Split, Loop, Reverse, Normalize | DPAD / DSMP | Sample Editor (central); Start/End as waveform handles with numeric values |
 | Load, Clear, Library (copy into library) | sample store | Sample Editor toolbar: Load…, Copy to library, Clear; audio file drop on a pad or the Sample Editor |
-| Mute | `drm.pNN.mute` | Pad Rack, Step lane, Mixer, Inspector (same parameter) |
+| Mute | `drm.pNN.mute` | Pad Rack (Grid and List), Mixer, Inspector (same parameter); Step lane header shows "muted" |
 | Send 1 / Send 2 | `drm.pNN.send1/send2` | Sound Editor: 4 · Output (Delay send, Reverb send); Mixer Expanded |
 | Output (Main, Out 2…9) | DPAD output | Sound Editor: Output; Routing matrix; Mixer Expanded strip footer |
 
@@ -95,7 +136,7 @@ navigation with no state.
 | MIDI button (click: save; drag: DAW) | PatternExport | Step Sequencer: **Drag MIDI** handle (drag only) + ▾ **Save MIDI file…** (existing save code kept) |
 | Velocity, Chance, Ratchet, Micro, Accent (selected step) | DSEQ step | Inspector (selection) and Parameter Lanes under the step ruler |
 | Step lock | DSEQ step `locked` | Inspector: Lock; lock mark on the step cell |
-| Lane on/off | `drm.seq.lane.pNN` | Step Sequencer lane header: lane dot |
+| Lane on/off | `drm.seq.lane.pNN` | Step Sequencer lane header: lane LED |
 | Song on/off | DSNG | Top chrome: Pattern / Song |
 | Song length 16/32/64 | DSNG | Song Arranger toolbar |
 | Slot P1–P5, A/B, Place | DSNG | Song Arranger toolbar |
@@ -153,8 +194,11 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
 ### Selection and audition
 - One selected pad, step set and song bar (UI state). Pad Rack, Step lanes, Mixer
   strip and Sound Editor highlight the same pad.
-- Click on a pad body selects without sound. Audition: ▶ corner of the tile or Enter
-  while the Pad Rack has focus. Hit flash shows playback, independent of selection.
+- Pad Rack Grid: clicking the pad's top strip (number, note) selects without sound;
+  striking the pad surface auditions it (velocity 100, Shift = 127) and selects it; Enter
+  auditions the focused pad. List, step lanes and mixer strips select without sound.
+- Hit flash shows playback independently of selection: glow and top LED follow the hit
+  velocity once velocity telemetry exists (§6); until then a fixed-brightness flash.
 - Step: click toggles; drag paints; Shift-drag selects a range; Ctrl/Cmd-click adds.
   Selected steps get a white outline; the Inspector shows them.
 
@@ -171,8 +215,9 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
 - Toolbar: BAR, Bar ▾ (Duplicate to next bar, Clear bar, New seed), steps, bars, A/B,
   A ⇄ B, A → B, Swing, Accent, Drag MIDI.
 - Parameter lanes (Velocity, Chance, Ratchet, Microtiming) sit under the same ruler
-  and scroll/zoom with the grid. Each lane has a selector; 2 lanes at ≥ 860 px window
-  height, 1 below. Drag a bar to set a value; drag across bars to draw; double-click =
+  and scroll/zoom with the grid. Each lane has a selector. Number of lanes by Step editor
+  height: 2 at ≥ 560 px, 1 at 420–559 px, hidden below 420 px (selector stays in the
+  toolbar). Velocity bars use the amount colour scale. Drag a bar to set a value; drag across bars to draw; double-click =
   default. Edits apply to the current lane's steps (or the selection when one exists).
 - Mass edits that are not supported are shown disabled with the reason.
 
@@ -187,7 +232,7 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
 - ▾ → Save MIDI file… keeps the existing save path as a separate command.
 - After a drag the handle says "Dragged · P2 A" for 3 s. The plugin cannot see whether
   the host accepted the drop, so no success is claimed.
-- The Cubase failure reported at Gate B is not explained yet; see §7.
+- The Cubase failure reported at Gate B is not explained yet; see §8.
 
 ### Docking
 - Drag a panel header: valid targets highlight in cyan (zone = tab, editor half =
@@ -196,7 +241,9 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
   = 50/50. Maximize (⤢ or header double-click) folds side zones to rails and the Mixer
   to Collapsed; Restore returns the previous layout exactly.
 - Mixer: state switch in its header; drag its top edge for a custom height within the
-  state's range; never overlays the work area.
+  state's range; never overlays the work area. Strips: all 16 when each gets its minimum
+  width (Compact 80 px, Expanded 108 px), else a bank of 8 (1–8 / 9–16), else horizontal
+  scroll; FX returns and Main stay visible. "Reset peaks" clears OVER and CLIP latches.
 
 ### Keyboard and focus
 - The editor handles a key only when one of its components has keyboard focus; every
@@ -211,20 +258,54 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
 ## 5. Tokens and components
 
 - Surfaces and text: family tokens from `libs/vox-ui/Tokens.h`, unchanged.
-- Proposed Drums semantic layer (no hard-coded product colours in panels):
-  `accent.primary` = copper `#EF805D`, `accent.focus` = cyan `#00DDF5`,
-  `state.danger` (fills `#E4425D`, text `#FF8FA0`), `state.ok`, `state.warning`,
-  `pad.1…pad.16`.
-- Contrast on panel `#0B1925`: family textMuted `#587487` = 3.6:1 (too low for 10–11 px
-  text). Proposal: `#6F8A9D` (4.9:1). This is a family token; changing it affects every
-  VOX product, so it needs the design-system owner, otherwise a Drums-local token.
-- Components and states (default, hover, pressed, focused, disabled, primary, danger,
-  on; knob default/hover/drag/bipolar/disabled; fader + meter with peak; step cell
-  states; panel header normal/focused/pinned) are on `08-tokens-components.png`.
+- Shared semantic roles, opt-in through `libs/vox-ui` (no global change to other products,
+  no hard-coded product colours in panels): `accent.product` (Drums = copper `#EF805D`),
+  `accent.focus` (cyan `#00DDF5`), `text.secondaryAccessible` (`#6F8A9D`, 4.9:1 on panel;
+  the family `textMuted` `#587487` is 3.6:1), `state.danger` (fills `#E4425D`, text
+  `#FF8FA0`), `state.ok`, `state.warning`, `pad.1…pad.16`, `scale.amount` (gradient
+  stops), `scale.steel` (`#9CC3DA`), `lamp.hot/over/clip`.
+- Tactile material tokens (`control.body`, `control.bezel`, `control.edge`,
+  `control.shadow`, `control.pointer`, `cap.metal`, `slot.recess`, `raised.surface`,
+  `pad.rubber`) are listed with values on `08-tokens-components.png`. They are drawn with
+  JUCE paths and gradients, not bitmaps, so states, focus and automation repaint at any
+  scale on the message thread.
 - Knob: vertical drag, Shift = fine, double-click = default, wheel = one step; host
-  automation moves it live; gestures begin/end around a drag for correct automation.
+  automation moves it live; gesture begin/end around each drag.
+- Hit targets: ≥ 32 × 32 px for buttons, toggles, dropdowns and segmented controls; knob
+  hit area = knob + label + value block; fader hit area = whole strip column; Mixer M/S
+  ≥ 32 × 32. Exceptions: step cells (≥ 20 px high; keyboard: arrows, Enter toggles, +/−
+  velocity while the grid has focus) and pad M/S (24 × 20 visual, 28 × 26 hit; the same
+  actions are in List, Mixer, Inspector and as M/S keys on the focused pad).
 
-## 6. Layout persistence (proposal; needs Architecture Guard review in Gate 2)
+## 6. Telemetry, meters and overload (Gate 2 feasibility)
+
+Verified in PR #125 at `c7c29bb`: `Processor::takeHitMask()` returns a bitmask (no
+velocity); `takePadMeter(pad)` (post-fader pad peak) and `takeMainMeter(ch)` (Main after
+FX returns) read with `exchange(0)`, so a second reader would see zero. There is no
+limiter or clipper on the outputs (only the Kick drive `tanh`, a sound feature). Out 2–9
+have no meters of their own.
+
+- **One UI telemetry coordinator** (message thread, ~30 Hz timer) drains hit mask and
+  meters once per frame and publishes an immutable snapshot to Pad Rack, Mixer,
+  Inspector and Sound Editor. No panel calls `take*()` itself. Peak hold and OVER/CLIP
+  latches live in the coordinator.
+- **Velocity for pad glow**: proposed minimal addition — 16 lock-free per-pad
+  `std::atomic<uint8_t>` holding the highest velocity triggered in the block (written where
+  the hit bit is set: host MIDI, internal pattern/song and audition paths), drained by the
+  coordinator. Audio output and timing stay bit-identical; needs Architecture Guard review
+  and a test. Until it exists, the flash has fixed brightness and no velocity is claimed.
+- **OVER** (pad/strip): pad post-fader peak ≥ 0 dBFS. Means internal float headroom was
+  used, not output clipping. Latched until Reset peaks.
+- **−1 dB / CLIP** (Main): −1 dB when the Main peak ≥ −1 dBFS (not latched); CLIP when a
+  Main sample reaches |x| ≥ 1.0 at the plugin output, before the host (latched). The host
+  mixes in floating point and may not clip; a fixed-point stage or file export would.
+  Tooltip text says this.
+- **Out 2–9**: a strip routed to Out n shows its pad meter. Per-bus meters would need
+  read-only taps on the bus buffers in `processBlock` (bounded, no allocation); proposed
+  for Gate 2 only if the owner wants bus meters, with tests. Nothing changes the sound.
+- No compressor or gain-reduction display: the product has no compressor.
+
+## 7. Layout persistence (proposal; needs Architecture Guard review in Gate 2)
 
 - The layout is UI-only state: zones, tabs, split direction and ratio, maximized
   editor, Mixer state and height, Pad Rack view, parameter lanes, Inspector pin.
@@ -242,7 +323,7 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
 - Required before merge: round-trip, old-project load, unknown-section and
   project-portability tests (spec v3 §5).
 
-## 7. Feasibility and compatibility checklist
+## 8. Feasibility and compatibility checklist
 
 | Item | Status |
 |---|---|
@@ -254,15 +335,17 @@ maximize, Mixer state, Workspace and Panels menus) that the spec requires.
 | Host parameters | 174 IDs, order, ranges, automation unchanged; controls only rebind. |
 | DSP, buses, ABI, preset/pattern/song formats | Unchanged. 9 stereo host buses unchanged. |
 | State | Only DUIS (UI section) changes, additively, with migration tests; unknown-section policy unchanged. |
-| Realtime | Meters, hit flash and playhead read lock-free snapshots on a ~30 Hz UI timer; no allocation, locks or I/O added to the audio callback. |
+| Realtime | One telemetry coordinator reads hit/meter atomics once per UI frame (§6); no allocation, locks or I/O added to the audio callback. Velocity telemetry = 16 relaxed atomic stores per block at most. |
+| Tactile controls | JUCE `Path`/`ColourGradient` drawing, cached per size/state; no bitmaps; repaint only on value or state change. |
+| Overload indication | Real for pad post-fader and Main (existing taps). Out 2–9 meters need new read-only taps (Gate 2, optional). |
 | Minimum size | 1040×700 works (one editor, rails, Mixer collapsed). Host resize limited to it. |
 | DPI | Layout in logical px; JUCE scale factor from the host. 125/150/200 % evidence is a Gate 2/3 deliverable. |
 | Keyboard | No global key capture; unhandled keys pass to the host. |
 | Font | Renders use Inter; JUCE uses the platform font (Segoe UI on Windows). Metrics differ slightly; layout keeps slack. |
-| Family tokens | Copper accent and muted-text change need the design-system owner (shared `libs/vox-ui`). |
+| Family tokens | Resolved by the tech lead: opt-in shared semantic roles in `libs/vox-ui`; family surfaces unchanged (§5). |
 | Generator genre fidelity | Functional work in issue #128; the UI only shows the real style setting and target. |
 
-## 8. Limits of this proposal
+## 9. Limits of this proposal
 
 - Renders are HTML/Chromium at 2× of the logical size, not JUCE output; no host was
   used. Values shown are factory defaults or illustrative pattern data.

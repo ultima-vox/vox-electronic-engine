@@ -11,7 +11,7 @@ SHEET_CSS = """
 .sheet .sub{color:#6F8A9D;margin-bottom:6px}
 .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
 .card{display:flex;flex-direction:column;gap:6px}
-.card .cv{position:relative;background:#040C14;border-radius:6px;overflow:hidden}
+.card .cv{position:relative;background:#040C14;border-radius:6px;overflow:hidden;line-height:1.3}
 .card .cl{font-size:12px;color:#E9F3FA;font-weight:600}.card .cd{font-size:11.5px;color:#9AB2C5;max-width:var(--cw)}
 table.t{border-collapse:collapse;font-size:12px;width:100%}
 table.t th,table.t td{border:1px solid #122C3D;padding:5px 8px;text-align:left;vertical-align:top}
@@ -69,11 +69,11 @@ def zone_map(W, H, scale, lw, rw, mix, rails=False, split=True, label=True):
         out.append(f'<div class="z" style="left:{right_x:.0f}px;top:{top:.0f}px;width:{rw*s:.0f}px;height:{ah:.0f}px">'
                    + (f'<b>Right side zone</b><i>{rw} px</i><br><i>Inspector · Generator · Routing · Settings</i>' if label else f'<i>R {rw}</i>') + '</div>')
     out.append(f'<div class="z m" style="left:{G2:.0f}px;top:{bottom+G2:.0f}px;width:{W*s-2*G2:.0f}px;height:{mix*s:.0f}px;flex-direction:row;gap:8px">'
-               + (f'<b>Mixer dock (bottom only)</b><i>{mix} px · Collapsed 30 / Compact 120–200 / Expanded 300–460 · resize by the top edge</i>' if label else (f'<i>Mixer {mix}</i>' if mix * s >= 14 else '')) + '</div>')
+               + (f'<b>Mixer dock (bottom only)</b><i>{mix} px · Collapsed 30 / Compact 150–200 / Expanded 300–460 · resize by the top edge</i>' if label else (f'<i>Mixer {mix}</i>' if mix * s >= 14 else '')) + '</div>')
     return "".join(out)
 
 def schematic():
-    big = card(1060, 663, zone_map(1440, 900, 1060 / 1440, 300, 290, 168), "Default zones at 1440×900 (Beatmaking)",
+    big = card(1060, 663, zone_map(1440, 900, 1060 / 1440, 392, 280, 184), "Default zones at 1440×900 (Beatmaking)",
                "Side zones hold side panels only, as dock tabs (one visible per zone). The central zone holds 1–2 editors. The Mixer has exactly one place: the bottom dock. Nothing floats over the work area.")
     rules = '''<div class="card" style="--cw:330px;width:330px"><div class="cl">Docking rules</div><ol class="ol">
 <li><b>Side panels</b> (Pad Rack, Library, Inspector, Generator, Routing, Settings) dock into the left or right zone, as a tab or as a stacked section. Never into the central zone.</li>
@@ -83,26 +83,26 @@ def schematic():
 <li>Drag a header → valid targets light up (cyan); invalid targets do not. Esc cancels. Dropping elsewhere changes nothing.</li>
 <li>Each panel exists once. Opening a hidden panel from <b>Panels</b> restores it to its last zone.</li>
 <li>Undo (chrome) covers project edits only; layout changes are not part of the project undo history. <b>Reset Workspace</b> restores the preset.</li></ol></div>'''
-    mats = [("1600×1000", zone_map(1600, 1000, .2, 300, 290, 200, label=False, split=False)),
-            ("1440×900", zone_map(1440, 900, .2, 300, 290, 168, label=False, split=False)),
-            ("1280×720", zone_map(1280, 720, .2, 250, 250, 138, label=False, split=False)),
+    mats = [("1600×1000", zone_map(1600, 1000, .2, 392, 280, 184, label=False, split=False)),
+            ("1440×900", zone_map(1440, 900, .2, 392, 280, 184, label=False, split=False)),
+            ("1280×720", zone_map(1280, 720, .2, 250, 250, 150, label=False, split=False)),
             ("1040×700", zone_map(1040, 700, .2, 196, 0, 30, rails=True, label=False, split=False))]
     thumbs = '<div class="row">' + "".join(card(int(W * .2), int(H * .2), m, n) for n, m, W, H in
                                           [(n, m, int(n.split("×")[0]), int(n.split("×")[1])) for n, m in mats]) + '</div>'
     table = '''<table class="t"><tr><th>Window</th><th>Left zone</th><th>Right zone</th><th>Central</th><th>Mixer default</th><th>Pad Rack</th><th>Step lanes</th><th>Parameter lanes</th></tr>
-<tr><td class="k">≥ 1400 × ≥ 860<br>(1600×1000, 1440×900)</td><td>300 px</td><td>290 px</td><td>≥ 786 px, 1–2 editors</td><td>Compact 168–200</td><td>Grid 4×4</td><td>16; full names when the editor is ≥ 900 px wide (1600), short names below (1440)</td><td>2</td></tr>
-<tr><td class="k">1240–1399 × 720–859<br>(1280×720)</td><td>250 px</td><td>250 px</td><td>≥ 716 px; second editor as tab if &lt; 2 × min height</td><td>Compact 138–150</td><td>List, full names</td><td>16, short names</td><td>1 (selector switches)</td></tr>
-<tr><td class="k">1040–1239 × 700–719<br>(1040×700, minimum)</td><td colspan="2">Both zones become rails (34 px). One side panel open at a time, docked at its minimum width (left 196 / right 240), the last one used.</td><td>≥ 700 px; one editor + tab</td><td>Collapsed 30</td><td>List, short names, no note column</td><td>16, short names</td><td>2</td></tr>
+<tr><td class="k">≥ 1400 × ≥ 860<br>(1600×1000, 1440×900)</td><td>392 px (Pad Rack Grid + Library stacked)</td><td>280 px</td><td>≥ 744 px, 1–2 editors</td><td>Compact 184; 16 strips at 1600, bank of 8 at 1440</td><td>Grid 4×4, square pads ≥ 80 px</td><td>16; full names when the editor is ≥ 900 px wide (1600), short names below (1440)</td><td>2</td></tr>
+<tr><td class="k">1240–1399 × 720–859<br>(1280×720)</td><td>250 px</td><td>250 px</td><td>≥ 716 px; second editor as tab if &lt; 2 × min height</td><td>Compact 150; bank of 8</td><td>List, full names</td><td>16, short names</td><td>1 (editor 508 px high)</td></tr>
+<tr><td class="k">1040–1239 × 700–719<br>(1040×700, minimum)</td><td colspan="2">Both zones become rails (34 px). One side panel open at a time, docked at its minimum width (left 196 / right 240), the last one used.</td><td>≥ 700 px; one editor + tab</td><td>Collapsed 30</td><td>List, short names, no note column</td><td>16, short names</td><td>2 (editor 608 px high)</td></tr>
 <tr><td class="k">&lt; 1040 × 700</td><td colspan="7">Not supported: the window cannot be made smaller than 1040×700 (host resize is limited to the minimum). Larger windows follow the rows above.</td></tr></table>'''
     order = '''<ol class="ol"><li>Mixer Compact → Collapsed when the central zone would drop below its editors' minimum height (Step 380, Song 230, Sound Editor 440, Sample Editor 170).</li>
 <li>Second central editor → tab in the same slot when two minimums do not fit (vertical split: heights; horizontal split: widths, 700 each).</li>
-<li>Parameter lanes 2 → 1 → hidden (the lane selector stays).</li>
-<li>Pad Rack Grid → List; Step lane names → short names.</li>
+<li>Parameter lanes by Step editor height: 2 at ≥ 560 px, 1 at 420–559 px, hidden below 420 px (the lane selector stays).</li>
+<li>Pad Rack Grid → List when pads would be smaller than 80 px; Step lane names → short names.</li><li>Mixer strips: all 16 at ≥ 80 px (Compact) / 108 px (Expanded), else a bank of 8, else horizontal scroll.</li>
 <li>Right zone → rail, then left zone → rail (one side panel open at a time).</li>
 <li>Expanded Mixer is clamped so the central zone keeps its minimum; the dock never covers an editor.</li>
 <li>Growing the window reverses the same steps in the opposite order; user choices (hidden panels, chosen tab, Mixer state) are kept, only forced changes are undone.</li></ol>'''
     presets = '''<table class="t"><tr><th>Workspace preset</th><th>Left</th><th>Central</th><th>Right (tabs)</th><th>Mixer</th></tr>
-<tr><td class="k">Beatmaking (default)</td><td>Pad Rack · Grid</td><td>Step Sequencer + 2 parameter lanes</td><td>Inspector · Generator · Routing · Settings</td><td>Compact</td></tr>
+<tr><td class="k">Beatmaking (default)</td><td>Pad Rack · Grid, Library stacked below</td><td>Step Sequencer + 2 parameter lanes</td><td>Inspector · Generator · Routing · Settings</td><td>Compact</td></tr>
 <tr><td class="k">Composition</td><td>Pad Rack · List</td><td>Song Arranger over Step Sequencer (vertical)</td><td>Inspector · Generator</td><td>Collapsed</td></tr>
 <tr><td class="k">Sound Design</td><td>Pad Rack · Grid · Library</td><td>Sound Editor over Sample Editor (vertical)</td><td>Inspector (Pin offered)</td><td>Compact</td></tr>
 <tr><td class="k">Mixing</td><td>hidden</td><td>Step Sequencer</td><td>Routing · Inspector · Settings</td><td>Expanded with FX returns and Main</td></tr></table>
@@ -127,22 +127,22 @@ def states():
             ("Pinned object unavailable", panel(0, 0, 224, 330, head("Inspector", pin=True), '<div style="margin:8px;padding:8px;border:1px solid #6B5420;background:#1F1A0C;border-radius:5px;font-size:11.5px;color:#F3DFA6;line-height:1.45">Pinned to <b>Pattern 3 A · bar 4 · steps 9–12</b>. After loading a preset, Pattern 3 has 2 bars: these steps no longer exist.</div><div style="padding:4px 8px;display:flex;gap:6px"><span class="btn sm">Unpin</span><span class="btn sm">Pin current selection</span></div>'), "After a load/restore the pinned steps or song bar can disappear (shorter pattern or song). Honest state + two safe actions; nothing is edited until the user picks one."),
             ("Nothing selected", panel(0, 0, 224, 330, head("Inspector", pin=False), '<div style="padding:16px 12px;color:var(--t2);font-size:12px;line-height:1.5">Nothing selected.<br><span style="color:var(--t3)">Select a pad, steps or a song bar. Pinned content stays until unpinned.</span></div>'), "Empty state is text only; no disabled placeholder controls.")]
     rows.append('<h2>Inspector</h2><div class="row">' + "".join(card(224, 330, i, n, d) for n, i, d in insp) + '</div>')
-    rack = [card(300, 430, pad_rack(0, 0, 300, 430, "grid", sel=3, hit=(0,)), "Pad Rack · Grid", "White outline = selection (Pad 4). Ring in the pad colour = hit flash (Pad 1 playing). ▶ corner = audition. Three different signals. Pad 10: ‘● missing’ = its sample file is missing (reference kept, the pad plays its synthesis), as in the Library panel."),
-            card(300, 430, pad_rack(0, 0, 300, 430, "list", sel=3, hit=(0,)), "Pad Rack · List · same selection", "Same pad selected, same M/S, same hit indicator (dot). Grid/List is a view switch, not a different panel."),
+    rack = [card(392, 560, pad_rack(0, 0, 392, 560, "grid", sel=3, hit={0: 118, 3: 72}), "Pad Rack · Grid", "White outline = selection (Pad 4). Ring in the pad colour = hit flash (Pad 1 playing). Top strip = select, surface = audition. Glow = velocity (Pad 1 hit at 118), right-edge bar = measured peak. Pad 10: ‘● missing’ = its sample file is missing (reference kept, the pad plays its synthesis), as in the Library panel."),
+            card(300, 560, pad_rack(0, 0, 300, 560, "list", sel=3, hit=(0,)), "Pad Rack · List · same selection", "Same pad selected, same M/S, same hit indicator (dot). Grid/List is a view switch, not a different panel."),
             '''<div class="card" style="--cw:520px;width:520px"><div class="cl">Pad interactions</div><table class="t">
 <tr><th>Gesture</th><th>Result</th></tr>
-<tr><td class="k">Click pad body</td><td>Select (Inspector follows unless pinned). No sound.</td></tr>
-<tr><td class="k">Click ▶ / Enter</td><td>Audition at velocity 100 (Shift = 127). Selection unchanged.</td></tr>
+<tr><td class="k">Click the top strip (number, note)</td><td>Select only (Inspector follows unless pinned). No sound.</td></tr>
+<tr><td class="k">Strike the pad surface / Enter</td><td>Audition at velocity 100 (Shift = 127) and select. Glow follows the velocity.</td></tr>
 <tr><td class="k">Ctrl/Cmd-click</td><td>Add to selection (for M/S/output edits across pads).</td></tr>
 <tr><td class="k">M / S</td><td>Pad mute / solo (host parameters drm.pNN.mute / solo).</td></tr>
 <tr><td class="k">Double-click</td><td>Open the Sound Editor for this pad (central zone).</td></tr>
 <tr><td class="k">Drop audio file</td><td>Load into player A of that pad (B with Alt). Same as Load…</td></tr>
 <tr><td class="k">Arrows</td><td>Move selection when the Pad Rack has keyboard focus. Space/transport keys are never taken.</td></tr></table></div>''']
     rows.append('<h2>Pad Rack: grid and list, one selection</h2><div class="row">' + "".join(rack) + '</div>')
-    mixw = 1420
+    mixw = 1600
     mix = [card(mixw, 30, mixer(0, 0, mixw, 30, "collapsed"), "Mixer · Collapsed (30 px)", "Status line: Main meter, level, peak, enabled outputs, state switch."),
-           card(mixw, 150, mixer(0, 0, mixw, 150, "compact"), "Mixer · Compact (default 150–168 px)", "All 16 strips: vertical fader, meter, Pan, M/S. Main on the right. Sends and outputs are in Expanded or the Inspector."),
-           card(1040, 420, mixer(0, 0, 1040, 420, "expanded", bank=1), "Mixer · Expanded · bank 1–8 (narrow window)", "When 16 strips no longer fit their minimum width (60 px), the bank switch shows 1–8 / 9–16. FX returns (Delay: time, feedback, tone, return; Reverb: size, damp, return) and Main stay visible.")]
+           card(mixw, 184, mixer(0, 0, mixw, 184, "compact"), "Mixer · Compact at 1600 px (default 150–184 px high)", "All 16 strips fit their 80 px minimum: fader, measured meter with peak hold, Pan, M/S; Main with −1 dB and CLIP lamps. At 1440 px the same Compact Mixer shows a bank of 8 (Beatmaking)."),
+           card(mixw, 440, mixer(0, 0, mixw, 440, "expanded", hot=True, clip=True, over=(0,)), "Mixer · Expanded at 1600 px · bank of 8", "16 strips would be narrower than 108 px, so a bank of 8 (1–8 / 9–16); below 8 the viewport scrolls. FX returns and Main stay visible. Shown with Kick OVER latched, Main −1 dB lit and CLIP latched (white dot = latched until Reset peaks).")]
     rows.append('<h2>Mixer dock: three states of one dock</h2><div class="row">' + "".join(mix) + '</div>')
     S = 340
     def ed(t, extra=""):
@@ -182,7 +182,7 @@ def states():
     rows.append('<h2>Drag MIDI states</h2><div class="row">' + "".join(card(264, 150, b, n, d) for n, b, d in drag) + '</div>')
     rows.append('<h2>Song edit target: Edit Source Pattern</h2><div class="row">' + card(1100, 330, song_editor(0, 0, 1100, 330, sel=36, target="src"), "Song Arranger · target = Edit Source Pattern",
                 "Counterpart of the Composition screen (Edit This Bar). Here a grid edit changes P5 B bar 1 and every linked bar (33, 37, 45, 53); the text names them before the edit.") + '</div>')
-    sheet("07-states", 1480, "Key states", "Inspector, Pad Rack views, Mixer states, split editors, dock-target previews, menus, Drag MIDI, song edit target", "".join(rows))
+    sheet("07-states", 1660, "Key states", "Inspector, Pad Rack views, Mixer states, split editors, dock-target previews, menus, Drag MIDI, song edit target", "".join(rows))
 
 # ----------------------------------------------------------------- 08 tokens and components
 def lum(hx):
@@ -212,47 +212,87 @@ def tokens():
             + f'<div class="sub">Danger text uses #FF8FA0 ({contrast("#FF8FA0", "#0B1925"):.1f}:1); #E4425D ({contrast("#E4425D", "#0B1925"):.1f}:1) is used only for fills and borders. One meaning each: cyan never marks a primary action; copper never marks focus or activity. Colour is never the only cue (text, shape or icon always present).</div>'
             + '<h2>Pad identity (proposed semantic tokens pad.1–pad.16)</h2><div class="row">' + pads + '</div>'
             + '<div class="sub">Eight hues; pads 9–16 repeat them one step darker. Used only as a 3–4 px identity bar, step fill and meter colour; pad number and name are always shown.</div>')
-    typo = [("Product name", 15, 600), ("Panel title / tab", 12, 600), ("Body / values", 12, 400), ("Label", 11, 400), ("Caption (uppercase)", 10, 400)]
+    typo = [("Product name", 15, 600), ("Panel title / tab", 12.5, 600), ("Values", 12, 500), ("Labels", 12, 400), ("Caption (uppercase)", 11, 400), ("Minimum (lamps, dense notes)", 10, 600)]
     body += '<h2>Typography (Inter in renders; JUCE uses the platform UI font: Segoe UI on Windows)</h2><table class="t"><tr><th>Role</th><th>Size / weight</th><th>Sample</th></tr>' + "".join(
-        f'<tr><td class="k">{r}</td><td>{s} px / {w}</td><td style="font-size:{s}px;font-weight:{w};{"text-transform:uppercase;letter-spacing:.09em;color:#6F8A9D" if s == 10 else ""}">Closed Hat · 145.0 BPM · −6.2 dB</td></tr>' for r, s, w in typo) + '</table>'
-    body += '''<h2>Sizes</h2><table class="t"><tr><th>Item</th><th>Value</th></tr>
-<tr><td class="k">Gutter between docked panels</td><td>6 px; panel radius 6; control radius 5–6</td></tr>
-<tr><td class="k">Control heights</td><td>button 28 (small 24), segmented 26 (large 32), dropdown 26, toggle 24 (in rows 16–18)</td></tr>
-<tr><td class="k">Panel header</td><td>30 px: grip 14, title/tabs, actions 22×22</td></tr>
-<tr><td class="k">Knobs</td><td>44 (editor), 40 (sample), 32 (mixer expanded), 24 (mixer compact), 20 inline; 270° arc, label above, value below</td></tr>
-<tr><td class="k">Hit targets</td><td>≥ 16 px for dense rows (M/S in lanes), ≥ 22 px elsewhere</td></tr></table>'''
-    # components with states
+        f'<tr><td class="k">{r}</td><td>{sz} px / {w}</td><td style="font-size:{sz}px;font-weight:{w};{"text-transform:uppercase;letter-spacing:.09em;color:#6F8A9D" if r.startswith("Caption") else ""}">Closed Hat · 145.0 BPM · −6.2 dB</td></tr>' for r, sz, w in typo) + '</table>'
+    body += '''<div class="sub" style="margin-top:6px">Secondary text was raised from 10–11 px to 11–12 px. 10 px is used only inside lamps and for pad note numbers. A 100 % (1×) render of Beatmaking is included: <code>01-beatmaking@1x.png</code>.</div>'''
+    # ---------- tactile material tokens
+    mats = [("control.body", "radial #33475A → #1A2833 → #0E1820", "matte knob / pad body; light from top-left"),
+            ("control.bezel", "#040B11 + #13283A ring", "recessed track the value arc sits on"),
+            ("control.edge", "#2C4456 (hover #4A6A82)", "1 px body edge"),
+            ("control.shadow", "0 1.6 px, black 55 %", "physical lift; pressed = inset shadow"),
+            ("control.pointer", "#E9F3FA, 2 px", "position indicator; disabled #3D5566"),
+            ("cap.metal", "linear #5A6C79 → #2C3B46 → #1E2A33 → #3A4B57", "fader cap with centre line"),
+            ("slot.recess", "#03090E, inset shadow", "fader slot, meter well, pad peak bar"),
+            ("raised.surface", "linear #22343F → #15232D, top highlight 8 %", "buttons, toggles, M/S"),
+            ("pad.rubber", "radial #26343F → #141F27", "pad strike surface; muted: #18222A → #0E161C")]
+    body += '<h2>Tactile material tokens (shared, for Drums, Synth and FX)</h2><table class="t"><tr><th>Token</th><th>Value</th><th>Use</th></tr>' + "".join(f'<tr><td class="k">{a}</td><td>{b}</td><td>{c}</td></tr>' for a, b, c in mats) + '</table>'
+    body += '<div class="sub" style="margin-top:6px">Drawn with JUCE paths and gradients (no bitmaps), so every state, focus ring and automation update repaints on the message thread at any scale.</div>'
+    # ---------- scales
     def st(label, html, w=120):
-        return f'<div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;width:{w}px"><span class="cap">{label}</span>{html}</div>'
-    btns = [st("default", '<span class="btn">Generate</span>'), st("hover", '<span class="btn" style="background:#13283A;border-color:#2B4A60">Generate</span>'),
-            st("pressed", '<span class="btn" style="background:#06121D;border-color:#2B4A60">Generate</span>'), st("focused", '<span class="btn focusring">Generate</span>'),
-            st("disabled", '<span class="btn dis">Paste</span>'), st("primary", '<span class="btn pri">Generate Pattern</span>', 150), st("danger", '<span class="btn danger">Panic</span>'), st("on (toggle)", '<span class="btn on">Loop</span>')]
-    segs = [st("segmented", '<div class="seg"><i class="on">Grid</i><i>List</i></div>'), st("tabs", '<div class="ph" style="width:220px;border:1px solid var(--subtle)"><div class="tabs"><i class="on">Inspector</i><i>Generator</i></div></div>', 230),
-            st("dropdown", '<span class="sel">LP 24</span>'), st("M / S", '<span style="display:flex;gap:4px"><span class="tg">M</span><span class="tg m">M</span><span class="tg">S</span><span class="tg s">S</span></span>', 140),
-            st("toggle", '<span style="display:flex;gap:4px"><span class="tg">Reverse</span><span class="tg on">Loop</span></span>', 150), st("lane on/off", '<span style="display:flex;gap:8px;align-items:center"><i style="width:9px;height:9px;border-radius:50%;background:var(--cyan)"></i><i style="width:9px;height:9px;border-radius:50%;border:1.5px solid #3D5566"></i></span>')]
-    knobs = [st("default", knob("Cutoff", "4.80 kHz", .62, 44, kw=80), 90), st("hover", knob("Cutoff", "4.80 kHz", .62, 44, kw=80).replace("#1D3B50", "#2B4A60"), 90),
-             st("drag (value tip)", knob("Cutoff", "4.80 kHz", .62, 44, kw=80) + '<span class="chip" style="color:var(--t1)">4.80 kHz · Shift = fine</span>', 170),
-             st("bipolar", knob("Pan", "L 20", .4, 44, bipolar=True, kw=80), 90), st("disabled", knob("Split", "vel 64", .5, 44, kw=80, dim=True), 90),
-             st("mixer fader + meter", f'<div style="display:flex;gap:6px">{vfader(110, .6, 18)}{meter(110, .7, "#32D296", 6, peak=.8)}{meter(110, .97, "#32D296", 6, peak=1.0)}</div>', 120)]
-    cells = []
-    for lab, inner, extra in [("off", "", ""), ("on · vel 64", '<div style="position:absolute;left:0;right:0;bottom:0;height:50%;background:#56C2A6;border-radius:2px"></div>', ""),
-                              ("on · vel 127", '<div style="position:absolute;left:0;right:0;bottom:0;height:100%;background:#56C2A6;border-radius:2px"></div>', ""),
-                              ("accent", '<div style="position:absolute;left:0;right:0;bottom:0;height:90%;background:#F0A35E;border-radius:2px"></div><div style="position:absolute;left:3px;right:3px;top:1px;height:2px;background:#E9F3FA"></div>', ""),
-                              ("chance < 100 %", '<div style="position:absolute;left:0;right:0;bottom:0;height:70%;background:#56C2A6;background-image:repeating-linear-gradient(135deg,rgba(6,18,29,.55) 0 2px,transparent 2px 5px);border-radius:2px"></div>', ""),
-                              ("ratchet 2×", '<div style="position:absolute;left:0;right:0;bottom:0;height:70%;background:#56C2A6;border-radius:2px"></div><div style="position:absolute;left:3px;bottom:2px;display:flex;gap:2px"><i style="width:3px;height:3px;background:#06121D;border-radius:50%"></i><i style="width:3px;height:3px;background:#06121D;border-radius:50%"></i></div>', ""),
-                              ("locked", '<div style="position:absolute;left:0;right:0;bottom:0;height:90%;background:#F0A35E;border-radius:2px"></div><div style="position:absolute;right:2px;top:3px;width:6px;height:5px;border:1.5px solid #06121D;border-radius:1px"></div>', ""),
-                              ("selected", '<div style="position:absolute;left:0;right:0;bottom:0;height:60%;background:#56C2A6;border-radius:2px"></div>', "box-shadow:0 0 0 2px #E9F3FA;"),
-                              ("playhead column", "", "background:#13283A;box-shadow:inset 0 0 0 1px rgba(0,221,245,.55);")]:
-        cells.append(st(lab, f'<div style="position:relative;width:52px;height:30px;background:#13283A;border-radius:3px;overflow:hidden;{extra}">{inner}</div>', 96))
-    heads = [st("panel header", '<div class="pnl" style="position:relative;width:260px;height:32px"><div class="ph">' + head("Generator") + '</div></div>', 270),
-             st("focused panel", '<div class="pnl focus" style="position:relative;width:260px;height:32px"><div class="ph">' + head(None, tabs=["Step Sequencer"], maxi=True) + '</div></div>', 270),
-             st("Inspector pinned", '<div class="pnl" style="position:relative;width:260px;height:32px"><div class="ph">' + head("Inspector", pin=True) + '</div></div>', 270)]
-    body += ('<h2>Components and states</h2><div class="sub">Buttons</div><div class="row">' + "".join(btns) + '</div>'
-             + '<div class="sub" style="margin-top:12px">Selection controls</div><div class="row">' + "".join(segs) + '</div>'
-             + '<div class="sub" style="margin-top:12px">Knobs, fader, meter (knob: vertical drag, Shift = fine, double-click = default, wheel = step; automation from the host moves it live)</div><div class="row">' + "".join(knobs) + '</div>'
-             + '<div class="sub" style="margin-top:12px">Step cell</div><div class="row">' + "".join(cells) + '</div>'
-             + '<div class="sub" style="margin-top:12px">Panel headers (focus = cyan border; keyboard focus moves panel to panel with F6)</div><div class="row">' + "".join(heads) + '</div>')
-    sheet("08-tokens-components", 1480, "Design tokens and components", "Family tokens from libs/vox-ui/Tokens.h plus the proposed Drums semantic layer · contrast computed against panel #0B1925", body)
+        return f'<div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;width:{w}px"><span class="cap" style="white-space:normal;line-height:1.3;min-height:28px">{label}</span>{html}</div>'
+    grad = "".join(f'<i style="display:block;width:6px;height:14px;background:{grad_col(k/59)}"></i>' for k in range(60))
+    body += ('<h2>Three value scales — the arc shows the parameter value, never measured audio</h2>'
+             f'<div class="row" style="align-items:center"><div style="display:flex;border-radius:3px;overflow:hidden">{grad}</div><span class="sub" style="margin:0">amount scale: green → yellow → orange → red with increasing intensity; red = maximum setting, not clipping</span></div>'
+             '<div class="row" style="margin-top:10px">'
+             + st("amount · Level 85 %", knob("Level", "85 %", .85, 48, kw=96), 110)
+             + st("amount · Velocity 118", knob("Velocity", "118", 118/127, 48, kw=96), 110)
+             + st("amount · Drive 2.20×", knob("Drive", "2.20×", (2.2-1)/7, 48, kw=96), 110)
+             + st("amount · Delay send 35 %", knob("Delay send", "35 %", .35, 48, kw=96), 120)
+             + st("amount · Reso 100 %", knob("Reso", "100 %", 1, 48, kw=96), 110)
+             + st("value · Cutoff", knob("Cutoff", "4.80 kHz", .62, 48, kw=96), 110)
+             + st("value · Decay", knob("Decay", "380 ms", .42, 48, kw=96), 110)
+             + st("bipolar · Pan L 20", knob("Pan", "L20", .4, 48, kw=96), 110)
+             + st("bipolar · Tune +7 st", knob("Tune", "+7.0 st", .5 + 7/48, 48, kw=96), 110)
+             + st("bipolar · Attack −30 %", knob("Attack", "−30 %", .35, 48, kw=96), 110)
+             + '</div><div class="sub" style="margin-top:8px">Amount: level, velocity, drive, sub, sends, returns, feedback, resonance, accent, swing, sample level, generator amounts. Value (steel arc + unit): cutoff, decay, tail, pitch decay, tone, size, damp, character, split, delay time. Bipolar (steel arc from the centre detent): pan, tune, fine, transient attack/sustain, microtiming. No compressor or gain-reduction display: the product has no compressor.</div>')
+    # ---------- control states
+    states = ["", "hover", "focus", "pressed", "dim"]
+    names = ["normal", "hover", "keyboard focus", "pressed / dragging", "disabled"]
+    kn = "".join(st(n, knob("Cutoff", "4.80 kHz", .62, 48, kw=96, state=s_ if s_ != "dim" else "", dim=s_ == "dim") + ('<span class="chip" style="color:var(--t1)">4.80 kHz · Shift = fine</span>' if s_ == "pressed" else ""), 140) for s_, n in zip(states, names))
+    bt = "".join(st(n, h) for n, h in [("normal", '<span class="btn">Generate</span>'), ("hover", '<span class="btn hov">Generate</span>'), ("pressed", '<span class="btn prs">Generate</span>'),
+              ("focus", '<span class="btn focusring">Generate</span>'), ("disabled", '<span class="btn dis">Paste</span>'), ("primary", '<span class="btn pri">Generate Pattern</span>'), ("danger", '<span class="btn danger">Panic</span>')])
+    tg = "".join(st(n, h, 130) for n, h in [("toggle off", '<span class="tg">Reverse</span>'), ("toggle on (lit LED)", '<span class="tg on">Loop</span>'), ("mute off / on", '<span style="display:flex;gap:4px"><span class="tg">M</span><span class="tg m">M</span></span>'),
+              ("solo off / on", '<span style="display:flex;gap:4px"><span class="tg">S</span><span class="tg s">S</span></span>'), ("segmented", '<div class="seg"><i class="on">Grid</i><i>List</i></div>'), ("dropdown", '<span class="sel">LP 24</span>'),
+              ("lane on / off", '<span style="display:flex;gap:8px"><span style="width:12px;height:10px;border-radius:3px;border:1px solid #0A141C;background:radial-gradient(circle,#9FF6FF 0,#00C8DE 55%,#077083 100%);box-shadow:0 0 3px rgba(0,221,245,.35)"></span><span style="width:12px;height:10px;border-radius:3px;border:1px solid #0A141C;background:#0C1820;box-shadow:inset 0 1px 2px #000"></span></span>')])
+    fd = "".join(st(n, f'<div style="display:flex;gap:6px;align-items:flex-end">{h}</div>', 120) for n, h in [
+        ("fader 85 %", vfader(150, .85, 28)), ("fader 40 %", vfader(150, .4, 28)), ("fader disabled", vfader(150, .6, 28, dim=True)),
+        ("meter: −18 dBFS", meter(150, .45, w=8, peak=.5)), ("meter: −2 dBFS", meter(150, .93, w=8, peak=.95)), ("meter + peak hold", meter(150, .6, w=8, peak=.98))])
+    lamps = "".join(st(n, h, 150) for n, h in [("−1 dB off / near threshold", f'<span style="display:flex;gap:6px">{lamp("hot")}{lamp("hot", True)}</span>'),
+              ("OVER off / latched", f'<span style="display:flex;gap:6px">{lamp("over")}{lamp("over", True, True)}</span>'),
+              ("CLIP off / latched", f'<span style="display:flex;gap:6px">{lamp("clip")}{lamp("clip", True, True)}</span>')])
+    pads = "".join(st(n, pad_tile(i, 88, **kw), 100) for n, i, kw in [
+        ("normal", 1, {}), ("hover", 1, {"state": "hover"}), ("pressed", 1, {"state": "pressed", "hitv": 100}), ("hit vel 40", 3, {"hitv": 40, "peak": .3}), ("hit vel 80", 3, {"hitv": 80, "peak": .6}),
+        ("hit vel 127", 3, {"hitv": 127, "peak": .85}), ("selected", 0, {"sel": True}), ("muted", 11, {"mut": True}), ("solo", 2, {"solo": True}), ("missing", 9, {"miss": True}), ("OVER latched", 0, {"over": True, "peak": .98})])
+    body += ('<h2>Components and states</h2><div class="sub">Knob (vertical drag; Shift = fine; double-click = default; wheel = one step; host automation moves it live; gesture begin/end around each drag)</div><div class="row">' + kn + '</div>'
+             + '<div class="sub" style="margin-top:12px">Buttons</div><div class="row">' + bt + '</div>'
+             + '<div class="sub" style="margin-top:12px">Toggles and choices (booleans = toggles; real enumerations = segmented or dropdown)</div><div class="row">' + tg + '</div>'
+             + '<div class="sub" style="margin-top:12px">Level fader (recessed slot, intensity fill, metal cap) and measured meters (green to −12, yellow to −3, orange to 0 dBFS; never red)</div><div class="row" style="align-items:flex-end">' + fd + '</div>'
+             + '<div class="sub" style="margin-top:12px">Overload lamps (separate from every gradient; white dot = latched until “Reset peaks” or a click on the lamp)</div><div class="row">' + lamps + '</div>'
+             + '<div class="sub" style="margin-top:12px">Pad (88 px). Glow and top LED scale with MIDI velocity; right-edge bar = measured post-fader peak</div><div class="row">' + pads + '</div>')
+    sem = '''<h2>What each indicator measures</h2><table class="t"><tr><th>Indicator</th><th>Source</th><th>Meaning</th></tr>
+<tr><td class="k">Knob / fader arc and fill</td><td>parameter value</td><td>setting only; red = top of the range, never overload</td></tr>
+<tr><td class="k">Pad glow, top LED</td><td>MIDI velocity of the hit (host MIDI, internal pattern/song, audition)</td><td>how hard the pad was triggered; not loudness. Needs per-pad velocity telemetry (README §6); until then a fixed-brightness flash, no velocity claim</td></tr>
+<tr><td class="k">Pad peak bar, strip meter</td><td>pad output post-fader (existing <code>takePadMeter</code>)</td><td>measured audio of that pad</td></tr>
+<tr><td class="k">OVER (pad / strip)</td><td>pad post-fader peak ≥ 0 dBFS</td><td>internal float headroom used; not output clipping. Latched</td></tr>
+<tr><td class="k">Main meter</td><td>Main after FX returns, before the host (existing <code>takeMainMeter</code>)</td><td>measured plugin output</td></tr>
+<tr><td class="k">−1 dB</td><td>Main peak ≥ −1 dBFS</td><td>near threshold. Not latched</td></tr>
+<tr><td class="k">CLIP</td><td>Main sample |x| ≥ 1.0 (0 dBFS) at the plugin output</td><td>the plugin output reached full scale. The host mixes in floating point and may not clip; a fixed-point stage or export would. Latched</td></tr>
+<tr><td class="k">Out 2–9</td><td>no meter today</td><td>a strip routed to Out n shows its pad meter; per-bus meters need read-only taps (Gate 2 proposal)</td></tr></table>'''
+    sizes = '''<h2>Sizes and hit targets</h2><table class="t"><tr><th>Item</th><th>Visual</th><th>Hit rectangle</th></tr>
+<tr><td class="k">Buttons, toggles, dropdowns, segmented</td><td>28 px high (small 26)</td><td>≥ 32 × 32</td></tr>
+<tr><td class="k">Knobs</td><td>48 (sheet), 44 editor, 40 inspector/pan, 34–36 sends and returns, 32 compact pan, 20 inline</td><td>knob + label + value block, ≥ 36 × 48; inline ≥ 32 × 28</td></tr>
+<tr><td class="k">Faders</td><td>slot 7, cap 26 × 16</td><td>whole strip column, ≥ 32 wide</td></tr>
+<tr><td class="k">Mixer M/S</td><td>half strip × 26</td><td>≥ 32 × 32</td></tr>
+<tr><td class="k">Pad M/S</td><td>24 × 20</td><td>28 × 26 (pad padding included); same actions in List (24 × 24 in a 32 px row), Mixer and Inspector, and keys M/S on the focused pad</td></tr>
+<tr><td class="k">Pads</td><td>≥ 80 px square (Grid); below that the zone uses List</td><td>whole pad: top strip = select, rest = audition</td></tr>
+<tr><td class="k">Step cells, lane bars</td><td>≥ 20 px high (dense grid)</td><td>cell; keyboard alternative while the grid has focus: arrows move, Enter toggles the step, +/− change its velocity (Space is never used)</td></tr>
+<tr><td class="k">Mixer strip width</td><td>Compact ≥ 80, Expanded ≥ 108</td><td>else bank of 8, else horizontal scroll</td></tr>
+<tr><td class="k">Gutter, radius</td><td>6 px between panels; panel radius 6, pad 9, control 5–6</td><td></td></tr></table>'''
+    body += sem + sizes
+    # ---------- static parts kept from v1
+    pass
+    sheet("08-tokens-components", 1560, "Design tokens and components", "Family tokens from libs/vox-ui/Tokens.h plus the proposed Drums semantic layer · contrast computed against panel #0B1925", body)
 
 if __name__ == "__main__":
     schematic(); states(); tokens()
