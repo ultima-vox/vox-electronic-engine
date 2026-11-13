@@ -142,7 +142,7 @@ def states():
     mixw = 1600
     mix = [card(mixw, 30, mixer(0, 0, mixw, 30, "collapsed"), "Mixer · Collapsed (30 px)", "Status line: Main meter, level, peak, enabled outputs, state switch."),
            card(mixw, 184, mixer(0, 0, mixw, 184, "compact"), "Mixer · Compact at 1600 px (default 150–184 px high)", "All 16 strips fit their 80 px minimum: fader, measured meter with peak hold, Pan, M/S; Main with −1 dB and CLIP lamps. At 1440 px the same Compact Mixer shows a bank of 8 (Beatmaking)."),
-           card(mixw, 440, mixer(0, 0, mixw, 440, "expanded", hot=True, clip=True, over=(0,)), "Mixer · Expanded at 1600 px · bank of 8", "16 strips would be narrower than 108 px, so a bank of 8 (1–8 / 9–16); below 8 the viewport scrolls. FX returns and Main stay visible. Shown with Kick OVER latched, Main −1 dB lit and CLIP latched (white dot = latched until Reset peaks).")]
+           card(mixw, 440, mixer(0, 0, mixw, 440, "expanded", hot=True, clip=True, over=(0,)), "Mixer · Expanded at 1600 px · bank of 8", "16 strips would be narrower than 108 px, so a bank of 8 (1–8 / 9–16); below 8 the viewport scrolls. FX returns and Main stay visible. Shown with Kick OVER latched, Main −1 dB lit and Main OVER (≥ 0 dBFS before the host) latched; white dot = latched until Reset peaks. No CLIP lamp.")]
     rows.append('<h2>Mixer dock: three states of one dock</h2><div class="row">' + "".join(mix) + '</div>')
     S = 340
     def ed(t, extra=""):
@@ -255,21 +255,24 @@ def tokens():
     tg = "".join(st(n, h, 130) for n, h in [("toggle off", '<span class="tg">Reverse</span>'), ("toggle on (lit LED)", '<span class="tg on">Loop</span>'), ("mute off / on", '<span style="display:flex;gap:4px"><span class="tg">M</span><span class="tg m">M</span></span>'),
               ("solo off / on", '<span style="display:flex;gap:4px"><span class="tg">S</span><span class="tg s">S</span></span>'), ("segmented", '<div class="seg"><i class="on">Grid</i><i>List</i></div>'), ("dropdown", '<span class="sel">LP 24</span>'),
               ("lane on / off", '<span style="display:flex;gap:8px"><span style="width:12px;height:10px;border-radius:3px;border:1px solid #0A141C;background:radial-gradient(circle,#9FF6FF 0,#00C8DE 55%,#077083 100%);box-shadow:0 0 3px rgba(0,221,245,.35)"></span><span style="width:12px;height:10px;border-radius:3px;border:1px solid #0A141C;background:#0C1820;box-shadow:inset 0 1px 2px #000"></span></span>')])
+    hier = "".join(st(n, h, 130) for n, h in [("primary 52 px, tick scale", knob("Decay", "380 ms", .42, 52, kw=110)), ("primary, amount", knob("Drive", "2.20×", .17, 52, kw=110)),
+              ("primary, bipolar", knob("Tune", "+7.0 st", .65, 52, kw=110)), ("secondary 34 px", knob("Fine", "0 ct", .5, 34, kw=110)), ("secondary, amount", knob("Sub", "25 %", .25, 34, kw=110)), ("inline 20 px", mini("Swing", "0 %", 0))])
     fd = "".join(st(n, f'<div style="display:flex;gap:6px;align-items:flex-end">{h}</div>', 120) for n, h in [
-        ("fader 85 %", vfader(150, .85, 28)), ("fader 40 %", vfader(150, .4, 28)), ("fader disabled", vfader(150, .6, 28, dim=True)),
+        ("fader + % scale", vfader(150, .85, 30, scale=True)), ("fader 40 %", vfader(150, .4, 30)), ("fader disabled", vfader(150, .6, 30, dim=True)),
         ("meter: −18 dBFS", meter(150, .45, w=8, peak=.5)), ("meter: −2 dBFS", meter(150, .93, w=8, peak=.95)), ("meter + peak hold", meter(150, .6, w=8, peak=.98))])
     lamps = "".join(st(n, h, 150) for n, h in [("−1 dB off / near threshold", f'<span style="display:flex;gap:6px">{lamp("hot")}{lamp("hot", True)}</span>'),
               ("OVER off / latched", f'<span style="display:flex;gap:6px">{lamp("over")}{lamp("over", True, True)}</span>'),
-              ("CLIP off / latched", f'<span style="display:flex;gap:6px">{lamp("clip")}{lamp("clip", True, True)}</span>')])
-    pads = "".join(st(n, pad_tile(i, 88, **kw), 100) for n, i, kw in [
-        ("normal", 1, {}), ("hover", 1, {"state": "hover"}), ("pressed", 1, {"state": "pressed", "hitv": 100}), ("hit vel 40", 3, {"hitv": 40, "peak": .3}), ("hit vel 80", 3, {"hitv": 80, "peak": .6}),
-        ("hit vel 127", 3, {"hitv": 127, "peak": .85}), ("selected", 0, {"sel": True}), ("muted", 11, {"mut": True}), ("solo", 2, {"solo": True}), ("missing", 9, {"miss": True}), ("OVER latched", 0, {"over": True, "peak": .98})])
+              ("CLIP: not shown", '<span style="font-size:11px;color:var(--t2);line-height:1.35">no clipping event exists in the product; a lamp would be fabricated</span>')])
+    pads = "".join(st(n, pad_tile(i, 92, **kw), 104) for n, i, kw in [
+        ("normal", 1, {}), ("face hover = play", 1, {"state": "hover"}), ("name bar hover = select", 1, {"state": "hover-label"}), ("pressed (face travels)", 1, {"state": "pressed", "hitv": 100}), ("hit v40 (illustr.)", 3, {"hitv": 40}), ("hit v80 (illustr.)", 3, {"hitv": 80}),
+        ("hit v127 (illustr.)", 3, {"hitv": 127}), ("measured peak only", 3, {"peak": .85}), ("selected", 0, {"sel": True}), ("selected + hit", 0, {"sel": True, "hitv": 118}), ("muted", 11, {"mut": True}), ("solo", 2, {"solo": True}), ("missing", 9, {"miss": True}), ("OVER latched", 0, {"over": True, "peak": .98})])
     body += ('<h2>Components and states</h2><div class="sub">Knob (vertical drag; Shift = fine; double-click = default; wheel = one step; host automation moves it live; gesture begin/end around each drag)</div><div class="row">' + kn + '</div>'
+             + '<div class="sub" style="margin-top:12px">Knob hierarchy by musical priority (Sound Editor: Tune, Decay, Drive, Cutoff, Level primary; trims secondary)</div><div class="row">' + hier + '</div>'
              + '<div class="sub" style="margin-top:12px">Buttons</div><div class="row">' + bt + '</div>'
              + '<div class="sub" style="margin-top:12px">Toggles and choices (booleans = toggles; real enumerations = segmented or dropdown)</div><div class="row">' + tg + '</div>'
-             + '<div class="sub" style="margin-top:12px">Level fader (recessed slot, intensity fill, metal cap) and measured meters (green to −12, yellow to −3, orange to 0 dBFS; never red)</div><div class="row" style="align-items:flex-end">' + fd + '</div>'
+             + '<div class="sub" style="margin-top:12px">Level fader: neutral recessed track (the setting is not loudness), % scale, raised metal cap; Shift = fine, double-click = default, value field when the existing binding offers text entry. Measured meters: green to −12, yellow to −3, orange to 0 dBFS, never red; peak hold with numeric value</div><div class="row" style="align-items:flex-end">' + fd + '</div>'
              + '<div class="sub" style="margin-top:12px">Overload lamps (separate from every gradient; white dot = latched until “Reset peaks” or a click on the lamp)</div><div class="row">' + lamps + '</div>'
-             + '<div class="sub" style="margin-top:12px">Pad (88 px). Glow and top LED scale with MIDI velocity; right-edge bar = measured post-fader peak</div><div class="row">' + pads + '</div>')
+             + '<div class="sub" style="margin-top:12px">Pad (92 px): rubber face ≈ 2/3 of the tile = play; name bar = select (no sound) + M/S. Glow and top LED = hit velocity (illustrative until telemetry exists); bottom bar = measured post-fader peak; white ring + light name bar = selected</div><div class="row">' + pads + '</div>')
     sem = '''<h2>What each indicator measures</h2><table class="t"><tr><th>Indicator</th><th>Source</th><th>Meaning</th></tr>
 <tr><td class="k">Knob / fader arc and fill</td><td>parameter value</td><td>setting only; red = top of the range, never overload</td></tr>
 <tr><td class="k">Pad glow, top LED</td><td>MIDI velocity of the hit (host MIDI, internal pattern/song, audition)</td><td>how hard the pad was triggered; not loudness. Needs per-pad velocity telemetry (README §6); until then a fixed-brightness flash, no velocity claim</td></tr>
@@ -277,7 +280,8 @@ def tokens():
 <tr><td class="k">OVER (pad / strip)</td><td>pad post-fader peak ≥ 0 dBFS</td><td>internal float headroom used; not output clipping. Latched</td></tr>
 <tr><td class="k">Main meter</td><td>Main after FX returns, before the host (existing <code>takeMainMeter</code>)</td><td>measured plugin output</td></tr>
 <tr><td class="k">−1 dB</td><td>Main peak ≥ −1 dBFS</td><td>near threshold. Not latched</td></tr>
-<tr><td class="k">CLIP</td><td>Main sample |x| ≥ 1.0 (0 dBFS) at the plugin output</td><td>the plugin output reached full scale. The host mixes in floating point and may not clip; a fixed-point stage or export would. Latched</td></tr>
+<tr><td class="k">OVER (Main)</td><td>Main sample |x| ≥ 1.0, after FX returns, before the host</td><td>“≥ 0 dBFS (pre-host)”: full scale reached; a risk for a fixed-point stage, not proof of clipping. The DAW master bus is not measured. Latched</td></tr>
+<tr><td class="k">CLIP</td><td>none</td><td>not shown: the product has no clipping or saturation event to report (Kick drive is a sound feature). Would need a documented source first</td></tr>
 <tr><td class="k">Out 2–9</td><td>no meter today</td><td>a strip routed to Out n shows its pad meter; per-bus meters need read-only taps (Gate 2 proposal)</td></tr></table>'''
     sizes = '''<h2>Sizes and hit targets</h2><table class="t"><tr><th>Item</th><th>Visual</th><th>Hit rectangle</th></tr>
 <tr><td class="k">Buttons, toggles, dropdowns, segmented</td><td>28 px high (small 26)</td><td>≥ 32 × 32</td></tr>
@@ -294,6 +298,28 @@ def tokens():
     pass
     sheet("08-tokens-components", 1560, "Design tokens and components", "Family tokens from libs/vox-ui/Tokens.h plus the proposed Drums semantic layer · contrast computed against panel #0B1925", body)
 
+def diffsheet():
+    def pair(title, a, b, w, changes):
+        return (f'<h2>{title}</h2><div class="row"><div class="card"><div class="cl">v3.1 (52c2be2)</div><img src="../diff/{a}" style="width:{w}px;border-radius:6px"></div>'
+                f'<div class="card"><div class="cl">v3.2</div><img src="../diff/{b}" style="width:{w}px;border-radius:6px"></div></div><ul class="ol" style="margin-top:8px">'
+                + "".join(f"<li>{c}</li>" for c in changes) + "</ul>")
+    body = pair("Pad Rack Grid (TL P1)", "pads-v31.png", "pads-v32.png", 400, [
+        "Each pad = a raised rubber <b>face</b> (≈ 2/3 of the square, play) over a flat <b>name bar</b> (select without sound, M/S). Before: one surface with a thin top strip as the select zone.",
+        "Number and note on the face corner; name in the bar; M/S moved into the bar; peak bar along the face bottom; hint line under the grid.",
+        "Pressed = face travels into the housing; selected = white ring + light name bar; velocity glow labelled v* (illustrative until telemetry exists).",
+        "Grid still exactly 4×4 equal squares (92 px at 1440×900; left zone 404 px)."])
+    body += pair("Sound Editor (TL P2)", "sound-v31.png", "sound-v32.png", 800, [
+        "Primary controls Tune, Decay, Drive, Cutoff, Level: 52 px knobs with an 11-step tick scale; secondary trims 34 px.",
+        "Kick body: Drive primary + Pitch env; Pitch dec, Sub, Tail secondary.",
+        "Values and units unchanged; amount / value / bipolar arcs unchanged."])
+    body += pair("Mixer, overload semantics and faders (TL P1/P2)", "mixer-v31.png", "mixer-v32.png", 1440, [
+        "Main lamp <b>CLIP → OVER (≥ 0 dBFS, pre-host)</b>; no CLIP lamp anywhere: the product has no clipping event. −1 dB near-threshold lamp kept.",
+        "Fader track neutral (no colour scale: the setting is not loudness), % scale, larger metal cap; strips show numeric peak; Main shows L/R and per-channel peaks.",
+        "8-strip bank, M/S size and Main/FX visibility unchanged from v3.1."])
+    body += ('<h2>100 % (1×) crops</h2><div class="sub">Logical pixels as the native UI would draw them at 100 % scale.</div>'
+             '<div class="row"><img src="../diff/beat-1x.png"><img src="../diff/sound-1x.png"></div><div class="row" style="margin-top:12px"><img src="../diff/mixer-1x.png"></div>')
+    sheet("09-v32-changes", 1660, "v3.1 → v3.2 changes", "TL review 6861782128: pads, overload semantics, knob hierarchy, faders · architecture and palette unchanged", body)
+
 if __name__ == "__main__":
-    schematic(); states(); tokens()
+    schematic(); states(); tokens(); diffsheet()
     print("sheets ok")

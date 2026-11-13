@@ -31,10 +31,10 @@ const fs = require('fs'), path = require('path');
       return res;
     });
     await page.screenshot({ path: path.join(out, f.replace('.html', '.png')), fullPage: true });
-    if (f === '01-beatmaking.html') {
+    if (['01-beatmaking.html', '03-sound-design.html', '04-mixing.html'].includes(f)) {
       const p1 = await browser.newPage({ viewport: { width: w, height: 400 }, deviceScaleFactor: 1 });
       await p1.goto('file://' + path.join(dir, f));
-      await p1.screenshot({ path: path.join(out, '01-beatmaking@1x.png'), fullPage: true });
+      await p1.screenshot({ path: path.join(out, f.replace('.html', '@1x.png')), fullPage: true });
       await p1.close();
     }
     console.log(f, clipped.length ? 'CLIPPED ' + clipped.join(' | ') : 'ok');

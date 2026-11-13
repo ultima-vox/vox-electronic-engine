@@ -123,7 +123,7 @@ body{background:#030A10;color:var(--t1);font:12.5px/1.3 "Inter","Segoe UI",sans-
 # Scales: "amount" = intensity gradient green→yellow→orange→red along the arc (level, velocity,
 # drive, sends, feedback, amounts); "value" = neutral steel arc + unit readout (frequency, time,
 # size, tone, split); "bipolar" = steel arc from the centre detent (pan, tune, fine, transient,
-# microtiming). The red end of the amount scale never means clipping: CLIP is a separate lamp.
+# microtiming). The red end of the amount scale never means overload: OVER is a separate lamp.
 GRAD = [(0, (50, 210, 150)), (.5, (227, 209, 75)), (.75, (240, 138, 60)), (1, (228, 66, 93))]
 STEEL = "#9CC3DA"
 def grad_col(t):
@@ -137,14 +137,16 @@ BIPOLAR_L = {"Pan", "Tune", "Fine", "Attack", "Sustain", "Micro", "Microtiming"}
 VALUE_L = {"Cutoff", "Decay", "Tail", "Pitch dec", "Pitch decay", "Size", "Damp", "Tone", "Split", "Character", "Time", "Start", "End"}
 _KID = [0]
 
-def knob(label, value, frac, size=36, color=None, bipolar=False, kw=None, dim=False, scale=None, state=""):
+def knob(label, value, frac, size=36, color=None, bipolar=False, kw=None, dim=False, scale=None, state="", ticks=None):
     """Dimensional rotary: recessed bezel track, value arc on the track, matte body with a
     light pointer. The arc (value) and the body (control) are separate layers."""
     _KID[0] += 1
     kid = _KID[0]
     if scale is None:
         scale = "bipolar" if (bipolar or label in BIPOLAR_L) else ("value" if label in VALUE_L else "amount")
-    R = size / 2 - 2.5
+    if ticks is None:
+        ticks = size >= 48
+    R = size / 2 - (6.5 if ticks else 2.5)
     cx = cy = size / 2
     a0, a1 = math.radians(135), math.radians(405)
     def pt(a, r=R): return cx + r * math.cos(a), cy + r * math.sin(a)
@@ -175,6 +177,11 @@ def knob(label, value, frac, size=36, color=None, bipolar=False, kw=None, dim=Fa
     if scale == "bipolar":
         tx0, ty0 = pt(math.radians(270), R - sw); tx1, ty1 = pt(math.radians(270), R + 1.5)
         parts.append(f'<line x1="{tx0:.1f}" y1="{ty0:.1f}" x2="{tx1:.1f}" y2="{ty1:.1f}" stroke="#587487" stroke-width="1.2"/>')
+    if ticks:
+        for t in range(11):
+            a = a0 + (a1 - a0) * t / 10
+            x0_, y0_ = pt(a, R + 3.2); x1_, y1_ = pt(a, R + (6.2 if t in (0, 5, 10) else 5.0))
+            parts.append(f'<line x1="{x0_:.1f}" y1="{y0_:.1f}" x2="{x1_:.1f}" y2="{y1_:.1f}" stroke="{"#6F8A9D" if t in (0, 5, 10) else "#3A5468"}" stroke-width="1.1"/>')
     rb = R - sw - 2.2
     edge = "#6A90AA" if state == "hover" else "#2C4456"
     body_top, body_mid, body_bot = ("#22313C", "#141F28", "#0D161D") if state == "pressed" else (("#42586B", "#22323E", "#121E27") if state == "hover" else ("#33475A", "#1A2833", "#0E1820"))
@@ -233,46 +240,59 @@ def _hits(hit):
     if isinstance(hit, dict): return hit
     return {p: HITV.get(p, 100) for p in hit}
 
-def pad_tile(i, cs, sel=False, hitv=None, mut=False, solo=False, miss=False, peak=0.0, over=False, state=""):
-    """One rubber pad. Label bar (number, note) = select zone; strike surface = audition;
-    identity LED on top; M/S bottom-left; measured post-fader peak bottom-right."""
+PAD_LB = 19   # name bar under the playable face
+
+def pad_tile(i, cs, sel=False, hitv=None, mut=False, solo=False, miss=False, peak=0.0, over=False, state="", illustrative=True):
+    """v3.2 pad: a dominant rubber face (play) above a flat name bar (select, M/S).
+    Face ≈ 2/3 of the tile; pressed = face travels 1.5 px down into the housing."""
     col = PADC[i]
-    name = PADS[i][0] if cs >= 100 else SHORT[i]
+    name = PADS[i][0] if cs >= 104 else SHORT[i]
+    m = 3
+    fw, fh = cs - 2 * m, cs - 2 * m - PAD_LB
     v = (hitv or 0) / 127
-    glow = (f"box-shadow:inset 0 0 0 1px {col},inset 0 0 {10+18*v:.0f}px {col}{int(40+150*v):02X},0 0 {6+10*v:.0f}px {col}{int(30+90*v):02X},0 2px 3px rgba(0,0,0,.6);" if hitv else
-            "box-shadow:inset 0 1px 0 rgba(255,255,255,.07),inset 0 -3px 5px rgba(0,0,0,.45),0 2px 3px rgba(0,0,0,.6);")
     if state == "pressed":
-        glow = "box-shadow:inset 0 3px 6px rgba(0,0,0,.7),0 1px 1px rgba(0,0,0,.6);"
-    bg = "radial-gradient(120% 90% at 50% 25%,#26343F,#141F27 70%)" if not mut else "radial-gradient(120% 90% at 50% 25%,#18222A,#0E161C 70%)"
-    if state == "hover": bg = "radial-gradient(120% 90% at 50% 25%,#2D3D49,#17232C 70%)"
+        face_bg = "radial-gradient(120% 95% at 50% 30%,#1E2B34,#111A21 75%)"
+        face_sh = "box-shadow:inset 0 3px 6px rgba(0,0,0,.75),inset 0 0 0 1px #0A1218;transform:translateY(1.5px);"
+    else:
+        top = "#33434F" if state == "hover" else ("#1C262E" if mut else "#2A3A46")
+        face_bg = f"radial-gradient(120% 95% at 50% 25%,{top},{'#0F171D' if mut else '#16222B'} 72%)"
+        face_sh = "box-shadow:inset 0 1px 0 rgba(255,255,255,.10),inset 0 -4px 6px rgba(0,0,0,.45),0 2px 0 #060B10,0 3px 5px rgba(0,0,0,.55);"
+    glow = (f"background-image:radial-gradient(80% 70% at 50% 55%,{col}{int(60+150*v):02X},transparent 75%);" if hitv else "")
+    led = f'<div style="position:absolute;left:{fw*0.3:.0f}px;width:{fw*0.4:.0f}px;top:4px;height:3px;border-radius:2px;background:{col};opacity:{1 if hitv else (.3 if mut else .7)};{f"box-shadow:0 0 6px {col};" if hitv else ""}"></div>'
+    note = f'<div style="position:absolute;left:6px;right:6px;top:8px;display:flex;justify-content:space-between;font-size:10.5px;color:var(--t3)"><span style="color:var(--t2);font-weight:600">{i+1}</span><span>{PADS[i][1]} {PADS[i][2]}</span></div>'
+    ov = f'<div style="position:absolute;left:0;right:0;top:{fh*0.42:.0f}px;text-align:center">{lamp("over", True, True, small=True)}</div>' if over else ''
+    ms = f'<div style="position:absolute;left:0;right:0;top:{fh*0.42:.0f}px;text-align:center;font-size:11.5px;font-weight:600;color:#FF8FA0">● missing</div>' if miss else ''
+    vel = f'<div style="position:absolute;right:6px;bottom:9px;font-size:10px;color:#E9F3FA;opacity:.8">v{hitv}{"*" if illustrative else ""}</div>' if hitv else ''
+    pk = '' if peak <= 0 else f'<i style="display:block;height:100%;width:{min(peak,1)*100:.0f}%;background:{"#F08A3C" if peak > .9 else ("#E3D14B" if peak > .7 else "#2FC58A")}"></i>'
+    meterbar = f'<div title="measured post-fader peak" style="position:absolute;left:6px;right:{30 if hitv else 6}px;bottom:5px;height:3px;border-radius:2px;background:#03090E;overflow:hidden">{pk}</div>'
+    face = (f'<div title="strike to play" style="position:absolute;left:{m}px;top:{m}px;width:{fw:.0f}px;height:{fh:.0f}px;border-radius:7px;background:{face_bg};{glow}{face_sh}'
+            f'border:1px solid {"#070E14" if not hitv else col};overflow:hidden">{led}{note}{ov}{ms}{vel}{meterbar}</div>')
+    lb_bg = "#E9F3FA" if sel else ("#121E27" if state != "hover-label" else "#1A2A36")
+    lb_fg = "#06121D" if sel else ("var(--t3)" if mut else "var(--t1)")
+    msb = lambda t, on, cls: f'<span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:14px;border-radius:3px;font-size:9.5px;font-weight:700;{"background:linear-gradient(#C23A50,#8E2236);color:#fff" if (on and cls=="m") else ("background:linear-gradient(#E8C34A,#B48F24);color:#1A1404" if (on and cls=="s") else ("background:#0A141C;color:" + ("#587487" if sel else "var(--t2)") + ";border:1px solid " + ("#9AB2C5" if sel else "#22384A")))}">{t}</span>'
+    label = (f'<div title="click to select without sound" style="position:absolute;left:{m}px;right:{m}px;bottom:{m}px;height:{PAD_LB-3}px;border-radius:4px;background:{lb_bg};display:flex;align-items:center;gap:2px;padding:0 2px 0 5px">'
+             f'<span style="flex:1;font-size:11px;font-weight:600;color:{lb_fg};white-space:nowrap;overflow:hidden;{"text-decoration:line-through;" if mut else ""}">{name}</span>'
+             f'{msb("M", mut, "m")}{msb("S", solo, "s")}</div>')
     ring = "outline:2px solid #E9F3FA;outline-offset:1px;" if sel else ""
-    led_op = 1 if hitv else (.35 if mut else .75)
-    ph = cs - 40
-    pk = '' if peak <= 0 else f'<i style="position:absolute;left:0;right:0;bottom:0;height:{min(peak,1)*100:.0f}%;background:{"#F08A3C" if peak > .9 else ("#E3D14B" if peak > .7 else "#2FC58A")}"></i>'
-    sub = ('<span style="color:#FF8FA0">● missing</span>' if miss else '') + (lamp("over", True, True, small=True) if over else '')
-    body = f'''<div style="position:absolute;left:9px;right:9px;top:4px;height:3px;border-radius:2px;background:{col};opacity:{led_op};{f"box-shadow:0 0 6px {col};" if hitv else ""}"></div>
-<div style="position:absolute;left:7px;right:9px;top:10px;display:flex;justify-content:space-between;font-size:11px;color:var(--t3)" title="click here to select without sound"><span>{i+1}</span><span>{PADS[i][1]} {PADS[i][2]}</span></div>
-<div style="position:absolute;left:6px;right:10px;top:{cs*0.31:.0f}px;text-align:center;font-size:{14 if cs >= 80 else 13}px;font-weight:600;{"color:var(--t3);text-decoration:line-through;" if mut else ""}white-space:nowrap;overflow:hidden">{name}</div>
-{f'<div style="position:absolute;left:6px;right:10px;top:{cs*0.31+18:.0f}px;text-align:center;font-size:11px;font-weight:600">{sub}</div>' if sub else ''}
-<div style="position:absolute;left:6px;bottom:6px;display:flex;gap:3px"><span class="tg sm {"m" if mut else ""}" style="height:20px;min-width:24px">M</span><span class="tg sm {"s" if solo else ""}" style="height:20px;min-width:24px">S</span></div>
-<div style="position:absolute;right:4px;top:26px;width:4px;height:{ph:.0f}px;border-radius:2px;background:#03090E;box-shadow:inset 0 1px 1px #000;overflow:hidden" title="measured post-fader peak">{pk}</div>'''
-    return f'<div style="position:relative;width:{cs:.0f}px;height:{cs:.0f}px;border-radius:9px;background:{bg};border:1px solid #070E14;{glow}{ring}overflow:hidden;flex:none">{body}</div>'
+    return f'<div style="position:relative;width:{cs:.0f}px;height:{cs:.0f}px;border-radius:9px;background:#0A1218;box-shadow:inset 0 1px 3px rgba(0,0,0,.8);{ring}flex:none">{face}{label}</div>'
 
 def pad_grid(w, h, sel=0, hit=(3,), pinned=None):
-    gap = 8
-    cs = min((w - 16 - 3 * gap) / 4, (h - 16 - 3 * gap) / 4)
+    gap = 6
+    cs = min((w - 16 - 3 * gap) / 4, (h - 36 - 3 * gap) / 4)
     x0 = (w - (4 * cs + 3 * gap)) / 2
     hv = _hits(hit)
     out = []
     for i in range(16):
         x = x0 + (i % 4) * (cs + gap); y = 8 + (i // 4) * (cs + gap)
         out.append(f'<div style="position:absolute;left:{x:.0f}px;top:{y:.0f}px">{pad_tile(i, cs, sel=i == sel, hitv=hv.get(i), mut=i == 11, miss=i == 9, peak=MET[i])}</div>')
+    hy = 8 + 4 * cs + 3 * gap + 5
+    out.append(f'<div style="position:absolute;left:{x0:.0f}px;top:{hy:.0f}px;font-size:11px;color:var(--t2);white-space:nowrap">Pad = play · name bar = select · <span style="color:var(--t3)">v* illustrative</span></div>')
     return "".join(out)
 
 def pad_grid_height(w):
-    gap = 8
+    gap = 6
     cs = (w - 16 - 3 * gap) / 4
-    return 16 + 4 * cs + 3 * gap
+    return 16 + 4 * cs + 3 * gap + 20
 
 def pad_list(w, h, sel=0, hit=(3,), rows=16):
     narrow = w < 220
@@ -346,7 +366,7 @@ def step_editor(x, y, w, h, steps=16, sel_steps=((3, 4), (3, 5), (3, 6), (3, 7))
               extra='<span class="btn sm ghost">Split ▾</span>')
     if not song:
         tb = f'''<div style="height:{tb_h}px;display:flex;align-items:center;gap:{6 if w > 900 else 4}px;padding:0 8px;border-bottom:1px solid var(--subtle);white-space:nowrap;overflow:hidden">
-{'<span class="cap">Bar</span>' if w > 900 else ''}<div class="seg"><i class="on">1</i><i>2</i><i>3</i><i>4</i></div><span class="btn sm dd">Bar</span><span class="sel">{steps} steps</span><span class="sel">4 bars</span>
+{'<span class="cap">Bar</span>' if w > 900 else ''}<div class="seg"><i class="on">1</i><i>2</i><i>3</i><i>4</i></div><span class="btn sm dd">Bar</span><span class="sel" style="padding:0 18px 0 7px">{steps} steps</span><span class="sel" style="padding:0 18px 0 7px">4 bars</span>
 <span class="vsep"></span><div class="seg"><i class="on">A</i><i>B</i></div>{'<span class="btn sm">A ⇄ B</span><span class="btn sm">A → B</span>' if w > 900 else ''}<span class="vsep"></span>{mini("Swing", "0 %", 0)}{mini("Accent", "50 %", .5)}
 <span style="flex:1"></span><span style="display:inline-flex"><span class="btn pri sm" style="height:26px;border-radius:5px 0 0 5px" title="Drag onto a DAW track · scope: this pattern">⠿ Drag MIDI</span><span class="btn pri sm" style="height:26px;border-radius:0 5px 5px 0;border-left:1px solid #B65A3E;padding:0 6px" title="Save MIDI file…">▾</span></span></div>'''
     else:
@@ -491,7 +511,9 @@ def sound_editor(x, y, w, h, title_tabs=None, active=0, pad=0, sample_open=False
     arrow = '<div style="flex:none;align-self:center;color:#2B4A60;font-size:18px;width:14px;text-align:center">→</div>'
     cols = 4
     cw = (inner_w - 3 * 14) / cols
-    k = lambda *a, **kw: knob(*a, size=44, kw=int(cw/2.2), **kw)
+    P = lambda *a, **kw: knob(*a, size=52, kw=int(cw/2.1), **kw)     # primary
+    S = lambda *a, **kw: knob(*a, size=36, kw=int(cw/4.3), **kw)     # secondary (4 per row)
+    S2 = lambda *a, **kw: knob(*a, size=34, kw=int(cw/2.2), **kw)    # secondary (2 per row)
     k3 = lambda *a, **kw: knob(*a, size=40, kw=int(cw/3.35), **kw)
     src = f'''<div style="padding:8px;display:flex;flex-direction:column;gap:8px">
 <div style="display:flex;gap:6px;align-items:center"><span class="lbl">Model</span><span class="sel">Kick</span><span style="flex:1"></span></div>
@@ -505,13 +527,16 @@ def sound_editor(x, y, w, h, title_tabs=None, active=0, pad=0, sample_open=False
 <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--t2)"><span>3 %</span><span>kick_psy_01.wav</span><span>82 %</span></div>
 <div style="display:flex;justify-content:space-around">{k3("Sample lvl","100 %",.5)}{k3("Split","vel 64",.5)}</div>
 <div style="display:flex;gap:4px;flex-wrap:wrap"><span class="tg on">Loop</span><span class="tg">Reverse</span><span class="tg on">Normalize</span><span style="flex:1"></span><span class="btn sm">Load…</span></div>''')
-    tone = f'''<div style="padding:8px;display:grid;grid-template-columns:1fr 1fr;row-gap:10px;justify-items:center">{k("Tune","0.0 st",.5,bipolar=True)}{k("Fine","0 ct",.5,bipolar=True)}{k("Decay","380 ms",.42)}{k("Character","50 %",.5)}</div>'''
-    body = f'''<div style="padding:8px;display:grid;grid-template-columns:1fr 1fr 1fr;row-gap:10px;justify-items:center">{k3("Pitch env","36.0 st",.75)}{k3("Pitch dec","22 ms",.3)}{k3("Drive","2.20×",.2)}{k3("Sub","25 %",.25)}{k3("Tail","200 ms",.25)}</div>'''
+    tone = f'''<div style="padding:8px;display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-around">{P("Tune","0.0 st",.5,bipolar=True)}{P("Decay","380 ms",.42)}</div>
+<div style="display:flex;justify-content:space-around">{S2("Fine","0 ct",.5,bipolar=True)}{S2("Character","50 %",.5)}</div></div>'''
+    S3 = lambda *a, **kw: knob(*a, size=34, kw=int(cw/3.3), **kw)
+    body = f'''<div style="padding:8px;display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-around;align-items:flex-end">{P("Drive","2.20×",.17)}{S2("Pitch env","36.0 st",.75)}</div>
+<div style="display:flex;justify-content:space-between">{S3("Pitch dec","22 ms",.3)}{S3("Sub","25 %",.25)}{S3("Tail","200 ms",.25)}</div></div>'''
     filt = f'''<div style="padding:8px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;gap:6px;align-items:center"><span class="lbl">Filter</span><span class="sel">LP 24</span></div>
-<div style="display:flex;justify-content:space-around">{k("Cutoff","4.80 kHz",.7)}{k("Reso","20 %",.2)}</div><div class="cap" style="padding-top:2px">Transient</div>
-<div style="display:flex;justify-content:space-around">{k("Attack","+20 %",.6,bipolar=True)}{k("Sustain","−10 %",.45,bipolar=True)}</div></div>'''
-    outp = f'''<div style="padding:8px;display:flex;flex-direction:column;gap:8px"><div style="display:grid;grid-template-columns:1fr 1fr;row-gap:8px;justify-items:center">{k("Level","85 %",.85)}{k("Pan","C",.5,bipolar=True)}{k("Delay send","0 %",0,color="var(--cyan)")}{k("Reverb send","15 %",.15,color="#9C8CF2")}</div>
-<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center"><span class="lbl">Output</span><span class="sel">Main</span><span class="lbl">Note</span><span class="sel">C1 (36)</span><span class="lbl">Choke</span><span class="sel">Off</span><span class="lbl">Voices</span><span class="sel">Mono</span></div></div>'''
+<div style="display:flex;justify-content:space-around;align-items:flex-end">{P("Cutoff","4.80 kHz",.7)}{S2("Reso","20 %",.2)}</div><div class="cap" style="padding-top:2px">Transient</div>
+<div style="display:flex;justify-content:space-around">{S2("Attack","+20 %",.6,bipolar=True)}{S2("Sustain","−10 %",.45,bipolar=True)}</div></div>'''
+    outp = f'''<div style="padding:8px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;justify-content:space-around;align-items:flex-end">{P("Level","85 %",.85)}{S2("Pan","C",.5,bipolar=True)}</div><div style="display:flex;justify-content:space-around">{S2("Delay send","0 %",0)}{S2("Reverb send","15 %",.15)}</div>
+</div><div style="display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center"><span class="lbl">Output</span><span class="sel">Main</span><span class="lbl">Note</span><span class="sel">C1 (36)</span><span class="lbl">Choke</span><span class="sel">Off</span><span class="lbl">Voices</span><span class="sel">Mono</span></div></div>'''
     colA = sec("1 · Source", src, cw, "sample + synth")
     colB = f'<div style="display:flex;flex-direction:column;gap:10px;width:{cw:.0f}px">{sec("2 · Tone", tone, cw)}{sec("Kick body", body, cw, "", adv=True)}</div>'
     colC = sec("3 · Filter &amp; transient", filt, cw)
@@ -521,9 +546,9 @@ def sound_editor(x, y, w, h, title_tabs=None, active=0, pad=0, sample_open=False
 def sample_editor(x, y, w, h, title_tabs=None, active=0):
     hd = head(None, tabs=title_tabs or ["Sample Editor · Pad 1 Kick"], active=active, maxi=True)
     ww = w - 2 - 24 - 200
-    wh = h - 32 - 40 - 28
-    side = f'''<div style="position:absolute;right:12px;top:50px;width:186px;display:flex;flex-direction:column;gap:6px">
-<div style="display:flex;justify-content:space-around">{knob("Sample level","100 %",.5,34,kw=88)}{knob("Split","vel 64",.5,34,kw=88)}</div>
+    wh = h - 32 - 40 - 36
+    side = f'''<div style="position:absolute;right:12px;top:45px;width:186px;display:flex;flex-direction:column;gap:3px">
+<div style="display:flex;justify-content:space-around">{knob("Sample level","100 %",.5,30,kw=88)}{knob("Split","vel 64",.5,30,kw=88)}</div>
 <div style="font-size:10.5px;color:var(--t2);white-space:nowrap">Start <b style="color:var(--t1)">3.0 %</b> · End <b style="color:var(--t1)">82.0 %</b> · 0.51 s</div></div>'''
     return panel(x, y, w, h, hd, f'''<div style="height:40px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--subtle)"><span class="cap">Player</span><div class="seg"><i class="on">A · kick_psy_01.wav</i><i>B · empty</i></div>
 <span class="vsep"></span><span class="tg on">Loop</span><span class="tg">Reverse</span><span class="tg on">Normalize</span><span style="flex:1"></span><span class="btn sm pri">Load…</span><span class="btn sm">Copy to library</span><span class="btn sm">Clear</span></div>
@@ -532,7 +557,7 @@ def sample_editor(x, y, w, h, title_tabs=None, active=0):
 # ----------------------------------------------------------------- mixer dock
 def meter(h, frac, col=None, w=6, peak=None):
     """Measured audio peak (post-fader for pads, post-return for Main). Colours follow dBFS
-    (green below -12, yellow to -3, orange to 0); no red: CLIP is a separate lamp."""
+    (green below -12, yellow to -3, orange to 0); no red: OVER is a separate lamp."""
     p = f'<i style="position:absolute;left:0;right:0;bottom:{min(peak, 1)*(h-2):.0f}px;height:2px;background:#E9F3FA"></i>' if peak else ""
     return (f'<div style="position:relative;width:{w}px;height:{h}px;background:#030A10;border-radius:2px;overflow:hidden;box-shadow:inset 0 1px 2px #000,0 1px 0 #1A2D3B">'
             f'<i style="position:absolute;left:0;right:0;bottom:0;height:{frac*h:.0f}px;background:linear-gradient(to top,#2FC58A 0,#2FC58A {0.7*h:.0f}px,#E3D14B {0.7*h:.0f}px,#E3D14B {0.9*h:.0f}px,#F08A3C {0.9*h:.0f}px)"></i>'
@@ -540,7 +565,7 @@ def meter(h, frac, col=None, w=6, peak=None):
 
 def lamp(kind, on=False, latched=False, small=False):
     """OVER/CLIP/-1 dB lamps: unlit = dark outlined; lit = high-contrast fill with text."""
-    txt = {"clip": "CLIP", "over": "OVER", "hot": "−1"}[kind]
+    txt = {"clip": "CLIP", "over": "OVER", "hot": "−1 dB"}[kind]
     if not on:
         st = "background:#06101A;color:#2E4556;border:1px solid #1D3346"
     elif kind == "clip":
@@ -552,17 +577,24 @@ def lamp(kind, on=False, latched=False, small=False):
     lt = '<i style="position:absolute;right:-3px;top:-3px;width:6px;height:6px;border-radius:50%;background:#fff"></i>' if (on and latched) else ""
     return f'<span style="position:relative;display:inline-flex;align-items:center;justify-content:center;height:{14 if small else 16}px;padding:0 {3 if small else 5}px;border-radius:3px;font-size:{9 if small else 10}px;letter-spacing:.04em;{st}">{txt}{lt}</span>'
 
-def vfader(h, frac, w=18, dim=False):
-    """Level fader: recessed slot, intensity fill inside the slot, metal cap with grip lines."""
-    cap_h = 16
+def vfader(h, frac, w=18, dim=False, scale=False):
+    """Level fader: neutral recessed slot (the setting is not loudness: no colour scale here,
+    the meter beside it shows measured audio), raised metal cap with grip lines; optional
+    % scale on the left (Shift = fine, double-click = default)."""
+    cap_h = 18
     cy = (1 - frac) * (h - cap_h)
-    fill = f'<i style="position:absolute;left:{w/2-1.5:.1f}px;width:3px;bottom:2px;height:{frac*(h-cap_h):.0f}px;border-radius:2px;background:linear-gradient(to top,#32D296,#E3D14B {h*0.6:.0f}px,#F08A3C {h*0.85:.0f}px,#E4425D {h:.0f}px);opacity:{.35 if dim else .9}"></i>'
-    ticks = "".join(f'<i style="position:absolute;left:0;width:3px;top:{cap_h/2 + k*(h-cap_h)/6:.0f}px;height:1px;background:#24394A"></i><i style="position:absolute;right:0;width:3px;top:{cap_h/2 + k*(h-cap_h)/6:.0f}px;height:1px;background:#24394A"></i>' for k in range(7))
-    return (f'<div style="position:relative;width:{w}px;height:{h}px;flex:none">{ticks}'
-            f'<i style="position:absolute;left:{w/2-3.5:.1f}px;width:7px;top:0;bottom:0;background:#03090E;border-radius:4px;box-shadow:inset 0 1px 3px #000,0 1px 0 #1A2D3B"></i>{fill}'
-            f'<i style="position:absolute;left:{max(0, w/2-13):.0f}px;width:{min(26, w):.0f}px;top:{cy:.0f}px;height:{cap_h}px;border-radius:3px;'
-            f'background:linear-gradient(#5A6C79,#2C3B46 45%,#1E2A33 55%,#3A4B57);border:1px solid #0A1219;box-shadow:0 2px 3px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.18)"></i>'
-            f'<i style="position:absolute;left:{max(0, w/2-9):.0f}px;width:{min(18, w-8):.0f}px;top:{cy+cap_h/2-.5:.0f}px;height:1px;background:#E9F3FA;opacity:.85"></i></div>')
+    sl = 16 if scale else 0
+    fill = f'<i style="position:absolute;left:{sl + w/2-1.5:.1f}px;width:3px;bottom:2px;height:{frac*(h-cap_h):.0f}px;border-radius:2px;background:#5F7F95;opacity:{.35 if dim else .85}"></i>'
+    ticks = "".join(f'<i style="position:absolute;left:{sl}px;width:4px;top:{cap_h/2 + k*(h-cap_h)/4:.0f}px;height:1px;background:#2E4558"></i><i style="position:absolute;left:{sl+w-4}px;width:4px;top:{cap_h/2 + k*(h-cap_h)/4:.0f}px;height:1px;background:#2E4558"></i>' for k in range(5))
+    labels = "".join(f'<span style="position:absolute;left:0;width:{sl-2}px;text-align:right;top:{cap_h/2 + k*(h-cap_h)/4 - 6:.0f}px;font-size:9.5px;color:var(--t3)">{v}</span>' for k, v in enumerate(["100", "75", "50", "25", "0"])) if scale else ""
+    cw = min(30, w)
+    return (f'<div style="position:relative;width:{w + sl}px;height:{h}px;flex:none">{labels}{ticks}'
+            f'<i style="position:absolute;left:{sl + w/2-3.5:.1f}px;width:7px;top:0;bottom:0;background:#03090E;border-radius:4px;box-shadow:inset 0 1px 3px #000,0 1px 0 #1A2D3B"></i>{fill}'
+            f'<i style="position:absolute;left:{sl + (w-cw)/2:.0f}px;width:{cw:.0f}px;top:{cy:.0f}px;height:{cap_h}px;border-radius:3px;'
+            f'background:linear-gradient(#6A7C89,#33434E 42%,#222E37 58%,#41525E);border:1px solid #0A1219;box-shadow:0 2px 4px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.22)"></i>'
+            f'<i style="position:absolute;left:{sl + (w-cw)/2 + 4:.0f}px;width:{cw-8:.0f}px;top:{cy+5:.0f}px;height:1px;background:#0A1219;opacity:.6"></i>'
+            f'<i style="position:absolute;left:{sl + (w-cw)/2 + 3:.0f}px;width:{cw-6:.0f}px;top:{cy+cap_h/2-.5:.0f}px;height:1.5px;background:#E9F3FA"></i>'
+            f'<i style="position:absolute;left:{sl + (w-cw)/2 + 4:.0f}px;width:{cw-8:.0f}px;top:{cy+cap_h-6:.0f}px;height:1px;background:#0A1219;opacity:.6"></i></div>')
 
 MET = [.72, .2, .38, .55, .3, 0, .12, .06, 0, .18, 0, 0, 0, 0, 0, 0]
 
@@ -584,7 +616,7 @@ def mixer_layout(w, state, bank=None):
     return n, sw, first, avail
 
 def mixer(x, y, w, h, state="compact", bank=None, show_fx=True, hot=False, clip=False, over=()):
-    lamps_main = f'{lamp("hot", hot)}{lamp("clip", clip, latched=clip)}'
+    lamps_main = f'{lamp("hot", hot)}{lamp("over", clip, latched=clip)}'
     if state == "collapsed":
         bars = "".join(f'<div style="width:160px;height:6px;background:#030A10;border-radius:2px;overflow:hidden;box-shadow:inset 0 1px 2px #000"><i style="display:block;width:{v}%;height:100%;background:linear-gradient(to right,#2FC58A 0,#2FC58A 112px,#E3D14B 112px,#E3D14B 144px,#F08A3C 144px)"></i></div>' for v in (62, 58))
         hd = f'''<span class="grip"></span><span class="ttl">Mixer</span><span class="chip">Collapsed</span><span style="flex:1"></span>
@@ -601,7 +633,7 @@ def mixer(x, y, w, h, state="compact", bank=None, show_fx=True, hot=False, clip=
     else:
         bank_ui = f'<span class="lbl">{n} visible · scroll</span>'
     hd = (f'<span class="grip" style="opacity:.3"></span><span class="ttl">Mixer</span><span class="lbl">bottom dock · drag the top edge to resize</span><span style="flex:1"></span>'
-          f'<span class="btn sm" title="Clears latched OVER and CLIP lamps">Reset peaks</span><span class="vsep"></span>{bank_ui}<span class="vsep"></span>{seg}')
+          f'<span class="btn sm" title="Clears latched OVER lamps and peak holds">Reset peaks</span><span class="vsep"></span>{bank_ui}<span class="vsep"></span>{seg}')
     strips = []
     for j in range(n):
         i = first + j
@@ -623,8 +655,8 @@ def mixer(x, y, w, h, state="compact", bank=None, show_fx=True, hot=False, clip=
             fh = bh - 274
             inner = f'''{name}
 <div style="display:flex;flex-direction:column;align-items:center;gap:2px;margin-top:4px">{knob("Pan",pan_txt(PAN[i]),.5 + PAN[i] / 2,40,kw=int(sw-10))}<div style="display:flex;justify-content:space-between;width:100%">{knob("Delay",f"{DLY[i%8]} %",DLY[i%8]/100,34,kw=int(sw/2-6))}{knob("Reverb",f"{REV[i%8]} %",REV[i%8]/100,34,kw=int(sw/2-6))}</div></div>
-<div style="display:flex;gap:6px;justify-content:center;margin-top:8px">{vfader(fh, LEVEL[i]/100, 28)}{meter(fh, MET[i], w=8, peak=pk)}</div>
-<div style="text-align:center;font-size:12px;margin-top:4px">{LEVEL[i]} %</div>
+<div style="display:flex;gap:6px;justify-content:center;margin-top:8px">{vfader(fh, LEVEL[i]/100, 30, scale=True)}{meter(fh, MET[i], w=9, peak=pk)}</div>
+<div style="display:flex;justify-content:center;gap:6px;font-size:12px;margin-top:4px"><span>{LEVEL[i]} %</span><span style="color:var(--t2)">pk {("−%.1f" % (20*math.log10(1/pk)) if pk else "−∞")}</span></div>
 <div style="margin-top:6px">{ms}</div>
 <div style="margin-top:6px;height:26px;border:1px solid {'#6B5420' if (OUTS[i] and OUTS[i] not in HOST_ON) else '#1D3B50'};border-radius:5px;font-size:11.5px;color:{out_col};display:flex;align-items:center;justify-content:center;white-space:nowrap;background:#08121A">{out_txt}</div>'''
         strips.append(f'<div style="position:absolute;left:{sx:.0f}px;top:6px;width:{sw:.0f}px;height:{bh:.0f}px;background:{"linear-gradient(#17293A,#112130)" if sel else "linear-gradient(#112230,#0C1B27)"};border:1px solid {"#E9F3FA" if sel else "#163246"};border-radius:6px;padding:5px 6px;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)">{inner}</div>')
@@ -638,7 +670,7 @@ def mixer(x, y, w, h, state="compact", bank=None, show_fx=True, hot=False, clip=
         mh = bh - 58
         fx = f'''<div style="position:absolute;left:{fxx-mw:.0f}px;top:6px;width:{mw}px;height:{bh:.0f}px;background:linear-gradient(#132433,#0D1C28);border:1px solid #2B4A60;border-radius:6px;padding:5px 7px">
 <div style="display:flex;align-items:center;gap:4px"><span style="font-size:12px;font-weight:600">Main</span><span style="margin-left:auto;display:flex;gap:3px">{lamps_main}</span></div>
-<div style="display:flex;gap:4px;justify-content:center;margin-top:6px">{vfader(mh,.6,26)}{meter(mh,.62,w=6,peak=.7)}{meter(mh,.58,w=6,peak=.66)}</div><div style="text-align:center;font-size:12px;margin-top:4px">60 % · −6.2 dB</div></div>'''
+<div style="display:flex;gap:4px;justify-content:center;margin-top:6px">{vfader(mh,.6,28)}<div style="display:flex;flex-direction:column;align-items:center">{meter(mh-12,.62,w=7,peak=.7)}<span style="font-size:9.5px;color:var(--t2)">L</span></div><div style="display:flex;flex-direction:column;align-items:center">{meter(mh-12,.58,w=7,peak=.66)}<span style="font-size:9.5px;color:var(--t2)">R</span></div></div><div style="text-align:center;font-size:12px;margin-top:2px">60 % · −6.2 dB</div></div>'''
     elif state == "expanded" and show_fx:
         def ret(name, colr, kn, left):
             return f'''<div style="position:absolute;top:6px;width:100px;height:{bh:.0f}px;background:linear-gradient(#112230,#0C1B27);border:1px solid #1D3B50;border-radius:6px;padding:6px;left:{left:.0f}px">
@@ -647,11 +679,11 @@ def mixer(x, y, w, h, state="compact", bank=None, show_fx=True, hot=False, clip=
         x0 = fxx - (2 * 100 + 132 + 12)
         dl = ret("Delay", "var(--t1)", '<span class="sel" style="font-size:12px;margin-bottom:4px">1/8D</span>' + knob("Feedback", "35 %", .41, 36, kw=88) + knob("Tone", "50 %", .5, 36, kw=88) + knob("Return", "80 %", .8, 36, kw=88), x0)
         rv = ret("Reverb", "var(--t1)", knob("Size", "50 %", .5, 36, kw=88) + knob("Damp", "50 %", .5, 36, kw=88) + knob("Return", "80 %", .8, 36, kw=88), x0 + 106)
-        mh = bh - 128
+        mh = bh - 134
         main = f'''<div style="position:absolute;left:{x0+212:.0f}px;top:6px;width:132px;height:{bh:.0f}px;background:linear-gradient(#132433,#0D1C28);border:1px solid #2B4A60;border-radius:6px;padding:7px">
 <div style="font-size:13px;font-weight:600">Main</div><div style="font-size:10.5px;color:var(--t3);white-space:nowrap">post-return, pre-host</div>
 <div style="display:flex;gap:4px;margin-top:6px">{lamps_main}</div>
-<div style="display:flex;gap:5px;justify-content:center;margin-top:8px">{vfader(mh,.6,28)}{meter(mh,.62,w=8,peak=.7)}{meter(mh,.58,w=8,peak=.66)}</div><div style="text-align:center;font-size:12px;margin-top:5px">60 % · −6.2 dB</div><div style="text-align:center;font-size:11px;color:var(--t2)">peak −1.8 dB</div></div>'''
+<div style="display:flex;gap:5px;justify-content:center;margin-top:8px">{vfader(mh,.6,30,scale=True)}<div style="display:flex;flex-direction:column;align-items:center;gap:2px">{meter(mh-14,.62,w=9,peak=.7)}<span style="font-size:10px;color:var(--t2)">L</span></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px">{meter(mh-14,.58,w=9,peak=.66)}<span style="font-size:10px;color:var(--t2)">R</span></div></div><div style="text-align:center;font-size:12px;margin-top:4px">60 % · −6.2 dB</div><div style="text-align:center;font-size:11px;color:var(--t2)">peak L −0.8 · R −1.4</div></div>'''
         fx = dl + rv + main
     return panel(x, y, w, h, hd, "".join(strips) + fx)
 
@@ -686,8 +718,8 @@ def routing(x, y, w, h, tabs=None, active=0):
 
 def library(x, y, w, h, tabs=None, active=0):
     hd = head("Library" if not tabs else None, tabs=tabs, active=active)
-    items = [("Factory", "Psy Full-on"), ("Factory", "House Techno"), ("Factory", "Hip-hop Breaks"), ("User", "My Kit 01")][: (3 if h < 300 else 4)]
-    lst = "".join(f'<div style="height:28px;display:flex;align-items:center;gap:8px;padding:0 10px;border-top:1px solid #0E2231;{"background:#13283A;box-shadow:inset 2px 0 0 var(--copper);" if k==0 else ""}"><span class="cap" style="width:50px">{t}</span><span style="font-size:12px">{n}</span></div>' for k, (t, n) in enumerate(items))
+    items = [("Factory", "Psy Full-on"), ("Factory", "House Techno"), ("Factory", "Hip-hop Breaks"), ("User", "My Kit 01")][: (2 if h < 220 else (3 if h < 300 else 4))]
+    lst = "".join(f'<div style="height:{26 if h < 300 else 28}px;display:flex;align-items:center;gap:8px;padding:0 10px;border-top:1px solid #0E2231;{"background:#13283A;box-shadow:inset 2px 0 0 var(--copper);" if k==0 else ""}"><span class="cap" style="width:50px">{t}</span><span style="font-size:12px">{n}</span></div>' for k, (t, n) in enumerate(items))
     return panel(x, y, w, h, hd, f'''<div style="padding:8px"><div class="seg"><i class="on">Kits</i><i>Pads</i><i>Patterns</i><i>Songs</i></div></div>{lst}
 {'' if h < 300 else '<div style="padding:8px 10px;font-size:11.5px;color:var(--t2);line-height:1.4">Kit replaces pads, mix, sends, returns. Keeps patterns, song, mutes.</div>'}
 <div style="padding:{"8px" if h < 300 else "0"} 10px 0;display:flex;gap:5px;flex-wrap:wrap"><span class="btn pri sm">Load</span><span class="btn sm">Undo Load</span><span class="btn sm">Save…</span><span class="btn sm">Import .voxkit</span><span class="btn sm">Export .voxkit</span></div>
@@ -720,7 +752,7 @@ def beatmaking(W=1440, H=900, name="01-beatmaking", legend=True):
     top, bottom = frame(W, H, mix_h)
     ah = bottom - top
     if W >= 1400:
-        lw, rw = 392, 280
+        lw, rw = 404, 280
     elif W >= 1240:
         lw, rw = 250, 250
     else:
@@ -759,7 +791,7 @@ def beatmaking(W=1440, H=900, name="01-beatmaking", legend=True):
             "Mixer dock, Compact: one shared mixer at the bottom. It never covers the sequencer; it resizes the central zone.",
             "Every side panel has a header: grip to move, title or dock tabs, hide. The Inspector has Pin (not shown pinned here).",
             "Pattern toolbar: real Swing and Accent (host-automatable), Bar menu (Duplicate to next bar, Clear bar, New seed). Lit lane LED = lane on for the internal sequencer (lane 16 off). Velocity lane bars use the intensity scale.",
-            "Pad Rack Grid: 16 equal square rubber pads. Top strip (number, note) selects without sound; the strike surface auditions and selects. Top LED and glow scale with the hit velocity (Pad 1 = 118, Pad 4 = 72); right-edge bar = measured post-fader peak; M/S bottom-left; ‘● missing’ = sample file missing. Library is stacked below in the same zone."]
+            "Pad Rack Grid: 16 equal squares. The rubber face (about 2/3 of each pad) is the playable surface; the flat name bar under it selects without sound and holds M/S. Number and note on the face; top LED and glow follow the hit velocity (v* = illustrative, needs telemetry); bottom bar = measured post-fader peak; ‘● missing’ = sample file missing."]
     sub = {1440: "Pad Rack (grid) · Step Sequencer + parameter lanes · Inspector (steps) · Mixer compact",
            1600: "Pad Rack (grid) · Step Sequencer + parameter lanes · Inspector (steps) · Mixer compact",
            1280: "Pad Rack (list) · Step Sequencer + 1 parameter lane · Inspector (steps) · Mixer compact",
@@ -800,7 +832,7 @@ def sound_design():
     top, bottom = frame(W, H, mix_h)
     ah = bottom - top
     lw, rw = 380, 250
-    SE = 482
+    SE = 492
     parts = [chrome("Sound Design", status="Stopped", pos="1 . 1 . 1"), pad_rack(G, top, lw, ah, "grid", sel=0, hit=()),
              sound_editor(G + lw + G, top, W - lw - rw - 4 * G, SE, sample_open=True),
              sample_editor(G + lw + G, top + SE + G, W - lw - rw - 4 * G, ah - SE - G),
@@ -811,7 +843,7 @@ def sound_design():
         "One signal-flow layout: Source → Tone → Filter &amp; transient → Output. Only real controls of this pad model; sound shaping, Pan and sends are rotary knobs. Kick body is an advanced section shown only for the Kick model.",
         "Second central editor: Sample Editor (split). Start/end are graphical handles on the real waveform of player A or B. While it is open the Source block shows a summary instead of a second copy.",
         "Inspector pinned to Pad 1 while Pad 4 is selected in the rack: the pinned content does not follow; Quick Controls and the Sound Editor show the same live values.",
-        "Pad Rack Grid at 380 px: pads stay square (≥ 80 px); below that the zone switches to List. Clicking a pad’s top strip selects it without sound; striking the pad auditions it."], ("Sound Design", "1440×900 · Pad Rack (grid) · Sound Editor over Sample Editor · Inspector pinned · Mixer compact"), 2)
+        "Pad Rack Grid at 380 px: square pads with the playable face over the name bar; below 80 px the zone switches to List. Sound Editor: primary controls (Tune, Decay, Drive, Cutoff, Level) are 52 px knobs with a tick scale; secondary ones 34 px."], ("Sound Design", "1440×900 · Pad Rack (grid) · Sound Editor over Sample Editor · Inspector pinned · Mixer compact"), 2)
 
 def mixing():
     W, H = 1440, 900
@@ -822,14 +854,14 @@ def mixing():
     parts = [chrome("Mixing"), step_editor(G, top, W - rw - 3 * G, ah, rowmin=10, sel_steps=(), focus=False),
              routing(W - rw - G, top, rw, ah, tabs=["Inspector", "Routing", "Settings"], active=1),
              mixer(G, bottom + G, W - 2 * G, mix_h, "expanded", hot=True, over=(0,))]
-    parts += [mk(1, 1, bottom + G + 4), mk(2, 268, bottom + G + 38), mk(3, 1118, bottom + G + 38), mk(4, 640, bottom + G + mix_h - 48), mk(5, 1072, 120), mk(6, 1370, bottom + G + 86)]
+    parts += [mk(1, 1, bottom + G + 4), mk(2, 268, bottom + G + 38), mk(3, 1152, bottom + G + 38), mk(4, 640, bottom + G + mix_h - 48), mk(5, 1072, 120), mk(6, 1402, bottom + G + 78)]
     page("04-mixing", W, H, "".join(parts), [
         "Mixer expanded: same single dock, taller. The central zone shrinks (sequencer still readable) — nothing is overlaid.",
         "At this width 16 strips would fall below 108 px, so the Mixer shows a bank of 8 (1–8 here; 9–16 one click away; the scroll line shows the position). Each strip: vertical level fader, measured meter with peak hold, rotary Pan / Delay send / Reverb send, M/S, real output.",
         "FX returns (Delay, Reverb → Main) and Main are separate strips on the right.",
         "Output box: cyan = host-enabled output (O.Hat, Tom → Out 3; Cym → Out 6). An output the host has not enabled is shown in amber as ‘Out n→Main’ (Perc 5 → Out 8, bank 9–16): it plays on Main.",
         "Routing is a dock tab in the right zone, next to Inspector and Settings (tabs share one zone).",
-        "Measured audio, separate from knob values: Kick ‘OVER’ is latched because its post-fader peak passed 0 dBFS (internal headroom, not output clipping). Main ‘−1’ is lit (peak above −1 dBFS); ‘CLIP’ stays dark. Reset peaks clears latches."], ("Mixing", "1440×900 · Step Sequencer reduced · Routing docked as a tab · Mixer expanded with FX returns and Main"), 3)
+        "Measured audio, separate from settings: Kick ‘OVER’ is latched because its post-fader peak reached 0 dBFS (internal float headroom, not clipping). Main ‘−1 dB’ is lit (peak above −1 dBFS); Main ‘OVER’ (≥ 0 dBFS before the host) stays dark. There is no CLIP lamp: the product has no clipping event to show. Reset peaks clears latches. Faders have a neutral track and a % scale; meters show L/R and numeric peaks."], ("Mixing", "1440×900 · Step Sequencer reduced · Routing docked as a tab · Mixer expanded with FX returns and Main"), 3)
 
 def generator_screen():
     W, H = 1440, 900
