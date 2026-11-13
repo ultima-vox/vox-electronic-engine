@@ -120,6 +120,13 @@ endif()
 add_test(NAME suite_drums_candidate_tests
   COMMAND suite_drums_candidate_tests ${PROJECT_SOURCE_DIR}/products/drums/factory-content.csv)
 
+# Semantic pad roles (issue 132, DROL): codec, identity parity against the
+# c7c29bb generator, role mapping, Mutate Lanes, presets, proposal.
+add_executable(suite_drums_pad_roles_tests DrumsPadRolesTests.cpp)
+target_link_libraries(suite_drums_pad_roles_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_pad_roles_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_pad_roles_tests COMMAND suite_drums_pad_roles_tests)
+
 # Callback timing of a heavy scene (reports p50/p95/p99/p99.9/worst; does
 # not gate on the numbers).
 add_executable(suite_drums_callback_bench DrumsCallbackBench.cpp)

@@ -6,9 +6,12 @@
 // A preset is a VOXS container (the project state format) with a DPTY
 // section naming its type and only the sections that type owns:
 //   kit      DPAD, DSMP, DPRM (level, tune, decay, pan, cutoff, sends of the
-//            pads; kit volume, velocity, choke; delay and reverb)
+//            pads; kit volume, velocity, choke; delay and reverb), and DROL
+//            when the kit has roles the user set
 //   pad      the same for one pad; it loads onto any pad (the target keeps
-//            its MIDI note)
+//            its MIDI note, its output and its role). DROL, when written,
+//            holds only the source pad's role; loading offers it
+//            (roleOffer) and never applies it by itself
 //   pattern  DSEQ holding the pattern's A and B in slot 1
 //   song     DSEQ, DSNG, DGEN
 //
@@ -75,6 +78,16 @@ public:
     juce::Result loadFactoryKit (int kit);
     juce::Result loadFactoryPatterns (int kit);
 
+    // Pad roles (issue 132). The status note of the last successful load
+    // ("Roles set to the default layout of this kit"), empty if none.
+    juce::String lastNotice() const { return notice_; }
+    // After a pad preset with a role other than the target pad's: that role,
+    // offered for the target pad until the project state changes. Applying
+    // it is one undoable edit of that pad's role only.
+    struct RoleOffer { int pad = 0; PadRole role = PadRole::none; };
+    std::optional<RoleOffer> roleOffer() const;
+    bool applyRoleOffer();
+
     // Portable kit: the kit preset and every sample file it references.
     juce::Result exportPortableKit (const juce::File& zip, const juce::String& name) const;
     juce::Result importPortableKit (const juce::File& zip);
@@ -84,6 +97,9 @@ private:
     DrumsProcessor& processor_;
     juce::MemoryBlock previous_;
     std::uint64_t previousEpoch_ = 0;   // the processor's restore epoch right after the load
+    juce::String notice_;
+    std::optional<RoleOffer> offer_;
+    std::uint64_t offerEpoch_ = 0;
 };
 
 } // namespace vox::drums

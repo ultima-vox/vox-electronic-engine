@@ -406,6 +406,8 @@ int PatternHistory::undo (PatternStore& store)
         store.setAlternate (e->slot, e->beforeB);
     if (e->hasSong)
         store.setSong (e->songBefore);
+    if (e->hasRoles && roleSink_)
+        roleSink_ (e->rolesBefore);
     const int slot = e->slot;
     redo_.push_back (std::move (e));
     return slot;
@@ -425,6 +427,8 @@ int PatternHistory::redo (PatternStore& store)
         store.setAlternate (e->slot, e->afterB);
     if (e->hasSong)
         store.setSong (e->songAfter);
+    if (e->hasRoles && roleSink_)
+        roleSink_ (e->rolesAfter);
     const int slot = e->slot;
     undo_.push_back (std::move (e));
     return slot;
