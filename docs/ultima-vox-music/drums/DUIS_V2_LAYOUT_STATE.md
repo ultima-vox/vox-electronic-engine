@@ -1,6 +1,9 @@
 # DUIS v2 — VOX Drums layout and UI-state contract (Architecture Guard proposal)
 
-Status: **proposal for Architecture Guard review**. Documentation only: no code, no JUCE UI,
+Status: **revision 2, after Architecture Guard review 6864584060** on PR #130. Approved there:
+Q1, Q2, Q3, Q5, Q6. Q4 was rejected and is withdrawn (§10). This revision resolves P1 (no
+rewrite of future data), P2 codec order, P2 budget and P2 restore threading. Still a
+proposal for Architecture Guard review. Documentation only: no code, no JUCE UI,
 no change to `drm/production-candidate` (PR #125) or to any other branch. It is required
 before Gate 2 (native UI v3, issue #127). Task order: issue #127 comment 6863921664.
 
@@ -68,9 +71,19 @@ record × recordCount:
   u8  payload[length]
 ```
 
-The whole section is at most 2048 bytes. Records are written in ascending `type` order, and a
-type appears at most once. Unknown record types are kept byte for byte, in their order, and
-written back.
+The whole section is at most 2048 bytes.
+
+**Ordering rule (one rule, for known and unknown types alike).** Record types are **strictly
+ascending**: each type appears at most once, and an unknown type sits at its numeric position
+among the known ones. A stream that breaks the rule is **non-canonical and invalid** (§7). It is
+never silently re-sorted.
+
+**Preservation.** Two levels are kept apart:
+
+- *Per record:* an unknown record's payload is kept byte for byte and re-emitted at its type
+  position.
+- *Whole section:* the original section bytes are written back unchanged until a committed
+  layout edit (§7).
 
 **Panel IDs** (closed set for v1). Hidden panels are the ones that appear in no zone record.
 
@@ -116,8 +129,14 @@ If any check fails, the **whole** `DLAY` is invalid; §7 says what happens then.
 record. If a later version adds them, that is a new record type, which a v1 reader keeps and
 ignores.
 
-**Canonical form.** `encode (decode (b)) == b` for every valid v1 `b` written by this contract:
-records sorted, no padding, no duplicate types.
+**Canonical form.** `encode (decode (b)) == b` holds for every **valid** v1 stream.
+
+- A valid stream has strictly ascending types and correct lengths.
+- Each known payload is in its single encoding: fixed widths, no trailing bytes, and the
+  variable parts sized exactly by their counts.
+- Unknown payloads are kept as they are, so they round trip by construction.
+
+A known payload with extra or missing bytes is invalid; it is not normalised.
 
 ## 5. Editor size, display and DPI
 
@@ -158,9 +177,21 @@ records sorted, no padding, no duplicate types.
   Drags in progress are never written.
 - **Editor closed.** A save writes the processor's copy. A restore replaces it. The next editor
   open shows it. Nothing is lost because the editor is closed (F6).
-- **Restore while the editor is open.** After the restore commits, the processor posts an async
-  message-thread notification. The editor re-applies the layout and the selection, cancels any
-  drag in progress, and closes menus.
+- **Restore while the editor is open: threads and handoff.**
+  - `setStateInformation` can be called by the host on any non-audio thread.
+  - It decodes, validates and commits the layout under the processor's state lock. It never
+    touches a `Component`.
+  - Then it increments an atomic `layoutGeneration` and calls `sendChangeMessage()` on a
+    processor-owned `juce::ChangeBroadcaster`. That call only posts a message, so it is safe from
+    any thread.
+  - On the message thread, each registered editor compares `layoutGeneration` with the value it
+    last applied. If it differs, the editor copies the layout under the lock, applies it,
+    cancels a drag in progress and closes menus.
+  - The editor registers in its constructor and **unregisters in its destructor**. Both run on
+    the message thread, which is also where the broadcaster delivers. An editor closed while a
+    notification is pending is therefore never called. A notification arriving after the close
+    finds no listener.
+  - No UI is changed from a host or audio callback. The audio thread never touches layout state.
 - **Save during a drag.** The last committed layout is saved.
 - **Undo.** Layout changes are not project-undo steps and never touch audio state.
 - **Dirty flag.**
@@ -178,8 +209,8 @@ records sorted, no padding, no duplicate types.
 | `DUIS` v1, no `DLAY` (written by `c7c29bb`) | layout from the migration table (§8); selection from `DUIS` |
 | `DUIS` v1 + valid `DLAY` v1 | layout from `DLAY`; selection from `DUIS` |
 | `DLAY` with unknown record types | known records used; unknown records kept and written back unchanged |
-| `DLAY` version > 1 (newer writer) | layout from `DUIS` migration. The `DLAY` bytes are kept and written back **unchanged until the user changes the layout** in this session; after that a v1 `DLAY` is written (the newer layout is replaced; stated in the release notes) |
-| `DLAY` v1 invalid (truncated, out of range, duplicate or misplaced panel, > 2048 bytes) | layout from `DUIS` migration. The project, audio state included, **is restored**. "Layout data was invalid and was reset" appears in Settings › Diagnostics. The next save writes a valid `DLAY`. |
+| `DLAY` version > 1 (newer writer) | Layout for this session from the `DUIS` migration. The future `DLAY` bytes are **never rewritten**: every save writes them back unchanged, and layout edits in this session apply on screen only. The Workspace menu shows "Layout saved by a newer VOX Drums — changes here are not saved" plus **Reset layout…**. Only Reset, after a confirmation that names the loss ("Replace the newer layout with this version's layout? The newer layout will be lost."), writes a v1 `DLAY`. |
+| `DLAY` v1 invalid (truncated, wrong length, out of range, duplicate or misplaced panel, non-ascending types, > 2048 bytes) | Layout from the `DUIS` migration. The project, audio state included, **is restored**. "Layout data was invalid; a default layout is shown" appears in Settings › Diagnostics. The invalid bytes are **kept** and written back unchanged while the user only views. The **first committed layout edit, or Reset**, replaces them with a valid v1 `DLAY`. They are the plugin's own corrupt v1 data, not a newer feature, so this replacement loses nothing usable. |
 | Inspector pin pointing to an object that no longer exists | Inspector shows "unavailable" with Unpin / Pin current selection (spec v3 §2); nothing is edited |
 | `DUIS` v1 malformed | unchanged from today: the whole restore is rejected (F4) |
 | `UIST` out of the old range | unchanged from today: rejected (F3). The new build never writes such a `UIST` (§5) |
@@ -235,14 +266,17 @@ approval (§12 Q2).
   = 1). The project does not reference the file. A project opened on another machine keeps its
   own layout; only the named list is missing there.
 
-## 10. Size budget
+## 10. Size budget (Q4 withdrawn)
 
-- `DLAY` is at most 2048 bytes plus 16 bytes of section header.
-- `productStateReserve()` rises from 736 KiB to 740 KiB. The room for unknown-writer sections
-  shrinks by 4 KiB.
-- Room for unknown sections drops from about 284 KiB to about 280 KiB. A project whose unknown
-  sections fall in between would be accepted by `c7c29bb` but refused by the new build. That is
-  unlikely, but it is a change to F5 and needs approval (§12 Q4).
+- `DLAY` is at most 2048 bytes plus a 16-byte section header: 2064 bytes.
+- **No change to `productStateReserve()` (736 KiB = 753,664 bytes).** Its own comment at
+  `c7c29bb` sizes the product's largest state at about 705 KB. Even counted as 705 KiB
+  (721,920 bytes), that leaves about 31 KB, enough for `DLAY` (2064 bytes) and the proposed
+  `DROL` (37 bytes, PR #132).
+- The room for unknown-writer sections is unchanged (F5).
+- **Boundary fixture (T21):** the largest product state the plugin can produce, plus a
+  2048-byte `DLAY`, plus `DROL`, encoded and measured, must fit `productStateReserve()`. If it
+  does not, the reserve change comes back for review with the measured number.
 
 ## 11. Acceptance tests (Gate 2, before the UI ships)
 
@@ -252,11 +286,17 @@ approval (§12 Q2).
     and misplaced panel is rejected.
   - **T3** Size limits: 2048 bytes accepted, 2049 rejected; `recordCount` 33 rejected.
 - **Unknown data and fallbacks:**
-  - **T4** An unknown record type is kept in order and written back byte for byte.
-  - **T5** `DLAY` v2 (synthetic) is preserved verbatim through restore and save, and replaced
-    only after a layout change.
+  - **T4** Unknown record types interleaved between known types (e.g. 1, 3, 11, 12, 20) are kept
+    at their positions and written back byte for byte. Out-of-order or duplicate types make the
+    stream invalid.
+  - **T4b** A known payload with a trailing extra byte is invalid; it is not normalised.
+  - **T5** Synthetic future data (`DLAY` v2): load, make several layout edits, save, reopen. The
+    saved `DLAY` is byte-identical to the original and the notice is shown. Only Reset with
+    confirmation writes v1, and Cancel leaves it unchanged.
   - **T6** An invalid `DLAY` restores the project with all audio sections bit-identical to the
     fixture. The layout equals the `DUIS` migration and the diagnostics text is present.
+    Save without edits writes the invalid bytes back unchanged. After one layout edit, the save
+    writes a valid v1.
 - **Migration:**
   - **T7** `DUIS` pages 0–7, with Song mode on and off: expected workspace, active tabs and
     selection (§8 table).
@@ -273,6 +313,9 @@ approval (§12 Q2).
     identical layout.
   - **T13** Restore while the editor is open (with a drag in progress): the layout is replaced,
     the drag is cancelled, no crash.
+  - **T13b** A restore on a non-message thread, while the editor is being closed on the message
+    thread, run many times (TSan build): no callback into a deleted editor, no data race; the
+    next editor opens with the restored layout.
   - **T14** Determinism: the same bytes at 1040×700, 1280×720, 1440×900 and 1600×1000 give the
     same visible layout on every run, and the saved bytes are unchanged by the forced
     degradation.
@@ -291,6 +334,9 @@ approval (§12 Q2).
     a finding). Save, close, reopen restores the layout. An old `c7c29bb` project opens with the
     migrated layout. Run at 100/125/150/200 %.
   - **T20** Presets: loading kit, pad, pattern and song presets does not change the layout.
+- **Budget:**
+  - **T21** Boundary fixture (§10): the largest product state + a 2048-byte `DLAY` + `DROL`
+    fits `productStateReserve()`. The measured size is printed by the test.
 
 ## 12. Decisions requested from Architecture Guard
 
@@ -299,7 +345,7 @@ approval (§12 Q2).
 2. **Q2** Exception: an invalid `DLAY` falls back instead of rejecting the project (§7).
 3. **Q3** Real editor size in `DLAY`; `UIST` clamped to the old range. New editor maximum
    2560 × 1600 logical px; minimum 1040 × 700 unchanged (§5).
-4. **Q4** `productStateReserve()` +4 KiB (§10).
+4. **Q4** Withdrawn after review: no reserve change; boundary fixture T21 instead (§10).
 5. **Q5** Per-user workspaces file location, format and limits (§9).
 6. **Q6** Mark the host project dirty on committed layout changes via JUCE
    `withNonParameterStateChanged` (§6); host behaviour to be tested (T19).
