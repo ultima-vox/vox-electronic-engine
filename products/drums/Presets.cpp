@@ -4,6 +4,8 @@
 
 #include <juce_cryptography/juce_cryptography.h>
 
+#include <algorithm>
+
 namespace vox::drums {
 namespace {
 
@@ -108,6 +110,12 @@ void replaceSection (preset::StateDocument& doc, preset::Section section)
         doc.sections.push_back (std::move (section));
 }
 
+void removeSection (preset::StateDocument& doc, preset::Tag tag)
+{
+    doc.sections.erase (std::remove_if (doc.sections.begin(), doc.sections.end(), [tag] (const preset::Section& s) { return s.tag == tag; }),
+                        doc.sections.end());
+}
+
 bool decodeBlob (const void* data, std::size_t size, const DrumsProcessor& processor, preset::StateDocument& out, juce::String& error)
 {
     auto decoded = preset::decode ({ static_cast<const std::byte*> (data), data != nullptr ? size : 0u }, processor.product().stateTag,
@@ -204,6 +212,23 @@ juce::MemoryBlock Presets::capture (PresetType type, const juce::String& name, i
     {
         copy (padSectionTag);
         copy (sampleSectionTag);
+        // Roles only when the user set them (the state holds DROL only then).
+        // A pad preset carries just its own pad's role.
+        if (const auto* s = current.find (rolesSectionTag))
+        {
+            PadRoles roles;
+            juce::String error;
+            if (decodeRoles (*s, roles, error) && roles.explicitRoles)
+            {
+                if (type == PresetType::pad)
+                {
+                    const auto own = roles.role[static_cast<std::size_t> (info.source)];
+                    roles.role.fill (PadRole::none);
+                    roles.role[static_cast<std::size_t> (info.source)] = own;
+                }
+                doc.sections.push_back (encodeRoles (roles));
+            }
+        }
         std::map<std::string, float> values, kept;
         juce::String error;
         if (const auto* s = current.find (parameterSectionTag))
@@ -282,6 +307,16 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
         return juce::Result::fail ("cannot read the current state: " + error);
 
     const auto require = [&] (preset::Tag tag) -> const preset::Section* { return preset.find (tag); };
+    // Pad roles: the preset's (strict) and the project's current ones.
+    PadRoles incomingRoles, currentRoles;
+    const auto* incomingRoleSection = require (rolesSectionTag);
+    if (incomingRoleSection != nullptr && ! decodeRoles (*incomingRoleSection, incomingRoles, error))
+        return juce::Result::fail (error);
+    if (const auto* s = doc.find (rolesSectionTag))
+        if (! decodeRoles (*s, currentRoles, error))
+            return juce::Result::fail (error);
+    juce::String notice;
+    std::optional<RoleOffer> offer;
     if (info.type == PresetType::kit || info.type == PresetType::pad)
     {
         const auto* pads = require (padSectionTag);
@@ -301,6 +336,16 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
         if (info.type == PresetType::kit)
         {
             replaceSection (doc, *pads);
+            // A kit replaces the roles: the preset's, or the default layout
+            // for a kit without roles (legacy and factory kits are that layout).
+            if (incomingRoles.explicitRoles)
+                replaceSection (doc, encodeRoles (incomingRoles));
+            else
+            {
+                removeSection (doc, rolesSectionTag);
+                if (currentRoles.explicitRoles && currentRoles.role != PadRoles::identity())
+                    notice = "Roles set to the default layout of this kit";
+            }
             for (const auto& [id, value] : incoming)
                 if (kitScope (id))
                     values[id] = value;
@@ -331,6 +376,13 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
                     return juce::Result::fail (error);
             for (int player = 0; player < kit::samplesPerPad; ++player)
                 refs[static_cast<std::size_t> (slotOf (to, player))] = incomingRefs[static_cast<std::size_t> (slotOf (source, player))];
+            // The target keeps its role; a different preset role is only offered.
+            if (incomingRoles.explicitRoles)
+            {
+                const auto offered = incomingRoles.role[static_cast<std::size_t> (source)];
+                if (offered != currentRoles.role[static_cast<std::size_t> (to)])
+                    offer = RoleOffer { to, offered };
+            }
         }
         replaceSection (doc, encodeParameterValues (values));
         replaceSection (doc, SampleLibrary::encodeReferences (refs));
@@ -376,7 +428,25 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
         return juce::Result::fail (rejected);   // nothing changed
     previous_ = std::move (before);
     previousEpoch_ = processor_.patternEpoch();
+    notice_ = notice;
+    offer_ = offer;
+    offerEpoch_ = previousEpoch_;
     return juce::Result::ok();
+}
+
+std::optional<Presets::RoleOffer> Presets::roleOffer() const
+{
+    if (! offer_ || processor_.patternEpoch() != offerEpoch_
+        || processor_.padRoles().role[static_cast<std::size_t> (offer_->pad)] == offer_->role)
+        return std::nullopt;
+    return offer_;
+}
+
+bool Presets::applyRoleOffer()
+{
+    const auto offer = roleOffer();
+    offer_.reset();
+    return offer && processor_.setPadRole (offer->pad, offer->role);
 }
 
 juce::Result Presets::apply (const void* data, std::size_t size, int target, std::optional<PresetType> expected)

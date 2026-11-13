@@ -11,7 +11,14 @@
 //
 // Locks: a locked step (PatternStep::locked) and every step of a locked
 // lane (laneLocks) are left exactly as they are by every function here.
+//
+// Roles (DROL, option B): every function takes a RoleMap. The style rules
+// work on role slots; each slot's result goes to the pad lane that has that
+// role. Lanes without a slot (role none, a duplicate role) are cleared like
+// any lane the style leaves empty. Locks and the Mutate Lanes mask are pad
+// lanes. With RoleMap::identity() the output is exactly as before roles.
 
+#include "PadRoles.h"
 #include "PatternStore.h"
 
 namespace vox::drums {
@@ -44,19 +51,20 @@ preset::Section encodeGenerator (const GeneratorSettings&);
 bool decodeGenerator (const preset::Section&, GeneratorSettings& out, juce::String& error);
 
 // A new pattern in `pattern`'s grid (its steps and bars are kept).
-void generatePattern (const GeneratorSettings&, StoredPattern& pattern);
+void generatePattern (const GeneratorSettings&, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
 // Regenerates only the lanes in `laneMask` (bit n = lane n).
-void mutateLanes (const GeneratorSettings&, std::uint32_t laneMask, StoredPattern& pattern);
+// The mask is a set of pad lanes; lanes outside it are not touched.
+void mutateLanes (const GeneratorSettings&, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
 // Writes a fill into the end of bar `bar` (the last bar: -1).
-void generateFill (const GeneratorSettings&, StoredPattern& pattern, int bar = -1);
+void generateFill (const GeneratorSettings&, StoredPattern& pattern, int bar = -1, const RoleMap& roles = RoleMap::identity());
 // B from A: A with `variation` applied and a fill in its last bar. B takes
 // A's grid; B's locked steps and lanes are kept. If B has another grid than
 // A and holds a locked step or a hit on a locked lane, B is not changed.
-void generateVariation (const GeneratorSettings&, const StoredPattern& a, StoredPattern& b);
+void generateVariation (const GeneratorSettings&, const StoredPattern& a, StoredPattern& b, const RoleMap& roles = RoleMap::identity());
 // A whole song of the current length: the five slots (intro, main, lift,
 // break, peak) with their B variations, arranged on the timeline in
 // eight-bar phrases. Song length, mode and loop are kept; locked steps and
 // lanes of the slots are kept; unique bars are replaced.
-void generateSong (const GeneratorSettings&, PatternStore::Everything& all);
+void generateSong (const GeneratorSettings&, PatternStore::Everything& all, const RoleMap& roles = RoleMap::identity());
 
 } // namespace vox::drums

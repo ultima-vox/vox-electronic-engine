@@ -165,6 +165,58 @@ void DrumsProcessor::setUiState (const UiState& ui)
     ui_ = ui;
 }
 
+PadRoles DrumsProcessor::padRoles() const
+{
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    return roles_;
+}
+
+void DrumsProcessor::storeRoles (const PadRoles& roles)
+{
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    roles_ = roles;
+}
+
+bool DrumsProcessor::setPadRoles (const std::array<PadRole, kit::padCount>& role)
+{
+    PadRoles next;
+    next.explicitRoles = true;
+    next.role = role;
+    const auto before = padRoles();
+    if (next == before)
+        return false;
+    auto e = std::make_unique<PatternHistory::Entry>();
+    e->slot = -1;
+    e->hasRoles = true;
+    e->rolesBefore = before;
+    e->rolesAfter = next;
+    storeRoles (next);
+    patternHistory().push (std::move (e));
+    return true;
+}
+
+bool DrumsProcessor::setPadRole (int pad, PadRole role)
+{
+    if (pad < 0 || pad >= padCount)
+        return false;
+    auto roles = padRoles().role;
+    roles[static_cast<std::size_t> (pad)] = role;
+    return setPadRoles (roles);
+}
+
+RoleProposal DrumsProcessor::proposeRoles() const
+{
+    auto kit = store_.snapshot();
+    for (int pad = 0; pad < padCount; ++pad)   // the decay a user hears is the host parameter
+        kit.pads[static_cast<std::size_t> (pad)].decay = padRefs_[static_cast<std::size_t> (pad)].decay->load();
+    return proposeRolesFromModels (kit);
+}
+
+bool DrumsProcessor::applyRoleProposal (const RoleProposal& proposal)
+{
+    return proposal.complete() && setPadRoles (proposal.role);
+}
+
 int DrumsProcessor::currentSlot() const
 {
     return std::clamp (static_cast<int> (std::lround (parameters_.getRawParameterValue (patternParameterId)->load())), 0,
@@ -190,6 +242,7 @@ bool DrumsProcessor::editSong (const std::function<void (SongData&)>& change)
 bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSeed, int bar)
 {
     auto g = generator();
+    const auto roles = RoleMap::from (padRoles());
     if (newSeed)
     {
         g.seed = g.seed * 1664525u + 1013904223u;
@@ -203,7 +256,7 @@ bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSe
         e->allBefore = std::make_unique<PatternStore::Everything>();
         patternStore_.copyEverything (*e->allBefore);
         e->allAfter = std::make_unique<PatternStore::Everything> (*e->allBefore);
-        generateSong (g, *e->allAfter);
+        generateSong (g, *e->allAfter, roles);
         if (e->allAfter->slots == e->allBefore->slots && e->allAfter->alternates == e->allBefore->alternates
             && e->allAfter->song == e->allBefore->song)
             return false;
@@ -217,7 +270,7 @@ bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSe
         e->after = e->before;
         patternStore_.copyAlternate (slot, e->beforeB);
         e->afterB = e->beforeB;
-        generateVariation (g, e->before, e->afterB);
+        generateVariation (g, e->before, e->afterB, roles);
         if (e->afterB == e->beforeB)
             return false;
         patternStore_.setAlternate (slot, e->afterB);
@@ -228,11 +281,11 @@ bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSe
         patternStore_.copySlot (slot, e->before);
         e->after = e->before;
         if (what == Generate::pattern)
-            generatePattern (g, e->after);
+            generatePattern (g, e->after, roles);
         else if (what == Generate::mutate)
-            mutateLanes (g, laneMask, e->after);
+            mutateLanes (g, laneMask, e->after, roles);
         else
-            generateFill (g, e->after, bar);
+            generateFill (g, e->after, bar, roles);
         if (e->after == e->before)
             return false;
         patternStore_.setSlot (slot, e->after);
@@ -285,6 +338,7 @@ DrumsProcessor::DrumsProcessor()
     reverbDamp_ = parameters_.getRawParameterValue ("drm.fx.reverb.damp");
     reverbLevel_ = parameters_.getRawParameterValue ("drm.fx.reverb.level");
     presets_ = std::make_unique<Presets> (*this);
+    patternHistory_.setRoleSink ([this] (const PadRoles& roles) { storeRoles (roles); });
     events_.resize (midiCapacity);
     live_ = defaultKit();
     for (const auto& entry : pluginParameters())
@@ -665,6 +719,10 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodeSong (patternStore_.song()));
     out.push_back (encodeGenerator (generator()));
     out.push_back (encodeUiState (uiState()));
+    // Only roles the user set are saved: a project without them keeps
+    // exactly the sections it had before roles existed.
+    if (const auto roles = padRoles(); roles.explicitRoles)
+        out.push_back (encodeRoles (roles));
 }
 
 std::shared_ptr<const ExportSnapshot> DrumsProcessor::captureExport (ExportSnapshot::Scope scope, int passes)
@@ -791,6 +849,17 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
             return {};
     }
 
+    // Pad roles: DROL when the user set them; identity otherwise (DROL
+    // written as derived, explicit = 0, also means identity).
+    auto rolesRestore = std::make_shared<PadRoles>();
+    if (const auto* section = document.find (rolesSectionTag))
+    {
+        if (! decodeRoles (*section, *rolesRestore, error))
+            return {};
+        if (! rolesRestore->explicitRoles)
+            *rolesRestore = PadRoles {};
+    }
+
     std::vector<std::pair<juce::RangedAudioParameter*, float>> next;
     for (const auto& entry : pluginParameters())
     {
@@ -817,10 +886,13 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (encodeSong (*songRestore));
         restore.sections.push_back (encodeGenerator (*generatorRestore));
         restore.sections.push_back (encodeUiState (*uiRestore));
+        if (rolesRestore->explicitRoles)
+            restore.sections.push_back (encodeRoles (*rolesRestore));
     }
     restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore, generatorRestore,
-                     uiRestore] {
+                     uiRestore, rolesRestore] {
         setGenerator (*generatorRestore);
+        storeRoles (*rolesRestore);
         setUiState (*uiRestore);
         store_.setAll (*kitRestore);
         patternStore_.setAll (*patternRestore);

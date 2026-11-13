@@ -3,13 +3,15 @@
 Status: **revision 2, after Architecture Guard review 6864585514** on PR #132. That review
 approved the direction and decided Q1, Q2, Q4 and Q5, and Q3 with conditions (§7). This revision
 specifies pad-preset mapping (P1), selected-lane-only Mutate (P1) and the model-role preview
-(P2). Implementation still waits for re-review, in this Draft PR's branch. Task order: issue #127 comment 6863921664, priority 3. Decision: option B
-(PR #129 review, issue #128).
+(P2). Architecture Guard re-review passed; the model, state, generator and preset parts are
+implemented in this Draft PR's branch (§8). Task order: issue #127 comment 6863921664,
+priority 3. Decision: option B (PR #129 review, issue #128).
 
 Baseline: `drm/production-candidate` @ `c7c29bbbd6101dfb5e0cb2418a071d11caeb15b2`.
 
-This change does **not** modify PR #129. The Ambient lane fix there is independent. If both are
-integrated, this work rebases onto the integrated generator.
+This change does **not** modify PR #129. The Ambient lane fix there is independent. Integration
+order and its one expected test update are in §8.4. Nothing is rebased or merged without the
+owner's authorization.
 
 ## 1. Problem
 
@@ -238,3 +240,64 @@ The section is always 21 bytes.
 5. **Q5** Strict decode — **approved**.
 
 Requested: re-review of this revision before implementation starts.
+
+## 8. Implementation (this branch)
+
+### 8.1 Code
+
+| File | Change |
+|---|---|
+| `products/drums/PadRoles.h/.cpp` (new) | `PadRole`, `PadRoles`, `DROL` codec (strict), `RoleMap` (role slot ↔ pad lane), notices, `proposeRolesFromModels` + `RoleProposal::choose/complete` |
+| `products/drums/Generator.h/.cpp` | every action takes `const RoleMap& = RoleMap::identity()`. Style rules, fill lane choice, fill thinning, variation decor mask and its randomness are keyed by role slot; writes go to the mapped lane; lanes without a slot are cleared (Q2). Locks and the Mutate mask stay physical lanes. |
+| `products/drums/Processor.h/.cpp` | roles under `settingsLock_`; `padRoles`, `setPadRoles`, `setPadRole`, `proposeRoles`, `applyRoleProposal`; `generate()` passes `RoleMap::from (padRoles())`; `DROL` read strictly, written only when explicit; `DROL` explicit = 0 → identity |
+| `products/drums/PatternStore.h/.cpp` | a role edit is an entry of the existing undo history (`hasRoles`, applied through `setRoleSink`) |
+| `products/drums/Presets.h/.cpp` | kit: replaces roles or removes them (notice); pad: target keeps its role, `roleOffer` / `applyRoleOffer`; pad preset save writes only the source pad's role |
+| `products/CMakeLists.txt`, `tests/suite/CMakeLists.txt` | new sources; `suite_drums_pad_roles_tests` |
+
+Not changed: `DPAD`, `DGEN`, pattern/song formats, MIDI export, scheduler, host parameters,
+buses, factory content, `productStateReserve()`, the audio thread. Every new path runs on the
+message thread (generation, state, presets).
+
+Mutate Lanes: the scratch result S of §3.4 is the role-mapped style result of the selected lanes
+(as before roles, no fill); with the identity map it is exactly the old Mutate.
+
+### 8.2 Tests (`tests/suite/DrumsPadRolesTests.cpp`)
+
+| ID | Covered by |
+|---|---|
+| R1, R2, R3 | `testCodec`, `testState`: round trip of all values; short, long, empty, version, flag and role-value variants rejected by the codec and by a project restore with the live state byte-identical |
+| R4 | `testIdentityParity`: `DrumsGeneratorDigest.h` hashes Pattern, Variation B, Fill, Mutate (4 masks, step and lane locks) and Song over 6 seeds × 3 densities × 3 complexities × 2 syncopations × 3 fills × 2 variations × 4 grids per style. The 7 expected values were produced by the same header built against the `c7c29bb` generator. Factory hashes: `suite_drums_candidate_tests` (unchanged, passes). |
+| R5, R6, R9, R13, R14 | `checkMoved`: for kick/snare swapped, hats on pads 9/12, and 4 seeded random permutations, every Pattern/Variation/Fill/Song result equals the identity result moved to the mapped lanes (1,519 cases per role set). Plus direct grammar checks (four-on-the-floor on pad 2, Breaks back-beat on pad 1, Full-on open hat on pad 12) and percussion order. |
+| R7, R8, R10 | missing closed hat, duplicate kick, role none: no hits, notices, first pad used, cleared lanes keep locked cells, Variation clears a none lane |
+| R11 | lane lock on the mapped kick pad and step locks |
+| R12 | 5 role sets × 7 styles × 4 masks × 2 seeds, two locked steps: unselected lanes byte-identical, selected = S except locked, mask 0 no-op, deterministic; negative test with the kick on pad 2 |
+| R15 | processor export of a remapped pattern = the moved identity pattern exported with the pads' notes |
+| R16a–d | kit preset with/without `DROL`, notice, Undo Load; legacy and modern pad presets onto another pad, offer, Apply, undo/redo; no `DROL` without explicit roles; factory content writes none |
+| R17 | in-test: `DROL` is the only added section, schema 1. Cross-build run (local, §8.3). |
+| R18, R19 | factory kit proposals follow models, nothing written; hats by note, then decay; ties and sample hats are "?"; Apply blocked until chosen; one undo step |
+
+Mutation check (local): writing fills to the slot lane, keying the variation mask by lane, or
+removing the break-slot kick from lane 1 each make the mapping tests fail.
+
+### 8.3 Old-build evidence (local, Linux)
+
+A state with explicit roles written by this branch was loaded by a `c7c29bb` build and saved
+again: no restore error, the re-saved state is byte-identical (DROL kept as unknown), and this
+branch reads it back with the same roles.
+
+### 8.4 Integration with PR #129
+
+Both branches start at `c7c29bb` and touch `Generator.cpp` in different places (#129: one
+Ambient line; here: function signatures and lane mapping). Expected after integrating #129:
+the R4 digest values of Ambient and Breaks change (Breaks because its Mutate case runs over an
+Ambient baseline), both computed from #129 @ `567d696`: Ambient `0x574cb8aac3e13957`, Breaks
+`0x178afe258efca0bf`. That is #129's own intended change; the other five must stay. No rebase or
+merge is done here without authorization.
+
+### 8.5 Not in this PR
+
+- **UI** (§3.5): the role dropdown, the "Set roles from pad models…" preview, the notices in the
+  Generator panel, and the Inspector "Preset role: X — Apply" offer belong to UI v3, which waits
+  for the owner's visual sign-off (issue #127). The processor and preset APIs they call exist and
+  are tested here.
+- DAW tests and listening. Automated tests do not establish sound quality or DAW behaviour.
