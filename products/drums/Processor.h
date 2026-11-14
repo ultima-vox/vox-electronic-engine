@@ -196,7 +196,7 @@ protected:
     bool isProductSection (preset::Tag tag) const override
     {
         return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag
-            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == rolesSectionTag;
+            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == rolesSectionTag || tag == styleSectionTag;
     }
 
 private:

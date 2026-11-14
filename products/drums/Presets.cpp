@@ -254,6 +254,7 @@ juce::MemoryBlock Presets::capture (PresetType type, const juce::String& name, i
         copy (sequenceSectionTag);
         copy (songSectionTag);
         copy (generatorSectionTag);
+        copy (styleSectionTag);   // a user style the generator uses (DSTL)
     }
     if (! complete (doc, type))
         return {};   // an incomplete preset is not written
@@ -416,7 +417,14 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
         replaceSection (doc, *seq);
         replaceSection (doc, *song);
         if (const auto* g = require (generatorSectionTag))
+        {
             replaceSection (doc, *g);
+            // DGEN and DSTL travel together: the preset's user style, or none.
+            if (const auto* st = require (styleSectionTag))
+                replaceSection (doc, *st);
+            else
+                removeSection (doc, styleSectionTag);
+        }
     }
 
     const auto next = encodeBlob (doc);

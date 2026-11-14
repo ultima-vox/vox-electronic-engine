@@ -17,9 +17,11 @@
 //    nothing: no cell, seed, lock, A/B or song bar, no history entry
 //    (PR 138 review).
 #include "GeneratorReference.h"
+#include "Presets.h"
 #include "Processor.h"
 #include "StyleRegistry.h"
 
+#include <juce_cryptography/juce_cryptography.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <chrono>
@@ -593,6 +595,170 @@ void testRoundTrip (const juce::File& fixture)
     check (uuids.size() == st::registrySize, "registry: 23 unique UUIDs");
 }
 
+//==============================================================================
+// DGEN v2 and DSTL v1 (docs/ultima-vox-music/drums/STYLE_ENGINE.md).
+std::unique_ptr<DrumsProcessor> newProcessor()
+{
+    auto p = std::make_unique<DrumsProcessor>();
+    p->setRateAndBufferSizeDetails (48000.0, 512);
+    p->prepareToPlay (48000.0, 512);
+    return p;
+}
+
+juce::MemoryBlock stateOf (DrumsProcessor& p)
+{
+    juce::MemoryBlock b;
+    p.getStateInformation (b);
+    return b;
+}
+
+vox::preset::StateDocument documentOf (const juce::MemoryBlock& b, DrumsProcessor& p)
+{
+    auto d = vox::preset::decode ({ static_cast<const std::byte*> (b.getData()), b.getSize() }, p.product().stateTag, p.product().stateSchema);
+    check (d.ok(), "state decodes");
+    return d.ok() ? std::move (d.document) : vox::preset::StateDocument {};
+}
+
+juce::MemoryBlock blobOf (const vox::preset::StateDocument& doc)
+{
+    juce::MemoryBlock b;
+    if (const auto bytes = vox::preset::encode (doc))
+        b.replaceAll (bytes->data(), bytes->size());
+    return b;
+}
+
+void testEmbeddedStyle (const juce::File& fixture)
+{
+    // DGEN v2 round trip for every registry style, available or not.
+    for (int id = 0; id < st::registrySize; ++id)
+    {
+        GeneratorSettings g;
+        g.style = static_cast<Style> (id);
+        g.seed = 1234567u + static_cast<std::uint32_t> (id);
+        g.density = 0.25f;
+        g.laneLocks = 0x8001u;
+        const auto s = encodeGenerator (g);
+        GeneratorSettings back;
+        juce::String error;
+        check (s.data.size() == 58u && decodeGenerator (s, back, error) && back == g && back.custom == nullptr,
+               "DGEN v2: registry style " + juce::String (id) + " round-trips (" + error + ")");
+    }
+    st::Definition parsed;
+    if (st::parse (fixture.loadFileAsString(), parsed).failed())
+        return;
+    const auto user = std::make_shared<const st::Definition> (parsed);
+
+    // A project with a user style restores on a fresh instance (empty library).
+    auto p = newProcessor();
+    auto g = p->generator();
+    g.custom = user;
+    g.seed = 777;
+    p->setGenerator (g);
+    check (p->generate (DrumsProcessor::Generate::pattern, 0xffffu, false), "DSTL: a user style generates in the processor");
+    const auto saved = stateOf (*p);
+    const auto doc = documentOf (saved, *p);
+    const auto* dstl = doc.find (styleSectionTag);
+    check (dstl != nullptr, "DSTL: written for a user style");
+    auto q = newProcessor();
+    q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (q->lastStateError().isEmpty() && q->generator().custom != nullptr
+               && st::documentHash (*q->generator().custom) == st::documentHash (*user) && stateOf (*q) == saved,
+           "DSTL: a fresh instance restores the user style and saves the same bytes (" + q->lastStateError() + ")");
+    {
+        auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
+        p->generate (DrumsProcessor::Generate::variation, 0xffffu, false);
+        q->generate (DrumsProcessor::Generate::variation, 0xffffu, false);
+        p->patterns().copyAlternate (p->currentSlot(), *a);
+        q->patterns().copyAlternate (q->currentSlot(), *b);
+        check (*a == *b, "DSTL: the restored style generates identically");
+    }
+    // A factory style writes no DSTL.
+    {
+        auto f = newProcessor();
+        check (documentOf (stateOf (*f), *f).find (styleSectionTag) == nullptr, "DSTL: none for a factory style");
+    }
+    // Every malformed case is rejected and leaves the live state unchanged.
+    const auto rejects = [&] (const std::function<void (vox::preset::StateDocument&)>& damage, const juce::String& what) {
+        auto bad = doc;
+        damage (bad);
+        auto r = newProcessor();
+        const auto before = stateOf (*r);
+        const auto blob = blobOf (bad);
+        r->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+        check (r->lastStateError().isNotEmpty() && stateOf (*r) == before, "DSTL: " + what + " is rejected atomically (" + r->lastStateError() + ")");
+    };
+    const auto onStyle = [] (std::function<void (std::vector<std::byte>&)> f) {
+        return [f] (vox::preset::StateDocument& d) {
+            for (auto& s : d.sections)
+                if (s.tag == styleSectionTag)
+                    f (s.data);
+        };
+    };
+    rejects (onStyle ([] (std::vector<std::byte>& d) { d[0] = std::byte { 2 }; }), "an unknown version");
+    rejects (onStyle ([] (std::vector<std::byte>& d) { d[10] = static_cast<std::byte> (std::to_integer<int> (d[10]) ^ 1); }), "a wrong hash");
+    rejects (onStyle ([] (std::vector<std::byte>& d) { d[50] = static_cast<std::byte> (std::to_integer<int> (d[50]) ^ 4); }), "changed text");
+    rejects (onStyle ([] (std::vector<std::byte>& d) { d.pop_back(); }), "a truncated text");
+    rejects (onStyle ([] (std::vector<std::byte>& d) { d.resize (39); }), "a truncated header");
+    const auto replaceStyle = [&] (const st::Definition& def, const juce::String& textOverride = {}) {
+        return [def, textOverride] (vox::preset::StateDocument& d) {
+            auto section = encodeStyleSection (def);
+            if (textOverride.isNotEmpty())
+            {
+                // Valid hash and length over a non-canonical text.
+                const auto t = textOverride.toStdString();
+                section.data.resize (4);
+                const juce::SHA256 h (t.data(), t.size());
+                const auto raw = h.getRawData();
+                for (std::size_t i = 0; i < raw.getSize(); ++i)
+                    section.data.push_back (static_cast<std::byte> (static_cast<const std::uint8_t*> (raw.getData())[i]));
+                for (int shift = 0; shift < 32; shift += 8)
+                    section.data.push_back (static_cast<std::byte> ((t.size() >> shift) & 0xffu));
+                for (char c : t)
+                    section.data.push_back (static_cast<std::byte> (c));
+            }
+            for (auto& s : d.sections)
+                if (s.tag == styleSectionTag)
+                    s = section;
+        };
+    };
+    rejects (replaceStyle (parsed, st::serialize (parsed) + " "), "a non-canonical text");
+    {
+        auto other = parsed;
+        other.id = "11111111-2222-4333-8444-555555555555";
+        rejects (replaceStyle (other), "a style the generator does not reference");
+        auto factory = parsed;
+        factory.id = st::registry()[0].uuid;
+        rejects (replaceStyle (factory), "an embedded factory UUID");
+    }
+    rejects ([] (vox::preset::StateDocument& d) {
+        d.sections.erase (std::remove_if (d.sections.begin(), d.sections.end(), [] (const auto& s) { return s.tag == styleSectionTag; }),
+                          d.sections.end());
+    }, "a user style UUID without DSTL");
+    {
+        auto f = newProcessor();
+        auto fdoc = documentOf (stateOf (*f), *f);
+        fdoc.sections.push_back (*dstl);
+        auto r = newProcessor();
+        const auto before = stateOf (*r);
+        const auto blob = blobOf (fdoc);
+        r->setStateInformation (blob.getData(), static_cast<int> (blob.getSize()));
+        check (r->lastStateError().isNotEmpty() && stateOf (*r) == before, "DSTL: a DSTL beside a factory-style DGEN is rejected atomically");
+    }
+    // Song presets carry DGEN with DSTL; a preset without DSTL removes it.
+    {
+        const auto songPreset = p->presets().capture (PresetType::song, "With user style");
+        auto r = newProcessor();
+        check (r->presets().apply (songPreset.getData(), songPreset.getSize(), -1, PresetType::song).wasOk() && r->generator().custom != nullptr
+                   && st::documentHash (*r->generator().custom) == st::documentHash (*user),
+               "DSTL: a song preset brings the user style along");
+        auto f = newProcessor();
+        const auto factorySong = f->presets().capture (PresetType::song, "Factory style");
+        check (r->presets().apply (factorySong.getData(), factorySong.getSize(), -1, PresetType::song).wasOk() && r->generator().custom == nullptr
+                   && documentOf (stateOf (*r), *r).find (styleSectionTag) == nullptr,
+               "DSTL: a song preset with a factory style removes it");
+    }
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -604,6 +770,7 @@ int main (int argc, char** argv)
     }
     juce::ScopedJuceInitialiser_GUI juce;
     testRoundTrip (juce::File (juce::String (argv[1])));
+    testEmbeddedStyle (juce::File (juce::String (argv[1])));
     testRegistry();
     testUnavailableStyle();
     testFormulas();

@@ -177,3 +177,29 @@ Pre-release policy (#136): there is **no `DGEN` v1 decoder**. A development-buil
   both. A preset without `DSTL` removes the project's `DSTL`.
 - **Budget:** `DSTL` ≤ 65,576 bytes + section header. This must be measured by the boundary
   fixture (#130 T21); `productStateReserve()` is reviewed with that number.
+
+### Implemented and tested (`suite_drums_style_engine_tests`, `suite_drums_candidate_tests`)
+
+- **`DGEN` v2:** encode and decode; all 23 registry styles round-trip, available or not.
+  - The candidate tests reject: v1, an unknown version, an unknown UUID, NaN and negative
+    amounts, truncated and trailing bytes.
+- **`DSTL` v1:**
+  - a user style generates in the processor;
+  - the project saves `DGEN` + `DSTL`;
+  - a **fresh instance with an empty library** restores it, saves the same bytes and generates
+    identically;
+  - a factory style writes no `DSTL`.
+- **`DSTL` rejected atomically** (live state unchanged):
+  - unknown version, wrong hash, changed text;
+  - truncated text or header;
+  - non-canonical text with a valid hash;
+  - a style the generator does not reference;
+  - an embedded factory UUID;
+  - a user UUID without `DSTL`;
+  - a `DSTL` beside a factory-style `DGEN`.
+- **Song presets:** they bring the user style along. A preset with a factory style removes the
+  project's `DSTL`.
+- **Mutation check (local):** removing the canonical-text check, or the "DSTL not used by
+  DGEN" check, fails the corresponding tests.
+- **Not yet:** the library folder, Import/Export UI and the library-level UUID collisions
+  (Replace / Keep both). They come with the import feature.

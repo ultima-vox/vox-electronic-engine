@@ -2,6 +2,8 @@
 
 #include "StyleRegistry.h"
 
+#include <juce_cryptography/juce_cryptography.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -418,52 +420,109 @@ bool generateSong (const GeneratorSettings& g, PatternStore::Everything& all, co
 // DGEN: u32 version (1), u8 style, 8 x f32 (density, groove, syncopation,
 // swing, humanize, complexity, fills, variation), u32 seed, u16 lane locks.
 namespace {
-constexpr std::uint32_t generatorVersion = 1;
+constexpr std::uint32_t generatorVersion = 2;   // DGEN v2: style by UUID (no v1 decoder, pre-release policy)
+}
+
+namespace {
+
+// The 16 bytes of a canonical UUID text, in the order of its hex digits.
+std::array<std::uint8_t, 16> uuidBytes (const juce::String& uuid)
+{
+    std::array<std::uint8_t, 16> out {};
+    const auto hex = uuid.removeCharacters ("-");
+    for (int i = 0; i < 16 && hex.length() == 32; ++i)
+        out[static_cast<std::size_t> (i)] = static_cast<std::uint8_t> (hex.substring (2 * i, 2 * i + 2).getHexValue32());
+    return out;
+}
+
+juce::String uuidText (const std::byte* b)
+{
+    juce::String hex;
+    for (int i = 0; i < 16; ++i)
+    {
+        hex << juce::String::toHexString (std::to_integer<int> (b[i])).paddedLeft ('0', 2);
+        if (i == 3 || i == 5 || i == 7 || i == 9)
+            hex << "-";
+    }
+    return hex.toLowerCase();
+}
+
+std::uint32_t readU32 (const std::vector<std::byte>& d, std::size_t at)
+{
+    std::uint32_t v = 0;
+    for (std::size_t i = 0; i < 4; ++i)
+        v |= std::to_integer<std::uint32_t> (d[at + i]) << (8 * i);
+    return v;
+}
+
+void writeU32 (std::vector<std::byte>& d, std::uint32_t v)
+{
+    for (int shift = 0; shift < 32; shift += 8)
+        d.push_back (static_cast<std::byte> ((v >> shift) & 0xffu));
+}
+
+constexpr std::uint32_t styleSectionVersion = 1;
+constexpr std::size_t maxStyleText = 65536;
+
+} // namespace
+
+juce::String styleUuidOf (const GeneratorSettings& g)
+{
+    if (g.custom != nullptr)
+        return g.custom->id;
+    const auto* info = style::infoById (static_cast<int> (g.style));
+    return info != nullptr ? juce::String (info->uuid) : juce::String();
 }
 
 preset::Section encodeGenerator (const GeneratorSettings& g)
 {
     preset::Section s;
     s.tag = generatorSectionTag;
-    const auto u32 = [&] (std::uint32_t v) {
-        for (int shift = 0; shift < 32; shift += 8)
-            s.data.push_back (static_cast<std::byte> ((v >> shift) & 0xffu));
-    };
-    u32 (generatorVersion);
-    s.data.push_back (static_cast<std::byte> (g.style));
+    writeU32 (s.data, generatorVersion);
+    for (auto b : uuidBytes (styleUuidOf (g)))
+        s.data.push_back (static_cast<std::byte> (b));
     for (float v : { g.density, g.groove, g.syncopation, g.swing, g.humanize, g.complexity, g.fills, g.variation })
     {
         std::uint32_t bits = 0;
         std::memcpy (&bits, &v, sizeof bits);
-        u32 (bits);
+        writeU32 (s.data, bits);
     }
-    u32 (g.seed);
+    writeU32 (s.data, g.seed);
     s.data.push_back (static_cast<std::byte> (g.laneLocks & 0xffu));
     s.data.push_back (static_cast<std::byte> (g.laneLocks >> 8));
     return s;
 }
 
-bool decodeGenerator (const preset::Section& section, GeneratorSettings& out, juce::String& error)
+bool decodeGenerator (const preset::Section& section, GeneratorSettings& out, juce::String& error,
+                      const std::shared_ptr<const style::Definition>& embedded)
 {
     const auto& d = section.data;
-    const auto u32 = [&] (std::size_t at) {
-        std::uint32_t v = 0;
-        for (std::size_t i = 0; i < 4; ++i)
-            v |= std::to_integer<std::uint32_t> (d[at + i]) << (8 * i);
-        return v;
-    };
-    if (d.size() != 4 + 1 + 8 * 4 + 4 + 2 || u32 (0) != generatorVersion)
+    if (d.size() != 4 + 16 + 8 * 4 + 4 + 2 || readU32 (d, 0) != generatorVersion)
     {
         error = "unsupported generator section";
         return false;
     }
     GeneratorSettings g;
-    const auto style = std::to_integer<std::uint8_t> (d[4]);
+    const auto uuid = uuidText (d.data() + 4);
+    if (const auto* info = style::infoByUuid (uuid))
+        g.style = static_cast<Style> (info->id);
+    else if (embedded != nullptr && embedded->id == uuid)
+        g.custom = embedded;
+    else
+    {
+        error = "unknown generator style " + uuid;
+        return false;
+    }
+    if (embedded != nullptr && g.custom == nullptr)
+    {
+        error = "the embedded style is not the generator's style";
+        return false;
+    }
     float* fields[8] = { &g.density, &g.groove, &g.syncopation, &g.swing, &g.humanize, &g.complexity, &g.fills, &g.variation };
-    bool ok = style < styleCount;
+    bool ok = true;
     for (std::size_t i = 0; i < 8; ++i)
     {
-        const auto bits = u32 (5 + i * 4);
+        const auto bits = readU32 (d, 20 + i * 4);
         std::memcpy (fields[i], &bits, sizeof bits);
         ok = ok && std::isfinite (*fields[i]) && *fields[i] >= 0.0f && *fields[i] <= 1.0f;
     }
@@ -472,10 +531,69 @@ bool decodeGenerator (const preset::Section& section, GeneratorSettings& out, ju
         error = "invalid generator section";
         return false;
     }
-    g.style = static_cast<Style> (style);
-    g.seed = u32 (37);
-    g.laneLocks = static_cast<std::uint16_t> (std::to_integer<std::uint16_t> (d[41]) | (std::to_integer<std::uint16_t> (d[42]) << 8));
+    g.seed = readU32 (d, 52);
+    g.laneLocks = static_cast<std::uint16_t> (std::to_integer<std::uint16_t> (d[56]) | (std::to_integer<std::uint16_t> (d[57]) << 8));
     out = g;
+    return true;
+}
+
+preset::Section encodeStyleSection (const style::Definition& def)
+{
+    preset::Section s;
+    s.tag = styleSectionTag;
+    const auto text = style::serialize (def).toStdString();
+    writeU32 (s.data, styleSectionVersion);
+    const juce::SHA256 hash (text.data(), text.size());
+    const auto raw = hash.getRawData();
+    for (std::size_t i = 0; i < raw.getSize(); ++i)
+        s.data.push_back (static_cast<std::byte> (static_cast<const std::uint8_t*> (raw.getData())[i]));
+    writeU32 (s.data, static_cast<std::uint32_t> (text.size()));
+    for (char c : text)
+        s.data.push_back (static_cast<std::byte> (c));
+    return s;
+}
+
+bool decodeStyleSection (const preset::Section& section, std::shared_ptr<const style::Definition>& out, juce::String& error)
+{
+    const auto& d = section.data;
+    if (d.size() < 40 || readU32 (d, 0) != styleSectionVersion)
+    {
+        error = "unsupported style section";
+        return false;
+    }
+    const auto length = readU32 (d, 36);
+    if (length == 0 || length > maxStyleText || d.size() != 40 + static_cast<std::size_t> (length))
+    {
+        error = "invalid style section length";
+        return false;
+    }
+    const auto* text = reinterpret_cast<const char*> (d.data() + 40);
+    const juce::SHA256 hash (text, length);
+    const auto raw = hash.getRawData();
+    if (raw.getSize() != 32 || std::memcmp (raw.getData(), d.data() + 4, 32) != 0)
+    {
+        error = "style section hash mismatch";
+        return false;
+    }
+    auto def = std::make_shared<style::Definition>();
+    const auto source = juce::String::fromUTF8 (text, static_cast<int> (length));
+    const auto parsed = style::parse (source, *def);
+    if (parsed.failed())
+    {
+        error = parsed.getErrorMessage();
+        return false;
+    }
+    if (style::serialize (*def).toStdString() != std::string (text, length))
+    {
+        error = "style section is not in canonical form";
+        return false;
+    }
+    if (style::infoByUuid (def->id) != nullptr)
+    {
+        error = "a factory style cannot be embedded";
+        return false;
+    }
+    out = std::move (def);
     return true;
 }
 
