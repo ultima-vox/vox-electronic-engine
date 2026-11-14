@@ -12,9 +12,15 @@
 //  - content hashes: deterministic and pinned per factory style;
 //  - parser: strict, every rejection class names its field, limits hold,
 //    random mutations never crash and stay bounded;
-//  - formulas evaluate exactly as the equivalent C++ expression.
+//  - formulas evaluate exactly as the equivalent C++ expression;
+//  - an unavailable (registered, no definition) or unknown style changes
+//    nothing: no cell, seed, lock, A/B or song bar, no history entry
+//    (PR 138 review).
 #include "GeneratorReference.h"
+#include "Processor.h"
 #include "StyleRegistry.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <chrono>
 #include <cstring>
@@ -357,11 +363,77 @@ void testFormulas()
         }
 }
 
+//==============================================================================
+void testUnavailableStyle()
+{
+    for (int id : { 7, 22, 255 })
+    {
+        const auto label = "unavailable style " + juce::String (id) + ": ";
+        GeneratorSettings g;
+        g.style = static_cast<Style> (id);
+        g.seed = 99;
+        g.laneLocks = 0x0004u;
+        check (! styleAvailable (g.style), label + "reported unavailable");
+        // Pre-populated data: a Full-on pattern with a locked step.
+        GeneratorSettings fill = g;
+        fill.style = Style::fullOn;
+        auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>(), keep = std::make_unique<StoredPattern>();
+        empty (*a, 16, 4);
+        generatePattern (fill, *a);
+        a->cell (3, 1, 6).locked = true;
+        a->seed = 4242;
+        *keep = *a;
+        check (! generatePattern (g, *a) && *a == *keep, label + "Pattern changes nothing (cells, seed, locks)");
+        check (! mutateLanes (g, 0xffffu, *a) && ! mutateLanes (g, 0x0010u, *a) && *a == *keep, label + "Mutate changes nothing");
+        check (! generateFill (g, *a, -1) && ! generateFill (g, *a, 0) && *a == *keep, label + "Fill changes nothing");
+        empty (*b, 32, 2);   // another grid, so a copy from A would be visible
+        generatePattern (fill, *b);
+        const auto bBefore = std::make_unique<StoredPattern> (*b);
+        check (! generateVariation (g, *a, *b) && *b == *bBefore && *a == *keep, label + "Variation A>B changes neither A nor B");
+        for (int length : { 16, 32, 64 })
+        {
+            auto all = std::make_unique<PatternStore::Everything>();
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+            {
+                all->slots[static_cast<std::size_t> (slot)] = *keep;
+                all->alternates[static_cast<std::size_t> (slot)] = *bBefore;
+            }
+            all->song = SongData::initial();
+            all->song.length = static_cast<std::uint8_t> (length);
+            generateSong (fill, *all);   // a real timeline to protect
+            const auto before = std::make_unique<PatternStore::Everything> (*all);
+            check (! generateSong (g, *all) && all->slots == before->slots && all->alternates == before->alternates && all->song == before->song,
+                   label + "Song " + juce::String (length) + " changes no slot, variation or timeline");
+        }
+    }
+    // Through the processor: false, no seed change, no history, state unchanged.
+    auto p = std::make_unique<DrumsProcessor>();
+    p->setRateAndBufferSizeDetails (48000.0, 512);
+    p->prepareToPlay (48000.0, 512);
+    p->generate (DrumsProcessor::Generate::pattern);   // some content first
+    p->patternHistory().clear();
+    auto g = p->generator();
+    g.style = static_cast<Style> (9);   // Dark Psy: registered, not yet available
+    p->setGenerator (g);
+    juce::MemoryBlock before;
+    p->getStateInformation (before);
+    bool any = false;
+    for (auto what : { DrumsProcessor::Generate::pattern, DrumsProcessor::Generate::song, DrumsProcessor::Generate::mutate,
+                       DrumsProcessor::Generate::fill, DrumsProcessor::Generate::variation })
+        any = p->generate (what) || any;
+    juce::MemoryBlock after;
+    p->getStateInformation (after);
+    check (! any && p->generator().seed == g.seed && ! p->patternHistory().canUndo() && after == before,
+           "unavailable style: the processor reports no change, keeps the seed, records no undo step and leaves the state unchanged");
+}
+
 } // namespace
 
 int main()
 {
+    juce::ScopedJuceInitialiser_GUI juce;
     testRegistry();
+    testUnavailableStyle();
     testFormulas();
     testHashes();
     testParser();

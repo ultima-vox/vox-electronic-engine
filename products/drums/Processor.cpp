@@ -242,6 +242,10 @@ bool DrumsProcessor::editSong (const std::function<void (SongData&)>& change)
 bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSeed, int bar)
 {
     auto g = generator();
+    // A style without a runnable definition changes nothing, not even the
+    // seed, and records no history entry (PR 138 review).
+    if (! styleAvailable (g.style))
+        return false;
     const auto roles = RoleMap::from (padRoles());
     if (newSeed)
     {

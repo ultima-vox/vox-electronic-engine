@@ -213,27 +213,38 @@ bool GeneratorSettings::operator== (const GeneratorSettings& o) const noexcept
         && laneLocks == o.laneLocks;
 }
 
-void generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const RoleMap& roles)
+bool styleAvailable (Style style)
 {
+    return style::available (static_cast<int> (style));
+}
+
+bool generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const RoleMap& roles)
+{
+    if (definitionOf (g) == nullptr)
+        return false;   // before anything changes
     // The probability seed follows the generator's only when the generator
     // wrote something: a fully locked pattern stays exactly as it is.
     if (generateLanes (g, 0xffffu, pattern, roles))
         pattern.seed = g.seed;
     if (g.fills > 0.05f && pattern.bars > 1)
         generateFill (g, pattern, -1, roles);
+    return true;
 }
 
-void mutateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles)
+bool mutateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles)
 {
+    if (definitionOf (g) == nullptr)
+        return false;
     generateLanes (g, laneMask & 0xffffu, pattern, roles);
+    return true;
 }
 
-void generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const RoleMap& roles)
+bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const RoleMap& roles)
 {
     const auto laneOf = [&] (int slot) { return static_cast<int> (roles.laneOfSlot[static_cast<std::size_t> (slot)]); };
     const auto* def = definitionOf (g);
     if (def == nullptr)
-        return;
+        return false;
     if (bar < 0 || bar >= p.bars)
         bar = p.bars - 1;
     const int scale = p.steps / 16;
@@ -259,10 +270,13 @@ void generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
         if (laneOf (lane) >= 0)   // no pad with this role: the hit is not written
             put (g, p, laneOf (lane), bar, pos * scale, toStep (c, lane, pos, h));
     }
+    return true;
 }
 
-void generateVariation (const GeneratorSettings& g, const StoredPattern& a, StoredPattern& b, const RoleMap& roles)
+bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, StoredPattern& b, const RoleMap& roles)
 {
+    if (definitionOf (g) == nullptr)
+        return false;   // before B is copied from A
     // B keeps its own locked cells: build from A, then put B's locked cells back.
     auto locked = std::make_unique<StoredPattern> (b);
     const bool sameGrid = b.steps == a.steps && b.bars == a.bars;
@@ -277,7 +291,7 @@ void generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
                     anyLocked = b.cell (lane, bar, step).locked
                              || ((g.laneLocks & (1u << lane)) != 0 && b.cell (lane, bar, step).on);
         if (anyLocked)
-            return;
+            return true;   // available; B kept because of its locks
     }
     b = a;
     GeneratorSettings v = g;
@@ -303,10 +317,13 @@ void generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
                 for (int step = 0; step < b.steps; ++step)
                     if (locked->cell (lane, bar, step).locked || (g.laneLocks & (1u << lane)) != 0)
                         b.cell (lane, bar, step) = locked->cell (lane, bar, step);
+    return true;
 }
 
-void generateSong (const GeneratorSettings& g, PatternStore::Everything& all, const RoleMap& roles)
+bool generateSong (const GeneratorSettings& g, PatternStore::Everything& all, const RoleMap& roles)
 {
+    if (definitionOf (g) == nullptr)
+        return false;   // before any slot, variation or song bar changes
     const int kickLane = roles.laneOfSlot[static_cast<std::size_t> (kick)];
     // Slots: 1 intro (sparse), 2 main, 3 lift (denser), 4 break (no kick), 5 peak.
     struct Part { float density, complexity, fills; bool kickOn; };
@@ -353,6 +370,7 @@ void generateSong (const GeneratorSettings& g, PatternStore::Everything& all, co
             song.bars[static_cast<std::size_t> (phrase * 8 + 4 + k)].patternBar = static_cast<std::uint8_t> (k % bars);
         }
     }
+    return true;
 }
 
 //==============================================================================

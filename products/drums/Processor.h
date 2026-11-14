@@ -136,7 +136,8 @@ public:
     // `laneMask`, fill in `bar`, variation: B from A) or on everything
     // (song). With `newSeed` the seed advances first, so every press gives
     // new data; without it the stored seed reproduces its result. One undo
-    // step in patternHistory(). Returns false when nothing changed.
+    // step in patternHistory(). Returns false when nothing changed, also
+    // when the style is not available (then not even the seed changes).
     enum class Generate { pattern, song, mutate, fill, variation };
     bool generate (Generate what, std::uint32_t laneMask = 0xffffu, bool newSeed = true, int bar = -1);
     int currentSlot() const;
