@@ -213,24 +213,13 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         lastKey_.clear();
         update();
     };
-    button (midi_, "MIDI", "Click: save the pattern as a MIDI file. Drag: drop it into your DAW.", vox::ui::VoxButton::Type::Primary);
-    midi_->onClick = [this] {
-        // Frozen at the click: what is saved is what was there when the
-        // button was pressed, whatever changes while the dialog is open.
-        const auto frozen = snapshot();
-        chooser_ = std::make_unique<juce::FileChooser> ("Save as MIDI", saveAsDefault(), "*.mid");
-        chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
-                                   | juce::FileBrowserComponent::warnAboutOverwriting,
-                               [frozen, safe = juce::Component::SafePointer<PatternEditor> (this)] (const juce::FileChooser& fc) {
-                                   if (fc.getResult() == juce::File())
-                                       return;
-                                   const auto file = fc.getResult().withFileExtension ("mid");
-                                   const bool ok = writeSnapshot (*frozen, file);
-                                   if (safe != nullptr)
-                                       safe->exported (ok, file);
-                               });
-    };
-    midi_->addMouseListener (this, false);
+    midi_ = std::make_unique<MidiDragButton> ("MIDI", vox::ui::VoxButton::Type::Primary);
+    midi_->setTooltip ("Click: save the pattern as a MIDI file. Drag: drop it into your DAW.");
+    addAndMakeVisible (*midi_);
+    midi_->onClick = [this] { openSaveDialog(); };
+    // A drag that starts on the MIDI button exports the pattern to a file
+    // and drops it (into the DAW's arrangement, a folder, ...).
+    midi_->onDragStart = [this] { startDrag(); };
     abLabel_ = std::make_unique<juce::Label> ("ab", "");
     abLabel_->setFont (vox::ui::typography::valueText());
     abLabel_->setColour (juce::Label::textColourId, c::textMuted);
@@ -294,10 +283,7 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
     update (false);
 }
 
-PatternEditor::~PatternEditor()
-{
-    midi_->removeMouseListener (this);
-}
+PatternEditor::~PatternEditor() = default;
 
 void PatternEditor::checkEpoch()
 {
@@ -678,30 +664,81 @@ juce::File PatternEditor::exportForDrag()
     return file;
 }
 
+void PatternEditor::openSaveDialog()
+{
+    // Frozen at the click: what is saved is what was there when the
+    // button was pressed, whatever changes while the dialog is open.
+    const auto frozen = snapshot();
+    if (saveDialogForTesting)
+    {
+        saveDialogForTesting (frozen);
+        return;
+    }
+    chooser_ = std::make_unique<juce::FileChooser> ("Save as MIDI", saveAsDefault(), "*.mid");
+    chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                               | juce::FileBrowserComponent::warnAboutOverwriting,
+                           [frozen, safe = juce::Component::SafePointer<PatternEditor> (this)] (const juce::FileChooser& fc) {
+                               if (fc.getResult() == juce::File())
+                                   return;
+                               const auto file = fc.getResult().withFileExtension ("mid");
+                               const bool ok = writeSnapshot (*frozen, file);
+                               if (safe != nullptr)
+                                   safe->exported (ok, file);
+                           });
+}
+
 void PatternEditor::startDrag()
 {
+    // A failed export is shown (exportMessage) and starts no drag.
     const auto file = exportForDrag();
     if (file == juce::File())
         return;
+    if (externalDragForTesting)
+    {
+        externalDragForTesting (file);
+        return;
+    }
+    // The OS drag (JUCE): on Windows an OLE DoDragDrop with a copy of the
+    // file (CF_HDROP). Not changed by issue 131; see the audit there.
     if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
         container->performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);
 }
 
-void PatternEditor::mouseDown (const juce::MouseEvent&)
+//==============================================================================
+void MidiDragButton::mouseDown (const juce::MouseEvent& e)
 {
-    dragging_ = false;
+    // A new gesture: whatever the last one left (a drag whose mouse-up the
+    // OS drag took, a failed export) ends here.
+    pressed_ = true;
+    dragStarted_ = false;
+    VoxButton::mouseDown (e);   // the pressed look; no click on mouse-down
 }
 
-void PatternEditor::mouseDrag (const juce::MouseEvent& e)
+void MidiDragButton::mouseDrag (const juce::MouseEvent& e)
 {
-    // A drag that starts on the MIDI button exports the pattern to a file
-    // and drops it (into the DAW's arrangement, a folder, ...).
-    if (e.eventComponent == midi_.get() && ! dragging_ && e.getDistanceFromDragStart() > 6)
+    if (! pressed_ || dragStarted_)
+        return;   // a started drag is never re-armed into a click
+    if (e.getDistanceFromDragStart() > dragThreshold)
     {
-        dragging_ = true;
-        midi_->setState (juce::Button::buttonNormal);
-        startDrag();
+        dragStarted_ = true;
+        setState (juce::Button::buttonNormal);
+        if (onDragStart)
+            onDragStart();   // may run the OS drag; this gesture never clicks
+        return;
     }
+    VoxButton::mouseDrag (e);
+}
+
+void MidiDragButton::mouseUp (const juce::MouseEvent& e)
+{
+    const bool inside = getLocalBounds().contains (e.getPosition());
+    const bool click = pressed_ && ! dragStarted_ && inside && isEnabled();
+    pressed_ = false;
+    dragStarted_ = false;
+    // Button::mouseUp is not called: it would click from the hover state.
+    setState (inside ? juce::Button::buttonOver : juce::Button::buttonNormal);
+    if (click && onClick)
+        onClick();
 }
 
 void PatternEditor::paint (juce::Graphics&) {}

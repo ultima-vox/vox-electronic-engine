@@ -8,6 +8,10 @@
 //  - export: click and drag write the same bytes from one frozen snapshot;
 //    channel 10, Note On/Off pairs without overlap, tempo, 4/4 and End of
 //    Track at the end of bar 16/32/64 (and of a 1-4 bar pattern);
+//  - MIDI button gesture (issue 131): a click saves, a drag drops, one press
+//    never does both (drags over the button, release inside or outside,
+//    a lost mouse-up, a failed export, the next click); parity of the
+//    dropped and saved files for a pattern and 16/32/64-bar songs;
 //  - outputs: 9 host buses (Main + Out 2..9), every destination alone, no
 //    copy on Main, a disabled bus plays on Main bit-identically, sends and
 //    returns, tails, All Sound Off, mute, solo, meters, and blocks larger
@@ -698,6 +702,179 @@ void testExport()
     editor.reset();
     if (root.getFileName() == "drags" && root.isAChildOf (workFolder))
         root.deleteRecursively();
+    PatternEditor::setDragRootForTesting ({});
+}
+
+//==============================================================================
+// Issue 131 (H1): the MIDI button's gesture. One press clicks (Save dialog)
+// or drags (a drop file), never both; checked through the button's own mouse
+// handlers with the dialog and the OS drag replaced by test hooks.
+juce::MouseEvent buttonEvent (juce::Component& c, juce::Point<float> pos, juce::Point<float> down, bool dragged)
+{
+    auto source = juce::Desktop::getInstance().getMainMouseSource();
+    const auto now = juce::Time::getCurrentTime();
+    return juce::MouseEvent (source, pos, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c, now,
+                             down, now, 1, dragged);
+}
+
+void testMidiGesture()
+{
+    auto p = makeProcessor();
+    buildSong (*p);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
+    check (panel != nullptr, "gesture: Drums panel");
+    if (panel == nullptr)
+        return;
+    panel->showPage (2);
+    auto& ed = panel->patternEditor();
+    auto* button = dynamic_cast<MidiDragButton*> (ed.button ("midi"));
+    check (button != nullptr && button->getWidth() > 20 && button->getHeight() > 10, "gesture: the MIDI button is a MidiDragButton with a size");
+    if (button == nullptr)
+        return;
+    const auto root = workFolder.getChildFile ("gesture-drags");
+    PatternEditor::setDragRootForTesting (root);
+    int saves = 0;
+    std::vector<juce::File> drops;
+    std::shared_ptr<const ExportSnapshot> saved;
+    ed.saveDialogForTesting = [&] (std::shared_ptr<const ExportSnapshot> s) { ++saves; saved = std::move (s); };
+    ed.externalDragForTesting = [&] (const juce::File& f) { drops.push_back (f); };
+
+    const auto centre = button->getLocalBounds().getCentre().toFloat();
+    const auto inside = centre.translated (20.0f, 0.0f);   // past the threshold, still over the button
+    check (button->getLocalBounds().contains (inside.toInt()), "gesture: the drag positions are over the button");
+    const auto press = [&] (juce::Point<float> at) { button->mouseDown (buttonEvent (*button, at, at, false)); };
+    const auto move = [&] (juce::Point<float> to, juce::Point<float> from) { button->mouseDrag (buttonEvent (*button, to, from, true)); };
+    const auto release = [&] (juce::Point<float> at, juce::Point<float> from) { button->mouseUp (buttonEvent (*button, at, from, at != from)); };
+    const auto reset = [&] { saves = 0; drops.clear(); saved.reset(); };
+
+    // 1. An ordinary click opens Save (once) and writes no drop file.
+    reset();
+    press (centre);
+    release (centre, centre);
+    check (saves == 1 && drops.empty(), "gesture: a click opens the Save dialog and starts no drag");
+    // 2. Moving no more than the threshold is still a click.
+    reset();
+    press (centre);
+    move (centre.translated (static_cast<float> (MidiDragButton::dragThreshold), 0.0f), centre);
+    release (centre.translated (static_cast<float> (MidiDragButton::dragThreshold), 0.0f), centre);
+    check (saves == 1 && drops.empty(), "gesture: a move within the threshold is a click");
+    // 3. The reported defect: down, drag past the threshold, more drags over
+    //    the button (Button::mouseDrag re-armed the click on each), up over
+    //    the button. One drop, no Save.
+    reset();
+    press (centre);
+    move (inside, centre);
+    check (button->dragInProgress() && drops.size() == 1, "gesture: a drag past the threshold starts one drag");
+    for (float dx : { 22.0f, 18.0f, 25.0f, 0.0f, -10.0f })
+        move (centre.translated (dx, 2.0f), centre);
+    check (drops.size() == 1 && button->getState() == juce::Button::buttonNormal, "gesture: further drags over the button start nothing and do not re-arm it");
+    release (centre, centre);
+    check (saves == 0 && drops.size() == 1, "gesture: down > drag > drags over the button > up over the button: no Save dialog");
+    check (! button->dragInProgress(), "gesture: the mouse-up ends the gesture");
+    // The drop file: written, non-empty, under the drag root, byte-equal to
+    // what a click would save now.
+    if (drops.size() == 1)
+    {
+        juce::MemoryBlock dropped;
+        drops[0].loadFileAsData (dropped);
+        check (drops[0].isAChildOf (root) && dropped.getSize() > 100 && dropped == DrumsProcessor::renderExport (*ed.snapshot()),
+               "gesture: the drop file exists, is non-empty and equals the export");
+    }
+    // 4. A drag released outside the button does not save either.
+    reset();
+    press (centre);
+    move (inside, centre);
+    release ({ -200.0f, -200.0f }, centre);
+    check (saves == 0 && drops.size() == 1, "gesture: a drag released outside the button does not save");
+    // 5. The OS drag took the mouse-up (it never arrives): the next gesture
+    //    is an ordinary click again.
+    reset();
+    press (centre);
+    move (inside, centre);
+    press (centre);
+    release (centre, centre);
+    check (saves == 1 && drops.size() == 1, "gesture: after a drag without mouse-up, a fresh click opens Save");
+    // 6. A failing drag (the export cannot be written): no drop, the
+    //    failure is shown, no Save in that gesture; the next click saves.
+    reset();
+    const auto blocker = workFolder.getChildFile ("gesture-blocker");
+    blocker.replaceWithText ("not a folder");
+    PatternEditor::setDragRootForTesting (blocker.getChildFile ("drags"));
+    press (centre);
+    move (inside, centre);
+    release (centre, centre);
+    check (saves == 0 && drops.empty() && ed.exportMessage().startsWith ("MIDI export failed"),
+           "gesture: a failed drag export is shown and neither drops nor saves");
+    PatternEditor::setDragRootForTesting (root);
+    press (centre);
+    release (centre, centre);
+    check (saves == 1, "gesture: after a failed drag, a fresh click opens Save");
+    // 7. Keyboard / accessibility activation still saves.
+    reset();
+    if (button->onClick)
+        button->onClick();
+    check (saves == 1 && drops.empty(), "gesture: activation without the mouse opens Save");
+
+    // 8. Parity through the gesture: pattern and 16/32/64-bar song, the
+    //    drop file equals the file the Save path writes from its snapshot.
+    for (int length : { 0, 16, 32, 64 })
+    {
+        const auto name = length == 0 ? juce::String ("pattern") : "song " + juce::String (length) + " bars";
+        auto ui = p->uiState();
+        ui.exportScope = length == 0 ? 0 : 1;
+        p->setUiState (ui);
+        if (length > 0)
+            p->editSong ([length] (SongData& s) { s.length = static_cast<std::uint8_t> (length); });
+        reset();
+        press (centre);
+        release (centre, centre);
+        press (centre);
+        move (inside, centre);
+        release (centre, centre);
+        check (saves == 1 && saved != nullptr && drops.size() == 1, "gesture parity " + name + ": one save, one drop");
+        if (saves != 1 || saved == nullptr || drops.size() != 1)
+            continue;
+        const auto savedFile = workFolder.getChildFile ("gesture-save.mid");
+        check (PatternEditor::writeSnapshot (*saved, savedFile), "gesture parity " + name + ": the Save path writes");
+        juce::MemoryBlock a, b;
+        savedFile.loadFileAsData (a);
+        drops[0].loadFileAsData (b);
+        check (a.getSize() > 0 && a == b, "gesture parity " + name + ": Save and drag files are byte-identical");
+        const auto parsed = parseMidi (b);
+        check (parsed.ok && ! parsed.overlap && ! parsed.unmatchedOff, "gesture parity " + name + ": a valid file");
+        if (length > 0)
+            check (parsed.endTick == length * 3840 && drops[0].getFileName() == "VOX Drums Song.mid",
+                   "gesture parity " + name + ": End of Track at bar " + juce::String (length));
+        else
+            check (drops[0].getFileName().startsWith ("VOX Drums Pattern "), "gesture parity pattern: file name");
+    }
+    // Lifetime: the newest drop survives cleanup; older ones go after dragLifetime.
+    {
+        reset();
+        press (centre);
+        move (inside, centre);
+        release (centre, centre);
+        press (centre);
+        move (inside, centre);
+        release (centre, centre);
+        check (drops.size() == 2 && drops[0].existsAsFile() && drops[1].existsAsFile() && drops[0] != drops[1],
+               "gesture: every drag writes its own file");
+        if (drops.size() == 2)
+        {
+            ed.cleanupDragFiles (juce::Time::getCurrentTime() + PatternEditor::dragLifetime + juce::RelativeTime::minutes (1));
+            check (! drops[0].exists() && drops[1].existsAsFile(), "gesture: cleanup removes old drops and keeps the newest");
+        }
+    }
+
+    ed.saveDialogForTesting = nullptr;
+    ed.externalDragForTesting = nullptr;
+    p->editorBeingDeleted (editor.get());
+    editor.reset();
+    if (root.getFileName() == "gesture-drags" && root.isAChildOf (workFolder))
+        root.deleteRecursively();
+    blocker.deleteFile();
     PatternEditor::setDragRootForTesting ({});
 }
 
@@ -2451,6 +2628,7 @@ int main (int argc, char** argv)
     workFolder.createDirectory();
     testSongParity();
     testExport();
+    testMidiGesture();
     testOutputs();
     testGenerator();
     testPresets();
