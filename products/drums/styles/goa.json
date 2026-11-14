@@ -1,0 +1,15 @@
+{
+  "format": "vox-drums-style", "version": 1, "key": "goa", "name": "Goa",
+  "rules": [
+    { "part": "kick", "at": [1, 5, 9, 13], "velocity": 1.0, "accent": true },
+    { "part": "closedHat", "at": [3, 7, 11, 15], "velocity": 0.8 },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.15 + 0.5 * density", "velocity": 0.45 },
+    { "part": "snare", "at": [13], "velocity": 0.85, "accent": true },
+    { "part": "snare", "at": [5], "when": ["density > 0.5"], "velocity": 0.7 },
+    { "part": "perc1", "at": [4, 7, 10, 16], "kind": "ghost", "chance": "0.4 + 0.5 * density", "velocity": 0.65 },
+    { "part": "perc2", "at": [3, 6, 9, 12, 15], "kind": "ghost", "chance": "0.2 + 0.6 * syncopation", "velocity": 0.55 },
+    { "part": "tom", "at": [11, 12, 15], "kind": "ghost", "chance": "0.25 + 0.6 * complexity", "velocity": 0.7 },
+    { "part": "openHat", "at": [15], "kind": "ghost", "chance": "0.2 + 0.5 * density", "velocity": 0.7 }
+  ],
+  "fill": { "cycle": ["snare", "tom"], "ratchet": 2 }
+}

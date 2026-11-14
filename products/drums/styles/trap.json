@@ -1,0 +1,17 @@
+{
+  "format": "vox-drums-style", "version": 1, "key": "trap", "name": "Trap",
+  "rules": [
+    { "part": "kick", "at": [1], "velocity": 1.0, "accent": true },
+    { "part": "kick", "at": [7, 8, 11, 14], "kind": "ghost", "chance": "0.15 + 0.45 * syncopation + 0.2 * density", "velocity": 0.85 },
+    { "part": "snare", "at": [9], "velocity": 0.95, "accent": true },
+    { "part": "clap", "at": [9], "when": ["density > 0.4"], "velocity": 0.8 },
+    { "part": "closedHat", "at": [1, 5, 9, 13], "velocity": 0.7,
+      "ratchet": { "chance": "0.1 + 0.5 * complexity", "salt": 7, "valueSalt": 8, "below": [[0.5, 2], [0.8, 3]], "otherwise": 4 } },
+    { "part": "closedHat", "at": [3, 7, 11, 15], "velocity": 0.55,
+      "ratchet": { "chance": "0.1 + 0.5 * complexity", "salt": 7, "valueSalt": 8, "below": [[0.5, 2], [0.8, 3]], "otherwise": 4 } },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.05 + 0.5 * density", "velocity": 0.4 },
+    { "part": "openHat", "at": [7, 15], "kind": "ghost", "chance": "0.15 + 0.4 * density", "velocity": 0.65 },
+    { "part": "perc1", "at": [4, 12], "kind": "ghost", "chance": "0.1 + 0.5 * complexity", "velocity": 0.5 }
+  ],
+  "fill": { "cycle": ["closedHat", "snare"], "ratchet": 4 }
+}

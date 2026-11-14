@@ -7,11 +7,21 @@
 //
 // Lane roles follow the pad layout of the default and factory kits: 1 kick,
 // 2 snare, 3 clap, 4 closed hat, 5 open hat, 6 tom, 7 rim, 8 cymbal, 9-16
-// percussion.
+// percussion. The styles write percussion only to lanes 9-10: on lanes 11-16
+// the factory kits hold other instruments (a clap, a snare, a kick).
+// Generation does not read the kit: on a user kit whose pads are arranged
+// differently, the rhythm is the style's but other instruments play it.
 //
 // Locks: a locked step (PatternStep::locked) and every step of a locked
 // lane (laneLocks) are left exactly as they are by every function here.
+//
+// Roles (DROL, option B): every function takes a RoleMap. The style rules
+// work on role slots; each slot's result goes to the pad lane that has that
+// role. Lanes without a slot (role none, a duplicate role) are cleared like
+// any lane the style leaves empty. Locks and the Mutate Lanes mask are pad
+// lanes. With RoleMap::identity() the output is exactly as before roles.
 
+#include "PadRoles.h"
 #include "PatternStore.h"
 
 namespace vox::drums {
@@ -43,20 +53,27 @@ preset::Section encodeGenerator (const GeneratorSettings&);
 // Strict: unknown version, wrong size or a value out of range is rejected.
 bool decodeGenerator (const preset::Section&, GeneratorSettings& out, juce::String& error);
 
+// Every function below first checks that the style has a definition the
+// generator can run (StyleRegistry: a registered but not yet available
+// style, or an unknown id, has none). If not, it returns false and changes
+// NOTHING: no cell, seed, lock, A/B pattern or song bar. True otherwise.
+bool styleAvailable (Style);
+
 // A new pattern in `pattern`'s grid (its steps and bars are kept).
-void generatePattern (const GeneratorSettings&, StoredPattern& pattern);
+bool generatePattern (const GeneratorSettings&, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
 // Regenerates only the lanes in `laneMask` (bit n = lane n).
-void mutateLanes (const GeneratorSettings&, std::uint32_t laneMask, StoredPattern& pattern);
+// The mask is a set of pad lanes; lanes outside it are not touched.
+bool mutateLanes (const GeneratorSettings&, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
 // Writes a fill into the end of bar `bar` (the last bar: -1).
-void generateFill (const GeneratorSettings&, StoredPattern& pattern, int bar = -1);
+bool generateFill (const GeneratorSettings&, StoredPattern& pattern, int bar = -1, const RoleMap& roles = RoleMap::identity());
 // B from A: A with `variation` applied and a fill in its last bar. B takes
 // A's grid; B's locked steps and lanes are kept. If B has another grid than
 // A and holds a locked step or a hit on a locked lane, B is not changed.
-void generateVariation (const GeneratorSettings&, const StoredPattern& a, StoredPattern& b);
+bool generateVariation (const GeneratorSettings&, const StoredPattern& a, StoredPattern& b, const RoleMap& roles = RoleMap::identity());
 // A whole song of the current length: the five slots (intro, main, lift,
 // break, peak) with their B variations, arranged on the timeline in
 // eight-bar phrases. Song length, mode and loop are kept; locked steps and
 // lanes of the slots are kept; unique bars are replaced.
-void generateSong (const GeneratorSettings&, PatternStore::Everything& all);
+bool generateSong (const GeneratorSettings&, PatternStore::Everything& all, const RoleMap& roles = RoleMap::identity());
 
 } // namespace vox::drums

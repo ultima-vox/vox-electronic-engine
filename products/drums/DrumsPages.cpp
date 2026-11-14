@@ -469,6 +469,13 @@ private:
         for (int lane = 0; lane < padCount; ++lane)
             if (mutate_[static_cast<std::size_t> (lane)]->getToggleState())
                 mask |= 1u << lane;
+        if (! styleAvailable (processor_.generator().style))
+        {
+            status_->setText (juce::String ("Not generated: the style ") + styleName (processor_.generator().style)
+                                  + " is not available; nothing changed",
+                              juce::dontSendNotification);
+            return;
+        }
         const bool changed = processor_.generate (what, mask);
         refresh();
         status_->setText (changed ? done + " (seed " + juce::String (shown_.seed) + ")"

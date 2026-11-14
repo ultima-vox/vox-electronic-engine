@@ -1,0 +1,15 @@
+{
+  "format": "vox-drums-style", "version": 1, "key": "full-on", "name": "Full-on / Psy",
+  "rules": [
+    { "part": "kick", "at": [1, 5, 9, 13], "velocity": 1.0, "accent": true },
+    { "part": "openHat", "at": [3, 7, 11, 15], "velocity": 0.85 },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "chance": "0.35 + 0.65 * density", "velocity": 0.55 },
+    { "part": "closedHat", "at": [1, 5, 9, 13], "when": ["density > 0.75"], "velocity": 0.7 },
+    { "part": "clap", "at": [5, 13], "when": ["density > 0.15"], "velocity": 0.9, "accent": true },
+    { "part": "snare", "at": [13], "chance": "0.3 + 0.5 * complexity", "velocity": 0.8 },
+    { "part": "perc1", "at": [4, 8, 12, 16], "kind": "ghost", "chance": "0.25 + 0.6 * syncopation", "velocity": 0.6 },
+    { "part": "perc2", "at": [2, 6, 10, 14], "kind": "ghost", "chance": "0.15 + 0.5 * syncopation * density", "velocity": 0.5 },
+    { "part": "rim", "at": [8, 16], "kind": "ghost", "chance": "0.2 + 0.6 * complexity", "velocity": 0.6 }
+  ],
+  "fill": { "cycle": ["snare", "tom"], "ratchet": 2 }
+}

@@ -5,6 +5,7 @@
 #include "DrumsParameters.h"
 #include "Generator.h"
 #include "KitStore.h"
+#include "PadRoles.h"
 #include "PatternStore.h"
 #include "SampleLibrary.h"
 #include "engine/KitEngine.h"
@@ -135,10 +136,24 @@ public:
     // `laneMask`, fill in `bar`, variation: B from A) or on everything
     // (song). With `newSeed` the seed advances first, so every press gives
     // new data; without it the stored seed reproduces its result. One undo
-    // step in patternHistory(). Returns false when nothing changed.
+    // step in patternHistory(). Returns false when nothing changed, also
+    // when the style is not available (then not even the seed changes).
     enum class Generate { pattern, song, mutate, fill, variation };
     bool generate (Generate what, std::uint32_t laneMask = 0xffffu, bool newSeed = true, int bar = -1);
     int currentSlot() const;
+
+    //== pad roles (issue 132, DROL), message thread
+    PadRoles padRoles() const;
+    // One undoable edit in patternHistory(); the roles become explicit (and
+    // are saved as DROL from then on). False when nothing changed.
+    bool setPadRoles (const std::array<PadRole, kit::padCount>& roles);
+    bool setPadRole (int pad, PadRole role);
+    // "Set roles from pad models...": the proposal for the current kit (pad
+    // models, notes, decays). Never applied by itself.
+    RoleProposal proposeRoles() const;
+    // Apply of the preview: one undoable edit. Refused (false, nothing
+    // changed) while a row still needs a choice. Cancel = not calling it.
+    bool applyRoleProposal (const RoleProposal& proposal);
     // Message thread: one undoable change of the song (timeline, length,
     // loop, mode). False when `change` left it as it was.
     bool editSong (const std::function<void (SongData&)>& change);
@@ -181,7 +196,7 @@ protected:
     bool isProductSection (preset::Tag tag) const override
     {
         return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag
-            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag;
+            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == rolesSectionTag;
     }
 
 private:
@@ -234,9 +249,11 @@ private:
     PatternStore::Live livePattern_;   // audio thread
     PatternStore::SongLive liveSong_;  // audio thread
     std::unique_ptr<Presets> presets_;
-    mutable juce::SpinLock settingsLock_;   // generator_, ui_
+    mutable juce::SpinLock settingsLock_;   // generator_, ui_, roles_
     GeneratorSettings generator_;
     UiState ui_;
+    PadRoles roles_;
+    void storeRoles (const PadRoles&);
 
     struct Audition { std::uint8_t pad = 0, velocity = 0; };
     juce::AbstractFifo auditionFifo_ { 64 };

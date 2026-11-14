@@ -14,6 +14,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include "PadRoles.h"
 #include "StateContainer.h"
 #include "engine/KitEngine.h"
 
@@ -297,7 +298,12 @@ public:
         bool hasSong = false;
         SongData songBefore, songAfter;
         std::unique_ptr<PatternStore::Everything> allBefore, allAfter;
+        // A pad role edit (issue 132): slot = -1, applied through setRoleSink.
+        bool hasRoles = false;
+        PadRoles rolesBefore, rolesAfter;
     };
+    // Where undo/redo of a role edit goes (the processor's roles).
+    void setRoleSink (std::function<void (const PadRoles&)> sink) { roleSink_ = std::move (sink); }
     void push (std::unique_ptr<Entry> entry);
     // Replaces the newest entry's result (one knob drag = one undo step);
     // false if there is none for `slot` or it can be redone instead.
@@ -317,6 +323,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<Entry>> undo_, redo_;
+    std::function<void (const PadRoles&)> roleSink_;
 };
 
 } // namespace vox::drums
