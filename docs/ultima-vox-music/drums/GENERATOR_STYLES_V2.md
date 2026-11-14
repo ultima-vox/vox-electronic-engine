@@ -41,39 +41,139 @@ What this document can and cannot settle:
 - **Owner decision (2026-11-14): 3/4, 6/8 and 12/8 are added** (§10). The tables in §3 are the
   4/4 rules; §10.5 gives the rules for the other meters.
 
-## 2. Roles: Ride, Crash, Tom 2, Tom 3
+## 2. Roles on 16 pads (revision 3: fixes the 19-on-16 P1 of the #137 review)
 
-The current roles (#132) are: none, kick, snare, clap, closed hat, open hat, tom, rim, cymbal,
-percussion. Proposed set:
+Review finding (#137 comment 6880526397, #136 comment 6880518298):
 
-| Value | Role | Change |
+- revision 2 listed 11 instrument slots + 8 percussion slots = 19 on a 16-pad instrument;
+- the fix needs a hard maximum of 16 physical pads with a deterministic per-kit map;
+- no mandatory instrument may be dropped or aliased silently;
+- roles must stay separate from MIDI notes.
+
+### 2.1 Three separate things
+
+| Concept | What it is | Count |
 |---|---|---|
-| 0–7 | none, kick, snare, clap, closed hat, open hat, tom, rim | `tom` is shown as **Tom 1 (high)** |
-| 8 | crash | the former `cymbal`, renamed |
-| 9 | percussion | unchanged |
-| 10 | **ride** | new |
-| 11 | **tom 2 (mid)** | new |
-| 12 | **tom 3 (floor)** | new |
+| **Pad** (lane) | a physical pad of the instrument: sound, MIDI note, output, pattern lane | **exactly 16**, indices 0–15. Nothing is ever generated, stored or exported for an index ≥ 16. |
+| **Role** | per-pad metadata saying which instrument part the pad plays | one per pad (`DROL`) |
+| **Part** | a line a style writes: kick, snare, …, perc 3 | per style, at most 16 (§2.4) |
 
-- `DROL` stays one section, version 2: the values 0–12 are valid and decode stays strict. It is
-  unreleased, so there is no migration.
-- Generator slots:
-  - 0 kick, 1 snare, 2 clap, 3 closed hat, 4 open hat, 5 tom 1, 6 rim, 7 crash, 8 ride, 9 tom 2,
-    10 tom 3;
-  - then percussion #1–#8 in slots 11–18.
-  - The first pad with a role takes its slot; a missing role is not written and is noted (as
-    #132).
-- The **default layout** of 16 pads stays as today: 1–8 kick … crash, 9–16 percussion. It has no
-  ride or toms 2–3.
-  - A style that uses them warns "No ride pad: ride parts are not generated".
-  - Each new genre kit (§5) carries its own roles, with ride and toms where the genre needs them.
-- "Set roles from pad models":
-  - **toms** by GM note: 48/50 → Tom 1, 45/47 → Tom 2, 41/43 → Tom 3; otherwise by tune, highest
-    to lowest;
-  - **cymbals**: 49/52/55/57 → Crash, 51/53/59 → Ride; otherwise a "?" row.
-- UI: in the native hardware-inspired UI (#127, #135). The role controls built earlier in the
-  old eight-page editor (branch `drm/pad-roles-ui`, not published) are donors for behaviour
-  only, per the #135 contract.
+- A **MIDI note** is a property of the pad. It is set by the user or the kit, not by the role.
+  - Changing a pad's note never changes its role.
+  - Changing a role never changes a note.
+- The generator writes **parts**. The role map turns each part into **one pad index (0–15) or
+  none**.
+- Export writes each pad's own note. So a generated or exported note can only target an existing
+  pad, and the pad's current note.
+
+### 2.2 Role values (`DROL` v2, strict 0–12)
+
+| Value | Role |
+|---|---|
+| 0 | none |
+| 1–7 | kick, snare, clap, closed hat, open hat, tom 1 (high), rim |
+| 8 | crash (was "cymbal") |
+| 9 | percussion |
+| 10 | ride |
+| 11 | tom 2 (mid) |
+| 12 | tom 3 (floor) |
+
+- `DROL` v2 is unreleased, so there is no migration.
+- 16 bytes of roles plus the header; the strict decode rejects values > 12.
+
+### 2.3 Concrete 16-pad kit maps
+
+Every factory kit stores its map. Notes are GM where one exists.
+
+| Pad | Default / electronic (today) | Trance | Rock | Metal |
+|---|---|---|---|---|
+| 1 | kick (36) | kick (36) | kick (36) | kick (36) |
+| 2 | snare (38) | snare (38) | snare (38) | snare (38) |
+| 3 | clap (39) | clap (39) | rim / cross-stick (37) | rim (37) |
+| 4 | closed hat (42) | closed hat (42) | closed hat (42) | closed hat (42) |
+| 5 | open hat (46) | open hat (46) | open hat (46) | open hat (46) |
+| 6 | tom 1 (45) | tom 1 (50) | tom 1 (48) | tom 1 (48) |
+| 7 | rim (37) | rim (37) | tom 2 (45) | tom 2 (45) |
+| 8 | crash (49) | crash (49) | tom 3 (43) | tom 3 (41) |
+| 9 | perc (50) | ride (51) | crash (49) | crash (49) |
+| 10 | perc (51) | tom 2 (47) | ride (51) | ride (51) |
+| 11 | perc (52) | tom 3 (43) | perc: crash 2 (57) | perc: crash 2 (57) |
+| 12 | perc (53) | perc: shaker (82) | perc: ride bell (53) | perc: china (52) |
+| 13 | perc (54) | perc: conga (63) | perc: splash (55) | perc: splash (55) |
+| 14 | perc (55) | perc: tambourine (54) | perc: pedal hat (44) | perc: ride bell (53) |
+| 15 | perc (56) | perc: reverse crash / FX (60) | perc: cowbell (56) | perc: pedal hat (44) |
+| 16 | perc (57) | perc: snare roll layer (40) | perc: tambourine (54) | perc: snare rim-shot layer (40) |
+| **Roles present** | 8 instruments + 8 perc | 11 instruments + 5 perc | 10 instruments (no clap) + 6 perc | 10 instruments (no clap) + 6 perc |
+
+- The **Dark Psy, Tech House, Melodic Techno and DnB kits** use the default/electronic column,
+  with their own sounds and percussion names.
+- **Metal double bass** is the one kick part on pad 1. It is played on 8ths or 16ths with
+  alternating velocity (left/right foot). It is not a second kick role.
+- Every factory kit map fits in 16 pads, with no duplicate instrument roles.
+- A test checks every factory map:
+  - roles valid;
+  - at most one pad per instrument role;
+  - every part each style marks as **required** (§2.4) has a pad in that style's factory kit.
+
+### 2.4 Parts per style: required, optional, never
+
+Each style declares its parts:
+
+| Group | Required parts | Optional parts | Never |
+|---|---|---|---|
+| Trance family | kick, clap, open hat, closed hat | snare, crash, ride, tom 1–3, rim, perc 1–5 | — |
+| Dark Psy | kick, closed hat, perc 1 | open hat, rim, tom 1, crash, perc 2–8 | clap on 5 and 13 in the same bar |
+| Tech House, House, Melodic Techno | kick, clap or snare, closed hat, open hat | rim, crash, tom 1–2, perc 1–6 | — |
+| DnB, Melodic DnB | kick, snare, closed hat | open hat, ride, crash, rim, perc 1–4 | — |
+| Hard Rock | kick, snare, closed hat, crash | open hat, ride, tom 1–3, rim, perc 1–6 | clap |
+| Heavy, Symphonic, Nordic Metal | kick, snare, crash, ride, tom 1, tom 3 | closed/open hat, tom 2, rim, perc 1–6 | clap |
+
+- **At most 16 parts** per style, and at most 8 of them percussion. Perc *n* goes to the *n*-th
+  percussion pad in pad order.
+- **Missing required part** (the kit has no pad with that role):
+  - the part is not generated;
+  - the Generator panel shows a warning with the role, e.g. "Heavy Metal needs a ride: no pad
+    has the Ride role", and a button **Assign…** that opens the role selector;
+  - the generator does not substitute another pad.
+- **Missing optional part:** not generated. A quiet note lists them ("Not used: tom 2, perc 6").
+- **Notices are style-aware:** only parts the selected style uses are reported. A rock kit
+  without a clap gets no clap warning, because no rock style uses a clap.
+
+### 2.5 Duplicate roles: deterministic, visible, under user control
+
+- Two or more pads with the same instrument role:
+  - the **lowest pad index** plays the part; the others get nothing from the generator, but
+    keep their manual notes;
+  - a notice reads "2 kick pads: pad 1 plays generated kicks", with one action, **Use pad N**,
+    which swaps the roles of the two pads as one undoable step.
+- Percussion is not a duplicate: several percussion pads take perc 1, 2, … in pad order.
+- **Full generation** (Pattern, Variation, Song) clears unlocked lanes of pads that receive no
+  part, as approved in #132 (Q2). Mutate touches only the selected pads.
+
+### 2.6 Role proposal from pad models
+
+"Set roles from pad models" stays explicit, with "?" rows and Apply/Cancel, one undo step (#132).
+New hints:
+
+- **toms** by GM note: 48/50 → tom 1, 45/47 → tom 2, 41/43 → tom 3; otherwise by tune, highest
+  to lowest;
+- **cymbals**: 49/52/55/57 → crash, 51/53/59 → ride; otherwise a "?" row;
+- two crash candidates: the first is crash, the second is percussion.
+
+### 2.7 Tests (added to R1–R19 of #132)
+
+- **Bounds:**
+  - for every style, kit map, seed and setting in the matrix, every generated hit has a pad
+    index 0–15;
+  - every exported Note On equals the note of that pad at export time;
+  - with notes reassigned after generation, the export follows the new notes and the roles are
+    unchanged.
+- **Factory maps:** valid; no duplicate instrument role; required parts present for each
+  style's kit.
+- **Missing and duplicate:**
+  - a missing required part: no hits, a warning with Assign;
+  - a duplicate: the lowest pad plays it, notice, Use pad N swaps in one undo step;
+  - style-aware notices: no clap warning for rock and metal.
 
 ## 3. Rhythm rules of the 16 new styles
 
@@ -250,22 +350,57 @@ Each style gets a default `GeneratorSettings` and a tempo hint:
   unchanged.
 - `productStateReserve()` is unchanged: `DGEN` and `DROL` stay the same size.
 
-## 7. Implementation order (after approval)
+## 7. Task order (TL decision, #136 comment 6880518298 and #137 comment 6880526397)
 
-1. An integration branch with #129, #132 and the #133 UI. The style audit test (#129) is needed
-   as the base of the style tests.
-2. Roles v2 (§2) in the engine, presets, proposal and UI.
-3. `Style` ids 7–22 and their rules (§3); `DGEN` v2.
-4. Style defaults with an undoable Apply (§4).
-5. Factory kits and the per-style songs (§5); hashes.
-6. Tests:
-   - the grammar matrix of `suite_drums_generator_style_tests` extended to 23 styles, with every
-     "always/never" of §3;
-   - the distinction tests of §3.1–3.5, each with its measured statistic in the report;
-   - identity parity for the 7 existing styles;
-   - roles v2 codec and mapping, UI;
-   - MIDI listening files for every style.
-7. A Draft PR with Windows CI. No merge without authorization.
+**Now (independent foundation, its own Draft code PR):**
+
+1. A declarative style registry, parser and interpreter skeleton, with exactly **23 canonical
+   style ids and names** (House once). Ids are stable; style metadata and defaults live in one
+   place.
+2. The 7 existing styles ported to declarative definitions, with **byte-identical** results for
+   Pattern, A/B Variation, Fill, Mutate and Song, locks and seeds included. The old code and its
+   outputs are **test references only**, not shipped migration code.
+3. Tests:
+   - ids and names unique;
+   - deterministic hashes;
+   - bounded parser errors;
+   - no allocation on the audio thread.
+4. No on-disk format is frozen in this step (`DGEN` v2 and `DSTL` wait for Architecture Guard).
+
+**In parallel:** one focused Architecture Guard review of this document:
+
+- §2 (16-pad roles);
+- §3 (rules);
+- §10 (host meter, mixed tuplets, scheduler and export);
+- §11 (import, `DGEN` v2 and `DSTL`, portable presets).
+
+The result is one consistent v1.0 schema with a test matrix, approved before the irreversible
+parts are written.
+
+**Then, against the reviewed spec:**
+
+- roles v2;
+- meters and tuplets;
+- import;
+- the 16 new styles;
+- style defaults;
+- presets and factory content;
+- MIDI listening files.
+
+**Assets:**
+
+- The developer researches acoustic drum samples with verifiable redistribution and
+  commercial rights: CC0 preferred, CC BY with full attribution.
+- For each asset, record URL, author, licence version, retrieval date, checksum and NOTICE text.
+- Until a licensed, credible kit exists, Rock/Metal kits and their content are
+  **NOT RELEASE-READY**. If none can be found, a shortage report follows.
+- Grammar and test work does not wait for this.
+
+**UI:** a separate workstream after the owner's final visual sign-off (#127, #135): native
+custom JUCE components, never stock JUCE painting or the old eight-page editor.
+
+**Acceptance:** Windows CI on the exact head of each PR; one final integrated Cubase/REAPER
+acceptance. No merge without authorization.
 
 ## 8. Not proven by any of this
 
