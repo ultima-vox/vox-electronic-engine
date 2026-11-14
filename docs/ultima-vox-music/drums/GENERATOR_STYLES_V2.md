@@ -384,3 +384,147 @@ Each pattern gets a **meter**:
 - Host meter mismatch shown, never changed.
 - `DSEQ`/`DSNG` version bump without decoding development-build data.
 - Native meter and supported meters per style, with a refusal for the rest.
+
+## 11. Importable styles (owner request 2026-11-14)
+
+The owner asked that additional styles can be imported into both the generator and the presets.
+So a style must be **data**, not C++ code. This is an architecture change and needs
+Architecture Guard review before code.
+
+### 11.1 Principle: one style engine for factory and user styles
+
+- A style is a **declarative description**: which role plays where, under which settings, with
+  what chance, velocity, accent and ratchet, plus the fill, variation and song rules. One
+  interpreter in the generator runs every style.
+- The **23 factory styles are written in the same format** and built into the binary as
+  resources. They use no hidden code path, so an imported style can do everything a factory
+  style can.
+- **Identity parity:** the 7 existing styles, rewritten as data, must generate byte-identical
+  output. This is checked by the per-style generator digest, which already exists in #132.
+
+### 11.2 File format `.voxstyle` (JSON, version 1)
+
+```
+{
+  "format": "vox-drums-style", "version": 1,
+  "id": "<UUID>", "name": "My Style", "author": "…", "group": "Trance",
+  "tempo": { "min": 136, "max": 140 },          // hint only; never changes the host
+  "meters": ["4/4", "12/8"], "nativeMeter": "4/4",
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.3, "swing": 0,
+                "humanize": 0.1, "complexity": 0.4, "fills": 0.6, "variation": 0.4 },
+  "rules": { "4/4": {
+    "lanes": {
+      "kick":      [ { "at": [1,5,9,13], "velocity": 1.0, "accent": true } ],
+      "clap":      [ { "at": [5,13], "when": { "density": [0.15, 1] }, "velocity": 0.9 } ],
+      "closedHat": [ { "at": [2,4,6,8,10,12,14,16],
+                       "chance": { "base": 0.35, "density": 0.65 }, "velocity": 0.55 } ],
+      "perc1":     [ { "at": [4,8,12,16], "chance": { "base": 0.25, "syncopation": 0.6 },
+                       "velocity": 0.6, "ghost": true,
+                       "ratchet": { "chance": { "complexity": 0.5 }, "values": [2,3,4] } } ]
+    },
+    "fill":      { "roles": ["snare", "tom1"], "order": "alternate", "thin": ["closedHat","openHat","perc1","perc2"],
+                   "ratchet": { "chance": { "complexity": 0.8 }, "values": [2] } },
+    "variation": { "keep": ["kick", "snare", "clap"] },
+    "song":      { "breakWithoutKick": true },
+    "always":    [ { "role": "kick", "at": [1,5,9,13] } ],
+    "never":     [ { "role": "kick", "notAt": [1,5,9,13] }, { "role": "closedHat", "at": [3,7,11,15] } ]
+  } }
+}
+```
+
+- **Positions** are 1-based on the meter's 16th grid:
+  - 4/4: 1–16; 3/4 and 6/8: 1–12; 12/8: 1–24.
+  - On a finer grid (32 or 64 steps) a rule lands on the matching step, as factory styles do
+    today.
+- **Chance** is `clamp (base + Σ coefficient × setting, 0, 1)` over density, groove,
+  syncopation, complexity, fills and variation. No other expressions and no scripts.
+- **`when`** limits a rule to a settings range. **`bars`** limits it to bar numbers
+  (e.g. `"odd"`, `[1]`).
+- **Roles** are the semantic roles of §2: kick … tom3, perc1–perc8. They go through the pad
+  roles (#132), so an imported style plays correctly on any kit with roles.
+- **`always` / `never`** are the style's own invariants. They are checked at import (§11.4).
+- Randomness is the generator's deterministic hash, keyed by role slot and position. The same
+  style, settings and seed always give the same output.
+
+### 11.3 Limits and validation (strict)
+
+- **Size:** a file is at most 64 KiB. At most 64 rules per role and meter, 4 meters, 24
+  positions per rule, 8 ratchet values from 1–8.
+- **Values:** numbers are finite. Velocity is 0–1; coefficients are −2…2; tempo is 40–300.
+- **Schema:** an unknown key, a wrong type, an unknown role or meter, a position outside the
+  meter, or a duplicate id rejects the file. The error names the field: e.g. "rules.4/4.lanes.clap[0].at[2]: 17 is outside 4/4 (1–16)".
+- **Parsing** runs on the message thread only, never on the audio thread, and is bounded in
+  time and memory. Untrusted files are data only: nothing is executed.
+
+### 11.4 Import and self-test
+
+- **"Import Style…"** is in the Library and in GENERATE.
+- After the schema check, the style is **generated over a settings matrix**:
+  - 6 seeds × 3 densities × 3 complexities × 2 fills × every meter it declares;
+  - Pattern, Variation, Fill and Song.
+- Its `always`/`never` invariants are checked on the result. A style that breaks its own
+  invariants is **not imported**, and the report lists the first violations.
+- A valid style is copied to `…/ULTIMA VOX/VOX Drums/Styles/<name>.voxstyle`. The project and
+  presets do not depend on that file (§11.5).
+- **"Export Style…"** writes any style, a factory one included, as `.voxstyle`, for editing
+  and sharing.
+- **Same id, different content:** the import asks "Replace" or "Keep both". Keep both gives the
+  copy a new id.
+
+### 11.5 Registry, projects and presets
+
+- **Style reference** in `DGEN` v2: `u8 kind` (0 factory, 1 user) plus the factory id (§6) or
+  the 16-byte UUID. Strict: an unknown factory id or a missing embedded user style rejects the
+  restore.
+- **Projects embed the user style they use** (new section `DSTL`: the canonical JSON of the one
+  style `DGEN` references, at most 64 KiB, with its SHA-256).
+  - A project opened on another machine, without the style file, still regenerates identically.
+  - If the local library holds the same UUID with other content, the project keeps its
+    embedded version and the UI shows "This project uses its own version of My Style".
+- **Budget:** `DSTL` adds at most 64 KiB + header. The boundary fixture (#130 T21) must
+  include it; the reserve is reviewed with the measured number.
+- **Presets:**
+  - A new preset type **Style** (`.voxstyle`) appears in the Library next to
+    Kit/Pad/Pattern/Song, with Factory and User lists.
+  - A Song preset made with a user style embeds `DSTL`, like a project.
+  - Generator-settings presets (§4) are the style's `defaults`. "Style defaults" applies them as
+    one undoable step.
+- The factory content manifest lists the 23 factory styles with their hashes. User styles are
+  not in the manifest.
+
+### 11.6 UI (native hardware UI, #127 / #135)
+
+- GENERATE style list grouped by `group`, with Factory and User sections and an "imported" mark.
+- Import / Export / Delete (user styles only) and the import report with the field errors and
+  self-test violations.
+- The tempo range is shown as information. It never changes the DAW.
+
+### 11.7 Tests
+
+- **Parser:**
+  - a valid round trip;
+  - every rejection class (size, unknown key, type, range, position, role, meter, duplicate id)
+    with its exact error text;
+  - fuzzing with random bytes and random mutations: no crash, bounded time.
+- **Identity:** the 7 existing styles as data give the c7c29bb/#129 digests byte for byte.
+- **The 16 new factory styles** pass the grammar matrix and distinction tests of §3 and §10.
+- **Import:**
+  - a valid style is imported and generates;
+  - a style breaking its own `never` is refused with a report;
+  - replace / keep both.
+- **Projects and presets:**
+  - a project with a user style restores and regenerates identically on a "machine" without
+    the style file (fresh library folder);
+  - a Song preset with `DSTL` behaves the same;
+  - a missing `DSTL` rejects the restore.
+- **Realtime:** no parsing, file access or allocation on the audio thread (allocation probe).
+
+### 11.8 Decisions for Architecture Guard
+
+1. **One declarative style engine** for factory and user styles, with the 7 existing styles
+   proven byte-identical.
+2. The `.voxstyle` v1 schema and limits; linear chance formulas only, no scripts.
+3. Import self-test against the style's own invariants.
+4. Projects and Song presets embed the user style (`DSTL`); budget review with a measured
+   fixture.
+5. New Library preset type **Style**.
