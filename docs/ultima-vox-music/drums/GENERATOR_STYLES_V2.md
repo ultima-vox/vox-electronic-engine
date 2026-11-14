@@ -78,7 +78,11 @@ Review finding (#137 comment 6880526397, #136 comment 6880518298):
 | 11 | tom 2 (mid) |
 | 12 | tom 3 (floor) |
 
-- `DROL` v2 is unreleased, so there is no migration.
+- **`DROL` v2 codec:**
+  - `u32 version = 2`, `u8 explicit (0/1)`, `u8 role[16]` (0–12): exactly 21 bytes;
+  - strict: a wrong size, version, flag or role value rejects the restore;
+  - written only when the roles are explicit;
+  - no v1 decoder (pre-release policy). It is unreleased, so there is no migration.
 - 16 bytes of roles plus the header; the strict decode rejects values > 12.
 
 ### 2.3 Concrete 16-pad kit maps
@@ -428,299 +432,266 @@ Settled here as engineering details:
 Open for review: the per-style rules of §3 (Architecture Guard / tech lead) and the listening
 gate per style (owner).
 
-## 10. Meters from the DAW, and triplets together with straight notes (owner decisions 2026-11-14)
+## 10. Meters, mixed tuplets and timing (revision 4: answers AG review 5906060397, AG-2 and AG-3)
 
-Owner decisions:
+Owner decisions (2026-11-14):
 
-1. **4/4 is the native meter of every style.** 3/4, 6/8 and 12/8 are additional meters.
-2. The plugin **follows the DAW's time signature**.
-3. **Triplets must work together with straight notes** in the same pattern (e.g. a straight kick
-   with a hi-hat triplet roll).
+- **4/4 is native for every style**; 3/4, 6/8 and 12/8 are additional meters;
+- the plugin **follows the DAW's time signature**;
+- **triplets only for a piece of a pattern**, mixed with straight notes.
 
-This is an architecture change. Pattern format, scheduler, song, MIDI export, UI grid and
-generator are all affected. It needs Architecture Guard review before code.
+Not implemented before Architecture Guard PASS.
 
 ### 10.1 Today (`c7c29bb`)
 
-- A stored pattern is 16, 32 or 64 steps per bar, 1–4 bars. Every bar is 4 quarter notes.
-- The engine already has a 1/8-triplet step length (`kit::Pattern::timing` = 3), but stored
-  patterns never use it.
-- The sequencer counts bars of 4 quarters from the host's PPQ. It does not read the host's time
-  signature.
-- The song is a list of 4/4 bars. MIDI export writes 4/4.
-- Ratchet (1–8 hits evenly inside one step) is the only way to play an odd subdivision today.
+- A stored pattern has 16, 32 or 64 cells per bar and 1–4 bars, in a dense array of
+  16 lanes × 4 bars × 64 cells.
+- Each cell holds one event (`PatternStep`: on, accent, velocity, probability, ratchet 1–8,
+  micro ±50 % of a cell, locked).
+- Every bar is 4 quarter notes. The sequencer does not read the host's time signature.
 
-### 10.2 The meter follows the DAW
+### 10.2 Storage model: per-beat subdivision within a fixed 64-slot bar
 
-- **Source:** the host's time signature and bar position in every block: JUCE
-  `PositionInfo::getTimeSignature()` and `getPpqPositionOfLastBarStart()`, from VST3
-  `ProcessContext` (`kTimeSigValid`, `kBarPositionValid`). Reading them in `processBlock`
-  allocates nothing and does not block.
-- **Unverified:** whether Cubase and REAPER fill these fields, also during meter changes, loops
-  and offline render. This is the first thing to test.
-- **Without host data** (the field is not valid, offline export, tests): the pattern's stored
-  meter; 4/4 for a new pattern.
-- **Bar lines come from the host.** Each host bar starts the pattern (or song bar) from its
-  beginning:
-  - A pattern written for a **longer** bar than the host's is cut at the host bar line.
-  - A **shorter** one is followed by silence until the next bar line.
-  - Nothing is stretched or time-scaled.
-  - The UI shows "Host is 7/8, pattern is 4/4: cut at the bar line".
-- **Meter changes in the DAW timeline** work bar by bar: every host bar uses its own meter.
-- **Song mode:** song bar n plays at host bar n (counting from song position 0). The song has
-  no meter of its own; it takes each host bar as it comes.
-- **New pattern and Generate** use the host's meter at that moment (the meter selector shows
-  "Host (6/8)"). The user can also fix a meter for a pattern (e.g. write 6/8 material while the
-  host is 4/4).
-- **Supported pattern meters:**
-  - numerator 1–16 with denominator 4 or 8: a bar holds at most 16 beats.
-  - The generator has rules for 4/4 (every style) plus 3/4, 6/8 and 12/8 (§10.5). In any other
-    meter (e.g. 7/8) generation is refused with a message, and manual editing works.
-- **MIDI export** writes each pattern's meter as a time-signature event and the bar lengths in
-  that meter. A song export writes a time-signature event wherever consecutive bars differ.
-- The plugin **never changes the DAW's meter or tempo**.
+**Meter and beats.** A pattern has a meter n/d:
 
-### 10.3 Triplets together with straight notes: per-beat subdivision
+- d = 4: n beats of a quarter;
+- d = 8 with n ∈ {6, 9, 12}: compound, n/3 beats of a dotted quarter;
+- d = 8 otherwise (e.g. 7/8): n beats of an eighth.
+- At most 16 beats.
 
-- Triplets are switched **for a piece of the pattern only**, never for the whole pattern or
-  song (owner, 2026-11-14). Each **lane** has, for each **beat** of each bar, a subdivision:
-  **straight** or **triplet**.
-- The other lanes and beats keep theirs. So within one bar:
-  - the kick can stay on straight 16ths;
-  - the hats play 16th triplets on beat 4 only;
-  - the snare plays an 8th-triplet fill over beats 3–4.
+**Resolution.** Per pattern: 8th, 16th, 32nd or 64th. Each beat of each lane has one of two
+subdivisions:
 
-| Meter | Beat | Straight cells per beat (resolution 16 / 32 / 64 per 4/4 bar) | Alternative |
-|---|---|---|---|
-| x/4 (2/4, 3/4, 4/4, …) | quarter | 4 / 8 / 16 | **triplet:** 3 / 6 / 12 (8th, 16th, 32nd triplets) |
-| x/8 compound (6/8, 9/8, 12/8) | dotted quarter (3 eighths) | 6 / 12 / 24 … within the cell limit | **duplet:** 4 / 8 / 16 (two or four even notes across the dotted beat) |
-
-- **Ratchet** still divides one cell. A straight 16th cell with ratchet 3 is 32nd-note triplets
-  on one note.
-- **Microtiming** stays relative to the cell length.
-- **Timing is exact:** cell start = beat start + index × beat length / cells.
-  - Hits are computed in PPQ as double and sample positions as today.
-  - MIDI export at 960 PPQ is exact, because 960 is divisible by 3, 6, 12 and 24.
-- **Storage:**
-  - per lane and bar, a 16-bit mask of triplet (or duplet) beats;
-  - a triplet beat uses fewer cells than a straight one, so the cell array keeps its maximum
-    size;
-  - for a full pattern (16 lanes × 4 bars) the masks add 128 bytes.
-- **Editing:**
-  - switching a beat to triplet maps its notes to the nearest triplet cells (and back), as one
-    undoable edit;
-  - a note that would collide with another is kept and the merge is reported.
-
-### 10.4 Formats (pre-release policy, no shims)
-
-- **`DSEQ` version bump:**
-  - per pattern: the meter (numerator, denominator) and whether it is "host" or fixed;
-  - per lane and bar: the tuplet beat mask.
-  - Strict decode: a cell count that does not fit the meter, an unknown meter, or a mask bit
-    beyond the bar's beats rejects the restore.
-- **`DSNG` version bump:** no song meter (it follows the host). Bars keep their pattern
-  references.
-- Development-build `DSEQ`/`DSNG` data is not decoded (as `DGEN`, #136).
-- **Budget:** a few hundred bytes more per state. Checked by the boundary fixture (#130 T21).
-
-### 10.5 Generator: 4/4 native, extra meters, triplet rules
-
-**All 23 styles: 4/4 native**, with the §3 rules. Additional meters:
-
-| Style | Additional meters | Rules there |
+| Beat kind | Straight cells per beat (8th / 16th / 32nd / 64th) | Alternative cells per beat |
 |---|---|---|
-| Nordic Metal | 6/8, 12/8 | 6/8:<br>- kick on 1 and 4 (the two dotted beats), tom 3 doubling them (war drum);<br>- snare on 4 (density < 0.4) or 4 + ghost on 6;<br>- gallop kick 1-2-3 by syncopation;<br>- ride on every eighth |
-| Symphonic Metal | 12/8, 3/4 | 12/8:<br>- kick on 1, 4, 7 and 10; snare on 4 and 10, or on every dotted beat in the "epic" bar;<br>- eighth-triplet tom rolls.<br>3/4: kick on 1, snare on 2 and 3, crash on 1 |
-| Heavy Metal, Hard Rock | 12/8 | shuffle:<br>- Heavy Metal: kick on each eighth or the 1-3 gallop;<br>- Hard Rock: kick on 1 and 7;<br>- snare on 4 and 10 |
-| Symphonic Trance, Dream Trance | 3/4 | kick on 1, soft clap on 3, hats on each eighth (intros and breakdowns) |
-| Ambient | 3/4, 6/8 | kick on 1 only; the other hits as in 4/4, probability < 100 % |
-| all others | — | 4/4 only. In another host meter, generation is refused with a message |
+| quarter (x/4) | 2 / 4 / 8 / 16 | **triplet** 3 / 6 / 12 / 24 |
+| dotted quarter (6/8, 9/8, 12/8) | 3 / 6 / 12 / 24 | **duplet** 2 / 4 / 8 / 16 |
+| eighth (5/8, 7/8, …) | 1 / 2 / 4 / 8 | triplet — / 3 / 6 / 12 |
 
-**Triplet rules inside 4/4**, in the styles where they belong:
+- **Slots per beat** = max(straight, alternative) at that resolution. The beat's events use the
+  first *k* slots of its subdivision. Bar capacity = beats × slots per beat.
+- That must be **≤ 64**, the existing per-bar storage. Nothing is truncated: a combination over
+  64 is **not offered**.
 
-- **Trap:** closed-hat 16th-triplet rolls on single beats; this replaces part of today's
-  ratchet rolls.
-- **Heavy, Symphonic and Nordic Metal:** 8th-triplet tom/snare fills, and triplet double-kick
-  bursts at high complexity.
-- **Uplifting, Anthem and Symphonic Trance:** an 8th-triplet snare roll before the final
-  16th/32nd build in long fills.
-- **Hard Rock:** triplet tom fills.
-- **DnB, Melodic DnB:** occasional 16th-triplet ghost snares.
-- **Every other style: no triplets.** This is a "never" rule. Full-on, Goa, Techno, House and
-  Tech House stay straight.
+**Capacity per meter** (slots per bar; **✗** = not offered, with the reason shown in the
+resolution menu):
 
-Tests:
+| Meter | 8th | 16th | 32nd | 64th |
+|---|---|---|---|---|
+| 4/4 | 12 | 24 | 48 | ✗ with tuplets (96); **64, straight only** (tuplet switch disabled: "64th notes: triplets unavailable") |
+| 3/4 | 9 | 18 | 36 | ✗ with tuplets (72); **48, straight only** |
+| 6/8 | 6 | 12 | 24 | 48 |
+| 12/8 | 12 | 24 | 48 | ✗ (96): "12/8 goes down to 32nd notes" |
+| 7/8 | 7 (straight only) | 21 | 42 | ✗ with triplets (84); **56, straight only** |
 
-- the grammar matrix runs every (style, meter) pair and checks every triplet "always/never";
-- unsupported meters must be refused;
-- scheduler tests with a simulated host: meter changes, bar starts, loops, mismatched patterns
-  cut or padded, triplet cells at exact sample positions at 44.1/48/96 kHz and various block
-  sizes;
-- export tests: time-signature events, bar lengths, triplet ticks; playback = export within
-  1 tick, as today.
+- **Events per cell:** one, as today: velocity, accent, probability, ratchet, micro, lock.
+- **Timing of a cell:** t = bar start + beat × beat length + index × beat length / cells, plus
+  micro × cell length.
+  - Computed in PPQ as double.
+  - Sample positions use the existing scheduler arithmetic.
 
-### 10.6 UI (native hardware UI, #127 / #135)
+**MIDI and exactness.**
 
-- Step Sequencer:
-  - the grid groups cells by the beats of the meter;
-  - a beat switched to triplet shows its 3/6/12 cells evenly across the same width;
-  - a per-lane, per-beat "3" toggle; selecting several beats switches them together.
-- Meter display and selector: "Host (6/8)" or a fixed meter. The mismatch notice from §10.2.
+- Beat lengths at 960 PPQ: 960 for a quarter, 1440 for a dotted quarter, 480 for an eighth.
+- Every cell count above divides them exactly (960 / 24 = 40, 1440 / 24 = 60, 480 / 12 = 40), so
+  NoteOn ticks are integers.
+- NoteOff is sent at min(cell length, the next hit on the same lane) — no overlap, as today.
 
-### 10.7 Decisions for Architecture Guard
+### 10.3 Changing a beat's subdivision never loses or merges events
 
-1. Bar lines and meter from the host each block; the stored meter only without host data.
-2. Mismatch handling: cut or silence at the host bar line, never stretched.
-3. Per-lane, per-beat triplet/duplet subdivision as the way to mix triplets with straight notes;
-   ratchet unchanged.
-4. Song bars follow host bars; no song meter.
-5. `DSEQ`/`DSNG` version bump without decoding development-build data.
+- Switching a beat (or a selection of beats) between straight and tuplet **converts its events
+  with their absolute time kept**:
+  - each event goes to the nearest cell of the new subdivision (ties to the earlier one);
+  - its micro is set so that cell time + micro equals the old time exactly.
+- The switch is **refused, with nothing changed**, when either:
+  - two events would land in the same cell (a collision), or
+  - the needed micro would exceed ±50 % of the new cell.
 
-## 11. Importable styles (owner request 2026-11-14)
+  The message names the steps: "Beat 4: two hits would meet (16ths 2 and 3); move or delete
+  one first". An empty beat switches freely.
+- Every switch is one undo step. Undo restores the exact previous cells, mask and micro (the
+  history entry stores the whole slot, as today).
+- Locked cells:
+  - a beat holding a locked event switches only when the conversion keeps that event as one
+    locked event;
+  - otherwise the switch is refused: "Beat 2 has locked steps".
 
-The owner asked that additional styles can be imported into both the generator and the presets.
-So a style must be **data**, not C++ code. This is an architecture change and needs
-Architecture Guard review before code.
+### 10.4 Meter from the host, and what playback may never do
 
-### 11.1 Principle: one style engine for factory and user styles
+- Each block reads the host's time signature and bar position (JUCE
+  `getTimeSignature()`, `getPpqPositionOfLastBarStart()`, `getBarCount()`). This is read-only:
+  no allocation, no lock.
+- **Missing data:**
+  - no time signature → the pattern's own meter;
+  - no bar position → bars counted from song position 0 in the pattern meter;
+  - the UI shows "Host gives no bar positions; bars counted from the start".
+- **Mismatch:** a pattern whose meter differs from the host bar plays from each host bar line.
+  - A longer pattern bar is cut at the next host bar line; a shorter one rests until it.
+  - Nothing is stretched.
+  - This is a **playback rule only**: it never edits the pattern, the song or the export.
+- **Loop or jump** (PPQ moves backwards, or forwards by more than one block):
+  - the scheduler drops its queued events for the old position and starts from the new host
+    bar;
+  - drum voices are one-shots and keep decaying, so there are no hanging notes. The plugin has
+    no MIDI output, so there are no queued NoteOffs to send.
+- **Meter change in the host:** the song bar index follows the host bar count
+  (`getBarCount()`), or the counted bars when it is missing. A meter change between two
+  bars only changes how the next bar is cut or padded.
+- **Export is independent of the host:** a pattern exports in its own meter; a song exports bar
+  by bar in each bar's pattern meter, with a time-signature event wherever it changes.
+- **Tests:**
+  - a simulated host with meter changes, loops, jumps and missing fields;
+  - NoteOn sample positions at 44.1/48/96 kHz with blocks of 64/333/512;
+  - export ticks;
+  - export unchanged by any playback mismatch.
+  - Cubase/REAPER behaviour: in the final integrated DAW acceptance (not per PR). Whether they
+    report bar positions during loops and meter changes is **unverified**.
 
-- A style is a **declarative description**: which role plays where, under which settings, with
-  what chance, velocity, accent and ratchet, plus the fill, variation and song rules. One
-  interpreter in the generator runs every style.
-- The **23 factory styles are written in the same format** and built into the binary as
-  resources. They use no hidden code path, so an imported style can do everything a factory
-  style can.
-- **Identity parity:** the 7 existing styles, rewritten as data, must generate byte-identical
-  output. This is checked by the per-style generator digest, which already exists in #132.
+### 10.5 Formats
 
-### 11.2 File format `.voxstyle` (JSON, version 1)
+- **`DSEQ`, new version:**
+  - per pattern: meter (n, d), resolution, and whether the meter follows the host;
+  - per lane and bar: a 16-bit subdivision mask (one bit per beat);
+  - cells as today, at most 64 per bar.
+  - Strict decode: an unknown meter or resolution, a combination over 64 slots, or a mask bit
+    beyond the bar's beats rejects the restore.
+- `DSNG`: no song meter (bars follow the host); version bump.
+- Development-build versions are not decoded (#136 policy).
+- **Budget:** cells unchanged; masks add 128 bytes per pattern (16 lanes × 4 bars × 2 bytes).
+  Measured by the boundary fixture (#130 T21).
+
+### 10.6 Generator
+
+- All 23 styles: **4/4 native**. Additional meters, and triplet rules inside 4/4, as in
+  revision 3:
+  - Nordic Metal: 6/8 and 12/8;
+  - Symphonic Metal: 12/8 and 3/4;
+  - Heavy Metal and Hard Rock: 12/8;
+  - Symphonic and Dream Trance: 3/4;
+  - Ambient: 3/4 and 6/8;
+  - triplet fills and rolls only in Trap, the Metal styles, Hard Rock, Uplifting / Anthem /
+    Symphonic Trance and DnB; "never" in the others.
+- Generating in a meter the style does not define is refused with a message. A rule never
+  writes beyond the capacity of §10.2.
+- **Tests:**
+  - every (style, meter, resolution) the style supports;
+  - the grammar matrix;
+  - every generated hit inside the bar's capacity;
+  - switching subdivisions back and forth restores bit-identical cells.
+
+### 10.7 UI
+
+- Grid cells grouped by beat; a tuplet beat shows its cells across the same width.
+- A per-lane, per-beat "3" (or "2" in compound meters) toggle; several selected beats switch as
+  one undo step.
+- Refusals are shown at the place of the edit. The resolution menu marks the unavailable
+  combinations of §10.2 with their reason.
+
+## 11. Importable styles: one canonical `.voxstyle` schema (revision 4: answers AG-1)
+
+- **One schema, one parser, one AST** for factory and user styles. It **extends the flat-rule
+  schema already implemented and parity-tested in #138**. There is no second, incompatible "v1".
+- The 7 factory definitions in #138 move to this schema with byte-identical generation. The
+  #138 test proves it.
+
+### 11.1 Schema (`"format": "vox-drums-style"`, `"version": 1`, canonical public form)
 
 ```
 {
   "format": "vox-drums-style", "version": 1,
-  "id": "<UUID>", "name": "My Style", "author": "…", "group": "Trance",
-  "tempo": { "min": 136, "max": 140 },          // hint only; never changes the host
-  "meters": ["4/4", "12/8"], "nativeMeter": "4/4",
-  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.3, "swing": 0,
-                "humanize": 0.1, "complexity": 0.4, "fills": 0.6, "variation": 0.4 },
-  "rules": { "4/4": {
-    "lanes": {
-      "kick":      [ { "at": [1,5,9,13], "velocity": 1.0, "accent": true } ],
-      "clap":      [ { "at": [5,13], "when": { "density": [0.15, 1] }, "velocity": 0.9 } ],
-      "closedHat": [ { "at": [2,4,6,8,10,12,14,16],
-                       "chance": { "base": 0.35, "density": 0.65 }, "velocity": 0.55 } ],
-      "perc1":     [ { "at": [4,8,12,16], "chance": { "base": 0.25, "syncopation": 0.6 },
-                       "velocity": 0.6, "ghost": true,
-                       "ratchet": { "chance": { "complexity": 0.5 }, "values": [2,3,4] } } ]
-    },
-    "fill":      { "roles": ["snare", "tom1"], "order": "alternate", "thin": ["closedHat","openHat","perc1","perc2"],
-                   "ratchet": { "chance": { "complexity": 0.8 }, "values": [2] } },
-    "variation": { "keep": ["kick", "snare", "clap"] },
-    "song":      { "breakWithoutKick": true },
-    "always":    [ { "role": "kick", "at": [1,5,9,13] } ],
-    "never":     [ { "role": "kick", "notAt": [1,5,9,13] }, { "role": "closedHat", "at": [3,7,11,15] } ]
-  } }
+  "id": "<UUID>",                       // required; factory styles have fixed UUIDs in the registry
+  "key": "house", "name": "House",      // key: [a-z0-9-], unique per id; name: shown
+  "meta": { "author": "…", "group": "House & Techno", "tempo": { "min": 120, "max": 126 } },
+  "meters": ["4/4"],                    // must contain "4/4"; also "3/4", "6/8", "12/8"
+  "defaults": { "density": 0.6, …, "variation": 0.4 },
+  "rules": [                            // flat list, as #138
+    { "part": "kick", "at": [1, 5, 9, 13], "velocity": 0.95, "accent": true },
+    { "part": "closedHat", "at": [2, 4, …], "kind": "ghost", "chance": "0.1 + 0.7 * density", "velocity": 0.4 },
+    { "part": "snare", "meter": "12/8", "at": [4, 10], "velocity": 0.9 },
+    { "part": "closedHat", "beats": [4], "subdivision": "tuplet", "at": [1, 2, 3, 4, 5, 6], … }
+  ],
+  "probability": { "value": "90 - 50 * complexity", "min": 30, "max": 100, "except": ["kick"] },
+  "fill": { "cycle": ["clap", "snare", "snare"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true },
+  "assertions": [ { "part": "kick", "never": [2, 3, 4, …] } ]   // optional, see 11.3
 }
 ```
 
-- **Positions** are 1-based on the meter's 16th grid:
-  - 4/4: 1–16; 3/4 and 6/8: 1–12; 12/8: 1–24.
-  - On a finer grid (32 or 64 steps) a rule lands on the matching step, as factory styles do
-    today.
-- **Triplets:** a rule may target triplet cells of given beats, e.g.
-  `{ "beats": [4], "triplet": "16th", "at": [1,2,3,4,5,6] }`. The beat is switched to triplet
-  subdivision on that lane (§10.3).
-- **Chance** is `clamp (base + Σ coefficient × setting, 0, 1)` over density, groove,
-  syncopation, complexity, fills and variation. No other expressions and no scripts.
-- **`when`** limits a rule to a settings range. **`bars`** limits it to bar numbers
-  (e.g. `"odd"`, `[1]`).
-- **Roles** are the semantic roles of §2: kick … tom3, perc1–perc8. They go through the pad
-  roles (#132), so an imported style plays correctly on any kit with roles.
-- **`always` / `never`** are the style's own invariants. They are checked at import (§11.4).
-- Randomness is the generator's deterministic hash, keyed by role slot and position. The same
-  style, settings and seed always give the same output.
+- **Rule `meter`** defaults to `"4/4"`.
+- **`at` positions:**
+  - on a straight beat: 1-based on the meter's 16th grid (4/4 1–16, 3/4 and 6/8 1–12, 12/8
+    1–24);
+  - with `"beats"` and `"subdivision": "tuplet"`: cell indices of the tuplet at the pattern's
+    resolution, counted within each listed beat.
+- **Formulas:** exactly #138's bounded arithmetic: numbers, the 8 settings, `+ - *`, parentheses,
+  64 tokens, depth 8. Products like `0.15 + 0.55 * syncopation * (0.5 + density)` are allowed,
+  so imported styles can do what factory styles do. Revision 3's "linear only" is withdrawn.
+- **Strict:**
+  - any unknown key at any level rejects the file, with the field path;
+  - the limits of #138 apply, plus `meta` text ≤ 64 characters and `assertions` ≤ 64.
+- **Canonical serializer:** the AST is written back as JSON with sorted keys, fixed spacing and
+  shortest round-trip numbers (`std::to_chars`), so parse → write → parse is exact.
+- **Content hash:** SHA-256 of the canonical binary form, as #138 implements. It covers the
+  generation-relevant data; `meta` is hashed separately for display.
 
-### 11.3 Limits and validation (strict)
+### 11.2 Identity, collisions and projects
 
-- **Size:** a file is at most 64 KiB. At most 64 rules per role and meter, 4 meters, 24
-  positions per rule, 8 ratchet values from 1–8.
-- **4/4 required:** a style without `"4/4"` in `meters` and full 4/4 rules is rejected.
-  Triple meters are optional additions.
-- **Values:** numbers are finite. Velocity is 0–1; coefficients are −2…2; tempo is 40–300.
-- **Schema:** an unknown key, a wrong type, an unknown role or meter, a position outside the
-  meter, or a duplicate id rejects the file. The error names the field: e.g. "rules.4/4.lanes.clap[0].at[2]: 17 is outside 4/4 (1–16)".
-- **Parsing** runs on the message thread only, never on the audio thread, and is bounded in
-  time and memory. Untrusted files are data only: nothing is executed.
+- **Id:**
+  - every style has a UUID; factory UUIDs are constants in the registry;
+  - the registry's numeric ids 0–22 stay for display order only;
+  - **`DGEN` v2 stores the style UUID** (16 bytes). There is no factory/user kind byte, so the
+    reference has one form.
+- **Library import:**
 
-### 11.4 Import and self-test
+  | Case | Result |
+  |---|---|
+  | same UUID, same content hash | "already in the library" (no change) |
+  | same UUID, different hash | the user chooses **Replace** (the library entry changes; projects keep their own embedded copy) or **Keep both** (the copy gets a new UUID; its name gets " (2)") |
+  | a factory UUID | refused: "factory styles cannot be replaced" |
+  | another UUID with the same name | allowed; the list shows the author |
 
-- **"Import Style…"** is in the Library and in GENERATE.
-- After the schema check, the style is **generated over a settings matrix**:
-  - 6 seeds × 3 densities × 3 complexities × 2 fills × every meter it declares;
-  - Pattern, Variation, Fill and Song.
-- Its `always`/`never` invariants are checked on the result. A style that breaks its own
-  invariants is **not imported**, and the report lists the first violations.
-- A valid style is copied to `…/ULTIMA VOX/VOX Drums/Styles/<name>.voxstyle`. The project and
-  presets do not depend on that file (§11.5).
-- **"Export Style…"** writes any style, a factory one included, as `.voxstyle`, for editing
-  and sharing.
-- **Same id, different content:** the import asks "Replace" or "Keep both". Keep both gives the
-  copy a new id.
+- **Projects and Song presets embed the user style they use** (`DSTL` = canonical JSON + its
+  hash, at most 64 KiB, one per state).
+  - On restore the embedded copy is used whatever the local library holds.
+  - If the library has the same UUID with another hash, the UI says "This project uses its own
+    version of My Style".
+  - A user style referenced in `DGEN` without `DSTL` rejects the restore. Factory UUIDs need no
+    `DSTL`.
 
-### 11.5 Registry, projects and presets
+### 11.3 What validation proves, and what it does not
 
-- **Style reference** in `DGEN` v2: `u8 kind` (0 factory, 1 user) plus the factory id (§6) or
-  the 16-byte UUID. Strict: an unknown factory id or a missing embedded user style rejects the
-  restore.
-- **Projects embed the user style they use** (new section `DSTL`: the canonical JSON of the one
-  style `DGEN` references, at most 64 KiB, with its SHA-256).
-  - A project opened on another machine, without the style file, still regenerates identically.
-  - If the local library holds the same UUID with other content, the project keeps its
-    embedded version and the UI shows "This project uses its own version of My Style".
-- **Budget:** `DSTL` adds at most 64 KiB + header. The boundary fixture (#130 T21) must
-  include it; the reserve is reviewed with the measured number.
-- **Presets:**
-  - A new preset type **Style** (`.voxstyle`) appears in the Library next to
-    Kit/Pad/Pattern/Song, with Factory and User lists.
-  - A Song preset made with a user style embeds `DSTL`, like a project.
-  - Generator-settings presets (§4) are the style's `defaults`. "Style defaults" applies them as
-    one undoable step.
-- The factory content manifest lists the 23 factory styles with their hashes. User styles are
-  not in the manifest.
+- **Schema and security:** strict parsing, bounds, message thread only, no code or script; 4,000+
+  random mutations without a crash (#138 already does this for the rule part).
+- **Structural self-consistency:** the optional `assertions` (always/never per part) are checked
+  on a generated matrix at import. A style that breaks its **own** assertions is refused.
+  - This proves only that the file agrees with itself. It is **not** a genre or quality check,
+    and the UI must not call it one.
+- **Genre and sound:** only the owner's listening review, for factory styles; nothing for user
+  styles.
 
-### 11.6 UI (native hardware UI, #127 / #135)
+### 11.4 Required tests (in the implementation PR)
 
-- GENERATE style list grouped by `group`, with Factory and User sections and an "imported" mark.
-- Import / Export / Delete (user styles only) and the import report with the field errors and
-  self-test violations.
-- The tempo range is shown as information. It never changes the DAW.
+1. **Factory round trip:** each factory style exported → parsed → identical AST hash →
+   byte-identical generation over the #138 parity matrix.
+2. **User style through a project:**
+   - library import → project `DSTL` → save;
+   - restore into a fresh instance with an **empty library folder** → identical generation and
+     identical `DSTL` bytes.
+3. **Collisions:** every row of the table in 11.2. **Missing `DSTL`:** the restore is rejected
+   and the live state is unchanged.
+4. Every rejection class with its field path, the limits, and fuzzing of whole files including
+   `meta`, `meters`, tuplet rules and assertions.
+5. A user style is not offered in a meter it does not define, and a tuplet rule never writes
+   outside §10.2 capacity.
 
-### 11.7 Tests
+### 11.5 Decisions for Architecture Guard (revision 4)
 
-- **Parser:**
-  - a valid round trip;
-  - every rejection class (size, unknown key, type, range, position, role, meter, duplicate id)
-    with its exact error text;
-  - fuzzing with random bytes and random mutations: no crash, bounded time.
-- **Identity:** the 7 existing styles as data give the c7c29bb/#129 digests byte for byte.
-- **The 16 new factory styles** pass the grammar matrix and distinction tests of §3 and §10.
-- **Import:**
-  - a valid style is imported and generates;
-  - a style breaking its own `never` is refused with a report;
-  - replace / keep both.
-- **Projects and presets:**
-  - a project with a user style restores and regenerates identically on a "machine" without
-    the style file (fresh library folder);
-  - a Song preset with `DSTL` behaves the same;
-  - a missing `DSTL` rejects the restore.
-- **Realtime:** no parsing, file access or allocation on the audio thread (allocation probe).
-
-### 11.8 Decisions for Architecture Guard
-
-1. **One declarative style engine** for factory and user styles, with the 7 existing styles
-   proven byte-identical.
-2. The `.voxstyle` v1 schema and limits; linear chance formulas only, no scripts.
-3. Import self-test against the style's own invariants.
-4. Projects and Song presets embed the user style (`DSTL`); budget review with a measured
-   fixture.
-5. New Library preset type **Style**.
+1. One schema: #138's flat rules + `id`, `meta`, `meters`, `defaults`, per-rule `meter` and
+   tuplet fields, `variation`, `song`, `assertions`, a canonical serializer.
+2. `DGEN` v2 references a style by UUID only; `DSTL` embeds user styles.
+3. Storage: per-beat subdivision within 64 slots per bar; the capacity table and the
+   unavailable combinations of §10.2.
+4. Lossless subdivision switching (absolute time kept through micro) or refusal, never a merge.
+5. The host-meter rules of §10.4, including loops and missing data. Playback never edits
+   state or export.
