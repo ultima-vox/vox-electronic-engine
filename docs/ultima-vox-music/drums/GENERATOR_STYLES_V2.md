@@ -293,100 +293,152 @@ Settled here as engineering details:
 Open for review: the per-style rules of §3 (Architecture Guard / tech lead) and the listening
 gate per style (owner).
 
-## 10. Meters 3/4, 6/8 and 12/8 (owner decision 2026-11-14)
+## 10. Meters from the DAW, and triplets together with straight notes (owner decisions 2026-11-14)
 
-This is an architecture change, not a style detail. Pattern format, scheduler, song, MIDI
-export, UI grid and generator are all affected. It needs Architecture Guard review before code.
+Owner decisions:
+
+1. **4/4 is the native meter of every style.** 3/4, 6/8 and 12/8 are additional meters.
+2. The plugin **follows the DAW's time signature**.
+3. **Triplets must work together with straight notes** in the same pattern (e.g. a straight kick
+   with a hi-hat triplet roll).
+
+This is an architecture change. Pattern format, scheduler, song, MIDI export, UI grid and
+generator are all affected. It needs Architecture Guard review before code.
 
 ### 10.1 Today (`c7c29bb`)
 
-- A stored pattern is 16, 32 or 64 steps per bar, 1–4 bars. The step length follows the step
-  count: 1/16, 1/32, 1/64. Every bar is 4 quarter notes.
-- The engine already knows a 1/8-triplet step (`kit::Pattern::timing` = 3, 1/3 quarter note).
-  The stored pattern never uses it.
-- The song is a list of bars, each 4 quarter notes. MIDI export writes 4/4.
+- A stored pattern is 16, 32 or 64 steps per bar, 1–4 bars. Every bar is 4 quarter notes.
+- The engine already has a 1/8-triplet step length (`kit::Pattern::timing` = 3), but stored
+  patterns never use it.
+- The sequencer counts bars of 4 quarters from the host's PPQ. It does not read the host's time
+  signature.
+- The song is a list of 4/4 bars. MIDI export writes 4/4.
+- Ratchet (1–8 hits evenly inside one step) is the only way to play an odd subdivision today.
 
-### 10.2 Model
+### 10.2 The meter follows the DAW
 
-Each pattern gets a **meter**:
+- **Source:** the host's time signature and bar position in every block: JUCE
+  `PositionInfo::getTimeSignature()` and `getPpqPositionOfLastBarStart()`, from VST3
+  `ProcessContext` (`kTimeSigValid`, `kBarPositionValid`). Reading them in `processBlock`
+  allocates nothing and does not block.
+- **Unverified:** whether Cubase and REAPER fill these fields, also during meter changes, loops
+  and offline render. This is the first thing to test.
+- **Without host data** (the field is not valid, offline export, tests): the pattern's stored
+  meter; 4/4 for a new pattern.
+- **Bar lines come from the host.** Each host bar starts the pattern (or song bar) from its
+  beginning:
+  - A pattern written for a **longer** bar than the host's is cut at the host bar line.
+  - A **shorter** one is followed by silence until the next bar line.
+  - Nothing is stretched or time-scaled.
+  - The UI shows "Host is 7/8, pattern is 4/4: cut at the bar line".
+- **Meter changes in the DAW timeline** work bar by bar: every host bar uses its own meter.
+- **Song mode:** song bar n plays at host bar n (counting from song position 0). The song has
+  no meter of its own; it takes each host bar as it comes.
+- **New pattern and Generate** use the host's meter at that moment (the meter selector shows
+  "Host (6/8)"). The user can also fix a meter for a pattern (e.g. write 6/8 material while the
+  host is 4/4).
+- **Supported pattern meters:**
+  - numerator 1–16 with denominator 4 or 8; a bar is at most 4 quarter notes × 4… capped at 16
+    beats.
+  - The generator has rules for 4/4 (every style) plus 3/4, 6/8 and 12/8 (§10.5). In any other
+    meter (e.g. 7/8) generation is refused with a message, and manual editing works.
+- **MIDI export** writes each pattern's meter as a time-signature event and the bar lengths in
+  that meter. A song export writes a time-signature event wherever consecutive bars differ.
+- The plugin **never changes the DAW's meter or tempo**.
 
-| Meter | Bar length | Pulse | Steps per bar (resolution) |
+### 10.3 Triplets together with straight notes: per-beat subdivision
+
+- Each **lane** has, for each **beat** of each bar, a subdivision: **straight** or **triplet**.
+- The other lanes and beats keep theirs. So within one bar:
+  - the kick can stay on straight 16ths;
+  - the hats play 16th triplets on beat 4 only;
+  - the snare plays an 8th-triplet fill over beats 3–4.
+
+| Meter | Beat | Straight cells per beat (resolution 16 / 32 / 64 per 4/4 bar) | Alternative |
 |---|---|---|---|
-| 4/4 | 4 quarters | 4 beats of 4 sixteenths | 16, 32, 64 (1/16, 1/32, 1/64) |
-| 3/4 | 3 quarters | 3 beats of 4 sixteenths | 12, 24, 48 |
-| 6/8 | 3 quarters | 2 dotted-quarter beats of 3 eighths | 6, 12, 24, 48 (1/8, 1/16, 1/32, 1/64) |
-| 12/8 | 6 quarters | 4 dotted-quarter beats of 3 eighths | 12, 24, 48 (1/8, 1/16, 1/32) |
+| x/4 (2/4, 3/4, 4/4, …) | quarter | 4 / 8 / 16 | **triplet:** 3 / 6 / 12 (8th, 16th, 32nd triplets) |
+| x/8 compound (6/8, 9/8, 12/8) | dotted quarter (3 eighths) | 6 / 12 / 24 … within the cell limit | **duplet:** 4 / 8 / 16 (two or four even notes across the dotted beat) |
 
-- The step length is always a straight division of the quarter note: 1/2, 1/4, 1/8 or 1/16.
-  The triplet character comes from the meter's 3-eighth beats, not from a tuplet step.
-- 4/4 with an 8th-triplet feel ("shuffle") is written as 12/8. This is the usual notation.
-- At most 64 steps per bar and 4 bars, as today. The cell array keeps its size.
-- Meters outside these four are not supported (no 5/4 or 7/8). They can be added later with a
-  new id.
-
-### 10.3 Song and host
-
-- **One meter per song.** All bars of a song share it.
-  - A pattern of another meter cannot be placed in the song: the arranger refuses with
-    "Pattern 3 is 6/8; this song is 4/4".
-  - Changing the song meter is an explicit, undoable action that lists the bars it would clear.
-- **Host sync:** bar 1 starts at song position 0. Bars are counted in the pattern's or song's
-  meter from the host's PPQ.
-  - If the host reports another time signature (JUCE `PositionInfo::getTimeSignature`), the UI
-    shows "Host is 4/4, pattern is 6/8: bar lines will drift".
-  - Playback still follows the plugin's meter. The plugin never changes the host's meter or
-    tempo.
-- **MIDI export** writes the meter as the time-signature meta event (3/4, 6/8, 12/8) and bar
-  lengths in that meter. Song 16/32/64 bars means that many bars of the song's meter.
+- **Ratchet** still divides one cell. A straight 16th cell with ratchet 3 is 32nd-note triplets
+  on one note.
+- **Microtiming** stays relative to the cell length.
+- **Timing is exact:** cell start = beat start + index × beat length / cells.
+  - Hits are computed in PPQ as double and sample positions as today.
+  - MIDI export at 960 PPQ is exact, because 960 is divisible by 3, 6, 12 and 24.
+- **Storage:**
+  - per lane and bar, a 16-bit mask of triplet (or duplet) beats;
+  - a triplet beat uses fewer cells than a straight one, so the cell array keeps its maximum
+    size;
+  - for a full pattern (16 lanes × 4 bars) the masks add 128 bytes.
+- **Editing:**
+  - switching a beat to triplet maps its notes to the nearest triplet cells (and back), as one
+    undoable edit;
+  - a note that would collide with another is kept and the merge is reported.
 
 ### 10.4 Formats (pre-release policy, no shims)
 
-- `DSEQ`: each pattern gets a meter byte (0 = 4/4, 1 = 3/4, 2 = 6/8, 3 = 12/8); version
-  bumped. Strict decode: a step count that does not fit the meter, or an unknown meter,
-  rejects the restore.
-- `DSNG`: a song meter byte; version bumped.
-- The development-build v1/v2 data is not decoded (as `DGEN`, #136).
-- `productStateReserve()` is unchanged; the size grows by a few bytes.
+- **`DSEQ` version bump:**
+  - per pattern: the meter (numerator, denominator) and whether it is "host" or fixed;
+  - per lane and bar: the tuplet beat mask.
+  - Strict decode: a cell count that does not fit the meter, an unknown meter, or a mask bit
+    beyond the bar's beats rejects the restore.
+- **`DSNG` version bump:** no song meter (it follows the host). Bars keep their pattern
+  references.
+- Development-build `DSEQ`/`DSNG` data is not decoded (as `DGEN`, #136).
+- **Budget:** a few hundred bytes more per state. Checked by the boundary fixture (#130 T21).
 
-### 10.5 Generator in other meters
+### 10.5 Generator: 4/4 native, extra meters, triplet rules
 
-- **4/4 is mandatory for every style** (owner, 2026-11-14). All 23 factory styles have full
-  4/4 rules, the §3 tables. 3/4, 6/8 and 12/8 are added on top for the styles in the table
-  below; they never replace 4/4.
-- Every style has a **native meter** and the list of meters it supports. The style-defaults
-  preset sets the native meter.
-- Generating into a pattern of an unsupported meter is refused with a message: never silently
-  4/4 rules on a 6/8 grid.
+**All 23 styles: 4/4 native**, with the §3 rules. Additional meters:
 
-| Style | Meters | Rules outside 4/4 |
+| Style | Additional meters | Rules there |
 |---|---|---|
-| Nordic Metal | **6/8 native**, 12/8, 4/4 | 6/8:<br>- kick on 1 and 4 (the two dotted-quarter beats), tom 3 doubling them (war drum);<br>- snare on 4 when density < 0.4, otherwise on 4 with a ghost on 6;<br>- gallop kick 1-2-3 by syncopation;<br>- ride on every eighth |
-| Symphonic Metal | 4/4 native, 12/8, 3/4 | 12/8:<br>- kick on 1, 4, 7 and 10; snare on 4 and 10 (half-time) or on every dotted beat in the "epic" bar;<br>- toms roll in eighth triplets.<br>3/4: kick on 1, snare on 2 and 3, crash on 1 (orchestral waltz-march) |
-| Heavy Metal | 4/4 native, 12/8 | 12/8 shuffle: double-kick on each eighth (density > 0.6) or the gallop 1-3 of each beat; snare on 4 and 10 |
-| Hard Rock | 4/4 native, 12/8 | 12/8 shuffle: kick on 1 and 7, snare on 4 and 10, hats on each eighth with an accent on each beat |
-| Symphonic Trance, Dream Trance | 4/4 native, 3/4 | 3/4: kick on 1, clap on 3 (soft), hats on each eighth; for breakdowns and intros only |
-| Ambient | 4/4 native, 3/4, 6/8 | 3/4 and 6/8: kick on 1 only, other hits as today with probability < 100 % |
-| all other styles | 4/4 only | — |
+| Nordic Metal | 6/8, 12/8 | 6/8:<br>- kick on 1 and 4 (the two dotted beats), tom 3 doubling them (war drum);<br>- snare on 4 (density < 0.4) or 4 + ghost on 6;<br>- gallop kick 1-2-3 by syncopation;<br>- ride on every eighth |
+| Symphonic Metal | 12/8, 3/4 | 12/8:<br>- kick on 1, 4, 7 and 10; snare on 4 and 10, or on every dotted beat in the "epic" bar;<br>- eighth-triplet tom rolls.<br>3/4: kick on 1, snare on 2 and 3, crash on 1 |
+| Heavy Metal, Hard Rock | 12/8 | shuffle:<br>- Heavy Metal: kick on each eighth or the 1-3 gallop;<br>- Hard Rock: kick on 1 and 7;<br>- snare on 4 and 10 |
+| Symphonic Trance, Dream Trance | 3/4 | kick on 1, soft clap on 3, hats on each eighth (intros and breakdowns) |
+| Ambient | 3/4, 6/8 | kick on 1 only; the other hits as in 4/4, probability < 100 % |
+| all others | — | 4/4 only. In another host meter, generation is refused with a message |
 
-- Tests: the grammar matrix runs every supported (style, meter) pair. Unsupported pairs must
-  be refused.
-- Export tests check the time-signature meta event and bar lengths. Scheduler tests check the
-  hit positions in the host's PPQ for every meter.
+**Triplet rules inside 4/4**, in the styles where they belong:
 
-### 10.6 UI
+- **Trap:** closed-hat 16th-triplet rolls on single beats; this replaces part of today's
+  ratchet rolls.
+- **Heavy, Symphonic and Nordic Metal:** 8th-triplet tom/snare fills, and triplet double-kick
+  bursts at high complexity.
+- **Uplifting, Anthem and Symphonic Trance:** an 8th-triplet snare roll before the final
+  16th/32nd build in long fills.
+- **Hard Rock:** triplet tom fills.
+- **DnB, Melodic DnB:** occasional 16th-triplet ghost snares.
+- **Every other style: no triplets.** This is a "never" rule. Full-on, Goa, Techno, House and
+  Tech House stay straight.
 
-- The Step Sequencer grid groups steps by the meter's beats: 4 × 4, 3 × 4, 2 × 3 or 4 × 3.
-- The meter selector sits next to the steps-per-bar selector.
-- The Song Arranger shows the song meter.
-- Native hardware UI (#127, #135).
+Tests:
+
+- the grammar matrix runs every (style, meter) pair and checks every triplet "always/never";
+- unsupported meters must be refused;
+- scheduler tests with a simulated host: meter changes, bar starts, loops, mismatched patterns
+  cut or padded, triplet cells at exact sample positions at 44.1/48/96 kHz and various block
+  sizes;
+- export tests: time-signature events, bar lengths, triplet ticks; playback = export within
+  1 tick, as today.
+
+### 10.6 UI (native hardware UI, #127 / #135)
+
+- Step Sequencer:
+  - the grid groups cells by the beats of the meter;
+  - a beat switched to triplet shows its 3/6/12 cells evenly across the same width;
+  - a per-lane, per-beat "3" toggle; selecting several beats switches them together.
+- Meter display and selector: "Host (6/8)" or a fixed meter. The mismatch notice from §10.2.
 
 ### 10.7 Decisions for Architecture Guard
 
-- Pattern meter with a straight step division (no tuplet steps).
-- One meter per song.
-- Host meter mismatch shown, never changed.
-- `DSEQ`/`DSNG` version bump without decoding development-build data.
-- Native meter and supported meters per style, with a refusal for the rest.
+1. Bar lines and meter from the host each block; the stored meter only without host data.
+2. Mismatch handling: cut or silence at the host bar line, never stretched.
+3. Per-lane, per-beat triplet/duplet subdivision as the way to mix triplets with straight notes;
+   ratchet unchanged.
+4. Song bars follow host bars; no song meter.
+5. `DSEQ`/`DSNG` version bump without decoding development-build data.
 
 ## 11. Importable styles (owner request 2026-11-14)
 
@@ -439,6 +491,9 @@ Architecture Guard review before code.
   - 4/4: 1–16; 3/4 and 6/8: 1–12; 12/8: 1–24.
   - On a finer grid (32 or 64 steps) a rule lands on the matching step, as factory styles do
     today.
+- **Triplets:** a rule may target triplet cells of given beats, e.g.
+  `{ "beats": [4], "triplet": "16th", "at": [1,2,3,4,5,6] }`. The beat is switched to triplet
+  subdivision on that lane (§10.3).
 - **Chance** is `clamp (base + Σ coefficient × setting, 0, 1)` over density, groove,
   syncopation, complexity, fills and variation. No other expressions and no scripts.
 - **`when`** limits a rule to a settings range. **`bars`** limits it to bar numbers
