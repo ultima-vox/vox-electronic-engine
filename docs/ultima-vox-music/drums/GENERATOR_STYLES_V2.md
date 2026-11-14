@@ -1,6 +1,8 @@
 # VOX Drums generator: 16 new styles, genre presets and kits — design for approval
 
-Status: **design proposal, documentation only.** No code. Owner request (work session, 2026-11-14):
+Status: **design, documentation only; revision 2 aligned with the owner contract in issue #136**
+(2026-11-14) and the hardware UI reference (#135). Where #136 and this document differ, #136
+wins. Implementation follows in a separate Draft PR. No code here. Owner request (work session, 2026-11-14):
 add Uplifting Trance, Anthem Trance, Dark Psy, Melodic Trance, Hard Rock, Heavy Metal, Symphonic
 Metal, Nordic Metal, House, Tech House, Drum and Bass, Melodic Drum and Bass, Melodic Techno,
 Progressive Trance, Dream Trance, Hard Trance and Symphonic Trance.
@@ -69,7 +71,9 @@ percussion. Proposed set:
   - **toms** by GM note: 48/50 → Tom 1, 45/47 → Tom 2, 41/43 → Tom 3; otherwise by tune, highest
     to lowest;
   - **cymbals**: 49/52/55/57 → Crash, 51/53/59 → Ride; otherwise a "?" row.
-- UI (#133 branch): the role lists get the three new entries. Nothing else changes.
+- UI: in the native hardware-inspired UI (#127, #135). The role controls built earlier in the
+  old eight-page editor (branch `drm/pad-roles-ui`, not published) are donors for behaviour
+  only, per the #135 contract.
 
 ## 3. Rhythm rules of the 16 new styles
 
@@ -148,9 +152,11 @@ Distinctions:
 | **Symphonic Metal** | 100–180 | double bass 16ths in odd bars; **half-time** bars (kick 1 and 11) in even bars | 5 and 13 in double-bass bars; **9 only** in half-time bars | ride on 8ths; crash on every beat in the last bar of a phrase ("epic" bar) | tom 3 on the beats under orchestral hits; tom rolls 1→3 in fills | clap; a bar that is neither double-bass nor half-time |
 | **Nordic Metal (?)** | 90–140 | **war-drum pulse**: kick + tom 3 on 1, 5, 9, 13; kick gallop (1, 3, 4) by syncopation | 5 and 13 (or 13 only, half-time, when density < 0.4) | ride 8ths; crash on 1 | tom 2 / tom 3 ostinato on 16ths of beat 4 | clap; 16th double bass (that is Heavy Metal) |
 
-- **(?) Nordic Metal** is not one style in common use. The rules above are a Viking/folk
-  metal reading: tom-heavy war-drum pulse and mid tempo. Black-metal blast beats (alternating
-  kick/snare 16ths, 180+ BPM) would be a different rule set. **Owner: which one is meant?**
+- **Nordic Metal** is not one style in common use. **Engineering decision (#136: settle
+  details without further questions):**
+  - Viking/folk metal reading: a tom-heavy war-drum pulse and mid tempo.
+  - Black-metal blast beats are not this style.
+  - The listening review can redirect it.
 - **(?) Triplet feel:** folk and power metal often use 6/8 or 12/8 gallops. The model has
   only straight 16ths, so the gallop above is the 16th version. A triplet grid would be a
   pattern-model change and is not proposed here.
@@ -208,21 +214,38 @@ Each style gets a default `GeneratorSettings` and a tempo hint:
 | Metal | tight kick, snare, CH, OH, tom 1–3, crash ×2, ride, china (perc) | Heavy, Symphonic, Nordic Metal |
 
 - Each kit stores its roles (`DROL`), so the generator finds ride and toms.
-- **Risk:** rock and metal kits are built from the eight synth models (kick, snare, clap, hat, tom,
-  rim, cymbal, perc). They will not sound like a recorded acoustic kit. Acoustic sample kits
-  need recorded samples, which this project does not have.
-- **Patterns and songs per style:** a Song preset per new style (5 slots with A/B and the song
-  timeline) is generated with the style defaults and a fixed seed, then stored as factory data
-  with committed hashes, like today's factory content.
+- **Acoustic kits (Rock, Metal) need licensed acoustic samples** (#136).
+  - The repository has none.
+  - Built from the eight synth models, they would not sound like a recorded kit. So they
+    **must not ship as finished presets**: they are marked **NOT RELEASE-READY** in the
+    manifest until licensed, redistributable samples are added.
+  - No sample is downloaded without a verified license and attribution (Freesound included).
+- Electronic kits are built from the synth models. Each still passes the listening gate before
+  it counts as release-ready.
+- **Manifest** per kit and preset: origin, role map, sample licenses, content hashes,
+  release-ready yes/no.
+- **Patterns and songs per style:**
+  - A Song preset per style (5 slots with A/B and the song timeline, 16, 32 or 64 bars).
+  - Pattern presets of 1–4 bars (the pattern model's limit).
+  - Each is generated from that style's own rules, defaults and a fixed seed, never from
+    another style's renamed output, and stored as factory data with committed hashes.
 - The existing factory kits and contents keep their hashes. New hashes are added.
 
 ## 6. Formats (pre-release policy: one canonical record each)
 
 - **`DGEN` v2:**
-  - the style is a stable id 0–22 (0–6 as today, then the 16 new styles in the order of §3);
-  - decode stays strict: an unknown id rejects the restore.
-  - `DGEN` v1 (development build) is read once and saved as v2. No shim is kept after the first
-    public release.
+  - the style is a stable id 0–22 (0–6 as today, then the 16 new styles in the order of §3).
+  - Ids are never reused.
+  - The id is a `u8`:
+    - 23 used of 256;
+    - the encoding stays explicit and bounded;
+    - a later style takes the next free id.
+  - Decode is strict: an unknown id rejects the restore with a clear error ("unknown generator
+    style N"). It never falls back to another style.
+  - **No `DGEN` v1 decoder** in the release (#136): a development-build state with v1 is
+    rejected like any unsupported version.
+- The style registry (id, name, group, tempo range, defaults) is one table in code and is
+  tested: exactly 23 unique ids and names, a fixed order, House once.
 - **`DROL` v2:** role values 0–12 (§2).
 - **Presets:** kit presets carry `DROL`. Song presets carry `DGEN` v2. The preset types are
   unchanged.
@@ -253,12 +276,20 @@ Each style gets a default `GeneratorSettings` and a tempo hint:
   files at the style's tempo hint will be provided for the owner's review: yes / no / why.
 - DAW behaviour is not covered.
 
-## 9. Decisions requested
+## 9. Decisions
 
-1. **Approve** the style rules (§3), especially the **Never** column, which is what separates
-   styles.
-2. **Nordic Metal:** Viking/folk war-drum style as written, or black-metal blast beats?
-3. **Roles v2** (§2): rename Cymbal → Crash; add Ride, Tom 2, Tom 3; GM-note proposals.
-4. **Style defaults** as a button with undo (§4), not applied automatically on style change.
-5. **Factory kits** (§5) from synth models, with the stated limitation for rock and metal.
-6. **`DGEN` v2 / `DROL` v2** under the pre-release policy (§6).
+Settled by #136 and the owner session:
+
+- scope (23 styles, three preset kinds);
+- `DGEN` v2 without a v1 decoder;
+- roles v2;
+- acoustic kits only with licensed samples.
+
+Settled here as engineering details:
+
+- Nordic Metal reading;
+- style defaults as an undoable button;
+- `u8` style id.
+
+Open for review: the per-style rules of §3 (Architecture Guard / tech lead) and the listening
+gate per style (owner).
