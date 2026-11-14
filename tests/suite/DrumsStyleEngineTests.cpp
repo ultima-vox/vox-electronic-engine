@@ -16,6 +16,7 @@
 //  - an unavailable (registered, no definition) or unknown style changes
 //    nothing: no cell, seed, lock, A/B or song bar, no history entry
 //    (PR 138 review).
+#include "DrumsPatternTestUtil.h"
 #include "GeneratorReference.h"
 #include "Presets.h"
 #include "Processor.h"
@@ -86,10 +87,8 @@ void testRegistry()
 // Parity with the switch-based generator.
 void empty (StoredPattern& p, int steps, int bars)
 {
-    p.steps = static_cast<std::uint8_t> (steps);
-    p.bars = static_cast<std::uint8_t> (bars);
     p.seed = 1;
-    p.cells.fill ({});
+    testutil::emptyGrid (p, steps, bars);
 }
 
 PadRoles explicitRoles (std::array<PadRole, kit::padCount> r)
@@ -158,7 +157,7 @@ void testParity()
                                         other.seed = g.seed + 11u;
                                         empty (*a, grid[0], grid[1]);
                                         reference::generatePattern (other, *a);
-                                        a->cell (4, 0, 1).locked = true;
+                                        testutil::stepAt (*a, 4, 0, 1).locked = true;
                                         g.laneLocks = seed % 2 == 0 ? 0x0042u : 0u;
                                         *ra = *a;
                                         generatePattern (g, *a, map);
@@ -209,7 +208,7 @@ void testParity()
                         }
                         e->song = SongData::initial();
                         e->song.length = static_cast<std::uint8_t> (length);
-                        e->slots[1].cell (0, 2, 4).locked = true;
+                        testutil::stepAt (e->slots[1], 0, 2, 4).locked = true;
                     }
                     generateSong (g, *all, map);
                     reference::generateSong (g, *rall, map);
@@ -420,7 +419,7 @@ void testUnavailableStyle()
         auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>(), keep = std::make_unique<StoredPattern>();
         empty (*a, 16, 4);
         generatePattern (fill, *a);
-        a->cell (3, 1, 6).locked = true;
+        testutil::stepAt (*a, 3, 1, 6).locked = true;
         a->seed = 4242;
         *keep = *a;
         check (! generatePattern (g, *a) && *a == *keep, label + "Pattern changes nothing (cells, seed, locks)");
@@ -580,7 +579,7 @@ void testRoundTrip (const juce::File& fixture)
         generateSong (s, *all);
         bool breakHasKick = false;
         for (int bar = 0; bar < 4; ++bar)
-            breakHasKick = breakHasKick || all->slots[3].cell (0, bar, 0).on;
+            breakHasKick = breakHasKick || testutil::stepAt (all->slots[3], 0, bar, 0).on;
         check (breakHasKick, "fixture: song.breakWithoutKick = false keeps the kick in the break slot");
     }
     // Registry identities.

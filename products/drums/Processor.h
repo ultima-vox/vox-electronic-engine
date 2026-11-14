@@ -177,6 +177,13 @@ public:
     std::uint32_t takeHitMask() noexcept { return hitMask_.exchange (0, std::memory_order_acq_rel); }
     double lastPpq() const noexcept { return lastPpq_.load (std::memory_order_relaxed); }
     bool transportPlaying() const noexcept { return playing_.load (std::memory_order_relaxed); }
+    // PR 137 §10.4: the bar lines of the last block (the host's, or counted
+    // from 0); for the editor's playhead. hostBars() false: "Host gives no
+    // bar positions; bars counted from the start".
+    std::int64_t lastBarStartTick() const noexcept { return barStartTick_.load (std::memory_order_relaxed); }
+    std::int64_t lastBarIndex() const noexcept { return barIndex_.load (std::memory_order_relaxed); }
+    int lastBarTicks() const noexcept { return barTicks_.load (std::memory_order_relaxed); }
+    bool hostBars() const noexcept { return hostBars_.load (std::memory_order_relaxed); }
     std::uint64_t droppedMidiEvents() const noexcept { return droppedMidi_.load (std::memory_order_relaxed); }
 
     static constexpr std::size_t midiCapacity = 4096;   // events per host block
@@ -263,6 +270,9 @@ private:
     std::atomic<std::uint32_t> hitMask_ { 0 };
     std::atomic<double> lastPpq_ { 0.0 };
     std::atomic<bool> playing_ { false };
+    std::atomic<std::int64_t> barStartTick_ { 0 }, barIndex_ { 0 };
+    std::atomic<int> barTicks_ { 3840 };
+    std::atomic<bool> hostBars_ { false };
     std::atomic<std::uint64_t> droppedMidi_ { 0 };
     std::array<int, 128> padForNote_ {};
 

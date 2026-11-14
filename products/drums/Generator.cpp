@@ -131,7 +131,30 @@ Hit styleHit (const style::Definition& def, const style::ParamValues& values, co
     return h;
 }
 
-kit::PatternStep toStep (const Context& c, int lane, int pos, const Hit& h) noexcept
+// The cell of 16th position `pos` (0..15) in a 4/4 lane bar: its storage
+// slot, or -1 when no cell of the bar's grid starts there (an 8th grid,
+// a triplet beat, or a beat the bar does not have).
+int slotOf16th (const timing::BarTiming& t, int pos) noexcept
+{
+    const int tick = pos * timing::ticksPerQuarter / 4;
+    const int beatTicks = timing::beatTicks (timing::beatKind (t.signature));
+    const int beat = tick / beatTicks;
+    if (beat >= t.beats())
+        return -1;
+    const int cellTicks = t.cellTicks (beat), within = tick - beat * beatTicks;
+    return cellTicks > 0 && within % cellTicks == 0 ? t.slot (beat, within / cellTicks) : -1;
+}
+
+// The generator writes 4/4 (the styles' rules for other meters are not
+// interpreted yet: PR 137 §10.6 refuses them).
+bool generatorGrid (const StoredPattern& p) noexcept
+{
+    return p.signature == timing::TimeSignature {} && timing::BarTiming { p.signature, p.resolution, 0 }.valid();
+}
+
+// `cellTicks`: the length of the cell the step goes to (micro is a percent
+// of it, quantised once to ticks).
+kit::PatternStep toStep (const Context& c, int lane, int pos, const Hit& h, int cellTicks) noexcept
 {
     kit::PatternStep s;
     if (! h.on)
@@ -151,14 +174,15 @@ kit::PatternStep toStep (const Context& c, int lane, int pos, const Hit& h) noex
         micro += 50.0 * std::clamp (g.swing, 0.0f, 1.0f);
     if (lane != kick || ! beat (pos))   // the downbeat kick stays on the grid
         micro += g.humanize * 16.0 * (c.r (lane, pos, 91) - 0.5);
-    s.micro = static_cast<std::int8_t> (std::clamp (static_cast<int> (std::lround (micro)), -50, 50));
+    s.microTicks = static_cast<std::int16_t> (
+        kit::percentToTicks (std::clamp (static_cast<int> (std::lround (micro)), -50, 50), cellTicks));
     return s;
 }
 
 // Writes `step` unless the cell or its lane is locked.
-void put (const GeneratorSettings& g, StoredPattern& p, int lane, int bar, int step, const kit::PatternStep& value) noexcept
+void put (const GeneratorSettings& g, StoredPattern& p, int lane, int bar, int slot, const kit::PatternStep& value) noexcept
 {
-    auto& cell = p.cell (lane, bar, step);
+    auto& cell = p.cell (lane, bar, slot);
     if (cell.locked || (g.laneLocks & (1u << lane)) != 0)
         return;
     cell = value;
@@ -172,7 +196,8 @@ bool generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPa
     const auto* def = definitionOf (g);
     const auto values = paramsOf (g);
     bool open = false;
-    const int scale = p.steps / 16;   // the styles are written on 16ths
+    // The styles are written on 16ths: a cell starting on a 16th gets that
+    // position's hit; every other cell of the lane is cleared.
     for (int lane = 0; lane < kit::padCount; ++lane)
     {
         if ((laneMask & (1u << lane)) == 0)
@@ -181,14 +206,19 @@ bool generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPa
         for (int bar = 0; bar < p.bars; ++bar)
         {
             const Context c { g, bar, p.bars };
-            for (int step = 0; step < p.steps; ++step)
-            {
-                kit::PatternStep value;
-                if (step % scale == 0 && slot >= 0 && def != nullptr)
-                    value = toStep (c, slot, step / scale, styleHit (*def, values, c, slot, step / scale));
-                open = open || ! (p.cell (lane, bar, step).locked || (g.laneLocks & (1u << lane)) != 0);
-                put (g, p, lane, bar, step, value);
-            }
+            const auto t = p.timing (lane, bar);
+            for (int beat = 0; beat < t.beats(); ++beat)
+                for (int cell = 0; cell < t.cells (beat); ++cell)
+                {
+                    const int start = t.cellStartTick (beat, cell);
+                    const int pos = start % (timing::ticksPerQuarter / 4) == 0 ? start / (timing::ticksPerQuarter / 4) : -1;
+                    const int at = t.slot (beat, cell);
+                    kit::PatternStep value;
+                    if (pos >= 0 && pos < 16 && slot >= 0 && def != nullptr)
+                        value = toStep (c, slot, pos, styleHit (*def, values, c, slot, pos), t.cellTicks (beat));
+                    open = open || ! (p.cell (lane, bar, at).locked || (g.laneLocks & (1u << lane)) != 0);
+                    put (g, p, lane, bar, at, value);
+                }
         }
     }
     return open;
@@ -233,9 +263,7 @@ juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Defin
                 g.density = density;
                 g.complexity = complexity;
                 g.fills = 0.0f;
-                p->steps = 16;
-                p->bars = 4;
-                p->cells.fill ({});
+                *p = {};   // 4/4, 16ths, 4 bars, empty
                 generatePattern (g, *p);
                 for (const auto& a : definition->assertions)
                 {
@@ -244,7 +272,7 @@ juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Defin
                     for (int bar = 0; bar < p->bars; ++bar)
                         for (int pos = 0; pos < 16; ++pos)
                         {
-                            const bool on = p->cell (a.part, bar, pos).on;
+                            const bool on = p->cell (a.part, bar, slotOf16th (p->timing (a.part, bar), pos)).on;
                             const bool wrong = ((a.always & (1u << pos)) != 0 && ! on) || ((a.never & (1u << pos)) != 0 && on);
                             if (wrong && out.size() < maxViolations)
                                 out.add (juce::String (style::partKey (a.part)) + (on ? " plays" : " is missing") + " at " + juce::String (pos + 1)
@@ -263,7 +291,7 @@ bool styleAvailable (Style style)
 
 bool generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr)
+    if (definitionOf (g) == nullptr || ! generatorGrid (pattern))
         return false;   // before anything changes
     // The probability seed follows the generator's only when the generator
     // wrote something: a fully locked pattern stays exactly as it is.
@@ -276,7 +304,7 @@ bool generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const 
 
 bool mutateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr)
+    if (definitionOf (g) == nullptr || ! generatorGrid (pattern))
         return false;
     generateLanes (g, laneMask & 0xffffu, pattern, roles);
     return true;
@@ -286,11 +314,10 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
 {
     const auto laneOf = [&] (int slot) { return static_cast<int> (roles.laneOfSlot[static_cast<std::size_t> (slot)]); };
     const auto* def = definitionOf (g);
-    if (def == nullptr)
+    if (def == nullptr || ! generatorGrid (p))
         return false;
     if (bar < 0 || bar >= p.bars)
         bar = p.bars - 1;
-    const int scale = p.steps / 16;
     // The fill takes the last 2..8 sixteenths of the bar.
     const int length = std::clamp (static_cast<int> (std::lround (2.0 + 6.0 * g.fills)), 2, 8);
     const Context c { g, bar, p.bars };
@@ -301,7 +328,8 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
         // Thin out the groove under the fill, then write the roll rising to the bar line.
         for (int other : { static_cast<int> (closedHat), static_cast<int> (openHat), static_cast<int> (perc1), static_cast<int> (perc2) })
             if (c.r (other, pos, 71) < 0.5 * g.fills && laneOf (other) >= 0)
-                put (g, p, laneOf (other), bar, pos * scale, {});
+                if (const int at = slotOf16th (p.timing (laneOf (other), bar), pos); at >= 0)
+                    put (g, p, laneOf (other), bar, at, {});
         if (c.r (lane, pos, 72) > 0.35 + 0.65 * g.fills && index < length - 1)
             continue;
         Hit h;
@@ -310,19 +338,22 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
         h.accent = index == length - 1;
         if (g.complexity > 0.3f && c.r (lane, pos, 73) < g.complexity - 0.2)
             h.ratchet = def->fill.ratchet;
-        if (laneOf (lane) >= 0)   // no pad with this role: the hit is not written
-            put (g, p, laneOf (lane), bar, pos * scale, toStep (c, lane, pos, h));
+        if (laneOf (lane) < 0)   // no pad with this role: the hit is not written
+            continue;
+        const auto t = p.timing (laneOf (lane), bar);
+        if (const int at = slotOf16th (t, pos); at >= 0)   // a 16th the lane's grid has
+            put (g, p, laneOf (lane), bar, at, toStep (c, lane, pos, h, t.cellTicks (pos / 4)));
     }
     return true;
 }
 
 bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, StoredPattern& b, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr)
+    if (definitionOf (g) == nullptr || ! generatorGrid (a))
         return false;   // before B is copied from A
     // B keeps its own locked cells: build from A, then put B's locked cells back.
     auto locked = std::make_unique<StoredPattern> (b);
-    const bool sameGrid = b.steps == a.steps && b.bars == a.bars;
+    const bool sameGrid = b.signature == a.signature && b.resolution == a.resolution && b.bars == a.bars && b.masks == a.masks;
     if (! sameGrid)
     {
         // B would take A's grid, where its locked cells have no place: with
@@ -330,9 +361,9 @@ bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
         bool anyLocked = false;
         for (int lane = 0; lane < kit::padCount && ! anyLocked; ++lane)
             for (int bar = 0; bar < b.bars && ! anyLocked; ++bar)
-                for (int step = 0; step < b.steps && ! anyLocked; ++step)
-                    anyLocked = b.cell (lane, bar, step).locked
-                             || ((g.laneLocks & (1u << lane)) != 0 && b.cell (lane, bar, step).on);
+                for (int slot = 0; slot < kit::slotStride && ! anyLocked; ++slot)
+                    anyLocked = b.cell (lane, bar, slot).locked
+                             || ((g.laneLocks & (1u << lane)) != 0 && b.cell (lane, bar, slot).on);
         if (anyLocked)
             return true;   // available; B kept because of its locks
     }
@@ -357,15 +388,16 @@ bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
     if (sameGrid)
         for (int lane = 0; lane < kit::padCount; ++lane)
             for (int bar = 0; bar < b.bars; ++bar)
-                for (int step = 0; step < b.steps; ++step)
-                    if (locked->cell (lane, bar, step).locked || (g.laneLocks & (1u << lane)) != 0)
-                        b.cell (lane, bar, step) = locked->cell (lane, bar, step);
+                for (int slot = 0; slot < kit::slotStride; ++slot)
+                    if (locked->cell (lane, bar, slot).locked || (g.laneLocks & (1u << lane)) != 0)
+                        b.cell (lane, bar, slot) = locked->cell (lane, bar, slot);
     return true;
 }
 
 bool generateSong (const GeneratorSettings& g, PatternStore::Everything& all, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr)
+    if (definitionOf (g) == nullptr
+        || std::any_of (all.slots.begin(), all.slots.end(), [] (const StoredPattern& p) { return ! generatorGrid (p); }))
         return false;   // before any slot, variation or song bar changes
     const int kickLane = roles.laneOfSlot[static_cast<std::size_t> (kick)];
     // Slots: 1 intro (sparse), 2 main, 3 lift (denser), 4 break (no kick), 5 peak.
@@ -385,8 +417,8 @@ bool generateSong (const GeneratorSettings& g, PatternStore::Everything& all, co
         generatePattern (s, a, roles);
         if (! parts[slot].kickOn && kickLane >= 0 && definitionOf (g)->songBreakWithoutKick)
             for (int bar = 0; bar < a.bars; ++bar)
-                for (int step = 0; step < a.steps; ++step)
-                    put (g, a, kickLane, bar, step, {});
+                for (int cell = 0; cell < kit::slotStride; ++cell)
+                    put (g, a, kickLane, bar, cell, {});
         generateVariation (s, a, all.alternates[static_cast<std::size_t> (slot)], roles);
     }
     // Timeline in eight-bar phrases: intro, main, lift, break, peak, ...;

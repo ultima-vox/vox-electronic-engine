@@ -201,15 +201,11 @@ void factoryPatterns (int kit, PatternStore::Everything& out)
     for (int slot = 0; slot < slotCountForSong; ++slot)
     {
         auto& a = out.slots[static_cast<std::size_t> (slot)];
-        a = {};
-        a.steps = 16;
-        a.bars = 4;
+        a = {};   // 4/4 at 16ths, 4 bars
         const auto g = factoryGenerator (kit, slot);
         generatePattern (g, a);
         auto& b = out.alternates[static_cast<std::size_t> (slot)];
         b = {};
-        b.steps = 16;
-        b.bars = 4;
         generateVariation (g, a, b);
     }
     // A 16-bar song: slot 2 with its B, then slot 5 with its B.

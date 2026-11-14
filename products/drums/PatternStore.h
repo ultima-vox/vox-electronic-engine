@@ -2,9 +2,10 @@
 
 // VOX Drums user patterns (DRM-04): the sequencer plays one of
 // `slotCount` editable pattern slots (host parameter drm.seq.pattern). Each
-// slot is 16 lanes x 16/32/64 steps per bar x 1-4 bars with per-step
-// velocity, accent, probability, ratchet and microtiming, plus a seed for
-// the probability decisions. A new instrument starts with the factory
+// slot is 16 lanes x 1-4 bars on one grid (meter, resolution, per-beat
+// triplet/duplet masks; PR 137 §10) with per-cell velocity, accent,
+// probability, ratchet and microtiming in ticks, plus a seed for the
+// probability decisions. A new instrument starts with the factory
 // patterns in the slots. Saved as the versioned state section DSEQ.
 //
 // Threads: the message/host threads edit under a SpinLock held only for a
@@ -22,37 +23,115 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace vox::drums {
 
 inline constexpr preset::Tag sequenceSectionTag = preset::makeTag ("DSEQ");
 
+// PR 137 §10.2: a pattern has one grid (meter, resolution) for all its bars;
+// each lane's bar has an alternative-beat mask (triplets, or duplets in
+// compound meters). Cells live in fixed storage slots (BarTiming::slot); the
+// slots a bar does not use (past its capacity, or reserved by a beat's
+// current subdivision) are always empty (a default PatternStep).
 struct StoredPattern {
-    static constexpr int maxCells = kit::padCount * kit::maxPatternSteps * kit::maxPatternBars;
-    std::uint8_t steps = 16;   // per bar: 16, 32 or 64
+    static constexpr int laneStride = kit::maxPatternBars * kit::slotStride;
+    static constexpr int maxCells = kit::padCount * laneStride;
+    timing::TimeSignature signature {};    // 4/4
+    timing::Resolution resolution = timing::Resolution::sixteenth;
+    // §10.5: the pattern's meter follows the host's (the editor and the
+    // generator use it for new content); no effect on playback, which always
+    // plays from the host's bar lines.
+    bool followHost = true;
     std::uint8_t bars = 4;     // 1..4
     std::uint32_t seed = 1;
-    std::array<kit::PatternStep, maxCells> cells {};   // (lane * bars + bar) * steps + step
+    std::array<std::uint16_t, kit::padCount * kit::maxPatternBars> masks {};   // lane * 4 + bar
+    kit::PatternCells cells {};   // (lane * 4 + bar) * 64 + slot
 
-    kit::PatternStep& cell (int lane, int bar, int step) noexcept
+    kit::PatternStep& cell (int lane, int bar, int slot) noexcept
     {
-        return cells[static_cast<std::size_t> ((lane * bars + bar) * steps + step)];
+        return cells[static_cast<std::size_t> (lane * laneStride + bar * kit::slotStride + slot)];
     }
-    const kit::PatternStep& cell (int lane, int bar, int step) const noexcept
+    const kit::PatternStep& cell (int lane, int bar, int slot) const noexcept
     {
-        return cells[static_cast<std::size_t> ((lane * bars + bar) * steps + step)];
+        return cells[static_cast<std::size_t> (lane * laneStride + bar * kit::slotStride + slot)];
     }
-    // The engine's view of this pattern (points into `cells`).
+    std::uint16_t& mask (int lane, int bar) noexcept { return masks[static_cast<std::size_t> (lane * kit::maxPatternBars + bar)]; }
+    std::uint16_t mask (int lane, int bar) const noexcept { return masks[static_cast<std::size_t> (lane * kit::maxPatternBars + bar)]; }
+    timing::BarTiming timing (int lane, int bar) const noexcept { return { signature, resolution, mask (lane, bar) }; }
+    // The cell of (beat, cell) in the lane's bar.
+    kit::PatternStep& at (int lane, int bar, int beat, int cellIndex) noexcept
+    {
+        return cell (lane, bar, timing (lane, bar).slot (beat, cellIndex));
+    }
+    const kit::PatternStep& at (int lane, int bar, int beat, int cellIndex) const noexcept
+    {
+        return cell (lane, bar, timing (lane, bar).slot (beat, cellIndex));
+    }
+    int slotsPerBar() const noexcept { return timing::capacity (signature, resolution).slotsPerBar; }
+    // The engine's view of this pattern (points into `cells` and `masks`).
     kit::Pattern view() const noexcept;
-    // Changes steps/bars keeping what fits: steps scale on the grid (a
-    // 16-step cell lands on the matching 32/64-step position), bars beyond
-    // the new count are dropped, new bars repeat bar 1.
-    void resize (int newSteps, int newBars) noexcept;
+    // Changes the bar count: bars beyond the new count are dropped, new bars
+    // repeat bar 1 (cells and masks). The grid is kept. Meter and resolution
+    // never change here (PR 137 §10.3: they are lossless-or-reject
+    // conversions).
+    void setBars (int newBars) noexcept;
+    // PR 137 §10.3, lossless or rejected (nothing changes; `why` names the
+    // place). convertGrid changes meter and/or resolution: every event keeps
+    // its tick from its bar start and all its attributes; the masks are kept
+    // and must be allowed by the new grid. switchBeats switches the beats in
+    // `beats` (bit b) of one lane's bar between straight and alternative.
+    // Never StoredPattern-wide resampling: off-grid events are not dropped.
+    bool convertGrid (timing::TimeSignature signature, timing::Resolution resolution, std::string* why = nullptr);
+    bool switchBeats (int lane, int bar, std::uint16_t beats, std::string* why = nullptr);
+    // Every rule of §10.5: a supported grid within 64 slots, masks inside
+    // the beats and allowed by the capacity, values in range, |microTicks|
+    // within half the cell, ratchet subhits distinct, unused slots empty.
+    // The first violation in `why` when given.
+    bool valid (std::string* why = nullptr) const;
     bool operator== (const StoredPattern& other) const noexcept;
 };
 
-// A StoredPattern is ~24 KB. Code that may run on a host thread with a small
+// The cell rules of PR 137 §10.5 for one lane's bar (`slots`: its 64
+// storage slots): a valid timing; in the active slots values in range,
+// |microTicks| within half the cell and distinct ratchet subhits; every
+// other slot empty (a default PatternStep).
+bool validLaneBar (const timing::BarTiming& timing, const kit::PatternStep* slots, std::string* why = nullptr);
+
+// The state codec shared by DSEQ and DSNG (little endian).
+namespace gridcodec {
+void putU8 (std::vector<std::byte>& out, std::uint8_t v);
+void putU16 (std::vector<std::byte>& out, std::uint16_t v);
+void putU32 (std::vector<std::byte>& out, std::uint32_t v);
+struct Reader {
+    const std::vector<std::byte>& data;
+    std::size_t at = 0;
+    bool ok = true;
+    std::uint8_t u8();
+    std::uint16_t u16();
+    std::uint32_t u32();
+};
+// u8 numerator, u8 denominator, u8 resolution (0 8th .. 3 64th).
+void putGrid (std::vector<std::byte>& out, timing::TimeSignature signature, timing::Resolution resolution);
+// False for an unsupported meter, an unknown resolution or one over 64 slots.
+bool getGrid (Reader& in, timing::TimeSignature& signature, timing::Resolution& resolution);
+// A cell is one 32-bit little-endian word (TL decision 6882837766, option B;
+// microTicks stays an int16 in memory):
+//   bit 0 on, bit 1 accent, bit 2 locked,
+//   bits 3-5 ratchet - 1 (1..8),
+//   bits 6-12 velocity (0..127),
+//   bits 13-19 probability (7 bits; a valid cell holds 1..100),
+//   bits 20-28 microTicks, 9-bit two's complement (-256..255; a valid cell
+//              holds at most half its cell, <= 240),
+//   bits 29-31 reserved, zero.
+std::uint32_t packCell (const kit::PatternStep& c) noexcept;
+bool unpackCell (std::uint32_t word, kit::PatternStep& c) noexcept;   // false: reserved bits set
+void putCell (std::vector<std::byte>& out, const kit::PatternStep& c);
+bool getCell (Reader& in, kit::PatternStep& c);   // false on a short read or reserved bits
+} // namespace gridcodec
+
+// A StoredPattern is ~33 KB. Code that may run on a host thread with a small
 // stack (constructors, state save/restore, editor actions) copies them into
 // existing objects or the heap, never into stack temporaries (Windows CI:
 // a 1 MB main-thread stack overflowed).
@@ -64,7 +143,7 @@ StoredPattern factorySlot (int index) noexcept;   // tests
 //==============================================================================
 // DRM-05 Song mode (docs/ultima-vox-music/drums/DRM-05_SONG_MODE.md).
 //
-// A song is a timeline of 16, 32 or 64 bars in 4/4. Each bar is empty, a
+// A song is a timeline of 16, 32 or 64 bars. Each bar is empty, a
 // reference to one bar of a pattern slot's A or B variation (it follows
 // later edits of that pattern), or unique: its own cells, grid and seed
 // (Make Unique, or any edit of the bar in the song view). Every bar can be
@@ -77,18 +156,24 @@ StoredPattern factorySlot (int index) noexcept;   // tests
 inline constexpr preset::Tag songSectionTag = preset::makeTag ("DSNG");
 inline constexpr int slotCountForSong = kit::factoryPatternCount;
 
-// The cells of one unique bar: 16 lanes x up to 64 steps, lane * 64 + step.
-// Immutable once it is in a SongData (shared between copies and undo
-// entries); `id` is unique per content version in this process.
+// The cells of one unique bar: 16 lanes x 64 slots (lane * 64 + slot) on
+// the bar's grid, with each lane's mask. Immutable once it is in a SongData
+// (shared between copies and undo entries); `id` is unique per content
+// version in this process.
 struct BarCells {
-    static constexpr int stride = kit::maxPatternSteps;
+    static constexpr int stride = kit::slotStride;
     std::uint64_t id = 0;
-    std::uint8_t steps = 16;   // 16, 32 or 64
+    timing::TimeSignature signature {};
+    timing::Resolution resolution = timing::Resolution::sixteenth;
     std::uint32_t seed = 1;
+    std::array<std::uint16_t, kit::padCount> masks {};
     std::array<kit::PatternStep, kit::padCount * stride> cells {};
 
-    kit::PatternStep& cell (int lane, int step) noexcept { return cells[static_cast<std::size_t> (lane * stride + step)]; }
-    const kit::PatternStep& cell (int lane, int step) const noexcept { return cells[static_cast<std::size_t> (lane * stride + step)]; }
+    kit::PatternStep& cell (int lane, int slot) noexcept { return cells[static_cast<std::size_t> (lane * stride + slot)]; }
+    const kit::PatternStep& cell (int lane, int slot) const noexcept { return cells[static_cast<std::size_t> (lane * stride + slot)]; }
+    timing::BarTiming timing (int lane) const noexcept { return { signature, resolution, masks[static_cast<std::size_t> (lane)] }; }
+    kit::BarView view() const noexcept;
+    bool valid (std::string* why = nullptr) const;   // the rules of StoredPattern::valid for one bar
     bool sameContent (const BarCells& other) const noexcept;
     static std::uint64_t nextId() noexcept;
 };
@@ -153,11 +238,12 @@ void buildSongView (const SongTable& table, const StoredPattern* slots, const St
                     const BarCells* const* unique, bool applyLoop, SongView& out) noexcept;
 SongTable tableOf (const SongData& song) noexcept;
 
-// DSNG v1: u32 version, u8 songMode, u8 length, u8 loopOn, u8 loopStart,
+// DSNG v2: u32 version, u8 songMode, u8 length, u8 loopOn, u8 loopStart,
 // u8 loopLength, then 64 bars: u8 kind; pattern: u8 slot, u8 variation,
-// u8 patternBar; unique: u8 steps, u32 seed, 16 x steps cells (lane-major)
-// of u8 flags (on, accent, locked), velocity, probability, ratchet, micro.
-// Strict: anything out of range rejects the section.
+// u8 patternBar; unique: grid (u8 numerator, u8 denominator, u8
+// resolution), u32 seed, 16 u16 masks, then 16 lanes x slotsPerBar cells
+// (lane-major; the gridcodec cell). Strict: anything out of range, or
+// content in a reserved slot, rejects the section.
 // Timeline edits (message thread). Each returns the edited copy; `from` and
 // `count` are clamped to the song. Bars pushed past the end are dropped.
 namespace songedit {
@@ -197,7 +283,7 @@ public:
     void copyAll (std::array<StoredPattern, slotCount>& out) const;
 
     // DRM-04b: each slot has a second variation (B). The sequencer plays the
-    // slot (A); swapping exchanges A and B. Saved with the slots (DSEQ v2).
+    // slot (A); swapping exchanges A and B. Saved with the slots (DSEQ).
     StoredPattern alternate (int index) const;   // tests
     void copyAlternate (int index, StoredPattern& out) const;
     void setAlternate (int index, const StoredPattern& pattern);
@@ -226,8 +312,8 @@ public:
     // committed (message thread only).
     std::function<void()> beforeCommitForTesting;
 
-    // DSEQ v2: the slots, then their alternates. v1 (DRM-04a) has no
-    // alternates: each reads as a copy of its slot.
+    // DSEQ v4: the slots, then their alternates (layout in PatternStore.cpp).
+    // Development versions 1-3 are not decoded.
     static preset::Section encode (const std::array<StoredPattern, slotCount>& slots,
                                    const std::array<StoredPattern, slotCount>& alternates);
     // Strict: an unknown version, a wrong size or slot count, or any value

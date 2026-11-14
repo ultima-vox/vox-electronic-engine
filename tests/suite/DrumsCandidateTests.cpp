@@ -22,12 +22,14 @@
 //  - editor: eight pages without overlapping controls at the minimum and a
 //    large size and at 100/125/150/200 %, bound controls on every page;
 //  - realtime: processBlock allocates nothing in Song mode on nine buses.
+#include "DrumsPatternTestUtil.h"
 #include "DrumsEditor.h"
 #include "DrumsParameters.h"
 #include "FactoryContent.h"
 #include "PatternEditor.h"
 #include "PatternExport.h"
 #include "Presets.h"
+#include "StyleRegistry.h"
 #include "Processor.h"
 #include "common/SuiteEditor.h"
 
@@ -49,6 +51,47 @@
 namespace {
 
 using namespace vox::drums;
+
+// The largest user style the state can embed: the factory styles' largest
+// rules repeated (new salts, parts cycled within the parser's limits), the
+// longest metadata and all assertions, until the canonical text is as close
+// to 64 KiB as possible. Parsed back, so it is a valid canonical style.
+std::shared_ptr<const style::Definition> largestUserStyle()
+{
+    const auto* base = style::factoryDefinition (0);
+    style::Definition d = *base;
+    d.id = "0b6c1f0e-5d2a-4c3b-9e8f-7a6b5c4d3e2f";
+    d.key = "largest-user-style";
+    d.name = juce::String::repeatedString ("N", style::maxMetaText);
+    d.meta.author = juce::String::repeatedString ("A", style::maxMetaText);
+    d.meta.group = juce::String::repeatedString ("G", style::maxMetaText);
+    d.rules.clear();
+    // The rules of the available factory styles, largest first.
+    std::vector<std::pair<int, style::Rule>> pool;
+    for (int id = 0; id < style::registrySize; ++id)
+        if (const auto* f = style::available (id) ? style::factoryDefinition (id) : nullptr)
+            for (const auto& r : f->rules)
+            {
+                style::Definition one = d;
+                one.rules = { r };
+                pool.emplace_back (style::serialize (one).getNumBytesAsUTF8(), r);
+            }
+    std::stable_sort (pool.begin(), pool.end(), [] (const auto& x, const auto& y) { return x.first > y.first; });
+    for (int i = 0; d.rules.size() < static_cast<std::size_t> (style::maxRules) && ! pool.empty(); ++i)
+    {
+        auto r = pool[static_cast<std::size_t> (i) % std::min<std::size_t> (pool.size(), 8)].second;
+        r.part = i % style::partCount;
+        r.salt = 1000 + i;
+        auto next = d;
+        next.rules.push_back (r);
+        if (style::serialize (next).getNumBytesAsUTF8() > style::maxTextBytes)
+            break;
+        d = std::move (next);
+    }
+    auto parsed = std::make_shared<style::Definition>();
+    const auto ok = style::parse (style::serialize (d), *parsed);
+    return ok.wasOk() ? parsed : nullptr;
+}
 
 int failures = 0;
 std::string manifestPath;
@@ -281,18 +324,16 @@ void buildSong (DrumsProcessor& p)
         g.variation = 0.7f;
         g.seed = 100u + static_cast<std::uint32_t> (slot);
         auto& a = all->slots[static_cast<std::size_t> (slot)];
-        a = {};
-        a.resize (steps[slot], bars[slot]);
+        testutil::emptyGrid (a, steps[slot], bars[slot]);
         generatePattern (g, a);
         auto& b = all->alternates[static_cast<std::size_t> (slot)];
-        b = {};
-        b.resize (steps[slot], bars[slot]);
+        testutil::emptyGrid (b, steps[slot], bars[slot]);
         generateVariation (g, a, b);
         // Probability on real steps of every pattern.
         for (int lane = 3; lane < 6; ++lane)
-            for (int st = 1; st < a.steps; st += 3)
-                if (a.cell (lane, 0, st).on)
-                    a.cell (lane, 0, st).probability = 55;
+            for (int st = 1; st < testutil::stepsOf (a); st += 3)
+                if (testutil::stepAt (a, lane, 0, st).on)
+                    testutil::stepAt (a, lane, 0, st).probability = 55;
     }
     auto& song = all->song;
     song = {};
@@ -309,7 +350,7 @@ void buildSong (DrumsProcessor& p)
     const auto unique = [] (int barSteps, std::uint32_t seed, const std::function<void (BarCells&)>& fill) {
         auto cells = std::make_shared<BarCells>();
         cells->id = BarCells::nextId();
-        cells->steps = static_cast<std::uint8_t> (barSteps);
+        testutil::setSteps (*cells, barSteps);
         cells->seed = seed;
         fill (*cells);
         SongBar bar;
@@ -319,11 +360,11 @@ void buildSong (DrumsProcessor& p)
     };
     const auto on = [] (BarCells& cells, int lane, int st, int velocity, int ratchet = 1, int micro = 0, int probability = 100,
                         bool accent = false) {
-        auto& c = cells.cell (lane, st);
+        auto& c = testutil::stepAt (cells, lane, st);
         c.on = true;
         c.velocity = static_cast<std::uint8_t> (velocity);
         c.ratchet = static_cast<std::uint8_t> (ratchet);
-        c.micro = static_cast<std::int8_t> (micro);
+        c.microTicks = static_cast<std::int16_t> (kit::percentToTicks (micro, 3840 / testutil::stepsOf (cells)));   // micro: percent of the cell
         c.probability = static_cast<std::uint8_t> (probability);
         c.accent = accent;
     };
@@ -513,27 +554,23 @@ void testSongParity()
         std::array<kit::SongBarView, kit::maxSongBars> views {};
         for (int bar = 0; bar < 64; ++bar)
             if (const auto& cells = snapshot->bars[static_cast<std::size_t> (bar)])
-                views[static_cast<std::size_t> (bar)] = { cells->cells.data(), BarCells::stride, cells->steps, cells->seed };
+                views[static_cast<std::size_t> (bar)] = cells->view();
         kit::Song song;
         song.bars = 64;
         song.views = views.data();
         song.loopStart = 8;
         song.loopLength = 4;
         std::vector<Hit> looped;
-        std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> buffer;
+        std::vector<kit::ScheduledHit> buffer;
         bool mapped = true;
         for (std::int64_t bar = 0; bar < 24; ++bar)
         {
             // Bars 1-8 play once, then bars 9-12 repeat from bar 9 (review 6795902654).
             mapped = mapped && kit::songBarAt (song, bar) == static_cast<std::uint32_t> (bar < 8 ? bar : 8 + (bar - 8) % 4);
-            const auto& view = views[kit::songBarAt (song, bar)];
-            for (std::uint32_t st = 0; st < view.steps; ++st)
-            {
-                const int n = kit::songHits (song, snapshot->context, bar, st, buffer.data());
-                for (int k = 0; k < n; ++k)
-                    looped.push_back ({ buffer[static_cast<std::size_t> (k)].ppq * 960.0, notes[buffer[static_cast<std::size_t> (k)].pad],
-                                        buffer[static_cast<std::size_t> (k)].velocity });
-            }
+            buffer.clear();
+            testutil::barHits (views[kit::songBarAt (song, bar)], snapshot->context, bar, bar * 3840, buffer);
+            for (const auto& h : buffer)
+                looped.push_back ({ h.ppq * 960.0, notes[h.pad], h.velocity });
         }
         check (mapped, "song loop: bars before the region play once, then the region repeats from its first bar");
         // The playhead the editor shows uses the same mapping as the audio.
@@ -688,7 +725,7 @@ void testExport()
     {
         const auto pattern = std::make_unique<StoredPattern>();
         p->patterns().copySlot (0, *pattern);
-        pattern->resize (16, bars);
+        pattern->setBars (bars);
         p->patterns().setSlot (0, *pattern);
         const auto parsed = parseMidi (DrumsProcessor::renderExport (*p->captureExport (ExportSnapshot::Scope::pattern)));
         check (parsed.ok && parsed.endTick == bars * 3840 && ! parsed.notes.empty(),
@@ -992,10 +1029,10 @@ void testGenerator()
         g.style = static_cast<Style> (style);
         g.seed = 5;
         auto p = std::make_unique<StoredPattern>();
-        p->resize (16, 4);
+        testutil::emptyGrid (*p, 16, 4);
         generatePattern (g, *p);
         auto again = std::make_unique<StoredPattern>();
-        again->resize (16, 4);
+        testutil::emptyGrid (*again, 16, 4);
         generatePattern (g, *again);
         check (*p == *again, juce::String ("generator: deterministic for ") + styleName (g.style));
         int hits = 0;
@@ -1009,11 +1046,11 @@ void testGenerator()
         for (std::size_t b = a + 1; b < byStyle.size(); ++b)
             distinct = distinct && ! (*byStyle[a] == *byStyle[b]);
     check (distinct, "generator: the seven styles give seven different patterns");
-    const auto kickOn = [&] (int style, int step) { return byStyle[static_cast<std::size_t> (style)]->cell (0, 0, step).on; };
+    const auto kickOn = [&] (int style, int step) { return testutil::stepAt (*byStyle[static_cast<std::size_t> (style)], 0, 0, step).on; };
     check (kickOn (0, 0) && kickOn (0, 4) && kickOn (0, 8) && kickOn (0, 12), "generator: full-on has a four-on-the-floor kick");
     check (kickOn (2, 4) && kickOn (3, 12), "generator: house and techno have a four-on-the-floor kick");
-    check (kickOn (4, 0) && ! kickOn (4, 4) && ! kickOn (4, 12) && byStyle[4]->cell (1, 0, 8).on, "generator: trap is half-time (snare on 3)");
-    check (kickOn (5, 0) && kickOn (5, 10) && ! kickOn (5, 4) && byStyle[5]->cell (1, 0, 4).on, "generator: breaks has a broken kick and a back-beat");
+    check (kickOn (4, 0) && ! kickOn (4, 4) && ! kickOn (4, 12) && testutil::stepAt (*byStyle[4], 1, 0, 8).on, "generator: trap is half-time (snare on 3)");
+    check (kickOn (5, 0) && kickOn (5, 10) && ! kickOn (5, 4) && testutil::stepAt (*byStyle[5], 1, 0, 4).on, "generator: breaks has a broken kick and a back-beat");
     int ambientHits = 0, fullOnHits = 0;
     for (const auto& cell : byStyle[6]->cells)
         ambientHits += cell.on ? 1 : 0;
@@ -1026,7 +1063,7 @@ void testGenerator()
         base.style = Style::trap;
         base.seed = 9;
         auto reference = std::make_unique<StoredPattern>();
-        reference->resize (16, 4);
+        testutil::emptyGrid (*reference, 16, 4);
         generatePattern (base, *reference);
         float GeneratorSettings::* amounts[] = { &GeneratorSettings::density, &GeneratorSettings::groove, &GeneratorSettings::syncopation,
                                                 &GeneratorSettings::swing, &GeneratorSettings::humanize, &GeneratorSettings::complexity,
@@ -1037,24 +1074,24 @@ void testGenerator()
             auto g = base;
             g.*amounts[i] = (base.*amounts[i]) < 0.5f ? 1.0f : 0.0f;
             auto changed = std::make_unique<StoredPattern>();
-            changed->resize (16, 4);
+            testutil::emptyGrid (*changed, 16, 4);
             generatePattern (g, *changed);
             check (! (*changed == *reference), juce::String ("generator: ") + names[i] + " changes the pattern");
         }
         auto g = base;
         g.seed = 10;
         auto seeded = std::make_unique<StoredPattern>();
-        seeded->resize (16, 4);
+        testutil::emptyGrid (*seeded, 16, 4);
         generatePattern (g, *seeded);
         check (! (*seeded == *reference), "generator: the seed changes the pattern");
         // Grids of 32 and 64 steps keep the idiom on the quarter notes.
         for (int steps : { 32, 64 })
         {
             auto fine = std::make_unique<StoredPattern>();
-            fine->resize (steps, 2);
+            testutil::emptyGrid (*fine, steps, 2);
             GeneratorSettings f;
             generatePattern (f, *fine);
-            check (fine->cell (0, 0, 0).on && fine->cell (0, 0, steps / 4).on && ! fine->cell (0, 0, 1).on,
+            check (testutil::stepAt (*fine, 0, 0, 0).on && testutil::stepAt (*fine, 0, 0, steps / 4).on && ! testutil::stepAt (*fine, 0, 0, 1).on,
                    "generator: " + juce::String (steps) + "-step grid");
         }
     }
@@ -1081,10 +1118,10 @@ void testGenerator()
         bool onlyLane = true;
         for (int lane = 0; lane < padCount; ++lane)
             for (int bar = 0; bar < after->bars; ++bar)
-                for (int st = 0; st < after->steps; ++st)
+                for (int st = 0; st < testutil::stepsOf (*after); ++st)
                     if (lane != 3)
-                        onlyLane = onlyLane && after->cell (lane, bar, st).on == before->cell (lane, bar, st).on
-                                && after->cell (lane, bar, st).velocity == before->cell (lane, bar, st).velocity;
+                        onlyLane = onlyLane && testutil::stepAt (*after, lane, bar, st).on == testutil::stepAt (*before, lane, bar, st).on
+                                && testutil::stepAt (*after, lane, bar, st).velocity == testutil::stepAt (*before, lane, bar, st).velocity;
         check (onlyLane, "mutate: only the chosen lane changes");
     }
     {
@@ -1094,8 +1131,8 @@ void testGenerator()
         bool lastBarOnly = true;
         for (int lane = 0; lane < padCount; ++lane)
             for (int bar = 0; bar + 1 < after->bars; ++bar)
-                for (int st = 0; st < after->steps; ++st)
-                    lastBarOnly = lastBarOnly && after->cell (lane, bar, st).on == before->cell (lane, bar, st).on;
+                for (int st = 0; st < testutil::stepsOf (*after); ++st)
+                    lastBarOnly = lastBarOnly && testutil::stepAt (*after, lane, bar, st).on == testutil::stepAt (*before, lane, bar, st).on;
         check (lastBarOnly, "fill: only the last bar changes");
     }
     {
@@ -1138,16 +1175,16 @@ void testGenerator()
     // Locks.
     {
         auto pattern = slot();
-        for (int st = 0; st < pattern->steps; ++st)
+        for (int st = 0; st < testutil::stepsOf (*pattern); ++st)
         {
-            auto& cell = pattern->cell (0, 0, st);
+            auto& cell = testutil::stepAt (*pattern, 0, 0, st);
             cell = {};
             cell.on = st % 5 == 0;
             cell.velocity = 33;
             cell.locked = true;
         }
-        pattern->cell (6, 1, 2) = {};
-        pattern->cell (6, 1, 2).locked = true;   // a locked empty step stays empty
+        testutil::stepAt (*pattern, 6, 1, 2) = {};
+        testutil::stepAt (*pattern, 6, 1, 2).locked = true;   // a locked empty step stays empty
         store.setSlot (0, *pattern);
         auto g = p->generator();
         g.laneLocks = 1u << 4;
@@ -1159,16 +1196,16 @@ void testGenerator()
             p->generate (what);
             const auto after = slot();
             bool steps = true, lane = true;
-            for (int st = 0; st < after->steps; ++st)
+            for (int st = 0; st < testutil::stepsOf (*after); ++st)
             {
-                const auto& c = after->cell (0, 0, st);
+                const auto& c = testutil::stepAt (*after, 0, 0, st);
                 steps = steps && c.locked && c.on == (st % 5 == 0) && c.velocity == 33;
             }
-            steps = steps && ! after->cell (6, 1, 2).on && after->cell (6, 1, 2).locked;
+            steps = steps && ! testutil::stepAt (*after, 6, 1, 2).on && testutil::stepAt (*after, 6, 1, 2).locked;
             for (int bar = 0; bar < after->bars; ++bar)
-                for (int st = 0; st < after->steps; ++st)
-                    lane = lane && after->cell (4, bar, st).on == lockedLane->cell (4, bar, st).on
-                        && after->cell (4, bar, st).velocity == lockedLane->cell (4, bar, st).velocity;
+                for (int st = 0; st < testutil::stepsOf (*after); ++st)
+                    lane = lane && testutil::stepAt (*after, 4, bar, st).on == testutil::stepAt (*lockedLane, 4, bar, st).on
+                        && testutil::stepAt (*after, 4, bar, st).velocity == testutil::stepAt (*lockedLane, 4, bar, st).velocity;
             check (steps, "locks: locked steps survive generator action " + juce::String (static_cast<int> (what)));
             check (lane, "locks: a locked lane survives generator action " + juce::String (static_cast<int> (what)));
         }
@@ -1288,7 +1325,7 @@ void testPresets()
         const auto all = std::make_unique<PatternStore::Everything>();
         p->patterns().copyEverything (*all);
         check (all->song.length == 64 && all->song.bars[63].kind == SongBar::Kind::unique && all->song.bars[63].cells != nullptr
-                   && all->song.bars[63].cells->cell (15, 63).velocity == 77,
+                   && testutil::stepAt (*all->song.bars[63].cells, 15, 63).velocity == 77,
                "song preset: the timeline with its unique bars is restored");
         juce::ignoreUnused (wanted);
     }
@@ -1481,7 +1518,7 @@ void testState()
     setPlain (*p, "drm.fx.delay.time", 5.0f);
     auto pattern = std::make_unique<StoredPattern>();
     p->patterns().copySlot (1, *pattern);
-    pattern->cell (2, 0, 3).locked = true;
+    testutil::stepAt (*pattern, 2, 0, 3).locked = true;
     p->patterns().setSlot (1, *pattern);
     const auto saved = stateOf (*p);
     check (saved.getSize() > 0 && saved.getSize() < vox::preset::maxStateBytes, "state: the candidate state fits the container ("
@@ -1493,7 +1530,7 @@ void testState()
         check (stateOf (*q) == saved, "state: saves back byte-identically");
         const auto song = q->patterns().song();
         check (song.songMode && song.length == 64 && song.bars[63].kind == SongBar::Kind::unique && song.bars[20].cells != nullptr
-                   && song.bars[20].cells->steps == 32 && song.bars[4].kind == SongBar::Kind::pattern && song.bars[8].variation == 1,
+                   && testutil::stepsOf (*song.bars[20].cells) == 32 && song.bars[4].kind == SongBar::Kind::pattern && song.bars[8].variation == 1,
                "state: the song (mode, length, references, unique bars) is restored");
         check (q->generator() == g, "state: generator settings and seed are restored");
         check (q->uiState() == UiState { 3, 11, 42, 2, 1 }, "state: the editor's page, pad and bars are restored");
@@ -1503,7 +1540,7 @@ void testState()
                "state: the DRM-06 parameters are restored");
         auto restored = std::make_unique<StoredPattern>();
         q->patterns().copySlot (1, *restored);
-        check (restored->cell (2, 0, 3).locked, "state: step locks are restored");
+        check (testutil::stepAt (*restored, 2, 0, 3).locked, "state: step locks are restored");
         // The restored instrument plays the song.
         juce::String why;
         const auto notes = q->captureExport (ExportSnapshot::Scope::song)->notes;
@@ -1603,8 +1640,8 @@ void testState()
         const auto before = DrumsProcessor::renderExport (*q->captureExport (ExportSnapshot::Scope::song));
         auto edited = std::make_unique<StoredPattern> (all->slots[static_cast<std::size_t> (base.bars[5].slot)]);
         for (int lane = 0; lane < padCount; ++lane)
-            for (int st = 0; st < edited->steps; ++st)
-                edited->cell (lane, base.bars[5].patternBar, st) = {};
+            for (int st = 0; st < testutil::stepsOf (*edited); ++st)
+                testutil::stepAt (*edited, lane, base.bars[5].patternBar, st) = {};
         q->patterns().setSlot (base.bars[5].slot, *edited);
         const auto after = parseMidi (DrumsProcessor::renderExport (*q->captureExport (ExportSnapshot::Scope::song)));
         const auto reference = parseMidi (before);
@@ -1943,15 +1980,15 @@ void testEditor()
         p->patterns().copySlot (reference.slot, *pattern);
         strip.button ("edit")->setToggleState (true, juce::sendNotificationSync);
         check (ed.songBar() == 6, "song bar: the step grid follows the selected bar");
-        const bool wasOn = ed.shown().cell (12, 0, 5).on;
+        const bool wasOn = testutil::stepAt (ed.shown(), 12, 0, 5).on;
         ed.clickCell (12, 5);
         p->patterns().copySlot (reference.slot, *patternAfter);
         check (song().bars[6].kind == SongBar::Kind::unique && song().bars[6].cells != nullptr
-                   && song().bars[6].cells->cell (12, 5).on != wasOn && *patternAfter == *pattern,
+                   && testutil::stepAt (*song().bars[6].cells, 12, 5).on != wasOn && *patternAfter == *pattern,
                "song bar: an edit makes the bar unique and leaves its pattern alone");
         check (ed.lockToggle() != nullptr, "song bar: step lock control");
         ed.lockToggle()->setToggleState (true, juce::sendNotificationSync);
-        check (song().bars[6].cells->cell (12, 5).locked, "song bar: Lock sets the step lock");
+        check (testutil::stepAt (*song().bars[6].cells, 12, 5).locked, "song bar: Lock sets the step lock");
         p->patternHistory().undo (p->patterns());
         p->patternHistory().undo (p->patterns());
         check (song().bars[6] == reference, "song bar: undo returns the bar to its pattern");
@@ -2102,20 +2139,20 @@ void testReviewFindings()
         auto& store = p->patterns();
         auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
         store.copySlot (0, *a);
-        a->resize (32, 2);
+        check (testutil::setGrid (*a, 32, 2), "variation: A converts losslessly to 32 steps");
         store.setSlot (0, *a);
         store.copyAlternate (0, *b);
-        b->resize (16, 4);
-        b->cell (5, 3, 7) = {};
-        b->cell (5, 3, 7).on = true;
-        b->cell (5, 3, 7).velocity = 44;
-        b->cell (5, 3, 7).locked = true;
+        check (testutil::setGrid (*b, 16, 4), "variation: B stays at 16 steps");
+        testutil::stepAt (*b, 5, 3, 7) = {};
+        testutil::stepAt (*b, 5, 3, 7).on = true;
+        testutil::stepAt (*b, 5, 3, 7).velocity = 44;
+        testutil::stepAt (*b, 5, 3, 7).locked = true;
         store.setAlternate (0, *b);
         const bool changed = p->generate (DrumsProcessor::Generate::variation);
         auto after = std::make_unique<StoredPattern>();
         store.copyAlternate (0, *after);
         check (! changed && *after == *b, "variation: B with a locked step and another grid than A is left as it is");
-        b->cell (5, 3, 7).locked = false;
+        testutil::stepAt (*b, 5, 3, 7).locked = false;
         store.setAlternate (0, *b);
         auto g = p->generator();
         g.laneLocks = 1u << 5;
@@ -2127,7 +2164,7 @@ void testReviewFindings()
         p->setGenerator (g);
         check (p->generate (DrumsProcessor::Generate::variation), "variation: without locks B takes A's grid");
         store.copyAlternate (0, *after);
-        check (after->steps == 32 && after->bars == 2, "variation: B has A's grid");
+        check (testutil::stepsOf (*after) == 32 && after->bars == 2, "variation: B has A's grid");
     }
     // S4: a failed portable-kit import leaves the sample library unchanged.
     {
@@ -2194,18 +2231,28 @@ void testReviewFindings()
             auto all = everything (q);
             for (auto* set : { &all->slots, &all->alternates })
                 for (auto& pattern : *set)
-                    pattern.resize (64, 4);
+                    check (testutil::setGrid (pattern, 64, 4), "largest state: a pattern converts losslessly to 64 steps x 4 bars");
             all->song.length = 64;
             for (auto& bar : all->song.bars)
             {
                 auto cells = std::make_shared<BarCells>();
                 cells->id = BarCells::nextId();
-                cells->steps = 64;
+                testutil::setSteps (*cells, 64);
                 bar = {};
                 bar.kind = SongBar::Kind::unique;
                 bar.cells = cells;
             }
             q.patterns().setEverything (*all);
+            // TL decision 6882837766: the worst case also holds the largest
+            // embedded user style (DSTL, canonical text up to 64 KiB) and
+            // explicit pad roles (DROL).
+            auto g = q.generator();
+            g.custom = largestUserStyle();
+            q.setGenerator (g);
+            std::array<PadRole, kit::padCount> roles {};
+            for (int pad = 0; pad < kit::padCount; ++pad)
+                roles[static_cast<std::size_t> (pad)] = static_cast<PadRole> (1 + pad % (padRoleCount - 1));
+            q.setPadRoles (roles);
         };
         // Owner decision 6814720707: sections of an unknown writer are kept
         // byte for byte, or the whole restore is refused. Never dropped.
@@ -2281,9 +2328,22 @@ void testReviewFindings()
             // The reserve really covers the product's own worst case (plus the longest sample references).
             auto own = makeProcessor();
             fill (*own);
-            check (stateOf (*own).getSize() + 166u * 1024u <= 736u * 1024u,
-                   "unknown sections: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (stateOf (*own).getSize()))
-                       + " bytes without samples)");
+            const auto ownState = stateOf (*own);
+            juce::String sizes;
+            {
+                const auto doc = vox::preset::decode ({ static_cast<const std::byte*> (ownState.getData()), ownState.getSize() },
+                                                      own->product().stateTag, own->product().stateSchema).document;
+                for (const auto& sec : doc.sections)
+                    sizes << juce::String (std::string (sec.tag.begin(), sec.tag.end())) << " " << static_cast<int> (sec.data.size()) << ", ";
+                check (doc.find (styleSectionTag) != nullptr && doc.find (styleSectionTag)->data.size() > 60000 && doc.find (rolesSectionTag) != nullptr,
+                       "largest state: holds a DSTL over 60 KB and DROL (" + sizes + ")");
+            }
+            check (ownState.getSize() + 166u * 1024u <= 736u * 1024u,
+                   "unknown sections: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (ownState.getSize()))
+                       + " bytes without samples: " + sizes + "+ 166 KiB of sample references <= 736 KiB)");
+            std::printf ("largest state: %d bytes (%s); reserve 736 KiB, %d bytes to spare with 166 KiB of sample references\n",
+                         static_cast<int> (ownState.getSize()), sizes.toRawUTF8(),
+                         static_cast<int> (736 * 1024) - static_cast<int> (ownState.getSize()) - 166 * 1024);
             const auto file = workFolder.getChildFile ("large-kit.voxkitpreset");
             check (fits->presets().save (PresetType::kit, "Large", file).wasOk() && fits->presets().load (file, PresetType::kit).wasOk()
                        && unknownOf (stateOf (*fits)).size() == budget,

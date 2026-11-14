@@ -262,8 +262,14 @@ void run (const Scenario& sc, double rate, std::uint32_t block)
     for (std::size_t i = 0; i < kitCells.size(); ++i)
         kitCells[i] = { (legacyCells[i].flags & VOX_STEP_ON) != 0, (legacyCells[i].flags & VOX_STEP_ACCENT) != 0,
                         legacyCells[i].velocity };
-    const kit::Pattern kitPattern { legacyPattern.laneCount, legacyPattern.stepsPerBar, legacyPattern.barCount,
-                                    legacyPattern.timing, kitCells.data() };
+    // The legacy 16-step 4/4 grid as the kit engine's cell storage (PR 137 §10).
+    if (legacyPattern.stepsPerBar != 16 || legacyPattern.timing != 0)
+    {
+        check (false, "the reference factory pattern is a 16-step 4/4 grid");
+        return;
+    }
+    auto kitStorage = std::make_unique<kit::PatternCells>();
+    const kit::Pattern kitPattern = kit::fromLegacyGrid (kitCells.data(), legacyPattern.laneCount, legacyPattern.barCount, *kitStorage);
 
     // Instances.
     VoxInstance ref = nullptr;

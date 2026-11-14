@@ -1,5 +1,12 @@
 # VOX Drums — production candidate (DRM-05, DRM-06, DRM-07, presets)
 
+> **Superseded in part (PR 137 §10, step 2):** the cell model, the state layout and the
+> canonical rule changed. Cells now live in per-beat storage slots with `microTicks`. The formats
+> are `DSEQ` v4 and `DSNG` v2; development versions are not decoded. The rule is `kit::cellHits`,
+> and `stepHits`, `songHits` and `stepLength` are removed. Current description:
+> [BAR_TIMING.md](BAR_TIMING.md#step-2-implemented). This document is kept as the history of
+> DRM-04/05.
+
 **Status:** implemented and covered by automated tests; **not** accepted in a DAW.
 DRM-08 stays on HOLD until the owner completes
 [DAW_ACCEPTANCE_CHECKLIST.md](DAW_ACCEPTANCE_CHECKLIST.md).

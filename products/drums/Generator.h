@@ -75,17 +75,23 @@ bool decodeStyleSection (const preset::Section&, std::shared_ptr<const style::De
 
 // Every function below first checks that the style has a definition the
 // generator can run (StyleRegistry: a registered but not yet available
-// style, or an unknown id, has none). If not, it returns false and changes
-// NOTHING: no cell, seed, lock, A/B pattern or song bar. True otherwise.
+// style, or an unknown id, has none) and that the pattern (Generate Song:
+// every A slot) is in 4/4 (PR 137 §10.6: other meters are refused until the
+// styles' meter rules are interpreted). If not, it returns false and
+// changes NOTHING: no cell, seed, lock, A/B pattern or song bar. True
+// otherwise. Style rules are on 16ths: a cell of the pattern's grid that
+// starts on a 16th gets that position's hit (micro: a percent of the cell,
+// quantised once to ticks); the other cells of a generated lane are cleared.
 bool styleAvailable (Style);
 
 // The style's own 4/4 assertions (PR 137 §11.3) checked on generated
 // patterns over a settings matrix (6 seeds × density × complexity, no fills,
-// 16 steps × 4 bars, identity roles). Returns the first violations ("" when
+// 4/4 at 16ths × 4 bars, identity roles). Returns the first violations ("" when
 // none). Proves only that the style agrees with itself, not genre quality.
 juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Definition>& definition, int maxViolations = 8);
 
-// A new pattern in `pattern`'s grid (its steps and bars are kept).
+// A new pattern in `pattern`'s grid (its meter, resolution, masks and bars
+// are kept).
 bool generatePattern (const GeneratorSettings&, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
 // Regenerates only the lanes in `laneMask` (bit n = lane n).
 // The mask is a set of pad lanes; lanes outside it are not touched.

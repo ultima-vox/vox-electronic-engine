@@ -429,7 +429,7 @@ const char* factoryPatternName (int index) noexcept
     return index >= 0 && index < factoryPatternCount ? patternNames[index] : "";
 }
 
-Pattern factoryPattern (int index, std::array<PatternStep, 8 * 4 * 16>& cells) noexcept
+void factoryPattern (int index, std::array<PatternStep, 8 * 4 * 16>& cells) noexcept
 {
     cells.fill ({});
     const auto set = [&] (int bar, int pad, int st, int vel, bool acc) {
@@ -502,18 +502,98 @@ Pattern factoryPattern (int index, std::array<PatternStep, 8 * 4 * 16>& cells) n
             }
         }
     }
-    return Pattern { 8, steps, bars, 0, cells.data() };
+}
+
+Pattern fromLegacyGrid (const PatternStep* legacy, std::uint32_t lanes, std::uint32_t barCount, PatternCells& out) noexcept
+{
+    out.fill ({});
+    lanes = std::min<std::uint32_t> (lanes, padCount);
+    barCount = std::clamp<std::uint32_t> (barCount, 1, maxPatternBars);
+    const timing::BarTiming grid { {}, timing::Resolution::sixteenth, 0 };
+    for (std::uint32_t lane = 0; lane < lanes; ++lane)
+        for (std::uint32_t bar = 0; bar < barCount; ++bar)
+            for (int st = 0; st < 16; ++st)
+                out[(lane * maxPatternBars + bar) * slotStride + static_cast<std::uint32_t> (grid.slot (st / 4, st % 4))]
+                    = legacy[(lane * barCount + bar) * 16 + static_cast<std::uint32_t> (st)];
+    Pattern p;
+    p.lanes = lanes;
+    p.bars = barCount;
+    p.cells = out.data();
+    return p;
 }
 
 //==============================================================================
-double stepLength (const Pattern& pattern) noexcept
+int percentToTicks (int percent, int cellTicks) noexcept
 {
-    static constexpr double stepPpq[5] = { 0.25, 0.5, 0.125, 1.0 / 3.0, 0.0625 };
-    return stepPpq[std::min<std::uint32_t> (pattern.timing, 4u)];
+    // percent * cellTicks / 100, nearest, an exact tie to the earlier tick.
+    const long long num = static_cast<long long> (std::clamp (percent, -50, 50)) * std::max (cellTicks, 0);
+    long long q = num / 100, r = num % 100;
+    if (r < 0)
+    {
+        r += 100;
+        --q;
+    }
+    return static_cast<int> (q + (2 * r > 100 ? 1 : 0));
 }
 
 namespace {
-// Deterministic 0..99 from the seed, the absolute step and the lane.
+std::int64_t floorDiv (std::int64_t a, std::int64_t b) noexcept
+{
+    return a >= 0 ? a / b : -((-a + b - 1) / b);
+}
+} // namespace
+
+std::int64_t BarGrid::barAt (std::int64_t tick) const noexcept
+{
+    return firstIndex + floorDiv (tick - originTick, lengthTicks);
+}
+
+BarGrid barGrid (const Transport& tr, timing::TimeSignature fallback) noexcept
+{
+    BarGrid g;
+    const timing::TimeSignature host { tr.numerator, tr.denominator };
+    const auto meter = tr.hasSignature && timing::supported (host) ? host : fallback;
+    if (timing::supported (meter))
+        g.lengthTicks = timing::beatCount (meter) * timing::beatTicks (timing::beatKind (meter));
+    if (tr.hasBarStart && std::isfinite (tr.barStartPpq) && std::abs (tr.barStartPpq) < 1.0e12)
+    {
+        g.hostBars = true;
+        g.originTick = static_cast<std::int64_t> (std::llround (tr.barStartPpq * timing::ticksPerQuarter));
+        // Without a bar count: bars of this length from 0.
+        g.firstIndex = tr.hasBarCount ? tr.barCount : floorDiv (g.originTick, g.lengthTicks);
+    }
+    return g;
+}
+
+bool Pattern::playable() const noexcept
+{
+    return cells != nullptr && lanes != 0 && bars != 0 && bars <= maxPatternBars
+        && timing::BarTiming { signature, resolution, 0 }.valid();
+}
+
+BarView Pattern::bar (std::uint32_t index) const noexcept
+{
+    BarView v;
+    if (! playable())
+        return v;
+    index %= bars;
+    v.cells = cells + index * slotStride;
+    v.laneStride = maxPatternBars * slotStride;
+    v.masks = masks != nullptr ? masks + index : nullptr;
+    v.maskStride = maxPatternBars;
+    v.signature = signature;
+    v.resolution = resolution;
+    v.seed = seed;
+    return v;
+}
+
+int Pattern::barTicks() const noexcept
+{
+    return timing::BarTiming { signature, resolution, 0 }.barTicks();
+}
+
+namespace {
+// Deterministic 0..99 from the seed, the position key and the lane.
 int chance (std::uint32_t seed, std::int64_t g, std::uint32_t lane) noexcept
 {
     std::uint64_t x = (static_cast<std::uint64_t> (seed) << 32) ^ static_cast<std::uint64_t> (g) * 0x9E3779B97F4A7C15ull
@@ -527,53 +607,45 @@ int chance (std::uint32_t seed, std::int64_t g, std::uint32_t lane) noexcept
 }
 } // namespace
 
-namespace {
-// The one cell rule (pattern and song): the hits of `cell` on `lane` at grid
-// time `t` (swing included) with step length `step`; probability decided
-// by (seed, key, lane).
-inline void cellHits (const PatternStep& cell, std::uint32_t lane, double t, double step, std::uint32_t seed,
-                      std::int64_t key, const StepContext& context, ScheduledHit* out, int& count) noexcept
+int cellHits (const BarView& bar, const StepContext& context, std::int64_t absoluteBar, std::int64_t barStartTick,
+              int lane, int beat, int cell, ScheduledHit* out) noexcept
 {
-    if (! cell.on || ((context.laneMask >> lane) & 1u) == 0)
-        return;
-    const int probability = std::clamp<int> (cell.probability, 0, 100);
-    if (probability < 100 && chance (seed, key, lane) >= probability)
-        return;
-    double velocity = cell.velocity;
-    if (cell.accent)
+    if (bar.cells == nullptr || lane < 0 || lane >= padCount || ((context.laneMask >> lane) & 1u) == 0)
+        return 0;
+    const auto t = bar.timing (lane);
+    if (! t.valid() || beat < 0 || beat >= t.beats() || cell < 0 || cell >= t.cells (beat))
+        return 0;
+    const int slot = t.slot (beat, cell);
+    const auto& c = bar.cell (lane, slot);
+    if (! c.on)
+        return 0;
+    const int probability = std::clamp<int> (c.probability, 0, 100);
+    if (probability < 100 && chance (bar.seed, absoluteBar * slotStride + slot, static_cast<std::uint32_t> (lane)) >= probability)
+        return 0;
+    // The legacy rule: accent raises the velocity towards 127 by the accent amount.
+    double velocity = c.velocity;
+    if (c.accent)
         velocity += context.accent * (127.0 - velocity);
     const auto v = static_cast<std::uint8_t> (std::fmin (127.0, std::floor (velocity + 0.5)));
-    const int ratchet = std::clamp<int> (cell.ratchet, 1, maxRatchet);
-    const int microPercent = std::clamp<int> (cell.micro, -50, 50);
-    const double micro = microPercent * 0.01 * step;
+    const int cellTicks = t.cellTicks (beat);
+    const int half = cellTicks / 2;
+    const int micro = std::clamp<int> (c.microTicks, -half, half);
+    const std::int64_t base = barStartTick + t.cellStartTick (beat, cell) + micro;
+    // Swing: the one shared rule (timing::swingDelay), unrounded.
+    const double delay = timing::swingDelay (t, beat, cell, context.swing);
+    const int ratchet = std::clamp<int> (c.ratchet, 1, maxRatchet);
+    const auto gate = static_cast<std::int32_t> (std::max (1, (cellTicks + ratchet) / (2 * ratchet)));
     for (int k = 0; k < ratchet; ++k)
     {
-        // The first hit without micro is exactly the legacy time.
-        out[count].ppq = k == 0 && microPercent == 0 ? t : t + micro + static_cast<double> (k) * step / ratchet;
-        out[count].pad = static_cast<std::uint8_t> (lane);
-        out[count].velocity = v;
-        ++count;
+        const std::int64_t tick = base + timing::subhitTick (0, cellTicks, k, ratchet);
+        out[k].tick = tick;
+        // With swing 0 and no micro this is exactly the legacy g * step (+ swing * step).
+        out[k].ppq = static_cast<double> (tick) / timing::ticksPerQuarter + delay;
+        out[k].gateTicks = gate;
+        out[k].pad = static_cast<std::uint8_t> (lane);
+        out[k].velocity = v;
     }
-}
-} // namespace
-
-int stepHits (const Pattern& pattern, const StepContext& context, std::int64_t g, ScheduledHit* out) noexcept
-{
-    if (g < 0 || pattern.cells == nullptr || pattern.lanes == 0 || pattern.steps == 0 || pattern.bars == 0)
-        return 0;
-    const double step = stepLength (pattern);
-    // The legacy rule: odd steps late by swing; accent raises the velocity
-    // towards 127 by the accent amount.
-    const double t = static_cast<double> (g) * step + ((g & 1) ? context.swing * step : 0.0);
-    const auto steps = static_cast<std::int64_t> (pattern.steps);
-    const auto bars = static_cast<std::int64_t> (pattern.bars);
-    const auto st = static_cast<std::uint32_t> (g % steps);
-    const auto bar = static_cast<std::uint32_t> ((g / steps) % bars);
-    const auto lanes = std::min<std::uint32_t> (pattern.lanes, padCount);
-    int count = 0;
-    for (std::uint32_t lane = 0; lane < lanes; ++lane)
-        cellHits (pattern.cells[(lane * pattern.bars + bar) * pattern.steps + st], lane, t, step, pattern.seed, g, context, out, count);
-    return count;
+    return ratchet;
 }
 
 std::uint32_t songBarAt (const Song& song, std::int64_t absoluteBar) noexcept
@@ -594,23 +666,6 @@ std::uint32_t songBarAt (const Song& song, std::int64_t absoluteBar) noexcept
     return static_cast<std::uint32_t> (absoluteBar % bars);
 }
 
-int songHits (const Song& song, const StepContext& context, std::int64_t absoluteBar, std::uint32_t step, ScheduledHit* out) noexcept
-{
-    if (absoluteBar < 0 || song.views == nullptr || song.bars == 0)
-        return 0;
-    const auto& bar = song.views[songBarAt (song, absoluteBar)];
-    if (bar.cells == nullptr || bar.steps == 0 || step >= bar.steps)
-        return 0;
-    const double length = 4.0 / static_cast<double> (bar.steps);
-    const double t = 4.0 * static_cast<double> (absoluteBar) + static_cast<double> (step) * length
-                   + ((step & 1u) ? context.swing * length : 0.0);
-    int count = 0;
-    for (std::uint32_t lane = 0; lane < static_cast<std::uint32_t> (padCount); ++lane)
-        cellHits (bar.cells[lane * bar.laneStride + step], lane, t, length, bar.seed,
-                  absoluteBar * 128 + static_cast<std::int64_t> (step), context, out, count);
-    return count;
-}
-
 //==============================================================================
 struct KitEngine::Impl {
     KitSettings safe;   // this block's settings, in range (sanitize)
@@ -627,6 +682,7 @@ struct KitEngine::Impl {
     struct Hit {
         std::uint32_t offset;
         std::uint8_t pad, velocity;
+        std::int64_t order;   // cell start tick * 16 + lane
     };
     std::array<Hit, maxSequencerHits> hits {};
     std::array<std::int8_t, 128> noteToPad {};
@@ -859,16 +915,18 @@ struct KitEngine::Impl {
     }
 
     // The sequencer for one chunk: every hit of the canonical rule
-    // (stepHits for a pattern, songHits for a song) whose frame offset
-    // (legacy rounding) is in [0, frames) and that is later than the
-    // horizon. Hits are ordered by offset (stable: lane order within a step,
-    // as the legacy module). Bounded: at most 4 bars x 64 steps are looked at.
+    // (cellHits) whose frame offset (legacy rounding) is in [0, frames) and
+    // that is later than the horizon, ordered by offset, then by its cell's
+    // start, then by lane (the legacy order: steps in time, lanes within a
+    // step). A bar plays from its bar line (BarGrid: the host's, or counted
+    // from 0); a bar of another length is cut at the next bar line or rests
+    // until it (PR 137 §10.4). Bounded: only the beats that can reach the
+    // chunk are looked at.
     int schedule (const KitSettings& kit, const Pattern* pattern, const Song* song, const Transport& tr, double ppq0,
                   bool discontinuity, std::uint32_t frames) noexcept
     {
         const bool hasSong = song != nullptr && song->views != nullptr && song->bars > 0;
-        const bool hasPattern = pattern != nullptr && pattern->cells != nullptr && pattern->lanes != 0 && pattern->steps != 0
-                             && pattern->bars != 0;
+        const bool hasPattern = pattern != nullptr && pattern->playable();
         if (kit.sequencerMode == 0 || ! (hasSong || hasPattern) || ! tr.playing || ! tr.hasTempo || ! tr.hasPpq
             || ! (tr.bpm > 0.0) || tr.bpm > 1000.0 || ! std::isfinite (ppq0) || frames == 0)
             return 0;
@@ -884,66 +942,75 @@ struct KitEngine::Impl {
         for (int lane = 0; lane < padCount; ++lane)
             if (kit.pads[static_cast<std::size_t> (lane)].laneOn)
                 context.laneMask |= 1u << lane;
-        const auto offsetOf = [&] (double t) { return std::ceil ((t - ppq0) * samplesPerPpq - 1e-6); };
+        // The shared tick -> sample rule (first sample at or after the event).
+        const auto offsetOf = [&] (double t) { return static_cast<double> (timing::sampleOffset (t, ppq0, samplesPerPpq)); };
         int count = 0;
         double latest = horizon;
-        std::array<ScheduledHit, padCount * maxRatchet> stepOut;
-        const auto take = [&] (int n) {
+        std::array<ScheduledHit, maxRatchet> cellOut;
+        const auto take = [&] (int n, std::int64_t order) {
             for (int k = 0; k < n && count < maxSequencerHits; ++k)
             {
-                const auto& h = stepOut[static_cast<std::size_t> (k)];
+                const auto& h = cellOut[static_cast<std::size_t> (k)];
                 const double at = offsetOf (h.ppq);
                 if (at < 0.0 || at >= static_cast<double> (frames) || ! (h.ppq > horizon))
                     continue;
-                // Insert by offset after equal offsets (stable).
+                // Insert after the hits it does not precede (stable).
                 int pos = count;
                 const auto offset = static_cast<std::uint32_t> (at);
-                while (pos > 0 && hits[static_cast<std::size_t> (pos - 1)].offset > offset)
+                while (pos > 0)
                 {
-                    hits[static_cast<std::size_t> (pos)] = hits[static_cast<std::size_t> (pos - 1)];
+                    const auto& prev = hits[static_cast<std::size_t> (pos - 1)];
+                    if (prev.offset < offset || (prev.offset == offset && prev.order <= order))
+                        break;
+                    hits[static_cast<std::size_t> (pos)] = prev;
                     --pos;
                 }
-                hits[static_cast<std::size_t> (pos)] = { offset, h.pad, h.velocity };
+                hits[static_cast<std::size_t> (pos)] = { offset, h.pad, h.velocity, order };
                 ++count;
                 latest = std::fmax (latest, h.ppq);
             }
         };
-        if (hasSong)
+
+        // A cell's hits lie in [start - 1/2 cell, start + cell + 1/2 cell)
+        // (micro, ratchets, swing), and a cell is at most 480 ticks.
+        constexpr std::int64_t before = 240, after = 720;
+        const double ppqEnd = ppq0 + static_cast<double> (frames) / samplesPerPpq;
+        const auto lo = static_cast<std::int64_t> (std::floor (ppq0 * timing::ticksPerQuarter)) - after;
+        const auto hi = static_cast<std::int64_t> (std::ceil (ppqEnd * timing::ticksPerQuarter)) + before;
+        // Bars: the host's bar lines, or counted from 0 in the pattern's
+        // meter (a song: 4/4) when the host gives no bar position.
+        const BarGrid grid = barGrid (tr, hasSong ? timing::TimeSignature {} : pattern->signature);
+        const std::int64_t barTicks = grid.lengthTicks;
+        const auto lanes = hasSong ? static_cast<std::uint32_t> (padCount) : std::min<std::uint32_t> (pattern->lanes, padCount);
+        for (std::int64_t bar = std::max<std::int64_t> (0, grid.barAt (lo)); bar <= grid.barAt (hi); ++bar)
         {
-            // A step's hits lie within [s - 0.5, s + 2) steps of its grid
-            // time, so look 3 steps back and 1 ahead of the chunk, across
-            // bar lines (each bar has its own step length).
-            const double ppqEnd = ppq0 + static_cast<double> (frames) / samplesPerPpq;
-            const auto firstBar = static_cast<std::int64_t> (std::floor (ppq0 / 4.0)) - 1;
-            // The next bar's first step can sound up to half a (1/16) step
-            // before the bar line (negative microtiming).
-            const auto lastBar = static_cast<std::int64_t> (std::floor ((ppqEnd + 0.125) / 4.0));
-            for (std::int64_t bar = std::max<std::int64_t> (0, firstBar); bar <= lastBar; ++bar)
+            const BarView view = hasSong ? song->views[songBarAt (*song, bar)] : pattern->bar (static_cast<std::uint32_t> (bar % pattern->bars));
+            if (view.cells == nullptr)
+                continue;
+            const std::int64_t barStart = grid.startOf (bar);
+            for (std::uint32_t lane = 0; lane < lanes; ++lane)
             {
-                const auto& view = song->views[songBarAt (*song, bar)];
-                if (view.cells == nullptr || view.steps == 0)
+                const auto t = view.timing (static_cast<int> (lane));
+                if (! t.valid())
                     continue;
-                const double length = 4.0 / static_cast<double> (view.steps);
-                const double barPpq = 4.0 * static_cast<double> (bar);
-                const auto from = static_cast<std::int64_t> (std::floor ((ppq0 - barPpq) / length)) - 3;
-                const auto to = static_cast<std::int64_t> (std::floor ((ppqEnd - barPpq) / length)) + 1;
-                const auto lo = std::max<std::int64_t> (0, from);
-                const auto hi = std::min<std::int64_t> (static_cast<std::int64_t> (view.steps) - 1, to);
-                for (std::int64_t st = lo; st <= hi; ++st)
-                    take (songHits (*song, context, bar, static_cast<std::uint32_t> (st), stepOut.data()));
-            }
-        }
-        else
-        {
-            const double step = stepLength (*pattern);
-            // A step's hits lie within [g - 0.5, g + 2) steps of its grid time
-            // (micro, swing, ratchets), so start 3 steps back and stop once a
-            // step cannot reach this chunk.
-            for (std::int64_t g = static_cast<std::int64_t> (std::floor (ppq0 / step)) - 3;; ++g)
-            {
-                if (offsetOf ((static_cast<double> (g) - 0.5) * step) >= static_cast<double> (frames))
-                    break;
-                take (stepHits (*pattern, context, g, stepOut.data()));
+                for (int beat = 0; beat < t.beats(); ++beat)
+                {
+                    const std::int64_t beatStart = barStart + t.cellStartTick (beat, 0);
+                    if (beatStart >= barStart + barTicks)
+                        break;   // past the bar line: cut
+                    if (beatStart + timing::beatTicks (timing::beatKind (t.signature)) + after <= lo || beatStart - before > hi)
+                        continue;
+                    for (int cell = 0; cell < t.cells (beat); ++cell)
+                    {
+                        const std::int64_t start = barStart + t.cellStartTick (beat, cell);
+                        if (start >= barStart + barTicks)
+                            break;
+                        if (start + after <= lo || start - before > hi)
+                            continue;
+                        take (cellHits (view, context, bar, barStart, static_cast<int> (lane), beat, cell, cellOut.data()),
+                              start * padCount + lane);
+                    }
+                }
             }
         }
         horizon = latest;
@@ -1020,7 +1087,8 @@ void KitEngine::process (const KitSettings& settings, const Outputs& out, std::u
 
     // A loop or seek moves the position backwards; steps after the new
     // position may then play again.
-    const bool discontinuity = transport.hasPpq && transport.ppq < s.lastPpqSeen;
+    // PR 137 §10.5a: a step back of more than one tick; less is jitter.
+    const bool discontinuity = transport.hasPpq && transport.ppq < s.lastPpqSeen - 1.0 / timing::ticksPerQuarter;
     if (transport.hasPpq)
         s.lastPpqSeen = transport.ppq;
 

@@ -5,16 +5,18 @@
 #include <memory>
 
 namespace vox::drums {
-namespace {
 
-int timingFor (int steps) noexcept
+//==============================================================================
+namespace gridcodec {
+void putU8 (std::vector<std::byte>& out, std::uint8_t v)
 {
-    return steps == 64 ? 4 : steps == 32 ? 2 : 0;   // 1/64, 1/32, 1/16
+    out.push_back (static_cast<std::byte> (v));
 }
 
-bool validSteps (int steps) noexcept
+void putU16 (std::vector<std::byte>& out, std::uint16_t v)
 {
-    return steps == 16 || steps == 32 || steps == 64;
+    putU8 (out, static_cast<std::uint8_t> (v & 0xffu));
+    putU8 (out, static_cast<std::uint8_t> (v >> 8));
 }
 
 void putU32 (std::vector<std::byte>& out, std::uint32_t v)
@@ -23,88 +25,288 @@ void putU32 (std::vector<std::byte>& out, std::uint32_t v)
         out.push_back (static_cast<std::byte> ((v >> s) & 0xffu));
 }
 
-void putU8 (std::vector<std::byte>& out, std::uint8_t v)
+std::uint8_t Reader::u8()
 {
-    out.push_back (static_cast<std::byte> (v));
+    if (at >= data.size())
+    {
+        ok = false;
+        return 0;
+    }
+    return std::to_integer<std::uint8_t> (data[at++]);
 }
 
-struct Reader {
-    const std::vector<std::byte>& data;
-    std::size_t at = 0;
-    bool ok = true;
-    std::uint8_t u8()
-    {
-        if (at >= data.size())
-        {
-            ok = false;
-            return 0;
-        }
-        return std::to_integer<std::uint8_t> (data[at++]);
-    }
-    std::uint32_t u32()
-    {
-        std::uint32_t v = 0;
-        for (int i = 0; i < 4; ++i)
-            v |= static_cast<std::uint32_t> (u8()) << (8 * i);
-        return v;
-    }
-};
+std::uint16_t Reader::u16()
+{
+    const auto lo = u8();
+    return static_cast<std::uint16_t> (lo | (u8() << 8));
+}
 
-constexpr std::uint32_t sectionVersion = 3;
+std::uint32_t Reader::u32()
+{
+    std::uint32_t v = 0;
+    for (int i = 0; i < 4; ++i)
+        v |= static_cast<std::uint32_t> (u8()) << (8 * i);
+    return v;
+}
+
+void putGrid (std::vector<std::byte>& out, timing::TimeSignature signature, timing::Resolution resolution)
+{
+    putU8 (out, static_cast<std::uint8_t> (signature.numerator));
+    putU8 (out, static_cast<std::uint8_t> (signature.denominator));
+    putU8 (out, static_cast<std::uint8_t> (resolution));
+}
+
+bool getGrid (Reader& in, timing::TimeSignature& signature, timing::Resolution& resolution)
+{
+    signature.numerator = in.u8();
+    signature.denominator = in.u8();
+    const auto r = in.u8();
+    if (! in.ok || r >= timing::resolutionCount || ! timing::supported (signature))
+        return false;
+    resolution = static_cast<timing::Resolution> (r);
+    return timing::capacity (signature, resolution).availability != timing::Availability::unavailable;
+}
+
+std::uint32_t packCell (const kit::PatternStep& c) noexcept
+{
+    // Values outside the fields (never in a valid pattern) are clamped.
+    const auto ratchet = static_cast<std::uint32_t> (std::clamp<int> (c.ratchet, 1, kit::maxRatchet) - 1);
+    const auto velocity = static_cast<std::uint32_t> (std::min<int> (c.velocity, 127));
+    const auto probability = static_cast<std::uint32_t> (std::min<int> (c.probability, 127));
+    const auto micro = static_cast<std::uint32_t> (std::clamp<int> (c.microTicks, -256, 255)) & 0x1ffu;
+    return (c.on ? 1u : 0u) | (c.accent ? 2u : 0u) | (c.locked ? 4u : 0u) | ratchet << 3 | velocity << 6 | probability << 13 | micro << 20;
+}
+
+bool unpackCell (std::uint32_t w, kit::PatternStep& c) noexcept
+{
+    if ((w >> 29) != 0)
+        return false;   // the three reserved bits must be zero
+    c.on = (w & 1u) != 0;
+    c.accent = (w & 2u) != 0;
+    c.locked = (w & 4u) != 0;
+    c.ratchet = static_cast<std::uint8_t> (((w >> 3) & 7u) + 1u);
+    c.velocity = static_cast<std::uint8_t> ((w >> 6) & 0x7fu);
+    c.probability = static_cast<std::uint8_t> ((w >> 13) & 0x7fu);
+    const auto micro = static_cast<int> ((w >> 20) & 0x1ffu);
+    c.microTicks = static_cast<std::int16_t> (micro >= 256 ? micro - 512 : micro);   // 9-bit two's complement
+    return true;
+}
+
+void putCell (std::vector<std::byte>& out, const kit::PatternStep& c)
+{
+    putU32 (out, packCell (c));
+}
+
+bool getCell (Reader& in, kit::PatternStep& c)
+{
+    const auto w = in.u32();
+    return in.ok && unpackCell (w, c);
+}
+} // namespace gridcodec
+
+namespace {
+
+using gridcodec::putU32;
+using gridcodec::putU8;
+using gridcodec::Reader;
+
+// DSEQ version 4: the first public layout (PR 137 §10.5). Versions 1-3 were
+// development builds and are not decoded (#136 policy).
+constexpr std::uint32_t sectionVersion = 4;
+
+std::string where (const char* what, int lane, int bar, int slot)
+{
+    return std::string (what) + " (lane " + std::to_string (lane + 1) + ", bar " + std::to_string (bar + 1) + ", slot "
+         + std::to_string (slot) + ")";
+}
 
 } // namespace
+
+bool validLaneBar (const timing::BarTiming& t, const kit::PatternStep* slots, std::string* why)
+{
+    const auto fail = [&] (const char* what, int slot) {
+        if (why != nullptr)
+            *why = std::string (what) + " (slot " + std::to_string (slot) + ")";
+        return false;
+    };
+    if (! t.valid())
+        return fail ("invalid grid or subdivision mask", -1);
+    const int per = t.slotsPerBeat();
+    for (int s = 0; s < kit::slotStride; ++s)
+    {
+        const auto& c = slots[s];
+        if (! t.slotActive (s))
+        {
+            if (! (c == kit::PatternStep {}))
+                return fail ("content in an unused slot", s);
+            continue;
+        }
+        if (c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1 || c.ratchet > kit::maxRatchet)
+            return fail ("value out of range", s);
+        const int cellTicks = t.cellTicks (s / per);
+        if (2 * std::abs (static_cast<int> (c.microTicks)) > cellTicks)
+            return fail ("microtiming beyond half a cell", s);
+        if (! timing::subhitsDistinct (cellTicks, c.ratchet))
+            return fail ("ratchet subhits collide", s);
+    }
+    return true;
+}
 
 kit::Pattern StoredPattern::view() const noexcept
 {
     kit::Pattern p;
     p.lanes = kit::padCount;
-    p.steps = steps;
     p.bars = bars;
-    p.timing = static_cast<std::uint32_t> (timingFor (steps));
+    p.signature = signature;
+    p.resolution = resolution;
     p.cells = cells.data();
+    p.masks = masks.data();
     p.seed = seed;
     return p;
 }
 
-void StoredPattern::resize (int newSteps, int newBars) noexcept
+void StoredPattern::setBars (int newBars) noexcept
 {
-    if (! validSteps (newSteps))
-        newSteps = steps;
     newBars = std::clamp (newBars, 1, kit::maxPatternBars);
-    const auto copy = std::make_unique<StoredPattern> (*this);   // heap: ~24 KB
-    const StoredPattern& old = *copy;
-    cells.fill ({});
-    steps = static_cast<std::uint8_t> (newSteps);
-    bars = static_cast<std::uint8_t> (newBars);
     for (int lane = 0; lane < kit::padCount; ++lane)
-        for (int bar = 0; bar < newBars; ++bar)
+        for (int bar = 0; bar < kit::maxPatternBars; ++bar)
         {
-            const int from = bar < old.bars ? bar : 0;
-            for (int st = 0; st < old.steps; ++st)
+            if (bar < std::min<int> (bars, newBars))
+                continue;
+            for (int slot = 0; slot < kit::slotStride; ++slot)
+                cell (lane, bar, slot) = bar < newBars ? cell (lane, 0, slot) : kit::PatternStep {};
+            mask (lane, bar) = bar < newBars ? mask (lane, 0) : std::uint16_t { 0 };
+        }
+    bars = static_cast<std::uint8_t> (newBars);
+}
+
+bool StoredPattern::valid (std::string* why) const
+{
+    if (bars < 1 || bars > kit::maxPatternBars || ! timing::BarTiming { signature, resolution, 0 }.valid())
+    {
+        if (why != nullptr)
+            *why = "invalid grid or bar count";
+        return false;
+    }
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < kit::maxPatternBars; ++bar)
+        {
+            const auto* slots = &cell (lane, bar, 0);
+            if (bar >= bars)
             {
-                // Grid position st / old.steps of the bar.
-                const int to = st * newSteps / old.steps;
-                if (to * old.steps != st * newSteps)
-                    continue;   // between the new grid's steps: dropped
-                cell (lane, bar, to) = old.cell (lane, from, st);
+                // Bars past the count are empty.
+                for (int s = 0; s < kit::slotStride; ++s)
+                    if (! (slots[s] == kit::PatternStep {}))
+                    {
+                        if (why != nullptr)
+                            *why = where ("content past the last bar", lane, bar, s);
+                        return false;
+                    }
+                if (mask (lane, bar) != 0)
+                {
+                    if (why != nullptr)
+                        *why = where ("subdivision mask past the last bar", lane, bar, -1);
+                    return false;
+                }
+                continue;
+            }
+            std::string reason;
+            if (! validLaneBar (timing (lane, bar), slots, &reason))
+            {
+                if (why != nullptr)
+                    *why = "lane " + std::to_string (lane + 1) + ", bar " + std::to_string (bar + 1) + ": " + reason;
+                return false;
             }
         }
+    return true;
+}
+
+namespace {
+const char* switchReason (timing::SwitchResult r) noexcept
+{
+    switch (r)
+    {
+        case timing::SwitchResult::ok: return "";
+        case timing::SwitchResult::invalidTiming: return "the grid does not allow this";
+        case timing::SwitchResult::collision: return "two events would share a cell";
+        case timing::SwitchResult::offsetTooLarge: return "an event would be more than half a cell from its cell";
+        case timing::SwitchResult::reservedSlotNotEmpty: return "content in a reserved cell";
+    }
+    return "";
+}
+
+// Moves one lane's bar of `p` from `from` to `to` (the full cell is the
+// attribute that travels with each event). False with `why` on rejection;
+// `p` is then partly changed (callers work on a copy).
+template <typename Move>
+bool moveLaneBar (StoredPattern& p, int lane, int bar, const timing::BarTiming& from, const timing::BarTiming& to, Move move,
+                  std::string* why)
+{
+    timing::LaneBar events {};
+    std::array<kit::PatternStep, kit::slotStride> attributes {};
+    for (int s = 0; s < kit::slotStride; ++s)
+    {
+        attributes[static_cast<std::size_t> (s)] = p.cell (lane, bar, s);
+        events[static_cast<std::size_t> (s)] = { attributes[static_cast<std::size_t> (s)].on, attributes[static_cast<std::size_t> (s)].microTicks };
+    }
+    const auto outcome = move (from, to, events, &attributes);
+    if (outcome.result != timing::SwitchResult::ok)
+    {
+        if (why != nullptr)
+            *why = std::string (switchReason (outcome.result)) + " (lane " + std::to_string (lane + 1) + ", bar " + std::to_string (bar + 1)
+                 + (outcome.beat >= 0 ? ", beat " + std::to_string (outcome.beat + 1) + ", cell " + std::to_string (outcome.cell + 1) : std::string())
+                 + ")";
+        return false;
+    }
+    for (int s = 0; s < kit::slotStride; ++s)
+    {
+        auto c = events[static_cast<std::size_t> (s)].on ? attributes[static_cast<std::size_t> (s)] : kit::PatternStep {};
+        c.microTicks = events[static_cast<std::size_t> (s)].microTicks;
+        p.cell (lane, bar, s) = c;
+    }
+    p.mask (lane, bar) = to.alternativeBeats;
+    return true;
+}
+} // namespace
+
+bool StoredPattern::convertGrid (timing::TimeSignature newSignature, timing::Resolution newResolution, std::string* why)
+{
+    auto next = std::make_unique<StoredPattern> (*this);   // heap: ~33 KB; committed only when every bar converts
+    next->signature = newSignature;
+    next->resolution = newResolution;
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < bars; ++bar)
+        {
+            const timing::BarTiming to { newSignature, newResolution, mask (lane, bar) };
+            if (! moveLaneBar (*next, lane, bar, timing (lane, bar), to,
+                               [] (const auto& f, const auto& t, auto& e, auto* x) { return timing::convertBar (f, t, e, x); }, why))
+                return false;
+        }
+    if (! next->valid (why))
+        return false;
+    *this = *next;
+    return true;
+}
+
+bool StoredPattern::switchBeats (int lane, int bar, std::uint16_t beats, std::string* why)
+{
+    if (lane < 0 || lane >= kit::padCount || bar < 0 || bar >= this->bars)
+        return false;
+    auto next = std::make_unique<StoredPattern> (*this);
+    const auto from = timing (lane, bar);
+    const timing::BarTiming to { signature, resolution, static_cast<std::uint16_t> (from.alternativeBeats ^ beats) };
+    if (! moveLaneBar (*next, lane, bar, from, to,
+                       [] (const auto& f, const auto& t, auto& e, auto* x) { return timing::switchSubdivision (f, t, e, x); }, why))
+        return false;
+    *this = *next;
+    return true;
 }
 
 bool StoredPattern::operator== (const StoredPattern& o) const noexcept
 {
-    if (steps != o.steps || bars != o.bars || seed != o.seed)
-        return false;
-    const int n = kit::padCount * steps * bars;
-    for (int i = 0; i < n; ++i)
-    {
-        const auto& a = cells[static_cast<std::size_t> (i)];
-        const auto& b = o.cells[static_cast<std::size_t> (i)];
-        if (a.on != b.on || a.accent != b.accent || a.velocity != b.velocity || a.probability != b.probability
-            || a.ratchet != b.ratchet || a.micro != b.micro || a.locked != b.locked)
-            return false;
-    }
-    return true;
+    // Unused slots are empty in every valid pattern, so all storage compares.
+    return signature == o.signature && resolution == o.resolution && followHost == o.followHost && bars == o.bars
+        && seed == o.seed && masks == o.masks && cells == o.cells;
 }
 
 StoredPattern factorySlot (int index) noexcept
@@ -116,17 +318,15 @@ StoredPattern factorySlot (int index) noexcept
 
 void factorySlot (int index, StoredPattern& p) noexcept
 {
-    std::array<kit::PatternStep, 8 * 4 * 16> legacy {};   // 3 KB
-    const auto view = kit::factoryPattern (index, legacy);
-    p.cells.fill ({});
-    p.steps = static_cast<std::uint8_t> (view.steps);
+    std::array<kit::PatternStep, 8 * 4 * 16> legacy {};   // 2 KB
+    kit::factoryPattern (index, legacy);
+    p.signature = {};
+    p.resolution = timing::Resolution::sixteenth;
+    p.followHost = true;
+    p.masks.fill (0);
+    const auto view = kit::fromLegacyGrid (legacy.data(), 8, 4, p.cells);
     p.bars = static_cast<std::uint8_t> (view.bars);
     p.seed = 1;
-    for (std::uint32_t lane = 0; lane < view.lanes; ++lane)
-        for (std::uint32_t bar = 0; bar < view.bars; ++bar)
-            for (std::uint32_t st = 0; st < view.steps; ++st)
-                p.cell (static_cast<int> (lane), static_cast<int> (bar), static_cast<int> (st))
-                    = legacy[(lane * view.bars + bar) * view.steps + st];
 }
 
 void PatternStore::factorySlots (std::array<StoredPattern, slotCount>& out)
@@ -259,66 +459,58 @@ const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
 }
 
 //==============================================================================
-// DSEQ: u32 version (1), u32 slot count (5); per slot: u8 steps, u8 bars,
-// u32 seed, then 16 lanes x bars x steps cells in storage order: u8 flags
-// (bit 0 on, bit 1 accent), u8 velocity, u8 probability, u8 ratchet,
-// u8 micro (two's complement).
+// DSEQ version 4 (PR 137 §10.5): u32 version, u32 slot count (5), then the
+// 5 slots (A) and their 5 alternates (B), each: grid (u8 numerator, u8
+// denominator, u8 resolution), u8 followHost, u8 bars (1..4), u32 seed,
+// 16 lanes x bars u16 subdivision masks (lane-major), then 16 lanes x bars x
+// slotsPerBar cells (lane-major, the bar's storage slots in order), each a
+// 32-bit word (gridcodec::packCell). Strict: an unsupported grid, a mask
+// beyond the beats or not allowed, a value out of range, a |microTicks| over
+// half a cell, nonzero reserved bits or content in a reserved slot rejects
+// the section. A full 64-slot pattern of 4 bars is 9 + 128 + 16 x 4 x 64 x 4
+// bytes.
 namespace {
 
 void encodePattern (std::vector<std::byte>& out, const StoredPattern& p)
 {
-    putU8 (out, p.steps);
+    gridcodec::putGrid (out, p.signature, p.resolution);
+    putU8 (out, p.followHost ? 1 : 0);
     putU8 (out, p.bars);
     putU32 (out, p.seed);
-    const int n = kit::padCount * p.steps * p.bars;
-    for (int i = 0; i < n; ++i)
-    {
-        const auto& c = p.cells[static_cast<std::size_t> (i)];
-        putU8 (out, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0) | (c.locked ? 4 : 0)));
-        putU8 (out, c.velocity);
-        putU8 (out, c.probability);
-        putU8 (out, c.ratchet);
-        putU8 (out, static_cast<std::uint8_t> (c.micro));
-    }
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < p.bars; ++bar)
+            gridcodec::putU16 (out, p.mask (lane, bar));
+    const int slots = p.slotsPerBar();
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < p.bars; ++bar)
+            for (int s = 0; s < slots; ++s)
+                gridcodec::putCell (out, p.cell (lane, bar, s));
 }
 
-bool decodePattern (Reader& in, StoredPattern& p, std::uint32_t version)
+bool decodePattern (Reader& in, StoredPattern& p)
 {
     p = {};
-    const int steps = in.u8(), bars = in.u8();
+    const bool grid = gridcodec::getGrid (in, p.signature, p.resolution);
+    const auto followHost = in.u8(), bars = in.u8();
     p.seed = in.u32();
-    if (! in.ok || ! validSteps (steps) || bars < 1 || bars > kit::maxPatternBars)
+    if (! in.ok || ! grid || followHost > 1 || bars < 1 || bars > kit::maxPatternBars)
         return false;
-    p.steps = static_cast<std::uint8_t> (steps);
-    p.bars = static_cast<std::uint8_t> (bars);
-    const int n = kit::padCount * steps * bars;
-    for (int i = 0; i < n; ++i)
-    {
-        auto& c = p.cells[static_cast<std::size_t> (i)];
-        const auto flags = in.u8();
-        c.velocity = in.u8();
-        c.probability = in.u8();
-        c.ratchet = in.u8();
-        c.micro = static_cast<std::int8_t> (in.u8());
-        c.on = (flags & 1u) != 0;
-        c.accent = (flags & 2u) != 0;
-        c.locked = (flags & 4u) != 0;
-        if (! in.ok || flags > (version >= 3 ? 7u : 3u) || c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1
-            || c.ratchet > kit::maxRatchet || c.micro < -50 || c.micro > 50)
-            return false;
-    }
-    return true;
+    p.followHost = followHost != 0;
+    p.bars = bars;
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < p.bars; ++bar)
+            p.mask (lane, bar) = in.u16();
+    const int slots = p.slotsPerBar();
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < p.bars; ++bar)
+            for (int s = 0; s < slots; ++s)
+                if (! gridcodec::getCell (in, p.cell (lane, bar, s)))
+                    return false;
+    return in.ok && p.valid();
 }
 
 } // namespace
 
-//==============================================================================
-// DSEQ: u32 version, u32 slot count (5); per slot: u8 steps, u8 bars,
-// u32 seed, then 16 lanes x bars x steps cells in storage order: u8 flags
-// (bit 0 on, bit 1 accent), u8 velocity, u8 probability, u8 ratchet,
-// u8 micro (two's complement). Version 2 (DRM-04b) follows the 5 slots with
-// their 5 alternates (B) in the same layout; version 1 (DRM-04a) has none.
-// Version 3 (DRM-05) adds flag bit 2: the step is locked for the generator.
 preset::Section PatternStore::encode (const std::array<StoredPattern, slotCount>& slots,
                                       const std::array<StoredPattern, slotCount>& alternates)
 {
@@ -338,22 +530,17 @@ bool PatternStore::decode (const preset::Section& section, std::array<StoredPatt
 {
     Reader in { section.data };
     const auto version = in.u32();
-    if ((version < 1 || version > 3) || in.u32() != static_cast<std::uint32_t> (slotCount) || ! in.ok)
+    if (version != sectionVersion || in.u32() != static_cast<std::uint32_t> (slotCount) || ! in.ok)
     {
         error = "unsupported pattern section";
         return false;
     }
-    for (auto& p : out)
-        if (! decodePattern (in, p, version))
-        {
-            error = "invalid pattern section";
-            return false;
-        }
-    if (version == 1)
-        alternates = out;
-    else
-        for (auto& p : alternates)
-            if (! decodePattern (in, p, version))
+    // Decoded into the heap, then committed: a rejection changes nothing.
+    auto next = std::make_unique<std::array<StoredPattern, slotCount>>();
+    auto nextB = std::make_unique<std::array<StoredPattern, slotCount>>();
+    for (auto* set : { next.get(), nextB.get() })
+        for (auto& p : *set)
+            if (! decodePattern (in, p))
             {
                 error = "invalid pattern section";
                 return false;
@@ -363,6 +550,8 @@ bool PatternStore::decode (const preset::Section& section, std::array<StoredPatt
         error = "invalid pattern section";
         return false;
     }
+    out = *next;
+    alternates = *nextB;
     return true;
 }
 

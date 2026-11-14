@@ -17,6 +17,7 @@
 //    unknown IDs are ignored;
 //  - realtime: processBlock allocates nothing (allocation probe), with
 //    transport, sequencer, MIDI, automation and audition all active.
+#include "DrumsPatternTestUtil.h"
 #include "Processor.h"
 #include "DrumsEditor.h"
 #include "DrumsParameters.h"
@@ -54,6 +55,8 @@ namespace {
 
 using vox::drums::DrumsProcessor;
 namespace kit = vox::drums::kit;
+namespace timing = vox::drums::timing;
+namespace testutil = vox::drums::testutil;
 using vox::drums::padCount;
 
 int failures = 0;
@@ -1331,7 +1334,7 @@ void testRealtime()
             setPlain (*p, "drm.seq.mode", 2.0f);   // Both
             const auto editedHeap = heapFactory (1);
             auto& edited = *editedHeap;
-            edited.resize (64, 4);
+            check (testutil::setGrid (edited, 64, 4), "a factory pattern converts losslessly to 64 steps x 4 bars");
             juce::AudioBuffer<float> buffer (2, block);
             juce::MidiBuffer midi;
             midi.ensureSize (8192);
@@ -1348,9 +1351,9 @@ void testRealtime()
                     setPlain (*p, "drm.p01.decay", 0.1f + 0.01f * static_cast<float> (b % 30));
                 if (b % 9 == 0)   // pattern edits and slot changes between blocks
                 {
-                    edited.cell (b % padCount, 0, b % edited.steps).on ^= true;
-                    edited.cell (b % padCount, 0, b % edited.steps).velocity = 100;
-                    edited.cell (b % padCount, 0, b % edited.steps).ratchet = static_cast<std::uint8_t> (1 + b % 8);
+                    testutil::stepAt (edited, b % padCount, 0, b % testutil::stepsOf (edited)).on ^= true;
+                    testutil::stepAt (edited, b % padCount, 0, b % testutil::stepsOf (edited)).velocity = 100;
+                    testutil::stepAt (edited, b % padCount, 0, b % testutil::stepsOf (edited)).ratchet = static_cast<std::uint8_t> (1 + b % 8);
                     p->patterns().setSlot (b % vox::drums::PatternStore::slotCount, edited);
                     setPlain (*p, vox::drums::patternParameterId, static_cast<float> (b % vox::drums::PatternStore::slotCount));
                 }
@@ -1375,23 +1378,76 @@ std::unique_ptr<vox::drums::StoredPattern> randomPattern (std::mt19937& random, 
 {
     auto heap = std::make_unique<vox::drums::StoredPattern>();
     auto& p = *heap;
-    p.steps = static_cast<std::uint8_t> (steps);
-    p.bars = static_cast<std::uint8_t> (bars);
+    testutil::emptyGrid (p, steps, bars);
     p.seed = static_cast<std::uint32_t> (random());
     for (int lane = 0; lane < padCount; ++lane)
         for (int bar = 0; bar < bars; ++bar)
             for (int st = 0; st < steps; ++st)
                 if (random() % 6 == 0)
                 {
-                    auto& c = p.cell (lane, bar, st);
+                    auto& c = testutil::stepAt (p, lane, bar, st);
                     c.on = true;
                     c.accent = random() % 3 == 0;
                     c.velocity = static_cast<std::uint8_t> (1 + random() % 127);
                     c.probability = static_cast<std::uint8_t> (random() % 2 ? 100 : 1 + random() % 100);
                     c.ratchet = static_cast<std::uint8_t> (1 + random() % 8);
-                    c.micro = static_cast<std::int8_t> (static_cast<int> (random() % 101) - 50);
+                    c.microTicks = static_cast<std::int16_t> (kit::percentToTicks (static_cast<int> (random() % 101) - 50, 3840 / steps));
                 }
     return heap;
+}
+
+// TL decision 6882837766 (option B): the serialized cell is one 32-bit
+// little-endian word with fixed bit positions. Golden words, byte order,
+// every ratchet, the micro range, and reserved-bit rejection.
+void testCellCodec()
+{
+    namespace gc = vox::drums::gridcodec;
+    const auto cell = [] (bool on, bool accent, bool locked, int ratchet, int velocity, int probability, int micro) {
+        kit::PatternStep c;
+        c.on = on;
+        c.accent = accent;
+        c.locked = locked;
+        c.ratchet = static_cast<std::uint8_t> (ratchet);
+        c.velocity = static_cast<std::uint8_t> (velocity);
+        c.probability = static_cast<std::uint8_t> (probability);
+        c.microTicks = static_cast<std::int16_t> (micro);
+        return c;
+    };
+    struct Golden { kit::PatternStep c; std::uint32_t word; const char* what; };
+    const Golden golden[] = {
+        { kit::PatternStep {}, 0x000c8000u, "the empty cell (probability 100, ratchet 1)" },
+        { cell (true, true, true, 8, 127, 100, 240), 0x0f0c9fffu, "every flag, ratchet 8, velocity 127, micro +240" },
+        { cell (true, false, false, 1, 1, 1, -240), 0x11002041u, "probability 1, micro -240 (9-bit two's complement)" },
+        { cell (false, true, false, 3, 64, 50, -1), 0x1ff65012u, "an edited off cell keeps its values, micro -1" },
+        { cell (true, false, true, 5, 99, 100, 120), 0x078c98e5u, "locked, ratchet 5, micro +120" },
+    };
+    bool words = true, back = true;
+    for (const auto& g : golden)
+    {
+        words = words && gc::packCell (g.c) == g.word;
+        kit::PatternStep d;
+        back = back && gc::unpackCell (g.word, d) && d == g.c;
+    }
+    check (words, "cell codec: golden words");
+    check (back, "cell codec: golden words decode to the same cells");
+    std::vector<std::byte> bytes;
+    gc::putCell (bytes, golden[1].c);
+    check (bytes.size() == 4 && std::to_integer<int> (bytes[0]) == 0xff && std::to_integer<int> (bytes[1]) == 0x9f
+               && std::to_integer<int> (bytes[2]) == 0x0c && std::to_integer<int> (bytes[3]) == 0x0f,
+           "cell codec: little endian, low byte first (independent of the machine's byte order)");
+    bool all = true;
+    for (int ratchet = 1; ratchet <= 8; ++ratchet)
+        for (int micro = -256; micro <= 255; micro += 17)
+            for (int flags = 0; flags < 8; ++flags)
+            {
+                const auto c = cell ((flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0, ratchet, (micro + 256) % 128, 1 + (ratchet * 13) % 100, micro);
+                kit::PatternStep d;
+                all = all && gc::unpackCell (gc::packCell (c), d) && d == c && (gc::packCell (c) >> 29) == 0;
+            }
+    check (all, "cell codec: every ratchet 1..8, flags and micro -256..255 round trip; the reserved bits stay zero");
+    kit::PatternStep d;
+    check (! gc::unpackCell (0x000c8000u | 1u << 29, d) && ! gc::unpackCell (0x000c8000u | 1u << 30, d) && ! gc::unpackCell (0x000c8000u | 1u << 31, d),
+           "cell codec: any reserved bit set is rejected");
 }
 
 void testPatterns()
@@ -1458,21 +1514,45 @@ void testPatterns()
             d[at] = std::byte { v };
             return d;
         };
-        // Slot 1 header at 8: steps, bars, seed (4); first cell at 14.
+        // DSEQ v4, slot 1 at 8: numerator, denominator, resolution,
+        // followHost, bars, seed (4), then 16 x bars u16 masks, then the
+        // cells: one little-endian 32-bit word each (gridcodec::packCell).
+        // Slot 1 here: 4/4, 16ths (6 slots per beat, the last 2 reserved).
+        const auto bars = static_cast<std::size_t> (std::to_integer<int> (good[12]));
+        const std::size_t masks = 17, cells = masks + 16 * bars * 2;
+        check (std::to_integer<int> (good[8]) == 4 && std::to_integer<int> (good[9]) == 4 && std::to_integer<int> (good[10]) == 1,
+               "DSEQ v4: slot 1 is a 4/4 16th grid");
+        const auto word = [&] (std::size_t cell, std::uint32_t w) {
+            auto d = good;
+            for (int i = 0; i < 4; ++i)
+                d[cells + 4 * cell + static_cast<std::size_t> (i)] = static_cast<std::byte> ((w >> (8 * i)) & 0xffu);
+            return d;
+        };
+        // A valid on cell: velocity 100, probability 100, ratchet 1, micro 0.
+        const std::uint32_t on = 1u | 100u << 6 | 100u << 13;
         bad ({}, "empty");
-        bad (edit (0, 4), "unknown version");   // 3 is DRM-05 (step lock)
+        bad (edit (0, 3), "development version 3");
+        bad (edit (0, 5), "unknown version");
         bad (edit (4, 4), "4 slots");
-        bad (edit (8, 24), "24 steps");
-        bad (edit (9, 0), "0 bars");
-        bad (edit (9, 5), "5 bars");
-        bad (edit (14, 8), "unknown flag");   // bit 2 (4) is the step lock since DSEQ v3
-        bad (edit (15, 128), "velocity 128");
-        bad (edit (16, 0), "probability 0");
-        bad (edit (16, 101), "probability 101");
-        bad (edit (17, 0), "ratchet 0");
-        bad (edit (17, 9), "ratchet 9");
-        bad (edit (18, 51), "micro +51");
-        bad (edit (18, static_cast<std::uint8_t> (-51)), "micro -51");
+        bad (edit (8, 0), "0/4 meter");
+        bad (edit (8, 17), "17/4 meter");
+        bad (edit (9, 5), "denominator 5");
+        bad (edit (10, 4), "unknown resolution");
+        bad (edit (11, 2), "followHost 2");
+        bad (edit (12, 0), "0 bars");
+        bad (edit (12, 5), "5 bars");
+        bad (edit (masks + 0, 0x10), "a triplet mask bit beyond the 4 beats");
+        bad (word (4, on), "content in a reserved slot (beat 1, slot 5)");
+        bad (word (4, 100u << 13 | 1u << 3), "a non-empty off cell in a reserved slot (ratchet 2)");
+        bad (word (0, on | 1u << 29), "reserved bit 29");
+        bad (word (0, on | 1u << 31), "reserved bit 31");
+        bad (word (0, 1u | 100u << 6 | 0u << 13), "probability 0");
+        bad (word (0, 1u | 100u << 6 | 101u << 13), "probability 101");
+        bad (word (0, 1u | 100u << 6 | 127u << 13), "probability 127");
+        bad (word (0, on | (121u & 0x1ffu) << 20), "microTicks +121 (over half a 240-tick cell)");
+        bad (word (0, on | (static_cast<std::uint32_t> (-121) & 0x1ffu) << 20), "microTicks -121");
+        bad (word (0, on | (255u & 0x1ffu) << 20), "microTicks +255");
+        bad (word (0, on | (static_cast<std::uint32_t> (-256) & 0x1ffu) << 20), "microTicks -256");
         {
             auto d = good;
             d.pop_back();
@@ -1496,13 +1576,12 @@ void testPatterns()
         setPlain (*p, vox::drums::patternParameterId, 3.0f);
         const auto emptyHeap = std::make_unique<StoredPattern>();
         auto& empty = *emptyHeap;
-        empty.steps = 16;
-        empty.bars = 1;
+        testutil::emptyGrid (empty, 16, 1);
         p->patterns().setSlot (3, empty);
         check (render (*p, 200, 256, &head, 140.0, noMidi).peak <= 0.0, "an empty pattern slot is silent");
         const auto oneHeap = std::make_unique<StoredPattern> (empty);
         auto& one = *oneHeap;
-        one.cell (12, 0, 0) = { true, false, 120 };   // pad 13 on beat 1
+        testutil::stepAt (one, 12, 0, 0) = { true, false, 120 };   // pad 13 on beat 1
         p->patterns().setSlot (3, one);
         p->takeHitMask();
         const auto r = render (*p, 200, 256, &head, 140.0, noMidi);
@@ -1558,18 +1637,18 @@ void testPatterns()
             ctx.laneMask = 0xffffu & ~(1u << 4);
             std::vector<std::tuple<long long, int, int>> expected;
             const auto view = pattern.view();
-            std::array<vox::drums::kit::ScheduledHit, vox::drums::kit::padCount * vox::drums::kit::maxRatchet> out {};
             std::map<std::pair<long long, int>, int> merged;
-            for (std::int64_t g = 0; g < 32 * 2 * 3; ++g)
+            std::vector<vox::drums::kit::ScheduledHit> barOut;
+            for (std::int64_t bar = 0; bar < 2 * 3; ++bar)
             {
-                const int n = vox::drums::kit::stepHits (view, ctx, g, out.data());
-                for (int k = 0; k < n; ++k)
+                barOut.clear();
+                testutil::barHits (view.bar (static_cast<std::uint32_t> (bar % 2)), ctx, bar, bar * view.barTicks(), barOut);
+                for (const auto& h : barOut)
                 {
-                    const auto& h = out[static_cast<std::size_t> (k)];
                     if (h.ppq < 0.0)
                         continue;
                     const int noteNumber = p->kitStore().pad (h.pad).note;
-                    auto& v = merged[{ std::llround (h.ppq * 960.0), noteNumber }];
+                    auto& v = merged[{ static_cast<long long> (timing::exportTick (h.ppq, 960)), noteNumber }];
                     v = std::max (v, static_cast<int> (h.velocity));
                 }
             }
@@ -1635,13 +1714,12 @@ void testPatterns()
         std::thread writer ([&] {
             const auto pHeap = std::make_unique<StoredPattern>();
             auto& p = *pHeap;
-            p.steps = 16;
-            p.bars = 1;
+            testutil::emptyGrid (p, 16, 1);
             const auto allHeap = std::make_unique<SlotArray>();
             for (int i = 0; i < 20000; ++i)
             {
                 p.seed = static_cast<std::uint32_t> (store.generation() + 1);   // single writer: the next generation
-                p.cell (i % padCount, 0, i % 16).on ^= true;
+                testutil::stepAt (p, i % padCount, 0, i % 16).on ^= true;
                 if (i % 7 == 0)
                 {
                     auto& all = *allHeap;
@@ -1681,10 +1759,9 @@ void testPatterns()
         auto p = makeProcessor();
         const auto upperHeap = std::make_unique<StoredPattern>();
         auto& upper = *upperHeap;
-        upper.steps = 16;
-        upper.bars = 1;
+        testutil::emptyGrid (upper, 16, 1);
         for (int pad = 8; pad < padCount; ++pad)
-            upper.cell (pad, 0, pad - 8) = { true, false, static_cast<std::uint8_t> (60 + pad) };
+            testutil::stepAt (upper, pad, 0, pad - 8) = { true, false, static_cast<std::uint8_t> (60 + pad) };
         p->patterns().setSlot (4, upper);
         const auto blob = p->exportPatternMidi (4, 1, 120.0);
         juce::MidiFile file;
@@ -1712,22 +1789,39 @@ void testPatterns()
         p->setPlayHead (nullptr);
     }
 
-    // resize keeps what fits on the new grid.
+    // PR 137 §10.3: a resolution change keeps every note at its time or is
+    // refused (nothing changes); the bar count drops bars or repeats bar 1.
     {
         const auto pHeap = std::make_unique<StoredPattern>();
         auto& p = *pHeap;
-        p.steps = 16;
-        p.bars = 2;
-        p.cell (0, 0, 4) = { true, true, 99 };
-        p.cell (1, 1, 15) = { true, false, 50 };
+        testutil::emptyGrid (p, 16, 2);
+        testutil::stepAt (p, 0, 0, 4) = { true, true, 99 };
+        testutil::stepAt (p, 1, 1, 15) = { true, false, 50 };
         const auto qHeap = std::make_unique<StoredPattern> (p);
         auto& q = *qHeap;
-        q.resize (64, 4);
-        check (q.steps == 64 && q.bars == 4 && q.cell (0, 0, 16).on && q.cell (0, 0, 16).velocity == 99 && q.cell (1, 1, 60).on
-                   && q.cell (0, 2, 16).on && ! q.cell (1, 2, 60).on,
+        check (q.convertGrid ({}, timing::Resolution::sixtyFourth) && q.valid(), "16 -> 64 steps converts");
+        q.setBars (4);
+        check (testutil::stepsOf (q) == 64 && q.bars == 4 && testutil::stepAt (q, 0, 0, 16).on && testutil::stepAt (q, 0, 0, 16).velocity == 99
+                   && testutil::stepAt (q, 1, 1, 60).on && testutil::stepAt (q, 0, 2, 16).on && ! testutil::stepAt (q, 1, 2, 60).on,
                "16 -> 64 steps keeps positions; added bars repeat bar 1");
-        q.resize (16, 1);
-        check (q.steps == 16 && q.bars == 1 && q.cell (0, 0, 4).on && ! q.cell (1, 0, 15).on, "back to 16 steps x 1 bar");
+        check (q.convertGrid ({}, timing::Resolution::sixteenth) && testutil::stepsOf (q) == 16 && testutil::stepAt (q, 0, 0, 4).on
+                   && testutil::stepAt (q, 1, 1, 15).on,
+               "back to 16 steps: on-grid notes keep their steps");
+        q.setBars (1);
+        check (q.bars == 1 && testutil::stepAt (q, 0, 0, 4).on && ! testutil::stepAt (q, 1, 0, 15).on, "1 bar: the later bars are dropped");
+        // Two 64ths in one 16th cell, and one between two 16ths: refused, unchanged.
+        check (q.convertGrid ({}, timing::Resolution::sixtyFourth), "16 -> 64 again");
+        testutil::stepAt (q, 2, 0, 1) = { true, false, 70 };   // 64th 2: within a 16th's half-cell of 16th 1 ...
+        testutil::stepAt (q, 2, 0, 0) = { true, false, 71 };   // ... which holds a note: two notes, one cell
+        const auto before = std::make_unique<StoredPattern> (q);
+        std::string why;
+        check (! q.convertGrid ({}, timing::Resolution::sixteenth, &why) && q == *before && why.find ("share a cell") != std::string::npos,
+               "64 -> 16 with two notes for one cell is refused and changes nothing (" + why + ")");
+        testutil::stepAt (q, 2, 0, 0) = {};
+        testutil::stepAt (q, 2, 0, 1) = {};
+        testutil::stepAt (q, 3, 0, 2) = { true, false, 72 };   // 64th 3 = an 8th of a 16th... exactly half a 16th: kept with +120 ticks
+        check (q.convertGrid ({}, timing::Resolution::sixteenth) && testutil::stepAt (q, 3, 0, 0).on && testutil::stepAt (q, 3, 0, 0).microTicks == 120,
+               "64 -> 16 keeps an off-grid note at its time (half a cell late, +120 ticks)");
     }
 }
 
@@ -1817,8 +1911,7 @@ void testExportPlaybackParity()
     auto& pattern = *patternHeap;
     {
         auto source = makeProcessor();
-        pattern.steps = 32;
-        pattern.bars = 2;
+        testutil::emptyGrid (pattern, 32, 2);
         pattern.seed = 4242;
         bool microPlus = false, microMinus = false, ratchets = false, chance = false, accents = false;
         for (int lane = 0; lane < padCount; ++lane)
@@ -1826,15 +1919,16 @@ void testExportPlaybackParity()
                 for (int st = 0; st < 32; ++st)
                     if (random() % 5 == 0)
                     {
-                        auto& c = pattern.cell (lane, bar, st);
+                        auto& c = testutil::stepAt (pattern, lane, bar, st);
                         c.on = true;
                         c.velocity = static_cast<std::uint8_t> (20 + random() % 100);
                         c.accent = random() % 4 == 0;
                         c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 20 + random() % 70 : 100);
                         c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 2 + random() % 7 : 1);
-                        c.micro = static_cast<std::int8_t> (random() % 3 == 0 ? static_cast<int> (random() % 101) - 50 : 0);
-                        microPlus = microPlus || c.micro > 0;
-                        microMinus = microMinus || c.micro < 0;
+                        c.microTicks = static_cast<std::int16_t> (
+                            random() % 3 == 0 ? kit::percentToTicks (static_cast<int> (random() % 101) - 50, 120) : 0);
+                        microPlus = microPlus || c.microTicks > 0;
+                        microMinus = microMinus || c.microTicks < 0;
                         ratchets = ratchets || c.ratchet > 1;
                         chance = chance || c.probability < 100;
                         accents = accents || c.accent;
@@ -2025,13 +2119,13 @@ void testPatternEditorUi()
     const auto& original = *originalHeap;
 
     // Toggle a step on and off.
-    const bool wasOn = (*heapSlot (store, 2)).cell (12, 0, 3).on;
+    const bool wasOn = testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).on;
     ed.clickCell (12, 3);
-    check ((*heapSlot (store, 2)).cell (12, 0, 3).on != wasOn && ed.selectedLane() == 12 && ed.selectedStep() == 3,
+    check (testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).on != wasOn && ed.selectedLane() == 12 && ed.selectedStep() == 3,
            "step editor: a click toggles the step and selects it");
-    check (! wasOn && (*heapSlot (store, 2)).cell (12, 0, 3).velocity == 100, "step editor: a new step has velocity 100");
+    check (! wasOn && testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).velocity == 100, "step editor: a new step has velocity 100");
     ed.clickCell (12, 3);
-    check ((*heapSlot (store, 2)).cell (12, 0, 3).on == wasOn, "step editor: a second click toggles it back");
+    check (testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).on == wasOn, "step editor: a second click toggles it back");
     ed.clickCell (12, 3);
 
     // Inspector: each value moves the selected step; a drag is one undo step.
@@ -2041,27 +2135,28 @@ void testPatternEditorUi()
     for (int v : { 40, 50, 60, 70 })
         velocity->setValue (v, juce::sendNotificationSync);
     velocity->onDragEnd();
-    check ((*heapSlot (store, 2)).cell (12, 0, 3).velocity == 70 && history.size() == steps + 1,
+    check (testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).velocity == 70 && history.size() == steps + 1,
            "step editor: a velocity drag sets the step and is one undo step");
     ed.inspector ("probability")->setValue (35, juce::sendNotificationSync);
     ed.inspector ("ratchet")->setValue (4, juce::sendNotificationSync);
     ed.inspector ("micro")->setValue (-20, juce::sendNotificationSync);
     ed.accentToggle()->setToggleState (true, juce::sendNotificationSync);
     {
-        const auto c = (*heapSlot (store, 2)).cell (12, 0, 3);
-        check (c.probability == 35 && c.ratchet == 4 && c.micro == -20 && c.accent, "step editor: chance, ratchet, micro and accent set the step");
+        const auto c = testutil::stepAt (*heapSlot (store, 2), 12, 0, 3);
+        check (c.probability == 35 && c.ratchet == 4 && c.microTicks == -48 && c.accent,
+               "step editor: chance, ratchet, micro (-20 % of a 240-tick cell = -48 ticks) and accent set the step");
     }
     // Undo walks back one edit at a time; redo forward; a new edit clears redo.
     ed.button ("undo")->onClick();
-    check (! (*heapSlot (store, 2)).cell (12, 0, 3).accent && (*heapSlot (store, 2)).cell (12, 0, 3).micro == -20, "step editor: undo reverts the last edit only");
+    check (! testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).accent && testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).microTicks == -48, "step editor: undo reverts the last edit only");
     ed.button ("undo")->onClick();
     ed.button ("undo")->onClick();
     ed.button ("undo")->onClick();
     ed.button ("undo")->onClick();
-    check ((*heapSlot (store, 2)).cell (12, 0, 3).velocity == 100 && (*heapSlot (store, 2)).cell (12, 0, 3).probability == 100,
+    check (testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).velocity == 100 && testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).probability == 100,
            "step editor: undo of the velocity drag returns to the value before the drag");
     ed.button ("redo")->onClick();
-    check ((*heapSlot (store, 2)).cell (12, 0, 3).velocity == 70, "step editor: redo replays the drag");
+    check (testutil::stepAt (*heapSlot (store, 2), 12, 0, 3).velocity == 70, "step editor: redo replays the drag");
     ed.inspector ("velocity")->setValue (90, juce::sendNotificationSync);
     check (! history.canRedo(), "step editor: a new edit clears redo");
 
@@ -2069,7 +2164,7 @@ void testPatternEditorUi()
     ed.combo ("bars")->setSelectedItemIndex (1, juce::sendNotificationSync);   // 2 bars
     check ((*heapSlot (store, 2)).bars == 2, "step editor: bars combo resizes the pattern");
     ed.combo ("steps")->setSelectedItemIndex (1, juce::sendNotificationSync);  // 32 steps
-    check ((*heapSlot (store, 2)).steps == 32 && (*heapSlot (store, 2)).cell (12, 0, 6).velocity == 90,
+    check (testutil::stepsOf (*heapSlot (store, 2)) == 32 && testutil::stepAt (*heapSlot (store, 2), 12, 0, 6).velocity == 90,
            "step editor: 32 steps keep each step at its position");
     ed.selectBar (0);
     ed.clickCell (2, 31);
@@ -2079,10 +2174,10 @@ void testPatternEditorUi()
     const auto& q = *qHeap;
         bool same = true;
         for (int lane = 0; lane < padCount; ++lane)
-            for (int st = 0; st < q.steps; ++st)
+            for (int st = 0; st < testutil::stepsOf (q); ++st)
             {
-                const auto& a = q.cell (lane, 0, st);
-                const auto& b = q.cell (lane, 1, st);
+                const auto& a = testutil::stepAt (q, lane, 0, st);
+                const auto& b = testutil::stepAt (q, lane, 1, st);
                 same = same && a.on == b.on && a.velocity == b.velocity && a.ratchet == b.ratchet;
             }
         check (same && ed.bar() == 1, "step editor: Dup copies bar 1 to bar 2 and shows bar 2");
@@ -2093,9 +2188,9 @@ void testPatternEditorUi()
     const auto& q = *qHeap;
         bool empty = true;
         for (int lane = 0; lane < padCount; ++lane)
-            for (int st = 0; st < q.steps; ++st)
-                empty = empty && ! q.cell (lane, 1, st).on;
-        check (empty && q.cell (12, 0, 6).on, "step editor: Clear empties only the shown bar");
+            for (int st = 0; st < testutil::stepsOf (q); ++st)
+                empty = empty && ! testutil::stepAt (q, lane, 1, st).on;
+        check (empty && testutil::stepAt (q, 12, 0, 6).on, "step editor: Clear empties only the shown bar");
     }
     const auto seed = (*heapSlot (store, 2)).seed;
     ed.button ("seed")->onClick();
@@ -2114,19 +2209,20 @@ void testPatternEditorUi()
     ed.button ("undo")->onClick();
     check ((*heapSlot (store, 2)) == edited && (*heapAlternate (store, 2)) == a, "step editor: undo reverts the swap");
 
-    // State: alternates are saved (DSEQ v2) and restored; a v1 section reads
-    // B = A; a restore clears the history.
+    // State: alternates are saved (DSEQ) and restored; a development v1
+    // section is rejected; a restore clears the history.
     {
         const auto saved = stateOf (*p);
         auto other = makeProcessor();
         other->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         check (other->lastStateError().isEmpty() && (*heapSlot (other->patterns(), 2)) == edited && (*heapAlternate (other->patterns(), 2)) == a,
                "step editor: slots and variations survive save and restore");
-        // v1: header + the 5 slots only.
+        // A development DSEQ v1 section (header + the 5 slots only) is not
+        // decoded (#136 pre-release policy), and decode changes nothing.
         const auto allHeap = std::make_unique<SlotArray>();
         other->patterns().copyAll (*allHeap);
-        auto v2 = PatternStore::encode (*allHeap, *allHeap).data;
-        auto v1 = std::vector<std::byte> (v2.begin(), v2.begin() + static_cast<std::ptrdiff_t> (8 + (v2.size() - 8) / 2));
+        auto v4 = PatternStore::encode (*allHeap, *allHeap).data;
+        auto v1 = std::vector<std::byte> (v4.begin(), v4.begin() + static_cast<std::ptrdiff_t> (8 + (v4.size() - 8) / 2));
         v1[0] = std::byte { 1 };
         vox::preset::Section section;
         section.tag = vox::drums::sequenceSectionTag;
@@ -2134,9 +2230,11 @@ void testPatternEditorUi()
         const auto slotsHeap = std::make_unique<SlotArray>(), alternatesHeap = std::make_unique<SlotArray>();
         auto& slots = *slotsHeap;
         auto& alternates = *alternatesHeap;
+        slots[2] = a;
+        alternates[2] = a;
         juce::String error;
-        check (PatternStore::decode (section, slots, alternates, error) && slots[2] == edited && alternates[2] == edited,
-               "step editor: a DSEQ v1 section reads each variation as a copy of its slot");
+        check (! PatternStore::decode (section, slots, alternates, error) && slots[2] == a && alternates[2] == a && error.isNotEmpty(),
+               "step editor: a development DSEQ v1 section is rejected and changes nothing");
         check (history.canUndo(), "step editor: history before a restore");
         p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         panel->pollForTesting();
@@ -2175,9 +2273,8 @@ void testPatternEditorUi()
         setPlain (*q, vox::drums::patternParameterId, 2.0f);
         const auto otherHeap = std::make_unique<StoredPattern>();
         auto& other = *otherHeap;
-        other.steps = 16;
-        other.bars = 1;
-        other.cell (15, 0, 7) = { true, false, 77 };
+        testutil::emptyGrid (other, 16, 1);
+        testutil::stepAt (other, 15, 0, 7) = { true, false, 77 };
         q->patterns().setSlot (2, other);
         panelB->pollForTesting();
         auto& edB = panelB->patternEditor();
@@ -2221,13 +2318,13 @@ void testPatternEditorUi()
         check (target != nullptr, "step editor: grid component");
         if (target != nullptr)
         {
-            const bool before = (*heapSlot (store, 2)).cell (13, ed.bar(), 5).on;
+            const bool before = testutil::stepAt (*heapSlot (store, 2), 13, ed.bar(), 5).on;
             auto source = juce::Desktop::getInstance().getMainMouseSource();
             const auto pos = (r.getCentre() - target->getPosition()).toFloat();
             const juce::MouseEvent e (source, pos, juce::ModifierKeys(), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, target, target,
                                       juce::Time::getCurrentTime(), pos, juce::Time::getCurrentTime(), 1, false);
             target->mouseDown (e);
-            check ((*heapSlot (store, 2)).cell (13, ed.bar(), 5).on != before, "step editor: a mouse click on the cell toggles exactly that step");
+            check (testutil::stepAt (*heapSlot (store, 2), 13, ed.bar(), 5).on != before, "step editor: a mouse click on the cell toggles exactly that step");
         }
     }
     check ((*heapSlot (store, 2)) != original, "step editor: the slot was edited");
@@ -2250,6 +2347,7 @@ int main (int argc, char** argv)
     testSound();
     testState();
     testStateReentrancy();
+    testCellCodec();
     testPatterns();
     testExportPlaybackParity();
     testPatternEditorUi();
