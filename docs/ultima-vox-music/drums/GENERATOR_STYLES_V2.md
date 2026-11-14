@@ -497,24 +497,37 @@ resolution menu):
   NoteOn ticks are integers.
 - NoteOff is sent at min(cell length, the next hit on the same lane) — no overlap, as today.
 
-### 10.3 Changing a beat's subdivision never loses or merges events
+### 10.3 Changing a beat's subdivision never loses or merges events (revision 5)
 
-- Switching a beat (or a selection of beats) between straight and tuplet **converts its events
-  with their absolute time kept**:
-  - each event goes to the nearest cell of the new subdivision (ties to the earlier one);
-  - its micro is set so that cell time + micro equals the old time exactly.
-- The switch is **refused, with nothing changed**, when either:
-  - two events would land in the same cell (a collision), or
-  - the needed micro would exceed ±50 % of the new cell.
+Correction after AG review 5906187802:
 
-  The message names the steps: "Beat 4: two hits would meet (16ths 2 and 3); move or delete
-  one first". An empty beat switches freely.
-- Every switch is one undo step. Undo restores the exact previous cells, mask and micro (the
-  history entry stores the whole slot, as today).
-- Locked cells:
-  - a beat holding a locked event switches only when the conversion keeps that event as one
-    locked event;
-  - otherwise the switch is refused: "Beat 2 has locked steps".
+- Today `PatternStep::micro` is an **integer percent** of a cell (signed byte, ±50, edited in
+  whole percent). It cannot hold offsets such as −1/3 of a cell, so revision 4's "exact via
+  micro" was not true.
+- In the first-release `DSEQ`, an event's offset is **`microTicks`**:
+  - a signed 16-bit offset in ticks of the canonical 960-PPQ timeline, relative to its cell's
+    start;
+  - bounded to ±½ of that cell's length.
+  - The largest cell is 480 ticks (an 8th), so the bound is at most ±240, well inside 16 bits.
+- The UI may show percent. A user edit is quantised **once** to whole ticks, and every later
+  operation keeps those ticks.
+
+**Switching a beat (or a selection of beats) between straight and tuplet:**
+
+1. Every event's **absolute tick** = cell start tick + microTicks; it is kept.
+2. Each event goes to the cell whose start is nearest (ties to the earlier cell), with
+   microTicks = absolute tick − new cell start.
+3. The whole switch is **rejected atomically**, with nothing changed and the steps named, when
+   any of these holds:
+   - two events would share a cell;
+   - a |microTicks| would exceed ½ of the new cell;
+   - a locked event would not stay one locked event;
+   - the result would not fit the capacity of §10.2.
+4. Otherwise the switch is one undo step. Undo restores events, locks, mask and ticks
+   **bit-identically** (the history entry holds the whole slot).
+
+All cell lengths divide 960 or 1440 exactly (§10.2), so cell starts are whole ticks and nothing
+is ever rounded except the user's own edit.
 
 ### 10.4 Meter from the host, and what playback may never do
 
@@ -552,13 +565,68 @@ resolution menu):
 - **`DSEQ`, new version:**
   - per pattern: meter (n, d), resolution, and whether the meter follows the host;
   - per lane and bar: a 16-bit subdivision mask (one bit per beat);
-  - cells as today, at most 64 per bar.
+  - cells, at most 64 slots per bar, with `microTicks` as a signed 16-bit value instead of the
+    percent byte;
+  - **reserved but inactive slots** (the slots of a beat beyond its current subdivision's cell
+    count) must be empty: any content there rejects the restore.
   - Strict decode: an unknown meter or resolution, a combination over 64 slots, or a mask bit
     beyond the bar's beats rejects the restore.
 - `DSNG`: no song meter (bars follow the host); version bump.
 - Development-build versions are not decoded (#136 policy).
 - **Budget:** cells unchanged; masks add 128 bytes per pattern (16 lanes × 4 bars × 2 bytes).
   Measured by the boundary fixture (#130 T21).
+
+### 10.5a One shared timing engine (revision 5, AG review 5906187802)
+
+- Today `PatternStore` (`validSteps`, `timingFor`, `StoredPattern::view`), the KitEngine
+  scheduler (`stepLength`), the exports and the editor each assume 16/32/64 steps of one length.
+- Revision 4 capacities (12, 18, 21, 24, 36, 42, 48, 56, …) and per-beat subdivisions break that
+  assumption everywhere.
+- **One module computes all timing.** Pure, allocation-free, no locks, usable on the audio
+  thread:
+
+  ```
+  struct BarTiming {        // from (meter n/d, resolution, the lane's subdivision mask for the bar)
+      int beats, barTicks;                  // e.g. 12/8 → 4 beats, 5760 ticks
+      int slotsPerBeat;                     // max(straight, tuplet) at the resolution
+      int cells (int beat) const;           // active cells of that beat
+      int cellStartTick (int beat, int cell) const;   // exact integer ticks from the bar start
+      int cellTicks (int beat) const;       // beat ticks / cells
+      int slot (int beat, int cell) const;  // storage slot 0..63
+  };
+  ```
+
+- **Consumers:**
+  - the scheduler: hit tick = bar start tick + cellStartTick + microTicks, plus ratchet
+    subdivisions inside the cell;
+  - the generator: positions to cells;
+  - the editor: geometry and editing;
+  - pattern and song MIDI export: ticks written exactly;
+  - the subdivision switch.
+- No subsystem reconstructs timing on its own. The uniform `stepLength` arithmetic is
+  removed.
+- **Ticks to samples:**
+  - sample offset = (tick / 960 − block start PPQ) × samples per quarter, rounded down. This
+    is the one conversion; MIDI export uses the integer ticks directly.
+  - A test asserts that every scheduled NoteOn sample equals this conversion of its export tick
+    (± 0 samples) at 44.1/48/96 kHz and blocks of 64/333/512.
+- **Host jumps:**
+  - a discontinuity is a PPQ step backwards of more than 1 tick, or forwards of more than one
+    block plus 1 tick;
+  - smaller differences are floating-point jitter and do not reset the scheduler.
+
+### 10.5b Test matrix for revision 5 (before `DSEQ` is frozen)
+
+| Area | Cases |
+|---|---|
+| Capacity | every (meter, resolution) of §10.2: slots per beat and bar; unavailable combinations refused with their reason |
+| Switch round trips | 4/4: 16th ↔ 16th-triplet and 32nd ↔ 32nd-triplet; 3/4 likewise; 6/8 and 12/8: straight ↔ duplet; with on-grid notes, humanized notes (non-zero microTicks) and off-grid notes at ±½ cell; straight → tuplet → straight restores bit-identically |
+| Rejections | two events into one cell; a \|microTicks\| > ½ cell; a locked step that would split or move; each leaves cells, mask, ticks and history unchanged |
+| Undo/redo | every accepted switch; bit-identical restore |
+| Reserved slots | inactive slots empty after every operation; non-empty inactive slots in `DSEQ` rejected |
+| Scheduler | per-beat mixed subdivisions; NoteOn sample = tick conversion ± 0 at 44.1/48/96 kHz, blocks 64/333/512; ratchets inside tuplet cells |
+| Export | pattern and song: integer ticks equal `cellStartTick + microTicks`; time-signature events; NoteOff before the next hit on the lane |
+| Host | meter change, loop, jump, jitter (no reset), missing time signature or bar start; export unchanged by playback |
 
 ### 10.6 Generator
 
