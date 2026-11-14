@@ -9,51 +9,28 @@
 namespace vox::drums {
 namespace {
 
-void putU32 (std::vector<std::byte>& out, std::uint32_t v)
-{
-    for (int s = 0; s < 32; s += 8)
-        out.push_back (static_cast<std::byte> ((v >> s) & 0xffu));
-}
+using gridcodec::putU32;
+using gridcodec::putU8;
+using gridcodec::Reader;
 
-void putU8 (std::vector<std::byte>& out, std::uint8_t v)
-{
-    out.push_back (static_cast<std::byte> (v));
-}
+// DSNG version 2 (PR 137 §10.5): unique bars carry their grid and masks;
+// no song meter (bars follow the host). Version 1 was a development build
+// and is not decoded (#136 policy).
+constexpr std::uint32_t songVersion = 2;
 
-struct Reader {
-    const std::vector<std::byte>& data;
-    std::size_t at = 0;
-    bool ok = true;
-    std::uint8_t u8()
+// One bar of `p` as unique cells (copied, the grid and masks with them).
+void copyBar (const StoredPattern& p, int bar, BarCells& out) noexcept
+{
+    out.signature = p.signature;
+    out.resolution = p.resolution;
+    out.seed = p.seed;
+    for (int lane = 0; lane < kit::padCount; ++lane)
     {
-        if (at >= data.size())
-        {
-            ok = false;
-            return 0;
-        }
-        return std::to_integer<std::uint8_t> (data[at++]);
+        out.masks[static_cast<std::size_t> (lane)] = p.mask (lane, bar);
+        for (int slot = 0; slot < kit::slotStride; ++slot)
+            out.cell (lane, slot) = p.cell (lane, bar, slot);
     }
-    std::uint32_t u32()
-    {
-        std::uint32_t v = 0;
-        for (int i = 0; i < 4; ++i)
-            v |= static_cast<std::uint32_t> (u8()) << (8 * i);
-        return v;
-    }
-};
-
-bool validSteps (int steps) noexcept
-{
-    return steps == 16 || steps == 32 || steps == 64;
 }
-
-bool sameStep (const kit::PatternStep& a, const kit::PatternStep& b) noexcept
-{
-    return a.on == b.on && a.accent == b.accent && a.velocity == b.velocity && a.probability == b.probability
-        && a.ratchet == b.ratchet && a.micro == b.micro && a.locked == b.locked;
-}
-
-constexpr std::uint32_t songVersion = 1;
 
 } // namespace
 
@@ -65,12 +42,27 @@ std::uint64_t BarCells::nextId() noexcept
 
 bool BarCells::sameContent (const BarCells& o) const noexcept
 {
-    if (steps != o.steps || seed != o.seed)
-        return false;
+    return signature == o.signature && resolution == o.resolution && seed == o.seed && masks == o.masks && cells == o.cells;
+}
+
+kit::BarView BarCells::view() const noexcept
+{
+    kit::BarView v;
+    v.cells = cells.data();
+    v.laneStride = stride;
+    v.masks = masks.data();
+    v.maskStride = 1;
+    v.signature = signature;
+    v.resolution = resolution;
+    v.seed = seed;
+    return v;
+}
+
+bool BarCells::valid (std::string* why) const
+{
     for (int lane = 0; lane < kit::padCount; ++lane)
-        for (int st = 0; st < steps; ++st)
-            if (! sameStep (cell (lane, st), o.cell (lane, st)))
-                return false;
+        if (! validLaneBar (timing (lane), &cell (lane, 0), why))
+            return false;
     return true;
 }
 
@@ -110,7 +102,7 @@ void SongData::normalise() noexcept
             bar.patternBar = static_cast<std::uint8_t> (std::min<int> (bar.patternBar, kit::maxPatternBars - 1));
             bar.cells.reset();
         }
-        else if (bar.kind == SongBar::Kind::unique && bar.cells != nullptr && validSteps (bar.cells->steps))
+        else if (bar.kind == SongBar::Kind::unique && bar.cells != nullptr && bar.cells->valid())
             bar.slot = bar.variation = bar.patternBar = 0;
         else
             bar = {};
@@ -155,12 +147,7 @@ std::shared_ptr<const BarCells> resolveBar (const SongBar& bar, const std::array
     const StoredPattern& p = bar.variation != 0 ? alternates[index] : slots[index];
     auto cells = std::make_shared<BarCells>();
     cells->id = BarCells::nextId();
-    cells->steps = p.steps;
-    cells->seed = p.seed;
-    const int pb = bar.patternBar % std::max<int> (1, p.bars);
-    for (int lane = 0; lane < kit::padCount; ++lane)
-        for (int st = 0; st < p.steps; ++st)
-            cells->cell (lane, st) = p.cell (lane, pb, st);
+    copyBar (p, bar.patternBar % std::max<int> (1, p.bars), *cells);
     return cells;
 }
 
@@ -195,21 +182,12 @@ void buildSongView (const SongTable& table, const StoredPattern* slots, const St
             // clang is correct), which made every A bar read the first slot.
             const int index = bar.slot < slotCountForSong ? static_cast<int> (bar.slot) : slotCountForSong - 1;
             const StoredPattern& p = bar.variation != 0 ? alternates[index] : slots[index];
-            if (p.bars == 0 || p.steps == 0)
+            if (p.bars == 0)
                 continue;
-            const int pb = bar.patternBar % p.bars;
-            view.cells = p.cells.data() + pb * p.steps;
-            view.laneStride = static_cast<std::uint32_t> (p.bars) * p.steps;
-            view.steps = p.steps;
-            view.seed = p.seed;
+            view = p.view().bar (static_cast<std::uint32_t> (bar.patternBar % p.bars));
         }
         else if (bar.kind == SongBar::Kind::unique && unique != nullptr && unique[i] != nullptr)
-        {
-            view.cells = unique[i]->cells.data();
-            view.laneStride = BarCells::stride;
-            view.steps = unique[i]->steps;
-            view.seed = unique[i]->seed;
-        }
+            view = unique[i]->view();
     }
     out.song = {};
     out.song.bars = static_cast<std::uint32_t> (length);
@@ -302,24 +280,25 @@ SongData makeUnique (const SongData& song, int from, int count, const std::array
 void barToPattern (const std::shared_ptr<const BarCells>& bar, StoredPattern& out)
 {
     out.cells.fill ({});
+    out.masks.fill (0);
     out.bars = 1;
-    out.steps = bar != nullptr ? bar->steps : std::uint8_t { 16 };
+    out.signature = bar != nullptr ? bar->signature : timing::TimeSignature {};
+    out.resolution = bar != nullptr ? bar->resolution : timing::Resolution::sixteenth;
     out.seed = bar != nullptr ? bar->seed : 1u;
     if (bar != nullptr)
         for (int lane = 0; lane < kit::padCount; ++lane)
-            for (int st = 0; st < bar->steps; ++st)
-                out.cell (lane, 0, st) = bar->cell (lane, st);
+        {
+            out.mask (lane, 0) = bar->masks[static_cast<std::size_t> (lane)];
+            for (int slot = 0; slot < kit::slotStride; ++slot)
+                out.cell (lane, 0, slot) = bar->cell (lane, slot);
+        }
 }
 
 std::shared_ptr<const BarCells> patternToBar (const StoredPattern& pattern)
 {
     auto cells = std::make_shared<BarCells>();
     cells->id = BarCells::nextId();
-    cells->steps = pattern.steps;
-    cells->seed = pattern.seed;
-    for (int lane = 0; lane < kit::padCount; ++lane)
-        for (int st = 0; st < pattern.steps; ++st)
-            cells->cell (lane, st) = pattern.cell (lane, 0, st);
+    copyBar (pattern, 0, *cells);
     return cells;
 }
 
@@ -349,18 +328,15 @@ preset::Section encodeSong (const SongData& song)
         }
         else if (kind == SongBar::Kind::unique)
         {
-            putU8 (s.data, bar.cells->steps);
-            putU32 (s.data, bar.cells->seed);
+            const auto& b = *bar.cells;
+            gridcodec::putGrid (s.data, b.signature, b.resolution);
+            putU32 (s.data, b.seed);
+            for (const auto m : b.masks)
+                gridcodec::putU16 (s.data, m);
+            const int slots = timing::capacity (b.signature, b.resolution).slotsPerBar;
             for (int lane = 0; lane < kit::padCount; ++lane)
-                for (int st = 0; st < bar.cells->steps; ++st)
-                {
-                    const auto& c = bar.cells->cell (lane, st);
-                    putU8 (s.data, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0) | (c.locked ? 4 : 0)));
-                    putU8 (s.data, c.velocity);
-                    putU8 (s.data, c.probability);
-                    putU8 (s.data, c.ratchet);
-                    putU8 (s.data, static_cast<std::uint8_t> (c.micro));
-                }
+                for (int slot = 0; slot < slots; ++slot)
+                    gridcodec::putCell (s.data, b.cell (lane, slot));
         }
     }
     return s;
@@ -411,33 +387,20 @@ bool decodeSong (const preset::Section& section, SongData& out, juce::String& er
         {
             auto cells = std::make_shared<BarCells>();
             cells->id = BarCells::nextId();
-            const int steps = in.u8();
+            const bool grid = gridcodec::getGrid (in, cells->signature, cells->resolution);
             cells->seed = in.u32();
-            if (! in.ok || ! validSteps (steps))
+            for (auto& m : cells->masks)
+                m = in.u16();
+            bool ok = in.ok && grid;
+            const int slots = ok ? timing::capacity (cells->signature, cells->resolution).slotsPerBar : 0;
+            for (int lane = 0; lane < kit::padCount && ok; ++lane)
+                for (int slot = 0; slot < slots && ok; ++slot)
+                    ok = gridcodec::getCell (in, cells->cell (lane, slot));
+            if (! ok || ! cells->valid())
             {
                 error = "invalid song section";
                 return false;
             }
-            cells->steps = static_cast<std::uint8_t> (steps);
-            for (int lane = 0; lane < kit::padCount; ++lane)
-                for (int st = 0; st < steps; ++st)
-                {
-                    auto& c = cells->cell (lane, st);
-                    const auto flags = in.u8();
-                    c.velocity = in.u8();
-                    c.probability = in.u8();
-                    c.ratchet = in.u8();
-                    c.micro = static_cast<std::int8_t> (in.u8());
-                    c.on = (flags & 1u) != 0;
-                    c.accent = (flags & 2u) != 0;
-                    c.locked = (flags & 4u) != 0;
-                    if (! in.ok || flags > 7 || c.velocity > 127 || c.probability < 1 || c.probability > 100 || c.ratchet < 1
-                        || c.ratchet > kit::maxRatchet || c.micro < -50 || c.micro > 50)
-                    {
-                        error = "invalid song section";
-                        return false;
-                    }
-                }
             bar.cells = std::move (cells);
         }
     }
@@ -473,12 +436,18 @@ void PatternStore::copySongBar (int bar, StoredPattern& out, std::uint64_t& gene
             const StoredPattern& p = b.variation != 0 ? alternates_[index] : slots_[index];
             const int pb = b.patternBar % std::max<int> (1, p.bars);
             out.cells.fill ({});
+            out.masks.fill (0);
             out.bars = 1;
-            out.steps = p.steps;
+            out.signature = p.signature;
+            out.resolution = p.resolution;
+            out.followHost = p.followHost;
             out.seed = p.seed;
             for (int lane = 0; lane < kit::padCount; ++lane)
-                for (int st = 0; st < p.steps; ++st)
-                    out.cell (lane, 0, st) = p.cell (lane, pb, st);
+            {
+                out.mask (lane, 0) = p.mask (lane, pb);
+                for (int slot = 0; slot < kit::slotStride; ++slot)
+                    out.cell (lane, 0, slot) = p.cell (lane, pb, slot);
+            }
             return;
         }
     }

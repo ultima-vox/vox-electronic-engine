@@ -113,6 +113,13 @@ struct SwitchOutcome {
 // its event (velocity, lock, ratchet... of the caller's cells); may be null.
 template <typename Extra>
 SwitchOutcome switchSubdivision (const BarTiming& from, const BarTiming& to, LaneBar& bar, std::array<Extra, maxSlotsPerBar>* extra) noexcept;
+// The same rule for a change of meter or resolution (any two valid
+// timings): every event keeps its tick from the bar start and goes to the
+// nearest cell of `to`; rejected, changing nothing, on a collision, a
+// |microTicks| over half the new cell (an event past the new bar's end
+// included) or content in a reserved slot of `from`. Off cells are not kept.
+template <typename Extra>
+SwitchOutcome convertBar (const BarTiming& from, const BarTiming& to, LaneBar& bar, std::array<Extra, maxSlotsPerBar>* extra) noexcept;
 
 } // namespace vox::drums::timing
 

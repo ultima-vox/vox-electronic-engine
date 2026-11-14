@@ -16,6 +16,7 @@
 //  - old builds: a state with DROL keeps the c7c29bb schema and sections;
 //  - "Set roles from pad models": factory kits, hats by note and decay,
 //    "?" rows block Apply, Apply is one undo step.
+#include "DrumsPatternTestUtil.h"
 #include "DrumsGeneratorDigest.h"
 #include "DrumsParameters.h"
 #include "FactoryContent.h"
@@ -78,9 +79,16 @@ PadRoles explicitRoles (const Roles& r)
 // Integrated with #129 (drm/genre-fidelity @ 567d696): Breaks and Ambient
 // take the values computed from that branch (design §8.4); the other five
 // are unchanged from c7c29bb.
+// Re-pinned for the PR 137 §10 cell model (the digest hashes the grid, the
+// masks and microTicks; it was 0x658698542ea09551, 0x5366bdf7267d606e,
+// 0x354625583cd12f27, 0xb3e1f4f46bbb1050, 0x932bca8aec35fc3f,
+// 0x178afe258efca0bf, 0x574cb8aac3e13957). Before re-pinning, every
+// generated cell was checked equal to the previous model's (percent micro
+// converted by percentToTicks) over the digest's matrix and more (one-off
+// check recorded in the step 2 PR); only the representation changed.
 constexpr std::array<std::uint64_t, styleCount> c7c29bbDigest = {
-    0x658698542ea09551ull, 0x5366bdf7267d606eull, 0x354625583cd12f27ull, 0xb3e1f4f46bbb1050ull,
-    0x932bca8aec35fc3full, 0x178afe258efca0bfull, 0x574cb8aac3e13957ull,
+    0x0caecfb4787de2c0ull, 0xc7e2dde7a2d3ee8cull, 0x947f76cf829132b0ull, 0x239015bd0543c117ull,
+    0xcacc9831a82e874eull, 0x6b856fad4f3b17f8ull, 0x08643b40ef3f94e0ull,
 };
 
 void empty (StoredPattern& p, int steps, int bars) { digest::emptyPattern (p, steps, bars); }
@@ -89,18 +97,18 @@ void empty (StoredPattern& p, int steps, int bars) { digest::emptyPattern (p, st
 // lane without a slot is empty.
 bool movedEqual (const StoredPattern& identity, const StoredPattern& mapped, const RoleMap& map)
 {
-    if (identity.steps != mapped.steps || identity.bars != mapped.bars || identity.seed != mapped.seed)
+    if (identity.resolution != mapped.resolution || identity.masks != mapped.masks || identity.bars != mapped.bars || identity.seed != mapped.seed)
         return false;
     for (int lane = 0; lane < kit::padCount; ++lane)
     {
         const int slot = map.slotOfLane[static_cast<std::size_t> (lane)];
         for (int bar = 0; bar < mapped.bars; ++bar)
-            for (int step = 0; step < mapped.steps; ++step)
+            for (int step = 0; step < testutil::stepsOf (mapped); ++step)
             {
-                const auto& got = mapped.cell (lane, bar, step);
-                const kit::PatternStep want = slot >= 0 ? identity.cell (slot, bar, step) : kit::PatternStep {};
+                const auto& got = testutil::stepAt (mapped, lane, bar, step);
+                const kit::PatternStep want = slot >= 0 ? testutil::stepAt (identity, slot, bar, step) : kit::PatternStep {};
                 if (got.on != want.on || got.accent != want.accent || got.velocity != want.velocity || got.probability != want.probability
-                    || got.ratchet != want.ratchet || got.micro != want.micro || got.locked != want.locked)
+                    || got.ratchet != want.ratchet || got.microTicks != want.microTicks || got.locked != want.locked)
                     return false;
             }
     }
@@ -110,12 +118,12 @@ bool movedEqual (const StoredPattern& identity, const StoredPattern& mapped, con
 bool laneEqual (const StoredPattern& a, const StoredPattern& b, int laneA, int laneB)
 {
     for (int bar = 0; bar < a.bars; ++bar)
-        for (int step = 0; step < a.steps; ++step)
+        for (int step = 0; step < testutil::stepsOf (a); ++step)
         {
-            const auto& x = a.cell (laneA, bar, step);
-            const auto& y = b.cell (laneB, bar, step);
+            const auto& x = testutil::stepAt (a, laneA, bar, step);
+            const auto& y = testutil::stepAt (b, laneB, bar, step);
             if (x.on != y.on || x.accent != y.accent || x.velocity != y.velocity || x.probability != y.probability
-                || x.ratchet != y.ratchet || x.micro != y.micro || x.locked != y.locked)
+                || x.ratchet != y.ratchet || x.microTicks != y.microTicks || x.locked != y.locked)
                 return false;
         }
     return true;
@@ -124,8 +132,8 @@ bool laneEqual (const StoredPattern& a, const StoredPattern& b, int laneA, int l
 bool laneEmpty (const StoredPattern& p, int lane)
 {
     for (int bar = 0; bar < p.bars; ++bar)
-        for (int step = 0; step < p.steps; ++step)
-            if (p.cell (lane, bar, step).on)
+        for (int step = 0; step < testutil::stepsOf (p); ++step)
+            if (testutil::stepAt (p, lane, bar, step).on)
                 return false;
     return true;
 }
@@ -285,14 +293,14 @@ void testMapping()
             bool four = true;
             for (int bar = 0; bar < 4; ++bar)
                 for (int step = 0; step < 16; ++step)
-                    four = four && (step % 4 == 0 ? p->cell (1, bar, step).on : (! p->cell (1, bar, step).on || (style == 2 && step == 15)));
+                    four = four && (step % 4 == 0 ? testutil::stepAt (*p, 1, bar, step).on : (! testutil::stepAt (*p, 1, bar, step).on || (style == 2 && step == 15)));
             check (four, juce::String ("R5: ") + styleName (static_cast<Style> (style)) + " four-on-the-floor on pad 2");
         }
         empty (*p, 16, 4);
         generatePattern (settings (5, 3, 0.8f, 0.0f), *p, map);   // Breaks: snare always on 5 and 13
         bool back = true;
         for (int bar = 0; bar < 4; ++bar)
-            back = back && p->cell (0, bar, 4).on && p->cell (0, bar, 12).on;
+            back = back && testutil::stepAt (*p, 0, bar, 4).on && testutil::stepAt (*p, 0, bar, 12).on;
         check (back, "R5: the Breaks back-beat is on pad 1");
     }
     // R6: closed hat on pad 9, open hat on pad 12 (pads 4/5 percussion).
@@ -316,7 +324,7 @@ void testMapping()
         bool offbeat = true;
         for (int bar = 0; bar < 4; ++bar)
             for (int step = 0; step < 16; ++step)
-                offbeat = offbeat && (step % 4 != 2 || (p->cell (11, bar, step).on && ! p->cell (8, bar, step).on));
+                offbeat = offbeat && (step % 4 != 2 || (testutil::stepAt (*p, 11, bar, step).on && ! testutil::stepAt (*p, 8, bar, step).on));
         check (offbeat, "R6: Full-on open hat on the off-beats of pad 12, closed hat never there on pad 9");
     }
     // Random full permutations (seeded, reproducible).
@@ -363,13 +371,13 @@ void testMapping()
             empty (*p, 16, 4);
             for (int lane = 0; lane < kit::padCount; ++lane)
                 for (int step = 0; step < 16; ++step)
-                    p->cell (lane, 0, step) = { true, false, 99, 100, 1, 0, false };
-            p->cell (8, 0, 5).locked = true;
+                    testutil::stepAt (*p, lane, 0, step) = { true, false, 99, 100, 1, false, 0 };
+            testutil::stepAt (*p, 8, 0, 5).locked = true;
             auto g = settings (style, 6);
             generatePattern (g, *p, map);
-            ok = ok && p->cell (8, 0, 5).on && p->cell (8, 0, 5).velocity == 99;
+            ok = ok && testutil::stepAt (*p, 8, 0, 5).on && testutil::stepAt (*p, 8, 0, 5).velocity == 99;
             for (int step = 0; step < 16; ++step)
-                ok = ok && (step == 5 || ! p->cell (8, 0, step).on);
+                ok = ok && (step == 5 || ! testutil::stepAt (*p, 8, 0, step).on);
         }
         check (ok, "R10: lanes with a duplicate role or no slot are cleared, locked cells kept");
     }
@@ -381,7 +389,7 @@ void testMapping()
         auto b = std::make_unique<StoredPattern>();
         empty (*p, 16, 4);
         generatePattern (settings (3, 8), *p, map);
-        p->cell (6, 1, 4) = { true, false, 90, 100, 1, 0, false };   // user hit on the none lane of A
+        testutil::stepAt (*p, 6, 1, 4) = { true, false, 90, 100, 1, false, 0 };   // user hit on the none lane of A
         empty (*b, 16, 4);
         generateVariation (settings (3, 8), *p, *b, map);
         check (laneEmpty (*b, 6), "R10: Variation B clears a lane with role none");
@@ -395,14 +403,14 @@ void testMapping()
             auto g = settings (style, 12);
             empty (*p, 16, 4);
             generatePattern (settings ((style + 3) % styleCount, 40), *p);
-            p->cell (0, 2, 7).locked = true;
-            p->cell (12, 3, 15).locked = true;
+            testutil::stepAt (*p, 0, 2, 7).locked = true;
+            testutil::stepAt (*p, 12, 3, 15).locked = true;
             auto before = std::make_unique<StoredPattern> (*p);
             g.laneLocks = 1u << 1;   // pad 2, where the kick now is
             generatePattern (g, *p, map);
-            ok = ok && laneEqual (*before, *p, 1, 1) && p->cell (0, 2, 7).on == before->cell (0, 2, 7).on
-                 && p->cell (0, 2, 7).velocity == before->cell (0, 2, 7).velocity && p->cell (12, 3, 15).locked
-                 && p->cell (12, 3, 15).on == before->cell (12, 3, 15).on;
+            ok = ok && laneEqual (*before, *p, 1, 1) && testutil::stepAt (*p, 0, 2, 7).on == testutil::stepAt (*before, 0, 2, 7).on
+                 && testutil::stepAt (*p, 0, 2, 7).velocity == testutil::stepAt (*before, 0, 2, 7).velocity && testutil::stepAt (*p, 12, 3, 15).locked
+                 && testutil::stepAt (*p, 12, 3, 15).on == testutil::stepAt (*before, 12, 3, 15).on;
         }
         check (ok, "R11: lane and step locks are kept with remapped roles");
     }
@@ -431,8 +439,8 @@ void testMutate()
                     auto g = settings (style, seed);
                     empty (*base, 16, 4);
                     generatePattern (settings ((style + 2) % styleCount, seed + 100), *base);
-                    base->cell (0, 0, 4).locked = true;
-                    base->cell (9, 3, 10).locked = true;
+                    testutil::stepAt (*base, 0, 0, 4).locked = true;
+                    testutil::stepAt (*base, 9, 3, 10).locked = true;
                     // S: the full result for these roles, without locks.
                     empty (*s, 16, 4);
                     mutateLanes (g, 0xffffu, *s, map);
@@ -445,11 +453,11 @@ void testMutate()
                         for (int bar = 0; bar < 4; ++bar)
                             for (int step = 0; step < 16; ++step)
                             {
-                                const auto& got = m->cell (lane, bar, step);
-                                const auto& was = base->cell (lane, bar, step);
+                                const auto& got = testutil::stepAt (*m, lane, bar, step);
+                                const auto& was = testutil::stepAt (*base, lane, bar, step);
                                 const bool selected = (mask & (1u << lane)) != 0;
-                                const auto& want = ! selected || was.locked ? was : s->cell (lane, bar, step);
-                                ok = ok && got.on == want.on && got.velocity == want.velocity && got.micro == want.micro
+                                const auto& want = ! selected || was.locked ? was : testutil::stepAt (*s, lane, bar, step);
+                                ok = ok && got.on == want.on && got.velocity == want.velocity && got.microTicks == want.microTicks
                                      && got.probability == want.probability && got.ratchet == want.ratchet && got.locked == want.locked;
                             }
                     if (mask == 0)
@@ -629,8 +637,8 @@ void testProcessor()
     {
         const int slot = map.slotOfLane[static_cast<std::size_t> (lane)];
         for (int bar = 0; bar < moved->bars; ++bar)
-            for (int step = 0; step < moved->steps; ++step)
-                moved->cell (lane, bar, step) = a->cell (slot, bar, step);
+            for (int step = 0; step < testutil::stepsOf (*moved); ++step)
+                testutil::stepAt (*moved, lane, bar, step) = testutil::stepAt (*a, slot, bar, step);
     }
     ExportOptions options;
     options.bpm = snapshot->bpm;

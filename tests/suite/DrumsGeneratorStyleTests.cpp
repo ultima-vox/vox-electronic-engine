@@ -24,6 +24,7 @@
 #include "FactoryContent.h"
 #include "Generator.h"
 #include "PatternExport.h"
+#include "DrumsPatternTestUtil.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -69,7 +70,7 @@ bool core (Model m) { return m == Model::kick || m == Model::snare || m == Model
 
 bool hit (const StoredPattern& p, int lane, int bar, int pos)
 {
-    return p.cell (lane, bar, pos * (p.steps / 16)).on;
+    return testutil::stepAt (p, lane, bar, pos * (testutil::stepsOf (p) / 16)).on;
 }
 
 int fillLength (const GeneratorSettings& g)
@@ -81,7 +82,7 @@ std::string describe (const GeneratorSettings& g, const StoredPattern& p)
 {
     char b[256];
     std::snprintf (b, sizeof b, "%s seed %u density %.2f complexity %.2f syncopation %.2f fills %.2f variation %.2f, %d steps x %d bars",
-                   styleName (g.style), g.seed, g.density, g.complexity, g.syncopation, g.fills, g.variation, p.steps, p.bars);
+                   styleName (g.style), g.seed, g.density, g.complexity, g.syncopation, g.fills, g.variation, testutil::stepsOf (p), p.bars);
     return b;
 }
 
@@ -105,13 +106,13 @@ void violation (Tally& t, const std::string& what)
 void checkGrammar (Style style, float density, const StoredPattern& p, bool fill, int fillLen, bool kickOn, Tally& t, const std::string& ctx)
 {
     ++t.patterns;
-    const int scale = p.steps / 16;
+    const int scale = testutil::stepsOf (p) / 16;
     for (int bar = 0; bar < p.bars; ++bar)
     {
         ++t.bars;
         for (int lane = 0; lane < kit::padCount; ++lane)
-            for (int step = 0; step < p.steps; ++step)
-                if (p.cell (lane, bar, step).on)
+            for (int step = 0; step < testutil::stepsOf (p); ++step)
+                if (testutil::stepAt (p, lane, bar, step).on)
                 {
                     ++t.hits;
                     if (step % scale != 0)
@@ -179,10 +180,18 @@ void checkGrammar (Style style, float density, const StoredPattern& p, bool fill
     }
 }
 
+// Random previous content in every cell a valid pattern can hold (its
+// bars' active cells; unused storage is always empty, PR 137 §10.5).
 void prefill (StoredPattern& p, std::uint32_t salt)
 {
-    for (std::size_t i = 0; i < p.cells.size(); ++i)
-        p.cells[i].on = ((i * 2654435761u + salt) >> 7) % 3 == 0;
+    for (int lane = 0; lane < kit::padCount; ++lane)
+        for (int bar = 0; bar < p.bars; ++bar)
+            for (int slot = 0; slot < kit::slotStride; ++slot)
+                if (p.timing (lane, bar).slotActive (slot))
+                {
+                    const auto i = static_cast<std::size_t> ((lane * kit::maxPatternBars + bar) * kit::slotStride + slot);
+                    p.cells[i].on = ((i * 2654435761u + salt) >> 7) % 3 == 0;
+                }
 }
 
 void testGrammarMatrix()
@@ -215,18 +224,17 @@ void testGrammarMatrix()
                                     g.variation = v;
                                     g.swing = 0.25f;
                                     g.humanize = 0.3f;
-                                    a->cells.fill ({});
-                                    a->resize (grid[0], grid[1]);
+                                    testutil::emptyGrid (*a, grid[0], grid[1]);
                                     generatePattern (g, *a);
                                     const std::string name = styleName (g.style);
                                     checkGrammar (g.style, d, *a, f > 0.05f && a->bars > 1, fillLength (g), true, tallies[name + " · pattern"], describe (g, *a) + " (pattern)");
-                                    b->resize (grid[0], grid[1]);
+                                    testutil::emptyGrid (*b, grid[0], grid[1]);
                                     generateVariation (g, *a, *b);
                                     checkGrammar (g.style, d, *b, true, fillLength (g), true, tallies[name + " · variation B"], describe (g, *b) + " (variation B)");
                                     // (c) the previous content does not leak into an unlocked pattern
                                     if (seed <= 2 && cx == 0.5f && sy == 0.5f)
                                     {
-                                        again->resize (grid[0], grid[1]);
+                                        testutil::emptyGrid (*again, grid[0], grid[1]);
                                         prefill (*again, seed);
                                         generatePattern (g, *again);
                                         ++deterministic;
@@ -246,12 +254,10 @@ void testSongs()
             for (float d : { 0.2f, 0.6f, 1.0f })
                 for (int length : { 16, 32, 64 })
                 {
-                    for (auto& s : all->slots) s.cells.fill ({});
-                    for (auto& s : all->alternates) s.cells.fill ({});
-                    all->song = SongData::initial();
+                                                            all->song = SongData::initial();
                     all->song.length = static_cast<std::uint8_t> (length);
-                    for (auto& s : all->slots) s.resize (16, 4);
-                    for (auto& s : all->alternates) s.resize (16, 4);
+                    for (auto& s : all->slots) testutil::emptyGrid (s, 16, 4);
+                    for (auto& s : all->alternates) testutil::emptyGrid (s, 16, 4);
                     GeneratorSettings g;
                     g.style = static_cast<Style> (style);
                     g.seed = seed;
@@ -287,7 +293,7 @@ void testFills()
                 g.style = static_cast<Style> (style);
                 g.seed = seed;
                 g.fills = 0.0f;
-                p->resize (16, 4);
+                testutil::emptyGrid (*p, 16, 4);
                 generatePattern (g, *p);
                 g.fills = f;
                 generateFill (g, *p, 1);
@@ -295,11 +301,11 @@ void testFills()
                 const std::string name = styleName (g.style);
                 // bar 2 has the fill; check it as the last bar of a 2-bar slice
                 auto slice = std::make_unique<StoredPattern>();
-                slice->resize (16, 2);
+                testutil::emptyGrid (*slice, 16, 2);
                 for (int lane = 0; lane < kit::padCount; ++lane)
                     for (int bar = 0; bar < 2; ++bar)
                         for (int step = 0; step < 16; ++step)
-                            slice->cell (lane, bar, step) = p->cell (lane, bar, step);
+                            testutil::stepAt (*slice, lane, bar, step) = testutil::stepAt (*p, lane, bar, step);
                 checkGrammar (g.style, g.density, *slice, true, fillLength (g), true, tallies[name + " · fill"], describe (g, *slice) + " (fill in bar 2)");
             }
 }
@@ -329,13 +335,13 @@ void testKitRoles()
                         g.density = d;
                         g.syncopation = sy;
                         g.complexity = 0.6f;
-                        p->resize (16, 4);
+                        testutil::emptyGrid (*p, 16, 4);
                         generatePattern (g, *p);
                         bars += p->bars;
                         for (int lane = 0; lane < kit::padCount; ++lane)
                             for (int bar = 0; bar < p->bars; ++bar)
-                                for (int step = 0; step < p->steps; ++step)
-                                    hits[static_cast<std::size_t> (lane)] += p->cell (lane, bar, step).on ? 1 : 0;
+                                for (int step = 0; step < testutil::stepsOf (*p); ++step)
+                                    hits[static_cast<std::size_t> (lane)] += testutil::stepAt (*p, lane, bar, step).on ? 1 : 0;
                     }
             for (int lane = 0; lane < kit::padCount; ++lane)
             {
@@ -363,14 +369,14 @@ void testKitRoles()
     GeneratorSettings g;
     g.style = Style::fullOn;
     g.seed = 1;
-    p->resize (16, 4);
+    testutil::emptyGrid (*p, 16, 4);
     generatePattern (g, *p);
     int lane1 = 0, lane2 = 0;
     for (int bar = 0; bar < p->bars; ++bar)
         for (int step = 0; step < 16; ++step)
         {
-            lane1 += p->cell (0, bar, step).on ? 1 : 0;
-            lane2 += p->cell (1, bar, step).on ? 1 : 0;
+            lane1 += testutil::stepAt (*p, 0, bar, step).on ? 1 : 0;
+            lane2 += testutil::stepAt (*p, 1, bar, step).on ? 1 : 0;
         }
     report << "### A user kit with pads 1 and 2 swapped (reported, not asserted)\n\n"
               "Psy Full-on kit with pad 1 = " << modelName (kitSwapped.pads[0].model) << " model and pad 2 = " << modelName (kitSwapped.pads[1].model)
@@ -384,7 +390,7 @@ void testKitRoles()
 bool sameStep (const kit::PatternStep& a, const kit::PatternStep& b)
 {
     return a.on == b.on && a.accent == b.accent && a.velocity == b.velocity && a.probability == b.probability
-        && a.ratchet == b.ratchet && a.micro == b.micro && a.locked == b.locked;
+        && a.ratchet == b.ratchet && a.microTicks == b.microTicks && a.locked == b.locked;
 }
 
 void testMutate()
@@ -406,12 +412,11 @@ void testMutate()
                     GeneratorSettings g0;
                     g0.style = static_cast<Style> ((style + 3) % styleCount);
                     g0.seed = seed + 100u;
-                    p->cells.fill ({});
-                    p->resize (16, 4);
+                    testutil::emptyGrid (*p, 16, 4);
                     generatePattern (g0, *p);
-                    p->cell (closedHat, 1, 3).on = true;
-                    p->cell (closedHat, 1, 3).locked = true;
-                    p->cell (kick, 2, 5).locked = true;
+                    testutil::stepAt (*p, closedHat, 1, 3).on = true;
+                    testutil::stepAt (*p, closedHat, 1, 3).locked = true;
+                    testutil::stepAt (*p, kick, 2, 5).locked = true;
                     GeneratorSettings g;
                     g.style = static_cast<Style> (style);
                     g.seed = seed;
@@ -424,19 +429,18 @@ void testMutate()
                     // The selected style's lanes: a fresh pattern with no fill and no locks.
                     auto r = g;
                     r.laneLocks = 0;
-                    reference->cells.fill ({});
-                    reference->resize (16, 4);
+                    testutil::emptyGrid (*reference, 16, 4);
                     generatePattern (r, *reference);
                     ++cases;
                     bool ok = *again == *p;
                     for (int lane = 0; lane < kit::padCount; ++lane)
                         for (int bar = 0; bar < p->bars; ++bar)
-                            for (int step = 0; step < p->steps; ++step)
+                            for (int step = 0; step < testutil::stepsOf (*p); ++step)
                             {
-                                const auto& now = p->cell (lane, bar, step);
-                                const auto& was = before->cell (lane, bar, step);
+                                const auto& now = testutil::stepAt (*p, lane, bar, step);
+                                const auto& was = testutil::stepAt (*before, lane, bar, step);
                                 const bool selected = (mask & (1u << lane)) != 0 && (locks & (1u << lane)) == 0;
-                                ok = ok && (selected && ! was.locked ? sameStep (now, reference->cell (lane, bar, step)) : sameStep (now, was));
+                                ok = ok && (selected && ! was.locked ? sameStep (now, testutil::stepAt (*reference, lane, bar, step)) : sameStep (now, was));
                             }
                     if (! ok)
                     {
@@ -504,8 +508,7 @@ void writeMidiExamples (const juce::File& folder)
             g.density = 0.6f;
             g.complexity = 0.5f;
             g.syncopation = 0.4f;
-            p->cells.fill ({});
-            p->resize (16, 4);
+            testutil::emptyGrid (*p, 16, 4);
             generatePattern (g, *p);
             kit::StepContext context;
             ExportOptions options;
@@ -586,8 +589,7 @@ int main (int argc, char** argv)
             g.density = 0.6f;
             g.complexity = 0.5f;
             g.syncopation = 0.4f;
-            p->cells.fill ({});
-            p->resize (16, 4);
+            testutil::emptyGrid (*p, 16, 4);
             generatePattern (g, *p);
             checkMidiRoundTrip (*p, notes, 140.0, folder.getChildFile (juce::String (styleName (style)).retainCharacters ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") + ".mid"), styleName (style));
         }

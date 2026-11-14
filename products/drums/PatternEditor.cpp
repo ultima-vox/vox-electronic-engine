@@ -18,6 +18,59 @@ constexpr int nameWidth = 70;
 } // namespace
 
 //==============================================================================
+// The editor addresses a lane's cells by their order in its bar ("step":
+// beat by beat, the active cells of each). With every beat straight in 4/4
+// this is the 16th / 32nd / 64th index, as before PR 137 §10.
+namespace {
+int cellCount (const timing::BarTiming& t) noexcept
+{
+    int n = 0;
+    for (int b = 0; b < t.beats(); ++b)
+        n += t.cells (b);
+    return n;
+}
+
+// Beat and cell of `step` (false when the bar has no such cell).
+bool locate (const timing::BarTiming& t, int step, int& beat, int& cell) noexcept
+{
+    if (step < 0)
+        return false;
+    for (beat = 0; beat < t.beats(); ++beat)
+    {
+        if (step < t.cells (beat))
+        {
+            cell = step;
+            return true;
+        }
+        step -= t.cells (beat);
+    }
+    return false;
+}
+
+int slotOfStep (const timing::BarTiming& t, int step) noexcept
+{
+    int beat = 0, cell = 0;
+    return locate (t, step, beat, cell) ? t.slot (beat, cell) : -1;
+}
+
+kit::PatternStep& stepCell (StoredPattern& p, int lane, int bar, int step) noexcept
+{
+    const int slot = slotOfStep (p.timing (lane, bar), step);
+    return p.cell (lane, bar, slot >= 0 ? slot : 0);
+}
+
+int stepCellTicks (const StoredPattern& p, int lane, int bar, int step) noexcept
+{
+    const auto t = p.timing (lane, bar);
+    int beat = 0, cell = 0;
+    return locate (t, step, beat, cell) ? t.cellTicks (beat) : 0;
+}
+
+constexpr timing::Resolution stepResolutions[3] = { timing::Resolution::sixteenth, timing::Resolution::thirtySecond,
+                                                    timing::Resolution::sixtyFourth };
+} // namespace
+
+//==============================================================================
 // The step grid of the shown bar.
 class PatternEditor::Grid final : public juce::Component {
 public:
@@ -28,35 +81,46 @@ public:
     int rows() const { return getHeight() >= 16 * 11 ? padCount : padCount / 2; }
     int firstLane() const { return rows() == padCount ? 0 : owner_.lanePage_ * (padCount / 2); }
 
-    juce::Rectangle<int> cell (int lane, int step) const
+    // Cell `step` of `lane` in the shown bar: its place in the bar's time.
+    juce::Rectangle<float> cellArea (int lane, int step) const
     {
         const auto& p = owner_.shown_;
         const int row = lane - firstLane();
-        if (row < 0 || row >= rows())
+        const auto t = p.timing (lane, owner_.bar_);
+        int beat = 0, c = 0;
+        if (row < 0 || row >= rows() || ! locate (t, step, beat, c))
             return {};
-        const float w = static_cast<float> (getWidth() - nameWidth) / static_cast<float> (p.steps);
+        const float width = static_cast<float> (getWidth() - nameWidth), bar = static_cast<float> (t.barTicks());
         const float h = static_cast<float> (getHeight()) / static_cast<float> (rows());
-        return juce::Rectangle<float> (static_cast<float> (nameWidth) + w * static_cast<float> (step), h * static_cast<float> (row), w, h)
-            .getSmallestIntegerContainer();
+        return { static_cast<float> (nameWidth) + width * static_cast<float> (t.cellStartTick (beat, c)) / bar,
+                 h * static_cast<float> (row), width * static_cast<float> (t.cellTicks (beat)) / bar, h };
     }
+
+    juce::Rectangle<int> cell (int lane, int step) const { return cellArea (lane, step).getSmallestIntegerContainer(); }
 
     bool hit (juce::Point<int> at, int& lane, int& step) const
     {
         const auto& p = owner_.shown_;
         if (at.x < nameWidth || at.y < 0 || at.x >= getWidth() || at.y >= getHeight())
             return false;
-        step = (at.x - nameWidth) * p.steps / juce::jmax (1, getWidth() - nameWidth);
         lane = firstLane() + at.y * rows() / juce::jmax (1, getHeight());
-        return step >= 0 && step < p.steps && lane >= 0 && lane < padCount;
+        if (lane < 0 || lane >= padCount)
+            return false;
+        const auto t = p.timing (lane, owner_.bar_);
+        const int tick = (at.x - nameWidth) * t.barTicks() / juce::jmax (1, getWidth() - nameWidth);
+        step = 0;
+        for (int beat = 0; beat < t.beats(); ++beat)
+            for (int c = 0; c < t.cells (beat); ++c, ++step)
+                if (tick >= t.cellStartTick (beat, c) && tick < t.cellStartTick (beat, c) + t.cellTicks (beat))
+                    return true;
+        return false;
     }
 
     void paint (juce::Graphics& g) override
     {
         const auto& p = owner_.shown_;
-        const float w = static_cast<float> (getWidth() - nameWidth) / static_cast<float> (p.steps);
         const float h = static_cast<float> (getHeight()) / static_cast<float> (rows());
         g.setFont (vox::ui::typography::valueText().withHeight (juce::jlimit (9.0f, 12.0f, h * 0.85f)));
-        const int beat = juce::jmax (1, p.steps / 4);
         for (int row = 0; row < rows(); ++row)
         {
             const int lane = firstLane() + row;
@@ -65,12 +129,18 @@ public:
             g.setColour (lane == owner_.lane_ ? c::text : (laneOn ? c::textSecondary : c::textMuted));
             g.drawText (juce::String (lane + 1) + " " + padName (lane), juce::Rectangle<float> (0.0f, y, nameWidth - 4.0f, h),
                         juce::Justification::centredLeft, true);
-            for (int s = 0; s < p.steps; ++s)
+            const auto t = p.timing (lane, owner_.bar_);
+            int s = 0;
+            for (int beat = 0; beat < t.beats(); ++beat)
+                for (int inBeat = 0; inBeat < t.cells (beat); ++inBeat, ++s)
             {
-                const auto& cellValue = p.cell (lane, owner_.bar_, s);
-                auto r = juce::Rectangle<float> (static_cast<float> (nameWidth) + w * static_cast<float> (s), y, w, h).reduced (w > 8.0f ? 1.0f : 0.5f);
-                const bool playing = s == owner_.playStep_ && owner_.bar_ == owner_.playBar_;
-                g.setColour (playing ? c::panelRaised.brighter (0.35f) : (s % beat == 0 ? c::panelRaised : c::control));
+                const auto& cellValue = p.cell (lane, owner_.bar_, t.slot (beat, inBeat));
+                const auto area = cellArea (lane, s);
+                const float w = area.getWidth();
+                auto r = area.reduced (w > 8.0f ? 1.0f : 0.5f);
+                const int start = t.cellStartTick (beat, inBeat);
+                const bool playing = owner_.bar_ == owner_.playBar_ && owner_.playStep_ >= start && owner_.playStep_ < start + t.cellTicks (beat);
+                g.setColour (playing ? c::panelRaised.brighter (0.35f) : (inBeat == 0 ? c::panelRaised : c::control));
                 g.fillRect (r);
                 if (cellValue.on)
                 {
@@ -80,7 +150,7 @@ public:
                     auto fill = r.reduced (1.0f);
                     if (cellValue.probability < 100)
                         fill = fill.removeFromBottom (fill.getHeight() * static_cast<float> (cellValue.probability) / 100.0f);
-                    fill = fill.translated (static_cast<float> (cellValue.micro) * 0.01f * w, 0.0f);
+                    fill = fill.translated (static_cast<float> (cellValue.microTicks) / static_cast<float> (t.cellTicks (beat)) * w, 0.0f);
                     g.fillRect (fill);
                     if (cellValue.ratchet > 1)
                     {
@@ -138,12 +208,22 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
     }
     steps_ = std::make_unique<vox::ui::VoxComboBox>();
     steps_->addItemList ({ "16 steps", "32 steps", "64 steps" }, 1);
-    steps_->setTooltip ("Steps per bar: 1/16, 1/32 or 1/64 notes");
+    steps_->setTooltip ("Resolution: 1/16, 1/32 or 1/64 notes. Every note keeps its time; a change that cannot keep them is refused");
     steps_->onChange = [this] {
         if (refreshing_)
             return;
-        const int steps = 16 << steps_->getSelectedItemIndex();
-        edit ("steps", [steps] (StoredPattern& p) { p.resize (steps, p.bars); });
+        const auto resolution = stepResolutions[juce::jlimit (0, 2, steps_->getSelectedItemIndex())];
+        // PR 137 §10.3: lossless or refused (never resampled).
+        auto trial = std::make_unique<StoredPattern> (shown_);
+        std::string why;
+        if (! trial->convertGrid (trial->signature, resolution, &why))
+        {
+            exportMessage_ = "Resolution not changed: " + juce::String (why);
+            refreshControls();
+            return;
+        }
+        exportMessage_.clear();
+        edit ("steps", [resolution] (StoredPattern& p) { p.convertGrid (p.signature, resolution); });
     };
     barCount_ = std::make_unique<vox::ui::VoxComboBox>();
     barCount_->addItemList ({ "1 bar", "2 bars", "3 bars", "4 bars" }, 1);
@@ -152,7 +232,7 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         if (refreshing_)
             return;
         const int bars = barCount_->getSelectedItemIndex() + 1;
-        edit ("bars", [bars] (StoredPattern& p) { p.resize (p.steps, bars); });
+        edit ("bars", [bars] (StoredPattern& p) { p.setBars (bars); });
     };
     addAndMakeVisible (*steps_);
     addAndMakeVisible (*barCount_);
@@ -169,8 +249,11 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         edit ("dup", [from] (StoredPattern& p) {
             const int to = (from + 1) % p.bars;
             for (int lane = 0; lane < padCount; ++lane)
-                for (int s = 0; s < p.steps; ++s)
+            {
+                p.mask (lane, to) = p.mask (lane, from);
+                for (int s = 0; s < kit::slotStride; ++s)
                     p.cell (lane, to, s) = p.cell (lane, from, s);
+            }
         });
         selectBar ((from + 1) % shown_.bars);
     };
@@ -179,16 +262,19 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
         const int at = bar_;
         edit ("clear", [at] (StoredPattern& p) {
             for (int lane = 0; lane < padCount; ++lane)
-                for (int s = 0; s < p.steps; ++s)
+                for (int s = 0; s < kit::slotStride; ++s)
                     p.cell (lane, at, s) = {};
         });
     };
     button (swap_, "A/B", "Swap this pattern with its variation B");
     swap_->onClick = [this] {
         editBoth ([] (StoredPattern& a, StoredPattern& b) {
-            // Member-wise: std::swap would put a ~24 KB temporary on the stack.
+            // Member-wise: std::swap would put a ~33 KB temporary on the stack.
             a.cells.swap (b.cells);
-            std::swap (a.steps, b.steps);
+            a.masks.swap (b.masks);
+            std::swap (a.signature, b.signature);
+            std::swap (a.resolution, b.resolution);
+            std::swap (a.followHost, b.followHost);
             std::swap (a.bars, b.bars);
             std::swap (a.seed, b.seed);
         });
@@ -240,7 +326,7 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
     addAndMakeVisible (*grid_);
 
     const auto knob = [this] (std::unique_ptr<vox::ui::VoxKnob>& k, const juce::String& label, double lo, double hi,
-                              std::function<juce::String (double)> text, std::function<void (kit::PatternStep&, double)> set) {
+                              std::function<juce::String (double)> text, std::function<void (kit::PatternStep&, double, int)> set) {
         k = std::make_unique<vox::ui::VoxKnob> (label, vox::ui::VoxKnob::Size::Normal);
         auto& s = k->getSlider();
         s.setRange (lo, hi, 1.0);
@@ -254,21 +340,24 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
             const int lane = lane_, bar = bar_, step = step_;
             const double v = s.getValue();
             edit (key + juce::String (lane) + ":" + juce::String (bar) + ":" + juce::String (step),
-                  [lane, bar, step, v, set] (StoredPattern& p) { set (p.cell (lane, bar, step), v); });
+                  [lane, bar, step, v, set] (StoredPattern& p) { set (stepCell (p, lane, bar, step), v, stepCellTicks (p, lane, bar, step)); });
         };
         addAndMakeVisible (*k);
     };
     knob (velocity_, "Velocity", 1.0, 127.0, [] (double v) { return juce::String (juce::roundToInt (v)); },
-          [] (kit::PatternStep& c, double v) { c.velocity = static_cast<std::uint8_t> (juce::roundToInt (v)); c.on = true; });
+          [] (kit::PatternStep& c, double v, int) { c.velocity = static_cast<std::uint8_t> (juce::roundToInt (v)); c.on = true; });
     knob (probability_, "Chance", 1.0, 100.0, [] (double v) { return juce::String (juce::roundToInt (v)) + " %"; },
-          [] (kit::PatternStep& c, double v) { c.probability = static_cast<std::uint8_t> (juce::roundToInt (v)); });
+          [] (kit::PatternStep& c, double v, int) { c.probability = static_cast<std::uint8_t> (juce::roundToInt (v)); });
     knob (ratchet_, "Ratchet", 1.0, 8.0, [] (double v) { return juce::String (juce::roundToInt (v)) + "x"; },
-          [] (kit::PatternStep& c, double v) { c.ratchet = static_cast<std::uint8_t> (juce::roundToInt (v)); });
+          [] (kit::PatternStep& c, double v, int) { c.ratchet = static_cast<std::uint8_t> (juce::roundToInt (v)); });
     knob (micro_, "Micro", -50.0, 50.0, [] (double v) {
               const int n = juce::roundToInt (v);
               return (n > 0 ? "+" : "") + juce::String (n) + " %";
           },
-          [] (kit::PatternStep& c, double v) { c.micro = static_cast<std::int8_t> (juce::roundToInt (v)); });
+          // Percent of the cell, quantised once to ticks (PR 137 §10.3).
+          [] (kit::PatternStep& c, double v, int cellTicks) {
+              c.microTicks = static_cast<std::int16_t> (kit::percentToTicks (juce::roundToInt (v), cellTicks));
+          });
     micro_->setStyle (vox::ui::VoxKnob::Style::Bipolar);
     accentButton_ = std::make_unique<juce::ToggleButton> ("Accent");
     accentButton_->onClick = [this] {
@@ -276,7 +365,7 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
             return;
         const int lane = lane_, bar = bar_, step = step_;
         const bool on = accentButton_->getToggleState();
-        edit ("accent", [lane, bar, step, on] (StoredPattern& p) { p.cell (lane, bar, step).accent = on; });
+        edit ("accent", [lane, bar, step, on] (StoredPattern& p) { stepCell (p, lane, bar, step).accent = on; });
     };
     addAndMakeVisible (*accentButton_);
     lockButton_ = std::make_unique<juce::ToggleButton> ("Lock");
@@ -286,7 +375,7 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
             return;
         const int lane = lane_, bar = bar_, step = step_;
         const bool on = lockButton_->getToggleState();
-        edit ("lock", [lane, bar, step, on] (StoredPattern& p) { p.cell (lane, bar, step).locked = on; });
+        edit ("lock", [lane, bar, step, on] (StoredPattern& p) { stepCell (p, lane, bar, step).locked = on; });
     };
     addAndMakeVisible (*lockButton_);
 
@@ -326,7 +415,7 @@ void PatternEditor::edit (const juce::String& key, const std::function<void (Sto
         store.copySongBar (songBar_, e->before, generation);
         e->after = e->before;
         change (e->after);
-        e->after.resize (e->after.steps, 1);
+        e->after.setBars (1);
         if (e->after == e->before)
             return;
         e->slot = -1;
@@ -402,15 +491,19 @@ void PatternEditor::update (bool repaintIfChanged)
             lastKey_.clear();
         slot_ = index;
         bar_ = juce::jlimit (0, shown_.bars - 1, bar_);
-        step_ = juce::jlimit (0, shown_.steps - 1, step_);
+        step_ = juce::jlimit (0, cellCount (shown_.timing (lane_, bar_)) - 1, step_);
         changed = true;
     }
-    const double stepPpq = 4.0 / shown_.steps;
-    const auto g = static_cast<long long> (std::floor (processor_.lastPpq() / stepPpq));
+    // The playhead: the tick in the bar, on the bar lines the sequencer used
+    // in the last block (the host's, or counted from the start).
+    const auto tick = static_cast<long long> (std::floor (processor_.lastPpq() * timing::ticksPerQuarter));
+    const long long inBar = tick - processor_.lastBarStartTick();
+    const long long barIndex = processor_.lastBarIndex();
     // A song bar shows the playhead only while that bar plays.
     const bool here = songBar_ < 0 || processor_.songBarPlaying() == songBar_;
-    const int play = processor_.transportPlaying() && g >= 0 && here ? static_cast<int> (g % shown_.steps) : -1;
-    const int playBar = g >= 0 && here ? static_cast<int> ((g / shown_.steps) % shown_.bars) : -1;
+    const bool inside = tick >= 0 && barIndex >= 0 && inBar >= 0 && inBar < processor_.lastBarTicks();
+    const int play = processor_.transportPlaying() && inside && here ? static_cast<int> (inBar) : -1;
+    const int playBar = inside && here ? static_cast<int> (barIndex % shown_.bars) : -1;
     if (play != playStep_ || playBar != playBar_)
     {
         playStep_ = play;
@@ -434,13 +527,16 @@ void PatternEditor::refreshControls()
         b.setEnabled (i < shown_.bars);
         b.setToggleState (i == bar_, juce::dontSendNotification);
     }
-    steps_->setSelectedItemIndex (shown_.steps == 64 ? 2 : shown_.steps == 32 ? 1 : 0, juce::dontSendNotification);
+    steps_->setSelectedItemIndex (shown_.resolution == timing::Resolution::sixtyFourth ? 2
+                                  : shown_.resolution == timing::Resolution::thirtySecond ? 1 : 0,
+                                  juce::dontSendNotification);
     barCount_->setSelectedItemIndex (shown_.bars - 1, juce::dontSendNotification);
-    const auto& c = shown_.cell (lane_, bar_, step_);
+    const auto& c = stepCell (shown_, lane_, bar_, step_);
+    const int cellTicks = juce::jmax (1, stepCellTicks (shown_, lane_, bar_, step_));
     velocity_->getSlider().setValue (c.on ? c.velocity : 100, juce::dontSendNotification);
     probability_->getSlider().setValue (c.probability, juce::dontSendNotification);
     ratchet_->getSlider().setValue (c.ratchet, juce::dontSendNotification);
-    micro_->getSlider().setValue (c.micro, juce::dontSendNotification);
+    micro_->getSlider().setValue (std::round (100.0 * c.microTicks / cellTicks), juce::dontSendNotification);
     accentButton_->setToggleState (c.accent, juce::dontSendNotification);
     for (auto* k : { velocity_.get(), probability_.get(), ratchet_.get(), micro_.get() })
         k->setEnabled (c.on);
@@ -483,7 +579,7 @@ void PatternEditor::selectCell (int lane, int step)
 {
     lane_ = juce::jlimit (0, padCount - 1, lane);
     lanePage_ = lane_ / (padCount / 2);   // a selected lane is always shown
-    step_ = juce::jlimit (0, shown_.steps - 1, step);
+    step_ = juce::jlimit (0, cellCount (shown_.timing (lane_, bar_)) - 1, step);
     refreshControls();
     repaint();
 }
@@ -493,7 +589,7 @@ void PatternEditor::clickCell (int lane, int step)
     selectCell (lane, step);
     const int l = lane_, s = step_, b = bar_;
     edit ("toggle", [l, s, b] (StoredPattern& p) {
-        auto& c = p.cell (l, b, s);
+        auto& c = stepCell (p, l, b, s);
         if (c.on)
             c = {};
         else

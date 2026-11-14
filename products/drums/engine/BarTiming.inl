@@ -2,18 +2,20 @@
 
 namespace vox::drums::timing {
 
+namespace detail {
+// `keepUnchanged`: beats whose subdivision does not change keep their cells
+// (a subdivision switch); otherwise every beat moves (a grid change).
 template <typename Extra>
-SwitchOutcome switchSubdivision (const BarTiming& from, const BarTiming& to, LaneBar& bar, std::array<Extra, maxSlotsPerBar>* extra) noexcept
+SwitchOutcome moveEvents (const BarTiming& from, const BarTiming& to, LaneBar& bar, std::array<Extra, maxSlotsPerBar>* extra,
+                          bool keepUnchanged) noexcept
 {
-    if (! from.valid() || ! to.valid() || ! (from.signature == to.signature) || from.resolution != to.resolution)
-        return { SwitchResult::invalidTiming, -1, -1 };
     for (int s = 0; s < maxSlotsPerBar; ++s)
         if (bar[static_cast<std::size_t> (s)].on && ! from.slotActive (s))
             return { SwitchResult::reservedSlotNotEmpty, s / from.slotsPerBeat(), s % from.slotsPerBeat() };
 
     LaneBar next {};
     std::array<Extra, maxSlotsPerBar> nextExtra {};
-    const auto changed = static_cast<std::uint16_t> (from.alternativeBeats ^ to.alternativeBeats);
+    const auto changed = keepUnchanged ? static_cast<std::uint16_t> (from.alternativeBeats ^ to.alternativeBeats) : std::uint16_t { 0xffff };
     // Beats that keep their subdivision keep their events where they are.
     for (int b = 0; b < from.beats(); ++b)
     {
@@ -67,6 +69,24 @@ SwitchOutcome switchSubdivision (const BarTiming& from, const BarTiming& to, Lan
     if (extra != nullptr)
         *extra = nextExtra;
     return {};
+}
+
+} // namespace detail
+
+template <typename Extra>
+SwitchOutcome switchSubdivision (const BarTiming& from, const BarTiming& to, LaneBar& bar, std::array<Extra, maxSlotsPerBar>* extra) noexcept
+{
+    if (! from.valid() || ! to.valid() || ! (from.signature == to.signature) || from.resolution != to.resolution)
+        return { SwitchResult::invalidTiming, -1, -1 };
+    return detail::moveEvents (from, to, bar, extra, true);
+}
+
+template <typename Extra>
+SwitchOutcome convertBar (const BarTiming& from, const BarTiming& to, LaneBar& bar, std::array<Extra, maxSlotsPerBar>* extra) noexcept
+{
+    if (! from.valid() || ! to.valid())
+        return { SwitchResult::invalidTiming, -1, -1 };
+    return detail::moveEvents (from, to, bar, extra, false);
 }
 
 } // namespace vox::drums::timing

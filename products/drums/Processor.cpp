@@ -546,6 +546,23 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 transport.hasPpq = true;
                 transport.ppq = *ppq;
             }
+            // PR 137 §10.4: read-only; each field only when the host gives it.
+            if (const auto signature = position->getTimeSignature())
+            {
+                transport.hasSignature = true;
+                transport.numerator = signature->numerator;
+                transport.denominator = signature->denominator;
+            }
+            if (const auto barStart = position->getPpqPositionOfLastBarStart())
+            {
+                transport.hasBarStart = true;
+                transport.barStartPpq = *barStart;
+            }
+            if (const auto bars = position->getBarCount())
+            {
+                transport.hasBarCount = true;
+                transport.barCount = *bars;
+            }
         }
     }
     playing_.store (transport.playing, std::memory_order_relaxed);
@@ -555,9 +572,14 @@ void DrumsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const int slot = std::clamp (static_cast<int> (std::lround (load (pattern_))), 0, PatternStore::slotCount - 1);
     const auto& pattern = patternStore_.pull (slot, livePattern_);
     const kit::Song* song = patternStore_.pullSong (liveSong_);
-    songBar_.store (song != nullptr && transport.hasPpq
-                        ? static_cast<int> (kit::songBarAt (*song, static_cast<std::int64_t> (std::floor (transport.ppq / 4.0))))
-                        : -1,
+    // The bar lines the sequencer uses (kit::barGrid: the same rule).
+    const auto grid = kit::barGrid (transport, song != nullptr ? timing::TimeSignature {} : pattern.signature);
+    const auto bar = transport.hasPpq ? grid.barAt (static_cast<std::int64_t> (std::floor (transport.ppq * timing::ticksPerQuarter))) : 0;
+    barStartTick_.store (grid.startOf (bar), std::memory_order_relaxed);
+    barIndex_.store (bar, std::memory_order_relaxed);
+    barTicks_.store (grid.lengthTicks, std::memory_order_relaxed);
+    hostBars_.store (grid.hostBars, std::memory_order_relaxed);
+    songBar_.store (song != nullptr && transport.hasPpq && bar >= 0 ? static_cast<int> (kit::songBarAt (*song, bar)) : -1,
                     std::memory_order_relaxed);
     const bool panic = panicPending_.exchange (false, std::memory_order_acq_rel);
     const auto* sampleViews = samples_.acquire();
@@ -778,7 +800,7 @@ juce::MemoryBlock DrumsProcessor::renderExport (const ExportSnapshot& snapshot)
     std::array<kit::SongBarView, kit::maxSongBars> views {};
     for (int bar = 0; bar < snapshot.songLength; ++bar)
         if (const auto& cells = snapshot.bars[static_cast<std::size_t> (bar)])
-            views[static_cast<std::size_t> (bar)] = { cells->cells.data(), BarCells::stride, cells->steps, cells->seed };
+            views[static_cast<std::size_t> (bar)] = cells->view();
     kit::Song song;
     song.bars = static_cast<std::uint32_t> (snapshot.songLength);
     song.views = views.data();

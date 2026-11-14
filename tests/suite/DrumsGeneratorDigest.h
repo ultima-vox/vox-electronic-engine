@@ -5,7 +5,9 @@
 // Fill, Mutate Lanes with lane and step locks, Song). It calls the generator
 // with its default arguments only, so the same code builds against a
 // generator from before pad roles; the expected values in the test were
-// produced that way from c7c29bb (see DrumsPadRolesTests.cpp).
+// produced that way from c7c29bb (see DrumsPadRolesTests.cpp), and
+// re-pinned for the PR 137 §10 cell model (grid, masks, microTicks), whose
+// per-cell equivalence with the previous model is recorded in the PR.
 
 #include "Generator.h"
 #include "PatternStore.h"
@@ -30,20 +32,27 @@ struct Fnv {
     }
     void pattern (const StoredPattern& p) noexcept
     {
-        byte (p.steps);
+        byte (static_cast<std::uint8_t> (p.signature.numerator));
+        byte (static_cast<std::uint8_t> (p.signature.denominator));
+        byte (static_cast<std::uint8_t> (p.resolution));
         byte (p.bars);
         u32 (p.seed);
         for (int lane = 0; lane < kit::padCount; ++lane)
             for (int bar = 0; bar < p.bars; ++bar)
-                for (int step = 0; step < p.steps; ++step)
-                {
-                    const auto& c = p.cell (lane, bar, step);
-                    byte (static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0) | (c.locked ? 4 : 0)));
-                    byte (c.velocity);
-                    byte (c.probability);
-                    byte (c.ratchet);
-                    byte (static_cast<std::uint8_t> (c.micro));
-                }
+            {
+                const auto t = p.timing (lane, bar);
+                u32 (t.alternativeBeats);
+                for (int beat = 0; beat < t.beats(); ++beat)
+                    for (int cell = 0; cell < t.cells (beat); ++cell)
+                    {
+                        const auto& c = p.cell (lane, bar, t.slot (beat, cell));
+                        byte (static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0) | (c.locked ? 4 : 0)));
+                        byte (c.velocity);
+                        byte (c.probability);
+                        byte (c.ratchet);
+                        u32 (static_cast<std::uint16_t> (c.microTicks));
+                    }
+            }
     }
     void section (const preset::Section& s) noexcept
     {
@@ -53,12 +62,22 @@ struct Fnv {
     }
 };
 
+// The slot of straight step `step` of a 4/4 bar with `steps` steps.
+inline int stepSlot (int steps, int step) noexcept
+{
+    const timing::BarTiming t { {}, steps == 64 ? timing::Resolution::sixtyFourth : steps == 32 ? timing::Resolution::thirtySecond
+                                                                                                : timing::Resolution::sixteenth, 0 };
+    return t.slot (step / (steps / 4), step % (steps / 4));
+}
+
+// An empty 4/4 pattern with `steps` straight cells per bar (16, 32, 64).
 inline void emptyPattern (StoredPattern& p, int steps, int bars) noexcept
 {
-    p.steps = static_cast<std::uint8_t> (steps);
+    p = {};
+    p.resolution = steps == 64 ? timing::Resolution::sixtyFourth : steps == 32 ? timing::Resolution::thirtySecond
+                                                                              : timing::Resolution::sixteenth;
     p.bars = static_cast<std::uint8_t> (bars);
     p.seed = 1;
-    p.cells.fill ({});
 }
 
 inline std::array<std::uint64_t, styleCount> generatorDigest()
@@ -107,8 +126,8 @@ inline std::array<std::uint64_t, styleCount> generatorDigest()
                                     {
                                         emptyPattern (*m, grid[0], grid[1]);
                                         generatePattern (other, *m);
-                                        m->cell (3, 0, 2).locked = true;
-                                        m->cell (8, grid[1] - 1, grid[0] - 1).locked = true;
+                                        m->cell (3, 0, stepSlot (grid[0], 2)).locked = true;
+                                        m->cell (8, grid[1] - 1, stepSlot (grid[0], grid[0] - 1)).locked = true;
                                         GeneratorSettings locked = g;
                                         locked.laneLocks = seed % 2 == 0 ? 0x0020u : 0u;
                                         mutateLanes (locked, mask, *m);

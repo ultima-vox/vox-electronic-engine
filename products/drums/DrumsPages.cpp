@@ -896,7 +896,10 @@ public:
              << "Outputs: Main + Out 2..9 (9 stereo buses); enabled now: "
              << juce::String (juce::BigInteger (static_cast<juce::int64> (processor_.activeOutputs())).countNumberOfSetBits()) << "\n"
              << "Version " << JucePlugin_VersionString << ", state schema " << juce::String (processor_.product().stateSchema)
-             << ", sections DPRM DPAD(2) DSMP(2) DSEQ(3) DSNG(1) DGEN(2) DSTL(1) DUIS(1)";
+             << ", sections DPRM DPAD(2) DSMP(2) DSEQ(4) DSNG(2) DGEN(2) DSTL(1) DUIS(1)";
+        // PR 137 §10.4: say when the host gives no bar positions.
+        if (processor_.transportPlaying() && ! processor_.hostBars())
+            text << "\nHost gives no bar positions; bars counted from the start";
         const auto error = processor_.lastStateError();
         if (error.isNotEmpty())
             text << "\nLast rejected state: " << error;
