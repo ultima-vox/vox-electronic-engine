@@ -75,9 +75,12 @@ PadRoles explicitRoles (const Roles& r)
 // 567d696) changes two values, both from that fix alone: Ambient
 // (0x574cb8aac3e13957) and Breaks (0x178afe258efca0bf), whose Mutate case
 // runs over an Ambient baseline. The other five stay.
+// Integrated with #129 (drm/genre-fidelity @ 567d696): Breaks and Ambient
+// take the values computed from that branch (design §8.4); the other five
+// are unchanged from c7c29bb.
 constexpr std::array<std::uint64_t, styleCount> c7c29bbDigest = {
     0x658698542ea09551ull, 0x5366bdf7267d606eull, 0x354625583cd12f27ull, 0xb3e1f4f46bbb1050ull,
-    0x932bca8aec35fc3full, 0x39d0ed13b56aa19aull, 0x04199d36b4e7e54bull,
+    0x932bca8aec35fc3full, 0x178afe258efca0bfull, 0x574cb8aac3e13957ull,
 };
 
 void empty (StoredPattern& p, int steps, int bars) { digest::emptyPattern (p, steps, bars); }
