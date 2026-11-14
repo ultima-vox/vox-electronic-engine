@@ -85,9 +85,27 @@ int subhitTick (int cellStart, int cellTicks, int index, int count) noexcept;
 // True when all `count` subhits of a cell of `cellTicks` fall on distinct ticks.
 bool subhitsDistinct (int cellTicks, int count) noexcept;
 
-// The sample offset in a block of an event at `eventTick` (absolute, from
-// song position 0): floor ((eventTick / 960 - blockStartPpq) * samplesPerQuarter).
-std::int64_t sampleOffset (std::int64_t eventTick, double blockStartPpq, double samplesPerQuarter) noexcept;
+// The sample of a block on which an event at `eventPpq` (quarter notes from
+// song position 0: tick / 960, plus the swing delay) sounds: the first
+// sample at or after it, ceil ((eventPpq - blockStartPpq) * samplesPerQuarter
+// - 1e-6) (the legacy rule kept for DRM-00, TL decision 6882837766). Negative
+// before the block, >= the block length after it.
+std::int64_t sampleOffset (double eventPpq, double blockStartPpq, double samplesPerQuarter) noexcept;
+
+// Swing (TL decision 6882837766, option A): the delay in quarter notes of
+// cell `cell` of beat `beat`: swing x the cell's length for a straight cell
+// whose index in the bar's straight grid (beat x straight cells per beat +
+// cell; the phase restarts at every bar line) is odd; 0 for every tuplet
+// cell. Playback adds it unrounded; the MIDI export rounds once (exportTick).
+// Computed as swing * (cellTicks / 960.0): in the uniform 4/4 grid this is
+// the legacy swing * step exactly.
+double swingDelay (const BarTiming& timing, int beat, int cell, double swing) noexcept;
+
+// The MIDI export's tick of a continuous time in quarter notes, at
+// `ticksPerQuarter`: the nearest whole tick, an exact tie to the earlier one.
+// Unswung events are whole ticks already; a swung one moves by at most half
+// a tick from what plays (the one exception to tick-identical export).
+std::int64_t exportTick (double ppq, int ticksPerQuarter) noexcept;
 
 //==============================================================================
 // Switching beats between straight and alternative (§10.3): each event keeps

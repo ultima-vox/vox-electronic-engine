@@ -29,6 +29,7 @@
 #include "PatternEditor.h"
 #include "PatternExport.h"
 #include "Presets.h"
+#include "StyleRegistry.h"
 #include "Processor.h"
 #include "common/SuiteEditor.h"
 
@@ -50,6 +51,47 @@
 namespace {
 
 using namespace vox::drums;
+
+// The largest user style the state can embed: the factory styles' largest
+// rules repeated (new salts, parts cycled within the parser's limits), the
+// longest metadata and all assertions, until the canonical text is as close
+// to 64 KiB as possible. Parsed back, so it is a valid canonical style.
+std::shared_ptr<const style::Definition> largestUserStyle()
+{
+    const auto* base = style::factoryDefinition (0);
+    style::Definition d = *base;
+    d.id = "0b6c1f0e-5d2a-4c3b-9e8f-7a6b5c4d3e2f";
+    d.key = "largest-user-style";
+    d.name = juce::String::repeatedString ("N", style::maxMetaText);
+    d.meta.author = juce::String::repeatedString ("A", style::maxMetaText);
+    d.meta.group = juce::String::repeatedString ("G", style::maxMetaText);
+    d.rules.clear();
+    // The rules of the available factory styles, largest first.
+    std::vector<std::pair<int, style::Rule>> pool;
+    for (int id = 0; id < style::registrySize; ++id)
+        if (const auto* f = style::available (id) ? style::factoryDefinition (id) : nullptr)
+            for (const auto& r : f->rules)
+            {
+                style::Definition one = d;
+                one.rules = { r };
+                pool.emplace_back (style::serialize (one).getNumBytesAsUTF8(), r);
+            }
+    std::stable_sort (pool.begin(), pool.end(), [] (const auto& x, const auto& y) { return x.first > y.first; });
+    for (int i = 0; d.rules.size() < static_cast<std::size_t> (style::maxRules) && ! pool.empty(); ++i)
+    {
+        auto r = pool[static_cast<std::size_t> (i) % std::min<std::size_t> (pool.size(), 8)].second;
+        r.part = i % style::partCount;
+        r.salt = 1000 + i;
+        auto next = d;
+        next.rules.push_back (r);
+        if (style::serialize (next).getNumBytesAsUTF8() > style::maxTextBytes)
+            break;
+        d = std::move (next);
+    }
+    auto parsed = std::make_shared<style::Definition>();
+    const auto ok = style::parse (style::serialize (d), *parsed);
+    return ok.wasOk() ? parsed : nullptr;
+}
 
 int failures = 0;
 std::string manifestPath;
@@ -2201,6 +2243,16 @@ void testReviewFindings()
                 bar.cells = cells;
             }
             q.patterns().setEverything (*all);
+            // TL decision 6882837766: the worst case also holds the largest
+            // embedded user style (DSTL, canonical text up to 64 KiB) and
+            // explicit pad roles (DROL).
+            auto g = q.generator();
+            g.custom = largestUserStyle();
+            q.setGenerator (g);
+            std::array<PadRole, kit::padCount> roles {};
+            for (int pad = 0; pad < kit::padCount; ++pad)
+                roles[static_cast<std::size_t> (pad)] = static_cast<PadRole> (1 + pad % (padRoleCount - 1));
+            q.setPadRoles (roles);
         };
         // Owner decision 6814720707: sections of an unknown writer are kept
         // byte for byte, or the whole restore is refused. Never dropped.
@@ -2276,9 +2328,22 @@ void testReviewFindings()
             // The reserve really covers the product's own worst case (plus the longest sample references).
             auto own = makeProcessor();
             fill (*own);
-            check (stateOf (*own).getSize() + 166u * 1024u <= 736u * 1024u,
-                   "unknown sections: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (stateOf (*own).getSize()))
-                       + " bytes without samples)");
+            const auto ownState = stateOf (*own);
+            juce::String sizes;
+            {
+                const auto doc = vox::preset::decode ({ static_cast<const std::byte*> (ownState.getData()), ownState.getSize() },
+                                                      own->product().stateTag, own->product().stateSchema).document;
+                for (const auto& sec : doc.sections)
+                    sizes << juce::String (std::string (sec.tag.begin(), sec.tag.end())) << " " << static_cast<int> (sec.data.size()) << ", ";
+                check (doc.find (styleSectionTag) != nullptr && doc.find (styleSectionTag)->data.size() > 60000 && doc.find (rolesSectionTag) != nullptr,
+                       "largest state: holds a DSTL over 60 KB and DROL (" + sizes + ")");
+            }
+            check (ownState.getSize() + 166u * 1024u <= 736u * 1024u,
+                   "unknown sections: the product's worst-case state fits its reserve (" + juce::String (static_cast<int> (ownState.getSize()))
+                       + " bytes without samples: " + sizes + "+ 166 KiB of sample references <= 736 KiB)");
+            std::printf ("largest state: %d bytes (%s); reserve 736 KiB, %d bytes to spare with 166 KiB of sample references\n",
+                         static_cast<int> (ownState.getSize()), sizes.toRawUTF8(),
+                         static_cast<int> (736 * 1024) - static_cast<int> (ownState.getSize()) - 166 * 1024);
             const auto file = workFolder.getChildFile ("large-kit.voxkitpreset");
             check (fits->presets().save (PresetType::kit, "Large", file).wasOk() && fits->presets().load (file, PresetType::kit).wasOk()
                        && unknownOf (stateOf (*fits)).size() == budget,

@@ -27,8 +27,8 @@ struct ExportedNote {
 };
 
 // The notes of an export, in time order (tick, then lane order): a hit at
-// ppq t is a Note On at round(t * ticksPerQuarter) (t is its integer tick
-// / 960 plus the swing delay); its Note Off is half a ratchet subhit later
+// ppq t is a Note On at timing::exportTick (t) (t is its integer tick / 960
+// plus the unrounded swing delay; rounded once, ties earlier); its Note Off is half a ratchet subhit later
 // (ScheduledHit::gateTicks), or earlier if the same note sounds again
 // before. Hits before position 0 are not exported (they do not play from 0).
 // A pattern exports in its own meter, bar after bar.

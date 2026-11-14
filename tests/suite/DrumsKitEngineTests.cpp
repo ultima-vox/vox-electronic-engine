@@ -1232,6 +1232,137 @@ void testHostBars()
     }
 }
 
+// TL decision 6882837766 (swing option A, legacy sample rule): for swing 0,
+// 0.21 and 0.5, grids of 16ths/32nds/64ths in 4/4, 3/4 and 6/8 (with
+// triplet or duplet beats where the grid allows them), the scheduler plays
+// every canonical hit once on the sample timing::sampleOffset gives, at
+// 44.1/48/96 kHz; tuplet cells are never swung.
+void testSwingMatrix()
+{
+    std::mt19937 random (612);
+    struct Grid { timing::TimeSignature meter; timing::Resolution resolution; };
+    const Grid grids[] = { { { 4, 4 }, timing::Resolution::sixteenth }, { { 4, 4 }, timing::Resolution::thirtySecond },
+                           { { 4, 4 }, timing::Resolution::sixtyFourth }, { { 3, 4 }, timing::Resolution::sixteenth },
+                           { { 6, 8 }, timing::Resolution::sixteenth }, { { 6, 8 }, timing::Resolution::thirtySecond } };
+    int configs = 0, failures = 0, swungTuplets = 0;
+    std::string first;
+    for (const auto& grid : grids)
+        for (const double swing : { 0.0, 0.21, 0.5 })
+        {
+            kit::PatternCells cells {};
+            std::array<std::uint16_t, kit::padCount * kit::maxPatternBars> masks {};
+            kit::Pattern p;
+            p.lanes = 16;
+            p.bars = 2;
+            p.signature = grid.meter;
+            p.resolution = grid.resolution;
+            p.cells = cells.data();
+            p.masks = masks.data();
+            p.seed = 77;
+            const bool tuplets = timing::capacity (grid.meter, grid.resolution).availability == timing::Availability::full;
+            for (int lane = 0; lane < 16; ++lane)
+                for (int bar = 0; bar < 2; ++bar)
+                {
+                    auto& mask = masks[static_cast<std::size_t> (lane * kit::maxPatternBars + bar)];
+                    const timing::BarTiming base { grid.meter, grid.resolution, 0 };
+                    mask = tuplets ? static_cast<std::uint16_t> (random() & ((1u << base.beats()) - 1u)) : 0;
+                    const timing::BarTiming t { grid.meter, grid.resolution, mask };
+                    for (int beat = 0; beat < t.beats(); ++beat)
+                        for (int cell = 0; cell < t.cells (beat); ++cell)
+                        {
+                            if (random() % 4 != 0)
+                                continue;
+                            auto& c = cells[static_cast<std::size_t> ((lane * kit::maxPatternBars + bar) * kit::slotStride + t.slot (beat, cell))];
+                            c = { true, false, static_cast<std::uint8_t> (1 + random() % 127) };
+                            c.ratchet = static_cast<std::uint8_t> (random() % 5 == 0 ? 1 + random() % 8 : 1);
+                            const int half = t.cellTicks (beat) / 2;
+                            c.microTicks = static_cast<std::int16_t> (random() % 4 == 0 ? static_cast<int> (random() % static_cast<unsigned> (2 * half + 1)) - half : 0);
+                        }
+                }
+            // Canonical hits, and no swing on tuplet cells.
+            kit::StepContext ctx;
+            ctx.swing = swing;
+            ctx.laneMask = 0xffffu;
+            std::vector<kit::ScheduledHit> canonical;
+            const auto barTicks = p.barTicks();
+            for (std::int64_t bar = 0; bar < 4; ++bar)
+            {
+                const auto view = p.bar (static_cast<std::uint32_t> (bar % 2));
+                testutil::barHits (view, ctx, bar, bar * barTicks, canonical);
+                for (int lane = 0; lane < 16; ++lane)
+                {
+                    const auto t = view.timing (lane);
+                    for (int beat = 0; beat < t.beats(); ++beat)
+                        if (((t.alternativeBeats >> beat) & 1u) != 0)
+                            for (int cell = 0; cell < t.cells (beat); ++cell)
+                                swungTuplets += timing::swingDelay (t, beat, cell, swing) != 0.0 ? 1 : 0;
+                }
+            }
+            for (const double rate : { 44100.0, 48000.0, 96000.0 })
+            {
+                ++configs;
+                const double bpm = 131.0, spq = 60.0 * rate / bpm;
+                auto settings = kit::legacyKit();
+                settings.sequencerMode = 1;
+                settings.swing = static_cast<float> (swing);
+                settings.accent = 0.5f;
+                ctx.swing = settings.swing;   // the engine reads swing as a float
+                std::vector<kit::ScheduledHit> expected;
+                for (std::int64_t bar = 0; bar <= 4; ++bar)   // bar 5's first cells may sound early (negative micro)
+                    testutil::barHits (p.bar (static_cast<std::uint32_t> (bar % 2)), ctx, bar, bar * barTicks, expected);
+                std::multiset<std::tuple<long long, int, int>> want, got;
+                const double end = 4.0 * barTicks / 960.0;
+                for (const auto& h : expected)
+                    if (h.ppq >= 0.0 && h.ppq < end - 0.01)
+                        want.insert ({ timing::sampleOffset (h.ppq, 0.0, spq), h.pad, h.velocity });
+                kit::KitEngine engine;
+                engine.prepare (rate);
+                std::vector<float> l (333), r (333);
+                long long sample = 0;
+                for (double ppq = 0.0; ppq < end - 0.01; ppq = static_cast<double> (sample) / spq)
+                {
+                    kit::Transport tr;
+                    tr.playing = tr.hasTempo = tr.hasPpq = true;
+                    tr.bpm = bpm;
+                    tr.ppq = ppq;
+                    engine.process (settings, { l.data(), r.data(), nullptr }, 333, nullptr, 0, tr, &p, nullptr, false);
+                    for (int i = 0; i < engine.scheduledCount(); ++i)
+                    {
+                        std::uint32_t off;
+                        std::uint8_t pad, vel;
+                        engine.scheduled (i, off, pad, vel);
+                        if (static_cast<double> (sample + off) / spq < end - 0.01)
+                            got.insert ({ sample + off, pad, vel });
+                    }
+                    sample += 333;
+                }
+                // Block-start rounding may move a hit by one sample.
+                std::size_t matched = 0;
+                auto pool = got;
+                for (const auto& w : want)
+                    for (long long d : { 0LL, -1LL, 1LL })
+                        if (auto it = pool.find ({ std::get<0> (w) + d, std::get<1> (w), std::get<2> (w) }); it != pool.end())
+                        {
+                            pool.erase (it);
+                            ++matched;
+                            break;
+                        }
+                if (matched != want.size() || ! pool.empty() || want.size() < 20)
+                {
+                    ++failures;
+                    if (first.empty())
+                        first = std::to_string (grid.meter.numerator) + "/" + std::to_string (grid.meter.denominator) + " res "
+                              + std::to_string (static_cast<int> (grid.resolution)) + " swing " + std::to_string (swing) + " at "
+                              + std::to_string (static_cast<int> (rate)) + ": " + std::to_string (matched) + " / " + std::to_string (want.size())
+                              + ", " + std::to_string (pool.size()) + " extra";
+                }
+            }
+        }
+    check (failures == 0, "swing matrix: the scheduler plays every canonical hit once on its sample (" + std::to_string (configs) + " configurations"
+                              + (first.empty() ? "" : ", first failure: " + first) + ")");
+    check (swungTuplets == 0, "swing matrix: no tuplet cell is swung");
+}
+
 int main()
 {
     testModels();
@@ -1245,6 +1376,7 @@ int main()
     testSongScheduler();
     testSongLoopRegion();
     testHostBars();
+    testSwingMatrix();
     testStepRules();
     testSchedulerEqualsCanonical();
     if (failures == 0)

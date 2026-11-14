@@ -4,10 +4,12 @@ Status:
 
 - **Step 1 implemented** (`products/drums/engine/BarTiming.{h,inl,cpp}`): the pure timing module
   and the lossless-or-reject subdivision switch.
-- **Step 2 implemented** (this branch, `drm/timing-integration`): one cell model for storage,
-  scheduler, export, song, generator and the old editor, through `BarTiming`. See
-  [Step 2](#step-2-implemented) below. **Three TL decisions are open** (swing, tick → sample
-  rounding, the state budget); nothing in the step pre-empts them.
+- **Step 2 implemented** (PR #140): one cell model for storage, scheduler, export, song,
+  generator and the old editor, through `BarTiming`. See [Step 2](#step-2-implemented) below.
+- **TL decisions (#140 comment 6882837766), all applied:**
+  - swing option A;
+  - the legacy `ceil` sample rule;
+  - a 4-byte packed state cell.
 
 ## Module
 
@@ -23,8 +25,19 @@ Status:
   - the storage slot, and whether a slot is active (reserved slots are inactive).
 - **`subhitTick()`:** ratchet subhits rounded **once** to the nearest tick, exact ties to the
   earlier tick. `subhitsDistinct()` checks a cell length / count pair.
-- **`sampleOffset()`:** the one tick → sample conversion,
-  `floor ((tick / 960 − blockStartPpq) × samplesPerQuarter)`.
+- **`sampleOffset()`:** the one time → sample conversion. An event sounds on the first sample at
+  or after it: `ceil ((eventPpq − blockStartPpq) × samplesPerQuarter − 1e-6)`, the legacy rule
+  that keeps DRM-00.
+  - It is used for integer-tick events and for unrounded swung times.
+  - The result is negative before the block, and ≥ the block length after it.
+- **`swingDelay()`:** the one swing rule.
+  - A straight cell whose index in the bar's straight grid (beat × straight cells + cell) is odd
+    is late by `swing × (cellTicks / 960.0)` quarters. The phase restarts at every bar line.
+  - Tuplet cells are never swung.
+  - In the uniform 4/4 grid this is the legacy `swing × step`, with the same floating-point
+    operation order.
+- **`exportTick()`:** a continuous time rounded once to the nearest tick, an exact tie going to the
+  earlier tick.
 - **`switchSubdivision()`:** moves a lane bar between layouts.
   - Each event keeps its absolute tick and all caller attributes (the template `Extra`).
   - It is rejected, changing nothing, on a collision, a |microTicks| > ½ cell, content in a
@@ -47,7 +60,13 @@ Status:
   - 40/3 → 0, 13, 27;
   - 30/4 ties → 7, 22;
   - distinct subhits for every supported cell length × 1–8.
-- **Samples:** the conversion, including a negative offset.
+- **Samples:**
+  - exact samples, the 1e-6 tolerance, fractional positions, negative offsets;
+  - every event lands in exactly one block at 44.1/48/96 kHz × 64/333/512.
+- **Swing:**
+  - 4/4 at 16th/32nd/64th, 3/4, 6/8 (straight and duplet beats), 7/8 at 8ths;
+  - tuplets are never swung;
+  - `exportTick` ties.
 - **Switches:**
   - 16th ↔ 16th-triplet;
   - the TL tie example (360 → triplet 320 + 40 → straight 240 + 120);
@@ -106,9 +125,20 @@ Status:
   - per pattern: grid (u8 numerator, u8 denominator, u8 resolution), u8 followHost, u8 bars,
     u32 seed;
   - 16 × bars u16 masks;
-  - 16 × bars × slotsPerBar cells: u8 flags, velocity, probability, ratchet, i16 microTicks.
-  - Strict: grid, mask, every value, |micro| ≤ ½ cell, distinct ratchet subhits, empty reserved
-    slots.
+  - 16 × bars × slotsPerBar cells, **each one 32-bit little-endian word** (TL option B;
+    `microTicks` stays `int16` in memory).
+  - Strict, decoded before commit: grid, mask, every value, |micro| ≤ ½ of the actual cell,
+    distinct ratchet subhits, zero reserved bits, empty reserved slots, no truncated or trailing
+    bytes. Values of `on = false` cells in active slots are kept.
+
+  | Bits | Field |
+  |---|---|
+  | 0, 1, 2 | on, accent, locked |
+  | 3–5 | ratchet − 1 (1..8) |
+  | 6–12 | velocity (0..127) |
+  | 13–19 | probability (valid: 1..100) |
+  | 20–28 | microTicks, 9-bit two's complement (valid: ±½ cell, ≤ 240) |
+  | 29–31 | reserved, must be 0 |
 - **`DSNG` v2:** unique bars carry grid, seed, 16 masks and their cells in the same layout. There
   is no song meter.
 
@@ -120,12 +150,13 @@ Status:
   - probability key: (seed, absolute bar × 64 + slot, lane).
   - Scheduler and both exports use it.
   - The uniform `stepLength`, `stepHits` and `songHits` are removed.
-- **Swing (open, PR 140 comment):** a delay of `swing × cell` on straight cells with an odd index
-  in the bar's straight grid. Tuplet cells are not swung.
+- **Swing (TL option A):** `timing::swingDelay`.
   - Playback adds it unrounded, which keeps DRM-00 bit-identical.
-  - Export rounds tick + delay as before (`llround`).
-- **Tick → sample (open):** the scheduler keeps the legacy `ceil(x − 1e-6)` rule (DRM-00);
-  §10.5a says `floor`.
+  - The MIDI export writes `exportTick` of the same continuous time.
+  - **The one exception to tick-identical export:** a swung event can differ from what plays by
+    at most ½ tick. Every unswung event, ratchet subhits included, is tick-identical.
+- **Time → sample:** `timing::sampleOffset` (the legacy `ceil(x − 1e-6)`), the scheduler's only
+  rule.
 - **Bar lines (§10.4), `kit::barGrid`:**
   - With a host bar position: the host's bar start and index, and its meter (when supported).
   - Otherwise: bars of the pattern's meter (a song: 4/4) counted from 0.
@@ -157,19 +188,21 @@ Status:
 
 ### Measured state size (§10.5, the worst-case fixture)
 
-| Section | Before (computed) | Now (measured) |
-|---|---|---|
-| DSEQ | 204,868 | 247,138 |
-| DSNG | 327,808 | 395,785 |
-| State without samples | ≈537,840 | **648,088** |
+The fixture holds 10 patterns at 64 slots × 4 bars and 64 unique 64-slot song bars, every cell
+used. It also holds the largest embedded user style (`DSTL`, canonical text 65,459 bytes) and
+explicit pad roles (`DROL`). Measured on the saved container:
 
-- **The reserve check fails.** The own state may take 583,680 bytes (736 KiB minus 166 KiB for
-  sample references).
-- The fixture also lacks `DSTL` (up to 65,576 bytes) and `DROL`.
-- **Open TL decision** (PR 140 comment):
-  - (B) a bit-packed 4-byte cell (29 bits);
-  - or (A) a larger reserve.
-- The failing check is kept as it is.
+| Section | 6-byte cell (before option B) | 4-byte cell (now) |
+|---|---|---|
+| DSEQ | 247,138 | **165,218** |
+| DSNG | 395,785 | **264,713** |
+| DSTL | (not in the fixture then) | **65,499** |
+| Others (DPRM, DPAD, DSMP, DGEN, DUIS, UIST, DROL) | 5,077 | 5,098 |
+| Whole state, without samples | 648,088 | **500,632** |
+
+- Reserve: 736 KiB, unchanged.
+- With 166 KiB of sample references: **83,048 bytes to spare**.
+- The unknown-section boundary tests (at the budget, one byte over) pass unchanged.
 
 ### Tests
 
@@ -184,11 +217,21 @@ Status:
     jump.
   - Mutation check (local): removing the cut or the jitter threshold fails these tests.
 - **DRM-00 kit parity and legacy parity:** unchanged and passing (bit-identical).
+- **Swing matrix (kit engine):** swing 0 / 0.21 / 0.5 × {4/4 at 16th/32nd/64th, 3/4, 6/8 at
+  16th/32nd} with random tuplet beats, ratchets and micro, at 44.1/48/96 kHz (54
+  configurations). Every canonical hit plays once on its sample; no tuplet cell is swung.
+- **Cell codec (product):**
+  - golden words (empty cell; every flag + ratchet 8 + velocity 127 + micro +240; probability 1
+    + micro −240; an edited off cell; locked + ratchet 5 + micro +120);
+  - little-endian byte order;
+  - round trips of every ratchet × flags × micro −256..255;
+  - reserved bits rejected.
 - **Product:**
   - lossless 16 ↔ 64 conversions;
   - a collision rejected atomically;
   - an off-grid note kept at its tick (+120);
-  - every `DSEQ` v4 rejection (version 3, meter, resolution, mask, reserved slot, values,
-    micro ±121, truncation);
+  - every `DSEQ` v4 rejection: version 3, meter, resolution, mask, a reserved slot (on, or off
+    with values), reserved bits 29/31, probability 0/101/127, micro ±121, +255 and −256,
+    truncation, a trailing byte;
   - a development `DSEQ` v1 is rejected unchanged.
 

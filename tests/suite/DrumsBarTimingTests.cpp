@@ -127,11 +127,74 @@ void testSubhits()
     check (distinct, "ratchet: every supported cell length gives distinct subhits for 1..8");
 }
 
+// Tick -> sample: the first sample at or after the event (the legacy
+// ceil (x - 1e-6), TL decision 6882837766), for integer-tick and swung
+// (fractional) times, at 44.1/48/96 kHz and blocks of 64/333/512.
 void testSamples()
 {
-    check (sampleOffset (960, 0.5, 22050.0) == 11025, "samples: tick 960 from ppq 0.5 at 22050 per quarter");
-    check (sampleOffset (1000, 1.0, 24000.0) == 1000, "samples: 40 ticks at 24000 per quarter");
-    check (sampleOffset (959, 1.0, 44100.0) == -46, "samples: an event before the block start is negative (floor of -45.94)");
+    check (sampleOffset (1.0, 0.5, 22050.0) == 11025, "samples: an exact sample (tick 960 from ppq 0.5 at 22050 per quarter)");
+    check (sampleOffset (1000.0 / 960.0, 1.0, 24000.0) == 1000, "samples: 40 ticks at 24000 per quarter (exact up to rounding error)");
+    check (sampleOffset (959.0 / 960.0, 1.0, 44100.0) == -45, "samples: before the block start: negative, the first sample at or after (-45.94 -> -45)");
+    check (sampleOffset (0.5 + 0.3 / 44100.0, 0.5, 44100.0) == 1, "samples: a fractional position plays on the next sample");
+    check (sampleOffset (0.5 + 0.5e-6 / 44100.0, 0.5, 44100.0) == 0, "samples: within 1e-6 of a sample it plays on that sample");
+    check (sampleOffset (0.5 + 2.0e-6 / 44100.0, 0.5, 44100.0) == 1, "samples: 2e-6 past a sample it plays on the next");
+    // A sweep: every event of a 1-bar 16th grid (swing 0.21) lands in exactly
+    // one block, on the sample the formula gives, whatever the block size.
+    bool partition = true;
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        for (const int block : { 64, 333, 512 })
+        {
+            const double spq = 60.0 * rate / 137.0;
+            const BarTiming t { {}, Resolution::sixteenth, 0 };
+            for (int beat = 0; beat < 4; ++beat)
+                for (int cell = 0; cell < 4; ++cell)
+                {
+                    const double ppq = t.cellStartTick (beat, cell) / 960.0 + swingDelay (t, beat, cell, 0.21);
+                    const auto global = sampleOffset (ppq, 0.0, spq);
+                    int owners = 0;
+                    for (std::int64_t start = 0; start < static_cast<std::int64_t> (4 * spq) + block; start += block)
+                    {
+                        const auto at = sampleOffset (ppq, static_cast<double> (start) / spq, spq);
+                        if (at >= 0 && at < block)
+                        {
+                            ++owners;
+                            partition = partition && std::llabs (start + at - global) <= 1;   // block-start rounding
+                        }
+                    }
+                    partition = partition && owners == 1;
+                }
+        }
+    check (partition, "samples: each event lands in exactly one block at 44.1/48/96 kHz x 64/333/512");
+}
+
+// Swing: odd straight cells by swing x cell, the phase restarting every bar
+// line; tuplet cells never; exportTick rounds once, ties earlier.
+void testSwing()
+{
+    const BarTiming s16 { {}, Resolution::sixteenth, 0 };
+    check (swingDelay (s16, 0, 0, 0.21) == 0.0 && swingDelay (s16, 0, 1, 0.21) == 0.21 * 0.25 && swingDelay (s16, 3, 3, 0.5) == 0.125,
+           "swing: 4/4 16ths, odd cells late by swing x 1/16 (the legacy value exactly)");
+    const BarTiming s32 { {}, Resolution::thirtySecond, 0b0100 };
+    check (swingDelay (s32, 0, 1, 0.5) == 0.5 * 0.125 && swingDelay (s32, 2, 1, 0.5) == 0.0 && swingDelay (s32, 2, 0, 0.5) == 0.0,
+           "swing: 32nds swing odd 32nds; a triplet beat is never swung");
+    const BarTiming s64 { {}, Resolution::sixtyFourth, 0 };
+    check (swingDelay (s64, 1, 15, 0.21) == 0.21 * 0.0625, "swing: 64ths");
+    const BarTiming three { { 3, 4 }, Resolution::sixteenth, 0 };
+    check (swingDelay (three, 2, 3, 0.5) == 0.125 && swingDelay (three, 2, 2, 0.5) == 0.0, "swing: 3/4 keeps the phase per beat");
+    const BarTiming six { { 6, 8 }, Resolution::sixteenth, 0b10 };
+    // 6/8 at 16ths: 6 cells per dotted beat (even), so the phase is the cell's.
+    check (swingDelay (six, 0, 1, 0.5) == 0.5 * 0.25 && swingDelay (six, 0, 2, 0.5) == 0.0 && swingDelay (six, 1, 1, 0.5) == 0.0,
+           "swing: 6/8 straight beat swings odd 16ths; its duplet beat does not");
+    const BarTiming seven { { 7, 8 }, Resolution::eighth, 0 };
+    check (swingDelay (seven, 1, 0, 0.5) == 0.5 * 0.5 && swingDelay (seven, 2, 0, 0.5) == 0.0,
+           "swing: one cell per beat (7/8 at 8ths): the bar's straight index decides (odd eighths)");
+    check (swingDelay (s16, 0, 1, 0.0) == 0.0, "swing 0: no delay");
+    // Exact ties with exactly representable values (2 ticks per quarter).
+    check (exportTick (0.25, 2) == 0 && exportTick (0.75, 2) == 1 && exportTick (-0.25, 2) == -1,
+           "exportTick: an exact tie goes to the earlier tick");
+    check (exportTick (50.4 / 960.0, 960) == 50 && exportTick (50.6 / 960.0, 960) == 51 && exportTick (1000.0 / 960.0, 960) == 1000
+               && exportTick (0.25 + 0.21 * 0.25, 960) == 290,
+           "exportTick: nearest tick; whole ticks unchanged; swing 0.21 on a 16th: 240 + 50.4 -> 290");
 }
 
 // Absolute event ticks (with the extra value) of a lane bar.
@@ -296,6 +359,7 @@ int main()
     testSweep();
     testSubhits();
     testSamples();
+    testSwing();
     testSwitch();
     if (failures == 0)
         std::printf ("VOX Drums bar timing tests passed\n");

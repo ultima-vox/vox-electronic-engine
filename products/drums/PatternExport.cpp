@@ -30,7 +30,9 @@ void barNotes (const kit::BarView& view, const kit::StepContext& context, std::i
                     if (h.ppq < 0.0)
                         continue;   // before position 0: it does not play from 0 either
                     ExportedNote e;
-                    e.tick = static_cast<std::int64_t> (std::llround (h.ppq * tpq));
+                    // The continuous time rounded once (ties earlier): whole
+                    // ticks stay; swing moves by at most half a tick.
+                    e.tick = timing::exportTick (h.ppq, options.ticksPerQuarter);
                     e.offTick = e.tick + std::max<std::int64_t> (1, std::llround (h.gateTicks * tpq / timing::ticksPerQuarter));
                     e.note = notes[h.pad];
                     e.velocity = std::max (1, static_cast<int> (h.velocity));

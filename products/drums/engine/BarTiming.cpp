@@ -153,9 +153,24 @@ bool subhitsDistinct (int cellTicks, int count) noexcept
     return true;
 }
 
-std::int64_t sampleOffset (std::int64_t eventTick, double blockStartPpq, double samplesPerQuarter) noexcept
+std::int64_t sampleOffset (double eventPpq, double blockStartPpq, double samplesPerQuarter) noexcept
 {
-    return static_cast<std::int64_t> (std::floor ((static_cast<double> (eventTick) / ticksPerQuarter - blockStartPpq) * samplesPerQuarter));
+    return static_cast<std::int64_t> (std::ceil ((eventPpq - blockStartPpq) * samplesPerQuarter - 1e-6));
+}
+
+double swingDelay (const BarTiming& t, int beat, int cell, double swing) noexcept
+{
+    if (beat < 0 || beat >= t.beats() || ((t.alternativeBeats >> beat) & 1u) != 0)
+        return 0.0;
+    const int straight = straightCells (beatKind (t.signature), t.resolution);
+    if (((beat * straight + cell) & 1) == 0)
+        return 0.0;
+    return swing * (static_cast<double> (t.cellTicks (beat)) / ticksPerQuarter);
+}
+
+std::int64_t exportTick (double ppq, int ticksPerQuarter) noexcept
+{
+    return static_cast<std::int64_t> (std::ceil (ppq * ticksPerQuarter - 0.5));
 }
 
 } // namespace vox::drums::timing

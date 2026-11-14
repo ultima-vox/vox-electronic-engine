@@ -116,10 +116,19 @@ struct Reader {
 void putGrid (std::vector<std::byte>& out, timing::TimeSignature signature, timing::Resolution resolution);
 // False for an unsupported meter, an unknown resolution or one over 64 slots.
 bool getGrid (Reader& in, timing::TimeSignature& signature, timing::Resolution& resolution);
-// u8 flags (bit 0 on, 1 accent, 2 locked), u8 velocity, u8 probability,
-// u8 ratchet, i16 microTicks.
+// A cell is one 32-bit little-endian word (TL decision 6882837766, option B;
+// microTicks stays an int16 in memory):
+//   bit 0 on, bit 1 accent, bit 2 locked,
+//   bits 3-5 ratchet - 1 (1..8),
+//   bits 6-12 velocity (0..127),
+//   bits 13-19 probability (7 bits; a valid cell holds 1..100),
+//   bits 20-28 microTicks, 9-bit two's complement (-256..255; a valid cell
+//              holds at most half its cell, <= 240),
+//   bits 29-31 reserved, zero.
+std::uint32_t packCell (const kit::PatternStep& c) noexcept;
+bool unpackCell (std::uint32_t word, kit::PatternStep& c) noexcept;   // false: reserved bits set
 void putCell (std::vector<std::byte>& out, const kit::PatternStep& c);
-bool getCell (Reader& in, kit::PatternStep& c);   // false on a short read or unknown flag bits
+bool getCell (Reader& in, kit::PatternStep& c);   // false on a short read or reserved bits
 } // namespace gridcodec
 
 // A StoredPattern is ~33 KB. Code that may run on a host thread with a small

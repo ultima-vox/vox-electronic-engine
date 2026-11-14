@@ -631,15 +631,8 @@ int cellHits (const BarView& bar, const StepContext& context, std::int64_t absol
     const int half = cellTicks / 2;
     const int micro = std::clamp<int> (c.microTicks, -half, half);
     const std::int64_t base = barStartTick + t.cellStartTick (beat, cell) + micro;
-    // Swing (the legacy rule: odd steps of a straight grid late by swing x
-    // step) delays the straight cells with an odd index in the bar's
-    // straight grid; tuplet cells are not swung. Unrounded (PR 140, pending
-    // the TL's decision on swing in the tick model).
-    const bool alternative = ((t.alternativeBeats >> beat) & 1u) != 0;
-    const int straight = timing::straightCells (timing::beatKind (bar.signature), bar.resolution);
-    const double delay = ! alternative && ((beat * straight + cell) & 1) != 0
-                           ? context.swing * (static_cast<double> (cellTicks) / timing::ticksPerQuarter)
-                           : 0.0;
+    // Swing: the one shared rule (timing::swingDelay), unrounded.
+    const double delay = timing::swingDelay (t, beat, cell, context.swing);
     const int ratchet = std::clamp<int> (c.ratchet, 1, maxRatchet);
     const auto gate = static_cast<std::int32_t> (std::max (1, (cellTicks + ratchet) / (2 * ratchet)));
     for (int k = 0; k < ratchet; ++k)
@@ -949,7 +942,8 @@ struct KitEngine::Impl {
         for (int lane = 0; lane < padCount; ++lane)
             if (kit.pads[static_cast<std::size_t> (lane)].laneOn)
                 context.laneMask |= 1u << lane;
-        const auto offsetOf = [&] (double t) { return std::ceil ((t - ppq0) * samplesPerPpq - 1e-6); };
+        // The shared tick -> sample rule (first sample at or after the event).
+        const auto offsetOf = [&] (double t) { return static_cast<double> (timing::sampleOffset (t, ppq0, samplesPerPpq)); };
         int count = 0;
         double latest = horizon;
         std::array<ScheduledHit, maxRatchet> cellOut;

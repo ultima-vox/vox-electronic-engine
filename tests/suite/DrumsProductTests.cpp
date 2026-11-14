@@ -1396,6 +1396,60 @@ std::unique_ptr<vox::drums::StoredPattern> randomPattern (std::mt19937& random, 
     return heap;
 }
 
+// TL decision 6882837766 (option B): the serialized cell is one 32-bit
+// little-endian word with fixed bit positions. Golden words, byte order,
+// every ratchet, the micro range, and reserved-bit rejection.
+void testCellCodec()
+{
+    namespace gc = vox::drums::gridcodec;
+    const auto cell = [] (bool on, bool accent, bool locked, int ratchet, int velocity, int probability, int micro) {
+        kit::PatternStep c;
+        c.on = on;
+        c.accent = accent;
+        c.locked = locked;
+        c.ratchet = static_cast<std::uint8_t> (ratchet);
+        c.velocity = static_cast<std::uint8_t> (velocity);
+        c.probability = static_cast<std::uint8_t> (probability);
+        c.microTicks = static_cast<std::int16_t> (micro);
+        return c;
+    };
+    struct Golden { kit::PatternStep c; std::uint32_t word; const char* what; };
+    const Golden golden[] = {
+        { kit::PatternStep {}, 0x000c8000u, "the empty cell (probability 100, ratchet 1)" },
+        { cell (true, true, true, 8, 127, 100, 240), 0x0f0c9fffu, "every flag, ratchet 8, velocity 127, micro +240" },
+        { cell (true, false, false, 1, 1, 1, -240), 0x11002041u, "probability 1, micro -240 (9-bit two's complement)" },
+        { cell (false, true, false, 3, 64, 50, -1), 0x1ff65012u, "an edited off cell keeps its values, micro -1" },
+        { cell (true, false, true, 5, 99, 100, 120), 0x078c98e5u, "locked, ratchet 5, micro +120" },
+    };
+    bool words = true, back = true;
+    for (const auto& g : golden)
+    {
+        words = words && gc::packCell (g.c) == g.word;
+        kit::PatternStep d;
+        back = back && gc::unpackCell (g.word, d) && d == g.c;
+    }
+    check (words, "cell codec: golden words");
+    check (back, "cell codec: golden words decode to the same cells");
+    std::vector<std::byte> bytes;
+    gc::putCell (bytes, golden[1].c);
+    check (bytes.size() == 4 && std::to_integer<int> (bytes[0]) == 0xff && std::to_integer<int> (bytes[1]) == 0x9f
+               && std::to_integer<int> (bytes[2]) == 0x0c && std::to_integer<int> (bytes[3]) == 0x0f,
+           "cell codec: little endian, low byte first (independent of the machine's byte order)");
+    bool all = true;
+    for (int ratchet = 1; ratchet <= 8; ++ratchet)
+        for (int micro = -256; micro <= 255; micro += 17)
+            for (int flags = 0; flags < 8; ++flags)
+            {
+                const auto c = cell ((flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0, ratchet, (micro + 256) % 128, 1 + (ratchet * 13) % 100, micro);
+                kit::PatternStep d;
+                all = all && gc::unpackCell (gc::packCell (c), d) && d == c && (gc::packCell (c) >> 29) == 0;
+            }
+    check (all, "cell codec: every ratchet 1..8, flags and micro -256..255 round trip; the reserved bits stay zero");
+    kit::PatternStep d;
+    check (! gc::unpackCell (0x000c8000u | 1u << 29, d) && ! gc::unpackCell (0x000c8000u | 1u << 30, d) && ! gc::unpackCell (0x000c8000u | 1u << 31, d),
+           "cell codec: any reserved bit set is rejected");
+}
+
 void testPatterns()
 {
     using vox::drums::PatternStore;
@@ -1462,12 +1516,20 @@ void testPatterns()
         };
         // DSEQ v4, slot 1 at 8: numerator, denominator, resolution,
         // followHost, bars, seed (4), then 16 x bars u16 masks, then the
-        // cells (flags, velocity, probability, ratchet, i16 microTicks).
+        // cells: one little-endian 32-bit word each (gridcodec::packCell).
         // Slot 1 here: 4/4, 16ths (6 slots per beat, the last 2 reserved).
         const auto bars = static_cast<std::size_t> (std::to_integer<int> (good[12]));
         const std::size_t masks = 17, cells = masks + 16 * bars * 2;
         check (std::to_integer<int> (good[8]) == 4 && std::to_integer<int> (good[9]) == 4 && std::to_integer<int> (good[10]) == 1,
                "DSEQ v4: slot 1 is a 4/4 16th grid");
+        const auto word = [&] (std::size_t cell, std::uint32_t w) {
+            auto d = good;
+            for (int i = 0; i < 4; ++i)
+                d[cells + 4 * cell + static_cast<std::size_t> (i)] = static_cast<std::byte> ((w >> (8 * i)) & 0xffu);
+            return d;
+        };
+        // A valid on cell: velocity 100, probability 100, ratchet 1, micro 0.
+        const std::uint32_t on = 1u | 100u << 6 | 100u << 13;
         bad ({}, "empty");
         bad (edit (0, 3), "development version 3");
         bad (edit (0, 5), "unknown version");
@@ -1480,21 +1542,17 @@ void testPatterns()
         bad (edit (12, 0), "0 bars");
         bad (edit (12, 5), "5 bars");
         bad (edit (masks + 0, 0x10), "a triplet mask bit beyond the 4 beats");
-        bad (edit (cells + 4 * 6, 1), "content in a reserved slot (beat 1, slot 5)");
-        bad (edit (cells, 8), "unknown flag");   // bit 2 (4) is the step lock
-        bad (edit (cells + 1, 128), "velocity 128");
-        bad (edit (cells + 2, 0), "probability 0");
-        bad (edit (cells + 2, 101), "probability 101");
-        bad (edit (cells + 3, 0), "ratchet 0");
-        bad (edit (cells + 3, 9), "ratchet 9");
-        {
-            auto d = edit (cells + 4, 121);   // +121 ticks in a 240-tick cell
-            d[cells + 5] = std::byte { 0 };
-            bad (d, "microTicks +121 (over half a cell)");
-            d[cells + 4] = std::byte { 0x87 };   // -121
-            d[cells + 5] = std::byte { 0xff };
-            bad (d, "microTicks -121");
-        }
+        bad (word (4, on), "content in a reserved slot (beat 1, slot 5)");
+        bad (word (4, 100u << 13 | 1u << 3), "a non-empty off cell in a reserved slot (ratchet 2)");
+        bad (word (0, on | 1u << 29), "reserved bit 29");
+        bad (word (0, on | 1u << 31), "reserved bit 31");
+        bad (word (0, 1u | 100u << 6 | 0u << 13), "probability 0");
+        bad (word (0, 1u | 100u << 6 | 101u << 13), "probability 101");
+        bad (word (0, 1u | 100u << 6 | 127u << 13), "probability 127");
+        bad (word (0, on | (121u & 0x1ffu) << 20), "microTicks +121 (over half a 240-tick cell)");
+        bad (word (0, on | (static_cast<std::uint32_t> (-121) & 0x1ffu) << 20), "microTicks -121");
+        bad (word (0, on | (255u & 0x1ffu) << 20), "microTicks +255");
+        bad (word (0, on | (static_cast<std::uint32_t> (-256) & 0x1ffu) << 20), "microTicks -256");
         {
             auto d = good;
             d.pop_back();
@@ -1590,7 +1648,7 @@ void testPatterns()
                     if (h.ppq < 0.0)
                         continue;
                     const int noteNumber = p->kitStore().pad (h.pad).note;
-                    auto& v = merged[{ std::llround (h.ppq * 960.0), noteNumber }];
+                    auto& v = merged[{ static_cast<long long> (timing::exportTick (h.ppq, 960)), noteNumber }];
                     v = std::max (v, static_cast<int> (h.velocity));
                 }
             }
@@ -2289,6 +2347,7 @@ int main (int argc, char** argv)
     testSound();
     testState();
     testStateReentrancy();
+    testCellCodec();
     testPatterns();
     testExportPlaybackParity();
     testPatternEditorUi();

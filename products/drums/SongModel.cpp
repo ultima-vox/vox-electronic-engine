@@ -13,7 +13,8 @@ using gridcodec::putU32;
 using gridcodec::putU8;
 using gridcodec::Reader;
 
-// DSNG version 2 (PR 137 §10.5): unique bars carry their grid and masks;
+// DSNG version 2 (PR 137 §10.5): unique bars carry their grid and masks
+// and 32-bit cells (gridcodec::packCell);
 // no song meter (bars follow the host). Version 1 was a development build
 // and is not decoded (#136 policy).
 constexpr std::uint32_t songVersion = 2;

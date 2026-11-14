@@ -67,26 +67,40 @@ bool getGrid (Reader& in, timing::TimeSignature& signature, timing::Resolution& 
     return timing::capacity (signature, resolution).availability != timing::Availability::unavailable;
 }
 
+std::uint32_t packCell (const kit::PatternStep& c) noexcept
+{
+    // Values outside the fields (never in a valid pattern) are clamped.
+    const auto ratchet = static_cast<std::uint32_t> (std::clamp<int> (c.ratchet, 1, kit::maxRatchet) - 1);
+    const auto velocity = static_cast<std::uint32_t> (std::min<int> (c.velocity, 127));
+    const auto probability = static_cast<std::uint32_t> (std::min<int> (c.probability, 127));
+    const auto micro = static_cast<std::uint32_t> (std::clamp<int> (c.microTicks, -256, 255)) & 0x1ffu;
+    return (c.on ? 1u : 0u) | (c.accent ? 2u : 0u) | (c.locked ? 4u : 0u) | ratchet << 3 | velocity << 6 | probability << 13 | micro << 20;
+}
+
+bool unpackCell (std::uint32_t w, kit::PatternStep& c) noexcept
+{
+    if ((w >> 29) != 0)
+        return false;   // the three reserved bits must be zero
+    c.on = (w & 1u) != 0;
+    c.accent = (w & 2u) != 0;
+    c.locked = (w & 4u) != 0;
+    c.ratchet = static_cast<std::uint8_t> (((w >> 3) & 7u) + 1u);
+    c.velocity = static_cast<std::uint8_t> ((w >> 6) & 0x7fu);
+    c.probability = static_cast<std::uint8_t> ((w >> 13) & 0x7fu);
+    const auto micro = static_cast<int> ((w >> 20) & 0x1ffu);
+    c.microTicks = static_cast<std::int16_t> (micro >= 256 ? micro - 512 : micro);   // 9-bit two's complement
+    return true;
+}
+
 void putCell (std::vector<std::byte>& out, const kit::PatternStep& c)
 {
-    putU8 (out, static_cast<std::uint8_t> ((c.on ? 1 : 0) | (c.accent ? 2 : 0) | (c.locked ? 4 : 0)));
-    putU8 (out, c.velocity);
-    putU8 (out, c.probability);
-    putU8 (out, c.ratchet);
-    putU16 (out, static_cast<std::uint16_t> (c.microTicks));
+    putU32 (out, packCell (c));
 }
 
 bool getCell (Reader& in, kit::PatternStep& c)
 {
-    const auto flags = in.u8();
-    c.velocity = in.u8();
-    c.probability = in.u8();
-    c.ratchet = in.u8();
-    c.microTicks = static_cast<std::int16_t> (in.u16());
-    c.on = (flags & 1u) != 0;
-    c.accent = (flags & 2u) != 0;
-    c.locked = (flags & 4u) != 0;
-    return in.ok && flags <= 7u;
+    const auto w = in.u32();
+    return in.ok && unpackCell (w, c);
 }
 } // namespace gridcodec
 
@@ -449,11 +463,11 @@ const kit::Pattern& PatternStore::pull (int index, Live& live) noexcept
 // 5 slots (A) and their 5 alternates (B), each: grid (u8 numerator, u8
 // denominator, u8 resolution), u8 followHost, u8 bars (1..4), u32 seed,
 // 16 lanes x bars u16 subdivision masks (lane-major), then 16 lanes x bars x
-// slotsPerBar cells (lane-major, the bar's storage slots in order; cell
-// layout in gridcodec). Strict: an unsupported grid, a mask beyond the beats
-// or not allowed, a value out of range, a |microTicks| over half a cell or
-// content in a reserved slot rejects the section. Only these bytes are
-// written: a full pattern (4/4 at 16th, 4 bars) is 9 + 128 + 16 x 4 x 24 x 6
+// slotsPerBar cells (lane-major, the bar's storage slots in order), each a
+// 32-bit word (gridcodec::packCell). Strict: an unsupported grid, a mask
+// beyond the beats or not allowed, a value out of range, a |microTicks| over
+// half a cell, nonzero reserved bits or content in a reserved slot rejects
+// the section. A full 64-slot pattern of 4 bars is 9 + 128 + 16 x 4 x 64 x 4
 // bytes.
 namespace {
 
