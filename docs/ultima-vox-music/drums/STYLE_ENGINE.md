@@ -140,3 +140,40 @@ Not yet done:
 - `DGEN` v2 (style by UUID) and `DSTL` (embedded user style). Their exact state layout is
   committed before the code.
 - Import UI, library folder, collision handling.
+
+## State layout: `DGEN` v2 and `DSTL` v1 (exact; committed before the code)
+
+Pre-release policy (#136): there is **no `DGEN` v1 decoder**. A development-build state with
+`DGEN` v1 is rejected like any unsupported version. All integers are little-endian.
+
+### `DGEN` v2: generator settings, 58 bytes
+
+| Offset | Size | Field | Rule |
+|---|---|---|---|
+| 0 | 4 | `u32 version` = 2 | anything else rejects |
+| 4 | 16 | style UUID, the 32 hex digits of the canonical text in order (byte *i* = digits 2*i*, 2*i*+1) | a registry UUID (factory style, ids 0–22, available or not), or the id of the state's `DSTL` |
+| 20 | 32 | 8 × `f32`: density, groove, syncopation, swing, humanize, complexity, fills, variation | finite, 0–1 |
+| 52 | 4 | `u32 seed` | any |
+| 56 | 2 | `u16 laneLocks` | any |
+
+- Size other than 58 → rejected.
+- An unknown UUID with no matching `DSTL` → rejected: "unknown generator style".
+
+### `DSTL` v1: the user style the generator uses, embedded for portability
+
+| Offset | Size | Field | Rule |
+|---|---|---|---|
+| 0 | 4 | `u32 version` = 1 | anything else rejects |
+| 4 | 32 | SHA-256 of the text bytes (= `documentHash`) | must match |
+| 36 | 4 | `u32 length` *n* | 1 – 65,536 |
+| 40 | *n* | the style's canonical UTF-8 text (`style::serialize`) | must parse, and must serialize back to exactly these bytes |
+
+- **At most one `DSTL`.** It is written only when the generator style is a user style.
+- **The `DSTL` id must equal the `DGEN` UUID.** A `DSTL` whose id is a factory UUID, or that
+  `DGEN` does not reference, is rejected.
+- The embedded copy is used on restore, whatever the local library holds.
+- Any rejection leaves the live state unchanged (transactional restore).
+- **Presets:** a Song preset carries `DGEN` and, for a user style, `DSTL`. Loading one replaces
+  both. A preset without `DSTL` removes the project's `DSTL`.
+- **Budget:** `DSTL` ≤ 65,576 bytes + section header. This must be measured by the boundary
+  fixture (#130 T21); `productStateReserve()` is reviewed with that number.
