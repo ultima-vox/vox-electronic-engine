@@ -350,6 +350,9 @@ Each pattern gets a **meter**:
 
 ### 10.5 Generator in other meters
 
+- **4/4 is mandatory for every style** (owner, 2026-11-14). All 23 factory styles have full
+  4/4 rules, the §3 tables. 3/4, 6/8 and 12/8 are added on top for the styles in the table
+  below; they never replace 4/4.
 - Every style has a **native meter** and the list of meters it supports. The style-defaults
   preset sets the native meter.
 - Generating into a pattern of an unsupported meter is refused with a message: never silently
@@ -450,6 +453,8 @@ Architecture Guard review before code.
 
 - **Size:** a file is at most 64 KiB. At most 64 rules per role and meter, 4 meters, 24
   positions per rule, 8 ratchet values from 1–8.
+- **4/4 required:** a style without `"4/4"` in `meters` and full 4/4 rules is rejected.
+  Triple meters are optional additions.
 - **Values:** numbers are finite. Velocity is 0–1; coefficients are −2…2; tempo is 40–300.
 - **Schema:** an unknown key, a wrong type, an unknown role or meter, a position outside the
   meter, or a duplicate id rejects the file. The error names the field: e.g. "rules.4/4.lanes.clap[0].at[2]: 17 is outside 4/4 (1–16)".
