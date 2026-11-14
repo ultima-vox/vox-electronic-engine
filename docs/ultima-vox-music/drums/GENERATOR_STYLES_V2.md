@@ -432,7 +432,7 @@ Settled here as engineering details:
 Open for review: the per-style rules of §3 (Architecture Guard / tech lead) and the listening
 gate per style (owner).
 
-## 10. Meters, mixed tuplets and timing (revision 6: exact-tick, round-trip and size-budget clarifications)
+## 10. Meters, mixed tuplets and timing (revision 7: continuous Swing, sample offset, packed state)
 
 Owner decisions (2026-11-14):
 
@@ -560,15 +560,13 @@ All ordinary cell starts at these resolutions are integer ticks; user micro edit
 - **`DSEQ`, new version:**
   - per pattern: meter (n, d), resolution, and whether the meter follows the host;
   - per lane and bar: a 16-bit subdivision mask (one bit per beat);
-  - cells, at most 64 slots per bar, with `microTicks` as a signed 16-bit value instead of the
-    percent byte;
+  - cells, at most 64 slots per bar. `microTicks` is signed int16 **in memory**; on disk DSEQ/DSNG cells are fixed 4-byte little-endian words containing flags (3 bits), ratchet minus one (3), velocity (7), probability (7), microTicks signed 9-bit two's complement (9), reserved zero (3). The implementation must explicitly document bit positions and golden vectors; do not use implementation-defined bitfields.
   - **reserved but inactive slots** (the slots of a beat beyond its current subdivision's cell
     count) must be empty: any content there rejects the restore.
-  - Strict decode: an unknown meter or resolution, a combination over 64 slots, or a mask bit
-    beyond the bar's beats rejects the restore.
+  - Strict decode rejects unknown meter/resolution, invalid mask or capacity, malformed inactive slots, probability/ratchet/velocity range errors, microTicks beyond ±half actual cell, nonzero packed high bits, truncated/trailing bytes. Rejection is transactional.
 - `DSNG`: no song meter (bars follow the host); version bump.
 - Development-build versions are not decoded (#136 policy).
-- **Actual state budget:** each serialized cell's one-byte signed-percent `micro` becomes two-byte signed `microTicks`, adding **one byte per serialized cell**. At the maximum of 16 lanes × 4 bars × 64 slots this is **up to +4096 bytes per pattern**, plus **up to +128 bytes** of subdivision masks (`16 × 4 × 2`) and meter/resolution metadata. There are five A and five B patterns, and unique Song bars may also store cells. Measure the actual full `DSEQ`, `DSNG`, `DSTL` and container bounds (with headers) in #130 T21 before calling the budget accepted; an unchanged cell *count* is not unchanged byte size.
+- **State budget (binding TL #140):** the uncompressed six-byte cell codec exceeded the 736-KiB product reserve in the measured worst-case fixture; the **four-byte packed codec is approved** for the first release. Reported estimates after packing are DSEQ ~165,218 bytes and DSNG ~264,714 bytes but **final budget PASS is pending**. Keep the reserve unchanged initially. Measure complete DSEQ/DSNG + 64-KiB DSTL + DROL + maximum legal sample references + preserved unknown-section allowance, headers and checksums, with 10 full patterns and 64 full unique Song bars. Include malformed input and exact round-trip tests in #130 T21.
 
 ### 10.5a One shared timing engine (revision 5, AG review 5906187802)
 
@@ -594,29 +592,30 @@ All ordinary cell starts at these resolutions are integer ticks; user micro edit
   - the scheduler: hit tick = bar start tick + cellStartTick + microTicks, with ratchet subhits calculated from the cell's rational tick duration using the exact same quantisation rule as export;
   - the generator: positions to cells;
   - the editor: geometry and editing;
-  - pattern and song MIDI export: consume the exact same quantised integer-tick event list as the scheduler;
+  - pattern and song MIDI export: unswung events/ratchets share integer ticks with playback; **continuous swung** audio is converted once to the nearest whole 960-PPQ tick (maximum 0.5-tick difference), as explicitly approved in #140;
   - the subdivision switch.
 - No subsystem reconstructs timing on its own. The uniform `stepLength` arithmetic is
   removed.
 - **Ticks to samples:**
   - Ordinary cell-start + `microTicks` note positions are integral. **Ratchet subhits need not be integral before rounding** (e.g. a 40-tick cell divided by 3). A single allocation-free integer/rational helper must map each subhit to the **nearest whole tick, with exact ties to the earlier tick**, and both scheduler and MIDI export must consume these quantised events, maintaining increasing order and rejecting a combination if two distinct subhits cannot be represented without collision.
-  - Once the shared event tick is known, `sampleOffset = floor((eventTick / 960 − blockStartPPQ) × samplesPerQuarter)` with explicit block boundary/clamping tests. The exporter writes this **same eventTick**. Unit tests assert deterministic equality to this conversion at 44.1/48/96 kHz and blocks 64/333/512; this internal equality is not evidence of host transport precision.
+  - **Audio sample conversion** retains the verified `ceil((eventPpq - blockStartPpq) * samplesPerQuarter - 1e-6)` rule (first sample at/after the event), not `floor`. Inputs may be exact ticks / 960 or continuous PPQ after Swing; export rounds Swing once but realtime retains it. Verify DRM-00 parity, fractional PPQ, negative/block boundary cases at 44.1/48/96 kHz and blocks 64/333/512.
+  - **Swing (TL #140 option A):** shared continuous `swing × cellTicks` delay on alternating **straight** cells, never automatically on tuplet cells. Specify phase per beat/bar; reproduce old 4/4 uniform-grid floating operation order so frozen kit parity stays bit-identical. Export rounds absolute swung time once (ties earlier); Swing = 0 keeps exact tick equality. Test 0, 0.21 and 0.5 in Pattern/Song and mixed subdivisions.
 - **Host jumps:**
   - a discontinuity is a PPQ step backwards of more than 1 tick, or forwards of more than one
     block plus 1 tick;
   - smaller differences are floating-point jitter and do not reset the scheduler.
 
-### 10.5b Test matrix for revision 5 (before `DSEQ` is frozen)
+### 10.5b Test matrix for revision 7 (before `DSEQ` is frozen)
 
 | Area | Cases |
 |---|---|
-| Capacity | every (meter, resolution) of §10.2: slots per beat and bar; unavailable combinations refused with their reason |
+| Capacity | All allowed meters/resolutions and 4-byte cell format; measured max DSEQ/DSNG/DSTL/DROL/sample references plus preserved-state allowance ≤736 KiB before PASS |
 | Subdivision switches | 4/4 16th ↔ 16th-triplet and 32nd ↔ 32nd-triplet; 3/4 likewise; 6/8 and 12/8 straight ↔ duplet; on-grid and humanised/off-grid notes at ±½ cell. Any accepted conversion preserves absolute ticks and all event attributes; a second inverse edit can choose a different cell on a tie. **Undo/Redo alone** must restore bit-identical state. |
 | Rejections | two events into one cell; a \|microTicks\| > ½ cell; a locked step that would split or move; each leaves cells, mask, ticks and history unchanged |
 | Undo/redo | every accepted switch; bit-identical restore |
 | Reserved slots | inactive slots remain empty after all operations; DSEQ with nonempty inactive slots is rejected. Old `StoredPattern::resize` drops off-grid events and MUST NOT be used for new meter/resolution changes; conversions are lossless-or-atomic-reject. |
-| Scheduler | mixed straight/tuplet notes, shared integer-tick to sample conversion at 44.1/48/96 kHz and block sizes 64/333/512; fractional ratchet subhits rounded exactly once, in order |
-| Export | pattern and song emit the same tick events (including quantised ratchets) as playback; check NoteOn/Off ordering and time-signature events, with no dropped notes |
+| Scheduler | mixed straight/tuplet notes; one ceil(x−1e-6) sample conversion at 44.1/48/96 kHz, blocks 64/333/512; continuous swung audio and DRM-00 parity |
+| Export | Same integer tick events when unswung; Swing rounded once to 960-PPQ tick (≤0.5-tick difference); correct NoteOn/Off and time-signature events |
 | Host | meter changes, loops, jumps, transport jitter and missing fields; export independent from host; first/last beat micro offsets crossing bar boundaries must be scheduled/exported coherently, or rejected clearly before editing, never silently omitted |
 
 ### 10.6 Generator
@@ -636,7 +635,7 @@ All ordinary cell starts at these resolutions are integer ticks; user micro edit
   - every (style, meter, resolution) the style supports;
   - the grammar matrix;
   - every generated hit inside the bar's capacity;
-  - switching subdivisions back and forth restores bit-identical cells.
+  - subdivision switching preserves absolute hit time; **Undo/Redo** restores the exact cell state, not necessarily a separate inverse edit.
 
 ### 10.7 UI
 
