@@ -1,5 +1,9 @@
 {
-  "format": "vox-drums-style", "version": 1, "key": "house", "name": "House",
+  "format": "vox-drums-style", "version": 1,
+  "id": "bc13d2b9-ce97-4aaf-84cf-1bf84a409fe6", "key": "house", "name": "House",
+  "meta": { "author": "Ultima Vox", "group": "House & Techno", "tempo": { "min": 120, "max": 126 } },
+  "meters": ["4/4"],
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.25, "humanize": 0.15 },
   "rules": [
     { "part": "kick", "at": [1, 5, 9, 13], "velocity": 0.95, "accent": true },
     { "part": "kick", "at": [16], "kind": "ghost", "chance": "0.1 + 0.4 * syncopation", "velocity": 0.6 },
@@ -11,5 +15,7 @@
     { "part": "perc1", "at": [8, 11, 14], "kind": "ghost", "chance": "0.15 + 0.55 * syncopation * (0.5 + density)", "velocity": 0.5 },
     { "part": "snare", "at": [16], "kind": "ghost", "chance": "0.1 + 0.4 * complexity", "velocity": 0.45 }
   ],
-  "fill": { "cycle": ["clap", "snare", "snare"], "ratchet": 2 }
+  "fill": { "cycle": ["clap", "snare", "snare"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true }
 }

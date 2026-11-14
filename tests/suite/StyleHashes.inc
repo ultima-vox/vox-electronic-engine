@@ -1,9 +1,9 @@
-// SHA-256 of the factory style definitions, ids 0..6 (StyleDefinition contentHash).
-// Update deliberately when a factory definition changes.
-"e440547c12479dbef7a7cfad2d315b8e60c4429aeb8ed0b26d8fe7c71bc8a581",   // full-on
-"d24b85cb1ccdc8840a6f2196322f82e0ea03433f41f07e2ff48bb9fc27230330",   // goa
-"b4ef8d56bc7fa5fa591ba0352d1d9c721fb1b856bde8cb4fb7c6510dfc554ffb",   // house
-"502e84358365f546f82b59ffe69610f3e351ce8b8b0996cf7fdfccfe11575114",   // techno
-"92271724aa35f132169ed859822dde21c29bf7404f2436e1bb5ae7faaf0932ac",   // trap
-"35a2aad8414b7233ce4490210582af25b4c06593e70164f8c10a94146ff065da",   // breaks
-"a1ae1547e6532ccb81155e513f4c5a456c901c3f91c730dce0323f95d47edafc",   // ambient
+// SHA-256 of the generation-relevant content of the factory style definitions, ids 0..6
+// (StyleDefinition contentHash). Update deliberately when a factory definition changes.
+"030dd745004216024bdcd3cd595b4f03788ec3a9169a400f9e05897295ee0a69",   // full-on
+"dfb7cd30a5ebce92a7e1c1b812a879bb0201b3463c3f1188365fb8d22b5d6820",   // goa
+"18e491c4816db05ee6135090daca126c00f4a29626854732ae8208eccd85b303",   // house
+"a4c0545e0cf0d05a626d26ac12efb1eb182d036da8cc5e8b9cb53982c9f75f10",   // techno
+"b31ab3ec988aba071e5bf714bab5ca2b6e82d17f96bb0e23938748051641cd36",   // trap
+"bf8a96e1c03af3b2084351b911b4127228492ec06e82b3f74fb6e70733975132",   // breaks
+"e9de65aee1749fafd65135e6fb88b08b3fcff58e05d9bfe336500cc987f32913",   // ambient

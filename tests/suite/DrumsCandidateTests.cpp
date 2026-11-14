@@ -1538,10 +1538,14 @@ void testState()
         rejects (songSectionTag, [] (std::vector<std::byte>& d) { d.resize (d.size() - 3); }, "DSNG truncated");
         rejects (songSectionTag, [] (std::vector<std::byte>& d) { d.push_back (std::byte { 0 }); }, "DSNG trailing bytes");
         rejects (songSectionTag, [] (std::vector<std::byte>& d) { d.clear(); }, "DSNG empty");
-        rejects (generatorSectionTag, set (0, 2), "DGEN unknown version");
-        rejects (generatorSectionTag, set (4, 7), "DGEN unknown style");
-        rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d[8] = std::byte { 0xc0 }; d[7] = std::byte { 0x7f }; }, "DGEN NaN amount");
+        // DGEN v2 (style by UUID; no v1 decoder, pre-release policy).
+        rejects (generatorSectionTag, set (0, 1), "DGEN version 1 (development build)");
+        rejects (generatorSectionTag, set (0, 3), "DGEN unknown version");
+        rejects (generatorSectionTag, set (4, 0x77), "DGEN unknown style UUID");
+        rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d[22] = std::byte { 0xc0 }; d[23] = std::byte { 0x7f }; }, "DGEN NaN amount");
+        rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d[23] = std::byte { 0xbf }; d[22] = std::byte { 0x80 }; }, "DGEN negative amount");
         rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d.pop_back(); }, "DGEN truncated");
+        rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d.push_back (std::byte { 0 }); }, "DGEN trailing bytes");
         rejects (uiStateSectionTag, set (4, 8), "DUIS page out of range");
         rejects (uiStateSectionTag, set (5, 16), "DUIS pad out of range");
         rejects (uiStateSectionTag, set (0, 2), "DUIS unknown version");

@@ -2,6 +2,7 @@
 
 #include <juce_cryptography/juce_cryptography.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstring>
@@ -13,6 +14,34 @@ namespace {
 const char* const partKeys[partCount] = { "kick", "snare", "clap", "closedHat", "openHat", "tom", "rim", "cymbal",
                                           "perc1", "perc2", "perc3", "perc4", "perc5", "perc6", "perc7", "perc8" };
 const char* const paramKeys[paramCount] = { "density", "groove", "syncopation", "complexity", "fills", "variation", "swing", "humanize" };
+const char* const meterKeys[meterCount] = { "4/4", "3/4", "6/8", "12/8" };
+
+// Shortest text that reads back to exactly the same value.
+juce::String shortest (double d)
+{
+    char buffer[64] {};
+    const auto r = std::to_chars (buffer, buffer + sizeof buffer, d);
+    return juce::String (buffer, static_cast<std::size_t> (r.ptr - buffer));
+}
+juce::String shortest (float f)
+{
+    char buffer[64] {};
+    const auto r = std::to_chars (buffer, buffer + sizeof buffer, f);
+    return juce::String (buffer, static_cast<std::size_t> (r.ptr - buffer));
+}
+
+juce::String quoted (const juce::String& text)
+{
+    juce::String out ("\"");
+    for (auto ch : text)
+    {
+        if (ch == '"') out << "\\\"";
+        else if (ch == '\\') out << "\\\\";
+        else if (ch < 0x20) out << "\\u" << juce::String::toHexString (static_cast<int> (ch)).paddedLeft ('0', 4);
+        else out << juce::String::charToString (ch);
+    }
+    return out + "\"";
+}
 
 //== formulas: tokens, then precedence climbing to postfix ======================
 struct Token {
@@ -257,31 +286,86 @@ struct Reader {
         }
         return fail (path, "expected '<formula> > <number>' (>, >=, <, <=)");
     }
-    bool positions (const juce::var& v, const juce::String& path, std::uint16_t& out)
+    // Positions 1..`count`, unique, as a bit mask (bit 0 = position 1).
+    bool positions (const juce::var& v, const juce::String& path, int count, std::uint32_t& out, bool allowEmpty = false)
     {
         const auto* a = v.getArray();
-        if (a == nullptr || a->isEmpty() || a->size() > 16)
-            return fail (path, "must be a list of 1..16 positions");
+        if (a == nullptr || (a->isEmpty() && ! allowEmpty) || a->size() > count)
+            return fail (path, "must be a list of " + juce::String (allowEmpty ? 0 : 1) + ".." + juce::String (count) + " positions");
         out = 0;
         for (int i = 0; i < a->size(); ++i)
         {
             int p = 0;
-            if (! integer ((*a)[i], path + "[" + juce::String (i) + "]", 1, 16, p))
+            if (! integer ((*a)[i], path + "[" + juce::String (i) + "]", 1, count, p))
                 return false;
-            const auto bit = static_cast<std::uint16_t> (1u << (p - 1));
+            const auto bit = 1u << (p - 1);
             if ((out & bit) != 0)
                 return fail (path + "[" + juce::String (i) + "]", "position " + juce::String (p) + " appears twice");
-            out = static_cast<std::uint16_t> (out | bit);
+            out |= bit;
+        }
+        return true;
+    }
+    bool meter (const juce::var& v, const juce::String& path, Meter& out)
+    {
+        juce::String t;
+        if (! text (v, path, t))
+            return false;
+        for (int m = 0; m < meterCount; ++m)
+            if (t == meterKeys[m])
+            {
+                out = static_cast<Meter> (m);
+                return true;
+            }
+        return fail (path, "unknown meter '" + t + "' (4/4, 3/4, 6/8, 12/8)");
+    }
+    bool partList (const juce::var& v, const juce::String& path, std::uint16_t& out)
+    {
+        const auto* a = v.getArray();
+        if (a == nullptr || a->size() > partCount)
+            return fail (path, "must be a list of parts");
+        out = 0;
+        for (int i = 0; i < a->size(); ++i)
+        {
+            int part = 0;
+            if (! this->part ((*a)[i], path + "[" + juce::String (i) + "]", part))
+                return false;
+            if ((out & (1u << part)) != 0)
+                return fail (path + "[" + juce::String (i) + "]", juce::String ("part ") + partKey (part) + " appears twice");
+            out = static_cast<std::uint16_t> (out | (1u << part));
         }
         return true;
     }
 };
 
-bool readRule (Reader& in, const juce::var& v, const juce::String& path, Rule& r)
+bool readRule (Reader& in, const juce::var& v, const juce::String& path, std::uint8_t meters, Rule& r)
 {
-    if (! in.keys (v, path, { "part", "at", "kind", "when", "chance", "salt", "velocity", "accent", "bars", "ratchet" }))
+    if (! in.keys (v, path, { "part", "meter", "beats", "subdivision", "at", "kind", "when", "chance", "salt", "velocity", "accent", "bars", "ratchet" }))
         return false;
-    if (! in.part (v["part"], path + ".part", r.part) || ! in.positions (v["at"], path + ".at", r.positions))
+    if (! in.part (v["part"], path + ".part", r.part))
+        return false;
+    if (v.hasProperty ("meter"))
+    {
+        if (! in.meter (v["meter"], path + ".meter", r.meter))
+            return false;
+        if ((meters & (1u << static_cast<int> (r.meter))) == 0)
+            return in.fail (path + ".meter", juce::String (meterKey (r.meter)) + " is not in the style's meters");
+    }
+    if (v.hasProperty ("beats") != v.hasProperty ("subdivision"))
+        return in.fail (path, "\"beats\" and \"subdivision\" go together");
+    if (v.hasProperty ("beats"))
+    {
+        const auto sub = v["subdivision"].toString();
+        const bool compound = compoundMeter (r.meter);
+        if (sub != (compound ? "duplet" : "triplet"))
+            return in.fail (path + ".subdivision", juce::String ("must be \"") + (compound ? "duplet" : "triplet") + "\" in " + meterKey (r.meter));
+        std::uint32_t beats = 0;
+        if (! in.positions (v["beats"], path + ".beats", meterBeats (r.meter), beats))
+            return false;
+        r.tupletBeats = static_cast<std::uint16_t> (beats);
+        if (! in.positions (v["at"], path + ".at", compound ? 4 : 6, r.positions))
+            return false;
+    }
+    else if (! in.positions (v["at"], path + ".at", gridPositions (r.meter), r.positions))
         return false;
     if (v.hasProperty ("kind"))
     {
@@ -451,6 +535,22 @@ bool parseExpr (const juce::String& text, Expr& out, juce::String& error)
         error = "unexpected text after the formula";
         return false;
     }
+    // Canonical text: binary operators between single spaces, parentheses
+    // tight, numbers shortest. Reading it back gives the same postfix form.
+    juce::String canonical;
+    for (const auto& t : tokens)
+        switch (t.kind)
+        {
+            case Token::Kind::number: canonical << shortest (t.number); break;
+            case Token::Kind::name: canonical << t.name; break;
+            case Token::Kind::plus: canonical << " + "; break;
+            case Token::Kind::minus: canonical << " - "; break;
+            case Token::Kind::times: canonical << " * "; break;
+            case Token::Kind::open: canonical << "("; break;
+            case Token::Kind::close: canonical << ")"; break;
+            case Token::Kind::end: break;
+        }
+    e.text = canonical;
     out = std::move (e);
     return true;
 }
@@ -479,15 +579,71 @@ juce::Result parse (const juce::String& json, Definition& out)
     Reader in;
     Definition d;
     const auto ok = [&]() -> bool {
-        if (! in.keys (root, "style", { "format", "version", "key", "name", "rules", "probability", "fill" }))
+        if (! in.keys (root, "style", { "format", "version", "id", "key", "name", "meta", "meters", "defaults", "rules", "probability", "fill",
+                                        "variation", "song", "assertions" }))
             return false;
         if (root["format"].toString() != "vox-drums-style")
             return in.fail ("format", "must be \"vox-drums-style\"");
         int version = 0;
         if (! in.integer (root["version"], "version", 1, 1, version))
             return false;
-        if (! in.text (root["key"], "key", d.key) || ! in.text (root["name"], "name", d.name))
+        if (! in.text (root["id"], "id", d.id, 36) || ! isCanonicalUuid (d.id))
+            return in.fail ("id", "must be a lower-case UUID like \"0123abcd-0123-4567-89ab-0123456789ab\"");
+        if (! in.text (root["key"], "key", d.key, 48) || ! d.key.containsOnly ("abcdefghijklmnopqrstuvwxyz0123456789-"))
+            return in.fail ("key", "must be 1..48 characters a-z, 0-9 or -");
+        if (! in.text (root["name"], "name", d.name, maxMetaText))
             return false;
+        if (root.hasProperty ("meta"))
+        {
+            const auto& mv = root["meta"];
+            if (! in.keys (mv, "meta", { "author", "group", "tempo" }))
+                return false;
+            if (mv.hasProperty ("author") && ! in.text (mv["author"], "meta.author", d.meta.author, maxMetaText))
+                return false;
+            if (mv.hasProperty ("group") && ! in.text (mv["group"], "meta.group", d.meta.group, maxMetaText))
+                return false;
+            if (mv.hasProperty ("tempo"))
+            {
+                const auto& tv = mv["tempo"];
+                if (! in.keys (tv, "meta.tempo", { "min", "max" }) || ! in.integer (tv["min"], "meta.tempo.min", 20, 400, d.meta.tempoMin)
+                    || ! in.integer (tv["max"], "meta.tempo.max", 20, 400, d.meta.tempoMax))
+                    return false;
+                if (d.meta.tempoMin > d.meta.tempoMax)
+                    return in.fail ("meta.tempo", "min is above max");
+            }
+        }
+        {
+            const auto* a = root["meters"].getArray();
+            if (a == nullptr || a->isEmpty() || a->size() > meterCount)
+                return in.fail ("meters", "must be a list of meters including \"4/4\"");
+            d.meters = 0;
+            for (int i = 0; i < a->size(); ++i)
+            {
+                Meter m;
+                if (! in.meter ((*a)[i], "meters[" + juce::String (i) + "]", m))
+                    return false;
+                const auto bit = static_cast<std::uint8_t> (1u << static_cast<int> (m));
+                if ((d.meters & bit) != 0)
+                    return in.fail ("meters[" + juce::String (i) + "]", juce::String (meterKey (m)) + " appears twice");
+                d.meters = static_cast<std::uint8_t> (d.meters | bit);
+            }
+            if ((d.meters & 1u) == 0)
+                return in.fail ("meters", "must include \"4/4\" (every style has full 4/4 rules)");
+        }
+        if (root.hasProperty ("defaults"))
+        {
+            const auto& dv = root["defaults"];
+            if (! in.keys (dv, "defaults", { "density", "groove", "syncopation", "complexity", "fills", "variation", "swing", "humanize" }))
+                return false;
+            for (int i = 0; i < paramCount; ++i)
+                if (dv.hasProperty (paramKeys[i]))
+                {
+                    double x = 0.0;
+                    if (! in.number (dv[paramKeys[i]], juce::String ("defaults.") + paramKeys[i], 0.0, 1.0, x))
+                        return false;
+                    d.defaults.values[static_cast<std::size_t> (i)] = static_cast<float> (x);
+                }
+        }
         const auto* rules = root["rules"].getArray();
         if (rules == nullptr || rules->isEmpty() || rules->size() > maxRules)
             return in.fail ("rules", "must be a list of 1.." + juce::String (maxRules) + " rules");
@@ -495,7 +651,7 @@ juce::Result parse (const juce::String& json, Definition& out)
         for (int i = 0; i < rules->size(); ++i)
         {
             Rule r;
-            if (! readRule (in, (*rules)[i], "rules[" + juce::String (i) + "]", r))
+            if (! readRule (in, (*rules)[i], "rules[" + juce::String (i) + "]", d.meters, r))
                 return false;
             if (++perPart[static_cast<std::size_t> (r.part)] > maxRulesPerPart)
                 return in.fail ("rules[" + juce::String (i) + "]", "more than " + juce::String (maxRulesPerPart) + " rules for " + partKey (r.part));
@@ -512,19 +668,8 @@ juce::Result parse (const juce::String& json, Definition& out)
                 return false;
             if (po.min > po.max)
                 return in.fail ("probability", "min is above max");
-            if (pv.hasProperty ("except"))
-            {
-                const auto* a = pv["except"].getArray();
-                if (a == nullptr || a->size() > partCount)
-                    return in.fail ("probability.except", "must be a list of parts");
-                for (int i = 0; i < a->size(); ++i)
-                {
-                    int part = 0;
-                    if (! in.part ((*a)[i], "probability.except[" + juce::String (i) + "]", part))
-                        return false;
-                    po.exceptParts = static_cast<std::uint16_t> (po.exceptParts | (1u << part));
-                }
-            }
+            if (pv.hasProperty ("except") && ! in.partList (pv["except"], "probability.except", po.exceptParts))
+                return false;
             d.probability = std::move (po);
         }
         const auto& fv = root["fill"];
@@ -540,7 +685,49 @@ juce::Result parse (const juce::String& json, Definition& out)
                 return false;
             d.fill.cycle.push_back (part);
         }
-        return in.integer (fv["ratchet"], "fill.ratchet", 1, 8, d.fill.ratchet);
+        if (! in.integer (fv["ratchet"], "fill.ratchet", 1, 8, d.fill.ratchet))
+            return false;
+        if (root.hasProperty ("variation"))
+        {
+            if (! in.keys (root["variation"], "variation", { "keep" }) || ! in.partList (root["variation"]["keep"], "variation.keep", d.variationKeep))
+                return false;
+        }
+        if (root.hasProperty ("song"))
+        {
+            const auto& sv = root["song"];
+            if (! in.keys (sv, "song", { "breakWithoutKick" }))
+                return false;
+            if (! sv["breakWithoutKick"].isBool())
+                return in.fail ("song.breakWithoutKick", "must be true or false");
+            d.songBreakWithoutKick = static_cast<bool> (sv["breakWithoutKick"]);
+        }
+        if (root.hasProperty ("assertions"))
+        {
+            const auto* a = root["assertions"].getArray();
+            if (a == nullptr || a->size() > maxAssertions)
+                return in.fail ("assertions", "must be a list of at most " + juce::String (maxAssertions) + " assertions");
+            for (int i = 0; i < a->size(); ++i)
+            {
+                const auto& av = (*a)[i];
+                const auto ap = "assertions[" + juce::String (i) + "]";
+                Assertion as;
+                if (! in.keys (av, ap, { "part", "meter", "always", "never" }) || ! in.part (av["part"], ap + ".part", as.part))
+                    return false;
+                if (av.hasProperty ("meter") && ! in.meter (av["meter"], ap + ".meter", as.meter))
+                    return false;
+                if ((d.meters & (1u << static_cast<int> (as.meter))) == 0)
+                    return in.fail (ap + ".meter", juce::String (meterKey (as.meter)) + " is not in the style's meters");
+                const int n = gridPositions (as.meter);
+                if (av.hasProperty ("always") && ! in.positions (av["always"], ap + ".always", n, as.always, true))
+                    return false;
+                if (av.hasProperty ("never") && ! in.positions (av["never"], ap + ".never", n, as.never, true))
+                    return false;
+                if ((as.always & as.never) != 0)
+                    return in.fail (ap, "a position is both always and never");
+                d.assertions.push_back (as);
+            }
+        }
+        return true;
     }();
     if (! ok)
         return juce::Result::fail ("style: " + in.error);
@@ -551,13 +738,18 @@ juce::Result parse (const juce::String& json, Definition& out)
 juce::String contentHash (const Definition& d)
 {
     Bytes b;
-    b.text ("vox-drums-style/1");
-    b.text (d.key);
-    b.text (d.name);
+    b.text ("vox-drums-style/1/content");
+    b.u8 (d.meters);
+    for (auto v : d.defaults.values)
+        b.f32 (v);
+    b.u32 (d.variationKeep);
+    b.u8 (d.songBreakWithoutKick ? 1u : 0u);
     b.u32 (static_cast<std::uint32_t> (d.rules.size()));
     for (const auto& r : d.rules)
     {
         b.u8 (static_cast<std::uint32_t> (r.part));
+        b.u8 (static_cast<std::uint32_t> (r.meter));
+        b.u32 (r.tupletBeats);
         b.u32 (r.positions);
         b.u8 (static_cast<std::uint32_t> (r.kind));
         b.u32 (static_cast<std::uint32_t> (r.when.size()));
@@ -600,6 +792,177 @@ juce::String contentHash (const Definition& d)
         b.u8 (static_cast<std::uint32_t> (p));
     b.u8 (static_cast<std::uint32_t> (d.fill.ratchet));
     return juce::SHA256 (b.block).toHexString();
+}
+
+const char* meterKey (Meter m) noexcept
+{
+    const auto i = static_cast<int> (m);
+    return i >= 0 && i < meterCount ? meterKeys[i] : "?";
+}
+
+int gridPositions (Meter m) noexcept
+{
+    static constexpr int n[meterCount] = { 16, 12, 12, 24 };
+    return n[static_cast<int> (m) & 3];
+}
+
+int meterBeats (Meter m) noexcept
+{
+    static constexpr int n[meterCount] = { 4, 3, 2, 4 };
+    return n[static_cast<int> (m) & 3];
+}
+
+bool compoundMeter (Meter m) noexcept
+{
+    return m == Meter::m6_8 || m == Meter::m12_8;
+}
+
+bool isCanonicalUuid (const juce::String& s) noexcept
+{
+    if (s.length() != 36)
+        return false;
+    for (int i = 0; i < 36; ++i)
+    {
+        const auto ch = s[i];
+        const bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+        if (dash ? ch != '-' : ! ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')))
+            return false;
+    }
+    return true;
+}
+
+namespace {
+juce::String positionList (std::uint32_t mask)
+{
+    juce::StringArray items;
+    for (int i = 0; i < 32; ++i)
+        if ((mask & (1u << i)) != 0)
+            items.add (juce::String (i + 1));
+    return "[" + items.joinIntoString (",") + "]";
+}
+juce::String partListText (std::uint16_t mask)
+{
+    juce::StringArray items;
+    for (int p = 0; p < partCount; ++p)
+        if ((mask & (1u << p)) != 0)
+            items.add (quoted (partKey (p)));
+    return "[" + items.joinIntoString (",") + "]";
+}
+// An object with its members in sorted key order.
+juce::String object (std::vector<std::pair<juce::String, juce::String>> members)
+{
+    std::sort (members.begin(), members.end(), [] (const auto& a, const auto& b) { return a.first.compare (b.first) < 0; });
+    juce::StringArray items;
+    for (const auto& [k, v] : members)
+        items.add (quoted (k) + ":" + v);
+    return "{" + items.joinIntoString (",") + "}";
+}
+const char* const cmpText[4] = { " > ", " >= ", " < ", " <= " };
+} // namespace
+
+juce::String serialize (const Definition& d)
+{
+    std::vector<std::pair<juce::String, juce::String>> top;
+    top.emplace_back ("format", quoted ("vox-drums-style"));
+    top.emplace_back ("version", "1");
+    top.emplace_back ("id", quoted (d.id));
+    top.emplace_back ("key", quoted (d.key));
+    top.emplace_back ("name", quoted (d.name));
+    {
+        std::vector<std::pair<juce::String, juce::String>> meta;
+        if (d.meta.author.isNotEmpty()) meta.emplace_back ("author", quoted (d.meta.author));
+        if (d.meta.group.isNotEmpty()) meta.emplace_back ("group", quoted (d.meta.group));
+        if (d.meta.tempoMin > 0) meta.emplace_back ("tempo", object ({ { "min", juce::String (d.meta.tempoMin) }, { "max", juce::String (d.meta.tempoMax) } }));
+        if (! meta.empty()) top.emplace_back ("meta", object (meta));
+    }
+    {
+        juce::StringArray m;
+        for (int i = 0; i < meterCount; ++i)
+            if ((d.meters & (1u << i)) != 0)
+                m.add (quoted (meterKeys[i]));
+        top.emplace_back ("meters", "[" + m.joinIntoString (",") + "]");
+    }
+    {
+        std::vector<std::pair<juce::String, juce::String>> def;
+        for (int i = 0; i < paramCount; ++i)
+            def.emplace_back (paramKeys[i], shortest (d.defaults.values[static_cast<std::size_t> (i)]));
+        top.emplace_back ("defaults", object (def));
+    }
+    {
+        juce::StringArray rules;
+        for (const auto& r : d.rules)
+        {
+            std::vector<std::pair<juce::String, juce::String>> m;
+            m.emplace_back ("part", quoted (partKey (r.part)));
+            if (r.meter != Meter::m4_4) m.emplace_back ("meter", quoted (meterKey (r.meter)));
+            if (r.tupletBeats != 0)
+            {
+                m.emplace_back ("beats", positionList (r.tupletBeats));
+                m.emplace_back ("subdivision", quoted (compoundMeter (r.meter) ? "duplet" : "triplet"));
+            }
+            m.emplace_back ("at", positionList (r.positions));
+            if (r.kind == Rule::Kind::ghost) m.emplace_back ("kind", quoted ("ghost"));
+            if (! r.when.empty())
+            {
+                juce::StringArray w;
+                for (const auto& c : r.when)
+                    w.add (quoted (c.left.text + cmpText[static_cast<int> (c.cmp)] + shortest (c.right)));
+                m.emplace_back ("when", "[" + w.joinIntoString (",") + "]");
+            }
+            if (! r.chance.empty()) m.emplace_back ("chance", quoted (r.chance.text));
+            if (r.salt != 0) m.emplace_back ("salt", juce::String (r.salt));
+            m.emplace_back ("velocity", shortest (r.velocity));
+            if (r.accent) m.emplace_back ("accent", "true");
+            if (r.bars != Bars::all) m.emplace_back ("bars", quoted (r.bars == Bars::first ? "first" : "odd"));
+            if (r.ratchet)
+            {
+                juce::StringArray below;
+                for (const auto& [t, v] : r.ratchet->below)
+                    below.add ("[" + shortest (t) + "," + juce::String (v) + "]");
+                m.emplace_back ("ratchet", object ({ { "chance", quoted (r.ratchet->chance.text) },
+                                                     { "salt", juce::String (r.ratchet->salt) },
+                                                     { "valueSalt", juce::String (r.ratchet->valueSalt) },
+                                                     { "below", "[" + below.joinIntoString (",") + "]" },
+                                                     { "otherwise", juce::String (r.ratchet->otherwise) } }));
+            }
+            rules.add (object (m));
+        }
+        top.emplace_back ("rules", "[" + rules.joinIntoString (",") + "]");
+    }
+    if (d.probability)
+        top.emplace_back ("probability", object ({ { "value", quoted (d.probability->value.text) },
+                                                   { "min", juce::String (d.probability->min) },
+                                                   { "max", juce::String (d.probability->max) },
+                                                   { "except", partListText (d.probability->exceptParts) } }));
+    {
+        juce::StringArray cycle;
+        for (auto p : d.fill.cycle)
+            cycle.add (quoted (partKey (p)));
+        top.emplace_back ("fill", object ({ { "cycle", "[" + cycle.joinIntoString (",") + "]" }, { "ratchet", juce::String (d.fill.ratchet) } }));
+    }
+    top.emplace_back ("variation", object ({ { "keep", partListText (d.variationKeep) } }));
+    top.emplace_back ("song", object ({ { "breakWithoutKick", d.songBreakWithoutKick ? "true" : "false" } }));
+    if (! d.assertions.empty())
+    {
+        juce::StringArray items;
+        for (const auto& a : d.assertions)
+        {
+            std::vector<std::pair<juce::String, juce::String>> m;
+            m.emplace_back ("part", quoted (partKey (a.part)));
+            if (a.meter != Meter::m4_4) m.emplace_back ("meter", quoted (meterKey (a.meter)));
+            if (a.always != 0) m.emplace_back ("always", positionList (a.always));
+            if (a.never != 0) m.emplace_back ("never", positionList (a.never));
+            items.add (object (m));
+        }
+        top.emplace_back ("assertions", "[" + items.joinIntoString (",") + "]");
+    }
+    return object (top);
+}
+
+juce::String documentHash (const Definition& d)
+{
+    const auto utf8 = serialize (d).toStdString();
+    return juce::SHA256 (utf8.data(), utf8.size()).toHexString();
 }
 
 } // namespace vox::drums::style

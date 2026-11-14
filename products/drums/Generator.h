@@ -22,6 +22,7 @@
 // lanes. With RoleMap::identity() the output is exactly as before roles.
 
 #include "PadRoles.h"
+#include "StyleDefinition.h"
 #include "PatternStore.h"
 
 namespace vox::drums {
@@ -44,20 +45,45 @@ struct GeneratorSettings {
     float variation = 0.4f;     // difference between bars, and of B from A
     std::uint32_t seed = 1;
     std::uint16_t laneLocks = 0;   // bit n: lane n is locked
+    // A style definition to run instead of the factory style `style` (a
+    // user style; message thread). Not part of operator== or DGEN v1.
+    std::shared_ptr<const style::Definition> custom;
 
     bool operator== (const GeneratorSettings&) const noexcept;
     bool operator!= (const GeneratorSettings& o) const noexcept { return ! (*this == o); }
 };
 
+// The embedded user style (DSTL v1, docs/ultima-vox-music/drums/STYLE_ENGINE.md).
+inline constexpr preset::Tag styleSectionTag = preset::makeTag ("DSTL");
+
+// The UUID DGEN stores for `g`: the user style's id, or the factory style's.
+juce::String styleUuidOf (const GeneratorSettings&);
+
+// DGEN v2 (58 bytes; style by UUID). Strict: an unknown version, a wrong
+// size, a value out of range, or a UUID that is neither a registry style
+// nor `embedded` (the state's DSTL) is rejected; so is an `embedded` style
+// the generator does not use.
 preset::Section encodeGenerator (const GeneratorSettings&);
-// Strict: unknown version, wrong size or a value out of range is rejected.
-bool decodeGenerator (const preset::Section&, GeneratorSettings& out, juce::String& error);
+bool decodeGenerator (const preset::Section&, GeneratorSettings& out, juce::String& error,
+                      const std::shared_ptr<const style::Definition>& embedded = nullptr);
+
+// DSTL v1: version, SHA-256 of the text, length, the canonical text. Strict:
+// the hash must match, the text must parse and be canonical, and its id must
+// not be a factory UUID.
+preset::Section encodeStyleSection (const style::Definition&);
+bool decodeStyleSection (const preset::Section&, std::shared_ptr<const style::Definition>& out, juce::String& error);
 
 // Every function below first checks that the style has a definition the
 // generator can run (StyleRegistry: a registered but not yet available
 // style, or an unknown id, has none). If not, it returns false and changes
 // NOTHING: no cell, seed, lock, A/B pattern or song bar. True otherwise.
 bool styleAvailable (Style);
+
+// The style's own 4/4 assertions (PR 137 §11.3) checked on generated
+// patterns over a settings matrix (6 seeds × density × complexity, no fills,
+// 16 steps × 4 bars, identity roles). Returns the first violations ("" when
+// none). Proves only that the style agrees with itself, not genre quality.
+juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Definition>& definition, int maxViolations = 8);
 
 // A new pattern in `pattern`'s grid (its steps and bars are kept).
 bool generatePattern (const GeneratorSettings&, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());

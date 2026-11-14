@@ -1,4 +1,4 @@
-# VOX Drums declarative style engine — foundation (issue #136)
+# VOX Drums declarative style engine (issue #136)
 
 Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
 
@@ -90,3 +90,116 @@ Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
   factory kits. They come after the AG review (#137 §7).
 - Generation runs on the message thread only. Parsing and evaluation never run in
   `processBlock`.
+
+## Canonical `.voxstyle` v1 schema (branch `drm/style-schema`; AG-1 PASS, review 5906187802)
+
+One schema, parser and AST for factory and user styles. It extends the flat-rule form above.
+Formulas are unchanged.
+
+| Key | Required | Content |
+|---|---|---|
+| `format`, `version` | yes | `"vox-drums-style"`, `1` |
+| `id` | yes | lower-case UUID. Factory styles have fixed UUIDs in the registry; the numeric ids 0–22 give order only. |
+| `key`, `name` | yes | key `[a-z0-9-]{1,48}`; name 1–64 characters |
+| `meta` | no | `author`, `group` (≤ 64 characters each), `tempo {min, max}` 20–400 (information only) |
+| `meters` | yes | unique list from `4/4`, `3/4`, `6/8`, `12/8`; **must contain `4/4`** |
+| `defaults` | no | the 8 settings, 0–1 ("Style defaults") |
+| `rules[]` | yes | as above, plus `meter` (default `4/4`, must be listed in `meters`) and, for tuplets, `beats` + `subdivision` (`triplet` in 4/4 and 3/4, `duplet` in 6/8 and 12/8) |
+| `probability`, `fill` | `fill` yes | as above |
+| `variation` | no | `keep`: the parts a Variation B keeps (default kick, snare, clap) |
+| `song` | no | `breakWithoutKick` (default true) |
+| `assertions[]` | no | `part`, `meter`, `always` / `never` positions: **self-consistency checks only, not genre or quality** |
+
+- **Positions** are stored as a 32-bit mask:
+  - straight rules: 1–16 in 4/4, 1–12 in 3/4 and 6/8, **1–24 in 12/8**;
+  - tuplet rules: cells 1–6 (triplet) or 1–4 (duplet) within each listed beat.
+- **Generation:** only straight 4/4 rules run until the shared timing engine (PR #137 §10.5a)
+  exists. The other rules are validated, kept and serialized exactly.
+- **Canonical serializer** (`style::serialize`):
+  - sorted keys, no spaces outside formulas;
+  - formulas in canonical token form;
+  - numbers in their shortest round-trip form (`std::to_chars`).
+  - parse → serialize → parse is exact.
+- **Hashes:**
+  - `contentHash`: the generation-relevant data;
+  - `documentHash`: the canonical text, used for library and project identity.
+- **Runnable fixture:** `tests/suite/fixtures/example-user-style.voxstyle` uses every field,
+  including 12/8 rules up to position 23, tuplet and duplet rules, and assertions.
+- **Tests added:**
+  - every new rejection class;
+  - 12/8 positions 17–24 and tuplet cells kept exactly;
+  - every factory style and the fixture round-trip byte-exactly;
+  - **factory export → parse → generate**, byte-identical (Pattern, Variation, Song);
+  - the fixture generates and its own assertions hold;
+  - a contradicted assertion is reported;
+  - `variation.keep` and `song.breakWithoutKick` are honoured;
+  - 23 unique registry UUIDs.
+
+Not yet done:
+
+- `DGEN` v2 (style by UUID) and `DSTL` (embedded user style). Their exact state layout is
+  committed before the code.
+- Import UI, library folder, collision handling.
+
+## State layout: `DGEN` v2 and `DSTL` v1 (exact; committed before the code)
+
+Pre-release policy (#136): there is **no `DGEN` v1 decoder**. A development-build state with
+`DGEN` v1 is rejected like any unsupported version. All integers are little-endian.
+
+### `DGEN` v2: generator settings, 58 bytes
+
+| Offset | Size | Field | Rule |
+|---|---|---|---|
+| 0 | 4 | `u32 version` = 2 | anything else rejects |
+| 4 | 16 | style UUID, the 32 hex digits of the canonical text in order (byte *i* = digits 2*i*, 2*i*+1) | a registry UUID (factory style, ids 0–22, available or not), or the id of the state's `DSTL` |
+| 20 | 32 | 8 × `f32`: density, groove, syncopation, swing, humanize, complexity, fills, variation | finite, 0–1 |
+| 52 | 4 | `u32 seed` | any |
+| 56 | 2 | `u16 laneLocks` | any |
+
+- Size other than 58 → rejected.
+- An unknown UUID with no matching `DSTL` → rejected: "unknown generator style".
+
+### `DSTL` v1: the user style the generator uses, embedded for portability
+
+| Offset | Size | Field | Rule |
+|---|---|---|---|
+| 0 | 4 | `u32 version` = 1 | anything else rejects |
+| 4 | 32 | SHA-256 of the text bytes (= `documentHash`) | must match |
+| 36 | 4 | `u32 length` *n* | 1 – 65,536 |
+| 40 | *n* | the style's canonical UTF-8 text (`style::serialize`) | must parse, and must serialize back to exactly these bytes |
+
+- **At most one `DSTL`.** It is written only when the generator style is a user style.
+- **The `DSTL` id must equal the `DGEN` UUID.** A `DSTL` whose id is a factory UUID, or that
+  `DGEN` does not reference, is rejected.
+- The embedded copy is used on restore, whatever the local library holds.
+- Any rejection leaves the live state unchanged (transactional restore).
+- **Presets:** a Song preset carries `DGEN` and, for a user style, `DSTL`. Loading one replaces
+  both. A preset without `DSTL` removes the project's `DSTL`.
+- **Budget:** `DSTL` ≤ 65,576 bytes + section header. This must be measured by the boundary
+  fixture (#130 T21); `productStateReserve()` is reviewed with that number.
+
+### Implemented and tested (`suite_drums_style_engine_tests`, `suite_drums_candidate_tests`)
+
+- **`DGEN` v2:** encode and decode; all 23 registry styles round-trip, available or not.
+  - The candidate tests reject: v1, an unknown version, an unknown UUID, NaN and negative
+    amounts, truncated and trailing bytes.
+- **`DSTL` v1:**
+  - a user style generates in the processor;
+  - the project saves `DGEN` + `DSTL`;
+  - a **fresh instance with an empty library** restores it, saves the same bytes and generates
+    identically;
+  - a factory style writes no `DSTL`.
+- **`DSTL` rejected atomically** (live state unchanged):
+  - unknown version, wrong hash, changed text;
+  - truncated text or header;
+  - non-canonical text with a valid hash;
+  - a style the generator does not reference;
+  - an embedded factory UUID;
+  - a user UUID without `DSTL`;
+  - a `DSTL` beside a factory-style `DGEN`.
+- **Song presets:** they bring the user style along. A preset with a factory style removes the
+  project's `DSTL`.
+- **Mutation check (local):** removing the canonical-text check, or the "DSTL not used by
+  DGEN" check, fails the corresponding tests.
+- **Not yet:** the library folder, Import/Export UI and the library-level UUID collisions
+  (Replace / Keep both). They come with the import feature.

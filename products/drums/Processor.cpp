@@ -721,7 +721,10 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (samples_.writeState());
     out.push_back (patternStore_.encodeCurrent());
     out.push_back (encodeSong (patternStore_.song()));
-    out.push_back (encodeGenerator (generator()));
+    const auto g = generator();
+    out.push_back (encodeGenerator (g));
+    if (g.custom != nullptr)   // a user style travels with the project (DSTL)
+        out.push_back (encodeStyleSection (*g.custom));
     out.push_back (encodeUiState (uiState()));
     // Only roles the user set are saved: a project without them keeps
     // exactly the sections it had before roles existed.
@@ -840,11 +843,23 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
     }
 
     // Generator settings and editor state: defaults in older projects.
+    // The embedded user style (DSTL) first: DGEN may reference it.
+    std::shared_ptr<const style::Definition> embeddedStyle;
+    if (const auto* section = document.find (styleSectionTag))
+    {
+        if (! decodeStyleSection (*section, embeddedStyle, error))
+            return {};
+    }
     auto generatorRestore = std::make_shared<GeneratorSettings>();
     if (const auto* section = document.find (generatorSectionTag))
     {
-        if (! decodeGenerator (*section, *generatorRestore, error))
+        if (! decodeGenerator (*section, *generatorRestore, error, embeddedStyle))
             return {};
+    }
+    else if (embeddedStyle != nullptr)
+    {
+        error = "the embedded style is not the generator's style";
+        return {};
     }
     auto uiRestore = std::make_shared<UiState>();
     if (const auto* section = document.find (uiStateSectionTag))
@@ -889,6 +904,8 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (PatternStore::encode (*patternRestore, *alternateRestore));
         restore.sections.push_back (encodeSong (*songRestore));
         restore.sections.push_back (encodeGenerator (*generatorRestore));
+        if (generatorRestore->custom != nullptr)
+            restore.sections.push_back (encodeStyleSection (*generatorRestore->custom));
         restore.sections.push_back (encodeUiState (*uiRestore));
         if (rolesRestore->explicitRoles)
             restore.sections.push_back (encodeRoles (*rolesRestore));

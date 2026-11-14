@@ -1,5 +1,9 @@
 {
-  "format": "vox-drums-style", "version": 1, "key": "ambient", "name": "Ambient",
+  "format": "vox-drums-style", "version": 1,
+  "id": "8939c28f-742c-41e1-aef9-e5de8d6d6ca6", "key": "ambient", "name": "Ambient",
+  "meta": { "author": "Ultima Vox", "group": "Ambient", "tempo": { "min": 60, "max": 100 } },
+  "meters": ["4/4"],
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.0, "humanize": 0.15 },
   "rules": [
     { "part": "kick", "at": [1], "velocity": 0.7 },
     { "part": "kick", "at": [11], "kind": "ghost", "chance": "0.1 + 0.4 * density", "velocity": 0.5 },
@@ -10,5 +14,7 @@
     { "part": "perc2", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.04 + 0.2 * density + 0.1 * syncopation", "velocity": 0.4, "salt": 9 }
   ],
   "probability": { "value": "90 - 50 * complexity", "min": 30, "max": 100, "except": ["kick"] },
-  "fill": { "cycle": ["perc1", "cymbal"], "ratchet": 2 }
+  "fill": { "cycle": ["perc1", "cymbal"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true }
 }
