@@ -432,7 +432,7 @@ Settled here as engineering details:
 Open for review: the per-style rules of §3 (Architecture Guard / tech lead) and the listening
 gate per style (owner).
 
-## 10. Meters, mixed tuplets and timing (revision 4: answers AG review 5906060397, AG-2 and AG-3)
+## 10. Meters, mixed tuplets and timing (revision 6: exact-tick, round-trip and size-budget clarifications)
 
 Owner decisions (2026-11-14):
 
@@ -485,10 +485,7 @@ resolution menu):
 | 7/8 | 7 (straight only) | 21 | 42 | ✗ with triplets (84); **56, straight only** |
 
 - **Events per cell:** one, as today: velocity, accent, probability, ratchet, micro, lock.
-- **Timing of a cell:** t = bar start + beat × beat length + index × beat length / cells, plus
-  micro × cell length.
-  - Computed in PPQ as double.
-  - Sample positions use the existing scheduler arithmetic.
+- **Timing of a cell (new release):** `eventTick = barStartTick + beatStartTick + cellIndex * cellTicks + microTicks` on the canonical **960-PPQ** grid. Cell start and offset are integer ticks; the shared `BarTiming` module (§10.5a) supplies event ticks for playback and MIDI export. Do not retain uniform-step or percentage-micro timing in the new v1 state.
 
 **MIDI and exactness.**
 
@@ -523,11 +520,9 @@ Correction after AG review 5906187802:
    - a |microTicks| would exceed ½ of the new cell;
    - a locked event would not stay one locked event;
    - the result would not fit the capacity of §10.2.
-4. Otherwise the switch is one undo step. Undo restores events, locks, mask and ticks
-   **bit-identically** (the history entry holds the whole slot).
+4. Otherwise the switch is one undo step. **Undo/Redo**, not a second independent subdivision conversion, restores the saved event, lock, mask and tick bytes **bit-identically**.
 
-All cell lengths divide 960 or 1440 exactly (§10.2), so cell starts are whole ticks and nothing
-is ever rounded except the user's own edit.
+All ordinary cell starts at these resolutions are integer ticks; user micro edits are quantised once. A reverse subdivision switch is **not guaranteed to restore the original cell index**: in 4/4, a straight cell starting at tick 480 with `microTicks = -120` sounds at tick 360. Switching to 16th-triplets can represent it from tick 320 with `microTicks = +40`. Switching back, tick 360 is exactly between straight starts 240 and 480; the chosen earlier-cell tie rule selects 240, not the original 480. Both conversions preserve the **absolute note time**, but the cell index changes. **Undo/Redo must restore bit-identical state; two independent opposite edits need only preserve all absolute event ticks and other event attributes**, and must reject collisions. Include half-cell ties in the test matrix. Ratchet rounding is separately specified in §10.5a.
 
 ### 10.4 Meter from the host, and what playback may never do
 
@@ -573,8 +568,7 @@ is ever rounded except the user's own edit.
     beyond the bar's beats rejects the restore.
 - `DSNG`: no song meter (bars follow the host); version bump.
 - Development-build versions are not decoded (#136 policy).
-- **Budget:** cells unchanged; masks add 128 bytes per pattern (16 lanes × 4 bars × 2 bytes).
-  Measured by the boundary fixture (#130 T21).
+- **Actual state budget:** each serialized cell's one-byte signed-percent `micro` becomes two-byte signed `microTicks`, adding **one byte per serialized cell**. At the maximum of 16 lanes × 4 bars × 64 slots this is **up to +4096 bytes per pattern**, plus **up to +128 bytes** of subdivision masks (`16 × 4 × 2`) and meter/resolution metadata. There are five A and five B patterns, and unique Song bars may also store cells. Measure the actual full `DSEQ`, `DSNG`, `DSTL` and container bounds (with headers) in #130 T21 before calling the budget accepted; an unchanged cell *count* is not unchanged byte size.
 
 ### 10.5a One shared timing engine (revision 5, AG review 5906187802)
 
@@ -597,19 +591,16 @@ is ever rounded except the user's own edit.
   ```
 
 - **Consumers:**
-  - the scheduler: hit tick = bar start tick + cellStartTick + microTicks, plus ratchet
-    subdivisions inside the cell;
+  - the scheduler: hit tick = bar start tick + cellStartTick + microTicks, with ratchet subhits calculated from the cell's rational tick duration using the exact same quantisation rule as export;
   - the generator: positions to cells;
   - the editor: geometry and editing;
-  - pattern and song MIDI export: ticks written exactly;
+  - pattern and song MIDI export: consume the exact same quantised integer-tick event list as the scheduler;
   - the subdivision switch.
 - No subsystem reconstructs timing on its own. The uniform `stepLength` arithmetic is
   removed.
 - **Ticks to samples:**
-  - sample offset = (tick / 960 − block start PPQ) × samples per quarter, rounded down. This
-    is the one conversion; MIDI export uses the integer ticks directly.
-  - A test asserts that every scheduled NoteOn sample equals this conversion of its export tick
-    (± 0 samples) at 44.1/48/96 kHz and blocks of 64/333/512.
+  - Ordinary cell-start + `microTicks` note positions are integral. **Ratchet subhits need not be integral before rounding** (e.g. a 40-tick cell divided by 3). A single allocation-free integer/rational helper must map each subhit to the **nearest whole tick, with exact ties to the earlier tick**, and both scheduler and MIDI export must consume these quantised events, maintaining increasing order and rejecting a combination if two distinct subhits cannot be represented without collision.
+  - Once the shared event tick is known, `sampleOffset = floor((eventTick / 960 − blockStartPPQ) × samplesPerQuarter)` with explicit block boundary/clamping tests. The exporter writes this **same eventTick**. Unit tests assert deterministic equality to this conversion at 44.1/48/96 kHz and blocks 64/333/512; this internal equality is not evidence of host transport precision.
 - **Host jumps:**
   - a discontinuity is a PPQ step backwards of more than 1 tick, or forwards of more than one
     block plus 1 tick;
@@ -620,13 +611,13 @@ is ever rounded except the user's own edit.
 | Area | Cases |
 |---|---|
 | Capacity | every (meter, resolution) of §10.2: slots per beat and bar; unavailable combinations refused with their reason |
-| Switch round trips | 4/4: 16th ↔ 16th-triplet and 32nd ↔ 32nd-triplet; 3/4 likewise; 6/8 and 12/8: straight ↔ duplet; with on-grid notes, humanized notes (non-zero microTicks) and off-grid notes at ±½ cell; straight → tuplet → straight restores bit-identically |
+| Subdivision switches | 4/4 16th ↔ 16th-triplet and 32nd ↔ 32nd-triplet; 3/4 likewise; 6/8 and 12/8 straight ↔ duplet; on-grid and humanised/off-grid notes at ±½ cell. Any accepted conversion preserves absolute ticks and all event attributes; a second inverse edit can choose a different cell on a tie. **Undo/Redo alone** must restore bit-identical state. |
 | Rejections | two events into one cell; a \|microTicks\| > ½ cell; a locked step that would split or move; each leaves cells, mask, ticks and history unchanged |
 | Undo/redo | every accepted switch; bit-identical restore |
-| Reserved slots | inactive slots empty after every operation; non-empty inactive slots in `DSEQ` rejected |
-| Scheduler | per-beat mixed subdivisions; NoteOn sample = tick conversion ± 0 at 44.1/48/96 kHz, blocks 64/333/512; ratchets inside tuplet cells |
-| Export | pattern and song: integer ticks equal `cellStartTick + microTicks`; time-signature events; NoteOff before the next hit on the lane |
-| Host | meter change, loop, jump, jitter (no reset), missing time signature or bar start; export unchanged by playback |
+| Reserved slots | inactive slots remain empty after all operations; DSEQ with nonempty inactive slots is rejected. Old `StoredPattern::resize` drops off-grid events and MUST NOT be used for new meter/resolution changes; conversions are lossless-or-atomic-reject. |
+| Scheduler | mixed straight/tuplet notes, shared integer-tick to sample conversion at 44.1/48/96 kHz and block sizes 64/333/512; fractional ratchet subhits rounded exactly once, in order |
+| Export | pattern and song emit the same tick events (including quantised ratchets) as playback; check NoteOn/Off ordering and time-signature events, with no dropped notes |
+| Host | meter changes, loops, jumps, transport jitter and missing fields; export independent from host; first/last beat micro offsets crossing bar boundaries must be scheduled/exported coherently, or rejected clearly before editing, never silently omitted |
 
 ### 10.6 Generator
 
