@@ -127,6 +127,12 @@ target_link_libraries(suite_drums_pad_roles_tests PRIVATE ${VOX_SUITE_drm_TARGET
 target_include_directories(suite_drums_pad_roles_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 add_test(NAME suite_drums_pad_roles_tests COMMAND suite_drums_pad_roles_tests)
 
+# Shared bar timing (PR 137 §10 rev 6): capacity, ticks, ratchet rounding,
+# lossless-or-reject subdivision switches. Engine library only.
+add_executable(suite_drums_bar_timing_tests DrumsBarTimingTests.cpp)
+target_link_libraries(suite_drums_bar_timing_tests PRIVATE vox_drums_engine)
+add_test(NAME suite_drums_bar_timing_tests COMMAND suite_drums_bar_timing_tests)
+
 # Declarative style engine foundation (issue 136): registry, parser, hashes
 # and byte parity of the seven original styles with the switch-based
 # generator (GeneratorReference.cpp, a test reference only).

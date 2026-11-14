@@ -43,7 +43,8 @@ endfunction()
 # VOX Drums kit engine (DRM-03): C++, no legacy ABI.
 add_library(vox_drums_engine STATIC
   drums/engine/KitEngine.cpp drums/engine/KitEngine.h
-  drums/engine/SendFx.cpp drums/engine/SendFx.h)
+  drums/engine/SendFx.cpp drums/engine/SendFx.h
+  drums/engine/BarTiming.cpp drums/engine/BarTiming.h drums/engine/BarTiming.inl)
 target_include_directories(vox_drums_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/drums)
 target_compile_features(vox_drums_engine PUBLIC cxx_std_20)
 set_target_properties(vox_drums_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
