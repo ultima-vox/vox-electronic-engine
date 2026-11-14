@@ -7,6 +7,12 @@ proposal for Architecture Guard review. Documentation only: no code, no JUCE UI,
 no change to `drm/production-candidate` (PR #125) or to any other branch. It is required
 before Gate 2 (native UI v3, issue #127). Task order: issue #127 comment 6863921664.
 
+> **Superseded in part (2026-11-14):** pre-release policy, §14. There are no shipped projects
+> or presets, so every rule here that exists only so that `c7c29bb` can open new projects
+> (`DUIS` v1 migration, `UIST` clamp and dual write, old-build tests) is dropped for the first
+> public release. §14 is the short simplification delta for Architecture Guard. Where §14 and
+> an earlier section disagree, §14 wins.
+
 Baseline verified: `drm/production-candidate` @ `c7c29bbbd6101dfb5e0cb2418a071d11caeb15b2`,
 JUCE `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`.
 
@@ -360,3 +366,105 @@ approval (§12 Q2).
 - **Not covered here:**
   - custom-kit semantic roles (separate Draft PR, option B, issue #128);
   - the Cubase MIDI drag failure (separate task).
+
+## 14. Simplification delta: pre-release policy (2026-11-14)
+
+Source: owner policy in #130 comment 6880138881 (also #127, #136), confirmed by the owner in
+the work session.
+
+- There are no user projects or presets. PR #125 is an unpublished development build and is not
+  a compatibility target.
+- Each format gets one canonical record with versioning and validation.
+- Compatibility is frozen at the first public release.
+
+Documentation only; no code.
+
+### 14.1 Dropped from the release
+
+| Item | Was | Now |
+|---|---|---|
+| `DUIS` v1 (8-page navigation) | kept byte-compatible, read and written | **not written**. Its fields move to `DLAY` (§14.3). `DUIS` stays a recognised product tag so a development-build project does not carry it forever as an unknown section. It is **read and discarded**, with no migration. |
+| §8 migration from `DUIS.page` | page → workspace table | **dropped**. A project without `DLAY` opens Beatmaking with default selection. |
+| §5 `UIST` clamp and dual write | `UIST` clamped to 1500 × 920; real size only in `DLAY` | **dropped**. One canonical editor size, unclamped (§14.2). |
+| §7 rows for `DUIS` v1 without `DLAY`, and round trips through `c7c29bb` | migrated layout | **dropped** |
+| §2 rationale "old builds keep `DLAY` as unknown" | Q1 motivation | **withdrawn**. `DLAY` stays, as the one canonical, bounded layout record. |
+| Tests T7, T9, T10, T11; the `c7c29bb` part of T19 | migration and old-build checks | **removed** (§14.4) |
+
+### 14.2 Editor size: one canonical value (decision D1)
+
+The real logical editor size, up to 2560 × 1600 and at least 1040 × 700, is stored in **one**
+place. There are two clean options.
+
+- **D1-a (recommended): `UIST` is the size record.**
+  - The suite's `EditorLimits` maximum rises to 2560 × 1600 for every product. The minimum is
+    unchanged.
+  - `DLAY` has no EDITOR_SIZE record.
+  - `UIST` is already the suite's framework invariant (written and validated by
+    `SuiteProcessor` for all three plugins). This keeps one field and one validator.
+  - It is a shared-framework change: FX and Trance Synthesis must still pass their editor
+    tests at the new maximum.
+- **D1-b: `DLAY` EDITOR_SIZE is the size record.** `SuiteProcessor` would need a per-product
+  switch to stop writing `UIST` for Drums. That is a second code path in the framework.
+
+The display clamp for a small screen (§5, T15) and the computed, never-stored degradation stay
+unchanged.
+
+### 14.3 What `DLAY` holds after the change
+
+- The layout records of §4, unchanged.
+- **New record SELECTION:** `u8 pad (0–15), u8 songBar (0–63), u8 patternBar (0–3)`, strictly
+  validated. It replaces the `DUIS` fields.
+- Dropped:
+  - `exportScope` (UI v3 drag handles fix the scope);
+  - `page` (workspaces replace pages).
+- EDITOR_SIZE only if D1-b is chosen.
+
+### 14.4 What stays: reliability, not legacy
+
+- **Container:** CRC, schema check, and the transactional restore (F1, F2).
+- **Strict product sections:** a malformed audio or musical section rejects the restore, and
+  the live state stays unchanged.
+- **Future versions** (§7):
+  - `DLAY` version > 1 is kept and never rewritten without a confirmed Reset.
+  - Unknown record types are kept in place.
+  - These rules are needed for projects from later releases.
+- **Invalid `DLAY` falls back** to the default layout. The project, audio included, still
+  restores, and a diagnostic is shown (Q2 exception). This is UI-only data, so it must not
+  cost a project.
+- **Lifecycle (§6):**
+  - The processor owns the layout under `settingsLock_`; the editor writes back committed
+    gestures only.
+  - Restore → atomic generation → `ChangeBroadcaster`. The editor registers in its constructor
+    and unregisters in its destructor.
+  - Layout changes are not undo steps.
+  - Host dirty flag through `withNonParameterStateChanged`.
+- **Per-user workspaces file** (§9): separate from the project; project layout and global
+  workspaces stay separate.
+- **Budget** (§10, T21): unchanged.
+- **Host automation:** host parameters and their IDs are untouched. No UI mutation from the
+  audio callback.
+
+### 14.5 Tests after the change
+
+| Test | Change |
+|---|---|
+| T1–T4b | unchanged; the SELECTION record is added to T1/T2 |
+| T5 | fallback is the default Beatmaking layout (not a `DUIS` migration) |
+| T6 | same; audio sections bit-identical; diagnostic present; first edit writes v1 |
+| T7, T9, T10, T11 | **removed** |
+| T8 | becomes: no `DLAY` → Beatmaking, default selection |
+| T12–T18, T20, T21 | unchanged |
+| T19 | without the "old `c7c29bb` project" step |
+| **T22 (new)** | a development-build state with `DUIS` v1: restores, `DUIS` is dropped on save (not kept as unknown), and the layout is the default |
+| **T23 (new)** | D1-a: all three plugins open, save and restore at 1040 × 700 and 2560 × 1600; out-of-range sizes still rejected |
+
+### 14.6 Decisions for Architecture Guard
+
+1. **D1:** the canonical editor size in `UIST` with the suite maximum raised to 2560 × 1600
+   (D1-a, recommended), or in `DLAY` (D1-b).
+2. **D2:** `DUIS` read and discarded (no migration, not preserved as unknown).
+3. **D3:** SELECTION record in `DLAY` replaces the `DUIS` fields; `exportScope` and `page`
+   dropped.
+
+After the first public release these formats are frozen. From then on, any change needs
+compatibility with shipped projects.
