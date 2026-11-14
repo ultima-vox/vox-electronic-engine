@@ -1,0 +1,15 @@
+{
+  "format": "vox-drums-style", "version": 1, "key": "house", "name": "House",
+  "rules": [
+    { "part": "kick", "at": [1, 5, 9, 13], "velocity": 0.95, "accent": true },
+    { "part": "kick", "at": [16], "kind": "ghost", "chance": "0.1 + 0.4 * syncopation", "velocity": 0.6 },
+    { "part": "clap", "at": [5, 13], "velocity": 0.9, "accent": true },
+    { "part": "openHat", "at": [3, 7, 11, 15], "velocity": 0.75 },
+    { "part": "closedHat", "at": [1, 5, 9, 13], "when": ["density > 0.3"], "velocity": 0.6 },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.1 + 0.7 * density", "velocity": 0.4 },
+    { "part": "rim", "at": [4, 7, 12], "kind": "ghost", "chance": "0.2 + 0.6 * syncopation", "velocity": 0.55 },
+    { "part": "perc1", "at": [8, 11, 14], "kind": "ghost", "chance": "0.15 + 0.55 * syncopation * (0.5 + density)", "velocity": 0.5 },
+    { "part": "snare", "at": [16], "kind": "ghost", "chance": "0.1 + 0.4 * complexity", "velocity": 0.45 }
+  ],
+  "fill": { "cycle": ["clap", "snare", "snare"], "ratchet": 2 }
+}

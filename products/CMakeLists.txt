@@ -58,5 +58,21 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/SampleLibrary.cpp drums/SampleLibrary.h
   drums/KitStore.cpp drums/KitStore.h
   drums/PatternStore.cpp drums/PatternStore.h drums/SongModel.cpp drums/Generator.cpp drums/Generator.h drums/PadRoles.cpp drums/PadRoles.h drums/FactoryContent.cpp drums/FactoryContent.h drums/Presets.cpp drums/Presets.h drums/DrumsPages.cpp drums/DrumsPages.h drums/PatternExport.cpp drums/PatternExport.h
-  drums/PatternEditor.cpp drums/PatternEditor.h)
+  drums/PatternEditor.cpp drums/PatternEditor.h
+  drums/StyleDefinition.cpp drums/StyleDefinition.h drums/StyleRegistry.cpp drums/StyleRegistry.h)
 target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juce_cryptography)
+
+# Factory style definitions (issue 136): the JSON files in drums/styles are
+# built into the plugin as text, in this order, and parsed by the same
+# parser an imported style will use. Reconfigures when a file changes.
+set(VOX_DRUMS_FACTORY_STYLES full-on goa house techno trap breaks ambient)
+set(_vox_styles_inc "${CMAKE_CURRENT_BINARY_DIR}/drums/FactoryStyles.inc")
+set(_vox_styles_text "// Generated from products/drums/styles/*.json. Do not edit.\n")
+foreach(_style IN LISTS VOX_DRUMS_FACTORY_STYLES)
+  set(_file "${CMAKE_CURRENT_SOURCE_DIR}/drums/styles/${_style}.json")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_file}")
+  file(READ "${_file}" _json)
+  string(APPEND _vox_styles_text "R\"voxstyle(${_json})voxstyle\",\n")
+endforeach()
+file(CONFIGURE OUTPUT "${_vox_styles_inc}" CONTENT "${_vox_styles_text}" @ONLY)
+target_include_directories(${VOX_SUITE_drm_TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/drums")
