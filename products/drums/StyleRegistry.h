@@ -21,7 +21,8 @@ namespace vox::drums::style {
 inline constexpr int registrySize = 23;
 
 struct StyleInfo {
-    int id = 0;               // stable, 0..22
+    int id = 0;               // stable list/order position, 0..22
+    const char* uuid = "";    // the style's identity (DGEN v2 references it); never changes
     const char* key = "";     // stable text id, e.g. "dark-psy"
     const char* name = "";    // shown to the user
     const char* group = "";   // browser grouping
@@ -32,6 +33,7 @@ struct StyleInfo {
 const std::array<StyleInfo, registrySize>& registry() noexcept;
 const StyleInfo* infoById (int id) noexcept;
 const StyleInfo* infoByKey (const juce::String& key) noexcept;
+const StyleInfo* infoByUuid (const juce::String& uuid) noexcept;
 
 // The parsed factory definition of `id`, or nullptr when the style has no
 // definition yet (not available for generation).

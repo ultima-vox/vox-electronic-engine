@@ -133,7 +133,7 @@ add_test(NAME suite_drums_pad_roles_tests COMMAND suite_drums_pad_roles_tests)
 add_executable(suite_drums_style_engine_tests DrumsStyleEngineTests.cpp GeneratorReference.cpp)
 target_link_libraries(suite_drums_style_engine_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_style_engine_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME suite_drums_style_engine_tests COMMAND suite_drums_style_engine_tests)
+add_test(NAME suite_drums_style_engine_tests COMMAND suite_drums_style_engine_tests ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/example-user-style.voxstyle)
 
 # Generator style fidelity (issue 128): rhythm grammar per style over a
 # settings matrix, audible roles on the factory kits, reproducibility.

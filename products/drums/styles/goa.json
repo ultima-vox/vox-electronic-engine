@@ -1,5 +1,9 @@
 {
-  "format": "vox-drums-style", "version": 1, "key": "goa", "name": "Goa",
+  "format": "vox-drums-style", "version": 1,
+  "id": "07de80e8-7de8-42d5-9318-53a2cb88cef8", "key": "goa", "name": "Goa",
+  "meta": { "author": "Ultima Vox", "group": "Psy", "tempo": { "min": 138, "max": 148 } },
+  "meters": ["4/4"],
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.0, "humanize": 0.15 },
   "rules": [
     { "part": "kick", "at": [1, 5, 9, 13], "velocity": 1.0, "accent": true },
     { "part": "closedHat", "at": [3, 7, 11, 15], "velocity": 0.8 },
@@ -11,5 +15,7 @@
     { "part": "tom", "at": [11, 12, 15], "kind": "ghost", "chance": "0.25 + 0.6 * complexity", "velocity": 0.7 },
     { "part": "openHat", "at": [15], "kind": "ghost", "chance": "0.2 + 0.5 * density", "velocity": 0.7 }
   ],
-  "fill": { "cycle": ["snare", "tom"], "ratchet": 2 }
+  "fill": { "cycle": ["snare", "tom"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true }
 }

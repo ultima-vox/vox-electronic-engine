@@ -1,4 +1,4 @@
-# VOX Drums declarative style engine — foundation (issue #136)
+# VOX Drums declarative style engine (issue #136)
 
 Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
 
@@ -90,3 +90,53 @@ Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
   factory kits. They come after the AG review (#137 §7).
 - Generation runs on the message thread only. Parsing and evaluation never run in
   `processBlock`.
+
+## Canonical `.voxstyle` v1 schema (branch `drm/style-schema`; AG-1 PASS, review 5906187802)
+
+One schema, parser and AST for factory and user styles. It extends the flat-rule form above.
+Formulas are unchanged.
+
+| Key | Required | Content |
+|---|---|---|
+| `format`, `version` | yes | `"vox-drums-style"`, `1` |
+| `id` | yes | lower-case UUID. Factory styles have fixed UUIDs in the registry; the numeric ids 0–22 give order only. |
+| `key`, `name` | yes | key `[a-z0-9-]{1,48}`; name 1–64 characters |
+| `meta` | no | `author`, `group` (≤ 64 characters each), `tempo {min, max}` 20–400 (information only) |
+| `meters` | yes | unique list from `4/4`, `3/4`, `6/8`, `12/8`; **must contain `4/4`** |
+| `defaults` | no | the 8 settings, 0–1 ("Style defaults") |
+| `rules[]` | yes | as above, plus `meter` (default `4/4`, must be listed in `meters`) and, for tuplets, `beats` + `subdivision` (`triplet` in 4/4 and 3/4, `duplet` in 6/8 and 12/8) |
+| `probability`, `fill` | `fill` yes | as above |
+| `variation` | no | `keep`: the parts a Variation B keeps (default kick, snare, clap) |
+| `song` | no | `breakWithoutKick` (default true) |
+| `assertions[]` | no | `part`, `meter`, `always` / `never` positions: **self-consistency checks only, not genre or quality** |
+
+- **Positions** are stored as a 32-bit mask:
+  - straight rules: 1–16 in 4/4, 1–12 in 3/4 and 6/8, **1–24 in 12/8**;
+  - tuplet rules: cells 1–6 (triplet) or 1–4 (duplet) within each listed beat.
+- **Generation:** only straight 4/4 rules run until the shared timing engine (PR #137 §10.5a)
+  exists. The other rules are validated, kept and serialized exactly.
+- **Canonical serializer** (`style::serialize`):
+  - sorted keys, no spaces outside formulas;
+  - formulas in canonical token form;
+  - numbers in their shortest round-trip form (`std::to_chars`).
+  - parse → serialize → parse is exact.
+- **Hashes:**
+  - `contentHash`: the generation-relevant data;
+  - `documentHash`: the canonical text, used for library and project identity.
+- **Runnable fixture:** `tests/suite/fixtures/example-user-style.voxstyle` uses every field,
+  including 12/8 rules up to position 23, tuplet and duplet rules, and assertions.
+- **Tests added:**
+  - every new rejection class;
+  - 12/8 positions 17–24 and tuplet cells kept exactly;
+  - every factory style and the fixture round-trip byte-exactly;
+  - **factory export → parse → generate**, byte-identical (Pattern, Variation, Song);
+  - the fixture generates and its own assertions hold;
+  - a contradicted assertion is reported;
+  - `variation.keep` and `song.breakWithoutKick` are honoured;
+  - 23 unique registry UUIDs.
+
+Not yet done:
+
+- `DGEN` v2 (style by UUID) and `DSTL` (embedded user style). Their exact state layout is
+  committed before the code.
+- Import UI, library folder, collision handling.

@@ -246,10 +246,10 @@ void testHashes()
 }
 
 //==============================================================================
-juce::String minimal (const juce::String& rules, const juce::String& extra = {})
+juce::String minimal (const juce::String& rules, const juce::String& extra = {}, const juce::String& meters = R"(["4/4"])")
 {
-    return R"({ "format": "vox-drums-style", "version": 1, "key": "t", "name": "T", "rules": [)" + rules + "]" + extra
-         + R"(, "fill": { "cycle": ["snare"], "ratchet": 2 } })";
+    return R"({ "format": "vox-drums-style", "version": 1, "id": "00000000-0000-4000-8000-000000000001", "key": "t", "name": "T", "meters": )"
+         + meters + R"(, "rules": [)" + rules + "]" + extra + R"(, "fill": { "cycle": ["snare"], "ratchet": 2 } })";
 }
 
 void testParser()
@@ -281,6 +281,29 @@ void testParser()
           "rules[0].ratchet.otherwise" },
         { minimal (R"({ "part": "kick", "at": [1] })", R"(, "probability": { "value": "50", "min": 80, "max": 20 })"), "min is above max" },
         { R"({ "format": "vox-drums-style", "version": 2, "key": "t", "name": "T", "rules": [], "fill": {} })", "version" },
+        // Canonical schema (PR 137 §11.1).
+        { minimal (R"({ "part": "kick", "at": [1] })").replace ("00000000-0000-4000-8000-000000000001", "not-a-uuid"), "id: must be a lower-case UUID" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-00000000000A"), "id: must be a lower-case UUID" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace ("\"key\": \"t\"", "\"key\": \"Bad Key\""), "key: must be" },
+        { minimal (R"({ "part": "kick", "at": [1] })", {}, R"(["12/8"])"), "meters: must include \"4/4\"" },
+        { minimal (R"({ "part": "kick", "at": [1] })", {}, R"(["4/4", "4/4"])"), "meters[1]: 4/4 appears twice" },
+        { minimal (R"({ "part": "kick", "at": [1] })", {}, R"(["4/4", "5/4"])"), "unknown meter '5/4'" },
+        { minimal (R"({ "part": "kick", "meter": "12/8", "at": [1] })"), "rules[0].meter: 12/8 is not in the style's meters" },
+        { minimal (R"({ "part": "kick", "meter": "12/8", "at": [25] })", {}, R"(["4/4", "12/8"])"), "rules[0].at[0]: 25 is outside 1..24" },
+        { minimal (R"({ "part": "kick", "meter": "3/4", "at": [13] })", {}, R"(["4/4", "3/4"])"), "rules[0].at[0]: 13 is outside 1..12" },
+        { minimal (R"({ "part": "kick", "beats": [4], "at": [1] })"), "go together" },
+        { minimal (R"({ "part": "kick", "beats": [4], "subdivision": "duplet", "at": [1] })"), "must be \"triplet\" in 4/4" },
+        { minimal (R"({ "part": "kick", "beats": [5], "subdivision": "triplet", "at": [1] })"), "rules[0].beats[0]: 5 is outside 1..4" },
+        { minimal (R"({ "part": "kick", "beats": [4], "subdivision": "triplet", "at": [7] })"), "rules[0].at[0]: 7 is outside 1..6" },
+        { minimal (R"({ "part": "kick", "meter": "12/8", "beats": [1], "subdivision": "duplet", "at": [5] })", {}, R"(["4/4", "12/8"])"),
+          "rules[0].at[0]: 5 is outside 1..4" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "defaults": { "density": 2 })"), "defaults.density: 2 is outside" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "defaults": { "tempo": 1 })"), "unknown key 'tempo'" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "meta": { "tempo": { "min": 140, "max": 120 } })"), "meta.tempo: min is above max" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "variation": { "keep": ["kick", "kick"] })"), "part kick appears twice" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "song": { "breakWithoutKick": 1 })"), "song.breakWithoutKick: must be true or false" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "assertions": [ { "part": "kick", "always": [1], "never": [1] } ])"),
+          "a position is both always and never" },
     };
     for (const auto& c : rejects)
     {
@@ -289,6 +312,21 @@ void testParser()
         const auto r = st::parse (c.json, out);
         check (r.failed() && r.getErrorMessage().contains (c.field) && out.key == "untouched",
                "parser rejects with '" + c.field + "' (got '" + r.getErrorMessage() + "')");
+    }
+    // Accepted: 12/8 positions 17..24 and tuplet cells survive parse and serialization.
+    {
+        st::Definition t;
+        const auto r = st::parse (minimal (R"({ "part": "kick", "meter": "12/8", "at": [17, 20, 24] },
+                                            { "part": "closedHat", "beats": [2, 4], "subdivision": "triplet", "at": [1, 6] })",
+                                           {}, R"(["4/4", "12/8"])"),
+                                  t);
+        check (r.wasOk() && t.rules.size() == 2 && t.rules[0].positions == ((1u << 16) | (1u << 19) | (1u << 23)) && t.rules[0].meter == st::Meter::m12_8
+                   && t.rules[1].tupletBeats == 0x000Au && t.rules[1].positions == 0x21u,
+               "parser: 12/8 positions 17..24 and tuplet cells are kept exactly (" + r.getErrorMessage() + ")");
+        st::Definition back;
+        check (st::parse (st::serialize (t), back).wasOk() && back.rules[0].positions == t.rules[0].positions
+                   && back.rules[1].tupletBeats == t.rules[1].tupletBeats && st::serialize (back) == st::serialize (t),
+               "serializer: 12/8 and tuplet rules round-trip");
     }
     // Limits.
     {
@@ -427,11 +465,145 @@ void testUnavailableStyle()
            "unavailable style: the processor reports no change, keeps the seed, records no undo step and leaves the state unchanged");
 }
 
+//==============================================================================
+// Canonical serializer: every factory style and the fixture round-trip, and
+// a re-parsed factory definition generates byte-identically.
+void testRoundTrip (const juce::File& fixture)
+{
+    std::vector<std::shared_ptr<const st::Definition>> defs;
+    for (int id = 0; id < styleCount; ++id)
+        if (const auto* d = st::factoryDefinition (id))
+            defs.push_back (std::make_shared<st::Definition> (*d));
+    const auto text = fixture.loadFileAsString();
+    st::Definition example;
+    const auto parsed = st::parse (text, example);
+    check (parsed.wasOk(), "fixture: example-user-style.voxstyle parses (" + parsed.getErrorMessage() + ")");
+    if (parsed.wasOk())
+        defs.push_back (std::make_shared<st::Definition> (example));
+    for (const auto& d : defs)
+    {
+        const auto first = st::serialize (*d);
+        st::Definition again;
+        const auto r = st::parse (first, again);
+        check (r.wasOk() && st::serialize (again) == first && st::contentHash (again) == st::contentHash (*d)
+                   && st::documentHash (again) == st::documentHash (*d),
+               "serializer: " + d->key + " round-trips exactly (" + r.getErrorMessage() + ")");
+    }
+    // Factory export -> parse -> generate: byte-identical over a matrix.
+    auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
+    auto all = std::make_unique<PatternStore::Everything>(), all2 = std::make_unique<PatternStore::Everything>();
+    for (int id = 0; id < styleCount; ++id)
+    {
+        auto reparsed = std::make_shared<st::Definition>();
+        if (! st::parse (st::serialize (*st::factoryDefinition (id)), *reparsed).wasOk())
+            continue;
+        int bad = 0, n = 0;
+        for (std::uint32_t seed = 1; seed <= 4; ++seed)
+            for (float density : { 0.1f, 0.6f, 1.0f })
+                for (float complexity : { 0.2f, 0.9f })
+                    for (int steps : { 16, 64 })
+                    {
+                        GeneratorSettings g;
+                        g.style = static_cast<Style> (id);
+                        g.seed = seed * 31u;
+                        g.density = density;
+                        g.complexity = complexity;
+                        g.fills = 0.7f;
+                        g.syncopation = 0.6f;
+                        GeneratorSettings h = g;
+                        h.style = Style::fullOn;   // must not matter: the custom definition runs
+                        h.custom = reparsed;
+                        empty (*a, steps, 4);
+                        empty (*b, steps, 4);
+                        generatePattern (g, *a);
+                        generatePattern (h, *b);
+                        bad += *a == *b ? 0 : 1;
+                        auto va = std::make_unique<StoredPattern>(), vb = std::make_unique<StoredPattern>();
+                        empty (*va, steps, 4);
+                        empty (*vb, steps, 4);
+                        generateVariation (g, *a, *va);
+                        generateVariation (h, *b, *vb);
+                        bad += *va == *vb ? 0 : 1;
+                        n += 2;
+                    }
+        for (auto* e : { all.get(), all2.get() })
+        {
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+            {
+                empty (e->slots[static_cast<std::size_t> (slot)], 16, 4);
+                empty (e->alternates[static_cast<std::size_t> (slot)], 16, 4);
+            }
+            e->song = SongData::initial();
+            e->song.length = 32;
+        }
+        GeneratorSettings g;
+        g.style = static_cast<Style> (id);
+        GeneratorSettings h = g;
+        h.custom = reparsed;
+        generateSong (g, *all);
+        generateSong (h, *all2);
+        bad += all->slots == all2->slots && all->alternates == all2->alternates && all->song == all2->song ? 0 : 1;
+        ++n;
+        check (bad == 0, juce::String ("round trip: ") + styleName (static_cast<Style> (id)) + " exported, re-parsed and generated: "
+                             + juce::String (bad) + " of " + juce::String (n) + " differ");
+    }
+    // The fixture runs: it generates, and its own 4/4 assertions hold.
+    if (parsed.wasOk())
+    {
+        auto def = std::make_shared<st::Definition> (example);
+        GeneratorSettings g;
+        g.custom = def;
+        empty (*a, 16, 4);
+        check (generatePattern (g, *a), "fixture: generates");
+        int hits = 0;
+        for (const auto& c : a->cells)
+            hits += c.on ? 1 : 0;
+        check (hits > 16, "fixture: writes a pattern (" + juce::String (hits) + " hits)");
+        const auto violations = checkStyleAssertions (def);
+        check (violations.isEmpty(), "fixture: its assertions hold (" + violations.joinIntoString ("; ") + ")");
+        // A broken copy: an assertion the rules contradict is reported.
+        auto broken = std::make_shared<st::Definition> (example);
+        broken->assertions.push_back ({ st::Meter::m4_4, 0, 0, 1u });   // "kick never on 1"
+        check (! checkStyleAssertions (broken).isEmpty(), "fixture: a contradicted assertion is reported");
+        // variation.keep and song.breakWithoutKick are honoured.
+        GeneratorSettings s;
+        s.custom = def;
+        s.density = 0.8f;
+        for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+        {
+            empty (all->slots[static_cast<std::size_t> (slot)], 16, 4);
+            empty (all->alternates[static_cast<std::size_t> (slot)], 16, 4);
+        }
+        all->song = SongData::initial();
+        generateSong (s, *all);
+        bool breakHasKick = false;
+        for (int bar = 0; bar < 4; ++bar)
+            breakHasKick = breakHasKick || all->slots[3].cell (0, bar, 0).on;
+        check (breakHasKick, "fixture: song.breakWithoutKick = false keeps the kick in the break slot");
+    }
+    // Registry identities.
+    std::set<juce::String> uuids;
+    for (const auto& info : st::registry())
+    {
+        check (st::isCanonicalUuid (info.uuid) && st::infoByUuid (info.uuid) == &info, juce::String ("registry: UUID of ") + info.name);
+        uuids.insert (info.uuid);
+        if (const auto* d = st::factoryDefinition (info.id))
+            check (d->id == info.uuid, juce::String ("registry: factory definition id of ") + info.name);
+    }
+    check (uuids.size() == st::registrySize, "registry: 23 unique UUIDs");
+}
+
 } // namespace
 
-int main()
+int main (int argc, char** argv)
 {
+    if (argc < 2)
+    {
+        std::printf ("usage: %s <tests/suite/fixtures/example-user-style.voxstyle>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
+    testRoundTrip (juce::File (juce::String (argv[1])));
     testRegistry();
     testUnavailableStyle();
     testFormulas();

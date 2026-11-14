@@ -61,7 +61,7 @@ bool offBeat (int pos) noexcept { return pos % 4 == 2; }
 // The style being generated: its declarative definition (StyleRegistry).
 const style::Definition* definitionOf (const GeneratorSettings& g)
 {
-    return style::factoryDefinition (static_cast<int> (g.style));
+    return g.custom != nullptr ? g.custom.get() : style::factoryDefinition (static_cast<int> (g.style));
 }
 
 style::ParamValues paramsOf (const GeneratorSettings& g) noexcept
@@ -87,7 +87,9 @@ Hit styleHit (const style::Definition& def, const style::ParamValues& values, co
     };
     for (const auto& rule : def.rules)
     {
-        if (rule.part != lane || (rule.positions & (1u << pos)) == 0)
+        // Only straight 4/4 rules run until the shared timing engine (PR 137
+        // §10.5a) plays other meters and tuplet cells.
+        if (rule.part != lane || rule.meter != style::Meter::m4_4 || rule.tupletBeats != 0 || (rule.positions & (1u << pos)) == 0)
             continue;
         if ((rule.bars == style::Bars::first && c.bar != 0) || (rule.bars == style::Bars::odd && c.bar % 2 != 0))
             continue;
@@ -213,6 +215,45 @@ bool GeneratorSettings::operator== (const GeneratorSettings& o) const noexcept
         && laneLocks == o.laneLocks;
 }
 
+juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Definition>& definition, int maxViolations)
+{
+    juce::StringArray out;
+    if (definition == nullptr)
+        return { "no style" };
+    auto p = std::make_unique<StoredPattern>();
+    for (std::uint32_t seed = 1; seed <= 6; ++seed)
+        for (float density : { 0.0f, 0.5f, 1.0f })
+            for (float complexity : { 0.0f, 0.5f, 1.0f })
+            {
+                GeneratorSettings g;
+                g.custom = definition;
+                g.seed = seed;
+                g.density = density;
+                g.complexity = complexity;
+                g.fills = 0.0f;
+                p->steps = 16;
+                p->bars = 4;
+                p->cells.fill ({});
+                generatePattern (g, *p);
+                for (const auto& a : definition->assertions)
+                {
+                    if (a.meter != style::Meter::m4_4)
+                        continue;
+                    for (int bar = 0; bar < p->bars; ++bar)
+                        for (int pos = 0; pos < 16; ++pos)
+                        {
+                            const bool on = p->cell (a.part, bar, pos).on;
+                            const bool wrong = ((a.always & (1u << pos)) != 0 && ! on) || ((a.never & (1u << pos)) != 0 && on);
+                            if (wrong && out.size() < maxViolations)
+                                out.add (juce::String (style::partKey (a.part)) + (on ? " plays" : " is missing") + " at " + juce::String (pos + 1)
+                                         + " (bar " + juce::String (bar + 1) + ", seed " + juce::String (seed) + ", density "
+                                         + juce::String (density) + ", complexity " + juce::String (complexity) + ")");
+                        }
+                }
+            }
+    return out;
+}
+
 bool styleAvailable (Style style)
 {
     return style::available (static_cast<int> (style));
@@ -304,7 +345,7 @@ bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
     {
         const int slot = roles.slotOfLane[static_cast<std::size_t> (lane)];
         if (slot < 0
-            || (slot != kick && slot != snare && slot != clap
+            || ((definitionOf (g)->variationKeep & (1u << slot)) == 0
                 && rnd (v.seed, static_cast<std::uint32_t> (slot), 77) < 0.25 + 0.75 * g.variation))
             mask |= 1u << lane;
     }
@@ -340,7 +381,7 @@ bool generateSong (const GeneratorSettings& g, PatternStore::Everything& all, co
         s.fills = std::clamp (g.fills * parts[slot].fills, 0.0f, 1.0f);
         auto& a = all.slots[static_cast<std::size_t> (slot)];
         generatePattern (s, a, roles);
-        if (! parts[slot].kickOn && kickLane >= 0)
+        if (! parts[slot].kickOn && kickLane >= 0 && definitionOf (g)->songBreakWithoutKick)
             for (int bar = 0; bar < a.bars; ++bar)
                 for (int step = 0; step < a.steps; ++step)
                     put (g, a, kickLane, bar, step, {});

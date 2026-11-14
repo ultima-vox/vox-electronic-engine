@@ -22,6 +22,7 @@
 // lanes. With RoleMap::identity() the output is exactly as before roles.
 
 #include "PadRoles.h"
+#include "StyleDefinition.h"
 #include "PatternStore.h"
 
 namespace vox::drums {
@@ -44,6 +45,9 @@ struct GeneratorSettings {
     float variation = 0.4f;     // difference between bars, and of B from A
     std::uint32_t seed = 1;
     std::uint16_t laneLocks = 0;   // bit n: lane n is locked
+    // A style definition to run instead of the factory style `style` (a
+    // user style; message thread). Not part of operator== or DGEN v1.
+    std::shared_ptr<const style::Definition> custom;
 
     bool operator== (const GeneratorSettings&) const noexcept;
     bool operator!= (const GeneratorSettings& o) const noexcept { return ! (*this == o); }
@@ -58,6 +62,12 @@ bool decodeGenerator (const preset::Section&, GeneratorSettings& out, juce::Stri
 // style, or an unknown id, has none). If not, it returns false and changes
 // NOTHING: no cell, seed, lock, A/B pattern or song bar. True otherwise.
 bool styleAvailable (Style);
+
+// The style's own 4/4 assertions (PR 137 §11.3) checked on generated
+// patterns over a settings matrix (6 seeds × density × complexity, no fills,
+// 16 steps × 4 bars, identity roles). Returns the first violations ("" when
+// none). Proves only that the style agrees with itself, not genre quality.
+juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Definition>& definition, int maxViolations = 8);
 
 // A new pattern in `pattern`'s grid (its steps and bars are kept).
 bool generatePattern (const GeneratorSettings&, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());

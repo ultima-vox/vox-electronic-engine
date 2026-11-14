@@ -4,10 +4,12 @@
 // data, run by one interpreter in the generator. The factory styles are
 // written in this form too (StyleRegistry); nothing about a style is code.
 //
-// This is the FOUNDATION step: the in-memory model, a strict bounded JSON
-// parser and a deterministic content hash. The on-disk/import format, its
-// embedding in projects (DSTL) and DGEN v2 are not frozen yet: they wait
-// for the Architecture Guard review of PR 137 §§2, 3, 10, 11.
+// The canonical public `.voxstyle` v1 schema (PR 137 §11.1, AG-1 PASS in
+// review 5906187802): ONE schema, parser and AST for factory and user
+// styles; a canonical serializer (sorted keys, shortest round-trip
+// numbers) so parse -> write -> parse is exact. Rules for meters other than
+// 4/4 and tuplet rules are parsed, validated and serialized; the generator
+// runs them once the shared timing engine (PR 137 §10.5a) exists.
 //
 // Message thread only (parsing, hashing). The audio thread never sees it.
 
@@ -45,12 +47,21 @@ struct Expr {
         Param param = Param::density;
     };
     std::vector<Node> rpn;   // postfix
+    juce::String text;       // canonical source: tokens, single spaces, shortest numbers
     double evaluate (const ParamValues&) const noexcept;
     bool empty() const noexcept { return rpn.empty(); }
 };
 // Parses `text` (e.g. "0.15 + 0.5 * syncopation * density"). On failure
 // returns false and sets `error`.
 bool parseExpr (const juce::String& text, Expr& out, juce::String& error);
+
+// Meters a style may define (4/4 is required).
+enum class Meter : std::uint8_t { m4_4, m3_4, m6_8, m12_8 };
+inline constexpr int meterCount = 4;
+const char* meterKey (Meter) noexcept;              // "4/4", ...
+int gridPositions (Meter) noexcept;                 // 16th positions per bar: 16, 12, 12, 24
+int meterBeats (Meter) noexcept;                    // 4, 3, 2, 4
+bool compoundMeter (Meter) noexcept;                // 6/8, 12/8
 
 struct Condition {
     Expr left;
@@ -72,7 +83,12 @@ struct Ratchet {
 
 struct Rule {
     int part = 0;
-    std::uint16_t positions = 0;   // bit n: 16th n (0-based) of a 4/4 bar
+    Meter meter = Meter::m4_4;
+    // Straight: bit n = 16th n (0-based) of the meter's grid (up to 24).
+    // Tuplet: bit n = tuplet cell n within each listed beat (triplet 0..5
+    // in x/4 meters, duplet 0..3 in compound meters, at the 16th level).
+    std::uint32_t positions = 0;
+    std::uint16_t tupletBeats = 0;   // 0: a straight rule; bit b: beat b (0-based)
     enum class Kind : std::uint8_t { hit, ghost } kind = Kind::hit;
     std::vector<Condition> when;   // all must hold
     Expr chance;                   // hit: optional gate; ghost: required
@@ -95,24 +111,63 @@ struct Fill {
     int ratchet = 2;          // ratchet of a complex fill hit
 };
 
+struct Meta {
+    juce::String author, group;
+    int tempoMin = 0, tempoMax = 0;   // 0/0: no hint; information only, never sent to the host
+};
+
+// Recommended generator settings for the style ("Style defaults").
+struct Defaults {
+    std::array<float, paramCount> values { 0.5f, 0.5f, 0.3f, 0.4f, 0.5f, 0.4f, 0.0f, 0.2f };   // Param order
+};
+
+// A style's own structural self-checks (PR 137 §11.3): they prove only that
+// the file agrees with itself, never genre or quality.
+struct Assertion {
+    Meter meter = Meter::m4_4;
+    int part = 0;
+    std::uint32_t always = 0, never = 0;   // grid positions as Rule::positions
+};
+
 struct Definition {
-    juce::String key, name;
+    juce::String id;    // canonical lower-case UUID "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    juce::String key;   // [a-z0-9-], 1..48
+    juce::String name;
+    Meta meta;
+    std::uint8_t meters = 1;   // bit m: Meter m; bit 0 (4/4) always set
+    Defaults defaults;
     std::vector<Rule> rules;   // evaluated in order, per part
     std::optional<ProbabilityOverride> probability;
     Fill fill;
+    std::uint16_t variationKeep = 0x0007;   // parts a Variation B keeps from A (kick, snare, clap)
+    bool songBreakWithoutKick = true;       // the Song's break slot has no kick
+    std::vector<Assertion> assertions;
 };
 
 // Limits of the parser (bounded input; the import format will reuse them).
 inline constexpr std::size_t maxTextBytes = 64 * 1024;
-inline constexpr int maxRules = 512, maxRulesPerPart = 64, maxExprTokens = 64, maxExprDepth = 8, maxConditions = 4;
+inline constexpr int maxRules = 512, maxRulesPerPart = 64, maxExprTokens = 64, maxExprDepth = 8, maxConditions = 4, maxAssertions = 64,
+                     maxMetaText = 64;
 
 // Strict: an unknown key, a wrong type, an unknown part or setting, a
 // position outside 1..16, a duplicate position, a value out of range or a
 // text over the limits fails with an error naming the field.
 juce::Result parse (const juce::String& json, Definition& out);
 
-// SHA-256 (hex) of a deterministic binary form of the definition: equal
-// definitions give equal hashes on every platform.
+// The canonical text: keys sorted, no spaces outside formulas, numbers in
+// their shortest round-trip form, arrays in canonical order (rules in file
+// order). parse (serialize (d)) gives d again, and serialize of that gives
+// the same text.
+juce::String serialize (const Definition&);
+
+// SHA-256 (hex) of the generation-relevant data (rules, probability, fill,
+// variation, song, meters, defaults) in a deterministic binary form: equal
+// on every platform for equal definitions.
 juce::String contentHash (const Definition&);
+// SHA-256 (hex) of the canonical text: identifies the whole document (id,
+// names and metadata included); used for library and project identity.
+juce::String documentHash (const Definition&);
+
+bool isCanonicalUuid (const juce::String&) noexcept;
 
 } // namespace vox::drums::style
