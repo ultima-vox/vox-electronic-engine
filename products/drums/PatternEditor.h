@@ -27,6 +27,31 @@
 namespace vox::drums {
 
 class DrumsProcessor;
+
+// The MIDI button: one press either clicks or drags, never both (issue 131,
+// H1). Release without moving more than dragThreshold pixels, over the
+// button: onClick (save). Moving further starts onDragStart once and the
+// rest of that gesture, wherever it is released, never clicks. A drag that
+// fails or whose mouse-up never arrives (the OS drag took the mouse) ends at
+// the next mouse-down, so the next ordinary click saves again. The click is
+// decided from the event positions, not from juce::Button's hover state,
+// which Button::mouseDrag re-arms on every drag event over the button.
+// Keyboard and accessibility activation still go through onClick.
+class MidiDragButton final : public vox::ui::VoxButton {
+public:
+    using vox::ui::VoxButton::VoxButton;
+    static constexpr int dragThreshold = 6;
+    std::function<void()> onDragStart;
+    bool dragInProgress() const noexcept { return dragStarted_; }
+
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+private:
+    bool pressed_ = false, dragStarted_ = false;
+};
+
 struct ExportSnapshot;
 
 class PatternEditor final : public juce::Component {
@@ -39,8 +64,6 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void mouseDown (const juce::MouseEvent&) override;
-    void mouseDrag (const juce::MouseEvent&) override;
 
     //== tests and the panel
     const StoredPattern& shown() const noexcept { return shown_; }
@@ -83,6 +106,11 @@ public:
     static void setDragRootForTesting (const juce::File& root);
     static inline const juce::RelativeTime dragLifetime = juce::RelativeTime::minutes (10);
     static inline const juce::RelativeTime staleLifetime = juce::RelativeTime::days (1);
+    // Tests: replace the save dialog (gets what a click froze) and the
+    // OS drag (gets the written file), so a gesture can be checked
+    // without a dialog or a drop target. Empty in the product.
+    std::function<void (std::shared_ptr<const ExportSnapshot>)> saveDialogForTesting;
+    std::function<void (const juce::File&)> externalDragForTesting;
     juce::String fileName() const;        // "VOX Drums Pattern N.mid"
     juce::File saveAsDefault() const;     // the save dialog's suggestion (Documents)
 
@@ -93,6 +121,7 @@ private:
     void refreshControls();
     void checkEpoch();
     void startDrag();
+    void openSaveDialog();
     juce::File newDragFile();
     // "<creation ms>-<UUID>": the age of this instance's folder for others' cleanup.
     const juce::String instanceId_ = juce::String (juce::Time::currentTimeMillis()) + "-" + juce::Uuid().toString();
@@ -104,13 +133,14 @@ private:
     std::uint64_t generation_ = 0, epoch_ = 0;
     int slot_ = -1, bar_ = 0, playStep_ = -1, playBar_ = -1, songBar_ = -1, shownSongBar_ = -1;
     int lane_ = 0, step_ = 0, lanePage_ = 0;
-    bool refreshing_ = false, gesture_ = false, dragging_ = false;
+    bool refreshing_ = false, gesture_ = false;
     juce::String lastKey_, exportMessage_;
     void exported (bool ok, const juce::File& file);
 
     std::array<std::unique_ptr<vox::ui::VoxButton>, kit::maxPatternBars> bars_;
     std::unique_ptr<vox::ui::VoxComboBox> steps_, barCount_;
-    std::unique_ptr<vox::ui::VoxButton> dup_, clear_, swap_, copyB_, seed_, undo_, redo_, midi_, lanes_;
+    std::unique_ptr<vox::ui::VoxButton> dup_, clear_, swap_, copyB_, seed_, undo_, redo_, lanes_;
+    std::unique_ptr<MidiDragButton> midi_;
     std::unique_ptr<juce::Label> abLabel_;
     std::unique_ptr<Grid> grid_;
     std::unique_ptr<vox::ui::VoxKnob> velocity_, probability_, ratchet_, micro_;
