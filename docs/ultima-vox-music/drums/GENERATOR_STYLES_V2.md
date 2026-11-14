@@ -338,8 +338,7 @@ generator are all affected. It needs Architecture Guard review before code.
   "Host (6/8)"). The user can also fix a meter for a pattern (e.g. write 6/8 material while the
   host is 4/4).
 - **Supported pattern meters:**
-  - numerator 1–16 with denominator 4 or 8; a bar is at most 4 quarter notes × 4… capped at 16
-    beats.
+  - numerator 1–16 with denominator 4 or 8: a bar holds at most 16 beats.
   - The generator has rules for 4/4 (every style) plus 3/4, 6/8 and 12/8 (§10.5). In any other
     meter (e.g. 7/8) generation is refused with a message, and manual editing works.
 - **MIDI export** writes each pattern's meter as a time-signature event and the bar lengths in
@@ -348,7 +347,9 @@ generator are all affected. It needs Architecture Guard review before code.
 
 ### 10.3 Triplets together with straight notes: per-beat subdivision
 
-- Each **lane** has, for each **beat** of each bar, a subdivision: **straight** or **triplet**.
+- Triplets are switched **for a piece of the pattern only**, never for the whole pattern or
+  song (owner, 2026-11-14). Each **lane** has, for each **beat** of each bar, a subdivision:
+  **straight** or **triplet**.
 - The other lanes and beats keep theirs. So within one bar:
   - the kick can stay on straight 16ths;
   - the hats play 16th triplets on beat 4 only;
