@@ -864,7 +864,7 @@ juce::String contentHash (const Definition& d)
         b.u8 (static_cast<std::uint32_t> (p));
     b.u8 (static_cast<std::uint32_t> (d.fill.ratchet));
     // Hashed only when not the default, so styles without them keep their hash.
-    if (d.fill.maxLength != 8 || d.fill.maxVelocity != 0.95f)
+    if (d.fill.maxLength != 8 || ! juce::exactlyEqual (d.fill.maxVelocity, 0.95f))
     {
         b.u8 (static_cast<std::uint32_t> (d.fill.maxLength));
         b.f32 (d.fill.maxVelocity);
@@ -1024,7 +1024,7 @@ juce::String serialize (const Definition& d)
                                                                 { "ratchet", juce::String (d.fill.ratchet) } };
         if (d.fill.maxLength != 8)
             fm.emplace_back ("maxLength", juce::String (d.fill.maxLength));
-        if (d.fill.maxVelocity != 0.95f)
+        if (! juce::exactlyEqual (d.fill.maxVelocity, 0.95f))
             fm.emplace_back ("maxVelocity", shortest (d.fill.maxVelocity));
         top.emplace_back ("fill", object (fm));
     }
