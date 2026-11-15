@@ -51,3 +51,29 @@ audio files and no third-party material.
 - **Samples:** none are shipped. User samples are referenced by path and content hash;
   a portable kit (`.voxkit`) carries the user's own files.
 - **Not done:** the kits were not auditioned or tuned by ear by a person.
+
+## Listening pack (PR 137 §8; TL review on #148)
+
+Per style (23):
+
+- `NN-<key>-0-preview.wav`: rendered offline through the style's factory kit (the Factory Song's
+  main phrase, bars 9–16, then 1 s of tails; Internal sequencer, Song mode; 48 kHz, 16-bit, stereo).
+  Every preview is written at the same fixed −6 dB so none clips; the plugin's own peak is listed in
+  the README. A preview that would still clip, or is silent, fails the test.
+- `NN-<key>-1-song.mid`, `-2-pattern.mid`, `-3-meter.mid` (the style's first extra meter) or
+  `-3-busy.mid`: the plugin's own MIDI export with the kit's notes, at the middle of the tempo hint.
+  MIDI alone is not a listening verdict.
+
+`README.md` is the review table (yes / no / why); `SHA256SUMS.txt` lists every file
+(`sha256sum -c` format). `suite_drums_candidate_tests` always generates and checks everything in
+memory. With `VOX_LISTENING_OUT=<new or empty folder>` it writes the files, checks every write,
+requires exactly 69 MIDI + 23 WAV + README + SHA256SUMS, and writes `<folder>.zip`; it never
+deletes or overwrites (a non-empty folder fails the test and nothing is written).
+
+- **Windows CI:** the suite workflow writes the pack and uploads `VOX-Drums-Listening-Pack`
+  (the ZIP and SHA256SUMS; kept 14 days).
+- **Reproducible copy:** `tools/drums/make-listening-pack.ps1 -Build <dir> -Out <folder>` (Windows) or
+  `tools/drums/make-listening-pack.sh <build-dir> <folder>` builds the test, writes the pack and
+  verifies SHA256SUMS. Two runs give identical files (the ZIP container itself carries timestamps).
+- Rock and Metal previews use the synth sketches: **NOT RELEASE-READY**. This is not the final DAW
+  acceptance; nothing here establishes that a style sounds right.
