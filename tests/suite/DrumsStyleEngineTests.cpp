@@ -795,6 +795,157 @@ void testEmbeddedStyle (const juce::File& fixture)
     }
 }
 
+// PR 137 §10.6: the interpreter runs the rules of the pattern's meter and
+// tuplet rules (they set the lane's beat to triplets / duplets); meters the
+// style does not define are refused; every result is a valid pattern.
+void testMetersAndTuplets (const juce::File& fixture)
+{
+    st::Definition example;
+    if (st::parse (fixture.loadFileAsString(), example).failed())
+    {
+        check (false, "meters: the fixture parses");
+        return;
+    }
+    auto def = std::make_shared<st::Definition> (example);
+    auto p = std::make_unique<StoredPattern>();
+    const auto fresh = [&] (timing::TimeSignature s, timing::Resolution r) {
+        *p = {};
+        p->signature = s;
+        p->resolution = r;
+    };
+    const auto on = [&] (int lane, int bar, int tick) {
+        const auto t = p->timing (lane, bar);
+        for (int b = 0; b < t.beats(); ++b)
+            for (int c = 0; c < t.cells (b); ++c)
+                if (t.cellStartTick (b, c) == tick)
+                    return p->cell (lane, bar, t.slot (b, c)).on;
+        return false;
+    };
+    GeneratorSettings g;
+    g.custom = def;
+    g.seed = 3;
+    g.fills = 0.0f;
+    g.complexity = 0.3f;   // the 4/4 triplet hat rule needs complexity > 0.6
+    // 12/8: its own rules on the 24-position grid; the tom duplets on beat 4.
+    fresh ({ 12, 8 }, timing::Resolution::sixteenth);
+    check (generatePattern (g, *p) && p->valid(), "12/8: generates a valid pattern");
+    bool kicks = true, snares = true, hats = true;
+    for (int bar = 0; bar < p->bars; ++bar)
+    {
+        for (int pos : { 0, 6, 12, 18 })
+            kicks = kicks && on (0, bar, pos * 240);
+        for (int pos = 0; pos < 24; ++pos)
+        {
+            const bool k = on (0, bar, pos * 240);
+            kicks = kicks && (k == (pos % 6 == 0));
+            hats = hats && (on (3, bar, pos * 240) == (pos % 2 == 0));
+        }
+        snares = snares && on (1, bar, 6 * 240) && on (1, bar, 18 * 240);
+    }
+    check (kicks && snares && hats, "12/8: kick on 1/7/13/19 only, snare on 7 and 19, hats on odd 16ths up to 23 (the 12/8 rules, not 4/4)");
+    {
+        const auto t = p->timing (5, 0);
+        bool duplets = t.alternativeBeats == 0b1000 && t.cells (3) == 4;
+        for (int k = 0; k < 4; ++k)
+            duplets = duplets && on (5, 0, 3 * 1440 + k * 360);
+        check (duplets, "12/8: tom 1 plays duplets on beat 4 (mask set, 4 cells of 360 ticks)");
+        check (p->timing (0, 0).alternativeBeats == 0 && p->timing (3, 0).alternativeBeats == 0, "12/8: lanes without tuplet rules stay straight");
+    }
+    // 4/4: the triplet hat rule only when complexity > 0.6.
+    fresh ({}, timing::Resolution::sixteenth);
+    check (generatePattern (g, *p) && p->timing (3, 0).alternativeBeats == 0, "4/4: below complexity 0.6 the hats stay straight");
+    g.complexity = 0.8f;
+    check (generatePattern (g, *p) && p->valid() && p->timing (3, 0).alternativeBeats == 0b1000, "4/4: complexity 0.8: hats in triplets on beat 4");
+    {
+        bool triplets = true;
+        for (int k = 0; k < 6; ++k)
+            triplets = triplets && on (3, 0, 2880 + k * 160);
+        check (triplets && ! on (3, 0, 2880 + 240), "4/4: the six triplet hats of beat 4 (160 ticks apart), no straight 16th there");
+    }
+    // 32nd resolution: the same rule lands on every second 32nd-triplet cell.
+    fresh ({}, timing::Resolution::thirtySecond);
+    check (generatePattern (g, *p) && p->valid() && p->timing (3, 0).alternativeBeats == 0b1000 && on (3, 0, 2880 + 160) && ! on (3, 0, 2880 + 80),
+           "4/4 at 32nds: triplet hats on the 16th-level triplet cells only");
+    // 64th: no tuplets at this resolution: straight, the tuplet rule is skipped.
+    fresh ({}, timing::Resolution::sixtyFourth);
+    check (generatePattern (g, *p) && p->valid() && p->timing (3, 0).alternativeBeats == 0, "4/4 at 64ths (straight only): no triplets");
+    // A locked cell in beat 4 keeps the beat straight and the cell.
+    fresh ({}, timing::Resolution::sixteenth);
+    p->cell (3, 0, p->timing (3, 0).slot (3, 1)) = { true, false, 99 };
+    p->cell (3, 0, p->timing (3, 0).slot (3, 1)).locked = true;
+    check (generatePattern (g, *p) && p->timing (3, 0).alternativeBeats == 0 && p->timing (3, 1).alternativeBeats == 0b1000
+               && p->cell (3, 0, p->timing (3, 0).slot (3, 1)).velocity == 99,
+           "tuplets: a locked cell keeps its beat straight in that bar only; the cell is kept");
+    // Back to a style without tuplet rules: the beats go back to straight.
+    {
+        GeneratorSettings plain;
+        plain.style = Style::fullOn;
+        plain.seed = 3;
+        p->cell (3, 0, p->timing (3, 0).slot (3, 1)).locked = false;
+        check (generatePattern (plain, *p) && p->valid() && p->timing (3, 1).alternativeBeats == 0 && p->timing (3, 0).alternativeBeats == 0,
+               "tuplets: a style without tuplet rules regenerates the lane straight");
+    }
+    // Refusals: a meter the style does not define, and one no style has.
+    for (const auto& [sig, what] : { std::pair { timing::TimeSignature { 3, 4 }, "3/4" }, std::pair { timing::TimeSignature { 7, 8 }, "7/8" } })
+    {
+        fresh (sig, timing::Resolution::sixteenth);
+        p->cell (0, 0, 0) = { true, false, 77 };
+        const auto before = std::make_unique<StoredPattern> (*p);
+        const auto why = generatorRefusal (g, *p);
+        check (! generatePattern (g, *p) && ! mutateLanes (g, 0xffffu, *p) && ! generateFill (g, *p) && *p == *before
+                   && why == juce::String ("the style is written for 4/4, 12/8, not ") + what,
+               juce::String ("meters: ") + what + " is refused and changes nothing (" + why + ")");
+        GeneratorSettings factory;
+        check (! generatePattern (factory, *p) && *p == *before, juce::String ("meters: a 4/4 factory style refuses ") + what);
+    }
+    {
+        auto four = std::make_unique<StoredPattern>();
+        check (generatorRefusal (g, *p).isNotEmpty() && generatorRefusal (g, *four).isEmpty(), "meters: no refusal for 4/4");
+    }
+    // The matrix: every meter the fixture defines x every resolution; fills;
+    // every result valid (inside the capacity, unused slots empty).
+    int cases = 0, invalid = 0;
+    for (const auto sig : { timing::TimeSignature { 4, 4 }, timing::TimeSignature { 12, 8 } })
+        for (int r = 0; r < timing::resolutionCount; ++r)
+        {
+            const auto res = static_cast<timing::Resolution> (r);
+            if (timing::capacity (sig, res).availability == timing::Availability::unavailable)
+                continue;
+            for (std::uint32_t seed = 1; seed <= 4; ++seed)
+                for (float cx : { 0.2f, 0.9f })
+                {
+                    GeneratorSettings m = g;
+                    m.seed = seed;
+                    m.complexity = cx;
+                    m.fills = 1.0f;
+                    fresh (sig, res);
+                    ++cases;
+                    invalid += generatePattern (m, *p) && p->valid() ? 0 : 1;
+                    auto b = std::make_unique<StoredPattern>();
+                    *b = {};
+                    invalid += generateVariation (m, *p, *b) && b->valid() ? 0 : 1;
+                }
+        }
+    check (invalid == 0, "meters: " + juce::String (cases) + " generations (4/4, 12/8 x resolutions x seeds x complexity, fills, variation) are valid patterns");
+    // The fixture's own assertions, 12/8 included, hold.
+    check (checkStyleAssertions (def).isEmpty(), "meters: the fixture's 4/4 and 12/8 assertions hold");
+    // The processor names the refusal and changes nothing.
+    {
+        auto proc = std::make_unique<DrumsProcessor>();
+        auto three = std::make_unique<StoredPattern>();   // heap: ~33 KB
+        three->signature = { 3, 4 };
+        three->bars = 1;
+        proc->patterns().setSlot (proc->currentSlot(), *three);
+        auto settings = proc->generator();
+        settings.custom = def;
+        proc->setGenerator (settings);
+        const auto seed = proc->generator().seed;
+        check (proc->generateRefusal (DrumsProcessor::Generate::pattern) == "the style is written for 4/4, 12/8, not 3/4"
+                   && ! proc->generate (DrumsProcessor::Generate::pattern) && proc->generator().seed == seed && ! proc->patternHistory().canUndo(),
+               "processor: a refused meter is named; the seed and history are unchanged");
+    }
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -813,6 +964,7 @@ int main (int argc, char** argv)
     testHashes();
     testParser();
     testParity();
+    testMetersAndTuplets (juce::File (juce::String (argv[1])));
     if (failures == 0)
         std::printf ("VOX Drums style engine tests passed\n");
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

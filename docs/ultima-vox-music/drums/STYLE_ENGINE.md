@@ -122,8 +122,21 @@ Formulas are unchanged.
 - **Positions** are stored as a 32-bit mask:
   - straight rules: 1–16 in 4/4, 1–12 in 3/4 and 6/8, **1–24 in 12/8**;
   - tuplet rules: cells 1–6 (triplet) or 1–4 (duplet) within each listed beat.
-- **Generation:** only straight 4/4 rules run until the shared timing engine (PR #137 §10.5a)
-  exists. The other rules are validated, kept and serialized exactly.
+- **Generation (PR #137 §10.6, `drm/style-meters`):**
+  - the generator runs the rules of the pattern's meter: 4/4, and 3/4, 6/8, 12/8 when the style
+    lists them;
+  - a straight cell that starts on a 16th of the meter's grid gets that position's hit;
+  - **tuplet rules:** a part with a tuplet rule for a beat gets that beat in triplets (in 4/4
+    and 3/4) or duplets (in 6/8 and 12/8) in its lane, with the cells from those rules (cell
+    *k* at the 16th level). This holds when the rule's bars and conditions apply, no cell of the
+    beat is locked, and the resolution has tuplets (4/4 at 64ths has none).
+  - Other beats of a generated lane go back to straight. Tuplet cells are not swung.
+  - **Refusal:** a pattern in a meter the style does not define is refused and nothing changes.
+    `generatorRefusal()` gives the reason ("the style is written for 4/4, 12/8, not 3/4"), and
+    GENERATE shows it.
+  - The fill takes the last 2–8 sixteenths of the meter's bar. Assertions are checked per meter.
+  - 4/4 output is byte-identical to before: R4 digests, the 43,044-result parity and the pinned
+    hashes are unchanged.
 - **Canonical serializer** (`style::serialize`):
   - sorted keys, no spaces outside formulas;
   - formulas in canonical token form;

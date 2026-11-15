@@ -476,6 +476,11 @@ private:
                               juce::dontSendNotification);
             return;
         }
+        if (const auto why = processor_.generateRefusal (what); why.isNotEmpty())
+        {
+            status_->setText ("Not generated: " + why + "; nothing changed", juce::dontSendNotification);
+            return;
+        }
         const bool changed = processor_.generate (what, mask);
         refresh();
         status_->setText (changed ? done + " (seed " + juce::String (shown_.seed) + ")"
