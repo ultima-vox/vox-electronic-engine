@@ -66,6 +66,9 @@ std::shared_ptr<const style::Definition> largestUserStyle()
     d.meta.author = juce::String::repeatedString ("A", style::maxMetaText);
     d.meta.group = juce::String::repeatedString ("G", style::maxMetaText);
     d.rules.clear();
+    // Every meter, so a pooled rule of any meter stays valid (factory styles
+    // have 3/4, 6/8 and 12/8 rules).
+    d.meters = (1u << style::meterCount) - 1u;
     // 16 declared parts (the most a style may have): all but ride, tom 2, tom 3.
     d.requiredParts = { 1u };
     d.optionalParts = 0xfffeu;
@@ -2609,6 +2612,87 @@ void testStyleDefaults()
     }
 }
 
+//==============================================================================
+// PR 137 §10.6: every style in every extra meter it defines generates a song
+// (five slots in that meter, B variations, timeline) and exports pattern and
+// song MIDI in that time signature.
+void testMeterSongs()
+{
+    static constexpr timing::TimeSignature meters[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
+    int cases = 0;
+    juce::StringArray failed;
+    for (int s = 0; s < factoryStyleCount; ++s)
+        for (int m = 1; m < style::meterCount; ++m)
+        {
+            if (((style::factoryDefinition (s)->meters >> m) & 1u) == 0)
+                continue;
+            ++cases;
+            const auto sig = meters[m];
+            const juce::String label = juce::String (style::infoById (s)->key) + " " + juce::String (sig.numerator) + "/" + juce::String (sig.denominator);
+            auto p = makeProcessor();
+            GeneratorSettings g;
+            g.style = static_cast<Style> (s);
+            const auto& v = style::factoryDefinition (s)->defaults.values;   // Param order
+            g.density = v[0];
+            g.groove = v[1];
+            g.syncopation = v[2];
+            g.complexity = v[3];
+            g.fills = v[4];
+            g.variation = v[5];
+            g.swing = v[6];
+            g.humanize = v[7];
+            p->setGenerator (g);
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+            {
+                StoredPattern empty;
+                empty.signature = sig;
+                p->patterns().setSlot (slot, empty);
+            }
+            if (! p->generate (DrumsProcessor::Generate::song))
+            {
+                failed.add (label + ": song not generated (" + p->generateRefusal (DrumsProcessor::Generate::song) + ")");
+                continue;
+            }
+            auto all = std::make_unique<PatternStore::Everything>();
+            p->patterns().copyEverything (*all);
+            bool valid = true;
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+            {
+                const auto& a = all->slots[static_cast<std::size_t> (slot)];
+                const auto& b = all->alternates[static_cast<std::size_t> (slot)];
+                valid = valid && a.valid() && b.valid() && a.signature.numerator == sig.numerator && a.signature.denominator == sig.denominator
+                     && b.signature.numerator == sig.numerator && b.signature.denominator == sig.denominator;
+            }
+            if (! valid)
+                failed.add (label + ": a slot is invalid or not in the meter");
+            for (const auto scope : { ExportSnapshot::Scope::pattern, ExportSnapshot::Scope::song })
+            {
+                const auto midi = DrumsProcessor::renderExport (*p->captureExport (scope));
+                juce::MidiFile file;
+                juce::MemoryInputStream in (midi, false);
+                int notes = 0;
+                bool meterOk = false;
+                if (file.readFrom (in))
+                    for (int track = 0; track < file.getNumTracks(); ++track)
+                        for (const auto* e : *file.getTrack (track))
+                        {
+                            notes += e->message.isNoteOn() ? 1 : 0;
+                            int num = 0, den = 0;
+                            if (e->message.isTimeSignatureMetaEvent())
+                            {
+                                e->message.getTimeSignatureInfo (num, den);
+                                meterOk = meterOk || (num == sig.numerator && den == sig.denominator);
+                            }
+                        }
+                if (notes == 0 || ! meterOk)
+                    failed.add (label + (scope == ExportSnapshot::Scope::song ? ": song" : ": pattern") + " export has " + juce::String (notes)
+                                + " notes" + (meterOk ? "" : ", no time signature " + juce::String (sig.numerator) + "/" + juce::String (sig.denominator)));
+            }
+        }
+    check (cases == 10 && failed.isEmpty(), "meter songs: " + juce::String (cases) + " style x extra-meter cases generate a song and export pattern and song MIDI in that meter ("
+                                                + failed.joinIntoString ("; ") + ")");
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -2626,6 +2710,7 @@ int main (int argc, char** argv)
     testOutputs();
     testGenerator();
     testStyleDefaults();
+    testMeterSongs();
     testPresets();
     testState();
     testEditor();
