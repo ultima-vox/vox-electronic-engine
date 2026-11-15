@@ -23,9 +23,15 @@
 
 namespace vox::drums::style {
 
-// The generator's parts (role slots of PadRoles.h RoleMap): 0..7 kick,
-// snare, clap, closed hat, open hat, tom, rim, cymbal; 8..15 percussion 1-8.
-inline constexpr int partCount = 16;
+// The generator's parts (role slots of PadRoles.h RoleMap; PR 137 §2,
+// roles v2): 0..7 kick, snare, clap, closed hat, open hat, tom 1, rim,
+// crash; 8..15 percussion 1-8; 16 ride, 17 tom 2, 18 tom 3. A style uses at
+// most 16 of them, at most 8 percussion (Definition::requiredParts /
+// optionalParts).
+inline constexpr int partCount = 19;
+inline constexpr int firstPercussionPart = 8, percussionParts = 8;
+inline constexpr int maxPartsPerStyle = 16;
+constexpr bool isPercussionPart (int part) noexcept { return part >= firstPercussionPart && part < firstPercussionPart + percussionParts; }
 const char* partKey (int part) noexcept;   // "kick", "closedHat", "perc1", ...
 int partFromKey (const juce::String& key) noexcept;   // -1 if unknown
 
@@ -103,7 +109,7 @@ struct Rule {
 struct ProbabilityOverride {
     Expr value;
     int min = 1, max = 100;
-    std::uint16_t exceptParts = 0;   // bit n: part n keeps 100 %
+    std::uint32_t exceptParts = 0;   // bit n: part n keeps 100 %
 };
 
 struct Fill {
@@ -139,7 +145,22 @@ struct Definition {
     std::vector<Rule> rules;   // evaluated in order, per part
     std::optional<ProbabilityOverride> probability;
     Fill fill;
-    std::uint16_t variationKeep = 0x0007;   // parts a Variation B keeps from A (kick, snare, clap)
+    std::uint32_t variationKeep = 0x0007;   // parts a Variation B keeps from A (kick, snare, clap)
+    // PR 137 §2.4: the parts the style writes. Each required group is a set
+    // of alternatives (bit n = part n), one of which a kit must have (e.g.
+    // clap or snare); optional parts are written when a pad has the role.
+    // Every part a rule, the fill or an assertion uses is declared; at most
+    // 16 parts, 8 of them percussion. They drive the Generator notices only,
+    // never the generated cells (not in contentHash).
+    std::vector<std::uint32_t> requiredParts;
+    std::uint32_t optionalParts = 0;
+    std::uint32_t declaredParts() const noexcept
+    {
+        std::uint32_t m = optionalParts;
+        for (auto g : requiredParts)
+            m |= g;
+        return m;
+    }
     bool songBreakWithoutKick = true;       // the Song's break slot has no kick
     std::vector<Assertion> assertions;
 };

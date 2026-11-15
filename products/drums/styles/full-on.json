@@ -4,6 +4,7 @@
   "meta": { "author": "Ultima Vox", "group": "Psy", "tempo": { "min": 140, "max": 148 } },
   "meters": ["4/4"],
   "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.0, "humanize": 0.15 },
+  "parts": { "required": ["kick", "openHat"], "optional": ["snare", "clap", "closedHat", "tom1", "rim", "perc1", "perc2"] },
   "rules": [
     { "part": "kick", "at": [1, 5, 9, 13], "velocity": 1.0, "accent": true },
     { "part": "openHat", "at": [3, 7, 11, 15], "velocity": 0.85 },
@@ -15,7 +16,7 @@
     { "part": "perc2", "at": [2, 6, 10, 14], "kind": "ghost", "chance": "0.15 + 0.5 * syncopation * density", "velocity": 0.5 },
     { "part": "rim", "at": [8, 16], "kind": "ghost", "chance": "0.2 + 0.6 * complexity", "velocity": 0.6 }
   ],
-  "fill": { "cycle": ["snare", "tom"], "ratchet": 2 },
+  "fill": { "cycle": ["snare", "tom1"], "ratchet": 2 },
   "variation": { "keep": ["kick", "snare", "clap"] },
   "song": { "breakWithoutKick": true }
 }

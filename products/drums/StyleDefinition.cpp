@@ -11,8 +11,9 @@ namespace vox::drums::style {
 
 namespace {
 
-const char* const partKeys[partCount] = { "kick", "snare", "clap", "closedHat", "openHat", "tom", "rim", "cymbal",
-                                          "perc1", "perc2", "perc3", "perc4", "perc5", "perc6", "perc7", "perc8" };
+const char* const partKeys[partCount] = { "kick", "snare", "clap", "closedHat", "openHat", "tom1", "rim", "crash",
+                                          "perc1", "perc2", "perc3", "perc4", "perc5", "perc6", "perc7", "perc8",
+                                          "ride", "tom2", "tom3" };
 const char* const paramKeys[paramCount] = { "density", "groove", "syncopation", "complexity", "fills", "variation", "swing", "humanize" };
 const char* const meterKeys[meterCount] = { "4/4", "3/4", "6/8", "12/8" };
 
@@ -318,7 +319,7 @@ struct Reader {
             }
         return fail (path, "unknown meter '" + t + "' (4/4, 3/4, 6/8, 12/8)");
     }
-    bool partList (const juce::var& v, const juce::String& path, std::uint16_t& out)
+    bool partList (const juce::var& v, const juce::String& path, std::uint32_t& out)
     {
         const auto* a = v.getArray();
         if (a == nullptr || a->size() > partCount)
@@ -331,7 +332,7 @@ struct Reader {
                 return false;
             if ((out & (1u << part)) != 0)
                 return fail (path + "[" + juce::String (i) + "]", juce::String ("part ") + partKey (part) + " appears twice");
-            out = static_cast<std::uint16_t> (out | (1u << part));
+            out |= 1u << part;
         }
         return true;
     }
@@ -579,8 +580,8 @@ juce::Result parse (const juce::String& json, Definition& out)
     Reader in;
     Definition d;
     const auto ok = [&]() -> bool {
-        if (! in.keys (root, "style", { "format", "version", "id", "key", "name", "meta", "meters", "defaults", "rules", "probability", "fill",
-                                        "variation", "song", "assertions" }))
+        if (! in.keys (root, "style", { "format", "version", "id", "key", "name", "meta", "meters", "defaults", "parts", "rules", "probability",
+                                        "fill", "variation", "song", "assertions" }))
             return false;
         if (root["format"].toString() != "vox-drums-style")
             return in.fail ("format", "must be \"vox-drums-style\"");
@@ -644,6 +645,60 @@ juce::Result parse (const juce::String& json, Definition& out)
                     d.defaults.values[static_cast<std::size_t> (i)] = static_cast<float> (x);
                 }
         }
+        // PR 137 §2.4: "parts": { "required": [part or [alternatives], ...],
+        // "optional": [part, ...] }. Required, so every style says what it needs.
+        {
+            const auto& pv = root["parts"];
+            if (! in.keys (pv, "parts", { "required", "optional" }))
+                return false;
+            std::uint32_t seen = 0;
+            const auto* req = pv["required"].getArray();
+            if (req == nullptr || req->isEmpty() || req->size() > maxPartsPerStyle)
+                return in.fail ("parts.required", "must be a list of 1.." + juce::String (maxPartsPerStyle) + " parts or lists of alternatives");
+            for (int i = 0; i < req->size(); ++i)
+            {
+                const auto& item = (*req)[i];
+                const auto ip = "parts.required[" + juce::String (i) + "]";
+                std::uint32_t group = 0;
+                if (item.isArray())
+                {
+                    if (item.getArray()->size() < 2 || ! in.partList (item, ip, group))
+                        return in.fail (ip, "a list of alternatives needs 2 or more different parts");
+                }
+                else
+                {
+                    int part = 0;
+                    if (! in.part (item, ip, part))
+                        return false;
+                    group = 1u << part;
+                }
+                if ((seen & group) != 0)
+                    return in.fail (ip, "a part appears twice in parts");
+                seen |= group;
+                d.requiredParts.push_back (group);
+            }
+            if (pv.hasProperty ("optional"))
+            {
+                if (! in.partList (pv["optional"], "parts.optional", d.optionalParts))
+                    return false;
+                if ((seen & d.optionalParts) != 0)
+                    return in.fail ("parts.optional", "a part is both required and optional");
+            }
+            // Canonical order: groups by their lowest part.
+            std::sort (d.requiredParts.begin(), d.requiredParts.end(),
+                       [] (std::uint32_t a, std::uint32_t b) { return (a & (~a + 1u)) < (b & (~b + 1u)); });
+            const auto declared = d.declaredParts();
+            int total = 0, percussion = 0;
+            for (int p = 0; p < partCount; ++p)
+                if ((declared >> p) & 1u)
+                {
+                    ++total;
+                    percussion += isPercussionPart (p) ? 1 : 0;
+                }
+            if (total > maxPartsPerStyle || percussion > percussionParts)
+                return in.fail ("parts", "at most " + juce::String (maxPartsPerStyle) + " parts, " + juce::String (percussionParts) + " of them percussion");
+        }
+        const auto undeclared = [&] (int part) { return ((d.declaredParts() >> part) & 1u) == 0; };
         const auto* rules = root["rules"].getArray();
         if (rules == nullptr || rules->isEmpty() || rules->size() > maxRules)
             return in.fail ("rules", "must be a list of 1.." + juce::String (maxRules) + " rules");
@@ -653,6 +708,8 @@ juce::Result parse (const juce::String& json, Definition& out)
             Rule r;
             if (! readRule (in, (*rules)[i], "rules[" + juce::String (i) + "]", d.meters, r))
                 return false;
+            if (undeclared (r.part))
+                return in.fail ("rules[" + juce::String (i) + "].part", juce::String (partKey (r.part)) + " is not in parts");
             if (++perPart[static_cast<std::size_t> (r.part)] > maxRulesPerPart)
                 return in.fail ("rules[" + juce::String (i) + "]", "more than " + juce::String (maxRulesPerPart) + " rules for " + partKey (r.part));
             d.rules.push_back (std::move (r));
@@ -683,6 +740,8 @@ juce::Result parse (const juce::String& json, Definition& out)
             int part = 0;
             if (! in.part ((*cycle)[i], "fill.cycle[" + juce::String (i) + "]", part))
                 return false;
+            if (undeclared (part))
+                return in.fail ("fill.cycle[" + juce::String (i) + "]", juce::String (partKey (part)) + " is not in parts");
             d.fill.cycle.push_back (part);
         }
         if (! in.integer (fv["ratchet"], "fill.ratchet", 1, 8, d.fill.ratchet))
@@ -713,6 +772,8 @@ juce::Result parse (const juce::String& json, Definition& out)
                 Assertion as;
                 if (! in.keys (av, ap, { "part", "meter", "always", "never" }) || ! in.part (av["part"], ap + ".part", as.part))
                     return false;
+                if (undeclared (as.part))
+                    return in.fail (ap + ".part", juce::String (partKey (as.part)) + " is not in parts");
                 if (av.hasProperty ("meter") && ! in.meter (av["meter"], ap + ".meter", as.meter))
                     return false;
                 if ((d.meters & (1u << static_cast<int> (as.meter))) == 0)
@@ -840,7 +901,7 @@ juce::String positionList (std::uint32_t mask)
             items.add (juce::String (i + 1));
     return "[" + items.joinIntoString (",") + "]";
 }
-juce::String partListText (std::uint16_t mask)
+juce::String partListText (std::uint32_t mask)
 {
     juce::StringArray items;
     for (int p = 0; p < partCount; ++p)
@@ -941,6 +1002,28 @@ juce::String serialize (const Definition& d)
         top.emplace_back ("fill", object ({ { "cycle", "[" + cycle.joinIntoString (",") + "]" }, { "ratchet", juce::String (d.fill.ratchet) } }));
     }
     top.emplace_back ("variation", object ({ { "keep", partListText (d.variationKeep) } }));
+    {
+        juce::StringArray groups;
+        for (auto g : d.requiredParts)
+        {
+            int count = 0;
+            for (int p = 0; p < partCount; ++p)
+                count += ((g >> p) & 1u) != 0 ? 1 : 0;
+            if (count == 1)
+            {
+                for (int p = 0; p < partCount; ++p)
+                    if ((g >> p) & 1u)
+                        groups.add (quoted (partKey (p)));
+            }
+            else
+                groups.add (partListText (g));
+        }
+        std::vector<std::pair<juce::String, juce::String>> m;
+        m.emplace_back ("required", "[" + groups.joinIntoString (",") + "]");
+        if (d.optionalParts != 0)
+            m.emplace_back ("optional", partListText (d.optionalParts));
+        top.emplace_back ("parts", object (m));
+    }
     top.emplace_back ("song", object ({ { "breakWithoutKick", d.songBreakWithoutKick ? "true" : "false" } }));
     if (! d.assertions.empty())
     {

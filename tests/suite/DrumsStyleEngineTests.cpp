@@ -249,8 +249,11 @@ void testHashes()
 //==============================================================================
 juce::String minimal (const juce::String& rules, const juce::String& extra = {}, const juce::String& meters = R"(["4/4"])")
 {
+    // Declares 16 parts (all but ride, tom 2 and tom 3; PR 137 §2.4).
     return R"({ "format": "vox-drums-style", "version": 1, "id": "00000000-0000-4000-8000-000000000001", "key": "t", "name": "T", "meters": )"
-         + meters + R"(, "rules": [)" + rules + "]" + extra + R"(, "fill": { "cycle": ["snare"], "ratchet": 2 } })";
+         + meters
+         + R"(, "parts": { "required": ["kick"], "optional": ["snare", "clap", "closedHat", "openHat", "tom1", "rim", "crash", "perc1", "perc2", "perc3", "perc4", "perc5", "perc6", "perc7", "perc8"] })"
+         + R"(, "rules": [)" + rules + "]" + extra + R"(, "fill": { "cycle": ["snare"], "ratchet": 2 } })";
 }
 
 void testParser()
@@ -282,6 +285,18 @@ void testParser()
           "rules[0].ratchet.otherwise" },
         { minimal (R"({ "part": "kick", "at": [1] })", R"(, "probability": { "value": "50", "min": 80, "max": 20 })"), "min is above max" },
         { R"({ "format": "vox-drums-style", "version": 2, "key": "t", "name": "T", "rules": [], "fill": {} })", "version" },
+        // Parts (PR 137 §2.4, roles v2).
+        { minimal (R"({ "part": "ride", "at": [1] })"), "rules[0].part: ride is not in parts" },
+        { minimal (R"({ "part": "tom", "at": [1] })"), "unknown part 'tom'" },
+        { minimal (R"({ "part": "cymbal", "at": [1] })"), "unknown part 'cymbal'" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("optional": ["snare",)", R"("optional": ["ride", "snare",)"), "parts: at most 16 parts" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("optional": ["snare",)", R"("optional": ["kick", "snare",)"), "parts.optional: a part is both required and optional" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("required": ["kick"])", R"("required": ["kick", "kick"])"), "parts.required[1]: a part appears twice" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("required": ["kick"])", R"("required": ["kick", ["snare"]])"), "parts.required[1]: a list of alternatives needs 2 or more" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("required": ["kick"])", R"("required": [])"), "parts.required: must be a list of 1..16" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("required": ["kick"], )", ""), "parts.required: must be a list" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"(, "parts": {)", R"(, "partz": {)"), "unknown key 'partz'" },
+        { minimal (R"({ "part": "kick", "at": [1] })", R"(, "assertions": [{ "part": "tom2", "never": [1] }])"), "assertions[0].part: tom2 is not in parts" },
         // Canonical schema (PR 137 §11.1).
         { minimal (R"({ "part": "kick", "at": [1] })").replace ("00000000-0000-4000-8000-000000000001", "not-a-uuid"), "id: must be a lower-case UUID" },
         { minimal (R"({ "part": "kick", "at": [1] })").replace ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-00000000000A"), "id: must be a lower-case UUID" },
@@ -313,6 +328,28 @@ void testParser()
         const auto r = st::parse (c.json, out);
         check (r.failed() && r.getErrorMessage().contains (c.field) && out.key == "untouched",
                "parser rejects with '" + c.field + "' (got '" + r.getErrorMessage() + "')");
+    }
+    // Parts (PR 137 §2.4): alternatives and optional parts round-trip canonically; ride, tom 2
+    // and tom 3 are parts; 8 percussion parts are allowed.
+    {
+        st::Definition t;
+        const auto r = st::parse (R"({ "format": "vox-drums-style", "version": 1, "id": "00000000-0000-4000-8000-000000000002", "key": "p", "name": "P",)"
+                                  R"( "meters": ["4/4"], "parts": { "optional": ["tom3", "perc8", "perc1"], "required": ["ride", ["snare", "clap"], "kick"] },)"
+                                  R"( "rules": [{ "part": "ride", "at": [1, 3] }, { "part": "tom3", "at": [16] }], "fill": { "cycle": ["snare"], "ratchet": 2 } })",
+                                  t);
+        check (r.wasOk() && t.requiredParts.size() == 3 && t.requiredParts[0] == 1u && t.requiredParts[1] == 6u && t.requiredParts[2] == (1u << 16)
+                   && t.optionalParts == ((1u << 8) | (1u << 15) | (1u << 18)) && t.rules[0].part == 16 && t.rules[1].part == 18,
+               "parser: parts with alternatives, ride and tom 3 (" + r.getErrorMessage() + ")");
+        const auto text = st::serialize (t);
+        st::Definition back;
+        check (text.contains (R"("parts":{"optional":["perc1","perc8","tom3"],"required":["kick",["snare","clap"],"ride"]})")
+                   && st::parse (text, back).wasOk() && st::serialize (back) == text,
+               "serializer: parts in canonical order (groups by lowest part, parts by index): " + text.fromFirstOccurrenceOf ("\"parts\"", true, false).substring (0, 90));
+        st::Definition eight;
+        check (st::parse (R"({ "format": "vox-drums-style", "version": 1, "id": "00000000-0000-4000-8000-000000000003", "key": "e", "name": "E", "meters": ["4/4"],)"
+                          R"( "parts": { "required": ["kick"], "optional": ["perc1", "perc2", "perc3", "perc4", "perc5", "perc6", "perc7", "perc8", "snare"] },)"
+                          R"( "rules": [{ "part": "kick", "at": [1] }], "fill": { "cycle": ["snare"], "ratchet": 2 } })", eight).wasOk(),
+               "parser: 8 percussion parts are allowed");
     }
     // Accepted: 12/8 positions 17..24 and tuplet cells survive parse and serialization.
     {

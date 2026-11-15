@@ -60,7 +60,7 @@ void setEnvironment (const char* name, const juce::String& value)
 
 using Roles = std::array<PadRole, kit::padCount>;
 constexpr auto K = PadRole::kick, S = PadRole::snare, C = PadRole::clap, CH = PadRole::closedHat, OH = PadRole::openHat,
-               T = PadRole::tom, R = PadRole::rim, CY = PadRole::cymbal, P = PadRole::percussion, N = PadRole::none;
+               T = PadRole::tom1, R = PadRole::rim, CY = PadRole::crash, P = PadRole::percussion, N = PadRole::none;
 
 PadRoles explicitRoles (const Roles& r)
 {
@@ -181,10 +181,11 @@ void testCodec()
     auto s = good; s.data.pop_back(); rejects (s, "20 bytes");
     s = good; s.data.push_back (std::byte { 0 }); rejects (s, "22 bytes");
     s = good; s.data.clear(); rejects (s, "an empty section");
-    s = good; s.data[0] = std::byte { 2 }; rejects (s, "version 2");
+    s = good; s.data[0] = std::byte { 1 }; rejects (s, "version 1 (development build, not decoded)");
+    s = good; s.data[0] = std::byte { 3 }; rejects (s, "version 3");
     s = good; s.data[3] = std::byte { 1 }; rejects (s, "a version above 2^24");
     s = good; s.data[4] = std::byte { 2 }; rejects (s, "explicit = 2");
-    s = good; s.data[5] = std::byte { 10 }; rejects (s, "role 10");
+    s = good; s.data[5] = std::byte { 13 }; rejects (s, "role 13");
     s = good; s.data[20] = std::byte { 255 }; rejects (s, "role 255");
 
     // Identity and the map.
@@ -354,7 +355,7 @@ void testMapping()
                 ok = ok && (lane == 3 || laneEqual (*id, *p, lane, lane));
         }
         check (ok, "R7: a missing role gets no hits, the other roles are unchanged");
-        check (roleNotices (explicitRoles (r)).contains ("No closed hat pad: closed hat parts are not generated"), "R7: missing-role notice");
+        check (roleNotices (explicitRoles (r)).contains ("This style needs a closed hat: no pad has the Closed hat role"), "R7: missing-role notice");
     }
     // R8 / R10: a second kick on pad 9; percussion moves up one pad.
     {
@@ -363,7 +364,7 @@ void testMapping()
         const auto map = RoleMap::from (explicitRoles (r));
         check (map.laneOfSlot[0] == 0 && map.slotOfLane[8] < 0 && map.laneOfSlot[8] == 9 && map.laneOfSlot[15] < 0 && map.slotOfLane[15] == 14,
                "R8: the first kick pad is used; pad 9 gets nothing; percussion moves up");
-        check (roleNotices (explicitRoles (r)).contains ("2 kick pads: pad 1 used"), "R8: duplicate notice");
+        check (roleNotices (explicitRoles (r)).contains ("2 kick pads: pad 1 plays generated kick hits"), "R8: duplicate notice");
         // R10: pre-filled pattern; lane 9 (duplicate) cleared except locked cells.
         bool ok = true;
         for (int style = 0; style < styleCount; ++style)
@@ -584,7 +585,7 @@ void testState()
         variant ([] (preset::Section& x) { x.data.push_back (std::byte { 1 }); }, "long");
         variant ([] (preset::Section& x) { x.data[0] = std::byte { 9 }; }, "version");
         variant ([] (preset::Section& x) { x.data[4] = std::byte { 7 }; }, "flag");
-        variant ([] (preset::Section& x) { x.data[12] = std::byte { 10 }; }, "role value");
+        variant ([] (preset::Section& x) { x.data[12] = std::byte { 13 }; }, "role value");
     }
     // R17: the state keeps the c7c29bb container: same product tag and
     // schema, and every section c7c29bb writes is still there. c7c29bb keeps
@@ -603,7 +604,7 @@ void testState()
         auto q = makeProcessor();
         check (q->setPadRole (5, PadRole::rim) && q->padRoles().role[5] == PadRole::rim && q->padRoles().explicitRoles, "setPadRole");
         q->patternHistory().undo (q->patterns());
-        check (q->padRoles().role[5] == PadRole::tom, "undo restores the previous role");
+        check (q->padRoles().role[5] == PadRole::tom1, "undo restores the previous role");
         q->patternHistory().redo (q->patterns());
         check (q->padRoles().role[5] == PadRole::rim, "redo reapplies the role");
     }
@@ -656,7 +657,7 @@ void testPresets (const juce::File& folder)
     setEnvironment ("VOX_DRUMS_PRESETS", folder.getFullPathName());
     Roles custom = PadRoles::identity();
     std::swap (custom[0], custom[1]);
-    custom[2] = PadRole::tom;
+    custom[2] = PadRole::tom1;
 
     // R16a: a kit preset with DROL replaces the roles.
     auto source = makeProcessor();
@@ -696,7 +697,7 @@ void testPresets (const juce::File& folder)
         const auto* s = decoded.ok() ? decoded.document.find (rolesSectionTag) : nullptr;
         bool othersNone = s != nullptr && decodeRoles (*s, stored, error);
         for (int pad = 0; pad < kit::padCount && othersNone; ++pad)
-            othersNone = pad == 2 ? stored.role[2] == PadRole::tom : stored.role[static_cast<std::size_t> (pad)] == PadRole::none;
+            othersNone = pad == 2 ? stored.role[2] == PadRole::tom1 : stored.role[static_cast<std::size_t> (pad)] == PadRole::none;
         check (othersNone, "R16c: a pad preset stores only its own pad's role");
     }
     auto t = makeProcessor();
@@ -705,10 +706,10 @@ void testPresets (const juce::File& folder)
     check (t->presets().apply (modernPad.getData(), modernPad.getSize(), 0).wasOk() && t->padRoles() == before,
            "R16c: loading keeps the target's role");
     const auto offer = t->presets().roleOffer();
-    check (offer && offer->pad == 0 && offer->role == PadRole::tom, "R16c: the preset role is offered for the target pad");
+    check (offer && offer->pad == 0 && offer->role == PadRole::tom1, "R16c: the preset role is offered for the target pad");
     check (t->presets().applyRoleOffer(), "R16c: Apply");
     auto after = before.role;
-    after[0] = PadRole::tom;
+    after[0] = PadRole::tom1;
     check (t->padRoles().role == after && ! t->presets().roleOffer(), "R16c: Apply sets only the target pad");
     t->patternHistory().undo (t->patterns());
     check (t->padRoles() == before, "R16c: undo restores the role");
@@ -743,8 +744,17 @@ void testProposal()
             const auto role = proposal.role[static_cast<std::size_t> (pad)];
             const bool hat = role == PadRole::closedHat || role == PadRole::openHat;
             static constexpr PadRole byModel[kit::modelCount] = { PadRole::kick, PadRole::snare, PadRole::clap, PadRole::closedHat,
-                                                                  PadRole::tom, PadRole::rim, PadRole::cymbal, PadRole::percussion };
-            consistent = consistent && (model == kit::Model::hat ? hat : role == byModel[static_cast<int> (model)]);
+                                                                  PadRole::tom1, PadRole::rim, PadRole::crash, PadRole::percussion };
+            // Roles v2 (PR 137 §2.6): a tom is tom 1, 2 or 3 (a fourth: percussion, asked); a
+            // cymbal is crash or ride (a second crash: percussion).
+            const bool tom = role == PadRole::tom1 || role == PadRole::tom2 || role == PadRole::tom3
+                          || (role == PadRole::percussion && proposal.needsChoice[static_cast<std::size_t> (pad)]);
+            const bool cymbal = role == PadRole::crash || role == PadRole::ride || role == PadRole::percussion;
+            consistent = consistent
+                      && (model == kit::Model::hat ? hat
+                          : model == kit::Model::tom ? tom
+                          : model == kit::Model::cymbal ? cymbal
+                          : role == byModel[static_cast<int> (model)]);
         }
         check (consistent, "R18: factory kit " + juce::String (k + 1) + ": proposed roles follow the pad models");
         check (proposal.role[3] == PadRole::closedHat && proposal.role[4] == PadRole::openHat && ! proposal.needsChoice[3]
@@ -794,6 +804,207 @@ void testProposal()
 
 } // namespace
 
+// PR 137 §2 (roles v2): the 16-pad maps of §2.3, the part map with ride /
+// tom 2 / tom 3, style-aware notices (§2.4, §2.5), Use pad N, generation to
+// the ride pad, and the GM hints of the proposal (§2.6).
+namespace {
+constexpr auto RD = PadRole::ride, T2 = PadRole::tom2, T3 = PadRole::tom3;
+// §2.3 columns (pads 1..16).
+constexpr Roles tranceMap { K, S, C, CH, OH, T, R, CY, RD, T2, T3, P, P, P, P, P };
+constexpr Roles rockMap { K, S, R, CH, OH, T, T2, T3, CY, RD, P, P, P, P, P, P };
+constexpr Roles metalMap = rockMap;
+
+style::Definition partsOnly (std::vector<std::uint32_t> required, std::uint32_t optional)
+{
+    style::Definition d;
+    d.requiredParts = std::move (required);
+    d.optionalParts = optional;
+    return d;
+}
+constexpr std::uint32_t bit (int part) { return 1u << part; }
+constexpr int pKick = 0, pSnare = 1, pClap = 2, pClosed = 3, pOpen = 4, pTom1 = 5, pRim = 6, pCrash = 7, pPerc1 = 8, pRide = 16, pTom2 = 17, pTom3 = 18;
+
+bool hasNotice (const std::vector<RoleNotice>& notices, RoleNotice::Kind kind, const juce::String& text)
+{
+    for (const auto& n : notices)
+        if (n.kind == kind && n.text == text)
+            return true;
+    return false;
+}
+} // namespace
+
+void testRolesV2()
+{
+    // Parts of roles; identity: no pad for ride, tom 2, tom 3.
+    check (partOfRole (PadRole::kick) == 0 && partOfRole (PadRole::tom1) == 5 && partOfRole (PadRole::crash) == 7 && partOfRole (RD) == 16
+               && partOfRole (T2) == 17 && partOfRole (T3) == 18 && partOfRole (P) == -1 && partOfRole (N) == -1,
+           "roles v2: the part of each role");
+    const auto id = RoleMap::identity();
+    check (id.laneOfSlot[16] < 0 && id.laneOfSlot[17] < 0 && id.laneOfSlot[18] < 0, "roles v2: the default map has no ride, tom 2 or tom 3 pad");
+    // §2.3 maps: valid, no duplicate instrument role, the parts land on the stated pads.
+    for (const auto& [name, map] : { std::pair { "Trance", tranceMap }, std::pair { "Rock", rockMap }, std::pair { "Metal", metalMap } })
+    {
+        const auto m = RoleMap::from (explicitRoles (map));
+        std::array<int, padRoleCount> count {};
+        for (auto r : map)
+            ++count[static_cast<std::size_t> (r)];
+        bool unique = true;
+        for (int r = 1; r < padRoleCount; ++r)
+            unique = unique && (r == static_cast<int> (P) || count[static_cast<std::size_t> (r)] <= 1);
+        PadRoles back;
+        juce::String error;
+        check (unique && decodeRoles (encodeRoles (explicitRoles (map)), back, error) && back.role == map,
+               juce::String ("roles v2: the ") + name + " map is valid, round trips and has no duplicate instrument role");
+        bool lanes = true;
+        for (int lane = 0; lane < kit::padCount; ++lane)
+        {
+            const int part = m.slotOfLane[static_cast<std::size_t> (lane)];
+            lanes = lanes && part >= -1 && part < RoleMap::parts && (part < 0 || m.laneOfSlot[static_cast<std::size_t> (part)] == lane);
+        }
+        check (lanes, juce::String ("roles v2: the ") + name + " map sends every part to one pad 0-15");
+    }
+    {
+        const auto m = RoleMap::from (explicitRoles (tranceMap));
+        check (m.laneOfSlot[pRide] == 8 && m.laneOfSlot[pTom2] == 9 && m.laneOfSlot[pTom3] == 10 && m.laneOfSlot[pPerc1] == 11
+                   && m.laneOfSlot[pPerc1 + 4] == 15 && m.laneOfSlot[pPerc1 + 5] < 0,
+               "roles v2: Trance map: ride pad 9, tom 2 pad 10, tom 3 pad 11, perc 1-5 on pads 12-16");
+        const auto r = RoleMap::from (explicitRoles (rockMap));
+        check (r.laneOfSlot[pClap] < 0 && r.laneOfSlot[pRim] == 2 && r.laneOfSlot[pTom2] == 6 && r.laneOfSlot[pTom3] == 7 && r.laneOfSlot[pCrash] == 8
+                   && r.laneOfSlot[pRide] == 9,
+               "roles v2: Rock map: no clap; rim pad 3, tom 2/3 pads 7/8, crash pad 9, ride pad 10");
+    }
+    // Style-aware notices (§2.4).
+    const auto metal = partsOnly ({ bit (pKick), bit (pSnare), bit (pCrash), bit (pRide), bit (pTom1), bit (pTom3) },
+                                  bit (pClosed) | bit (pOpen) | bit (pTom2) | bit (pRim) | bit (pPerc1) | bit (pPerc1 + 6));
+    const auto rock = partsOnly ({ bit (pKick), bit (pSnare), bit (pClosed), bit (pCrash) }, bit (pOpen) | bit (pRide) | bit (pTom1));
+    const auto house = partsOnly ({ bit (pKick), bit (pClap) | bit (pSnare), bit (pClosed), bit (pOpen) }, bit (pRim));
+    {
+        const auto notices = roleNotices (explicitRoles (metalMap), &metal, "Heavy Metal");
+        bool anyMissing = false;
+        for (const auto& n : notices)
+            anyMissing = anyMissing || n.kind == RoleNotice::Kind::missingRequired;
+        check (! anyMissing, "notices: the Metal map has every part Heavy Metal requires");
+        check (hasNotice (notices, RoleNotice::Kind::missingOptional, "Not used: perc 7"),
+               "notices: an unused optional part (perc 7: the map has 6 percussion pads) is one quiet note");
+    }
+    {
+        auto noRide = metalMap;
+        noRide[9] = P;
+        const auto notices = roleNotices (explicitRoles (noRide), &metal, "Heavy Metal");
+        bool found = false;
+        for (const auto& n : notices)
+            found = found || (n.kind == RoleNotice::Kind::missingRequired && n.role == RD && n.text == "Heavy Metal needs a ride: no pad has the Ride role");
+        check (found, "notices: a missing required ride is a warning naming the role (Assign... opens the Ride role)");
+    }
+    {
+        // No clap warning for rock: a rock style does not use a clap.
+        bool clap = false;
+        for (const auto& n : roleNotices (explicitRoles (rockMap), &rock, "Hard Rock"))
+            clap = clap || n.text.containsIgnoreCase ("clap");
+        check (! clap, "notices: no clap warning on a rock kit for a rock style");
+    }
+    {
+        // Alternatives: clap or snare.
+        Roles r = PadRoles::identity();
+        r[1] = P;   // no snare: the clap satisfies it
+        bool missing = false;
+        for (const auto& n : roleNotices (explicitRoles (r), &house, "House"))
+            missing = missing || n.kind == RoleNotice::Kind::missingRequired;
+        check (! missing, "notices: a required clap-or-snare is satisfied by the clap alone");
+        r[2] = P;   // neither
+        check (hasNotice (roleNotices (explicitRoles (r), &house, "House"), RoleNotice::Kind::missingRequired,
+                          "House needs a snare or a clap: no pad has the roles"),
+               "notices: neither clap nor snare: one warning naming both");
+    }
+    {
+        // Duplicates (§2.5): the lowest pad plays; Use pad N swaps in one step.
+        auto two = metalMap;
+        two[13] = RD;   // a second ride on pad 14
+        const auto notices = roleNotices (explicitRoles (two), &metal, "Heavy Metal");
+        const RoleNotice* dup = nullptr;
+        for (const auto& n : notices)
+            if (n.kind == RoleNotice::Kind::duplicate && n.role == RD)
+                dup = &n;
+        check (dup != nullptr && dup->pad == 9 && dup->otherPad == 13 && dup->text == "2 ride pads: pad 10 plays generated ride hits",
+               "notices: two ride pads: pad 10 plays, Use pad 14 offered");
+        check (RoleMap::from (explicitRoles (two)).laneOfSlot[pRide] == 9, "duplicate ride: the lowest pad plays it");
+        if (dup != nullptr)
+        {
+            const auto swapped = usePad (two, dup->pad, dup->otherPad);
+            check (swapped[9] == N && swapped[13] == RD && RoleMap::from (explicitRoles (swapped)).laneOfSlot[pRide] == 13,
+                   "Use pad 14: pad 10 gets the role None, pad 14 plays the ride");
+            check (usePad (two, 9, 3) == two, "Use pad N: only between two pads with the same role");
+            auto p = makeProcessor();
+            check (p->setPadRoles (two) && p->setPadRoles (swapped) && p->padRoles().role == swapped, "Use pad N through the processor");
+            p->patternHistory().undo (p->patterns());
+            check (p->padRoles().role == two, "Use pad N is one undo step");
+        }
+    }
+    // Generation to the ride pad: a user style with a ride part.
+    {
+        auto def = std::make_shared<style::Definition>();
+        const auto ok = style::parse (R"({ "format": "vox-drums-style", "version": 1, "id": "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "key": "ride-test",
+            "name": "Ride test", "meters": ["4/4"], "parts": { "required": ["kick", "ride"], "optional": ["tom3"] },
+            "rules": [ { "part": "kick", "at": [1, 9] }, { "part": "ride", "at": [1, 3, 5, 7, 9, 11, 13, 15] }, { "part": "tom3", "at": [16] } ],
+            "fill": { "cycle": ["tom3"], "ratchet": 2 } })", *def);
+        check (ok.wasOk(), "a style with ride and tom 3 parts parses (" + ok.getErrorMessage() + ")");
+        auto p = makeProcessor();
+        auto g = p->generator();
+        g.custom = def;
+        g.fills = 0.0f;
+        p->setGenerator (g);
+        check (p->setPadRoles (metalMap), "metal roles set");
+        p->generate (DrumsProcessor::Generate::pattern, 0xffffu, false);
+        StoredPattern a;
+        p->patterns().copySlot (0, a);
+        const auto lane = [&] (int l) {
+            int hits = 0;
+            for (int bar = 0; bar < a.bars; ++bar)
+                for (int slot = 0; slot < kit::slotStride; ++slot)
+                    hits += a.cell (l, bar, slot).on ? 1 : 0;
+            return hits;
+        };
+        check (lane (9) == 8 * a.bars && lane (7) == a.bars && lane (0) == 2 * a.bars,
+               "generation: ride hits on the ride pad (10), tom 3 on pad 8, kick on pad 1");
+        int others = 0;
+        for (int l : { 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15 })
+            others += lane (l);
+        check (others == 0, "generation: no other pad gets anything");
+        auto noRide = metalMap;
+        noRide[9] = P;
+        check (p->setPadRoles (noRide), "roles without a ride");
+        p->generate (DrumsProcessor::Generate::pattern, 0xffffu, false);
+        p->patterns().copySlot (0, a);
+        int total = 0;
+        for (int l = 0; l < kit::padCount; ++l)
+            total += l == 0 || l == 7 ? 0 : lane (l);
+        check (total == 0 && lane (0) == 2 * a.bars, "generation: no ride pad: the ride part is not written anywhere (no substitute)");
+    }
+    // Proposal hints (§2.6): toms by GM note, then tune; cymbals by GM note.
+    {
+        auto k = vox::drums::defaultKit();
+        const auto pad = [&] (int i, kit::Model m, int note, float tune) {
+            auto& x = k.pads[static_cast<std::size_t> (i)];
+            x.model = m;
+            x.note = static_cast<std::uint8_t> (note);
+            x.tune = tune;
+        };
+        pad (5, kit::Model::tom, 41, 0.0f);    // tom 3 by note
+        pad (8, kit::Model::tom, 48, 0.0f);    // tom 1 by note
+        pad (9, kit::Model::tom, 60, 5.0f);    // no GM tom note, lower: no tom role left -> asked
+        pad (10, kit::Model::tom, 61, 9.0f);   // no GM tom note, higher: the free role (tom 2)
+        pad (7, kit::Model::cymbal, 51, 0.0f); // ride by note
+        pad (11, kit::Model::cymbal, 49, 0.0f);   // crash by note
+        pad (12, kit::Model::cymbal, 57, 0.0f);   // a second crash: percussion
+        pad (13, kit::Model::cymbal, 70, 0.0f);   // no GM cymbal note: asked (here percussion, a crash exists)
+        const auto prop = proposeRolesFromModels (k);
+        check (prop.role[5] == T3 && prop.role[8] == T && prop.role[10] == T2 && prop.role[9] == P && prop.needsChoice[9] && ! prop.needsChoice[10],
+               "proposal: toms by GM note (41 tom 3, 48 tom 1), the rest by tune, highest first, into the free role; a fourth asked");
+        check (prop.role[7] == RD && prop.role[11] == CY && prop.role[12] == P && prop.needsChoice[13],
+               "proposal: cymbals by GM note (51 ride, 49 crash), a second crash is percussion, an unknown note asked");
+    }
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
@@ -807,6 +1018,7 @@ int main()
     testProcessor();
     testPresets (folder);
     testProposal();
+    testRolesV2();
     if (folder.getFileName().startsWith ("vox-drums-roles-") && folder.isDirectory())
         folder.deleteRecursively();
     if (failures == 0)

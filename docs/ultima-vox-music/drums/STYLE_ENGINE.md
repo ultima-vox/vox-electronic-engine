@@ -36,7 +36,9 @@ Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
   "fill": { "cycle": ["clap", "snare", "snare"], "ratchet": 2 } }
 ```
 
-- **`part`:** a generator part, the role slots of #132: kick … cymbal, perc1–perc8.
+- **`part`:** a generator part (roles v2, PR #137 §2): `kick`, `snare`, `clap`, `closedHat`,
+  `openHat`, `tom1`, `rim`, `crash`, `perc1`–`perc8`, `ride`, `tom2`, `tom3` (19 keys; a style
+  declares at most 16 of them in `parts`).
 - **`at`:** 16th positions 1–16 of a 4/4 bar.
 - **`kind`:**
   - `hit` sets the hit, optionally gated by `chance`;
@@ -104,12 +106,19 @@ Formulas are unchanged.
 | `meta` | no | `author`, `group` (≤ 64 characters each), `tempo {min, max}` 20–400 (information only) |
 | `meters` | yes | unique list from `4/4`, `3/4`, `6/8`, `12/8`; **must contain `4/4`** |
 | `defaults` | no | the 8 settings, 0–1 ("Style defaults") |
+| `parts` | yes | PR #137 §2.4. `required`: a list where each item is a part, or a list of 2+ alternatives of which one is enough (e.g. `["clap","snare"]`); `optional`: a list of parts. At most 16 parts, 8 of them percussion; no part twice. Every part used by a rule, the fill or an assertion must be declared. Used for the Generator notices only; not in `contentHash`. |
 | `rules[]` | yes | as above, plus `meter` (default `4/4`, must be listed in `meters`) and, for tuplets, `beats` + `subdivision` (`triplet` in 4/4 and 3/4, `duplet` in 6/8 and 12/8) |
 | `probability`, `fill` | `fill` yes | as above |
 | `variation` | no | `keep`: the parts a Variation B keeps (default kick, snare, clap) |
 | `song` | no | `breakWithoutKick` (default true) |
 | `assertions[]` | no | `part`, `meter`, `always` / `never` positions: **self-consistency checks only, not genre or quality** |
 
+- **Roles v2 (pre-release, PR #137 §2):**
+  - the keys `tom` and `cymbal` became `tom1` and `crash`; `ride`, `tom2` and `tom3` were added;
+  - the canonical text of the factory styles changed (`documentHash`); their `contentHash` and
+    generated output did not.
+  - The seven factory styles declare as `required` the parts they always play (a rule without a
+    chance, condition or bar restriction), and the other parts they use as `optional`.
 - **Positions** are stored as a 32-bit mask:
   - straight rules: 1–16 in 4/4, 1–12 in 3/4 and 6/8, **1–24 in 12/8**;
   - tuplet rules: cells 1–6 (triplet) or 1–4 (duplet) within each listed beat.

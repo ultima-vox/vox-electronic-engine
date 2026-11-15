@@ -1,5 +1,22 @@
 # VOX Drums: semantic pad roles (option B) — Architecture Guard proposal
 
+> **Roles v2 (PR #137 §2), implemented on `drm/roles-v2`:**
+> - `PadRole` 0–12: Cymbal is renamed **Crash**, Tom is **Tom 1**, and **Ride**, **Tom 2** and
+>   **Tom 3** are added.
+> - `DROL` v2 is 21 bytes (version 2, values 0–12). v1 is not decoded (pre-release).
+> - Parts: `ride` 16, `tom2` 17, `tom3` 18. The default map is unchanged, so its generation is
+>   byte-identical.
+> - Notices are style-aware (`roleNotices (roles, style, name)`):
+>   - missing required parts: a warning with the role (Assign…);
+>   - unused optional parts: one note;
+>   - duplicates: the lowest pad plays it, with **Use pad N**;
+>   - extra percussion pads.
+> - **Use pad N** gives the pad that played the part the role None; a literal swap of two equal
+>   roles would change nothing.
+> - The proposal assigns toms and cymbals by GM note (§2.6).
+>
+> Where this document says Tom/Cymbal or `DROL` v1, read v2.
+
 Status: **revision 2, after Architecture Guard review 6864585514** on PR #132. That review
 approved the direction and decided Q1, Q2, Q4 and Q5, and Q3 with conditions (§7). This revision
 specifies pad-preset mapping (P1), selected-lane-only Mutate (P1) and the model-role preview

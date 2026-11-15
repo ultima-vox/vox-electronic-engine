@@ -66,6 +66,9 @@ std::shared_ptr<const style::Definition> largestUserStyle()
     d.meta.author = juce::String::repeatedString ("A", style::maxMetaText);
     d.meta.group = juce::String::repeatedString ("G", style::maxMetaText);
     d.rules.clear();
+    // 16 declared parts (the most a style may have): all but ride, tom 2, tom 3.
+    d.requiredParts = { 1u };
+    d.optionalParts = 0xfffeu;
     // The rules of the available factory styles, largest first.
     std::vector<std::pair<int, style::Rule>> pool;
     for (int id = 0; id < style::registrySize; ++id)
@@ -80,7 +83,7 @@ std::shared_ptr<const style::Definition> largestUserStyle()
     for (int i = 0; d.rules.size() < static_cast<std::size_t> (style::maxRules) && ! pool.empty(); ++i)
     {
         auto r = pool[static_cast<std::size_t> (i) % std::min<std::size_t> (pool.size(), 8)].second;
-        r.part = i % style::partCount;
+        r.part = i % style::maxPartsPerStyle;   // parts 0..15
         r.salt = 1000 + i;
         auto next = d;
         next.rules.push_back (r);

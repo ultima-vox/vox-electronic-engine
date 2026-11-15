@@ -4,17 +4,18 @@
   "meta": { "author": "Ultima Vox", "group": "Ambient", "tempo": { "min": 60, "max": 100 } },
   "meters": ["4/4"],
   "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.0, "humanize": 0.15 },
+  "parts": { "required": ["kick"], "optional": ["closedHat", "rim", "crash", "perc1", "perc2"] },
   "rules": [
     { "part": "kick", "at": [1], "velocity": 0.7 },
     { "part": "kick", "at": [11], "kind": "ghost", "chance": "0.1 + 0.4 * density", "velocity": 0.5 },
     { "part": "rim", "at": [5, 13], "kind": "ghost", "chance": "0.2 + 0.5 * density", "velocity": 0.45 },
     { "part": "closedHat", "at": [3, 7, 11, 15], "kind": "ghost", "chance": "0.15 + 0.6 * density", "velocity": 0.35 },
-    { "part": "cymbal", "at": [1], "bars": "odd", "kind": "ghost", "chance": "0.3 + 0.4 * density", "velocity": 0.5 },
+    { "part": "crash", "at": [1], "bars": "odd", "kind": "ghost", "chance": "0.3 + 0.4 * density", "velocity": 0.5 },
     { "part": "perc1", "at": [1, 3, 5, 7, 9, 11, 13, 15], "kind": "ghost", "chance": "0.04 + 0.2 * density + 0.1 * syncopation", "velocity": 0.4, "salt": 8 },
     { "part": "perc2", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.04 + 0.2 * density + 0.1 * syncopation", "velocity": 0.4, "salt": 9 }
   ],
   "probability": { "value": "90 - 50 * complexity", "min": 30, "max": 100, "except": ["kick"] },
-  "fill": { "cycle": ["perc1", "cymbal"], "ratchet": 2 },
+  "fill": { "cycle": ["perc1", "crash"], "ratchet": 2 },
   "variation": { "keep": ["kick", "snare", "clap"] },
   "song": { "breakWithoutKick": true }
 }
