@@ -387,9 +387,15 @@ public:
         // A pad role edit (issue 132): slot = -1, applied through setRoleSink.
         bool hasRoles = false;
         PadRoles rolesBefore, rolesAfter;
+        // A generator settings edit ("Style defaults", PR 137 §4): slot = -1;
+        // the eight values in style::Param order, applied through setSettingsSink.
+        bool hasSettings = false;
+        std::array<float, 8> settingsBefore {}, settingsAfter {};
     };
     // Where undo/redo of a role edit goes (the processor's roles).
     void setRoleSink (std::function<void (const PadRoles&)> sink) { roleSink_ = std::move (sink); }
+    // Where undo/redo of a settings edit goes (the processor's generator values).
+    void setSettingsSink (std::function<void (const std::array<float, 8>&)> sink) { settingsSink_ = std::move (sink); }
     void push (std::unique_ptr<Entry> entry);
     // Replaces the newest entry's result (one knob drag = one undo step);
     // false if there is none for `slot` or it can be redone instead.
@@ -410,6 +416,7 @@ public:
 private:
     std::vector<std::unique_ptr<Entry>> undo_, redo_;
     std::function<void (const PadRoles&)> roleSink_;
+    std::function<void (const std::array<float, 8>&)> settingsSink_;
 };
 
 } // namespace vox::drums

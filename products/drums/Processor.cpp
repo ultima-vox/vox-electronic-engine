@@ -204,6 +204,27 @@ bool DrumsProcessor::setPadRole (int pad, PadRole role)
     return setPadRoles (roles);
 }
 
+bool DrumsProcessor::applyStyleDefaults()
+{
+    auto g = generator();
+    const auto defaults = styleDefaults (g);
+    const auto before = generatorValues (g);
+    if (! defaults)
+        return false;
+    setGeneratorValues (g, *defaults);
+    const auto after = generatorValues (g);
+    if (after == before)
+        return false;
+    auto e = std::make_unique<PatternHistory::Entry>();
+    e->slot = -1;
+    e->hasSettings = true;
+    e->settingsBefore = before;
+    e->settingsAfter = after;
+    setGenerator (g);
+    patternHistory().push (std::move (e));
+    return true;
+}
+
 RoleProposal DrumsProcessor::proposeRoles() const
 {
     auto kit = store_.snapshot();
@@ -363,6 +384,11 @@ DrumsProcessor::DrumsProcessor()
     reverbLevel_ = parameters_.getRawParameterValue ("drm.fx.reverb.level");
     presets_ = std::make_unique<Presets> (*this);
     patternHistory_.setRoleSink ([this] (const PadRoles& roles) { storeRoles (roles); });
+    patternHistory_.setSettingsSink ([this] (const GeneratorValues& values) {
+        auto g = generator();
+        setGeneratorValues (g, values);
+        setGenerator (g);
+    });
     events_.resize (midiCapacity);
     live_ = defaultKit();
     for (const auto& entry : pluginParameters())

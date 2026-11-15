@@ -1842,6 +1842,19 @@ void testEditor()
         }
         for (const auto* name : { "groove", "syncopation", "swing", "humanize", "complexity", "fills", "variation" })
             check (dynamic_cast<juce::Slider*> (page->named (name)) != nullptr, juce::String ("generate: amount ") + name);
+        // Style defaults (PR 137 §4): the button sets the amounts, the knobs follow, Undo returns them.
+        if (style != nullptr && density != nullptr)
+        {
+            style->setSelectedItemIndex (style::infoByKey ("heavy-metal")->id, juce::sendNotificationSync);
+            density->setValue (0.2, juce::sendNotificationSync);
+            check (press ("style.defaults") && std::abs (p->generator().density - 0.8f) < 1.0e-6f && std::abs (density->getValue() - 0.8) < 1.0e-6,
+                   "generate: Style defaults sets Heavy Metal's density 0.8 and moves the knob");
+            press ("undo");
+            panel->pollForTesting();
+            check (std::abs (p->generator().density - 0.2f) < 1.0e-6f && std::abs (density->getValue() - 0.2) < 1.0e-6
+                       && p->generator().style == static_cast<Style> (style::infoByKey ("heavy-metal")->id),
+                   "generate: Undo returns the amounts and the knob; the style stays");
+        }
     }
     // ROUTING: note and output per pad.
     {
@@ -2504,6 +2517,98 @@ void testRealtime()
 
 } // namespace
 
+//==============================================================================
+// PR 137 §4 "Style defaults": the eight amounts become the style's
+// recommended values in one undoable step; style, seed and locks stay.
+void testStyleDefaults()
+{
+    auto p = std::make_unique<DrumsProcessor>();
+    p->setRateAndBufferSizeDetails (48000.0, 512);
+    p->prepareToPlay (48000.0, 512);
+    const GeneratorValues off { 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f, 0.17f, 0.18f };
+    int wrong = 0;
+    for (int id = 0; id < factoryStyleCount; ++id)
+    {
+        p->patternHistory().clear();
+        GeneratorSettings g;
+        g.style = static_cast<Style> (id);
+        g.seed = 777u + static_cast<std::uint32_t> (id);
+        g.laneLocks = 0x0104u;
+        setGeneratorValues (g, off);
+        p->setGenerator (g);
+        const auto expected = style::factoryDefinition (id)->defaults.values;
+        const bool applied = p->applyStyleDefaults();
+        const auto after = p->generator();
+        bool ok = applied && generatorValues (after) == expected && after.style == g.style && after.seed == g.seed && after.laneLocks == g.laneLocks
+               && p->patternHistory().size() == 1;
+        ok = ok && ! p->applyStyleDefaults() && p->patternHistory().size() == 1;   // already the defaults: no step
+        p->patternHistory().undo (p->patterns());
+        ok = ok && p->generator() == g;
+        p->patternHistory().redo (p->patterns());
+        ok = ok && p->generator() == after;
+        if (! ok)
+        {
+            ++wrong;
+            check (false, juce::String ("style defaults: ") + styleName (g.style) + " applies, does not repeat, undoes and redoes");
+        }
+    }
+    check (wrong == 0, "style defaults: all 23 styles apply their own values as one undoable step; style, seed and lane locks stay");
+    {
+        // Dark Psy's row of §4, literally.
+        GeneratorSettings g;
+        g.style = static_cast<Style> (style::infoByKey ("dark-psy")->id);
+        p->setGenerator (g);
+        p->applyStyleDefaults();
+        const auto d = p->generator();
+        const auto near = [] (float a, float b) { return std::abs (a - b) < 1.0e-6f; };
+        check (near (d.density, 0.6f) && near (d.groove, 0.4f) && near (d.syncopation, 0.6f) && near (d.swing, 0.0f) && near (d.humanize, 0.05f)
+                   && near (d.complexity, 0.7f) && near (d.fills, 0.5f) && near (d.variation, 0.5f),
+               "style defaults: Dark Psy gets 0.6 / 0.4 / 0.6 / 0 / 0.05 / 0.7 / 0.5 / 0.5 (PR 137 §4)");
+    }
+    {
+        // An embedded user style: its own defaults, not the factory style's.
+        auto custom = std::make_shared<style::Definition> (*style::factoryDefinition (0));
+        custom->defaults.values = { 0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 0.3f, 0.2f };
+        GeneratorSettings g;
+        g.custom = custom;
+        p->setGenerator (g);
+        check (p->applyStyleDefaults() && generatorValues (p->generator()) == custom->defaults.values,
+               "style defaults: a user style applies its own defaults");
+    }
+    {
+        // Unknown style: false, nothing changes, no history step.
+        p->patternHistory().clear();
+        GeneratorSettings g;
+        g.style = static_cast<Style> (style::registrySize);
+        setGeneratorValues (g, off);
+        p->setGenerator (g);
+        check (! p->applyStyleDefaults() && p->generator() == g && ! p->patternHistory().canUndo(),
+               "style defaults: an unknown style changes nothing and records no step");
+    }
+    {
+        // In one history with pattern edits: undo goes back step by step.
+        p->patternHistory().clear();
+        GeneratorSettings g;
+        g.style = Style::house;
+        setGeneratorValues (g, off);
+        p->setGenerator (g);
+        auto all = std::make_unique<PatternStore::Everything>();
+        p->generate (DrumsProcessor::Generate::pattern);
+        p->patterns().copyEverything (*all);
+        const auto seeded = p->generator();
+        p->applyStyleDefaults();
+        const auto withDefaults = p->generator();
+        p->generate (DrumsProcessor::Generate::pattern);
+        p->patternHistory().undo (p->patterns());   // the second pattern
+        auto now = std::make_unique<PatternStore::Everything>();
+        p->patterns().copyEverything (*now);
+        const bool patternBack = now->slots == all->slots && generatorValues (p->generator()) == generatorValues (withDefaults);
+        p->patternHistory().undo (p->patterns());   // the defaults
+        check (patternBack && generatorValues (p->generator()) == generatorValues (seeded) && p->patternHistory().size() == 1,
+               "style defaults: undo walks back through pattern and settings steps in order");
+    }
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -2520,6 +2625,7 @@ int main (int argc, char** argv)
     testExport();
     testOutputs();
     testGenerator();
+    testStyleDefaults();
     testPresets();
     testState();
     testEditor();

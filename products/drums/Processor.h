@@ -144,6 +144,12 @@ public:
     // patterns ("" when it would run): an unavailable style, or a meter the
     // style does not define (PR 137 §10.6). Message thread.
     juce::String generateRefusal (Generate what) const;
+    // PR 137 §4 "Style defaults": sets the eight generator values to the
+    // current style's recommended ones; style, seed and lane locks stay. One
+    // undoable step in patternHistory() (undo restores the eight values as
+    // they were). False, nothing changed and no step, when the style has no
+    // definition or the values already are the defaults.
+    bool applyStyleDefaults();
     int currentSlot() const;
 
     //== pad roles (issue 132, DROL), message thread
