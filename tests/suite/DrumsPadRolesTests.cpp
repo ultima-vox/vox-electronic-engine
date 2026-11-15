@@ -729,6 +729,31 @@ void testPresets (const juce::File& folder)
 
 void testProposal()
 {
+    // PR 137 §2.6 as approved on #143: GM note 45 proposes tom 2, but the
+    // legacy/default layout keeps pad 6 (note 45) = tom 1 until the user applies
+    // the proposal; the difference is shown, Cancel changes nothing, Apply is one
+    // undoable step.
+    {
+        auto p = makeProcessor();
+        p->presets().loadFactoryKit (0);
+        check (p->kitStore().pad (5).note == 45 && ! p->padRoles().explicitRoles && p->padRoles().role[5] == PadRole::tom1,
+               "GM 45: the default kit loads with pad 6 (note 45) = tom 1");
+        const auto before = stateOf (*p);
+        auto proposal = p->proposeRoles();
+        check (proposal.role[5] == PadRole::tom2 && (proposal.changedPads (p->padRoles()) & (1u << 5)) != 0,
+               "GM 45: the proposal shows pad 6 tom 1 -> tom 2 as a difference");
+        check (stateOf (*p) == before && p->padRoles().role[5] == PadRole::tom1 && ! p->patternHistory().canUndo(),
+               "GM 45: preview / Cancel changes nothing");
+        for (int pad = 0; pad < kit::padCount; ++pad)
+            if (proposal.needsChoice[static_cast<std::size_t> (pad)])
+                proposal.choose (pad, p->padRoles().role[static_cast<std::size_t> (pad)]);
+        check (p->applyRoleProposal (proposal) && p->padRoles().explicitRoles && p->padRoles().role[5] == PadRole::tom2,
+               "GM 45: explicit Apply makes pad 6 tom 2");
+        p->patternHistory().undo (p->patterns());
+        check (p->padRoles().role[5] == PadRole::tom1, "GM 45: undo returns pad 6 to tom 1");
+        p->patternHistory().redo (p->patterns());
+        check (p->padRoles().role[5] == PadRole::tom2, "GM 45: redo applies tom 2 again");
+    }
     // R18: factory kits; nothing is written by the proposal.
     for (int k = 0; k < factoryKitCount; ++k)
     {
@@ -928,6 +953,9 @@ void testRolesV2()
                 dup = &n;
         check (dup != nullptr && dup->pad == 9 && dup->otherPad == 13 && dup->text == "2 ride pads: pad 10 plays generated ride hits",
                "notices: two ride pads: pad 10 plays, Use pad 14 offered");
+        check (dup != nullptr
+                   && dup->actionTip == "Use pad 14: pad 10 gets the role None and keeps its notes; pad 14 plays the generated ride hits. One undo step.",
+               "notices: the Use pad N tooltip says what it does (no swap claimed)");
         check (RoleMap::from (explicitRoles (two)).laneOfSlot[pRide] == 9, "duplicate ride: the lowest pad plays it");
         if (dup != nullptr)
         {
@@ -937,8 +965,17 @@ void testRolesV2()
             check (usePad (two, 9, 3) == two, "Use pad N: only between two pads with the same role");
             auto p = makeProcessor();
             check (p->setPadRoles (two) && p->setPadRoles (swapped) && p->padRoles().role == swapped, "Use pad N through the processor");
+            // Pad 10's manual notes stay: roles never touch cells.
+            auto withNotes = std::make_unique<StoredPattern>();
+            p->patterns().copySlot (0, *withNotes);
+            testutil::stepAt (*withNotes, 9, 0, 0).on = true;
+            p->patterns().setSlot (0, *withNotes);
             p->patternHistory().undo (p->patterns());
             check (p->padRoles().role == two, "Use pad N is one undo step");
+            p->patternHistory().redo (p->patterns());
+            auto after = std::make_unique<StoredPattern>();
+            p->patterns().copySlot (0, *after);
+            check (p->padRoles().role == swapped && testutil::stepAt (*after, 9, 0, 0).on, "Use pad N: redo applies it again; pad 10 keeps its notes");
         }
     }
     // Generation to the ride pad: a user style with a ride part.
