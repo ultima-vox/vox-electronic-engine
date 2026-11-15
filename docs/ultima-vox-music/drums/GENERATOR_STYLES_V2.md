@@ -148,8 +148,12 @@ Each style declares its parts:
 - Two or more pads with the same instrument role:
   - the **lowest pad index** plays the part; the others get nothing from the generator, but
     keep their manual notes;
-  - a notice reads "2 kick pads: pad 1 plays generated kicks", with one action, **Use pad N**,
-    which swaps the roles of the two pads as one undoable step.
+  - a notice reads "2 kick pads: pad 1 plays generated kicks", with one action, **Use pad N**.
+    Both pads hold the same role, so a swap would change nothing. **As approved on #143:** the pad
+    that plays the part now gets the role **None** and keeps its manual notes, and pad N (now the
+    first pad with the role) plays it. One undoable step (undo and redo). Its tooltip says exactly
+    this: "Use pad N: pad M gets the role None and keeps its notes; pad N plays the generated …
+    hits. One undo step."
 - Percussion is not a duplicate: several percussion pads take perc 1, 2, … in pad order.
 - **Full generation** (Pattern, Variation, Song) clears unlocked lanes of pads that receive no
   part, as approved in #132 (Q2). Mutate touches only the selected pads.
@@ -160,7 +164,9 @@ Each style declares its parts:
 New hints:
 
 - **toms** by GM note: 48/50 → tom 1, 45/47 → tom 2, 41/43 → tom 3; otherwise by tune, highest
-  to lowest;
+  to lowest. **As approved on #143:** this is a *proposal* only. The default/legacy layout keeps
+  pad 6 (note 45) = tom 1; "Set roles from pad models" shows pad 6 tom 1 → tom 2 as a difference
+  (`RoleProposal::changedPads`), Cancel changes nothing, Apply is one undoable step;
 - **cymbals**: 49/52/55/57 → crash, 51/53/59 → ride; otherwise a "?" row;
 - two crash candidates: the first is crash, the second is percussion.
 
@@ -662,6 +668,10 @@ All ordinary cell starts at these resolutions are integer ticks; user micro edit
   "meta": { "author": "…", "group": "House & Techno", "tempo": { "min": 120, "max": 126 } },
   "meters": ["4/4"],                    // must contain "4/4"; also "3/4", "6/8", "12/8"
   "defaults": { "density": 0.6, …, "variation": 0.4 },
+  "parts": {                            // required (§2.4; approved on #143): every part a rule, the fill
+    "required": ["kick", ["clap", "snare"], "openHat"],   // or an assertion uses; an inner list = alternatives
+    "optional": ["snare", "closedHat", "rim", "perc1"]    // at most 16 parts, 8 percussion; not in contentHash
+  },
   "rules": [                            // flat list, as #138
     { "part": "kick", "at": [1, 5, 9, 13], "velocity": 0.95, "accent": true },
     { "part": "closedHat", "at": [2, 4, …], "kind": "ghost", "chance": "0.1 + 0.7 * density", "velocity": 0.4 },
