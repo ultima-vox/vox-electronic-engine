@@ -362,6 +362,13 @@ public:
             processor_.patternHistory().redo (processor_.patterns());
             status_->setText ("Redone", juce::dontSendNotification);
         });
+        action (defaults_, "Style defaults", "Set the eight amounts to the selected style's recommended values (one undo step)", [this] {
+            const bool changed = processor_.applyStyleDefaults();
+            refresh();
+            status_->setText (changed ? juce::String ("Style defaults of ") + styleName (shown_.style) + " applied"
+                                      : juce::String ("Nothing changed: the amounts already are the style defaults"),
+                              juce::dontSendNotification);
+        });
         status_ = makeLabel ("", true);
         addAndMakeVisible (*status_);
         refresh();
@@ -421,6 +428,7 @@ public:
         buttons = area.removeFromTop (36);
         undo_->setBounds (buttons.removeFromLeft (cw).reduced (2));
         redo_->setBounds (buttons.removeFromLeft (cw).reduced (2));
+        defaults_->setBounds (buttons.reduced (2));
         area.removeFromTop (sp::sm);
         status_->setBounds (area.removeFromTop (20));
     }
@@ -437,6 +445,7 @@ public:
         if (name == "variation.ab") return variation_.get();
         if (name == "undo") return undo_.get();
         if (name == "redo") return redo_.get();
+        if (name == "style.defaults") return defaults_.get();
         for (auto& k : amounts_)
             if (k->getName() == name)
                 return &k->getSlider();
@@ -507,7 +516,7 @@ private:
     std::unique_ptr<VoxComboBox> style_;
     std::array<std::unique_ptr<VoxKnob>, 8> amounts_;
     std::array<std::unique_ptr<VoxButton>, padCount> locks_, mutate_;
-    std::unique_ptr<VoxButton> pattern_, song_, mutateButton_, fill_, variation_, undo_, redo_;
+    std::unique_ptr<VoxButton> pattern_, song_, mutateButton_, fill_, variation_, undo_, redo_, defaults_;
 };
 
 //==============================================================================

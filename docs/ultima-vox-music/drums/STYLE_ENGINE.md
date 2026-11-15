@@ -196,6 +196,24 @@ Formulas are unchanged.
   sound acceptance is a listening/DAW check by the owner. Rock and Metal stay **NOT RELEASE-READY**
   until licensed acoustic samples exist.
 
+## Style defaults (`drm/style-defaults`, PR 137 §4)
+
+- **GENERATE → "Style defaults"** (`DrumsProcessor::applyStyleDefaults`): sets the eight amounts
+  to the `defaults` of the style the generator runs (a user style: its own). Style, seed and
+  lane locks stay. Choosing a style still changes only the style.
+- **One undo step** in the generator/pattern history (`PatternHistory::Entry::hasSettings`, the
+  eight values before and after, applied through a settings sink like role edits). Undo restores
+  the eight values as they were before the button; later knob moves are not history steps
+  (unchanged: knob edits have no undo).
+- **Refused** (false, nothing changed, no step): an unknown style, or amounts that already are the
+  defaults.
+- **Not stored:** the button changes `GeneratorSettings` only; `DGEN`, `DSTL` and every other state
+  format are unchanged.
+- **Tests** (`suite_drums_candidate_tests`): all 23 styles apply exactly their JSON values with
+  style/seed/locks kept, no second step, undo and redo; Dark Psy's §4 row literally; a user
+  style's own defaults; unknown style refused; undo order with pattern steps; the GENERATE button
+  moves the knobs and Undo returns them.
+
 Not yet done:
 
 - `DGEN` v2 (style by UUID) and `DSTL` (embedded user style). Their exact state layout is

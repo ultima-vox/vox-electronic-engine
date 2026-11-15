@@ -82,6 +82,8 @@ const style::Definition* definitionOf (const GeneratorSettings& g)
     return g.custom != nullptr ? g.custom.get() : style::factoryDefinition (static_cast<int> (g.style));
 }
 
+static_assert (std::tuple_size_v<GeneratorValues> == 8, "PatternHistory stores the eight generator values");
+
 style::ParamValues paramsOf (const GeneratorSettings& g) noexcept
 {
     style::ParamValues p;
@@ -425,6 +427,26 @@ juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Defin
                 }
     }
     return out;
+}
+
+GeneratorValues generatorValues (const GeneratorSettings& g) noexcept
+{
+    return { g.density, g.groove, g.syncopation, g.complexity, g.fills, g.variation, g.swing, g.humanize };
+}
+
+void setGeneratorValues (GeneratorSettings& g, const GeneratorValues& v) noexcept
+{
+    float* fields[] = { &g.density, &g.groove, &g.syncopation, &g.complexity, &g.fills, &g.variation, &g.swing, &g.humanize };
+    for (std::size_t i = 0; i < v.size(); ++i)
+        *fields[i] = std::clamp (v[i], 0.0f, 1.0f);
+}
+
+std::optional<GeneratorValues> styleDefaults (const GeneratorSettings& g)
+{
+    const auto* def = definitionOf (g);
+    if (def == nullptr)
+        return std::nullopt;
+    return def->defaults.values;
 }
 
 bool styleAvailable (Style style)

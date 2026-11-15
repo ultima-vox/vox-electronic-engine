@@ -25,6 +25,8 @@
 #include "StyleDefinition.h"
 #include "PatternStore.h"
 
+#include <optional>
+
 namespace vox::drums {
 
 inline constexpr preset::Tag generatorSectionTag = preset::makeTag ("DGEN");
@@ -53,6 +55,15 @@ struct GeneratorSettings {
     bool operator== (const GeneratorSettings&) const noexcept;
     bool operator!= (const GeneratorSettings& o) const noexcept { return ! (*this == o); }
 };
+
+// The eight generator values in style::Param order (density, groove,
+// syncopation, complexity, fills, variation, swing, humanize).
+using GeneratorValues = std::array<float, style::paramCount>;
+GeneratorValues generatorValues (const GeneratorSettings&) noexcept;
+void setGeneratorValues (GeneratorSettings&, const GeneratorValues&) noexcept;
+// PR 137 §4: the recommended values of the style `g` runs ("Style
+// defaults"); nullopt when it has no definition. Message thread.
+std::optional<GeneratorValues> styleDefaults (const GeneratorSettings& g);
 
 // The embedded user style (DSTL v1, docs/ultima-vox-music/drums/STYLE_ENGINE.md).
 inline constexpr preset::Tag styleSectionTag = preset::makeTag ("DSTL");
