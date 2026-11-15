@@ -74,8 +74,16 @@ int partOfRole (PadRole r) noexcept
         case PadRole::ride: return 16;
         case PadRole::tom2: return 17;
         case PadRole::tom3: return 18;
-        default: return static_cast<int> (r) - 1;   // kick .. crash: parts 0..7
+        case PadRole::kick:
+        case PadRole::snare:
+        case PadRole::clap:
+        case PadRole::closedHat:
+        case PadRole::openHat:
+        case PadRole::tom1:
+        case PadRole::rim:
+        case PadRole::crash: return static_cast<int> (r) - 1;   // kick .. crash: parts 0..7
     }
+    return -1;
 }
 
 RoleMap RoleMap::identity() noexcept
@@ -246,6 +254,8 @@ std::vector<RoleNotice> roleNotices (const PadRoles& roles, const style::Definit
         n.otherPad = second[static_cast<std::size_t> (r)];
         n.text = juce::String (count[static_cast<std::size_t> (r)]) + " " + lower (role) + " pads: pad " + juce::String (n.pad + 1) + " plays generated "
                + lower (role) + " hits";
+        n.actionTip = "Use pad " + juce::String (n.otherPad + 1) + ": pad " + juce::String (n.pad + 1) + " gets the role None and keeps its notes; pad "
+                    + juce::String (n.otherPad + 1) + " plays the generated " + lower (role) + " hits. One undo step.";
         out.push_back (n);
     }
     // More percussion pads than percussion parts.
@@ -289,6 +299,15 @@ void RoleProposal::choose (int pad, PadRole r) noexcept
         return;
     role[static_cast<std::size_t> (pad)] = r;
     needsChoice[static_cast<std::size_t> (pad)] = false;
+}
+
+std::uint16_t RoleProposal::changedPads (const PadRoles& current) const noexcept
+{
+    std::uint16_t mask = 0;
+    for (int pad = 0; pad < kit::padCount; ++pad)
+        if (role[static_cast<std::size_t> (pad)] != current.role[static_cast<std::size_t> (pad)])
+            mask = static_cast<std::uint16_t> (mask | (1u << pad));
+    return mask;
 }
 
 bool RoleProposal::complete() const noexcept
