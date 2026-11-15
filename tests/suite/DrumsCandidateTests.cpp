@@ -78,7 +78,7 @@ std::shared_ptr<const style::Definition> largestUserStyle()
             {
                 style::Definition one = d;
                 one.rules = { r };
-                pool.emplace_back (style::serialize (one).getNumBytesAsUTF8(), r);
+                pool.emplace_back (static_cast<int> (style::serialize (one).getNumBytesAsUTF8()), r);
             }
     std::stable_sort (pool.begin(), pool.end(), [] (const auto& x, const auto& y) { return x.first > y.first; });
     for (int i = 0; d.rules.size() < static_cast<std::size_t> (style::maxRules) && ! pool.empty(); ++i)
