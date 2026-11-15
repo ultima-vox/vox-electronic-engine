@@ -66,7 +66,9 @@ target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juc
 # Factory style definitions (issue 136): the JSON files in drums/styles are
 # built into the plugin as text, in this order, and parsed by the same
 # parser an imported style will use. Reconfigures when a file changes.
-set(VOX_DRUMS_FACTORY_STYLES full-on goa house techno trap breaks ambient)
+set(VOX_DRUMS_FACTORY_STYLES full-on goa house techno trap breaks ambient
+    uplifting-trance anthem-trance dark-psy melodic-trance hard-rock heavy-metal symphonic-metal nordic-metal
+    tech-house drum-and-bass melodic-drum-and-bass melodic-techno progressive-trance dream-trance hard-trance symphonic-trance)
 set(_vox_styles_inc "${CMAKE_CURRENT_BINARY_DIR}/drums/FactoryStyles.inc")
 set(_vox_styles_text "// Generated from products/drums/styles/*.json. Do not edit.\n")
 foreach(_style IN LISTS VOX_DRUMS_FACTORY_STYLES)

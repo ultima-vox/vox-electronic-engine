@@ -1,0 +1,268 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "bbc77dde-f332-4ee2-86de-a5c278867da0",
+ "key": "symphonic-trance",
+ "name": "Symphonic Trance",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Trance",
+  "tempo": {
+   "min": 136,
+   "max": 140
+  }
+ },
+ "meters": [
+  "4/4",
+  "3/4"
+ ],
+ "defaults": {
+  "density": 0.6,
+  "groove": 0.5,
+  "syncopation": 0.3,
+  "swing": 0,
+  "humanize": 0.1,
+  "complexity": 0.4,
+  "fills": 0.6,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "clap",
+   "closedHat",
+   "openHat"
+  ],
+  "optional": [
+   "snare",
+   "tom1",
+   "rim",
+   "crash",
+   "perc1",
+   "perc2",
+   "perc3",
+   "perc4",
+   "perc5",
+   "ride",
+   "tom2",
+   "tom3"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.9,
+   "accent": true
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "velocity": 0.8
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "chance": "0.2 + 0.6 * density",
+   "velocity": 0.45
+  },
+  {
+   "part": "tom3",
+   "at": [
+    1
+   ],
+   "bars": "odd",
+   "velocity": 0.85
+  },
+  {
+   "part": "tom1",
+   "at": [
+    14
+   ],
+   "kind": "ghost",
+   "chance": "0.3 + 0.5 * complexity",
+   "velocity": 0.7
+  },
+  {
+   "part": "tom2",
+   "at": [
+    15
+   ],
+   "kind": "ghost",
+   "chance": "0.3 + 0.5 * complexity",
+   "velocity": 0.7
+  },
+  {
+   "part": "tom3",
+   "at": [
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.3 + 0.5 * complexity",
+   "velocity": 0.75
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.85
+  },
+  {
+   "part": "snare",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "beats": [
+    4
+   ],
+   "subdivision": "triplet",
+   "bars": "last",
+   "when": [
+    "fills > 0.3",
+    "complexity > 0.5"
+   ],
+   "velocity": 0.65
+  },
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9
+   ],
+   "meter": "3/4",
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    9
+   ],
+   "meter": "3/4",
+   "velocity": 0.85
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11
+   ],
+   "meter": "3/4",
+   "velocity": 0.8
+  },
+  {
+   "part": "tom3",
+   "at": [
+    1
+   ],
+   "meter": "3/4",
+   "bars": "odd",
+   "velocity": 0.85
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "meter": "3/4",
+   "bars": "first",
+   "velocity": 0.85
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "tom3",
+   "snare"
+  ],
+  "ratchet": 4
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "clap",
+   "openHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "clap",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "openHat",
+   "always": [
+    3,
+    7,
+    11,
+    15
+   ]
+  }
+ ]
+}

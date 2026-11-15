@@ -1,0 +1,322 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "ad7deadd-26fd-4945-bdd3-b8a9c12254a9",
+ "key": "heavy-metal",
+ "name": "Heavy Metal",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Rock & Metal",
+  "tempo": {
+   "min": 120,
+   "max": 180
+  }
+ },
+ "meters": [
+  "4/4",
+  "12/8"
+ ],
+ "defaults": {
+  "density": 0.8,
+  "groove": 0.6,
+  "syncopation": 0.4,
+  "swing": 0,
+  "humanize": 0.15,
+  "complexity": 0.6,
+  "fills": 0.6,
+  "variation": 0.5
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "snare",
+   "tom1",
+   "crash",
+   "ride",
+   "tom3"
+  ],
+  "optional": [
+   "closedHat",
+   "openHat",
+   "rim",
+   "tom2"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    9
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "kick",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ],
+   "when": [
+    "density > 0.4"
+   ],
+   "velocity": 0.9
+  },
+  {
+   "part": "kick",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "when": [
+    "density > 0.75"
+   ],
+   "velocity": 0.8
+  },
+  {
+   "part": "kick",
+   "at": [
+    1,
+    3,
+    4,
+    5,
+    7,
+    8,
+    9,
+    11,
+    12,
+    13,
+    15,
+    16
+   ],
+   "when": [
+    "syncopation > 0.6"
+   ],
+   "velocity": 0.9
+  },
+  {
+   "part": "snare",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "ride",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "when": [
+    "density > 0.5"
+   ],
+   "velocity": 0.7
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ],
+   "when": [
+    "density <= 0.5"
+   ],
+   "velocity": 0.6
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.9
+  },
+  {
+   "part": "tom1",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "beats": [
+    4
+   ],
+   "subdivision": "triplet",
+   "bars": "last",
+   "when": [
+    "fills > 0.3",
+    "complexity > 0.5"
+   ],
+   "velocity": 0.75
+  },
+  {
+   "part": "kick",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15,
+    17,
+    19,
+    21,
+    23
+   ],
+   "meter": "12/8",
+   "velocity": 0.9
+  },
+  {
+   "part": "kick",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16,
+    18,
+    20,
+    22,
+    24
+   ],
+   "meter": "12/8",
+   "when": [
+    "density > 0.6"
+   ],
+   "velocity": 0.8
+  },
+  {
+   "part": "snare",
+   "at": [
+    7,
+    19
+   ],
+   "meter": "12/8",
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "ride",
+   "at": [
+    1,
+    7,
+    13,
+    19
+   ],
+   "meter": "12/8",
+   "velocity": 0.7
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "meter": "12/8",
+   "bars": "first",
+   "velocity": 0.9
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "tom1",
+   "tom2",
+   "tom3"
+  ],
+  "ratchet": 2
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "snare"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    9
+   ]
+  },
+  {
+   "part": "snare",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "openHat",
+   "never": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "kick",
+   "meter": "12/8",
+   "always": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15,
+    17,
+    19,
+    21,
+    23
+   ]
+  }
+ ]
+}

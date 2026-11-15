@@ -1,0 +1,260 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "ba3859d9-a9bb-4d2a-acfe-af7f117398a8",
+ "key": "dark-psy",
+ "name": "Dark Psy",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Psy",
+  "tempo": {
+   "min": 145,
+   "max": 150
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.6,
+  "groove": 0.4,
+  "syncopation": 0.6,
+  "swing": 0,
+  "humanize": 0.05,
+  "complexity": 0.7,
+  "fills": 0.5,
+  "variation": 0.5
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "closedHat",
+   "perc1"
+  ],
+  "optional": [
+   "clap",
+   "openHat",
+   "tom1",
+   "rim",
+   "crash",
+   "perc2",
+   "perc3",
+   "perc4"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "velocity": 0.6
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "when": [
+    "density > 0.3"
+   ],
+   "velocity": 0.7
+  },
+  {
+   "part": "clap",
+   "at": [
+    13
+   ],
+   "chance": "0.05 + 0.2 * complexity",
+   "velocity": 0.75
+  },
+  {
+   "part": "perc1",
+   "at": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ],
+   "chance": "0.15 + 0.35 * complexity",
+   "velocity": 0.45,
+   "ratchet": {
+    "chance": "complexity - 0.2",
+    "salt": 11,
+    "valueSalt": 12,
+    "below": [
+     [
+      0.5,
+      2
+     ],
+     [
+      0.8,
+      3
+     ]
+    ],
+    "otherwise": 4
+   }
+  },
+  {
+   "part": "rim",
+   "at": [
+    3,
+    6,
+    11,
+    14
+   ],
+   "chance": "0.1 + 0.4 * complexity",
+   "velocity": 0.4,
+   "ratchet": {
+    "chance": "complexity - 0.3",
+    "salt": 13,
+    "valueSalt": 14,
+    "below": [
+     [
+      0.6,
+      2
+     ]
+    ],
+    "otherwise": 3
+   }
+  },
+  {
+   "part": "tom1",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.05 + 0.3 * syncopation * complexity",
+   "velocity": 0.45
+  },
+  {
+   "part": "perc2",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.3 * syncopation",
+   "velocity": 0.4
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "perc1",
+   "rim"
+  ],
+  "ratchet": 4
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "closedHat",
+   "openHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "closedHat",
+   "always": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "never": [
+    1,
+    5,
+    9,
+    13
+   ]
+  },
+  {
+   "part": "clap",
+   "never": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  }
+ ]
+}

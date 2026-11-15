@@ -10,6 +10,7 @@
 #include <optional>
 
 namespace vox::drums {
+static_assert (factoryStyleCount == style::registrySize);
 namespace {
 
 enum Lane { kick, snare, clap, closedHat, openHat, tom, rim, cymbal, perc1, perc2, perc3, perc4, perc5, perc6, perc7, perc8 };
@@ -114,7 +115,7 @@ Hit styleHit (const style::Definition& def, const style::ParamValues& values, co
             continue;
         if (tupletBeat < 0 ? rule.tupletBeats != 0 : ((rule.tupletBeats >> tupletBeat) & 1u) == 0)
             continue;
-        if ((rule.bars == style::Bars::first && c.bar != 0) || (rule.bars == style::Bars::odd && c.bar % 2 != 0))
+        if (! style::barApplies (rule.bars, c.bar, c.bars))
             continue;
         bool when = true;
         for (const auto& condition : rule.when)
@@ -271,7 +272,7 @@ bool generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPa
                 {
                     if (rule.part != slot || rule.meter != meter || rule.tupletBeats == 0)
                         continue;
-                    if ((rule.bars == style::Bars::first && bar != 0) || (rule.bars == style::Bars::odd && bar % 2 != 0))
+                    if (! style::barApplies (rule.bars, bar, p.bars))
                         continue;
                     bool when = true;
                     for (const auto& condition : rule.when)
@@ -356,11 +357,34 @@ bool GeneratorSettings::operator== (const GeneratorSettings& o) const noexcept
         && laneLocks == o.laneLocks;
 }
 
+namespace {
+// The assertion check plays every part the style declares (at most 16, §2.4)
+// on a pad of its own, so assertions on ride / tom 2 / tom 3 (no pad in the
+// identity map) are checked too.
+RoleMap assertionMap (const style::Definition& d) noexcept
+{
+    RoleMap m;
+    m.slotOfLane.fill (-1);
+    m.laneOfSlot.fill (-1);
+    const auto declared = d.declaredParts();
+    int lane = 0;
+    for (int part = 0; part < RoleMap::parts && lane < kit::padCount; ++part)
+        if ((declared >> part) & 1u)
+        {
+            m.slotOfLane[static_cast<std::size_t> (lane)] = static_cast<std::int8_t> (part);
+            m.laneOfSlot[static_cast<std::size_t> (part)] = static_cast<std::int8_t> (lane);
+            ++lane;
+        }
+    return m;
+}
+} // namespace
+
 juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Definition>& definition, int maxViolations)
 {
     juce::StringArray out;
     if (definition == nullptr)
         return { "no style" };
+    const auto map = assertionMap (*definition);
     auto p = std::make_unique<StoredPattern>();
     static constexpr timing::TimeSignature signatures[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
     for (int m = 0; m < style::meterCount; ++m)
@@ -380,16 +404,17 @@ juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Defin
                     g.fills = 0.0f;
                     *p = {};   // 16ths, 4 bars, empty
                     p->signature = signatures[m];
-                    generatePattern (g, *p);
+                    generatePattern (g, *p, map);
                     for (const auto& a : definition->assertions)
                     {
+                        const int lane = map.laneOfSlot[static_cast<std::size_t> (a.part)];
                         if (a.meter != meter)
                             continue;
                         for (int bar = 0; bar < p->bars; ++bar)
                             for (int pos = 0; pos < style::gridPositions (meter); ++pos)
                             {
-                                const int at = slotOf16th (p->timing (a.part, bar), pos);
-                                const bool on = at >= 0 && p->cell (a.part, bar, at).on;
+                                const int at = lane < 0 ? -1 : slotOf16th (p->timing (lane, bar), pos);
+                                const bool on = at >= 0 && p->cell (lane, bar, at).on;
                                 const bool wrong = ((a.always & (1u << pos)) != 0 && ! on) || ((a.never & (1u << pos)) != 0 && on);
                                 if (wrong && out.size() < maxViolations)
                                     out.add (juce::String (style::partKey (a.part)) + (on ? " plays" : " is missing") + " at " + juce::String (pos + 1)
@@ -456,7 +481,7 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
     if (bar < 0 || bar >= p.bars)
         bar = p.bars - 1;
     // The fill takes the last 2..8 sixteenths of the bar (straight cells).
-    const int length = std::clamp (static_cast<int> (std::lround (2.0 + 6.0 * g.fills)), 2, 8);
+    const int length = std::clamp (static_cast<int> (std::lround (2.0 + 6.0 * g.fills)), 2, def->fill.maxLength);
     const Context c { g, bar, p.bars, meter };
     for (int pos = positions - length; pos < positions; ++pos)
     {
@@ -471,7 +496,7 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
             continue;
         Hit h;
         h.on = true;
-        h.velocity = static_cast<float> (0.45 + 0.5 * (index + 1) / length);
+        h.velocity = std::min (def->fill.maxVelocity, static_cast<float> (0.45 + 0.5 * (index + 1) / length));
         h.accent = index == length - 1;
         if (g.complexity > 0.3f && c.r (lane, pos, 73) < g.complexity - 0.2)
             h.ratchet = def->fill.ratchet;

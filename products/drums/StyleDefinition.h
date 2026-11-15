@@ -77,7 +77,13 @@ struct Condition {
 };
 
 // Which bars of a pattern a rule plays in.
-enum class Bars : std::uint8_t { all, first, odd };   // odd: bars 1, 3 (0-based even)
+// odd: bars 1, 3 (0-based even); even: bars 2, 4; last: the pattern's last bar.
+enum class Bars : std::uint8_t { all, first, odd, even, last };
+constexpr bool barApplies (Bars b, int bar, int bars) noexcept
+{
+    return b == Bars::all || (b == Bars::first && bar == 0) || (b == Bars::odd && bar % 2 == 0) || (b == Bars::even && bar % 2 == 1)
+        || (b == Bars::last && bar == bars - 1);
+}
 
 struct Ratchet {
     Expr chance;       // probability of a ratchet at this position
@@ -115,6 +121,8 @@ struct ProbabilityOverride {
 struct Fill {
     std::vector<int> cycle;   // the parts of the fill, part = cycle[index % size]
     int ratchet = 2;          // ratchet of a complex fill hit
+    int maxLength = 8;        // 2..8 sixteenths (the fill takes 2 + 6 x fills, at most this)
+    float maxVelocity = 0.95f;   // 0.1..0.95: the ceiling of the rising fill velocity
 };
 
 struct Meta {

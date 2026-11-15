@@ -23,6 +23,8 @@
 // violation found) to that path.
 #include "FactoryContent.h"
 #include "Generator.h"
+#include "PadRoles.h"
+#include "StyleRegistry.h"
 #include "PatternExport.h"
 #include "DrumsPatternTestUtil.h"
 
@@ -32,6 +34,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -565,6 +568,384 @@ void writeReport (const char* path)
 
 } // namespace
 
+//==============================================================================
+// PR 137 §3: the 16 new styles. Each check is a "Distinctions that tests
+// check" line of §3 (or §2.4/§10.6), measured on generated patterns with the
+// style's defaults, on the kit map of its genre (§2.3: Trance or Metal for
+// the parts ride / tom 2 / tom 3, the default map otherwise).
+namespace v2 {
+constexpr int pKick = 0, pSnare = 1, pClap = 2, pClosed = 3, pOpen = 4, pTom1 = 5, pRim = 6, pCrash = 7, pPerc1 = 8, pPerc2 = 9,
+              pRide = 16, pTom2 = 17, pTom3 = 18;
+using Roles = std::array<PadRole, kit::padCount>;
+constexpr auto K = PadRole::kick, S = PadRole::snare, C = PadRole::clap, CH = PadRole::closedHat, OH = PadRole::openHat,
+               T1 = PadRole::tom1, R = PadRole::rim, CY = PadRole::crash, P = PadRole::percussion, RD = PadRole::ride, T2 = PadRole::tom2,
+               T3 = PadRole::tom3;
+constexpr Roles tranceMap { K, S, C, CH, OH, T1, R, CY, RD, T2, T3, P, P, P, P, P };
+constexpr Roles metalMap { K, S, R, CH, OH, T1, T2, T3, CY, RD, P, P, P, P, P, P };
+
+RoleMap mapFor (int id)
+{
+    PadRoles roles;
+    roles.explicitRoles = true;
+    const auto* info = style::infoById (id);
+    const juce::String group = info != nullptr ? info->group : "";
+    const auto* d = style::factoryDefinition (id);
+    const bool extended = d != nullptr && (d->declaredParts() & ((1u << pRide) | (1u << pTom2) | (1u << pTom3))) != 0;
+    // A style with ride / tom 2 / tom 3 outside Rock & Metal uses the Trance map.
+    roles.role = group == "Rock & Metal" ? metalMap : extended ? tranceMap : PadRoles::identity();
+    return RoleMap::from (roles);
+}
+
+GeneratorSettings defaultsOf (int id, std::uint32_t seed)
+{
+    GeneratorSettings g;
+    g.style = static_cast<Style> (id);
+    const auto* d = style::factoryDefinition (id);
+    const auto& v = d->defaults.values;   // density, groove, syncopation, complexity, fills, variation, swing, humanize
+    g.density = v[0];
+    g.groove = v[1];
+    g.syncopation = v[2];
+    g.complexity = v[3];
+    g.fills = v[4];
+    g.variation = v[5];
+    g.swing = v[6];
+    g.humanize = v[7];
+    g.seed = seed;
+    return g;
+}
+
+// Generated bars of style `id` (4/4, 16ths, 4 bars), seeds 1..n.
+struct Bars {
+    std::vector<std::unique_ptr<StoredPattern>> patterns;
+    RoleMap map;
+    int count() const { return static_cast<int> (patterns.size()) * 4; }
+    const StoredPattern& pattern (int bar) const { return *patterns[static_cast<std::size_t> (bar / 4)]; }
+    const kit::PatternStep* at (int part, int bar, int pos) const
+    {
+        const int lane = part >= 0 && part < RoleMap::parts ? map.laneOfSlot[static_cast<std::size_t> (part)] : -1;
+        if (lane < 0)
+            return nullptr;
+        const auto& p = pattern (bar);
+        const int s = testutil::slotOfStep (16, pos);
+        return &p.cell (lane, bar % 4, s);
+    }
+    bool on (int part, int bar, int pos) const
+    {
+        const auto* c = at (part, bar, pos);
+        return c != nullptr && c->on;
+    }
+    int hits (int part, int bar) const
+    {
+        int n = 0;
+        for (int pos = 0; pos < 16; ++pos)
+            n += on (part, bar, pos) ? 1 : 0;
+        return n;
+    }
+};
+
+Bars generate (int id, int seeds, std::function<void (GeneratorSettings&)> tweak = {})
+{
+    Bars b;
+    b.map = mapFor (id);
+    for (int seed = 1; seed <= seeds; ++seed)
+    {
+        auto g = defaultsOf (id, static_cast<std::uint32_t> (seed));
+        g.fills = 0.0f;
+        if (tweak)
+            tweak (g);
+        auto p = std::make_unique<StoredPattern>();
+        testutil::emptyGrid (*p, 16, 4);
+        generatePattern (g, *p, b.map);
+        b.patterns.push_back (std::move (p));
+    }
+    return b;
+}
+
+int idOf (const char* key)
+{
+    const auto* info = style::infoByKey (key);
+    return info != nullptr ? info->id : -1;
+}
+} // namespace v2
+
+void testNewStyles()
+{
+    using namespace v2;
+    constexpr int seeds = 25;
+    // Every factory style runs, its assertions hold, and every meter x
+    // resolution it defines generates valid patterns.
+    {
+        int ran = 0, invalid = 0;
+        juce::StringArray broken;
+        static constexpr timing::TimeSignature signatures[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
+        for (int id = 0; id < factoryStyleCount; ++id)
+        {
+            const auto* d = style::factoryDefinition (id);
+            if (d == nullptr)
+            {
+                broken.add ("style " + juce::String (id) + " has no definition");
+                continue;
+            }
+            const auto violations = checkStyleAssertions (std::make_shared<style::Definition> (*d));
+            if (! violations.isEmpty())
+                broken.add (juce::String (style::infoById (id)->key) + ": " + violations[0]);
+            for (int m = 0; m < style::meterCount; ++m)
+                if ((d->meters >> m) & 1u)
+                    for (int r = 0; r < timing::resolutionCount; ++r)
+                    {
+                        const auto res = static_cast<timing::Resolution> (r);
+                        if (timing::capacity (signatures[m], res).availability == timing::Availability::unavailable)
+                            continue;
+                        for (std::uint32_t seed = 1; seed <= 3; ++seed)
+                        {
+                            auto g = defaultsOf (id, seed);
+                            g.fills = 1.0f;
+                            g.complexity = seed == 3 ? 1.0f : g.complexity;
+                            auto p = std::make_unique<StoredPattern>();
+                            p->signature = signatures[m];
+                            p->resolution = res;
+                            ++ran;
+                            invalid += generatePattern (g, *p, mapFor (id)) && p->valid() ? 0 : 1;
+                        }
+                    }
+        }
+        check (broken.isEmpty(), "styles v2: all 23 factory styles are available and their assertions hold: " + broken.joinIntoString ("; ").toStdString());
+        check (invalid == 0, "styles v2: " + std::to_string (ran) + " generations over every style x meter x resolution are valid patterns ("
+                                 + std::to_string (invalid) + " invalid)");
+    }
+    const auto uplifting = generate (idOf ("uplifting-trance"), seeds), anthem = generate (idOf ("anthem-trance"), seeds);
+    {
+        bool up = true, an = true;
+        for (int bar = 0; bar < uplifting.count(); ++bar)
+        {
+            up = up && ! uplifting.on (pSnare, bar, 4) && ! uplifting.on (pSnare, bar, 12);
+            an = an && anthem.on (pSnare, bar, 4) && anthem.on (pSnare, bar, 12);
+        }
+        check (up && an, "Uplifting vs Anthem: the snare on 5/13 is always on in Anthem and never in Uplifting (outside fills)");
+    }
+    {
+        const auto melodic = generate (idOf ("melodic-trance"), seeds);
+        int maxMelodic = 0, maxUplifting = 0;
+        for (int bar = 0; bar < melodic.count(); ++bar)
+            for (int part = 1; part < RoleMap::parts; ++part)
+                for (int pos = 0; pos < 16; ++pos)
+                {
+                    if (const auto* c = melodic.at (part, bar, pos); c != nullptr && c->on)
+                        maxMelodic = std::max<int> (maxMelodic, c->velocity);
+                    if (const auto* c = uplifting.at (part, bar, pos); c != nullptr && c->on)
+                        maxUplifting = std::max<int> (maxUplifting, c->velocity);
+                }
+        check (maxMelodic <= 114 && maxUplifting > 114,
+               "Melodic vs Uplifting: non-kick velocity <= 0.9 in Melodic (" + std::to_string (maxMelodic) + "), above in Uplifting ("
+                   + std::to_string (maxUplifting) + ")");
+    }
+    {
+        const auto prog = generate (idOf ("progressive-trance"), seeds);
+        bool openOnly15 = true;
+        int rolling = 0;
+        for (int bar = 0; bar < prog.count(); ++bar)
+        {
+            for (int pos = 0; pos < 16; ++pos)
+                openOnly15 = openOnly15 && (pos == 14 || ! prog.on (pOpen, bar, pos));
+            for (int pos : { 3, 6, 9, 11, 14 })
+                rolling += prog.on (pPerc1, bar, pos) ? 1 : 0;
+        }
+        check (openOnly15 && rolling > prog.count() * 2, "Progressive: rolling percussion (" + std::to_string (rolling) + " hits); open hat only on 15");
+    }
+    {
+        const auto dream = generate (idOf ("dream-trance"), seeds);
+        bool ride = true;
+        for (int bar = 0; bar < dream.count(); ++bar)
+            for (int pos = 0; pos < 16; pos += 2)
+                ride = ride && dream.on (pRide, bar, pos);
+        check (ride, "Dream: a ride on every 8th");
+    }
+    {
+        const auto hard = generate (idOf ("hard-trance"), seeds);
+        bool hats = true, kick = true;
+        for (int bar = 0; bar < hard.count(); ++bar)
+            for (int pos = 0; pos < 16; ++pos)
+            {
+                hats = hats && hard.on (pClosed, bar, pos);
+                kick = kick && (pos % 4 == 0) == hard.on (pKick, bar, pos);
+            }
+        // With fills, the kick leaves the beat only in the fill window of the last bar.
+        const auto filled = generate (idOf ("hard-trance"), seeds, [] (GeneratorSettings& g) { g.fills = 1.0f; });
+        int roll = 0;
+        bool outside = true;
+        for (int bar = 0; bar < filled.count(); ++bar)
+            for (int pos = 0; pos < 16; ++pos)
+                if (pos % 4 != 0 && filled.on (pKick, bar, pos))
+                {
+                    const bool window = bar % 4 == 3 && pos >= 8;
+                    outside = outside && window;
+                    roll += window ? 1 : 0;
+                }
+        check (hats && kick && outside && roll > 0, "Hard Trance: closed hats on all 16ths; the kick leaves the beat only in fills (" + std::to_string (roll) + " roll hits)");
+    }
+    {
+        const auto sym = generate (idOf ("symphonic-trance"), seeds);
+        int t1 = 0, t2 = 0, t3 = 0;
+        for (int bar = 0; bar < sym.count(); ++bar)
+        {
+            t1 += sym.hits (pTom1, bar);
+            t2 += sym.hits (pTom2, bar);
+            t3 += sym.hits (pTom3, bar);
+        }
+        check (t1 > 0 && t2 > 0 && t3 > sym.count() / 2, "Symphonic Trance: the three toms (" + std::to_string (t1) + "/" + std::to_string (t2) + "/" + std::to_string (t3) + ")");
+    }
+    // Psy.
+    {
+        const auto dark = generate (idOf ("dark-psy"), seeds), fullOn = generate (0, seeds), techno = generate (3, seeds);
+        int darkClap = 0, fullClap = 0, ratchetBars = 0;
+        bool hatOnBeat = false, technoBeats = true, both = false;
+        for (int bar = 0; bar < dark.count(); ++bar)
+        {
+            const bool c5 = dark.on (pClap, bar, 4), c13 = dark.on (pClap, bar, 12);
+            darkClap += c5 || c13 ? 1 : 0;
+            both = both || (c5 && c13);
+            fullClap += fullOn.on (pClap, bar, 4) || fullOn.on (pClap, bar, 12) ? 1 : 0;
+            for (int pos : { 0, 4, 8, 12 })
+            {
+                hatOnBeat = hatOnBeat || dark.on (pClosed, bar, pos);
+                technoBeats = technoBeats && techno.on (pClosed, bar, pos);
+            }
+            bool ratchet = false;
+            for (int part : { pPerc1, pRim })
+                for (int pos = 0; pos < 16; ++pos)
+                    if (const auto* c = dark.at (part, bar, pos); c != nullptr && c->on && c->ratchet > 1)
+                        ratchet = true;
+            ratchetBars += ratchet ? 1 : 0;
+        }
+        const int n = dark.count();
+        check (darkClap * 4 <= n && fullClap * 10 >= n * 9 && ! both,
+               "Dark Psy vs Full-on: clap on 5/13 in " + std::to_string (darkClap) + " of " + std::to_string (n) + " bars (<= 25 %) vs "
+                   + std::to_string (fullClap) + " (>= 90 %); never on both");
+        check (! hatOnBeat && technoBeats, "Dark Psy vs Techno: Techno has a closed hat on all four beats; Dark Psy never");
+        check (ratchetBars * 10 >= n * 3, "Dark Psy: ratcheted percussion in " + std::to_string (ratchetBars) + " of " + std::to_string (n) + " bars (>= 30 %)");
+    }
+    // House and techno family.
+    {
+        const auto house = generate (2, seeds), tech = generate (idOf ("tech-house"), seeds), techno = generate (3, seeds),
+                   melodic = generate (idOf ("melodic-techno"), seeds);
+        int housePickup = 0, techPickup = 0, percBars = 0;
+        bool melodicBeats = false;
+        for (int bar = 0; bar < house.count(); ++bar)
+        {
+            housePickup += house.on (pKick, bar, 15) ? 1 : 0;
+            techPickup += tech.on (pKick, bar, 15) ? 1 : 0;
+            int positions = 0;
+            for (int pos = 0; pos < 16; ++pos)
+                positions += tech.on (pPerc1, bar, pos) || tech.on (pPerc2, bar, pos) || tech.on (pRim, bar, pos) ? 1 : 0;
+            percBars += positions >= 4 ? 1 : 0;
+            for (int pos : { 0, 4, 8, 12 })
+                melodicBeats = melodicBeats || melodic.on (pClosed, bar, pos);
+        }
+        check (housePickup > 0 && techPickup == 0, "House vs Tech House: the kick pickup on 16 only in House (" + std::to_string (housePickup) + " bars)");
+        check (percBars == tech.count(), "Tech House: percussion on >= 4 positions in every bar at density 0.6");
+        check (! melodicBeats, "Techno vs Melodic Techno: Melodic Techno never has a closed hat on the beats");
+    }
+    // Drum and bass.
+    {
+        const auto dnb = generate (idOf ("drum-and-bass"), seeds), mel = generate (idOf ("melodic-drum-and-bass"), seeds),
+                   breaks = generate (5, seeds), trap = generate (4, seeds);
+        bool dnbKick = true, melGhost = true, melRide = true, dnbSnare = true, trapSnare = true;
+        int breaksGhost = 0, dnbGhost = 0;
+        for (int bar = 0; bar < dnb.count(); ++bar)
+        {
+            for (int pos : { 3, 6, 13, 4, 12 })
+                dnbKick = dnbKick && ! dnb.on (pKick, bar, pos);
+            for (int pos : { 3, 6, 13 })
+                breaksGhost += breaks.on (pKick, bar, pos) ? 1 : 0;
+            int ghosts = 0;
+            for (int pos = 0; pos < 16; ++pos)
+                if (pos != 4 && pos != 12)
+                {
+                    ghosts += mel.on (pSnare, bar, pos) ? 1 : 0;
+                    dnbGhost += dnb.on (pSnare, bar, pos) ? 1 : 0;
+                }
+            melGhost = melGhost && ghosts <= 1;
+            for (int pos = 0; pos < 16; pos += 2)
+                melRide = melRide && mel.on (pRide, bar, pos);
+            dnbSnare = dnbSnare && dnb.on (pSnare, bar, 4) && dnb.on (pSnare, bar, 12);
+            trapSnare = trapSnare && trap.on (pSnare, bar, 8);
+        }
+        check (dnbKick && breaksGhost > 0, "Breaks vs DnB: kick ghosts on 4/7/14 in Breaks (" + std::to_string (breaksGhost) + "), never in DnB (nor on 5/13)");
+        check (melGhost && melRide && dnbGhost > dnb.count(), "DnB vs Melodic DnB: at most one snare ghost per bar (" + std::string (melGhost ? "yes" : "no")
+                                                                  + ") and a ride on every 8th (" + (melRide ? "yes" : "no") + ") in Melodic; DnB ghosts "
+                                                                  + std::to_string (dnbGhost));
+        check (dnbSnare && trapSnare, "Trap vs DnB: Trap's snare on 9, DnB's on 5 and 13");
+    }
+    // Rock and metal.
+    {
+        const auto metal = generate (idOf ("heavy-metal"), seeds), house = generate (2, seeds),
+                   rock = generate (idOf ("hard-rock"), seeds), sym = generate (idOf ("symphonic-metal"), seeds),
+                   nordic = generate (idOf ("nordic-metal"), seeds);
+        bool houseGrid = true, metalKicks = true, metalBackbeat = true, rockKicks = true, symAlternates = true, nordicToms = true;
+        int metalClap = 0;
+        for (int bar = 0; bar < metal.count(); ++bar)
+        {
+            int hk = 0;
+            for (int pos = 0; pos < 16; ++pos)
+                hk += house.on (pKick, bar, pos) && pos != 15 ? 1 : 0;
+            houseGrid = houseGrid && hk == 4 && house.on (pClap, bar, 4) && house.on (pClap, bar, 12);
+            metalKicks = metalKicks && metal.hits (pKick, bar) >= 8;
+            metalBackbeat = metalBackbeat && metal.on (pSnare, bar, 4) && metal.on (pSnare, bar, 12);
+            metalClap += metal.hits (pClap, bar);
+            rockKicks = rockKicks && rock.hits (pKick, bar) <= 4;
+            const bool odd = bar % 2 == 0;   // bars 1, 3
+            symAlternates = symAlternates && (odd ? sym.hits (pKick, bar) == 16 && sym.on (pSnare, bar, 4)
+                                                  : sym.hits (pKick, bar) == 2 && sym.on (pKick, bar, 10) && sym.on (pSnare, bar, 8) && ! sym.on (pSnare, bar, 4));
+            for (int pos : { 0, 4, 8, 12 })
+                nordicToms = nordicToms && nordic.on (pTom3, bar, pos);
+        }
+        check (houseGrid && metalKicks && metalBackbeat && metalClap == 0,
+               "Heavy Metal vs House: House 4 kicks on the beats and a clap on 5/13; Heavy Metal >= 8 kicks per bar at density 0.8, snare 5/13, never a clap");
+        check (rockKicks, "Hard Rock vs Heavy Metal: at most 4 kicks per bar outside fills in Hard Rock");
+        check (symAlternates, "Symphonic Metal: double-bass bars (1, 3) and half-time bars (2, 4: kick 1/11, snare 9) alternate");
+        check (nordicToms, "Nordic Metal: tom 3 on the beats");
+    }
+    // Meters (§10.6): the styles that list them generate there; the rest refuse.
+    {
+        const std::pair<const char*, timing::TimeSignature> listed[] = {
+            { "nordic-metal", { 6, 8 } }, { "nordic-metal", { 12, 8 } }, { "symphonic-metal", { 12, 8 } }, { "symphonic-metal", { 3, 4 } },
+            { "heavy-metal", { 12, 8 } }, { "hard-rock", { 12, 8 } }, { "symphonic-trance", { 3, 4 } }, { "dream-trance", { 3, 4 } } };
+        bool ok = true;
+        for (const auto& [key, sig] : listed)
+        {
+            auto p = std::make_unique<StoredPattern>();
+            p->signature = sig;
+            ok = ok && generatePattern (defaultsOf (idOf (key), 1), *p, mapFor (idOf (key))) && p->valid();
+        }
+        auto p = std::make_unique<StoredPattern>();
+        p->signature = { 3, 4 };
+        const bool refused = ! generatePattern (defaultsOf (idOf ("dark-psy"), 1), *p) && ! generatePattern (defaultsOf (idOf ("heavy-metal"), 1), *p);
+        check (ok && refused, "meters: Nordic 6/8 + 12/8, Symphonic Metal 12/8 + 3/4, Heavy Metal and Hard Rock 12/8, Symphonic and Dream Trance 3/4; "
+                              "Dark Psy and Heavy Metal refuse 3/4");
+    }
+    // Triplet rolls (§10.6) only in the styles that have them.
+    {
+        juce::StringArray with;
+        for (int id = 0; id < factoryStyleCount; ++id)
+        {
+            auto p = std::make_unique<StoredPattern>();
+            testutil::emptyGrid (*p, 16, 4);
+            auto g = defaultsOf (id, 1);
+            g.fills = 1.0f;
+            g.complexity = 1.0f;
+            generatePattern (g, *p, mapFor (id));
+            bool any = false;
+            for (int lane = 0; lane < kit::padCount; ++lane)
+                for (int bar = 0; bar < p->bars; ++bar)
+                    any = any || p->mask (lane, bar) != 0;
+            if (any)
+                with.add (style::infoById (id)->key);
+        }
+        const juce::String expected = "uplifting-trance anthem-trance hard-rock heavy-metal symphonic-metal nordic-metal drum-and-bass symphonic-trance";
+        check (with.joinIntoString (" ") == expected, "triplets: only " + expected.toStdString() + " (got " + with.joinIntoString (" ").toStdString() + ")");
+    }
+}
+
 int main (int argc, char** argv)
 {
     testGrammarMatrix();
@@ -572,6 +953,7 @@ int main (int argc, char** argv)
     testFills();
     testKitRoles();
     testMutate();
+    testNewStyles();
     {
         // Two examples round-trip through a file even without a report folder.
         const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-generator-" + juce::Uuid().toString());
