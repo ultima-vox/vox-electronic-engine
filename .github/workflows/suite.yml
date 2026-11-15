@@ -68,6 +68,10 @@ jobs:
           # Golden renders are also written as WAV files for listening (artifact).
           New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          # VOX Drums listening pack (PR 137 section 8): 69 MIDI, 23 WAV, README, SHA256SUMS,
+          # and listening-pack\vox-drums-listening.zip; the test fails on any write error.
+          New-Item -ItemType Directory -Force -Path listening-pack | Out-Null
+          $env:VOX_LISTENING_OUT = Join-Path (Resolve-Path listening-pack).Path 'vox-drums-listening'
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -115,6 +119,16 @@ jobs:
           }
           $lines | Set-Content suite-out\manifest.txt
           Get-Content suite-out\manifest.txt
+
+      - name: Upload the VOX Drums listening pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-Drums-Listening-Pack
+          path: |
+            listening-pack/vox-drums-listening.zip
+            listening-pack/vox-drums-listening/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload suite bundles and reports
         if: always()

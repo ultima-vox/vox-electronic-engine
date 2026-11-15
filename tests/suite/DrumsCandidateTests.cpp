@@ -130,9 +130,10 @@ public:
         info.setIsPlaying (playing);
         info.setBpm (bpm);
         info.setPpqPosition (ppq);
-        info.setTimeSignature (TimeSignature { 4, 4 });
+        info.setTimeSignature (meter);
     }
     PositionInfo info;
+    TimeSignature meter { 4, 4 };
 };
 
 // `outputs`: bit n enables output bus n (bit 0, Main, is always on).
@@ -2907,22 +2908,78 @@ void testMeterSongs()
 }
 
 //==============================================================================
-// PR 137 §8: three MIDI listening files per style for the owner's review, at
-// the style's tempo hint, through the plugin's own export (the notes of the
-// style's factory kit). Always generated and checked; written to
-// $VOX_LISTENING_OUT (with README.md, the review table) when it is set.
+// Renders `bars` bars of the processor's song from bar `fromBar` (4/4) at
+// `bpm`, then one second of tails with the transport stopped: the Main
+// output, offline and deterministic (fixed block size, no host).
+juce::AudioBuffer<float> renderSongBars (DrumsProcessor& p, double rate, double bpm, int fromBar, int bars)
+{
+    constexpr int block = 512;
+    TestPlayHead head;
+    p.setPlayHead (&head);
+    p.reset();
+    const double perFrame = bpm / (60.0 * rate);
+    const double fromPpq = fromBar * 4.0, toPpq = (fromBar + bars) * 4.0;
+    const int frames = static_cast<int> (std::ceil ((toPpq - fromPpq) / perFrame)) + static_cast<int> (rate);
+    juce::AudioBuffer<float> out (2, frames), buffer (p.getTotalNumOutputChannels(), block);
+    juce::MidiBuffer midi;
+    int done = 0;
+    while (done < frames)
+    {
+        const int n = std::min (block, frames - done);
+        const double ppq = fromPpq + done * perFrame;
+        head.set (ppq < toPpq, bpm, ppq);
+        buffer.setSize (buffer.getNumChannels(), n, false, false, true);
+        buffer.clear();
+        midi.clear();
+        p.processBlock (buffer, midi);
+        for (int ch = 0; ch < 2; ++ch)
+            out.copyFrom (ch, done, buffer, std::min (ch, buffer.getNumChannels() - 1), 0, n);
+        done += n;
+    }
+    p.setPlayHead (nullptr);
+    return out;
+}
+
+// PR 137 §8 and the TL review on #148: the listening pack. Three MIDI files per
+// style through the plugin's own export, at the style's tempo hint, with the
+// notes of the style's factory kit; one WAV preview per style rendered
+// offline through that kit (the Factory Song's main phrase, bars 9-16); a
+// README review table; SHA256SUMS; and a ZIP of all of it. Always generated
+// and checked in memory; with $VOX_LISTENING_OUT set, every write is checked
+// and the folder must hold exactly 69 MIDI, 23 WAV, README.md and
+// SHA256SUMS.txt, and <folder>.zip is written.
 void testListeningFiles()
 {
     const char* out = std::getenv ("VOX_LISTENING_OUT");
     const juce::File folder = out != nullptr ? juce::File (juce::String (out)) : juce::File();
+    juce::StringArray writeErrors;
+    bool folderOk = out != nullptr;
+    const auto writeFile = [&] (const juce::String& name, const void* data, std::size_t size) {
+        if (! folderOk)
+            return;
+        if (! folder.getChildFile (name).replaceWithData (data, size))
+            writeErrors.add (name);
+    };
     if (out != nullptr)
-        folder.createDirectory();
-    juce::String table = "# VOX Drums listening files (PR 137 section 8)\n\n"
-                         "Load the named factory kit in VOX Drums, put the MIDI file on the VOX Drums track and listen at the given tempo. "
-                         "Write yes / no and why. These files show the generator's written rules; they are not release-ready content.\n\n"
-                         "| # | Style | File | Meter | BPM | Kit to load | Content | Release | Verdict (yes / no) | Why |\n"
+    {
+        // Never deletes anything: the folder must be new or empty (no stale files).
+        if (folder.exists() && (! folder.isDirectory() || folder.getNumberOfChildFiles (juce::File::findFilesAndDirectories) > 0))
+            writeErrors.add ("VOX_LISTENING_OUT must be a new or empty folder: " + folder.getFullPathName());
+        else if (const auto made = folder.createDirectory(); made.failed())
+            writeErrors.add ("folder: " + made.getErrorMessage());
+        folderOk = writeErrors.isEmpty();   // otherwise nothing is written, nothing overwritten
+    }
+    constexpr double rate = 48000.0;
+    juce::String table = "# VOX Drums listening pack (PR 137 section 8)\n\n"
+                         "Per style: a WAV preview rendered offline through the style's factory kit (synth models; the main phrase of its "
+                         "Factory Song, bars 9-16, then 1 s of tails; 48 kHz 16-bit stereo, every file at the same fixed -6 dB so none clips; "
+                         "the plugin's own peak is listed), and three MIDI files. For the MIDI files load the named factory kit in "
+                         "the VOX Drums VST3 (or the Factory Song, which loads it), put the file on the VOX Drums track and play at the given "
+                         "BPM; MIDI alone is not a listening verdict. Write yes / no and why. Rock and Metal use synth sketches and are NOT "
+                         "RELEASE-READY until licensed acoustic samples exist. This is not the final DAW acceptance.\n\n"
+                         "| # | Style | File | Meter | BPM | Kit | Content | Release | Verdict (yes / no) | Why |\n"
                          "|---|---|---|---|---|---|---|---|---|---|\n";
-    int files = 0, bad = 0;
+    int files = 0, wavs = 0, bad = 0, row = 0;
     juce::StringArray problems;
     for (int s = 0; s < factoryStyleCount; ++s)
     {
@@ -2931,8 +2988,10 @@ void testListeningFiles()
         const double bpm = std::round ((info->tempoMin + info->tempoMax) * 0.5);
         const int kitIndex = factoryKitOfStyle (s);
         const auto release = juce::String (factoryReleaseText (factoryKitRelease (kitIndex)));
-        auto p = makeProcessor();
-        p->presets().loadFactoryKit (kitIndex);
+        const auto prefix = juce::String (s + 1).paddedLeft ('0', 2) + "-" + info->key;
+        auto p = makeProcessor (rate);
+        setPlain (*p, "drm.seq.mode", 1.0f);   // Internal: the plugin plays its own song for the preview
+        p->editSong ([] (SongData& song) { song.songMode = true; });
         // The third file: the style's first extra meter, else a busier pattern.
         timing::TimeSignature extra { 4, 4 };
         static constexpr timing::TimeSignature meters[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
@@ -2945,10 +3004,10 @@ void testListeningFiles()
             timing::TimeSignature meter;
         };
         const Take takes[3] = {
-            { "1-song", "factory song preset (32 bars: intro, main, break, peak with B variations and fills)", { 4, 4 } },
-            { "2-pattern", "Generate Pattern with the style defaults, seed 1, 4 bars x 2", { 4, 4 } },
-            extra.numerator == 4 ? Take { "3-busy", "Generate Pattern, density/complexity +0.2, fills 1, seed 2, 4 bars x 2", { 4, 4 } }
-                                 : Take { "3-meter", "Generate Pattern in " + juce::String (extra.numerator) + "/" + juce::String (extra.denominator)
+            { "1-song", "MIDI: Factory Song (32 bars: intro, main, break, peak with B variations and fills)", { 4, 4 } },
+            { "2-pattern", "MIDI: Generate Pattern with the style defaults, seed 1, 4 bars x 2", { 4, 4 } },
+            extra.numerator == 4 ? Take { "3-busy", "MIDI: Generate Pattern, density/complexity +0.2, fills 1, seed 2, 4 bars x 2", { 4, 4 } }
+                                 : Take { "3-meter", "MIDI: Generate Pattern in " + juce::String (extra.numerator) + "/" + juce::String (extra.denominator)
                                                          + " with the style defaults, seed 2, 4 bars x 2",
                                           extra },
         };
@@ -2958,8 +3017,37 @@ void testListeningFiles()
             std::shared_ptr<const ExportSnapshot> snap;
             if (t == 0)
             {
-                p->presets().loadFactoryStyleSong (s);
+                // The Factory Song loads its kit; render its main phrase first.
+                if (p->presets().loadFactoryStyleSong (s).failed())
+                    problems.add (juce::String (info->key) + ": the Factory Song does not load");
                 snap = p->captureExport (ExportSnapshot::Scope::song);
+                auto audio = renderSongBars (*p, rate, bpm, 8, 8);
+                float peak = 0.0f;
+                for (int ch = 0; ch < 2; ++ch)
+                    peak = std::max (peak, audio.getMagnitude (ch, 0, audio.getNumSamples()));
+                if (peak < 1.0e-3f)
+                    problems.add (juce::String (info->key) + ": the WAV preview is silent");
+                // A fixed -6 dB for every preview (the same for all styles), so no
+                // 16-bit file clips; the plugin's own peak is in the README.
+                constexpr float headroom = 0.5f;
+                audio.applyGain (headroom);
+                if (peak * headroom >= 1.0f)
+                    problems.add (juce::String (info->key) + ": the preview would clip even after -6 dB (plugin peak "
+                                  + juce::String (juce::Decibels::gainToDecibels (peak), 1) + " dBFS)");
+                juce::MemoryBlock wavBytes;
+                {
+                    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream> (wavBytes, false);
+                    juce::WavAudioFormat format;
+                    auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions{}.withSampleRate (rate).withNumChannels (2).withBitsPerSample (16));
+                    if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()))
+                        problems.add (juce::String (info->key) + ": the WAV preview cannot be encoded");
+                }
+                const auto wavName = prefix + "-0-preview.wav";
+                writeFile (wavName, wavBytes.getData(), wavBytes.getSize());
+                ++wavs;
+                table << "| " << ++row << " | " << info->name << " | `" << wavName << "` | 4/4 | " << juce::String (static_cast<int> (bpm)) << " | "
+                      << factoryKitInfo (kitIndex).name << " | WAV preview: Factory Song bars 9-16 through the kit, written at -6 dB; plugin peak "
+                      << juce::String (juce::Decibels::gainToDecibels (peak), 1) << " dBFS | " << release << " | | |\n";
             }
             else
             {
@@ -3005,21 +3093,64 @@ void testListeningFiles()
             if (! ok)
                 problems.add (juce::String (info->key) + " " + take.suffix + ": " + juce::String (notes) + " notes" + (meterOk ? "" : ", meter missing"));
             ++files;
-            const auto name = juce::String (s + 1).paddedLeft ('0', 2) + "-" + info->key + "-" + take.suffix + ".mid";
-            table << "| " << files << " | " << info->name << " | `" << name << "` | " << take.meter.numerator << "/" << take.meter.denominator << " | "
+            const auto name = prefix + "-" + take.suffix + ".mid";
+            table << "| " << ++row << " | " << info->name << " | `" << name << "` | " << take.meter.numerator << "/" << take.meter.denominator << " | "
                   << juce::String (static_cast<int> (bpm)) << " | " << factoryKitInfo (kitIndex).name << " | " << take.content << " | " << release
                   << " | | |\n";
-            if (out != nullptr)
-                folder.getChildFile (name).replaceWithData (midi.getData(), midi.getSize());
+            writeFile (name, midi.getData(), midi.getSize());
         }
     }
-    if (out != nullptr)
+    check (files == 3 * factoryStyleCount && wavs == factoryStyleCount && bad == 0 && problems.isEmpty(),
+           "listening pack: 3 MIDI per style (" + juce::String (files) + ") with notes and their meter, and a non-silent WAV preview per style ("
+               + juce::String (wavs) + ") (" + problems.joinIntoString ("; ") + ")");
+    if (out == nullptr)
+        return;
+    if (! folderOk)
     {
-        folder.getChildFile ("README.md").replaceWithText (table);
-        std::printf ("wrote %d listening files to %s\n", files, folder.getFullPathName().toRawUTF8());
+        check (false, "listening pack: " + writeErrors.joinIntoString ("; ").toStdString());
+        return;
     }
-    check (files == 3 * factoryStyleCount && bad == 0 && problems.isEmpty(),
-           "listening files: 3 per style (" + juce::String (files) + "), valid MIDI with notes and their meter (" + problems.joinIntoString ("; ") + ")");
+    writeFile ("README.md", table.toRawUTF8(), table.getNumBytesAsUTF8());
+    // SHA256SUMS.txt over every file, in name order (sha256sum -c format).
+    auto entries = folder.findChildFiles (juce::File::findFiles, false);
+    std::sort (entries.begin(), entries.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName() < b.getFileName(); });
+    juce::String sums;
+    int midiCount = 0, wavCount = 0;
+    bool readme = false;
+    for (const auto& f : entries)
+    {
+        juce::MemoryBlock bytes;
+        if (! f.loadFileAsData (bytes))
+            writeErrors.add ("read back " + f.getFileName());
+        sums << juce::SHA256 (bytes).toHexString() << "  " << f.getFileName() << "\n";
+        midiCount += f.hasFileExtension ("mid") ? 1 : 0;
+        wavCount += f.hasFileExtension ("wav") ? 1 : 0;
+        readme = readme || f.getFileName() == "README.md";
+    }
+    writeFile ("SHA256SUMS.txt", sums.toRawUTF8(), sums.getNumBytesAsUTF8());
+    // The ZIP next to the folder: <folder>.zip.
+    const auto zip = folder.getSiblingFile (folder.getFileName() + ".zip");
+    bool zipped = false;
+    {
+        zip.deleteFile();
+        juce::ZipFile::Builder builder;
+        for (const auto& f : folder.findChildFiles (juce::File::findFiles, false))
+            builder.addFile (f, 9, f.getFileName());
+        if (auto stream = zip.createOutputStream())
+            zipped = builder.writeToStream (*stream, nullptr) && stream->getStatus().wasOk();
+    }
+    juce::ZipFile check2 (zip);
+    const int expected = 3 * factoryStyleCount + factoryStyleCount + 2;
+    check (writeErrors.isEmpty() && midiCount == 3 * factoryStyleCount && wavCount == factoryStyleCount && readme && zipped
+               && check2.getNumEntries() == expected,
+           "listening pack: written to " + folder.getFullPathName().toStdString() + ": exactly " + std::to_string (midiCount) + " MIDI, "
+               + std::to_string (wavCount) + " WAV, README.md, SHA256SUMS.txt; " + zip.getFileName().toStdString() + " with "
+               + std::to_string (check2.getNumEntries()) + " of " + std::to_string (expected) + " entries ("
+               + writeErrors.joinIntoString ("; ").toStdString() + ")");
+    juce::MemoryBlock zipBytes;
+    zip.loadFileAsData (zipBytes);
+    std::printf ("listening pack: %s, %d bytes, sha256 %s\n", zip.getFullPathName().toRawUTF8(), static_cast<int> (zipBytes.getSize()),
+                 juce::SHA256 (zipBytes).toHexString().toRawUTF8());
 }
 
 int main (int argc, char** argv)
