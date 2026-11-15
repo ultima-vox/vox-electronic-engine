@@ -2734,6 +2734,122 @@ void testGenreContent()
     }
 }
 
+//==============================================================================
+// PR 137 §8: three MIDI listening files per style for the owner's review, at
+// the style's tempo hint, through the plugin's own export (the notes of the
+// style's factory kit). Always generated and checked; written to
+// $VOX_LISTENING_OUT (with README.md, the review table) when it is set.
+void testListeningFiles()
+{
+    const char* out = std::getenv ("VOX_LISTENING_OUT");
+    const juce::File folder = out != nullptr ? juce::File (juce::String (out)) : juce::File();
+    if (out != nullptr)
+        folder.createDirectory();
+    juce::String table = "# VOX Drums listening files (PR 137 section 8)\n\n"
+                         "Load the named factory kit in VOX Drums, put the MIDI file on the VOX Drums track and listen at the given tempo. "
+                         "Write yes / no and why. These files show the generator's written rules; they are not release-ready content.\n\n"
+                         "| # | Style | File | Meter | BPM | Kit to load | Content | Release | Verdict (yes / no) | Why |\n"
+                         "|---|---|---|---|---|---|---|---|---|---|\n";
+    int files = 0, bad = 0;
+    juce::StringArray problems;
+    for (int s = 0; s < factoryStyleCount; ++s)
+    {
+        const auto* info = style::infoById (s);
+        const auto* def = style::factoryDefinition (s);
+        const double bpm = std::round ((info->tempoMin + info->tempoMax) * 0.5);
+        const int kitIndex = factoryKitOfStyle (s);
+        const auto release = juce::String (factoryReleaseText (factoryKitRelease (kitIndex)));
+        auto p = makeProcessor();
+        p->presets().loadFactoryKit (kitIndex);
+        // The third file: the style's first extra meter, else a busier pattern.
+        timing::TimeSignature extra { 4, 4 };
+        static constexpr timing::TimeSignature meters[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
+        for (int m = 1; m < style::meterCount && extra.numerator == 4; ++m)
+            if ((def->meters >> m) & 1u)
+                extra = meters[m];
+        struct Take {
+            const char* suffix;
+            juce::String content;
+            timing::TimeSignature meter;
+        };
+        const Take takes[3] = {
+            { "1-song", "factory song preset (32 bars: intro, main, break, peak with B variations and fills)", { 4, 4 } },
+            { "2-pattern", "Generate Pattern with the style defaults, seed 1, 4 bars x 2", { 4, 4 } },
+            extra.numerator == 4 ? Take { "3-busy", "Generate Pattern, density/complexity +0.2, fills 1, seed 2, 4 bars x 2", { 4, 4 } }
+                                 : Take { "3-meter", "Generate Pattern in " + juce::String (extra.numerator) + "/" + juce::String (extra.denominator)
+                                                         + " with the style defaults, seed 2, 4 bars x 2",
+                                          extra },
+        };
+        for (int t = 0; t < 3; ++t)
+        {
+            const auto& take = takes[t];
+            std::shared_ptr<const ExportSnapshot> snap;
+            if (t == 0)
+            {
+                p->presets().loadFactoryStyleSong (s);
+                snap = p->captureExport (ExportSnapshot::Scope::song);
+            }
+            else
+            {
+                auto g = factoryStyleGenerator (s);
+                g.seed = static_cast<std::uint32_t> (t);
+                if (t == 2 && take.meter.numerator == 4)
+                {
+                    g.density = std::min (1.0f, g.density + 0.2f);
+                    g.complexity = std::min (1.0f, g.complexity + 0.2f);
+                    g.fills = 1.0f;
+                }
+                p->setGenerator (g);
+                StoredPattern empty;
+                empty.signature = take.meter;
+                p->patterns().setSlot (p->currentSlot(), empty);
+                if (! p->generate (DrumsProcessor::Generate::pattern, 0xffffu, false))
+                    problems.add (juce::String (info->key) + " " + take.suffix + ": not generated (" + p->generateRefusal (DrumsProcessor::Generate::pattern) + ")");
+                snap = p->captureExport (ExportSnapshot::Scope::pattern, 2);
+            }
+            auto copy = std::make_shared<ExportSnapshot> (*snap);
+            copy->bpm = bpm;
+            copy->trackName = juce::String ("VOX Drums ") + info->name + " " + take.suffix;
+            const auto midi = DrumsProcessor::renderExport (*copy);
+            // Valid MIDI with notes and the take's time signature.
+            juce::MidiFile file;
+            juce::MemoryInputStream in (midi, false);
+            int notes = 0;
+            bool meterOk = false;
+            if (file.readFrom (in))
+                for (int track = 0; track < file.getNumTracks(); ++track)
+                    for (const auto* e : *file.getTrack (track))
+                    {
+                        notes += e->message.isNoteOn() ? 1 : 0;
+                        int num = 0, den = 0;
+                        if (e->message.isTimeSignatureMetaEvent())
+                        {
+                            e->message.getTimeSignatureInfo (num, den);
+                            meterOk = meterOk || (num == take.meter.numerator && den == take.meter.denominator);
+                        }
+                    }
+            const bool ok = midi.getSize() > 0 && notes >= 16 && meterOk;
+            bad += ok ? 0 : 1;
+            if (! ok)
+                problems.add (juce::String (info->key) + " " + take.suffix + ": " + juce::String (notes) + " notes" + (meterOk ? "" : ", meter missing"));
+            ++files;
+            const auto name = juce::String (s + 1).paddedLeft ('0', 2) + "-" + info->key + "-" + take.suffix + ".mid";
+            table << "| " << files << " | " << info->name << " | `" << name << "` | " << take.meter.numerator << "/" << take.meter.denominator << " | "
+                  << juce::String (static_cast<int> (bpm)) << " | " << factoryKitInfo (kitIndex).name << " | " << take.content << " | " << release
+                  << " | | |\n";
+            if (out != nullptr)
+                folder.getChildFile (name).replaceWithData (midi.getData(), midi.getSize());
+        }
+    }
+    if (out != nullptr)
+    {
+        folder.getChildFile ("README.md").replaceWithText (table);
+        std::printf ("wrote %d listening files to %s\n", files, folder.getFullPathName().toRawUTF8());
+    }
+    check (files == 3 * factoryStyleCount && bad == 0 && problems.isEmpty(),
+           "listening files: 3 per style (" + juce::String (files) + "), valid MIDI with notes and their meter (" + problems.joinIntoString ("; ") + ")");
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -2752,6 +2868,7 @@ int main (int argc, char** argv)
     testGenerator();
     testStyleDefaults();
     testGenreContent();
+    testListeningFiles();
     testPresets();
     testState();
     testEditor();

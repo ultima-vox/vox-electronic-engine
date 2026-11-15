@@ -47,3 +47,23 @@ audio files and no third-party material.
 - **Samples:** none are shipped. User samples are referenced by path and content hash;
   a portable kit (`.voxkit`) carries the user's own files.
 - **Not done:** the kits were not auditioned or tuned by ear by a person.
+
+## Listening files (PR 137 §8)
+
+Three MIDI files per style (69), made through the plugin's own MIDI export with the notes of the
+style's factory kit, at the middle of the style's tempo hint:
+
+1. `NN-<key>-1-song.mid`: the style's factory song preset (32 bars);
+2. `NN-<key>-2-pattern.mid`: Generate Pattern with the style defaults, seed 1, 4 bars × 2;
+3. `NN-<key>-3-meter.mid` in the style's first extra meter (3/4, 6/8 or 12/8) when it has one,
+   else `NN-<key>-3-busy.mid`: density and complexity +0.2, fills 1, seed 2.
+
+`suite_drums_candidate_tests` always generates and checks them (valid MIDI, ≥ 16 notes, the
+take's time signature). To write them with `README.md`, the review table (yes / no / why):
+
+```
+VOX_LISTENING_OUT=<folder> ctest -R suite_drums_candidate_tests
+```
+
+They are generated, not committed. Verdicts go to the owner's review; nothing here establishes
+that a style sounds right.
