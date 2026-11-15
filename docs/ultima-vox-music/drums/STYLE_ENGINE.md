@@ -105,7 +105,7 @@ Formulas are unchanged.
 | `meta` | no | `author`, `group` (≤ 64 characters each), `tempo {min, max}` 20–400 (information only) |
 | `meters` | yes | unique list from `4/4`, `3/4`, `6/8`, `12/8`; **must contain `4/4`** |
 | `defaults` | no | the 8 settings, 0–1 ("Style defaults") |
-| `parts` | yes | PR #137 §2.4. `required`: a list where each item is a part, or a list of 2+ alternatives of which one is enough (e.g. `["clap","snare"]`); `optional`: a list of parts. At most 16 parts, 8 of them percussion; no part twice. Every part used by a rule, the fill or an assertion must be declared. Used for the Generator notices only; not in `contentHash`. |
+| `parts` | yes (approved on #143; a file without it is rejected) | PR #137 §2.4. `required`: a list where each item is a part, or a list of 2+ alternatives of which one is enough (e.g. `["clap","snare"]`); `optional`: a list of parts. At most 16 parts, 8 of them percussion; no part twice. Every part used by a rule, the fill or an assertion must be declared. Used for the Generator notices only; not in `contentHash`. |
 | `rules[]` | yes | as above, plus `meter` (default `4/4`, must be listed in `meters`) and, for tuplets, `beats` + `subdivision` (`triplet` in 4/4 and 3/4, `duplet` in 6/8 and 12/8) |
 | `probability`, `fill` | `fill` yes | as above |
 | `variation` | no | `keep`: the parts a Variation B keeps (default kick, snare, clap) |

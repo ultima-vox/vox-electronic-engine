@@ -75,6 +75,8 @@ struct RoleNotice {
         extraPercussion    // more percussion pads than the style's percussion parts
     } kind = Kind::missingRequired;
     juce::String text;
+    // The action's tooltip (duplicate: what "Use pad N" does, PR 137 §2.5 as approved).
+    juce::String actionTip;
     PadRole role = PadRole::none;
     int pad = -1, otherPad = -1;
 };
@@ -98,6 +100,9 @@ struct RoleProposal {
     void choose (int pad, PadRole r) noexcept;
     // Apply is possible only when no row is still "?".
     bool complete() const noexcept;
+    // Bit n: the proposal changes pad n's role against `current` (shown before
+    // Apply/Cancel; a proposal never changes a kit by itself).
+    std::uint16_t changedPads (const PadRoles& current) const noexcept;
 };
 // Hats are told apart by note (42/44 closed, 46 open), then by decay.
 // Toms by GM note (48/50 tom 1, 45/47 tom 2, 41/43 tom 3), otherwise by tune
