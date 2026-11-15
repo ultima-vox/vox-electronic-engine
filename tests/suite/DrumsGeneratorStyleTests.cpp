@@ -938,7 +938,8 @@ void testNewStyles()
     {
         const std::pair<const char*, timing::TimeSignature> listed[] = {
             { "nordic-metal", { 6, 8 } }, { "nordic-metal", { 12, 8 } }, { "symphonic-metal", { 12, 8 } }, { "symphonic-metal", { 3, 4 } },
-            { "heavy-metal", { 12, 8 } }, { "hard-rock", { 12, 8 } }, { "symphonic-trance", { 3, 4 } }, { "dream-trance", { 3, 4 } } };
+            { "heavy-metal", { 12, 8 } }, { "hard-rock", { 12, 8 } }, { "symphonic-trance", { 3, 4 } }, { "dream-trance", { 3, 4 } },
+            { "ambient", { 3, 4 } }, { "ambient", { 6, 8 } } };
         bool ok = true;
         for (const auto& [key, sig] : listed)
         {
@@ -949,8 +950,25 @@ void testNewStyles()
         auto p = std::make_unique<StoredPattern>();
         p->signature = { 3, 4 };
         const bool refused = ! generatePattern (defaultsOf (idOf ("dark-psy"), 1), *p) && ! generatePattern (defaultsOf (idOf ("heavy-metal"), 1), *p);
-        check (ok && refused, "meters: Nordic 6/8 + 12/8, Symphonic Metal 12/8 + 3/4, Heavy Metal and Hard Rock 12/8, Symphonic and Dream Trance 3/4; "
-                              "Dark Psy and Heavy Metal refuse 3/4");
+        auto twelve = std::make_unique<StoredPattern>();
+        twelve->signature = { 12, 8 };
+        const bool ambientRefuses = ! generatePattern (defaultsOf (idOf ("ambient"), 1), *twelve);
+        // PR 137 §10.6: every style's meter list, exactly.
+        const std::pair<const char*, std::uint8_t> meterMasks[] = { { "nordic-metal", 0b1101 }, { "symphonic-metal", 0b1011 }, { "heavy-metal", 0b1001 },
+                                                                    { "hard-rock", 0b1001 }, { "symphonic-trance", 0b0011 }, { "dream-trance", 0b0011 },
+                                                                    { "ambient", 0b0111 } };
+        int exact = 0;
+        for (int id = 0; id < factoryStyleCount; ++id)
+        {
+            std::uint8_t expected = 0b0001;
+            for (const auto& [key, mask] : meterMasks)
+                if (id == idOf (key))
+                    expected = mask;
+            exact += style::factoryDefinition (id)->meters == expected ? 1 : 0;
+        }
+        check (ok && refused && ambientRefuses && exact == factoryStyleCount,
+               "meters: Nordic 6/8 + 12/8, Symphonic Metal 12/8 + 3/4, Heavy Metal and Hard Rock 12/8, Symphonic and Dream Trance 3/4, "
+               "Ambient 3/4 + 6/8, all others 4/4 only (PR 137 §10.6); Dark Psy and Heavy Metal refuse 3/4, Ambient refuses 12/8");
     }
     // Triplet rolls (§10.6) only in the styles that have them.
     {
