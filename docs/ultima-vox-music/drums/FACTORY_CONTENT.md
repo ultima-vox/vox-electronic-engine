@@ -27,10 +27,14 @@ audio files and no third-party material.
 
 - The original styles' songs use the original kits (Full-on and Goa: Psy Full-on; House, Techno
   and Ambient: House Techno; Trap and Breaks: Hip-hop Breaks) and the identity map.
-- **Loading:** a genre kit sets its roles; an original kit sets the default layout. A style song
-  sets the five patterns with B, the song and the generator (style and its defaults); the
-  playback mode stays the user's. It does not load a kit: the list names the kit it was written
-  for.
+- **Loading:** a genre kit sets its roles; an original kit sets the default layout. A **Factory
+  Song** (TL decision on #147) loads its paired factory kit (pads, kit parameters, roles), the
+  generator (the style and its defaults), the five patterns with B and the song as **one** load:
+  all or nothing (`Presets::applyDocuments`), one Undo Load; the playback mode stays the user's.
+  There is no song-only factory load. Rock/Metal songs are listed as NOT RELEASE-READY.
+- **Pinned mappings (approved on #147):** DnB ride on pad 9 and ghost snare (percussion) on pad 10;
+  Melodic Techno tom 2 on pad 9; snare-model percussion layers where §2.3 names them; Ambient's
+  song on House Techno (interim).
 - **Manifest:** `factory-content.csv` now has a `release` column: `listening-pending` for every
   electronic kit and its content (none was auditioned), `NOT-RELEASE-READY:needs-licensed-samples`
   for Rock and Metal. A genre kit's hash also covers its `DROL` section. The three original kits'

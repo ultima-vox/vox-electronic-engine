@@ -167,7 +167,14 @@ Formulas are unchanged.
   - `fill.maxLength` 2–8 (default 8) and `fill.maxVelocity` 0.1–0.95 (default 0.95), e.g. Melodic
     Trance's short, soft fill.
 - **Meters:** Hard Rock and Heavy Metal 4/4 + 12/8; Symphonic Metal 4/4 + 3/4 + 12/8; Nordic Metal
-  4/4 + 6/8 + 12/8; Dream and Symphonic Trance 4/4 + 3/4; every other style 4/4 only.
+  4/4 + 6/8 + 12/8; Dream and Symphonic Trance 4/4 + 3/4; **Ambient (an original style) 4/4 + 3/4 + 6/8**
+  (added after TL review on #145: 3/4 and 6/8 rules only, so its 4/4 output and the R4 parity are
+  unchanged; its pinned `contentHash` changes deliberately); every other style 4/4 only. A test
+  pins every style's meter list and generates a song in every extra meter, exporting pattern and
+  song MIDI in that time signature (10 cases).
+- **Trap triplet fills (§10.6) are not implemented:** any Trap triplet rule changes Trap's 4/4
+  output in the settings the byte-parity matrix covers (fills 0.7), so it waits for a TL decision
+  (re-pin Trap's parity digests and hash, or keep Trap without triplets).
 - **Triplet rolls** (beat 4 of the last bar, with fills > 0.3 and complexity > 0.5): Uplifting,
   Anthem, Hard Rock, Heavy Metal, Symphonic Metal, Nordic Metal, Drum & Bass, Symphonic Trance.
 - **Assertion check:** `checkStyleAssertions` now generates with a role map that gives every

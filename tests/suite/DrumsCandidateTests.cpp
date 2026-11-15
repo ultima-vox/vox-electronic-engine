@@ -66,6 +66,9 @@ std::shared_ptr<const style::Definition> largestUserStyle()
     d.meta.author = juce::String::repeatedString ("A", style::maxMetaText);
     d.meta.group = juce::String::repeatedString ("G", style::maxMetaText);
     d.rules.clear();
+    // Every meter, so a pooled rule of any meter stays valid (factory styles
+    // have 3/4, 6/8 and 12/8 rules).
+    d.meters = (1u << style::meterCount) - 1u;
     // 16 declared parts (the most a style may have): all but ride, tom 2, tom 3.
     d.requiredParts = { 1u };
     d.optionalParts = 0xfffeu;
@@ -2714,24 +2717,193 @@ void testGenreContent()
                 }
         check (ride > 0 && tom3 > 0, "style songs: Heavy Metal's ride and tom 3 play on the Metal kit's ride (pad 10) and tom 3 (pad 8)");
     }
-    // Loading: the kit sets its roles; the song sets patterns, song and the generator.
+    // Per-kit mappings approved on #147, pinned: DnB ride on pad 9 and the ghost
+    // snare (percussion) on pad 10; Melodic Techno tom 2 on pad 9; the snare-model
+    // percussion layers (Trance pad 16, Metal pad 16); Hard Trance = Trance column;
+    // Dark Psy and Tech House = default column; Ambient's song -> House Techno.
     {
-        auto p = makeProcessor();
-        check (p->presets().loadFactoryKit (10).wasOk() && p->padRoles() == factoryKitRoles (10), "genre kits: loading Metal sets its roles (DROL)");
-        check (p->presets().loadFactoryKit (0).wasOk() && ! p->padRoles().explicitRoles, "genre kits: an original kit sets the default layout again");
-        const int heavy = style::infoByKey ("heavy-metal")->id;
-        check (p->presets().loadFactoryStyleSong (heavy).wasOk(), "style songs: Heavy Metal loads");
-        factoryStyleSong (heavy, *all);
-        auto now = std::make_unique<PatternStore::Everything>();
-        p->patterns().copyEverything (*now);
-        const auto g = p->generator();
-        check (now->slots == all->slots && now->alternates == all->alternates && now->song.length == 32
-                   && g.style == static_cast<Style> (heavy) && std::abs (g.density - 0.8f) < 1.0e-6f,
-               "style songs: loading sets the patterns, the song and the generator (Heavy Metal, its defaults)");
-        check (p->presets().undoLoad().wasOk(), "style songs: Undo Load");
-        check (p->presets().loadFactoryStyleSong (factoryStyleCount).failed() && p->presets().loadFactoryStyleSong (-1).failed(),
-               "style songs: an unknown style is refused");
+        const auto pinned = [] (int kitIndex, int pad, R role, int note, kit::Model model) {
+            return factoryKitRoles (kitIndex).role[static_cast<std::size_t> (pad)] == role
+                && factoryKit (kitIndex).pads[static_cast<std::size_t> (pad)].note == note
+                && factoryKit (kitIndex).pads[static_cast<std::size_t> (pad)].model == model;
+        };
+        check (pinned (8, 8, R::ride, 51, kit::Model::cymbal) && pinned (8, 9, R::percussion, 50, kit::Model::snare),
+               "genre kits: DnB ride on pad 9 (51), ghost snare percussion on pad 10");
+        check (pinned (7, 8, R::tom2, 47, kit::Model::tom), "genre kits: Melodic Techno tom 2 on pad 9 (47)");
+        check (pinned (3, 15, R::percussion, 40, kit::Model::snare) && pinned (10, 15, R::percussion, 40, kit::Model::snare),
+               "genre kits: Trance and Metal snare layers on pad 16 are percussion on the snare model");
+        check (factoryKitRoles (4).role == factoryKitRoles (3).role, "genre kits: Hard Trance uses the Trance column");
+        bool defaultColumn = true;
+        for (int kitIndex : { 5, 6 })
+            for (int pad = 0; pad < padCount; ++pad)
+                defaultColumn = defaultColumn && factoryKitRoles (kitIndex).role[static_cast<std::size_t> (pad)] == PadRoles::identity()[static_cast<std::size_t> (pad)];
+        check (defaultColumn, "genre kits: Dark Psy and Tech House use the default column");
+        check (factoryKitOfStyle (style::infoByKey ("ambient")->id) == 1, "style songs: Ambient's song is written for House Techno (interim pairing)");
     }
+    // A Factory Song loads its paired kit, roles, generator, patterns and song as
+    // one load (TL review on #147), from any previous kit.
+    {
+        const int heavy = style::infoByKey ("heavy-metal")->id, dark = style::infoByKey ("dark-psy")->id, house = style::infoByKey ("house")->id;
+        auto p = makeProcessor();
+        check (p->presets().loadFactoryKit (0).wasOk(), "factory song: start from Psy Full-on");
+        p->editSong ([] (SongData& s) { s.songMode = true; });
+        const auto beforeSong = stateOf (*p);
+        const auto matches = [&] (int styleId) {
+            const int kitIndex = factoryKitOfStyle (styleId);
+            factoryStyleSong (styleId, *all);
+            auto now = std::make_unique<PatternStore::Everything>();
+            p->patterns().copyEverything (*now);
+            const auto expectedKit = factoryKit (kitIndex);
+            bool notes = true;
+            for (int pad = 0; pad < padCount; ++pad)
+                notes = notes && p->kitStore().pad (pad).note == expectedKit.pads[static_cast<std::size_t> (pad)].note
+                     && p->kitStore().pad (pad).model == expectedKit.pads[static_cast<std::size_t> (pad)].model;
+            const auto g = p->generator();
+            return notes && p->padRoles() == factoryKitRoles (kitIndex) && now->slots == all->slots && now->alternates == all->alternates
+                && now->song.length == 32 && now->song.songMode && g.style == static_cast<Style> (styleId)
+                && generatorValues (g) == style::factoryDefinition (styleId)->defaults.values;
+        };
+        check (p->presets().loadFactoryStyleSong (heavy).wasOk() && matches (heavy),
+               "factory song: Heavy Metal loads the Metal kit (notes, models), its roles, the generator and the song; Song mode stays on");
+        check (p->kitStore().pad (9).note == 51 && p->padRoles().role[9] == R::ride && p->kitStore().pad (7).note == 41 && p->padRoles().role[7] == R::tom3,
+               "factory song: ride (pad 10, note 51) and tom 3 (pad 8, note 41) are the Metal kit's");
+        // Rendering plays the ride pad: Heavy Metal's ride lane has hits and the pad sounds.
+        {
+            int rideHits = 0;
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+                for (int step = 0; step < 16; ++step)
+                    rideHits += testutil::stepAt (all->slots[static_cast<std::size_t> (slot)], 9, 0, step).on ? 1 : 0;
+            p->reset();
+            const auto out = hitPad (*p, 9);
+            check (rideHits > 0 && (energy (out, 0) > 1.0e-4f || energy (out, 1) > 1.0e-4f), "factory song: the ride lane has hits and the ride pad sounds");
+        }
+        check (p->presets().undoLoad().wasOk() && stateOf (*p) == beforeSong, "factory song: one Undo Load returns kit, roles, generator and song exactly");
+        check (p->presets().loadFactoryStyleSong (dark).wasOk() && matches (dark), "factory song: Dark Psy after Psy Full-on loads the Dark Psy kit and roles");
+        check (p->presets().loadFactoryStyleSong (heavy).wasOk() && matches (heavy), "factory song: Heavy Metal after Dark Psy replaces kit and roles");
+        check (p->presets().loadFactoryStyleSong (house).wasOk() && matches (house) && ! p->padRoles().explicitRoles,
+               "factory song: House after Metal loads House Techno and the default layout (no DROL)");
+        // Failure rollback: a bundle whose second part is broken changes nothing (not even the kit).
+        {
+            const auto before = stateOf (*p);
+            // A real song preset without its DSNG section: incomplete.
+            const auto songBlob = p->presets().capture (PresetType::song, "broken");
+            auto decoded = vox::preset::decode ({ static_cast<const std::byte*> (songBlob.getData()), songBlob.getSize() }, p->product().stateTag,
+                                                p->product().stateSchema);
+            auto broken = decoded.document;
+            broken.sections.erase (std::remove_if (broken.sections.begin(), broken.sections.end(),
+                                                   [] (const vox::preset::Section& section) { return section.tag == songSectionTag; }),
+                                   broken.sections.end());
+            std::vector<vox::preset::StateDocument> bundle;
+            bundle.push_back (p->presets().factoryKitDocument (10));
+            bundle.push_back (std::move (broken));
+            check (p->presets().applyDocuments (std::move (bundle)).failed() && stateOf (*p) == before,
+                   "factory song: a failing part rolls the whole load back (the kit is not applied either)");
+            check (p->presets().loadFactoryStyleSong (factoryStyleCount).failed() && p->presets().loadFactoryStyleSong (-1).failed() && stateOf (*p) == before,
+                   "factory song: an unknown style is refused and changes nothing");
+        }
+        // Round trip: the project state and the saved presets reproduce the load.
+        {
+            check (p->presets().loadFactoryStyleSong (heavy).wasOk(), "factory song: Heavy Metal again");
+            const auto saved = stateOf (*p);
+            auto q = makeProcessor();
+            q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+            check (q->lastStateError().isEmpty() && stateOf (*q) == saved && q->padRoles() == factoryKitRoles (10)
+                       && q->generator().style == static_cast<Style> (heavy),
+                   "factory song: the project state restores kit, roles, generator and song byte for byte");
+            const auto kitPreset = p->presets().capture (PresetType::kit, "metal");
+            const auto songPreset = p->presets().capture (PresetType::song, "heavy");
+            auto r = makeProcessor();
+            check (r->presets().apply (kitPreset.getData(), kitPreset.getSize()).wasOk()
+                       && r->presets().apply (songPreset.getData(), songPreset.getSize()).wasOk() && r->padRoles() == factoryKitRoles (10)
+                       && r->generator().style == static_cast<Style> (heavy),
+                   "factory song: saved kit and song presets load the same kit, roles and generator elsewhere");
+            auto mine = std::make_unique<PatternStore::Everything>(), theirs = std::make_unique<PatternStore::Everything>();
+            p->patterns().copyEverything (*mine);
+            r->patterns().copyEverything (*theirs);
+            check (mine->slots == theirs->slots && mine->alternates == theirs->alternates, "factory song: the saved song preset has the same patterns");
+        }
+    }
+}
+
+//==============================================================================
+// PR 137 §10.6: every style in every extra meter it defines generates a song
+// (five slots in that meter, B variations, timeline) and exports pattern and
+// song MIDI in that time signature.
+void testMeterSongs()
+{
+    static constexpr timing::TimeSignature meters[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
+    int cases = 0;
+    juce::StringArray failed;
+    for (int s = 0; s < factoryStyleCount; ++s)
+        for (int m = 1; m < style::meterCount; ++m)
+        {
+            if (((style::factoryDefinition (s)->meters >> m) & 1u) == 0)
+                continue;
+            ++cases;
+            const auto sig = meters[m];
+            const juce::String label = juce::String (style::infoById (s)->key) + " " + juce::String (sig.numerator) + "/" + juce::String (sig.denominator);
+            auto p = makeProcessor();
+            GeneratorSettings g;
+            g.style = static_cast<Style> (s);
+            const auto& v = style::factoryDefinition (s)->defaults.values;   // Param order
+            g.density = v[0];
+            g.groove = v[1];
+            g.syncopation = v[2];
+            g.complexity = v[3];
+            g.fills = v[4];
+            g.variation = v[5];
+            g.swing = v[6];
+            g.humanize = v[7];
+            p->setGenerator (g);
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+            {
+                StoredPattern empty;
+                empty.signature = sig;
+                p->patterns().setSlot (slot, empty);
+            }
+            if (! p->generate (DrumsProcessor::Generate::song))
+            {
+                failed.add (label + ": song not generated (" + p->generateRefusal (DrumsProcessor::Generate::song) + ")");
+                continue;
+            }
+            auto all = std::make_unique<PatternStore::Everything>();
+            p->patterns().copyEverything (*all);
+            bool valid = true;
+            for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+            {
+                const auto& a = all->slots[static_cast<std::size_t> (slot)];
+                const auto& b = all->alternates[static_cast<std::size_t> (slot)];
+                valid = valid && a.valid() && b.valid() && a.signature.numerator == sig.numerator && a.signature.denominator == sig.denominator
+                     && b.signature.numerator == sig.numerator && b.signature.denominator == sig.denominator;
+            }
+            if (! valid)
+                failed.add (label + ": a slot is invalid or not in the meter");
+            for (const auto scope : { ExportSnapshot::Scope::pattern, ExportSnapshot::Scope::song })
+            {
+                const auto midi = DrumsProcessor::renderExport (*p->captureExport (scope));
+                juce::MidiFile file;
+                juce::MemoryInputStream in (midi, false);
+                int notes = 0;
+                bool meterOk = false;
+                if (file.readFrom (in))
+                    for (int track = 0; track < file.getNumTracks(); ++track)
+                        for (const auto* e : *file.getTrack (track))
+                        {
+                            notes += e->message.isNoteOn() ? 1 : 0;
+                            int num = 0, den = 0;
+                            if (e->message.isTimeSignatureMetaEvent())
+                            {
+                                e->message.getTimeSignatureInfo (num, den);
+                                meterOk = meterOk || (num == sig.numerator && den == sig.denominator);
+                            }
+                        }
+                if (notes == 0 || ! meterOk)
+                    failed.add (label + (scope == ExportSnapshot::Scope::song ? ": song" : ": pattern") + " export has " + juce::String (notes)
+                                + " notes" + (meterOk ? "" : ", no time signature " + juce::String (sig.numerator) + "/" + juce::String (sig.denominator)));
+            }
+        }
+    check (cases == 10 && failed.isEmpty(), "meter songs: " + juce::String (cases) + " style x extra-meter cases generate a song and export pattern and song MIDI in that meter ("
+                                                + failed.joinIntoString ("; ") + ")");
 }
 
 //==============================================================================
@@ -2869,6 +3041,7 @@ int main (int argc, char** argv)
     testStyleDefaults();
     testGenreContent();
     testListeningFiles();
+    testMeterSongs();
     testPresets();
     testState();
     testEditor();

@@ -79,10 +79,17 @@ public:
     // sets the default layout.
     juce::Result loadFactoryKit (int kit);
     juce::Result loadFactoryPatterns (int kit);
-    // The song preset of factory style `style` (PR 137 §5): patterns, song and
-    // the generator set to that style with its defaults. Written for the
-    // roles of factoryKitOfStyle (style); load that kit for its sounds.
+    // The Factory Song of style `style` (PR 137 §5; TL review on #147): its
+    // paired factory kit (pads, kit parameters, roles: DROL for a genre kit,
+    // the default layout for an original one), the generator set to the
+    // style with its defaults, the five patterns with B and the song, as ONE
+    // load: all or nothing, one Undo Load. The playback mode stays the user's.
     juce::Result loadFactoryStyleSong (int style);
+    // Several presets merged into one new state and applied once (all or
+    // nothing, one Undo Load). Factory Songs use it; public for tests.
+    juce::Result applyDocuments (std::vector<preset::StateDocument>&& presets, int target = -1, std::optional<PresetType> expected = {});
+    // The factory kit `kit` as a kit preset document (no checks).
+    preset::StateDocument factoryKitDocument (int kit) const;
 
     // Pad roles (issue 132). The status note of the last successful load
     // ("Roles set to the default layout of this kit"), empty if none.
@@ -100,6 +107,8 @@ public:
 
 private:
     juce::Result applyDocument (preset::StateDocument&& preset, int target, std::optional<PresetType> expected = {});
+    juce::Result mergeDocument (preset::StateDocument& doc, const preset::StateDocument& preset, int target, std::optional<PresetType> expected,
+                                juce::String& notice, std::optional<RoleOffer>& offer);
     DrumsProcessor& processor_;
     juce::MemoryBlock previous_;
     std::uint64_t previousEpoch_ = 0;   // the processor's restore epoch right after the load
