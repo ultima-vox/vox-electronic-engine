@@ -125,7 +125,7 @@ add_test(NAME suite_drums_candidate_tests
 add_executable(suite_drums_pad_roles_tests DrumsPadRolesTests.cpp)
 target_link_libraries(suite_drums_pad_roles_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_pad_roles_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
-add_test(NAME suite_drums_pad_roles_tests COMMAND suite_drums_pad_roles_tests)
+add_test(NAME suite_drums_pad_roles_tests COMMAND suite_drums_pad_roles_tests ${CMAKE_CURRENT_SOURCE_DIR}/golden/trap-triplet-v2-changes.csv)
 
 # Shared bar timing (PR 137 §10 rev 6): capacity, ticks, ratchet rounding,
 # lossless-or-reject subdivision switches. Engine library only.

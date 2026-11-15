@@ -94,6 +94,8 @@ Model modelOfRole (PadRole r)
 
 bool hit (const StoredPattern& p, int lane, int bar, int pos)
 {
+    if (((p.mask (lane, bar) >> (pos / 4)) & 1u) != 0)   // a tuplet beat has no straight 16ths
+        return false;
     return testutil::stepAt (p, lane, bar, pos * (testutil::stepsOf (p) / 16)).on;
 }
 
@@ -135,13 +137,25 @@ void checkGrammar (Style style, float density, const StoredPattern& p, bool fill
     {
         ++t.bars;
         for (int lane = 0; lane < kit::padCount; ++lane)
+        {
+            // Tuplet beats: only Trap's triplet roll (TL option (a) on #145), the
+            // closed hat's beat 4 in the last bar; its cells are not 16ths.
+            const auto tuplets = p.mask (lane, bar);
+            const bool rollWindow = style == Style::trap && lane == closedHat && bar == p.bars - 1;
+            if ((tuplets & ~(rollWindow ? 1u << 3 : 0u)) != 0)
+                violation (t, ctx + ": a tuplet beat outside Trap's roll (lane " + std::to_string (lane + 1) + ")");
             for (int step = 0; step < testutil::stepsOf (p); ++step)
+            {
+                if (((tuplets >> (step / (testutil::stepsOf (p) / 4))) & 1u) != 0)
+                    continue;
                 if (testutil::stepAt (p, lane, bar, step).on)
                 {
                     ++t.hits;
                     if (step % scale != 0)
                         violation (t, ctx + ": a hit between the 16ths (lane " + std::to_string (lane + 1) + ")");
                 }
+            }
+        }
         for (int pos = 0; pos < 16; ++pos)
         {
             const bool k = hit (p, kick, bar, pos), quarter = pos % 4 == 0, off = pos % 4 == 2;
@@ -988,7 +1002,8 @@ void testNewStyles()
             if (any)
                 with.add (style::infoById (id)->key);
         }
-        const juce::String expected = "uplifting-trance anthem-trance hard-rock heavy-metal symphonic-metal nordic-metal drum-and-bass symphonic-trance";
+        // §10.6: Trap (v2, TL option (a) on #145) and the eight new styles with rolls.
+        const juce::String expected = "trap uplifting-trance anthem-trance hard-rock heavy-metal symphonic-metal nordic-metal drum-and-bass symphonic-trance";
         check (with.joinIntoString (" ") == expected, "triplets: only " + expected.toStdString() + " (got " + with.joinIntoString (" ").toStdString() + ")");
     }
 }

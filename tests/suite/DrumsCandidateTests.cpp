@@ -3153,6 +3153,149 @@ void testListeningFiles()
                  juce::SHA256 (zipBytes).toHexString().toRawUTF8());
 }
 
+//==============================================================================
+// Trap v2 (TL option (a) on #145): the triplet hat roll on beat 4 of the last
+// bar, with fills > 0.3 and complexity > 0.65, at resolutions with triplets,
+// never over a locked beat; MIDI export at 960 PPQ including ratchets inside
+// triplet cells; Song; state and undo.
+void testTrapTriplets()
+{
+    const auto settings = [] (float fills, float complexity) {
+        GeneratorSettings g;
+        g.style = Style::trap;
+        g.seed = 4242;
+        g.density = 0.6f;
+        g.complexity = complexity;
+        g.fills = fills;
+        g.swing = 0.0f;
+        g.humanize = 0.0f;
+        return g;
+    };
+    constexpr int hat = 3;   // the closed-hat lane of the default layout
+    constexpr std::uint16_t beat4 = 1u << 3;
+    const auto maskOnlyInWindow = [&] (const StoredPattern& p) {
+        for (int lane = 0; lane < padCount; ++lane)
+            for (int bar = 0; bar < p.bars; ++bar)
+                if (p.mask (lane, bar) != (lane == hat && bar == p.bars - 1 ? p.mask (lane, bar) & beat4 : 0))
+                    return false;
+        return true;
+    };
+    {
+        int rolled = 0;
+        bool window = true;
+        for (const auto res : { timing::Resolution::sixteenth, timing::Resolution::thirtySecond, timing::Resolution::sixtyFourth })
+        {
+            StoredPattern p;
+            p.resolution = res;
+            generatePattern (settings (1.0f, 1.0f), p);
+            const bool roll = (p.mask (hat, p.bars - 1) & beat4) != 0;
+            rolled += roll ? 1 : 0;
+            window = window && maskOnlyInWindow (p) && roll == (res != timing::Resolution::sixtyFourth) && p.valid();
+        }
+        check (window && rolled == 2, "Trap v2: the roll is on beat 4 of the last bar's closed hat at 16ths and 32nds, never at 64ths (no triplets there)");
+        StoredPattern a, b, c;
+        generatePattern (settings (1.0f, 0.65f), a);
+        generatePattern (settings (0.25f, 1.0f), b);
+        generatePattern (settings (0.35f, 0.7f), c);
+        check (a.mask (hat, a.bars - 1) == 0 && b.mask (hat, b.bars - 1) == 0 && (c.mask (hat, c.bars - 1) & beat4) != 0,
+               "Trap v2: the gate is fills > 0.3 and complexity > 0.65 (no roll at 0.65 or fills 0.25; a roll at 0.35 / 0.7)");
+        StoredPattern locked;
+        locked.cell (hat, locked.bars - 1, locked.timing (hat, locked.bars - 1).slot (3, 0)) = { true, false, 90, 100, 1, true, 0 };
+        const auto before = locked.cell (hat, locked.bars - 1, locked.timing (hat, locked.bars - 1).slot (3, 0));
+        generatePattern (settings (1.0f, 1.0f), locked);
+        check (locked.mask (hat, locked.bars - 1) == 0 && locked.cell (hat, locked.bars - 1, locked.timing (hat, locked.bars - 1).slot (3, 0)) == before,
+               "Trap v2: a locked cell keeps beat 4 straight (no roll) and stays as it was");
+    }
+    {
+        auto all = std::make_unique<PatternStore::Everything>();
+        for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+        {
+            all->slots[static_cast<std::size_t> (slot)] = {};
+            all->alternates[static_cast<std::size_t> (slot)] = {};
+        }
+        all->song = SongData::initial();
+        all->song.length = 32;
+        generateSong (settings (0.6f, 0.8f), *all);
+        int rolls = 0;
+        bool window = true;
+        for (const auto* set : { &all->slots, &all->alternates })
+            for (const auto& p : *set)
+            {
+                rolls += (p.mask (hat, p.bars - 1) & beat4) != 0 ? 1 : 0;
+                window = window && maskOnlyInWindow (p) && p.valid();
+            }
+        check (rolls > 0 && window, "Trap v2: Generate Song rolls in the slots whose complexity passes the gate, only in the window (" + juce::String (rolls) + " slots)");
+    }
+    // Export at 960 PPQ: triplet 16ths 160 ticks apart; ratchets inside a triplet
+    // cell at the nearest whole tick, ties to the earlier (0/53/107 and 0/80).
+    {
+        auto p = makeProcessor();
+        auto pattern = std::make_unique<StoredPattern>();
+        generatePattern (settings (1.0f, 1.0f), *pattern);
+        const int bar = pattern->bars - 1;
+        const auto t = pattern->timing (hat, bar);
+        check ((t.alternativeBeats & beat4) != 0 && t.cells (3) == 6, "Trap v2: the rolled beat has six triplet cells at 16ths");
+        for (int cell = 0; cell < 6; ++cell)
+        {
+            auto& c = pattern->cell (hat, bar, t.slot (3, cell));
+            c = {};
+            c.on = true;
+            c.velocity = 100;
+            c.probability = 100;
+            c.ratchet = static_cast<std::uint8_t> (cell == 1 ? 3 : cell == 2 ? 2 : 1);
+        }
+        p->patterns().setSlot (p->currentSlot(), *pattern);
+        auto snap = std::make_shared<ExportSnapshot> (*p->captureExport (ExportSnapshot::Scope::pattern, 1));
+        snap->context.swing = 0.0;
+        const auto midi = DrumsProcessor::renderExport (*snap);
+        juce::MidiFile file;
+        juce::MemoryInputStream in (midi, false);
+        std::vector<int> ticks;
+        int tpq = 0;
+        if (file.readFrom (in))
+        {
+            tpq = file.getTimeFormat();
+            const int note = p->kitStore().pad (hat).note;
+            const int from = (bar * 4 + 3) * tpq, to = (bar * 4 + 4) * tpq;
+            for (int track = 0; track < file.getNumTracks(); ++track)
+                for (const auto* e : *file.getTrack (track))
+                    if (e->message.isNoteOn() && e->message.getNoteNumber() == note && e->message.getTimeStamp() >= from && e->message.getTimeStamp() < to)
+                        ticks.push_back (static_cast<int> (e->message.getTimeStamp()) - from);
+        }
+        std::sort (ticks.begin(), ticks.end());
+        const std::vector<int> expected { 0, 160, 213, 267, 320, 400, 480, 640, 800 };
+        juce::StringArray got;
+        for (int v : ticks)
+            got.add (juce::String (v));
+        check (tpq == 960 && ticks == expected,
+               "Trap v2: MIDI export of the roll at 960 PPQ: cells 160 ticks apart, ratchet 3 at +53/+107, ratchet 2 at +80 (got " + got.joinIntoString (" ") + ")");
+    }
+    // State and undo through the processor.
+    {
+        auto p = makeProcessor();
+        p->setGenerator (settings (1.0f, 1.0f));
+        auto before = std::make_unique<StoredPattern>();
+        p->patterns().copySlot (p->currentSlot(), *before);
+        check (p->generate (DrumsProcessor::Generate::pattern, 0xffffu, false), "Trap v2: Generate Pattern through the processor");
+        auto after = std::make_unique<StoredPattern>();
+        p->patterns().copySlot (p->currentSlot(), *after);
+        check ((after->mask (hat, after->bars - 1) & beat4) != 0, "Trap v2: the processor's pattern has the roll");
+        const auto saved = stateOf (*p);
+        auto q = makeProcessor();
+        q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        auto restored = std::make_unique<StoredPattern>();
+        q->patterns().copySlot (q->currentSlot(), *restored);
+        check (q->lastStateError().isEmpty() && *restored == *after, "Trap v2: the project state keeps the roll (masks and cells) byte for byte");
+        p->patternHistory().undo (p->patterns());
+        auto undone = std::make_unique<StoredPattern>();
+        p->patterns().copySlot (p->currentSlot(), *undone);
+        p->patternHistory().redo (p->patterns());
+        auto redone = std::make_unique<StoredPattern>();
+        p->patterns().copySlot (p->currentSlot(), *redone);
+        check (*undone == *before && *redone == *after, "Trap v2: undo restores the pattern before, redo the roll, exactly");
+    }
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -3173,6 +3316,7 @@ int main (int argc, char** argv)
     testGenreContent();
     testListeningFiles();
     testMeterSongs();
+    testTrapTriplets();
     testPresets();
     testState();
     testEditor();
