@@ -75,8 +75,14 @@ public:
     juce::Result undoLoad();
 
     // Factory content, through the same path as a preset file.
+    // A genre kit (PR 137 §5) carries its pad roles (DROL); an original kit
+    // sets the default layout.
     juce::Result loadFactoryKit (int kit);
     juce::Result loadFactoryPatterns (int kit);
+    // The song preset of factory style `style` (PR 137 §5): patterns, song and
+    // the generator set to that style with its defaults. Written for the
+    // roles of factoryKitOfStyle (style); load that kit for its sounds.
+    juce::Result loadFactoryStyleSong (int style);
 
     // Pad roles (issue 132). The status note of the last successful load
     // ("Roles set to the default layout of this kit"), empty if none.

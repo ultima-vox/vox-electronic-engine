@@ -513,6 +513,24 @@ juce::Result Presets::loadFactoryKit (int kit)
     doc.sections.push_back (encodeInfo ({ PresetType::kit, factoryKitInfo (kit).name, 0 }));
     doc.sections.push_back (KitStore::encode (factoryKit (kit)));
     doc.sections.push_back (encodeParameterValues (factoryKitParameters (kit)));
+    if (const auto roles = factoryKitRoles (kit); roles.explicitRoles)
+        doc.sections.push_back (encodeRoles (roles));
+    return applyDocument (std::move (doc), -1);
+}
+
+juce::Result Presets::loadFactoryStyleSong (int style)
+{
+    const auto all = std::make_unique<PatternStore::Everything>();
+    if (! factoryStyleSong (style, *all))
+        return juce::Result::fail ("no such factory style");
+    all->song.songMode = processor_.patterns().song().songMode;   // the playback mode is the user's
+    preset::StateDocument doc;
+    doc.product = processor_.product().stateTag;
+    doc.schema = processor_.product().stateSchema;
+    doc.sections.push_back (encodeInfo ({ PresetType::song, juce::String (styleName (static_cast<Style> (style))) + " song", 0 }));
+    doc.sections.push_back (PatternStore::encode (all->slots, all->alternates));
+    doc.sections.push_back (encodeSong (all->song));
+    doc.sections.push_back (encodeGenerator (factoryStyleGenerator (style)));
     return applyDocument (std::move (doc), -1);
 }
 
