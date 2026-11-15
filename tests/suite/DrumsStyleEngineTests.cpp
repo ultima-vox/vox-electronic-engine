@@ -13,9 +13,9 @@
 //  - parser: strict, every rejection class names its field, limits hold,
 //    random mutations never crash and stay bounded;
 //  - formulas evaluate exactly as the equivalent C++ expression;
-//  - an unavailable (registered, no definition) or unknown style changes
-//    nothing: no cell, seed, lock, A/B or song bar, no history entry
-//    (PR 138 review).
+//  - an unknown style (every registered style has its definition since the
+//    16 new styles) changes nothing: no cell, seed, lock, A/B or song bar, no
+//    history entry (PR 138 review).
 #include "DrumsPatternTestUtil.h"
 #include "GeneratorReference.h"
 #include "Presets.h"
@@ -72,14 +72,14 @@ void testRegistry()
         lowerNames.insert (juce::String (s.name).toLowerCase());
         houses += juce::String (s.name).equalsIgnoreCase ("House") ? 1 : 0;
         check (st::infoByKey (s.key) == &s && st::infoById (i) == &s, juce::String ("registry: lookup of ") + s.key);
-        check (st::available (i) == (i < styleCount), juce::String ("registry: ") + s.name + (i < styleCount ? " is available" : " waits for its rules"));
+        check (st::available (i), juce::String ("registry: ") + s.name + " is available");
     }
     check (keys.size() == st::registrySize && lowerNames.size() == st::registrySize, "registry: 23 unique keys and names");
     check (houses == 1, "registry: House appears exactly once");
     check (st::infoById (-1) == nullptr && st::infoById (st::registrySize) == nullptr && st::infoByKey ("polka") == nullptr,
            "registry: unknown ids and keys are not found");
     check (st::factoryParseError().isEmpty(), "registry: every factory style parses (" + st::factoryParseError() + ")");
-    for (int i = 0; i < styleCount; ++i)
+    for (int i = 0; i < factoryStyleCount; ++i)
         check (juce::String (styleName (static_cast<Style> (i))) == names[i], juce::String ("registry: styleName follows the registry for ") + names[i]);
 }
 
@@ -229,13 +229,14 @@ void testHashes()
 {
     // Pinned: a change to a factory definition must be deliberate and show
     // up here (and in the factory content manifest when that exists).
-    static const char* pinned[styleCount] = {
+    static const char* pinned[factoryStyleCount] = {
 #include "StyleHashes.inc"
     };
     std::set<juce::String> seen;
-    for (int i = 0; i < styleCount; ++i)
+    for (int i = 0; i < factoryStyleCount; ++i)
     {
         const auto* d = st::factoryDefinition (i);
+        check (d != nullptr, "hash: factory style " + juce::String (i) + " has a definition");
         if (d == nullptr)
             continue;
         const auto h = st::contentHash (*d);
@@ -243,7 +244,7 @@ void testHashes()
         check (h == pinned[i], "hash: " + d->key + " = pinned value (got " + h + ")");
         seen.insert (h);
     }
-    check (seen.size() == static_cast<std::size_t> (styleCount), "hash: the seven factory styles differ");
+    check (seen.size() == static_cast<std::size_t> (factoryStyleCount), "hash: the 23 factory styles differ");
 }
 
 //==============================================================================
@@ -280,7 +281,13 @@ void testParser()
         { minimal (R"({ "part": "kick", "at": [1], "chance": "0.5 +" })"), "rules[0].chance" },
         { minimal (R"({ "part": "kick", "at": [1], "chance": "density ^ 2" })"), "rules[0].chance" },
         { minimal (R"({ "part": "kick", "at": [1], "when": ["density"] })"), "rules[0].when[0]" },
-        { minimal (R"({ "part": "kick", "at": [1], "bars": "even" })"), "rules[0].bars" },
+        { minimal (R"({ "part": "kick", "at": [1], "bars": "third" })"), "rules[0].bars" },
+        // Fill limits (drm/styles-16).
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("ratchet": 2 })", R"("ratchet": 2, "maxLength": 1 })"), "fill.maxLength" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("ratchet": 2 })", R"("ratchet": 2, "maxLength": 9 })"), "fill.maxLength" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("ratchet": 2 })", R"("ratchet": 2, "maxVelocity": 0.05 })"), "fill.maxVelocity" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("ratchet": 2 })", R"("ratchet": 2, "maxVelocity": 1 })"), "fill.maxVelocity" },
+        { minimal (R"({ "part": "kick", "at": [1] })").replace (R"("ratchet": 2 })", R"("ratchet": 2, "length": 4 })"), "unknown key 'length'" },
         { minimal (R"({ "part": "kick", "at": [1], "ratchet": { "chance": "1", "salt": 1, "valueSalt": 2, "otherwise": 9 } })"),
           "rules[0].ratchet.otherwise" },
         { minimal (R"({ "part": "kick", "at": [1] })", R"(, "probability": { "value": "50", "min": 80, "max": 20 })"), "min is above max" },
@@ -440,11 +447,77 @@ void testFormulas()
 }
 
 //==============================================================================
+// drm/styles-16: rule bars "even" / "last", and the fill limits maxLength /
+// maxVelocity (in contentHash only when not the default).
+void testBarsAndFillLimits()
+{
+    const auto parsed = [] (const juce::String& fillExtra) {
+        auto d = std::make_shared<st::Definition>();
+        const auto text = minimal (R"({ "part": "kick", "at": [1], "bars": "even" }, { "part": "snare", "at": [1], "bars": "last" })")
+                              .replace (R"("ratchet": 2 })", R"("ratchet": 2)" + fillExtra + " }");
+        const auto r = st::parse (text, *d);
+        check (r.wasOk(), "bars/fill: parses (" + r.getErrorMessage() + ")");
+        return d;
+    };
+    const auto plain = parsed (""), limited = parsed (R"(, "maxLength": 3, "maxVelocity": 0.5)"),
+               explicitDefaults = parsed (R"(, "maxLength": 8, "maxVelocity": 0.95)");
+    check (st::contentHash (*plain) == st::contentHash (*explicitDefaults) && st::contentHash (*plain) != st::contentHash (*limited),
+           "bars/fill: the default limits do not change contentHash; other limits do");
+    check (st::serialize (*plain) == st::serialize (*explicitDefaults) && st::serialize (*limited).contains ("\"maxLength\":3"),
+           "bars/fill: the serializer writes the limits only when they are not the default");
+    GeneratorSettings g;
+    g.custom = plain;
+    g.fills = 0.0f;
+    auto p = std::make_unique<StoredPattern>();
+    for (int bars : { 4, 3, 2, 1 })
+    {
+        empty (*p, 16, bars);
+        generatePattern (g, *p);
+        bool ok = true;
+        for (int bar = 0; bar < bars; ++bar)
+        {
+            ok = ok && testutil::stepAt (*p, 0, bar, 0).on == (bar % 2 == 1);
+            ok = ok && testutil::stepAt (*p, 1, bar, 0).on == (bar == bars - 1);
+        }
+        check (ok, "bars/fill: \"even\" plays bars 2 and 4, \"last\" the last bar (" + juce::String (bars) + " bars)");
+    }
+    // Fill: maxLength 3 keeps the roll in positions 14..16; maxVelocity caps the base velocity
+    // (groove and humanize at 0, so it is the stored velocity).
+    int outsidePlain = 0, outsideLimited = 0, loudPlain = 0, loudLimited = 0, hits = 0;
+    for (std::uint32_t seed = 1; seed <= 12; ++seed)
+        for (const auto& def : { plain, limited })
+        {
+            GeneratorSettings f;
+            f.custom = def;
+            f.seed = seed;
+            f.fills = 1.0f;
+            f.groove = 0.0f;
+            f.humanize = 0.0f;
+            f.complexity = 0.0f;
+            empty (*p, 16, 4);
+            generateFill (f, *p, -1);
+            for (int pos = 0; pos < 16; ++pos)
+            {
+                const auto& c = testutil::stepAt (*p, 1, 3, pos);
+                if (! c.on)
+                    continue;
+                const bool isLimited = def == limited;
+                hits += isLimited ? 1 : 0;
+                (isLimited ? outsideLimited : outsidePlain) += pos < 13 ? 1 : 0;
+                (isLimited ? loudLimited : loudPlain) += c.velocity > 64 ? 1 : 0;
+            }
+        }
+    check (hits > 0 && outsideLimited == 0 && loudLimited == 0 && outsidePlain > 0 && loudPlain > 0,
+           "bars/fill: maxLength 3 / maxVelocity 0.5 keep the fill in the last 3 sixteenths at velocity <= 64 ("
+               + juce::String (hits) + " hits; without limits " + juce::String (outsidePlain) + " earlier, " + juce::String (loudPlain) + " louder)");
+}
+
+//==============================================================================
 void testUnavailableStyle()
 {
-    for (int id : { 7, 22, 255 })
+    for (int id : { st::registrySize, 100, 255 })
     {
-        const auto label = "unavailable style " + juce::String (id) + ": ";
+        const auto label = "unknown style " + juce::String (id) + ": ";
         GeneratorSettings g;
         g.style = static_cast<Style> (id);
         g.seed = 99;
@@ -489,7 +562,7 @@ void testUnavailableStyle()
     p->generate (DrumsProcessor::Generate::pattern);   // some content first
     p->patternHistory().clear();
     auto g = p->generator();
-    g.style = static_cast<Style> (9);   // Dark Psy: registered, not yet available
+    g.style = static_cast<Style> (st::registrySize);   // the first unknown id
     p->setGenerator (g);
     juce::MemoryBlock before;
     p->getStateInformation (before);
@@ -500,7 +573,7 @@ void testUnavailableStyle()
     juce::MemoryBlock after;
     p->getStateInformation (after);
     check (! any && p->generator().seed == g.seed && ! p->patternHistory().canUndo() && after == before,
-           "unavailable style: the processor reports no change, keeps the seed, records no undo step and leaves the state unchanged");
+           "unknown style: the processor reports no change, keeps the seed, records no undo step and leaves the state unchanged");
 }
 
 //==============================================================================
@@ -509,7 +582,7 @@ void testUnavailableStyle()
 void testRoundTrip (const juce::File& fixture)
 {
     std::vector<std::shared_ptr<const st::Definition>> defs;
-    for (int id = 0; id < styleCount; ++id)
+    for (int id = 0; id < factoryStyleCount; ++id)
         if (const auto* d = st::factoryDefinition (id))
             defs.push_back (std::make_shared<st::Definition> (*d));
     const auto text = fixture.loadFileAsString();
@@ -530,7 +603,7 @@ void testRoundTrip (const juce::File& fixture)
     // Factory export -> parse -> generate: byte-identical over a matrix.
     auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
     auto all = std::make_unique<PatternStore::Everything>(), all2 = std::make_unique<PatternStore::Everything>();
-    for (int id = 0; id < styleCount; ++id)
+    for (int id = 0; id < factoryStyleCount; ++id)
     {
         auto reparsed = std::make_shared<st::Definition>();
         if (! st::parse (st::serialize (*st::factoryDefinition (id)), *reparsed).wasOk())
@@ -959,6 +1032,7 @@ int main (int argc, char** argv)
     testRoundTrip (juce::File (juce::String (argv[1])));
     testEmbeddedStyle (juce::File (juce::String (argv[1])));
     testRegistry();
+    testBarsAndFillLimits();
     testUnavailableStyle();
     testFormulas();
     testHashes();

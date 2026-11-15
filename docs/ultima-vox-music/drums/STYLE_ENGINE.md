@@ -12,7 +12,7 @@ Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
 |---|---|---|
 | Style model, formula language, strict JSON parser, content hash | `products/drums/StyleDefinition.{h,cpp}` | message thread only |
 | Registry of exactly 23 styles | `products/drums/StyleRegistry.{h,cpp}` | stable ids 0–22, keys, names, groups, tempo hint ranges (information only, never sent to the host) |
-| Factory definitions of the 7 original styles | `products/drums/styles/*.json` | built in as text by CMake; parsed by the same parser an imported style will use |
+| Factory definitions of all 23 styles | `products/drums/styles/*.json` | built in as text by CMake; parsed by the same parser an imported style will use |
 | Interpreter | `products/drums/Generator.cpp` (`styleHit`) | one code path for every style; the switch on `Style` is gone |
 | Test reference | `tests/suite/GeneratorReference.cpp` | the switch-based generator, test-only, never linked into the plugin |
 
@@ -21,9 +21,8 @@ Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
     in this step);
   - 7–22 are the 16 new styles, in the order of issue #136;
   - ids are never reused.
-- A style is **available** only when it has a definition. In this step that is the original 7.
-  The 16 new styles are listed but not offered for generation. They get their rules after the
-  Architecture Guard review of PR #137 §3.
+- A style is **available** only when it has a definition. Since `drm/styles-16` all 23 have one
+  (see "The 16 new styles" below); an unknown id is still refused and changes nothing.
 
 ## Definition (internal, version 1, not frozen)
 
@@ -44,7 +43,7 @@ Status: **foundation implemented on `drm/style-engine`; formats not frozen.**
   - `hit` sets the hit, optionally gated by `chance`;
   - `ghost` fills only an empty position and, at complexity > 0.5, may make it a 60 % step.
 - **`when`:** conditions such as `"density > 0.15"`.
-- **`bars`:** `all`, `first` or `odd`.
+- **`bars`:** `all`, `first`, `odd`, `even` or `last` (bar 1, 3; 2, 4; the pattern's last bar).
 - **`salt`:** selects an independent random draw.
 - **`ratchet`:** an optional chance-gated choice of value.
 - **Formulas:**
@@ -156,6 +155,46 @@ Formulas are unchanged.
   - a contradicted assertion is reported;
   - `variation.keep` and `song.breakWithoutKick` are honoured;
   - 23 unique registry UUIDs.
+
+## The 16 new styles (`drm/styles-16`, PR #137 §3, §2.4, §4, §10.6)
+
+- **Source:** `products/drums/styles/<key>.json`, one per style, in registry order (ids 7–22).
+  Each implements its §3 table: the rules ("Always"/"Sometimes"), the `parts` of §2.4, the
+  defaults of §4, the meters of §10.6, and `assertions` for its "Never" lines.
+- **Schema additions** (both in `contentHash` only when not the default, so the 7 original
+  hashes are unchanged):
+  - `bars`: `even` and `last`;
+  - `fill.maxLength` 2–8 (default 8) and `fill.maxVelocity` 0.1–0.95 (default 0.95), e.g. Melodic
+    Trance's short, soft fill.
+- **Meters:** Hard Rock and Heavy Metal 4/4 + 12/8; Symphonic Metal 4/4 + 3/4 + 12/8; Nordic Metal
+  4/4 + 6/8 + 12/8; Dream and Symphonic Trance 4/4 + 3/4; **Ambient (an original style) 4/4 + 3/4 + 6/8**
+  (added after TL review on #145: 3/4 and 6/8 rules only, so its 4/4 output and the R4 parity are
+  unchanged; its pinned `contentHash` changes deliberately); every other style 4/4 only. A test
+  pins every style's meter list and generates a song in every extra meter, exporting pattern and
+  song MIDI in that time signature (10 cases).
+- **Trap triplet fills (§10.6) are not implemented:** any Trap triplet rule changes Trap's 4/4
+  output in the settings the byte-parity matrix covers (fills 0.7), so it waits for a TL decision
+  (re-pin Trap's parity digests and hash, or keep Trap without triplets).
+- **Triplet rolls** (beat 4 of the last bar, with fills > 0.3 and complexity > 0.5): Uplifting,
+  Anthem, Hard Rock, Heavy Metal, Symphonic Metal, Nordic Metal, Drum & Bass, Symphonic Trance.
+- **Assertion check:** `checkStyleAssertions` now generates with a role map that gives every
+  declared part a pad of its own, so assertions on ride, tom 2 and tom 3 are checked.
+- **Tests** (`suite_drums_generator_style_tests`, `testNewStyles`), on the genre's role map
+  (§2.3), with the style's defaults:
+  - all 23 styles: assertions hold; every style × meter × resolution generates a valid pattern;
+  - genre distinctions from §3: Uplifting vs Anthem snare 5/13; Melodic ≤ 0.9 velocity;
+    Progressive rolling percussion, open hat only on 15; Dream ride on every 8th; Hard Trance 16th
+    hats, kick off the beat only in fills; Symphonic Trance three toms; Dark Psy vs Full-on clap
+    and vs Techno hats, ratchets in ≥ 30 % of bars; House vs Tech House pickup, Tech House ≥ 4
+    percussion positions; Melodic Techno no hat on the beats; Breaks vs DnB kick ghosts; Melodic
+    DnB ≤ 1 snare ghost and a ride; Trap snare on 9; Heavy Metal vs House kicks/clap; Hard Rock ≤ 4
+    kicks; Symphonic Metal double-bass/half-time bars; Nordic tom 3 on the beats; the meters each
+    style accepts and refuses; the exact list of styles with triplet rolls;
+  - hashes of all 23 pinned (`StyleHashes.inc`); export → parse → generate byte-identical for all
+    23; the unknown-style test uses ids 23, 100 and 255.
+- **Limits:** these tests check the written rules, not whether a style sounds right. Genre and
+  sound acceptance is a listening/DAW check by the owner. Rock and Metal stay **NOT RELEASE-READY**
+  until licensed acoustic samples exist.
 
 Not yet done:
 

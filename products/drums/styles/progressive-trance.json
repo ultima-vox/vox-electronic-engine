@@ -1,0 +1,213 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "7146e97c-118a-455c-885e-5d04cec72ef6",
+ "key": "progressive-trance",
+ "name": "Progressive Trance",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Trance",
+  "tempo": {
+   "min": 128,
+   "max": 134
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.55,
+  "groove": 0.5,
+  "syncopation": 0.55,
+  "swing": 0.05,
+  "humanize": 0.15,
+  "complexity": 0.5,
+  "fills": 0.4,
+  "variation": 0.3
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "clap",
+   "closedHat",
+   "openHat"
+  ],
+  "optional": [
+   "snare",
+   "tom1",
+   "rim",
+   "crash",
+   "perc1",
+   "perc2",
+   "perc3",
+   "perc4",
+   "perc5",
+   "ride",
+   "tom2",
+   "tom3"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.85,
+   "accent": true
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "velocity": 0.7
+  },
+  {
+   "part": "openHat",
+   "at": [
+    15
+   ],
+   "chance": "0.2 + 0.6 * density",
+   "velocity": 0.7
+  },
+  {
+   "part": "perc1",
+   "at": [
+    4,
+    7,
+    10,
+    12,
+    15
+   ],
+   "chance": "0.4 + 0.5 * density",
+   "velocity": 0.6
+  },
+  {
+   "part": "perc2",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.5 * syncopation",
+   "velocity": 0.4
+  },
+  {
+   "part": "rim",
+   "at": [
+    6,
+    14
+   ],
+   "velocity": 0.55
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "perc1",
+   "rim"
+  ],
+  "ratchet": 2,
+  "maxLength": 4
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "clap",
+   "closedHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "closedHat",
+   "always": [
+    3,
+    7,
+    11,
+    15
+   ]
+  },
+  {
+   "part": "openHat",
+   "never": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    16
+   ]
+  },
+  {
+   "part": "rim",
+   "always": [
+    6,
+    14
+   ]
+  }
+ ]
+}

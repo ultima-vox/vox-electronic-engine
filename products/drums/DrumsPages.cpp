@@ -294,7 +294,7 @@ public:
         styleLabel_ = makeLabel ("Style");
         addAndMakeVisible (*styleLabel_);
         style_ = std::make_unique<VoxComboBox>();
-        for (int i = 0; i < styleCount; ++i)
+        for (int i = 0; i < factoryStyleCount; ++i)
             style_->addItem (styleName (static_cast<Style> (i)), i + 1);
         style_->onChange = [this] {
             change ([this] (GeneratorSettings& g) { g.style = static_cast<Style> (juce::jmax (0, style_->getSelectedItemIndex())); });

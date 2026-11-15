@@ -1,0 +1,199 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "1f1ef7bb-769a-4d19-b658-c9775ddd405e",
+ "key": "drum-and-bass",
+ "name": "Drum & Bass",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Bass & Breaks",
+  "tempo": {
+   "min": 170,
+   "max": 176
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.6,
+  "groove": 0.6,
+  "syncopation": 0.5,
+  "swing": 0,
+  "humanize": 0.2,
+  "complexity": 0.6,
+  "fills": 0.5,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "snare",
+   "closedHat"
+  ],
+  "optional": [
+   "openHat",
+   "rim",
+   "crash",
+   "ride",
+   "perc1"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    11
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "kick",
+   "at": [
+    8
+   ],
+   "chance": "0.15 + 0.6 * syncopation",
+   "velocity": 0.8
+  },
+  {
+   "part": "snare",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "snare",
+   "at": [
+    4,
+    8,
+    10,
+    15,
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.5 * complexity",
+   "velocity": 0.35
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "chance": "0.3 + 0.6 * density",
+   "velocity": 0.5
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    16
+   ],
+   "chance": "0.3 + 0.6 * density",
+   "velocity": 0.55,
+   "ratchet": {
+    "chance": "complexity - 0.3",
+    "salt": 21,
+    "valueSalt": 22,
+    "below": [],
+    "otherwise": 2
+   }
+  },
+  {
+   "part": "openHat",
+   "at": [
+    7
+   ],
+   "chance": "0.2 + 0.5 * density",
+   "velocity": 0.6
+  },
+  {
+   "part": "rim",
+   "at": [
+    12
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.4 * complexity",
+   "velocity": 0.45
+  },
+  {
+   "part": "snare",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "beats": [
+    4
+   ],
+   "subdivision": "triplet",
+   "bars": "last",
+   "when": [
+    "fills > 0.3",
+    "complexity > 0.5"
+   ],
+   "velocity": 0.6
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "snare",
+   "snare",
+   "closedHat"
+  ],
+  "ratchet": 2
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "snare"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    11
+   ],
+   "never": [
+    4,
+    5,
+    7,
+    13,
+    14
+   ]
+  },
+  {
+   "part": "snare",
+   "always": [
+    5,
+    13
+   ]
+  }
+ ]
+}

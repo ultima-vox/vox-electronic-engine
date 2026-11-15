@@ -30,7 +30,8 @@ namespace vox::drums {
 inline constexpr preset::Tag generatorSectionTag = preset::makeTag ("DGEN");
 
 enum class Style : std::uint8_t { fullOn, goa, house, techno, trap, breaks, ambient };
-inline constexpr int styleCount = 7;
+inline constexpr int styleCount = 7;           // the original styles (byte-parity references in tests)
+inline constexpr int factoryStyleCount = 23;   // every factory style (StyleRegistry ids 0..22)
 const char* styleName (Style) noexcept;
 
 struct GeneratorSettings {

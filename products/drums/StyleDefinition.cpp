@@ -412,7 +412,9 @@ bool readRule (Reader& in, const juce::var& v, const juce::String& path, std::ui
             return false;
         if (b == "first") r.bars = Bars::first;
         else if (b == "odd") r.bars = Bars::odd;
-        else if (b != "all") return in.fail (path + ".bars", "must be \"all\", \"first\" or \"odd\"");
+        else if (b == "even") r.bars = Bars::even;
+        else if (b == "last") r.bars = Bars::last;
+        else if (b != "all") return in.fail (path + ".bars", "must be \"all\", \"first\", \"odd\", \"even\" or \"last\"");
     }
     if (v.hasProperty ("ratchet"))
     {
@@ -730,7 +732,7 @@ juce::Result parse (const juce::String& json, Definition& out)
             d.probability = std::move (po);
         }
         const auto& fv = root["fill"];
-        if (! in.keys (fv, "fill", { "cycle", "ratchet" }))
+        if (! in.keys (fv, "fill", { "cycle", "ratchet", "maxLength", "maxVelocity" }))
             return false;
         const auto* cycle = fv["cycle"].getArray();
         if (cycle == nullptr || cycle->isEmpty() || cycle->size() > 8)
@@ -746,6 +748,15 @@ juce::Result parse (const juce::String& json, Definition& out)
         }
         if (! in.integer (fv["ratchet"], "fill.ratchet", 1, 8, d.fill.ratchet))
             return false;
+        if (fv.hasProperty ("maxLength") && ! in.integer (fv["maxLength"], "fill.maxLength", 2, 8, d.fill.maxLength))
+            return false;
+        if (fv.hasProperty ("maxVelocity"))
+        {
+            double v = 0.0;
+            if (! in.number (fv["maxVelocity"], "fill.maxVelocity", 0.1, 0.95, v))
+                return false;
+            d.fill.maxVelocity = static_cast<float> (v);
+        }
         if (root.hasProperty ("variation"))
         {
             if (! in.keys (root["variation"], "variation", { "keep" }) || ! in.partList (root["variation"]["keep"], "variation.keep", d.variationKeep))
@@ -852,6 +863,12 @@ juce::String contentHash (const Definition& d)
     for (auto p : d.fill.cycle)
         b.u8 (static_cast<std::uint32_t> (p));
     b.u8 (static_cast<std::uint32_t> (d.fill.ratchet));
+    // Hashed only when not the default, so styles without them keep their hash.
+    if (d.fill.maxLength != 8 || ! juce::exactlyEqual (d.fill.maxVelocity, 0.95f))
+    {
+        b.u8 (static_cast<std::uint32_t> (d.fill.maxLength));
+        b.f32 (d.fill.maxVelocity);
+    }
     return juce::SHA256 (b.block).toHexString();
 }
 
@@ -974,7 +991,11 @@ juce::String serialize (const Definition& d)
             if (r.salt != 0) m.emplace_back ("salt", juce::String (r.salt));
             m.emplace_back ("velocity", shortest (r.velocity));
             if (r.accent) m.emplace_back ("accent", "true");
-            if (r.bars != Bars::all) m.emplace_back ("bars", quoted (r.bars == Bars::first ? "first" : "odd"));
+            if (r.bars != Bars::all)
+            {
+                static const char* const barsKeys[] = { "all", "first", "odd", "even", "last" };
+                m.emplace_back ("bars", quoted (barsKeys[static_cast<int> (r.bars)]));
+            }
             if (r.ratchet)
             {
                 juce::StringArray below;
@@ -999,7 +1020,13 @@ juce::String serialize (const Definition& d)
         juce::StringArray cycle;
         for (auto p : d.fill.cycle)
             cycle.add (quoted (partKey (p)));
-        top.emplace_back ("fill", object ({ { "cycle", "[" + cycle.joinIntoString (",") + "]" }, { "ratchet", juce::String (d.fill.ratchet) } }));
+        std::vector<std::pair<juce::String, juce::String>> fm { { "cycle", "[" + cycle.joinIntoString (",") + "]" },
+                                                                { "ratchet", juce::String (d.fill.ratchet) } };
+        if (d.fill.maxLength != 8)
+            fm.emplace_back ("maxLength", juce::String (d.fill.maxLength));
+        if (! juce::exactlyEqual (d.fill.maxVelocity, 0.95f))
+            fm.emplace_back ("maxVelocity", shortest (d.fill.maxVelocity));
+        top.emplace_back ("fill", object (fm));
     }
     top.emplace_back ("variation", object ({ { "keep", partListText (d.variationKeep) } }));
     {
