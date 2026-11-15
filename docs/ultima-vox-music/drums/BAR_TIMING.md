@@ -173,8 +173,8 @@ Status:
 
 ### Generator
 
-- It writes 4/4. Generating in another meter is refused, changing nothing, until the styles'
-  meter rules are interpreted (§10.6).
+- It writes every meter the style defines (4/4, 3/4, 6/8, 12/8), and tuplet beats from tuplet
+  rules (see STYLE_ENGINE.md). Other meters are refused, changing nothing (§10.6).
 - A cell starting on a 16th gets that position's hit. Micro is a percent of that cell, quantised
   once. The lane's other cells are cleared.
 - **Equivalence with the previous model (one-off, local):** every generated cell was compared

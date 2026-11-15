@@ -76,13 +76,22 @@ bool decodeStyleSection (const preset::Section&, std::shared_ptr<const style::De
 // Every function below first checks that the style has a definition the
 // generator can run (StyleRegistry: a registered but not yet available
 // style, or an unknown id, has none) and that the pattern (Generate Song:
-// every A slot) is in 4/4 (PR 137 §10.6: other meters are refused until the
-// styles' meter rules are interpreted). If not, it returns false and
-// changes NOTHING: no cell, seed, lock, A/B pattern or song bar. True
-// otherwise. Style rules are on 16ths: a cell of the pattern's grid that
-// starts on a 16th gets that position's hit (micro: a percent of the cell,
-// quantised once to ticks); the other cells of a generated lane are cleared.
+// every A slot) is in a meter the style defines (4/4 always; 3/4, 6/8, 12/8
+// when listed; PR 137 §10.6). If not, it returns false and changes NOTHING:
+// no cell, mask, seed, lock, A/B pattern or song bar. True otherwise.
+// Style rules are on the meter's 16th grid: a straight cell that starts on
+// a 16th gets the hit of that position from the rules of the pattern's
+// meter (micro: a percent of the cell, quantised once to ticks). A part
+// with tuplet rules for a beat gets that beat in triplets (duplets in 6/8
+// and 12/8) in its lane, unless a cell of the beat is locked or the
+// resolution has no tuplets, and its cells from those rules; other beats of
+// a generated lane go back to straight. The other cells of a generated lane
+// are cleared.
 bool styleAvailable (Style);
+// Why the generator refuses `pattern` with `g` ("" when it does not): the
+// style has no runnable definition, or the pattern's meter is not one the
+// style defines (PR 137 §10.6). Message thread.
+juce::String generatorRefusal (const GeneratorSettings& g, const StoredPattern& pattern);
 
 // The style's own 4/4 assertions (PR 137 §11.3) checked on generated
 // patterns over a settings matrix (6 seeds × density × complexity, no fills,

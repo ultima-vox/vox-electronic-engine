@@ -239,12 +239,32 @@ bool DrumsProcessor::editSong (const std::function<void (SongData&)>& change)
     return true;
 }
 
+juce::String DrumsProcessor::generateRefusal (Generate what) const
+{
+    const auto g = generator();
+    auto pattern = std::make_unique<StoredPattern>();   // heap: ~33 KB
+    if (what == Generate::song)
+    {
+        for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+        {
+            patternStore_.copySlot (slot, *pattern);
+            const auto why = generatorRefusal (g, *pattern);
+            if (why.isNotEmpty())
+                return "pattern " + juce::String (slot + 1) + ": " + why;
+        }
+        return {};
+    }
+    patternStore_.copySlot (currentSlot(), *pattern);
+    return generatorRefusal (g, *pattern);
+}
+
 bool DrumsProcessor::generate (Generate what, std::uint32_t laneMask, bool newSeed, int bar)
 {
     auto g = generator();
-    // A style without a runnable definition changes nothing, not even the
-    // seed, and records no history entry (PR 138 review).
-    if (! styleAvailable (g.style))
+    // A style without a runnable definition, or a pattern in a meter the
+    // style does not define, changes nothing, not even the seed, and records
+    // no history entry (PR 138 review, PR 137 §10.6).
+    if (! styleAvailable (g.style) || generateRefusal (what).isNotEmpty())
         return false;
     const auto roles = RoleMap::from (padRoles());
     if (newSeed)

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <optional>
 
 namespace vox::drums {
 namespace {
@@ -38,6 +39,7 @@ struct Hit {
 struct Context {
     const GeneratorSettings& g;
     int bar = 0, bars = 1;
+    style::Meter meter = style::Meter::m4_4;
     bool lastBar() const noexcept { return bar == bars - 1; }
     double r (int lane, int pos, int salt = 0) const noexcept
     {
@@ -57,8 +59,21 @@ struct Context {
     }
 };
 
-bool beat (int pos) noexcept { return pos % 4 == 0; }
-bool offBeat (int pos) noexcept { return pos % 4 == 2; }
+// A beat and an off-beat 16th on the meter's grid: quarter beats in 4/4 and
+// 3/4 (4 sixteenths), dotted-quarter beats in 6/8 and 12/8 (6 sixteenths,
+// the off-beat on the middle eighth). Tuplet cells (keys >= 32) are neither.
+bool beat (int pos, style::Meter m = style::Meter::m4_4) noexcept
+{
+    return pos < 32 && pos % (style::compoundMeter (m) ? 6 : 4) == 0;
+}
+bool offBeat (int pos, style::Meter m = style::Meter::m4_4) noexcept
+{
+    return pos < 32 && (style::compoundMeter (m) ? pos % 6 == 3 : pos % 4 == 2);
+}
+
+// The random key of a tuplet cell (beat 0..15, cell 0..5): apart from the
+// straight 16th positions 0..23.
+constexpr int tupletKey (int beat, int cell) noexcept { return 32 + beat * 8 + cell; }
 
 // The style being generated: its declarative definition (StyleRegistry).
 const style::Definition* definitionOf (const GeneratorSettings& g)
@@ -78,8 +93,12 @@ style::ParamValues paramsOf (const GeneratorSettings& g) noexcept
 // The hit of part `lane` at 16th `pos`: the style's rules for that part, in
 // order. A hit rule sets the hit (velocity, accent); a ghost rule only fills
 // an empty position, and with complexity above 0.5 may make it a 60 % step.
-Hit styleHit (const style::Definition& def, const style::ParamValues& values, const Context& c, int lane, int pos) noexcept
+// `pos` is the 16th position on the meter's grid (straight), or with
+// `tupletBeat` >= 0 the tuplet cell within that beat; `key` the random key
+// (pos for straight cells, tupletKey for tuplet cells).
+Hit styleHit (const style::Definition& def, const style::ParamValues& values, const Context& c, int lane, int pos, int tupletBeat = -1) noexcept
 {
+    const int key = tupletBeat < 0 ? pos : tupletKey (tupletBeat, pos);
     const double cx = values[style::Param::complexity];
     Hit h;
     const auto on = [&] (float velocity, bool accent) {
@@ -89,9 +108,11 @@ Hit styleHit (const style::Definition& def, const style::ParamValues& values, co
     };
     for (const auto& rule : def.rules)
     {
-        // Only straight 4/4 rules run until the shared timing engine (PR 137
-        // §10.5a) plays other meters and tuplet cells.
-        if (rule.part != lane || rule.meter != style::Meter::m4_4 || rule.tupletBeats != 0 || (rule.positions & (1u << pos)) == 0)
+        // The rules of the pattern's meter; straight rules for straight cells,
+        // tuplet rules for the cells of their beats (PR 137 §10.6).
+        if (rule.part != lane || rule.meter != c.meter || (rule.positions & (1u << pos)) == 0)
+            continue;
+        if (tupletBeat < 0 ? rule.tupletBeats != 0 : ((rule.tupletBeats >> tupletBeat) & 1u) == 0)
             continue;
         if ((rule.bars == style::Bars::first && c.bar != 0) || (rule.bars == style::Bars::odd && c.bar % 2 != 0))
             continue;
@@ -102,20 +123,20 @@ Hit styleHit (const style::Definition& def, const style::ParamValues& values, co
             continue;
         if (rule.kind == style::Rule::Kind::ghost)
         {
-            if (! h.on && c.chance (rule.chance.evaluate (values), lane, pos, rule.salt + 40))
+            if (! h.on && c.chance (rule.chance.evaluate (values), lane, key, rule.salt + 40))
             {
                 on (rule.velocity, false);
-                if (cx > 0.5 && c.chance (cx - 0.5, lane, pos, rule.salt + 41))
+                if (cx > 0.5 && c.chance (cx - 0.5, lane, key, rule.salt + 41))
                     h.probability = 60;
             }
             continue;
         }
-        if (! rule.chance.empty() && ! c.chance (rule.chance.evaluate (values), lane, pos, rule.salt))
+        if (! rule.chance.empty() && ! c.chance (rule.chance.evaluate (values), lane, key, rule.salt))
             continue;
         on (rule.velocity, rule.accent);
-        if (rule.ratchet && c.chance (rule.ratchet->chance.evaluate (values), lane, pos, rule.ratchet->salt))
+        if (rule.ratchet && c.chance (rule.ratchet->chance.evaluate (values), lane, key, rule.ratchet->salt))
         {
-            const double draw = c.r (lane, pos, rule.ratchet->valueSalt);
+            const double draw = c.r (lane, key, rule.ratchet->valueSalt);
             h.ratchet = rule.ratchet->otherwise;
             for (const auto& [threshold, value] : rule.ratchet->below)
                 if (draw < threshold)
@@ -131,25 +152,51 @@ Hit styleHit (const style::Definition& def, const style::ParamValues& values, co
     return h;
 }
 
-// The cell of 16th position `pos` (0..15) in a 4/4 lane bar: its storage
-// slot, or -1 when no cell of the bar's grid starts there (an 8th grid,
-// a triplet beat, or a beat the bar does not have).
-int slotOf16th (const timing::BarTiming& t, int pos) noexcept
+// The storage slot of the cell of `t` that starts at `tick` from the bar
+// start, or -1 when no cell starts there; `beatOut` gets its beat.
+int slotAtTick (const timing::BarTiming& t, int tick, int* beatOut = nullptr) noexcept
 {
-    const int tick = pos * timing::ticksPerQuarter / 4;
     const int beatTicks = timing::beatTicks (timing::beatKind (t.signature));
     const int beat = tick / beatTicks;
-    if (beat >= t.beats())
+    if (tick < 0 || beat >= t.beats())
         return -1;
     const int cellTicks = t.cellTicks (beat), within = tick - beat * beatTicks;
-    return cellTicks > 0 && within % cellTicks == 0 ? t.slot (beat, within / cellTicks) : -1;
+    if (cellTicks <= 0 || within % cellTicks != 0)
+        return -1;
+    if (beatOut != nullptr)
+        *beatOut = beat;
+    return t.slot (beat, within / cellTicks);
 }
 
-// The generator writes 4/4 (the styles' rules for other meters are not
-// interpreted yet: PR 137 §10.6 refuses them).
-bool generatorGrid (const StoredPattern& p) noexcept
+// The cell of 16th position `pos` on the bar's straight grid.
+int slotOf16th (const timing::BarTiming& t, int pos) noexcept
 {
-    return p.signature == timing::TimeSignature {} && timing::BarTiming { p.signature, p.resolution, 0 }.valid();
+    return slotAtTick (t, pos * timing::ticksPerQuarter / 4);
+}
+
+// The style meter of a pattern signature (4/4, 3/4, 6/8, 12/8), else none.
+std::optional<style::Meter> styleMeter (timing::TimeSignature s) noexcept
+{
+    if (s == timing::TimeSignature { 4, 4 }) return style::Meter::m4_4;
+    if (s == timing::TimeSignature { 3, 4 }) return style::Meter::m3_4;
+    if (s == timing::TimeSignature { 6, 8 }) return style::Meter::m6_8;
+    if (s == timing::TimeSignature { 12, 8 }) return style::Meter::m12_8;
+    return std::nullopt;
+}
+
+// The pattern is in a meter the style defines, on a valid grid (PR 137
+// §10.6: anything else is refused).
+bool generatorGrid (const style::Definition& def, const StoredPattern& p) noexcept
+{
+    const auto m = styleMeter (p.signature);
+    return m && (def.meters & (1u << static_cast<int> (*m))) != 0 && timing::BarTiming { p.signature, p.resolution, 0 }.valid();
+}
+
+// The tuplet cells per beat at the 16th level: triplet 6 in a quarter beat,
+// duplet 4 in a dotted-quarter beat.
+int tupletCells16 (style::Meter m) noexcept
+{
+    return style::compoundMeter (m) ? 4 : 6;
 }
 
 // `cellTicks`: the length of the cell the step goes to (micro is a percent
@@ -162,7 +209,7 @@ kit::PatternStep toStep (const Context& c, int lane, int pos, const Hit& h, int 
     const auto& g = c.g;
     // Groove: accents lean to the off-beats; humanize: variance.
     double velocity = h.velocity;
-    velocity *= 1.0 + g.groove * (offBeat (pos) ? 0.18 : beat (pos) ? 0.0 : -0.12);
+    velocity *= 1.0 + g.groove * (offBeat (pos, c.meter) ? 0.18 : beat (pos, c.meter) ? 0.0 : -0.12);
     velocity *= 1.0 + g.humanize * 0.35 * (c.r (lane, pos, 90) - 0.5);
     s.on = true;
     s.accent = h.accent;
@@ -170,9 +217,9 @@ kit::PatternStep toStep (const Context& c, int lane, int pos, const Hit& h, int 
     s.probability = static_cast<std::uint8_t> (std::clamp (h.probability, 1, 100));
     s.ratchet = static_cast<std::uint8_t> (std::clamp (h.ratchet, 1, kit::maxRatchet));
     double micro = 0.0;
-    if (pos % 2 == 1)
+    if (pos < 32 && pos % 2 == 1)   // odd straight 16ths; tuplet cells are not swung
         micro += 50.0 * std::clamp (g.swing, 0.0f, 1.0f);
-    if (lane != kick || ! beat (pos))   // the downbeat kick stays on the grid
+    if (lane != kick || ! beat (pos, c.meter))   // the downbeat kick stays on the grid
         micro += g.humanize * 16.0 * (c.r (lane, pos, 91) - 0.5);
     s.microTicks = static_cast<std::int16_t> (
         kit::percentToTicks (std::clamp (static_cast<int> (std::lround (micro)), -50, 50), cellTicks));
@@ -195,30 +242,92 @@ bool generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPa
 {
     const auto* def = definitionOf (g);
     const auto values = paramsOf (g);
+    const auto meter = styleMeter (p.signature).value_or (style::Meter::m4_4);
+    const int positions = style::gridPositions (meter);
+    const int n16 = tupletCells16 (meter);
+    const bool tuplets = timing::capacity (p.signature, p.resolution).availability == timing::Availability::full;
+    const int beatTicks = timing::beatTicks (timing::beatKind (p.signature));
     bool open = false;
     // The styles are written on 16ths: a cell starting on a 16th gets that
-    // position's hit; every other cell of the lane is cleared.
+    // position's hit (a tuplet cell: its tuplet rules); every other cell of
+    // the lane is cleared.
     for (int lane = 0; lane < kit::padCount; ++lane)
     {
         if ((laneMask & (1u << lane)) == 0)
             continue;
         const int slot = roles.slotOfLane[static_cast<std::size_t> (lane)];
+        const bool laneLocked = (g.laneLocks & (1u << lane)) != 0;
         for (int bar = 0; bar < p.bars; ++bar)
         {
-            const Context c { g, bar, p.bars };
+            const Context c { g, bar, p.bars, meter };
+            // PR 137 §10.6: the beats this part plays as tuplets in this bar
+            // (a tuplet rule of the meter whose bars and conditions apply). A
+            // beat changes its subdivision only when none of its cells is
+            // locked; it is then generated anew.
+            if (slot >= 0 && def != nullptr && tuplets && ! laneLocked)
+            {
+                std::uint16_t want = 0;
+                for (const auto& rule : def->rules)
+                {
+                    if (rule.part != slot || rule.meter != meter || rule.tupletBeats == 0)
+                        continue;
+                    if ((rule.bars == style::Bars::first && bar != 0) || (rule.bars == style::Bars::odd && bar % 2 != 0))
+                        continue;
+                    bool when = true;
+                    for (const auto& condition : rule.when)
+                        when = when && condition.holds (values);
+                    if (when)
+                        want = static_cast<std::uint16_t> (want | rule.tupletBeats);
+                }
+                const auto before = p.timing (lane, bar);
+                want = static_cast<std::uint16_t> (want & ((1u << before.beats()) - 1u));
+                auto mask = before.alternativeBeats;
+                for (int b = 0; b < before.beats(); ++b)
+                {
+                    const auto bit = static_cast<std::uint16_t> (1u << b);
+                    if (((want ^ mask) & bit) == 0)
+                        continue;
+                    bool locked = false;
+                    for (int k = 0; k < before.slotsPerBeat(); ++k)
+                        locked = locked || p.cell (lane, bar, before.slot (b, k)).locked;
+                    if (locked)
+                        continue;
+                    for (int k = 0; k < before.slotsPerBeat(); ++k)
+                        p.cell (lane, bar, before.slot (b, k)) = {};
+                    mask = static_cast<std::uint16_t> (mask ^ bit);
+                }
+                p.mask (lane, bar) = mask;
+            }
             const auto t = p.timing (lane, bar);
             for (int beat = 0; beat < t.beats(); ++beat)
+            {
+                const bool alternative = ((t.alternativeBeats >> beat) & 1u) != 0;
                 for (int cell = 0; cell < t.cells (beat); ++cell)
                 {
                     const int start = t.cellStartTick (beat, cell);
-                    const int pos = start % (timing::ticksPerQuarter / 4) == 0 ? start / (timing::ticksPerQuarter / 4) : -1;
                     const int at = t.slot (beat, cell);
                     kit::PatternStep value;
-                    if (pos >= 0 && pos < 16 && slot >= 0 && def != nullptr)
-                        value = toStep (c, slot, pos, styleHit (*def, values, c, slot, pos), t.cellTicks (beat));
-                    open = open || ! (p.cell (lane, bar, at).locked || (g.laneLocks & (1u << lane)) != 0);
+                    if (slot >= 0 && def != nullptr)
+                    {
+                        if (alternative)
+                        {
+                            // Tuplet cell k of the beat at the 16th level.
+                            const int within = start - beat * beatTicks, unit = beatTicks / n16;
+                            if (within % unit == 0)
+                                value = toStep (c, slot, tupletKey (beat, within / unit),
+                                                styleHit (*def, values, c, slot, within / unit, beat), t.cellTicks (beat));
+                        }
+                        else
+                        {
+                            const int pos = start % (timing::ticksPerQuarter / 4) == 0 ? start / (timing::ticksPerQuarter / 4) : -1;
+                            if (pos >= 0 && pos < positions)
+                                value = toStep (c, slot, pos, styleHit (*def, values, c, slot, pos), t.cellTicks (beat));
+                        }
+                    }
+                    open = open || ! (p.cell (lane, bar, at).locked || laneLocked);
                     put (g, p, lane, bar, at, value);
                 }
+            }
         }
     }
     return open;
@@ -253,34 +362,43 @@ juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Defin
     if (definition == nullptr)
         return { "no style" };
     auto p = std::make_unique<StoredPattern>();
-    for (std::uint32_t seed = 1; seed <= 6; ++seed)
-        for (float density : { 0.0f, 0.5f, 1.0f })
-            for (float complexity : { 0.0f, 0.5f, 1.0f })
-            {
-                GeneratorSettings g;
-                g.custom = definition;
-                g.seed = seed;
-                g.density = density;
-                g.complexity = complexity;
-                g.fills = 0.0f;
-                *p = {};   // 4/4, 16ths, 4 bars, empty
-                generatePattern (g, *p);
-                for (const auto& a : definition->assertions)
+    static constexpr timing::TimeSignature signatures[style::meterCount] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 12, 8 } };
+    for (int m = 0; m < style::meterCount; ++m)
+    {
+        if ((definition->meters & (1u << m)) == 0)
+            continue;
+        const auto meter = static_cast<style::Meter> (m);
+        for (std::uint32_t seed = 1; seed <= 6; ++seed)
+            for (float density : { 0.0f, 0.5f, 1.0f })
+                for (float complexity : { 0.0f, 0.5f, 1.0f })
                 {
-                    if (a.meter != style::Meter::m4_4)
-                        continue;
-                    for (int bar = 0; bar < p->bars; ++bar)
-                        for (int pos = 0; pos < 16; ++pos)
-                        {
-                            const bool on = p->cell (a.part, bar, slotOf16th (p->timing (a.part, bar), pos)).on;
-                            const bool wrong = ((a.always & (1u << pos)) != 0 && ! on) || ((a.never & (1u << pos)) != 0 && on);
-                            if (wrong && out.size() < maxViolations)
-                                out.add (juce::String (style::partKey (a.part)) + (on ? " plays" : " is missing") + " at " + juce::String (pos + 1)
-                                         + " (bar " + juce::String (bar + 1) + ", seed " + juce::String (seed) + ", density "
-                                         + juce::String (density) + ", complexity " + juce::String (complexity) + ")");
-                        }
+                    GeneratorSettings g;
+                    g.custom = definition;
+                    g.seed = seed;
+                    g.density = density;
+                    g.complexity = complexity;
+                    g.fills = 0.0f;
+                    *p = {};   // 16ths, 4 bars, empty
+                    p->signature = signatures[m];
+                    generatePattern (g, *p);
+                    for (const auto& a : definition->assertions)
+                    {
+                        if (a.meter != meter)
+                            continue;
+                        for (int bar = 0; bar < p->bars; ++bar)
+                            for (int pos = 0; pos < style::gridPositions (meter); ++pos)
+                            {
+                                const int at = slotOf16th (p->timing (a.part, bar), pos);
+                                const bool on = at >= 0 && p->cell (a.part, bar, at).on;
+                                const bool wrong = ((a.always & (1u << pos)) != 0 && ! on) || ((a.never & (1u << pos)) != 0 && on);
+                                if (wrong && out.size() < maxViolations)
+                                    out.add (juce::String (style::partKey (a.part)) + (on ? " plays" : " is missing") + " at " + juce::String (pos + 1)
+                                             + " in " + style::meterKey (meter) + " (bar " + juce::String (bar + 1) + ", seed " + juce::String (seed)
+                                             + ", density " + juce::String (density) + ", complexity " + juce::String (complexity) + ")");
+                            }
+                    }
                 }
-            }
+    }
     return out;
 }
 
@@ -289,9 +407,26 @@ bool styleAvailable (Style style)
     return style::available (static_cast<int> (style));
 }
 
+juce::String generatorRefusal (const GeneratorSettings& g, const StoredPattern& pattern)
+{
+    const auto* def = definitionOf (g);
+    if (def == nullptr)
+        return "the style is not available";
+    if (! generatorGrid (*def, pattern))
+    {
+        juce::StringArray meters;
+        for (int m = 0; m < style::meterCount; ++m)
+            if ((def->meters >> m) & 1u)
+                meters.add (style::meterKey (static_cast<style::Meter> (m)));
+        return "the style is written for " + meters.joinIntoString (", ") + ", not "
+             + juce::String (pattern.signature.numerator) + "/" + juce::String (pattern.signature.denominator);
+    }
+    return {};
+}
+
 bool generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr || ! generatorGrid (pattern))
+    if (definitionOf (g) == nullptr || ! generatorGrid (*definitionOf (g), pattern))
         return false;   // before anything changes
     // The probability seed follows the generator's only when the generator
     // wrote something: a fully locked pattern stays exactly as it is.
@@ -304,7 +439,7 @@ bool generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const 
 
 bool mutateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr || ! generatorGrid (pattern))
+    if (definitionOf (g) == nullptr || ! generatorGrid (*definitionOf (g), pattern))
         return false;
     generateLanes (g, laneMask & 0xffffu, pattern, roles);
     return true;
@@ -314,16 +449,18 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
 {
     const auto laneOf = [&] (int slot) { return static_cast<int> (roles.laneOfSlot[static_cast<std::size_t> (slot)]); };
     const auto* def = definitionOf (g);
-    if (def == nullptr || ! generatorGrid (p))
+    if (def == nullptr || ! generatorGrid (*def, p))
         return false;
+    const auto meter = styleMeter (p.signature).value_or (style::Meter::m4_4);
+    const int positions = style::gridPositions (meter);
     if (bar < 0 || bar >= p.bars)
         bar = p.bars - 1;
-    // The fill takes the last 2..8 sixteenths of the bar.
+    // The fill takes the last 2..8 sixteenths of the bar (straight cells).
     const int length = std::clamp (static_cast<int> (std::lround (2.0 + 6.0 * g.fills)), 2, 8);
-    const Context c { g, bar, p.bars };
-    for (int pos = 16 - length; pos < 16; ++pos)
+    const Context c { g, bar, p.bars, meter };
+    for (int pos = positions - length; pos < positions; ++pos)
     {
-        const int index = pos - (16 - length);
+        const int index = pos - (positions - length);
         const int lane = fillLane (*def, index + static_cast<int> (c.r (0, pos, 70) * 2.0));
         // Thin out the groove under the fill, then write the roll rising to the bar line.
         for (int other : { static_cast<int> (closedHat), static_cast<int> (openHat), static_cast<int> (perc1), static_cast<int> (perc2) })
@@ -342,14 +479,18 @@ bool generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const 
             continue;
         const auto t = p.timing (laneOf (lane), bar);
         if (const int at = slotOf16th (t, pos); at >= 0)   // a 16th the lane's grid has
-            put (g, p, laneOf (lane), bar, at, toStep (c, lane, pos, h, t.cellTicks (pos / 4)));
+        {
+            int beatOfPos = 0;
+            slotAtTick (t, pos * timing::ticksPerQuarter / 4, &beatOfPos);
+            put (g, p, laneOf (lane), bar, at, toStep (c, lane, pos, h, t.cellTicks (beatOfPos)));
+        }
     }
     return true;
 }
 
 bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, StoredPattern& b, const RoleMap& roles)
 {
-    if (definitionOf (g) == nullptr || ! generatorGrid (a))
+    if (definitionOf (g) == nullptr || ! generatorGrid (*definitionOf (g), a))
         return false;   // before B is copied from A
     // B keeps its own locked cells: build from A, then put B's locked cells back.
     auto locked = std::make_unique<StoredPattern> (b);
@@ -397,7 +538,7 @@ bool generateVariation (const GeneratorSettings& g, const StoredPattern& a, Stor
 bool generateSong (const GeneratorSettings& g, PatternStore::Everything& all, const RoleMap& roles)
 {
     if (definitionOf (g) == nullptr
-        || std::any_of (all.slots.begin(), all.slots.end(), [] (const StoredPattern& p) { return ! generatorGrid (p); }))
+        || std::any_of (all.slots.begin(), all.slots.end(), [&] (const StoredPattern& p) { return ! generatorGrid (*definitionOf (g), p); }))
         return false;   // before any slot, variation or song bar changes
     const int kickLane = roles.laneOfSlot[static_cast<std::size_t> (kick)];
     // Slots: 1 intro (sparse), 2 main, 3 lift (denser), 4 break (no kick), 5 peak.

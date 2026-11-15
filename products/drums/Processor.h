@@ -140,6 +140,10 @@ public:
     // when the style is not available (then not even the seed changes).
     enum class Generate { pattern, song, mutate, fill, variation };
     bool generate (Generate what, std::uint32_t laneMask = 0xffffu, bool newSeed = true, int bar = -1);
+    // Why `generate (what)` would change nothing for the current style and
+    // patterns ("" when it would run): an unavailable style, or a meter the
+    // style does not define (PR 137 §10.6). Message thread.
+    juce::String generateRefusal (Generate what) const;
     int currentSlot() const;
 
     //== pad roles (issue 132, DROL), message thread
