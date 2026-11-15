@@ -790,6 +790,7 @@ private:
         juce::String label;
         int factory = -1;    // factory kit index, or -1
         juce::File file;     // user preset
+        int style = -1;      // factory style song (PR 137 §5), or -1
     };
     PresetType type() const { return static_cast<PresetType> (juce::jlimit (0, 3, type_->getSelectedItemIndex())); }
     void rescan()
@@ -797,11 +798,22 @@ private:
         items_.clear();
         const auto t = type();
         // Factory content: kits under Kit, each kit's patterns and song under Song.
-        if (t == PresetType::kit || t == PresetType::song)
+        if (t == PresetType::kit)
             for (int kit = 0; kit < factoryKitCount; ++kit)
                 items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name
-                                        + (t == PresetType::song ? " patterns and song" : ""),
+                                        + (factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples ? "  (NOT RELEASE-READY)" : ""),
                                     kit, {} });
+        if (t == PresetType::song)
+        {
+            for (int kit = 0; kit < originalFactoryKitCount; ++kit)
+                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name + " patterns and song", kit, {} });
+            for (int style = 0; style < factoryStyleCount; ++style)
+                items_.push_back ({ juce::String ("Factory song: ") + styleName (static_cast<Style> (style)) + "  (loads kit "
+                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")"
+                                        + (factoryKitRelease (factoryKitOfStyle (style)) == FactoryRelease::needsLicensedSamples ? "  NOT RELEASE-READY"
+                                                                                                                                   : ""),
+                                    -1, {}, style });
+        }
         for (const auto& file : processor_.presets().userPresets (t))
             items_.push_back ({ file.getFileNameWithoutExtension(), -1, file });
         list_->updateContent();
@@ -817,7 +829,9 @@ private:
         }
         const auto& item = items_[static_cast<std::size_t> (row)];
         auto& presets = processor_.presets();
-        if (item.factory >= 0)
+        if (item.style >= 0)
+            report (presets.loadFactoryStyleSong (item.style), "Loaded " + item.label);
+        else if (item.factory >= 0)
             report (type() == PresetType::kit ? presets.loadFactoryKit (item.factory) : presets.loadFactoryPatterns (item.factory),
                     "Loaded " + item.label);
         else

@@ -70,6 +70,27 @@ const char* modelName (Model m)
     return n[static_cast<int> (m)];
 }
 bool core (Model m) { return m == Model::kick || m == Model::snare || m == Model::clap; }
+// The model a pad role is played by (roles v2).
+Model modelOfRole (PadRole r)
+{
+    switch (r)
+    {
+        case PadRole::kick: return Model::kick;
+        case PadRole::snare: return Model::snare;
+        case PadRole::clap: return Model::clap;
+        case PadRole::closedHat:
+        case PadRole::openHat: return Model::hat;
+        case PadRole::tom1:
+        case PadRole::tom2:
+        case PadRole::tom3: return Model::tom;
+        case PadRole::rim: return Model::rim;
+        case PadRole::crash:
+        case PadRole::ride: return Model::cymbal;
+        case PadRole::none:
+        case PadRole::percussion: break;
+    }
+    return Model::perc;
+}
 
 bool hit (const StoredPattern& p, int lane, int bar, int pos)
 {
@@ -324,6 +345,9 @@ void testKitRoles()
     for (int k = 0; k < factoryKitCount; ++k)
     {
         const auto kitSettings = factoryKit (k);
+        // The generator plays on the kit's roles (the genre kits store them, PR 137 §5).
+        const auto roles = factoryKitRoles (k);
+        const auto map = RoleMap::from (roles);
         for (int style = 0; style < styleCount; ++style)
         {
             std::array<long, kit::padCount> hits {};
@@ -339,7 +363,7 @@ void testKitRoles()
                         g.syncopation = sy;
                         g.complexity = 0.6f;
                         testutil::emptyGrid (*p, 16, 4);
-                        generatePattern (g, *p);
+                        generatePattern (g, *p, map);
                         bars += p->bars;
                         for (int lane = 0; lane < kit::padCount; ++lane)
                             for (int bar = 0; bar < p->bars; ++bar)
@@ -351,8 +375,13 @@ void testKitRoles()
                 if (hits[static_cast<std::size_t> (lane)] == 0)
                     continue;
                 const auto model = kitSettings.pads[static_cast<std::size_t> (lane)].model;
-                const auto role = roleModel[lane];
-                const bool coreMismatch = model != role && (core (model) || core (role));
+                const auto role = roles.explicitRoles ? modelOfRole (roles.role[static_cast<std::size_t> (lane)]) : roleModel[lane];
+                // A genre kit's percussion pad may be a snare layer (§2.3: Trance "snare roll layer",
+                // Metal "rim-shot layer", DnB "ghost snare"): there only a core role on another model,
+                // or a kick model on another role, is a mismatch.
+                const bool percussionLayer = roles.explicitRoles && roles.role[static_cast<std::size_t> (lane)] == PadRole::percussion
+                                          && model == Model::snare;
+                const bool coreMismatch = model != role && (core (model) || core (role)) && ! percussionLayer;
                 rows += model != role ? 1 : 0;
                 if (model != role)
                     report << "| " << factoryKitInfo (k).name << " | " << styleName (static_cast<Style> (style)) << " | " << lane + 1 << " | "

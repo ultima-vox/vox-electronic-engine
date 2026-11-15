@@ -785,7 +785,8 @@ void testProposal()
         check (proposal.role[3] == PadRole::closedHat && proposal.role[4] == PadRole::openHat && ! proposal.needsChoice[3]
                    && ! proposal.needsChoice[4],
                "R18: factory hats on notes 42/46 are closed/open without a question");
-        check (stateOf (*p) == before && p->padRoles() == PadRoles {}, "R18: the preview writes nothing (Cancel = no-op)");
+        // The kit's own roles stay (none for an original kit, its DROL for a genre kit).
+        check (stateOf (*p) == before && p->padRoles() == factoryKitRoles (k), "R18: the preview writes nothing (Cancel = no-op)");
     }
     // R19: hats by note, then decay; ties and samples ask.
     auto kitWith = [] (std::initializer_list<std::tuple<int, int, float, kit::Source>> hats) {

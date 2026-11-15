@@ -362,7 +362,9 @@ DrumsPanel::DrumsPanel (DrumsProcessor& processor) : processor_ (processor)
     addAndMakeVisible (*kitSelectLabel_);
     kitSelect_ = std::make_unique<vox::ui::VoxComboBox>();
     for (int kit = 0; kit < factoryKitCount; ++kit)
-        kitSelect_->addItem (juce::String (factoryKitInfo (kit).name) + "  (" + factoryKitInfo (kit).family + ")", kit + 1);
+        kitSelect_->addItem (juce::String (factoryKitInfo (kit).name) + "  (" + factoryKitInfo (kit).family + ")"
+                                 + (factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples ? "  NOT RELEASE-READY" : ""),
+                             kit + 1);
     kitSelect_->setTextWhenNothingSelected ("Choose...");
     kitSelect_->setTooltip ("Loads the kit's pads, mix and returns. User kits and Undo Load are on the PRESETS page.");
     kitSelect_->onChange = [this] {
