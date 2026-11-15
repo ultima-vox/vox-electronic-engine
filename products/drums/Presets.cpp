@@ -290,6 +290,16 @@ bool Presets::canUndoLoad() const noexcept
 
 juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target, std::optional<PresetType> expected)
 {
+    std::vector<preset::StateDocument> one;
+    one.push_back (std::move (preset));
+    return applyDocuments (std::move (one), target, expected);
+}
+
+// Merges one preset into `doc` (the state being built). Nothing is applied
+// here; a failure leaves the live state as it was.
+juce::Result Presets::mergeDocument (preset::StateDocument& doc, const preset::StateDocument& preset, int target, std::optional<PresetType> expected,
+                                     juce::String& notice, std::optional<RoleOffer>& offer)
+{
     PresetInfo info;
     const auto* infoSection = preset.find (presetTypeSectionTag);
     if (infoSection == nullptr || ! decodeInfo (*infoSection, info))
@@ -300,13 +310,7 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
     if (! complete (preset, info.type))
         return juce::Result::fail ("the preset is incomplete");
 
-    juce::MemoryBlock before;
-    processor_.getStateInformation (before);
-    preset::StateDocument doc;
     juce::String error;
-    if (! decodeBlob (before.getData(), before.getSize(), processor_, doc, error))
-        return juce::Result::fail ("cannot read the current state: " + error);
-
     const auto require = [&] (preset::Tag tag) -> const preset::Section* { return preset.find (tag); };
     // Pad roles: the preset's (strict) and the project's current ones.
     PadRoles incomingRoles, currentRoles;
@@ -316,8 +320,6 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
     if (const auto* s = doc.find (rolesSectionTag))
         if (! decodeRoles (*s, currentRoles, error))
             return juce::Result::fail (error);
-    juce::String notice;
-    std::optional<RoleOffer> offer;
     if (info.type == PresetType::kit || info.type == PresetType::pad)
     {
         const auto* pads = require (padSectionTag);
@@ -427,6 +429,26 @@ juce::Result Presets::applyDocument (preset::StateDocument&& preset, int target,
         }
     }
 
+    return juce::Result::ok();
+}
+
+juce::Result Presets::applyDocuments (std::vector<preset::StateDocument>&& presets, int target, std::optional<PresetType> expected)
+{
+    juce::MemoryBlock before;
+    processor_.getStateInformation (before);
+    preset::StateDocument doc;
+    juce::String error;
+    if (! decodeBlob (before.getData(), before.getSize(), processor_, doc, error))
+        return juce::Result::fail ("cannot read the current state: " + error);
+
+    juce::String notice;
+    std::optional<RoleOffer> offer;
+    // Every preset is merged into one new state, applied once: all or nothing,
+    // and one Undo Load.
+    for (const auto& preset : presets)
+        if (const auto merged = mergeDocument (doc, preset, target, expected, notice, offer); merged.failed())
+            return merged;
+
     const auto next = encodeBlob (doc);
     if (next.getSize() == 0)
         return juce::Result::fail ("the state is too large");
@@ -503,10 +525,8 @@ juce::Result Presets::undoLoad()
     return juce::Result::ok();
 }
 
-juce::Result Presets::loadFactoryKit (int kit)
+preset::StateDocument Presets::factoryKitDocument (int kit) const
 {
-    if (kit < 0 || kit >= factoryKitCount)
-        return juce::Result::fail ("no such factory kit");
     preset::StateDocument doc;
     doc.product = processor_.product().stateTag;
     doc.schema = processor_.product().stateSchema;
@@ -515,7 +535,14 @@ juce::Result Presets::loadFactoryKit (int kit)
     doc.sections.push_back (encodeParameterValues (factoryKitParameters (kit)));
     if (const auto roles = factoryKitRoles (kit); roles.explicitRoles)
         doc.sections.push_back (encodeRoles (roles));
-    return applyDocument (std::move (doc), -1);
+    return doc;
+}
+
+juce::Result Presets::loadFactoryKit (int kit)
+{
+    if (kit < 0 || kit >= factoryKitCount)
+        return juce::Result::fail ("no such factory kit");
+    return applyDocument (factoryKitDocument (kit), -1);
 }
 
 juce::Result Presets::loadFactoryStyleSong (int style)
@@ -531,7 +558,11 @@ juce::Result Presets::loadFactoryStyleSong (int style)
     doc.sections.push_back (PatternStore::encode (all->slots, all->alternates));
     doc.sections.push_back (encodeSong (all->song));
     doc.sections.push_back (encodeGenerator (factoryStyleGenerator (style)));
-    return applyDocument (std::move (doc), -1);
+    // The paired kit first, then the song: one state, one Undo Load.
+    std::vector<preset::StateDocument> bundle;
+    bundle.push_back (factoryKitDocument (factoryKitOfStyle (style)));
+    bundle.push_back (std::move (doc));
+    return applyDocuments (std::move (bundle));
 }
 
 juce::Result Presets::loadFactoryPatterns (int kit)

@@ -808,8 +808,10 @@ private:
             for (int kit = 0; kit < originalFactoryKitCount; ++kit)
                 items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name + " patterns and song", kit, {} });
             for (int style = 0; style < factoryStyleCount; ++style)
-                items_.push_back ({ juce::String ("Factory song: ") + styleName (static_cast<Style> (style)) + "  (kit "
-                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")",
+                items_.push_back ({ juce::String ("Factory song: ") + styleName (static_cast<Style> (style)) + "  (loads kit "
+                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")"
+                                        + (factoryKitRelease (factoryKitOfStyle (style)) == FactoryRelease::needsLicensedSamples ? "  NOT RELEASE-READY"
+                                                                                                                                   : ""),
                                     -1, {}, style });
         }
         for (const auto& file : processor_.presets().userPresets (t))
