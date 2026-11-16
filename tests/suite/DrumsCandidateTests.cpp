@@ -2972,8 +2972,8 @@ void testListeningFiles()
     constexpr double rate = 48000.0;
     juce::String table = "# VOX Drums listening pack (PR 137 section 8)\n\n"
                          "Per style: a WAV preview rendered offline through the style's factory kit (synth models; the main phrase of its "
-                         "Factory Song, bars 9-16, then 1 s of tails; 48 kHz 16-bit stereo, every file at the same fixed -6 dB so none clips; "
-                         "the plugin's own peak is listed), and three MIDI files. For the MIDI files load the named factory kit in "
+                         "Factory Song, bars 9-16, then 1 s of tails; 48 kHz 16-bit stereo; the plugin's unity output with no gain adjustment, "
+                         "its measured peak listed; above -1 dBFS fails the gate), and three MIDI files. For the MIDI files load the named factory kit in "
                          "the VOX Drums VST3 (or the Factory Song, which loads it), put the file on the VOX Drums track and play at the given "
                          "BPM; MIDI alone is not a listening verdict. Write yes / no and why. Rock and Metal use synth sketches and are NOT "
                          "RELEASE-READY until licensed acoustic samples exist. This is not the final DAW acceptance.\n\n"
@@ -3027,13 +3027,11 @@ void testListeningFiles()
                     peak = std::max (peak, audio.getMagnitude (ch, 0, audio.getNumSamples()));
                 if (peak < 1.0e-3f)
                     problems.add (juce::String (info->key) + ": the WAV preview is silent");
-                // A fixed -6 dB for every preview (the same for all styles), so no
-                // 16-bit file clips; the plugin's own peak is in the README.
-                constexpr float headroom = 0.5f;
-                audio.applyGain (headroom);
-                if (peak * headroom >= 1.0f)
-                    problems.add (juce::String (info->key) + ": the preview would clip even after -6 dB (plugin peak "
-                                  + juce::String (juce::Decibels::gainToDecibels (peak), 1) + " dBFS)");
+                // The plugin's own unity output, no gain adjustment (TL P1 review on
+                // #148); above -1 dBFS fails the gate.
+                if (juce::Decibels::gainToDecibels (peak) > -1.0f)
+                    problems.add (juce::String (info->key) + ": the preview peaks at " + juce::String (juce::Decibels::gainToDecibels (peak), 2)
+                                  + " dBFS, above -1 dBFS");
                 juce::MemoryBlock wavBytes;
                 {
                     std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream> (wavBytes, false);
@@ -3046,7 +3044,7 @@ void testListeningFiles()
                 writeFile (wavName, wavBytes.getData(), wavBytes.getSize());
                 ++wavs;
                 table << "| " << ++row << " | " << info->name << " | `" << wavName << "` | 4/4 | " << juce::String (static_cast<int> (bpm)) << " | "
-                      << factoryKitInfo (kitIndex).name << " | WAV preview: Factory Song bars 9-16 through the kit, written at -6 dB; plugin peak "
+                      << factoryKitInfo (kitIndex).name << " | WAV preview: Factory Song bars 9-16 through the kit, unity output, peak "
                       << juce::String (juce::Decibels::gainToDecibels (peak), 1) << " dBFS | " << release << " | | |\n";
             }
             else

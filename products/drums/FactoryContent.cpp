@@ -31,11 +31,17 @@ struct KitTable {
     PadRow pads[kit::padCount];
 };
 
+// Kit Volume (the kit's output gain on every bus) is calibrated per kit
+// (TL P1 review on #148): with the worst-case factory content measured by
+// suite_drums_gain_staging_tests (a multi-seed stress matrix) it peaks at
+// about -2 dBFS sample peak or below (the gate is -1 dBFS) on Main and on
+// every output bus. Before calibration every kit had
+// 0.6 (tests/suite/golden/factory-content-before-gain-staging.csv).
 // Pad layout shared by every kit (the generator's lane roles): kick, snare,
 // clap, closed hat, open hat, tom, rim, cymbal, then eight percussion pads.
 const KitTable tables[originalFactoryKitCount] = {
     // Psy / Full-on: short punchy kick with a fast pitch drop, tight bright hats, dry.
-    { { "Psy Full-on", "Psy / Full-on", { Style::fullOn, Style::goa }, 145.0f }, 0.6f, 3, 0.3f, 0.6f, 0.35f, 0.6f,
+    { { "Psy Full-on", "Psy / Full-on", { Style::fullOn, Style::goa }, 145.0f }, 0.385f, 3, 0.3f, 0.6f, 0.35f, 0.6f,
       {
           { Model::kick, 36, 0, 0.9f, 0.0f, 0.3f, 0.0f, 0.55f, 20000.0f, Filter::off, 0.0f, 0.2f, -0.1f, 36.0f, 0.022f, 2.2f, 0.25f, 0.2f, 0.0f, 0.0f },
           { Model::snare, 38, 0, 0.6f, 2.0f, 0.16f, 0.0f, 0.7f, 20000.0f, Filter::off, 0.0f, 0.1f, 0.0f, 24.0f, 0.035f, 1.6f, 0.3f, 0.25f, 0.0f, 0.15f },
@@ -55,7 +61,7 @@ const KitTable tables[originalFactoryKitCount] = {
           { Model::cymbal, 57, 0, 0.35f, 5.0f, 0.6f, 0.0f, 0.4f, 20000.0f, Filter::off, 0.0f, 0.0f, 0.0f, 24.0f, 0.035f, 1.6f, 0.3f, 0.25f, 0.0f, 0.35f },
       } },
     // House / Techno: round longer kick, noisy clap with room, shuffling hats, rumble toms.
-    { { "House Techno", "House / Techno", { Style::house, Style::techno }, 126.0f }, 0.6f, 2, 0.35f, 0.45f, 0.5f, 0.5f,
+    { { "House Techno", "House / Techno", { Style::house, Style::techno }, 126.0f }, 0.407f, 2, 0.35f, 0.45f, 0.5f, 0.5f,
       {
           { Model::kick, 36, 0, 0.9f, -2.0f, 0.45f, 0.0f, 0.4f, 20000.0f, Filter::off, 0.0f, 0.0f, 0.2f, 20.0f, 0.05f, 1.4f, 0.5f, 0.4f, 0.0f, 0.0f },
           { Model::snare, 38, 0, 0.55f, -1.0f, 0.2f, 0.0f, 0.5f, 20000.0f, Filter::off, 0.0f, 0.0f, 0.0f, 24.0f, 0.035f, 1.6f, 0.3f, 0.25f, 0.0f, 0.25f },
@@ -75,7 +81,7 @@ const KitTable tables[originalFactoryKitCount] = {
           { Model::cymbal, 57, 0, 0.35f, 2.0f, 0.9f, 0.0f, 0.7f, 20000.0f, Filter::off, 0.0f, 0.0f, 0.0f, 24.0f, 0.035f, 1.6f, 0.3f, 0.25f, 0.0f, 0.4f },
       } },
     // Hip-hop / Breaks: long sub kick, fat low snare, crisp rolling hats, wide room.
-    { { "Hip-hop Breaks", "Hip-hop / Breaks", { Style::trap, Style::breaks }, 92.0f }, 0.6f, 4, 0.25f, 0.4f, 0.6f, 0.45f,
+    { { "Hip-hop Breaks", "Hip-hop / Breaks", { Style::trap, Style::breaks }, 92.0f }, 0.327f, 4, 0.25f, 0.4f, 0.6f, 0.45f,
       {
           { Model::kick, 36, 0, 0.9f, -5.0f, 0.9f, 0.0f, 0.3f, 20000.0f, Filter::off, 0.0f, 0.0f, 0.4f, 16.0f, 0.07f, 3.0f, 0.8f, 0.9f, 0.0f, 0.0f },
           { Model::snare, 38, 0, 0.7f, -4.0f, 0.3f, 0.0f, 0.45f, 20000.0f, Filter::off, 0.0f, 0.3f, 0.1f, 24.0f, 0.035f, 2.0f, 0.3f, 0.25f, 0.0f, 0.2f },
@@ -153,7 +159,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
 {
     static const std::array<GenreKit, factoryKitCount - originalFactoryKitCount> kits {
         // Trance: punchy kick with a long tail, bright clap and snare, airy hats, 3 toms, crash, ride.
-        GenreKit { { { "Trance", "Trance", { styleId (7), styleId (8) }, 138.0f }, 0.6f, 3, 0.35f, 0.55f, 0.55f, 0.5f,
+        GenreKit { { { "Trance", "Trance", { styleId (7), styleId (8) }, 138.0f }, 0.337f, 3, 0.35f, 0.55f, 0.55f, 0.5f,
                      { body (pad (Model::kick, 36, 0.9f, -1.0f, 0.4f, 0.0f, 0.5f), 0.1f, 0.0f, 30.0f, 0.03f, 2.0f, 0.4f, 0.3f),
                        pad (Model::snare, 38, 0.6f, 1.0f, 0.2f, 0.0f, 0.6f, 0.0f, 0.25f),
                        pad (Model::clap, 39, 0.65f, 0.0f, 0.3f, 0.0f, 0.55f, 0.0f, 0.35f),
@@ -172,7 +178,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        pad (Model::snare, 40, 0.45f, 4.0f, 0.12f, 0.0f, 0.75f, 0.0f, 0.2f) } },
                    tranceRoles, FactoryRelease::listeningPending },
         // Hard Trance: hard driven kick, tight snare and clap, hissy 16th hats.
-        GenreKit { { { "Hard Trance", "Trance / Hard", { styleId (21), styleId (21) }, 150.0f }, 0.6f, 2, 0.3f, 0.6f, 0.45f, 0.6f,
+        GenreKit { { { "Hard Trance", "Trance / Hard", { styleId (21), styleId (21) }, 150.0f }, 0.402f, 2, 0.3f, 0.6f, 0.45f, 0.6f,
                      { body (pad (Model::kick, 36, 0.92f, 0.0f, 0.35f, 0.0f, 0.65f), 0.2f, 0.0f, 40.0f, 0.025f, 3.0f, 0.35f, 0.25f),
                        pad (Model::snare, 38, 0.6f, 2.0f, 0.18f, 0.0f, 0.7f, 0.0f, 0.2f),
                        pad (Model::clap, 39, 0.65f, 1.0f, 0.25f, 0.0f, 0.65f, 0.0f, 0.3f),
@@ -191,7 +197,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        pad (Model::snare, 40, 0.45f, 5.0f, 0.1f, 0.0f, 0.8f, 0.0f, 0.15f) } },
                    tranceRoles, FactoryRelease::listeningPending },
         // Dark Psy: short dry kick, metallic hats, glitchy percussion.
-        GenreKit { { { "Dark Psy", "Psy / Dark", { styleId (9), styleId (9) }, 148.0f }, 0.6f, 3, 0.4f, 0.4f, 0.4f, 0.65f,
+        GenreKit { { { "Dark Psy", "Psy / Dark", { styleId (9), styleId (9) }, 148.0f }, 0.562f, 3, 0.4f, 0.4f, 0.4f, 0.65f,
                      { body (pad (Model::kick, 36, 0.9f, 1.0f, 0.22f, 0.0f, 0.6f), 0.2f, -0.1f, 38.0f, 0.018f, 2.4f, 0.2f, 0.15f),
                        pad (Model::snare, 38, 0.55f, 3.0f, 0.12f, 0.0f, 0.75f, 0.0f, 0.2f),
                        pad (Model::clap, 39, 0.55f, 2.0f, 0.18f, -0.1f, 0.7f, 0.1f, 0.25f),
@@ -210,7 +216,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        pad (Model::cymbal, 57, 0.3f, 8.0f, 0.4f, -0.6f, 0.9f, 0.0f, 0.3f) } },
                    electronicRoles, FactoryRelease::listeningPending },
         // Tech House: round kick, clap and snare, shuffling hats, bongo / conga / shaker percussion.
-        GenreKit { { { "Tech House", "House / Tech", { styleId (15), styleId (15) }, 125.0f }, 0.6f, 2, 0.35f, 0.45f, 0.45f, 0.55f,
+        GenreKit { { { "Tech House", "House / Tech", { styleId (15), styleId (15) }, 125.0f }, 0.386f, 2, 0.35f, 0.45f, 0.45f, 0.55f,
                      { body (pad (Model::kick, 36, 0.9f, -2.0f, 0.42f, 0.0f, 0.4f), 0.0f, 0.2f, 22.0f, 0.045f, 1.6f, 0.5f, 0.35f),
                        pad (Model::snare, 38, 0.5f, 0.0f, 0.18f, 0.0f, 0.5f, 0.0f, 0.25f),
                        pad (Model::clap, 39, 0.65f, -1.0f, 0.28f, 0.0f, 0.45f, 0.0f, 0.3f),
@@ -229,7 +235,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        pad (Model::cymbal, 57, 0.3f, 3.0f, 0.8f, 0.0f, 0.6f, 0.0f, 0.4f) } },
                    electronicRoles, FactoryRelease::listeningPending },
         // Melodic Techno: deep kick, soft clap, two tuned toms, tonal percussion with space.
-        GenreKit { { { "Melodic Techno", "Techno / Melodic", { styleId (18), styleId (18) }, 122.0f }, 0.6f, 4, 0.45f, 0.4f, 0.65f, 0.45f,
+        GenreKit { { { "Melodic Techno", "Techno / Melodic", { styleId (18), styleId (18) }, 122.0f }, 0.375f, 4, 0.45f, 0.4f, 0.65f, 0.45f,
                      { body (pad (Model::kick, 36, 0.9f, -3.0f, 0.5f, 0.0f, 0.35f), 0.0f, 0.3f, 18.0f, 0.06f, 1.5f, 0.6f, 0.45f),
                        pad (Model::snare, 38, 0.5f, -2.0f, 0.22f, 0.0f, 0.4f, 0.0f, 0.35f),
                        pad (Model::clap, 39, 0.55f, -2.0f, 0.35f, 0.0f, 0.35f, 0.1f, 0.45f),
@@ -248,7 +254,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        pad (Model::cymbal, 56, 0.28f, 2.0f, 1.2f, 0.0f, 0.3f, 0.0f, 0.5f) } },
                    melodicTechnoRoles, FactoryRelease::listeningPending },
         // DnB: punchy kick, cracking snare, ghost snare, fast hats, ride, crash.
-        GenreKit { { { "DnB", "Drum & Bass", { styleId (16), styleId (17) }, 174.0f }, 0.6f, 3, 0.3f, 0.5f, 0.5f, 0.5f,
+        GenreKit { { { "DnB", "Drum & Bass", { styleId (16), styleId (17) }, 174.0f }, 0.406f, 3, 0.3f, 0.5f, 0.5f, 0.5f,
                      { body (pad (Model::kick, 36, 0.9f, 1.0f, 0.3f, 0.0f, 0.55f), 0.25f, 0.0f, 34.0f, 0.02f, 2.0f, 0.35f, 0.2f),
                        body (pad (Model::snare, 38, 0.7f, 4.0f, 0.22f, 0.0f, 0.75f, 0.0f, 0.25f), 0.3f, 0.0f, 28.0f, 0.03f, 2.0f, 0.3f, 0.3f),
                        pad (Model::clap, 39, 0.55f, 1.0f, 0.25f, 0.0f, 0.6f, 0.0f, 0.3f),
@@ -267,7 +273,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        pad (Model::cymbal, 56, 0.28f, 6.0f, 0.5f, 0.0f, 0.8f, 0.0f, 0.4f) } },
                    dnbRoles, FactoryRelease::listeningPending },
         // Rock (acoustic layout from the synth models; NOT RELEASE-READY without licensed samples).
-        GenreKit { { { "Rock (synth sketch)", "Rock", { styleId (11), styleId (11) }, 125.0f }, 0.6f, 3, 0.25f, 0.4f, 0.55f, 0.45f,
+        GenreKit { { { "Rock (synth sketch)", "Rock", { styleId (11), styleId (11) }, 125.0f }, 0.328f, 3, 0.25f, 0.4f, 0.55f, 0.45f,
                      { body (pad (Model::kick, 36, 0.9f, -1.0f, 0.35f, 0.0f, 0.4f), 0.3f, 0.1f, 14.0f, 0.04f, 1.4f, 0.4f, 0.3f),
                        body (pad (Model::snare, 38, 0.7f, 0.0f, 0.28f, 0.0f, 0.5f, 0.0f, 0.3f), 0.2f, 0.1f, 18.0f, 0.04f, 1.6f, 0.3f, 0.35f),
                        pad (Model::rim, 37, 0.5f, 0.0f, 0.08f, 0.1f, 0.4f, 0.0f, 0.2f),
@@ -286,7 +292,7 @@ const std::array<GenreKit, factoryKitCount - originalFactoryKitCount>& genreKits
                        filtered (pad (Model::hat, 54, 0.35f, 9.0f, 0.12f, -0.5f, 0.85f), Filter::hp24, 20000.0f, 0.0f) } },
                    rockRoles, FactoryRelease::needsLicensedSamples },
         // Metal (acoustic layout from the synth models; NOT RELEASE-READY without licensed samples).
-        GenreKit { { { "Metal (synth sketch)", "Metal", { styleId (12), styleId (13) }, 160.0f }, 0.6f, 3, 0.2f, 0.45f, 0.5f, 0.5f,
+        GenreKit { { { "Metal (synth sketch)", "Metal", { styleId (12), styleId (13) }, 160.0f }, 0.208f, 3, 0.2f, 0.45f, 0.5f, 0.5f,
                      { body (pad (Model::kick, 36, 0.9f, 2.0f, 0.2f, 0.0f, 0.75f), 0.5f, 0.0f, 20.0f, 0.015f, 1.8f, 0.25f, 0.1f),
                        body (pad (Model::snare, 38, 0.72f, 2.0f, 0.24f, 0.0f, 0.65f, 0.0f, 0.3f), 0.3f, 0.05f, 22.0f, 0.03f, 2.0f, 0.3f, 0.3f),
                        pad (Model::rim, 37, 0.5f, 2.0f, 0.06f, 0.1f, 0.5f, 0.0f, 0.15f),

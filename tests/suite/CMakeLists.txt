@@ -120,6 +120,19 @@ endif()
 add_test(NAME suite_drums_candidate_tests
   COMMAND suite_drums_candidate_tests ${PROJECT_SOURCE_DIR}/products/drums/factory-content.csv)
 
+# Gain staging (TL P1 on #148): every factory kit with its worst-case content
+# peaks at or below -1 dBFS on every output bus at 44.1/48/96 kHz.
+add_executable(suite_drums_gain_staging_tests DrumsGainStagingTests.cpp)
+target_link_libraries(suite_drums_gain_staging_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_gain_staging_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+foreach(rate 44100 48000 96000)
+  foreach(routing main multi)
+    add_test(NAME suite_drums_gain_staging_tests_${rate}_${routing} COMMAND suite_drums_gain_staging_tests ${rate} ${routing})
+  endforeach()
+endforeach()
+add_test(NAME suite_drums_gain_staging_tests_blocks COMMAND suite_drums_gain_staging_tests blocks)
+add_test(NAME suite_drums_gain_staging_tests_matched COMMAND suite_drums_gain_staging_tests matched)
+
 # Semantic pad roles (issue 132, DROL): codec, identity parity against the
 # c7c29bb generator, role mapping, Mutate Lanes, presets, proposal.
 add_executable(suite_drums_pad_roles_tests DrumsPadRolesTests.cpp)
