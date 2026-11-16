@@ -78,60 +78,80 @@ deletes or overwrites (a non-empty folder fails the test and nothing is written)
 - Rock and Metal previews use the synth sketches: **NOT RELEASE-READY**. This is not the final DAW
   acceptance; nothing here establishes that a style sounds right.
 
-## Gain staging (TL P1 review on #148)
+## Gain staging (TL P1 review on #148; coverage per the TL review on #150)
 
 **Finding:** at the old Kit Volume (0.6 in every kit) ten of the eleven factory kits peaked above
 0 dBFS on Main with their own factory content (up to +7.09 dBFS, Metal), and the Rock and Metal
 kits also on single output buses. The Main sum is linear; the excess came from the kits' output
 gain (pad level × Kit Volume against the synth models). **Fix:** each factory kit's Kit Volume (its
-output gain on every bus) is calibrated to about −2 dBFS worst case. No limiter, no DSP change, no
-routing change (Main FX only on Main; Kit Volume still applies to every bus and stays automatable).
-The initial instance kit (`legacyKit`, the host parameter defaults) is unchanged; it starts with no
-pattern.
+output gain on every bus) is calibrated so that its worst case in the stress matrix below is about
+−2 dBFS sample peak. No limiter, no DSP change, no routing change (Main FX only on Main; Kit Volume
+still applies to every bus and stays automatable). The initial instance kit (`legacyKit`, the host
+parameter defaults) is unchanged; it starts with no pattern.
 
-**Gate** (`suite_drums_gain_staging_tests`, one ctest per rate: 44.1, 48, 96 kHz): for every kit,
-the 32-bar Factory Song of every style written for it, a 64-bar stress song per style (density,
-complexity, fills, groove, syncopation, variation and Seq Accent at 1), and the original kits' own
-song; factory routing (all pads on Main) and multi-out (pad n on Out 2 + n % 8). Every bus must peak
-≤ −1 dBFS and every sample be finite. At 48 kHz it also checks **matched gain**: each calibrated
-kit's output equals the legacy output (Kit Volume 0.6) times the volume ratio, sample for sample
-(max deviation ≈ 1e-7 of peak), so the timbre is unchanged.
+**What is guaranteed, exactly:** the factory kits, at their stored Kit Volume and pad levels, with
+the factory routing (all pads on Main) or the multi-out routing (pad n on Out 2 + n % 8), playing
+the factory content and the stress matrix below, peak at or below **−1 dBFS sample peak** on every
+active output bus at 44.1, 48 and 96 kHz, with every sample finite. It is **not** a true-peak
+(inter-sample, oversampled) figure, which is not measured. It does **not** cover user-edited kits or
+settings: any Kit Volume or pad level can be raised past full scale. The matrix is sampled (fixed
+seeds), so the ~1 dB margin between the measured worst case (−2 dBFS) and the gate is the safety for
+seeds and settings outside it.
 
-| Kit | Kit Volume | Worst Main / worst single output bus, before | after |
+**Gate** (`suite_drums_gain_staging_tests`, 8 ctests run in parallel):
+
+- **Matrix** (`<rate> main|multi`, 44.1 / 48 / 96 kHz): per style on its factory kit, the 32-bar
+  Factory Song; stress A (density, complexity, fills, groove, syncopation, variation and Seq Accent
+  at 1) as a 64-bar song (seed 77 + id) and two 32-bar songs (seeds 1009 + 7·id, 4099 + 13·id);
+  stress B (density, complexity, fills 1; groove, syncopation, variation 0.5; humanize 0; Seq Accent
+  1) as two 32-bar songs (seeds 9973 + 3·id, 30011 + 11·id); and the original kits' own song.
+  Multi-out runs the Factory Song and the first stress A song (each bus carries at most two pads).
+- **`blocks`** (48 kHz): the stress A song of each kit rendered in blocks of 64, 333 and 512 frames
+  is **sample-identical** on Main (the transport stops at the same frame), so the block size cannot
+  change a peak; and the Factory Song looped over bars 25–32, played for 40 bars (across the loop
+  point), stays under the limit.
+- **`matched`** (48 kHz): each calibrated kit's output equals the legacy output (Kit Volume 0.6)
+  times the volume ratio, sample for sample (max deviation ≈ 1e-7 of peak): the timbre is unchanged.
+- **Report:** `VOX_GAIN_REPORT=<prefix>` writes `<prefix>-<mode>.csv` (kit, style, content, seed,
+  rate, block, routing, bus, peak); a failed write fails the test. The Windows CI writes them into
+  the suite artifact (`suite-out/gain`).
+
+| Kit | Kit Volume | Worst Main / worst single output bus (dBFS sample peak), before | after (worst case) |
 |---|---|---|---|
-| Psy Full-on | 0.600 → 0.395 (−3.63 dB) | +1.62 / −3.42 | −2.01 / −7.05 |
-| House Techno | 0.600 → 0.407 (−3.37 dB) | +1.36 / −3.75 | −2.02 / −7.12 |
-| Hip-hop Breaks | 0.600 → 0.390 (−3.74 dB) | +1.74 / −1.57 | −2.00 / −5.31 |
-| Trance | 0.600 → 0.346 (−4.78 dB) | +2.77 / −1.27 | −2.01 / −6.05 |
-| Hard Trance | 0.600 → 0.402 (−3.48 dB) | +1.47 / −0.56 | −2.01 / −4.04 |
-| Dark Psy | 0.600 → 0.564 (−0.54 dB) | −1.47 / −3.02 | −2.00 / −3.55 |
-| Tech House | 0.600 → 0.386 (−3.83 dB) | +1.83 / −2.38 | −2.00 / −6.21 |
-| Melodic Techno | 0.600 → 0.382 (−3.92 dB) | +1.90 / −1.38 | −2.02 / −5.31 |
-| DnB | 0.600 → 0.406 (−3.39 dB) | +1.39 / −0.07 | −2.00 / −3.46 |
-| Rock (synth sketch) | 0.600 → 0.328 (−5.25 dB) | +3.24 / +1.27 | −2.00 / −3.97 |
-| Metal (synth sketch) | 0.600 → 0.210 (−9.12 dB) | +7.09 / +0.99 | −2.03 / −8.13 |
+| Psy Full-on | 0.600 → 0.385 (−3.85 dB) | +1.62 / −3.42 | −2.01 / −7.25 (full-on stress B, 96 kHz) |
+| House Techno | 0.600 → 0.407 (−3.37 dB) | +1.36 / −3.75 | −2.02 / −7.70 (techno stress A 64 bars, 96 kHz) |
+| Hip-hop Breaks | 0.600 → 0.327 (−5.27 dB) | +1.74 / −1.57 | −2.01 / −6.93 (breaks stress A seed 4164, 48 kHz) |
+| Trance | 0.600 → 0.337 (−5.01 dB) | +2.77 / −1.27 | −2.02 / −6.30 (anthem-trance stress A, 96 kHz) |
+| Hard Trance | 0.600 → 0.402 (−3.48 dB) | +1.47 / −0.56 | −2.01 / −4.04 (hard-trance stress A 64 bars, 96 kHz) |
+| Dark Psy | 0.600 → 0.562 (−0.57 dB) | −1.47 / −3.02 | −2.01 / −3.60 (dark-psy stress A, 48 kHz) |
+| Tech House | 0.600 → 0.386 (−3.83 dB) | +1.83 / −2.38 | −2.00 / −5.68 (tech-house stress A 64 bars, 48 kHz) |
+| Melodic Techno | 0.600 → 0.375 (−4.08 dB) | +1.90 / −1.38 | −2.02 / −4.97 (melodic-techno stress B, 96 kHz) |
+| DnB | 0.600 → 0.406 (−3.39 dB) | +1.39 / −0.07 | −2.00 / −3.14 (melodic DnB stress A 64 bars, 96 kHz) |
+| Rock (synth sketch) | 0.600 → 0.328 (−5.25 dB) | +3.24 / +1.27 | −2.00 / −3.97 (hard-rock Factory Song, 96 kHz) |
+| Metal (synth sketch) | 0.600 → 0.208 (−9.20 dB) | +7.09 / +0.99 | −2.01 / −8.24 (nordic-metal stress B, 48 kHz) |
 
-Worst Factory Song peak per style (Main, any of the three rates), before → after, dBFS:
+"Before" is the single-seed measurement of the first calibration round; "after" is the full matrix.
+
+Worst Factory Song peak per style (Main, any rate), before → after, dBFS sample peak:
 
 | Style | Before | After | Style | Before | After |
 |---|---|---|---|---|---|
-| Full-on / Psy | +0.50 | −3.13 | Heavy Metal | +3.77 | −5.34 |
-| Goa | +1.62 | −2.01 | Symphonic Metal | +4.07 | −5.04 |
-| House | −0.79 | −4.16 | Nordic Metal | +5.94 | −3.18 |
+| Full-on / Psy | +0.50 | −3.35 | Heavy Metal | +3.77 | −5.43 |
+| Goa | +1.62 | −2.23 | Symphonic Metal | +4.07 | −5.13 |
+| House | −0.79 | −4.16 | Nordic Metal | +5.94 | −3.26 |
 | Techno | −0.20 | −3.57 | Tech House | −0.00 | −3.84 |
-| Trap | +0.10 | −3.64 | Drum & Bass | −2.48 | −5.87 |
-| Breaks | +0.50 | −3.24 | Melodic Drum & Bass | +0.23 | −3.17 |
-| Ambient | −2.69 | −6.06 | Melodic Techno | +1.90 | −2.02 |
-| Uplifting Trance | +0.39 | −4.39 | Progressive Trance | +0.73 | −4.05 |
-| Anthem Trance | +2.35 | −2.44 | Dream Trance | +1.82 | −2.97 |
-| Dark Psy | −1.55 | −2.08 | Hard Trance | +0.97 | −2.51 |
-| Melodic Trance | −0.33 | −5.11 | Symphonic Trance | +2.47 | −2.31 |
+| Trap | +0.10 | −5.17 | Drum & Bass | −2.48 | −5.87 |
+| Breaks | +0.50 | −4.77 | Melodic Drum & Bass | +0.23 | −3.94 |
+| Ambient | −2.69 | −6.06 | Melodic Techno | +1.90 | −2.18 |
+| Uplifting Trance | +0.39 | −4.62 | Progressive Trance | +0.73 | −4.28 |
+| Anthem Trance | +2.35 | −2.67 | Dream Trance | +1.82 | −3.19 |
+| Dark Psy | −1.55 | −2.11 | Hard Trance | +0.97 | −2.51 |
+| Melodic Trance | −0.33 | −5.34 | Symphonic Trance | +2.47 | −2.54 |
 | Hard Rock | +3.24 | −2.00 | | | |
 
 - **Hashes:** only the 11 kit hashes change (Kit Volume is in the kit's DPAD and DPRM); every
   pattern and song hash is unchanged. The previous manifest is kept as the comparison baseline in
   `tests/suite/golden/factory-content-before-gain-staging.csv`.
 - **Listening previews** are the plugin's unity output (no gain adjustment); above −1 dBFS fails.
-- **Not covered:** user kits and user settings (any Kit Volume or pad level can be raised past full
-  scale); loudness or tonal balance between kits (listening).
-
+- **Not covered:** user kits and user settings; true-peak headroom; loudness or tonal balance
+  between kits (listening).

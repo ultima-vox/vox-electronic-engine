@@ -72,6 +72,9 @@ jobs:
           # and listening-pack\vox-drums-listening.zip; the test fails on any write error.
           New-Item -ItemType Directory -Force -Path listening-pack | Out-Null
           $env:VOX_LISTENING_OUT = Join-Path (Resolve-Path listening-pack).Path 'vox-drums-listening'
+          # VOX Drums gain staging reports (CSV per rate/routing, blocks), in the suite artifact.
+          New-Item -ItemType Directory -Force -Path suite-out\gain | Out-Null
+          $env:VOX_GAIN_REPORT = Join-Path (Resolve-Path suite-out\gain).Path 'gain'
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

@@ -126,8 +126,12 @@ add_executable(suite_drums_gain_staging_tests DrumsGainStagingTests.cpp)
 target_link_libraries(suite_drums_gain_staging_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_gain_staging_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 foreach(rate 44100 48000 96000)
-  add_test(NAME suite_drums_gain_staging_tests_${rate} COMMAND suite_drums_gain_staging_tests ${rate})
+  foreach(routing main multi)
+    add_test(NAME suite_drums_gain_staging_tests_${rate}_${routing} COMMAND suite_drums_gain_staging_tests ${rate} ${routing})
+  endforeach()
 endforeach()
+add_test(NAME suite_drums_gain_staging_tests_blocks COMMAND suite_drums_gain_staging_tests blocks)
+add_test(NAME suite_drums_gain_staging_tests_matched COMMAND suite_drums_gain_staging_tests matched)
 
 # Semantic pad roles (issue 132, DROL): codec, identity parity against the
 # c7c29bb generator, role mapping, Mutate Lanes, presets, proposal.
