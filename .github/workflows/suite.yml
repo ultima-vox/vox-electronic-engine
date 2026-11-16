@@ -75,7 +75,12 @@ jobs:
           # VOX Drums gain staging reports (CSV per rate/routing, blocks), in the suite artifact.
           New-Item -ItemType Directory -Force -Path suite-out\gain | Out-Null
           $env:VOX_GAIN_REPORT = Join-Path (Resolve-Path suite-out\gain).Path 'gain'
-          ctest --test-dir build-suite -C Release -L suite --output-on-failure
+          # Everything but the gain-staging gates runs one test at a time (the
+          # callback timing bench measures wall time); the eight independent
+          # gain-staging renders then run in parallel.
+          ctest --test-dir build-suite -C Release -L suite -E suite_drums_gain_staging --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-suite -C Release -L suite -R suite_drums_gain_staging -j 8 --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Steinberg VST3 validator
