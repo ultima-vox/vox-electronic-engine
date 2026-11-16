@@ -1078,7 +1078,8 @@ void testRolesV2()
 // (VOX_GOLDEN_UPDATE=1 rewrites it in a reviewed commit).
 // The original Trap, pinned (TL review on #149): tests/suite/fixtures/
 // trap-pre-v2.json is trap.json of 88d0cc7 (before Trap v2), immutable; its
-// bytes and its contentHash (the pre-v2 pinned value) are fixed here. The
+// bytes (with LF line ends) and its contentHash (the pre-v2 pinned value)
+// are fixed here. The
 // legacy oracle must be exactly that definition, so a later edit of a
 // straight Trap rule cannot move the legacy baseline together with v2.
 constexpr const char* trapPreV2FileSha256 = "68b6430e4f6af1233558566ab336cad9f37a308ee0ee00c704de8c2599a386b5";
@@ -1086,9 +1087,16 @@ constexpr const char* trapPreV2ContentHash = "b31ab3ec988aba071e5bf714bab5ca2b6e
 
 std::shared_ptr<const style::Definition> pinnedOriginalTrap (const juce::File& fixture)
 {
+    juce::MemoryBlock raw;
+    fixture.loadFileAsData (raw);
+    // The pin is over the file with LF line ends: a checkout that converted it
+    // to CRLF (Windows, a reused working tree) still compares the same text.
     juce::MemoryBlock bytes;
-    fixture.loadFileAsData (bytes);
-    check (juce::SHA256 (bytes).toHexString() == trapPreV2FileSha256, "Trap v2: the pinned pre-v2 Trap snapshot is unchanged (SHA-256 of trap-pre-v2.json)");
+    for (std::size_t i = 0; i < raw.getSize(); ++i)
+        if (static_cast<char> (raw[i]) != '\r')
+            bytes.append (&raw[i], 1);
+    check (juce::SHA256 (bytes).toHexString() == trapPreV2FileSha256,
+           "Trap v2: the pinned pre-v2 Trap snapshot is unchanged (SHA-256 of trap-pre-v2.json, LF line ends)");
     auto d = std::make_shared<style::Definition>();
     const auto parsed = style::parse (bytes.toString(), *d);
     check (parsed.wasOk() && style::contentHash (*d) == trapPreV2ContentHash,
