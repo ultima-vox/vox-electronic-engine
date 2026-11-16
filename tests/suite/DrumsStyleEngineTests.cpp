@@ -20,6 +20,7 @@
 #include "GeneratorReference.h"
 #include "Presets.h"
 #include "Processor.h"
+#include "StyleLibrary.h"
 #include "StyleRegistry.h"
 
 #include <juce_cryptography/juce_cryptography.h>
@@ -1021,6 +1022,126 @@ void testMetersAndTuplets (const juce::File& fixture)
 
 } // namespace
 
+//==============================================================================
+// PR 137 §11.2 / §11.4: the user style library. Strict import, every row of
+// the collision table, the self-consistency refusal, a project that carries
+// its library style and restores with an EMPTY library, and the notice when
+// the library holds another version.
+void testStyleLibrary (const juce::File& fixture)
+{
+    using Status = StyleLibrary::ImportResult::Status;
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-styles-" + juce::Uuid().toString());
+    const StyleLibrary::Collision ask = StyleLibrary::Collision::ask;
+    StyleLibrary library (root.getChildFile ("library"));
+    const auto original = fixture.loadFileAsString();
+    st::Definition fixtureDef;
+    check (st::parse (original, fixtureDef).wasOk(), "library: the fixture parses");
+    const auto files = [&] { return library.folder().findChildFiles (juce::File::findFiles, false, "*.voxstyle").size(); };
+
+    // New style: added, stored as canonical text.
+    auto r = library.importFile (fixture, ask);
+    check (r.status == Status::added && files() == 1 && library.list().size() == 1
+               && library.list()[0].file.loadFileAsString() == st::serialize (fixtureDef),
+           "library: a new style is added as canonical .voxstyle text (" + r.message + ")");
+    // Same id, same content: nothing changes.
+    const auto before = library.list()[0].file.loadFileAsString();
+    r = library.importText (original, ask);
+    check (r.status == Status::alreadyInLibrary && files() == 1 && library.list()[0].file.loadFileAsString() == before,
+           "library: same id and content -> already in the library, nothing written");
+    // Same id, other content: a conflict until the user chooses.
+    st::Definition changed = fixtureDef;
+    changed.rules[0].velocity = 0.9f;
+    const auto changedText = st::serialize (changed);
+    r = library.importText (changedText, ask);
+    check (r.status == Status::conflict && files() == 1 && library.list()[0].file.loadFileAsString() == before,
+           "library: same id, other content -> a conflict, nothing written (" + r.message + ")");
+    // Replace: the entry changes.
+    r = library.importText (changedText, StyleLibrary::Collision::replace);
+    check (r.status == Status::replaced && files() == 1 && library.list()[0].contentHash == st::contentHash (changed),
+           "library: Replace changes the library entry");
+    // Keep both: a new id and " (2)", then " (3)".
+    r = library.importText (original, StyleLibrary::Collision::keepBoth);
+    const auto copy2 = r.definition;
+    const auto r3 = library.importText (original, StyleLibrary::Collision::keepBoth);
+    check (r.status == Status::keptBoth && copy2 != nullptr && copy2->id != fixtureDef.id && st::isCanonicalUuid (copy2->id)
+               && copy2->name == fixtureDef.name + " (2)" && st::contentHash (*copy2) == st::contentHash (fixtureDef)
+               && r3.status == Status::keptBoth && r3.definition->name == fixtureDef.name + " (3)" && files() == 3,
+           "library: Keep both gives the copy a new id and \" (2)\", then \" (3)\"");
+    // A factory id is refused.
+    r = library.importText (st::serialize (*st::factoryDefinition (0)), StyleLibrary::Collision::replace);
+    check (r.status == Status::refused && r.message == "factory styles cannot be replaced" && files() == 3,
+           "library: a factory style's id is refused, whatever the choice");
+    // Another id with the same name: allowed.
+    st::Definition sameName = fixtureDef;
+    sameName.id = "0f0f0f0f-1111-4222-8333-444455556666";
+    sameName.meta.author = "Someone else";
+    r = library.importText (st::serialize (sameName), ask);
+    int named = 0;
+    for (const auto& e : library.list())
+        named += e.definition->name == fixtureDef.name ? 1 : 0;
+    check (r.status == Status::added && named == 2, "library: another id with the same name is added (the list shows the author)");
+    // Invalid text: refused with the field path; a style that breaks its own assertions: refused.
+    const auto canonical = st::serialize (fixtureDef);
+    check (canonical.contains ("\"part\":\"kick\""), "library: the canonical text names the kick part");
+    r = library.importText (canonical.replace ("\"part\":\"kick\"", "\"part\":\"cowbell\""), ask);
+    check (r.status == Status::refused && r.message.contains ("cowbell") && files() == 4, "library: invalid text is refused, naming the field (" + r.message + ")");
+    st::Definition contradiction = fixtureDef;
+    contradiction.id = "1a1a1a1a-2b2b-4c3c-8d4d-5e5e6f6f7a7a";
+    for (auto& a : contradiction.assertions)
+        if (a.part == 1 && a.meter == st::Meter::m4_4)
+            a.always |= 1u << 1;   // snare always on 2, which no rule writes
+    r = library.importText (st::serialize (contradiction), ask);
+    check (r.status == Status::refused && r.message.startsWith ("the style breaks its own assertions") && files() == 4,
+           "library: a style that breaks its own assertions is refused (" + r.message + ")");
+    // A broken file in the folder is skipped and reported, never offered.
+    library.folder().getChildFile ("broken.voxstyle").replaceWithText ("{ not json");
+    juce::StringArray skipped;
+    const auto listed = library.list (&skipped);
+    check (listed.size() == 4 && skipped.size() == 1 && skipped[0].startsWith ("broken.voxstyle"), "library: a broken file is skipped and reported");
+    library.folder().getChildFile ("broken.voxstyle").deleteFile();
+
+    // §11.4 (2): library style -> project DSTL -> save; restore into a fresh
+    // instance whose library folder is EMPTY: identical generation and DSTL bytes.
+    library.importText (original, StyleLibrary::Collision::replace);   // the library holds the original again
+    const auto inLibrary = library.find (fixtureDef.id);
+    auto p = newProcessor();
+    auto g = p->generator();
+    g.custom = inLibrary;
+    g.seed = 4242;
+    p->setGenerator (g);
+    check (inLibrary != nullptr && p->generate (DrumsProcessor::Generate::pattern, 0xffffu, false), "library: a library style generates in the processor");
+    const auto saved = stateOf (*p);
+    StyleLibrary empty (root.getChildFile ("empty"));
+    auto fresh = newProcessor();
+    fresh->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    const auto* dstl = documentOf (saved, *p).find (styleSectionTag);
+    const auto restored = stateOf (*fresh);
+    const auto* dstlAgain = documentOf (restored, *fresh).find (styleSectionTag);
+    check (empty.list().empty() && fresh->lastStateError().isEmpty() && restored == saved && dstl != nullptr && dstlAgain != nullptr
+               && dstl->data == dstlAgain->data,
+           "library: the project restores with an empty library, same state and DSTL bytes");
+    auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
+    p->patterns().copySlot (p->currentSlot(), *a);
+    fresh->patterns().copySlot (fresh->currentSlot(), *b);
+    *a = {};
+    *b = {};
+    GeneratorSettings ga = p->generator(), gb = fresh->generator();
+    generatePattern (ga, *a);
+    generatePattern (gb, *b);
+    check (*a == *b && gb.custom != nullptr && st::contentHash (*gb.custom) == st::contentHash (*inLibrary),
+           "library: the restored project generates identically from its embedded copy");
+    // The library now holds another version (Replace): the project keeps its own and says so.
+    library.importText (changedText, StyleLibrary::Collision::replace);
+    check (library.projectNotice (p->generator()) == "This project uses its own version of " + fixtureDef.name
+               && st::contentHash (*p->generator().custom) == st::contentHash (*inLibrary),
+           "library: the project keeps its embedded version and the notice says so");
+    check (library.projectNotice (GeneratorSettings {}).isEmpty(), "library: no notice for a factory style");
+    // Remove.
+    check (library.remove (sameName.id) && library.find (sameName.id) == nullptr && ! library.remove (sameName.id), "library: remove");
+    if (root.getFileName().startsWith ("vox-drums-styles-"))
+        root.deleteRecursively();
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -1031,6 +1152,7 @@ int main (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI juce;
     testRoundTrip (juce::File (juce::String (argv[1])));
     testEmbeddedStyle (juce::File (juce::String (argv[1])));
+    testStyleLibrary (juce::File (juce::String (argv[1])));
     testRegistry();
     testBarsAndFillLimits();
     testUnavailableStyle();

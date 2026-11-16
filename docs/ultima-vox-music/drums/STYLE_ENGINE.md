@@ -218,7 +218,7 @@ Not yet done:
 
 - `DGEN` v2 (style by UUID) and `DSTL` (embedded user style). Their exact state layout is
   committed before the code.
-- Import UI, library folder, collision handling.
+- Import UI (the library folder and collision handling are done; see below).
 
 ## State layout: `DGEN` v2 and `DSTL` v1 (exact; committed before the code)
 
@@ -280,5 +280,22 @@ Pre-release policy (#136): there is **no `DGEN` v1 decoder**. A development-buil
   project's `DSTL`.
 - **Mutation check (local):** removing the canonical-text check, or the "DSTL not used by
   DGEN" check, fails the corresponding tests.
-- **Not yet:** the library folder, Import/Export UI and the library-level UUID collisions
-  (Replace / Keep both). They come with the import feature.
+- **Library (`drm/style-library`, §11.2):** `products/drums/StyleLibrary.{h,cpp}`, message thread.
+  - **Folder:** `<user application data>/ULTIMA VOX/VOX Drums/Styles` (`VOX_DRUMS_STYLES`, an absolute
+    path, overrides it); one canonical `.voxstyle` per style, `<key>-<first 8 id digits>.voxstyle`.
+    A file that does not parse is skipped and reported, never offered.
+  - **Import:** strict parse (every rejection names its field) → refused for a factory id ("factory
+    styles cannot be replaced") → refused if the style breaks its own assertions
+    (`checkStyleAssertions`; self-consistency only, not genre or quality) → by id: same content
+    hash = "already in the library" (nothing written); other content = a **conflict** until the
+    user chooses **Replace** (the entry changes; projects keep their embedded copy) or **Keep both**
+    (a new id, " (2)", " (3)" … in the name); another id with the same name is allowed.
+  - **Projects:** never depend on the library; they restore from their `DSTL`.
+    `projectNotice()` gives "This project uses its own version of <name>" when the library holds
+    the same id with other content.
+  - **Tests** (`testStyleLibrary`): every collision row, refusals (factory id, invalid field,
+    broken assertions), the skipped file, a library style saved in a project and restored into a
+    fresh instance with an **empty** library (same state, same `DSTL` bytes, identical generation),
+    the notice after Replace, remove.
+- **Not yet:** the Import / Export UI and the library browser. They belong to the native UI
+  workstream (after the owner's visual sign-off).
