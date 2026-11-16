@@ -635,6 +635,12 @@ All ordinary cell starts at these resolutions are integer ticks; user micro edit
   - Ambient: 3/4 and 6/8;
   - triplet fills and rolls only in Trap, the Metal styles, Hard Rock, Uplifting / Anthem /
     Symphonic Trance and DnB; "never" in the others.
+  - **Trap (TL decision, option (a) on #145):** a closed-hat triplet roll on beat 4 of the last bar
+    of the pattern, when fills > 0.3 and complexity > 0.65 (strictly; 0.65 so that a stored float
+    0.6 never passes a "> 0.6" by rounding), at resolutions with triplets (16ths, 32nds; none at
+    64ths), never over a beat with a locked cell. Its cells may ratchet (chance complexity − 0.65:
+    2, else 3 hits). The legacy Trap output stays the immutable baseline; the changed cases are
+    listed in `tests/suite/golden/trap-triplet-v2-changes.csv`.
 - Generating in a meter the style does not define is refused with a message. A rule never
   writes beyond the capacity of §10.2.
 - **Tests:**

@@ -16,6 +16,7 @@
 //  - an unknown style (every registered style has its definition since the
 //    16 new styles) changes nothing: no cell, seed, lock, A/B or song bar, no
 //    history entry (PR 138 review).
+#include "DrumsGeneratorDigest.h"
 #include "DrumsPatternTestUtil.h"
 #include "GeneratorReference.h"
 #include "Presets.h"
@@ -128,6 +129,24 @@ void testParity()
     auto all = std::make_unique<PatternStore::Everything>(), rall = std::make_unique<PatternStore::Everything>();
     const auto maps = roleMaps();
     std::array<int, styleCount> cases {}, bad {};
+    // Trap v2 (TL option (a) on #145): the comparisons with the switch-based
+    // generator run Trap with its legacy rules (no triplet roll), which must be
+    // byte-identical; the factory Trap is compared too and may differ only by
+    // its roll (the closed-hat lane's beat 4 in the last bar).
+    const auto legacyTrap = digest::legacyTrapDefinition();
+    int trapV2Cases = 0, trapV2Outside = 0, trapV2Rolled = 0;
+    std::string trapV2Why;
+    const auto trapV2 = [&] (const StoredPattern& v2, const StoredPattern& old, const RoleMap& map) {
+        ++trapV2Cases;
+        std::string why;
+        if (! digest::onlyTrapRoll (v2, old, map.laneOfSlot[3], &why))
+        {
+            ++trapV2Outside;
+            if (trapV2Why.empty())
+                trapV2Why = why;
+        }
+        trapV2Rolled += v2 == old ? 0 : 1;
+    };
     for (int style = 0; style < styleCount; ++style)
         for (const auto& [mapName, map] : maps)
             for (std::uint32_t seed = 1; seed <= 4; ++seed)
@@ -149,6 +168,9 @@ void testParity()
                                         g.swing = 0.25f;
                                         g.humanize = 0.3f;
                                         g.groove = 0.6f;
+                                        const bool trap = style == static_cast<int> (Style::trap);
+                                        if (trap)
+                                            g.custom = legacyTrap;
                                         auto& n = cases[static_cast<std::size_t> (style)];
                                         auto& wrong = bad[static_cast<std::size_t> (style)];
                                         // Pattern, from a pre-filled pattern with a locked step and (every other seed) a locked lane.
@@ -160,9 +182,22 @@ void testParity()
                                         testutil::stepAt (*a, 4, 0, 1).locked = true;
                                         g.laneLocks = seed % 2 == 0 ? 0x0042u : 0u;
                                         *ra = *a;
+                                        const auto base = std::make_unique<StoredPattern> (*a);
                                         generatePattern (g, *a, map);
                                         reference::generatePattern (g, *ra, map);
                                         wrong += *a == *ra ? 0 : 1;
+                                        if (trap)
+                                        {
+                                            GeneratorSettings v2 = g;
+                                            v2.custom = nullptr;
+                                            auto withRoll = std::make_unique<StoredPattern> (*base);
+                                            generatePattern (v2, *withRoll, map);
+                                            trapV2 (*withRoll, *ra, map);
+                                            auto mutated = std::make_unique<StoredPattern> (*a), oldMutated = std::make_unique<StoredPattern> (*ra);
+                                            mutateLanes (v2, 0xffffu, *mutated, map);
+                                            reference::mutateLanes (g, 0xffffu, *oldMutated, map);
+                                            trapV2 (*mutated, *oldMutated, map);
+                                        }
                                         // Variation B from A.
                                         empty (*b, grid[0], grid[1]);
                                         *rb = *b;
@@ -210,9 +245,30 @@ void testParity()
                         e->song.length = static_cast<std::uint8_t> (length);
                         testutil::stepAt (e->slots[1], 0, 2, 4).locked = true;
                     }
+                    const bool trap = style == static_cast<int> (Style::trap);
+                    auto withRoll = std::make_unique<PatternStore::Everything> (*all);
+                    if (trap)
+                        g.custom = legacyTrap;
                     generateSong (g, *all, map);
                     reference::generateSong (g, *rall, map);
                     const bool same = all->slots == rall->slots && all->alternates == rall->alternates && all->song == rall->song;
+                    if (trap)
+                    {
+                        GeneratorSettings v2 = g;
+                        v2.custom = nullptr;
+                        v2.complexity = 0.8f;   // a song whose peak slot rolls
+                        GeneratorSettings old = v2;
+                        old.custom = legacyTrap;
+                        auto withoutRoll = std::make_unique<PatternStore::Everything> (*withRoll);
+                        generateSong (v2, *withRoll, map);
+                        generateSong (old, *withoutRoll, map);
+                        for (int slot = 0; slot < PatternStore::slotCount; ++slot)
+                        {
+                            trapV2 (withRoll->slots[static_cast<std::size_t> (slot)], withoutRoll->slots[static_cast<std::size_t> (slot)], map);
+                            trapV2 (withRoll->alternates[static_cast<std::size_t> (slot)], withoutRoll->alternates[static_cast<std::size_t> (slot)], map);
+                        }
+                        trapV2Outside += withRoll->song == withoutRoll->song ? 0 : 1;
+                    }
                     bad[static_cast<std::size_t> (style)] += same ? 0 : 1;
                     cases[static_cast<std::size_t> (style)] += 1;
                 }
@@ -222,6 +278,9 @@ void testParity()
                    + juce::String (bad[static_cast<std::size_t> (style)]) + " of " + juce::String (cases[static_cast<std::size_t> (style)])
                    + " results differ");
     std::printf ("parity: %d results compared per style\n", cases[0]);
+    check (trapV2Cases > 0 && trapV2Rolled > 0 && trapV2Outside == 0,
+           "parity: the factory Trap (v2) differs from the switch-based Trap only by its triplet roll (" + juce::String (trapV2Rolled) + " of "
+               + juce::String (trapV2Cases) + " results roll; " + juce::String (trapV2Outside) + " differ elsewhere " + juce::String (trapV2Why) + ")");
 }
 
 //==============================================================================

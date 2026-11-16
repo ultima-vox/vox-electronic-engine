@@ -18,6 +18,9 @@
 //    "?" rows block Apply, Apply is one undo step.
 #include "DrumsPatternTestUtil.h"
 #include "DrumsGeneratorDigest.h"
+#include "StyleDefinition.h"
+
+#include <juce_cryptography/juce_cryptography.h>
 #include "DrumsParameters.h"
 #include "FactoryContent.h"
 #include "PadRoles.h"
@@ -28,6 +31,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <sstream>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
@@ -91,26 +96,34 @@ constexpr std::array<std::uint64_t, styleCount> c7c29bbDigest = {
     0xcacc9831a82e874eull, 0x6b856fad4f3b17f8ull, 0x08643b40ef3f94e0ull,
 };
 
+// Trap v2 (TL option (a) on #145): the digest of the factory Trap with its
+// triplet hat roll. c7c29bbDigest keeps the legacy Trap value unchanged; the
+// cases that differ are listed in tests/suite/golden/trap-triplet-v2-changes.csv.
+constexpr std::uint64_t trapTripletV2Digest = 0x34ffe33f70e1c3caull;
+
 void empty (StoredPattern& p, int steps, int bars) { digest::emptyPattern (p, steps, bars); }
 
-// `mapped` holds, on lane map.laneOfSlot[s], exactly `identity`'s lane s; a
-// lane without a slot is empty.
+// `mapped` holds, on lane map.laneOfSlot[s], exactly `identity`'s lane s
+// (its tuplet masks and every cell slot); a lane without a slot is empty.
 bool movedEqual (const StoredPattern& identity, const StoredPattern& mapped, const RoleMap& map)
 {
-    if (identity.resolution != mapped.resolution || identity.masks != mapped.masks || identity.bars != mapped.bars || identity.seed != mapped.seed)
+    if (identity.resolution != mapped.resolution || identity.bars != mapped.bars || identity.seed != mapped.seed)
         return false;
     for (int lane = 0; lane < kit::padCount; ++lane)
     {
         const int slot = map.slotOfLane[static_cast<std::size_t> (lane)];
         for (int bar = 0; bar < mapped.bars; ++bar)
-            for (int step = 0; step < testutil::stepsOf (mapped); ++step)
+        {
+            if (mapped.mask (lane, bar) != (slot >= 0 ? identity.mask (slot, bar) : 0))
+                return false;
+            for (int at = 0; at < kit::slotStride; ++at)
             {
-                const auto& got = testutil::stepAt (mapped, lane, bar, step);
-                const kit::PatternStep want = slot >= 0 ? testutil::stepAt (identity, slot, bar, step) : kit::PatternStep {};
-                if (got.on != want.on || got.accent != want.accent || got.velocity != want.velocity || got.probability != want.probability
-                    || got.ratchet != want.ratchet || got.microTicks != want.microTicks || got.locked != want.locked)
+                const auto& got = mapped.cell (lane, bar, at);
+                const kit::PatternStep want = slot >= 0 ? identity.cell (slot, bar, at) : kit::PatternStep {};
+                if (! (got == want))
                     return false;
             }
+        }
     }
     return true;
 }
@@ -198,14 +211,27 @@ void testCodec()
 void testIdentityParity()
 {
     // R4: the generator with identity roles is byte-identical to c7c29bb.
+    // Trap v2 (TL decision, option (a) on #145): the legacy Trap baseline stays
+    // as it was and is reproduced by the Trap rules without the triplet roll;
+    // the factory Trap has its own v2 expectation (trapTripletV2Digest).
+    const auto hex = [] (std::uint64_t v) {
+        char text[64];
+        std::snprintf (text, sizeof text, "0x%016llx", static_cast<unsigned long long> (v));
+        return juce::String (text);
+    };
     const auto d = digest::generatorDigest();
     for (int style = 0; style < styleCount; ++style)
     {
-        char text[64];
-        std::snprintf (text, sizeof text, "0x%016llx", static_cast<unsigned long long> (d[static_cast<std::size_t> (style)]));
-        check (d[static_cast<std::size_t> (style)] == c7c29bbDigest[static_cast<std::size_t> (style)],
-               juce::String ("R4: generator digest of ") + styleName (static_cast<Style> (style)) + " equals c7c29bb (got " + juce::String (text) + ")");
+        const auto got = d[static_cast<std::size_t> (style)];
+        if (style == static_cast<int> (Style::trap))
+            check (got == trapTripletV2Digest, "R4: generator digest of Trap equals its v2 expectation (got " + hex (got) + ")");
+        else
+            check (got == c7c29bbDigest[static_cast<std::size_t> (style)],
+                   juce::String ("R4: generator digest of ") + styleName (static_cast<Style> (style)) + " equals c7c29bb (got " + hex (got) + ")");
     }
+    const auto legacyTrap = digest::styleDigest (static_cast<int> (Style::trap), digest::legacyTrapDefinition());
+    check (legacyTrap == c7c29bbDigest[static_cast<std::size_t> (Style::trap)],
+           "R4: Trap without its triplet roll reproduces the legacy baseline byte for byte (got " + hex (legacyTrap) + ")");
     // An explicit identity map is the same as the default argument.
     auto a = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>();
     const auto map = RoleMap::from (explicitRoles (PadRoles::identity()));
@@ -1043,13 +1069,150 @@ void testRolesV2()
     }
 }
 
-int main()
+//==============================================================================
+// Trap v2 change manifest (TL option (a) on #145): over the R4 digest matrix,
+// every case where the factory Trap differs from the legacy Trap rules. Each
+// changed case must be gated (fills > 0.3 and complexity > 0.65, a resolution
+// with triplets) and differ only by the closed-hat lane's beat 4 in the last
+// bar. The list is pinned in tests/suite/golden/trap-triplet-v2-changes.csv
+// (VOX_GOLDEN_UPDATE=1 rewrites it in a reviewed commit).
+// The original Trap, pinned (TL review on #149): tests/suite/fixtures/
+// trap-pre-v2.json is trap.json of 88d0cc7 (before Trap v2), immutable; its
+// bytes (with LF line ends) and its contentHash (the pre-v2 pinned value)
+// are fixed here. The
+// legacy oracle must be exactly that definition, so a later edit of a
+// straight Trap rule cannot move the legacy baseline together with v2.
+constexpr const char* trapPreV2FileSha256 = "68b6430e4f6af1233558566ab336cad9f37a308ee0ee00c704de8c2599a386b5";
+constexpr const char* trapPreV2ContentHash = "b31ab3ec988aba071e5bf714bab5ca2b6e82d17f96bb0e23938748051641cd36";
+
+std::shared_ptr<const style::Definition> pinnedOriginalTrap (const juce::File& fixture)
 {
+    juce::MemoryBlock raw;
+    fixture.loadFileAsData (raw);
+    // The pin is over the file with LF line ends: a checkout that converted it
+    // to CRLF (Windows, a reused working tree) still compares the same text.
+    juce::MemoryBlock bytes;
+    for (std::size_t i = 0; i < raw.getSize(); ++i)
+        if (static_cast<char> (raw[i]) != '\r')
+            bytes.append (&raw[i], 1);
+    check (juce::SHA256 (bytes).toHexString() == trapPreV2FileSha256,
+           "Trap v2: the pinned pre-v2 Trap snapshot is unchanged (SHA-256 of trap-pre-v2.json, LF line ends)");
+    auto d = std::make_shared<style::Definition>();
+    const auto parsed = style::parse (bytes.toString(), *d);
+    check (parsed.wasOk() && style::contentHash (*d) == trapPreV2ContentHash,
+           "Trap v2: the pre-v2 snapshot parses and has the pre-v2 pinned contentHash (" + parsed.getErrorMessage() + ")");
+    const auto stripped = digest::legacyTrapDefinition();
+    check (style::contentHash (*stripped) == trapPreV2ContentHash && style::serialize (*stripped) == style::serialize (*d),
+           "Trap v2: the factory Trap without its tuplet rules is exactly the pinned original Trap (contentHash and canonical text)");
+    return d;
+}
+
+void testTrapV2Changes (const juce::File& golden, const juce::File& originalTrap)
+{
+    static constexpr int grids[4][2] = { { 16, 4 }, { 64, 4 }, { 16, 1 }, { 32, 2 } };
+    static constexpr std::uint32_t masks[4] = { 0x0008u, 0x0130u, 0x0003u, 0xffffu };
+    // The legacy side of the manifest is the pinned original definition itself.
+    const auto legacy = pinnedOriginalTrap (originalTrap);
+    auto a = std::make_unique<StoredPattern>(), la = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>(),
+         lb = std::make_unique<StoredPattern>();
+    std::ostringstream rows;
+    rows << "action,seed,density,complexity,syncopation,fills,variation,steps,bars,mask\n";
+    int cases = 0, changed = 0, ungated = 0, outside = 0;
+    std::string firstWhy;
+    const auto compare = [&] (const char* action, const GeneratorSettings& g, int steps, int bars, std::uint32_t mask, const StoredPattern& v2,
+                              const StoredPattern& old) {
+        ++cases;
+        if (v2 == old)
+            return;
+        ++changed;
+        const bool gated = g.fills > 0.3f && g.complexity > 0.65f && steps != 64;
+        ungated += gated ? 0 : 1;
+        std::string why;
+        if (! digest::onlyTrapRoll (v2, old, 3, &why))
+        {
+            ++outside;
+            if (firstWhy.empty())
+                firstWhy = std::string (action) + ": " + why;
+        }
+        char line[160];
+        std::snprintf (line, sizeof line, "%s,%u,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%d,0x%04x\n", action, g.seed, static_cast<double> (g.density),
+                       static_cast<double> (g.complexity), static_cast<double> (g.syncopation), static_cast<double> (g.fills),
+                       static_cast<double> (g.variation), steps, bars, mask);
+        rows << line;
+    };
+    for (std::uint32_t seed = 1; seed <= 6; ++seed)
+        for (float density : { 0.0f, 0.5f, 1.0f })
+            for (float complexity : { 0.0f, 0.5f, 1.0f })
+                for (float syncopation : { 0.0f, 1.0f })
+                    for (float fills : { 0.0f, 0.5f, 1.0f })
+                        for (float variation : { 0.4f, 1.0f })
+                            for (const auto& grid : grids)
+                            {
+                                GeneratorSettings g;
+                                g.style = Style::trap;
+                                g.seed = seed * 7919u;
+                                g.density = density;
+                                g.complexity = complexity;
+                                g.syncopation = syncopation;
+                                g.fills = fills;
+                                g.variation = variation;
+                                g.swing = 0.25f;
+                                g.humanize = 0.3f;
+                                GeneratorSettings l = g;
+                                l.custom = legacy;
+                                digest::emptyPattern (*a, grid[0], grid[1]);
+                                digest::emptyPattern (*la, grid[0], grid[1]);
+                                generatePattern (g, *a);
+                                generatePattern (l, *la);
+                                compare ("pattern", g, grid[0], grid[1], 0, *a, *la);
+                                // Variation and Fill from the same A (the legacy A), so only the action differs.
+                                digest::emptyPattern (*b, grid[0], grid[1]);
+                                digest::emptyPattern (*lb, grid[0], grid[1]);
+                                generateVariation (g, *la, *b);
+                                generateVariation (l, *la, *lb);
+                                compare ("variation", g, grid[0], grid[1], 0, *b, *lb);
+                                *b = *la;
+                                *lb = *la;
+                                generateFill (g, *b, 0);
+                                generateFill (l, *lb, 0);
+                                compare ("fill", g, grid[0], grid[1], 0, *b, *lb);
+                                for (auto mask : masks)
+                                {
+                                    *b = *la;
+                                    *lb = *la;
+                                    mutateLanes (g, mask, *b);
+                                    mutateLanes (l, mask, *lb);
+                                    compare ("mutate", g, grid[0], grid[1], mask, *b, *lb);
+                                }
+                            }
+    const auto manifest = rows.str();
+    if (std::getenv ("VOX_GOLDEN_UPDATE") != nullptr)
+    {
+        golden.replaceWithText (manifest);
+        std::printf ("wrote %s\n", golden.getFullPathName().toRawUTF8());
+    }
+    auto committed = golden.loadFileAsString().toStdString();
+    committed.erase (std::remove (committed.begin(), committed.end(), '\r'), committed.end());
+    check (changed > 0 && ungated == 0 && outside == 0,
+           "Trap v2: " + juce::String (changed) + " of " + juce::String (cases)
+               + " matrix cases change, all gated (fills > 0.3, complexity > 0.65, not 64ths) and only in the closed-hat lane's beat 4 of the last bar ("
+               + juce::String (ungated) + " ungated, " + juce::String (outside) + " outside: " + juce::String (firstWhy) + ")");
+    check (committed == manifest, "Trap v2: the changed cases match " + golden.getFileName() + " (VOX_GOLDEN_UPDATE=1 rewrites it)");
+}
+
+int main (int argc, char** argv)
+{
+    if (argc < 3)
+    {
+        std::printf ("usage: %s <tests/suite/golden/trap-triplet-v2-changes.csv> <tests/suite/fixtures/trap-pre-v2.json>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
     const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-drums-roles-" + juce::Uuid().toString());
     folder.createDirectory();
     testCodec();
     testIdentityParity();
+    testTrapV2Changes (juce::File (juce::String (argv[1])), juce::File (juce::String (argv[2])));
     testMapping();
     testMutate();
     testState();

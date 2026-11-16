@@ -16,7 +16,8 @@
       "ratchet": { "chance": "0.1 + 0.5 * complexity", "salt": 7, "valueSalt": 8, "below": [[0.5, 2], [0.8, 3]], "otherwise": 4 } },
     { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.05 + 0.5 * density", "velocity": 0.4 },
     { "part": "openHat", "at": [7, 15], "kind": "ghost", "chance": "0.15 + 0.4 * density", "velocity": 0.65 },
-    { "part": "perc1", "at": [4, 12], "kind": "ghost", "chance": "0.1 + 0.5 * complexity", "velocity": 0.5 }
+    { "part": "perc1", "at": [4, 12], "kind": "ghost", "chance": "0.1 + 0.5 * complexity", "velocity": 0.5 },
+    { "part": "closedHat", "beats": [4], "subdivision": "triplet", "at": [1, 2, 3, 4, 5, 6], "bars": "last", "when": ["fills > 0.3", "complexity > 0.65"], "velocity": 0.6, "ratchet": { "chance": "complexity - 0.65", "salt": 21, "valueSalt": 22, "below": [[0.6, 2]], "otherwise": 3 } }
   ],
   "fill": { "cycle": ["closedHat", "snare"], "ratchet": 4 },
   "variation": { "keep": ["kick", "snare", "clap"] },
