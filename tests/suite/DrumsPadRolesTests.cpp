@@ -18,6 +18,9 @@
 //    "?" rows block Apply, Apply is one undo step.
 #include "DrumsPatternTestUtil.h"
 #include "DrumsGeneratorDigest.h"
+#include "StyleDefinition.h"
+
+#include <juce_cryptography/juce_cryptography.h>
 #include "DrumsParameters.h"
 #include "FactoryContent.h"
 #include "PadRoles.h"
@@ -1073,11 +1076,35 @@ void testRolesV2()
 // with triplets) and differ only by the closed-hat lane's beat 4 in the last
 // bar. The list is pinned in tests/suite/golden/trap-triplet-v2-changes.csv
 // (VOX_GOLDEN_UPDATE=1 rewrites it in a reviewed commit).
-void testTrapV2Changes (const juce::File& golden)
+// The original Trap, pinned (TL review on #149): tests/suite/fixtures/
+// trap-pre-v2.json is trap.json of 88d0cc7 (before Trap v2), immutable; its
+// bytes and its contentHash (the pre-v2 pinned value) are fixed here. The
+// legacy oracle must be exactly that definition, so a later edit of a
+// straight Trap rule cannot move the legacy baseline together with v2.
+constexpr const char* trapPreV2FileSha256 = "68b6430e4f6af1233558566ab336cad9f37a308ee0ee00c704de8c2599a386b5";
+constexpr const char* trapPreV2ContentHash = "b31ab3ec988aba071e5bf714bab5ca2b6e82d17f96bb0e23938748051641cd36";
+
+std::shared_ptr<const style::Definition> pinnedOriginalTrap (const juce::File& fixture)
+{
+    juce::MemoryBlock bytes;
+    fixture.loadFileAsData (bytes);
+    check (juce::SHA256 (bytes).toHexString() == trapPreV2FileSha256, "Trap v2: the pinned pre-v2 Trap snapshot is unchanged (SHA-256 of trap-pre-v2.json)");
+    auto d = std::make_shared<style::Definition>();
+    const auto parsed = style::parse (bytes.toString(), *d);
+    check (parsed.wasOk() && style::contentHash (*d) == trapPreV2ContentHash,
+           "Trap v2: the pre-v2 snapshot parses and has the pre-v2 pinned contentHash (" + parsed.getErrorMessage() + ")");
+    const auto stripped = digest::legacyTrapDefinition();
+    check (style::contentHash (*stripped) == trapPreV2ContentHash && style::serialize (*stripped) == style::serialize (*d),
+           "Trap v2: the factory Trap without its tuplet rules is exactly the pinned original Trap (contentHash and canonical text)");
+    return d;
+}
+
+void testTrapV2Changes (const juce::File& golden, const juce::File& originalTrap)
 {
     static constexpr int grids[4][2] = { { 16, 4 }, { 64, 4 }, { 16, 1 }, { 32, 2 } };
     static constexpr std::uint32_t masks[4] = { 0x0008u, 0x0130u, 0x0003u, 0xffffu };
-    const auto legacy = digest::legacyTrapDefinition();
+    // The legacy side of the manifest is the pinned original definition itself.
+    const auto legacy = pinnedOriginalTrap (originalTrap);
     auto a = std::make_unique<StoredPattern>(), la = std::make_unique<StoredPattern>(), b = std::make_unique<StoredPattern>(),
          lb = std::make_unique<StoredPattern>();
     std::ostringstream rows;
@@ -1167,9 +1194,9 @@ void testTrapV2Changes (const juce::File& golden)
 
 int main (int argc, char** argv)
 {
-    if (argc < 2)
+    if (argc < 3)
     {
-        std::printf ("usage: %s <tests/suite/golden/trap-triplet-v2-changes.csv>\n", argv[0]);
+        std::printf ("usage: %s <tests/suite/golden/trap-triplet-v2-changes.csv> <tests/suite/fixtures/trap-pre-v2.json>\n", argv[0]);
         return EXIT_FAILURE;
     }
     juce::ScopedJuceInitialiser_GUI juce;
@@ -1177,7 +1204,7 @@ int main (int argc, char** argv)
     folder.createDirectory();
     testCodec();
     testIdentityParity();
-    testTrapV2Changes (juce::File (juce::String (argv[1])));
+    testTrapV2Changes (juce::File (juce::String (argv[1])), juce::File (juce::String (argv[2])));
     testMapping();
     testMutate();
     testState();
