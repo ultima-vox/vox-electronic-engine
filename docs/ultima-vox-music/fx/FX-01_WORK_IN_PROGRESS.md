@@ -129,3 +129,13 @@ editor audition in that block can still start a new event. Missing playhead
 information clears continuity history instead of assuming a stop/seek. Tests
 using a simulated JUCE playhead were added but require the processor test to
 run in the suite build; Cubase/REAPER behavior has not been verified.
+
+## Downlifter engine foundation
+
+A second layer recipe combines a descending MIDI-transposed sine sweep and a
+falling noise low-pass/envelope. Frequency and filter trajectories are prepared
+outside the callback. Local renders at the three target sample rates and block
+sizes pass finiteness, audibility, broad brightness trajectory and short-window
+fundamental-energy checks, including ASan/UBSan. This is not yet available in
+plugin Program state or the UI; audible review, alias/CPU qualification and
+full FX-03 acceptance remain outstanding.

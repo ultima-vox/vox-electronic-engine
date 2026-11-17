@@ -244,3 +244,8 @@ if(NOT WIN32)
 endif()
 add_test(NAME suite_fx_program_bridge_tests COMMAND suite_fx_program_bridge_tests)
 set_tests_properties(suite_fx_program_bridge_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_downlifter_tests FxDownlifterTests.cpp)
+target_include_directories(suite_fx_downlifter_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_downlifter_tests COMMAND suite_fx_downlifter_tests)
+set_tests_properties(suite_fx_downlifter_tests PROPERTIES LABELS suite)

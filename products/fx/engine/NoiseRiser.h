@@ -11,14 +11,17 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
+enum class NoiseFamily : std::uint8_t { riser, downlifter };
 struct NoiseLayer {
+    NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
     timeline::LayerTime timing {};
     float gain = 1.0f, pan = 0.0f; // pan -1..1; center preserves original gain
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::downlifter) &&
+               timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
 };
@@ -41,7 +44,10 @@ public:
             const double phase = static_cast<double>(i) / tableIntervals;
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
             coefficients_[i] = 1.0 - std::exp(-6.283185307179586 * cutoff / rate_);
+            pitchFactors_[i] = std::exp2(3.0 * (1.0 - phase));
         }
+        for (std::size_t i = 0; i < noteHz_.size(); ++i)
+            noteHz_[i] = 440.0 * std::exp2((static_cast<double>(i) - 69.0) / 12.0);
         voices_ = {}; retiring_ = {}; serial_ = 0;
     }
     // The caller must ensure there is no concurrent access. UI/worker threads
@@ -99,7 +105,7 @@ public:
 private:
     struct LayerState {
         std::uint32_t rng = 1;
-        double lowpass = 0, dcInput = 0, dcOutput = 0;
+        double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0;
     };
     struct Voice {
         bool active = false;
@@ -138,14 +144,28 @@ private:
             const double position = t * tableIntervals;
             const auto index = static_cast<std::size_t>(position);
             const double fraction = position - static_cast<double>(index);
-            const double coefficient = coefficients_[index] + fraction * (coefficients_[index + 1] - coefficients_[index]);
+            const bool descending = settings.family == NoiseFamily::downlifter;
+            const auto coefficient = descending
+                ? coefficients_[tableIntervals - index] + fraction * (coefficients_[tableIntervals - index - 1] - coefficients_[tableIntervals - index])
+                : coefficients_[index] + fraction * (coefficients_[index + 1] - coefficients_[index]);
             layer.lowpass += coefficient * (noise - layer.lowpass);
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
             const double layerDuration = v.duration * span;
             const double fadeIn = std::min(1.0, t * layerDuration / 0.01);
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
-            const double sample = filtered * v.velocity * (0.15 + 0.85 * t) * fadeIn * fadeOut * release *
+            double source = filtered;
+            double envelope = 0.15 + 0.85 * t;
+            if (descending) {
+                const double pitchFactor = pitchFactors_[index] + fraction * (pitchFactors_[index + 1] - pitchFactors_[index]);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchFactor, 0.45 * rate_);
+                const double tonal = std::sin(6.283185307179586 * layer.phase);
+                layer.phase += frequency / rate_;
+                if (layer.phase >= 1.0) layer.phase -= 1.0;
+                source = 0.5 * filtered + 0.5 * tonal;
+                envelope = 1.0 - 0.85 * t;
+            }
+            const double sample = source * v.velocity * envelope * fadeIn * fadeOut * release *
                                   v.layerScale * settings.gain * settings.gainCurve.evaluate(static_cast<float>(t));
             const double pan = std::clamp(static_cast<double>(settings.pan) +
                                           2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0, -1.0, 1.0);
@@ -154,7 +174,8 @@ private:
         }
     }
     static constexpr std::size_t tableIntervals = 4096;
-    std::array<double, tableIntervals + 1> coefficients_ {};
+    std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {};
+    std::array<double, 128> noteHz_ {};
     NoiseProgram program_;
     double rate_ = 44100.0;
     std::uint64_t serial_ = 0;
