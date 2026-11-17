@@ -306,3 +306,15 @@ user sample import, safe sample ownership/retirement, reverse/position/rate
 controls, sample portability, tuning and host/quality/performance evidence are
 still required. The built-in source is not a hidden fallback for a missing
 user sample; user sample loading is not yet offered.
+
+## Generator foundation
+
+A JUCE-independent seeded generator produces layered Programs with category,
+style, complexity, intensity, energy, stereo movement and seconds; it supports
+per-layer/per-field locks, mutation and distinct A/B seeds. A deterministic
+48-entry procedural seed corpus covers four variants per currently implemented
+family. Local tests verify determinism, lock preservation, structural uniqueness
+and an audible finite smoke render of each entry; ASan/UBSan passed. These are
+not yet curated/approved factory presets: the generator, corpus and locks are
+not connected to plugin/UI/state, and key/pitch, patterns, full musical controls,
+exports and perceptual/licensing qualification remain outstanding.

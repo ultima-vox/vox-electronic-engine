@@ -9,7 +9,7 @@ validator and binary SHA are pending; HOLD prohibits merge and release.
 | FX-02 | Partial: seconds and bars clock/curve primitives, 4-layer noise engine with per-event snapshot, and single-producer bridge tests. Seconds timing and validated layered Program persistence/publication are wired to plugin; basic layer enable/family/gain/pan/timing UI and per-layer gain-curve editing exist; pan/pitch/filter/global curve UI, bar sync and event policies remain. |
 | FX-03 | Partial: Noise Riser, tonal/noise Downlifter, six-partial Shepard sweep, Impact, Whoosh, Laser, Squelch, Metallic, Texture, Formant, Glitch and a procedural-source Granular Cloud are selectable for new events and persisted as structural state. User sample import, full host-synced Glitch, granular controls and comprehensive quality tests remain. |
 | FX-04 | Partial: standalone typed 64-route matrix, LFO and seeded sample-and-hold primitives; no plugin modulation integration, macros, effects or quality policies yet. |
-| FX-05 | Not started: generator, content, preset/sample handling, patterns and exports. |
+| FX-05 | Partial: deterministic standalone Generate/Mutate/A-B and a 48-program procedural seed corpus with locks and audible smoke tests. Not yet connected to plugin/UI or a preset browser; musical curation, full settings, sample handling, patterns and exports remain. |
 | FX-06 | In progress: truthful interim Perform panel; other workspaces and controls remain. |
 | FX-07 | Not complete: Windows exact-head suite/validator and binary hash, host, performance, safety, licensing and packaging qualification. |
 

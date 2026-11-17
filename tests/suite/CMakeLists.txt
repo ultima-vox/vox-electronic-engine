@@ -327,3 +327,8 @@ vox_suite_add_allocation_probe(suite_fx_granular_tests)
 target_include_directories(suite_fx_granular_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_granular_tests COMMAND suite_fx_granular_tests)
 set_tests_properties(suite_fx_granular_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_generator_tests FxGeneratorTests.cpp)
+target_include_directories(suite_fx_generator_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_generator_tests COMMAND suite_fx_generator_tests)
+set_tests_properties(suite_fx_generator_tests PROPERTIES LABELS suite)
