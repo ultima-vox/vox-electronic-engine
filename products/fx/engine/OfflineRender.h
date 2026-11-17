@@ -1,0 +1,62 @@
+#pragma once
+#include "NoiseRiser.h"
+#include <atomic>
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+namespace vox::fx::offline {
+enum class WavFormat { pcm24, float32 };
+struct Settings {
+    std::uint32_t sampleRate=48000;
+    float duration=4, velocity=1, gain=1;
+    int note=60;
+    WavFormat format=WavFormat::pcm24;
+    bool valid() const noexcept {
+        return sampleRate>=8000&&sampleRate<=384000&&std::isfinite(duration)&&duration>=.05f&&duration<=32&&
+               std::isfinite(velocity)&&velocity>0&&velocity<=1&&std::isfinite(gain)&&gain>=0&&gain<=1&&
+               note>=0&&note<128&&(format==WavFormat::pcm24||format==WavFormat::float32);
+    }
+};
+inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(static_cast<std::uint8_t>(x));out.push_back(static_cast<std::uint8_t>(x>>8));}
+inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
+inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++i)out.push_back(static_cast<std::uint8_t>(s[i]));}
+// Worker thread only. Renders the same event engine as realtime; no effects
+// exist yet, therefore no post-event tail is claimed. Output is transactional:
+// invalid input, cancellation or non-finite DSP leave the old bytes unchanged.
+inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
+                      const std::atomic<bool>* cancel=nullptr,std::atomic<float>* progress=nullptr) {
+    if(!program.valid()||!settings.valid())return false;
+    const auto frames=static_cast<std::uint32_t>(std::ceil(static_cast<double>(settings.duration)*settings.sampleRate));
+    const bool floating=settings.format==WavFormat::float32;
+    const std::uint16_t bits=floating?32:24, bytesPerSample=bits/8, blockAlign=static_cast<std::uint16_t>(2*bytesPerSample);
+    const auto dataBytes=frames*blockAlign;
+    const auto riffSize=4u+24u+(floating?12u:0u)+8u+dataBytes;
+    std::vector<std::uint8_t> bytes;bytes.reserve(static_cast<std::size_t>(riffSize)+8);
+    tag(bytes,"RIFF");u32(bytes,riffSize);tag(bytes,"WAVE");tag(bytes,"fmt ");u32(bytes,16);
+    u16(bytes,floating?3:1);u16(bytes,2);u32(bytes,settings.sampleRate);u32(bytes,settings.sampleRate*blockAlign);
+    u16(bytes,blockAlign);u16(bytes,bits);
+    if(floating){tag(bytes,"fact");u32(bytes,4);u32(bytes,frames);}
+    tag(bytes,"data");u32(bytes,dataBytes);
+    auto engine=std::make_unique<NoiseRiser>();engine->prepare(settings.sampleRate);
+    if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration))return false;
+    std::array<float,512> left{},right{};
+    if(progress)progress->store(0,std::memory_order_relaxed);
+    for(std::uint32_t at=0;at<frames;){
+        if(cancel&&cancel->load(std::memory_order_relaxed))return false;
+        const auto count=std::min<std::uint32_t>(512,frames-at);
+        engine->render(left.data(),right.data(),static_cast<int>(count));
+        for(std::uint32_t i=0;i<count;++i)for(float sample:{left[i],right[i]}){
+            const float value=sample*settings.gain;if(!std::isfinite(value)||std::abs(value)>1)return false;
+            if(floating)u32(bytes,std::bit_cast<std::uint32_t>(value));
+            else {const auto pcm=static_cast<std::int32_t>(std::lround(value*8388607.0f));
+                const auto word=static_cast<std::uint32_t>(pcm);bytes.push_back(static_cast<std::uint8_t>(word));
+                bytes.push_back(static_cast<std::uint8_t>(word>>8));bytes.push_back(static_cast<std::uint8_t>(word>>16));}
+        }
+        at+=count;if(progress)progress->store(static_cast<float>(at)/frames,std::memory_order_relaxed);
+    }
+    output=std::move(bytes);return true;
+}
+} // namespace vox::fx::offline

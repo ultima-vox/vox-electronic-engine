@@ -337,3 +337,8 @@ add_executable(suite_fx_pattern_tests FxPatternTests.cpp)
 target_include_directories(suite_fx_pattern_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_pattern_tests COMMAND suite_fx_pattern_tests)
 set_tests_properties(suite_fx_pattern_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_offline_render_tests FxOfflineRenderTests.cpp)
+target_include_directories(suite_fx_offline_render_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_offline_render_tests COMMAND suite_fx_offline_render_tests)
+set_tests_properties(suite_fx_offline_render_tests PROPERTIES LABELS suite)

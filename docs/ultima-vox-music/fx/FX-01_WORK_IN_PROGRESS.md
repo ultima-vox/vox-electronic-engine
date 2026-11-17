@@ -329,3 +329,15 @@ determinism and 12 structurally distinct seed patterns. ASan/UBSan passed.
 This is not yet the internal realtime sequencer or a product export feature:
 host synchronization, other grids/triplets, swing, UI, state, file delivery and
 musical validation remain. MIDI represents triggers only, not synthesized audio.
+
+## Offline WAV foundation
+
+A worker-only renderer creates stereo 24-bit PCM or 32-bit float RIFF/WAVE
+bytes using the same event DSP, bounded duration/rate, cancellation and atomic
+progress. It returns bytes transactionally and rejects non-finite/out-of-range
+samples instead of silently clipping. Tests validate headers, sample/frame
+counts, exact float samples, decoded PCM error and cancellation; ASan/UBSan
+passed. No file chooser, background job integration, atomic file replacement,
+patterns, configurable tails or effects are connected yet. In particular, the
+present WAV renderer does not claim an effects tail because effects do not yet
+exist in the engine.
