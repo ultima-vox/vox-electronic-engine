@@ -263,3 +263,13 @@ the Program store and are captured by newly triggered events. Tests for the
 editor-to-Program binding and undo/redo were added but only syntax-checked.
 The full Timeline workspace, selection/zoom, pan/pitch/filter/global curves,
 accessible alternative node entry and Windows visual/DPI qualification remain.
+
+## Modulation primitives
+
+A JUCE-independent, bounded 64-route typed matrix, LFO and seeded
+sample-and-hold have been added. The matrix applies signed offsets to a copy
+of normalized host base values and prepares route smoothing off the callback.
+Standalone tests cover validation, clamping, smoothing, reproducibility and
+zero allocations in a Linux audio-path probe; ASan/UBSan passed. These helpers
+are not wired into Program state, processor DSP or UI. Other sources, macro
+assignments, route editing and complete FX-04 behavior remain outstanding.
