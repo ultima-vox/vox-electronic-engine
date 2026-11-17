@@ -13,7 +13,11 @@ validator and binary SHA are pending; HOLD prohibits merge and release.
 | FX-06 | In progress: truthful interim Perform panel; other workspaces and controls remain. |
 | FX-07 | Not complete: Windows exact-head suite/validator and binary hash, host, performance, safety, licensing and packaging qualification. |
 
-Next: execute the new processor and layered-state integration tests on Windows,
-add pan/pitch/filter/global curve editing and executable editor tests, then implement the remaining
-family-specific sound engines and complete the full modulation/FX inventory. Validate the pending
-Windows runs as they finish, fix failures and repeat on exact candidate SHA.
+Resume: Wire the existing standalone generator, pattern scheduler and WAV/MIDI
+render foundations to validated Program/state and real user-facing workflows;
+implement the specified modulation, four true FX slots and host-sync behavior;
+complete family algorithms, sample ownership and the remaining curve/UI paths.
+Run the processor/editor tests in an executable JUCE build, inspect and fix the
+queued Windows suite/build runs, and repeat all qualification on the exact final
+head. The 48 procedural programs and 12 patterns are uncurated seed corpora,
+not accepted factory content. No host or installation acceptance is claimed.
