@@ -1,3 +1,5 @@
+> **ARCHIVED COMPENDIUM SNAPSHOT — 2026-11-08.** The combined text below is not regenerated after subsequent PRs. It is useful for original requirements/provenance but **not current developer instructions**. Current owner sequence is **VOX Drums → VOX FX → VOX Trance Synthesis** and active development is on `integration/vox-drums-1.0`. Read [current developer handoff](../DEVELOPER_HANDOFF.md), [status](../STATUS.md), [roadmap](../ROADMAP.md) and GitHub [issue #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127) first. Individual reviewed specifications, issue decisions, actual source and exact-HEAD CI override any old roadmap/order below.
+
 # ULTIMA VOX MUSIC — COMPLETE MASTER DEVELOPMENT SPECIFICATION
 
 **This compendium includes all project files as of 2026-11-08. For independent changes/reviews prefer the individual files.**
