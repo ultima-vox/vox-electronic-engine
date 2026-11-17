@@ -110,7 +110,7 @@ int main() {
     {
         vox::fx::FxProcessor riser, down;
         riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
-        check(down.setFamily(1) && !down.setFamily(8), "bounded family selection");
+        check(down.setFamily(1) && !down.setFamily(9), "bounded family selection");
         juce::AudioBuffer<float> a(2,512), b(2,512);
         juce::MidiBuffer ma, mb;
         ma.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);

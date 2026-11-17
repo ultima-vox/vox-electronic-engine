@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::metallic) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::texture) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -189,7 +189,18 @@ private:
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::metallic) {
+            if (settings.family == NoiseFamily::texture) {
+                // Two continuously phased detuned sine oscillators and
+                // filtered noise, with slow level and stereo evolution.
+                const double elapsed = t * layerDuration;
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)], rate_ * 0.40);
+                const double a = std::sin(6.283185307179586 * layer.phase);
+                const double b = std::sin(6.283185307179586 * layer.subPhase);
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                layer.subPhase += std::min(frequency * 1.007, rate_ * 0.45) / rate_; if (layer.subPhase >= 1.0) layer.subPhase -= 1.0;
+                source = 0.3 * (a + b) + 0.15 * filtered;
+                envelope = 0.65 + 0.15 * std::sin(6.283185307179586 * elapsed * 0.17);
+            } else if (settings.family == NoiseFamily::metallic) {
                 // Eight stable damped inharmonic modes excited once per layer.
                 // Coefficients are prepared at the active sample rate; modes
                 // beyond the anti-alias cutoff are omitted.
@@ -317,7 +328,8 @@ private:
                                   v.layerScale * settings.gain * settings.gainCurve.evaluate(static_cast<float>(t));
             const double pan = std::clamp(static_cast<double>(settings.pan) +
                                           2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
-                                          (settings.family == NoiseFamily::whoosh ? 2.0 * t - 1.0 : 0.0), -1.0, 1.0);
+                                          (settings.family == NoiseFamily::whoosh ? 2.0 * t - 1.0 : 0.0) +
+                                          (settings.family == NoiseFamily::texture ? 0.35 * std::sin(6.283185307179586 * t * layerDuration * 0.11) : 0.0), -1.0, 1.0);
             left += sample * std::min(1.0, 1.0 - pan);
             right += sample * std::min(1.0, 1.0 + pan);
         }

@@ -208,3 +208,11 @@ cover full events at 44.1/48/96 kHz and 64/128/512 blocks, decay and finite
 output, plus eight-event/four-layer stress at 96 kHz; ASan/UBSan passed.
 This is an initial mode bank, not the full filter/controls inventory or a
 perceptual/alias/performance qualification.
+
+## Texture / Drone
+
+FFAM family 8 uses two continuously phased detuned sine oscillators, filtered
+noise and slow level/pan motion. Local 44.1/48/96 kHz, 64/128/512 block
+renders demonstrate sustained output, stereo movement and finite bounds;
+ASan/UBSan passed. No unison control, full VA waveforms or product-level
+quality/host/performance qualification is claimed.
