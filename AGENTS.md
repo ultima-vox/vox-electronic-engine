@@ -9,6 +9,7 @@
 3. [Standalone architecture](docs/ultima-vox-music/00_README_AND_OWNER_DECISIONS.md), [frozen VST3 IDs](docs/ultima-vox-music/IDENTITY.md) and [suite build](docs/BUILD.md).
 4. For Drums: [PR #141 and TL comments](https://github.com/ultima-vox/vox-electronic-engine/pull/141), [approved JUCE UI #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127), [hardware styling #135](https://github.com/ultima-vox/vox-electronic-engine/pull/135), [layout-state proposal #130 §14](https://github.com/ultima-vox/vox-electronic-engine/pull/130), and [open StyleLibrary #151](https://github.com/ultima-vox/vox-electronic-engine/pull/151).
 5. [Common engineering agent contract](agents/AGENT_CONTRACT.md) for general quality/review practice, only where consistent with the current independent-product architecture.
+6. [Final Drums DAW acceptance checklist](docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md) — release gate after complete exact-head Windows qualification, one final owner Cubase/REAPER pass.
 
 ## Active product policy and work order
 

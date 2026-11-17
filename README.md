@@ -17,6 +17,7 @@
 - **[Standalone build and validation](docs/BUILD.md)** and [pinned suite build](docs/ultima-vox-music/BUILD.md).
 - **[Frozen plugin identities](docs/ultima-vox-music/IDENTITY.md)**.
 - [VOX Drums specification](docs/ultima-vox-music/03_VOX_DRUMS_SPEC.md) and [approved JUCE UI contract #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127).
+- **[Final DAW acceptance checklist](docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md)** — release gate for the completed exact-head Windows candidate; one final owner pass only.
 
 ## Current VOX Drums source of truth
 
