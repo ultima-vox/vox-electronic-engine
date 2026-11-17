@@ -318,3 +318,14 @@ and an audible finite smoke render of each entry; ASan/UBSan passed. These are
 not yet curated/approved factory presets: the generator, corpus and locks are
 not connected to plugin/UI/state, and key/pitch, patterns, full musical controls,
 exports and perceptual/licensing qualification remain outstanding.
+
+## Trigger-pattern and MIDI-export foundation
+
+A JUCE-free offline scheduler supports one to four 4/4 bars of 1/16 steps,
+seeded probability, one to four ratchets, trigger notes and velocities. It
+exports a type-0 Standard MIDI File from the same canonical tick events; tests
+parse the file and compare notes, note-offs and offsets, check bounds,
+determinism and 12 structurally distinct seed patterns. ASan/UBSan passed.
+This is not yet the internal realtime sequencer or a product export feature:
+host synchronization, other grids/triplets, swing, UI, state, file delivery and
+musical validation remain. MIDI represents triggers only, not synthesized audio.
