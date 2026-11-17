@@ -1,66 +1,33 @@
-# Execution roadmap
+# Execution roadmap — ULTIMA VOX MUSIC standalone VST3
 
-Updated:26.10.2026. Owner priority: **finish the production Rack; Bass afterwards**.
-Another agent is developing Acid Synth and its dedicated UI in parallel.
-Small engineering checkpoints provide evidence; they are not permission to ship
-incomplete controls or label an MVP production.
+**Updated 2026-11-17.** Supersedes the October 2026 Rack-first development order. Three releases, **in order: VOX Drums → VOX FX → VOX Trance Synthesis (VOX Synth)**. No single runtime Rack, nested .vins host or combined Rack release.
 
-| Order | Work | Exit evidence / tracker |
+## 1. VOX Drums — finish the existing code, no rewrite
+
+| Order | Work | Required exit evidence |
 | --- | --- | --- |
-| 0 | Audit current main and correct unsupported diagnoses | Source-level capability audit complete; direct main release probe27 PASS; exact old owner session still unconfirmed |
-| 1 | Freeze the generic Rack control/audio/state contracts | Reviewed named parameters, bus/source identities, state authority/rollback and full resource bounds; #53/#56 |
-| 2 | Implement Rack audio graph and Send FX/returns | Actual sends/returns, tap/mute/solo/tail/latency policy, state and routing tests; #54 |
-| 3 | Implement explicit internal kick ducking | Documented event-trigger/audio-detector source contract, target gain envelope, routing/state and block/timing evidence; #55 |
-| 4 | Finish shared Rack UI, automation and integration | Real MIDI/audio/ducking controls, host/UI/state agreement, correct slot mappings and native captures; #57, related #28/#5 |
-| 5 | Production Rack milestone | Windows x64 VST3/full checks, RT/performance evidence and integrated Cubase/REAPER/visual acceptance; #53/#4 |
-| Parallel | Acid Synth and Acid-specific UI, externally owned | Real descriptor/DSP/presets/generation/panel bindings using the agreed host adapter; no parallel shared schema rewrite |
-| 6 | Complete Full-on Bass after Rack | Every accepted VOX control/bank, usable sound/pattern generation, factory content, MIDI, state and musical/host acceptance; #58/#45 |
-| 7 | Specify/review and implement musical Pattern v2 | Polyphonic/long-phrase event model, version/adapter/resource policy and scheduler/export tests; existing Lead8/Atmos6 DSP voices do not complete this model |
-| 8 | Add Full-on Drums | Kit/pad/choke/resources, patterns and actual kick source integration with the established Rack bus |
-| 9 | Finish Full-on Lead / Keys / FX | Full instrument controls/content; motifs/arp/chords/voice leading, synth keys and semantic FX/WAV workflow as applicable |
-| 10 | Package instruments/content | Offline installation, identity/version policy and selected licensing |
-| 11 | Final production acceptance | Complete lineup, installer/upgrade, real editor, sound review and measured Windows/DAW workload matrix |
+| D0 — now | Stabilize integrated Drums `integration/vox-drums-1.0@f9d544662` and restore Windows CI after the self-hosted runner cancellation | Exact integrated SHA, runner diagnostics, successful Windows build, serial CTest + gain tests, Steinberg validator and artifact hashes; previous [suite 43943639327](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/43943639327) was canceled after 16/32 serial tests |
+| D1 | Complete existing [StyleLibrary #151](https://github.com/ultima-vox/vox-electronic-engine/pull/151), not recreate it | Fix P1 replacement file/delete atomicity and P2 direct-import size and duplicate UUID ambiguities; tests and exact-head Windows CI, independent review, integrate into `integration/vox-drums-1.0` |
+| D2 | Replace interim eight-page editor with approved **native JUCE dockable workspace** | [Functional UI authority #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127), visual-only [#135](https://github.com/ultima-vox/vox-electronic-engine/pull/135), pre-release state policy [#130 §14](https://github.com/ultima-vox/vox-electronic-engine/pull/130). Real UI screenshots, layout and control/automation tests, no WebView |
+| D3 | Complete musical/factory content, program and style coverage | Deterministic generator/style tests; kit/pattern/song presets, source and license manifest per redistributed sample; owner listening **before release**, not before development integration |
+| D4 | Audit full Drums release-candidate code path | DSP/golden parity, RT safety/96k callback timing, 9 buses, state/undo, sample lifetime, host automation, Song 16/32/64-bar and MIDI drag/export; no known P0/P1 |
+| D5 | Single integrated Windows qualification then one owner DAW acceptance | CI on **final integrated SHA**, validator, manifest/hashes, native UI evidence; one manual Cubase 12–15 and REAPER acceptance at the end. No merge to `main` until production approval |
 
-## Current task and boundaries
+D0 is an **infrastructure issue**, not a confirmed DSP test failure. Do not change audio code or test thresholds merely to turn a canceled job green. Actual sound is still a listening gate even when CI is green.
 
-[RACK_PRODUCTION](tasks/RACK_PRODUCTION.md) is the active lead packet.
-[Main audit](testing/rack-capability-audit-20261026.md) separates present code from
-missing features and unconfirmed causes. The existing Main-only mixer is useful
-infrastructure; Send FX, internal ducking and complete user routing are not present.
+## 2. VOX FX — next independent instrument
 
-Acid DSP and its dedicated UI belong to the other agent. Shared Rack/provider
-host/state contracts belong to one lead; publish/review their integration adapter
-before requiring the Acid panel to bind unpublished experiments. Do not edit
-Acid-specific implementation as part of the shared Rack task.
+Use [FX specification](ultima-vox-music/04_VOX_FX_SPEC.md) as product target, [frozen identity](ultima-vox-music/IDENTITY.md) and audited donor history [#110](https://github.com/ultima-vox/vox-electronic-engine/pull/110) / `archive/fx-00-2026-11-09` as reference only. Implement a standalone JUCE VST3 MIDI-triggered FX generator, not a Rack slot and not an incoming-audio insert effect. Reuse shared JUCE controls and safe DSP primitives from Drums where applicable; independently benchmark, test and validate FX before its own release.
 
-Bass WIP is retained but deferred. Its reduced13/16-control Sound composition is
-not the accepted product surface. Preserve [full Bass acceptance](product/FULLON_BASS_ACCEPTANCE.md)
-and do not add legacy POC compatibility modes: the owner confirms no old projects
-require migration. Version intentional replacement/rejection; preserve plugin
-identity and realtime/routing safety.
+## 3. VOX Trance Synthesis (VOX Synth) — last
 
-## Integrated milestone policy
+Use [Synthesis specification](ultima-vox-music/02_VOX_TRANCE_SYNTHESIS_SPEC.md) and unique frozen identity. Audit preserved Bass and Acid donor commits (`archive/bass-recovered-2026-11-09`, `archive/acid-recovered-2026-11-09`, `archive/acid-303-rack-2026-11-09`), then transfer only independently reviewed DSP, controls and tests to the standalone synth. Include NoteOff/release and timing parity, voice resources, current parameter/state contracts, generative MIDI and dedicated JUCE UI. No reintroduction of `slotNN` Rack parameter pool.
 
-The Rack milestone must exercise actual host MIDI -> audio, internal patterns,
-Generate/Mutate publication, export/re-import, project reopen, panic/ownership,
-returns/ducking, tails, latency and lifecycle under declared workloads. Deterministic
-test instruments can verify infrastructure before every production instrument exists.
+## Cross-cutting engineering and release policy
 
-Manual Cubase/REAPER checks occur at integrated milestones, not after each PR.
-Automated green checks do not prove DAW routing, visual acceptance, factory timbre
-or production readiness. Standalone is not required.
-
-## Historical work
-
-PRs #46/#48/#50 integrate routing/lifecycle/live-control repairs. PR #51 integrates
-verified scheduler/export/diagnostic corrections from AGY's original packet.
-Remaining exact-session/musical Bass acceptance stays open in #45 after Rack.
-The earlier AGY diagnosis packet is not the current parallel work assignment.
-
-## Open decisions
-
-- Target CPU/RAM/interface/buffer and measured supported workload budgets.
-- Reviewed Rack bus counts, tap policies, kick source contract and effect latency.
-- Exact hidden synth-page/performance semantics and full instrument resource limits.
-- Whether piano must be realistic acoustic rather than synthetic.
-- Commercial distribution/licence/device-transfer policy and factory quantities.
+- C++20/JUCE, Windows x64 VST3; use `.github/workflows/suite.yml` and available Windows self-hosted runners; no Linux-only CI qualification for production.
+- Each plugin keeps its own processor/editor, identity, automation IDs, bounded serialized state, DSP resource/RT tests, plugin validator and reproducible binaries.
+- Presets, external assets and licenses are release blockers if unverified; do not make ungrounded performance or audio-quality claims.
+- Manual host acceptance is **one final stage per completed plugin**, not one manual round per PR.
+- Stage verified features in each plugin's development integration branch and retain source SHA/provenance. Avoid micro-PR ladders, unreviewed main merges and branch deletion while active PRs still reference them.
+- The historical October 2026 Rack-first roadmap remains in Git history and does not apply to the independent suite.
