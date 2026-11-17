@@ -11,10 +11,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  choose_runner:
+    uses: ./.github/workflows/choose-windows-runner.yml
+    secrets: inherit
+
   windows-suite:
-    runs-on: [self-hosted, windows]
+    needs: choose_runner
+    runs-on: ${{ fromJSON(needs.choose_runner.outputs.runs_on) }}
     timeout-minutes: 120
     env:
+      VOX_CI_RUNNER_KIND: ${{ needs.choose_runner.outputs.kind }}
       CMAKE_GENERATOR: Visual Studio 17 2022
       # Reviewed dependency pins. A tag can move; these commits cannot.
       JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
@@ -106,6 +112,7 @@ jobs:
             "Commit: $env:GITHUB_SHA",
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
             "Runner: $env:RUNNER_NAME",
+            "Runner selection: $env:VOX_CI_RUNNER_KIND",
             "JUCE: $env:JUCE_COMMIT",
             "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
           )
