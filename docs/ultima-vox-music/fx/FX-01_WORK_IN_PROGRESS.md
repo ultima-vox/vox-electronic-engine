@@ -170,3 +170,14 @@ local DSP test covers complete four-second events at 44.1/48/96 kHz and
 64/128/512 blocks; audibility, finite output and decaying tail pass, as does
 ASan/UBSan. This does not establish perceptual quality, aliasing, maximum-load
 performance or plugin-host validation.
+
+## Whoosh / Doppler
+
+FFAM family 4 adds a filtered noise/tonal pass with a fixed 256-sample per-layer
+own-signal delay, interpolated moving read tap, an amplitude window and stereo
+pan motion. Delay is bounded to 254 samples (at most 2 ms where the sample
+rate permits). Tests at 44.1/48/96 kHz and 64/128/512 blocks check audibility,
+finite output and left-to-right energy movement; ASan/UBSan passed locally.
+The delay increases per-event memory and note-on initialization; real host
+callback and maximum-load performance remain unmeasured. Listening and full
+Doppler/alias qualification remain outstanding.

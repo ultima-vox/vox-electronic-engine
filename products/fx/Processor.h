@@ -29,7 +29,7 @@ public:
     // Structural selector: snapshots into newly triggered events, not a host
     // automation parameter. Family selection is a single lock-free scalar.
     bool setFamily (int family) noexcept {
-        if (family < 0 || family > 3) return false;
+        if (family < 0 || family > 4) return false;
         family_.store (family, std::memory_order_release); return true;
     }
     int family() const noexcept { return family_.load (std::memory_order_acquire); }

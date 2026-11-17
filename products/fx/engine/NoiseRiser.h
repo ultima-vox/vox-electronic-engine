@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::impact) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::whoosh) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -117,6 +117,8 @@ private:
         std::uint32_t rng = 1;
         double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0, subPhase = 0;
         std::array<double, 6> partialPhases {};
+        std::array<float, 256> delay {};
+        unsigned delayWrite = 0;
     };
     struct Voice {
         bool active = false;
@@ -156,9 +158,14 @@ private:
             const auto index = static_cast<std::size_t>(position);
             const double fraction = position - static_cast<double>(index);
             const bool descending = settings.family == NoiseFamily::downlifter;
+            const bool movingBack = descending || (settings.family == NoiseFamily::whoosh && t >= 0.5);
+            const double filterPosition = settings.family == NoiseFamily::whoosh ? (movingBack ? (2.0 - 2.0 * t) : 2.0 * t) : t;
+            const double filterPos = std::min(filterPosition * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
+            const auto filterIndex = static_cast<std::size_t>(filterPos);
+            const double filterFraction = filterPos - static_cast<double>(filterIndex);
             const auto coefficient = descending
                 ? coefficients_[tableIntervals - index] + fraction * (coefficients_[tableIntervals - index - 1] - coefficients_[tableIntervals - index])
-                : coefficients_[index] + fraction * (coefficients_[index + 1] - coefficients_[index]);
+                : coefficients_[filterIndex] + filterFraction * (coefficients_[filterIndex + 1] - coefficients_[filterIndex]);
             layer.lowpass += coefficient * (noise - layer.lowpass);
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
@@ -167,7 +174,25 @@ private:
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::impact) {
+            if (settings.family == NoiseFamily::whoosh) {
+                // Bounded variable delay on this layer's own signal. Its
+                // slowly moving read tap supplies a subtle Doppler shift.
+                constexpr unsigned mask = 255;
+                const double delaySamples = 1.0 + t * (std::min(254.0, rate_ * 0.002) - 1.0);
+                const auto whole = static_cast<unsigned>(delaySamples);
+                const double mix = delaySamples - whole;
+                const auto read0 = (layer.delayWrite - whole) & mask;
+                const auto read1 = (read0 - 1) & mask;
+                const double delayed = layer.delay[read0] * (1.0 - mix) + layer.delay[read1] * mix;
+                layer.delay[layer.delayWrite] = static_cast<float>(filtered);
+                layer.delayWrite = (layer.delayWrite + 1) & mask;
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * (2.0 - 1.5 * t), rate_ * 0.45);
+                const double tonal = std::sin(6.283185307179586 * layer.phase);
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                source = 0.65 * delayed + 0.2 * tonal;
+                const double window = std::sin(3.141592653589793 * t);
+                envelope = window * window;
+            } else if (settings.family == NoiseFamily::impact) {
                 // Decaying sine body with a fast pitch fall, separate sub,
                 // and short noise exciter. Tables are prepared off-thread.
                 const double elapsed = t * layerDuration;
@@ -219,7 +244,8 @@ private:
             const double sample = source * v.velocity * envelope * fadeIn * fadeOut * release *
                                   v.layerScale * settings.gain * settings.gainCurve.evaluate(static_cast<float>(t));
             const double pan = std::clamp(static_cast<double>(settings.pan) +
-                                          2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0, -1.0, 1.0);
+                                          2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
+                                          (settings.family == NoiseFamily::whoosh ? 2.0 * t - 1.0 : 0.0), -1.0, 1.0);
             left += sample * std::min(1.0, 1.0 - pan);
             right += sample * std::min(1.0, 1.0 + pan);
         }
