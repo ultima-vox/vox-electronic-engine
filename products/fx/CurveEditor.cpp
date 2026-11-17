@@ -1,0 +1,130 @@
+#include "CurveEditor.h"
+#include "Processor.h"
+#include "Tokens.h"
+#include "Typography.h"
+#include <algorithm>
+#include <cmath>
+
+namespace vox::fx {
+namespace {
+class CurveChange final : public juce::UndoableAction {
+public:
+    CurveChange(FxProcessor& p,int layer,timeline::Curve before,timeline::Curve after)
+        : processor(p), index(layer), oldCurve(before), newCurve(after) {}
+    bool perform() override { return apply(newCurve); }
+    bool undo() override { return apply(oldCurve); }
+private:
+    bool apply(const timeline::Curve& curve) {
+        return processor.editLayer(static_cast<std::size_t>(index),[&](NoiseLayer& l){l.gainCurve=curve;});
+    }
+    FxProcessor& processor;
+    int index;
+    timeline::Curve oldCurve,newCurve;
+};
+}
+CurveEditor::CurveEditor(FxProcessor& processor,int layer) : processor_(processor),layer_(layer) {
+    setWantsKeyboardFocus(true);
+    setTitle("Layer gain curve");
+    setDescription("Double click to add nodes; drag to edit. Delete removes a node. L, S, E or H select segment shape.");
+    shown_=processor_.program().layers[static_cast<std::size_t>(layer_)].gainCurve;
+    restoreEpoch_=processor_.programRestoreEpoch();
+}
+juce::Rectangle<float> CurveEditor::graph() const noexcept { return getLocalBounds().toFloat().reduced(8.0f); }
+juce::Point<float> CurveEditor::pointFor(const timeline::Node& n) const noexcept {
+    auto r=graph(); return {r.getX()+n.time*r.getWidth(),r.getBottom()-n.value*r.getHeight()};
+}
+int CurveEditor::hit(juce::Point<float> point) const noexcept {
+    int result=-1;float best=9.0f*9.0f;
+    for(int i=0;i<shown_.count;++i){const auto d=pointFor(shown_.nodes[static_cast<std::size_t>(i)])-point;
+        const float dist=d.x*d.x+d.y*d.y;if(dist<=best){best=dist;result=i;}}
+    return result;
+}
+void CurveEditor::paint(juce::Graphics& g) {
+    namespace c=vox::ui::tokens::colour;
+    auto r=graph(); g.setColour(c::graph);g.fillRoundedRectangle(r,3.0f);
+    g.setColour(c::border);g.drawRoundedRectangle(r,3.0f,1.0f);
+    juce::Path path;
+    constexpr int samples=80;
+    for(int i=0;i<=samples;++i){const float t=static_cast<float>(i)/samples;
+        const float x=r.getX()+t*r.getWidth(), y=r.getBottom()-shown_.evaluate(t)*r.getHeight();
+        if(i==0)path.startNewSubPath(x,y);else path.lineTo(x,y);}
+    g.setColour(c::accent);g.strokePath(path,juce::PathStrokeType(1.5f));
+    for(int i=0;i<shown_.count;++i){const auto point=pointFor(shown_.nodes[static_cast<std::size_t>(i)]);
+        g.setColour(i==selected_?c::text:c::accent);g.fillEllipse(point.x-3.0f,point.y-3.0f,6.0f,6.0f);}
+    if(hasKeyboardFocus(true)){g.setColour(c::text);g.drawRoundedRectangle(r,3.0f,1.5f);}
+}
+void CurveEditor::syncRestore() {
+    const auto epoch=processor_.programRestoreEpoch();
+    if(epoch!=restoreEpoch_) { undo_.clearUndoHistory(); dragging_=false; selected_=-1; restoreEpoch_=epoch; }
+}
+void CurveEditor::refresh(const timeline::Curve& curve) {
+    syncRestore();
+    if(!dragging_ && curve.valid()){shown_=curve;if(selected_>=shown_.count)selected_=-1;repaint();}
+}
+bool CurveEditor::publish(const timeline::Curve& curve) {
+    return curve.valid() && processor_.editLayer(static_cast<std::size_t>(layer_),[&](NoiseLayer& l){l.gainCurve=curve;});
+}
+bool CurveEditor::setCurve(const timeline::Curve& curve) {
+    syncRestore();
+    if(!curve.valid())return false;
+    const auto old=processor_.program().layers[static_cast<std::size_t>(layer_)].gainCurve;
+    undo_.beginNewTransaction();
+    if(!undo_.perform(new CurveChange(processor_,layer_,old,curve)))return false;
+    shown_=curve;repaint();return true;
+}
+bool CurveEditor::undo(){syncRestore();const bool ok=undo_.undo();refresh(processor_.program().layers[static_cast<std::size_t>(layer_)].gainCurve);return ok;}
+bool CurveEditor::redo(){syncRestore();const bool ok=undo_.redo();refresh(processor_.program().layers[static_cast<std::size_t>(layer_)].gainCurve);return ok;}
+void CurveEditor::mouseDown(const juce::MouseEvent& event) {
+    grabKeyboardFocus(); selected_=hit(event.position);dragging_=selected_>=0;
+    if(dragging_) beforeDrag_=shown_;
+    repaint();
+}
+void CurveEditor::mouseDrag(const juce::MouseEvent& event) {
+    if(!dragging_ || selected_<0)return;
+    auto r=graph();if(r.getWidth()<=0 || r.getHeight()<=0)return;
+    auto& node=shown_.nodes[static_cast<std::size_t>(selected_)];
+    node.value=juce::jlimit(0.0f,1.0f,(r.getBottom()-event.position.y)/r.getHeight());
+    if(selected_>0 && selected_+1<shown_.count){
+        const float time=std::round(juce::jlimit(0.0f,1.0f,(event.position.x-r.getX())/r.getWidth())*16.0f)/16.0f;
+        const float lo=shown_.nodes[static_cast<std::size_t>(selected_-1)].time+0.0001f;
+        const float hi=shown_.nodes[static_cast<std::size_t>(selected_+1)].time-0.0001f;
+        if(lo<=hi)node.time=juce::jlimit(lo,hi,time);
+    }
+    (void)publish(shown_);repaint();
+}
+void CurveEditor::mouseUp(const juce::MouseEvent&) {
+    if(!dragging_) return;
+    dragging_=false;
+    const auto after=shown_;undo_.beginNewTransaction();
+    (void)undo_.perform(new CurveChange(processor_,layer_,beforeDrag_,after));repaint();
+}
+void CurveEditor::mouseDoubleClick(const juce::MouseEvent& event) {
+    dragging_=false;auto r=graph();if(r.getWidth()<=0||r.getHeight()<=0||shown_.count>=16)return;
+    const float time=std::round(juce::jlimit(0.0f,1.0f,(event.position.x-r.getX())/r.getWidth())*16.0f)/16.0f;
+    if(time<=0||time>=1)return;
+    auto next=shown_;int at=1;while(at<next.count && next.nodes[static_cast<std::size_t>(at)].time<time)++at;
+    if(at>=next.count || next.nodes[static_cast<std::size_t>(at)].time==time)return;
+    for(int i=next.count;i>at;--i)next.nodes[static_cast<std::size_t>(i)]=next.nodes[static_cast<std::size_t>(i-1)];
+    next.nodes[static_cast<std::size_t>(at)]={time,juce::jlimit(0.0f,1.0f,(r.getBottom()-event.position.y)/r.getHeight()),timeline::Shape::linear};
+    ++next.count;if(setCurve(next))selected_=at;
+}
+bool CurveEditor::keyPressed(const juce::KeyPress& key) {
+    if(key.getModifiers().isCommandDown() && key.getKeyCode()=='z')return undo();
+    if(key.getModifiers().isCommandDown() && key.getKeyCode()=='y')return redo();
+    if(selected_<0 || selected_>=shown_.count)return false;
+    auto next=shown_;
+    if(key==juce::KeyPress::deleteKey || key==juce::KeyPress::backspaceKey){
+        if(selected_==0 || selected_+1==next.count)return false;
+        for(int i=selected_;i+1<next.count;++i)next.nodes[static_cast<std::size_t>(i)]=next.nodes[static_cast<std::size_t>(i+1)];
+        --next.count;selected_=-1;return setCurve(next);
+    }
+    switch(juce::CharacterFunctions::toLowerCase(static_cast<juce::juce_wchar>(key.getTextCharacter()))){
+        case 'l':next.nodes[static_cast<std::size_t>(selected_)].shape=timeline::Shape::linear;break;
+        case 's':next.nodes[static_cast<std::size_t>(selected_)].shape=timeline::Shape::smooth;break;
+        case 'e':next.nodes[static_cast<std::size_t>(selected_)].shape=timeline::Shape::exponential;break;
+        case 'h':next.nodes[static_cast<std::size_t>(selected_)].shape=timeline::Shape::hold;break;
+        default:return false;
+    }
+    return setCurve(next);
+}
+} // namespace vox::fx

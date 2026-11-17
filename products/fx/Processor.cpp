@@ -220,6 +220,7 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     auto held = std::make_shared<float> (0.0f);
     result.apply = [this, value, duration, program, held] {
         (void) programs_.publish (*program);
+        restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);
         *held = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();

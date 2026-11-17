@@ -3,6 +3,7 @@
 #include "components/VoxButton.h"
 #include "components/VoxComboBox.h"
 #include "engine/NoiseRiser.h"
+#include "CurveEditor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace vox::fx {
@@ -19,9 +20,11 @@ public:
     juce::Slider& gainSlider() noexcept { return gain_.getSlider(); }
     juce::Slider& panSlider() noexcept { return pan_.getSlider(); }
     juce::Button& enabledButton() noexcept { return enabled_; }
+    CurveEditor& curveEditor() noexcept { return curve_; }
 private:
     FxProcessor& processor_;
     int index_;
+    CurveEditor curve_;
     vox::ui::VoxButton enabled_ { "ON", vox::ui::VoxButton::Type::Toggle };
     vox::ui::VoxComboBox family_;
     vox::ui::VoxKnob gain_ { "GAIN", vox::ui::VoxKnob::Size::Small };

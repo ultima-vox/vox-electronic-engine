@@ -60,4 +60,4 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/PatternEditor.cpp drums/PatternEditor.h)
 target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juce_cryptography)
 
-target_sources(${VOX_SUITE_fx_TARGET} PRIVATE fx/FxEditor.cpp fx/FxEditor.h fx/LayerPanel.cpp fx/LayerPanel.h)
+target_sources(${VOX_SUITE_fx_TARGET} PRIVATE fx/FxEditor.cpp fx/FxEditor.h fx/LayerPanel.cpp fx/LayerPanel.h fx/CurveEditor.cpp fx/CurveEditor.h)

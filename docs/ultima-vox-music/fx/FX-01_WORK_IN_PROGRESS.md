@@ -252,3 +252,14 @@ events, not host automation; layer gain/pan automation and editable curves
 remain required. Layer edits use serialized non-audio read-modify-write so
 concurrent changes to different layers are not lost. JUCE editor binding tests
 were added and syntax-checked but have not yet executed in a full suite build.
+
+## Basic gain-curve editing
+
+Each layer card has an editable gain curve: double-click inserts a node,
+interior nodes drag with 1/16 time snapping, Delete removes an interior node,
+and L/S/E/H set the outgoing shape. Ctrl-Z/Y undo and redo structural edits;
+project restore clears the editor undo history. Curve values publish through
+the Program store and are captured by newly triggered events. Tests for the
+editor-to-Program binding and undo/redo were added but only syntax-checked.
+The full Timeline workspace, selection/zoom, pan/pitch/filter/global curves,
+accessible alternative node entry and Windows visual/DPI qualification remain.

@@ -46,6 +46,11 @@ int main() {
         const auto edited = p.program();
         check(std::abs(edited.layers[1].gain - 0.42f) < 1e-5f && edited.layers[1].pan == -0.5f,
               "layer UI edits structural program");
+        auto& curve = panel.layerPanel(1).curveEditor();
+        check(curve.setCurve(vox::fx::timeline::Curve::constant(0.25f)) &&
+              p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve edit changes program");
+        check(curve.undo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 1.0f, "curve undo");
+        check(curve.redo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve redo");
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }

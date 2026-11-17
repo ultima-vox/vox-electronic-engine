@@ -4,7 +4,7 @@
 #include "Typography.h"
 
 namespace vox::fx {
-LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor), index_(index) {
+LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor), index_(index), curve_(processor,index) {
     enabled_.setClickingTogglesState(true);
     enabled_.setTitle("Enable layer " + juce::String(index + 1));
     enabled_.onClick = [this] { processor_.editLayer(static_cast<std::size_t>(index_), [this](NoiseLayer& l){ l.enabled=enabled_.getToggleState(); }); };
@@ -28,6 +28,7 @@ LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor
     s.onValueChange=[this]{const float v=static_cast<float>(span_.getSlider().getValue());
         processor_.editLayer(static_cast<std::size_t>(index_), [v](NoiseLayer& l){l.timing.span=v;l.timing.offset=std::min(l.timing.offset,1.0f-v);});span_.repaint();};
     for(auto* knob:{&gain_,&pan_,&offset_,&span_})addAndMakeVisible(*knob);
+    addAndMakeVisible(curve_);
     refresh(processor_.program().layers[static_cast<std::size_t>(index_)]);
 }
 void LayerPanel::refresh(const NoiseLayer& layer) {
@@ -38,6 +39,7 @@ void LayerPanel::refresh(const NoiseLayer& layer) {
     offset_.getSlider().setValue(layer.timing.offset,juce::dontSendNotification);
     span_.getSlider().setValue(layer.timing.span,juce::dontSendNotification);
     gain_.repaint();pan_.repaint();offset_.repaint();span_.repaint();
+    curve_.refresh(layer.gainCurve);
 }
 void LayerPanel::paint(juce::Graphics& g) {
     namespace c=vox::ui::tokens::colour;
@@ -54,5 +56,6 @@ void LayerPanel::resized() {
     auto knobs=area.removeFromTop(85);const int width=knobs.getWidth()/4;
     gain_.setBounds(knobs.removeFromLeft(width));pan_.setBounds(knobs.removeFromLeft(width));
     offset_.setBounds(knobs.removeFromLeft(width));span_.setBounds(knobs);
+    curve_.setBounds(area);
 }
 } // namespace vox::fx

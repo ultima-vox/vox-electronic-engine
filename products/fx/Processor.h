@@ -37,6 +37,7 @@ public:
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
     NoiseProgram program() const { return programs_.snapshot(); }
+    std::uint64_t programRestoreEpoch() const noexcept { return restoreEpoch_.load(std::memory_order_acquire); }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
 
 protected:
@@ -47,6 +48,7 @@ protected:
 private:
     NoiseRiser engine_;
     ProgramStore programs_;
+    std::atomic<std::uint64_t> restoreEpoch_ { 0 };
     NoiseProgram audioProgram_;
     std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
