@@ -216,3 +216,11 @@ noise and slow level/pan motion. Local 44.1/48/96 kHz, 64/128/512 block
 renders demonstrate sustained output, stereo movement and finite bounds;
 ASan/UBSan passed. No unison control, full VA waveforms or product-level
 quality/host/performance qualification is claimed.
+
+## Formant / Alien
+
+FFAM family 9 uses three moving, prepared-coefficient TPT band-pass formants
+excited by sine and noise. Local tests cover 44.1/48/96 kHz, 64/128/512
+blocks, finite output, distinction from Texture and 96 kHz eight-event,
+four-layer stress; ASan/UBSan passed. Full vowel control, modulation routing,
+perceptual/alias qualification and host verification remain outstanding.

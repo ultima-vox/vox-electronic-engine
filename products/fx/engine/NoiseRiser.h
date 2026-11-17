@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::texture) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::formant) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -129,6 +129,7 @@ private:
         std::uint32_t rng = 1;
         double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0, subPhase = 0;
         double svf1 = 0, svf2 = 0;
+        std::array<double, 3> formant1 {}, formant2 {};
         std::array<double, 6> partialPhases {};
         std::array<double, 8> mode1 {}, mode2 {};
         bool modesStarted = false;
@@ -189,7 +190,33 @@ private:
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::texture) {
+            if (settings.family == NoiseFamily::formant) {
+                // Three independently moving resonant band-pass formants
+                // excited by a tonal oscillator and a small noise component.
+                const double elapsed = t * layerDuration;
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)], rate_ * 0.4);
+                const double input = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                constexpr std::array<double, 3> centers {0.25, 0.48, 0.70};
+                constexpr std::array<double, 3> depths {0.11, 0.08, 0.06};
+                source = 0.0;
+                for (std::size_t formant = 0; formant < centers.size(); ++formant) {
+                    const double morph = std::sin(6.283185307179586 * elapsed * 0.24 + formant * 1.3);
+                    const double pos = (centers[formant] + depths[formant] * morph) * tableIntervals;
+                    const auto gi = static_cast<std::size_t>(pos);
+                    const double g = svfG_[gi] + (pos - static_cast<double>(gi)) * (svfG_[gi+1] - svfG_[gi]);
+                    constexpr double damping = 0.32;
+                    const double a1 = 1.0 / (1.0 + g * (g + damping));
+                    const double v3 = input - layer.formant2[formant];
+                    const double v1 = a1 * layer.formant1[formant] + g * a1 * v3;
+                    const double v2 = layer.formant2[formant] + g * v1;
+                    layer.formant1[formant] = 2.0 * v1 - layer.formant1[formant];
+                    layer.formant2[formant] = 2.0 * v2 - layer.formant2[formant];
+                    source += v1;
+                }
+                source *= 0.15;
+                envelope = 0.7;
+            } else if (settings.family == NoiseFamily::texture) {
                 // Two continuously phased detuned sine oscillators and
                 // filtered noise, with slow level and stereo evolution.
                 const double elapsed = t * layerDuration;
