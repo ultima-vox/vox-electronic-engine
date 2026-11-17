@@ -1,3 +1,5 @@
+> **Implementation baseline note (2026-11-17):** This file describes the original independent VOX Drums target and includes historical "current 8-pad" statements from the Rack donor. The active `integration/vox-drums-1.0@f9d544662` branch now contains the standalone 16-pad implementation, Song 16/32/64-bar model, MIDI export and generator; **this is not production acceptance**. Use [developer handoff](../DEVELOPER_HANDOFF.md), [current status](../STATUS.md), [BAR_TIMING.md](drums/BAR_TIMING.md) for the current DSEQ v4/DSNG v2 timing model, and [UI issue #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127) for the release interface. Requirements below remain goals where not yet verified; do not restart the instrument from the old eight-pad reference.
+
 # 03 — VOX Drums: самостоятельная драм-машина
 
 **Статус:** целевая спецификация самостоятельного VST3, не характеристика текущего `.vins`. **Цель:** один полноценный жанрово-нейтральный инструмент с профессиональным синтезом/сэмплированием ударных и быстрым генератором грувов. Первый формат — Windows x64 VST3, C++20/JUCE 9.
