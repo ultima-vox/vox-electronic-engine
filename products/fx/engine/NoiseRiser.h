@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::squelch) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::metallic) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -58,8 +58,18 @@ public:
                 shepardWeights_[partial][i] = sine * sine;
             }
         }
-        for (std::size_t i = 0; i < noteHz_.size(); ++i)
+        constexpr std::array<double, 8> ratios {1.0, 1.47, 2.08, 2.71, 3.93, 5.11, 6.48, 7.83};
+        for (std::size_t i = 0; i < noteHz_.size(); ++i) {
             noteHz_[i] = 440.0 * std::exp2((static_cast<double>(i) - 69.0) / 12.0);
+            for (std::size_t j = 0; j < ratios.size(); ++j) {
+                auto& mode = modal_[i][j];
+                const double frequency = noteHz_[i] * ratios[j];
+                mode.enabled = frequency < rate_ * 0.45;
+                const double radius = std::exp(-1.0 / (rate_ * (1.2 / (1.0 + j * 0.18))));
+                mode.a1 = 2.0 * radius * std::cos(6.283185307179586 * frequency / rate_);
+                mode.a2 = -radius * radius;
+            }
+        }
         voices_ = {}; retiring_ = {}; serial_ = 0;
     }
     // The caller must ensure there is no concurrent access. UI/worker threads
@@ -120,6 +130,8 @@ private:
         double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0, subPhase = 0;
         double svf1 = 0, svf2 = 0;
         std::array<double, 6> partialPhases {};
+        std::array<double, 8> mode1 {}, mode2 {};
+        bool modesStarted = false;
         std::array<float, 256> delay {};
         unsigned delayWrite = 0;
     };
@@ -173,11 +185,31 @@ private:
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
             const double layerDuration = v.duration * span;
-            const double fadeIn = std::min(1.0, t * layerDuration / ((settings.family == NoiseFamily::impact || settings.family == NoiseFamily::laser || settings.family == NoiseFamily::squelch) ? 0.001 : 0.01));
+            const double fadeIn = std::min(1.0, t * layerDuration / ((settings.family == NoiseFamily::impact || settings.family == NoiseFamily::laser || settings.family == NoiseFamily::squelch || settings.family == NoiseFamily::metallic) ? 0.001 : 0.01));
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::squelch) {
+            if (settings.family == NoiseFamily::metallic) {
+                // Eight stable damped inharmonic modes excited once per layer.
+                // Coefficients are prepared at the active sample rate; modes
+                // beyond the anti-alias cutoff are omitted.
+                const auto& modes = modal_[static_cast<std::size_t>(v.note)];
+                source = 0.0;
+                for (std::size_t mode = 0; mode < modes.size(); ++mode) {
+                    if (!modes[mode].enabled) continue;
+                    if (!layer.modesStarted) {
+                        const double polarity = (layer.rng & (1u << mode)) ? 1.0 : -1.0;
+                        layer.mode1[mode] = 0.4 * polarity;
+                        layer.mode2[mode] = 0.5 * modes[mode].a1 * layer.mode1[mode];
+                    }
+                    const double next = modes[mode].a1 * layer.mode1[mode] + modes[mode].a2 * layer.mode2[mode];
+                    layer.mode2[mode] = layer.mode1[mode]; layer.mode1[mode] = next;
+                    source += next;
+                }
+                layer.modesStarted = true;
+                source *= 1.0 / 8.0;
+                envelope = 1.0;
+            } else if (settings.family == NoiseFamily::squelch) {
                 // Resonant TPT low-pass excited by a fast pitch-falling sine
                 // plus a short noise burst; cutoff rises then falls in 300 ms.
                 const double elapsed = t * layerDuration;
@@ -295,7 +327,9 @@ private:
     std::array<double, tableIntervals + 1> impactPitch_ {}, impactBody_ {}, impactNoise_ {};
     std::array<double, tableIntervals + 1> svfG_ {}, squelchDecay_ {};
     std::array<std::array<double, tableIntervals + 1>, 6> shepardWeights_ {};
+    struct ModalCoefficient { double a1 = 0, a2 = 0; bool enabled = false; };
     std::array<double, 128> noteHz_ {};
+    std::array<std::array<ModalCoefficient, 8>, 128> modal_ {};
     NoiseProgram program_;
     double rate_ = 44100.0;
     std::uint64_t serial_ = 0;

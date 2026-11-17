@@ -199,3 +199,12 @@ sample tests cover finite output, decay and distinction from Laser. An
 additional eight-event/four-layer stress render at 96 kHz stayed finite and
 below full scale; ASan/UBSan passed locally. Comb, ratchet, perceptual
 acceptance, full filter inventory and exact-head VST3/host evidence remain.
+
+## Metallic / Resonant
+
+FFAM family 7 implements eight prepared, damped inharmonic modes with bounded
+feedback coefficients and omission above 0.45 times sample rate. Local tests
+cover full events at 44.1/48/96 kHz and 64/128/512 blocks, decay and finite
+output, plus eight-event/four-layer stress at 96 kHz; ASan/UBSan passed.
+This is an initial mode bank, not the full filter/controls inventory or a
+perceptual/alias/performance qualification.

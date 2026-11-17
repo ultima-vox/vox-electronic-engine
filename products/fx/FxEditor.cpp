@@ -23,6 +23,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.addItem ("Whoosh / Doppler", 5);
     family_.addItem ("Zap / Laser", 6);
     family_.addItem ("Psy Blip / Squelch", 7);
+    family_.addItem ("Metallic / Resonant", 8);
     family_.setTitle ("Sound family");
     family_.setTooltip ("Family for newly triggered events");
     family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
