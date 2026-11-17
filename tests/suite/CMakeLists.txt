@@ -269,3 +269,8 @@ add_executable(suite_fx_laser_tests FxLaserTests.cpp)
 target_include_directories(suite_fx_laser_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_laser_tests COMMAND suite_fx_laser_tests)
 set_tests_properties(suite_fx_laser_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_squelch_tests FxSquelchTests.cpp)
+target_include_directories(suite_fx_squelch_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_squelch_tests COMMAND suite_fx_squelch_tests)
+set_tests_properties(suite_fx_squelch_tests PROPERTIES LABELS suite)

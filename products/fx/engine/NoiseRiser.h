@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::laser) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::squelch) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -44,12 +44,14 @@ public:
             const double phase = static_cast<double>(i) / tableIntervals;
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
             coefficients_[i] = 1.0 - std::exp(-6.283185307179586 * cutoff / rate_);
+            svfG_[i] = std::tan(3.141592653589793 * cutoff / rate_);
             pitchFactors_[i] = std::exp2(3.0 * (1.0 - phase));
             risingFactors_[i] = std::exp2(3.0 * phase);
             const double seconds = 8.0 * phase;
             impactPitch_[i] = std::exp(-22.0 * seconds);
             impactBody_[i] = std::exp(-2.0 * seconds);
             impactNoise_[i] = std::exp(-14.0 * seconds);
+            squelchDecay_[i] = std::exp(-5.0 * seconds);
             for (std::size_t partial = 0; partial < shepardWeights_.size(); ++partial) {
                 const double position = std::fmod(static_cast<double>(partial) + 3.0 * phase, 6.0);
                 const double sine = std::sin(3.141592653589793 * position / 6.0);
@@ -116,6 +118,7 @@ private:
     struct LayerState {
         std::uint32_t rng = 1;
         double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0, subPhase = 0;
+        double svf1 = 0, svf2 = 0;
         std::array<double, 6> partialPhases {};
         std::array<float, 256> delay {};
         unsigned delayWrite = 0;
@@ -170,11 +173,35 @@ private:
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
             const double layerDuration = v.duration * span;
-            const double fadeIn = std::min(1.0, t * layerDuration / ((settings.family == NoiseFamily::impact || settings.family == NoiseFamily::laser) ? 0.001 : 0.01));
+            const double fadeIn = std::min(1.0, t * layerDuration / ((settings.family == NoiseFamily::impact || settings.family == NoiseFamily::laser || settings.family == NoiseFamily::squelch) ? 0.001 : 0.01));
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::laser) {
+            if (settings.family == NoiseFamily::squelch) {
+                // Resonant TPT low-pass excited by a fast pitch-falling sine
+                // plus a short noise burst; cutoff rises then falls in 300 ms.
+                const double elapsed = t * layerDuration;
+                const double pos = std::min(elapsed / 8.0 * tableIntervals, static_cast<double>(tableIntervals));
+                const auto at = static_cast<std::size_t>(pos), next = std::min(at + 1, tableIntervals);
+                const double f = pos - static_cast<double>(at);
+                const auto read = [at, next, f] (const auto& table) { return table[at] + f * (table[next] - table[at]); };
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * (1.0 + 3.0 * read(impactPitch_)), 0.4 * rate_);
+                const double exciter = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise * read(impactNoise_);
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                const double sweep = std::clamp(1.0 - std::abs(elapsed / 0.15 - 1.0), 0.0, 1.0);
+                const double gp = std::min(sweep * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
+                const auto gi = static_cast<std::size_t>(gp);
+                const double g = svfG_[gi] + (gp - static_cast<double>(gi)) * (svfG_[gi+1] - svfG_[gi]);
+                constexpr double damping = 0.28;
+                const double a1 = 1.0 / (1.0 + g * (g + damping));
+                const double v3 = exciter - layer.svf2;
+                const double v1 = a1 * layer.svf1 + g * a1 * v3;
+                const double v2 = layer.svf2 + g * v1;
+                layer.svf1 = 2.0 * v1 - layer.svf1;
+                layer.svf2 = 2.0 * v2 - layer.svf2;
+                source = 0.35 * v2;
+                envelope = read(squelchDecay_);
+            } else if (settings.family == NoiseFamily::laser) {
                 // Fast exponential chirp with a short synthetic noise tick.
                 // Rate-independent prepared curves avoid per-sample exp().
                 const double elapsed = t * layerDuration;
@@ -266,6 +293,7 @@ private:
     static constexpr std::size_t tableIntervals = 4096;
     std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {}, risingFactors_ {};
     std::array<double, tableIntervals + 1> impactPitch_ {}, impactBody_ {}, impactNoise_ {};
+    std::array<double, tableIntervals + 1> svfG_ {}, squelchDecay_ {};
     std::array<std::array<double, tableIntervals + 1>, 6> shepardWeights_ {};
     std::array<double, 128> noteHz_ {};
     NoiseProgram program_;

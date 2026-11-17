@@ -190,3 +190,12 @@ Tests cover 44.1/48/96 kHz, 64/128/512 blocks, output bounds, decay and a
 normalized high-frequency trajectory proxy; ASan/UBSan passed locally. The
 current recipe does not include optional FM, drive or oversampling; listening,
 anti-alias measurement and exact-head host tests remain required.
+
+## Psy Blip / Squelch
+
+FFAM family 6 uses a pitch-falling sine/noise exciter and a moving resonant TPT
+low-pass with precomputed coefficients. Local 44.1/48/96 kHz and 64/128/512
+sample tests cover finite output, decay and distinction from Laser. An
+additional eight-event/four-layer stress render at 96 kHz stayed finite and
+below full scale; ASan/UBSan passed locally. Comb, ratchet, perceptual
+acceptance, full filter inventory and exact-head VST3/host evidence remain.
