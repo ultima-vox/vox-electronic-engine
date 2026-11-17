@@ -25,6 +25,13 @@ preset::Section encodeFamily (int family)
             section.data.push_back (static_cast<std::byte> ((word >> shift) & 0xffu));
     return section;
 }
+preset::Section encodeProgram (const NoiseProgram& program)
+{
+    preset::Section section;
+    section.tag = fxProgramSectionTag;
+    (void) programcodec::encode (program, section.data); // validated on publication
+    return section;
+}
 std::uint32_t wordAt (const std::vector<std::byte>& data, std::size_t offset)
 {
     std::uint32_t value = 0;
@@ -53,7 +60,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
     engine_.prepare (rate);
-    appliedFamily_ = -1;
+    programSequence_ = 0;
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
@@ -101,12 +108,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         engine_.allSoundOff (0);
         auditionPending_.store (false, std::memory_order_relaxed);
     }
-    const int selectedFamily = family_.load (std::memory_order_acquire);
-    if (selectedFamily != appliedFamily_) {
-        NoiseProgram program;
-        program.layers[0].family = static_cast<NoiseFamily> (selectedFamily);
-        if (engine_.setProgram (program)) appliedFamily_ = selectedFamily;
-    }
+    // One bounded attempt: if a concurrent writer is publishing, keep the
+    // prior snapshot and retry on the next block. No locks or allocation.
+    if (programs_.tryRead (audioProgram_, programSequence_))
+        (void) engine_.setProgram (audioProgram_);
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
@@ -160,7 +165,9 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
     const auto current = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
     out.push_back (encodeParameter (output_->get(), juce::exactlyEqual (current, heldDuration_) ? loadedDuration_ : current));
-    out.push_back (encodeFamily (family()));
+    const auto program = programs_.snapshot();
+    out.push_back (encodeFamily (static_cast<int> (program.layers[0].family)));
+    out.push_back (encodeProgram (program));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -194,12 +201,25 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
         }
         family = static_cast<int> (wordAt (section->data, 4));
     }
+    auto program = std::make_shared<NoiseProgram>();
+    program->layers[0].family = static_cast<NoiseFamily> (family);
+    if (const auto* section = doc.find (fxProgramSectionTag)) {
+        if (!programcodec::decode (section->data, *program)) {
+            error = "Unsupported or malformed FX Program section";
+            return {};
+        }
+        if (doc.find (fxFamilySectionTag) != nullptr && static_cast<int> (program->layers[0].family) != family) {
+            error = "Inconsistent FX family and Program sections";
+            return {};
+        }
+    }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
-    result.sections.push_back (encodeFamily (family));
+    result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
+    result.sections.push_back (encodeProgram (*program));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, family, held] {
-        setFamily (family);
+    result.apply = [this, value, duration, program, held] {
+        (void) programs_.publish (*program);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);
         *held = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();

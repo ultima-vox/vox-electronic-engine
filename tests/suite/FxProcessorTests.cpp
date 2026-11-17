@@ -134,6 +134,35 @@ int main() {
         block(impact, b, md);
         check(b.getMagnitude(0, 0, 512) > 0, "impact reaches processor DSP");
     }
+    {
+        vox::fx::FxProcessor layered; layered.prepareToPlay(48000, 512);
+        auto program = layered.program(); program.layers[0].enabled = false;
+        program.layers[1].enabled = true; program.layers[1].family = vox::fx::NoiseFamily::downlifter;
+        program.layers[1].pan = -1.0f;
+        check(layered.setProgram(program), "publish layered program");
+        juce::MidiBuffer notes;
+        notes.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(layered, audio, notes);
+        check(audio.getMagnitude(0, 0, 512) > 0 && audio.getMagnitude(1, 0, 512) == 0,
+              "published layer drives real stereo DSP");
+        const auto layerState = save(layered);
+        vox::fx::FxProcessor restoredLayered;
+        restoredLayered.setStateInformation(layerState.getData(), static_cast<int>(layerState.getSize()));
+        const auto recovered = restoredLayered.program();
+        check(restoredLayered.lastStateError().isEmpty() && !recovered.layers[0].enabled &&
+              recovered.layers[1].enabled && recovered.layers[1].family == vox::fx::NoiseFamily::downlifter &&
+              recovered.layers[1].pan == -1.0f && save(restoredLayered) == layerState,
+              "layer program restored and roundtrips");
+        auto bad = vox::preset::decode(std::span(static_cast<const std::byte*>(layerState.getData()), layerState.getSize()),
+                                       vox::preset::makeTag("VXFX"), 1);
+        for (auto& section : bad.document.sections) if (section.tag == vox::fx::fxProgramSectionTag) section.data[0] = std::byte{2};
+        const auto encodedBad = vox::preset::encode(bad.document);
+        if (encodedBad) {
+            restoredLayered.setStateInformation(encodedBad->data(), static_cast<int>(encodedBad->size()));
+            check(restoredLayered.lastStateError().isNotEmpty() && save(restoredLayered) == layerState,
+                  "future layered state rejected transactionally");
+        } else check(false, "future program test encoded");
+    }
     auto* gain = p.getParameters()[0];
     check(gain != nullptr, "output parameter exists");
     gain->setValueNotifyingHost(0.25f);
@@ -169,7 +198,7 @@ int main() {
                                           vox::preset::makeTag("VXFX"), 1);
         auto& oldSections = oldDoc.document.sections;
         oldSections.erase(std::remove_if(oldSections.begin(), oldSections.end(), [] (const auto& section) {
-            return section.tag == vox::fx::fxFamilySectionTag;
+            return section.tag == vox::fx::fxFamilySectionTag || section.tag == vox::fx::fxProgramSectionTag;
         }), oldSections.end());
         for (auto& section : oldSections) if (section.tag == vox::fx::fxParameterSectionTag) {
             section.data.resize(8); section.data[0] = std::byte{1};

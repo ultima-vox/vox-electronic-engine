@@ -2,11 +2,13 @@
 
 #include "common/SuiteProcessor.h"
 #include "engine/NoiseRiser.h"
+#include "engine/ProgramStore.h"
 
 namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 
 // Interim FX-01 instrument: a four-second one-shot noise riser. The timeline,
 // structural Program, layers and remaining families are not implemented yet.
@@ -26,24 +28,26 @@ public:
     void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
     void panic() noexcept { panicPending_.store (true, std::memory_order_release); }
     float outputPeak() const noexcept { return peak_.load (std::memory_order_relaxed); }
-    // Structural selector: snapshots into newly triggered events, not a host
-    // automation parameter. Family selection is a single lock-free scalar.
-    bool setFamily (int family) noexcept {
+    // Controller methods only: these may lock/allocate and are never called
+    // from the audio callback. Existing events retain their captured program.
+    bool setFamily (int family) {
         if (family < 0 || family > 9) return false;
-        family_.store (family, std::memory_order_release); return true;
+        return programs_.setLayerFamily (0, static_cast<NoiseFamily> (family));
     }
-    int family() const noexcept { return family_.load (std::memory_order_acquire); }
+    int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
+    bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
+    NoiseProgram program() const { return programs_.snapshot(); }
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag; }
 
 private:
     NoiseRiser engine_;
-    static_assert (std::atomic<int>::is_always_lock_free);
-    std::atomic<int> family_ { 0 };
-    int appliedFamily_ = -1; // audio thread only
+    ProgramStore programs_;
+    NoiseProgram audioProgram_;
+    std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
     juce::AudioParameterFloat* duration_ = nullptr;
     // Guarded by SuiteProcessor state lock, not accessed by the audio thread.

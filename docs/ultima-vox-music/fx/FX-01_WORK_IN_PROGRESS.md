@@ -224,3 +224,22 @@ excited by sine and noise. Local tests cover 44.1/48/96 kHz, 64/128/512
 blocks, finite output, distinction from Texture and 96 kHz eight-event,
 four-layer stress; ASan/UBSan passed. Full vowel control, modulation routing,
 perceptual/alias qualification and host verification remain outstanding.
+
+## Layered Program publication and persistence
+
+The processor now persists the current four-layer Program in a versioned
+`FPRG` section (explicit little-endian fields and bounded curves). Legacy
+states without FPRG migrate from FFAM; mismatched FFAM/FPRG or malformed,
+future and invalid Program data are rejected before commit. Audio reads use a
+single bounded attempt against fixed lock-free atomic words: a concurrent
+writer causes the old snapshot to remain active until a later block. Writers
+serialize on non-audio threads; no resource graph is retired in the callback.
+The old three-slot bridge remains a standalone experimental component and is
+not used by the processor. Controller APIs expose Program updates, but a full
+layer/curve editing UI is not yet implemented.
+
+Standalone codec tests include truncation, random inputs, unsupported version
+and transactional failure. Program-store concurrent tests passed under TSan;
+Linux allocation probe measured zero allocations for a changed snapshot read.
+JUCE processor integration tests for four-layer audio and project restore were
+added and syntax-checked only; they await a runnable suite build and host tests.
