@@ -52,3 +52,15 @@ complete spectral/aliasing quality assessment. The DSP test was also run
 with AddressSanitizer and UndefinedBehaviorSanitizer. Windows performance,
 actual plugin callback distributions, host validation and allocation/locking
 proof await exact-head CI and further independent analysis.
+
+## Subsequent development
+
+An interim Perform panel binds the real output parameter using JUCE's slider
+parameter attachment and provides coalesced audition/panic requests and a
+meter sourced from the rendered block peak. It is not the full product UI.
+The JUCE-free timeline primitives now provide validated 2–16 node curves,
+seconds and tempo-integrated bars clocks, and per-layer time mapping. Only
+the seconds clock is currently used by the Noise Riser; bars, layer mapping
+and curve editing are not yet connected to processor state or the UI. The
+DSP API can snapshot 0.05–32 second durations per trigger; the processor still
+uses its fixed four-second default. No claim of complete FX-02 is made.

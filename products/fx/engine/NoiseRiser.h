@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Timeline.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -8,7 +10,8 @@
 namespace vox::fx {
 
 // FX-01 work in progress: deterministic, allocation-free one-shot noise risers.
-// Each event is four seconds long. Note-off is intentionally ignored (one-shot);
+// The plugin currently uses four-second events; the engine accepts 0.05–32 s.
+// Note-off is intentionally ignored (one-shot);
 // all-sound-off uses a 5 ms release. This is not yet the full Program engine.
 class NoiseRiser {
 public:
@@ -27,8 +30,10 @@ public:
     // A ninth event fades the oldest voice in a dedicated, bounded retirement
     // slot. If that slot is still fading, the new event is dropped instead of
     // truncating an audible voice or allocating memory.
-    bool noteOn(int channel, int note, float velocity) noexcept {
-        if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f) return false;
+    bool noteOn(int channel, int note, float velocity, double duration = 4.0) noexcept {
+        timeline::SecondsClock clock;
+        if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
+            !clock.start(duration, rate_)) return false;
         Voice* slot = nullptr;
         for (auto& voice : voices_)
             if (!voice.active) { slot = &voice; break; }
@@ -44,6 +49,8 @@ public:
         slot->channel = channel;
         slot->note = note;
         slot->velocity = std::clamp(velocity, 0.0f, 1.0f);
+        slot->clock = clock;
+        slot->duration = duration;
         slot->serial = ++serial_;
         slot->rng = 0x9e3779b9u ^ static_cast<std::uint32_t>(serial_ * 0x85ebca6bu);
         if (slot->rng == 0) slot->rng = 1;
@@ -74,7 +81,9 @@ private:
         bool active = false;
         int channel = 0, note = 0;
         float velocity = 0;
-        std::uint64_t serial = 0, age = 0;
+        std::uint64_t serial = 0;
+        timeline::SecondsClock clock;
+        double duration = 4.0;
         std::uint32_t rng = 1;
         double lowpass = 0, dcInput = 0, dcOutput = 0;
         int releaseRemaining = 0, releaseLength = 0;
@@ -86,10 +95,9 @@ private:
     }
     double tick(Voice& v) noexcept {
         if (!v.active) return 0;
-        constexpr double duration = 4.0;
-        const double t = static_cast<double>(v.age) / (duration * rate_);
-        if (t >= 1.0) { v.active = false; return 0; }
-        ++v.age;
+        const double duration = v.duration;
+        double t = 0.0;
+        if (!v.clock.next(t)) { v.active = false; return 0; }
         v.rng ^= v.rng << 13; v.rng ^= v.rng >> 17; v.rng ^= v.rng << 5;
         const double noise = (static_cast<double>(v.rng) / 2147483648.0) - 1.0;
         // Linear interpolation of coefficients prepared off the audio thread.

@@ -225,3 +225,8 @@ target_include_directories(suite_fx_processor_tests PRIVATE ${juce_SOURCE_DIR}/m
 vox_suite_add_allocation_probe(suite_fx_processor_tests)
 add_test(NAME suite_fx_processor_tests COMMAND suite_fx_processor_tests)
 set_tests_properties(suite_fx_processor_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_timeline_tests FxTimelineTests.cpp)
+target_include_directories(suite_fx_timeline_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_timeline_tests COMMAND suite_fx_timeline_tests)
+set_tests_properties(suite_fx_timeline_tests PROPERTIES LABELS suite)

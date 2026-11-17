@@ -80,6 +80,17 @@ int main() {
         std::printf("128 samples %.0f Hz %d voices: p50 %.2f p95 %.2f p99 %.2f max %.2f us\n",
                     rate, voices, us[150], us[285], us[297], us.back());
     }
+    // The DSP event duration is snapshotted per trigger, without changing the
+    // plugin's interim four-second default.
+    {
+        vox::fx::NoiseRiser shortEvent; shortEvent.prepare(48000);
+        check(!shortEvent.noteOn(1, 60, 1, 0.049), "reject short event");
+        check(!shortEvent.noteOn(1, 60, 1, 32.1), "reject long event");
+        check(shortEvent.noteOn(1, 60, 1, 0.05), "minimum event duration");
+        std::array<float, 128> l{}, r{};
+        for (int i = 0; i < 20; ++i) shortEvent.render(l.data(), r.data(), 128);
+        check(std::all_of(l.begin() + 100, l.end(), [](float v) { return v == 0; }), "minimum event ends");
+    }
     vox::fx::NoiseRiser invalid; invalid.prepare(std::numeric_limits<double>::quiet_NaN());
     check(!invalid.noteOn(1, 60, std::numeric_limits<float>::quiet_NaN()), "NaN velocity rejected");
     check(!invalid.noteOn(1, 60, std::numeric_limits<float>::infinity()), "infinite velocity rejected");
