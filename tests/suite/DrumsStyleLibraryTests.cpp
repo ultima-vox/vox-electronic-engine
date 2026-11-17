@@ -34,7 +34,13 @@ int main (int argc, char** argv)
         return 2;
     const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory)
                           .getChildFile ("vox-style-library-regression-" + juce::Uuid().toString());
-    StyleLibrary library (root.getChildFile ("styles"));
+    // Exercise native Windows UTF-16 paths, including a surrogate pair:
+    // Cyrillic, CJK and a non-BMP musical symbol. Keep the source ASCII so
+    // this regression does not depend on the compiler's source code page.
+    const auto unicodeName = juce::String::charToString (0x0416)
+                           + juce::String::charToString (0x97f3)
+                           + juce::String::charToString (0x1f3b5);
+    StyleLibrary library (root.getChildFile ("styles-" + unicodeName));
     const auto original = juce::File (juce::String (argv[1])).loadFileAsString();
     style::Definition definition;
     if (style::parse (original, definition).failed())
@@ -59,8 +65,18 @@ int main (int argc, char** argv)
                "oversized direct input does not create a folder");
     }
 
-    check (library.importText (original).status == Status::added, "fixture imports");
-    const auto old = library.list().front().file;
+    check (library.importText (original).status == Status::added, "fixture imports into a non-ASCII folder");
+    const auto imported = library.list();
+    if (imported.empty())
+    {
+        root.deleteRecursively();
+        return 1;
+    }
+    const auto old = library.folder().getChildFile ("original-" + unicodeName + ".voxstyle");
+    check (imported.front().file.moveFileTo (old), "fixture gets a non-ASCII filename");
+    const auto unicodeEntries = library.list();
+    check (unicodeEntries.size() == 1 && unicodeEntries.front().file == old && old.loadFileAsString() == canonical,
+           "non-ASCII folder and filename round-trip without content loss");
 
     // A different UUID with the same truncated prefix/key must not be lost.
     auto collision = renamed;

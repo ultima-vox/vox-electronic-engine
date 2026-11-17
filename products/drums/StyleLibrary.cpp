@@ -13,7 +13,8 @@ namespace {
 std::filesystem::path nativePath (const juce::File& file)
 {
    #if JUCE_WINDOWS
-    return file.getFullPathName().toStdWString();
+    const auto path = file.getFullPathName();
+    return std::filesystem::path (path.toWideCharPointer());
    #else
     return file.getFullPathName().toStdString();
    #endif
