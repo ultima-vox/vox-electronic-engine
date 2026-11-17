@@ -209,3 +209,9 @@ set_tests_properties(suite_verify_juce_strict-wrong-commit suite_verify_juce_str
 
 get_property(suite_tests DIRECTORY PROPERTY TESTS)
 set_tests_properties(${suite_tests} PROPERTIES LABELS suite)
+
+# FX-01: JUCE-independent DSP foundation; not a plugin integration test.
+add_executable(suite_fx_noise_riser_tests FxNoiseRiserTests.cpp)
+target_include_directories(suite_fx_noise_riser_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_noise_riser_tests COMMAND suite_fx_noise_riser_tests)
+set_tests_properties(suite_fx_noise_riser_tests PROPERTIES LABELS suite)
