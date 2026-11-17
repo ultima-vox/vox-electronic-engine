@@ -106,3 +106,16 @@ normalized duration after the normalized output gain; v1 and the original
 shell's absent FPRM import with the default 4 seconds. State restores still
 use the SuiteProcessor transactional product-section protocol. FX-02's
 bar-based timing and transport behavior are not connected yet.
+
+## Program bridge foundation
+
+A fixed three-slot, single-producer/single-consumer Program bridge validates
+before publication, reports a full queue, and copies only the newest claimed
+snapshot into caller-provided storage on the consumer. Late observations of
+older snapshots are discarded. It uses lock-free 32-bit atomic slot ownership;
+there is no audio-thread allocation or object graph retirement. Local stress
+and ThreadSanitizer tests exercise snapshot consistency. The bridge is not
+wired to the plugin or host state yet: doing so requires a controller that
+serializes all edits and coordinates transactional restore without losing
+publication when the bounded queue is full. It must not be called concurrently
+by multiple producers.
