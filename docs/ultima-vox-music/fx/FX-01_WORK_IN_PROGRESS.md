@@ -119,3 +119,13 @@ wired to the plugin or host state yet: doing so requires a controller that
 serializes all edits and coordinates transactional restore without losing
 publication when the bounded queue is full. It must not be called concurrently
 by multiple producers.
+
+## Transport discontinuity policy (interim)
+
+When a host supplies playing state and absolute sample positions, a transition
+from playing to stopped or a sample-position discontinuity while playing
+fades currently active events over 5 ms at the next block boundary. A note or
+editor audition in that block can still start a new event. Missing playhead
+information clears continuity history instead of assuming a stop/seek. Tests
+using a simulated JUCE playhead were added but require the processor test to
+run in the suite build; Cubase/REAPER behavior has not been verified.

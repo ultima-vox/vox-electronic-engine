@@ -2,6 +2,7 @@
 #include "FxEditor.h"
 #include <bit>
 #include <cmath>
+#include <limits>
 
 namespace vox::fx {
 namespace {
@@ -48,6 +49,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     panicPending_.store (false, std::memory_order_relaxed);
     auditionPending_.store (false, std::memory_order_relaxed);
     peak_.store (0.0f, std::memory_order_relaxed);
+    transportKnown_ = wasPlaying_ = expectedSampleKnown_ = false;
 }
 
 void FxProcessor::releaseResources() { engine_.prepare (preparedSampleRate()); }
@@ -64,6 +66,27 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     juce::ScopedNoDenormals noDenormals;
     noteMidiSeen (midi);
     buffer.clear();
+    // Stop, seek or loop discontinuity fades existing events. No stop is
+    // inferred when a host does not provide a position. New notes in this
+    // block may still start (including audition while transport is stopped).
+    bool positionAvailable = false;
+    if (auto* host = getPlayHead()) {
+        if (const auto position = host->getPosition()) {
+            positionAvailable = true;
+            const bool playing = position->getIsPlaying();
+            const auto sample = position->getTimeInSamples();
+            const bool stopped = transportKnown_ && wasPlaying_ && !playing;
+            const bool discontinuity = transportKnown_ && wasPlaying_ && playing && expectedSampleKnown_ &&
+                                       sample.hasValue() && *sample != expectedSample_;
+            if (stopped || discontinuity) engine_.allSoundOff (0);
+            expectedSampleKnown_ = playing && sample.hasValue() &&
+                                   *sample <= std::numeric_limits<std::int64_t>::max() - buffer.getNumSamples();
+            if (expectedSampleKnown_) expectedSample_ = *sample + buffer.getNumSamples();
+            wasPlaying_ = playing;
+            transportKnown_ = true;
+        }
+    }
+    if (!positionAvailable) transportKnown_ = wasPlaying_ = expectedSampleKnown_ = false;
     if (panicPending_.exchange (false, std::memory_order_acquire)) {
         engine_.allSoundOff (0);
         auditionPending_.store (false, std::memory_order_relaxed);

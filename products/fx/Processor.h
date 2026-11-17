@@ -40,6 +40,10 @@ private:
     juce::SmoothedValue<float> outputSmoothing_;
     std::atomic<bool> panicPending_ { false }, auditionPending_ { false };
     std::atomic<float> peak_ { 0.0f };
+    // Audio-thread-only transport history. Missing host position invalidates
+    // continuity tracking; it never fabricates a seek.
+    bool transportKnown_ = false, wasPlaying_ = false, expectedSampleKnown_ = false;
+    std::int64_t expectedSample_ = 0;
 };
 
 } // namespace vox::fx

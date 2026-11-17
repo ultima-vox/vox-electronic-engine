@@ -10,6 +10,13 @@
 #endif
 
 namespace {
+struct TestPlayHead : juce::AudioPlayHead {
+    juce::Optional<PositionInfo> position;
+    juce::Optional<PositionInfo> getPosition() const override { return position; }
+    void set(bool playing, std::int64_t sample) {
+        PositionInfo value; value.setIsPlaying(playing); value.setTimeInSamples(sample); position = value;
+    }
+};
 int failures = 0;
 void check (bool condition, const char* message) {
     if (!condition) { std::printf("FAIL: %s\n", message); ++failures; }
@@ -72,6 +79,30 @@ int main() {
     check(audio.getMagnitude(0, 0, 512) > 0, "editor audition triggers sound");
     p.panic(); block(p, audio, midi);
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
+
+    {
+        vox::fx::FxProcessor transport; TestPlayHead playhead;
+        transport.setPlayHead(&playhead); transport.prepareToPlay(48000, 512);
+        juce::MidiBuffer events;
+        playhead.set(true, 0);
+        events.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(transport, audio, events);
+        playhead.set(true, 512); block(transport, audio, events);
+        check(audio.getMagnitude(0, 300, 212) > 0, "continuous transport preserves event");
+        playhead.set(false, 1024); block(transport, audio, events);
+        check(audio.getMagnitude(0, 300, 212) == 0, "transport stop fades event");
+        playhead.set(true, 2000);
+        events.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(transport, audio, events);
+        playhead.set(true, 8000); block(transport, audio, events);
+        check(audio.getMagnitude(0, 300, 212) == 0, "transport seek fades event");
+        playhead.set(true, 8512);
+        events.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(transport, audio, events);
+        playhead.set(true, 1000); block(transport, audio, events);
+        check(audio.getMagnitude(0, 300, 212) == 0, "loop jump fades event");
+        transport.setPlayHead(nullptr);
+    }
 
     auto* gain = p.getParameters()[0];
     check(gain != nullptr, "output parameter exists");
