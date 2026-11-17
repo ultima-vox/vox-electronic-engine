@@ -24,7 +24,7 @@
 | [Bar timing](ultima-vox-music/drums/BAR_TIMING.md) | Implemented cell scheduling model and DSEQ/DSNG |
 | [Styles](ultima-vox-music/drums/STYLE_ENGINE.md) and [factory](ultima-vox-music/drums/FACTORY_CONTENT.md) | Style codecs, generator and content |
 | [DAW checklist](ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md) | Single final manual DAW acceptance |
-| [Legacy archive index](archive-index-2026-11-09.md) | If present; otherwise consult PR #118 and preserved `archive/*` refs |
+| [Legacy archive index / PR #118](https://github.com/ultima-vox/vox-electronic-engine/pull/118) | Historical donor and `archive/*` preservation refs |
 
 ## Current review and decisions
 
