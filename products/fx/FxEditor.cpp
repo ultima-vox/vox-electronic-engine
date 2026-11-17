@@ -16,6 +16,13 @@ FxPanel::FxPanel (FxProcessor& processor)
     output_.setDoubleClickResetValue (1.0);
     output_.getSlider().setTitle ("Output gain");
     output_.getSlider().setDescription ("Master output gain");
+    family_.addItem ("Noise Riser", 1);
+    family_.addItem ("Downlifter", 2);
+    family_.setTitle ("Sound family");
+    family_.setTooltip ("Family for newly triggered events");
+    family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
+    family_.onChange = [this] { processor_.setFamily (family_.getSelectedId() - 1); };
+    addAndMakeVisible (family_);
     addAndMakeVisible (audition_);
     addAndMakeVisible (panic_);
     audition_.setTooltip ("Trigger the noise riser");
@@ -30,10 +37,10 @@ void FxPanel::paint (juce::Graphics& g)
     auto area = getLocalBounds().reduced (32);
     g.setColour (c::text);
     g.setFont (vox::ui::typography::sectionTitle());
-    g.drawText ("PERFORM  /  NOISE RISER", area.removeFromTop (30), juce::Justification::centredLeft);
+    g.drawText ("PERFORM  /  SOUND FAMILY", area.removeFromTop (30), juce::Justification::centredLeft);
     g.setColour (c::textSecondary);
     g.setFont (vox::ui::typography::controlLabel());
-    g.drawText ("One-shot noise riser. Trigger with MIDI or audition.", area.removeFromTop (24), juce::Justification::centredLeft);
+    g.drawText ("One-shot event. Trigger with MIDI or audition.", area.removeFromTop (24), juce::Justification::centredLeft);
     auto meter = getLocalBounds().reduced (32).removeFromBottom (55).removeFromLeft (320).toFloat();
     g.setColour (c::panelRaised); g.fillRoundedRectangle (meter, 4.0f);
     g.setColour (c::accent); g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * shownPeak_), 4.0f);
@@ -47,6 +54,9 @@ void FxPanel::resized()
     output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     area.removeFromLeft (20);
+    auto familyArea = area.removeFromLeft (200);
+    family_.setBounds (familyArea.removeFromTop (40));
+    area.removeFromLeft (20);
     auto buttons = area.removeFromLeft (160);
     audition_.setBounds (buttons.removeFromTop (40)); buttons.removeFromTop (10);
     panic_.setBounds (buttons.removeFromTop (40));
@@ -55,6 +65,7 @@ void FxPanel::timerCallback()
 {
     if (!isShowing()) return;
     // Block peak comes from rendered samples; visual decay is message-thread only.
+    family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
     shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);
     repaint();
 }

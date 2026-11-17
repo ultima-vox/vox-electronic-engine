@@ -6,6 +6,7 @@
 namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
+inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
 
 // Interim FX-01 instrument: a four-second one-shot noise riser. The timeline,
 // structural Program, layers and remaining families are not implemented yet.
@@ -25,14 +26,24 @@ public:
     void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
     void panic() noexcept { panicPending_.store (true, std::memory_order_release); }
     float outputPeak() const noexcept { return peak_.load (std::memory_order_relaxed); }
+    // Structural selector: snapshots into newly triggered events, not a host
+    // automation parameter. Family selection is a single lock-free scalar.
+    bool setFamily (int family) noexcept {
+        if (family < 0 || family > 1) return false;
+        family_.store (family, std::memory_order_release); return true;
+    }
+    int family() const noexcept { return family_.load (std::memory_order_acquire); }
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag; }
 
 private:
     NoiseRiser engine_;
+    static_assert (std::atomic<int>::is_always_lock_free);
+    std::atomic<int> family_ { 0 };
+    int appliedFamily_ = -1; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
     juce::AudioParameterFloat* duration_ = nullptr;
     // Guarded by SuiteProcessor state lock, not accessed by the audio thread.

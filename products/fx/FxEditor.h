@@ -1,6 +1,7 @@
 #pragma once
 #include "components/VoxKnob.h"
 #include "components/VoxButton.h"
+#include "components/VoxComboBox.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace vox::fx {
@@ -15,6 +16,7 @@ public:
     void resized() override;
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
     juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
+    juce::ComboBox& familySelector() noexcept { return family_; }
 private:
     void timerCallback() override;
     FxProcessor& processor_;
@@ -22,6 +24,7 @@ private:
     juce::SliderParameterAttachment attachment_;
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment durationAttachment_;
+    vox::ui::VoxComboBox family_;
     vox::ui::VoxButton audition_ { "AUDITION" };
     vox::ui::VoxButton panic_ { "PANIC" };
     float shownPeak_ = 0.0f;

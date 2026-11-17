@@ -16,6 +16,15 @@ preset::Section encodeParameter (float value, float durationNormalized)
             section.data.push_back (static_cast<std::byte> ((word >> shift) & 0xffu));
     return section;
 }
+preset::Section encodeFamily (int family)
+{
+    preset::Section section;
+    section.tag = fxFamilySectionTag;
+    for (const auto word : { std::uint32_t { 1 }, static_cast<std::uint32_t> (family) })
+        for (int shift = 0; shift < 32; shift += 8)
+            section.data.push_back (static_cast<std::byte> ((word >> shift) & 0xffu));
+    return section;
+}
 std::uint32_t wordAt (const std::vector<std::byte>& data, std::size_t offset)
 {
     std::uint32_t value = 0;
@@ -44,6 +53,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
     engine_.prepare (rate);
+    appliedFamily_ = -1;
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
@@ -90,6 +100,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (panicPending_.exchange (false, std::memory_order_acquire)) {
         engine_.allSoundOff (0);
         auditionPending_.store (false, std::memory_order_relaxed);
+    }
+    const int selectedFamily = family_.load (std::memory_order_acquire);
+    if (selectedFamily != appliedFamily_) {
+        NoiseProgram program;
+        program.layers[0].family = static_cast<NoiseFamily> (selectedFamily);
+        if (engine_.setProgram (program)) appliedFamily_ = selectedFamily;
     }
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
@@ -144,6 +160,7 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
     const auto current = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
     out.push_back (encodeParameter (output_->get(), juce::exactlyEqual (current, heldDuration_) ? loadedDuration_ : current));
+    out.push_back (encodeFamily (family()));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -169,10 +186,20 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
             return {};
         }
     }
+    int family = 0;
+    if (const auto* section = doc.find (fxFamilySectionTag)) {
+        if (section->data.size() != 8 || wordAt (section->data, 0) != 1 || wordAt (section->data, 4) > 1) {
+            error = "Unsupported or malformed FX family section";
+            return {};
+        }
+        family = static_cast<int> (wordAt (section->data, 4));
+    }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
+    result.sections.push_back (encodeFamily (family));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, held] {
+    result.apply = [this, value, duration, family, held] {
+        setFamily (family);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);
         *held = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();

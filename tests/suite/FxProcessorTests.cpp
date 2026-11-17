@@ -38,6 +38,9 @@ int main() {
         panel.durationSlider().setValue(8.0, juce::sendNotificationSync);
         check(std::abs(p.durationParameter().get() - 8.0f) < 1e-4f, "duration editor controls parameter");
         p.durationParameter().setValueNotifyingHost(p.durationParameter().convertTo0to1(4.0f));
+        panel.familySelector().setSelectedId(2, juce::sendNotificationSync);
+        check(p.family() == 1, "family selector updates structural state");
+        p.setFamily(0);
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }
@@ -104,16 +107,31 @@ int main() {
         transport.setPlayHead(nullptr);
     }
 
+    {
+        vox::fx::FxProcessor riser, down;
+        riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
+        check(down.setFamily(1) && !down.setFamily(2), "bounded family selection");
+        juce::AudioBuffer<float> a(2,512), b(2,512);
+        juce::MidiBuffer ma, mb;
+        ma.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        mb.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(riser, a, ma); block(down, b, mb);
+        double difference = 0;
+        for (int i = 0; i < 512; ++i) difference += std::abs(a.getSample(0, i) - b.getSample(0, i));
+        check(b.getMagnitude(0, 0, 512) > 0 && difference > 1e-4, "family choice reaches real processor DSP");
+    }
     auto* gain = p.getParameters()[0];
     check(gain != nullptr, "output parameter exists");
     gain->setValueNotifyingHost(0.25f);
     p.durationParameter().setValueNotifyingHost(p.durationParameter().convertTo0to1(2.5f));
+    p.setFamily(1);
     const auto saved = save(p);
     vox::fx::FxProcessor restored;
     restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
     check(restored.lastStateError().isEmpty(), "valid state accepted");
     check(std::abs(restored.getParameters()[0]->getValue() - 0.25f) < 1e-6f, "parameter restored");
     check(std::abs(restored.durationParameter().get() - 2.5f) < 1e-4f, "duration restored");
+    check(restored.family() == 1, "structural family restored");
     check(save(restored) == saved, "state deterministic roundtrip");
     auto damaged = saved;
     static_cast<unsigned char*>(damaged.getData())[20] ^= 1;
@@ -135,7 +153,11 @@ int main() {
         // FPRM v1 had only the output value. Restore it with the 4 s default.
         auto oldDoc = vox::preset::decode(std::span(static_cast<const std::byte*>(saved.getData()), saved.getSize()),
                                           vox::preset::makeTag("VXFX"), 1);
-        for (auto& section : oldDoc.document.sections) if (section.tag == vox::fx::fxParameterSectionTag) {
+        auto& oldSections = oldDoc.document.sections;
+        oldSections.erase(std::remove_if(oldSections.begin(), oldSections.end(), [] (const auto& section) {
+            return section.tag == vox::fx::fxFamilySectionTag;
+        }), oldSections.end());
+        for (auto& section : oldSections) if (section.tag == vox::fx::fxParameterSectionTag) {
             section.data.resize(8); section.data[0] = std::byte{1};
         }
         auto old = vox::preset::encode(oldDoc.document);
@@ -143,7 +165,8 @@ int main() {
         check(old.has_value(), "encode v1 state");
         if (old) {
             migrated.setStateInformation(old->data(), static_cast<int>(old->size()));
-            check(migrated.lastStateError().isEmpty() && std::abs(migrated.durationParameter().get() - 4.0f) < 1e-4f,
+            check(migrated.lastStateError().isEmpty() && migrated.family() == 0 &&
+                  std::abs(migrated.durationParameter().get() - 4.0f) < 1e-4f,
                   "v1 state migrates to four second duration");
         }
     }

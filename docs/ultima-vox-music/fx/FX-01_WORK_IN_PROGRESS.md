@@ -139,3 +139,15 @@ sizes pass finiteness, audibility, broad brightness trajectory and short-window
 fundamental-energy checks, including ASan/UBSan. This is not yet available in
 plugin Program state or the UI; audible review, alias/CPU qualification and
 full FX-03 acceptance remain outstanding.
+
+## Interim family selector
+
+The Perform panel now selects Noise Riser or Downlifter as a structural choice,
+not a host-automatable parameter. An atomic integer is read at block boundaries;
+the audio thread creates the bounded layer settings and existing events keep
+the family they started with. The `FFAM` product section stores version 1 and
+the validated family ID as two little-endian u32 values. States missing FFAM
+migrate to Noise Riser; unsupported versions and IDs are rejected. This is a
+single-scalar handoff, not the full layered Program controller. Processor-level
+family, state and editor tests have been added, but have not yet run in a full
+JUCE build or VST3 host.
