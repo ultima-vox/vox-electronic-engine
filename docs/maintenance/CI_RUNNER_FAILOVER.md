@@ -31,3 +31,8 @@ The repository runner listing endpoint `GET /repos/ultima-vox/vox-electronic-eng
 ## Verification after adding the secret
 
 GitHub Actions evaluates repository secrets when a **new run starts**. Existing runs which selected hosted Windows before `CI_RUNNER_STATUS_TOKEN` was created keep their previous routing decision; they do not automatically reselect. Trigger a new PR synchronize run to verify the selector log. Expected when the repository's Windows self-hosted machines are still offline: `Runner selection: github-hosted ("windows-2022")` **without** the `CI_RUNNER_STATUS_TOKEN is not configured` notice. When self-hosted runners later return online, start another fresh run and expect `Runner selection: self-hosted (["self-hosted","windows"])`. Do not infer credential success from fallback alone if the log instead says `Cannot read repository runner status`.
+
+## Live self-hosted verification (2026-11-17)
+
+After the owner started the Windows machines, a new PR synchronization event must verify that `choose_runner` selects `self-hosted`. Earlier hosted-mode SUCCESS does not prove the online branch; CI results must be tied to the new SHA and selector logs. Do not claim all four runners online merely because one Windows job has begun.
+
