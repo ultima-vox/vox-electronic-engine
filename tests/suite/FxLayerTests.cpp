@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 
 int main() {
     int failures = 0;
@@ -10,7 +11,7 @@ int main() {
     constexpr int block = 128;
     std::array<float, block> l{}, r{};
     for (int index = 0; index < 4; ++index) {
-        vox::fx::NoiseRiser engine; engine.prepare(48000);
+        auto engineOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& engine=*engineOwner; engine.prepare(48000);
         vox::fx::NoiseProgram program;
         for (auto& layer : program.layers) layer.enabled = false;
         auto& layer = program.layers[static_cast<std::size_t>(index)];
@@ -23,7 +24,7 @@ int main() {
         check(std::all_of(silent.begin(), silent.end(), [](float x) { return x == 0; }), "layer pan");
     }
     {
-        vox::fx::NoiseRiser engine; engine.prepare(48000);
+        auto engineOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& engine=*engineOwner; engine.prepare(48000);
         vox::fx::NoiseProgram program;
         for (int i = 0; i < 4; ++i) {
             auto& layer = program.layers[static_cast<std::size_t>(i)];
@@ -43,7 +44,7 @@ int main() {
         }
     }
     {
-        vox::fx::NoiseRiser engine, control; engine.prepare(48000); control.prepare(48000);
+        auto engineOwner=std::make_unique<vox::fx::NoiseRiser>(); auto controlOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& engine=*engineOwner; auto& control=*controlOwner; engine.prepare(48000); control.prepare(48000);
         check(engine.noteOn(1, 60, 1) && control.noteOn(1, 60, 1), "snapshot test trigger");
         vox::fx::NoiseProgram silent; silent.layers[0].gain = 0;
         check(engine.setProgram(silent), "install subsequent program");
@@ -56,7 +57,7 @@ int main() {
         check(!engine.setProgram(silent), "invalid program rejected");
     }
     {
-        vox::fx::NoiseRiser engine; engine.prepare(48000);
+        auto engineOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& engine=*engineOwner; engine.prepare(48000);
         vox::fx::NoiseProgram program;
         program.layers[0].gainCurve = vox::fx::timeline::Curve::constant(0);
         check(engine.setProgram(program) && engine.noteOn(1,60,1), "zero gain curve program");

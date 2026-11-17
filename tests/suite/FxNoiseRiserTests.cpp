@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 #include <chrono>
 #include <limits>
@@ -13,7 +14,7 @@ int main() {
     auto check = [&](bool ok, const char* message) { if (!ok) { std::printf("FAIL: %s\n", message); ++failures; } };
     for (double rate : {44100.0, 48000.0, 96000.0}) {
         for (int block : {64, 128, 512}) {
-            vox::fx::NoiseRiser a, b;
+            auto aOwner=std::make_unique<vox::fx::NoiseRiser>(); auto bOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& a=*aOwner; auto& b=*bOwner;
             a.prepare(rate); b.prepare(rate);
             check(a.noteOn(1, 60, 1.0f) && b.noteOn(1, 60, 1.0f), "trigger");
             std::array<float, 512> l{}, r{}, l2{}, r2{};
@@ -36,7 +37,7 @@ int main() {
     // Compare all four seconds against the pre-optimization transcendental
     // reference, including the envelope end, at every supported sample rate.
     for (double rate : {44100.0, 48000.0, 96000.0}) {
-        vox::fx::NoiseRiser fast; vox::fx::ReferenceNoiseRiser reference;
+        auto fastOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& fast=*fastOwner; vox::fx::ReferenceNoiseRiser reference;
         fast.prepare(rate); reference.prepare(rate);
         fast.noteOn(1, 60, 1); reference.noteOn(1, 60, 1);
         std::array<float, 128> fl{}, fr{}, rl{}, rr{};
@@ -66,7 +67,7 @@ int main() {
     // Callback timing sample (not a real host or release performance gate).
     for (double rate : {44100.0, 48000.0, 96000.0}) for (int voices : {1, 8, 9}) {
         std::vector<double> us; us.reserve(300);
-        vox::fx::NoiseRiser bench;
+        auto benchOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& bench=*benchOwner;
         std::array<float, 128> left{}, right{};
         for (int iteration = 0; iteration < 300; ++iteration) {
             bench.prepare(rate);
@@ -83,7 +84,7 @@ int main() {
     // The DSP event duration is snapshotted per trigger, without changing the
     // plugin's interim four-second default.
     {
-        vox::fx::NoiseRiser shortEvent; shortEvent.prepare(48000);
+        auto shortEventOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& shortEvent=*shortEventOwner; shortEvent.prepare(48000);
         check(!shortEvent.noteOn(1, 60, 1, 0.049), "reject short event");
         check(!shortEvent.noteOn(1, 60, 1, 32.1), "reject long event");
         check(shortEvent.noteOn(1, 60, 1, 0.05), "minimum event duration");
@@ -91,7 +92,7 @@ int main() {
         for (int i = 0; i < 20; ++i) shortEvent.render(l.data(), r.data(), 128);
         check(std::all_of(l.begin() + 100, l.end(), [](float v) { return v == 0; }), "minimum event ends");
     }
-    vox::fx::NoiseRiser invalid; invalid.prepare(std::numeric_limits<double>::quiet_NaN());
+    auto invalidOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& invalid=*invalidOwner; invalid.prepare(std::numeric_limits<double>::quiet_NaN());
     check(!invalid.noteOn(1, 60, std::numeric_limits<float>::quiet_NaN()), "NaN velocity rejected");
     check(!invalid.noteOn(1, 60, std::numeric_limits<float>::infinity()), "infinite velocity rejected");
     check(!invalid.noteOn(1, 60, -1), "negative velocity rejected");
@@ -101,7 +102,7 @@ int main() {
     check(invalid.noteOn(1, 60, 1), "invalid sample rate falls back safely");
     invalid.allSoundOff(0);
     {
-        vox::fx::NoiseRiser poly; poly.prepare(96000);
+        auto polyOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& poly=*polyOwner; poly.prepare(96000);
         for (int i = 0; i < 8; ++i) check(poly.noteOn(i % 2 + 1, 60 + i, 1), "poly note");
         check(poly.noteOn(1, 72, 1), "nine voices including retiree");
         std::array<float, 512> l{}, r{};
@@ -113,7 +114,7 @@ int main() {
         check(std::all_of(l.begin(), l.end(), [](float v) { return v == 0; }), "poly event ends");
     }
     {
-        vox::fx::NoiseRiser channels; channels.prepare(48000);
+        auto channelsOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& channels=*channelsOwner; channels.prepare(48000);
         channels.noteOn(1, 60, 1); channels.noteOn(2, 61, 1);
         channels.allSoundOff(1);
         std::array<float, 512> l{}, r{}; channels.render(l.data(), r.data(), 512);
@@ -122,14 +123,14 @@ int main() {
         check(std::all_of(l.begin() + 300, l.end(), [](float v) { return v == 0; }), "target channel fades out");
     }
     // The sample clock, not block boundaries, defines the event timeline.
-    vox::fx::NoiseRiser x, y; x.prepare(48000); y.prepare(48000);
+    auto xOwner=std::make_unique<vox::fx::NoiseRiser>(); auto yOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& x=*xOwner; auto& y=*yOwner; x.prepare(48000); y.prepare(48000);
     x.noteOn(1, 60, 0.8f); y.noteOn(1, 60, 0.8f);
     std::array<float, 512> xl{}, xr{}, yl{}, yr{};
     x.render(xl.data(), xr.data(), 512);
     for (int offset = 0; offset < 512; offset += 64)
         y.render(yl.data() + offset, yr.data() + offset, 64);
     check(xl == yl && xr == yr, "block-boundary invariant");
-    vox::fx::NoiseRiser p; p.prepare(48000);
+    auto pOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& p=*pOwner; p.prepare(48000);
     for (int i = 0; i < 8; ++i) check(p.noteOn(1, 60 + i, 1), "eight events");
     check(p.noteOn(1, 72, 1), "bounded stealing");
     check(!p.noteOn(1, 73, 1), "reject when retirement slot occupied");

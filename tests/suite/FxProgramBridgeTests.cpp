@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <thread>
 
 int main() {
@@ -23,7 +24,7 @@ int main() {
     check(bridge.consumeLatest(output, sequence) && sequence == 4, "monotonic sequence");
 
     {
-        vox::fx::NoiseRiser engine; engine.prepare(48000);
+        auto engineOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& engine=*engineOwner; engine.prepare(48000);
         p.layers[0].gain = 0;
         check(bridge.publish(p) && bridge.consumeLatest(output, sequence) && engine.setProgram(output),
               "publish prepared settings to engine");

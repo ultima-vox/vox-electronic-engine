@@ -2,6 +2,7 @@
 #include "FxEditor.h"
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <limits>
 #include <span>
 
@@ -30,7 +31,7 @@ void block (vox::fx::FxProcessor& p, juce::AudioBuffer<float>& audio, juce::Midi
 }
 int main() {
     juce::ScopedJuceInitialiser_GUI gui;
-    vox::fx::FxProcessor p;
+    auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
     {
         vox::fx::FxPanel panel(p);
         panel.outputSlider().setValue(0.5, juce::sendNotificationSync);
@@ -94,7 +95,7 @@ int main() {
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
 
     {
-        vox::fx::FxProcessor transport; TestPlayHead playhead;
+        auto transportOwner=std::make_unique<vox::fx::FxProcessor>(); auto& transport=*transportOwner; TestPlayHead playhead;
         transport.setPlayHead(&playhead); transport.prepareToPlay(48000, 512);
         juce::MidiBuffer events;
         playhead.set(true, 0);
@@ -118,7 +119,7 @@ int main() {
     }
 
     {
-        vox::fx::FxProcessor riser, down;
+        auto riserOwner=std::make_unique<vox::fx::FxProcessor>(); auto downOwner=std::make_unique<vox::fx::FxProcessor>(); auto& riser=*riserOwner; auto& down=*downOwner;
         riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
         check(down.setFamily(1) && !down.setFamily(10), "bounded family selection");
         juce::AudioBuffer<float> a(2,512), b(2,512);
@@ -129,7 +130,7 @@ int main() {
         double difference = 0;
         for (int i = 0; i < 512; ++i) difference += std::abs(a.getSample(0, i) - b.getSample(0, i));
         check(b.getMagnitude(0, 0, 512) > 0 && difference > 1e-4, "family choice reaches real processor DSP");
-        vox::fx::FxProcessor shepard;
+        auto shepardOwner=std::make_unique<vox::fx::FxProcessor>(); auto& shepard=*shepardOwner;
         shepard.prepareToPlay(48000, 512); shepard.setFamily(2);
         juce::MidiBuffer mc;
         mc.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
@@ -137,7 +138,7 @@ int main() {
         difference = 0;
         for (int i = 0; i < 512; ++i) difference += std::abs(a.getSample(0, i) - b.getSample(0, i));
         check(b.getMagnitude(0, 0, 512) > 0 && difference > 1e-4, "Shepard reaches processor DSP");
-        vox::fx::FxProcessor impact;
+        auto impactOwner=std::make_unique<vox::fx::FxProcessor>(); auto& impact=*impactOwner;
         impact.prepareToPlay(48000, 512); impact.setFamily(3);
         juce::MidiBuffer md;
         md.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
@@ -145,7 +146,7 @@ int main() {
         check(b.getMagnitude(0, 0, 512) > 0, "impact reaches processor DSP");
     }
     {
-        vox::fx::FxProcessor layered; layered.prepareToPlay(48000, 512);
+        auto layeredOwner=std::make_unique<vox::fx::FxProcessor>(); auto& layered=*layeredOwner; layered.prepareToPlay(48000, 512);
         auto program = layered.program(); program.layers[0].enabled = false;
         program.layers[1].enabled = true; program.layers[1].family = vox::fx::NoiseFamily::downlifter;
         program.layers[1].pan = -1.0f;
@@ -156,7 +157,7 @@ int main() {
         check(audio.getMagnitude(0, 0, 512) > 0 && audio.getMagnitude(1, 0, 512) == 0,
               "published layer drives real stereo DSP");
         const auto layerState = save(layered);
-        vox::fx::FxProcessor restoredLayered;
+        auto restoredLayeredOwner=std::make_unique<vox::fx::FxProcessor>(); auto& restoredLayered=*restoredLayeredOwner;
         restoredLayered.setStateInformation(layerState.getData(), static_cast<int>(layerState.getSize()));
         const auto recovered = restoredLayered.program();
         check(restoredLayered.lastStateError().isEmpty() && !recovered.layers[0].enabled &&
@@ -179,7 +180,7 @@ int main() {
     p.durationParameter().setValueNotifyingHost(p.durationParameter().convertTo0to1(2.5f));
     p.setFamily(1);
     const auto saved = save(p);
-    vox::fx::FxProcessor restored;
+    auto restoredOwner=std::make_unique<vox::fx::FxProcessor>(); auto& restored=*restoredOwner;
     restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
     check(restored.lastStateError().isEmpty(), "valid state accepted");
     check(std::abs(restored.getParameters()[0]->getValue() - 0.25f) < 1e-6f, "parameter restored");
@@ -214,7 +215,7 @@ int main() {
             section.data.resize(8); section.data[0] = std::byte{1};
         }
         auto old = vox::preset::encode(oldDoc.document);
-        vox::fx::FxProcessor migrated;
+        auto migratedOwner=std::make_unique<vox::fx::FxProcessor>(); auto& migrated=*migratedOwner;
         check(old.has_value(), "encode v1 state");
         if (old) {
             migrated.setStateInformation(old->data(), static_cast<int>(old->size()));
@@ -224,7 +225,7 @@ int main() {
         }
     }
     {
-        vox::fx::FxProcessor durationTest; durationTest.prepareToPlay(48000, 512);
+        auto durationTestOwner=std::make_unique<vox::fx::FxProcessor>(); auto& durationTest=*durationTestOwner; durationTest.prepareToPlay(48000, 512);
         durationTest.durationParameter().setValueNotifyingHost(0.0f);
         juce::MidiBuffer notes;
         notes.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);

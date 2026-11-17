@@ -273,3 +273,12 @@ Standalone tests cover validation, clamping, smoothing, reproducibility and
 zero allocations in a Linux audio-path probe; ASan/UBSan passed. These helpers
 are not wired into Program state, processor DSP or UI. Other sources, macro
 assignments, route editing and complete FX-04 behavior remain outstanding.
+
+## Windows stack safety in tests
+
+The prepared engine currently occupies approximately 549 KB (local Linux
+`sizeof`, including coefficient tables). Tests that create multiple engines or
+processors now allocate them on the heap rather than relying on the default
+Windows thread stack. This is an unverified Windows safeguard; exact-head
+Windows execution remains pending. Engine memory and initialization costs
+still need product-level profiling and optimization.

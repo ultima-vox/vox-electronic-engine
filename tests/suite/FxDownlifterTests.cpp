@@ -2,13 +2,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 int main() {
     int failures = 0;
     auto check = [&](bool ok, const char* msg) { if (!ok) { std::printf("FAIL: %s\n", msg); ++failures; } };
     for (double rate : {44100.0, 48000.0, 96000.0}) for (int block : {64, 128, 512}) {
-        vox::fx::NoiseRiser engine;
+        auto engineOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& engine=*engineOwner;
         vox::fx::NoiseProgram program; program.layers[0].family = vox::fx::NoiseFamily::downlifter;
         engine.prepare(rate); check(engine.setProgram(program) && engine.noteOn(1, 60, 1, 2), "downlifter starts");
         std::vector<float> left(static_cast<std::size_t>(rate * 2)), right(left.size());

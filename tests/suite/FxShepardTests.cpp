@@ -2,13 +2,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 int main() {
     int failures = 0;
     auto check = [&](bool ok, const char* message) { if (!ok) { std::printf("FAIL: %s\n", message); ++failures; } };
     for (double rate : {44100.0, 48000.0, 96000.0}) {
-        vox::fx::NoiseRiser a, b, riser;
+        auto aOwner=std::make_unique<vox::fx::NoiseRiser>(); auto bOwner=std::make_unique<vox::fx::NoiseRiser>(); auto riserOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& a=*aOwner; auto& b=*bOwner; auto& riser=*riserOwner;
         a.prepare(rate); b.prepare(rate); riser.prepare(rate);
         vox::fx::NoiseProgram program; program.layers[0].family = vox::fx::NoiseFamily::shepard;
         check(a.setProgram(program) && b.setProgram(program), "valid Shepard program");
