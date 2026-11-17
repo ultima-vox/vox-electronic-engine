@@ -304,3 +304,9 @@ if(NOT WIN32)
 endif()
 add_test(NAME suite_fx_program_store_tests COMMAND suite_fx_program_store_tests)
 set_tests_properties(suite_fx_program_store_tests PROPERTIES LABELS suite)
+
+# Timing output is diagnostic only, not a Windows performance gate.
+add_executable(suite_fx_callback_benchmark FxCallbackBenchmark.cpp)
+target_include_directories(suite_fx_callback_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_callback_benchmark COMMAND suite_fx_callback_benchmark)
+set_tests_properties(suite_fx_callback_benchmark PROPERTIES LABELS suite)
