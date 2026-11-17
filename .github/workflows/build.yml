@@ -6,9 +6,15 @@ on:
   pull_request:
 
 jobs:
+  choose_runner:
+    uses: ./.github/workflows/choose-windows-runner.yml
+    secrets: inherit
+
   windows-vst3:
-    runs-on: [self-hosted, windows]
+    needs: choose_runner
+    runs-on: ${{ fromJSON(needs.choose_runner.outputs.runs_on) }}
     env:
+      VOX_CI_RUNNER_KIND: ${{ needs.choose_runner.outputs.kind }}
       CMAKE_GENERATOR: Visual Studio 17 2022
 
     steps:
