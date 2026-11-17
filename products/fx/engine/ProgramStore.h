@@ -37,7 +37,7 @@ public:
         return true;
     }
     bool setLayerFamily(std::size_t index, NoiseFamily family) {
-        if (static_cast<unsigned>(family) > static_cast<unsigned>(NoiseFamily::formant)) return false;
+        if (static_cast<unsigned>(family) > static_cast<unsigned>(NoiseFamily::glitch)) return false;
         return editLayer(index, [family] (NoiseLayer& layer) { layer.family = family; });
     }
     NoiseProgram snapshot() const {

@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant, glitch };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::formant) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::glitch) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -134,7 +134,7 @@ private:
         std::array<double, 8> mode1 {}, mode2 {};
         bool modesStarted = false;
         std::array<float, 256> delay {};
-        unsigned delayWrite = 0;
+        unsigned delayWrite = 0, glitchWritten = 0;
     };
     struct Voice {
         bool active = false;
@@ -190,7 +190,29 @@ private:
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::formant) {
+            if (settings.family == NoiseFamily::glitch) {
+                // Capture this layer's own synthesized signal into a bounded
+                // 256-sample loop, then retrigger windowed slices on a fixed
+                // 120 BPM sixteenth grid. No external audio input is used.
+                const double elapsed = t * layerDuration;
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * 2.0, rate_ * 0.4);
+                const double dry = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                if (layer.glitchWritten < layer.delay.size()) {
+                    layer.delay[layer.glitchWritten++] = static_cast<float>(dry);
+                    source = dry * 0.5;
+                } else {
+                    const double grid = elapsed * 8.0;
+                    const auto step = static_cast<std::uint64_t>(grid);
+                    const double fractionOfStep = grid - static_cast<double>(step);
+                    const double speed = (step & 1u) != 0 ? 2.0 : 1.0;
+                    const auto sliceIndex = static_cast<unsigned>(fractionOfStep * 0.125 * rate_ * speed) & 255u;
+                    const double window = std::sin(3.141592653589793 * static_cast<double>(sliceIndex) / 255.0);
+                    const double edge = std::min(1.0, std::min(fractionOfStep, 1.0-fractionOfStep) * 125.0);
+                    source = (step % 4 == 2 ? 0.0 : layer.delay[sliceIndex] * window * window * edge);
+                }
+                envelope = 0.75;
+            } else if (settings.family == NoiseFamily::formant) {
                 // Three independently moving resonant band-pass formants
                 // excited by a tonal oscillator and a small noise component.
                 const double elapsed = t * layerDuration;

@@ -316,3 +316,8 @@ vox_suite_add_allocation_probe(suite_fx_modulation_tests)
 target_include_directories(suite_fx_modulation_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_modulation_tests COMMAND suite_fx_modulation_tests)
 set_tests_properties(suite_fx_modulation_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_glitch_tests FxGlitchTests.cpp)
+target_include_directories(suite_fx_glitch_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_glitch_tests COMMAND suite_fx_glitch_tests)
+set_tests_properties(suite_fx_glitch_tests PROPERTIES LABELS suite)

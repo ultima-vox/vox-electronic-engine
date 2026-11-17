@@ -7,7 +7,7 @@ validator and binary SHA are pending; HOLD prohibits merge and release.
 |---|---|
 | FX-01 | In progress: playable noise riser code, gain/duration parameters, v1→v2 state migration, interim bound UI and processor tests. Processor/UI tests await an executable JUCE suite build. |
 | FX-02 | Partial: seconds and bars clock/curve primitives, 4-layer noise engine with per-event snapshot, and single-producer bridge tests. Seconds timing and validated layered Program persistence/publication are wired to plugin; basic layer enable/family/gain/pan/timing UI and per-layer gain-curve editing exist; pan/pitch/filter/global curve UI, bar sync and event policies remain. |
-| FX-03 | Partial: Noise Riser, tonal/noise Downlifter, six-partial Shepard sweep, Impact, Whoosh, Laser, Squelch, Metallic, Texture and Formant are selectable for new events and persisted as structural state; two additional families, grains and full quality tests remain. |
+| FX-03 | Partial: Noise Riser, tonal/noise Downlifter, six-partial Shepard sweep, Impact, Whoosh, Laser, Squelch, Metallic, Texture, Formant and Glitch are selectable for new events and persisted as structural state; Granular Cloud, full host-synced Glitch behavior, grains and full quality tests remain. |
 | FX-04 | Partial: standalone typed 64-route matrix, LFO and seeded sample-and-hold primitives; no plugin modulation integration, macros, effects or quality policies yet. |
 | FX-05 | Not started: generator, content, preset/sample handling, patterns and exports. |
 | FX-06 | In progress: truthful interim Perform panel; other workspaces and controls remain. |

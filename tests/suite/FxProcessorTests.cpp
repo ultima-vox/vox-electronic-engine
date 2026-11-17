@@ -121,7 +121,7 @@ int main() {
     {
         auto riserOwner=std::make_unique<vox::fx::FxProcessor>(); auto downOwner=std::make_unique<vox::fx::FxProcessor>(); auto& riser=*riserOwner; auto& down=*downOwner;
         riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
-        check(down.setFamily(1) && !down.setFamily(10), "bounded family selection");
+        check(down.setFamily(1) && !down.setFamily(11), "bounded family selection");
         juce::AudioBuffer<float> a(2,512), b(2,512);
         juce::MidiBuffer ma, mb;
         ma.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);

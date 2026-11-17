@@ -282,3 +282,13 @@ processors now allocate them on the heap rather than relying on the default
 Windows thread stack. This is an unverified Windows safeguard; exact-head
 Windows execution remains pending. Engine memory and initialization costs
 still need product-level profiling and optimization.
+
+## Glitch / Stutter
+
+FFAM family 10 captures the layer's own synthesized signal in its bounded
+256-sample buffer, then loops windowed slices with deterministic gated
+retriggers. The interim grid is fixed at 120 BPM; it is not host-synchronized
+and has no sample-import/slice editor yet. Local tests at 44.1/48/96 kHz and
+64/128/512 blocks check audibility, deterministic gate silence and finite
+bounds; ASan/UBSan passed. Listening, artifact, transport-sync and VST3 host
+qualification remain outstanding.

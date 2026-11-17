@@ -26,6 +26,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.addItem ("Metallic / Resonant", 8);
     family_.addItem ("Texture / Drone", 9);
     family_.addItem ("Formant / Alien", 10);
+    family_.addItem ("Glitch / Stutter", 11);
     family_.setTitle ("Sound family");
     family_.setTooltip ("Family for newly triggered events");
     family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
