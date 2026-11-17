@@ -1,0 +1,2 @@
+id,name,type,minimum,maximum,default,automatable,choices
+fx.output.gain,Output Gain,float,0,1,1,true,

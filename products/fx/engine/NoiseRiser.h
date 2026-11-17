@@ -13,7 +13,12 @@ namespace vox::fx {
 class NoiseRiser {
 public:
     void prepare(double sampleRate) noexcept {
-        rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 ? sampleRate : 44100.0;
+        rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
+        for (std::size_t i = 0; i < coefficients_.size(); ++i) {
+            const double phase = static_cast<double>(i) / tableIntervals;
+            const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
+            coefficients_[i] = 1.0 - std::exp(-6.283185307179586 * cutoff / rate_);
+        }
         voices_ = {};
         retiring_ = {};
         serial_ = 0;
@@ -23,7 +28,7 @@ public:
     // slot. If that slot is still fading, the new event is dropped instead of
     // truncating an audible voice or allocating memory.
     bool noteOn(int channel, int note, float velocity) noexcept {
-        if (!std::isfinite(velocity) || velocity <= 0.0f) return false;
+        if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f) return false;
         Voice* slot = nullptr;
         for (auto& voice : voices_)
             if (!voice.active) { slot = &voice; break; }
@@ -50,6 +55,8 @@ public:
         if (retiring_.active && (channel == 0 || retiring_.channel == channel)) beginRelease(retiring_);
     }
 
+    // Both pointers must address at least count writable samples; outputs are
+    // overwritten, not accumulated. The processor validates its bus layout.
     void render(float* left, float* right, int count) noexcept {
         for (int i = 0; i < count; ++i) {
             double sum = 0;
@@ -85,9 +92,12 @@ private:
         ++v.age;
         v.rng ^= v.rng << 13; v.rng ^= v.rng >> 17; v.rng ^= v.rng << 5;
         const double noise = (static_cast<double>(v.rng) / 2147483648.0) - 1.0;
-        // Exponential cutoff sweep, clamped below Nyquist.
-        const double cutoff = std::min(180.0 * std::exp(t * std::log(10000.0 / 180.0)), rate_ * 0.45);
-        const double coefficient = 1.0 - std::exp(-6.283185307179586 * cutoff / rate_);
+        // Linear interpolation of coefficients prepared off the audio thread.
+        // The table spans the complete event, independent of block size.
+        const double position = t * tableIntervals;
+        const auto index = static_cast<std::size_t>(position);
+        const double fraction = position - static_cast<double>(index);
+        const double coefficient = coefficients_[index] + fraction * (coefficients_[index + 1] - coefficients_[index]);
         v.lowpass += coefficient * (noise - v.lowpass);
         // DC blocker prevents very-low-frequency energy building up in a sum.
         const double filtered = v.lowpass - v.dcInput + 0.995 * v.dcOutput;
@@ -101,6 +111,8 @@ private:
         }
         return filtered * v.velocity * (0.15 + 0.85 * t) * fadeIn * fadeOut * release;
     }
+    static constexpr std::size_t tableIntervals = 4096;
+    std::array<double, tableIntervals + 1> coefficients_ {};
     double rate_ = 44100.0;
     std::uint64_t serial_ = 0;
     std::array<Voice, 8> voices_ {};
