@@ -33,10 +33,14 @@ FxPanel::FxPanel (FxProcessor& processor)
     addAndMakeVisible (family_);
     addAndMakeVisible (audition_);
     addAndMakeVisible (panic_);
-    audition_.setTooltip ("Trigger the noise riser");
+    audition_.setTooltip ("Trigger the current program");
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
     panic_.onClick = [this] { processor_.panic(); };
+    for (int i=0; i<4; ++i) {
+        layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
+        addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
+    }
     startTimerHz (25);
 }
 void FxPanel::paint (juce::Graphics& g)
@@ -68,12 +72,22 @@ void FxPanel::resized()
     auto buttons = area.removeFromLeft (160);
     audition_.setBounds (buttons.removeFromTop (40)); buttons.removeFromTop (10);
     panic_.setBounds (buttons.removeFromTop (40));
+    auto row = getLocalBounds().reduced(32);
+    row.removeFromTop(235);
+    row.removeFromBottom(80);
+    const int width = row.getWidth() / 4;
+    for (std::size_t i=0; i<layers_.size(); ++i) {
+        auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
+        layers_[i]->setBounds(card.reduced(3));
+    }
 }
 void FxPanel::timerCallback()
 {
     if (!isShowing()) return;
     // Block peak comes from rendered samples; visual decay is message-thread only.
-    family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
+    const auto program = processor_.program();
+    family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
+    for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);
     repaint();
 }

@@ -23,17 +23,22 @@ public:
         commit(program, encoded);
         return true;
     }
-    // Serialized read-modify-write for the structural family selector. This
-    // prevents a concurrent preset restore from losing another layer edit.
-    bool setLayerFamily(std::size_t index, NoiseFamily family) {
-        if (index >= 4 || static_cast<unsigned>(family) > static_cast<unsigned>(NoiseFamily::formant)) return false;
+    // Serialized read-modify-write preserves edits to other layers even when
+    // a UI gesture and a host-state restore arrive on different threads.
+    template <typename Edit>
+    bool editLayer(std::size_t index, Edit edit) {
+        if (index >= 4) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
         auto next = desired_;
-        next.layers[index].family = family;
+        edit(next.layers[index]);
         std::vector<std::byte> encoded;
         if (!programcodec::encode(next, encoded)) return false;
         commit(next, encoded);
         return true;
+    }
+    bool setLayerFamily(std::size_t index, NoiseFamily family) {
+        if (static_cast<unsigned>(family) > static_cast<unsigned>(NoiseFamily::formant)) return false;
+        return editLayer(index, [family] (NoiseLayer& layer) { layer.family = family; });
     }
     NoiseProgram snapshot() const {
         const std::lock_guard<std::mutex> lock(mutex_);

@@ -243,3 +243,12 @@ and transactional failure. Program-store concurrent tests passed under TSan;
 Linux allocation probe measured zero allocations for a changed snapshot read.
 JUCE processor integration tests for four-layer audio and project restore were
 added and syntax-checked only; they await a runnable suite build and host tests.
+
+## Basic layer controls
+
+The interim panel exposes enable, family, gain, pan, start and length for each
+of the four layers. These are structural Program edits for newly triggered
+events, not host automation; layer gain/pan automation and editable curves
+remain required. Layer edits use serialized non-audio read-modify-write so
+concurrent changes to different layers are not lost. JUCE editor binding tests
+were added and syntax-checked but have not yet executed in a full suite build.

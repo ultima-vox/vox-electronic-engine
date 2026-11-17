@@ -37,6 +37,7 @@ public:
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
     NoiseProgram program() const { return programs_.snapshot(); }
+    template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;

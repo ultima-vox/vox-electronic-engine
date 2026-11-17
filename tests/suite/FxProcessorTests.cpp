@@ -41,6 +41,11 @@ int main() {
         panel.familySelector().setSelectedId(2, juce::sendNotificationSync);
         check(p.family() == 1, "family selector updates structural state");
         p.setFamily(0);
+        panel.layerPanel(1).gainSlider().setValue(0.42, juce::sendNotificationSync);
+        panel.layerPanel(1).panSlider().setValue(-0.5, juce::sendNotificationSync);
+        const auto edited = p.program();
+        check(std::abs(edited.layers[1].gain - 0.42f) < 1e-5f && edited.layers[1].pan == -0.5f,
+              "layer UI edits structural program");
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }
