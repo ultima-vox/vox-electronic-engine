@@ -64,3 +64,34 @@ the seconds clock is currently used by the Noise Riser; bars, layer mapping
 and curve editing are not yet connected to processor state or the UI. The
 DSP API can snapshot 0.05–32 second durations per trigger; the processor still
 uses its fixed four-second default. No claim of complete FX-02 is made.
+
+## Layered noise engine checkpoint
+
+The JUCE-free Noise Riser engine can snapshot four independently enabled
+noise layers per event. Each layer has its own normalized event offset/span,
+gain, pan, gain curve and pan curve; enabled layers are averaged per event to
+keep the existing output bound. Eight event slots plus one retirement slot
+remain fixed-size. The UI/host cannot yet edit, publish or serialize these
+layer settings; the plugin uses the original single-layer default. Pitch,
+cutoff curves, other sound families and a realtime-safe Program publication
+bridge are still absent. `setProgram` is only safe with exclusive engine
+access and must not be called directly by a concurrent UI thread.
+
+After adding layers, a repeat of the Linux DSP-only 128-sample benchmark
+(same compiler/host and method as above; one active layer per event) produced:
+
+| Sample rate | Voices | p50 us | p95 us | p99 us | max us |
+|---:|---:|---:|---:|---:|
+| 44100 | 1 | 4.51 | 4.70 | 6.49 | 35.94 |
+| 44100 | 8 | 16.64 | 25.56 | 30.94 | 40.35 |
+| 44100 | 9 | 18.71 | 28.47 | 51.45 | 62.73 |
+| 48000 | 1 | 4.66 | 5.18 | 5.33 | 22.27 |
+| 48000 | 8 | 23.18 | 29.38 | 60.44 | 115.32 |
+| 48000 | 9 | 21.61 | 30.23 | 46.97 | 51.73 |
+| 96000 | 1 | 4.54 | 5.99 | 23.78 | 47.09 |
+| 96000 | 8 | 26.64 | 32.90 | 66.72 | 70.97 |
+| 96000 | 9 | 19.27 | 29.24 | 44.97 | 53.03 |
+
+These results supersede the earlier pre-layer benchmark, but are not a
+four-layer stress benchmark, a real host callback distribution, or Windows
+performance evidence. Optimisation and worst-case measurement remain required.
