@@ -1,3 +1,7 @@
+> **SUPERSEDED — historical Rack-first product specification (2026-10-26).** This document is preserved for engineering history and donor research, but its Rack/Bass-first strategy, lineup and acceptance sequence are **NOT current instructions**. As of 2026-11-17 the owner approved exactly three independent Windows x64 VST3 instruments, in the order **VOX Drums → VOX FX → VOX Trance Synthesis (VOX Synth)**. Use [current developer handoff](../DEVELOPER_HANDOFF.md), [status](../STATUS.md), [roadmap](../ROADMAP.md), [standalone architecture](../ultima-vox-music/00_README_AND_OWNER_DECISIONS.md), and [Drums UI authority #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127). The text below is the dated 2026-10-26 historical record, not a competing active product contract.
+
+---
+
 # Vox Trance Engine — спецификация продукта v1.1
 
 Дата: 26.10.2026.
