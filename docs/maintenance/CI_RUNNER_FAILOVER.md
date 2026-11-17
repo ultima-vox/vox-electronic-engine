@@ -27,3 +27,7 @@ The repository runner listing endpoint `GET /repos/ultima-vox/vox-electronic-eng
 - A true timeout-based failover if a previously online runner becomes unavailable **after** selection is not implemented. Such recovery would require a separate watchdog/rerun design and should not retry a DSP validation silently.
 
 **Reference:** [GitHub REST API - self-hosted runners](https://docs.github.com/en/rest/actions/self-hosted-runners), [GitHub Actions runner selection](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job).
+
+## Verification after adding the secret
+
+GitHub Actions evaluates repository secrets when a **new run starts**. Existing runs which selected hosted Windows before `CI_RUNNER_STATUS_TOKEN` was created keep their previous routing decision; they do not automatically reselect. Trigger a new PR synchronize run to verify the selector log. Expected when the repository's Windows self-hosted machines are still offline: `Runner selection: github-hosted ("windows-2022")` **without** the `CI_RUNNER_STATUS_TOKEN is not configured` notice. When self-hosted runners later return online, start another fresh run and expect `Runner selection: self-hosted (["self-hosted","windows"])`. Do not infer credential success from fallback alone if the log instead says `Cannot read repository runner status`.
