@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::downlifter) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::shepard) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -45,6 +45,12 @@ public:
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
             coefficients_[i] = 1.0 - std::exp(-6.283185307179586 * cutoff / rate_);
             pitchFactors_[i] = std::exp2(3.0 * (1.0 - phase));
+            risingFactors_[i] = std::exp2(3.0 * phase);
+            for (std::size_t partial = 0; partial < shepardWeights_.size(); ++partial) {
+                const double position = std::fmod(static_cast<double>(partial) + 3.0 * phase, 6.0);
+                const double sine = std::sin(3.141592653589793 * position / 6.0);
+                shepardWeights_[partial][i] = sine * sine;
+            }
         }
         for (std::size_t i = 0; i < noteHz_.size(); ++i)
             noteHz_[i] = 440.0 * std::exp2((static_cast<double>(i) - 69.0) / 12.0);
@@ -106,6 +112,7 @@ private:
     struct LayerState {
         std::uint32_t rng = 1;
         double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0;
+        std::array<double, 6> partialPhases {};
     };
     struct Voice {
         bool active = false;
@@ -141,7 +148,7 @@ private:
             auto& layer = v.layers[i];
             layer.rng ^= layer.rng << 13; layer.rng ^= layer.rng >> 17; layer.rng ^= layer.rng << 5;
             const double noise = static_cast<double>(layer.rng) / 2147483648.0 - 1.0;
-            const double position = t * tableIntervals;
+            const double position = std::min(t * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
             const auto index = static_cast<std::size_t>(position);
             const double fraction = position - static_cast<double>(index);
             const bool descending = settings.family == NoiseFamily::downlifter;
@@ -156,7 +163,28 @@ private:
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (descending) {
+            if (settings.family == NoiseFamily::shepard) {
+                // Six octave-spaced sine partials traverse a six-octave
+                // window. At each wrap, the Hann-like weight is zero, so
+                // resetting the frequency by six octaves is masked.
+                const double factor = risingFactors_[index] + fraction * (risingFactors_[index + 1] - risingFactors_[index]);
+                source = 0.0;
+                for (std::size_t partial = 0; partial < layer.partialPhases.size(); ++partial) {
+                    double octave = std::ldexp(1.0, static_cast<int>(partial) - 3) * factor;
+                    if (static_cast<double>(partial) + 3.0 * t >= 6.0) octave *= 1.0 / 64.0;
+                    const double frequency = noteHz_[static_cast<std::size_t>(v.note)] * octave;
+                    const double weight = shepardWeights_[partial][index] + fraction * (shepardWeights_[partial][index + 1] - shepardWeights_[partial][index]);
+                    auto& phase = layer.partialPhases[partial];
+                    // Fade partials to zero before Nyquist rather than abruptly
+                    // gating a moving partial as it crosses the cutoff.
+                    const double antiAlias = std::clamp((0.45 * rate_ - frequency) / (0.05 * rate_), 0.0, 1.0);
+                    source += weight * antiAlias * std::sin(6.283185307179586 * phase);
+                    phase += std::min(frequency, 0.45 * rate_) / rate_;
+                    if (phase >= 1.0) phase -= 1.0;
+                }
+                source *= 1.0 / 3.0;
+                envelope = 0.8;
+            } else if (descending) {
                 const double pitchFactor = pitchFactors_[index] + fraction * (pitchFactors_[index + 1] - pitchFactors_[index]);
                 const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchFactor, 0.45 * rate_);
                 const double tonal = std::sin(6.283185307179586 * layer.phase);
@@ -174,7 +202,8 @@ private:
         }
     }
     static constexpr std::size_t tableIntervals = 4096;
-    std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {};
+    std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {}, risingFactors_ {};
+    std::array<std::array<double, tableIntervals + 1>, 6> shepardWeights_ {};
     std::array<double, 128> noteHz_ {};
     NoiseProgram program_;
     double rate_ = 44100.0;

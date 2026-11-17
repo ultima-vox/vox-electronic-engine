@@ -151,3 +151,13 @@ migrate to Noise Riser; unsupported versions and IDs are rejected. This is a
 single-scalar handoff, not the full layered Program controller. Processor-level
 family, state and editor tests have been added, but have not yet run in a full
 JUCE build or VST3 host.
+
+## Shepard sweep
+
+A six-partial octave-overlap tonal sweep is selectable as FFAM family 2.
+Per-partial Hann-like amplitude windows suppress octave-wrap discontinuities;
+partials fade before Nyquist. Local DSP tests render complete two-second
+sweeps at 44.1/48/96 kHz, compare 64/512-sample blocks, check finite bounded
+sound, and compare against the noise riser. ASan/UBSan passed locally. This
+is an initial implementation: perceptual octave continuity, alias rejection,
+worst-case CPU and processor/host behavior still require qualification.

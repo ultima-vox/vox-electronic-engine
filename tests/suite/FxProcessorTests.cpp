@@ -110,7 +110,7 @@ int main() {
     {
         vox::fx::FxProcessor riser, down;
         riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
-        check(down.setFamily(1) && !down.setFamily(2), "bounded family selection");
+        check(down.setFamily(1) && !down.setFamily(3), "bounded family selection");
         juce::AudioBuffer<float> a(2,512), b(2,512);
         juce::MidiBuffer ma, mb;
         ma.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
@@ -119,6 +119,14 @@ int main() {
         double difference = 0;
         for (int i = 0; i < 512; ++i) difference += std::abs(a.getSample(0, i) - b.getSample(0, i));
         check(b.getMagnitude(0, 0, 512) > 0 && difference > 1e-4, "family choice reaches real processor DSP");
+        vox::fx::FxProcessor shepard;
+        shepard.prepareToPlay(48000, 512); shepard.setFamily(2);
+        juce::MidiBuffer mc;
+        mc.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(shepard, b, mc);
+        difference = 0;
+        for (int i = 0; i < 512; ++i) difference += std::abs(a.getSample(0, i) - b.getSample(0, i));
+        check(b.getMagnitude(0, 0, 512) > 0 && difference > 1e-4, "Shepard reaches processor DSP");
     }
     auto* gain = p.getParameters()[0];
     check(gain != nullptr, "output parameter exists");
