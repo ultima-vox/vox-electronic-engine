@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "FxEditor.h"
 #include <bit>
 #include <cmath>
 
@@ -41,19 +42,34 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
+    auditionPending_.store (false, std::memory_order_relaxed);
+    peak_.store (0.0f, std::memory_order_relaxed);
 }
 
 void FxProcessor::releaseResources() { engine_.prepare (preparedSampleRate()); }
-void FxProcessor::reset() { panicPending_.store (true, std::memory_order_release); }
+void FxProcessor::reset() { panic(); }
+juce::AudioProcessorEditor* FxProcessor::createEditor()
+{
+    auto editor = std::make_unique<vox::suite::SuiteEditor> (*this);
+    editor->setContent (std::make_unique<FxPanel> (*this));
+    return editor.release();
+}
 
 void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     noteMidiSeen (midi);
     buffer.clear();
-    if (panicPending_.exchange (false, std::memory_order_acquire)) engine_.allSoundOff (0);
+    if (panicPending_.exchange (false, std::memory_order_acquire)) {
+        engine_.allSoundOff (0);
+        auditionPending_.store (false, std::memory_order_relaxed);
+    }
+    if (auditionPending_.exchange (false, std::memory_order_acquire)) engine_.noteOn (1, 60, 0.8f);
     const int size = buffer.getNumSamples();
-    if (buffer.getNumChannels() < 2 || size == 0) return;
+    if (buffer.getNumChannels() < 2 || size == 0) {
+        peak_.store (0.0f, std::memory_order_relaxed);
+        return;
+    }
     auto* left = buffer.getWritePointer (0);
     auto* right = buffer.getWritePointer (1);
     int position = 0;
@@ -84,11 +100,14 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     renderTo (size);
     const auto target = output_->get();
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
+    float peak = 0.0f;
     for (int i = 0; i < size; ++i) {
         const auto gain = outputSmoothing_.getNextValue();
         left[i] *= gain;
         right[i] *= gain;
+        peak = std::max (peak, std::max (std::abs (left[i]), std::abs (right[i])));
     }
+    peak_.store (peak, std::memory_order_relaxed);
 }
 
 void FxProcessor::writeProductState (std::vector<preset::Section>& out) const

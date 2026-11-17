@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "FxEditor.h"
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -23,6 +24,13 @@ void block (vox::fx::FxProcessor& p, juce::AudioBuffer<float>& audio, juce::Midi
 int main() {
     juce::ScopedJuceInitialiser_GUI gui;
     vox::fx::FxProcessor p;
+    {
+        vox::fx::FxPanel panel(p);
+        panel.outputSlider().setValue(0.5, juce::sendNotificationSync);
+        check(std::abs(p.outputParameter().get() - 0.5f) < 1e-6f, "editor knob controls host parameter");
+        p.outputParameter().setValueNotifyingHost(1.0f);
+        check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;
@@ -38,6 +46,7 @@ int main() {
     midi.clear();
     check(audio.getMagnitude(0, 0, 100) == 0, "MIDI offset preserves leading silence");
     check(audio.getMagnitude(0, 101, 411) > 0, "MIDI trigger makes processor audio");
+    check(p.outputPeak() == audio.getMagnitude(0, 0, 512), "meter follows actual output peak");
     midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
     block(p, audio, midi);
     check(audio.getMagnitude(0, 0, 512) > 0, "one-shot ignores note off");
@@ -55,6 +64,11 @@ int main() {
     block(p, audio, midi);
     p.reset(); block(p, audio, midi);
     check(audio.getMagnitude(0, 300, 212) == 0, "reset fades active event");
+
+    p.audition(); block(p, audio, midi);
+    check(audio.getMagnitude(0, 0, 512) > 0, "editor audition triggers sound");
+    p.panic(); block(p, audio, midi);
+    check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
 
     auto* gain = p.getParameters()[0];
     check(gain != nullptr, "output parameter exists");
