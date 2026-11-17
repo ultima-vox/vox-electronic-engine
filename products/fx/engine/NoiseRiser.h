@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::whoosh) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::laser) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -170,11 +170,24 @@ private:
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
             const double layerDuration = v.duration * span;
-            const double fadeIn = std::min(1.0, t * layerDuration / (settings.family == NoiseFamily::impact ? 0.001 : 0.01));
+            const double fadeIn = std::min(1.0, t * layerDuration / ((settings.family == NoiseFamily::impact || settings.family == NoiseFamily::laser) ? 0.001 : 0.01));
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::whoosh) {
+            if (settings.family == NoiseFamily::laser) {
+                // Fast exponential chirp with a short synthetic noise tick.
+                // Rate-independent prepared curves avoid per-sample exp().
+                const double elapsed = t * layerDuration;
+                const double pos = std::min(elapsed / 8.0 * tableIntervals, static_cast<double>(tableIntervals));
+                const auto at = static_cast<std::size_t>(pos);
+                const auto next = std::min(at + 1, tableIntervals);
+                const double f = pos - static_cast<double>(at);
+                const auto read = [at, next, f] (const auto& table) { return table[at] + f * (table[next] - table[at]); };
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * (2.0 + 12.0 * read(impactPitch_)), 0.40 * rate_);
+                source = 0.8 * std::sin(6.283185307179586 * layer.phase) + 0.2 * noise * read(impactNoise_);
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                envelope = read(impactNoise_);
+            } else if (settings.family == NoiseFamily::whoosh) {
                 // Bounded variable delay on this layer's own signal. Its
                 // slowly moving read tap supplies a subtle Doppler shift.
                 constexpr unsigned mask = 255;

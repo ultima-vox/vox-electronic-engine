@@ -181,3 +181,12 @@ finite output and left-to-right energy movement; ASan/UBSan passed locally.
 The delay increases per-event memory and note-on initialization; real host
 callback and maximum-load performance remain unmeasured. Listening and full
 Doppler/alias qualification remain outstanding.
+
+## Zap / Laser
+
+FFAM family 5 adds an exponential MIDI-transposed sine chirp with a short
+noise tick and rate-independent precomputed pitch/amplitude trajectories.
+Tests cover 44.1/48/96 kHz, 64/128/512 blocks, output bounds, decay and a
+normalized high-frequency trajectory proxy; ASan/UBSan passed locally. The
+current recipe does not include optional FM, drive or oversampling; listening,
+anti-alias measurement and exact-head host tests remain required.
