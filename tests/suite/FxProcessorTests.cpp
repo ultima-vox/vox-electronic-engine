@@ -28,6 +28,9 @@ int main() {
         vox::fx::FxPanel panel(p);
         panel.outputSlider().setValue(0.5, juce::sendNotificationSync);
         check(std::abs(p.outputParameter().get() - 0.5f) < 1e-6f, "editor knob controls host parameter");
+        panel.durationSlider().setValue(8.0, juce::sendNotificationSync);
+        check(std::abs(p.durationParameter().get() - 8.0f) < 1e-4f, "duration editor controls parameter");
+        p.durationParameter().setValueNotifyingHost(p.durationParameter().convertTo0to1(4.0f));
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }
@@ -73,11 +76,13 @@ int main() {
     auto* gain = p.getParameters()[0];
     check(gain != nullptr, "output parameter exists");
     gain->setValueNotifyingHost(0.25f);
+    p.durationParameter().setValueNotifyingHost(p.durationParameter().convertTo0to1(2.5f));
     const auto saved = save(p);
     vox::fx::FxProcessor restored;
     restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
     check(restored.lastStateError().isEmpty(), "valid state accepted");
     check(std::abs(restored.getParameters()[0]->getValue() - 0.25f) < 1e-6f, "parameter restored");
+    check(std::abs(restored.durationParameter().get() - 2.5f) < 1e-4f, "duration restored");
     check(save(restored) == saved, "state deterministic roundtrip");
     auto damaged = saved;
     static_cast<unsigned char*>(damaged.getData())[20] ^= 1;
@@ -88,12 +93,37 @@ int main() {
     check(decoded.ok(), "decode state");
     if (decoded.ok()) {
         for (auto& section : decoded.document.sections)
-            if (section.tag == vox::fx::fxParameterSectionTag) section.data[0] = std::byte{2};
+            if (section.tag == vox::fx::fxParameterSectionTag) section.data[0] = std::byte{3};
         auto encoded = vox::preset::encode(decoded.document);
         if (encoded) {
             restored.setStateInformation(encoded->data(), static_cast<int>(encoded->size()));
             check(restored.lastStateError().isNotEmpty() && save(restored) == saved, "future FX section rejected transactionally");
         } else check(false, "encode future state");
+    }
+    {
+        // FPRM v1 had only the output value. Restore it with the 4 s default.
+        auto oldDoc = vox::preset::decode(std::span(static_cast<const std::byte*>(saved.getData()), saved.getSize()),
+                                          vox::preset::makeTag("VXFX"), 1);
+        for (auto& section : oldDoc.document.sections) if (section.tag == vox::fx::fxParameterSectionTag) {
+            section.data.resize(8); section.data[0] = std::byte{1};
+        }
+        auto old = vox::preset::encode(oldDoc.document);
+        vox::fx::FxProcessor migrated;
+        check(old.has_value(), "encode v1 state");
+        if (old) {
+            migrated.setStateInformation(old->data(), static_cast<int>(old->size()));
+            check(migrated.lastStateError().isEmpty() && std::abs(migrated.durationParameter().get() - 4.0f) < 1e-4f,
+                  "v1 state migrates to four second duration");
+        }
+    }
+    {
+        vox::fx::FxProcessor durationTest; durationTest.prepareToPlay(48000, 512);
+        durationTest.durationParameter().setValueNotifyingHost(0.0f);
+        juce::MidiBuffer notes;
+        notes.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
+        block(durationTest, audio, notes);
+        for (int i = 0; i < 4; ++i) block(durationTest, audio, notes);
+        check(audio.getMagnitude(0, 400, 112) == 0, "duration parameter affects triggered event");
     }
     restored.prepareToPlay(48000, 512);
     restored.getParameters()[0]->setValueNotifyingHost(0.0f);

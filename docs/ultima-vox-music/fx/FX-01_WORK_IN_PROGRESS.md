@@ -95,3 +95,14 @@ After adding layers, a repeat of the Linux DSP-only 128-sample benchmark
 These results supersede the earlier pre-layer benchmark, but are not a
 four-layer stress benchmark, a real host callback distribution, or Windows
 performance evidence. Optimisation and worst-case measurement remain required.
+
+## Duration parameter and state v2
+
+`fx.event.duration` is a host-automatable 0.05–32 s value. The processor
+snapshots its value once per block for newly triggered events; changing it does
+not alter events already playing. The Perform panel binds it via a JUCE slider
+parameter attachment. The reported tail is 32 seconds. FPRM v2 appends the
+normalized duration after the normalized output gain; v1 and the original
+shell's absent FPRM import with the default 4 seconds. State restores still
+use the SuiteProcessor transactional product-section protocol. FX-02's
+bar-based timing and transport behavior are not connected yet.

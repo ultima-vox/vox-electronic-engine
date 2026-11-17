@@ -17,9 +17,10 @@ public:
     void reset() override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using vox::suite::SuiteProcessor::processBlock;
-    double getTailLengthSeconds() const override { return 4.0; }
+    double getTailLengthSeconds() const override { return 32.0; }
     juce::AudioProcessorEditor* createEditor() override;
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
+    juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
     // Message-to-audio requests are bounded and coalesced, not a MIDI queue.
     void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
     void panic() noexcept { panicPending_.store (true, std::memory_order_release); }
@@ -33,6 +34,9 @@ protected:
 private:
     NoiseRiser engine_;
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
+    juce::AudioParameterFloat* duration_ = nullptr;
+    // Guarded by SuiteProcessor state lock, not accessed by the audio thread.
+    float loadedDuration_ = 0.0f, heldDuration_ = 0.0f;
     juce::SmoothedValue<float> outputSmoothing_;
     std::atomic<bool> panicPending_ { false }, auditionPending_ { false };
     std::atomic<float> peak_ { 0.0f };

@@ -5,12 +5,12 @@
 
 namespace vox::fx {
 namespace {
-preset::Section encodeParameter (float value)
+preset::Section encodeParameter (float value, float durationNormalized)
 {
     preset::Section section;
     section.tag = fxParameterSectionTag;
-    // FPRM v1: version and IEEE-754 normalized output gain, little endian.
-    for (const auto word : { std::uint32_t { 1 }, std::bit_cast<std::uint32_t> (value) })
+    // FPRM v2: version, normalized output and duration, IEEE-754 little endian.
+    for (const auto word : { std::uint32_t { 2 }, std::bit_cast<std::uint32_t> (value), std::bit_cast<std::uint32_t> (durationNormalized) })
         for (int shift = 0; shift < 32; shift += 8)
             section.data.push_back (static_cast<std::byte> ((word >> shift) & 0xffu));
     return section;
@@ -33,6 +33,10 @@ FxProcessor::FxProcessor()
     output_ = new juce::AudioParameterFloat (juce::ParameterID { "fx.output.gain", 1 },
                                               "Output Gain", 0.0f, 1.0f, 1.0f);
     addParameter (output_);
+    duration_ = new juce::AudioParameterFloat (juce::ParameterID { "fx.event.duration", 1 },
+                                                "Event Duration", 0.05f, 32.0f, 4.0f);
+    addParameter (duration_);
+    loadedDuration_ = heldDuration_ = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
 }
 
 void FxProcessor::prepareToPlay (double rate, int blockSize)
@@ -64,7 +68,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         engine_.allSoundOff (0);
         auditionPending_.store (false, std::memory_order_relaxed);
     }
-    if (auditionPending_.exchange (false, std::memory_order_acquire)) engine_.noteOn (1, 60, 0.8f);
+    const float requestedDuration = duration_->get();
+    const double eventDuration = std::isfinite (requestedDuration)
+        ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
+    if (auditionPending_.exchange (false, std::memory_order_acquire)) engine_.noteOn (1, 60, 0.8f, eventDuration);
     const int size = buffer.getNumSamples();
     if (buffer.getNumChannels() < 2 || size == 0) {
         peak_.store (0.0f, std::memory_order_relaxed);
@@ -89,7 +96,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         const int channel = (status & 0x0f) + 1;
         if (type == 0x90 && bytes[2] != 0) {
             renderTo (metadata.samplePosition);
-            engine_.noteOn (channel, bytes[1] & 0x7f, static_cast<float> (bytes[2] & 0x7f) / 127.0f);
+            engine_.noteOn (channel, bytes[1] & 0x7f, static_cast<float> (bytes[2] & 0x7f) / 127.0f, eventDuration);
         } else if (type == 0xb0 && (bytes[1] == 120 || bytes[1] == 123)) {
             renderTo (metadata.samplePosition);
             engine_.allSoundOff (channel);
@@ -112,27 +119,42 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
 
 void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
-    out.push_back (encodeParameter (output_->get()));
+    const auto current = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
+    out.push_back (encodeParameter (output_->get(), juce::exactlyEqual (current, heldDuration_) ? loadedDuration_ : current));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
 {
     float value = 1.0f; // FOUND-01 shell states have no FPRM section.
+    float duration = duration_->convertTo0to1 (4.0f);
     if (const auto* section = doc.find (fxParameterSectionTag)) {
-        if (section->data.size() != 8 || wordAt (section->data, 0) != 1) {
-            error = "Unsupported or malformed FX parameter section";
+        const auto size = section->data.size();
+        if (size != 8 && size != 12) {
+            error = "Malformed FX parameter section";
+            return {};
+        }
+        const auto version = wordAt (section->data, 0);
+        if ((version != 1 || size != 8) && (version != 2 || size != 12)) {
+            error = "Unsupported FX parameter section";
             return {};
         }
         value = std::bit_cast<float> (wordAt (section->data, 4));
-        if (! std::isfinite (value) || value < 0.0f || value > 1.0f) {
-            error = "Invalid FX output gain";
+        if (version == 2) duration = std::bit_cast<float> (wordAt (section->data, 8));
+        if (! std::isfinite (value) || value < 0.0f || value > 1.0f ||
+            ! std::isfinite (duration) || duration < 0.0f || duration > 1.0f) {
+            error = "Invalid FX parameter value";
             return {};
         }
     }
     ProductRestore result;
-    result.sections.push_back (encodeParameter (value));
-    result.apply = [this, value] { output_->setValueNotifyingHost (value); };
-    result.settle = [] {};
+    result.sections.push_back (encodeParameter (value, duration));
+    auto held = std::make_shared<float> (0.0f);
+    result.apply = [this, value, duration, held] {
+        output_->setValueNotifyingHost (value);
+        duration_->setValueNotifyingHost (duration);
+        *held = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
+    };
+    result.settle = [this, duration, held] { loadedDuration_ = duration; heldDuration_ = *held; };
     return result;
 }
 } // namespace vox::fx
