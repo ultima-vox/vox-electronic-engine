@@ -292,3 +292,17 @@ and has no sample-import/slice editor yet. Local tests at 44.1/48/96 kHz and
 64/128/512 blocks check audibility, deterministic gate silence and finite
 bounds; ASan/UBSan passed. Listening, artifact, transport-sync and VST3 host
 qualification remain outstanding.
+
+## Granular Cloud
+
+FFAM family 11 uses an explicitly built-in, procedurally synthesized source
+prepared outside the audio callback. A single preallocated pool contains at
+most 64 Hann-windowed grains globally; note stealing remaps ownership and
+panic retires grains. Local tests at 44.1/48/96 kHz verify audibility,
+block-invariant deterministic output, the 64-grain cap and retirement. A
+Linux allocation probe observed zero allocations during granular processing
+and event stealing; ASan/UBSan passed. This is not full granular acceptance:
+user sample import, safe sample ownership/retirement, reverse/position/rate
+controls, sample portability, tuning and host/quality/performance evidence are
+still required. The built-in source is not a hidden fallback for a missing
+user sample; user sample loading is not yet offered.

@@ -195,7 +195,7 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     }
     int family = 0;
     if (const auto* section = doc.find (fxFamilySectionTag)) {
-        if (section->data.size() != 8 || wordAt (section->data, 0) != 1 || wordAt (section->data, 4) > 10) {
+        if (section->data.size() != 8 || wordAt (section->data, 0) != 1 || wordAt (section->data, 4) > 11) {
             error = "Unsupported or malformed FX family section";
             return {};
         }

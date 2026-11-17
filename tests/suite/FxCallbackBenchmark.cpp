@@ -11,9 +11,9 @@
 int main() {
     using Clock=std::chrono::steady_clock;
     constexpr int measurements=100, block=128;
-    const char* names[]{"riser","downlifter","shepard","impact","whoosh","laser","squelch","metallic","texture","formant"};
+    const char* names[]{"riser","downlifter","shepard","impact","whoosh","laser","squelch","metallic","texture","formant","glitch","granular"};
     double checksum=0; int failures=0;
-    for(double rate:{44100.0,48000.0,96000.0}) for(int family=0;family<10;++family) {
+    for(double rate:{44100.0,48000.0,96000.0}) for(int family=0;family<12;++family) {
         auto engine=std::make_unique<vox::fx::NoiseRiser>();engine->prepare(rate);
         vox::fx::NoiseProgram p;for(auto& l:p.layers){l.enabled=true;l.family=static_cast<vox::fx::NoiseFamily>(family);}
         if(!engine->setProgram(p))return 1;

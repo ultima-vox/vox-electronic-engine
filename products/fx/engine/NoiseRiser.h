@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant, glitch };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant, glitch, granular };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::glitch) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::granular) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -70,7 +70,24 @@ public:
                 mode.a2 = -radius * radius;
             }
         }
-        voices_ = {}; retiring_ = {}; serial_ = 0;
+        // Explicit built-in procedural sample, prepared outside the callback.
+        // External sample loading/ownership is a separate unfinished feature.
+        std::uint32_t sourceRng = 0x719b83a5u;
+        double color = 0;
+        for (std::size_t i=0; i<sample_.size(); ++i) {
+            sourceRng ^= sourceRng << 13; sourceRng ^= sourceRng >> 17; sourceRng ^= sourceRng << 5;
+            const double white = static_cast<double>(sourceRng) / 2147483648.0 - 1.0;
+            color += 0.15 * (white - color);
+            const double fade = std::sin(3.141592653589793 * i / sample_.size());
+            sample_[i] = static_cast<float>(0.65 * color * fade * fade + 0.25 * std::sin(6.283185307179586 * 13.0 * i / sample_.size()));
+        }
+        for (std::size_t i=0; i<grainWindow_.size(); ++i) {
+            const double phase = static_cast<double>(i) / (grainWindow_.size() - 1);
+            grainWindow_[i] = 0.5 - 0.5 * std::cos(6.283185307179586 * phase);
+        }
+        grainLength_ = static_cast<unsigned>(std::max(2.0, rate_ * 0.08));
+        grainInterval_ = static_cast<unsigned>(std::max(1.0, rate_ * 0.025));
+        grains_ = {}; activeGrains_ = 0; voices_ = {}; retiring_ = {}; serial_ = 0;
     }
     // The caller must ensure there is no concurrent access. UI/worker threads
     // must not call this during rendering without a safe publication bridge.
@@ -92,6 +109,8 @@ public:
             slot = &*std::min_element(voices_.begin(), voices_.end(),
                 [](const Voice& a, const Voice& b) { return a.serial < b.serial; });
             retiring_ = *slot; beginRelease(retiring_);
+            for (auto& grain : grains_)
+                if (grain.active && grain.serial == retiring_.serial) grain.voiceIndex = 8;
         }
         *slot = {};
         slot->active = true; slot->channel = channel; slot->note = note;
@@ -109,6 +128,10 @@ public:
         slot->layerScale = 1.0 / std::max(1, enabled);
         return true;
     }
+    // Audio-thread diagnostics; never read concurrently without a snapshot.
+    unsigned activeGrainCount() const noexcept {
+        return activeGrains_;
+    }
     void allSoundOff(int channel) noexcept {
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
         if (retiring_.active && (channel == 0 || retiring_.channel == channel)) beginRelease(retiring_);
@@ -118,8 +141,9 @@ public:
     void render(float* left, float* right, int count) noexcept {
         for (int i = 0; i < count; ++i) {
             double l = 0, r = 0;
-            for (auto& v : voices_) tick(v, l, r);
-            tick(retiring_, l, r);
+            for (std::size_t voice=0; voice<voices_.size(); ++voice) tick(voices_[voice], l, r, voice);
+            tick(retiring_, l, r, 8);
+            mixGrains(l, r);
             left[i] = static_cast<float>(l * 0.055);
             right[i] = static_cast<float>(r * 0.055);
         }
@@ -134,7 +158,9 @@ private:
         std::array<double, 8> mode1 {}, mode2 {};
         bool modesStarted = false;
         std::array<float, 256> delay {};
-        unsigned delayWrite = 0, glitchWritten = 0;
+        unsigned delayWrite = 0, glitchWritten = 0, grainCountdown = 0;
+        double grainGain = 0, grainPan = 0;
+        bool grainLayerActive = false;
     };
     struct Voice {
         bool active = false;
@@ -152,7 +178,7 @@ private:
         v.releaseLength = std::max(1, static_cast<int>(rate_ * 0.005));
         v.releaseRemaining = v.releaseLength;
     }
-    void tick(Voice& v, double& left, double& right) noexcept {
+    void tick(Voice& v, double& left, double& right, std::size_t voiceIndex) noexcept {
         if (!v.active) return;
         double eventPhase = 0;
         if (!v.clock.next(eventPhase)) { v.active = false; return; }
@@ -162,6 +188,8 @@ private:
             if (--v.releaseRemaining == 0) v.active = false;
         }
         for (std::size_t i = 0; i < v.layers.size(); ++i) {
+            v.layers[i].grainGain = 0;
+            v.layers[i].grainLayerActive = false;
             const auto& settings = v.program.layers[i];
             if (!settings.enabled) continue;
             const double offset = settings.timing.offset, span = settings.timing.span;
@@ -190,7 +218,26 @@ private:
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::glitch) {
+            if (settings.family == NoiseFamily::granular) {
+                // Each layer schedules into one shared, preallocated 64-grain
+                // pool. Capacity exhaustion drops new grains deterministically.
+                layer.grainLayerActive = true;
+                layer.grainGain = 0.35 * v.velocity * fadeIn * fadeOut * release * v.layerScale * settings.gain *
+                                  settings.gainCurve.evaluate(static_cast<float>(t));
+                layer.grainPan = std::clamp(static_cast<double>(settings.pan) +
+                                 2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0, -1.0, 1.0);
+                if (layer.grainCountdown == 0) {
+                    for (auto& grain:grains_) if (!grain.active) {
+                        grain.active=true; ++activeGrains_; grain.voiceIndex=voiceIndex; grain.layerIndex=i; grain.serial=v.serial;
+                        grain.position=static_cast<double>(layer.rng % sample_.size());
+                        grain.speed=std::clamp(noteHz_[static_cast<std::size_t>(v.note)] / noteHz_[60], 0.25, 4.0);
+                        grain.age=0; grain.length=grainLength_; break;
+                    }
+                    layer.grainCountdown=grainInterval_;
+                }
+                --layer.grainCountdown;
+                continue;
+            } else if (settings.family == NoiseFamily::glitch) {
                 // Capture this layer's own synthesized signal into a bounded
                 // 256-sample loop, then retrigger windowed slices on a fixed
                 // 120 BPM sixteenth grid. No external audio input is used.
@@ -383,6 +430,37 @@ private:
             right += sample * std::min(1.0, 1.0 + pan);
         }
     }
+    struct Grain {
+        bool active=false;
+        std::size_t voiceIndex=0, layerIndex=0;
+        std::uint64_t serial=0;
+        double position=0, speed=1;
+        unsigned age=0, length=0;
+    };
+    void mixGrains(double& left, double& right) noexcept {
+        if (activeGrains_ == 0) return;
+        for (auto& grain:grains_) {
+            if (!grain.active) continue;
+            auto& owner = grain.voiceIndex == 8 ? retiring_ : voices_[grain.voiceIndex];
+            if (!owner.active || owner.serial != grain.serial || grain.age >= grain.length) { grain.active=false; --activeGrains_; continue; }
+            const auto& layer = owner.layers[grain.layerIndex];
+            if (!layer.grainLayerActive) { grain.active=false; --activeGrains_; continue; }
+            const auto at=static_cast<std::size_t>(grain.position) % sample_.size();
+            const auto next=(at+1) % sample_.size();
+            const double frac=grain.position - std::floor(grain.position);
+            const double source=sample_[at] + frac * (sample_[next] - sample_[at]);
+            const double windowPos=static_cast<double>(grain.age) * (grainWindow_.size()-1) / (grain.length-1);
+            const auto w=static_cast<std::size_t>(windowPos);
+            const auto wn=std::min(w+1,grainWindow_.size()-1);
+            const double window=grainWindow_[w] + (windowPos-w)*(grainWindow_[wn]-grainWindow_[w]);
+            const double sample=source*window*layer.grainGain;
+            left+=sample*std::min(1.0,1.0-layer.grainPan);
+            right+=sample*std::min(1.0,1.0+layer.grainPan);
+            grain.position+=grain.speed;
+            if (grain.position >= sample_.size()) grain.position-=sample_.size();
+            if (++grain.age >= grain.length) { grain.active=false; --activeGrains_; }
+        }
+    }
     static constexpr std::size_t tableIntervals = 4096;
     std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {}, risingFactors_ {};
     std::array<double, tableIntervals + 1> impactPitch_ {}, impactBody_ {}, impactNoise_ {};
@@ -391,6 +469,10 @@ private:
     struct ModalCoefficient { double a1 = 0, a2 = 0; bool enabled = false; };
     std::array<double, 128> noteHz_ {};
     std::array<std::array<ModalCoefficient, 8>, 128> modal_ {};
+    std::array<float, 8192> sample_ {};
+    std::array<double, 1025> grainWindow_ {};
+    std::array<Grain, 64> grains_ {};
+    unsigned grainLength_ = 2, grainInterval_ = 1, activeGrains_ = 0;
     NoiseProgram program_;
     double rate_ = 44100.0;
     std::uint64_t serial_ = 0;

@@ -9,10 +9,10 @@ LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor
     enabled_.setTitle("Enable layer " + juce::String(index + 1));
     enabled_.onClick = [this] { processor_.editLayer(static_cast<std::size_t>(index_), [this](NoiseLayer& l){ l.enabled=enabled_.getToggleState(); }); };
     addAndMakeVisible(enabled_);
-    const char* names[]{"Noise Riser", "Downlifter", "Shepard", "Impact", "Whoosh", "Laser", "Squelch", "Metallic", "Texture", "Formant", "Glitch"};
-    for(int i=0;i<11;++i) family_.addItem(names[i],i+1);
+    const char* names[]{"Noise Riser", "Downlifter", "Shepard", "Impact", "Whoosh", "Laser", "Squelch", "Metallic", "Texture", "Formant", "Glitch", "Granular"};
+    for(int i=0;i<12;++i) family_.addItem(names[i],i+1);
     family_.setTitle("Layer " + juce::String(index + 1) + " family");
-    family_.onChange = [this] { const int id=family_.getSelectedId(); if(id>=1 && id<=11)
+    family_.onChange = [this] { const int id=family_.getSelectedId(); if(id>=1 && id<=12)
         processor_.editLayer(static_cast<std::size_t>(index_), [id](NoiseLayer& l){l.family=static_cast<NoiseFamily>(id-1);}); };
     addAndMakeVisible(family_);
     auto& g=gain_.getSlider();g.setRange(0,1,0.001);g.setTitle("Layer gain");

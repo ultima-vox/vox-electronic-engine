@@ -31,7 +31,7 @@ public:
     // Controller methods only: these may lock/allocate and are never called
     // from the audio callback. Existing events retain their captured program.
     bool setFamily (int family) {
-        if (family < 0 || family > 10) return false;
+        if (family < 0 || family > 11) return false;
         return programs_.setLayerFamily (0, static_cast<NoiseFamily> (family));
     }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }

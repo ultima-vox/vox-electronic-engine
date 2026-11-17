@@ -67,7 +67,7 @@ inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexc
     for (auto& layer:next.layers) {
         std::uint32_t enabled=0, family=0;
         if (!getU32(bytes,offset,enabled) || enabled > 1 || !getU32(bytes,offset,family) ||
-            family > static_cast<std::uint32_t>(NoiseFamily::glitch) ||
+            family > static_cast<std::uint32_t>(NoiseFamily::granular) ||
             !getFloat(bytes,offset,layer.timing.offset) || !getFloat(bytes,offset,layer.timing.span) ||
             !getFloat(bytes,offset,layer.gain) || !getFloat(bytes,offset,layer.pan) ||
             !getCurve(bytes,offset,layer.gainCurve) || !getCurve(bytes,offset,layer.panCurve)) return false;
