@@ -254,3 +254,8 @@ add_executable(suite_fx_shepard_tests FxShepardTests.cpp)
 target_include_directories(suite_fx_shepard_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_shepard_tests COMMAND suite_fx_shepard_tests)
 set_tests_properties(suite_fx_shepard_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_impact_tests FxImpactTests.cpp)
+target_include_directories(suite_fx_impact_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_impact_tests COMMAND suite_fx_impact_tests)
+set_tests_properties(suite_fx_impact_tests PROPERTIES LABELS suite)

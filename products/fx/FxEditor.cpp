@@ -19,6 +19,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.addItem ("Noise Riser", 1);
     family_.addItem ("Downlifter", 2);
     family_.addItem ("Tonal Sweep / Shepard", 3);
+    family_.addItem ("Impact / Boom", 4);
     family_.setTitle ("Sound family");
     family_.setTooltip ("Family for newly triggered events");
     family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);

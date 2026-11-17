@@ -161,3 +161,12 @@ sweeps at 44.1/48/96 kHz, compare 64/512-sample blocks, check finite bounded
 sound, and compare against the noise riser. ASan/UBSan passed locally. This
 is an initial implementation: perceptual octave continuity, alias rejection,
 worst-case CPU and processor/host behavior still require qualification.
+
+## Impact / Boom
+
+FFAM family 3 adds a descending sine body, separate sub and short noise
+exciter with prepared exponential trajectories and a 1 ms attack fade. The
+local DSP test covers complete four-second events at 44.1/48/96 kHz and
+64/128/512 blocks; audibility, finite output and decaying tail pass, as does
+ASan/UBSan. This does not establish perceptual quality, aliasing, maximum-load
+performance or plugin-host validation.

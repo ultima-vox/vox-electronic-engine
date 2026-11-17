@@ -11,7 +11,7 @@ namespace vox::fx {
 // Interim layered Noise Riser. Programs are POD; install only while stopped or
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
-enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard };
+enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -20,7 +20,7 @@ struct NoiseLayer {
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
     bool valid() const noexcept {
-        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::shepard) &&
+        return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::impact) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
                std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
     }
@@ -46,6 +46,10 @@ public:
             coefficients_[i] = 1.0 - std::exp(-6.283185307179586 * cutoff / rate_);
             pitchFactors_[i] = std::exp2(3.0 * (1.0 - phase));
             risingFactors_[i] = std::exp2(3.0 * phase);
+            const double seconds = 8.0 * phase;
+            impactPitch_[i] = std::exp(-22.0 * seconds);
+            impactBody_[i] = std::exp(-2.0 * seconds);
+            impactNoise_[i] = std::exp(-14.0 * seconds);
             for (std::size_t partial = 0; partial < shepardWeights_.size(); ++partial) {
                 const double position = std::fmod(static_cast<double>(partial) + 3.0 * phase, 6.0);
                 const double sine = std::sin(3.141592653589793 * position / 6.0);
@@ -111,7 +115,7 @@ public:
 private:
     struct LayerState {
         std::uint32_t rng = 1;
-        double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0;
+        double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0, subPhase = 0;
         std::array<double, 6> partialPhases {};
     };
     struct Voice {
@@ -159,11 +163,30 @@ private:
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
             const double layerDuration = v.duration * span;
-            const double fadeIn = std::min(1.0, t * layerDuration / 0.01);
+            const double fadeIn = std::min(1.0, t * layerDuration / (settings.family == NoiseFamily::impact ? 0.001 : 0.01));
             const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
-            if (settings.family == NoiseFamily::shepard) {
+            if (settings.family == NoiseFamily::impact) {
+                // Decaying sine body with a fast pitch fall, separate sub,
+                // and short noise exciter. Tables are prepared off-thread.
+                const double elapsed = t * layerDuration;
+                const double pos = std::min(elapsed / 8.0 * tableIntervals, static_cast<double>(tableIntervals));
+                const auto at = static_cast<std::size_t>(pos);
+                const auto next = std::min(at + 1, tableIntervals);
+                const double f = pos - static_cast<double>(at);
+                const auto read = [at, next, f] (const auto& table) {
+                    return table[at] + f * (table[next] - table[at]);
+                };
+                const double fundamental = std::clamp(noteHz_[static_cast<std::size_t>(v.note)] * 0.19, 30.0, 160.0);
+                const double frequency = std::min(fundamental * (1.0 + 3.0 * read(impactPitch_)), rate_ * 0.45);
+                const double body = std::sin(6.283185307179586 * layer.phase);
+                const double sub = std::sin(6.283185307179586 * layer.subPhase);
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                layer.subPhase += fundamental * 0.5 / rate_; if (layer.subPhase >= 1.0) layer.subPhase -= 1.0;
+                source = (0.65 * body + 0.20 * sub) * read(impactBody_) + 0.25 * noise * read(impactNoise_);
+                envelope = 1.0;
+            } else if (settings.family == NoiseFamily::shepard) {
                 // Six octave-spaced sine partials traverse a six-octave
                 // window. At each wrap, the Hann-like weight is zero, so
                 // resetting the frequency by six octaves is masked.
@@ -203,6 +226,7 @@ private:
     }
     static constexpr std::size_t tableIntervals = 4096;
     std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {}, risingFactors_ {};
+    std::array<double, tableIntervals + 1> impactPitch_ {}, impactBody_ {}, impactNoise_ {};
     std::array<std::array<double, tableIntervals + 1>, 6> shepardWeights_ {};
     std::array<double, 128> noteHz_ {};
     NoiseProgram program_;
