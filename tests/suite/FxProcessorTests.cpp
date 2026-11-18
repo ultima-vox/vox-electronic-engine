@@ -304,6 +304,11 @@ int main() {
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
         block(*sequenced,a,noMidi);block(*manual,b,note);
         for(int i=0;i<512;++i)check(a.getSample(0,i)==b.getSample(0,i),"host pattern downbeat matches MIDI trigger");
+        check(!sequenced->patternUnavailable(),"valid pattern host timing is available");
+        pos.setBpm(9);head.position=pos;block(*sequenced,a,noMidi);
+        check(sequenced->patternUnavailable(),"invalid scheduler tempo surfaced to UI");
+        pos.setBpm(120);head.position=pos;block(*sequenced,a,noMidi);
+        check(!sequenced->patternUnavailable(),"pattern status recovers when timing is valid");
         auto shifted=std::make_unique<vox::fx::FxProcessor>();auto manualShifted=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::pattern::Pattern shiftedPattern;shiftedPattern.steps[1].enabled=true;
         check(shifted->setPattern(shiftedPattern),"install shifted pattern");

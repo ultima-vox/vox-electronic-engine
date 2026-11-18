@@ -207,6 +207,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     panicPending_.store (false, std::memory_order_relaxed);
     auditionPending_.store (false, std::memory_order_relaxed);
     peak_.store (0.0f, std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
+    patternUnavailable_.store(false,std::memory_order_relaxed);
     transport_.unavailable();
 }
 
@@ -231,12 +232,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // Stop, seek or loop discontinuity fades existing events. No stop is
     // inferred when a host does not provide a position. New notes in this
     // block may still start (including audition while transport is stopped).
-    bool positionAvailable = false, patternHostReady=false;
+    bool positionAvailable = false, patternHostReady=false, hostPlaying=false;
     double hostPpq=0.0,hostBpm=0.0,glitchTempo=120.0;
     if (auto* host = getPlayHead()) {
         if (const auto position = host->getPosition()) {
             positionAvailable = true;
-            const bool playing = position->getIsPlaying();
+            const bool playing = position->getIsPlaying();hostPlaying=playing;
             const auto ppq=position->getPpqPosition(), bpm=position->getBpm();
             if(bpm.hasValue()&&std::isfinite(*bpm)&&*bpm>=1.0&&*bpm<=1000.0)glitchTempo=*bpm;
             const auto signature=position->getTimeSignature();
@@ -271,6 +272,9 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
     if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection); }
     const int size = buffer.getNumSamples();
+    const bool wantsPattern=patternEnabled_->get();
+    bool patternUnavailable=wantsPattern&&(!positionAvailable||hostPlaying)&&!patternHostReady;
+    patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
         peak_.store (0.0f, std::memory_order_relaxed);publishTelemetry(false);
@@ -301,13 +305,15 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             }
         }
     };
-    if(patternEnabled_->get() && patternHostReady) {
+    if(wantsPattern && patternHostReady) {
         // MIDI at the same offset is processed first. No host MIDI output is generated.
-        (void) pattern::forEachTrigger(audioPatternSchedule_,audioPattern_.bars,hostPpq,hostBpm,preparedSampleRate(),size,
+        const bool scheduled=pattern::forEachTrigger(audioPatternSchedule_,audioPattern_.bars,hostPpq,hostBpm,preparedSampleRate(),size,
             [&] (int offset,std::uint8_t note,std::uint8_t velocity) noexcept {
                 processMidiThrough(offset);renderTo(offset);
                 {const auto selection=samples_.selection();engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection);}
             });
+        patternUnavailable=!scheduled;
+        patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
     }
     processMidiThrough(size-1);
     midi.clear(); // Consume input: never echo host MIDI from this instrument.

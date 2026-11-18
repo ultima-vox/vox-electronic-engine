@@ -64,8 +64,10 @@ inline bool schedule(const Pattern& p,std::vector<Event>& output) {
     output=std::move(next);return true;
 }
 // Host-synchronized trigger enumeration for a constant-tempo block. Events are
-// rounded to the nearest sample, matching MIDI tick conversion; PPQ is in quarter notes. Bounds
-// are proportional to the block duration, with at most 1536 events per 4 bars.
+// rounded to the nearest sample, matching MIDI tick conversion; PPQ is in quarter notes.
+// At most eight pattern cycles are examined per call (including look-behind).
+// A block covering more cycles fails before emitting any notes, rather than
+// performing unbounded work or silently truncating the pattern.
 // Only note-on is emitted because the current instrument is one-shot.
 template <typename Emit>
 inline bool forEachTrigger(const FixedSchedule& schedule,unsigned bars,double ppqPosition,double bpm,
@@ -78,6 +80,8 @@ inline bool forEachTrigger(const FixedSchedule& schedule,unsigned bars,double pp
     const double period=static_cast<double>(bars)*16*ticksPerStep;
     const auto first=static_cast<std::int64_t>(std::floor((start-0.5/samplesPerTick)/period));
     const auto last=static_cast<std::int64_t>(std::floor((end+0.5/samplesPerTick)/period));
+    constexpr std::int64_t maxCycles=8;
+    if(last<first||last-first>=maxCycles)return false;
     for(auto cycle=first;cycle<=last;++cycle){
         for(std::size_t i=0;i<schedule.count;++i){const auto& event=schedule.events[i];
             if(!event.on)continue;

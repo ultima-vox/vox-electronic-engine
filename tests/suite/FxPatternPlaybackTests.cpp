@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include <limits>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
 #endif
@@ -46,5 +47,9 @@ int main(){
 #endif
     check(ok&&count>0,"bounded callback");
     check(!forEachTrigger(schedule,p.bars,0,0,48000,512,[](int,std::uint8_t,std::uint8_t){}),"invalid tempo rejected");
+    int oversizedEvents=0;
+    check(!forEachTrigger(schedule,p.bars,0,1000,8000,std::numeric_limits<int>::max(),
+        [&](int,std::uint8_t,std::uint8_t){++oversizedEvents;})&&oversizedEvents==0,
+        "oversized block rejected before emitting any events");
     std::printf("FX pattern playback scheduling: %d failure(s)\n",fails);return fails?1:0;
 }

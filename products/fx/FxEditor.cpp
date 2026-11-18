@@ -238,7 +238,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     };
     patternEnabled_.setClickingTogglesState(true);
     patternEnabled_.setTitle("Enable host-synchronized trigger pattern");
-    patternEnabled_.setTooltip("Requires playing host with PPQ and BPM; 4/4 patterns only");
+    patternEnabled_.setTooltip("Requires a playing 4/4 host with PPQ and 10–1000 BPM; oversized blocks are rejected to bound callback work");
     patternAttachment_=std::make_unique<juce::ButtonParameterAttachment>(processor_.patternEnabledParameter(),patternEnabled_);
     addAndMakeVisible(patternSelector_);addAndMakeVisible(patternEnabled_);
     for(int i=1;i<=4;++i){patternLength_.addItem(juce::String(i)+" bars",i);patternBar_.addItem("Bar "+juce::String(i),i);}
@@ -556,6 +556,7 @@ void FxPanel::timerCallback()
     sampleStatus_.setTooltip(detail);
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
+    patternEnabled_.setButtonText(processor_.patternUnavailable()?"PATTERN UNAVAILABLE":"HOST PATTERN");
     refreshPattern();refreshMacro();refreshGenerator();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();

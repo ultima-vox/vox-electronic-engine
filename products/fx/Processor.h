@@ -46,6 +46,7 @@ public:
     }
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
+    bool patternUnavailable() const noexcept { return patternUnavailable_.load(std::memory_order_relaxed); }
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
     juce::AudioParameterFloat& effectWetParameter(std::size_t index) noexcept { return *effectWet_[index]; }
@@ -145,7 +146,7 @@ private:
     std::atomic<float> peak_ { 0.0f };
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
     std::atomic<std::uint32_t> telemetry_ { 0 };
-    std::atomic<bool> clipLatched_ { false };
+    std::atomic<bool> clipLatched_ { false }, patternUnavailable_ { false };
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     transport::Tracker transport_;

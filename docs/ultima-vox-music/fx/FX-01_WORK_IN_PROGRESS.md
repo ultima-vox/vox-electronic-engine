@@ -875,3 +875,16 @@ Standalone SMF tests verify encoded tempo and canonical scheduling, including
 ASan/UBSan. Processor/editor tempo tests are syntax-checked only; native file
 chooser and real host tempo behavior remain unqualified. This supersedes the
 earlier fixed-120-BPM export description.
+
+### Bounded pattern playback
+
+The realtime host scheduler now checks at most eight pattern cycles per block,
+including its one-sample look-behind. It rejects an oversized block before
+emitting any pattern notes instead of iterating in proportion to an arbitrary
+host block length. The audio callback reports unavailable pattern timing to the
+interim editor for missing/unsupported host timing or scheduler rejection; live
+MIDI still plays. This bounds work, but even the allowed worst case can scan
+12,288 schedule events and needs real callback profiling. Standalone block
+parity, huge-block rejection, ASan/UBSan and Linux allocation probe passed.
+Processor/UI status tests were added and syntax-checked only; they remain to
+be executed on Windows and in hosts.
