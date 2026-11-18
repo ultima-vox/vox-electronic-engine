@@ -67,7 +67,8 @@ inline bool schedule(const Pattern& p,std::vector<Event>& output) {
 // rounded to the nearest sample, matching MIDI tick conversion; PPQ is in quarter notes.
 // At most eight pattern cycles are examined per call (including look-behind).
 // A block covering more cycles fails before emitting any notes, rather than
-// performing unbounded work or silently truncating the pattern.
+// performing unbounded work or silently truncating the pattern. The schedule
+// must be sorted as produced by scheduleFixed; binary search skips old events.
 // Only note-on is emitted because the current instrument is one-shot.
 template <typename Emit>
 inline bool forEachTrigger(const FixedSchedule& schedule,unsigned bars,double ppqPosition,double bpm,
@@ -83,13 +84,20 @@ inline bool forEachTrigger(const FixedSchedule& schedule,unsigned bars,double pp
     constexpr std::int64_t maxCycles=8;
     if(last<first||last-first>=maxCycles)return false;
     for(auto cycle=first;cycle<=last;++cycle){
-        for(std::size_t i=0;i<schedule.count;++i){const auto& event=schedule.events[i];
-            if(!event.on)continue;
-            const double at=(static_cast<double>(cycle)*period+event.tick-start)*samplesPerTick;
+        const double cycleStart=static_cast<double>(cycle)*period;
+        // One tick of conservative padding avoids losing boundary events to
+        // floating-point rounding even for large positive/negative PPQ.
+        const double searchTick=start-cycleStart-(.5/samplesPerTick)-1.0;
+        const auto begin=schedule.events.begin(),endEvents=begin+static_cast<std::ptrdiff_t>(schedule.count);
+        const auto selected=std::lower_bound(begin,endEvents,searchTick,
+            [](const Event& event,double tick){return static_cast<double>(event.tick)<tick;});
+        for(auto it=selected;it!=endEvents;++it){const auto& event=*it;
+            const double at=(cycleStart+event.tick-start)*samplesPerTick;
             // A half-sample look-behind allows a trigger rounded onto the
             // first sample of this block to cross the preceding boundary.
             const double rounded=std::floor(at+0.5+1.0e-7);
-            if(rounded>=0 && rounded<samples)
+            if(rounded>=samples)break;
+            if(event.on && rounded>=0)
                 emit(static_cast<int>(rounded),event.note,event.velocity);
         }
     }

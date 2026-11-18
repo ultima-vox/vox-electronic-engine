@@ -896,3 +896,9 @@ a deadline pass. This extreme 1000-BPM run exposed many dropped triggers during
 the single retirement fade and sustained >=1 output with four drive slots; see
 `DSP_BENCHMARK.md`. Real Windows plugin/host timing and musical acceptance remain
 open.
+
+Pattern enumeration skips irrelevant sorted events with bounded binary search
+and exits at the block end, retaining the eight-cycle cap. A 5000-case
+full-scan-reference comparison plus grid tests, ASan/UBSan and allocation probe
+passed. The DSP stress run preserved checksums/drop counts; noisy timings do
+not prove a speedup or host deadline. See `DSP_BENCHMARK.md`.

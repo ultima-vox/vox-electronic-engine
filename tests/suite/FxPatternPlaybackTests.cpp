@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <vector>
 #include <limits>
+#include <random>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
 #endif
@@ -47,6 +48,32 @@ int main(){
 #endif
     check(ok&&count>0,"bounded callback");
     check(!forEachTrigger(schedule,p.bars,0,0,48000,512,[](int,std::uint8_t,std::uint8_t){}),"invalid tempo rejected");
+    {
+        // Compare against the original full-scan timing calculation, including
+        // boundaries, negative PPQ and very large host positions.
+        struct Trigger { int at;std::uint8_t note,velocity;bool operator==(const Trigger&) const=default; };
+        std::mt19937 rng(91);
+        for(int run=0;run<5000;++run){
+            const double rate=(run%3==0?44100.0:run%3==1?48000.0:96000.0);
+            const double bpm=10.0+static_cast<double>(rng()%99000)/100.0;
+            const double ppq=run%10==0?(run%20==0?999999999.0:-999999999.0)+static_cast<double>(rng()%100)/100.0:
+                static_cast<double>(static_cast<int>(rng()%200000)-100000)/1000.0;
+            const int samples=1+static_cast<int>(rng()%2048);std::vector<Trigger> expected,actual;
+            const double start=ppq*vox::fx::pattern::ppq,per=60.0*rate/(bpm*vox::fx::pattern::ppq);
+            const double end=start+samples/per,period=static_cast<double>(p.bars)*16*ticksPerStep;
+            const auto first=static_cast<std::int64_t>(std::floor((start-.5/per)/period));
+            const auto last=static_cast<std::int64_t>(std::floor((end+.5/per)/period));
+            for(auto cycle=first;cycle<=last;++cycle)for(std::size_t i=0;i<schedule.count;++i){
+                const auto& event=schedule.events[i];if(!event.on)continue;
+                const auto at=(static_cast<double>(cycle)*period+event.tick-start)*per;
+                const auto rounded=std::floor(at+.5+1e-7);
+                if(rounded>=0&&rounded<samples)expected.push_back({static_cast<int>(rounded),event.note,event.velocity});
+            }
+            const auto valid=forEachTrigger(schedule,p.bars,ppq,bpm,rate,samples,
+                [&](int at,std::uint8_t note,std::uint8_t velocity){actual.push_back({at,note,velocity});});
+            check(valid&&actual==expected,"bounded optimized enumeration matches full-scan reference");
+        }
+    }
     int oversizedEvents=0;
     check(!forEachTrigger(schedule,p.bars,0,1000,8000,std::numeric_limits<int>::max(),
         [&](int,std::uint8_t,std::uint8_t){++oversizedEvents;})&&oversizedEvents==0,

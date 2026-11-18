@@ -118,3 +118,23 @@ occupied; four serial high-drive slots saturate nearly the entire measured
 output. Both are real limitations requiring product/listening review, not
 passing evidence for musical or host acceptance. Only finite output and valid
 scheduler execution are automated assertions; no timing threshold is asserted.
+
+### Bounded schedule lookup follow-up
+
+Sorted pattern schedules now use a bounded binary search to skip events before
+the current block, followed by an early exit after the block. A 5000-case test
+against the previous full scan checks offsets, notes and velocities across
+negative/large PPQ, tempo and sample-rate variations; grid/block invariance,
+ASan/UBSan and allocation tests also pass. On a separate noisy Linux run of the
+same max-pattern/Shepard/drive workload, results were:
+
+```text
+44100 Hz: p50 540.31 p95 824.44 p99 951.07 max 997.22 us
+48000 Hz: p50 539.71 p95 583.47 p99 911.60 max 988.23 us
+96000 Hz: p50 520.26 p95 548.41 p99 565.24 max 606.55 us
+```
+
+Checksums, trigger acceptance/drop counts and saturation counts matched the
+previous run. Wall-clock variability and dominating synthesis/effects mean these
+numbers do not establish a speedup or a DAW deadline guarantee. The eight-cycle
+per-block rejection policy remains unchanged.
