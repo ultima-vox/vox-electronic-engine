@@ -133,6 +133,10 @@ int main() {
     {
         auto owner=std::make_unique<vox::fx::FxProcessor>();vox::fx::pattern::Pattern pattern;
         vox::fx::FxPanel panel(*owner);
+        panel.patternLengthSelector().setSelectedId(4,juce::sendNotificationSync);
+        panel.patternBarSelector().setSelectedId(4,juce::sendNotificationSync);
+        panel.patternStep(2).setToggleState(true,juce::sendNotificationSync);
+        check(owner->patternSnapshot().bars==4 && owner->patternSnapshot().steps[50].enabled,"editor changes bar four step");
         panel.patternSelector().setSelectedId(8,juce::sendNotificationSync);
         check(vox::fx::pattern::factory(7,pattern)&&owner->patternSnapshot().seed==pattern.seed,"pattern selector installs real pattern");
         std::vector<std::uint8_t> exported,expected;

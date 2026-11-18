@@ -53,6 +53,7 @@ public:
                            const std::atomic<bool>* cancel=nullptr, std::atomic<float>* progress=nullptr) const;
     // Offline trigger pattern controller/export; not a running sequencer yet.
     bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
+    template<typename Edit> bool editPattern(Edit edit) { return programs_.editPattern(edit); }
     pattern::Pattern patternSnapshot() const { return programs_.snapshotState().pattern; }
     bool exportPatternMidi(double bpm, std::vector<std::uint8_t>& bytes) const {
         return pattern::exportMidi(patternSnapshot(),bpm,bytes);

@@ -159,6 +159,10 @@ void FxProcessor::reset() { panic(); }
 juce::AudioProcessorEditor* FxProcessor::createEditor()
 {
     auto editor = std::make_unique<vox::suite::SuiteEditor> (*this);
+    // The interim layer cards and pattern row need vertical space. Old saved
+    // sizes below this product-specific minimum are enlarged when opened.
+    editor->setResizeLimits (1040, 760, 1500, 920);
+    if(editor->getHeight()<760)editor->setSize(editor->getWidth(),760);
     editor->setContent (std::make_unique<FxPanel> (*this));
     return editor.release();
 }

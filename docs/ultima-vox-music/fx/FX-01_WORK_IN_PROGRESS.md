@@ -436,3 +436,14 @@ allocation probe and ASan/UBSan passed. Processor tests for note timing, state,
 and allocation are authored but syntax-only. Missing: runtime Windows/DAW
 verification, triplet/other grid and swing options, event editing, per-cycle
 variation, transport discontinuity qualification and integrated MIDI file UI.
+
+## Partial pattern grid editor
+
+The Perform panel has a length selector, bar page and sixteen on/off step
+buttons; edits serialize through the ProgramStore and reach the host scheduler
+and FPAT state. Out-of-range bar pages are disabled, not silently extended.
+The FX editor minimum height is 760 pixels so existing layer curve controls
+retain space; older smaller saved sizes are enlarged on opening. This is not
+the final pattern workspace: note, velocity, probability, ratchets, grid/swing,
+accessibility audit, scaling/visual acceptance, and undo are still missing.
+ProgramStore tests, TSan and allocation probe passed; UI tests are syntax-only.

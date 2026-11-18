@@ -99,12 +99,31 @@ FxPanel::FxPanel (FxProcessor& processor)
         const auto id=patternSelector_.getSelectedId();pattern::Pattern selected;
         if(id>=1 && id<=12 && pattern::factory(static_cast<std::size_t>(id-1),selected)) (void)processor_.setPattern(selected);
         patternSelector_.setSelectedId(0,juce::dontSendNotification);
+        refreshPattern();
     };
     patternEnabled_.setClickingTogglesState(true);
     patternEnabled_.setTitle("Enable host-synchronized trigger pattern");
     patternEnabled_.setTooltip("Requires playing host with PPQ and BPM; 4/4 patterns only");
     patternAttachment_=std::make_unique<juce::ButtonParameterAttachment>(processor_.patternEnabledParameter(),patternEnabled_);
     addAndMakeVisible(patternSelector_);addAndMakeVisible(patternEnabled_);
+    for(int i=1;i<=4;++i){patternLength_.addItem(juce::String(i)+" bars",i);patternBar_.addItem("Bar "+juce::String(i),i);}
+    patternLength_.setTitle("Pattern length in bars");patternBar_.setTitle("Pattern bar to edit");
+    patternBar_.setSelectedId(1,juce::dontSendNotification);
+    patternLength_.onChange=[this] {const int id=patternLength_.getSelectedId();
+        if(id>=1 && id<=4)processor_.editPattern([id](pattern::Pattern& p){p.bars=static_cast<std::uint8_t>(id);});
+        refreshPattern();};
+    patternBar_.onChange=[this] {refreshPattern();};
+    addAndMakeVisible(patternLength_);addAndMakeVisible(patternBar_);
+    for(std::size_t i=0;i<patternSteps_.size();++i){auto& step=patternSteps_[i];
+        step.setButtonText(juce::String(static_cast<int>(i+1)));step.setClickingTogglesState(true);
+        step.setTitle("Pattern step "+juce::String(static_cast<int>(i+1)));
+        step.setTooltip("Enable or disable this sixteenth-note step in the selected bar");
+        step.onClick=[this,i] {const int bar=patternBar_.getSelectedId();const bool enabled=patternSteps_[i].getToggleState();
+            if(bar>=1&&bar<=4)processor_.editPattern([bar,i,enabled](pattern::Pattern& p){
+                if(bar<=p.bars)p.steps[static_cast<std::size_t>(bar-1)*16+i].enabled=enabled;});};
+        addAndMakeVisible(step);
+    }
+    refreshPattern();
     startTimerHz (25);
 }
 void FxPanel::paint (juce::Graphics& g)
@@ -163,13 +182,30 @@ void FxPanel::resized()
     patternSelector_.setBounds(patternRow.removeFromLeft(190).reduced(0,8));
     patternRow.removeFromLeft(10);
     patternEnabled_.setBounds(patternRow.removeFromLeft(160).reduced(0,8));
+    auto stepRow=getLocalBounds().reduced(32).removeFromBottom(115).removeFromTop(35);
+    patternLength_.setBounds(stepRow.removeFromLeft(85).reduced(2));
+    patternBar_.setBounds(stepRow.removeFromLeft(80).reduced(2));
+    const int stepWidth=stepRow.getWidth()/16;
+    for(std::size_t i=0;i<patternSteps_.size();++i){auto area=i==15?stepRow:stepRow.removeFromLeft(stepWidth);
+        patternSteps_[i].setBounds(area.reduced(2));}
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(235);
-    row.removeFromBottom(80);
+    row.removeFromBottom(120);
     const int width = row.getWidth() / 4;
     for (std::size_t i=0; i<layers_.size(); ++i) {
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
         layers_[i]->setBounds(card.reduced(3));
+    }
+}
+void FxPanel::refreshPattern()
+{
+    const auto pattern=processor_.patternSnapshot();
+    patternLength_.setSelectedId(pattern.bars,juce::dontSendNotification);
+    const int bar=std::max(1,patternBar_.getSelectedId());
+    for(std::size_t i=0;i<patternSteps_.size();++i) {
+        const bool inRange=bar<=pattern.bars;
+        patternSteps_[i].setEnabled(inRange);
+        patternSteps_[i].setToggleState(inRange && pattern.steps[static_cast<std::size_t>(bar-1)*16+i].enabled,juce::dontSendNotification);
     }
 }
 void FxPanel::timerCallback()
@@ -177,6 +213,7 @@ void FxPanel::timerCallback()
     if (!isShowing()) return;
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
+    refreshPattern();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {

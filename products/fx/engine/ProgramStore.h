@@ -86,6 +86,15 @@ public:
         if(!programcodec::encode(desired_,encoded))return false;
         commit(desired_,encoded,desiredEffects_,value);return true;
     }
+    template <typename Edit>
+    bool editPattern(Edit edit) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto next=desiredPattern_;edit(next);
+        if(!next.valid())return false;
+        std::vector<std::byte> encoded;
+        if(!programcodec::encode(desired_,encoded))return false;
+        commit(desired_,encoded,desiredEffects_,next);return true;
+    }
     Snapshot snapshotState() const {
         const std::lock_guard<std::mutex> lock(mutex_);
         return {desired_,desiredEffects_,desiredPattern_};

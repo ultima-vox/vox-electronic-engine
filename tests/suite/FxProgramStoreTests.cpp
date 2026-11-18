@@ -80,11 +80,16 @@ int main(){
     {
         vox::fx::ProgramStore shared;
         vox::fx::NoiseProgram program;auto effects=vox::fx::effects::defaults();vox::fx::pattern::Pattern pattern;
-        pattern.seed=300;pattern.steps[1].enabled=true;program.layers[0].gain=.3f;
+        pattern.bars=4;pattern.seed=300;pattern.steps[1].enabled=true;program.layers[0].gain=.3f;
         check(shared.publishState(program,effects,pattern),"publish Program and pattern");
         vox::fx::NoiseProgram audio;vox::fx::pattern::Pattern audioPattern;std::uint64_t fx=0,seq=0;
         check(shared.tryRead(audio,fx,audioPattern,seq)&&audioPattern.seed==300&&audioPattern.steps[1].enabled&&
               audio.layers[0].gain==.3f,"audio snapshot includes pattern");
+        check(shared.editPattern([](vox::fx::pattern::Pattern& p){p.steps[2].enabled=true;}) &&
+              shared.snapshotState().pattern.steps[2].enabled,"transactional pattern step edit");
+        check(!shared.editPattern([](vox::fx::pattern::Pattern& p){p.bars=0;}) &&
+              shared.snapshotState().pattern.bars==4,"invalid pattern step edit rejected");
+        (void)shared.tryRead(audio,fx,audioPattern,seq);
         auto invalid=pattern;invalid.steps[0].ratchets=0;
         check(!shared.setPattern(invalid)&&shared.snapshotState().pattern.seed==300,"invalid pattern rejected transactionally");
         std::atomic<bool> done{false};
