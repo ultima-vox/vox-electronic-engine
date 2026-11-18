@@ -46,12 +46,19 @@ public:
         if(activeEventCount()!=0)return false;
         releaseSampleLeases();sampleStore_=store;return true;
     }
+    // Audio thread or stopped controller only. Tempo changes apply to future
+    // samples; existing glitch grid phase is never reinterpreted.
+    bool setTempo(double bpm) noexcept {
+        if(!std::isfinite(bpm)||bpm<1.0||bpm>1000.0)return false;
+        glitchGridIncrement_=bpm/(15.0*rate_);return true;
+    }
     static double samplePlaybackStep(double sourceRate,double outputRate,double pitchRatio) noexcept {
         return sourceRate/outputRate*pitchRatio;
     }
     void prepare(double sampleRate) noexcept {
         releaseSampleLeases();
         rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
+        (void)setTempo(120.0);
         for (std::size_t i = 0; i < coefficients_.size(); ++i) {
             const double phase = static_cast<double>(i) / tableIntervals;
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
@@ -193,7 +200,9 @@ private:
         std::array<double, 8> mode1 {}, mode2 {};
         bool modesStarted = false;
         std::array<float, 256> delay {};
-        unsigned delayWrite = 0, glitchWritten = 0, grainCountdown = 0;
+        unsigned delayWrite = 0, glitchWritten = 0, grainCountdown = 0,glitchStepAge=0;
+        double glitchGrid=0;
+        std::uint64_t glitchStep=0;
         double grainGain = 0, grainPan = 0;
         bool grainLayerActive = false;
     };
@@ -277,9 +286,14 @@ private:
                 continue;
             } else if (settings.family == NoiseFamily::glitch) {
                 // Capture this layer's own synthesized signal into a bounded
-                // 256-sample loop, then retrigger windowed slices on a fixed
-                // 120 BPM sixteenth grid. No external audio input is used.
-                const double elapsed = t * layerDuration;
+                // 256-sample loop, then windowed slices on an event-local
+                // sixteenth grid. Beat phase integrates tempo per sample.
+                // There is no external audio input or host-PPQ alignment.
+                const auto step=static_cast<std::uint64_t>(layer.glitchGrid);
+                const double fractionOfStep=layer.glitchGrid-static_cast<double>(step);
+                if(step!=layer.glitchStep){layer.glitchStep=step;layer.glitchStepAge=0;}
+                const unsigned sliceAge=layer.glitchStepAge++;
+                layer.glitchGrid+=glitchGridIncrement_;
                 const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * 2.0, rate_ * 0.4);
                 const double dry = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
@@ -287,11 +301,8 @@ private:
                     layer.delay[layer.glitchWritten++] = static_cast<float>(dry);
                     source = dry * 0.5;
                 } else {
-                    const double grid = elapsed * 8.0;
-                    const auto step = static_cast<std::uint64_t>(grid);
-                    const double fractionOfStep = grid - static_cast<double>(step);
-                    const double speed = (step & 1u) != 0 ? 2.0 : 1.0;
-                    const auto sliceIndex = static_cast<unsigned>(fractionOfStep * 0.125 * rate_ * speed) & 255u;
+                    const unsigned speed = (step & 1u) != 0 ? 2u : 1u;
+                    const auto sliceIndex = (sliceAge * speed) & 255u;
                     const double window = std::sin(3.141592653589793 * static_cast<double>(sliceIndex) / 255.0);
                     const double edge = std::min(1.0, std::min(fractionOfStep, 1.0-fractionOfStep) * 125.0);
                     source = (step % 4 == 2 ? 0.0 : layer.delay[sliceIndex] * window * window * edge);
@@ -520,7 +531,7 @@ private:
     std::array<Grain, 64> grains_ {};
     unsigned grainLength_ = 2, grainInterval_ = 1, activeGrains_ = 0;
     NoiseProgram program_;
-    double rate_ = 44100.0;
+    double rate_ = 44100.0,glitchGridIncrement_=120.0/(15.0*44100.0);
     std::uint64_t serial_ = 0;
     std::array<Voice, 8> voices_ {};
     Voice retiring_ {};

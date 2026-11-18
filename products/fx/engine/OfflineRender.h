@@ -14,6 +14,7 @@ enum class WavFormat { pcm24, float32 };
 struct Settings {
     std::uint32_t sampleRate=48000;
     float duration=4, velocity=1, gain=1;
+    double tempo=120;
     int note=60;
     WavFormat format=WavFormat::pcm24;
     std::array<effects::Settings,4> effects{};
@@ -24,7 +25,7 @@ struct Settings {
         if(!macroRoutes.valid())return false;
         for(float value:macros)if(!std::isfinite(value)||value<0||value>1)return false;
         return sampleRate>=8000&&sampleRate<=384000&&std::isfinite(duration)&&duration>=.05f&&duration<=32&&
-               std::isfinite(velocity)&&velocity>0&&velocity<=1&&std::isfinite(gain)&&gain>=0&&gain<=1&&
+               std::isfinite(tempo)&&tempo>=1&&tempo<=1000&&std::isfinite(velocity)&&velocity>0&&velocity<=1&&std::isfinite(gain)&&gain>=0&&gain<=1&&
                note>=0&&note<128&&(format==WavFormat::pcm24||format==WavFormat::float32);
     }
 };
@@ -66,6 +67,7 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
     tag(bytes,"data");u32(bytes,dataBytes);
     sample::Store sampleStore; // outlives engine and its event leases
     auto engine=std::make_unique<NoiseRiser>();engine->prepare(settings.sampleRate);
+    if(!engine->setTempo(settings.tempo))return false;
     const bool useUser=capture&&capture->useUserSample;
     if(useUser && (!sampleStore.publish(capture->sample,capture->sampleRate)||!engine->attachSampleStore(&sampleStore)))return false;
     if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser))return false;

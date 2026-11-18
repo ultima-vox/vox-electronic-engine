@@ -119,6 +119,8 @@ private:
     }
     mutable sample::Controller samples_; // destroyed after engine and all sample leases
     NoiseRiser engine_;
+    static_assert(std::atomic<double>::is_always_lock_free);
+    std::atomic<double> capturedTempo_ {120.0}; // audio -> offline snapshot
     effects::Chain effects_;
     macro::Runtime macroRuntime_;
     macro::Config audioMacroConfig_;

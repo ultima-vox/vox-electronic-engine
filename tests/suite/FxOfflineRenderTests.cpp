@@ -107,6 +107,18 @@ int main(){
         capture.sample.clear();const auto saved=wav;
         check(!vox::fx::offline::renderWav(capture,wav)&&wav==saved,"missing user sample fails transactionally, no fallback");
     }
+    {
+        vox::fx::offline::Settings tempoSettings;tempoSettings.duration=.4f;tempoSettings.format=vox::fx::offline::WavFormat::float32;
+        tempoSettings.tempo=73.125;vox::fx::NoiseProgram glitch;glitch.layers[0].family=vox::fx::NoiseFamily::glitch;
+        check(vox::fx::offline::renderWav(glitch,tempoSettings,wav),"tempo captured glitch WAV");
+        auto reference=std::make_unique<vox::fx::NoiseRiser>();reference->prepare(48000);reference->setTempo(tempoSettings.tempo);
+        reference->setProgram(glitch);reference->noteOn(1,60,1,tempoSettings.duration);
+        for(int at=0;at<19200;at+=512){const int count=std::min(512,19200-at);reference->render(l,r,count);
+            for(int i=0;i<count;++i)check(std::bit_cast<float>(word(56+static_cast<std::size_t>(at+i)*8))==l[i],
+                "offline captured tempo matches realtime glitch");}
+        const auto saved=wav;tempoSettings.tempo=0;
+        check(!vox::fx::offline::renderWav(glitch,tempoSettings,wav)&&wav==saved,"invalid captured tempo rejected transactionally");
+    }
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

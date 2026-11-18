@@ -288,8 +288,8 @@ still need product-level profiling and optimization.
 
 FFAM family 10 captures the layer's own synthesized signal in its bounded
 256-sample buffer, then loops windowed slices with deterministic gated
-retriggers. The interim grid is fixed at 120 BPM; it is not host-synchronized
-and has no sample-import/slice editor yet. Local tests at 44.1/48/96 kHz and
+retriggers. The original interim grid was fixed at 120 BPM; the subsequent
+tempo update below supersedes that limitation. There is no slice editor yet. Local tests at 44.1/48/96 kHz and
 64/128/512 blocks check audibility, deterministic gate silence and finite
 bounds; ASan/UBSan passed. Listening, artifact, transport-sync and VST3 host
 qualification remain outstanding.
@@ -834,3 +834,19 @@ serialized lock masks, while the top-level layer toggle means all fields locked.
 The processor/editor tests for selective lock mutation and save/restore were
 added and syntax-checked only; no host/UI execution is claimed. Locks for
 not-yet-implemented Program fields, pattern, effects and sample remain open.
+
+### Glitch tempo follow-up
+
+The event-local sixteenth grid now integrates host BPM per sample, preserving
+phase across block-level tempo changes. Invalid or absent host BPM uses 120 BPM;
+playing/stopped does not itself alter the tempo selection. The grid is not
+aligned to host PPQ, and changing tempo within one host block cannot be observed
+through the current wrapper. Offline WAV captures the latest observed tempo and
+holds it constant. Standalone gate/tempo-change, block-partition, offline parity
+and allocation-probe tests passed; selected ASan/UBSan passed. Processor host
+tempo tests and editor passed syntax checks only; real host transport and
+click/listening tests remain open. Noise-riser reference tests remained within
+the previous tolerance. A concurrent Linux run showed a single 8.08 ms maximum
+for the 48 kHz nine-voice 128-sample benchmark (p99 82.45 µs); this exceeds
+the 2.67 ms period and is not production timing qualification or evidence of
+a root cause. Repeat controlled p50/p95/p99/max measurements on Windows.

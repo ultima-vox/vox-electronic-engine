@@ -441,6 +441,18 @@ int main() {
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*missing,sound,note);
         check(sound.getMagnitude(0,0,512)>0,"explicit fallback triggers procedural sample");
     }
+    {
+        auto tempoProcessor=std::make_unique<vox::fx::FxProcessor>();TestPlayHead host;
+        juce::AudioPlayHead::PositionInfo position;position.setIsPlaying(true);position.setBpm(73.125);host.position=position;
+        tempoProcessor->setPlayHead(&host);tempoProcessor->prepareToPlay(48000,512);
+        juce::AudioBuffer<float> tempoAudio(2,512);juce::MidiBuffer tempoMidi;
+        block(*tempoProcessor,tempoAudio,tempoMidi);
+        check(tempoProcessor->captureProgramWav({}).settings.tempo==73.125,"offline capture snapshots valid host tempo");
+        position.setBpm(std::numeric_limits<double>::quiet_NaN());host.position=position;
+        block(*tempoProcessor,tempoAudio,tempoMidi);
+        check(tempoProcessor->captureProgramWav({}).settings.tempo==120,"invalid host tempo uses documented default");
+        tempoProcessor->setPlayHead(nullptr);
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;

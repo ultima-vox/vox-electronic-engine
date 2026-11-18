@@ -153,6 +153,7 @@ offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) con
 {
     const auto snapshot=programs_.snapshotState();
     settings.duration=duration_->get(); settings.gain=output_->get();
+    settings.tempo=capturedTempo_.load(std::memory_order_relaxed);
     settings.macroRoutes=snapshot.macros;
     for(std::size_t i=0;i<8;++i)settings.macros[i]=macros_[i]->get();
     for(std::size_t i=0;i<4;++i){
@@ -197,7 +198,7 @@ effects::Settings FxProcessor::effect (std::size_t index) const
 void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
-    engine_.prepare (rate);
+    engine_.prepare (rate);capturedTempo_.store(120.0,std::memory_order_relaxed);
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     (void) macroRuntime_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     programSequence_ = 0; audioEffects_ = effects::defaults();
@@ -231,12 +232,13 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // inferred when a host does not provide a position. New notes in this
     // block may still start (including audition while transport is stopped).
     bool positionAvailable = false, patternHostReady=false;
-    double hostPpq=0.0,hostBpm=0.0;
+    double hostPpq=0.0,hostBpm=0.0,glitchTempo=120.0;
     if (auto* host = getPlayHead()) {
         if (const auto position = host->getPosition()) {
             positionAvailable = true;
             const bool playing = position->getIsPlaying();
             const auto ppq=position->getPpqPosition(), bpm=position->getBpm();
+            if(bpm.hasValue()&&std::isfinite(*bpm)&&*bpm>=1.0&&*bpm<=1000.0)glitchTempo=*bpm;
             const auto signature=position->getTimeSignature();
             const bool supportedSignature=!signature.hasValue() || (signature->numerator==4 && signature->denominator==4);
             if(playing && ppq.hasValue() && bpm.hasValue() && supportedSignature) {
@@ -255,6 +257,8 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         }
     }
     if (!positionAvailable) transportKnown_ = wasPlaying_ = expectedSampleKnown_ = false;
+    (void)engine_.setTempo(glitchTempo);
+    capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
     if (panicPending_.exchange (false, std::memory_order_acquire)) {
         engine_.allSoundOff (0);
         auditionPending_.store (false, std::memory_order_relaxed);
