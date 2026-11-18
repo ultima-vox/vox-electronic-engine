@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main] # Legacy Rack: standalone Drums/FX/Synth PRs use suite.yml
+
+# Keep one running and one newest pending run per PR/workflow.
+# New PR pushes supersede older pending runs; running tests finish to avoid
+# starvation on rapidly pushed development branches. Non-PR runs are isolated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 jobs:
   choose_runner:
