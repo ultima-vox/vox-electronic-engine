@@ -69,7 +69,11 @@ void CurveEditor::paint(juce::Graphics& g) {
 }
 void CurveEditor::syncRestore() {
     const auto epoch=processor_.programRestoreEpoch();
-    if(epoch!=restoreEpoch_) { undo_.clearUndoHistory(); dragging_=false; selected_=-1; restoreEpoch_=epoch; }
+    if(epoch!=restoreEpoch_) {
+        undo_.clearUndoHistory();dragging_=false;selected_=-1;restoreEpoch_=epoch;
+        shown_=curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_);
+        repaint();
+    }
 }
 void CurveEditor::refresh(const timeline::Curve& curve) {
     syncRestore();
@@ -89,11 +93,13 @@ bool CurveEditor::setCurve(const timeline::Curve& curve) {
 bool CurveEditor::undo(){syncRestore();const bool ok=undo_.undo();refresh(curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_));return ok;}
 bool CurveEditor::redo(){syncRestore();const bool ok=undo_.redo();refresh(curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_));return ok;}
 void CurveEditor::mouseDown(const juce::MouseEvent& event) {
+    syncRestore();
     grabKeyboardFocus(); selected_=hit(event.position);dragging_=selected_>=0;
     if(dragging_) beforeDrag_=shown_;
     repaint();
 }
 void CurveEditor::mouseDrag(const juce::MouseEvent& event) {
+    syncRestore();
     if(!dragging_ || selected_<0)return;
     auto r=graph();if(r.getWidth()<=0 || r.getHeight()<=0)return;
     auto& node=shown_.nodes[static_cast<std::size_t>(selected_)];
@@ -107,12 +113,14 @@ void CurveEditor::mouseDrag(const juce::MouseEvent& event) {
     (void)publish(shown_);repaint();
 }
 void CurveEditor::mouseUp(const juce::MouseEvent&) {
+    syncRestore();
     if(!dragging_) return;
     dragging_=false;
     const auto after=shown_;undo_.beginNewTransaction();
     (void)undo_.perform(new CurveChange(processor_,layer_,kind_,beforeDrag_,after));repaint();
 }
 void CurveEditor::mouseDoubleClick(const juce::MouseEvent& event) {
+    syncRestore();
     dragging_=false;auto r=graph();if(r.getWidth()<=0||r.getHeight()<=0||shown_.count>=16)return;
     const float time=std::round(juce::jlimit(0.0f,1.0f,(event.position.x-r.getX())/r.getWidth())*16.0f)/16.0f;
     if(time<=0||time>=1)return;
@@ -123,6 +131,7 @@ void CurveEditor::mouseDoubleClick(const juce::MouseEvent& event) {
     ++next.count;if(setCurve(next))selected_=at;
 }
 bool CurveEditor::keyPressed(const juce::KeyPress& key) {
+    syncRestore();
     if(key.getModifiers().isCommandDown() && key.getKeyCode()=='z')return undo();
     if(key.getModifiers().isCommandDown() && key.getKeyCode()=='y')return redo();
     if(selected_<0 || selected_>=shown_.count)return false;

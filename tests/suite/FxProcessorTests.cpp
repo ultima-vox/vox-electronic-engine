@@ -65,6 +65,15 @@ int main() {
         auto replacement=p.program();replacement.layers[1].gainCurve=vox::fx::timeline::Curve::constant(.8f);
         check(p.setProgram(replacement),"replace Program after curve edit");curve.refresh(replacement.layers[1].gainCurve);
         check(!curve.undo(),"whole Program replacement invalidates stale curve history");
+        curve.setBounds(0,0,100,100);curve.refresh(replacement.layers[1].gainCurve);
+        const auto source=juce::Desktop::getInstance().getMainMouseSource();const auto now=juce::Time::getCurrentTime();
+        auto mouse=[&](juce::Point<float> position){return juce::MouseEvent(source,position,juce::ModifierKeys{},0,0,0,0,0,
+            &curve,&curve,now,{8.0f,24.8f},now,1,true);};
+        curve.mouseDown(mouse({8.0f,24.8f}));
+        auto restored=p.program();restored.layers[1].gainCurve=vox::fx::timeline::Curve::constant(.4f);
+        check(p.setProgram(restored),"replace Program while curve drag is active");
+        curve.mouseDrag(mouse({8.0f,80.0f}));curve.mouseUp(mouse({8.0f,80.0f}));
+        check(p.program().layers[1].gainCurve.evaluate(.5f)==.4f,"stale drag cannot overwrite replaced Program");
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }

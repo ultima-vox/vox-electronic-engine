@@ -801,3 +801,9 @@ standalone DSP/codec test confirms that a saved pan sweep moves energy from left
 to right and passed normally and under ASan/UBSan. Editor/processor regression
 tests are added but only syntax-checked locally. Pitch, cutoff and global curves
 remain unimplemented.
+
+Curve mouse/key handlers now check the Program replacement epoch before editing,
+refreshing the displayed curve and cancelling an in-progress drag on observed
+replacement. Added a JUCE regression for replacement during a drag; syntax
+checked only. Concurrent replacement between the epoch check and publication is
+not yet proven atomic and still needs processor/host concurrency qualification.
