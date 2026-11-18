@@ -617,3 +617,26 @@ syntax-only locally. A Linux 96 kHz, 128-frame diagnostic 8-event/4-layer
 Shepard + four flangers reported p50 316.96, p95 356.22, p99 451.27, max
 464.30 microseconds; this is not host/Windows deadline qualification. Delay,
 chorus, reverb, rate/feedback controls and tempo sync are not yet implemented.
+
+## Chorus and finite single-tap delay
+
+Four slots now also offer a stereo chorus (fixed quadrature 0.22 Hz, amount
+controls depth, no feedback) and a single-tap stereo delay (amount controls
+50–500 ms, no feedback or tempo sync). Both use the same prepare-allocated
+double banks; the maximum buffer memory is approximately 12.3 MB at 384 kHz
+for the four shared slots. Existing bypass/wet and 5 ms structural transitions
+apply. Offline WAV includes up to 0.5 seconds for each serial delay plus one
+second for other decaying FX; four 500 ms delay slots have a tested 2-second
+tail. Host tail reporting is conservatively increased to 35 seconds for the
+32-second event and up to 3 seconds of effect allowance. A formal full-range
+worst-case tail proof and actual host Stop/bounce behavior are still needed.
+
+Standalone impulse timing, serial tail, chorus stereo response, WAV tail and
+parity, transitions, allocation and ASan/UBSan tests passed; JUCE-core file
+export test passed after the change. Processor/UI/host state tests are syntax
+only. In a diagnostic Linux 96 kHz 128-frame 8-event/4-layer Shepard run, four
+delays reported p50 340.07, p95 488.56, p99 605.12, max 791.28 microseconds;
+four chorus slots p50 363.11, p95 532.68, p99 568.92, max 591.88 microseconds.
+These are not Windows/host or deadline qualification. Reverb, multiple delay
+taps/feedback, tempo sync, adjustable chorus controls, host testing, and
+allocation-failure reporting remain.

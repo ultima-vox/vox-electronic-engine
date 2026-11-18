@@ -117,17 +117,20 @@ int main() {
         check(effected->effect(1).type==vox::fx::effects::Type::phaser,"editor selects phaser");
         panel.effectSelector(2).setSelectedId(9,juce::sendNotificationSync);
         check(effected->effect(2).type==vox::fx::effects::Type::flanger,"editor selects flanger");
+        panel.effectSelector(3).setSelectedId(10,juce::sendNotificationSync);
+        check(effected->effect(3).type==vox::fx::effects::Type::delay,"editor selects delay");
         auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();
         restoredFx->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
         check(restoredFx->effect(0).type==effected->effect(0).type &&
               std::abs(restoredFx->effectWetParameter(0).get()-.7f)<1e-5f &&
               restoredFx->effect(1).type==vox::fx::effects::Type::phaser &&
-              restoredFx->effect(2).type==vox::fx::effects::Type::flanger,"effects restored in state");
+              restoredFx->effect(2).type==vox::fx::effects::Type::flanger &&
+              restoredFx->effect(3).type==vox::fx::effects::Type::delay,"effects restored in state");
         auto legacy=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:legacy.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag){
             section.data.clear();std::uint64_t old=0;
             for(std::size_t i=0;i<4;++i){const auto settings=effected->effect(i);
-                const auto legacyType=settings.type==vox::fx::effects::Type::flanger?0u:static_cast<unsigned>(settings.type);
+                const auto legacyType=static_cast<unsigned>(settings.type)>7?0u:static_cast<unsigned>(settings.type);
                 const auto packed=static_cast<std::uint16_t>(legacyType|
                     (static_cast<unsigned>(std::lround(settings.wet*63))<<3)|
                     (static_cast<unsigned>(std::lround(settings.amount*127))<<9));

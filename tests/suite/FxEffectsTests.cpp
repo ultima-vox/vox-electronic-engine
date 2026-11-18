@@ -84,12 +84,35 @@ int main(){
             check(migrated.type==Type::phaser&&std::abs(migrated.wet-31.0f/63)<1e-6f&&
                   std::abs(migrated.amount-100.0f/127)<1e-6f,"legacy FXSL words decode exactly");
         }
+        {
+            Chain delay;check(delay.prepare(rate)&&delay.set(0,{Type::delay,1,0}),"delay prepare");
+            std::array<float,512> x{},y{};
+            for(int i=0;i<10;++i)delay.process(x.data(),y.data(),x.size());
+            x[0]=y[0]=1;double first=0,total=0;std::size_t firstAt=0;
+            for(int block=0;block<110;++block){delay.process(x.data(),y.data(),x.size());
+                for(std::size_t i=0;i<x.size();++i){const auto at=static_cast<std::size_t>(block)*x.size()+i;
+                    if(std::abs(x[i])>1e-4&&!first){first=x[i];firstAt=at;}total+=std::abs(x[i]);}
+                x={};y={};}
+            check(firstAt==static_cast<std::size_t>(std::round(rate*.05)) && std::abs(first-1)<.001f && std::abs(total-1)<.001f,
+                  "fixed delay produces one correctly timed impulse");
+            check(unpack(pack({Type::delay,1,.5f})).type==Type::delay,"delay structural state");
+        }
+        {
+            Chain chorus;check(chorus.prepare(rate)&&chorus.set(0,{Type::chorus,1,.8f}),"chorus prepare");
+            std::array<float,512> x{},y{};for(int i=0;i<5;++i)chorus.process(x.data(),y.data(),x.size());
+            x[0]=y[0]=1;double delayed=0,stereo=0;
+            for(int block=0;block<8;++block){chorus.process(x.data(),y.data(),x.size());
+                for(std::size_t i=block==0?1:0;i<x.size();++i){delayed+=std::abs(x[i]);stereo+=std::abs(x[i]-y[i]);}
+                x={};y={};}
+            check(delayed>.1&&stereo>.01,"chorus produces modulated stereo delay");
+        }
         c.prepare(rate);for(std::size_t i=0;i<4;++i)check(c.set(i,{Type::flanger,.5f,.3f}),"four flanger slots");
 #ifdef VOX_TEST_INTERPOSE_MALLOC
         voxProbeBegin();
 #endif
         for(int iteration=0;iteration<16;++iteration){
-            for(std::size_t i=0;i<4;++i)c.set(i,{iteration%2?Type::phaser:Type::flanger,.5f,.3f});
+            const Type types[]{Type::phaser,Type::flanger,Type::delay,Type::chorus};
+            for(std::size_t i=0;i<4;++i)c.set(i,{types[(iteration+static_cast<int>(i))%4],.5f,.3f});
             c.process(l.data(),r.data(),l.size());
         }
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -99,6 +122,16 @@ int main(){
         for(std::size_t i=0;i<4;++i)c.set(i,{Type::bypass,1,.5f});
         for(int i=0;i<10;++i){l=original;r=original;c.process(l.data(),r.data(),l.size());}
         l=original;r=original;c.process(l.data(),r.data(),l.size());check(l==original,"bypass exact after transition");
+    }
+    {
+        Chain serial;check(serial.prepare(8000),"serial delay prepare");
+        for(std::size_t i=0;i<4;++i)serial.set(i,{Type::delay,1,1});
+        std::array<float,128> l{},r{};for(int block=0;block<20;++block)serial.process(l.data(),r.data(),l.size());
+        l[0]=r[0]=1;double energy=0;std::size_t first=0;
+        for(int block=0;block<135;++block){serial.process(l.data(),r.data(),l.size());
+            for(std::size_t i=0;i<l.size();++i)if(std::abs(l[i])>1e-5f){if(energy==0)first=static_cast<std::size_t>(block)*l.size()+i;energy+=std::abs(l[i]);}
+            l={};r={};}
+        check(first==16000 && std::abs(energy-1)<.001,"four serial half-second delays have finite two-second tail");
     }
     for(double rate:{8000.0,384000.0}){
         Chain edge;check(edge.prepare(rate)&&edge.set(0,{Type::flanger,1,0}),"flanger edge sample rate");

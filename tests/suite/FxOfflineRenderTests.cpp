@@ -49,6 +49,20 @@ int main(){
     vox::fx::effects::Chain flanger;flanger.prepare(s.sampleRate);flanger.set(0,s.effects[0]);
     flanged->render(l,r,512);flanger.process(l,r,512);
     for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline flanger matches realtime chain");
+    s.effects[0]={vox::fx::effects::Type::delay,1,0};
+    check(vox::fx::offline::renderWav(program,s,wav),"delay WAV render");
+    check(wav.size()==56+(frames+s.sampleRate/2)*8,"single delay tail included");
+    double delayEnergy=0;for(std::size_t i=frames;i<frames+s.sampleRate/2;++i)
+        delayEnergy+=std::abs(std::bit_cast<float>(word(56+i*8)));
+    check(delayEnergy>0,"delay tail contains event audio");
+    s.effects[1]={vox::fx::effects::Type::delay,1,0};
+    check(vox::fx::offline::renderWav(program,s,wav)&&wav.size()==56+(frames+s.sampleRate)*8,"serial delay tails accumulate");
+    s.effects[0]={vox::fx::effects::Type::chorus,1,.7f};s.effects[1]={};
+    check(vox::fx::offline::renderWav(program,s,wav)&&wav.size()==56+(frames+s.sampleRate)*8,"chorus WAV with tail");
+    auto chorused=std::make_unique<vox::fx::NoiseRiser>();chorused->prepare(s.sampleRate);chorused->setProgram(program);chorused->noteOn(1,s.note,s.velocity,s.duration);
+    vox::fx::effects::Chain chorus;chorus.prepare(s.sampleRate);chorus.set(0,s.effects[0]);
+    chorused->render(l,r,512);chorus.process(l,r,512);
+    for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline chorus matches realtime chain");
     s.effects[0]={};s.macroRoutes.setGainRoute(0,-.5f,0);s.macros[0]=1;
     check(vox::fx::offline::renderWav(program,s,wav),"macro routed WAV render");
     auto macroEngine=std::make_unique<vox::fx::NoiseRiser>();macroEngine->prepare(s.sampleRate);macroEngine->setProgram(program);macroEngine->noteOn(1,s.note,s.velocity,s.duration);

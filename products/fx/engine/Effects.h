@@ -7,8 +7,8 @@
 #include <vector>
 
 namespace vox::fx::effects {
-// Compact, bounded effects; delay, reverb and chorus remain.
-enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, count };
+// Compact, bounded effects; reverb and advanced delay options remain.
+enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, count };
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -63,7 +63,7 @@ public:
         if(!std::isfinite(rate)||rate<8000||rate>384000)return false;
         // Two banks per slot permit bounded crossfades without copying or
         // clearing delay memory on the callback. Allocation is prepare-only.
-        const auto size=static_cast<std::size_t>(std::ceil(rate*.005))+4;
+        const auto size=static_cast<std::size_t>(std::ceil(rate*.5))+4;
         std::array<std::array<Bank,2>,4> next;
         try { for(auto& slot:next)for(auto& bank:slot){bank.left.assign(size,0);bank.right.assign(size,0);} }
         catch(...) { return false; }
@@ -99,6 +99,15 @@ public:
         }
     }
 private:
+    static double readDelay(const State& state,const std::vector<float>& buffer,double delay) noexcept {
+        const auto size=buffer.size();const auto whole=static_cast<std::size_t>(delay);
+        if(size<4||whole>=size||state.age<whole)return 0;
+        const double fraction=delay-whole;
+        const auto index=state.write>=whole?state.write-whole:state.write+size-whole;
+        const auto previous=index==0?size-1:index-1;
+        const double older=state.age>whole?buffer[previous]:0.0;
+        return buffer[index]*(1-fraction)+older*fraction;
+    }
     void apply(State& state,Bank& bank,float amount,double& l,double& r) noexcept {
         constexpr double tau=6.2831853071795864769;
         switch(state.type){
@@ -154,18 +163,9 @@ private:
         }
         case Type::flanger: {
             const auto size=bank.left.size();if(size<4)break; // failed/unprepared allocation: safe bypass
-            const auto read=[&](const std::vector<float>& buffer,double phase){
-                const double delay=rate_*(.0005+.002*(1.0+amount*std::sin(tau*phase)));
-                const auto whole=static_cast<std::size_t>(delay);
-                const double fraction=delay-whole;
-                if(state.age<whole)return 0.0;
-                const auto index=state.write>=whole?state.write-whole:state.write+size-whole;
-                const auto previous=index==0?size-1:index-1;
-                const double older=state.age>whole?buffer[previous]:0.0;
-                return buffer[index]*(1-fraction)+older*fraction;
-            };
-            const auto delayedL=read(bank.left,state.phase);
-            const auto delayedR=read(bank.right,state.phase+.25);
+            const auto delay=[&](double phase){return rate_*(.0005+.002*(1.0+amount*std::sin(tau*phase)));};
+            const auto delayedL=readDelay(state,bank.left,delay(state.phase));
+            const auto delayedR=readDelay(state,bank.right,delay(state.phase+.25));
             const auto write=[](double input,double delayed){
                 const auto value=std::clamp(input+.35*delayed,-8.0,8.0);
                 return static_cast<float>(std::abs(value)<1e-15?0:value);
@@ -175,6 +175,28 @@ private:
             if(state.age<size)++state.age;
             l=.5*(l+delayedL);r=.5*(r+delayedR);
             state.phase+=.25/rate_;if(state.phase>=1)state.phase-=1;break;
+        }
+        case Type::delay: {
+            const auto size=bank.left.size();if(size<4)break;
+            // Single stereo tap, no feedback: finite 50–500 ms tail per slot.
+            const double length=std::round(rate_*(.05+.45*amount));
+            const auto delayedL=readDelay(state,bank.left,length),delayedR=readDelay(state,bank.right,length);
+            bank.left[state.write]=static_cast<float>(l);bank.right[state.write]=static_cast<float>(r);
+            if(++state.write==size)state.write=0;
+            if(state.age<size)++state.age;
+            l=delayedL;r=delayedR;break;
+        }
+        case Type::chorus: {
+            const auto size=bank.left.size();if(size<4)break;
+            // Quadrature modulated 9–23 ms taps, no feedback.
+            const auto delay=[&](double phase){return rate_*(.016+.007*amount*std::sin(tau*phase));};
+            const auto delayedL=readDelay(state,bank.left,delay(state.phase));
+            const auto delayedR=readDelay(state,bank.right,delay(state.phase+.25));
+            bank.left[state.write]=static_cast<float>(l);bank.right[state.write]=static_cast<float>(r);
+            if(++state.write==size)state.write=0;
+            if(state.age<size)++state.age;
+            l=.5*(l+delayedL);r=.5*(r+delayedR);
+            state.phase+=.22/rate_;if(state.phase>=1)state.phase-=1;break;
         }
         case Type::count: break;
         }
