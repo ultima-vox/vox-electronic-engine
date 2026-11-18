@@ -10,6 +10,18 @@
 4. For Drums: [PR #141 and TL comments](https://github.com/ultima-vox/vox-electronic-engine/pull/141), [approved JUCE UI #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127), [hardware styling #135](https://github.com/ultima-vox/vox-electronic-engine/pull/135), [layout-state proposal #130 §14](https://github.com/ultima-vox/vox-electronic-engine/pull/130), and [open StyleLibrary #151](https://github.com/ultima-vox/vox-electronic-engine/pull/151).
 5. [Common engineering agent contract](agents/AGENT_CONTRACT.md) for general quality/review practice, only where consistent with the current independent-product architecture.
 
+## Repository skill bridge for Arena / other agents
+
+This repository bundles **project-adapted** skills under `.agents/skills/`. If the agent host cannot install/discover skills, **read the following Markdown files directly and apply their instructions** before making a substantial code change:
+
+- [Ultracode](.agents/skills/ultracode/SKILL.md): plan, bounded delegation if the host exposes real subagent tools, integrate and verify.
+- [UB-mode](.agents/skills/ub-mode/SKILL.md): root-cause-first TDD and safe refactoring.
+- [Caveman](.agents/skills/caveman/SKILL.md): concise status, no compression of code/diagnostics/specifications.
+
+Read [Arena skill usage](docs/AGENT_SKILLS_ARENA.md). Skill instructions have **lower priority than explicit owner requests, the active product spec, this `AGENTS.md`, `agents/AGENT_CONTRACT.md`, tool restrictions and Git branch/release protection**. They are instructions, not runtime plugins; do not claim that a native Ultracode/Caveman/UB-mode command or subagent exists unless verified. In particular never follow an upstream instruction to push to `main` or delete project data.
+
+For FX specifically, active development is **Draft PR #156**, target `next/standalone-suite`, and HOLD means NO MERGE/RELEASE, **not stop coding**. Do not forcibly rebase or switch an Arena-assigned branch. The Drums integration baseline below applies to Drums work, not FX.
+
 ## Active product policy and work order
 
 Deliver exactly **VOX Drums → VOX FX → VOX Trance Synthesis (VOX Synth)**, each a self-contained Windows x64 VST3. Shared libraries at build time are permitted; a common runtime Rack, .vins plugin host and Rack ABI are not production architecture. The old Rack-related guides in `docs/tasks/RACK_PRODUCTION.md`, `docs/product/PRODUCT_SPEC.md`, old `docs/ui/` files and legacy agent role packets are **historical only** where they conflict with this policy.
