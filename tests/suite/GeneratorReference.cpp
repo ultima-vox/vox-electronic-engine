@@ -1,0 +1,410 @@
+// The VOX Drums generator as it was before the declarative style engine
+// (drm/genre-fidelity #129 + pad roles #132, the switch-based styleHit). A
+// TEST REFERENCE ONLY (#136): the product generator must give byte-identical
+// results for the seven original styles. Never linked into the plugin.
+#include "GeneratorReference.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+namespace vox::drums::reference {
+namespace {
+
+enum Lane { kick, snare, clap, closedHat, openHat, tom, rim, cymbal, perc1, perc2, perc3, perc4, perc5, perc6, perc7, perc8 };
+
+// Deterministic hash of the seed and a position; uniform in [0, 1).
+double rnd (std::uint32_t seed, std::uint32_t a, std::uint32_t b = 0, std::uint32_t c = 0) noexcept
+{
+    std::uint64_t x = (static_cast<std::uint64_t> (seed) << 32) ^ (static_cast<std::uint64_t> (a) * 0x9E3779B97F4A7C15ull)
+                    ^ (static_cast<std::uint64_t> (b) * 0xC2B2AE3D27D4EB4Full) ^ (static_cast<std::uint64_t> (c) * 0x165667B19E3779F9ull);
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBull;
+    x ^= x >> 31;
+    return static_cast<double> (x >> 11) * (1.0 / 9007199254740992.0);
+}
+
+// One generated cell on the 16th grid of a bar (pos 0..15, plus finer
+// positions for 32/64-step grids through `sub`).
+struct Hit {
+    bool on = false;
+    float velocity = 0.8f;   // 0..1
+    bool accent = false;
+    int probability = 100, ratchet = 1;
+};
+
+struct Context {
+    const GeneratorSettings& g;
+    int bar = 0, bars = 1;
+    bool lastBar() const noexcept { return bar == bars - 1; }
+    double r (int lane, int pos, int salt = 0) const noexcept
+    {
+        return rnd (g.seed, static_cast<std::uint32_t> (lane * 131 + salt), static_cast<std::uint32_t> (pos),
+                    static_cast<std::uint32_t> (bar));
+    }
+    // The same for every bar: the pattern's identity. Bars differ by `variation`.
+    double base (int lane, int pos, int salt = 0) const noexcept
+    {
+        return rnd (g.seed, static_cast<std::uint32_t> (lane * 131 + salt), static_cast<std::uint32_t> (pos), 9999u);
+    }
+    bool chance (double p, int lane, int pos, int salt = 0) const noexcept
+    {
+        // A bar deviates from the pattern's base decision with probability `variation`.
+        const bool varied = bar > 0 && r (lane, pos, salt + 500) < 0.5 * g.variation;
+        return (varied ? r (lane, pos, salt) : base (lane, pos, salt)) < p;
+    }
+};
+
+bool beat (int pos) noexcept { return pos % 4 == 0; }
+bool offBeat (int pos) noexcept { return pos % 4 == 2; }
+
+// The hit of `lane` at 16th `pos` for each style.
+Hit styleHit (const Context& c, int lane, int pos) noexcept
+{
+    const auto& g = c.g;
+    const double d = g.density, sy = g.syncopation, cx = g.complexity;
+    Hit h;
+    const auto on = [&] (float velocity, bool accent = false) {
+        h.on = true;
+        h.velocity = velocity;
+        h.accent = accent;
+    };
+    const auto ghost = [&] (double p, float velocity, int salt = 0) {
+        if (! h.on && c.chance (p, lane, pos, salt + 40))
+        {
+            on (velocity);
+            if (cx > 0.5 && c.chance (cx - 0.5, lane, pos, salt + 41))
+                h.probability = 60;
+        }
+    };
+    switch (g.style)
+    {
+        case Style::fullOn:   // 4-on-the-floor, off-beat open hat, 16th hats, clap on 2 and 4
+            if (lane == kick && beat (pos)) on (1.0f, true);
+            if (lane == openHat && offBeat (pos)) on (0.85f);
+            if (lane == closedHat && ! offBeat (pos) && (pos % 2 == 1 ? c.chance (0.35 + 0.65 * d, lane, pos) : ! beat (pos) || d > 0.75))
+                on (pos % 2 == 1 ? 0.55f : 0.7f);
+            if (lane == clap && (pos == 4 || pos == 12) && d > 0.15) on (0.9f, true);
+            if (lane == snare && pos == 12 && c.chance (0.3 + 0.5 * cx, lane, pos)) on (0.8f);
+            if (lane == perc1 && pos % 4 == 3) ghost (0.25 + 0.6 * sy, 0.6f);
+            if (lane == perc2 && pos % 4 == 1) ghost (0.15 + 0.5 * sy * d, 0.5f);
+            if (lane == rim && (pos == 7 || pos == 15)) ghost (0.2 + 0.6 * cx, 0.6f);
+            break;
+        case Style::goa:      // floor kick, off-beat closed hat, rolling triplet-feel percussion
+            if (lane == kick && beat (pos)) on (1.0f, true);
+            if (lane == closedHat && offBeat (pos)) on (0.8f);
+            if (lane == closedHat && pos % 2 == 1) ghost (0.15 + 0.5 * d, 0.45f);
+            if (lane == snare && pos == 12) on (0.85f, true);
+            if (lane == snare && pos == 4 && d > 0.5) on (0.7f);
+            if (lane == perc1 && (pos % 3 == 0) && ! beat (pos)) ghost (0.4 + 0.5 * d, 0.65f);        // 3-against-4 line
+            if (lane == perc2 && (pos % 3 == 2)) ghost (0.2 + 0.6 * sy, 0.55f);
+            if (lane == tom && (pos == 10 || pos == 11 || pos == 14)) ghost (0.25 + 0.6 * cx, 0.7f);
+            if (lane == openHat && pos == 14) ghost (0.2 + 0.5 * d, 0.7f);
+            break;
+        case Style::house:    // floor kick, clap on 2 and 4, off-beat open hat, shuffled hats
+            if (lane == kick && beat (pos)) on (0.95f, true);
+            if (lane == kick && pos == 15) ghost (0.1 + 0.4 * sy, 0.6f);
+            if (lane == clap && (pos == 4 || pos == 12)) on (0.9f, true);
+            if (lane == openHat && offBeat (pos)) on (0.75f);
+            if (lane == closedHat && pos % 2 == 0 && ! offBeat (pos) && d > 0.3) on (0.6f);
+            if (lane == closedHat && pos % 2 == 1) ghost (0.1 + 0.7 * d, 0.4f);
+            if (lane == rim && (pos == 3 || pos == 6 || pos == 11)) ghost (0.2 + 0.6 * sy, 0.55f);
+            if (lane == perc1 && (pos == 7 || pos == 10 || pos == 13)) ghost (0.15 + 0.55 * sy * (0.5 + d), 0.5f);
+            if (lane == snare && pos == 15) ghost (0.1 + 0.4 * cx, 0.45f);
+            break;
+        case Style::techno:   // floor kick, driving 16th hats accented off the beat, sparse clap, rumble tom
+            if (lane == kick && beat (pos)) on (1.0f, true);
+            if (lane == closedHat && (d > 0.35 || pos % 2 == 0)) on (offBeat (pos) ? 0.85f : pos % 2 == 0 ? 0.55f : 0.4f, offBeat (pos));
+            if (lane == clap && pos == 12 && d > 0.25) on (0.85f);
+            if (lane == clap && pos == 4 && d > 0.6) on (0.8f);
+            if (lane == tom && pos % 4 != 0) ghost (0.1 + 0.45 * d * (0.4 + sy), 0.5f);
+            if (lane == rim && (pos == 3 || pos == 9 || pos == 14)) ghost (0.25 + 0.6 * sy, 0.6f);
+            if (lane == perc1 && pos % 4 == 1) ghost (0.1 + 0.5 * cx, 0.5f);
+            if (lane == openHat && pos == 14) ghost (0.15 + 0.4 * d, 0.65f);
+            if (lane == cymbal && pos == 0 && c.bar == 0) ghost (0.3 + 0.4 * d, 0.7f);
+            break;
+        case Style::trap:     // half-time: snare on 3, syncopated kick, rolling hats
+            if (lane == kick && pos == 0) on (1.0f, true);
+            if (lane == kick && (pos == 6 || pos == 7 || pos == 10 || pos == 13)) ghost (0.15 + 0.45 * sy + 0.2 * d, 0.85f);
+            if (lane == snare && pos == 8) on (0.95f, true);
+            if (lane == clap && pos == 8 && d > 0.4) on (0.8f);
+            if (lane == closedHat && pos % 2 == 0)
+            {
+                on (beat (pos) ? 0.7f : 0.55f);
+                if (c.chance (0.1 + 0.5 * cx, lane, pos, 7))
+                    h.ratchet = c.r (lane, pos, 8) < 0.5 ? 2 : c.r (lane, pos, 8) < 0.8 ? 3 : 4;
+            }
+            if (lane == closedHat && pos % 2 == 1) ghost (0.05 + 0.5 * d, 0.4f);
+            if (lane == openHat && (pos == 6 || pos == 14)) ghost (0.15 + 0.4 * d, 0.65f);
+            if (lane == perc1 && (pos == 3 || pos == 11)) ghost (0.1 + 0.5 * cx, 0.5f);
+            break;
+        case Style::breaks:   // broken kick, snare on 2 and 4 with ghost notes, 8th hats
+            if (lane == kick && (pos == 0 || pos == 10)) on (0.95f, pos == 0);
+            if (lane == kick && (pos == 3 || pos == 6 || pos == 13)) ghost (0.1 + 0.5 * sy, 0.75f);
+            if (lane == snare && (pos == 4 || pos == 12)) on (0.95f, true);
+            if (lane == snare && (pos == 7 || pos == 9 || pos == 15)) ghost (0.15 + 0.6 * cx, 0.35f);
+            if (lane == closedHat && pos % 2 == 0) on (beat (pos) ? 0.7f : 0.55f);
+            if (lane == closedHat && pos % 2 == 1) ghost (0.05 + 0.45 * d, 0.4f);
+            if (lane == openHat && pos == 6) ghost (0.2 + 0.4 * d, 0.6f);
+            if (lane == rim && (pos == 2 || pos == 11)) ghost (0.1 + 0.5 * sy, 0.5f);
+            if (lane == cymbal && pos == 0 && c.bar == 0) ghost (0.4, 0.7f);
+            break;
+        case Style::ambient:  // sparse, quiet, uncertain
+            if (lane == kick && pos == 0) on (0.7f);
+            if (lane == kick && pos == 10) ghost (0.1 + 0.4 * d, 0.5f);
+            if (lane == rim && (pos == 4 || pos == 12)) ghost (0.2 + 0.5 * d, 0.45f);
+            if (lane == closedHat && pos % 4 == 2) ghost (0.15 + 0.6 * d, 0.35f);
+            if (lane == cymbal && pos == 0 && c.bar % 2 == 0) ghost (0.3 + 0.4 * d, 0.5f);
+            // Percussion only on lanes 9-10: the factory kits put a clap, snare or kick on 11-12 (issue 128).
+            if ((lane == perc1 || lane == perc2) && pos % 2 == (lane % 2)) ghost (0.04 + 0.2 * d + 0.1 * sy, 0.4f, lane);
+            if (h.on && lane != kick)
+                h.probability = std::clamp (static_cast<int> (std::lround (90.0 - 50.0 * cx)), 30, 100);
+            break;
+    }
+    return h;
+}
+
+// PR 137 §10: the storage change applied exactly as in Generator.cpp (the
+// slot of a 16th position; micro quantised once to ticks of its cell).
+int slotOf16th (const timing::BarTiming& t, int pos) noexcept
+{
+    const int tick = pos * timing::ticksPerQuarter / 4;
+    const int beatTicks = timing::beatTicks (timing::beatKind (t.signature));
+    const int beat = tick / beatTicks;
+    if (beat >= t.beats())
+        return -1;
+    const int cellTicks = t.cellTicks (beat), within = tick - beat * beatTicks;
+    return cellTicks > 0 && within % cellTicks == 0 ? t.slot (beat, within / cellTicks) : -1;
+}
+
+kit::PatternStep toStep (const Context& c, int lane, int pos, const Hit& h, int cellTicks) noexcept
+{
+    kit::PatternStep s;
+    if (! h.on)
+        return s;
+    const auto& g = c.g;
+    // Groove: accents lean to the off-beats; humanize: variance.
+    double velocity = h.velocity;
+    velocity *= 1.0 + g.groove * (offBeat (pos) ? 0.18 : beat (pos) ? 0.0 : -0.12);
+    velocity *= 1.0 + g.humanize * 0.35 * (c.r (lane, pos, 90) - 0.5);
+    s.on = true;
+    s.accent = h.accent;
+    s.velocity = static_cast<std::uint8_t> (std::clamp (static_cast<int> (std::lround (velocity * 127.0)), 1, 127));
+    s.probability = static_cast<std::uint8_t> (std::clamp (h.probability, 1, 100));
+    s.ratchet = static_cast<std::uint8_t> (std::clamp (h.ratchet, 1, kit::maxRatchet));
+    double micro = 0.0;
+    if (pos % 2 == 1)
+        micro += 50.0 * std::clamp (g.swing, 0.0f, 1.0f);
+    if (lane != kick || ! beat (pos))   // the downbeat kick stays on the grid
+        micro += g.humanize * 16.0 * (c.r (lane, pos, 91) - 0.5);
+    s.microTicks = static_cast<std::int16_t> (
+        kit::percentToTicks (std::clamp (static_cast<int> (std::lround (micro)), -50, 50), cellTicks));
+    return s;
+}
+
+// Writes `step` unless the cell or its lane is locked.
+void put (const GeneratorSettings& g, StoredPattern& p, int lane, int bar, int slot, const kit::PatternStep& value) noexcept
+{
+    auto& cell = p.cell (lane, bar, slot);
+    if (cell.locked || (g.laneLocks & (1u << lane)) != 0)
+        return;
+    cell = value;
+}
+
+// Returns whether any cell was open to the generator (not locked).
+// `laneMask` selects pad lanes; each lane gets the result of its role slot
+// (nothing for a lane without one). With the identity map slot == lane.
+bool generateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& p, const RoleMap& roles)
+{
+    bool open = false;
+    for (int lane = 0; lane < kit::padCount; ++lane)
+    {
+        if ((laneMask & (1u << lane)) == 0)
+            continue;
+        const int slot = roles.slotOfLane[static_cast<std::size_t> (lane)];
+        for (int bar = 0; bar < p.bars; ++bar)
+        {
+            const Context c { g, bar, p.bars };
+            const auto t = p.timing (lane, bar);
+            for (int beat = 0; beat < t.beats(); ++beat)
+                for (int cell = 0; cell < t.cells (beat); ++cell)
+                {
+                    const int start = t.cellStartTick (beat, cell);
+                    const int pos = start % (timing::ticksPerQuarter / 4) == 0 ? start / (timing::ticksPerQuarter / 4) : -1;
+                    const int at = t.slot (beat, cell);
+                    kit::PatternStep value;
+                    if (pos >= 0 && pos < 16 && slot >= 0)
+                        value = toStep (c, slot, pos, styleHit (c, slot, pos), t.cellTicks (beat));
+                    open = open || ! (p.cell (lane, bar, at).locked || (g.laneLocks & (1u << lane)) != 0);
+                    put (g, p, lane, bar, at, value);
+                }
+        }
+    }
+    return open;
+}
+
+int fillLane (Style style, int index) noexcept
+{
+    switch (style)
+    {
+        case Style::fullOn:
+        case Style::goa: return index % 2 == 0 ? snare : tom;
+        case Style::house: return index % 3 == 0 ? clap : snare;
+        case Style::techno: return index % 2 == 0 ? tom : rim;
+        case Style::trap: return index % 2 == 0 ? closedHat : snare;
+        case Style::breaks: return index % 3 == 2 ? tom : snare;
+        case Style::ambient: return index % 2 == 0 ? perc1 : cymbal;
+    }
+    return snare;
+}
+
+} // namespace
+
+void generatePattern (const GeneratorSettings& g, StoredPattern& pattern, const RoleMap& roles)
+{
+    // The probability seed follows the generator's only when the generator
+    // wrote something: a fully locked pattern stays exactly as it is.
+    if (generateLanes (g, 0xffffu, pattern, roles))
+        pattern.seed = g.seed;
+    if (g.fills > 0.05f && pattern.bars > 1)
+        reference::generateFill (g, pattern, -1, roles);
+}
+
+void mutateLanes (const GeneratorSettings& g, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles)
+{
+    reference::generateLanes (g, laneMask & 0xffffu, pattern, roles);
+}
+
+void generateFill (const GeneratorSettings& g, StoredPattern& p, int bar, const RoleMap& roles)
+{
+    const auto laneOf = [&] (int slot) { return static_cast<int> (roles.laneOfSlot[static_cast<std::size_t> (slot)]); };
+    if (bar < 0 || bar >= p.bars)
+        bar = p.bars - 1;
+    // The fill takes the last 2..8 sixteenths of the bar.
+    const int length = std::clamp (static_cast<int> (std::lround (2.0 + 6.0 * g.fills)), 2, 8);
+    const Context c { g, bar, p.bars };
+    for (int pos = 16 - length; pos < 16; ++pos)
+    {
+        const int index = pos - (16 - length);
+        const int lane = fillLane (g.style, index + static_cast<int> (c.r (0, pos, 70) * 2.0));
+        // Thin out the groove under the fill, then write the roll rising to the bar line.
+        for (int other : { static_cast<int> (closedHat), static_cast<int> (openHat), static_cast<int> (perc1), static_cast<int> (perc2) })
+            if (c.r (other, pos, 71) < 0.5 * g.fills && laneOf (other) >= 0)
+                if (const int at = slotOf16th (p.timing (laneOf (other), bar), pos); at >= 0)
+                    put (g, p, laneOf (other), bar, at, {});
+        if (c.r (lane, pos, 72) > 0.35 + 0.65 * g.fills && index < length - 1)
+            continue;
+        Hit h;
+        h.on = true;
+        h.velocity = static_cast<float> (0.45 + 0.5 * (index + 1) / length);
+        h.accent = index == length - 1;
+        if (g.complexity > 0.3f && c.r (lane, pos, 73) < g.complexity - 0.2)
+            h.ratchet = g.style == Style::trap ? 4 : 2;
+        if (laneOf (lane) < 0)   // no pad with this role: the hit is not written
+            continue;
+        const auto t = p.timing (laneOf (lane), bar);
+        if (const int at = slotOf16th (t, pos); at >= 0)
+            put (g, p, laneOf (lane), bar, at, toStep (c, lane, pos, h, t.cellTicks (pos / 4)));
+    }
+}
+
+void generateVariation (const GeneratorSettings& g, const StoredPattern& a, StoredPattern& b, const RoleMap& roles)
+{
+    // B keeps its own locked cells: build from A, then put B's locked cells back.
+    auto locked = std::make_unique<StoredPattern> (b);
+    const bool sameGrid = b.signature == a.signature && b.resolution == a.resolution && b.bars == a.bars && b.masks == a.masks;
+    if (! sameGrid)
+    {
+        // B would take A's grid, where its locked cells have no place: with
+        // anything locked in B, B is left exactly as it is.
+        bool anyLocked = false;
+        for (int lane = 0; lane < kit::padCount && ! anyLocked; ++lane)
+            for (int bar = 0; bar < b.bars && ! anyLocked; ++bar)
+                for (int slot = 0; slot < kit::slotStride && ! anyLocked; ++slot)
+                    anyLocked = b.cell (lane, bar, slot).locked
+                             || ((g.laneLocks & (1u << lane)) != 0 && b.cell (lane, bar, slot).on);
+        if (anyLocked)
+            return;
+    }
+    b = a;
+    GeneratorSettings v = g;
+    v.seed = g.seed * 2654435761u + 0x9E3779B9u;
+    // The decorating lanes are regenerated with the derived seed; kick and the
+    // back-beat stay. Decided per role slot. A lane without a slot (role none,
+    // a duplicate) is always in the mask, so it is cleared like in full generation.
+    std::uint32_t mask = 0;
+    for (int lane = 0; lane < kit::padCount; ++lane)
+    {
+        const int slot = roles.slotOfLane[static_cast<std::size_t> (lane)];
+        if (slot < 0
+            || (slot != kick && slot != snare && slot != clap
+                && rnd (v.seed, static_cast<std::uint32_t> (slot), 77) < 0.25 + 0.75 * g.variation))
+            mask |= 1u << lane;
+    }
+    reference::generateLanes (v, mask, b, roles);
+    reference::generateFill (v, b, -1, roles);
+    b.seed = v.seed;
+    if (sameGrid)
+        for (int lane = 0; lane < kit::padCount; ++lane)
+            for (int bar = 0; bar < b.bars; ++bar)
+                for (int slot = 0; slot < kit::slotStride; ++slot)
+                    if (locked->cell (lane, bar, slot).locked || (g.laneLocks & (1u << lane)) != 0)
+                        b.cell (lane, bar, slot) = locked->cell (lane, bar, slot);
+}
+
+void generateSong (const GeneratorSettings& g, PatternStore::Everything& all, const RoleMap& roles)
+{
+    const int kickLane = roles.laneOfSlot[static_cast<std::size_t> (kick)];
+    // Slots: 1 intro (sparse), 2 main, 3 lift (denser), 4 break (no kick), 5 peak.
+    struct Part { float density, complexity, fills; bool kickOn; };
+    static constexpr Part parts[slotCountForSong] = {
+        { 0.45f, 0.5f, 0.6f, true }, { 1.0f, 1.0f, 1.0f, true }, { 1.2f, 1.15f, 1.1f, true },
+        { 0.6f, 0.9f, 0.8f, false }, { 1.4f, 1.3f, 1.25f, true }
+    };
+    for (int slot = 0; slot < slotCountForSong; ++slot)
+    {
+        GeneratorSettings s = g;
+        s.seed = g.seed + static_cast<std::uint32_t> (slot) * 7919u;
+        s.density = std::clamp (g.density * parts[slot].density, 0.0f, 1.0f);
+        s.complexity = std::clamp (g.complexity * parts[slot].complexity, 0.0f, 1.0f);
+        s.fills = std::clamp (g.fills * parts[slot].fills, 0.0f, 1.0f);
+        auto& a = all.slots[static_cast<std::size_t> (slot)];
+        reference::generatePattern (s, a, roles);
+        if (! parts[slot].kickOn && kickLane >= 0)
+            for (int bar = 0; bar < a.bars; ++bar)
+                for (int cell = 0; cell < kit::slotStride; ++cell)
+                    put (g, a, kickLane, bar, cell, {});
+        reference::generateVariation (s, a, all.alternates[static_cast<std::size_t> (slot)], roles);
+    }
+    // Timeline in eight-bar phrases: intro, main, lift, break, peak, ...;
+    // the last four bars of every phrase are the B variation (it ends in a fill).
+    auto& song = all.song;
+    const int phrases = song.length / 8;
+    static constexpr int order16[2] = { 1, 4 };
+    static constexpr int order32[4] = { 0, 1, 3, 4 };
+    static constexpr int order64[8] = { 0, 1, 2, 3, 1, 2, 4, 4 };
+    for (int bar = 0; bar < kit::maxSongBars; ++bar)
+        song.bars[static_cast<std::size_t> (bar)] = {};
+    for (int phrase = 0; phrase < phrases; ++phrase)
+    {
+        const int slot = song.length == 16 ? order16[phrase] : song.length == 32 ? order32[phrase] : order64[phrase];
+        song.place (phrase * 8, slot, 0, all.slots[static_cast<std::size_t> (slot)].bars);
+        song.place (phrase * 8 + 4, slot, 1, all.alternates[static_cast<std::size_t> (slot)].bars);
+        // Patterns shorter than four bars repeat to fill the phrase.
+        const int bars = std::max<int> (1, all.slots[static_cast<std::size_t> (slot)].bars);
+        for (int k = bars; k < 4; ++k)
+        {
+            song.place (phrase * 8 + k, slot, 0, 1);
+            song.bars[static_cast<std::size_t> (phrase * 8 + k)].patternBar = static_cast<std::uint8_t> (k % bars);
+            song.place (phrase * 8 + 4 + k, slot, 1, 1);
+            song.bars[static_cast<std::size_t> (phrase * 8 + 4 + k)].patternBar = static_cast<std::uint8_t> (k % bars);
+        }
+    }
+}
+
+//==============================================================================
+// DGEN: u32 version (1), u8 style, 8 x f32 (density, groove, syncopation,
+// swing, humanize, complexity, fills, variation), u32 seed, u16 lane locks.
+} // namespace vox::drums::reference

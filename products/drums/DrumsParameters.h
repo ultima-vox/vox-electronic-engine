@@ -8,7 +8,8 @@
 // Host parameters are what a musician automates (03 §6): per pad level,
 // tune, decay, pan, cutoff and mute (16 x 6), kit volume, velocity and
 // choke, sequencer mode, pattern, swing, accent and the 16 lanes: 119.
-// Sends arrive with the FX returns (DRM-06). Everything structural (model,
+// DRM-06 appends (never reorders): per pad send 1, send 2 and solo (16 x 3)
+// and the shared delay and reverb (7): 174. Everything structural (model,
 // note, choke group, polyphony, fine, character, filter type, resonance,
 // transient, kick body, sample source and players) is versioned product
 // state (section DPAD), edited in the editor.
@@ -25,7 +26,13 @@ namespace vox::drums {
 inline constexpr int padCount = kit::padCount;
 
 enum class Field { level, tune, decay, pan, cutoff, mute, kitVolume, kitVelocity, kitChoke,
-                   seqMode, seqPattern, seqSwing, seqAccent, seqLane };
+                   seqMode, seqPattern, seqSwing, seqAccent, seqLane,
+                   // DRM-06, appended
+                   send1, send2, solo, delayTime, delayFeedback, delayTone, delayLevel, reverbSize, reverbDamp, reverbLevel };
+
+// drm.fx.delay.time choices: the delay length in quarter notes at the host tempo.
+inline constexpr int delayTimeCount = 7;
+double delayTimeQuarters (int choice) noexcept;
 
 struct PluginParameter {
     std::string id;        // host identity, e.g. "drm.p01.level"

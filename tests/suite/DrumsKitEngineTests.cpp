@@ -14,6 +14,7 @@
 //    plays exactly the canonical hit list (no miss, no double) across block
 //    sizes, rates and a loop back.
 #include "engine/KitEngine.h"
+#include "DrumsTimingTestUtil.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <map>
 #include <set>
@@ -36,6 +38,8 @@
 namespace {
 
 namespace kit = vox::drums::kit;
+namespace timing = vox::drums::timing;
+namespace testutil = vox::drums::testutil;
 int failures = 0;
 
 void check (bool ok, const std::string& what)
@@ -346,7 +350,7 @@ void testBlockInvariance()
 // buses and buffers (run under ASan/UBSan in the PR evidence).
 void testInvalidSettings()
 {
-    std::vector<std::vector<float>> bus (20, std::vector<float> (256));
+    std::vector<std::vector<float>> bus (2 + kit::auxBuses * 2, std::vector<float> (256));
     std::array<float*, kit::auxBuses * 2> aux {};
     for (int b = 0; b < kit::auxBuses * 2; ++b)
         aux[static_cast<std::size_t> (b)] = bus[static_cast<std::size_t> (b + 2)].data();
@@ -359,24 +363,37 @@ void testInvalidSettings()
         kit::Transport tr;
         kit::Outputs out { bus[0].data(), bus[1].data(), &aux };
         engine.process (settings, out, 256, &e, 1, tr, nullptr, nullptr, false);
-        std::array<double, 10> energy {};
-        for (int b = 0; b < 10; ++b)
+        std::array<double, 11> energy {};
+        for (int b = 0; b < 11; ++b)
             for (int i = 0; i < 256; ++i)
                 energy[static_cast<std::size_t> (b)] += std::abs (bus[static_cast<std::size_t> (b * 2)][static_cast<std::size_t> (i)]);
-        return energy;   // [0] main, [1] send 1, [2] send 2, [3..9] Out 2..8
+        return energy;   // [0] main, [1] send 1, [2] send 2, [3..10] Out 2..9
     };
-    for (const int output : { 0, 7, 8, 255 })
+    // Every destination (Main, Out 2..9) carries the pad exactly once and
+    // nothing else does; an invalid index plays on Main.
+    for (const int output : { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 255 })
     {
         auto settings = kit::legacyKit();
         settings.pads[0].output = static_cast<std::uint8_t> (output);
         const auto e = renderTo (settings, 36);
-        const int expected = output == 7 ? 9 : 0;   // Out 8 is bus pair 9; invalid -> Main
+        const int expected = output >= 1 && output <= 8 ? output + 2 : 0;   // Out N+1 is bus pair N+2
         int carrying = 0;
-        for (int b = 0; b < 10; ++b)
+        for (int b = 0; b < 11; ++b)
             if (b != 1 && b != 2 && e[static_cast<std::size_t> (b)] > 0.0)
                 ++carrying;
         check (e[static_cast<std::size_t> (expected)] > 1.0e-3 && carrying == 1,
-               "output " + std::to_string (output) + " plays exactly once on " + (expected == 0 ? "Main" : "Out 8"));
+               "output " + std::to_string (output) + " plays exactly once on "
+                   + (expected == 0 ? std::string ("Main") : "Out " + std::to_string (output + 1)));
+    }
+    // Sends are post level and pan, proportional and independent of the output.
+    {
+        auto settings = kit::legacyKit();
+        settings.pads[0].output = 3;
+        settings.pads[0].send1 = 0.5f;
+        settings.pads[0].send2 = 0.25f;
+        const auto e = renderTo (settings, 36);
+        check (e[0] <= 0.0 && e[5] > 1.0e-3 && std::abs (e[1] / e[5] - 0.5) < 1.0e-4 && std::abs (e[2] / e[5] - 0.25) < 1.0e-4,
+               "sends carry level x send of the pad, next to its dry output");
     }
 
     // Garbage in every field.
@@ -460,10 +477,10 @@ void testRealtime()
     std::vector<float> l (512), r (512);
     std::vector<kit::Event> events;
     events.reserve (64);
-    std::vector<kit::PatternStep> cells (16 * 16);
-    for (std::size_t i = 0; i < cells.size(); i += 3)
-        cells[i] = { true, i % 2 == 0, 100 };
-    const kit::Pattern pattern { 16, 16, 1, 0, cells.data() };
+    auto grid = std::make_unique<testutil::GridPattern> (16, 16, 1);
+    for (int i = 0; i < 16 * 16; i += 3)
+        grid->at (i / 16, 0, i % 16) = { true, i % 2 == 0, 100 };
+    const kit::Pattern& pattern = grid->pattern;
     settings.sequencerMode = 2;
     kit::Transport tr;
     tr.playing = tr.hasTempo = tr.hasPpq = true;
@@ -492,58 +509,65 @@ void testRealtime()
 //==============================================================================
 void testStepRules()
 {
-    std::vector<kit::PatternStep> cells (16 * 16);
-    const auto at = [&] (int lane, int st) -> kit::PatternStep& { return cells[static_cast<std::size_t> (lane * 16 + st)]; };
+    auto grid = std::make_unique<testutil::GridPattern> (16, 16, 1);
+    const auto at = [&] (int lane, int st) -> kit::PatternStep& { return grid->at (lane, 0, st); };
     at (0, 0) = { true, false, 100 };
     at (0, 0).ratchet = 4;
     at (1, 1) = { true, false, 90 };
-    at (1, 1).micro = 50;
+    at (1, 1).microTicks = static_cast<std::int16_t> (kit::percentToTicks (50, 240));
     at (2, 1) = { true, false, 80 };
     at (3, 2) = { true, true, 60 };
     at (4, 2) = { true, false, 70 };
     at (5, 3) = { true, false, 70 };
-    at (5, 3).micro = -50;
-    kit::Pattern pattern { 16, 16, 1, 0, cells.data() };
+    at (5, 3).microTicks = static_cast<std::int16_t> (kit::percentToTicks (-50, 240));
+    const kit::Pattern& pattern = grid->pattern;
     kit::StepContext ctx;
     ctx.swing = 0.0;
     ctx.accent = 0.5;
     std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> out {};
-    int n = kit::stepHits (pattern, ctx, 0, out.data());
+    const auto stepHits = [&] (const kit::Pattern& p, std::int64_t g) { return testutil::stepHits (p, ctx, g, 16, out.data()); };
+    int n = stepHits (pattern, 0);
     check (n == 4 && juce_exact (out[0].ppq, 0.0) && std::abs (out[1].ppq - 0.0625) < 1e-12 && std::abs (out[3].ppq - 0.1875) < 1e-12
-               && out[3].pad == 0 && out[3].velocity == 100,
-           "ratchet 4: four hits evenly in the step");
-    n = kit::stepHits (pattern, ctx, 1, out.data());
-    check (n == 2 && out[0].pad == 1 && std::abs (out[0].ppq - 0.375) < 1e-12 && out[1].pad == 2 && juce_exact (out[1].ppq, 0.25),
-           "micro +50 % moves a hit half a step later");
+               && out[3].pad == 0 && out[3].velocity == 100 && out[1].tick == 60 && out[3].tick == 180 && out[0].gateTicks == 30,
+           "ratchet 4: four hits evenly in the step (ticks 0/60/120/180, gate half a subhit)");
+    n = stepHits (pattern, 1);
+    check (n == 2 && out[0].pad == 1 && std::abs (out[0].ppq - 0.375) < 1e-12 && out[0].tick == 360 && out[1].pad == 2 && juce_exact (out[1].ppq, 0.25),
+           "micro +50 % (120 ticks) moves a hit half a step later");
     ctx.swing = 0.3;
-    n = kit::stepHits (pattern, ctx, 1, out.data());
-    check (n == 2 && std::abs (out[1].ppq - (0.25 + 0.3 * 0.25)) < 1e-12 && std::abs (out[0].ppq - (0.25 + 0.075 + 0.125)) < 1e-12,
-           "swing delays odd steps, micro adds to it");
-    n = kit::stepHits (pattern, ctx, 2, out.data());
+    n = stepHits (pattern, 1);
+    check (n == 2 && std::abs (out[1].ppq - (0.25 + 0.3 * 0.25)) < 1e-12 && std::abs (out[0].ppq - (0.25 + 0.075 + 0.125)) < 1e-12
+               && out[1].tick == 240,
+           "swing delays odd steps (unrounded, not in the tick), micro adds to it");
+    n = stepHits (pattern, 2);
     check (n == 2 && out[0].velocity == 94 && out[1].velocity == 70, "accent raises velocity towards 127 by the accent amount");
     ctx.laneMask = ~(1u << 3);
-    n = kit::stepHits (pattern, ctx, 2, out.data());
+    n = stepHits (pattern, 2);
     check (n == 1 && out[0].pad == 4, "a disabled lane plays nothing");
     ctx.laneMask = 0xffffu;
-    n = kit::stepHits (pattern, ctx, 3, out.data());
+    n = stepHits (pattern, 3);
     check (n == 1 && std::abs (out[0].ppq - (0.75 + 0.3 * 0.25 - 0.125)) < 1e-12, "micro -50 % moves a hit half a step earlier");
-    check (kit::stepHits (pattern, ctx, -1, out.data()) == 0, "negative steps have no hits");
+    {
+        const auto view = pattern.bar (0);
+        check (kit::cellHits (view, ctx, 0, 0, 0, 4, 0, out.data()) == 0 && kit::cellHits (view, ctx, 0, 0, 0, 0, 4, out.data()) == 0
+                   && kit::cellHits (view, ctx, 0, 0, 16, 0, 0, out.data()) == 0 && kit::cellHits (view, ctx, 0, 0, -1, 0, 0, out.data()) == 0,
+               "a beat, cell or lane outside the bar has no hits");
+    }
 
     // Probability: deterministic per seed and absolute position, about the
     // stated share, different seeds decide differently.
-    std::vector<kit::PatternStep> pc (16);
-    pc[0] = { true, false, 100 };
-    pc[0].probability = 30;
-    kit::Pattern prob { 1, 16, 1, 0, pc.data(), 7 };
+    auto pg = std::make_unique<testutil::GridPattern> (1, 16, 1, 7);
+    pg->at (0, 0, 0) = { true, false, 100 };
+    pg->at (0, 0, 0).probability = 30;
+    const kit::Pattern& prob = pg->pattern;
     int played = 0, same = 0, differ = 0;
     kit::Pattern other = prob;
     other.seed = 8;
     for (std::int64_t pass = 0; pass < 4000; ++pass)
     {
         const std::int64_t g = pass * 16;
-        const int a = kit::stepHits (prob, ctx, g, out.data());
-        const int b = kit::stepHits (prob, ctx, g, out.data());
-        const int c = kit::stepHits (other, ctx, g, out.data());
+        const int a = stepHits (prob, g);
+        const int b = stepHits (prob, g);
+        const int c = stepHits (other, g);
         played += a;
         same += a == b ? 1 : 0;
         differ += a != c ? 1 : 0;
@@ -552,29 +576,93 @@ void testStepRules()
     check (played > 1100 && played < 1300, "probability 30 % plays about 30 % of passes (" + std::to_string (played) + " / 4000)");
     check (differ > 500, "another seed decides differently");
 
-    // 1/64 grid.
-    kit::Pattern fine { 16, 64, 1, 4, cells.data() };
-    check (juce_exact (kit::stepLength (fine), 0.0625) && juce_exact (kit::stepLength (pattern), 0.25), "step lengths 1/64 and 1/16");
+    // 1/64 grid: cells of 60 ticks.
+    auto fine = std::make_unique<testutil::GridPattern> (16, 64, 1);
+    fine->at (0, 0, 5) = { true, false, 100 };
+    n = testutil::stepHits (fine->pattern, ctx, 5, 64, out.data());
+    ctx.swing = 0.0;
+    const int m = testutil::stepHits (fine->pattern, ctx, 5, 64, out.data());
+    check (n == 1 && m == 1 && out[0].tick == 300 && juce_exact (out[0].ppq, 0.3125), "1/64 cells are 60 ticks (step 6 at tick 300)");
+
+    // PR 137 §10: a triplet beat; fractional ratchets rounded once (ties
+    // earlier); tuplet cells are not swung.
+    {
+        kit::PatternCells cells {};
+        std::array<std::uint16_t, kit::padCount * kit::maxPatternBars> masks {};
+        kit::Pattern tp;
+        tp.lanes = 1;
+        tp.bars = 1;
+        tp.cells = cells.data();
+        tp.resolution = timing::Resolution::thirtySecond;  // 4/4 32nd: 8 straight / 12 triplet cells, 12 slots per beat
+        tp.masks = masks.data();
+        masks[0] = 0b0010;                                 // lane 1, bar 1: beat 2 in triplets
+        const timing::BarTiming t { {}, timing::Resolution::thirtySecond, 0b0010 };
+        auto& c = cells[static_cast<std::size_t> (t.slot (1, 1))];   // triplet cell 2 of beat 2: tick 960 + 80
+        c = { true, false, 100 };
+        c.ratchet = 3;                                      // 80 / 3: subhits 0, 27 (26.67), 53 (53.33)
+        auto& straightOdd = cells[static_cast<std::size_t> (t.slot (2, 1))];   // straight cell 2 of beat 3: tick 1920 + 120
+        straightOdd = { true, false, 90 };
+        kit::StepContext sw;
+        sw.swing = 0.5;
+        const auto view = tp.bar (0);
+        n = kit::cellHits (view, sw, 0, 0, 0, 1, 1, out.data());
+        check (n == 3 && out[0].tick == 1040 && out[1].tick == 1067 && out[2].tick == 1093 && juce_exact (out[0].ppq, 1040.0 / 960.0),
+               "a triplet cell: tick 1040, ratchet subhits rounded once to 1067 / 1093, not swung");
+        n = kit::cellHits (view, sw, 0, 0, 0, 2, 1, out.data());
+        check (n == 1 && out[0].tick == 2040 && std::abs (out[0].ppq - (2040.0 / 960.0 + 0.5 * 120.0 / 960.0)) < 1e-12,
+               "a straight odd cell next to it is swung by swing x cell");
+        auto& tie = cells[static_cast<std::size_t> (t.slot (3, 0))];   // straight 32nd (120 ticks) x 8: 15 each, exact
+        tie = { true, false, 80 };
+        tie.ratchet = 8;
+        n = kit::cellHits (view, sw, 0, 0, 0, 3, 0, out.data());
+        bool even = n == 8;
+        for (int k = 0; k < n; ++k)
+            even = even && out[static_cast<std::size_t> (k)].tick == 2880 + 15 * k;
+        check (even, "ratchet 8 in a 120-tick cell: every 15 ticks");
+    }
 }
 
 // The sequencer plays exactly the canonical hit list: every hit of
-// stepHits() once, at its sample (legacy rounding), none twice, across
+// cellHits() once, at its sample (legacy rounding), none twice, across
 // rates, block sizes (also odd) and a loop back.
 void testSchedulerEqualsCanonical()
 {
     std::mt19937 random (2024);
-    std::vector<kit::PatternStep> cells (16 * 32 * 2);
-    for (auto& c : cells)
-        if (random() % 5 == 0)
+    // 4/4 at 32nds, 2 bars; each lane's beats randomly straight or triplet
+    // (PR 137 §10.5b: mixed straight/tuplet notes), humanised in ticks.
+    kit::PatternCells cells {};
+    std::array<std::uint16_t, kit::padCount * kit::maxPatternBars> masks {};
+    kit::Pattern pattern;
+    pattern.lanes = 16;
+    pattern.bars = 2;
+    pattern.resolution = timing::Resolution::thirtySecond;
+    pattern.cells = cells.data();
+    pattern.masks = masks.data();
+    pattern.seed = 1234;
+    int tupletCells = 0;
+    for (int lane = 0; lane < 16; ++lane)
+        for (int bar = 0; bar < 2; ++bar)
         {
-            c.on = true;
-            c.velocity = static_cast<std::uint8_t> (1 + random() % 127);
-            c.accent = random() % 4 == 0;
-            c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 1 + random() % 100 : 100);
-            c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 1 + random() % 8 : 1);
-            c.micro = static_cast<std::int8_t> (random() % 3 == 0 ? static_cast<int> (random() % 101) - 50 : 0);
+            auto& mask = masks[static_cast<std::size_t> (lane * kit::maxPatternBars + bar)];
+            mask = static_cast<std::uint16_t> (random() % 16);
+            const timing::BarTiming t { {}, pattern.resolution, mask };
+            for (int beat = 0; beat < t.beats(); ++beat)
+                for (int cell = 0; cell < t.cells (beat); ++cell)
+                {
+                    if (random() % 5 != 0)
+                        continue;
+                    auto& c = cells[static_cast<std::size_t> ((lane * kit::maxPatternBars + bar) * kit::slotStride + t.slot (beat, cell))];
+                    c.on = true;
+                    c.velocity = static_cast<std::uint8_t> (1 + random() % 127);
+                    c.accent = random() % 4 == 0;
+                    c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 1 + random() % 100 : 100);
+                    c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 1 + random() % 8 : 1);
+                    const int half = t.cellTicks (beat) / 2;
+                    c.microTicks = static_cast<std::int16_t> (random() % 3 == 0 ? static_cast<int> (random() % static_cast<unsigned> (2 * half + 1)) - half : 0);
+                    tupletCells += ((mask >> beat) & 1u) != 0 ? 1 : 0;
+                }
         }
-    const kit::Pattern pattern { 16, 32, 2, 2, cells.data(), 1234 };
+    check (tupletCells > 40, "the pattern mixes straight and triplet cells (" + std::to_string (tupletCells) + " triplet hits)");
     auto settings = kit::legacyKit();
     settings.sequencerMode = 1;
     settings.swing = 0.2f;
@@ -624,15 +712,15 @@ void testSchedulerEqualsCanonical()
             // Canonical: segment 1 [0, ppqAtJump), segment 2 from jumpTo on.
             const double ppqAtJump = static_cast<double> (jumpSample) / spp;
             std::multiset<std::tuple<long long, int, int>> canonical;
-            std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> out {};
             long long ambiguous = 0;
+            std::vector<kit::ScheduledHit> barOut;
             const auto add = [&] (double from, double to, long long base, double origin) {
-                for (std::int64_t g = 0; g * kit::stepLength (pattern) < to + 1.0; ++g)
+                for (std::int64_t bar = 0; static_cast<double> (bar * pattern.barTicks()) / 960.0 < to + 1.0; ++bar)
                 {
-                    const int n = kit::stepHits (pattern, ctx, g, out.data());
-                    for (int k = 0; k < n; ++k)
+                    barOut.clear();
+                    testutil::barHits (pattern.bar (static_cast<std::uint32_t> (bar % pattern.bars)), ctx, bar, bar * pattern.barTicks(), barOut);
+                    for (const auto& h : barOut)
                     {
-                        const auto& h = out[static_cast<std::size_t> (k)];
                         if (h.ppq < from || h.ppq >= to)
                             continue;
                         const double exact = (h.ppq - origin) * spp;
@@ -677,6 +765,604 @@ void testSchedulerEqualsCanonical()
         }
 }
 
+//==============================================================================
+// DRM-06: mute gates a pad's running voices within ~3 ms and the gate opens
+// again; the per-pad meter reports the post-fader peak; soundOffSeen.
+void testMixerGateAndMeters()
+{
+    auto settings = kit::legacyKit();
+    settings.pads[7].decay = 4.0f;   // cymbal, long
+    kit::KitEngine engine;
+    engine.prepare (48000.0);
+    std::vector<float> l (480), r (480);
+    kit::Transport tr;
+    kit::Outputs out { l.data(), r.data(), nullptr };
+    const auto e = note (0, 49, 120);
+    engine.process (settings, out, 480, &e, 1, tr, nullptr, nullptr, false);
+    float peak = 0.0f;
+    for (int i = 0; i < 480; ++i)
+        peak = std::max (peak, std::max (std::abs (l[static_cast<std::size_t> (i)]), std::abs (r[static_cast<std::size_t> (i)])));
+    check (peak > 1.0e-3f && std::abs (engine.padPeak (7) - peak) < 1.0e-6f, "the pad meter equals the pad's output peak");
+    bool others = true;
+    for (int pad = 0; pad < kit::padCount; ++pad)
+        others = others && (pad == 7 || engine.padPeak (pad) <= 0.0f);
+    check (others, "silent pads meter zero");
+    settings.pads[7].mute = true;
+    engine.process (settings, out, 480, nullptr, 0, tr, nullptr, nullptr, false);   // 10 ms
+    float tail = 0.0f;
+    for (int i = 240; i < 480; ++i)
+        tail = std::max (tail, std::abs (l[static_cast<std::size_t> (i)]));
+    check (tail <= 0.0f && std::abs (l[0]) > 0.0f, "mute fades the running voice out within 5 ms");
+    check (engine.activeVoices() == 1, "the muted voice keeps running silently");
+    settings.pads[7].mute = false;
+    engine.process (settings, out, 480, nullptr, 0, tr, nullptr, nullptr, false);
+    check (std::abs (l[479]) > 0.0f || std::abs (r[479]) > 0.0f, "unmute opens the gate again");
+    check (! engine.soundOffSeen(), "no sound-off seen");
+    kit::Event cc;
+    cc.size = 3;
+    cc.bytes[0] = 0xB0;
+    cc.bytes[1] = 120;
+    engine.process (settings, out, 480, &cc, 1, tr, nullptr, nullptr, false);
+    check (engine.soundOffSeen() && engine.activeVoices() == 0, "CC120 is reported and stops the voices");
+}
+
+//==============================================================================
+// DRM-05: the song rule and the song scheduler. A 64-bar song whose bars
+// have different grids (16/32/64), seeds and content, with a loop region:
+// songBarAt maps bars; the engine plays exactly the hits of cellHits, once
+// each, at their samples, across block sizes and a seek back.
+void testSongScheduler()
+{
+    std::mt19937 random (77);
+    constexpr int bars = 64;
+    std::vector<std::vector<kit::PatternStep>> cells (bars);
+    std::array<kit::SongBarView, bars> views {};
+    for (int b = 0; b < bars; ++b)
+    {
+        if (b % 9 == 8)
+            continue;   // empty bar
+        const int steps = b % 3 == 0 ? 64 : (b % 3 == 1 ? 32 : 16);   // bar 64 (index 63): 64 steps
+        auto& bc = cells[static_cast<std::size_t> (b)];
+        bc.resize (16 * kit::slotStride);
+        for (int lane = 0; lane < 16; ++lane)
+            for (int st = 0; st < steps; ++st)
+                if (random() % 7 == 0)
+                {
+                    auto& c = bc[static_cast<std::size_t> (lane * kit::slotStride + testutil::slotOfStep (steps, st))];
+                    c.on = true;
+                    c.velocity = static_cast<std::uint8_t> (1 + random() % 127);
+                    c.accent = random() % 4 == 0;
+                    c.probability = static_cast<std::uint8_t> (random() % 3 == 0 ? 1 + random() % 100 : 100);
+                    c.ratchet = static_cast<std::uint8_t> (random() % 4 == 0 ? 1 + random() % 8 : 1);
+                    c.microTicks = static_cast<std::int16_t> (
+                        random() % 3 == 0 ? kit::percentToTicks (static_cast<int> (random() % 101) - 50, 3840 / steps) : 0);
+                }
+        auto& v = views[static_cast<std::size_t> (b)];
+        v.cells = bc.data();
+        v.laneStride = kit::slotStride;
+        v.resolution = testutil::resolutionOfSteps (steps);
+        v.seed = static_cast<std::uint32_t> (1000 + b);
+    }
+    // A unique hit on the last step of the last bar.
+    cells[63][15 * 64 + 63] = { true, false, 99 };
+    cells[2][0].on = true;          // bar 3 (16 steps), lane 1, step 0: half a step before its bar line
+    cells[2][0].velocity = 77;
+    cells[2][0].microTicks = -120;
+    cells[2][0].probability = 100;
+    cells[2][0].ratchet = 1;
+    kit::Song song { bars, views.data(), 0, 0 };
+    check (kit::songBarAt (song, 0) == 0 && kit::songBarAt (song, 63) == 63 && kit::songBarAt (song, 64) == 0 && kit::songBarAt (song, 130) == 2,
+           "song bars wrap at the song length");
+    kit::Song looped { bars, views.data(), 8, 4 };
+    check (kit::songBarAt (looped, 0) == 0 && kit::songBarAt (looped, 7) == 7 && kit::songBarAt (looped, 8) == 8 && kit::songBarAt (looped, 11) == 11
+               && kit::songBarAt (looped, 12) == 8 && kit::songBarAt (looped, 21) == 9,
+           "a loop region plays the bars before it once, then repeats [start, start + length) from its first bar");
+
+    auto settings = kit::legacyKit();
+    settings.sequencerMode = 1;
+    settings.swing = 0.22f;
+    settings.accent = 0.6f;
+    settings.pads[3].laneOn = false;
+    kit::StepContext ctx;
+    ctx.swing = settings.swing;
+    ctx.accent = settings.accent;
+    ctx.laneMask = 0xffffu & ~(1u << 3);
+    std::array<kit::ScheduledHit, kit::padCount * kit::maxRatchet> out {};
+    // The final-bar hit exists in the rule, at the last 1/64 of bar 64.
+    {
+        const int n = kit::cellHits (views[63], ctx, 63, 63 * 3840, 15, 3, 15, out.data());
+        bool found = false;
+        for (int k = 0; k < n; ++k)
+            found = found || (out[static_cast<std::size_t> (k)].pad == 15 && out[static_cast<std::size_t> (k)].velocity == 99);
+        check (found, "the unique hit of the final bar is in the song rule");
+    }
+    const double bpm = 174.0;
+    for (const double rate : { 44100.0, 96000.0 })
+        for (const int block : { 64, 333, 512 })
+        {
+            kit::KitEngine engine;
+            engine.prepare (rate);
+            const double spp = 60.0 * rate / bpm;
+            std::multiset<std::tuple<long long, int, int>> played;
+            kit::Transport tr;
+            tr.playing = tr.hasTempo = tr.hasPpq = true;
+            tr.bpm = bpm;
+            std::vector<float> l (static_cast<std::size_t> (block)), r (static_cast<std::size_t> (block));
+            long long sample = 0;
+            const double end = 4.0 * bars + 2.0;   // the whole song and into the wrap
+            for (double ppq = 0.0; ppq < end; ppq += block / spp, sample += block)
+            {
+                tr.ppq = ppq;
+                kit::Outputs o { l.data(), r.data(), nullptr };
+                engine.process (settings, o, static_cast<std::uint32_t> (block), nullptr, 0, tr, nullptr, nullptr, false,
+                                kit::KitEngine::Release::none, &song);
+                for (int i = 0; i < engine.scheduledCount(); ++i)
+                {
+                    std::uint32_t off;
+                    std::uint8_t pad, vel;
+                    engine.scheduled (i, off, pad, vel);
+                    played.insert ({ sample + off, pad, vel });
+                }
+            }
+            std::multiset<std::tuple<long long, int, int>> canonical;
+            long long edge = 0;
+            const double playedEnd = static_cast<double> (sample) / spp;
+            std::vector<kit::ScheduledHit> barOut;
+            for (std::int64_t bar = 0; bar <= bars; ++bar)
+            {
+                barOut.clear();
+                testutil::barHits (views[kit::songBarAt (song, bar)], ctx, bar, bar * 3840, barOut);
+                {
+                    for (const auto& h : barOut)
+                    {
+                        if (h.ppq < 0.0 || h.ppq >= playedEnd)
+                            continue;
+                        if (h.ppq < 2.0 / spp || playedEnd - h.ppq < 2.0 / spp)
+                        {
+                            ++edge;
+                            continue;
+                        }
+                        canonical.insert ({ static_cast<long long> (std::ceil (h.ppq * spp - 1e-6)), h.pad, h.velocity });
+                    }
+                }
+            }
+            std::size_t matched = 0;
+            auto pool = played;
+            for (const auto& c : canonical)
+                for (long long d : { 0LL, -1LL, 1LL })
+                {
+                    auto it = pool.find ({ std::get<0> (c) + d, std::get<1> (c), std::get<2> (c) });
+                    if (it != pool.end())
+                    {
+                        pool.erase (it);
+                        ++matched;
+                        break;
+                    }
+                }
+            const std::string label = "song " + std::to_string (static_cast<int> (rate)) + " Hz / " + std::to_string (block);
+            check (canonical.size() > 3000, label + ": the song has hits (" + std::to_string (canonical.size()) + ")");
+            check (matched == canonical.size() && static_cast<long long> (pool.size()) <= edge,
+                   label + ": every song hit played once at its sample (" + std::to_string (matched) + " / "
+                       + std::to_string (canonical.size()) + ", " + std::to_string (pool.size()) + " extra)");
+            bool lastBar = false;
+            for (const auto& h : played)
+                lastBar = lastBar || (std::get<1> (h) == 15 && std::get<2> (h) == 99
+                                      && std::get<0> (h) > static_cast<long long> (255.9 * spp) && std::get<0> (h) < static_cast<long long> (256.0 * spp) + 2);
+            check (lastBar, label + ": the final bar's unique hit plays in the last 1/64 of bar 64");
+        }
+    // A seek back replays; switching from the song to a pattern and back is safe.
+    {
+        kit::KitEngine engine;
+        engine.prepare (48000.0);
+        kit::Transport tr;
+        tr.playing = tr.hasTempo = tr.hasPpq = true;
+        tr.bpm = bpm;
+        std::vector<float> l (512), r (512);
+        kit::Outputs o { l.data(), r.data(), nullptr };
+        const double spp = 60.0 * 48000.0 / bpm;
+        const auto count = [&] (double from, double to, const kit::Song* sg, const kit::Pattern* pt) {
+            int hits = 0;
+            for (double ppq = from; ppq < to; ppq += 512 / spp)
+            {
+                tr.ppq = ppq;
+                engine.process (settings, o, 512, nullptr, 0, tr, pt, nullptr, false, kit::KitEngine::Release::none, sg);
+                hits += engine.scheduledCount();
+            }
+            return hits;
+        };
+        const int first = count (0.0, 16.0, &song, nullptr);
+        const int again = count (0.0, 16.0, &song, nullptr);
+        check (first > 50 && first == again, "a seek back to 0 replays the same hits (" + std::to_string (first) + " / " + std::to_string (again) + ")");
+        auto pg = std::make_unique<testutil::GridPattern> (16, 16, 1, 1);
+        pg->at (0, 0, 0) = { true, false, 100 };
+        const kit::Pattern& pattern = pg->pattern;
+        const int inPattern = count (16.0, 24.0, nullptr, &pattern);
+        const int back = count (24.0, 32.0, &song, nullptr);
+        check (inPattern == 2 && back > 0, "switching between song and pattern keeps playing without doubles");
+    }
+}
+
+// Review 6795902654: the loop region is entered at its first bar when the
+// host reaches it (bars before the region play once, in order), and repeats
+// in order for any start and length. Every bar has one hit that names it.
+void testSongLoopRegion()
+{
+    constexpr int bars = 16;
+    std::vector<std::vector<kit::PatternStep>> cells (bars, std::vector<kit::PatternStep> (16 * kit::slotStride));
+    std::array<kit::SongBarView, bars> views {};
+    for (int b = 0; b < bars; ++b)
+    {
+        auto& c = cells[static_cast<std::size_t> (b)][static_cast<std::size_t> ((b % 16) * kit::slotStride)];   // lane b, step 0
+        c.on = true;
+        c.velocity = static_cast<std::uint8_t> (20 + b);
+        auto& v = views[static_cast<std::size_t> (b)];
+        v.cells = cells[static_cast<std::size_t> (b)].data();
+        v.laneStride = kit::slotStride;
+        v.seed = 1;
+    }
+    const auto expect = [&] (std::uint32_t start, std::uint32_t length, std::initializer_list<int> sequence, const std::string& what) {
+        kit::Song song { bars, views.data(), start, length };
+        std::int64_t absolute = 0;
+        bool ok = true;
+        std::string got;
+        for (const int bar : sequence)
+        {
+            got += std::to_string (kit::songBarAt (song, absolute)) + " ";
+            ok = ok && kit::songBarAt (song, absolute) == static_cast<std::uint32_t> (bar);
+            ++absolute;
+        }
+        check (ok, "loop region " + what + ": bars " + got);
+    };
+    expect (4, 3, { 0, 1, 2, 3, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4 }, "start 5, length 3");
+    expect (4, 4, { 0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 4 }, "start 5, length 4");
+    expect (0, 4, { 0, 1, 2, 3, 0, 1, 2, 3, 0 }, "start 1, length 4");
+    expect (13, 3, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 13, 14, 15, 13 }, "the last three bars");
+    expect (15, 1, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 15 }, "one bar");
+    expect (0, 0, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1 }, "disabled: the song repeats");
+    {
+        kit::Song song { bars, views.data(), 4, 3 };
+        check (kit::songBarAt (song, 30) == 6 && kit::songBarAt (song, 31) == 4 && kit::songBarAt (song, 1) == 1 && kit::songBarAt (song, 1000) == 4,
+               "loop region: a seek far into the loop, and back before it, uses the same mapping");
+    }
+
+    // The engine plays that mapping: which bar's hit sounds at each absolute bar.
+    auto settings = kit::legacyKit();
+    settings.sequencerMode = 1;
+    const double rate = 48000.0, bpm = 480.0;   // one bar = 0.5 s = 24000 frames
+    const auto play = [&] (const kit::Song& song, std::int64_t fromBar, std::int64_t toBar) {
+        kit::KitEngine engine;
+        engine.prepare (rate);
+        std::vector<float> left (512), right (512);
+        std::vector<int> sequence;
+        const double perFrame = bpm / (60.0 * rate);
+        for (double ppq = 4.0 * static_cast<double> (fromBar); ppq < 4.0 * static_cast<double> (toBar); ppq += 512 * perFrame)
+        {
+            kit::Transport transport;
+            transport.playing = transport.hasTempo = transport.hasPpq = true;
+            transport.bpm = bpm;
+            transport.ppq = ppq;
+            engine.process (settings, { left.data(), right.data(), nullptr }, 512, nullptr, 0, transport, nullptr, nullptr, false,
+                            kit::KitEngine::Release::none, &song);
+            for (int i = 0; i < engine.scheduledCount(); ++i)
+            {
+                std::uint32_t offset = 0;
+                std::uint8_t pad = 0, velocity = 0;
+                engine.scheduled (i, offset, pad, velocity);
+                if (ppq + offset * perFrame < 4.0 * static_cast<double> (toBar) - 1.0e-6)   // the last block ends past toBar
+                    sequence.push_back (velocity - 20);   // the bar that hit belongs to
+            }
+        }
+        return sequence;
+    };
+    const auto text = [] (const std::vector<int>& v) {
+        std::string s;
+        for (const int x : v)
+            s += std::to_string (x) + " ";
+        return s;
+    };
+    {
+        const kit::Song song { bars, views.data(), 4, 3 };
+        const auto played = play (song, 0, 12);
+        check (played == std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 4, 5, 6, 4, 5 }, "loop region: the engine plays the intro once, then bars 5-7 in order: " + text (played));
+        const auto into = play (song, 9, 12);   // a seek into the loop
+        check (into == std::vector<int> { 6, 4, 5 }, "loop region: playback started inside the loop is in phase: " + text (into));
+        const auto before = play (song, 2, 6);  // a seek back before the loop
+        check (before == std::vector<int> { 2, 3, 4, 5 }, "loop region: playback started before the loop enters it at its first bar: " + text (before));
+    }
+    {
+        const kit::Song song { bars, views.data(), 4, 4 };
+        const auto played = play (song, 0, 13);
+        check (played == std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 4 }, "loop region: start 5, length 4 in the engine: " + text (played));
+    }
+    {
+        const kit::Song song { bars, views.data(), 0, 0 };
+        const auto played = play (song, 14, 18);
+        check (played == std::vector<int> { 14, 15, 0, 1 }, "loop region: without a loop the song repeats after its last bar: " + text (played));
+    }
+}
+
+// PR 137 §10.4 / §10.5b (host): the sequencer plays each pattern bar from
+// the host's bar line; a longer bar is cut at the next line, a shorter one
+// rests until it; without a bar position bars are counted from 0; a step
+// back of less than a tick is jitter, more replays; a meter change between
+// bars only changes the cut. The patterns are never changed, and the export
+// (PatternExport) takes no host input at all.
+void testHostBars()
+{
+    auto settings = kit::legacyKit();
+    settings.sequencerMode = 1;
+    const double rate = 48000.0, bpm = 120.0;   // one quarter = 24000 frames
+    const double spq = 60.0 * rate / bpm;
+    // Plays [fromPpq, toPpq) in 480-frame blocks with `setup` filling the
+    // host fields per block; returns (ppq of each hit, pad) in order.
+    using Hits = std::vector<std::pair<double, int>>;
+    const auto play = [&] (const kit::Pattern& pattern, double fromPpq, double toPpq,
+                           const std::function<void (kit::Transport&)>& setup) {
+        kit::KitEngine engine;
+        engine.prepare (rate);
+        std::vector<float> l (480), r (480);
+        Hits hits;
+        for (double ppq = fromPpq; ppq < toPpq - 1.0e-9; ppq += 480.0 / spq)
+        {
+            kit::Transport tr;
+            tr.playing = tr.hasTempo = tr.hasPpq = true;
+            tr.bpm = bpm;
+            tr.ppq = ppq;
+            setup (tr);
+            engine.process (settings, { l.data(), r.data(), nullptr }, 480, nullptr, 0, tr, &pattern, nullptr, false);
+            for (int i = 0; i < engine.scheduledCount(); ++i)
+            {
+                std::uint32_t off;
+                std::uint8_t pad, vel;
+                engine.scheduled (i, off, pad, vel);
+                hits.emplace_back (ppq + off / spq, pad);
+            }
+        }
+        return hits;
+    };
+    const auto near = [] (const Hits& got, std::initializer_list<double> want) {
+        if (got.size() != want.size())
+            return false;
+        std::size_t i = 0;
+        for (const double w : want)
+            if (std::abs (got[i++].first - w) > 2.0 / 24000.0)
+                return false;
+        return true;
+    };
+    const auto text = [] (const Hits& h) {
+        std::string t;
+        for (const auto& [ppq, pad] : h)
+            t += std::to_string (ppq).substr (0, 6) + " ";
+        return t;
+    };
+    // A 1-bar 4/4 pattern: lane 1 on every quarter.
+    auto four = std::make_unique<testutil::GridPattern> (16, 16, 1);
+    for (int b = 0; b < 4; ++b)
+        four->at (0, 0, 4 * b) = { true, false, 100 };
+    const auto host = [] (int numerator, int denominator, double barStart, std::int64_t barCount) {
+        return [=] (kit::Transport& tr) {
+            tr.hasSignature = tr.hasBarStart = tr.hasBarCount = true;
+            tr.numerator = numerator;
+            tr.denominator = denominator;
+            tr.barStartPpq = barStart;
+            tr.barCount = barCount;
+        };
+    };
+    // Host 4/4 with bar positions = counted bars.
+    {
+        const auto counted = play (four->pattern, 0.0, 8.0, [] (kit::Transport&) {});
+        const auto hosted = play (four->pattern, 0.0, 8.0, [&] (kit::Transport& tr) {
+            const double bar = std::floor (tr.ppq / 4.0);
+            host (4, 4, bar * 4.0, static_cast<std::int64_t> (bar)) (tr);
+        });
+        check (near (counted, { 0, 1, 2, 3, 4, 5, 6, 7 }) && counted == hosted, "host bars: 4/4 bar lines from the host equal the counted bars");
+    }
+    // Host 3/4: each 4/4 pattern bar starts at the host's bar line and is cut after 3 beats.
+    {
+        const auto got = play (four->pattern, 0.0, 9.0, [&] (kit::Transport& tr) {
+            const double bar = std::floor (tr.ppq / 3.0);
+            host (3, 4, bar * 3.0, static_cast<std::int64_t> (bar)) (tr);
+        });
+        check (near (got, { 0, 1, 2, 3, 4, 5, 6, 7, 8 }), "host 3/4: a 4/4 pattern bar is cut at the next bar line: " + text (got));
+    }
+    // A 3/4 pattern in a 4/4 host: plays 3 beats from each bar line, rests on beat 4.
+    {
+        auto three = std::make_unique<testutil::GridPattern> (16, 16, 1);
+        three->pattern.signature = { 3, 4 };
+        for (int b = 0; b < 3; ++b)
+            three->cells[static_cast<std::size_t> (timing::BarTiming { { 3, 4 }, timing::Resolution::sixteenth, 0 }.slot (b, 0))] = { true, false, 100 };
+        const auto got = play (three->pattern, 0.0, 8.0, [&] (kit::Transport& tr) {
+            const double bar = std::floor (tr.ppq / 4.0);
+            host (4, 4, bar * 4.0, static_cast<std::int64_t> (bar)) (tr);
+        });
+        check (near (got, { 0, 1, 2, 4, 5, 6 }), "host 4/4: a 3/4 pattern bar rests until the next bar line: " + text (got));
+        const auto counted = play (three->pattern, 0.0, 6.0, [] (kit::Transport&) {});
+        check (near (counted, { 0, 1, 2, 3, 4, 5 }), "no host bars: a 3/4 pattern counts its own 3/4 bars from 0: " + text (counted));
+    }
+    // Bar lines off the counted grid (the host's bar 5 starts at ppq 1.5);
+    // the pattern bar is the host's bar index modulo the bar count.
+    {
+        auto two = std::make_unique<testutil::GridPattern> (16, 16, 2);
+        two->at (0, 0, 0) = { true, false, 100 };   // bar A: lane 1
+        two->at (1, 1, 0) = { true, false, 100 };   // bar B: lane 2
+        const auto got = play (two->pattern, 1.5, 9.5, [&] (kit::Transport& tr) {
+            const double bar = std::floor ((tr.ppq - 1.5) / 4.0);
+            host (4, 4, 1.5 + bar * 4.0, 5 + static_cast<std::int64_t> (bar)) (tr);
+        });
+        check (near (got, { 1.5, 5.5 }) && got[0].second == 1 && got[1].second == 0,
+               "host bars: a bar line at ppq 1.5 with the host's bar 5 plays pattern bar B there, then bar A: " + text (got));
+    }
+    // A meter change: 4/4, 4/4, then 3/4 bars; the third pattern bar is cut.
+    {
+        const auto got = play (four->pattern, 0.0, 11.0, [&] (kit::Transport& tr) {
+            if (tr.ppq < 8.0)
+                host (4, 4, std::floor (tr.ppq / 4.0) * 4.0, static_cast<std::int64_t> (tr.ppq / 4.0)) (tr);
+            else
+                host (3, 4, 8.0 + std::floor ((tr.ppq - 8.0) / 3.0) * 3.0, 2 + static_cast<std::int64_t> ((tr.ppq - 8.0) / 3.0)) (tr);
+        });
+        bool beat4 = false;
+        for (const auto& h : got)
+            beat4 = beat4 || std::abs (h.first - 11.0) < 1.0e-3;
+        check (near (got, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 }) && ! beat4, "host meter change 4/4 -> 3/4: the next bar is cut: " + text (got));
+    }
+    // Jitter: block 51 reports a start a little before the previous block's
+    // (ppq 1.0, where a hit played): half a tick back is jitter and replays
+    // nothing; two ticks back is a jump and replays that hit.
+    {
+        const auto replay = [&] (double back) {
+            kit::KitEngine engine;
+            engine.prepare (rate);
+            std::vector<float> l (480), r (480);
+            int hits = 0;
+            for (int b = 0; b < 120; ++b)
+            {
+                kit::Transport tr;
+                tr.playing = tr.hasTempo = tr.hasPpq = true;
+                tr.bpm = bpm;
+                tr.ppq = b == 51 ? 1.0 - back : b * 480.0 / spq;
+                engine.process (settings, { l.data(), r.data(), nullptr }, 480, nullptr, 0, tr, &four->pattern, nullptr, false);
+                hits += engine.scheduledCount();
+            }
+            return hits;
+        };
+        const int clean = replay (-480.0 / spq);   // block 51 at its own position
+        check (clean == 3, "jitter: three quarters in 2.4 quarters (" + std::to_string (clean) + ")");
+        check (replay (0.5 / 960.0) == clean, "jitter: a step back of half a tick replays nothing");
+        check (replay (2.0 / 960.0) == clean + 1, "a step back of two ticks is a jump: the hit there plays again");
+    }
+}
+
+// TL decision 6882837766 (swing option A, legacy sample rule): for swing 0,
+// 0.21 and 0.5, grids of 16ths/32nds/64ths in 4/4, 3/4 and 6/8 (with
+// triplet or duplet beats where the grid allows them), the scheduler plays
+// every canonical hit once on the sample timing::sampleOffset gives, at
+// 44.1/48/96 kHz; tuplet cells are never swung.
+void testSwingMatrix()
+{
+    std::mt19937 random (612);
+    struct Grid { timing::TimeSignature meter; timing::Resolution resolution; };
+    const Grid grids[] = { { { 4, 4 }, timing::Resolution::sixteenth }, { { 4, 4 }, timing::Resolution::thirtySecond },
+                           { { 4, 4 }, timing::Resolution::sixtyFourth }, { { 3, 4 }, timing::Resolution::sixteenth },
+                           { { 6, 8 }, timing::Resolution::sixteenth }, { { 6, 8 }, timing::Resolution::thirtySecond } };
+    int configs = 0, failures = 0, swungTuplets = 0;
+    std::string first;
+    for (const auto& grid : grids)
+        for (const double swing : { 0.0, 0.21, 0.5 })
+        {
+            kit::PatternCells cells {};
+            std::array<std::uint16_t, kit::padCount * kit::maxPatternBars> masks {};
+            kit::Pattern p;
+            p.lanes = 16;
+            p.bars = 2;
+            p.signature = grid.meter;
+            p.resolution = grid.resolution;
+            p.cells = cells.data();
+            p.masks = masks.data();
+            p.seed = 77;
+            const bool tuplets = timing::capacity (grid.meter, grid.resolution).availability == timing::Availability::full;
+            for (int lane = 0; lane < 16; ++lane)
+                for (int bar = 0; bar < 2; ++bar)
+                {
+                    auto& mask = masks[static_cast<std::size_t> (lane * kit::maxPatternBars + bar)];
+                    const timing::BarTiming base { grid.meter, grid.resolution, 0 };
+                    mask = tuplets ? static_cast<std::uint16_t> (random() & ((1u << base.beats()) - 1u)) : 0;
+                    const timing::BarTiming t { grid.meter, grid.resolution, mask };
+                    for (int beat = 0; beat < t.beats(); ++beat)
+                        for (int cell = 0; cell < t.cells (beat); ++cell)
+                        {
+                            if (random() % 4 != 0)
+                                continue;
+                            auto& c = cells[static_cast<std::size_t> ((lane * kit::maxPatternBars + bar) * kit::slotStride + t.slot (beat, cell))];
+                            c = { true, false, static_cast<std::uint8_t> (1 + random() % 127) };
+                            c.ratchet = static_cast<std::uint8_t> (random() % 5 == 0 ? 1 + random() % 8 : 1);
+                            const int half = t.cellTicks (beat) / 2;
+                            c.microTicks = static_cast<std::int16_t> (random() % 4 == 0 ? static_cast<int> (random() % static_cast<unsigned> (2 * half + 1)) - half : 0);
+                        }
+                }
+            // Canonical hits, and no swing on tuplet cells.
+            kit::StepContext ctx;
+            ctx.swing = swing;
+            ctx.laneMask = 0xffffu;
+            std::vector<kit::ScheduledHit> canonical;
+            const auto barTicks = p.barTicks();
+            for (std::int64_t bar = 0; bar < 4; ++bar)
+            {
+                const auto view = p.bar (static_cast<std::uint32_t> (bar % 2));
+                testutil::barHits (view, ctx, bar, bar * barTicks, canonical);
+                for (int lane = 0; lane < 16; ++lane)
+                {
+                    const auto t = view.timing (lane);
+                    for (int beat = 0; beat < t.beats(); ++beat)
+                        if (((t.alternativeBeats >> beat) & 1u) != 0)
+                            for (int cell = 0; cell < t.cells (beat); ++cell)
+                                swungTuplets += timing::swingDelay (t, beat, cell, swing) != 0.0 ? 1 : 0;
+                }
+            }
+            for (const double rate : { 44100.0, 48000.0, 96000.0 })
+            {
+                ++configs;
+                const double bpm = 131.0, spq = 60.0 * rate / bpm;
+                auto settings = kit::legacyKit();
+                settings.sequencerMode = 1;
+                settings.swing = static_cast<float> (swing);
+                settings.accent = 0.5f;
+                ctx.swing = settings.swing;   // the engine reads swing as a float
+                std::vector<kit::ScheduledHit> expected;
+                for (std::int64_t bar = 0; bar <= 4; ++bar)   // bar 5's first cells may sound early (negative micro)
+                    testutil::barHits (p.bar (static_cast<std::uint32_t> (bar % 2)), ctx, bar, bar * barTicks, expected);
+                std::multiset<std::tuple<long long, int, int>> want, got;
+                const double end = 4.0 * barTicks / 960.0;
+                for (const auto& h : expected)
+                    if (h.ppq >= 0.0 && h.ppq < end - 0.01)
+                        want.insert ({ timing::sampleOffset (h.ppq, 0.0, spq), h.pad, h.velocity });
+                kit::KitEngine engine;
+                engine.prepare (rate);
+                std::vector<float> l (333), r (333);
+                long long sample = 0;
+                for (double ppq = 0.0; ppq < end - 0.01; ppq = static_cast<double> (sample) / spq)
+                {
+                    kit::Transport tr;
+                    tr.playing = tr.hasTempo = tr.hasPpq = true;
+                    tr.bpm = bpm;
+                    tr.ppq = ppq;
+                    engine.process (settings, { l.data(), r.data(), nullptr }, 333, nullptr, 0, tr, &p, nullptr, false);
+                    for (int i = 0; i < engine.scheduledCount(); ++i)
+                    {
+                        std::uint32_t off;
+                        std::uint8_t pad, vel;
+                        engine.scheduled (i, off, pad, vel);
+                        if (static_cast<double> (sample + off) / spq < end - 0.01)
+                            got.insert ({ sample + off, pad, vel });
+                    }
+                    sample += 333;
+                }
+                // Block-start rounding may move a hit by one sample.
+                std::size_t matched = 0;
+                auto pool = got;
+                for (const auto& w : want)
+                    for (long long d : { 0LL, -1LL, 1LL })
+                        if (auto it = pool.find ({ std::get<0> (w) + d, std::get<1> (w), std::get<2> (w) }); it != pool.end())
+                        {
+                            pool.erase (it);
+                            ++matched;
+                            break;
+                        }
+                if (matched != want.size() || ! pool.empty() || want.size() < 20)
+                {
+                    ++failures;
+                    if (first.empty())
+                        first = std::to_string (grid.meter.numerator) + "/" + std::to_string (grid.meter.denominator) + " res "
+                              + std::to_string (static_cast<int> (grid.resolution)) + " swing " + std::to_string (swing) + " at "
+                              + std::to_string (static_cast<int> (rate)) + ": " + std::to_string (matched) + " / " + std::to_string (want.size())
+                              + ", " + std::to_string (pool.size()) + " extra";
+                }
+            }
+        }
+    check (failures == 0, "swing matrix: the scheduler plays every canonical hit once on its sample (" + std::to_string (configs) + " configurations"
+                              + (first.empty() ? "" : ", first failure: " + first) + ")");
+    check (swungTuplets == 0, "swing matrix: no tuplet cell is swung");
+}
+
 int main()
 {
     testModels();
@@ -686,6 +1372,11 @@ int main()
     testBlockInvariance();
     testInvalidSettings();
     testRealtime();
+    testMixerGateAndMeters();
+    testSongScheduler();
+    testSongLoopRegion();
+    testHostBars();
+    testSwingMatrix();
     testStepRules();
     testSchedulerEqualsCanonical();
     if (failures == 0)

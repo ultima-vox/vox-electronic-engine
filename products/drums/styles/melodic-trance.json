@@ -1,0 +1,187 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "3d5eecb1-dc83-448a-af83-a05251d6783d",
+ "key": "melodic-trance",
+ "name": "Melodic Trance",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Trance",
+  "tempo": {
+   "min": 132,
+   "max": 138
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.6,
+  "groove": 0.5,
+  "syncopation": 0.3,
+  "swing": 0,
+  "humanize": 0.1,
+  "complexity": 0.4,
+  "fills": 0.6,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "clap",
+   "closedHat",
+   "openHat"
+  ],
+  "optional": [
+   "snare",
+   "tom1",
+   "rim",
+   "crash",
+   "perc1",
+   "perc2",
+   "perc3",
+   "perc4",
+   "perc5",
+   "ride",
+   "tom2",
+   "tom3"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    13
+   ],
+   "when": [
+    "density > 0.1"
+   ],
+   "velocity": 0.75
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "velocity": 0.7
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    2,
+    4,
+    5,
+    6,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    16
+   ],
+   "chance": "0.3 + 0.6 * density",
+   "velocity": 0.45
+  },
+  {
+   "part": "perc1",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.2 + 0.5 * density",
+   "velocity": 0.35
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.7
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "snare"
+  ],
+  "ratchet": 2,
+  "maxLength": 4,
+  "maxVelocity": 0.75
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "clap",
+   "openHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "openHat",
+   "always": [
+    3,
+    7,
+    11,
+    15
+   ]
+  }
+ ]
+}

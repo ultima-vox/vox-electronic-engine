@@ -1,0 +1,24 @@
+{
+  "format": "vox-drums-style", "version": 1,
+  "id": "b9a2e70e-6f37-4dc2-ba52-ce5f61fc770b", "key": "techno", "name": "Techno",
+  "meta": { "author": "Ultima Vox", "group": "House & Techno", "tempo": { "min": 125, "max": 135 } },
+  "meters": ["4/4"],
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.0, "humanize": 0.15 },
+  "parts": { "required": ["kick", "closedHat"], "optional": ["clap", "openHat", "tom1", "rim", "crash", "perc1"] },
+  "rules": [
+    { "part": "kick", "at": [1, 5, 9, 13], "velocity": 1.0, "accent": true },
+    { "part": "closedHat", "at": [3, 7, 11, 15], "velocity": 0.85, "accent": true },
+    { "part": "closedHat", "at": [1, 5, 9, 13], "velocity": 0.55 },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "when": ["density > 0.35"], "velocity": 0.4 },
+    { "part": "clap", "at": [13], "when": ["density > 0.25"], "velocity": 0.85 },
+    { "part": "clap", "at": [5], "when": ["density > 0.6"], "velocity": 0.8 },
+    { "part": "tom1", "at": [2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16], "kind": "ghost", "chance": "0.1 + 0.45 * density * (0.4 + syncopation)", "velocity": 0.5 },
+    { "part": "rim", "at": [4, 10, 15], "kind": "ghost", "chance": "0.25 + 0.6 * syncopation", "velocity": 0.6 },
+    { "part": "perc1", "at": [2, 6, 10, 14], "kind": "ghost", "chance": "0.1 + 0.5 * complexity", "velocity": 0.5 },
+    { "part": "openHat", "at": [15], "kind": "ghost", "chance": "0.15 + 0.4 * density", "velocity": 0.65 },
+    { "part": "crash", "at": [1], "bars": "first", "kind": "ghost", "chance": "0.3 + 0.4 * density", "velocity": 0.7 }
+  ],
+  "fill": { "cycle": ["tom1", "rim"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true }
+}

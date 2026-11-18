@@ -423,9 +423,9 @@ void testFactoryPatterns()
         const char* name = nullptr;
         module->content->getFactoryPattern (drumsId, static_cast<std::uint32_t> (index), &name, &pattern);
         std::array<vox::drums::kit::PatternStep, 8 * 4 * 16> cells {};
-        const auto kitPattern = vox::drums::kit::factoryPattern (index, cells);
-        bool equal = std::string (name) == vox::drums::kit::factoryPatternName (index) && kitPattern.lanes == pattern.laneCount
-                  && kitPattern.steps == pattern.stepsPerBar && kitPattern.bars == pattern.barCount && kitPattern.timing == pattern.timing;
+        vox::drums::kit::factoryPattern (index, cells);   // the legacy layout: 8 lanes x 4 bars x 16 steps, 4/4
+        bool equal = std::string (name) == vox::drums::kit::factoryPatternName (index) && pattern.laneCount == 8
+                  && pattern.stepsPerBar == 16 && pattern.barCount == 4 && pattern.timing == 0;
         for (std::size_t i = 0; i < cells.size(); ++i)
             equal = equal && cells[i].on == ((refCells[i].flags & VOX_STEP_ON) != 0)
                  && (! cells[i].on || (cells[i].accent == ((refCells[i].flags & VOX_STEP_ACCENT) != 0) && cells[i].velocity == refCells[i].velocity));

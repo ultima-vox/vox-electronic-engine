@@ -1,0 +1,69 @@
+name: choose-windows-runner
+
+# Lightweight selector shared by the standalone-suite and legacy-build workflows.
+# Read-only fine-grained token: repository Administration (read).
+# Without the optional token, or on API failure, use windows-2022; never queue
+# indefinitely merely because runner status could not be checked.
+on:
+  workflow_call:
+    secrets:
+      CI_RUNNER_STATUS_TOKEN:
+        required: false
+    outputs:
+      runs_on:
+        description: JSON-compatible runner target for fromJSON()
+        value: ${{ jobs.choose.outputs.runs_on }}
+      kind:
+        description: self-hosted or github-hosted
+        value: ${{ jobs.choose.outputs.kind }}
+
+jobs:
+  choose:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runs_on: ${{ steps.detect.outputs.runs_on }}
+      kind: ${{ steps.detect.outputs.kind }}
+    steps:
+      - name: Prefer an online Windows self-hosted runner
+        id: detect
+        shell: bash
+        env:
+          RUNNER_STATUS_TOKEN: ${{ secrets.CI_RUNNER_STATUS_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          kind=github-hosted
+          runs_on='"windows-2022"'
+
+          if [[ -z "${RUNNER_STATUS_TOKEN}" ]]; then
+            echo "::notice title=GitHub-hosted fallback::CI_RUNNER_STATUS_TOKEN is not configured; choosing windows-2022."
+          else
+            # The token is used only in this no-checkout selector job and must
+            # grant repo Administration: read (to list repository runners).
+            export GH_TOKEN="${RUNNER_STATUS_TOKEN}"
+            if payload=$(gh api --method GET "repos/${REPOSITORY}/actions/runners?per_page=100" 2>/dev/null); then
+              if jq -e '.runners | type == "array"' >/dev/null <<< "${payload}"; then
+                if jq -e '
+                  [ .runners[]
+                    | select(.status == "online" and ((.os // "") | ascii_downcase) == "windows")
+                    | select(([.labels[]?.name | ascii_downcase] | index("self-hosted")) != null)
+                    | select(([.labels[]?.name | ascii_downcase] | index("windows")) != null)
+                  ] | length > 0
+                ' >/dev/null <<< "${payload}"; then
+                  kind=self-hosted
+                  runs_on='["self-hosted","windows"]'
+                fi
+              else
+                echo "::warning title=GitHub-hosted fallback::Runner API returned an unexpected response."
+              fi
+            else
+              echo "::warning title=GitHub-hosted fallback::Cannot read repository runner status; check token Administration:read permission."
+            fi
+          fi
+
+          echo "runs_on=${runs_on}" >> "${GITHUB_OUTPUT}"
+          echo "kind=${kind}" >> "${GITHUB_OUTPUT}"
+          echo "Runner selection: ${kind} (${runs_on})"

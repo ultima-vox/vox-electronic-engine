@@ -1,0 +1,203 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "0439e7b8-7fbb-414a-9dfc-8341a1657a88",
+ "key": "hard-trance",
+ "name": "Hard Trance",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Trance",
+  "tempo": {
+   "min": 145,
+   "max": 155
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.75,
+  "groove": 0.6,
+  "syncopation": 0.3,
+  "swing": 0,
+  "humanize": 0.05,
+  "complexity": 0.6,
+  "fills": 0.7,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "clap",
+   "closedHat",
+   "openHat"
+  ],
+  "optional": [
+   "snare",
+   "tom1",
+   "rim",
+   "crash",
+   "perc1",
+   "perc2",
+   "perc3",
+   "perc4",
+   "perc5",
+   "ride",
+   "tom2",
+   "tom3"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.95,
+   "accent": true
+  },
+  {
+   "part": "snare",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.9,
+   "accent": true
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "velocity": 0.85
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "when": [
+    "density > 0.4"
+   ],
+   "velocity": 0.55
+  },
+  {
+   "part": "ride",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "when": [
+    "complexity > 0.6"
+   ],
+   "velocity": 0.6
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.9
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "kick",
+   "snare"
+  ],
+  "ratchet": 3
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "clap",
+   "snare",
+   "openHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "clap",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "snare",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "openHat",
+   "always": [
+    3,
+    7,
+    11,
+    15
+   ]
+  }
+ ]
+}

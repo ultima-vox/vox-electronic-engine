@@ -677,16 +677,11 @@ preset::Section SampleLibrary::encodeState (const std::array<PadInfo, slotCount>
     return section;
 }
 
-bool SampleLibrary::readState (const preset::Section* section, Restore& out, juce::String& error)
+bool SampleLibrary::decodeReferences (const preset::Section& section, std::array<std::optional<SampleReference>, slotCount>& refs,
+                                      juce::String& error)
 {
-    out.pads = {};
-    out.diagnostics.clear();
-    release (out.reserved);
-    out.reserved = 0;
-    out.owner = this;
-    if (section == nullptr)
-        return true;   // no samples assigned (an older document)
-    Reader in { section->data };
+    refs = {};
+    Reader in { section.data };
     const auto version = in.u32();
     const auto count = in.u32();
     // Version 1 (DRM-02): 8 pads, one sample each -> player A of pads 1-8.
@@ -696,7 +691,6 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
         error = "unsupported sample section";
         return false;
     }
-    std::array<std::optional<SampleReference>, slotCount> refs;
     for (std::uint32_t pad = 0; pad < count; ++pad)
     {
         const auto assigned = in.u8();
@@ -728,11 +722,34 @@ bool SampleLibrary::readState (const preset::Section* section, Restore& out, juc
         }
         refs[version == 1 ? static_cast<std::uint32_t> (slotOf (static_cast<int> (pad), 0)) : pad] = r;
     }
-    if (in.at != section->data.size())
+    if (in.at != section.data.size())
     {
         error = "malformed sample section";
         return false;
     }
+    return true;
+}
+
+preset::Section SampleLibrary::encodeReferences (const std::array<std::optional<SampleReference>, slotCount>& refs)
+{
+    std::array<PadInfo, slotCount> pads;
+    for (std::size_t i = 0; i < pads.size(); ++i)
+        pads[i].reference = refs[i];
+    return encodeState (pads);
+}
+
+bool SampleLibrary::readState (const preset::Section* section, Restore& out, juce::String& error)
+{
+    out.pads = {};
+    out.diagnostics.clear();
+    release (out.reserved);
+    out.reserved = 0;
+    out.owner = this;
+    if (section == nullptr)
+        return true;   // no samples assigned (an older document)
+    std::array<std::optional<SampleReference>, slotCount> refs;
+    if (! decodeReferences (*section, refs, error))
+        return false;
 
     // Resolve each reference: a buffer the library already holds with the
     // same content (no new memory: a restore of the current project, or the

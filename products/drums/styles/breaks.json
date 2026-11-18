@@ -1,0 +1,24 @@
+{
+  "format": "vox-drums-style", "version": 1,
+  "id": "5e8c088c-e6ea-4038-8994-8be735c4e1a8", "key": "breaks", "name": "Breaks",
+  "meta": { "author": "Ultima Vox", "group": "Bass & Breaks", "tempo": { "min": 85, "max": 130 } },
+  "meters": ["4/4"],
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.12, "humanize": 0.35 },
+  "parts": { "required": ["kick", "snare", "closedHat"], "optional": ["openHat", "tom1", "rim", "crash"] },
+  "rules": [
+    { "part": "kick", "at": [1], "velocity": 0.95, "accent": true },
+    { "part": "kick", "at": [11], "velocity": 0.95 },
+    { "part": "kick", "at": [4, 7, 14], "kind": "ghost", "chance": "0.1 + 0.5 * syncopation", "velocity": 0.75 },
+    { "part": "snare", "at": [5, 13], "velocity": 0.95, "accent": true },
+    { "part": "snare", "at": [8, 10, 16], "kind": "ghost", "chance": "0.15 + 0.6 * complexity", "velocity": 0.35 },
+    { "part": "closedHat", "at": [1, 5, 9, 13], "velocity": 0.7 },
+    { "part": "closedHat", "at": [3, 7, 11, 15], "velocity": 0.55 },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "kind": "ghost", "chance": "0.05 + 0.45 * density", "velocity": 0.4 },
+    { "part": "openHat", "at": [7], "kind": "ghost", "chance": "0.2 + 0.4 * density", "velocity": 0.6 },
+    { "part": "rim", "at": [3, 12], "kind": "ghost", "chance": "0.1 + 0.5 * syncopation", "velocity": 0.5 },
+    { "part": "crash", "at": [1], "bars": "first", "kind": "ghost", "chance": "0.4", "velocity": 0.7 }
+  ],
+  "fill": { "cycle": ["snare", "snare", "tom1"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true }
+}

@@ -1,6 +1,11 @@
 #pragma once
 
-// VOX Drums editor content (DRM-03b). Host parameters are bound through
+// VOX Drums editor content (DRM-07): eight pages on a tab bar, PERFORMANCE,
+// SOUND, PATTERN/SONG, MIXER, GENERATE, ROUTING, PRESETS and ADVANCED. The
+// page shown, the selected pad and song bar are saved with the project
+// (section DUIS).
+//
+// (DRM-03b) Host parameters are bound through
 // JUCE attachments; structural pad settings (model, note, choke, polyphony,
 // fine, character, filter, resonance, transient, kick body, sample source,
 // mode, split and the players) are bound to the KitStore. Both directions
@@ -9,6 +14,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "DrumsPages.h"
 #include "VoxComponents.h"
 #include "engine/KitEngine.h"
 #include "PatternStore.h"
@@ -44,6 +50,18 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    static constexpr int pageCount = 8;
+    static const char* pageName (int page) noexcept;
+    int page() const noexcept { return page_; }
+    void showPage (int page);
+    // Pages 3..7 (MIXER .. ADVANCED); null for the pages built into the panel.
+    Page* pageComponent (int page) { return page >= 0 && page < pageCount ? pages_[static_cast<std::size_t> (page)].get() : nullptr; }
+    SongStrip& songStrip() { return *song_; }
+    // PERFORMANCE: loads the chosen factory kit (Undo Load is on PRESETS).
+    juce::ComboBox* kitSelector() { return kitSelect_.get(); }
+    // Visible controls of the current page that overlap another one (tests).
+    juce::StringArray overlappingControls() const;
+
     int selectedPad() const noexcept { return selectedPad_; }
     void selectPad (int pad);
     int selectedPlayer() const noexcept { return selectedPlayer_; }
@@ -56,6 +74,8 @@ public:
     // "poly", "filter", "source", "sample_mode"; toggles "loop", "reverse",
     // "normalize").
     juce::Slider* sliderFor (const juce::String& id);
+    // SOUND page: the selected pad's knob "level", "tune", "decay", "pan" or "cutoff".
+    juce::Slider* selectedPadSlider (const juce::String& name);
     juce::Button* buttonFor (const juce::String& id);
     juce::ComboBox* comboFor (const juce::String& id);
     juce::Slider* structuralSlider (const juce::String& name);
@@ -110,6 +130,10 @@ private:
     class WaveformView;
 
     void timerCallback() override;
+    void applyVisibility();
+    void layoutPerformance (juce::Rectangle<int> area);
+    void layoutSound (juce::Rectangle<int> area);
+    void layoutPattern (juce::Rectangle<int> area);
     HostKnob makeHostKnob (const juce::String& id, const juce::String& label);
     void bindPadControls();
     void refreshStructure();
@@ -151,6 +175,20 @@ private:
     std::vector<HostKnob> seqKnobs_;
     std::vector<HostToggle> lanes_;
     std::unique_ptr<PatternEditor> steps_;
+
+    // DRM-07
+    vox::ui::VoxTabBar tabs_;
+    int page_ = 0;
+    std::array<std::unique_ptr<Page>, pageCount> pages_;
+    std::unique_ptr<SongStrip> song_;
+    std::vector<HostKnob> fxMacros_;        // PERFORMANCE macros 5-8
+    HostCombo patternSelect_;               // PATTERN/SONG: the slot to edit
+    std::unique_ptr<vox::ui::VoxComboBox> padSelect_;   // SOUND: the pad to edit
+    std::unique_ptr<juce::Label> padSelectLabel_, transport_;
+    std::unique_ptr<vox::ui::VoxButton> songMode_, variation_;
+    std::unique_ptr<vox::ui::VoxComboBox> kitSelect_;   // PERFORMANCE: load a factory kit
+    std::unique_ptr<juce::Label> kitSelectLabel_;
+    std::uint8_t shownUiPad_ = 255;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DrumsPanel)
 };

@@ -1,0 +1,219 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "2affaf5a-2ca7-484c-b3f1-af939403cac1",
+ "key": "tech-house",
+ "name": "Tech House",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "House & Techno",
+  "tempo": {
+   "min": 124,
+   "max": 128
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.6,
+  "groove": 0.6,
+  "syncopation": 0.6,
+  "swing": 0.2,
+  "humanize": 0.2,
+  "complexity": 0.5,
+  "fills": 0.4,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   [
+    "clap",
+    "snare"
+   ],
+   "closedHat",
+   "openHat"
+  ],
+  "optional": [
+   "tom1",
+   "rim",
+   "crash",
+   "perc1",
+   "perc2",
+   "tom2"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.9,
+   "accent": true
+  },
+  {
+   "part": "snare",
+   "at": [
+    13
+   ],
+   "kind": "ghost",
+   "chance": "0.2 * complexity",
+   "velocity": 0.5
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "chance": "0.5 + 0.5 * density",
+   "velocity": 0.5
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "velocity": 0.75
+  },
+  {
+   "part": "perc1",
+   "at": [
+    4,
+    7,
+    10,
+    14,
+    16
+   ],
+   "chance": "0.35 + 0.65 * density",
+   "velocity": 0.65
+  },
+  {
+   "part": "rim",
+   "at": [
+    11
+   ],
+   "velocity": 0.6
+  },
+  {
+   "part": "perc2",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.2 + 0.5 * density",
+   "velocity": 0.35
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "perc1",
+   "rim",
+   "tom1"
+  ],
+  "ratchet": 2
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "clap",
+   "openHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "clap",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "rim",
+   "always": [
+    11
+   ]
+  },
+  {
+   "part": "openHat",
+   "always": [
+    3,
+    7,
+    11,
+    15
+   ]
+  }
+ ]
+}

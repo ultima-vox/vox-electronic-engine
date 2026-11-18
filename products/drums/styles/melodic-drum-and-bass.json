@@ -1,0 +1,193 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "dac0f9f7-9e2b-4be9-ad46-1a555e7858d4",
+ "key": "melodic-drum-and-bass",
+ "name": "Melodic Drum & Bass",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Bass & Breaks",
+  "tempo": {
+   "min": 170,
+   "max": 176
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.45,
+  "groove": 0.6,
+  "syncopation": 0.3,
+  "swing": 0,
+  "humanize": 0.2,
+  "complexity": 0.3,
+  "fills": 0.5,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "snare",
+   "closedHat"
+  ],
+  "optional": [
+   "openHat",
+   "crash",
+   "ride",
+   "perc1"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    11
+   ],
+   "velocity": 0.95,
+   "accent": true
+  },
+  {
+   "part": "kick",
+   "at": [
+    8
+   ],
+   "chance": "0.3 * syncopation",
+   "velocity": 0.7
+  },
+  {
+   "part": "snare",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.95,
+   "accent": true
+  },
+  {
+   "part": "snare",
+   "at": [
+    10
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.4 * complexity",
+   "velocity": 0.3
+  },
+  {
+   "part": "ride",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ],
+   "velocity": 0.5
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "chance": "0.2 + 0.4 * density",
+   "velocity": 0.35
+  },
+  {
+   "part": "perc1",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "kind": "ghost",
+   "chance": "0.2 + 0.4 * density",
+   "velocity": 0.3
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.7
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "snare",
+   "ride"
+  ],
+  "ratchet": 2,
+  "maxVelocity": 0.7
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "snare",
+   "ride"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    11
+   ],
+   "never": [
+    4,
+    5,
+    7,
+    13,
+    14
+   ]
+  },
+  {
+   "part": "snare",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "ride",
+   "always": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ]
+  }
+ ]
+}

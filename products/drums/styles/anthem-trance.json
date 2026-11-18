@@ -1,0 +1,220 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "cf4f04dc-8002-41f7-8593-128ed7f8ad31",
+ "key": "anthem-trance",
+ "name": "Anthem Trance",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Trance",
+  "tempo": {
+   "min": 138,
+   "max": 140
+  }
+ },
+ "meters": [
+  "4/4"
+ ],
+ "defaults": {
+  "density": 0.6,
+  "groove": 0.5,
+  "syncopation": 0.3,
+  "swing": 0,
+  "humanize": 0.1,
+  "complexity": 0.4,
+  "fills": 0.6,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "clap",
+   "closedHat",
+   "openHat"
+  ],
+  "optional": [
+   "snare",
+   "tom1",
+   "rim",
+   "crash",
+   "perc1",
+   "perc2",
+   "perc3",
+   "perc4",
+   "perc5",
+   "ride",
+   "tom2",
+   "tom3"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "clap",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.9,
+   "accent": true
+  },
+  {
+   "part": "snare",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.85,
+   "accent": true
+  },
+  {
+   "part": "openHat",
+   "at": [
+    3,
+    7,
+    11,
+    15
+   ],
+   "velocity": 0.85
+  },
+  {
+   "part": "ride",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ],
+   "when": [
+    "density > 0.6"
+   ],
+   "velocity": 0.55
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16
+   ],
+   "chance": "0.2 + 0.6 * density",
+   "velocity": 0.45
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.85
+  },
+  {
+   "part": "snare",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "beats": [
+    4
+   ],
+   "subdivision": "triplet",
+   "bars": "last",
+   "when": [
+    "fills > 0.3",
+    "complexity > 0.5"
+   ],
+   "velocity": 0.65
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "snare",
+   "tom1",
+   "tom2",
+   "tom3"
+  ],
+  "ratchet": 3
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "clap",
+   "snare",
+   "openHat"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    5,
+    9,
+    13
+   ],
+   "never": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "part": "clap",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "snare",
+   "always": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "openHat",
+   "always": [
+    3,
+    7,
+    11,
+    15
+   ]
+  }
+ ]
+}

@@ -53,7 +53,7 @@ struct Reader {
     }
 };
 
-constexpr std::uint32_t padSectionVersion = 1;
+constexpr std::uint32_t padSectionVersion = 2;   // 2 (DRM-06): pad outputs and the voice limit appended
 
 } // namespace
 
@@ -84,6 +84,13 @@ void KitStore::setPad (int pad, const kit::PadSettings& settings)
     p.cutoff = host.cutoff;
     p.mute = host.mute;
     p.laneOn = host.laneOn;
+    setAll (next);
+}
+
+void KitStore::setVoiceLimit (int voices)
+{
+    auto next = snapshot();
+    next.voiceLimit = static_cast<std::uint8_t> (voices <= 16 ? 16 : voices <= 32 ? 32 : 64);
     setAll (next);
 }
 
@@ -120,8 +127,6 @@ void KitStore::copyStructure (const kit::KitSettings& from, kit::KitSettings& to
         t.attack = f.attack;
         t.sustain = f.sustain;
         t.output = f.output;
-        t.send1 = f.send1;
-        t.send2 = f.send2;
         t.pitchAmount = f.pitchAmount;
         t.pitchDecay = f.pitchDecay;
         t.drive = f.drive;
@@ -132,6 +137,7 @@ void KitStore::copyStructure (const kit::KitSettings& from, kit::KitSettings& to
         t.velocitySplit = f.velocitySplit;
         t.players = f.players;
     }
+    to.voiceLimit = from.voiceLimit;
 }
 
 void KitStore::pull (kit::KitSettings& live) noexcept
@@ -144,7 +150,9 @@ void KitStore::pull (kit::KitSettings& live) noexcept
 }
 
 //==============================================================================
-// DPAD: u32 version (1), u32 pad count (16), then per pad: u8 model, note,
+// Version 2 appends, after the pads: 16 x u8 output (0 Main, 1..8 = Out
+// 2..9), u8 voice limit (16, 32 or 64). Version 1 reads as Main and 64.
+// DPAD: u32 version, u32 pad count (16), then per pad: u8 model, note,
 // choke group, polyphony, filter, source, sample mode, velocity split; f32
 // fine, character, resonance, attack, sustain, pitch amount, pitch decay,
 // drive, sub, tail; then players A and B: f32 start, end, level; u8 loop,
@@ -177,13 +185,17 @@ preset::Section KitStore::encode (const kit::KitSettings& k)
             putU8 (s.data, pl.normalize ? 1 : 0);
         }
     }
+    for (const auto& p : k.pads)
+        putU8 (s.data, p.output);
+    putU8 (s.data, k.voiceLimit);
     return s;
 }
 
 bool KitStore::decode (const preset::Section& section, kit::KitSettings& out, juce::String& error)
 {
     Reader in { section.data };
-    if (in.u32() != padSectionVersion || in.u32() != static_cast<std::uint32_t> (kit::padCount) || ! in.ok)
+    const auto version = in.u32();
+    if (version < 1 || version > padSectionVersion || in.u32() != static_cast<std::uint32_t> (kit::padCount) || ! in.ok)
     {
         error = "unsupported pad section";
         return false;
@@ -237,6 +249,23 @@ bool KitStore::decode (const preset::Section& section, kit::KitSettings& out, ju
         p.filter = static_cast<kit::Filter> (filter);
         p.source = static_cast<kit::Source> (source);
         p.sampleMode = static_cast<kit::SampleMode> (mode);
+    }
+    for (auto& p : out.pads)
+        p.output = 0;
+    out.voiceLimit = kit::maxVoices;
+    if (version >= 2)
+    {
+        for (auto& p : out.pads)
+            p.output = in.u8();
+        out.voiceLimit = in.u8();
+        bool ok = in.ok && (out.voiceLimit == 16 || out.voiceLimit == 32 || out.voiceLimit == 64);
+        for (const auto& p : out.pads)
+            ok = ok && p.output <= kit::auxOutputs;
+        if (! ok)
+        {
+            error = "invalid pad section";
+            return false;
+        }
     }
     if (in.at != section.data.size())
     {

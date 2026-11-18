@@ -1,5 +1,12 @@
 # DRM-04a: VOX Drums sequencer model, scheduler and MIDI export
 
+> **Superseded in part (PR 137 §10, step 2):** the cell model, the state layout and the
+> canonical rule changed. Cells now live in per-beat storage slots with `microTicks`. The formats
+> are `DSEQ` v4 and `DSNG` v2; development versions are not decoded. The rule is `kit::cellHits`,
+> and `stepHits`, `songHits` and `stepLength` are removed. Current description:
+> [BAR_TIMING.md](BAR_TIMING.md#step-2-implemented). This document is kept as the history of
+> DRM-04/05.
+
 Status: on `drm/04-sequencer`, stacked on DRM-03b. DRM-04a is the engine,
 state and export slice of DRM-04 (03 §55, §62, §104). DRM-04b, the next PR,
 adds the step editor (grid, per-step values, bar selector, duplicate, A/B,

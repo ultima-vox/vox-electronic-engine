@@ -176,6 +176,10 @@ public:
     // dropped without apply releases its reservation.
     preset::Section writeState() const;
     static preset::Section encodeState (const std::array<PadInfo, slotCount>& pads);
+    // The references of a DSMP section, without resolving any file (presets).
+    static bool decodeReferences (const preset::Section& section, std::array<std::optional<SampleReference>, slotCount>& refs,
+                                  juce::String& error);
+    static preset::Section encodeReferences (const std::array<std::optional<SampleReference>, slotCount>& refs);
     struct Restore {
         Restore() = default;
         ~Restore();

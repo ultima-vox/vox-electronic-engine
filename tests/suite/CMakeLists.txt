@@ -108,6 +108,69 @@ endif()
 add_test(NAME suite_drums_product_tests
   COMMAND suite_drums_product_tests ${PROJECT_SOURCE_DIR}/products/drums/parameters.csv)
 
+# Production candidate (DRM-05/06/07, presets): song and MIDI parity, the
+# nine outputs, generator, presets, state, editor pages, realtime.
+add_executable(suite_drums_candidate_tests DrumsCandidateTests.cpp)
+target_link_libraries(suite_drums_candidate_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_cryptography)
+target_include_directories(suite_drums_candidate_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+vox_suite_add_allocation_probe(suite_drums_candidate_tests)
+if(NOT WIN32)
+  target_link_libraries(suite_drums_candidate_tests PRIVATE Threads::Threads)
+endif()
+add_test(NAME suite_drums_candidate_tests
+  COMMAND suite_drums_candidate_tests ${PROJECT_SOURCE_DIR}/products/drums/factory-content.csv)
+
+# Gain staging (TL P1 on #148): every factory kit with its worst-case content
+# peaks at or below -1 dBFS on every output bus at 44.1/48/96 kHz.
+add_executable(suite_drums_gain_staging_tests DrumsGainStagingTests.cpp)
+target_link_libraries(suite_drums_gain_staging_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_gain_staging_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+foreach(rate 44100 48000 96000)
+  foreach(routing main multi)
+    add_test(NAME suite_drums_gain_staging_tests_${rate}_${routing} COMMAND suite_drums_gain_staging_tests ${rate} ${routing})
+  endforeach()
+endforeach()
+add_test(NAME suite_drums_gain_staging_tests_blocks COMMAND suite_drums_gain_staging_tests blocks)
+add_test(NAME suite_drums_gain_staging_tests_matched COMMAND suite_drums_gain_staging_tests matched)
+
+# Semantic pad roles (issue 132, DROL): codec, identity parity against the
+# c7c29bb generator, role mapping, Mutate Lanes, presets, proposal.
+add_executable(suite_drums_pad_roles_tests DrumsPadRolesTests.cpp)
+target_link_libraries(suite_drums_pad_roles_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_cryptography)
+target_include_directories(suite_drums_pad_roles_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_pad_roles_tests COMMAND suite_drums_pad_roles_tests ${CMAKE_CURRENT_SOURCE_DIR}/golden/trap-triplet-v2-changes.csv
+                                                     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/trap-pre-v2.json)
+
+# Shared bar timing (PR 137 §10 rev 6): capacity, ticks, ratchet rounding,
+# lossless-or-reject subdivision switches. Engine library only.
+add_executable(suite_drums_bar_timing_tests DrumsBarTimingTests.cpp)
+target_link_libraries(suite_drums_bar_timing_tests PRIVATE vox_drums_engine)
+add_test(NAME suite_drums_bar_timing_tests COMMAND suite_drums_bar_timing_tests)
+
+# Declarative style engine foundation (issue 136): registry, parser, hashes
+# and byte parity of the seven original styles with the switch-based
+# generator (GeneratorReference.cpp, a test reference only).
+add_executable(suite_drums_style_engine_tests DrumsStyleEngineTests.cpp GeneratorReference.cpp)
+target_link_libraries(suite_drums_style_engine_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_cryptography)
+target_include_directories(suite_drums_style_engine_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME suite_drums_style_engine_tests COMMAND suite_drums_style_engine_tests ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/example-user-style.voxstyle)
+
+# Generator style fidelity (issue 128): rhythm grammar per style over a
+# settings matrix, audible roles on the factory kits, reproducibility.
+add_executable(suite_drums_generator_style_tests DrumsGeneratorStyleTests.cpp)
+target_link_libraries(suite_drums_generator_style_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_generator_style_tests PRIVATE ${juce_SOURCE_DIR}/modules)
+add_test(NAME suite_drums_generator_style_tests
+  COMMAND suite_drums_generator_style_tests ${CMAKE_BINARY_DIR}/vox-drums-generator-style-audit.md ${CMAKE_BINARY_DIR}/vox-drums-generator-midi)
+
+# Callback timing of a heavy scene (reports p50/p95/p99/p99.9/worst; does
+# not gate on the numbers).
+add_executable(suite_drums_callback_bench DrumsCallbackBench.cpp)
+target_link_libraries(suite_drums_callback_bench PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_callback_bench PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_callback_bench
+  COMMAND suite_drums_callback_bench ${CMAKE_BINARY_DIR}/vox-drums-callback-timing.csv)
+
 # DRM-02: pad samples (decode, sound, ownership, realtime, state, editor).
 add_executable(suite_drums_sample_tests DrumsSampleTests.cpp)
 target_link_libraries(suite_drums_sample_tests PRIVATE ${VOX_SUITE_drm_TARGET})

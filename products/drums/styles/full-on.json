@@ -1,0 +1,22 @@
+{
+  "format": "vox-drums-style", "version": 1,
+  "id": "dcadd0b1-5bfc-45d1-8154-e152b32ebe03", "key": "full-on", "name": "Full-on / Psy",
+  "meta": { "author": "Ultima Vox", "group": "Psy", "tempo": { "min": 140, "max": 148 } },
+  "meters": ["4/4"],
+  "defaults": { "density": 0.6, "groove": 0.5, "syncopation": 0.4, "complexity": 0.5, "fills": 0.5, "variation": 0.4, "swing": 0.0, "humanize": 0.15 },
+  "parts": { "required": ["kick", "openHat"], "optional": ["snare", "clap", "closedHat", "tom1", "rim", "perc1", "perc2"] },
+  "rules": [
+    { "part": "kick", "at": [1, 5, 9, 13], "velocity": 1.0, "accent": true },
+    { "part": "openHat", "at": [3, 7, 11, 15], "velocity": 0.85 },
+    { "part": "closedHat", "at": [2, 4, 6, 8, 10, 12, 14, 16], "chance": "0.35 + 0.65 * density", "velocity": 0.55 },
+    { "part": "closedHat", "at": [1, 5, 9, 13], "when": ["density > 0.75"], "velocity": 0.7 },
+    { "part": "clap", "at": [5, 13], "when": ["density > 0.15"], "velocity": 0.9, "accent": true },
+    { "part": "snare", "at": [13], "chance": "0.3 + 0.5 * complexity", "velocity": 0.8 },
+    { "part": "perc1", "at": [4, 8, 12, 16], "kind": "ghost", "chance": "0.25 + 0.6 * syncopation", "velocity": 0.6 },
+    { "part": "perc2", "at": [2, 6, 10, 14], "kind": "ghost", "chance": "0.15 + 0.5 * syncopation * density", "velocity": 0.5 },
+    { "part": "rim", "at": [8, 16], "kind": "ghost", "chance": "0.2 + 0.6 * complexity", "velocity": 0.6 }
+  ],
+  "fill": { "cycle": ["snare", "tom1"], "ratchet": 2 },
+  "variation": { "keep": ["kick", "snare", "clap"] },
+  "song": { "breakWithoutKick": true }
+}

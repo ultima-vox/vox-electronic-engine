@@ -1,0 +1,132 @@
+#pragma once
+
+// VOX Drums pattern and song generator (DRM-05). Message thread; pure
+// functions of the settings: equal settings and input give equal output.
+// It writes StoredPattern / SongData, the one event model the sequencer
+// plays and the MIDI export writes; it has no scheduler of its own.
+//
+// Lane roles follow the pad layout of the default and factory kits: 1 kick,
+// 2 snare, 3 clap, 4 closed hat, 5 open hat, 6 tom, 7 rim, 8 cymbal, 9-16
+// percussion. The styles write percussion only to lanes 9-10: on lanes 11-16
+// the factory kits hold other instruments (a clap, a snare, a kick).
+// Generation does not read the kit: on a user kit whose pads are arranged
+// differently, the rhythm is the style's but other instruments play it.
+//
+// Locks: a locked step (PatternStep::locked) and every step of a locked
+// lane (laneLocks) are left exactly as they are by every function here.
+//
+// Roles (DROL, option B): every function takes a RoleMap. The style rules
+// work on role slots; each slot's result goes to the pad lane that has that
+// role. Lanes without a slot (role none, a duplicate role) are cleared like
+// any lane the style leaves empty. Locks and the Mutate Lanes mask are pad
+// lanes. With RoleMap::identity() the output is exactly as before roles.
+
+#include "PadRoles.h"
+#include "StyleDefinition.h"
+#include "PatternStore.h"
+
+#include <optional>
+
+namespace vox::drums {
+
+inline constexpr preset::Tag generatorSectionTag = preset::makeTag ("DGEN");
+
+enum class Style : std::uint8_t { fullOn, goa, house, techno, trap, breaks, ambient };
+inline constexpr int styleCount = 7;           // the original styles (byte-parity references in tests)
+inline constexpr int factoryStyleCount = 23;   // every factory style (StyleRegistry ids 0..22)
+const char* styleName (Style) noexcept;
+
+struct GeneratorSettings {
+    Style style = Style::fullOn;
+    float density = 0.5f;       // how many hits
+    float groove = 0.5f;        // velocity shaping (accents against the beat)
+    float syncopation = 0.3f;   // off-beat placement
+    float swing = 0.0f;         // delays the off 16ths (written as microtiming)
+    float humanize = 0.2f;      // velocity and timing variance
+    float complexity = 0.4f;    // ghost notes, ratchets, probability
+    float fills = 0.5f;         // fill length and intensity
+    float variation = 0.4f;     // difference between bars, and of B from A
+    std::uint32_t seed = 1;
+    std::uint16_t laneLocks = 0;   // bit n: lane n is locked
+    // A style definition to run instead of the factory style `style` (a
+    // user style; message thread). Not part of operator== or DGEN v1.
+    std::shared_ptr<const style::Definition> custom;
+
+    bool operator== (const GeneratorSettings&) const noexcept;
+    bool operator!= (const GeneratorSettings& o) const noexcept { return ! (*this == o); }
+};
+
+// The eight generator values in style::Param order (density, groove,
+// syncopation, complexity, fills, variation, swing, humanize).
+using GeneratorValues = std::array<float, style::paramCount>;
+GeneratorValues generatorValues (const GeneratorSettings&) noexcept;
+void setGeneratorValues (GeneratorSettings&, const GeneratorValues&) noexcept;
+// PR 137 §4: the recommended values of the style `g` runs ("Style
+// defaults"); nullopt when it has no definition. Message thread.
+std::optional<GeneratorValues> styleDefaults (const GeneratorSettings& g);
+
+// The embedded user style (DSTL v1, docs/ultima-vox-music/drums/STYLE_ENGINE.md).
+inline constexpr preset::Tag styleSectionTag = preset::makeTag ("DSTL");
+
+// The UUID DGEN stores for `g`: the user style's id, or the factory style's.
+juce::String styleUuidOf (const GeneratorSettings&);
+
+// DGEN v2 (58 bytes; style by UUID). Strict: an unknown version, a wrong
+// size, a value out of range, or a UUID that is neither a registry style
+// nor `embedded` (the state's DSTL) is rejected; so is an `embedded` style
+// the generator does not use.
+preset::Section encodeGenerator (const GeneratorSettings&);
+bool decodeGenerator (const preset::Section&, GeneratorSettings& out, juce::String& error,
+                      const std::shared_ptr<const style::Definition>& embedded = nullptr);
+
+// DSTL v1: version, SHA-256 of the text, length, the canonical text. Strict:
+// the hash must match, the text must parse and be canonical, and its id must
+// not be a factory UUID.
+preset::Section encodeStyleSection (const style::Definition&);
+bool decodeStyleSection (const preset::Section&, std::shared_ptr<const style::Definition>& out, juce::String& error);
+
+// Every function below first checks that the style has a definition the
+// generator can run (StyleRegistry: a registered but not yet available
+// style, or an unknown id, has none) and that the pattern (Generate Song:
+// every A slot) is in a meter the style defines (4/4 always; 3/4, 6/8, 12/8
+// when listed; PR 137 §10.6). If not, it returns false and changes NOTHING:
+// no cell, mask, seed, lock, A/B pattern or song bar. True otherwise.
+// Style rules are on the meter's 16th grid: a straight cell that starts on
+// a 16th gets the hit of that position from the rules of the pattern's
+// meter (micro: a percent of the cell, quantised once to ticks). A part
+// with tuplet rules for a beat gets that beat in triplets (duplets in 6/8
+// and 12/8) in its lane, unless a cell of the beat is locked or the
+// resolution has no tuplets, and its cells from those rules; other beats of
+// a generated lane go back to straight. The other cells of a generated lane
+// are cleared.
+bool styleAvailable (Style);
+// Why the generator refuses `pattern` with `g` ("" when it does not): the
+// style has no runnable definition, or the pattern's meter is not one the
+// style defines (PR 137 §10.6). Message thread.
+juce::String generatorRefusal (const GeneratorSettings& g, const StoredPattern& pattern);
+
+// The style's own 4/4 assertions (PR 137 §11.3) checked on generated
+// patterns over a settings matrix (6 seeds × density × complexity, no fills,
+// 4/4 at 16ths × 4 bars, identity roles). Returns the first violations ("" when
+// none). Proves only that the style agrees with itself, not genre quality.
+juce::StringArray checkStyleAssertions (const std::shared_ptr<const style::Definition>& definition, int maxViolations = 8);
+
+// A new pattern in `pattern`'s grid (its meter, resolution, masks and bars
+// are kept).
+bool generatePattern (const GeneratorSettings&, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
+// Regenerates only the lanes in `laneMask` (bit n = lane n).
+// The mask is a set of pad lanes; lanes outside it are not touched.
+bool mutateLanes (const GeneratorSettings&, std::uint32_t laneMask, StoredPattern& pattern, const RoleMap& roles = RoleMap::identity());
+// Writes a fill into the end of bar `bar` (the last bar: -1).
+bool generateFill (const GeneratorSettings&, StoredPattern& pattern, int bar = -1, const RoleMap& roles = RoleMap::identity());
+// B from A: A with `variation` applied and a fill in its last bar. B takes
+// A's grid; B's locked steps and lanes are kept. If B has another grid than
+// A and holds a locked step or a hit on a locked lane, B is not changed.
+bool generateVariation (const GeneratorSettings&, const StoredPattern& a, StoredPattern& b, const RoleMap& roles = RoleMap::identity());
+// A whole song of the current length: the five slots (intro, main, lift,
+// break, peak) with their B variations, arranged on the timeline in
+// eight-bar phrases. Song length, mode and loop are kept; locked steps and
+// lanes of the slots are kept; unique bars are replaced.
+bool generateSong (const GeneratorSettings&, PatternStore::Everything& all, const RoleMap& roles = RoleMap::identity());
+
+} // namespace vox::drums

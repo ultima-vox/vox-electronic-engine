@@ -1,5 +1,6 @@
 #include "DrumsParameters.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -26,6 +27,12 @@ juce::NormalisableRange<float> logRange (float lo, float hi)
 }
 
 } // namespace
+
+double delayTimeQuarters (int choice) noexcept
+{
+    static constexpr double quarters[delayTimeCount] = { 0.25, 1.0 / 3.0, 0.5, 0.75, 1.0, 1.5, 2.0 };
+    return quarters[std::clamp (choice, 0, delayTimeCount - 1)];
+}
 
 const kit::KitSettings& defaultKit()
 {
@@ -79,6 +86,22 @@ const std::vector<PluginParameter>& pluginParameters()
         t.push_back ({ "drm.seq.accent", "Seq Accent", Field::seqAccent });
         for (int pad = 0; pad < padCount; ++pad)
             t.push_back ({ "drm.seq.lane." + padPrefix (pad).substr (4), "Lane " + std::to_string (pad + 1), Field::seqLane, pad });
+        // DRM-06: appended after the DRM-03b/04 parameters; the order above never changes.
+        for (int pad = 0; pad < padCount; ++pad)
+        {
+            const auto prefix = padPrefix (pad);
+            const auto label = "Pad " + std::to_string (pad + 1) + " ";
+            t.push_back ({ prefix + ".send1", label + "Send 1", Field::send1, pad });
+            t.push_back ({ prefix + ".send2", label + "Send 2", Field::send2, pad });
+            t.push_back ({ prefix + ".solo", label + "Solo", Field::solo, pad });
+        }
+        t.push_back ({ "drm.fx.delay.time", "Delay Time", Field::delayTime });
+        t.push_back ({ "drm.fx.delay.feedback", "Delay Feedback", Field::delayFeedback });
+        t.push_back ({ "drm.fx.delay.tone", "Delay Tone", Field::delayTone });
+        t.push_back ({ "drm.fx.delay.level", "Delay Return", Field::delayLevel });
+        t.push_back ({ "drm.fx.reverb.size", "Reverb Size", Field::reverbSize });
+        t.push_back ({ "drm.fx.reverb.damp", "Reverb Damp", Field::reverbDamp });
+        t.push_back ({ "drm.fx.reverb.level", "Reverb Return", Field::reverbLevel });
         return t;
     }();
     return table;
@@ -165,6 +188,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             case Field::seqLane:
                 layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { e.id, 1 }, e.name, true));
                 break;
+            case Field::send1:
+            case Field::send2:
+                floatParam (e, { 0.0f, 1.0f }, 0.0f, percent, fromPercent);
+                break;
+            case Field::solo:
+                layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { e.id, 1 }, e.name, false));
+                break;
+            case Field::delayTime:
+                layout.add (std::make_unique<juce::AudioParameterChoice> (
+                    juce::ParameterID { e.id, 1 }, e.name, juce::StringArray { "1/16", "1/8T", "1/8", "1/8D", "1/4", "1/4D", "1/2" }, 3));
+                break;
+            case Field::delayFeedback:
+                floatParam (e, { 0.0f, 0.85f }, 0.35f, percent, fromPercent);
+                break;
+            case Field::delayTone:
+            case Field::reverbSize:
+            case Field::reverbDamp:
+                floatParam (e, { 0.0f, 1.0f }, 0.5f, percent, fromPercent);
+                break;
+            case Field::delayLevel:
+            case Field::reverbLevel:
+                floatParam (e, { 0.0f, 1.0f }, 0.8f, percent, fromPercent);
+                break;
         }
     }
     return layout;
@@ -209,6 +255,16 @@ std::string describeLayout (juce::AudioProcessorValueTreeState& state)
                 case Field::seqMode:
                 case Field::seqPattern:
                 case Field::seqLane:
+                case Field::send1:
+                case Field::send2:
+                case Field::solo:
+                case Field::delayTime:
+                case Field::delayFeedback:
+                case Field::delayTone:
+                case Field::delayLevel:
+                case Field::reverbSize:
+                case Field::reverbDamp:
+                case Field::reverbLevel:
                     def = ranged->convertFrom0to1 (ranged->getDefaultValue());
                     break;
             }

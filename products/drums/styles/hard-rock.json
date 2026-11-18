@@ -1,0 +1,271 @@
+{
+ "format": "vox-drums-style",
+ "version": 1,
+ "id": "62362a3e-4589-4061-964b-20008ff39879",
+ "key": "hard-rock",
+ "name": "Hard Rock",
+ "meta": {
+  "author": "Ultima Vox",
+  "group": "Rock & Metal",
+  "tempo": {
+   "min": 110,
+   "max": 140
+  }
+ },
+ "meters": [
+  "4/4",
+  "12/8"
+ ],
+ "defaults": {
+  "density": 0.5,
+  "groove": 0.5,
+  "syncopation": 0.4,
+  "swing": 0,
+  "humanize": 0.3,
+  "complexity": 0.4,
+  "fills": 0.6,
+  "variation": 0.4
+ },
+ "parts": {
+  "required": [
+   "kick",
+   "snare",
+   "closedHat",
+   "crash"
+  ],
+  "optional": [
+   "openHat",
+   "tom1",
+   "rim",
+   "ride",
+   "tom2",
+   "tom3"
+  ]
+ },
+ "rules": [
+  {
+   "part": "kick",
+   "at": [
+    1,
+    9
+   ],
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "kick",
+   "at": [
+    11
+   ],
+   "chance": "0.2 + 0.6 * syncopation",
+   "velocity": 0.85
+  },
+  {
+   "part": "kick",
+   "at": [
+    8
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.4 * syncopation",
+   "velocity": 0.75
+  },
+  {
+   "part": "snare",
+   "at": [
+    5,
+    13
+   ],
+   "velocity": 0.95,
+   "accent": true
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ],
+   "when": [
+    "density <= 0.7"
+   ],
+   "velocity": 0.65
+  },
+  {
+   "part": "ride",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15
+   ],
+   "when": [
+    "density > 0.7"
+   ],
+   "velocity": 0.6
+  },
+  {
+   "part": "openHat",
+   "at": [
+    15
+   ],
+   "kind": "ghost",
+   "chance": "0.1 + 0.3 * complexity",
+   "velocity": 0.6
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "bars": "first",
+   "velocity": 0.85
+  },
+  {
+   "part": "snare",
+   "at": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "beats": [
+    4
+   ],
+   "subdivision": "triplet",
+   "bars": "last",
+   "when": [
+    "fills > 0.3",
+    "complexity > 0.5"
+   ],
+   "velocity": 0.7
+  },
+  {
+   "part": "kick",
+   "at": [
+    1,
+    13
+   ],
+   "meter": "12/8",
+   "velocity": 1.0,
+   "accent": true
+  },
+  {
+   "part": "kick",
+   "at": [
+    11,
+    23
+   ],
+   "meter": "12/8",
+   "kind": "ghost",
+   "chance": "0.2 + 0.5 * syncopation",
+   "velocity": 0.8
+  },
+  {
+   "part": "snare",
+   "at": [
+    7,
+    19
+   ],
+   "meter": "12/8",
+   "velocity": 0.95,
+   "accent": true
+  },
+  {
+   "part": "closedHat",
+   "at": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15,
+    17,
+    19,
+    21,
+    23
+   ],
+   "meter": "12/8",
+   "velocity": 0.6
+  },
+  {
+   "part": "crash",
+   "at": [
+    1
+   ],
+   "meter": "12/8",
+   "bars": "first",
+   "velocity": 0.85
+  }
+ ],
+ "fill": {
+  "cycle": [
+   "tom1",
+   "tom2",
+   "tom3",
+   "snare"
+  ],
+  "ratchet": 2
+ },
+ "variation": {
+  "keep": [
+   "kick",
+   "snare"
+  ]
+ },
+ "song": {
+  "breakWithoutKick": true
+ },
+ "assertions": [
+  {
+   "part": "kick",
+   "always": [
+    1,
+    9
+   ],
+   "never": [
+    5,
+    13
+   ]
+  },
+  {
+   "part": "snare",
+   "always": [
+    5,
+    13
+   ],
+   "never": [
+    1,
+    9
+   ]
+  },
+  {
+   "part": "kick",
+   "meter": "12/8",
+   "always": [
+    1,
+    13
+   ]
+  },
+  {
+   "part": "snare",
+   "meter": "12/8",
+   "always": [
+    7,
+    19
+   ]
+  }
+ ]
+}
