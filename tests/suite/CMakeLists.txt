@@ -395,3 +395,13 @@ target_compile_definitions(suite_fx_file_export_tests PRIVATE JUCE_USE_CURL=0 JU
 target_include_directories(suite_fx_file_export_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_file_export_tests COMMAND suite_fx_file_export_tests)
 set_tests_properties(suite_fx_file_export_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_sample_store_tests FxSampleStoreTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_sample_store_tests)
+target_include_directories(suite_fx_sample_store_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(suite_fx_sample_store_tests PRIVATE Threads::Threads)
+endif()
+add_test(NAME suite_fx_sample_store_tests COMMAND suite_fx_sample_store_tests)
+set_tests_properties(suite_fx_sample_store_tests PROPERTIES LABELS suite)

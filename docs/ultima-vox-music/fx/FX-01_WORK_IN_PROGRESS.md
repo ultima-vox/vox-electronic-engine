@@ -683,3 +683,19 @@ not audio. Granular tests exercise 0/8/9 events, grain retirement and panic,
 including allocation probe and ASan/UBSan. Processor and meter tests remain
 syntax-only. Counters are sampled at block boundaries, not continuous gauges;
 CPU/memory/dropped-trigger metrics and host/visual runtime checks remain.
+
+## Sample ownership foundation (not integrated)
+
+An isolated three-version immutable mono sample store admits validated finite
+[-1,1] content at 8–384 kHz, at most 4,194,304 frames per version. Controller
+publication allocates and retires storage; audio acquisition uses one bounded
+CAS and explicit leases, with no callback allocation, lock or destruction.
+Outstanding leases keep old versions alive across replacement and clear; if
+all slots are held, publication fails rather than evicting active samples.
+A failed acquisition does not imply a fallback. Explicit lease release and
+Store lifetime beyond all leases are mandatory integration contracts.
+Two-reader concurrent publication stress passed TSan, as did standalone
+validation, slot-exhaustion and allocation probes; an earlier test form passed
+ASan/UBSan. This is **not** user sample support: decoding, hash/path manifest,
+missing-file policy, audio event/grain lease ownership, sample-rate-correct
+playback, UI, WAV capture and project persistence are all still unimplemented.
