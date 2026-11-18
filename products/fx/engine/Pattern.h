@@ -27,9 +27,10 @@ struct Pattern {
     std::array<Step,192> steps{};
     std::uint8_t bars=1;
     Grid grid=Grid::sixteenth;
+    float swing=0.0f; // 0..1: odd step starts are delayed up to half a step
     std::uint32_t seed=1;
     bool valid() const noexcept {
-        if(bars<1||bars>4||gridTicks(grid)==0)return false;
+        if(bars<1||bars>4||gridTicks(grid)==0||!std::isfinite(swing)||swing<0||swing>1)return false;
         for(const auto& step:steps)if(!step.valid())return false;
         return true;
     }
@@ -46,9 +47,11 @@ inline bool scheduleFixed(const Pattern& p,FixedSchedule& output) noexcept {
     for(std::uint32_t i=0;i<static_cast<std::uint32_t>(p.bars)*stepsPerBar(p.grid);++i){
         const auto& s=p.steps[i];rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
         if(!s.enabled || rng%100>=s.probability)continue;
+        const auto shifted=i*stepTicks+((i&1u)?static_cast<std::uint32_t>(std::lround(p.swing*stepTicks*.5)):0u);
+        const auto duration=(i+1)*stepTicks-shifted;
         for(std::uint32_t r=0;r<s.ratchets;++r){
-            const auto start=i*stepTicks+(r*stepTicks)/s.ratchets;
-            const auto end=i*stepTicks+((r+1)*stepTicks)/s.ratchets;
+            const auto start=shifted+(r*duration)/s.ratchets;
+            const auto end=shifted+((r+1)*duration)/s.ratchets;
             const auto length=std::max(1u,(end-start)*3/4);
             next.events[next.count++]={start,s.note,s.velocity,true};
             next.events[next.count++]={start+length,s.note,0,false};

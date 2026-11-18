@@ -11,7 +11,7 @@ int main(){
     constexpr std::array<Grid,8> grids{Grid::quarter,Grid::eighth,Grid::sixteenth,Grid::thirtysecond,
         Grid::quarterTriplet,Grid::eighthTriplet,Grid::sixteenthTriplet,Grid::thirtysecondTriplet};
     constexpr std::array<unsigned,8> stepCounts{4,8,16,32,6,12,24,48};
-    for(std::size_t g=0;g<grids.size();++g){Pattern p;p.bars=4;p.grid=grids[g];
+    for(std::size_t g=0;g<grids.size();++g){Pattern p;p.bars=4;p.grid=grids[g];p.swing=.5f;
         const unsigned n=stepCounts[g]*p.bars;for(unsigned i=0;i<n;++i){p.steps[i].enabled=true;p.steps[i].ratchets=4;}
         FixedSchedule fixed;check(p.valid()&&stepsPerBar(p.grid)==stepCounts[g]&&scheduleFixed(p,fixed),"grid schedule valid");
         check(fixed.count==n*8,"all four ratchets emitted");

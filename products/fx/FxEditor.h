@@ -24,6 +24,7 @@ public:
     juce::ComboBox& patternGridSelector() noexcept { return patternGrid_; }
     juce::ComboBox& patternPageSelector() noexcept { return patternPage_; }
     juce::ComboBox& patternStepSelector() noexcept { return patternStepSelector_; }
+    juce::Slider& patternSwingSlider() noexcept { return patternSwing_; }
     juce::Slider& patternNoteSlider() noexcept { return patternDetails_[0]; }
     juce::Slider& patternVelocitySlider() noexcept { return patternDetails_[1]; }
     juce::Slider& patternProbabilitySlider() noexcept { return patternDetails_[2]; }
@@ -54,6 +55,7 @@ private:
     std::array<juce::ToggleButton,4> layerLocks_;
     vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
     std::array<juce::Slider,4> patternDetails_;
+    juce::Slider patternSwing_;
     std::array<juce::TextButton,16> patternSteps_;
     vox::ui::VoxButton patternEnabled_ { "HOST PATTERN", vox::ui::VoxButton::Type::Toggle };
     std::unique_ptr<juce::ButtonParameterAttachment> patternAttachment_;

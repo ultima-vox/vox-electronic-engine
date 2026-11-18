@@ -147,6 +147,8 @@ int main() {
               "editor changes selected step detail");
         panel.patternGridSelector().setSelectedId(8,juce::sendNotificationSync);
         panel.patternPageSelector().setSelectedId(3,juce::sendNotificationSync);
+        panel.patternSwingSlider().setValue(.7,juce::sendNotificationSync);
+        check(std::abs(owner->patternSnapshot().swing-.7f)<.001f,"editor controls pattern swing");
         panel.patternStep(2).setToggleState(true,juce::sendNotificationSync);
         check(owner->patternSnapshot().grid==vox::fx::pattern::Grid::thirtysecondTriplet &&
               owner->patternSnapshot().steps[178].enabled,"editor addresses 32nd triplet last-bar page");
@@ -160,7 +162,7 @@ int main() {
         std::vector<std::uint8_t> recalled;
         check(restored->exportPatternMidi(120,recalled)&&recalled==exported,"trigger pattern recalled in host state");
         auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(saved.getData()),saved.getSize()),vox::preset::makeTag("VXFX"),1);
-        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxPatternSectionTag)section.data[0]=std::byte{3};
+        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxPatternSectionTag)section.data[0]=std::byte{4};
         const auto bad=vox::preset::encode(document.document);
         if(bad){restored->setStateInformation(bad->data(),static_cast<int>(bad->size()));
             check(restored->lastStateError().isNotEmpty()&&save(*restored)==saved,"invalid pattern restore is transactional");}

@@ -122,6 +122,12 @@ FxPanel::FxPanel (FxProcessor& processor)
     for(int i=1;i<=3;++i)patternPage_.addItem("Page "+juce::String(i),i);
     patternPage_.setTitle("Step page within bar");patternPage_.setSelectedId(1,juce::dontSendNotification);
     patternPage_.onChange=[this]{refreshPattern();};
+    patternSwing_.setRange(0,1,.01);patternSwing_.setSliderStyle(juce::Slider::LinearHorizontal);
+    patternSwing_.setTextBoxStyle(juce::Slider::TextBoxLeft,false,40,20);
+    patternSwing_.setTitle("Pattern swing");patternSwing_.setTooltip("Delay odd steps up to half their grid interval");
+    patternSwing_.onValueChange=[this]{const float swing=static_cast<float>(patternSwing_.getValue());
+        processor_.editPattern([swing](pattern::Pattern& p){p.swing=swing;});};
+    addAndMakeVisible(patternSwing_);
     addAndMakeVisible(patternLength_);addAndMakeVisible(patternBar_);addAndMakeVisible(patternGrid_);addAndMakeVisible(patternPage_);
     for(int i=1;i<=16;++i)patternStepSelector_.addItem(juce::String(i),i);
     patternStepSelector_.setTitle("Step to edit");patternStepSelector_.setTooltip("Choose a step to edit its note, velocity, probability and ratchets");
@@ -225,6 +231,7 @@ void FxPanel::resized()
     patternBar_.setBounds(stepRow.removeFromLeft(80).reduced(2));
     patternGrid_.setBounds(stepRow.removeFromLeft(75).reduced(2));
     patternPage_.setBounds(stepRow.removeFromLeft(75).reduced(2));
+    patternSwing_.setBounds(stepRow.removeFromLeft(75).reduced(2));
     const int stepWidth=stepRow.getWidth()/16;
     for(std::size_t i=0;i<patternSteps_.size();++i){auto area=i==15?stepRow:stepRow.removeFromLeft(stepWidth);
         patternSteps_[i].setBounds(area.reduced(2));}
@@ -242,6 +249,8 @@ void FxPanel::refreshPattern()
     const auto pattern=processor_.patternSnapshot();
     patternLength_.setSelectedId(pattern.bars,juce::dontSendNotification);
     patternGrid_.setSelectedId(static_cast<int>(pattern.grid)+1,juce::dontSendNotification);
+    if(!patternSwing_.isMouseButtonDown()&&!patternSwing_.hasKeyboardFocus(true))
+        patternSwing_.setValue(pattern.swing,juce::dontSendNotification);
     const int bar=std::clamp(patternBar_.getSelectedId(),1,4),page=std::clamp(patternPage_.getSelectedId(),1,3);
     const auto steps=pattern::stepsPerBar(pattern.grid);
     for(std::size_t i=0;i<patternSteps_.size();++i) {

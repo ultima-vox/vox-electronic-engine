@@ -459,3 +459,15 @@ offset parity, 44.1/48/96 kHz and 64/128/512 blocks, maximum capacity,
 malformed/future state and v1 migration. Local ASan/UBSan, TSan store tests
 and allocation probe passed. Swing, real DAW transport/tempo transitions,
 UI visual/accessibility testing and processor-state runtime tests remain open.
+
+## Pattern swing and FPAT v3
+
+A structural 0–1 swing control delays each odd step by up to half its grid
+interval; ratchets are distributed within the shortened remainder of that
+step. The same integer tick schedule drives host playback and MIDI export.
+FPAT v3 persists swing; v1 and v2 migrate with swing zero. Validation rejects
+non-finite/out-of-range swing and unsupported future versions. Local tests
+cover swung offsets/order, v1/v2 migration, eight grids at 44.1/48/96 kHz,
+64/128/512 blocks and MIDI/playback timing parity, plus ASan/UBSan, TSan and
+a maximum-schedule allocation probe. Processor/UI tests remain syntax-only;
+DAW transport, varying BPM and real visual/accessibility acceptance remain.

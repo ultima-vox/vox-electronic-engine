@@ -13,12 +13,14 @@ int main(){
     const auto old=round;
     for(std::size_t n=0;n<bytes.size();++n){check(!codec::decode(std::span(bytes).first(n),restored),"reject truncated data");
         check(codec::encode(restored,round)&&round==old,"failed decode preserves pattern");}
-    auto legacy=bytes;legacy[0]=std::byte{1};legacy.erase(legacy.begin()+12,legacy.begin()+16);legacy.resize(67*4);
+    auto legacy=bytes;legacy[0]=std::byte{1};legacy.erase(legacy.begin()+12,legacy.begin()+20);legacy.resize(67*4);
     Pattern migrated;check(codec::decode(legacy,migrated)&&migrated.grid==Grid::sixteenth && migrated.bars==4 &&
           migrated.steps[63].note==p.steps[63].note && !migrated.steps[64].enabled,"FPAT v1 migration");
-    auto malformed=bytes;malformed[0]=std::byte{3};check(!codec::decode(malformed,restored),"future version rejected");
+    auto legacyV2=bytes;legacyV2[0]=std::byte{2};legacyV2.erase(legacyV2.begin()+16,legacyV2.begin()+20);
+    check(codec::decode(legacyV2,migrated)&&migrated.swing==0 && migrated.steps[191].note==p.steps[191].note,"FPAT v2 migration");
+    auto malformed=bytes;malformed[0]=std::byte{4};check(!codec::decode(malformed,restored),"future version rejected");
     malformed=bytes;malformed.push_back(std::byte{0});check(!codec::decode(malformed,restored),"trailing bytes rejected");
-    malformed=bytes;malformed[19]=std::byte{0x80};check(!codec::decode(malformed,restored),"reserved bits rejected");
+    malformed=bytes;malformed[23]=std::byte{0x80};check(!codec::decode(malformed,restored),"reserved bits rejected");
     p.steps[0].ratchets=0;check(!codec::encode(p,round)&&round==old,"invalid encode transactional");
     std::printf("FX pattern codec: %d failure(s)\n",fails);return fails?1:0;
 }
