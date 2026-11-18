@@ -1,41 +1,38 @@
-# Documentation
+# Documentation index and authority — standalone ULTIMA VOX MUSIC
 
-Read [STATUS](STATUS.md) to distinguish existing code from production targets.
+**Updated 2026-11-17.** Earlier Rack-first documents (October 2026) remain in version history for provenance. They are **not** the current product plan.
 
-## Authority
+## Precedence if documents disagree
 
-1. Current explicit owner instructions.
-2. [Product specification](product/PRODUCT_SPEC.md): agreed product direction and labelled open implementation decisions.
-3. [Protected contracts](architecture/CONTRACTS.md): existing identity, routing, realtime and migration protections.
-4. [Roadmap](ROADMAP.md) and the current scoped task.
-5. [Design system](ui/DESIGN_SYSTEM.md) and [UI workflows](ui/WORKFLOWS.md).
-6. [Agent contract](../agents/AGENT_CONTRACT.md) and [development workflow](../agents/DEVELOPMENT_WORKFLOW.md).
+1. Latest explicit owner decision and approved GitHub issue/contract.
+2. [Developer handoff](DEVELOPER_HANDOFF.md) and [engineering instructions](../AGENTS.md) for the **current branch and immediate tasks** (both are dated snapshots; recheck the repository).
+3. [Independent-product architecture](ultima-vox-music/00_README_AND_OWNER_DECISIONS.md), [plugin identities](ultima-vox-music/IDENTITY.md), [Drums spec](ultima-vox-music/03_VOX_DRUMS_SPEC.md) and implementation-specific contracts.
+4. **Drums UI:** [issue #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127) controls behavior; [PR #135](https://github.com/ultima-vox/vox-electronic-engine/pull/135) controls physical-instrument styling only; [PR #130 §14](https://github.com/ultima-vox/vox-electronic-engine/pull/130) supersedes pre-release compatibility-only UI-state provisions.
+5. The actual code, tests and **exact-HEAD** Windows CI evidence establish what is implemented and verified. Specifications describe targets, not evidence of completion.
+6. Older `product/PRODUCT_SPEC.md`, `ui/`, Rack issue/task documents and `agents/*` assignments are historical where they conflict with the standalone direction.
 
-A product target is not permission to silently change the existing ABI/state schema.
-Implementing a contract change requires its own migration analysis, tests and review.
+## Essential working documents
 
-## Working documents
-
-| Document | Purpose |
+| Resource | Purpose |
 | --- | --- |
-| [Product](product/PRODUCT_SPEC.md) | Instrument model, offline generation, exports, scope and open decisions |
-| [Status](STATUS.md) | Observed implementation, owner-reported defects, unverified acceptance |
-| [Roadmap](ROADMAP.md) | Ordered work and deliverables |
-| [Contracts](architecture/CONTRACTS.md) | Boundaries that implementation must preserve |
-| [Current Rack task](tasks/RACK_PRODUCTION.md) | Rack-first priority, Acid ownership, buses/ducking/parameters and production gate |
-| [Rack capability audit](testing/rack-capability-audit-20261026.md) | Verified main capabilities, missing features and corrections to speculative bug claims |
-| [Full Bass acceptance](product/FULLON_BASS_ACCEPTANCE.md) | Complete selected VOX control surface, deferred until Rack completion |
-| [Build](BUILD.md) | Real commands, artifact names and check limitations |
-| [Design system](ui/DESIGN_SYSTEM.md) | Current component/token locations and interaction rules |
-| [UI workflows](ui/WORKFLOWS.md) | Rack, instrument pages, generators and visual gates |
-| [AGY Bass task](tasks/AGY_BASS_DIAGNOSTICS.md) | Independent, bounded development packet |
-| [Performance suite](testing/phase-17-performance.md) | Existing synthetic workload and limits |
-| [Reliability suite](testing/phase-18-reliability.md) | Existing automated lifecycle/state workload |
-| [Rack live controls](testing/rack-live-controls-report.md) | Direct control publication, macro plain mapping and runtime metadata snapshots |
-| [Rack lifecycle validation](testing/rack-lifecycle-report.md) | Typed/project state preflight and safe reprepare evidence |
+| [Developer handoff](DEVELOPER_HANDOFF.md) | Starting branch/commit, previous PR history, open problems, new developer execution order |
+| [Status](STATUS.md) | Verified snapshot of actual development and CI |
+| [Roadmap](ROADMAP.md) | Drums → FX → Synth release sequence and gates |
+| [Build](BUILD.md) / [suite pins](ultima-vox-music/BUILD.md) | Windows standalone build, CI, artifact and toolchain requirements |
+| [Current identity freeze](ultima-vox-music/IDENTITY.md) | Frozen plugin FUID/CIDs and naming |
+| [Standalone Drums target](ultima-vox-music/03_VOX_DRUMS_SPEC.md) | 16-pad instrument sound, sampling, Song/MIDI, output and content target |
+| [Bar timing](ultima-vox-music/drums/BAR_TIMING.md) | Implemented cell scheduling model and DSEQ/DSNG |
+| [Styles](ultima-vox-music/drums/STYLE_ENGINE.md) and [factory](ultima-vox-music/drums/FACTORY_CONTENT.md) | Style codecs, generator and content |
+| [DAW checklist](ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md) | Single final manual DAW acceptance |
+| [Legacy archive index / PR #118](https://github.com/ultima-vox/vox-electronic-engine/pull/118) | Historical donor and `archive/*` preservation refs |
 
-## Historical material
+## Current review and decisions
 
-[Archive index](../archive/README.md) records moved files and exact-content hashes.
-Legacy issues #10/#11 and historical UI documents do not override the current product model.
-They remain useful for implementation provenance and migration research.
+- [Drums integration PR #141](https://github.com/ultima-vox/vox-electronic-engine/pull/141): all TL decisions, integrated SHA, CI and handoff comments.
+- [Drums UI/UX issue #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127): approved release interface behavior.
+- [User style library PR #151](https://github.com/ultima-vox/vox-electronic-engine/pull/151): separate Draft, do not assume code has been merged.
+- [Legacy archives](https://github.com/ultima-vox/vox-electronic-engine/pull/118): relevant for reusing Bass/Acid/FX donors only after independent source audit.
+
+## Historical documents
+
+The October `product/PRODUCT_SPEC.md`, Rack-first `tasks/RACK_PRODUCTION.md`, `architecture/CONTRACTS.md`, `ui/DESIGN_SYSTEM.md`, `ui/WORKFLOWS.md`, and older engineering agents' reports describe the previous code base. Preserve them for traceability, but **do not revive the Rack production objective**. Historical details that remain useful (RT safety, host contracts, provenance) must be checked against the active standalone implementation before reuse.

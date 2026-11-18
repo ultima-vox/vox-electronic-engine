@@ -1,3 +1,5 @@
+> **Owner update (2026-11-17):** The independent-plugin architecture below remains authoritative, but the **current release order is VOX Drums → VOX FX → VOX Trance Synthesis (VOX Synth)**, superseding the older section 4 that places Synthesis before FX. Release is one standalone product at a time. For active branch/CI/developer instructions use [DEVELOPER_HANDOFF.md](../DEVELOPER_HANDOFF.md), [STATUS](../STATUS.md) and [ROADMAP](../ROADMAP.md). The body below is the original 2026-11-08 design snapshot; its suggested stages and open decisions are historical where superseded by reviewed code/issues.
+
 # ULTIMA VOX MUSIC — Independent Plugin Suite
 
 **Проектная документация / architecture and product definition, revision 1.0 — 08.11.2026**  

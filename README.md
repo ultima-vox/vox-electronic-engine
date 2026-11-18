@@ -1,63 +1,43 @@
-# Vox Trance Engine
+# ULTIMA VOX MUSIC — standalone Windows VST3 instruments
 
-Windows x64 VST3 rack for offline sound and MIDI generation.
-Target hosts: Cubase 12–15 and REAPER 7.x on Windows 10–11.
+**Active product direction (2026-11-17):** exactly three independent C++20 / JUCE Windows x64 VST3 instruments, completed in this order:
 
-**Product direction is agreed; the production instruments are not yet delivered.**
-The current binary still identifies itself as **Vox Electronic Engine**.
-This documentation/archival change does not rename the installed plugin or change its IDs.
+1. **VOX Drums** — finish the existing 16-pad drum machine and its approved custom JUCE editor.
+2. **VOX FX** — standalone MIDI-triggered FX sound generator.
+3. **VOX Trance Synthesis** (also called VOX Synth) — standalone synth including Bass/Acid and approved synthesis capabilities.
 
-## Product
+**There is no shared Rack host in the shipping architecture.** The historical Vox Electronic Engine Rack code remains in this repository as a donor/archive, not as the default product or the active development task. Existing DSP, tests and `libs/vox-ui` are reused rather than rewritten.
 
-One rack hosts separate style-specific instruments:
-Full-on Bass, Full-on Drums, Full-on Lead, Full-on Keys and Full-on FX.
-Each owns its presets, generator rules and specialised controls; DSP components are shared.
-Further styles can be added as instruments/content without duplicating the host.
+## New developer: start here
 
-Generation is offline, without neural networks.
-Sound and Pattern generation remain separate.
-Style instruments can be distributed individually or in bundles.
-The first instrument to finish is **Full-on Bass**; a working empty rack alone is not the deliverable.
+- **[Current developer handoff](docs/DEVELOPER_HANDOFF.md)** — authoritative dated baseline, scope, integration branch, PRs, CI incident and next tasks.
+- **[Agent instructions](AGENTS.md)** — current task precedence, safety rules and workflow.
+- **[Live project status](docs/STATUS.md)** and **[roadmap](docs/ROADMAP.md)**.
+- **[Documentation authority/index](docs/README.md)**.
+- **[Standalone build and validation](docs/BUILD.md)** and [pinned suite build](docs/ultima-vox-music/BUILD.md).
+- **[Frozen plugin identities](docs/ultima-vox-music/IDENTITY.md)**.
+- [VOX Drums specification](docs/ultima-vox-music/03_VOX_DRUMS_SPEC.md) and [approved JUCE UI contract #127](https://github.com/ultima-vox/vox-electronic-engine/issues/127).
+- **[Final DAW acceptance checklist](docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md)** — release gate for the completed exact-head Windows candidate; one final owner pass only.
 
-## Start here
+## Current VOX Drums source of truth
 
-- [Documentation index](docs/README.md)
-- [Product specification](docs/product/PRODUCT_SPEC.md)
-- [Current implementation status](docs/STATUS.md)
-- [Execution roadmap](docs/ROADMAP.md)
-- [Protected contracts](docs/architecture/CONTRACTS.md)
-- [Build and validation](docs/BUILD.md)
-- [UI design rules](docs/ui/DESIGN_SYSTEM.md)
-- [UI workflows](docs/ui/WORKFLOWS.md)
-- [AGY task: reproduce Bass/generation failures](docs/tasks/AGY_BASS_DIAGNOSTICS.md)
+The shared development branch is **`integration/vox-drums-1.0`**, GitHub [PR #141](https://github.com/ultima-vox/vox-electronic-engine/pull/141). The checked baseline on 2026-11-17 is `f9d5446623a558410b0af4652aabf1e918899bec`. This includes the major generator/style/factory/gain chain and MIDI drag integration; it is **not** production-accepted.
 
-## Current source layout
+The integrated Windows Suite on that SHA was **interrupted by the self-hosted runner shutdown** after 16/32 serial CTests had passed; the remaining tests and VST3 validation did not finish. [CI incident and required rerun](https://github.com/ultima-vox/vox-electronic-engine/pull/141#issuecomment-6929407023). The separate [StyleLibrary PR #151](https://github.com/ultima-vox/vox-electronic-engine/pull/151) is not yet integrated and has outstanding review findings.
 
-| Path | Responsibility |
+Work in a new branch from the integration branch, issue Draft PRs targeting it, and use GitHub Actions on Windows self-hosted runners. **Do not merge to `main`**, delete branches or restart the Drums implementation. The manual Cubase/REAPER acceptance is a **single final stage** after the product and automated qualification are complete.
+
+## Repository layout (active and historical)
+
+| Path | Role |
 | --- | --- |
-| `apps/vst3/` | JUCE host adapter and editor composition |
-| `libs/instrument/`, `libs/rack/` | Providers, stable identities, routing and state |
-| `libs/sequence/`, `libs/transport/`, `libs/midi/` | Current sequence model, host time, scheduling and MIDI export |
-| `libs/bass/`, `libs/modules/` | Existing Psy Bass implementation and built-in provider composition |
-| `libs/acid/`, `libs/lead/`, `libs/semanticfx/`, `libs/atmos/` | Existing modules still compiled and tested |
-| `libs/parts/` | Existing compatibility/Part code; retain until references and migrations are audited |
-| `libs/preset/`, `libs/modulation/`, `libs/effects/` | Presets, modulation and creative processing |
-| `libs/ui/`, `libs/vox-ui/` | Product UI and shared presentation components |
-| `tests/` | Existing regression, integration, performance and reliability suites |
-| `docs/` | Current product, engineering, UI and task documentation |
-| `archive/` | Historical documents and inactive source; not build inputs |
+| `products/drums/` | Active standalone Drums processor, DSP integration, sequencer, MIDI, state and interim editor |
+| `products/fx/`, `products/trance-synthesis/` | Other standalone VST3 product source; presence is not feature or release acceptance |
+| `libs/vox-*/` | Shared DSP, UI, state and testing infrastructure |
+| `tests/suite/` | Standalone regressions, golden renders and performance checks |
+| `.github/workflows/suite.yml` | Windows standalone-suite CI and validator |
+| `apps/vst3/`, `libs/rack/`, `libs/bass/`, `libs/acid/` | Historical Rack code and future DSP donors; not the Drums release host |
+| `docs/ultima-vox-music/` | Standalone specifications and implementation contracts |
+| `archive/` | Historical design and source records |
 
-Do not remove a compiled module merely because it is absent from the first commercial package.
-Catalog visibility, installed content and persistent InstrumentId are different concerns.
-
-## Build
-
-Use the [Windows build instructions](docs/BUILD.md).
-Build/package filenames deliberately retain `Vox Electronic Engine` during this transition.
-Compilation and automated tests do not establish sound quality or acceptance in a DAW.
-
-## History
-
-Old product specifications, the separate-Drums product policy and inactive Kick/MATCH
-source are preserved in [the archive](archive/README.md).
-They are historical evidence, not current product requirements.
+Earlier Rack-first product specifications and October status documents are preserved for historical review in Git, but **do not supersede the active standalone handoff**. Automated CI cannot prove audible sound quality, final UI appearance or real DAW drag/routing behavior.

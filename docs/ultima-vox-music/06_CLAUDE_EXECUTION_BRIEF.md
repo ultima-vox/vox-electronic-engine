@@ -1,3 +1,5 @@
+> **HISTORICAL TASK — superseded for current work (2026-11-17).** This brief was authored for Claude before the consolidated VOX Drums integration. Claude is no longer assumed available. New Codex/other developers **must start with [the current successor handoff](../DEVELOPER_HANDOFF.md)** and the existing `integration/vox-drums-1.0` branch, not the old staged execution plan, Rack or a fresh implementation. Current owner priority: **Drums → FX → Trance Synthesis**. The original Claude brief below is retained as historical background only.
+
 # CLAUDE CODE MASTER TASK — ULTIMA VOX MUSIC: three production standalone instruments
 
 **Date:** 2026-11-08. **Repository:** `ultima-vox/vox-electronic-engine`. **Status:** development specification, NOT an instruction to merge existing PRs or release anything. **Owner pivot:** retire the single Kontakt-style Rack runtime, reuse audited legacy assets only, and create three independent Windows x64 VST3 plugins with a shared library and consistent ULTIMA VOX MUSIC UI.

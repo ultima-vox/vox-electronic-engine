@@ -1,93 +1,42 @@
-# Implementation status
+# Development status — ULTIMA VOX MUSIC standalone VST3
 
-Updated: 26.10.2026.
-Audited main: `ccc1b4dbe416d96370721674eb4857aec19f8fac`.
-Product direction: Vox Trance Engine; installed binary: Vox Electronic Engine.
+**Snapshot:** 2026-11-17, checked against GitHub `ultima-vox/vox-electronic-engine`. Re-query live PR heads and CI when resuming work. This supersedes the Rack-first status snapshot of 2026-10-26 (retained in Git history).
 
-## Current priority and ownership
+## Product order and boundaries
 
-**Finish the generic Rack first; Bass follows.** Another agent owns Acid Synth
-and its dedicated UI. The lead owns shared Rack/host/state contracts and Routing.
-See [current task](tasks/RACK_PRODUCTION.md), [audit](testing/rack-capability-audit-20261026.md)
-and [epic #53](https://github.com/ultima-vox/vox-electronic-engine/issues/53).
+1. **VOX Drums:** primary active development and first release candidate.
+2. **VOX FX:** subsequent independent MIDI-triggered FX instrument, not an audio insert effect or nested Rack plugin.
+3. **VOX Trance Synthesis (VOX Synth):** subsequent independent synthesizer, with Bass/Acid donor DSP and further approved scope.
 
-The Rack is a working MIDI/mix foundation, **not production-complete**. Confirmed
-gaps in main: internal kick ducking bus, per-slot Send FX/return graph and their
-Routing UI. Existing global post-rack effects do not implement those features.
-Generic direct parameter/automation/state completion also remains open.
+All are Windows x64 VST3, Cubase 12–15 / REAPER target, JUCE 9 / C++20, no shared Rack host. Three frozen identities are recorded in [IDENTITY.md](ultima-vox-music/IDENTITY.md). Existing `main` still contains legacy Rack material; don't treat `main` as the standalone Drums code baseline.
 
-## Existing code, not a production-acceptance claim
+## VOX Drums actual integration checkpoint
 
-- C++20, JUCE 9.0.1, CMake; Windows VST3 package workflow.
-- Generic 16-slot Rack/Router and instrument/provider registry.
-- Psy Bass, Acid, Lead, Semantic FX and Atmos modules.
-- Step sequence, host PPQ sync, scheduling, MIDI export.
-- Preset/state handling, modulation and post-rack effects.
-- Shared VOX UI components and product editor.
-- Automated regression, performance and reliability suites.
+- **Primary branch and PR:** `integration/vox-drums-1.0` / [#141](https://github.com/ultima-vox/vox-electronic-engine/pull/141).
+- **Exact checked HEAD:** `f9d5446623a558410b0af4652aabf1e918899bec`. The role/style/meter/generator/factory/listening/Trap/gain commits from stacked #143–#150 are in the history; MIDI drag fix #142 was merged in `f9d5446`.
+- Existing `products/drums/` includes a 16-pad Synth/Sample/Layer instrument, step and Song 16/32/64-bar editing and MIDI export, generator and style model, presets/state/undo, 9 host-visible stereo output buses and initial JUCE editor. Not all are manually host-qualified.
+- The **interim eight-page editor is not the approved release UI**; [#127](https://github.com/ultima-vox/vox-electronic-engine/issues/127) requires a native hardware-inspired dockable workstation, with [#135](https://github.com/ultima-vox/vox-electronic-engine/pull/135) visual-only reference and #130 §14 pre-release state simplification.
+- [#151 StyleLibrary](https://github.com/ultima-vox/vox-electronic-engine/pull/151) `1757eec5` remains separate Draft. CI suite succeeded on this branch, but source review found a P1 in Replace and P2 in direct text bounds and duplicate UUID handling; [review](https://github.com/ultima-vox/vox-electronic-engine/pull/151#issuecomment-6927775544).
 
-These facts describe source structure. Evidence and limitations are recorded
-separately below; source presence is not production acceptance.
+## Exact Windows CI evidence and current blocker
 
-## Owner-reported blockers
+| Commit | Workflow | Verified result | Interpretation |
+| --- | --- | --- | --- |
+| `5e1cf357` (#150) | [Windows build](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/43805453493) | SUCCESS | Old uncombined #150 tree |
+| `5e1cf357` (#150) | [Windows suite](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/43805453483) | SUCCESS: 32 serial + 8 gain; validator reported 47/47 per bundle | Gain and tests for #150, **not final integration** |
+| `f9d544662` (#141) | [Windows suite](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/43943639327) | FAILURE due to runner shutdown/cancellation at 2026-11-16 20:16 UTC after 16/32 serial tests | No assertion failure observed; remaining serial, gain and validator not executed |
+| `f9d544662` (#141) | [Windows build](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/43943639334) | QUEUED when checked | Not a PASS |
+| `1757eec5` (#151) | [Windows suite](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/43942191194) | SUCCESS on isolated Draft | Does not resolve independent source review defects |
 
-| Symptom | Status | Required evidence |
-| --- | --- | --- |
-| Generation does not work | Original session cause not established; PR #51 scheduler/export fixes are integrated and the generation/publication/audio path exists | Reproduce any remaining failure with exact build/state, source mode, transport and event trace |
-| Bass sounds like a continuous beep | Original session cause not established; direct main voice NoteOff/release/reset probe passes27 checks | Exact build/state and full event path; do not label ADSR broken from this symptom alone |
-| Too much functionality without a reliable workflow | Reported | One complete Bass -> generation -> MIDI -> project restore path |
+**Immediate gate:** diagnose self-hosted Windows runner shutdown/service/competing jobs and rerun the **unchanged integrated SHA**. A canceled job is not an audio regression, but it also is not a green integrated candidate. Preserve logs and hashes.
 
-Do not label a guessed envelope or routing cause as confirmed. Lack of ducking or
-sends does not by itself explain either symptom. Remaining Bass acceptance is
-deferred after Rack, tracked in #45/#58.
+## Open product/release gates
 
-## Production targets still incomplete
+- Apply P1/P2 fixes in #151, retest and incorporate into integrated Drums; do not rebuild StyleLibrary.
+- Deliver approved native JUCE UI #127 with genuine controls and dockable layout; correct pad select/audition, context and host automation, persistent layout state; produce real JUCE captures at stated sizes and DPI.
+- Confirm style/music quality by actual listening before release; factory acoustic samples need per-file redistribution/provenance (Rock/Metal remain not release-ready).
+- Audit 96 kHz callback timing, RT safety, state/undo, sample ownership, factory sample-peak bounded matrix, routing 9 buses, MIDI drag and one-pass Song export.
+- Run one final combined Windows CTest + VST3 validator + artifact hashes on exact release candidate, then **one owner Cubase/REAPER manual acceptance**. Green CI is not sound or host acceptance.
+- No merge to `main`, no branch deletion and no release-ready claim until gates are closed.
 
-- Full-on Bass/Drums/Lead/Keys/FX as separate production rack instruments.
-- Independent constrained Sound/Pattern generation for that complete lineup.
-- Polyphonic, long-phrase musical model and versioned adapters.
-- Complete Keys and Drum Kit workflows.
-- Style-instrument packaging, commercial entitlements and offline licensing policy.
-- Approved production UI and full Windows/Cubase/REAPER acceptance.
-
-Lead DSP already has8 voices and Atmos6. The missing polyphonic/long-phrase
-Sequence/Pattern/scheduler model is a separate gap. Dedicated AcidPanel is not
-in audited main, but its development is separately owned. The active Rack editor
-uses generic pages; BassPanel's presence does not mean it is the only active UI.
-Full Bass acceptance requires [the entire selected VOX surface](product/FULLON_BASS_ACCEPTANCE.md),
-not the reduced13/16-control experimental panel.
-
-Existing generic Lead/FX code is not equivalent to an accepted Full-on instrument.
-
-## Validation ledger
-
-- Required Windows checks passed for integrated safety/scheduler PRs #46/#48/#50/#51.
-- This audit performed source review and a direct main PsyBassVoice lifecycle
-  probe:27 checks PASS with project ASan/UBSan. Dependency objects were not all
-  instrumented; LeakSanitizer was disabled. The exact owner session was not reproduced.
-- No new Windows build, DAW launch or listening acceptance was performed by this
-  audit. Existing CI has Windows Release build/CTest/packaging jobs.
-- CTest does not prove audible character, drag-and-drop in a DAW, or visual acceptance.
-- CPU/RAM promises await target CPU, audio interface and buffer information.
-- Existing test ceilings are regression guards, not end-user performance promises.
-
-## Current work allocation
-
-Rack state/lifecycle hardening and MIDI release recovery are integrated in main
-(PRs #48 and #46; required Windows CI passed for both). See the
-[lifecycle report](testing/rack-lifecycle-report.md) and
-[router report](testing/rack-midi-hardening-report.md).
-Live-control synchronization and onset-aware release/ratchet/export diagnostics
-are also integrated (PRs #50/#51); see the
-[verification report](testing/rack-live-controls-report.md).
-Manual sound/DAW acceptance remains outstanding at integrated milestones,
-not a per-PR handoff. Standalone is not required; VST3 remains the product.
-
-- Documentation/archival: completed in PR #44.
-- AGY's original [diagnostic packet](tasks/AGY_BASS_DIAGNOSTICS.md) is historical
-  input to PR #51; remaining exact-session/musical acceptance is tracked in #45.
-- Rack lead: #53–#57; Acid DSP/UI: external agent; Bass: #58 after Rack.
-- PR #52 and local Bass/direct-control experiments are unfinished and unmerged;
-  they are not the published shared interface or evidence of production Bass.
-- UI PR #43: existing Sound workspace candidate. Re-evaluate against current workflows; do not merge or close automatically during cleanup.
-- Pattern/API v2 and new style instruments: subsequent scoped implementation, not part of AGY's first task.
+**Handoff:** [DEVELOPER_HANDOFF.md](DEVELOPER_HANDOFF.md). This report is a dated observation, not a promise about future CI state.
