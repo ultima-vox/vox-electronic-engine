@@ -370,6 +370,8 @@ tail; worker WAV appends 1 second when lowpass is enabled. It omits
 delay/reverb, phaser/flanger/chorus, full tail/latency policy and
 aliasing/performance qualification. It is not a completed FX-04 processor.
 Processor/UI integration and state tests have only been syntax-checked, not
-executed. The controller's FX and layer snapshots are separately published;
-a concurrent host restore can expose an intermediate pairing to audio and
-requires a unified transactional snapshot before production acceptance.
+executed. Program and four FX settings are now published together via one
+bounded lock-free audio snapshot; controller layer/FX edits serialize, and
+host state saves the coherent pair. Local concurrent publication stress, TSan
+and a Linux allocation probe pass. Host-automated parameter values remain
+separate from structural snapshots, as documented above.

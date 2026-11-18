@@ -89,17 +89,11 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
-bool FxProcessor::setEffect (std::size_t index, effects::Settings settings) noexcept
+bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)
 {
-    if (index>=4 || !settings.valid()) return false;
-    const auto shift=static_cast<unsigned>(index*16);
-    const std::uint64_t mask=std::uint64_t{0xffff}<<shift;
-    auto old=effectsSettings_.load(std::memory_order_relaxed);
-    const auto bits=static_cast<std::uint64_t>(effects::pack(settings))<<shift;
-    while (!effectsSettings_.compare_exchange_weak(old,(old&~mask)|bits,std::memory_order_release,std::memory_order_relaxed)) {}
-    return true;
+    return programs_.setEffect(index,settings);
 }
-effects::Settings FxProcessor::effect (std::size_t index) const noexcept
+effects::Settings FxProcessor::effect (std::size_t index) const
 {
     if (index>=4) return {};
     return effects::unpack(static_cast<std::uint16_t>(effectsSnapshot()>>(index*16)));
@@ -110,7 +104,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     SuiteProcessor::prepareToPlay (rate, blockSize);
     engine_.prepare (rate);
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
-    programSequence_ = 0;
+    programSequence_ = 0; audioEffects_ = effects::defaults();
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
@@ -160,7 +154,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     }
     // One bounded attempt: if a concurrent writer is publishing, keep the
     // prior snapshot and retry on the next block. No locks or allocation.
-    if (programs_.tryRead (audioProgram_, programSequence_))
+    if (programs_.tryRead (audioProgram_, audioEffects_, programSequence_))
         (void) engine_.setProgram (audioProgram_);
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
@@ -199,7 +193,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         // interim one-shot mode. CC120/123 and reset use a 5 ms fade.
     }
     renderTo (size);
-    const auto fxSnapshot=effectsSnapshot();
+    const auto fxSnapshot=audioEffects_;
     for (std::size_t i=0;i<4;++i)
         (void) effects_.set(i,effects::unpack(static_cast<std::uint16_t>(fxSnapshot>>(i*16))));
     effects_.process(left,right,static_cast<std::size_t>(size));
@@ -219,10 +213,10 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
     const auto current = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
     out.push_back (encodeParameter (output_->get(), juce::exactlyEqual (current, heldDuration_) ? loadedDuration_ : current));
-    const auto program = programs_.snapshot();
-    out.push_back (encodeFamily (static_cast<int> (program.layers[0].family)));
-    out.push_back (encodeProgram (program));
-    out.push_back (encodeEffects (effectsSnapshot()));
+    const auto snapshot = programs_.snapshotState();
+    out.push_back (encodeFamily (static_cast<int> (snapshot.program.layers[0].family)));
+    out.push_back (encodeProgram (snapshot.program));
+    out.push_back (encodeEffects (snapshot.effects));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -284,8 +278,7 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     result.sections.push_back (encodeEffects (fx));
     auto held = std::make_shared<float> (0.0f);
     result.apply = [this, value, duration, program, held, fx] {
-        (void) programs_.publish (*program);
-        effectsSettings_.store(fx,std::memory_order_release);
+        (void) programs_.publishState (*program, fx);
         restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);

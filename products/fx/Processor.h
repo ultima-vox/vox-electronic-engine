@@ -41,9 +41,9 @@ public:
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
-    bool setEffect (std::size_t index, effects::Settings settings) noexcept;
-    effects::Settings effect (std::size_t index) const noexcept;
-    std::uint64_t effectsSnapshot() const noexcept { return effectsSettings_.load(std::memory_order_acquire); }
+    bool setEffect (std::size_t index, effects::Settings settings);
+    effects::Settings effect (std::size_t index) const;
+    std::uint64_t effectsSnapshot() const { return programs_.snapshotState().effects; }
     NoiseProgram program() const { return programs_.snapshot(); }
     std::uint64_t programRestoreEpoch() const noexcept { return restoreEpoch_.load(std::memory_order_acquire); }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
@@ -56,8 +56,7 @@ protected:
 private:
     NoiseRiser engine_;
     effects::Chain effects_;
-    static_assert (std::atomic<std::uint64_t>::is_always_lock_free);
-    std::atomic<std::uint64_t> effectsSettings_ { effects::defaults() };
+    std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;
     std::atomic<std::uint64_t> restoreEpoch_ { 0 };
     NoiseProgram audioProgram_;

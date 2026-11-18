@@ -50,5 +50,32 @@ int main(){
         check(final.layers[0].family==vox::fx::NoiseFamily::downlifter &&
               final.layers[1].family==vox::fx::NoiseFamily::formant, "concurrent layer edits preserved");
     }
+    {
+        vox::fx::ProgramStore unified;vox::fx::NoiseProgram audio;std::uint64_t fx=0,seq=0;
+        (void)unified.tryRead(audio,fx,seq);
+        std::atomic<bool> finished{false};
+        std::thread producer([&]{for(int i=0;i<10000;++i){vox::fx::NoiseProgram program;
+            const bool drive=(i&1)!=0;program.layers[0].gain=drive?.75f:.25f;
+            auto packed=vox::fx::effects::defaults();
+            const auto setting=vox::fx::effects::pack({drive?vox::fx::effects::Type::drive:vox::fx::effects::Type::bypass,1,.5f});
+            packed=(packed&~std::uint64_t{0xffff})|setting;
+            if(!unified.publishState(program,packed))std::abort();
+        }finished.store(true,std::memory_order_release);});
+        do {if(unified.tryRead(audio,fx,seq)){
+            const auto type=vox::fx::effects::unpack(static_cast<std::uint16_t>(fx)).type;
+            check((type==vox::fx::effects::Type::drive&&audio.layers[0].gain==.75f)||
+                  (type==vox::fx::effects::Type::bypass&&audio.layers[0].gain==.25f),"coherent Program and FX snapshot");
+        }}while(!finished.load(std::memory_order_acquire));
+        producer.join();
+        const auto state=unified.snapshotState();check(state.program.layers[0].gain==.75f&&
+            vox::fx::effects::unpack(static_cast<std::uint16_t>(state.effects)).type==vox::fx::effects::Type::drive,"latest unified state");
+        check(!unified.publishState(state.program,(state.effects&~std::uint64_t{7})|7),"invalid effects state rejected");
+        std::thread layerWriter([&]{for(int i=0;i<1000;++i)if(!unified.setLayerFamily(1,vox::fx::NoiseFamily::formant))std::abort();});
+        std::thread fxWriter([&]{for(int i=0;i<1000;++i)if(!unified.setEffect(2,{vox::fx::effects::Type::gate,.5f,.5f}))std::abort();});
+        layerWriter.join();fxWriter.join();const auto both=unified.snapshotState();
+        check(both.program.layers[1].family==vox::fx::NoiseFamily::formant &&
+            vox::fx::effects::unpack(static_cast<std::uint16_t>(both.effects>>32)).type==vox::fx::effects::Type::gate,
+            "concurrent layer and FX edits preserved");
+    }
     std::printf("FX Program store: %d failure(s)\n",fails);return fails?1:0;
 }
