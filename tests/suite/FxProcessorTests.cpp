@@ -42,6 +42,12 @@ int main() {
         p.durationParameter().setValueNotifyingHost(p.durationParameter().convertTo0to1(4.0f));
         panel.familySelector().setSelectedId(2, juce::sendNotificationSync);
         check(p.family() == 1, "family selector updates structural state");
+        panel.eventBarsSelector().setSelectedId(6,juce::sendNotificationSync);
+        check(p.program().bars==16,"bar duration editor changes Program");
+        auto barState=save(p);auto barRecall=std::make_unique<vox::fx::FxProcessor>();
+        barRecall->setStateInformation(barState.getData(),static_cast<int>(barState.getSize()));
+        check(barRecall->program().bars==16,"bar duration survives state recall");
+        panel.eventBarsSelector().setSelectedId(1,juce::sendNotificationSync);
         p.setFamily(0);
         panel.layerPanel(1).gainSlider().setValue(0.42, juce::sendNotificationSync);
         panel.layerPanel(1).panSlider().setValue(-0.5, juce::sendNotificationSync);
@@ -458,6 +464,29 @@ int main() {
         block(*tempoProcessor,tempoAudio,tempoMidi);
         check(tempoProcessor->captureProgramWav({}).settings.tempo==120,"invalid host tempo uses documented default");
         tempoProcessor->setPlayHead(nullptr);
+    }
+    {
+        auto musical=std::make_unique<vox::fx::FxProcessor>(); TestPlayHead head;
+        musical->setPlayHead(&head); musical->prepareToPlay(8000,256);
+        auto program=musical->program(); program.bars=1;program.layers[0].family=vox::fx::NoiseFamily::shepard;
+        check(musical->setProgram(program),"processor bar program installed");
+        juce::AudioBuffer<float> audio(2,256);juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        block(*musical,audio,midi);
+        check(musical->audioTelemetry().events==0,"bar note rejected without host position");
+        std::int64_t sample=0;double ppq=0,energy=0;
+        auto run=[&](int total,double bpm,bool trigger){
+            while(total>0){const int n=std::min(total,256);audio.setSize(2,n,false,false,true);
+                juce::AudioPlayHead::PositionInfo pos;pos.setIsPlaying(true);pos.setTimeInSamples(sample);
+                pos.setPpqPosition(ppq);pos.setBpm(bpm);juce::AudioPlayHead::TimeSignature sig{4,4};pos.setTimeSignature(sig);head.position=pos;
+                if(trigger){midi.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);trigger=false;}
+                block(*musical,audio,midi);energy+=audio.getMagnitude(0,0,n);sample+=n;ppq+=n*bpm/(60.0*8000.0);total-=n;
+            }
+        };
+        run(4000,120,true);check(energy>0 && musical->audioTelemetry().events==1,"processor renders tonal bar event");
+        run(23999,60,false);check(musical->audioTelemetry().events==1,"processor tempo change retains event");
+        run(2,60,false);check(musical->audioTelemetry().events==0,"processor bar event ends at boundary");
+        musical->setPlayHead(nullptr);
     }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);

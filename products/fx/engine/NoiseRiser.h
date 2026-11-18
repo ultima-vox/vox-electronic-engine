@@ -29,8 +29,10 @@ struct NoiseLayer {
 };
 struct NoiseProgram {
     std::array<NoiseLayer, 4> layers {};
+    std::uint8_t bars = 0; // 0 = legacy seconds; otherwise 1, 2, 4, 8 or 16 bars
     NoiseProgram() noexcept { layers[0].enabled = true; }
     bool valid() const noexcept {
+        if (bars != 0 && bars != 1 && bars != 2 && bars != 4 && bars != 8 && bars != 16) return false;
         for (const auto& layer : layers) if (!layer.valid()) return false;
         return true;
     }
@@ -51,7 +53,18 @@ public:
     // samples; existing glitch grid phase is never reinterpreted.
     bool setTempo(double bpm) noexcept {
         if(!std::isfinite(bpm)||bpm<1.0||bpm>1000.0)return false;
-        glitchGridIncrement_=bpm/(15.0*rate_);return true;
+        glitchGridIncrement_=bpm/(15.0*rate_); return true;
+    }
+    // When host musical position is unavailable, reject new bar events and
+    // fade only existing bar voices; keep the last tempo for their release.
+    void setMusicalClockAvailable(bool available, double bpm = 120.0) noexcept {
+        available = available && std::isfinite(bpm) && bpm >= 1.0 && bpm <= 1000.0;
+        musicalClockAvailable_ = available;
+        if (available) tempo_ = bpm;
+        if (!available) {
+            for (auto& v : voices_) if (v.active && v.program.bars != 0) beginRelease(v);
+            for (auto& v : retiring_) if (v.active && v.program.bars != 0) beginRelease(v);
+        }
     }
     static double samplePlaybackStep(double sourceRate,double outputRate,double pitchRatio) noexcept {
         return sourceRate/outputRate*pitchRatio;
@@ -59,7 +72,7 @@ public:
     void prepare(double sampleRate) noexcept {
         releaseSampleLeases();
         rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
-        (void)setTempo(120.0);
+        (void)setTempo(120.0); tempo_ = 120.0; musicalClockAvailable_ = false;
         for (std::size_t i = 0; i < coefficients_.size(); ++i) {
             const double phase = static_cast<double>(i) / tableIntervals;
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
@@ -121,8 +134,10 @@ public:
     // fades are occupied the incoming event is dropped deterministically.
     bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false, std::uint64_t expectedSampleToken = 0) noexcept {
         timeline::SecondsClock clock;
+        timeline::BarsClock barsClock;
         if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
             !clock.start(duration, rate_)) return false;
+        if (program_.bars != 0 && (!musicalClockAvailable_ || !barsClock.start(program_.bars,4,4,rate_))) return false;
         Voice* slot = nullptr;
         for (auto& voice : voices_) if (!voice.active) { slot = &voice; break; }
         const bool stealing=slot==nullptr;
@@ -156,7 +171,8 @@ public:
         *slot = {};
         slot->active = true; slot->channel = channel; slot->note = note;
         slot->velocity = std::clamp(velocity, 0.0f, 1.0f);
-        slot->clock = clock; slot->duration = duration; slot->program = program_;
+        slot->clock = clock; slot->barsClock = barsClock;
+        slot->duration = program_.bars ? program_.bars * 4.0 * 60.0 / tempo_ : duration; slot->program = program_;
         slot->serial = ++serial_;
         int enabled = 0;
         for (std::size_t i = 0; i < slot->layers.size(); ++i) {
@@ -225,6 +241,7 @@ private:
         float velocity = 0;
         std::uint64_t serial = 0;
         timeline::SecondsClock clock;
+        timeline::BarsClock barsClock;
         double duration = 4.0, layerScale = 1.0;
         int releaseRemaining = 0, releaseLength = 0;
         NoiseProgram program;
@@ -238,7 +255,7 @@ private:
     void tick(Voice& v, double& left, double& right, std::size_t voiceIndex) noexcept {
         if (!v.active) return;
         double eventPhase = 0;
-        if (!v.clock.next(eventPhase)) { v.active = false; return; }
+        if (!(v.program.bars ? v.barsClock.next(tempo_,eventPhase) : v.clock.next(eventPhase))) { v.active = false; return; }
         double release = 1.0;
         if (v.releaseRemaining > 0) {
             release = static_cast<double>(v.releaseRemaining) / v.releaseLength;
@@ -544,6 +561,8 @@ private:
     std::array<Grain, 64> grains_ {};
     unsigned grainLength_ = 2, grainInterval_ = 1, activeGrains_ = 0;
     NoiseProgram program_;
+    double tempo_ = 120.0;
+    bool musicalClockAvailable_ = false;
     double rate_ = 44100.0,glitchGridIncrement_=120.0/(15.0*44100.0);
     std::uint64_t serial_ = 0;
     std::uint32_t droppedEvents_=0;

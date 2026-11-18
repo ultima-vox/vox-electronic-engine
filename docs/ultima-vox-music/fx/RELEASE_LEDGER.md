@@ -9,7 +9,7 @@ Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent
 | FX-T03 | OPEN: gain/pan only, not 20 typed curves or migration | queued / not approved / not done |
 | FX-T04 | OPEN: seconds one-shot only, no complete modes | queued / not approved / not done |
 | FX-T05 | PARTIAL: eight voices, four fades and drop counter standalone; held note ownership missing | queued / not approved / not done |
-| FX-T06 | PARTIAL: standalone bars clock, transport tracker; no integrated 16-bar timing | queued / not approved / not done |
+| FX-T06 | PARTIAL: bar one-shot integrated with host clock and UI; standalone four-layer 16-bar rendering and tempo change tested on Linux; processor test written, not executed; no target-bar Transition, Gate or host evidence | queued / not approved / not done |
 | FX-T07 | OPEN: key/scale musical proof absent | queued / not approved / not done |
 | FX-T08 | PARTIAL: eight macros, limited routes/sources, standalone tests | queued / not approved / not done |
 | FX-T09 | PARTIAL: effects tests; 4-drive saturation and tails require qualification | queued / not approved / not done |
@@ -34,3 +34,7 @@ Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent
 | C | 600 cumulative | 0 documented | no catalog/listening sign-off |
 
 48 deterministic procedural seeds and 12 patterns are prototypes, not approved factory content. Counts mean no documented approvals, not a claim that all seeds are unusable. Production 1.0 requires all 600 unless the owner changes the spec.
+
+## Integrated bar one-shot (post-baseline checkpoint)
+
+FPRG v2 migrates v1 to seconds; bar one-shot requires playing host with finite PPQ/tempo and explicit 4/4. Loss of clock fades bar voices; seconds voices remain playable. Native selector, processor host-clock path and processor/editor test are implemented but execution is still pending Windows. Linux standalone bar event tests include audible four-layer 16 bars at 60 BPM/8 kHz, tempo change and invalid-clock fade; this is diagnostic, not a musical approval, target-bar Transition or 16-bar processor/DAW proof. WAV export explicitly refuses bar Programs. Exact commit and run IDs are recorded in the associated PR checkpoint; later changes invalidate exact-HEAD evidence.

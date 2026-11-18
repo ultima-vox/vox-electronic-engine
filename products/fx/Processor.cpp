@@ -236,7 +236,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // Stop, seek or loop discontinuity fades existing events. No stop is
     // inferred when a host does not provide a position. New notes in this
     // block may still start (including audition while transport is stopped).
-    bool positionAvailable = false, patternHostReady=false, hostPlaying=false;
+    bool positionAvailable = false, patternHostReady=false, hostPlaying=false, musicalClockReady=false;
     double hostPpq=0.0,hostBpm=0.0,glitchTempo=120.0;
     if (auto* host = getPlayHead()) {
         if (const auto position = host->getPosition()) {
@@ -246,6 +246,9 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             if(bpm.hasValue()&&std::isfinite(*bpm)&&*bpm>=1.0&&*bpm<=1000.0)glitchTempo=*bpm;
             const auto signature=position->getTimeSignature();
             const bool supportedSignature=!signature.hasValue() || (signature->numerator==4 && signature->denominator==4);
+            musicalClockReady=playing && ppq.hasValue() && std::isfinite(*ppq) && bpm.hasValue() &&
+                std::isfinite(*bpm) && *bpm>=1.0 && *bpm<=1000.0 && signature.hasValue() &&
+                signature->numerator==4 && signature->denominator==4;
             if(playing && ppq.hasValue() && bpm.hasValue() && supportedSignature) {
                 hostPpq=*ppq;hostBpm=*bpm;patternHostReady=true;
             }
@@ -259,6 +262,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     }
     if (!positionAvailable) transport_.unavailable();
     (void)engine_.setTempo(glitchTempo);
+    engine_.setMusicalClockAvailable(musicalClockReady,glitchTempo);
     capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
     if (panicPending_.exchange (false, std::memory_order_acquire)) {
         engine_.allSoundOff (0);
@@ -271,6 +275,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         (void) pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
         (void) macroRuntime_.setConfig(audioMacroConfig_);
     }
+    musicalClockUnavailable_.store(!musicalClockReady,std::memory_order_relaxed);
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;

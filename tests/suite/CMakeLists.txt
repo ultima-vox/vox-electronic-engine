@@ -231,6 +231,11 @@ target_include_directories(suite_fx_timeline_tests PRIVATE ${PROJECT_SOURCE_DIR}
 add_test(NAME suite_fx_timeline_tests COMMAND suite_fx_timeline_tests)
 set_tests_properties(suite_fx_timeline_tests PROPERTIES LABELS suite)
 
+add_executable(suite_fx_bar_event_tests FxBarEventTests.cpp)
+target_include_directories(suite_fx_bar_event_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_bar_event_tests COMMAND suite_fx_bar_event_tests)
+set_tests_properties(suite_fx_bar_event_tests PROPERTIES LABELS suite)
+
 add_executable(suite_fx_layer_tests FxLayerTests.cpp)
 target_include_directories(suite_fx_layer_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_layer_tests COMMAND suite_fx_layer_tests)

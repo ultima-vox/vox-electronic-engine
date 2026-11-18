@@ -46,6 +46,7 @@ public:
     }
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
+    bool musicalClockUnavailable() const noexcept { return musicalClockUnavailable_.load(std::memory_order_relaxed); }
     bool patternUnavailable() const noexcept { return patternUnavailable_.load(std::memory_order_relaxed); }
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
@@ -66,6 +67,10 @@ public:
     bool setFamily (int family) {
         if (family < 0 || family > 11) return false;
         return programs_.setLayerFamily (0, static_cast<NoiseFamily> (family));
+    }
+    bool setEventBars (int bars) {
+        if (bars != 0 && bars != 1 && bars != 2 && bars != 4 && bars != 8 && bars != 16) return false;
+        return programs_.editProgram([bars](NoiseProgram& p) { p.bars=static_cast<std::uint8_t>(bars); return true; });
     }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) {
@@ -136,6 +141,7 @@ private:
     pattern::FixedSchedule audioPatternSchedule_;
     std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
+    std::atomic<bool> musicalClockUnavailable_ {true};
     juce::AudioParameterFloat* duration_ = nullptr;
     juce::AudioParameterBool* patternEnabled_ = nullptr;
     std::array<juce::AudioParameterFloat*,4> effectWet_{}, effectAmount_{};

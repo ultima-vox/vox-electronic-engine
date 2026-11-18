@@ -44,6 +44,7 @@ public:
     juce::ComboBox& comparisonSelector() noexcept { return comparison_; }
     juce::ComboBox& factorySelector() noexcept { return factory_; }
     juce::ComboBox& familySelector() noexcept { return family_; }
+    juce::ComboBox& eventBarsSelector() noexcept { return eventBars_; }
     juce::Slider& macroDepthSlider() noexcept { return macroDepth_; }
     juce::Slider& macroValueSlider() noexcept { return macroValue_; }
     juce::ComboBox& macroDestinationSelector() noexcept { return macroDestination_; }
@@ -85,7 +86,8 @@ private:
     juce::SliderParameterAttachment attachment_;
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment durationAttachment_;
-    vox::ui::VoxComboBox family_,macroSelector_,macroDestination_,factory_,comparison_;
+    vox::ui::VoxComboBox family_,eventBars_,macroSelector_,macroDestination_,factory_,comparison_;
+    juce::Label clockStatus_;
     juce::Slider macroValue_,macroDepth_;
     std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;
     vox::ui::VoxButton audition_ { "AUDITION" };

@@ -214,7 +214,7 @@ private:
         desired_ = program; desiredEffects_=effectsValue; desiredPattern_=patternValue; desiredMacros_=macrosValue; desiredGenerator_=generatorValue;
         sequence_.fetch_add(1); // even: complete publication
     }
-    static constexpr std::size_t maxWords = (4 + 4 * (24 + 2 * (4 + 16 * 12))) / 4;
+    static constexpr std::size_t maxWords = (8 + 4 * (24 + 2 * (4 + 16 * 12))) / 4;
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
     mutable std::mutex mutex_; // only non-audio threads

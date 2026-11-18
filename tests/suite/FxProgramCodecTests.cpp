@@ -10,12 +10,19 @@ int main() {
         l.gainCurve.count=3;l.gainCurve.nodes[0]={0,0,vox::fx::timeline::Shape::smooth};
         l.gainCurve.nodes[1]={.5f,1,vox::fx::timeline::Shape::hold};l.gainCurve.nodes[2]={1,.2f,vox::fx::timeline::Shape::linear};}
     std::vector<std::byte> bytes,again;check(vox::fx::programcodec::encode(p,bytes),"encode valid program");
+    if(bytes.size()<8) { std::printf("FAIL: encoded fixture too short\n"); return 1; }
     vox::fx::NoiseProgram q;check(vox::fx::programcodec::decode(bytes,q),"decode valid program");
     check(vox::fx::programcodec::encode(q,again)&&bytes==again,"deterministic roundtrip");
     const auto before=again;
     for(std::size_t size=0;size<bytes.size();++size){check(!vox::fx::programcodec::decode(std::span(bytes).first(size),q),"reject truncation");
         check(vox::fx::programcodec::encode(q,again)&&again==before,"rejection transactional");}
-    auto future=bytes;future[0]=std::byte{2};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
+    auto legacy=bytes;legacy[0]=std::byte{1};legacy.resize(legacy.size()-4);
+    vox::fx::NoiseProgram migrated; migrated.bars=16;
+    check(vox::fx::programcodec::decode(legacy,migrated)&&migrated.bars==0,"v1 migrates to seconds");
+    p.bars=16; std::vector<std::byte> barBytes; check(vox::fx::programcodec::encode(p,barBytes)&&vox::fx::programcodec::decode(barBytes,migrated)&&migrated.bars==16,"bar roundtrip");
+    if(barBytes.size()<4) { std::printf("FAIL: bar fixture too short\n"); return 1; }
+    auto invalidBars=barBytes;invalidBars[invalidBars.size()-4]=std::byte{3};check(!vox::fx::programcodec::decode(invalidBars,migrated)&&migrated.bars==16,"invalid bars rejected transactionally");
+    auto future=bytes;future[0]=std::byte{3};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
     auto invalidBool=bytes;invalidBool[4]=std::byte{2};check(!vox::fx::programcodec::decode(invalidBool,q),"invalid enabled rejected");
     auto extra=bytes;extra.push_back(std::byte{0});check(!vox::fx::programcodec::decode(extra,q),"trailing data rejected");
     p.layers[0].gain=std::numeric_limits<float>::quiet_NaN();

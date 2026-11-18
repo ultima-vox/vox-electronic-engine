@@ -105,6 +105,17 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
     family_.onChange = [this] { processor_.setFamily (family_.getSelectedId() - 1); };
     addAndMakeVisible (family_);
+    eventBars_.addItem("Seconds",1); eventBars_.addItem("1 bar",2); eventBars_.addItem("2 bars",3);
+    eventBars_.addItem("4 bars",4); eventBars_.addItem("8 bars",5); eventBars_.addItem("16 bars",6);
+    eventBars_.setTitle("One-shot duration mode");
+    eventBars_.setTooltip("Bar notes require playing host, PPQ, tempo and explicit 4/4; WAV export is unavailable for bars");
+    eventBars_.onChange=[this] { constexpr int values[]{0,1,2,4,8,16}; const int id=eventBars_.getSelectedId();
+        if(id>=1&&id<=6)(void)processor_.setEventBars(values[id-1]); };
+    const auto initialBars=processor_.program().bars;
+    const int initialBarsId=initialBars==0?1:initialBars==1?2:initialBars==2?3:initialBars==4?4:initialBars==8?5:6;
+    eventBars_.setSelectedId(initialBarsId,juce::dontSendNotification);
+    addAndMakeVisible(eventBars_);
+    clockStatus_.setFont(juce::FontOptions(10.0f)); addAndMakeVisible(clockStatus_);
     sampleImport_.setTooltip("Import a licensed mono or stereo WAV for granular layers; decoding is asynchronous");
     sampleBuiltin_.setTooltip("Explicitly select the built-in granular source");
     sampleStatus_.setTooltip("Granular sample status");sampleStatus_.setFont(juce::FontOptions(11.0f));
@@ -339,7 +350,9 @@ void FxPanel::resized()
     area.removeFromLeft (20);
     auto familyArea = area.removeFromLeft (200);
     family_.setBounds (familyArea.removeFromTop (40));
-    familyArea.removeFromTop(5);familyArea.removeFromTop(12);auto macroRow=familyArea.removeFromTop(36);
+    eventBars_.setBounds(familyArea.removeFromTop(25));
+    clockStatus_.setBounds(familyArea.removeFromTop(12));
+    auto macroRow=familyArea.removeFromTop(32);
     macroSelector_.setBounds(macroRow.removeFromLeft(49).reduced(1));
     macroDestination_.setBounds(macroRow.removeFromLeft(49).reduced(1));
     macroValue_.setBounds(macroRow.removeFromLeft(50).reduced(1));macroDepth_.setBounds(macroRow.reduced(1));
@@ -351,6 +364,7 @@ void FxPanel::resized()
     audition_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
     panic_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
     factory_.setBounds (buttons.removeFromTop (32));
+
     area.removeFromLeft (20);
     auto generatorArea = area.removeFromLeft (180);
     auto seedRow=generatorArea.removeFromTop(30);
@@ -559,6 +573,9 @@ void FxPanel::timerCallback()
     patternEnabled_.setButtonText(processor_.patternUnavailable()?"PATTERN UNAVAILABLE":"HOST PATTERN");
     refreshPattern();refreshMacro();refreshGenerator();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
+    const int barsId=program.bars==0?1:program.bars==1?2:program.bars==2?3:program.bars==4?4:program.bars==8?5:6;
+    eventBars_.setSelectedId(barsId,juce::dontSendNotification);
+    clockStatus_.setText(program.bars==0?"Seconds":processor_.musicalClockUnavailable()?"Host bar clock unavailable":"Host bar clock ready",juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));

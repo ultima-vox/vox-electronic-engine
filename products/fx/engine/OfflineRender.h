@@ -46,7 +46,7 @@ inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++
 // invalid input, cancellation or non-finite DSP leave the old bytes unchanged.
 inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
                           const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture) {
-    if(!program.valid()||!settings.valid())return false;
+    if(!program.valid()||program.bars != 0||!settings.valid())return false; // bar export not implemented
     bool hasShortTail=false;unsigned delays=0,reverbs=0;
     for(const auto& effect:settings.effects){
         if(effect.type==effects::Type::lowpass||effect.type==effects::Type::phaser||effect.type==effects::Type::flanger||effect.type==effects::Type::chorus)hasShortTail=true;
