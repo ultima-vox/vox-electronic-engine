@@ -810,3 +810,9 @@ edits compare that revision while holding the same mutex. A standalone concurren
 stale-edit/restore test passed under TSan and ASan/UBSan, and the audio snapshot
 allocation probe passed. Actual JUCE processor/host concurrency still needs
 qualification.
+
+WAV chooser now retains one shared capture and moves it into the render worker,
+avoiding extra copies of large user-sample buffers. Missing captures fail before
+opening the chooser, and allocation failure while copying a lease releases it
+and leaves an explicit unavailable capture. This path is syntax-checked; native
+chooser and out-of-memory behavior remain untested in a host.

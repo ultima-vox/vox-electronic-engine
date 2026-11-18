@@ -381,7 +381,16 @@ void FxPanel::exportWav()
     // never references the processor or editor and cannot touch the callback.
     offline::Settings settings;settings.sampleRate=48000;settings.note=60;settings.velocity=1;
     settings.format=offline::WavFormat::pcm24;
-    const auto capture=processor_.captureProgramWav(settings);
+    std::shared_ptr<offline::Capture> capture;
+    try { capture=std::make_shared<offline::Capture>(processor_.captureProgramWav(settings)); }
+    catch(...) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "WAV export failed","Could not capture the sound for export.");return;
+    }
+    if(capture->useUserSample && capture->sample.empty()) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "WAV export failed","The selected granular sample is unavailable. Reimport it or choose the built-in source.");return;
+    }
     exportChooser_=std::make_unique<juce::FileChooser>("Export current sound as WAV",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.wav"),"*.wav");
     midiExport_.setEnabled(false);wavExport_.setEnabled(false);
@@ -397,7 +406,7 @@ void FxPanel::exportWav()
             }
             safe->wavExport_.setButtonText("STOP");
             try {
-                safe->wavJob_=std::make_unique<fileexport::WavJob>(capture,target);
+                safe->wavJob_=std::make_unique<fileexport::WavJob>(std::move(*capture),target);
             } catch(...) {
                 safe->wavJob_.reset();safe->wavExport_.setButtonText("WAV");
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,

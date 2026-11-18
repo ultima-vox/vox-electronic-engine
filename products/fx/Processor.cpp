@@ -168,7 +168,7 @@ offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) con
         sample::Store::Lease lease;
         if(samples_.store().acquire(lease,generation)) {
             try { capture.sampleRate=lease.rate();capture.sample.assign(lease.data(),lease.data()+lease.frames()); }
-            catch(...) { samples_.store().release(lease);throw; }
+            catch(...) { capture.sample.clear();capture.sampleRate=0; }
             samples_.store().release(lease);
         }
     }
