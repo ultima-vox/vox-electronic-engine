@@ -103,11 +103,31 @@ int main() {
         auto effected=std::make_unique<vox::fx::FxProcessor>();
         auto dry=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::FxPanel panel(*effected);
+        check(panel.comparisonSelector().getNumItems()==4,"A/B comparison actions exposed");
         check(panel.midiExportButton().isEnabled() && panel.midiExportButton().getTooltip().contains("120 BPM"),
               "MIDI export control communicates fixed tempo");
         check(panel.effectSelector(0).getNumItems()==static_cast<int>(vox::fx::effects::Type::count),
               "every implemented effect is selectable");
         check(panel.effectSelector(0).getItemText(11)=="Reverb", "last effect appears in selector");
+        check(!effected->recallComparison(0),"empty comparison recall rejected");
+        effected->outputParameter().setValueNotifyingHost(.4f);
+        panel.comparisonSelector().setSelectedId(1,juce::sendNotificationSync);
+        effected->setFamily(3);effected->outputParameter().setValueNotifyingHost(.8f);
+        effected->setEffect(3,{vox::fx::effects::Type::reverb,1,.5f});
+        check(effected->setMacroGainRoute(0,.25f,0),"comparison B route");
+        auto comparePattern=effected->patternSnapshot();comparePattern.steps[0].enabled=true;
+        check(effected->setPattern(comparePattern),"comparison B pattern");
+        panel.comparisonSelector().setSelectedId(3,juce::sendNotificationSync);
+        panel.comparisonSelector().setSelectedId(2,juce::sendNotificationSync);
+        check(effected->family()==0&&std::abs(effected->outputParameter().get()-.4f)<1e-5f &&
+              effected->effect(3).type==vox::fx::effects::Type::bypass && effected->macroConfig().count==0 &&
+              !effected->patternSnapshot().steps[0].enabled,"comparison A recalls full base state");
+        panel.comparisonSelector().setSelectedId(4,juce::sendNotificationSync);
+        check(effected->family()==3&&std::abs(effected->outputParameter().get()-.8f)<1e-5f &&
+              effected->effect(3).type==vox::fx::effects::Type::reverb && effected->macroConfig().count==1 &&
+              effected->patternSnapshot().steps[0].enabled,"comparison B recalls independent state");
+        check(effected->setMacroGainRoute(0,0,0),"clear comparison test route");
+        effected->outputParameter().setValueNotifyingHost(1.0f);
         panel.effectSelector(0).setSelectedId(3,juce::sendNotificationSync);
         panel.effectWet(0).setValue(.7,juce::sendNotificationSync);
         check(effected->effect(0).type==vox::fx::effects::Type::drive &&

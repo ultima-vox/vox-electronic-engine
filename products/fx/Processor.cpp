@@ -136,6 +136,20 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
+bool FxProcessor::storeComparison(std::size_t slot)
+{
+    if(slot>=comparisons_.size())return false;
+    juce::MemoryBlock state;getStateInformation(state);
+    if(state.isEmpty()||state.getSize()>16*1024*1024)return false;
+    comparisons_[slot]=std::move(state);return true;
+}
+bool FxProcessor::recallComparison(std::size_t slot)
+{
+    if(slot>=comparisons_.size()||comparisons_[slot].isEmpty())return false;
+    setStateInformation(comparisons_[slot].getData(),static_cast<int>(comparisons_[slot].getSize()));
+    return lastStateError().isEmpty();
+}
+
 offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) const
 {
     const auto snapshot=programs_.snapshotState();

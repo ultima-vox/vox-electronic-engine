@@ -660,3 +660,15 @@ Processor/editor recall is syntax-only. A diagnostic Linux 96 kHz 128-frame
 p99 557.15, max 640.84 microseconds; this is not host/Windows qualification.
 More perceptual validation, room/damping/predelay controls, tempo sync,
 feedback-delay options and automated quality policies remain.
+
+## Session comparison A/B
+
+The comparison menu stores two independent full VXFX state snapshots in the
+processor for the lifetime of the instance, so reopening the editor does not
+lose them. Explicit Recall A/B uses the validated project-state restore path
+and notifies the host of restored parameter bases (including automation-linked
+values); this is stated in the menu and tooltip. These are session-only slots,
+not persisted as part of a project, and are not a curated preset browser.
+Processor/UI tests cover empty recall and independent Program/effect/route/
+pattern/parameter snapshots but have only been syntax-checked locally; runtime
+host notifications, automation interaction and GUI layout need verification.

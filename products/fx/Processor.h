@@ -62,6 +62,10 @@ public:
         if(!programs_.publish (program))return false;
         restoreEpoch_.fetch_add(1,std::memory_order_release);return true;
     }
+    // Message/controller thread only. A/B snapshots are session-only and
+    // deliberately recall all host parameter bases with host notification.
+    bool storeComparison(std::size_t slot);
+    bool recallComparison(std::size_t slot);
     generator::ControllerState generatorState() const { return programs_.snapshotState().generator; }
     template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
@@ -97,6 +101,7 @@ private:
     macro::Config audioMacroConfig_;
     std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;
+    std::array<juce::MemoryBlock,2> comparisons_; // controller thread only; not project state
     std::atomic<std::uint64_t> restoreEpoch_ { 0 };
     NoiseProgram audioProgram_;
     pattern::Pattern audioPattern_;

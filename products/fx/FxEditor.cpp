@@ -78,6 +78,17 @@ FxPanel::FxPanel (FxProcessor& processor)
         if(id>=1&&id<=48&&generator::factory(static_cast<std::size_t>(id-1),result))(void)processor_.setProgram(result.program);
         factory_.setSelectedId(0,juce::dontSendNotification);};
     addAndMakeVisible(factory_);
+    comparison_.setTextWhenNothingSelected("Compare A/B");comparison_.setTitle("Session A/B comparisons");
+    comparison_.setTooltip("Store or recall full session snapshots; recall changes host parameter values. Slots are not saved in the project.");
+    comparison_.addItem("Store A",1);comparison_.addItem("Recall A (host values)",2);
+    comparison_.addItem("Store B",3);comparison_.addItem("Recall B (host values)",4);
+    comparison_.onChange=[this]{const auto id=comparison_.getSelectedId();
+        if(id>=1&&id<=4){const auto slot=static_cast<std::size_t>((id-1)/2);
+            const bool ok=(id&1)?processor_.storeComparison(slot):processor_.recallComparison(slot);
+            if(!ok)juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "Comparison unavailable","Store this comparison before recalling it, or check the current state.");}
+        comparison_.setSelectedId(0,juce::dontSendNotification);};
+    addAndMakeVisible(comparison_);
     midiExport_.setTitle("Export trigger pattern MIDI");
     midiExport_.setTooltip("Export one pattern loop as MIDI at 120 BPM; contains trigger notes, not audio");
     midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
@@ -233,7 +244,7 @@ void FxPanel::paint (juce::Graphics& g)
     auto macroLabel=getLocalBounds().reduced(32).withTrimmedTop(125).removeFromLeft(200).removeFromTop(12);
     macroLabel.translate(276,0);
     g.drawText("SOURCE   TARGET   VALUE   DEPTH",macroLabel,juce::Justification::centredLeft);
-    auto labels=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(14);
+    auto labels=getLocalBounds().reduced(32).withTrimmedTop(197).removeFromTop(14);
     const int labelWidth=labels.getWidth()/4;
     for(int i=0;i<4;++i) {
         auto column=i==3?labels:labels.removeFromLeft(labelWidth);
@@ -272,9 +283,10 @@ void FxPanel::resized()
     auto topLocks=lockArea.removeFromTop(30), bottomLocks=lockArea.removeFromTop(30);
     layerLocks_[0].setBounds(topLocks.removeFromLeft(45));layerLocks_[1].setBounds(topLocks);
     layerLocks_[2].setBounds(bottomLocks.removeFromLeft(45));layerLocks_[3].setBounds(bottomLocks);
-    lockArea.removeFromTop(5);auto exports=lockArea.removeFromTop(32);
+    lockArea.removeFromTop(4);comparison_.setBounds(lockArea.removeFromTop(24));
+    lockArea.removeFromTop(4);auto exports=lockArea.removeFromTop(24);
     midiExport_.setBounds(exports.removeFromLeft(exports.getWidth()/2).reduced(1));wavExport_.setBounds(exports.reduced(1));
-    auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(45);
+    auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(197).removeFromTop(45);
     const int fxWidth=fxRow.getWidth()/4;
     for (std::size_t i=0;i<4;++i) {
         auto column=i==3?fxRow:fxRow.removeFromLeft(fxWidth);
@@ -300,7 +312,7 @@ void FxPanel::resized()
     for(std::size_t i=0;i<patternSteps_.size();++i){auto area=i==15?stepRow:stepRow.removeFromLeft(stepWidth);
         patternSteps_[i].setBounds(area.reduced(2));}
     auto row = getLocalBounds().reduced(32);
-    row.removeFromTop(235);
+    row.removeFromTop(247);
     row.removeFromBottom(120);
     const int width = row.getWidth() / 4;
     for (std::size_t i=0; i<layers_.size(); ++i) {
