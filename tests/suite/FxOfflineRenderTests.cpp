@@ -95,6 +95,18 @@ int main(){
     panEngine->render(l,r,512);
     for(std::size_t i=0;i<512;++i){check(std::bit_cast<float>(word(56+i*8))==0,"hard-right pan mutes left");
         check(std::bit_cast<float>(word(60+i*8))==r[i]*.5f,"hard-right pan preserves right");}
+    {
+        vox::fx::offline::Capture capture;capture.program=program;capture.program.layers[0].family=vox::fx::NoiseFamily::granular;
+        capture.settings=s;capture.settings.duration=.05f;capture.settings.gain=1;capture.settings.macroRoutes={};
+        capture.useUserSample=true;capture.sampleRate=24000;capture.sample.assign(512,.7f);
+        check(vox::fx::offline::renderWav(capture,wav),"captured user sample WAV render");
+        vox::fx::sample::Store store;store.publish(capture.sample,capture.sampleRate);
+        auto sampled=std::make_unique<vox::fx::NoiseRiser>();sampled->prepare(s.sampleRate);sampled->attachSampleStore(&store);
+        sampled->setProgram(capture.program);sampled->noteOn(1,s.note,s.velocity,capture.settings.duration,true);sampled->render(l,r,512);
+        for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"user sample WAV matches granular realtime DSP");
+        capture.sample.clear();const auto saved=wav;
+        check(!vox::fx::offline::renderWav(capture,wav)&&wav==saved,"missing user sample fails transactionally, no fallback");
+    }
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

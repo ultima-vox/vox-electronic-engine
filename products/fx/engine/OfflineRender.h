@@ -31,6 +31,9 @@ struct Settings {
 struct Capture {
     NoiseProgram program{};
     Settings settings{};
+    bool useUserSample=false;
+    std::uint32_t sampleRate=0;
+    std::vector<float> sample; // immutable worker-owned copy, not a lease
 };
 inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(static_cast<std::uint8_t>(x));out.push_back(static_cast<std::uint8_t>(x>>8));}
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
@@ -40,8 +43,8 @@ inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++
 // two seconds per serial reverb.
 // Output is transactional:
 // invalid input, cancellation or non-finite DSP leave the old bytes unchanged.
-inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
-                      const std::atomic<bool>* cancel=nullptr,std::atomic<float>* progress=nullptr) {
+inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
+                          const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture) {
     if(!program.valid()||!settings.valid())return false;
     bool hasShortTail=false;unsigned delays=0,reverbs=0;
     for(const auto& effect:settings.effects){
@@ -61,8 +64,11 @@ inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::
     u16(bytes,blockAlign);u16(bytes,bits);
     if(floating){tag(bytes,"fact");u32(bytes,4);u32(bytes,frames);}
     tag(bytes,"data");u32(bytes,dataBytes);
+    sample::Store sampleStore; // outlives engine and its event leases
     auto engine=std::make_unique<NoiseRiser>();engine->prepare(settings.sampleRate);
-    if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration))return false;
+    const bool useUser=capture&&capture->useUserSample;
+    if(useUser && (!sampleStore.publish(capture->sample,capture->sampleRate)||!engine->attachSampleStore(&sampleStore)))return false;
+    if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser))return false;
     effects::Chain chain;if(!chain.prepare(settings.sampleRate))return false;
     macro::Runtime macroRuntime;if(!macroRuntime.prepare(settings.sampleRate)||!macroRuntime.setConfig(settings.macroRoutes))return false;
     for(std::size_t i=0;i<settings.effects.size();++i)if(!chain.set(i,settings.effects[i]))return false;
@@ -85,5 +91,13 @@ inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::
         at+=count;if(progress)progress->store(static_cast<float>(at)/frames,std::memory_order_relaxed);
     }
     output=std::move(bytes);return true;
+}
+inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
+                      const std::atomic<bool>* cancel=nullptr,std::atomic<float>* progress=nullptr) {
+    return renderWavImpl(program,settings,output,cancel,progress,nullptr);
+}
+inline bool renderWav(const Capture& capture,std::vector<std::uint8_t>& output,
+                      const std::atomic<bool>* cancel=nullptr,std::atomic<float>* progress=nullptr) {
+    return renderWavImpl(capture.program,capture.settings,output,cancel,progress,&capture);
 }
 } // namespace vox::fx::offline

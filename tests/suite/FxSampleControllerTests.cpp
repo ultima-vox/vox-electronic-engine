@@ -15,7 +15,10 @@ int main(){
     check(ref.valid()&&ref.kind==Reference::Kind::external&&token>1,"import commits reference and token");
     Store::Lease held;check(controller.store().acquire(held,token)&&held.frames()==2&&held.data()[0]==-1,"published decoded content");
     auto mismatch=ref;mismatch.sha256[0]=mismatch.sha256[0]=='a'?'b':'a';
-    check(controller.restore(mismatch)&&controller.selection()==1,"restored reference immediately disables old sample");
+    Controller::PreparedRestore prepared;
+    check(Controller::prepareRestore(mismatch,prepared),"prepare validated restore off audio thread");
+    controller.commitRestore(std::move(prepared));
+    check(controller.selection()==1,"restored reference immediately disables old sample");
     check(controller.waitUntilSettled(std::chrono::seconds(5))&&controller.status()==Controller::Status::missing&&
           controller.reference()==mismatch&&controller.selection()==1,"hash mismatch remains explicitly missing");
     Store::Lease absent;check(!controller.store().acquire(absent,controller.selection())&&held.data()[0]==-1,"old lease lives, new mismatch has no fallback");

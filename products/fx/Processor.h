@@ -6,6 +6,7 @@
 #include "engine/Generator.h"
 #include "engine/Effects.h"
 #include "engine/OfflineRender.h"
+#include "engine/SampleController.h"
 
 namespace vox::fx {
 
@@ -17,6 +18,7 @@ inline constexpr preset::Tag fxMacroRouteSectionTag = preset::makeTag ("FMOD");
 inline constexpr preset::Tag fxPatternEnableSectionTag = preset::makeTag ("FPEN");
 inline constexpr preset::Tag fxPatternSectionTag = preset::makeTag ("FPAT");
 inline constexpr preset::Tag fxEffectsSectionTag = preset::makeTag ("FXSL");
+inline constexpr preset::Tag fxSampleSectionTag = preset::makeTag ("FSMP");
 inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 
 // Work-in-progress standalone FX instrument. Structural edits are published
@@ -76,6 +78,12 @@ public:
     template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
+    // These operations lock or perform file I/O; never call from audio.
+    bool importSample(const juce::File& path) { return samples_.import(path); }
+    bool useBuiltinSample() { return samples_.restore({}); }
+    sample::Controller::Status sampleStatus() const { return samples_.status(); }
+    sample::Reference sampleReference() const { return samples_.reference(); }
+    bool waitForSample(std::chrono::milliseconds timeout) { return samples_.waitUntilSettled(timeout); }
     // Worker/controller thread only: captures the structural snapshot and
     // current host base parameters; may allocate and render for many seconds.
     offline::Capture captureProgramWav (offline::Settings settings) const;
@@ -98,13 +106,14 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxSampleSectionTag || tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
 
 private:
     void publishTelemetry(bool clipped) noexcept {
         const auto value=engine_.activeEventCount()|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u);
         telemetry_.store(value,std::memory_order_relaxed);
     }
+    mutable sample::Controller samples_; // destroyed after engine and all sample leases
     NoiseRiser engine_;
     effects::Chain effects_;
     macro::Runtime macroRuntime_;

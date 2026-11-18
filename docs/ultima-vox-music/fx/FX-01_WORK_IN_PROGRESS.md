@@ -748,3 +748,18 @@ file import, failure, mismatch, restored identity, supersession and held leases;
 ASan/UBSan and TSan passed. The controller and reference codec are not yet
 wired to processor state, UI, MIDI triggering or offline capture. Worker teardown
 may wait for filesystem I/O, so it must never occur on the audio callback.
+
+### Processor sample integration (unqualified)
+
+FSMP v1 stores a validated path and byte SHA-256. Restore validates all sections
+before scheduling a hash-checked worker request; absent/mismatched content uses
+an explicit unavailable generation, never the built-in source. Processor note-on
+uses the exact selected generation, and captured WAVs copy the leased sample to
+worker-owned memory. The controller is declared before the engine so it outlives
+all voice leases. Standalone sample-backed WAV comparison passed normally and
+under ASan/UBSan. Processor and test code passed JUCE syntax checks only: the
+processor/state/A-B/import tests have not run here. No user sample import UI is
+exposed yet. File-system restore and destruction may block non-audio host threads;
+real host callback/lifecycle and concurrent restore behavior need qualification.
+A missing external selection currently suppresses every new event, including
+non-granular events, until explicit built-in selection or successful reload.

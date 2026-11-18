@@ -33,7 +33,7 @@ inline Result renderFile(const offline::Capture& capture,const juce::File& targe
     bool success=false;
     try {
         std::vector<std::uint8_t> bytes;
-        success=offline::renderWav(capture.program,capture.settings,bytes,&cancel,&progress) &&
+        success=offline::renderWav(capture,bytes,&cancel,&progress) &&
                 writeBytes(target,bytes,&cancel);
     } catch(...) { success=false; }
     return success?Result::success:(cancel.load(std::memory_order_relaxed)?Result::cancelled:Result::failure);

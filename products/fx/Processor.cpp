@@ -89,6 +89,7 @@ FxProcessor::FxProcessor()
                                     1,
                                     juce::Colour::fromString ("FF16CDBA") })
 {
+    (void) engine_.attachSampleStore(&samples_.store());
     output_ = new juce::AudioParameterFloat (juce::ParameterID { "fx.output.gain", 1 },
                                               "Output Gain", 0.0f, 1.0f, 1.0f);
     addParameter (output_);
@@ -160,14 +161,25 @@ offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) con
         settings.effects[i]=effects::unpack(static_cast<std::uint16_t>(snapshot.effects>>(i*16)));
         settings.effects[i].wet=effectWet_[i]->get(); settings.effects[i].amount=effectAmount_[i]->get();
     }
-    return {snapshot.program,settings};
+    offline::Capture capture;capture.program=snapshot.program;capture.settings=settings;
+    const auto generation=samples_.selection();
+    if(generation!=0) {
+        capture.useUserSample=true;
+        sample::Store::Lease lease;
+        if(samples_.store().acquire(lease,generation)) {
+            try { capture.sampleRate=lease.rate();capture.sample.assign(lease.data(),lease.data()+lease.frames()); }
+            catch(...) { samples_.store().release(lease);throw; }
+            samples_.store().release(lease);
+        }
+    }
+    return capture;
 }
 
 bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
                                     const std::atomic<bool>* cancel, std::atomic<float>* progress) const
 {
     const auto capture=captureProgramWav(settings);
-    return offline::renderWav(capture.program,capture.settings,output,cancel,progress);
+    return offline::renderWav(capture,output,cancel,progress);
 }
 
 bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)
@@ -257,7 +269,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
-    if (auditionPending_.exchange (false, std::memory_order_acquire)) engine_.noteOn (1, 60, 0.8f, eventDuration);
+    if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection); }
     const int size = buffer.getNumSamples();
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
@@ -283,7 +295,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             const int channel=(bytes[0]&0x0f)+1;
             if(type==0x90 && bytes[2]!=0) {
                 renderTo(metadata.samplePosition);
-                engine_.noteOn(channel,bytes[1]&0x7f,static_cast<float>(bytes[2]&0x7f)/127.0f,eventDuration);
+                {const auto selection=samples_.selection();engine_.noteOn(channel,bytes[1]&0x7f,static_cast<float>(bytes[2]&0x7f)/127.0f,eventDuration,selection!=0,selection);}
             } else if(type==0xb0 && (bytes[1]==120 || bytes[1]==123)) {
                 renderTo(metadata.samplePosition);engine_.allSoundOff(channel);
             }
@@ -294,7 +306,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         (void) pattern::forEachTrigger(audioPatternSchedule_,audioPattern_.bars,hostPpq,hostBpm,preparedSampleRate(),size,
             [&] (int offset,std::uint8_t note,std::uint8_t velocity) noexcept {
                 processMidiThrough(offset);renderTo(offset);
-                engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration);
+                {const auto selection=samples_.selection();engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection);}
             });
     }
     processMidiThrough(size-1);
@@ -339,10 +351,19 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     std::array<float,8> macroValues{};for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
     out.push_back (encodeMacros(macroValues));out.push_back (encodeMacroRoutes(snapshot.macros));
     out.push_back (encodeGenerator(snapshot.generator));
+    preset::Section sampleSection;sampleSection.tag=fxSampleSectionTag;
+    (void)sample::referencecodec::encode(samples_.reference(),sampleSection.data);
+    out.push_back(std::move(sampleSection));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
 {
+    sample::Reference sampleReference;
+    if(const auto* section=doc.find(fxSampleSectionTag)) {
+        if(!sample::referencecodec::decode(section->data,sampleReference)) { error="Malformed sample reference";return {}; }
+    }
+    sample::Controller::PreparedRestore preparedSample;
+    if(!sample::Controller::prepareRestore(sampleReference,preparedSample)) { error="Cannot prepare sample reference";return {}; }
     float value = 1.0f; // FOUND-01 shell states have no FPRM section.
     float duration = duration_->convertTo0to1 (4.0f);
     if (const auto* section = doc.find (fxParameterSectionTag)) {
@@ -443,12 +464,16 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     result.sections.push_back (encodeMacros (macroValues));
     result.sections.push_back (encodeMacroRoutes (*macroRoutes));
     result.sections.push_back (encodeGenerator (*generatorState));
+    preset::Section sampleSection;sampleSection.tag=fxSampleSectionTag;
+    if(!sample::referencecodec::encode(sampleReference,sampleSection.data)) { error="Cannot encode sample reference";return {}; }
+    result.sections.push_back(std::move(sampleSection));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes, generatorState] {
+    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes, generatorState, preparedSample=std::move(preparedSample)] () mutable {
         (void) programs_.publishState (*program, fx, *triggerPattern, *macroRoutes, *generatorState);
         for(std::size_t i=0;i<8;++i)macros_[i]->setValueNotifyingHost(macroValues[i]);
         patternEnabled_->setValueNotifyingHost(patternEnabled?1.0f:0.0f);
         for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
+        samples_.commitRestore(std::move(preparedSample));
         restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);

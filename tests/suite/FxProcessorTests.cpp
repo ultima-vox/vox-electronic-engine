@@ -334,6 +334,36 @@ int main() {
                 (static_cast<std::uint32_t>(wav[at+2])<<16)|(static_cast<std::uint32_t>(wav[at+3])<<24);
             check(std::bit_cast<float>(bits)==a.getSample(0,i),"macro WAV matches processor");}
     }
+    {
+        const std::vector<std::uint8_t> fixture{'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,
+            0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x40,0,0x40};
+        const auto file=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-processor-sample",".wav",false);
+        check(file.replaceWithData(fixture.data(),fixture.size()),"create sample fixture");
+        auto user=std::make_unique<vox::fx::FxProcessor>();user->setFamily(11);
+        check(user->importSample(file)&&user->waitForSample(std::chrono::seconds(5))&&
+              user->sampleStatus()==vox::fx::sample::Controller::Status::ready,"processor asynchronously imports sample");
+        const auto sampleState=save(*user);user->prepareToPlay(48000,512);
+        juce::AudioBuffer<float> sound(2,512);juce::MidiBuffer note;
+        note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*user,sound,note);
+        check(sound.getMagnitude(0,0,512)>0,"processor granular sample triggers audio");
+        vox::fx::offline::Settings settings;settings.format=vox::fx::offline::WavFormat::float32;
+        settings.velocity=100.0f/127.0f;std::vector<std::uint8_t> bytes;
+        check(user->renderProgramWav(settings,bytes),"sample-backed processor WAV render");
+        if(bytes.size()>=56+512*8)for(int i=0;i<512;++i){const auto at=static_cast<std::size_t>(56+i*8);
+            const auto bits=static_cast<std::uint32_t>(bytes[at])|(static_cast<std::uint32_t>(bytes[at+1])<<8)|
+                (static_cast<std::uint32_t>(bytes[at+2])<<16)|(static_cast<std::uint32_t>(bytes[at+3])<<24);
+            check(std::bit_cast<float>(bits)==sound.getSample(0,i),"sample-backed WAV matches processor");}
+        check(file.deleteFile(),"remove loaded sample fixture");
+        auto missing=std::make_unique<vox::fx::FxProcessor>();missing->setStateInformation(sampleState.getData(),static_cast<int>(sampleState.getSize()));
+        check(missing->waitForSample(std::chrono::seconds(5))&&missing->sampleStatus()==vox::fx::sample::Controller::Status::missing,
+              "restored missing sample is explicit");
+        missing->prepareToPlay(48000,512);note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        block(*missing,sound,note);check(sound.getMagnitude(0,0,512)==0,"missing sample never silently falls back");
+        const auto before=bytes;check(!missing->renderProgramWav(settings,bytes)&&bytes==before,"missing sample WAV fails transactionally");
+        check(missing->useBuiltinSample(),"explicit built-in fallback");
+        note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*missing,sound,note);
+        check(sound.getMagnitude(0,0,512)>0,"explicit fallback triggers procedural sample");
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;

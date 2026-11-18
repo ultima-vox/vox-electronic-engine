@@ -17,6 +17,14 @@ namespace vox::fx::sample {
 class Controller {
 public:
     enum class Status { builtin, loading, ready, missing, failed };
+    struct PreparedRestore { Reference reference;std::string requestPath,expectedHash; };
+    static bool prepareRestore(const Reference& reference,PreparedRestore& output) noexcept {
+        if(!reference.valid())return false;
+        try { PreparedRestore next;next.reference=reference;
+            if(reference.kind==Reference::Kind::external){next.requestPath=reference.path;next.expectedHash=reference.sha256;}
+            output=std::move(next);return true;
+        } catch(...) {return false;}
+    }
     Controller() : worker_([this]{run();}) {}
     Controller(const Controller&)=delete;
     Controller& operator=(const Controller&)=delete;
@@ -39,7 +47,7 @@ public:
         try { next={candidate.path,{},true,0}; } catch(...) {return false;}
         {
             const std::lock_guard<std::mutex> lock(mutex_);
-            if(stopping_||revision_==std::numeric_limits<std::uint64_t>::max())return false;
+            if(stopping_||disabled_||revision_==std::numeric_limits<std::uint64_t>::max())return false;
             next.revision=++revision_;request_=std::move(next);pending_=true;status_=Status::loading;
         }
         condition_.notify_all();return true;
@@ -47,22 +55,29 @@ public:
     // Project restore publishes the external reference immediately as missing;
     // it becomes playable only after file hash verification. No fallback.
     bool restore(const Reference& reference) {
-        if(!reference.valid())return false;
-        Reference next;Request request;
-        try {next=reference;if(reference.kind==Reference::Kind::external)request={reference.path,reference.sha256,false,0};}
-        catch(...) {return false;}
+        PreparedRestore prepared;if(!prepareRestore(reference,prepared))return false;
+        commitRestore(std::move(prepared));return true;
+    }
+    // All allocations were done by prepareRestore; call only from the
+    // controller/host state thread, after the containing state is validated.
+    void commitRestore(PreparedRestore&& prepared) {
         {
             const std::lock_guard<std::mutex> lock(mutex_);
-            if(stopping_||revision_==std::numeric_limits<std::uint64_t>::max())return false;
-            ++revision_;desired_=std::move(next);
-            if(reference.kind==Reference::Kind::builtin){
-                selection_.store(0,std::memory_order_release);pending_=false;status_=Status::builtin;store_.clear();
+            if(revision_==std::numeric_limits<std::uint64_t>::max())disabled_=true;
+            else ++revision_;
+            desired_=std::move(prepared.reference);
+            if(desired_.kind==Reference::Kind::builtin){
+                selection_.store(0,std::memory_order_release);pending_=false;status_=Status::builtin;
             } else {
-                selection_.store(1,std::memory_order_release);status_=Status::loading;
-                request.revision=revision_;request_=std::move(request);pending_=true;
+                selection_.store(1,std::memory_order_release);
+                if(disabled_||stopping_){pending_=false;status_=Status::missing;}
+                else {
+                    request_={std::move(prepared.requestPath),std::move(prepared.expectedHash),false,revision_};
+                    pending_=true;status_=Status::loading;
+                }
             }
         }
-        condition_.notify_all();return true;
+        condition_.notify_all();
     }
     // Controller/test thread only; never call on audio or GUI hot paths.
     bool waitUntilSettled(std::chrono::milliseconds timeout) {
@@ -91,7 +106,7 @@ private:
             {
                 const std::lock_guard<std::mutex> lock(mutex_);
                 if(stopping_)return;
-                if(request.revision!=revision_)continue;
+                if(disabled_||request.revision!=revision_)continue;
                 std::uint64_t token=0;
                 if(verified&&store_.publish(decoded.mono,decoded.rate,&token)){
                     if(request.importing)desired_=std::move(imported);
@@ -109,7 +124,7 @@ private:
     std::atomic<std::uint64_t> selection_{0};
     Status status_=Status::builtin;
     std::uint64_t revision_=0;
-    bool stopping_=false,pending_=false;
+    bool stopping_=false,pending_=false,disabled_=false;
     std::thread worker_;
 };
 } // namespace vox::fx::sample
