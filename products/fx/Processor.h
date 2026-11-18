@@ -27,6 +27,8 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
+    juce::AudioParameterFloat& effectWetParameter(std::size_t index) noexcept { return *effectWet_[index]; }
+    juce::AudioParameterFloat& effectAmountParameter(std::size_t index) noexcept { return *effectAmount_[index]; }
     // Message-to-audio requests are bounded and coalesced, not a MIDI queue.
     void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
     void panic() noexcept { panicPending_.store (true, std::memory_order_release); }
@@ -63,6 +65,7 @@ private:
     std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
     juce::AudioParameterFloat* duration_ = nullptr;
+    std::array<juce::AudioParameterFloat*,4> effectWet_{}, effectAmount_{};
     // Guarded by SuiteProcessor state lock, not accessed by the audio thread.
     float loadedDuration_ = 0.0f, heldDuration_ = 0.0f;
     juce::SmoothedValue<float> outputSmoothing_;

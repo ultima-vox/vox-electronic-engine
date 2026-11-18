@@ -72,13 +72,12 @@ FxPanel::FxPanel (FxProcessor& processor)
             slider->setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);addAndMakeVisible(*slider);
         }
         effectsWet_[i].setTitle("Slot " + juce::String(static_cast<int>(i+1)) + " wet mix");
-        effectsWet_[i].setTooltip("Wet mix (structural; not yet host automatable)");
+        effectsWet_[i].setTooltip("Host-automatable wet mix");
         effectsAmount_[i].setTitle("Slot " + juce::String(static_cast<int>(i+1)) + " amount");
-        effectsAmount_[i].setTooltip("Effect amount (structural; not yet host automatable)");
-        effectsWet_[i].onValueChange=[this,i] {auto s=processor_.effect(i);s.wet=static_cast<float>(effectsWet_[i].getValue());(void)processor_.setEffect(i,s);};
-        effectsAmount_[i].onValueChange=[this,i] {auto s=processor_.effect(i);s.amount=static_cast<float>(effectsAmount_[i].getValue());(void)processor_.setEffect(i,s);};
+        effectsAmount_[i].setTooltip("Host-automatable effect amount");
+        wetAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectWetParameter(i),effectsWet_[i]);
+        amountAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectAmountParameter(i),effectsAmount_[i]);
         const auto s=processor_.effect(i);type.setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
-        effectsWet_[i].setValue(s.wet,juce::dontSendNotification);effectsAmount_[i].setValue(s.amount,juce::dontSendNotification);
     }
     startTimerHz (25);
 }
@@ -148,8 +147,6 @@ void FxPanel::timerCallback()
     for (std::size_t i=0;i<4;++i) {
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
         effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
-        if(!effectsWet_[i].isMouseButtonDown())effectsWet_[i].setValue(s.wet,juce::dontSendNotification);
-        if(!effectsAmount_[i].isMouseButtonDown())effectsAmount_[i].setValue(s.amount,juce::dontSendNotification);
     }
     for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);

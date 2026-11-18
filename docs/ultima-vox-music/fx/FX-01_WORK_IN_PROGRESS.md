@@ -363,8 +363,10 @@ wet/amount controls with 5 ms crossfades on structural changes. Local tests
 cover finite bounded output, each type changing audio, 4 slots, exact steady
 bypass, block invariance, validation, and a Linux callback allocation probe;
 ASan/UBSan passed. This foundation is now wired to processor audio, basic Perform controls,
-versioned FXSL structural state and the worker renderer. Slot wet/amount are
-not yet host-automatable; FXSL values are quantized to 6/7 bits. Lowpass state
+versioned FXSL state and the worker renderer. Eight stable host-automatable
+wet/amount parameters feed the DSP without altering structural slot types;
+FXSL v2 saves full float values, and v1 quantized values migrate. Generate and
+Mutate preserve these host automation lanes. Lowpass state
 is flushed at a tiny threshold and the host reports a conservative 33 second
 tail; worker WAV appends 1 second when lowpass is enabled. It omits
 delay/reverb, phaser/flanger/chorus, full tail/latency policy and
@@ -375,3 +377,15 @@ bounded lock-free audio snapshot; controller layer/FX edits serialize, and
 host state saves the coherent pair. Local concurrent publication stress, TSan
 and a Linux allocation probe pass. Host-automated parameter values remain
 separate from structural snapshots, as documented above.
+
+## Effect automation precedence
+
+The eight `fx.slot.N.wet` / `fx.slot.N.amount` parameters are host-automatable
+and independently smoothed; slot type is structural. Generate and Mutate
+change only the layer Program and leave all automation lanes unchanged. Host
+state restore applies saved FXSL base values; subsequent host automation wins.
+FXSL v1 migrates to v2 and absent sections default to bypass. Callback reads
+the coherent structural snapshot plus independent host parameters at block
+boundaries. Processor/editor/host automation, v1 migration and malformed-v2
+tests are authored and syntax-checked only; executable Windows evidence is
+still required.

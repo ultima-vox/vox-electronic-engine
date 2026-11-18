@@ -40,6 +40,7 @@ private:
     std::array<std::unique_ptr<LayerPanel>, 4> layers_;
     std::array<vox::ui::VoxComboBox,4> effectsType_;
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;
+    std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;
     float shownPeak_ = 0.0f;
 };
 } // namespace vox::fx

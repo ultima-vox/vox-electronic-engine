@@ -86,15 +86,31 @@ int main() {
         panel.effectSelector(0).setSelectedId(3,juce::sendNotificationSync);
         panel.effectWet(0).setValue(.7,juce::sendNotificationSync);
         check(effected->effect(0).type==vox::fx::effects::Type::drive &&
-              std::abs(effected->effect(0).wet-.7f)<.02f,"effect UI updates actual slot");
+              std::abs(effected->effectWetParameter(0).get()-.7f)<1e-5f,"effect UI updates host-automatable slot wet");
+        effected->effectAmountParameter(0).setValueNotifyingHost(.3f);
+        vox::fx::generator::Settings settings;check(effected->generateProgram(settings,{}),"generate while slot automation active");
+        check(std::abs(effected->effectWetParameter(0).get()-.7f)<1e-5f &&
+              std::abs(effected->effectAmountParameter(0).get()-.3f)<1e-5f,"generation preserves FX automation");
         auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();
         restoredFx->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
-        check(restoredFx->effectsSnapshot()==effected->effectsSnapshot(),"effects restored in state");
+        check(restoredFx->effect(0).type==effected->effect(0).type &&
+              std::abs(restoredFx->effectWetParameter(0).get()-.7f)<1e-5f,"effects restored in state");
+        auto legacy=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
+        for(auto& section:legacy.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag){
+            section.data.clear();const auto old=effected->effectsSnapshot();
+            for(const auto word:{std::uint32_t{1},static_cast<std::uint32_t>(old),static_cast<std::uint32_t>(old>>32)})
+                for(int shift=0;shift<32;shift+=8)section.data.push_back(static_cast<std::byte>((word>>shift)&255));
+        }
+        const auto old=vox::preset::encode(legacy.document);auto migratedFx=std::make_unique<vox::fx::FxProcessor>();
+        if(old){migratedFx->setStateInformation(old->data(),static_cast<int>(old->size()));
+            check(migratedFx->lastStateError().isEmpty()&&migratedFx->effect(0).type==vox::fx::effects::Type::drive,"FXSL v1 migrates to automated v2");}
+        else check(false,"encode old FXSL");
         auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:document.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag)section.data[4]=std::byte{0xff};
         const auto bad=vox::preset::encode(document.document);
         if(bad){restoredFx->setStateInformation(bad->data(),static_cast<int>(bad->size()));
             check(restoredFx->lastStateError().isNotEmpty()&&save(*restoredFx)==state,"invalid effects state rejected transactionally");}
+        check(dry->setProgram(effected->program()),"dry and effected tests use identical Program");
         effected->prepareToPlay(48000,512);dry->prepareToPlay(48000,512);
         juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer n1,n2;
         n1.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);

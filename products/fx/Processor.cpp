@@ -32,11 +32,17 @@ preset::Section encodeProgram (const NoiseProgram& program)
     (void) programcodec::encode (program, section.data); // validated on publication
     return section;
 }
-preset::Section encodeEffects (std::uint64_t packed)
+preset::Section encodeEffects (std::uint64_t packed, const std::array<float,4>& wet, const std::array<float,4>& amount)
 {
     preset::Section section; section.tag=fxEffectsSectionTag;
-    for (const auto word : {std::uint32_t{1}, static_cast<std::uint32_t>(packed), static_cast<std::uint32_t>(packed >> 32)})
+    const auto append=[&] (std::uint32_t word) {
         for (int shift=0; shift<32; shift+=8) section.data.push_back(static_cast<std::byte>((word>>shift)&0xffu));
+    };
+    append(2);
+    for (std::size_t i=0;i<4;++i) {
+        append(static_cast<std::uint32_t>(effects::unpack(static_cast<std::uint16_t>(packed>>(i*16))).type));
+        append(std::bit_cast<std::uint32_t>(wet[i]));append(std::bit_cast<std::uint32_t>(amount[i]));
+    }
     return section;
 }
 std::uint32_t wordAt (const std::vector<std::byte>& data, std::size_t offset)
@@ -61,6 +67,12 @@ FxProcessor::FxProcessor()
                                                 "Event Duration", 0.05f, 32.0f, 4.0f);
     addParameter (duration_);
     loadedDuration_ = heldDuration_ = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
+    for (std::size_t i=0;i<4;++i) {
+        const auto number=juce::String(static_cast<int>(i+1));
+        effectWet_[i]=new juce::AudioParameterFloat(juce::ParameterID{"fx.slot."+number+".wet",1},"FX " + number + " Wet",0.0f,1.0f,1.0f);
+        effectAmount_[i]=new juce::AudioParameterFloat(juce::ParameterID{"fx.slot."+number+".amount",1},"FX " + number + " Amount",0.0f,1.0f,0.5f);
+        addParameter(effectWet_[i]);addParameter(effectAmount_[i]);
+    }
 }
 
 bool FxProcessor::generateProgram (const generator::Settings& settings, const generator::Locks& locks)
@@ -96,7 +108,9 @@ bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)
 effects::Settings FxProcessor::effect (std::size_t index) const
 {
     if (index>=4) return {};
-    return effects::unpack(static_cast<std::uint16_t>(effectsSnapshot()>>(index*16)));
+    auto settings=effects::unpack(static_cast<std::uint16_t>(effectsSnapshot()>>(index*16)));
+    settings.wet=effectWet_[index]->get();settings.amount=effectAmount_[index]->get();
+    return settings;
 }
 
 void FxProcessor::prepareToPlay (double rate, int blockSize)
@@ -194,8 +208,13 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     }
     renderTo (size);
     const auto fxSnapshot=audioEffects_;
-    for (std::size_t i=0;i<4;++i)
-        (void) effects_.set(i,effects::unpack(static_cast<std::uint16_t>(fxSnapshot>>(i*16))));
+    for (std::size_t i=0;i<4;++i) {
+        auto settings=effects::unpack(static_cast<std::uint16_t>(fxSnapshot>>(i*16)));
+        const auto wet=effectWet_[i]->get(), amount=effectAmount_[i]->get();
+        settings.wet=std::isfinite(wet)?juce::jlimit(0.0f,1.0f,wet):0.0f;
+        settings.amount=std::isfinite(amount)?juce::jlimit(0.0f,1.0f,amount):0.0f;
+        (void) effects_.set(i,settings);
+    }
     effects_.process(left,right,static_cast<std::size_t>(size));
     const auto target = output_->get();
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
@@ -216,7 +235,9 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     const auto snapshot = programs_.snapshotState();
     out.push_back (encodeFamily (static_cast<int> (snapshot.program.layers[0].family)));
     out.push_back (encodeProgram (snapshot.program));
-    out.push_back (encodeEffects (snapshot.effects));
+    std::array<float,4> wet{},amount{};
+    for(std::size_t i=0;i<4;++i){wet[i]=effectWet_[i]->get();amount[i]=effectAmount_[i]->get();}
+    out.push_back (encodeEffects (snapshot.effects,wet,amount));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -263,22 +284,36 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
         }
     }
     auto fx=effects::defaults();
+    std::array<float,4> wet{1,1,1,1},amount{.5f,.5f,.5f,.5f};
     if (const auto* section=doc.find(fxEffectsSectionTag)) {
-        if (section->data.size()!=12 || wordAt(section->data,0)!=1) {
-            error="Unsupported or malformed FX effects section"; return {};
-        }
-        fx=static_cast<std::uint64_t>(wordAt(section->data,4)) |
-           (static_cast<std::uint64_t>(wordAt(section->data,8))<<32);
-        if (!effects::validPacked(fx)) {error="Invalid FX effects settings";return {};}
+        if (section->data.size()==12 && wordAt(section->data,0)==1) {
+            fx=static_cast<std::uint64_t>(wordAt(section->data,4)) |
+               (static_cast<std::uint64_t>(wordAt(section->data,8))<<32);
+            if (!effects::validPacked(fx)) {error="Invalid FX effects settings";return {};}
+            for(std::size_t i=0;i<4;++i){const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));wet[i]=s.wet;amount[i]=s.amount;}
+        } else if(section->data.size()==52 && wordAt(section->data,0)==2) {
+            fx=0;
+            for(std::size_t i=0;i<4;++i) {
+                effects::Settings settings;
+                const auto type=wordAt(section->data,4+i*12);
+                if(type>=static_cast<std::uint32_t>(effects::Type::count)){error="Invalid FX effects type";return {};}
+                settings.type=static_cast<effects::Type>(type);
+                wet[i]=settings.wet=std::bit_cast<float>(wordAt(section->data,8+i*12));
+                amount[i]=settings.amount=std::bit_cast<float>(wordAt(section->data,12+i*12));
+                if(!settings.valid()){error="Invalid FX effects settings";return {};}
+                fx|=static_cast<std::uint64_t>(effects::pack(settings))<<(i*16);
+            }
+        } else {error="Unsupported or malformed FX effects section";return {};}
     }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
     result.sections.push_back (encodeProgram (*program));
-    result.sections.push_back (encodeEffects (fx));
+    result.sections.push_back (encodeEffects (fx,wet,amount));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx] {
+    result.apply = [this, value, duration, program, held, fx, wet, amount] {
         (void) programs_.publishState (*program, fx);
+        for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
         restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);

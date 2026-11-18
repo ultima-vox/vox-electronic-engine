@@ -1,3 +1,11 @@
 id,name,type,minimum,maximum,default,automatable,choices
 fx.output.gain,Output Gain,float,0,1,1,true,
 fx.event.duration,Event Duration,float,0.05,32,4,true,
+fx.slot.1.wet,FX 1 Wet,float,0,1,1,true,
+fx.slot.1.amount,FX 1 Amount,float,0,1,0.5,true,
+fx.slot.2.wet,FX 2 Wet,float,0,1,1,true,
+fx.slot.2.amount,FX 2 Amount,float,0,1,0.5,true,
+fx.slot.3.wet,FX 3 Wet,float,0,1,1,true,
+fx.slot.3.amount,FX 3 Amount,float,0,1,0.5,true,
+fx.slot.4.wet,FX 4 Wet,float,0,1,1,true,
+fx.slot.4.amount,FX 4 Amount,float,0,1,0.5,true,
