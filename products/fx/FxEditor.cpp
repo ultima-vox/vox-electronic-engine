@@ -52,9 +52,21 @@ FxPanel::FxPanel (FxProcessor& processor)
         generator::Settings settings;
         settings.family = processor_.family(); settings.complexity = 4;
         settings.seed = static_cast<std::uint32_t> (seed_.getValue());
-        (void) processor_.generateProgram (settings, {});
+        generator::Locks locks;
+        for (std::size_t i=0;i<4;++i) if(layerLocks_[i].getToggleState()) locks.layers[i]=generator::all;
+        (void) processor_.generateProgram (settings, locks);
     };
-    mutate_.onClick = [this] { (void) processor_.mutateProgram (static_cast<std::uint32_t> (seed_.getValue()), {}); };
+    mutate_.onClick = [this] {
+        generator::Locks locks;
+        for (std::size_t i=0;i<4;++i) if(layerLocks_[i].getToggleState()) locks.layers[i]=generator::all;
+        (void) processor_.mutateProgram (static_cast<std::uint32_t> (seed_.getValue()), locks);
+    };
+    for(std::size_t i=0;i<4;++i) {
+        layerLocks_[i].setButtonText(juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)));
+        layerLocks_[i].setTitle("Lock entire layer " + juce::String(static_cast<int>(i+1)));
+        layerLocks_[i].setTooltip("Preserve this layer during Generate and Mutate (editor session only)");
+        addAndMakeVisible(layerLocks_[i]);
+    }
     addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
     for (int i=0; i<4; ++i) {
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
@@ -121,6 +133,10 @@ void FxPanel::resized()
     seed_.setBounds (generatorArea.removeFromTop (30)); generatorArea.removeFromTop (5);
     generate_.setBounds (generatorArea.removeFromTop (35)); generatorArea.removeFromTop (5);
     mutate_.setBounds (generatorArea.removeFromTop (35));
+    auto lockArea=area.removeFromLeft(100);
+    auto topLocks=lockArea.removeFromTop(30), bottomLocks=lockArea.removeFromTop(30);
+    layerLocks_[0].setBounds(topLocks.removeFromLeft(45));layerLocks_[1].setBounds(topLocks);
+    layerLocks_[2].setBounds(bottomLocks.removeFromLeft(45));layerLocks_[3].setBounds(bottomLocks);
     auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(45);
     const int fxWidth=fxRow.getWidth()/4;
     for (std::size_t i=0;i<4;++i) {

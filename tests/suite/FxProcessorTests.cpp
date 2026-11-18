@@ -72,7 +72,9 @@ int main() {
         std::vector<std::byte> expected,actual;
         vox::fx::programcodec::encode(before,expected);vox::fx::programcodec::encode(recalled->program(),actual);
         check(expected==actual,"generated program survives host state recall");
+        panel.layerLock(0).setToggleState(true,juce::sendNotificationSync);
         panel.mutateButton().onClick();
+        check(generated->program().layers[0].gain==before.layers[0].gain,"editor lock preserves selected layer");
         vox::fx::programcodec::encode(generated->program(),actual);
         check(expected!=actual,"editor mutate changes the real program");
         vox::fx::generator::Locks locks;locks.layers[0]=vox::fx::generator::all;

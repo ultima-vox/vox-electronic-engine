@@ -21,6 +21,7 @@ public:
     juce::Slider& seedSlider() noexcept { return seed_; }
     juce::Button& generateButton() noexcept { return generate_; }
     juce::Button& mutateButton() noexcept { return mutate_; }
+    juce::Button& layerLock(std::size_t index) noexcept { return layerLocks_[index]; }
     juce::ComboBox& effectSelector(std::size_t index) noexcept { return effectsType_[index]; }
     juce::Slider& effectWet(std::size_t index) noexcept { return effectsWet_[index]; }
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
@@ -37,6 +38,7 @@ private:
     juce::Slider seed_;
     vox::ui::VoxButton generate_ { "GENERATE" };
     vox::ui::VoxButton mutate_ { "MUTATE" };
+    std::array<juce::ToggleButton,4> layerLocks_;
     std::array<std::unique_ptr<LayerPanel>, 4> layers_;
     std::array<vox::ui::VoxComboBox,4> effectsType_;
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;

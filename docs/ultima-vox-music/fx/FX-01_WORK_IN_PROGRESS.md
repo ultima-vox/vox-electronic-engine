@@ -317,7 +317,7 @@ per-layer/per-field locks, mutation and distinct A/B seeds. A deterministic
 family. Local tests verify determinism, lock preservation, structural uniqueness
 and an audible finite smoke render of each entry; ASan/UBSan passed. These are
 not yet curated/approved factory presets. Generate and Mutate are now wired to
-the plugin, but the corpus, locks and generator settings are not yet exposed
+the plugin, but the corpus, granular locks and generator settings are not yet exposed
 or fully saved; key/pitch, patterns, full musical controls, user-facing exports
 and perceptual/licensing qualification remain outstanding.
 
@@ -350,8 +350,9 @@ results through the serialized ProgramStore controller. Existing events keep
 their captured program; new events see the published validated snapshot.
 Generate/Mutate deliberately leave host-automated duration and output gain
 untouched. Per-field lock support is available in the controller API, but the
-UI currently uses no locks and exposes only family and seed (four generated
-layers, default settings). Program content is saved in existing FPRG state;
+UI exposes whole-layer lock toggles plus family and seed (four generated
+layers, default settings); these toggles are editor-session-only and are not
+saved in project state. Program content is saved in existing FPRG state;
 the seed and generator settings themselves are not saved yet. Full generation,
 A/B, lock controls, preset browser and recallable metadata remain unfinished.
 Local ProgramStore and generator tests pass, and processor/editor sources and
