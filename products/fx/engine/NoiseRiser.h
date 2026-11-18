@@ -110,7 +110,7 @@ public:
     }
     // A ninth event fades the oldest in a dedicated bounded retirement slot.
     // If that slot is still fading, the incoming event is dropped.
-    bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false) noexcept {
+    bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false, std::uint64_t expectedSampleToken = 0) noexcept {
         timeline::SecondsClock clock;
         if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
             !clock.start(duration, rate_)) return false;
@@ -125,7 +125,7 @@ public:
         // Explicit user selection never falls back if the content is missing
         // or publication races acquisition. Acquire before changing voices.
         sample::Store::Lease incoming;
-        if(userSample && (!sampleStore_ || !sampleStore_->acquire(incoming)))return false;
+        if(userSample && (!sampleStore_ || !sampleStore_->acquire(incoming,expectedSampleToken)))return false;
         const auto slotIndex=static_cast<std::size_t>(slot-voices_.data());
         if(stealing){
             retiring_=*slot;beginRelease(retiring_);

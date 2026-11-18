@@ -39,7 +39,7 @@ public:
     Store& operator=(const Store&)=delete;
     // Controller/worker only. All validation and allocation precede publish;
     // if no retired slot is free, the current sample is unchanged.
-    bool publish(std::span<const float> samples,std::uint32_t sampleRate) {
+    bool publish(std::span<const float> samples,std::uint32_t sampleRate,std::uint64_t* publishedToken=nullptr) {
         if(samples.empty()||samples.size()>maxFrames||sampleRate<8000||sampleRate>384000)return false;
         for(float sample:samples)if(!std::isfinite(sample)||sample < -1 || sample > 1)return false;
         std::vector<float> prepared;
@@ -59,6 +59,7 @@ public:
             const auto token=(generation_<<2)|(index+1);
             slot.leases.store(0,std::memory_order_release);
             current_.store(token,std::memory_order_release);
+            if(publishedToken)*publishedToken=token;
             return true;
         }
         return false;
@@ -68,11 +69,11 @@ public:
     // Audio thread: exactly one CAS and one validation, no retries or locks.
     // A concurrent replacement may cause a transient failure; caller decides
     // its explicit policy rather than using an invalid or implicit sample.
-    bool acquire(Lease& lease) noexcept {
+    bool acquire(Lease& lease,std::uint64_t expectedToken=0) noexcept {
         if(lease.owner_!=nullptr)return false;
         const auto token=current_.load(std::memory_order_acquire);
         const auto id=static_cast<std::size_t>(token&3u);
-        if(id==0 || id>capacity)return false;
+        if(id==0 || id>capacity || (expectedToken!=0&&token!=expectedToken))return false;
         auto& slot=slots_[id-1];auto count=slot.leases.load(std::memory_order_acquire);
         if((count&locked)!=0 || count==locked-1)return false;
         if(!slot.leases.compare_exchange_strong(count,count+1,std::memory_order_acq_rel))return false;

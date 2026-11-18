@@ -14,10 +14,12 @@ int main(){
     Store store;Store::Lease a,b,c,d;
     check(!store.acquire(a),"empty store has no implicit fallback");
     const std::vector<float> first(128,.1f),second(64,.2f),third(256,.3f),fourth(42,.4f);
-    check(store.publish(first,48000)&&store.acquire(a),"publish/acquire first");
+    std::uint64_t firstToken=0,secondToken=0;
+    check(store.publish(first,48000,&firstToken)&&store.acquire(a,firstToken),"publish/acquire first by generation");
     check(!store.acquire(a),"cannot overwrite a live lease");
     check(a.frames()==first.size()&&a.rate()==48000&&a.data()[0]==.1f,"first lease contents");
-    check(store.publish(second,44100)&&store.acquire(b),"publish/acquire second");
+    check(store.publish(second,44100,&secondToken)&&store.acquire(b,secondToken),"publish/acquire second");
+    Store::Lease stale;check(firstToken!=secondToken&&!store.acquire(stale,firstToken),"stale requested generation cannot resolve to newer content");
     check(store.publish(third,96000)&&store.acquire(c),"publish/acquire third");
     check(!store.publish(fourth,48000),"all versions leased: publish fails rather than evicting");
     check(a.data()[0]==.1f&&b.data()[0]==.2f&&c.data()[0]==.3f,"old leases remain immutable");
@@ -31,6 +33,8 @@ int main(){
     check(acquired&&store.publish(fourth,48000),"released slot reusable off audio thread");
     const auto nan=std::vector<float>{std::numeric_limits<float>::quiet_NaN()};
     const std::vector<float> over{1.1f};
+    std::uint64_t unchanged=123;
+    check(!store.publish(nan,48000,&unchanged)&&unchanged==123,"failed publication leaves token unchanged");
     check(!store.publish(nan,48000)&&!store.publish(first,0)&&!store.publish(over,48000)&&
           !store.publish(std::span<const float>{},48000),"invalid sample rejected");
     check(store.acquire(d)&&d.data()[0]==.4f,"invalid publication leaves current unchanged");

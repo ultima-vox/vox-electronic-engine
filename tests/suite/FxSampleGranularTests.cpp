@@ -19,17 +19,19 @@ int main(){
     check(a->attachSampleStore(&aStore)&&b->attachSampleStore(&bStore),"attach sample stores while stopped");
     check(!a->noteOn(1,60,1,1,true),"missing requested sample does not silently fall back");
     std::vector<float> one(512,.2f),two(512,.7f),three(512,-.4f),four(512,.1f);
-    check(aStore.publish(one,24000)&&bStore.publish(one,24000),"publish first samples");
-    check(a->noteOn(1,60,1,1,true)&&b->noteOn(1,60,1,1,true),"sample event trigger");
+    std::uint64_t firstToken=0,secondToken=0;
+    check(aStore.publish(one,24000,&firstToken)&&bStore.publish(one,24000),"publish first samples");
+    check(a->noteOn(1,60,1,1,true,firstToken)&&b->noteOn(1,60,1,1,true),"sample event trigger");
     check(!a->attachSampleStore(nullptr),"cannot detach store while active");
     std::array<float,512> al{},ar{},bl{},br{};
     a->render(al.data(),ar.data(),512);b->render(bl.data(),br.data(),512);
-    check(aStore.publish(two,48000),"replace sample during event");
+    check(aStore.publish(two,48000,&secondToken),"replace sample during event");
+    check(!a->noteOn(1,60,1,1,true,firstToken)&&a->activeEventCount()==1,"stale token cannot trigger newer content");
     for(int i=0;i<6;++i){a->render(al.data(),ar.data(),512);b->render(bl.data(),br.data(),512);
         check(al==bl&&ar==br,"existing event retains original immutable sample");}
     a->allSoundOff(0);b->allSoundOff(0);a->render(al.data(),ar.data(),512);b->render(bl.data(),br.data(),512);
     check(a->activeEventCount()==0&&b->activeEventCount()==0,"old sample events retire");
-    check(a->noteOn(1,60,1,1,true)&&b->noteOn(1,60,1,1,true),"new sample events");
+    check(a->noteOn(1,60,1,1,true,secondToken)&&b->noteOn(1,60,1,1,true),"new sample events");
     double difference=0;for(int i=0;i<6;++i){a->render(al.data(),ar.data(),512);b->render(bl.data(),br.data(),512);
         for(std::size_t j=0;j<al.size();++j)difference+=std::abs(al[j]-bl[j]);}
     check(difference>.1,"new event uses replacement sample");
