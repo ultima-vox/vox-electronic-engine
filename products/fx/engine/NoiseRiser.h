@@ -122,6 +122,11 @@ public:
             slot=&*std::min_element(voices_.begin(),voices_.end(),
                 [](const Voice& a,const Voice& b){return a.serial<b.serial;});
         }
+        // The external source is relevant only to enabled granular layers.
+        // A mixed event is rejected as a unit when its granular source is
+        // unavailable; unrelated families remain playable.
+        userSample = userSample && std::any_of(program_.layers.begin(),program_.layers.end(),
+            [](const auto& layer) { return layer.enabled && layer.family == NoiseFamily::granular; });
         // Explicit user selection never falls back if the content is missing
         // or publication races acquisition. Acquire before changing voices.
         sample::Store::Lease incoming;

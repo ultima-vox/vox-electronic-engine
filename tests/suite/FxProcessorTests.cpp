@@ -360,6 +360,11 @@ int main() {
         missing->prepareToPlay(48000,512);note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
         block(*missing,sound,note);check(sound.getMagnitude(0,0,512)==0,"missing sample never silently falls back");
         const auto before=bytes;check(!missing->renderProgramWav(settings,bytes)&&bytes==before,"missing sample WAV fails transactionally");
+        check(missing->setFamily(0),"select non-granular family despite missing sample");
+        note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*missing,sound,note);
+        check(sound.getMagnitude(0,0,512)>0,"missing sample does not suppress non-granular audio");
+        check(missing->renderProgramWav(settings,bytes),"non-granular WAV ignores missing sample");
+        missing->panic();block(*missing,sound,note);check(missing->setFamily(11),"return to granular family");
         check(missing->useBuiltinSample(),"explicit built-in fallback");
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*missing,sound,note);
         check(sound.getMagnitude(0,0,512)>0,"explicit fallback triggers procedural sample");

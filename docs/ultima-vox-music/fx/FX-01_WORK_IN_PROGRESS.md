@@ -761,5 +761,20 @@ under ASan/UBSan. Processor and test code passed JUCE syntax checks only: the
 processor/state/A-B/import tests have not run here. No user sample import UI is
 exposed yet. File-system restore and destruction may block non-audio host threads;
 real host callback/lifecycle and concurrent restore behavior need qualification.
-A missing external selection currently suppresses every new event, including
-non-granular events, until explicit built-in selection or successful reload.
+A missing external selection suppresses only events with an enabled granular
+layer; mixed events fail as a whole rather than silently substituting content.
+Non-granular event and WAV rendering continue.
+
+### TL P1 follow-up: source and pending-import contract
+
+FSMP v2 adds an unverified pending-path kind; v1 built-in/external references
+still decode. Pending import immediately selects unavailable and saves that path,
+not the previous playable reference. A/B or project restore of that pending path
+remains unavailable (it does not auto-trust an unhashed file). A failed import
+rolls back the pre-import selection; superseding imports retain the same rollback
+point. Restores supersede in-flight work. Status `failed` signals the failed
+request even when the rolled-back selection is playable. A gated deterministic
+test exercises pending save, supersession and rollback. A concurrent standalone
+loader/restore/MIDI-engine stress test passed TSan; granular, offline and
+controller tests passed, including selected ASan/UBSan. Actual JUCE processor,
+A/B, Windows and host execution still require exact-head qualification.

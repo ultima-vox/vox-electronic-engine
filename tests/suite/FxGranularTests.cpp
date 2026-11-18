@@ -43,5 +43,21 @@ int main(){
         e->allSoundOff(0);for(int i=0;i<2;++i)e->render(l,r,512);
         check(e->activeGrainCount()==0&&e->activeEventCount()==0,"panic retires grains and events");
     }
+    {
+        vox::fx::sample::Store store;auto engine=std::make_unique<vox::fx::NoiseRiser>();engine->prepare(48000);
+        check(engine->attachSampleStore(&store),"attach missing sample store");
+        vox::fx::NoiseProgram program;program.layers[0].family=vox::fx::NoiseFamily::riser;
+        check(engine->setProgram(program)&&engine->noteOn(1,60,1,1,true,1),"missing sample does not silence non-granular event");
+        float l[512]{},r[512]{};engine->render(l,r,512);
+        check(std::any_of(l,l+512,[](float x){return x!=0;}),"non-granular event remains audible");
+        engine->allSoundOff(0);engine->render(l,r,512);
+        program.layers[0].family=vox::fx::NoiseFamily::granular;
+        check(engine->setProgram(program)&&!engine->noteOn(1,60,1,1,true,1),"missing sample never triggers granular fallback");
+        program.layers[0].family=vox::fx::NoiseFamily::riser;program.layers[1].enabled=true;
+        program.layers[1].family=vox::fx::NoiseFamily::granular;
+        check(engine->setProgram(program)&&!engine->noteOn(1,60,1,1,true,1),"mixed event with granular layer fails atomically");
+        program.layers[1].enabled=false;
+        check(engine->setProgram(program)&&engine->noteOn(1,60,1,1,true,1),"disabled granular layer does not require sample");
+    }
     std::printf("FX granular: %d failure(s)\n",fails);return fails?1:0;
 }

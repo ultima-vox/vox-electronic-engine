@@ -163,7 +163,9 @@ offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) con
     }
     offline::Capture capture;capture.program=snapshot.program;capture.settings=settings;
     const auto generation=samples_.selection();
-    if(generation!=0) {
+    const bool needsSample=std::any_of(capture.program.layers.begin(),capture.program.layers.end(),
+        [](const auto& layer){return layer.enabled && layer.family==NoiseFamily::granular;});
+    if(generation!=0 && needsSample) {
         capture.useUserSample=true;
         sample::Store::Lease lease;
         if(samples_.store().acquire(lease,generation)) {

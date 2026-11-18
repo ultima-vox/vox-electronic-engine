@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <limits>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -25,7 +26,8 @@ public:
             output=std::move(next);return true;
         } catch(...) {return false;}
     }
-    Controller() : worker_([this]{run();}) {}
+    using Loader=std::function<bool(const juce::File&,Decoded&)>;
+    explicit Controller(Loader loader = loadWav) : loader_(std::move(loader)),worker_([this]{run();}) {}
     Controller(const Controller&)=delete;
     Controller& operator=(const Controller&)=delete;
     ~Controller(){
@@ -36,18 +38,24 @@ public:
     std::uint64_t selection() const noexcept { return selection_.load(std::memory_order_acquire); }
     Reference reference() const { const std::lock_guard<std::mutex> lock(mutex_);return desired_; }
     Status status() const { const std::lock_guard<std::mutex> lock(mutex_);return status_; }
-    // Import is transactional: failure leaves the prior reference and token
-    // selected. A new request coalesces older unfinished requests.
+    // A pending import saves its intended path as unverified and is silent for
+    // granular playback. On failure, roll back the pre-import selection; a
+    // superseding import keeps that same rollback point.
     bool import(const juce::File& file) {
         const auto name=file.getFullPathName();
         if(name.isEmpty()||!juce::File::isAbsolutePath(name))return false;
-        Reference candidate;candidate.kind=Reference::Kind::external;candidate.path=name.toRawUTF8();candidate.sha256=std::string(64,'0');
+        Reference candidate;candidate.kind=Reference::Kind::pending;candidate.path=name.toRawUTF8();
         if(!candidate.valid())return false;
         Request next;
         try { next={candidate.path,{},true,0}; } catch(...) {return false;}
         {
             const std::lock_guard<std::mutex> lock(mutex_);
             if(stopping_||disabled_||revision_==std::numeric_limits<std::uint64_t>::max())return false;
+            if(!importPending_){
+                rollback_=std::move(desired_);rollbackSelection_=selection_.load(std::memory_order_relaxed);
+                importPending_=true;
+            }
+            desired_=std::move(candidate);selection_.store(1,std::memory_order_release);
             next.revision=++revision_;request_=std::move(next);pending_=true;status_=Status::loading;
         }
         condition_.notify_all();return true;
@@ -65,12 +73,13 @@ public:
             const std::lock_guard<std::mutex> lock(mutex_);
             if(revision_==std::numeric_limits<std::uint64_t>::max())disabled_=true;
             else ++revision_;
+            importPending_=false;rollback_={};
             desired_=std::move(prepared.reference);
             if(desired_.kind==Reference::Kind::builtin){
                 selection_.store(0,std::memory_order_release);pending_=false;status_=Status::builtin;
             } else {
                 selection_.store(1,std::memory_order_release);
-                if(disabled_||stopping_){pending_=false;status_=Status::missing;}
+                if(desired_.kind==Reference::Kind::pending||disabled_||stopping_){pending_=false;status_=Status::missing;}
                 else {
                     request_={std::move(prepared.requestPath),std::move(prepared.expectedHash),false,revision_};
                     pending_=true;status_=Status::loading;
@@ -98,7 +107,7 @@ private:
             Decoded decoded;Reference imported;bool verified=false;
             try {
                 const auto path=juce::String::fromUTF8(request.path.c_str(),static_cast<int>(request.path.size()));
-                const bool loaded=juce::File::isAbsolutePath(path)&&loadWav(juce::File(path),decoded);
+                const bool loaded=juce::File::isAbsolutePath(path)&&loader_(juce::File(path),decoded);
                 const auto hash=loaded?decoded.sha256.toStdString():std::string{};
                 verified=loaded&&(request.importing||hash==request.expected);
                 if(verified&&request.importing)imported={Reference::Kind::external,request.path,hash};
@@ -109,9 +118,12 @@ private:
                 if(disabled_||request.revision!=revision_)continue;
                 std::uint64_t token=0;
                 if(verified&&store_.publish(decoded.mono,decoded.rate,&token)){
-                    if(request.importing)desired_=std::move(imported);
+                    if(request.importing){desired_=std::move(imported);rollback_={};importPending_=false;}
                     selection_.store(token,std::memory_order_release);status_=Status::ready;
-                } else status_=request.importing?Status::failed:Status::missing;
+                } else if(request.importing){
+                    desired_=std::move(rollback_);selection_.store(rollbackSelection_,std::memory_order_release);
+                    importPending_=false;status_=Status::failed;
+                } else status_=Status::missing;
             }
             condition_.notify_all();
         }
@@ -119,12 +131,14 @@ private:
     Store store_; // must be destroyed after worker and audio leases
     mutable std::mutex mutex_;
     std::condition_variable condition_;
-    Reference desired_;
+    Reference desired_,rollback_;
+    std::uint64_t rollbackSelection_=0;
     Request request_;
     std::atomic<std::uint64_t> selection_{0};
     Status status_=Status::builtin;
     std::uint64_t revision_=0;
-    bool stopping_=false,pending_=false,disabled_=false;
+    bool stopping_=false,pending_=false,disabled_=false,importPending_=false;
+    Loader loader_;
     std::thread worker_;
 };
 } // namespace vox::fx::sample
