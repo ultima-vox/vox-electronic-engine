@@ -171,13 +171,31 @@ test('Song clones only on a bar edit, relinks on undo, and follows source on oth
   await song.getByRole('button',{name:'Loop selected bar'}).click();
   await page.getByRole('button',{name:'Play preview',exact:true}).click();
   await expect(bar(2)).toHaveAttribute('data-playing','true');
-  const download = page.waitForEvent('download'); await song.getByRole('button',{name:/Download whole song MIDI/}).click();
+  const songExport = song.getByRole('button',{name:'Download whole song MIDI · 4/4 demo',exact:true});
+  const patternExport = panel(page,'Step Sequencer').getByRole('button',{name:'Download pattern MIDI · 4/4 demo',exact:true});
+  await expect(songExport).toHaveText('MIDI · 4/4 demo');
+  await expect(patternExport).toHaveText('MIDI · 4/4 demo');
+  const download = page.waitForEvent('download'); await songExport.click();
   const file = await download; expect(file.suggestedFilename()).toBe('vox-song.mid');
-  expect((await readFile((await file.path())!)).toString('ascii',0,4)).toBe('MThd');
+  const midi = await readFile((await file.path())!);
+  expect(midi.toString('ascii',0,4)).toBe('MThd');
+  expect(midi.includes(Buffer.from([0, 0xff, 0x58, 4, 4, 2, 24, 8]))).toBe(true); // Fixed 4/4 time-signature event.
 });
 
-test('Dock drag preview, keyboard/resizing, named restore and hiding do not stop or rewrite the pattern', async ({page}) => {
-  await hit(page,'Kick, step 2').click();
+test('Docking preserves playback and musical edits; only the named workspace layout survives reload', async ({page}) => {
+  const footer = page.locator('.instrument-foot');
+  await expect(footer.getByText('Browser demo',{exact:true})).toBeVisible();
+  await expect(footer.getByText('Musical edits reset on reload',{exact:true})).toBeVisible();
+  await expect(footer.getByText('Workspace layout saved locally',{exact:true})).toBeVisible();
+  const kit = page.getByRole('combobox',{name:'Kit',exact:true});
+  const kickLevel = panel(page,'Mixer Dock').getByRole('slider',{name:'Mixer Kick Level',exact:true});
+  const kickStep = hit(page,'Kick, step 2');
+  await expect(kit).toHaveValue('Analog Motion');
+  await kit.selectOption('Dry Circuit');
+  await setValue(panel(page,'Inspector').getByRole('textbox',{name:'Level value',exact:true}),'0.4');
+  await expect(kickLevel).toHaveAttribute('aria-valuenow','0.4');
+  await expect(kickStep).toHaveAttribute('aria-pressed','false');
+  await kickStep.click();
   await page.getByRole('button',{name:'Play preview',exact:true}).click();
   await expect(page.getByRole('button',{name:'Stop preview',exact:true})).toBeVisible();
   const grip = page.getByRole('button',{name:'Move Pad Rack to right dock',exact:true});
@@ -196,15 +214,36 @@ test('Dock drag preview, keyboard/resizing, named restore and hiding do not stop
   await page.mouse.move(b.x+b.width/2,b.y+62); await page.mouse.down(); await page.mouse.move(b.x-30,b.y+62,{steps:4}); await page.mouse.up();
   const after = bounded(await divider.getAttribute('aria-valuenow')); expect(after).toBeGreaterThan(before+20);
   await divider.press('ArrowLeft'); const width = bounded(await divider.getAttribute('aria-valuenow')); expect(width).toBeGreaterThan(after);
-  await page.locator('.workspace-menu summary').click();
-  await page.getByRole('textbox',{name:'Save workspace as'}).fill('Studio setup');
+  const summary = page.locator('.workspace-menu summary');
+  await summary.click();
+  await expect(page.getByText('Only the layout is saved. Reload resets Kit, pad, Pattern and Song edits.',{exact:true})).toBeVisible();
+  await page.getByRole('textbox',{name:'Save workspace layout as'}).fill('Studio setup');
   await page.getByRole('button',{name:'Save layout',exact:true}).click();
+  await expect(footer.getByRole('status')).toHaveText('Workspace layout saved as Studio setup.');
   await workspace(page,'Reset Workspace');
   await expect(left.locator('[data-dock="pads"]')).toBeVisible();
-  await expect(hit(page,'Kick, step 2')).toHaveAttribute('aria-pressed','true');
+  await expect(kickStep).toHaveAttribute('aria-pressed','true');
   await workspace(page,'Studio setup'); await expect(right.locator('[data-dock="pads"]')).toBeVisible();
-  await page.reload(); await expect(right.locator('[data-dock="pads"]')).toBeVisible();
+
+  const mode = page.getByRole('group',{name:'Drums mode'});
+  const song = panel(page,'Song Arranger');
+  await mode.getByRole('button',{name:'Song',exact:true}).click();
+  await song.getByRole('group',{name:'Song length in bars'}).getByRole('button',{name:'32',exact:true}).click();
+  await expect(song.locator('.arranger-bar')).toHaveCount(32);
+  await mode.getByRole('button',{name:'Pattern',exact:true}).click();
+  await expect(kit).toHaveValue('Dry Circuit');
+  await expect(kickLevel).toHaveAttribute('aria-valuenow','0.4');
+  await expect(kickStep).toHaveAttribute('aria-pressed','true');
+
+  await page.reload();
+  await expect(summary).toContainText('Studio setup');
+  await expect(right.locator('[data-dock="pads"]')).toBeVisible();
   await expect(divider).toHaveAttribute('aria-valuenow',String(width));
+  await expect(kit).toHaveValue('Analog Motion');
+  await expect(kickLevel).toHaveAttribute('aria-valuenow','0.85');
+  await expect(kickStep).toHaveAttribute('aria-pressed','false');
+  await mode.getByRole('button',{name:'Song',exact:true}).click();
+  await expect(song.locator('.arranger-bar')).toHaveCount(16);
   await page.getByRole('button',{name:'Hide Pad Rack'}).click(); await expect(right.locator('[data-dock="pads"]')).toHaveCount(0);
   await showPanel(page,'Pad Rack'); await expect(left.locator('[data-dock="pads"]')).toBeVisible();
 });
@@ -222,6 +261,7 @@ test('Expanded Mixer has 16 strips, real Out 2 signal, and Kit Level affects tha
   await mixer.getByRole('combobox',{name:'Kick mix output'}).selectOption('1');
   await showPanel(page,'Routing');
   const routing = panel(page,'Routing');
+  await expect(routing.getByText(/mixed to one browser playback device, not separate DAW outputs/)).toBeVisible();
   await expect(routing.getByRole('combobox',{name:'Pad output',exact:true})).toHaveValue('1');
   const bus = routing.getByRole('meter',{name:'Out 2 local bus peak'}).locator('..');
   const main = mixer.getByRole('meter',{name:'Main left pre-device peak'}).locator('..');

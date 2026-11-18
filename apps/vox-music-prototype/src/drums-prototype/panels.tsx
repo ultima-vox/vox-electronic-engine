@@ -138,7 +138,7 @@ export function RoutingPanel({ session: s }: { session: Session }) {
   return <div className="panel-body scroll-body stack"><Select label="Route pad" value={i} onChange={e => s.selectPad(+e.target.value)}>{s.history.value.pads.map((value, pad) => <option value={pad} key={pad}>{numberTag(pad + 1)} · {value.name}</option>)}</Select>
     <div className="inline"><span className="eyebrow">MIDI note</span><NumericValue binding={{ spec: linear('note','MIDI note',0,127,36 + i,1), value: p.note, onChange: value => s.setPad(i, old => ({ ...old, note: value })) }} /><span className="caption">{midiNote(p.note)}</span></div>
     <Outputs value={p.out} onChange={out => s.setPad(i, old => ({ ...old, out }))} />
-    <Notice>Main and Out 2–9 are distinct browser buses monitored on the same device. Native outputs and Host MIDI are not connected.</Notice>
+    <Notice>Main and Out 2–9 are local Web Audio buses with meter taps, mixed to one browser playback device, not separate DAW outputs. Host MIDI is not connected.</Notice>
     <div className="bus-list">{s.preview.levels.buses.map((value, out) => <div className="bus-status" key={out}><span>{outputName(out)}</span><Meter value={value} label={`${outputName(out)} local bus peak`} orientation="horizontal" /></div>)}</div>
   </div>;
 }
@@ -171,7 +171,7 @@ export function Mixer({ session: s, mode, setMode, bank, setBank, height, bpm }:
   const mixChoices = [{ value: 'collapsed' as const, label: 'Collapsed' }, { value: 'compact' as const, label: 'Compact' }, { value: 'expanded' as const, label: 'Expanded' }];
   const outputs = Math.max(...y.main);
   return <section className="ds-panel mixer" aria-label="Mixer Dock" data-mixer={mode} style={{ '--mix-height': `${height}px` } as CSSProperties}>
-    <header className="panel-header mixer-header"><AudioLines size={15} aria-hidden="true" /><h2>Mixer</h2><span className="mixer-meta eyebrow">16 channels</span><div className="spacer" />
+    <header className="panel-header mixer-header"><AudioLines size={15} aria-hidden="true" /><h2>Mixer</h2><span className="mixer-meta eyebrow">16 channels · local monitor</span><div className="spacer" />
       {mode !== 'collapsed' && <Segmented label="Mixer bank" value={bank} choices={[{ value: 0, label: '1–8' }, { value: 1, label: '9–16' }]} onChange={setBank} />}
       {mode === 'collapsed' && <div className="collapsed-peak inline"><span className="eyebrow">Main</span><Meter value={outputs} label="Main pre-device peak" orientation="horizontal" showValue /></div>}
       <Segmented value={mode} choices={mixChoices} onChange={setMode} label="Mixer mode" />

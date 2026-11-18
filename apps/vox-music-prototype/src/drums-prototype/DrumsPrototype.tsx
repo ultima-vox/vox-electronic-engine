@@ -135,15 +135,15 @@ export function DrumsPrototype({ active }: { active: boolean }) {
   }
   function restore(next: Layout) {
     history.end(); setLayout(parseLayout(next)); setFocusPane('primary'); setMaximized(null); setMoving(null); setOver(null);
-    layoutMenu.current?.removeAttribute('open'); say(`${next.preset} workspace loaded.`);
+    layoutMenu.current?.removeAttribute('open'); say(`${next.preset} workspace layout loaded.`);
   }
   function saveLayout() {
     const name = workspaceName.trim().slice(0, 34);
     if (!name || builtIn(name)) { say('Choose a name different from the built-in layouts.'); return; }
     const next = { ...layout, preset: name };
     const all = [...saved.filter(p => p.preset !== name), next].slice(-12);
-    if (!writeLocal(layoutsKey, all)) { say('Local storage is unavailable. Workspace was not saved.'); return; }
-    setSaved(all); setWorkspaceName(''); setLayout(next); layoutMenu.current?.removeAttribute('open'); say(`Workspace saved as ${name}.`);
+    if (!writeLocal(layoutsKey, all)) { say('Local storage is unavailable. Workspace layout was not saved.'); return; }
+    setSaved(all); setWorkspaceName(''); setLayout(next); layoutMenu.current?.removeAttribute('open'); say(`Workspace layout saved as ${name}.`);
   }
   const actualLayout = {
     left: Math.min(layout.leftWidth, room.width && room.width < 1130 ? 212 : room.width && room.width < 1350 ? 247 : 340),
@@ -221,7 +221,8 @@ export function DrumsPrototype({ active }: { active: boolean }) {
         <details className="disclosure workspace-menu" ref={layoutMenu}><summary><span className="eyebrow">Workspace</span><span className="summary-value"><LayoutDashboard size={12} aria-hidden="true" /> {layout.preset} <ChevronDown size={12} aria-hidden="true" /></span></summary>
           <div className="ds-panel menu-sheet stack"><span className="eyebrow">Workspace layouts</span>{presetNames.map(name => <Button key={name} aria-pressed={layout.preset === name} onClick={() => restore(workspace(name))}>{name}</Button>)}
             {saved.length > 0 && <><div className="divider" /><span className="eyebrow">Saved locally</span>{saved.map(item => <Button key={item.preset} aria-pressed={layout.preset === item.preset} onClick={() => restore(item)}>{item.preset}</Button>)}</>}
-            <div className="divider" /><label className="ds-field"><span className="eyebrow">Save workspace as</span><input maxLength={34} value={workspaceName} onChange={e => setWorkspaceName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveLayout(); }} placeholder="My layout" /></label>
+            <div className="divider" /><p className="caption">Only the layout is saved. Reload resets Kit, pad, Pattern and Song edits.</p>
+            <label className="ds-field"><span className="eyebrow">Save workspace layout as</span><input maxLength={34} value={workspaceName} onChange={e => setWorkspaceName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveLayout(); }} placeholder="My layout" /></label>
             <Button onClick={saveLayout} disabled={!workspaceName.trim()}>Save layout</Button><Button onClick={() => restore(workspace())}><RotateCcw size={12} aria-hidden="true" /> Reset Workspace</Button>
           </div>
         </details>
@@ -263,8 +264,10 @@ export function DrumsPrototype({ active }: { active: boolean }) {
       {mixerMode === 'expanded' && <Splitter label="Resize mixer height" direction="horizontal" value={layout.mixHeight} min={bounds.height[0]} max={bounds.height[1]} onChange={mixHeight => setLayout(old => ({ ...old, mixHeight }))} invert />}
       <Mixer bpm={bpm} session={session} mode={mixerMode} setMode={mixer => setLayout(old => ({ ...old, mixer, mixerAuto: false }))} bank={bank} setBank={setBank} height={layout.mixHeight} />
     </div>
-    <footer className="instrument-foot"><span className="inline"><Activity size={13} aria-hidden="true" /><span>Web Audio preview</span><i aria-hidden="true" /> <span>{preview.running ? 'Playing locally' : preview.state === 'running' ? 'Audio ready' : 'Ready to play'}</span></span>
-      <span className="live-notice" role="status">{status}</span><span className="foot-right"><AudioLines size={12} aria-hidden="true" /> {layoutPersisted ? 'Workspace saved locally' : 'Storage unavailable'} <span className="foot-hint">· Shift + drag for fine adjustment</span></span>
+    <footer className="instrument-foot"><span className="inline"><Activity size={13} aria-hidden="true" /><span>Browser demo</span><i aria-hidden="true" /> <span>{preview.running ? 'Playing locally' : preview.state === 'running' ? 'Audio ready' : 'Ready to play'}</span></span>
+      <span className="live-notice" role="status">{status}</span><span className="foot-right"><AudioLines size={12} aria-hidden="true" />
+        <span><span>{layoutPersisted ? 'Workspace layout saved locally' : 'Workspace layout not saved'}</span> · <span>Musical edits reset on reload</span></span>
+      </span>
     </footer>
   </main>;
 }

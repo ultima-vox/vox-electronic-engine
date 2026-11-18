@@ -45,7 +45,11 @@ main.tsx / app.css                        shell, route, accent
 shared-test-utils + e2e                  fixtures and browser evidence, never runtime imports
 ```
 
-The shared library receives values and callbacks only. It has no imports from either instrument or their engines. Browser workspace layout is versioned and local; it is **not** a project save, a host state chunk, or part of musical undo. Imported Drums samples and user kit/pattern snapshots last for the page session. FX User Programs and favorites persist locally; A/B and unsaved work are session-only.
+The shared library receives values and callbacks only. It has no imports from either instrument or their engines.
+
+- **Drums repeat visits:** only the current Workspace layout and named layouts persist. Kit, pad, Pattern and Song edits, imported samples and Library snapshots are session-only and reset on reload. A layout save is not a project save or part of musical undo.
+- **Drums MIDI and audio:** Step and Song download first-pass MIDI files at the local tempo in fixed **4/4**. They do not sync to a host or drag into a DAW. Main and Out 2–9 are measured Web Audio buses mixed into one browser playback device, not nine DAW outputs.
+- **FX:** User Programs and favorites persist locally; A/B and unsaved work are session-only.
 
 - [Owner handoff and requirement matrices](docs/HANDOFF.md)
 - [JUCE_PORTING_MAP.md](docs/JUCE_PORTING_MAP.md)

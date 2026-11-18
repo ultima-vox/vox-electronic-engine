@@ -4,21 +4,17 @@
 
 ## Адреса и проверка публикации
 
-Ожидаемый адрес проекта: `https://ultima-vox.github.io/vox-electronic-engine/`. Точки входа:
+Публичный адрес: [VOX MUSIC Workbench](https://ultima-vox.github.io/vox-electronic-engine/). Точки входа: [Drums](https://ultima-vox.github.io/vox-electronic-engine/#drums), [FX](https://ultima-vox.github.io/vox-electronic-engine/#fx), [Design System](https://ultima-vox.github.io/vox-electronic-engine/#system).
 
-- `https://ultima-vox.github.io/vox-electronic-engine/#drums`
-- `https://ultima-vox.github.io/vox-electronic-engine/#fx`
-- `https://ultima-vox.github.io/vox-electronic-engine/#system`
+Первый успешный деплой — `7e9d704c0bcccd96ada9c7ecd95bade67ac4085b`: [публичная HTTPS-проверка SHA и 26/26 Chromium](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44296408470/job/134780977376). После **Publish to GitHub Pages** job **Verify the public HTTPS site** без локального сервера сверяет точный SHA по [workbench-version.json](https://ultima-vox.github.io/vox-electronic-engine/workbench-version.json) и повторно тестирует сам публичный сайт. Маркер показывает текущий опубликованный коммит, а не обязательно первый. Статический сайт на Pages обслуживается GitHub независимо от Arena.
 
-Это **целевые URL**, не подтверждение, что Pages уже включён. Успешный job **Publish to GitHub Pages** должен вернуть этот HTTPS-адрес. Затем **Verify the public HTTPS site** без локального сервера проверяет, что `/vox-electronic-engine/workbench-version.json` отдаёт точный SHA деплоя, и прогоняет Chromium на самом публичном сайте. Только после обоих успехов SHA можно считать опубликованным и проверенным. Статический сайт на Pages продолжает обслуживаться GitHub после завершения сессии Arena.
-
-## Однократная настройка владельцем репозитория
+## Однократная настройка (уже выполнена владельцем)
 
 1. **Settings → Pages → Build and deployment → Source → GitHub Actions**. Не выбирайте `Deploy from a branch` и не создавайте workflow через шаблон, который коммитит в `main`. Для стандартного `github.io` используется HTTPS; не добавляйте custom domain для этой конфигурации.
 2. **Settings → Environments → `github-pages` → Deployment branches and tags → Selected branches and tags**. Разрешите правило типа **Branch** только для точного имени `arena/ce951751-vox-electronic-engine`, без wildcard. Если `github-pages` ещё нет, создайте это окружение или откройте автоматически созданное после первого запуска. Не снимайте существующие review/approval gates для деплоя.
 3. **Actions → VOX MUSIC Pages → запуск нужного SHA → Re-run all jobs**. Повтор всех jobs пересоберёт артефакт с тем же SHA и новым именем по номеру попытки, в том числе если предыдущий уже истёк. Если окружение требует approval, владелец подтверждает только запуск ожидаемой ветки/SHA. При ограничительной политике Actions разрешите официальные actions, перечисленные в [workflow](../../../.github/workflows/vox-music-pages.yml); расширять глобальные права `GITHUB_TOKEN` или добавлять PAT не требуется.
 
-При подготовке Pages был выключен (`has_pages: false`), а API управления Pages и окружением вернул `403 Resource not accessible by integration`. Зелёные browser-тесты или загруженный `dist` в Actions не заменяют настройку владельцем и не означают публичного деплоя.
+История: первая попытка не опубликовала сайт, пока Pages был выключен. После настройки владельцем и повтора всех jobs публикация прошла. Зелёная сборка или загруженный `dist` сами по себе не доказывают, что сайт обновился.
 
 ## Обновления и границы доступа
 
@@ -34,4 +30,4 @@ VOX_BASE_PATH=/vox-electronic-engine/ npm run build
 VOX_BASE_PATH=/vox-electronic-engine/ VOX_TEST_PREVIEW=1 VOX_VISUAL_CAPTURE=0 npm run test:e2e
 ```
 
-Обычный Vite-запуск без `VOX_BASE_PATH` по-прежнему использует корень `/`. Workspace и сохранённые FX Programs хранятся в браузере на origin Pages, а локальный аудиоимпорт и скачивание JSON/MIDI не требуют backend. Данные `localStorage` со старого preview-домена браузер сам не переносит; FX Program можно перенести экспортом и импортом JSON.
+Обычный Vite-запуск без `VOX_BASE_PATH` по-прежнему использует корень `/`. На origin Pages в браузере сохраняются только layout Workspace в Drums и явно сохранённые данные FX (User Programs и избранное). Музыкальные правки Drums и импортированные сэмплы сбрасываются при перезагрузке страницы. Аудиоимпорт, экспорт JSON и скачивание демо MIDI в фиксированном 4/4 не требуют backend. Данные `localStorage` со старого preview-домена браузер сам не переносит; FX Program можно перенести экспортом и импортом JSON.

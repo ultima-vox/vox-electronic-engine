@@ -22,6 +22,12 @@ export const paramChoices = paramFields.map(value => ({ value, label: stepSpecs[
 export function PatternSelector({ value, onChange, label = 'Pattern slot' }: { value: number; onChange: (value: number) => void; label?: string }) {
   return <Select label={label} hideLabel value={value} onChange={event => onChange(+event.target.value)}>{['Motion', 'Afterbeat', 'Offset', 'Empty'].map((name, i) => <option key={name} value={i}>P{numberTag(i + 1)} · {name}</option>)}</Select>;
 }
+function DemoMidiDownload({ scope, onDownload }: { scope: 'pattern' | 'whole song'; onDownload: () => void }) {
+  return <Button className="sm" aria-label={`Download ${scope} MIDI · 4/4 demo`}
+    title="First pass at local tempo in fixed 4/4. Downloads a file; no host sync or DAW drag."
+    onClick={onDownload}><ArrowDownToLine size={13} aria-hidden="true" /> MIDI · 4/4 demo</Button>;
+}
+
 export function StepEditor({ session: s, patternKey, setPatternKey, bpm, clipboard }: { session: Session; patternKey: PatternKey; setPatternKey: (key: PatternKey) => void; bpm: number; clipboard: React.MutableRefObject<Pattern | null> }) {
   const [field, setField] = useState<keyof Step>('velocity');
   const [showLocks, setShowLocks] = useState(false);
@@ -48,7 +54,7 @@ export function StepEditor({ session: s, patternKey, setPatternKey, bpm, clipboa
         const tool = patternTools.find(item => item.value === e.target.value);
         if (tool) s.editActive(old => transformPattern(old, tool.value, pad));
       }}><option value="">Pattern tools…</option>{patternTools.map(tool => <option key={tool.value} value={tool.value}>{tool.label}</option>)}</Select>
-      <IconButton label="Download pattern MIDI (browser file)" onClick={() => downloadBlob('vox-pattern.mid', new Blob([buildMidi(s.history.value, { mode: 'pattern', ref: s.activeRef }, bpm)], { type: 'audio/midi' }))}><ArrowDownToLine size={14} /></IconButton>
+      <DemoMidiDownload scope="pattern" onDownload={() => downloadBlob('vox-pattern.mid', new Blob([buildMidi(s.history.value, { mode: 'pattern', ref: s.activeRef }, bpm)], { type: 'audio/midi' }))} />
     </div>
     <div className="sequence-inner">
       <StepGrid label="16-track step sequencer" rows={s.history.value.pads.map((item, row) => ({ name: item.name, colour: padColor(row), selected: row === pad }))} steps={p.length} playhead={playhead}
@@ -97,7 +103,7 @@ export function SongEditor({ session: s, bpm, enterSong }: { session: Session; b
   return <div className="arranger-editor editor-content">
     <div className="editor-toolbar inline wrap"><span className="eyebrow">Song length</span><Segmented label="Song length in bars" value={data.songLength} choices={lengthChoices} onChange={changeLength} />
       <Toggle checked={s.loopBar} onClick={() => s.setLoopBar(!s.loopBar)}>Loop selected bar</Toggle><div className="spacer" />
-      <IconButton label="Download whole song MIDI (browser file)" onClick={() => downloadBlob('vox-song.mid', new Blob([buildMidi(data, { mode: 'song', loopBar: null }, bpm)], { type: 'audio/midi' }))}><ArrowDownToLine size={14} /></IconButton>
+      <DemoMidiDownload scope="whole song" onDownload={() => downloadBlob('vox-song.mid', new Blob([buildMidi(data, { mode: 'song', loopBar: null }, bpm)], { type: 'audio/midi' }))} />
     </div>
     <div className="arranger-target inline wrap"><Badge tone={bar.override ? 'good' : 'accent'}>BAR {numberTag(s.selectedBar + 1)} · {bar.override ? 'UNLINKED' : 'LINKED'}</Badge>
       <Segmented label="Song editing target" value={s.editMode} choices={[{ value: 'source', label: 'Edit Source Pattern' }, { value: 'bar', label: 'Edit This Bar' }]} onChange={mode => { s.setEditMode(mode); enterSong(); }} />
