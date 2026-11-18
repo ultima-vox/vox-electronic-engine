@@ -735,3 +735,16 @@ lifetime, worker/UI load, project manifest/hash validation and missing-file
 policy, sample selection persistence, and offline sample snapshot/render are
 still required before exposing a control. The caller must keep the store alive
 longer than the engine and call attach only while stopped.
+
+## Sample reference and asynchronous controller foundation
+
+A versioned, bounded UTF-8 path/SHA-256 reference codec and a worker-owned
+sample controller now support asynchronous imports and hash-verified restore.
+A restored external reference is marked unavailable immediately until verified;
+a missing/mismatched file never falls back silently. Failed new imports retain
+the prior selection, superseded work is discarded, and audio can require the
+exact immutable publication generation. Standalone JUCE-core worker tests cover
+file import, failure, mismatch, restored identity, supersession and held leases;
+ASan/UBSan and TSan passed. The controller and reference codec are not yet
+wired to processor state, UI, MIDI triggering or offline capture. Worker teardown
+may wait for filesystem I/O, so it must never occur on the audio callback.
