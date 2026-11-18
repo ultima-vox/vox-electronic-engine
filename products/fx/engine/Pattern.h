@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -25,9 +26,12 @@ struct Pattern {
     }
 };
 struct Event { std::uint32_t tick=0;std::uint8_t note=0,velocity=0;bool on=false; };
-inline bool schedule(const Pattern& p,std::vector<Event>& output) {
+// Fixed-capacity canonical schedule, also suitable for audio-thread handoff.
+// Note-off precedes the following ratchet; construction is already ordered.
+struct FixedSchedule { std::array<Event,512> events{}; std::size_t count=0; };
+inline bool scheduleFixed(const Pattern& p,FixedSchedule& output) noexcept {
     if(!p.valid())return false;
-    std::vector<Event> next;next.reserve(static_cast<std::size_t>(p.bars)*16*8);
+    FixedSchedule next;
     std::uint32_t rng=p.seed?p.seed:1;
     for(std::uint32_t i=0;i<static_cast<std::uint32_t>(p.bars)*16;++i){
         const auto& s=p.steps[i];rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
@@ -36,11 +40,44 @@ inline bool schedule(const Pattern& p,std::vector<Event>& output) {
             const auto start=i*ticksPerStep+(r*ticksPerStep)/s.ratchets;
             const auto end=i*ticksPerStep+((r+1)*ticksPerStep)/s.ratchets;
             const auto length=std::max(1u,(end-start)*3/4);
-            next.push_back({start,s.note,s.velocity,true});next.push_back({start+length,s.note,0,false});
+            next.events[next.count++]={start,s.note,s.velocity,true};
+            next.events[next.count++]={start+length,s.note,0,false};
         }
     }
-    std::stable_sort(next.begin(),next.end(),[](const Event& a,const Event& b){return a.tick<b.tick;});
+    output=next;return true;
+}
+inline bool schedule(const Pattern& p,std::vector<Event>& output) {
+    FixedSchedule fixed;if(!scheduleFixed(p,fixed))return false;
+    std::vector<Event> next(fixed.events.begin(),fixed.events.begin()+static_cast<std::ptrdiff_t>(fixed.count));
     output=std::move(next);return true;
+}
+// Host-synchronized trigger enumeration for a constant-tempo block. Events are
+// rounded to the nearest sample, matching MIDI tick conversion; PPQ is in quarter notes. Bounds
+// are proportional to the block duration, with at most 512 events per 4 bars.
+// Only note-on is emitted because the current instrument is one-shot.
+template <typename Emit>
+inline bool forEachTrigger(const FixedSchedule& schedule,unsigned bars,double ppqPosition,double bpm,
+                           double rate,int samples,Emit emit) noexcept {
+    if(bars<1||bars>4||schedule.count>schedule.events.size()||!std::isfinite(ppqPosition)||std::abs(ppqPosition)>1.0e9||
+       !std::isfinite(bpm)||bpm<10||bpm>1000||!std::isfinite(rate)||rate<8000||rate>384000||samples<0)return false;
+    if(samples==0||schedule.count==0)return true;
+    const double start=ppqPosition*ppq, samplesPerTick=60.0*rate/(bpm*ppq);
+    const double end=start+samples/samplesPerTick;
+    const double period=static_cast<double>(bars)*16*ticksPerStep;
+    const auto first=static_cast<std::int64_t>(std::floor((start-0.5/samplesPerTick)/period));
+    const auto last=static_cast<std::int64_t>(std::floor((end+0.5/samplesPerTick)/period));
+    for(auto cycle=first;cycle<=last;++cycle){
+        for(std::size_t i=0;i<schedule.count;++i){const auto& event=schedule.events[i];
+            if(!event.on)continue;
+            const double at=(static_cast<double>(cycle)*period+event.tick-start)*samplesPerTick;
+            // A half-sample look-behind allows a trigger rounded onto the
+            // first sample of this block to cross the preceding boundary.
+            const double rounded=std::floor(at+0.5+1.0e-7);
+            if(rounded>=0 && rounded<samples)
+                emit(static_cast<int>(rounded),event.note,event.velocity);
+        }
+    }
+    return true;
 }
 inline bool tickToSample(std::uint32_t tick,double bpm,double rate,std::uint64_t& sample) noexcept {
     if(!std::isfinite(bpm)||bpm<10||bpm>1000||!std::isfinite(rate)||rate<8000||rate>384000)return false;

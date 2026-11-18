@@ -9,3 +9,4 @@ fx.slot.3.wet,FX 3 Wet,float,0,1,1,true,
 fx.slot.3.amount,FX 3 Amount,float,0,1,0.5,true,
 fx.slot.4.wet,FX 4 Wet,float,0,1,1,true,
 fx.slot.4.amount,FX 4 Amount,float,0,1,0.5,true,
+fx.pattern.enabled,Pattern Enabled,bool,0,1,0,true,Off|On

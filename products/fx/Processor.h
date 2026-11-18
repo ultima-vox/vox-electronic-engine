@@ -11,6 +11,7 @@ namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxPatternEnableSectionTag = preset::makeTag ("FPEN");
 inline constexpr preset::Tag fxPatternSectionTag = preset::makeTag ("FPAT");
 inline constexpr preset::Tag fxEffectsSectionTag = preset::makeTag ("FXSL");
 inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
@@ -27,6 +28,7 @@ public:
     using vox::suite::SuiteProcessor::processBlock;
     double getTailLengthSeconds() const override { return 33.0; }
     juce::AudioProcessorEditor* createEditor() override;
+    juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
     juce::AudioParameterFloat& effectWetParameter(std::size_t index) noexcept { return *effectWet_[index]; }
@@ -65,7 +67,7 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag; }
 
 private:
     NoiseRiser engine_;
@@ -74,9 +76,12 @@ private:
     ProgramStore programs_;
     std::atomic<std::uint64_t> restoreEpoch_ { 0 };
     NoiseProgram audioProgram_;
+    pattern::Pattern audioPattern_;
+    pattern::FixedSchedule audioPatternSchedule_;
     std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
     juce::AudioParameterFloat* duration_ = nullptr;
+    juce::AudioParameterBool* patternEnabled_ = nullptr;
     std::array<juce::AudioParameterFloat*,4> effectWet_{}, effectAmount_{};
     // Guarded by SuiteProcessor state lock, not accessed by the audio thread.
     float loadedDuration_ = 0.0f, heldDuration_ = 0.0f;

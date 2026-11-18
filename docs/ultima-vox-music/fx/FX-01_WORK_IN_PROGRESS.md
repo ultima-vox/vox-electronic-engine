@@ -414,5 +414,25 @@ publication; the controller exports MIDI bytes through the same canonical
 offline scheduler. Local pattern codec, scheduler and concurrent store tests
 passed, including TSan, selected ASan/UBSan and a Linux allocation probe.
 Processor state/export tests are authored but only syntax-checked. There is
-no realtime pattern playback, host synchronization, triplet/swing support,
-file/drag delivery or pattern editor yet: saved patterns do not trigger audio.
+At this checkpoint there was no realtime playback; see the following section
+for the current limited host-synchronized implementation.
+
+## Host-PPQ pattern playback (partial)
+
+FPEN v1 stores the independently host-automatable `fx.pattern.enabled`
+parameter, default off; missing FPEN migrates to off. The Perform panel can
+load one of twelve uncurated seed patterns and enable playback. A fixed 512-event
+canonical schedule is published with Program and slot types; while transport
+is playing and host PPQ/BPM are valid, 4/4 patterns issue one-shot note-ons at
+rounded sample offsets. At equal offsets, incoming MIDI is processed first.
+MIDI export and playback share the same ticks and probability choices; output
+MIDI remains disabled. Unsupported explicit time signatures and missing/invalid
+tempo or PPQ produce no pattern triggers; no tempo is fabricated. The host
+tempo is sampled once per block; same-seed probability repeats each cycle.
+
+The standalone scheduler passed 44.1/48/96 kHz, 64/128/512 block, 75/120/173
+BPM, cross-boundary rounding, tempo-change and MIDI-tick parity tests; a Linux
+allocation probe and ASan/UBSan passed. Processor tests for note timing, state,
+and allocation are authored but syntax-only. Missing: runtime Windows/DAW
+verification, triplet/other grid and swing options, event editing, per-cycle
+variation, transport discontinuity qualification and integrated MIDI file UI.

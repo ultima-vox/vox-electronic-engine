@@ -132,7 +132,9 @@ int main() {
     }
     {
         auto owner=std::make_unique<vox::fx::FxProcessor>();vox::fx::pattern::Pattern pattern;
-        check(vox::fx::pattern::factory(7,pattern)&&owner->setPattern(pattern),"set factory trigger pattern");
+        vox::fx::FxPanel panel(*owner);
+        panel.patternSelector().setSelectedId(8,juce::sendNotificationSync);
+        check(vox::fx::pattern::factory(7,pattern)&&owner->patternSnapshot().seed==pattern.seed,"pattern selector installs real pattern");
         std::vector<std::uint8_t> exported,expected;
         check(owner->exportPatternMidi(120,exported)&&vox::fx::pattern::exportMidi(pattern,120,expected)&&exported==expected,
               "processor exports canonical trigger MIDI");
@@ -146,6 +148,44 @@ int main() {
         if(bad){restored->setStateInformation(bad->data(),static_cast<int>(bad->size()));
             check(restored->lastStateError().isNotEmpty()&&save(*restored)==saved,"invalid pattern restore is transactional");}
         else check(false,"encode invalid pattern state");
+    }
+    {
+        auto sequenced=std::make_unique<vox::fx::FxProcessor>();auto manual=std::make_unique<vox::fx::FxProcessor>();
+        vox::fx::pattern::Pattern pattern;pattern.steps[0].enabled=true;
+        check(sequenced->setPattern(pattern),"install sequencer pattern");
+        sequenced->patternEnabledParameter().setValueNotifyingHost(1.0f);
+        TestPlayHead head;juce::AudioPlayHead::PositionInfo pos;
+        pos.setIsPlaying(true);pos.setTimeInSamples(0);pos.setPpqPosition(0.0);pos.setBpm(120.0);
+        head.position=pos;sequenced->setPlayHead(&head);
+        sequenced->prepareToPlay(48000,512);manual->prepareToPlay(48000,512);
+        juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer noMidi,note;
+        note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        block(*sequenced,a,noMidi);block(*manual,b,note);
+        for(int i=0;i<512;++i)check(a.getSample(0,i)==b.getSample(0,i),"host pattern downbeat matches MIDI trigger");
+        auto shifted=std::make_unique<vox::fx::FxProcessor>();auto manualShifted=std::make_unique<vox::fx::FxProcessor>();
+        vox::fx::pattern::Pattern shiftedPattern;shiftedPattern.steps[1].enabled=true;
+        check(shifted->setPattern(shiftedPattern),"install shifted pattern");
+        shifted->patternEnabledParameter().setValueNotifyingHost(1.0f);
+        TestPlayHead shiftedHead;juce::AudioPlayHead::PositionInfo shiftedPosition;
+        shiftedPosition.setIsPlaying(true);shiftedPosition.setTimeInSamples(0);
+        shiftedPosition.setPpqPosition(.25-100.0*120.0/(60.0*48000.0));shiftedPosition.setBpm(120.0);
+        shiftedHead.position=shiftedPosition;shifted->setPlayHead(&shiftedHead);
+        shifted->prepareToPlay(48000,512);manualShifted->prepareToPlay(48000,512);
+        note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),100);
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+        voxProbeBegin();
+#endif
+        shifted->processBlock(a,noMidi);
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+        const auto patternAllocations=voxProbeEnd();
+        if(voxProbeAvailable())check(patternAllocations==0,"host pattern callback allocates nothing");
+#endif
+        block(*manualShifted,b,note);
+        check(a.getMagnitude(0,0,100)==0 && a.getMagnitude(0,101,411)>0,"pattern trigger sample offset");
+        for(int i=0;i<512;++i)check(a.getSample(0,i)==b.getSample(0,i),"shifted pattern matches MIDI trigger");
+        auto state=save(*sequenced);auto restored=std::make_unique<vox::fx::FxProcessor>();
+        restored->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
+        check(restored->patternEnabledParameter().get(),"pattern enable restored");
     }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);

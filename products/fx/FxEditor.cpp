@@ -91,6 +91,20 @@ FxPanel::FxPanel (FxProcessor& processor)
         amountAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectAmountParameter(i),effectsAmount_[i]);
         const auto s=processor_.effect(i);type.setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
     }
+    patternSelector_.setTextWhenNothingSelected("Load seed pattern...");
+    patternSelector_.setTitle("Load trigger seed pattern");
+    patternSelector_.setTooltip("Replaces the saved pattern; works when HOST PATTERN is enabled");
+    for(int i=0;i<12;++i)patternSelector_.addItem("Seed pattern " + juce::String(i+1),i+1);
+    patternSelector_.onChange=[this] {
+        const auto id=patternSelector_.getSelectedId();pattern::Pattern selected;
+        if(id>=1 && id<=12 && pattern::factory(static_cast<std::size_t>(id-1),selected)) (void)processor_.setPattern(selected);
+        patternSelector_.setSelectedId(0,juce::dontSendNotification);
+    };
+    patternEnabled_.setClickingTogglesState(true);
+    patternEnabled_.setTitle("Enable host-synchronized trigger pattern");
+    patternEnabled_.setTooltip("Requires playing host with PPQ and BPM; 4/4 patterns only");
+    patternAttachment_=std::make_unique<juce::ButtonParameterAttachment>(processor_.patternEnabledParameter(),patternEnabled_);
+    addAndMakeVisible(patternSelector_);addAndMakeVisible(patternEnabled_);
     startTimerHz (25);
 }
 void FxPanel::paint (juce::Graphics& g)
@@ -144,6 +158,11 @@ void FxPanel::resized()
         column=column.reduced(3).withTrimmedTop(14);effectsType_[i].setBounds(column.removeFromLeft(column.getWidth()*4/10));
         effectsWet_[i].setBounds(column.removeFromLeft(column.getWidth()/2));effectsAmount_[i].setBounds(column);
     }
+    auto patternRow=getLocalBounds().reduced(32).removeFromBottom(55);
+    patternRow.removeFromLeft(340);
+    patternSelector_.setBounds(patternRow.removeFromLeft(190).reduced(0,8));
+    patternRow.removeFromLeft(10);
+    patternEnabled_.setBounds(patternRow.removeFromLeft(160).reduced(0,8));
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(235);
     row.removeFromBottom(80);

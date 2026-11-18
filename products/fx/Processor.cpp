@@ -45,6 +45,13 @@ preset::Section encodeEffects (std::uint64_t packed, const std::array<float,4>& 
     }
     return section;
 }
+preset::Section encodePatternEnable (bool enabled)
+{
+    preset::Section section; section.tag=fxPatternEnableSectionTag;
+    for(const auto word:{std::uint32_t{1},enabled?std::uint32_t{1}:std::uint32_t{0}})
+        for(int shift=0;shift<32;shift+=8)section.data.push_back(static_cast<std::byte>((word>>shift)&255u));
+    return section;
+}
 preset::Section encodePattern (const pattern::Pattern& pattern)
 {
     preset::Section section; section.tag=fxPatternSectionTag;
@@ -73,6 +80,8 @@ FxProcessor::FxProcessor()
                                                 "Event Duration", 0.05f, 32.0f, 4.0f);
     addParameter (duration_);
     loadedDuration_ = heldDuration_ = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
+    patternEnabled_=new juce::AudioParameterBool(juce::ParameterID{"fx.pattern.enabled",1},"Pattern Enabled",false);
+    addParameter(patternEnabled_);
     for (std::size_t i=0;i<4;++i) {
         const auto number=juce::String(static_cast<int>(i+1));
         effectWet_[i]=new juce::AudioParameterFloat(juce::ParameterID{"fx.slot."+number+".wet",1},"FX " + number + " Wet",0.0f,1.0f,1.0f);
@@ -162,11 +171,18 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // Stop, seek or loop discontinuity fades existing events. No stop is
     // inferred when a host does not provide a position. New notes in this
     // block may still start (including audition while transport is stopped).
-    bool positionAvailable = false;
+    bool positionAvailable = false, patternHostReady=false;
+    double hostPpq=0.0,hostBpm=0.0;
     if (auto* host = getPlayHead()) {
         if (const auto position = host->getPosition()) {
             positionAvailable = true;
             const bool playing = position->getIsPlaying();
+            const auto ppq=position->getPpqPosition(), bpm=position->getBpm();
+            const auto signature=position->getTimeSignature();
+            const bool supportedSignature=!signature.hasValue() || (signature->numerator==4 && signature->denominator==4);
+            if(playing && ppq.hasValue() && bpm.hasValue() && supportedSignature) {
+                hostPpq=*ppq;hostBpm=*bpm;patternHostReady=true;
+            }
             const auto sample = position->getTimeInSamples();
             const bool stopped = transportKnown_ && wasPlaying_ && !playing;
             const bool discontinuity = transportKnown_ && wasPlaying_ && playing && expectedSampleKnown_ &&
@@ -186,8 +202,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     }
     // One bounded attempt: if a concurrent writer is publishing, keep the
     // prior snapshot and retry on the next block. No locks or allocation.
-    if (programs_.tryRead (audioProgram_, audioEffects_, programSequence_))
+    if (programs_.tryRead (audioProgram_, audioEffects_, audioPattern_, programSequence_)) {
         (void) engine_.setProgram (audioProgram_);
+        (void) pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
+    }
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
@@ -205,26 +223,33 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         if (end > position) engine_.render (left + position, right + position, end - position);
         position = end;
     };
-    for (const auto metadata : midi)
-    {
-        // Ignore malformed and out-of-block packets; never materialize a
-        // MidiMessage (a long SysEx message could allocate on this thread).
-        if (metadata.numBytes < 1 || metadata.samplePosition < 0 || metadata.samplePosition >= size) continue;
-        const auto* bytes = metadata.data;
-        const int status = bytes[0];
-        const int type = status & 0xf0;
-        if ((type != 0x90 && type != 0xb0) || metadata.numBytes < 3) continue;
-        const int channel = (status & 0x0f) + 1;
-        if (type == 0x90 && bytes[2] != 0) {
-            renderTo (metadata.samplePosition);
-            engine_.noteOn (channel, bytes[1] & 0x7f, static_cast<float> (bytes[2] & 0x7f) / 127.0f, eventDuration);
-        } else if (type == 0xb0 && (bytes[1] == 120 || bytes[1] == 123)) {
-            renderTo (metadata.samplePosition);
-            engine_.allSoundOff (channel);
+    auto midiIt=midi.cbegin(); const auto midiEnd=midi.cend();
+    auto processMidiThrough = [&] (int through) {
+        while(midiIt!=midiEnd) {
+            const auto metadata=*midiIt;
+            if(metadata.samplePosition>through)break;
+            ++midiIt;
+            // Do not materialize a MidiMessage: SysEx may allocate.
+            if(metadata.numBytes<3 || metadata.samplePosition<0 || metadata.samplePosition>=size)continue;
+            const auto* bytes=metadata.data;const int type=bytes[0]&0xf0;
+            const int channel=(bytes[0]&0x0f)+1;
+            if(type==0x90 && bytes[2]!=0) {
+                renderTo(metadata.samplePosition);
+                engine_.noteOn(channel,bytes[1]&0x7f,static_cast<float>(bytes[2]&0x7f)/127.0f,eventDuration);
+            } else if(type==0xb0 && (bytes[1]==120 || bytes[1]==123)) {
+                renderTo(metadata.samplePosition);engine_.allSoundOff(channel);
+            }
         }
-        // NoteOff and zero-velocity NoteOn are deliberately ignored in this
-        // interim one-shot mode. CC120/123 and reset use a 5 ms fade.
+    };
+    if(patternEnabled_->get() && patternHostReady) {
+        // MIDI at the same offset is processed first. No host MIDI output is generated.
+        (void) pattern::forEachTrigger(audioPatternSchedule_,audioPattern_.bars,hostPpq,hostBpm,preparedSampleRate(),size,
+            [&] (int offset,std::uint8_t note,std::uint8_t velocity) noexcept {
+                processMidiThrough(offset);renderTo(offset);
+                engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration);
+            });
     }
+    processMidiThrough(size-1);
     midi.clear(); // Consume input: never echo host MIDI from this instrument.
     renderTo (size);
     const auto fxSnapshot=audioEffects_;
@@ -259,6 +284,7 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     for(std::size_t i=0;i<4;++i){wet[i]=effectWet_[i]->get();amount[i]=effectAmount_[i]->get();}
     out.push_back (encodeEffects (snapshot.effects,wet,amount));
     out.push_back (encodePattern (snapshot.pattern));
+    out.push_back (encodePatternEnable (patternEnabled_->get()));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -332,15 +358,24 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
             error="Unsupported or malformed FX pattern section";return {};
         }
     }
+    bool patternEnabled=false;
+    if(const auto* section=doc.find(fxPatternEnableSectionTag)) {
+        if(section->data.size()!=8 || wordAt(section->data,0)!=1 || wordAt(section->data,4)>1) {
+            error="Unsupported or malformed FX pattern enable section";return {};
+        }
+        patternEnabled=wordAt(section->data,4)!=0;
+    }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
     result.sections.push_back (encodeProgram (*program));
     result.sections.push_back (encodeEffects (fx,wet,amount));
     result.sections.push_back (encodePattern (*triggerPattern));
+    result.sections.push_back (encodePatternEnable (patternEnabled));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern] {
+    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled] {
         (void) programs_.publishState (*program, fx, *triggerPattern);
+        patternEnabled_->setValueNotifyingHost(patternEnabled?1.0f:0.0f);
         for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
         restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
