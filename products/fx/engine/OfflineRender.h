@@ -68,9 +68,8 @@ inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::
         engine->render(left.data(),right.data(),static_cast<int>(count));
         chain.process(left.data(),right.data(),count);
         for(std::uint32_t i=0;i<count;++i){
-          const float gain=macroRuntime.process(settings.gain,settings.macros);
-          for(float sample:{left[i],right[i]}){
-            const float value=sample*gain;if(!std::isfinite(value)||std::abs(value)>1)return false;
+          const auto gain=macroRuntime.processStereo(settings.gain,settings.macros);
+          for(float value:{left[i]*gain.left,right[i]*gain.right}){if(!std::isfinite(value)||std::abs(value)>1)return false;
             if(floating)u32(bytes,std::bit_cast<std::uint32_t>(value));
             else {const auto pcm=static_cast<std::int32_t>(std::lround(value*8388607.0f));
                 const auto word=static_cast<std::uint32_t>(pcm);bytes.push_back(static_cast<std::uint8_t>(word));

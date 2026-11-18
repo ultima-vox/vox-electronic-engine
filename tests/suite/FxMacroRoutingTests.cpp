@@ -49,5 +49,32 @@ int main(){
         check(codec::encode(motion,motionBytes)&&codec::decode(motionBytes,recalled)&&recalled==motion,"motion routes persisted");
         check(!motion.setSourceGainRoute(vox::fx::mod::Source::follower,.5f,0),"unsupported source rejected");
     }
+    {
+        using vox::fx::mod::Source;using vox::fx::mod::Destination;
+        Config routing;
+        check(routing.setRoute(Source::macro1,Destination::gain,.25f,0) &&
+              routing.setRoute(Source::macro1,Destination::pan,.5f,0) && routing.count==2,
+              "same source can target gain and pan");
+        Runtime p;check(p.prepare(48000)&&p.setConfig(routing),"prepare stereo route");
+        auto values=std::array<float,8>{};values.fill(.5f);values[0]=1;
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+        voxProbeBegin();
+#endif
+        for(int i=0;i<512;++i)(void)p.processStereo(.5f,values);
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+        const auto panAllocations=voxProbeEnd();if(voxProbeAvailable())check(panAllocations==0,"pan routing allocates nothing");
+#endif
+        const auto right=p.processStereo(.5f,values);
+        check(right.left==0 && right.right==.75f,"positive macro pans hard right with gain");
+        values[0]=0;const auto left=p.processStereo(.5f,values);
+        check(left.left==.25f && left.right==0,"negative macro pans hard left with gain");
+        values[0]=.5f;const auto center=p.processStereo(.5f,values);
+        check(center.left==.5f && center.right==.5f,"neutral pan preserves stereo channels");
+        std::vector<std::byte> bytes;Config roundtrip;
+        check(codec::encode(routing,bytes)&&codec::decode(bytes,roundtrip)&&roundtrip==routing,"pan routes roundtrip");
+        check(routing.setRoute(Source::macro1,Destination::pan,0,0) && routing.count==1 &&
+              routing.routes[0].destination==Destination::gain,"removing pan preserves same-source gain");
+        check(!routing.setRoute(Source::macro1,Destination::pitch,.5f,0),"unsupported pitch rejected");
+    }
     std::printf("FX macro routing: %d failure(s)\n",fails);return fails?1:0;
 }

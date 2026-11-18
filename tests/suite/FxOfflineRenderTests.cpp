@@ -52,6 +52,13 @@ int main(){
     auto lfoEngine=std::make_unique<vox::fx::NoiseRiser>();lfoEngine->prepare(s.sampleRate);lfoEngine->setProgram(program);lfoEngine->noteOn(1,s.note,s.velocity,s.duration);
     vox::fx::macro::Runtime motion;motion.prepare(s.sampleRate);motion.setConfig(s.macroRoutes);lfoEngine->render(l,r,512);
     for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i]*motion.process(.5f,s.macros),"offline motion matches gain DSP");
+    s.macroRoutes={};s.macroRoutes.setRoute(vox::fx::mod::Source::macro1,vox::fx::mod::Destination::pan,.5f,0);
+    s.macros[0]=1;s.gain=.5f;
+    check(vox::fx::offline::renderWav(program,s,wav),"pan routed WAV render");
+    auto panEngine=std::make_unique<vox::fx::NoiseRiser>();panEngine->prepare(s.sampleRate);panEngine->setProgram(program);panEngine->noteOn(1,s.note,s.velocity,s.duration);
+    panEngine->render(l,r,512);
+    for(std::size_t i=0;i<512;++i){check(std::bit_cast<float>(word(56+i*8))==0,"hard-right pan mutes left");
+        check(std::bit_cast<float>(word(60+i*8))==r[i]*.5f,"hard-right pan preserves right");}
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

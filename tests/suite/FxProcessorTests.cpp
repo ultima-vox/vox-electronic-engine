@@ -250,6 +250,16 @@ int main() {
         panel.macroSelector().setSelectedId(2,juce::sendNotificationSync);
         check(modulated->macroParameter(0).get()==1.0f && modulated->macroParameter(1).get()==.5f,
               "switching macro editor preserves unrelated automation lanes");
+        panel.macroSelector().setSelectedId(1,juce::sendNotificationSync);
+        panel.macroDestinationSelector().setSelectedId(2,juce::sendNotificationSync);
+        panel.macroDepthSlider().setValue(.5,juce::sendNotificationSync);
+        check(modulated->macroConfig().count==2 && modulated->macroConfig().routes[1].destination==vox::fx::mod::Destination::pan,
+              "editor adds pan without replacing gain route");
+        auto panState=save(*modulated);auto panRecall=std::make_unique<vox::fx::FxProcessor>();
+        panRecall->setStateInformation(panState.getData(),static_cast<int>(panState.getSize()));
+        check(panRecall->macroConfig()==modulated->macroConfig(),"gain and pan routes recalled together");
+        panel.macroDepthSlider().setValue(0,juce::sendNotificationSync);
+        panel.macroDestinationSelector().setSelectedId(1,juce::sendNotificationSync);
         panel.macroSelector().setSelectedId(9,juce::sendNotificationSync);
         check(!panel.macroValueSlider().isEnabled(),"fixed LFO source does not expose fake macro value");
         panel.macroDepthSlider().setValue(.25,juce::sendNotificationSync);

@@ -584,3 +584,15 @@ before replacement. MIDI writing currently happens on the message thread and
 may block on a slow filesystem; WAV rendering/writing is off-thread. Neither
 the test nor temporary-file replacement establishes crash-atomic durability
 on every filesystem.
+
+## Gain and stereo-balance modulation
+
+Macro, fixed LFO and sample-and-hold sources can now target master stereo
+balance as well as master gain, including both destinations from the same
+source. Pan is a post-effects linear balance: center preserves both channels,
+and the extremes mute the opposite channel; it is not per-layer panning or an
+equal-power mono pan. FMOD stores typed destinations and the panel selects
+gain or pan; neither route overwrites host automation. Standalone codec, DSP,
+WAV parity, ASan/UBSan and zero-allocation probe pass. Processor/UI/state tests
+are syntax-only. Pitch/cutoff destinations, other sources, route-wide editor,
+and click-free route reconfiguration remain unfinished.

@@ -301,9 +301,9 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
     float peak = 0.0f;
     for (int i = 0; i < size; ++i) {
-        const auto gain = macroRuntime_.process(outputSmoothing_.getNextValue(),macroValues);
-        left[i] *= gain;
-        right[i] *= gain;
+        const auto gain = macroRuntime_.processStereo(outputSmoothing_.getNextValue(),macroValues);
+        left[i] *= gain.left;
+        right[i] *= gain.right;
         peak = std::max (peak, std::max (std::abs (left[i]), std::abs (right[i])));
     }
     peak_.store (peak, std::memory_order_relaxed);

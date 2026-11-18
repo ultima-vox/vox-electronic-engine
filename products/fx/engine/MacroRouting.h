@@ -8,8 +8,8 @@
 #include <vector>
 
 namespace vox::fx::macro {
-// Product routes currently target master gain. Macro sources, two LFOs and
-// seeded sample-and-hold are supported; other destinations remain unavailable.
+// Product routes target master gain or stereo balance. Macro sources, two LFOs
+// and seeded sample-and-hold are supported; other destinations remain unavailable.
 struct Config {
     std::array<mod::Route,64> routes{};
     std::uint32_t count=0;
@@ -20,7 +20,7 @@ struct Config {
     }
     bool valid() const noexcept {
         if(count>routes.size())return false;
-        for(std::size_t i=0;i<count;++i){const auto& r=routes[i];if(!r.valid()||r.destination!=mod::Destination::gain||!supportedSource(r.source))return false;}
+        for(std::size_t i=0;i<count;++i){const auto& r=routes[i];if(!r.valid()||(r.destination!=mod::Destination::gain&&r.destination!=mod::Destination::pan)||!supportedSource(r.source))return false;}
         return true;
     }
     bool operator==(const Config& other) const noexcept {
@@ -34,11 +34,15 @@ struct Config {
         return setSourceGainRoute(static_cast<mod::Source>(static_cast<unsigned>(mod::Source::macro1)+index),depth,smoothing);
     }
     bool setSourceGainRoute(mod::Source source,float depth,float smoothing) noexcept {
-        if(!supportedSource(source)||!std::isfinite(depth)||depth < -1||depth>1||!std::isfinite(smoothing)||smoothing<0||smoothing>1||!valid())return false;
-        std::size_t slot=0;while(slot<count && routes[slot].source!=source)++slot;
+        return setRoute(source,mod::Destination::gain,depth,smoothing);
+    }
+    bool setRoute(mod::Source source,mod::Destination destination,float depth,float smoothing) noexcept {
+        if(!supportedSource(source)||(destination!=mod::Destination::gain&&destination!=mod::Destination::pan)||
+           !std::isfinite(depth)||depth < -1||depth>1||!std::isfinite(smoothing)||smoothing<0||smoothing>1||!valid())return false;
+        std::size_t slot=0;while(slot<count && (routes[slot].source!=source||routes[slot].destination!=destination))++slot;
         if(depth==0){if(slot<count){for(std::size_t i=slot+1;i<count;++i)routes[i-1]=routes[i];--count;}return true;}
         if(slot==count){if(count==routes.size())return false;++count;}
-        routes[slot]={source,mod::Destination::gain,depth,smoothing};return true;
+        routes[slot]={source,destination,depth,smoothing};return true;
     }
 };
 namespace codec {
@@ -76,6 +80,7 @@ inline bool decode(std::span<const std::byte> bytes,Config& output) noexcept {
     return fromWords(words,output);
 }
 }
+struct StereoGain { float left=0,right=0,gain=0; };
 class Runtime {
 public:
     bool prepare(double rate) noexcept {
@@ -92,8 +97,9 @@ public:
             useLfo2_|=config.routes[i].source==mod::Source::lfo2;useRandom_|=config.routes[i].source==mod::Source::random;}
         return true;
     }
-    float process(float base,const std::array<float,8>& macros) noexcept {
-        if(config_.count==0)return std::isfinite(base)?std::clamp(base,0.0f,1.0f):0.0f;
+    float process(float base,const std::array<float,8>& macros) noexcept { return processStereo(base,macros).gain; }
+    StereoGain processStereo(float base,const std::array<float,8>& macros) noexcept {
+        if(config_.count==0){const auto gain=std::isfinite(base)?std::clamp(base,0.0f,1.0f):0.0f;return {gain,gain,gain};}
         mod::Sources sources{};
         for(std::size_t i=0;i<macros.size();++i){const float v=macros[i];
             sources[static_cast<std::size_t>(mod::Source::macro1)+i]=std::isfinite(v)?2*std::clamp(v,0.0f,1.0f)-1:0;}
@@ -101,7 +107,11 @@ public:
         if(useLfo2_)sources[static_cast<std::size_t>(mod::Source::lfo2)]=lfo2_.next(1.0,rate_);
         if(useRandom_)sources[static_cast<std::size_t>(mod::Source::random)]=random_.next(4.0,rate_);
         mod::Destinations bases{};bases[static_cast<std::size_t>(mod::Destination::gain)]=base;
-        return matrix_.step(bases,sources)[static_cast<std::size_t>(mod::Destination::gain)];
+        bases[static_cast<std::size_t>(mod::Destination::pan)]=.5f;
+        const auto result=matrix_.step(bases,sources);
+        const auto gain=result[static_cast<std::size_t>(mod::Destination::gain)];
+        const auto pan=result[static_cast<std::size_t>(mod::Destination::pan)];
+        return {gain*std::min(1.0f,2.0f*(1.0f-pan)),gain*std::min(1.0f,2.0f*pan),gain};
     }
 private:
     double rate_=44100;Config config_;mod::Matrix matrix_;

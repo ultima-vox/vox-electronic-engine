@@ -38,6 +38,9 @@ public:
     bool setMotionGainRoute(mod::Source source,float depth,float smoothing) {
         return programs_.editMacroConfig([=](macro::Config& config){return config.setSourceGainRoute(source,depth,smoothing);});
     }
+    bool setMotionRoute(mod::Source source,mod::Destination destination,float depth,float smoothing) {
+        return programs_.editMacroConfig([=](macro::Config& config){return config.setRoute(source,destination,depth,smoothing);});
+    }
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
