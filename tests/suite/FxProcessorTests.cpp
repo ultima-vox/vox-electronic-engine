@@ -105,6 +105,9 @@ int main() {
         vox::fx::FxPanel panel(*effected);
         check(panel.midiExportButton().isEnabled() && panel.midiExportButton().getTooltip().contains("120 BPM"),
               "MIDI export control communicates fixed tempo");
+        check(panel.effectSelector(0).getNumItems()==static_cast<int>(vox::fx::effects::Type::count),
+              "every implemented effect is selectable");
+        check(panel.effectSelector(0).getItemText(11)=="Reverb", "last effect appears in selector");
         panel.effectSelector(0).setSelectedId(3,juce::sendNotificationSync);
         panel.effectWet(0).setValue(.7,juce::sendNotificationSync);
         check(effected->effect(0).type==vox::fx::effects::Type::drive &&
