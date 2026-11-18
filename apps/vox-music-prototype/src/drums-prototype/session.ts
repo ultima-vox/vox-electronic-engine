@@ -1,0 +1,27 @@
+import type { History } from '../shared/history';
+import type { ParameterBinding } from '../design-system/parameters';
+import type { Context, DrumProject, PadData, PadParameter, Pattern, PatternRef } from './model';
+import type { Editor } from './layout';
+import type { Preview } from './preview';
+export type EditMode = 'source' | 'bar';
+export type Session = {
+  history: History<DrumProject>;
+  preview: Preview;
+  selectedPad: number;
+  selectedBar: number;
+  context: Context;
+  selectPad: (index: number) => void;
+  selectBar: (index: number) => void;
+  selectSteps: (pad: number, step: number, extend: boolean, toggleSelection?: boolean) => void;
+  editMode: EditMode;
+  setEditMode: (mode: EditMode) => void;
+  loopBar: boolean;
+  setLoopBar: (value: boolean) => void;
+  mode: 'pattern' | 'song';
+  activeRef: PatternRef;
+  editActive: (fn: (pattern: Pattern) => Pattern) => void;
+  setPad: (pad: number, fn: (value: PadData) => PadData) => void;
+  bind: (pad: number, field: PadParameter, prefix?: string) => ParameterBinding;
+  open: (editor: Editor) => void;
+  say: (text: string) => void;
+};
