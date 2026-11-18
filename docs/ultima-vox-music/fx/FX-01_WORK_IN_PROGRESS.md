@@ -888,3 +888,11 @@ MIDI still plays. This bounds work, but even the allowed worst case can scan
 parity, huge-block rejection, ASan/UBSan and Linux allocation probe passed.
 Processor/UI status tests were added and syntax-checked only; they remain to
 be executed on Windows and in hosts.
+
+A standalone stress benchmark now times maximum pattern scheduling with
+eight 4-layer Shepard events and four drive effects at 44.1/48/96 kHz. It
+records p50/p95/p99/max, dropped triggers and saturation rather than declaring
+a deadline pass. This extreme 1000-BPM run exposed many dropped triggers during
+the single retirement fade and sustained >=1 output with four drive slots; see
+`DSP_BENCHMARK.md`. Real Windows plugin/host timing and musical acceptance remain
+open.

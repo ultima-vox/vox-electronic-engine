@@ -438,3 +438,8 @@ vox_suite_add_allocation_probe(suite_fx_transport_tests)
 target_include_directories(suite_fx_transport_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_transport_tests COMMAND suite_fx_transport_tests)
 set_tests_properties(suite_fx_transport_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_pattern_benchmark FxPatternBenchmark.cpp)
+target_include_directories(suite_fx_pattern_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_pattern_benchmark COMMAND suite_fx_pattern_benchmark)
+set_tests_properties(suite_fx_pattern_benchmark PROPERTIES LABELS suite)

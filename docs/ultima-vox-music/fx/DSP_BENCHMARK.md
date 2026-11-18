@@ -96,3 +96,25 @@ routes: p50 395.56 µs, p95 457.89 µs, p99 539.25 µs, max 588.78 µs.
 This is a single noisy local DSP-only run, not a Windows/plugin/DAW deadline
 or a guarantee. Route publication, preset restore and full-duration profiling
 are excluded.
+
+## Maximum pattern + Shepard stress (standalone, 70b4091 worktree)
+
+GCC `-O2`, Linux sandbox, 400 consecutive 128-sample blocks per rate; four-bar
+32nd-triplet pattern with four ratchets per step (1536 note on/off schedule
+entries), constant 1000 BPM, eight initial four-layer Shepard events and four
+serial drive slots. Timed work includes pattern enumeration, note triggers,
+voice stealing, synthesis and effects. Preparation and JUCE/host processing
+are excluded. This is a deliberately extreme, single noisy local run, **not** a
+Windows/DAW deadline claim or evidence of complete quality.
+
+```text
+44100 Hz: p50 542.50 p95 657.91 p99 791.12 max 911.73 us; accepted 233 dropped 696; peak 1.000, >=1 samples 50254
+48000 Hz: p50 541.66 p95 805.25 p99 931.15 max 1006.98 us; accepted 214 dropped 640; peak 1.000, >=1 samples 50088
+96000 Hz: p50 528.34 p95 661.28 p99 760.24 max 963.29 us; accepted 107 dropped 320; peak 1.000, >=1 samples 49911
+```
+
+Most rapid triggers are dropped while the single stealing retirement fade is
+occupied; four serial high-drive slots saturate nearly the entire measured
+output. Both are real limitations requiring product/listening review, not
+passing evidence for musical or host acceptance. Only finite output and valid
+scheduler execution are automated assertions; no timing threshold is asserted.
