@@ -471,3 +471,13 @@ cover swung offsets/order, v1/v2 migration, eight grids at 44.1/48/96 kHz,
 64/128/512 blocks and MIDI/playback timing parity, plus ASan/UBSan, TSan and
 a maximum-schedule allocation probe. Processor/UI tests remain syntax-only;
 DAW transport, varying BPM and real visual/accessibility acceptance remain.
+
+## Macro routing foundation (not yet connected)
+
+An initial typed route config accepts up to 64 macro-to-master-gain routes and
+validates source/target/depth/smoothing; an explicit versioned codec and the
+unified ProgramStore publication include the routes. Runtime applies bipolar
+macro offsets without overwriting the host base. Local routing tests,
+ASan/UBSan, ProgramStore TSan and Linux allocation probes passed. No macro
+parameters, processor DSP, state section, export or UI is connected yet; other
+modulation sources and destinations are not accepted by this initial config.

@@ -8,7 +8,8 @@
 namespace vox::fx::mod {
 // These destinations are normalized offsets into the corresponding base
 // values. Matrix results never mutate the host automation base.
-enum class Source : std::uint8_t { lfo1, lfo2, step, random, adsr, phase, velocity, follower, count };
+enum class Source : std::uint8_t { lfo1, lfo2, step, random, adsr, phase, velocity, follower,
+    macro1, macro2, macro3, macro4, macro5, macro6, macro7, macro8, count };
 enum class Destination : std::uint8_t { gain, pan, pitch, cutoff, count };
 struct Route {
     Source source = Source::lfo1;

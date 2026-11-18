@@ -1,0 +1,40 @@
+#include "engine/MacroRouting.h"
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <limits>
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+#include "AllocationProbe.h"
+#endif
+int main(){
+    using namespace vox::fx::macro;int fails=0;auto check=[&](bool ok,const char* msg){if(!ok){std::printf("FAIL: %s\n",msg);++fails;}};
+    Config config;check(config.setGainRoute(0,.5f,.01f),"set macro route");
+    check(config.setGainRoute(7,-.25f,0),"set second route");
+    std::vector<std::byte> encoded;Config restored;
+    check(codec::encode(config,encoded)&&codec::decode(encoded,restored)&&restored==config,"routes roundtrip");
+    auto invalid=config;invalid.routes[0].depth=std::numeric_limits<float>::quiet_NaN();
+    check(!invalid.valid()&&!codec::encode(invalid,encoded),"invalid route rejected");
+    Config maximum;maximum.count=64;for(auto& route:maximum.routes)
+        route={vox::fx::mod::Source::macro1,vox::fx::mod::Destination::gain,.01f,0};
+    std::vector<std::byte> full;Config fullDecoded;
+    check(codec::encode(maximum,full)&&codec::decode(full,fullDecoded)&&fullDecoded==maximum,"64 typed routes roundtrip");
+    auto unknown=encoded;unknown[8]=std::byte{0xff};
+    check(!codec::decode(unknown,restored)&&restored==config,"unsupported source rejected transactionally");
+    for(std::size_t n=0;n<encoded.size();++n)
+        check(!codec::decode(std::span(encoded).first(n),restored),"truncated route state rejected");
+    auto future=encoded;future[0]=std::byte{2};check(!codec::decode(future,restored)&&restored==config,"future state rejected transactionally");
+    std::array<float,8> macros{};macros.fill(.5f);macros[0]=1;macros[7]=1;
+    Runtime runtime;check(runtime.prepare(48000)&&runtime.setConfig(config),"prepare macro routing");
+    auto before=runtime.process(.5f,macros);check(before<.5f,"bipolar negative route and smoothed positive route");
+    for(int i=0;i<10000;++i)(void)runtime.process(.5f,macros);
+    check(std::abs(runtime.process(.5f,macros)-.75f)<.001f,"routed macro changes real output gain");
+    check(config.setGainRoute(0,0,.01f)&&config.count==1,"remove route");
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+    voxProbeBegin();
+#endif
+    for(int i=0;i<512;++i)(void)runtime.process(.5f,macros);
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+    const auto n=voxProbeEnd();if(voxProbeAvailable())check(n==0,"macro audio processing allocates nothing");
+#endif
+    std::printf("FX macro routing: %d failure(s)\n",fails);return fails?1:0;
+}

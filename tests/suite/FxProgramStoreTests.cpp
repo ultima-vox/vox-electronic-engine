@@ -101,5 +101,15 @@ int main(){
         }while(!done.load(std::memory_order_acquire));
         writer.join();
     }
+    {
+        vox::fx::ProgramStore shared;auto state=shared.snapshotState();vox::fx::macro::Config routes;
+        check(routes.setGainRoute(3,.4f,.01f)&&shared.publishState(state.program,state.effects,state.pattern,routes),"publish typed macro routes");
+        vox::fx::NoiseProgram audio;vox::fx::pattern::Pattern pattern;vox::fx::macro::Config audioRoutes;std::uint64_t fx=0,sequence=0;
+        check(shared.tryRead(audio,fx,pattern,audioRoutes,sequence)&&audioRoutes==routes,"audio snapshot includes routes");
+        auto invalid=routes;invalid.count=65;
+        check(!shared.setMacroConfig(invalid)&&shared.snapshotState().macros==routes,"invalid route publication rejected");
+        check(shared.editMacroConfig([](vox::fx::macro::Config& c){return c.setGainRoute(4,.5f,0);})&&
+              shared.snapshotState().macros.count==2,"serialized route edit");
+    }
     std::printf("FX Program store: %d failure(s)\n",fails);return fails?1:0;
 }
