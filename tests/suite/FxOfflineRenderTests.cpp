@@ -35,6 +35,11 @@ int main(){
     vox::fx::effects::Chain chain;chain.prepare(s.sampleRate);chain.set(0,s.effects[0]);
     effected->render(l,r,512);chain.process(l,r,512);
     for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline effects match realtime chain");
+    s.effects[0]={};s.macroRoutes.setGainRoute(0,-.5f,0);s.macros[0]=1;
+    check(vox::fx::offline::renderWav(program,s,wav),"macro routed WAV render");
+    auto macroEngine=std::make_unique<vox::fx::NoiseRiser>();macroEngine->prepare(s.sampleRate);macroEngine->setProgram(program);macroEngine->noteOn(1,s.note,s.velocity,s.duration);
+    macroEngine->render(l,r,512);
+    for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i]*.5f,"offline macro routing matches gain DSP");
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

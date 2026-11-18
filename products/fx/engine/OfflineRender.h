@@ -1,6 +1,7 @@
 #pragma once
 #include "NoiseRiser.h"
 #include "Effects.h"
+#include "MacroRouting.h"
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -16,8 +17,12 @@ struct Settings {
     int note=60;
     WavFormat format=WavFormat::pcm24;
     std::array<effects::Settings,4> effects{};
+    macro::Config macroRoutes{};
+    std::array<float,8> macros{.5f,.5f,.5f,.5f,.5f,.5f,.5f,.5f};
     bool valid() const noexcept {
         for(const auto& effect:effects)if(!effect.valid())return false;
+        if(!macroRoutes.valid())return false;
+        for(float value:macros)if(!std::isfinite(value)||value<0||value>1)return false;
         return sampleRate>=8000&&sampleRate<=384000&&std::isfinite(duration)&&duration>=.05f&&duration<=32&&
                std::isfinite(velocity)&&velocity>0&&velocity<=1&&std::isfinite(gain)&&gain>=0&&gain<=1&&
                note>=0&&note<128&&(format==WavFormat::pcm24||format==WavFormat::float32);
@@ -49,6 +54,7 @@ inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::
     auto engine=std::make_unique<NoiseRiser>();engine->prepare(settings.sampleRate);
     if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration))return false;
     effects::Chain chain;if(!chain.prepare(settings.sampleRate))return false;
+    macro::Runtime macroRuntime;if(!macroRuntime.prepare(settings.sampleRate)||!macroRuntime.setConfig(settings.macroRoutes))return false;
     for(std::size_t i=0;i<settings.effects.size();++i)if(!chain.set(i,settings.effects[i]))return false;
     std::array<float,512> left{},right{};
     if(progress)progress->store(0,std::memory_order_relaxed);
@@ -57,12 +63,15 @@ inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::
         const auto count=std::min<std::uint32_t>(512,frames-at);
         engine->render(left.data(),right.data(),static_cast<int>(count));
         chain.process(left.data(),right.data(),count);
-        for(std::uint32_t i=0;i<count;++i)for(float sample:{left[i],right[i]}){
-            const float value=sample*settings.gain;if(!std::isfinite(value)||std::abs(value)>1)return false;
+        for(std::uint32_t i=0;i<count;++i){
+          const float gain=macroRuntime.process(settings.gain,settings.macros);
+          for(float sample:{left[i],right[i]}){
+            const float value=sample*gain;if(!std::isfinite(value)||std::abs(value)>1)return false;
             if(floating)u32(bytes,std::bit_cast<std::uint32_t>(value));
             else {const auto pcm=static_cast<std::int32_t>(std::lround(value*8388607.0f));
                 const auto word=static_cast<std::uint32_t>(pcm);bytes.push_back(static_cast<std::uint8_t>(word));
                 bytes.push_back(static_cast<std::uint8_t>(word>>8));bytes.push_back(static_cast<std::uint8_t>(word>>16));}
+          }
         }
         at+=count;if(progress)progress->store(static_cast<float>(at)/frames,std::memory_order_relaxed);
     }

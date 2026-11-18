@@ -87,3 +87,12 @@ performance guarantee; no aliasing or DAW qualification is implied.
 96k Shepard 8x4 + 4x effect 6: p50 496.04 p95 673.23 p99 713.89 max 720.24 us; checksum -0.089174
 
 ```
+
+## Macro routing stress snapshot
+
+Same preliminary Xeon/GCC -O2 diagnostic, 400 consecutive 128-sample calls
+at 96 kHz with 8×4 Shepard layers, four drive slots and 64 macro-to-gain
+routes: p50 395.56 µs, p95 457.89 µs, p99 539.25 µs, max 588.78 µs.
+This is a single noisy local DSP-only run, not a Windows/plugin/DAW deadline
+or a guarantee. Route publication, preset restore and full-duration profiling
+are excluded.

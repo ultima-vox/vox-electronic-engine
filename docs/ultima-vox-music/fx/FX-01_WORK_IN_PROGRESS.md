@@ -481,3 +481,20 @@ macro offsets without overwriting the host base. Local routing tests,
 ASan/UBSan, ProgramStore TSan and Linux allocation probes passed. No macro
 parameters, processor DSP, state section, export or UI is connected yet; other
 modulation sources and destinations are not accepted by this initial config.
+
+## Macro integration (partial)
+
+Eight stable `fx.macro.1`–`fx.macro.8` host parameters feed bipolar macro
+sources (0.5 is neutral). The current typed routing supports up to 64 routes
+from those sources to master gain, each with bipolar depth and smoothing;
+FMOD v1 stores routes, FMAC v1 stores base values, and absent sections migrate
+to neutral/no routes. The compact Perform selector edits one macro at a time
+and assigns a macro-to-gain depth without changing the host gain lane.
+Program, pattern, FX structure and route config share one bounded publication;
+callback evaluation allocates nothing, and worker WAV uses the same routing.
+Generate/Mutate preserve macros and routes. The macro UI exposes one route per
+macro, while the codec/runtime can represent 64; other modulation sources,
+destinations, general matrix UI, click-free route switching and automation
+of route depths are **not implemented**. Processor/UI and state tests are
+syntax-only. Local macro/codec/WAV tests, store TSan, ASan/UBSan and allocation
+probes passed; target-host RT and audible quality still require qualification.

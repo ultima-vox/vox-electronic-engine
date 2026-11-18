@@ -110,6 +110,15 @@ int main(){
         check(!shared.setMacroConfig(invalid)&&shared.snapshotState().macros==routes,"invalid route publication rejected");
         check(shared.editMacroConfig([](vox::fx::macro::Config& c){return c.setGainRoute(4,.5f,0);})&&
               shared.snapshotState().macros.count==2,"serialized route edit");
+        (void)shared.tryRead(audio,fx,pattern,audioRoutes,sequence);
+        std::atomic<bool> finished{false};
+        std::thread producer([&]{for(int i=0;i<5000;++i){auto next=state.program;vox::fx::macro::Config c;
+            const bool flag=(i&1)!=0;next.layers[0].gain=flag?.75f:.25f;
+            if(!c.setGainRoute(0,flag?.75f:.25f,0)||!shared.publishState(next,state.effects,state.pattern,c))std::abort();
+        }finished.store(true,std::memory_order_release);});
+        do {if(shared.tryRead(audio,fx,pattern,audioRoutes,sequence))
+            check(audioRoutes.count==1&&audio.layers[0].gain==audioRoutes.routes[0].depth,"coherent Program and macro routes");
+        }while(!finished.load(std::memory_order_acquire));producer.join();
     }
     std::printf("FX Program store: %d failure(s)\n",fails);return fails?1:0;
 }

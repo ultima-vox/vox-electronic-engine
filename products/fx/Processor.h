@@ -11,6 +11,8 @@ namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxMacroSectionTag = preset::makeTag ("FMAC");
+inline constexpr preset::Tag fxMacroRouteSectionTag = preset::makeTag ("FMOD");
 inline constexpr preset::Tag fxPatternEnableSectionTag = preset::makeTag ("FPEN");
 inline constexpr preset::Tag fxPatternSectionTag = preset::makeTag ("FPAT");
 inline constexpr preset::Tag fxEffectsSectionTag = preset::makeTag ("FXSL");
@@ -28,6 +30,11 @@ public:
     using vox::suite::SuiteProcessor::processBlock;
     double getTailLengthSeconds() const override { return 33.0; }
     juce::AudioProcessorEditor* createEditor() override;
+    juce::AudioParameterFloat& macroParameter(std::size_t index) noexcept { return *macros_[index]; }
+    bool setMacroGainRoute(std::size_t index,float depth,float smoothing) {
+        return programs_.editMacroConfig([=](macro::Config& config){return config.setGainRoute(index,depth,smoothing);});
+    }
+    macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
@@ -68,11 +75,13 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag; }
 
 private:
     NoiseRiser engine_;
     effects::Chain effects_;
+    macro::Runtime macroRuntime_;
+    macro::Config audioMacroConfig_;
     std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;
     std::atomic<std::uint64_t> restoreEpoch_ { 0 };
@@ -84,6 +93,7 @@ private:
     juce::AudioParameterFloat* duration_ = nullptr;
     juce::AudioParameterBool* patternEnabled_ = nullptr;
     std::array<juce::AudioParameterFloat*,4> effectWet_{}, effectAmount_{};
+    std::array<juce::AudioParameterFloat*,8> macros_{};
     // Guarded by SuiteProcessor state lock, not accessed by the audio thread.
     float loadedDuration_ = 0.0f, heldDuration_ = 0.0f;
     juce::SmoothedValue<float> outputSmoothing_;

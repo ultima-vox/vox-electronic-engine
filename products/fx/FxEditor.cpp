@@ -33,6 +33,25 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
     family_.onChange = [this] { processor_.setFamily (family_.getSelectedId() - 1); };
     addAndMakeVisible (family_);
+    for(int i=1;i<=8;++i)macroSelector_.addItem("M"+juce::String(i),i);
+    macroSelector_.setTitle("Macro selector");macroSelector_.setTooltip("Select one of eight host-automatable macros");
+    macroSelector_.setSelectedId(1,juce::dontSendNotification);
+    macroValue_.setSliderStyle(juce::Slider::LinearHorizontal);macroValue_.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,18);
+    macroValue_.setTitle("Macro value");macroValue_.setTooltip("Bipolar macro value: center is neutral");
+    macroDepth_.setRange(-1,1,.01);macroDepth_.setSliderStyle(juce::Slider::LinearHorizontal);
+    macroDepth_.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,18);
+    macroDepth_.setTitle("Macro to master gain depth");macroDepth_.setTooltip("Assign this macro to master gain; zero removes the route");
+    macroDepth_.onValueChange=[this]{const int id=macroSelector_.getSelectedId();if(id>=1&&id<=8)
+        (void)processor_.setMacroGainRoute(static_cast<std::size_t>(id-1),static_cast<float>(macroDepth_.getValue()),.01f);};
+    macroSelector_.onChange=[this]{const int id=macroSelector_.getSelectedId();if(id>=1&&id<=8){
+        // Detach first: the new attachment's initial slider update must not
+        // notify the previous macro's listener and overwrite its automation.
+        macroAttachment_.reset();
+        macroAttachment_=std::make_unique<juce::SliderParameterAttachment>(processor_.macroParameter(static_cast<std::size_t>(id-1)),macroValue_);
+        refreshMacro();}};
+    macroAttachment_=std::make_unique<juce::SliderParameterAttachment>(processor_.macroParameter(0),macroValue_);
+    addAndMakeVisible(macroSelector_);addAndMakeVisible(macroValue_);addAndMakeVisible(macroDepth_);
+    refreshMacro();
     addAndMakeVisible (audition_);
     addAndMakeVisible (panic_);
     audition_.setTooltip ("Trigger the current program");
@@ -176,6 +195,9 @@ void FxPanel::paint (juce::Graphics& g)
     g.setColour (c::textSecondary);
     g.setFont (vox::ui::typography::controlLabel());
     g.drawText ("One-shot event. Trigger with MIDI or audition.", area.removeFromTop (24), juce::Justification::centredLeft);
+    auto macroLabel=getLocalBounds().reduced(32).withTrimmedTop(125).removeFromLeft(200).removeFromTop(12);
+    macroLabel.translate(276,0);
+    g.drawText("MACRO         VALUE       GAIN DEPTH",macroLabel,juce::Justification::centredLeft);
     auto labels=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(14);
     const int labelWidth=labels.getWidth()/4;
     for(int i=0;i<4;++i) {
@@ -197,6 +219,9 @@ void FxPanel::resized()
     area.removeFromLeft (20);
     auto familyArea = area.removeFromLeft (200);
     family_.setBounds (familyArea.removeFromTop (40));
+    familyArea.removeFromTop(5);familyArea.removeFromTop(12);auto macroRow=familyArea.removeFromTop(36);
+    macroSelector_.setBounds(macroRow.removeFromLeft(58).reduced(1));
+    macroValue_.setBounds(macroRow.removeFromLeft(65).reduced(1));macroDepth_.setBounds(macroRow.reduced(1));
     area.removeFromLeft (20);
     auto buttons = area.removeFromLeft (160);
     audition_.setBounds (buttons.removeFromTop (40)); buttons.removeFromTop (10);
@@ -271,12 +296,19 @@ void FxPanel::refreshPattern()
     // the user can recover by selecting an existing step on this page.
     patternStepSelector_.setEnabled(bar<=pattern.bars && static_cast<unsigned>((page-1)*16)<steps);
 }
+void FxPanel::refreshMacro()
+{
+    const int id=macroSelector_.getSelectedId();if(id<1||id>8)return;
+    const auto config=processor_.macroConfig();const auto source=static_cast<mod::Source>(static_cast<unsigned>(mod::Source::macro1)+static_cast<unsigned>(id-1));
+    float depth=0;for(std::size_t i=0;i<config.count;++i)if(config.routes[i].source==source){depth=config.routes[i].depth;break;}
+    if(!macroDepth_.isMouseButtonDown()&&!macroDepth_.hasKeyboardFocus(true))macroDepth_.setValue(depth,juce::dontSendNotification);
+}
 void FxPanel::timerCallback()
 {
     if (!isShowing()) return;
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
-    refreshPattern();
+    refreshPattern();refreshMacro();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {

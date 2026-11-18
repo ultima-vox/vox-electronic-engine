@@ -45,6 +45,17 @@ preset::Section encodeEffects (std::uint64_t packed, const std::array<float,4>& 
     }
     return section;
 }
+preset::Section encodeMacros(const std::array<float,8>& values)
+{
+    preset::Section section;section.tag=fxMacroSectionTag;
+    auto put=[&](std::uint32_t word){for(int shift=0;shift<32;shift+=8)section.data.push_back(static_cast<std::byte>((word>>shift)&255u));};
+    put(1);for(float value:values)put(std::bit_cast<std::uint32_t>(value));return section;
+}
+preset::Section encodeMacroRoutes(const macro::Config& config)
+{
+    preset::Section section;section.tag=fxMacroRouteSectionTag;
+    (void)macro::codec::encode(config,section.data);return section;
+}
 preset::Section encodePatternEnable (bool enabled)
 {
     preset::Section section; section.tag=fxPatternEnableSectionTag;
@@ -88,6 +99,10 @@ FxProcessor::FxProcessor()
         effectAmount_[i]=new juce::AudioParameterFloat(juce::ParameterID{"fx.slot."+number+".amount",1},"FX " + number + " Amount",0.0f,1.0f,0.5f);
         addParameter(effectWet_[i]);addParameter(effectAmount_[i]);
     }
+    for(std::size_t i=0;i<8;++i){const auto number=juce::String(static_cast<int>(i+1));
+        macros_[i]=new juce::AudioParameterFloat(juce::ParameterID{"fx.macro."+number,1},"Macro "+number,0.0f,1.0f,.5f);
+        addParameter(macros_[i]);
+    }
 }
 
 bool FxProcessor::generateProgram (const generator::Settings& settings, const generator::Locks& locks)
@@ -121,6 +136,8 @@ bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std:
 {
     const auto snapshot=programs_.snapshotState();
     settings.duration=duration_->get(); settings.gain=output_->get();
+    settings.macroRoutes=snapshot.macros;
+    for(std::size_t i=0;i<8;++i)settings.macros[i]=macros_[i]->get();
     for(std::size_t i=0;i<4;++i){
         settings.effects[i]=effects::unpack(static_cast<std::uint16_t>(snapshot.effects>>(i*16)));
         settings.effects[i].wet=effectWet_[i]->get(); settings.effects[i].amount=effectAmount_[i]->get();
@@ -145,6 +162,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     SuiteProcessor::prepareToPlay (rate, blockSize);
     engine_.prepare (rate);
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
+    (void) macroRuntime_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     programSequence_ = 0; audioEffects_ = effects::defaults();
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
@@ -206,9 +224,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     }
     // One bounded attempt: if a concurrent writer is publishing, keep the
     // prior snapshot and retry on the next block. No locks or allocation.
-    if (programs_.tryRead (audioProgram_, audioEffects_, audioPattern_, programSequence_)) {
+    if (programs_.tryRead (audioProgram_, audioEffects_, audioPattern_, audioMacroConfig_, programSequence_)) {
         (void) engine_.setProgram (audioProgram_);
         (void) pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
+        (void) macroRuntime_.setConfig(audioMacroConfig_);
     }
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
@@ -267,9 +286,11 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     effects_.process(left,right,static_cast<std::size_t>(size));
     const auto target = output_->get();
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
+    std::array<float,8> macroValues{};
+    for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
     float peak = 0.0f;
     for (int i = 0; i < size; ++i) {
-        const auto gain = outputSmoothing_.getNextValue();
+        const auto gain = macroRuntime_.process(outputSmoothing_.getNextValue(),macroValues);
         left[i] *= gain;
         right[i] *= gain;
         peak = std::max (peak, std::max (std::abs (left[i]), std::abs (right[i])));
@@ -289,6 +310,8 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodeEffects (snapshot.effects,wet,amount));
     out.push_back (encodePattern (snapshot.pattern));
     out.push_back (encodePatternEnable (patternEnabled_->get()));
+    std::array<float,8> macroValues{};for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
+    out.push_back (encodeMacros(macroValues));out.push_back (encodeMacroRoutes(snapshot.macros));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -369,6 +392,15 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
         }
         patternEnabled=wordAt(section->data,4)!=0;
     }
+    std::array<float,8> macroValues{.5f,.5f,.5f,.5f,.5f,.5f,.5f,.5f};
+    if(const auto* section=doc.find(fxMacroSectionTag)) {
+        if(section->data.size()!=36 || wordAt(section->data,0)!=1){error="Unsupported or malformed FX macro section";return {};}
+        for(std::size_t i=0;i<8;++i){macroValues[i]=std::bit_cast<float>(wordAt(section->data,4+i*4));
+            if(!std::isfinite(macroValues[i])||macroValues[i]<0||macroValues[i]>1){error="Invalid FX macro value";return {};}}
+    }
+    auto macroRoutes=std::make_shared<macro::Config>();
+    if(const auto* section=doc.find(fxMacroRouteSectionTag))if(!macro::codec::decode(section->data,*macroRoutes)){
+        error="Unsupported or malformed FX macro routes";return {};}
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
@@ -376,9 +408,12 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     result.sections.push_back (encodeEffects (fx,wet,amount));
     result.sections.push_back (encodePattern (*triggerPattern));
     result.sections.push_back (encodePatternEnable (patternEnabled));
+    result.sections.push_back (encodeMacros (macroValues));
+    result.sections.push_back (encodeMacroRoutes (*macroRoutes));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled] {
-        (void) programs_.publishState (*program, fx, *triggerPattern);
+    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes] {
+        (void) programs_.publishState (*program, fx, *triggerPattern, *macroRoutes);
+        for(std::size_t i=0;i<8;++i)macros_[i]->setValueNotifyingHost(macroValues[i]);
         patternEnabled_->setValueNotifyingHost(patternEnabled?1.0f:0.0f);
         for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
         restoreEpoch_.fetch_add (1, std::memory_order_release);

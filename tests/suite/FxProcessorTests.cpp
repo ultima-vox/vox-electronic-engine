@@ -213,6 +213,41 @@ int main() {
         restored->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
         check(restored->patternEnabledParameter().get(),"pattern enable restored");
     }
+    {
+        auto modulated=std::make_unique<vox::fx::FxProcessor>();auto dry=std::make_unique<vox::fx::FxProcessor>();
+        vox::fx::FxPanel panel(*modulated);
+        panel.macroDepthSlider().setValue(-.5,juce::sendNotificationSync);
+        check(modulated->macroConfig().count==1,"editor assigns typed macro gain route");
+        check(modulated->setMacroGainRoute(0,-.5f,0),"assign macro to output gain");
+        panel.macroValueSlider().setValue(1.0,juce::sendNotificationSync);
+        panel.macroSelector().setSelectedId(2,juce::sendNotificationSync);
+        check(modulated->macroParameter(0).get()==1.0f && modulated->macroParameter(1).get()==.5f,
+              "switching macro editor preserves unrelated automation lanes");
+        panel.macroSelector().setSelectedId(1,juce::sendNotificationSync);
+        check(modulated->outputParameter().get()==1.0f,"macro leaves host output automation base unchanged");
+        auto state=save(*modulated);auto restored=std::make_unique<vox::fx::FxProcessor>();
+        restored->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
+        check(restored->macroConfig().count==1&&restored->macroParameter(0).get()==1,"macro routes and values recalled");
+        auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
+        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxMacroRouteSectionTag)section.data[0]=std::byte{2};
+        const auto bad=vox::preset::encode(document.document);
+        if(bad){restored->setStateInformation(bad->data(),static_cast<int>(bad->size()));
+            check(restored->lastStateError().isNotEmpty()&&save(*restored)==state,"future macro routes rejected transactionally");}
+        else check(false,"encode invalid macro state");
+        modulated->prepareToPlay(48000,512);dry->prepareToPlay(48000,512);
+        juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer ma,mb;
+        ma.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        mb.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        block(*modulated,a,ma);block(*dry,b,mb);
+        for(int i=0;i<512;++i)check(std::abs(a.getSample(0,i)-b.getSample(0,i)*.5f)<1e-7f,"macro route affects DSP");
+        vox::fx::offline::Settings settings;settings.sampleRate=48000;settings.velocity=100.0f/127.0f;
+        settings.format=vox::fx::offline::WavFormat::float32;std::vector<std::uint8_t> wav;
+        check(modulated->renderProgramWav(settings,wav),"render macro-modulated WAV");
+        if(wav.size()>=56+512*8)for(int i=0;i<512;++i){const auto at=static_cast<std::size_t>(56+i*8);
+            const auto bits=static_cast<std::uint32_t>(wav[at])|(static_cast<std::uint32_t>(wav[at+1])<<8)|
+                (static_cast<std::uint32_t>(wav[at+2])<<16)|(static_cast<std::uint32_t>(wav[at+3])<<24);
+            check(std::bit_cast<float>(bits)==a.getSample(0,i),"macro WAV matches processor");}
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;

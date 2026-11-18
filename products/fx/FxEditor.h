@@ -18,6 +18,9 @@ public:
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
     juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
     juce::ComboBox& familySelector() noexcept { return family_; }
+    juce::Slider& macroDepthSlider() noexcept { return macroDepth_; }
+    juce::Slider& macroValueSlider() noexcept { return macroValue_; }
+    juce::ComboBox& macroSelector() noexcept { return macroSelector_; }
     juce::Slider& seedSlider() noexcept { return seed_; }
     juce::Button& generateButton() noexcept { return generate_; }
     juce::Button& mutateButton() noexcept { return mutate_; }
@@ -41,12 +44,15 @@ public:
 private:
     void timerCallback() override;
     void refreshPattern();
+    void refreshMacro();
     FxProcessor& processor_;
     vox::ui::VoxKnob output_ { "OUTPUT", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment attachment_;
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment durationAttachment_;
-    vox::ui::VoxComboBox family_;
+    vox::ui::VoxComboBox family_,macroSelector_;
+    juce::Slider macroValue_,macroDepth_;
+    std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;
     vox::ui::VoxButton audition_ { "AUDITION" };
     vox::ui::VoxButton panic_ { "PANIC" };
     juce::Slider seed_;
