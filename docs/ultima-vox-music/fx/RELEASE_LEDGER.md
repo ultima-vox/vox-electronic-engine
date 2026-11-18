@@ -25,9 +25,13 @@ Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent
 | FX-T19 | OPEN: complete asset/license inventory absent | queued / N/A / not done |
 | FX-T20 | NOT READY: single integrated owner acceptance after candidate qualification | queued / not approved / not done |
 
-## Current local work — 2026-11-18 (unqualified checkpoint)
+## Current local work — 2026-11-18 (unqualified checkpoints)
 
-The current branch adds Playback Mode/TriggerPolicy state migration (FPRG v4), MIDI NoteOff ownership, six mode choices, per-layer amplitude/pitch/cutoff/panorama plus four global DSP trajectories, and JUCE layer-trajectory selection. Thirty-five JUCE-independent FX test executables compiled with `g++ -std=c++20 -O2 -pthread` and passed (including the updated delay-feedback effect tests), including `FxProgramCodecTests`, `FxProgramStoreTests` (maximum-size v4 payload), `FxCurveTrajectoryTests`, `FxPlaybackModeTests`, family/render tests, pattern, modulation and sample-store primitives. The playback-mode test also passed AddressSanitizer+UndefinedBehaviorSanitizer. `FxFileExportTests`, sample decode/controller tests and `FxProcessorTests` were not executed because their JUCE headers are unavailable; CMake/CTest was also unavailable (`cmake` is not installed). These are source-local checks, not plugin integration, Windows qualification, production audio approval or DAW evidence. Current work changes exact-head state, so all release gates remain HOLD.
+Code checkpoint `5675dd20d51814f80a3c093c587e1dda3ce72ab4` adds Playback Mode/TriggerPolicy state migration (FPRG v4), MIDI NoteOff ownership, six mode choices, and 20 DSP trajectories (per-layer and global). Thirty-five JUCE-independent FX test executables compiled with `g++ -std=c++20 -O2 -pthread` passed at that checkpoint, including codec/store (maximum-size v4 payload), trajectory/render, playback-mode, family/render, pattern, modulation and sample-store primitives. Playback-mode tests also passed AddressSanitizer+UndefinedBehaviorSanitizer.
+
+Follow-up code checkpoint `01685a2` adds delay feedback (50–500 ms, up to 75%, bounded 10 s/slot decay); the updated `FxEffectsTests` passed on this code. The other 34 standalone tests were not rerun after this change, so this is NOT a full 01685a2 regression pass. A 4-second, four-layer synthetic Transition WAV was rendered from 01685a2 into the ignored local artifact `build/vox-fx-hybrid-transition-preview-normalized.wav`, peak-normalized to -6 dBFS for audition; it has no post-FX, is DSP smoke evidence only, and is not approved audio.
+
+`FxFileExportTests`, sample decode/controller tests and `FxProcessorTests` were not executed because JUCE headers are unavailable; CMake/CTest could not run (`cmake` is not installed). No exact-HEAD Windows run was triggered or claimed. These checks do not establish plugin integration, Windows qualification, production audio approval, or DAW evidence.
 
 | Test | Current local result | Still missing |
 |---|---|---|
