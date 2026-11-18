@@ -128,12 +128,21 @@ int main() {
         panel.generateButton().onClick();
         check(generated->program().layers[1].enabled&&!generated->program().layers[2].enabled&&
               !generated->program().layers[3].enabled,"generator uses selected complexity");
+        settingsPanel.lockLayerSelector().setSelectedId(2,juce::sendNotificationSync);
+        settingsPanel.fieldLock(3).setToggleState(true,juce::sendNotificationSync);
+        settingsPanel.fieldLock(4).setToggleState(true,juce::sendNotificationSync);
+        check(generated->generatorState().locks.layers[1]==(vox::fx::generator::gain|vox::fx::generator::pan),
+              "field lock controls store only selected layer fields");
+        const auto protectedLayer=generated->program().layers[1];panel.mutateButton().onClick();
+        check(generated->program().layers[1].gain==protectedLayer.gain&&generated->program().layers[1].pan==protectedLayer.pan,
+              "field locks protect gain and pan during mutation");
         const auto settingsSaved=save(*generated);auto settingsRecall=std::make_unique<vox::fx::FxProcessor>();
         settingsRecall->setStateInformation(settingsSaved.getData(),static_cast<int>(settingsSaved.getSize()));
         const auto restored=settingsRecall->generatorState();
         check(restored.style==controls.style&&restored.complexity==controls.complexity&&
-              restored.intensity==controls.intensity&&restored.energy==controls.energy&&restored.stereo==controls.stereo,
-              "generator controls survive project state roundtrip");
+              restored.intensity==controls.intensity&&restored.energy==controls.energy&&restored.stereo==controls.stereo&&
+              restored.locks.layers[1]==(vox::fx::generator::gain|vox::fx::generator::pan),
+              "generator controls and field locks survive project state roundtrip");
     }
     {
         auto effected=std::make_unique<vox::fx::FxProcessor>();

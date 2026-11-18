@@ -19,10 +19,13 @@ public:
     juce::Slider& intensitySlider() noexcept { return intensity_; }
     juce::Slider& energySlider() noexcept { return energy_; }
     juce::Slider& stereoSlider() noexcept { return stereo_; }
+    juce::ComboBox& lockLayerSelector() noexcept { return lockLayer_; }
+    juce::Button& fieldLock(std::size_t index) noexcept { return fieldLocks_[index]; }
 private:
     void timerCallback() override;
     FxProcessor& processor_;
-    juce::ComboBox style_,complexity_;
+    juce::ComboBox style_,complexity_,lockLayer_;
+    std::array<juce::ToggleButton,7> fieldLocks_;
     juce::Slider intensity_,energy_,stereo_;
     std::array<juce::Label,5> labels_;
     juce::TextButton close_ { "Close" };

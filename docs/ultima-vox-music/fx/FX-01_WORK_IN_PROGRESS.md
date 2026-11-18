@@ -827,3 +827,10 @@ duration is not overwritten. Standalone state/migration/generation tests passed
 normally and under ASan/UBSan; JUCE UI/project roundtrip tests are syntax-checked
 only. Style is currently a deterministic seed variation, not a curated musical
 genre. Pitch/key, bars, full sound-design controls and curated presets remain.
+
+The generator settings overlay also exposes per-layer family, enable, timing,
+gain, pan, gain-envelope and pan-envelope locks; they modify the already
+serialized lock masks, while the top-level layer toggle means all fields locked.
+The processor/editor tests for selective lock mutation and save/restore were
+added and syntax-checked only; no host/UI execution is claimed. Locks for
+not-yet-implemented Program fields, pattern, effects and sample remain open.

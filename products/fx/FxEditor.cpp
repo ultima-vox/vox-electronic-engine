@@ -34,6 +34,20 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     stereo_.onValueChange=[this]{const auto v=static_cast<float>(stereo_.getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.stereo=v;});};
     addAndMakeVisible(style_);addAndMakeVisible(complexity_);addAndMakeVisible(close_);
+    for(int i=0;i<4;++i)lockLayer_.addItem("Layer " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)),i+1);
+    lockLayer_.setSelectedId(1,juce::dontSendNotification);lockLayer_.setTitle("Layer for generator locks");
+    lockLayer_.onChange=[this]{timerCallback();};addAndMakeVisible(lockLayer_);
+    const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env"};
+    const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve};
+    for(std::size_t i=0;i<fieldLocks_.size();++i){
+        auto& button=fieldLocks_[i];button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
+        button.setTooltip("Preserve this field during Generate and Mutate");
+        button.onClick=[this,i,bit=bits[i]]{const int layer=lockLayer_.getSelectedId()-1;if(layer<0||layer>=4)return;
+            const bool locked=fieldLocks_[i].getToggleState();
+            (void)processor_.editGeneratorState([layer,bit,locked](generator::ControllerState& s){
+                auto& mask=s.locks.layers[static_cast<std::size_t>(layer)];if(locked)mask|=bit;else mask&=~bit;});};
+        addAndMakeVisible(button);
+    }
     close_.onClick=[this]{setVisible(false);};timerCallback();startTimerHz(15);
 }
 void GeneratorPanel::paint(juce::Graphics& g) {
@@ -45,6 +59,10 @@ void GeneratorPanel::resized() {
     for(std::size_t i=0;i<labels_.size();++i){auto row=area.removeFromTop(31);labels_[i].setBounds(row.removeFromLeft(100));
         switch(i){case 0:style_.setBounds(row);break;case 1:complexity_.setBounds(row);break;
             case 2:intensity_.setBounds(row);break;case 3:energy_.setBounds(row);break;case 4:stereo_.setBounds(row);break;default:break;}}
+    auto locks=area.removeFromTop(27);lockLayer_.setBounds(locks.removeFromLeft(100));
+    const auto width=locks.getWidth()/4;for(std::size_t i=0;i<4;++i)fieldLocks_[i].setBounds(locks.removeFromLeft(width));
+    auto second=area.removeFromTop(27);second.removeFromLeft(100);
+    const auto secondWidth=second.getWidth()/3;for(std::size_t i=4;i<7;++i)fieldLocks_[i].setBounds(second.removeFromLeft(secondWidth));
 }
 void GeneratorPanel::timerCallback() {
     if(!isShowing())return;
@@ -53,6 +71,10 @@ void GeneratorPanel::timerCallback() {
     complexity_.setSelectedId(state.complexity,juce::dontSendNotification);
     auto sync=[](juce::Slider& slider,float value){if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
     sync(intensity_,state.intensity);sync(energy_,state.energy);sync(stereo_,state.stereo);
+    const int layer=lockLayer_.getSelectedId()-1;
+    if(layer>=0&&layer<4){const auto mask=state.locks.layers[static_cast<std::size_t>(layer)];
+        const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve};
+        for(std::size_t i=0;i<fieldLocks_.size();++i)fieldLocks_[i].setToggleState((mask&bits[i])!=0,juce::dontSendNotification);}
 }
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
@@ -176,7 +198,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     }
     refreshGenerator();
     addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
-    generatorSettings_.setTitle("Generator settings");generatorSettings_.setTooltip("Adjust style seed, active layers, intensity, energy and stereo spread");
+    generatorSettings_.setTitle("Generator settings");generatorSettings_.setTooltip("Adjust generator shaping and per-field layer locks");
     generatorPanel_=std::make_unique<GeneratorPanel>(processor_);addChildComponent(*generatorPanel_);
     generatorSettings_.onClick=[this]{generatorPanel_->setVisible(true);generatorPanel_->toFront(true);};
     addAndMakeVisible(generatorSettings_);
@@ -371,7 +393,7 @@ void FxPanel::resized()
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(247);
     row.removeFromBottom(120);
-    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(360,210));
+    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(480,280));
     const int width = row.getWidth() / 4;
     for (std::size_t i=0; i<layers_.size(); ++i) {
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
@@ -491,7 +513,7 @@ void FxPanel::refreshGenerator()
 {
     const auto controls=processor_.generatorState();
     if(!seed_.isMouseButtonDown()&&!seed_.hasKeyboardFocus(true))seed_.setValue(controls.seed,juce::dontSendNotification);
-    for(std::size_t i=0;i<4;++i)layerLocks_[i].setToggleState(controls.locks.layers[i]!=0,juce::dontSendNotification);
+    for(std::size_t i=0;i<4;++i)layerLocks_[i].setToggleState(controls.locks.layers[i]==generator::all,juce::dontSendNotification);
 }
 void FxPanel::refreshMacro()
 {
