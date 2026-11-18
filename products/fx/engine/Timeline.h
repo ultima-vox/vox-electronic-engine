@@ -99,16 +99,22 @@ public:
         if (!std::isfinite(bars) || bars <= 0 || bars > 32 || numerator < 1 || numerator > 32 ||
             denominator < 1 || denominator > 32 || (denominator & (denominator - 1)) != 0 ||
             !std::isfinite(sampleRate) || sampleRate < 8000 || sampleRate > 384000) return false;
-        beats_ = bars * numerator * 4.0 / denominator; rate_ = sampleRate; elapsed_ = 0; return true;
+        beats_ = bars * numerator * 4.0 / denominator; rate_ = sampleRate; elapsed_ = 0; compensation_ = 0; return true;
     }
     // Invalid host tempo leaves the clock untouched; no invented BPM fallback.
     bool next(double bpm, double& phase) noexcept {
         if (!std::isfinite(bpm) || bpm <= 0 || bpm > 1000 || beats_ <= 0 || elapsed_ >= beats_) return false;
         phase = elapsed_ / beats_;
-        elapsed_ += bpm / (60.0 * rate_);
+        // Compensated summation avoids a multi-sample boundary drift on long,
+        // low-tempo events without allocating or retaining a rendered buffer.
+        const double increment = bpm / (60.0 * rate_);
+        const double corrected = increment - compensation_;
+        const double sum = elapsed_ + corrected;
+        compensation_ = (sum - elapsed_) - corrected;
+        elapsed_ = sum;
         return true;
     }
 private:
-    double beats_ = 0, rate_ = 44100, elapsed_ = 0;
+    double beats_ = 0, rate_ = 44100, elapsed_ = 0, compensation_ = 0;
 };
 } // namespace vox::fx::timeline

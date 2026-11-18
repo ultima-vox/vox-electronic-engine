@@ -44,5 +44,29 @@ int main() {
     check(bars.next(60, phase) && std::abs(phase - 0.25) < 1e-9, "tempo change phase continuity");
     check(!bars.next(std::numeric_limits<double>::quiet_NaN(), phase), "invalid tempo rejected");
     check(!bars.start(1,4,3,48000), "invalid time signature");
+    // Full-duration sample boundaries, including a 64-second event that
+    // cannot be represented by the legacy 32-second host parameter.
+    for (double rate : {44100.0, 48000.0, 96000.0}) {
+        for (double bpm : {60.0, 100.0, 128.0, 140.0, 160.0, 200.0}) {
+            BarsClock longClock;
+            check(longClock.start(16, 4, 4, rate), "long bars start");
+            const auto expected = static_cast<std::uint64_t>(std::ceil(64.0 * 60.0 * rate / bpm));
+            std::uint64_t count = 0;
+            while (longClock.next(bpm, phase)) {
+                ++count;
+                if (count > expected + 1) break; // bound failure cases
+            }
+            const auto delta = count > expected ? count - expected : expected - count;
+            check(delta <= 1, "16-bar duration within one sample");
+            check(phase >= 0 && phase < 1, "long bars phase range");
+        }
+    }
+    BarsClock paused, control;
+    check(paused.start(1,4,4,48000) && control.start(1,4,4,48000), "pause setup");
+    double a = 0, b = 0;
+    for (int i = 0; i < 1000; ++i) { paused.next(120,a); control.next(120,b); }
+    check(!paused.next(0,a) && !paused.next(std::numeric_limits<double>::infinity(),a), "bad tempos pause");
+    check(paused.next(60,a) && control.next(60,b) && a == b, "invalid tempo leaves position unchanged");
+
     std::printf("FX timeline: %d failure(s)\n", failures); return failures ? 1 : 0;
 }
