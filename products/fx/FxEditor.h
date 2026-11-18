@@ -86,7 +86,7 @@ private:
     juce::SliderParameterAttachment attachment_;
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment durationAttachment_;
-    vox::ui::VoxComboBox family_,eventBars_,macroSelector_,macroDestination_,factory_,comparison_;
+    vox::ui::VoxComboBox family_,eventBars_,playMode_,triggerPolicy_,macroSelector_,macroDestination_,factory_,comparison_;
     juce::Label clockStatus_;
     juce::Slider macroValue_,macroDepth_;
     std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;

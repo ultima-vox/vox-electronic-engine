@@ -115,6 +115,18 @@ FxPanel::FxPanel (FxProcessor& processor)
     const int initialBarsId=initialBars==0?1:initialBars==1?2:initialBars==2?3:initialBars==4?4:initialBars==8?5:6;
     eventBars_.setSelectedId(initialBarsId,juce::dontSendNotification);
     addAndMakeVisible(eventBars_);
+    playMode_.addItem("One Shot",1);playMode_.addItem("Gate",2);playMode_.addItem("Continuous",3);
+    playMode_.addItem("Loop",4);playMode_.addItem("Sequence",5);playMode_.addItem("Transition",6);
+    playMode_.setTitle("Play mode");playMode_.setTooltip("One Shot/Transition end automatically; Gate, Continuous and Loop repeat a bounded timeline until matching NoteOff; Sequence uses Host Pattern");
+    triggerPolicy_.addItem("Overlap",1);triggerPolicy_.addItem("Ignore",2);triggerPolicy_.addItem("Replace",3);
+    triggerPolicy_.setTitle("Repeated NoteOn policy");triggerPolicy_.setTooltip("Overlap voices, ignore a duplicate channel/note, or fade-replace that same channel/note");
+    const auto initialProgram=processor_.program();
+    playMode_.setSelectedId(static_cast<int>(initialProgram.mode)+1,juce::dontSendNotification);
+    triggerPolicy_.setSelectedId(static_cast<int>(initialProgram.triggerPolicy)+1,juce::dontSendNotification);
+    auto updatePlayback=[this]{const int m=playMode_.getSelectedId()-1,p=triggerPolicy_.getSelectedId()-1;
+        if(m>=0&&m<=5&&p>=0&&p<=2)(void)processor_.setPlayback(static_cast<PlayMode>(m),static_cast<TriggerPolicy>(p));};
+    playMode_.onChange=updatePlayback;triggerPolicy_.onChange=updatePlayback;
+    addAndMakeVisible(playMode_);addAndMakeVisible(triggerPolicy_);
     clockStatus_.setFont(juce::FontOptions(10.0f)); addAndMakeVisible(clockStatus_);
     sampleImport_.setTooltip("Import a licensed mono or stereo WAV for granular layers; decoding is asynchronous");
     sampleBuiltin_.setTooltip("Explicitly select the built-in granular source");
@@ -351,6 +363,9 @@ void FxPanel::resized()
     auto familyArea = area.removeFromLeft (200);
     family_.setBounds (familyArea.removeFromTop (40));
     eventBars_.setBounds(familyArea.removeFromTop(25));
+    auto modeRow=familyArea.removeFromTop(25);
+    playMode_.setBounds(modeRow.removeFromLeft(modeRow.getWidth()/2).reduced(1));
+    triggerPolicy_.setBounds(modeRow.reduced(1));
     clockStatus_.setBounds(familyArea.removeFromTop(12));
     auto macroRow=familyArea.removeFromTop(32);
     macroSelector_.setBounds(macroRow.removeFromLeft(49).reduced(1));
@@ -575,6 +590,8 @@ void FxPanel::timerCallback()
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
     const int barsId=program.bars==0?1:program.bars==1?2:program.bars==2?3:program.bars==4?4:program.bars==8?5:6;
     eventBars_.setSelectedId(barsId,juce::dontSendNotification);
+    playMode_.setSelectedId(static_cast<int>(program.mode)+1,juce::dontSendNotification);
+    triggerPolicy_.setSelectedId(static_cast<int>(program.triggerPolicy)+1,juce::dontSendNotification);
     clockStatus_.setText(program.bars==0?"Seconds":processor_.musicalClockUnavailable()?"Host bar clock unavailable":"Host bar clock ready",juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {

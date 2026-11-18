@@ -10,7 +10,7 @@ class FxProcessor;
 // 1/16, L/S/E/H select the outgoing segment shape, Ctrl-Z/Y undo/redo.
 class CurveEditor final : public juce::Component {
 public:
-    enum class Kind { gain, pan };
+    enum class Kind { gain, pitch, cutoff, pan };
     CurveEditor(FxProcessor&, int layer);
     void setKind(Kind);
     Kind kind() const noexcept { return kind_; }

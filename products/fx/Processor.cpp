@@ -281,8 +281,8 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
     if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection); }
     const int size = buffer.getNumSamples();
-    const bool wantsPattern=patternEnabled_->get();
-    bool patternUnavailable=wantsPattern&&(!positionAvailable||hostPlaying)&&!patternHostReady;
+    const bool wantsPattern=patternEnabled_->get()||audioProgram_.mode==PlayMode::sequence;
+    bool patternUnavailable=wantsPattern&&!patternHostReady;
     patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
@@ -309,6 +309,8 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             if(type==0x90 && bytes[2]!=0) {
                 renderTo(metadata.samplePosition);
                 {const auto selection=samples_.selection();engine_.noteOn(channel,bytes[1]&0x7f,static_cast<float>(bytes[2]&0x7f)/127.0f,eventDuration,selection!=0,selection);}
+            } else if(type==0x80 || (type==0x90 && bytes[2]==0)) {
+                renderTo(metadata.samplePosition);engine_.noteOff(channel,bytes[1]&0x7f);
             } else if(type==0xb0 && (bytes[1]==120 || bytes[1]==123)) {
                 renderTo(metadata.samplePosition);engine_.allSoundOff(channel);
             }

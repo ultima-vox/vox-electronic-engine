@@ -25,6 +25,17 @@ Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent
 | FX-T19 | OPEN: complete asset/license inventory absent | queued / N/A / not done |
 | FX-T20 | NOT READY: single integrated owner acceptance after candidate qualification | queued / not approved / not done |
 
+## Current local work — 2026-11-18 (unqualified checkpoint)
+
+The current branch adds Playback Mode/TriggerPolicy state migration (FPRG v4), MIDI NoteOff ownership, six mode choices, per-layer amplitude/pitch/cutoff/panorama plus four global DSP trajectories, and JUCE layer-trajectory selection. Thirty-five JUCE-independent FX test executables compiled with `g++ -std=c++20 -O2 -pthread` and passed, including `FxProgramCodecTests`, `FxProgramStoreTests` (maximum-size v4 payload), `FxCurveTrajectoryTests`, `FxPlaybackModeTests`, family/render tests, pattern, modulation and sample-store primitives. The playback-mode test also passed AddressSanitizer+UndefinedBehaviorSanitizer. `FxFileExportTests`, sample decode/controller tests and `FxProcessorTests` were not executed because their JUCE headers are unavailable; CMake/CTest was also unavailable (`cmake` is not installed). These are source-local checks, not plugin integration, Windows qualification, production audio approval or DAW evidence. Current work changes exact-head state, so all release gates remain HOLD.
+
+| Test | Current local result | Still missing |
+|---|---|---|
+| FX-T02 | PARTIAL: layer pitch/cutoff controls affect sample render; no full oscillator/filter architecture | independent filter units/UI and exact-head qualification |
+| FX-T03 | PARTIAL: codec v4 migration and 20 DSP trajectories; codec/store/render tests passed | global editor/multiselect, musical review, JUCE/Windows tests |
+| FX-T04 | PARTIAL: mode persistence, basic Gate/Continuous/Loop lifecycle, NoteOff and retrigger-policy tests passed | Sequence/Transition synchronization semantics, loop seam/transport tests, JUCE/host proof |
+| FX-T05 | PARTIAL: same-note channel ownership/release test passed | CC/Panic/steal/tail completeness and Windows host evidence |
+
 ## Content waves
 
 | Wave | Target approved unique Programs | Approved / audited | Evidence |
