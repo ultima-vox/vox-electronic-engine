@@ -791,3 +791,13 @@ The concurrent standalone loader/restore/MIDI-engine stress test also runs the
 thread-local allocation probe around note-on, render and panic; Linux probe
 reported zero allocations. This does not replace allocation measurement of the
 JUCE processor callback or Windows host execution.
+
+### Layer pan curve editor
+
+Each layer's existing curve editor can now select gain or pan. The selector
+edits the actual Program curve, with independent selection and undo history
+cleared on switching; whole-Program replacement still clears stale undo. A
+standalone DSP/codec test confirms that a saved pan sweep moves energy from left
+to right and passed normally and under ASan/UBSan. Editor/processor regression
+tests are added but only syntax-checked locally. Pitch, cutoff and global curves
+remain unimplemented.

@@ -1,4 +1,5 @@
 #include "engine/NoiseRiser.h"
+#include "engine/ProgramCodec.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -63,6 +64,21 @@ int main() {
         check(engine.setProgram(program) && engine.noteOn(1,60,1), "zero gain curve program");
         engine.render(l.data(), r.data(), block);
         check(std::all_of(l.begin(), l.end(), [](float x) { return x == 0; }), "gain curve controls output");
+    }
+    {
+        auto engine=std::make_unique<vox::fx::NoiseRiser>();engine->prepare(48000);
+        vox::fx::NoiseProgram program;
+        auto& curve=program.layers[0].panCurve;
+        curve.nodes[0]={0,0,vox::fx::timeline::Shape::linear};curve.nodes[1]={1,1,vox::fx::timeline::Shape::linear};
+        std::vector<std::byte> state;vox::fx::NoiseProgram decoded;
+        check(vox::fx::programcodec::encode(program,state)&&vox::fx::programcodec::decode(state,decoded)&&
+              decoded.layers[0].panCurve.evaluate(.25f)==.25f,"pan curve survives program codec");
+        check(engine->setProgram(decoded)&&engine->noteOn(1,60,1,.4),"pan curve sweep event");
+        double earlyL=0,earlyR=0,lateL=0,lateR=0;
+        for(int sample=0;sample<19200;++sample){float left=0,right=0;engine->render(&left,&right,1);
+            if(sample<2400){earlyL+=left*left;earlyR+=right*right;}
+            if(sample>=16800){lateL+=left*left;lateR+=right*right;}}
+        check(earlyL>earlyR*3&&lateR>lateL*3,"pan envelope moves audible energy left to right");
     }
     std::printf("FX layers: %d failure(s)\n", failures); return failures ? 1 : 0;
 }

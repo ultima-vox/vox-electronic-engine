@@ -53,6 +53,15 @@ int main() {
               p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve edit changes program");
         check(curve.undo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 1.0f, "curve undo");
         check(curve.redo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve redo");
+        auto& selector=panel.layerPanel(1).curveSelector();
+        selector.setSelectedId(2,juce::sendNotificationSync);
+        check(curve.setCurve(vox::fx::timeline::Curve::constant(.8f))&&
+              p.program().layers[1].panCurve.evaluate(.5f)==.8f&&p.program().layers[1].gainCurve.evaluate(.5f)==.25f,
+              "pan curve editor updates only pan curve");
+        check(curve.undo()&&p.program().layers[1].panCurve.evaluate(.5f)==.5f,"pan curve undo");
+        check(curve.redo()&&p.program().layers[1].panCurve.evaluate(.5f)==.8f,"pan curve redo");
+        selector.setSelectedId(1,juce::sendNotificationSync);
+        check(!curve.undo(),"switching curves clears incompatible undo history");
         auto replacement=p.program();replacement.layers[1].gainCurve=vox::fx::timeline::Curve::constant(.8f);
         check(p.setProgram(replacement),"replace Program after curve edit");curve.refresh(replacement.layers[1].gainCurve);
         check(!curve.undo(),"whole Program replacement invalidates stale curve history");
