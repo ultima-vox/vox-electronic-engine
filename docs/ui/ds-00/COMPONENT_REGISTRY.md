@@ -12,6 +12,11 @@ SHA `f1d6eb595779c973ae5a139270795aae968804cc`.
 
 Nothing else is a public shared control. Do not describe `VoxFader`, `VoxPad`, `VoxKeyboard`, `VoxMeter`, or `VoxDockWorkspace` as implemented.
 
+## Not a component source
+
+`hardware-reference.html` is not a `libs/vox-ui` module and is not linked into the VST3. It may suggest layout behaviour (one workspace, Grid/List, a bottom mixer). It does not add classes, ParameterIDs, or colours. Docking, Pin, layout persistence, Reset, and a real Select/Audition split remain open #127 requirements (`GAP-DOCK`, `GAP-INSPECTOR`, `GAP-WORKSPACE-PRESETS`, `GAP-RESET-LAYOUT`, `GAP-SELECT-AUDITION`). Proposed classes below stay proposed.
+
+
 ## Existing
 
 | Class | Status | Binding | Paint / a11y / DPI | Must stay shared? |

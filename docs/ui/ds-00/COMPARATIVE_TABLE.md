@@ -5,6 +5,21 @@ Shared UI SHA: `f1d6eb595779c973ae5a139270795aae968804cc` (same `VoxComponents.h
 Hardware reference SHA: `74513b1ce4e670d8126ccd78a8ce1b02a4764789`.
 FX SHA: `a43c46e431f2d35bd9550d4f5094516e9513335b`.
 
+
+## Latest TL ruling (2026-11-18)
+
+Visual direction is not approved. This table compares requirements with code. It does not pick a palette.
+
+| Ruling | What the sources say | What this audit does |
+|---|---|---|
+| Functional authority | #127 | HTML does not replace #127. |
+| HTML role | `hardware-reference.html` @ `74513b1` | Reference for single layout/behaviour ideas only. See [HTML_PROTOTYPE_VS_127.md](HTML_PROTOTYPE_VS_127.md). |
+| Neon sheet | Rejected by the owner | Not copied into `Tokens.h`. |
+| `Tokens.h` | Current constants, blob `c1c9a2d` | Inventory only. Not a visual sign-off. |
+| HTML hexes `#070d13`, `#fa8549`, `#3ce4d4` | In the prototype stylesheet | Not approved. Not merged into tokens. |
+| Dock, Pin, layout save, Reset, Select/Audition | Required by #127; missing or collided in code | Left open. See `GAP-*` rows in the CSV. |
+| Eight Drums pages | `pageName` / `showPage` on the integration SHA | Do not carry them into the new architecture. |
+
 | Requirement | Authority | Code now | Status | Accept when | Product-specific? |
 |---|---|---|---|---|---|
 | Dockable hybrid workstation, not eight pages | #127 | `DrumsPanel::pageName` lists PERFORMANCE, SOUND, PATTERN/SONG, MIXER, GENERATE, ROUTING, PRESETS, ADVANCED. `showPage` writes `ui.page`. | partial | Those tabs are not primary navigation. Dock state is separate from `ui.page`. | Drums editor. Shared code may offer a dock host later. |

@@ -1,6 +1,6 @@
 # DS-00 — shared UI inventory and Drums binding matrix
 
-Status: documentation only. Not a visual sign-off, not a JUCE editor replacement, not a DSP or CI PASS.
+Status: **IN PROGRESS / NO MERGE**. Documentation only. Not a visual sign-off, not a JUCE editor replacement, not a DSP or CI PASS.
 
 Issue: [#158](https://github.com/ultima-vox/vox-electronic-engine/issues/158).
 Functional authority for Drums remains [#127](https://github.com/ultima-vox/vox-electronic-engine/issues/127).
@@ -42,6 +42,14 @@ Visual reference only: [#135](https://github.com/ultima-vox/vox-electronic-engin
 `absent` — required behaviour was not found.
 `proposed` — a later shared component, not present in `VoxComponents.h`.
 
-## TL ruling — colour
+## TL rulings — 2026-11-18
 
-Do not copy the rejected neon sheet into `Tokens.h` or a future editor. The hardware HTML palette is also not an approved token change. See the prototype audit.
+These rulings are recorded. They do not close the open requirements below.
+
+- `hardware-reference.html` (`74513b1`) is an interactive reference for individual layout and behaviour ideas only. [#127](https://github.com/ultima-vox/vox-electronic-engine/issues/127) remains the functional authority. The HTML does not replace it.
+- Visual direction is **not approved**. The rejected neon sheet is not imported.
+- Current `Tokens.h` values are an inventory, not a signed-off palette.
+- HTML colours `#070d13`, `#fa8549`, and `#3ce4d4` are not approved and are not written into `Tokens.h`.
+- Docking, Inspector Pin, layout persistence, Reset Workspace, and separate Select / Audition stay **open requirements**. Rows: `GAP-DOCK`, `GAP-INSPECTOR`, `GAP-WORKSPACE-PRESETS`, `GAP-RESET-LAYOUT`, `GAP-SELECT-AUDITION`.
+- The eight primary pages in `DrumsPanel::pageName` are the current editor. They are not the new architecture and must not be carried forward as primary navigation.
+- The HTML contains demonstration elements that are not bound to DSP: fixed `145.0 BPM`, named dummy kits, CSS fader caps, and a Main strip that always prints `OVER`.

@@ -1,6 +1,10 @@
 # Handoff and implementation order
 
-This file does not open the implementation. Visual owner sign-off on #127 is still pending. Neon concept art is not the direction (owner decision 2026-11-18). Hardware reference #135 remains visual-only.
+Status: **IN PROGRESS / NO MERGE**.
+
+This file does not open the implementation. Visual direction is not approved. Neon concept art is not the direction (owner decision 2026-11-18). `Tokens.h` is not a signed-off palette. HTML colours `#070d13`, `#fa8549`, `#3ce4d4` are not approved.
+
+`hardware-reference.html` is an interactive reference for individual layout and behaviour ideas only. It does not replace #127. It contains demonstration elements with no DSP binding (fixed tempo, dummy kit names, CSS faders, a strip that always reads OVER). Docking, Pin, layout persistence, Reset Workspace, and separate Select/Audition stay open. Do not carry the eight primary Drums pages into the new architecture.
 
 ## Order
 
