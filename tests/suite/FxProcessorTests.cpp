@@ -233,6 +233,11 @@ int main() {
         panel.macroSelector().setSelectedId(2,juce::sendNotificationSync);
         check(modulated->macroParameter(0).get()==1.0f && modulated->macroParameter(1).get()==.5f,
               "switching macro editor preserves unrelated automation lanes");
+        panel.macroSelector().setSelectedId(9,juce::sendNotificationSync);
+        check(!panel.macroValueSlider().isEnabled(),"fixed LFO source does not expose fake macro value");
+        panel.macroDepthSlider().setValue(.25,juce::sendNotificationSync);
+        check(modulated->macroConfig().count==2,"editor assigns LFO gain route");
+        panel.macroDepthSlider().setValue(0,juce::sendNotificationSync);
         panel.macroSelector().setSelectedId(1,juce::sendNotificationSync);
         check(modulated->outputParameter().get()==1.0f,"macro leaves host output automation base unchanged");
         auto state=save(*modulated);auto restored=std::make_unique<vox::fx::FxProcessor>();

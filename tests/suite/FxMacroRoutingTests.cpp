@@ -36,5 +36,18 @@ int main(){
 #ifdef VOX_TEST_INTERPOSE_MALLOC
     const auto n=voxProbeEnd();if(voxProbeAvailable())check(n==0,"macro audio processing allocates nothing");
 #endif
+    {
+        Config motion;check(motion.setSourceGainRoute(vox::fx::mod::Source::lfo1,.5f,0)&&
+                            motion.setSourceGainRoute(vox::fx::mod::Source::random,.25f,0),"LFO and sample-hold routes");
+        Runtime a,b;check(a.prepare(48000)&&b.prepare(48000)&&a.setConfig(motion)&&b.setConfig(motion),"prepare motion sources");
+        std::array<float,8> neutral{};neutral.fill(.5f);double delta=0;
+        for(int i=0;i<48000;++i){const float x=a.process(.5f,neutral),y=b.process(.5f,neutral);
+            check(x==y&&std::isfinite(x)&&x>=0&&x<=1,"motion deterministic and bounded");delta+=std::abs(x-.5f);}
+        check(delta>1,"motion modulates gain");
+        check(motion.setSourceGainRoute(vox::fx::mod::Source::lfo2,.2f,.01f),"second LFO route");
+        std::vector<std::byte> motionBytes;Config recalled;
+        check(codec::encode(motion,motionBytes)&&codec::decode(motionBytes,recalled)&&recalled==motion,"motion routes persisted");
+        check(!motion.setSourceGainRoute(vox::fx::mod::Source::follower,.5f,0),"unsupported source rejected");
+    }
     std::printf("FX macro routing: %d failure(s)\n",fails);return fails?1:0;
 }

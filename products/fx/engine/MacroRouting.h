@@ -8,16 +8,19 @@
 #include <vector>
 
 namespace vox::fx::macro {
-// Initial product routes: eight bipolar macro sources may target master gain.
-// Other typed sources and destinations remain unavailable until implemented.
+// Product routes currently target master gain. Macro sources, two LFOs and
+// seeded sample-and-hold are supported; other destinations remain unavailable.
 struct Config {
     std::array<mod::Route,64> routes{};
     std::uint32_t count=0;
+    static bool supportedSource(mod::Source source) noexcept {
+        const auto id=static_cast<unsigned>(source);
+        return source==mod::Source::lfo1||source==mod::Source::lfo2||source==mod::Source::random||
+               (id>=static_cast<unsigned>(mod::Source::macro1)&&id<=static_cast<unsigned>(mod::Source::macro8));
+    }
     bool valid() const noexcept {
         if(count>routes.size())return false;
-        for(std::size_t i=0;i<count;++i){const auto& r=routes[i];const auto source=static_cast<unsigned>(r.source);
-            if(!r.valid()||r.destination!=mod::Destination::gain||source<static_cast<unsigned>(mod::Source::macro1)||
-               source>static_cast<unsigned>(mod::Source::macro8))return false;}
+        for(std::size_t i=0;i<count;++i){const auto& r=routes[i];if(!r.valid()||r.destination!=mod::Destination::gain||!supportedSource(r.source))return false;}
         return true;
     }
     bool operator==(const Config& other) const noexcept {
@@ -27,8 +30,11 @@ struct Config {
         return true;
     }
     bool setGainRoute(std::size_t index,float depth,float smoothing) noexcept {
-        if(index>=8||!std::isfinite(depth)||depth < -1||depth>1||!std::isfinite(smoothing)||smoothing<0||smoothing>1||!valid())return false;
-        const auto source=static_cast<mod::Source>(static_cast<unsigned>(mod::Source::macro1)+index);
+        if(index>=8)return false;
+        return setSourceGainRoute(static_cast<mod::Source>(static_cast<unsigned>(mod::Source::macro1)+index),depth,smoothing);
+    }
+    bool setSourceGainRoute(mod::Source source,float depth,float smoothing) noexcept {
+        if(!supportedSource(source)||!std::isfinite(depth)||depth < -1||depth>1||!std::isfinite(smoothing)||smoothing<0||smoothing>1||!valid())return false;
         std::size_t slot=0;while(slot<count && routes[slot].source!=source)++slot;
         if(depth==0){if(slot<count){for(std::size_t i=slot+1;i<count;++i)routes[i-1]=routes[i];--count;}return true;}
         if(slot==count){if(count==routes.size())return false;++count;}
@@ -74,23 +80,32 @@ class Runtime {
 public:
     bool prepare(double rate) noexcept {
         if(!std::isfinite(rate)||rate<8000||rate>384000)return false;
-        rate_=rate;return matrix_.prepare(rate_,config_.routes.data(),config_.count);
+        rate_=rate;lfo1_.reset();lfo2_.reset();random_.reset(0x57a3u);
+        return matrix_.prepare(rate_,config_.routes.data(),config_.count);
     }
     bool setConfig(const Config& config) noexcept {
         if(!config.valid())return false;
         if(config==config_)return true;
         if(!matrix_.prepare(rate_,config.routes.data(),config.count))return false;
-        config_=config;return true;
+        config_=config;useLfo1_=useLfo2_=useRandom_=false;
+        for(std::size_t i=0;i<config.count;++i){useLfo1_|=config.routes[i].source==mod::Source::lfo1;
+            useLfo2_|=config.routes[i].source==mod::Source::lfo2;useRandom_|=config.routes[i].source==mod::Source::random;}
+        return true;
     }
     float process(float base,const std::array<float,8>& macros) noexcept {
         if(config_.count==0)return std::isfinite(base)?std::clamp(base,0.0f,1.0f):0.0f;
         mod::Sources sources{};
         for(std::size_t i=0;i<macros.size();++i){const float v=macros[i];
             sources[static_cast<std::size_t>(mod::Source::macro1)+i]=std::isfinite(v)?2*std::clamp(v,0.0f,1.0f)-1:0;}
+        if(useLfo1_)sources[static_cast<std::size_t>(mod::Source::lfo1)]=lfo1_.next(.5,rate_);
+        if(useLfo2_)sources[static_cast<std::size_t>(mod::Source::lfo2)]=lfo2_.next(1.0,rate_);
+        if(useRandom_)sources[static_cast<std::size_t>(mod::Source::random)]=random_.next(4.0,rate_);
         mod::Destinations bases{};bases[static_cast<std::size_t>(mod::Destination::gain)]=base;
         return matrix_.step(bases,sources)[static_cast<std::size_t>(mod::Destination::gain)];
     }
 private:
     double rate_=44100;Config config_;mod::Matrix matrix_;
+    mod::Lfo lfo1_,lfo2_;mod::SampleHold random_;
+    bool useLfo1_=false,useLfo2_=false,useRandom_=false;
 };
 } // namespace vox::fx::macro

@@ -4,6 +4,15 @@
 #include "Typography.h"
 
 namespace vox::fx {
+namespace {
+mod::Source sourceForControl(int id) noexcept {
+    if(id>=1&&id<=8)return static_cast<mod::Source>(static_cast<unsigned>(mod::Source::macro1)+static_cast<unsigned>(id-1));
+    if(id==9)return mod::Source::lfo1;
+    if(id==10)return mod::Source::lfo2;
+    if(id==11)return mod::Source::random;
+    return mod::Source::count;
+}
+}
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
       durationAttachment_ (processor.durationParameter(), duration_.getSlider())
@@ -34,21 +43,23 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.onChange = [this] { processor_.setFamily (family_.getSelectedId() - 1); };
     addAndMakeVisible (family_);
     for(int i=1;i<=8;++i)macroSelector_.addItem("M"+juce::String(i),i);
-    macroSelector_.setTitle("Macro selector");macroSelector_.setTooltip("Select one of eight host-automatable macros");
+    macroSelector_.addItem("LFO 1",9);macroSelector_.addItem("LFO 2",10);macroSelector_.addItem("S&H",11);
+    macroSelector_.setTitle("Modulation source selector");macroSelector_.setTooltip("Macros or fixed-rate LFO 1 (0.5 Hz), LFO 2 (1 Hz), S&H (4 Hz)");
     macroSelector_.setSelectedId(1,juce::dontSendNotification);
     macroValue_.setSliderStyle(juce::Slider::LinearHorizontal);macroValue_.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,18);
     macroValue_.setTitle("Macro value");macroValue_.setTooltip("Bipolar macro value: center is neutral");
     macroDepth_.setRange(-1,1,.01);macroDepth_.setSliderStyle(juce::Slider::LinearHorizontal);
     macroDepth_.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,18);
     macroDepth_.setTitle("Macro to master gain depth");macroDepth_.setTooltip("Assign this macro to master gain; zero removes the route");
-    macroDepth_.onValueChange=[this]{const int id=macroSelector_.getSelectedId();if(id>=1&&id<=8)
-        (void)processor_.setMacroGainRoute(static_cast<std::size_t>(id-1),static_cast<float>(macroDepth_.getValue()),.01f);};
-    macroSelector_.onChange=[this]{const int id=macroSelector_.getSelectedId();if(id>=1&&id<=8){
+    macroDepth_.onValueChange=[this]{const auto source=sourceForControl(macroSelector_.getSelectedId());
+        if(source!=mod::Source::count)(void)processor_.setMotionGainRoute(source,static_cast<float>(macroDepth_.getValue()),.01f);};
+    macroSelector_.onChange=[this]{const int id=macroSelector_.getSelectedId();
         // Detach first: the new attachment's initial slider update must not
         // notify the previous macro's listener and overwrite its automation.
-        macroAttachment_.reset();
-        macroAttachment_=std::make_unique<juce::SliderParameterAttachment>(processor_.macroParameter(static_cast<std::size_t>(id-1)),macroValue_);
-        refreshMacro();}};
+        macroAttachment_.reset();macroValue_.setEnabled(id>=1&&id<=8);
+        if(id>=1&&id<=8)
+            macroAttachment_=std::make_unique<juce::SliderParameterAttachment>(processor_.macroParameter(static_cast<std::size_t>(id-1)),macroValue_);
+        refreshMacro();};
     macroAttachment_=std::make_unique<juce::SliderParameterAttachment>(processor_.macroParameter(0),macroValue_);
     addAndMakeVisible(macroSelector_);addAndMakeVisible(macroValue_);addAndMakeVisible(macroDepth_);
     refreshMacro();
@@ -199,7 +210,7 @@ void FxPanel::paint (juce::Graphics& g)
     g.drawText ("One-shot event. Trigger with MIDI or audition.", area.removeFromTop (24), juce::Justification::centredLeft);
     auto macroLabel=getLocalBounds().reduced(32).withTrimmedTop(125).removeFromLeft(200).removeFromTop(12);
     macroLabel.translate(276,0);
-    g.drawText("MACRO         VALUE       GAIN DEPTH",macroLabel,juce::Justification::centredLeft);
+    g.drawText("SOURCE        VALUE       GAIN DEPTH",macroLabel,juce::Justification::centredLeft);
     auto labels=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(14);
     const int labelWidth=labels.getWidth()/4;
     for(int i=0;i<4;++i) {
@@ -306,8 +317,8 @@ void FxPanel::refreshGenerator()
 }
 void FxPanel::refreshMacro()
 {
-    const int id=macroSelector_.getSelectedId();if(id<1||id>8)return;
-    const auto config=processor_.macroConfig();const auto source=static_cast<mod::Source>(static_cast<unsigned>(mod::Source::macro1)+static_cast<unsigned>(id-1));
+    const auto source=sourceForControl(macroSelector_.getSelectedId());if(source==mod::Source::count)return;
+    const auto config=processor_.macroConfig();
     float depth=0;for(std::size_t i=0;i<config.count;++i)if(config.routes[i].source==source){depth=config.routes[i].depth;break;}
     if(!macroDepth_.isMouseButtonDown()&&!macroDepth_.hasKeyboardFocus(true))macroDepth_.setValue(depth,juce::dontSendNotification);
 }

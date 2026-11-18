@@ -40,6 +40,11 @@ int main(){
     auto macroEngine=std::make_unique<vox::fx::NoiseRiser>();macroEngine->prepare(s.sampleRate);macroEngine->setProgram(program);macroEngine->noteOn(1,s.note,s.velocity,s.duration);
     macroEngine->render(l,r,512);
     for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i]*.5f,"offline macro routing matches gain DSP");
+    s.macroRoutes={};s.macroRoutes.setSourceGainRoute(vox::fx::mod::Source::lfo1,-.5f,0);s.gain=.5f;
+    check(vox::fx::offline::renderWav(program,s,wav),"LFO routed WAV render");
+    auto lfoEngine=std::make_unique<vox::fx::NoiseRiser>();lfoEngine->prepare(s.sampleRate);lfoEngine->setProgram(program);lfoEngine->noteOn(1,s.note,s.velocity,s.duration);
+    vox::fx::macro::Runtime motion;motion.prepare(s.sampleRate);motion.setConfig(s.macroRoutes);lfoEngine->render(l,r,512);
+    for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i]*motion.process(.5f,s.macros),"offline motion matches gain DSP");
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

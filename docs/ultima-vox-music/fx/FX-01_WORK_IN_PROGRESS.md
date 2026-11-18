@@ -509,3 +509,16 @@ finer masks loaded from state; generator and mutation read the saved controls.
 Local codec/store tests, ASan/UBSan and TSan passed. Processor/editor recall
 and invalid-state tests are syntax-only; style, intensity, key, A/B, other
 locks and full generator metadata are still not integrated.
+
+## Initial motion-to-gain sources
+
+Two free-running sine LFOs (fixed 0.5 and 1 Hz) and a deterministically seeded
+4 Hz sample-and-hold join the macro sources for typed master-gain routes. The
+source selector exposes their depth but disables the macro value slider for
+these fixed-rate sources. FMOD stores the typed routes and worker WAV evaluates
+the same runtime. Local deterministic/bounds, codec and offline DSP parity
+tests plus ASan/UBSan and allocation probe passed; processor/UI tests remain
+syntax-only. Rates, shape, tempo synchronization, seed editing, more sources
+and destinations, general matrix UI, and click-free structural changes remain.
+LFO phase is currently free-running in the live processor while offline render
+starts from reset, so live-to-WAV equality is not claimed for a running LFO.
