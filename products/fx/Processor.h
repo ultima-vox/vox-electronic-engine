@@ -94,6 +94,7 @@ public:
     bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
     template<typename Edit> bool editPattern(Edit edit) { return programs_.editPattern(edit); }
     pattern::Pattern patternSnapshot() const { return programs_.snapshotState().pattern; }
+    double observedTempo() const noexcept { return capturedTempo_.load(std::memory_order_relaxed); }
     bool exportPatternMidi(double bpm, std::vector<std::uint8_t>& bytes) const {
         return pattern::exportMidi(patternSnapshot(),bpm,bytes);
     }

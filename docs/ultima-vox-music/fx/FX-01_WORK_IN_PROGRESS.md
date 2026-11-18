@@ -864,3 +864,14 @@ tests include stop, sample precedence, PPQ seeks, tempo changes, jitter, invalid
 values and integer overflow; ASan/UBSan and Linux allocation probe passed. JUCE
 processor integration was syntax-checked, not executed, and Cubase/REAPER host
 behavior remains unqualified.
+
+### MIDI export tempo
+
+MIDI export now captures the latest valid host BPM with the pattern before the
+save chooser opens, using 120 BPM if no valid host BPM was observed. BPM outside
+the MIDI scheduler's 10–1000 range fails explicitly instead of being silently
+replaced; the exported type-0 file has a fixed tempo and 4/4 time signature.
+Standalone SMF tests verify encoded tempo and canonical scheduling, including
+ASan/UBSan. Processor/editor tempo tests are syntax-checked only; native file
+chooser and real host tempo behavior remain unqualified. This supersedes the
+earlier fixed-120-BPM export description.

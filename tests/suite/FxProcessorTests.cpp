@@ -149,8 +149,8 @@ int main() {
         auto dry=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::FxPanel panel(*effected);
         check(panel.comparisonSelector().getNumItems()==4,"A/B comparison actions exposed");
-        check(panel.midiExportButton().isEnabled() && panel.midiExportButton().getTooltip().contains("120 BPM"),
-              "MIDI export control communicates fixed tempo");
+        check(panel.midiExportButton().isEnabled() && panel.midiExportButton().getTooltip().contains("host tempo"),
+              "MIDI export control communicates captured host tempo");
         check(panel.effectSelector(0).getNumItems()==static_cast<int>(vox::fx::effects::Type::count),
               "every implemented effect is selectable");
         check(panel.effectSelector(0).getItemText(11)=="Reverb", "last effect appears in selector");
@@ -447,7 +447,8 @@ int main() {
         tempoProcessor->setPlayHead(&host);tempoProcessor->prepareToPlay(48000,512);
         juce::AudioBuffer<float> tempoAudio(2,512);juce::MidiBuffer tempoMidi;
         block(*tempoProcessor,tempoAudio,tempoMidi);
-        check(tempoProcessor->captureProgramWav({}).settings.tempo==73.125,"offline capture snapshots valid host tempo");
+        check(tempoProcessor->captureProgramWav({}).settings.tempo==73.125&&tempoProcessor->observedTempo()==73.125,
+              "offline and MIDI export snapshot valid host tempo");
         position.setBpm(std::numeric_limits<double>::quiet_NaN());host.position=position;
         block(*tempoProcessor,tempoAudio,tempoMidi);
         check(tempoProcessor->captureProgramWav({}).settings.tempo==120,"invalid host tempo uses documented default");

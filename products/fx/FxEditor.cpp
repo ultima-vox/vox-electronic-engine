@@ -159,7 +159,7 @@ FxPanel::FxPanel (FxProcessor& processor)
         comparison_.setSelectedId(0,juce::dontSendNotification);};
     addAndMakeVisible(comparison_);
     midiExport_.setTitle("Export trigger pattern MIDI");
-    midiExport_.setTooltip("Export one pattern loop as MIDI at 120 BPM; contains trigger notes, not audio");
+    midiExport_.setTooltip("Export one 4/4 pattern loop at the latest host tempo (120 BPM if unavailable); trigger notes, not audio");
     midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
     wavExport_.setTitle("Export current sound as WAV");
     wavExport_.setTooltip("Export C4 at velocity 100%, 48 kHz, 24-bit WAV; click again to cancel rendering");
@@ -418,12 +418,17 @@ void FxPanel::exportPattern()
 {
     // Capture before opening the chooser; later edits do not change the file.
     const auto pattern=processor_.patternSnapshot();
+    const auto bpm=processor_.observedTempo();
+    if(bpm<10.0||bpm>1000.0) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "MIDI export failed","The captured host tempo is outside the supported MIDI export range (10–1000 BPM).");return;
+    }
     exportChooser_=std::make_unique<juce::FileChooser>("Export trigger pattern as MIDI",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX Pattern.mid"),"*.mid");
     midiExport_.setEnabled(false);wavExport_.setEnabled(false);
     exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
         juce::FileBrowserComponent::warnAboutOverwriting,
-        [safe=juce::Component::SafePointer<FxPanel>(this),pattern](const juce::FileChooser& chooser){
+        [safe=juce::Component::SafePointer<FxPanel>(this),pattern,bpm](const juce::FileChooser& chooser){
             if(safe==nullptr)return;
             safe->midiExport_.setEnabled(true);safe->wavExport_.setEnabled(true);
             auto target=chooser.getResult();if(target==juce::File{})return;
@@ -434,13 +439,13 @@ void FxPanel::exportPattern()
                     "MIDI export failed","Choose a filename ending in .mid.");return;
             }
             std::vector<std::uint8_t> bytes;
-            bool success=pattern::exportMidi(pattern,120.0,bytes);
+            bool success=pattern::exportMidi(pattern,bpm,bytes);
             if(success){
                 success=fileexport::writeBytes(target,bytes);
             }
             juce::AlertWindow::showMessageBoxAsync(success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
                 success?"MIDI exported":"MIDI export failed",
-                success?"Trigger pattern exported at 120 BPM.":"Could not write the trigger pattern.");
+                success?("Trigger pattern exported at " + juce::String(bpm,2) + " BPM."):juce::String("Could not write the trigger pattern."));
         });
 }
 void FxPanel::exportWav()

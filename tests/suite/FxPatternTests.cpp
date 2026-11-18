@@ -29,6 +29,12 @@ int main(){
     std::uint64_t samples=0;check(tickToSample(960,120,48000,samples)&&samples==24000,"ticks to sample timing");
     std::vector<std::uint8_t> midi,midi2;check(exportMidi(p,120,midi)&&exportMidi(p,120,midi2)&&midi==midi2,"deterministic MIDI");
     check(midi.size()>40&&midi[0]=='M'&&midi[1]=='T'&&midi[2]=='h'&&midi[3]=='d'&&midi[8]==0&&midi[9]==0&&midi[10]==0&&midi[11]==1,"valid SMF header");
+    std::vector<std::uint8_t> atHostTempo;
+    check(exportMidi(p,73.125,atHostTempo)&&atHostTempo.size()>29&&atHostTempo[22]==0&&
+          atHostTempo[23]==0xff&&atHostTempo[24]==0x51&&atHostTempo[25]==3,"host tempo MIDI metadata");
+    if(atHostTempo.size()>28){const auto micros=(static_cast<std::uint32_t>(atHostTempo[26])<<16)|
+        (static_cast<std::uint32_t>(atHostTempo[27])<<8)|atHostTempo[28];
+        check(micros==static_cast<std::uint32_t>(std::llround(60000000.0/73.125)),"captured BPM encoded as microseconds per quarter");}
     const std::uint32_t len=(static_cast<std::uint32_t>(midi[18])<<24)|(static_cast<std::uint32_t>(midi[19])<<16)|(static_cast<std::uint32_t>(midi[20])<<8)|midi[21];
     check(len==midi.size()-22&&midi[midi.size()-3]==0xff&&midi[midi.size()-2]==0x2f&&midi.back()==0,"track length and end marker");
     // Parse the SMF event stream and compare every note and absolute tick to
