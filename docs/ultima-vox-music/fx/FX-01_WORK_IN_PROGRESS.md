@@ -1,10 +1,11 @@
 # FX-01: interim instrument foundation (not a release)
 
-The standalone instrument's identity, stereo-only output and MIDI input are
-unchanged. This checkpoint is incomplete: only a four-second one-shot Noise
-Riser and output gain exist. No four-layer Program or full product UI exists.
+This is a chronological development log: early sections describe historical
+checkpoints and are superseded by later sections. For current milestone status
+and remaining work, see `STATUS.md`. The standalone identity, stereo-only
+output and MIDI input remain unchanged; the product is not complete.
 
-## Interim behavior
+## Initial FX-01 checkpoint behavior (historical)
 
 * `fx.output.gain` is a normalized linear host parameter, default 1.0,
   smoothed over 5 ms. Its stable ID and range are in `products/fx/parameters.csv`.
@@ -315,9 +316,10 @@ per-layer/per-field locks, mutation and distinct A/B seeds. A deterministic
 48-entry procedural seed corpus covers four variants per currently implemented
 family. Local tests verify determinism, lock preservation, structural uniqueness
 and an audible finite smoke render of each entry; ASan/UBSan passed. These are
-not yet curated/approved factory presets: the generator, corpus and locks are
-not connected to plugin/UI/state, and key/pitch, patterns, full musical controls,
-exports and perceptual/licensing qualification remain outstanding.
+not yet curated/approved factory presets. Generate and Mutate are now wired to
+the plugin, but the corpus, locks and generator settings are not yet exposed
+or fully saved; key/pitch, patterns, full musical controls, user-facing exports
+and perceptual/licensing qualification remain outstanding.
 
 ## Trigger-pattern and MIDI-export foundation
 

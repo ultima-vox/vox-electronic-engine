@@ -34,8 +34,8 @@ struct NoiseProgram {
     }
 };
 
-// Allocation-free one-shot events. The plugin currently uses a four-second
-// event. Note-off is ignored in one-shot mode; all-sound-off fades over 5 ms.
+// Allocation-free one-shot events. Duration is captured at note-on; note-off
+// is ignored in one-shot mode and all-sound-off fades over 5 ms.
 class NoiseRiser {
 public:
     void prepare(double sampleRate) noexcept {
