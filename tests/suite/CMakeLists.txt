@@ -425,6 +425,7 @@ add_test(NAME suite_fx_sample_reference_tests COMMAND suite_fx_sample_reference_
 set_tests_properties(suite_fx_sample_reference_tests PROPERTIES LABELS suite)
 
 add_executable(suite_fx_sample_controller_tests FxSampleControllerTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_sample_controller_tests)
 target_link_libraries(suite_fx_sample_controller_tests PRIVATE juce::juce_cryptography)
 target_compile_definitions(suite_fx_sample_controller_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_include_directories(suite_fx_sample_controller_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)

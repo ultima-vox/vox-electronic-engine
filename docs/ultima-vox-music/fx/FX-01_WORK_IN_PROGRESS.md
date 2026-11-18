@@ -786,3 +786,8 @@ select the built-in source; it reports loading, ready, missing and failed with
 the selected path in a tooltip. The chooser asks for licensed user content; no
 samples are bundled. The native chooser, visual layout, editor lifecycle and
 processor/A-B state tests remain unexecuted locally and need Windows/host checks.
+
+The concurrent standalone loader/restore/MIDI-engine stress test also runs the
+thread-local allocation probe around note-on, render and panic; Linux probe
+reported zero allocations. This does not replace allocation measurement of the
+JUCE processor callback or Windows host execution.
