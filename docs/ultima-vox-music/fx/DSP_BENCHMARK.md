@@ -138,3 +138,17 @@ Checksums, trigger acceptance/drop counts and saturation counts matched the
 previous run. Wall-clock variability and dominating synthesis/effects mean these
 numbers do not establish a speedup or a DAW deadline guarantee. The eight-cycle
 per-block rejection policy remains unchanged.
+
+A scheduler-only diagnostic compared the old full scan with bounded lookup on
+10,000 consecutive 128-sample blocks at 48 kHz / 137 BPM, using the same
+1536-entry schedule. Timing includes clock-call overhead; checksum covers
+trigger offsets and values. One Linux `-O2` run:
+
+```text
+full scan:      p50 3.317 p95 3.473 p99 4.742 max 40.489 us
+bounded lookup: p50 0.076 p95 0.104 p99 0.120 max 15.964 us
+checksum 655856 for both
+```
+
+This is a microbenchmark, not a DAW callback/deadline guarantee. A separate
+full-scan reference test checks individual events and ordering.
