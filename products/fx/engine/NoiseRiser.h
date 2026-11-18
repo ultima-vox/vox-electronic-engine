@@ -396,8 +396,9 @@ private:
                 // resetting the frequency by six octaves is masked.
                 const double factor = risingFactors_[index] + fraction * (risingFactors_[index + 1] - risingFactors_[index]);
                 source = 0.0;
+                constexpr std::array<double,6> octaveRatios {0.125, 0.25, 0.5, 1.0, 2.0, 4.0};
                 for (std::size_t partial = 0; partial < layer.partialPhases.size(); ++partial) {
-                    double octave = std::ldexp(1.0, static_cast<int>(partial) - 3) * factor;
+                    double octave = octaveRatios[partial] * factor;
                     if (static_cast<double>(partial) + 3.0 * t >= 6.0) octave *= 1.0 / 64.0;
                     const double frequency = noteHz_[static_cast<std::size_t>(v.note)] * octave;
                     const double weight = shepardWeights_[partial][index] + fraction * (shepardWeights_[partial][index + 1] - shepardWeights_[partial][index]);
@@ -405,7 +406,8 @@ private:
                     // Fade partials to zero before Nyquist rather than abruptly
                     // gating a moving partial as it crosses the cutoff.
                     const double antiAlias = std::clamp((0.45 * rate_ - frequency) / (0.05 * rate_), 0.0, 1.0);
-                    source += weight * antiAlias * std::sin(6.283185307179586 * phase);
+                    if (weight > 0.0 && antiAlias > 0.0)
+                        source += weight * antiAlias * std::sin(6.283185307179586 * phase);
                     phase += std::min(frequency, 0.45 * rate_) / rate_;
                     if (phase >= 1.0) phase -= 1.0;
                 }

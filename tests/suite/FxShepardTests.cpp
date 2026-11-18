@@ -8,6 +8,21 @@
 int main() {
     int failures = 0;
     auto check = [&](bool ok, const char* message) { if (!ok) { std::printf("FAIL: %s\n", message); ++failures; } };
+    // Optimized octave multipliers and silent-partial branch are mathematically
+    // identical to the original per-partial reference, including alias fade.
+    constexpr std::array<double,6> ratios{.125,.25,.5,1,2,4};
+    for(double rate:{44100.0,48000.0,96000.0})for(int note:{24,60,96,127})
+        for(int n=0;n<=1000;++n)for(std::size_t partial=0;partial<ratios.size();++partial){
+            const double t=n/1000.0,factor=std::exp2(3*t),base=440*std::exp2((note-69)/12.0);
+            double original=std::ldexp(1.0,static_cast<int>(partial)-3)*factor;
+            double optimized=ratios[partial]*factor;
+            if(static_cast<double>(partial)+3*t>=6){original/=64;optimized/=64;}
+            const double frequency=base*original,weight=std::sin(3.141592653589793*std::fmod(partial+3*t,6.0)/6.0);
+            const double w=weight*weight,antiAlias=std::clamp((.45*rate-frequency)/(.05*rate),0.0,1.0);
+            const double sine=std::sin(6.283185307179586*std::fmod(n*.017,1.0));
+            const double before=w*antiAlias*sine,after=(w>0&&antiAlias>0)?w*antiAlias*sine:0;
+            check(original==optimized && before==after,"optimized partial matches reference");
+        }
     for (double rate : {44100.0, 48000.0, 96000.0}) {
         auto aOwner=std::make_unique<vox::fx::NoiseRiser>(); auto bOwner=std::make_unique<vox::fx::NoiseRiser>(); auto riserOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& a=*aOwner; auto& b=*bOwner; auto& riser=*riserOwner;
         a.prepare(rate); b.prepare(rate); riser.prepare(rate);

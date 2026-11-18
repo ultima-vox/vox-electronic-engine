@@ -67,3 +67,23 @@ the 1,333 µs nominal block period warrant profiling on the target Windows DAW.
 96k Shepard 8x4 + 4x effect 6: p50 425.13 p95 481.47 p99 501.91 max 549.97 us; checksum -0.089174
 
 ```
+
+## Shepard constant-ratio/silent-partial optimization
+
+Same local diagnostic rerun after replacing per-sample ldexp with exact octave
+constants and skipping sine for muted partials. Full two-second float renders
+for notes 24, 60, 96 and 127 at 44.1/48/96 kHz were byte-identical to the
+previous implementation in a local before/after comparison. The unit test also
+compares partial math. Wall-clock runs are noisy and not comparable as a formal
+performance guarantee; no aliasing or DAW qualification is implied.
+
+```text
+96k Shepard 8x4 + 4x effect 0: p50 356.03 p95 500.56 p99 553.98 max 622.36 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 356.36 p95 495.44 p99 553.35 max 612.25 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 375.66 p95 542.49 p99 615.36 max 667.04 us; checksum -24.707053
+96k Shepard 8x4 + 4x effect 3: p50 390.67 p95 546.37 p99 590.88 max 617.03 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 368.00 p95 484.22 p99 539.45 max 592.48 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 355.87 p95 501.38 p99 591.45 max 640.41 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 496.04 p95 673.23 p99 713.89 max 720.24 us; checksum -0.089174
+
+```
