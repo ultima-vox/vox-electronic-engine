@@ -176,6 +176,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (auditionPending_.exchange (false, std::memory_order_acquire)) engine_.noteOn (1, 60, 0.8f, eventDuration);
     const int size = buffer.getNumSamples();
     if (buffer.getNumChannels() < 2 || size == 0) {
+        midi.clear(); // This instrument has no MIDI output, including empty blocks.
         peak_.store (0.0f, std::memory_order_relaxed);
         return;
     }
@@ -206,6 +207,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         // NoteOff and zero-velocity NoteOn are deliberately ignored in this
         // interim one-shot mode. CC120/123 and reset use a 5 ms fade.
     }
+    midi.clear(); // Consume input: never echo host MIDI from this instrument.
     renderTo (size);
     const auto fxSnapshot=audioEffects_;
     for (std::size_t i=0;i<4;++i) {

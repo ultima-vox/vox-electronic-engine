@@ -131,6 +131,7 @@ int main() {
     const auto allocations = voxProbeEnd();
     if (voxProbeAvailable()) check(allocations == 0, "no allocations on processor audio thread");
 #endif
+    check(midi.isEmpty(), "processor consumes MIDI without host MIDI output");
     midi.clear();
     check(audio.getMagnitude(0, 0, 100) == 0, "MIDI offset preserves leading silence");
     check(audio.getMagnitude(0, 101, 411) > 0, "MIDI trigger makes processor audio");
