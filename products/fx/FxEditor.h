@@ -21,6 +21,8 @@ public:
     juce::Slider& seedSlider() noexcept { return seed_; }
     juce::Button& generateButton() noexcept { return generate_; }
     juce::Button& mutateButton() noexcept { return mutate_; }
+    juce::ComboBox& patternGridSelector() noexcept { return patternGrid_; }
+    juce::ComboBox& patternPageSelector() noexcept { return patternPage_; }
     juce::ComboBox& patternStepSelector() noexcept { return patternStepSelector_; }
     juce::Slider& patternNoteSlider() noexcept { return patternDetails_[0]; }
     juce::Slider& patternVelocitySlider() noexcept { return patternDetails_[1]; }
@@ -50,7 +52,7 @@ private:
     vox::ui::VoxButton generate_ { "GENERATE" };
     vox::ui::VoxButton mutate_ { "MUTATE" };
     std::array<juce::ToggleButton,4> layerLocks_;
-    vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_;
+    vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
     std::array<juce::Slider,4> patternDetails_;
     std::array<juce::TextButton,16> patternSteps_;
     vox::ui::VoxButton patternEnabled_ { "HOST PATTERN", vox::ui::VoxButton::Type::Toggle };

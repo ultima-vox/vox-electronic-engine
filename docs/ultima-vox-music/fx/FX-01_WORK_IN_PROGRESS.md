@@ -406,7 +406,7 @@ full effects tails and tempo/pattern export still remain.
 
 ## Pattern state and controller
 
-FPAT v1 stores the bars, seed and all 64 step fields in explicit little-endian
+FPAT initially used v1 to store bars, seed and 64 step fields in explicit little-endian
 words with reserved-bit, length and range validation. Absent FPAT migrates to
 an empty default pattern; malformed/future data rejects the whole project
 transaction. Program, FX slot types and pattern now share one bounded atomic
@@ -446,3 +446,16 @@ The FX editor minimum height is 760 pixels so existing layer curve controls
 retain space; older smaller saved sizes are enlarged on opening. This is not
 the final pattern workspace: grid/swing options, accessibility audit, scaling/visual acceptance, and undo are still missing.
 ProgramStore tests, TSan and allocation probe passed; UI tests are syntax-only.
+
+## Pattern grid expansion and FPAT v2
+
+Straight quarter/eighth/sixteenth/thirty-second grids and their triplets use
+a fixed 960-PPQ timeline; up to 192 steps and 1536 note events cover four
+bars with four ratchets per step. The UI adds grid and 16-step page selectors;
+changing grid reinterprets step timing and leaves step indices intact. FPAT v2
+saves grid and all 192 steps; v1 migrates to a sixteenth grid, filling newly
+available steps with defaults. Tests cover all eight grids, MIDI/playback
+offset parity, 44.1/48/96 kHz and 64/128/512 blocks, maximum capacity,
+malformed/future state and v1 migration. Local ASan/UBSan, TSan store tests
+and allocation probe passed. Swing, real DAW transport/tempo transitions,
+UI visual/accessibility testing and processor-state runtime tests remain open.

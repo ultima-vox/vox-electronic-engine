@@ -113,7 +113,16 @@ FxPanel::FxPanel (FxProcessor& processor)
         if(id>=1 && id<=4)processor_.editPattern([id](pattern::Pattern& p){p.bars=static_cast<std::uint8_t>(id);});
         refreshPattern();};
     patternBar_.onChange=[this] {refreshPattern();};
-    addAndMakeVisible(patternLength_);addAndMakeVisible(patternBar_);
+    const char* gridNames[]{"1/4","1/8","1/16","1/32","1/4T","1/8T","1/16T","1/32T"};
+    for(int i=0;i<8;++i)patternGrid_.addItem(gridNames[i],i+1);
+    patternGrid_.setTitle("Pattern grid");patternGrid_.setTooltip("Changing grid reinterprets step timing without resampling steps");
+    patternGrid_.onChange=[this]{const int id=patternGrid_.getSelectedId();
+        if(id>=1&&id<=8)processor_.editPattern([id](pattern::Pattern& p){p.grid=static_cast<pattern::Grid>(id-1);});
+        refreshPattern();};
+    for(int i=1;i<=3;++i)patternPage_.addItem("Page "+juce::String(i),i);
+    patternPage_.setTitle("Step page within bar");patternPage_.setSelectedId(1,juce::dontSendNotification);
+    patternPage_.onChange=[this]{refreshPattern();};
+    addAndMakeVisible(patternLength_);addAndMakeVisible(patternBar_);addAndMakeVisible(patternGrid_);addAndMakeVisible(patternPage_);
     for(int i=1;i<=16;++i)patternStepSelector_.addItem(juce::String(i),i);
     patternStepSelector_.setTitle("Step to edit");patternStepSelector_.setTooltip("Choose a step to edit its note, velocity, probability and ratchets");
     patternStepSelector_.setSelectedId(1,juce::dontSendNotification);
@@ -124,11 +133,12 @@ FxPanel::FxPanel (FxProcessor& processor)
         slider.setRange(i==0||i==2?0:1,i==0?127:i==1?127:i==2?100:4,1);
         slider.setSliderStyle(juce::Slider::LinearHorizontal);slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,20);
         slider.setTextValueSuffix(suffixes[i]);slider.setTitle(detailNames[i]);slider.setTooltip(detailNames[i]);
-        slider.onValueChange=[this,i] {const int bar=patternBar_.getSelectedId(),step=patternStepSelector_.getSelectedId();
+        slider.onValueChange=[this,i] {const int bar=patternBar_.getSelectedId(),step=patternStepSelector_.getSelectedId(),page=patternPage_.getSelectedId();
             const int value=static_cast<int>(patternDetails_[i].getValue());
-            if(bar>=1&&bar<=4&&step>=1&&step<=16)processor_.editPattern([bar,step,i,value](pattern::Pattern& p){
-                if(bar>p.bars)return;
-                auto& selected=p.steps[static_cast<std::size_t>(bar-1)*16+static_cast<std::size_t>(step-1)];
+            if(bar>=1&&bar<=4&&step>=1&&step<=16&&page>=1&&page<=3)processor_.editPattern([bar,step,page,i,value](pattern::Pattern& p){
+                const auto steps=pattern::stepsPerBar(p.grid),local=static_cast<unsigned>((page-1)*16+step-1);
+                if(bar>p.bars||local>=steps)return;
+                auto& selected=p.steps[static_cast<std::size_t>(bar-1)*steps+local];
                 switch(i){case 0:selected.note=static_cast<std::uint8_t>(value);break;
                     case 1:selected.velocity=static_cast<std::uint8_t>(value);break;
                     case 2:selected.probability=static_cast<std::uint8_t>(value);break;
@@ -140,9 +150,10 @@ FxPanel::FxPanel (FxProcessor& processor)
         step.setButtonText(juce::String(static_cast<int>(i+1)));step.setClickingTogglesState(true);
         step.setTitle("Pattern step "+juce::String(static_cast<int>(i+1)));
         step.setTooltip("Enable or disable this sixteenth-note step in the selected bar");
-        step.onClick=[this,i] {const int bar=patternBar_.getSelectedId();const bool enabled=patternSteps_[i].getToggleState();
-            if(bar>=1&&bar<=4)processor_.editPattern([bar,i,enabled](pattern::Pattern& p){
-                if(bar<=p.bars)p.steps[static_cast<std::size_t>(bar-1)*16+i].enabled=enabled;});
+        step.onClick=[this,i] {const int bar=patternBar_.getSelectedId(),page=patternPage_.getSelectedId();const bool enabled=patternSteps_[i].getToggleState();
+            if(bar>=1&&bar<=4&&page>=1&&page<=3)processor_.editPattern([bar,page,i,enabled](pattern::Pattern& p){
+                const auto steps=pattern::stepsPerBar(p.grid);const auto local=static_cast<std::size_t>(page-1)*16+i;
+                if(bar<=p.bars&&local<steps)p.steps[static_cast<std::size_t>(bar-1)*steps+local].enabled=enabled;});
             patternStepSelector_.setSelectedId(static_cast<int>(i+1),juce::dontSendNotification);refreshPattern();};
         addAndMakeVisible(step);
     }
@@ -212,6 +223,8 @@ void FxPanel::resized()
     auto stepRow=getLocalBounds().reduced(32).removeFromBottom(115).removeFromTop(35);
     patternLength_.setBounds(stepRow.removeFromLeft(85).reduced(2));
     patternBar_.setBounds(stepRow.removeFromLeft(80).reduced(2));
+    patternGrid_.setBounds(stepRow.removeFromLeft(75).reduced(2));
+    patternPage_.setBounds(stepRow.removeFromLeft(75).reduced(2));
     const int stepWidth=stepRow.getWidth()/16;
     for(std::size_t i=0;i<patternSteps_.size();++i){auto area=i==15?stepRow:stepRow.removeFromLeft(stepWidth);
         patternSteps_[i].setBounds(area.reduced(2));}
@@ -228,15 +241,20 @@ void FxPanel::refreshPattern()
 {
     const auto pattern=processor_.patternSnapshot();
     patternLength_.setSelectedId(pattern.bars,juce::dontSendNotification);
-    const int bar=std::max(1,patternBar_.getSelectedId());
+    patternGrid_.setSelectedId(static_cast<int>(pattern.grid)+1,juce::dontSendNotification);
+    const int bar=std::clamp(patternBar_.getSelectedId(),1,4),page=std::clamp(patternPage_.getSelectedId(),1,3);
+    const auto steps=pattern::stepsPerBar(pattern.grid);
     for(std::size_t i=0;i<patternSteps_.size();++i) {
-        const bool inRange=bar<=pattern.bars;
+        const auto local=static_cast<std::size_t>(page-1)*16+i;
+        const bool inRange=bar<=pattern.bars && local<steps;
         patternSteps_[i].setEnabled(inRange);
-        patternSteps_[i].setToggleState(inRange && pattern.steps[static_cast<std::size_t>(bar-1)*16+i].enabled,juce::dontSendNotification);
+        patternSteps_[i].setToggleState(inRange && pattern.steps[static_cast<std::size_t>(bar-1)*steps+local].enabled,juce::dontSendNotification);
     }
     const auto stepIndex=std::clamp(patternStepSelector_.getSelectedId(),1,16);
-    const bool valid=bar<=pattern.bars;
-    const auto& selected=pattern.steps[static_cast<std::size_t>(bar-1)*16+static_cast<std::size_t>(stepIndex-1)];
+    const auto local=static_cast<std::size_t>(page-1)*16+static_cast<std::size_t>(stepIndex-1);
+    const bool valid=bar<=pattern.bars && local<steps;
+    const auto index=valid ? static_cast<std::size_t>(bar-1)*steps+local : 0;
+    const auto& selected=pattern.steps[index];
     const int values[]{selected.note,selected.velocity,selected.probability,selected.ratchets};
     for(std::size_t i=0;i<patternDetails_.size();++i){auto& slider=patternDetails_[i];slider.setEnabled(valid);
         if(!slider.isMouseButtonDown() && !slider.hasKeyboardFocus(true))slider.setValue(values[i],juce::dontSendNotification);}

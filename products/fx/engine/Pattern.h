@@ -10,17 +10,26 @@ namespace vox::fx::pattern {
 // Offline canonical trigger scheduler. Host-synchronized realtime integration
 // is not implemented yet; the same tick events are used by SMF export.
 inline constexpr std::uint32_t ppq=960, ticksPerStep=240;
+enum class Grid : std::uint8_t { quarter, eighth, sixteenth, thirtysecond, quarterTriplet, eighthTriplet, sixteenthTriplet, thirtysecondTriplet, count };
+inline constexpr std::uint32_t gridTicks(Grid grid) noexcept {
+    constexpr std::array<std::uint32_t,8> ticks{960,480,240,120,640,320,160,80};
+    const auto index=static_cast<unsigned>(grid);return index<ticks.size()?ticks[index]:0;
+}
+inline constexpr std::uint32_t stepsPerBar(Grid grid) noexcept {
+    const auto ticks=gridTicks(grid);return ticks?4*ppq/ticks:0;
+}
 struct Step {
     bool enabled=false;
     std::uint8_t note=60, velocity=100, probability=100, ratchets=1;
     bool valid() const noexcept { return note<128 && velocity>0 && velocity<128 && probability<=100 && ratchets>=1 && ratchets<=4; }
 };
 struct Pattern {
-    std::array<Step,64> steps{};
+    std::array<Step,192> steps{};
     std::uint8_t bars=1;
+    Grid grid=Grid::sixteenth;
     std::uint32_t seed=1;
     bool valid() const noexcept {
-        if(bars<1||bars>4)return false;
+        if(bars<1||bars>4||gridTicks(grid)==0)return false;
         for(const auto& step:steps)if(!step.valid())return false;
         return true;
     }
@@ -28,17 +37,18 @@ struct Pattern {
 struct Event { std::uint32_t tick=0;std::uint8_t note=0,velocity=0;bool on=false; };
 // Fixed-capacity canonical schedule, also suitable for audio-thread handoff.
 // Note-off precedes the following ratchet; construction is already ordered.
-struct FixedSchedule { std::array<Event,512> events{}; std::size_t count=0; };
+struct FixedSchedule { std::array<Event,1536> events{}; std::size_t count=0; };
 inline bool scheduleFixed(const Pattern& p,FixedSchedule& output) noexcept {
     if(!p.valid())return false;
     FixedSchedule next;
     std::uint32_t rng=p.seed?p.seed:1;
-    for(std::uint32_t i=0;i<static_cast<std::uint32_t>(p.bars)*16;++i){
+    const auto stepTicks=gridTicks(p.grid);
+    for(std::uint32_t i=0;i<static_cast<std::uint32_t>(p.bars)*stepsPerBar(p.grid);++i){
         const auto& s=p.steps[i];rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
         if(!s.enabled || rng%100>=s.probability)continue;
         for(std::uint32_t r=0;r<s.ratchets;++r){
-            const auto start=i*ticksPerStep+(r*ticksPerStep)/s.ratchets;
-            const auto end=i*ticksPerStep+((r+1)*ticksPerStep)/s.ratchets;
+            const auto start=i*stepTicks+(r*stepTicks)/s.ratchets;
+            const auto end=i*stepTicks+((r+1)*stepTicks)/s.ratchets;
             const auto length=std::max(1u,(end-start)*3/4);
             next.events[next.count++]={start,s.note,s.velocity,true};
             next.events[next.count++]={start+length,s.note,0,false};
@@ -53,7 +63,7 @@ inline bool schedule(const Pattern& p,std::vector<Event>& output) {
 }
 // Host-synchronized trigger enumeration for a constant-tempo block. Events are
 // rounded to the nearest sample, matching MIDI tick conversion; PPQ is in quarter notes. Bounds
-// are proportional to the block duration, with at most 512 events per 4 bars.
+// are proportional to the block duration, with at most 1536 events per 4 bars.
 // Only note-on is emitted because the current instrument is one-shot.
 template <typename Emit>
 inline bool forEachTrigger(const FixedSchedule& schedule,unsigned bars,double ppqPosition,double bpm,
