@@ -120,5 +120,17 @@ int main(){
             check(audioRoutes.count==1&&audio.layers[0].gain==audioRoutes.routes[0].depth,"coherent Program and macro routes");
         }while(!finished.load(std::memory_order_acquire));producer.join();
     }
+    {
+        vox::fx::ProgramStore store;auto before=store.snapshotState();
+        vox::fx::NoiseProgram audio;std::uint64_t sequence=0;(void)store.tryRead(audio,sequence);
+        check(store.editGeneratorState([](vox::fx::generator::ControllerState& v){v.seed=123;v.locks.layers[2]=vox::fx::generator::all;}) &&
+              store.snapshotState().generator.seed==123,"edit saved generator controls");
+        check(!store.tryRead(audio,sequence),"controller-only generator settings do not republish DSP");
+        check(!store.editGeneratorState([](vox::fx::generator::ControllerState& v){v.seed=0;})&&
+              store.snapshotState().generator.seed==123,"reject invalid generator settings transactionally");
+        auto generator=store.snapshotState().generator;generator.seed=987;
+        check(store.publishState(before.program,before.effects,before.pattern,before.macros,generator)&&
+              store.snapshotState().generator.seed==987,"restore generator with Program snapshot");
+    }
     std::printf("FX Program store: %d failure(s)\n",fails);return fails?1:0;
 }

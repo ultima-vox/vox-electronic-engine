@@ -59,33 +59,35 @@ FxPanel::FxPanel (FxProcessor& processor)
     audition_.onClick = [this] { processor_.audition(); };
     panic_.onClick = [this] { processor_.panic(); };
     seed_.setRange (1, 2147483647, 1);
-    seed_.setValue (1, juce::dontSendNotification);
+    seed_.setValue (processor_.generatorState().seed, juce::dontSendNotification);
     seed_.setSliderStyle (juce::Slider::LinearHorizontal);
     seed_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 85, 25);
     seed_.setTitle ("Generator seed");
     seed_.setTooltip ("Deterministic seed for Generate and Mutate");
+    seed_.onValueChange=[this] {const auto seed=static_cast<std::uint32_t>(seed_.getValue());
+        (void)processor_.editGeneratorState([seed](generator::ControllerState& state){state.seed=seed;});};
     addAndMakeVisible (seed_);
     generate_.setTooltip ("Generate four layers for the selected family and seed; host duration is unchanged");
     mutate_.setTooltip ("Mutate layer gains, pans and gain curves using the seed");
     generate_.onClick = [this] {
         generator::Settings settings;
         settings.family = processor_.family(); settings.complexity = 4;
-        settings.seed = static_cast<std::uint32_t> (seed_.getValue());
-        generator::Locks locks;
-        for (std::size_t i=0;i<4;++i) if(layerLocks_[i].getToggleState()) locks.layers[i]=generator::all;
-        (void) processor_.generateProgram (settings, locks);
+        const auto controls=processor_.generatorState();settings.seed=controls.seed;
+        (void) processor_.generateProgram (settings, controls.locks);
     };
     mutate_.onClick = [this] {
-        generator::Locks locks;
-        for (std::size_t i=0;i<4;++i) if(layerLocks_[i].getToggleState()) locks.layers[i]=generator::all;
-        (void) processor_.mutateProgram (static_cast<std::uint32_t> (seed_.getValue()), locks);
+        const auto controls=processor_.generatorState();
+        (void) processor_.mutateProgram (controls.seed, controls.locks);
     };
     for(std::size_t i=0;i<4;++i) {
         layerLocks_[i].setButtonText(juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)));
         layerLocks_[i].setTitle("Lock entire layer " + juce::String(static_cast<int>(i+1)));
-        layerLocks_[i].setTooltip("Preserve this layer during Generate and Mutate (editor session only)");
+        layerLocks_[i].setTooltip("Preserve this layer during Generate and Mutate; saved in the project");
+        layerLocks_[i].onClick=[this,i]{const auto mask=layerLocks_[i].getToggleState()?static_cast<std::uint32_t>(generator::all):0u;
+            (void)processor_.editGeneratorState([i,mask](generator::ControllerState& state){state.locks.layers[i]=mask;});};
         addAndMakeVisible(layerLocks_[i]);
     }
+    refreshGenerator();
     addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
     for (int i=0; i<4; ++i) {
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
@@ -296,6 +298,12 @@ void FxPanel::refreshPattern()
     // the user can recover by selecting an existing step on this page.
     patternStepSelector_.setEnabled(bar<=pattern.bars && static_cast<unsigned>((page-1)*16)<steps);
 }
+void FxPanel::refreshGenerator()
+{
+    const auto controls=processor_.generatorState();
+    if(!seed_.isMouseButtonDown()&&!seed_.hasKeyboardFocus(true))seed_.setValue(controls.seed,juce::dontSendNotification);
+    for(std::size_t i=0;i<4;++i)layerLocks_[i].setToggleState(controls.locks.layers[i]!=0,juce::dontSendNotification);
+}
 void FxPanel::refreshMacro()
 {
     const int id=macroSelector_.getSelectedId();if(id<1||id>8)return;
@@ -308,7 +316,7 @@ void FxPanel::timerCallback()
     if (!isShowing()) return;
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
-    refreshPattern();refreshMacro();
+    refreshPattern();refreshMacro();refreshGenerator();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {

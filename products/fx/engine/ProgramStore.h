@@ -3,6 +3,7 @@
 #include "Effects.h"
 #include "PatternCodec.h"
 #include "MacroRouting.h"
+#include "GeneratorState.h"
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -19,33 +20,40 @@ namespace vox::fx {
 class ProgramStore {
 public:
     ProgramStore() { (void) publish(NoiseProgram{}); }
-    struct Snapshot { NoiseProgram program; std::uint64_t effects=effects::defaults(); pattern::Pattern pattern; macro::Config macros; };
+    struct Snapshot { NoiseProgram program; std::uint64_t effects=effects::defaults(); pattern::Pattern pattern; macro::Config macros; generator::ControllerState generator; };
+    bool publishState(const NoiseProgram& program, std::uint64_t effectsValue, const pattern::Pattern& patternValue,
+                      const macro::Config& macrosValue, const generator::ControllerState& generatorValue) {
+        std::vector<std::byte> encoded;
+        if (!programcodec::encode(program,encoded)||!effects::validPacked(effectsValue)||!patternValue.valid()||!macrosValue.valid()||!generatorValue.valid())return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        commit(program,encoded,effectsValue,patternValue,macrosValue,generatorValue);return true;
+    }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue, const pattern::Pattern& patternValue,
                       const macro::Config& macrosValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program,encoded) || !effects::validPacked(effectsValue) || !patternValue.valid() || !macrosValue.valid())return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program,encoded,effectsValue,patternValue,macrosValue);return true;
+        commit(program,encoded,effectsValue,patternValue,macrosValue,desiredGenerator_);return true;
     }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue, const pattern::Pattern& patternValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded) || !effects::validPacked(effectsValue) || !patternValue.valid()) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program, encoded, effectsValue, patternValue, desiredMacros_);
+        commit(program, encoded, effectsValue, patternValue, desiredMacros_, desiredGenerator_);
         return true;
     }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded) || !effects::validPacked(effectsValue)) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program, encoded, effectsValue, desiredPattern_, desiredMacros_);
+        commit(program, encoded, effectsValue, desiredPattern_, desiredMacros_, desiredGenerator_);
         return true;
     }
     bool publish(const NoiseProgram& program) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded)) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program, encoded, desiredEffects_, desiredPattern_, desiredMacros_);
+        commit(program, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
         return true;
     }
     // Serialized read-modify-write preserves edits to other layers even when
@@ -58,7 +66,7 @@ public:
         edit(next.layers[index]);
         std::vector<std::byte> encoded;
         if (!programcodec::encode(next, encoded)) return false;
-        commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_);
+        commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
         return true;
     }
     // Serialized whole-program edit. A false return aborts without publication;
@@ -70,7 +78,7 @@ public:
         if (!edit(next)) return false;
         std::vector<std::byte> encoded;
         if (!programcodec::encode(next, encoded)) return false;
-        commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_);
+        commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
         return true;
     }
     bool setLayerFamily(std::size_t index, NoiseFamily family) {
@@ -85,14 +93,14 @@ public:
         const auto next=(desiredEffects_&~mask)|(static_cast<std::uint64_t>(effects::pack(settings))<<shift);
         std::vector<std::byte> encoded;
         if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,next,desiredPattern_,desiredMacros_);return true;
+        commit(desired_,encoded,next,desiredPattern_,desiredMacros_,desiredGenerator_);return true;
     }
     bool setPattern(const pattern::Pattern& value) {
         if(!value.valid())return false;
         const std::lock_guard<std::mutex> lock(mutex_);
         std::vector<std::byte> encoded;
         if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,desiredEffects_,value,desiredMacros_);return true;
+        commit(desired_,encoded,desiredEffects_,value,desiredMacros_,desiredGenerator_);return true;
     }
     template <typename Edit>
     bool editPattern(Edit edit) {
@@ -101,23 +109,29 @@ public:
         if(!next.valid())return false;
         std::vector<std::byte> encoded;
         if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,desiredEffects_,next,desiredMacros_);return true;
+        commit(desired_,encoded,desiredEffects_,next,desiredMacros_,desiredGenerator_);return true;
     }
     bool setMacroConfig(const macro::Config& config) {
         if(!config.valid())return false;
         const std::lock_guard<std::mutex> lock(mutex_);std::vector<std::byte> encoded;
         if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,desiredEffects_,desiredPattern_,config);return true;
+        commit(desired_,encoded,desiredEffects_,desiredPattern_,config,desiredGenerator_);return true;
     }
     template<typename Edit> bool editMacroConfig(Edit edit) {
         const std::lock_guard<std::mutex> lock(mutex_);auto next=desiredMacros_;
         if(!edit(next)||!next.valid())return false;
         std::vector<std::byte> encoded;if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,desiredEffects_,desiredPattern_,next);return true;
+        commit(desired_,encoded,desiredEffects_,desiredPattern_,next,desiredGenerator_);return true;
+    }
+    template<typename Edit> bool editGeneratorState(Edit edit) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto next=desiredGenerator_;edit(next);if(!next.valid())return false;
+        // Controller metadata is not used in audio; avoid republishing the DSP graph.
+        desiredGenerator_=next;return true;
     }
     Snapshot snapshotState() const {
         const std::lock_guard<std::mutex> lock(mutex_);
-        return {desired_,desiredEffects_,desiredPattern_,desiredMacros_};
+        return {desired_,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_};
     }
     NoiseProgram snapshot() const {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -163,7 +177,7 @@ public:
 private:
     // Called with mutex_ held, only from producer threads.
     void commit(const NoiseProgram& program, const std::vector<std::byte>& encoded, std::uint64_t effectsValue,
-                const pattern::Pattern& patternValue,const macro::Config& macrosValue) noexcept {
+                const pattern::Pattern& patternValue,const macro::Config& macrosValue,const generator::ControllerState& generatorValue) noexcept {
         macro::codec::Words macroWords{};(void)macro::codec::toWords(macrosValue,macroWords);
         pattern::codec::Words patternWords{};
         (void) pattern::codec::toWords(patternValue,patternWords); // all controller entry points validate
@@ -179,7 +193,7 @@ private:
         effectWords_.store(effectsValue);
         for(std::size_t i=0;i<patternWords.size();++i)patternWords_[i].store(patternWords[i]);
         for(std::size_t i=0;i<macroWords.size();++i)macroWords_[i].store(macroWords[i]);
-        desired_ = program; desiredEffects_=effectsValue; desiredPattern_=patternValue; desiredMacros_=macrosValue;
+        desired_ = program; desiredEffects_=effectsValue; desiredPattern_=patternValue; desiredMacros_=macrosValue; desiredGenerator_=generatorValue;
         sequence_.fetch_add(1); // even: complete publication
     }
     static constexpr std::size_t maxWords = (4 + 4 * (24 + 2 * (4 + 16 * 12))) / 4;
@@ -190,6 +204,7 @@ private:
     std::uint64_t desiredEffects_=effects::defaults();
     pattern::Pattern desiredPattern_{};
     macro::Config desiredMacros_{};
+    generator::ControllerState desiredGenerator_{};
     std::array<std::atomic<std::uint32_t>,macro::codec::wordCount> macroWords_{};
     std::array<std::atomic<std::uint32_t>,pattern::codec::wordCount> patternWords_{};
     std::atomic<std::uint64_t> effectWords_ {effects::defaults()};

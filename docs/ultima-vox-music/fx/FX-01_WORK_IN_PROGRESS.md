@@ -351,8 +351,7 @@ their captured program; new events see the published validated snapshot.
 Generate/Mutate deliberately leave host-automated duration and output gain
 untouched. Per-field lock support is available in the controller API, but the
 UI exposes whole-layer lock toggles plus family and seed (four generated
-layers, default settings); these toggles are editor-session-only and are not
-saved in project state. Program content is saved in existing FPRG state;
+layers, default settings); subsequent FGEN work saves the seed and masks. Program content is saved in existing FPRG state;
 the seed and generator settings themselves are not saved yet. Full generation,
 A/B, lock controls, preset browser and recallable metadata remain unfinished.
 Local ProgramStore and generator tests pass, and processor/editor sources and
@@ -498,3 +497,15 @@ destinations, general matrix UI, click-free route switching and automation
 of route depths are **not implemented**. Processor/UI and state tests are
 syntax-only. Local macro/codec/WAV tests, store TSan, ASan/UBSan and allocation
 probes passed; target-host RT and audible quality still require qualification.
+
+## Generator control recall
+
+FGEN v1 persists the exposed deterministic seed and four per-layer lock masks,
+with strict range/unknown-bit validation; missing FGEN defaults to seed 1 and
+unlocked layers. Controls live in the serialized ProgramStore snapshot and
+restore with the structural Program, while UI-only metadata edits do not
+publish to the audio thread. The interim UI toggles whole layers and preserves
+finer masks loaded from state; generator and mutation read the saved controls.
+Local codec/store tests, ASan/UBSan and TSan passed. Processor/editor recall
+and invalid-state tests are syntax-only; style, intensity, key, A/B, other
+locks and full generator metadata are still not integrated.

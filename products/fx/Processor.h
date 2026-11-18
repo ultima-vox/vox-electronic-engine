@@ -11,6 +11,7 @@ namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxGeneratorSectionTag = preset::makeTag ("FGEN");
 inline constexpr preset::Tag fxMacroSectionTag = preset::makeTag ("FMAC");
 inline constexpr preset::Tag fxMacroRouteSectionTag = preset::makeTag ("FMOD");
 inline constexpr preset::Tag fxPatternEnableSectionTag = preset::makeTag ("FPEN");
@@ -52,6 +53,8 @@ public:
     }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
+    generator::ControllerState generatorState() const { return programs_.snapshotState().generator; }
+    template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
     // Worker/controller thread only: captures the structural snapshot and
@@ -75,7 +78,7 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
 
 private:
     NoiseRiser engine_;

@@ -73,6 +73,16 @@ int main() {
         vox::fx::programcodec::encode(before,expected);vox::fx::programcodec::encode(recalled->program(),actual);
         check(expected==actual,"generated program survives host state recall");
         panel.layerLock(0).setToggleState(true,juce::sendNotificationSync);
+        auto generatorSaved=save(*generated);auto generatorRecall=std::make_unique<vox::fx::FxProcessor>();
+        generatorRecall->setStateInformation(generatorSaved.getData(),static_cast<int>(generatorSaved.getSize()));
+        vox::fx::FxPanel recalledPanel(*generatorRecall);
+        check(recalledPanel.seedSlider().getValue()==123 && recalledPanel.layerLock(0).getToggleState(),"generator seed and locks recalled in editor");
+        auto invalidGenerator=vox::preset::decode(std::span(static_cast<const std::byte*>(generatorSaved.getData()),generatorSaved.getSize()),vox::preset::makeTag("VXFX"),1);
+        for(auto& section:invalidGenerator.document.sections)if(section.tag==vox::fx::fxGeneratorSectionTag)section.data[0]=std::byte{2};
+        const auto invalidGeneratorBytes=vox::preset::encode(invalidGenerator.document);
+        if(invalidGeneratorBytes){generatorRecall->setStateInformation(invalidGeneratorBytes->data(),static_cast<int>(invalidGeneratorBytes->size()));
+            check(generatorRecall->lastStateError().isNotEmpty()&&save(*generatorRecall)==generatorSaved,"future generator state rejected transactionally");}
+        else check(false,"encode invalid generator state");
         panel.mutateButton().onClick();
         check(generated->program().layers[0].gain==before.layers[0].gain,"editor lock preserves selected layer");
         vox::fx::programcodec::encode(generated->program(),actual);

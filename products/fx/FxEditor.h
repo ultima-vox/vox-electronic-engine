@@ -45,6 +45,7 @@ private:
     void timerCallback() override;
     void refreshPattern();
     void refreshMacro();
+    void refreshGenerator();
     FxProcessor& processor_;
     vox::ui::VoxKnob output_ { "OUTPUT", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment attachment_;

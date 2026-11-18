@@ -383,3 +383,8 @@ vox_suite_add_allocation_probe(suite_fx_macro_routing_tests)
 target_include_directories(suite_fx_macro_routing_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_macro_routing_tests COMMAND suite_fx_macro_routing_tests)
 set_tests_properties(suite_fx_macro_routing_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_generator_state_tests FxGeneratorStateTests.cpp)
+target_include_directories(suite_fx_generator_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_generator_state_tests COMMAND suite_fx_generator_state_tests)
+set_tests_properties(suite_fx_generator_state_tests PROPERTIES LABELS suite)

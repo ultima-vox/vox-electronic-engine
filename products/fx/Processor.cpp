@@ -45,6 +45,11 @@ preset::Section encodeEffects (std::uint64_t packed, const std::array<float,4>& 
     }
     return section;
 }
+preset::Section encodeGenerator(const generator::ControllerState& state)
+{
+    preset::Section section;section.tag=fxGeneratorSectionTag;
+    (void)generator::statecodec::encode(state,section.data);return section;
+}
 preset::Section encodeMacros(const std::array<float,8>& values)
 {
     preset::Section section;section.tag=fxMacroSectionTag;
@@ -312,6 +317,7 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodePatternEnable (patternEnabled_->get()));
     std::array<float,8> macroValues{};for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
     out.push_back (encodeMacros(macroValues));out.push_back (encodeMacroRoutes(snapshot.macros));
+    out.push_back (encodeGenerator(snapshot.generator));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -401,6 +407,9 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     auto macroRoutes=std::make_shared<macro::Config>();
     if(const auto* section=doc.find(fxMacroRouteSectionTag))if(!macro::codec::decode(section->data,*macroRoutes)){
         error="Unsupported or malformed FX macro routes";return {};}
+    auto generatorState=std::make_shared<generator::ControllerState>();
+    if(const auto* section=doc.find(fxGeneratorSectionTag))if(!generator::statecodec::decode(section->data,*generatorState)){
+        error="Unsupported or malformed FX generator settings";return {};}
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
@@ -410,9 +419,10 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     result.sections.push_back (encodePatternEnable (patternEnabled));
     result.sections.push_back (encodeMacros (macroValues));
     result.sections.push_back (encodeMacroRoutes (*macroRoutes));
+    result.sections.push_back (encodeGenerator (*generatorState));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes] {
-        (void) programs_.publishState (*program, fx, *triggerPattern, *macroRoutes);
+    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes, generatorState] {
+        (void) programs_.publishState (*program, fx, *triggerPattern, *macroRoutes, *generatorState);
         for(std::size_t i=0;i<8;++i)macros_[i]->setValueNotifyingHost(macroValues[i]);
         patternEnabled_->setValueNotifyingHost(patternEnabled?1.0f:0.0f);
         for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
