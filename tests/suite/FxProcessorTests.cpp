@@ -79,6 +79,30 @@ int main() {
         check(generated->mutateProgram(222,locks),"locked mutation accepted");
         check(generated->program().layers[0].gain==locked.layers[0].gain,"locked layer preserved");
     }
+    {
+        auto effected=std::make_unique<vox::fx::FxProcessor>();
+        auto dry=std::make_unique<vox::fx::FxProcessor>();
+        vox::fx::FxPanel panel(*effected);
+        panel.effectSelector(0).setSelectedId(3,juce::sendNotificationSync);
+        panel.effectWet(0).setValue(.7,juce::sendNotificationSync);
+        check(effected->effect(0).type==vox::fx::effects::Type::drive &&
+              std::abs(effected->effect(0).wet-.7f)<.02f,"effect UI updates actual slot");
+        auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();
+        restoredFx->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
+        check(restoredFx->effectsSnapshot()==effected->effectsSnapshot(),"effects restored in state");
+        auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
+        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag)section.data[4]=std::byte{0xff};
+        const auto bad=vox::preset::encode(document.document);
+        if(bad){restoredFx->setStateInformation(bad->data(),static_cast<int>(bad->size()));
+            check(restoredFx->lastStateError().isNotEmpty()&&save(*restoredFx)==state,"invalid effects state rejected transactionally");}
+        effected->prepareToPlay(48000,512);dry->prepareToPlay(48000,512);
+        juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer n1,n2;
+        n1.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        n2.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        block(*effected,a,n1);block(*dry,b,n2);double difference=0;
+        for(int i=0;i<512;++i)difference+=std::abs(a.getSample(0,i)-b.getSample(0,i));
+        check(difference>1e-5,"serial shared effect changes processor output");
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;

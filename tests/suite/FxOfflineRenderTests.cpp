@@ -28,6 +28,13 @@ int main(){
     auto engine=std::make_unique<vox::fx::NoiseRiser>();engine->prepare(s.sampleRate);engine->setProgram(program);engine->noteOn(1,s.note,s.velocity,s.duration);
     float l[512]{},r[512]{};engine->render(l,r,512);
     for(std::size_t i=0;i<512;++i){const auto v=std::bit_cast<float>(word(56+i*8));check(v==l[i],"float WAV uses exact realtime DSP");}
+    s.effects[0]={vox::fx::effects::Type::lowpass,1,.5f};
+    check(vox::fx::offline::renderWav(program,s,wav),"effected WAV render");
+    check(wav.size()==56+(frames+s.sampleRate)*8,"filter tail included");
+    auto effected=std::make_unique<vox::fx::NoiseRiser>();effected->prepare(s.sampleRate);effected->setProgram(program);effected->noteOn(1,s.note,s.velocity,s.duration);
+    vox::fx::effects::Chain chain;chain.prepare(s.sampleRate);chain.set(0,s.effects[0]);
+    effected->render(l,r,512);chain.process(l,r,512);
+    for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline effects match realtime chain");
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

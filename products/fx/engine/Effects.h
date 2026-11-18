@@ -6,8 +6,7 @@
 #include <cstdint>
 
 namespace vox::fx::effects {
-// First non-delay effects. This is not yet connected to the product; delay,
-// reverb, modulation effects, serialization and host controls remain.
+// Initial non-delay effects; delay, reverb and modulation effects remain.
 enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, count };
 struct Settings {
     Type type=Type::bypass;
@@ -17,6 +16,25 @@ struct Settings {
                std::isfinite(wet)&&wet>=0&&wet<=1&&std::isfinite(amount)&&amount>=0&&amount<=1;
     }
 };
+// Compact, bounded structural state; UI resolution is 6/7 bits. One atomic
+// 64-bit word can publish all four slots as a coherent snapshot.
+inline std::uint16_t pack(Settings s) noexcept {
+    return static_cast<std::uint16_t>(static_cast<unsigned>(s.type) |
+        (static_cast<unsigned>(std::lround(s.wet*63))<<3) |
+        (static_cast<unsigned>(std::lround(s.amount*127))<<9));
+}
+inline Settings unpack(std::uint16_t word) noexcept {
+    return {static_cast<Type>(word&7u), static_cast<float>((word>>3)&63u)/63.0f,
+            static_cast<float>((word>>9)&127u)/127.0f};
+}
+inline std::uint64_t defaults() noexcept {
+    std::uint64_t result=0;for(unsigned i=0;i<4;++i)result|=static_cast<std::uint64_t>(pack({}))<<(16*i);
+    return result;
+}
+inline bool validPacked(std::uint64_t value) noexcept {
+    for(unsigned i=0;i<4;++i)if(!unpack(static_cast<std::uint16_t>(value>>(16*i))).valid())return false;
+    return true;
+}
 class Chain {
     struct State {
         Type type=Type::bypass;
@@ -74,6 +92,8 @@ private:
             }
             state.coefficientCounter=(state.coefficientCounter+1)&31u;
             state.lowL+=state.filterAlpha*(l-state.lowL);state.lowR+=state.filterAlpha*(r-state.lowR);
+            if(std::abs(state.lowL)<1.0e-15)state.lowL=0;
+            if(std::abs(state.lowR)<1.0e-15)state.lowR=0;
             l=state.lowL;r=state.lowR;break;
         }
         case Type::drive: {const double gain=1+15*amount,normalizer=1.0/std::tanh(gain);

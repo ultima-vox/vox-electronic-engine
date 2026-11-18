@@ -32,6 +32,13 @@ preset::Section encodeProgram (const NoiseProgram& program)
     (void) programcodec::encode (program, section.data); // validated on publication
     return section;
 }
+preset::Section encodeEffects (std::uint64_t packed)
+{
+    preset::Section section; section.tag=fxEffectsSectionTag;
+    for (const auto word : {std::uint32_t{1}, static_cast<std::uint32_t>(packed), static_cast<std::uint32_t>(packed >> 32)})
+        for (int shift=0; shift<32; shift+=8) section.data.push_back(static_cast<std::byte>((word>>shift)&0xffu));
+    return section;
+}
 std::uint32_t wordAt (const std::vector<std::byte>& data, std::size_t offset)
 {
     std::uint32_t value = 0;
@@ -82,10 +89,27 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
+bool FxProcessor::setEffect (std::size_t index, effects::Settings settings) noexcept
+{
+    if (index>=4 || !settings.valid()) return false;
+    const auto shift=static_cast<unsigned>(index*16);
+    const std::uint64_t mask=std::uint64_t{0xffff}<<shift;
+    auto old=effectsSettings_.load(std::memory_order_relaxed);
+    const auto bits=static_cast<std::uint64_t>(effects::pack(settings))<<shift;
+    while (!effectsSettings_.compare_exchange_weak(old,(old&~mask)|bits,std::memory_order_release,std::memory_order_relaxed)) {}
+    return true;
+}
+effects::Settings FxProcessor::effect (std::size_t index) const noexcept
+{
+    if (index>=4) return {};
+    return effects::unpack(static_cast<std::uint16_t>(effectsSnapshot()>>(index*16)));
+}
+
 void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
     engine_.prepare (rate);
+    (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     programSequence_ = 0;
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
@@ -175,6 +199,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         // interim one-shot mode. CC120/123 and reset use a 5 ms fade.
     }
     renderTo (size);
+    const auto fxSnapshot=effectsSnapshot();
+    for (std::size_t i=0;i<4;++i)
+        (void) effects_.set(i,effects::unpack(static_cast<std::uint16_t>(fxSnapshot>>(i*16))));
+    effects_.process(left,right,static_cast<std::size_t>(size));
     const auto target = output_->get();
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
     float peak = 0.0f;
@@ -194,6 +222,7 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     const auto program = programs_.snapshot();
     out.push_back (encodeFamily (static_cast<int> (program.layers[0].family)));
     out.push_back (encodeProgram (program));
+    out.push_back (encodeEffects (effectsSnapshot()));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -239,13 +268,24 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
             return {};
         }
     }
+    auto fx=effects::defaults();
+    if (const auto* section=doc.find(fxEffectsSectionTag)) {
+        if (section->data.size()!=12 || wordAt(section->data,0)!=1) {
+            error="Unsupported or malformed FX effects section"; return {};
+        }
+        fx=static_cast<std::uint64_t>(wordAt(section->data,4)) |
+           (static_cast<std::uint64_t>(wordAt(section->data,8))<<32);
+        if (!effects::validPacked(fx)) {error="Invalid FX effects settings";return {};}
+    }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
     result.sections.push_back (encodeProgram (*program));
+    result.sections.push_back (encodeEffects (fx));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held] {
+    result.apply = [this, value, duration, program, held, fx] {
         (void) programs_.publish (*program);
+        effectsSettings_.store(fx,std::memory_order_release);
         restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);

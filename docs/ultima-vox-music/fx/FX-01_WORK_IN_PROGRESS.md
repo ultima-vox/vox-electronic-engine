@@ -333,14 +333,13 @@ musical validation remain. MIDI represents triggers only, not synthesized audio.
 ## Offline WAV foundation
 
 A worker-only renderer creates stereo 24-bit PCM or 32-bit float RIFF/WAVE
-bytes using the same event DSP, bounded duration/rate, cancellation and atomic
+bytes using the same event DSP and initial effects, bounded duration/rate, cancellation and atomic
 progress. It returns bytes transactionally and rejects non-finite/out-of-range
 samples instead of silently clipping. Tests validate headers, sample/frame
 counts, exact float samples, decoded PCM error and cancellation; ASan/UBSan
 passed. No file chooser, background job integration, atomic file replacement,
-patterns, configurable tails or effects are connected yet. In particular, the
-present WAV renderer does not claim an effects tail because effects do not yet
-exist in the engine.
+patterns or configurable tails are connected yet. A lowpass slot appends a
+fixed one-second tail; full future effect-tail management remains unimplemented.
 
 ## Generator controller integration
 
@@ -363,6 +362,14 @@ lowpass, drive, wavefold, bitcrush, ring and gate, true bypass and smoothed
 wet/amount controls with 5 ms crossfades on structural changes. Local tests
 cover finite bounded output, each type changing audio, 4 slots, exact steady
 bypass, block invariance, validation, and a Linux callback allocation probe;
-ASan/UBSan passed. It is **not connected to plugin audio, state, controls or
-exports**, and omits delay/reverb, phaser/flanger/chorus, tails, latency and
+ASan/UBSan passed. This foundation is now wired to processor audio, basic Perform controls,
+versioned FXSL structural state and the worker renderer. Slot wet/amount are
+not yet host-automatable; FXSL values are quantized to 6/7 bits. Lowpass state
+is flushed at a tiny threshold and the host reports a conservative 33 second
+tail; worker WAV appends 1 second when lowpass is enabled. It omits
+delay/reverb, phaser/flanger/chorus, full tail/latency policy and
 aliasing/performance qualification. It is not a completed FX-04 processor.
+Processor/UI integration and state tests have only been syntax-checked, not
+executed. The controller's FX and layer snapshots are separately published;
+a concurrent host restore can expose an intermediate pairing to audio and
+requires a unified transactional snapshot before production acceptance.

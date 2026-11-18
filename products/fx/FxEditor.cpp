@@ -60,6 +60,26 @@ FxPanel::FxPanel (FxProcessor& processor)
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
         addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
     }
+    for (std::size_t i=0;i<4;++i) {
+        auto& type=effectsType_[i];
+        const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate"};
+        for (int n=0;n<7;++n) type.addItem(names[n],n+1);
+        type.setTitle("Shared effect slot " + juce::String(static_cast<int>(i+1)));
+        type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s); };
+        addAndMakeVisible(type);
+        for (auto* slider : {&effectsWet_[i],&effectsAmount_[i]}) {
+            slider->setRange(0,1,.001);slider->setSliderStyle(juce::Slider::LinearHorizontal);
+            slider->setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);addAndMakeVisible(*slider);
+        }
+        effectsWet_[i].setTitle("Slot " + juce::String(static_cast<int>(i+1)) + " wet mix");
+        effectsWet_[i].setTooltip("Wet mix (structural; not yet host automatable)");
+        effectsAmount_[i].setTitle("Slot " + juce::String(static_cast<int>(i+1)) + " amount");
+        effectsAmount_[i].setTooltip("Effect amount (structural; not yet host automatable)");
+        effectsWet_[i].onValueChange=[this,i] {auto s=processor_.effect(i);s.wet=static_cast<float>(effectsWet_[i].getValue());(void)processor_.setEffect(i,s);};
+        effectsAmount_[i].onValueChange=[this,i] {auto s=processor_.effect(i);s.amount=static_cast<float>(effectsAmount_[i].getValue());(void)processor_.setEffect(i,s);};
+        const auto s=processor_.effect(i);type.setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
+        effectsWet_[i].setValue(s.wet,juce::dontSendNotification);effectsAmount_[i].setValue(s.amount,juce::dontSendNotification);
+    }
     startTimerHz (25);
 }
 void FxPanel::paint (juce::Graphics& g)
@@ -72,6 +92,12 @@ void FxPanel::paint (juce::Graphics& g)
     g.setColour (c::textSecondary);
     g.setFont (vox::ui::typography::controlLabel());
     g.drawText ("One-shot event. Trigger with MIDI or audition.", area.removeFromTop (24), juce::Justification::centredLeft);
+    auto labels=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(14);
+    const int labelWidth=labels.getWidth()/4;
+    for(int i=0;i<4;++i) {
+        auto column=i==3?labels:labels.removeFromLeft(labelWidth);
+        g.drawText("FX " + juce::String(i+1) + "            WET       AMOUNT",column.reduced(3,0),juce::Justification::centredLeft);
+    }
     auto meter = getLocalBounds().reduced (32).removeFromBottom (55).removeFromLeft (320).toFloat();
     g.setColour (c::panelRaised); g.fillRoundedRectangle (meter, 4.0f);
     g.setColour (c::accent); g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * shownPeak_), 4.0f);
@@ -96,6 +122,13 @@ void FxPanel::resized()
     seed_.setBounds (generatorArea.removeFromTop (30)); generatorArea.removeFromTop (5);
     generate_.setBounds (generatorArea.removeFromTop (35)); generatorArea.removeFromTop (5);
     mutate_.setBounds (generatorArea.removeFromTop (35));
+    auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(45);
+    const int fxWidth=fxRow.getWidth()/4;
+    for (std::size_t i=0;i<4;++i) {
+        auto column=i==3?fxRow:fxRow.removeFromLeft(fxWidth);
+        column=column.reduced(3).withTrimmedTop(14);effectsType_[i].setBounds(column.removeFromLeft(column.getWidth()*4/10));
+        effectsWet_[i].setBounds(column.removeFromLeft(column.getWidth()/2));effectsAmount_[i].setBounds(column);
+    }
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(235);
     row.removeFromBottom(80);
@@ -111,6 +144,13 @@ void FxPanel::timerCallback()
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
+    const auto fx=processor_.effectsSnapshot();
+    for (std::size_t i=0;i<4;++i) {
+        const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
+        effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
+        if(!effectsWet_[i].isMouseButtonDown())effectsWet_[i].setValue(s.wet,juce::dontSendNotification);
+        if(!effectsAmount_[i].isMouseButtonDown())effectsAmount_[i].setValue(s.amount,juce::dontSendNotification);
+    }
     for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);
     repaint();

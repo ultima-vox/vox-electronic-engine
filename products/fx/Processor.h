@@ -4,11 +4,13 @@
 #include "engine/NoiseRiser.h"
 #include "engine/ProgramStore.h"
 #include "engine/Generator.h"
+#include "engine/Effects.h"
 
 namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxEffectsSectionTag = preset::makeTag ("FXSL");
 inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 
 // Work-in-progress standalone FX instrument. Structural edits are published
@@ -21,7 +23,7 @@ public:
     void reset() override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using vox::suite::SuiteProcessor::processBlock;
-    double getTailLengthSeconds() const override { return 32.0; }
+    double getTailLengthSeconds() const override { return 33.0; }
     juce::AudioProcessorEditor* createEditor() override;
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
@@ -39,6 +41,9 @@ public:
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
+    bool setEffect (std::size_t index, effects::Settings settings) noexcept;
+    effects::Settings effect (std::size_t index) const noexcept;
+    std::uint64_t effectsSnapshot() const noexcept { return effectsSettings_.load(std::memory_order_acquire); }
     NoiseProgram program() const { return programs_.snapshot(); }
     std::uint64_t programRestoreEpoch() const noexcept { return restoreEpoch_.load(std::memory_order_acquire); }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
@@ -46,10 +51,13 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag; }
 
 private:
     NoiseRiser engine_;
+    effects::Chain effects_;
+    static_assert (std::atomic<std::uint64_t>::is_always_lock_free);
+    std::atomic<std::uint64_t> effectsSettings_ { effects::defaults() };
     ProgramStore programs_;
     std::atomic<std::uint64_t> restoreEpoch_ { 0 };
     NoiseProgram audioProgram_;
