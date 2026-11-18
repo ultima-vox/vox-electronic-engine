@@ -63,6 +63,21 @@ int main(){
     vox::fx::effects::Chain chorus;chorus.prepare(s.sampleRate);chorus.set(0,s.effects[0]);
     chorused->render(l,r,512);chorus.process(l,r,512);
     for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline chorus matches realtime chain");
+    s.effects[0]={vox::fx::effects::Type::reverb,1,.8f};
+    check(vox::fx::offline::renderWav(program,s,wav),"reverb WAV render");
+    check(wav.size()==56+(frames+2*s.sampleRate)*8,"reverb tail included");
+    double reverbEnergy=0;for(std::size_t i=frames;i<frames+2*s.sampleRate;++i)
+        reverbEnergy+=std::abs(std::bit_cast<float>(word(56+i*8)));
+    check(reverbEnergy>0,"reverb tail contains event audio");
+    s.effects[1]={vox::fx::effects::Type::delay,1,0};
+    check(vox::fx::offline::renderWav(program,s,wav)&&wav.size()==56+(frames+5*s.sampleRate/2)*8,"reverb and delay tails accumulate");
+    s.effects[1]={};
+    auto reverbed=std::make_unique<vox::fx::NoiseRiser>();reverbed->prepare(s.sampleRate);reverbed->setProgram(program);reverbed->noteOn(1,s.note,s.velocity,s.duration);
+    vox::fx::effects::Chain reverb;reverb.prepare(s.sampleRate);reverb.set(0,s.effects[0]);
+    // Re-render without slot 2 for direct block parity.
+    check(vox::fx::offline::renderWav(program,s,wav),"reverb parity WAV");
+    reverbed->render(l,r,512);reverb.process(l,r,512);
+    for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline reverb matches realtime chain");
     s.effects[0]={};s.macroRoutes.setGainRoute(0,-.5f,0);s.macros[0]=1;
     check(vox::fx::offline::renderWav(program,s,wav),"macro routed WAV render");
     auto macroEngine=std::make_unique<vox::fx::NoiseRiser>();macroEngine->prepare(s.sampleRate);macroEngine->setProgram(program);macroEngine->noteOn(1,s.note,s.velocity,s.duration);

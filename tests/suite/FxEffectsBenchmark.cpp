@@ -12,7 +12,7 @@ int main(){
     constexpr double rate=96000;constexpr int block=128,iterations=400;
     for(auto effect:{vox::fx::effects::Type::bypass,vox::fx::effects::Type::lowpass,
                      vox::fx::effects::Type::drive,vox::fx::effects::Type::wavefold,
-                     vox::fx::effects::Type::bitcrush,vox::fx::effects::Type::ring,vox::fx::effects::Type::gate,vox::fx::effects::Type::phaser,vox::fx::effects::Type::flanger,vox::fx::effects::Type::delay,vox::fx::effects::Type::chorus}){
+                     vox::fx::effects::Type::bitcrush,vox::fx::effects::Type::ring,vox::fx::effects::Type::gate,vox::fx::effects::Type::phaser,vox::fx::effects::Type::flanger,vox::fx::effects::Type::delay,vox::fx::effects::Type::chorus,vox::fx::effects::Type::reverb}){
         auto engine=std::make_unique<vox::fx::NoiseRiser>();engine->prepare(rate);
         vox::fx::NoiseProgram program;for(auto& layer:program.layers){layer.enabled=true;layer.family=vox::fx::NoiseFamily::shepard;}
         if(!engine->setProgram(program))return 1;

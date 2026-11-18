@@ -7,8 +7,8 @@
 #include <vector>
 
 namespace vox::fx::effects {
-// Compact, bounded effects; reverb and advanced delay options remain.
-enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, count };
+// Compact, bounded effects; advanced controls and quality modes remain.
+enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, reverb, count };
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -49,7 +49,8 @@ class Chain {
         std::array<double,4> allpassL{},allpassR{};
         double phaseCoefficientL=0,phaseCoefficientR=0;
         unsigned bank=0;
-        std::size_t write=0,age=0;
+        std::size_t write=0,age=0,silentSamples=0;
+        std::array<std::size_t,4> reverbL{},reverbR{};
     };
     struct Bank { std::vector<float> left,right; };
     struct Slot {
@@ -197,6 +198,34 @@ private:
             if(state.age<size)++state.age;
             l=.5*(l+delayedL);r=.5*(r+delayedR);
             state.phase+=.22/rate_;if(state.phase>=1)state.phase-=1;break;
+        }
+        case Type::reverb: {
+            const auto size=bank.left.size();if(size<4)break;
+            if(state.coefficientCounter==0){
+                constexpr double leftTimes[]{.0297,.0371,.0411,.0437};
+                constexpr double rightTimes[]{.0311,.0389,.0443,.0479};
+                for(std::size_t i=0;i<4;++i){state.reverbL[i]=static_cast<std::size_t>(std::round(rate_*leftTimes[i]));
+                    state.reverbR[i]=static_cast<std::size_t>(std::round(rate_*rightTimes[i]));}
+                state.coefficientCounter=1;
+            }
+            if(std::abs(l)>1e-15||std::abs(r)>1e-15)state.silentSamples=0;
+            else if(state.silentSamples<static_cast<std::size_t>(rate_*2))++state.silentSamples;
+            // Hard tail bound: after two seconds without input, retire this
+            // bank logically (no buffer clear on the audio thread).
+            if(state.silentSamples>=static_cast<std::size_t>(rate_*2)){
+                state.write=state.age=0;l=r=0;break;
+            }
+            double sumL=0,sumR=0;
+            for(std::size_t i=0;i<4;++i){sumL+=readDelay(state,bank.left,static_cast<double>(state.reverbL[i]));
+                sumR+=readDelay(state,bank.right,static_cast<double>(state.reverbR[i]));}
+            sumL*=.25;sumR*=.25;
+            const double feedback=.1+.3*amount;
+            const auto safe=[](double value){value=std::clamp(value,-8.0,8.0);return static_cast<float>(std::abs(value)<1e-15?0:value);};
+            bank.left[state.write]=safe(l+feedback*(.8*sumL+.2*sumR));
+            bank.right[state.write]=safe(r+feedback*(.8*sumR+.2*sumL));
+            if(++state.write==size)state.write=0;
+            if(state.age<size)++state.age;
+            l=sumL;r=sumR;break;
         }
         case Type::count: break;
         }

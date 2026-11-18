@@ -36,18 +36,20 @@ inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(st
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
 inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++i)out.push_back(static_cast<std::uint8_t>(s[i]));}
 // Worker thread only. Renders the same event engine and shared effects;
-// allow up to one second of short-effect decay plus 0.5 s per serial delay.
+// allow one second of short-effect decay, 0.5 s per serial delay and
+// two seconds per serial reverb.
 // Output is transactional:
 // invalid input, cancellation or non-finite DSP leave the old bytes unchanged.
 inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
                       const std::atomic<bool>* cancel=nullptr,std::atomic<float>* progress=nullptr) {
     if(!program.valid()||!settings.valid())return false;
-    bool hasShortTail=false;unsigned delays=0;
+    bool hasShortTail=false;unsigned delays=0,reverbs=0;
     for(const auto& effect:settings.effects){
         if(effect.type==effects::Type::lowpass||effect.type==effects::Type::phaser||effect.type==effects::Type::flanger||effect.type==effects::Type::chorus)hasShortTail=true;
         if(effect.type==effects::Type::delay)++delays;
+        if(effect.type==effects::Type::reverb)++reverbs;
     }
-    const auto tail=std::ceil(settings.sampleRate*((hasShortTail?1.0:0.0)+.5*delays));
+    const auto tail=std::ceil(settings.sampleRate*((hasShortTail?1.0:0.0)+.5*delays+2.0*reverbs));
     const auto frames=static_cast<std::uint32_t>(std::ceil(static_cast<double>(settings.duration)*settings.sampleRate)+tail);
     const bool floating=settings.format==WavFormat::float32;
     const std::uint16_t bits=floating?32:24, bytesPerSample=bits/8, blockAlign=static_cast<std::uint16_t>(2*bytesPerSample);

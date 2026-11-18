@@ -640,3 +640,23 @@ four chorus slots p50 363.11, p95 532.68, p99 568.92, max 591.88 microseconds.
 These are not Windows/host or deadline qualification. Reverb, multiple delay
 taps/feedback, tempo sync, adjustable chorus controls, host testing, and
 allocation-failure reporting remain.
+
+## Bounded multitap reverb
+
+Each slot can select a basic four-tap-per-channel stereo feedback reverb.
+Amount changes feedback between 0.1 and 0.4; this is an initial algorithm, not
+a claim of production-quality room modeling. After two seconds below the
+input silence threshold, its bank is logically retired without callback
+clearing. Offline tail allowance adds two seconds per serial reverb (plus
+delay/short-effect allowances); host reports 41 seconds to conservatively
+cover a 32-second event and up to nine seconds of effects. Four serial reverb
+impulse decays were checked at 8 kHz within eight seconds. Full-range tail
+proof and real host Stop/bounce behavior remain unverified.
+
+Standalone stereo impulse, block-invariance, finite tail, reverb/delay WAV
+parity, type packing, ASan/UBSan and transition allocation tests pass.
+Processor/editor recall is syntax-only. A diagnostic Linux 96 kHz 128-frame
+8-event/4-layer Shepard + four reverbs run reported p50 333.63, p95 503.67,
+p99 557.15, max 640.84 microseconds; this is not host/Windows qualification.
+More perceptual validation, room/damping/predelay controls, tempo sync,
+feedback-delay options and automated quality policies remain.

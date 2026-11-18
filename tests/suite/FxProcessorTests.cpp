@@ -117,6 +117,11 @@ int main() {
         check(effected->effect(1).type==vox::fx::effects::Type::phaser,"editor selects phaser");
         panel.effectSelector(2).setSelectedId(9,juce::sendNotificationSync);
         check(effected->effect(2).type==vox::fx::effects::Type::flanger,"editor selects flanger");
+        panel.effectSelector(3).setSelectedId(12,juce::sendNotificationSync);
+        check(effected->effect(3).type==vox::fx::effects::Type::reverb,"editor selects reverb");
+        {auto reverbState=save(*effected);auto reverbRecall=std::make_unique<vox::fx::FxProcessor>();
+            reverbRecall->setStateInformation(reverbState.getData(),static_cast<int>(reverbState.getSize()));
+            check(reverbRecall->effect(3).type==vox::fx::effects::Type::reverb,"reverb type recalled");}
         panel.effectSelector(3).setSelectedId(10,juce::sendNotificationSync);
         check(effected->effect(3).type==vox::fx::effects::Type::delay,"editor selects delay");
         auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();

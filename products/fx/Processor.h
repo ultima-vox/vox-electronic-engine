@@ -29,7 +29,7 @@ public:
     void reset() override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using vox::suite::SuiteProcessor::processBlock;
-    double getTailLengthSeconds() const override { return 35.0; }
+    double getTailLengthSeconds() const override { return 41.0; }
     juce::AudioProcessorEditor* createEditor() override;
     juce::AudioParameterFloat& macroParameter(std::size_t index) noexcept { return *macros_[index]; }
     bool setMacroGainRoute(std::size_t index,float depth,float smoothing) {

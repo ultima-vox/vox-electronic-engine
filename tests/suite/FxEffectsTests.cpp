@@ -106,13 +106,33 @@ int main(){
                 x={};y={};}
             check(delayed>.1&&stereo>.01,"chorus produces modulated stereo delay");
         }
+        {
+            Chain a,b;check(a.prepare(rate)&&b.prepare(rate)&&a.set(0,{Type::reverb,1,.8f})&&b.set(0,{Type::reverb,1,.8f}),"reverb prepare");
+            std::array<float,512> x{},y{},xx{},yy{};
+            for(int block=0;block<5;++block){a.process(x.data(),y.data(),x.size());b.process(xx.data(),yy.data(),xx.size());}
+            double energy=0,stereo=0;
+            for(int block=0;block<static_cast<int>(rate*2.1/512)+1;++block){
+                x={};y={};if(block==0)x[0]=y[0]=1;xx=x;yy=y;
+                a.process(x.data(),y.data(),x.size());
+                for(std::size_t i=0;i<xx.size();i+=64)b.process(xx.data()+i,yy.data()+i,64);
+                check(x==xx&&y==yy,"reverb block invariant");
+                for(std::size_t i=0;i<x.size();++i){check(std::isfinite(x[i])&&std::abs(x[i])<=1,"reverb bounded");
+                    energy+=std::abs(x[i]);stereo+=std::abs(x[i]-y[i]);}
+            }
+            double late=0;for(float v:x)late+=std::abs(v);
+            check(energy>.5&&stereo>.05&&late<1e-7,"reverb diffuse stereo decay and finite tail");
+            x={};y={};a.process(x.data(),y.data(),x.size());
+            double stale=0;for(float value:x)stale+=std::abs(value);
+            check(stale==0,"reverb retired bank stays silent");
+            check(unpack(pack({Type::reverb,1,.8f})).type==Type::reverb,"reverb structural state");
+        }
         c.prepare(rate);for(std::size_t i=0;i<4;++i)check(c.set(i,{Type::flanger,.5f,.3f}),"four flanger slots");
 #ifdef VOX_TEST_INTERPOSE_MALLOC
         voxProbeBegin();
 #endif
         for(int iteration=0;iteration<16;++iteration){
-            const Type types[]{Type::phaser,Type::flanger,Type::delay,Type::chorus};
-            for(std::size_t i=0;i<4;++i)c.set(i,{types[(iteration+static_cast<int>(i))%4],.5f,.3f});
+            const Type types[]{Type::phaser,Type::flanger,Type::delay,Type::chorus,Type::reverb};
+            for(std::size_t i=0;i<4;++i)c.set(i,{types[(iteration+static_cast<int>(i))%5],.5f,.3f});
             c.process(l.data(),r.data(),l.size());
         }
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -132,6 +152,16 @@ int main(){
             for(std::size_t i=0;i<l.size();++i)if(std::abs(l[i])>1e-5f){if(energy==0)first=static_cast<std::size_t>(block)*l.size()+i;energy+=std::abs(l[i]);}
             l={};r={};}
         check(first==16000 && std::abs(energy-1)<.001,"four serial half-second delays have finite two-second tail");
+    }
+    {
+        Chain serial;check(serial.prepare(8000),"serial reverb prepare");
+        for(std::size_t i=0;i<4;++i)serial.set(i,{Type::reverb,1,1});
+        std::array<float,128> l{},r{};for(int block=0;block<20;++block)serial.process(l.data(),r.data(),l.size());
+        l[0]=r[0]=1;double energy=0,late=0;
+        for(int block=0;block<520;++block){serial.process(l.data(),r.data(),l.size());
+            for(float sample:l){energy+=std::abs(sample);if(block>510)late+=std::abs(sample);}
+            l={};r={};}
+        check(energy>.1&&late<1e-7,"four serial reverbs decay within eight-second allowance");
     }
     for(double rate:{8000.0,384000.0}){
         Chain edge;check(edge.prepare(rate)&&edge.set(0,{Type::flanger,1,0}),"flanger edge sample rate");

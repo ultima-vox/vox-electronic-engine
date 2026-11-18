@@ -126,7 +126,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     }
     for (std::size_t i=0;i<4;++i) {
         auto& type=effectsType_[i];
-        const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate","Phaser","Flanger","Delay","Chorus"};
+        const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate","Phaser","Flanger","Delay","Chorus","Reverb"};
         for (int n=0;n<7;++n) type.addItem(names[n],n+1);
         type.setTitle("Shared effect slot " + juce::String(static_cast<int>(i+1)));
         type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s); };
