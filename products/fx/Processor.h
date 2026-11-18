@@ -55,7 +55,10 @@ public:
         return programs_.setLayerFamily (0, static_cast<NoiseFamily> (family));
     }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
-    bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
+    bool setProgram (const NoiseProgram& program) {
+        if(!programs_.publish (program))return false;
+        restoreEpoch_.fetch_add(1,std::memory_order_release);return true;
+    }
     generator::ControllerState generatorState() const { return programs_.snapshotState().generator; }
     template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);

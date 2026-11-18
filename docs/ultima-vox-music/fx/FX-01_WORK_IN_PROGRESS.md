@@ -522,3 +522,14 @@ syntax-only. Rates, shape, tempo synchronization, seed editing, more sources
 and destinations, general matrix UI, and click-free structural changes remain.
 LFO phase is currently free-running in the live processor while offline render
 starts from reset, so live-to-WAV equality is not claimed for a running LFO.
+
+## Procedural seed Program selector
+
+The Perform panel can now load any of the 48 existing procedural layer seed
+Programs. These are explicitly labeled seed Programs, not curated factory
+presets: selecting one replaces only the layer Program, leaving host duration,
+output, macros, effects and pattern untouched. Whole-Program replacement also
+invalidates stale curve undo history. Generator DSP tests already cover audible
+finite renders and structural uniqueness; new editor, automation-precedence
+and history tests are syntax-only. Tags, preview/compare, favorites, searching,
+curation and perceptual/host acceptance remain unfinished.

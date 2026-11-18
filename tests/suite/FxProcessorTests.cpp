@@ -53,6 +53,9 @@ int main() {
               p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve edit changes program");
         check(curve.undo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 1.0f, "curve undo");
         check(curve.redo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve redo");
+        auto replacement=p.program();replacement.layers[1].gainCurve=vox::fx::timeline::Curve::constant(.8f);
+        check(p.setProgram(replacement),"replace Program after curve edit");curve.refresh(replacement.layers[1].gainCurve);
+        check(!curve.undo(),"whole Program replacement invalidates stale curve history");
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }
@@ -60,6 +63,10 @@ int main() {
         auto generated = std::make_unique<vox::fx::FxProcessor>();
         vox::fx::FxPanel panel(*generated);
         generated->durationParameter().setValueNotifyingHost(generated->durationParameter().convertTo0to1(7.0f));
+        panel.familySelector().setSelectedId(4, juce::sendNotificationSync);
+        panel.factorySelector().setSelectedId(21,juce::sendNotificationSync);
+        check(generated->family()==5 && std::abs(generated->durationParameter().get()-7.0f)<1e-4f,
+              "factory seed selection installs real Program without overwriting duration automation");
         panel.familySelector().setSelectedId(4, juce::sendNotificationSync);
         panel.seedSlider().setValue(123, juce::sendNotificationSync);
         panel.generateButton().onClick();

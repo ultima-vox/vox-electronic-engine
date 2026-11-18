@@ -65,6 +65,14 @@ FxPanel::FxPanel (FxProcessor& processor)
     refreshMacro();
     addAndMakeVisible (audition_);
     addAndMakeVisible (panic_);
+    const char* familyNames[]{"Noise Riser","Downlifter","Shepard","Impact","Whoosh","Laser","Squelch","Metallic","Texture","Formant","Glitch","Granular"};
+    factory_.setTextWhenNothingSelected("Load seed program...");factory_.setTitle("Procedural seed program");
+    factory_.setTooltip("Load an uncurated procedural layer seed; duration, effects, macros and pattern remain unchanged");
+    for(int i=0;i<48;++i)factory_.addItem(juce::String(familyNames[i/4])+" "+juce::String(1+i%4),i+1);
+    factory_.onChange=[this]{const int id=factory_.getSelectedId();generator::Result result;
+        if(id>=1&&id<=48&&generator::factory(static_cast<std::size_t>(id-1),result))(void)processor_.setProgram(result.program);
+        factory_.setSelectedId(0,juce::dontSendNotification);};
+    addAndMakeVisible(factory_);
     audition_.setTooltip ("Trigger the current program");
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
@@ -237,8 +245,9 @@ void FxPanel::resized()
     macroValue_.setBounds(macroRow.removeFromLeft(65).reduced(1));macroDepth_.setBounds(macroRow.reduced(1));
     area.removeFromLeft (20);
     auto buttons = area.removeFromLeft (160);
-    audition_.setBounds (buttons.removeFromTop (40)); buttons.removeFromTop (10);
-    panic_.setBounds (buttons.removeFromTop (40));
+    audition_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
+    panic_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
+    factory_.setBounds (buttons.removeFromTop (32));
     area.removeFromLeft (20);
     auto generatorArea = area.removeFromLeft (180);
     seed_.setBounds (generatorArea.removeFromTop (30)); generatorArea.removeFromTop (5);
