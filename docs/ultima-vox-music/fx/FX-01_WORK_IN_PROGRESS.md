@@ -805,5 +805,8 @@ remain unimplemented.
 Curve mouse/key handlers now check the Program replacement epoch before editing,
 refreshing the displayed curve and cancelling an in-progress drag on observed
 replacement. Added a JUCE regression for replacement during a drag; syntax
-checked only. Concurrent replacement between the epoch check and publication is
-not yet proven atomic and still needs processor/host concurrency qualification.
+checked only. ProgramStore now publishes a replacement revision under its writer mutex; curve
+edits compare that revision while holding the same mutex. A standalone concurrent
+stale-edit/restore test passed under TSan and ASan/UBSan, and the audio snapshot
+allocation probe passed. Actual JUCE processor/host concurrency still needs
+qualification.

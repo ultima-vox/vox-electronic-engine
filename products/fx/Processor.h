@@ -67,8 +67,7 @@ public:
     }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) {
-        if(!programs_.publish (program))return false;
-        restoreEpoch_.fetch_add(1,std::memory_order_release);return true;
+        return programs_.publish (program);
     }
     // Message/controller thread only. A/B snapshots are session-only and
     // deliberately recall all host parameter bases with host notification.
@@ -101,7 +100,11 @@ public:
     effects::Settings effect (std::size_t index) const;
     std::uint64_t effectsSnapshot() const { return programs_.snapshotState().effects; }
     NoiseProgram program() const { return programs_.snapshot(); }
-    std::uint64_t programRestoreEpoch() const noexcept { return restoreEpoch_.load(std::memory_order_acquire); }
+    std::uint64_t programRestoreEpoch() const noexcept { return programs_.programRevision(); }
+    ProgramStore::VersionedProgram versionedProgram() const { return programs_.versionedProgram(); }
+    template <typename Edit> bool editLayerIfRevision(std::size_t index,std::uint64_t revision,Edit edit) {
+        return programs_.editLayerIfRevision(index,revision,edit);
+    }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
 
 protected:
@@ -122,7 +125,6 @@ private:
     std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;
     std::array<juce::MemoryBlock,2> comparisons_; // controller thread only; not project state
-    std::atomic<std::uint64_t> restoreEpoch_ { 0 };
     NoiseProgram audioProgram_;
     pattern::Pattern audioPattern_;
     pattern::FixedSchedule audioPatternSchedule_;

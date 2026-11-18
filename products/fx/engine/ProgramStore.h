@@ -26,35 +26,35 @@ public:
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program,encoded)||!effects::validPacked(effectsValue)||!patternValue.valid()||!macrosValue.valid()||!generatorValue.valid())return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program,encoded,effectsValue,patternValue,macrosValue,generatorValue);return true;
+        commit(program,encoded,effectsValue,patternValue,macrosValue,generatorValue);advanceProgramRevision();return true;
     }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue, const pattern::Pattern& patternValue,
                       const macro::Config& macrosValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program,encoded) || !effects::validPacked(effectsValue) || !patternValue.valid() || !macrosValue.valid())return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program,encoded,effectsValue,patternValue,macrosValue,desiredGenerator_);return true;
+        commit(program,encoded,effectsValue,patternValue,macrosValue,desiredGenerator_);advanceProgramRevision();return true;
     }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue, const pattern::Pattern& patternValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded) || !effects::validPacked(effectsValue) || !patternValue.valid()) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
         commit(program, encoded, effectsValue, patternValue, desiredMacros_, desiredGenerator_);
-        return true;
+        advanceProgramRevision();return true;
     }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded) || !effects::validPacked(effectsValue)) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
         commit(program, encoded, effectsValue, desiredPattern_, desiredMacros_, desiredGenerator_);
-        return true;
+        advanceProgramRevision();return true;
     }
     bool publish(const NoiseProgram& program) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded)) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
         commit(program, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
-        return true;
+        advanceProgramRevision();return true;
     }
     // Serialized read-modify-write preserves edits to other layers even when
     // a UI gesture and a host-state restore arrive on different threads.
@@ -69,6 +69,23 @@ public:
         commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
         return true;
     }
+    // Compare under the same writer lock as whole-Program publication, so a
+    // stale UI gesture cannot modify a newly restored Program.
+    template <typename Edit>
+    bool editLayerIfRevision(std::size_t index,std::uint64_t revision,Edit edit) {
+        if(index>=4)return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if(programRevision_.load(std::memory_order_relaxed)!=revision)return false;
+        auto next=desired_;edit(next.layers[index]);std::vector<std::byte> encoded;
+        if(!programcodec::encode(next,encoded))return false;
+        commit(next,encoded,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_);return true;
+    }
+    std::uint64_t programRevision() const noexcept { return programRevision_.load(std::memory_order_acquire); }
+    struct VersionedProgram { NoiseProgram program;std::uint64_t revision; };
+    VersionedProgram versionedProgram() const {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        return {desired_,programRevision_.load(std::memory_order_relaxed)};
+    }
     // Serialized whole-program edit. A false return aborts without publication;
     // callers must not recursively enter this store from the editor function.
     template <typename Edit>
@@ -79,7 +96,7 @@ public:
         std::vector<std::byte> encoded;
         if (!programcodec::encode(next, encoded)) return false;
         commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
-        return true;
+        advanceProgramRevision();return true;
     }
     bool setLayerFamily(std::size_t index, NoiseFamily family) {
         if (static_cast<unsigned>(family) > static_cast<unsigned>(NoiseFamily::granular)) return false;
@@ -175,6 +192,7 @@ public:
         lastSequence=after; return true;
     }
 private:
+    void advanceProgramRevision() noexcept { programRevision_.fetch_add(1,std::memory_order_release); }
     // Called with mutex_ held, only from producer threads.
     void commit(const NoiseProgram& program, const std::vector<std::byte>& encoded, std::uint64_t effectsValue,
                 const pattern::Pattern& patternValue,const macro::Config& macrosValue,const generator::ControllerState& generatorValue) noexcept {
@@ -209,6 +227,7 @@ private:
     std::array<std::atomic<std::uint32_t>,pattern::codec::wordCount> patternWords_{};
     std::atomic<std::uint64_t> effectWords_ {effects::defaults()};
     std::atomic<std::uint64_t> sequence_ {0};
+    std::atomic<std::uint64_t> programRevision_ {0};
     std::atomic<std::uint32_t> wordCount_ {0};
     std::array<std::atomic<std::uint32_t>, maxWords> words_ {};
 };

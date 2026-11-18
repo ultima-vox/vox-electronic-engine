@@ -15,17 +15,18 @@ const timeline::Curve& curveFor(const NoiseLayer& layer,CurveEditor::Kind kind) 
 }
 class CurveChange final : public juce::UndoableAction {
 public:
-    CurveChange(FxProcessor& p,int layer,CurveEditor::Kind which,timeline::Curve before,timeline::Curve after)
-        : processor(p), index(layer), kind(which), oldCurve(before), newCurve(after) {}
+    CurveChange(FxProcessor& p,int layer,CurveEditor::Kind which,std::uint64_t revision,timeline::Curve before,timeline::Curve after)
+        : processor(p), index(layer), kind(which), expectedRevision(revision), oldCurve(before), newCurve(after) {}
     bool perform() override { return apply(newCurve); }
     bool undo() override { return apply(oldCurve); }
 private:
     bool apply(const timeline::Curve& curve) {
-        return processor.editLayer(static_cast<std::size_t>(index),[&](NoiseLayer& l){curveFor(l,kind)=curve;});
+        return processor.editLayerIfRevision(static_cast<std::size_t>(index),expectedRevision,[&](NoiseLayer& l){curveFor(l,kind)=curve;});
     }
     FxProcessor& processor;
     int index;
     CurveEditor::Kind kind;
+    std::uint64_t expectedRevision;
     timeline::Curve oldCurve,newCurve;
 };
 }
@@ -33,14 +34,16 @@ CurveEditor::CurveEditor(FxProcessor& processor,int layer) : processor_(processo
     setWantsKeyboardFocus(true);
     setTitle("Layer gain curve");
     setDescription("Double click to add nodes; drag to edit. Delete removes a node. L, S, E or H select segment shape.");
-    shown_=curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_);
-    restoreEpoch_=processor_.programRestoreEpoch();
+    const auto snapshot=processor_.versionedProgram();
+    shown_=curveFor(snapshot.program.layers[static_cast<std::size_t>(layer_)],kind_);
+    restoreEpoch_=snapshot.revision;
 }
 void CurveEditor::setKind(Kind kind) {
     if(kind_==kind)return;
     kind_=kind;dragging_=false;selected_=-1;undo_.clearUndoHistory();
     setTitle(kind_==Kind::gain?"Layer gain curve":"Layer pan curve");
-    shown_=curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_);
+    const auto snapshot=processor_.versionedProgram();
+    shown_=curveFor(snapshot.program.layers[static_cast<std::size_t>(layer_)],kind_);restoreEpoch_=snapshot.revision;
     repaint();
 }
 juce::Rectangle<float> CurveEditor::graph() const noexcept { return getLocalBounds().toFloat().reduced(8.0f); }
@@ -68,26 +71,34 @@ void CurveEditor::paint(juce::Graphics& g) {
     if(hasKeyboardFocus(true)){g.setColour(c::text);g.drawRoundedRectangle(r,3.0f,1.5f);}
 }
 void CurveEditor::syncRestore() {
-    const auto epoch=processor_.programRestoreEpoch();
-    if(epoch!=restoreEpoch_) {
-        undo_.clearUndoHistory();dragging_=false;selected_=-1;restoreEpoch_=epoch;
-        shown_=curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_);
+    const auto snapshot=processor_.versionedProgram();
+    if(snapshot.revision!=restoreEpoch_) {
+        undo_.clearUndoHistory();dragging_=false;selected_=-1;restoreEpoch_=snapshot.revision;
+        shown_=curveFor(snapshot.program.layers[static_cast<std::size_t>(layer_)],kind_);
         repaint();
     }
 }
-void CurveEditor::refresh(const timeline::Curve& curve) {
-    syncRestore();
-    if(!dragging_ && curve.valid()){shown_=curve;if(selected_>=shown_.count)selected_=-1;repaint();}
+void CurveEditor::refresh(const timeline::Curve&) {
+    // Take curve and revision together; an earlier panel snapshot may already
+    // have been superseded by a host restore on another thread.
+    const auto snapshot=processor_.versionedProgram();
+    if(snapshot.revision!=restoreEpoch_) {
+        undo_.clearUndoHistory();dragging_=false;selected_=-1;restoreEpoch_=snapshot.revision;
+    }
+    if(!dragging_){shown_=curveFor(snapshot.program.layers[static_cast<std::size_t>(layer_)],kind_);
+        if(selected_>=shown_.count)selected_=-1;
+        repaint();}
 }
 bool CurveEditor::publish(const timeline::Curve& curve) {
-    return curve.valid() && processor_.editLayer(static_cast<std::size_t>(layer_),[&](NoiseLayer& l){curveFor(l,kind_)=curve;});
+    return curve.valid() && processor_.editLayerIfRevision(static_cast<std::size_t>(layer_),restoreEpoch_,
+        [&](NoiseLayer& l){curveFor(l,kind_)=curve;});
 }
 bool CurveEditor::setCurve(const timeline::Curve& curve) {
     syncRestore();
     if(!curve.valid())return false;
     const auto old=curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_);
     undo_.beginNewTransaction();
-    if(!undo_.perform(new CurveChange(processor_,layer_,kind_,old,curve)))return false;
+    if(!undo_.perform(new CurveChange(processor_,layer_,kind_,restoreEpoch_,old,curve)))return false;
     shown_=curve;repaint();return true;
 }
 bool CurveEditor::undo(){syncRestore();const bool ok=undo_.undo();refresh(curveFor(processor_.program().layers[static_cast<std::size_t>(layer_)],kind_));return ok;}
@@ -117,7 +128,7 @@ void CurveEditor::mouseUp(const juce::MouseEvent&) {
     if(!dragging_) return;
     dragging_=false;
     const auto after=shown_;undo_.beginNewTransaction();
-    (void)undo_.perform(new CurveChange(processor_,layer_,kind_,beforeDrag_,after));repaint();
+    (void)undo_.perform(new CurveChange(processor_,layer_,kind_,restoreEpoch_,beforeDrag_,after));repaint();
 }
 void CurveEditor::mouseDoubleClick(const juce::MouseEvent& event) {
     syncRestore();

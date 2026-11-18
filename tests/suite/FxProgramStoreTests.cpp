@@ -29,6 +29,25 @@ int main(){
           store.snapshot().layers[0].gain==.25f,"invalid whole-program edit leaves state unchanged");
     check(store.editProgram([](vox::fx::NoiseProgram& p){p.layers[2].gain=.75f;return true;}) &&
           store.snapshot().layers[2].gain==.75f,"whole-program edit published");
+    const auto revision=store.programRevision();
+    check(store.editLayerIfRevision(0,revision,[](vox::fx::NoiseLayer& l){l.pan=.25f;}),"matching revision accepts curve edit");
+    check(store.programRevision()==revision,"layer edit keeps replacement revision");
+    auto replacement=store.snapshot();replacement.layers[0].pan=-.75f;
+    check(store.publish(replacement)&&store.programRevision()!=revision,"whole program replacement advances revision");
+    check(!store.editLayerIfRevision(0,revision,[](vox::fx::NoiseLayer& l){l.pan=.9f;})&&
+          store.snapshot().layers[0].pan==-.75f,"stale curve edit cannot overwrite replacement");
+    {
+        vox::fx::ProgramStore racing;const auto old=racing.versionedProgram();
+        std::atomic<bool> started{false};
+        std::thread stale([&]{started.store(true,std::memory_order_release);
+            for(int i=0;i<10000;++i)(void)racing.editLayerIfRevision(0,old.revision,[](vox::fx::NoiseLayer& l){l.pan=.9f;});});
+        while(!started.load(std::memory_order_acquire))std::this_thread::yield();
+        auto restored=old.program;restored.layers[0].pan=-.75f;
+        check(racing.publish(restored),"concurrent replacement accepted");stale.join();
+        check(racing.snapshot().layers[0].pan==-.75f,"stale concurrent edits never overwrite replacement");
+        const auto current=racing.versionedProgram();
+        check(current.revision==racing.programRevision()&&current.program.layers[0].pan==-.75f,"revision and Program snapshot coherent");
+    }
     (void) store.tryRead(result,seen); // consume the pre-stress edit
     constexpr int iterations=30000;std::atomic<bool> done{false};
     std::thread writer([&]{for(int i=0;i<iterations;++i){vox::fx::NoiseProgram p;

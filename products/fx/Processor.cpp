@@ -121,7 +121,6 @@ bool FxProcessor::generateProgram (const generator::Settings& settings, const ge
         if (!generator::generate (settings, previous, locks, result)) return false;
         program = result.program; return true;
     });
-    if (committed) restoreEpoch_.fetch_add (1, std::memory_order_release);
     return committed;
 }
 
@@ -133,7 +132,6 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
         if (!generator::mutate (previous, locks, seed, result)) return false;
         program = result.program; return true;
     });
-    if (committed) restoreEpoch_.fetch_add (1, std::memory_order_release);
     return committed;
 }
 
@@ -476,7 +474,6 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
         patternEnabled_->setValueNotifyingHost(patternEnabled?1.0f:0.0f);
         for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
         samples_.commitRestore(std::move(preparedSample));
-        restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);
         *held = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
