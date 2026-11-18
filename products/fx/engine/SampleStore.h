@@ -80,6 +80,13 @@ public:
         lease.owner_=this;lease.slot_=id-1;lease.data_=slot.samples.data();lease.frames_=slot.samples.size();lease.rate_=slot.rate;
         return true;
     }
+    // Audio thread: transfer ownership without changing the refcount. Both
+    // leases must belong to the same consumer and destination must be empty.
+    bool transfer(Lease& from,Lease& to) noexcept {
+        if(from.owner_!=this||to.owner_!=nullptr)return false;
+        to.owner_=this;to.slot_=from.slot_;to.data_=from.data_;to.frames_=from.frames_;to.rate_=from.rate_;
+        from.owner_=nullptr;from.data_=nullptr;from.frames_=0;from.rate_=0;return true;
+    }
     // Audio thread: explicit bounded refcount decrement, no memory destruction.
     void release(Lease& lease) noexcept {
         if(lease.owner_!=this)return;

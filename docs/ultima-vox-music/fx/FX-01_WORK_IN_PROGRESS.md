@@ -715,3 +715,23 @@ malformed input sweep, disk/missing-file paths, store publication and
 ASan/UBSan. This decoder and store are still **not** wired to the instrument:
 asset manifest/path/hash state, missing-file policy, sample-rate-correct
 granular event/grain ownership, UI and offline capture remain unfinished.
+
+## Opt-in sample-backed granular engine path
+
+NoiseRiser can now attach a longer-lived sample store while stopped and an
+explicit per-note flag selects user sample playback; missing/racing content
+rejects the event instead of falling back. Each event holds an immutable lease,
+transferred to the retirement voice on steal and released after its event ends
+or reset. Grain playback includes source/output sample-rate ratio and handles
+short buffers/high rates; built-in procedural selection remains the default.
+Standalone tests cover replacement while events are active, new-event content,
+a 24-to-48 kHz spectral pitch check, extreme single-frame source rates, steals,
+panic, explicit fallback, concurrent writer/renderer TSan, ASan/UBSan and
+allocation probe. Existing riser/layer/granular/offline/store regressions pass;
+processor/editor code was syntax-checked only.
+
+This does **not** expose user sample import in the product yet. Processor
+lifetime, worker/UI load, project manifest/hash validation and missing-file
+policy, sample selection persistence, and offline sample snapshot/render are
+still required before exposing a control. The caller must keep the store alive
+longer than the engine and call attach only while stopped.

@@ -1,4 +1,5 @@
 #pragma once
+#include "SampleStore.h"
 
 #include "Timeline.h"
 #include <algorithm>
@@ -38,7 +39,18 @@ struct NoiseProgram {
 // is ignored in one-shot mode and all-sound-off fades over 5 ms.
 class NoiseRiser {
 public:
+    ~NoiseRiser() { releaseSampleLeases(); }
+    // Control thread only, while stopped. Attached store must outlive this
+    // engine and all rendering, including the destructor.
+    bool attachSampleStore(sample::Store* store) noexcept {
+        if(activeEventCount()!=0)return false;
+        releaseSampleLeases();sampleStore_=store;return true;
+    }
+    static double samplePlaybackStep(double sourceRate,double outputRate,double pitchRatio) noexcept {
+        return sourceRate/outputRate*pitchRatio;
+    }
     void prepare(double sampleRate) noexcept {
+        releaseSampleLeases();
         rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
         for (std::size_t i = 0; i < coefficients_.size(); ++i) {
             const double phase = static_cast<double>(i) / tableIntervals;
@@ -98,20 +110,29 @@ public:
     }
     // A ninth event fades the oldest in a dedicated bounded retirement slot.
     // If that slot is still fading, the incoming event is dropped.
-    bool noteOn(int channel, int note, float velocity, double duration = 4.0) noexcept {
+    bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false) noexcept {
         timeline::SecondsClock clock;
         if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
             !clock.start(duration, rate_)) return false;
         Voice* slot = nullptr;
         for (auto& voice : voices_) if (!voice.active) { slot = &voice; break; }
-        if (!slot) {
-            if (retiring_.active) return false;
-            slot = &*std::min_element(voices_.begin(), voices_.end(),
-                [](const Voice& a, const Voice& b) { return a.serial < b.serial; });
-            retiring_ = *slot; beginRelease(retiring_);
-            for (auto& grain : grains_)
-                if (grain.active && grain.serial == retiring_.serial) grain.voiceIndex = 8;
+        const bool stealing=slot==nullptr;
+        if(stealing){
+            if(retiring_.active)return false;
+            slot=&*std::min_element(voices_.begin(),voices_.end(),
+                [](const Voice& a,const Voice& b){return a.serial<b.serial;});
         }
+        // Explicit user selection never falls back if the content is missing
+        // or publication races acquisition. Acquire before changing voices.
+        sample::Store::Lease incoming;
+        if(userSample && (!sampleStore_ || !sampleStore_->acquire(incoming)))return false;
+        const auto slotIndex=static_cast<std::size_t>(slot-voices_.data());
+        if(stealing){
+            retiring_=*slot;beginRelease(retiring_);
+            if(sampleStore_&&sampleLeases_[slotIndex].data())(void)sampleStore_->transfer(sampleLeases_[slotIndex],sampleLeases_[8]);
+            for(auto& grain:grains_)if(grain.active&&grain.serial==retiring_.serial)grain.voiceIndex=8;
+        }
+        if(userSample)(void)sampleStore_->transfer(incoming,sampleLeases_[slotIndex]);
         *slot = {};
         slot->active = true; slot->channel = channel; slot->note = note;
         slot->velocity = std::clamp(velocity, 0.0f, 1.0f);
@@ -146,8 +167,12 @@ public:
     void render(float* left, float* right, int count) noexcept {
         for (int i = 0; i < count; ++i) {
             double l = 0, r = 0;
-            for (std::size_t voice=0; voice<voices_.size(); ++voice) tick(voices_[voice], l, r, voice);
+            for (std::size_t voice=0; voice<voices_.size(); ++voice) {
+                tick(voices_[voice], l, r, voice);
+                if(!voices_[voice].active&&sampleLeases_[voice].data())sampleStore_->release(sampleLeases_[voice]);
+            }
             tick(retiring_, l, r, 8);
+            if(!retiring_.active&&sampleLeases_[8].data())sampleStore_->release(sampleLeases_[8]);
             mixGrains(l, r);
             left[i] = static_cast<float>(l * 0.055);
             right[i] = static_cast<float>(r * 0.055);
@@ -234,8 +259,11 @@ private:
                 if (layer.grainCountdown == 0) {
                     for (auto& grain:grains_) if (!grain.active) {
                         grain.active=true; ++activeGrains_; grain.voiceIndex=voiceIndex; grain.layerIndex=i; grain.serial=v.serial;
-                        grain.position=static_cast<double>(layer.rng % sample_.size());
-                        grain.speed=std::clamp(noteHz_[static_cast<std::size_t>(v.note)] / noteHz_[60], 0.25, 4.0);
+                        const auto& lease=sampleLeases_[voiceIndex];
+                        const auto length=lease.data()?lease.frames():sample_.size();
+                        grain.position=static_cast<double>(layer.rng % length);
+                        const auto ratio=std::clamp(noteHz_[static_cast<std::size_t>(v.note)] / noteHz_[60], 0.25, 4.0);
+                        grain.speed=lease.data()?samplePlaybackStep(lease.rate(),rate_,ratio):ratio;
                         grain.age=0; grain.length=grainLength_; break;
                     }
                     layer.grainCountdown=grainInterval_;
@@ -452,10 +480,13 @@ private:
             if (!owner.active || owner.serial != grain.serial || grain.age >= grain.length) { grain.active=false; --activeGrains_; continue; }
             const auto& layer = owner.layers[grain.layerIndex];
             if (!layer.grainLayerActive) { grain.active=false; --activeGrains_; continue; }
-            const auto at=static_cast<std::size_t>(grain.position) % sample_.size();
-            const auto next=(at+1) % sample_.size();
+            const auto& lease=sampleLeases_[grain.voiceIndex];
+            const auto* data=lease.data()?lease.data():sample_.data();
+            const auto length=lease.data()?lease.frames():sample_.size();
+            const auto at=static_cast<std::size_t>(grain.position) % length;
+            const auto next=(at+1) % length;
             const double frac=grain.position - std::floor(grain.position);
-            const double source=sample_[at] + frac * (sample_[next] - sample_[at]);
+            const double source=data[at] + frac * (data[next] - data[at]);
             const double windowPos=static_cast<double>(grain.age) * (grainWindow_.size()-1) / (grain.length-1);
             const auto w=static_cast<std::size_t>(windowPos);
             const auto wn=std::min(w+1,grainWindow_.size()-1);
@@ -464,9 +495,12 @@ private:
             left+=sample*std::min(1.0,1.0-layer.grainPan);
             right+=sample*std::min(1.0,1.0+layer.grainPan);
             grain.position+=grain.speed;
-            if (grain.position >= sample_.size()) grain.position-=sample_.size();
+            if (grain.position >= length) grain.position=std::fmod(grain.position,static_cast<double>(length));
             if (++grain.age >= grain.length) { grain.active=false; --activeGrains_; }
         }
+    }
+    void releaseSampleLeases() noexcept {
+        if(sampleStore_)for(auto& lease:sampleLeases_)sampleStore_->release(lease);
     }
     static constexpr std::size_t tableIntervals = 4096;
     std::array<double, tableIntervals + 1> coefficients_ {}, pitchFactors_ {}, risingFactors_ {};
@@ -485,5 +519,7 @@ private:
     std::uint64_t serial_ = 0;
     std::array<Voice, 8> voices_ {};
     Voice retiring_ {};
+    sample::Store* sampleStore_=nullptr; // non-owning, lifetime guaranteed by caller
+    std::array<sample::Store::Lease,9> sampleLeases_{};
 };
 } // namespace vox::fx

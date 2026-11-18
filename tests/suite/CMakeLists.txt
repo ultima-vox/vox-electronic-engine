@@ -412,3 +412,9 @@ target_compile_definitions(suite_fx_sample_decode_tests PRIVATE JUCE_USE_CURL=0 
 target_include_directories(suite_fx_sample_decode_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_sample_decode_tests COMMAND suite_fx_sample_decode_tests)
 set_tests_properties(suite_fx_sample_decode_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_sample_granular_tests FxSampleGranularTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_sample_granular_tests)
+target_include_directories(suite_fx_sample_granular_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_sample_granular_tests COMMAND suite_fx_sample_granular_tests)
+set_tests_properties(suite_fx_sample_granular_tests PROPERTIES LABELS suite)
