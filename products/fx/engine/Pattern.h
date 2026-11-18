@@ -7,8 +7,7 @@
 #include <vector>
 
 namespace vox::fx::pattern {
-// Offline canonical trigger scheduler. Host-synchronized realtime integration
-// is not implemented yet; the same tick events are used by SMF export.
+// Canonical trigger scheduler shared by host-synchronized playback and SMF export.
 inline constexpr std::uint32_t ppq=960, ticksPerStep=240;
 enum class Grid : std::uint8_t { quarter, eighth, sixteenth, thirtysecond, quarterTriplet, eighthTriplet, sixteenthTriplet, thirtysecondTriplet, count };
 inline constexpr std::uint32_t gridTicks(Grid grid) noexcept {

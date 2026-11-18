@@ -103,6 +103,8 @@ int main() {
         auto effected=std::make_unique<vox::fx::FxProcessor>();
         auto dry=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::FxPanel panel(*effected);
+        check(panel.midiExportButton().isEnabled() && panel.midiExportButton().getTooltip().contains("120 BPM"),
+              "MIDI export control communicates fixed tempo");
         panel.effectSelector(0).setSelectedId(3,juce::sendNotificationSync);
         panel.effectWet(0).setValue(.7,juce::sendNotificationSync);
         check(effected->effect(0).type==vox::fx::effects::Type::drive &&

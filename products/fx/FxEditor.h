@@ -37,6 +37,7 @@ public:
     juce::ComboBox& patternBarSelector() noexcept { return patternBar_; }
     juce::Button& patternStep(std::size_t index) noexcept { return patternSteps_[index]; }
     juce::ComboBox& patternSelector() noexcept { return patternSelector_; }
+    juce::Button& midiExportButton() noexcept { return midiExport_; }
     juce::Button& patternButton() noexcept { return patternEnabled_; }
     juce::Button& layerLock(std::size_t index) noexcept { return layerLocks_[index]; }
     juce::ComboBox& effectSelector(std::size_t index) noexcept { return effectsType_[index]; }
@@ -44,6 +45,7 @@ public:
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
 private:
     void timerCallback() override;
+    void exportPattern();
     void refreshPattern();
     void refreshMacro();
     void refreshGenerator();
@@ -60,6 +62,8 @@ private:
     juce::Slider seed_;
     vox::ui::VoxButton generate_ { "GENERATE" };
     vox::ui::VoxButton mutate_ { "MUTATE" };
+    vox::ui::VoxButton midiExport_ { "EXPORT MIDI" };
+    std::unique_ptr<juce::FileChooser> exportChooser_;
     std::array<juce::ToggleButton,4> layerLocks_;
     vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
     std::array<juce::Slider,4> patternDetails_;

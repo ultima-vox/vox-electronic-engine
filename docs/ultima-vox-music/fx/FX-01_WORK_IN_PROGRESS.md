@@ -549,3 +549,15 @@ chorus, flanger, delay and reverb are still missing. A local Linux diagnostic
 96 kHz 128-frame 8-event/4-layer Shepard + four phasers run reported p50 278.32,
 p95 300.04, p99 320.12, max 344.37 microseconds; this is not host, Windows or
 deadline qualification.
+
+## Trigger-pattern MIDI save action
+
+The panel has an EXPORT MIDI action that captures the current pattern before
+opening an asynchronous save dialog. It writes a type-0 MIDI file at explicitly
+fixed 120 BPM, containing the deterministic trigger notes (not audio), using a
+temporary file and an overwrite-confirming chooser. Cancellation does nothing;
+errors are reported. A .mid extension is required instead of silently changing
+the confirmed destination. Pattern/scheduler/SMF standalone tests pass; panel
+code and its basic control assertion were syntax-checked against JUCE 9.0.1
+only. Native dialog, overwrite/error behavior and host interaction still require
+Windows runtime testing. WAV file UI, drag export and tempo selection remain.

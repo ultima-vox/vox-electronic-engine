@@ -73,6 +73,9 @@ FxPanel::FxPanel (FxProcessor& processor)
         if(id>=1&&id<=48&&generator::factory(static_cast<std::size_t>(id-1),result))(void)processor_.setProgram(result.program);
         factory_.setSelectedId(0,juce::dontSendNotification);};
     addAndMakeVisible(factory_);
+    midiExport_.setTitle("Export trigger pattern MIDI");
+    midiExport_.setTooltip("Export one pattern loop as MIDI at 120 BPM; contains trigger notes, not audio");
+    midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
     audition_.setTooltip ("Trigger the current program");
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
@@ -257,6 +260,7 @@ void FxPanel::resized()
     auto topLocks=lockArea.removeFromTop(30), bottomLocks=lockArea.removeFromTop(30);
     layerLocks_[0].setBounds(topLocks.removeFromLeft(45));layerLocks_[1].setBounds(topLocks);
     layerLocks_[2].setBounds(bottomLocks.removeFromLeft(45));layerLocks_[3].setBounds(bottomLocks);
+    lockArea.removeFromTop(5);midiExport_.setBounds(lockArea.removeFromTop(32));
     auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(45);
     const int fxWidth=fxRow.getWidth()/4;
     for (std::size_t i=0;i<4;++i) {
@@ -290,6 +294,36 @@ void FxPanel::resized()
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
         layers_[i]->setBounds(card.reduced(3));
     }
+}
+void FxPanel::exportPattern()
+{
+    // Capture before opening the chooser; later edits do not change the file.
+    const auto pattern=processor_.patternSnapshot();
+    exportChooser_=std::make_unique<juce::FileChooser>("Export trigger pattern as MIDI",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX Pattern.mid"),"*.mid");
+    midiExport_.setEnabled(false);
+    exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe=juce::Component::SafePointer<FxPanel>(this),pattern](const juce::FileChooser& chooser){
+            if(safe==nullptr)return;
+            safe->midiExport_.setEnabled(true);
+            auto target=chooser.getResult();if(target==juce::File{})return;
+            // Do not silently change the destination after the chooser's
+            // overwrite confirmation, which could overwrite another file.
+            if(!target.hasFileExtension("mid")){
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    "MIDI export failed","Choose a filename ending in .mid.");return;
+            }
+            std::vector<std::uint8_t> bytes;
+            bool success=pattern::exportMidi(pattern,120.0,bytes);
+            if(success){
+                juce::TemporaryFile temp(target);
+                success=temp.getFile().replaceWithData(bytes.data(),bytes.size()) && temp.overwriteTargetFileWithTemporary();
+            }
+            juce::AlertWindow::showMessageBoxAsync(success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+                success?"MIDI exported":"MIDI export failed",
+                success?"Trigger pattern exported at 120 BPM.":"Could not write the trigger pattern.");
+        });
 }
 void FxPanel::refreshPattern()
 {
