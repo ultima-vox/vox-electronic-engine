@@ -267,7 +267,9 @@ void FxPanel::refreshPattern()
     const int values[]{selected.note,selected.velocity,selected.probability,selected.ratchets};
     for(std::size_t i=0;i<patternDetails_.size();++i){auto& slider=patternDetails_[i];slider.setEnabled(valid);
         if(!slider.isMouseButtonDown() && !slider.hasKeyboardFocus(true))slider.setValue(values[i],juce::dontSendNotification);}
-    patternStepSelector_.setEnabled(valid);
+    // Keep the selector available when the current step is out of range so
+    // the user can recover by selecting an existing step on this page.
+    patternStepSelector_.setEnabled(bar<=pattern.bars && static_cast<unsigned>((page-1)*16)<steps);
 }
 void FxPanel::timerCallback()
 {

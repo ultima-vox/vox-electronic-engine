@@ -152,6 +152,13 @@ int main() {
         panel.patternStep(2).setToggleState(true,juce::sendNotificationSync);
         check(owner->patternSnapshot().grid==vox::fx::pattern::Grid::thirtysecondTriplet &&
               owner->patternSnapshot().steps[178].enabled,"editor addresses 32nd triplet last-bar page");
+        panel.patternGridSelector().setSelectedId(1,juce::sendNotificationSync);
+        panel.patternPageSelector().setSelectedId(1,juce::sendNotificationSync);
+        panel.patternStepSelector().setSelectedId(16,juce::sendNotificationSync);
+        check(panel.patternStepSelector().isEnabled() && !panel.patternNoteSlider().isEnabled(),
+              "step selector remains usable when previous step is outside grid");
+        panel.patternStepSelector().setSelectedId(1,juce::sendNotificationSync);
+        check(panel.patternNoteSlider().isEnabled(),"valid step re-enables detail controls");
         panel.patternSelector().setSelectedId(8,juce::sendNotificationSync);
         check(vox::fx::pattern::factory(7,pattern)&&owner->patternSnapshot().seed==pattern.seed,"pattern selector installs real pattern");
         std::vector<std::uint8_t> exported,expected;
