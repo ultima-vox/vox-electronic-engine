@@ -36,3 +36,23 @@ GitHub Actions evaluates repository secrets when a **new run starts**. Existing 
 
 After the owner started the Windows machines, a new PR synchronization event must verify that `choose_runner` selects `self-hosted`. Earlier hosted-mode SUCCESS does not prove the online branch; CI results must be tied to the new SHA and selector logs. Do not claim all four runners online merely because one Windows job has begun.
 
+
+## PR run queue control (2026-11-18)
+
+Both `suite.yml` and `build.yml` now declare workflow-level GitHub Actions `concurrency` with a key that is stable per **PR number and workflow**, not per commit SHA. `cancel-in-progress: false` intentionally leaves an already running test uninterrupted while new pushes **replace an older pending run**. At most one running and one pending run of a given workflow/PR should survive under the new configuration. Separate PRs retain independent groups; GitHub may assign different runner resources.
+
+Non-PR runs use the unique `github.run_id` and are **never coalesced**. This preserves every push-to-main and manually requested workflow run.
+
+The legacy `build.yml` only runs for PRs targeting `main` (plus push to `main`), avoiding expensive Rack builds on every standalone FX/Drums PR. The `suite.yml` remains the standalone Windows x64 VST3 build/test/validator gate for all PRs and `next/standalone-suite` pushes.
+
+**Compatibility:** These changes apply only after the workflow change is present in the workflow revision a PR run uses (after review/integration or explicit branch update). They do **not** retroactively prune queued runs from older workflow revisions, such as the existing long FX #156 backlog. For a one-time queue cleanup, cancel only superseded queued PR runs in Actions, preserving the *latest SHA*, currently running diagnostic jobs and required exact-head release evidence. Do not cancel another developer's in-progress work without coordination.
+
+To inspect and selectively cancel **old queued** runs using authenticated GitHub CLI, not a repository token with unnecessary Administration permissions:
+
+```powershell
+gh run list -R ultima-vox/vox-electronic-engine -b arena/d9776bd9-vox-electronic-engine -L 50 --json databaseId,headSha,status,workflowName
+# Inspect carefully; cancel only SUPERSEDED queued run IDs, never the newest head or a running test:
+gh run cancel RUN_ID -R ultima-vox/vox-electronic-engine
+```
+
+GitHub Actions concurrency is **not** a hard real-time preemption mechanism: a self-hosted runner that has become Offline after selection can still strand the previously selected run. That is a separate runner-health/watchdog concern.
