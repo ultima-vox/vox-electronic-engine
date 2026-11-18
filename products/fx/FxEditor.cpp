@@ -13,6 +13,47 @@ mod::Source sourceForControl(int id) noexcept {
     return mod::Source::count;
 }
 }
+GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
+    const char* names[]{"Style seed", "Active layers", "Intensity", "Energy", "Stereo"};
+    for(std::size_t i=0;i<labels_.size();++i){labels_[i].setText(names[i],juce::dontSendNotification);addAndMakeVisible(labels_[i]);}
+    for(int i=0;i<6;++i)style_.addItem("Style " + juce::String(i+1),i+1);
+    for(int i=1;i<=4;++i)complexity_.addItem(juce::String(i),i);
+    style_.setTitle("Generator style seed");complexity_.setTitle("Generator active layers");
+    style_.onChange=[this]{const auto value=style_.getSelectedId()-1;
+        (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.style=value;});};
+    complexity_.onChange=[this]{const auto value=complexity_.getSelectedId();
+        (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.complexity=value;});};
+    auto configure=[this](juce::Slider& slider,const char* title){slider.setRange(0,1,.01);
+        slider.setTitle(title);slider.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight,false,50,24);addAndMakeVisible(slider);};
+    configure(intensity_,"Generator intensity");configure(energy_,"Generator energy");configure(stereo_,"Generator stereo spread");
+    intensity_.onValueChange=[this]{const auto v=static_cast<float>(intensity_.getValue());
+        (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.intensity=v;});};
+    energy_.onValueChange=[this]{const auto v=static_cast<float>(energy_.getValue());
+        (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.energy=v;});};
+    stereo_.onValueChange=[this]{const auto v=static_cast<float>(stereo_.getValue());
+        (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.stereo=v;});};
+    addAndMakeVisible(style_);addAndMakeVisible(complexity_);addAndMakeVisible(close_);
+    close_.onClick=[this]{setVisible(false);};timerCallback();startTimerHz(15);
+}
+void GeneratorPanel::paint(juce::Graphics& g) {
+    g.fillAll(vox::ui::tokens::colour::panelRaised);
+    g.setColour(vox::ui::tokens::colour::border);g.drawRect(getLocalBounds(),1);
+}
+void GeneratorPanel::resized() {
+    auto area=getLocalBounds().reduced(10);close_.setBounds(area.removeFromBottom(26).removeFromRight(75));
+    for(std::size_t i=0;i<labels_.size();++i){auto row=area.removeFromTop(31);labels_[i].setBounds(row.removeFromLeft(100));
+        switch(i){case 0:style_.setBounds(row);break;case 1:complexity_.setBounds(row);break;
+            case 2:intensity_.setBounds(row);break;case 3:energy_.setBounds(row);break;case 4:stereo_.setBounds(row);break;default:break;}}
+}
+void GeneratorPanel::timerCallback() {
+    if(!isShowing())return;
+    const auto state=processor_.generatorState();
+    style_.setSelectedId(state.style+1,juce::dontSendNotification);
+    complexity_.setSelectedId(state.complexity,juce::dontSendNotification);
+    auto sync=[](juce::Slider& slider,float value){if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
+    sync(intensity_,state.intensity);sync(energy_,state.energy);sync(stereo_,state.stereo);
+}
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
       durationAttachment_ (processor.durationParameter(), duration_.getSlider())
@@ -118,10 +159,8 @@ FxPanel::FxPanel (FxProcessor& processor)
     generate_.setTooltip ("Generate four layers for the selected family and seed; host duration is unchanged");
     mutate_.setTooltip ("Mutate layer gains, pans and gain curves using the seed");
     generate_.onClick = [this] {
-        generator::Settings settings;
-        settings.family = processor_.family(); settings.complexity = 4;
-        const auto controls=processor_.generatorState();settings.seed=controls.seed;
-        (void) processor_.generateProgram (settings, controls.locks);
+        const auto controls=processor_.generatorState();
+        (void) processor_.generateProgram (controls.settings(processor_.family()), controls.locks);
     };
     mutate_.onClick = [this] {
         const auto controls=processor_.generatorState();
@@ -137,6 +176,10 @@ FxPanel::FxPanel (FxProcessor& processor)
     }
     refreshGenerator();
     addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
+    generatorSettings_.setTitle("Generator settings");generatorSettings_.setTooltip("Adjust style seed, active layers, intensity, energy and stereo spread");
+    generatorPanel_=std::make_unique<GeneratorPanel>(processor_);addChildComponent(*generatorPanel_);
+    generatorSettings_.onClick=[this]{generatorPanel_->setVisible(true);generatorPanel_->toFront(true);};
+    addAndMakeVisible(generatorSettings_);
     for (int i=0; i<4; ++i) {
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
         addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
@@ -288,7 +331,9 @@ void FxPanel::resized()
     factory_.setBounds (buttons.removeFromTop (32));
     area.removeFromLeft (20);
     auto generatorArea = area.removeFromLeft (180);
-    seed_.setBounds (generatorArea.removeFromTop (30)); generatorArea.removeFromTop (5);
+    auto seedRow=generatorArea.removeFromTop(30);
+    generatorSettings_.setBounds(seedRow.removeFromRight(65).reduced(1));seed_.setBounds(seedRow);
+    generatorArea.removeFromTop (5);
     generate_.setBounds (generatorArea.removeFromTop (35)); generatorArea.removeFromTop (5);
     mutate_.setBounds (generatorArea.removeFromTop (35));
     auto lockArea=area.removeFromLeft(100);
@@ -326,6 +371,7 @@ void FxPanel::resized()
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(247);
     row.removeFromBottom(120);
+    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(360,210));
     const int width = row.getWidth() / 4;
     for (std::size_t i=0; i<layers_.size(); ++i) {
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);

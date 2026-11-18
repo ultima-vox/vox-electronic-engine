@@ -816,3 +816,14 @@ avoiding extra copies of large user-sample buffers. Missing captures fail before
 opening the chooser, and allocation failure while copying a lease releases it
 and leaves an explicit unavailable capture. This path is syntax-checked; native
 chooser and out-of-memory behavior remain untested in a host.
+
+### Generator controls
+
+The interim generator settings panel now binds style-seed variant, layer count,
+intensity, energy and stereo spread to the real deterministic generator. FGEN v2
+stores these controls along with seed and locks; v1 migrates to the previously
+hard-coded UI defaults. Program family remains the selected family and host
+duration is not overwritten. Standalone state/migration/generation tests passed
+normally and under ASan/UBSan; JUCE UI/project roundtrip tests are syntax-checked
+only. Style is currently a deterministic seed variation, not a curated musical
+genre. Pitch/key, bars, full sound-design controls and curated presets remain.

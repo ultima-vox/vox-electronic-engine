@@ -103,7 +103,7 @@ int main() {
         vox::fx::FxPanel recalledPanel(*generatorRecall);
         check(recalledPanel.seedSlider().getValue()==123 && recalledPanel.layerLock(0).getToggleState(),"generator seed and locks recalled in editor");
         auto invalidGenerator=vox::preset::decode(std::span(static_cast<const std::byte*>(generatorSaved.getData()),generatorSaved.getSize()),vox::preset::makeTag("VXFX"),1);
-        for(auto& section:invalidGenerator.document.sections)if(section.tag==vox::fx::fxGeneratorSectionTag)section.data[0]=std::byte{2};
+        for(auto& section:invalidGenerator.document.sections)if(section.tag==vox::fx::fxGeneratorSectionTag)section.data[0]=std::byte{3};
         const auto invalidGeneratorBytes=vox::preset::encode(invalidGenerator.document);
         if(invalidGeneratorBytes){generatorRecall->setStateInformation(invalidGeneratorBytes->data(),static_cast<int>(invalidGeneratorBytes->size()));
             check(generatorRecall->lastStateError().isNotEmpty()&&save(*generatorRecall)==generatorSaved,"future generator state rejected transactionally");}
@@ -116,6 +116,24 @@ int main() {
         auto locked=generated->program();
         check(generated->mutateProgram(222,locks),"locked mutation accepted");
         check(generated->program().layers[0].gain==locked.layers[0].gain,"locked layer preserved");
+        auto& settingsPanel=panel.generatorPanel();
+        settingsPanel.styleSelector().setSelectedId(4,juce::sendNotificationSync);
+        settingsPanel.complexitySelector().setSelectedId(2,juce::sendNotificationSync);
+        settingsPanel.intensitySlider().setValue(.2,juce::sendNotificationSync);
+        settingsPanel.energySlider().setValue(.4,juce::sendNotificationSync);
+        settingsPanel.stereoSlider().setValue(.8,juce::sendNotificationSync);
+        const auto controls=generated->generatorState();
+        check(controls.style==3&&controls.complexity==2&&std::abs(controls.intensity-.2f)<1e-5f&&
+              std::abs(controls.energy-.4f)<1e-5f&&std::abs(controls.stereo-.8f)<1e-5f,"generator settings UI binds controller");
+        panel.generateButton().onClick();
+        check(generated->program().layers[1].enabled&&!generated->program().layers[2].enabled&&
+              !generated->program().layers[3].enabled,"generator uses selected complexity");
+        const auto settingsSaved=save(*generated);auto settingsRecall=std::make_unique<vox::fx::FxProcessor>();
+        settingsRecall->setStateInformation(settingsSaved.getData(),static_cast<int>(settingsSaved.getSize()));
+        const auto restored=settingsRecall->generatorState();
+        check(restored.style==controls.style&&restored.complexity==controls.complexity&&
+              restored.intensity==controls.intensity&&restored.energy==controls.energy&&restored.stereo==controls.stereo,
+              "generator controls survive project state roundtrip");
     }
     {
         auto effected=std::make_unique<vox::fx::FxProcessor>();

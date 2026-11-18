@@ -9,6 +9,25 @@
 namespace vox::fx {
 class FxProcessor;
 
+class GeneratorPanel final : public juce::Component, private juce::Timer {
+public:
+    explicit GeneratorPanel(FxProcessor&);
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    juce::ComboBox& styleSelector() noexcept { return style_; }
+    juce::ComboBox& complexitySelector() noexcept { return complexity_; }
+    juce::Slider& intensitySlider() noexcept { return intensity_; }
+    juce::Slider& energySlider() noexcept { return energy_; }
+    juce::Slider& stereoSlider() noexcept { return stereo_; }
+private:
+    void timerCallback() override;
+    FxProcessor& processor_;
+    juce::ComboBox style_,complexity_;
+    juce::Slider intensity_,energy_,stereo_;
+    std::array<juce::Label,5> labels_;
+    juce::TextButton close_ { "Close" };
+};
+
 // An honest FX-01 panel: only controls with working processor bindings are
 // exposed. Additional workspaces are added as their DSP/controller exists.
 class FxPanel final : public juce::Component, private juce::Timer {
@@ -27,6 +46,7 @@ public:
     juce::ComboBox& macroDestinationSelector() noexcept { return macroDestination_; }
     juce::ComboBox& macroSelector() noexcept { return macroSelector_; }
     juce::Slider& seedSlider() noexcept { return seed_; }
+    GeneratorPanel& generatorPanel() noexcept { return *generatorPanel_; }
     juce::Button& generateButton() noexcept { return generate_; }
     juce::Button& mutateButton() noexcept { return mutate_; }
     juce::ComboBox& patternGridSelector() noexcept { return patternGrid_; }
@@ -70,6 +90,8 @@ private:
     juce::Slider seed_;
     vox::ui::VoxButton generate_ { "GENERATE" };
     vox::ui::VoxButton mutate_ { "MUTATE" };
+    juce::TextButton generatorSettings_ { "Settings" };
+    std::unique_ptr<GeneratorPanel> generatorPanel_;
     vox::ui::VoxButton midiExport_ { "MIDI" };
     vox::ui::VoxButton wavExport_ { "WAV" };
     juce::TextButton sampleImport_ { "Import" },sampleBuiltin_ { "Built-in" };
