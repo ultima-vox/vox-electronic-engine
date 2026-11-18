@@ -7,7 +7,7 @@ const enter = async (field: Locator, value: string) => { await field.fill(value)
 const peak = (meter: Locator) => expect.poll(async () => Number(await meter.locator('..').getAttribute('data-value')));
 
 test('A: calculated browser contrast and searchable exact DS-00 CSV stay in the Console', async ({page}) => {
-  await page.goto('/#system');
+  await page.goto('./#system');
   await page.getByRole('button', { name: 'Tokens', exact: true }).click();
   const contrast = page.getByRole('table', { name: 'Browser token contrast' });
   const ratio = contrast.getByRole('row', { name: /Product accent Panel/ }).getByRole('cell').nth(2);
@@ -38,7 +38,7 @@ test('A: calculated browser contrast and searchable exact DS-00 CSV stay in the 
 });
 
 test('A: typed Hz/kHz and s/ms entry changes the existing shared controls; invalid units and Escape do not', async ({page}) => {
-  await page.goto('/#drums');
+  await page.goto('./#drums');
   await page.getByRole('combobox', { name: 'Primary editor' }).selectOption('sound');
   const sound = region(page, 'Sound Editor');
   const cutoff = sound.getByRole('textbox', { name: 'Cutoff value (Hz)', exact: true });
@@ -56,7 +56,7 @@ test('A: typed Hz/kHz and s/ms entry changes the existing shared controls; inval
 });
 
 test('B: pattern tools use real Song edit targets and preserve linkage on no-op and Undo', async ({page}) => {
-  await page.goto('/');
+  await page.goto('./');
   await page.locator('.workspace-menu summary').click();
   await page.getByRole('button', { name: 'Composition', exact: true }).click();
   await page.getByRole('group', { name: 'Drums mode' }).getByRole('button', { name: 'Song', exact: true }).click();
@@ -111,7 +111,7 @@ test('B: donor sample selection, Normalize, Reverse and bounded Loop feed real W
       return stop.apply(this, args);
     };
   });
-  await page.goto('/');
+  await page.goto('./');
   const editor = page.getByRole('combobox', { name: 'Primary editor' });
   await editor.selectOption('sample');
   const sample = region(page, 'Sample Editor');
@@ -155,7 +155,7 @@ test('B: editable local delay division and feedback drive the real send/return, 
       const node = create.apply(this, args); window.voxTestDelay = node; return node;
     };
   });
-  await page.goto('/');
+  await page.goto('./');
   const mixer = region(page, 'Mixer Dock');
   await mixer.getByRole('button', { name: 'Expanded', exact: true }).click();
   await mixer.getByText('Delay settings', { exact: true }).click();

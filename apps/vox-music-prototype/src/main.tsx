@@ -34,7 +34,7 @@ function App() {
   const open = (next: Product) => { if (next === product) return; setProduct(next); window.history.pushState(null, '', `#${next}`); window.scrollTo(0,0); };
   return <div className="suite" data-theme={product === 'system' ? theme : product}>
     <a className="skip-link" href="#product-panel" onClick={event => { event.preventDefault(); document.getElementById('product-panel')?.focus(); }}>Skip to instrument</a>
-    <header className="suite-bar"><div className="suite-brand"><img src="/vox-mark.svg" alt="" width={35} height={35} /><span><strong>VOX<span> MUSIC</span></strong><small>INSTRUMENT SUITE</small></span></div>
+    <header className="suite-bar"><div className="suite-brand"><img src={`${import.meta.env.BASE_URL}vox-mark.svg`} alt="" width={35} height={35} /><span><strong>VOX<span> MUSIC</span></strong><small>INSTRUMENT SUITE</small></span></div>
       <Tabs label="VOX Music products" id="product" choices={products} value={product} onChange={open} />
       <div className="suite-status"><Badge tone="accent" dot>BROWSER DEMO</Badge></div>
     </header>

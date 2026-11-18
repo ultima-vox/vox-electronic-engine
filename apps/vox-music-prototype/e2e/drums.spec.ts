@@ -20,7 +20,7 @@ async function workspace(page: Page, name: string) {
   await page.getByRole('button',{name,exact:true}).click();
 }
 
-test.beforeEach(async ({ page }) => { await page.goto('/'); await expect(page.getByRole('heading',{name:'VOX Drums',exact:true})).toBeVisible(); });
+test.beforeEach(async ({ page }) => { await page.goto('./'); await expect(page.getByRole('heading',{name:'VOX Drums',exact:true})).toBeVisible(); });
 
 test('Grid/List selection is non-audible, independently of pad audition and Inspector pin', async ({page}) => {
   const rack = panel(page,'Pad Rack'); const inspector = panel(page,'Inspector');

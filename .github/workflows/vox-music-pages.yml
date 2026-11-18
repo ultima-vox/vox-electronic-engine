@@ -1,0 +1,148 @@
+name: VOX MUSIC Pages
+run-name: VOX MUSIC Pages · ${{ github.sha }}
+
+on:
+  push:
+    branches: [arena/ce951751-vox-electronic-engine]
+
+permissions: {}
+
+concurrency:
+  group: vox-music-pages
+  cancel-in-progress: false
+
+env:
+  VOX_BASE_PATH: /vox-electronic-engine/
+  VOX_VISUAL_CAPTURE: '0'
+
+jobs:
+  build:
+    # This is the owner-designated publishing ref. A PR event, fork, or different branch cannot publish.
+    if: github.repository == 'ultima-vox/vox-electronic-engine' && github.event_name == 'push' && github.ref == 'refs/heads/arena/ce951751-vox-electronic-engine'
+    name: Test and package the static Workbench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: apps/vox-music-prototype
+    steps:
+      - name: Checkout the exact publishing commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify publishing SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'Testing Pages candidate %s\n' "$GITHUB_SHA"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: apps/vox-music-prototype/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Test the built app under the Pages subpath
+        env:
+          VOX_TEST_PREVIEW: '1'
+        run: npm run test:e2e
+
+      - name: Stamp the tested commit in the static site
+        run: printf '{"sha":"%s"}\n' "$GITHUB_SHA" > dist/workbench-version.json
+
+      - name: Upload only the tested dist directory
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: apps/vox-music-prototype/dist
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - name: Require the GitHub Actions Pages source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! source=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq '.build_type') || [ "$source" != 'workflow' ]; then
+            echo '::error title=GitHub Pages is not configured::In repository Settings → Pages, set Build and deployment → Source to GitHub Actions, then re-run all jobs.'
+            exit 1
+          fi
+
+      - name: Publish the tested artifact
+        id: pages
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  verify:
+    name: Verify the public HTTPS site
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: apps/vox-music-prototype
+    env:
+      VOX_BASE_URL: ${{ needs.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout the deployed commit's tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Check public HTTPS and the published SHA (no sandbox or credentials)
+        run: |
+          site="${VOX_BASE_URL%/}/"
+          test "$site" = 'https://ultima-vox.github.io/vox-electronic-engine/'
+          published=false
+          for attempt in {1..15}; do
+            if curl --proto '=https' --fail --silent --show-error --max-time 8 \
+                "${site}workbench-version.json?sha=$GITHUB_SHA" \
+                | jq -e --arg sha "$GITHUB_SHA" '.sha == $sha' >/dev/null; then
+              published=true
+              break
+            fi
+            sleep 5
+          done
+          test "$published" = true
+          curl --proto '=https' --fail --silent --show-error --max-time 10 "$site" >/dev/null
+          printf 'Public URL serves %s: %s\n' "$GITHUB_SHA" "$site"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: apps/vox-music-prototype/package-lock.json
+
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Playwright on the public Pages URL (no captures)
+        run: npm run test:e2e
+
+      - name: Record deployment evidence
+        run: |
+          printf 'Verified commit `%s` at %s with public Chromium tests.\n' "$GITHUB_SHA" "$VOX_BASE_URL" >> "$GITHUB_STEP_SUMMARY"

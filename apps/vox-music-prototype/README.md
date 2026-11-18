@@ -50,3 +50,4 @@ The shared library receives values and callbacks only. It has no imports from ei
 - [Owner handoff and requirement matrices](docs/HANDOFF.md)
 - [JUCE_PORTING_MAP.md](docs/JUCE_PORTING_MAP.md)
 - [Verification and manual protocol](docs/VERIFICATION.md)
+- [GitHub Pages publishing and owner setup](docs/GITHUB_PAGES.md)

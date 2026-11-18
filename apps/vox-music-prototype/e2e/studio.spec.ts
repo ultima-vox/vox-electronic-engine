@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
@@ -6,11 +7,28 @@ import { testWav } from '../src/shared-test-utils/fixtures';
 const product = async (page: Page, name: string) => page.getByRole('tab',{name,exact:true}).click();
 const zone = async (page: Page, name: string) => page.locator('.fx-nav').getByRole('tab',{name,exact:true}).click();
 
+test('Direct hash routes and both logo assets respect the configured site path', async ({page, baseURL}) => {
+  const home = new URL('./', baseURL!);
+  const logo = new URL('vox-mark.svg', home).href;
+  const entries = [['drums','VOX Drums'], ['fx','VOX FX'], ['system','Design System Console']] as const;
+  for (const [route, title] of entries) {
+    await page.goto('about:blank'); // Exercise a fresh HTTP load for each hash, not just client navigation.
+    const response = await page.goto(`./#${route}`);
+    expect(response?.status()).toBe(200);
+    await expect(page).toHaveURL(new URL(`#${route}`, home).href);
+    await expect(page.getByRole('heading',{name:title,exact:true})).toBeVisible();
+  }
+  const image = page.locator('.suite-brand img');
+  expect(await image.evaluate((el: HTMLImageElement) => el.src)).toBe(logo);
+  await expect.poll(() => image.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+  expect(await page.locator('link[rel="icon"]').evaluate((el: HTMLLinkElement) => el.href)).toBe(logo);
+});
+
 for (const [width,height] of [[1040,700],[1280,720],[1440,900],[1600,1000]]) {
   test(`Drums fits ${width}×${height}; target hit sizes, one Mixer and no viewport clipping`, async ({page}, testInfo) => {
     await page.setViewportSize({width,height});
     const errors: string[] = []; page.on('pageerror',e=>errors.push(e.message));
-    await page.goto('/'); await page.getByRole('heading',{name:'VOX Drums',exact:true}).waitFor(); await page.evaluate(() => document.fonts.ready);
+    await page.goto('./'); await page.getByRole('heading',{name:'VOX Drums',exact:true}).waitFor(); await page.evaluate(() => document.fonts.ready);
     await expect.poll(() => page.locator('.work-area').evaluate(e => e.clientWidth)).toBeGreaterThan(900);
     await expect(page.getByRole('region',{name:'Pad Rack',exact:true})).toHaveCount(1);
     await expect(page.getByRole('region',{name:'Mixer Dock',exact:true})).toHaveCount(1);
@@ -25,7 +43,7 @@ for (const [width,height] of [[1040,700],[1280,720],[1440,900],[1600,1000]]) {
 }
 
 test('Center split stack/side, maximize and responsive tab fallback maintain musical data', async ({page}, testInfo) => {
-  await page.goto('/');
+  await page.goto('./');
   await page.getByRole('button',{name:'Add second editor',exact:true}).click();
   const divider = page.getByRole('separator',{name:'Resize editor split'});
   await expect(divider).toBeVisible(); await expect(divider).toHaveAttribute('aria-orientation','vertical');
@@ -48,7 +66,7 @@ test('Center split stack/side, maximize and responsive tab fallback maintain mus
 
 test('FX eight work areas, editable 20-curve timeline, assignment and configured processing', async ({page}, testInfo) => {
   const errors: string[]=[]; page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('/#fx'); await expect(page.locator('.suite')).toHaveAttribute('data-theme','fx');
+  await page.goto('./#fx'); await expect(page.locator('.suite')).toHaveAttribute('data-theme','fx');
   const tabs=page.getByRole('tablist',{name:'FX work areas'}); await expect(tabs.getByRole('tab')).toHaveCount(8);
   await page.getByRole('button',{name:'Generate program'}).click(); await expect(page.getByRole('status')).toContainText('Seeded browser Program');
   await zone(page,'Design'); await expect(page.locator('.fx-layers > section')).toHaveCount(4);
@@ -84,8 +102,8 @@ test('FX eight work areas, editable 20-curve timeline, assignment and configured
   expect(errors).toEqual([]);
 });
 
-test('FX search/favorites, independent A/B, validated JSON import and saved Program reload', async ({page}) => {
-  await page.goto('/#fx'); await zone(page,'Presets');
+test('FX search/favorites, independent A/B, JSON round trip and saved Program reload', async ({page}) => {
+  await page.goto('./#fx'); await zone(page,'Presets');
   await page.getByRole('searchbox',{name:'Search presets'}).fill('ember');
   const load=page.getByRole('button',{name:'Load Ember Strike'});
   await expect(load).toBeVisible(); await expect(page.getByRole('button',{name:'Load Glass Drift'})).toHaveCount(0);
@@ -102,13 +120,25 @@ test('FX search/favorites, independent A/B, validated JSON import and saved Prog
   await page.reload(); await zone(page,'Presets');
   await page.getByRole('group',{name:'FX preset collection'}).getByRole('button',{name:'User',exact:true}).click(); await page.getByRole('button',{name:'Load My texture'}).click();
   await expect(page.locator('.fx-program-label strong')).toHaveText('My texture');
-  await page.getByLabel('Import FX Program JSON').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{"version":2}')});
+  const download = page.waitForEvent('download');
+  await page.getByRole('button',{name:'Export JSON',exact:true}).click();
+  const json = await download;
+  expect(json.suggestedFilename()).toBe('vox-fx-program.json');
+  const payload = await readFile((await json.path())!);
+  expect(JSON.parse(payload.toString('utf8')).name).toBe('My texture');
+  await page.getByRole('group',{name:'FX preset collection'}).getByRole('button',{name:'Browser collection',exact:true}).click();
+  await page.getByRole('button',{name:'Load Ember Strike'}).click();
+  await expect(page.locator('.fx-program-label strong')).toHaveText('Ember Strike');
+  const importJSON = page.getByLabel('Import FX Program JSON');
+  await importJSON.setInputFiles({name:json.suggestedFilename(),mimeType:'application/json',buffer:payload});
+  await expect(page.locator('.fx-program-label strong')).toHaveText('My texture');
+  await importJSON.setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{"version":2}')});
   await expect(page.getByRole('alert')).toContainText('Invalid Program v1');
   await expect(page.locator('.fx-program-label strong')).toHaveText('My texture');
 });
 
 test('Separate Console routes, three token accents and live control fixture states', async ({page}) => {
-  await page.goto('/'); await product(page,'Design System');
+  await page.goto('./'); await product(page,'Design System');
   await expect(page.getByRole('heading',{name:'Design System Console'})).toBeVisible();
   const themes=page.getByRole('group',{name:'Product accent theme'});
   await themes.getByRole('button',{name:'Synth',exact:true}).click(); await expect(page.locator('.suite')).toHaveAttribute('data-theme','synth');
@@ -133,7 +163,7 @@ test('Separate Console routes, three token accents and live control fixture stat
 });
 
 test('Accessibility smoke audit of active Drums, FX and Console landing surfaces', async ({page}) => {
-  await page.goto('/');
+  await page.goto('./');
   const scan = async (name: string) => {
     const { violations } = await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21a','wcag21aa']).analyze();
     expect(violations.map(({id,nodes}) => ({id,targets:nodes.map(n=>n.target)})),name).toEqual([]);
@@ -142,7 +172,7 @@ test('Accessibility smoke audit of active Drums, FX and Console landing surfaces
 });
 
 test('Owner review interactions: Composition, Sound Design, Mixing, and docked Generator', async ({page}, testInfo) => {
-  await page.goto('/'); await page.evaluate(() => document.fonts.ready);
+  await page.goto('./'); await page.evaluate(() => document.fonts.ready);
   const choose = async (name: string) => {
     await page.locator('.workspace-menu summary').click();
     await page.getByRole('button',{name,exact:true}).click();

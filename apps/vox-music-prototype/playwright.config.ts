@@ -7,7 +7,9 @@ import { execFileSync } from 'node:child_process';
 import { brotliDecompressSync } from 'node:zlib';
 
 const bundled = process.env.VOX_BUNDLED_CHROMIUM === '1';
-const baseURL = process.env.VOX_BASE_URL ?? 'http://127.0.0.1:4180';
+const appURL = new URL(process.env.VOX_BASE_URL || `http://127.0.0.1:4180${process.env.VOX_BASE_PATH || '/'}`);
+if (!appURL.pathname.endsWith('/')) appURL.pathname += '/';
+const baseURL = appURL.href;
 const capture = process.env.VOX_VISUAL_CAPTURE === '1';
 const serverScript = process.env.VOX_TEST_PREVIEW === '1' ? 'preview' : 'dev';
 async function chromiumOptions() {
