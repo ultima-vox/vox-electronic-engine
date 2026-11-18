@@ -7,6 +7,7 @@
 #include "engine/Effects.h"
 #include "engine/OfflineRender.h"
 #include "engine/SampleController.h"
+#include "engine/Transport.h"
 
 namespace vox::fx {
 
@@ -146,8 +147,7 @@ private:
     std::atomic<bool> clipLatched_ { false };
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
-    bool transportKnown_ = false, wasPlaying_ = false, expectedSampleKnown_ = false;
-    std::int64_t expectedSample_ = 0;
+    transport::Tracker transport_;
 };
 
 } // namespace vox::fx

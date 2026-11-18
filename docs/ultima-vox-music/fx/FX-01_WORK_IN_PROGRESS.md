@@ -850,3 +850,17 @@ the previous tolerance. A concurrent Linux run showed a single 8.08 ms maximum
 for the 48 kHz nine-voice 128-sample benchmark (p99 82.45 µs); this exceeds
 the 2.67 ms period and is not production timing qualification or evidence of
 a root cause. Repeat controlled p50/p95/p99/max measurements on Windows.
+
+### PPQ-only transport discontinuity fallback
+
+Transport tracking uses host sample positions when continuous sample data is
+available. If not, it predicts PPQ from the previous block's valid tempo and
+sample rate and fades active events for jumps of at least 0.125 quarter notes
+(a 1/32 note). This threshold tolerates host rounding and small unreported
+intra-block tempo changes but deliberately cannot detect smaller PPQ-only seeks.
+Stop fades, absent/invalid host information resets only the corresponding
+prediction, and a completely unavailable position resets tracking. Standalone
+tests include stop, sample precedence, PPQ seeks, tempo changes, jitter, invalid
+values and integer overflow; ASan/UBSan and Linux allocation probe passed. JUCE
+processor integration was syntax-checked, not executed, and Cubase/REAPER host
+behavior remains unqualified.

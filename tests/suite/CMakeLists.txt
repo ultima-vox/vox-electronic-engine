@@ -432,3 +432,9 @@ target_compile_definitions(suite_fx_sample_controller_tests PRIVATE JUCE_USE_CUR
 target_include_directories(suite_fx_sample_controller_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_sample_controller_tests COMMAND suite_fx_sample_controller_tests)
 set_tests_properties(suite_fx_sample_controller_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_transport_tests FxTransportTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_transport_tests)
+target_include_directories(suite_fx_transport_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_transport_tests COMMAND suite_fx_transport_tests)
+set_tests_properties(suite_fx_transport_tests PROPERTIES LABELS suite)

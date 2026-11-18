@@ -207,7 +207,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     panicPending_.store (false, std::memory_order_relaxed);
     auditionPending_.store (false, std::memory_order_relaxed);
     peak_.store (0.0f, std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
-    transportKnown_ = wasPlaying_ = expectedSampleKnown_ = false;
+    transport_.unavailable();
 }
 
 void FxProcessor::releaseResources() { engine_.prepare (preparedSampleRate()); }
@@ -244,19 +244,15 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             if(playing && ppq.hasValue() && bpm.hasValue() && supportedSignature) {
                 hostPpq=*ppq;hostBpm=*bpm;patternHostReady=true;
             }
-            const auto sample = position->getTimeInSamples();
-            const bool stopped = transportKnown_ && wasPlaying_ && !playing;
-            const bool discontinuity = transportKnown_ && wasPlaying_ && playing && expectedSampleKnown_ &&
-                                       sample.hasValue() && *sample != expectedSample_;
-            if (stopped || discontinuity) engine_.allSoundOff (0);
-            expectedSampleKnown_ = playing && sample.hasValue() &&
-                                   *sample <= std::numeric_limits<std::int64_t>::max() - buffer.getNumSamples();
-            if (expectedSampleKnown_) expectedSample_ = *sample + buffer.getNumSamples();
-            wasPlaying_ = playing;
-            transportKnown_ = true;
+            const auto sample=position->getTimeInSamples();
+            transport::Position current;current.playing=playing;
+            current.hasSample=sample.hasValue();if(current.hasSample)current.sample=*sample;
+            current.hasPpq=ppq.hasValue();if(current.hasPpq)current.ppq=*ppq;
+            current.hasTempo=bpm.hasValue();if(current.hasTempo)current.tempo=*bpm;
+            if(transport_.update(current,preparedSampleRate(),buffer.getNumSamples()))engine_.allSoundOff(0);
         }
     }
-    if (!positionAvailable) transportKnown_ = wasPlaying_ = expectedSampleKnown_ = false;
+    if (!positionAvailable) transport_.unavailable();
     (void)engine_.setTempo(glitchTempo);
     capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
     if (panicPending_.exchange (false, std::memory_order_acquire)) {

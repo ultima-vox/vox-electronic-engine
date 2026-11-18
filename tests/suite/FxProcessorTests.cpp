@@ -520,6 +520,17 @@ int main() {
     }
 
     {
+        auto ppqProcessor=std::make_unique<vox::fx::FxProcessor>();TestPlayHead head;
+        juce::AudioPlayHead::PositionInfo position;position.setIsPlaying(true);position.setPpqPosition(2.0);position.setBpm(120);
+        head.position=position;ppqProcessor->setPlayHead(&head);ppqProcessor->prepareToPlay(48000,512);
+        juce::MidiBuffer notes;notes.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+        block(*ppqProcessor,audio,notes);
+        position.setPpqPosition(2.0+512.0*120.0/(60.0*48000));head.position=position;block(*ppqProcessor,audio,notes);
+        check(audio.getMagnitude(0,300,212)>0,"PPQ-only continuity preserves event");
+        position.setPpqPosition(10);head.position=position;block(*ppqProcessor,audio,notes);
+        check(audio.getMagnitude(0,300,212)==0,"PPQ-only seek fades event");ppqProcessor->setPlayHead(nullptr);
+    }
+    {
         auto riserOwner=std::make_unique<vox::fx::FxProcessor>(); auto downOwner=std::make_unique<vox::fx::FxProcessor>(); auto& riser=*riserOwner; auto& down=*downOwner;
         riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
         check(down.setFamily(1) && !down.setFamily(12), "bounded family selection");
