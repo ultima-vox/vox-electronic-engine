@@ -132,11 +132,25 @@ int main() {
     check(xl == yl && xr == yr, "block-boundary invariant");
     auto pOwner=std::make_unique<vox::fx::NoiseRiser>(); auto& p=*pOwner; p.prepare(48000);
     for (int i = 0; i < 8; ++i) check(p.noteOn(1, 60 + i, 1), "eight events");
-    check(p.noteOn(1, 72, 1), "bounded stealing");
-    check(!p.noteOn(1, 73, 1), "reject when retirement slot occupied");
+    for(int i=0;i<4;++i)check(p.noteOn(1,72+i,1),"four bounded retirement fades");
+    check(p.activeEventCount()==12,"eight active voices plus four retirement fades");
+    check(!p.noteOn(1,76,1),"reject only when all retirement slots occupied");
     std::array<float, 512> l{}, r{};
     p.render(l.data(), r.data(), 512);
-    check(p.noteOn(1, 73, 1), "retirement slot reused");
+    check(p.noteOn(1,76,1), "retirement slot reused");
+    for(double rate:{44100.0,48000.0,96000.0}) {
+        auto fades=std::make_unique<vox::fx::NoiseRiser>();fades->prepare(rate);
+        for(int i=0;i<8;++i)check(fades->noteOn(1,60+i,1),"retirement timing initial voice");
+        for(int i=0;i<4;++i)check(fades->noteOn(1,72+i,1),"retirement timing steal");
+        const int fadeSamples=std::max(1,static_cast<int>(rate*.005));
+        std::vector<float> left(static_cast<std::size_t>(fadeSamples)),right(left.size());
+        fades->render(left.data(),right.data(),fadeSamples-1);
+        check(fades->activeEventCount()==12,"all fades remain active until their final sample");
+        fades->render(left.data(),right.data(),1);
+        check(fades->activeEventCount()==8,"four retirement fades finish at sample-accurate boundary");
+        fades->allSoundOff(0);fades->render(left.data(),right.data(),fadeSamples);
+        check(fades->activeEventCount()==0,"panic fades all active voices");
+    }
     p.prepare(48000); p.render(l.data(), r.data(), 512);
     check(std::all_of(l.begin(), l.end(), [](float x) { return x == 0; }), "prepare resets all voices");
     std::printf("FX noise riser: %d failure(s)\n", failures);

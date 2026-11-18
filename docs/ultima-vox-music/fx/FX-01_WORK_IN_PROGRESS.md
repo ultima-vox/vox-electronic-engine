@@ -902,3 +902,17 @@ and exits at the block end, retaining the eight-cycle cap. A 5000-case
 full-scan-reference comparison plus grid tests, ASan/UBSan and allocation probe
 passed. The DSP stress run preserved checksums/drop counts; noisy timings do
 not prove a speedup or host deadline. See `DSP_BENCHMARK.md`.
+
+### Multiple bounded retirement fades
+
+Event stealing now provides four fixed retirement voices/lease slots in addition
+to the eight active voices. The oldest event is stolen into a free 5 ms fade;
+when all four fades are occupied, further incoming events are still dropped.
+The global grain cap remains 64. Tests cover four simultaneous steals, bounded
+rejection, exact fade retirement at 44.1/48/96 kHz, panic, sample-generation
+leases across replacement, grain retirement, ASan/UBSan, TSan and a Linux
+allocation probe. Processor/UI changes are syntax-checked only. A repeat of the
+maximum-pattern stress had zero dropped triggers for the measured 1000-BPM
+case but higher callback cost; more densely simultaneous MIDI can still drop.
+This supersedes earlier statements about a single retirement slot, not the
+outstanding Windows/host performance or audio-quality acceptance.

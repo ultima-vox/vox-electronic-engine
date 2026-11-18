@@ -12,7 +12,8 @@
 
 // Preliminary DSP-only timing, NOT a plugin, DAW, or deadline qualification.
 // Preparation is outside the timed region. 1536-event, four-bar schedule at
-// 1000 BPM plus eight 4-layer Shepard events and four serial drive effects.
+// 1000 BPM plus eight active 4-layer Shepard events, up to four short
+// retirement fades and four serial drive effects.
 int main(){
     using namespace vox::fx;using Clock=std::chrono::steady_clock;
     constexpr int block=128,iterations=400;constexpr double bpm=1000;

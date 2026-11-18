@@ -42,17 +42,36 @@ int main(){
 #ifdef VOX_TEST_INTERPOSE_MALLOC
     voxProbeBegin();
 #endif
-    const bool stolen=a->noteOn(1,72,1,1,true);a->render(al.data(),ar.data(),512);
+    const bool stolen=a->noteOn(1,72,1,1,true)&&a->noteOn(1,73,1,1,true)&&
+        a->noteOn(1,74,1,1,true)&&a->noteOn(1,75,1,1,true);
+    const bool full=!a->noteOn(1,76,1,1,true)&&a->activeEventCount()==12;
+    a->render(al.data(),ar.data(),512);
     a->allSoundOff(0);a->render(al.data(),ar.data(),512);
 #ifdef VOX_TEST_INTERPOSE_MALLOC
     const auto allocations=voxProbeEnd();if(voxProbeAvailable())check(allocations==0,"sample event acquisition, steal and retirement allocate nothing");
 #endif
-    check(stolen&&a->activeEventCount()==0&&a->activeGrainCount()==0,"sample leases survive stealing and panic");
+    check(stolen&&full&&a->activeEventCount()==0&&a->activeGrainCount()==0,"multiple sample leases survive stealing and panic");
     check(aStore.publish(three,48000)&&aStore.publish(four,48000),"retired event leases permit sample replacement");
     aStore.clear();check(!a->noteOn(1,60,1,1,true),"missing new source rejected after clear");
     check(a->noteOn(1,60,1,1,false),"procedural source requires explicit selection");
     a->prepare(48000);b->prepare(48000);
     check(a->attachSampleStore(nullptr)&&b->attachSampleStore(nullptr),"detach after stopped reset");
+    {
+        sample::Store leaseStore;auto engine=std::make_unique<NoiseRiser>();engine->prepare(48000);
+        engine->attachSampleStore(&leaseStore);engine->setProgram(program);
+        std::uint64_t first=0,second=0;
+        check(leaseStore.publish(one,48000,&first),"first multi-retirement sample");
+        for(int i=0;i<8;++i)check(engine->noteOn(1,60+i,1,1,true,first),"initial sample voices");
+        engine->render(al.data(),ar.data(),512);
+        check(leaseStore.publish(two,48000,&second),"second multi-retirement sample");
+        for(int i=0;i<4;++i)check(engine->noteOn(1,72+i,1,1,true,second),"steal into separate sample retirement slot");
+        check(engine->activeEventCount()==12&&engine->activeGrainCount()<=64,"multiple retirements respect event and grain bounds");
+        check(leaseStore.publish(three,48000),"third version published");
+        check(!leaseStore.publish(four,48000),"retiring and active voices retain both old sample versions");
+        engine->allSoundOff(0);engine->render(al.data(),ar.data(),512);
+        check(engine->activeEventCount()==0&&engine->activeGrainCount()==0&&leaseStore.publish(four,48000),
+              "panic releases all retirement leases and grains");
+    }
     {
         sample::Store pitchedStore;auto e=std::make_unique<NoiseRiser>();e->prepare(48000);e->setProgram(program);e->attachSampleStore(&pitchedStore);
         std::vector<float> sine(240);for(std::size_t i=0;i<sine.size();++i)sine[i]=static_cast<float>(.7*std::sin(6.283185307179586*i/sine.size()));

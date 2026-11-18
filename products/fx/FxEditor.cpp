@@ -327,7 +327,7 @@ void FxPanel::paint (juce::Graphics& g)
     g.setColour (c::text); g.setFont (vox::ui::typography::controlLabel());
     auto meterText=meter.toNearestInt().reduced(8);
     g.drawText(clipHold_?"OUTPUT PEAK  /  CLIP":"OUTPUT PEAK",meterText.removeFromTop(18),juce::Justification::centredLeft);
-    g.drawText("EVENTS "+juce::String(shownEvents_)+" (8 + FADE)   GRAINS "+juce::String(shownGrains_)+"/64",
+    g.drawText("EVENTS "+juce::String(shownEvents_)+" (8 + 4 FADES)   GRAINS "+juce::String(shownGrains_)+"/64",
                meterText,juce::Justification::centredLeft);
 }
 void FxPanel::resized()

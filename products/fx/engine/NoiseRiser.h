@@ -115,8 +115,9 @@ public:
         program_ = program;
         return true;
     }
-    // A ninth event fades the oldest in a dedicated bounded retirement slot.
-    // If that slot is still fading, the incoming event is dropped.
+    // Up to eight active events plus four 5 ms retirement fades. A steal
+    // chooses the oldest active event and a free retirement slot; if all four
+    // fades are occupied the incoming event is dropped deterministically.
     bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false, std::uint64_t expectedSampleToken = 0) noexcept {
         timeline::SecondsClock clock;
         if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
@@ -124,8 +125,10 @@ public:
         Voice* slot = nullptr;
         for (auto& voice : voices_) if (!voice.active) { slot = &voice; break; }
         const bool stealing=slot==nullptr;
+        std::size_t retiringIndex=retiring_.size();
         if(stealing){
-            if(retiring_.active)return false;
+            for(std::size_t i=0;i<retiring_.size();++i)if(!retiring_[i].active){retiringIndex=i;break;}
+            if(retiringIndex==retiring_.size())return false;
             slot=&*std::min_element(voices_.begin(),voices_.end(),
                 [](const Voice& a,const Voice& b){return a.serial<b.serial;});
         }
@@ -140,9 +143,10 @@ public:
         if(userSample && (!sampleStore_ || !sampleStore_->acquire(incoming,expectedSampleToken)))return false;
         const auto slotIndex=static_cast<std::size_t>(slot-voices_.data());
         if(stealing){
-            retiring_=*slot;beginRelease(retiring_);
-            if(sampleStore_&&sampleLeases_[slotIndex].data())(void)sampleStore_->transfer(sampleLeases_[slotIndex],sampleLeases_[8]);
-            for(auto& grain:grains_)if(grain.active&&grain.serial==retiring_.serial)grain.voiceIndex=8;
+            auto& retired=retiring_[retiringIndex];retired=*slot;beginRelease(retired);
+            const auto leaseIndex=voices_.size()+retiringIndex;
+            if(sampleStore_&&sampleLeases_[slotIndex].data())(void)sampleStore_->transfer(sampleLeases_[slotIndex],sampleLeases_[leaseIndex]);
+            for(auto& grain:grains_)if(grain.active&&grain.serial==retired.serial)grain.voiceIndex=leaseIndex;
         }
         if(userSample)(void)sampleStore_->transfer(incoming,sampleLeases_[slotIndex]);
         *slot = {};
@@ -163,7 +167,8 @@ public:
     }
     // Audio-thread diagnostics; never read concurrently without a snapshot.
     unsigned activeEventCount() const noexcept {
-        unsigned count=retiring_.active?1u:0u;
+        unsigned count=0;
+        for(const auto& voice:retiring_)count+=voice.active?1u:0u;
         for(const auto& voice:voices_)count+=voice.active?1u:0u;
         return count;
     }
@@ -172,7 +177,7 @@ public:
     }
     void allSoundOff(int channel) noexcept {
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
-        if (retiring_.active && (channel == 0 || retiring_.channel == channel)) beginRelease(retiring_);
+        for(auto& v:retiring_)if(v.active&&(channel==0||v.channel==channel))beginRelease(v);
     }
     // Both pointers must address at least count writable samples; outputs are
     // overwritten, not accumulated. The processor validates its bus layout.
@@ -183,8 +188,11 @@ public:
                 tick(voices_[voice], l, r, voice);
                 if(!voices_[voice].active&&sampleLeases_[voice].data())sampleStore_->release(sampleLeases_[voice]);
             }
-            tick(retiring_, l, r, 8);
-            if(!retiring_.active&&sampleLeases_[8].data())sampleStore_->release(sampleLeases_[8]);
+            for(std::size_t i=0;i<retiring_.size();++i){
+                const auto leaseIndex=voices_.size()+i;
+                tick(retiring_[i],l,r,leaseIndex);
+                if(!retiring_[i].active&&sampleLeases_[leaseIndex].data())sampleStore_->release(sampleLeases_[leaseIndex]);
+            }
             mixGrains(l, r);
             left[i] = static_cast<float>(l * 0.055);
             right[i] = static_cast<float>(r * 0.055);
@@ -492,7 +500,7 @@ private:
         if (activeGrains_ == 0) return;
         for (auto& grain:grains_) {
             if (!grain.active) continue;
-            auto& owner = grain.voiceIndex == 8 ? retiring_ : voices_[grain.voiceIndex];
+            auto& owner = grain.voiceIndex < voices_.size() ? voices_[grain.voiceIndex] : retiring_[grain.voiceIndex-voices_.size()];
             if (!owner.active || owner.serial != grain.serial || grain.age >= grain.length) { grain.active=false; --activeGrains_; continue; }
             const auto& layer = owner.layers[grain.layerIndex];
             if (!layer.grainLayerActive) { grain.active=false; --activeGrains_; continue; }
@@ -534,8 +542,8 @@ private:
     double rate_ = 44100.0,glitchGridIncrement_=120.0/(15.0*44100.0);
     std::uint64_t serial_ = 0;
     std::array<Voice, 8> voices_ {};
-    Voice retiring_ {};
+    std::array<Voice,4> retiring_ {};
     sample::Store* sampleStore_=nullptr; // non-owning, lifetime guaranteed by caller
-    std::array<sample::Store::Lease,9> sampleLeases_{};
+    std::array<sample::Store::Lease,12> sampleLeases_{};
 };
 } // namespace vox::fx

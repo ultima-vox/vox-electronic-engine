@@ -152,3 +152,21 @@ checksum 655856 for both
 
 This is a microbenchmark, not a DAW callback/deadline guarantee. A separate
 full-scan reference test checks individual events and ordering.
+
+### Four retirement fades (follow-up)
+
+After expanding from one to four bounded 5 ms retirement fades (still eight
+active events, 64 grains globally), reran the same 1000-BPM maximum-pattern
+stress on Linux GCC `-O2`:
+
+```text
+44100 Hz: p50 696.73 p95 737.03 p99 769.67 max 875.50 us; accepted 929 dropped 0; >=1 samples 38558
+48000 Hz: p50 697.69 p95 729.32 p99 762.39 max 832.66 us; accepted 854 dropped 0; >=1 samples 38297
+96000 Hz: p50 686.56 p95 723.71 p99 805.69 max 908.72 us; accepted 427 dropped 0; >=1 samples 38200
+```
+
+The measured case accepts more triggers at increased synthesis cost, while
+four serial drive effects still saturate much of the output. Simultaneous
+bursts exceeding the four fade slots are dropped by design. These are local
+preliminary measurements, not Windows plugin or host qualification; no deadline
+or musical-quality claim is made.
