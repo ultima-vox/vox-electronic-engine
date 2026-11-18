@@ -699,3 +699,19 @@ validation, slot-exhaustion and allocation probes; an earlier test form passed
 ASan/UBSan. This is **not** user sample support: decoding, hash/path manifest,
 missing-file policy, audio event/grain lease ownership, sample-rate-correct
 playback, UI, WAV capture and project persistence are all still unimplemented.
+
+## Bounded sample WAV decoder (not integrated)
+
+A worker-only RIFF/WAVE reader decodes mono/stereo PCM16/24/32 and IEEE
+float32, validates normalized finite samples, preserves source sample rate,
+downmixes stereo to mono, caps input at 64 MiB / 4,194,304 frames, and hashes
+the exact source bytes with JUCE SHA-256. Decode/read failures leave the
+previous result unchanged; shorter/extended files are rejected, while
+same-length concurrent edits cannot be detected. Strict RIFF size, alignment
+and channel checks intentionally reject unsupported WAV variants (including
+WAVE_FORMAT_EXTENSIBLE), not silently reinterpret them. Linux JUCE-core/
+cryptography execution tests cover PCM formats, float, a known digest,
+malformed input sweep, disk/missing-file paths, store publication and
+ASan/UBSan. This decoder and store are still **not** wired to the instrument:
+asset manifest/path/hash state, missing-file policy, sample-rate-correct
+granular event/grain ownership, UI and offline capture remain unfinished.
