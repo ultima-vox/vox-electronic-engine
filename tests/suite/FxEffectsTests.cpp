@@ -98,6 +98,16 @@ int main(){
             check(unpack(pack({Type::delay,1,.5f})).type==Type::delay,"delay structural state");
         }
         {
+            constexpr double rate=8000;Chain echo;check(echo.prepare(rate)&&echo.set(0,{Type::delay,1,1}),"feedback delay setup");
+            std::array<float,128> l{},r{};echo.process(l.data(),r.data(),l.size());l={};r={};l[0]=r[0]=1;
+            std::vector<float> rendered(9000);std::size_t written=0;
+            while(written<rendered.size()){const auto count=std::min<std::size_t>(l.size(),rendered.size()-written);
+                echo.process(l.data(),r.data(),count);std::copy_n(l.begin(),count,rendered.begin()+static_cast<std::ptrdiff_t>(written));
+                written+=count;l={};r={};}
+            check(std::abs(rendered[4000]-1.0f)<.001f&&std::abs(rendered[8000]-.75f)<.005f,
+                  "delay feedback creates a second echo at the selected repeat level");
+        }
+        {
             Chain chorus;check(chorus.prepare(rate)&&chorus.set(0,{Type::chorus,1,.8f}),"chorus prepare");
             std::array<float,512> x{},y{};for(int i=0;i<5;++i)chorus.process(x.data(),y.data(),x.size());
             x[0]=y[0]=1;double delayed=0,stereo=0;
@@ -147,11 +157,14 @@ int main(){
         Chain serial;check(serial.prepare(8000),"serial delay prepare");
         for(std::size_t i=0;i<4;++i)serial.set(i,{Type::delay,1,1});
         std::array<float,128> l{},r{};for(int block=0;block<20;++block)serial.process(l.data(),r.data(),l.size());
-        l[0]=r[0]=1;double energy=0;std::size_t first=0;
-        for(int block=0;block<135;++block){serial.process(l.data(),r.data(),l.size());
-            for(std::size_t i=0;i<l.size();++i)if(std::abs(l[i])>1e-5f){if(energy==0)first=static_cast<std::size_t>(block)*l.size()+i;energy+=std::abs(l[i]);}
+        l[0]=r[0]=1;double energy=0,late=0,peak=0;std::size_t first=0;
+        for(int block=0;block<2625;++block){serial.process(l.data(),r.data(),l.size());
+            for(std::size_t i=0;i<l.size();++i){const auto sample=std::abs(l[i]);
+                if(sample>1e-5f){if(energy==0)first=static_cast<std::size_t>(block)*l.size()+i;energy+=sample;}
+                peak=std::max(peak,static_cast<double>(sample));if(block>2560)late+=sample;}
             l={};r={};}
-        check(first==16000 && std::abs(energy-1)<.001,"four serial half-second delays have finite two-second tail");
+        check(first==16000&&energy>1.0&&peak<=8.0&&late<1e-6,
+              "four serial feedback delays repeat with bounded gain and retire within 41 seconds");
     }
     {
         Chain serial;check(serial.prepare(8000),"serial reverb prepare");
