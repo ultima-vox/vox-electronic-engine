@@ -13,7 +13,13 @@ VOX_BUNDLED_CHROMIUM=1 npm run test:e2e      # restricted Linux x64
 # Or npx playwright install chromium && npm run test:e2e
 ```
 
-For the built app, start `npm run preview -- --port 5173 --strictPort` and run the browser suite with `VOX_BASE_URL=http://127.0.0.1:5173`. Playwright uses no hosted audio files. Each test has a fresh browser context; no previous local storage required. `VOX_VISUAL_CAPTURE` defaults off (including traces and failure screenshots).
+After `npm run build`, use `VOX_TEST_PREVIEW=1 npm run test:e2e` for a test-managed Vite preview instead of the dev server. To exercise an existing built preview, run with `VOX_BASE_URL=http://127.0.0.1:5173`. Playwright uses no hosted audio files. Each test has a fresh browser context; no previous local storage required. `VOX_VISUAL_CAPTURE` defaults off (including traces and failure screenshots).
+
+## Browser-only PR CI
+
+[VOX Music Workbench](../../../.github/workflows/vox-music-workbench.yml) is a dedicated GitHub-hosted Ubuntu job for changes to the app, the DS-00 docs/CSV it consumes, or the workflow. It checks out and prints the PR's **head SHA**, not the synthetic merge tree, runs Node 22.22.3 with `npm ci`, typecheck, unit tests, build and Playwright Chromium on the built app, and writes the tested SHA to the success summary. Captures are disabled. Read the result for the specific head in PR Checks; a queued run, a local run or the separate Windows `build`/`suite` is not this job's success.
+
+The unit suite compares the 24 recipes with the [original donor PCM hash manifest](../src/drums-prototype/fixtures/donor-pcm.sha256.json). [The audit](DONOR_DELTA_AUDIT.md#pcm-регрессия) describes provenance and encoding. The keyboard regression holds ArrowUp through repeat and Shift release, switches from fine to regular increments, and checks that ArrowUp release produces exactly one Undo entry and one corresponding Redo.
 
 ## Donor delta run · 2026-11-18, 09:51 UTC
 

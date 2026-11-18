@@ -1,0 +1,74 @@
+name: VOX Music Workbench
+run-name: VOX Music Workbench · ${{ github.event.pull_request.head.sha }}
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - 'apps/vox-music-prototype/**'
+      - 'docs/ui/vox-music/**'
+      - '.github/workflows/vox-music-workbench.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vox-music-workbench-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Workbench / Node 22 and Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/vox-music-prototype
+    env:
+      VOX_VISUAL_CAPTURE: '0'
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify tested SHA
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          head=$(git rev-parse HEAD)
+          printf 'Testing PR head: %s\n' "$head"
+          test "$head" = "$EXPECTED_HEAD"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # Match the pinned reference runtime for the raw PCM hashes.
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: apps/vox-music-prototype/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (including donor PCM hashes)
+        run: npm test
+
+      - name: Build browser bundle
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Playwright against the built app (no captures)
+        env:
+          VOX_TEST_PREVIEW: '1'
+        run: npm run test:e2e
+
+      - name: Record successful head
+        run: |
+          printf 'Verified workbench PR head `%s` (Node `%s`): typecheck, unit, Vite build and Chromium.\n' "$(git rev-parse HEAD)" "$(node --version)" >> "$GITHUB_STEP_SUMMARY"

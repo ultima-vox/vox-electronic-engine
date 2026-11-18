@@ -9,6 +9,7 @@ import { brotliDecompressSync } from 'node:zlib';
 const bundled = process.env.VOX_BUNDLED_CHROMIUM === '1';
 const baseURL = process.env.VOX_BASE_URL ?? 'http://127.0.0.1:4180';
 const capture = process.env.VOX_VISUAL_CAPTURE === '1';
+const serverScript = process.env.VOX_TEST_PREVIEW === '1' ? 'preview' : 'dev';
 async function chromiumOptions() {
   if (!bundled) return {};
   if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('The npm Chromium fallback requires Linux x64. Use the regular Playwright browser installation.');
@@ -32,5 +33,5 @@ export default defineConfig({
   workers: 2,
   reporter: 'list',
   use: { ...devices['Desktop Chrome'], browserName: 'chromium', baseURL, viewport: { width: 1440, height: 900 }, trace: capture ? 'retain-on-failure' : 'off', screenshot: capture ? 'only-on-failure' : 'off', launchOptions: await chromiumOptions() },
-  webServer: process.env.VOX_BASE_URL ? undefined : { command: 'npm run dev -- --host 127.0.0.1 --port 4180 --strictPort', url: baseURL, timeout: 24000, reuseExistingServer: false },
+  webServer: process.env.VOX_BASE_URL ? undefined : { command: `npm run ${serverScript} -- --host 127.0.0.1 --port 4180 --strictPort`, url: baseURL, timeout: 24000, reuseExistingServer: false },
 });

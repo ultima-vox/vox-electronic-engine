@@ -98,6 +98,32 @@ test('Unified rotary/fader/numeric bindings, exact reset, fine drag, keyboard fo
   await knob.press('ArrowUp'); await expect(knob).toHaveAttribute('aria-valuenow','0.02');
 });
 
+test('Releasing Shift during a held arrow gesture leaves one Undo entry', async ({page}) => {
+  const knob = panel(page,'Inspector').getByRole('slider',{name:'Level',exact:true});
+  const undo = page.getByRole('button',{name:'Undo musical edit',exact:true});
+  const redo = page.getByRole('button',{name:'Redo musical edit',exact:true});
+  await knob.focus();
+  await expect(knob).toHaveAttribute('aria-valuenow','0.85');
+  await expect(undo).toBeDisabled();
+
+  await page.keyboard.down('Shift');
+  await page.keyboard.down('ArrowUp');
+  await page.keyboard.down('ArrowUp'); // Repeat while held, at fine step size.
+  await expect(knob).toHaveAttribute('aria-valuenow','0.852');
+  await page.keyboard.up('Shift');
+  await expect(undo).toBeDisabled(); // A modifier release must not commit the gesture.
+  await page.keyboard.down('ArrowUp'); // Same held arrow, now with the regular step size.
+  await expect(knob).toHaveAttribute('aria-valuenow','0.872');
+  await page.keyboard.up('ArrowUp');
+  await expect(undo).toBeEnabled();
+
+  await undo.click();
+  await expect(knob).toHaveAttribute('aria-valuenow','0.85');
+  await expect(undo).toBeDisabled();
+  await redo.click();
+  await expect(knob).toHaveAttribute('aria-valuenow','0.872');
+});
+
 test('64 steps, keyboard selection, drag on velocity lane and shared step edit history', async ({page}) => {
   const inspector = panel(page,'Inspector');
   await page.getByRole('combobox',{name:'Pattern slot',exact:true}).selectOption('3');

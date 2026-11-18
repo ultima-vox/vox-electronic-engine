@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createPattern, editPattern, initialProject, lengths } from './model';
 import { donorSamples, renderDonorSample, SR } from './donor-samples';
@@ -22,6 +24,27 @@ test('All 24 donor recipes render distinct, deterministic, finite procedural PCM
   }
   assert.equal(seen.size, 24);
   assert.equal(renderDonorSample('0:9'), null);
+});
+
+test('All 24 recipes match the pinned donor B raw PCM SHA-256 manifest', () => {
+  const reference = JSON.parse(readFileSync(new URL('./fixtures/donor-pcm.sha256.json', import.meta.url), 'utf8')) as {
+    encoding: string;
+    sampleRate: number;
+    recipes: Record<string, { frames: number; sha256: string }>;
+  };
+  assert.equal(reference.encoding, 'float32-le-mono');
+  assert.equal(reference.sampleRate, SR);
+  assert.deepEqual(donorSamples.map(({ id }) => id).sort(), Object.keys(reference.recipes).sort());
+  for (const { id, name } of donorSamples) {
+    const pcm = renderDonorSample(id);
+    const label = `${name} (${id})`;
+    assert(pcm, `Missing PCM for ${label}`);
+    assert.equal(pcm.length, reference.recipes[id].frames, `${label}: frame count`);
+    // Canonical IEEE-754 float32 little-endian bytes, including the sign of zero.
+    const bytes = Buffer.alloc(pcm.length * 4);
+    for (let i = 0; i < pcm.length; i++) bytes.writeFloatLE(pcm[i], i * 4);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), reference.recipes[id].sha256, `${label}: donor PCM changed`);
+  }
 });
 
 test('Normalize adjusts full source peak before playback gain; silent and tiny files stay bounded', () => {

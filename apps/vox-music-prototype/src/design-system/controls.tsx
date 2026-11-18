@@ -9,9 +9,13 @@ type GestureKind = 'dial' | 'vertical' | 'horizontal' | 'encoder';
 function useGesture(binding: ParameterBinding, kind: GestureKind, track?: RefObject<HTMLElement | null>) {
   const { spec, value, onBegin, onEnd, onChange, disabled } = binding;
   const drag = useRef<{ pointer: number; x: number; y: number; position: number } | null>(null);
-  const keySession = useRef(false);
+  const heldKeys = useRef(new Set<string>());
   const last = useRef(value);
-  const endKeys = () => { if (keySession.current) { keySession.current = false; onEnd?.(); } };
+  const endKeys = () => {
+    if (!heldKeys.current.size) return;
+    heldKeys.current.clear();
+    onEnd?.();
+  };
   const apply = (plain: number) => {
     const next = quantize(spec, plain);
     if (next !== last.current) { last.current = next; onChange(next); }
@@ -31,7 +35,9 @@ function useGesture(binding: ParameterBinding, kind: GestureKind, track?: RefObj
     const dir = key === 'ArrowRight' || key === 'ArrowUp' || key === 'PageUp' ? 1 : key === 'ArrowLeft' || key === 'ArrowDown' || key === 'PageDown' ? -1 : 0;
     if (!dir && !['Home', 'End', 'Delete'].includes(key)) return;
     event.preventDefault();
-    if (!keySession.current) { last.current = value; keySession.current = true; onBegin?.(); }
+    const firstKey = heldKeys.current.size === 0;
+    heldKeys.current.add(event.code || key);
+    if (firstKey) { last.current = value; onBegin?.(); }
     const step = event.shiftKey ? spec.step : (spec.keyStep ?? spec.step) * (key.startsWith('Page') ? 10 : 1);
     let next = key === 'Home' ? spec.min : key === 'End' ? spec.max : key === 'Delete' ? spec.defaultValue : last.current + dir * step;
     if (kind === 'encoder' && dir) next = next > spec.max ? spec.min : next < spec.min ? spec.max : next;
@@ -71,7 +77,12 @@ function useGesture(binding: ParameterBinding, kind: GestureKind, track?: RefObj
     },
     onPointerCancel: endPointer, onLostPointerCapture: endPointer,
     onDoubleClick: () => { endKeys(); reset(binding); },
-    onKeyDown, onKeyUp: endKeys, onBlur: endKeys,
+    onKeyDown,
+    onKeyUp: (event: KeyboardEvent<HTMLElement>) => {
+      // Shift changes the step size, not the lifetime of the active gesture.
+      if (heldKeys.current.delete(event.code || event.key) && !heldKeys.current.size) onEnd?.();
+    },
+    onBlur: endKeys,
   };
 }
 

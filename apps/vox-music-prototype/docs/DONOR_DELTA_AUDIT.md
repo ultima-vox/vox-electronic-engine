@@ -38,6 +38,12 @@
 | `SoundTab.tsx`, `engine.ts`, `Tabs.tsx` Zones/Macros/Advanced: ADSR, несколько типов фильтра, transient/sustain, fine pitch, velocity curves/zones, macros, reverb size | Реальные варианты обработки в B, **не перенесены** в этом выборочном проходе. Существующий browser Sound сохраняет Tune/Decay/LP cutoff/Drive/Pan/Level, choke, 16 голосов и Synth/Sample/Layer. Новых подписей для неподключённых B-обработок нет; нативный перечень остаётся отдельной задачей DS-00. | [Sound/Sample](../src/drums-prototype/editors.tsx), [портинг](JUCE_PORTING_MAP.md) |
 | `Header.tsx`, `Tabs.tsx`, `ui.tsx`, `store.ts`: 8 pad, 4 выхода в один Master, 7 tabs, scale 1040×828, kit/preset и combined select/hit | Оставлены 4×4/List, одна выбранная pad-цель, layout/docks отдельно от музыки, один Mixer, девять измеряемых локальных шин. Master L/R у B анализируется, но per-pad `padLevel()` и из него return/output UI — расчётная вспышка, не DSP peak. Не импортировались она, компрессор, Zustand/store, баннер, масштаб, навигация и kit/preset метаданные B. Значение MIDI channel в B — поле браузерного store, не подтверждённое подключение к хосту. | [Drums](../src/drums-prototype), [#127](https://github.com/ultima-vox/vox-electronic-engine/issues/127) |
 
+## PCM-регрессия
+
+После ревью #160 разовую сверку закрепили [SHA-256-манифестом](../src/drums-prototype/fixtures/donor-pcm.sha256.json). Эталоны получены из `getRaw(kind, variant)` **оригинального** `src/audio/samples.ts` в проверенном ZIP B, не из текущего генератора. Ключ `kind:variant` использует индексы исходного банка. Для каждого из 24 вариантов сохранены число кадров и хеш моно PCM IEEE-754 float32 little-endian, включая знак нуля, при 44 100 Гц, без WAV-заголовка, нормализации или обработки микшером. Эталонная среда — Node 22.22.3 на Linux x64, та же версия Node задана в CI.
+
+`npm test` проверяет покрытие всех ключей, число кадров и хеш для каждого рецепта. CI не обновляет манифест автоматически; изменение эталона должно быть отдельно обосновано источником. В репозиторий не добавлены буферы PCM, архивы или ещё один генератор.
+
 ## Проверки и входы для ручной проверки
 
 - Оригинальная регрессия сохранена: **19 прежних + 5 новых = 24/24 Chromium** на собранной версии, **22/22 unit**, `typecheck` и `build`. Новые тесты — [donors.spec.ts](../e2e/donors.spec.ts); результаты и команды — [VERIFICATION](VERIFICATION.md). Наблюдатели теста делегируют настоящий Web Audio `start/stop`/gain/delay; измеряются реальные analyser taps, а не расписание UI.
