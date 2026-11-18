@@ -571,9 +571,16 @@ best-effort cancellation, writes a temporary file in chunks, and joins its
 worker on editor destruction. No worker holds a processor/editor pointer.
 Cancellation before replacement leaves the target alone; cancellation racing
 the final replacement may be too late. File writes and the destructor join can
-block on a slow filesystem, but not on the audio callback. Existing offline
-render tests and ASan/UBSan pass; controller capture and GUI/dialog/worker code
-are syntax-checked only, not executed locally. Windows file chooser, cancellation,
-overwrite, teardown, write failure and host tests are still required. Fixed
+block on a slow filesystem, but not on the audio callback. Offline render tests pass. A JUCE-core Linux runtime test now exercises actual
+worker rendering, byte equality, write failure, cancellation, target preservation
+and teardown; its previous form also passed ASan/UBSan. Controller capture and
+gui/dialog integration are syntax-checked only. Windows file chooser, worker,
+cancellation, overwrite, teardown, write failure and host tests remain required. Fixed
 format/rate/note, no drag export, and live free-running LFO phase mismatch
 remain explicit limitations.
+
+MIDI and WAV use the same temporary-file writer, which checks output length
+before replacement. MIDI writing currently happens on the message thread and
+may block on a slow filesystem; WAV rendering/writing is off-thread. Neither
+the test nor temporary-file replacement establishes crash-atomic durability
+on every filesystem.

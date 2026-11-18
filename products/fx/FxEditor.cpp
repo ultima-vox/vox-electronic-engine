@@ -78,7 +78,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
     wavExport_.setTitle("Export current sound as WAV");
     wavExport_.setTooltip("Export C4 at velocity 100%, 48 kHz, 24-bit WAV; click again to cancel rendering");
-    wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel.store(true,std::memory_order_relaxed);else exportWav();};
+    wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel();else exportWav();};
     addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger the current program");
     panic_.setTooltip ("Fade all active events");
@@ -323,8 +323,7 @@ void FxPanel::exportPattern()
             std::vector<std::uint8_t> bytes;
             bool success=pattern::exportMidi(pattern,120.0,bytes);
             if(success){
-                juce::TemporaryFile temp(target);
-                success=temp.getFile().replaceWithData(bytes.data(),bytes.size()) && temp.overwriteTargetFileWithTemporary();
+                success=fileexport::writeBytes(target,bytes);
             }
             juce::AlertWindow::showMessageBoxAsync(success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
                 success?"MIDI exported":"MIDI export failed",
@@ -351,32 +350,9 @@ void FxPanel::exportWav()
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                     "WAV export failed","Choose a filename ending in .wav.");return;
             }
-            safe->wavJob_=std::make_unique<WavJob>();
-            auto* job=safe->wavJob_.get();
             safe->wavExport_.setButtonText("STOP");
             try {
-                job->worker=std::thread([job,capture,target]{
-                    bool success=false;
-                    try {
-                        std::vector<std::uint8_t> bytes;
-                        if(offline::renderWav(capture.program,capture.settings,bytes,&job->cancel,&job->progress)){
-                            juce::TemporaryFile temporary(target);
-                            bool written=false;
-                            {
-                                juce::FileOutputStream stream(temporary.getFile());
-                                written=stream.openedOk();
-                                for(std::size_t offset=0;written&&offset<bytes.size()&&!job->cancel.load(std::memory_order_relaxed);){
-                                    const auto count=std::min<std::size_t>(16384,bytes.size()-offset);
-                                    written=stream.write(bytes.data()+offset,count);offset+=count;
-                                }
-                                stream.flush();written=written&&stream.getStatus().wasOk();
-                            }
-                            if(written&&!job->cancel.load(std::memory_order_relaxed))success=temporary.overwriteTargetFileWithTemporary();
-                        }
-                    } catch(...) { success=false; }
-                    const int result=success?1:(job->cancel.load(std::memory_order_relaxed)?3:2);
-                    job->result.store(result,std::memory_order_release);
-                });
+                safe->wavJob_=std::make_unique<fileexport::WavJob>(capture,target);
             } catch(...) {
                 safe->wavJob_.reset();safe->wavExport_.setButtonText("WAV");
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
@@ -427,15 +403,15 @@ void FxPanel::refreshMacro()
 void FxPanel::timerCallback()
 {
     if(wavJob_){
-        const int result=wavJob_->result.load(std::memory_order_acquire);
-        if(result){
+        const auto result=wavJob_->result();
+        if(result!=fileexport::Result::running){
             wavJob_.reset();wavExport_.setButtonText("WAV");
-            if(result!=3)juce::AlertWindow::showMessageBoxAsync(result==1?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
-                result==1?"WAV exported":"WAV export failed",
-                result==1?"The captured sound was exported at 48 kHz, 24-bit.":"Could not render or write the WAV file.");
+            if(result!=fileexport::Result::cancelled)juce::AlertWindow::showMessageBoxAsync(result==fileexport::Result::success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+                result==fileexport::Result::success?"WAV exported":"WAV export failed",
+                result==fileexport::Result::success?"The captured sound was exported at 48 kHz, 24-bit.":"Could not render or write the WAV file.");
         }else {
-            const int percent=static_cast<int>(wavJob_->progress.load(std::memory_order_relaxed)*100);
-            wavExport_.setButtonText(wavJob_->cancel.load(std::memory_order_relaxed)?"...":juce::String(percent)+"%");
+            const int percent=static_cast<int>(wavJob_->progress()*100);
+            wavExport_.setButtonText(wavJob_->cancelled()?"...":juce::String(percent)+"%");
         }
     }
     if (!isShowing()) return;
