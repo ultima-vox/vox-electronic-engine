@@ -355,3 +355,14 @@ the seed and generator settings themselves are not saved yet. Full generation,
 A/B, lock controls, preset browser and recallable metadata remain unfinished.
 Local ProgramStore and generator tests pass, and processor/editor sources and
 tests pass syntax checks; the new UI/state integration test is not executed.
+
+## Shared effects foundation
+
+A standalone four-slot serial, allocation-free zero-tail chain implements
+lowpass, drive, wavefold, bitcrush, ring and gate, true bypass and smoothed
+wet/amount controls with 5 ms crossfades on structural changes. Local tests
+cover finite bounded output, each type changing audio, 4 slots, exact steady
+bypass, block invariance, validation, and a Linux callback allocation probe;
+ASan/UBSan passed. It is **not connected to plugin audio, state, controls or
+exports**, and omits delay/reverb, phaser/flanger/chorus, tails, latency and
+aliasing/performance qualification. It is not a completed FX-04 processor.
