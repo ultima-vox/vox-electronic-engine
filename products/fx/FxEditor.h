@@ -83,5 +83,6 @@ private:
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;
     float shownPeak_ = 0.0f;
+    unsigned shownEvents_=0,shownGrains_=0,clipHold_=0;
 };
 } // namespace vox::fx

@@ -193,7 +193,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
     auditionPending_.store (false, std::memory_order_relaxed);
-    peak_.store (0.0f, std::memory_order_relaxed);
+    peak_.store (0.0f, std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
     transportKnown_ = wasPlaying_ = expectedSampleKnown_ = false;
 }
 
@@ -261,7 +261,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const int size = buffer.getNumSamples();
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
-        peak_.store (0.0f, std::memory_order_relaxed);
+        peak_.store (0.0f, std::memory_order_relaxed);publishTelemetry(false);
         return;
     }
     auto* left = buffer.getWritePointer (0);
@@ -320,7 +320,8 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         right[i] *= gain.right;
         peak = std::max (peak, std::max (std::abs (left[i]), std::abs (right[i])));
     }
-    peak_.store (peak, std::memory_order_relaxed);
+    peak_.store (peak, std::memory_order_relaxed);publishTelemetry(peak>=1.0f);
+    if(peak>=1.0f)clipLatched_.store(true,std::memory_order_relaxed);
 }
 
 void FxProcessor::writeProductState (std::vector<preset::Section>& out) const

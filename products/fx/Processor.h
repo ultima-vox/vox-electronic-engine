@@ -51,6 +51,12 @@ public:
     void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
     void panic() noexcept { panicPending_.store (true, std::memory_order_release); }
     float outputPeak() const noexcept { return peak_.load (std::memory_order_relaxed); }
+    bool consumeClip() noexcept { return clipLatched_.exchange(false,std::memory_order_relaxed); }
+    struct AudioTelemetry { unsigned events=0,grains=0;bool clipped=false; };
+    AudioTelemetry audioTelemetry() const noexcept {
+        const auto value=telemetry_.load(std::memory_order_relaxed);
+        return {value&15u,(value>>4)&127u,(value&(1u<<11))!=0};
+    }
     // Controller methods only: these may lock/allocate and are never called
     // from the audio callback. Existing events retain their captured program.
     bool setFamily (int family) {
@@ -95,6 +101,10 @@ protected:
     bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
 
 private:
+    void publishTelemetry(bool clipped) noexcept {
+        const auto value=engine_.activeEventCount()|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u);
+        telemetry_.store(value,std::memory_order_relaxed);
+    }
     NoiseRiser engine_;
     effects::Chain effects_;
     macro::Runtime macroRuntime_;
@@ -117,6 +127,9 @@ private:
     juce::SmoothedValue<float> outputSmoothing_;
     std::atomic<bool> panicPending_ { false }, auditionPending_ { false };
     std::atomic<float> peak_ { 0.0f };
+    static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
+    std::atomic<std::uint32_t> telemetry_ { 0 };
+    std::atomic<bool> clipLatched_ { false };
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     bool transportKnown_ = false, wasPlaying_ = false, expectedSampleKnown_ = false;

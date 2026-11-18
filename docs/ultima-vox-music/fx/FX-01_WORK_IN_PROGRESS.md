@@ -672,3 +672,14 @@ not persisted as part of a project, and are not a curated preset browser.
 Processor/UI tests cover empty recall and independent Program/effect/route/
 pattern/parameter snapshots but have only been syntax-checked locally; runtime
 host notifications, automation interaction and GUI layout need verification.
+
+## Basic audio telemetry
+
+A lock-free audio-thread snapshot publishes active event count (including the
+one bounded retiring fade voice) and occupied grains once per block. A separate
+lock-free latch catches output peaks at or above full scale between UI polls;
+the Perform meter shows a one-second clip hold and clamps only its visual bar,
+not audio. Granular tests exercise 0/8/9 events, grain retirement and panic,
+including allocation probe and ASan/UBSan. Processor and meter tests remain
+syntax-only. Counters are sampled at block boundaries, not continuous gauges;
+CPU/memory/dropped-trigger metrics and host/visual runtime checks remain.

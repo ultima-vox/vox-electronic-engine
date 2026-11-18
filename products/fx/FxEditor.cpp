@@ -252,9 +252,12 @@ void FxPanel::paint (juce::Graphics& g)
     }
     auto meter = getLocalBounds().reduced (32).removeFromBottom (55).removeFromLeft (320).toFloat();
     g.setColour (c::panelRaised); g.fillRoundedRectangle (meter, 4.0f);
-    g.setColour (c::accent); g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * shownPeak_), 4.0f);
+    g.setColour (clipHold_?c::danger:c::accent); g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * std::min(1.0f,shownPeak_)), 4.0f);
     g.setColour (c::text); g.setFont (vox::ui::typography::controlLabel());
-    g.drawText ("OUTPUT PEAK", meter.toNearestInt().reduced (8), juce::Justification::centredLeft);
+    auto meterText=meter.toNearestInt().reduced(8);
+    g.drawText(clipHold_?"OUTPUT PEAK  /  CLIP":"OUTPUT PEAK",meterText.removeFromTop(18),juce::Justification::centredLeft);
+    g.drawText("EVENTS "+juce::String(shownEvents_)+" (8 + FADE)   GRAINS "+juce::String(shownGrains_)+"/64",
+               meterText,juce::Justification::centredLeft);
 }
 void FxPanel::resized()
 {
@@ -446,6 +449,8 @@ void FxPanel::timerCallback()
         effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
     }
     for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
+    const auto telemetry=processor_.audioTelemetry();shownEvents_=telemetry.events;shownGrains_=telemetry.grains;
+    clipHold_=processor_.consumeClip()?25u:(clipHold_?clipHold_-1:0u);
     shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);
     repaint();
 }

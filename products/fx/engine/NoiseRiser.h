@@ -129,6 +129,11 @@ public:
         return true;
     }
     // Audio-thread diagnostics; never read concurrently without a snapshot.
+    unsigned activeEventCount() const noexcept {
+        unsigned count=retiring_.active?1u:0u;
+        for(const auto& voice:voices_)count+=voice.active?1u:0u;
+        return count;
+    }
     unsigned activeGrainCount() const noexcept {
         return activeGrains_;
     }

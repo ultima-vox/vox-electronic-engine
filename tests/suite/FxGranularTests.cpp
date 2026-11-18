@@ -13,7 +13,9 @@ int main(){
         auto a=std::make_unique<vox::fx::NoiseRiser>(),b=std::make_unique<vox::fx::NoiseRiser>();a->prepare(rate);b->prepare(rate);
         vox::fx::NoiseProgram p;for(auto& layer:p.layers){layer.enabled=true;layer.family=vox::fx::NoiseFamily::granular;}
         check(a->setProgram(p)&&b->setProgram(p),"granular program");
+        check(a->activeEventCount()==0 && a->activeGrainCount()==0,"empty telemetry");
         for(int i=0;i<8;++i)check(a->noteOn(1,60+i,1,1)&&b->noteOn(1,60+i,1,1),"8 granular events");
+        check(a->activeEventCount()==8,"active event count includes eight voices");
         const int n=static_cast<int>(rate);std::vector<float> l(n),r(n),l2(n),r2(n);unsigned peak=0;
         for(int at=0;at<n;at+=64){int count=std::min(64,n-at);a->render(l.data()+at,r.data()+at,count);peak=std::max(peak,a->activeGrainCount());}
         for(int at=0;at<n;at+=512){int count=std::min(512,n-at);b->render(l2.data()+at,r2.data()+at,count);}
@@ -21,7 +23,7 @@ int main(){
         check(energy>1e-6,"audible granular cloud");check(peak==64,"global pool reaches but never exceeds 64");
         check(l==l2 && r==r2,"granular block invariance");
         float tailL[512]{},tailR[512]{};a->render(tailL,tailR,512);
-        check(a->activeGrainCount()==0,"grains retired after events end");
+        check(a->activeGrainCount()==0&&a->activeEventCount()==0,"grains and events retired after events end");
     }
     {
         auto e=std::make_unique<vox::fx::NoiseRiser>();e->prepare(48000);vox::fx::NoiseProgram p;
@@ -31,13 +33,15 @@ int main(){
 #ifdef VOX_TEST_INTERPOSE_MALLOC
         voxProbeBegin();
 #endif
-        const bool stolen=e->noteOn(1,72,1,1);e->render(l,r,512);
+        const bool stolen=e->noteOn(1,72,1,1);
+        check(e->activeEventCount()==9,"event count includes bounded retirement fade");
+        e->render(l,r,512);
 #ifdef VOX_TEST_INTERPOSE_MALLOC
         const auto allocations=voxProbeEnd();if(voxProbeAvailable())check(allocations==0,"granular audio and stealing allocate nothing");
 #endif
         check(stolen && e->activeGrainCount()<=64,"grain ownership survives event steal");
         e->allSoundOff(0);for(int i=0;i<2;++i)e->render(l,r,512);
-        check(e->activeGrainCount()==0,"panic retires grains");
+        check(e->activeGrainCount()==0&&e->activeEventCount()==0,"panic retires grains and events");
     }
     std::printf("FX granular: %d failure(s)\n",fails);return fails?1:0;
 }

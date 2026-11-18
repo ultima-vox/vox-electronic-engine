@@ -370,8 +370,10 @@ int main() {
     check(audio.getMagnitude(0, 300, 212) == 0, "reset fades active event");
 
     p.audition(); block(p, audio, midi);
+    check(p.audioTelemetry().events>=1&&p.audioTelemetry().events<=9&&p.audioTelemetry().grains<=64,"audio telemetry reports bounded active pool");
     check(audio.getMagnitude(0, 0, 512) > 0, "editor audition triggers sound");
     p.panic(); block(p, audio, midi);
+    check(p.audioTelemetry().events==0&&p.audioTelemetry().grains==0,"audio telemetry reflects panic release");
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
 
     {
