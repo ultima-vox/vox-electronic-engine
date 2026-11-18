@@ -5,6 +5,7 @@
 #include "engine/ProgramStore.h"
 #include "engine/Generator.h"
 #include "engine/Effects.h"
+#include "engine/OfflineRender.h"
 
 namespace vox::fx {
 
@@ -43,6 +44,10 @@ public:
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
+    // Worker/controller thread only: captures the structural snapshot and
+    // current host base parameters; may allocate and render for many seconds.
+    bool renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
+                           const std::atomic<bool>* cancel=nullptr, std::atomic<float>* progress=nullptr) const;
     bool setEffect (std::size_t index, effects::Settings settings);
     effects::Settings effect (std::size_t index) const;
     std::uint64_t effectsSnapshot() const { return programs_.snapshotState().effects; }

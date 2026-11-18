@@ -1,6 +1,7 @@
 #include "Processor.h"
 #include "FxEditor.h"
 #include <cmath>
+#include <bit>
 #include <cstdio>
 #include <memory>
 #include <limits>
@@ -111,6 +112,9 @@ int main() {
         if(bad){restoredFx->setStateInformation(bad->data(),static_cast<int>(bad->size()));
             check(restoredFx->lastStateError().isNotEmpty()&&save(*restoredFx)==state,"invalid effects state rejected transactionally");}
         check(dry->setProgram(effected->program()),"dry and effected tests use identical Program");
+        vox::fx::offline::Settings render;render.sampleRate=48000;render.note=60;render.velocity=100.0f/127.0f;
+        render.format=vox::fx::offline::WavFormat::float32;
+        std::vector<std::uint8_t> wav;check(effected->renderProgramWav(render,wav),"controller captures and renders program WAV");
         effected->prepareToPlay(48000,512);dry->prepareToPlay(48000,512);
         juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer n1,n2;
         n1.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
@@ -118,6 +122,11 @@ int main() {
         block(*effected,a,n1);block(*dry,b,n2);double difference=0;
         for(int i=0;i<512;++i)difference+=std::abs(a.getSample(0,i)-b.getSample(0,i));
         check(difference>1e-5,"serial shared effect changes processor output");
+        if(wav.size()>=56+512*8)for(int i=0;i<512;++i){const auto at=static_cast<std::size_t>(56+i*8);
+            const auto bits=static_cast<std::uint32_t>(wav[at])|(static_cast<std::uint32_t>(wav[at+1])<<8)|
+                (static_cast<std::uint32_t>(wav[at+2])<<16)|(static_cast<std::uint32_t>(wav[at+3])<<24);
+            check(std::bit_cast<float>(bits)==a.getSample(0,i),"controller WAV matches processor output");
+        }
     }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);

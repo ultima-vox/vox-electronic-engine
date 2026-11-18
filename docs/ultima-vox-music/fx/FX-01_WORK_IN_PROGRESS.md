@@ -389,3 +389,14 @@ the coherent structural snapshot plus independent host parameters at block
 boundaries. Processor/editor/host automation, v1 migration and malformed-v2
 tests are authored and syntax-checked only; executable Windows evidence is
 still required.
+
+## Controller-to-WAV render
+
+A non-realtime processor API now captures one coherent Program/slot-type
+snapshot, samples the current host duration, master gain and effect base
+parameters, and invokes the worker WAV renderer. The caller chooses note,
+velocity, sample rate and PCM/float format; cancellation/progress propagate.
+A processor-versus-WAV test is authored and syntax-checked, not yet executed.
+The API does not create threads or files, and no UI/drag delivery exists yet.
+Host automation is sampled, not recorded as a changing automation envelope;
+full effects tails and tempo/pattern export still remain.

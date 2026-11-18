@@ -101,6 +101,18 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
+bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
+                                    const std::atomic<bool>* cancel, std::atomic<float>* progress) const
+{
+    const auto snapshot=programs_.snapshotState();
+    settings.duration=duration_->get(); settings.gain=output_->get();
+    for(std::size_t i=0;i<4;++i){
+        settings.effects[i]=effects::unpack(static_cast<std::uint16_t>(snapshot.effects>>(i*16)));
+        settings.effects[i].wet=effectWet_[i]->get(); settings.effects[i].amount=effectAmount_[i]->get();
+    }
+    return offline::renderWav(snapshot.program,settings,output,cancel,progress);
+}
+
 bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)
 {
     return programs_.setEffect(index,settings);
