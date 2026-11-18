@@ -348,3 +348,9 @@ vox_suite_add_allocation_probe(suite_fx_effects_tests)
 target_include_directories(suite_fx_effects_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_effects_tests COMMAND suite_fx_effects_tests)
 set_tests_properties(suite_fx_effects_tests PROPERTIES LABELS suite)
+
+# Local diagnostic only, not a host or Windows deadline qualification.
+add_executable(suite_fx_effects_benchmark FxEffectsBenchmark.cpp)
+target_include_directories(suite_fx_effects_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_effects_benchmark COMMAND suite_fx_effects_benchmark)
+set_tests_properties(suite_fx_effects_benchmark PROPERTIES LABELS suite)

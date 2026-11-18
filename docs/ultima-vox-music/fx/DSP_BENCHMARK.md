@@ -47,3 +47,23 @@ These noisy wall-clock measurements are neither qualification nor a CPU gate.
 96000 granular 8 events x 4 layers: p50 112.23 p95 124.77 p99 127.29 max 133.20 us
 checksum 8694.820750, bound failures 0
 ```
+
+## Four shared slots stress snapshot
+
+Same Linux Xeon/GCC -O2 environment; 400 consecutive 128-sample DSP calls
+at 96 kHz, eight events, four Shepard layers per event and four identical
+shared effects slots (0=bypass, 1=lowpass, 2=drive, 3=wavefold, 4=bitcrush,
+5=ring, 6=gate). First ~0.53 s only; no host, plugin wrapper, UI or automation.
+These are noisy wall-clock samples, not a deadline guarantee. Maxima approaching
+the 1,333 µs nominal block period warrant profiling on the target Windows DAW.
+
+```text
+96k Shepard 8x4 + 4x effect 0: p50 474.33 p95 865.18 p99 1038.01 max 1064.06 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 443.63 p95 532.84 p99 755.44 max 901.32 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 445.38 p95 534.10 p99 652.04 max 769.64 us; checksum -24.707053
+96k Shepard 8x4 + 4x effect 3: p50 448.97 p95 751.97 p99 809.69 max 984.31 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 428.99 p95 476.00 p99 496.31 max 517.65 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 416.85 p95 453.26 p99 473.08 max 591.04 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 425.13 p95 481.47 p99 501.91 max 549.97 us; checksum -0.089174
+
+```
