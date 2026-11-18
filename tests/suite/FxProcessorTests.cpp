@@ -138,7 +138,12 @@ int main() {
         check(dry->setProgram(effected->program()),"dry and effected tests use identical Program");
         vox::fx::offline::Settings render;render.sampleRate=48000;render.note=60;render.velocity=100.0f/127.0f;
         render.format=vox::fx::offline::WavFormat::float32;
-        std::vector<std::uint8_t> wav;check(effected->renderProgramWav(render,wav),"controller captures and renders program WAV");
+        const auto capture=effected->captureProgramWav(render);
+        check(capture.settings.effects[1].type==vox::fx::effects::Type::phaser &&
+              std::abs(capture.settings.effects[0].wet-.7f)<1e-5f,"WAV capture includes FX and automation");
+        std::vector<std::uint8_t> wav, capturedWav;
+        check(effected->renderProgramWav(render,wav) && vox::fx::offline::renderWav(capture.program,capture.settings,capturedWav)
+              && wav==capturedWav,"captured worker render matches controller WAV");
         effected->prepareToPlay(48000,512);dry->prepareToPlay(48000,512);
         juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer n1,n2;
         n1.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);

@@ -76,6 +76,10 @@ FxPanel::FxPanel (FxProcessor& processor)
     midiExport_.setTitle("Export trigger pattern MIDI");
     midiExport_.setTooltip("Export one pattern loop as MIDI at 120 BPM; contains trigger notes, not audio");
     midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
+    wavExport_.setTitle("Export current sound as WAV");
+    wavExport_.setTooltip("Export C4 at velocity 100%, 48 kHz, 24-bit WAV; click again to cancel rendering");
+    wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel.store(true,std::memory_order_relaxed);else exportWav();};
+    addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger the current program");
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
@@ -209,6 +213,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     refreshPattern();
     startTimerHz (25);
 }
+FxPanel::~FxPanel() { stopTimer(); wavJob_.reset(); }
 void FxPanel::paint (juce::Graphics& g)
 {
     namespace c = vox::ui::tokens::colour;
@@ -260,7 +265,8 @@ void FxPanel::resized()
     auto topLocks=lockArea.removeFromTop(30), bottomLocks=lockArea.removeFromTop(30);
     layerLocks_[0].setBounds(topLocks.removeFromLeft(45));layerLocks_[1].setBounds(topLocks);
     layerLocks_[2].setBounds(bottomLocks.removeFromLeft(45));layerLocks_[3].setBounds(bottomLocks);
-    lockArea.removeFromTop(5);midiExport_.setBounds(lockArea.removeFromTop(32));
+    lockArea.removeFromTop(5);auto exports=lockArea.removeFromTop(32);
+    midiExport_.setBounds(exports.removeFromLeft(exports.getWidth()/2).reduced(1));wavExport_.setBounds(exports.reduced(1));
     auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(185).removeFromTop(45);
     const int fxWidth=fxRow.getWidth()/4;
     for (std::size_t i=0;i<4;++i) {
@@ -301,12 +307,12 @@ void FxPanel::exportPattern()
     const auto pattern=processor_.patternSnapshot();
     exportChooser_=std::make_unique<juce::FileChooser>("Export trigger pattern as MIDI",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX Pattern.mid"),"*.mid");
-    midiExport_.setEnabled(false);
+    midiExport_.setEnabled(false);wavExport_.setEnabled(false);
     exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
         juce::FileBrowserComponent::warnAboutOverwriting,
         [safe=juce::Component::SafePointer<FxPanel>(this),pattern](const juce::FileChooser& chooser){
             if(safe==nullptr)return;
-            safe->midiExport_.setEnabled(true);
+            safe->midiExport_.setEnabled(true);safe->wavExport_.setEnabled(true);
             auto target=chooser.getResult();if(target==juce::File{})return;
             // Do not silently change the destination after the chooser's
             // overwrite confirmation, which could overwrite another file.
@@ -323,6 +329,59 @@ void FxPanel::exportPattern()
             juce::AlertWindow::showMessageBoxAsync(success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
                 success?"MIDI exported":"MIDI export failed",
                 success?"Trigger pattern exported at 120 BPM.":"Could not write the trigger pattern.");
+        });
+}
+void FxPanel::exportWav()
+{
+    // Capture a self-contained value while the processor is alive. The worker
+    // never references the processor or editor and cannot touch the callback.
+    offline::Settings settings;settings.sampleRate=48000;settings.note=60;settings.velocity=1;
+    settings.format=offline::WavFormat::pcm24;
+    const auto capture=processor_.captureProgramWav(settings);
+    exportChooser_=std::make_unique<juce::FileChooser>("Export current sound as WAV",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.wav"),"*.wav");
+    midiExport_.setEnabled(false);wavExport_.setEnabled(false);
+    exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe=juce::Component::SafePointer<FxPanel>(this),capture](const juce::FileChooser& chooser){
+            if(safe==nullptr)return;
+            safe->midiExport_.setEnabled(true);safe->wavExport_.setEnabled(true);
+            const auto target=chooser.getResult();if(target==juce::File{})return;
+            if(!target.hasFileExtension("wav")){
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    "WAV export failed","Choose a filename ending in .wav.");return;
+            }
+            safe->wavJob_=std::make_unique<WavJob>();
+            auto* job=safe->wavJob_.get();
+            safe->wavExport_.setButtonText("STOP");
+            try {
+                job->worker=std::thread([job,capture,target]{
+                    bool success=false;
+                    try {
+                        std::vector<std::uint8_t> bytes;
+                        if(offline::renderWav(capture.program,capture.settings,bytes,&job->cancel,&job->progress)){
+                            juce::TemporaryFile temporary(target);
+                            bool written=false;
+                            {
+                                juce::FileOutputStream stream(temporary.getFile());
+                                written=stream.openedOk();
+                                for(std::size_t offset=0;written&&offset<bytes.size()&&!job->cancel.load(std::memory_order_relaxed);){
+                                    const auto count=std::min<std::size_t>(16384,bytes.size()-offset);
+                                    written=stream.write(bytes.data()+offset,count);offset+=count;
+                                }
+                                stream.flush();written=written&&stream.getStatus().wasOk();
+                            }
+                            if(written&&!job->cancel.load(std::memory_order_relaxed))success=temporary.overwriteTargetFileWithTemporary();
+                        }
+                    } catch(...) { success=false; }
+                    const int result=success?1:(job->cancel.load(std::memory_order_relaxed)?3:2);
+                    job->result.store(result,std::memory_order_release);
+                });
+            } catch(...) {
+                safe->wavJob_.reset();safe->wavExport_.setButtonText("WAV");
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    "WAV export failed","Could not start the render worker.");
+            }
         });
 }
 void FxPanel::refreshPattern()
@@ -367,6 +426,18 @@ void FxPanel::refreshMacro()
 }
 void FxPanel::timerCallback()
 {
+    if(wavJob_){
+        const int result=wavJob_->result.load(std::memory_order_acquire);
+        if(result){
+            wavJob_.reset();wavExport_.setButtonText("WAV");
+            if(result!=3)juce::AlertWindow::showMessageBoxAsync(result==1?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+                result==1?"WAV exported":"WAV export failed",
+                result==1?"The captured sound was exported at 48 kHz, 24-bit.":"Could not render or write the WAV file.");
+        }else {
+            const int percent=static_cast<int>(wavJob_->progress.load(std::memory_order_relaxed)*100);
+            wavExport_.setButtonText(wavJob_->cancel.load(std::memory_order_relaxed)?"...":juce::String(percent)+"%");
+        }
+    }
     if (!isShowing()) return;
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();

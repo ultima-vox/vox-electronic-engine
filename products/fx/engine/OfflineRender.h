@@ -28,6 +28,10 @@ struct Settings {
                note>=0&&note<128&&(format==WavFormat::pcm24||format==WavFormat::float32);
     }
 };
+struct Capture {
+    NoiseProgram program{};
+    Settings settings{};
+};
 inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(static_cast<std::uint8_t>(x));out.push_back(static_cast<std::uint8_t>(x>>8));}
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
 inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++i)out.push_back(static_cast<std::uint8_t>(s[i]));}

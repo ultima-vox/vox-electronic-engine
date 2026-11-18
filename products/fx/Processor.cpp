@@ -136,8 +136,7 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
-bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
-                                    const std::atomic<bool>* cancel, std::atomic<float>* progress) const
+offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) const
 {
     const auto snapshot=programs_.snapshotState();
     settings.duration=duration_->get(); settings.gain=output_->get();
@@ -147,7 +146,14 @@ bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std:
         settings.effects[i]=effects::unpack(static_cast<std::uint16_t>(snapshot.effects>>(i*16)));
         settings.effects[i].wet=effectWet_[i]->get(); settings.effects[i].amount=effectAmount_[i]->get();
     }
-    return offline::renderWav(snapshot.program,settings,output,cancel,progress);
+    return {snapshot.program,settings};
+}
+
+bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
+                                    const std::atomic<bool>* cancel, std::atomic<float>* progress) const
+{
+    const auto capture=captureProgramWav(settings);
+    return offline::renderWav(capture.program,capture.settings,output,cancel,progress);
 }
 
 bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)

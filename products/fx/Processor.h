@@ -65,6 +65,7 @@ public:
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
     // Worker/controller thread only: captures the structural snapshot and
     // current host base parameters; may allocate and render for many seconds.
+    offline::Capture captureProgramWav (offline::Settings settings) const;
     bool renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
                            const std::atomic<bool>* cancel=nullptr, std::atomic<float>* progress=nullptr) const;
     // Trigger pattern controller and offline MIDI export.

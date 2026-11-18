@@ -4,6 +4,8 @@
 #include "components/VoxComboBox.h"
 #include "LayerPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
+#include <thread>
 
 namespace vox::fx {
 class FxProcessor;
@@ -13,6 +15,7 @@ class FxProcessor;
 class FxPanel final : public juce::Component, private juce::Timer {
 public:
     explicit FxPanel (FxProcessor&);
+    ~FxPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
@@ -46,6 +49,15 @@ public:
 private:
     void timerCallback() override;
     void exportPattern();
+    void exportWav();
+    struct WavJob {
+        std::atomic<bool> cancel{false};
+        std::atomic<float> progress{0};
+        // 0 running, 1 complete, 2 failure, 3 cancelled
+        std::atomic<int> result{0};
+        std::thread worker;
+        ~WavJob() { cancel.store(true,std::memory_order_relaxed); if(worker.joinable())worker.join(); }
+    };
     void refreshPattern();
     void refreshMacro();
     void refreshGenerator();
@@ -62,8 +74,10 @@ private:
     juce::Slider seed_;
     vox::ui::VoxButton generate_ { "GENERATE" };
     vox::ui::VoxButton mutate_ { "MUTATE" };
-    vox::ui::VoxButton midiExport_ { "EXPORT MIDI" };
+    vox::ui::VoxButton midiExport_ { "MIDI" };
+    vox::ui::VoxButton wavExport_ { "WAV" };
     std::unique_ptr<juce::FileChooser> exportChooser_;
+    std::unique_ptr<WavJob> wavJob_;
     std::array<juce::ToggleButton,4> layerLocks_;
     vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
     std::array<juce::Slider,4> patternDetails_;

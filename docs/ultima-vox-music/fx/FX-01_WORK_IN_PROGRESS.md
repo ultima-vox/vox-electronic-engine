@@ -561,3 +561,19 @@ the confirmed destination. Pattern/scheduler/SMF standalone tests pass; panel
 code and its basic control assertion were syntax-checked against JUCE 9.0.1
 only. Native dialog, overwrite/error behavior and host interaction still require
 Windows runtime testing. WAV file UI, drag export and tempo selection remain.
+
+## WAV save action
+
+The WAV button captures a self-contained Program, FX, macro and base-parameter
+snapshot before opening the save dialog, then renders C4 at full velocity,
+48 kHz/24-bit on an editor-owned worker. It reports render progress, offers
+best-effort cancellation, writes a temporary file in chunks, and joins its
+worker on editor destruction. No worker holds a processor/editor pointer.
+Cancellation before replacement leaves the target alone; cancellation racing
+the final replacement may be too late. File writes and the destructor join can
+block on a slow filesystem, but not on the audio callback. Existing offline
+render tests and ASan/UBSan pass; controller capture and GUI/dialog/worker code
+are syntax-checked only, not executed locally. Windows file chooser, cancellation,
+overwrite, teardown, write failure and host tests are still required. Fixed
+format/rate/note, no drag export, and live free-running LFO phase mismatch
+remain explicit limitations.
