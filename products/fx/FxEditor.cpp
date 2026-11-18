@@ -36,12 +36,18 @@ FxPanel::FxPanel (FxProcessor& processor)
     family_.addItem ("Texture / Drone", 9);
     family_.addItem ("Formant / Alien", 10);
     family_.addItem ("Glitch / Stutter", 11);
-    family_.addItem ("Granular Cloud (built-in source)", 12);
+    family_.addItem ("Granular Cloud", 12);
     family_.setTitle ("Sound family");
     family_.setTooltip ("Family for newly triggered events");
     family_.setSelectedId (processor_.family() + 1, juce::dontSendNotification);
     family_.onChange = [this] { processor_.setFamily (family_.getSelectedId() - 1); };
     addAndMakeVisible (family_);
+    sampleImport_.setTooltip("Import a licensed mono or stereo WAV for granular layers; decoding is asynchronous");
+    sampleBuiltin_.setTooltip("Explicitly select the built-in granular source");
+    sampleStatus_.setTooltip("Granular sample status");sampleStatus_.setFont(juce::FontOptions(11.0f));
+    sampleImport_.onClick=[this]{importSample();};
+    sampleBuiltin_.onClick=[this]{(void)processor_.useBuiltinSample();};
+    addAndMakeVisible(sampleImport_);addAndMakeVisible(sampleBuiltin_);addAndMakeVisible(sampleStatus_);
     for(int i=1;i<=8;++i)macroSelector_.addItem("M"+juce::String(i),i);
     macroSelector_.addItem("LFO 1",9);macroSelector_.addItem("LFO 2",10);macroSelector_.addItem("S&H",11);
     macroSelector_.setTitle("Modulation source selector");macroSelector_.setTooltip("Macros or fixed-rate LFO 1 (0.5 Hz), LFO 2 (1 Hz), S&H (4 Hz)");
@@ -272,6 +278,9 @@ void FxPanel::resized()
     macroSelector_.setBounds(macroRow.removeFromLeft(49).reduced(1));
     macroDestination_.setBounds(macroRow.removeFromLeft(49).reduced(1));
     macroValue_.setBounds(macroRow.removeFromLeft(50).reduced(1));macroDepth_.setBounds(macroRow.reduced(1));
+    auto sampleRow=familyArea.removeFromTop(23);
+    sampleImport_.setBounds(sampleRow.removeFromLeft(58).reduced(1));
+    sampleBuiltin_.setBounds(sampleRow.removeFromLeft(58).reduced(1));sampleStatus_.setBounds(sampleRow.reduced(1));
     area.removeFromLeft (20);
     auto buttons = area.removeFromLeft (160);
     audition_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
@@ -322,6 +331,20 @@ void FxPanel::resized()
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
         layers_[i]->setBounds(card.reduced(3));
     }
+}
+void FxPanel::importSample()
+{
+    sampleChooser_=std::make_unique<juce::FileChooser>("Choose a licensed WAV sample",juce::File{},"*.wav");
+    sampleImport_.setEnabled(false);
+    sampleChooser_->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+        [safe=juce::Component::SafePointer<FxPanel>(this)](const juce::FileChooser& chooser){
+            if(safe==nullptr)return;
+            safe->sampleImport_.setEnabled(true);
+            const auto file=chooser.getResult();if(file==juce::File{})return;
+            if(!safe->processor_.importSample(file))
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    "Sample import failed","The selected path is invalid or the import could not be queued.");
+        });
 }
 void FxPanel::exportPattern()
 {
@@ -439,6 +462,16 @@ void FxPanel::timerCallback()
         }
     }
     if (!isShowing()) return;
+    const auto sample=processor_.sampleSnapshot();
+    using Status=sample::Controller::Status;
+    const char* text=sample.status==Status::builtin?"Built-in":sample.status==Status::loading?"Loading":
+                     sample.status==Status::ready?"Ready":sample.status==Status::missing?"Missing":"Failed";
+    sampleStatus_.setText(text,juce::dontSendNotification);
+    juce::String detail=sample.reference.path.empty()?juce::String("Built-in source"):juce::String::fromUTF8(sample.reference.path.c_str());
+    if(sample.status==Status::failed)detail="Import failed; reverted to: "+detail;
+    if(sample.reference.kind==sample::Reference::Kind::pending&&sample.status==Status::missing)
+        detail="Unverified import; reimport the WAV: "+detail;
+    sampleStatus_.setTooltip(detail);
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
     refreshPattern();refreshMacro();refreshGenerator();

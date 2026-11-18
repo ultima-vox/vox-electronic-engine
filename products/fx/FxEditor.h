@@ -42,6 +42,8 @@ public:
     juce::Button& patternStep(std::size_t index) noexcept { return patternSteps_[index]; }
     juce::ComboBox& patternSelector() noexcept { return patternSelector_; }
     juce::Button& midiExportButton() noexcept { return midiExport_; }
+    juce::Button& sampleImportButton() noexcept { return sampleImport_; }
+    juce::Button& sampleBuiltinButton() noexcept { return sampleBuiltin_; }
     juce::Button& patternButton() noexcept { return patternEnabled_; }
     juce::Button& layerLock(std::size_t index) noexcept { return layerLocks_[index]; }
     juce::ComboBox& effectSelector(std::size_t index) noexcept { return effectsType_[index]; }
@@ -49,6 +51,7 @@ public:
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
 private:
     void timerCallback() override;
+    void importSample();
     void exportPattern();
     void exportWav();
     void refreshPattern();
@@ -69,6 +72,9 @@ private:
     vox::ui::VoxButton mutate_ { "MUTATE" };
     vox::ui::VoxButton midiExport_ { "MIDI" };
     vox::ui::VoxButton wavExport_ { "WAV" };
+    juce::TextButton sampleImport_ { "Import" },sampleBuiltin_ { "Built-in" };
+    juce::Label sampleStatus_;
+    std::unique_ptr<juce::FileChooser> sampleChooser_;
     std::unique_ptr<juce::FileChooser> exportChooser_;
     std::unique_ptr<fileexport::WavJob> wavJob_;
     std::array<juce::ToggleButton,4> layerLocks_;

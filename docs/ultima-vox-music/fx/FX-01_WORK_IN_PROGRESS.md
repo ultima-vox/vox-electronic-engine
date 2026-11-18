@@ -758,8 +758,8 @@ uses the exact selected generation, and captured WAVs copy the leased sample to
 worker-owned memory. The controller is declared before the engine so it outlives
 all voice leases. Standalone sample-backed WAV comparison passed normally and
 under ASan/UBSan. Processor and test code passed JUCE syntax checks only: the
-processor/state/A-B/import tests have not run here. No user sample import UI is
-exposed yet. File-system restore and destruction may block non-audio host threads;
+processor/state/A-B/import tests have not run here. An interim sample import/built-in selector is now wired, but native chooser,
+status presentation and processor tests have only been syntax-checked here. File-system restore and destruction may block non-audio host threads;
 real host callback/lifecycle and concurrent restore behavior need qualification.
 A missing external selection suppresses only events with an enabled granular
 layer; mixed events fail as a whole rather than silently substituting content.
@@ -778,3 +778,11 @@ test exercises pending save, supersession and rollback. A concurrent standalone
 loader/restore/MIDI-engine stress test passed TSan; granular, offline and
 controller tests passed, including selected ASan/UBSan. Actual JUCE processor,
 A/B, Windows and host execution still require exact-head qualification.
+
+### Interim sample UI
+
+The Perform panel can choose a user-supplied WAV asynchronously or explicitly
+select the built-in source; it reports loading, ready, missing and failed with
+the selected path in a tooltip. The chooser asks for licensed user content; no
+samples are bundled. The native chooser, visual layout, editor lifecycle and
+processor/A-B state tests remain unexecuted locally and need Windows/host checks.

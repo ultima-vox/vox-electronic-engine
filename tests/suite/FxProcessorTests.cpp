@@ -342,7 +342,31 @@ int main() {
         auto user=std::make_unique<vox::fx::FxProcessor>();user->setFamily(11);
         check(user->importSample(file)&&user->waitForSample(std::chrono::seconds(5))&&
               user->sampleStatus()==vox::fx::sample::Controller::Status::ready,"processor asynchronously imports sample");
-        const auto sampleState=save(*user);user->prepareToPlay(48000,512);
+        const auto sampleState=save(*user);
+        {
+            auto decoded=vox::preset::decode(std::span(static_cast<const std::byte*>(sampleState.getData()),sampleState.getSize()),vox::preset::makeTag("VXFX"),1);
+            vox::fx::sample::Reference pending;pending.kind=vox::fx::sample::Reference::Kind::pending;
+            pending.path=file.getFullPathName().toStdString();
+            bool found=false;for(auto& section:decoded.document.sections)if(section.tag==vox::fx::fxSampleSectionTag){
+                found=vox::fx::sample::referencecodec::encode(pending,section.data);}
+            const auto pendingBytes=vox::preset::encode(decoded.document);
+            check(found&&pendingBytes.has_value(),"construct pending sample project state");
+            if(pendingBytes){
+                auto comparison=std::make_unique<vox::fx::FxProcessor>();
+                comparison->setStateInformation(pendingBytes->data(),static_cast<int>(pendingBytes->size()));
+                check(comparison->sampleReference()==pending&&comparison->sampleStatus()==vox::fx::sample::Controller::Status::missing,
+                      "pending project restore remains unavailable");
+                check(comparison->storeComparison(0)&&comparison->useBuiltinSample()&&comparison->recallComparison(0)&&
+                      comparison->sampleReference()==pending&&comparison->sampleStatus()==vox::fx::sample::Controller::Status::missing,
+                      "A/B restores pending identity without trusting unhashed content");
+                auto bad=decoded.document;for(auto& section:bad.sections)if(section.tag==vox::fx::fxSampleSectionTag)section.data[0]=std::byte{99};
+                const auto invalid=vox::preset::encode(bad);const auto before=save(*comparison);
+                if(invalid){comparison->setStateInformation(invalid->data(),static_cast<int>(invalid->size()));
+                    check(comparison->lastStateError().isNotEmpty()&&save(*comparison)==before,"invalid sample state rejected transactionally");}
+                else check(false,"encode invalid sample project state");
+            }
+        }
+        user->prepareToPlay(48000,512);
         juce::AudioBuffer<float> sound(2,512);juce::MidiBuffer note;
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*user,sound,note);
         check(sound.getMagnitude(0,0,512)>0,"processor granular sample triggers audio");
@@ -365,7 +389,10 @@ int main() {
         check(sound.getMagnitude(0,0,512)>0,"missing sample does not suppress non-granular audio");
         check(missing->renderProgramWav(settings,bytes),"non-granular WAV ignores missing sample");
         missing->panic();block(*missing,sound,note);check(missing->setFamily(11),"return to granular family");
-        check(missing->useBuiltinSample(),"explicit built-in fallback");
+        vox::fx::FxPanel samplePanel(*missing);
+        check(samplePanel.sampleImportButton().isEnabled(),"sample import action exposed");
+        samplePanel.sampleBuiltinButton().onClick();
+        check(missing->sampleReference().kind==vox::fx::sample::Reference::Kind::builtin,"editor explicitly selects built-in sample");
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*missing,sound,note);
         check(sound.getMagnitude(0,0,512)>0,"explicit fallback triggers procedural sample");
     }

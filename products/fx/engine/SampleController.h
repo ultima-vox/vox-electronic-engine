@@ -36,6 +36,8 @@ public:
     }
     Store& store() noexcept { return store_; }
     std::uint64_t selection() const noexcept { return selection_.load(std::memory_order_acquire); }
+    struct Snapshot { Reference reference;Status status; };
+    Snapshot snapshot() const { const std::lock_guard<std::mutex> lock(mutex_);return {desired_,status_}; }
     Reference reference() const { const std::lock_guard<std::mutex> lock(mutex_);return desired_; }
     Status status() const { const std::lock_guard<std::mutex> lock(mutex_);return status_; }
     // A pending import saves its intended path as unverified and is silent for

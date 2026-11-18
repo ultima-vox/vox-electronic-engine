@@ -82,6 +82,7 @@ public:
     bool importSample(const juce::File& path) { return samples_.import(path); }
     bool useBuiltinSample() { return samples_.restore({}); }
     sample::Controller::Status sampleStatus() const { return samples_.status(); }
+    sample::Controller::Snapshot sampleSnapshot() const { return samples_.snapshot(); }
     sample::Reference sampleReference() const { return samples_.reference(); }
     bool waitForSample(std::chrono::milliseconds timeout) { return samples_.waitUntilSettled(timeout); }
     // Worker/controller thread only: captures the structural snapshot and
