@@ -206,12 +206,16 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
     auditionPending_.store (false, std::memory_order_relaxed);
-    peak_.store (0.0f, std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
+    peak_.store (0.0f, std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
     patternUnavailable_.store(false,std::memory_order_relaxed);
     transport_.unavailable();
 }
 
-void FxProcessor::releaseResources() { engine_.prepare (preparedSampleRate()); }
+void FxProcessor::releaseResources() {
+    engine_.prepare (preparedSampleRate());
+    telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);
+    peak_.store(0,std::memory_order_relaxed);
+}
 void FxProcessor::reset() { panic(); }
 juce::AudioProcessorEditor* FxProcessor::createEditor()
 {

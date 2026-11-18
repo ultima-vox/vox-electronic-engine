@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace vox::fx {
 
@@ -106,7 +107,7 @@ public:
         }
         grainLength_ = static_cast<unsigned>(std::max(2.0, rate_ * 0.08));
         grainInterval_ = static_cast<unsigned>(std::max(1.0, rate_ * 0.025));
-        grains_ = {}; activeGrains_ = 0; voices_ = {}; retiring_ = {}; serial_ = 0;
+        grains_ = {}; activeGrains_ = 0; voices_ = {}; retiring_ = {}; serial_ = 0;droppedEvents_=0;
     }
     // The caller must ensure there is no concurrent access. UI/worker threads
     // must not call this during rendering without a safe publication bridge.
@@ -128,7 +129,10 @@ public:
         std::size_t retiringIndex=retiring_.size();
         if(stealing){
             for(std::size_t i=0;i<retiring_.size();++i)if(!retiring_[i].active){retiringIndex=i;break;}
-            if(retiringIndex==retiring_.size())return false;
+            if(retiringIndex==retiring_.size()){
+                if(droppedEvents_!=std::numeric_limits<std::uint32_t>::max())++droppedEvents_;
+                return false;
+            }
             slot=&*std::min_element(voices_.begin(),voices_.end(),
                 [](const Voice& a,const Voice& b){return a.serial<b.serial;});
         }
@@ -172,6 +176,7 @@ public:
         for(const auto& voice:voices_)count+=voice.active?1u:0u;
         return count;
     }
+    std::uint32_t droppedEventCount() const noexcept { return droppedEvents_; }
     unsigned activeGrainCount() const noexcept {
         return activeGrains_;
     }
@@ -541,6 +546,7 @@ private:
     NoiseProgram program_;
     double rate_ = 44100.0,glitchGridIncrement_=120.0/(15.0*44100.0);
     std::uint64_t serial_ = 0;
+    std::uint32_t droppedEvents_=0;
     std::array<Voice, 8> voices_ {};
     std::array<Voice,4> retiring_ {};
     sample::Store* sampleStore_=nullptr; // non-owning, lifetime guaranteed by caller

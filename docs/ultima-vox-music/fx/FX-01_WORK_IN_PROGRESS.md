@@ -916,3 +916,10 @@ maximum-pattern stress had zero dropped triggers for the measured 1000-BPM
 case but higher callback cost; more densely simultaneous MIDI can still drop.
 This supersedes earlier statements about a single retirement slot, not the
 outstanding Windows/host performance or audio-quality acceptance.
+
+The audio engine now counts triggers rejected specifically because all four
+retirement fades are occupied. The saturating counter is published through a
+lock-free block snapshot and displayed in the interim meter; it resets on
+prepare/resource release. Invalid notes and missing samples are not included.
+Standalone counter tests passed, while the 13-simultaneous-MIDI processor/UI
+telemetry regression remains syntax-checked only.

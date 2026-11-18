@@ -134,7 +134,7 @@ int main() {
     for (int i = 0; i < 8; ++i) check(p.noteOn(1, 60 + i, 1), "eight events");
     for(int i=0;i<4;++i)check(p.noteOn(1,72+i,1),"four bounded retirement fades");
     check(p.activeEventCount()==12,"eight active voices plus four retirement fades");
-    check(!p.noteOn(1,76,1),"reject only when all retirement slots occupied");
+    check(!p.noteOn(1,76,1)&&p.droppedEventCount()==1,"full retirement pool drops and counts one event");
     std::array<float, 512> l{}, r{};
     p.render(l.data(), r.data(), 512);
     check(p.noteOn(1,76,1), "retirement slot reused");
@@ -152,7 +152,8 @@ int main() {
         check(fades->activeEventCount()==0,"panic fades all active voices");
     }
     p.prepare(48000); p.render(l.data(), r.data(), 512);
-    check(std::all_of(l.begin(), l.end(), [](float x) { return x == 0; }), "prepare resets all voices");
+    check(std::all_of(l.begin(), l.end(), [](float x) { return x == 0; })&&p.droppedEventCount()==0,
+          "prepare resets all voices and dropped event count");
     std::printf("FX noise riser: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

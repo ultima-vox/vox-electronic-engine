@@ -115,5 +115,6 @@ private:
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;
     float shownPeak_ = 0.0f;
     unsigned shownEvents_=0,shownGrains_=0,clipHold_=0;
+    std::uint32_t shownDropped_=0;
 };
 } // namespace vox::fx

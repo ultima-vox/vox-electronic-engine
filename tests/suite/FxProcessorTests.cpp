@@ -495,12 +495,22 @@ int main() {
     check(audio.getMagnitude(0, 300, 212) == 0, "reset fades active event");
 
     p.audition(); block(p, audio, midi);
-    check(p.audioTelemetry().events>=1&&p.audioTelemetry().events<=9&&p.audioTelemetry().grains<=64,"audio telemetry reports bounded active pool");
+    check(p.audioTelemetry().events>=1&&p.audioTelemetry().events<=12&&p.audioTelemetry().grains<=64,"audio telemetry reports bounded active pool");
     check(audio.getMagnitude(0, 0, 512) > 0, "editor audition triggers sound");
     p.panic(); block(p, audio, midi);
     check(p.audioTelemetry().events==0&&p.audioTelemetry().grains==0,"audio telemetry reflects panic release");
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
 
+    {
+        auto busy=std::make_unique<vox::fx::FxProcessor>();busy->prepareToPlay(48000,512);
+        juce::AudioBuffer<float> shortBlock(2,64);juce::MidiBuffer notes;
+        for(int i=0;i<13;++i)notes.addEvent(juce::MidiMessage::noteOn(1,48+i,static_cast<juce::uint8>(100)),0);
+        block(*busy,shortBlock,notes);
+        check(busy->audioTelemetry().events==12&&busy->audioTelemetry().dropped==1,
+              "voice pool telemetry reports simultaneous retirement exhaustion");
+        busy->releaseResources();check(busy->audioTelemetry().events==0&&busy->audioTelemetry().dropped==0,
+              "resource release resets voice telemetry");
+    }
     {
         auto transportOwner=std::make_unique<vox::fx::FxProcessor>(); auto& transport=*transportOwner; TestPlayHead playhead;
         transport.setPlayHead(&playhead); transport.prepareToPlay(48000, 512);
