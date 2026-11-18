@@ -32,13 +32,13 @@ inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(st
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
 inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++i)out.push_back(static_cast<std::uint8_t>(s[i]));}
 // Worker thread only. Renders the same event engine and non-delay effects;
-// the filter receives one second of post-event decay. Output is transactional:
+// the filter and phaser receive one second of post-event decay. Output is transactional:
 // invalid input, cancellation or non-finite DSP leave the old bytes unchanged.
 inline bool renderWav(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
                       const std::atomic<bool>* cancel=nullptr,std::atomic<float>* progress=nullptr) {
     if(!program.valid()||!settings.valid())return false;
     bool hasFilter=false;
-    for(const auto& effect:settings.effects)if(effect.type==effects::Type::lowpass)hasFilter=true;
+    for(const auto& effect:settings.effects)if(effect.type==effects::Type::lowpass||effect.type==effects::Type::phaser)hasFilter=true;
     const auto frames=static_cast<std::uint32_t>(std::ceil(static_cast<double>(settings.duration)*settings.sampleRate))+
                       (hasFilter?settings.sampleRate:0u);
     const bool floating=settings.format==WavFormat::float32;

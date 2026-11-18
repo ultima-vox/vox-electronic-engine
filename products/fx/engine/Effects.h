@@ -6,8 +6,8 @@
 #include <cstdint>
 
 namespace vox::fx::effects {
-// Initial non-delay effects; delay, reverb and modulation effects remain.
-enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, count };
+// Compact, bounded effects; delay, reverb, chorus and flanger remain.
+enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, count };
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -40,6 +40,8 @@ class Chain {
         Type type=Type::bypass;
         double lowL=0,lowR=0,phase=0,gate=0,filterAlpha=0;
         unsigned coefficientCounter=0;
+        std::array<double,4> allpassL{},allpassR{};
+        double phaseCoefficientL=0,phaseCoefficientR=0;
     };
     struct Slot {
         State current{}, old{};
@@ -111,6 +113,29 @@ private:
         case Type::gate: {const double target=state.phase<.5?1.0:0.0;
             state.gate+=smoothing_*(target-state.gate);l*=state.gate;r*=state.gate;
             state.phase+=(1.0+15.0*amount)/rate_;if(state.phase>=1)state.phase-=1;break;}
+        case Type::phaser: {
+            // Four first-order allpasses per channel; parallel dry creates
+            // moving notches. Fixed-rate stereo quadrature LFO, bounded sweep.
+            if(state.coefficientCounter==0){
+                const auto coefficient=[&](double oscillator){
+                    const double frequency=std::min(1000.0*std::exp2(2.0*amount*oscillator),rate_*.4);
+                    const double g=std::tan(3.14159265358979323846*frequency/rate_);
+                    return (g-1.0)/(g+1.0);
+                };
+                state.phaseCoefficientL=coefficient(std::sin(tau*state.phase));
+                state.phaseCoefficientR=coefficient(std::cos(tau*state.phase));
+            }
+            state.coefficientCounter=(state.coefficientCounter+1)&15u;
+            const auto process=[](double input,std::array<double,4>& memory,double coefficient){
+                double signal=input;
+                for(auto& z:memory){const double output=coefficient*signal+z;
+                    z=signal-coefficient*output;if(std::abs(z)<1.0e-15)z=0;signal=output;}
+                return .5*(input+signal);
+            };
+            l=process(l,state.allpassL,state.phaseCoefficientL);
+            r=process(r,state.allpassR,state.phaseCoefficientR);
+            state.phase+=.23/rate_;if(state.phase>=1)state.phase-=1;break;
+        }
         case Type::count: break;
         }
     }

@@ -35,6 +35,13 @@ int main(){
     vox::fx::effects::Chain chain;chain.prepare(s.sampleRate);chain.set(0,s.effects[0]);
     effected->render(l,r,512);chain.process(l,r,512);
     for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline effects match realtime chain");
+    s.effects[0]={vox::fx::effects::Type::phaser,1,.7f};
+    check(vox::fx::offline::renderWav(program,s,wav),"phaser WAV render");
+    check(wav.size()==56+(frames+s.sampleRate)*8,"phaser tail included");
+    auto phased=std::make_unique<vox::fx::NoiseRiser>();phased->prepare(s.sampleRate);phased->setProgram(program);phased->noteOn(1,s.note,s.velocity,s.duration);
+    vox::fx::effects::Chain phaser;phaser.prepare(s.sampleRate);phaser.set(0,s.effects[0]);
+    phased->render(l,r,512);phaser.process(l,r,512);
+    for(std::size_t i=0;i<512;++i)check(std::bit_cast<float>(word(56+i*8))==l[i],"offline phaser matches realtime chain");
     s.effects[0]={};s.macroRoutes.setGainRoute(0,-.5f,0);s.macros[0]=1;
     check(vox::fx::offline::renderWav(program,s,wav),"macro routed WAV render");
     auto macroEngine=std::make_unique<vox::fx::NoiseRiser>();macroEngine->prepare(s.sampleRate);macroEngine->setProgram(program);macroEngine->noteOn(1,s.note,s.velocity,s.duration);

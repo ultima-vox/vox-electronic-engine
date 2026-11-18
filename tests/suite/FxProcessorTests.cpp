@@ -111,10 +111,13 @@ int main() {
         vox::fx::generator::Settings settings;check(effected->generateProgram(settings,{}),"generate while slot automation active");
         check(std::abs(effected->effectWetParameter(0).get()-.7f)<1e-5f &&
               std::abs(effected->effectAmountParameter(0).get()-.3f)<1e-5f,"generation preserves FX automation");
+        panel.effectSelector(1).setSelectedId(8,juce::sendNotificationSync);
+        check(effected->effect(1).type==vox::fx::effects::Type::phaser,"editor selects phaser");
         auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();
         restoredFx->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
         check(restoredFx->effect(0).type==effected->effect(0).type &&
-              std::abs(restoredFx->effectWetParameter(0).get()-.7f)<1e-5f,"effects restored in state");
+              std::abs(restoredFx->effectWetParameter(0).get()-.7f)<1e-5f &&
+              restoredFx->effect(1).type==vox::fx::effects::Type::phaser,"effects restored in state");
         auto legacy=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:legacy.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag){
             section.data.clear();const auto old=effected->effectsSnapshot();

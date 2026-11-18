@@ -69,7 +69,8 @@ int main(){
         producer.join();
         const auto state=unified.snapshotState();check(state.program.layers[0].gain==.75f&&
             vox::fx::effects::unpack(static_cast<std::uint16_t>(state.effects)).type==vox::fx::effects::Type::drive,"latest unified state");
-        check(!unified.publishState(state.program,(state.effects&~std::uint64_t{7})|7),"invalid effects state rejected");
+        check(!unified.setEffect(0,{vox::fx::effects::Type::count,1,.5f}) && unified.snapshotState().effects==state.effects,
+              "invalid effect type rejected without publication");
         std::thread layerWriter([&]{for(int i=0;i<1000;++i)if(!unified.setLayerFamily(1,vox::fx::NoiseFamily::formant))std::abort();});
         std::thread fxWriter([&]{for(int i=0;i<1000;++i)if(!unified.setEffect(2,{vox::fx::effects::Type::gate,.5f,.5f}))std::abort();});
         layerWriter.join();fxWriter.join();const auto both=unified.snapshotState();

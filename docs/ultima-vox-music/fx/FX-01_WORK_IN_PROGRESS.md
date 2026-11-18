@@ -533,3 +533,19 @@ invalidates stale curve undo history. Generator DSP tests already cover audible
 finite renders and structural uniqueness; new editor, automation-precedence
 and history tests are syntax-only. Tags, preview/compare, favorites, searching,
 curation and perceptual/host acceptance remain unfinished.
+
+## Fixed-rate phaser
+
+All four serial slots can now select a four-stage stereo allpass phaser. A
+0.23 Hz quadrature LFO sweeps a 1 kHz center, and the existing amount parameter
+controls sweep depth; wet is host-automatable. Slot changes retain the
+existing bounded 5 ms crossfade. FMOD is unrelated; FXSL retains the stable
+three-bit slot type encoding and uses the previously unused value 7. One second
+of phaser decay is included in offline WAV. Tests cover impulse/stereo response,
+block-size invariance, an analytical fixed-notch frequency, finite decay, packed
+state, realtime/WAV parity, sanitizers and an allocation probe. Processor/editor
+state tests were syntax-checked only. Rate, feedback and tempo sync controls,
+chorus, flanger, delay and reverb are still missing. A local Linux diagnostic
+96 kHz 128-frame 8-event/4-layer Shepard + four phasers run reported p50 278.32,
+p95 300.04, p99 320.12, max 344.37 microseconds; this is not host, Windows or
+deadline qualification.
