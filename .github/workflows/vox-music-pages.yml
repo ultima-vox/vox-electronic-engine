@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
     defaults:
       run:
         working-directory: apps/vox-music-prototype
@@ -59,12 +61,16 @@ jobs:
           VOX_TEST_PREVIEW: '1'
         run: npm run test:e2e
 
-      - name: Stamp the tested commit in the static site
-        run: printf '{"sha":"%s"}\n' "$GITHUB_SHA" > dist/workbench-version.json
+      - name: Stamp the tested commit and name this attempt's artifact
+        id: package
+        run: |
+          printf '{"sha":"%s"}\n' "$GITHUB_SHA" > dist/workbench-version.json
+          printf 'artifact_name=github-pages-%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Upload only the tested dist directory
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
+          name: ${{ steps.package.outputs.artifact_name }}
           path: apps/vox-music-prototype/dist
 
   deploy:
@@ -93,6 +99,8 @@ jobs:
       - name: Publish the tested artifact
         id: pages
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          artifact_name: ${{ needs.build.outputs.artifact_name }}
 
   verify:
     name: Verify the public HTTPS site
