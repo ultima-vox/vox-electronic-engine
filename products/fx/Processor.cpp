@@ -373,10 +373,12 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     std::array<float,4> wet{1,1,1,1},amount{.5f,.5f,.5f,.5f};
     if (const auto* section=doc.find(fxEffectsSectionTag)) {
         if (section->data.size()==12 && wordAt(section->data,0)==1) {
-            fx=static_cast<std::uint64_t>(wordAt(section->data,4)) |
+            const auto legacy=static_cast<std::uint64_t>(wordAt(section->data,4)) |
                (static_cast<std::uint64_t>(wordAt(section->data,8))<<32);
-            if (!effects::validPacked(fx)) {error="Invalid FX effects settings";return {};}
-            for(std::size_t i=0;i<4;++i){const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));wet[i]=s.wet;amount[i]=s.amount;}
+            fx=0;
+            for(std::size_t i=0;i<4;++i){const auto s=effects::unpackLegacy(static_cast<std::uint16_t>(legacy>>(i*16)));
+                if(!s.valid()){error="Invalid FX effects settings";return {};}
+                wet[i]=s.wet;amount[i]=s.amount;fx|=static_cast<std::uint64_t>(effects::pack(s))<<(i*16);}
         } else if(section->data.size()==52 && wordAt(section->data,0)==2) {
             fx=0;
             for(std::size_t i=0;i<4;++i) {

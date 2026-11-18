@@ -596,3 +596,24 @@ gain or pan; neither route overwrites host automation. Standalone codec, DSP,
 WAV parity, ASan/UBSan and zero-allocation probe pass. Processor/UI/state tests
 are syntax-only. Pitch/cutoff destinations, other sources, route-wide editor,
 and click-free route reconfiguration remain unfinished.
+
+## Fixed-rate stereo flanger and slot packing migration
+
+Each slot can now select a short modulated stereo delay with fixed 0.25 Hz
+quadrature LFO and 0.35 feedback; amount controls sweep depth. Two preallocated
+delay banks per slot allow existing 5 ms type crossfades. Banks are allocated
+on prepare and lazily invalidated on reuse, without callback clearing,
+allocation or deallocation. Failed/unprepared bank allocation produces safe
+bypass for the flanger; prepare failure is not yet surfaced as host telemetry.
+Offline rendering includes one second of flanger decay. Internal packed slot
+words now use 4-bit type and 6/6-bit auxiliary values; the host-automated wet
+and amount parameters retain their precision. FXSL v1's legacy 3/6/7 layout
+is explicitly migrated and FXSL v2 remains the persisted current format.
+
+Standalone impulse, first-input/warmup, stale-bank, block invariance, decay,
+8–384 kHz boundary, WAV parity and allocation/transition tests passed; selected
+ASan/UBSan passed. Processor/UI, FXSL migration and host behavior remain
+syntax-only locally. A Linux 96 kHz, 128-frame diagnostic 8-event/4-layer
+Shepard + four flangers reported p50 316.96, p95 356.22, p99 451.27, max
+464.30 microseconds; this is not host/Windows deadline qualification. Delay,
+chorus, reverb, rate/feedback controls and tempo sync are not yet implemented.

@@ -4,10 +4,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace vox::fx::effects {
-// Compact, bounded effects; delay, reverb, chorus and flanger remain.
-enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, count };
+// Compact, bounded effects; delay, reverb and chorus remain.
+enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, count };
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -16,15 +17,20 @@ struct Settings {
                std::isfinite(wet)&&wet>=0&&wet<=1&&std::isfinite(amount)&&amount>=0&&amount<=1;
     }
 };
-// Compact, bounded structural state; UI resolution is 6/7 bits. One atomic
+// Compact, bounded structural state; non-automated snapshot resolution is 6/6 bits. One atomic
 // 64-bit word can publish all four slots as a coherent snapshot.
 inline std::uint16_t pack(Settings s) noexcept {
     return static_cast<std::uint16_t>(static_cast<unsigned>(s.type) |
-        (static_cast<unsigned>(std::lround(s.wet*63))<<3) |
-        (static_cast<unsigned>(std::lround(s.amount*127))<<9));
+        (static_cast<unsigned>(std::lround(s.wet*63))<<4) |
+        (static_cast<unsigned>(std::lround(s.amount*63))<<10));
 }
 inline Settings unpack(std::uint16_t word) noexcept {
-    return {static_cast<Type>(word&7u), static_cast<float>((word>>3)&63u)/63.0f,
+    return {static_cast<Type>(word&15u), static_cast<float>((word>>4)&63u)/63.0f,
+            static_cast<float>((word>>10)&63u)/63.0f};
+}
+// FXSL v1 stored 3-bit type and 6/7-bit values; keep its exact host values.
+inline Settings unpackLegacy(std::uint16_t word) noexcept {
+    return {static_cast<Type>(word&7u),static_cast<float>((word>>3)&63u)/63.0f,
             static_cast<float>((word>>9)&127u)/127.0f};
 }
 inline std::uint64_t defaults() noexcept {
@@ -42,7 +48,10 @@ class Chain {
         unsigned coefficientCounter=0;
         std::array<double,4> allpassL{},allpassR{};
         double phaseCoefficientL=0,phaseCoefficientR=0;
+        unsigned bank=0;
+        std::size_t write=0,age=0;
     };
+    struct Bank { std::vector<float> left,right; };
     struct Slot {
         State current{}, old{};
         Settings desired{};
@@ -52,7 +61,13 @@ class Chain {
 public:
     bool prepare(double rate) noexcept {
         if(!std::isfinite(rate)||rate<8000||rate>384000)return false;
-        rate_=rate; fadeSamples_=static_cast<unsigned>(std::max(1.0,std::round(.005*rate)));
+        // Two banks per slot permit bounded crossfades without copying or
+        // clearing delay memory on the callback. Allocation is prepare-only.
+        const auto size=static_cast<std::size_t>(std::ceil(rate*.005))+4;
+        std::array<std::array<Bank,2>,4> next;
+        try { for(auto& slot:next)for(auto& bank:slot){bank.left.assign(size,0);bank.right.assign(size,0);} }
+        catch(...) { return false; }
+        banks_.swap(next); rate_=rate; fadeSamples_=static_cast<unsigned>(std::max(1.0,std::round(.005*rate)));
         smoothing_=1.0-std::exp(-1.0/(.005*rate)); slots_={}; return true;
     }
     // Bounded and allocation-free; type changes crossfade for 5ms. A later
@@ -64,15 +79,16 @@ public:
     void process(float* left,float* right,std::size_t count) noexcept {
         if(left==nullptr||right==nullptr)return;
         for(std::size_t i=0;i<count;++i){double l=left[i],r=right[i];
-            for(auto& slot:slots_){
+            for(std::size_t slotIndex=0;slotIndex<slots_.size();++slotIndex){auto& slot=slots_[slotIndex];
                 if(slot.transition==0 && slot.current.type!=slot.desired.type){
-                    slot.old=slot.current;slot.current={};slot.current.type=slot.desired.type;slot.transition=fadeSamples_;
+                    slot.old=slot.current;slot.current={};slot.current.bank=1-slot.old.bank;
+                    slot.current.type=slot.desired.type;slot.transition=fadeSamples_;
                 }
                 slot.wet+=static_cast<float>((slot.desired.wet-slot.wet)*smoothing_);
                 slot.amount+=static_cast<float>((slot.desired.amount-slot.amount)*smoothing_);
-                double a=l,b=r;apply(slot.current,slot.amount,a,b);
+                double a=l,b=r;apply(slot.current,banks_[slotIndex][slot.current.bank],slot.amount,a,b);
                 if(slot.current.type!=Type::bypass){a=l+(a-l)*slot.wet;b=r+(b-r)*slot.wet;}
-                if(slot.transition){double oldL=l,oldR=r;apply(slot.old,slot.amount,oldL,oldR);
+                if(slot.transition){double oldL=l,oldR=r;apply(slot.old,banks_[slotIndex][slot.old.bank],slot.amount,oldL,oldR);
                     if(slot.old.type!=Type::bypass){oldL=l+(oldL-l)*slot.wet;oldR=r+(oldR-r)*slot.wet;}
                     const double mix=1.0-static_cast<double>(slot.transition)/fadeSamples_;
                     a=oldL+(a-oldL)*mix;b=oldR+(b-oldR)*mix;--slot.transition;
@@ -83,7 +99,7 @@ public:
         }
     }
 private:
-    void apply(State& state,float amount,double& l,double& r) noexcept {
+    void apply(State& state,Bank& bank,float amount,double& l,double& r) noexcept {
         constexpr double tau=6.2831853071795864769;
         switch(state.type){
         case Type::bypass: break;
@@ -136,11 +152,36 @@ private:
             r=process(r,state.allpassR,state.phaseCoefficientR);
             state.phase+=.23/rate_;if(state.phase>=1)state.phase-=1;break;
         }
+        case Type::flanger: {
+            const auto size=bank.left.size();if(size<4)break; // failed/unprepared allocation: safe bypass
+            const auto read=[&](const std::vector<float>& buffer,double phase){
+                const double delay=rate_*(.0005+.002*(1.0+amount*std::sin(tau*phase)));
+                const auto whole=static_cast<std::size_t>(delay);
+                const double fraction=delay-whole;
+                if(state.age<whole)return 0.0;
+                const auto index=state.write>=whole?state.write-whole:state.write+size-whole;
+                const auto previous=index==0?size-1:index-1;
+                const double older=state.age>whole?buffer[previous]:0.0;
+                return buffer[index]*(1-fraction)+older*fraction;
+            };
+            const auto delayedL=read(bank.left,state.phase);
+            const auto delayedR=read(bank.right,state.phase+.25);
+            const auto write=[](double input,double delayed){
+                const auto value=std::clamp(input+.35*delayed,-8.0,8.0);
+                return static_cast<float>(std::abs(value)<1e-15?0:value);
+            };
+            bank.left[state.write]=write(l,delayedL);bank.right[state.write]=write(r,delayedR);
+            if(++state.write==size)state.write=0;
+            if(state.age<size)++state.age;
+            l=.5*(l+delayedL);r=.5*(r+delayedR);
+            state.phase+=.25/rate_;if(state.phase>=1)state.phase-=1;break;
+        }
         case Type::count: break;
         }
     }
     double rate_=44100,smoothing_=0;
     unsigned fadeSamples_=1;
     std::array<Slot,4> slots_{};
+    std::array<std::array<Bank,2>,4> banks_{};
 };
 } // namespace vox::fx::effects

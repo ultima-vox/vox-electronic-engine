@@ -115,20 +115,33 @@ int main() {
               std::abs(effected->effectAmountParameter(0).get()-.3f)<1e-5f,"generation preserves FX automation");
         panel.effectSelector(1).setSelectedId(8,juce::sendNotificationSync);
         check(effected->effect(1).type==vox::fx::effects::Type::phaser,"editor selects phaser");
+        panel.effectSelector(2).setSelectedId(9,juce::sendNotificationSync);
+        check(effected->effect(2).type==vox::fx::effects::Type::flanger,"editor selects flanger");
         auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();
         restoredFx->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
         check(restoredFx->effect(0).type==effected->effect(0).type &&
               std::abs(restoredFx->effectWetParameter(0).get()-.7f)<1e-5f &&
-              restoredFx->effect(1).type==vox::fx::effects::Type::phaser,"effects restored in state");
+              restoredFx->effect(1).type==vox::fx::effects::Type::phaser &&
+              restoredFx->effect(2).type==vox::fx::effects::Type::flanger,"effects restored in state");
         auto legacy=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:legacy.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag){
-            section.data.clear();const auto old=effected->effectsSnapshot();
+            section.data.clear();std::uint64_t old=0;
+            for(std::size_t i=0;i<4;++i){const auto settings=effected->effect(i);
+                const auto legacyType=settings.type==vox::fx::effects::Type::flanger?0u:static_cast<unsigned>(settings.type);
+                const auto packed=static_cast<std::uint16_t>(legacyType|
+                    (static_cast<unsigned>(std::lround(settings.wet*63))<<3)|
+                    (static_cast<unsigned>(std::lround(settings.amount*127))<<9));
+                old|=static_cast<std::uint64_t>(packed)<<(i*16);
+            }
             for(const auto word:{std::uint32_t{1},static_cast<std::uint32_t>(old),static_cast<std::uint32_t>(old>>32)})
                 for(int shift=0;shift<32;shift+=8)section.data.push_back(static_cast<std::byte>((word>>shift)&255));
         }
         const auto old=vox::preset::encode(legacy.document);auto migratedFx=std::make_unique<vox::fx::FxProcessor>();
         if(old){migratedFx->setStateInformation(old->data(),static_cast<int>(old->size()));
-            check(migratedFx->lastStateError().isEmpty()&&migratedFx->effect(0).type==vox::fx::effects::Type::drive,"FXSL v1 migrates to automated v2");}
+            check(migratedFx->lastStateError().isEmpty()&&migratedFx->effect(0).type==vox::fx::effects::Type::drive &&
+                  std::abs(migratedFx->effectWetParameter(0).get()-std::round(.7f*63)/63)<1e-5f &&
+                  std::abs(migratedFx->effectAmountParameter(0).get()-std::round(.3f*127)/127)<1e-5f,
+                  "FXSL v1 migrates type and old quantized automation values");}
         else check(false,"encode old FXSL");
         auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:document.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag)section.data[4]=std::byte{0xff};
