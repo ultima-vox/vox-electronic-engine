@@ -25,6 +25,7 @@ Visual reference only: [#135](https://github.com/ultima-vox/vox-electronic-engin
 | [TOKENS.md](TOKENS.md) | Token values, provenance, extra literals |
 | [UI_BINDING_MATRIX.csv](UI_BINDING_MATRIX.csv) | 261 rows. 174 Drums host IDs plus structural, layout, telemetry, shared components, FX host IDs |
 | [HANDOFF.md](HANDOFF.md) | Order of later implementation. Not permission to start it |
+| [HTML_PROTOTYPE_VS_127.md](HTML_PROTOTYPE_VS_127.md) | Interactive HTML versus #127 and #135. Neon palette is not imported. |
 
 ## Non-goals
 
@@ -40,3 +41,7 @@ Visual reference only: [#135](https://github.com/ultima-vox/vox-electronic-engin
 `partial` — a real binding or panel exists, but not the #127 surface.
 `absent` — required behaviour was not found.
 `proposed` — a later shared component, not present in `VoxComponents.h`.
+
+## TL ruling — colour
+
+Do not copy the rejected neon sheet into `Tokens.h` or a future editor. The hardware HTML palette is also not an approved token change. See the prototype audit.
