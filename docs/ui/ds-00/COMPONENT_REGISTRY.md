@@ -10,6 +10,11 @@ SHA `f1d6eb595779c973ae5a139270795aae968804cc`.
 - `components/VoxTabBar.h`
 - `components/VoxSectionHeader.h`
 
+
+## Not the instrument model
+
+`AudioProcessorValueTreeState parameters_` in Drums is the host-parameter registry (`Processor.cpp` constructs it with `UndoManager* = nullptr`). It is not the kit, the sample library, or the workspace layout. Structural members, including pad `output` and `voiceLimit`, stay on the store path. FX has no APVTS; `AudioParameterFloat*` plus `SliderParameterAttachment` is a valid host binding and is not a defect. See [STATE_BOUNDARIES.md](STATE_BOUNDARIES.md).
+
 Nothing else is a public shared control. Do not describe `VoxFader`, `VoxPad`, `VoxKeyboard`, `VoxMeter`, or `VoxDockWorkspace` as implemented.
 
 ## Not a component source

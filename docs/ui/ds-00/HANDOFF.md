@@ -45,10 +45,14 @@ This file does not open the implementation. Visual direction is not approved. Ne
 
 ## Choices the TL should check
 
-1. **Macro tooltip vs CSV (FX).** `FxEditor.cpp` tooltip says the macro center is neutral. `fx.macro.N` in CSV is float 0..1 default 0.5. Which mapping is intended?
+1. **FX macro tooltip vs host range.** Resolved as not an ABI defect at `1587dbb4`. Host `fx.macro.N` stays `0..1`, default `0.5`. `MacroRouting.h` maps a finite value with `2*clamp(v,0,1)-1` only when a route exists, so `0.5` is modulation zero. The tooltip describes that source. Do not change the range. The slider text is the host value. No FX follow-up is opened here.
 2. **1440×1080 token vs 1040×700 #127 minimum.** Which number is the layout reference for the future dock?
 3. **Where copper lives.** #127 wants a Drums action colour distinct from cyan focus. It is not in `Tokens.h`. Should it be a product accent only, or a named token?
 4. **`ui.page` vs a new layout blob.** #127 says do not keep the eight-page contract for users. Whether `ui.page` remains as unused compatibility is a #130 question. This matrix does not decide it.
 5. **Who calls `takeHitMask` / `takePadMeter` / `takeMainMeter`.** They consume on read. A shared `VoxMeter` must not call them. Confirm the processor still wants that consume-on-read contract.
 6. **FX include path.** `FxEditor.h` includes `"components/VoxKnob.h"` and names `vox::ui::VoxKnob`. CMake was not re-read. Confirm it is `libs/vox-ui` and not a fork.
 7. **Song copy-on-write UI.** Marked partial/UNVERIFIED. The segmented Edit Source / Edit This Bar control from #127 was not found. Confirm before a dock PR rewrites song editing.
+
+## State boundaries
+
+See [STATE_BOUNDARIES.md](STATE_BOUNDARIES.md). Do not change the 174 Drums IDs. Do not put layout into APVTS. Do not attach an `UndoManager` to `parameters_` without a separate migration. Do not rewrite FX onto APVTS. `memory_order_relaxed` is per atomic, not a multi-parameter snapshot.

@@ -3,7 +3,12 @@
 Drums code SHA: `ef13daa3887dbd6079054384b04be7b65849d9ef`.
 Shared UI SHA: `f1d6eb595779c973ae5a139270795aae968804cc` (same `VoxComponents.h` / `Tokens.h` blobs on the Drums SHA).
 Hardware reference SHA: `74513b1ce4e670d8126ccd78a8ce1b02a4764789`.
-FX SHA: `a43c46e431f2d35bd9550d4f5094516e9513335b`.
+FX SHA: `1587dbb4a01f7b01c7a8751562bbe6c57fe6fe82` (re-read; replaces `a43c46e4`).
+
+## How to read status
+
+`partial` in this table and in the CSV is UI coverage. It is not a statement that DSP drops the parameter. Host rows carry `dsp_path=confirmed-static` when `Processor.cpp` or the FX processor reads them. That evidence is a source reading, not a runtime PASS. Ranges in the CSV `domain` column are the layout literals. Float32 print noise from `describeLayout` (`setprecision(9)`) is kept only in `csv_printed_domain`.
+
 
 
 ## Latest TL ruling (2026-11-18)
