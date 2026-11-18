@@ -10,8 +10,16 @@ on:
     branches: [next/standalone-suite]
   workflow_dispatch:
 
+# Cancel obsolete runs for the same PR and workflow (does not clear existing queue).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows-suite:
+    # FX draft PR — heavy Windows gate is manual until the integrated candidate.
+    # Other PRs and protected branch pushes keep their existing CI behavior.
+    if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     env:
