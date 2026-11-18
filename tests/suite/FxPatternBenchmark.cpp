@@ -47,6 +47,7 @@ int main(){
                 if(std::abs(value)>=1)++clipped;
                 peak=std::max(peak,static_cast<double>(std::abs(value)));checksum+=value;}
         }
+        if(engine->droppedEventCount()!=static_cast<std::uint32_t>(dropped))++failures;
         std::sort(timings.begin(),timings.end());
         std::printf("%.0f Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 %.2f p95 %.2f p99 %.2f max %.2f us; accepted %d dropped %d peak %.3f clipped %d checksum %.6f\n",
             rate,timings[iterations/2],timings[iterations*95/100],timings[iterations*99/100],timings.back(),accepted,dropped,peak,clipped,checksum);

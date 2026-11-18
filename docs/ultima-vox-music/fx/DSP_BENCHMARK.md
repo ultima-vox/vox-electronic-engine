@@ -170,3 +170,10 @@ four serial drive effects still saturate much of the output. Simultaneous
 bursts exceeding the four fade slots are dropped by design. These are local
 preliminary measurements, not Windows plugin or host qualification; no deadline
 or musical-quality claim is made.
+
+A later run after adding the saturating drop counter also cross-checked the
+engine's count against the benchmark's rejected-trigger count (both zero in
+this workload). Timing was 44.1 kHz p50 675.39 / p95 723.24 / p99 1231.74 /
+max 1315.48 µs; 48 kHz 681.46 / 715.52 / 1183.99 / 1453.84 µs; 96 kHz
+670.87 / 698.06 / 713.47 / 774.78 µs. Output saturation and the non-Windows,
+non-host qualification caveats above still apply.
