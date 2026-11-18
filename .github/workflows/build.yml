@@ -4,9 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# Collapse superseded PR builds while preserving pushes to main and manual runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-vst3:
+    # FX draft PR — heavy Windows gate is manual until the integrated candidate.
+    # All other PRs and main continue to build as before.
+    if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
     runs-on: [self-hosted, windows]
     env:
       CMAKE_GENERATOR: Visual Studio 17 2022
