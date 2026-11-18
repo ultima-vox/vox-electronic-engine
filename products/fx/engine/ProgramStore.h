@@ -1,6 +1,7 @@
 #pragma once
 #include "ProgramCodec.h"
 #include "Effects.h"
+#include "PatternCodec.h"
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -17,19 +18,26 @@ namespace vox::fx {
 class ProgramStore {
 public:
     ProgramStore() { (void) publish(NoiseProgram{}); }
-    struct Snapshot { NoiseProgram program; std::uint64_t effects=effects::defaults(); };
+    struct Snapshot { NoiseProgram program; std::uint64_t effects=effects::defaults(); pattern::Pattern pattern; };
+    bool publishState(const NoiseProgram& program, std::uint64_t effectsValue, const pattern::Pattern& patternValue) {
+        std::vector<std::byte> encoded;
+        if (!programcodec::encode(program, encoded) || !effects::validPacked(effectsValue) || !patternValue.valid()) return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        commit(program, encoded, effectsValue, patternValue);
+        return true;
+    }
     bool publishState(const NoiseProgram& program, std::uint64_t effectsValue) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded) || !effects::validPacked(effectsValue)) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program, encoded, effectsValue);
+        commit(program, encoded, effectsValue, desiredPattern_);
         return true;
     }
     bool publish(const NoiseProgram& program) {
         std::vector<std::byte> encoded;
         if (!programcodec::encode(program, encoded)) return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        commit(program, encoded, desiredEffects_);
+        commit(program, encoded, desiredEffects_, desiredPattern_);
         return true;
     }
     // Serialized read-modify-write preserves edits to other layers even when
@@ -42,7 +50,7 @@ public:
         edit(next.layers[index]);
         std::vector<std::byte> encoded;
         if (!programcodec::encode(next, encoded)) return false;
-        commit(next, encoded, desiredEffects_);
+        commit(next, encoded, desiredEffects_, desiredPattern_);
         return true;
     }
     // Serialized whole-program edit. A false return aborts without publication;
@@ -54,7 +62,7 @@ public:
         if (!edit(next)) return false;
         std::vector<std::byte> encoded;
         if (!programcodec::encode(next, encoded)) return false;
-        commit(next, encoded, desiredEffects_);
+        commit(next, encoded, desiredEffects_, desiredPattern_);
         return true;
     }
     bool setLayerFamily(std::size_t index, NoiseFamily family) {
@@ -69,11 +77,18 @@ public:
         const auto next=(desiredEffects_&~mask)|(static_cast<std::uint64_t>(effects::pack(settings))<<shift);
         std::vector<std::byte> encoded;
         if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,next);return true;
+        commit(desired_,encoded,next,desiredPattern_);return true;
+    }
+    bool setPattern(const pattern::Pattern& value) {
+        if(!value.valid())return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::byte> encoded;
+        if(!programcodec::encode(desired_,encoded))return false;
+        commit(desired_,encoded,desiredEffects_,value);return true;
     }
     Snapshot snapshotState() const {
         const std::lock_guard<std::mutex> lock(mutex_);
-        return {desired_,desiredEffects_};
+        return {desired_,desiredEffects_,desiredPattern_};
     }
     NoiseProgram snapshot() const {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -83,6 +98,9 @@ public:
         std::uint64_t ignored=0; return tryRead(destination,ignored,lastSequence);
     }
     bool tryRead(NoiseProgram& destination, std::uint64_t& effectDestination, std::uint64_t& lastSequence) const noexcept {
+        pattern::Pattern ignored; return tryRead(destination,effectDestination,ignored,lastSequence);
+    }
+    bool tryRead(NoiseProgram& destination, std::uint64_t& effectDestination, pattern::Pattern& patternDestination, std::uint64_t& lastSequence) const noexcept {
         const auto before=sequence_.load();
         if ((before & 1u) != 0 || before == lastSequence) return false;
         const auto count=wordCount_.load();
@@ -94,16 +112,22 @@ public:
                 bytes[i*4+byte]=static_cast<std::byte>((value >> (8*byte)) & 0xffu);
         }
         const auto effectValue=effectWords_.load();
+        pattern::codec::Words patternWords{};
+        for(std::size_t i=0;i<patternWords.size();++i)patternWords[i]=patternWords_[i].load();
         const auto after=sequence_.load();
         if (before != after || (after & 1u) != 0) return false;
         NoiseProgram next;
         if (!programcodec::decode(std::span(bytes).first(count*4),next)) return false;
-        if (!effects::validPacked(effectValue)) return false;
-        destination=next; effectDestination=effectValue; lastSequence=after; return true;
+        pattern::Pattern nextPattern;
+        if (!effects::validPacked(effectValue) || !pattern::codec::fromWords(patternWords,nextPattern)) return false;
+        destination=next; effectDestination=effectValue; patternDestination=nextPattern; lastSequence=after; return true;
     }
 private:
     // Called with mutex_ held, only from producer threads.
-    void commit(const NoiseProgram& program, const std::vector<std::byte>& encoded, std::uint64_t effectsValue) noexcept {
+    void commit(const NoiseProgram& program, const std::vector<std::byte>& encoded, std::uint64_t effectsValue,
+                const pattern::Pattern& patternValue) noexcept {
+        pattern::codec::Words patternWords{};
+        (void) pattern::codec::toWords(patternValue,patternWords); // all controller entry points validate
         const auto count = encoded.size() / 4;
         sequence_.fetch_add(1); // odd: write in progress
         wordCount_.store(static_cast<std::uint32_t>(count));
@@ -114,7 +138,8 @@ private:
             words_[i].store(value);
         }
         effectWords_.store(effectsValue);
-        desired_ = program; desiredEffects_=effectsValue;
+        for(std::size_t i=0;i<patternWords.size();++i)patternWords_[i].store(patternWords[i]);
+        desired_ = program; desiredEffects_=effectsValue; desiredPattern_=patternValue;
         sequence_.fetch_add(1); // even: complete publication
     }
     static constexpr std::size_t maxWords = (4 + 4 * (24 + 2 * (4 + 16 * 12))) / 4;
@@ -123,6 +148,8 @@ private:
     mutable std::mutex mutex_; // only non-audio threads
     NoiseProgram desired_;
     std::uint64_t desiredEffects_=effects::defaults();
+    pattern::Pattern desiredPattern_{};
+    std::array<std::atomic<std::uint32_t>,pattern::codec::wordCount> patternWords_{};
     std::atomic<std::uint64_t> effectWords_ {effects::defaults()};
     std::atomic<std::uint64_t> sequence_ {0};
     std::atomic<std::uint32_t> wordCount_ {0};

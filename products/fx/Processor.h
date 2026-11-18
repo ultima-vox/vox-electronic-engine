@@ -11,6 +11,7 @@ namespace vox::fx {
 
 inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxPatternSectionTag = preset::makeTag ("FPAT");
 inline constexpr preset::Tag fxEffectsSectionTag = preset::makeTag ("FXSL");
 inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 
@@ -48,6 +49,12 @@ public:
     // current host base parameters; may allocate and render for many seconds.
     bool renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
                            const std::atomic<bool>* cancel=nullptr, std::atomic<float>* progress=nullptr) const;
+    // Offline trigger pattern controller/export; not a running sequencer yet.
+    bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
+    pattern::Pattern patternSnapshot() const { return programs_.snapshotState().pattern; }
+    bool exportPatternMidi(double bpm, std::vector<std::uint8_t>& bytes) const {
+        return pattern::exportMidi(patternSnapshot(),bpm,bytes);
+    }
     bool setEffect (std::size_t index, effects::Settings settings);
     effects::Settings effect (std::size_t index) const;
     std::uint64_t effectsSnapshot() const { return programs_.snapshotState().effects; }
@@ -58,7 +65,7 @@ public:
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag; }
 
 private:
     NoiseRiser engine_;

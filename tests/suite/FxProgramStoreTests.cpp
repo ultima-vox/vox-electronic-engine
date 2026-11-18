@@ -77,5 +77,24 @@ int main(){
             vox::fx::effects::unpack(static_cast<std::uint16_t>(both.effects>>32)).type==vox::fx::effects::Type::gate,
             "concurrent layer and FX edits preserved");
     }
+    {
+        vox::fx::ProgramStore shared;
+        vox::fx::NoiseProgram program;auto effects=vox::fx::effects::defaults();vox::fx::pattern::Pattern pattern;
+        pattern.seed=300;pattern.steps[1].enabled=true;program.layers[0].gain=.3f;
+        check(shared.publishState(program,effects,pattern),"publish Program and pattern");
+        vox::fx::NoiseProgram audio;vox::fx::pattern::Pattern audioPattern;std::uint64_t fx=0,seq=0;
+        check(shared.tryRead(audio,fx,audioPattern,seq)&&audioPattern.seed==300&&audioPattern.steps[1].enabled&&
+              audio.layers[0].gain==.3f,"audio snapshot includes pattern");
+        auto invalid=pattern;invalid.steps[0].ratchets=0;
+        check(!shared.setPattern(invalid)&&shared.snapshotState().pattern.seed==300,"invalid pattern rejected transactionally");
+        std::atomic<bool> done{false};
+        std::thread writer([&]{for(int i=0;i<5000;++i){auto next=program;auto pat=pattern;
+            next.layers[0].gain=(i&1)? .75f : .25f;pat.seed=(i&1)?75:25;
+            if(!shared.publishState(next,effects,pat))std::abort();}done.store(true,std::memory_order_release);});
+        do {if(shared.tryRead(audio,fx,audioPattern,seq))check((audio.layers[0].gain==.75f&&audioPattern.seed==75)||
+            (audio.layers[0].gain==.25f&&audioPattern.seed==25),"coherent Program and pattern");
+        }while(!done.load(std::memory_order_acquire));
+        writer.join();
+    }
     std::printf("FX Program store: %d failure(s)\n",fails);return fails?1:0;
 }

@@ -9,13 +9,13 @@ validator and binary SHA are pending; HOLD prohibits merge and release.
 | FX-02 | Partial: seconds and bars clock/curve primitives, 4-layer noise engine with per-event snapshot, and single-producer bridge tests. Seconds timing and validated layered Program persistence/publication are wired to plugin; basic layer enable/family/gain/pan/timing UI and per-layer gain-curve editing exist; pan/pitch/filter/global curve UI, bar sync and event policies remain. |
 | FX-03 | Partial: Noise Riser, tonal/noise Downlifter, six-partial Shepard sweep, Impact, Whoosh, Laser, Squelch, Metallic, Texture, Formant, Glitch and a procedural-source Granular Cloud are selectable for new events and persisted as structural state. User sample import, full host-synced Glitch, granular controls and comprehensive quality tests remain. |
 | FX-04 | Partial: standalone typed 64-route matrix, LFO and seeded sample-and-hold primitives; four serial shared slots with bypass, lowpass, drive, wavefold, bitcrush, ring and gate are wired into audio, basic UI and versioned structural state. Eight stable slot wet/amount parameters are host-automatable and stored in FXSL v2 (v1 migrates). Modulation remains standalone; macros, delay/reverb/modulation effects and quality policies remain. |
-| FX-05 | Partial: deterministic standalone Generate/Mutate/A-B and a 48-program procedural seed corpus with locks and audible smoke tests. Generate/Mutate now publish to the plugin Program and have basic seed controls; whole-layer lock toggles work for the editor session; fine-grained locks, persisted generator metadata, A/B and the corpus are not yet exposed or recalled; offline canonical 1/16 trigger scheduler, 12 seed patterns and SMF export exist but are not integrated; musical curation, full settings, sample handling, host sync and user-facing file exports remain; a worker-only controller API renders 24-bit/float WAV bytes from the current Program and FX/host base values, including a bounded filter tail; file/drag UI is not connected. |
+| FX-05 | Partial: deterministic standalone Generate/Mutate/A-B and a 48-program procedural seed corpus with locks and audible smoke tests. Generate/Mutate now publish to the plugin Program and have basic seed controls; whole-layer lock toggles work for the editor session; fine-grained locks, persisted generator metadata, A/B and the corpus are not yet exposed or recalled; offline 1/16 trigger scheduler, 12 seed patterns and canonical SMF export now have a processor controller and versioned FPAT project state; playback, host sync and export UI remain unimplemented; musical curation, full settings, sample handling, host sync and user-facing file exports remain; a worker-only controller API renders 24-bit/float WAV bytes from the current Program and FX/host base values, including a bounded filter tail; file/drag UI is not connected. |
 | FX-06 | In progress: truthful interim Perform panel; other workspaces and controls remain. |
 | FX-07 | Not complete: Windows exact-head suite/validator and binary hash, host, performance, safety, licensing and packaging qualification. |
 
 Resume: Complete generator settings, persisted/fine-grained locks, A-B UI and corpus integration; wire
-the existing standalone pattern scheduler and WAV/MIDI render foundations to
-validated Program/state and real user-facing workflows;
+pattern scheduler playback and WAV/MIDI render foundations to real user-facing
+workflows;
 implement the specified modulation, remaining FX algorithms and host-sync behavior;
 complete family algorithms, sample ownership and the remaining curve/UI paths.
 Run the processor/editor tests in an executable JUCE build, inspect and fix the
@@ -29,3 +29,9 @@ layer and Shepard), not runner outages. Large test objects were moved to heap
 as a plausible fix but the hypothesis is not verified until an exact-head
 Windows suite passes; isolate surviving failures with crash traces. CI queue
 cancellation was proposed separately in PR #155; FX does not change workflows.
+
+Skills bridge: inspected the three Markdown adaptations and Arena instructions
+at `agents/arena-skill-bridge-20261118@d92d322a0` read-only, plus root
+`AGENTS.md`, the agent contract and FX specification. No native skill runtime
+or subagent facility was available or claimed; bounded implementation and
+independent verification were performed sequentially.

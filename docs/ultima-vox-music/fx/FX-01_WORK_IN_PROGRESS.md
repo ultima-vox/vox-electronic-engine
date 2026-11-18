@@ -403,3 +403,16 @@ A processor-versus-WAV test is authored and syntax-checked, not yet executed.
 The API does not create threads or files, and no UI/drag delivery exists yet.
 Host automation is sampled, not recorded as a changing automation envelope;
 full effects tails and tempo/pattern export still remain.
+
+## Pattern state and controller
+
+FPAT v1 stores the bars, seed and all 64 step fields in explicit little-endian
+words with reserved-bit, length and range validation. Absent FPAT migrates to
+an empty default pattern; malformed/future data rejects the whole project
+transaction. Program, FX slot types and pattern now share one bounded atomic
+publication; the controller exports MIDI bytes through the same canonical
+offline scheduler. Local pattern codec, scheduler and concurrent store tests
+passed, including TSan, selected ASan/UBSan and a Linux allocation probe.
+Processor state/export tests are authored but only syntax-checked. There is
+no realtime pattern playback, host synchronization, triplet/swing support,
+file/drag delivery or pattern editor yet: saved patterns do not trigger audio.

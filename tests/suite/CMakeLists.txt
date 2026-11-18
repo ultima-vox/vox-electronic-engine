@@ -354,3 +354,8 @@ add_executable(suite_fx_effects_benchmark FxEffectsBenchmark.cpp)
 target_include_directories(suite_fx_effects_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_effects_benchmark COMMAND suite_fx_effects_benchmark)
 set_tests_properties(suite_fx_effects_benchmark PROPERTIES LABELS suite)
+
+add_executable(suite_fx_pattern_codec_tests FxPatternCodecTests.cpp)
+target_include_directories(suite_fx_pattern_codec_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_pattern_codec_tests COMMAND suite_fx_pattern_codec_tests)
+set_tests_properties(suite_fx_pattern_codec_tests PROPERTIES LABELS suite)

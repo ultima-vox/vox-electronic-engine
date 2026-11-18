@@ -130,6 +130,23 @@ int main() {
             check(std::bit_cast<float>(bits)==a.getSample(0,i),"controller WAV matches processor output");
         }
     }
+    {
+        auto owner=std::make_unique<vox::fx::FxProcessor>();vox::fx::pattern::Pattern pattern;
+        check(vox::fx::pattern::factory(7,pattern)&&owner->setPattern(pattern),"set factory trigger pattern");
+        std::vector<std::uint8_t> exported,expected;
+        check(owner->exportPatternMidi(120,exported)&&vox::fx::pattern::exportMidi(pattern,120,expected)&&exported==expected,
+              "processor exports canonical trigger MIDI");
+        auto saved=save(*owner);auto restored=std::make_unique<vox::fx::FxProcessor>();
+        restored->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));
+        std::vector<std::uint8_t> recalled;
+        check(restored->exportPatternMidi(120,recalled)&&recalled==exported,"trigger pattern recalled in host state");
+        auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(saved.getData()),saved.getSize()),vox::preset::makeTag("VXFX"),1);
+        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxPatternSectionTag)section.data[0]=std::byte{2};
+        const auto bad=vox::preset::encode(document.document);
+        if(bad){restored->setStateInformation(bad->data(),static_cast<int>(bad->size()));
+            check(restored->lastStateError().isNotEmpty()&&save(*restored)==saved,"invalid pattern restore is transactional");}
+        else check(false,"encode invalid pattern state");
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;

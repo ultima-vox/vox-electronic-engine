@@ -45,6 +45,12 @@ preset::Section encodeEffects (std::uint64_t packed, const std::array<float,4>& 
     }
     return section;
 }
+preset::Section encodePattern (const pattern::Pattern& pattern)
+{
+    preset::Section section; section.tag=fxPatternSectionTag;
+    (void) pattern::codec::encode(pattern,section.data); // validated at publication
+    return section;
+}
 std::uint32_t wordAt (const std::vector<std::byte>& data, std::size_t offset)
 {
     std::uint32_t value = 0;
@@ -252,6 +258,7 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     std::array<float,4> wet{},amount{};
     for(std::size_t i=0;i<4;++i){wet[i]=effectWet_[i]->get();amount[i]=effectAmount_[i]->get();}
     out.push_back (encodeEffects (snapshot.effects,wet,amount));
+    out.push_back (encodePattern (snapshot.pattern));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -319,14 +326,21 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
             }
         } else {error="Unsupported or malformed FX effects section";return {};}
     }
+    auto triggerPattern=std::make_shared<pattern::Pattern>();
+    if(const auto* section=doc.find(fxPatternSectionTag)) {
+        if(!pattern::codec::decode(section->data,*triggerPattern)) {
+            error="Unsupported or malformed FX pattern section";return {};
+        }
+    }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
     result.sections.push_back (encodeProgram (*program));
     result.sections.push_back (encodeEffects (fx,wet,amount));
+    result.sections.push_back (encodePattern (*triggerPattern));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx, wet, amount] {
-        (void) programs_.publishState (*program, fx);
+    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern] {
+        (void) programs_.publishState (*program, fx, *triggerPattern);
         for(std::size_t i=0;i<4;++i){effectWet_[i]->setValueNotifyingHost(wet[i]);effectAmount_[i]->setValueNotifyingHost(amount[i]);}
         restoreEpoch_.fetch_add (1, std::memory_order_release);
         output_->setValueNotifyingHost (value);
