@@ -3,6 +3,7 @@
 #include "common/SuiteProcessor.h"
 #include "engine/NoiseRiser.h"
 #include "engine/ProgramStore.h"
+#include "engine/Generator.h"
 
 namespace vox::fx {
 
@@ -10,8 +11,8 @@ inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
 inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
 inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 
-// Interim FX-01 instrument: a four-second one-shot noise riser. The timeline,
-// structural Program, layers and remaining families are not implemented yet.
+// Work-in-progress standalone FX instrument. Structural edits are published
+// off the audio thread; host parameters remain independent of generation.
 class FxProcessor final : public vox::suite::SuiteProcessor {
 public:
     FxProcessor();
@@ -36,6 +37,8 @@ public:
     }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) { return programs_.publish (program); }
+    bool generateProgram (const generator::Settings&, const generator::Locks&);
+    bool mutateProgram (std::uint32_t seed, const generator::Locks&);
     NoiseProgram program() const { return programs_.snapshot(); }
     std::uint64_t programRestoreEpoch() const noexcept { return restoreEpoch_.load(std::memory_order_acquire); }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }

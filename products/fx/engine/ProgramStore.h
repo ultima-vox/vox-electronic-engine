@@ -36,6 +36,18 @@ public:
         commit(next, encoded);
         return true;
     }
+    // Serialized whole-program edit. A false return aborts without publication;
+    // callers must not recursively enter this store from the editor function.
+    template <typename Edit>
+    bool editProgram(Edit edit) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto next = desired_;
+        if (!edit(next)) return false;
+        std::vector<std::byte> encoded;
+        if (!programcodec::encode(next, encoded)) return false;
+        commit(next, encoded);
+        return true;
+    }
     bool setLayerFamily(std::size_t index, NoiseFamily family) {
         if (static_cast<unsigned>(family) > static_cast<unsigned>(NoiseFamily::granular)) return false;
         return editLayer(index, [family] (NoiseLayer& layer) { layer.family = family; });

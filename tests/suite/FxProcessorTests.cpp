@@ -55,6 +55,30 @@ int main() {
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }
+    {
+        auto generated = std::make_unique<vox::fx::FxProcessor>();
+        vox::fx::FxPanel panel(*generated);
+        generated->durationParameter().setValueNotifyingHost(generated->durationParameter().convertTo0to1(7.0f));
+        panel.familySelector().setSelectedId(4, juce::sendNotificationSync);
+        panel.seedSlider().setValue(123, juce::sendNotificationSync);
+        panel.generateButton().onClick();
+        auto before=generated->program();
+        check(before.layers[0].family==vox::fx::NoiseFamily::impact && before.layers[3].enabled,
+              "editor generate publishes a four-layer program");
+        check(std::abs(generated->durationParameter().get()-7.0f)<1e-4f,"generator preserves host duration automation");
+        auto saved=save(*generated);auto recalled=std::make_unique<vox::fx::FxProcessor>();
+        recalled->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));
+        std::vector<std::byte> expected,actual;
+        vox::fx::programcodec::encode(before,expected);vox::fx::programcodec::encode(recalled->program(),actual);
+        check(expected==actual,"generated program survives host state recall");
+        panel.mutateButton().onClick();
+        vox::fx::programcodec::encode(generated->program(),actual);
+        check(expected!=actual,"editor mutate changes the real program");
+        vox::fx::generator::Locks locks;locks.layers[0]=vox::fx::generator::all;
+        auto locked=generated->program();
+        check(generated->mutateProgram(222,locks),"locked mutation accepted");
+        check(generated->program().layers[0].gain==locked.layers[0].gain,"locked layer preserved");
+    }
     p.prepareToPlay(48000, 512);
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;

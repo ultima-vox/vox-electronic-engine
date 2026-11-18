@@ -18,6 +18,9 @@ public:
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
     juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
     juce::ComboBox& familySelector() noexcept { return family_; }
+    juce::Slider& seedSlider() noexcept { return seed_; }
+    juce::Button& generateButton() noexcept { return generate_; }
+    juce::Button& mutateButton() noexcept { return mutate_; }
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
 private:
     void timerCallback() override;
@@ -29,6 +32,9 @@ private:
     vox::ui::VoxComboBox family_;
     vox::ui::VoxButton audition_ { "AUDITION" };
     vox::ui::VoxButton panic_ { "PANIC" };
+    juce::Slider seed_;
+    vox::ui::VoxButton generate_ { "GENERATE" };
+    vox::ui::VoxButton mutate_ { "MUTATE" };
     std::array<std::unique_ptr<LayerPanel>, 4> layers_;
     float shownPeak_ = 0.0f;
 };

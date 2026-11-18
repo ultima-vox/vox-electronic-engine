@@ -341,3 +341,17 @@ passed. No file chooser, background job integration, atomic file replacement,
 patterns, configurable tails or effects are connected yet. In particular, the
 present WAV renderer does not claim an effects tail because effects do not yet
 exist in the engine.
+
+## Generator controller integration
+
+The interim Perform panel now publishes deterministic Generate and Mutate
+results through the serialized ProgramStore controller. Existing events keep
+their captured program; new events see the published validated snapshot.
+Generate/Mutate deliberately leave host-automated duration and output gain
+untouched. Per-field lock support is available in the controller API, but the
+UI currently uses no locks and exposes only family and seed (four generated
+layers, default settings). Program content is saved in existing FPRG state;
+the seed and generator settings themselves are not saved yet. Full generation,
+A/B, lock controls, preset browser and recallable metadata remain unfinished.
+Local ProgramStore and generator tests pass, and processor/editor sources and
+tests pass syntax checks; the new UI/state integration test is not executed.

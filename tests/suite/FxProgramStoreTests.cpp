@@ -23,6 +23,13 @@ int main(){
     if(voxProbeAvailable()) check(allocations==0,"snapshot read allocates nothing");
 #endif
     check(read && result.layers[0].gain==.25f,"audio snapshot applied");
+    check(!store.editProgram([](vox::fx::NoiseProgram& p){p.layers[0].gain=.9f;return false;}) &&
+          store.snapshot().layers[0].gain==.25f,"aborted whole-program edit leaves state unchanged");
+    check(!store.editProgram([](vox::fx::NoiseProgram& p){p.layers[0].gain=2;return true;}) &&
+          store.snapshot().layers[0].gain==.25f,"invalid whole-program edit leaves state unchanged");
+    check(store.editProgram([](vox::fx::NoiseProgram& p){p.layers[2].gain=.75f;return true;}) &&
+          store.snapshot().layers[2].gain==.75f,"whole-program edit published");
+    (void) store.tryRead(result,seen); // consume the pre-stress edit
     constexpr int iterations=30000;std::atomic<bool> done{false};
     std::thread writer([&]{for(int i=0;i<iterations;++i){vox::fx::NoiseProgram p;
         p.layers[0].gain=static_cast<float>(i)/iterations;p.layers[1].gain=p.layers[0].gain;

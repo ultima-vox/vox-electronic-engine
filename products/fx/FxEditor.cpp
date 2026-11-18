@@ -39,6 +39,23 @@ FxPanel::FxPanel (FxProcessor& processor)
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
     panic_.onClick = [this] { processor_.panic(); };
+    seed_.setRange (1, 2147483647, 1);
+    seed_.setValue (1, juce::dontSendNotification);
+    seed_.setSliderStyle (juce::Slider::LinearHorizontal);
+    seed_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 85, 25);
+    seed_.setTitle ("Generator seed");
+    seed_.setTooltip ("Deterministic seed for Generate and Mutate");
+    addAndMakeVisible (seed_);
+    generate_.setTooltip ("Generate four layers for the selected family and seed; host duration is unchanged");
+    mutate_.setTooltip ("Mutate layer gains, pans and gain curves using the seed");
+    generate_.onClick = [this] {
+        generator::Settings settings;
+        settings.family = processor_.family(); settings.complexity = 4;
+        settings.seed = static_cast<std::uint32_t> (seed_.getValue());
+        (void) processor_.generateProgram (settings, {});
+    };
+    mutate_.onClick = [this] { (void) processor_.mutateProgram (static_cast<std::uint32_t> (seed_.getValue()), {}); };
+    addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
     for (int i=0; i<4; ++i) {
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
         addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
@@ -74,6 +91,11 @@ void FxPanel::resized()
     auto buttons = area.removeFromLeft (160);
     audition_.setBounds (buttons.removeFromTop (40)); buttons.removeFromTop (10);
     panic_.setBounds (buttons.removeFromTop (40));
+    area.removeFromLeft (20);
+    auto generatorArea = area.removeFromLeft (180);
+    seed_.setBounds (generatorArea.removeFromTop (30)); generatorArea.removeFromTop (5);
+    generate_.setBounds (generatorArea.removeFromTop (35)); generatorArea.removeFromTop (5);
+    mutate_.setBounds (generatorArea.removeFromTop (35));
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(235);
     row.removeFromBottom(80);

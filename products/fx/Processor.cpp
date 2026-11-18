@@ -56,6 +56,32 @@ FxProcessor::FxProcessor()
     loadedDuration_ = heldDuration_ = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
 }
 
+bool FxProcessor::generateProgram (const generator::Settings& settings, const generator::Locks& locks)
+{
+    // Generator duration is intentionally not applied to the independent host
+    // automation lane. The currently automated duration wins for new events.
+    const bool committed = programs_.editProgram ([&] (NoiseProgram& program) {
+        generator::Result previous; previous.program = program;
+        generator::Result result;
+        if (!generator::generate (settings, previous, locks, result)) return false;
+        program = result.program; return true;
+    });
+    if (committed) restoreEpoch_.fetch_add (1, std::memory_order_release);
+    return committed;
+}
+
+bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& locks)
+{
+    const bool committed = programs_.editProgram ([&] (NoiseProgram& program) {
+        generator::Result previous; previous.program = program;
+        generator::Result result;
+        if (!generator::mutate (previous, locks, seed, result)) return false;
+        program = result.program; return true;
+    });
+    if (committed) restoreEpoch_.fetch_add (1, std::memory_order_release);
+    return committed;
+}
+
 void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
