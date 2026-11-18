@@ -6,6 +6,7 @@ name: suite
 # The legacy engine keeps its own workflow (build.yml), unchanged.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [next/standalone-suite]
   workflow_dispatch:
@@ -19,7 +20,20 @@ jobs:
   windows-suite:
     # FX draft PR — heavy Windows gate is manual until the integrated candidate.
     # Other PRs and protected branch pushes keep their existing CI behavior.
-    if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
+    # Regular FX Draft synchronizations stay skipped. To run exact-head suite
+    # while keeping Draft/HOLD, add [RUN_FX_SUITE] to PR #156 description.
+    # It triggers only on the addition (an edited-body event), not future pushes.
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        (github.event.action != 'edited' &&
+          !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine')) ||
+        (github.event.action == 'edited' &&
+          github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+          github.event.changes.body.from != null &&
+          !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
+          contains(github.event.pull_request.body, '[RUN_FX_SUITE]'))
+      }}
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     env:
