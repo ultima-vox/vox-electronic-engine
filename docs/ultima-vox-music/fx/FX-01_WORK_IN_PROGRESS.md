@@ -439,11 +439,10 @@ variation, transport discontinuity qualification and integrated MIDI file UI.
 
 ## Partial pattern grid editor
 
-The Perform panel has a length selector, bar page and sixteen on/off step
-buttons; edits serialize through the ProgramStore and reach the host scheduler
+The Perform panel has a length selector, bar page, sixteen on/off step
+buttons and selected-step note/velocity/probability/ratchet controls; edits serialize through the ProgramStore and reach the host scheduler
 and FPAT state. Out-of-range bar pages are disabled, not silently extended.
 The FX editor minimum height is 760 pixels so existing layer curve controls
 retain space; older smaller saved sizes are enlarged on opening. This is not
-the final pattern workspace: note, velocity, probability, ratchets, grid/swing,
-accessibility audit, scaling/visual acceptance, and undo are still missing.
+the final pattern workspace: grid/swing options, accessibility audit, scaling/visual acceptance, and undo are still missing.
 ProgramStore tests, TSan and allocation probe passed; UI tests are syntax-only.

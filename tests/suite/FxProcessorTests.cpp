@@ -137,6 +137,14 @@ int main() {
         panel.patternBarSelector().setSelectedId(4,juce::sendNotificationSync);
         panel.patternStep(2).setToggleState(true,juce::sendNotificationSync);
         check(owner->patternSnapshot().bars==4 && owner->patternSnapshot().steps[50].enabled,"editor changes bar four step");
+        panel.patternStepSelector().setSelectedId(3,juce::sendNotificationSync);
+        panel.patternNoteSlider().setValue(72,juce::sendNotificationSync);
+        panel.patternVelocitySlider().setValue(90,juce::sendNotificationSync);
+        panel.patternProbabilitySlider().setValue(55,juce::sendNotificationSync);
+        panel.patternRatchetSlider().setValue(3,juce::sendNotificationSync);
+        const auto editedStep=owner->patternSnapshot().steps[50];
+        check(editedStep.note==72 && editedStep.velocity==90 && editedStep.probability==55 && editedStep.ratchets==3,
+              "editor changes selected step detail");
         panel.patternSelector().setSelectedId(8,juce::sendNotificationSync);
         check(vox::fx::pattern::factory(7,pattern)&&owner->patternSnapshot().seed==pattern.seed,"pattern selector installs real pattern");
         std::vector<std::uint8_t> exported,expected;
