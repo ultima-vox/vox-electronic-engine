@@ -3,6 +3,7 @@
 #include "common/SuiteProcessor.h"
 #include "effects/EffectsChain.h"
 #include "engine/SynthEngine.h"
+#include "Parameters.h"
 
 #include <array>
 #include <atomic>
@@ -42,7 +43,7 @@ protected:
 
 private:
     juce::AudioProcessorValueTreeState parameters_;
-    std::array<std::atomic<float>*, 15> raw_ {};
+    std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
     vstengine::effects::EffectsChain fx_;
     engine::Event events_[engine::maxEvents] {};

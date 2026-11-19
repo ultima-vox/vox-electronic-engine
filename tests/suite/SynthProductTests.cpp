@@ -224,6 +224,230 @@ void testOutputAndRealtime()
     check (finite && synth->activeVoices() <= 16, "a MIDI flood stays finite and inside the cap");
 }
 
+void silence (vox::syn::SynthesisProcessor& synth, int blocks, int frames)
+{
+    juce::AudioBuffer<float> buffer (2, frames);
+    juce::MidiBuffer midi;
+    for (int i = 0; i < blocks; ++i)
+        synth.processBlock (buffer, midi);
+}
+
+bool slideKeepsPhase (float slide, float portamento)
+{
+    auto synth = make();
+    setPlain (*synth, "syn.a.slide", slide);
+    setPlain (*synth, "syn.a.portamento", portamento);
+    setPlain (*synth, "syn.b.level", 0.0f);
+    synth->prepareToPlay (48000.0, 64);
+    juce::AudioBuffer<float> one (2, 1);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (100)), 0);
+    synth->processBlock (one, midi);
+    midi.clear();
+    bool parked = false;
+    for (int i = 0; i < 8000 && ! parked; ++i)
+    {
+        synth->processBlock (one, midi);
+        const double phase = synth->monoPhase (0);
+        parked = phase >= 0.25 && phase <= 0.74;
+    }
+    if (! parked)
+        return false;
+    const double earlier = synth->monoPhase (0);
+    synth->processBlock (one, midi);
+    const double before = synth->monoPhase (0);
+    double step = before - earlier;
+    if (step < 0.0)
+        step += 1.0;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 48, static_cast<juce::uint8> (100)), 0);
+    synth->processBlock (one, midi);
+    const double after = synth->monoPhase (0);
+    double expected = before + step;
+    if (expected >= 1.0)
+        expected -= 1.0;
+    const double error = std::abs (after - expected);
+    return error < 0.02 || error > 0.98;
+}
+
+void testSlideVersusSnap()
+{
+    check (slideKeepsPhase (1.0f, 0.0f), "slide keeps the phase through the processor");
+    check (slideKeepsPhase (0.0f, 1.0f), "portamento keeps the phase through the processor");
+    check (! slideKeepsPhase (0.0f, 0.0f), "snap resets the phase through the processor");
+}
+
+void addModWheel (juce::MidiBuffer& midi, int count, int sample)
+{
+    for (int i = 0; i < count; ++i)
+        midi.addEvent (juce::MidiMessage::controllerEvent (1, 1, i & 0x7f), sample);
+}
+
+void testOverflowReleases()
+{
+    constexpr int frames = 512;
+    constexpr int extra = vox::syn::engine::maxEvents + 64;
+
+    auto synth = make();
+    synth->prepareToPlay (48000.0, frames);
+    juce::AudioBuffer<float> buffer (2, frames);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (100)), 0);
+    synth->processBlock (buffer, midi);
+    check (synth->monoGate (0) && synth->monoGate (1), "both parts hold the note");
+
+    midi.clear();
+    addModWheel (midi, extra, 0);
+    midi.addEvent (juce::MidiMessage::noteOff (1, 40), frames - 1);
+    const auto droppedBefore = synth->droppedMidi();
+#ifndef VOX_TEST_INTERPOSE_MALLOC
+#error "suite_synth_product_tests requires the allocation probe. A missing probe used to skip the check."
+#endif
+    if (! voxProbeAvailable())
+    {
+        ++skips;
+        check (false, "allocation probe did not attach");
+        synth->processBlock (buffer, midi);
+    }
+    else
+    {
+        voxProbeBegin();
+        synth->processBlock (buffer, midi);
+        const unsigned long calls = voxProbeEnd();
+        check (calls == 0, "overflow processBlock allocates nothing (" + std::to_string (calls) + ")");
+    }
+    check (synth->droppedMidi() > droppedBefore, "saturated non-releases are counted");
+    check (! synth->monoGate (0) && ! synth->monoGate (1), "note-off after a full queue is kept");
+    silence (*synth, 90, frames);
+    check (synth->activeVoices() == 0 && ! synth->monoGate (0), "released note reaches idle");
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (110)), 0);
+    synth->processBlock (buffer, midi);
+    check (synth->monoGate (0), "note is held again");
+    midi.clear();
+    for (int i = 0; i < extra; ++i)
+        midi.addEvent (juce::MidiMessage::noteOff (1, 41), 0);
+    midi.addEvent (juce::MidiMessage::noteOff (1, 40), frames - 1);
+    synth->processBlock (buffer, midi);
+    check (! synth->monoGate (0) && ! synth->monoGate (1), "the newest note-off survives a queue of note-offs");
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (100)), 0);
+    synth->processBlock (buffer, midi);
+    midi.clear();
+    for (int i = 0; i < extra; ++i)
+        midi.addEvent (juce::MidiMessage::noteOn (1, 48 + (i % 12), static_cast<juce::uint8> (90)), 0);
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 120, 0), frames - 1);
+    synth->processBlock (buffer, midi);
+    check (synth->activeVoices() == 0 && ! synth->monoGate (0) && ! synth->monoGate (1),
+           "CC120 after a saturated block kills held notes");
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0);
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (100)), 1);
+    synth->processBlock (buffer, midi);
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOff (1, 40), 0);
+    synth->processBlock (buffer, midi);
+    check (synth->monoGate (0), "sustain holds the note after note-off");
+    midi.clear();
+    addModWheel (midi, extra, 0);
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), frames - 1);
+    synth->processBlock (buffer, midi);
+    check (! synth->monoGate (0) && ! synth->monoGate (1), "sustain release after a full queue is kept");
+
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (100)), 0);
+    synth->processBlock (buffer, midi);
+    midi.clear();
+    addModWheel (midi, extra, 0);
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (0)), frames - 1);
+    synth->processBlock (buffer, midi);
+    check (! synth->monoGate (0), "note-on velocity 0 after a full queue releases");
+
+    setPlain (*synth, "syn.a.engine", 2.0f);
+    setPlain (*synth, "syn.b.engine", 2.0f);
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 48, static_cast<juce::uint8> (100)), 0);
+    midi.addEvent (juce::MidiMessage::noteOn (1, 52, static_cast<juce::uint8> (100)), 10);
+    synth->processBlock (buffer, midi);
+    check (synth->activeVoices() > 0, "VA notes are sounding");
+    midi.clear();
+    addModWheel (midi, extra, 0);
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 123, 0), frames - 1);
+    synth->processBlock (buffer, midi);
+    silence (*synth, 200, frames);
+    check (synth->activeVoices() == 0, "CC123 after a full queue leaves no stuck VA notes");
+}
+
+double chainTailSeconds (bool delay, bool reverb)
+{
+    vstengine::effects::EffectsChain chain;
+    chain.prepare (48000.0, 128, 2);
+    const auto enable = [&] (int index, vstengine::effects::EffectType type)
+    {
+        vstengine::effects::EffectSettings settings;
+        settings.type = type;
+        settings.enabled = true;
+        settings.mix = 1.0f;
+        settings.amount = 0.5f;
+        settings.rate = 0.5f;
+        settings.character = 0.5f;
+        chain.setEffect (static_cast<std::size_t> (index), settings);
+    };
+    if (delay)
+        enable (6, vstengine::effects::EffectType::delay);
+    if (reverb)
+        enable (7, vstengine::effects::EffectType::reverb);
+    return static_cast<double> (chain.tailSamples()) / 48000.0;
+}
+
+float firstSample (vox::syn::SynthesisProcessor& synth)
+{
+    synth.prepareToPlay (48000.0, 128);
+    juce::AudioBuffer<float> buffer (2, 128);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (120)), 0);
+    synth.processBlock (buffer, midi);
+    return buffer.getSample (0, 64);
+}
+
+void testExposedFxTail()
+{
+    auto synth = make();
+    const double voice = vox::syn::engine::voiceTailSeconds();
+    const double delayTail = chainTailSeconds (true, false);
+    const double reverbTail = chainTailSeconds (false, true);
+    check (delayTail > voice && reverbTail > delayTail, "chain tails are longer than the voice and ordered");
+
+    setPlain (*synth, "syn.fx.delay", 1.0f);
+    check (std::abs (synth->getTailLengthSeconds() - std::max (voice, delayTail)) < 1.0e-9,
+           "delay control reports the chain tail before the next callback");
+    setPlain (*synth, "syn.fx.reverb", 1.0f);
+    check (std::abs (synth->getTailLengthSeconds() - std::max (voice, reverbTail)) < 1.0e-9,
+           "reverb control wins over delay, matching the chain");
+    setPlain (*synth, "syn.fx.delay", 0.0f);
+    setPlain (*synth, "syn.fx.reverb", 0.0f);
+    check (std::abs (synth->getTailLengthSeconds() - voice) < 1.0e-12,
+           "clearing the FX controls returns the voice bound immediately");
+
+    auto dry = make();
+    auto wet = make();
+    setPlain (*wet, "syn.fx.delay", 1.0f);
+    const float drySample = firstSample (*dry);
+    const float wetSample = firstSample (*wet);
+    check (std::abs (drySample - wetSample) > 1.0e-4f, "enabled delay changes the rendered block");
+
+    setPlain (*synth, "syn.fx.delay", 1.0f);
+    juce::MemoryBlock saved;
+    synth->getStateInformation (saved);
+    auto copy = make();
+    copy->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (std::abs (plain (*copy, "syn.fx.delay") - 1.0f) < 1.0e-5f, "delay control round-trips");
+    check (std::abs (copy->getTailLengthSeconds() - std::max (voice, delayTail)) < 1.0e-9,
+           "restored delay control reports the chain tail");
+}
+
 } // namespace
 
 int main()
@@ -232,6 +456,9 @@ int main()
     testPartsAndCap();
     testState();
     testOutputAndRealtime();
+    testSlideVersusSnap();
+    testOverflowReleases();
+    testExposedFxTail();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);
     else

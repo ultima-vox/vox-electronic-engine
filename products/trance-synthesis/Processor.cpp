@@ -47,6 +47,48 @@ engine::EngineKind kindFrom (float raw) noexcept
     return engine::EngineKind::va;
 }
 
+bool isPanic (const juce::MidiMessageMetadata& metadata) noexcept
+{
+    if (metadata.numBytes < 2 || (metadata.data[0] & 0xf0u) != 0xb0u)
+        return false;
+    const auto control = metadata.data[1];
+    return control == 120 || control == 123;
+}
+
+// Note-off, note-on velocity 0, and sustain release. Dropping these is what
+// leaves a gate up after a full event queue.
+bool isRelease (const juce::MidiMessageMetadata& metadata) noexcept
+{
+    if (metadata.numBytes < 2)
+        return false;
+    const auto type = static_cast<std::uint8_t> (metadata.data[0] & 0xf0u);
+    const auto data2 = metadata.numBytes > 2 ? metadata.data[2] : std::uint8_t { 0 };
+    if (type == 0x80)
+        return true;
+    if (type == 0x90 && data2 == 0)
+        return true;
+    return type == 0xb0 && metadata.data[1] == 64 && data2 < 64;
+}
+
+void syncExposedFx (vstengine::effects::EffectsChain& fx, float delay, float reverb) noexcept
+{
+    using vstengine::effects::EffectSettings;
+    using vstengine::effects::EffectType;
+    const auto slot = [] (EffectType type, bool on) noexcept
+    {
+        EffectSettings settings;
+        settings.type = type;
+        settings.enabled = on;
+        settings.mix = on ? 0.35f : 0.0f;
+        settings.amount = 0.5f;
+        settings.rate = 0.4f;
+        settings.character = 0.5f;
+        return settings;
+    };
+    fx.setEffect (6, slot (EffectType::delay, delay >= 0.5f));
+    fx.setEffect (7, slot (EffectType::reverb, reverb >= 0.5f));
+}
+
 preset::Section encodeParameters (const float* plain, int count)
 {
     preset::Section section;
@@ -104,13 +146,19 @@ void SynthesisProcessor::releaseResources()
 
 double SynthesisProcessor::getTailLengthSeconds() const
 {
-    // Voice release is the documented bound in voiceTailSeconds. An enabled
-    // EffectsChain slot adds its own finite tail (reverb 8 s, delay 6 s,
-    // phaser 0.5 s, chorus/flanger 0.1 s, bitcrusher 0.01 s). Slots ship off.
+    // Voice release is voiceTailSeconds(). syn.fx.delay and syn.fx.reverb
+    // are the host controls. 6 s and 8 s match EffectsChain::tailSamples
+    // for delay slot 6 and reverb slot 7. The report follows the controls
+    // so a host read between callbacks is not a stale chain.
     double tail = engine::voiceTailSeconds();
-    const double rate = getSampleRate();
-    if (fx_.isPrepared() && rate > 0.0)
-        tail = std::max (tail, static_cast<double> (fx_.tailSamples()) / rate);
+    const auto on = [] (const std::atomic<float>* value) noexcept
+    {
+        return value != nullptr && value->load (std::memory_order_relaxed) >= 0.5f;
+    };
+    if (on (raw_[reverbParameterIndex]))
+        tail = std::max (tail, 8.0);
+    else if (on (raw_[delayParameterIndex]))
+        tail = std::max (tail, 6.0);
     return tail;
 }
 
@@ -146,19 +194,13 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         block.part[part].portamento = load (raw_[static_cast<std::size_t> (base + 5)]);
         block.part[part].drive = load (raw_[static_cast<std::size_t> (base + 6)]);
     }
-    block.output = load (raw_[14]);
+    block.output = load (raw_[outputParameterIndex]);
+    syncExposedFx (fx_, load (raw_[delayParameterIndex]), load (raw_[reverbParameterIndex]));
 
     int count = 0;
     std::uint64_t dropped = 0;
-    for (const auto metadata : midi)
+    const auto admit = [&] (const juce::MidiMessageMetadata& metadata)
     {
-        if (metadata.numBytes < 1 || metadata.data[0] == 0xf0)
-            continue;
-        if (count == engine::maxEvents)
-        {
-            ++dropped;
-            continue;
-        }
         engine::Event event;
         event.offset = static_cast<std::uint32_t> (juce::jlimit (0, frames - 1, metadata.samplePosition));
         event.status = metadata.data[0];
@@ -172,6 +214,75 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
         events_[index] = event;
         ++count;
+    };
+
+    int total = 0;
+    int panic = 0;
+    int release = 0;
+    for (const auto metadata : midi)
+    {
+        if (metadata.numBytes < 1 || metadata.data[0] == 0xf0)
+            continue;
+        ++total;
+        if (isPanic (metadata))
+            ++panic;
+        else if (isRelease (metadata))
+            ++release;
+    }
+
+    if (total <= engine::maxEvents)
+    {
+        for (const auto metadata : midi)
+        {
+            if (metadata.numBytes < 1 || metadata.data[0] == 0xf0)
+                continue;
+            admit (metadata);
+        }
+    }
+    else
+    {
+        // Panic and releases keep the newest events, so a note-off or CC120
+        // at the end of a saturated block is admitted. Other events keep
+        // the earliest ones that still fit.
+        const int keepPanic = std::min (panic, engine::maxEvents);
+        const int keepRelease = std::min (release, engine::maxEvents - keepPanic);
+        const int keepOther = engine::maxEvents - keepPanic - keepRelease;
+        int skipPanic = panic - keepPanic;
+        int skipRelease = release - keepRelease;
+        int takenOther = 0;
+        for (const auto metadata : midi)
+        {
+            if (metadata.numBytes < 1 || metadata.data[0] == 0xf0)
+                continue;
+            if (isPanic (metadata))
+            {
+                if (skipPanic > 0)
+                {
+                    --skipPanic;
+                    ++dropped;
+                    continue;
+                }
+            }
+            else if (isRelease (metadata))
+            {
+                if (skipRelease > 0)
+                {
+                    --skipRelease;
+                    ++dropped;
+                    continue;
+                }
+            }
+            else if (takenOther == keepOther)
+            {
+                ++dropped;
+                continue;
+            }
+            else
+            {
+                ++takenOther;
+            }
+            admit (metadata);
+        }
     }
     if (dropped != 0)
         droppedMidi_.fetch_add (dropped, std::memory_order_relaxed);
@@ -186,7 +297,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
 void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
-    float plain[15];
+    float plain[parameterCatalog.size()];
     for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
     {
         const float current = plainValue (*parameters_.getParameter (parameterCatalog[i].id));
@@ -198,7 +309,7 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
 SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const preset::StateDocument& document,
                                                                         juce::String& error)
 {
-    float plain[15];
+    float plain[parameterCatalog.size()];
     for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
         plain[i] = parameterCatalog[i].initial;
 
@@ -247,7 +358,7 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         }
     }
 
-    auto values = std::make_shared<std::array<float, 15>>();
+    auto values = std::make_shared<std::array<float, parameterCatalog.size()>>();
     for (std::size_t i = 0; i < values->size(); ++i)
         (*values)[i] = plain[i];
     ProductRestore restore;

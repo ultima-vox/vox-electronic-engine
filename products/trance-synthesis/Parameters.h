@@ -21,7 +21,7 @@ struct Parameter
 
 inline constexpr int engineChoices = 3;
 
-inline const std::array<Parameter, 15> parameterCatalog {{
+inline const std::array<Parameter, 17> parameterCatalog {{
     { "syn.a.engine", "Part A Engine", 0.0f, 2.0f, 0.0f, true },
     { "syn.a.level", "Part A Level", 0.0f, 1.0f, 0.75f, false },
     { "syn.a.cutoff", "Part A Cutoff", 0.0f, 1.0f, 0.55f, false },
@@ -37,7 +37,15 @@ inline const std::array<Parameter, 15> parameterCatalog {{
     { "syn.b.portamento", "Part B Portamento", 0.0f, 1.0f, 0.0f, false },
     { "syn.b.drive", "Part B Drive", 0.0f, 1.0f, 0.30f, false },
     { "syn.output", "Output", 0.0f, 1.0f, 0.80f, false },
+    { "syn.fx.delay", "Delay", 0.0f, 1.0f, 0.0f, false },
+    { "syn.fx.reverb", "Reverb", 0.0f, 1.0f, 0.0f, false },
 }};
+
+inline constexpr std::size_t outputParameterIndex = 14;
+inline constexpr std::size_t delayParameterIndex = 15;
+inline constexpr std::size_t reverbParameterIndex = 16;
+
+static_assert (parameterCatalog.size() == reverbParameterIndex + 1);
 
 inline constexpr const char* outputParameterName = "Output";
 
