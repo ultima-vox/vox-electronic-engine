@@ -235,12 +235,15 @@ jobs:
         id: targeted
         run: |
           New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
-          ctest --test-dir fx-historic/build-triage -C Release -R '^suite_fx_processor_tests$' --output-on-failure --output-junit fx-triage/results.xml -VV *>&1 | Tee-Object fx-triage/ctest-console.txt
-          $code = $LASTEXITCODE
-          if ($code -ne 0) { exit $code }
+          $junit = Join-Path (Resolve-Path fx-triage).Path 'results.xml'
+          # Keep the native exit status; the always() step preserves CTest text separately.
+          ctest --test-dir fx-historic/build-triage -C Release -R '^suite_fx_processor_tests$' '--no-tests=error' --output-on-failure --output-junit $junit -VV
+          exit $LASTEXITCODE
 
       - name: Capture the exact test exception under installed x64 CDB
-        if: ${{ steps.targeted.outcome == 'failure' }}
+        # Without a status function Actions adds success(), so a failed
+        # targeted test would skip the very step that captures the crash.
+        if: ${{ failure() && !cancelled() && steps.targeted.outcome == 'failure' }}
         timeout-minutes: 4
         run: |
           $helper = Join-Path $env:GITHUB_WORKSPACE '.github\scripts\Capture-FxProcessorException.ps1'

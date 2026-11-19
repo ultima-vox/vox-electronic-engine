@@ -2,6 +2,8 @@
 
 **Authority:** [independent TL review, #156](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7003120118). TL integrated `1ae534f6d49e5a24b72d05a3463147697138af85` into #156 and removed the consumed marker. This follow-up stays on `arena/20b960e7-vox-electronic-engine`. Do not merge, mark Ready, reset the marker or launch the broad qualification on the strength of this diagnostic staging.
 
+> **Targeted run update:** [44488704936](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44488704936) completed. Historical Release/PDB build succeeded, the single-test step failed, and the CDB step was skipped because its expression lacked a failure status function. This does not establish another SEGFAULT or missing CDB. [Job and archive provenance](evidence/windows-44488704936.txt). Preserve the archive and inspect the raw CTest log before any new trigger.
+
 ## Confirmed facts, not a root-cause claim
 
 - Run `44479129114`, job `135406798629`: Release x64 build succeeded; **73/74 CTests passed**. Only `suite_fx_processor_tests` (test #28) failed with CTest `SEGFAULT`; validator execution skipped. Physically built synthetic merge `54fe607f105bd689100461ab41d764aee003c4f9`, same tree `5d7064b9c4623aa3fa3a2d1a5e11ef7ffcc3ea01` as then-PR head `e08eb314f6da27f877c0544a836e3bf8aec6207c`. The artifact's `VOX FX.vst3` file SHA-256 is `894b974cc72c7c772e39be01ea0410723d818b9660cf74c931199b85ac1f748a`, verified by TL, not a release binary. [Updated evidence](evidence/windows-44479129114.txt).
@@ -33,3 +35,47 @@ an abrupt test-step exit cannot bypass log preservation.
 The two-cue Arena ZIP is `artifacts/vox-fx-wave-b-asset-rehearsal.zip` with
 [archive SHA-256](evidence/wave-b-asset-rehearsal.sha256) and
 [member SHA-256s](evidence/wave-b-asset-rehearsal-members.sha256).
+
+## Follow-up after targeted run 44488704936
+
+[Evidence and next runner action](evidence/windows-44488704936.txt). The
+consumed marker is removed; #156 remains Draft on `b15a166`. The opt-in and
+full Windows suite job are unchanged. The staging fix makes the debugger step's
+status check explicit and preserves native CTest exit and an absolute JUnit
+path; it fails instead of reporting success if no test matches. YAML and both
+changed PowerShell blocks parsed locally. A Linux CTest fixture produced a
+nonzero exit, JUnit and `LastTestsFailed.log` for one intentionally failing
+named test, did not execute an unrelated test, and failed on zero matches.
+This is not Windows workflow runtime validation or a processor fix.
+
+The **eight** previously staged Wave B candidates now have a technical audit
+and an Arena review bundle, `artifacts/vox-fx-wave-b-eight-cue-audit.zip`
+(20,701,615 bytes; [archive hash](evidence/wave-b-eight-archive.sha256),
+[member hashes](evidence/wave-b-eight-members.sha256)). The
+[manifest](evidence/wave-b-eight-manifest.tsv) records original tonal/keyless
+4/8/16-bar pairs, two independently authored sample-backed cues, source SHA,
+portable section versions, a musical instruction and the solo SHA per entry.
+The sample sources regenerated at the same two prior SHA values; no third-party
+material is asserted, and no license or listening approval is implied.
+
+At the `b15a166` product tree, the linked authoring tool checked eight portable
+round trips, 24 solo renders at 44.1/48/96 kHz and eight PCM-identical repeats at
+48 kHz. Peak `0.0012182…0.02314925`, max DC `0.00001786`, min mono/stereo RMS
+`0.95644551`, final 5 ms silent for this matrix. These are solo technical
+checks, not quality or full-mix acceptance. See [metrics](evidence/wave-b-eight-metrics.tsv)
+and [host/audition sidecar](evidence/wave-b-eight-settings.tsv). Wave A stays
+120/0, B stays at eight candidates in staging, targets 300/600 remain.
+
+To reproduce with the JUCE pin from the existing
+[Linux harness](evidence/run-linux-native-fx.sh) (Linux x86-64 GCC, run from root):
+
+```bash
+JUCE_MODULES=build/fx-native/deps/juce/modules
+JUCE_OBJECTS=build/fx-native/deps/obj
+g++ -std=c++20 -O2 -pthread -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 -DJUCE_USE_CURL=0 \
+  -I"$JUCE_MODULES" -Iproducts/fx -Ilibs/vox-preset \
+  docs/ultima-vox-music/fx/evidence/export-wave-b-stage.cpp libs/vox-preset/StateContainer.cpp \
+  "$JUCE_OBJECTS"/juce_core*.o "$JUCE_OBJECTS"/juce_cryptography.o -ldl -lrt -l:libz.so.1 \
+  -o build/export-wave-b-stage
+build/export-wave-b-stage build/wave-b-stage
+```

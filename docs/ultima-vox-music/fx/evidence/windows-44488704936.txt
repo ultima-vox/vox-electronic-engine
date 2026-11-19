@@ -1,0 +1,41 @@
+VOX FX historical single-test Windows replay — NOT qualified
+Run: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44488704936
+Job: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44488704936/job/135438567188
+PR trigger head: b15a166124054bc64898428af826e0127bd0d934
+Historical source requested for the test build: e08eb314f6da27f877c0544a836e3bf8aec6207c
+TL context: https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7004005525
+
+Actions metadata reports job completed FAILURE. Both checkout steps, pin
+resolution, historical Release/PDB configure, and the build of only
+suite_fx_processor_tests succeeded. The targeted CTest step FAILED with a
+job annotation of process exit code 1. The installed-x64-CDB step was SKIPPED;
+provenance preservation and upload succeeded. The full windows-suite job was
+SKIPPED. Neither the full CTest label nor the Steinberg validator ran.
+
+The CDB step condition in b15a166 contained only
+`steps.targeted.outcome == 'failure'`. Actions applies an implicit success()
+check to a step condition with no status function, blocking it on the preceding
+failure. This explains the skipped capture; it does not establish whether CDB
+was installed or why CTest failed. The historical checkout was rebuilt with
+symbols, not the original EXE. The log and archive storage redirects return EOF
+from this environment; the targeted failure has not been classified as the same
+SEGFAULT, a different test failure, or test infrastructure. No stack, exception
+code or dump has been obtained from this run.
+
+Artifact: VOX-FX-Processor-Triage-Historical, ID 14512102319, 37,599,325 bytes.
+https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44488704936/artifacts/14512102319
+Archive metadata digest: sha256:e18a1c522e2e5f625a81812fd2b85cd78d669971e13da4b43b88a4015df81994
+Expires: 2026-11-22 08:34:11 UTC (repo capped requested retention at three days).
+
+First preserve the signed-in download, then read LastTest.log, full job log
+and provenance.txt. If the targeted test faulted, run the capture helper on
+the saved/rebuilt EXE and matching PDB in its Windows checkout/CTest context;
+no need to re-run the full suite. If logs show a different error, diagnose that
+instead. Until evidence is collected, do not assume the old processor crash
+was either reproduced or fixed. No new run was requested by Arena.
+
+After this job finished, Arena removed the consumed [RUN_FX_PROCESSOR] line
+without changing the PR head Draft/HOLD state. The resulting PR edit event
+created run 44496154373; its jobs were SKIPPED. No new reproduction or broad
+Windows suite ran as a result of that removal. The staging follow-up has an
+explicit failure-status guard, absolute JUnit output and no-tests-as-error.
