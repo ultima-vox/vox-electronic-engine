@@ -6,6 +6,8 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
+**Latest:** [consolidated motion, browser, runtime and review-catalog handoff](FULL_IMPLEMENTATION_HANDOFF_20261119.md). Executable pinned-JUCE Linux processor/editor and stress tests have now run; the historical table below describes the earlier checkpoint, not the latest code. No Windows, DAW or factory approval is inferred.
+
 | Milestone | Status |
 |---|---|
 | FX-01 | In progress: playable noise riser code, gain/duration parameters, v1→v2 state migration, interim bound UI and processor tests. Processor/UI tests await an executable JUCE suite build. |
