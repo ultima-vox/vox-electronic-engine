@@ -8,9 +8,13 @@ struct FactoryProgram {
     const char* id;
     const char* name;
     const char* style;
-    const char* role;
+    const char* variant;
     const char* purpose;
-    ProgramCategory category;
+    FactoryRole role;
+    int engineA;
+    int engineB;
+    const char* mood;
+    int auditionNote;
     const float* values;
 };
 
@@ -18,10 +22,11 @@ struct FactoryPhrase {
     const char* id;
     const char* name;
     const char* style;
-    const char* role;
+    const char* pattern;
     const char* purpose;
-    ProgramCategory category;
+    FactoryRole role;
     int ticksPerQuarter;
+    int lengthTicks;
     const PhraseNote* notes;
     int noteCount;
 };

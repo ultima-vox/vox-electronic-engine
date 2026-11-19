@@ -22,6 +22,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -490,8 +491,10 @@ void testParameterAutomation()
 
 void testProgramBrowser()
 {
-    check (vox::syn::factoryProgramsReady == 600, "600 factory programs are delivered");
-    check (vox::syn::factoryPhrasesReady == 120, "120 factory phrases are delivered");
+    check (vox::syn::factoryProgramsInstalled == 600, "600 factory programs are installed candidates");
+    check (vox::syn::factoryPhrasesInstalled == 120, "120 factory phrases are installed candidates");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "no factory program is human-approved");
+    check (vox::syn::factoryPhrasesHumanApproved == 0, "no factory phrase is human-approved");
     check (vox::syn::factoryProgramCount() == 600 && vox::syn::factoryPhraseCount() == 120,
            "delivered counts match the installed tables");
     check (vox::syn::factoryProgramCapacity == 600 && vox::syn::factoryPhraseCapacity == 120,
@@ -638,15 +641,35 @@ void testFactoryContent()
 {
     check (vox::syn::factoryProgramCount() == 600, "600 programs installed");
     check (vox::syn::factoryPhraseCount() == 120, "120 phrases installed");
-    std::set<std::string> ids, names, vectors, phraseIds, phraseNotes;
-    int perCategory[8] = {};
+    check (static_cast<int> (vox::syn::ProgramCategory::user) == 8, "UBNK user category ordinal stays 8");
+    std::set<std::string> ids, names, timbreKeys, phraseIds, pitchKeys;
+    int perRole[7] = {};
+    int phraseRole[7] = {};
+    int psyBass = 0, vaBass = 0;
     for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
     {
         const auto& program = vox::syn::factoryProgram (i);
         check (program.id != nullptr && std::strlen (program.id) == 6, "program id");
-        check (program.name != nullptr && program.purpose != nullptr && std::strlen (program.purpose) > 8, "program purpose");
-        check (static_cast<int> (program.category) < 8, "factory program is not a user slot");
-        ++perCategory[static_cast<int> (program.category)];
+        check (std::string (program.purpose).find ("not approved") != std::string::npos,
+               "program text does not claim approval");
+        check (std::string (program.purpose).find ("riser") == std::string::npos
+                   && std::string (program.purpose).find ("downlifter") == std::string::npos
+                   && std::string (program.purpose).find ("impact") == std::string::npos,
+               "transition FX stays out of the synth bank");
+        const int role = static_cast<int> (program.role);
+        check (role >= 0 && role < 7, "primary role");
+        ++perRole[role];
+        if (role == static_cast<int> (vox::syn::FactoryRole::bass))
+        {
+            if (program.engineA == 0)
+                ++psyBass;
+            else
+                ++vaBass;
+        }
+        else if (role == static_cast<int> (vox::syn::FactoryRole::acid))
+            check (program.engineA == 1, "acid role uses the 303 engine");
+        else
+            check (program.engineA == 2, "non-bass role uses VA");
         ids.insert (program.id);
         names.insert (program.name);
         std::string key;
@@ -655,64 +678,167 @@ void testFactoryContent()
             const float value = program.values[p];
             check (value >= vox::syn::parameterCatalog[p].minimum && value <= vox::syn::parameterCatalog[p].maximum,
                    std::string (program.id) + " " + vox::syn::parameterCatalog[p].id);
+            if (p == vox::syn::outputParameterIndex)
+                continue;
             key.append (reinterpret_cast<const char*> (&value), sizeof value);
         }
-        vectors.insert (key);
+        timbreKeys.insert (key);
     }
     check (static_cast<int> (ids.size()) == 600 && static_cast<int> (names.size()) == 600
-               && static_cast<int> (vectors.size()) == 600,
-           "program ids, names and parameter vectors are unique");
-    check (perCategory[0] == 100 && perCategory[1] == 80 && perCategory[2] == 80 && perCategory[3] == 60
-               && perCategory[4] == 60 && perCategory[5] == 80 && perCategory[6] == 70 && perCategory[7] == 70,
-           "category counts match the manifest");
+               && static_cast<int> (timbreKeys.size()) == 600,
+           "ids, names and timbre vectors are unique with output excluded");
+    for (int role = 0; role < 7; ++role)
+        check (perRole[role] == vox::syn::factoryRoleQuota[static_cast<std::size_t> (role)], "role quota");
+    check (psyBass > 0 && vaBass > 0, "bass covers Psy Bass and VA");
 
     auto synth = make();
+    synth->prepareToPlay (48000.0, 256);
+    std::set<std::uint64_t> audioHashes;
+    const auto audit = envOrEmpty ("VOX_FACTORY_AUDIT");
+    std::ofstream auditFile;
+    if (! audit.empty())
+    {
+        auditFile.open (audit);
+        check (static_cast<bool> (auditFile), "factory render manifest opens");
+        auditFile << "kind,id,style,role,peak,rms,clipped,hash\n";
+    }
     for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
     {
-        check (synth->loadFactoryProgram (i), "program loads");
         const auto& program = vox::syn::factoryProgram (i);
-        check (std::abs (plain (*synth, "syn.output") - program.values[vox::syn::outputParameterIndex]) < 1.0e-5f,
-               std::string (program.id) + " output loaded");
-        check (std::abs (plain (*synth, "syn.a.cutoff") - program.values[2]) < 1.0e-5f,
-               std::string (program.id) + " cutoff loaded");
+        check (synth->loadFactoryProgram (i), "program loads");
+        check (std::abs (plain (*synth, "syn.a.cutoff") - program.values[2]) < 1.0e-5f, "cutoff loaded");
+        juce::AudioBuffer<float> buffer (2, 256);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, program.auditionNote, static_cast<juce::uint8> (100)), 0);
+        double sum = 0.0;
+        float peak = 0.0f;
+        int clipped = 0;
+        int counted = 0;
+        std::uint64_t hash = 1469598103934665603ull;
+        bool finite = true;
+        for (int block = 0; block < 94; ++block)
+        {
+            if (block == 47)
+            {
+                midi.clear();
+                midi.addEvent (juce::MidiMessage::noteOff (1, program.auditionNote), 0);
+            }
+            synth->processBlock (buffer, midi);
+            midi.clear();
+            for (int sample = 0; sample < 256; ++sample)
+            {
+                const float left = buffer.getSample (0, sample);
+                finite = finite && std::isfinite (left);
+                peak = std::max (peak, std::abs (left));
+                sum += static_cast<double> (left) * left;
+                if (std::abs (left) > 1.0f)
+                    ++clipped;
+                ++counted;
+                const auto bits = static_cast<std::uint32_t> (left * 1000.0f);
+                hash ^= bits;
+                hash *= 1099511628211ull;
+            }
+        }
+        check (finite && peak > 1.0e-4f, std::string (program.id) + " audition is not silent");
+        check (audioHashes.insert (hash).second, std::string (program.id) + " audition hash is unique");
+        if (auditFile)
+            auditFile << "program," << program.id << "," << program.style << ","
+                      << vox::syn::factoryRoleNames[static_cast<std::size_t> (program.role)] << ","
+                      << peak << "," << std::sqrt (sum / counted) << "," << clipped << "," << hash << "\n";
+        juce::MidiBuffer quiet;
+        for (int block = 0; block < 40 && synth->activeVoices() > 0; ++block)
+            synth->processBlock (buffer, quiet);
     }
-    check (! synth->loadFactoryProgram (600) && ! synth->loadFactoryProgram (-1), "program index is bounded");
+    check (! synth->loadFactoryProgram (600), "program index is bounded");
 
-    synth->prepareToPlay (48000.0, 128);
-    check (synth->loadFactoryProgram (260), "pluck program for phrase playback");
+    setPlain (*synth, "syn.a.engine", 2.0f);
+    setPlain (*synth, "syn.b.engine", 2.0f);
+    setPlain (*synth, "syn.a.level", 0.7f);
+    setPlain (*synth, "syn.b.level", 0.0f);
+    setPlain (*synth, "syn.a.attack", 0.0f);
+    setPlain (*synth, "syn.a.decay", 0.2f);
+    setPlain (*synth, "syn.a.release", 0.12f);
+    setPlain (*synth, "syn.a.sustain", 0.4f);
+    setPlain (*synth, "syn.fx.delay", 0.0f);
+    setPlain (*synth, "syn.fx.reverb", 0.0f);
+    synth->releaseResources();
+    synth->prepareToPlay (48000.0, 256);
     for (int i = 0; i < vox::syn::factoryPhraseCount(); ++i)
     {
         const auto& phrase = vox::syn::factoryPhrase (i);
-        check (phrase.noteCount > 0 && phrase.notes != nullptr && phrase.ticksPerQuarter == 960, "phrase has notes");
-        check (phrase.id != nullptr && phrase.purpose != nullptr && std::strlen (phrase.purpose) > 8, "phrase purpose");
+        check (phrase.noteCount > 0 && phrase.ticksPerQuarter == 960 && phrase.lengthTicks == 3840, "phrase timing");
+        ++phraseRole[static_cast<int> (phrase.role)];
         phraseIds.insert (phrase.id);
-        std::string key;
+        std::string pitches;
+        std::vector<std::tuple<int, int, int, bool>> events;
         int previous = -1;
         for (int n = 0; n < phrase.noteCount; ++n)
         {
             const auto& note = phrase.notes[n];
             check (note.tick >= previous && note.note >= 0 && note.note <= 127, "phrase note range");
-            check (note.velocity >= 1 && note.velocity <= 127 && note.duration > 0, "phrase velocity and duration");
+            check (note.velocity >= 1 && note.velocity <= 127 && note.duration > 0, "phrase gate");
             previous = note.tick;
-            key += std::to_string (note.tick) + ":" + std::to_string (note.note) + ":" + std::to_string (note.duration) + ";";
+            pitches += std::to_string (note.tick) + ":" + std::to_string (note.note) + ":"
+                     + std::to_string (note.velocity) + ":" + (note.slide ? "s" : "") + (note.accent ? "a" : "") + ";";
+            events.push_back ({ note.tick * 25, 1, note.note, note.velocity >= 110 });
+            events.push_back ({ (note.tick + note.duration) * 25, 0, note.note, false });
         }
-        phraseNotes.insert (key);
-
-        juce::AudioBuffer<float> buffer (2, 128);
+        check (pitchKeys.insert (pitches).second, std::string (phrase.id) + " pitch row is unique without duration salt");
+        std::sort (events.begin(), events.end());
+        juce::AudioBuffer<float> buffer (2, 256);
         juce::MidiBuffer midi;
-        midi.addEvent (juce::MidiMessage::noteOn (1, phrase.notes[0].note, static_cast<juce::uint8> (100)), 0);
+        std::size_t at = 0;
+        const int end = std::get<0> (events.back()) + 16000;
         float peak = 0.0f;
-        for (int block = 0; block < 4; ++block)
+        bool finite = true;
+        bool ordered = true;
+        int lastSample = -1;
+        for (int origin = 0; origin < end; origin += 256)
         {
-            synth->processBlock (buffer, midi);
             midi.clear();
-            for (int sample = 0; sample < 128; ++sample)
-                peak = std::max (peak, std::abs (buffer.getSample (0, sample)));
+            while (at < events.size() && std::get<0> (events[at]) < origin + 256)
+            {
+                const int sample = std::get<0> (events[at]) - origin;
+                ordered = ordered && std::get<0> (events[at]) >= lastSample;
+                lastSample = std::get<0> (events[at]);
+                const int note = std::get<1> (events[at]) == 1 ? std::get<2> (events[at]) : std::get<2> (events[at]);
+                if (std::get<1> (events[at]) == 1)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, note, static_cast<juce::uint8> (100)), sample);
+                else
+                    midi.addEvent (juce::MidiMessage::noteOff (1, note), sample);
+                ++at;
+            }
+            synth->processBlock (buffer, midi);
+            for (int sample = 0; sample < 256; ++sample)
+            {
+                const float left = buffer.getSample (0, sample);
+                finite = finite && std::isfinite (left);
+                peak = std::max (peak, std::abs (left));
+            }
         }
-        check (peak > 1.0e-4f, std::string (phrase.id) + " makes sound");
+        check (ordered && at == events.size(), std::string (phrase.id) + " events stay ordered through note-off");
+        check (finite && peak > 1.0e-4f, std::string (phrase.id) + " full phrase is finite and audible");
+        juce::MidiBuffer quiet;
+        juce::AudioBuffer<float> tail (2, 256);
+        for (int block = 0; block < 80 && synth->activeVoices() > 0; ++block)
+            synth->processBlock (tail, quiet);
+        check (synth->activeVoices() == 0, std::string (phrase.id) + " releases");
+        if (auditFile)
+            auditFile << "phrase," << phrase.id << "," << phrase.style << ","
+                      << vox::syn::factoryRoleNames[static_cast<std::size_t> (phrase.role)] << ","
+                      << peak << ",,0,\n";
     }
-    check (static_cast<int> (phraseIds.size()) == 120 && static_cast<int> (phraseNotes.size()) == 120,
-           "phrase ids and note lists are unique");
+    check (phraseRole[0] == 30 && phraseRole[1] == 25 && phraseRole[5] == 25 && phraseRole[2] == 20
+               && phraseRole[4] + phraseRole[6] == 20,
+           "phrase quotas are bass 30, acid 25, arp 25, lead 20, pad+stab 20");
+    check (static_cast<int> (phraseIds.size()) == 120, "phrase ids are unique");
+
+    check (synth->saveUserProgram ("Ordinal", static_cast<int> (vox::syn::ProgramCategory::user)), "save legacy user slot");
+    juce::MemoryBlock saved;
+    synth->getStateInformation (saved);
+    auto copy = make();
+    copy->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (copy->userProgramCategory (0) == 8, "UBNK still stores user as category 8");
 }
 
 void testStateEdges()

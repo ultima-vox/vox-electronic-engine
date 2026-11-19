@@ -592,11 +592,11 @@ juce::String SynthesisProcessor::factoryProgramName (int index) const
     return program.name;
 }
 
-int SynthesisProcessor::factoryProgramCategory (int index) const
+int SynthesisProcessor::factoryProgramRole (int index) const
 {
     if (index < 0 || index >= vox::syn::factoryProgramCount())
         return 0;
-    return static_cast<int> (factoryProgram (index).category);
+    return static_cast<int> (factoryProgram (index).role);
 }
 
 juce::String SynthesisProcessor::factoryProgramSearch (int index) const
@@ -605,7 +605,7 @@ juce::String SynthesisProcessor::factoryProgramSearch (int index) const
         return {};
     const auto& program = factoryProgram (index);
     return juce::String (program.id) + " " + program.name + " " + program.style + " "
-         + program.role + " " + program.purpose;
+         + program.variant + " " + program.mood + " " + program.purpose;
 }
 
 bool SynthesisProcessor::loadFactoryProgram (int index)

@@ -53,7 +53,7 @@ public:
     bool loadUserProgram (int index);
     [[nodiscard]] int factoryProgramCount() const noexcept;
     [[nodiscard]] juce::String factoryProgramName (int index) const;
-    [[nodiscard]] int factoryProgramCategory (int index) const;
+    [[nodiscard]] int factoryProgramRole (int index) const;
     [[nodiscard]] juce::String factoryProgramSearch (int index) const;
     bool loadFactoryProgram (int index);
 
