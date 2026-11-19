@@ -1,5 +1,11 @@
 # VOX FX release evidence ledger
 
+## 2026-11-19 — current engineering evidence, HOLD retained
+
+- [FX-T18 paired Linux callback measurements](FX_T18_PAIRED_20261119.md): regular/authored stress improved; same-core scheduling still causes deadline misses; Windows qualification pending.
+- [Wave B interludes review](WAVE_B_INTERLUDES_20261119.md): A 120 + B 24 staged, zero approvals; 300/600 not reached.
+- Windows fixture overflow fix `71c5045`, targeted 1/1 at `514e96a`, according to TL/owner. This is not full CTest, Steinberg validation or artifact SHA verification. The historical rows below do not describe the latest P0 status.
+
 For current status and exact qualifications, see the [Wave A review and Windows HOLD](WAVE_A_REVIEW_HANDOFF_20261119.md); the preceding [capture handoff](CAPTURE_WAVE_A_HANDOFF_20261119.md) retains the full FX-01…07 / FX-T01…20 matrix. The table below is historical baseline evidence, not current qualification.
 
 Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent `f4e407fc379cbc36bd447af24e0626dc1c80fec8`. This is a gap ledger, not a release approval. Any later commit invalidates exact-HEAD qualification until rerun. Exact baseline Windows [suite 44367745359](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44367745359) and [build 44367745537](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44367745537) queued; no bundle SHA or validator result. Prior four Windows SEGFAULTs remain unverified. Linux standalone evidence is historical and partial; see `STATUS.md` and `DSP_BENCHMARK.md`. No manual DAW or listening approval has been performed.
