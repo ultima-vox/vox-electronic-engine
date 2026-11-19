@@ -34,7 +34,7 @@ void checkRestoreAdmission() {
     using namespace vox::fx;
     struct Listener final : juce::AudioProcessorParameter::Listener {
         void parameterValueChanged(int,float) override {
-            const std::unique_lock lock(mutex);entered=true;cv.notify_all();
+            std::unique_lock lock(mutex);entered=true;cv.notify_all();
             cv.wait(lock,[this]{return released;});
         }
         void parameterGestureChanged(int,bool) override {}
