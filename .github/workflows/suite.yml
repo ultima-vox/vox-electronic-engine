@@ -68,8 +68,10 @@ jobs:
           # Golden renders are also written as WAV files for listening (artifact).
           New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          $env:VOX_SYNTH_PERF_LOG = (Join-Path (Resolve-Path suite-out).Path 'synth-perf.txt')
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path suite-out\synth-perf.txt) { Get-Content suite-out\synth-perf.txt }
 
       - name: Steinberg VST3 validator
         shell: powershell

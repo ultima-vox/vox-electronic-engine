@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -548,6 +549,12 @@ void testPerformance()
         calls = voxProbeEnd();
     const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
     std::printf ("synth perf: %.2f ms for 1.0 s audio, oversampling off, mallocs %lu\n", ms, calls);
+    if (const char* path = std::getenv ("VOX_SYNTH_PERF_LOG"))
+    {
+        std::ofstream out (path);
+        check (static_cast<bool> (out), "performance log opens");
+        out << "synth perf: " << ms << " ms for 1.0 s audio, oversampling off, mallocs " << calls << "\n";
+    }
     check (calls == 0, "performance render allocates nothing");
     check (ms < 1500.0, "1 s of audio stays under 1.5 s without oversampling");
     bool finite = true;
