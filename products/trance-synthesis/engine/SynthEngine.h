@@ -88,6 +88,7 @@ public:
     [[nodiscard]] bool monoGate (int part) const noexcept;
     [[nodiscard]] float monoAccent (int part) const noexcept;
     [[nodiscard]] int glideSource (int part) const noexcept;
+    [[nodiscard]] bool vaNoteHeld (int part, int note) const noexcept;
     [[nodiscard]] int vaFadeLeft() const noexcept;
 
 private:

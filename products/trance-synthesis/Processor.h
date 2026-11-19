@@ -17,6 +17,7 @@ namespace vox::syn {
 
 inline constexpr preset::Tag engineSectionTag = preset::makeTag ("ENG1");
 inline constexpr preset::Tag userBankTag = preset::makeTag ("UBNK");
+inline constexpr preset::Tag phraseSectionTag = preset::makeTag ("PHRS");
 inline constexpr int maxUserPrograms = 128;
 
 struct UserProgram {
@@ -50,6 +51,7 @@ public:
     [[nodiscard]] int glideSource (int part) const noexcept { return engine_.glideSource (part); }
     [[nodiscard]] double monoPhase (int part) const noexcept { return engine_.monoPhase (part); }
     [[nodiscard]] int vaFadeLeft() const noexcept { return engine_.vaFadeLeft(); }
+    [[nodiscard]] bool vaNoteHeld (int part, int note) const noexcept { return engine_.vaNoteHeld (part, note); }
     [[nodiscard]] std::uint64_t droppedMidi() const noexcept { return droppedMidi_.load (std::memory_order_relaxed); }
 
     [[nodiscard]] int userProgramCount() const;
@@ -64,8 +66,8 @@ public:
     bool loadFactoryProgram (int index);
 
     void setPhraseIndex (int index);
-    [[nodiscard]] int phraseIndex() const noexcept { return phraseIndex_; }
-    [[nodiscard]] bool phrasePlaying() const noexcept { return phrasePlaying_; }
+    [[nodiscard]] int phraseIndex() const;
+    [[nodiscard]] bool phrasePlaying() const noexcept { return phrasePlaying_.load (std::memory_order_acquire); }
     void setPhrasePlaying (bool playing);
     // Forced clock is for tests. Otherwise a playing host wins, else the internal 120 bpm clock.
     void setPhraseClock (bool forced, bool hostPlaying, double ppq, double bpm) noexcept;
@@ -79,15 +81,16 @@ protected:
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     bool isProductSection (preset::Tag tag) const override
     {
-        return tag == engineSectionTag || tag == userBankTag;
+        return tag == engineSectionTag || tag == userBankTag || tag == phraseSectionTag;
     }
 
 private:
     engine::BlockParams latchBlock();
     void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
-    void insertEvent (const engine::Event& event, int& count);
-    void addPhraseEvents (int frames, int& count);
-    void phraseNotes (const PhraseNote*& notes, int& count, int& lengthTicks) const;
+    bool insertEvent (const engine::Event& event, int& count);
+    void publishLocked();
+    void readSnapshot (PhraseSnapshot& out) noexcept;
+    void collectPhrase (int frames, const PhraseSnapshot& snap, engine::Event* phraseEvents, int& phraseCount);
     juce::AudioProcessorValueTreeState parameters_;
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
@@ -95,17 +98,36 @@ private:
     engine::Event events_[engine::maxEvents] {};
     bool prepared_ = false;
     double sampleRate_ = 48000.0;
+    // Control thread owns the editable phrase under phraseLock_. It builds a
+    // fixed PhraseSnapshot into a slot the audio thread is not copying, then
+    // publishes the slot with release. The audio thread copies that slot onto
+    // its stack and never frees it. Slots live for the processor lifetime.
+    // Play, stop and the clock epoch are atomics. Stop sends note-offs only
+    // for notes this player turned on, so host-held notes stay.
+    juce::CriticalSection phraseLock_;
     int phraseIndex_ = 0;
-    bool phrasePlaying_ = false;
-    bool phraseStop_ = false;
     bool phraseEdited_ = false;
-    bool clockForced_ = false;
-    bool clockHost_ = false;
-    double clockPpq_ = 0.0;
-    double clockBpm_ = 120.0;
-    std::int64_t phrasePlayed_ = 0;
-    int phraseLength_ = 0;
+    int phraseLength_ = 3840;
     std::vector<PhraseNote> phraseEdit_;
+    struct PhraseSlot {
+        PhraseSnapshot snap;
+        int revision = 0;
+    };
+    PhraseSlot phraseSlots_[3] {};
+    std::atomic<int> phrasePublished_ { 0 };
+    std::atomic<int> phraseAudioSlot_ { -1 };
+    int phraseRevision_ = 0;
+    std::atomic<bool> phrasePlaying_ { false };
+    std::atomic<int> phraseStopEpoch_ { 0 };
+    std::atomic<int> phraseClockEpoch_ { 0 };
+    std::atomic<bool> clockForced_ { false };
+    std::atomic<bool> clockHost_ { false };
+    std::atomic<std::uint64_t> clockPpqBits_ { 0 };
+    std::atomic<std::uint64_t> clockBpmBits_ { 0 };
+    int rtStopEpoch_ = 0;
+    int rtClockEpoch_ = 0;
+    std::int64_t rtPlayed_ = 0;
+    std::uint8_t phraseHeld_[128] {};
     std::atomic<std::uint64_t> droppedMidi_ { 0 };
 
     struct Restored { float loaded = 0.0f, held = 0.0f; };

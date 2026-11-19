@@ -121,6 +121,16 @@ int SynthEngine::glideSource (int part) const noexcept
     return parts_[part].mono.glideSource;
 }
 
+bool SynthEngine::vaNoteHeld (int part, int note) const noexcept
+{
+    if (part < 0 || part >= partCount || note < 0 || note > 127)
+        return false;
+    for (const auto& voice : voices_)
+        if (voice.active && ! voice.dying && voice.gate && voice.part == part && voice.note == note)
+            return true;
+    return false;
+}
+
 int SynthEngine::vaFadeLeft() const noexcept
 {
     int left = 0;

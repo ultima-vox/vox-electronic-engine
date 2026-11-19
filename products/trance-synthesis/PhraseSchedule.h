@@ -49,6 +49,78 @@ struct AuditionEvent {
     bool accent = false;
 };
 
+inline constexpr int maxPhraseNotes = 64;
+inline constexpr int maxPhraseEvents = maxPhraseNotes * 2;
+
+// Fixed performance schedule. The control thread builds it. The audio thread only copies it.
+struct PhraseSnapshot {
+    int loopTicks = 1;
+    int eventCount = 0;
+    ScheduledEvent events[maxPhraseEvents] {};
+};
+
+[[nodiscard]] inline bool fillPerformanceSnapshot (const PhraseNote* notes, int count, int lengthTicks,
+                                                   PhraseSnapshot& out)
+{
+    out = {};
+    if (count < 0 || count > maxPhraseNotes || (notes == nullptr && count > 0))
+        return false;
+    int off[maxPhraseNotes];
+    char into[maxPhraseNotes] {};
+    for (int i = 0; i < count; ++i)
+        off[i] = notes[i].tick + notes[i].duration;
+    for (int i = 0; i < count; ++i)
+    {
+        if (! notes[i].slide)
+            continue;
+        int destTick = -1;
+        for (int j = 0; j < count; ++j)
+            if (notes[j].tick > notes[i].tick && (destTick < 0 || notes[j].tick < destTick))
+                destTick = notes[j].tick;
+        if (destTick < 0)
+            continue;
+        off[i] = destTick;
+        for (int j = 0; j < count; ++j)
+            if (notes[j].tick == destTick)
+                into[j] = 1;
+    }
+
+    ScheduledEvent built[maxPhraseEvents];
+    int builtCount = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        ScheduledEvent on;
+        on.tick = notes[i].tick;
+        on.on = true;
+        on.note = notes[i].note;
+        on.velocity = notes[i].velocity;
+        on.slide = into[i] != 0;
+        on.accent = notes[i].accent;
+        built[builtCount++] = on;
+        ScheduledEvent done;
+        done.tick = off[i];
+        done.on = false;
+        done.note = notes[i].note;
+        built[builtCount++] = done;
+    }
+    std::sort (built, built + builtCount, [] (const ScheduledEvent& a, const ScheduledEvent& b) {
+        if (a.tick != b.tick)
+            return a.tick < b.tick;
+        if (a.on != b.on)
+            return a.on && ! b.on;
+        return a.note < b.note;
+    });
+    out.eventCount = builtCount;
+    int loopTicks = std::max (1, lengthTicks);
+    for (int i = 0; i < builtCount; ++i)
+    {
+        out.events[i] = built[i];
+        loopTicks = std::max (loopTicks, built[i].tick + 1);
+    }
+    out.loopTicks = loopTicks;
+    return true;
+}
+
 // Half-away-from-zero. Block size does not move the result.
 [[nodiscard]] inline int phraseSample (int tick, double sampleRate, double bpm = phraseTempoBpm) noexcept
 {

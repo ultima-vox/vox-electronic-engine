@@ -134,6 +134,11 @@ SynthesisProcessor::SynthesisProcessor()
         const float plain = plainValue (*parameters_.getParameter (parameterCatalog[i].id));
         restored_[i] = { plain, plain };
     }
+    const double bpm = phraseTempoBpm;
+    std::uint64_t bits = 0;
+    std::memcpy (&bits, &bpm, sizeof bits);
+    clockBpmBits_.store (bits, std::memory_order_relaxed);
+    publishLocked();
 }
 
 void SynthesisProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
@@ -199,17 +204,34 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     const auto block = latchBlock();
 
+    PhraseSnapshot snap;
+    readSnapshot (snap);
+    engine::Event phraseEvents[maxPhraseEvents];
+    int phraseCount = 0;
+    int phraseOffs = 0;
+    collectPhrase (frames, snap, phraseEvents, phraseCount);
+    for (int i = 0; i < phraseCount; ++i)
+        if ((phraseEvents[i].status & 0xf0u) == 0x80u)
+            ++phraseOffs;
+
     int count = 0;
     std::uint64_t dropped = 0;
+    const int hostCap = std::max (0, engine::maxEvents - phraseOffs);
     const auto admit = [&] (const juce::MidiMessageMetadata& metadata)
     {
+        if (count >= hostCap)
+        {
+            ++dropped;
+            return;
+        }
         engine::Event event;
         event.offset = static_cast<std::uint32_t> (juce::jlimit (0, frames - 1, metadata.samplePosition));
         event.status = metadata.data[0];
         event.data1 = metadata.numBytes > 1 ? metadata.data[1] : 0;
         event.data2 = metadata.numBytes > 2 ? metadata.data[2] : 0;
         event.articulation = 0;
-        insertEvent (event, count);
+        if (! insertEvent (event, count))
+            ++dropped;
     };
 
     int total = 0;
@@ -226,7 +248,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             ++release;
     }
 
-    if (total <= engine::maxEvents)
+    if (total <= hostCap)
     {
         for (const auto metadata : midi)
         {
@@ -240,9 +262,9 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         // Panic and releases keep the newest events, so a note-off or CC120
         // at the end of a saturated block is admitted. Other events keep
         // the earliest ones that still fit.
-        const int keepPanic = std::min (panic, engine::maxEvents);
-        const int keepRelease = std::min (release, engine::maxEvents - keepPanic);
-        const int keepOther = engine::maxEvents - keepPanic - keepRelease;
+        const int keepPanic = std::min (panic, hostCap);
+        const int keepRelease = std::min (release, hostCap - keepPanic);
+        const int keepOther = hostCap - keepPanic - keepRelease;
         int skipPanic = panic - keepPanic;
         int skipRelease = release - keepRelease;
         int takenOther = 0;
@@ -283,7 +305,27 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (dropped != 0)
         droppedMidi_.fetch_add (dropped, std::memory_order_relaxed);
 
-    addPhraseEvents (frames, count);
+    for (int i = 0; i < phraseCount; ++i)
+    {
+        const bool off = (phraseEvents[i].status & 0xf0u) == 0x80u;
+        if (! off && count >= engine::maxEvents)
+        {
+            droppedMidi_.fetch_add (1, std::memory_order_relaxed);
+            continue;
+        }
+        if (! insertEvent (phraseEvents[i], count))
+            continue;
+        const int note = phraseEvents[i].data1;
+        if (note > 127)
+            continue;
+        if (off)
+        {
+            if (phraseHeld_[note] > 0)
+                --phraseHeld_[note];
+        }
+        else if (phraseHeld_[note] < 255)
+            ++phraseHeld_[note];
+    }
     runEngine (buffer, count, block);
 }
 
@@ -365,13 +407,10 @@ void SynthesisProcessor::audition (juce::AudioBuffer<float>& buffer, const Audit
     runEngine (buffer, count, block);
 }
 
-void SynthesisProcessor::insertEvent (const engine::Event& event, int& count)
+bool SynthesisProcessor::insertEvent (const engine::Event& event, int& count)
 {
     if (count >= engine::maxEvents)
-    {
-        droppedMidi_.fetch_add (1, std::memory_order_relaxed);
-        return;
-    }
+        return false;
     int index = count;
     while (index > 0 && events_[index - 1].offset > event.offset)
     {
@@ -380,72 +419,134 @@ void SynthesisProcessor::insertEvent (const engine::Event& event, int& count)
     }
     events_[index] = event;
     ++count;
+    return true;
+}
+
+void SynthesisProcessor::publishLocked()
+{
+    const PhraseNote* notes = nullptr;
+    int count = 0;
+    int length = std::max (1, phraseLength_);
+    if (phraseEdited_)
+    {
+        notes = phraseEdit_.data();
+        count = static_cast<int> (phraseEdit_.size());
+    }
+    else
+    {
+        const auto& phrase = factoryPhrase (phraseIndex_);
+        notes = phrase.notes;
+        count = phrase.noteCount;
+        length = std::max (1, phrase.lengthTicks);
+        phraseLength_ = length;
+    }
+    PhraseSnapshot snap;
+    if (! fillPerformanceSnapshot (notes, count, length, snap))
+        return;
+    const int reading = phraseAudioSlot_.load (std::memory_order_acquire);
+    const int published = phrasePublished_.load (std::memory_order_acquire);
+    int slot = (published + 1) % 3;
+    for (int i = 0; i < 3; ++i)
+        if (i != reading && i != published)
+        {
+            slot = i;
+            break;
+        }
+    phraseSlots_[slot].snap = snap;
+    phraseSlots_[slot].revision = ++phraseRevision_;
+    phrasePublished_.store (slot, std::memory_order_release);
+}
+
+void SynthesisProcessor::readSnapshot (PhraseSnapshot& out) noexcept
+{
+    const int slot = phrasePublished_.load (std::memory_order_acquire);
+    phraseAudioSlot_.store (slot, std::memory_order_release);
+    out = phraseSlots_[slot].snap;
+    phraseAudioSlot_.store (-1, std::memory_order_release);
+}
+
+namespace {
+double loadBits (const std::atomic<std::uint64_t>& bits) noexcept
+{
+    const auto raw = bits.load (std::memory_order_relaxed);
+    double value = 0.0;
+    std::memcpy (&value, &raw, sizeof value);
+    return value;
+}
+
+void storeBits (std::atomic<std::uint64_t>& bits, double value) noexcept
+{
+    std::uint64_t raw = 0;
+    std::memcpy (&raw, &value, sizeof raw);
+    bits.store (raw, std::memory_order_relaxed);
+}
 }
 
 void SynthesisProcessor::setPhraseIndex (int index)
 {
+    const juce::ScopedLock lock (phraseLock_);
     if (index < 0 || index >= factoryPhraseCount())
         return;
     phraseIndex_ = index;
     phraseEdited_ = false;
     phraseEdit_.clear();
-    phrasePlayed_ = 0;
+    publishLocked();
+    phraseClockEpoch_.fetch_add (1, std::memory_order_release);
+    if (phrasePlaying_.load (std::memory_order_relaxed))
+        phraseStopEpoch_.fetch_add (1, std::memory_order_release);
+}
+
+int SynthesisProcessor::phraseIndex() const
+{
+    const juce::ScopedLock lock (phraseLock_);
+    return phraseIndex_;
 }
 
 void SynthesisProcessor::setPhrasePlaying (bool playing)
 {
-    if (phrasePlaying_ && ! playing)
-        phraseStop_ = true;
-    if (playing && ! phrasePlaying_)
-        phrasePlayed_ = 0;
-    phrasePlaying_ = playing;
+    const juce::ScopedLock lock (phraseLock_);
+    const bool was = phrasePlaying_.load (std::memory_order_relaxed);
+    if (was && ! playing)
+        phraseStopEpoch_.fetch_add (1, std::memory_order_release);
+    if (playing && ! was)
+        phraseClockEpoch_.fetch_add (1, std::memory_order_release);
+    phrasePlaying_.store (playing, std::memory_order_release);
 }
 
 void SynthesisProcessor::setPhraseClock (bool forced, bool hostPlaying, double ppq, double bpm) noexcept
 {
-    clockForced_ = forced;
-    clockHost_ = hostPlaying;
-    clockPpq_ = ppq;
-    clockBpm_ = bpm > 1.0 ? bpm : phraseTempoBpm;
-}
-
-void SynthesisProcessor::phraseNotes (const PhraseNote*& notes, int& count, int& lengthTicks) const
-{
-    if (phraseEdited_)
-    {
-        notes = phraseEdit_.data();
-        count = static_cast<int> (phraseEdit_.size());
-        lengthTicks = std::max (1, phraseLength_);
-        return;
-    }
-    const auto& phrase = factoryPhrase (phraseIndex_);
-    notes = phrase.notes;
-    count = phrase.noteCount;
-    lengthTicks = std::max (1, phrase.lengthTicks);
+    clockForced_.store (forced, std::memory_order_relaxed);
+    clockHost_.store (hostPlaying, std::memory_order_relaxed);
+    storeBits (clockPpqBits_, ppq);
+    storeBits (clockBpmBits_, bpm > 1.0 ? bpm : phraseTempoBpm);
 }
 
 int SynthesisProcessor::phraseNoteCount() const
 {
-    const PhraseNote* notes = nullptr;
-    int count = 0;
-    int length = 0;
-    phraseNotes (notes, count, length);
-    return count;
+    const juce::ScopedLock lock (phraseLock_);
+    if (phraseEdited_)
+        return static_cast<int> (phraseEdit_.size());
+    return factoryPhrase (phraseIndex_).noteCount;
 }
 
 PhraseNote SynthesisProcessor::phraseNote (int index) const
 {
-    const PhraseNote* notes = nullptr;
-    int count = 0;
-    int length = 0;
-    phraseNotes (notes, count, length);
-    if (index < 0 || index >= count || notes == nullptr)
+    const juce::ScopedLock lock (phraseLock_);
+    if (phraseEdited_)
+    {
+        if (index < 0 || index >= static_cast<int> (phraseEdit_.size()))
+            return {};
+        return phraseEdit_[static_cast<std::size_t> (index)];
+    }
+    const auto& phrase = factoryPhrase (phraseIndex_);
+    if (index < 0 || index >= phrase.noteCount || phrase.notes == nullptr)
         return {};
-    return notes[index];
+    return phrase.notes[index];
 }
 
 void SynthesisProcessor::setPhraseNote (int index, PhraseNote note)
 {
+    const juce::ScopedLock lock (phraseLock_);
     if (! phraseEdited_)
     {
         const auto& phrase = factoryPhrase (phraseIndex_);
@@ -460,42 +561,60 @@ void SynthesisProcessor::setPhraseNote (int index, PhraseNote note)
     note.duration = std::max (1, note.duration);
     note.tick = std::max (0, note.tick);
     phraseEdit_[static_cast<std::size_t> (index)] = note;
+    publishLocked();
 }
 
 std::vector<std::byte> SynthesisProcessor::exportCurrentPhrase() const
 {
-    const PhraseNote* notes = nullptr;
-    int count = 0;
-    int length = 0;
-    phraseNotes (notes, count, length);
-    return exportPhraseSmf (notes, count);
+    const juce::ScopedLock lock (phraseLock_);
+    if (phraseEdited_)
+        return exportPhraseSmf (phraseEdit_.data(), static_cast<int> (phraseEdit_.size()));
+    const auto& phrase = factoryPhrase (phraseIndex_);
+    return exportPhraseSmf (phrase.notes, phrase.noteCount);
 }
 
-void SynthesisProcessor::addPhraseEvents (int frames, int& count)
+void SynthesisProcessor::collectPhrase (int frames, const PhraseSnapshot& snap, engine::Event* phraseEvents, int& phraseCount)
 {
-    if (phraseStop_)
+    phraseCount = 0;
+    if (frames <= 0)
+        return;
+    const int stopEpoch = phraseStopEpoch_.load (std::memory_order_acquire);
+    if (stopEpoch != rtStopEpoch_)
     {
-        engine::Event event;
-        event.offset = 0;
-        event.status = 0xb0;
-        event.data1 = 123;
-        event.data2 = 0;
-        insertEvent (event, count);
-        phraseStop_ = false;
-        phrasePlayed_ = 0;
+        rtStopEpoch_ = stopEpoch;
+        rtPlayed_ = 0;
+        for (int note = 0; note < 128; ++note)
+        {
+            while (phraseHeld_[note] > 0 && phraseCount < maxPhraseEvents)
+            {
+                engine::Event event;
+                event.offset = 0;
+                event.status = 0x80;
+                event.data1 = static_cast<std::uint8_t> (note);
+                phraseEvents[phraseCount++] = event;
+                --phraseHeld_[note];
+            }
+        }
         return;
     }
-    if (! phrasePlaying_ || frames <= 0)
+    if (! phrasePlaying_.load (std::memory_order_acquire))
         return;
+
+    const int clockEpoch = phraseClockEpoch_.load (std::memory_order_acquire);
+    if (clockEpoch != rtClockEpoch_)
+    {
+        rtClockEpoch_ = clockEpoch;
+        rtPlayed_ = 0;
+    }
 
     bool host = false;
     double ppq = 0.0;
     double bpm = phraseTempoBpm;
-    if (clockForced_)
+    if (clockForced_.load (std::memory_order_relaxed))
     {
-        host = clockHost_;
-        ppq = clockPpq_;
-        bpm = clockBpm_;
+        host = clockHost_.load (std::memory_order_relaxed);
+        ppq = loadBits (clockPpqBits_);
+        bpm = loadBits (clockBpmBits_);
     }
     else if (auto* head = getPlayHead())
     {
@@ -512,19 +631,12 @@ void SynthesisProcessor::addPhraseEvents (int frames, int& count)
             }
         }
     }
+    if (bpm <= 1.0)
+        bpm = phraseTempoBpm;
 
-    const PhraseNote* notes = nullptr;
-    int noteCount = 0;
-    int lengthTicks = 1;
-    phraseNotes (notes, noteCount, lengthTicks);
-    const auto scheduled = schedulePhrase (notes, noteCount, PhraseProjection::performance);
-    int loopTicks = std::max (1, lengthTicks);
-    for (const auto& event : scheduled)
-        loopTicks = std::max (loopTicks, event.tick + 1);
-
-    const auto emit = [&] (const ScheduledEvent& event, int offset)
+    const auto push = [&] (const ScheduledEvent& event, int offset)
     {
-        if (offset < 0 || offset >= frames)
+        if (offset < 0 || offset >= frames || phraseCount >= maxPhraseEvents)
             return;
         engine::Event midi;
         midi.offset = static_cast<std::uint32_t> (offset);
@@ -535,9 +647,10 @@ void SynthesisProcessor::addPhraseEvents (int frames, int& count)
             midi.articulation = static_cast<std::uint8_t> (midi.articulation | engine::articulateAccent);
         if (event.slide)
             midi.articulation = static_cast<std::uint8_t> (midi.articulation | engine::articulateSlide);
-        insertEvent (midi, count);
+        phraseEvents[phraseCount++] = midi;
     };
 
+    const int loopTicks = std::max (1, snap.loopTicks);
     if (host)
     {
         const double ticksPerSample = (bpm / 60.0) * phrasePulsesPerQuarter / sampleRate_;
@@ -546,34 +659,35 @@ void SynthesisProcessor::addPhraseEvents (int frames, int& count)
         const double startTick = ppq * phrasePulsesPerQuarter;
         const double endTick = startTick + static_cast<double> (frames) * ticksPerSample;
         const double cycle = std::floor (startTick / static_cast<double> (loopTicks)) * loopTicks;
-        for (const auto& event : scheduled)
+        for (int i = 0; i < snap.eventCount; ++i)
         {
+            const auto& event = snap.events[i];
             for (int k = -1; k <= 1; ++k)
             {
                 const double at = cycle + static_cast<double> (k * loopTicks + event.tick);
                 if (at < startTick || at >= endTick)
                     continue;
-                const int offset = static_cast<int> (std::llround ((at - startTick) / ticksPerSample));
-                emit (event, offset);
+                push (event, static_cast<int> (std::llround ((at - startTick) / ticksPerSample)));
             }
         }
         return;
     }
 
     const int loopSamples = std::max (1, phraseSample (loopTicks, sampleRate_, bpm));
-    for (const auto& event : scheduled)
+    for (int i = 0; i < snap.eventCount; ++i)
     {
+        const auto& event = snap.events[i];
         std::int64_t at = phraseSample (event.tick, sampleRate_, bpm);
-        if (at < phrasePlayed_)
+        if (at < rtPlayed_)
         {
-            const auto behind = phrasePlayed_ - at;
+            const auto behind = rtPlayed_ - at;
             const auto steps = (behind + loopSamples - 1) / loopSamples;
             at += steps * static_cast<std::int64_t> (loopSamples);
         }
-        if (at >= phrasePlayed_ && at < phrasePlayed_ + frames)
-            emit (event, static_cast<int> (at - phrasePlayed_));
+        if (at >= rtPlayed_ && at < rtPlayed_ + frames)
+            push (event, static_cast<int> (at - rtPlayed_));
     }
-    phrasePlayed_ += frames;
+    rtPlayed_ += frames;
 }
 
 void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) const
@@ -607,6 +721,35 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
         }
     }
     out.push_back (std::move (bank));
+    int phraseIndex = 0;
+    bool phraseEdited = false;
+    int phraseLength = 1;
+    std::vector<PhraseNote> phraseNotes;
+    {
+        const juce::ScopedLock phraseLock (phraseLock_);
+        phraseIndex = phraseIndex_;
+        phraseEdited = phraseEdited_;
+        phraseLength = phraseLength_;
+        if (phraseEdited_)
+            phraseNotes = phraseEdit_;
+    }
+    preset::Section phrase;
+    phrase.tag = phraseSectionTag;
+    putU32 (phrase.data, 1u);
+    putU32 (phrase.data, static_cast<std::uint32_t> (std::max (0, phraseIndex)));
+    putU32 (phrase.data, phraseEdited ? 1u : 0u);
+    putU32 (phrase.data, static_cast<std::uint32_t> (std::max (1, phraseLength)));
+    putU32 (phrase.data, static_cast<std::uint32_t> (phraseNotes.size()));
+    for (const auto& note : phraseNotes)
+    {
+        putU32 (phrase.data, static_cast<std::uint32_t> (note.tick));
+        putU32 (phrase.data, static_cast<std::uint32_t> (note.note));
+        putU32 (phrase.data, static_cast<std::uint32_t> (note.velocity));
+        putU32 (phrase.data, static_cast<std::uint32_t> (note.duration));
+        putU32 (phrase.data, note.slide ? 1u : 0u);
+        putU32 (phrase.data, note.accent ? 1u : 0u);
+    }
+    out.push_back (std::move (phrase));
 }
 
 SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const preset::StateDocument& document,
@@ -724,6 +867,61 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         }
     }
 
+    struct PhraseState {
+        int index = 0;
+        bool edited = false;
+        int length = 3840;
+        std::vector<PhraseNote> notes;
+    };
+    auto phrase = std::make_shared<PhraseState>();
+    if (const auto* section = document.find (phraseSectionTag))
+    {
+        std::size_t at = 0;
+        std::uint32_t version = 0, index = 0, edited = 0, length = 0, count = 0;
+        if (! takeU32 (section->data, at, version) || version != 1u
+            || ! takeU32 (section->data, at, index) || ! takeU32 (section->data, at, edited)
+            || ! takeU32 (section->data, at, length) || ! takeU32 (section->data, at, count)
+            || index >= static_cast<std::uint32_t> (factoryPhraseCount())
+            || length == 0 || length > 1000000u
+            || count > static_cast<std::uint32_t> (maxPhraseNotes)
+            || (edited > 1u))
+        {
+            error = "malformed PHRS section";
+            return {};
+        }
+        phrase->index = static_cast<int> (index);
+        phrase->edited = edited == 1u;
+        phrase->length = static_cast<int> (length);
+        if (phrase->edited)
+        {
+            phrase->notes.resize (count);
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                std::uint32_t tick = 0, note = 0, velocity = 0, duration = 0, slide = 0, accent = 0;
+                if (! takeU32 (section->data, at, tick) || ! takeU32 (section->data, at, note)
+                    || ! takeU32 (section->data, at, velocity) || ! takeU32 (section->data, at, duration)
+                    || ! takeU32 (section->data, at, slide) || ! takeU32 (section->data, at, accent)
+                    || note > 127u || velocity < 1u || velocity > 127u || duration < 1u || slide > 1u || accent > 1u)
+                {
+                    error = "malformed PHRS section";
+                    return {};
+                }
+                phrase->notes[i] = { static_cast<int> (tick), static_cast<int> (note), static_cast<int> (velocity),
+                                     static_cast<int> (duration), slide == 1u, accent == 1u };
+            }
+        }
+        else if (count != 0u)
+        {
+            error = "malformed PHRS section";
+            return {};
+        }
+        if (at != section->data.size())
+        {
+            error = "malformed PHRS section";
+            return {};
+        }
+    }
+
     auto values = std::make_shared<std::array<float, parameterCatalog.size()>>();
     for (std::size_t i = 0; i < values->size(); ++i)
         (*values)[i] = plain[i];
@@ -750,7 +948,24 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         }
     }
     restore.sections.push_back (std::move (encoded));
-    restore.apply = [this, values, bank] {
+    preset::Section phraseSection;
+    phraseSection.tag = phraseSectionTag;
+    putU32 (phraseSection.data, 1u);
+    putU32 (phraseSection.data, static_cast<std::uint32_t> (phrase->index));
+    putU32 (phraseSection.data, phrase->edited ? 1u : 0u);
+    putU32 (phraseSection.data, static_cast<std::uint32_t> (phrase->length));
+    putU32 (phraseSection.data, static_cast<std::uint32_t> (phrase->notes.size()));
+    for (const auto& note : phrase->notes)
+    {
+        putU32 (phraseSection.data, static_cast<std::uint32_t> (note.tick));
+        putU32 (phraseSection.data, static_cast<std::uint32_t> (note.note));
+        putU32 (phraseSection.data, static_cast<std::uint32_t> (note.velocity));
+        putU32 (phraseSection.data, static_cast<std::uint32_t> (note.duration));
+        putU32 (phraseSection.data, note.slide ? 1u : 0u);
+        putU32 (phraseSection.data, note.accent ? 1u : 0u);
+    }
+    restore.sections.push_back (std::move (phraseSection));
+    restore.apply = [this, values, bank, phrase] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
         {
             auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
@@ -760,6 +975,15 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         }
         const juce::ScopedLock lock (bankLock_);
         userPrograms_ = *bank;
+        const juce::ScopedLock phraseLock (phraseLock_);
+        phraseIndex_ = phrase->index;
+        phraseEdited_ = phrase->edited;
+        phraseLength_ = phrase->length;
+        phraseEdit_ = phrase->notes;
+        publishLocked();
+        phraseClockEpoch_.fetch_add (1, std::memory_order_release);
+        if (phrasePlaying_.load (std::memory_order_relaxed))
+            phraseStopEpoch_.fetch_add (1, std::memory_order_release);
     };
     restore.settle = [this, values] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)

@@ -23,6 +23,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -1632,6 +1633,241 @@ void testIntegrationStress()
     check (synth->getTailLengthSeconds() < 2.0, "disabling delay and reverb drops the long tail");
 }
 
+void testPhraseHardening()
+{
+    for (int i = 0; i < vox::syn::factoryPhraseCount(); ++i)
+    {
+        const auto& phrase = vox::syn::factoryPhrase (i);
+        vox::syn::PhraseSnapshot snap;
+        check (vox::syn::fillPerformanceSnapshot (phrase.notes, phrase.noteCount, phrase.lengthTicks, snap), "snapshot fits");
+        const auto played = vox::syn::schedulePhrase (phrase.notes, phrase.noteCount, vox::syn::PhraseProjection::performance);
+        check (snap.eventCount == static_cast<int> (played.size()), std::string (phrase.id) + " snapshot event count");
+        if (snap.eventCount == static_cast<int> (played.size()))
+            for (int e = 0; e < snap.eventCount; ++e)
+                check (snap.events[e].tick == played[static_cast<std::size_t> (e)].tick
+                           && snap.events[e].on == played[static_cast<std::size_t> (e)].on
+                           && snap.events[e].note == played[static_cast<std::size_t> (e)].note
+                           && snap.events[e].velocity == played[static_cast<std::size_t> (e)].velocity
+                           && snap.events[e].slide == played[static_cast<std::size_t> (e)].slide
+                           && snap.events[e].accent == played[static_cast<std::size_t> (e)].accent,
+                       std::string (phrase.id) + " snapshot matches the performance projection");
+    }
+
+    auto player = make();
+    setPlain (*player, "syn.a.engine", 1.0f);
+    setPlain (*player, "syn.b.level", 0.0f);
+    player->prepareToPlay (48000.0, 128);
+    player->setPhraseIndex (1);
+    const int notes = player->phraseNoteCount();
+    for (int i = 0; i < notes; ++i)
+    {
+        auto note = player->phraseNote (i);
+        note.tick = i * 240;
+        note.duration = 200;
+        note.note = 36 + (i % 12);
+        note.velocity = 70 + (i % 40);
+        note.slide = i + 1 < notes;
+        note.accent = i % 4 == 0;
+        player->setPhraseNote (i, note);
+    }
+    player->setPhrasePlaying (true);
+    juce::AudioBuffer<float> buffer (2, 128);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 48, static_cast<juce::uint8> (90)), 0);
+    midi.clear();
+    player->setPhraseClock (true, true, 0.0, 120.0);
+#ifndef VOX_TEST_INTERPOSE_MALLOC
+#error "suite_synth_product_tests requires the allocation probe. A missing probe used to skip the check."
+#endif
+    unsigned long calls = 0;
+    const auto started = std::chrono::steady_clock::now();
+    if (voxProbeAvailable())
+        voxProbeBegin();
+    for (int i = 0; i < 375; ++i)
+    {
+        midi.addEvent (juce::MidiMessage::noteOn (1, 48, static_cast<juce::uint8> (90)), 0);
+        if (i == 200)
+            player->setPhraseClock (true, true, 0.0, 120.0);
+        if (i > 200)
+            player->setPhraseClock (true, true, (i - 200) * (128.0 / 48000.0) * 2.0, 120.0);
+        auto tweaked = player->phraseNote (0);
+        tweaked.velocity = 60 + (i % 40);
+        player->setPhraseNote (0, tweaked);
+        player->processBlock (buffer, midi);
+        midi.clear();
+    }
+    if (voxProbeAvailable())
+        calls = voxProbeEnd();
+    const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count();
+    const auto line = "synth phrase: " + std::to_string (ms) + " ms for player-on audio, mallocs " + std::to_string (calls);
+    std::printf ("%s\n", line.c_str());
+    appendPerf (line);
+    check (calls == 0, "player-on processBlock allocates nothing");
+    check (ms < 1500.0, "player-on audio stays under 1.5 s");
+    player->setPhrasePlaying (false);
+
+    auto saturated = make();
+    setPlain (*saturated, "syn.a.engine", 2.0f);
+    setPlain (*saturated, "syn.b.level", 0.0f);
+    saturated->prepareToPlay (48000.0, 250);
+    saturated->setPhraseIndex (0);
+    for (int i = 1; i < saturated->phraseNoteCount(); ++i)
+    {
+        auto note = saturated->phraseNote (i);
+        note.tick = 3000;
+        note.slide = false;
+        saturated->setPhraseNote (i, note);
+    }
+    auto first = saturated->phraseNote (0);
+    first.tick = 0;
+    first.duration = 10;
+    first.note = 40;
+    first.velocity = 100;
+    first.slide = false;
+    first.accent = false;
+    saturated->setPhraseNote (0, first);
+    saturated->setPhrasePlaying (true);
+    juce::AudioBuffer<float> block (2, 250);
+    juce::MidiBuffer host;
+    host.addEvent (juce::MidiMessage::noteOn (1, 72, static_cast<juce::uint8> (100)), 10);
+    saturated->processBlock (block, host);
+    check (saturated->vaNoteHeld (0, 40), "phrase note is held before the flood");
+    check (saturated->vaNoteHeld (0, 72), "host note is held before the flood");
+    juce::MidiBuffer flood;
+    for (int i = 0; i < 300; ++i)
+        flood.addEvent (juce::MidiMessage::controllerEvent (1, 1, i % 127), 0);
+    unsigned long floodCalls = 0;
+    if (voxProbeAvailable())
+        voxProbeBegin();
+    saturated->processBlock (block, flood);
+    if (voxProbeAvailable())
+        floodCalls = voxProbeEnd();
+    check (floodCalls == 0, "saturated phrase block allocates nothing");
+    check (! saturated->vaNoteHeld (0, 40), "phrase NoteOff is admitted inside a full host buffer");
+    check (saturated->vaNoteHeld (0, 72), "phrase NoteOff does not release the host note");
+
+    auto stopping = make();
+    setPlain (*stopping, "syn.a.engine", 2.0f);
+    setPlain (*stopping, "syn.b.level", 0.0f);
+    stopping->prepareToPlay (48000.0, 128);
+    stopping->setPhraseIndex (0);
+    for (int i = 1; i < stopping->phraseNoteCount(); ++i)
+    {
+        auto note = stopping->phraseNote (i);
+        note.tick = 3000;
+        stopping->setPhraseNote (i, note);
+    }
+    auto held = stopping->phraseNote (0);
+    held.tick = 0;
+    held.duration = 960;
+    held.note = 40;
+    held.velocity = 90;
+    held.slide = false;
+    stopping->setPhraseNote (0, held);
+    stopping->setPhrasePlaying (true);
+    juce::AudioBuffer<float> small (2, 128);
+    juce::MidiBuffer live;
+    live.addEvent (juce::MidiMessage::noteOn (1, 72, static_cast<juce::uint8> (110)), 0);
+    stopping->processBlock (small, live);
+    check (stopping->vaNoteHeld (0, 40) && stopping->vaNoteHeld (0, 72), "phrase and host notes are both held");
+    juce::MidiBuffer stopFlood;
+    for (int i = 0; i < 300; ++i)
+        stopFlood.addEvent (juce::MidiMessage::controllerEvent (1, 1, 20), 0);
+    stopping->setPhrasePlaying (false);
+    stopping->processBlock (small, stopFlood);
+    check (! stopping->vaNoteHeld (0, 40), "stop releases the phrase note while the host buffer is full");
+    check (stopping->vaNoteHeld (0, 72), "stop does not send a channel panic over host notes");
+
+    auto edited = make();
+    edited->setPhraseIndex (30);
+    auto changed = edited->phraseNote (2);
+    const int factoryVelocity = changed.velocity;
+    changed.velocity = 42;
+    edited->setPhraseNote (2, changed);
+    const auto before = edited->exportCurrentPhrase();
+    juce::MemoryBlock saved;
+    edited->getStateInformation (saved);
+    auto reopened = make();
+    reopened->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (reopened->lastStateError().isEmpty(), "PHRS state accepted");
+    check (reopened->phraseIndex() == 30, "phrase index restored");
+    check (reopened->phraseNote (2).velocity == 42, "edited velocity restored");
+    check (reopened->exportCurrentPhrase() == before, "restored phrase exports the same SMF");
+    {
+        auto editor = std::unique_ptr<juce::AudioProcessorEditor> (reopened->createEditor());
+        editor.reset();
+    }
+    check (reopened->phraseNote (2).velocity == 42, "closing the editor keeps the phrase");
+    reopened->prepareToPlay (48000.0, 128);
+    reopened->setPhrasePlaying (true);
+    juce::MidiBuffer silent;
+    reopened->processBlock (small, silent);
+    bool finite = true;
+    for (int i = 0; i < 128; ++i)
+        finite = finite && std::isfinite (small.getSample (0, i));
+    check (finite, "playback after the editor closes stays finite");
+
+    auto decoded = vox::preset::decode (
+        std::span (static_cast<const std::byte*> (saved.getData()), saved.getSize()),
+        vox::preset::makeTag (VOX_SUITE_STATE_TAG), 1);
+    vox::preset::StateDocument missing = decoded.document;
+    missing.sections.erase (std::remove_if (missing.sections.begin(), missing.sections.end(),
+                                            [] (const vox::preset::Section& section) { return section.tag == vox::syn::phraseSectionTag; }),
+                            missing.sections.end());
+    const auto missingBytes = vox::preset::encode (missing);
+    auto migrated = make();
+    migrated->setPhraseIndex (4);
+    migrated->setStateInformation (missingBytes->data(), static_cast<int> (missingBytes->size()));
+    check (migrated->lastStateError().isEmpty(), "missing PHRS still loads");
+    check (migrated->phraseIndex() == 0, "missing PHRS rolls the working phrase back to the factory phrase");
+    check (migrated->phraseNote (2).velocity != 42 || factoryVelocity == 42, "missing PHRS does not keep the edited velocity");
+
+    auto corrupt = decoded.document;
+    for (auto& section : corrupt.sections)
+        if (section.tag == vox::syn::phraseSectionTag && ! section.data.empty())
+            section.data[0] = std::byte { 9 };
+    const auto corruptBytes = vox::preset::encode (corrupt);
+    edited->setStateInformation (corruptBytes->data(), static_cast<int> (corruptBytes->size()));
+    check (edited->lastStateError().isNotEmpty(), "corrupt PHRS is rejected");
+    check (edited->phraseNote (2).velocity == 42, "rejected PHRS leaves the live phrase alone");
+
+    auto raced = make();
+    raced->prepareToPlay (48000.0, 64);
+    raced->setPhrasePlaying (true);
+    raced->setPhraseNote (0, raced->phraseNote (0));
+    std::atomic<bool> run { true };
+    std::thread writer ([&] {
+        int n = 0;
+        while (run.load (std::memory_order_relaxed))
+        {
+            raced->setPhraseIndex (n % vox::syn::factoryPhraseCount());
+            auto note = raced->phraseNote (0);
+            note.velocity = 30 + (n % 80);
+            note.slide = (n % 2) == 0;
+            raced->setPhraseNote (0, note);
+            raced->setPhrasePlaying ((n % 5) != 0);
+            raced->setPhraseClock ((n % 2) == 0, true, (n % 8) * 0.25, 120.0);
+            ++n;
+        }
+    });
+    juce::AudioBuffer<float> race (2, 64);
+    bool raceFinite = true;
+    for (int i = 0; i < 300; ++i)
+    {
+        juce::MidiBuffer raceMidi;
+        raceMidi.addEvent (juce::MidiMessage::noteOn (1, 50 + (i % 12), static_cast<juce::uint8> (80)), 0);
+        raced->processBlock (race, raceMidi);
+        for (int sample = 0; sample < 64; ++sample)
+            raceFinite = raceFinite && std::isfinite (race.getSample (0, sample)) && std::isfinite (race.getSample (1, sample));
+    }
+    run.store (false, std::memory_order_relaxed);
+    writer.join();
+    raced->setPhrasePlaying (false);
+    juce::MidiBuffer empty;
+    raced->processBlock (race, empty);
+    check (raceFinite, "edit, switch, play and stop during processBlock stay finite");
+}
+
 } // namespace
 
 int main()
@@ -1651,6 +1887,7 @@ int main()
     testArticulation();
     testHistoricalUbnk();
     testPhrasePlayer();
+    testPhraseHardening();
     testStateEdges();
     testIntegrationStress();
     if (failures == 0 && skips == 0)
