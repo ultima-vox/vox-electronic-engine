@@ -18,3 +18,18 @@
 `Vellum Coil` (Dark Trance gate sweep) and `Kiln Choir` (Balearic continuous bed) are separate review-only rehearsals with authored modal WAVs, distinct grain trajectories and FMOD3 step/ADSR. The worker test exercises PCM import, portable save/restore of the SHA, a missing source, rejection of a different valid WAV, exact-byte source relink at a different path, and byte-identical offline output after relink. With an output directory argument the test also writes the two source WAVs, two solo WAVs and two `.voxfx` files. References in the export carry only a filename and hash so each recipient chooses the provided WAV using Relink; no temporary machine path is transmitted. Host FX wet/amount remain intentionally outside portable format.
 
 Wave A stays **120 review-only / 0 approved**, with eight separate Wave B candidates staged (three tonal/keyless pairs plus these two asset cues). B=300/C=600 remain open, as do FX-T18, OS DPI/focus, licensed listening approval and final owner-only DAW acceptance. The original 96,509,858-byte ZIP still verifies against [SHA-256](evidence/wave-a-120-archive.sha256); it remains an Arena download, not a durable repo-accessible distribution channel. Transfer the unchanged ZIP to an authorized private share and verify the same SHA after upload; do not put a media blob in Git or publish a release to work around access.
+
+## Executed checks
+
+[Test logs](evidence/windows-triage-linux-daa2b76.txt), test/content revision
+`daa2b7621b274283c73029f97e0bd8dfbf225c38`: pinned JUCE native processor and
+runtime stress passed (2/2); linked worker plus ASan/UBSan passed (1/1 each).
+YAML and new PowerShell syntax checked; a Linux CTest failure fixture verified
+that its JSON and text/JUnit outputs match the discovery/preservation logic.
+No Windows PowerShell/CDB runtime validation or full Linux CTest was possible.
+The follow-up workflow-only refinement copies text logs in a separate step so
+an abrupt test-step exit cannot bypass log preservation.
+
+The two-cue Arena ZIP is `artifacts/vox-fx-wave-b-asset-rehearsal.zip` with
+[archive SHA-256](evidence/wave-b-asset-rehearsal.sha256) and
+[member SHA-256s](evidence/wave-b-asset-rehearsal-members.sha256).

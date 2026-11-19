@@ -1,0 +1,52 @@
+Linux scoped follow-up on daa2b7621b274283c73029f97e0bd8dfbf225c38
+GCC 12.2, pinned JUCE e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8.
+Native run: bash docs/ultima-vox-music/fx/evidence/run-linux-native-fx.sh build/fx-native
+[FX processor] JUCE initialization
+[FX processor] capture parity
+[FX processor] restore admission
+[FX processor] motion, generator and preset browser
+[FX processor] editor/parameters and state
+[FX processor] layer editor
+[FX processor] generation
+[FX processor] FX slots, comparison and Source editor
+[FX processor] pattern editor
+[FX processor] pattern playback
+[FX processor] modulation
+[FX processor] sample import and relink
+[FX processor] tempo capture
+[FX processor] bar-clock gate and capture
+[FX processor] bar transitions
+[FX processor] voice capacity and telemetry
+[FX processor] transport discontinuity
+[FX processor] PPQ snapshots
+[FX processor] source-family playback
+[FX processor] layered Program
+[FX processor] legacy parameter migration
+[FX processor] duration capture
+[FX processor] test cases finished; teardown follows
+capture parity case 0: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 1: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 2: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 3: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 4: 149280 frames peak 0.0280716 tail 0.0000006 max error 0
+capture parity case 5: 150000 frames peak 0.0076635 tail 0.0000000 max error 0
+capture parity case 6: 149280 frames peak 0.0280716 tail 0.0000006 max error 0
+FX processor: 0 failure(s)
+FX JUCE runtime stress: 0 failing cases
+Sample controller -O2 -pthread, linked JUCE core/cryptography and StateContainer.cpp, stack limit 1024 KiB:
+daa2b7621b274283c73029f97e0bd8dfbf225c38
+Wave B external asset cue voxfx.sweep.vellum-coil peak 0.001632 source SHA-256 6737b0be62f5d6ebdf33f82bef880ad0cbd758ec5dd31eb967650f2f84eb154a
+Wave B external asset cue voxfx.atmosphere.kiln-choir peak 0.002909 source SHA-256 99476406853eb4a42733b90157786a80fa064a21aa747b2b39aef181743e654f
+FX sample controller: 0 failure(s)
+99476406853eb4a42733b90157786a80fa064a21aa747b2b39aef181743e654f  build/fx-event/wave-b-assets/ceramic-modes.wav
+6737b0be62f5d6ebdf33f82bef880ad0cbd758ec5dd31eb967650f2f84eb154a  build/fx-event/wave-b-assets/rail-modes.wav
+0f6ee515c76abe775a62c8c60811486cac12dff0a16972f1317de725db839b2c  build/fx-event/wave-b-assets/voxfx.atmosphere.kiln-choir.voxfx
+289f0ea643e97d324fa3285c7ddecab78343ec691a3307d5a256ed0a02e401d7  build/fx-event/wave-b-assets/voxfx.atmosphere.kiln-choir.wav
+f33e1c145e452899b8197a9d009bb7f1d51989bce368652c481ea1cab1b8aacc  build/fx-event/wave-b-assets/voxfx.sweep.vellum-coil.voxfx
+dfc2138291f3fed58cc3021ef30320ccb277141fffd81a37edaeeb2adac2cfff  build/fx-event/wave-b-assets/voxfx.sweep.vellum-coil.wav
+Sample controller ASan/UBSan -O1 -g1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie, detect_leaks=1, halt_on_error=1; linked JUCE objects uninstrumented:
+daa2b7621b274283c73029f97e0bd8dfbf225c38
+Wave B external asset cue voxfx.sweep.vellum-coil peak 0.001632 source SHA-256 6737b0be62f5d6ebdf33f82bef880ad0cbd758ec5dd31eb967650f2f84eb154a
+Wave B external asset cue voxfx.atmosphere.kiln-choir peak 0.002909 source SHA-256 99476406853eb4a42733b90157786a80fa064a21aa747b2b39aef181743e654f
+FX sample controller: 0 failure(s)
+PowerShell AST and YAML syntax checked, existing trigger/eligibility/concurrency/validator unchanged. Linux CTest fixture confirmed test command/working directory JSON, JUnit and LastTestsFailed.log on intentional failure. No Windows runner or debugger execution.

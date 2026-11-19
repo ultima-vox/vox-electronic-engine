@@ -97,12 +97,20 @@ jobs:
             New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
             $report = (Resolve-Path suite-out\ctest).Path
             ctest --test-dir build-suite -C Release -L suite --output-on-failure --output-junit (Join-Path $report 'results.xml')
-            $testExit = $LASTEXITCODE
-            Copy-Item build-suite\Testing\Temporary\LastTest*.log $report -ErrorAction SilentlyContinue
-            exit $testExit
+            exit $LASTEXITCODE
           }
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Preserve FX CTest text logs
+        if: ${{ always() && !cancelled() && steps.suite-ctest.outcome != 'skipped' && env.FX_DIAGNOSTICS == 'ON' }}
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
+          foreach ($file in 'LastTest.log','LastTestsFailed.log') {
+            $source = Join-Path 'build-suite\Testing\Temporary' $file
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination suite-out\ctest }
+          }
 
       - name: Capture failed FX processor test only
         if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
