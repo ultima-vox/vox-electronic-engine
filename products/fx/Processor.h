@@ -57,7 +57,13 @@ public:
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
     bool musicalClockUnavailable() const noexcept { return musicalClockUnavailable_.load(std::memory_order_relaxed); }
-    bool patternUnavailable() const noexcept { return patternUnavailable_.load(std::memory_order_relaxed); }
+    enum class PatternClock : unsigned { inactive, noPlayhead, stopped, invalidPpq, invalidTempo,
+                                         unsupportedMeter, waitingForState, blockRejected, readyAssumed44, ready44 };
+    PatternClock patternClock() const noexcept { return patternClock_.load(std::memory_order_relaxed); }
+    bool patternUnavailable() const noexcept {
+        const auto status=patternClock();
+        return status!=PatternClock::inactive&&status!=PatternClock::ready44&&status!=PatternClock::readyAssumed44;
+    }
     juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
     juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
     juce::AudioParameterFloat& effectWetParameter(std::size_t index) noexcept { return *effectWet_[index]; }
@@ -239,7 +245,8 @@ private:
     std::atomic<std::uint64_t> cursorSequence_{0},cursorGraph_{0},cursorPhases_{0};
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
     std::atomic<std::uint32_t> telemetry_ { 0 }, droppedEvents_ { 0 };
-    std::atomic<bool> clipLatched_ { false }, patternUnavailable_ { false };
+    std::atomic<bool> clipLatched_ { false };
+    std::atomic<PatternClock> patternClock_ { PatternClock::inactive };
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     transport::Tracker transport_;

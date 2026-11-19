@@ -1,0 +1,9 @@
+preset_id	arrangement slot	owner listening check
+voxfx.impact.granite-hinge	Drop with kick and bass already present	Distinguish the first hit from the kick and check whether the grain scrape obscures the offbeat bass onset.
+voxfx.riser.bell-current	Two-bar F-major pre-lead lift at 126 BPM	Check the third against the chord voicing; audition whether the bell leaves room for the lead at the join.
+voxfx.fall.serpent-return	Four-bar descending acid color under an exposed kick	Check low-mid masking in the longest gap and whether the final bar moves out of the next phrase quickly enough.
+voxfx.sweep.tangent-iris	Sustained loop in a progressive break	Hold multiple passes in the DAW and compare each seam against the rhythm; the staged WAV is one finite pass.
+voxfx.zap.quartz-fissure	Short high-register answer to a broken fill	Try different Gate note lengths; assess cymbal masking and whether the release stays clear of the next strike.
+voxfx.rhythm.checker-mire	Three-bar 1/8-triplet phrase before a scene change	Contrast the last bar pickup against straight bass and verify that restarting the host does not move the phrase into the neighboring scene.
+voxfx.atmosphere.glass-estuary	Low-motion hold under piano or spoken vocal	Check consonant detail and center occupancy; test a long hold beyond the finite solo reference.
+voxfx.stinger.brass-arc	A-minor end tag following an exposed hook	Check whether the leading call remains distinct from the lead and the side answer is still readable in mono.

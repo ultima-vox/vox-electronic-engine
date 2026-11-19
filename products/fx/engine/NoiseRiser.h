@@ -290,6 +290,25 @@ public:
         for(auto& v:voices_)if(v.active&&v.source==TriggerSource::preview)beginRelease(v);
         for(auto& v:retiring_)if(v.active&&v.source==TriggerSource::preview)beginRelease(v);
     }
+    // Offline processing discards live audition voices before any host notes
+    // can reuse their slots. The sample store releases a reader token only.
+    void discardPreview() noexcept {
+        bool discarded=false;
+        const auto drop=[&](auto& bank,std::size_t offset){
+            for(std::size_t i=0;i<bank.size();++i){
+                auto& v=bank[i];
+                if(!v.active||v.source!=TriggerSource::preview)continue;
+                v.active=false;discarded=true;
+                if(sampleLeases_[offset+i].data())sampleStore_->release(sampleLeases_[offset+i]);
+            }
+        };
+        drop(voices_,0);drop(retiring_,voices_.size());
+        if(discarded)for(auto& grain:grains_){
+            if(!grain.active)continue;
+            const auto& owner=grain.voiceIndex<voices_.size()?voices_[grain.voiceIndex]:retiring_[grain.voiceIndex-voices_.size()];
+            if(!owner.active){grain.active=false;--activeGrains_;}
+        }
+    }
     void allSoundOff(int channel) noexcept {
         if (channel < 0 || channel > 16) return;
         if (channel == 0) midiKeys_ = {};

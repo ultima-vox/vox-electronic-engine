@@ -360,12 +360,13 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     panicPending_.store (false, std::memory_order_relaxed);
     auditionRequest_.store(AuditionRequest::none,std::memory_order_relaxed);
     peaks_.store(0,std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
-    patternUnavailable_.store(false,std::memory_order_relaxed);
+    patternClock_.store(PatternClock::inactive,std::memory_order_relaxed);
     transport_.unavailable();
 }
 
 void FxProcessor::releaseResources() {
     previewBus_.prepare(preparedSampleRate());
+    patternClock_.store(PatternClock::inactive,std::memory_order_relaxed);
     engine_.prepare (preparedSampleRate());
     telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);
     peaks_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);publishPlayhead(false);
@@ -406,7 +407,8 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // Stop, seek or loop discontinuity fades existing events. No stop is
     // inferred when a host does not provide a position. New notes in this
     // block may still start (including audition while transport is stopped).
-    bool positionAvailable = false, patternHostReady=false, hostPlaying=false, musicalClockReady=false;
+    bool positionAvailable = false, hostPlaying=false, musicalClockReady=false;
+    auto patternClock=PatternClock::noPlayhead;
     double hostPpq=0.0,hostBpm=0.0,renderTempo=120.0;
     timeline::BarGrid barGrid;
     if (auto* host = getPlayHead()) {
@@ -424,8 +426,13 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
                 const auto lastBar = position->getPpqPositionOfLastBarStart();
                 barGrid = timeline::BarGrid::from(*ppq, *bpm, preparedSampleRate(), lastBar.orFallback(0.0));
             }
-            if(playing && ppq.hasValue() && bpm.hasValue() && supportedSignature) {
-                hostPpq=*ppq;hostBpm=*bpm;patternHostReady=true;
+            if(!playing)patternClock=PatternClock::stopped;
+            else if(!supportedSignature)patternClock=PatternClock::unsupportedMeter;
+            else if(!ppq.hasValue()||!std::isfinite(*ppq)||std::abs(*ppq)>1.0e9)patternClock=PatternClock::invalidPpq;
+            else if(!bpm.hasValue()||!std::isfinite(*bpm)||*bpm<10.0||*bpm>1000.0)patternClock=PatternClock::invalidTempo;
+            else {
+                hostPpq=*ppq;hostBpm=*bpm;
+                patternClock=signature.hasValue()?PatternClock::ready44:PatternClock::readyAssumed44;
             }
             const auto sample=position->getTimeInSamples();
             transport::Position current;current.playing=playing;
@@ -486,16 +493,23 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     macroRuntime_.setTempo(renderTempo);
     effects_.setTempo(renderTempo);
     const auto audition=admit?auditionRequest_.exchange(AuditionRequest::none,std::memory_order_acquire):AuditionRequest::none;
-    if(audition==AuditionRequest::stop)engine_.stopPreview();
-    if(audition==AuditionRequest::start)engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
     const bool offlineBounce=isNonRealtime();
+    if(offlineBounce){
+        engine_.discardPreview();
+        previewBus_.discardOnAudioThread();
+    }else{
+        if(audition==AuditionRequest::stop)engine_.stopPreview();
+        if(audition==AuditionRequest::start)engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
+    }
     engine_.setLayerSoloMask(offlineBounce?0:layerSoloMask(),offlineBounce);
     const int size = buffer.getNumSamples();
     const bool wantsPattern=audioBases_.pattern||audioProgram_.mode==PlayMode::sequence;
-    bool patternUnavailable=wantsPattern&&!patternHostReady;
-    patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
+    const bool patternHostReady=patternClock==PatternClock::ready44||patternClock==PatternClock::readyAssumed44;
+    if(!wantsPattern)patternClock=PatternClock::inactive;
+    else if(!admit&&patternHostReady)patternClock=PatternClock::waitingForState;
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
+        patternClock_.store(patternClock,std::memory_order_relaxed);
         peaks_.store(0,std::memory_order_relaxed);publishTelemetry(false);publishPlayhead(false);
         return;
     }
@@ -533,9 +547,9 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
                 processMidiThrough(offset);renderTo(offset);
                 engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection,TriggerSource::pattern);
             });
-        patternUnavailable=!scheduled;
-        patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
+        if(!scheduled)patternClock=PatternClock::blockRejected;
     }
+    patternClock_.store(patternClock,std::memory_order_relaxed);
     processMidiThrough(size-1);
     midi.clear(); // Consume input: never echo host MIDI from this instrument.
     renderTo (size);
@@ -550,8 +564,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const auto target = audioBases_.output;
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
     macro::renderPost(effects_,macroRuntime_,left,right,static_cast<std::size_t>(size),macroValues,[&]{return outputSmoothing_.getNextValue();});
-    if(offlineBounce)previewBus_.discardOnAudioThread();
-    else previewBus_.mix(left,right,size);
+    if(!offlineBounce)previewBus_.mix(left,right,size);
     float peakL=0,peakR=0;
     for(int i=0;i<size;++i){peakL=std::max(peakL,std::abs(left[i]));peakR=std::max(peakR,std::abs(right[i]));}
     peaks_.store(std::bit_cast<std::uint32_t>(peakL)|(std::uint64_t{std::bit_cast<std::uint32_t>(peakR)}<<32),std::memory_order_relaxed);

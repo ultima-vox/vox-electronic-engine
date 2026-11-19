@@ -144,6 +144,53 @@ void checkSoloAndPlayhead() {
     check(!fx->curvePlayhead(fx->versionedProgram().publication)&&fx->outputPeak()==0&&!fx->consumeClip(),"release resets cursor and peak/clip");
 }
 
+void checkBounceMonitorIsolation() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>(),reference=std::make_unique<FxProcessor>();
+    NoiseProgram p;p.layers[0].family=NoiseFamily::granular;p.layers[0].pan=-1;
+    p.layers[1]=p.layers[0];p.layers[1].family=NoiseFamily::laser;p.layers[1].pan=1;
+    for(auto* instance:{fx.get(),reference.get()}){
+        check(instance->setProgram(p),"bounce monitor fixture");
+        instance->prepareToPlay(48000,512);
+    }
+    juce::AudioBuffer<float> audio(2,512),expected(2,512);juce::MidiBuffer midi,expectedMidi;
+    fx->audition();block(*fx,audio,midi);
+    check(audio.getMagnitude(0,0,512)>0&&fx->audioTelemetry().grains>0,"live audition has sounding grains");
+    fx->setNonRealtime(true);block(*fx,audio,midi);
+    check(audio.getMagnitude(0,512)==0&&fx->audioTelemetry().events==0&&fx->audioTelemetry().grains==0,
+          "in-place bounce discards live audition voices and grains before dry render");
+    fx->setNonRealtime(false);block(*fx,audio,midi);
+    check(audio.getMagnitude(0,512)==0,"discarded audition does not resume on return to realtime");
+    fx->prepareToPlay(48000,512);
+    pattern::Pattern sequence;sequence.steps[0].enabled=true;
+    TestPlayHead clock;juce::AudioPlayHead::PositionInfo pos;
+    pos.setIsPlaying(true);pos.setTimeInSamples(0);pos.setPpqPosition(0.0);pos.setBpm(120.0);
+    pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});clock.position=pos;
+    for(auto* instance:{fx.get(),reference.get()}){
+        check(instance->setPattern(sequence),"install offline trigger pattern");
+        instance->patternEnabledParameter().setValueNotifyingHost(1.f);instance->setPlayHead(&clock);
+    }
+    fx->toggleLayerSolo(0);fx->setNonRealtime(true);
+    fx->audition();
+    constexpr std::array<float,4> preview{.4f,.1f,-.2f,-.1f};
+    check(fx->previewBus().publish(preview,48000,fx->previewBus().ticket()),"queue browser preview during bounce");
+    midi.addEvent(juce::MidiMessage::noteOn(2,67,juce::uint8{95}),127);expectedMidi=midi;
+    block(*fx,audio,midi);block(*reference,expected,expectedMidi);
+    const auto same=[&](int size){return std::equal(audio.getReadPointer(0),audio.getReadPointer(0)+size,expected.getReadPointer(0))&&
+        std::equal(audio.getReadPointer(1),audio.getReadPointer(1)+size,expected.getReadPointer(1));};
+    check(same(512)&&audio.getMagnitude(0,0,512)>0&&audio.getMagnitude(1,0,512)>0&&fx->audioTelemetry().events==2,
+          "offline Pattern and MIDI match unmonitored realtime reference in both channels");
+    pos.setTimeInSamples(512);pos.setPpqPosition(512.0/24000);pos.setBpm(84.0);clock.position=pos;
+    audio.setSize(2,128);expected.setSize(2,128);
+    fx->outputParameter().setValueNotifyingHost(.35f);reference->outputParameter().setValueNotifyingHost(.35f);
+    fx->toggleLayerSolo(1);fx->audition();block(*fx,audio,midi);block(*reference,expected,expectedMidi);
+    check(same(128)&&fx->layerSoloMask()==3&&fx->outputParameter().get()==reference->outputParameter().get(),
+          "different offline block size, changed tempo, automation and multi-solo do not change reference audio");
+    fx->setNonRealtime(false);fx->setPlayHead(nullptr);reference->setPlayHead(nullptr);
+    block(*fx,audio,midi);block(*reference,expected,expectedMidi);
+    check(same(128)&&fx->audioTelemetry().events==2,"return to live processing does not replay a queued audition");
+}
+
 void checkExportAcrossEditorClose() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();
@@ -378,6 +425,7 @@ int main() {
     phase("JUCE initialization");
     juce::ScopedJuceInitialiser_GUI gui;
     phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();
+    phase("offline host monitor isolation");checkBounceMonitorIsolation();
     phase("timeline viewport keyboard and selection");checkTimelineViewport();
     phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
@@ -810,6 +858,25 @@ int main() {
         panel.patternStep(2).setToggleState(true,juce::sendNotificationSync);
         check(owner->patternSnapshot().grid==vox::fx::pattern::Grid::thirtysecondTriplet &&
               owner->patternSnapshot().steps[178].enabled,"editor addresses 32nd triplet last-bar page");
+        const auto beforePaste=owner->patternSnapshot();
+        const auto command=[&](int id){panel.patternActionsSelector().setSelectedId(id,juce::sendNotificationSync);};
+        command(5);
+        panel.patternBarSelector().setSelectedId(2,juce::sendNotificationSync);
+        command(6);
+        const auto afterPaste=owner->patternSnapshot();
+        check(afterPaste!=beforePaste&&std::equal(afterPaste.steps.begin()+48,afterPaste.steps.begin()+96,beforePaste.steps.begin()+144)&&
+              std::equal(afterPaste.steps.begin()+144,afterPaste.steps.end(),beforePaste.steps.begin()+144)&&
+              afterPaste.swing==beforePaste.swing&&afterPaste.seed==beforePaste.seed,
+              "paste copies complete selected bar across pages without overwriting the source or global controls");
+        command(3);check(owner->patternSnapshot()==beforePaste,"whole bar paste is one undo transaction");
+        command(4);check(owner->patternSnapshot()==afterPaste,"redo restores the complete pasted bar");
+        command(6);command(3);check(owner->patternSnapshot()==beforePaste,"identical paste does not insert a second history entry");
+        panel.patternGridSelector().setSelectedId(1,juce::sendNotificationSync);
+        const auto otherGrid=owner->patternSnapshot();
+        command(6);check(owner->patternSnapshot()==otherGrid,"native editor rejects bar paste into a different grid");
+        check(panel.patternPageSelector().getSelectedId()==1,"shorter grid reveals a valid page");
+        panel.patternLengthSelector().setSelectedId(1,juce::sendNotificationSync);
+        check(panel.patternBarSelector().getSelectedId()==1,"shorter pattern reveals a valid bar");
         panel.patternGridSelector().setSelectedId(1,juce::sendNotificationSync);
         panel.patternPageSelector().setSelectedId(1,juce::sendNotificationSync);
         panel.patternStepSelector().setSelectedId(16,juce::sendNotificationSync);
@@ -866,11 +933,17 @@ int main() {
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
         block(*sequenced,a,noMidi);block(*manual,b,note);
         for(int i=0;i<512;++i)check(a.getSample(0,i)==b.getSample(0,i),"host pattern downbeat matches MIDI trigger");
-        check(!sequenced->patternUnavailable(),"valid pattern host timing is available");
-        pos.setBpm(9);head.position=pos;block(*sequenced,a,noMidi);
-        check(sequenced->patternUnavailable(),"invalid scheduler tempo surfaced to UI");
-        pos.setBpm(120);head.position=pos;block(*sequenced,a,noMidi);
-        check(!sequenced->patternUnavailable(),"pattern status recovers when timing is valid");
+        using Clock=vox::fx::FxProcessor::PatternClock;
+        check(sequenced->patternClock()==Clock::readyAssumed44,"missing signature is explicitly reported as assumed 4/4");
+        const auto expectClock=[&](Clock value){head.position=pos;block(*sequenced,a,noMidi);check(sequenced->patternClock()==value,"pattern reports exact clock admission reason");};
+        pos.setBpm(9);expectClock(Clock::invalidTempo);
+        pos.setBpm(120);pos.setPpqPosition({});expectClock(Clock::invalidPpq);
+        pos.setPpqPosition(0.0);pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{3,4});expectClock(Clock::unsupportedMeter);
+        pos.setIsPlaying(false);expectClock(Clock::stopped);
+        head.position={};block(*sequenced,a,noMidi);
+        check(sequenced->patternClock()==Clock::noPlayhead,"missing transport is not represented as playing");
+        pos.setIsPlaying(true);pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});expectClock(Clock::ready44);
+        sequenced->releaseResources();check(sequenced->patternClock()==Clock::inactive,"release clears stale Pattern status");
         auto shifted=std::make_unique<vox::fx::FxProcessor>();auto manualShifted=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::pattern::Pattern shiftedPattern;shiftedPattern.steps[1].enabled=true;
         check(shifted->setPattern(shiftedPattern),"install shifted pattern");

@@ -710,7 +710,9 @@ void FxPanel::finishPatternDrag(){
 }
 void FxPanel::patternCommand(int id){
     if(patternDragging_)return;
+    const auto previous=displayedPattern_;const auto revision=patternRevision_;
     refreshPattern();
+    if((id==2||id==6)&&(previous!=displayedPattern_||revision!=patternRevision_))return;
     const juce::String prefix="VOXFX-PATTERN/1:";
     if(id==1){
         std::vector<std::byte> bytes;
@@ -725,6 +727,12 @@ void FxPanel::patternCommand(int id){
             return;
         }
         editPattern([&](auto& p){p=value;});
+    }else if(id==5||id==6){
+        const auto bar=static_cast<unsigned>(patternBar_.getSelectedId()-1);
+        if(id==5){
+            (void)pattern::edit::copyBar(displayedPattern_,bar,copiedPatternBar_);
+            refreshPattern();
+        }else editPattern([&](auto& p){(void)pattern::edit::pasteBar(p,bar,copiedPatternBar_);});
     }else if(id==3||id==4){
         auto& from=id==3?patternUndo_:patternRedo_;
         auto& to=id==3?patternRedo_:patternUndo_;
@@ -1009,8 +1017,11 @@ FxPanel::FxPanel (FxProcessor& processor)
             patternStepSelector_.setSelectedId(static_cast<int>(i+1),juce::dontSendNotification);refreshPattern();};
         addAndMakeVisible(step);
     }
-    patternActions_.setTitle("Whole Pattern clipboard and history");patternActions_.setTextWhenNothingSelected("Edit…");
+    patternActions_.setTitle("Pattern and bar clipboard, undo and redo");
+    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid.");patternActions_.setTextWhenNothingSelected("Edit…");
     patternActions_.addItem("Copy Pattern",1);patternActions_.addItem("Paste Pattern",2);
+    patternActions_.addItem("Copy selected bar",5);patternActions_.addItem("Paste into selected bar",6);
+    patternActions_.addSeparator();
     patternActions_.addItem("Undo edit",3);patternActions_.addItem("Redo edit",4);
     patternActions_.onChange=[this]{const auto id=patternActions_.getSelectedId();patternActions_.setSelectedId(0,juce::dontSendNotification);patternCommand(id);};
     addAndMakeVisible(patternActions_);
@@ -1294,11 +1305,22 @@ void FxPanel::refreshPattern()
     patternGrid_.setSelectedId(static_cast<int>(pattern.grid)+1,juce::dontSendNotification);
     if(!patternSwing_.isMouseButtonDown()&&!patternSwing_.hasKeyboardFocus(true))
         patternSwing_.setValue(pattern.swing,juce::dontSendNotification);
-    const int bar=std::clamp(patternBar_.getSelectedId(),1,4),page=std::clamp(patternPage_.getSelectedId(),1,3);
     const auto steps=pattern::stepsPerBar(pattern.grid);
+    const int pages=static_cast<int>((steps+15)/16);
+    const int bar=std::clamp(patternBar_.getSelectedId(),1,static_cast<int>(pattern.bars));
+    const int page=std::clamp(patternPage_.getSelectedId(),1,pages);
+    for(int i=1;i<=4;++i)patternBar_.setItemEnabled(i,i<=pattern.bars);
+    for(int i=1;i<=3;++i)patternPage_.setItemEnabled(i,i<=pages);
+    patternBar_.setSelectedId(bar,juce::dontSendNotification);
+    patternPage_.setSelectedId(page,juce::dontSendNotification);
+    patternActions_.setItemEnabled(6,copiedPatternBar_.grid==pattern.grid);
     for(std::size_t i=0;i<patternSteps_.size();++i) {
         const auto local=static_cast<std::size_t>(page-1)*16+i;
         const bool inRange=bar<=pattern.bars && local<steps;
+        const auto stepNumber=juce::String(static_cast<int>(local+1));
+        const auto title="Bar "+juce::String(bar)+", step "+stepNumber;
+        if(patternSteps_[i].getTitle()!=title)patternSteps_[i].setTitle(title);
+        if(patternSteps_[i].getButtonText()!=stepNumber)patternSteps_[i].setButtonText(stepNumber);
         patternSteps_[i].setEnabled(inRange);
         patternSteps_[i].setToggleState(inRange && pattern.steps[static_cast<std::size_t>(bar-1)*steps+local].enabled,juce::dontSendNotification);
     }
@@ -1356,7 +1378,24 @@ void FxPanel::timerCallback()
     sampleStatus_.setTooltip(detail);
     // Block peak comes from rendered samples; visual decay is message-thread only.
     const auto program = processor_.program();
-    patternEnabled_.setButtonText(processor_.patternUnavailable()?"PATTERN UNAVAILABLE":"HOST PATTERN");
+    using Clock=FxProcessor::PatternClock;
+    const auto clock=processor_.patternClock();
+    const char* patternLabel="HOST PATTERN";
+    const char* patternHelp="Use host PPQ to play the trigger Pattern. Sequence mode also uses this Pattern.";
+    switch(clock){
+        case Clock::inactive: break;
+        case Clock::ready44: patternHelp="Host Pattern: synchronized in 4/4.";break;
+        case Clock::readyAssumed44: patternLabel="PATTERN · 4/4*";patternHelp="Time signature unavailable. Pattern assumes 4/4 for compatibility.";break;
+        case Clock::noPlayhead: patternLabel="PATTERN · NO CLOCK";patternHelp="The host did not report transport position.";break;
+        case Clock::stopped: patternLabel="PATTERN · STOPPED";patternHelp="Start the host transport to play the Pattern.";break;
+        case Clock::invalidPpq: patternLabel="PATTERN · NO PPQ";patternHelp="Host beat position is missing or outside the supported range.";break;
+        case Clock::invalidTempo: patternLabel="PATTERN · BPM";patternHelp="Host Pattern requires a valid tempo from 10 to 1000 BPM.";break;
+        case Clock::unsupportedMeter: patternLabel="PATTERN · METER";patternHelp="Host Pattern does not play in a reported time signature other than 4/4.";break;
+        case Clock::waitingForState: patternLabel="PATTERN · WAITING";patternHelp="Waiting for the new Program and Pattern state.";break;
+        case Clock::blockRejected: patternLabel="PATTERN · BLOCK";patternHelp="This host block cannot be scheduled within the Pattern work limit.";break;
+    }
+    if(patternEnabled_.getButtonText()!=patternLabel)patternEnabled_.setButtonText(patternLabel);
+    if(patternEnabled_.getTooltip()!=patternHelp){patternEnabled_.setTooltip(patternHelp);patternEnabled_.setDescription(patternHelp);}
     refreshPattern();refreshMacro();refreshGenerator();
     family_.setSelectedId (static_cast<int>(program.layers[0].family) + 1, juce::dontSendNotification);
     const int barsId=program.bars==0?1:program.bars==1?2:program.bars==2?3:program.bars==4?4:program.bars==8?5:6;

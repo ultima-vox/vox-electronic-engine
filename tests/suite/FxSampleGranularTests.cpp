@@ -73,6 +73,29 @@ int main(){
               "panic releases all retirement leases and grains");
     }
     {
+        sample::Store monitors;auto engine=std::make_unique<NoiseRiser>();engine->prepare(48000);
+        engine->attachSampleStore(&monitors);engine->setProgram(program);
+        std::uint64_t previewToken=0,midiToken=0;
+        check(monitors.publish(one,48000,&previewToken)&&engine->noteOn(1,60,1,1,true,previewToken,TriggerSource::preview),
+              "preview holds its external sample lease");
+        engine->render(al.data(),ar.data(),512);
+        check(engine->activeGrainCount()>0&&monitors.publish(two,48000,&midiToken),"preview grains sound before relink");
+        for(int i=0;i<8;++i)check(engine->noteOn(2,60+i,1,1,true,midiToken),"trigger MIDI under the live preview");
+        check(engine->activeEventCount()==9&&monitors.publish(three,48000)&&!monitors.publish(four,48000),
+              "stolen preview retains its external sample during retirement");
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+        voxProbeBegin();
+#endif
+        engine->discardPreview();
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+        const auto discardAllocations=voxProbeEnd();if(voxProbeAvailable())check(discardAllocations==0,"discarding preview allocates nothing");
+#endif
+        check(engine->activeEventCount()==8&&engine->activeGrainCount()==0&&monitors.publish(four,48000),
+              "discard releases preview retirement lease and grains without touching MIDI owners");
+        engine->render(al.data(),ar.data(),512);
+        check(engine->activeEventCount()==8&&engine->activeGrainCount()>0,"MIDI granular voices continue after preview discard");
+    }
+    {
         sample::Store pitchedStore;auto e=std::make_unique<NoiseRiser>();e->prepare(48000);e->setProgram(program);e->attachSampleStore(&pitchedStore);
         std::vector<float> sine(240);for(std::size_t i=0;i<sine.size();++i)sine[i]=static_cast<float>(.7*std::sin(6.283185307179586*i/sine.size()));
         check(pitchedStore.publish(sine,24000)&&e->noteOn(1,60,1,1,true),"source-rate pitch test setup");

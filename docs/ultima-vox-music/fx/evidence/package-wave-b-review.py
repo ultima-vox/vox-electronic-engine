@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify a Wave B staging export and rebuild the listening archive locally.
 
-Usage: python3 package-wave-b-review.py <export-directory> <destination.zip> [--counterpoints | --signals]
+Usage: python3 package-wave-b-review.py <export-directory> <destination.zip> [--counterpoints | --signals | --crossings]
 Does not upload, alter the export directory, or overwrite a destination.
 """
 
@@ -17,7 +17,7 @@ def sha(data):
 
 
 def package(root, destination, profile=''):
-    profiles = {'': ('twentyfour', 54), '--counterpoints': ('thirtytwo', 88), '--signals': ('forty', 25)}
+    profiles = {'': ('twentyfour', 54), '--counterpoints': ('thirtytwo', 88), '--signals': ('forty', 25), '--crossings': ('fortyeight', 22)}
     tranche, count = profiles[profile]
     evidence = Path(__file__).resolve().parent
     prefix = f'wave-b-{tranche}-'
@@ -53,6 +53,6 @@ def package(root, destination, profile=''):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3 and not (len(sys.argv) == 4 and sys.argv[3] in ('--counterpoints', '--signals')):
+    if len(sys.argv) != 3 and not (len(sys.argv) == 4 and sys.argv[3] in ('--counterpoints', '--signals', '--crossings')):
         sys.exit(__doc__)
     package(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] if len(sys.argv) == 4 else '')

@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/PatternEdit.h"
 #include "components/VoxKnob.h"
 #include "components/VoxButton.h"
 #include "components/VoxComboBox.h"
@@ -284,6 +285,7 @@ private:
     juce::ComboBox patternActions_;
     std::deque<pattern::Pattern> patternUndo_,patternRedo_;
     pattern::Pattern displayedPattern_,patternDragBefore_;
+    pattern::edit::Bar copiedPatternBar_;
     std::uint64_t patternRevision_=0;
     bool patternDragging_=false;
     std::array<juce::TextButton,16> patternSteps_;
