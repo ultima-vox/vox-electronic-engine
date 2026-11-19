@@ -278,6 +278,7 @@ private:
     juce::Label sampleStatus_;
     std::unique_ptr<juce::FileChooser> sampleChooser_;
     std::unique_ptr<juce::FileChooser> exportChooser_;
+    bool exportChooserOpen_=false;
     std::array<juce::ToggleButton,4> layerLocks_;
     vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
     std::array<StructuralSlider,4> patternDetails_;

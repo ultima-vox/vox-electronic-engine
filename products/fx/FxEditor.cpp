@@ -850,12 +850,12 @@ FxPanel::FxPanel (FxProcessor& processor)
     addAndMakeVisible(comparison_);
     midiExport_.setTitle("Export trigger pattern MIDI");
     midiExport_.setTooltip("Export one 4/4 pattern loop at the latest host tempo (120 BPM if unavailable); trigger notes, not audio");
-    midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
+    midiExport_.onClick=[this]{if(processor_.fileExportStatus())processor_.cancelFileExport(fileexport::Kind::midi);else exportPattern();};addAndMakeVisible(midiExport_);
     wavExport_.setTitle("Export WAV");
     wavExport_.setTooltip("Choose stereo WAV options; click during rendering to cancel");
     wavOptions_.onSave=[this](offline::Settings settings){exportWav(settings);};
     addChildComponent(wavOptions_);
-    wavExport_.onClick=[this]{if(processor_.wavExportStatus())processor_.cancelWavExport();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
+    wavExport_.onClick=[this]{if(processor_.fileExportStatus())processor_.cancelFileExport(fileexport::Kind::wav);else if(!exportChooserOpen_){wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
     addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger a finite audition of the current voice. Bar programs require the host bar clock.");
     stopAudition_.setTitle("Stop audition");stopAudition_.setTooltip("Fade audition voices and stop preset preview without stopping MIDI or Pattern voices");
@@ -1214,6 +1214,7 @@ void FxPanel::importSample()
 }
 void FxPanel::exportPattern()
 {
+    if(exportChooserOpen_||processor_.fileExportStatus())return;
     // Capture before opening the chooser; later edits do not change the file.
     const auto pattern=processor_.patternSnapshot();
     const auto bpm=processor_.observedTempo();
@@ -1223,12 +1224,13 @@ void FxPanel::exportPattern()
     }
     exportChooser_=std::make_unique<juce::FileChooser>("Export trigger pattern as MIDI",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX Pattern.mid"),"*.mid");
+    exportChooserOpen_=true;
     midiExport_.setEnabled(false);wavExport_.setEnabled(false);
     exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
         juce::FileBrowserComponent::warnAboutOverwriting,
         [safe=juce::Component::SafePointer<FxPanel>(this),pattern,bpm](const juce::FileChooser& chooser){
             if(safe==nullptr)return;
-            safe->midiExport_.setEnabled(true);safe->wavExport_.setEnabled(true);
+            safe->exportChooserOpen_=false;
             auto target=chooser.getResult();if(target==juce::File{})return;
             // Do not silently change the destination after the chooser's
             // overwrite confirmation, which could overwrite another file.
@@ -1236,19 +1238,13 @@ void FxPanel::exportPattern()
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                     "MIDI export failed","Choose a filename ending in .mid.");return;
             }
-            std::vector<std::uint8_t> bytes;
-            bool success=pattern::exportMidi(pattern,bpm,bytes);
-            if(success){
-                success=fileexport::writeBytes(target,bytes);
-            }
-            juce::AlertWindow::showMessageBoxAsync(success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
-                success?"MIDI exported":"MIDI export failed",
-                success?("Trigger pattern exported at " + juce::String(bpm,2) + " BPM."):juce::String("Could not write the trigger pattern."));
+            if(!safe->processor_.startMidiExport(pattern,bpm,target))
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"MIDI export failed","Could not start the file worker.");
         });
 }
 void FxPanel::exportWav(offline::Settings settings)
 {
-    if(processor_.wavExportStatus())return;
+    if(exportChooserOpen_||processor_.fileExportStatus())return;
     // Capture a self-contained value while the processor is alive. The worker
     // never references the processor or editor and cannot touch the callback.
     std::shared_ptr<offline::Capture> capture;
@@ -1274,20 +1270,19 @@ void FxPanel::exportWav(offline::Settings settings)
     }
     exportChooser_=std::make_unique<juce::FileChooser>("Export VOX FX stereo WAV",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.wav"),"*.wav");
+    exportChooserOpen_=true;
     midiExport_.setEnabled(false);wavExport_.setEnabled(false);
     exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
         juce::FileBrowserComponent::warnAboutOverwriting,
         [safe=juce::Component::SafePointer<FxPanel>(this),capture](const juce::FileChooser& chooser){
             if(safe==nullptr)return;
-            safe->midiExport_.setEnabled(true);safe->wavExport_.setEnabled(true);
+            safe->exportChooserOpen_=false;
             const auto target=chooser.getResult();if(target==juce::File{})return;
             if(!target.hasFileExtension("wav")){
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                     "WAV export failed","Choose a filename ending in .wav.");return;
             }
-            safe->wavExport_.setButtonText("STOP");
             if(!safe->processor_.startWavExport(std::move(*capture),target)) {
-                safe->wavExport_.setButtonText("WAV");
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                     "WAV export failed","Could not start the render worker.");
             }
@@ -1353,15 +1348,26 @@ void FxPanel::refreshMacro()
 }
 void FxPanel::timerCallback()
 {
-    if(const auto result=processor_.takeWavExportResult()){
-        wavExport_.setButtonText("WAV");
-        if(*result!=fileexport::Result::cancelled)juce::AlertWindow::showMessageBoxAsync(*result==fileexport::Result::success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
-            *result==fileexport::Result::success?"WAV exported":"WAV export failed",
-            *result==fileexport::Result::success?"The captured audio was exported using the selected WAV settings.":"Could not render or write the WAV file.");
-    }else if(const auto status=processor_.wavExportStatus()){
-        const int percent=static_cast<int>(status->progress*100);
-        wavExport_.setButtonText(status->committing?"Saving…":status->cancelling?"Cancelling…":juce::String(percent)+"%");
-    }else if(wavExport_.getButtonText()!="WAV")wavExport_.setButtonText("WAV");
+    using Kind=fileexport::Kind;
+    if(const auto done=processor_.takeFileExportResult();done&&done->result!=fileexport::Result::cancelled){
+        const bool ok=done->result==fileexport::Result::success;
+        const bool wav=done->kind==Kind::wav;
+        const juce::String format=wav?"WAV":"MIDI";
+        juce::AlertWindow::showMessageBoxAsync(ok?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+            format+(ok?" exported":" export failed"),ok?(wav?"The captured audio was exported.":"The captured trigger pattern and tempo were exported."):
+            "Could not render or write the selected file.");
+    }
+    const auto status=processor_.fileExportStatus();
+    const bool wavBusy=status&&status->kind==Kind::wav, midiBusy=status&&status->kind==Kind::midi;
+    midiExport_.setEnabled(!exportChooserOpen_&&!wavBusy);
+    wavExport_.setEnabled(!exportChooserOpen_&&!midiBusy);
+    if(status){
+        const auto label=status->committing?juce::String("Saving…"):status->cancelling?juce::String("Cancelling…"):
+            wavBusy?juce::String(static_cast<int>(status->progress*100))+"%":juce::String("Cancel");
+        (wavBusy?wavExport_:midiExport_).setButtonText(label);
+    }
+    if(!wavBusy&&wavExport_.getButtonText()!="WAV")wavExport_.setButtonText("WAV");
+    if(!midiBusy&&midiExport_.getButtonText()!="MIDI")midiExport_.setButtonText("MIDI");
     if (!isShowing()) return;
     const auto sample=processor_.sampleSnapshot();
     using Status=sample::Controller::Status;

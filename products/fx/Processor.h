@@ -146,9 +146,10 @@ public:
     // Message thread only. Own export independently of editor lifetime; the
     // render receives an immutable capture, never a processor/editor pointer.
     bool startWavExport(offline::Capture,juce::File);
-    std::optional<fileexport::Status> wavExportStatus() const noexcept;
-    bool cancelWavExport() noexcept;
-    std::optional<fileexport::Result> takeWavExportResult();
+    bool startMidiExport(pattern::Pattern,double tempo,juce::File);
+    std::optional<fileexport::Status> fileExportStatus() const noexcept;
+    bool cancelFileExport(fileexport::Kind) noexcept;
+    std::optional<fileexport::Completion> takeFileExportResult();
     // Trigger pattern controller and offline MIDI export.
     bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
     template<typename Edit> bool editPattern(Edit edit) { return programs_.editPattern(edit); }
@@ -250,7 +251,7 @@ private:
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     transport::Tracker transport_;
-    std::unique_ptr<fileexport::WavJob> wavExportJob_;
+    std::unique_ptr<fileexport::Job> fileExportJob_;
 };
 
 } // namespace vox::fx

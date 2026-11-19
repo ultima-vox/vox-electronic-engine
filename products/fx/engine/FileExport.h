@@ -44,7 +44,7 @@ using WriteObserver=void(*)(void*,std::size_t) noexcept;
 inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>& bytes,
                        Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
     if(cancel&&cancel->cancelled())return false;
-    // Do not attempt to replace a directory even if its name ends in .wav.
+    // Do not attempt to replace a directory, regardless of its extension.
     if(target.isDirectory())return false;
     juce::TemporaryFile temporary(target);
     bool written=false;
@@ -64,7 +64,9 @@ inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>&
            (!cancel||cancel->beginCommit())&&temporary.overwriteTargetFileWithTemporary();
 }
 enum class Result { running, success, failure, cancelled };
-struct Status { Result result; float progress; bool cancelling, committing; };
+enum class Kind { wav, midi };
+struct Completion { Kind kind; Result result; };
+struct Status { Kind kind; Result result; float progress; bool cancelling, committing; };
 inline Result renderFile(const offline::Capture& capture,const juce::File& target,
                          Cancellation& cancel,std::atomic<float>& progress,
                          WriteObserver observe=nullptr,void* observerContext=nullptr) {
@@ -76,26 +78,39 @@ inline Result renderFile(const offline::Capture& capture,const juce::File& targe
     } catch(...) { success=false; }
     return success?Result::success:(cancel.sealFailure()?Result::cancelled:Result::failure);
 }
-class WavJob {
+class Job {
 public:
-    WavJob(offline::Capture capture,juce::File target,WriteObserver observe=nullptr,void* context=nullptr)
-        : worker_([this,capture=std::move(capture),target=std::move(target),observe,context]() mutable {
+    Job(offline::Capture capture,juce::File target,WriteObserver observe=nullptr,void* context=nullptr)
+        : kind_(Kind::wav),worker_([this,capture=std::move(capture),target=std::move(target),observe,context]() mutable {
             const auto outcome=renderFile(capture,target,cancel_,progress_,observe,context);
             // Retire the potentially large sample before publishing completion;
             // an editor reaping this job has no file or audio payload work left.
             std::vector<float>().swap(capture.sample);
             result_.store(outcome,std::memory_order_release);
         }) {}
-    WavJob(const WavJob&)=delete;
-    WavJob& operator=(const WavJob&)=delete;
-    ~WavJob() { (void)cancel();wait(); }
+    Job(pattern::Pattern snapshot,double bpm,juce::File target,WriteObserver observe=nullptr,void* context=nullptr)
+        : kind_(Kind::midi),worker_([this,snapshot,bpm,target=std::move(target),observe,context] {
+            bool success=false;
+            try {
+                std::vector<std::uint8_t> bytes;
+                success=!cancel_.cancelled()&&pattern::exportMidi(snapshot,bpm,bytes)&&writeBytes(target,bytes,&cancel_,observe,context);
+            } catch(...) { success=false; }
+            if(success)progress_.store(1.f,std::memory_order_relaxed);
+            const auto result=success?Result::success:(cancel_.sealFailure()?Result::cancelled:Result::failure);
+            result_.store(result,std::memory_order_release);
+        }) {}
+    Job(const Job&)=delete;
+    Job& operator=(const Job&)=delete;
+    ~Job() { (void)cancel();wait(); }
+    Kind kind() const noexcept { return kind_; }
     bool cancel() noexcept { return result()==Result::running&&cancel_.request(); }
     float progress() const noexcept { return progress_.load(std::memory_order_relaxed); }
     Result result() const noexcept { return result_.load(std::memory_order_acquire); }
-    Status status() const noexcept { return {result(),progress(),cancel_.cancelled(),cancel_.committing()}; }
+    Status status() const noexcept { return {kind_,result(),progress(),cancel_.cancelled(),cancel_.committing()}; }
     // Lifecycle/controller thread only; destructor joins before destroying state.
     void wait() { if(worker_.joinable())worker_.join(); }
 private:
+    const Kind kind_;
     Cancellation cancel_;
     std::atomic<float> progress_{0};
     std::atomic<Result> result_{Result::running};

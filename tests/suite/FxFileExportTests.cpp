@@ -22,23 +22,23 @@ int main() {
     std::vector<std::uint8_t> expected;
     check(offline::renderWav(capture.program,capture.settings,expected),"reference render");
     {
-        fileexport::WavJob job(capture,path);job.wait();
+        fileexport::Job job(capture,path);job.wait();
         check(job.result()==fileexport::Result::success && job.progress()==1.0f,"worker reports completed render");
     }
     juce::MemoryBlock actual;check(path.loadFileAsData(actual),"load worker output");
     check(actual.getSize()==expected.size() && std::memcmp(actual.getData(),expected.data(),expected.size())==0,
           "worker output equals captured WAV bytes");
     auto invalid=capture;invalid.settings.duration=33;
-    {fileexport::WavJob job(invalid,path);job.wait();check(job.result()==fileexport::Result::failure,"invalid render reported");}
+    {fileexport::Job job(invalid,path);job.wait();check(job.result()==fileexport::Result::failure,"invalid render reported");}
     juce::MemoryBlock preserved;check(path.loadFileAsData(preserved) && preserved==actual,"failed render preserves target");
-    {fileexport::WavJob job(capture,dir.getChildFile("missing/output.wav"));job.wait();
+    {fileexport::Job job(capture,dir.getChildFile("missing/output.wav"));job.wait();
         check(job.result()==fileexport::Result::failure,"write failure reported");}
     std::atomic<float> progress{0};
     check(fileexport::renderFile(capture,path,cancel,progress)==fileexport::Result::cancelled,"pre-cancelled render reported");
     juce::MemoryBlock afterCancel;check(path.loadFileAsData(afterCancel)&&afterCancel==actual,"cancelled render preserves target");
     const auto collision=dir.getChildFile("directory.wav");
     check(collision.createDirectory().wasOk()&&collision.getChildFile("keep.txt").replaceWithText("keep"),"create directory collision fixture");
-    {fileexport::WavJob job(capture,collision);job.wait();check(job.result()==fileexport::Result::failure&&
+    {fileexport::Job job(capture,collision);job.wait();check(job.result()==fileexport::Result::failure&&
       collision.getChildFile("keep.txt").loadFileAsString()=="keep","directory target is never replaced");}
     fileexport::Cancellation failed;
     check(fileexport::renderFile(capture,collision,failed,progress)==fileexport::Result::failure&&
@@ -50,10 +50,11 @@ int main() {
             std::mutex mutex;std::condition_variable condition;std::size_t bytes=0;bool resume=false;
         } gate;
         auto longer=capture;longer.settings.duration=.5f;
-        fileexport::WavJob job(longer,path,[](void* context,std::size_t count) noexcept {
+        const auto holdWrite=[](void* context,std::size_t count) noexcept {
             auto& g=*static_cast<Gate*>(context);std::unique_lock lock(g.mutex);g.bytes=count;
             g.condition.notify_all();g.condition.wait(lock,[&]{return g.resume;});
-        },&gate);
+        };
+        fileexport::Job job(longer,path,holdWrite,&gate);
         {
             std::unique_lock lock(gate.mutex);
             const bool entered=gate.condition.wait_for(lock,std::chrono::seconds(5),[&]{return gate.bytes>0;});
@@ -66,9 +67,25 @@ int main() {
         check(job.result()==fileexport::Result::cancelled&&path.loadFileAsData(kept)&&kept==actual,
               "mid-write cancellation keeps destination byte-identical");
         check(dir.findChildFiles(juce::File::findFiles,false).size()==1,"cancel removes partial temporary file");
+        gate.bytes=0;gate.resume=false;
+        const auto midiPath=dir.getChildFile("original.mid");
+        check(midiPath.replaceWithText("original MIDI"),"prepare MIDI overwrite sentinel");
+        pattern::Pattern pattern;pattern.steps[0].enabled=true;
+        fileexport::Job midi(pattern,125.,midiPath,holdWrite,&gate);
+        {
+            std::unique_lock lock(gate.mutex);
+            const bool entered=gate.condition.wait_for(lock,std::chrono::seconds(5),[&]{return gate.bytes>0;});
+            check(entered&&midi.cancel(),"MIDI can be cancelled after writing but before replacement");
+            if(!entered)(void)midi.cancel();
+            gate.resume=true;
+        }
+        gate.condition.notify_all();midi.wait();
+        check(midi.status().kind==fileexport::Kind::midi&&midi.result()==fileexport::Result::cancelled&&
+              midiPath.loadFileAsString()=="original MIDI"&&dir.findChildFiles(juce::File::findFiles,false).size()==2,
+              "MIDI cancellation preserves old destination and removes temporary bytes");
     }
     auto longCapture=capture;longCapture.settings.duration=32;
-    {fileexport::WavJob job(longCapture,path);job.cancel();job.wait();
+    {fileexport::Job job(longCapture,path);job.cancel();job.wait();
         // If the thread finished before cancellation, success is legitimate.
         check(job.result()==fileexport::Result::cancelled || job.result()==fileexport::Result::success,
               "worker cancellation or completed render reported");}

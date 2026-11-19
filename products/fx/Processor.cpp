@@ -277,34 +277,43 @@ bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std:
 }
 
 namespace {
-bool onWavControllerThread() noexcept {
+bool onFileControllerThread() noexcept {
     const auto* manager=juce::MessageManager::getInstanceWithoutCreating();
     return manager&&manager->isThisTheMessageThread();
 }
 }
 
 bool FxProcessor::startWavExport(offline::Capture capture,juce::File target) {
-    if(!onWavControllerThread()||wavExportJob_||!target.hasFileExtension("wav"))return false;
-    try { wavExportJob_=std::make_unique<fileexport::WavJob>(std::move(capture),std::move(target)); }
+    if(!onFileControllerThread()||fileExportJob_||!target.hasFileExtension("wav"))return false;
+    try { fileExportJob_=std::make_unique<fileexport::Job>(std::move(capture),std::move(target)); }
     catch(...) { return false; }
     return true;
 }
 
-std::optional<fileexport::Status> FxProcessor::wavExportStatus() const noexcept {
-    if(!onWavControllerThread()||!wavExportJob_)return {};
-    return wavExportJob_->status();
+bool FxProcessor::startMidiExport(pattern::Pattern snapshot,double tempo,juce::File target) {
+    if(!onFileControllerThread()||fileExportJob_||!target.hasFileExtension("mid")||
+       !snapshot.valid()||!std::isfinite(tempo)||tempo<10||tempo>1000)return false;
+    try { fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,std::move(target)); }
+    catch(...) { return false; }
+    return true;
 }
 
-bool FxProcessor::cancelWavExport() noexcept {
-    return onWavControllerThread()&&wavExportJob_&&wavExportJob_->cancel();
+std::optional<fileexport::Status> FxProcessor::fileExportStatus() const noexcept {
+    if(!onFileControllerThread()||!fileExportJob_)return {};
+    return fileExportJob_->status();
 }
 
-std::optional<fileexport::Result> FxProcessor::takeWavExportResult() {
-    if(!onWavControllerThread()||!wavExportJob_)return {};
-    const auto result=wavExportJob_->result();
+bool FxProcessor::cancelFileExport(fileexport::Kind kind) noexcept {
+    return onFileControllerThread()&&fileExportJob_&&fileExportJob_->kind()==kind&&fileExportJob_->cancel();
+}
+
+std::optional<fileexport::Completion> FxProcessor::takeFileExportResult() {
+    if(!onFileControllerThread()||!fileExportJob_)return {};
+    const auto result=fileExportJob_->result();
     if(result==fileexport::Result::running)return {};
-    wavExportJob_.reset();
-    return result;
+    const auto kind=fileExportJob_->kind();
+    fileExportJob_.reset();
+    return fileexport::Completion{kind,result};
 }
 
 bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)

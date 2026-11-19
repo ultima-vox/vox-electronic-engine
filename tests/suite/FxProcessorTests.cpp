@@ -1,6 +1,6 @@
 #include "Processor.h"
 #include "FxEditor.h"
-#include "content/FactoryCandidates.h"
+#include "content/ReviewWaveBAssets.h"
 #include <cmath>
 #include <cstring>
 #include <bit>
@@ -239,6 +239,10 @@ void checkInPlaceBounceHistory() {
         check(same()&&a.getMagnitude(0,128)>1e-7f&&fx->audioTelemetry().events==0,
               "in-place bounce keeps nonempty shared effect history but not preview PCM or audition voice");
         check(!bus.playing()&&!bus.publish(preview,static_cast<std::uint32_t>(rate),stale),"pending browser ticket cannot restore preview after bounce begins");
+        fx->setNonRealtime(false);render(64,120.);
+        check(same()&&a.getMagnitude(0,64)>1e-7f&&fx->audioTelemetry().events==0,
+              "returning online mid-tail preserves the shared FX bank without restoring preview");
+        fx->setNonRealtime(true);
         // Admit a held MIDI note; losing PPQ disables Pattern, not the MIDI
         // owner. Recover clock at a known downbeat without a sample-time seek.
         ma.addEvent(juce::MidiMessage::noteOn(3,67,juce::uint8{108}),31);mb=ma;
@@ -288,6 +292,69 @@ void checkAuditionAtCapacity() {
     check(compare()&&fx->audioTelemetry().events==7,"offline transition and oldest held NoteOff preserve the other MIDI owners");
 }
 
+void checkGranularPreviewPressure() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>(),reference=std::make_unique<FxProcessor>();
+    auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-voice-pressure","",false);
+    check(dir.createDirectory().wasOk(),"create granular pressure test directory");
+    const auto before=dir.getChildFile("preview.wav"),after=dir.getChildFile("music.wav");
+    using content::waveb::Asset;
+    const auto write=[&](const juce::File& file,Asset asset){const auto wave=content::waveb::sourceWav(asset);
+        return file.replaceWithData(wave.data(),wave.size());};
+    check(write(before,Asset::rail)&&write(after,Asset::ceramic),"write original test sample generations");
+    const auto load=[&](FxProcessor& instance,const juce::File& file){
+        return instance.importSample(file)&&instance.waitForSample(std::chrono::seconds(5))&&
+               instance.sampleStatus()==sample::Controller::Status::ready;
+    };
+    TestPlayHead head;juce::AudioPlayHead::PositionInfo pos;pos.setIsPlaying(true);pos.setBpm(120.);
+    pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});
+    NoiseProgram program;program.mode=PlayMode::gate;program.layers[0].family=NoiseFamily::granular;
+    program.layers[0].grains={95,.19f,true};pattern::Pattern grid;grid.steps[0]={true,63,97,100,1};
+    for(auto* instance:{fx.get(),reference.get()}){
+        instance->prepareToPlay(48000,512);instance->setPlayHead(&head);
+        check(instance->setProgram(program)&&instance->setPattern(grid)&&load(*instance,before),"install external granular audition fixture");
+    }
+    juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer ma,mb;
+    std::int64_t sample=0;double ppq=.5;
+    const auto render=[&](int size,bool playing){
+        pos.setIsPlaying(playing);pos.setTimeInSamples(sample);pos.setPpqPosition(ppq);head.position=pos;
+        a.setSize(2,size);b.setSize(2,size);mb=ma;block(*fx,a,ma);block(*reference,b,mb);
+        sample+=size;ppq+=size/24000.;
+        for(int c=0;c<2;++c)for(int i=0;i<size;++i)
+            if(!std::isfinite(a.getSample(c,i))||a.getSample(c,i)!=b.getSample(c,i))return false;
+        return true;
+    };
+    for(int cycle=0;cycle<2;++cycle){
+        for(auto* instance:{fx.get(),reference.get()}){
+            instance->patternEnabledParameter().setValueNotifyingHost(0.f);
+            check(load(*instance,before),"select first external generation for preview");instance->audition();
+        }
+        check(render(512,true)&&a.getMagnitude(0,512)>0&&fx->audioTelemetry().events==1&&fx->audioTelemetry().grains>0,
+              "external sample is leased by an audible preview");
+        const auto oldHash=fx->sampleReference().sha256;
+        for(auto* instance:{fx.get(),reference.get()})check(load(*instance,after),"replace selected sample while preview owns the old lease");
+        check(fx->sampleReference().sha256!=oldHash,"music selects a genuinely different sample generation");
+        for(int note=48;note<55;++note)ma.addEvent(juce::MidiMessage::noteOn(2,note,juce::uint8{100}),0);
+        check(render(64,true)&&fx->audioTelemetry().events==8,"fill the active bank with preview plus seven held MIDI notes");
+        for(auto* instance:{fx.get(),reference.get()})instance->patternEnabledParameter().setValueNotifyingHost(1.f);
+        ppq=4.;
+        ma.addEvent(juce::MidiMessage::noteOn(2,70,juce::uint8{100}),0);
+        for(int i=1;i<=4;++i)ma.addEvent(juce::MidiMessage::noteOn(2,70+i,juce::uint8{100}),i*8);
+        check(render(64,true)&&fx->audioTelemetry().events==12&&fx->audioTelemetry().dropped==static_cast<unsigned>(cycle+1),
+              "same-offset MIDI and Pattern, then repeated steals reclaim retiring preview before truly musical overflow");
+        for(auto* instance:{fx.get(),reference.get()})instance->stopAudition();
+        check(render(256,true)&&fx->audioTelemetry().events==8&&a.getMagnitude(0,256)>0,
+              "STOP audition never kills musical owners under external sample pressure");
+        ma.addEvent(juce::MidiMessage::noteOff(2,48),0);
+        check(render(256,true)&&fx->audioTelemetry().events==8,"a stolen MIDI press consumes only its own NoteOff");
+        ma.addEvent(juce::MidiMessage::noteOff(2,70),0);
+        check(render(256,true)&&fx->audioTelemetry().events==7,"a surviving MIDI press releases its own held voice");
+        check(render(512,false)&&fx->audioTelemetry().events==0&&fx->audioTelemetry().grains==0,
+              "host stop drains musical and sample retirement state before restart");
+    }
+    fx.reset();reference.reset();dir.deleteRecursively();
+}
+
 void checkPatternClipboardRestore() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();
@@ -320,22 +387,22 @@ void checkExportAcrossEditorClose() {
     const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-panel-export","",false);
     check(dir.createDirectory().wasOk(),"export test directory");
     const auto path=dir.getChildFile("capture.wav");
-    check(fx->startWavExport(capture,path)&&fx->wavExportStatus(),"processor starts and owns an export while editor is open");
+    check(fx->startWavExport(capture,path)&&fx->fileExportStatus(),"processor starts and owns an export while editor is open");
     panel.reset();
-    check(fx->wavExportStatus().has_value()&&!fx->startWavExport(capture,path),"closing editor neither cancels export nor admits a duplicate");
+    check(fx->fileExportStatus().has_value()&&!fx->startWavExport(capture,path),"closing editor neither cancels export nor admits a duplicate");
     fx->setFamily(static_cast<int>(NoiseFamily::laser));
     for(int i=0;i<3;++i){
         auto recreated=std::make_unique<FxPanel>(*fx);
-        check(fx->wavExportStatus().has_value(),"repeated panel recreation leaves export status owned by processor");
+        check(fx->fileExportStatus().has_value(),"repeated panel recreation leaves export status owned by processor");
     }
     auto reopened=std::make_unique<FxPanel>(*fx);
     const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
-    std::optional<fileexport::Result> result;
+    std::optional<fileexport::Completion> result;
     while(!result&&std::chrono::steady_clock::now()<end){
-        result=fx->takeWavExportResult();
+        result=fx->takeFileExportResult();
         if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    check(result==fileexport::Result::success&&!fx->wavExportStatus()&&!fx->takeWavExportResult(),"reopened editor can consume completion exactly once");
+    check(result&&result->kind==fileexport::Kind::wav&&result->result==fileexport::Result::success&&!fx->fileExportStatus()&&!fx->takeFileExportResult(),"reopened editor can consume completion exactly once");
     juce::MemoryBlock bytes;
     check(path.loadFileAsData(bytes)&&bytes.getSize()==expected.size()&&std::memcmp(bytes.getData(),expected.data(),expected.size())==0,
           "export contains original capture despite editor close and subsequent Program edit");
@@ -352,28 +419,64 @@ void checkPendingExportLifecycle() {
     check(dir.createDirectory().wasOk(),"lifecycle test directory");
     const auto path=dir.getChildFile("during-save.wav");
     check(path.replaceWithText("old destination"),"prepare overwrite sentinel");
-    check(fx->startWavExport(capture,path)&&fx->wavExportStatus()->result==fileexport::Result::running,"export pending at session save");
+    check(fx->startWavExport(capture,path)&&fx->fileExportStatus()->result==fileexport::Result::running,"export pending at session save");
     bool hostSave=false,refused=false;
     std::thread host([&]{
         hostSave=save(*fx)==project;
-        refused=!fx->wavExportStatus()&&!fx->cancelWavExport()&&!fx->takeWavExportResult()&&
+        refused=!fx->fileExportStatus()&&!fx->cancelFileExport(fileexport::Kind::wav)&&!fx->takeFileExportResult()&&
                 !fx->startWavExport(capture,dir.getChildFile("off-thread.wav"));
     });host.join();
     check(hostSave&&refused,"host-thread save excludes export job; job controls refuse off-message access");
-    const bool accepted=fx->cancelWavExport();
+    const bool accepted=fx->cancelFileExport(fileexport::Kind::wav);
     const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
-    std::optional<fileexport::Result> result;
+    std::optional<fileexport::Completion> result;
     while(!result&&std::chrono::steady_clock::now()<end){
-        result=fx->takeWavExportResult();
+        result=fx->takeFileExportResult();
         if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    check(accepted&&result==fileexport::Result::cancelled&&path.loadFileAsString()=="old destination",
+    check(accepted&&result&&result->kind==fileexport::Kind::wav&&result->result==fileexport::Result::cancelled&&path.loadFileAsString()=="old destination",
           "controller cancellation preserves existing WAV target");
     const auto unloadPath=dir.getChildFile("during-unload.wav");
     check(fx->startWavExport(std::move(capture),unloadPath),"start long render before processor unload");
     fx.reset();
     check(!unloadPath.exists()&&dir.findChildFiles(juce::File::findFiles,false).size()==1,
           "processor destruction cancels, joins and leaves no partial export");
+    dir.deleteRecursively();
+}
+
+void checkMidiExportLifecycle() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    auto panel=std::make_unique<FxPanel>(*fx);
+    pattern::Pattern snapshot;snapshot.bars=2;snapshot.steps[1]={true,53,92,100,3};
+    std::vector<std::uint8_t> expected;
+    check(pattern::exportMidi(snapshot,133.75,expected),"reference MIDI file encodes captured tempo and Pattern");
+    const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-midi-export","",false);
+    check(dir.createDirectory().wasOk(),"create MIDI export test directory");
+    const auto target=dir.getChildFile("pattern.mid");
+    check(target.replaceWithText("old file")&&!fx->startMidiExport(snapshot,9.,target)&&
+          !fx->startMidiExport(snapshot,120.,dir.getChildFile("wrong.wav")),"reject invalid tempo or extension before starting a file job");
+    check(fx->startMidiExport(snapshot,133.75,target)&&fx->fileExportStatus()->kind==fileexport::Kind::midi,"processor owns MIDI job");
+    panel.reset();
+    check(!fx->startWavExport({},dir.getChildFile("second.wav"))&&!fx->cancelFileExport(fileexport::Kind::wav),
+          "MIDI and WAV share one worker slot, and wrong-kind cancellation is refused");
+    snapshot.steps[1].note=80;check(fx->setPattern(snapshot),"edit Pattern after confirming MIDI export");
+    panel=std::make_unique<FxPanel>(*fx);
+    const auto wait=[&]{std::optional<fileexport::Completion> result;
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!(result=fx->takeFileExportResult())&&std::chrono::steady_clock::now()<until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return result;
+    };
+    auto result=wait();juce::MemoryBlock actual;
+    check(result&&result->kind==fileexport::Kind::midi&&result->result==fileexport::Result::success&&
+          target.loadFileAsData(actual)&&actual.getSize()==expected.size()&&std::memcmp(actual.getData(),expected.data(),expected.size())==0,
+          "editor recreation and Pattern edits leave the immutable MIDI capture byte-exact");
+    check(!fx->takeFileExportResult(),"MIDI result is consumed once");
+    check(fx->startMidiExport(snapshot,120.,dir.getChildFile("missing/target.mid")),"start deterministic MIDI filesystem failure");
+    result=wait();
+    check(result&&result->kind==fileexport::Kind::midi&&result->result==fileexport::Result::failure&&
+          dir.findChildFiles(juce::File::findFiles,false).size()==1,"MIDI failure is reported and leaves no additional file");
     dir.deleteRecursively();
 }
 
@@ -545,10 +648,12 @@ int main() {
     phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();
     phase("offline host monitor isolation");checkBounceMonitorIsolation();
     phase("in-place bounce effect history and audition priority");checkInPlaceBounceHistory();checkAuditionAtCapacity();
+    phase("External granular preview under repeated MIDI and Pattern pressure");checkGranularPreviewPressure();
     phase("Pattern clipboard during restore and editor recreation");checkPatternClipboardRestore();
     phase("timeline viewport keyboard and selection");checkTimelineViewport();
     phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
+    phase("MIDI export lifecycle");checkMidiExportLifecycle();
     phase("capture parity");checkCaptureParity();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
