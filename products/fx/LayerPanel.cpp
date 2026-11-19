@@ -4,7 +4,7 @@
 #include "Typography.h"
 
 namespace vox::fx {
-LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor), index_(index), curve_(processor,index) {
+LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor), index_(index), curve_(processor,static_cast<std::size_t>(index)) {
     enabled_.setClickingTogglesState(true);
     enabled_.setTitle("Enable layer " + juce::String(index + 1));
     enabled_.onClick = [this] { processor_.editLayer(static_cast<std::size_t>(index_), [this](NoiseLayer& l){ l.enabled=enabled_.getToggleState(); }); };
@@ -43,9 +43,7 @@ void LayerPanel::refresh(const NoiseLayer& layer) {
     offset_.getSlider().setValue(layer.timing.offset,juce::dontSendNotification);
     span_.getSlider().setValue(layer.timing.span,juce::dontSendNotification);
     gain_.repaint();pan_.repaint();offset_.repaint();span_.repaint();
-    curve_.refresh(curve_.kind()==CurveEditor::Kind::gain?layer.gainCurve:
-                   curve_.kind()==CurveEditor::Kind::pitch?layer.pitchCurve:
-                   curve_.kind()==CurveEditor::Kind::cutoff?layer.cutoffCurve:layer.panCurve);
+    curve_.refresh();
 }
 void LayerPanel::paint(juce::Graphics& g) {
     namespace c=vox::ui::tokens::colour;

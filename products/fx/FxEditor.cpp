@@ -76,9 +76,62 @@ void GeneratorPanel::timerCallback() {
         const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve};
         for(std::size_t i=0;i<fieldLocks_.size();++i)fieldLocks_[i].setToggleState((mask&bits[i])!=0,juce::dontSendNotification);}
 }
+ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor, std::nullopt) {
+    const char* names[] { "Amplitude", "Pitch", "Cutoff", "Panorama" };
+    for (int i=0; i<4; ++i) selector_.addItem(names[i], i+1);
+    selector_.setTitle("Program trajectory");
+    selector_.setSelectedId(1, juce::dontSendNotification);
+    selector_.onChange = [this] {
+        const int index = selector_.getSelectedId() - 1;
+        if (index < 0 || index >= 4) return;
+        editor_.setKind(static_cast<CurveKind>(index));
+        refreshHint();
+    };
+    undo_.setTitle("Undo curve edit"); redo_.setTitle("Redo curve edit");
+    reset_.setTooltip("Restore the selected trajectory to its neutral value; this edit can be undone");
+    undo_.onClick = [this] { (void)editor_.undo(); };
+    redo_.onClick = [this] { (void)editor_.redo(); };
+    reset_.onClick = [this] { (void)editor_.resetCurve(); };
+    hint_.setFont(vox::ui::typography::controlLabel());
+    for (auto* child : std::array<juce::Component*,6>{ &selector_, &undo_, &redo_, &reset_, &editor_, &hint_ })
+        addAndMakeVisible(*child);
+    refreshHint();
+}
+void ProgramCurvePanel::refresh() { editor_.refresh(); }
+void ProgramCurvePanel::refreshHint() {
+    const char* unit = "Amplitude: 0% to 100%";
+    switch (editor_.kind()) {
+        case CurveKind::gain: break;
+        case CurveKind::pitch: unit = "Pitch: -24 to +24 semitones before layer pitch"; break;
+        case CurveKind::cutoff: unit = "Cutoff: below to above the family sweep; center is neutral"; break;
+        case CurveKind::pan: unit = "Panorama: left to right offset; center is neutral"; break;
+    }
+    hint_.setText(juce::String(unit) + "  |  Time: 0-100% of event  |  Double-click to add, Delete to remove",
+                  juce::dontSendNotification);
+}
+void ProgramCurvePanel::paint(juce::Graphics& g) {
+    namespace c = vox::ui::tokens::colour;
+    const auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+    g.setColour(c::panelRaised); g.fillRoundedRectangle(bounds, 6.0f);
+    g.setColour(c::border); g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
+    g.setColour(c::text); g.setFont(vox::ui::typography::controlLabel());
+    g.drawText("PROGRAM TRAJECTORIES / NEW EVENTS", getLocalBounds().reduced(12).removeFromTop(28).removeFromLeft(270),
+               juce::Justification::centredLeft);
+}
+void ProgramCurvePanel::resized() {
+    auto area = getLocalBounds().reduced(12);
+    auto header = area.removeFromTop(28);
+    header.removeFromLeft(270);
+    selector_.setBounds(header.removeFromLeft(140).reduced(2));
+    undo_.setBounds(header.removeFromLeft(60).reduced(2));
+    redo_.setBounds(header.removeFromLeft(60).reduced(2));
+    reset_.setBounds(header.removeFromLeft(100).reduced(2));
+    hint_.setBounds(area.removeFromBottom(22));
+    editor_.setBounds(area);
+}
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
-      durationAttachment_ (processor.durationParameter(), duration_.getSlider())
+      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor)
 {
     addAndMakeVisible (output_);
     addAndMakeVisible (duration_);
@@ -229,6 +282,17 @@ FxPanel::FxPanel (FxProcessor& processor)
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
         addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
     }
+    addChildComponent(programCurves_);
+    programCurvesButton_.setClickingTogglesState(true);
+    programCurvesButton_.setTooltip("Switch between layer cards and Program amplitude, pitch, cutoff and panorama");
+    programCurvesButton_.onClick = [this] {
+        const bool show = programCurvesButton_.getToggleState();
+        for (auto& layer : layers_) layer->setVisible(!show);
+        if (show) programCurves_.refresh();
+        programCurves_.setVisible(show);
+        programCurvesButton_.setButtonText(show ? "Layer cards" : "Program curves");
+    };
+    addAndMakeVisible(programCurvesButton_);
     for (std::size_t i=0;i<4;++i) {
         auto& type=effectsType_[i];
         const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate","Phaser","Flanger","Delay","Chorus","Reverb"};
@@ -356,6 +420,7 @@ void FxPanel::paint (juce::Graphics& g)
 void FxPanel::resized()
 {
     auto area = getLocalBounds().reduced (32);
+    programCurvesButton_.setBounds(area.withHeight(28).removeFromRight(154));
     area.removeFromTop (80);
     output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));
@@ -423,6 +488,7 @@ void FxPanel::resized()
     row.removeFromTop(247);
     row.removeFromBottom(120);
     generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(480,280));
+    programCurves_.setBounds(row.reduced(3));
     const int width = row.getWidth() / 4;
     for (std::size_t i=0; i<layers_.size(); ++i) {
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
@@ -602,7 +668,8 @@ void FxPanel::timerCallback()
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
         effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
     }
-    for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
+    if (programCurves_.isVisible()) programCurves_.refresh();
+    else for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     const auto telemetry=processor_.audioTelemetry();shownEvents_=telemetry.events;shownGrains_=telemetry.grains;shownDropped_=telemetry.dropped;
     clipHold_=processor_.consumeClip()?25u:(clipHold_?clipHold_-1:0u);
     shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);

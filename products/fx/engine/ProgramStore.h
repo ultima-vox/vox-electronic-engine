@@ -1,5 +1,6 @@
 #pragma once
 #include "ProgramCodec.h"
+#include "CurveTarget.h"
 #include "Effects.h"
 #include "PatternCodec.h"
 #include "MacroRouting.h"
@@ -79,6 +80,19 @@ public:
         auto next=desired_;edit(next.layers[index]);std::vector<std::byte> encoded;
         if(!programcodec::encode(next,encoded))return false;
         commit(next,encoded,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_);return true;
+    }
+    bool editCurveIfRevision(CurveTarget target, std::uint64_t revision, const timeline::Curve& curve) {
+        if (!curve.valid()) return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (programRevision_.load(std::memory_order_relaxed) != revision) return false;
+        auto next = desired_;
+        auto* destination = target.get(next);
+        if (!destination) return false;
+        *destination = curve;
+        std::vector<std::byte> encoded;
+        if (!programcodec::encode(next, encoded)) return false;
+        commit(next, encoded, desiredEffects_, desiredPattern_, desiredMacros_, desiredGenerator_);
+        return true; // Localized edit, not a restore: keep undo transactions valid.
     }
     std::uint64_t programRevision() const noexcept { return programRevision_.load(std::memory_order_acquire); }
     struct VersionedProgram { NoiseProgram program;std::uint64_t revision; };

@@ -115,6 +115,9 @@ public:
     NoiseProgram program() const { return programs_.snapshot(); }
     std::uint64_t programRestoreEpoch() const noexcept { return programs_.programRevision(); }
     ProgramStore::VersionedProgram versionedProgram() const { return programs_.versionedProgram(); }
+    bool editCurveIfRevision(CurveTarget target, std::uint64_t revision, const timeline::Curve& curve) {
+        return programs_.editCurveIfRevision(target, revision, curve);
+    }
     template <typename Edit> bool editLayerIfRevision(std::size_t index,std::uint64_t revision,Edit edit) {
         return programs_.editLayerIfRevision(index,revision,edit);
     }

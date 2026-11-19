@@ -14,6 +14,10 @@ Audio render(vox::fx::NoiseProgram p) {
     Audio a{std::vector<float>(frames),std::vector<float>(frames)};
     engine.render(a.left.data(),a.right.data(),frames);return a;
 }
+double distance(const Audio& a,const Audio& b) {
+    if(a.left.empty() || a.left.size()!=b.left.size()) return 0;
+    double delta=0;for(std::size_t i=0;i<a.left.size();++i)delta+=std::abs(a.left[i]-b.left[i]);return delta;
+}
 double rms(const std::vector<float>& a) { double sum=0;for(float x:a)sum+=x*x;return std::sqrt(sum/a.size()); }
 }
 int main() {
@@ -28,8 +32,19 @@ int main() {
     const auto moved=render(shaped);
     check(!dry.left.empty()&&!moved.left.empty(),"render both baseline and shaped trajectory programs");
     check(rms(moved.left)<rms(dry.left)*0.8,"global amplitude trajectory scales layer output");
-    double delta=0;for(std::size_t i=0;i<dry.left.size();++i)delta+=std::abs(dry.left[i]-moved.left[i]);
-    check(delta>1.0,"layer pitch/cutoff trajectories alter generated samples");
+    auto local=base;
+    local.layers[0].pitchCurve=shaped.layers[0].pitchCurve;
+    check(distance(dry,render(local))>1.0,"layer pitch trajectory alone alters samples");
+    auto global=base;
+    global.pitchCurve=vox::fx::timeline::Curve::constant(.9f);
+    check(distance(dry,render(global))>1.0,"Program pitch trajectory alone alters pitched samples");
+    vox::fx::NoiseProgram riser;
+    const auto defaultRiser=render(riser);
+    riser.cutoffCurve=vox::fx::timeline::Curve::constant(.15f);
+    check(distance(defaultRiser,render(riser))>1.0,"Program cutoff trajectory alone alters the noise sweep");
+    riser.cutoffCurve=vox::fx::timeline::Curve::constant(.5f);
+    riser.layers[0].cutoffCurve=vox::fx::timeline::Curve::constant(.15f);
+    check(distance(defaultRiser,render(riser))>1.0,"layer cutoff trajectory alone alters the noise sweep");
     check(rms(moved.right)>rms(moved.left)*8,"global panorama trajectory moves output to the right");
     std::printf("FX curve trajectories: %d failure(s)\n",failures);return failures?1:0;
 }

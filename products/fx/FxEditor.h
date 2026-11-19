@@ -31,6 +31,24 @@ private:
     juce::TextButton close_ { "Close" };
 };
 
+// The Program graph is a separate editor view; these trajectories are
+// structural and do not act as host automation parameters.
+class ProgramCurvePanel final : public juce::Component {
+public:
+    explicit ProgramCurvePanel(FxProcessor&);
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    void refresh();
+    CurveEditor& editor() noexcept { return editor_; }
+    juce::ComboBox& selector() noexcept { return selector_; }
+private:
+    void refreshHint();
+    CurveEditor editor_;
+    vox::ui::VoxComboBox selector_;
+    juce::TextButton undo_ { "Undo" }, redo_ { "Redo" }, reset_ { "Reset curve" };
+    juce::Label hint_;
+};
+
 // An honest FX-01 panel: only controls with working processor bindings are
 // exposed. Additional workspaces are added as their DSP/controller exists.
 class FxPanel final : public juce::Component, private juce::Timer {
@@ -72,6 +90,8 @@ public:
     juce::Button& layerLock(std::size_t index) noexcept { return layerLocks_[index]; }
     juce::ComboBox& effectSelector(std::size_t index) noexcept { return effectsType_[index]; }
     juce::Slider& effectWet(std::size_t index) noexcept { return effectsWet_[index]; }
+    ProgramCurvePanel& programCurves() noexcept { return programCurves_; }
+    juce::Button& programCurvesButton() noexcept { return programCurvesButton_; }
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
 private:
     void timerCallback() override;
@@ -112,6 +132,8 @@ private:
     vox::ui::VoxButton patternEnabled_ { "HOST PATTERN", vox::ui::VoxButton::Type::Toggle };
     std::unique_ptr<juce::ButtonParameterAttachment> patternAttachment_;
     std::array<std::unique_ptr<LayerPanel>, 4> layers_;
+    juce::TextButton programCurvesButton_ { "Program curves" };
+    ProgramCurvePanel programCurves_;
     std::array<vox::ui::VoxComboBox,4> effectsType_;
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;

@@ -60,7 +60,7 @@ int main() {
         check(curve.undo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 1.0f, "curve undo");
         check(curve.redo() && p.program().layers[1].gainCurve.evaluate(0.5f) == 0.25f, "curve redo");
         auto& selector=panel.layerPanel(1).curveSelector();
-        selector.setSelectedId(2,juce::sendNotificationSync);
+        selector.setSelectedId(4,juce::sendNotificationSync);
         check(curve.setCurve(vox::fx::timeline::Curve::constant(.8f))&&
               p.program().layers[1].panCurve.evaluate(.5f)==.8f&&p.program().layers[1].gainCurve.evaluate(.5f)==.25f,
               "pan curve editor updates only pan curve");
@@ -69,9 +69,9 @@ int main() {
         selector.setSelectedId(1,juce::sendNotificationSync);
         check(!curve.undo(),"switching curves clears incompatible undo history");
         auto replacement=p.program();replacement.layers[1].gainCurve=vox::fx::timeline::Curve::constant(.8f);
-        check(p.setProgram(replacement),"replace Program after curve edit");curve.refresh(replacement.layers[1].gainCurve);
+        check(p.setProgram(replacement),"replace Program after curve edit");curve.refresh();
         check(!curve.undo(),"whole Program replacement invalidates stale curve history");
-        curve.setBounds(0,0,100,100);curve.refresh(replacement.layers[1].gainCurve);
+        curve.setBounds(0,0,100,100);curve.refresh();
         const auto source=juce::Desktop::getInstance().getMainMouseSource();const auto now=juce::Time::getCurrentTime();
         auto mouse=[&](juce::Point<float> position){return juce::MouseEvent(source,position,juce::ModifierKeys{},0,0,0,0,0,
             &curve,&curve,now,{8.0f,24.8f},now,1,true);};
@@ -82,6 +82,42 @@ int main() {
         check(p.program().layers[1].gainCurve.evaluate(.5f)==.4f,"stale drag cannot overwrite replaced Program");
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
+    }
+    {
+        using namespace vox::fx;
+        auto processor = std::make_unique<FxProcessor>();
+        FxPanel panel(*processor);
+        panel.setSize(1040,700);
+        auto& toggle = panel.programCurvesButton();
+        auto& curves = panel.programCurves();
+        check(!curves.isVisible() && panel.layerPanel(0).isVisible(), "opens on layer cards");
+        toggle.setToggleState(true,juce::sendNotificationSync);
+        check(curves.isVisible() && !panel.layerPanel(0).isVisible() && curves.editor().getHeight()>100,
+              "Program trajectory view replaces layer cards at the minimum size");
+        processor->outputParameter().setValueNotifyingHost(.4f);
+        for (int id=1; id<=4; ++id) {
+            curves.selector().setSelectedId(id,juce::sendNotificationSync);
+            const float value = static_cast<float>(id)*.15f;
+            check(curves.editor().setCurve(timeline::Curve::constant(value)), "Program trajectory editor applies change");
+        }
+        const auto edited = processor->program();
+        check(edited.amplitudeCurve.evaluate(.5f)==.15f && edited.pitchCurve.evaluate(.5f)==2*.15f &&
+              edited.cutoffCurve.evaluate(.5f)==3*.15f && edited.panoramaCurve.evaluate(.5f)==4*.15f &&
+              edited.layers[0].panCurve.evaluate(.5f)==.5f && std::abs(processor->outputParameter().get()-.4f)<1e-6f,
+              "four Program bindings leave layer and automation values alone");
+        check(curves.editor().resetCurve() && processor->program().panoramaCurve.evaluate(.5f)==.5f,
+              "Reset returns the selected trajectory to neutral");
+        check(curves.editor().undo() && processor->program().panoramaCurve.evaluate(.5f)==4*.15f,
+              "Program reset is undoable");
+        auto state = save(*processor);
+        auto recalled = std::make_unique<FxProcessor>();
+        recalled->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
+        check(recalled->program().panoramaCurve.evaluate(.5f)==4*.15f &&
+              recalled->program().amplitudeCurve.evaluate(.5f)==.15f, "Program curves round trip through host state");
+        processor->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
+        check(!curves.editor().redo(), "Program restore invalidates curve actions from the old revision");
+        toggle.setToggleState(false,juce::sendNotificationSync);
+        check(!curves.isVisible() && panel.layerPanel(0).isVisible(), "layer cards remain accessible");
     }
     {
         auto generated = std::make_unique<vox::fx::FxProcessor>();

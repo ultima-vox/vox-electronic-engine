@@ -1,6 +1,7 @@
 #include "engine/ProgramStore.h"
 #include <atomic>
 #include <cstdio>
+#include <memory>
 #include <thread>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -14,7 +15,7 @@ int main(){
     auto fillCurve=[](vox::fx::timeline::Curve& c){c.count=16;for(int i=0;i<16;++i)c.nodes[static_cast<std::size_t>(i)]={static_cast<float>(i)/15.0f,static_cast<float>(i%2),vox::fx::timeline::Shape::smooth};};
     for(auto& layer:largest.layers){fillCurve(layer.gainCurve);fillCurve(layer.panCurve);fillCurve(layer.pitchCurve);fillCurve(layer.cutoffCurve);}
     fillCurve(largest.amplitudeCurve);fillCurve(largest.pitchCurve);fillCurve(largest.cutoffCurve);fillCurve(largest.panoramaCurve);
-    check(store.publish(largest)&&store.tryRead(result,seen)&&result.panoramaCurve.count==16,"largest v3 Program fits the fixed audio publication buffer");
+    check(store.publish(largest)&&store.tryRead(result,seen)&&result.panoramaCurve.count==16,"largest v4 Program fits the fixed audio publication buffer");
     auto invalid=store.snapshot();invalid.layers[0].gain=2;
     check(!store.publish(invalid)&&!store.tryRead(result,seen),"invalid publication rejected");
     auto testProgram=store.snapshot(); testProgram.layers[0].gain=.25f;
@@ -52,6 +53,32 @@ int main(){
         check(racing.snapshot().layers[0].pan==-.75f,"stale concurrent edits never overwrite replacement");
         const auto current=racing.versionedProgram();
         check(current.revision==racing.programRevision()&&current.program.layers[0].pan==-.75f,"revision and Program snapshot coherent");
+    }
+    {
+        using namespace vox::fx;
+        auto curves = std::make_unique<ProgramStore>();
+        const auto start = curves->versionedProgram();
+        const CurveKind kinds[] {CurveKind::gain, CurveKind::pitch, CurveKind::cutoff, CurveKind::pan};
+        for (std::size_t i=0;i<4;++i) {
+            check(curves->editCurveIfRevision({std::nullopt,kinds[i]},start.revision,
+                    timeline::Curve::constant(static_cast<float>(i+1)/16)), "edit Program trajectory");
+        }
+        check(curves->editCurveIfRevision({2,CurveKind::pan},start.revision,timeline::Curve::constant(.9f)),
+              "edit layer trajectory through same guarded path");
+        NoiseProgram audio; std::uint64_t sequence=0;
+        check(curves->tryRead(audio,sequence) && audio.amplitudeCurve.evaluate(.5f)==.0625f &&
+              audio.pitchCurve.evaluate(.5f)==.125f && audio.cutoffCurve.evaluate(.5f)==.1875f &&
+              audio.panoramaCurve.evaluate(.5f)==.25f && audio.layers[2].panCurve.evaluate(.5f)==.9f &&
+              audio.layers[0].panCurve.evaluate(.5f)==.5f && curves->programRevision()==start.revision,
+              "all four targets and the selected layer reach audio without invalidating undo");
+        const auto invalidCurve=timeline::Curve::constant(2);
+        check(!curves->editCurveIfRevision({std::nullopt,CurveKind::pan},start.revision,invalidCurve) &&
+              !curves->editCurveIfRevision({4,CurveKind::pan},start.revision,timeline::Curve::constant(.9f)) &&
+              !curves->editCurveIfRevision({std::nullopt,static_cast<CurveKind>(255)},start.revision,timeline::Curve::constant(.9f)) &&
+              !curves->tryRead(audio,sequence), "invalid edits do not change the audio publication");
+        check(curves->publish(start.program), "restore Program after scoped curve edits");
+        check(!curves->editCurveIfRevision({std::nullopt,CurveKind::gain},start.revision,timeline::Curve::constant(.9f)) &&
+              curves->snapshot().amplitudeCurve.evaluate(.5f)==1, "stale Program edit cannot overwrite a restore");
     }
     (void) store.tryRead(result,seen); // consume the pre-stress edit
     constexpr int iterations=30000;std::atomic<bool> done{false};
