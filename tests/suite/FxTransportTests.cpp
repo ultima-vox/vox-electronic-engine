@@ -19,6 +19,7 @@ int main(){
     position.hasSample=true;position.sample=100;position.ppq=0;
     check(!tracker.update(position,48000,480),"switch to sample timeline without false seek");
     position.sample=580;position.ppq=8;check(!tracker.update(position,48000,480),"sample continuity has precedence over PPQ");
+    check(tracker.musicalDiscontinuity(),"absolute bar transitions can still observe the PPQ jump");
     position.sample=1061;check(tracker.update(position,48000,480),"sample discontinuity detected");
     tracker.unavailable();position.sample=10000;check(!tracker.update(position,48000,480),"missing host resets tracking");
     tracker.unavailable();position.hasSample=false;position.ppq=3;position.tempo=120;

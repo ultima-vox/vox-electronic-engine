@@ -16,13 +16,16 @@ struct Position {
 // resets history rather than inferring a stop or a seek.
 class Tracker {
 public:
-    void unavailable() noexcept { known_=playing_=sampleExpected_=ppqExpected_=false; }
+    void unavailable() noexcept { known_=playing_=sampleExpected_=ppqExpected_=ppqJumped_=false; }
+    bool musicalDiscontinuity() const noexcept { return ppqJumped_; }
     bool update(const Position& p,double rate,int blockSize) noexcept {
         const bool stopped=known_&&playing_&&!p.playing;
         bool jumped=false;
+        ppqJumped_=false;
         if(known_&&playing_&&p.playing){
+            ppqJumped_=ppqExpected_&&p.hasPpq&&std::isfinite(p.ppq)&&std::abs(p.ppq-nextPpq_)>=.125;
             if(sampleExpected_&&p.hasSample)jumped=p.sample!=nextSample_;
-            else if(ppqExpected_&&p.hasPpq&&std::isfinite(p.ppq))jumped=std::abs(p.ppq-nextPpq_)>=.125;
+            else jumped=ppqJumped_;
         }
         const bool sizeValid=blockSize>=0;
         sampleExpected_=p.playing&&p.hasSample&&sizeValid&&
@@ -38,7 +41,7 @@ public:
         return stopped||jumped;
     }
 private:
-    bool known_=false,playing_=false,sampleExpected_=false,ppqExpected_=false;
+    bool known_=false,playing_=false,sampleExpected_=false,ppqExpected_=false,ppqJumped_=false;
     std::int64_t nextSample_=0;
     double nextPpq_=0;
 };

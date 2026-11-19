@@ -531,6 +531,30 @@ int main() {
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
 
     {
+        auto fx=std::make_unique<vox::fx::FxProcessor>();TestPlayHead host;
+        fx->setPlayHead(&host);fx->prepareToPlay(8000,256);
+        auto program=fx->program();program.mode=vox::fx::PlayMode::transition;program.bars=1;
+        check(fx->setProgram(program),"configure processor Transition");
+        // Start 256 samples before the target (PPQ 4.5), and trigger at offset 64.
+        juce::AudioPlayHead::PositionInfo pos;
+        pos.setIsPlaying(true);pos.setBpm(120);pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});
+        pos.setPpqPositionOfLastBarStart(.5);pos.setPpqPosition(4.5-256./4000);
+        pos.setTimeInSamples(0);host.position=pos;
+        juce::AudioBuffer<float> audio(2,256);juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1,60,.8f),64);
+        block(*fx,audio,midi);
+        check(audio.getMagnitude(0,0,64)==0 && audio.getMagnitude(0,65,191)>0,
+              "aligned processor note honors its MIDI sample offset");
+        pos.setTimeInSamples(256);pos.setPpqPosition(4.5);pos.setPpqPositionOfLastBarStart(4.5);host.position=pos;
+        block(*fx,audio,midi);
+        check(audio.getMagnitude(0,0,256)==0 && fx->audioTelemetry().events==0,
+              "aligned processor note stops on shifted host bar line");
+        pos.setTimeInSamples(512);pos.setPpqPosition(4.5+256./4000);pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{3,4});host.position=pos;
+        midi.addEvent(juce::MidiMessage::noteOn(1,60,.8f),64);block(*fx,audio,midi);
+        check(fx->musicalClockUnavailable() && fx->audioTelemetry().events==0,"transition rejects unsupported meter");
+        fx->setPlayHead(nullptr);
+    }
+    {
         auto busy=std::make_unique<vox::fx::FxProcessor>();busy->prepareToPlay(48000,512);
         juce::AudioBuffer<float> shortBlock(2,64);juce::MidiBuffer notes;
         for(int i=0;i<13;++i)notes.addEvent(juce::MidiMessage::noteOn(1,48+i,static_cast<juce::uint8>(100)),0);

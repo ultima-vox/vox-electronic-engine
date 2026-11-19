@@ -57,6 +57,12 @@ int main(){
     check(delayEnergy>0,"delay tail contains event audio");
     s.effects[1]={vox::fx::effects::Type::delay,1,0};
     check(vox::fx::offline::renderWav(program,s,wav)&&wav.size()==56+(frames+s.sampleRate)*8,"serial delay tails accumulate");
+    s.effects[0]={vox::fx::effects::Type::delay,1,1};s.effects[1]={};
+    check(vox::fx::offline::renderWav(program,s,wav)&&wav.size()==56+(frames+10*s.sampleRate)*8,
+          "feedback delay export includes its full bounded tail");
+    double secondEcho=0;
+    for(std::size_t i=s.sampleRate;i<s.sampleRate+frames;++i)secondEcho+=std::abs(std::bit_cast<float>(word(56+i*8)));
+    check(secondEcho>0,"feedback survives in WAV beyond the old half-second limit");
     s.effects[0]={vox::fx::effects::Type::chorus,1,.7f};s.effects[1]={};
     check(vox::fx::offline::renderWav(program,s,wav)&&wav.size()==56+(frames+s.sampleRate)*8,"chorus WAV with tail");
     auto chorused=std::make_unique<vox::fx::NoiseRiser>();chorused->prepare(s.sampleRate);chorused->setProgram(program);chorused->noteOn(1,s.note,s.velocity,s.duration);

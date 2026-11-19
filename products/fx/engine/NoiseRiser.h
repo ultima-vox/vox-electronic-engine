@@ -15,6 +15,7 @@ namespace vox::fx {
 // the layer settings at note-on; no pointer into UI or host state is retained.
 enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant, glitch, granular };
 enum class PlayMode : std::uint8_t { oneShot, gate, continuous, loop, sequence, transition };
+enum class TriggerSource : std::uint8_t { midi, pattern, preview };
 enum class TriggerPolicy : std::uint8_t { overlap, ignore, replace };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
@@ -77,11 +78,20 @@ public:
     void setMusicalClockAvailable(bool available, double bpm = 120.0) noexcept {
         available = available && std::isfinite(bpm) && bpm >= 1.0 && bpm <= 1000.0;
         musicalClockAvailable_ = available;
+        if (!available) barGrid_ = {};
         if (available) tempo_ = bpm;
         if (!available) {
             for (auto& v : voices_) if (v.active && v.program.bars != 0) beginRelease(v);
             for (auto& v : retiring_) if (v.active && v.program.bars != 0) beginRelease(v);
         }
+    }
+    void setBarGrid(timeline::BarGrid grid) noexcept {
+        barGrid_ = grid;
+        blockOffset_ = 0;
+        if (!grid.valid()) releaseAlignedTransitions();
+    }
+    void releaseAlignedTransitions() noexcept {
+        for (auto& v : voices_) if (v.active && v.targetSpan > 0) beginRelease(v);
     }
     static double samplePlaybackStep(double sourceRate,double outputRate,double pitchRatio) noexcept {
         return sourceRate/outputRate*pitchRatio;
@@ -90,6 +100,7 @@ public:
         releaseSampleLeases();
         rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
         (void)setTempo(120.0); tempo_ = 120.0; musicalClockAvailable_ = false;
+        barGrid_ = {}; blockOffset_ = 0; midiKeys_ = {};
         for (std::size_t i = 0; i < coefficients_.size(); ++i) {
             const double phase = static_cast<double>(i) / tableIntervals;
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
@@ -149,14 +160,23 @@ public:
     // Up to eight active events plus four 5 ms retirement fades. A steal
     // chooses the oldest active event and a free retirement slot; if all four
     // fades are occupied the incoming event is dropped deterministically.
-    bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false, std::uint64_t expectedSampleToken = 0) noexcept {
+    bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false, std::uint64_t expectedSampleToken = 0,
+                TriggerSource source = TriggerSource::midi) noexcept {
         timeline::SecondsClock clock;
         timeline::BarsClock barsClock;
-        if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
-            !clock.start(duration, rate_)) return false;
+        if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f) return false;
+        // Every valid MIDI key-down occupies a FIFO position, even if its
+        // audio voice is later stolen, replaced, finite, or never started.
+        // Otherwise that key-up would release a newer overlapping voice.
+        const auto ticket = source == TriggerSource::midi ? ++midiKey(channel, note).issued : 0;
+        if (!clock.start(duration, rate_)) return false;
         if (program_.bars != 0 && (!musicalClockAvailable_ || !barsClock.start(program_.bars,4,4,rate_))) return false;
+        const bool aligned = program_.mode == PlayMode::transition && program_.bars != 0;
+        if (aligned && !barGrid_.valid()) return false;
+        const double start = barGrid_.at(blockOffset_);
+        const double target = aligned ? barGrid_.target(start, program_.bars) : start;
         if (program_.triggerPolicy == TriggerPolicy::ignore)
-            for (const auto& voice : voices_) if (voice.active && voice.channel == channel && voice.note == note) return false;
+            for (const auto& voice : voices_) if (voice.active && voice.channel == channel && voice.note == note && voice.source == source) return false;
         Voice* slot = nullptr;
         for (auto& voice : voices_) if (!voice.active) { slot = &voice; break; }
         const bool stealing=slot==nullptr;
@@ -182,7 +202,7 @@ public:
         // Replace only after all bounded resources and optional sample content
         // are secured, so a rejected NoteOn cannot disturb the old owner.
         if(program_.triggerPolicy==TriggerPolicy::replace)
-            for(auto& voice:voices_)if(voice.active&&voice.channel==channel&&voice.note==note)beginRelease(voice);
+            for(auto& voice:voices_)if(voice.active&&voice.channel==channel&&voice.note==note&&voice.source==source)beginRelease(voice);
         const auto slotIndex=static_cast<std::size_t>(slot-voices_.data());
         if(stealing){
             auto& retired=retiring_[retiringIndex];retired=*slot;beginRelease(retired);
@@ -192,10 +212,16 @@ public:
         }
         if(userSample)(void)sampleStore_->transfer(incoming,sampleLeases_[slotIndex]);
         *slot = {};
-        slot->active = true; slot->channel = channel; slot->note = note;
+        slot->active = true; slot->channel = channel; slot->note = note; slot->source = source; slot->noteTicket = ticket;
         slot->velocity = std::clamp(velocity, 0.0f, 1.0f);
         slot->clock = clock; slot->barsClock = barsClock;
         slot->duration = program_.bars ? program_.bars * 4.0 * 60.0 / tempo_ : duration; slot->program = program_;
+        slot->target = target; slot->targetSpan = target - start;
+        if (aligned) slot->duration = slot->targetSpan * 60.0 / tempo_;
+        // Pattern/preview send no NoteOff. They audition one bounded pass,
+        // without stealing MIDI ownership for the same channel/note.
+        if (source != TriggerSource::midi && isHeldMode(slot->program.mode))
+            slot->program.mode = PlayMode::oneShot;
         slot->serial = ++serial_;
         int enabled = 0;
         for (std::size_t i = 0; i < slot->layers.size(); ++i) {
@@ -219,18 +245,22 @@ public:
     unsigned activeGrainCount() const noexcept {
         return activeGrains_;
     }
-    // A MIDI NoteOff releases exactly one held owner: FIFO (oldest serial)
-    // among matching channel/note voices that have not already entered release.
-    // One Shot and Transition ignore ordinary NoteOff.
+    // Consume exactly one MIDI key-down on this channel/note. A finite or
+    // already retired owner still consumes its own key-up. No event IDs are
+    // assumed to exist in MIDI 1.0; identical keys are paired in wire order.
     void noteOff(int channel, int note) noexcept {
         if(channel<1||channel>16||note<0||note>127)return;
-        Voice* oldest=nullptr;
-        for(auto& v:voices_)if(v.active&&v.channel==channel&&v.note==note&&v.releaseRemaining==0&&
-            (v.program.mode==PlayMode::gate||v.program.mode==PlayMode::continuous||v.program.mode==PlayMode::loop)&&
-            (oldest==nullptr||v.serial<oldest->serial))oldest=&v;
-        if(oldest)beginRelease(*oldest);
+        auto& key = midiKey(channel, note);
+        if (key.released == key.issued) return;
+        const auto ticket = ++key.released;
+        for (auto& v : voices_)
+            if (v.active && v.channel == channel && v.note == note && v.source == TriggerSource::midi &&
+                v.noteTicket == ticket && v.releaseRemaining == 0 && isHeldMode(v.program.mode)) { beginRelease(v); break; }
     }
     void allSoundOff(int channel) noexcept {
+        if (channel < 0 || channel > 16) return;
+        if (channel == 0) midiKeys_ = {};
+        else midiKeys_[static_cast<std::size_t>(channel - 1)] = {};
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
         for(auto& v:retiring_)if(v.active&&(channel==0||v.channel==channel))beginRelease(v);
     }
@@ -239,13 +269,15 @@ public:
     void render(float* left, float* right, int count) noexcept {
         for (int i = 0; i < count; ++i) {
             double l = 0, r = 0;
+            const double ppq = barGrid_.at(blockOffset_);
+            if (barGrid_.valid()) ++blockOffset_;
             for (std::size_t voice=0; voice<voices_.size(); ++voice) {
-                tick(voices_[voice], l, r, voice);
+                tick(voices_[voice], l, r, voice, ppq);
                 if(!voices_[voice].active&&sampleLeases_[voice].data())sampleStore_->release(sampleLeases_[voice]);
             }
             for(std::size_t i=0;i<retiring_.size();++i){
                 const auto leaseIndex=voices_.size()+i;
-                tick(retiring_[i],l,r,leaseIndex);
+                tick(retiring_[i],l,r,leaseIndex,ppq);
                 if(!retiring_[i].active&&sampleLeases_[leaseIndex].data())sampleStore_->release(sampleLeases_[leaseIndex]);
             }
             mixGrains(l, r);
@@ -254,6 +286,13 @@ public:
         }
     }
 private:
+    struct MidiKey { std::uint64_t issued = 0, released = 0; };
+    MidiKey& midiKey(int channel, int note) noexcept {
+        return midiKeys_[static_cast<std::size_t>(channel - 1)][static_cast<std::size_t>(note)];
+    }
+    static bool isHeldMode(PlayMode mode) noexcept {
+        return mode == PlayMode::gate || mode == PlayMode::continuous || mode == PlayMode::loop;
+    }
     struct LayerState {
         std::uint32_t rng = 1;
         double lowpass = 0, dcInput = 0, dcOutput = 0, phase = 0, subPhase = 0;
@@ -272,11 +311,13 @@ private:
     struct Voice {
         bool active = false;
         int channel = 0, note = 0;
+        TriggerSource source = TriggerSource::midi;
         float velocity = 0;
-        std::uint64_t serial = 0;
+        std::uint64_t serial = 0, noteTicket = 0;
         timeline::SecondsClock clock;
         timeline::BarsClock barsClock;
         double duration = 4.0, layerScale = 1.0, continuousPhase = 0.0;
+        double target = 0, targetSpan = 0, lastPhase = 0;
         bool continuousStarted = false;
         int releaseRemaining = 0, releaseLength = 0;
         NoiseProgram program;
@@ -287,10 +328,20 @@ private:
         v.releaseLength = std::max(1, static_cast<int>(rate_ * 0.005));
         v.releaseRemaining = v.releaseLength;
     }
-    void tick(Voice& v, double& left, double& right, std::size_t voiceIndex) noexcept {
+    void tick(Voice& v, double& left, double& right, std::size_t voiceIndex, double ppq) noexcept {
         if (!v.active) return;
         double eventPhase = 0;
-        bool advanced = v.program.bars ? v.barsClock.next(tempo_,eventPhase) : v.clock.next(eventPhase);
+        bool advanced;
+        if (v.targetSpan > 0) {
+            // Freeze the last phase only during interruption fades (stop,
+            // seek, clock loss or steal). The oscillator itself keeps running.
+            advanced = v.releaseRemaining != 0 || ppq < v.target - timeline::BarGrid::tolerance;
+            if (advanced && v.releaseRemaining == 0)
+                v.lastPhase = std::max(v.lastPhase, 1.0 - (v.target - ppq) / v.targetSpan);
+            eventPhase = v.lastPhase;
+        } else {
+            advanced = v.program.bars ? v.barsClock.next(tempo_,eventPhase) : v.clock.next(eventPhase);
+        }
         bool heldSustain=false;
         if(!advanced) {
             switch(v.program.mode) {
@@ -632,8 +683,11 @@ private:
     std::array<Grain, 64> grains_ {};
     unsigned grainLength_ = 2, grainInterval_ = 1, activeGrains_ = 0;
     NoiseProgram program_;
+    std::array<std::array<MidiKey,128>,16> midiKeys_ {};
     double tempo_ = 120.0;
     bool musicalClockAvailable_ = false;
+    timeline::BarGrid barGrid_;
+    std::uint64_t blockOffset_ = 0;
     double rate_ = 44100.0,glitchGridIncrement_=120.0/(15.0*44100.0);
     std::uint64_t serial_ = 0;
     std::uint32_t droppedEvents_=0;

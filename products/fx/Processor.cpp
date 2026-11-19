@@ -238,6 +238,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // block may still start (including audition while transport is stopped).
     bool positionAvailable = false, patternHostReady=false, hostPlaying=false, musicalClockReady=false;
     double hostPpq=0.0,hostBpm=0.0,glitchTempo=120.0;
+    timeline::BarGrid barGrid;
     if (auto* host = getPlayHead()) {
         if (const auto position = host->getPosition()) {
             positionAvailable = true;
@@ -249,6 +250,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             musicalClockReady=playing && ppq.hasValue() && std::isfinite(*ppq) && bpm.hasValue() &&
                 std::isfinite(*bpm) && *bpm>=1.0 && *bpm<=1000.0 && signature.hasValue() &&
                 signature->numerator==4 && signature->denominator==4;
+            if (musicalClockReady) {
+                const auto lastBar = position->getPpqPositionOfLastBarStart();
+                barGrid = timeline::BarGrid::from(*ppq, *bpm, preparedSampleRate(), lastBar.orFallback(0.0));
+            }
             if(playing && ppq.hasValue() && bpm.hasValue() && supportedSignature) {
                 hostPpq=*ppq;hostBpm=*bpm;patternHostReady=true;
             }
@@ -258,11 +263,13 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             current.hasPpq=ppq.hasValue();if(current.hasPpq)current.ppq=*ppq;
             current.hasTempo=bpm.hasValue();if(current.hasTempo)current.tempo=*bpm;
             if(transport_.update(current,preparedSampleRate(),buffer.getNumSamples()))engine_.allSoundOff(0);
+            else if(transport_.musicalDiscontinuity())engine_.releaseAlignedTransitions();
         }
     }
     if (!positionAvailable) transport_.unavailable();
     (void)engine_.setTempo(glitchTempo);
     engine_.setMusicalClockAvailable(musicalClockReady,glitchTempo);
+    engine_.setBarGrid(barGrid);
     capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
     if (panicPending_.exchange (false, std::memory_order_acquire)) {
         engine_.allSoundOff (0);
@@ -275,11 +282,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         (void) pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
         (void) macroRuntime_.setConfig(audioMacroConfig_);
     }
-    musicalClockUnavailable_.store(!musicalClockReady,std::memory_order_relaxed);
+    musicalClockUnavailable_.store(!musicalClockReady || (audioProgram_.mode == PlayMode::transition && !barGrid.valid()),
+                                   std::memory_order_relaxed);
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
-    if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection); }
+    if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection,TriggerSource::preview); }
     const int size = buffer.getNumSamples();
     const bool wantsPattern=patternEnabled_->get()||audioProgram_.mode==PlayMode::sequence;
     bool patternUnavailable=wantsPattern&&!patternHostReady;
@@ -321,7 +329,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         const bool scheduled=pattern::forEachTrigger(audioPatternSchedule_,audioPattern_.bars,hostPpq,hostBpm,preparedSampleRate(),size,
             [&] (int offset,std::uint8_t note,std::uint8_t velocity) noexcept {
                 processMidiThrough(offset);renderTo(offset);
-                {const auto selection=samples_.selection();engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection);}
+                {const auto selection=samples_.selection();engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection,TriggerSource::pattern);}
             });
         patternUnavailable=!scheduled;
         patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);

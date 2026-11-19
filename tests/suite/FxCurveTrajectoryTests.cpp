@@ -2,13 +2,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace {
 struct Audio { std::vector<float> left, right; };
 Audio render(vox::fx::NoiseProgram p) {
     constexpr int frames=24000;
-    vox::fx::NoiseRiser engine;engine.prepare(48000);engine.setProgram(p);
+    auto owner=std::make_unique<vox::fx::NoiseRiser>();auto& engine=*owner;engine.prepare(48000);engine.setProgram(p);
     if(!engine.noteOn(1,69,0.8f,0.5))return {};
     Audio a{std::vector<float>(frames),std::vector<float>(frames)};
     engine.render(a.left.data(),a.right.data(),frames);return a;

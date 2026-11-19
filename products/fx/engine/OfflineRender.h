@@ -39,22 +39,36 @@ struct Capture {
 inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(static_cast<std::uint8_t>(x));out.push_back(static_cast<std::uint8_t>(x>>8));}
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
 inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++i)out.push_back(static_cast<std::uint8_t>(s[i]));}
-// Worker thread only. Renders the same event engine and shared effects;
-// allow one second of short-effect decay, 0.5 s per serial delay and
-// two seconds per serial reverb.
-// Output is transactional:
-// invalid input, cancellation or non-finite DSP leave the old bytes unchanged.
+// A WAV exports one bounded audition of the current sound, not the trigger
+// pattern or host tempo map. Fixed tempo and PPQ zero define musical exports.
+// Bound the in-memory PCM payload before allocating it.
+inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& settings) noexcept {
+    if (!program.valid() || !settings.valid()) return 0;
+    const double duration = program.bars ? program.bars * 240.0 / settings.tempo : settings.duration;
+    bool shortTail = false;
+    double serialTail = 0;
+    for (const auto& effect : settings.effects) {
+        switch (effect.type) {
+            case effects::Type::lowpass: case effects::Type::phaser:
+            case effects::Type::flanger: case effects::Type::chorus: shortTail = true; break;
+            case effects::Type::delay: serialTail += effect.amount > 0 ? effects::feedbackDelayTailSeconds : 0.5; break;
+            case effects::Type::reverb: serialTail += 2.0; break;
+            default: break;
+        }
+    }
+    const double total = std::ceil(duration * settings.sampleRate) +
+        std::ceil((serialTail + (shortTail ? 1.0 : 0.0)) * settings.sampleRate);
+    const unsigned align = settings.format == WavFormat::float32 ? 8 : 6;
+    constexpr unsigned maxPayload = 128u * 1024u * 1024u;
+    return total <= maxPayload / align ? static_cast<std::uint32_t>(total) : 0;
+}
+
+// Worker thread only. Output is transactional: invalid input, cancellation or
+// non-finite DSP leave the old bytes unchanged.
 inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
                           const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture) {
-    if(!program.valid()||program.bars != 0||!settings.valid())return false; // bar export not implemented
-    bool hasShortTail=false;unsigned delays=0,reverbs=0;
-    for(const auto& effect:settings.effects){
-        if(effect.type==effects::Type::lowpass||effect.type==effects::Type::phaser||effect.type==effects::Type::flanger||effect.type==effects::Type::chorus)hasShortTail=true;
-        if(effect.type==effects::Type::delay)++delays;
-        if(effect.type==effects::Type::reverb)++reverbs;
-    }
-    const auto tail=std::ceil(settings.sampleRate*((hasShortTail?1.0:0.0)+.5*delays+2.0*reverbs));
-    const auto frames=static_cast<std::uint32_t>(std::ceil(static_cast<double>(settings.duration)*settings.sampleRate)+tail);
+    const auto frames = frameCount(program, settings);
+    if (frames == 0 || (cancel && cancel->load(std::memory_order_relaxed))) return false;
     const bool floating=settings.format==WavFormat::float32;
     const std::uint16_t bits=floating?32:24, bytesPerSample=bits/8, blockAlign=static_cast<std::uint16_t>(2*bytesPerSample);
     const auto dataBytes=frames*blockAlign;
@@ -68,9 +82,14 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
     sample::Store sampleStore; // outlives engine and its event leases
     auto engine=std::make_unique<NoiseRiser>();engine->prepare(settings.sampleRate);
     if(!engine->setTempo(settings.tempo))return false;
+    const auto grid = timeline::BarGrid::from(0, settings.tempo, settings.sampleRate);
+    if (program.bars) {
+        engine->setMusicalClockAvailable(true, settings.tempo);
+        engine->setBarGrid(grid);
+    }
     const bool useUser=capture&&capture->useUserSample;
     if(useUser && (!sampleStore.publish(capture->sample,capture->sampleRate)||!engine->attachSampleStore(&sampleStore)))return false;
-    if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser))return false;
+    if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser,0,TriggerSource::preview))return false;
     effects::Chain chain;if(!chain.prepare(settings.sampleRate))return false;
     macro::Runtime macroRuntime;if(!macroRuntime.prepare(settings.sampleRate)||!macroRuntime.setConfig(settings.macroRoutes))return false;
     for(std::size_t i=0;i<settings.effects.size();++i)if(!chain.set(i,settings.effects[i]))return false;

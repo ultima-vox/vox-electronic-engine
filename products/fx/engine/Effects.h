@@ -8,6 +8,7 @@
 
 namespace vox::fx::effects {
 // Compact, bounded effects; advanced controls and quality modes remain.
+inline constexpr double feedbackDelayTailSeconds = 10.0;
 enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, reverb, count };
 struct Settings {
     Type type=Type::bypass;
@@ -183,8 +184,8 @@ private:
             // ten-second silence cap bounds even the maximum-feedback tail;
             // logical retirement avoids clearing the delay buffer on RT.
             if(std::abs(l)>1.0e-12||std::abs(r)>1.0e-12)state.silentSamples=0;
-            else if(state.silentSamples<static_cast<std::size_t>(rate_*10))++state.silentSamples;
-            if(state.silentSamples>=static_cast<std::size_t>(rate_*10)){
+            else if(state.silentSamples<static_cast<std::size_t>(rate_*feedbackDelayTailSeconds))++state.silentSamples;
+            if(state.silentSamples>=static_cast<std::size_t>(rate_*feedbackDelayTailSeconds)){
                 state.write=state.age=0;l=r=0;break;
             }
             const double length=std::round(rate_*(.05+.45*amount));

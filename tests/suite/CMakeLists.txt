@@ -232,6 +232,7 @@ add_test(NAME suite_fx_timeline_tests COMMAND suite_fx_timeline_tests)
 set_tests_properties(suite_fx_timeline_tests PROPERTIES LABELS suite)
 
 add_executable(suite_fx_bar_event_tests FxBarEventTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_bar_event_tests)
 target_include_directories(suite_fx_bar_event_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_bar_event_tests COMMAND suite_fx_bar_event_tests)
 set_tests_properties(suite_fx_bar_event_tests PROPERTIES LABELS suite)

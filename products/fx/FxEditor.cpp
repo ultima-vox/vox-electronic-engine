@@ -107,8 +107,8 @@ FxPanel::FxPanel (FxProcessor& processor)
     addAndMakeVisible (family_);
     eventBars_.addItem("Seconds",1); eventBars_.addItem("1 bar",2); eventBars_.addItem("2 bars",3);
     eventBars_.addItem("4 bars",4); eventBars_.addItem("8 bars",5); eventBars_.addItem("16 bars",6);
-    eventBars_.setTitle("One-shot duration mode");
-    eventBars_.setTooltip("Bar notes require playing host, PPQ, tempo and explicit 4/4; WAV export is unavailable for bars");
+    eventBars_.setTitle("Event timeline");
+    eventBars_.setTooltip("Live bar notes require playing host, PPQ, tempo and explicit 4/4. WAV uses a fixed tempo and starts on a bar line.");
     eventBars_.onChange=[this] { constexpr int values[]{0,1,2,4,8,16}; const int id=eventBars_.getSelectedId();
         if(id>=1&&id<=6)(void)processor_.setEventBars(values[id-1]); };
     const auto initialBars=processor_.program().bars;
@@ -117,7 +117,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     addAndMakeVisible(eventBars_);
     playMode_.addItem("One Shot",1);playMode_.addItem("Gate",2);playMode_.addItem("Continuous",3);
     playMode_.addItem("Loop",4);playMode_.addItem("Sequence",5);playMode_.addItem("Transition",6);
-    playMode_.setTitle("Play mode");playMode_.setTooltip("One Shot/Transition end automatically; Gate holds the final source state, Continuous evolves a slow free-running trajectory, Loop replays the bounded timeline; matching NoteOff releases held modes. Sequence uses Host Pattern.");
+    playMode_.setTitle("Play mode");playMode_.setTooltip("Transition in bars ends on a host bar line; a mid-bar note shortens the first bar. In seconds it is free-running. Gate, Continuous and Loop release on MIDI NoteOff. Preview plays one pass; Sequence uses Host Pattern.");
     triggerPolicy_.addItem("Overlap",1);triggerPolicy_.addItem("Ignore",2);triggerPolicy_.addItem("Replace",3);
     triggerPolicy_.setTitle("Repeated NoteOn policy");triggerPolicy_.setTooltip("Overlap voices, ignore a duplicate channel/note, or fade-replace that same channel/note");
     const auto initialProgram=processor_.program();
@@ -184,7 +184,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     midiExport_.setTitle("Export trigger pattern MIDI");
     midiExport_.setTooltip("Export one 4/4 pattern loop at the latest host tempo (120 BPM if unavailable); trigger notes, not audio");
     midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
-    wavExport_.setTitle("Export current sound as WAV");
+    wavExport_.setTitle("Export one audition as WAV");
     wavExport_.setTooltip("Export C4 at velocity 100%, 48 kHz, 24-bit WAV; click again to cancel rendering");
     wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel();else exportWav();};
     addAndMakeVisible(wavExport_);
@@ -489,11 +489,15 @@ void FxPanel::exportWav()
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","Could not capture the sound for export.");return;
     }
+    if (offline::frameCount(capture->program, capture->settings) == 0) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "WAV export failed", "This audition exceeds the 128 MiB WAV audio limit or has invalid settings.");return;
+    }
     if(capture->useUserSample && capture->sample.empty()) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","The selected granular sample is unavailable. Reimport it or choose the built-in source.");return;
     }
-    exportChooser_=std::make_unique<juce::FileChooser>("Export current sound as WAV",
+    exportChooser_=std::make_unique<juce::FileChooser>("Export one audition as WAV",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.wav"),"*.wav");
     midiExport_.setEnabled(false);wavExport_.setEnabled(false);
     exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
@@ -592,7 +596,7 @@ void FxPanel::timerCallback()
     eventBars_.setSelectedId(barsId,juce::dontSendNotification);
     playMode_.setSelectedId(static_cast<int>(program.mode)+1,juce::dontSendNotification);
     triggerPolicy_.setSelectedId(static_cast<int>(program.triggerPolicy)+1,juce::dontSendNotification);
-    clockStatus_.setText(program.bars==0?"Seconds":processor_.musicalClockUnavailable()?"Host bar clock unavailable":"Host bar clock ready",juce::dontSendNotification);
+    clockStatus_.setText(program.bars==0?"Seconds":processor_.musicalClockUnavailable()?"Host bar clock unavailable":(program.mode==PlayMode::transition ? "Ends on host bar line" : "Host bar clock ready"),juce::dontSendNotification);
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));

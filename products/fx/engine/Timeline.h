@@ -89,6 +89,24 @@ private:
     std::uint64_t age_ = 0;
 };
 
+// A playing 4/4 block. Anchor at the host's last bar start if supplied;
+// otherwise use the zero-based PPQ grid. Offsets are audio sample offsets.
+struct BarGrid {
+    double ppq = 0, origin = 0, step = 0;
+    static constexpr double tolerance = 1.0e-9; // beat rounding, not a musical snap window
+    static BarGrid from(double ppq, double bpm, double rate, double origin = 0) noexcept {
+        if (!std::isfinite(ppq) || std::abs(ppq) > 1.0e6 || !std::isfinite(origin) ||
+            std::abs(origin) > 1.0e6 || !std::isfinite(bpm) || bpm < 1 || bpm > 1000 ||
+            !std::isfinite(rate) || rate < 8000 || rate > 384000) return {};
+        return { ppq, origin, bpm / (60.0 * rate) };
+    }
+    bool valid() const noexcept { return step > 0; }
+    double at(std::uint64_t offset) const noexcept { return ppq + static_cast<double>(offset) * step; }
+    double target(double onset, unsigned bars) const noexcept {
+        return origin + 4.0 * (std::floor((onset - origin + tolerance) / 4.0) + bars);
+    }
+};
+
 // Bars clock integrates beat increments, so tempo changes affect only future
 // samples and never reinterpret phase already played. Denominator is the
 // notated time-signature denominator (4 = quarter note). Callers explicitly
