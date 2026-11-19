@@ -106,6 +106,13 @@ int main(){
                 written+=count;l={};r={};}
             check(std::abs(rendered[4000]-1.0f)<.001f&&std::abs(rendered[8000]-.75f)<.005f,
                   "delay feedback creates a second echo at the selected repeat level");
+            Chain reuse;check(reuse.prepare(rate)&&reuse.set(0,{Type::delay,1,1}),"delay bank-reuse setup");
+            std::array<float,128> a{},b{};reuse.process(a.data(),b.data(),a.size());a={};b={};a[0]=b[0]=1;
+            for(int block=0;block<45;++block){reuse.process(a.data(),b.data(),a.size());a={};b={};}
+            (void)reuse.set(0,{Type::bypass,1,0});for(int block=0;block<3;++block){reuse.process(a.data(),b.data(),a.size());a={};b={};}
+            (void)reuse.set(0,{Type::delay,1,1});double stale=0;
+            for(int block=0;block<45;++block){reuse.process(a.data(),b.data(),a.size());for(float value:a)stale+=std::abs(value);a={};b={};}
+            check(stale<1e-6,"reused feedback-delay bank does not replay stale samples");
         }
         {
             Chain chorus;check(chorus.prepare(rate)&&chorus.set(0,{Type::chorus,1,.8f}),"chorus prepare");

@@ -55,8 +55,8 @@ struct NoiseProgram {
     }
 };
 
-// Allocation-free one-shot events. Duration is captured at note-on; note-off
-// is ignored in one-shot mode and all-sound-off fades over 5 ms.
+// Allocation-free event engine. Duration is captured at note-on; PlayMode
+// owns the held lifecycle and all-sound-off uses the shared 5 ms fade.
 class NoiseRiser {
 public:
     ~NoiseRiser() { releaseSampleLeases(); }
@@ -219,12 +219,16 @@ public:
     unsigned activeGrainCount() const noexcept {
         return activeGrains_;
     }
-    // Note ownership is the MIDI channel/note pair. One Shot and Transition
-    // deliberately ignore NoteOff; held modes fade only their matching voices.
+    // A MIDI NoteOff releases exactly one held owner: FIFO (oldest serial)
+    // among matching channel/note voices that have not already entered release.
+    // One Shot and Transition ignore ordinary NoteOff.
     void noteOff(int channel, int note) noexcept {
         if(channel<1||channel>16||note<0||note>127)return;
-        for(auto& v:voices_)if(v.active&&v.channel==channel&&v.note==note&&
-            (v.program.mode==PlayMode::gate||v.program.mode==PlayMode::continuous||v.program.mode==PlayMode::loop))beginRelease(v);
+        Voice* oldest=nullptr;
+        for(auto& v:voices_)if(v.active&&v.channel==channel&&v.note==note&&v.releaseRemaining==0&&
+            (v.program.mode==PlayMode::gate||v.program.mode==PlayMode::continuous||v.program.mode==PlayMode::loop)&&
+            (oldest==nullptr||v.serial<oldest->serial))oldest=&v;
+        if(oldest)beginRelease(*oldest);
     }
     void allSoundOff(int channel) noexcept {
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
@@ -272,7 +276,8 @@ private:
         std::uint64_t serial = 0;
         timeline::SecondsClock clock;
         timeline::BarsClock barsClock;
-        double duration = 4.0, layerScale = 1.0;
+        double duration = 4.0, layerScale = 1.0, continuousPhase = 0.0;
+        bool continuousStarted = false;
         int releaseRemaining = 0, releaseLength = 0;
         NoiseProgram program;
         std::array<LayerState, 4> layers {};
@@ -286,12 +291,27 @@ private:
         if (!v.active) return;
         double eventPhase = 0;
         bool advanced = v.program.bars ? v.barsClock.next(tempo_,eventPhase) : v.clock.next(eventPhase);
-        const bool heldMode = v.program.mode==PlayMode::gate || v.program.mode==PlayMode::continuous || v.program.mode==PlayMode::loop;
-        if(!advanced && heldMode && v.releaseRemaining==0) {
-            if(v.program.bars) {
-                advanced = musicalClockAvailable_ && v.barsClock.start(v.program.bars,4,4,rate_) && v.barsClock.next(tempo_,eventPhase);
-            } else {
-                advanced = v.clock.start(v.duration,rate_) && v.clock.next(eventPhase);
+        bool heldSustain=false;
+        if(!advanced) {
+            switch(v.program.mode) {
+                case PlayMode::loop:
+                    if(v.releaseRemaining==0) {
+                        advanced=v.program.bars
+                            ? musicalClockAvailable_ && v.barsClock.start(v.program.bars,4,4,rate_) && v.barsClock.next(tempo_,eventPhase)
+                            : v.clock.start(v.duration,rate_) && v.clock.next(eventPhase);
+                    } else {eventPhase=std::nextafter(1.0,0.0);advanced=true;heldSustain=true;}
+                    break;
+                case PlayMode::gate:
+                    eventPhase=std::nextafter(1.0,0.0);advanced=true;heldSustain=true;break;
+                case PlayMode::continuous:
+                    // Complete the authored attack timeline once, then evolve
+                    // the normalized source position at a slow free-running
+                    // rate. This is procedural sustain, not a one-shot loop.
+                    if(!v.continuousStarted){v.continuousStarted=true;v.continuousPhase=.25;}
+                    else {v.continuousPhase+=.05/rate_;if(v.continuousPhase>=1.0)v.continuousPhase-=1.0;}
+                    eventPhase=.5+.49*std::sin(6.283185307179586*v.continuousPhase);
+                    advanced=true;heldSustain=true;break;
+                default: break;
             }
         }
         if(!advanced){v.active=false;return;}
@@ -335,7 +355,8 @@ private:
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
             const double layerDuration = v.duration * span;
             const double fadeIn = std::min(1.0, t * layerDuration / ((settings.family == NoiseFamily::impact || settings.family == NoiseFamily::laser || settings.family == NoiseFamily::squelch || settings.family == NoiseFamily::metallic) ? 0.001 : 0.01));
-            const double fadeOut = std::min(1.0, (1.0 - t) * layerDuration / 0.02);
+            const bool sustainedMode=v.program.mode==PlayMode::gate||v.program.mode==PlayMode::continuous;
+            const double fadeOut = (heldSustain||sustainedMode) ? 1.0 : std::min(1.0, (1.0 - t) * layerDuration / 0.02);
             double source = filtered;
             double envelope = 0.15 + 0.85 * t;
             if (settings.family == NoiseFamily::granular) {
