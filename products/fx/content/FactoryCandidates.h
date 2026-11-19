@@ -5,7 +5,7 @@
 
 namespace vox::fx::content {
 // Review catalog, separate from the existing procedural Seed selector.
-// Version 1: immutable stable IDs, handwritten recipes, no external assets.
+// Version 2 audit manifest: immutable stable IDs, handwritten recipes, no external assets.
 // Candidate status cannot be turned into a factory release by the loader.
 enum class Role { impact, riser, fall, sweep, zap, rhythm, atmosphere, stinger };
 struct Entry {
@@ -19,10 +19,20 @@ struct Entry {
     std::uint32_t revision = 1;
     bool secondWave = false;
     unsigned authored = 0;
+    std::string_view useCase{};
 };
-inline constexpr unsigned schemaVersion = 1;
+inline constexpr unsigned schemaVersion = 2;
 inline constexpr std::string_view provenance = "Original hand-authored VOX synth recipe; no external assets; distribution approval pending";
-inline constexpr Entry reviewEntries[] {
+inline constexpr std::string_view useCase(const Entry& e) noexcept {
+    constexpr std::string_view byRole[]{"Downbeat accent","Build into a transition","Release after a drop","Movement and flyby",
+        "Short fill accent","Rhythmic fill","Breakdown bed","Section marker"};
+    return e.useCase.empty()?byRole[static_cast<unsigned>(e.role)]:e.useCase;
+}
+inline constexpr const char* scaleName(source::Scale scale) noexcept {
+    constexpr const char* names[]{"Chromatic","Major","Minor","Dorian","Phrygian"};
+    return names[static_cast<unsigned>(scale)];
+}
+inline constexpr Entry firstReviewEntries[] {
     {"voxfx.impact.iron-drop", "Iron Drop", "Peak-Time Tech", "Heavy", Role::impact, PlayMode::oneShot, true, 38, 0, .7f, 138},
     {"voxfx.riser.first-light", "First Light", "Uplifting", "Bright", Role::riser, PlayMode::transition, true, 62, 4, 4, 138},
     {"voxfx.fall.blue-hour", "Blue Hour", "Progressive", "Melancholic", Role::fall, PlayMode::oneShot, true, 57, 0, 2.6f, 128},
@@ -107,7 +117,20 @@ inline constexpr AuthoredRecipe authored[]{
     {{{{F::downlifter,.68f,-.23f,0,.91f,0,{T::bandpass,860,.88f,2}},{F::formant,.52f,.33f,.07f,.81f,-5,{T::notch,470,.7f,2}},{F::glitch,.62f,.04f,.27f,.52f,0,{T::highpass,620,.72f,2}}}},
       {.82f,.68f,0,.33f},{{{E::ring,.27f,.4f},{E::delay,.17f,.28f},{E::reverb,.13f,.42f}}},{K::minor,7},{.59f,.29f}},
 };
-}
+#include "ReviewWaveARecipes.h"
+} // namespace detail
+
+inline constexpr auto reviewEntries=[] {
+    std::array<Entry,std::size(firstReviewEntries)+std::size(detail::waveA)> result{};
+    std::copy(std::begin(firstReviewEntries),std::end(firstReviewEntries),result.begin());
+    for(std::size_t i=0;i<std::size(detail::waveA);++i){
+        auto e=detail::waveA[i].entry;
+        e.authored=static_cast<unsigned>(std::size(detail::authored)+1+i);
+        result[std::size(firstReviewEntries)+i]=e;
+    }
+    return result;
+}();
+
 
 inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
     using F=NoiseFamily;
@@ -143,6 +166,26 @@ inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
             beat.steps[6]={true,60,117,100,1};beat.steps[7]={true,72,83,78,1};beat.steps[10]={true,69,106,100,2};
         }
         return result;
+    }
+    if(e.authored>std::size(detail::authored)){
+        const auto index=e.authored-std::size(detail::authored)-1;
+        if(index<std::size(detail::waveA)){
+            const auto& item=detail::waveA[index];
+            for(std::size_t i=0;i<item.layers.size();++i){
+                const auto& r=item.layers[i];if(r.gain==0)continue;
+                layer(i,r.family,r.gain,r.pan,r.start,r.span);
+                p.layers[i].transpose=r.transpose;p.layers[i].filters[0]=r.filter;p.layers[i].character=r.character;
+            }
+            const auto curve=[&](detail::Contour c){return envelope(c.start,c.middle,c.end,c.pivot);};
+            p.amplitudeCurve=curve(item.amp);p.pitchCurve=curve(item.pitch);p.panoramaCurve=curve(item.pan);
+            p.tonality=item.key;s.effects=item.fx;
+            if(e.mode==PlayMode::sequence){
+                auto& pattern=result.pattern;
+                pattern.bars=item.beat.bars;pattern.grid=item.beat.grid;pattern.swing=item.beat.swing;
+                for(const auto& h:item.beat.hits)if(h.velocity!=0)pattern.steps[h.step]={true,h.note,h.velocity,h.chance,h.ratchet};
+            }
+            return result;
+        }
     }
     if(e.secondWave){
         using T=source::FilterType;

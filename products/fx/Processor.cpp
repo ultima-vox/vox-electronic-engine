@@ -152,7 +152,7 @@ bool FxProcessor::generateSound(bool mutation){
 void FxProcessor::setStateInformation(const void* data,int size){
     const juce::ScopedLock transaction(controllerRestoreLock_);
     vox::suite::SuiteProcessor::setStateInformation(data,size);
-    if(lastStateError().isEmpty())previewBus_.stop();
+    if(lastStateError().isEmpty())panic();
 }
 
 bool FxProcessor::storeComparison(std::size_t slot)
@@ -184,7 +184,10 @@ bool FxProcessor::recallComparison(std::size_t slot)
     return lastStateError().isEmpty();
 }
 
-portable::Sound FxProcessor::portableSnapshot() const {return {programs_.snapshotState(),samples_.reference()};}
+portable::Sound FxProcessor::portableSnapshot() const {
+    const juce::ScopedLock transaction(controllerRestoreLock_);
+    return {programs_.snapshotState(),samples_.reference()};
+}
 bool FxProcessor::encodePortablePreset(std::vector<std::byte>& out) const {
     return portable::encode(portableSnapshot(),out);
 }
@@ -195,7 +198,7 @@ bool FxProcessor::applyPortableSound(const portable::Sound& sound) {
     const auto& s=sound.state;
     if(!programs_.publishState(s.program,s.effects,s.pattern,s.macros,s.generator))return false;
     samples_.commitRestore(std::move(prepared));
-    previewBus_.stop();
+    panic();
     return true; // All 19 host parameter values, layout and the A/B bank are left alone.
 }
 bool FxProcessor::restorePortablePreset(std::span<const std::byte> bytes) {
@@ -228,6 +231,7 @@ offline::Capture FxProcessor::capturePresetPreview(const portable::Sound& sound)
 
 offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) const
 {
+    const juce::ScopedLock transaction(controllerRestoreLock_);
     const auto snapshot=programs_.snapshotState();
     settings.duration=duration_->get(); settings.gain=output_->get();
     settings.tempo=capturedTempo_.load(std::memory_order_relaxed);
@@ -238,6 +242,7 @@ offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) con
         settings.effects[i].wet=effectWet_[i]->get(); settings.effects[i].amount=effectAmount_[i]->get();
     }
     offline::Capture capture;capture.program=snapshot.program;capture.settings=settings;capture.pattern=snapshot.pattern;
+    capture.patternEnabled=patternEnabled_->get();
     const auto generation=samples_.selection();
     const bool needsSample=std::any_of(capture.program.layers.begin(),capture.program.layers.end(),
         [](const auto& layer){return layer.enabled && layer.family==NoiseFamily::granular;});
@@ -433,7 +438,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const auto target = output_->get();
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
     macro::renderPost(effects_,macroRuntime_,left,right,static_cast<std::size_t>(size),macroValues,[&]{return outputSmoothing_.getNextValue();});
-    if(isNonRealtime())previewBus_.stop();
+    if(isNonRealtime())previewBus_.discardOnAudioThread();
     else previewBus_.mix(left,right,size);
     float peak = 0.0f;
     for (int i = 0; i < size; ++i) peak=std::max(peak,std::max(std::abs(left[i]),std::abs(right[i])));

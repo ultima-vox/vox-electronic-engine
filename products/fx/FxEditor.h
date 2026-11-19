@@ -142,13 +142,21 @@ public:
     juce::TextButton& saveButton() noexcept {return save_;}
     juce::TextButton& loadButton() noexcept {return load_;}
     int matchCount() const noexcept {return static_cast<int>(visible_.size());}
+    bool indexing() const noexcept {return indexJob_!=nullptr;}
+    void pollBackground();
+    juce::ComboBox& durationFacet() noexcept {return durationFacet_;}
+    juce::ComboBox& tonalityFacet() noexcept {return tonalFacet_;}
+    juce::ComboBox& styleFacet() noexcept {return styleFacet_;}
 private:
-    struct Row { portable::Tags tags;PlayMode mode;int factory=-1;juce::File file{};juce::String details; };
+    struct Row { portable::Tags tags;PlayMode mode;int factory=-1;juce::File file{};juce::String details;
+        unsigned bars=0;float seconds=0;bool pitched=false;juce::String key,searchable; };
     int getNumRows() override;
     void paintListBoxItem(int,juce::Graphics&,int,int,bool) override;
     void selectedRowsChanged(int) override;
     void timerCallback() override;
-    void scan(const juce::File& select={});
+    void scan();
+    void rebuild(const juce::File& select={});
+    void upsert(const library::IndexEntry&);
     void filter();
     void runPreview();
     void stopPreview();
@@ -164,11 +172,14 @@ private:
     std::vector<std::size_t> visible_;
     juce::ListBox rows_{"Presets",this};
     juce::TextEditor search_,name_,style_,mood_,use_;
-    juce::ComboBox scope_,role_,mode_,editRole_;
+    juce::ComboBox scope_,role_,mode_,editRole_,styleFacet_,moodFacet_,useFacet_,durationFacet_,tonalFacet_;
     juce::ToggleButton onlyFavorites_{"Favorites"},favorite_{"Favorite"};
     juce::Label title_,detail_,status_;
     juce::TextButton load_{"Load"},play_{"Preview"},stop_{"Stop"},save_{"Save new"},tags_{"Save tags"},remove_{"Delete"},openFile_{"Open file…"},saveFile_{"Save file…"},close_{"Close"};
     std::unique_ptr<preview::Job> audition_;
+    std::unique_ptr<library::IndexJob> indexJob_;
+    juce::String indexStatus_;
+    preview::Bus::Ticket previewTicket_=0;
     bool armed_=false;
 };
 

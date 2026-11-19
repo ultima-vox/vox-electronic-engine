@@ -9,24 +9,31 @@ namespace vox::fx::preview {
 // as the granular engine. UI/worker can publish, audio never frees a buffer.
 class Bus {
 public:
-    bool publish(std::span<const float> stereo,std::uint32_t rate){
-        if(stereo.size()<4||(stereo.size()&1u))return false;
+    // Capture before starting a job. Stop/restore/panic may arrive on the
+    // audio or host thread while that job is rendering. Its completed PCM
+    // must never restart monitoring after the invalidation.
+    using Ticket=std::uint32_t;
+    Ticket ticket() const noexcept {return epoch_.load(std::memory_order_acquire);}
+    bool publish(std::span<const float> stereo,std::uint32_t rate,Ticket expected){
+        if(stereo.size()<4||(stereo.size()&1u)||expected!=ticket())return false;
         std::uint64_t token=0;
-        if(!store_.publish(stereo,rate,&token))return false;
-        request_.store(token,std::memory_order_release);return true;
+        if(!store_.publish(stereo,rate,&token)||token>UINT32_MAX||expected!=ticket())return false;
+        request_.store((std::uint64_t{expected}<<32)|token,std::memory_order_release);
+        return expected==ticket();
     }
-    void stop() noexcept { request_.store(0,std::memory_order_release); }
-    bool playing() const noexcept {return request_.load(std::memory_order_acquire)!=0;}
+    void stop() noexcept {epoch_.fetch_add(1,std::memory_order_acq_rel);}
+    void discardOnAudioThread() noexcept {stop();resetLease();}
+    bool playing() const noexcept {return activeRequest()!=0;}
     void prepare(double rate) noexcept {
         resetLease();stop();rate_=std::isfinite(rate)&&rate>=8000&&rate<=384000?rate:48000;
         fade_=1.0/std::max(1.0,rate_*.005);
     }
     void mix(float* left,float* right,int count) noexcept {
-        const auto requested=request_.load(std::memory_order_acquire);
+        const auto requested=activeRequest();
         if(!lease_.data()&&requested==0)return;
         if(requested!=token_&&(!lease_.data()||gain_==0)){
             resetLease();
-            if(requested!=0&&store_.acquire(lease_,requested)){token_=requested;step_=lease_.rate()/rate_;}
+            if(requested!=0&&store_.acquire(lease_,static_cast<std::uint32_t>(requested))){token_=requested;step_=lease_.rate()/rate_;}
         }
         if(!lease_.data())return;
         const auto frames=lease_.frames()/2;
@@ -49,8 +56,14 @@ public:
         }
     }
 private:
+    std::uint64_t activeRequest() const noexcept {
+        const auto word=request_.load(std::memory_order_acquire);
+        return static_cast<Ticket>(word>>32)==ticket()?word:0;
+    }
     void resetLease() noexcept {store_.release(lease_);token_=0;position_=gain_=0;}
     sample::Store store_;sample::Store::Lease lease_;
+    static_assert(std::atomic<Ticket>::is_always_lock_free);
+    std::atomic<Ticket> epoch_{1};
     std::atomic<std::uint64_t> request_{0};
     std::uint64_t token_=0;double position_=0,step_=1,gain_=0,rate_=48000,fade_=1./240;
 };
@@ -67,7 +80,7 @@ public:
     ~Job(){cancel();worker_.join();}
     void cancel() noexcept {cancel_.store(true,std::memory_order_relaxed);}
     Result result() const noexcept { return result_.load(std::memory_order_acquire); }
-    bool publish(Bus& bus) const {return result()==Result::ready&&!cancel_.load()&&bus.publish(samples_,rate);}
+    bool publish(Bus& bus,Bus::Ticket ticket) const {return result()==Result::ready&&!cancel_.load()&&bus.publish(samples_,rate,ticket);}
 private:
     bool render(offline::Capture& capture,const sample::Reference& reference){
         const bool needsSample=std::any_of(capture.program.layers.begin(),capture.program.layers.end(),

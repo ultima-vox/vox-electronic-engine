@@ -62,7 +62,7 @@ public:
     juce::AudioParameterFloat& effectAmountParameter(std::size_t index) noexcept { return *effectAmount_[index]; }
     // Message-to-audio requests are bounded and coalesced, not a MIDI queue.
     void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
-    void panic() noexcept { panicPending_.store (true, std::memory_order_release); }
+    void panic() noexcept { previewBus_.stop();panicPending_.store (true, std::memory_order_release); }
     float outputPeak() const noexcept { return peak_.load (std::memory_order_relaxed); }
     bool consumeClip() noexcept { return clipLatched_.exchange(false,std::memory_order_relaxed); }
     struct AudioTelemetry { unsigned events=0,grains=0;bool clipped=false;std::uint32_t dropped=0; };
@@ -166,7 +166,7 @@ private:
     macro::Config audioMacroConfig_;
     std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;
-    juce::CriticalSection controllerRestoreLock_; // serialize project restore, preset load and comparison commands
+    mutable juce::CriticalSection controllerRestoreLock_; // serialize project restore, preset load and comparison commands
     mutable std::mutex comparisonMutex_; // never entered on the audio thread
     compare::Bank comparisons_;
     NoiseProgram audioProgram_;

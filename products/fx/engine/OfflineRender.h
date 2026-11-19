@@ -38,6 +38,7 @@ struct Capture {
     std::uint32_t sampleRate=0;
     std::vector<float> sample; // immutable worker-owned copy, not a lease
     pattern::Pattern pattern{};
+    bool patternEnabled=false; // capture the independent host Pattern switch
 };
 inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(static_cast<std::uint8_t>(x));out.push_back(static_cast<std::uint8_t>(x>>8));}
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
@@ -45,11 +46,12 @@ inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++
 // Export one finite pass or one Sequence cycle. Fixed tempo/PPQ zero, never
 // a recorded host tempo map. Sequence lets its last admitted voice finish.
 inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& settings,
-                                const pattern::Pattern* sequence = nullptr) noexcept {
+                                const pattern::Pattern* sequence = nullptr,bool patternEnabled=false) noexcept {
     if (!program.valid() || !settings.valid()) return 0;
-    if (program.mode == PlayMode::sequence && (!sequence || !sequence->valid() || settings.tempo < 10)) return 0;
+    const bool playsSequence=program.mode == PlayMode::sequence || patternEnabled;
+    if (playsSequence && (!sequence || !sequence->valid() || settings.tempo < 10)) return 0;
     const double event = program.bars ? program.bars * 240.0 / settings.tempo : settings.duration;
-    const double cycle = program.mode == PlayMode::sequence ? sequence->bars * 240.0 / settings.tempo : 0;
+    const double cycle = playsSequence ? sequence->bars * 240.0 / settings.tempo : 0;
     const double duration = event + cycle;
     bool shortTail = false;
     double serialTail = 0;
@@ -73,12 +75,16 @@ inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& set
     return total <= maxPayload / align ? static_cast<std::uint32_t>(total) : 0;
 }
 
+inline std::uint32_t frameCount(const Capture& capture) noexcept {
+    return frameCount(capture.program,capture.settings,&capture.pattern,capture.patternEnabled);
+}
+
 // Worker thread only. Output is transactional: invalid input, cancellation or
 // non-finite DSP leave the old bytes unchanged.
 inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
                           const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture,std::uint32_t limit=0) {
-    const auto* sequence = program.mode == PlayMode::sequence && capture ? &capture->pattern : nullptr;
-    const auto fullFrames = frameCount(program, settings, sequence);
+    const auto* sequence = capture && (program.mode == PlayMode::sequence || capture->patternEnabled) ? &capture->pattern : nullptr;
+    const auto fullFrames = frameCount(program, settings, sequence, capture && capture->patternEnabled);
     const auto frames = limit==0?fullFrames:std::min(limit,fullFrames);
     if (frames == 0 || (cancel && cancel->load(std::memory_order_relaxed))) return false;
     const bool floating=settings.format==WavFormat::float32;

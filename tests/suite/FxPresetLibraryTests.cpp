@@ -25,7 +25,7 @@ int main(){
     const auto wait=[&](const preview::Job& j){const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
         while(j.result()==preview::Result::loading&&std::chrono::steady_clock::now()<end)std::this_thread::sleep_for(std::chrono::milliseconds(2));};
     wait(job);preview::Bus bus;bus.prepare(96000);
-    check(job.result()==preview::Result::ready&&job.publish(bus)&&bus.playing(),"isolated preview render publishes to audition bus");
+    check(job.result()==preview::Result::ready&&job.publish(bus,bus.ticket())&&bus.playing(),"isolated preview render publishes to audition bus");
     std::array<float,256> l{},r{};double peak=0;
 #ifdef VOX_TEST_INTERPOSE_MALLOC
     voxProbeBegin();
@@ -36,12 +36,16 @@ int main(){
     const auto count=voxProbeEnd();if(voxProbeAvailable())check(count==0,"preview lease, resampling, mix and natural end allocate nothing");
 #endif
     check(peak>.01&&!bus.playing()&&l.back()==.003f&&r.back()==.006f,"preview mix affects only monitoring and returns to dry on end");
-    check(job.publish(bus),"publish another preview");bus.mix(l.data(),r.data(),256);bus.stop();
+    check(job.publish(bus,bus.ticket()),"publish another preview");bus.mix(l.data(),r.data(),256);bus.stop();
     for(int i=0;i<4;++i){l.fill(.002f);r.fill(.002f);bus.mix(l.data(),r.data(),256);}
     check(!bus.playing()&&l.back()==.002f&&r.back()==.002f,"stop fades back to dry");
+    const auto stale=bus.ticket();bus.stop();
+    check(!job.publish(bus,stale)&&!bus.playing(),"completed worker cannot restart a stopped audition");
+    const auto beforePrepare=bus.ticket();bus.prepare(48000);
+    check(!job.publish(bus,beforePrepare)&&!bus.playing(),"rate changes invalidate pending audition jobs");
     a.program.layers[0].family=NoiseFamily::granular;
     preview::Job missing(a,{sample::Reference::Kind::external,root.getChildFile("missing.wav").getFullPathName().toStdString(),std::string(64,'a')});
-    wait(missing);check(missing.result()==preview::Result::unavailable&&!missing.publish(bus),"unavailable WAV never falls back or changes the preview bus");
+    wait(missing);check(missing.result()==preview::Result::unavailable&&!missing.publish(bus,bus.ticket()),"unavailable WAV never falls back or changes the preview bus");
     (void)root.deleteRecursively();
     std::printf("FX user library and preview: %d failure(s)\n",failures);return failures?1:0;
 }

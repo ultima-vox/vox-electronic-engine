@@ -405,6 +405,12 @@ constexpr const char* browserModes[]{"One Shot","Gate","Continuous","Loop","Sequ
 juce::String lowerQuery(const portable::Tags& tags,PlayMode mode){
     return (juce::String(tags.name+" "+tags.style+" "+tags.mood+" "+tags.use)+" "+browserRoles[tags.role]+" "+browserModes[static_cast<unsigned>(mode)]).toLowerCase();
 }
+juce::String presetKey(source::Tonality key,bool pitched){
+    if(!pitched)return "Noise only";
+    if(key.scale==source::Scale::chromatic)return "Chromatic pitch";
+    constexpr const char* roots[]{"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    return juce::String(roots[key.root])+" "+content::scaleName(key.scale);
+}
 }
 PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(processor),root_(std::move(root)){
     title_.setText("PRESETS — REVIEW CATALOG / USER LIBRARY",juce::dontSendNotification);
@@ -418,6 +424,14 @@ PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(
     const auto field=[](juce::TextEditor& e,const char* hint){e.setTitle(hint);e.setTextToShowWhenEmpty(hint,juce::Colours::grey);e.setInputRestrictions(128);};
     field(name_,"User preset name");field(style_,"Style / genre tags");field(mood_,"Mood tags");field(use_,"Use-case tags");
     search_.onTextChange=[this]{filter();};scope_.onChange=[this]{filter();};role_.onChange=[this]{filter();};mode_.onChange=[this]{filter();};onlyFavorites_.onClick=[this]{filter();};
+    constexpr const char* facets[]{"All styles","All moods","All uses"};
+    std::array facetsControls{&styleFacet_,&moodFacet_,&useFacet_};
+    for(std::size_t i=0;i<facetsControls.size();++i){facetsControls[i]->setTitle(facets[i]);facetsControls[i]->onChange=[this]{filter();};}
+    const auto fillFacet=[this](juce::ComboBox& c,std::initializer_list<const char*> choices){
+        int id=1;for(auto* label:choices)c.addItem(label,id++);c.setSelectedId(1,juce::dontSendNotification);c.onChange=[this]{filter();};};
+    fillFacet(durationFacet_,{"All durations","Short ≤1 s","Long >1 s","Bars / Sequence","Host duration"});
+    fillFacet(tonalFacet_,{"All tonality","Pitch-responsive","Noise only"});
+    durationFacet_.setTitle("Filter by duration");tonalFacet_.setTitle("Filter by pitch classification");
     rows_.setRowHeight(28);rows_.setMultipleSelectionEnabled(false);
     detail_.setMinimumHorizontalScale(1);detail_.setJustificationType(juce::Justification::topLeft);
     load_.setTooltip("Load structure; host automation stays unchanged");
@@ -428,7 +442,8 @@ PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(
     save_.onClick=[this]{save(false);};tags_.onClick=[this]{save(true);};remove_.onClick=[this]{erase();};
     openFile_.onClick=[this]{stopPreview();if(looseFile)looseFile(false);};saveFile_.onClick=[this]{if(looseFile)looseFile(true);};
     close_.onClick=[this]{stopPreview();setVisible(false);};
-    const std::array<juce::Component*,23> controls{&rows_,&search_,&name_,&style_,&mood_,&use_,&scope_,&role_,&mode_,&editRole_,&onlyFavorites_,&favorite_,&title_,&detail_,&status_,&load_,&play_,&stop_,&save_,&tags_,&remove_,&openFile_,&saveFile_};
+    const std::array<juce::Component*,28> controls{&rows_,&search_,&name_,&style_,&mood_,&use_,&scope_,&role_,&mode_,&editRole_,&onlyFavorites_,&favorite_,&title_,&detail_,&status_,&load_,&play_,&stop_,&save_,&tags_,&remove_,&openFile_,&saveFile_,
+        &styleFacet_,&moodFacet_,&useFacet_,&durationFacet_,&tonalFacet_};
     for(auto* c:controls)addAndMakeVisible(*c);addAndMakeVisible(close_);
 }
 PresetBrowser::~PresetBrowser(){stopTimer();stopPreview();}
@@ -438,49 +453,83 @@ const PresetBrowser::Row* PresetBrowser::selected() const noexcept{
     const auto index=rows_.getSelectedRow();return index>=0&&static_cast<std::size_t>(index)<visible_.size()?&all_[visible_[static_cast<std::size_t>(index)]]:nullptr;
 }
 void PresetBrowser::report(juce::String text){status_.setText(std::move(text),juce::dontSendNotification);}
-void PresetBrowser::scan(const juce::File& select){
-    all_.clear();
+void PresetBrowser::scan(){
+    if(indexJob_)return;
+    visible_.clear();all_.clear();
     for(std::size_t i=0;i<std::size(content::reviewEntries);++i){const auto& e=content::reviewEntries[i];
-        portable::Tags tags{std::string(e.name),std::string(e.style),std::string(e.mood),"",static_cast<unsigned>(e.role),false};
+        const auto authored=content::makePreview(e,48000);
+        const auto bars=e.mode==PlayMode::sequence?authored.pattern.bars:e.bars;
+        const auto seconds=bars?0.f:e.seconds;
+        const auto key=presetKey(authored.program.tonality,e.pitchedSource);
+        portable::Tags tags{std::string(e.name),std::string(e.style),std::string(e.mood),std::string(content::useCase(e)),static_cast<unsigned>(e.role),false};
         auto notes=juce::String(browserModes[static_cast<unsigned>(e.mode)])+"  •  "+juce::String(e.bpm,0)+" BPM  •  "+
-            (e.bars?juce::String(e.bars)+" bars":juce::String(e.seconds,2)+" s")+"\n"+
-            (e.pitchedSource?"Pitched source":"Noise-only source")+"  •  Built-in assets\nOriginal VOX recipe; review only.";
-        all_.push_back({std::move(tags),e.mode,static_cast<int>(i),{},std::move(notes)});
+            (bars?juce::String(bars)+" bars":juce::String(seconds,2)+" s")+"\n"+
+            key+"  •  Built-in assets  •  Review only\n"+juce::String(tags.use);
+        auto searchable=lowerQuery(tags,e.mode)+" "+key.toLowerCase();
+        all_.push_back({std::move(tags),e.mode,static_cast<int>(i),{},std::move(notes),bars,seconds,e.pitchedSource,key,std::move(searchable)});
     }
-    const auto& root=root_;unsigned seen=0,invalid=0;
-    for(const auto& entry:juce::RangedDirectoryIterator(root,false,"*.voxfx",juce::File::findFiles,juce::File::FollowSymlinks::no)){
-        if(seen++>=library::maxFiles)break;
-        const auto file=entry.getFile();portable::Sound sound;portable::Tags metadata;
-        if(!library::managedFile(root,file)||!library::read(file,sound,&metadata)){++invalid;continue;}
-        if(metadata.name.empty())metadata.name=file.getFileNameWithoutExtension().toStdString();
-        const auto kind=sound.sample.kind;
-        const auto details=juce::String(browserModes[static_cast<unsigned>(sound.state.program.mode)])+"\n"+
-            (kind==sample::Reference::Kind::builtin?"Built-in source":kind==sample::Reference::Kind::pending?"Sample import pending — not portable":"External WAV · SHA verified on Preview/Load");
-        all_.push_back({std::move(metadata),sound.state.program.mode,-1,file,details});
-    }
-    std::stable_sort(all_.begin(),all_.end(),[](const Row& a,const Row& b){
+    indexStatus_="Scanning user presets…";
+    try{indexJob_=std::make_unique<library::IndexJob>(root_);startTimerHz(20);}
+    catch(...){indexStatus_="Could not start user scan";}
+    rebuild();
+}
+void PresetBrowser::upsert(const library::IndexEntry& entry){
+    const auto key=presetKey(entry.key,entry.pitched);
+    const auto length=entry.bars?juce::String(entry.bars)+" bars":juce::String("Host duration");
+    const auto details=juce::String(browserModes[static_cast<unsigned>(entry.mode)])+"  •  "+length+"  •  "+key+"\n"+
+        (entry.asset==sample::Reference::Kind::builtin?"Built-in source":entry.asset==sample::Reference::Kind::pending?"Unverified sample — reimport WAV":"External WAV · SHA verified on Preview/Load");
+    auto searchable=lowerQuery(entry.tags,entry.mode)+" "+key.toLowerCase();
+    Row row{entry.tags,entry.mode,-1,entry.file,details,entry.bars,0,entry.pitched,key,std::move(searchable)};
+    const auto at=std::find_if(all_.begin(),all_.end(),[&](const Row& r){return r.factory<0&&r.file==entry.file;});
+    if(at==all_.end())all_.push_back(std::move(row));else *at=std::move(row);
+}
+void PresetBrowser::rebuild(const juce::File& select){
+    visible_.clear();
+    std::sort(all_.begin(),all_.end(),[](const Row& a,const Row& b){
         if((a.factory>=0)!=(b.factory>=0))return a.factory>=0;
-        return juce::String(a.tags.name).compareIgnoreCase(juce::String(b.tags.name))<0;
+        const int name=juce::String(a.tags.name).compareIgnoreCase(juce::String(b.tags.name));
+        return name!=0?name<0:a.factory>=0?a.factory<b.factory:a.file.getFullPathName()<b.file.getFullPathName();
     });
+    const auto fill=[this](juce::ComboBox& c,const char* title,auto member){
+        const auto previous=c.getSelectedId()>1?c.getText():juce::String{};
+        juce::StringArray choices;
+        for(const auto& r:all_)if(!(r.tags.*member).empty())choices.addIfNotAlreadyThere(juce::String(r.tags.*member),true);
+        choices.sort(true);c.clear(juce::dontSendNotification);c.addItem(title,1);
+        int id=2,selected=1;for(const auto& label:choices){c.addItem(label,id);if(label.equalsIgnoreCase(previous))selected=id;++id;}
+        c.setSelectedId(selected,juce::dontSendNotification);
+    };
+    fill(styleFacet_,"All styles",&portable::Tags::style);fill(moodFacet_,"All moods",&portable::Tags::mood);fill(useFacet_,"All uses",&portable::Tags::use);
     filter();
     if(select!=juce::File{})for(std::size_t i=0;i<visible_.size();++i)if(all_[visible_[i]].file==select){rows_.selectRow(static_cast<int>(i));break;}
-    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(invalid?" · "+juce::String(invalid)+" invalid user files skipped":"")+
-        (seen>library::maxFiles?" · user scan limited to 512 files":""));
 }
 void PresetBrowser::filter(){
+    const auto* old=selected();
+    const auto oldFile=old?old->file:juce::File{};const int oldFactory=old?old->factory:-1;
     visible_.clear();
+    const auto sameTag=[](const juce::ComboBox& c,const std::string& value){return c.getSelectedId()<=1||c.getText().equalsIgnoreCase(juce::String(value));};
     const auto terms=juce::StringArray::fromTokens(search_.getText().toLowerCase(),false);
     for(std::size_t i=0;i<all_.size();++i){const auto& row=all_[i];
         if((scope_.getSelectedId()==2&&row.factory<0)||(scope_.getSelectedId()==3&&row.factory>=0)||
            (role_.getSelectedId()>1&&static_cast<unsigned>(role_.getSelectedId()-2)!=row.tags.role)||
            (mode_.getSelectedId()>1&&mode_.getSelectedId()-2!=static_cast<int>(row.mode))||
-           (onlyFavorites_.getToggleState()&&!row.tags.favorite))continue;
-        const auto searchable=lowerQuery(row.tags,row.mode);
+           (onlyFavorites_.getToggleState()&&!row.tags.favorite)||
+           !sameTag(styleFacet_,row.tags.style)||!sameTag(moodFacet_,row.tags.mood)||!sameTag(useFacet_,row.tags.use))continue;
+        const int durationClass=row.bars?4:row.seconds==0?5:row.seconds<=1?2:3;
+        const int tonalClass=row.pitched?2:3;
+        if((durationFacet_.getSelectedId()>1&&durationFacet_.getSelectedId()!=durationClass)||
+           (tonalFacet_.getSelectedId()>1&&tonalFacet_.getSelectedId()!=tonalClass))continue;
+        const auto& searchable=row.searchable;
         if(std::any_of(terms.begin(),terms.end(),[&](const juce::String& t){return !searchable.contains(t);}))continue;
         visible_.push_back(i);
     }
-    rows_.deselectAllRows();rows_.updateContent();if(!visible_.empty())rows_.selectRow(0);else selectedRowsChanged(-1);
-    report(juce::String(static_cast<int>(visible_.size()))+" shown");
+    rows_.updateContent();
+    int select=visible_.empty()?-1:0;
+    for(std::size_t i=0;i<visible_.size();++i){const auto& row=all_[visible_[i]];
+        if((oldFactory>=0&&row.factory==oldFactory)||(oldFile!=juce::File{}&&row.file==oldFile)){select=static_cast<int>(i);break;}}
+    const auto previous=rows_.getSelectedRow();
+    if(select<0)rows_.deselectAllRows();else rows_.selectRow(select);
+    if(previous==select)selectedRowsChanged(select);
+    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(indexStatus_.isEmpty()?"":" · "+indexStatus_));
 }
 void PresetBrowser::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selectedRow){
     if(row<0||static_cast<std::size_t>(row)>=visible_.size())return;
@@ -492,8 +541,10 @@ void PresetBrowser::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool 
     g.drawFittedText(line,8,0,w-16,h,juce::Justification::centredLeft,1);
 }
 void PresetBrowser::selectedRowsChanged(int){
+    if(armed_||(!audition_&&processor_.previewBus().playing()))stopPreview();
     const auto* row=selected();const bool user=row&&row->factory<0;
-    load_.setEnabled(row!=nullptr);play_.setEnabled(row!=nullptr);tags_.setEnabled(user);remove_.setEnabled(user);
+    load_.setEnabled(row!=nullptr);play_.setEnabled(row!=nullptr);save_.setEnabled(!indexJob_);
+    tags_.setEnabled(user&&!indexJob_);remove_.setEnabled(user&&!indexJob_);
     detail_.setText(row?row->details:juce::String("No matching presets"),juce::dontSendNotification);
     name_.setText(user?juce::String(row->tags.name):juce::String{},false);
     style_.setText(user?juce::String(row->tags.style):juce::String{},false);mood_.setText(user?juce::String(row->tags.mood):juce::String{},false);
@@ -513,6 +564,7 @@ void PresetBrowser::load(){
     report(ok?"Loaded structure · host values unchanged":"Preset is unavailable or invalid");
 }
 void PresetBrowser::save(bool tagsOnly){
+    if(indexJob_)return;
     const auto metadata=editorTags();if(!metadata.valid()){report("Enter a name and tags of at most 128 UTF-8 bytes each");return;}
     const auto& root=root_;
     if(root.isSymbolicLink()||root.createDirectory().failed()){report("User library folder unavailable");return;}
@@ -522,7 +574,7 @@ void PresetBrowser::save(bool tagsOnly){
         if(!library::managedFile(root,file)||!library::read(file,sound)){report("User preset has changed or is missing");return;}}
     else {if(file.exists()){report("User preset ID collision; try again");return;}sound=processor_.portableSnapshot();}
     if(!library::write(file,sound,&metadata)){report("Could not save user preset");return;}
-    scan(file);report(tagsOnly?"User tags saved":"Saved current structure in User Presets");
+    upsert(library::describe(file,metadata,sound));rebuild(file);report(tagsOnly?"User tags saved":"Saved current structure in User Presets");
 }
 void PresetBrowser::erase(){
     const auto* row=selected();if(!row||row->factory>=0)return;
@@ -532,34 +584,48 @@ void PresetBrowser::erase(){
         juce::ModalCallbackFunction::create([safe=juce::Component::SafePointer<PresetBrowser>(this),file](int result){
             if(!safe||result==0)return;
             if(!library::managedFile(safe->root_,file)||!file.existsAsFile()||!file.deleteFile()){safe->report("Could not delete user preset");return;}
-            safe->scan();safe->report("User preset deleted");}));
+            std::erase_if(safe->all_,[&](const Row& row){return row.factory<0&&row.file==file;});
+            safe->visible_.clear();safe->rebuild();safe->report("User preset deleted");}));
 }
 void PresetBrowser::runPreview(){
     const auto* row=selected();if(!row)return;
     if(audition_){report("Previous preview is still finishing; stop or wait");return;}
+    processor_.previewBus().stop();
+    previewTicket_=processor_.previewBus().ticket();
     offline::Capture capture;sample::Reference reference;
     if(row->factory>=0)capture=content::makePreview(content::reviewEntries[static_cast<std::size_t>(row->factory)],preview::Job::rate);
     else {portable::Sound sound;if(!library::read(row->file,sound)){report("User preset unavailable");return;}
         capture=processor_.capturePresetPreview(sound);reference=std::move(sound.sample);}
-    processor_.previewBus().stop();
     try{audition_=std::make_unique<preview::Job>(std::move(capture),std::move(reference));armed_=true;startTimerHz(20);report("Rendering preview…");}
     catch(...){report("Could not start preview worker");}
 }
 void PresetBrowser::stopPreview(){armed_=false;if(audition_)audition_->cancel();processor_.previewBus().stop();}
-void PresetBrowser::timerCallback(){
-    if(audition_){const auto result=audition_->result();if(result==preview::Result::loading)return;
-        const bool started=armed_&&result==preview::Result::ready&&audition_->publish(processor_.previewBus());
-        if(armed_)report(started?"Preview ready · host audio must be running":"Preview unavailable (asset, empty schedule or audio bounds)");
-        audition_.reset();armed_=false;
-        if(!started){stopTimer();return;}
+void PresetBrowser::timerCallback(){pollBackground();}
+void PresetBrowser::pollBackground(){
+    if(indexJob_&&indexJob_->ready()){
+        auto result=indexJob_->take();indexJob_.reset();
+        for(const auto& item:result.entries)upsert(item);
+        indexStatus_=result.unavailable?"User library unavailable":juce::String{};
+        if(result.invalid)indexStatus_+=(indexStatus_.isEmpty()?"":" · ")+juce::String(result.invalid)+" invalid user presets skipped";
+        if(result.limited)indexStatus_+=(indexStatus_.isEmpty()?"":" · ")+juce::String("User scan limited to 512 files");
+        visible_.clear();rebuild();
     }
-    if(!processor_.previewBus().playing()){report("Preview finished");stopTimer();}
+    if(audition_){const auto result=audition_->result();if(result==preview::Result::loading)return;
+        const bool started=armed_&&result==preview::Result::ready&&audition_->publish(processor_.previewBus(),previewTicket_);
+        if(armed_&&previewTicket_!=processor_.previewBus().ticket())report("Preview cancelled by restore, panic or offline processing");
+        else if(armed_)report(started?"Preview ready · host audio must be running":"Preview unavailable (asset, empty schedule or audio bounds)");
+        audition_.reset();armed_=false;
+        if(!started){if(!indexJob_)stopTimer();return;}
+    }
+    if(!indexJob_&&!processor_.previewBus().playing())stopTimer();
 }
 void PresetBrowser::paint(juce::Graphics& g){namespace c=vox::ui::tokens::colour;g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());}
 void PresetBrowser::resized(){
     auto a=getLocalBounds().reduced(12);title_.setBounds(a.removeFromTop(23));
     auto filters=a.removeFromTop(34);search_.setBounds(filters.removeFromLeft(261).reduced(2));scope_.setBounds(filters.removeFromLeft(117).reduced(2));
     role_.setBounds(filters.removeFromLeft(121).reduced(2));mode_.setBounds(filters.removeFromLeft(129).reduced(2));onlyFavorites_.setBounds(filters.reduced(2));
+    auto facets=a.removeFromTop(32);
+    for(auto* c:{&styleFacet_,&moodFacet_,&useFacet_,&durationFacet_,&tonalFacet_})c->setBounds(facets.removeFromLeft(177).reduced(2));
     auto footer=a.removeFromBottom(32);close_.setBounds(footer.removeFromRight(71).reduced(2));saveFile_.setBounds(footer.removeFromRight(103).reduced(2));
     openFile_.setBounds(footer.removeFromRight(103).reduced(2));status_.setBounds(footer.reduced(2));
     rows_.setBounds(a.removeFromLeft(a.getWidth()*55/100).reduced(2));auto form=a.reduced(8,2);
@@ -1112,11 +1178,11 @@ void FxPanel::exportWav(offline::Settings settings)
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","Could not capture the sound for export.");return;
     }
-    if (offline::frameCount(capture->program, capture->settings, &capture->pattern) == 0) {
+    if (offline::frameCount(*capture) == 0) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed", "This audition exceeds the 128 MiB WAV audio limit or has invalid settings.");return;
     }
-    if (capture->program.mode==PlayMode::sequence) {
+    if (capture->program.mode==PlayMode::sequence||capture->patternEnabled) {
         pattern::FixedSchedule schedule;
         if (!pattern::scheduleFixed(capture->pattern,schedule) || schedule.count==0) {
             juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,

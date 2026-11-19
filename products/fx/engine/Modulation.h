@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -34,9 +35,10 @@ public:
     bool prepare(double rate, const Route* routes, std::size_t count) noexcept {
         if (!std::isfinite(rate) || rate < 8000 || rate > 384000 || count > 64 || (count && !routes)) return false;
         for(std::size_t i=0;i<count;++i) if(!routes[i].valid()) return false;
-        count_=count;
+        count_=count;usedSources_=0;
         for(std::size_t i=0;i<count;++i){
             routes_[i]=routes[i]; smoothed_[i]=0;
+            usedSources_|=1u<<static_cast<unsigned>(routes[i].source);
             const double time=routes[i].smoothingSeconds;
             alpha_[i]=time <= 0 ? 1.0 : 1.0-std::exp(-1.0/(time*rate));
         }
@@ -51,15 +53,22 @@ public:
         return result;
     }
     void sum(Destinations& result,const Sources& sources) noexcept {
+        if(count_==0)return;
+        Sources safe;
+        for(auto mask=usedSources_;mask!=0;mask&=mask-1){
+            const auto i=std::countr_zero(mask);
+            const auto value=sources[i];
+            safe[i]=std::isfinite(value)?std::clamp(value,-1.f,1.f):0.f;
+        }
         for(std::size_t i=0;i<count_;++i){
-            const auto& route=routes_[i];const auto source=sources[static_cast<std::size_t>(route.source)];
-            const double target=(std::isfinite(source) ? std::clamp(source,-1.0f,1.0f) : 0.0f)*route.depth;
+            const auto& route=routes_[i];const double target=safe[static_cast<std::size_t>(route.source)]*route.depth;
             smoothed_[i]+=alpha_[i]*(target-smoothed_[i]);
             result[static_cast<std::size_t>(route.destination)]+=static_cast<float>(smoothed_[i]);
         }
     }
 private:
     std::size_t count_=0;
+    std::uint32_t usedSources_=0;
     std::array<Route,64> routes_{};
     std::array<double,64> alpha_{},smoothed_{};
 };

@@ -29,9 +29,82 @@ juce::MemoryBlock save (vox::fx::FxProcessor& processor) {
 void block (vox::fx::FxProcessor& p, juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi) {
     p.processBlock(audio, midi); midi.clear();
 }
+// Compare actual processBlock to the rendered float32 file. Deliberately use
+// different/irregular blocks and the same finite audition contract, not a
+// loop/held performance with an arbitrary MIDI NoteOff or a DAW tempo map.
+void checkCaptureParity() {
+    using namespace vox::fx;
+    for(unsigned mode=0;mode<7;++mode){
+        auto fx=std::make_unique<FxProcessor>();TestPlayHead host;fx->setPlayHead(&host);
+        constexpr int rate=48000,cycle=rate;
+        const auto clock=[&](int at){
+            juce::AudioPlayHead::PositionInfo pos;pos.setIsPlaying(true);pos.setBpm(240);
+            pos.setTimeInSamples(at);pos.setPpqPosition(4.*at/rate);
+            pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});host.position=pos;
+        };
+        NoiseProgram program;program.mode=static_cast<PlayMode>(mode<6?mode:0);
+        if(program.mode==PlayMode::transition)program.bars=1;
+        program.layers[0].family=NoiseFamily::laser;program.layers[0].pan=-.18f;
+        program.layers[1]=program.layers[0];program.layers[1].family=NoiseFamily::formant;program.layers[1].pan=.25f;
+        program.layers[1].gain=.49f;program.layers[1].timing={.09f,.85f};
+        check(fx->setProgram(program),"configure fixed-tempo multi-layer capture");
+        fx->durationParameter().setValueNotifyingHost(fx->durationParameter().convertTo0to1(.11f));
+        fx->outputParameter().setValueNotifyingHost(.63f);
+        fx->setEffect(0,{effects::Type::reverb,.32f,.2f});
+        fx->effectWetParameter(0).setValueNotifyingHost(.32f);fx->effectAmountParameter(0).setValueNotifyingHost(.2f);
+        auto motion=fx->versionedMotion();auto routes=motion.config;
+        (void)routes.put(0,{mod::Source::lfo2,mod::Destination::pitch,.11f,.02f});
+        (void)routes.put(1,{mod::Source::follower,mod::Destination::amount1,.2f,.018f});
+        (void)routes.put(2,{mod::Source::lfo1,mod::Destination::width,.12f,.014f});
+        check(fx->replaceMotionIfCurrent(motion,routes),"capture has pre- and post-DSP motion");
+        const bool sequence=program.mode==PlayMode::sequence||mode==6;
+        if(sequence){
+            pattern::Pattern beat;beat.bars=1;beat.grid=pattern::Grid::sixteenthTriplet;beat.swing=.19f;
+            beat.steps[0]={true,58,112,100,4};beat.steps[7]={true,65,92,100,2};beat.steps[23]={true,63,120,100,1};
+            check(fx->setPattern(beat),"capture an explicitly edited Sequence");
+        }
+        if(mode==6)fx->patternEnabledParameter().setValueNotifyingHost(1.f);
+        juce::MidiBuffer midi;fx->prepareToPlay(rate,512);clock(0);
+        juce::AudioBuffer<float> empty(2,0);fx->processBlock(empty,midi);
+        offline::Settings settings;settings.sampleRate=rate;settings.format=offline::WavFormat::float32;settings.velocity=.8f;
+        const auto capture=fx->captureProgramWav(settings);std::vector<std::uint8_t> wav;
+        check(capture.patternEnabled==(mode==6)&&capture.settings.tempo==240,"capture sees the Pattern switch and observed tempo");
+        if(!offline::renderWav(capture,wav)){check(false,"processor snapshot renders to float32 WAV");continue;}
+        if(!sequence)fx->audition();
+        const int frames=static_cast<int>((wav.size()-56)/8);
+        double peak=0,tail=0,error=0;
+        juce::AudioBuffer<float> audio(2,512);
+        constexpr int sizes[]{64,127,512,71,311};
+        for(int at=0,index=0;at<frames;++index){
+            if(sequence&&at==cycle){
+                // Leave transport continuous so the last voices and post-FX
+                // ring out, but stop scheduling after exactly one cycle.
+                if(mode==6)fx->patternEnabledParameter().setValueNotifyingHost(0.f);
+                else {program.mode=PlayMode::oneShot;fx->setProgram(program);}
+            }
+            const int bound=sequence&&at<cycle?cycle:frames;
+            const int count=std::min(sizes[index%5],bound-at);
+            audio.setSize(2,count,false,false,true);clock(at);fx->processBlock(audio,midi);
+            for(int i=0;i<count;++i)for(int ch=0;ch<2;++ch){
+                const auto offset=56+8*(at+i)+ch*4;std::uint32_t bits=0;
+                for(unsigned k=0;k<4;++k)bits|=std::uint32_t{wav[offset+k]}<<(8*k);
+                const double actual=audio.getSample(ch,i);
+                peak=std::max(peak,std::abs(actual));
+                if(at+i>=frames-rate*19/10)tail=std::max(tail,std::abs(actual));
+                error=std::max(error,std::abs(std::bit_cast<float>(bits)-actual));
+            }
+            at+=count;
+        }
+        std::printf("capture parity case %u: %d frames peak %.7f tail %.7f max error %.9g\n",mode,frames,peak,tail,error);
+        check(peak>.001&&error<=2e-6,"native callback/WAV match at fixed tempo across the complete render extent");
+        if(mode==0)check(tail>1e-6,"One Shot capture contains a post-event reverb tail");
+    }
+}
+
 }
 int main() {
     juce::ScopedJuceInitialiser_GUI gui;
+    checkCaptureParity();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
     {
         using namespace vox::fx;
@@ -51,6 +124,20 @@ int main() {
         const auto root=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("voxfx-ui-"+juce::Uuid().toString());
         {
             PresetBrowser browser(*owner,root);browser.setSize(920,456);browser.open();
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(browser.indexing()&&std::chrono::steady_clock::now()<deadline){browser.pollBackground();std::this_thread::yield();}
+            check(!browser.indexing(),"managed user scan completes through the background indexer");
+            const auto full=browser.matchCount();
+            auto& tonality=browser.tonalityFacet();auto& duration=browser.durationFacet();auto& style=browser.styleFacet();
+            tonality.setSelectedId(3,juce::sendNotificationSync);
+            check(browser.matchCount()>0&&browser.matchCount()<full,"tonality facet excludes pitched review Programs");
+            duration.setSelectedId(4,juce::sendNotificationSync);
+            check(browser.matchCount()==0,"categorical duration and tonality filters intersect");
+            tonality.setSelectedId(2,juce::sendNotificationSync);
+            check(browser.matchCount()>0,"bar duration includes transitions and pattern cycles");
+            for(int i=0;i<style.getNumItems();++i)if(style.getItemText(i)=="Uplifting")style.setSelectedItemIndex(i,juce::sendNotificationSync);
+            check(browser.matchCount()>0&&browser.matchCount()<full,"style facet combines with pitch and duration");
+            tonality.setSelectedId(1,juce::sendNotificationSync);duration.setSelectedId(1,juce::sendNotificationSync);style.setSelectedId(1,juce::sendNotificationSync);
             browser.searchField().setText("cobalt choir",false);browser.searchField().onTextChange();
             check(browser.matchCount()==1,"native browser keyword filter finds a unique review row");
             browser.searchField().setText("",false);browser.searchField().onTextChange();browser.nameField().setText("Saved Native Example",true);browser.saveButton().onClick();

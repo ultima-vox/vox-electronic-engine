@@ -1,6 +1,7 @@
 #pragma once
 #include "PortablePreset.h"
 #include "FileExport.h"
+#include <thread>
 
 namespace vox::fx::library {
 inline constexpr unsigned maxFiles=512;
@@ -28,6 +29,52 @@ inline bool write(const juce::File& file,const portable::Sound& sound,const port
         return fileexport::writeBytes(file,{payload.begin(),payload.end()});
     }catch(...){return false;}
 }
+// Worker-only directory scanning. The message thread sees only bounded
+// metadata; it never decodes all 512 user sounds synchronously.
+struct IndexEntry {
+    juce::File file;
+    portable::Tags tags;
+    PlayMode mode;
+    unsigned bars;
+    source::Tonality key;
+    bool pitched;
+    sample::Reference::Kind asset;
+};
+inline IndexEntry describe(const juce::File& file,portable::Tags tags,const portable::Sound& sound){
+    if(tags.name.empty())tags.name=file.getFileNameWithoutExtension().toStdString();
+    const auto& p=sound.state.program;
+    const bool pitched=std::any_of(p.layers.begin(),p.layers.end(),[](const auto& layer){return layer.enabled&&layer.family!=NoiseFamily::riser;});
+    return {file,std::move(tags),p.mode,p.mode==PlayMode::sequence?sound.state.pattern.bars:p.bars,p.tonality,pitched,sound.sample.kind};
+}
+struct Index {std::vector<IndexEntry> entries;unsigned invalid=0;bool limited=false,unavailable=false;};
+class IndexJob {
+public:
+    explicit IndexJob(juce::File root)
+        :worker_([this,root=std::move(root)](std::stop_token stop){
+            try {
+                if(root.isSymbolicLink())index_.unavailable=true;
+                else {
+                    unsigned seen=0;
+                    for(const auto& entry:juce::RangedDirectoryIterator(root,false,"*.voxfx",juce::File::findFiles,juce::File::FollowSymlinks::no)){
+                        if(stop.stop_requested())break;
+                        if(seen++>=maxFiles){index_.limited=true;break;}
+                        const auto file=entry.getFile();portable::Sound sound;portable::Tags metadata;
+                        if(!managedFile(root,file)||!read(file,sound,&metadata)){++index_.invalid;continue;}
+                        index_.entries.push_back(describe(file,std::move(metadata),sound));
+                    }
+                }
+            }catch(...){index_.unavailable=true;}
+            done_.store(true,std::memory_order_release);
+        }){}
+    bool ready() const noexcept {return done_.load(std::memory_order_acquire);}
+    Index take() {return ready()?std::move(index_):Index{};}
+private:
+    Index index_;
+    std::atomic<bool> done_{false};
+    // The destructor only waits for the current bounded (<64 KiB) local
+    // preset read, not for enumeration/decoding of the whole directory.
+    std::jthread worker_;
+};
 inline juce::File userRoot(){return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
     .getChildFile("ULTIMA VOX").getChildFile("VOX FX").getChildFile("User Presets");}
 } // namespace vox::fx::library
