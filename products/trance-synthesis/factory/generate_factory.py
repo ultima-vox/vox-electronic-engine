@@ -619,7 +619,7 @@ def pitch_key(notes):
 
 
 def write_midi(path, notes):
-    """SMF type 0. Velocity is the authored velocity. Slide and accent are omitted."""
+    """Policy A. SMF keeps authored tick+duration and velocity. Slide does not move NoteOff."""
     events = []
     for tick, note, velocity, duration, _slide, _accent in notes:
         events.append((tick, 1, note, velocity))

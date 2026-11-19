@@ -1,7 +1,10 @@
 #include "SynthEditor.h"
 
 #include "FactoryBank.h"
+#include "FactoryContent.h"
 #include "Parameters.h"
+
+#include <algorithm>
 #include "Processor.h"
 
 namespace vox::syn {
@@ -28,7 +31,10 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
     : processor_ (processor),
       capacity_ ({}, "factory"),
       load_ ("Load", vox::ui::VoxButton::Type::Primary),
-      save_ ("Save", vox::ui::VoxButton::Type::Secondary)
+      save_ ("Save", vox::ui::VoxButton::Type::Secondary),
+      play_ ("Play", vox::ui::VoxButton::Type::Primary),
+      stop_ ("Stop", vox::ui::VoxButton::Type::Secondary),
+      exportSmf_ ("SMF", vox::ui::VoxButton::Type::Secondary)
 {
     capacity_.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (capacity_);
@@ -51,6 +57,43 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
     save_.onClick = [this] { saveNamed(); };
     addAndMakeVisible (load_);
     addAndMakeVisible (save_);
+
+    for (int i = 0; i < factoryPhraseCount(); ++i)
+    {
+        const auto& phrase = factoryPhrase (i);
+        phrase_.addItem (juce::String (phrase.id) + " " + phrase.name, i + 1);
+    }
+    phrase_.setSelectedId (1, juce::dontSendNotification);
+    phrase_.onChange = [this]
+    {
+        processor_.setPhraseIndex (phrase_.getSelectedId() - 1);
+        showStep();
+    };
+    addAndMakeVisible (phrase_);
+    play_.onClick = [this] { processor_.setPhrasePlaying (true); };
+    stop_.onClick = [this] { processor_.setPhrasePlaying (false); };
+    exportSmf_.onClick = [this] { exportPhrase(); };
+    addAndMakeVisible (play_);
+    addAndMakeVisible (stop_);
+    addAndMakeVisible (exportSmf_);
+    step_.setRange (0.0, std::max (0, processor_.phraseNoteCount() - 1), 1.0);
+    step_.setSliderStyle (juce::Slider::LinearHorizontal);
+    step_.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    step_.onValueChange = [this] { if (! filling_) showStep(); };
+    addAndMakeVisible (step_);
+    for (auto* box : { &stepNote_, &stepVelocity_, &stepDuration_ })
+    {
+        box->onReturnKey = [this] { commitStep(); };
+        box->onFocusLost = [this] { commitStep(); };
+        addAndMakeVisible (box);
+    }
+    stepSlide_.setButtonText ("Slide");
+    stepAccent_.setButtonText ("Accent");
+    stepSlide_.onClick = [this] { commitStep(); };
+    stepAccent_.onClick = [this] { commitStep(); };
+    addAndMakeVisible (stepSlide_);
+    addAndMakeVisible (stepAccent_);
+    showStep();
 
     auto& state = processor_.parameters();
     juce::String lastGroup;
@@ -192,6 +235,57 @@ void SynthPanel::saveNamed()
         refresh();
 }
 
+void SynthPanel::showStep()
+{
+    const int count = processor_.phraseNoteCount();
+    filling_ = true;
+    step_.setRange (0.0, std::max (0, count - 1), 1.0);
+    const int index = std::clamp (static_cast<int> (step_.getValue()), 0, std::max (0, count - 1));
+    if (count == 0)
+    {
+        stepNote_.clear();
+        stepVelocity_.clear();
+        stepDuration_.clear();
+        filling_ = false;
+        return;
+    }
+    const auto note = processor_.phraseNote (index);
+    stepNote_.setText (juce::String (note.note), juce::dontSendNotification);
+    stepVelocity_.setText (juce::String (note.velocity), juce::dontSendNotification);
+    stepDuration_.setText (juce::String (note.duration), juce::dontSendNotification);
+    stepSlide_.setToggleState (note.slide, juce::dontSendNotification);
+    stepAccent_.setToggleState (note.accent, juce::dontSendNotification);
+    filling_ = false;
+}
+
+void SynthPanel::commitStep()
+{
+    if (filling_ || processor_.phraseNoteCount() <= 0)
+        return;
+    const int index = std::clamp (static_cast<int> (step_.getValue()), 0, processor_.phraseNoteCount() - 1);
+    auto note = processor_.phraseNote (index);
+    note.note = stepNote_.getText().getIntValue();
+    note.velocity = stepVelocity_.getText().getIntValue();
+    note.duration = stepDuration_.getText().getIntValue();
+    note.slide = stepSlide_.getToggleState();
+    note.accent = stepAccent_.getToggleState();
+    processor_.setPhraseNote (index, note);
+}
+
+void SynthPanel::exportPhrase()
+{
+    const auto bytes = processor_.exportCurrentPhrase();
+    chooser_ = std::make_shared<juce::FileChooser> ("Export phrase SMF", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("phrase.mid"), "*.mid");
+    const auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting;
+    chooser_->launchAsync (flags, [bytes] (const juce::FileChooser& chooser)
+    {
+        const auto file = chooser.getResult();
+        if (file == juce::File())
+            return;
+        file.replaceWithData (bytes.data(), bytes.size());
+    });
+}
+
 void SynthPanel::resized()
 {
     auto area = getLocalBounds().reduced (8);
@@ -207,7 +301,28 @@ void SynthPanel::resized()
     row.removeFromLeft (8);
     load_.setBounds (row.removeFromLeft (72));
     area.removeFromTop (6);
-    programs_.setBounds (area.removeFromTop (120));
+    auto phraseRow = area.removeFromTop (28);
+    phrase_.setBounds (phraseRow.removeFromLeft (360));
+    phraseRow.removeFromLeft (8);
+    play_.setBounds (phraseRow.removeFromLeft (64));
+    phraseRow.removeFromLeft (6);
+    stop_.setBounds (phraseRow.removeFromLeft (64));
+    phraseRow.removeFromLeft (6);
+    exportSmf_.setBounds (phraseRow.removeFromLeft (64));
+    area.removeFromTop (4);
+    auto stepRow = area.removeFromTop (28);
+    step_.setBounds (stepRow.removeFromLeft (120));
+    stepRow.removeFromLeft (6);
+    stepNote_.setBounds (stepRow.removeFromLeft (48));
+    stepRow.removeFromLeft (4);
+    stepVelocity_.setBounds (stepRow.removeFromLeft (48));
+    stepRow.removeFromLeft (4);
+    stepDuration_.setBounds (stepRow.removeFromLeft (64));
+    stepRow.removeFromLeft (6);
+    stepSlide_.setBounds (stepRow.removeFromLeft (70));
+    stepAccent_.setBounds (stepRow.removeFromLeft (80));
+    area.removeFromTop (6);
+    programs_.setBounds (area.removeFromTop (88));
     area.removeFromTop (8);
     viewport_.setBounds (area);
 

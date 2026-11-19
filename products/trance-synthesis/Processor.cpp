@@ -140,6 +140,7 @@ void SynthesisProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
 {
     vox::suite::SuiteProcessor::prepareToPlay (sampleRate, maximumBlockSize);
     engine_.prepare (sampleRate, maximumBlockSize);
+    sampleRate_ = sampleRate;
     const auto block = static_cast<std::uint32_t> (std::max (1, maximumBlockSize));
     fx_.prepare (sampleRate, block, 2u);
     prepared_ = sampleRate >= 8000.0 && sampleRate <= 384000.0 && maximumBlockSize > 0;
@@ -208,14 +209,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         event.data1 = metadata.numBytes > 1 ? metadata.data[1] : 0;
         event.data2 = metadata.numBytes > 2 ? metadata.data[2] : 0;
         event.articulation = 0;
-        int index = count;
-        while (index > 0 && events_[index - 1].offset > event.offset)
-        {
-            events_[index] = events_[index - 1];
-            --index;
-        }
-        events_[index] = event;
-        ++count;
+        insertEvent (event, count);
     };
 
     int total = 0;
@@ -289,6 +283,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (dropped != 0)
         droppedMidi_.fetch_add (dropped, std::memory_order_relaxed);
 
+    addPhraseEvents (frames, count);
     runEngine (buffer, count, block);
 }
 
@@ -368,6 +363,217 @@ void SynthesisProcessor::audition (juce::AudioBuffer<float>& buffer, const Audit
         events_[index] = event;
     }
     runEngine (buffer, count, block);
+}
+
+void SynthesisProcessor::insertEvent (const engine::Event& event, int& count)
+{
+    if (count >= engine::maxEvents)
+    {
+        droppedMidi_.fetch_add (1, std::memory_order_relaxed);
+        return;
+    }
+    int index = count;
+    while (index > 0 && events_[index - 1].offset > event.offset)
+    {
+        events_[index] = events_[index - 1];
+        --index;
+    }
+    events_[index] = event;
+    ++count;
+}
+
+void SynthesisProcessor::setPhraseIndex (int index)
+{
+    if (index < 0 || index >= factoryPhraseCount())
+        return;
+    phraseIndex_ = index;
+    phraseEdited_ = false;
+    phraseEdit_.clear();
+    phrasePlayed_ = 0;
+}
+
+void SynthesisProcessor::setPhrasePlaying (bool playing)
+{
+    if (phrasePlaying_ && ! playing)
+        phraseStop_ = true;
+    if (playing && ! phrasePlaying_)
+        phrasePlayed_ = 0;
+    phrasePlaying_ = playing;
+}
+
+void SynthesisProcessor::setPhraseClock (bool forced, bool hostPlaying, double ppq, double bpm) noexcept
+{
+    clockForced_ = forced;
+    clockHost_ = hostPlaying;
+    clockPpq_ = ppq;
+    clockBpm_ = bpm > 1.0 ? bpm : phraseTempoBpm;
+}
+
+void SynthesisProcessor::phraseNotes (const PhraseNote*& notes, int& count, int& lengthTicks) const
+{
+    if (phraseEdited_)
+    {
+        notes = phraseEdit_.data();
+        count = static_cast<int> (phraseEdit_.size());
+        lengthTicks = std::max (1, phraseLength_);
+        return;
+    }
+    const auto& phrase = factoryPhrase (phraseIndex_);
+    notes = phrase.notes;
+    count = phrase.noteCount;
+    lengthTicks = std::max (1, phrase.lengthTicks);
+}
+
+int SynthesisProcessor::phraseNoteCount() const
+{
+    const PhraseNote* notes = nullptr;
+    int count = 0;
+    int length = 0;
+    phraseNotes (notes, count, length);
+    return count;
+}
+
+PhraseNote SynthesisProcessor::phraseNote (int index) const
+{
+    const PhraseNote* notes = nullptr;
+    int count = 0;
+    int length = 0;
+    phraseNotes (notes, count, length);
+    if (index < 0 || index >= count || notes == nullptr)
+        return {};
+    return notes[index];
+}
+
+void SynthesisProcessor::setPhraseNote (int index, PhraseNote note)
+{
+    if (! phraseEdited_)
+    {
+        const auto& phrase = factoryPhrase (phraseIndex_);
+        phraseEdit_.assign (phrase.notes, phrase.notes + phrase.noteCount);
+        phraseLength_ = phrase.lengthTicks;
+        phraseEdited_ = true;
+    }
+    if (index < 0 || index >= static_cast<int> (phraseEdit_.size()))
+        return;
+    note.note = std::clamp (note.note, 0, 127);
+    note.velocity = std::clamp (note.velocity, 1, 127);
+    note.duration = std::max (1, note.duration);
+    note.tick = std::max (0, note.tick);
+    phraseEdit_[static_cast<std::size_t> (index)] = note;
+}
+
+std::vector<std::byte> SynthesisProcessor::exportCurrentPhrase() const
+{
+    const PhraseNote* notes = nullptr;
+    int count = 0;
+    int length = 0;
+    phraseNotes (notes, count, length);
+    return exportPhraseSmf (notes, count);
+}
+
+void SynthesisProcessor::addPhraseEvents (int frames, int& count)
+{
+    if (phraseStop_)
+    {
+        engine::Event event;
+        event.offset = 0;
+        event.status = 0xb0;
+        event.data1 = 123;
+        event.data2 = 0;
+        insertEvent (event, count);
+        phraseStop_ = false;
+        phrasePlayed_ = 0;
+        return;
+    }
+    if (! phrasePlaying_ || frames <= 0)
+        return;
+
+    bool host = false;
+    double ppq = 0.0;
+    double bpm = phraseTempoBpm;
+    if (clockForced_)
+    {
+        host = clockHost_;
+        ppq = clockPpq_;
+        bpm = clockBpm_;
+    }
+    else if (auto* head = getPlayHead())
+    {
+        if (const auto position = head->getPosition())
+        {
+            if (position->getIsPlaying())
+            {
+                host = true;
+                if (const auto hostPpq = position->getPpqPosition())
+                    ppq = *hostPpq;
+                if (const auto hostBpm = position->getBpm())
+                    if (*hostBpm > 1.0)
+                        bpm = *hostBpm;
+            }
+        }
+    }
+
+    const PhraseNote* notes = nullptr;
+    int noteCount = 0;
+    int lengthTicks = 1;
+    phraseNotes (notes, noteCount, lengthTicks);
+    const auto scheduled = schedulePhrase (notes, noteCount, PhraseProjection::performance);
+    int loopTicks = std::max (1, lengthTicks);
+    for (const auto& event : scheduled)
+        loopTicks = std::max (loopTicks, event.tick + 1);
+
+    const auto emit = [&] (const ScheduledEvent& event, int offset)
+    {
+        if (offset < 0 || offset >= frames)
+            return;
+        engine::Event midi;
+        midi.offset = static_cast<std::uint32_t> (offset);
+        midi.status = static_cast<std::uint8_t> (event.on ? 0x90 : 0x80);
+        midi.data1 = static_cast<std::uint8_t> (event.note & 0x7f);
+        midi.data2 = static_cast<std::uint8_t> (event.on ? std::clamp (event.velocity, 1, 127) : 0);
+        if (event.accent)
+            midi.articulation = static_cast<std::uint8_t> (midi.articulation | engine::articulateAccent);
+        if (event.slide)
+            midi.articulation = static_cast<std::uint8_t> (midi.articulation | engine::articulateSlide);
+        insertEvent (midi, count);
+    };
+
+    if (host)
+    {
+        const double ticksPerSample = (bpm / 60.0) * phrasePulsesPerQuarter / sampleRate_;
+        if (ticksPerSample <= 0.0)
+            return;
+        const double startTick = ppq * phrasePulsesPerQuarter;
+        const double endTick = startTick + static_cast<double> (frames) * ticksPerSample;
+        const double cycle = std::floor (startTick / static_cast<double> (loopTicks)) * loopTicks;
+        for (const auto& event : scheduled)
+        {
+            for (int k = -1; k <= 1; ++k)
+            {
+                const double at = cycle + static_cast<double> (k * loopTicks + event.tick);
+                if (at < startTick || at >= endTick)
+                    continue;
+                const int offset = static_cast<int> (std::llround ((at - startTick) / ticksPerSample));
+                emit (event, offset);
+            }
+        }
+        return;
+    }
+
+    const int loopSamples = std::max (1, phraseSample (loopTicks, sampleRate_, bpm));
+    for (const auto& event : scheduled)
+    {
+        std::int64_t at = phraseSample (event.tick, sampleRate_, bpm);
+        if (at < phrasePlayed_)
+        {
+            const auto behind = phrasePlayed_ - at;
+            const auto steps = (behind + loopSamples - 1) / loopSamples;
+            at += steps * static_cast<std::int64_t> (loopSamples);
+        }
+        if (at >= phrasePlayed_ && at < phrasePlayed_ + frames)
+            emit (event, static_cast<int> (at - phrasePlayed_));
+    }
+    phrasePlayed_ += frames;
 }
 
 void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) const

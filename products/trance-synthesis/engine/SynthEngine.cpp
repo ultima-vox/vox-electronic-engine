@@ -208,6 +208,7 @@ void SynthEngine::pushKey (Part& part, int key, int velocity) noexcept
     removeKey (part, key);
     auto& held = part.keys[key];
     held.velocity = static_cast<std::uint8_t> (velocity);
+    held.stack = 1;
     held.alive = true;
     held.down = true;
     held.previous = noKey;
@@ -366,8 +367,10 @@ void SynthEngine::noteOn (int part, int channel, int note, int velocity, NoteArt
         return;
     auto& slot = parts_[part];
     const int key = keyIndex (channel, note);
+    const int stacked = slot.keys[key].alive ? slot.keys[key].stack : 0;
     const bool had = slot.mono.gate && slot.mono.active;
     pushKey (slot, key, velocity);
+    slot.keys[key].stack = static_cast<std::uint8_t> (std::min (255, stacked + 1));
     const float gain = static_cast<float> (velocity) / 127.0f;
     if (monoEngine (slot.engine))
         startMono (part, note, gain, had, art);
@@ -393,6 +396,11 @@ void SynthEngine::noteOff (int part, int channel, int note) noexcept
     const int key = keyIndex (channel, note);
     if (! slot.keys[key].alive)
         return;
+    if (slot.keys[key].stack > 1)
+    {
+        --slot.keys[key].stack;
+        return;
+    }
     if (slot.sustain[channel])
     {
         slot.keys[key].down = false;

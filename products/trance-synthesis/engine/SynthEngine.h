@@ -97,6 +97,7 @@ private:
         std::uint16_t previous = noKey;
         std::uint16_t next = noKey;
         std::uint8_t velocity = 0;
+        std::uint8_t stack = 0;
         bool alive = false;
         bool down = false;
     };

@@ -1,23 +1,26 @@
 #pragma once
 
-// Canonical phrase schedule. Live audition and the SMF writer both start here.
+// One note list, two projections. Policy A.
 //
-// SMF type 0 carries tick, note, velocity, duration, tempo and end-of-track.
-// It does not carry slide or accent. Importing an SMF drops those flags.
-// That is a format limit, not a claim of parity.
+// Authored: NoteOff stays at tick + duration. This is what SMF type 0 stores,
+// together with note and velocity. Slide and accent are not in the file.
+// At a shared tick the file plays NoteOff before NoteOn.
 //
-// Native audition keeps the flags:
-//   slide  Mono Acid and Psy tie the gate into the next note and glide,
-//          even when the slide knob is 0. VA stays polyphonic and ignores slide.
-//   accent Acid opens the filter, Psy raises the level, VA raises the voice
-//          gain. The stored velocity is not rewritten. Host MIDI has no flag:
-//          Acid still treats velocity >= 110 as an accent, Psy and VA do not.
+// Performance: a slide note holds its gate until the next note and that next
+// note is marked slide. NoteOn is ordered before NoteOff at that tick so the
+// mono gate does not drop before the glide. VA does not glide. Accent never
+// rewrites velocity. A same-pitch NoteOff does not clear a newer NoteOn;
+// the engine counts stacked ons.
+//
+// Host MIDI has no slide flag. Acid still treats velocity >= 110 as an accent.
+// Psy and VA do not.
 
 #include "FactoryBank.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace vox::syn {
@@ -25,6 +28,8 @@ namespace vox::syn {
 inline constexpr int phraseTempoBpm = 120;
 inline constexpr int phrasePulsesPerQuarter = 960;
 inline constexpr char phraseSmfLimit[] = "slide/accent are not in this SMF";
+
+enum class PhraseProjection { authored, performance };
 
 struct ScheduledEvent {
     int tick = 0;
@@ -44,35 +49,39 @@ struct AuditionEvent {
     bool accent = false;
 };
 
-// Half-away-from-zero. The same tick lands on the same sample at a given rate
-// no matter which block size later slices the buffer.
-[[nodiscard]] inline int phraseSample (int tick, double sampleRate) noexcept
+// Half-away-from-zero. Block size does not move the result.
+[[nodiscard]] inline int phraseSample (int tick, double sampleRate, double bpm = phraseTempoBpm) noexcept
 {
+    const double tempo = bpm > 1.0 ? bpm : phraseTempoBpm;
     const double seconds = static_cast<double> (tick) * 60.0
-                         / (static_cast<double> (phraseTempoBpm) * phrasePulsesPerQuarter);
+                         / (tempo * phrasePulsesPerQuarter);
     return static_cast<int> (std::llround (seconds * sampleRate));
 }
 
-[[nodiscard]] inline std::vector<ScheduledEvent> schedulePhrase (const PhraseNote* notes, int count)
+[[nodiscard]] inline std::vector<ScheduledEvent> schedulePhrase (const PhraseNote* notes, int count,
+                                                                 PhraseProjection projection = PhraseProjection::performance)
 {
     std::vector<int> off (static_cast<std::size_t> (std::max (0, count)));
     std::vector<char> into (static_cast<std::size_t> (std::max (0, count)));
     for (int i = 0; i < count; ++i)
         off[static_cast<std::size_t> (i)] = notes[i].tick + notes[i].duration;
-    for (int i = 0; i < count; ++i)
+    if (projection == PhraseProjection::performance)
     {
-        if (! notes[i].slide)
-            continue;
-        int destTick = -1;
-        for (int j = 0; j < count; ++j)
-            if (notes[j].tick > notes[i].tick && (destTick < 0 || notes[j].tick < destTick))
-                destTick = notes[j].tick;
-        if (destTick < 0)
-            continue;
-        off[static_cast<std::size_t> (i)] = destTick;
-        for (int j = 0; j < count; ++j)
-            if (notes[j].tick == destTick)
-                into[static_cast<std::size_t> (j)] = 1;
+        for (int i = 0; i < count; ++i)
+        {
+            if (! notes[i].slide)
+                continue;
+            int destTick = -1;
+            for (int j = 0; j < count; ++j)
+                if (notes[j].tick > notes[i].tick && (destTick < 0 || notes[j].tick < destTick))
+                    destTick = notes[j].tick;
+            if (destTick < 0)
+                continue;
+            off[static_cast<std::size_t> (i)] = destTick;
+            for (int j = 0; j < count; ++j)
+                if (notes[j].tick == destTick)
+                    into[static_cast<std::size_t> (j)] = 1;
+        }
     }
 
     std::vector<ScheduledEvent> events;
@@ -84,7 +93,7 @@ struct AuditionEvent {
         on.on = true;
         on.note = notes[i].note;
         on.velocity = notes[i].velocity;
-        on.slide = into[static_cast<std::size_t> (i)] != 0;
+        on.slide = projection == PhraseProjection::performance && into[static_cast<std::size_t> (i)] != 0;
         on.accent = notes[i].accent;
         events.push_back (on);
         ScheduledEvent done;
@@ -101,6 +110,83 @@ struct AuditionEvent {
         return a.note < b.note;
     });
     return events;
+}
+
+[[nodiscard]] inline std::vector<std::byte> exportPhraseSmf (const PhraseNote* notes, int count)
+{
+    auto events = schedulePhrase (notes, count, PhraseProjection::authored);
+    std::sort (events.begin(), events.end(), [] (const ScheduledEvent& a, const ScheduledEvent& b) {
+        if (a.tick != b.tick)
+            return a.tick < b.tick;
+        if (a.on != b.on)
+            return ! a.on && b.on;
+        return a.note < b.note;
+    });
+
+    std::vector<std::byte> track;
+    const auto varlen = [&track] (int value)
+    {
+        unsigned char bytes[5];
+        int used = 0;
+        bytes[used++] = static_cast<unsigned char> (value & 0x7f);
+        value >>= 7;
+        while (value > 0)
+        {
+            bytes[used++] = static_cast<unsigned char> ((value & 0x7f) | 0x80);
+            value >>= 7;
+        }
+        while (used > 0)
+            track.push_back (static_cast<std::byte> (bytes[--used]));
+    };
+    const auto push = [&track] (unsigned char byte) { track.push_back (static_cast<std::byte> (byte)); };
+
+    track.insert (track.end(), { std::byte { 0 }, std::byte { 0xff }, std::byte { 0x51 }, std::byte { 3 } });
+    push (0x07);
+    push (0xa1);
+    push (0x20);
+    const auto* notice = reinterpret_cast<const unsigned char*> (phraseSmfLimit);
+    const int noticeLength = static_cast<int> (std::char_traits<char>::length (phraseSmfLimit));
+    push (0x00);
+    push (0xff);
+    push (0x01);
+    push (static_cast<unsigned char> (noticeLength));
+    for (int i = 0; i < noticeLength; ++i)
+        push (notice[i]);
+
+    int last = 0;
+    for (const auto& event : events)
+    {
+        varlen (event.tick - last);
+        last = event.tick;
+        push (event.on ? 0x90 : 0x80);
+        push (static_cast<unsigned char> (event.note & 0x7f));
+        push (event.on ? static_cast<unsigned char> (event.velocity & 0x7f) : 0);
+    }
+    varlen (0);
+    push (0xff);
+    push (0x2f);
+    push (0);
+
+    std::vector<std::byte> file;
+    const auto be32 = [&file] (unsigned value)
+    {
+        file.push_back (static_cast<std::byte> ((value >> 24) & 0xffu));
+        file.push_back (static_cast<std::byte> ((value >> 16) & 0xffu));
+        file.push_back (static_cast<std::byte> ((value >> 8) & 0xffu));
+        file.push_back (static_cast<std::byte> (value & 0xffu));
+    };
+    file.insert (file.end(), { std::byte { 'M' }, std::byte { 'T' }, std::byte { 'h' }, std::byte { 'd' } });
+    be32 (6);
+    file.push_back (std::byte { 0 });
+    file.push_back (std::byte { 0 });
+    file.push_back (std::byte { 0 });
+    file.push_back (std::byte { 1 });
+    file.push_back (std::byte { 0x03 });
+    file.push_back (std::byte { 0xc0 });
+    file.insert (file.end(), { std::byte { 'M' }, std::byte { 'T' }, std::byte { 'r' }, std::byte { 'k' } });
+    be32 (static_cast<unsigned> (track.size()));
+    file.insert (file.end(), track.begin(), track.end());
+    return file;
 }
 
 } // namespace vox::syn

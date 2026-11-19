@@ -63,6 +63,17 @@ public:
     [[nodiscard]] juce::String factoryProgramSearch (int index) const;
     bool loadFactoryProgram (int index);
 
+    void setPhraseIndex (int index);
+    [[nodiscard]] int phraseIndex() const noexcept { return phraseIndex_; }
+    [[nodiscard]] bool phrasePlaying() const noexcept { return phrasePlaying_; }
+    void setPhrasePlaying (bool playing);
+    // Forced clock is for tests. Otherwise a playing host wins, else the internal 120 bpm clock.
+    void setPhraseClock (bool forced, bool hostPlaying, double ppq, double bpm) noexcept;
+    [[nodiscard]] int phraseNoteCount() const;
+    [[nodiscard]] PhraseNote phraseNote (int index) const;
+    void setPhraseNote (int index, PhraseNote note);
+    [[nodiscard]] std::vector<std::byte> exportCurrentPhrase() const;
+
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
@@ -74,12 +85,27 @@ protected:
 private:
     engine::BlockParams latchBlock();
     void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
+    void insertEvent (const engine::Event& event, int& count);
+    void addPhraseEvents (int frames, int& count);
+    void phraseNotes (const PhraseNote*& notes, int& count, int& lengthTicks) const;
     juce::AudioProcessorValueTreeState parameters_;
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
     vstengine::effects::EffectsChain fx_;
     engine::Event events_[engine::maxEvents] {};
     bool prepared_ = false;
+    double sampleRate_ = 48000.0;
+    int phraseIndex_ = 0;
+    bool phrasePlaying_ = false;
+    bool phraseStop_ = false;
+    bool phraseEdited_ = false;
+    bool clockForced_ = false;
+    bool clockHost_ = false;
+    double clockPpq_ = 0.0;
+    double clockBpm_ = 120.0;
+    std::int64_t phrasePlayed_ = 0;
+    int phraseLength_ = 0;
+    std::vector<PhraseNote> phraseEdit_;
     std::atomic<std::uint64_t> droppedMidi_ { 0 };
 
     struct Restored { float loaded = 0.0f, held = 0.0f; };

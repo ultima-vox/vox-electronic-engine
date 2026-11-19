@@ -28,6 +28,9 @@ private:
     void refresh();
     void loadSelected();
     void saveNamed();
+    void showStep();
+    void commitStep();
+    void exportPhrase();
 
     struct ProgramRow {
         bool factory = false;
@@ -39,7 +42,13 @@ private:
     juce::TextEditor search_, name_;
     vox::ui::VoxComboBox category_;
     juce::ListBox programs_;
-    vox::ui::VoxButton load_, save_;
+    vox::ui::VoxButton load_, save_, play_, stop_, exportSmf_;
+    vox::ui::VoxComboBox phrase_;
+    juce::Slider step_;
+    juce::TextEditor stepNote_, stepVelocity_, stepDuration_;
+    juce::ToggleButton stepSlide_, stepAccent_;
+    std::shared_ptr<juce::FileChooser> chooser_;
+    bool filling_ = false;
     juce::Viewport viewport_;
     juce::Component page_;
     std::vector<std::unique_ptr<juce::Component>> controls_;

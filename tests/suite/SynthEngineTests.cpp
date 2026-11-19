@@ -479,6 +479,55 @@ void testGolden()
     }
 }
 
+void testSameKeyStack()
+{
+    eng::SynthEngine engine;
+    engine.prepare (48000.0, 256);
+    auto params = defaults();
+    params.part[0].engine = eng::EngineKind::acid;
+    params.part[0].slide = 0.0f;
+    params.part[0].portamento = 0.0f;
+    params.part[1].level = 0.0f;
+    const eng::Event first = midi (0, 0x90, 48, 70);
+    render (engine, 256, &first, 1, params);
+    check (engine.monoGate (0), "first note is held");
+
+    eng::Event join[2];
+    join[0] = midi (0, 0x90, 48, 64);
+    join[0].articulation = static_cast<std::uint8_t> (eng::articulateSlide | eng::articulateAccent);
+    join[1] = midi (1, 0x80, 48, 0);
+    render (engine, 256, join, 2, params);
+    check (engine.monoGate (0), "same-note slide join keeps the new gate");
+    check (engine.monoNote (0) == 48, "same-note join stays on that pitch");
+    check (engine.glideSource (0) == 1, "same-note slide still glides");
+    check (engine.monoAccent (0) > 0.2f, "accent on the new note is not cleared by the old note-off");
+
+    const eng::Event release = midi (0, 0x80, 48, 0);
+    render (engine, 64, &release, 1, params);
+    check (! engine.monoGate (0), "the new note still releases on its own note-off");
+
+    eng::SynthEngine overlap;
+    overlap.prepare (48000.0, 128);
+    const eng::Event on = midi (0, 0x90, 40, 80);
+    render (overlap, 64, &on, 1, params);
+    eng::Event again[2] = { midi (0, 0x90, 40, 100), midi (10, 0x80, 40, 0) };
+    render (overlap, 64, again, 2, params);
+    check (overlap.monoGate (0), "an older note-off does not kill a stacked note");
+    const eng::Event done = midi (20, 0x80, 40, 0);
+    render (overlap, 64, &done, 1, params);
+    check (! overlap.monoGate (0), "the stacked note releases on the later note-off");
+
+    eng::SynthEngine chord;
+    chord.prepare (48000.0, 128);
+    const eng::Event low = midi (0, 0x90, 36, 90);
+    render (chord, 128, &low, 1, params);
+    eng::Event move[2] = { midi (0, 0x90, 43, 90), midi (1, 0x80, 36, 0) };
+    move[0].articulation = eng::articulateSlide;
+    render (chord, 64, move, 2, params);
+    check (chord.monoGate (0) && chord.monoNote (0) == 43, "NoteOn before NoteOff keeps the new pitch");
+    check (chord.glideSource (0) == 1, "different-pitch slide still glides");
+}
+
 void testTailBound()
 {
     const double derivedTail = -std::log (1.0e-4) * 0.06;
@@ -498,6 +547,7 @@ int main()
     testVoiceCap();
     testMidi();
     testSwitchAndRates();
+    testSameKeyStack();
     testAllocation();
     testGolden();
     if (failures == 0 && skips == 0)

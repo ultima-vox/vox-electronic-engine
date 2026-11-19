@@ -1247,6 +1247,186 @@ void testHistoricalUbnk()
     check (std::abs (plain (*copy, "syn.a.cutoff") - 0.61f) < 1.0e-5f, "historical user value survives re-save");
 }
 
+void testPhrasePlayer()
+{
+    int slideJoins = 0;
+    for (int i = 0; i < vox::syn::factoryPhraseCount(); ++i)
+    {
+        const auto& phrase = vox::syn::factoryPhrase (i);
+        const auto authored = vox::syn::schedulePhrase (phrase.notes, phrase.noteCount, vox::syn::PhraseProjection::authored);
+        const auto played = vox::syn::schedulePhrase (phrase.notes, phrase.noteCount, vox::syn::PhraseProjection::performance);
+        for (int n = 0; n < phrase.noteCount; ++n)
+        {
+            const int off = phrase.notes[n].tick + phrase.notes[n].duration;
+            bool found = false;
+            for (const auto& event : authored)
+                found = found || (! event.on && event.note == phrase.notes[n].note && event.tick == off);
+            check (found, std::string (phrase.id) + " authored NoteOff stays at tick+duration");
+        }
+        for (int n = 0; n < phrase.noteCount; ++n)
+        {
+            if (! phrase.notes[n].slide)
+                continue;
+            int dest = -1;
+            for (int j = 0; j < phrase.noteCount; ++j)
+                if (phrase.notes[j].tick > phrase.notes[n].tick && (dest < 0 || phrase.notes[j].tick < dest))
+                    dest = phrase.notes[j].tick;
+            if (dest < 0)
+                continue;
+            ++slideJoins;
+            bool tied = false;
+            for (const auto& event : played)
+                tied = tied || (! event.on && event.note == phrase.notes[n].note && event.tick == dest);
+            check (tied, std::string (phrase.id) + " performance holds a slide gate to the next note");
+            bool into = false;
+            for (const auto& event : played)
+                into = into || (event.on && event.tick == dest && event.slide);
+            check (into, std::string (phrase.id) + " performance marks the destination slide");
+        }
+        std::string error;
+        const auto fileNotes = readSmf (std::string (VOX_FACTORY_MIDI_DIR) + "/" + phrase.id + ".mid", error);
+        check (error.empty(), std::string (phrase.id) + " " + error);
+        const auto exported = vox::syn::exportPhraseSmf (phrase.notes, phrase.noteCount);
+        const auto exportedPath = std::string ("/tmp/") + phrase.id + "-policy.mid";
+        {
+            std::ofstream out (exportedPath, std::ios::binary);
+            out.write (reinterpret_cast<const char*> (exported.data()), static_cast<std::streamsize> (exported.size()));
+        }
+        std::string exportError;
+        const auto roundTrip = readSmf (exportedPath, exportError);
+        check (exportError.empty() && static_cast<int> (roundTrip.size()) == phrase.noteCount, std::string (phrase.id) + " C++ SMF export parses");
+        if (static_cast<int> (fileNotes.size()) == phrase.noteCount && static_cast<int> (roundTrip.size()) == phrase.noteCount)
+        {
+            for (int n = 0; n < phrase.noteCount; ++n)
+            {
+                const auto& note = phrase.notes[n];
+                bool inFile = false;
+                bool inExport = false;
+                for (const auto& fileNote : fileNotes)
+                    inFile = inFile || (fileNote.tick == note.tick && fileNote.note == note.note
+                                         && fileNote.velocity == note.velocity && fileNote.duration == note.duration);
+                for (const auto& fileNote : roundTrip)
+                    inExport = inExport || (fileNote.tick == note.tick && fileNote.note == note.note
+                                             && fileNote.velocity == note.velocity && fileNote.duration == note.duration);
+                check (inFile && inExport, std::string (phrase.id) + " file and C++ export share the authored note");
+            }
+        }
+    }
+    check (slideJoins > 0, "at least one slide join exists");
+
+    const auto& acid = vox::syn::factoryPhrase (30);
+    check (std::string (acid.id) == "FP-031", "FP-031 is the acid slide example");
+    bool authored700 = false;
+    bool played720 = false;
+    const auto authored = vox::syn::schedulePhrase (acid.notes, acid.noteCount, vox::syn::PhraseProjection::authored);
+    const auto played = vox::syn::schedulePhrase (acid.notes, acid.noteCount, vox::syn::PhraseProjection::performance);
+    for (const auto& event : authored)
+        authored700 = authored700 || (! event.on && event.note == 46 && event.tick == 700);
+    for (const auto& event : played)
+        played720 = played720 || (! event.on && event.note == 46 && event.tick == 720);
+    check (authored700 && played720, "FP-031 authored NoteOff is 700 and performance NoteOff is 720");
+
+    auto edited = make();
+    edited->setPhraseIndex (30);
+    auto changed = edited->phraseNote (2);
+    check (changed.tick == 480 && changed.velocity == 120, "FP-031 step 2 is the slide note");
+    changed.velocity = 42;
+    edited->setPhraseNote (2, changed);
+    const auto bytes = edited->exportCurrentPhrase();
+    {
+        std::ofstream out ("/tmp/FP-031-edited.mid", std::ios::binary);
+        out.write (reinterpret_cast<const char*> (bytes.data()), static_cast<std::streamsize> (bytes.size()));
+    }
+    std::string editError;
+    const auto editedNotes = readSmf ("/tmp/FP-031-edited.mid", editError);
+    bool editedVelocity = false;
+    for (const auto& note : editedNotes)
+        editedVelocity = editedVelocity || (note.tick == 480 && note.note == 46 && note.velocity == 42 && note.duration == 220);
+    check (editError.empty() && editedVelocity, "edited velocity is in the exported SMF");
+    std::string originalError;
+    const auto original = readSmf (std::string (VOX_FACTORY_MIDI_DIR) + "/FP-031.mid", originalError);
+    bool originalKept = false;
+    for (const auto& note : original)
+        originalKept = originalKept || (note.tick == 480 && note.velocity == 120);
+    check (originalKept, "factory SMF is not rewritten by an edit");
+
+    auto join = make();
+    setPlain (*join, "syn.a.engine", 1.0f);
+    setPlain (*join, "syn.b.level", 0.0f);
+    setPlain (*join, "syn.a.slide", 0.0f);
+    setPlain (*join, "syn.a.portamento", 0.0f);
+    join->prepareToPlay (48000.0, 256);
+    juce::AudioBuffer<float> buffer (2, 256);
+    vox::syn::AuditionEvent first { 0, true, 48, 70, false, false };
+    join->audition (buffer, &first, 1);
+    vox::syn::AuditionEvent pair[2] = {
+        { 0, true, 48, 64, true, true },
+        { 1, false, 48, 0, false, false },
+    };
+    join->audition (buffer, pair, 2);
+    check (join->monoGate (0) && join->monoNote (0) == 48, "processor same-note join keeps the new gate");
+    check (join->glideSource (0) == 1, "processor same-note join glides");
+
+    auto split = make();
+    setPlain (*split, "syn.a.engine", 1.0f);
+    setPlain (*split, "syn.b.level", 0.0f);
+    split->prepareToPlay (48000.0, 256);
+    vox::syn::AuditionEvent late { 200, true, 50, 90, false, false };
+    split->audition (buffer, &late, 1);
+    check (split->monoGate (0), "note-on late in the block is sounding");
+    vox::syn::AuditionEvent off { 0, false, 50, 0, false, false };
+    split->audition (buffer, &off, 1);
+    check (! split->monoGate (0), "note-off in the next block releases it");
+
+    auto offsets = make();
+    setPlain (*offsets, "syn.a.engine", 1.0f);
+    setPlain (*offsets, "syn.b.level", 0.0f);
+    offsets->prepareToPlay (48000.0, 64);
+    juce::AudioBuffer<float> small (2, 64);
+    vox::syn::AuditionEvent chord[3] = {
+        { 0, true, 60, 80, false, false },
+        { 10, true, 64, 80, false, false },
+        { 20, true, 67, 80, false, false },
+    };
+    offsets->audition (small, chord, 3);
+    check (offsets->monoGate (0) && offsets->monoNote (0) == 67, "later offset in the block wins the mono note");
+
+    auto player = make();
+    setPlain (*player, "syn.a.engine", 1.0f);
+    setPlain (*player, "syn.b.level", 0.0f);
+    setPlain (*player, "syn.a.slide", 0.0f);
+    player->prepareToPlay (48000.0, 256);
+    player->setPhraseIndex (0);
+    const int firstTick = player->phraseNote (0).tick;
+    const int firstNote = player->phraseNote (0).note;
+    const int at = vox::syn::phraseSample (firstTick, 48000.0);
+    player->setPhrasePlaying (true);
+    int started = -1;
+    juce::MidiBuffer silent;
+    for (int origin = 0; origin < at + 256; origin += 256)
+    {
+        player->processBlock (buffer, silent);
+        silent.clear();
+        if (started < 0 && player->monoGate (0) && player->monoNote (0) == firstNote)
+            started = origin;
+    }
+    check (started == (at / 256) * 256, "internal clock starts the note in the block that contains its sample");
+
+    auto host = make();
+    setPlain (*host, "syn.a.engine", 1.0f);
+    setPlain (*host, "syn.b.level", 0.0f);
+    host->prepareToPlay (48000.0, 128);
+    host->setPhraseIndex (0);
+    host->setPhraseClock (true, true, static_cast<double> (firstTick) / 960.0, 120.0);
+    host->setPhrasePlaying (true);
+    juce::AudioBuffer<float> hostBuffer (2, 128);
+    host->processBlock (hostBuffer, silent);
+    check (host->monoGate (0) && host->monoNote (0) == firstNote, "host ppq places the note in this block");
+    host->setPhrasePlaying (false);
+    host->processBlock (hostBuffer, silent);
+    check (! host->monoGate (0), "stop releases the phrase");
+}
+
 void testStateEdges()
 {
     auto synth = make();
@@ -1470,6 +1650,7 @@ int main()
     testPhraseClock();
     testArticulation();
     testHistoricalUbnk();
+    testPhrasePlayer();
     testStateEdges();
     testIntegrationStress();
     if (failures == 0 && skips == 0)
