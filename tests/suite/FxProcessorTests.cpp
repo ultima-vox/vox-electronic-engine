@@ -191,6 +191,124 @@ void checkBounceMonitorIsolation() {
     check(same(128)&&fx->audioTelemetry().events==2,"return to live processing does not replay a queued audition");
 }
 
+void checkInPlaceBounceHistory() {
+    using namespace vox::fx;
+    for(const auto type:{effects::Type::delay,effects::Type::reverb}){
+        auto fx=std::make_unique<FxProcessor>(),continuous=std::make_unique<FxProcessor>();
+        NoiseProgram p;p.mode=PlayMode::gate;p.layers[0].family=NoiseFamily::laser;p.layers[0].pan=-.44f;
+        p.layers[1]=p.layers[0];p.layers[1].family=NoiseFamily::formant;p.layers[1].pan=.78f;
+        double rate=type==effects::Type::delay?48000.:96000.;
+        const float amount=type==effects::Type::delay?.8f:.7f;
+        TestPlayHead clock;juce::AudioPlayHead::PositionInfo pos;
+        pos.setIsPlaying(true);pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});
+        pattern::Pattern pattern;pattern.steps[0].enabled=true;
+        for(auto* instance:{fx.get(),continuous.get()}){
+            check(instance->setProgram(p)&&instance->setPattern(pattern)&&instance->setEffect(0,{type,1.f,amount}),"install in-place history fixture");
+            instance->durationParameter().setValueNotifyingHost(instance->durationParameter().convertTo0to1(.05f));
+            instance->effectWetParameter(0).setValueNotifyingHost(1.f);
+            instance->effectAmountParameter(0).setValueNotifyingHost(amount);
+            instance->prepareToPlay(rate,512);instance->setPlayHead(&clock);
+            instance->audition();
+        }
+        const auto state=save(*fx);
+        juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer ma,mb;
+        std::int64_t sample=0;double ppq=.5;
+        const auto render=[&](int size,double bpm,bool hasPpq=true){
+            pos.setTimeInSamples(sample);pos.setPpqPosition(hasPpq?juce::Optional<double>(ppq):juce::Optional<double>{});
+            pos.setBpm(bpm);clock.position=pos;
+            a.setSize(2,size);b.setSize(2,size);block(*fx,a,ma);block(*continuous,b,mb);
+            sample+=size;ppq+=size*bpm/(60*rate);
+        };
+        const auto same=[&]{
+            const auto size=a.getNumSamples();
+            for(int c=0;c<2;++c)
+                if(!std::equal(a.getReadPointer(c),a.getReadPointer(c)+size,b.getReadPointer(c)))return false;
+            return true;
+        };
+        // End the finite synth audition naturally, leaving a known nonempty
+        // shared FX history on both instances. Only the subject plays browser PCM.
+        const auto switchAt=static_cast<std::int64_t>(rate*(type==effects::Type::delay?.44:.072));
+        while(sample+512<switchAt)render(512,120.);
+        std::vector<float> preview(4096,.25f);
+        auto& bus=fx->previewBus();
+        check(bus.publish(preview,static_cast<std::uint32_t>(rate),bus.ticket()),"publish live browser preview");
+        render(static_cast<int>(switchAt-sample),120.);
+        check(!same()&&bus.playing()&&fx->audioTelemetry().events==0,"browser PCM is leased and synth audition left only effects history");
+        const auto stale=bus.ticket();
+        fx->setNonRealtime(true);fx->audition();render(128,120.);
+        check(same()&&a.getMagnitude(0,128)>1e-7f&&fx->audioTelemetry().events==0,
+              "in-place bounce keeps nonempty shared effect history but not preview PCM or audition voice");
+        check(!bus.playing()&&!bus.publish(preview,static_cast<std::uint32_t>(rate),stale),"pending browser ticket cannot restore preview after bounce begins");
+        // Admit a held MIDI note; losing PPQ disables Pattern, not the MIDI
+        // owner. Recover clock at a known downbeat without a sample-time seek.
+        ma.addEvent(juce::MidiMessage::noteOn(3,67,juce::uint8{108}),31);mb=ma;
+        render(64,120.);
+        check(same()&&fx->audioTelemetry().events==1,"held MIDI is admitted over the existing tail");
+        for(auto* instance:{fx.get(),continuous.get()})instance->patternEnabledParameter().setValueNotifyingHost(1.f);
+        render(512,94.,false);
+        check(same()&&fx->audioTelemetry().events==1&&fx->patternClock()==FxProcessor::PatternClock::invalidPpq,
+              "tempo change with missing PPQ disables Pattern without removing a seconds-based held note");
+        ppq=4.;render(128,94.);
+        check(same()&&fx->audioTelemetry().events==2&&fx->patternClock()==FxProcessor::PatternClock::ready44,
+              "PPQ recovery admits exactly one Pattern trigger without restarting held MIDI");
+        fx->setNonRealtime(false);render(64,94.);
+        check(same()&&fx->audioTelemetry().events==2&&!bus.playing(),"leaving bounce preserves wet history and does not resume preview");
+        ma.addEvent(juce::MidiMessage::noteOff(3,67),0);mb=ma;
+        for(int i=0;i<5;++i)render(128,94.);
+        check(same()&&fx->audioTelemetry().events==1,"post-bounce NoteOff still releases the original held owner");
+        rate=44100.;
+        for(auto* instance:{fx.get(),continuous.get()}){
+            instance->patternEnabledParameter().setValueNotifyingHost(0.f);
+            instance->prepareToPlay(rate,64);
+        }
+        render(64,120.,false);
+        check(same()&&a.getMagnitude(0,64)==0&&fx->audioTelemetry().events==0&&save(*fx)==state,
+              "explicit sample-rate prepare resets audio history but keeps project state");
+    }
+}
+
+void checkAuditionAtCapacity() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>(),reference=std::make_unique<FxProcessor>();
+    NoiseProgram p;p.mode=PlayMode::gate;p.layers[0].family=NoiseFamily::laser;
+    for(auto* instance:{fx.get(),reference.get()}){
+        check(instance->setProgram(p),"install held polyphony fixture");instance->prepareToPlay(48000,512);
+    }
+    juce::AudioBuffer<float> a(2,512),b(2,512);juce::MidiBuffer ma,mb;
+    const auto compare=[&]{block(*fx,a,ma);block(*reference,b,mb);
+        return std::equal(a.getReadPointer(0),a.getReadPointer(0)+512,b.getReadPointer(0))&&
+               std::equal(a.getReadPointer(1),a.getReadPointer(1)+512,b.getReadPointer(1));};
+    for(int i=0;i<8;++i)ma.addEvent(juce::MidiMessage::noteOn(2,48+i,juce::uint8{100}),i);
+    mb=ma;
+    check(compare()&&fx->audioTelemetry().events==8,"eight held notes match before audition request");
+    fx->audition();
+    check(compare()&&fx->audioTelemetry().events==8&&fx->audioTelemetry().dropped==0,
+          "an audition request at capacity cannot steal a held note or pollute the musical drop counter");
+    fx->setNonRealtime(true);ma.addEvent(juce::MidiMessage::noteOff(2,48),0);mb=ma;
+    check(compare()&&fx->audioTelemetry().events==7,"offline transition and oldest held NoteOff preserve the other MIDI owners");
+}
+
+void checkPatternClipboardRestore() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    pattern::Pattern initial;initial.bars=2;initial.grid=pattern::Grid::thirtysecondTriplet;
+    initial.steps[47]={true,72,96,67,3};
+    auto restored=initial;restored.steps[47]={true,64,88,100,2};
+    check(fx->setPattern(restored),"prepare same-grid restore fixture");const auto saved=save(*fx);
+    check(fx->setPattern(initial),"prepare pre-restore bar");
+    auto panel=std::make_unique<FxPanel>(*fx);
+    const auto command=[&](int id){panel->patternActionsSelector().setSelectedId(id,juce::sendNotificationSync);};
+    command(5);panel->patternBarSelector().setSelectedId(2,juce::sendNotificationSync);
+    fx->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));
+    command(6);check(fx->patternSnapshot()==restored&&save(*fx)==saved,"stale pre-restore paste does not edit the newly restored pattern");
+    command(6);auto expected=restored;expected.steps[95]=initial.steps[47];
+    check(fx->patternSnapshot()==expected,"deliberate same-grid paste uses the editor-local buffer after refreshing restore");
+    command(3);check(fx->patternSnapshot()==restored,"paste undo returns to restored pattern, not pre-restore data");
+    panel.reset();panel=std::make_unique<FxPanel>(*fx);
+    panel->patternBarSelector().setSelectedId(2,juce::sendNotificationSync);command(6);
+    check(fx->patternSnapshot()==restored&&save(*fx)==saved,"recreating editor clears the bar buffer without affecting host state");
+}
+
 void checkExportAcrossEditorClose() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();
@@ -426,6 +544,8 @@ int main() {
     juce::ScopedJuceInitialiser_GUI gui;
     phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();
     phase("offline host monitor isolation");checkBounceMonitorIsolation();
+    phase("in-place bounce effect history and audition priority");checkInPlaceBounceHistory();checkAuditionAtCapacity();
+    phase("Pattern clipboard during restore and editor recreation");checkPatternClipboardRestore();
     phase("timeline viewport keyboard and selection");checkTimelineViewport();
     phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();

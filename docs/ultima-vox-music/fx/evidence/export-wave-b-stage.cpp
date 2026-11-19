@@ -1,7 +1,7 @@
 // Authoring tool for Wave B staging cues; not a factory installer.
 // Compile with pinned JUCE core/cryptography and vox_preset. See triage handoff.
 #include "content/ReviewWaveBAssets.h"
-#include "content/ReviewWaveBCrossings.h"
+#include "content/ReviewWaveBRoomCuts.h"
 #include "engine/PortablePreset.h"
 #include "engine/SampleDecode.h"
 #include <filesystem>
@@ -36,7 +36,8 @@ std::string digest(const auto& bytes){return juce::SHA256(bytes.data(),bytes.siz
 
 int main(int argc,char** argv){
     const auto mode=argc==3?std::string_view(argv[2]):std::string_view{};
-    const bool crossings=mode=="--crossings";
+    const bool roomCuts=mode=="--room-cuts";
+    const bool crossings=roomCuts||mode=="--crossings";
     const bool signals=crossings||mode=="--signals";
     const bool extended=signals||mode=="--counterpoints";
     if(argc!=2&&!extended)return 1;
@@ -128,5 +129,6 @@ int main(int argc,char** argv){
         if(!auditCue(cue,pair))return 9;
     }
     if(crossings)for(const auto& cue:b::crossings)if(!auditCue(cue))return 10;
+    if(roomCuts)for(const auto& cue:b::roomCuts)if(!auditCue(cue))return 11;
     return list&&metrics&&settings?0:6;
 }

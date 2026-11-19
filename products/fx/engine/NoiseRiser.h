@@ -173,9 +173,9 @@ public:
         program_ = program;programPublication_=publication;
         return true;
     }
-    // Up to eight active events plus four 5 ms retirement fades. A steal
-    // chooses the oldest active event and a free retirement slot; if all four
-    // fades are occupied the incoming event is dropped deterministically.
+    // Up to eight active events plus four 5 ms retirement fades. Live
+    // audition needs a free slot and cannot steal a musical voice. Musical
+    // admissions reclaim audition capacity before stealing other music.
     bool noteOn(int channel, int note, float velocity, double duration = 4.0, bool userSample = false, std::uint64_t expectedSampleToken = 0,
                 TriggerSource source = TriggerSource::midi) noexcept {
         timeline::SecondsClock clock;
@@ -197,14 +197,27 @@ public:
         for (auto& voice : voices_) if (!voice.active) { slot = &voice; break; }
         const bool stealing=slot==nullptr;
         std::size_t retiringIndex=retiring_.size();
+        bool discardVictim=false;
         if(stealing){
+            if(source==TriggerSource::preview)return false;
+            // Keep musical admissions first. Preview in a retirement slot
+            // may be reclaimed if it would otherwise cause a dropped note.
             for(std::size_t i=0;i<retiring_.size();++i)if(!retiring_[i].active){retiringIndex=i;break;}
+            const auto musicalPriority=[](const Voice& a,const Voice& b){
+                const bool ap=a.source==TriggerSource::preview,bp=b.source==TriggerSource::preview;
+                return ap!=bp?ap:a.serial<b.serial;
+            };
+            slot=&*std::min_element(voices_.begin(),voices_.end(),musicalPriority);
             if(retiringIndex==retiring_.size()){
-                if(droppedEvents_!=std::numeric_limits<std::uint32_t>::max())++droppedEvents_;
-                return false;
+                if(slot->source==TriggerSource::preview)discardVictim=true;
+                else {
+                    for(std::size_t i=0;i<retiring_.size();++i)if(retiring_[i].source==TriggerSource::preview){retiringIndex=i;break;}
+                    if(retiringIndex==retiring_.size()){
+                        if(droppedEvents_!=std::numeric_limits<std::uint32_t>::max())++droppedEvents_;
+                        return false;
+                    }
+                }
             }
-            slot=&*std::min_element(voices_.begin(),voices_.end(),
-                [](const Voice& a,const Voice& b){return a.serial<b.serial;});
         }
         // The external source is relevant only to enabled granular layers.
         // A mixed event is rejected as a unit when its granular source is
@@ -220,9 +233,12 @@ public:
         if(program_.triggerPolicy==TriggerPolicy::replace)
             for(auto& voice:voices_)if(voice.active&&voice.channel==channel&&voice.note==note&&voice.source==source)beginRelease(voice);
         const auto slotIndex=static_cast<std::size_t>(slot-voices_.data());
-        if(stealing){
-            auto& retired=retiring_[retiringIndex];retired=*slot;beginRelease(retired);
+        if(discardVictim)discardVoice(*slot,slotIndex);
+        else if(stealing){
+            auto& retired=retiring_[retiringIndex];
             const auto leaseIndex=voices_.size()+retiringIndex;
+            if(retired.active)discardVoice(retired,leaseIndex);
+            retired=*slot;beginRelease(retired);
             if(sampleStore_&&sampleLeases_[slotIndex].data())(void)sampleStore_->transfer(sampleLeases_[slotIndex],sampleLeases_[leaseIndex]);
             for(auto& grain:grains_)if(grain.active&&grain.serial==retired.serial)grain.voiceIndex=leaseIndex;
         }
@@ -423,6 +439,13 @@ private:
     static double layerTranspose(const LayerState& layer,double global,double local) noexcept {
         const double octaves=((global-.5)+(local-.5))*4.0;
         return octaves==0.0?layer.transposeRatio:layer.transposeRatio*std::exp2(octaves);
+    }
+    // Used only on saturation to prioritize musical admissions. Lose an
+    // audition fade rather than a host note. Never free a sample payload here.
+    void discardVoice(Voice& v,std::size_t index) noexcept {
+        v.active=false;
+        if(sampleLeases_[index].data())sampleStore_->release(sampleLeases_[index]);
+        for(auto& grain:grains_)if(grain.active&&grain.voiceIndex==index){grain.active=false;--activeGrains_;}
     }
     void beginRelease(Voice& v,bool musical=false) noexcept {
         const auto hard=std::max(1,static_cast<int>(rate_*.005));

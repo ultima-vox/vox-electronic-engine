@@ -1,0 +1,9 @@
+preset_id	arrangement slot	owner listening check
+voxfx.impact.sill-knock	Drop with a busy kick and full bass	Check whether the short center hit reads at modest trim without muddying the kick; check side click on headphones and in mono.
+voxfx.riser.helix-crown	Eight-bar D-major festival lift	Listen before the lead enters and throughout the last two bars; check fifth and third against the existing chord voicing.
+voxfx.fall.dust-shutter	Two-bar keyless fall in an occupied progressive mix	Check if the descending move is audible without rolling off the arrangement; test the exit with a full midrange bass.
+voxfx.sweep.split-iris	Acid breakdown with intermittent open space	Hold two or three cycles, check seams and accent placement against bass; raw WAV is one finite pass.
+voxfx.zap.paper-comet	Short hi-tech fill with bright percussion	Try early and late Gate release; check whether the reply masks hats or the next transient.
+voxfx.rhythm.skew-buckle	Four-bar swung percussion lane	Compare native 4/4 playback to exported trigger MIDI; listen for intentional space on bar three.
+voxfx.atmosphere.frost-gallery	Behind a bright arp during a low-density break	Check side motion and mono masking against an actual lead and piano or vocal; do not make an atmospheric layer loud merely to match a transient.
+voxfx.stinger.latch-glint	Classic lead hook ends on G	Check recognition at conversational monitor level and on a small speaker; do not let the side reply mask the next downbeat.

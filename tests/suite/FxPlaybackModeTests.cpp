@@ -112,5 +112,42 @@ int main(){
         playback->noteOff(1,60);render(*playback,41);
         check(playback->activeEventCount()==0,"MIDI still owns and releases the loop");
     }
+    {
+        using namespace vox::fx;
+        auto engine=std::make_unique<NoiseRiser>();engine->prepare(8000);
+        NoiseProgram held;held.mode=PlayMode::gate;held.layers[0].family=NoiseFamily::laser;engine->setProgram(held);
+        for(int note=48;note<55;++note)check(engine->noteOn(1,note,1,.1),"fill musical bank before audition");
+        check(engine->noteOn(1,60,1,.1,false,0,TriggerSource::preview),"audition uses last free slot");
+        check(!engine->noteOn(1,61,1,.1,false,0,TriggerSource::preview)&&engine->droppedEventCount()==0,
+              "audition at capacity is refused without a musical drop");
+        check(engine->noteOn(1,62,1,.1,false,0,TriggerSource::pattern)&&engine->activeEventCount()==9,
+              "newer audition is retired before oldest music when a Pattern event arrives");
+        // When preview is discarded, each of the original seven MIDI owners
+        // must still respond to its own NoteOff.
+        engine->discardPreview();
+        for(int note=48;note<55;++note)engine->noteOff(1,note);
+        render(*engine,41);check(engine->activeEventCount()==1,"all held MIDI owners were retained, and only Pattern remains");
+        engine->prepare(8000);engine->setProgram(held);
+        for(int note=48;note<55;++note)engine->noteOn(1,note,1,.1);
+        engine->noteOn(1,60,1,.1,false,0,TriggerSource::preview);
+        for(int note=62;note<=66;++note)check(engine->noteOn(1,note,1,.1),"musical admission can reclaim a retiring preview under pressure");
+        check(engine->activeEventCount()==12&&engine->droppedEventCount()==0&&!engine->noteOn(1,67,1,.1)&&engine->droppedEventCount()==1,
+              "only full musical occupancy increments the dropped-event counter");
+    }
+    {
+        using namespace vox::fx;
+        auto engine=std::make_unique<NoiseRiser>();engine->prepare(8000);
+        NoiseProgram held;held.mode=PlayMode::gate;held.layers[0].family=NoiseFamily::laser;engine->setProgram(held);
+        for(int note=48;note<55;++note)engine->noteOn(1,note,1,.1);
+        auto finite=held;finite.mode=PlayMode::oneShot;engine->setProgram(finite);engine->noteOn(1,55,1,.05);
+        render(*engine,390);engine->setProgram(held);
+        for(int note=56;note<60;++note)engine->noteOn(1,note,1,.1);
+        render(*engine,12);
+        check(engine->activeEventCount()==11&&engine->noteOn(1,60,1,.1,false,0,TriggerSource::preview),
+              "audition fills the slot naturally freed while all retirement slots are occupied");
+        check(engine->noteOn(1,61,1,.1)&&engine->activeEventCount()==12&&engine->droppedEventCount()==0,
+              "reclaim active audition when no retirement slot is available for it");
+        engine->discardPreview();check(engine->activeEventCount()==12,"all active and retired owners are musical after reclaim");
+    }
     std::printf("FX playback modes and note ownership: %d failure(s)\n",failures);return failures?1:0;
 }

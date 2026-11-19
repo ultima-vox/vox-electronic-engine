@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure raw Crossings levels without modifying listening WAVs (NumPy 2.2.6)."""
+"""Measure raw incremental Wave B levels without modifying listening WAVs (NumPy 2.2.6)."""
 import csv
 from pathlib import Path
 import runpy
@@ -11,8 +11,8 @@ here = Path(__file__).parent
 signals = runpy.run_path(str(here / 'measure-wave-b-signals.py'))
 
 
-def main(root):
-    with (here / 'wave-b-fortyeight-creative-brief.tsv').open() as stream:
+def main(root, tranche):
+    with (here / f'wave-b-{tranche}-creative-brief.tsv').open() as stream:
         ids = [row['preset_id'] for row in csv.DictReader(stream, delimiter='\t')]
     with (root / 'levels.tsv').open('w') as out:
         out.write('id\traw-peak-dBFS\tactive-rms-dBFS\tactive-window-s\n')
@@ -23,6 +23,6 @@ def main(root):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        sys.exit('usage: measure-wave-b-crossings.py <Wave B 48 export directory>')
-    main(Path(sys.argv[1]))
+    if len(sys.argv) != 2 and not (len(sys.argv) == 3 and sys.argv[2] == '--room-cuts'):
+        sys.exit('usage: measure-wave-b-crossings.py <export directory> [--room-cuts]')
+    main(Path(sys.argv[1]), 'fiftysix' if len(sys.argv) == 3 else 'fortyeight')
