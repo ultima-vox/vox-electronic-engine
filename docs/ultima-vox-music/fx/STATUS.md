@@ -6,12 +6,12 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [In-place bounce history and audition priority](BOUNCE_HISTORY_20261119.md)
-and [Wave B Room Cuts](WAVE_B_ROOM_CUTS_20261119.md). Wave A 120 + Wave B 56
-= 176 review candidates, zero approved. Actual arrangements, durable private
-handoff, FX-T18, exact-head Windows/validator and the owner host round remain
-open. The targeted Windows stack-fix 1/1 is not full Windows qualification.
-Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
+**Latest:** [File export, voice pressure and consolidated arrangement review](FILE_EXPORT_AND_ARRANGEMENT_REVIEW_20261119.md).
+WAV and MIDI share a processor-owned file worker. A120 + B56 remains 176
+candidates, zero approved, now with one verified listening package and review
+matrix. Real arrangements, durable private handoff, FX-T18, exact-head Windows
+and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume
+notes below describe earlier checkpoints.
 
 | Milestone | Status |
 |---|---|
