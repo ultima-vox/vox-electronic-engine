@@ -619,6 +619,7 @@ def pitch_key(notes):
 
 
 def write_midi(path, notes):
+    """SMF type 0. Velocity is the authored velocity. Slide and accent are omitted."""
     events = []
     for tick, note, velocity, duration, _slide, _accent in notes:
         events.append((tick, 1, note, velocity))
@@ -634,11 +635,13 @@ def write_midi(path, notes):
             value >>= 7
         data.extend(reversed(buffer))
 
-    def meta_tempo():
-        data.extend(b"\x00\xff\x51\x03")
-        data.extend((500000).to_bytes(3, "big"))
-
-    meta_tempo()
+    data.extend(b"\x00\xff\x51\x03")
+    data.extend((500000).to_bytes(3, "big"))
+    notice = b"slide/accent are not in this SMF"
+    data.append(0x00)
+    data.extend(b"\xff\x01")
+    data.append(len(notice))
+    data.extend(notice)
     last = 0
     for tick, on, note, velocity in events:
         varlen(tick - last)

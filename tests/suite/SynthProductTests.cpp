@@ -4,6 +4,7 @@
 #include "Parameters.h"
 #include "FactoryBank.h"
 #include "FactoryContent.h"
+#include "PhraseSchedule.h"
 #include "StateContainer.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -637,6 +638,137 @@ void applyDocument (vox::syn::SynthesisProcessor& synth, const vox::preset::Stat
     synth.setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
 }
 
+struct SmfNote { int tick = 0, note = 0, velocity = 0, duration = 0; };
+
+int readVarlen (const std::vector<unsigned char>& data, std::size_t& at)
+{
+    int value = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        if (at >= data.size())
+            return -1;
+        const unsigned char byte = data[at++];
+        value = (value << 7) | (byte & 0x7f);
+        if ((byte & 0x80u) == 0)
+            return value;
+    }
+    return -1;
+}
+
+std::vector<SmfNote> readSmf (const std::string& path, std::string& error)
+{
+    std::ifstream in (path, std::ios::binary);
+    const std::vector<unsigned char> data ((std::istreambuf_iterator<char> (in)), {});
+    const auto fail = [&] (const char* why)
+    {
+        error = why;
+        return std::vector<SmfNote> {};
+    };
+    auto be16 = [&] (std::size_t at)
+    {
+        return (static_cast<unsigned> (data[at]) << 8) | data[at + 1];
+    };
+    auto be32 = [&] (std::size_t at)
+    {
+        return (static_cast<unsigned> (data[at]) << 24) | (static_cast<unsigned> (data[at + 1]) << 16)
+             | (static_cast<unsigned> (data[at + 2]) << 8) | data[at + 3];
+    };
+    if (data.size() < 22 || std::memcmp (data.data(), "MThd", 4) != 0)
+        return fail ("bad header");
+    if (be32 (4) != 6 || be16 (8) != 0 || be16 (10) != 1 || be16 (12) != 960)
+        return fail ("not a type-0 960 file");
+    if (std::memcmp (data.data() + 14, "MTrk", 4) != 0)
+        return fail ("missing track");
+    if (static_cast<std::size_t> (22 + be32 (18)) != data.size())
+        return fail ("track length does not match the file");
+
+    bool tempo = false, notice = false, ended = false;
+    std::vector<SmfNote> pending[128];
+    std::vector<SmfNote> notes;
+    int tick = 0;
+    int running = 0;
+    std::size_t at = 22;
+    while (at < data.size())
+    {
+        const int delta = readVarlen (data, at);
+        if (delta < 0)
+            return fail ("bad delta");
+        tick += delta;
+        if (at >= data.size())
+            return fail ("truncated event");
+        int status = data[at];
+        if (status == 0xff)
+        {
+            ++at;
+            if (at >= data.size())
+                return fail ("bad meta");
+            const int type = data[at++];
+            const int length = readVarlen (data, at);
+            if (length < 0 || at + static_cast<std::size_t> (length) > data.size())
+                return fail ("bad meta length");
+            if (type == 0x51)
+            {
+                if (length != 3)
+                    return fail ("tempo size");
+                const int micros = (data[at] << 16) | (data[at + 1] << 8) | data[at + 2];
+                if (micros != 500000)
+                    return fail ("tempo is not 120 bpm");
+                tempo = true;
+            }
+            else if (type == 0x01)
+            {
+                const std::string text (reinterpret_cast<const char*> (data.data() + at), static_cast<std::size_t> (length));
+                if (text != vox::syn::phraseSmfLimit)
+                    return fail ("missing slide/accent limit");
+                notice = true;
+            }
+            else if (type == 0x2f)
+            {
+                if (length != 0 || at != data.size())
+                    return fail ("end of track is not last");
+                ended = true;
+            }
+            at += static_cast<std::size_t> (length);
+            continue;
+        }
+        if (status < 0x80)
+        {
+            if (running == 0)
+                return fail ("running status without a status");
+            status = running;
+        }
+        else
+        {
+            running = status;
+            ++at;
+        }
+        const int kind = status & 0xf0;
+        if (kind != 0x90 && kind != 0x80)
+            return fail ("unexpected MIDI status");
+        if (at + 1 >= data.size())
+            return fail ("short note");
+        const int note = data[at++];
+        const int velocity = data[at++];
+        if ((kind == 0x90 && velocity > 0))
+            pending[note].push_back ({ tick, note, velocity, 0 });
+        else
+        {
+            if (pending[note].empty())
+                return fail ("note-off without a note-on");
+            const auto start = pending[note].front();
+            pending[note].erase (pending[note].begin());
+            notes.push_back ({ start.tick, note, start.velocity, tick - start.tick });
+        }
+    }
+    if (! tempo || ! notice || ! ended)
+        return fail ("missing tempo, limit text or end of track");
+    for (const auto& queue : pending)
+        if (! queue.empty())
+            return fail ("file ends with a sounding note");
+    error.clear();
+    return notes;
+}
+
 void testFactoryContent()
 {
     check (vox::syn::factoryProgramCount() == 600, "600 programs installed");
@@ -770,7 +902,6 @@ void testFactoryContent()
         ++phraseRole[static_cast<int> (phrase.role)];
         phraseIds.insert (phrase.id);
         std::string pitches;
-        std::vector<std::tuple<int, int, int, bool>> events;
         int previous = -1;
         for (int n = 0; n < phrase.noteCount; ++n)
         {
@@ -780,35 +911,81 @@ void testFactoryContent()
             previous = note.tick;
             pitches += std::to_string (note.tick) + ":" + std::to_string (note.note) + ":"
                      + std::to_string (note.velocity) + ":" + (note.slide ? "s" : "") + (note.accent ? "a" : "") + ";";
-            events.push_back ({ note.tick * 25, 1, note.note, note.velocity >= 110 });
-            events.push_back ({ (note.tick + note.duration) * 25, 0, note.note, false });
         }
         check (pitchKeys.insert (pitches).second, std::string (phrase.id) + " pitch row is unique without duration salt");
-        std::sort (events.begin(), events.end());
+
+        const auto scheduled = vox::syn::schedulePhrase (phrase.notes, phrase.noteCount);
+        for (int n = 0; n < phrase.noteCount; ++n)
+        {
+            const auto& note = phrase.notes[n];
+            bool matched = false;
+            for (const auto& event : scheduled)
+                matched = matched || (event.on && event.tick == note.tick && event.note == note.note
+                                       && event.velocity == note.velocity && event.accent == note.accent);
+            check (matched, std::string (phrase.id) + " schedule keeps velocity and accent");
+        }
+        int lastTick = 0;
+        bool slideBeforeEnd = false;
+        for (int n = 0; n < phrase.noteCount; ++n)
+            lastTick = std::max (lastTick, phrase.notes[n].tick);
+        for (int n = 0; n < phrase.noteCount; ++n)
+            slideBeforeEnd = slideBeforeEnd || (phrase.notes[n].slide && phrase.notes[n].tick < lastTick);
+        if (slideBeforeEnd)
+        {
+            bool tied = false;
+            for (const auto& event : scheduled)
+                tied = tied || (event.on && event.slide);
+            check (tied, std::string (phrase.id) + " slide ties into the next note");
+        }
+
+        std::string smfError;
+        const auto smf = readSmf (std::string (VOX_FACTORY_MIDI_DIR) + "/" + phrase.id + ".mid", smfError);
+        check (smfError.empty(), std::string (phrase.id) + " " + smfError);
+        check (static_cast<int> (smf.size()) == phrase.noteCount, std::string (phrase.id) + " SMF note count");
+        if (static_cast<int> (smf.size()) == phrase.noteCount)
+        {
+            for (int n = 0; n < phrase.noteCount; ++n)
+            {
+                const auto& note = phrase.notes[n];
+                bool matched = false;
+                for (const auto& fileNote : smf)
+                    matched = matched || (fileNote.tick == note.tick && fileNote.note == note.note
+                                           && fileNote.velocity == note.velocity && fileNote.duration == note.duration);
+                check (matched, std::string (phrase.id) + " SMF matches tick, note, velocity, duration");
+            }
+        }
+
+        std::vector<vox::syn::AuditionEvent> play;
+        int lastSample = 0;
+        for (const auto& event : scheduled)
+        {
+            vox::syn::AuditionEvent item;
+            item.sample = vox::syn::phraseSample (event.tick, 48000.0);
+            item.on = event.on;
+            item.note = event.note;
+            item.velocity = event.velocity;
+            item.slide = event.slide;
+            item.accent = event.accent;
+            if (event.on)
+                check (item.velocity == event.velocity && item.velocity > 0, std::string (phrase.id) + " audition uses the phrase velocity");
+            play.push_back (item);
+            lastSample = std::max (lastSample, item.sample);
+        }
         juce::AudioBuffer<float> buffer (2, 256);
-        juce::MidiBuffer midi;
         std::size_t at = 0;
-        const int end = std::get<0> (events.back()) + 16000;
+        const int end = lastSample + 16000;
         float peak = 0.0f;
         bool finite = true;
-        bool ordered = true;
-        int lastSample = -1;
         for (int origin = 0; origin < end; origin += 256)
         {
-            midi.clear();
-            while (at < events.size() && std::get<0> (events[at]) < origin + 256)
+            std::vector<vox::syn::AuditionEvent> block;
+            while (at < play.size() && play[at].sample < origin + 256)
             {
-                const int sample = std::get<0> (events[at]) - origin;
-                ordered = ordered && std::get<0> (events[at]) >= lastSample;
-                lastSample = std::get<0> (events[at]);
-                const int note = std::get<1> (events[at]) == 1 ? std::get<2> (events[at]) : std::get<2> (events[at]);
-                if (std::get<1> (events[at]) == 1)
-                    midi.addEvent (juce::MidiMessage::noteOn (1, note, static_cast<juce::uint8> (100)), sample);
-                else
-                    midi.addEvent (juce::MidiMessage::noteOff (1, note), sample);
-                ++at;
+                auto item = play[at++];
+                item.sample -= origin;
+                block.push_back (item);
             }
-            synth->processBlock (buffer, midi);
+            synth->audition (buffer, block.data(), static_cast<int> (block.size()));
             for (int sample = 0; sample < 256; ++sample)
             {
                 const float left = buffer.getSample (0, sample);
@@ -816,12 +993,11 @@ void testFactoryContent()
                 peak = std::max (peak, std::abs (left));
             }
         }
-        check (ordered && at == events.size(), std::string (phrase.id) + " events stay ordered through note-off");
+        check (at == play.size(), std::string (phrase.id) + " schedule played through note-off");
         check (finite && peak > 1.0e-4f, std::string (phrase.id) + " full phrase is finite and audible");
-        juce::MidiBuffer quiet;
         juce::AudioBuffer<float> tail (2, 256);
         for (int block = 0; block < 80 && synth->activeVoices() > 0; ++block)
-            synth->processBlock (tail, quiet);
+            synth->audition (tail, nullptr, 0);
         check (synth->activeVoices() == 0, std::string (phrase.id) + " releases");
         if (auditFile)
             auditFile << "phrase," << phrase.id << "," << phrase.style << ","
@@ -832,13 +1008,243 @@ void testFactoryContent()
                && phraseRole[4] + phraseRole[6] == 20,
            "phrase quotas are bass 30, acid 25, arp 25, lead 20, pad+stab 20");
     check (static_cast<int> (phraseIds.size()) == 120, "phrase ids are unique");
+}
 
-    check (synth->saveUserProgram ("Ordinal", static_cast<int> (vox::syn::ProgramCategory::user)), "save legacy user slot");
+void playScheduled (vox::syn::SynthesisProcessor& synth, const std::vector<vox::syn::ScheduledEvent>& scheduled,
+                   double rate, int block, float& peak, bool& finite)
+{
+    std::vector<vox::syn::AuditionEvent> play;
+    int last = 0;
+    for (const auto& event : scheduled)
+    {
+        vox::syn::AuditionEvent item;
+        item.sample = vox::syn::phraseSample (event.tick, rate);
+        item.on = event.on;
+        item.note = event.note;
+        item.velocity = event.velocity;
+        item.slide = event.slide;
+        item.accent = event.accent;
+        play.push_back (item);
+        last = std::max (last, item.sample);
+    }
+    juce::AudioBuffer<float> buffer (2, block);
+    std::size_t at = 0;
+    const int end = last + static_cast<int> (rate * 0.4);
+    peak = 0.0f;
+    finite = true;
+    for (int origin = 0; origin < end; origin += block)
+    {
+        std::vector<vox::syn::AuditionEvent> slice;
+        while (at < play.size() && play[at].sample < origin + block)
+        {
+            auto item = play[at++];
+            item.sample -= origin;
+            slice.push_back (item);
+        }
+        synth.audition (buffer, slice.data(), static_cast<int> (slice.size()));
+        for (int sample = 0; sample < block; ++sample)
+        {
+            const float left = buffer.getSample (0, sample);
+            finite = finite && std::isfinite (left);
+            peak = std::max (peak, std::abs (left));
+        }
+    }
+    juce::AudioBuffer<float> tail (2, block);
+    const int guard = static_cast<int> (rate * 0.6 / static_cast<double> (block)) + 2;
+    for (int i = 0; i < guard && synth.activeVoices() > 0; ++i)
+        synth.audition (tail, nullptr, 0);
+}
+
+void testPhraseClock()
+{
+    const int ticks[] = { 0, 240, 960, 3840 };
+    const double rates[] = { 44100.0, 48000.0, 96000.0 };
+    for (double rate : rates)
+        for (int tick : ticks)
+        {
+            const int sample = vox::syn::phraseSample (tick, rate);
+            const double musical = static_cast<double> (tick) * 60.0 / (120.0 * 960.0);
+            check (std::abs (static_cast<double> (sample) / rate - musical) <= 0.5 / rate + 1.0e-9,
+                   "tick lands within half a sample");
+        }
+
+    const auto& phrase = vox::syn::factoryPhrase (0);
+    const auto scheduled = vox::syn::schedulePhrase (phrase.notes, phrase.noteCount);
+    const auto run = [&] (double rate, int block)
+    {
+        auto synth = make();
+        setPlain (*synth, "syn.a.engine", 2.0f);
+        setPlain (*synth, "syn.b.engine", 2.0f);
+        setPlain (*synth, "syn.a.level", 0.7f);
+        setPlain (*synth, "syn.b.level", 0.0f);
+        setPlain (*synth, "syn.a.release", 0.1f);
+        setPlain (*synth, "syn.b.release", 0.1f);
+        setPlain (*synth, "syn.a.decay", 0.15f);
+        synth->prepareToPlay (rate, block);
+        float peak = 0.0f;
+        bool finite = false;
+        playScheduled (*synth, scheduled, rate, block, peak, finite);
+        check (finite && peak > 1.0e-4f, "phrase is audible at this rate and block");
+        check (synth->activeVoices() == 0, "phrase releases at this rate and block");
+    };
+    run (44100.0, 64);
+    run (48000.0, 256);
+    run (96000.0, 1000);
+}
+
+void armMono (vox::syn::SynthesisProcessor& synth, float engine)
+{
+    setPlain (synth, "syn.a.engine", engine);
+    setPlain (synth, "syn.b.level", 0.0f);
+    setPlain (synth, "syn.a.level", 0.8f);
+    setPlain (synth, "syn.a.slide", 0.0f);
+    setPlain (synth, "syn.a.portamento", 0.0f);
+    setPlain (synth, "syn.a.cutoff", 0.45f);
+    setPlain (synth, "syn.a.sustain", 0.8f);
+    setPlain (synth, "syn.a.decay", 0.4f);
+    setPlain (synth, "syn.fx.delay", 0.0f);
+    setPlain (synth, "syn.fx.reverb", 0.0f);
+    synth.prepareToPlay (48000.0, 256);
+}
+
+void testArticulation()
+{
+    auto acid = make();
+    armMono (*acid, 1.0f);
+    vox::syn::AuditionEvent first { 0, true, 48, 70, false, false };
+    juce::AudioBuffer<float> buffer (2, 256);
+    acid->audition (buffer, &first, 1);
+    for (int i = 0; i < 8; ++i)
+        acid->audition (buffer, nullptr, 0);
+    const double before = acid->monoFrequency (0);
+    vox::syn::AuditionEvent glide[2] = {
+        { 0, true, 60, 64, true, true },
+        { 1, false, 48, 0, false, false },
+    };
+    acid->audition (buffer, glide, 2);
+    check (acid->glideSource (0) == 1, "acid slide flag glides with the knob at 0");
+    check (acid->monoNote (0) == 60, "acid slide lands on the new note");
+    check (acid->monoFrequency (0) > before && acid->monoFrequency (0) < before * 1.5,
+           "acid slide does not snap to the target");
+    for (int i = 0; i < 6; ++i)
+        acid->audition (buffer, nullptr, 0);
+    check (acid->monoAccent (0) > 0.5f, "acid accent flag is not a velocity rewrite");
+
+    auto host = make();
+    armMono (*host, 1.0f);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 50, static_cast<juce::uint8> (120)), 0);
+    host->processBlock (buffer, midi);
+    for (int i = 0; i < 6; ++i)
+    {
+        midi.clear();
+        host->processBlock (buffer, midi);
+    }
+    check (host->monoAccent (0) > 0.5f, "host acid velocity 120 is still an accent");
+    auto quiet = make();
+    armMono (*quiet, 1.0f);
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 50, static_cast<juce::uint8> (70)), 0);
+    quiet->processBlock (buffer, midi);
+    for (int i = 0; i < 6; ++i)
+    {
+        midi.clear();
+        quiet->processBlock (buffer, midi);
+    }
+    check (quiet->monoAccent (0) < 0.05f, "host acid velocity 70 is not an accent");
+
+    auto psy = make();
+    armMono (*psy, 0.0f);
+    psy->audition (buffer, &first, 1);
+    for (int i = 0; i < 4; ++i)
+        psy->audition (buffer, nullptr, 0);
+    const double psyBefore = psy->monoFrequency (0);
+    psy->audition (buffer, glide, 2);
+    check (psy->glideSource (0) == 1, "psy slide flag glides");
+    check (psy->monoFrequency (0) > psyBefore && psy->monoFrequency (0) < psyBefore * 1.5, "psy slide does not snap");
+    for (int i = 0; i < 6; ++i)
+        psy->audition (buffer, nullptr, 0);
+    check (psy->monoAccent (0) > 0.5f, "psy accent flag raises the voice");
+    auto psyHost = make();
+    armMono (*psyHost, 0.0f);
+    midi.clear();
+    midi.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (120)), 0);
+    psyHost->processBlock (buffer, midi);
+    for (int i = 0; i < 6; ++i)
+    {
+        midi.clear();
+        psyHost->processBlock (buffer, midi);
+    }
+    check (psyHost->monoAccent (0) < 0.05f, "host psy velocity is not an accent");
+
+    auto va = make();
+    armMono (*va, 2.0f);
+    setPlain (*va, "syn.b.engine", 2.0f);
+    setPlain (*va, "syn.a.decay", 0.3f);
+    setPlain (*va, "syn.a.sustain", 0.6f);
+    setPlain (*va, "syn.b.decay", 0.3f);
+    setPlain (*va, "syn.b.sustain", 0.6f);
+    vox::syn::AuditionEvent chord[2] = {
+        { 0, true, 60, 90, true, false },
+        { 0, true, 67, 90, true, false },
+    };
+    va->audition (buffer, chord, 2);
+    check (va->activeVoices() == 4, "VA ignores slide and stays polyphonic on both parts");
+
+    auto dry = make();
+    armMono (*dry, 2.0f);
+    setPlain (*dry, "syn.a.decay", 0.05f);
+    setPlain (*dry, "syn.a.sustain", 0.0f);
+    vox::syn::AuditionEvent plain { 0, true, 72, 80, false, false };
+    dry->audition (buffer, &plain, 1);
+    float plainPeak = 0.0f;
+    for (int sample = 0; sample < 256; ++sample)
+        plainPeak = std::max (plainPeak, std::abs (buffer.getSample (0, sample)));
+    auto marked = make();
+    armMono (*marked, 2.0f);
+    setPlain (*marked, "syn.a.decay", 0.05f);
+    setPlain (*marked, "syn.a.sustain", 0.0f);
+    vox::syn::AuditionEvent accented { 0, true, 72, 80, false, true };
+    marked->audition (buffer, &accented, 1);
+    float accentPeak = 0.0f;
+    for (int sample = 0; sample < 256; ++sample)
+        accentPeak = std::max (accentPeak, std::abs (buffer.getSample (0, sample)));
+    check (accentPeak > plainPeak * 1.15f, "VA accent raises gain without changing velocity");
+}
+
+void testHistoricalUbnk()
+{
+    std::ifstream in (VOX_UBNK_FIXTURE, std::ios::binary);
+    const std::vector<char> bytes ((std::istreambuf_iterator<char> (in)), {});
+    check (! bytes.empty(), "b0f230f UBNK fixture is present");
+    auto synth = make();
+    synth->setStateInformation (bytes.data(), static_cast<int> (bytes.size()));
+    check (synth->lastStateError().isEmpty(), "historical UBNK loads: " + synth->lastStateError().toStdString());
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.2f) < 1.0e-5f, "historical ENG1 cutoff restored");
+    check (synth->userProgramCount() == 4, "four historical programs");
+    const int categories[] = { 0, 3, 7, 8 };
+    const char* names[] = { "Old Bass", "Old Pluck", "Old FX", "Old User" };
+    for (int i = 0; i < 4; ++i)
+    {
+        check (synth->userProgramCategory (i) == categories[i], "historical category ordinal");
+        check (synth->userProgramName (i) == names[i], "historical program name");
+    }
+    check (synth->loadUserProgram (0), "load historical bass");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.41f) < 1.0e-5f, "historical program value restored");
+
     juce::MemoryBlock saved;
     synth->getStateInformation (saved);
     auto copy = make();
     copy->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
-    check (copy->userProgramCategory (0) == 8, "UBNK still stores user as category 8");
+    check (copy->lastStateError().isEmpty(), "re-saved historical bank loads");
+    for (int i = 0; i < 4; ++i)
+    {
+        check (copy->userProgramCategory (i) == categories[i], "category survives re-save");
+        check (copy->userProgramName (i) == names[i], "name survives re-save");
+    }
+    check (copy->loadUserProgram (3), "load historical user slot");
+    check (copy->userProgramCategory (3) == 8, "user ordinal 8 survives re-save");
+    check (std::abs (plain (*copy, "syn.a.cutoff") - 0.61f) < 1.0e-5f, "historical user value survives re-save");
 }
 
 void testStateEdges()
@@ -1061,6 +1467,9 @@ int main()
     testProgramBrowser();
     testPerformance();
     testFactoryContent();
+    testPhraseClock();
+    testArticulation();
+    testHistoricalUbnk();
     testStateEdges();
     testIntegrationStress();
     if (failures == 0 && skips == 0)

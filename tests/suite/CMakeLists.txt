@@ -148,7 +148,10 @@ add_executable(suite_synth_product_tests SynthProductTests.cpp)
 target_link_libraries(suite_synth_product_tests PRIVATE ${VOX_SUITE_syn_TARGET})
 target_include_directories(suite_synth_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 vox_suite_add_allocation_probe(suite_synth_product_tests)
-target_compile_definitions(suite_synth_product_tests PRIVATE VOX_TEST_STATE_TAG="${VOX_SUITE_syn_STATE_TAG}")
+target_compile_definitions(suite_synth_product_tests PRIVATE
+  VOX_TEST_STATE_TAG="${VOX_SUITE_syn_STATE_TAG}"
+  VOX_FACTORY_MIDI_DIR="${CMAKE_SOURCE_DIR}/products/trance-synthesis/factory/midi"
+  VOX_UBNK_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ubnk-b0f230f.voxstate")
 if(NOT WIN32)
   find_package(Threads REQUIRED)
   target_link_libraries(suite_synth_product_tests PRIVATE Threads::Threads)

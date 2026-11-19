@@ -14,4 +14,7 @@ Primary roles follow the owner quota: Bass 120, Acid 90, Lead 110, Pluck/Keys 80
 
 `ProgramCategory` ordinals stored in user bank UBNK are unchanged. Factory role is a separate field.
 
-`COVERAGE.csv` is the role × style × engine matrix, including N/A cells. `midi/FP-*.mid` is SMF type 0 at 960 PPQ. A render CSV is written when `VOX_FACTORY_AUDIT` points at a file. Human approval is not implied by that file.
+`COVERAGE.csv` is the role × style × engine matrix, including N/A cells. `midi/FP-*.mid` is SMF type 0 at 960 PPQ and 120 bpm. The file stores tick, note, velocity and duration. Slide and accent are not in the SMF; the text event says so. Native audition applies them: Acid and Psy glide across a slide, VA does not; accent does not rewrite velocity. A render CSV is written when `VOX_FACTORY_AUDIT` points at a file. Human approval is not implied by that file.
+
+`tests/suite/fixtures/ubnk-b0f230f.voxstate` is a UBNK v1 blob in the layout introduced by `b0f230f`. Category ordinals in it are the pre-role-split values.
+

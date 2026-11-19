@@ -196,36 +196,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (! prepared_ || frames <= 0 || buffer.getNumChannels() < 2)
         return;
 
-    engine::BlockParams block;
-    const auto load = [] (std::atomic<float>* value) noexcept
-    {
-        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
-    };
-    for (int part = 0; part < engine::partCount; ++part)
-    {
-        const int base = part * 7;
-        const int extra = part == 0 ? static_cast<int> (partAExtraIndex) : static_cast<int> (partBExtraIndex);
-        auto& dst = block.part[part];
-        dst.engine = kindFrom (load (raw_[static_cast<std::size_t> (base)]));
-        dst.level = load (raw_[static_cast<std::size_t> (base + 1)]);
-        dst.cutoff = load (raw_[static_cast<std::size_t> (base + 2)]);
-        dst.resonance = load (raw_[static_cast<std::size_t> (base + 3)]);
-        dst.slide = load (raw_[static_cast<std::size_t> (base + 4)]);
-        dst.portamento = load (raw_[static_cast<std::size_t> (base + 5)]);
-        dst.drive = load (raw_[static_cast<std::size_t> (base + 6)]);
-        dst.sub = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sub))]);
-        dst.pitchSeconds = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::pitch))])) * 0.1;
-        dst.square = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::wave))]);
-        dst.env = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::env))]);
-        dst.detuneCents = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::detune))])) * 50.0;
-        dst.attack = 0.001 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::attack))])) * 0.2;
-        dst.decay = 0.01 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::decay))])) * 2.0;
-        dst.sustain = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sustain))]));
-        dst.release = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::release))]));
-        dst.noise = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::noise))]);
-    }
-    block.output = load (raw_[outputParameterIndex]);
-    syncExposedFx (fx_, raw_);
+    const auto block = latchBlock();
 
     int count = 0;
     std::uint64_t dropped = 0;
@@ -236,6 +207,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         event.status = metadata.data[0];
         event.data1 = metadata.numBytes > 1 ? metadata.data[1] : 0;
         event.data2 = metadata.numBytes > 2 ? metadata.data[2] : 0;
+        event.articulation = 0;
         int index = count;
         while (index > 0 && events_[index - 1].offset > event.offset)
         {
@@ -317,12 +289,85 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (dropped != 0)
         droppedMidi_.fetch_add (dropped, std::memory_order_relaxed);
 
+    runEngine (buffer, count, block);
+}
+
+engine::BlockParams SynthesisProcessor::latchBlock()
+{
+    engine::BlockParams block;
+    const auto load = [] (std::atomic<float>* value) noexcept
+    {
+        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
+    };
+    for (int part = 0; part < engine::partCount; ++part)
+    {
+        const int base = part * 7;
+        const int extra = part == 0 ? static_cast<int> (partAExtraIndex) : static_cast<int> (partBExtraIndex);
+        auto& dst = block.part[part];
+        dst.engine = kindFrom (load (raw_[static_cast<std::size_t> (base)]));
+        dst.level = load (raw_[static_cast<std::size_t> (base + 1)]);
+        dst.cutoff = load (raw_[static_cast<std::size_t> (base + 2)]);
+        dst.resonance = load (raw_[static_cast<std::size_t> (base + 3)]);
+        dst.slide = load (raw_[static_cast<std::size_t> (base + 4)]);
+        dst.portamento = load (raw_[static_cast<std::size_t> (base + 5)]);
+        dst.drive = load (raw_[static_cast<std::size_t> (base + 6)]);
+        dst.sub = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sub))]);
+        dst.pitchSeconds = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::pitch))])) * 0.1;
+        dst.square = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::wave))]);
+        dst.env = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::env))]);
+        dst.detuneCents = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::detune))])) * 50.0;
+        dst.attack = 0.001 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::attack))])) * 0.2;
+        dst.decay = 0.01 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::decay))])) * 2.0;
+        dst.sustain = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sustain))]));
+        dst.release = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::release))]));
+        dst.noise = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::noise))]);
+    }
+    block.output = load (raw_[outputParameterIndex]);
+    syncExposedFx (fx_, raw_);
+    return block;
+}
+
+void SynthesisProcessor::runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block)
+{
+    const int frames = buffer.getNumSamples();
     engine_.process (buffer.getWritePointer (0), buffer.getWritePointer (1), frames, events_, count, block);
     if (fx_.isPrepared())
     {
         float* audio[2] = { buffer.getWritePointer (0), buffer.getWritePointer (1) };
         fx_.process (std::span<float*> (audio, 2), static_cast<std::uint32_t> (frames));
     }
+}
+
+void SynthesisProcessor::audition (juce::AudioBuffer<float>& buffer, const AuditionEvent* events, int eventCount)
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int frames = buffer.getNumSamples();
+    buffer.clear();
+    if (! prepared_ || frames <= 0 || buffer.getNumChannels() < 2)
+        return;
+    const auto block = latchBlock();
+    const int count = std::min (eventCount, engine::maxEvents);
+    for (int i = 0; i < count; ++i)
+    {
+        engine::Event event;
+        event.offset = static_cast<std::uint32_t> (juce::jlimit (0, frames - 1, events[i].sample));
+        event.status = static_cast<std::uint8_t> (events[i].on ? 0x90 : 0x80);
+        event.data1 = static_cast<std::uint8_t> (events[i].note);
+        event.data2 = static_cast<std::uint8_t> (events[i].on ? std::clamp (events[i].velocity, 1, 127) : 0);
+        event.articulation = 0;
+        if (events[i].accent)
+            event.articulation = static_cast<std::uint8_t> (event.articulation | engine::articulateAccent);
+        if (events[i].slide)
+            event.articulation = static_cast<std::uint8_t> (event.articulation | engine::articulateSlide);
+        int index = i;
+        while (index > 0 && events_[index - 1].offset > event.offset)
+        {
+            events_[index] = events_[index - 1];
+            --index;
+        }
+        events_[index] = event;
+    }
+    runEngine (buffer, count, block);
 }
 
 void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) const

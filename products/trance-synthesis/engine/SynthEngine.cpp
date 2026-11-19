@@ -107,6 +107,20 @@ bool SynthEngine::monoGate (int part) const noexcept
     return parts_[part].mono.gate;
 }
 
+float SynthEngine::monoAccent (int part) const noexcept
+{
+    if (part < 0 || part >= partCount)
+        return 0.0f;
+    return parts_[part].mono.accent;
+}
+
+int SynthEngine::glideSource (int part) const noexcept
+{
+    if (part < 0 || part >= partCount)
+        return 0;
+    return parts_[part].mono.glideSource;
+}
+
 int SynthEngine::vaFadeLeft() const noexcept
 {
     int left = 0;
@@ -184,9 +198,9 @@ void SynthEngine::latchEngine (int part, EngineKind next) noexcept
     pushKey (slot, keyIndex (heldChannel, heldNote), heldVelocity);
     const float gain = static_cast<float> (heldVelocity) / 127.0f;
     if (monoEngine (next))
-        startMono (part, heldNote, gain, false);
+        startMono (part, heldNote, gain, false, {});
     else
-        startVa (part, heldChannel, heldNote, gain);
+        startVa (part, heldChannel, heldNote, gain, {});
 }
 
 void SynthEngine::pushKey (Part& part, int key, int velocity) noexcept
@@ -228,7 +242,7 @@ void SynthEngine::freeMonoRoom() noexcept
     }
 }
 
-void SynthEngine::startMono (int part, int note, float velocity, bool legato) noexcept
+void SynthEngine::startMono (int part, int note, float velocity, bool legato, NoteArticulation art) noexcept
 {
     if (! monoEngine (parts_[part].engine))
         return;
@@ -242,16 +256,21 @@ void SynthEngine::startMono (int part, int note, float velocity, bool legato) no
     mono.note = note;
     mono.gate = true;
     mono.active = true;
-    mono.glide = legato && was;
+    mono.glide = (legato && was) || (art.forceSlide && was);
     const auto& knobs = live_[part];
-    if (mono.glide && knobs.slide > 0.01f)
+    if (art.forceSlide && was)
+        mono.glideSource = 1;
+    else if (mono.glide && knobs.slide > 0.01f)
         mono.glideSource = 1;
     else if (was && knobs.portamento > 0.01f)
         mono.glideSource = 2;
     else
         mono.glideSource = 0;
     mono.glide = mono.glideSource != 0;
-    mono.accentTarget = parts_[part].engine == EngineKind::acid && velocity >= (110.0f / 127.0f) ? 1.0f : 0.0f;
+    mono.slideFloor = art.forceSlide && was ? 0.45f : 0.0f;
+    const bool accented = art.forceAccent
+                       || (parts_[part].engine == EngineKind::acid && velocity >= (110.0f / 127.0f));
+    mono.accentTarget = accented ? 1.0f : 0.0f;
     if (! mono.glide)
     {
         mono.velocity = velocity;
@@ -269,7 +288,7 @@ void SynthEngine::startMono (int part, int note, float velocity, bool legato) no
     }
 }
 
-void SynthEngine::startVa (int part, int channel, int note, float velocity) noexcept
+void SynthEngine::startVa (int part, int channel, int note, float velocity, NoteArticulation art) noexcept
 {
     if (parts_[part].engine != EngineKind::va)
         return;
@@ -278,6 +297,7 @@ void SynthEngine::startVa (int part, int channel, int note, float velocity) noex
         if (voice.active && ! voice.dying && voice.part == part && voice.note == note && voice.channel == channel)
         {
             voice.velocity = velocity;
+            voice.accentGain = art.forceAccent ? 1.35f : 1.0f;
             voice.amp.gate();
             voice.gate = true;
             voice.age = ++age_;
@@ -302,6 +322,7 @@ void SynthEngine::startVa (int part, int channel, int note, float velocity) noex
         slot->dying = true;
         slot->pendingNote = note;
         slot->pendingVelocity = velocity;
+        slot->pendingAccent = art.forceAccent ? 1.35f : 1.0f;
         slot->pendingPart = part;
         slot->fadeTotal = std::max (1, static_cast<int> (sampleRate_ * (fadeMs / 1000.0)));
         slot->fadeLeft = slot->fadeTotal;
@@ -316,6 +337,7 @@ void SynthEngine::startVa (int part, int channel, int note, float velocity) noex
     slot->channel = channel;
     slot->note = note;
     slot->velocity = velocity;
+    slot->accentGain = art.forceAccent ? 1.35f : 1.0f;
     slot->age = ++age_;
     slot->noise = 0x9e3779b9u ^ (static_cast<std::uint32_t> (note) * 0x85ebca6bu) ^ static_cast<std::uint32_t> (slot->age);
     slot->fade = 1.0f;
@@ -333,12 +355,12 @@ void SynthEngine::restoreLatest (int part, bool fromSlide) noexcept
     const int note = slot.latest % 128;
     const float velocity = static_cast<float> (slot.keys[slot.latest].velocity) / 127.0f;
     if (monoEngine (slot.engine))
-        startMono (part, note, std::max (0.15f, velocity), fromSlide);
+        startMono (part, note, std::max (0.15f, velocity), fromSlide, {});
     else
-        startVa (part, slot.latest / 128, note, std::max (0.15f, velocity));
+        startVa (part, slot.latest / 128, note, std::max (0.15f, velocity), {});
 }
 
-void SynthEngine::noteOn (int part, int channel, int note, int velocity) noexcept
+void SynthEngine::noteOn (int part, int channel, int note, int velocity, NoteArticulation art) noexcept
 {
     if (channel < 0 || channel > 15 || note < 0 || note > 127 || velocity <= 0)
         return;
@@ -348,9 +370,9 @@ void SynthEngine::noteOn (int part, int channel, int note, int velocity) noexcep
     pushKey (slot, key, velocity);
     const float gain = static_cast<float> (velocity) / 127.0f;
     if (monoEngine (slot.engine))
-        startMono (part, note, gain, had);
+        startMono (part, note, gain, had, art);
     else
-        startVa (part, channel, note, gain);
+        startVa (part, channel, note, gain, art);
 }
 
 void SynthEngine::releaseVa (int part, int channel, int note) noexcept
@@ -437,12 +459,15 @@ void SynthEngine::allOff (int part, bool hard) noexcept
         }
 }
 
-void SynthEngine::handle (int part, std::uint8_t status, std::uint8_t d1, std::uint8_t d2) noexcept
+void SynthEngine::handle (int part, std::uint8_t status, std::uint8_t d1, std::uint8_t d2, std::uint8_t articulation) noexcept
 {
     const auto type = static_cast<std::uint8_t> (status & 0xf0u);
     const int channel = status & 0x0f;
+    NoteArticulation art;
+    art.forceAccent = (articulation & articulateAccent) != 0;
+    art.forceSlide = (articulation & articulateSlide) != 0;
     if (type == 0x90 && d2 > 0)
-        noteOn (part, channel, d1, d2);
+        noteOn (part, channel, d1, d2, art);
     else if (type == 0x80 || type == 0x90)
         noteOff (part, channel, d1);
     else if (type == 0xb0 && d1 == 64)
@@ -483,7 +508,8 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
     if (! mono.active)
         return 0.0f;
 
-    const float slideSeconds = 0.004f + 0.32f * params.slide * params.slide;
+    const float slideControl = mono.glideSource == 1 ? std::max (params.slide, mono.slideFloor) : params.slide;
+    const float slideSeconds = 0.004f + 0.32f * slideControl * slideControl;
     const float portaSeconds = 0.001f + 0.50f * params.portamento * params.portamento;
     const float glideSeconds = mono.glideSource == 1 ? slideSeconds
                              : mono.glideSource == 2 ? portaSeconds
@@ -526,6 +552,7 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
         sample = std::tanh (sample * (1.0f + 4.0f * params.drive));
         const float cutoff = 40.0f * std::pow (180.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
         sample = static_cast<float> (mono.svf.next (sample, cutoff, std::clamp (params.resonance, 0.0f, 1.0f), sampleRate_));
+        sample *= 1.0f + 0.45f * mono.accent;
     }
     else
     {
@@ -593,6 +620,7 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params) noexcept
                 voice.channel = channel;
                 voice.note = note;
                 voice.velocity = velocity;
+                voice.accentGain = voice.pendingAccent;
                 voice.age = ++age_;
                 voice.noise = 0x9e3779b9u ^ static_cast<std::uint32_t> (note * 17);
                 voice.amp.gate();
@@ -620,7 +648,7 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params) noexcept
     const float env = static_cast<float> (voice.amp.next (params.attack, params.decay, params.sustain, sampleRate_));
     const float cutoff = 80.0f * std::pow (90.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
     sample = static_cast<float> (voice.svf.next (sample, cutoff, std::clamp (params.resonance, 0.0f, 1.0f), sampleRate_));
-    sample *= env * voice.velocity * 0.4f * std::clamp (params.level, 0.0f, 1.0f);
+    sample *= env * voice.velocity * voice.accentGain * 0.4f * std::clamp (params.level, 0.0f, 1.0f);
     if (! std::isfinite (sample))
     {
         voice.svf.reset();
@@ -658,7 +686,7 @@ void SynthEngine::process (float* left, float* right, int frames,
             if (event.offset != static_cast<std::uint32_t> (sample) || event.status == 0)
                 continue;
             for (int part = 0; part < partCount; ++part)
-                handle (part, event.status, event.data1, event.data2);
+                handle (part, event.status, event.data1, event.data2, event.articulation);
         }
         float mix = 0.0f;
         for (int part = 0; part < partCount; ++part)

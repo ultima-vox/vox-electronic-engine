@@ -31,6 +31,16 @@ struct Event {
     std::uint8_t status = 0;
     std::uint8_t data1 = 0;
     std::uint8_t data2 = 0;
+    // Bit 0 accent, bit 1 slide-into-this-note. Host MIDI leaves this 0.
+    std::uint8_t articulation = 0;
+};
+
+inline constexpr std::uint8_t articulateAccent = 1u;
+inline constexpr std::uint8_t articulateSlide = 2u;
+
+struct NoteArticulation {
+    bool forceSlide = false;
+    bool forceAccent = false;
 };
 
 struct PartParams {
@@ -76,6 +86,8 @@ public:
     [[nodiscard]] double monoFrequency (int part) const noexcept;
     [[nodiscard]] int monoNote (int part) const noexcept;
     [[nodiscard]] bool monoGate (int part) const noexcept;
+    [[nodiscard]] float monoAccent (int part) const noexcept;
+    [[nodiscard]] int glideSource (int part) const noexcept;
     [[nodiscard]] int vaFadeLeft() const noexcept;
 
 private:
@@ -98,6 +110,7 @@ private:
         float velocity = 0.0f;
         float velocityTarget = 0.0f;
         float accentTarget = 0.0f;
+        float slideFloor = 0.0f;
         int note = -1;
         int pitchLeft = 0;
         int pitchTotal = 1;
@@ -117,6 +130,7 @@ private:
         vstengine::dspcore::BlepOscillator oscB;
         vstengine::dspcore::BlepOscillator sub;
         float velocity = 0.0f;
+        float accentGain = 1.0f;
         float fade = 1.0f;
         int fadeLeft = 0;
         int fadeTotal = 1;
@@ -131,6 +145,7 @@ private:
         bool gate = false;
         bool dying = false;
         float pendingVelocity = 0.0f;
+        float pendingAccent = 1.0f;
         vstengine::dspcore::SvfLowpass svf;
         vstengine::dspcore::LinearAdsr amp;
     };
@@ -146,8 +161,8 @@ private:
 
     void latchEngine (int part, EngineKind next) noexcept;
     void silencePart (int part) noexcept;
-    void handle (int part, std::uint8_t status, std::uint8_t d1, std::uint8_t d2) noexcept;
-    void noteOn (int part, int channel, int note, int velocity) noexcept;
+    void handle (int part, std::uint8_t status, std::uint8_t d1, std::uint8_t d2, std::uint8_t articulation) noexcept;
+    void noteOn (int part, int channel, int note, int velocity, NoteArticulation art) noexcept;
     void noteOff (int part, int channel, int note) noexcept;
     void releaseVa (int part, int channel, int note) noexcept;
     void pedal (int part, int channel, bool down) noexcept;
@@ -155,8 +170,8 @@ private:
     void pushKey (Part& part, int key, int velocity) noexcept;
     void removeKey (Part& part, int key) noexcept;
     void restoreLatest (int part, bool fromSlide) noexcept;
-    void startMono (int part, int note, float velocity, bool legato) noexcept;
-    void startVa (int part, int channel, int note, float velocity) noexcept;
+    void startMono (int part, int note, float velocity, bool legato, NoteArticulation art) noexcept;
+    void startVa (int part, int channel, int note, float velocity, NoteArticulation art) noexcept;
     void freeMonoRoom() noexcept;
     [[nodiscard]] int used() const noexcept;
     [[nodiscard]] VaVoice* oldestVa() noexcept;

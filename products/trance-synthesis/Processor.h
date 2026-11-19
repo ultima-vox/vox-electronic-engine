@@ -4,6 +4,7 @@
 #include "effects/EffectsChain.h"
 #include "engine/SynthEngine.h"
 #include "Parameters.h"
+#include "PhraseSchedule.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -32,6 +33,8 @@ public:
     void prepareToPlay (double sampleRate, int maximumBlockSize) override;
     void releaseResources() override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // Native phrase audition. Not host MIDI: slide and accent ride on the event.
+    void audition (juce::AudioBuffer<float>&, const AuditionEvent* events, int eventCount);
     using vox::suite::SuiteProcessor::processBlock;
     double getTailLengthSeconds() const override;
     juce::AudioProcessorEditor* createEditor() override;
@@ -42,6 +45,9 @@ public:
     [[nodiscard]] int activeVoices() const noexcept { return engine_.activeVoices(); }
     [[nodiscard]] int monoNote (int part) const noexcept { return engine_.monoNote (part); }
     [[nodiscard]] bool monoGate (int part) const noexcept { return engine_.monoGate (part); }
+    [[nodiscard]] double monoFrequency (int part) const noexcept { return engine_.monoFrequency (part); }
+    [[nodiscard]] float monoAccent (int part) const noexcept { return engine_.monoAccent (part); }
+    [[nodiscard]] int glideSource (int part) const noexcept { return engine_.glideSource (part); }
     [[nodiscard]] double monoPhase (int part) const noexcept { return engine_.monoPhase (part); }
     [[nodiscard]] int vaFadeLeft() const noexcept { return engine_.vaFadeLeft(); }
     [[nodiscard]] std::uint64_t droppedMidi() const noexcept { return droppedMidi_.load (std::memory_order_relaxed); }
@@ -66,6 +72,8 @@ protected:
     }
 
 private:
+    engine::BlockParams latchBlock();
+    void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
     juce::AudioProcessorValueTreeState parameters_;
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
