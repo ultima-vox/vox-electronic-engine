@@ -6,7 +6,7 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [2026-11-19 capture, restore and Wave A handoff](CAPTURE_WAVE_A_HANDOFF_20261119.md). Native processor/editor, capture parity and 54-cell callback stress ran on the pinned Linux/JUCE harness; 56 review candidates, zero approved. The Windows workflow request was denied before creation. The historical table below describes earlier checkpoints.
+**Latest:** [2026-11-19 Wave A review and Windows HOLD](WAVE_A_REVIEW_HANDOFF_20261119.md). 120 review candidates, zero approved; Wave B begins with six staged comparisons. Pinned native/Linux qualification ran on new code. The protected Windows baseline built Release x64 but failed CTest; validator execution was skipped. The table below describes earlier checkpoints.
 
 | Milestone | Status |
 |---|---|
