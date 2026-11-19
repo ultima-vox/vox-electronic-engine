@@ -1,0 +1,29 @@
+VOX FX historical Windows triage — post-gate CDB step executed
+Run: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44497593788
+Job: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44497593788/job/135468652332
+PR trigger head: 5b438c568d20aad03109b63bae5c6d134f7871b2
+Historical source requested for rebuild: e08eb314f6da27f877c0544a836e3bf8aec6207c
+TL instructions: https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7005328273
+
+Actions metadata: completed FAILURE. Historical Release/PDB configure and
+single-test build succeeded; targeted CTest FAILED (generic exit 1 annotation).
+The CDB-capture step ran and reported SUCCESS, unlike the older skipped step.
+Provenance and upload succeeded. Full windows-suite SKIPPED, no broader CTest
+or validator execution. A successful capture step does not assert that a dump
+exists or establish an exception code/stack: the helper can also return cleanly
+with e.g. "debugger not found" or "no minidump captured" in its output.
+
+Archive: VOX-FX-Processor-Triage-Historical, ID 14516426278, 74,850,822 bytes.
+https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44497593788/artifacts/14516426278
+Archive metadata digest sha256:c31e0e020d86931fb96a7a53512c16c4a2043f879cf2510b06e17ea75647aaf2
+Expires 2026-11-22 09:34:02 UTC (repo capped retention to three days).
+Both job log and archive redirects returned EOF from Arena. The signed-in
+runner/TL should preserve and inspect the archive and provide LastTest.log,
+capture/fx-processor-diagnostic.txt and the exception/stack excerpt from
+capture/fx-processor-cdb.log, or confirm entries were absent. Keep the
+EXE/PDB/minidump private. Request recorded in PR comment 7005782904.
+
+Until those contents are verified, do not guess a fix or label this run a
+third matching SEGFAULT. Historical recurrence in 44479129114/44488704936 is
+independently confirmed by TL, but P0 root cause and qualification remain open.
+PR Draft/HOLD head/body unchanged by Arena; no new Windows run requested.

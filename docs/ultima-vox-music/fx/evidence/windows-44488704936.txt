@@ -39,3 +39,15 @@ without changing the PR head Draft/HOLD state. The resulting PR edit event
 created run 44496154373; its jobs were SKIPPED. No new reproduction or broad
 Windows suite ran as a result of that removal. The staging follow-up has an
 explicit failure-status guard, absolute JUnit output and no-tests-as-error.
+
+TL artifact inspection (supersedes "not classified" above):
+https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7005328273
+The independent downloaded LastTest.log reports suite_fx_processor_tests,
+***Exception: SegFault, 2.60 s. No other test was executed. This confirms
+recurrence for the same CTest on the historical source, not an SEH code, stack
+or cause. The artifact includes Release /Zi /DEBUG:FULL matched EXE/PDB, not the
+byte-identical original EXE from the full run:
+  EXE SHA-256 33ea4296cfb89e513e82f3864dc41630b5fe75f8de6820bff89af4d5d7670c80
+  PDB SHA-256 ce92e41e1838c188d71a9594949b4f963c6588d85206ce1b1d582fc64f3ef49b
+No stack or dump was found in that artifact. The TL preserved the original
+archive outside its short Actions retention.

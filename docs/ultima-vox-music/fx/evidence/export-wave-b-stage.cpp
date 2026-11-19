@@ -1,6 +1,7 @@
-// Authoring tool for the eight Wave B staging cues; not a factory installer.
+// Authoring tool for Wave B staging cues; not a factory installer.
 // Compile with pinned JUCE core/cryptography and vox_preset. See triage handoff.
 #include "content/ReviewWaveBAssets.h"
+#include "content/ReviewWaveBPerformance.h"
 #include "engine/PortablePreset.h"
 #include "engine/SampleDecode.h"
 #include <filesystem>
@@ -51,12 +52,17 @@ int main(int argc,char** argv){
         if(!programcodec::encode(capture.program,program)||!macro::codec::encode(capture.settings.macroRoutes,motion)||
            !recipes.insert(digest(program)).second)return false;
         portable::Sound sound,restored;portable::Tags tagsOut;
-        sound.state.program=capture.program;sound.state.macros=capture.settings.macroRoutes;sound.sample=source;sound.state.effects=0;
+        sound.state.program=capture.program;sound.state.pattern=capture.pattern;sound.state.macros=capture.settings.macroRoutes;sound.sample=source;sound.state.effects=0;
         for(unsigned i=0;i<4;++i)sound.state.effects|=std::uint64_t(effects::pack(capture.settings.effects[i]))<<(16*i);
         const portable::Tags tags{std::string(e.name),std::string(e.style),std::string(e.mood),std::string(content::useCase(e)),static_cast<unsigned>(e.role)};
         if(!portable::encode(sound,preset,&tags)||!portable::decode(preset,restored,&tagsOut)||restored.sample!=source||
            restored.state.macros!=sound.state.macros||!portable::encode(restored,again,&tagsOut)||preset!=again||
            !write(root/"presets"/(id+".voxfx"),preset))return false;
+        if(e.mode==PlayMode::sequence){
+            std::vector<std::byte> expected,actual;
+            if(!pattern::codec::encode(capture.pattern,expected)||!pattern::codec::encode(restored.state.pattern,actual)||
+               expected!=actual)return false;
+        }
         std::string solo;
         for(const auto rate:{44100u,48000u,96000u}){
             capture.settings.sampleRate=rate;
@@ -66,14 +72,19 @@ int main(int argc,char** argv){
             if(m.peak<=.0001||m.peak>=.5||m.dc>=.01||m.monoRatio<.8||m.last5>=.001)return false;
             metrics<<id<<'\t'<<rate<<'\t'<<(wav.size()-44)/6<<'\t'<<m.peak<<'\t'<<m.dc<<'\t'<<m.monoRatio<<'\t'<<m.last5<<'\n';
             if(rate==48000){
-                if(!offline::renderWav(capture,repeat)||repeat!=wav||!write(root/"solo"/(id+".wav"),wav))return false;
+                // Receiving-host values are re-applied from the sidecar;
+                // use the decoded Program, Pattern and Motion, not the input objects.
+                auto reopened=capture;
+                reopened.program=restored.state.program;reopened.pattern=restored.state.pattern;
+                reopened.settings.macroRoutes=restored.state.macros;
+                if(!offline::renderWav(reopened,repeat)||repeat!=wav||!write(root/"solo"/(id+".wav"),wav))return false;
                 solo=digest(wav);if(!soloHashes.insert(solo).second)return false;
             }
         }
         constexpr const char* roles[]{"impact","riser","fall","sweep","zap","rhythm","atmosphere","stinger"};
         constexpr const char* modes[]{"oneShot","gate","continuous","loop","sequence","transition"};
         list<<id<<'\t'<<e.name<<'\t'<<roles[static_cast<unsigned>(e.role)]<<'\t'<<e.style<<'\t'<<modes[static_cast<unsigned>(e.mode)]
-            <<'\t'<<e.bpm<<'\t'<<unsigned(e.bars)<<'\t'<<unsigned(e.note)<<'\t'<<pair<<'\t'<<(e.pitchedSource?content::scaleName(capture.program.tonality.scale):"keyless")
+            <<'\t'<<e.bpm<<'\t'<<(e.mode==PlayMode::sequence?unsigned(capture.pattern.bars):unsigned(e.bars))<<'\t'<<unsigned(e.note)<<'\t'<<pair<<'\t'<<(e.pitchedSource?content::scaleName(capture.program.tonality.scale):"keyless")
             <<'\t'<<(capture.useUserSample?source.path:"built-in")<<'\t'<<(capture.useUserSample?source.sha256:"-")<<'\t'
             <<std::to_integer<unsigned>(program[0])<<'\t'<<std::to_integer<unsigned>(motion[0])<<'\t'<<solo<<"\tstaged-review-only\t"<<content::useCase(e)<<'\n';
         settings<<id<<'\t'<<e.bpm<<'\t'<<unsigned(e.note)<<'\t'<<capture.settings.velocity<<'\t'<<capture.settings.duration<<'\t'<<capture.settings.gain;
@@ -88,5 +99,9 @@ int main(int argc,char** argv){
         sample::Reference source{sample::Reference::Kind::external,cue.sourceName,decoded.sha256.toStdString()};
         if(!audit(cue.sound.entry,"-",std::move(capture),source))return 4;
     }
-    return list&&metrics&&settings?0:5;
+    for(const auto& cue:b::performance){
+        const auto capture=b::makePreview(cue,48000);
+        if(capture.settings.macroRoutes.count!=cue.routes.size()||!audit(cue.sound.entry,"-",capture,{}))return 5;
+    }
+    return list&&metrics&&settings?0:6;
 }

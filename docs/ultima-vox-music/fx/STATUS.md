@@ -6,7 +6,7 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [Windows processor-test triage and Wave B asset rehearsal](WINDOWS_PROCESSOR_TRIAGE_20261119.md). The independent TL review integrated the [120-candidate Wave A package](WAVE_A_REVIEW_HANDOFF_20261119.md) into the Draft PR and confirmed 73/74 CTest on the old tree, with a single FX processor SEGFAULT and validator skipped. Windows exception/stack are still pending; no approved factory content. The table below describes earlier checkpoints.
+**Latest:** [Wave B performance tranche and Windows P0 evidence](WAVE_B_PERFORMANCE_20261119.md). Wave A remains 120/0; Wave B has 16 separately staged review cues. The historical Windows processor-test SEGFAULT is independently confirmed on two runs. The newer targeted run executed its capture step; the actual log/stack is pending retrieval. Draft/HOLD. The table below describes earlier checkpoints.
 
 | Milestone | Status |
 |---|---|
