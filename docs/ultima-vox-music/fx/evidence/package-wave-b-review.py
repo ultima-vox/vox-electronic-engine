@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify a Wave B 24 staging export and rebuild the listening archive locally.
+"""Verify a Wave B staging export and rebuild the listening archive locally.
 
-Usage: python3 package-wave-b-24.py <export-directory> <destination.zip>
+Usage: python3 package-wave-b-review.py <export-directory> <destination.zip> [--counterpoints]
 Does not upload, alter the export directory, or overwrite a destination.
 """
 
@@ -16,19 +16,23 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def package(root, destination):
+def package(root, destination, extended=False):
     evidence = Path(__file__).resolve().parent
-    prefix = 'wave-b-twentyfour-'
+    prefix = 'wave-b-thirtytwo-' if extended else 'wave-b-twentyfour-'
+    count = 88 if extended else 54
+    sidecars = {'READ ME.txt': 'package-readme.txt'}
+    if extended:
+        sidecars['creative-brief.tsv'] = 'creative-brief.tsv'
     hashes = (evidence / (prefix + 'members.sha256')).read_bytes()
     expected_archive = (evidence / (prefix + 'archive.sha256')).read_text().split()[0]
     expected = dict(line.split('  ', 1)[::-1] for line in hashes.decode().splitlines())
-    if len(expected) != 54 or destination.exists():
-        raise ValueError('Expected the 54 pinned members and a new archive path')
+    if len(expected) != count or destination.exists():
+        raise ValueError(f'Expected the {count} pinned members and a new archive path')
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=destination.parent) as tmp:
         with zipfile.ZipFile(tmp, 'w') as z:
             for name, digest in expected.items():
-                source = evidence / (prefix + 'package-readme.txt') if name == 'READ ME.txt' else root / name
+                source = evidence / (prefix + sidecars[name]) if name in sidecars else root / name
                 data = source.read_bytes()
                 if sha(data) != digest:
                     raise ValueError(f'{name}: SHA-256 does not match the staged render or metadata')
@@ -48,6 +52,7 @@ def package(root, destination):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
+    counterpoints = len(sys.argv) == 4 and sys.argv[3] == '--counterpoints'
+    if len(sys.argv) != 3 and not counterpoints:
         sys.exit(__doc__)
-    package(Path(sys.argv[1]), Path(sys.argv[2]))
+    package(Path(sys.argv[1]), Path(sys.argv[2]), counterpoints)

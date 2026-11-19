@@ -847,7 +847,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     wavExport_.setTooltip("Choose stereo WAV options; click during rendering to cancel");
     wavOptions_.onSave=[this](offline::Settings settings){exportWav(settings);};
     addChildComponent(wavOptions_);
-    wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
+    wavExport_.onClick=[this]{if(processor_.wavExportJob())processor_.cancelWavExport();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
     addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger a finite audition of the current voice. Bar programs require the host bar clock.");
     stopAudition_.setTitle("Stop audition");stopAudition_.setTooltip("Fade audition voices and stop preset preview without stopping MIDI or Pattern voices");
@@ -1022,7 +1022,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     refreshPattern();
     startTimerHz (25);
 }
-FxPanel::~FxPanel() { stopTimer(); wavJob_.reset(); }
+FxPanel::~FxPanel() { stopTimer(); }
 void FxPanel::paint (juce::Graphics& g)
 {
     namespace c = vox::ui::tokens::colour;
@@ -1237,6 +1237,7 @@ void FxPanel::exportPattern()
 }
 void FxPanel::exportWav(offline::Settings settings)
 {
+    if(processor_.wavExportJob())return;
     // Capture a self-contained value while the processor is alive. The worker
     // never references the processor or editor and cannot touch the callback.
     std::shared_ptr<offline::Capture> capture;
@@ -1274,10 +1275,8 @@ void FxPanel::exportWav(offline::Settings settings)
                     "WAV export failed","Choose a filename ending in .wav.");return;
             }
             safe->wavExport_.setButtonText("STOP");
-            try {
-                safe->wavJob_=std::make_unique<fileexport::WavJob>(std::move(*capture),target);
-            } catch(...) {
-                safe->wavJob_.reset();safe->wavExport_.setButtonText("WAV");
+            if(!safe->processor_.startWavExport(std::move(*capture),target)) {
+                safe->wavExport_.setButtonText("WAV");
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                     "WAV export failed","Could not start the render worker.");
             }
@@ -1332,18 +1331,15 @@ void FxPanel::refreshMacro()
 }
 void FxPanel::timerCallback()
 {
-    if(wavJob_){
-        const auto result=wavJob_->result();
-        if(result!=fileexport::Result::running){
-            wavJob_.reset();wavExport_.setButtonText("WAV");
-            if(result!=fileexport::Result::cancelled)juce::AlertWindow::showMessageBoxAsync(result==fileexport::Result::success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
-                result==fileexport::Result::success?"WAV exported":"WAV export failed",
-                result==fileexport::Result::success?"The captured audio was exported using the selected WAV settings.":"Could not render or write the WAV file.");
-        }else {
-            const int percent=static_cast<int>(wavJob_->progress()*100);
-            wavExport_.setButtonText(wavJob_->cancelled()?"...":juce::String(percent)+"%");
-        }
-    }
+    if(const auto result=processor_.takeWavExportResult()){
+        wavExport_.setButtonText("WAV");
+        if(*result!=fileexport::Result::cancelled)juce::AlertWindow::showMessageBoxAsync(*result==fileexport::Result::success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+            *result==fileexport::Result::success?"WAV exported":"WAV export failed",
+            *result==fileexport::Result::success?"The captured audio was exported using the selected WAV settings.":"Could not render or write the WAV file.");
+    }else if(const auto* job=processor_.wavExportJob()){
+        const int percent=static_cast<int>(job->progress()*100);
+        wavExport_.setButtonText(job->cancelled()?"...":juce::String(percent)+"%");
+    }else if(wavExport_.getButtonText()!="WAV")wavExport_.setButtonText("WAV");
     if (!isShowing()) return;
     const auto sample=processor_.sampleSnapshot();
     using Status=sample::Controller::Status;

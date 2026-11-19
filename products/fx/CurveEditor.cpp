@@ -31,7 +31,7 @@ CurveEditor::CurveEditor(FxProcessor& processor,std::optional<std::size_t> layer
     jassert(!layer || *layer < 4);
     setWantsKeyboardFocus(true);
     updateTitle();
-    setDescription("Double click to add nodes. Shift click to select multiple; drag or arrow keys move them. Enter edits one node numerically. Command-C/V copy or paste the entire curve. L, S, E or H set segment shape.");
+    setDescription("Double click to add nodes. Shift click to select multiple; drag or arrow keys move them. Enter edits one node numerically. Command-C/V copy or paste the entire curve. L, S, E or H set segment shape. Wheel or plus/minus zooms; Shift-wheel or Alt-left/right pans; zero fits the full authored duration.");
     refresh();
 }
 void CurveEditor::updateTitle() {
@@ -45,31 +45,67 @@ void CurveEditor::setKind(Kind kind) {
     updateTitle();
     refresh();
 }
-juce::Rectangle<float> CurveEditor::graph() const noexcept { return getLocalBounds().toFloat().reduced(8.0f); }
+juce::Rectangle<float> CurveEditor::graph() const noexcept {
+    auto area=getLocalBounds().toFloat().reduced(8.f);
+    area.removeFromBottom(std::min(16.f,area.getHeight()*.25f));
+    return area;
+}
+float CurveEditor::horizontalPosition(double phase) const noexcept {
+    const auto r=graph();return r.getX()+static_cast<float>(viewport_.fractionAt(phase))*r.getWidth();
+}
+float CurveEditor::phaseAt(float x,bool snap) const noexcept {
+    const auto r=graph();
+    auto time=viewport_.timeAt((x-r.getX())/r.getWidth());
+    if(snap)time=std::round(time*16.0)/16.0;
+    return static_cast<float>(std::clamp(time,viewport_.start(),viewport_.start()+viewport_.span()));
+}
 juce::Point<float> CurveEditor::pointFor(const timeline::Node& n) const noexcept {
-    auto r=graph(); return {r.getX()+n.time*r.getWidth(),r.getBottom()-n.value*r.getHeight()};
+    auto r=graph(); return {horizontalPosition(n.time),r.getBottom()-n.value*r.getHeight()};
 }
 int CurveEditor::hit(juce::Point<float> point) const noexcept {
+    if(!graph().expanded(5.f).contains(point))return -1;
     int result=-1;float best=9.0f*9.0f;
-    for(int i=0;i<shown_.count;++i){const auto d=pointFor(shown_.nodes[static_cast<std::size_t>(i)])-point;
+    for(int i=0;i<shown_.count;++i){const auto& node=shown_.nodes[static_cast<std::size_t>(i)];
+        if(!viewport_.contains(node.time))continue;
+        const auto d=pointFor(node)-point;
         const float dist=d.x*d.x+d.y*d.y;if(dist<=best){best=dist;result=i;}}
     return result;
 }
 void CurveEditor::paint(juce::Graphics& g) {
     namespace c=vox::ui::tokens::colour;
-    auto r=graph(); g.setColour(c::graph);g.fillRoundedRectangle(r,3.0f);
+    const auto r=graph();if(r.isEmpty())return;
+    g.setColour(c::graph);g.fillRoundedRectangle(r,3.0f);
     g.setColour(c::border);g.drawRoundedRectangle(r,3.0f,1.0f);
-    if(playhead_){
-        const float x=r.getX()+*playhead_*r.getWidth();
+    const int intervals=r.getWidth()>=380.f?4:2;
+    const double unitStep=axisLength_*viewport_.span()/intervals;
+    const int digits=std::clamp(static_cast<int>(std::ceil(-std::log10(unitStep)))+1,1,6);
+    g.setFont(juce::FontOptions(10.f));
+    for(int i=0;i<=intervals;++i){
+        const double fraction=static_cast<double>(i)/intervals;
+        const float x=r.getX()+static_cast<float>(fraction)*r.getWidth();
+        g.setColour(c::border.withAlpha(.55f));g.drawVerticalLine(juce::roundToInt(x),r.getY(),r.getBottom());
+        const auto label=juce::String(viewport_.timeAt(fraction)*axisLength_,digits)+(axisBars_?" bar":" s");
+        const float width=r.getWidth()/intervals;
+        const auto text=juce::Rectangle<float>(std::clamp(x-width*.5f,r.getX(),r.getRight()-width),r.getBottom()+2.f,width,12.f);
+        g.setColour(c::text);g.drawFittedText(label,text.toNearestInt(),i==0?juce::Justification::centredLeft:
+            i==intervals?juce::Justification::centredRight:juce::Justification::centred,1);
+    }
+    if(playhead_&&viewport_.contains(*playhead_)){
+        const float x=horizontalPosition(*playhead_);
         g.setColour(c::text.withAlpha(.65f));g.drawVerticalLine(juce::roundToInt(x),r.getY(),r.getBottom());
     }
+    juce::Graphics::ScopedSaveState clip(g);
+    g.reduceClipRegion(r.toNearestInt().expanded(1));
     juce::Path path;
     constexpr int samples=80;
-    for(int i=0;i<=samples;++i){const float t=static_cast<float>(i)/samples;
-        const float x=r.getX()+t*r.getWidth(), y=r.getBottom()-shown_.evaluate(t)*r.getHeight();
+    for(int i=0;i<=samples;++i){const double fraction=static_cast<double>(i)/samples;
+        const float x=r.getX()+static_cast<float>(fraction)*r.getWidth(),
+            y=r.getBottom()-shown_.evaluate(static_cast<float>(viewport_.timeAt(fraction)))*r.getHeight();
         if(i==0)path.startNewSubPath(x,y);else path.lineTo(x,y);}
     g.setColour(c::accent);g.strokePath(path,juce::PathStrokeType(1.5f));
-    for(int i=0;i<shown_.count;++i){const auto point=pointFor(shown_.nodes[static_cast<std::size_t>(i)]);
+    for(int i=0;i<shown_.count;++i){const auto& node=shown_.nodes[static_cast<std::size_t>(i)];
+        if(!viewport_.contains(node.time))continue;
+        const auto point=pointFor(node);
         g.setColour(selection_&curveedit::bit(static_cast<unsigned>(i))?c::text:c::accent);g.fillEllipse(point.x-3.0f,point.y-3.0f,6.0f,6.0f);}
     if(hasKeyboardFocus(true)){g.setColour(c::text);g.drawRoundedRectangle(r,3.0f,1.5f);}
 }
@@ -88,6 +124,10 @@ void CurveEditor::refresh() {
     if(snapshot.revision!=restoreEpoch_) {
         undo_.clearUndoHistory();dragging_=false;selected_=-1;selection_=0;restoreEpoch_=snapshot.revision;playhead_.reset();
     }
+    axisBars_=snapshot.program.bars!=0;
+    const auto seconds=processor_.durationParameter().get();
+    axisLength_=axisBars_?snapshot.program.bars:std::isfinite(seconds)?std::clamp(seconds,.05f,32.f):4.f;
+    if(target_.layer)axisLength_*=snapshot.program.layers[*target_.layer].timing.span;
     playhead_=dragging_?std::nullopt:processor_.curvePlayhead(snapshot.publication,target_.layer);
     if(!dragging_){if (const auto* curve = target_.get(snapshot.program)) shown_ = *curve;
         if(selected_>=shown_.count){selected_=-1;selection_=0;}
@@ -135,8 +175,7 @@ void CurveEditor::mouseDrag(const juce::MouseEvent& event) {
     if(!dragging_ || selected_<0)return;
     auto r=graph();if(r.getWidth()<=0 || r.getHeight()<=0)return;
     const auto& anchor=beforeDrag_.nodes[static_cast<std::size_t>(selected_)];
-    float time=std::clamp((event.position.x-r.getX())/r.getWidth(),0.0f,1.0f);
-    if(!event.mods.isAltDown())time=std::round(time*16.0f)/16.0f;
+    const float time=phaseAt(event.position.x,!event.mods.isAltDown());
     const float value=std::clamp((r.getBottom()-event.position.y)/r.getHeight(),0.0f,1.0f);
     if(!curveedit::move(beforeDrag_,selection_,time-anchor.time,value-anchor.value,shown_))return;
     if (!publish(shown_)) { dragging_=false; refresh(); }
@@ -149,10 +188,17 @@ void CurveEditor::mouseUp(const juce::MouseEvent&) {
     const auto after=shown_;undo_.beginNewTransaction();
     (void)undo_.perform(new CurveChange(processor_,target_,restoreEpoch_,beforeDrag_,after));repaint();
 }
+void CurveEditor::mouseWheelMove(const juce::MouseEvent& event,const juce::MouseWheelDetails& wheel) {
+    const auto r=graph();if(dragging_||r.isEmpty()||!r.contains(event.position))return;
+    const auto delta=wheel.deltaY!=0?wheel.deltaY:wheel.deltaX;
+    if(event.mods.isShiftDown()||wheel.deltaY==0)viewport_.pan(-delta);
+    else viewport_.zoom((event.position.x-r.getX())/r.getWidth(),std::exp2(static_cast<double>(delta)*2));
+    repaint();
+}
 void CurveEditor::mouseDoubleClick(const juce::MouseEvent& event) {
     syncRestore();
-    dragging_=false;auto r=graph();if(r.getWidth()<=0||r.getHeight()<=0||shown_.count>=16)return;
-    const float time=std::round(juce::jlimit(0.0f,1.0f,(event.position.x-r.getX())/r.getWidth())*16.0f)/16.0f;
+    dragging_=false;auto r=graph();if(r.isEmpty()||!r.contains(event.position)||shown_.count>=16)return;
+    const float time=phaseAt(event.position.x,!event.mods.isAltDown());
     if(time<=0||time>=1)return;
     auto next=shown_;int at=1;while(at<next.count && next.nodes[static_cast<std::size_t>(at)].time<time)++at;
     if(at>=next.count || next.nodes[static_cast<std::size_t>(at)].time==time)return;
@@ -221,8 +267,16 @@ bool CurveEditor::keyPressed(const juce::KeyPress& key) {
         if(code=='v'||code=='V')return pasteCurve();
         if(code=='a'||code=='A'){selection_=(curveedit::Selection{1}<<shown_.count)-1;repaint();return true;}
     }
+    if(!dragging_&&key.getModifiers().isAltDown()&&(code==juce::KeyPress::leftKey||code==juce::KeyPress::rightKey)){
+        viewport_.pan(code==juce::KeyPress::leftKey?-.25:.25);repaint();return true;
+    }
+    if(!dragging_&&(code=='+'||code=='='||code=='-'||code=='0')){
+        if(code=='0')viewport_.fit();
+        else viewport_.zoom(.5,code=='-'?.5:2.);
+        repaint();return true;
+    }
     if(code==juce::KeyPress::tabKey && key.getModifiers().isAltDown()){
-        selected_=(selected_+1)%shown_.count;selection_=curveedit::bit(static_cast<unsigned>(selected_));repaint();return true;
+        selected_=(selected_+1)%shown_.count;viewport_.reveal(shown_.nodes[static_cast<std::size_t>(selected_)].time);selection_=curveedit::bit(static_cast<unsigned>(selected_));repaint();return true;
     }
     if(!selection_)return false;
     if(code==juce::KeyPress::returnKey){enterNodeValues();return true;}

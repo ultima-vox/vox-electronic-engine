@@ -11,6 +11,7 @@
 #include "engine/ComparisonState.h"
 #include "engine/PortablePreset.h"
 #include "engine/Preview.h"
+#include "engine/FileExport.h"
 #include <bit>
 
 namespace vox::fx {
@@ -136,6 +137,12 @@ public:
     offline::Capture captureProgramWav (offline::Settings settings) const;
     bool renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
                            const std::atomic<bool>* cancel=nullptr, std::atomic<float>* progress=nullptr) const;
+    // Message thread only. Own export independently of editor lifetime; the
+    // render receives an immutable capture, never a processor/editor pointer.
+    bool startWavExport(offline::Capture,juce::File);
+    const fileexport::WavJob* wavExportJob() const noexcept { return wavExportJob_.get(); }
+    void cancelWavExport() noexcept;
+    std::optional<fileexport::Result> takeWavExportResult();
     // Trigger pattern controller and offline MIDI export.
     bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
     template<typename Edit> bool editPattern(Edit edit) { return programs_.editPattern(edit); }
@@ -236,6 +243,7 @@ private:
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     transport::Tracker transport_;
+    std::unique_ptr<fileexport::WavJob> wavExportJob_;
 };
 
 } // namespace vox::fx

@@ -3,6 +3,32 @@
 #include "Timeline.h"
 
 namespace vox::fx::curveedit {
+// Message-thread view only; the Program always stores normalized times.
+class Viewport {
+public:
+    double start() const noexcept { return start_; }
+    double span() const noexcept { return span_; }
+    double timeAt(double fraction) const noexcept { return start_+std::clamp(fraction,0.,1.)*span_; }
+    double fractionAt(double time) const noexcept { return (time-start_)/span_; }
+    bool contains(double time) const noexcept { return time>=start_&&time<=start_+span_; }
+    void fit() noexcept { start_=0;span_=1; }
+    void zoom(double anchor,double factor) noexcept {
+        if(!std::isfinite(anchor)||!std::isfinite(factor)||factor<=0)return;
+        anchor=std::clamp(anchor,0.,1.);
+        const auto time=timeAt(anchor);
+        span_=std::clamp(span_/factor,1./16,1.);
+        start_=std::clamp(time-anchor*span_,0.,1.-span_);
+    }
+    void pan(double fraction) noexcept {
+        if(std::isfinite(fraction))start_=std::clamp(start_+fraction*span_,0.,1.-span_);
+    }
+    void reveal(double time) noexcept {
+        if(!std::isfinite(time)||contains(time))return;
+        start_=std::clamp(time-.5*span_,0.,1.-span_);
+    }
+private:
+    double start_=0,span_=1;
+};
 using Selection = std::uint32_t;
 constexpr Selection bit(unsigned i) noexcept { return i < 16 ? Selection{1} << i : 0; }
 

@@ -27,7 +27,7 @@ Each cue has its own authored layers, contours, timing, filters, FX and two moti
 To rebuild the listening ZIP from the export directory without committing any audio binaries:
 
 ```bash
-python3 docs/ultima-vox-music/fx/evidence/package-wave-b-24.py build/wave-b-stage build/vox-fx-wave-b-twentyfour-cue-review.zip
+python3 docs/ultima-vox-music/fx/evidence/package-wave-b-review.py build/wave-b-stage build/vox-fx-wave-b-twentyfour-cue-review.zip
 ```
 
 The packager checks SHA-256 for each pinned member and reports whether the compressed ZIP also matches the original byte-for-byte (zlib version can change the compressed bytes). Transfer the result only via authorized private storage; the repository is public, so neither this script nor the review manifest publishes the audio archive.

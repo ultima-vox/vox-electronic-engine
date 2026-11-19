@@ -1,7 +1,7 @@
 // Authoring tool for Wave B staging cues; not a factory installer.
 // Compile with pinned JUCE core/cryptography and vox_preset. See triage handoff.
 #include "content/ReviewWaveBAssets.h"
-#include "content/ReviewWaveBInterludes.h"
+#include "content/ReviewWaveBCounterpoints.h"
 #include "engine/PortablePreset.h"
 #include "engine/SampleDecode.h"
 #include <filesystem>
@@ -35,7 +35,8 @@ std::string digest(const auto& bytes){return juce::SHA256(bytes.data(),bytes.siz
 }
 
 int main(int argc,char** argv){
-    if(argc!=2)return 1;
+    const bool extended=argc==3&&std::string_view(argv[2])=="--counterpoints";
+    if(argc!=2&&!extended)return 1;
     const std::filesystem::path root(argv[1]);
     for(const auto* dir:{"solo","presets","sources"})std::filesystem::create_directories(root/dir);
     std::ofstream list(root/"manifest.tsv"),metrics(root/"metrics.tsv"),settings(root/"settings.tsv");
@@ -110,9 +111,13 @@ int main(int argc,char** argv){
         sample::Reference source{sample::Reference::Kind::external,cue.sourceName,decoded.sha256.toStdString()};
         if(!audit(cue.sound.entry,"-",std::move(capture),source))return 4;
     }
-    for(const auto tranche:{std::span{b::performance},std::span{b::interludes}})for(const auto& cue:tranche){
+    const auto auditCue=[&](const b::PerformanceCue& cue){
         const auto capture=b::makePreview(cue,48000);
-        if(capture.settings.macroRoutes.count!=cue.routes.size()||!audit(cue.sound.entry,"-",capture,{})){std::cerr<<"Audit failed: "<<cue.sound.entry.id<<"\n";return 5;}
-    }
+        if(capture.settings.macroRoutes.count==cue.routes.size()&&audit(cue.sound.entry,"-",capture,{}))return true;
+        std::cerr<<"Audit failed: "<<cue.sound.entry.id<<"\n";return false;
+    };
+    for(const auto tranche:{std::span{b::performance},std::span{b::interludes}})
+        for(const auto& cue:tranche)if(!auditCue(cue))return 5;
+    if(extended)for(const auto& cue:b::counterpoints)if(!auditCue(cue))return 8;
     return list&&metrics&&settings?0:6;
 }

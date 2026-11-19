@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -74,6 +75,21 @@ int main() {
               "group preserves spacing and pinned endpoints");
         check(curveedit::erase(edited,selection,edited)&&edited.count==3&&edited.nodes[0].time==0&&edited.nodes[2].time==1,
               "delete selected interior nodes without erasing endpoints");
+    }
+    {
+        vox::fx::curveedit::Viewport view;
+        view.zoom(.75,2);
+        check(view.start()==.375&&view.span()==.5&&view.timeAt(.75)==.75,"zoom preserves time under pointer");
+        check(std::abs(view.fractionAt(view.timeAt(.36))-.36)<1e-12,"phase/pixel transform round trip");
+        for(int i=0;i<30;++i)view.zoom(.5,2);
+        view.pan(1e6);
+        check(view.start()==.9375&&view.span()==.0625&&view.timeAt(1)==1,"zoom and pan clamp at valid right edge");
+        view.reveal(0);
+        check(view.start()==0&&view.contains(0)&&!view.contains(.5),"keyboard node navigation reveals hidden nodes");
+        view.zoom(.5,std::numeric_limits<double>::quiet_NaN());
+        view.pan(std::numeric_limits<double>::infinity());
+        check(view.start()==0&&view.span()==.0625,"nonfinite gestures leave view unchanged");
+        view.fit();check(view.start()==0&&view.span()==1,"fit selects complete normalized timeline");
     }
     std::printf("FX curve trajectories: %d failure(s)\n",failures);return failures?1:0;
 }

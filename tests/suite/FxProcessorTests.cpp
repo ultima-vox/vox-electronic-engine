@@ -2,6 +2,7 @@
 #include "FxEditor.h"
 #include "content/FactoryCandidates.h"
 #include <cmath>
+#include <cstring>
 #include <bit>
 #include <cstdio>
 #include <condition_variable>
@@ -143,6 +144,65 @@ void checkSoloAndPlayhead() {
     check(!fx->curvePlayhead(fx->versionedProgram().publication)&&fx->outputPeak()==0&&!fx->consumeClip(),"release resets cursor and peak/clip");
 }
 
+void checkExportAcrossEditorClose() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    auto panel=std::make_unique<FxPanel>(*fx);
+    auto capture=fx->captureProgramWav({});
+    capture.settings.duration=.075f;capture.settings.sampleRate=44100;
+    std::vector<std::uint8_t> expected;
+    check(offline::renderWav(capture,expected),"capture reference before closing editor");
+    const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-panel-export","",false);
+    check(dir.createDirectory().wasOk(),"export test directory");
+    const auto path=dir.getChildFile("capture.wav");
+    check(fx->startWavExport(capture,path)&&fx->wavExportJob(),"processor starts and owns an export while editor is open");
+    panel.reset();
+    check(fx->wavExportJob()!=nullptr&&!fx->startWavExport(capture,path),"closing editor neither cancels export nor admits a duplicate");
+    fx->setFamily(static_cast<int>(NoiseFamily::laser));
+    auto reopened=std::make_unique<FxPanel>(*fx);
+    const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    std::optional<fileexport::Result> result;
+    while(!result&&std::chrono::steady_clock::now()<end){
+        result=fx->takeWavExportResult();
+        if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(result==fileexport::Result::success&&!fx->wavExportJob()&&!fx->takeWavExportResult(),"reopened editor can consume completion exactly once");
+    juce::MemoryBlock bytes;
+    check(path.loadFileAsData(bytes)&&bytes.getSize()==expected.size()&&std::memcmp(bytes.getData(),expected.data(),expected.size())==0,
+          "export contains original capture despite editor close and subsequent Program edit");
+    dir.deleteRecursively();
+}
+
+void checkTimelineViewport() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();NoiseProgram p;
+    p.layers[0].timing={.25f,.5f};check(fx->setProgram(p),"axis layer fixture");
+    auto editor=std::make_unique<CurveEditor>(*fx,0);
+    editor->setBounds(0,0,320,140);
+    const auto params=save(*fx);
+    check(!editor->axisUsesBars()&&editor->axisLength()==2,"layer axis uses span times duration in seconds");
+    check(editor->keyPressed(juce::KeyPress('+'))&&editor->viewport().start()==.25&&editor->viewport().span()==.5,
+          "keyboard zoom selects center half");
+    check(save(*fx)==params,"viewport does not affect host state or automation");
+    const auto now=juce::Time::getCurrentTime();const juce::Point<float> pos{198.f,58.f};
+    const juce::MouseEvent click(juce::Desktop::getInstance().getMainMouseSource(),pos,juce::ModifierKeys{},0,0,0,0,0,
+        editor.get(),editor.get(),now,pos,now,2,false);
+    editor->mouseDoubleClick(click);
+    const auto inserted=fx->program().layers[0].gainCurve;
+    check(inserted.count==3&&inserted.nodes[1].time==.5625f&&editor->undo(),"zoomed insertion uses visible-to-normalized mapping and undo");
+    check(fx->program().layers[0].gainCurve.count==2&&editor->viewport().span()==.5,"undo restores curve without resetting view");
+    check(editor->keyPressed(juce::KeyPress(juce::KeyPress::rightKey,juce::ModifierKeys::altModifier,0))&&
+          editor->viewport().start()==.375&&editor->keyPressed(juce::KeyPress('0'))&&editor->viewport().span()==1,
+          "keyboard pan and fit do not edit the curve");
+    auto& seconds=fx->durationParameter();seconds.setValueNotifyingHost(seconds.convertTo0to1(.75f));editor->refresh();
+    check(!editor->axisUsesBars()&&std::abs(editor->axisLength()-.375)<1e-4,"seconds axis follows host automation");
+    p.bars=8;check(fx->setProgram(p),"switch authoring timeline to bars");editor->refresh();
+    check(editor->axisUsesBars()&&editor->axisLength()==4,"layer axis switches to local bar span");
+    fx->setStateInformation(params.getData(),static_cast<int>(params.getSize()));editor->refresh();
+    check(fx->lastStateError().isEmpty()&&!editor->axisUsesBars()&&std::abs(editor->axisLength()-2)<1e-4,
+          "axis follows project restore");
+}
+
 void checkHostTempoCursor() {
     using namespace vox::fx;
     TestPlayHead automated, reference;
@@ -270,7 +330,8 @@ int main() {
     };
     phase("JUCE initialization");
     juce::ScopedJuceInitialiser_GUI gui;
-    phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();
+    phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();checkTimelineViewport();
+    phase("WAV export across editor close");checkExportAcrossEditorClose();
     phase("capture parity");checkCaptureParity();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;

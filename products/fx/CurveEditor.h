@@ -19,9 +19,13 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
+    void mouseWheelMove(const juce::MouseEvent&,const juce::MouseWheelDetails&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     bool keyPressed(const juce::KeyPress&) override;
     void refresh();
+    curveedit::Viewport viewport() const noexcept { return viewport_; }
+    double axisLength() const noexcept { return axisLength_; }
+    bool axisUsesBars() const noexcept { return axisBars_; }
     std::optional<float> visiblePlayhead() const noexcept { return playhead_; }
     bool resetCurve();
     bool setCurve(const timeline::Curve&); // one undoable structural edit
@@ -29,6 +33,8 @@ public:
     bool redo();
 private:
     juce::Rectangle<float> graph() const noexcept;
+    float horizontalPosition(double phase) const noexcept;
+    float phaseAt(float x,bool snap) const noexcept;
     juce::Point<float> pointFor(const timeline::Node&) const noexcept;
     int hit(juce::Point<float>) const noexcept;
     bool publish(const timeline::Curve&);
@@ -41,6 +47,9 @@ private:
     FxProcessor& processor_;
     CurveTarget target_;
     timeline::Curve shown_;
+    curveedit::Viewport viewport_;
+    double axisLength_=4;
+    bool axisBars_=false;
     std::optional<float> playhead_;
     timeline::Curve beforeDrag_;
     juce::UndoManager undo_;
