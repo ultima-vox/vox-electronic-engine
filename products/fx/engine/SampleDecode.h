@@ -69,7 +69,7 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output,const 
 // Worker/controller only; the exact bytes read are bounded before allocation
 // and hashed. Missing, shortened, extended, or unreadable files leave output
 // unchanged. Same-length concurrent edits are not detectable by this reader.
-inline bool loadWav(const juce::File& file,Decoded& output,const std::atomic<bool>* cancel=nullptr) {
+inline bool loadWavCancelable(const juce::File& file,Decoded& output,const std::atomic<bool>* cancel) {
     juce::FileInputStream input(file);if(!input.openedOk())return false;
     const auto length=input.getTotalLength();
     if(length<12 || static_cast<std::uint64_t>(length)>maxFileBytes)return false;
@@ -86,4 +86,5 @@ inline bool loadWav(const juce::File& file,Decoded& output,const std::atomic<boo
         return decodeWav(bytes,output,cancel);
     } catch(...) {return false;}
 }
+inline bool loadWav(const juce::File& file,Decoded& output){return loadWavCancelable(file,output,nullptr);}
 } // namespace vox::fx::sample

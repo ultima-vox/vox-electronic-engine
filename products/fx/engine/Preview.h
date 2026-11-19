@@ -77,7 +77,7 @@ private:
             const auto path=juce::String::fromUTF8(reference.path.data(),static_cast<int>(reference.path.size()));
             if(!juce::File::isAbsolutePath(path)||!path.endsWithIgnoreCase(".wav"))return false;
             sample::Decoded sample;
-            if(!sample::loadWav(juce::File(path),sample,&cancel_)||sample.sha256!=juce::String(reference.sha256))return false;
+            if(!sample::loadWavCancelable(juce::File(path),sample,&cancel_)||sample.sha256!=juce::String(reference.sha256))return false;
             capture.useUserSample=true;capture.sampleRate=sample.rate;capture.sample=std::move(sample.mono);
         }
         capture.settings.sampleRate=rate;capture.settings.format=offline::WavFormat::float32;
