@@ -15,7 +15,7 @@ int main(){
     auto fillCurve=[](vox::fx::timeline::Curve& c){c.count=16;for(int i=0;i<16;++i)c.nodes[static_cast<std::size_t>(i)]={static_cast<float>(i)/15.0f,static_cast<float>(i%2),vox::fx::timeline::Shape::smooth};};
     for(auto& layer:largest.layers){fillCurve(layer.gainCurve);fillCurve(layer.panCurve);fillCurve(layer.pitchCurve);fillCurve(layer.cutoffCurve);}
     fillCurve(largest.amplitudeCurve);fillCurve(largest.pitchCurve);fillCurve(largest.cutoffCurve);fillCurve(largest.panoramaCurve);
-    check(store.publish(largest)&&store.tryRead(result,seen)&&result.panoramaCurve.count==16,"largest v4 Program fits the fixed audio publication buffer");
+    check(store.publish(largest)&&store.tryRead(result,seen)&&result.panoramaCurve.count==16,"largest v5 Program fits the fixed audio publication buffer");
     auto invalid=store.snapshot();invalid.layers[0].gain=2;
     check(!store.publish(invalid)&&!store.tryRead(result,seen),"invalid publication rejected");
     auto testProgram=store.snapshot(); testProgram.layers[0].gain=.25f;
@@ -79,6 +79,16 @@ int main(){
         check(curves->publish(start.program), "restore Program after scoped curve edits");
         check(!curves->editCurveIfRevision({std::nullopt,CurveKind::gain},start.revision,timeline::Curve::constant(.9f)) &&
               curves->snapshot().amplitudeCurve.evaluate(.5f)==1, "stale Program edit cannot overwrite a restore");
+    }
+    {
+        const auto first=store.versionedPattern();
+        auto next=first.pattern;next.steps[12]={true,50,100,40,4};
+        check(store.replacePatternIfCurrent(first,next),"scoped Pattern edit accepted");
+        check(!store.replacePatternIfCurrent(first,first.pattern),"concurrent Pattern edit cannot be lost");
+        const auto second=store.versionedPattern();
+        check(store.publish(store.snapshot()),"a whole-Program restore with identical Pattern advances its revision");
+        check(!store.replacePatternIfCurrent(second,first.pattern)&&store.versionedPattern().pattern==next,
+              "stale drag or undo cannot overwrite a Program replacement");
     }
     (void) store.tryRead(result,seen); // consume the pre-stress edit
     constexpr int iterations=30000;std::atomic<bool> done{false};

@@ -17,6 +17,7 @@ struct Entry {
     float seconds;
     double bpm;
     std::uint32_t revision = 1;
+    bool secondWave = false;
 };
 inline constexpr unsigned schemaVersion = 1;
 inline constexpr std::string_view provenance = "Original hand-authored VOX synth recipe; no external assets; distribution approval pending";
@@ -24,11 +25,19 @@ inline constexpr Entry reviewEntries[] {
     {"voxfx.impact.iron-drop", "Iron Drop", "Peak-Time Tech", "Heavy", Role::impact, PlayMode::oneShot, true, 38, 0, .7f, 138},
     {"voxfx.riser.first-light", "First Light", "Uplifting", "Bright", Role::riser, PlayMode::transition, true, 62, 4, 4, 138},
     {"voxfx.fall.blue-hour", "Blue Hour", "Progressive", "Melancholic", Role::fall, PlayMode::oneShot, true, 57, 0, 2.6f, 128},
-    {"voxfx.sweep.salt-air", "Salt Air", "Balearic", "Airy", Role::sweep, PlayMode::loop, false, 60, 0, 1.8f, 124},
+    {"voxfx.sweep.salt-air", "Salt Air", "Balearic", "Airy", Role::sweep, PlayMode::loop, true, 60, 0, 1.8f, 124},
     {"voxfx.zap.acid-spore", "Acid Spore", "Goa", "Acidic", Role::zap, PlayMode::gate, true, 58, 0, .38f, 145},
     {"voxfx.rhythm.neon-fault", "Neon Fault", "Hi-Tech", "Extreme", Role::rhythm, PlayMode::sequence, true, 60, 0, .13f, 175},
     {"voxfx.atmosphere.root-system", "Root System", "Dark Forest", "Organic", Role::atmosphere, PlayMode::continuous, true, 43, 0, 5, 150},
-    {"voxfx.stinger.sun-glass", "Sun Glass", "Anthem", "Euphoric", Role::stinger, PlayMode::oneShot, true, 69, 0, .9f, 136}
+    {"voxfx.stinger.sun-glass", "Sun Glass", "Anthem", "Euphoric", Role::stinger, PlayMode::oneShot, true, 69, 0, .9f, 136},
+    {"voxfx.impact.subduction", "Subduction", "Dark Psy", "Subterranean", Role::impact, PlayMode::oneShot, true, 41, 0, 1.1f, 156, 1, true},
+    {"voxfx.riser.vernal-arc", "Vernal Arc", "Daylight Trance", "Open", Role::riser, PlayMode::transition, true, 65, 2, 3, 140, 1, true},
+    {"voxfx.fall.ash-tide", "Ash Tide", "Dark Trance", "Hollow", Role::fall, PlayMode::oneShot, false, 48, 0, 1.7f, 140, 1, true},
+    {"voxfx.sweep.cedar-probe", "Cedar Probe", "Forest Psy", "Dry", Role::sweep, PlayMode::gate, true, 59, 0, 1.3f, 150, 1, true},
+    {"voxfx.zap.pixel-wasp", "Pixel Wasp", "Hi-Tech", "Angular", Role::zap, PlayMode::oneShot, true, 73, 0, .19f, 178, 1, true},
+    {"voxfx.rhythm.sand-code", "Sand Code", "Goa", "Coiled", Role::rhythm, PlayMode::sequence, true, 55, 0, .21f, 146, 1, true},
+    {"voxfx.atmosphere.cloud-temple", "Cloud Temple", "Uplifting", "Weightless", Role::atmosphere, PlayMode::continuous, true, 69, 0, 4.5f, 138, 1, true},
+    {"voxfx.stinger.copper-warning", "Copper Warning", "Dark Psy", "Ominous", Role::stinger, PlayMode::oneShot, true, 51, 0, .85f, 152, 1, true}
 };
 
 inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
@@ -44,6 +53,54 @@ inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
     const auto envelope=[](float first,float middle,float last,float center){
         timeline::Curve c;c.count=3;c.nodes[0]={0,first,S::smooth};c.nodes[1]={center,middle,S::exponential};c.nodes[2]={1,last,S::linear};return c;
     };
+    if(e.secondWave){
+        using T=source::FilterType;
+        switch(e.role){
+            case Role::impact:
+                layer(0,F::impact,1,0,0,.55f);layer(1,F::squelch,.56f,-.23f,.1f,.63f);
+                layer(2,F::granular,.42f,.36f,.21f,.79f);p.layers[0].transpose=-12;
+                p.layers[2].filters[0]={T::lowpass,1100,.85f,4};p.layers[2].gainCurve=envelope(0,.65f,0,.31f);
+                s.effects[0]={E::drive,.42f,.58f};s.effects[1]={E::delay,.09f,.16f};break;
+            case Role::riser:
+                layer(0,F::texture,.75f,-.26f,0,1);layer(1,F::formant,.62f,.32f,.13f,.87f);
+                layer(2,F::shepard,.48f,0,.28f,.72f);p.tonality={source::Scale::major,5};
+                p.layers[0].pitchCurve=envelope(.29f,.48f,.74f,.57f);p.layers[1].transpose=7;
+                p.amplitudeCurve=envelope(.06f,.43f,1,.69f);s.effects[0]={E::reverb,.24f,.62f};break;
+            case Role::fall:
+                layer(0,F::riser,.88f,-.1f,0,1);layer(1,F::riser,.52f,.3f,.15f,.85f);
+                p.layers[0].cutoffCurve=envelope(.95f,.46f,.03f,.21f);
+                p.layers[1].filters[0]={T::notch,2100,.65f,2};p.layers[0].gainCurve=envelope(.9f,.53f,0,.28f);
+                p.layers[1].gainCurve=envelope(0,.74f,0,.39f);s.effects[0]={E::flanger,.19f,.36f};break;
+            case Role::sweep:
+                layer(0,F::whoosh,.67f,.14f,0,1);layer(1,F::formant,.68f,-.29f,.04f,.9f);
+                p.layers[1].filters[0]={T::bandpass,950,.86f,2};p.layers[1].transpose=-5;
+                p.panoramaCurve=envelope(.5f,.24f,.67f,.4f);s.effects[0]={E::phaser,.24f,.58f};break;
+            case Role::zap:
+                layer(0,F::glitch,.85f,-.2f,0,1);layer(1,F::laser,.72f,.43f,.15f,.76f);
+                p.layers[0].transpose=12;p.layers[1].filters[0]={T::highpass,890,.72f,2};
+                p.layers[1].pitchCurve=envelope(.85f,.59f,.32f,.16f);s.effects[0]={E::bitcrush,.25f,.63f};break;
+            case Role::rhythm: {
+                layer(0,F::squelch,.87f,-.19f,0,1);layer(1,F::metallic,.54f,.32f,.19f,.68f);
+                p.tonality={source::Scale::phrygian,7};p.layers[1].transpose=7;
+                auto& beat=result.pattern;beat.bars=2;beat.grid=pattern::Grid::sixteenthTriplet;beat.swing=.16f;beat.seed=43013u;
+                constexpr unsigned positions[]{0,4,8,13,16,20,23,24,31,34,36,40,44,46};
+                constexpr std::uint8_t notes[]{55,55,56,62,58,55,53,55,58,56,62,60,56,55};
+                for(unsigned i=0;i<std::size(positions);++i)beat.steps[positions[i]]={true,notes[i],static_cast<std::uint8_t>(i%4==0?120:93),static_cast<std::uint8_t>(i%4==0?100:86),static_cast<std::uint8_t>(i%5==1?3:1)};
+                s.effects[0]={E::drive,.24f,.42f};s.effects[1]={E::delay,.16f,.23f};break;
+            }
+            case Role::atmosphere:
+                layer(0,F::texture,.64f,-.24f,0,1);layer(1,F::texture,.53f,.34f,.21f,.79f);
+                layer(2,F::shepard,.43f,0,.42f,.58f);p.tonality={source::Scale::dorian,9};
+                p.layers[1].transpose=7;p.layers[2].filters[0]={T::lowpass,2100,.67f,2};
+                p.amplitudeCurve=envelope(0,.75f,.08f,.54f);s.effects[0]={E::chorus,.22f,.39f};s.effects[1]={E::reverb,.29f,.7f};break;
+            case Role::stinger:
+                layer(0,F::formant,.75f,0,0,.72f);layer(1,F::impact,.61f,0,.44f,.56f);
+                layer(2,F::metallic,.66f,-.32f,.45f,.55f);p.layers[2].transpose=-5;
+                p.layers[0].pitchCurve=envelope(.48f,.57f,.34f,.32f);p.layers[2].filters[0]={T::bandpass,850,1.1f,2};
+                s.effects[0]={E::ring,.11f,.4f};s.effects[1]={E::reverb,.22f,.42f};break;
+        }
+        return result;
+    }
     switch(e.role){
         case Role::impact:
             layer(0,F::impact,1,0,0,1);layer(1,F::metallic,.38f,.2f,0,.7f);

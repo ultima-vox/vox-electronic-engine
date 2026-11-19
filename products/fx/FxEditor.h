@@ -4,6 +4,7 @@
 #include "components/VoxComboBox.h"
 #include "LayerPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <deque>
 #include "engine/FileExport.h"
 
 namespace vox::fx {
@@ -65,6 +66,37 @@ private:
     juce::TextButton close_{"Cancel"}, save_{"Choose file..."};
 };
 
+// Structural gestures must submit synchronously: an ordinary Slider's
+// asynchronous onValueChange may be delivered after mouse-up or host restore.
+class StructuralSlider final : public juce::Slider {
+public:
+    std::function<void()> onStructuralChange;
+    void valueChanged() override { if(onStructuralChange)onStructuralChange(); }
+};
+
+class SourcePanel final : public juce::Component {
+public:
+    explicit SourcePanel(FxProcessor&);
+    void refresh();
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    juce::ComboBox& scaleSelector() noexcept { return scale_; }
+    juce::ComboBox& rootSelector() noexcept { return root_; }
+    juce::ComboBox& typeSelector(std::size_t slot) noexcept { return filters_[slot].type; }
+    juce::Slider& cutoffSlider(std::size_t slot) noexcept { return filters_[slot].hz; }
+private:
+    struct FilterRow { juce::ComboBox type, slope; StructuralSlider hz, q; };
+    FxProcessor& processor_;
+    juce::ComboBox layer_, root_, scale_;
+    StructuralSlider transpose_;
+    std::array<FilterRow,2> filters_;
+    juce::TextButton close_{"Close"};
+    std::uint64_t revision_=0;
+    bool dragging_=false;
+    template <typename Edit> void editLayer(Edit);
+    void editKey();
+};
+
 // An honest FX-01 panel: only controls with working processor bindings are
 // exposed. Additional workspaces are added as their DSP/controller exists.
 class FxPanel final : public juce::Component, private juce::Timer {
@@ -90,6 +122,7 @@ public:
     juce::ComboBox& patternGridSelector() noexcept { return patternGrid_; }
     juce::ComboBox& patternPageSelector() noexcept { return patternPage_; }
     juce::ComboBox& patternStepSelector() noexcept { return patternStepSelector_; }
+    juce::ComboBox& patternActionsSelector() noexcept { return patternActions_; }
     juce::Slider& patternSwingSlider() noexcept { return patternSwing_; }
     juce::Slider& patternNoteSlider() noexcept { return patternDetails_[0]; }
     juce::Slider& patternVelocitySlider() noexcept { return patternDetails_[1]; }
@@ -106,6 +139,7 @@ public:
     juce::Button& layerLock(std::size_t index) noexcept { return layerLocks_[index]; }
     juce::ComboBox& effectSelector(std::size_t index) noexcept { return effectsType_[index]; }
     juce::Slider& effectWet(std::size_t index) noexcept { return effectsWet_[index]; }
+    SourcePanel& sourcePanel() noexcept { return sourcePanel_; }
     ProgramCurvePanel& programCurves() noexcept { return programCurves_; }
     juce::Button& programCurvesButton() noexcept { return programCurvesButton_; }
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
@@ -113,8 +147,13 @@ private:
     void timerCallback() override;
     void importSample();
     void exportPattern();
+    void choosePreset(bool saving);
     void exportWav(offline::Settings);
     void refreshPattern();
+    template <typename Edit> void editPattern(Edit);
+    void patternCommand(int);
+    void notePatternUndo(const pattern::Pattern&);
+    void finishPatternDrag();
     void refreshMacro();
     void refreshGenerator();
     FxProcessor& processor_;
@@ -143,14 +182,23 @@ private:
     std::unique_ptr<fileexport::WavJob> wavJob_;
     std::array<juce::ToggleButton,4> layerLocks_;
     vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
-    std::array<juce::Slider,4> patternDetails_;
-    juce::Slider patternSwing_;
+    std::array<StructuralSlider,4> patternDetails_;
+    StructuralSlider patternSwing_;
+    juce::ComboBox patternActions_;
+    std::deque<pattern::Pattern> patternUndo_,patternRedo_;
+    pattern::Pattern displayedPattern_,patternDragBefore_;
+    std::uint64_t patternRevision_=0;
+    bool patternDragging_=false;
     std::array<juce::TextButton,16> patternSteps_;
     vox::ui::VoxButton patternEnabled_ { "HOST PATTERN", vox::ui::VoxButton::Type::Toggle };
     std::unique_ptr<juce::ButtonParameterAttachment> patternAttachment_;
     std::array<std::unique_ptr<LayerPanel>, 4> layers_;
     juce::TextButton programCurvesButton_ { "Program curves" };
     ProgramCurvePanel programCurves_;
+    juce::TextButton sourceButton_{"Source / Key"};
+    SourcePanel sourcePanel_;
+    juce::ComboBox presets_;
+    std::unique_ptr<juce::FileChooser> presetChooser_;
     std::array<vox::ui::VoxComboBox,4> effectsType_;
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;

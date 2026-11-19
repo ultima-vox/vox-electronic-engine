@@ -1,0 +1,30 @@
+#include "engine/ComparisonState.h"
+#include "engine/PortablePreset.h"
+#include <cstdio>
+
+int main(){
+    using namespace vox;
+    using namespace fx;
+    int errors=0;const auto check=[&](bool pass,const char* what){if(!pass){std::printf("FAIL: %s\n",what);++errors;}};
+    portable::Sound a,b;
+    a.state.program.layers[0].transpose=11;
+    a.state.pattern.steps[0]={true,53,97,71,4};
+    a.state.effects=effects::pack({effects::Type::reverb,.22f,.71f});
+    a.state.macros.setGainRoute(0,-.3f,.02f);
+    std::vector<std::byte> bytes,roundtrip;
+    check(portable::encode(a,bytes)&&portable::decode(bytes,b)&&portable::encode(b,roundtrip)&&bytes==roundtrip,"deterministic portable round trip");
+    check(b.state.program.layers[0].transpose==11&&b.state.pattern.steps[0].ratchets==4&&b.state.macros==a.state.macros,"portable authored sections restored");
+    check(effects::unpack(static_cast<std::uint16_t>(b.state.effects)).type==effects::Type::reverb&&bytes.size()>0,"effect topology retained without automated values");
+    for(std::size_t n=0;n<bytes.size();++n)check(!portable::decode(std::span(bytes).first(n),b),"reject every truncation");
+    if(!bytes.empty())bytes.back()^=std::byte{1};
+    check(!portable::decode(bytes,b)&&b.state.program.layers[0].transpose==11,"bad checksum rejects without mutation");
+    auto valid=preset::encode({compare::productTag,1,{{compare::uiTag,std::vector<std::byte>(8)}}});
+    if(!valid)return 1;
+    auto bank=compare::Bank{*valid,*valid};auto section=compare::encode(bank);compare::Bank loaded;
+    check(compare::decode(section.data,loaded)&&bank==loaded,"two independent slot records");
+    auto nested=preset::encode({compare::productTag,1,{{compare::uiTag,std::vector<std::byte>(8)},section}});
+    if(!nested)return 1;
+    check(!compare::decode(compare::encode({*valid,*nested}).data,loaded)&&loaded==bank,"reject nested banks without mutating output");
+    check(!compare::decode(compare::encode({*valid,std::vector<std::byte>(compare::maxSlotBytes+1)}).data,loaded)&&loaded==bank,"reject oversized slots before copying");
+    std::printf("FX portable preset and comparison codecs: %d failure(s)\n",errors);return errors?1:0;
+}

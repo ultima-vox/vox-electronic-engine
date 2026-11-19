@@ -49,7 +49,8 @@ inline bool generate(const Settings& settings,const Result& previous,const Locks
     Random motion(settings.seed ^ 0xbe31d295u);
     for(std::size_t i=0;i<next.program.layers.size();++i){
         auto& l=next.program.layers[i];
-        l={};
+        const auto filters=l.filters;const auto transpose=l.transpose;
+        l={};l.filters=filters;l.transpose=transpose; // not generator-owned controls
         l.enabled=static_cast<int>(i)<settings.complexity;
         l.family=static_cast<NoiseFamily>(i==0?settings.family:static_cast<int>(rng.next()%12));
         l.timing.offset=i==0?0.0f:rng.unit()*.35f;

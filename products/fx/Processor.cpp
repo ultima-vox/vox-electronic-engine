@@ -1,5 +1,6 @@
 #include "Processor.h"
 #include "FxEditor.h"
+#include "content/FactoryCandidates.h"
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -135,18 +136,64 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
+void FxProcessor::setStateInformation(const void* data,int size){
+    const juce::ScopedLock transaction(controllerRestoreLock_);
+    vox::suite::SuiteProcessor::setStateInformation(data,size);
+}
+
 bool FxProcessor::storeComparison(std::size_t slot)
 {
+    const juce::ScopedLock transaction(controllerRestoreLock_);
     if(slot>=comparisons_.size())return false;
     juce::MemoryBlock state;getStateInformation(state);
-    if(state.isEmpty()||state.getSize()>16*1024*1024)return false;
-    comparisons_[slot]=std::move(state);return true;
+    auto decoded=preset::decode({static_cast<const std::byte*>(state.getData()),state.getSize()},compare::productTag,1);
+    if(!decoded.ok())return false;
+    auto& sections=decoded.document.sections;
+    std::erase_if(sections,[](const auto& section){return section.tag==compare::sectionTag;});
+    auto snapshot=preset::encode(decoded.document);
+    if(!snapshot||snapshot->size()>compare::maxSlotBytes)return false;
+    const std::lock_guard lock(comparisonMutex_);
+    comparisons_[slot]=std::move(*snapshot);return true;
 }
 bool FxProcessor::recallComparison(std::size_t slot)
 {
-    if(slot>=comparisons_.size()||comparisons_[slot].isEmpty())return false;
-    setStateInformation(comparisons_[slot].getData(),static_cast<int>(comparisons_[slot].getSize()));
+    const juce::ScopedLock transaction(controllerRestoreLock_);
+    if(slot>=comparisons_.size())return false;
+    compare::Bank bank;
+    {const std::lock_guard lock(comparisonMutex_);bank=comparisons_;}
+    preset::StateDocument snapshot;
+    if(!compare::slotDocument(bank[slot],snapshot))return false;
+    snapshot.sections.push_back(compare::encode(bank)); // preserve both slots across recall
+    const auto encoded=preset::encode(snapshot);
+    if(!encoded)return false;
+    setStateInformation(encoded->data(),static_cast<int>(encoded->size()));
     return lastStateError().isEmpty();
+}
+
+bool FxProcessor::encodePortablePreset(std::vector<std::byte>& out) const {
+    return portable::encode({programs_.snapshotState(),samples_.reference()},out);
+}
+bool FxProcessor::applyPortableSound(const portable::Sound& sound) {
+    const juce::ScopedLock transaction(controllerRestoreLock_);
+    sample::Controller::PreparedRestore prepared;
+    if(!sample::Controller::prepareRestore(sound.sample,prepared))return false;
+    const auto& s=sound.state;
+    if(!programs_.publishState(s.program,s.effects,s.pattern,s.macros,s.generator))return false;
+    samples_.commitRestore(std::move(prepared));
+    return true; // All 19 host parameter values, layout and the A/B bank are left alone.
+}
+bool FxProcessor::restorePortablePreset(std::span<const std::byte> bytes) {
+    portable::Sound sound;
+    return portable::decode(bytes,sound)&&applyPortableSound(sound);
+}
+bool FxProcessor::loadReviewCandidate(std::size_t index) {
+    if(index>=std::size(content::reviewEntries))return false;
+    const auto preview=content::makePreview(content::reviewEntries[index],48000);
+    portable::Sound sound;
+    sound.state.program=preview.program;sound.state.pattern=preview.pattern;sound.state.macros=preview.settings.macroRoutes;
+    sound.state.effects=0;
+    for(unsigned i=0;i<4;++i)sound.state.effects|=static_cast<std::uint64_t>(effects::pack(preview.settings.effects[i]))<<(16*i);
+    return applyPortableSound(sound);
 }
 
 offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) const
@@ -379,6 +426,8 @@ void FxProcessor::writeProductState (std::vector<preset::Section>& out) const
     preset::Section sampleSection;sampleSection.tag=fxSampleSectionTag;
     (void)sample::referencecodec::encode(samples_.reference(),sampleSection.data);
     out.push_back(std::move(sampleSection));
+    const std::lock_guard lock(comparisonMutex_);
+    if(!compare::empty(comparisons_))out.push_back(compare::encode(comparisons_));
 }
 
 FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDocument& doc, juce::String& error)
@@ -479,6 +528,21 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     auto generatorState=std::make_shared<generator::ControllerState>();
     if(const auto* section=doc.find(fxGeneratorSectionTag))if(!generator::statecodec::decode(section->data,*generatorState)){
         error="Unsupported or malformed FX generator settings";return {};}
+    auto bank=std::make_shared<compare::Bank>();
+    if(const auto* section=doc.find(compare::sectionTag)){
+        if(!compare::decode(section->data,*bank)){error="Malformed FX comparison bank";return {};}
+        for(const auto& slot:*bank){
+            if(slot.empty())continue;
+            preset::StateDocument inner;
+            if(!compare::slotDocument(slot,inner)){error="Invalid FX comparison snapshot";return {};}
+            const auto* ui=inner.find(compare::uiTag);
+            if(ui->data.size()!=8 || !vox::suite::EditorLimits::valid(wordAt(ui->data,0),wordAt(ui->data,4))){
+                error="Invalid FX comparison editor size";return {};
+            }
+            juce::String validationError;
+            if(!readProductState(inner,validationError).apply){error="Invalid FX comparison: "+validationError;return {};}
+        }
+    }
     ProductRestore result;
     result.sections.push_back (encodeParameter (value, duration));
     result.sections.push_back (encodeFamily (static_cast<int> (program->layers[0].family)));
@@ -492,8 +556,10 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     preset::Section sampleSection;sampleSection.tag=fxSampleSectionTag;
     if(!sample::referencecodec::encode(sampleReference,sampleSection.data)) { error="Cannot encode sample reference";return {}; }
     result.sections.push_back(std::move(sampleSection));
+    if(!compare::empty(*bank))result.sections.push_back(compare::encode(*bank));
     auto held = std::make_shared<float> (0.0f);
-    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes, generatorState, preparedSample=std::move(preparedSample)] () mutable {
+    result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes, generatorState, bank, preparedSample=std::move(preparedSample)] () mutable {
+        {const std::lock_guard lock(comparisonMutex_);comparisons_=std::move(*bank);}
         (void) programs_.publishState (*program, fx, *triggerPattern, *macroRoutes, *generatorState);
         for(std::size_t i=0;i<8;++i)macros_[i]->setValueNotifyingHost(macroValues[i]);
         patternEnabled_->setValueNotifyingHost(patternEnabled?1.0f:0.0f);

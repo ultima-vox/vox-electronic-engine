@@ -1,5 +1,6 @@
 #include "FxEditor.h"
 #include "Processor.h"
+#include "content/FactoryCandidates.h"
 #include "Tokens.h"
 #include "Typography.h"
 
@@ -175,9 +176,143 @@ void WavOptionsPanel::resized() {
     for(std::size_t i=0;i<controls.size();++i){auto row=area.removeFromTop(29);labels_[i].setBounds(row.removeFromLeft(143));controls[i]->setBounds(row.reduced(2));}
     auto footer=area.removeFromBottom(30); save_.setBounds(footer.removeFromRight(130).reduced(2));close_.setBounds(footer.removeFromRight(80).reduced(2));
 }
+SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
+    constexpr const char* roots[]{"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    constexpr const char* scales[]{"Chromatic","Major","Natural minor","Dorian","Phrygian"};
+    const auto options=[](juce::ComboBox& box,const auto& names){for(std::size_t i=0;i<std::size(names);++i)box.addItem(names[i],static_cast<int>(i+1));};
+    constexpr const char* layerNames[]{"Layer A","Layer B","Layer C","Layer D"};
+    options(layer_,layerNames);options(root_,roots);options(scale_,scales);
+    layer_.setTitle("Layer to edit");root_.setTitle("Program root");scale_.setTitle("Program input scale");
+    root_.setTooltip("Quantize incoming pitched source notes to the nearest scale degree; chromatic leaves the note unchanged");
+    layer_.setSelectedId(1,juce::dontSendNotification);layer_.onChange=[this]{refresh();};
+    root_.onChange=[this]{editKey();};scale_.onChange=[this]{editKey();};
+    for(auto* box:{&layer_,&root_,&scale_})addAndMakeVisible(*box);
+    const auto slider=[this](StructuralSlider& control, double min, double max, double step, const char* title,const char* units) {
+        control.setRange(min,max,step);control.setTitle(title);control.setTextValueSuffix(units);
+        control.setSliderStyle(juce::Slider::LinearHorizontal);control.setTextBoxStyle(juce::Slider::TextBoxRight,false,85,24);
+        control.onDragStart=[this]{dragging_=true;};
+        control.onDragEnd=[this]{dragging_=false;refresh();};
+        addAndMakeVisible(control);
+    };
+    slider(transpose_,-24,24,1,"Layer transpose"," st");
+    transpose_.onStructuralChange=[this]{const auto value=static_cast<float>(transpose_.getValue());editLayer([=](NoiseLayer& l){l.transpose=value;});};
+    constexpr const char* types[]{"Off","Low-pass","High-pass","Band-pass","Notch"};
+    for(std::size_t i=0;i<filters_.size();++i){
+        auto& f=filters_[i];options(f.type,types);f.slope.addItem("12 dB/oct",1);f.slope.addItem("24 dB/oct",2);
+        f.type.setTitle("Layer filter type");f.slope.setTitle("Filter stages");
+        f.slope.setTooltip("12 or 24 dB/oct low/high pass; one or two stages for band-pass and notch");
+        f.slope.onChange=[this,i]{const int id=filters_[i].slope.getSelectedId();if(id==1||id==2)editLayer([=](NoiseLayer& l){l.filters[i].poles=id==1?2:4;});};
+        f.type.onChange=[this,i]{const int id=filters_[i].type.getSelectedId();if(id>=1&&id<=5)editLayer([=](NoiseLayer& l){l.filters[i].type=static_cast<source::FilterType>(id-1);});};
+        slider(f.hz,20,20000,1,"Filter cutoff"," Hz");f.hz.setSkewFactorFromMidPoint(1000);
+        f.hz.setTooltip("Cutoff is limited to 45% of the host rate during rendering");
+        slider(f.q,.5,4,.001,"Resonance Q", " Q");
+        f.hz.onStructuralChange=[this,i]{const auto value=static_cast<float>(filters_[i].hz.getValue());editLayer([=](NoiseLayer& l){l.filters[i].hz=value;});};
+        f.q.onStructuralChange=[this,i]{const auto value=static_cast<float>(filters_[i].q.getValue());editLayer([=](NoiseLayer& l){l.filters[i].q=value;});};
+        addAndMakeVisible(f.type);addAndMakeVisible(f.slope);
+    }
+    close_.onClick=[this]{setVisible(false);};addAndMakeVisible(close_);refresh();
+}
+template <typename Edit> void SourcePanel::editLayer(Edit edit){
+    const int index=layer_.getSelectedId()-1;
+    if(index>=0 && index<4) (void)processor_.editLayerIfRevision(static_cast<std::size_t>(index),revision_,edit);
+    refresh();
+}
+void SourcePanel::editKey(){
+    const int root=root_.getSelectedId()-1,scale=scale_.getSelectedId()-1;
+    if(root>=0&&root<12&&scale>=0&&scale<5)
+        (void)processor_.editTonalityIfRevision({static_cast<source::Scale>(scale),static_cast<std::uint8_t>(root)},revision_);
+    refresh();
+}
+void SourcePanel::refresh(){
+    const auto snapshot=processor_.versionedProgram();
+    // Keep the old token while an in-flight drag crosses a restore. All
+    // further callbacks from that drag remain rejected until mouse-up.
+    if(dragging_ && revision_!=snapshot.revision)return;
+    revision_=snapshot.revision;
+    const auto& layer=snapshot.program.layers[static_cast<std::size_t>(std::clamp(layer_.getSelectedId()-1,0,3))];
+    root_.setSelectedId(snapshot.program.tonality.root+1,juce::dontSendNotification);
+    scale_.setSelectedId(static_cast<int>(snapshot.program.tonality.scale)+1,juce::dontSendNotification);
+    root_.setEnabled(snapshot.program.tonality.scale!=source::Scale::chromatic);
+    if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
+    for(std::size_t i=0;i<filters_.size();++i){
+        const auto& value=layer.filters[i];auto& f=filters_[i];
+        f.type.setSelectedId(static_cast<int>(value.type)+1,juce::dontSendNotification);
+        f.slope.setSelectedId(value.poles==2?1:2,juce::dontSendNotification);
+        if(!f.hz.isMouseButtonDown())f.hz.setValue(value.hz,juce::dontSendNotification);
+        if(!f.q.isMouseButtonDown())f.q.setValue(value.q,juce::dontSendNotification);
+        const bool on=value.type!=source::FilterType::off;f.hz.setEnabled(on);f.q.setEnabled(on);f.slope.setEnabled(on);
+    }
+}
+void SourcePanel::paint(juce::Graphics& g){
+    namespace c=vox::ui::tokens::colour;
+    g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());
+    g.setColour(c::text);g.setFont(vox::ui::typography::controlLabel());
+    auto a=getLocalBounds().reduced(14);
+    g.drawText("SOURCE / KEY    •    Applies to new events",a.removeFromTop(21),juce::Justification::centredLeft);
+    a.removeFromTop(72);
+    g.drawText("FILTER     TYPE                     SLOPE                   CUTOFF                                           RESONANCE",a.removeFromTop(20),juce::Justification::centredLeft);
+    g.drawText("A",a.removeFromTop(31),juce::Justification::centredLeft);
+    g.drawText("B",a.removeFromTop(31),juce::Justification::centredLeft);
+}
+void SourcePanel::resized(){
+    auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
+    auto first=a.removeFromTop(32);
+    layer_.setBounds(first.removeFromLeft(142).reduced(2));root_.setBounds(first.removeFromLeft(78).reduced(2));scale_.setBounds(first.removeFromLeft(145).reduced(2));
+    transpose_.setBounds(a.removeFromTop(36).removeFromLeft(365).reduced(2));a.removeFromTop(24);
+    for(auto& f:filters_){auto row=a.removeFromTop(31);row.removeFromLeft(28);
+        f.type.setBounds(row.removeFromLeft(118).reduced(2));f.slope.setBounds(row.removeFromLeft(110).reduced(2));
+        f.hz.setBounds(row.removeFromLeft(row.getWidth()/2).reduced(2));f.q.setBounds(row.reduced(2));}
+    close_.setBounds(a.removeFromBottom(28).removeFromRight(92));
+}
+template <typename Edit> void FxPanel::editPattern(Edit edit){
+    auto next=displayedPattern_;edit(next);
+    if(next==displayedPattern_)return;
+    if(processor_.replacePatternIfCurrent({displayedPattern_,patternRevision_},next)){
+        if(!patternDragging_)notePatternUndo(displayedPattern_);
+        displayedPattern_=next;
+    }
+    if(!patternDragging_)refreshPattern();
+}
+void FxPanel::notePatternUndo(const pattern::Pattern& previous){
+    if(patternUndo_.size()==32)patternUndo_.pop_front();
+    patternUndo_.push_back(previous);patternRedo_.clear();
+}
+void FxPanel::finishPatternDrag(){
+    patternDragging_=false;
+    const auto state=processor_.versionedPattern();
+    if(state.revision==patternRevision_&&state.pattern==displayedPattern_&&displayedPattern_!=patternDragBefore_)
+        notePatternUndo(patternDragBefore_);
+    refreshPattern();
+}
+void FxPanel::patternCommand(int id){
+    if(patternDragging_)return;
+    refreshPattern();
+    const juce::String prefix="VOXFX-PATTERN/1:";
+    if(id==1){
+        std::vector<std::byte> bytes;
+        if(pattern::codec::encode(displayedPattern_,bytes))
+            juce::SystemClipboard::copyTextToClipboard(prefix+juce::Base64::toBase64(bytes.data(),bytes.size()));
+    }else if(id==2){
+        const auto text=juce::SystemClipboard::getTextFromClipboard();
+        juce::MemoryOutputStream bytes;pattern::Pattern value;
+        if(text.length()>8192||!text.startsWith(prefix)||!juce::Base64::convertFromBase64(bytes,text.substring(prefix.length()))||
+           !pattern::codec::decode({static_cast<const std::byte*>(bytes.getData()),bytes.getDataSize()},value)){
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Pattern paste rejected","Copy a VOX FX Pattern first.");
+            return;
+        }
+        editPattern([&](auto& p){p=value;});
+    }else if(id==3||id==4){
+        auto& from=id==3?patternUndo_:patternRedo_;
+        auto& to=id==3?patternRedo_:patternUndo_;
+        if(!from.empty()&&processor_.replacePatternIfCurrent({displayedPattern_,patternRevision_},from.back())){
+            to.push_back(displayedPattern_);displayedPattern_=from.back();from.pop_back();
+        }
+        refreshPattern();
+    }
+}
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
-      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor)
+      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor)
 {
     addAndMakeVisible (output_);
     addAndMakeVisible (duration_);
@@ -269,8 +404,8 @@ FxPanel::FxPanel (FxProcessor& processor)
         if(id>=1&&id<=48&&generator::factory(static_cast<std::size_t>(id-1),result))(void)processor_.setProgram(result.program);
         factory_.setSelectedId(0,juce::dontSendNotification);};
     addAndMakeVisible(factory_);
-    comparison_.setTextWhenNothingSelected("Compare A/B");comparison_.setTitle("Session A/B comparisons");
-    comparison_.setTooltip("Store or recall full session snapshots; recall changes host parameter values. Slots are not saved in the project.");
+    comparison_.setTextWhenNothingSelected("Compare A/B");comparison_.setTitle("Project A/B comparisons");
+    comparison_.setTooltip("Store or recall project snapshots; recall explicitly changes host parameter values. Both slots are saved in the project.");
     comparison_.addItem("Store A",1);comparison_.addItem("Recall A (host values)",2);
     comparison_.addItem("Store B",3);comparison_.addItem("Recall B (host values)",4);
     comparison_.onChange=[this]{const auto id=comparison_.getSelectedId();
@@ -341,6 +476,25 @@ FxPanel::FxPanel (FxProcessor& processor)
         programCurvesButton_.setButtonText(show ? "Layer cards" : "Program curves");
     };
     addAndMakeVisible(programCurvesButton_);
+    addChildComponent(sourcePanel_);
+    sourceButton_.setTooltip("Edit Program key and per-layer pitch and filters");
+    sourceButton_.onClick=[this]{sourcePanel_.refresh();sourcePanel_.setVisible(true);sourcePanel_.toFront(true);};
+    addAndMakeVisible(sourceButton_);
+    presets_.setTitle("User presets and review candidates");presets_.setTextWhenNothingSelected("Presets…");
+    presets_.setTooltip("Save/load a user sound or load a review candidate into this project. All host parameter values stay unchanged.");
+    presets_.addItem("Save user preset…",1);presets_.addItem("Load user preset…",2);
+    presets_.addSeparator();presets_.addSectionHeading("Review candidates — not approved");
+    for(std::size_t i=0;i<std::size(content::reviewEntries);++i){
+        const auto& e=content::reviewEntries[i];
+        presets_.addItem(juce::String(e.name.data())+" — "+juce::String(e.style.data()),static_cast<int>(10+i));
+    }
+    presets_.onChange=[this]{
+        const int id=presets_.getSelectedId();presets_.setSelectedId(0,juce::dontSendNotification);
+        if(id==1||id==2)choosePreset(id==1);
+        else if(id>=10 && !processor_.loadReviewCandidate(static_cast<std::size_t>(id-10)))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Candidate unavailable","Could not load the review sound.");
+    };
+    addAndMakeVisible(presets_);
     for (std::size_t i=0;i<4;++i) {
         auto& type=effectsType_[i];
         const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate","Phaser","Flanger","Delay","Chorus","Reverb"};
@@ -367,7 +521,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     for(int i=0;i<12;++i)patternSelector_.addItem("Seed pattern " + juce::String(i+1),i+1);
     patternSelector_.onChange=[this] {
         const auto id=patternSelector_.getSelectedId();pattern::Pattern selected;
-        if(id>=1 && id<=12 && pattern::factory(static_cast<std::size_t>(id-1),selected)) (void)processor_.setPattern(selected);
+        if(id>=1 && id<=12 && pattern::factory(static_cast<std::size_t>(id-1),selected)) editPattern([&](auto& p){p=selected;});
         patternSelector_.setSelectedId(0,juce::dontSendNotification);
         refreshPattern();
     };
@@ -380,14 +534,14 @@ FxPanel::FxPanel (FxProcessor& processor)
     patternLength_.setTitle("Pattern length in bars");patternBar_.setTitle("Pattern bar to edit");
     patternBar_.setSelectedId(1,juce::dontSendNotification);
     patternLength_.onChange=[this] {const int id=patternLength_.getSelectedId();
-        if(id>=1 && id<=4)processor_.editPattern([id](pattern::Pattern& p){p.bars=static_cast<std::uint8_t>(id);});
+        if(id>=1 && id<=4)editPattern([id](pattern::Pattern& p){p.bars=static_cast<std::uint8_t>(id);});
         refreshPattern();};
     patternBar_.onChange=[this] {refreshPattern();};
     const char* gridNames[]{"1/4","1/8","1/16","1/32","1/4T","1/8T","1/16T","1/32T"};
     for(int i=0;i<8;++i)patternGrid_.addItem(gridNames[i],i+1);
     patternGrid_.setTitle("Pattern grid");patternGrid_.setTooltip("Changing grid reinterprets step timing without resampling steps");
     patternGrid_.onChange=[this]{const int id=patternGrid_.getSelectedId();
-        if(id>=1&&id<=8)processor_.editPattern([id](pattern::Pattern& p){p.grid=static_cast<pattern::Grid>(id-1);});
+        if(id>=1&&id<=8)editPattern([id](pattern::Pattern& p){p.grid=static_cast<pattern::Grid>(id-1);});
         refreshPattern();};
     for(int i=1;i<=3;++i)patternPage_.addItem("Page "+juce::String(i),i);
     patternPage_.setTitle("Step page within bar");patternPage_.setSelectedId(1,juce::dontSendNotification);
@@ -395,8 +549,8 @@ FxPanel::FxPanel (FxProcessor& processor)
     patternSwing_.setRange(0,1,.01);patternSwing_.setSliderStyle(juce::Slider::LinearHorizontal);
     patternSwing_.setTextBoxStyle(juce::Slider::TextBoxLeft,false,40,20);
     patternSwing_.setTitle("Pattern swing");patternSwing_.setTooltip("Delay odd steps up to half their grid interval");
-    patternSwing_.onValueChange=[this]{const float swing=static_cast<float>(patternSwing_.getValue());
-        processor_.editPattern([swing](pattern::Pattern& p){p.swing=swing;});};
+    patternSwing_.onStructuralChange=[this]{const float swing=static_cast<float>(patternSwing_.getValue());
+        editPattern([swing](pattern::Pattern& p){p.swing=swing;});};
     addAndMakeVisible(patternSwing_);
     addAndMakeVisible(patternLength_);addAndMakeVisible(patternBar_);addAndMakeVisible(patternGrid_);addAndMakeVisible(patternPage_);
     for(int i=1;i<=16;++i)patternStepSelector_.addItem(juce::String(i),i);
@@ -409,9 +563,9 @@ FxPanel::FxPanel (FxProcessor& processor)
         slider.setRange(i==0||i==2?0:1,i==0?127:i==1?127:i==2?100:4,1);
         slider.setSliderStyle(juce::Slider::LinearHorizontal);slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,20);
         slider.setTextValueSuffix(suffixes[i]);slider.setTitle(detailNames[i]);slider.setTooltip(detailNames[i]);
-        slider.onValueChange=[this,i] {const int bar=patternBar_.getSelectedId(),step=patternStepSelector_.getSelectedId(),page=patternPage_.getSelectedId();
+        slider.onStructuralChange=[this,i] {const int bar=patternBar_.getSelectedId(),step=patternStepSelector_.getSelectedId(),page=patternPage_.getSelectedId();
             const int value=static_cast<int>(patternDetails_[i].getValue());
-            if(bar>=1&&bar<=4&&step>=1&&step<=16&&page>=1&&page<=3)processor_.editPattern([bar,step,page,i,value](pattern::Pattern& p){
+            if(bar>=1&&bar<=4&&step>=1&&step<=16&&page>=1&&page<=3)editPattern([bar,step,page,i,value](pattern::Pattern& p){
                 const auto steps=pattern::stepsPerBar(p.grid),local=static_cast<unsigned>((page-1)*16+step-1);
                 if(bar>p.bars||local>=steps)return;
                 auto& selected=p.steps[static_cast<std::size_t>(bar-1)*steps+local];
@@ -425,14 +579,24 @@ FxPanel::FxPanel (FxProcessor& processor)
     for(std::size_t i=0;i<patternSteps_.size();++i){auto& step=patternSteps_[i];
         step.setButtonText(juce::String(static_cast<int>(i+1)));step.setClickingTogglesState(true);
         step.setTitle("Pattern step "+juce::String(static_cast<int>(i+1)));
-        step.setTooltip("Enable or disable this sixteenth-note step in the selected bar");
+        step.setTooltip("Enable or disable this step on the selected bar and page");
         step.onClick=[this,i] {const int bar=patternBar_.getSelectedId(),page=patternPage_.getSelectedId();const bool enabled=patternSteps_[i].getToggleState();
-            if(bar>=1&&bar<=4&&page>=1&&page<=3)processor_.editPattern([bar,page,i,enabled](pattern::Pattern& p){
+            if(bar>=1&&bar<=4&&page>=1&&page<=3)editPattern([bar,page,i,enabled](pattern::Pattern& p){
                 const auto steps=pattern::stepsPerBar(p.grid);const auto local=static_cast<std::size_t>(page-1)*16+i;
                 if(bar<=p.bars&&local<steps)p.steps[static_cast<std::size_t>(bar-1)*steps+local].enabled=enabled;});
             patternStepSelector_.setSelectedId(static_cast<int>(i+1),juce::dontSendNotification);refreshPattern();};
         addAndMakeVisible(step);
     }
+    patternActions_.setTitle("Whole Pattern clipboard and history");patternActions_.setTextWhenNothingSelected("Edit…");
+    patternActions_.addItem("Copy Pattern",1);patternActions_.addItem("Paste Pattern",2);
+    patternActions_.addItem("Undo edit",3);patternActions_.addItem("Redo edit",4);
+    patternActions_.onChange=[this]{const auto id=patternActions_.getSelectedId();patternActions_.setSelectedId(0,juce::dontSendNotification);patternCommand(id);};
+    addAndMakeVisible(patternActions_);
+    const auto bindPatternDrag=[this](juce::Slider& slider){
+        slider.onDragStart=[this]{patternDragBefore_=displayedPattern_;patternDragging_=true;};
+        slider.onDragEnd=[this]{finishPatternDrag();};
+    };
+    bindPatternDrag(patternSwing_);for(auto& control:patternDetails_)bindPatternDrag(control);
     refreshPattern();
     startTimerHz (25);
 }
@@ -468,7 +632,10 @@ void FxPanel::paint (juce::Graphics& g)
 void FxPanel::resized()
 {
     auto area = getLocalBounds().reduced (32);
-    programCurvesButton_.setBounds(area.withHeight(28).removeFromRight(154));
+    auto actions=area.withHeight(28);
+    programCurvesButton_.setBounds(actions.removeFromRight(154));
+    sourceButton_.setBounds(actions.removeFromRight(130).reduced(2));
+    presets_.setBounds(actions.removeFromRight(141).reduced(2));
     area.removeFromTop (80);
     output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));
@@ -515,7 +682,8 @@ void FxPanel::resized()
         effectsWet_[i].setBounds(column.removeFromLeft(column.getWidth()/2));effectsAmount_[i].setBounds(column);
     }
     auto patternRow=getLocalBounds().reduced(32).removeFromBottom(55);
-    patternRow.removeFromLeft(340);
+    patternActions_.setBounds(patternRow.removeFromLeft(80).reduced(2,8));
+    patternRow.removeFromLeft(260);
     patternSelector_.setBounds(patternRow.removeFromLeft(190).reduced(0,8));
     patternRow.removeFromLeft(10);
     patternEnabled_.setBounds(patternRow.removeFromLeft(160).reduced(0,8));
@@ -536,6 +704,7 @@ void FxPanel::resized()
     row.removeFromTop(247);
     row.removeFromBottom(120);
     generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(600,280));
+    sourcePanel_.setBounds(getLocalBounds().withSizeKeepingCentre(665,247));
     wavOptions_.setBounds(getLocalBounds().withSizeKeepingCentre(470,232));
     programCurves_.setBounds(row.reduced(3));
     const int width = row.getWidth() / 4;
@@ -543,6 +712,39 @@ void FxPanel::resized()
         auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
         layers_[i]->setBounds(card.reduced(3));
     }
+}
+void FxPanel::choosePreset(bool saving){
+    presetChooser_=std::make_unique<juce::FileChooser>(saving?"Save VOX FX user sound":"Load VOX FX user sound",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.voxfx"),"*.voxfx");
+    presets_.setEnabled(false);
+    const int flags=saving?(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::warnAboutOverwriting):juce::FileBrowserComponent::openMode;
+    presetChooser_->launchAsync(flags|juce::FileBrowserComponent::canSelectFiles,
+        [safe=juce::Component::SafePointer<FxPanel>(this),saving](const juce::FileChooser& chooser){
+            if(!safe)return;
+            safe->presets_.setEnabled(true);
+            const auto file=chooser.getResult();if(file==juce::File{})return;
+            bool ok=false;
+            try {
+                if(file.hasFileExtension("voxfx")&&saving){
+                    std::vector<std::byte> bytes;
+                    if(safe->processor_.encodePortablePreset(bytes)){
+                        std::vector<std::uint8_t> data;data.reserve(bytes.size());
+                        for(auto b:bytes)data.push_back(std::to_integer<std::uint8_t>(b));
+                        ok=fileexport::writeBytes(file,data);
+                    }
+                }else if(file.hasFileExtension("voxfx")&&file.getSize()>0&&file.getSize()<=static_cast<juce::int64>(portable::maxBytes)){
+                    juce::FileInputStream input(file);
+                    if(input.openedOk()){
+                        std::vector<std::byte> data(portable::maxBytes+1);
+                        const auto count=input.read(data.data(),static_cast<int>(data.size()));
+                        if(count>0&&static_cast<std::size_t>(count)<=portable::maxBytes&&input.isExhausted())
+                            ok=safe->processor_.restorePortablePreset(std::span(data).first(static_cast<std::size_t>(count)));
+                    }
+                }
+            }catch(...){ok=false;}
+            if(!ok)juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Preset operation failed",
+                "Choose a valid .voxfx user sound. No project change was applied on a rejected load.");
+        });
 }
 void FxPanel::importSample()
 {
@@ -646,7 +848,12 @@ void FxPanel::exportWav(offline::Settings settings)
 }
 void FxPanel::refreshPattern()
 {
-    const auto pattern=processor_.patternSnapshot();
+    if(patternDragging_)return;
+    const auto state=processor_.versionedPattern();
+    if(state.revision!=patternRevision_||state.pattern!=displayedPattern_){patternUndo_.clear();patternRedo_.clear();}
+    patternRevision_=state.revision;displayedPattern_=state.pattern;
+    patternActions_.setItemEnabled(3,!patternUndo_.empty());patternActions_.setItemEnabled(4,!patternRedo_.empty());
+    const auto& pattern=displayedPattern_;
     patternLength_.setSelectedId(pattern.bars,juce::dontSendNotification);
     patternGrid_.setSelectedId(static_cast<int>(pattern.grid)+1,juce::dontSendNotification);
     if(!patternSwing_.isMouseButtonDown()&&!patternSwing_.hasKeyboardFocus(true))
@@ -729,6 +936,7 @@ void FxPanel::timerCallback()
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
         effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
     }
+    if (sourcePanel_.isVisible()) sourcePanel_.refresh();
     if (programCurves_.isVisible()) programCurves_.refresh();
     else for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     const auto telemetry=processor_.audioTelemetry();shownEvents_=telemetry.events;shownGrains_=telemetry.grains;shownDropped_=telemetry.dropped;

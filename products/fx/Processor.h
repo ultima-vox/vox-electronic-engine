@@ -8,6 +8,8 @@
 #include "engine/OfflineRender.h"
 #include "engine/SampleController.h"
 #include "engine/Transport.h"
+#include "engine/ComparisonState.h"
+#include "engine/PortablePreset.h"
 
 namespace vox::fx {
 
@@ -27,6 +29,7 @@ inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 class FxProcessor final : public vox::suite::SuiteProcessor {
 public:
     FxProcessor();
+    void setStateInformation(const void*,int) override;
     void prepareToPlay (double sampleRate, int maximumBlockSize) override;
     void releaseResources() override;
     void reset() override;
@@ -81,10 +84,13 @@ public:
     bool setProgram (const NoiseProgram& program) {
         return programs_.publish (program);
     }
-    // Message/controller thread only. A/B snapshots are session-only and
+    // Message/controller thread only. A/B snapshots are stored in the project and
     // deliberately recall all host parameter bases with host notification.
     bool storeComparison(std::size_t slot);
     bool recallComparison(std::size_t slot);
+    bool encodePortablePreset(std::vector<std::byte>&) const;
+    bool restorePortablePreset(std::span<const std::byte>);
+    bool loadReviewCandidate(std::size_t index);
     generator::ControllerState generatorState() const { return programs_.snapshotState().generator; }
     template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
@@ -105,6 +111,10 @@ public:
     // Trigger pattern controller and offline MIDI export.
     bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
     template<typename Edit> bool editPattern(Edit edit) { return programs_.editPattern(edit); }
+    ProgramStore::VersionedPattern versionedPattern() const { return programs_.versionedPattern(); }
+    bool replacePatternIfCurrent(const ProgramStore::VersionedPattern& expected,const pattern::Pattern& value) {
+        return programs_.replacePatternIfCurrent(expected,value);
+    }
     pattern::Pattern patternSnapshot() const { return programs_.snapshotState().pattern; }
     double observedTempo() const noexcept { return capturedTempo_.load(std::memory_order_relaxed); }
     bool exportPatternMidi(double bpm, std::vector<std::uint8_t>& bytes) const {
@@ -116,6 +126,7 @@ public:
     NoiseProgram program() const { return programs_.snapshot(); }
     std::uint64_t programRestoreEpoch() const noexcept { return programs_.programRevision(); }
     ProgramStore::VersionedProgram versionedProgram() const { return programs_.versionedProgram(); }
+    bool editTonalityIfRevision(source::Tonality tonality,std::uint64_t revision) { return programs_.editTonalityIfRevision(tonality,revision); }
     bool editCurveIfRevision(CurveTarget target, std::uint64_t revision, const timeline::Curve& curve) {
         return programs_.editCurveIfRevision(target, revision, curve);
     }
@@ -124,10 +135,12 @@ public:
     }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
 
+private:
+    bool applyPortableSound(const portable::Sound&);
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == fxSampleSectionTag || tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
+    bool isProductSection (preset::Tag tag) const override { return tag == compare::sectionTag || tag == fxSampleSectionTag || tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
 
 private:
     void publishTelemetry(bool clipped) noexcept {
@@ -144,7 +157,9 @@ private:
     macro::Config audioMacroConfig_;
     std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;
-    std::array<juce::MemoryBlock,2> comparisons_; // controller thread only; not project state
+    juce::CriticalSection controllerRestoreLock_; // serialize project restore, preset load and comparison commands
+    mutable std::mutex comparisonMutex_; // never entered on the audio thread
+    compare::Bank comparisons_;
     NoiseProgram audioProgram_;
     pattern::Pattern audioPattern_;
     pattern::FixedSchedule audioPatternSchedule_;

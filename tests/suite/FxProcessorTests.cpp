@@ -213,6 +213,55 @@ int main() {
         check(effected->family()==3&&std::abs(effected->outputParameter().get()-.8f)<1e-5f &&
               effected->effect(3).type==vox::fx::effects::Type::reverb && effected->macroConfig().count==1 &&
               effected->patternSnapshot().steps[0].enabled,"comparison B recalls independent state");
+        {
+            auto bankState=save(*effected);auto reopened=std::make_unique<vox::fx::FxProcessor>();
+            reopened->setStateInformation(bankState.getData(),static_cast<int>(bankState.getSize()));
+            check(reopened->recallComparison(0)&&reopened->family()==0&&std::abs(reopened->outputParameter().get()-.4f)<1e-5f,
+                  "closed editor A/B bank survives reopen");
+            check(reopened->recallComparison(1)&&reopened->family()==3&&reopened->recallComparison(0)&&reopened->family()==0,
+                  "recall never consumes either comparison slot");
+            std::vector<std::byte> preset;
+            check(effected->encodePortablePreset(preset),"encode portable sound");
+            reopened->outputParameter().setValueNotifyingHost(.21f);
+            check(reopened->restorePortablePreset(preset)&&reopened->family()==3&&std::abs(reopened->outputParameter().get()-.21f)<1e-5f,
+                  "user preset replaces structural state but leaves automation alone");
+            check(reopened->recallComparison(0)&&reopened->family()==0,"portable preset never replaces comparison slots");
+            auto decoded=vox::preset::decode({static_cast<const std::byte*>(bankState.getData()),bankState.getSize()},vox::fx::compare::productTag,1);
+            vox::fx::compare::Bank slots;
+            for(auto& section:decoded.document.sections)if(section.tag==vox::fx::compare::sectionTag){
+                check(vox::fx::compare::decode(section.data,slots),"read saved comparison bank");
+                vox::preset::StateDocument inner;
+                if(vox::fx::compare::slotDocument(slots[0],inner)){
+                    for(auto& payload:inner.sections)if(payload.tag==vox::preset::makeTag("FPRG"))payload.data.clear();
+                    if(auto invalid=vox::preset::encode(inner))slots[0]=std::move(*invalid);
+                    section=vox::fx::compare::encode(slots);
+                }
+            }
+            if(auto malformed=vox::preset::encode(decoded.document)){
+                const auto before=save(*reopened);
+                reopened->setStateInformation(malformed->data(),static_cast<int>(malformed->size()));
+                check(reopened->lastStateError().isNotEmpty()&&save(*reopened)==before,"bad comparison payload rolls back whole restore");
+            }else check(false,"encode malformed comparison fixture");
+        }
+        {
+            auto dragProcessor=std::make_unique<vox::fx::FxProcessor>();vox::fx::FxPanel dragPanel(*dragProcessor);
+            auto& source=dragPanel.sourcePanel();
+            source.typeSelector(0).setSelectedId(2,juce::sendNotificationSync);
+            source.cutoffSlider(0).setValue(800,juce::sendNotificationSync);
+            const auto captured=save(*dragProcessor);
+            auto& cutoff=source.cutoffSlider(0);
+            {
+                juce::Slider::ScopedDragNotification gesture(cutoff);
+                cutoff.setValue(1000,juce::sendNotificationAsync);
+                check(dragProcessor->program().layers[0].filters[0].hz==1000,"drag writes synchronously before restore");
+                dragProcessor->setStateInformation(captured.getData(),static_cast<int>(captured.getSize()));
+                source.refresh();cutoff.setValue(1250,juce::sendNotificationAsync);
+                check(dragProcessor->program().layers[0].filters[0].hz==800,"stale drag write rejected through host restore");
+            }
+            check(cutoff.getValue()==800,"gesture release reads back restored value");
+            cutoff.setValue(900,juce::sendNotificationSync);
+            check(dragProcessor->program().layers[0].filters[0].hz==900,"new gesture accepted after restore");
+        }
         check(effected->setMacroGainRoute(0,0,0),"clear comparison test route");
         effected->outputParameter().setValueNotifyingHost(1.0f);
         panel.effectSelector(0).setSelectedId(3,juce::sendNotificationSync);
@@ -319,6 +368,25 @@ int main() {
         check(panel.patternNoteSlider().isEnabled(),"valid step re-enables detail controls");
         panel.patternSelector().setSelectedId(8,juce::sendNotificationSync);
         check(vox::fx::pattern::factory(7,pattern)&&owner->patternSnapshot().seed==pattern.seed,"pattern selector installs real pattern");
+        const auto beforeSwing=owner->patternSnapshot();
+        {
+            juce::Slider::ScopedDragNotification gesture(panel.patternSwingSlider());
+            panel.patternSwingSlider().setValue(.31,juce::sendNotificationAsync);
+            panel.patternSwingSlider().setValue(.58,juce::sendNotificationAsync);
+        }
+        panel.patternActionsSelector().setSelectedId(3,juce::sendNotificationSync);
+        check(owner->patternSnapshot()==beforeSwing,"Pattern undo rolls an entire slider drag back together");
+        panel.patternActionsSelector().setSelectedId(4,juce::sendNotificationSync);
+        check(std::abs(owner->patternSnapshot().swing-.58f)<.001f,"Pattern redo restores the drag endpoint");
+        panel.patternActionsSelector().setSelectedId(3,juce::sendNotificationSync);
+        const auto patternProject=save(*owner);
+        {
+            juce::Slider::ScopedDragNotification gesture(panel.patternSwingSlider());
+            panel.patternSwingSlider().setValue(.61,juce::sendNotificationAsync);
+            owner->setStateInformation(patternProject.getData(),static_cast<int>(patternProject.getSize()));
+            panel.patternSwingSlider().setValue(.64,juce::sendNotificationAsync);
+        }
+        check(owner->patternSnapshot()==beforeSwing,"stale Pattern slider after host restore cannot change the schedule");
         std::vector<std::uint8_t> exported,expected;
         check(owner->exportPatternMidi(120,exported)&&vox::fx::pattern::exportMidi(pattern,120,expected)&&exported==expected,
               "processor exports canonical trigger MIDI");

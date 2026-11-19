@@ -20,6 +20,7 @@ inline constexpr std::uint32_t stepsPerBar(Grid grid) noexcept {
 struct Step {
     bool enabled=false;
     std::uint8_t note=60, velocity=100, probability=100, ratchets=1;
+    bool operator==(const Step&) const = default;
     bool valid() const noexcept { return note<128 && velocity>0 && velocity<128 && probability<=100 && ratchets>=1 && ratchets<=4; }
 };
 struct Pattern {
@@ -28,6 +29,7 @@ struct Pattern {
     Grid grid=Grid::sixteenth;
     float swing=0.0f; // 0..1: odd step starts are delayed up to half a step
     std::uint32_t seed=1;
+    bool operator==(const Pattern&) const = default;
     bool valid() const noexcept {
         if(bars<1||bars>4||gridTicks(grid)==0||!std::isfinite(swing)||swing<0||swing>1)return false;
         for(const auto& step:steps)if(!step.valid())return false;
