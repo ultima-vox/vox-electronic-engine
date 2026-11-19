@@ -1,0 +1,239 @@
+VOX FX consolidated implementation pass — Linux x86-64, GCC 12.2.0
+Code and test SHA: cdd138f54a85ba9c1e974a2e7f5d258a971d46c1
+Drive baseline SHA: b19b7f60258d43ff549cd4ec92cb1dfe9aad0f69
+JUCE SHA: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+
+Commands used (sources in tests/suite/):
+ - Regression/benchmark: g++ -std=c++20 -O2 -pthread -Iproducts/fx <source> [allocation probe] -o <test>; (ulimit -s 1024; <test>)
+   For sources referencing VOX_TEST_INTERPOSE_MALLOC: -DVOX_TEST_INTERPOSE_MALLOC=1 -Ilibs/vox-testkit/probe -rdynamic <probe.o>; probe compiled with gcc -std=c11 -O2 -c libs/vox-testkit/probe/AllocationProbeLinux.c.
+   FxFactoryCandidatesTests received a directory for the eight PCM24 preview WAVs. Benchmarks below were re-executed serially.
+ - ASan/UBSan: same compiler/includes, -O1 -g1 -no-pie -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all, no glibc interposer.
+ - TSan Program store: g++ -std=c++20 -O1 -g1 -pthread -no-pie -fsanitize=thread -Iproducts/fx tests/suite/FxProgramStoreTests.cpp -o <test>; <test>
+ - JUCE-linked worker tests: g++ -std=c++20 -O1 -pthread -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 -DJUCE_USE_CURL=0 -DJUCE_WEB_BROWSER=0 -I<JUCE>/modules -Iproducts/fx <source> [allocation probe for sample controller] <pinned juce_core, juce_core_CompilationTime and juce_cryptography objects> -ldl -lrt -l:libz.so.1 -o <test>; <test>
+ - Native syntax only: same JUCE flags plus -fsyntax-only -Iproducts -Ilibs/vox-preset -Ilibs/vox-ui, JucePlugin_Name="VOX FX", VOX_SUITE_STATE_TAG="VXFX", on products/fx/{Processor,FxEditor,LayerPanel,CurveEditor}.cpp and tests/suite/FxProcessorTests.cpp.
+ - Actual suite configure: cmake 3.31.6 -S . -B build/fx-native-suite -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON -DFETCHCONTENT_SOURCE_DIR_JUCE=<pinned JUCE checkout>
+
+--- regression.log ---
+PASS FxCurveTrajectoryTests
+PASS FxDownlifterTests
+PASS FxEffectsTests
+PASS FxBarEventTests
+PASS FxGeneratorStateTests
+PASS FxFormantTests
+PASS FxFactoryCandidatesTests
+PASS FxGeneratorTests
+PASS FxGlitchTests
+PASS FxImpactTests
+PASS FxLaserTests
+PASS FxGranularTests
+PASS FxMacroRoutingTests
+PASS FxModulationTests
+PASS FxLayerTests
+PASS FxMetallicTests
+PASS FxPatternCodecTests
+PASS FxPatternGridTests
+PASS FxOfflineRenderTests
+PASS FxPatternPlaybackTests
+PASS FxNoiseRiserTests
+PASS FxPatternSwingTests
+PASS FxPatternTests
+PASS FxPlaybackModeTests
+PASS FxProgramBridgeTests
+PASS FxProgramCodecTests
+PASS FxSampleReferenceTests
+PASS FxSampleStoreTests
+PASS FxSampleGranularTests
+PASS FxProgramStoreTests
+PASS FxShepardTests
+PASS FxTimelineTests
+PASS FxTextureTests
+PASS FxSquelchTests
+PASS FxTransportTests
+PASS FxWhooshTests
+PASS FxCallbackBenchmark
+PASS FxPatternBenchmark
+PASS FxEffectsBenchmark
+
+--- asan.log ---
+PASS FxCurveTrajectoryTests ASan+UBSan
+PASS FxEffectsTests ASan+UBSan
+PASS FxGeneratorStateTests ASan+UBSan
+PASS FxBarEventTests ASan+UBSan
+PASS FxGeneratorTests ASan+UBSan
+PASS FxOfflineRenderTests ASan+UBSan
+PASS FxPlaybackModeTests ASan+UBSan
+PASS FxProgramCodecTests ASan+UBSan
+PASS FxSampleStoreTests ASan+UBSan
+PASS FxProgramStoreTests ASan+UBSan
+
+--- tsan.log ---
+FX Program store: 0 failure(s)
+
+--- FxFileExportTests.log ---
+FX file export: 0 failure(s)
+
+--- FxSampleControllerTests.log ---
+FX sample controller: 0 failure(s)
+
+--- FxSampleDecodeTests.log ---
+FX sample WAV decode: 0 failure(s)
+
+--- juce-syntax.log ---
+PASS pinned JUCE editor/processor syntax (not executed)
+
+--- cmake-configure.log ---
+-- The C compiler identification is GNU 12.2.0
+-- The CXX compiler identification is GNU 12.2.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+CMake Error at build/fx-cmake/cmake/data/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:233 (message):
+  Could NOT find PkgConfig (missing: PKG_CONFIG_EXECUTABLE)
+Call Stack (most recent call first):
+  build/fx-cmake/cmake/data/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:603 (_FPHSA_FAILURE_MESSAGE)
+  build/fx-cmake/cmake/data/share/cmake-3.31/Modules/FindPkgConfig.cmake:114 (find_package_handle_standard_args)
+  build/juce-fx/extras/Build/CMake/JUCEModuleSupport.cmake:375 (find_package)
+  build/juce-fx/extras/Build/CMake/JUCEModuleSupport.cmake:636 (_juce_create_pkgconfig_target)
+  build/juce-fx/extras/Build/CMake/JUCEModuleSupport.cmake:679 (juce_add_module)
+  build/juce-fx/modules/CMakeLists.txt:33 (juce_add_modules)
+
+
+-- Configuring incomplete, errors occurred!
+
+--- drive-before.log ---
+44100 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 843.81 p95 1913.90 p99 1968.55 max 2115.67 us; accepted 929 dropped 0 peak 1.000 clipped 38558 checksum -3825.489300
+48000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 1351.43 p95 1920.82 p99 2031.18 max 3417.32 us; accepted 854 dropped 0 peak 1.000 clipped 38297 checksum -4854.280705
+96000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 832.44 p95 1672.56 p99 1704.17 max 1758.90 us; accepted 427 dropped 0 peak 1.000 clipped 38200 checksum -4625.933186
+scheduler only full scan 48k 128 @137 BPM: p50 3.353 p95 3.517 p99 6.243 max 64.243 us; checksum 655856
+scheduler only bounded lookup 48k 128 @137 BPM: p50 0.075 p95 0.105 p99 0.120 max 0.273 us; checksum 655856
+
+--- drive-after.log ---
+44100 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 848.48 p95 1096.54 p99 1522.62 max 1810.66 us; accepted 929 dropped 0 peak 0.278 clipped 0 checksum -54.202954
+48000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 850.53 p95 1216.60 p99 1567.27 max 1843.23 us; accepted 854 dropped 0 peak 0.278 clipped 0 checksum -91.264208
+96000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 835.97 p95 1103.46 p99 1521.07 max 1597.73 us; accepted 427 dropped 0 peak 0.278 clipped 0 checksum -81.864656
+scheduler only full scan 48k 128 @137 BPM: p50 3.362 p95 3.507 p99 4.498 max 61.232 us; checksum 655856
+scheduler only bounded lookup 48k 128 @137 BPM: p50 0.075 p95 0.103 p99 0.118 max 3.092 us; checksum 655856
+
+--- callback-serial.log ---
+44100 riser 8 events x 4 layers: p50 166.34 p95 220.47 p99 246.77 max 247.69 us
+44100 downlifter 8 events x 4 layers: p50 234.14 p95 285.88 p99 299.82 max 307.90 us
+44100 shepard 8 events x 4 layers: p50 572.01 p95 629.77 p99 680.25 max 706.95 us
+44100 impact 8 events x 4 layers: p50 288.56 p95 325.44 p99 339.96 max 351.96 us
+44100 whoosh 8 events x 4 layers: p50 258.82 p95 297.24 p99 352.92 max 395.07 us
+44100 laser 8 events x 4 layers: p50 242.25 p95 283.00 p99 293.94 max 294.21 us
+44100 squelch 8 events x 4 layers: p50 319.75 p95 355.48 p99 406.16 max 597.50 us
+44100 metallic 8 events x 4 layers: p50 196.19 p95 224.10 p99 258.86 max 296.07 us
+44100 texture 8 events x 4 layers: p50 318.97 p95 351.46 p99 375.49 max 386.17 us
+44100 formant 8 events x 4 layers: p50 487.76 p95 527.63 p99 536.87 max 818.43 us
+44100 glitch 8 events x 4 layers: p50 260.95 p95 282.53 p99 322.96 max 345.90 us
+44100 granular 8 events x 4 layers: p50 237.87 p95 301.17 p99 362.35 max 603.60 us
+48000 riser 8 events x 4 layers: p50 167.63 p95 258.67 p99 296.21 max 355.41 us
+48000 downlifter 8 events x 4 layers: p50 234.66 p95 283.81 p99 330.50 max 350.23 us
+48000 shepard 8 events x 4 layers: p50 566.59 p95 661.64 p99 688.02 max 777.32 us
+48000 impact 8 events x 4 layers: p50 291.03 p95 324.40 p99 374.02 max 392.16 us
+48000 whoosh 8 events x 4 layers: p50 267.72 p95 561.60 p99 576.80 max 610.94 us
+48000 laser 8 events x 4 layers: p50 251.86 p95 291.52 p99 315.58 max 316.51 us
+48000 squelch 8 events x 4 layers: p50 329.24 p95 353.63 p99 359.66 max 371.73 us
+48000 metallic 8 events x 4 layers: p50 196.10 p95 234.42 p99 256.77 max 292.27 us
+48000 texture 8 events x 4 layers: p50 316.85 p95 338.55 p99 350.34 max 351.05 us
+48000 formant 8 events x 4 layers: p50 509.48 p95 1032.90 p99 6331.90 max 18029.22 us
+48000 glitch 8 events x 4 layers: p50 572.33 p95 655.39 p99 695.17 max 751.65 us
+48000 granular 8 events x 4 layers: p50 602.79 p95 674.42 p99 690.64 max 720.21 us
+96000 riser 8 events x 4 layers: p50 436.89 p95 495.60 p99 517.75 max 521.78 us
+96000 downlifter 8 events x 4 layers: p50 548.40 p95 608.01 p99 619.65 max 644.14 us
+96000 shepard 8 events x 4 layers: p50 541.62 p95 732.58 p99 1046.93 max 1077.69 us
+96000 impact 8 events x 4 layers: p50 282.22 p95 313.59 p99 332.10 max 350.99 us
+96000 whoosh 8 events x 4 layers: p50 250.98 p95 284.75 p99 304.81 max 377.82 us
+96000 laser 8 events x 4 layers: p50 240.61 p95 269.97 p99 290.69 max 296.20 us
+96000 squelch 8 events x 4 layers: p50 318.84 p95 342.91 p99 359.32 max 360.81 us
+96000 metallic 8 events x 4 layers: p50 195.97 p95 221.82 p99 254.59 max 300.40 us
+96000 texture 8 events x 4 layers: p50 304.24 p95 575.79 p99 586.93 max 605.59 us
+96000 formant 8 events x 4 layers: p50 503.53 p95 821.93 p99 882.35 max 901.17 us
+96000 glitch 8 events x 4 layers: p50 269.03 p95 416.12 p99 497.75 max 520.72 us
+96000 granular 8 events x 4 layers: p50 237.95 p95 386.77 p99 414.21 max 417.39 us
+granular 44100 Hz 64 frames 1 events: grains 16 peak 0.006292 DC 0.0001168 p50 20.82 p95 23.57 p99 36.41 max 74.00 us
+granular 44100 Hz 64 frames 4 events: grains 64 peak 0.012395 DC 0.0003354 p50 71.90 p95 86.51 p99 104.13 max 126.74 us
+granular 44100 Hz 64 frames 8 events: grains 64 peak 0.013547 DC 0.0002869 p50 118.10 p95 132.75 p99 147.28 max 155.65 us
+granular 44100 Hz 128 frames 1 events: grains 16 peak 0.006292 DC 0.0000410 p50 41.90 p95 47.13 p99 58.98 max 89.19 us
+granular 44100 Hz 128 frames 4 events: grains 64 peak 0.012395 DC 0.0002221 p50 144.51 p95 170.83 p99 197.37 max 208.24 us
+granular 44100 Hz 128 frames 8 events: grains 64 peak 0.013547 DC 0.0001325 p50 237.40 p95 449.34 p99 493.59 max 554.13 us
+granular 44100 Hz 512 frames 1 events: grains 16 peak 0.006292 DC 0.0000397 p50 176.75 p95 235.60 p99 269.48 max 271.69 us
+granular 44100 Hz 512 frames 4 events: grains 64 peak 0.016155 DC 0.0001380 p50 627.26 p95 1265.17 p99 1330.38 max 1333.30 us
+granular 44100 Hz 512 frames 8 events: grains 64 peak 0.018261 DC 0.0001237 p50 954.26 p95 1037.88 p99 1209.92 max 1322.96 us
+granular 48000 Hz 64 frames 1 events: grains 16 peak 0.005625 DC 0.0000123 p50 20.91 p95 23.91 p99 43.42 max 47.46 us
+granular 48000 Hz 64 frames 4 events: grains 64 peak 0.011326 DC 0.0001897 p50 72.14 p95 94.89 p99 105.73 max 113.62 us
+granular 48000 Hz 64 frames 8 events: grains 64 peak 0.013623 DC 0.0001034 p50 117.97 p95 133.04 p99 134.72 max 147.10 us
+granular 48000 Hz 128 frames 1 events: grains 16 peak 0.005913 DC 0.0000999 p50 41.99 p95 50.99 p99 59.54 max 69.20 us
+granular 48000 Hz 128 frames 4 events: grains 64 peak 0.012106 DC 0.0002091 p50 144.40 p95 174.56 p99 179.45 max 180.58 us
+granular 48000 Hz 128 frames 8 events: grains 64 peak 0.013623 DC 0.0002643 p50 237.03 p95 377.66 p99 471.05 max 584.29 us
+granular 48000 Hz 512 frames 1 events: grains 16 peak 0.008673 DC 0.0000532 p50 179.84 p95 321.20 p99 373.64 max 381.96 us
+granular 48000 Hz 512 frames 4 events: grains 64 peak 0.015414 DC 0.0001638 p50 646.06 p95 1140.39 p99 1230.11 max 1311.34 us
+granular 48000 Hz 512 frames 8 events: grains 64 peak 0.016283 DC 0.0001759 p50 971.76 p95 1212.85 p99 1518.71 max 1544.91 us
+granular 96000 Hz 64 frames 1 events: grains 12 peak 0.006100 DC 0.0000447 p50 18.51 p95 21.14 p99 39.70 max 49.25 us
+granular 96000 Hz 64 frames 4 events: grains 48 peak 0.009056 DC 0.0002563 p50 61.80 p95 103.20 p99 119.69 max 124.37 us
+granular 96000 Hz 64 frames 8 events: grains 64 peak 0.011367 DC 0.0001620 p50 118.28 p95 137.23 p99 158.22 max 171.89 us
+granular 96000 Hz 128 frames 1 events: grains 16 peak 0.007606 DC 0.0000196 p50 41.83 p95 53.54 p99 56.43 max 89.53 us
+granular 96000 Hz 128 frames 4 events: grains 64 peak 0.011598 DC 0.0001222 p50 143.85 p95 176.15 p99 186.48 max 197.16 us
+granular 96000 Hz 128 frames 8 events: grains 64 peak 0.013666 DC 0.0000894 p50 236.40 p95 253.29 p99 265.35 max 267.04 us
+granular 96000 Hz 512 frames 1 events: grains 16 peak 0.007606 DC 0.0000282 p50 186.40 p95 337.71 p99 360.68 max 430.82 us
+granular 96000 Hz 512 frames 4 events: grains 64 peak 0.015943 DC 0.0001309 p50 630.87 p95 910.04 p99 980.92 max 1114.53 us
+granular 96000 Hz 512 frames 8 events: grains 64 peak 0.014875 DC 0.0001424 p50 981.33 p95 1616.63 p99 1801.89 max 3082.09 us
+checksum 8696.719949, bound failures 0
+
+--- FxEffectsBenchmark.log ---
+96k Shepard 8x4 + 4x effect 0: p50 553.85 p95 16608.44 p99 17325.82 max 44659.04 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 555.97 p95 16621.79 p99 17018.18 max 20618.47 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 573.26 p95 16615.33 p99 20659.63 max 20813.77 us; checksum -7.178030
+96k Shepard 8x4 + 4x effect 3: p50 590.78 p95 16682.70 p99 20656.68 max 20786.81 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 566.43 p95 16621.03 p99 20621.00 max 21228.46 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 553.57 p95 8613.98 p99 16730.40 max 43743.74 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 544.45 p95 8609.44 p99 16618.46 max 24607.94 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 556.94 p95 8662.48 p99 20610.55 max 20633.87 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 583.26 p95 9044.01 p99 16874.43 max 25086.08 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 562.73 p95 8754.14 p99 16852.11 max 20626.16 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 568.94 p95 8639.08 p99 16745.88 max 20623.64 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 578.61 p95 8673.94 p99 12675.35 max 24807.28 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 600.95 p95 8661.55 p99 12657.94 max 20718.04 us; checksum -7.162567
+
+--- FxFactoryCandidatesTests.log ---
+voxfx.impact.iron-drop 44100 Hz 119070 frames peak 0.020436 DC 0.0000287
+voxfx.impact.iron-drop 48000 Hz 129600 frames peak 0.020396 DC 0.0000286
+voxfx.impact.iron-drop 96000 Hz 259200 frames peak 0.020510 DC 0.0000277
+voxfx.riser.first-light 44100 Hz 350883 frames peak 0.017199 DC 0.0000013
+voxfx.riser.first-light 48000 Hz 381914 frames peak 0.016055 DC 0.0000013
+voxfx.riser.first-light 96000 Hz 763827 frames peak 0.015089 DC 0.0000014
+voxfx.fall.blue-hour 44100 Hz 555660 frames peak 0.017973 DC 0.0000000
+voxfx.fall.blue-hour 48000 Hz 604800 frames peak 0.018654 DC 0.0000000
+voxfx.fall.blue-hour 96000 Hz 1209600 frames peak 0.018378 DC 0.0000000
+voxfx.sweep.salt-air 44100 Hz 123480 frames peak 0.018524 DC 0.0000003
+voxfx.sweep.salt-air 48000 Hz 134400 frames peak 0.017217 DC 0.0000001
+voxfx.sweep.salt-air 96000 Hz 268800 frames peak 0.014999 DC 0.0000001
+voxfx.zap.acid-spore 44100 Hz 457758 frames peak 0.025090 DC 0.0000005
+voxfx.zap.acid-spore 48000 Hz 498240 frames peak 0.026010 DC 0.0000005
+voxfx.zap.acid-spore 96000 Hz 996480 frames peak 0.026034 DC 0.0000004
+voxfx.rhythm.neon-fault 44100 Hz 126693 frames peak 0.042686 DC 0.0002095
+voxfx.rhythm.neon-fault 48000 Hz 137898 frames peak 0.051026 DC 0.0002507
+voxfx.rhythm.neon-fault 96000 Hz 275795 frames peak 0.042623 DC 0.0002907
+voxfx.atmosphere.root-system 44100 Hz 352800 frames peak 0.004537 DC 0.0000037
+voxfx.atmosphere.root-system 48000 Hz 384000 frames peak 0.004586 DC 0.0000063
+voxfx.atmosphere.root-system 96000 Hz 768000 frames peak 0.004316 DC 0.0000063
+voxfx.stinger.sun-glass 44100 Hz 127890 frames peak 0.006846 DC 0.0000001
+voxfx.stinger.sun-glass 48000 Hz 139200 frames peak 0.006882 DC 0.0000001
+voxfx.stinger.sun-glass 96000 Hz 278400 frames peak 0.006885 DC 0.0000001
+
+--- preview-hashes.txt ---
+14e53b5088634ec343f94f4733051f280cd0241ba973aff145663a9c06b05f5e  voxfx.atmosphere.root-system.wav
+285c4ba14cf59ae49df141824354c073a062a932f53992ab0d490aab6a6d3ec7  voxfx.fall.blue-hour.wav
+52a0f0b8f640511477b0301a70c9cfaaef54b320c91e98837a7f27b675fda216  voxfx.impact.iron-drop.wav
+4a0e7708e03450fc50844e44af14f1b83d5d3f27d1085ed48d070a959a1c892c  voxfx.rhythm.neon-fault.wav
+5f1c20867e3e27ab111c2a1fe265fe151f54f49b71bbdd8680948b8866b3b4a1  voxfx.riser.first-light.wav
+b3b76472f81111fa89dfa7f5f1c2dd37bf018318fcb7fee46a84d3e9b8159d00  voxfx.stinger.sun-glass.wav
+2dcaaf2760cb678be904606d7181f5203d776ad6ef5bdd6c8a3247e5f385eacb  voxfx.sweep.salt-air.wav
+1eb1f2205b16cb8fe4cb021e0ad3b60aeda78889e687ca6010f16793466b1e0f  voxfx.zap.acid-spore.wav
