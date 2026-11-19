@@ -160,15 +160,17 @@ public:
         }
         grainLength_ = static_cast<unsigned>(std::max(2.0, rate_ * 0.08));
         grainInterval_ = static_cast<unsigned>(std::max(1.0, rate_ * 0.025));
+        soloMask_=0;soloGains_.fill(1.0);soloRamping_=false;
+        soloStep_=1.0/std::max(1.0,std::floor(rate_*.005));
         grains_ = {}; activeGrains_ = 0; voices_ = {}; retiring_ = {}; serial_ = 0;droppedEvents_=0;
     }
     // The caller must ensure there is no concurrent access. UI/worker threads
     // must not call this during rendering without a safe publication bridge.
     bool setVoiceMotion(const macro::Config& config) noexcept { return voiceMotion_.setConfig(config,true); }
     void setMacroBases(const std::array<float,8>& values) noexcept { macroBases_=values; }
-    bool setProgram(const NoiseProgram& program) noexcept {
+    bool setProgram(const NoiseProgram& program,std::uint64_t publication=0) noexcept {
         if (!program.valid()) return false;
-        program_ = program;
+        program_ = program;programPublication_=publication;
         return true;
     }
     // Up to eight active events plus four 5 ms retirement fades. A steal
@@ -236,7 +238,7 @@ public:
         // without stealing MIDI ownership for the same channel/note.
         if (source != TriggerSource::midi && isHeldMode(slot->program.mode))
             slot->program.mode = PlayMode::oneShot;
-        slot->serial = ++serial_;
+        slot->serial = ++serial_;slot->publication=programPublication_;
         if(voiceMotion_.active()){
             slot->motion=voiceMotion_;
             slot->motion.restart(static_cast<std::uint32_t>(serial_));
@@ -295,11 +297,47 @@ public:
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
         for(auto& v:retiring_)if(v.active&&(channel==0||v.channel==channel))beginRelease(v);
     }
+    // Monitor-only: fade layer contributions, not their clocks, filters or
+    // grain ownership. Zero mask monitors all enabled layers.
+    void setLayerSoloMask(unsigned mask,bool immediate=false) noexcept {
+        mask&=15u;
+        if(immediate){
+            for(std::size_t i=0;i<soloGains_.size();++i)soloGains_[i]=mask==0||(mask&(1u<<i))?1.0:0.0;
+            soloMask_=mask;soloRamping_=false;
+        }else if(mask!=soloMask_){soloMask_=mask;soloRamping_=true;}
+    }
+    // Select the newest rendered, active voice from this exact graph. Ignore
+    // retirement slots and voices which still use pre-edit trajectory data.
+    std::array<float,5> playhead(std::uint64_t publication) const noexcept {
+        std::array<float,5> result{-1,-1,-1,-1,-1};
+        const Voice* newest=nullptr;
+        for(const auto& v:voices_)if(v.active&&v.publication==publication&&v.renderedPhase>=0&&
+                                    (!newest||v.serial>newest->serial))newest=&v;
+        if(!newest)return result;
+        result[0]=static_cast<float>(newest->renderedPhase);
+        for(std::size_t i=0;i<newest->program.layers.size();++i){
+            const auto& layer=newest->program.layers[i];
+            if(layer.enabled)(void)layer.timing.phaseAt(newest->renderedPhase,result[i+1]);
+        }
+        return result;
+    }
     // Both pointers must address at least count writable samples; outputs are
     // overwritten, not accumulated. The processor validates its bus layout.
     void render(float* left, float* right, int count) noexcept {
         for (int i = 0; i < count; ++i) {
             double l = 0, r = 0;
+            if(soloRamping_){
+                soloRamping_=false;
+                for(std::size_t j=0;j<soloGains_.size();++j){
+                    const double target=soloMask_==0||(soloMask_&(1u<<j))?1.0:0.0;
+                    auto& gain=soloGains_[j];
+                    if(gain!=target){
+                        // Snap at the endpoint with rounding tolerance.
+                        if(std::abs(gain-target)<=soloStep_+1e-12)gain=target;
+                        else {gain+=target>gain?soloStep_:-soloStep_;soloRamping_=true;}
+                    }
+                }
+            }
             hasFilteredGrains_=false;
             const double ppq = barGrid_.at(blockOffset_);
             if (barGrid_.valid()) ++blockOffset_;
@@ -350,11 +388,11 @@ private:
         int channel = 0, note = 0;
         TriggerSource source = TriggerSource::midi;
         float velocity = 0;
-        std::uint64_t serial = 0, noteTicket = 0;
+        std::uint64_t serial = 0, noteTicket = 0, publication = 0;
         timeline::SecondsClock clock;
         timeline::BarsClock barsClock;
         double duration = 4.0, layerScale = 1.0, continuousPhase = 0.0;
-        double target = 0, targetSpan = 0, lastPhase = 0;
+        double target = 0, targetSpan = 0, lastPhase = 0, renderedPhase = -1;
         bool continuousStarted = false;
         int releaseRemaining = 0, releaseLength = 0;
         double releaseStart=1;unsigned releaseAge=0;
@@ -418,6 +456,7 @@ private:
             }
         }
         if(!advanced){v.active=false;return;}
+        v.renderedPhase=eventPhase;
         double release = 1.0;
         const bool releasing=v.releaseRemaining>0;
         if (releasing) {
@@ -722,8 +761,9 @@ private:
                                           2.0 * globalPan - 1.0 +
                                           (settings.family == NoiseFamily::whoosh ? 2.0 * t - 1.0 : 0.0) +
                                           (settings.family == NoiseFamily::texture ? 0.35 * std::sin(6.283185307179586 * t * layerDuration * 0.11) : 0.0), -1.0, 1.0);
-            left += sample * std::min(1.0, 1.0 - pan);
-            right += sample * std::min(1.0, 1.0 + pan);
+            const double monitored=sample*soloGains_[i];
+            left += monitored * std::min(1.0, 1.0 - pan);
+            right += monitored * std::min(1.0, 1.0 + pan);
         }
     }
     struct Grain {
@@ -757,7 +797,7 @@ private:
             const double window=grainWindow_[w] + (windowPos-w)*(grainWindow_[wn]-grainWindow_[w]);
             if(layer.filterGrains) layer.grainSum+=source*window;
             else {
-                const double sample=source*window*layer.grainGain;
+                const double sample=source*window*layer.grainGain*soloGains_[grain.layerIndex];
                 left+=sample*std::min(1.0,1.0-layer.grainPan);
                 right+=sample*std::min(1.0,1.0+layer.grainPan);
             }
@@ -769,12 +809,14 @@ private:
             if (++grain.age >= grain.length) { grain.active=false; --activeGrains_; }
         }
         const auto mixFiltered=[&](auto& voices){
-            for(auto& voice:voices)if(voice.active)for(auto& layer:voice.layers)
+            for(auto& voice:voices)if(voice.active)for(std::size_t i=0;i<voice.layers.size();++i){
+                auto& layer=voice.layers[i];
                 if(layer.grainLayerActive&&layer.filterGrains){
-                    const double sample=layer.shape(layer.grainSum)*layer.grainGain;
+                    const double sample=layer.shape(layer.grainSum)*layer.grainGain*soloGains_[i];
                     left+=sample*std::min(1.0,1.0-layer.grainPan);
                     right+=sample*std::min(1.0,1.0+layer.grainPan);
                 }
+            }
         };
         if(hasFilteredGrains_){mixFiltered(voices_);mixFiltered(retiring_);}
     }
@@ -794,6 +836,11 @@ private:
     std::array<Grain, 64> grains_ {};
     unsigned grainLength_ = 2, grainInterval_ = 1, activeGrains_ = 0;
     NoiseProgram program_;
+    std::uint64_t programPublication_=0;
+    std::array<double,4> soloGains_{1,1,1,1};
+    double soloStep_=.005;
+    unsigned soloMask_=0;
+    bool soloRamping_=false;
     bool hasFilteredGrains_=false;
     macro::Runtime voiceMotion_;
     std::array<float,8> macroBases_{.5f,.5f,.5f,.5f,.5f,.5f,.5f,.5f};

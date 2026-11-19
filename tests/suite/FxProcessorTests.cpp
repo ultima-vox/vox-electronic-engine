@@ -71,6 +71,121 @@ void checkRestoreAdmission() {
     check(!fx->previewBus().publish(stalePreview,48000,offlineTicket),"offline host processing cannot resurrect prior preview");
 }
 
+void checkSoloAndPlayhead() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    NoiseProgram p;p.mode=PlayMode::gate;
+    p.layers[0].family=NoiseFamily::laser;p.layers[0].pan=-1;
+    p.layers[1]=p.layers[0];p.layers[1].family=NoiseFamily::granular;p.layers[1].pan=1;p.layers[1].timing={.25f,.75f};
+    p.layers[1].filters[0]={source::FilterType::lowpass,2400,.71f,2};
+    p.layers[2]=p.layers[1];p.layers[2].filters={};
+    p.layers[3]=p.layers[1];p.layers[3].enabled=false;
+    check(fx->setProgram(p),"monitor fixture with procedural, filtered and unfiltered grains");
+    fx->durationParameter().setValueNotifyingHost(fx->durationParameter().convertTo0to1(.5f));
+    fx->prepareToPlay(8000,512);
+    const auto project=save(*fx);
+    std::vector<std::uint8_t> before, after;
+    offline::Settings wav;wav.sampleRate=8000;
+    check(fx->renderProgramWav(wav,before),"render state without Solo");
+    TestPlayHead host;fx->setPlayHead(&host);
+    juce::AudioBuffer<float> audio(2,512);juce::MidiBuffer midi;
+    const auto play=[&](int sample,int note=-1,int offset=0){
+        host.set(true,sample);if(note>=0)midi.addEvent(juce::MidiMessage::noteOn(1,note,juce::uint8{100}),offset);block(*fx,audio,midi);
+    };
+    play(0,60);
+    const auto publication=fx->versionedProgram().publication;
+    const auto cursor=fx->curvePlayhead(publication);
+    check(cursor&&std::abs(*cursor-511.f/4000)<.0002f&&!fx->curvePlayhead(publication,1),
+          "initial cursor follows rendered samples and hides future layers");
+    {
+        auto panel=std::make_unique<LayerPanel>(*fx,0);
+        panel->soloButton().onClick();panel->refresh(p.layers[0]);
+        check(panel->soloButton().getToggleState()&&fx->layerSoloMask()==1,"native Solo toggles only its own monitor bit");
+    }
+    play(512);play(1024);
+    check(audio.getMagnitude(0,0,512)>0&&audio.getMagnitude(1,0,512)==0&&
+          fx->audioTelemetry().events==1&&fx->audioTelemetry().grains>0,
+          "solo isolates procedural output while filtered and unfiltered grains keep running");
+    const auto local=fx->curvePlayhead(publication,1);
+    check(local&&std::abs(*local-(1535.f/4000-.25f)/.75f)<.0002f&&!fx->curvePlayhead(publication,3),
+          "layer cursor maps the captured window and hides disabled layers");
+    auto reopened=std::make_unique<LayerPanel>(*fx,0);
+    check(reopened->soloButton().getToggleState()&&reopened->curveEditor().visiblePlayhead().has_value(),
+          "editor reopen reads processor monitor state and live cursor");
+    check(save(*fx)==project&&fx->renderProgramWav(wav,after)&&before==after,"Solo and cursor stay out of project state and exported WAV");
+    fx->setNonRealtime(true);play(1536);
+    check(audio.getMagnitude(1,0,512)>0&&!fx->curvePlayhead(publication),"offline host bounce bypasses Solo and cursor");
+    fx->setNonRealtime(false);fx->toggleLayerSolo(1);play(2048);
+    check(fx->layerSoloMask()==3&&audio.getMagnitude(0,100,412)>0&&audio.getMagnitude(1,100,412)>0,
+          "multiple Solo layers monitor together without restarting the voice");
+    auto& curve=reopened->curveEditor();curve.refresh();
+    check(curve.visiblePlayhead().has_value(),"cursor recovers on return to live playback");
+    check(curve.setCurve(timeline::Curve::constant(.75f))&&!curve.visiblePlayhead()&&curve.undo()&&!curve.visiblePlayhead(),
+          "edit and undo invalidate cursor for voices carrying a prior graph");
+    play(2560);
+    check(!fx->curvePlayhead(fx->versionedProgram().publication)&&fx->audioTelemetry().events==1,
+          "pre-edit voice never draws against a different graph");
+    play(8192);
+    check(!fx->curvePlayhead(fx->versionedProgram().publication)&&fx->audioTelemetry().events==0,"host seek retires old voice and cursor");
+    play(8704,64,128);
+    const auto retrigger=fx->curvePlayhead(fx->versionedProgram().publication);
+    check(retrigger&&std::abs(*retrigger-383.f/4000)<.0002f,"post-seek cursor tracks MIDI offset");
+    fx->setStateInformation(project.getData(),static_cast<int>(project.getSize()));
+    curve.refresh();check(fx->layerSoloMask()==0&&!curve.visiblePlayhead(),"restore clears monitor and hides stale cursor immediately");
+    host.set(false,9216);block(*fx,audio,midi);
+    check(!fx->curvePlayhead(fx->versionedProgram().publication)&&fx->audioTelemetry().events==0,"stop and restore retire live cursor");
+    fx->audition();fx->stopAudition();block(*fx,audio,midi);
+    check(fx->audioTelemetry().events==0,"STOP cancels queued audition before note admission");
+    const auto stale=fx->previewBus().ticket();fx->stopAudition();
+    const std::array<float,4> preview{.1f,-.2f,.3f,-.4f};
+    check(!fx->previewBus().publish(preview,8000,stale),"STOP invalidates queued external preview result");
+    fx->setPlayHead(nullptr);fx->releaseResources();
+    check(!fx->curvePlayhead(fx->versionedProgram().publication)&&fx->outputPeak()==0&&!fx->consumeClip(),"release resets cursor and peak/clip");
+}
+
+void checkHostTempoCursor() {
+    using namespace vox::fx;
+    TestPlayHead automated, reference;
+    auto a=std::make_unique<FxProcessor>(), b=std::make_unique<FxProcessor>();
+    a->setPlayHead(&automated);b->setPlayHead(&reference);
+    NoiseProgram p;p.mode=PlayMode::gate;p.layers[0].family=NoiseFamily::laser;
+    const auto init=[&](FxProcessor& fx){
+        auto m=fx.versionedMotion();auto config=m.config;config.lfos[0]={1,true};
+        check(config.put(0,{mod::Source::lfo1,mod::Destination::layerPan,.43f,0})&&fx.replaceMotionIfCurrent(m,config),"tempo voice route setup");
+        check(fx.setProgram(p),"seconds voice setup");fx.prepareToPlay(8000,400);
+    };
+    init(*a);init(*b);
+    juce::AudioBuffer<float> x(2,400),y(2,400);juce::MidiBuffer mx,my;
+    const auto position=[&](TestPlayHead& host,int sample,double bpm,std::optional<double> ppq={}){
+        juce::AudioPlayHead::PositionInfo info;info.setIsPlaying(true);info.setTimeInSamples(sample);info.setBpm(bpm);
+        if(ppq){info.setPpqPosition(*ppq);info.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});}
+        host.position=info;
+    };
+    mx.addEvent(juce::MidiMessage::noteOn(1,60,juce::uint8{100}),0);my.addEvents(mx,0,400,0);
+    position(automated,0,84);position(reference,0,84);block(*a,x,mx);block(*b,y,my);
+    check(std::equal(x.getReadPointer(0),x.getReadPointer(0)+400,y.getReadPointer(0)),"identical initial BPM yields identical motion");
+    double delta=0;
+    for(int at=400;at<=1600;at+=400){
+        position(automated,at,140);position(reference,at,84);block(*a,x,mx);block(*b,y,my);
+        for(int i=0;i<400;++i)delta+=std::abs(x.getSample(0,i)-y.getSample(0,i));
+    }
+    check(delta>.001&&a->observedTempo()==140&&a->musicalClockUnavailable()&&a->audioTelemetry().events==1,
+          "automated host BPM without PPQ changes an existing seconds LFO, not bar clock admission");
+    a->prepareToPlay(8000,400);p.mode=PlayMode::transition;p.bars=1;check(a->setProgram(p),"bar-aligned cursor setup");
+    const auto graph=a->versionedProgram().publication;
+    position(automated,0,120);mx.addEvent(juce::MidiMessage::noteOn(1,60,juce::uint8{100}),0);block(*a,x,mx);
+    check(a->audioTelemetry().events==0&&!a->curvePlayhead(graph),"valid BPM without PPQ does not admit bar events or create a playhead");
+    position(automated,400,120,2.);mx.addEvent(juce::MidiMessage::noteOn(1,60,juce::uint8{100}),0);block(*a,x,mx);
+    const auto first=a->curvePlayhead(graph);
+    position(automated,800,60,2.1);block(*a,x,mx);
+    const auto second=a->curvePlayhead(graph);
+    check(first&&second&&std::abs(*first-.049875)<.0002&&std::abs(*second-.0749375)<.0002,
+          "Transition cursor uses actual bar-line target and tempo-segment timing");
+    position(automated,1200,60);block(*a,x,mx);
+    check(!a->curvePlayhead(graph)&&a->audioTelemetry().events==0,"clock loss retires aligned Transition and its cursor");
+    a->setPlayHead(nullptr);b->setPlayHead(nullptr);
+}
+
 // Compare actual processBlock to the rendered float32 file. Deliberately use
 // different/irregular blocks and the same finite audition contract, not a
 // loop/held performance with an arbitrary MIDI NoteOff or a DAW tempo map.
@@ -155,6 +270,7 @@ int main() {
     };
     phase("JUCE initialization");
     juce::ScopedJuceInitialiser_GUI gui;
+    phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();
     phase("capture parity");checkCaptureParity();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;

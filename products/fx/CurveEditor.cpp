@@ -59,6 +59,10 @@ void CurveEditor::paint(juce::Graphics& g) {
     namespace c=vox::ui::tokens::colour;
     auto r=graph(); g.setColour(c::graph);g.fillRoundedRectangle(r,3.0f);
     g.setColour(c::border);g.drawRoundedRectangle(r,3.0f,1.0f);
+    if(playhead_){
+        const float x=r.getX()+*playhead_*r.getWidth();
+        g.setColour(c::text.withAlpha(.65f));g.drawVerticalLine(juce::roundToInt(x),r.getY(),r.getBottom());
+    }
     juce::Path path;
     constexpr int samples=80;
     for(int i=0;i<=samples;++i){const float t=static_cast<float>(i)/samples;
@@ -72,7 +76,7 @@ void CurveEditor::paint(juce::Graphics& g) {
 void CurveEditor::syncRestore() {
     const auto snapshot=processor_.versionedProgram();
     if(snapshot.revision!=restoreEpoch_) {
-        undo_.clearUndoHistory();dragging_=false;selected_=-1;selection_=0;restoreEpoch_=snapshot.revision;
+        undo_.clearUndoHistory();dragging_=false;selected_=-1;selection_=0;restoreEpoch_=snapshot.revision;playhead_.reset();
         if (const auto* curve = target_.get(snapshot.program)) shown_ = *curve;
         repaint();
     }
@@ -82,8 +86,9 @@ void CurveEditor::refresh() {
     // have been superseded by a host restore on another thread.
     const auto snapshot=processor_.versionedProgram();
     if(snapshot.revision!=restoreEpoch_) {
-        undo_.clearUndoHistory();dragging_=false;selected_=-1;selection_=0;restoreEpoch_=snapshot.revision;
+        undo_.clearUndoHistory();dragging_=false;selected_=-1;selection_=0;restoreEpoch_=snapshot.revision;playhead_.reset();
     }
+    playhead_=dragging_?std::nullopt:processor_.curvePlayhead(snapshot.publication,target_.layer);
     if(!dragging_){if (const auto* curve = target_.get(snapshot.program)) shown_ = *curve;
         if(selected_>=shown_.count){selected_=-1;selection_=0;}
         repaint();}
@@ -105,7 +110,7 @@ bool CurveEditor::applyEdit(const timeline::Curve& curve) {
     if (snapshot.revision != restoreEpoch_ || !old) { refresh(); return false; }
     undo_.beginNewTransaction();
     if (!undo_.perform(new CurveChange(processor_, target_, restoreEpoch_, *old, curve))) { refresh(); return false; }
-    shown_=curve;repaint();return true;
+    shown_=curve;playhead_.reset();repaint();return true;
 }
 bool CurveEditor::undo(){syncRestore();const bool ok=undo_.undo();refresh();return ok;}
 bool CurveEditor::redo(){syncRestore();const bool ok=undo_.redo();refresh();return ok;}
@@ -121,7 +126,7 @@ void CurveEditor::mouseDown(const juce::MouseEvent& event) {
         dragging_=false;
     } else {
         if(!(selection_&bit))selection_=bit;
-        selected_=touched;dragging_=true;beforeDrag_=shown_;
+        selected_=touched;dragging_=true;beforeDrag_=shown_;playhead_.reset();
     }
     repaint();
 }

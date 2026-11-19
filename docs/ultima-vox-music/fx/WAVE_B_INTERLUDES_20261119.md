@@ -23,3 +23,11 @@ Each cue has its own authored layers, contours, timing, filters, FX and two moti
 - Peak .00121820–.02314925; maximum absolute DC .00013003; minimum mono/stereo RMS .92416610; maximum final-5-ms peak .00007761. These do not certify gain staging, musical distinctiveness or arrangement fitness.
 - For reproduction use the pinned JUCE toolchain and exporter command in [Windows triage / Wave B staging](WINDOWS_PROCESSOR_TRIAGE_20261119.md). The exporter now audits and emits all 24.
 - Owner listening, broader in-mix checks, the remaining 156 cues to reach 300, and then 300 more to reach 600 are open. No Windows or DAW qualification is inferred from this review package.
+
+To rebuild the listening ZIP from the export directory without committing any audio binaries:
+
+```bash
+python3 docs/ultima-vox-music/fx/evidence/package-wave-b-24.py build/wave-b-stage build/vox-fx-wave-b-twentyfour-cue-review.zip
+```
+
+The packager checks SHA-256 for each pinned member and reports whether the compressed ZIP also matches the original byte-for-byte (zlib version can change the compressed bytes). Transfer the result only via authorized private storage; the repository is public, so neither this script nor the review manifest publishes the audio archive.

@@ -114,5 +114,48 @@ int main(){
         check(base==sound({80,0,false})&&base!=sound({30,0,false})&&base!=sound({80,.35f,false})&&
               base!=sound({80,0,true}),"grain length, normalized position and reverse each alter deterministic audio");
     }
+    {
+        // Admit one grain at pitch 1, then sweep the programmed pitch before
+        // the next admission. Its exact reverse readout must still follow
+        // the original step, even through repeated odd-length wraps.
+        sample::Store store;auto engine=std::make_unique<NoiseRiser>();
+        const std::vector<float> ring{.1f,-.2f,.3f,-.4f,.2f,-.1f,.4f};
+        check(store.publish(ring,24000)&&engine->attachSampleStore(&store),"reverse pitch fixture source");
+        for(double rate:{44100.,48000.,96000.}){
+            auto shape=program;shape.mode=PlayMode::gate;shape.layers[0].grains={80,0,true};
+            auto swept=shape;swept.layers[0].pitchCurve.nodes[1].value=1.f;
+            const auto render=[&](const NoiseProgram& graph){
+                engine->prepare(rate);engine->setProgram(graph);
+                check(engine->noteOn(1,60,1,.05,true),"reverse grain at new host rate");
+                std::vector<float> l(static_cast<std::size_t>(rate*.05)),r(l.size());
+                // Exercise changing callback partitions, rather than only a single block.
+                for(int at=0;at<static_cast<int>(l.size());){const auto n=std::min(127,static_cast<int>(l.size())-at);
+                    engine->render(l.data()+at,r.data()+at,n);at+=n;}
+                return l;
+            };
+            const auto flat=render(shape), varying=render(swept);
+            const auto first=static_cast<int>(rate*.025),length=static_cast<int>(rate*.08);
+            check(std::equal(flat.begin(),flat.begin()+first,varying.begin())&&flat!=varying,
+                  "within-grain pitch is fixed; next admitted grain takes the changed trajectory");
+            double maxError=0;
+            for(int i=0;i<first;++i){
+                // Independent modulo reference from an unwrapped signed position.
+                const double travel=-i*24000./rate, floor=std::floor(travel);
+                const auto wrap=[&](long long j){return static_cast<std::size_t>((j%7+7)%7);};
+                const auto at=wrap(static_cast<long long>(floor)),next=(at+1)%ring.size();
+                const double x=ring[at]+(travel-floor)*(ring[next]-ring[at]);
+                const double w=static_cast<double>(i)*1024/(length-1), base=std::floor(w);
+                const auto hann=[](double j){return .5-.5*std::cos(6.283185307179586*j/1024);};
+                const double window=hann(base)+(w-base)*(hann(base+1)-hann(base));
+                const double want=x*window*.35*std::min(1.,i/(rate*.01))*.055;
+                maxError=std::max(maxError,std::abs(flat[i]-want));
+            }
+            check(maxError<2e-8,"reverse short-ring audio agrees with independent modulo/interpolation reference");
+            shape.layers[0].grains.position=-1;
+            const auto scattered=render(shape);
+            check(scattered==render(shape)&&scattered!=flat&&std::all_of(scattered.begin(),scattered.end(),[](float x){return std::isfinite(x);}),
+                  "seeded scatter remains repeatable, non-fixed and finite after host-rate reset");
+        }
+    }
     std::printf("FX sample granular ownership: %d failure(s)\n",fails);return fails?1:0;
 }

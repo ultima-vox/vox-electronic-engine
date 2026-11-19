@@ -9,6 +9,11 @@ LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor
     enabled_.setTitle("Enable layer " + juce::String(index + 1));
     enabled_.onClick = [this] { processor_.editLayer(static_cast<std::size_t>(index_), [this](NoiseLayer& l){ l.enabled=enabled_.getToggleState(); }); };
     addAndMakeVisible(enabled_);
+    solo_.setClickingTogglesState(true);
+    solo_.setTitle("Monitor solo layer " + juce::String(index+1));
+    solo_.setTooltip("Monitor selected layers together. Does not enable muted layers, change the Program or affect offline export.");
+    solo_.onClick=[this]{processor_.toggleLayerSolo(static_cast<std::size_t>(index_));};
+    addAndMakeVisible(solo_);
     const char* names[]{"Noise Riser", "Downlifter", "Shepard", "Impact", "Whoosh", "Laser", "Squelch", "Metallic", "Texture", "Formant", "Glitch", "Granular"};
     for(int i=0;i<12;++i) family_.addItem(names[i],i+1);
     family_.setTitle("Layer " + juce::String(index + 1) + " family");
@@ -37,6 +42,7 @@ LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor
 }
 void LayerPanel::refresh(const NoiseLayer& layer) {
     enabled_.setToggleState(layer.enabled,juce::dontSendNotification);
+    solo_.setToggleState((processor_.layerSoloMask()&(1u<<index_))!=0,juce::dontSendNotification);
     family_.setSelectedId(static_cast<int>(layer.family)+1,juce::dontSendNotification);
     gain_.getSlider().setValue(layer.gain,juce::dontSendNotification);
     pan_.getSlider().setValue(layer.pan,juce::dontSendNotification);
@@ -56,11 +62,12 @@ void LayerPanel::paint(juce::Graphics& g) {
 void LayerPanel::resized() {
     auto area=getLocalBounds().reduced(10);
     auto header=area.removeFromTop(25);enabled_.setBounds(header.removeFromRight(48));
-    curveType_.setBounds(header.removeFromRight(112).reduced(1));
+    solo_.setBounds(header.removeFromRight(48).reduced(1,0));
     area.removeFromTop(4);family_.setBounds(area.removeFromTop(30));area.removeFromTop(8);
     auto knobs=area.removeFromTop(85);const int width=knobs.getWidth()/4;
     gain_.setBounds(knobs.removeFromLeft(width));pan_.setBounds(knobs.removeFromLeft(width));
     offset_.setBounds(knobs.removeFromLeft(width));span_.setBounds(knobs);
+    curveType_.setBounds(area.removeFromTop(25).reduced(1));
     curve_.setBounds(area);
 }
 } // namespace vox::fx

@@ -104,10 +104,10 @@ public:
         commit(next,encoded,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_);return true;
     }
     std::uint64_t programRevision() const noexcept { return programRevision_.load(std::memory_order_acquire); }
-    struct VersionedProgram { NoiseProgram program;std::uint64_t revision; };
+    struct VersionedProgram { NoiseProgram program;std::uint64_t revision,publication; };
     VersionedProgram versionedProgram() const {
         const std::lock_guard<std::mutex> lock(mutex_);
-        return {desired_,programRevision_.load(std::memory_order_relaxed)};
+        return {desired_,programRevision_.load(std::memory_order_relaxed),sequence_.load()};
     }
     // Serialized whole-program edit. A false return aborts without publication;
     // callers must not recursively enter this store from the editor function.

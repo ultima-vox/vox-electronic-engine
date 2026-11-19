@@ -67,6 +67,14 @@ public:
         previewBus_.stop();auditionRequest_.store(AuditionRequest::stop,std::memory_order_release);
     }
     void panic() noexcept { previewBus_.stop();panicPending_.store (true, std::memory_order_release); }
+    // Transient monitor state; never encoded into presets or host sessions.
+    unsigned layerSoloMask() const noexcept { return layerSoloMask_.load(std::memory_order_relaxed); }
+    void toggleLayerSolo(std::size_t index) noexcept {
+        if(index<4)layerSoloMask_.fetch_xor(1u<<index,std::memory_order_relaxed);
+    }
+    // No extrapolation: sample the last rendered curve position from audio.
+    // Returns null for stale graph, stopped voice, or inactive layer window.
+    std::optional<float> curvePlayhead(std::uint64_t publication,std::optional<std::size_t> layer={}) const noexcept;
     struct OutputPeaks { float left, right; };
     OutputPeaks outputPeaks() const noexcept {
         const auto packed=peaks_.load(std::memory_order_relaxed);
@@ -161,6 +169,7 @@ protected:
     bool isProductSection (preset::Tag tag) const override { return tag == compare::sectionTag || tag == fxSampleSectionTag || tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
 
 private:
+    void publishPlayhead(bool rendered) noexcept;
     void publishTelemetry(bool clipped) noexcept {
         const auto value=engine_.activeEventCount()|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u);
         telemetry_.store(value,std::memory_order_relaxed);
@@ -218,6 +227,9 @@ private:
     std::atomic<bool> panicPending_ { false };
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
     std::atomic<std::uint64_t> peaks_ { 0 };
+    std::atomic<unsigned> layerSoloMask_{0};
+    // Single writer (audio or stopped host lifecycle) with bounded reader.
+    std::atomic<std::uint64_t> cursorSequence_{0},cursorGraph_{0},cursorPhases_{0};
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
     std::atomic<std::uint32_t> telemetry_ { 0 }, droppedEvents_ { 0 };
     std::atomic<bool> clipLatched_ { false }, patternUnavailable_ { false };

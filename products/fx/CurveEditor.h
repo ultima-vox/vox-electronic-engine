@@ -22,6 +22,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;
     bool keyPressed(const juce::KeyPress&) override;
     void refresh();
+    std::optional<float> visiblePlayhead() const noexcept { return playhead_; }
     bool resetCurve();
     bool setCurve(const timeline::Curve&); // one undoable structural edit
     bool undo();
@@ -40,6 +41,7 @@ private:
     FxProcessor& processor_;
     CurveTarget target_;
     timeline::Curve shown_;
+    std::optional<float> playhead_;
     timeline::Curve beforeDrag_;
     juce::UndoManager undo_;
     int selected_ = -1;

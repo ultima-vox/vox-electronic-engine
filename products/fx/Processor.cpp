@@ -288,6 +288,32 @@ effects::Settings FxProcessor::effect (std::size_t index) const
     return settings;
 }
 
+std::optional<float> FxProcessor::curvePlayhead(std::uint64_t publication,std::optional<std::size_t> layer) const noexcept {
+    if(layer&&*layer>=4)return {};
+    const auto before=cursorSequence_.load();
+    if(before&1u)return {};
+    const auto graph=cursorGraph_.load();
+    const auto phases=cursorPhases_.load();
+    if(before!=cursorSequence_.load()||graph!=publication)return {};
+    const auto encoded=(phases>>(layer?12*(*layer+1):0))&4095u;
+    if(encoded==0)return {};
+    return static_cast<float>(encoded-1)/4094.f;
+}
+
+void FxProcessor::publishPlayhead(bool rendered) noexcept {
+    std::uint64_t phases=0;
+    if(rendered){
+        const auto positions=engine_.playhead(programSequence_);
+        for(std::size_t i=0;i<positions.size();++i)if(positions[i]>=0){
+            const auto encoded=1+static_cast<std::uint64_t>(std::clamp(positions[i],0.f,1.f)*4094.f+.5f);
+            phases|=encoded<<(12*i);
+        }
+    }
+    cursorSequence_.fetch_add(1);
+    cursorGraph_.store(programSequence_);cursorPhases_.store(phases);
+    cursorSequence_.fetch_add(1);
+}
+
 void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
@@ -295,7 +321,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     engine_.prepare (rate);capturedTempo_.store(120.0,std::memory_order_relaxed);
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     (void) macroRuntime_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
-    programSequence_ = 0; audioEffects_ = effects::defaults();
+    programSequence_ = 0;publishPlayhead(false);audioEffects_ = effects::defaults();
     audioBases_=readCallbackBases();audioEpoch_=controllerEpoch_.load(std::memory_order_acquire);
     retiredEpoch_=retireAtEpoch_.load(std::memory_order_acquire);
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
@@ -311,7 +337,7 @@ void FxProcessor::releaseResources() {
     previewBus_.prepare(preparedSampleRate());
     engine_.prepare (preparedSampleRate());
     telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);
-    peaks_.store(0,std::memory_order_relaxed);
+    peaks_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);publishPlayhead(false);
 }
 void FxProcessor::reset() { panic(); }
 juce::AudioProcessorEditor* FxProcessor::createEditor()
@@ -328,6 +354,7 @@ juce::AudioProcessorEditor* FxProcessor::createEditor()
 void FxProcessor::retireOnPublication() noexcept {
     // Attach retirement to adoption of the complete new state, not to a
     // generic Panic exchange which the preceding callback could consume.
+    layerSoloMask_.store(0,std::memory_order_relaxed);
     retireAtEpoch_.store(controllerEpoch_.load(std::memory_order_relaxed)+1,std::memory_order_release);
     previewBus_.stop();
 }
@@ -403,7 +430,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
                     audioPattern_=pendingGraph_.pattern;(void)pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
                 }
                 audioMacroConfig_=pendingGraph_.macros;programSequence_=nextSequence;audioEpoch_=epoch;
-                (void)engine_.setProgram(audioProgram_);
+                (void)engine_.setProgram(audioProgram_,programSequence_);
                 (void)macroRuntime_.setConfig(audioMacroConfig_);(void)engine_.setVoiceMotion(audioMacroConfig_);
             }
             admit=audioEpoch_==epoch;
@@ -430,13 +457,15 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const auto audition=admit?auditionRequest_.exchange(AuditionRequest::none,std::memory_order_acquire):AuditionRequest::none;
     if(audition==AuditionRequest::stop)engine_.stopPreview();
     if(audition==AuditionRequest::start)engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
+    const bool offlineBounce=isNonRealtime();
+    engine_.setLayerSoloMask(offlineBounce?0:layerSoloMask(),offlineBounce);
     const int size = buffer.getNumSamples();
     const bool wantsPattern=audioBases_.pattern||audioProgram_.mode==PlayMode::sequence;
     bool patternUnavailable=wantsPattern&&!patternHostReady;
     patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
-        peaks_.store(0,std::memory_order_relaxed);publishTelemetry(false);
+        peaks_.store(0,std::memory_order_relaxed);publishTelemetry(false);publishPlayhead(false);
         return;
     }
     auto* left = buffer.getWritePointer (0);
@@ -490,13 +519,13 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const auto target = audioBases_.output;
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
     macro::renderPost(effects_,macroRuntime_,left,right,static_cast<std::size_t>(size),macroValues,[&]{return outputSmoothing_.getNextValue();});
-    if(isNonRealtime())previewBus_.discardOnAudioThread();
+    if(offlineBounce)previewBus_.discardOnAudioThread();
     else previewBus_.mix(left,right,size);
     float peakL=0,peakR=0;
     for(int i=0;i<size;++i){peakL=std::max(peakL,std::abs(left[i]));peakR=std::max(peakR,std::abs(right[i]));}
     peaks_.store(std::bit_cast<std::uint32_t>(peakL)|(std::uint64_t{std::bit_cast<std::uint32_t>(peakR)}<<32),std::memory_order_relaxed);
     const bool clip=peakL>=1.f||peakR>=1.f;
-    publishTelemetry(clip);
+    publishTelemetry(clip);publishPlayhead(!offlineBounce);
     if(clip)clipLatched_.store(true,std::memory_order_relaxed);
 }
 
