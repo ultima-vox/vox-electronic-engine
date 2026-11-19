@@ -37,8 +37,8 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     for(int i=0;i<4;++i)lockLayer_.addItem("Layer " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)),i+1);
     lockLayer_.setSelectedId(1,juce::dontSendNotification);lockLayer_.setTitle("Layer for generator locks");
     lockLayer_.onChange=[this]{timerCallback();};addAndMakeVisible(lockLayer_);
-    const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env"};
-    const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve};
+    const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env","Pitch env","Cutoff env"};
+    const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve};
     for(std::size_t i=0;i<fieldLocks_.size();++i){
         auto& button=fieldLocks_[i];button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
         button.setTooltip("Preserve this field during Generate and Mutate");
@@ -62,7 +62,7 @@ void GeneratorPanel::resized() {
     auto locks=area.removeFromTop(27);lockLayer_.setBounds(locks.removeFromLeft(100));
     const auto width=locks.getWidth()/4;for(std::size_t i=0;i<4;++i)fieldLocks_[i].setBounds(locks.removeFromLeft(width));
     auto second=area.removeFromTop(27);second.removeFromLeft(100);
-    const auto secondWidth=second.getWidth()/3;for(std::size_t i=4;i<7;++i)fieldLocks_[i].setBounds(second.removeFromLeft(secondWidth));
+    const auto secondWidth=second.getWidth()/5;for(std::size_t i=4;i<fieldLocks_.size();++i)fieldLocks_[i].setBounds(second.removeFromLeft(secondWidth));
 }
 void GeneratorPanel::timerCallback() {
     if(!isShowing())return;
@@ -73,7 +73,7 @@ void GeneratorPanel::timerCallback() {
     sync(intensity_,state.intensity);sync(energy_,state.energy);sync(stereo_,state.stereo);
     const int layer=lockLayer_.getSelectedId()-1;
     if(layer>=0&&layer<4){const auto mask=state.locks.layers[static_cast<std::size_t>(layer)];
-        const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve};
+        const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve};
         for(std::size_t i=0;i<fieldLocks_.size();++i)fieldLocks_[i].setToggleState((mask&bits[i])!=0,juce::dontSendNotification);}
 }
 ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor, std::nullopt) {
@@ -128,6 +128,52 @@ void ProgramCurvePanel::resized() {
     reset_.setBounds(header.removeFromLeft(100).reduced(2));
     hint_.setBounds(area.removeFromBottom(22));
     editor_.setBounds(area);
+}
+WavOptionsPanel::WavOptionsPanel() {
+    rate_.addItem("44.1 kHz",1); rate_.addItem("48 kHz",2); rate_.addItem("96 kHz",3);
+    format_.addItem("24-bit PCM",1); format_.addItem("32-bit float",2);
+    rate_.setSelectedId(2,juce::dontSendNotification); format_.setSelectedId(1,juce::dontSendNotification);
+    const char* names[]{"Sample rate", "Format", "Audition MIDI note", "Audition velocity"};
+    std::array<juce::Component*,4> controls {&rate_, &format_, &note_, &velocity_};
+    for (std::size_t i=0; i<controls.size(); ++i) {
+        controls[i]->setTitle(names[i]);
+        labels_[i].setText(names[i],juce::dontSendNotification);
+        addAndMakeVisible(labels_[i]); addAndMakeVisible(*controls[i]);
+    }
+    for (auto* slider : { &note_, &velocity_ }) {
+        slider->setSliderStyle(juce::Slider::LinearHorizontal);
+        slider->setTextBoxStyle(juce::Slider::TextBoxRight,false,56,24);
+    }
+    note_.setRange(0,127,1); note_.setValue(60,juce::dontSendNotification);
+    velocity_.setRange(1,127,1); velocity_.setValue(127,juce::dontSendNotification);
+    note_.setTooltip("MIDI note number; Sequence uses its own pattern notes");
+    velocity_.setTooltip("MIDI velocity; Sequence uses its own pattern velocities");
+    close_.onClick=[this]{setVisible(false);};
+    save_.onClick=[this]{setVisible(false);if(onSave)onSave(settings());};
+    addAndMakeVisible(close_); addAndMakeVisible(save_);
+}
+offline::Settings WavOptionsPanel::settings() const {
+    offline::Settings result;
+    result.sampleRate=rate_.getSelectedId()==1?44100u:rate_.getSelectedId()==3?96000u:48000u;
+    result.format=format_.getSelectedId()==2?offline::WavFormat::float32:offline::WavFormat::pcm24;
+    result.note=static_cast<int>(note_.getValue()); result.velocity=static_cast<float>(velocity_.getValue()/127.0);
+    return result;
+}
+void WavOptionsPanel::paint(juce::Graphics& g) {
+    namespace c = vox::ui::tokens::colour;
+    const auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+    g.setColour(c::panelRaised); g.fillRoundedRectangle(bounds,7.0f);
+    g.setColour(c::border); g.drawRoundedRectangle(bounds,7.0f,1.0f);
+    auto text=getLocalBounds().reduced(14);
+    g.setColour(c::text); g.setFont(vox::ui::typography::controlLabel());
+    g.drawText("WAV EXPORT / STEREO",text.removeFromTop(22),juce::Justification::centredLeft);
+    g.drawText("One sound pass, or one Sequence cycle with its notes and velocities.",text.removeFromTop(22),juce::Justification::centredLeft);
+}
+void WavOptionsPanel::resized() {
+    auto area=getLocalBounds().reduced(14); area.removeFromTop(48);
+    std::array<juce::Component*,4> controls {&rate_, &format_, &note_, &velocity_};
+    for(std::size_t i=0;i<controls.size();++i){auto row=area.removeFromTop(29);labels_[i].setBounds(row.removeFromLeft(143));controls[i]->setBounds(row.reduced(2));}
+    auto footer=area.removeFromBottom(30); save_.setBounds(footer.removeFromRight(130).reduced(2));close_.setBounds(footer.removeFromRight(80).reduced(2));
 }
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
@@ -237,9 +283,11 @@ FxPanel::FxPanel (FxProcessor& processor)
     midiExport_.setTitle("Export trigger pattern MIDI");
     midiExport_.setTooltip("Export one 4/4 pattern loop at the latest host tempo (120 BPM if unavailable); trigger notes, not audio");
     midiExport_.onClick=[this]{exportPattern();};addAndMakeVisible(midiExport_);
-    wavExport_.setTitle("Export one audition as WAV");
-    wavExport_.setTooltip("Export C4 at velocity 100%, 48 kHz, 24-bit WAV; click again to cancel rendering");
-    wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel();else exportWav();};
+    wavExport_.setTitle("Export WAV");
+    wavExport_.setTooltip("Choose stereo WAV options; click during rendering to cancel");
+    wavOptions_.onSave=[this](offline::Settings settings){exportWav(settings);};
+    addChildComponent(wavOptions_);
+    wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
     addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger the current program");
     panic_.setTooltip ("Fade all active events");
@@ -255,7 +303,7 @@ FxPanel::FxPanel (FxProcessor& processor)
         (void)processor_.editGeneratorState([seed](generator::ControllerState& state){state.seed=seed;});};
     addAndMakeVisible (seed_);
     generate_.setTooltip ("Generate four layers for the selected family and seed; host duration is unchanged");
-    mutate_.setTooltip ("Mutate layer gains, pans and gain curves using the seed");
+    mutate_.setTooltip ("Mutate unlocked layer gain, pan and trajectories using the seed");
     generate_.onClick = [this] {
         const auto controls=processor_.generatorState();
         (void) processor_.generateProgram (controls.settings(processor_.family()), controls.locks);
@@ -487,7 +535,8 @@ void FxPanel::resized()
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(247);
     row.removeFromBottom(120);
-    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(480,280));
+    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(600,280));
+    wavOptions_.setBounds(getLocalBounds().withSizeKeepingCentre(470,232));
     programCurves_.setBounds(row.reduced(3));
     const int width = row.getWidth() / 4;
     for (std::size_t i=0; i<layers_.size(); ++i) {
@@ -497,16 +546,20 @@ void FxPanel::resized()
 }
 void FxPanel::importSample()
 {
-    sampleChooser_=std::make_unique<juce::FileChooser>("Choose a licensed WAV sample",juce::File{},"*.wav");
+    const auto state=processor_.sampleSnapshot();
+    const bool relink=state.reference.kind==sample::Reference::Kind::external &&
+        (state.status==sample::Controller::Status::missing || state.status==sample::Controller::Status::failed);
+    sampleChooser_=std::make_unique<juce::FileChooser>(relink?"Relink the original WAV (SHA-256 must match)":"Choose a licensed WAV sample",juce::File{},"*.wav");
     sampleImport_.setEnabled(false);
     sampleChooser_->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-        [safe=juce::Component::SafePointer<FxPanel>(this)](const juce::FileChooser& chooser){
+        [safe=juce::Component::SafePointer<FxPanel>(this),relink,reference=state.reference](const juce::FileChooser& chooser){
             if(safe==nullptr)return;
             safe->sampleImport_.setEnabled(true);
             const auto file=chooser.getResult();if(file==juce::File{})return;
-            if(!safe->processor_.importSample(file))
+            const bool queued=relink?safe->processor_.relinkSample(file,reference):safe->processor_.importSample(file);
+            if(!queued)
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                    "Sample import failed","The selected path is invalid or the import could not be queued.");
+                    "Sample request failed","The selected path is invalid or the sample selection changed while the chooser was open.");
         });
 }
 void FxPanel::exportPattern()
@@ -543,27 +596,32 @@ void FxPanel::exportPattern()
                 success?("Trigger pattern exported at " + juce::String(bpm,2) + " BPM."):juce::String("Could not write the trigger pattern."));
         });
 }
-void FxPanel::exportWav()
+void FxPanel::exportWav(offline::Settings settings)
 {
     // Capture a self-contained value while the processor is alive. The worker
     // never references the processor or editor and cannot touch the callback.
-    offline::Settings settings;settings.sampleRate=48000;settings.note=60;settings.velocity=1;
-    settings.format=offline::WavFormat::pcm24;
     std::shared_ptr<offline::Capture> capture;
     try { capture=std::make_shared<offline::Capture>(processor_.captureProgramWav(settings)); }
     catch(...) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","Could not capture the sound for export.");return;
     }
-    if (offline::frameCount(capture->program, capture->settings) == 0) {
+    if (offline::frameCount(capture->program, capture->settings, &capture->pattern) == 0) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed", "This audition exceeds the 128 MiB WAV audio limit or has invalid settings.");return;
+    }
+    if (capture->program.mode==PlayMode::sequence) {
+        pattern::FixedSchedule schedule;
+        if (!pattern::scheduleFixed(capture->pattern,schedule) || schedule.count==0) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "WAV export failed", "The captured Sequence has no playable triggers.");return;
+        }
     }
     if(capture->useUserSample && capture->sample.empty()) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","The selected granular sample is unavailable. Reimport it or choose the built-in source.");return;
     }
-    exportChooser_=std::make_unique<juce::FileChooser>("Export one audition as WAV",
+    exportChooser_=std::make_unique<juce::FileChooser>("Export VOX FX stereo WAV",
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.wav"),"*.wav");
     midiExport_.setEnabled(false);wavExport_.setEnabled(false);
     exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
@@ -636,7 +694,7 @@ void FxPanel::timerCallback()
             wavJob_.reset();wavExport_.setButtonText("WAV");
             if(result!=fileexport::Result::cancelled)juce::AlertWindow::showMessageBoxAsync(result==fileexport::Result::success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
                 result==fileexport::Result::success?"WAV exported":"WAV export failed",
-                result==fileexport::Result::success?"The captured sound was exported at 48 kHz, 24-bit.":"Could not render or write the WAV file.");
+                result==fileexport::Result::success?"The captured audio was exported using the selected WAV settings.":"Could not render or write the WAV file.");
         }else {
             const int percent=static_cast<int>(wavJob_->progress()*100);
             wavExport_.setButtonText(wavJob_->cancelled()?"...":juce::String(percent)+"%");
@@ -648,8 +706,11 @@ void FxPanel::timerCallback()
     const char* text=sample.status==Status::builtin?"Built-in":sample.status==Status::loading?"Loading":
                      sample.status==Status::ready?"Ready":sample.status==Status::missing?"Missing":"Failed";
     sampleStatus_.setText(text,juce::dontSendNotification);
+    const bool canRelink=sample.reference.kind==sample::Reference::Kind::external && (sample.status==Status::missing || sample.status==Status::failed);
+    sampleImport_.setButtonText(canRelink?"Relink":"Import");
+    sampleImport_.setTooltip(canRelink?"Locate the original sample; SHA-256 must match":"Import a licensed mono or stereo WAV sample");
     juce::String detail=sample.reference.path.empty()?juce::String("Built-in source"):juce::String::fromUTF8(sample.reference.path.c_str());
-    if(sample.status==Status::failed)detail="Import failed; reverted to: "+detail;
+    if(sample.status==Status::failed)detail="Import or relink failed; retained: "+detail;
     if(sample.reference.kind==sample::Reference::Kind::pending&&sample.status==Status::missing)
         detail="Unverified import; reimport the WAV: "+detail;
     sampleStatus_.setTooltip(detail);

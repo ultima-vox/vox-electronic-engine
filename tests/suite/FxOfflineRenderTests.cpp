@@ -125,6 +125,37 @@ int main(){
         const auto saved=wav;tempoSettings.tempo=0;
         check(!vox::fx::offline::renderWav(glitch,tempoSettings,wav)&&wav==saved,"invalid captured tempo rejected transactionally");
     }
+    {
+        using namespace vox::fx;
+        offline::Capture sequence;sequence.program.mode=PlayMode::sequence;
+        sequence.program.layers[0].family=NoiseFamily::laser;
+        sequence.settings.sampleRate=8000;sequence.settings.tempo=120;sequence.settings.duration=.05f;
+        sequence.settings.format=offline::WavFormat::float32;
+        sequence.pattern.swing=.5f;
+        auto& first=sequence.pattern.steps[1];first.enabled=true;first.note=71;first.velocity=78;first.ratchets=2;
+        auto& last=sequence.pattern.steps[15];last.enabled=true;last.note=53;last.velocity=111;
+        const auto sequenceFrames=offline::frameCount(sequence.program,sequence.settings,&sequence.pattern);
+        check(offline::renderWav(sequence,wav)&&wav.size()==56+sequenceFrames*8, "Sequence exports one cycle and bounded voice tail");
+        pattern::FixedSchedule schedule;check(pattern::scheduleFixed(sequence.pattern,schedule),"Sequence canonical schedule");
+        auto reference=std::make_unique<NoiseRiser>();reference->prepare(8000);reference->setTempo(120);reference->setProgram(sequence.program);
+        std::vector<float> expectedL(sequenceFrames),expectedR(sequenceFrames);
+        std::uint64_t cursor=0;
+        for(std::size_t i=0;i<schedule.count;++i){
+            const auto& event=schedule.events[i];if(!event.on)continue;
+            std::uint64_t at=0;pattern::tickToSample(event.tick,120,8000,at);
+            reference->render(expectedL.data()+cursor,expectedR.data()+cursor,static_cast<int>(at-cursor));cursor=at;
+            reference->noteOn(1,event.note,event.velocity/127.0f,sequence.settings.duration,false,0,TriggerSource::pattern);
+        }
+        reference->render(expectedL.data()+cursor,expectedR.data()+cursor,static_cast<int>(sequenceFrames-cursor));
+        bool parity=wav.size()==56+sequenceFrames*8;
+        for(std::size_t i=0;parity&&i<expectedL.size();++i)parity=std::bit_cast<float>(word(56+i*8))==expectedL[i];
+        check(parity && std::any_of(expectedL.begin(),expectedL.end(),[](float x){return std::abs(x)>.0001f;}),
+              "Sequence WAV is sample-identical to canonical MIDI triggers with swing, ratchets and no second cycle");
+        const auto saved=wav;
+        sequence.pattern={};
+        check(!offline::renderWav(sequence,wav)&&wav==saved,"empty Sequence rejects without replacing destination");
+        check(!offline::renderWav(sequence.program,sequence.settings,wav)&&wav==saved,"Sequence requires its captured pattern");
+    }
     s.duration=33;const auto previous=wav;check(!vox::fx::offline::renderWav(program,s,wav)&&wav==previous,"invalid settings transactional");
     std::printf("FX offline WAV: %d failure(s)\n",fails);return fails?1:0;
 }

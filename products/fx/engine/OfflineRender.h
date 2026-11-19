@@ -2,6 +2,7 @@
 #include "NoiseRiser.h"
 #include "Effects.h"
 #include "MacroRouting.h"
+#include "Pattern.h"
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -35,16 +36,20 @@ struct Capture {
     bool useUserSample=false;
     std::uint32_t sampleRate=0;
     std::vector<float> sample; // immutable worker-owned copy, not a lease
+    pattern::Pattern pattern{};
 };
 inline void u16(std::vector<std::uint8_t>& out,std::uint16_t x){out.push_back(static_cast<std::uint8_t>(x));out.push_back(static_cast<std::uint8_t>(x>>8));}
 inline void u32(std::vector<std::uint8_t>& out,std::uint32_t x){for(int shift=0;shift<32;shift+=8)out.push_back(static_cast<std::uint8_t>(x>>shift));}
 inline void tag(std::vector<std::uint8_t>& out,const char* s){for(int i=0;i<4;++i)out.push_back(static_cast<std::uint8_t>(s[i]));}
-// A WAV exports one bounded audition of the current sound, not the trigger
-// pattern or host tempo map. Fixed tempo and PPQ zero define musical exports.
-// Bound the in-memory PCM payload before allocating it.
-inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& settings) noexcept {
+// Export one finite pass or one Sequence cycle. Fixed tempo/PPQ zero, never
+// a recorded host tempo map. Sequence lets its last admitted voice finish.
+inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& settings,
+                                const pattern::Pattern* sequence = nullptr) noexcept {
     if (!program.valid() || !settings.valid()) return 0;
-    const double duration = program.bars ? program.bars * 240.0 / settings.tempo : settings.duration;
+    if (program.mode == PlayMode::sequence && (!sequence || !sequence->valid() || settings.tempo < 10)) return 0;
+    const double event = program.bars ? program.bars * 240.0 / settings.tempo : settings.duration;
+    const double cycle = program.mode == PlayMode::sequence ? sequence->bars * 240.0 / settings.tempo : 0;
+    const double duration = event + cycle;
     bool shortTail = false;
     double serialTail = 0;
     for (const auto& effect : settings.effects) {
@@ -67,7 +72,8 @@ inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& set
 // non-finite DSP leave the old bytes unchanged.
 inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
                           const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture) {
-    const auto frames = frameCount(program, settings);
+    const auto* sequence = program.mode == PlayMode::sequence && capture ? &capture->pattern : nullptr;
+    const auto frames = frameCount(program, settings, sequence);
     if (frames == 0 || (cancel && cancel->load(std::memory_order_relaxed))) return false;
     const bool floating=settings.format==WavFormat::float32;
     const std::uint16_t bits=floating?32:24, bytesPerSample=bits/8, blockAlign=static_cast<std::uint16_t>(2*bytesPerSample);
@@ -82,6 +88,10 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
     sample::Store sampleStore; // outlives engine and its event leases
     auto engine=std::make_unique<NoiseRiser>();engine->prepare(settings.sampleRate);
     if(!engine->setTempo(settings.tempo))return false;
+    pattern::FixedSchedule schedule;
+    std::uint64_t cycleFrames = 0;
+    if (sequence && (!pattern::scheduleFixed(*sequence,schedule) || schedule.count == 0 ||
+        !pattern::tickToSample(sequence->bars*4u*pattern::ppq,settings.tempo,settings.sampleRate,cycleFrames))) return false;
     const auto grid = timeline::BarGrid::from(0, settings.tempo, settings.sampleRate);
     if (program.bars) {
         engine->setMusicalClockAvailable(true, settings.tempo);
@@ -89,7 +99,8 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
     }
     const bool useUser=capture&&capture->useUserSample;
     if(useUser && (!sampleStore.publish(capture->sample,capture->sampleRate)||!engine->attachSampleStore(&sampleStore)))return false;
-    if(!engine->setProgram(program)||!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser,0,TriggerSource::preview))return false;
+    if(!engine->setProgram(program))return false;
+    if(!sequence&&!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser,0,TriggerSource::preview))return false;
     effects::Chain chain;if(!chain.prepare(settings.sampleRate))return false;
     macro::Runtime macroRuntime;if(!macroRuntime.prepare(settings.sampleRate)||!macroRuntime.setConfig(settings.macroRoutes))return false;
     for(std::size_t i=0;i<settings.effects.size();++i)if(!chain.set(i,settings.effects[i]))return false;
@@ -98,7 +109,20 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
     for(std::uint32_t at=0;at<frames;){
         if(cancel&&cancel->load(std::memory_order_relaxed))return false;
         const auto count=std::min<std::uint32_t>(512,frames-at);
-        engine->render(left.data(),right.data(),static_cast<int>(count));
+        int cursor = 0;
+        const auto renderTo = [&](int end) noexcept {
+            if (end > cursor) engine->render(left.data()+cursor,right.data()+cursor,end-cursor);
+            cursor = end;
+        };
+        if (sequence && at < cycleFrames) {
+            const auto limit = static_cast<int>(std::min<std::uint64_t>(count,cycleFrames-at));
+            if (!pattern::forEachTrigger(schedule,sequence->bars,grid.at(at),settings.tempo,settings.sampleRate,limit,
+                [&](int offset,std::uint8_t note,std::uint8_t velocity) noexcept {
+                    renderTo(offset);
+                    (void)engine->noteOn(1,note,static_cast<float>(velocity)/127.0f,settings.duration,useUser,0,TriggerSource::pattern);
+                })) return false;
+        }
+        renderTo(static_cast<int>(count));
         chain.process(left.data(),right.data(),count);
         for(std::uint32_t i=0;i<count;++i){
           const auto gain=macroRuntime.processStereo(settings.gain,settings.macros);

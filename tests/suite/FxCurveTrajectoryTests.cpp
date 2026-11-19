@@ -1,4 +1,5 @@
 #include "engine/NoiseRiser.h"
+#include "engine/CurveEdit.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -46,5 +47,19 @@ int main() {
     riser.layers[0].cutoffCurve=vox::fx::timeline::Curve::constant(.15f);
     check(distance(defaultRiser,render(riser))>1.0,"layer cutoff trajectory alone alters the noise sweep");
     check(rms(moved.right)>rms(moved.left)*8,"global panorama trajectory moves output to the right");
+    {
+        using namespace vox::fx;
+        timeline::Curve original;
+        original.count=5;
+        original.nodes={{{0,.2f},{.25f,.2f},{.5f,.3f},{.75f,.5f},{1,.8f}}};
+        timeline::Curve edited;
+        const auto selection=curveedit::bit(0)|curveedit::bit(1)|curveedit::bit(2);
+        check(curveedit::move(original,selection,.9f,.1f,edited)&&edited.valid(),"group motion clamps at unselected neighbor");
+        check(edited.nodes[0].time==0&&edited.nodes[3].time==.75f&&edited.nodes[2].time<.75f&&
+              std::abs(edited.nodes[2].time-edited.nodes[1].time-.25f)<1e-6f&&edited.nodes[0].value>.2f,
+              "group preserves spacing and pinned endpoints");
+        check(curveedit::erase(edited,selection,edited)&&edited.count==3&&edited.nodes[0].time==0&&edited.nodes[2].time==1,
+              "delete selected interior nodes without erasing endpoints");
+    }
     std::printf("FX curve trajectories: %d failure(s)\n",failures);return failures?1:0;
 }

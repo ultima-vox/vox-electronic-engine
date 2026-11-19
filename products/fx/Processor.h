@@ -91,6 +91,7 @@ public:
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
     // These operations lock or perform file I/O; never call from audio.
     bool importSample(const juce::File& path) { return samples_.import(path); }
+    bool relinkSample(const juce::File& path, const sample::Reference& expected) { return samples_.relink(path,expected); }
     bool useBuiltinSample() { return samples_.restore({}); }
     sample::Controller::Status sampleStatus() const { return samples_.status(); }
     sample::Controller::Snapshot sampleSnapshot() const { return samples_.snapshot(); }

@@ -33,5 +33,19 @@ int main(){
     }
     check(programs.size()==48,"factory structures unique");
     auto invalid=s;invalid.seconds=99;Result out=a;check(!generate(invalid,a,locks,out)&&out.seconds==a.seconds,"invalid request rejected");
+    {
+        Result designed;
+        designed.program.mode=PlayMode::transition;designed.program.bars=8;
+        designed.program.panoramaCurve=timeline::Curve::constant(.8f);
+        designed.program.layers[0].pitchCurve=timeline::Curve::constant(.9f);
+        designed.program.layers[0].cutoffCurve=timeline::Curve::constant(.2f);
+        Locks motionLocks;motionLocks.layers[0]=pitchCurve|cutoffCurve;
+        Result regenerated,mutated;
+        check(generate(s,designed,motionLocks,regenerated)&&mutate(regenerated,motionLocks,23,mutated),"generation and mutation with new trajectory locks");
+        check(mutated.program.mode==PlayMode::transition&&mutated.program.bars==8&&mutated.program.panoramaCurve.evaluate(.5f)==.8f,
+              "generation does not reset the authored Program timeline");
+        check(mutated.program.layers[0].pitchCurve.evaluate(.5f)==.9f&&mutated.program.layers[0].cutoffCurve.evaluate(.5f)==.2f,
+              "pitch and cutoff locks survive both operations");
+    }
     std::printf("FX generator: %d failure(s)\n",fails);return fails?1:0;
 }

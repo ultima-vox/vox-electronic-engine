@@ -1,5 +1,6 @@
 #pragma once
 #include "engine/CurveTarget.h"
+#include "engine/CurveEdit.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace vox::fx {
@@ -32,6 +33,9 @@ private:
     bool publish(const timeline::Curve&);
     bool applyEdit(const timeline::Curve&);
     void updateTitle();
+    void enterNodeValues();
+    bool copyCurve() const;
+    bool pasteCurve();
     void syncRestore();
     FxProcessor& processor_;
     CurveTarget target_;
@@ -39,6 +43,7 @@ private:
     timeline::Curve beforeDrag_;
     juce::UndoManager undo_;
     int selected_ = -1;
+    curveedit::Selection selection_ = 0;
     bool dragging_ = false;
     std::uint64_t restoreEpoch_ = 0;
 };

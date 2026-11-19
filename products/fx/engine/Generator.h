@@ -18,7 +18,7 @@ struct Settings {
             std::isfinite(stereo)&&stereo>=0&&stereo<=1&&std::isfinite(seconds)&&seconds>=0.05f&&seconds<=32;
     }
 };
-enum Field : std::uint32_t { family=1u, enabled=2u, timing=4u, gain=8u, pan=16u, gainCurve=32u, panCurve=64u, all=127u };
+enum Field : std::uint32_t { family=1u, enabled=2u, timing=4u, gain=8u, pan=16u, gainCurve=32u, panCurve=64u, pitchCurve=128u, cutoffCurve=256u, all=511u };
 struct Locks { std::array<std::uint32_t,4> layers{}; bool duration=false; };
 struct Result { NoiseProgram program; float seconds=4; };
 class Random {
@@ -36,14 +36,20 @@ inline void applyLocks(NoiseLayer& next,const NoiseLayer& old,std::uint32_t mask
     if(mask&pan)next.pan=old.pan;
     if(mask&gainCurve)next.gainCurve=old.gainCurve;
     if(mask&panCurve)next.panCurve=old.panCurve;
+    if(mask&pitchCurve)next.pitchCurve=old.pitchCurve;
+    if(mask&cutoffCurve)next.cutoffCurve=old.cutoffCurve;
 }
 inline bool generate(const Settings& settings,const Result& previous,const Locks& locks,Result& output) noexcept {
     if(!settings.valid() || !previous.program.valid() || !std::isfinite(previous.seconds) || previous.seconds<.05f || previous.seconds>32) return false;
     for(auto mask:locks.layers)if(mask & ~static_cast<std::uint32_t>(all))return false;
     Random rng(settings.seed ^ (0x85ebca6bu * static_cast<std::uint32_t>(settings.style+1)));
-    Result next;next.seconds=locks.duration?previous.seconds:settings.seconds;
+    // Generate shapes the layers; preserve the user-selected mode, bars and
+    // authored Program-wide curves instead of silently replacing the timeline.
+    Result next=previous;next.seconds=locks.duration?previous.seconds:settings.seconds;
+    Random motion(settings.seed ^ 0xbe31d295u);
     for(std::size_t i=0;i<next.program.layers.size();++i){
         auto& l=next.program.layers[i];
+        l={};
         l.enabled=static_cast<int>(i)<settings.complexity;
         l.family=static_cast<NoiseFamily>(i==0?settings.family:static_cast<int>(rng.next()%12));
         l.timing.offset=i==0?0.0f:rng.unit()*.35f;
@@ -54,7 +60,14 @@ inline bool generate(const Settings& settings,const Result& previous,const Locks
         l.gainCurve.nodes[0]={0.0f,.25f+.4f*settings.energy,timeline::Shape::smooth};
         l.gainCurve.nodes[1]={.3f+.4f*rng.unit(),.55f+.45f*rng.unit(),timeline::Shape::smooth};
         l.gainCurve.nodes[2]={1.0f,.3f+.6f*settings.energy,timeline::Shape::linear};
-        l.panCurve=timeline::Curve::constant(.5f);
+        l.panCurve.nodes[0].value=.5f+(motion.unit()-.5f)*settings.stereo*.4f;
+        l.panCurve.nodes[1].value=.5f-(l.panCurve.nodes[0].value-.5f);
+        l.cutoffCurve.nodes[0].value=.5f-(.05f+.2f*settings.energy)*motion.unit();
+        l.cutoffCurve.nodes[1].value=.5f+(.05f+.2f*settings.energy)*motion.unit();
+        if(l.family==NoiseFamily::laser || l.family==NoiseFamily::downlifter || l.family==NoiseFamily::squelch) {
+            l.pitchCurve.nodes[0].value=.5f+(.05f+.12f*settings.intensity)*motion.unit();
+            l.pitchCurve.nodes[1].value=.5f;
+        }
         applyLocks(l,previous.program.layers[i],locks.layers[i]);
     }
     if(!next.program.valid())return false;
@@ -68,8 +81,13 @@ inline bool mutate(const Result& input,const Locks& locks,std::uint32_t seed,Res
     for(std::size_t i=0;i<next.program.layers.size();++i){auto& l=next.program.layers[i];
         if(!(locks.layers[i]&gain))l.gain=std::clamp(l.gain+(rng.unit()-.5f)*.2f,0.0f,1.0f);
         if(!(locks.layers[i]&pan))l.pan=std::clamp(l.pan+(rng.unit()-.5f)*.25f,-1.0f,1.0f);
-        if(!(locks.layers[i]&gainCurve))for(std::size_t n=0;n<l.gainCurve.count;++n)
-            l.gainCurve.nodes[n].value=std::clamp(l.gainCurve.nodes[n].value+(rng.unit()-.5f)*.12f,0.0f,1.0f);
+        const auto mutateCurve=[&](timeline::Curve& curve,Field field,float depth){
+            if(locks.layers[i]&field)return;
+            for(std::size_t n=0;n<curve.count;++n)
+                curve.nodes[n].value=std::clamp(curve.nodes[n].value+(rng.unit()-.5f)*depth,0.0f,1.0f);
+        };
+        mutateCurve(l.gainCurve,gainCurve,.12f);mutateCurve(l.panCurve,panCurve,.10f);
+        mutateCurve(l.pitchCurve,pitchCurve,.07f);mutateCurve(l.cutoffCurve,cutoffCurve,.12f);
     }
     if(!next.program.valid())return false;
     output=next;

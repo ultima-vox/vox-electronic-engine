@@ -27,7 +27,7 @@ inline bool encode(const ControllerState& value,std::vector<std::byte>& output) 
     if(!value.valid())return false;
     std::vector<std::byte> next;next.reserve(44);
     auto put=[&](std::uint32_t word){for(int shift=0;shift<32;shift+=8)next.push_back(static_cast<std::byte>((word>>shift)&255));};
-    put(2);put(value.seed);for(auto mask:value.locks.layers)put(mask);
+    put(3);put(value.seed);for(auto mask:value.locks.layers)put(mask);
     put(static_cast<std::uint32_t>(value.style));put(static_cast<std::uint32_t>(value.complexity));
     put(std::bit_cast<std::uint32_t>(value.intensity));put(std::bit_cast<std::uint32_t>(value.energy));put(std::bit_cast<std::uint32_t>(value.stereo));
     output=std::move(next);return true;
@@ -36,9 +36,15 @@ inline bool decode(std::span<const std::byte> bytes,ControllerState& output) noe
     if(bytes.size()!=24&&bytes.size()!=44)return false;
     auto read=[&](std::size_t n){std::uint32_t v=0;for(unsigned i=0;i<4;++i)v|=std::to_integer<std::uint32_t>(bytes[n*4+i])<<(8*i);return v;};
     const auto version=read(0);
-    if((version!=1||bytes.size()!=24)&&(version!=2||bytes.size()!=44))return false;
-    ControllerState next;next.seed=read(1);for(std::size_t i=0;i<4;++i)next.locks.layers[i]=read(i+2);
-    if(version==2){
+    if ((version==1 && bytes.size()!=24) || ((version==2||version==3) && bytes.size()!=44) || version<1 || version>3) return false;
+    ControllerState next;next.seed=read(1);
+    constexpr std::uint32_t oldAll = 127u;
+    for(std::size_t i=0;i<4;++i) {
+        const auto mask=read(i+2);
+        if(version<3 && (mask & ~oldAll))return false;
+        next.locks.layers[i]=version<3 && mask==oldAll?all:mask;
+    }
+    if(version>=2){
         const auto style=read(6),complexity=read(7);
         if(style>=6||complexity<1||complexity>4)return false;
         next.style=static_cast<int>(style);next.complexity=static_cast<int>(complexity);

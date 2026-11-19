@@ -62,6 +62,29 @@ public:
         }
         condition_.notify_all();return true;
     }
+    // A relink is not an import: only a byte-identical asset may replace the
+    // saved path. Keep the original reference and generation usable until
+    // verification succeeds. The chooser's reference may have been replaced
+    // by a host restore while it was open.
+    bool relink(const juce::File& file, const Reference& expectedReference) {
+        if(expectedReference.kind!=Reference::Kind::external || !expectedReference.valid()) return false;
+        const auto path=file.getFullPathName();
+        if(path.isEmpty() || !juce::File::isAbsolutePath(path))return false;
+        Request next;
+        try {
+            Reference candidate{Reference::Kind::external,path.toRawUTF8(),expectedReference.sha256};
+            if(!candidate.valid())return false;
+            next={std::move(candidate.path),std::move(candidate.sha256),false,0,true};
+        } catch(...) {return false;}
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            if(stopping_||disabled_||importPending_||revision_==std::numeric_limits<std::uint64_t>::max()||
+               desired_.kind!=Reference::Kind::external||desired_.path!=expectedReference.path||
+               desired_.sha256!=expectedReference.sha256)return false;
+            next.revision=++revision_;request_=std::move(next);pending_=true;status_=Status::loading;
+        }
+        condition_.notify_all();return true;
+    }
     // Project restore publishes the external reference immediately as missing;
     // it becomes playable only after file hash verification. No fallback.
     bool restore(const Reference& reference) {
@@ -96,7 +119,7 @@ public:
         return condition_.wait_for(lock,timeout,[this]{return status_!=Status::loading || stopping_;});
     }
 private:
-    struct Request { std::string path,expected;bool importing=false;std::uint64_t revision=0; };
+    struct Request { std::string path,expected;bool importing=false;std::uint64_t revision=0;bool relinking=false; };
     void run() noexcept {
         for(;;){
             Request request;
@@ -112,7 +135,7 @@ private:
                 const bool loaded=juce::File::isAbsolutePath(path)&&loader_(juce::File(path),decoded);
                 const auto hash=loaded?decoded.sha256.toStdString():std::string{};
                 verified=loaded&&(request.importing||hash==request.expected);
-                if(verified&&request.importing)imported={Reference::Kind::external,request.path,hash};
+                if(verified&&(request.importing||request.relinking))imported={Reference::Kind::external,request.path,hash};
             } catch(...) {verified=false;}
             {
                 const std::lock_guard<std::mutex> lock(mutex_);
@@ -120,12 +143,12 @@ private:
                 if(disabled_||request.revision!=revision_)continue;
                 std::uint64_t token=0;
                 if(verified&&store_.publish(decoded.mono,decoded.rate,&token)){
-                    if(request.importing){desired_=std::move(imported);rollback_={};importPending_=false;}
+                    if(request.importing||request.relinking){desired_=std::move(imported);rollback_={};importPending_=false;}
                     selection_.store(token,std::memory_order_release);status_=Status::ready;
                 } else if(request.importing){
                     desired_=std::move(rollback_);selection_.store(rollbackSelection_,std::memory_order_release);
                     importPending_=false;status_=Status::failed;
-                } else status_=Status::missing;
+                } else status_=request.relinking?Status::failed:Status::missing;
             }
             condition_.notify_all();
         }

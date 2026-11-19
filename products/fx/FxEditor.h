@@ -25,7 +25,7 @@ private:
     void timerCallback() override;
     FxProcessor& processor_;
     juce::ComboBox style_,complexity_,lockLayer_;
-    std::array<juce::ToggleButton,7> fieldLocks_;
+    std::array<juce::ToggleButton,9> fieldLocks_;
     juce::Slider intensity_,energy_,stereo_;
     std::array<juce::Label,5> labels_;
     juce::TextButton close_ { "Close" };
@@ -47,6 +47,22 @@ private:
     vox::ui::VoxComboBox selector_;
     juce::TextButton undo_ { "Undo" }, redo_ { "Redo" }, reset_ { "Reset curve" };
     juce::Label hint_;
+};
+
+// One-shot, held auditions and one fixed-tempo Sequence cycle all use the
+// same worker. Options are editor-local, never DAW parameters.
+class WavOptionsPanel final : public juce::Component {
+public:
+    WavOptionsPanel();
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    offline::Settings settings() const;
+    std::function<void(offline::Settings)> onSave;
+private:
+    juce::ComboBox rate_, format_;
+    juce::Slider note_, velocity_;
+    std::array<juce::Label,4> labels_;
+    juce::TextButton close_{"Cancel"}, save_{"Choose file..."};
 };
 
 // An honest FX-01 panel: only controls with working processor bindings are
@@ -97,7 +113,7 @@ private:
     void timerCallback() override;
     void importSample();
     void exportPattern();
-    void exportWav();
+    void exportWav(offline::Settings);
     void refreshPattern();
     void refreshMacro();
     void refreshGenerator();
@@ -119,6 +135,7 @@ private:
     std::unique_ptr<GeneratorPanel> generatorPanel_;
     vox::ui::VoxButton midiExport_ { "MIDI" };
     vox::ui::VoxButton wavExport_ { "WAV" };
+    WavOptionsPanel wavOptions_;
     juce::TextButton sampleImport_ { "Import" },sampleBuiltin_ { "Built-in" };
     juce::Label sampleStatus_;
     std::unique_ptr<juce::FileChooser> sampleChooser_;

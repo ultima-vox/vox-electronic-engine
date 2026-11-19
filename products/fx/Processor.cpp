@@ -160,7 +160,7 @@ offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) con
         settings.effects[i]=effects::unpack(static_cast<std::uint16_t>(snapshot.effects>>(i*16)));
         settings.effects[i].wet=effectWet_[i]->get(); settings.effects[i].amount=effectAmount_[i]->get();
     }
-    offline::Capture capture;capture.program=snapshot.program;capture.settings=settings;
+    offline::Capture capture;capture.program=snapshot.program;capture.settings=settings;capture.pattern=snapshot.pattern;
     const auto generation=samples_.selection();
     const bool needsSample=std::any_of(capture.program.layers.begin(),capture.program.layers.end(),
         [](const auto& layer){return layer.enabled && layer.family==NoiseFamily::granular;});

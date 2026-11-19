@@ -56,6 +56,24 @@ int main(){
     check(controller.import(missing)&&controller.waitUntilSettled(std::chrono::seconds(5))&&
           controller.status()==Controller::Status::failed&&controller.reference()==ref&&controller.selection()==restoredToken,
           "failed import preserves previously selected content");
+    {
+        const auto copy=file.getNonexistentSibling(false);
+        const auto different=file.getSiblingFile(file.getFileNameWithoutExtension()+"-different.wav").getNonexistentSibling(false);
+        auto changed=wav;changed.back()^=1;
+        check(copy.replaceWithData(wav.data(),wav.size())&&different.replaceWithData(changed.data(),changed.size()),
+              "write relocated originals and valid different audio");
+        check(controller.relink(different,ref)&&controller.waitUntilSettled(std::chrono::seconds(5))&&
+              controller.status()==Controller::Status::failed&&controller.reference()==ref&&controller.selection()==restoredToken,
+              "relink rejects a valid WAV with the wrong digest without replacing a ready generation");
+        auto moved=ref;moved.path=missing.getFullPathName().toStdString();
+        check(controller.restore(moved)&&controller.waitUntilSettled(std::chrono::seconds(5))&&controller.selection()==1,
+              "original pathname missing");
+        check(!controller.relink(copy,ref),"a stale chooser cannot relink another reference");
+        check(controller.relink(copy,moved)&&controller.waitUntilSettled(std::chrono::seconds(5))&&controller.selection()>1&&
+              controller.reference().sha256==ref.sha256&&controller.reference().path==copy.getFullPathName().toStdString(),
+              "matching relocation publishes a new path and generation");
+        check(copy.deleteFile()&&different.deleteFile(),"remove relink fixtures");
+    }
     check(controller.restore(mismatch)&&controller.restore({})&&controller.waitUntilSettled(std::chrono::seconds(5))&&
           controller.reference().kind==Reference::Kind::builtin&&controller.selection()==0,"superseded worker cannot restore old reference");
     check(held.data()[0]==-1,"switching to built-in retains active lease");controller.store().release(held);

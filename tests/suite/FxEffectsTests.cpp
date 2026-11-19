@@ -20,6 +20,22 @@ int main(){
             check(diff>1,"effect alters signal");
         }
         {
+            Chain drive;check(drive.prepare(rate),"drive prepare");
+            for (std::size_t i=0;i<4;++i)drive.set(i,{Type::drive,1,1});
+            std::array<float,512> left{},right{};
+            double peak=0,change=0;
+            for(int block=0;block<16;++block){
+                left=original;right=original;drive.process(left.data(),right.data(),left.size());
+                if(block<8)continue;
+                for(std::size_t i=0;i<left.size();++i){peak=std::max(peak,std::abs(static_cast<double>(left[i])));change+=std::abs(left[i]-original[i]);}
+            }
+            check(peak>0.1&&peak<0.45&&change>1,"four Drive slots reshape an audible signal without saturating at full scale");
+            for (std::size_t i=0;i<4;++i)drive.set(i,{Type::drive,1,0});
+            for(int block=0;block<40;++block){left=original;right=original;drive.process(left.data(),right.data(),left.size());}
+            double error=0;for(std::size_t i=0;i<left.size();++i)error=std::max(error,std::abs(static_cast<double>(left[i]-original[i])));
+            check(error<1e-6,"zero Drive amount is unity after smoothing");
+        }
+        {
             Chain a,b;a.prepare(rate);b.prepare(rate);
             for(std::size_t i=0;i<4;++i){a.set(i,{static_cast<Type>(i+1),.5f,.8f});b.set(i,{static_cast<Type>(i+1),.5f,.8f});}
             std::array<float,512> la=original,ra=original,lb=original,rb=original;

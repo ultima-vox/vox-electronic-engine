@@ -323,6 +323,7 @@ set_tests_properties(suite_fx_program_store_tests PROPERTIES LABELS suite)
 
 # Timing output is diagnostic only, not a Windows performance gate.
 add_executable(suite_fx_callback_benchmark FxCallbackBenchmark.cpp)
+vox_suite_add_allocation_probe(suite_fx_callback_benchmark)
 target_include_directories(suite_fx_callback_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_callback_benchmark COMMAND suite_fx_callback_benchmark)
 set_tests_properties(suite_fx_callback_benchmark PROPERTIES LABELS suite)
@@ -459,3 +460,8 @@ add_executable(suite_fx_pattern_benchmark FxPatternBenchmark.cpp)
 target_include_directories(suite_fx_pattern_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_pattern_benchmark COMMAND suite_fx_pattern_benchmark)
 set_tests_properties(suite_fx_pattern_benchmark PROPERTIES LABELS suite)
+
+add_executable(suite_fx_factory_candidates_tests FxFactoryCandidatesTests.cpp)
+target_include_directories(suite_fx_factory_candidates_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_factory_candidates_tests COMMAND suite_fx_factory_candidates_tests)
+set_tests_properties(suite_fx_factory_candidates_tests PROPERTIES LABELS suite)

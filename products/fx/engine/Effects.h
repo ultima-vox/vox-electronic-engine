@@ -125,8 +125,15 @@ private:
             if(std::abs(state.lowR)<1.0e-15)state.lowR=0;
             l=state.lowL;r=state.lowR;break;
         }
-        case Type::drive: {const double gain=1+15*amount,normalizer=1.0/std::tanh(gain);
-            l=std::tanh(l*gain)*normalizer;r=std::tanh(r*gain)*normalizer;break;}
+        case Type::drive: {
+            // Gain-compensated parallel saturation. Unity at zero amount;
+            // increasing drive lowers the wet ceiling instead of driving
+            // every serial slot towards the same full-scale rail.
+            const double gain=1.0+7.0*amount;
+            const double level=1.0/std::sqrt(gain);
+            const auto shape=[=](double x){return x+amount*(std::tanh(x*gain)*level-x);};
+            l=shape(l);r=shape(r);break;
+        }
         case Type::wavefold: {
             const double gain=1+7*amount;
             auto fold=[gain](double x){x=std::clamp(x*gain,-8.0,8.0);return 2.0/std::acos(-1.0)*std::asin(std::sin(std::acos(-1.0)*x*.5));};
