@@ -1,0 +1,9 @@
+preset_id	revision	review_schema	dayphase	energy	license_review	arrangement_check
+voxfx.impact.slate-clutch	1	2	Night	Peak	Original synthesis, release approval pending	Hear the dry after-tick separately from the next bass transient.
+voxfx.riser.lantern-parallax	1	2	Twilight	Driving	Original synthesis, release approval pending	Use in a sparse D-minor break; compare to the keyless alternate on the same four-bar cue.
+voxfx.riser.vapour-splice	1	2	Twilight	Driving	Original synthesis, release approval pending	Use when an existing chord line supplies pitch; compare to the tonal alternate without changing the transition slot.
+voxfx.fall.chalk-eddy	1	2	Deep Night	Moderate	Original synthesis, release approval pending	Check the eight-bar grain return does not dominate the bass rhythm.
+voxfx.sweep.silt-compass	1	2	Sunrise	Soft	Original synthesis, release approval pending	Verify held procedural motion and NoteOff release beyond this finite reference.
+voxfx.zap.fraction-spark	1	2	Deep Night	Extreme	Original synthesis, release approval pending	Use short MIDI gates and listen for masking on the next subdivision.
+voxfx.rhythm.hex-repeater	1	2	Night	Driving	Original synthesis, release approval pending	Keep the second bar's first beat clear; verify the final ratchet can lead into the downbeat.
+voxfx.stinger.amber-branch	1	2	Day	Moderate	Original synthesis, release approval pending	Hear the late fifth without masking the phrase ending on tonic.

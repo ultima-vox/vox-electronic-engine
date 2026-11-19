@@ -1,7 +1,7 @@
 // Authoring tool for Wave B staging cues; not a factory installer.
 // Compile with pinned JUCE core/cryptography and vox_preset. See triage handoff.
 #include "content/ReviewWaveBAssets.h"
-#include "content/ReviewWaveBCounterpoints.h"
+#include "content/ReviewWaveBSignals.h"
 #include "engine/PortablePreset.h"
 #include "engine/SampleDecode.h"
 #include <filesystem>
@@ -35,7 +35,9 @@ std::string digest(const auto& bytes){return juce::SHA256(bytes.data(),bytes.siz
 }
 
 int main(int argc,char** argv){
-    const bool extended=argc==3&&std::string_view(argv[2])=="--counterpoints";
+    const auto mode=argc==3?std::string_view(argv[2]):std::string_view{};
+    const bool signals=mode=="--signals";
+    const bool extended=signals||mode=="--counterpoints";
     if(argc!=2&&!extended)return 1;
     const std::filesystem::path root(argv[1]);
     for(const auto* dir:{"solo","presets","sources"})std::filesystem::create_directories(root/dir);
@@ -111,13 +113,18 @@ int main(int argc,char** argv){
         sample::Reference source{sample::Reference::Kind::external,cue.sourceName,decoded.sha256.toStdString()};
         if(!audit(cue.sound.entry,"-",std::move(capture),source))return 4;
     }
-    const auto auditCue=[&](const b::PerformanceCue& cue){
+    const auto auditCue=[&](const b::PerformanceCue& cue,std::string_view pair="-"){
         const auto capture=b::makePreview(cue,48000);
-        if(capture.settings.macroRoutes.count==cue.routes.size()&&audit(cue.sound.entry,"-",capture,{}))return true;
+        if(capture.settings.macroRoutes.count==cue.routes.size()&&audit(cue.sound.entry,pair,capture,{}))return true;
         std::cerr<<"Audit failed: "<<cue.sound.entry.id<<"\n";return false;
     };
     for(const auto tranche:{std::span{b::performance},std::span{b::interludes}})
         for(const auto& cue:tranche)if(!auditCue(cue))return 5;
     if(extended)for(const auto& cue:b::counterpoints)if(!auditCue(cue))return 8;
+    if(signals)for(const auto& cue:b::signals){
+        const auto id=cue.sound.entry.id;
+        const auto pair=id.ends_with("lantern-parallax")||id.ends_with("vapour-splice")?"melodic-four-bar-bridge":"-";
+        if(!auditCue(cue,pair))return 9;
+    }
     return list&&metrics&&settings?0:6;
 }

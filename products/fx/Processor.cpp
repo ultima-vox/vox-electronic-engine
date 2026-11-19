@@ -276,19 +276,31 @@ bool FxProcessor::renderProgramWav (offline::Settings settings, std::vector<std:
     return offline::renderWav(capture,output,cancel,progress);
 }
 
+namespace {
+bool onWavControllerThread() noexcept {
+    const auto* manager=juce::MessageManager::getInstanceWithoutCreating();
+    return manager&&manager->isThisTheMessageThread();
+}
+}
+
 bool FxProcessor::startWavExport(offline::Capture capture,juce::File target) {
-    if(wavExportJob_||!target.hasFileExtension("wav"))return false;
+    if(!onWavControllerThread()||wavExportJob_||!target.hasFileExtension("wav"))return false;
     try { wavExportJob_=std::make_unique<fileexport::WavJob>(std::move(capture),std::move(target)); }
     catch(...) { return false; }
     return true;
 }
 
-void FxProcessor::cancelWavExport() noexcept {
-    if(wavExportJob_&&wavExportJob_->result()==fileexport::Result::running)wavExportJob_->cancel();
+std::optional<fileexport::Status> FxProcessor::wavExportStatus() const noexcept {
+    if(!onWavControllerThread()||!wavExportJob_)return {};
+    return wavExportJob_->status();
+}
+
+bool FxProcessor::cancelWavExport() noexcept {
+    return onWavControllerThread()&&wavExportJob_&&wavExportJob_->cancel();
 }
 
 std::optional<fileexport::Result> FxProcessor::takeWavExportResult() {
-    if(!wavExportJob_)return {};
+    if(!onWavControllerThread()||!wavExportJob_)return {};
     const auto result=wavExportJob_->result();
     if(result==fileexport::Result::running)return {};
     wavExportJob_.reset();

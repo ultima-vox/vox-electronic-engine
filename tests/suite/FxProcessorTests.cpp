@@ -155,10 +155,14 @@ void checkExportAcrossEditorClose() {
     const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-panel-export","",false);
     check(dir.createDirectory().wasOk(),"export test directory");
     const auto path=dir.getChildFile("capture.wav");
-    check(fx->startWavExport(capture,path)&&fx->wavExportJob(),"processor starts and owns an export while editor is open");
+    check(fx->startWavExport(capture,path)&&fx->wavExportStatus(),"processor starts and owns an export while editor is open");
     panel.reset();
-    check(fx->wavExportJob()!=nullptr&&!fx->startWavExport(capture,path),"closing editor neither cancels export nor admits a duplicate");
+    check(fx->wavExportStatus().has_value()&&!fx->startWavExport(capture,path),"closing editor neither cancels export nor admits a duplicate");
     fx->setFamily(static_cast<int>(NoiseFamily::laser));
+    for(int i=0;i<3;++i){
+        auto recreated=std::make_unique<FxPanel>(*fx);
+        check(fx->wavExportStatus().has_value(),"repeated panel recreation leaves export status owned by processor");
+    }
     auto reopened=std::make_unique<FxPanel>(*fx);
     const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
     std::optional<fileexport::Result> result;
@@ -166,10 +170,45 @@ void checkExportAcrossEditorClose() {
         result=fx->takeWavExportResult();
         if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    check(result==fileexport::Result::success&&!fx->wavExportJob()&&!fx->takeWavExportResult(),"reopened editor can consume completion exactly once");
+    check(result==fileexport::Result::success&&!fx->wavExportStatus()&&!fx->takeWavExportResult(),"reopened editor can consume completion exactly once");
     juce::MemoryBlock bytes;
     check(path.loadFileAsData(bytes)&&bytes.getSize()==expected.size()&&std::memcmp(bytes.getData(),expected.data(),expected.size())==0,
           "export contains original capture despite editor close and subsequent Program edit");
+    dir.deleteRecursively();
+}
+
+void checkPendingExportLifecycle() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    auto capture=fx->captureProgramWav({});capture.settings.duration=32;capture.settings.sampleRate=192000;
+    for(auto& layer:capture.program.layers){layer.enabled=true;layer.family=NoiseFamily::granular;}
+    const auto project=save(*fx);
+    const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-export-lifecycle","",false);
+    check(dir.createDirectory().wasOk(),"lifecycle test directory");
+    const auto path=dir.getChildFile("during-save.wav");
+    check(path.replaceWithText("old destination"),"prepare overwrite sentinel");
+    check(fx->startWavExport(capture,path)&&fx->wavExportStatus()->result==fileexport::Result::running,"export pending at session save");
+    bool hostSave=false,refused=false;
+    std::thread host([&]{
+        hostSave=save(*fx)==project;
+        refused=!fx->wavExportStatus()&&!fx->cancelWavExport()&&!fx->takeWavExportResult()&&
+                !fx->startWavExport(capture,dir.getChildFile("off-thread.wav"));
+    });host.join();
+    check(hostSave&&refused,"host-thread save excludes export job; job controls refuse off-message access");
+    const bool accepted=fx->cancelWavExport();
+    const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    std::optional<fileexport::Result> result;
+    while(!result&&std::chrono::steady_clock::now()<end){
+        result=fx->takeWavExportResult();
+        if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(accepted&&result==fileexport::Result::cancelled&&path.loadFileAsString()=="old destination",
+          "controller cancellation preserves existing WAV target");
+    const auto unloadPath=dir.getChildFile("during-unload.wav");
+    check(fx->startWavExport(std::move(capture),unloadPath),"start long render before processor unload");
+    fx.reset();
+    check(!unloadPath.exists()&&dir.findChildFiles(juce::File::findFiles,false).size()==1,
+          "processor destruction cancels, joins and leaves no partial export");
     dir.deleteRecursively();
 }
 
@@ -194,6 +233,14 @@ void checkTimelineViewport() {
     check(editor->keyPressed(juce::KeyPress(juce::KeyPress::rightKey,juce::ModifierKeys::altModifier,0))&&
           editor->viewport().start()==.375&&editor->keyPressed(juce::KeyPress('0'))&&editor->viewport().span()==1,
           "keyboard pan and fit do not edit the curve");
+    check(editor->keyPressed(juce::KeyPress('+'))&&editor->keyPressed(juce::KeyPress(']'))&&editor->viewport().start()==0&&
+          editor->keyPressed(juce::KeyPress('['))&&editor->viewport().start()==.5,"bracket keys reveal hidden endpoint nodes without OS Alt+Tab");
+    check(editor->keyPressed(juce::KeyPress('0')),"fit after focus navigation");
+    const juce::MouseEvent select(juce::Desktop::getInstance().getMainMouseSource(),{8.f,8.f},juce::ModifierKeys{},0,0,0,0,0,
+        editor.get(),editor.get(),now,{8.f,8.f},now,1,false);
+    editor->mouseDown(select);editor->mouseUp(select);
+    check(fx->program().layers[0].gainCurve.count==2&&editor->redo()&&fx->program().layers[0].gainCurve.count==3,
+          "selecting without dragging preserves redo history");
     auto& seconds=fx->durationParameter();seconds.setValueNotifyingHost(seconds.convertTo0to1(.75f));editor->refresh();
     check(!editor->axisUsesBars()&&std::abs(editor->axisLength()-.375)<1e-4,"seconds axis follows host automation");
     p.bars=8;check(fx->setProgram(p),"switch authoring timeline to bars");editor->refresh();
@@ -330,8 +377,10 @@ int main() {
     };
     phase("JUCE initialization");
     juce::ScopedJuceInitialiser_GUI gui;
-    phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();checkTimelineViewport();
-    phase("WAV export across editor close");checkExportAcrossEditorClose();
+    phase("layer solo and synchronized cursor");checkSoloAndPlayhead();checkHostTempoCursor();
+    phase("timeline viewport keyboard and selection");checkTimelineViewport();
+    phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
+    phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
     phase("capture parity");checkCaptureParity();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;

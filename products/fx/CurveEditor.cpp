@@ -10,6 +10,14 @@
 
 namespace vox::fx {
 namespace {
+bool sameCurve(const timeline::Curve& a,const timeline::Curve& b) noexcept {
+    if(a.count!=b.count)return false;
+    for(std::size_t i=0;i<a.count;++i){
+        const auto& l=a.nodes[i];const auto& r=b.nodes[i];
+        if(l.time!=r.time||l.value!=r.value||l.shape!=r.shape)return false;
+    }
+    return true;
+}
 class CurveChange final : public juce::UndoableAction {
 public:
     CurveChange(FxProcessor& p,CurveTarget target,std::uint64_t revision,timeline::Curve before,timeline::Curve after)
@@ -31,7 +39,7 @@ CurveEditor::CurveEditor(FxProcessor& processor,std::optional<std::size_t> layer
     jassert(!layer || *layer < 4);
     setWantsKeyboardFocus(true);
     updateTitle();
-    setDescription("Double click to add nodes. Shift click to select multiple; drag or arrow keys move them. Enter edits one node numerically. Command-C/V copy or paste the entire curve. L, S, E or H set segment shape. Wheel or plus/minus zooms; Shift-wheel or Alt-left/right pans; zero fits the full authored duration.");
+    setDescription("Double click to add nodes. Shift click to select multiple; drag or arrow keys move them. Enter edits one node numerically. Command-C/V copy or paste the entire curve. L, S, E or H set segment shape. Wheel or plus/minus zooms; Shift-wheel or Alt-left/right pans; zero fits the full authored duration. Bracket keys select the previous or next node and reveal it.");
     refresh();
 }
 void CurveEditor::updateTitle() {
@@ -177,14 +185,16 @@ void CurveEditor::mouseDrag(const juce::MouseEvent& event) {
     const auto& anchor=beforeDrag_.nodes[static_cast<std::size_t>(selected_)];
     const float time=phaseAt(event.position.x,!event.mods.isAltDown());
     const float value=std::clamp((r.getBottom()-event.position.y)/r.getHeight(),0.0f,1.0f);
-    if(!curveedit::move(beforeDrag_,selection_,time-anchor.time,value-anchor.value,shown_))return;
-    if (!publish(shown_)) { dragging_=false; refresh(); }
-    repaint();
+    timeline::Curve next;
+    if(!curveedit::move(beforeDrag_,selection_,time-anchor.time,value-anchor.value,next)||sameCurve(shown_,next))return;
+    if(!publish(next)){dragging_=false;refresh();return;}
+    shown_=next;repaint();
 }
 void CurveEditor::mouseUp(const juce::MouseEvent&) {
     syncRestore();
     if(!dragging_) return;
     dragging_=false;
+    if(sameCurve(beforeDrag_,shown_)){refresh();return;}
     const auto after=shown_;undo_.beginNewTransaction();
     (void)undo_.perform(new CurveChange(processor_,target_,restoreEpoch_,beforeDrag_,after));repaint();
 }
@@ -275,8 +285,14 @@ bool CurveEditor::keyPressed(const juce::KeyPress& key) {
         else viewport_.zoom(.5,code=='-'?.5:2.);
         repaint();return true;
     }
-    if(code==juce::KeyPress::tabKey && key.getModifiers().isAltDown()){
-        selected_=(selected_+1)%shown_.count;viewport_.reveal(shown_.nodes[static_cast<std::size_t>(selected_)].time);selection_=curveedit::bit(static_cast<unsigned>(selected_));repaint();return true;
+    const auto character=key.getTextCharacter();
+    const bool previous=code=='['||character=='[';
+    const bool nextNode=code==']'||character==']'||(code==juce::KeyPress::tabKey&&key.getModifiers().isAltDown());
+    if(!dragging_&&(previous||nextNode)&&!key.getModifiers().isCommandDown()){
+        const int direction=previous?-1:1;
+        selected_=selected_<0?(previous?shown_.count-1:0):(selected_+shown_.count+direction)%shown_.count;
+        viewport_.reveal(shown_.nodes[static_cast<std::size_t>(selected_)].time);
+        selection_=curveedit::bit(static_cast<unsigned>(selected_));repaint();return true;
     }
     if(!selection_)return false;
     if(code==juce::KeyPress::returnKey){enterNodeValues();return true;}

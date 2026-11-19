@@ -140,8 +140,8 @@ public:
     // Message thread only. Own export independently of editor lifetime; the
     // render receives an immutable capture, never a processor/editor pointer.
     bool startWavExport(offline::Capture,juce::File);
-    const fileexport::WavJob* wavExportJob() const noexcept { return wavExportJob_.get(); }
-    void cancelWavExport() noexcept;
+    std::optional<fileexport::Status> wavExportStatus() const noexcept;
+    bool cancelWavExport() noexcept;
     std::optional<fileexport::Result> takeWavExportResult();
     // Trigger pattern controller and offline MIDI export.
     bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }

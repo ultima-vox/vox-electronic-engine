@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify a Wave B staging export and rebuild the listening archive locally.
 
-Usage: python3 package-wave-b-review.py <export-directory> <destination.zip> [--counterpoints]
+Usage: python3 package-wave-b-review.py <export-directory> <destination.zip> [--counterpoints | --signals]
 Does not upload, alter the export directory, or overwrite a destination.
 """
 
@@ -16,12 +16,13 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def package(root, destination, extended=False):
+def package(root, destination, profile=''):
+    profiles = {'': ('twentyfour', 54), '--counterpoints': ('thirtytwo', 88), '--signals': ('forty', 25)}
+    tranche, count = profiles[profile]
     evidence = Path(__file__).resolve().parent
-    prefix = 'wave-b-thirtytwo-' if extended else 'wave-b-twentyfour-'
-    count = 88 if extended else 54
+    prefix = f'wave-b-{tranche}-'
     sidecars = {'READ ME.txt': 'package-readme.txt'}
-    if extended:
+    if profile:
         sidecars['creative-brief.tsv'] = 'creative-brief.tsv'
     hashes = (evidence / (prefix + 'members.sha256')).read_bytes()
     expected_archive = (evidence / (prefix + 'archive.sha256')).read_text().split()[0]
@@ -52,7 +53,6 @@ def package(root, destination, extended=False):
 
 
 if __name__ == '__main__':
-    counterpoints = len(sys.argv) == 4 and sys.argv[3] == '--counterpoints'
-    if len(sys.argv) != 3 and not counterpoints:
+    if len(sys.argv) != 3 and not (len(sys.argv) == 4 and sys.argv[3] in ('--counterpoints', '--signals')):
         sys.exit(__doc__)
-    package(Path(sys.argv[1]), Path(sys.argv[2]), counterpoints)
+    package(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] if len(sys.argv) == 4 else '')

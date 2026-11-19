@@ -847,7 +847,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     wavExport_.setTooltip("Choose stereo WAV options; click during rendering to cancel");
     wavOptions_.onSave=[this](offline::Settings settings){exportWav(settings);};
     addChildComponent(wavOptions_);
-    wavExport_.onClick=[this]{if(processor_.wavExportJob())processor_.cancelWavExport();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
+    wavExport_.onClick=[this]{if(processor_.wavExportStatus())processor_.cancelWavExport();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
     addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger a finite audition of the current voice. Bar programs require the host bar clock.");
     stopAudition_.setTitle("Stop audition");stopAudition_.setTooltip("Fade audition voices and stop preset preview without stopping MIDI or Pattern voices");
@@ -1237,7 +1237,7 @@ void FxPanel::exportPattern()
 }
 void FxPanel::exportWav(offline::Settings settings)
 {
-    if(processor_.wavExportJob())return;
+    if(processor_.wavExportStatus())return;
     // Capture a self-contained value while the processor is alive. The worker
     // never references the processor or editor and cannot touch the callback.
     std::shared_ptr<offline::Capture> capture;
@@ -1336,9 +1336,9 @@ void FxPanel::timerCallback()
         if(*result!=fileexport::Result::cancelled)juce::AlertWindow::showMessageBoxAsync(*result==fileexport::Result::success?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
             *result==fileexport::Result::success?"WAV exported":"WAV export failed",
             *result==fileexport::Result::success?"The captured audio was exported using the selected WAV settings.":"Could not render or write the WAV file.");
-    }else if(const auto* job=processor_.wavExportJob()){
-        const int percent=static_cast<int>(job->progress()*100);
-        wavExport_.setButtonText(job->cancelled()?"...":juce::String(percent)+"%");
+    }else if(const auto status=processor_.wavExportStatus()){
+        const int percent=static_cast<int>(status->progress*100);
+        wavExport_.setButtonText(status->committing?"Saving…":status->cancelling?"Cancelling…":juce::String(percent)+"%");
     }else if(wavExport_.getButtonText()!="WAV")wavExport_.setButtonText("WAV");
     if (!isShowing()) return;
     const auto sample=processor_.sampleSnapshot();
