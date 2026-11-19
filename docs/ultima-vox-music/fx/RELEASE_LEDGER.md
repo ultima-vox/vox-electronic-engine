@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Timeline and export lifetime](TIMELINE_EXPORT_20261119.md) and [Wave B 32](WAVE_B_COUNTERPOINTS_20261119.md): native seconds/bars viewport, export through editor close, A 120 + B 32 (152 review candidates; 0 approvals), Windows/owner gates still open.
+
 - [FX-T18 paired Linux callback measurements](FX_T18_PAIRED_20261119.md): regular/authored stress improved; same-core scheduling still causes deadline misses; Windows qualification pending.
 - [Wave B interludes review](WAVE_B_INTERLUDES_20261119.md): A 120 + B 24 staged, zero approvals; 300/600 not reached.
 - Windows fixture overflow fix `71c5045`, targeted 1/1 at `514e96a`, according to TL/owner. This is not full CTest, Steinberg validation or artifact SHA verification. The historical rows below do not describe the latest P0 status.
