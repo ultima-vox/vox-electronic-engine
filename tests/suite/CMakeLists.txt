@@ -137,6 +137,24 @@ target_link_libraries(suite_drums_parity_tests PRIVATE ${VOX_SUITE_drm_TARGET} v
 target_include_directories(suite_drums_parity_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 add_test(NAME suite_drums_parity_tests COMMAND suite_drums_parity_tests)
 
+add_executable(suite_synth_engine_tests SynthEngineTests.cpp)
+target_link_libraries(suite_synth_engine_tests PRIVATE vox_synth_engine vox_testkit)
+target_compile_definitions(suite_synth_engine_tests PRIVATE
+  VOX_SYNTH_GOLDEN_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/golden/synth-engine.csv")
+vox_suite_add_allocation_probe(suite_synth_engine_tests)
+add_test(NAME suite_synth_engine_tests COMMAND suite_synth_engine_tests)
+
+add_executable(suite_synth_product_tests SynthProductTests.cpp)
+target_link_libraries(suite_synth_product_tests PRIVATE ${VOX_SUITE_syn_TARGET})
+target_include_directories(suite_synth_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+vox_suite_add_allocation_probe(suite_synth_product_tests)
+target_compile_definitions(suite_synth_product_tests PRIVATE VOX_TEST_STATE_TAG="${VOX_SUITE_syn_STATE_TAG}")
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(suite_synth_product_tests PRIVATE Threads::Threads)
+endif()
+add_test(NAME suite_synth_product_tests COMMAND suite_synth_product_tests)
+
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)
 
@@ -158,8 +176,10 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
     VOX_TEST_STATE_TAG="${VOX_SUITE_${key}_STATE_TAG}"
     VOX_TEST_FOREIGN_TAG="${VOX_SUITE_${otherKey}_STATE_TAG}")
   # Products with a sound engine (others must stay silent).
-  if(key STREQUAL "drm")
+  if(key STREQUAL "drm" OR key STREQUAL "syn")
     target_compile_definitions(${test} PRIVATE VOX_TEST_HAS_ENGINE=1)
+  else()
+    target_compile_definitions(${test} PRIVATE VOX_TEST_HAS_ENGINE=0)
   endif()
   add_test(NAME ${test} COMMAND ${test})
 
@@ -183,6 +203,9 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
   if(key STREQUAL "drm")
     set(engine 1)
     set(level "Pad 1 Level")
+  elseif(key STREQUAL "syn")
+    set(engine 1)
+    set(level "Output")
   endif()
   list(APPEND host_bundles
     "$<TARGET_FILE_DIR:${VOX_SUITE_${key}_TARGET}_VST3>/../..|${VOX_SUITE_${key}_NAME}|${engine}|${level}")

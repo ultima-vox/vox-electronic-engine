@@ -47,6 +47,20 @@ target_include_directories(vox_drums_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/d
 target_compile_features(vox_drums_engine PUBLIC cxx_std_20)
 set_target_properties(vox_drums_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# SYN-01 voice engine. JUCE-free. Two parts, 16 voices combined.
+add_library(vox_synth_engine STATIC
+  trance-synthesis/engine/SynthEngine.cpp trance-synthesis/engine/SynthEngine.h)
+target_include_directories(vox_synth_engine PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/trance-synthesis
+  ${CMAKE_SOURCE_DIR}/libs/vox-dsp)
+target_compile_features(vox_synth_engine PUBLIC cxx_std_20)
+set_target_properties(vox_synth_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+  target_compile_options(vox_synth_engine PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(vox_synth_engine PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 foreach(key IN LISTS VOX_SUITE_PRODUCTS)
   vox_add_suite_plugin(${key})
 endforeach()
@@ -59,3 +73,8 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/PatternStore.cpp drums/PatternStore.h drums/PatternExport.cpp drums/PatternExport.h
   drums/PatternEditor.cpp drums/PatternEditor.h)
 target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juce_cryptography)
+
+target_sources(${VOX_SUITE_syn_TARGET} PRIVATE
+  trance-synthesis/Parameters.cpp trance-synthesis/Parameters.h
+  trance-synthesis/SynthEditor.cpp trance-synthesis/SynthEditor.h)
+target_link_libraries(${VOX_SUITE_syn_TARGET} PUBLIC vox_synth_engine PRIVATE vox_dsp)
