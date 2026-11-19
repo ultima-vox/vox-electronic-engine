@@ -174,3 +174,112 @@ jobs:
           name: VOX-Suite-VST3
           path: suite-out
           if-no-files-found: error
+
+  # Explicit, single-test Windows reproduction. Trigger only by adding
+  # [RUN_FX_PROCESSOR] to Draft PR #156 body; never on push/synchronize.
+  windows-fx-processor-triage:
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.action == 'edited' &&
+        github.event.pull_request.number == 156 &&
+        github.event.pull_request.draft &&
+        github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+        github.event.changes.body.from != null &&
+        !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
+        contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]')
+      }}
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell
+    env:
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+      VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+      HISTORICAL_FX_HEAD: e08eb314f6da27f877c0544a836e3bf8aec6207c
+    steps:
+      - name: Checkout diagnostic tools from current PR
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout exact failed FX source snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: e08eb314f6da27f877c0544a836e3bf8aec6207c
+          path: fx-historic
+          persist-credentials: false
+
+      - name: Resolve pinned JUCE and VST3 dependencies
+        run: |
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository 'https://github.com/juce-framework/JUCE.git' -Ref 9.0.1 -Commit $env:JUCE_COMMIT
+          if (-not $juce) { exit 1 }
+          $sdk = & .github\scripts\Use-PinnedCheckout.ps1 -Name vst3sdk -Repository 'https://github.com/steinbergmedia/vst3sdk.git' -Ref v3.8.0_build_66 -Commit $env:VST3SDK_COMMIT -Submodules base,pluginterfaces,public.sdk,cmake
+          if (-not $sdk) { exit 1 }
+          "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VST3SDK_DIR=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure historical Release test with PDB symbols
+        run: |
+          cmake -S fx-historic -B fx-historic/build-triage -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DCMAKE_CXX_FLAGS_RELEASE:STRING=/O2 /Ob2 /DNDEBUG /Zi" "-DCMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=/INCREMENTAL:NO /DEBUG:FULL"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build ONLY the failed FX processor test and dependencies
+        id: build
+        run: |
+          cmake --build fx-historic/build-triage --config Release --target suite_fx_processor_tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run ONLY historical suite_fx_processor_tests
+        id: targeted
+        run: |
+          New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
+          ctest --test-dir fx-historic/build-triage -C Release -R '^suite_fx_processor_tests$' --output-on-failure --output-junit fx-triage/results.xml -VV *>&1 | Tee-Object fx-triage/ctest-console.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
+
+      - name: Capture the exact test exception under installed x64 CDB
+        if: ${{ steps.targeted.outcome == 'failure' }}
+        timeout-minutes: 4
+        run: |
+          $helper = Join-Path $env:GITHUB_WORKSPACE '.github\scripts\Capture-FxProcessorException.ps1'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'fx-triage\capture'
+          Push-Location fx-historic
+          try { & $helper -BuildDir build-triage -OutputDir $output -TimeoutSeconds 100 }
+          finally { Pop-Location }
+
+      - name: Preserve targeted CTest output and historical binary provenance
+        if: ${{ always() }}
+        run: |
+          New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
+          $lines = @("Source SHA intended: $env:HISTORICAL_FX_HEAD", "Job SHA: $env:GITHUB_SHA", "Run: $env:GITHUB_RUN_ID", "This executable was rebuilt with /Zi and /DEBUG:FULL; it is NOT the byte-identical original failing EXE.")
+          if (Test-Path fx-historic/.git) {
+            $lines += "Historical source checkout: $(& git -C fx-historic rev-parse HEAD)"
+            $lines += "Historical source tree: $(& git -C fx-historic rev-parse 'HEAD^{tree}')"
+          }
+          $temp = 'fx-historic\build-triage\Testing\Temporary'
+          if (Test-Path $temp) {
+            Get-ChildItem $temp -File -Filter '*Test*.log' | Copy-Item -Destination fx-triage -ErrorAction SilentlyContinue
+          }
+          $exe = Get-ChildItem 'fx-historic\build-triage\tests\suite' -Filter 'suite_fx_processor_tests.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exe) {
+            $lines += "Rebuilt EXE SHA-256: $((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+            Copy-Item $exe.FullName fx-triage
+            $pdb = [System.IO.Path]::ChangeExtension($exe.FullName, '.pdb')
+            if (Test-Path $pdb) {
+              $lines += "Rebuilt PDB SHA-256: $((Get-FileHash $pdb -Algorithm SHA256).Hash.ToLowerInvariant())"
+              Copy-Item $pdb fx-triage
+            }
+          }
+          $lines | Set-Content fx-triage/provenance.txt
+          $lines | ForEach-Object { Write-Host $_ }
+
+      - name: Upload single-test CTest, CDB, PDB and dump evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-FX-Processor-Triage-Historical
+          path: fx-triage
+          if-no-files-found: error
+          retention-days: 7
