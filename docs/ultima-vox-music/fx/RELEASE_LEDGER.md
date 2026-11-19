@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Pattern authoring / bounce](PATTERN_BOUNCE_20261119.md) and [Wave B 48](WAVE_B_CROSSINGS_20261119.md): same-grid bar copy/paste and native clock states; offline callbacks exclude audition voices; new diagnostic timing does not supersede prior deadline misses. A 120 + B 48 = 168 review candidates, zero approved.
+
 - [WAV lifecycle and timeline follow-up](WAV_LIFECYCLE_20261119.md) and [Wave B 40](WAVE_B_BRIDGE_SIGNALS_20261119.md): pre-commit cancel preserves the destination, native lifecycle and timeline coverage widened, A 120 + B 40 (160 review candidates, 0 approvals; 140 short of 300 candidates), private transfer and actual mix review still open.
 
 - [Timeline and export lifetime](TIMELINE_EXPORT_20261119.md) and [Wave B 32](WAVE_B_COUNTERPOINTS_20261119.md): native seconds/bars viewport, export through editor close, A 120 + B 32 (152 review candidates; 0 approvals), Windows/owner gates still open.
