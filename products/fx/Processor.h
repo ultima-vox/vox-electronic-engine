@@ -11,6 +11,7 @@
 #include "engine/ComparisonState.h"
 #include "engine/PortablePreset.h"
 #include "engine/Preview.h"
+#include <bit>
 
 namespace vox::fx {
 
@@ -61,9 +62,18 @@ public:
     juce::AudioParameterFloat& effectWetParameter(std::size_t index) noexcept { return *effectWet_[index]; }
     juce::AudioParameterFloat& effectAmountParameter(std::size_t index) noexcept { return *effectAmount_[index]; }
     // Message-to-audio requests are bounded and coalesced, not a MIDI queue.
-    void audition() noexcept { auditionPending_.store (true, std::memory_order_release); }
+    void audition() noexcept { auditionRequest_.store(AuditionRequest::start,std::memory_order_release); }
+    void stopAudition() noexcept {
+        previewBus_.stop();auditionRequest_.store(AuditionRequest::stop,std::memory_order_release);
+    }
     void panic() noexcept { previewBus_.stop();panicPending_.store (true, std::memory_order_release); }
-    float outputPeak() const noexcept { return peak_.load (std::memory_order_relaxed); }
+    struct OutputPeaks { float left, right; };
+    OutputPeaks outputPeaks() const noexcept {
+        const auto packed=peaks_.load(std::memory_order_relaxed);
+        return {std::bit_cast<float>(static_cast<std::uint32_t>(packed)),
+                std::bit_cast<float>(static_cast<std::uint32_t>(packed>>32))};
+    }
+    float outputPeak() const noexcept { const auto p=outputPeaks();return std::max(p.left,p.right); }
     bool consumeClip() noexcept { return clipLatched_.exchange(false,std::memory_order_relaxed); }
     struct AudioTelemetry { unsigned events=0,grains=0;bool clipped=false;std::uint32_t dropped=0; };
     AudioTelemetry audioTelemetry() const noexcept {
@@ -202,8 +212,12 @@ private:
     // Guarded by SuiteProcessor state lock, not accessed by the audio thread.
     float loadedDuration_ = 0.0f, heldDuration_ = 0.0f;
     juce::SmoothedValue<float> outputSmoothing_;
-    std::atomic<bool> panicPending_ { false }, auditionPending_ { false };
-    std::atomic<float> peak_ { 0.0f };
+    enum class AuditionRequest : std::uint32_t { none,start,stop };
+    static_assert(std::atomic<AuditionRequest>::is_always_lock_free);
+    std::atomic<AuditionRequest> auditionRequest_ { AuditionRequest::none };
+    std::atomic<bool> panicPending_ { false };
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+    std::atomic<std::uint64_t> peaks_ { 0 };
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
     std::atomic<std::uint32_t> telemetry_ { 0 }, droppedEvents_ { 0 };
     std::atomic<bool> clipLatched_ { false }, patternUnavailable_ { false };

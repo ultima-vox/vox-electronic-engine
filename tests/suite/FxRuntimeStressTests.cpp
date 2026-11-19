@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "content/FactoryCandidates.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -37,9 +38,11 @@ int main(){
     using namespace vox::fx;
     juce::ScopedJuceInitialiser_GUI init;
     int errors=0;
+    const bool typical=std::getenv("VOX_FX_STRESS_TYPICAL")!=nullptr;
     const bool shapes=std::getenv("VOX_FX_STRESS_AUTHORED")!=nullptr;
     const bool splitTiming=std::getenv("VOX_FX_TIMING_THREAD_CPU")!=nullptr&&threadMicros()>=0;
-    if(shapes)std::puts("Non-default grain shape, step and held ADSR routes");
+    if(typical)std::puts("Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI");
+    if(shapes&&!typical)std::puts("Non-default grain shape, step and held ADSR routes");
     if(splitTiming)std::puts("Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation");
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
     std::printf("Allocation probe available: %s\n",voxProbeAvailable()?"yes":"no");
@@ -52,8 +55,10 @@ int main(){
     std::puts("Lock probe unavailable");
 #endif
     for(bool patternOn:{false,true}){
+    if(typical&&patternOn)continue;
     std::puts(patternOn?"Max-ratchet synchronized Pattern + random MIDI":"Random MIDI without Pattern");
     for(double rate:{44100.,48000.,96000.})for(int frames:{64,128,512})for(int voices:{1,4,8}){
+        if(typical&&voices!=1)continue;
         auto fx=std::make_unique<FxProcessor>();fx->prepareToPlay(rate,frames);
         NoiseProgram p;p.mode=PlayMode::gate;
         for(auto& l:p.layers){l.enabled=true;l.family=NoiseFamily::granular;l.filters[0]={source::FilterType::lowpass,4800,.71f,2};}
@@ -69,16 +74,36 @@ int main(){
             if(!fx->setPattern(grid))return 1;
             fx->patternEnabledParameter().setValueNotifyingHost(1.f);fx->setPlayHead(&clock);
         }
-        for(std::size_t i=0;i<4;++i)fx->setEffect(i,{effects::Type::drive,1,.7f});
-        auto motion=fx->versionedMotion();auto cfg=motion.config;
-        for(unsigned i=0;i<64;++i)(void)cfg.put(i,{i%2?mod::Source::macro1:mod::Source::lfo1,
-            i%3==0?mod::Destination::grainRate:i%3==1?mod::Destination::width:mod::Destination::amount1,.005f,.002f});
-        if(shapes){
-            cfg.event={{.21f,.78f,.46f,.11f,.64f,.3f,.73f,.42f},true,.04f,.23f,.53f,.25f};
-            if(!cfg.put(0,{mod::Source::step,mod::Destination::grainRate,.17f,.01f})||
-               !cfg.put(1,{mod::Source::adsr,mod::Destination::layerGain,.2f,.002f}))return 1;
+        int firstNote=47;
+        if(typical){
+            // A seconds-based riser without host tempo or transport. Peak and
+            // latency are measured on its configured graph, not silent idle.
+            const auto& entries=content::reviewEntries;
+            const auto selected=std::find_if(std::begin(entries),std::end(entries),[](const auto& e){
+                return e.id=="voxfx.riser.firefly-ladder";});
+            if(selected==std::end(entries))return 1;
+            const auto capture=content::makePreview(*selected,static_cast<unsigned>(rate));
+            if(!fx->setProgram(capture.program))return 1;
+            firstNote=capture.settings.note;
+            auto& duration=fx->durationParameter();duration.setValueNotifyingHost(duration.convertTo0to1(capture.settings.duration));
+            for(std::size_t i=0;i<4;++i){
+                fx->setEffect(i,capture.settings.effects[i]);
+                fx->effectWetParameter(i).setValueNotifyingHost(capture.settings.effects[i].wet);
+                fx->effectAmountParameter(i).setValueNotifyingHost(capture.settings.effects[i].amount);
+            }
+            const auto m=fx->versionedMotion();if(!fx->replaceMotionIfCurrent(m,capture.settings.macroRoutes))return 1;
+        }else{
+            for(std::size_t i=0;i<4;++i)fx->setEffect(i,{effects::Type::drive,1,.7f});
+            auto motion=fx->versionedMotion();auto cfg=motion.config;
+            for(unsigned i=0;i<64;++i)(void)cfg.put(i,{i%2?mod::Source::macro1:mod::Source::lfo1,
+                i%3==0?mod::Destination::grainRate:i%3==1?mod::Destination::width:mod::Destination::amount1,.005f,.002f});
+            if(shapes){
+                cfg.event={{.21f,.78f,.46f,.11f,.64f,.3f,.73f,.42f},true,.04f,.23f,.53f,.25f};
+                if(!cfg.put(0,{mod::Source::step,mod::Destination::grainRate,.17f,.01f})||
+                   !cfg.put(1,{mod::Source::adsr,mod::Destination::layerGain,.2f,.002f}))return 1;
+            }
+            if(!fx->replaceMotionIfCurrent(motion,cfg))return 1;
         }
-        if(!fx->replaceMotionIfCurrent(motion,cfg))return 1;
         juce::AudioBuffer<float> io(2,frames);juce::MidiBuffer midi;midi.ensureSize(4096);
         constexpr int blocks=160;
         std::array<double,blocks> durations{};unsigned maximumGrains=0;double peak=0,sumL=0,sumR=0;
@@ -88,8 +113,8 @@ int main(){
         double maxCpu=0,maxWall=0,cpuAtMaxWall=0;
         int wallMisses=0,cpuMisses=0,wallOnly=0;
         for(int block=0;block<blocks;++block){
-            if(block==0)for(int i=0;i<voices;++i)midi.addEvent(juce::MidiMessage::noteOn(1,47+i,juce::uint8(100)),0);
-            if(block>=48&&block%3==0)for(int j=0;j<voices*2;++j){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
+            if(block==0)for(int i=0;i<voices;++i)midi.addEvent(juce::MidiMessage::noteOn(1,firstNote+i,juce::uint8(100)),0);
+            if(!typical&&block>=48&&block%3==0)for(int j=0;j<voices*2;++j){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
                 const int when=static_cast<int>(rng%frames),note=43+static_cast<int>((rng>>9)%17),channel=1+static_cast<int>((rng>>16)%3);
                 const unsigned op=(rng>>24)%8;
                 if(op==0)midi.addEvent(juce::MidiMessage::controllerEvent(channel,120,0),when);
@@ -98,7 +123,7 @@ int main(){
                 else if(op==3)midi.addEvent(juce::MidiMessage::noteOff(channel,note),when);
                 else midi.addEvent(juce::MidiMessage::noteOn(channel,note,juce::uint8(36+(rng%90))),when);
             }
-            if(block==129)fx->panic();
+            if(!typical&&block==129)fx->panic();
             if(patternOn)clock.advance(static_cast<std::int64_t>(block)*frames,rate);
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             voxProbeBegin();

@@ -8,9 +8,11 @@
 
 namespace {
 struct Audio { std::vector<float> left, right; };
-Audio render(vox::fx::NoiseProgram p) {
+Audio render(vox::fx::NoiseProgram p,const vox::fx::macro::Config& config={},double bpm=120,bool clock=false) {
     constexpr int frames=24000;
     auto owner=std::make_unique<vox::fx::NoiseRiser>();auto& engine=*owner;engine.prepare(48000);engine.setProgram(p);
+    if(!engine.setVoiceMotion(config)||!engine.setTempo(bpm))return {};
+    engine.setMusicalClockAvailable(clock,bpm);
     if(!engine.noteOn(1,69,0.8f,0.5))return {};
     Audio a{std::vector<float>(frames),std::vector<float>(frames)};
     engine.render(a.left.data(),a.right.data(),frames);return a;
@@ -25,6 +27,18 @@ int main() {
     int failures=0;auto check=[&](bool ok,const char* why){if(!ok){std::printf("FAIL: %s\n",why);++failures;}};
     vox::fx::NoiseProgram base;base.layers[0].enabled=true;base.layers[0].family=vox::fx::NoiseFamily::laser;
     const auto dry=render(base);
+    {
+        using namespace vox::fx;
+        macro::Config motion;
+        motion.lfos[0]={1,true};
+        check(motion.put(0,{mod::Source::lfo1,mod::Destination::layerPan,.44f,.01f}),"voice tempo test route");
+        const auto stopped=render(base,motion,84,false), playing=render(base,motion,84,true);
+        check(!stopped.left.empty()&&stopped.left==playing.left&&stopped.right==playing.right,
+              "seconds voice follows BPM without PPQ or a valid bar clock");
+        check(distance(stopped,render(base,motion,140,false))>.01,"tempo-synced voice LFO follows supplied BPM");
+        motion.lfos[0].sync=false;
+        check(distance(render(base,motion,84),render(base,motion,140))==0,"free-running LFO ignores host BPM");
+    }
     auto shaped=base;
     shaped.layers[0].pitchCurve=vox::fx::timeline::Curve::constant(0.9f);
     shaped.layers[0].cutoffCurve=vox::fx::timeline::Curve::constant(0.8f);

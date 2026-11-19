@@ -823,6 +823,8 @@ int main() {
         musical->setPlayHead(nullptr);
     }
     p.prepareToPlay(48000, 512);
+    auto meterProgram=p.program();meterProgram.panoramaCurve=vox::fx::timeline::Curve::constant(.25f);
+    check(p.setProgram(meterProgram),"asymmetric stereo meter test program");
     juce::AudioBuffer<float> audio(2, 512);
     juce::MidiBuffer midi;
     midi.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 100);
@@ -838,7 +840,10 @@ int main() {
     midi.clear();
     check(audio.getMagnitude(0, 0, 100) == 0, "MIDI offset preserves leading silence");
     check(audio.getMagnitude(0, 101, 411) > 0, "MIDI trigger makes processor audio");
-    check(p.outputPeak() == audio.getMagnitude(0, 0, 512), "meter follows actual output peak");
+    const auto stereo=p.outputPeaks();
+    check(stereo.left>stereo.right&&stereo.left==audio.getMagnitude(0,0,512)&&
+          stereo.right==audio.getMagnitude(1,0,512)&&p.outputPeak()==stereo.left,
+          "stereo meter reports distinct post-render channel peaks");
     midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
     block(p, audio, midi);
     check(audio.getMagnitude(0, 0, 512) > 0, "one-shot ignores note off");
@@ -860,6 +865,11 @@ int main() {
     p.audition(); block(p, audio, midi);
     check(p.audioTelemetry().events>=1&&p.audioTelemetry().events<=12&&p.audioTelemetry().grains<=64,"audio telemetry reports bounded active pool");
     check(audio.getMagnitude(0, 0, 512) > 0, "editor audition triggers sound");
+    midi.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);
+    block(p,audio,midi);
+    check(p.audioTelemetry().events==2,"host note and audition own distinct voices");
+    p.stopAudition();block(p,audio,midi);
+    check(p.audioTelemetry().events==1&&audio.getMagnitude(0,300,212)>0,"audition stop leaves the host note sounding");
     p.panic(); block(p, audio, midi);
     check(p.audioTelemetry().events==0&&p.audioTelemetry().grains==0,"audio telemetry reflects panic release");
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");

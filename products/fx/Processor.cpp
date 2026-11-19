@@ -301,8 +301,8 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
-    auditionPending_.store (false, std::memory_order_relaxed);
-    peak_.store (0.0f, std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
+    auditionRequest_.store(AuditionRequest::none,std::memory_order_relaxed);
+    peaks_.store(0,std::memory_order_relaxed);telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);
     patternUnavailable_.store(false,std::memory_order_relaxed);
     transport_.unavailable();
 }
@@ -311,7 +311,7 @@ void FxProcessor::releaseResources() {
     previewBus_.prepare(preparedSampleRate());
     engine_.prepare (preparedSampleRate());
     telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);
-    peak_.store(0,std::memory_order_relaxed);
+    peaks_.store(0,std::memory_order_relaxed);
 }
 void FxProcessor::reset() { panic(); }
 juce::AudioProcessorEditor* FxProcessor::createEditor()
@@ -349,14 +349,14 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // inferred when a host does not provide a position. New notes in this
     // block may still start (including audition while transport is stopped).
     bool positionAvailable = false, patternHostReady=false, hostPlaying=false, musicalClockReady=false;
-    double hostPpq=0.0,hostBpm=0.0,glitchTempo=120.0;
+    double hostPpq=0.0,hostBpm=0.0,renderTempo=120.0;
     timeline::BarGrid barGrid;
     if (auto* host = getPlayHead()) {
         if (const auto position = host->getPosition()) {
             positionAvailable = true;
             const bool playing = position->getIsPlaying();hostPlaying=playing;
             const auto ppq=position->getPpqPosition(), bpm=position->getBpm();
-            if(bpm.hasValue()&&std::isfinite(*bpm)&&*bpm>=1.0&&*bpm<=1000.0)glitchTempo=*bpm;
+            if(bpm.hasValue()&&std::isfinite(*bpm)&&*bpm>=1.0&&*bpm<=1000.0)renderTempo=*bpm;
             const auto signature=position->getTimeSignature();
             const bool supportedSignature=!signature.hasValue() || (signature->numerator==4 && signature->denominator==4);
             musicalClockReady=playing && ppq.hasValue() && std::isfinite(*ppq) && bpm.hasValue() &&
@@ -379,10 +379,10 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         }
     }
     if (!positionAvailable) transport_.unavailable();
-    (void)engine_.setTempo(glitchTempo);
-    engine_.setMusicalClockAvailable(musicalClockReady,glitchTempo);
+    (void)engine_.setTempo(renderTempo);
+    engine_.setMusicalClockAvailable(musicalClockReady,renderTempo);
     engine_.setBarGrid(barGrid);
-    capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
+    capturedTempo_.store(renderTempo,std::memory_order_relaxed);
     // Take one bounded read. A save/restore listener may notify several
     // host parameters synchronously; do not admit notes from a half-applied
     // graph/sample pair or use those parameter values in the meantime.
@@ -416,7 +416,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if(retire)retiredEpoch_=retirement;
     if(retire||panic){
         engine_.allSoundOff(0);previewBus_.stop();
-        auditionPending_.store(false,std::memory_order_relaxed);
+        auditionRequest_.store(AuditionRequest::none,std::memory_order_relaxed);
     }
     musicalClockUnavailable_.store(!musicalClockReady || (audioProgram_.mode == PlayMode::transition && !barGrid.valid()),
                                    std::memory_order_relaxed);
@@ -425,16 +425,18 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
     const auto& macroValues=audioBases_.macros;
     engine_.setMacroBases(macroValues);
-    macroRuntime_.setTempo(glitchTempo);
-    effects_.setTempo(glitchTempo);
-    if (admit&&auditionPending_.exchange(false,std::memory_order_acquire))engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
+    macroRuntime_.setTempo(renderTempo);
+    effects_.setTempo(renderTempo);
+    const auto audition=admit?auditionRequest_.exchange(AuditionRequest::none,std::memory_order_acquire):AuditionRequest::none;
+    if(audition==AuditionRequest::stop)engine_.stopPreview();
+    if(audition==AuditionRequest::start)engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
     const int size = buffer.getNumSamples();
     const bool wantsPattern=audioBases_.pattern||audioProgram_.mode==PlayMode::sequence;
     bool patternUnavailable=wantsPattern&&!patternHostReady;
     patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
-        peak_.store (0.0f, std::memory_order_relaxed);publishTelemetry(false);
+        peaks_.store(0,std::memory_order_relaxed);publishTelemetry(false);
         return;
     }
     auto* left = buffer.getWritePointer (0);
@@ -490,10 +492,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     macro::renderPost(effects_,macroRuntime_,left,right,static_cast<std::size_t>(size),macroValues,[&]{return outputSmoothing_.getNextValue();});
     if(isNonRealtime())previewBus_.discardOnAudioThread();
     else previewBus_.mix(left,right,size);
-    float peak = 0.0f;
-    for (int i = 0; i < size; ++i) peak=std::max(peak,std::max(std::abs(left[i]),std::abs(right[i])));
-    peak_.store (peak, std::memory_order_relaxed);publishTelemetry(peak>=1.0f);
-    if(peak>=1.0f)clipLatched_.store(true,std::memory_order_relaxed);
+    float peakL=0,peakR=0;
+    for(int i=0;i<size;++i){peakL=std::max(peakL,std::abs(left[i]));peakR=std::max(peakR,std::abs(right[i]));}
+    peaks_.store(std::bit_cast<std::uint32_t>(peakL)|(std::uint64_t{std::bit_cast<std::uint32_t>(peakR)}<<32),std::memory_order_relaxed);
+    const bool clip=peakL>=1.f||peakR>=1.f;
+    publishTelemetry(clip);
+    if(clip)clipLatched_.store(true,std::memory_order_relaxed);
 }
 
 void FxProcessor::writeProductState (std::vector<preset::Section>& out) const

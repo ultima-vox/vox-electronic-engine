@@ -818,7 +818,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     macroAttachment_=std::make_unique<juce::SliderParameterAttachment>(processor_.macroParameter(0),macroValue_);
     addAndMakeVisible(macroSelector_);addAndMakeVisible(macroDestination_);addAndMakeVisible(macroValue_);addAndMakeVisible(macroDepth_);
     refreshMacro();
-    addAndMakeVisible (audition_);
+    addAndMakeVisible (audition_);addAndMakeVisible(stopAudition_);
     addAndMakeVisible (panic_);
     const char* familyNames[]{"Noise Riser","Downlifter","Shepard","Impact","Whoosh","Laser","Squelch","Metallic","Texture","Formant","Glitch","Granular"};
     factory_.setTextWhenNothingSelected("Load seed program...");factory_.setTitle("Procedural seed program");
@@ -849,7 +849,9 @@ FxPanel::FxPanel (FxProcessor& processor)
     addChildComponent(wavOptions_);
     wavExport_.onClick=[this]{if(wavJob_)wavJob_->cancel();else {wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
     addAndMakeVisible(wavExport_);
-    audition_.setTooltip ("Trigger the current program");
+    audition_.setTooltip ("Trigger a finite audition of the current voice. Bar programs require the host bar clock.");
+    stopAudition_.setTitle("Stop audition");stopAudition_.setTooltip("Fade audition voices and stop preset preview without stopping MIDI or Pattern voices");
+    stopAudition_.onClick=[this]{processor_.stopAudition();};
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
     panic_.onClick = [this] { processor_.panic(); };
@@ -1042,12 +1044,22 @@ void FxPanel::paint (juce::Graphics& g)
     }
     auto meter = getLocalBounds().reduced (32).removeFromBottom (55).removeFromLeft (320).toFloat();
     g.setColour (c::panelRaised); g.fillRoundedRectangle (meter, 4.0f);
-    g.setColour (clipHold_?c::danger:c::accent); g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * std::min(1.0f,shownPeak_)), 4.0f);
-    g.setColour (c::text); g.setFont (vox::ui::typography::controlLabel());
-    auto meterText=meter.toNearestInt().reduced(8);
-    g.drawText(clipHold_?"OUTPUT PEAK  /  CLIP":"OUTPUT PEAK",meterText.removeFromTop(18),juce::Justification::centredLeft);
+    g.setColour(c::text);g.setFont(vox::ui::typography::controlLabel());
+    auto text=meter.toNearestInt().reduced(8,3);
+    g.drawText(clipHold_?"STEREO PEAK  /  CLIP":"STEREO PEAK",text.removeFromTop(16),juce::Justification::centredLeft);
+    for(std::size_t ch=0;ch<shownPeaks_.size();++ch){
+        auto row=text.removeFromTop(9);
+        g.setColour(c::text);g.drawText(ch==0?"L":"R",row.removeFromLeft(15),juce::Justification::centredLeft);
+        // Map -60..0 dBFS to the bar; clip is latched from actual samples.
+        const auto db=juce::Decibels::gainToDecibels(shownPeaks_[ch],-60.f);
+        auto track=row.reduced(0,2).toFloat();
+        g.setColour(c::panel);g.fillRoundedRectangle(track,2.f);
+        g.setColour(clipHold_?c::danger:c::accent);
+        g.fillRoundedRectangle(track.withWidth(track.getWidth()*juce::jlimit(0.f,1.f,(db+60.f)/60.f)),2.f);
+    }
+    g.setColour(c::text);
     g.drawText("EV "+juce::String(shownEvents_)+"/8+4  GR "+juce::String(shownGrains_)+"/64  DROP "+juce::String(static_cast<juce::int64>(shownDropped_)),
-               meterText,juce::Justification::centredLeft);
+               text,juce::Justification::centredLeft);
 }
 void FxPanel::resized()
 {
@@ -1077,7 +1089,9 @@ void FxPanel::resized()
     sampleBuiltin_.setBounds(sampleRow.removeFromLeft(58).reduced(1));sampleStatus_.setBounds(sampleRow.reduced(1));
     area.removeFromLeft (20);
     auto buttons = area.removeFromLeft (160);
-    audition_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
+    auto auditionRow=buttons.removeFromTop(32);buttons.removeFromTop(4);
+    stopAudition_.setBounds(auditionRow.removeFromRight(58).reduced(1,0));
+    audition_.setBounds(auditionRow.reduced(1,0));
     panic_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
     factory_.setBounds (buttons.removeFromTop (32));
 
@@ -1364,7 +1378,9 @@ void FxPanel::timerCallback()
     else for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     const auto telemetry=processor_.audioTelemetry();shownEvents_=telemetry.events;shownGrains_=telemetry.grains;shownDropped_=telemetry.dropped;
     clipHold_=processor_.consumeClip()?25u:(clipHold_?clipHold_-1:0u);
-    shownPeak_ = std::max (processor_.outputPeak(), shownPeak_ * 0.88f);
+    const auto peaks=processor_.outputPeaks();
+    shownPeaks_[0]=std::max(peaks.left,shownPeaks_[0]*.88f);
+    shownPeaks_[1]=std::max(peaks.right,shownPeaks_[1]*.88f);
     repaint();
 }
 } // namespace vox::fx

@@ -1,12 +1,13 @@
 // Authoring tool for Wave B staging cues; not a factory installer.
 // Compile with pinned JUCE core/cryptography and vox_preset. See triage handoff.
 #include "content/ReviewWaveBAssets.h"
-#include "content/ReviewWaveBPerformance.h"
+#include "content/ReviewWaveBInterludes.h"
 #include "engine/PortablePreset.h"
 #include "engine/SampleDecode.h"
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <set>
 
 namespace {
@@ -38,19 +39,27 @@ int main(int argc,char** argv){
     const std::filesystem::path root(argv[1]);
     for(const auto* dir:{"solo","presets","sources"})std::filesystem::create_directories(root/dir);
     std::ofstream list(root/"manifest.tsv"),metrics(root/"metrics.tsv"),settings(root/"settings.tsv");
-    list<<"id\tname\trole\tstyle\tmode\tbpm\tbars\tnote\tpair\ttonality\tsource\tsource-sha256\tFPRG\tFMOD\tsolo-48k-sha256\tstatus\tuse\n";
+    list<<"id\tname\trole\tstyle\tmood\tmode\tbpm\tbars\tnote\tpair\ttonality\troot\tsource\tsource-sha256\tFPRG\tFMOD\tsolo-48k-sha256\tstatus\tprovenance\tuse\n";
     metrics<<"id\trate\tframes\tpeak\tDC\tmono/stereo-rms\tlast-5ms-peak\n"<<std::fixed<<std::setprecision(8);
     settings<<"id\tBPM\tMIDI-note\tvelocity\tseconds\toutput";
     for(int i=1;i<=4;++i)settings<<"\tFX"<<i<<"-type\tFX"<<i<<"-wet\tFX"<<i<<"-amount";
     settings<<'\n'<<std::setprecision(9);
-    std::set<std::string> ids,recipes,soloHashes;
-    for(const auto& e:content::reviewEntries)ids.insert(std::string(e.id));
+    std::set<std::string> ids,names,recipes,soloHashes;
+    const auto newStructure=[&](NoiseProgram program){
+        program.tonality={};program.bars=0; // not unique merely by key or length
+        std::vector<std::byte> bytes;
+        return programcodec::encode(program,bytes)&&recipes.insert(digest(bytes)).second;
+    };
+    for(const auto& e:content::reviewEntries){
+        ids.emplace(e.id);names.emplace(e.name);
+        if(!newStructure(content::makePreview(e,48000).program))return 7;
+    }
     const auto audit=[&](const content::Entry& e,std::string_view pair,offline::Capture capture,const sample::Reference& source){
         const std::string id(e.id);
-        if(!ids.insert(id).second||!source.valid()||capture.useUserSample!=(source.kind==sample::Reference::Kind::external))return false;
+        if(!ids.insert(id).second||!names.emplace(e.name).second||e.mood.empty()||e.style.empty()||!source.valid()||capture.useUserSample!=(source.kind==sample::Reference::Kind::external))return false;
         std::vector<std::byte> program,motion,preset,again;
         if(!programcodec::encode(capture.program,program)||!macro::codec::encode(capture.settings.macroRoutes,motion)||
-           !recipes.insert(digest(program)).second)return false;
+           !newStructure(capture.program))return false;
         portable::Sound sound,restored;portable::Tags tagsOut;
         sound.state.program=capture.program;sound.state.pattern=capture.pattern;sound.state.macros=capture.settings.macroRoutes;sound.sample=source;sound.state.effects=0;
         for(unsigned i=0;i<4;++i)sound.state.effects|=std::uint64_t(effects::pack(capture.settings.effects[i]))<<(16*i);
@@ -83,10 +92,12 @@ int main(int argc,char** argv){
         }
         constexpr const char* roles[]{"impact","riser","fall","sweep","zap","rhythm","atmosphere","stinger"};
         constexpr const char* modes[]{"oneShot","gate","continuous","loop","sequence","transition"};
-        list<<id<<'\t'<<e.name<<'\t'<<roles[static_cast<unsigned>(e.role)]<<'\t'<<e.style<<'\t'<<modes[static_cast<unsigned>(e.mode)]
+        list<<id<<'\t'<<e.name<<'\t'<<roles[static_cast<unsigned>(e.role)]<<'\t'<<e.style<<'\t'<<e.mood<<'\t'<<modes[static_cast<unsigned>(e.mode)]
             <<'\t'<<e.bpm<<'\t'<<(e.mode==PlayMode::sequence?unsigned(capture.pattern.bars):unsigned(e.bars))<<'\t'<<unsigned(e.note)<<'\t'<<pair<<'\t'<<(e.pitchedSource?content::scaleName(capture.program.tonality.scale):"keyless")
+            <<'\t'<<(e.pitchedSource&&capture.program.tonality.scale!=source::Scale::chromatic?std::to_string(capture.program.tonality.root):"-")
             <<'\t'<<(capture.useUserSample?source.path:"built-in")<<'\t'<<(capture.useUserSample?source.sha256:"-")<<'\t'
-            <<std::to_integer<unsigned>(program[0])<<'\t'<<std::to_integer<unsigned>(motion[0])<<'\t'<<solo<<"\tstaged-review-only\t"<<content::useCase(e)<<'\n';
+            <<std::to_integer<unsigned>(program[0])<<'\t'<<std::to_integer<unsigned>(motion[0])<<'\t'<<solo<<"\tstaged-review-only\t"<<(capture.useUserSample?"Original VOX procedural source; see bundled source notes":content::provenance)
+            <<'\t'<<content::useCase(e)<<'\n';
         settings<<id<<'\t'<<e.bpm<<'\t'<<unsigned(e.note)<<'\t'<<capture.settings.velocity<<'\t'<<capture.settings.duration<<'\t'<<capture.settings.gain;
         for(const auto& fx:capture.settings.effects)settings<<'\t'<<static_cast<unsigned>(fx.type)<<'\t'<<fx.wet<<'\t'<<fx.amount;
         settings<<'\n';return true;
@@ -99,9 +110,9 @@ int main(int argc,char** argv){
         sample::Reference source{sample::Reference::Kind::external,cue.sourceName,decoded.sha256.toStdString()};
         if(!audit(cue.sound.entry,"-",std::move(capture),source))return 4;
     }
-    for(const auto& cue:b::performance){
+    for(const auto tranche:{std::span{b::performance},std::span{b::interludes}})for(const auto& cue:tranche){
         const auto capture=b::makePreview(cue,48000);
-        if(capture.settings.macroRoutes.count!=cue.routes.size()||!audit(cue.sound.entry,"-",capture,{}))return 5;
+        if(capture.settings.macroRoutes.count!=cue.routes.size()||!audit(cue.sound.entry,"-",capture,{})){std::cerr<<"Audit failed: "<<cue.sound.entry.id<<"\n";return 5;}
     }
     return list&&metrics&&settings?0:6;
 }

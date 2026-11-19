@@ -263,7 +263,7 @@ private:
     juce::Label clockStatus_;
     juce::Slider macroValue_,macroDepth_;
     std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;
-    vox::ui::VoxButton audition_ { "AUDITION" };
+    vox::ui::VoxButton audition_ { "AUDITION" }, stopAudition_ { "STOP" };
     vox::ui::VoxButton panic_ { "PANIC" };
     juce::Slider seed_;
     vox::ui::VoxButton generate_ { "GENERATE" };
@@ -303,7 +303,7 @@ private:
     std::array<vox::ui::VoxComboBox,4> effectsType_;
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;
-    float shownPeak_ = 0.0f;
+    std::array<float,2> shownPeaks_{};
     unsigned shownEvents_=0,shownGrains_=0,clipHold_=0;
     std::uint32_t shownDropped_=0;
 };
