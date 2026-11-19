@@ -34,6 +34,22 @@ int main(){
         check(blocked.waitUntilSettled(std::chrono::seconds(5))&&blocked.status()==Controller::Status::failed&&
               blocked.reference().kind==Reference::Kind::builtin&&blocked.selection()==0,"failed superseding import rolls back original selection");
     }
+    {
+        std::atomic<bool> entered{false},sawCancel{false};
+        Controller interruptible(Controller::CancelLoader{[&](const juce::File&,Decoded&,const std::atomic<bool>* stop){
+            entered.store(true,std::memory_order_release);
+            const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+            while(!stop->load(std::memory_order_relaxed)&&std::chrono::steady_clock::now()<until)std::this_thread::yield();
+            sawCancel.store(stop->load(std::memory_order_relaxed),std::memory_order_release);return false;
+        }});
+        check(interruptible.import(file),"queue cooperatively cancellable sample");
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        while(!entered.load(std::memory_order_acquire)&&std::chrono::steady_clock::now()<until)std::this_thread::yield();
+        check(entered.load()&&interruptible.restore({}),"restore supersedes in-flight decode");
+        while(!sawCancel.load(std::memory_order_acquire)&&std::chrono::steady_clock::now()<until)std::this_thread::yield();
+        check(sawCancel.load()&&interruptible.selection()==0&&interruptible.status()==Controller::Status::builtin,
+              "sample worker sees cancellation without resurrecting the superseded import");
+    }
     Controller controller;check(controller.selection()==0 && controller.reference().kind==Reference::Kind::builtin,"default built-in mode");
     check(controller.import(file),"queue sample import");
     check(controller.waitUntilSettled(std::chrono::seconds(5))&&controller.status()==Controller::Status::ready,"sample imported on worker");

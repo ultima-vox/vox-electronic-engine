@@ -864,10 +864,11 @@ FxPanel::FxPanel (FxProcessor& processor)
     addAndMakeVisible(presets_);
     for (std::size_t i=0;i<4;++i) {
         auto& type=effectsType_[i];
-        const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate","Phaser","Flanger","Delay","Chorus","Reverb"};
+        const char* names[]{"Bypass","Lowpass","Drive","Wavefold","Bitcrush","Ring","Gate","Phaser","Flanger","Delay","Chorus","Reverb","Tempo Delay (1/8)"};
         static_assert(std::size(names)==static_cast<std::size_t>(effects::Type::count));
         for (std::size_t n=0;n<std::size(names);++n) type.addItem(names[n],static_cast<int>(n+1));
         type.setTitle("Shared effect slot " + juce::String(static_cast<int>(i+1)));
+        type.setTooltip("Tempo Delay: eighth-note tap at host BPM (120 if unavailable, 30 BPM minimum); Amount is feedback");
         type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s); };
         addAndMakeVisible(type);
         for (auto* slider : {&effectsWet_[i],&effectsAmount_[i]}) {

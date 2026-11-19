@@ -114,6 +114,25 @@ int main(){
             check(unpack(pack({Type::delay,1,.5f})).type==Type::delay,"delay structural state");
         }
         {
+            Chain sync;check(sync.prepare(rate)&&sync.set(0,{Type::tempoDelay,1,0}),"Tempo Delay prepare");
+            std::array<float,256> l{},r{};
+            const auto silence=[&]{for(int i=0;i<8;++i)sync.process(l.data(),r.data(),l.size());};
+            const auto impulse=[&](double bpm){
+                sync.prepare(rate);sync.set(0,{Type::tempoDelay,1,0});
+                silence();sync.setTempo(bpm);silence();l[0]=r[0]=.5f;
+                std::size_t first=0;double peak=0;
+                const auto target=static_cast<std::size_t>(std::round(rate*tempoDelaySeconds(bpm)));
+                for(std::size_t at=0;at<target+257;at+=l.size()){
+                    sync.process(l.data(),r.data(),l.size());
+                    for(std::size_t i=0;i<l.size();++i)if(std::abs(l[i])>1e-4){if(peak==0)first=at+i;peak=std::max(peak,std::abs(static_cast<double>(l[i])));}
+                    l={};r={};
+                }
+                check(first==target&&std::abs(peak-.5)<.001,"Tempo Delay follows an exact eighth-note interval after its tap crossfade");
+            };
+            impulse(120);impulse(150);impulse(20);impulse(std::numeric_limits<double>::quiet_NaN());
+            check(includesTempoDelay(pack({Type::tempoDelay,1,.5f})),"tempo delay has a stable packed type distinct from free delay");
+        }
+        {
             constexpr double rate=8000;Chain echo;check(echo.prepare(rate)&&echo.set(0,{Type::delay,1,1}),"feedback delay setup");
             std::array<float,128> l{},r{};echo.process(l.data(),r.data(),l.size());l={};r={};l[0]=r[0]=1;
             std::vector<float> rendered(9000);std::size_t written=0;

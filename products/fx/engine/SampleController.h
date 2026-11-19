@@ -27,11 +27,16 @@ public:
         } catch(...) {return false;}
     }
     using Loader=std::function<bool(const juce::File&,Decoded&)>;
-    explicit Controller(Loader loader = loadWav) : loader_(std::move(loader)),worker_([this]{run();}) {}
+    using CancelLoader=std::function<bool(const juce::File&,Decoded&,const std::atomic<bool>*)>;
+    Controller():Controller(CancelLoader{loadWavCancelable}){}
+    explicit Controller(Loader loader):Controller(CancelLoader{[loader=std::move(loader)](const juce::File& file,Decoded& result,const std::atomic<bool>*){
+        return loader(file,result);
+    }}){}
+    explicit Controller(CancelLoader loader):loader_(std::move(loader)),worker_([this]{run();}){}
     Controller(const Controller&)=delete;
     Controller& operator=(const Controller&)=delete;
     ~Controller(){
-        {const std::lock_guard<std::mutex> lock(mutex_);stopping_=true;pending_=false;}
+        {const std::lock_guard<std::mutex> lock(mutex_);stopping_=true;pending_=false;cancelLoad_.store(true,std::memory_order_relaxed);}
         condition_.notify_all();if(worker_.joinable())worker_.join();
     }
     Store& store() noexcept { return store_; }
@@ -58,7 +63,7 @@ public:
                 importPending_=true;
             }
             desired_=std::move(candidate);selection_.store(1,std::memory_order_release);
-            next.revision=++revision_;request_=std::move(next);pending_=true;status_=Status::loading;
+            next.revision=++revision_;cancelLoad_.store(true,std::memory_order_relaxed);request_=std::move(next);pending_=true;status_=Status::loading;
         }
         condition_.notify_all();return true;
     }
@@ -81,7 +86,7 @@ public:
             if(stopping_||disabled_||importPending_||revision_==std::numeric_limits<std::uint64_t>::max()||
                desired_.kind!=Reference::Kind::external||desired_.path!=expectedReference.path||
                desired_.sha256!=expectedReference.sha256)return false;
-            next.revision=++revision_;request_=std::move(next);pending_=true;status_=Status::loading;
+            next.revision=++revision_;cancelLoad_.store(true,std::memory_order_relaxed);request_=std::move(next);pending_=true;status_=Status::loading;
         }
         condition_.notify_all();return true;
     }
@@ -98,6 +103,7 @@ public:
             const std::lock_guard<std::mutex> lock(mutex_);
             if(revision_==std::numeric_limits<std::uint64_t>::max())disabled_=true;
             else ++revision_;
+            cancelLoad_.store(true,std::memory_order_relaxed);
             importPending_=false;rollback_={};
             desired_=std::move(prepared.reference);
             if(desired_.kind==Reference::Kind::builtin){
@@ -127,12 +133,12 @@ private:
                 std::unique_lock<std::mutex> lock(mutex_);
                 condition_.wait(lock,[this]{return stopping_||pending_;});
                 if(stopping_)return;
-                request=std::move(request_);pending_=false;
+                request=std::move(request_);pending_=false;cancelLoad_.store(false,std::memory_order_relaxed);
             }
             Decoded decoded;Reference imported;bool verified=false;
             try {
                 const auto path=juce::String::fromUTF8(request.path.c_str(),static_cast<int>(request.path.size()));
-                const bool loaded=juce::File::isAbsolutePath(path)&&loader_(juce::File(path),decoded);
+                const bool loaded=juce::File::isAbsolutePath(path)&&loader_(juce::File(path),decoded,&cancelLoad_);
                 const auto hash=loaded?decoded.sha256.toStdString():std::string{};
                 verified=loaded&&(request.importing||hash==request.expected);
                 if(verified&&(request.importing||request.relinking))imported={Reference::Kind::external,request.path,hash};
@@ -163,7 +169,8 @@ private:
     Status status_=Status::builtin;
     std::uint64_t revision_=0;
     bool stopping_=false,pending_=false,disabled_=false,importPending_=false;
-    Loader loader_;
+    std::atomic<bool> cancelLoad_{false};
+    CancelLoader loader_;
     std::thread worker_;
 };
 } // namespace vox::fx::sample

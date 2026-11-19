@@ -9,7 +9,12 @@
 namespace vox::fx::effects {
 // Compact, bounded effects; advanced controls and quality modes remain.
 inline constexpr double feedbackDelayTailSeconds = 10.0;
-enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, reverb, count };
+// An eighth note on 30..1000 BPM. Slower host tempi clamp at one second.
+// No PPQ is inferred (only BPM determines the interval).
+inline double tempoDelaySeconds(double tempo) noexcept {
+    return 30.0/std::clamp(std::isfinite(tempo)?tempo:120.,30.,1000.);
+}
+enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, reverb, tempoDelay, count };
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -42,6 +47,10 @@ inline bool validPacked(std::uint64_t value) noexcept {
     for(unsigned i=0;i<4;++i)if(!unpack(static_cast<std::uint16_t>(value>>(16*i))).valid())return false;
     return true;
 }
+inline bool includesTempoDelay(std::uint64_t packed) noexcept {
+    for(unsigned i=0;i<4;++i)if(unpack(static_cast<std::uint16_t>(packed>>(16*i))).type==Type::tempoDelay)return true;
+    return false;
+}
 class Chain {
     struct State {
         Type type=Type::bypass;
@@ -51,6 +60,8 @@ class Chain {
         double phaseCoefficientL=0,phaseCoefficientR=0;
         unsigned bank=0;
         std::size_t write=0,age=0,silentSamples=0;
+        double syncTap=0,oldSyncTap=0;
+        unsigned syncFade=0;
         std::array<std::size_t,4> reverbL{},reverbR{};
     };
     struct Bank { std::vector<float> left,right; };
@@ -65,12 +76,16 @@ public:
         if(!std::isfinite(rate)||rate<8000||rate>384000)return false;
         // Two banks per slot permit bounded crossfades without copying or
         // clearing delay memory on the callback. Allocation is prepare-only.
-        const auto size=static_cast<std::size_t>(std::ceil(rate*.5))+4;
+        const auto size=static_cast<std::size_t>(std::ceil(rate))+4;
         std::array<std::array<Bank,2>,4> next;
         try { for(auto& slot:next)for(auto& bank:slot){bank.left.assign(size,0);bank.right.assign(size,0);} }
         catch(...) { return false; }
         banks_.swap(next); rate_=rate; fadeSamples_=static_cast<unsigned>(std::max(1.0,std::round(.005*rate)));
-        smoothing_=1.0-std::exp(-1.0/(.005*rate)); slots_={}; return true;
+        smoothing_=1.0-std::exp(-1.0/(.005*rate)); slots_={};
+        syncTap_=0;setTempo(120);return true;
+    }
+    void setTempo(double bpm) noexcept {
+        syncTap_=std::round(rate_*tempoDelaySeconds(bpm));
     }
     // Bounded and allocation-free; type changes crossfade for 5ms. A later
     // request during a crossfade is coalesced until that transition completes.
@@ -187,7 +202,7 @@ private:
             l=.5*(l+delayedL);r=.5*(r+delayedR);
             state.phase+=.25/rate_;if(state.phase>=1)state.phase-=1;break;
         }
-        case Type::delay: {
+        case Type::delay: case Type::tempoDelay: {
             const auto size=bank.left.size();if(size<4)break;
             // Stereo feedback tap: 50–500 ms and 0–75% feedback. A hard
             // ten-second silence cap bounds even the maximum-feedback tail;
@@ -197,8 +212,21 @@ private:
             if(state.silentSamples>=static_cast<std::size_t>(rate_*feedbackDelayTailSeconds)){
                 state.write=state.age=0;l=r=0;break;
             }
-            const double length=std::round(rate_*(.05+.45*amount));
-            const auto delayedL=readDelay(state,bank.left,length),delayedR=readDelay(state,bank.right,length);
+            double length;
+            if(state.type==Type::tempoDelay){
+                if(state.syncTap==0)state.syncTap=syncTap_;
+                if(state.syncFade==0&&state.syncTap!=syncTap_){
+                    state.oldSyncTap=state.syncTap;state.syncTap=syncTap_;state.syncFade=fadeSamples_;
+                }
+                length=state.syncTap;
+            }else length=std::round(rate_*(.05+.45*amount));
+            auto delayedL=readDelay(state,bank.left,length),delayedR=readDelay(state,bank.right,length);
+            if(state.syncFade){
+                const double blend=1.-static_cast<double>(state.syncFade)/fadeSamples_;
+                const auto oldL=readDelay(state,bank.left,state.oldSyncTap),oldR=readDelay(state,bank.right,state.oldSyncTap);
+                delayedL=oldL+(delayedL-oldL)*blend;delayedR=oldR+(delayedR-oldR)*blend;
+                --state.syncFade;
+            }
             const double feedback=.75*amount;
             bank.left[state.write]=static_cast<float>(std::clamp(l+feedback*delayedL,-8.0,8.0));
             bank.right[state.write]=static_cast<float>(std::clamp(r+feedback*delayedR,-8.0,8.0));
@@ -249,7 +277,7 @@ private:
         case Type::count: break;
         }
     }
-    double rate_=44100,smoothing_=0;
+    double rate_=44100,smoothing_=0,syncTap_=11025;
     unsigned fadeSamples_=1;
     std::array<Slot,4> slots_{};
     std::array<std::array<Bank,2>,4> banks_{};

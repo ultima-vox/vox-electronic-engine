@@ -86,7 +86,7 @@ inline constexpr WaveItem waveA[]{
      {.19f,1,0,.39f},{.28f,.59f,.76f,.56f},{.42f,.64f,.46f,.4f},{{{E::ring,.27f,.36f}}}},
     {{"voxfx.zap.delta-dialogue","Delta Dialogue","Goa Psy","Curious",R::zap,M::oneShot,true,54,0,.64f,144,1,false,0,"Two-note acid question and answer"},
      {{{F::squelch,.93f,-.37f,0,.52f,0,.51f,{T::lowpass,3800,1.23f,2}},{F::formant,.72f,.44f,.48f,.52f,7,-.37f,{T::bandpass,1510,.83f,2}}}},
-     {.67f,.89f,.18f,.56f},{.69f,.4f,.55f,.42f},{.33f,.5f,.69f,.52f},{{{E::drive,.27f,.69f},{E::delay,.15f,.14f}}},{K::phrygian,6}},
+     {.67f,.89f,.18f,.56f},{.69f,.4f,.55f,.42f},{.33f,.5f,.69f,.52f},{{{E::drive,.27f,.69f},{E::tempoDelay,.15f,.14f}}},{K::phrygian,6}},
     {{"voxfx.zap.hive-jab","Hive Jab","Dark Forest","Organic",R::zap,M::gate,true,45,0,.31f,154,1,false,0,"Low wet jab between bass hits"},
      {{{F::formant,.89f,.05f,0,.94f,-5,-.62f,{T::bandpass,710,1.17f,2}},{F::metallic,.56f,-.23f,.16f,.65f,-12,.63f,{T::lowpass,1870,.72f,4}},
        {F::granular,.39f,.39f,.28f,.72f,0,-.34f,{T::lowpass,4900,.71f,2}}}},
@@ -94,7 +94,7 @@ inline constexpr WaveItem waveA[]{
     // Rhythms — exact authored phrase notes, accents, probabilities and ratchets.
     {{"voxfx.rhythm.ribbon-code","Ribbon Code","Progressive Tech","Precise",R::rhythm,M::sequence,true,52,0,.13f,131,1,false,0,"Four-bar syncopated turnaround"},
      {{{F::metallic,.68f,.29f,0,.7f,0,-.42f,{T::bandpass,1450,.86f,2}},{F::impact,.79f,-.13f,0,.54f,-12,-.18f,{T::lowpass,980,.7f,4}}}},
-     {.96f,.56f,0,.21f},{.57f,.45f,.39f,.31f},{.52f,.39f,.58f,.49f},{{{E::drive,.32f,.48f},{E::delay,.12f,.13f}}},{K::minor,4},
+     {.96f,.56f,0,.21f},{.57f,.45f,.39f,.31f},{.52f,.39f,.58f,.49f},{{{E::drive,.32f,.48f},{E::tempoDelay,.12f,.13f}}},{K::minor,4},
      {G::sixteenth,4,.19f,{{{0,52,119},{3,55,80,96},{7,52,103},{14,59,93,100,2},{16,52,113},{20,50,98},{29,57,81,90},
                          {32,52,121},{35,55,91},{43,57,108,100,2},{48,52,115},{54,64,79,97},{57,62,96},{61,59,108,100,3},{63,52,121}}}}},
     {{"voxfx.rhythm.tokamak-ticks","Tokamak Ticks","Hi-Tech","Nervous",R::rhythm,M::sequence,true,69,0,.084f,184,1,false,0,"Triplet micro-ticks with four-hit ratchets"},

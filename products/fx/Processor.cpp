@@ -8,6 +8,16 @@
 
 namespace vox::fx {
 namespace {
+class ControllerPublication {
+public:
+    ControllerPublication(std::atomic<std::uint64_t>& epoch,unsigned& depth):epoch_(epoch),depth_(depth){
+        if(depth_++==0)epoch_.fetch_add(1,std::memory_order_acq_rel);
+    }
+    ~ControllerPublication(){if(--depth_==0)epoch_.fetch_add(1,std::memory_order_release);}
+    ControllerPublication(const ControllerPublication&)=delete;
+private:
+    std::atomic<std::uint64_t>& epoch_;unsigned& depth_;
+};
 preset::Section encodeParameter (float value, float durationNormalized)
 {
     preset::Section section;
@@ -40,7 +50,7 @@ preset::Section encodeEffects (std::uint64_t packed, const std::array<float,4>& 
     const auto append=[&] (std::uint32_t word) {
         for (int shift=0; shift<32; shift+=8) section.data.push_back(static_cast<std::byte>((word>>shift)&0xffu));
     };
-    append(2);
+    append(effects::includesTempoDelay(packed)?3:2);
     for (std::size_t i=0;i<4;++i) {
         append(static_cast<std::uint32_t>(effects::unpack(static_cast<std::uint16_t>(packed>>(i*16))).type));
         append(std::bit_cast<std::uint32_t>(wet[i]));append(std::bit_cast<std::uint32_t>(amount[i]));
@@ -141,6 +151,7 @@ bool FxProcessor::generateSound(bool mutation){
     const juce::ScopedLock transaction(controllerRestoreLock_);
     sample::Controller::PreparedRestore builtin;
     if(!sample::Controller::prepareRestore({},builtin))return false;
+    const ControllerPublication publication(controllerEpoch_,publicationDepth_);
     bool replaceSample=false;
     const bool graphChanged=programs_.editSoundGraph([&](auto& state){return generator::makeSound(state,mutation,state,replaceSample);});
     const bool assetChanged=replaceSample&&samples_.reference().kind!=sample::Reference::Kind::builtin;
@@ -152,7 +163,6 @@ bool FxProcessor::generateSound(bool mutation){
 void FxProcessor::setStateInformation(const void* data,int size){
     const juce::ScopedLock transaction(controllerRestoreLock_);
     vox::suite::SuiteProcessor::setStateInformation(data,size);
-    if(lastStateError().isEmpty())panic();
 }
 
 bool FxProcessor::storeComparison(std::size_t slot)
@@ -195,10 +205,11 @@ bool FxProcessor::applyPortableSound(const portable::Sound& sound) {
     const juce::ScopedLock transaction(controllerRestoreLock_);
     sample::Controller::PreparedRestore prepared;
     if(!sample::Controller::prepareRestore(sound.sample,prepared))return false;
+    const ControllerPublication publication(controllerEpoch_,publicationDepth_);
     const auto& s=sound.state;
     if(!programs_.publishState(s.program,s.effects,s.pattern,s.macros,s.generator))return false;
     samples_.commitRestore(std::move(prepared));
-    panic();
+    retireOnPublication();
     return true; // All 19 host parameter values, layout and the A/B bank are left alone.
 }
 bool FxProcessor::restorePortablePreset(std::span<const std::byte> bytes) {
@@ -285,6 +296,8 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     (void) macroRuntime_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     programSequence_ = 0; audioEffects_ = effects::defaults();
+    audioBases_=readCallbackBases();audioEpoch_=controllerEpoch_.load(std::memory_order_acquire);
+    retiredEpoch_=retireAtEpoch_.load(std::memory_order_acquire);
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
     outputSmoothing_.setCurrentAndTargetValue (output_->get());
     panicPending_.store (false, std::memory_order_relaxed);
@@ -310,6 +323,21 @@ juce::AudioProcessorEditor* FxProcessor::createEditor()
     if(editor->getHeight()<760)editor->setSize(editor->getWidth(),760);
     editor->setContent (std::make_unique<FxPanel> (*this));
     return editor.release();
+}
+
+void FxProcessor::retireOnPublication() noexcept {
+    // Attach retirement to adoption of the complete new state, not to a
+    // generic Panic exchange which the preceding callback could consume.
+    retireAtEpoch_.store(controllerEpoch_.load(std::memory_order_relaxed)+1,std::memory_order_release);
+    previewBus_.stop();
+}
+
+FxProcessor::CallbackBases FxProcessor::readCallbackBases() const noexcept {
+    CallbackBases values;
+    values.duration=duration_->get();values.output=output_->get();values.pattern=patternEnabled_->get();
+    for(std::size_t i=0;i<8;++i)values.macros[i]=macros_[i]->get();
+    for(std::size_t i=0;i<4;++i){values.wet[i]=effectWet_[i]->get();values.amount[i]=effectAmount_[i]->get();}
+    return values;
 }
 
 void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -355,31 +383,53 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     engine_.setMusicalClockAvailable(musicalClockReady,glitchTempo);
     engine_.setBarGrid(barGrid);
     capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
-    if (panicPending_.exchange (false, std::memory_order_acquire)) {
-        engine_.allSoundOff (0);
-        previewBus_.stop();
-        auditionPending_.store (false, std::memory_order_relaxed);
+    // Take one bounded read. A save/restore listener may notify several
+    // host parameters synchronously; do not admit notes from a half-applied
+    // graph/sample pair or use those parameter values in the meantime.
+    const auto epoch=controllerEpoch_.load(std::memory_order_acquire);
+    bool admit=false;
+    std::uint64_t selection=0;
+    if((epoch&1u)==0){
+        auto nextSequence=epoch==audioEpoch_?programSequence_:0;
+        const bool changed=programs_.tryRead(pendingGraph_.program,pendingGraph_.effects,
+            pendingGraph_.pattern,pendingGraph_.macros,nextSequence);
+        const auto bases=readCallbackBases();selection=samples_.selection();
+        if(epoch==controllerEpoch_.load(std::memory_order_acquire)){
+            // A new epoch always re-reads the complete graph, including
+            // no-op controller publications with an unchanged sequence.
+            if(changed){
+                audioProgram_=pendingGraph_.program;audioEffects_=pendingGraph_.effects;
+                if(programSequence_==0||audioPattern_!=pendingGraph_.pattern){
+                    audioPattern_=pendingGraph_.pattern;(void)pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
+                }
+                audioMacroConfig_=pendingGraph_.macros;programSequence_=nextSequence;audioEpoch_=epoch;
+                (void)engine_.setProgram(audioProgram_);
+                (void)macroRuntime_.setConfig(audioMacroConfig_);(void)engine_.setVoiceMotion(audioMacroConfig_);
+            }
+            admit=audioEpoch_==epoch;
+            if(admit)audioBases_=bases;
+        }
     }
-    // One bounded attempt: if a concurrent writer is publishing, keep the
-    // prior snapshot and retry on the next block. No locks or allocation.
-    if (programs_.tryRead (audioProgram_, audioEffects_, audioPattern_, audioMacroConfig_, programSequence_)) {
-        (void) engine_.setProgram (audioProgram_);
-        (void) pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
-        (void) macroRuntime_.setConfig(audioMacroConfig_);
-        (void) engine_.setVoiceMotion(audioMacroConfig_);
+    const auto retirement=retireAtEpoch_.load(std::memory_order_acquire);
+    const bool retire=admit&&retirement>retiredEpoch_&&retirement<=audioEpoch_;
+    const bool panic=admit&&panicPending_.exchange(false,std::memory_order_acquire);
+    if(retire)retiredEpoch_=retirement;
+    if(retire||panic){
+        engine_.allSoundOff(0);previewBus_.stop();
+        auditionPending_.store(false,std::memory_order_relaxed);
     }
     musicalClockUnavailable_.store(!musicalClockReady || (audioProgram_.mode == PlayMode::transition && !barGrid.valid()),
                                    std::memory_order_relaxed);
-    const float requestedDuration = duration_->get();
+    const float requestedDuration = audioBases_.duration;
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
-    std::array<float,8> macroValues{};
-    for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
+    const auto& macroValues=audioBases_.macros;
     engine_.setMacroBases(macroValues);
     macroRuntime_.setTempo(glitchTempo);
-    if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection,TriggerSource::preview); }
+    effects_.setTempo(glitchTempo);
+    if (admit&&auditionPending_.exchange(false,std::memory_order_acquire))engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
     const int size = buffer.getNumSamples();
-    const bool wantsPattern=patternEnabled_->get()||audioProgram_.mode==PlayMode::sequence;
+    const bool wantsPattern=audioBases_.pattern||audioProgram_.mode==PlayMode::sequence;
     bool patternUnavailable=wantsPattern&&!patternHostReady;
     patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
     if (buffer.getNumChannels() < 2 || size == 0) {
@@ -406,7 +456,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             const int channel=(bytes[0]&0x0f)+1;
             if(type==0x90 && bytes[2]!=0) {
                 renderTo(metadata.samplePosition);
-                {const auto selection=samples_.selection();engine_.noteOn(channel,bytes[1]&0x7f,static_cast<float>(bytes[2]&0x7f)/127.0f,eventDuration,selection!=0,selection);}
+                if(admit)engine_.noteOn(channel,bytes[1]&0x7f,static_cast<float>(bytes[2]&0x7f)/127.0f,eventDuration,selection!=0,selection);
             } else if(type==0x80 || (type==0x90 && bytes[2]==0)) {
                 renderTo(metadata.samplePosition);engine_.noteOff(channel,bytes[1]&0x7f);
             } else if(type==0xb0 && (bytes[1]==120 || bytes[1]==123)) {
@@ -414,12 +464,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             }
         }
     };
-    if(wantsPattern && patternHostReady) {
+    if(admit && wantsPattern && patternHostReady) {
         // MIDI at the same offset is processed first. No host MIDI output is generated.
         const bool scheduled=pattern::forEachTrigger(audioPatternSchedule_,audioPattern_.bars,hostPpq,hostBpm,preparedSampleRate(),size,
             [&] (int offset,std::uint8_t note,std::uint8_t velocity) noexcept {
                 processMidiThrough(offset);renderTo(offset);
-                {const auto selection=samples_.selection();engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection,TriggerSource::pattern);}
+                engine_.noteOn(1,note,static_cast<float>(velocity)/127.0f,eventDuration,selection!=0,selection,TriggerSource::pattern);
             });
         patternUnavailable=!scheduled;
         patternUnavailable_.store(patternUnavailable,std::memory_order_relaxed);
@@ -430,12 +480,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const auto fxSnapshot=audioEffects_;
     for (std::size_t i=0;i<4;++i) {
         auto settings=effects::unpack(static_cast<std::uint16_t>(fxSnapshot>>(i*16)));
-        const auto wet=effectWet_[i]->get(), amount=effectAmount_[i]->get();
+        const auto wet=audioBases_.wet[i], amount=audioBases_.amount[i];
         settings.wet=std::isfinite(wet)?juce::jlimit(0.0f,1.0f,wet):0.0f;
         settings.amount=std::isfinite(amount)?juce::jlimit(0.0f,1.0f,amount):0.0f;
         (void) effects_.set(i,settings);
     }
-    const auto target = output_->get();
+    const auto target = audioBases_.output;
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
     macro::renderPost(effects_,macroRuntime_,left,right,static_cast<std::size_t>(size),macroValues,[&]{return outputSmoothing_.getNextValue();});
     if(isNonRealtime())previewBus_.discardOnAudioThread();
@@ -527,12 +577,13 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
             for(std::size_t i=0;i<4;++i){const auto s=effects::unpackLegacy(static_cast<std::uint16_t>(legacy>>(i*16)));
                 if(!s.valid()){error="Invalid FX effects settings";return {};}
                 wet[i]=s.wet;amount[i]=s.amount;fx|=static_cast<std::uint64_t>(effects::pack(s))<<(i*16);}
-        } else if(section->data.size()==52 && wordAt(section->data,0)==2) {
+        } else if(section->data.size()==52 && (wordAt(section->data,0)==2||wordAt(section->data,0)==3)) {
+            const auto typeLimit=wordAt(section->data,0)==2?effects::Type::tempoDelay:effects::Type::count;
             fx=0;
             for(std::size_t i=0;i<4;++i) {
                 effects::Settings settings;
                 const auto type=wordAt(section->data,4+i*12);
-                if(type>=static_cast<std::uint32_t>(effects::Type::count)){error="Invalid FX effects type";return {};}
+                if(type>=static_cast<std::uint32_t>(typeLimit)){error="Invalid FX effects type";return {};}
                 settings.type=static_cast<effects::Type>(type);
                 wet[i]=settings.wet=std::bit_cast<float>(wordAt(section->data,8+i*12));
                 amount[i]=settings.amount=std::bit_cast<float>(wordAt(section->data,12+i*12));
@@ -597,6 +648,7 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
     if(!compare::empty(*bank))result.sections.push_back(compare::encode(*bank));
     auto held = std::make_shared<float> (0.0f);
     result.apply = [this, value, duration, program, held, fx, wet, amount, triggerPattern, patternEnabled, macroValues, macroRoutes, generatorState, bank, preparedSample=std::move(preparedSample)] () mutable {
+        const ControllerPublication publication(controllerEpoch_,publicationDepth_);
         {const std::lock_guard lock(comparisonMutex_);comparisons_=std::move(*bank);}
         (void) programs_.publishState (*program, fx, *triggerPattern, *macroRoutes, *generatorState);
         for(std::size_t i=0;i<8;++i)macros_[i]->setValueNotifyingHost(macroValues[i]);
@@ -606,6 +658,7 @@ FxProcessor::ProductRestore FxProcessor::readProductState (const preset::StateDo
         output_->setValueNotifyingHost (value);
         duration_->setValueNotifyingHost (duration);
         *held = static_cast<juce::RangedAudioParameter*> (duration_)->getValue();
+        retireOnPublication();
     };
     result.settle = [this, duration, held] { loadedDuration_ = duration; heldDuration_ = *held; };
     return result;

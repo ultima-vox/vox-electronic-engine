@@ -172,6 +172,26 @@ private:
     NoiseProgram audioProgram_;
     pattern::Pattern audioPattern_;
     pattern::FixedSchedule audioPatternSchedule_;
+    struct CallbackBases {
+        std::array<float,8> macros{};
+        std::array<float,4> wet{},amount{};
+        float duration=4,output=1;
+        bool pattern=false;
+    } audioBases_;
+    CallbackBases readCallbackBases() const noexcept;
+    // The structural store and immutable audio assets have separate owners.
+    // This fence makes host restore/preset load an admission boundary. Only
+    // the controller under controllerRestoreLock_ can change its parity.
+    std::atomic<std::uint64_t> controllerEpoch_{0}, retireAtEpoch_{0};
+    void retireOnPublication() noexcept;
+    unsigned publicationDepth_=0;
+    std::uint64_t audioEpoch_=0,retiredEpoch_=0;
+    struct PendingGraph {
+        NoiseProgram program;
+        pattern::Pattern pattern;
+        macro::Config macros;
+        std::uint64_t effects=0;
+    } pendingGraph_;
     std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
     std::atomic<bool> musicalClockUnavailable_ {true};

@@ -7,7 +7,7 @@
 namespace vox::fx::portable {
 inline constexpr auto product=preset::makeTag("VXUP");
 inline constexpr std::size_t maxBytes=64*1024;
-inline constexpr unsigned version=2;
+inline constexpr unsigned version=3;
 struct Sound { ProgramStore::Snapshot state; sample::Reference sample; };
 struct Tags {
     std::string name,style,mood,use;
@@ -46,7 +46,7 @@ inline bool readTags(std::span<const std::byte> bytes,Tags& out){
 // automation base values. FX slot types are structural; wet/amount remain
 // with the receiving project. An external sample is referenced, never embedded.
 inline bool encode(const Sound& value,std::vector<std::byte>& out,const Tags* tags=nullptr){
-    preset::StateDocument doc{product,tags?version:1u,{}};
+    preset::StateDocument doc{product,effects::includesTempoDelay(value.state.effects)?version:tags?2u:1u,{}};
     auto section=[&](const char* tag)->std::vector<std::byte>&{
         doc.sections.push_back({preset::makeTag(tag),{}});return doc.sections.back().data;
     };
@@ -63,7 +63,9 @@ inline bool encode(const Sound& value,std::vector<std::byte>& out,const Tags* ta
 inline bool decode(std::span<const std::byte> bytes,Sound& out,Tags* tags=nullptr){
     if(bytes.size()>maxBytes)return false;
     const auto decoded=preset::decode(bytes,product,version);
-    if(!decoded.ok()||decoded.document.sections.size()!=(decoded.document.schema==2?7u:6u))return false;
+    if(!decoded.ok())return false;
+    const bool tagged=decoded.document.find(tagsTag)!=nullptr;
+    if(decoded.document.sections.size()!=(tagged?7u:6u)||(decoded.document.schema==1&&tagged)||(decoded.document.schema==2&&!tagged))return false;
     const auto section=[&](const char* tag)->std::span<const std::byte>{
         const auto* found=decoded.document.find(preset::makeTag(tag));return found?std::span<const std::byte>(found->data):std::span<const std::byte>{};
     };
@@ -74,12 +76,12 @@ inline bool decode(std::span<const std::byte> bytes,Sound& out,Tags* tags=nullpt
     const auto fx=section("FTYP");std::size_t at=0;next.state.effects=0;
     for(unsigned i=0;i<4;++i){
         std::uint32_t type=0;
-        if(!programcodec::getU32(fx,at,type)||type>=static_cast<unsigned>(effects::Type::count))return false;
+        if(!programcodec::getU32(fx,at,type)||type>=static_cast<unsigned>(decoded.document.schema<3?effects::Type::tempoDelay:effects::Type::count))return false;
         next.state.effects|=static_cast<std::uint64_t>(effects::pack({static_cast<effects::Type>(type),1,.5f}))<<(16*i);
     }
     if(at!=fx.size())return false;
     Tags nextTags;
-    if(decoded.document.schema==2&&!readTags(section("META"),nextTags))return false;
+    if(tagged&&!readTags(section("META"),nextTags))return false;
     if(tags)*tags=std::move(nextTags);
     out=std::move(next);return true;
 }

@@ -64,6 +64,8 @@ inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& set
             case effects::Type::lowpass: case effects::Type::phaser:
             case effects::Type::flanger: case effects::Type::chorus: shortTail = true; break;
             case effects::Type::delay: serialTail += effect.amount > 0 || modulatedAmount ? effects::feedbackDelayTailSeconds : 0.5; break;
+            case effects::Type::tempoDelay: serialTail += effect.amount > 0 || modulatedAmount
+                ? effects::feedbackDelayTailSeconds : effects::tempoDelaySeconds(settings.tempo); break;
             case effects::Type::reverb: serialTail += 2.0; break;
             default: break;
         }
@@ -116,6 +118,7 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
     if(!engine->setProgram(program))return false;
     if(!sequence&&!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser,0,TriggerSource::preview))return false;
     effects::Chain chain;if(!chain.prepare(settings.sampleRate))return false;
+    chain.setTempo(settings.tempo);
     macro::Runtime macroRuntime;if(!macroRuntime.prepare(settings.sampleRate)||!macroRuntime.setConfig(settings.macroRoutes))return false;
     macroRuntime.setTempo(settings.tempo);
     for(std::size_t i=0;i<settings.effects.size();++i)if(!chain.set(i,settings.effects[i]))return false;

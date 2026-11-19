@@ -3,6 +3,7 @@
 #include <cmath>
 #include <bit>
 #include <cstdio>
+#include <condition_variable>
 #include <memory>
 #include <limits>
 #include <span>
@@ -29,6 +30,46 @@ juce::MemoryBlock save (vox::fx::FxProcessor& processor) {
 void block (vox::fx::FxProcessor& p, juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi) {
     p.processBlock(audio, midi); midi.clear();
 }
+void checkRestoreAdmission() {
+    using namespace vox::fx;
+    struct Listener final : juce::AudioProcessorParameter::Listener {
+        void parameterValueChanged(int,float) override {
+            const std::unique_lock lock(mutex);entered=true;cv.notify_all();
+            cv.wait(lock,[this]{return released;});
+        }
+        void parameterGestureChanged(int,bool) override {}
+        std::mutex mutex;std::condition_variable cv;bool entered=false,released=false;
+    } gate;
+    auto fx=std::make_unique<FxProcessor>(),donor=std::make_unique<FxProcessor>();
+    donor->setFamily(static_cast<int>(NoiseFamily::laser));donor->outputParameter().setValueNotifyingHost(.47f);
+    const auto state=save(*donor);fx->prepareToPlay(48000,512);
+    juce::AudioBuffer<float> audio(2,512);juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1,62,juce::uint8{100}),0);block(*fx,audio,midi);
+    check(fx->audioTelemetry().events==1,"an old event sounds before restore starts");
+    auto& gain=fx->outputParameter();gain.addListener(&gate);
+    const auto stale=fx->previewBus().ticket();
+    std::thread host([&]{fx->setStateInformation(state.getData(),static_cast<int>(state.getSize()));});
+    bool interleaved;
+    {
+        std::unique_lock lock(gate.mutex);
+        interleaved=gate.cv.wait_for(lock,std::chrono::seconds(5),[&]{return gate.entered;});
+    }
+    if(interleaved){
+        midi.addEvent(juce::MidiMessage::noteOn(1,71,juce::uint8{100}),0);block(*fx,audio,midi);
+        check(fx->audioTelemetry().events==1,"blocked restore cannot admit a note from partially published graph or host bases");
+    }else check(false,"restore reaches the synchronously notified host parameter");
+    {std::lock_guard lock(gate.mutex);gate.released=true;}gate.cv.notify_all();host.join();gain.removeListener(&gate);
+    const std::array<float,4> stalePreview{.4f,.4f,.4f,.4f};
+    check(!fx->previewBus().publish(stalePreview,48000,stale),"successful restore invalidates in-flight preview ticket");
+    block(*fx,audio,midi);
+    check(fx->audioTelemetry().events==0&&fx->family()==static_cast<int>(NoiseFamily::laser),"first complete restored block retires old events");
+    midi.addEvent(juce::MidiMessage::noteOn(1,72,juce::uint8{100}),0);block(*fx,audio,midi);
+    check(fx->audioTelemetry().events==1,"new notes are admitted after the restore commits");
+    fx->setNonRealtime(true);
+    const auto offlineTicket=fx->previewBus().ticket();block(*fx,audio,midi);
+    check(!fx->previewBus().publish(stalePreview,48000,offlineTicket),"offline host processing cannot resurrect prior preview");
+}
+
 // Compare actual processBlock to the rendered float32 file. Deliberately use
 // different/irregular blocks and the same finite audition contract, not a
 // loop/held performance with an arbitrary MIDI NoteOff or a DAW tempo map.
@@ -52,6 +93,10 @@ void checkCaptureParity() {
         fx->outputParameter().setValueNotifyingHost(.63f);
         fx->setEffect(0,{effects::Type::reverb,.32f,.2f});
         fx->effectWetParameter(0).setValueNotifyingHost(.32f);fx->effectAmountParameter(0).setValueNotifyingHost(.2f);
+        if(mode==5){
+            fx->setEffect(1,{effects::Type::tempoDelay,.37f,0});
+            fx->effectWetParameter(1).setValueNotifyingHost(.37f);fx->effectAmountParameter(1).setValueNotifyingHost(0.f);
+        }
         auto motion=fx->versionedMotion();auto routes=motion.config;
         (void)routes.put(0,{mod::Source::lfo2,mod::Destination::pitch,.11f,.02f});
         (void)routes.put(1,{mod::Source::follower,mod::Destination::amount1,.2f,.018f});
@@ -105,6 +150,7 @@ void checkCaptureParity() {
 int main() {
     juce::ScopedJuceInitialiser_GUI gui;
     checkCaptureParity();
+    checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
     {
         using namespace vox::fx;
@@ -404,6 +450,20 @@ int main() {
         {auto reverbState=save(*effected);auto reverbRecall=std::make_unique<vox::fx::FxProcessor>();
             reverbRecall->setStateInformation(reverbState.getData(),static_cast<int>(reverbState.getSize()));
             check(reverbRecall->effect(3).type==vox::fx::effects::Type::reverb,"reverb type recalled");}
+        panel.effectSelector(3).setSelectedId(13,juce::sendNotificationSync);
+        {
+            const auto synced=save(*effected);auto recall=std::make_unique<vox::fx::FxProcessor>();
+            recall->setStateInformation(synced.getData(),static_cast<int>(synced.getSize()));
+            check(recall->lastStateError().isEmpty()&&recall->effect(3).type==vox::fx::effects::Type::tempoDelay,
+                  "editor and FXSL v3 restore the tempo delay without reassigning host IDs");
+            const auto decoded=vox::preset::decode(std::span(static_cast<const std::byte*>(synced.getData()),synced.getSize()),vox::preset::makeTag("VXFX"),1);
+            auto misversioned=decoded.document;
+            for(auto& section:misversioned.sections)if(section.tag==vox::fx::fxEffectsSectionTag)section.data[0]=std::byte{2};
+            const auto payload=vox::preset::encode(misversioned);
+            if(payload){recall->setStateInformation(payload->data(),static_cast<int>(payload->size()));
+                check(recall->lastStateError().isNotEmpty()&&save(*recall)==synced,"v2 payload cannot introduce a v3 effect type");}
+            else check(false,"encode invalid version test fixture");
+        }
         panel.effectSelector(3).setSelectedId(10,juce::sendNotificationSync);
         check(effected->effect(3).type==vox::fx::effects::Type::delay,"editor selects delay");
         auto state=save(*effected);auto restoredFx=std::make_unique<vox::fx::FxProcessor>();

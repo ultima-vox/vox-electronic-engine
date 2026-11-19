@@ -18,6 +18,20 @@ int main(){
     for(std::size_t n=0;n<bytes.size();++n)check(!portable::decode(std::span(bytes).first(n),b),"reject every truncation");
     if(!bytes.empty())bytes.back()^=std::byte{1};
     check(!portable::decode(bytes,b)&&b.state.program.layers[0].transpose==11,"bad checksum rejects without mutation");
+    {
+        a.state.effects=effects::pack({effects::Type::tempoDelay,.42f,.28f});
+        portable::Tags tags{"Quarter Past","Progressive","Airy","Timed tail",3,true},read;
+        for(const auto* tagged:{static_cast<const portable::Tags*>(nullptr),static_cast<const portable::Tags*>(&tags)}){
+            check(portable::encode(a,bytes,tagged)&&portable::decode(bytes,b,&read)&&effects::includesTempoDelay(b.state.effects)&&
+                  read.name==(tagged?tags.name:""),"portable v3 tempo delay decodes with optional tags");
+            auto document=preset::decode(bytes,portable::product,portable::version);
+            check(document.ok()&&document.document.schema==3,"tempo delay uses explicit portable schema v3");
+            document.document.schema=tagged?2:1;
+            auto mislabeled=preset::encode(document.document);
+            check(mislabeled&&!portable::decode(*mislabeled,b)&&effects::includesTempoDelay(b.state.effects),
+                  "legacy portable schema rejects the new type without changing output");
+        }
+    }
     auto valid=preset::encode({compare::productTag,1,{{compare::uiTag,std::vector<std::byte>(8)}}});
     if(!valid)return 1;
     auto bank=compare::Bank{*valid,*valid};auto section=compare::encode(bank);compare::Bank loaded;

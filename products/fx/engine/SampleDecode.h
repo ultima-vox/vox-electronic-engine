@@ -29,6 +29,7 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output,const 
     std::size_t fmt=0,fmtSize=0,data=0,dataSize=0;
     bool foundFmt=false,foundData=false;
     for(std::size_t at=12;at<bytes.size();){
+        if(cancel&&cancel->load(std::memory_order_relaxed))return false;
         if(bytes.size()-at<8)return false;
         const auto size=static_cast<std::size_t>(u32(at+4));const auto start=at+8;
         if(size>bytes.size()-start || (size&1u)>bytes.size()-start-size)return false;
@@ -62,7 +63,23 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output,const 
             result.mono[frame]=static_cast<float>(sum/channels);
         }
         if(cancel&&cancel->load(std::memory_order_relaxed))return false;
-        result.sha256=juce::SHA256(bytes.data(),bytes.size()).toHexString();
+        if(cancel){
+            // SHA256 reads a verified in-memory stream in 64-byte slices.
+            // A partial hash is never published, even if cancellation lands
+            // on the final slice.
+            class InterruptibleStream final : public juce::MemoryInputStream {
+            public:
+                InterruptibleStream(std::span<const std::uint8_t> bytes,const std::atomic<bool>& flag)
+                    :juce::MemoryInputStream(bytes.data(),bytes.size(),false),flag_(flag){}
+                int read(void* dest,int maxBytesToRead) override {
+                    return flag_.load(std::memory_order_relaxed)?0:juce::MemoryInputStream::read(dest,maxBytesToRead);
+                }
+            private:
+                const std::atomic<bool>& flag_;
+            } stream(bytes,*cancel);
+            result.sha256=juce::SHA256(stream,static_cast<juce::int64>(bytes.size())).toHexString();
+            if(cancel->load(std::memory_order_relaxed))return false;
+        }else result.sha256=juce::SHA256(bytes.data(),bytes.size()).toHexString();
         output=std::move(result);return true;
     } catch(...) {return false;}
 }
@@ -70,6 +87,9 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output,const 
 // and hashed. Missing, shortened, extended, or unreadable files leave output
 // unchanged. Same-length concurrent edits are not detectable by this reader.
 inline bool loadWavCancelable(const juce::File& file,Decoded& output,const std::atomic<bool>* cancel) {
+    if(cancel&&cancel->load(std::memory_order_relaxed))return false;
+    const auto expected=file.getSize();
+    if(expected<12||static_cast<std::uint64_t>(expected)>maxFileBytes)return false;
     juce::FileInputStream input(file);if(!input.openedOk())return false;
     const auto length=input.getTotalLength();
     if(length<12 || static_cast<std::uint64_t>(length)>maxFileBytes)return false;

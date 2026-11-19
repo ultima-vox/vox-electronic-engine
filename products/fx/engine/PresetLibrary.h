@@ -13,6 +13,8 @@ inline bool managedFile(const juce::File& root,const juce::File& file){
 inline bool read(const juce::File& file,portable::Sound& sound,portable::Tags* tags=nullptr){
     try {
         if(!file.hasFileExtension("voxfx")||file.isSymbolicLink())return false;
+        const auto expected=file.getSize();
+        if(expected<=0||expected>static_cast<juce::int64>(portable::maxBytes))return false;
         juce::FileInputStream input(file);
         const auto size=input.getTotalLength();if(!input.openedOk()||size<=0||size>static_cast<juce::int64>(portable::maxBytes))return false;
         std::vector<std::byte> bytes(static_cast<std::size_t>(size));
