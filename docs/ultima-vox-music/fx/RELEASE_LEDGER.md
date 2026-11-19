@@ -25,6 +25,21 @@ Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent
 | FX-T19 | OPEN: complete asset/license inventory absent | queued / N/A / not done |
 | FX-T20 | NOT READY: single integrated owner acceptance after candidate qualification | queued / not approved / not done |
 
+## Current local work — 2026-11-18 (unqualified checkpoints)
+
+Code checkpoint `5675dd20d51814f80a3c093c587e1dda3ce72ab4` adds Playback Mode/TriggerPolicy state migration (FPRG v4), MIDI NoteOff ownership, six mode choices, and 20 DSP trajectories (per-layer and global). Thirty-five JUCE-independent FX test executables compiled with `g++ -std=c++20 -O2 -pthread` passed at that checkpoint, including codec/store (maximum-size v4 payload), trajectory/render, playback-mode, family/render, pattern, modulation and sample-store primitives. Playback-mode tests also passed AddressSanitizer+UndefinedBehaviorSanitizer.
+
+Follow-up code checkpoint `01685a2` adds delay feedback (50–500 ms, up to 75%, bounded 10 s/slot decay); the updated `FxEffectsTests` passed on this code. The other 34 standalone tests were not rerun after this change, so this is NOT a full 01685a2 regression pass. A 4-second, four-layer synthetic Transition WAV was rendered from 01685a2 into the ignored local artifact `build/vox-fx-hybrid-transition-preview-normalized.wav`, peak-normalized to -6 dBFS for audition; it has no post-FX, is DSP smoke evidence only, and is not approved audio.
+
+`FxFileExportTests`, sample decode/controller tests and `FxProcessorTests` were not executed because JUCE headers are unavailable; CMake/CTest could not run (`cmake` is not installed). No exact-HEAD Windows run was triggered or claimed. These checks do not establish plugin integration, Windows qualification, production audio approval, or DAW evidence.
+
+| Test | Current local result | Still missing |
+|---|---|---|
+| FX-T02 | PARTIAL: layer pitch/cutoff controls affect sample render; no full oscillator/filter architecture | independent filter units/UI and exact-head qualification |
+| FX-T03 | PARTIAL: codec v4 migration and 20 DSP trajectories; codec/store/render tests passed | global editor/multiselect, musical review, JUCE/Windows tests |
+| FX-T04 | PARTIAL: mode persistence, basic Gate/Continuous/Loop lifecycle, NoteOff and retrigger-policy tests passed | Sequence/Transition synchronization semantics, loop seam/transport tests, JUCE/host proof |
+| FX-T05 | PARTIAL: same-note channel ownership/release test passed | CC/Panic/steal/tail completeness and Windows host evidence |
+
 ## Content waves
 
 | Wave | Target approved unique Programs | Approved / audited | Evidence |

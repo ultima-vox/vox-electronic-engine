@@ -8,13 +8,11 @@
 
 namespace vox::fx::programcodec {
 
-// Version 1: little-endian u32 version, followed by four layers. Each layer
-// has u32 enabled, u32 family, f32 offset/span/gain/pan, and two curves.
-// A curve has u32 node count followed by count records (f32 time/value,
-// u32 shape). Values must pass the same validation as the DSP program.
-// Version 2 appends a u32 bars value (0 seconds, otherwise 1/2/4/8/16).
-// Version 1 migrates to seconds. Encoding allocates; bounded decode is also
-// used by the audio snapshot reader.
+// Versions 1 and 2 contain gain/pan curves per layer; v2 appends bars.
+// Version 3 appends per-layer pitch/cutoff and four Program trajectories;
+// v4 appends explicit playback mode and repeated-note policy.
+// Every decoder path is bounded, rejects unknown versions/truncation/trailing
+// bytes, and assigns its output only after complete validation.
 inline void putU32(std::vector<std::byte>& bytes, std::uint32_t value) {
     for (int shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffu));
 }
@@ -52,21 +50,25 @@ inline bool getCurve(std::span<const std::byte> bytes, std::size_t& offset, time
 inline bool encode(const NoiseProgram& program, std::vector<std::byte>& result) {
     if (!program.valid()) return false;
     std::vector<std::byte> next;
-    next.reserve(8 + 4 * (24 + 2 * (4 + 16 * 12)));
-    putU32(next,2);
+    next.reserve(16 + 4 * (24 + 4 * (4 + 16 * 12)) + 4 * (4 + 16 * 12));
+    putU32(next,4);
     for (const auto& layer:program.layers) {
         putU32(next,layer.enabled ? 1u : 0u); putU32(next,static_cast<std::uint32_t>(layer.family));
         putFloat(next,layer.timing.offset); putFloat(next,layer.timing.span); putFloat(next,layer.gain); putFloat(next,layer.pan);
         putCurve(next,layer.gainCurve); putCurve(next,layer.panCurve);
+        putCurve(next,layer.pitchCurve); putCurve(next,layer.cutoffCurve);
     }
-    putU32(next,program.bars);
+    putCurve(next,program.amplitudeCurve); putCurve(next,program.pitchCurve);
+    putCurve(next,program.cutoffCurve); putCurve(next,program.panoramaCurve);
+    putU32(next,program.bars); putU32(next,static_cast<std::uint32_t>(program.mode));
+    putU32(next,static_cast<std::uint32_t>(program.triggerPolicy));
     result=std::move(next); return true;
 }
 inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexcept {
-    constexpr std::size_t maxBytes=8 + 4 * (24 + 2 * (4 + 16 * 12));
+    constexpr std::size_t maxBytes=16 + 4 * (24 + 4 * (4 + 16 * 12)) + 4 * (4 + 16 * 12);
     if (bytes.size() > maxBytes) return false;
     NoiseProgram next; std::size_t offset=0; std::uint32_t version=0;
-    if (!getU32(bytes,offset,version) || (version != 1 && version != 2)) return false;
+    if (!getU32(bytes,offset,version) || (version < 1 || version > 4)) return false;
     for (auto& layer:next.layers) {
         std::uint32_t enabled=0, family=0;
         if (!getU32(bytes,offset,enabled) || enabled > 1 || !getU32(bytes,offset,family) ||
@@ -75,8 +77,16 @@ inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexc
             !getFloat(bytes,offset,layer.gain) || !getFloat(bytes,offset,layer.pan) ||
             !getCurve(bytes,offset,layer.gainCurve) || !getCurve(bytes,offset,layer.panCurve)) return false;
         layer.enabled=enabled != 0; layer.family=static_cast<NoiseFamily>(family);
+        if (version >= 3 && (!getCurve(bytes,offset,layer.pitchCurve) || !getCurve(bytes,offset,layer.cutoffCurve))) return false;
     }
-    if (version == 2) { std::uint32_t bars=0; if (!getU32(bytes,offset,bars) || bars > 16) return false; next.bars=static_cast<std::uint8_t>(bars); }
+    if (version >= 3 && (!getCurve(bytes,offset,next.amplitudeCurve) || !getCurve(bytes,offset,next.pitchCurve) ||
+                         !getCurve(bytes,offset,next.cutoffCurve) || !getCurve(bytes,offset,next.panoramaCurve))) return false;
+    if (version >= 2) { std::uint32_t bars=0; if (!getU32(bytes,offset,bars) || bars > 16) return false; next.bars=static_cast<std::uint8_t>(bars); }
+    if(version>=4){std::uint32_t mode=0,policy=0;
+        if(!getU32(bytes,offset,mode)||mode>static_cast<std::uint32_t>(PlayMode::transition)||
+           !getU32(bytes,offset,policy)||policy>static_cast<std::uint32_t>(TriggerPolicy::replace))return false;
+        next.mode=static_cast<PlayMode>(mode);next.triggerPolicy=static_cast<TriggerPolicy>(policy);
+    }
     if (offset != bytes.size() || !next.valid()) return false;
     result=next; return true;
 }

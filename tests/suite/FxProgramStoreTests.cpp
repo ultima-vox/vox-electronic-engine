@@ -10,6 +10,11 @@ int main(){
     vox::fx::ProgramStore store; vox::fx::NoiseProgram result; std::uint64_t seen=0;
     check(store.tryRead(result,seen)&&result.layers[0].enabled,"initial program");
     check(!store.tryRead(result,seen),"unchanged version skipped");
+    auto largest=store.snapshot();
+    auto fillCurve=[](vox::fx::timeline::Curve& c){c.count=16;for(int i=0;i<16;++i)c.nodes[static_cast<std::size_t>(i)]={static_cast<float>(i)/15.0f,static_cast<float>(i%2),vox::fx::timeline::Shape::smooth};};
+    for(auto& layer:largest.layers){fillCurve(layer.gainCurve);fillCurve(layer.panCurve);fillCurve(layer.pitchCurve);fillCurve(layer.cutoffCurve);}
+    fillCurve(largest.amplitudeCurve);fillCurve(largest.pitchCurve);fillCurve(largest.cutoffCurve);fillCurve(largest.panoramaCurve);
+    check(store.publish(largest)&&store.tryRead(result,seen)&&result.panoramaCurve.count==16,"largest v3 Program fits the fixed audio publication buffer");
     auto invalid=store.snapshot();invalid.layers[0].gain=2;
     check(!store.publish(invalid)&&!store.tryRead(result,seen),"invalid publication rejected");
     auto testProgram=store.snapshot(); testProgram.layers[0].gain=.25f;

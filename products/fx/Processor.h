@@ -72,6 +72,11 @@ public:
         if (bars != 0 && bars != 1 && bars != 2 && bars != 4 && bars != 8 && bars != 16) return false;
         return programs_.editProgram([bars](NoiseProgram& p) { p.bars=static_cast<std::uint8_t>(bars); return true; });
     }
+    bool setPlayback(PlayMode mode,TriggerPolicy policy) {
+        if(static_cast<unsigned>(mode)>static_cast<unsigned>(PlayMode::transition)||
+           static_cast<unsigned>(policy)>static_cast<unsigned>(TriggerPolicy::replace))return false;
+        return programs_.editProgram([=](NoiseProgram& p){p.mode=mode;p.triggerPolicy=policy;return true;});
+    }
     int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
     bool setProgram (const NoiseProgram& program) {
         return programs_.publish (program);

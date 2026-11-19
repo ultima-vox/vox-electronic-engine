@@ -8,10 +8,10 @@
 namespace vox::fx {
 namespace {
 timeline::Curve& curveFor(NoiseLayer& layer,CurveEditor::Kind kind) noexcept {
-    return kind==CurveEditor::Kind::gain?layer.gainCurve:layer.panCurve;
+    switch(kind){case CurveEditor::Kind::gain:return layer.gainCurve;case CurveEditor::Kind::pitch:return layer.pitchCurve;case CurveEditor::Kind::cutoff:return layer.cutoffCurve;case CurveEditor::Kind::pan:return layer.panCurve;}return layer.gainCurve;
 }
 const timeline::Curve& curveFor(const NoiseLayer& layer,CurveEditor::Kind kind) noexcept {
-    return kind==CurveEditor::Kind::gain?layer.gainCurve:layer.panCurve;
+    switch(kind){case CurveEditor::Kind::gain:return layer.gainCurve;case CurveEditor::Kind::pitch:return layer.pitchCurve;case CurveEditor::Kind::cutoff:return layer.cutoffCurve;case CurveEditor::Kind::pan:return layer.panCurve;}return layer.gainCurve;
 }
 class CurveChange final : public juce::UndoableAction {
 public:
@@ -41,7 +41,7 @@ CurveEditor::CurveEditor(FxProcessor& processor,int layer) : processor_(processo
 void CurveEditor::setKind(Kind kind) {
     if(kind_==kind)return;
     kind_=kind;dragging_=false;selected_=-1;undo_.clearUndoHistory();
-    setTitle(kind_==Kind::gain?"Layer gain curve":"Layer pan curve");
+    setTitle(kind_==Kind::gain?"Layer amplitude curve":kind_==Kind::pitch?"Layer pitch curve":kind_==Kind::cutoff?"Layer cutoff curve":"Layer panorama curve");
     const auto snapshot=processor_.versionedProgram();
     shown_=curveFor(snapshot.program.layers[static_cast<std::size_t>(layer_)],kind_);restoreEpoch_=snapshot.revision;
     repaint();

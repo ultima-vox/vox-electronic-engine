@@ -28,10 +28,10 @@ LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor
     s.onValueChange=[this]{const float v=static_cast<float>(span_.getSlider().getValue());
         processor_.editLayer(static_cast<std::size_t>(index_), [v](NoiseLayer& l){l.timing.span=v;l.timing.offset=std::min(l.timing.offset,1.0f-v);});span_.repaint();};
     for(auto* knob:{&gain_,&pan_,&offset_,&span_})addAndMakeVisible(*knob);
-    curveType_.addItem("Gain",1);curveType_.addItem("Pan",2);
-    curveType_.setTitle("Layer curve");curveType_.setTooltip("Choose the gain or pan envelope");
+    curveType_.addItem("Amplitude",1);curveType_.addItem("Pitch",2);curveType_.addItem("Cutoff",3);curveType_.addItem("Panorama",4);
+    curveType_.setTitle("Layer trajectory");curveType_.setTooltip("Edit layer amplitude, pitch (plus or minus 24 semitones), logarithmic cutoff or panorama trajectory");
     curveType_.setSelectedId(1,juce::dontSendNotification);
-    curveType_.onChange=[this]{curve_.setKind(curveType_.getSelectedId()==2?CurveEditor::Kind::pan:CurveEditor::Kind::gain);};
+    curveType_.onChange=[this]{curve_.setKind(static_cast<CurveEditor::Kind>(curveType_.getSelectedId()-1));};
     addAndMakeVisible(curveType_);addAndMakeVisible(curve_);
     refresh(processor_.program().layers[static_cast<std::size_t>(index_)]);
 }
@@ -43,7 +43,9 @@ void LayerPanel::refresh(const NoiseLayer& layer) {
     offset_.getSlider().setValue(layer.timing.offset,juce::dontSendNotification);
     span_.getSlider().setValue(layer.timing.span,juce::dontSendNotification);
     gain_.repaint();pan_.repaint();offset_.repaint();span_.repaint();
-    curve_.refresh(curve_.kind()==CurveEditor::Kind::gain?layer.gainCurve:layer.panCurve);
+    curve_.refresh(curve_.kind()==CurveEditor::Kind::gain?layer.gainCurve:
+                   curve_.kind()==CurveEditor::Kind::pitch?layer.pitchCurve:
+                   curve_.kind()==CurveEditor::Kind::cutoff?layer.cutoffCurve:layer.panCurve);
 }
 void LayerPanel::paint(juce::Graphics& g) {
     namespace c=vox::ui::tokens::colour;
@@ -56,7 +58,7 @@ void LayerPanel::paint(juce::Graphics& g) {
 void LayerPanel::resized() {
     auto area=getLocalBounds().reduced(10);
     auto header=area.removeFromTop(25);enabled_.setBounds(header.removeFromRight(48));
-    curveType_.setBounds(header.removeFromRight(75).reduced(1));
+    curveType_.setBounds(header.removeFromRight(112).reduced(1));
     area.removeFromTop(4);family_.setBounds(area.removeFromTop(30));area.removeFromTop(8);
     auto knobs=area.removeFromTop(85);const int width=knobs.getWidth()/4;
     gain_.setBounds(knobs.removeFromLeft(width));pan_.setBounds(knobs.removeFromLeft(width));

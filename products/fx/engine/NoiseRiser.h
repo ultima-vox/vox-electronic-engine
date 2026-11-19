@@ -14,6 +14,8 @@ namespace vox::fx {
 // on the audio thread from a separately prepared handoff. Each event snapshots
 // the layer settings at note-on; no pointer into UI or host state is retained.
 enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant, glitch, granular };
+enum class PlayMode : std::uint8_t { oneShot, gate, continuous, loop, sequence, transition };
+enum class TriggerPolicy : std::uint8_t { overlap, ignore, replace };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
     bool enabled = false;
@@ -21,20 +23,35 @@ struct NoiseLayer {
     float gain = 1.0f, pan = 0.0f; // pan -1..1; center preserves original gain
     timeline::Curve gainCurve = timeline::Curve::constant(1.0f);
     timeline::Curve panCurve = timeline::Curve::constant(0.5f); // 0..1 -> -1..1 offset
+    // Normalized trajectories; pitch maps to +/- 24 semitones and cutoff
+    // contributes logarithmic filter motion around the family sweep. Defaults
+    // preserve legacy sound.
+    timeline::Curve pitchCurve = timeline::Curve::constant(0.5f);
+    timeline::Curve cutoffCurve = timeline::Curve::constant(0.5f);
     bool valid() const noexcept {
         return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::granular) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
-               std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid();
+               std::isfinite(pan) && pan >= -1 && pan <= 1 && gainCurve.valid() && panCurve.valid() &&
+               pitchCurve.valid() && cutoffCurve.valid();
     }
 };
 struct NoiseProgram {
     std::array<NoiseLayer, 4> layers {};
-    std::uint8_t bars = 0; // 0 = legacy seconds; otherwise 1, 2, 4, 8 or 16 bars
+    // Program-wide amplitude, pitch, cutoff and panorama trajectories.
+    timeline::Curve amplitudeCurve = timeline::Curve::constant(1.0f);
+    timeline::Curve pitchCurve = timeline::Curve::constant(0.5f);
+    timeline::Curve cutoffCurve = timeline::Curve::constant(0.5f);
+    timeline::Curve panoramaCurve = timeline::Curve::constant(0.5f);
+    PlayMode mode = PlayMode::oneShot;
+    TriggerPolicy triggerPolicy = TriggerPolicy::overlap;
+    std::uint8_t bars = 0; // 0 = seconds; otherwise 1, 2, 4, 8 or 16 bars
     NoiseProgram() noexcept { layers[0].enabled = true; }
     bool valid() const noexcept {
         if (bars != 0 && bars != 1 && bars != 2 && bars != 4 && bars != 8 && bars != 16) return false;
+        if (static_cast<unsigned>(mode) > static_cast<unsigned>(PlayMode::transition) ||
+            static_cast<unsigned>(triggerPolicy) > static_cast<unsigned>(TriggerPolicy::replace)) return false;
         for (const auto& layer : layers) if (!layer.valid()) return false;
-        return true;
+        return amplitudeCurve.valid() && pitchCurve.valid() && cutoffCurve.valid() && panoramaCurve.valid();
     }
 };
 
@@ -138,6 +155,8 @@ public:
         if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f ||
             !clock.start(duration, rate_)) return false;
         if (program_.bars != 0 && (!musicalClockAvailable_ || !barsClock.start(program_.bars,4,4,rate_))) return false;
+        if (program_.triggerPolicy == TriggerPolicy::ignore)
+            for (const auto& voice : voices_) if (voice.active && voice.channel == channel && voice.note == note) return false;
         Voice* slot = nullptr;
         for (auto& voice : voices_) if (!voice.active) { slot = &voice; break; }
         const bool stealing=slot==nullptr;
@@ -160,6 +179,10 @@ public:
         // or publication races acquisition. Acquire before changing voices.
         sample::Store::Lease incoming;
         if(userSample && (!sampleStore_ || !sampleStore_->acquire(incoming,expectedSampleToken)))return false;
+        // Replace only after all bounded resources and optional sample content
+        // are secured, so a rejected NoteOn cannot disturb the old owner.
+        if(program_.triggerPolicy==TriggerPolicy::replace)
+            for(auto& voice:voices_)if(voice.active&&voice.channel==channel&&voice.note==note)beginRelease(voice);
         const auto slotIndex=static_cast<std::size_t>(slot-voices_.data());
         if(stealing){
             auto& retired=retiring_[retiringIndex];retired=*slot;beginRelease(retired);
@@ -195,6 +218,13 @@ public:
     std::uint32_t droppedEventCount() const noexcept { return droppedEvents_; }
     unsigned activeGrainCount() const noexcept {
         return activeGrains_;
+    }
+    // Note ownership is the MIDI channel/note pair. One Shot and Transition
+    // deliberately ignore NoteOff; held modes fade only their matching voices.
+    void noteOff(int channel, int note) noexcept {
+        if(channel<1||channel>16||note<0||note>127)return;
+        for(auto& v:voices_)if(v.active&&v.channel==channel&&v.note==note&&
+            (v.program.mode==PlayMode::gate||v.program.mode==PlayMode::continuous||v.program.mode==PlayMode::loop))beginRelease(v);
     }
     void allSoundOff(int channel) noexcept {
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
@@ -255,7 +285,16 @@ private:
     void tick(Voice& v, double& left, double& right, std::size_t voiceIndex) noexcept {
         if (!v.active) return;
         double eventPhase = 0;
-        if (!(v.program.bars ? v.barsClock.next(tempo_,eventPhase) : v.clock.next(eventPhase))) { v.active = false; return; }
+        bool advanced = v.program.bars ? v.barsClock.next(tempo_,eventPhase) : v.clock.next(eventPhase);
+        const bool heldMode = v.program.mode==PlayMode::gate || v.program.mode==PlayMode::continuous || v.program.mode==PlayMode::loop;
+        if(!advanced && heldMode && v.releaseRemaining==0) {
+            if(v.program.bars) {
+                advanced = musicalClockAvailable_ && v.barsClock.start(v.program.bars,4,4,rate_) && v.barsClock.next(tempo_,eventPhase);
+            } else {
+                advanced = v.clock.start(v.duration,rate_) && v.clock.next(eventPhase);
+            }
+        }
+        if(!advanced){v.active=false;return;}
         double release = 1.0;
         if (v.releaseRemaining > 0) {
             release = static_cast<double>(v.releaseRemaining) / v.releaseLength;
@@ -269,6 +308,12 @@ private:
             const double offset = settings.timing.offset, span = settings.timing.span;
             if (eventPhase < offset || eventPhase >= offset + span) continue;
             const double t = (eventPhase - offset) / span;
+            const double globalPitch = v.program.pitchCurve.evaluate(static_cast<float>(eventPhase));
+            const double localPitch = settings.pitchCurve.evaluate(static_cast<float>(t));
+            const double pitchRatio = std::exp2(((globalPitch - 0.5) + (localPitch - 0.5)) * 4.0);
+            const double globalCutoff = v.program.cutoffCurve.evaluate(static_cast<float>(eventPhase));
+            const double localCutoff = settings.cutoffCurve.evaluate(static_cast<float>(t));
+            const double cutoffMotion = (globalCutoff - 0.5) + (localCutoff - 0.5);
             auto& layer = v.layers[i];
             layer.rng ^= layer.rng << 13; layer.rng ^= layer.rng >> 17; layer.rng ^= layer.rng << 5;
             const double noise = static_cast<double>(layer.rng) / 2147483648.0 - 1.0;
@@ -281,9 +326,10 @@ private:
             const double filterPos = std::min(filterPosition * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
             const auto filterIndex = static_cast<std::size_t>(filterPos);
             const double filterFraction = filterPos - static_cast<double>(filterIndex);
-            const auto coefficient = descending
+            double coefficient = descending
                 ? coefficients_[tableIntervals - index] + fraction * (coefficients_[tableIntervals - index - 1] - coefficients_[tableIntervals - index])
                 : coefficients_[filterIndex] + filterFraction * (coefficients_[filterIndex + 1] - coefficients_[filterIndex]);
+            coefficient = std::clamp(coefficient * std::exp2(cutoffMotion * 4.0), 0.0, 1.0);
             layer.lowpass += coefficient * (noise - layer.lowpass);
             const double filtered = layer.lowpass - layer.dcInput + 0.995 * layer.dcOutput;
             layer.dcInput = layer.lowpass; layer.dcOutput = filtered;
@@ -297,16 +343,18 @@ private:
                 // pool. Capacity exhaustion drops new grains deterministically.
                 layer.grainLayerActive = true;
                 layer.grainGain = 0.35 * v.velocity * fadeIn * fadeOut * release * v.layerScale * settings.gain *
-                                  settings.gainCurve.evaluate(static_cast<float>(t));
+                                  settings.gainCurve.evaluate(static_cast<float>(t)) *
+                                  v.program.amplitudeCurve.evaluate(static_cast<float>(eventPhase));
                 layer.grainPan = std::clamp(static_cast<double>(settings.pan) +
-                                 2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0, -1.0, 1.0);
+                                 2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
+                                 2.0 * v.program.panoramaCurve.evaluate(static_cast<float>(eventPhase)) - 1.0, -1.0, 1.0);
                 if (layer.grainCountdown == 0) {
                     for (auto& grain:grains_) if (!grain.active) {
                         grain.active=true; ++activeGrains_; grain.voiceIndex=voiceIndex; grain.layerIndex=i; grain.serial=v.serial;
                         const auto& lease=sampleLeases_[voiceIndex];
                         const auto length=lease.data()?lease.frames():sample_.size();
                         grain.position=static_cast<double>(layer.rng % length);
-                        const auto ratio=std::clamp(noteHz_[static_cast<std::size_t>(v.note)] / noteHz_[60], 0.25, 4.0);
+                        const auto ratio=std::clamp(noteHz_[static_cast<std::size_t>(v.note)] / noteHz_[60] * pitchRatio, 0.25, 4.0);
                         grain.speed=lease.data()?samplePlaybackStep(lease.rate(),rate_,ratio):ratio;
                         grain.age=0; grain.length=grainLength_; break;
                     }
@@ -324,7 +372,7 @@ private:
                 if(step!=layer.glitchStep){layer.glitchStep=step;layer.glitchStepAge=0;}
                 const unsigned sliceAge=layer.glitchStepAge++;
                 layer.glitchGrid+=glitchGridIncrement_;
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * 2.0, rate_ * 0.4);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * 2.0, rate_ * 0.4);
                 const double dry = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 if (layer.glitchWritten < layer.delay.size()) {
@@ -342,7 +390,7 @@ private:
                 // Three independently moving resonant band-pass formants
                 // excited by a tonal oscillator and a small noise component.
                 const double elapsed = t * layerDuration;
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)], rate_ * 0.4);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio, rate_ * 0.4);
                 const double input = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 constexpr std::array<double, 3> centers {0.25, 0.48, 0.70};
@@ -368,7 +416,7 @@ private:
                 // Two continuously phased detuned sine oscillators and
                 // filtered noise, with slow level and stereo evolution.
                 const double elapsed = t * layerDuration;
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)], rate_ * 0.40);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio, rate_ * 0.40);
                 const double a = std::sin(6.283185307179586 * layer.phase);
                 const double b = std::sin(6.283185307179586 * layer.subPhase);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
@@ -403,7 +451,7 @@ private:
                 const auto at = static_cast<std::size_t>(pos), next = std::min(at + 1, tableIntervals);
                 const double f = pos - static_cast<double>(at);
                 const auto read = [at, next, f] (const auto& table) { return table[at] + f * (table[next] - table[at]); };
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * (1.0 + 3.0 * read(impactPitch_)), 0.4 * rate_);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * (1.0 + 3.0 * read(impactPitch_)), 0.4 * rate_);
                 const double exciter = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise * read(impactNoise_);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 const double sweep = std::clamp(1.0 - std::abs(elapsed / 0.15 - 1.0), 0.0, 1.0);
@@ -428,7 +476,7 @@ private:
                 const auto next = std::min(at + 1, tableIntervals);
                 const double f = pos - static_cast<double>(at);
                 const auto read = [at, next, f] (const auto& table) { return table[at] + f * (table[next] - table[at]); };
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * (2.0 + 12.0 * read(impactPitch_)), 0.40 * rate_);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * (2.0 + 12.0 * read(impactPitch_)), 0.40 * rate_);
                 source = 0.8 * std::sin(6.283185307179586 * layer.phase) + 0.2 * noise * read(impactNoise_);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 envelope = read(impactNoise_);
@@ -444,7 +492,7 @@ private:
                 const double delayed = layer.delay[read0] * (1.0 - mix) + layer.delay[read1] * mix;
                 layer.delay[layer.delayWrite] = static_cast<float>(filtered);
                 layer.delayWrite = (layer.delayWrite + 1) & mask;
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * (2.0 - 1.5 * t), rate_ * 0.45);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * (2.0 - 1.5 * t), rate_ * 0.45);
                 const double tonal = std::sin(6.283185307179586 * layer.phase);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 source = 0.65 * delayed + 0.2 * tonal;
@@ -461,7 +509,7 @@ private:
                 const auto read = [at, next, f] (const auto& table) {
                     return table[at] + f * (table[next] - table[at]);
                 };
-                const double fundamental = std::clamp(noteHz_[static_cast<std::size_t>(v.note)] * 0.19, 30.0, 160.0);
+                const double fundamental = std::clamp(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * 0.19, 30.0, 160.0);
                 const double frequency = std::min(fundamental * (1.0 + 3.0 * read(impactPitch_)), rate_ * 0.45);
                 const double body = std::sin(6.283185307179586 * layer.phase);
                 const double sub = std::sin(6.283185307179586 * layer.subPhase);
@@ -479,7 +527,7 @@ private:
                 for (std::size_t partial = 0; partial < layer.partialPhases.size(); ++partial) {
                     double octave = octaveRatios[partial] * factor;
                     if (static_cast<double>(partial) + 3.0 * t >= 6.0) octave *= 1.0 / 64.0;
-                    const double frequency = noteHz_[static_cast<std::size_t>(v.note)] * octave;
+                    const double frequency = noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * octave;
                     const double weight = shepardWeights_[partial][index] + fraction * (shepardWeights_[partial][index + 1] - shepardWeights_[partial][index]);
                     auto& phase = layer.partialPhases[partial];
                     // Fade partials to zero before Nyquist rather than abruptly
@@ -494,7 +542,7 @@ private:
                 envelope = 0.8;
             } else if (descending) {
                 const double pitchFactor = pitchFactors_[index] + fraction * (pitchFactors_[index + 1] - pitchFactors_[index]);
-                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchFactor, 0.45 * rate_);
+                const double frequency = std::min(noteHz_[static_cast<std::size_t>(v.note)] * pitchRatio * pitchFactor, 0.45 * rate_);
                 const double tonal = std::sin(6.283185307179586 * layer.phase);
                 layer.phase += frequency / rate_;
                 if (layer.phase >= 1.0) layer.phase -= 1.0;
@@ -502,9 +550,11 @@ private:
                 envelope = 1.0 - 0.85 * t;
             }
             const double sample = source * v.velocity * envelope * fadeIn * fadeOut * release *
-                                  v.layerScale * settings.gain * settings.gainCurve.evaluate(static_cast<float>(t));
+                                  v.layerScale * settings.gain * settings.gainCurve.evaluate(static_cast<float>(t)) *
+                                  v.program.amplitudeCurve.evaluate(static_cast<float>(eventPhase));
             const double pan = std::clamp(static_cast<double>(settings.pan) +
                                           2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
+                                          2.0 * v.program.panoramaCurve.evaluate(static_cast<float>(eventPhase)) - 1.0 +
                                           (settings.family == NoiseFamily::whoosh ? 2.0 * t - 1.0 : 0.0) +
                                           (settings.family == NoiseFamily::texture ? 0.35 * std::sin(6.283185307179586 * t * layerDuration * 0.11) : 0.0), -1.0, 1.0);
             left += sample * std::min(1.0, 1.0 - pan);

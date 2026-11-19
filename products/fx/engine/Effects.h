@@ -179,10 +179,19 @@ private:
         }
         case Type::delay: {
             const auto size=bank.left.size();if(size<4)break;
-            // Single stereo tap, no feedback: finite 50–500 ms tail per slot.
+            // Stereo feedback tap: 50–500 ms and 0–75% feedback. A hard
+            // ten-second silence cap bounds even the maximum-feedback tail;
+            // logical retirement avoids clearing the delay buffer on RT.
+            if(std::abs(l)>1.0e-12||std::abs(r)>1.0e-12)state.silentSamples=0;
+            else if(state.silentSamples<static_cast<std::size_t>(rate_*10))++state.silentSamples;
+            if(state.silentSamples>=static_cast<std::size_t>(rate_*10)){
+                state.write=state.age=0;l=r=0;break;
+            }
             const double length=std::round(rate_*(.05+.45*amount));
             const auto delayedL=readDelay(state,bank.left,length),delayedR=readDelay(state,bank.right,length);
-            bank.left[state.write]=static_cast<float>(l);bank.right[state.write]=static_cast<float>(r);
+            const double feedback=.75*amount;
+            bank.left[state.write]=static_cast<float>(std::clamp(l+feedback*delayedL,-8.0,8.0));
+            bank.right[state.write]=static_cast<float>(std::clamp(r+feedback*delayedR,-8.0,8.0));
             if(++state.write==size)state.write=0;
             if(state.age<size)++state.age;
             l=delayedL;r=delayedR;break;

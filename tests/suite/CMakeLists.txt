@@ -300,6 +300,16 @@ target_include_directories(suite_fx_program_codec_tests PRIVATE ${PROJECT_SOURCE
 add_test(NAME suite_fx_program_codec_tests COMMAND suite_fx_program_codec_tests)
 set_tests_properties(suite_fx_program_codec_tests PROPERTIES LABELS suite)
 
+add_executable(suite_fx_playback_mode_tests FxPlaybackModeTests.cpp)
+target_include_directories(suite_fx_playback_mode_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_playback_mode_tests COMMAND suite_fx_playback_mode_tests)
+set_tests_properties(suite_fx_playback_mode_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_curve_trajectory_tests FxCurveTrajectoryTests.cpp)
+target_include_directories(suite_fx_curve_trajectory_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_curve_trajectory_tests COMMAND suite_fx_curve_trajectory_tests)
+set_tests_properties(suite_fx_curve_trajectory_tests PROPERTIES LABELS suite)
+
 add_executable(suite_fx_program_store_tests FxProgramStoreTests.cpp)
 vox_suite_add_allocation_probe(suite_fx_program_store_tests)
 target_include_directories(suite_fx_program_store_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
