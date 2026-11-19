@@ -57,7 +57,65 @@ No program allocation/loader/sample decode in the callback. Shared reverb and de
 
 **Pattern Generate** uses same scheduling path for preview and MIDI export: style, scale/key/mode, root, phrase length, chord progression optional, density, octave, rests, octave jumps, swing, tie/slide/legato, accent, ratchet, call-and-response, controlled pitch contours. Styles must have rules: Psybass offbeat 1/16 or 1/8 with clear kick space; Acid patterns combine accent/slide/rest; leads use motifs/variation rather than uniformly random notes; pads use long chord tones with voice-leading. Notes outside declared pitch, velocity/gate and maximum events are rejected. Export SMF type 0/1 as explicitly selected; channel, NoteOn/Off and tick positions match **the same scheduling source** used by internal audition. Document deterministic probability semantics: one seeded result per render pass / pattern generation, not free random every block.
 
-**Patch factory acceptance (minimum target):** 48 complete curated presets: Bass ≥12, Acid ≥8, Lead ≥10, Pluck/Keys ≥8, Pad/Atmos ≥10; at least 20 generated/hand-reviewed MIDI phrases covering styles. These are target deliverables, not existing facts. Every factory preset has an audio render, an explicit gain check and a metadata/content license record.
+**Patch factory acceptance (expanded owner scope, 19.11.2026):** 600 musically curated and individually approved Factory presets plus 120 editable MIDI phrases, in cumulative waves 120 → 300 → 600. These are requirements, not existing or already-approved content. Earlier 48 patches / 20 phrases are superseded for release scope; existing prototypes/seeds count only after review. See §4.1–4.6.
+
+
+### 4.1 Factory content — hard production scope
+
+VOX Trance Synthesis 1.0 ships with 600 unique, individually reviewed Factory Programs, 120 editable MIDI phrases, and a separate User bank. A Program counts exactly once by primary role, regardless of multiple tags. Keep style/genre, sound role, and DSP engine as **independent** dimensions. A new name, tiny random variation or differing hash alone does not establish a new musical sound.
+
+| Primary sound role | Approved unique Programs |
+| --- | ---: |
+| Bass: offbeat Psy, rolling, Full-on, sub, progressive, tech | **120** |
+| Acid: 303 bass/lead, Goa, accented and gliding | **90** |
+| Leads: supersaw, anthem, Goa, FM, mono/poly | **110** |
+| Plucks/Keys: keys, bells, plucks, mallets | **80** |
+| Pads/Atmospheres: euphoric, evolving, dark, psybient | **90** |
+| Arps/Sequences: tonal arps, trance gates, rhythmic patches | **75** |
+| Stabs/Chords: rave stabs, harmonic and rhythmic chords | **35** |
+| **TOTAL** | **600** |
+
+Risers, downlifters, transition impacts and general sound-effect Programs belong in VOX FX. Musical stabs/chords belong in Synth; avoid duplicating VOX FX for a catalog number.
+
+### 4.2 Styles, breadth and metadata
+
+Primary Trance-first catalog must represent:
+- Classic and melodic: Classic 90s, Dream, Uplifting, Anthem/Euphoric, Melodic, Balearic/Sunset, Vocal-friendly (without unlicensed vocal recordings).
+- Progressive and driving: Progressive, Deep Progressive, Acid Trance, Tech Trance, Hard Trance, Peak-Time.
+- Goa/Psy spectrum: Goa/Neo-Goa, Progressive Psy, Morning Psy, Full-on Morning, Full-on Night, Twilight, Forest, Dark Psy, Hi-Tech/Psycore, Zenonesque/Dark Progressive, Psybient/Psychill.
+- Secondary tags: Warm, Bright, Airy, Vintage, Organic, Raw, Hypnotic, Dark, Cinematic, Sci-Fi, Industrial.
+
+Do not deliver only Psy Bass and Acid and label it universal Trance. Provide a machine-checkable role × style × engine coverage table, including justified non-applicable cells. Multi-style tagging is permitted, but one primary role prevents double counting.
+
+Each catalog entry requires stable unique ID and schema version; name; primary role/style; extra style, mood and energy tags; A/B engine algorithms; poly/mono and tonal metadata; suggested tempo/key where meaningful; macro labels; patch and content revisions; dependencies and hashes; author and license/provenance; deterministic audition note/velocity/tempo and audio render; review/approval status.
+
+### 4.3 Content waves and MIDI phrases
+
+| Development wave | Cumulative unique candidates | Required proof |
+| --- | ---: | --- |
+| A | **120** | All seven roles; all three engines; bright, dark, Goa and Psy coverage; functional Factory/User browser; versioned patch restore, audit manifest and previews |
+| B | **300** | Musical two-part A/B patches; useful modulation/macros; layered/split timbres; richer Acid/VA; broad coverage of major Trance styles |
+| C | **600** | Final role totals; verified distinctness and provenance; quality references, portable paths and asset recovery; owner-approved catalog |
+
+Wave A and B are development evidence, not permission for a reduced public 1.0 release. Final release requires the full 600 unless the owner explicitly changes this contract. Human audio sign-off is separate from machine test PASS.
+
+The 120 MIDI phrases are separate from the 600 patches: Bass **30**, Acid **25**, Arp **25**, Lead **20**, Pad/Chord/Stab **20**. Phrases must have meaningful style-specific pitch/scale, gates, accent, slides/ties, velocity and swing. Export as editable SMF from the exact same scheduler that previews/plays the pattern; specify deterministic probability and tempo-map snapshot policy.
+
+### 4.4 Distinctness, sound and technical evidence
+
+For every Factory candidate perform canonical state encode/decode and restore, ID/schema validation, audio preview and SHA-256, silence and non-finite checks, safe peak/headroom and DC checks, release/no stuck-note, mono fold-down, level transitions, broad MIDI note and velocity tests. Run engine-appropriate DSP tests: Bass phase/short note/kick gap, Acid accent/slide/resonance, VA alias/high-note quality, filter stability, FX tails, polyphony and CPU. Render references at 44.1/48/96 kHz where applicable.
+
+Distinct waveform hashes prove only byte difference. A human reviewer must assess timbral distinction, musical usefulness, role/style fit, balance and quality. **Agent-created candidate does not equal approved Factory content.** Do not fill catalog with renamed seeds, imperceptible mutations, duplicate renders, silent Program files or unsupported assets. Make original sounds; never copy competitor preset/patch collections.
+
+Original procedural assets must have documented creation/provenance. Any third-party sample or wavetable bundled with the product needs exact source, author, redistribution permission, required attribution and SHA-256. User-owned assets stay in the User scope; do not distribute them.
+
+### 4.5 Native browser and persistence
+
+Implement a real JUCE Factory/User browser with role/style/engine/mood filters, search, favorites, meaningful preview, macro labels and preset origin/version. Factory programs are immutable. User Save As, rename, delete, import/export are non-RT operations with transactional writes. Preset selection atomically restores A/B engines, modulation, FX, sequence and structural state without clobbering DAW host automation bases; project reopening must not depend on the original bank location.
+
+### 4.6 Evidence and reporting
+
+Produce a versioned factory manifest and generated coverage CSV grouped by role, style and engine with separate **target / candidate / technically-valid / human-approved / licensed** counts, unique IDs, audit/render commands, exact source SHA, sound hash, review notes and failures. Unknown counts are **not audited**, never invented as zero. Before requesting 1.0 acceptance, provide documented Factory approvals and a complete 120-phrase export/parity test matrix.
 
 ## 5. MIDI semantics
 
@@ -95,11 +153,11 @@ Use shared `vox::ui` LookAndFeel and actual widgets; theme specification in `05_
 2. **Sound quality:** transient sample alignment, pitch stability in cents measured, filter stability with 100% resonance, spectral alias checks at high fundamental frequencies, no unexplained DC, no clipped default patches; subjective blind A/B for Psy bass and Acid against approved internal references (not copyrighted reproduction).
 3. **Host:** Cubase 12–15 / REAPER test NOTE ON/OFF, sustain, CC120/123, transport Seek/Loop, bouncing, preset automation, offline vs realtime match; reopened projects restore exact patch and pattern. Includes baseline VST3 Validator and pluginval where applicable.
 4. **Realtime:** zero malloc/new/delete/lock/IO/log in callback by instrumentation; no event drop under documented bounded capacity; CPU on selected owner DAW CPU, p50/p95/p99/p99.9/max, calibrated 96k/64 and other scenarios; multinstance test with Drums+FX.
-5. **Preset completeness:** 48 different audible factory patches; 20 usable phrases; A/B comparison, stable seed, locked parameters unchanged by Generate/Mutate.
+5. **Preset completeness:** 600 unique technically and musically approved Factory Programs in waves 120→300→600, 120 editable MIDI phrases, manifests and role/style/engine coverage; A/B comparison, stable seed, locked parameters unchanged by Generate/Mutate.
 6. **UI:** all visible controls have data→DSP path, DAW automation tests, logical 1180×760 /1500×920 and Windows 100/125/150/200% DPI, focus/keyboard and mouse gesture; owner visual signoff.
 
 ## 9. Dependency-ordered implementation PRs
 
 `SYN-00` audited extraction and golden reference for Bass/Acid; `SYN-01` independent VST3 shell + IDs/state/automation + instrument smoke; `SYN-02` Bass DSP; `SYN-03` Acid DSP; `SYN-04` VA hybrid and filters; `SYN-05` modulation/macros/FX; `SYN-06` musical generator, sequencer and MIDI export; `SYN-07` complete VOX UI and factory bank; `SYN-08` Windows acceptance/security/perf/install. Each PR separately reviewed, no cross-merge into retired Rack.
 
-**Owner decisions:** final plugin identity; minimum factory content quality; whether phase-1 A/B can mix two Acid modes (default: yes, bounded); oversampling modes after CPU measurements. Counts are proposed specification, not proven CPU budget.
+**Owner decisions:** plugin identity is already frozen in docs/ultima-vox-music/IDENTITY.md. The factory product scope is 600 Factory Programs and 120 phrases per owner direction dated 19.11.2026. Whether phase-1 A/B can mix two Acid modes defaults to yes with bounded resources; oversampling choices and CPU ceilings require measured evidence. Counts are requirements, not evidence of finished content.
