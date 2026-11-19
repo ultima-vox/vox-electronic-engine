@@ -197,7 +197,7 @@ jobs:
     env:
       JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
       VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
-      HISTORICAL_FX_HEAD: e08eb314f6da27f877c0544a836e3bf8aec6207c
+      FX_TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Checkout diagnostic tools from current PR
         uses: actions/checkout@v4
@@ -207,8 +207,8 @@ jobs:
       - name: Checkout exact failed FX source snapshot
         uses: actions/checkout@v4
         with:
-          ref: e08eb314f6da27f877c0544a836e3bf8aec6207c
-          path: fx-historic
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: fx-current
           persist-credentials: false
 
       - name: Resolve pinned JUCE and VST3 dependencies
@@ -220,24 +220,24 @@ jobs:
           "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "VST3SDK_DIR=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - name: Configure historical Release test with PDB symbols
+      - name: Configure exact-head Release test with PDB symbols
         run: |
-          cmake -S fx-historic -B fx-historic/build-triage -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DCMAKE_CXX_FLAGS_RELEASE:STRING=/O2 /Ob2 /DNDEBUG /Zi" "-DCMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=/INCREMENTAL:NO /DEBUG:FULL"
+          cmake -S fx-current -B fx-current/build-triage -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DCMAKE_CXX_FLAGS_RELEASE:STRING=/O2 /Ob2 /DNDEBUG /Zi" "-DCMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=/INCREMENTAL:NO /DEBUG:FULL"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build ONLY the failed FX processor test and dependencies
         id: build
         run: |
-          cmake --build fx-historic/build-triage --config Release --target suite_fx_processor_tests --parallel
+          cmake --build fx-current/build-triage --config Release --target suite_fx_processor_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Run ONLY historical suite_fx_processor_tests
+      - name: Run ONLY exact-head suite_fx_processor_tests
         id: targeted
         run: |
           New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
           $junit = Join-Path (Resolve-Path fx-triage).Path 'results.xml'
           # Keep the native exit status; the always() step preserves CTest text separately.
-          ctest --test-dir fx-historic/build-triage -C Release -R '^suite_fx_processor_tests$' '--no-tests=error' --output-on-failure --output-junit $junit -VV
+          ctest --test-dir fx-current/build-triage -C Release -R '^suite_fx_processor_tests$' '--no-tests=error' --output-on-failure --output-junit $junit -VV
           exit $LASTEXITCODE
 
       - name: Capture the exact test exception under installed x64 CDB
@@ -248,24 +248,24 @@ jobs:
         run: |
           $helper = Join-Path $env:GITHUB_WORKSPACE '.github\scripts\Capture-FxProcessorException.ps1'
           $output = Join-Path $env:GITHUB_WORKSPACE 'fx-triage\capture'
-          Push-Location fx-historic
+          Push-Location fx-current
           try { & $helper -BuildDir build-triage -OutputDir $output -TimeoutSeconds 100 }
           finally { Pop-Location }
 
-      - name: Preserve targeted CTest output and historical binary provenance
+      - name: Preserve targeted CTest output and exact-head binary provenance
         if: ${{ always() }}
         run: |
           New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
-          $lines = @("Source SHA intended: $env:HISTORICAL_FX_HEAD", "Job SHA: $env:GITHUB_SHA", "Run: $env:GITHUB_RUN_ID", "This executable was rebuilt with /Zi and /DEBUG:FULL; it is NOT the byte-identical original failing EXE.")
-          if (Test-Path fx-historic/.git) {
-            $lines += "Historical source checkout: $(& git -C fx-historic rev-parse HEAD)"
-            $lines += "Historical source tree: $(& git -C fx-historic rev-parse 'HEAD^{tree}')"
+          $lines = @("Source SHA intended: $env:FX_TEST_SOURCE_SHA", "Job SHA: $env:GITHUB_SHA", "Run: $env:GITHUB_RUN_ID", "This executable was built from the exact PR head with /Zi and /DEBUG:FULL; it is NOT the original historical failing EXE.")
+          if (Test-Path fx-current/.git) {
+            $lines += "PR head source checkout: $(& git -C fx-current rev-parse HEAD)"
+            $lines += "PR head source tree: $(& git -C fx-current rev-parse 'HEAD^{tree}')"
           }
-          $temp = 'fx-historic\build-triage\Testing\Temporary'
+          $temp = 'fx-current\build-triage\Testing\Temporary'
           if (Test-Path $temp) {
             Get-ChildItem $temp -File -Filter '*Test*.log' | Copy-Item -Destination fx-triage -ErrorAction SilentlyContinue
           }
-          $exe = Get-ChildItem 'fx-historic\build-triage\tests\suite' -Filter 'suite_fx_processor_tests.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $exe = Get-ChildItem 'fx-current\build-triage\tests\suite' -Filter 'suite_fx_processor_tests.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($exe) {
             $lines += "Rebuilt EXE SHA-256: $((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
             Copy-Item $exe.FullName fx-triage
@@ -282,7 +282,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: VOX-FX-Processor-Triage-Historical
+          name: VOX-FX-Processor-Triage-Head
           path: fx-triage
           if-no-files-found: error
           retention-days: 7
