@@ -24,3 +24,23 @@ or evidence that the heap-fixture changes fixed them. The failed checkout and
 artifact remain on GitHub; preserve original logs and diagnose on the Windows
 runner as documented in windows-exception-runbook.md. Another exact-head
 qualification is not requested until that diagnosis/reconciliation.
+
+INDEPENDENT UPDATE — supersedes the evidence gap above (not the failure):
+https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7003120118
+The TL obtained the decoded CTest log and downloaded the ZIP. CTest: 73/74
+passed; only #28 suite_fx_processor_tests failed (SEGFAULT, 2.85 s). Other
+historical failing FX tests passed in this run. There is still no exception
+code, Windows stack, dump or confirmed root cause. Validator execution skipped.
+
+The checkout in the artifact is synthetic PR merge:
+  54fe607f105bd689100461ab41d764aee003c4f9
+  base parent f1d6eb595779c973ae5a139270795aae968804cc
+  PR head parent e08eb314f6da27f877c0544a836e3bf8aec6207c
+  identical tree to PR head: 5d7064b9c4623aa3fa3a2d1a5e11ef7ffcc3ea01
+Merge parent/tree identity independently rechecked against the GitHub Git API.
+Artifact manifest and downloaded VST3 binary matched according to the TL:
+  VST3/VOX FX.vst3/Contents/x86_64-win/VOX FX.vst3
+  SHA-256 894b974cc72c7c772e39be01ea0410723d818b9660cf74c931199b85ac1f748a
+Artifact 14507924201 expiry in Actions API: 2026-11-22 07:22:38 UTC. Retain the
+existing download and original job log privately. Do not distribute the failed
+bundle, and do not apply this result to 1ae534f or any later code.

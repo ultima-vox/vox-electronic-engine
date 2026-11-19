@@ -1,12 +1,14 @@
 #include "engine/SampleController.h"
 #include "engine/NoiseRiser.h"
+#include "engine/PortablePreset.h"
+#include "content/ReviewWaveBAssets.h"
 #include <chrono>
 #include <cstdio>
 #include <vector>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
 #endif
-int main(){
+int main(int argc,char** argv){
     using namespace vox::fx::sample;int failures=0;auto check=[&](bool ok,const char* s){if(!ok){std::printf("FAIL: %s\n",s);++failures;}};
     const std::vector<std::uint8_t> wav{'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,
         0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x80,0xff,0x7f};
@@ -122,6 +124,77 @@ int main(){
 #ifdef VOX_TEST_INTERPOSE_MALLOC
         if(voxProbeAvailable())check(audioAllocations.load(std::memory_order_relaxed)==0,"concurrent MIDI render allocates nothing");
 #endif
+    }
+    // Exercise the bring-your-own-asset workflow on long musical material,
+    // not only the two-sample ownership fixture above.
+    using namespace vox::fx;
+    const auto reviewRoot=argc==2?juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(argv[1])):juce::File{};
+    if(argc==2&&!reviewRoot.createDirectory().wasOk())return 1;
+    for(const auto& cue:content::waveb::assetCues){
+        const auto root=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("vox-fx-wave-b-"+juce::Uuid().toString());
+        if(!root.createDirectory().wasOk()){check(false,"create Wave B temporary directory");continue;}
+        const auto original=root.getChildFile(cue.sourceName);
+        const auto relocated=root.getChildFile("relocated.wav");
+        const auto other=root.getChildFile("wrong-source.wav");
+        const auto src=content::waveb::sourceWav(cue.asset);
+        auto wrong=src;wrong[99]^=1;
+        check(original.replaceWithData(src.data(),src.size())&&other.replaceWithData(wrong.data(),wrong.size()),"author source and a different valid WAV");
+        Controller importing;
+        check(importing.import(original)&&importing.waitUntilSettled(std::chrono::seconds(5))&&importing.status()==Controller::Status::ready,
+            "import authored musical source");
+        auto capture=content::waveb::makeAssetPreview(cue);
+        const auto copyAsset=[&](Controller& from,offline::Capture& target){
+            Store::Lease lease;
+            if(!from.store().acquire(lease,from.selection()))return false;
+            target.sample.assign(lease.data(),lease.data()+lease.frames());target.sampleRate=lease.rate();
+            from.store().release(lease);return true;
+        };
+        std::vector<std::uint8_t> before,after;
+        check(copyAsset(importing,capture)&&offline::renderWav(capture,before),"render sample-backed authored cue");
+        portable::Sound value,restored;
+        value.state.program=capture.program;value.state.macros=capture.settings.macroRoutes;value.sample=importing.reference();
+        for(unsigned i=0;i<4;++i){
+            const auto fx=capture.settings.effects[i];const auto shift=i*16;
+            value.state.effects=(value.state.effects&~(std::uint64_t{0xffff}<<shift))|(std::uint64_t{effects::pack(fx)}<<shift);
+        }
+        const auto& entry=cue.sound.entry;
+        portable::Tags tags{std::string(entry.name),std::string(entry.style),std::string(entry.mood),std::string(content::useCase(entry)),static_cast<unsigned>(entry.role)};
+        std::vector<std::byte> portableBytes;
+        check(portable::encode(value,portableBytes,&tags)&&portable::decode(portableBytes,restored)&&restored.sample==value.sample&&
+              restored.state.macros==value.state.macros&&restored.state.program.layers[0].grains==value.state.program.layers[0].grains,
+              "portable cue retains asset hash, FPRG7 grain shape and FMOD3 envelope");
+        check(original.moveFileTo(relocated),"simulate transfer to a different asset path");
+        Controller reopening;
+        check(reopening.restore(restored.sample)&&reopening.waitUntilSettled(std::chrono::seconds(5))&&reopening.status()==Controller::Status::missing,
+              "original path absent; reopen must not silently switch source");
+        check(reopening.relink(other,restored.sample)&&reopening.waitUntilSettled(std::chrono::seconds(5))&&reopening.selection()==1,
+              "reject a different musical WAV by hash");
+        check(reopening.relink(relocated,restored.sample)&&reopening.waitUntilSettled(std::chrono::seconds(5))&&
+              reopening.reference().sha256==value.sample.sha256&&reopening.selection()>1,"relink exact asset at new path");
+        auto reopened=content::waveb::makeAssetPreview(cue);
+        reopened.program=restored.state.program;reopened.settings.macroRoutes=restored.state.macros;
+        // Reference settings carry host FX wet/amount bases, not portable VXUP.
+        check(copyAsset(reopening,reopened)&&offline::renderWav(reopened,after)&&after==before,"restored and relocated cue renders byte-exactly");
+        double peak=0;
+        for(std::size_t i=44;i+2<after.size();i+=3){
+            const int raw=after[i]|after[i+1]<<8|after[i+2]<<16;
+            peak=std::max(peak,std::abs((raw^0x800000)-0x800000)/8388607.);
+        }
+        check(peak>.001&&peak<.5,"audible and bounded relocated fixture");
+        std::printf("Wave B external asset cue %.*s peak %.6f source SHA-256 %s\n",
+            static_cast<int>(entry.id.size()),entry.id.data(),peak,value.sample.sha256.c_str());
+        if(argc==2&&after==before&&peak>.001){
+            // A review package intentionally omits the build-machine's temp
+            // path. On opening, choose the distributed WAV with Relink.
+            value.sample.path=cue.sourceName;
+            std::vector<std::byte> shared;
+            const auto id=juce::String::fromUTF8(entry.id.data(),static_cast<int>(entry.id.size()));
+            check(portable::encode(value,shared,&tags)&&
+                  reviewRoot.getChildFile(id+".voxfx").replaceWithData(shared.data(),shared.size())&&
+                  reviewRoot.getChildFile(cue.sourceName).replaceWithData(src.data(),src.size())&&
+                  reviewRoot.getChildFile(id+".wav").replaceWithData(after.data(),after.size()),"export Wave B audition and hash-relink package");
+        }
+        check(root.deleteRecursively(),"remove authored source fixture files");
     }
     check(file.deleteFile(),"remove fixture");
     std::printf("FX sample controller: %d failure(s)\n",failures);return failures?1:0;

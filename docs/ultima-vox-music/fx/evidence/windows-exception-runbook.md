@@ -5,6 +5,38 @@ substitute the actual artifact ID/run and do not copy signed download links.
 This is a diagnostic replay, not a second `[RUN_FX_SUITE]` dispatch, a CTest
 replacement, or permission to alter the Draft/HOLD PR.
 
+**Current incident: one test, not the entire suite.** The TL independently
+identified `suite_fx_processor_tests` (73/74 passed) on the old `e08eb314`
+source tree; the actually built commit was `54fe607f` with the same tree.
+See [the source/binary evidence](windows-44479129114.txt). Preserve any original
+Release EXE and link PDBs from that job before cleaning or rebuilding. On that
+checkout, run:
+
+```powershell
+ctest --test-dir build-suite -C Release -R '^suite_fx_processor_tests$' --output-on-failure -VV
+Get-Content build-suite\Testing\Temporary\LastTest.log
+Get-Command cdb.exe,procdump64.exe,procdump.exe -ErrorAction SilentlyContinue
+```
+
+The helper `.github/scripts/Capture-FxProcessorException.ps1` discovers this
+one Release test via CTest JSON and uses installed x64 CDB if available. Run it
+from the matching runner checkout; if using the historical binary, copy only
+the helper into that workspace or invoke it by absolute path (do not rebuild
+or replace the original EXE first):
+
+```powershell
+& <path-to-helper> -BuildDir build-suite -OutputDir suite-diagnostic
+# Optional: -CdbPath 'C:\path\to\x64\cdb.exe' -TimeoutSeconds 90
+```
+
+On future manually admitted #156 suite runs, CTest JUnit and text logs go in
+`VOX-Suite-VST3/ctest/` even when CTest fails. A failed FX processor test triggers
+only the bounded debugger replay; if present, dump, debugger log and matching
+EXE/PDB go to the separate seven-day `VOX-FX-Processor-Diagnostic` artifact.
+Treat it as private engineering evidence. No tool installation or registry
+changes are attempted. This machinery is **not** authorization to dispatch
+another broad suite before the targeted replay/diagnosis.
+
 1. Preserve the original CTest output, the runner's
    `build-suite/Testing/Temporary/LastTest.log` and `LastTestsFailed.log`, and
    `VOX-Suite-VST3/manifest.txt` from the signed-in Actions UI or the runner.

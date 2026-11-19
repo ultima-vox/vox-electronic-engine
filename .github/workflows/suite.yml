@@ -37,6 +37,8 @@ jobs:
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     env:
+      # FX-only diagnostics; does not change job eligibility or other products.
+      FX_DIAGNOSTICS: ${{ github.event_name == 'pull_request' && github.head_ref == 'arena/d9776bd9-vox-electronic-engine' && 'ON' || 'OFF' }}
       CMAKE_GENERATOR: Visual Studio 17 2022
       # Reviewed dependency pins. A tag can move; these commits cannot.
       JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
@@ -78,20 +80,48 @@ jobs:
       - name: Configure (suite only)
         shell: powershell
         run: |
-          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DVOX_FX_DIAGNOSTIC_SYMBOLS=$env:FX_DIAGNOSTICS"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
         run: cmake --build build-suite --config Release --clean-first --parallel
 
       - name: Test (label suite)
+        id: suite-ctest
         shell: powershell
         run: |
           # Golden renders are also written as WAV files for listening (artifact).
           New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
+            $report = (Resolve-Path suite-out\ctest).Path
+            ctest --test-dir build-suite -C Release -L suite --output-on-failure --output-junit (Join-Path $report 'results.xml')
+            $testExit = $LASTEXITCODE
+            Copy-Item build-suite\Testing\Temporary\LastTest*.log $report -ErrorAction SilentlyContinue
+            exit $testExit
+          }
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Capture failed FX processor test only
+        if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
+        timeout-minutes: 3
+        shell: powershell
+        run: |
+          $failed = 'suite-out\ctest\LastTestsFailed.log'
+          if ((Test-Path $failed) -and (Select-String -Path $failed -Pattern '^\d+:suite_fx_processor_tests$' -Quiet)) {
+            & .github\scripts\Capture-FxProcessorException.ps1 -BuildDir build-suite -OutputDir suite-diagnostic
+          }
+
+      - name: Upload FX processor crash diagnostics
+        if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-FX-Processor-Diagnostic
+          path: suite-diagnostic
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Steinberg VST3 validator
         shell: powershell

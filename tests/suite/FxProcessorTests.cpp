@@ -149,10 +149,16 @@ void checkCaptureParity() {
 
 }
 int main() {
+    const auto phase=[](const char* label){
+        std::fprintf(stderr,"[FX processor] %s\n",label);
+        std::fflush(stderr); // survive abrupt termination with redirected CTest output
+    };
+    phase("JUCE initialization");
     juce::ScopedJuceInitialiser_GUI gui;
-    checkCaptureParity();
-    checkRestoreAdmission();
+    phase("capture parity");checkCaptureParity();
+    phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
+    phase("motion, generator and preset browser");
     {
         using namespace vox::fx;
         auto owner=std::make_unique<FxProcessor>();FxPanel panel(*owner);
@@ -216,6 +222,7 @@ int main() {
                   "offscreen JUCE painting supports explicit scaling factors");
         }
     }
+    phase("editor/parameters and state");
     {
         vox::fx::FxPanel panel(p);
         panel.outputSlider().setValue(0.5, juce::sendNotificationSync);
@@ -268,6 +275,7 @@ int main() {
         p.outputParameter().setValueNotifyingHost(1.0f);
         check(std::abs(panel.outputSlider().getValue() - 1.0) < 1e-6, "host updates editor knob");
     }
+    phase("layer editor");
     {
         using namespace vox::fx;
         auto processor = std::make_unique<FxProcessor>();
@@ -304,6 +312,7 @@ int main() {
         toggle.setToggleState(false,juce::sendNotificationSync);
         check(!curves.isVisible() && panel.layerPanel(0).isVisible(), "layer cards remain accessible");
     }
+    phase("generation");
     {
         auto generated = std::make_unique<vox::fx::FxProcessor>();
         vox::fx::FxPanel panel(*generated);
@@ -371,6 +380,7 @@ int main() {
               restored.locks.layers[1]==(vox::fx::generator::gain|vox::fx::generator::pan),
               "generator controls and field locks survive project state roundtrip");
     }
+    phase("FX slots, comparison and Source editor");
     {
         auto effected=std::make_unique<vox::fx::FxProcessor>();
         auto dry=std::make_unique<vox::fx::FxProcessor>();
@@ -551,6 +561,7 @@ int main() {
             check(std::bit_cast<float>(bits)==a.getSample(0,i),"controller WAV matches processor output");
         }
     }
+    phase("pattern editor");
     {
         auto owner=std::make_unique<vox::fx::FxProcessor>();vox::fx::pattern::Pattern pattern;
         vox::fx::FxPanel panel(*owner);
@@ -615,6 +626,7 @@ int main() {
             check(restored->lastStateError().isNotEmpty()&&save(*restored)==saved,"invalid pattern restore is transactional");}
         else check(false,"encode invalid pattern state");
     }
+    phase("pattern playback");
     {
         auto sequenced=std::make_unique<vox::fx::FxProcessor>();auto manual=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::pattern::Pattern pattern;pattern.steps[0].enabled=true;
@@ -658,6 +670,7 @@ int main() {
         restored->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
         check(restored->patternEnabledParameter().get(),"pattern enable restored");
     }
+    phase("modulation");
     {
         auto modulated=std::make_unique<vox::fx::FxProcessor>();auto dry=std::make_unique<vox::fx::FxProcessor>();
         vox::fx::FxPanel panel(*modulated);
@@ -708,6 +721,7 @@ int main() {
                 (static_cast<std::uint32_t>(wav[at+2])<<16)|(static_cast<std::uint32_t>(wav[at+3])<<24);
             check(std::bit_cast<float>(bits)==a.getSample(0,i),"macro WAV matches processor");}
     }
+    phase("sample import and relink");
     {
         const std::vector<std::uint8_t> fixture{'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,
             0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x40,0,0x40};
@@ -770,6 +784,7 @@ int main() {
         note.addEvent(juce::MidiMessage::noteOn(1,60,static_cast<juce::uint8>(100)),0);block(*missing,sound,note);
         check(sound.getMagnitude(0,0,512)>0,"explicit fallback triggers procedural sample");
     }
+    phase("tempo capture");
     {
         auto tempoProcessor=std::make_unique<vox::fx::FxProcessor>();TestPlayHead host;
         juce::AudioPlayHead::PositionInfo position;position.setIsPlaying(true);position.setBpm(73.125);host.position=position;
@@ -783,6 +798,7 @@ int main() {
         check(tempoProcessor->captureProgramWav({}).settings.tempo==120,"invalid host tempo uses documented default");
         tempoProcessor->setPlayHead(nullptr);
     }
+    phase("bar-clock gate and capture");
     {
         auto musical=std::make_unique<vox::fx::FxProcessor>(); TestPlayHead head;
         musical->setPlayHead(&head); musical->prepareToPlay(8000,256);
@@ -848,6 +864,7 @@ int main() {
     check(p.audioTelemetry().events==0&&p.audioTelemetry().grains==0,"audio telemetry reflects panic release");
     check(audio.getMagnitude(0, 300, 212) == 0, "editor panic fades sound");
 
+    phase("bar transitions");
     {
         auto fx=std::make_unique<vox::fx::FxProcessor>();TestPlayHead host;
         fx->setPlayHead(&host);fx->prepareToPlay(8000,256);
@@ -872,6 +889,7 @@ int main() {
         check(fx->musicalClockUnavailable() && fx->audioTelemetry().events==0,"transition rejects unsupported meter");
         fx->setPlayHead(nullptr);
     }
+    phase("voice capacity and telemetry");
     {
         auto busy=std::make_unique<vox::fx::FxProcessor>();busy->prepareToPlay(48000,512);
         juce::AudioBuffer<float> shortBlock(2,64);juce::MidiBuffer notes;
@@ -882,6 +900,7 @@ int main() {
         busy->releaseResources();check(busy->audioTelemetry().events==0&&busy->audioTelemetry().dropped==0,
               "resource release resets voice telemetry");
     }
+    phase("transport discontinuity");
     {
         auto transportOwner=std::make_unique<vox::fx::FxProcessor>(); auto& transport=*transportOwner; TestPlayHead playhead;
         transport.setPlayHead(&playhead); transport.prepareToPlay(48000, 512);
@@ -906,6 +925,7 @@ int main() {
         transport.setPlayHead(nullptr);
     }
 
+    phase("PPQ snapshots");
     {
         auto ppqProcessor=std::make_unique<vox::fx::FxProcessor>();TestPlayHead head;
         juce::AudioPlayHead::PositionInfo position;position.setIsPlaying(true);position.setPpqPosition(2.0);position.setBpm(120);
@@ -917,6 +937,7 @@ int main() {
         position.setPpqPosition(10);head.position=position;block(*ppqProcessor,audio,notes);
         check(audio.getMagnitude(0,300,212)==0,"PPQ-only seek fades event");ppqProcessor->setPlayHead(nullptr);
     }
+    phase("source-family playback");
     {
         auto riserOwner=std::make_unique<vox::fx::FxProcessor>(); auto downOwner=std::make_unique<vox::fx::FxProcessor>(); auto& riser=*riserOwner; auto& down=*downOwner;
         riser.prepareToPlay(48000, 512); down.prepareToPlay(48000, 512);
@@ -944,6 +965,7 @@ int main() {
         block(impact, b, md);
         check(b.getMagnitude(0, 0, 512) > 0, "impact reaches processor DSP");
     }
+    phase("layered Program");
     {
         auto layeredOwner=std::make_unique<vox::fx::FxProcessor>(); auto& layered=*layeredOwner; layered.prepareToPlay(48000, 512);
         auto program = layered.program(); program.layers[0].enabled = false;
@@ -1002,6 +1024,7 @@ int main() {
             check(restored.lastStateError().isNotEmpty() && save(restored) == saved, "future FX section rejected transactionally");
         } else check(false, "encode future state");
     }
+    phase("legacy parameter migration");
     {
         // FPRM v1 had only the output value. Restore it with the 4 s default.
         auto oldDoc = vox::preset::decode(std::span(static_cast<const std::byte*>(saved.getData()), saved.getSize()),
@@ -1023,6 +1046,7 @@ int main() {
                   "v1 state migrates to four second duration");
         }
     }
+    phase("duration capture");
     {
         auto durationTestOwner=std::make_unique<vox::fx::FxProcessor>(); auto& durationTest=*durationTestOwner; durationTest.prepareToPlay(48000, 512);
         durationTest.durationParameter().setValueNotifyingHost(0.0f);
@@ -1038,6 +1062,7 @@ int main() {
     midi.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)), 0);
     block(restored, audio, midi);
     check(audio.getMagnitude(0, 0, 512) == 0, "host output gain controls DSP");
+    phase("test cases finished; teardown follows");
     std::printf("FX processor: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

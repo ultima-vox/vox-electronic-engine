@@ -223,6 +223,16 @@ add_executable(suite_fx_processor_tests FxProcessorTests.cpp)
 target_link_libraries(suite_fx_processor_tests PRIVATE ${VOX_SUITE_fx_TARGET})
 target_include_directories(suite_fx_processor_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 vox_suite_add_allocation_probe(suite_fx_processor_tests)
+option(VOX_FX_DIAGNOSTIC_SYMBOLS "Keep optimized FX processor test symbols for debugger replay" OFF)
+if(MSVC AND VOX_FX_DIAGNOSTIC_SYMBOLS)
+  # The executable links the FX shared-code static library. Keep optimized
+  # Release code generation and linker folding, and add matching symbols.
+  target_compile_options(${VOX_SUITE_fx_TARGET} PRIVATE $<$<CONFIG:Release>:/Zi>)
+  target_compile_options(suite_fx_processor_tests PRIVATE $<$<CONFIG:Release>:/Zi>)
+  target_link_options(suite_fx_processor_tests PRIVATE
+    $<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF>
+    $<$<CONFIG:Release>:/OPT:ICF> $<$<CONFIG:Release>:/INCREMENTAL:NO>)
+endif()
 add_test(NAME suite_fx_processor_tests COMMAND suite_fx_processor_tests)
 set_tests_properties(suite_fx_processor_tests PROPERTIES LABELS suite)
 
@@ -444,7 +454,7 @@ set_tests_properties(suite_fx_sample_reference_tests PROPERTIES LABELS suite)
 
 add_executable(suite_fx_sample_controller_tests FxSampleControllerTests.cpp)
 vox_suite_add_allocation_probe(suite_fx_sample_controller_tests)
-target_link_libraries(suite_fx_sample_controller_tests PRIVATE juce::juce_cryptography)
+target_link_libraries(suite_fx_sample_controller_tests PRIVATE juce::juce_cryptography vox_preset)
 target_compile_definitions(suite_fx_sample_controller_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_include_directories(suite_fx_sample_controller_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_sample_controller_tests COMMAND suite_fx_sample_controller_tests)
