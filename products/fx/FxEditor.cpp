@@ -117,7 +117,7 @@ FxPanel::FxPanel (FxProcessor& processor)
     addAndMakeVisible(eventBars_);
     playMode_.addItem("One Shot",1);playMode_.addItem("Gate",2);playMode_.addItem("Continuous",3);
     playMode_.addItem("Loop",4);playMode_.addItem("Sequence",5);playMode_.addItem("Transition",6);
-    playMode_.setTitle("Play mode");playMode_.setTooltip("One Shot/Transition end automatically; Gate, Continuous and Loop repeat a bounded timeline until matching NoteOff; Sequence uses Host Pattern");
+    playMode_.setTitle("Play mode");playMode_.setTooltip("One Shot/Transition end automatically; Gate holds the final source state, Continuous evolves a slow free-running trajectory, Loop replays the bounded timeline; matching NoteOff releases held modes. Sequence uses Host Pattern.");
     triggerPolicy_.addItem("Overlap",1);triggerPolicy_.addItem("Ignore",2);triggerPolicy_.addItem("Replace",3);
     triggerPolicy_.setTitle("Repeated NoteOn policy");triggerPolicy_.setTooltip("Overlap voices, ignore a duplicate channel/note, or fade-replace that same channel/note");
     const auto initialProgram=processor_.program();
