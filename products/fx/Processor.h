@@ -10,6 +10,7 @@
 #include "engine/Transport.h"
 #include "engine/ComparisonState.h"
 #include "engine/PortablePreset.h"
+#include "engine/Preview.h"
 
 namespace vox::fx {
 
@@ -46,6 +47,10 @@ public:
     }
     bool setMotionRoute(mod::Source source,mod::Destination destination,float depth,float smoothing) {
         return programs_.editMacroConfig([=](macro::Config& config){return config.setRoute(source,destination,depth,smoothing);});
+    }
+    ProgramStore::VersionedMotion versionedMotion() const {return programs_.versionedMotion();}
+    bool replaceMotionIfCurrent(const ProgramStore::VersionedMotion& expected,const macro::Config& value) {
+        return programs_.replaceMotionIfCurrent(expected,value);
     }
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
@@ -88,13 +93,18 @@ public:
     // deliberately recall all host parameter bases with host notification.
     bool storeComparison(std::size_t slot);
     bool recallComparison(std::size_t slot);
+    portable::Sound portableSnapshot() const;
     bool encodePortablePreset(std::vector<std::byte>&) const;
+    bool applyPortableSound(const portable::Sound&);
     bool restorePortablePreset(std::span<const std::byte>);
     bool loadReviewCandidate(std::size_t index);
+    offline::Capture capturePresetPreview(const portable::Sound&) const;
+    preview::Bus& previewBus() noexcept {return previewBus_;}
     generator::ControllerState generatorState() const { return programs_.snapshotState().generator; }
     template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
     bool generateProgram (const generator::Settings&, const generator::Locks&);
     bool mutateProgram (std::uint32_t seed, const generator::Locks&);
+    bool generateSound(bool mutation);
     // These operations lock or perform file I/O; never call from audio.
     bool importSample(const juce::File& path) { return samples_.import(path); }
     bool relinkSample(const juce::File& path, const sample::Reference& expected) { return samples_.relink(path,expected); }
@@ -135,8 +145,6 @@ public:
     }
     template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
 
-private:
-    bool applyPortableSound(const portable::Sound&);
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
@@ -154,6 +162,7 @@ private:
     std::atomic<double> capturedTempo_ {120.0}; // audio -> offline snapshot
     effects::Chain effects_;
     macro::Runtime macroRuntime_;
+    preview::Bus previewBus_;
     macro::Config audioMacroConfig_;
     std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
     ProgramStore programs_;

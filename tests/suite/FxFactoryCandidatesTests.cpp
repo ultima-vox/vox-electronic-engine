@@ -59,7 +59,7 @@ int main(int argc,char** argv) {
             }
         }
     }
-    for(unsigned i=0;i<roles.size();++i){std::printf("%s: %u candidates, 0 approved\n",roleNames[i],roles[i]);if(roles[i]!=2)return 8;}
+    for(unsigned i=0;i<roles.size();++i){std::printf("%s: %u candidates, 0 approved\n",roleNames[i],roles[i]);if(roles[i]!=4)return 8;}
     if(std::any_of(modes.begin(),modes.end(),[](unsigned n){return n==0;}))return 9;
     if(!out.empty()&&!manifest)return 10;
     return 0;

@@ -15,9 +15,24 @@ mod::Source sourceForControl(int id) noexcept {
 }
 }
 GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
-    const char* names[]{"Style seed", "Active layers", "Intensity", "Energy", "Stereo"};
+    const char* names[]{"Style seed", "Active layers", "Intensity", "Energy", "Stereo", "Sound role"};
     for(std::size_t i=0;i<labels_.size();++i){labels_[i].setText(names[i],juce::dontSendNotification);addAndMakeVisible(labels_[i]);}
     for(int i=0;i<6;++i)style_.addItem("Style " + juce::String(i+1),i+1);
+    const char* roles[]{"Impact","Riser","Fall","Sweep","Zap","Rhythm","Atmosphere","Stinger"};
+    for(int i=0;i<8;++i)role_.addItem(roles[i],i+1);
+    role_.onChange=[this]{const auto id=role_.getSelectedId();if(id>0)(void)processor_.editGeneratorState([id](auto& state){state.role=static_cast<unsigned>(id-1);});};
+    addAndMakeVisible(role_);
+    const char* groups[]{"Global amplitude","Global pitch","Global cutoff","Global pan","Key / scale","Mode / retrigger","Bar length","FX slot types","Motion routes / clocks","Trigger pattern","External sample reference"};
+    for(int i=0;i<11;++i)graphLock_.addItem(groups[i],i+1);
+    graphLock_.setSelectedId(1,juce::dontSendNotification);graphLock_.onChange=[this]{timerCallback();};
+    lockGroup_.onClick=[this]{const int id=graphLock_.getSelectedId();if(id<1||id>11)return;const auto bit=1u<<(id-1);
+        const bool enabled=lockGroup_.getToggleState();(void)processor_.editGeneratorState([=](auto& state){if(enabled)state.graphLocks|=bit;else state.graphLocks&=~bit;});};
+    fullGenerate_.setTooltip("Generate the selected role, replacing only unlocked structural fields. Host automation is not changed.");
+    fullMutate_.setTooltip("Deterministically vary the unlocked existing structural values at the current seed.");
+    const auto doSound=[this](bool mutation){const bool applied=processor_.generateSound(mutation);
+        graphStatus_.setText(applied?"Sound graph updated · host values unchanged":"No structural change (check locks / seed)",juce::dontSendNotification);};
+    fullGenerate_.onClick=[doSound]{doSound(false);};fullMutate_.onClick=[doSound]{doSound(true);};
+    for(auto* c:std::array<juce::Component*,5>{&graphLock_,&lockGroup_,&fullGenerate_,&fullMutate_,&graphStatus_})addAndMakeVisible(*c);
     for(int i=1;i<=4;++i)complexity_.addItem(juce::String(i),i);
     style_.setTitle("Generator style seed");complexity_.setTitle("Generator active layers");
     style_.onChange=[this]{const auto value=style_.getSelectedId()-1;
@@ -38,8 +53,8 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     for(int i=0;i<4;++i)lockLayer_.addItem("Layer " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)),i+1);
     lockLayer_.setSelectedId(1,juce::dontSendNotification);lockLayer_.setTitle("Layer for generator locks");
     lockLayer_.onChange=[this]{timerCallback();};addAndMakeVisible(lockLayer_);
-    const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env","Pitch env","Cutoff env"};
-    const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve};
+    const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env","Pitch env","Cutoff env","Filters","Transpose","Character"};
+    const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve,generator::filters,generator::transpose,generator::character};
     for(std::size_t i=0;i<fieldLocks_.size();++i){
         auto& button=fieldLocks_[i];button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
         button.setTooltip("Preserve this field during Generate and Mutate");
@@ -59,22 +74,27 @@ void GeneratorPanel::resized() {
     auto area=getLocalBounds().reduced(10);close_.setBounds(area.removeFromBottom(26).removeFromRight(75));
     for(std::size_t i=0;i<labels_.size();++i){auto row=area.removeFromTop(31);labels_[i].setBounds(row.removeFromLeft(100));
         switch(i){case 0:style_.setBounds(row);break;case 1:complexity_.setBounds(row);break;
-            case 2:intensity_.setBounds(row);break;case 3:energy_.setBounds(row);break;case 4:stereo_.setBounds(row);break;default:break;}}
+            case 2:intensity_.setBounds(row);break;case 3:energy_.setBounds(row);break;case 4:stereo_.setBounds(row);break;case 5:role_.setBounds(row);break;default:break;}}
     auto locks=area.removeFromTop(27);lockLayer_.setBounds(locks.removeFromLeft(100));
     const auto width=locks.getWidth()/4;for(std::size_t i=0;i<4;++i)fieldLocks_[i].setBounds(locks.removeFromLeft(width));
     auto second=area.removeFromTop(27);second.removeFromLeft(100);
-    const auto secondWidth=second.getWidth()/5;for(std::size_t i=4;i<fieldLocks_.size();++i)fieldLocks_[i].setBounds(second.removeFromLeft(secondWidth));
+    const auto secondWidth=second.getWidth()/8;for(std::size_t i=4;i<fieldLocks_.size();++i)fieldLocks_[i].setBounds(second.removeFromLeft(secondWidth));
+    auto graph=area.removeFromTop(30);graphLock_.setBounds(graph.removeFromLeft(224).reduced(2));lockGroup_.setBounds(graph.reduced(2));
+    auto commands=area.removeFromTop(31);fullGenerate_.setBounds(commands.removeFromLeft(137).reduced(2));fullMutate_.setBounds(commands.removeFromLeft(133).reduced(2));graphStatus_.setBounds(commands.reduced(2));
 }
 void GeneratorPanel::timerCallback() {
     if(!isShowing())return;
     const auto state=processor_.generatorState();
     style_.setSelectedId(state.style+1,juce::dontSendNotification);
     complexity_.setSelectedId(state.complexity,juce::dontSendNotification);
+    role_.setSelectedId(static_cast<int>(state.role)+1,juce::dontSendNotification);
+    const int group=graphLock_.getSelectedId();if(group>=1&&group<=11)
+        lockGroup_.setToggleState((state.graphLocks&(1u<<(group-1)))!=0,juce::dontSendNotification);
     auto sync=[](juce::Slider& slider,float value){if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
     sync(intensity_,state.intensity);sync(energy_,state.energy);sync(stereo_,state.stereo);
     const int layer=lockLayer_.getSelectedId()-1;
     if(layer>=0&&layer<4){const auto mask=state.locks.layers[static_cast<std::size_t>(layer)];
-        const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve};
+        const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve,generator::filters,generator::transpose,generator::character};
         for(std::size_t i=0;i<fieldLocks_.size();++i)fieldLocks_[i].setToggleState((mask&bits[i])!=0,juce::dontSendNotification);}
 }
 ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor, std::nullopt) {
@@ -176,6 +196,112 @@ void WavOptionsPanel::resized() {
     for(std::size_t i=0;i<controls.size();++i){auto row=area.removeFromTop(29);labels_[i].setBounds(row.removeFromLeft(143));controls[i]->setBounds(row.reduced(2));}
     auto footer=area.removeFromBottom(30); save_.setBounds(footer.removeFromRight(130).reduced(2));close_.setBounds(footer.removeFromRight(80).reduced(2));
 }
+namespace {
+constexpr const char* motionSources[]{"LFO 1","LFO 2","Event step","Sample & hold","Event ADSR","Event phase","Velocity","Dry signal follower","Macro 1","Macro 2","Macro 3","Macro 4","Macro 5","Macro 6","Macro 7","Macro 8"};
+constexpr const char* motionDestinations[]{"Master gain","Master balance","Voice pitch (±12 st)","Voice cutoff (±2 oct)","Filter Q (×¼–4)","Grain rate (×½–2)","Layer gain","Layer pan","Stereo width","FX 1 wet","FX 1 amount","FX 2 wet","FX 2 amount","FX 3 wet","FX 3 amount","FX 4 wet","FX 4 amount"};
+static_assert(std::size(motionSources)==static_cast<unsigned>(mod::Source::count));
+static_assert(std::size(motionDestinations)==static_cast<unsigned>(mod::Destination::count));
+}
+MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
+    title_.setText("MOTION — VOICE AND MIX ROUTES",juce::dontSendNotification);
+    title_.setFont(vox::ui::typography::controlLabel());
+    routeHelp_.setText("Depth is signed. Event sources target voices; dry follower targets mix/FX.",juce::dontSendNotification);
+    rows_.setRowHeight(25);rows_.setMultipleSelectionEnabled(false);
+    for(unsigned i=0;i<std::size(motionSources);++i)source_.addItem(motionSources[i],static_cast<int>(i+1));
+    for(unsigned i=0;i<std::size(motionDestinations);++i)destination_.addItem(motionDestinations[i],static_cast<int>(i+1));
+    source_.setTitle("Route source");destination_.setTitle("Route destination");
+    const auto slider=[](juce::Slider& s,double a,double b,double step,const char* title,const char* suffix){
+        s.setRange(a,b,step);s.setTitle(title);s.setTextValueSuffix(suffix);
+        s.setSliderStyle(juce::Slider::LinearHorizontal);s.setTextBoxStyle(juce::Slider::TextBoxRight,false,90,23);
+    };
+    slider(depth_,-100,100,.01,"Signed route depth"," %");
+    slider(smooth_,0,1000,1,"Route smoothing time"," ms");
+    slider(randomRate_,.03125,16,0,"Sample and hold rate"," Hz");
+    slider(randomSeed_,0,4294967295.,1,"Sample and hold seed","");
+    randomSeed_.setNumDecimalPlacesToDisplay(0);
+    for(unsigned i=0;i<2;++i){
+        sync_[i].setButtonText("Tempo sync");
+        slider(lfoRate_[i],.03125,16,0,i==0?"LFO 1 rate":"LFO 2 rate"," Hz");
+        lfoRate_[i].setNumDecimalPlacesToDisplay(4);
+        sync_[i].setTooltip("Cycles per quarter note at host BPM, with continuous phase. Free-running phase; 120 BPM when host tempo is unavailable.");
+        sync_[i].onClick=[this,i]{lfoRate_[i].setTextValueSuffix(sync_[i].getToggleState()?" cyc/qn":" Hz");};
+        addAndMakeVisible(sync_[i]);addAndMakeVisible(lfoRate_[i]);
+    }
+    randomRate_.setNumDecimalPlacesToDisplay(4);
+    apply_.onClick=[this]{commit(0);};remove_.onClick=[this]{commit(1);};clock_.onClick=[this]{commit(2);};
+    reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);};
+    const std::array<juce::Component*,15> components{&title_,&routeHelp_,&rows_,&source_,&destination_,&depth_,&smooth_,&randomRate_,&randomSeed_,&status_,&apply_,&remove_,&clock_,&reload_,&close_};
+    for(auto* c:components)addAndMakeVisible(*c);
+    refresh(0);
+}
+int MotionPanel::getNumRows(){return static_cast<int>(shown_.config.count)+(shown_.config.count<64?1:0);}
+void MotionPanel::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selected){
+    namespace c=vox::ui::tokens::colour;
+    if(selected)g.fillAll(c::border);
+    g.setColour(c::text);g.setFont(juce::FontOptions(12.f));
+    if(row<0||row>=getNumRows())return;
+    juce::String text;
+    if(static_cast<unsigned>(row)==shown_.config.count)text="+ Add route";
+    else {const auto r=shown_.config.routes[static_cast<unsigned>(row)];
+        text=juce::String(row+1)+". "+motionSources[static_cast<unsigned>(r.source)]+" → "+motionDestinations[static_cast<unsigned>(r.destination)]+
+            "   "+juce::String(r.depth*100,1)+"% / "+juce::String(r.smoothingSeconds*1000,0)+" ms";}
+    g.drawFittedText(text,8,0,w-16,h,juce::Justification::centredLeft,1);
+}
+void MotionPanel::selectedRowsChanged(int row){
+    const bool existing=row>=0&&static_cast<unsigned>(row)<shown_.config.count;
+    const auto r=existing?shown_.config.routes[static_cast<unsigned>(row)]:mod::Route{mod::Source::macro1,mod::Destination::gain,.25f,.01f};
+    source_.setSelectedId(static_cast<int>(r.source)+1,juce::dontSendNotification);
+    destination_.setSelectedId(static_cast<int>(r.destination)+1,juce::dontSendNotification);
+    depth_.setValue(r.depth*100,juce::dontSendNotification);smooth_.setValue(r.smoothingSeconds*1000,juce::dontSendNotification);
+    remove_.setEnabled(existing);apply_.setEnabled(row>=0);
+}
+void MotionPanel::refresh(int row){
+    if(row<0)row=std::max(0,rows_.getSelectedRow());
+    shown_=processor_.versionedMotion();
+    rows_.updateContent();row=std::clamp(row,0,getNumRows()-1);rows_.selectRow(row);selectedRowsChanged(row);
+    for(unsigned i=0;i<2;++i){const auto lfo=shown_.config.lfos[i];
+        lfoRate_[i].setValue(lfo.rate,juce::dontSendNotification);sync_[i].setToggleState(lfo.sync,juce::dontSendNotification);
+        lfoRate_[i].setTextValueSuffix(lfo.sync?" cyc/qn":" Hz");}
+    randomRate_.setValue(shown_.config.randomRate,juce::dontSendNotification);randomSeed_.setValue(shown_.config.randomSeed,juce::dontSendNotification);
+    status_.setText(juce::String(shown_.config.count)+" / 64 routes",juce::dontSendNotification);
+}
+void MotionPanel::commit(int action){
+    const int row=rows_.getSelectedRow();auto next=shown_.config;
+    if(action==0){
+        const mod::Route route{static_cast<mod::Source>(source_.getSelectedId()-1),static_cast<mod::Destination>(destination_.getSelectedId()-1),
+            static_cast<float>(depth_.getValue()*.01),static_cast<float>(smooth_.getValue()*.001)};
+        if(row<0||!next.put(static_cast<std::size_t>(row),route)){
+            status_.setText("Unsupported source/target pairing, or no free row.",juce::dontSendNotification);return;}
+    }else if(action==1){if(row<0||!next.erase(static_cast<std::size_t>(row)))return;}
+    else {
+        for(unsigned i=0;i<2;++i)next.lfos[i]={static_cast<float>(lfoRate_[i].getValue()),sync_[i].getToggleState()};
+        next.randomRate=static_cast<float>(randomRate_.getValue());next.randomSeed=static_cast<std::uint32_t>(randomSeed_.getValue());
+    }
+    if(!processor_.replaceMotionIfCurrent(shown_,next)){
+        refresh();status_.setText("Program or routes changed. Old edit was not applied.",juce::dontSendNotification);return;}
+    refresh(row);
+}
+void MotionPanel::paint(juce::Graphics& g){
+    namespace c=vox::ui::tokens::colour;
+    g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());g.setColour(c::text);
+    g.setFont(juce::FontOptions(12.f));
+    for(auto entry:std::array<std::pair<const char*,juce::Component*>,6>{{{"Depth",&depth_},{"Smoothing",&smooth_},
+        {"LFO 1",&lfoRate_[0]},{"LFO 2",&lfoRate_[1]},{"S&H rate",&randomRate_},{"S&H seed",&randomSeed_}}}){
+        const auto r=entry.second->getBounds();g.drawText(entry.first,r.getX()-86,r.getY(),82,r.getHeight(),juce::Justification::centredLeft);}
+}
+void MotionPanel::resized(){
+    auto a=getLocalBounds().reduced(12);title_.setBounds(a.removeFromTop(23));routeHelp_.setBounds(a.removeFromTop(24));
+    auto footer=a.removeFromBottom(32);
+    close_.setBounds(footer.removeFromRight(76).reduced(2));reload_.setBounds(footer.removeFromRight(76).reduced(2));status_.setBounds(footer);
+    rows_.setBounds(a.removeFromLeft(a.getWidth()/2).reduced(2));auto form=a.reduced(6,0);
+    source_.setBounds(form.removeFromTop(30).reduced(2));destination_.setBounds(form.removeFromTop(30).reduced(2));
+    depth_.setBounds(form.removeFromTop(29).withTrimmedLeft(86).reduced(2));smooth_.setBounds(form.removeFromTop(29).withTrimmedLeft(86).reduced(2));
+    auto buttons=form.removeFromTop(30);apply_.setBounds(buttons.removeFromLeft(120).reduced(2));remove_.setBounds(buttons.removeFromLeft(120).reduced(2));
+    form.removeFromTop(7);
+    for(unsigned i=0;i<2;++i){auto r=form.removeFromTop(28);sync_[i].setBounds(r.removeFromRight(103));lfoRate_[i].setBounds(r.withTrimmedLeft(86).reduced(2));}
+    randomRate_.setBounds(form.removeFromTop(27).withTrimmedLeft(86).reduced(2));randomSeed_.setBounds(form.removeFromTop(27).withTrimmedLeft(86).reduced(2));
+    clock_.setBounds(form.removeFromTop(29).removeFromRight(134).reduced(2));
+}
 SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     constexpr const char* roots[]{"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     constexpr const char* scales[]{"Chromatic","Major","Natural minor","Dorian","Phrygian"};
@@ -196,6 +322,9 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     };
     slider(transpose_,-24,24,1,"Layer transpose"," st");
     transpose_.onStructuralChange=[this]{const auto value=static_cast<float>(transpose_.getValue());editLayer([=](NoiseLayer& l){l.transpose=value;});};
+    slider(character_,-100,100,.1,"Source character (relative to legacy)"," %");
+    character_.onStructuralChange=[this]{const auto value=static_cast<float>(character_.getValue()*.01);editLayer([=](NoiseLayer& l){l.character=value;});};
+    addAndMakeVisible(characterLabel_);
     constexpr const char* types[]{"Off","Low-pass","High-pass","Band-pass","Notch"};
     for(std::size_t i=0;i<filters_.size();++i){
         auto& f=filters_[i];options(f.type,types);f.slope.addItem("12 dB/oct",1);f.slope.addItem("24 dB/oct",2);
@@ -233,6 +362,10 @@ void SourcePanel::refresh(){
     root_.setSelectedId(snapshot.program.tonality.root+1,juce::dontSendNotification);
     scale_.setSelectedId(static_cast<int>(snapshot.program.tonality.scale)+1,juce::dontSendNotification);
     root_.setEnabled(snapshot.program.tonality.scale!=source::Scale::chromatic);
+    constexpr const char* characterNames[]{"Noise brightness","Tonal blend","Partial brightness","Sub level","Doppler depth","Sweep range","Resonance","Upper modes","Detune","Vowel spacing","Slice edge","Grain density"};
+    const auto* name=characterNames[static_cast<unsigned>(layer.family)];
+    characterLabel_.setText(name,juce::dontSendNotification);character_.setTitle(name);
+    if(!character_.isMouseButtonDown())character_.setValue(layer.character*100,juce::dontSendNotification);
     if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
     for(std::size_t i=0;i<filters_.size();++i){
         const auto& value=layer.filters[i];auto& f=filters_[i];
@@ -258,11 +391,184 @@ void SourcePanel::resized(){
     auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
     auto first=a.removeFromTop(32);
     layer_.setBounds(first.removeFromLeft(142).reduced(2));root_.setBounds(first.removeFromLeft(78).reduced(2));scale_.setBounds(first.removeFromLeft(145).reduced(2));
-    transpose_.setBounds(a.removeFromTop(36).removeFromLeft(365).reduced(2));a.removeFromTop(24);
+    auto voice=a.removeFromTop(36);
+    transpose_.setBounds(voice.removeFromLeft(248).reduced(2));
+    characterLabel_.setBounds(voice.removeFromLeft(108).reduced(2));character_.setBounds(voice.reduced(2));a.removeFromTop(24);
     for(auto& f:filters_){auto row=a.removeFromTop(31);row.removeFromLeft(28);
         f.type.setBounds(row.removeFromLeft(118).reduced(2));f.slope.setBounds(row.removeFromLeft(110).reduced(2));
         f.hz.setBounds(row.removeFromLeft(row.getWidth()/2).reduced(2));f.q.setBounds(row.reduced(2));}
     close_.setBounds(a.removeFromBottom(28).removeFromRight(92));
+}
+namespace {
+constexpr const char* browserRoles[]{"Impact","Riser","Fall","Sweep","Zap","Rhythm","Atmosphere","Stinger","Untagged"};
+constexpr const char* browserModes[]{"One Shot","Gate","Continuous","Loop","Sequence","Transition"};
+juce::String lowerQuery(const portable::Tags& tags,PlayMode mode){
+    return (juce::String(tags.name+" "+tags.style+" "+tags.mood+" "+tags.use)+" "+browserRoles[tags.role]+" "+browserModes[static_cast<unsigned>(mode)]).toLowerCase();
+}
+}
+PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(processor),root_(std::move(root)){
+    title_.setText("PRESETS — REVIEW CATALOG / USER LIBRARY",juce::dontSendNotification);
+    title_.setFont(vox::ui::typography::controlLabel());
+    search_.setTitle("Search name, role, style, mood, use case or mode");search_.setTextToShowWhenEmpty("Search words…",juce::Colours::grey);
+    scope_.addItem("All",1);scope_.addItem("Review only",2);scope_.addItem("User only",3);scope_.setSelectedId(1,juce::dontSendNotification);
+    role_.addItem("All roles",1);editRole_.setTitle("User preset role");
+    for(int i=0;i<9;++i){role_.addItem(browserRoles[i],i+2);editRole_.addItem(browserRoles[i],i+1);}
+    mode_.addItem("All modes",1);for(int i=0;i<6;++i)mode_.addItem(browserModes[i],i+2);
+    role_.setSelectedId(1,juce::dontSendNotification);mode_.setSelectedId(1,juce::dontSendNotification);
+    const auto field=[](juce::TextEditor& e,const char* hint){e.setTitle(hint);e.setTextToShowWhenEmpty(hint,juce::Colours::grey);e.setInputRestrictions(128);};
+    field(name_,"User preset name");field(style_,"Style / genre tags");field(mood_,"Mood tags");field(use_,"Use-case tags");
+    search_.onTextChange=[this]{filter();};scope_.onChange=[this]{filter();};role_.onChange=[this]{filter();};mode_.onChange=[this]{filter();};onlyFavorites_.onClick=[this]{filter();};
+    rows_.setRowHeight(28);rows_.setMultipleSelectionEnabled(false);
+    detail_.setMinimumHorizontalScale(1);detail_.setJustificationType(juce::Justification::topLeft);
+    load_.setTooltip("Load structure; host automation stays unchanged");
+    play_.setTooltip("Render up to 12 seconds, then temporarily replace this plug-in's real-time output. Stop before recording. Review uses authored audition settings; user previews use current host bases.");
+    save_.setTooltip("Save the current structure as a new file in the user library; no existing file is overwritten");
+    tags_.setTooltip("Update only metadata/favorite of the selected user preset");
+    load_.onClick=[this]{load();};play_.onClick=[this]{runPreview();};stop_.onClick=[this]{stopPreview();report("Preview stopped");};
+    save_.onClick=[this]{save(false);};tags_.onClick=[this]{save(true);};remove_.onClick=[this]{erase();};
+    openFile_.onClick=[this]{stopPreview();if(looseFile)looseFile(false);};saveFile_.onClick=[this]{if(looseFile)looseFile(true);};
+    close_.onClick=[this]{stopPreview();setVisible(false);};
+    const std::array<juce::Component*,23> controls{&rows_,&search_,&name_,&style_,&mood_,&use_,&scope_,&role_,&mode_,&editRole_,&onlyFavorites_,&favorite_,&title_,&detail_,&status_,&load_,&play_,&stop_,&save_,&tags_,&remove_,&openFile_,&saveFile_};
+    for(auto* c:controls)addAndMakeVisible(*c);addAndMakeVisible(close_);
+}
+PresetBrowser::~PresetBrowser(){stopTimer();stopPreview();}
+void PresetBrowser::open(){scan();setVisible(true);toFront(true);}
+int PresetBrowser::getNumRows(){return static_cast<int>(visible_.size());}
+const PresetBrowser::Row* PresetBrowser::selected() const noexcept{
+    const auto index=rows_.getSelectedRow();return index>=0&&static_cast<std::size_t>(index)<visible_.size()?&all_[visible_[static_cast<std::size_t>(index)]]:nullptr;
+}
+void PresetBrowser::report(juce::String text){status_.setText(std::move(text),juce::dontSendNotification);}
+void PresetBrowser::scan(const juce::File& select){
+    all_.clear();
+    for(std::size_t i=0;i<std::size(content::reviewEntries);++i){const auto& e=content::reviewEntries[i];
+        portable::Tags tags{std::string(e.name),std::string(e.style),std::string(e.mood),"",static_cast<unsigned>(e.role),false};
+        auto notes=juce::String(browserModes[static_cast<unsigned>(e.mode)])+"  •  "+juce::String(e.bpm,0)+" BPM  •  "+
+            (e.bars?juce::String(e.bars)+" bars":juce::String(e.seconds,2)+" s")+"\n"+
+            (e.pitchedSource?"Pitched source":"Noise-only source")+"  •  Built-in assets\nOriginal VOX recipe; review only.";
+        all_.push_back({std::move(tags),e.mode,static_cast<int>(i),{},std::move(notes)});
+    }
+    const auto& root=root_;unsigned seen=0,invalid=0;
+    for(const auto& entry:juce::RangedDirectoryIterator(root,false,"*.voxfx",juce::File::findFiles,juce::File::FollowSymlinks::no)){
+        if(seen++>=library::maxFiles)break;
+        const auto file=entry.getFile();portable::Sound sound;portable::Tags metadata;
+        if(!library::managedFile(root,file)||!library::read(file,sound,&metadata)){++invalid;continue;}
+        if(metadata.name.empty())metadata.name=file.getFileNameWithoutExtension().toStdString();
+        const auto kind=sound.sample.kind;
+        const auto details=juce::String(browserModes[static_cast<unsigned>(sound.state.program.mode)])+"\n"+
+            (kind==sample::Reference::Kind::builtin?"Built-in source":kind==sample::Reference::Kind::pending?"Sample import pending — not portable":"External WAV · SHA verified on Preview/Load");
+        all_.push_back({std::move(metadata),sound.state.program.mode,-1,file,details});
+    }
+    std::stable_sort(all_.begin(),all_.end(),[](const Row& a,const Row& b){
+        if((a.factory>=0)!=(b.factory>=0))return a.factory>=0;
+        return juce::String(a.tags.name).compareIgnoreCase(juce::String(b.tags.name))<0;
+    });
+    filter();
+    if(select!=juce::File{})for(std::size_t i=0;i<visible_.size();++i)if(all_[visible_[i]].file==select){rows_.selectRow(static_cast<int>(i));break;}
+    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(invalid?" · "+juce::String(invalid)+" invalid user files skipped":"")+
+        (seen>library::maxFiles?" · user scan limited to 512 files":""));
+}
+void PresetBrowser::filter(){
+    visible_.clear();
+    const auto terms=juce::StringArray::fromTokens(search_.getText().toLowerCase(),false);
+    for(std::size_t i=0;i<all_.size();++i){const auto& row=all_[i];
+        if((scope_.getSelectedId()==2&&row.factory<0)||(scope_.getSelectedId()==3&&row.factory>=0)||
+           (role_.getSelectedId()>1&&static_cast<unsigned>(role_.getSelectedId()-2)!=row.tags.role)||
+           (mode_.getSelectedId()>1&&mode_.getSelectedId()-2!=static_cast<int>(row.mode))||
+           (onlyFavorites_.getToggleState()&&!row.tags.favorite))continue;
+        const auto searchable=lowerQuery(row.tags,row.mode);
+        if(std::any_of(terms.begin(),terms.end(),[&](const juce::String& t){return !searchable.contains(t);}))continue;
+        visible_.push_back(i);
+    }
+    rows_.deselectAllRows();rows_.updateContent();if(!visible_.empty())rows_.selectRow(0);else selectedRowsChanged(-1);
+    report(juce::String(static_cast<int>(visible_.size()))+" shown");
+}
+void PresetBrowser::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selectedRow){
+    if(row<0||static_cast<std::size_t>(row)>=visible_.size())return;
+    const auto& item=all_[visible_[static_cast<std::size_t>(row)]];
+    namespace c=vox::ui::tokens::colour;
+    if(selectedRow)g.fillAll(c::border);g.setColour(c::text);g.setFont(juce::FontOptions(13.f));
+    const auto line=juce::String(item.factory>=0?"REVIEW  ":"USER  ")+juce::String(item.tags.name)+"  ·  "+browserRoles[item.tags.role]+
+        (item.tags.style.empty()?"":"  ·  "+juce::String(item.tags.style))+(item.tags.favorite?"  ★":"");
+    g.drawFittedText(line,8,0,w-16,h,juce::Justification::centredLeft,1);
+}
+void PresetBrowser::selectedRowsChanged(int){
+    const auto* row=selected();const bool user=row&&row->factory<0;
+    load_.setEnabled(row!=nullptr);play_.setEnabled(row!=nullptr);tags_.setEnabled(user);remove_.setEnabled(user);
+    detail_.setText(row?row->details:juce::String("No matching presets"),juce::dontSendNotification);
+    name_.setText(user?juce::String(row->tags.name):juce::String{},false);
+    style_.setText(user?juce::String(row->tags.style):juce::String{},false);mood_.setText(user?juce::String(row->tags.mood):juce::String{},false);
+    use_.setText(user?juce::String(row->tags.use):juce::String{},false);
+    editRole_.setSelectedId(user?static_cast<int>(row->tags.role)+1:9,juce::dontSendNotification);
+    favorite_.setToggleState(user&&row->tags.favorite,juce::dontSendNotification);
+}
+portable::Tags PresetBrowser::editorTags() const {
+    return {name_.getText().trim().toStdString(),style_.getText().trim().toStdString(),mood_.getText().trim().toStdString(),
+        use_.getText().trim().toStdString(),static_cast<unsigned>(editRole_.getSelectedId()-1),favorite_.getToggleState()};
+}
+void PresetBrowser::load(){
+    const auto* row=selected();if(!row)return;
+    stopPreview();portable::Sound sound;
+    const bool ok=row->factory>=0?processor_.loadReviewCandidate(static_cast<std::size_t>(row->factory)):
+        library::read(row->file,sound)&&processor_.applyPortableSound(sound);
+    report(ok?"Loaded structure · host values unchanged":"Preset is unavailable or invalid");
+}
+void PresetBrowser::save(bool tagsOnly){
+    const auto metadata=editorTags();if(!metadata.valid()){report("Enter a name and tags of at most 128 UTF-8 bytes each");return;}
+    const auto& root=root_;
+    if(root.isSymbolicLink()||root.createDirectory().failed()){report("User library folder unavailable");return;}
+    portable::Sound sound;
+    auto file=root.getChildFile(juce::Uuid().toString()+".voxfx");
+    if(tagsOnly){const auto* row=selected();if(!row||row->factory>=0)return;file=row->file;
+        if(!library::managedFile(root,file)||!library::read(file,sound)){report("User preset has changed or is missing");return;}}
+    else {if(file.exists()){report("User preset ID collision; try again");return;}sound=processor_.portableSnapshot();}
+    if(!library::write(file,sound,&metadata)){report("Could not save user preset");return;}
+    scan(file);report(tagsOnly?"User tags saved":"Saved current structure in User Presets");
+}
+void PresetBrowser::erase(){
+    const auto* row=selected();if(!row||row->factory>=0)return;
+    const auto file=row->file;
+    juce::AlertWindow::showOkCancelBox(juce::MessageBoxIconType::WarningIcon,"Delete user preset",
+        "Permanently delete the selected user preset file? Projects and immutable review entries will not change.","Delete","Cancel",this,
+        juce::ModalCallbackFunction::create([safe=juce::Component::SafePointer<PresetBrowser>(this),file](int result){
+            if(!safe||result==0)return;
+            if(!library::managedFile(safe->root_,file)||!file.existsAsFile()||!file.deleteFile()){safe->report("Could not delete user preset");return;}
+            safe->scan();safe->report("User preset deleted");}));
+}
+void PresetBrowser::runPreview(){
+    const auto* row=selected();if(!row)return;
+    if(audition_){report("Previous preview is still finishing; stop or wait");return;}
+    offline::Capture capture;sample::Reference reference;
+    if(row->factory>=0)capture=content::makePreview(content::reviewEntries[static_cast<std::size_t>(row->factory)],preview::Job::rate);
+    else {portable::Sound sound;if(!library::read(row->file,sound)){report("User preset unavailable");return;}
+        capture=processor_.capturePresetPreview(sound);reference=std::move(sound.sample);}
+    processor_.previewBus().stop();
+    try{audition_=std::make_unique<preview::Job>(std::move(capture),std::move(reference));armed_=true;startTimerHz(20);report("Rendering preview…");}
+    catch(...){report("Could not start preview worker");}
+}
+void PresetBrowser::stopPreview(){armed_=false;if(audition_)audition_->cancel();processor_.previewBus().stop();}
+void PresetBrowser::timerCallback(){
+    if(audition_){const auto result=audition_->result();if(result==preview::Result::loading)return;
+        const bool started=armed_&&result==preview::Result::ready&&audition_->publish(processor_.previewBus());
+        if(armed_)report(started?"Preview ready · host audio must be running":"Preview unavailable (asset, empty schedule or audio bounds)");
+        audition_.reset();armed_=false;
+        if(!started){stopTimer();return;}
+    }
+    if(!processor_.previewBus().playing()){report("Preview finished");stopTimer();}
+}
+void PresetBrowser::paint(juce::Graphics& g){namespace c=vox::ui::tokens::colour;g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());}
+void PresetBrowser::resized(){
+    auto a=getLocalBounds().reduced(12);title_.setBounds(a.removeFromTop(23));
+    auto filters=a.removeFromTop(34);search_.setBounds(filters.removeFromLeft(261).reduced(2));scope_.setBounds(filters.removeFromLeft(117).reduced(2));
+    role_.setBounds(filters.removeFromLeft(121).reduced(2));mode_.setBounds(filters.removeFromLeft(129).reduced(2));onlyFavorites_.setBounds(filters.reduced(2));
+    auto footer=a.removeFromBottom(32);close_.setBounds(footer.removeFromRight(71).reduced(2));saveFile_.setBounds(footer.removeFromRight(103).reduced(2));
+    openFile_.setBounds(footer.removeFromRight(103).reduced(2));status_.setBounds(footer.reduced(2));
+    rows_.setBounds(a.removeFromLeft(a.getWidth()*55/100).reduced(2));auto form=a.reduced(8,2);
+    detail_.setBounds(form.removeFromTop(69));auto audition=form.removeFromTop(31);
+    play_.setBounds(audition.removeFromLeft(102).reduced(2));stop_.setBounds(audition.removeFromLeft(73).reduced(2));load_.setBounds(audition.removeFromLeft(82).reduced(2));
+    form.removeFromTop(10);name_.setBounds(form.removeFromTop(29).reduced(2));style_.setBounds(form.removeFromTop(29).reduced(2));
+    mood_.setBounds(form.removeFromTop(29).reduced(2));use_.setBounds(form.removeFromTop(29).reduced(2));
+    auto tagsRow=form.removeFromTop(29);editRole_.setBounds(tagsRow.removeFromLeft(147).reduced(2));favorite_.setBounds(tagsRow.reduced(2));
+    auto files=form.removeFromTop(32);save_.setBounds(files.removeFromLeft(102).reduced(2));tags_.setBounds(files.removeFromLeft(98).reduced(2));remove_.setBounds(files.removeFromLeft(84).reduced(2));
 }
 template <typename Edit> void FxPanel::editPattern(Edit edit){
     auto next=displayedPattern_;edit(next);
@@ -312,7 +618,7 @@ void FxPanel::patternCommand(int id){
 }
 FxPanel::FxPanel (FxProcessor& processor)
     : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
-      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor)
+      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor)
 {
     addAndMakeVisible (output_);
     addAndMakeVisible (duration_);
@@ -401,7 +707,8 @@ FxPanel::FxPanel (FxProcessor& processor)
     factory_.setTooltip("Load an uncurated procedural layer seed; duration, effects, macros and pattern remain unchanged");
     for(int i=0;i<48;++i)factory_.addItem(juce::String(familyNames[i/4])+" "+juce::String(1+i%4),i+1);
     factory_.onChange=[this]{const int id=factory_.getSelectedId();generator::Result result;
-        if(id>=1&&id<=48&&generator::factory(static_cast<std::size_t>(id-1),result))(void)processor_.setProgram(result.program);
+        if(id>=1&&id<=48&&generator::factory(static_cast<std::size_t>(id-1),result)&&processor_.setProgram(result.program))
+            family_.setSelectedId(processor_.family()+1,juce::dontSendNotification);
         factory_.setSelectedId(0,juce::dontSendNotification);};
     addAndMakeVisible(factory_);
     comparison_.setTextWhenNothingSelected("Compare A/B");comparison_.setTitle("Project A/B comparisons");
@@ -479,21 +786,15 @@ FxPanel::FxPanel (FxProcessor& processor)
     addChildComponent(sourcePanel_);
     sourceButton_.setTooltip("Edit Program key and per-layer pitch and filters");
     sourceButton_.onClick=[this]{sourcePanel_.refresh();sourcePanel_.setVisible(true);sourcePanel_.toFront(true);};
+    addChildComponent(motionPanel_);
+    motionButton_.setTooltip("Open the native 64-route modulation editor");
+    motionButton_.onClick=[this]{motionPanel_.refresh();motionPanel_.setVisible(true);motionPanel_.toFront(true);};
+    addAndMakeVisible(motionButton_);
     addAndMakeVisible(sourceButton_);
-    presets_.setTitle("User presets and review candidates");presets_.setTextWhenNothingSelected("Presets…");
-    presets_.setTooltip("Save/load a user sound or load a review candidate into this project. All host parameter values stay unchanged.");
-    presets_.addItem("Save user preset…",1);presets_.addItem("Load user preset…",2);
-    presets_.addSeparator();presets_.addSectionHeading("Review candidates — not approved");
-    for(std::size_t i=0;i<std::size(content::reviewEntries);++i){
-        const auto& e=content::reviewEntries[i];
-        presets_.addItem(juce::String(e.name.data())+" — "+juce::String(e.style.data()),static_cast<int>(10+i));
-    }
-    presets_.onChange=[this]{
-        const int id=presets_.getSelectedId();presets_.setSelectedId(0,juce::dontSendNotification);
-        if(id==1||id==2)choosePreset(id==1);
-        else if(id>=10 && !processor_.loadReviewCandidate(static_cast<std::size_t>(id-10)))
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Candidate unavailable","Could not load the review sound.");
-    };
+    addChildComponent(browser_);
+    presets_.setTooltip("Browse the immutable review catalog and your tagged user presets");
+    presets_.onClick=[this]{browser_.open();};
+    browser_.looseFile=[this](bool saving){choosePreset(saving);};
     addAndMakeVisible(presets_);
     for (std::size_t i=0;i<4;++i) {
         auto& type=effectsType_[i];
@@ -636,6 +937,7 @@ void FxPanel::resized()
     programCurvesButton_.setBounds(actions.removeFromRight(154));
     sourceButton_.setBounds(actions.removeFromRight(130).reduced(2));
     presets_.setBounds(actions.removeFromRight(141).reduced(2));
+    motionButton_.setBounds(actions.removeFromRight(90).reduced(2));
     area.removeFromTop (80);
     output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));
@@ -703,8 +1005,10 @@ void FxPanel::resized()
     auto row = getLocalBounds().reduced(32);
     row.removeFromTop(247);
     row.removeFromBottom(120);
-    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(600,280));
+    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(768,372));
     sourcePanel_.setBounds(getLocalBounds().withSizeKeepingCentre(665,247));
+    motionPanel_.setBounds(getLocalBounds().withSizeKeepingCentre(848,434));
+    browser_.setBounds(getLocalBounds().withSizeKeepingCentre(920,456));
     wavOptions_.setBounds(getLocalBounds().withSizeKeepingCentre(470,232));
     programCurves_.setBounds(row.reduced(3));
     const int width = row.getWidth() / 4;

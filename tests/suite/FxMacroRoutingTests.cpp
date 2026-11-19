@@ -22,7 +22,7 @@ int main(){
     check(!codec::decode(unknown,restored)&&restored==config,"unsupported source rejected transactionally");
     for(std::size_t n=0;n<encoded.size();++n)
         check(!codec::decode(std::span(encoded).first(n),restored),"truncated route state rejected");
-    auto future=encoded;future[0]=std::byte{2};check(!codec::decode(future,restored)&&restored==config,"future state rejected transactionally");
+    auto future=encoded;future[0]=std::byte{3};check(!codec::decode(future,restored)&&restored==config,"future state rejected transactionally");
     std::array<float,8> macros{};macros.fill(.5f);macros[0]=1;macros[7]=1;
     Runtime runtime;check(runtime.prepare(48000)&&runtime.setConfig(config),"prepare macro routing");
     auto before=runtime.process(.5f,macros);check(before<.5f,"bipolar negative route and smoothed positive route");
@@ -47,7 +47,7 @@ int main(){
         check(motion.setSourceGainRoute(vox::fx::mod::Source::lfo2,.2f,.01f),"second LFO route");
         std::vector<std::byte> motionBytes;Config recalled;
         check(codec::encode(motion,motionBytes)&&codec::decode(motionBytes,recalled)&&recalled==motion,"motion routes persisted");
-        check(!motion.setSourceGainRoute(vox::fx::mod::Source::follower,.5f,0),"unsupported source rejected");
+        check(!motion.setSourceGainRoute(vox::fx::mod::Source::velocity,.5f,0),"voice source cannot target shared gain");
     }
     {
         using vox::fx::mod::Source;using vox::fx::mod::Destination;
@@ -74,7 +74,7 @@ int main(){
         check(codec::encode(routing,bytes)&&codec::decode(bytes,roundtrip)&&roundtrip==routing,"pan routes roundtrip");
         check(routing.setRoute(Source::macro1,Destination::pan,0,0) && routing.count==1 &&
               routing.routes[0].destination==Destination::gain,"removing pan preserves same-source gain");
-        check(!routing.setRoute(Source::macro1,Destination::pitch,.5f,0),"unsupported pitch rejected");
+        check(routing.setRoute(Source::macro1,Destination::pitch,.5f,0),"macro can target voice pitch");
     }
     std::printf("FX macro routing: %d failure(s)\n",fails);return fails?1:0;
 }

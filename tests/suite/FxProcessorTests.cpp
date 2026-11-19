@@ -34,6 +34,40 @@ int main() {
     juce::ScopedJuceInitialiser_GUI gui;
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
     {
+        using namespace vox::fx;
+        auto owner=std::make_unique<FxProcessor>();FxPanel panel(*owner);
+        auto& motion=panel.motionPanel();
+        motion.refresh(0);motion.sourceSelector().setSelectedId(static_cast<int>(mod::Source::velocity)+1,juce::sendNotificationSync);
+        motion.destinationSelector().setSelectedId(static_cast<int>(mod::Destination::pitch)+1,juce::sendNotificationSync);
+        motion.applyButton().onClick();
+        check(owner->macroConfig().count==1&&owner->macroConfig().routes[0].destination==mod::Destination::pitch,"native Motion row publishes a typed voice route");
+        const auto restored=save(*owner);owner->setStateInformation(restored.getData(),static_cast<int>(restored.getSize()));
+        motion.destinationSelector().setSelectedId(static_cast<int>(mod::Destination::cutoff)+1,juce::sendNotificationSync);
+        motion.applyButton().onClick();
+        check(owner->macroConfig().routes[0].destination==mod::Destination::pitch,"stale Motion draft cannot overwrite a host restore");
+        owner->editGeneratorState([](auto& state){state.role=5;});owner->effectWetParameter(0).setValueNotifyingHost(.31f);
+        check(owner->generateSound(false)&&owner->program().mode==PlayMode::sequence&&owner->patternSnapshot().steps[0].enabled&&
+            std::abs(owner->effectWetParameter(0).get()-.31f)<1e-5f,"full graph generation keeps host automation bases");
+        const auto root=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("voxfx-ui-"+juce::Uuid().toString());
+        {
+            PresetBrowser browser(*owner,root);browser.setSize(920,456);browser.open();
+            browser.searchField().setText("cobalt choir",false);browser.searchField().onTextChange();
+            check(browser.matchCount()==1,"native browser keyword filter finds a unique review row");
+            browser.searchField().setText("",false);browser.searchField().onTextChange();browser.nameField().setText("Saved Native Example",true);browser.saveButton().onClick();
+            browser.searchField().setText("saved native example",false);browser.searchField().onTextChange();
+            check(browser.matchCount()==1&&browser.loadButton().isEnabled(),"user preset appears in native browser after save and search");
+            owner->setFamily(0);const auto base=owner->effectWetParameter(0).get();browser.loadButton().onClick();
+            check(owner->family()==static_cast<int>(NoiseFamily::glitch)&&owner->effectWetParameter(0).get()==base,"browser loads saved structure without resetting automation");
+        }
+        (void)root.deleteRecursively();
+        for(float scale:{1.f,1.25f,1.5f,2.f}){
+            panel.setSize(1040,760);
+            const auto image=panel.createComponentSnapshot(panel.getLocalBounds(),true,scale);
+            check(image.isValid()&&image.getWidth()==static_cast<int>(1040*scale)&&image.getHeight()==static_cast<int>(760*scale),
+                  "offscreen JUCE painting supports explicit scaling factors");
+        }
+    }
+    {
         vox::fx::FxPanel panel(p);
         panel.outputSlider().setValue(0.5, juce::sendNotificationSync);
         check(std::abs(p.outputParameter().get() - 0.5f) < 1e-6f, "editor knob controls host parameter");
@@ -77,7 +111,9 @@ int main() {
             &curve,&curve,now,{8.0f,24.8f},now,1,true);};
         curve.mouseDown(mouse({8.0f,24.8f}));
         auto restored=p.program();restored.layers[1].gainCurve=vox::fx::timeline::Curve::constant(.4f);
-        check(p.setProgram(restored),"replace Program while curve drag is active");
+        auto donor=std::make_unique<vox::fx::FxProcessor>();check(donor->setProgram(restored),"establish stored host state for curve drag");
+        const auto incoming=save(*donor);p.setStateInformation(incoming.getData(),static_cast<int>(incoming.getSize()));
+        check(p.lastStateError().isEmpty(),"replace Program from host while curve drag is active");
         curve.mouseDrag(mouse({8.0f,80.0f}));curve.mouseUp(mouse({8.0f,80.0f}));
         check(p.program().layers[1].gainCurve.evaluate(.5f)==.4f,"stale drag cannot overwrite replaced Program");
         p.outputParameter().setValueNotifyingHost(1.0f);
@@ -145,7 +181,7 @@ int main() {
         vox::fx::FxPanel recalledPanel(*generatorRecall);
         check(recalledPanel.seedSlider().getValue()==123 && recalledPanel.layerLock(0).getToggleState(),"generator seed and locks recalled in editor");
         auto invalidGenerator=vox::preset::decode(std::span(static_cast<const std::byte*>(generatorSaved.getData()),generatorSaved.getSize()),vox::preset::makeTag("VXFX"),1);
-        for(auto& section:invalidGenerator.document.sections)if(section.tag==vox::fx::fxGeneratorSectionTag)section.data[0]=std::byte{4};
+        for(auto& section:invalidGenerator.document.sections)if(section.tag==vox::fx::fxGeneratorSectionTag)section.data[0]=std::byte{5};
         const auto invalidGeneratorBytes=vox::preset::encode(invalidGenerator.document);
         if(invalidGeneratorBytes){generatorRecall->setStateInformation(invalidGeneratorBytes->data(),static_cast<int>(invalidGeneratorBytes->size()));
             check(generatorRecall->lastStateError().isNotEmpty()&&save(*generatorRecall)==generatorSaved,"future generator state rejected transactionally");}
@@ -306,9 +342,9 @@ int main() {
         const auto old=vox::preset::encode(legacy.document);auto migratedFx=std::make_unique<vox::fx::FxProcessor>();
         if(old){migratedFx->setStateInformation(old->data(),static_cast<int>(old->size()));
             check(migratedFx->lastStateError().isEmpty()&&migratedFx->effect(0).type==vox::fx::effects::Type::drive &&
-                  std::abs(migratedFx->effectWetParameter(0).get()-std::round(.7f*63)/63)<1e-5f &&
-                  std::abs(migratedFx->effectAmountParameter(0).get()-std::round(.3f*127)/127)<1e-5f,
-                  "FXSL v1 migrates type and old quantized automation values");}
+                  std::abs(migratedFx->effectWetParameter(0).get()-migratedFx->effectWetParameter(0).getNormalisableRange().snapToLegalValue(std::round(.7f*63)/63))<1e-5f &&
+                  std::abs(migratedFx->effectAmountParameter(0).get()-migratedFx->effectAmountParameter(0).getNormalisableRange().snapToLegalValue(std::round(.3f*127)/127))<1e-5f,
+                  "FXSL v1 migrates type and quantizes legacy values to the unchanged JUCE host steps");}
         else check(false,"encode old FXSL");
         auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:document.document.sections)if(section.tag==vox::fx::fxEffectsSectionTag)section.data[4]=std::byte{0xff};
@@ -475,7 +511,7 @@ int main() {
         restored->setStateInformation(state.getData(),static_cast<int>(state.getSize()));
         check(restored->macroConfig().count==1&&restored->macroParameter(0).get()==1,"macro routes and values recalled");
         auto document=vox::preset::decode(std::span(static_cast<const std::byte*>(state.getData()),state.getSize()),vox::preset::makeTag("VXFX"),1);
-        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxMacroRouteSectionTag)section.data[0]=std::byte{2};
+        for(auto& section:document.document.sections)if(section.tag==vox::fx::fxMacroRouteSectionTag)section.data[0]=std::byte{3};
         const auto bad=vox::preset::encode(document.document);
         if(bad){restored->setStateInformation(bad->data(),static_cast<int>(bad->size()));
             check(restored->lastStateError().isNotEmpty()&&save(*restored)==state,"future macro routes rejected transactionally");}

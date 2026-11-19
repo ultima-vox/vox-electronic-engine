@@ -11,7 +11,8 @@ namespace vox::fx::programcodec {
 // Versions 1 and 2 contain gain/pan curves per layer; v2 appends bars.
 // Version 3 appends per-layer pitch/cutoff and four Program trajectories;
 // v4 appends playback mode and repeated-note policy. v5 appends Program
-// key/scale and dual filter/transpose settings per layer. Older fields
+// key/scale and dual filter/transpose settings per layer; v6 appends signed
+// family-specific Character on each layer. Older fields
 // remain byte-identical; old Programs use chromatic, bypassed filters.
 // Every decoder path is bounded, rejects unknown versions/truncation/trailing
 // bytes, and assigns its output only after complete validation.
@@ -50,12 +51,13 @@ inline bool getCurve(std::span<const std::byte> bytes, std::size_t& offset, time
     return curve.valid();
 }
 inline constexpr std::size_t soundBytes=8+4*(4+2*16);
-inline constexpr std::size_t maxBytes=16 + 4 * (24 + 4 * (4 + 16 * 12)) + 4 * (4 + 16 * 12) + soundBytes;
+inline constexpr std::size_t characterBytes=16;
+inline constexpr std::size_t maxBytes=16 + 4 * (24 + 4 * (4 + 16 * 12)) + 4 * (4 + 16 * 12) + soundBytes + characterBytes;
 inline bool encode(const NoiseProgram& program, std::vector<std::byte>& result) {
     if (!program.valid()) return false;
     std::vector<std::byte> next;
     next.reserve(maxBytes);
-    putU32(next,5);
+    putU32(next,6);
     for (const auto& layer:program.layers) {
         putU32(next,layer.enabled ? 1u : 0u); putU32(next,static_cast<std::uint32_t>(layer.family));
         putFloat(next,layer.timing.offset); putFloat(next,layer.timing.span); putFloat(next,layer.gain); putFloat(next,layer.pan);
@@ -71,12 +73,13 @@ inline bool encode(const NoiseProgram& program, std::vector<std::byte>& result) 
         putFloat(next,layer.transpose);
         for(const auto& f:layer.filters){putU32(next,static_cast<std::uint32_t>(f.type));putFloat(next,f.hz);putFloat(next,f.q);putU32(next,f.poles);}
     }
+    for(const auto& layer:program.layers)putFloat(next,layer.character);
     result=std::move(next); return true;
 }
 inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexcept {
     if (bytes.size() > maxBytes) return false;
     NoiseProgram next; std::size_t offset=0; std::uint32_t version=0;
-    if (!getU32(bytes,offset,version) || (version < 1 || version > 5)) return false;
+    if (!getU32(bytes,offset,version) || (version < 1 || version > 6)) return false;
     for (auto& layer:next.layers) {
         std::uint32_t enabled=0, family=0;
         if (!getU32(bytes,offset,enabled) || enabled > 1 || !getU32(bytes,offset,family) ||
@@ -109,6 +112,7 @@ inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexc
             }
         }
     }
+    if(version>=6)for(auto& layer:next.layers)if(!getFloat(bytes,offset,layer.character))return false;
     if (offset != bytes.size() || !next.valid()) return false;
     result=next; return true;
 }

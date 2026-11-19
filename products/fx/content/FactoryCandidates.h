@@ -18,6 +18,7 @@ struct Entry {
     double bpm;
     std::uint32_t revision = 1;
     bool secondWave = false;
+    unsigned authored = 0;
 };
 inline constexpr unsigned schemaVersion = 1;
 inline constexpr std::string_view provenance = "Original hand-authored VOX synth recipe; no external assets; distribution approval pending";
@@ -37,8 +38,76 @@ inline constexpr Entry reviewEntries[] {
     {"voxfx.zap.pixel-wasp", "Pixel Wasp", "Hi-Tech", "Angular", Role::zap, PlayMode::oneShot, true, 73, 0, .19f, 178, 1, true},
     {"voxfx.rhythm.sand-code", "Sand Code", "Goa", "Coiled", Role::rhythm, PlayMode::sequence, true, 55, 0, .21f, 146, 1, true},
     {"voxfx.atmosphere.cloud-temple", "Cloud Temple", "Uplifting", "Weightless", Role::atmosphere, PlayMode::continuous, true, 69, 0, 4.5f, 138, 1, true},
-    {"voxfx.stinger.copper-warning", "Copper Warning", "Dark Psy", "Ominous", Role::stinger, PlayMode::oneShot, true, 51, 0, .85f, 152, 1, true}
+    {"voxfx.stinger.copper-warning", "Copper Warning", "Dark Psy", "Ominous", Role::stinger, PlayMode::oneShot, true, 51, 0, .85f, 152, 1, true},
+    {"voxfx.impact.thunder-veil","Thunder Veil","Daylight Trance","Expansive",Role::impact,PlayMode::oneShot,true,48,0,1.5f,138,1,false,1},
+    {"voxfx.impact.oxide-bloom","Oxide Bloom","Industrial Psy","Gritty",Role::impact,PlayMode::gate,true,35,0,.58f,150,1,false,2},
+    {"voxfx.riser.cobalt-choir","Cobalt Choir","Uplifting","Radiant",Role::riser,PlayMode::transition,true,67,8,4,140,1,false,3},
+    {"voxfx.riser.pressure-front","Pressure Front","Progressive Tech","Tense",Role::riser,PlayMode::oneShot,false,60,0,2.8f,131,1,false,4},
+    {"voxfx.fall.halcyon-wake","Halcyon Wake","Daylight Trance","Nostalgic",Role::fall,PlayMode::oneShot,true,64,0,2.4f,134,1,false,5},
+    {"voxfx.fall.glass-elevator","Glass Elevator","Hi-Tech","Brittle",Role::fall,PlayMode::oneShot,true,53,0,.77f,180,1,false,6},
+    {"voxfx.sweep.velvet-conduit","Velvet Conduit","Progressive Tech","Liquid",Role::sweep,PlayMode::loop,true,58,0,1.25f,132,1,false,7},
+    {"voxfx.sweep.monsoon-edge","Monsoon Edge","Goa Psy","Restless",Role::sweep,PlayMode::gate,false,60,0,1.5f,146,1,false,8},
+    {"voxfx.zap.mantis-antenna","Mantis Antenna","Forest Psy","Insectile",Role::zap,PlayMode::gate,true,71,0,.43f,152,1,false,9},
+    {"voxfx.zap.prism-arc","Prism Arc","Anthem","Luminous",Role::zap,PlayMode::oneShot,true,81,0,.28f,139,1,false,10},
+    {"voxfx.rhythm.rusted-bell-grid","Rusted Bell Grid","Dark Psy","Mechanical",Role::rhythm,PlayMode::sequence,true,50,0,.09f,158,1,false,11},
+    {"voxfx.rhythm.lantern-bounce","Lantern Bounce","Daylight Trance","Playful",Role::rhythm,PlayMode::sequence,true,60,0,.27f,136,1,false,12},
+    {"voxfx.atmosphere.lichen-cavern","Lichen Cavern","Forest Psy","Damp",Role::atmosphere,PlayMode::continuous,true,46,0,4.8f,150,1,false,13},
+    {"voxfx.atmosphere.horizon-vapour","Horizon Vapour","Balearic Trance","Mist",Role::atmosphere,PlayMode::continuous,false,60,0,4.3f,126,1,false,14},
+    {"voxfx.stinger.solar-insignia","Solar Insignia","Uplifting","Triumphant",Role::stinger,PlayMode::oneShot,true,72,0,.85f,142,1,false,15},
+    {"voxfx.stinger.null-beacon","Null Beacon","Dark Trance","Uneasy",Role::stinger,PlayMode::oneShot,true,55,0,1.2f,147,1,false,16},
 };
+
+// Hand-specified combinations. Each row has independently authored source,
+// event staging, envelope, filter and effects choices (no seed expansion).
+struct AuthoredLayer {
+    NoiseFamily family=NoiseFamily::riser;
+    float gain=0,pan=0,start=0,span=1,transpose=0;
+    source::Filter filter{};
+};
+struct AuthoredRecipe {
+    std::array<AuthoredLayer,3> layers;
+    std::array<float,4> envelope; // start, crest, end, crest position
+    std::array<effects::Settings,3> fx;
+    source::Tonality key{};
+    std::array<float,2> pitch{.5f,.5f};
+};
+namespace detail {
+using F=NoiseFamily;using E=effects::Type;using T=source::FilterType;using K=source::Scale;
+inline constexpr AuthoredRecipe authored[]{
+    {{{{F::impact,.98f,0,0,.65f,0,{T::lowpass,2600,.7f,2}},{F::whoosh,.52f,.28f,.06f,.81f,7,{T::highpass,170,.707f,2}},{F::texture,.32f,-.46f,.24f,.76f,12,{T::lowpass,5300,.62f,2}}}},
+      {.91f,.83f,0,.19f},{{{E::chorus,.24f,.37f},{E::reverb,.24f,.52f},{}}},{K::major,0},{.58f,.43f}},
+    {{{{F::metallic,.86f,-.04f,0,1,-5,{T::bandpass,970,.94f,2}},{F::squelch,.47f,.41f,.13f,.71f,0,{T::lowpass,4600,1.2f,2}},{F::impact,.75f,0,0,.67f,-12,{}}}},
+      {.89f,.74f,.21f,.12f},{{{E::drive,.53f,.51f},{E::bitcrush,.17f,.44f},{E::delay,.11f,.17f}}},{K::phrygian,11},{.56f,.31f}},
+    {{{{F::formant,.72f,-.3f,0,1,0,{T::highpass,93,.68f,2}},{F::texture,.65f,.35f,.12f,.88f,7,{T::lowpass,4200,.72f,2}},{F::shepard,.48f,0,.31f,.69f,12,{T::lowpass,6500,.66f,2}}}},
+      {.04f,.54f,1,.61f},{{{E::chorus,.22f,.29f},{E::reverb,.17f,.57f},{}}},{K::major,7},{.45f,.64f}},
+    {{{{F::riser,.77f,-.31f,0,1,0,{T::bandpass,650,.81f,2}},{F::riser,.64f,.24f,.26f,.74f,0,{T::highpass,1700,.67f,4}},{F::riser,.51f,0,.55f,.45f,0,{T::notch,4100,.8f,2}}}},
+      {.1f,.73f,1,.71f},{{{E::phaser,.22f,.48f},{E::delay,.15f,.25f},{}}},{K::chromatic,0}},
+    {{{{F::downlifter,.78f,0,0,1,0,{T::lowpass,2700,.7f,2}},{F::texture,.48f,-.34f,.12f,.88f,-5,{T::highpass,144,.7f,2}},{F::whoosh,.42f,.49f,.32f,.65f,7,{T::lowpass,1700,.69f,2}}}},
+      {1,.68f,.02f,.39f},{{{E::delay,.19f,.32f},{E::reverb,.23f,.37f},{}}},{K::dorian,4},{.61f,.31f}},
+    {{{{F::glitch,.88f,.29f,0,.76f,0,{T::highpass,220,.74f,2}},{F::laser,.7f,-.37f,.18f,.82f,-12,{T::lowpass,2100,.85f,2}},{F::metallic,.45f,0,.25f,.55f,7,{T::notch,810,.87f,2}}}},
+      {.89f,.66f,0,.28f},{{{E::bitcrush,.24f,.62f},{E::flanger,.15f,.35f},{E::delay,.14f,.15f}}},{K::minor,5},{.74f,.26f}},
+    {{{{F::texture,.67f,-.21f,0,1,0,{T::bandpass,480,.7f,2}},{F::whoosh,.59f,.37f,.04f,.94f,-5,{T::highpass,185,.74f,2}},{F::formant,.38f,.02f,.22f,.71f,12,{T::notch,1650,.87f,2}}}},
+      {.15f,.8f,.12f,.47f},{{{E::phaser,.38f,.43f},{E::chorus,.2f,.26f},{}}},{K::minor,10},{.43f,.59f}},
+    {{{{F::riser,.88f,-.25f,0,1,0,{T::bandpass,1400,1.1f,2}},{F::riser,.57f,.43f,.05f,.89f,0,{T::lowpass,480,.71f,4}},{F::riser,.39f,-.03f,.41f,.59f,0,{T::highpass,5000,.68f,2}}}},
+      {.17f,.87f,.13f,.53f},{{{E::flanger,.18f,.5f},{E::ring,.18f,.29f},{}}},{K::chromatic,0}},
+    {{{{F::squelch,.9f,-.04f,0,1,0,{T::bandpass,1650,1.15f,2}},{F::formant,.59f,.44f,.1f,.9f,-12,{T::highpass,290,.68f,2}},{F::glitch,.35f,-.21f,.21f,.65f,0,{T::lowpass,5000,.74f,2}}}},
+      {.92f,.68f,.24f,.22f},{{{E::ring,.23f,.28f},{E::delay,.13f,.2f},{}}},{K::phrygian,11},{.48f,.76f}},
+    {{{{F::laser,.82f,-.19f,0,.9f,0,{T::highpass,630,.68f,2}},{F::metallic,.54f,.29f,.04f,.96f,7,{T::lowpass,6300,.73f,2}},{F::shepard,.51f,.02f,.32f,.68f,-12,{T::lowpass,3700,.72f,2}}}},
+      {.9f,.75f,0,.19f},{{{E::chorus,.23f,.34f},{E::reverb,.2f,.43f},{}}},{K::major,9},{.68f,.43f}},
+    {{{{F::metallic,.81f,0,0,.93f,0,{T::lowpass,2950,.73f,2}},{F::impact,.61f,-.15f,0,1,-12,{T::lowpass,1600,.68f,2}},{F::glitch,.47f,.43f,.15f,.84f,5,{T::highpass,690,.72f,2}}}},
+      {.94f,.7f,.02f,.36f},{{{E::drive,.38f,.48f},{E::gate,.17f,.39f},{E::delay,.12f,.24f}}},{K::phrygian,2},{.57f,.44f}},
+    {{{{F::texture,.78f,-.16f,0,1,0,{T::highpass,100,.7f,2}},{F::laser,.44f,.28f,.14f,.76f,12,{T::lowpass,3500,.72f,4}},{F::impact,.49f,0,0,.48f,0,{T::lowpass,900,.72f,2}}}},
+      {.54f,.88f,.03f,.32f},{{{E::chorus,.17f,.25f},{E::delay,.16f,.22f},{}}},{K::major,0},{.51f,.47f}},
+    {{{{F::granular,.74f,-.32f,0,1,-12,{T::bandpass,575,.88f,2}},{F::formant,.57f,.24f,.14f,.81f,0,{T::notch,900,.72f,2}},{F::squelch,.36f,.1f,.46f,.5f,7,{T::lowpass,1900,.71f,2}}}},
+      {.09f,.75f,.23f,.58f},{{{E::flanger,.21f,.41f},{E::reverb,.31f,.62f},{}}},{K::phrygian,10},{.45f,.55f}},
+    {{{{F::riser,.62f,.19f,0,1,0,{T::lowpass,730,.65f,2}},{F::riser,.79f,-.22f,.19f,.81f,0,{T::bandpass,1830,.72f,2}},{F::riser,.46f,.41f,.45f,.55f,0,{T::highpass,4600,.69f,2}}}},
+      {.08f,.71f,.12f,.65f},{{{E::chorus,.31f,.31f},{E::reverb,.31f,.71f},{}}},{K::chromatic,0}},
+    {{{{F::formant,.62f,-.29f,0,.87f,0,{T::highpass,170,.72f,2}},{F::shepard,.5f,.25f,.07f,.93f,7,{T::lowpass,5100,.66f,2}},{F::impact,.77f,0,.48f,.48f,-12,{T::lowpass,7800,.71f,2}}}},
+      {.51f,.91f,.03f,.52f},{{{E::chorus,.24f,.28f},{E::reverb,.21f,.48f},{}}},{K::major,0},{.49f,.59f}},
+    {{{{F::downlifter,.68f,-.23f,0,.91f,0,{T::bandpass,860,.88f,2}},{F::formant,.52f,.33f,.07f,.81f,-5,{T::notch,470,.7f,2}},{F::glitch,.62f,.04f,.27f,.52f,0,{T::highpass,620,.72f,2}}}},
+      {.82f,.68f,0,.33f},{{{E::ring,.27f,.4f},{E::delay,.17f,.28f},{E::reverb,.13f,.42f}}},{K::minor,7},{.59f,.29f}},
+};
+}
 
 inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
     using F=NoiseFamily;
@@ -53,6 +122,28 @@ inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
     const auto envelope=[](float first,float middle,float last,float center){
         timeline::Curve c;c.count=3;c.nodes[0]={0,first,S::smooth};c.nodes[1]={center,middle,S::exponential};c.nodes[2]={1,last,S::linear};return c;
     };
+    if(e.authored>=1&&e.authored<=std::size(detail::authored)){
+        const auto& recipe=detail::authored[e.authored-1];
+        for(unsigned i=0;i<recipe.layers.size();++i){const auto& r=recipe.layers[i];
+            layer(i,r.family,r.gain,r.pan,r.start,r.span);p.layers[i].transpose=r.transpose;p.layers[i].filters[0]=r.filter;}
+        constexpr float signature[]{.26f,.34f,.42f,-.35f,.30f,.38f,-.30f,.24f,.43f,-.25f,.33f,.20f,-.24f,-.40f,.33f,.37f};
+        static_assert(std::size(signature)==std::size(detail::authored));
+        p.layers[0].character=signature[e.authored-1];
+        const auto& a=recipe.envelope;p.amplitudeCurve=envelope(a[0],a[1],a[2],a[3]);
+        p.pitchCurve.nodes[0].value=recipe.pitch[0];p.pitchCurve.nodes[1].value=recipe.pitch[1];
+        p.tonality=recipe.key;std::copy(recipe.fx.begin(),recipe.fx.end(),s.effects.begin());
+        if(e.authored==11){
+            auto& beat=result.pattern;beat.bars=2;beat.grid=pattern::Grid::thirtysecond;beat.swing=.23f;beat.seed=700021;
+            constexpr unsigned positions[]{0,3,8,11,17,21,24,29,32,38,40,45,48,55,60,63};
+            constexpr std::uint8_t notes[]{50,57,50,51,50,60,53,50,50,53,50,51,62,50,53,57};
+            for(unsigned i=0;i<std::size(positions);++i)beat.steps[positions[i]]={true,notes[i],static_cast<std::uint8_t>(i%4==0?118:92),static_cast<std::uint8_t>(i%4==0?100:88),static_cast<std::uint8_t>(i%5==1?3:1)};
+        }else if(e.authored==12){
+            auto& beat=result.pattern;beat.bars=1;beat.grid=pattern::Grid::eighthTriplet;beat.swing=.10f;beat.seed=81207;
+            beat.steps[0]={true,60,120,100,1};beat.steps[2]={true,64,88,80,2};beat.steps[4]={true,67,101,100,1};
+            beat.steps[6]={true,60,117,100,1};beat.steps[7]={true,72,83,78,1};beat.steps[10]={true,69,106,100,2};
+        }
+        return result;
+    }
     if(e.secondWave){
         using T=source::FilterType;
         switch(e.role){

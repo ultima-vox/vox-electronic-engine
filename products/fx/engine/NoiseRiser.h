@@ -3,6 +3,7 @@
 
 #include "Timeline.h"
 #include "SourceSound.h"
+#include "MacroRouting.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -31,8 +32,10 @@ struct NoiseLayer {
     timeline::Curve pitchCurve = timeline::Curve::constant(0.5f);
     timeline::Curve cutoffCurve = timeline::Curve::constant(0.5f);
     std::array<source::Filter,2> filters{};
+    float character = 0; // signed, family-specific; zero is the legacy sound
     float transpose = 0; // semitones; authored bias for pitched sources
     bool valid() const noexcept {
+        if(!std::isfinite(character)||character< -1||character>1)return false;
         if(!std::isfinite(transpose)||transpose< -24||transpose>24||!filters[0].valid()||!filters[1].valid())return false;
         return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::granular) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
@@ -105,6 +108,7 @@ public:
     void prepare(double sampleRate) noexcept {
         releaseSampleLeases();
         rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
+        (void)voiceMotion_.prepare(rate_);
         (void)setTempo(120.0); tempo_ = 120.0; musicalClockAvailable_ = false;
         barGrid_ = {}; blockOffset_ = 0; midiKeys_ = {};
         for (std::size_t i = 0; i < coefficients_.size(); ++i) {
@@ -158,6 +162,8 @@ public:
     }
     // The caller must ensure there is no concurrent access. UI/worker threads
     // must not call this during rendering without a safe publication bridge.
+    bool setVoiceMotion(const macro::Config& config) noexcept { return voiceMotion_.setConfig(config,true); }
+    void setMacroBases(const std::array<float,8>& values) noexcept { macroBases_=values; }
     bool setProgram(const NoiseProgram& program) noexcept {
         if (!program.valid()) return false;
         program_ = program;
@@ -229,6 +235,10 @@ public:
         if (source != TriggerSource::midi && isHeldMode(slot->program.mode))
             slot->program.mode = PlayMode::oneShot;
         slot->serial = ++serial_;
+        if(voiceMotion_.active()){
+            slot->motion=voiceMotion_;
+            slot->motion.restart(static_cast<std::uint32_t>(serial_));
+        }
         int enabled = 0;
         const int mapped=slot->program.tonality.map(note);
         for (std::size_t i = 0; i < slot->layers.size(); ++i) {
@@ -342,6 +352,8 @@ private:
         bool continuousStarted = false;
         int releaseRemaining = 0, releaseLength = 0;
         NoiseProgram program;
+        macro::Runtime motion;
+        unsigned motionAge=0;
         std::array<LayerState, 4> layers {};
     };
     static double layerTranspose(const LayerState& layer,double global,double local) noexcept {
@@ -395,6 +407,16 @@ private:
             release = static_cast<double>(v.releaseRemaining) / v.releaseLength;
             if (--v.releaseRemaining == 0) v.active = false;
         }
+        using D=mod::Destination;
+        const bool hasMotion=v.motion.active();
+        const auto movement=hasMotion?([&]{
+            v.motion.setTempo(tempo_);
+            return v.motion.evaluate(macroBases_,0,{static_cast<float>(eventPhase),v.velocity,
+                static_cast<float>(v.motionAge++/rate_),static_cast<float>(release)});
+        })():mod::Destinations{};
+        const auto offsetOf=[&](D dst){return std::clamp(static_cast<double>(movement[macro::Runtime::at(dst)]),-1.0,1.0);};
+        const double pitchOffset=offsetOf(D::pitch),cutoffOffset=offsetOf(D::cutoff),qOffset=offsetOf(D::resonance);
+        const double grainRate=offsetOf(D::grainRate),gainOffset=offsetOf(D::layerGain),panOffset=offsetOf(D::layerPan);
         for (std::size_t i = 0; i < v.layers.size(); ++i) {
             v.layers[i].grainGain = 0;
             v.layers[i].grainSum = 0;
@@ -404,13 +426,23 @@ private:
             const double offset = settings.timing.offset, span = settings.timing.span;
             if (eventPhase < offset || eventPhase >= offset + span) continue;
             const double t = (eventPhase - offset) / span;
+            const auto character=static_cast<double>(settings.character);
             const double globalPitch = v.program.pitchCurve.evaluate(static_cast<float>(eventPhase));
             const double localPitch = settings.pitchCurve.evaluate(static_cast<float>(t));
-            const double pitchRatio = layerTranspose(v.layers[i],globalPitch,localPitch);
+            const double pitchRatio = layerTranspose(v.layers[i],globalPitch+pitchOffset*.25,localPitch);
             const double globalCutoff = v.program.cutoffCurve.evaluate(static_cast<float>(eventPhase));
             const double localCutoff = settings.cutoffCurve.evaluate(static_cast<float>(t));
-            const double cutoffMotion = (globalCutoff - 0.5) + (localCutoff - 0.5);
+            const double cutoffMotion = (globalCutoff - 0.5) + (localCutoff - 0.5) + cutoffOffset*.5 + (settings.family==NoiseFamily::riser?character*.5:0.);
             auto& layer = v.layers[i];
+            // Refresh TPT coefficients at a bounded rate without clearing
+            // integrators. Smoothing of the route takes place per sample.
+            if(hasMotion&&(v.motionAge&15u)==1u&&(v.motion.routesTo(D::cutoff)||v.motion.routesTo(D::resonance)))
+                for(std::size_t f=0;f<2;++f){auto value=settings.filters[f];if(value.type==source::FilterType::off)continue;
+                    value.hz=static_cast<float>(std::clamp(value.hz*std::exp2(cutoffOffset*2),20.,20000.));
+                    value.q=static_cast<float>(std::clamp(value.q*std::exp2(qOffset*2),.5,4.));
+                    layer.filters[f].prepare(value,rate_);
+                }
+            const double layerGain=std::clamp(settings.gain+gainOffset,0.,1.);
             layer.rng ^= layer.rng << 13; layer.rng ^= layer.rng >> 17; layer.rng ^= layer.rng << 5;
             const double noise = static_cast<double>(layer.rng) / 2147483648.0 - 1.0;
             const double position = std::min(t * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
@@ -440,10 +472,10 @@ private:
                 // pool. Capacity exhaustion drops new grains deterministically.
                 layer.grainLayerActive = true;
                 hasFilteredGrains_ |= layer.filterGrains;
-                layer.grainGain = 0.35 * v.velocity * fadeIn * fadeOut * release * v.layerScale * settings.gain *
+                layer.grainGain = 0.35 * v.velocity * fadeIn * fadeOut * release * v.layerScale * layerGain *
                                   settings.gainCurve.evaluate(static_cast<float>(t)) *
                                   v.program.amplitudeCurve.evaluate(static_cast<float>(eventPhase));
-                layer.grainPan = std::clamp(static_cast<double>(settings.pan) +
+                layer.grainPan = std::clamp(static_cast<double>(settings.pan) + panOffset +
                                  2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
                                  2.0 * v.program.panoramaCurve.evaluate(static_cast<float>(eventPhase)) - 1.0, -1.0, 1.0);
                 if (layer.grainCountdown == 0) {
@@ -456,7 +488,8 @@ private:
                         grain.speed=lease.data()?samplePlaybackStep(lease.rate(),rate_,ratio):ratio;
                         grain.age=0; grain.length=grainLength_; break;
                     }
-                    layer.grainCountdown=grainInterval_;
+                    const auto density=std::clamp(grainRate+character,-1.,1.);
+                    layer.grainCountdown=density==0?grainInterval_:static_cast<unsigned>(std::max(1.0,grainInterval_*std::exp2(-density)));
                 }
                 --layer.grainCountdown;
                 continue;
@@ -482,6 +515,10 @@ private:
                     const double window = std::sin(3.141592653589793 * static_cast<double>(sliceIndex) / 255.0);
                     const double edge = std::min(1.0, std::min(fractionOfStep, 1.0-fractionOfStep) * 125.0);
                     source = (step % 4 == 2 ? 0.0 : layer.delay[sliceIndex] * window * window * edge);
+                    if(character!=0){ // toward dry pulse or sharper slice gating, neutral is legacy
+                        const double amount=std::abs(character)*.6;
+                        source=character<0?source*(1-amount)+dry*.5*amount:source*(1-amount*(1-window));
+                    }
                 }
                 envelope = 0.75;
             } else if (settings.family == NoiseFamily::formant) {
@@ -496,7 +533,7 @@ private:
                 source = 0.0;
                 for (std::size_t formant = 0; formant < centers.size(); ++formant) {
                     const double morph = std::sin(6.283185307179586 * elapsed * 0.24 + formant * 1.3);
-                    const double pos = (centers[formant] + depths[formant] * morph) * tableIntervals;
+                    const double pos = (centers[formant] + depths[formant] * morph + character*(static_cast<double>(formant)-1)*.11) * tableIntervals;
                     const auto gi = static_cast<std::size_t>(pos);
                     const double g = svfG_[gi] + (pos - static_cast<double>(gi)) * (svfG_[gi+1] - svfG_[gi]);
                     constexpr double damping = 0.32;
@@ -518,7 +555,7 @@ private:
                 const double a = std::sin(6.283185307179586 * layer.phase);
                 const double b = std::sin(6.283185307179586 * layer.subPhase);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
-                layer.subPhase += std::min(frequency * 1.007, rate_ * 0.45) / rate_; if (layer.subPhase >= 1.0) layer.subPhase -= 1.0;
+                layer.subPhase += std::min(frequency * (1.007+.006*character), rate_ * 0.45) / rate_; if (layer.subPhase >= 1.0) layer.subPhase -= 1.0;
                 source = 0.3 * (a + b) + 0.15 * filtered;
                 envelope = 0.65 + 0.15 * std::sin(6.283185307179586 * elapsed * 0.17);
             } else if (settings.family == NoiseFamily::metallic) {
@@ -536,7 +573,7 @@ private:
                     }
                     const double next = modes[mode].a1 * layer.mode1[mode] + modes[mode].a2 * layer.mode2[mode];
                     layer.mode2[mode] = layer.mode1[mode]; layer.mode1[mode] = next;
-                    source += next;
+                    source += next*(1+character*(static_cast<double>(mode)/7-.5));
                 }
                 layer.modesStarted = true;
                 source *= 1.0 / 8.0;
@@ -556,7 +593,7 @@ private:
                 const double gp = std::min(sweep * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
                 const auto gi = static_cast<std::size_t>(gp);
                 const double g = svfG_[gi] + (gp - static_cast<double>(gi)) * (svfG_[gi+1] - svfG_[gi]);
-                constexpr double damping = 0.28;
+                const double damping = 0.28-.15*character;
                 const double a1 = 1.0 / (1.0 + g * (g + damping));
                 const double v3 = exciter - layer.svf2;
                 const double v1 = a1 * layer.svf1 + g * a1 * v3;
@@ -574,7 +611,7 @@ private:
                 const auto next = std::min(at + 1, tableIntervals);
                 const double f = pos - static_cast<double>(at);
                 const auto read = [at, next, f] (const auto& table) { return table[at] + f * (table[next] - table[at]); };
-                const double frequency = std::min(layer.tunedHz * pitchRatio * (2.0 + 12.0 * read(impactPitch_)), 0.40 * rate_);
+                const double frequency = std::min(layer.tunedHz * pitchRatio * (2.0 + (12.0+8*character) * read(impactPitch_)), 0.40 * rate_);
                 source = 0.8 * std::sin(6.283185307179586 * layer.phase) + 0.2 * noise * read(impactNoise_);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 envelope = read(impactNoise_);
@@ -582,7 +619,7 @@ private:
                 // Bounded variable delay on this layer's own signal. Its
                 // slowly moving read tap supplies a subtle Doppler shift.
                 constexpr unsigned mask = 255;
-                const double delaySamples = 1.0 + t * (std::min(254.0, rate_ * 0.002) - 1.0);
+                const double delaySamples = 1.0 + t * (std::min(254.0, rate_ * 0.002*(1+.60*character)) - 1.0);
                 const auto whole = static_cast<unsigned>(delaySamples);
                 const double mix = delaySamples - whole;
                 const auto read0 = (layer.delayWrite - whole) & mask;
@@ -613,7 +650,7 @@ private:
                 const double sub = std::sin(6.283185307179586 * layer.subPhase);
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 layer.subPhase += fundamental * 0.5 / rate_; if (layer.subPhase >= 1.0) layer.subPhase -= 1.0;
-                source = (0.65 * body + 0.20 * sub) * read(impactBody_) + 0.25 * noise * read(impactNoise_);
+                source = (0.65 * body + (0.20+.15*character) * sub) * read(impactBody_) + 0.25 * noise * read(impactNoise_);
                 envelope = 1.0;
             } else if (settings.family == NoiseFamily::shepard) {
                 // Six octave-spaced sine partials traverse a six-octave
@@ -626,7 +663,8 @@ private:
                     double octave = octaveRatios[partial] * factor;
                     if (static_cast<double>(partial) + 3.0 * t >= 6.0) octave *= 1.0 / 64.0;
                     const double frequency = layer.tunedHz * pitchRatio * octave;
-                    const double weight = shepardWeights_[partial][index] + fraction * (shepardWeights_[partial][index + 1] - shepardWeights_[partial][index]);
+                    const double weight = (shepardWeights_[partial][index] + fraction * (shepardWeights_[partial][index + 1] - shepardWeights_[partial][index]))*
+                        (1+character*(static_cast<double>(partial)/5-.5));
                     auto& phase = layer.partialPhases[partial];
                     // Fade partials to zero before Nyquist rather than abruptly
                     // gating a moving partial as it crosses the cutoff.
@@ -644,13 +682,13 @@ private:
                 const double tonal = std::sin(6.283185307179586 * layer.phase);
                 layer.phase += frequency / rate_;
                 if (layer.phase >= 1.0) layer.phase -= 1.0;
-                source = 0.5 * filtered + 0.5 * tonal;
+                source = (0.5-.4*character)*filtered+(0.5+.4*character)*tonal;
                 envelope = 1.0 - 0.85 * t;
             }
             const double sample = layer.shape(source) * v.velocity * envelope * fadeIn * fadeOut * release *
-                                  v.layerScale * settings.gain * settings.gainCurve.evaluate(static_cast<float>(t)) *
+                                  v.layerScale * layerGain * settings.gainCurve.evaluate(static_cast<float>(t)) *
                                   v.program.amplitudeCurve.evaluate(static_cast<float>(eventPhase));
-            const double pan = std::clamp(static_cast<double>(settings.pan) +
+            const double pan = std::clamp(static_cast<double>(settings.pan) + panOffset +
                                           2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
                                           2.0 * v.program.panoramaCurve.evaluate(static_cast<float>(eventPhase)) - 1.0 +
                                           (settings.family == NoiseFamily::whoosh ? 2.0 * t - 1.0 : 0.0) +
@@ -721,6 +759,8 @@ private:
     unsigned grainLength_ = 2, grainInterval_ = 1, activeGrains_ = 0;
     NoiseProgram program_;
     bool hasFilteredGrains_=false;
+    macro::Runtime voiceMotion_;
+    std::array<float,8> macroBases_{.5f,.5f,.5f,.5f,.5f,.5f,.5f,.5f};
     std::array<std::array<MidiKey,128>,16> midiKeys_ {};
     double tempo_ = 120.0;
     bool musicalClockAvailable_ = false;

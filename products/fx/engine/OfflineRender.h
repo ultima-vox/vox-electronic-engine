@@ -2,6 +2,7 @@
 #include "NoiseRiser.h"
 #include "Effects.h"
 #include "MacroRouting.h"
+#include "PostMotion.h"
 #include "Pattern.h"
 #include <atomic>
 #include <bit>
@@ -52,11 +53,15 @@ inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& set
     const double duration = event + cycle;
     bool shortTail = false;
     double serialTail = 0;
-    for (const auto& effect : settings.effects) {
+    for (std::size_t slot=0;slot<settings.effects.size();++slot) {
+        const auto& effect=settings.effects[slot];
+        const auto amountDest=static_cast<mod::Destination>(macro::Runtime::at(mod::Destination::amount1)+2*slot);
+        const bool modulatedAmount=std::any_of(settings.macroRoutes.routes.begin(),settings.macroRoutes.routes.begin()+settings.macroRoutes.count,
+            [amountDest](const auto& route){return route.destination==amountDest&&route.depth!=0;});
         switch (effect.type) {
             case effects::Type::lowpass: case effects::Type::phaser:
             case effects::Type::flanger: case effects::Type::chorus: shortTail = true; break;
-            case effects::Type::delay: serialTail += effect.amount > 0 ? effects::feedbackDelayTailSeconds : 0.5; break;
+            case effects::Type::delay: serialTail += effect.amount > 0 || modulatedAmount ? effects::feedbackDelayTailSeconds : 0.5; break;
             case effects::Type::reverb: serialTail += 2.0; break;
             default: break;
         }
@@ -71,9 +76,10 @@ inline std::uint32_t frameCount(const NoiseProgram& program, const Settings& set
 // Worker thread only. Output is transactional: invalid input, cancellation or
 // non-finite DSP leave the old bytes unchanged.
 inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,std::vector<std::uint8_t>& output,
-                          const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture) {
+                          const std::atomic<bool>* cancel,std::atomic<float>* progress,const Capture* capture,std::uint32_t limit=0) {
     const auto* sequence = program.mode == PlayMode::sequence && capture ? &capture->pattern : nullptr;
-    const auto frames = frameCount(program, settings, sequence);
+    const auto fullFrames = frameCount(program, settings, sequence);
+    const auto frames = limit==0?fullFrames:std::min(limit,fullFrames);
     if (frames == 0 || (cancel && cancel->load(std::memory_order_relaxed))) return false;
     const bool floating=settings.format==WavFormat::float32;
     const std::uint16_t bits=floating?32:24, bytesPerSample=bits/8, blockAlign=static_cast<std::uint16_t>(2*bytesPerSample);
@@ -97,12 +103,15 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
         engine->setMusicalClockAvailable(true, settings.tempo);
         engine->setBarGrid(grid);
     }
+    if(!engine->setVoiceMotion(settings.macroRoutes))return false;
+    engine->setMacroBases(settings.macros);
     const bool useUser=capture&&capture->useUserSample;
     if(useUser && (!sampleStore.publish(capture->sample,capture->sampleRate)||!engine->attachSampleStore(&sampleStore)))return false;
     if(!engine->setProgram(program))return false;
     if(!sequence&&!engine->noteOn(1,settings.note,settings.velocity,settings.duration,useUser,0,TriggerSource::preview))return false;
     effects::Chain chain;if(!chain.prepare(settings.sampleRate))return false;
     macro::Runtime macroRuntime;if(!macroRuntime.prepare(settings.sampleRate)||!macroRuntime.setConfig(settings.macroRoutes))return false;
+    macroRuntime.setTempo(settings.tempo);
     for(std::size_t i=0;i<settings.effects.size();++i)if(!chain.set(i,settings.effects[i]))return false;
     std::array<float,512> left{},right{};
     if(progress)progress->store(0,std::memory_order_relaxed);
@@ -123,10 +132,9 @@ inline bool renderWavImpl(const NoiseProgram& program,const Settings& settings,s
                 })) return false;
         }
         renderTo(static_cast<int>(count));
-        chain.process(left.data(),right.data(),count);
+        macro::renderPost(chain,macroRuntime,left.data(),right.data(),count,settings.macros,[&]{return settings.gain;});
         for(std::uint32_t i=0;i<count;++i){
-          const auto gain=macroRuntime.processStereo(settings.gain,settings.macros);
-          for(float value:{left[i]*gain.left,right[i]*gain.right}){if(!std::isfinite(value)||std::abs(value)>1)return false;
+          for(float value:{left[i],right[i]}){if(!std::isfinite(value)||std::abs(value)>1)return false;
             if(floating)u32(bytes,std::bit_cast<std::uint32_t>(value));
             else {const auto pcm=static_cast<std::int32_t>(std::lround(value*8388607.0f));
                 const auto word=static_cast<std::uint32_t>(pcm);bytes.push_back(static_cast<std::uint8_t>(word));

@@ -18,7 +18,7 @@ struct Settings {
             std::isfinite(stereo)&&stereo>=0&&stereo<=1&&std::isfinite(seconds)&&seconds>=0.05f&&seconds<=32;
     }
 };
-enum Field : std::uint32_t { family=1u, enabled=2u, timing=4u, gain=8u, pan=16u, gainCurve=32u, panCurve=64u, pitchCurve=128u, cutoffCurve=256u, all=511u };
+enum Field : std::uint32_t { family=1u, enabled=2u, timing=4u, gain=8u, pan=16u, gainCurve=32u, panCurve=64u, pitchCurve=128u, cutoffCurve=256u, filters=512u, transpose=1024u, character=2048u, all=4095u };
 struct Locks { std::array<std::uint32_t,4> layers{}; bool duration=false; };
 struct Result { NoiseProgram program; float seconds=4; };
 class Random {
@@ -38,6 +38,9 @@ inline void applyLocks(NoiseLayer& next,const NoiseLayer& old,std::uint32_t mask
     if(mask&panCurve)next.panCurve=old.panCurve;
     if(mask&pitchCurve)next.pitchCurve=old.pitchCurve;
     if(mask&cutoffCurve)next.cutoffCurve=old.cutoffCurve;
+    if(mask&filters)next.filters=old.filters;
+    if(mask&transpose)next.transpose=old.transpose;
+    if(mask&character)next.character=old.character;
 }
 inline bool generate(const Settings& settings,const Result& previous,const Locks& locks,Result& output) noexcept {
     if(!settings.valid() || !previous.program.valid() || !std::isfinite(previous.seconds) || previous.seconds<.05f || previous.seconds>32) return false;
@@ -49,8 +52,8 @@ inline bool generate(const Settings& settings,const Result& previous,const Locks
     Random motion(settings.seed ^ 0xbe31d295u);
     for(std::size_t i=0;i<next.program.layers.size();++i){
         auto& l=next.program.layers[i];
-        const auto filters=l.filters;const auto transpose=l.transpose;
-        l={};l.filters=filters;l.transpose=transpose; // not generator-owned controls
+        const auto filters=l.filters;const auto transpose=l.transpose;const auto character=l.character;
+        l={};l.filters=filters;l.transpose=transpose;l.character=character; // not generator-owned controls
         l.enabled=static_cast<int>(i)<settings.complexity;
         l.family=static_cast<NoiseFamily>(i==0?settings.family:static_cast<int>(rng.next()%12));
         l.timing.offset=i==0?0.0f:rng.unit()*.35f;

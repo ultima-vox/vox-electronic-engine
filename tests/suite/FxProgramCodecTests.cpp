@@ -19,7 +19,9 @@ int main() {
     p.tonality={vox::fx::source::Scale::dorian,7};p.layers[1].transpose=-7;
     p.layers[1].filters[0]={vox::fx::source::FilterType::lowpass,750,.85f,4};
     p.layers[1].filters[1]={vox::fx::source::FilterType::notch,2000,1.2f,2};
-    constexpr auto soundBytes=vox::fx::programcodec::soundBytes;
+    p.layers[1].character=.35f;
+    constexpr auto characterBytes=vox::fx::programcodec::characterBytes;
+    constexpr auto soundBytes=vox::fx::programcodec::soundBytes+characterBytes;
     std::vector<std::byte> bytes,again;check(vox::fx::programcodec::encode(p,bytes),"encode valid program");
     if(bytes.size()<8) { std::printf("FAIL: encoded fixture too short\n"); return 1; }
     vox::fx::NoiseProgram q;check(vox::fx::programcodec::decode(bytes,q),"decode valid program");
@@ -54,14 +56,17 @@ int main() {
     check(vox::fx::programcodec::decode(legacyV4,migrated)&&migrated.mode==p.mode&&migrated.triggerPolicy==p.triggerPolicy&&
           migrated.tonality.scale==vox::fx::source::Scale::chromatic&&migrated.layers[1].transpose==0&&
           migrated.layers[1].filters[0].type==vox::fx::source::FilterType::off,"v4 migrates to bypass/source defaults");
+    auto legacyV5=bytes;legacyV5.resize(legacyV5.size()-characterBytes);legacyV5[0]=std::byte{5};
+    check(vox::fx::programcodec::decode(legacyV5,migrated)&&migrated.layers[1].character==0&&migrated.layers[1].transpose==-7,"v5 migrates with neutral character");
+    check(q.layers[1].character==.35f,"v6 character roundtrip");
     check(q.tonality.scale==p.tonality.scale&&q.tonality.root==7&&q.layers[1].transpose==-7&&q.layers[1].filters[0].poles==4,"v5 sound roundtrip");
     auto badSound=bytes;badSound[bytes.size()-soundBytes]=std::byte{12};
     check(!vox::fx::programcodec::decode(badSound,q),"invalid key rejected");
-    badSound=bytes;badSound.back()=std::byte{1};check(!vox::fx::programcodec::decode(badSound,q),"noncanonical pole word rejected");
+    badSound=bytes;badSound[badSound.size()-characterBytes-1]=std::byte{1};check(!vox::fx::programcodec::decode(badSound,q),"noncanonical pole word rejected");
     p.bars=16; std::vector<std::byte> barBytes; check(vox::fx::programcodec::encode(p,barBytes)&&vox::fx::programcodec::decode(barBytes,migrated)&&migrated.bars==16,"bar roundtrip");
     if(barBytes.size()<4) { std::printf("FAIL: bar fixture too short\n"); return 1; }
     auto invalidBars=barBytes;invalidBars[invalidBars.size()-soundBytes-12]=std::byte{3};check(!vox::fx::programcodec::decode(invalidBars,migrated)&&migrated.bars==16,"invalid bars rejected transactionally");
-    auto future=bytes;future[0]=std::byte{6};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
+    auto future=bytes;future[0]=std::byte{7};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
     auto invalidMode=bytes;invalidMode[invalidMode.size()-soundBytes-8]=std::byte{255};
     check(!vox::fx::programcodec::decode(invalidMode,q),"invalid playback mode rejected");
     auto invalidBool=bytes;invalidBool[4]=std::byte{2};check(!vox::fx::programcodec::decode(invalidBool,q),"invalid enabled rejected");

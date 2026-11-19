@@ -6,6 +6,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <deque>
 #include "engine/FileExport.h"
+#include "engine/ProgramStore.h"
+#include "engine/PresetLibrary.h"
+#include "engine/Preview.h"
 
 namespace vox::fx {
 class FxProcessor;
@@ -25,10 +28,13 @@ public:
 private:
     void timerCallback() override;
     FxProcessor& processor_;
-    juce::ComboBox style_,complexity_,lockLayer_;
-    std::array<juce::ToggleButton,9> fieldLocks_;
+    juce::ComboBox style_,complexity_,lockLayer_,role_,graphLock_;
+    std::array<juce::ToggleButton,12> fieldLocks_;
+    juce::ToggleButton lockGroup_{"Lock selected group"};
+    juce::TextButton fullGenerate_{"Generate sound"},fullMutate_{"Mutate sound"};
+    juce::Label graphStatus_;
     juce::Slider intensity_,energy_,stereo_;
-    std::array<juce::Label,5> labels_;
+    std::array<juce::Label,6> labels_;
     juce::TextButton close_ { "Close" };
 };
 
@@ -74,6 +80,31 @@ public:
     void valueChanged() override { if(onStructuralChange)onStructuralChange(); }
 };
 
+class MotionPanel final : public juce::Component, private juce::ListBoxModel {
+public:
+    explicit MotionPanel(FxProcessor&);
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    void refresh(int row=-1);
+    juce::ComboBox& sourceSelector() noexcept {return source_;}
+    juce::ComboBox& destinationSelector() noexcept {return destination_;}
+    juce::TextButton& applyButton() noexcept {return apply_;}
+private:
+    int getNumRows() override;
+    void paintListBoxItem(int,juce::Graphics&,int,int,bool) override;
+    void selectedRowsChanged(int) override;
+    void commit(int action);
+    FxProcessor& processor_;
+    ProgramStore::VersionedMotion shown_{};
+    juce::ListBox rows_{"Routes",this};
+    juce::ComboBox source_,destination_;
+    StructuralSlider depth_,smooth_,randomRate_,randomSeed_;
+    std::array<StructuralSlider,2> lfoRate_;
+    std::array<juce::ToggleButton,2> sync_;
+    juce::TextButton apply_{"Apply route"},remove_{"Delete route"},clock_{"Apply clocks"},reload_{"Reload"},close_{"Close"};
+    juce::Label status_,title_,routeHelp_;
+};
+
 class SourcePanel final : public juce::Component {
 public:
     explicit SourcePanel(FxProcessor&);
@@ -88,13 +119,57 @@ private:
     struct FilterRow { juce::ComboBox type, slope; StructuralSlider hz, q; };
     FxProcessor& processor_;
     juce::ComboBox layer_, root_, scale_;
-    StructuralSlider transpose_;
+    StructuralSlider transpose_,character_;
+    juce::Label characterLabel_;
     std::array<FilterRow,2> filters_;
     juce::TextButton close_{"Close"};
     std::uint64_t revision_=0;
     bool dragging_=false;
     template <typename Edit> void editLayer(Edit);
     void editKey();
+};
+
+class PresetBrowser final : public juce::Component, private juce::ListBoxModel, private juce::Timer {
+public:
+    explicit PresetBrowser(FxProcessor&,juce::File root=library::userRoot());
+    ~PresetBrowser() override;
+    void open();
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    std::function<void(bool)> looseFile;
+    juce::TextEditor& searchField() noexcept {return search_;}
+    juce::TextEditor& nameField() noexcept {return name_;}
+    juce::TextButton& saveButton() noexcept {return save_;}
+    juce::TextButton& loadButton() noexcept {return load_;}
+    int matchCount() const noexcept {return static_cast<int>(visible_.size());}
+private:
+    struct Row { portable::Tags tags;PlayMode mode;int factory=-1;juce::File file{};juce::String details; };
+    int getNumRows() override;
+    void paintListBoxItem(int,juce::Graphics&,int,int,bool) override;
+    void selectedRowsChanged(int) override;
+    void timerCallback() override;
+    void scan(const juce::File& select={});
+    void filter();
+    void runPreview();
+    void stopPreview();
+    void load();
+    void save(bool tagsOnly);
+    void erase();
+    const Row* selected() const noexcept;
+    portable::Tags editorTags() const;
+    void report(juce::String);
+    FxProcessor& processor_;
+    juce::File root_;
+    std::vector<Row> all_;
+    std::vector<std::size_t> visible_;
+    juce::ListBox rows_{"Presets",this};
+    juce::TextEditor search_,name_,style_,mood_,use_;
+    juce::ComboBox scope_,role_,mode_,editRole_;
+    juce::ToggleButton onlyFavorites_{"Favorites"},favorite_{"Favorite"};
+    juce::Label title_,detail_,status_;
+    juce::TextButton load_{"Load"},play_{"Preview"},stop_{"Stop"},save_{"Save new"},tags_{"Save tags"},remove_{"Delete"},openFile_{"Open file…"},saveFile_{"Save file…"},close_{"Close"};
+    std::unique_ptr<preview::Job> audition_;
+    bool armed_=false;
 };
 
 // An honest FX-01 panel: only controls with working processor bindings are
@@ -140,6 +215,7 @@ public:
     juce::ComboBox& effectSelector(std::size_t index) noexcept { return effectsType_[index]; }
     juce::Slider& effectWet(std::size_t index) noexcept { return effectsWet_[index]; }
     SourcePanel& sourcePanel() noexcept { return sourcePanel_; }
+    MotionPanel& motionPanel() noexcept { return motionPanel_; }
     ProgramCurvePanel& programCurves() noexcept { return programCurves_; }
     juce::Button& programCurvesButton() noexcept { return programCurvesButton_; }
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
@@ -197,7 +273,10 @@ private:
     ProgramCurvePanel programCurves_;
     juce::TextButton sourceButton_{"Source / Key"};
     SourcePanel sourcePanel_;
-    juce::ComboBox presets_;
+    juce::TextButton motionButton_{"Motion"};
+    MotionPanel motionPanel_;
+    juce::TextButton presets_{"Presets"};
+    PresetBrowser browser_;
     std::unique_ptr<juce::FileChooser> presetChooser_;
     std::array<vox::ui::VoxComboBox,4> effectsType_;
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;

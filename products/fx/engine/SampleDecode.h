@@ -1,6 +1,7 @@
 #pragma once
 #include "SampleStore.h"
 #include <juce_cryptography/juce_cryptography.h>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <span>
@@ -15,7 +16,8 @@ struct Decoded {
 inline constexpr std::size_t maxFileBytes=64u*1024u*1024u;
 // Worker/controller only. Strict bounded RIFF/WAVE subset: mono/stereo PCM
 // 16/24/32-bit or IEEE float32, little-endian. Output changes only on success.
-inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output) {
+inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output,const std::atomic<bool>* cancel=nullptr) {
+    if(cancel&&cancel->load(std::memory_order_relaxed))return false;
     if(bytes.size()<12||bytes.size()>maxFileBytes)return false;
     const auto tag=[&](std::size_t n,const char* s){return n+4<=bytes.size() &&
         bytes[n]==static_cast<std::uint8_t>(s[0])&&bytes[n+1]==static_cast<std::uint8_t>(s[1])&&
@@ -45,6 +47,7 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output) {
     try {
         Decoded result;result.rate=rate;result.mono.resize(frames);
         for(std::size_t frame=0;frame<frames;++frame){
+            if((frame&4095u)==0&&cancel&&cancel->load(std::memory_order_relaxed))return false;
             double sum=0;
             for(std::size_t channel=0;channel<channels;++channel){
                 const auto at=data+frame*align+channel*bytesPerSample;double value=0;
@@ -58,6 +61,7 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output) {
             }
             result.mono[frame]=static_cast<float>(sum/channels);
         }
+        if(cancel&&cancel->load(std::memory_order_relaxed))return false;
         result.sha256=juce::SHA256(bytes.data(),bytes.size()).toHexString();
         output=std::move(result);return true;
     } catch(...) {return false;}
@@ -65,7 +69,7 @@ inline bool decodeWav(std::span<const std::uint8_t> bytes,Decoded& output) {
 // Worker/controller only; the exact bytes read are bounded before allocation
 // and hashed. Missing, shortened, extended, or unreadable files leave output
 // unchanged. Same-length concurrent edits are not detectable by this reader.
-inline bool loadWav(const juce::File& file,Decoded& output) {
+inline bool loadWav(const juce::File& file,Decoded& output,const std::atomic<bool>* cancel=nullptr) {
     juce::FileInputStream input(file);if(!input.openedOk())return false;
     const auto length=input.getTotalLength();
     if(length<12 || static_cast<std::uint64_t>(length)>maxFileBytes)return false;
@@ -73,12 +77,13 @@ inline bool loadWav(const juce::File& file,Decoded& output) {
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
         std::size_t offset=0;
         while(offset<bytes.size()){
+            if(cancel&&cancel->load(std::memory_order_relaxed))return false;
             const auto count=static_cast<int>(std::min<std::size_t>(16384,bytes.size()-offset));
             const int read=input.read(bytes.data()+offset,count);if(read<=0)return false;
             offset+=static_cast<std::size_t>(read);
         }
         std::uint8_t extra=0;if(input.read(&extra,1)!=0)return false;
-        return decodeWav(bytes,output);
+        return decodeWav(bytes,output,cancel);
     } catch(...) {return false;}
 }
 } // namespace vox::fx::sample

@@ -170,6 +170,19 @@ public:
         if(!programcodec::encode(desired_,encoded))return false;
         commit(desired_,encoded,desiredEffects_,desiredPattern_,config,desiredGenerator_);return true;
     }
+    struct VersionedMotion { macro::Config config;std::uint64_t revision; };
+    VersionedMotion versionedMotion() const {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        return {desiredMacros_,programRevision_.load(std::memory_order_relaxed)};
+    }
+    bool replaceMotionIfCurrent(const VersionedMotion& expected,const macro::Config& value) {
+        if(!value.valid())return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if(expected.revision!=programRevision_.load(std::memory_order_relaxed)||expected.config!=desiredMacros_)return false;
+        std::vector<std::byte> encoded;
+        if(!programcodec::encode(desired_,encoded))return false;
+        commit(desired_,encoded,desiredEffects_,desiredPattern_,value,desiredGenerator_);return true;
+    }
     template<typename Edit> bool editMacroConfig(Edit edit) {
         const std::lock_guard<std::mutex> lock(mutex_);auto next=desiredMacros_;
         if(!edit(next)||!next.valid())return false;
@@ -181,6 +194,19 @@ public:
         auto next=desiredGenerator_;edit(next);if(!next.valid())return false;
         // Controller metadata is not used in audio; avoid republishing the DSP graph.
         desiredGenerator_=next;return true;
+    }
+    template<typename Edit> bool editSoundGraph(Edit edit) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        Snapshot next{desired_,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_};
+        if(!edit(next)||!effects::validPacked(next.effects)||!next.pattern.valid()||!next.macros.valid())return false;
+        std::vector<std::byte> encoded;
+        if(!programcodec::encode(next.program,encoded))return false;
+        if(next.effects==desiredEffects_&&next.pattern==desiredPattern_&&next.macros==desiredMacros_){
+            std::vector<std::byte> original;
+            if(programcodec::encode(desired_,original)&&original==encoded)return false;
+        }
+        commit(next.program,encoded,next.effects,next.pattern,next.macros,desiredGenerator_);
+        advanceProgramRevision();return true;
     }
     Snapshot snapshotState() const {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -250,7 +276,7 @@ private:
         desired_ = program; desiredEffects_=effectsValue; desiredPattern_=patternValue; desiredMacros_=macrosValue; desiredGenerator_=generatorValue;
         sequence_.fetch_add(1); // even: complete publication
     }
-    // v4 carries four trajectories on every layer plus four Program-wide,
+    // Sized from the canonical Program codec, including v5 source settings.
     static constexpr std::size_t maxWords = programcodec::maxBytes / 4;
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free);

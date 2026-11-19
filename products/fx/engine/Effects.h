@@ -29,7 +29,7 @@ inline Settings unpack(std::uint16_t word) noexcept {
     return {static_cast<Type>(word&15u), static_cast<float>((word>>4)&63u)/63.0f,
             static_cast<float>((word>>10)&63u)/63.0f};
 }
-// FXSL v1 stored 3-bit type and 6/7-bit values; keep its exact host values.
+// FXSL v1 stored 3-bit type and 6/7-bit values; decode them before host range snapping.
 inline Settings unpackLegacy(std::uint16_t word) noexcept {
     return {static_cast<Type>(word&7u),static_cast<float>((word>>3)&63u)/63.0f,
             static_cast<float>((word>>9)&127u)/127.0f};
@@ -78,7 +78,7 @@ public:
         if(slot>=slots_.size()||!settings.valid())return false;
         slots_[slot].desired=settings;return true;
     }
-    void process(float* left,float* right,std::size_t count) noexcept {
+    void process(float* left,float* right,std::size_t count,const float* modulation=nullptr) noexcept {
         if(left==nullptr||right==nullptr)return;
         for(std::size_t i=0;i<count;++i){double l=left[i],r=right[i];
             for(std::size_t slotIndex=0;slotIndex<slots_.size();++slotIndex){auto& slot=slots_[slotIndex];
@@ -86,8 +86,10 @@ public:
                     slot.old=slot.current;slot.current={};slot.current.bank=1-slot.old.bank;
                     slot.current.type=slot.desired.type;slot.transition=fadeSamples_;
                 }
-                slot.wet+=static_cast<float>((slot.desired.wet-slot.wet)*smoothing_);
-                slot.amount+=static_cast<float>((slot.desired.amount-slot.amount)*smoothing_);
+                const float wet=modulation?std::clamp(slot.desired.wet+modulation[2*slotIndex],0.f,1.f):slot.desired.wet;
+                const float amount=modulation?std::clamp(slot.desired.amount+modulation[2*slotIndex+1],0.f,1.f):slot.desired.amount;
+                slot.wet+=static_cast<float>((wet-slot.wet)*smoothing_);
+                slot.amount+=static_cast<float>((amount-slot.amount)*smoothing_);
                 double a=l,b=r;apply(slot.current,banks_[slotIndex][slot.current.bank],slot.amount,a,b);
                 if(slot.current.type!=Type::bypass){a=l+(a-l)*slot.wet;b=r+(b-r)*slot.wet;}
                 if(slot.transition){double oldL=l,oldR=r;apply(slot.old,banks_[slotIndex][slot.old.bank],slot.amount,oldL,oldR);

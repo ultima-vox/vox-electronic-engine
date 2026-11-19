@@ -10,7 +10,8 @@ namespace vox::fx::mod {
 // values. Matrix results never mutate the host automation base.
 enum class Source : std::uint8_t { lfo1, lfo2, step, random, adsr, phase, velocity, follower,
     macro1, macro2, macro3, macro4, macro5, macro6, macro7, macro8, count };
-enum class Destination : std::uint8_t { gain, pan, pitch, cutoff, count };
+enum class Destination : std::uint8_t { gain, pan, pitch, cutoff, resonance, grainRate, layerGain, layerPan, width,
+    wet1, amount1, wet2, amount2, wet3, amount3, wet4, amount4, count };
 struct Route {
     Source source = Source::lfo1;
     Destination destination = Destination::gain;
@@ -45,14 +46,17 @@ public:
         Destinations result{};
         for(std::size_t i=0;i<result.size();++i)
             result[i]=std::isfinite(base[i]) ? std::clamp(base[i],0.0f,1.0f) : 0.0f;
+        sum(result,sources);
+        for(auto& value:result)value=std::clamp(value,0.0f,1.0f);
+        return result;
+    }
+    void sum(Destinations& result,const Sources& sources) noexcept {
         for(std::size_t i=0;i<count_;++i){
             const auto& route=routes_[i];const auto source=sources[static_cast<std::size_t>(route.source)];
             const double target=(std::isfinite(source) ? std::clamp(source,-1.0f,1.0f) : 0.0f)*route.depth;
             smoothed_[i]+=alpha_[i]*(target-smoothed_[i]);
             result[static_cast<std::size_t>(route.destination)]+=static_cast<float>(smoothed_[i]);
         }
-        for(auto& value:result)value=std::clamp(value,0.0f,1.0f);
-        return result;
     }
 private:
     std::size_t count_=0;
@@ -61,7 +65,7 @@ private:
 };
 
 // Deterministic, bounded oscillator/random helpers; phase/reset ownership is
-// with the caller/event. These are not wired to the plugin Program yet.
+// with the caller/event.
 class Lfo {
 public:
     void reset() noexcept { phase_=0; }

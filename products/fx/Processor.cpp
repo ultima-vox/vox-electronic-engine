@@ -1,5 +1,6 @@
 #include "Processor.h"
 #include "FxEditor.h"
+#include "engine/SoundGenerator.h"
 #include "content/FactoryCandidates.h"
 #include <bit>
 #include <cmath>
@@ -136,9 +137,22 @@ bool FxProcessor::mutateProgram (std::uint32_t seed, const generator::Locks& loc
     return committed;
 }
 
+bool FxProcessor::generateSound(bool mutation){
+    const juce::ScopedLock transaction(controllerRestoreLock_);
+    sample::Controller::PreparedRestore builtin;
+    if(!sample::Controller::prepareRestore({},builtin))return false;
+    bool replaceSample=false;
+    const bool graphChanged=programs_.editSoundGraph([&](auto& state){return generator::makeSound(state,mutation,state,replaceSample);});
+    const bool assetChanged=replaceSample&&samples_.reference().kind!=sample::Reference::Kind::builtin;
+    if(!graphChanged&&!assetChanged)return false;
+    if(assetChanged)samples_.commitRestore(std::move(builtin));
+    previewBus_.stop();return true;
+}
+
 void FxProcessor::setStateInformation(const void* data,int size){
     const juce::ScopedLock transaction(controllerRestoreLock_);
     vox::suite::SuiteProcessor::setStateInformation(data,size);
+    if(lastStateError().isEmpty())previewBus_.stop();
 }
 
 bool FxProcessor::storeComparison(std::size_t slot)
@@ -170,8 +184,9 @@ bool FxProcessor::recallComparison(std::size_t slot)
     return lastStateError().isEmpty();
 }
 
+portable::Sound FxProcessor::portableSnapshot() const {return {programs_.snapshotState(),samples_.reference()};}
 bool FxProcessor::encodePortablePreset(std::vector<std::byte>& out) const {
-    return portable::encode({programs_.snapshotState(),samples_.reference()},out);
+    return portable::encode(portableSnapshot(),out);
 }
 bool FxProcessor::applyPortableSound(const portable::Sound& sound) {
     const juce::ScopedLock transaction(controllerRestoreLock_);
@@ -180,6 +195,7 @@ bool FxProcessor::applyPortableSound(const portable::Sound& sound) {
     const auto& s=sound.state;
     if(!programs_.publishState(s.program,s.effects,s.pattern,s.macros,s.generator))return false;
     samples_.commitRestore(std::move(prepared));
+    previewBus_.stop();
     return true; // All 19 host parameter values, layout and the A/B bank are left alone.
 }
 bool FxProcessor::restorePortablePreset(std::span<const std::byte> bytes) {
@@ -194,6 +210,20 @@ bool FxProcessor::loadReviewCandidate(std::size_t index) {
     sound.state.effects=0;
     for(unsigned i=0;i<4;++i)sound.state.effects|=static_cast<std::uint64_t>(effects::pack(preview.settings.effects[i]))<<(16*i);
     return applyPortableSound(sound);
+}
+
+offline::Capture FxProcessor::capturePresetPreview(const portable::Sound& sound) const {
+    offline::Capture capture;
+    capture.program=sound.state.program;capture.pattern=sound.state.pattern;
+    auto& settings=capture.settings;
+    settings.duration=duration_->get();settings.gain=output_->get();settings.tempo=capturedTempo_.load(std::memory_order_relaxed);
+    settings.macroRoutes=sound.state.macros;
+    for(std::size_t i=0;i<8;++i)settings.macros[i]=macros_[i]->get();
+    for(std::size_t i=0;i<4;++i){
+        settings.effects[i]=effects::unpack(static_cast<std::uint16_t>(sound.state.effects>>(i*16)));
+        settings.effects[i].wet=effectWet_[i]->get();settings.effects[i].amount=effectAmount_[i]->get();
+    }
+    return capture;
 }
 
 offline::Capture FxProcessor::captureProgramWav (offline::Settings settings) const
@@ -245,6 +275,7 @@ effects::Settings FxProcessor::effect (std::size_t index) const
 void FxProcessor::prepareToPlay (double rate, int blockSize)
 {
     SuiteProcessor::prepareToPlay (rate, blockSize);
+    previewBus_.prepare(rate);
     engine_.prepare (rate);capturedTempo_.store(120.0,std::memory_order_relaxed);
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     (void) macroRuntime_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
@@ -259,6 +290,7 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
 }
 
 void FxProcessor::releaseResources() {
+    previewBus_.prepare(preparedSampleRate());
     engine_.prepare (preparedSampleRate());
     telemetry_.store(0,std::memory_order_relaxed);droppedEvents_.store(0,std::memory_order_relaxed);
     peak_.store(0,std::memory_order_relaxed);
@@ -320,6 +352,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     capturedTempo_.store(glitchTempo,std::memory_order_relaxed);
     if (panicPending_.exchange (false, std::memory_order_acquire)) {
         engine_.allSoundOff (0);
+        previewBus_.stop();
         auditionPending_.store (false, std::memory_order_relaxed);
     }
     // One bounded attempt: if a concurrent writer is publishing, keep the
@@ -328,12 +361,17 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         (void) engine_.setProgram (audioProgram_);
         (void) pattern::scheduleFixed(audioPattern_,audioPatternSchedule_);
         (void) macroRuntime_.setConfig(audioMacroConfig_);
+        (void) engine_.setVoiceMotion(audioMacroConfig_);
     }
     musicalClockUnavailable_.store(!musicalClockReady || (audioProgram_.mode == PlayMode::transition && !barGrid.valid()),
                                    std::memory_order_relaxed);
     const float requestedDuration = duration_->get();
     const double eventDuration = std::isfinite (requestedDuration)
         ? juce::jlimit (0.05, 32.0, static_cast<double> (requestedDuration)) : 4.0;
+    std::array<float,8> macroValues{};
+    for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
+    engine_.setMacroBases(macroValues);
+    macroRuntime_.setTempo(glitchTempo);
     if (auditionPending_.exchange (false, std::memory_order_acquire)) { const auto selection=samples_.selection();engine_.noteOn (1, 60, 0.8f, eventDuration,selection!=0,selection,TriggerSource::preview); }
     const int size = buffer.getNumSamples();
     const bool wantsPattern=patternEnabled_->get()||audioProgram_.mode==PlayMode::sequence;
@@ -392,18 +430,13 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         settings.amount=std::isfinite(amount)?juce::jlimit(0.0f,1.0f,amount):0.0f;
         (void) effects_.set(i,settings);
     }
-    effects_.process(left,right,static_cast<std::size_t>(size));
     const auto target = output_->get();
     outputSmoothing_.setTargetValue (std::isfinite (target) ? juce::jlimit (0.0f, 1.0f, target) : 0.0f);
-    std::array<float,8> macroValues{};
-    for(std::size_t i=0;i<8;++i)macroValues[i]=macros_[i]->get();
+    macro::renderPost(effects_,macroRuntime_,left,right,static_cast<std::size_t>(size),macroValues,[&]{return outputSmoothing_.getNextValue();});
+    if(isNonRealtime())previewBus_.stop();
+    else previewBus_.mix(left,right,size);
     float peak = 0.0f;
-    for (int i = 0; i < size; ++i) {
-        const auto gain = macroRuntime_.processStereo(outputSmoothing_.getNextValue(),macroValues);
-        left[i] *= gain.left;
-        right[i] *= gain.right;
-        peak = std::max (peak, std::max (std::abs (left[i]), std::abs (right[i])));
-    }
+    for (int i = 0; i < size; ++i) peak=std::max(peak,std::max(std::abs(left[i]),std::abs(right[i])));
     peak_.store (peak, std::memory_order_relaxed);publishTelemetry(peak>=1.0f);
     if(peak>=1.0f)clipLatched_.store(true,std::memory_order_relaxed);
 }
