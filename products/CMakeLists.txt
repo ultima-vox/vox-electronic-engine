@@ -76,5 +76,6 @@ target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juc
 
 target_sources(${VOX_SUITE_syn_TARGET} PRIVATE
   trance-synthesis/Parameters.cpp trance-synthesis/Parameters.h
+  trance-synthesis/FactoryContent.cpp trance-synthesis/FactoryContent.h
   trance-synthesis/SynthEditor.cpp trance-synthesis/SynthEditor.h)
 target_link_libraries(${VOX_SUITE_syn_TARGET} PUBLIC vox_synth_engine PRIVATE vox_dsp)

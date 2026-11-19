@@ -3,6 +3,7 @@
 #include "Processor.h"
 #include "Parameters.h"
 #include "FactoryBank.h"
+#include "FactoryContent.h"
 #include "StateContainer.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -11,10 +12,15 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
+#include <initializer_list>
+#include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -484,8 +490,10 @@ void testParameterAutomation()
 
 void testProgramBrowser()
 {
-    check (vox::syn::factoryProgramsReady == 0, "no factory programs are approved");
-    check (vox::syn::factoryPhrasesReady == 0, "no factory phrases are approved");
+    check (vox::syn::factoryProgramsReady == 600, "600 factory programs are delivered");
+    check (vox::syn::factoryPhrasesReady == 120, "120 factory phrases are delivered");
+    check (vox::syn::factoryProgramCount() == 600 && vox::syn::factoryPhraseCount() == 120,
+           "delivered counts match the installed tables");
     check (vox::syn::factoryProgramCapacity == 600 && vox::syn::factoryPhraseCapacity == 120,
            "factory capacity is 600 programs and 120 phrases");
 
@@ -520,6 +528,32 @@ void testProgramBrowser()
     }
 }
 
+std::string envOrEmpty (const char* key)
+{
+#ifdef _MSC_VER
+    char* buffer = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s (&buffer, &length, key) != 0 || buffer == nullptr)
+        return {};
+    std::string value (buffer);
+    std::free (buffer);
+    return value;
+#else
+    const char* value = std::getenv (key);
+    return value != nullptr ? value : std::string {};
+#endif
+}
+
+void appendPerf (const std::string& line)
+{
+    const auto path = envOrEmpty ("VOX_SYNTH_PERF_LOG");
+    if (path.empty())
+        return;
+    std::ofstream out (path, std::ios::app);
+    check (static_cast<bool> (out), "performance log opens");
+    out << line << '\n';
+}
+
 void testPerformance()
 {
     auto synth = make();
@@ -548,19 +582,342 @@ void testPerformance()
     if (voxProbeAvailable())
         calls = voxProbeEnd();
     const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
-    std::printf ("synth perf: %.2f ms for 1.0 s audio, oversampling off, mallocs %lu\n", ms, calls);
-    if (const char* path = std::getenv ("VOX_SYNTH_PERF_LOG"))
-    {
-        std::ofstream out (path);
-        check (static_cast<bool> (out), "performance log opens");
-        out << "synth perf: " << ms << " ms for 1.0 s audio, oversampling off, mallocs " << calls << "\n";
-    }
+    const auto line = "synth perf: " + std::to_string (ms) + " ms for 1.0 s audio, oversampling off, mallocs " + std::to_string (calls);
+    std::printf ("%s\n", line.c_str());
+    appendPerf (line);
     check (calls == 0, "performance render allocates nothing");
     check (ms < 1500.0, "1 s of audio stays under 1.5 s without oversampling");
     bool finite = true;
     for (int i = 0; i < 128; ++i)
         finite = finite && std::isfinite (buffer.getSample (0, i));
     check (finite, "performance render stays finite");
+}
+
+void putU32 (std::vector<std::byte>& out, std::uint32_t value)
+{
+    for (int shift = 0; shift < 32; shift += 8)
+        out.push_back (static_cast<std::byte> ((value >> shift) & 0xffu));
+}
+
+std::vector<std::byte> uiSectionBytes()
+{
+    std::vector<std::byte> data;
+    putU32 (data, 1180u);
+    putU32 (data, 760u);
+    return data;
+}
+
+std::vector<std::byte> engSection (std::initializer_list<std::pair<const char*, float>> entries)
+{
+    std::vector<std::byte> data;
+    putU32 (data, 1u);
+    putU32 (data, static_cast<std::uint32_t> (entries.size()));
+    for (const auto& entry : entries)
+    {
+        const auto length = static_cast<std::uint32_t> (std::strlen (entry.first));
+        putU32 (data, length);
+        for (std::uint32_t i = 0; i < length; ++i)
+            data.push_back (static_cast<std::byte> (entry.first[i]));
+        std::uint32_t bits = 0;
+        std::memcpy (&bits, &entry.second, sizeof bits);
+        putU32 (data, bits);
+    }
+    return data;
+}
+
+void applyDocument (vox::syn::SynthesisProcessor& synth, const vox::preset::StateDocument& document)
+{
+    const auto bytes = vox::preset::encode (document);
+    check (bytes.has_value(), "document encodes");
+    if (! bytes)
+        return;
+    synth.setStateInformation (bytes->data(), static_cast<int> (bytes->size()));
+}
+
+void testFactoryContent()
+{
+    check (vox::syn::factoryProgramCount() == 600, "600 programs installed");
+    check (vox::syn::factoryPhraseCount() == 120, "120 phrases installed");
+    std::set<std::string> ids, names, vectors, phraseIds, phraseNotes;
+    int perCategory[8] = {};
+    for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
+    {
+        const auto& program = vox::syn::factoryProgram (i);
+        check (program.id != nullptr && std::strlen (program.id) == 6, "program id");
+        check (program.name != nullptr && program.purpose != nullptr && std::strlen (program.purpose) > 8, "program purpose");
+        check (static_cast<int> (program.category) < 8, "factory program is not a user slot");
+        ++perCategory[static_cast<int> (program.category)];
+        ids.insert (program.id);
+        names.insert (program.name);
+        std::string key;
+        for (std::size_t p = 0; p < vox::syn::parameterCatalog.size(); ++p)
+        {
+            const float value = program.values[p];
+            check (value >= vox::syn::parameterCatalog[p].minimum && value <= vox::syn::parameterCatalog[p].maximum,
+                   std::string (program.id) + " " + vox::syn::parameterCatalog[p].id);
+            key.append (reinterpret_cast<const char*> (&value), sizeof value);
+        }
+        vectors.insert (key);
+    }
+    check (static_cast<int> (ids.size()) == 600 && static_cast<int> (names.size()) == 600
+               && static_cast<int> (vectors.size()) == 600,
+           "program ids, names and parameter vectors are unique");
+    check (perCategory[0] == 100 && perCategory[1] == 80 && perCategory[2] == 80 && perCategory[3] == 60
+               && perCategory[4] == 60 && perCategory[5] == 80 && perCategory[6] == 70 && perCategory[7] == 70,
+           "category counts match the manifest");
+
+    auto synth = make();
+    for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
+    {
+        check (synth->loadFactoryProgram (i), "program loads");
+        const auto& program = vox::syn::factoryProgram (i);
+        check (std::abs (plain (*synth, "syn.output") - program.values[vox::syn::outputParameterIndex]) < 1.0e-5f,
+               std::string (program.id) + " output loaded");
+        check (std::abs (plain (*synth, "syn.a.cutoff") - program.values[2]) < 1.0e-5f,
+               std::string (program.id) + " cutoff loaded");
+    }
+    check (! synth->loadFactoryProgram (600) && ! synth->loadFactoryProgram (-1), "program index is bounded");
+
+    synth->prepareToPlay (48000.0, 128);
+    check (synth->loadFactoryProgram (260), "pluck program for phrase playback");
+    for (int i = 0; i < vox::syn::factoryPhraseCount(); ++i)
+    {
+        const auto& phrase = vox::syn::factoryPhrase (i);
+        check (phrase.noteCount > 0 && phrase.notes != nullptr && phrase.ticksPerQuarter == 960, "phrase has notes");
+        check (phrase.id != nullptr && phrase.purpose != nullptr && std::strlen (phrase.purpose) > 8, "phrase purpose");
+        phraseIds.insert (phrase.id);
+        std::string key;
+        int previous = -1;
+        for (int n = 0; n < phrase.noteCount; ++n)
+        {
+            const auto& note = phrase.notes[n];
+            check (note.tick >= previous && note.note >= 0 && note.note <= 127, "phrase note range");
+            check (note.velocity >= 1 && note.velocity <= 127 && note.duration > 0, "phrase velocity and duration");
+            previous = note.tick;
+            key += std::to_string (note.tick) + ":" + std::to_string (note.note) + ":" + std::to_string (note.duration) + ";";
+        }
+        phraseNotes.insert (key);
+
+        juce::AudioBuffer<float> buffer (2, 128);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, phrase.notes[0].note, static_cast<juce::uint8> (100)), 0);
+        float peak = 0.0f;
+        for (int block = 0; block < 4; ++block)
+        {
+            synth->processBlock (buffer, midi);
+            midi.clear();
+            for (int sample = 0; sample < 128; ++sample)
+                peak = std::max (peak, std::abs (buffer.getSample (0, sample)));
+        }
+        check (peak > 1.0e-4f, std::string (phrase.id) + " makes sound");
+    }
+    check (static_cast<int> (phraseIds.size()) == 120 && static_cast<int> (phraseNotes.size()) == 120,
+           "phrase ids and note lists are unique");
+}
+
+void testStateEdges()
+{
+    auto synth = make();
+    setPlain (*synth, "syn.a.cutoff", 0.77f);
+    setPlain (*synth, "syn.fx.delay", 1.0f);
+    const auto before = plain (*synth, "syn.a.cutoff");
+
+    vox::preset::StateDocument old;
+    old.product = vox::preset::makeTag (VOX_TEST_STATE_TAG);
+    old.schema = 1;
+    old.sections.push_back ({ vox::suite::uiSectionTag, uiSectionBytes() });
+    old.sections.push_back ({ vox::syn::engineSectionTag, engSection ({
+        { "syn.a.cutoff", 0.11f },
+        { "syn.output", 0.22f },
+    }) });
+    applyDocument (*synth, old);
+    check (synth->lastStateError().isEmpty(), "SYN-01 style ENG1 with missing ids loads");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.11f) < 1.0e-5f, "old cutoff kept");
+    check (std::abs (plain (*synth, "syn.output") - 0.22f) < 1.0e-5f, "old output kept");
+    check (std::abs (plain (*synth, "syn.fx.delay") - 0.0f) < 1.0e-5f, "missing FX id falls back to the default");
+    check (std::abs (plain (*synth, "syn.a.sub") - vox::syn::parameterCatalog[vox::syn::partAExtraIndex].initial) < 1.0e-5f,
+           "missing extra id falls back to the default");
+
+    setPlain (*synth, "syn.a.cutoff", before);
+    juce::MemoryBlock saved;
+    synth->getStateInformation (saved);
+    auto corrupt = saved;
+    auto* bytes = static_cast<unsigned char*> (corrupt.getData());
+    bytes[corrupt.getSize() / 2] ^= 0x5a;
+    synth->setStateInformation (corrupt.getData(), static_cast<int> (corrupt.getSize()));
+    check (synth->lastStateError().isNotEmpty(), "corrupt state is rejected");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - before) < 1.0e-5f, "corrupt state does not change live parameters");
+
+    synth->setStateInformation (saved.getData(), 24);
+    check (synth->lastStateError().isNotEmpty(), "truncated state is rejected");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - before) < 1.0e-5f, "truncated state does not change live parameters");
+
+    vox::preset::StateDocument oversized;
+    oversized.product = old.product;
+    oversized.schema = 1;
+    oversized.sections.push_back ({ vox::suite::uiSectionTag, uiSectionBytes() });
+    std::vector<std::byte> bank;
+    putU32 (bank, 1u);
+    putU32 (bank, 129u);
+    oversized.sections.push_back ({ vox::syn::userBankTag, bank });
+    applyDocument (*synth, oversized);
+    check (synth->lastStateError().isNotEmpty(), "UBNK over 128 is rejected");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - before) < 1.0e-5f, "oversized bank does not change live parameters");
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    vox::preset::StateDocument badValue;
+    badValue.product = old.product;
+    badValue.schema = 1;
+    badValue.sections.push_back ({ vox::suite::uiSectionTag, uiSectionBytes() });
+    badValue.sections.push_back ({ vox::syn::engineSectionTag, engSection ({ { "syn.output", nan } }) });
+    applyDocument (*synth, badValue);
+    check (synth->lastStateError().isNotEmpty(), "non-finite ENG1 is rejected");
+
+    setPlain (*synth, "syn.a.cutoff", 0.33f);
+    for (int i = 0; i < vox::syn::maxUserPrograms; ++i)
+        check (synth->saveUserProgram ("P" + std::to_string (i), static_cast<int> (vox::syn::ProgramCategory::bass)), "fill user bank");
+    check (! synth->saveUserProgram ("overflow", 0), "user bank stops at 128");
+    setPlain (*synth, "syn.a.cutoff", 0.91f);
+    juce::AudioBuffer<float> buffer (2, 64);
+    juce::MidiBuffer midi;
+    synth->prepareToPlay (48000.0, 64);
+    synth->processBlock (buffer, midi);
+    check (synth->loadUserProgram (0), "load during automation");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.33f) < 1.0e-5f, "loaded program wins over the later automation");
+    juce::MemoryBlock full;
+    synth->getStateInformation (full);
+    auto copy = make();
+    copy->setStateInformation (full.getData(), static_cast<int> (full.getSize()));
+    check (copy->lastStateError().isEmpty() && copy->userProgramCount() == 128, "full user bank round-trips");
+}
+
+void testIntegrationStress()
+{
+    auto synth = make();
+    const char* enables[] = {
+        "syn.fx.distortion", "syn.fx.wavefolder", "syn.fx.phaser", "syn.fx.flanger",
+        "syn.fx.chorus", "syn.fx.bitcrusher", "syn.fx.delay", "syn.fx.reverb"
+    };
+    for (const char* id : enables)
+        setPlain (*synth, id, 1.0f);
+    setPlain (*synth, "syn.fx.distortion.mix", 0.35f);
+    setPlain (*synth, "syn.fx.wavefolder.mix", 0.25f);
+    setPlain (*synth, "syn.fx.phaser.mix", 0.3f);
+    setPlain (*synth, "syn.fx.flanger.mix", 0.25f);
+    setPlain (*synth, "syn.fx.chorus.mix", 0.3f);
+    setPlain (*synth, "syn.fx.bitcrusher.mix", 0.2f);
+    setPlain (*synth, "syn.fx.delay.mix", 0.3f);
+    setPlain (*synth, "syn.fx.reverb.mix", 0.3f);
+    setPlain (*synth, "syn.a.engine", 2.0f);
+    setPlain (*synth, "syn.b.engine", 2.0f);
+    setPlain (*synth, "syn.a.level", 0.45f);
+    setPlain (*synth, "syn.b.level", 0.35f);
+    check (std::abs (synth->getTailLengthSeconds() - 8.0) < 1.0e-9, "all-slot stress still reports the reverb tail");
+
+    double worstRatio = 0.0;
+    double worstMs = 0.0;
+    double worstDeadline = 0.0;
+    unsigned long mallocs = 0;
+    int clipped = 0;
+    int counted = 0;
+    bool finite = true;
+    const double rates[] = { 44100.0, 48000.0, 96000.0 };
+    const int blocks[] = { 32, 128, 512 };
+    for (double rate : rates)
+    {
+        for (int block : blocks)
+        {
+            setPlain (*synth, "syn.a.engine", 2.0f);
+            setPlain (*synth, "syn.b.engine", 2.0f);
+            setPlain (*synth, "syn.a.level", 0.45f);
+            setPlain (*synth, "syn.b.level", 0.35f);
+            synth->releaseResources();
+            synth->prepareToPlay (rate, block);
+            juce::AudioBuffer<float> buffer (2, block);
+            juce::MidiBuffer midi;
+            for (int note = 0; note < 8; ++note)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 36 + note, static_cast<juce::uint8> (100)), 0);
+            synth->processBlock (buffer, midi);
+            check (synth->activeVoices() == 16, "two VA parts use the full 16 voices");
+            midi.clear();
+            midi.addEvent (juce::MidiMessage::noteOn (1, 70, static_cast<juce::uint8> (120)), 0);
+            synth->processBlock (buffer, midi);
+            check (synth->activeVoices() == 16, "the 17th note steals inside the 16-voice cap");
+
+            midi.clear();
+            for (int i = 0; i < vox::syn::engine::maxEvents + 40; ++i)
+                midi.addEvent (juce::MidiMessage::controllerEvent (1, 1, i & 0x7f), 0);
+            midi.addEvent (juce::MidiMessage::controllerEvent (1, 123, 0), block - 1);
+            synth->processBlock (buffer, midi);
+            const int drain = static_cast<int> (rate * 1.5 / static_cast<double> (block)) + 1;
+            for (int i = 0; i < drain; ++i)
+            {
+                midi.clear();
+                synth->processBlock (buffer, midi);
+            }
+            check (synth->activeVoices() == 0,
+                   "CC123 under load leaves no stuck voice (" + std::to_string (synth->activeVoices()) + ")");
+
+            midi.clear();
+            for (int note = 0; note < 8; ++note)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 40 + note, static_cast<juce::uint8> (110)), 0);
+            synth->processBlock (buffer, midi);
+            setPlain (*synth, "syn.a.engine", 0.0f);
+            setPlain (*synth, "syn.b.engine", 1.0f);
+            midi.clear();
+            synth->processBlock (buffer, midi);
+            check (synth->activeVoices() <= 16, "engine switch stays inside the cap");
+            setPlain (*synth, "syn.a.engine", 2.0f);
+            setPlain (*synth, "syn.b.engine", 2.0f);
+
+            const double deadlineMs = 1000.0 * static_cast<double> (block) / rate;
+            for (std::size_t p = 0; p < vox::syn::parameterCatalog.size(); ++p)
+            {
+                const auto& entry = vox::syn::parameterCatalog[p];
+                const float value = entry.choice ? static_cast<float> (p % 3) : (p % 2 == 0 ? 0.15f : 0.85f);
+                setPlain (*synth, entry.id, value);
+                midi.clear();
+                if (p == 0)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, 48, static_cast<juce::uint8> (100)), 0);
+#ifndef VOX_TEST_INTERPOSE_MALLOC
+#error "suite_synth_product_tests requires the allocation probe."
+#endif
+                if (voxProbeAvailable())
+                    voxProbeBegin();
+                const auto start = std::chrono::steady_clock::now();
+                synth->processBlock (buffer, midi);
+                const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
+                if (voxProbeAvailable())
+                    mallocs += voxProbeEnd();
+                worstRatio = std::max (worstRatio, ms / deadlineMs);
+                if (ms > worstMs)
+                {
+                    worstMs = ms;
+                    worstDeadline = deadlineMs;
+                }
+                for (int sample = 0; sample < block; ++sample)
+                {
+                    const float left = buffer.getSample (0, sample);
+                    finite = finite && std::isfinite (left) && std::isfinite (buffer.getSample (1, sample));
+                    if (std::abs (left) > 1.0f)
+                        ++clipped;
+                    ++counted;
+                }
+            }
+        }
+    }
+    const auto line = "synth stress: worst " + std::to_string (worstMs) + " ms vs deadline " + std::to_string (worstDeadline)
+                      + " ms, ratio " + std::to_string (worstRatio) + ", mallocs " + std::to_string (mallocs)
+                      + ", clipped " + std::to_string (clipped) + "/" + std::to_string (counted)
+                      + ", oversampling off";
+    std::printf ("%s\n", line.c_str());
+    appendPerf (line);
+    check (finite, "stress output stays finite");
+    check (mallocs == 0, "stress processBlock allocates nothing");
+    check (worstRatio < 1.0, "worst block stays inside its audio deadline");
+    setPlain (*synth, "syn.fx.reverb", 0.0f);
+    setPlain (*synth, "syn.fx.delay", 0.0f);
+    check (synth->getTailLengthSeconds() < 2.0, "disabling delay and reverb drops the long tail");
 }
 
 } // namespace
@@ -577,6 +934,9 @@ int main()
     testParameterAutomation();
     testProgramBrowser();
     testPerformance();
+    testFactoryContent();
+    testStateEdges();
+    testIntegrationStress();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);
     else

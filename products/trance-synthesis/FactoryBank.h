@@ -11,8 +11,8 @@ namespace vox::syn {
 
 inline constexpr int factoryProgramCapacity = 600;
 inline constexpr int factoryPhraseCapacity = 120;
-inline constexpr int factoryProgramsReady = 0;
-inline constexpr int factoryPhrasesReady = 0;
+inline constexpr int factoryProgramsReady = 600;
+inline constexpr int factoryPhrasesReady = 120;
 
 enum class ProgramCategory : std::uint8_t {
     bass, acid, lead, pluck, keys, pad, atmos, fx, user, count

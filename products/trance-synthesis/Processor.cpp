@@ -1,6 +1,7 @@
 #include "Processor.h"
 
 #include "FactoryBank.h"
+#include "FactoryContent.h"
 #include "Parameters.h"
 #include "SynthEditor.h"
 
@@ -568,6 +569,51 @@ bool SynthesisProcessor::loadUserProgram (int index)
         values = userPrograms_[static_cast<std::size_t> (index)].values;
     }
     for (std::size_t i = 0; i < parameterCatalog.size() && i < values.size(); ++i)
+    {
+        auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
+        if (parameter == nullptr)
+            continue;
+        const float clamped = std::clamp (values[i], parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
+    }
+    return true;
+}
+
+int SynthesisProcessor::factoryProgramCount() const noexcept
+{
+    return vox::syn::factoryProgramCount();
+}
+
+juce::String SynthesisProcessor::factoryProgramName (int index) const
+{
+    if (index < 0 || index >= vox::syn::factoryProgramCount())
+        return {};
+    const auto& program = factoryProgram (index);
+    return program.name;
+}
+
+int SynthesisProcessor::factoryProgramCategory (int index) const
+{
+    if (index < 0 || index >= vox::syn::factoryProgramCount())
+        return 0;
+    return static_cast<int> (factoryProgram (index).category);
+}
+
+juce::String SynthesisProcessor::factoryProgramSearch (int index) const
+{
+    if (index < 0 || index >= vox::syn::factoryProgramCount())
+        return {};
+    const auto& program = factoryProgram (index);
+    return juce::String (program.id) + " " + program.name + " " + program.style + " "
+         + program.role + " " + program.purpose;
+}
+
+bool SynthesisProcessor::loadFactoryProgram (int index)
+{
+    if (index < 0 || index >= vox::syn::factoryProgramCount())
+        return false;
+    const float* values = factoryProgram (index).values;
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
     {
         auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
         if (parameter == nullptr)

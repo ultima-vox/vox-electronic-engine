@@ -426,10 +426,14 @@ void SynthEngine::allOff (int part, bool hard) noexcept
     }
     slot.mono.gate = false;
     for (auto& voice : voices_)
-        if (voice.active && voice.part == part && voice.gate)
+        if (voice.active && voice.part == part)
         {
-            voice.gate = false;
-            voice.amp.startRelease (0.2, sampleRate_);
+            voice.pendingNote = -1;
+            if (voice.gate)
+            {
+                voice.gate = false;
+                voice.amp.startRelease (live_[part].release, sampleRate_);
+            }
         }
 }
 

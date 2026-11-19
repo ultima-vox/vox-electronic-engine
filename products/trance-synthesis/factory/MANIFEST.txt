@@ -1,0 +1,15 @@
+VOX Trance Synthesis factory manifest
+author: original project data, no third-party presets or MIDI
+programs: 600
+phrases: 120
+programs-by-category:
+  bass: 100
+  acid: 80
+  lead: 80
+  pluck: 60
+  keys: 60
+  pad: 80
+  atmos: 70
+  fx: 70
+styles: classic, uplifting, progressive, tech, goa, fullon, psy, forest, dark, hitech
+ids: FS-001..FS-600 programs, FP-001..FP-120 phrases

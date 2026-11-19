@@ -29,6 +29,11 @@ private:
     void loadSelected();
     void saveNamed();
 
+    struct ProgramRow {
+        bool factory = false;
+        int index = 0;
+    };
+
     SynthesisProcessor& processor_;
     juce::Label capacity_;
     juce::TextEditor search_, name_;
@@ -40,7 +45,7 @@ private:
     std::vector<std::unique_ptr<juce::Component>> controls_;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliders_;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos_;
-    std::vector<int> visible_;
+    std::vector<ProgramRow> visible_;
 };
 
 } // namespace vox::syn

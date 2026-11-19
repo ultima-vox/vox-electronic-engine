@@ -85,16 +85,17 @@ int SynthPanel::getNumRows()
     return static_cast<int> (visible_.size());
 }
 
-void SynthPanel::paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected)
+void SynthPanel::paintListBoxItem (int rowNumber, juce::Graphics& g, int width, int height, bool selected)
 {
-    if (row < 0 || row >= static_cast<int> (visible_.size()))
+    if (rowNumber < 0 || rowNumber >= static_cast<int> (visible_.size()))
         return;
     g.fillAll (selected ? juce::Colour (0xff1d3a4d) : juce::Colours::transparentBlack);
     g.setColour (juce::Colours::white);
-    const int index = visible_[static_cast<std::size_t> (row)];
-    const auto category = categoryNames[static_cast<std::size_t> (processor_.userProgramCategory (index))];
-    g.drawText (processor_.userProgramName (index) + "  ·  " + category,
-                6, 0, width - 8, height, juce::Justification::centredLeft);
+    const auto row = visible_[static_cast<std::size_t> (rowNumber)];
+    const auto category = categoryNames[static_cast<std::size_t> (
+        row.factory ? processor_.factoryProgramCategory (row.index) : processor_.userProgramCategory (row.index))];
+    const auto name = row.factory ? processor_.factoryProgramName (row.index) : processor_.userProgramName (row.index);
+    g.drawText (name + "  ·  " + category, 6, 0, width - 8, height, juce::Justification::centredLeft);
 }
 
 void SynthPanel::listBoxItemDoubleClicked (int, const juce::MouseEvent&)
@@ -108,13 +109,21 @@ void SynthPanel::refresh()
     const auto query = search_.getText().trim().toLowerCase();
     const int selected = category_.getSelectedId();
     const int wanted = selected <= 1 ? -1 : selected - 2;
+    for (int i = 0; i < processor_.factoryProgramCount(); ++i)
+    {
+        if (wanted >= 0 && processor_.factoryProgramCategory (i) != wanted)
+            continue;
+        if (query.isNotEmpty() && ! processor_.factoryProgramSearch (i).toLowerCase().contains (query))
+            continue;
+        visible_.push_back ({ true, i });
+    }
     for (int i = 0; i < processor_.userProgramCount(); ++i)
     {
         if (wanted >= 0 && processor_.userProgramCategory (i) != wanted)
             continue;
         if (query.isNotEmpty() && ! processor_.userProgramName (i).toLowerCase().contains (query))
             continue;
-        visible_.push_back (i);
+        visible_.push_back ({ false, i });
     }
     capacity_.setText ("Factory ready " + juce::String (factoryProgramsReady) + " / " + juce::String (factoryProgramCapacity)
                            + "    Phrases ready " + juce::String (factoryPhrasesReady) + " / " + juce::String (factoryPhraseCapacity)
@@ -126,10 +135,14 @@ void SynthPanel::refresh()
 
 void SynthPanel::loadSelected()
 {
-    const int row = programs_.getSelectedRow();
-    if (row < 0 || row >= static_cast<int> (visible_.size()))
+    const int selected = programs_.getSelectedRow();
+    if (selected < 0 || selected >= static_cast<int> (visible_.size()))
         return;
-    processor_.loadUserProgram (visible_[static_cast<std::size_t> (row)]);
+    const auto row = visible_[static_cast<std::size_t> (selected)];
+    if (row.factory)
+        processor_.loadFactoryProgram (row.index);
+    else
+        processor_.loadUserProgram (row.index);
 }
 
 void SynthPanel::saveNamed()

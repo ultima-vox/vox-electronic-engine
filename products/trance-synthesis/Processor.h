@@ -51,6 +51,11 @@ public:
     [[nodiscard]] int userProgramCategory (int index) const;
     bool saveUserProgram (const juce::String& name, int category);
     bool loadUserProgram (int index);
+    [[nodiscard]] int factoryProgramCount() const noexcept;
+    [[nodiscard]] juce::String factoryProgramName (int index) const;
+    [[nodiscard]] int factoryProgramCategory (int index) const;
+    [[nodiscard]] juce::String factoryProgramSearch (int index) const;
+    bool loadFactoryProgram (int index);
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
