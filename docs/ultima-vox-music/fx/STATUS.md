@@ -6,7 +6,13 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [Wave B performance tranche and Windows P0 evidence](WAVE_B_PERFORMANCE_20261119.md). Wave A remains 120/0; Wave B has 16 separately staged review cues. The historical Windows processor-test SEGFAULT is independently confirmed on two runs. The newer targeted run executed its capture step; the actual log/stack is pending retrieval. Draft/HOLD. The table below describes earlier checkpoints.
+**Latest:** [WAV lifecycle and timeline follow-up](WAV_LIFECYCLE_20261119.md) and
+[Wave B Bridge Signals](WAVE_B_BRIDGE_SIGNALS_20261119.md). Wave A 120 + Wave B 40
+= 160 review candidates, zero approved. Confirmed WAV exports are processor-owned,
+not tied to the editor. The targeted Windows stack-fix test passed 1/1; that is
+not full Windows qualification. Actual arrangements, authorized private delivery,
+FX-T18, exact-head Windows/validator and the owner host round remain open.
+Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
 
 | Milestone | Status |
 |---|---|
