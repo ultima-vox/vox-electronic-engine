@@ -161,7 +161,7 @@ int main() {
     phase("motion, generator and preset browser");
     {
         using namespace vox::fx;
-        auto owner=std::make_unique<FxProcessor>();FxPanel panel(*owner);
+        auto owner=std::make_unique<FxProcessor>();auto panelStorage1=std::make_unique<vox::fx::FxPanel>(*owner); auto& panel=*panelStorage1;
         auto& motion=panel.motionPanel();
         motion.refresh(0);motion.sourceSelector().setSelectedId(static_cast<int>(mod::Source::velocity)+1,juce::sendNotificationSync);
         motion.destinationSelector().setSelectedId(static_cast<int>(mod::Destination::pitch)+1,juce::sendNotificationSync);
@@ -186,7 +186,7 @@ int main() {
             std::abs(owner->effectWetParameter(0).get()-.31f)<1e-5f,"full graph generation keeps host automation bases");
         const auto root=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("voxfx-ui-"+juce::Uuid().toString());
         {
-            PresetBrowser browser(*owner,root);browser.setSize(920,456);browser.open();
+            auto browserStorage11=std::make_unique<vox::fx::PresetBrowser>(*owner,root); auto& browser=*browserStorage11;browser.setSize(920,456);browser.open();
             const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
             while(browser.indexing()&&std::chrono::steady_clock::now()<deadline){browser.pollBackground();std::this_thread::yield();}
             check(!browser.indexing(),"managed user scan completes through the background indexer");
@@ -224,7 +224,7 @@ int main() {
     }
     phase("editor/parameters and state");
     {
-        vox::fx::FxPanel panel(p);
+        auto panelStorage2=std::make_unique<vox::fx::FxPanel>(p); auto& panel=*panelStorage2;
         panel.outputSlider().setValue(0.5, juce::sendNotificationSync);
         check(std::abs(p.outputParameter().get() - 0.5f) < 1e-6f, "editor knob controls host parameter");
         panel.durationSlider().setValue(8.0, juce::sendNotificationSync);
@@ -279,7 +279,7 @@ int main() {
     {
         using namespace vox::fx;
         auto processor = std::make_unique<FxProcessor>();
-        FxPanel panel(*processor);
+        auto panelStorage3=std::make_unique<vox::fx::FxPanel>(*processor); auto& panel=*panelStorage3;
         panel.setSize(1040,700);
         auto& toggle = panel.programCurvesButton();
         auto& curves = panel.programCurves();
@@ -315,7 +315,7 @@ int main() {
     phase("generation");
     {
         auto generated = std::make_unique<vox::fx::FxProcessor>();
-        vox::fx::FxPanel panel(*generated);
+        auto panelStorage4=std::make_unique<vox::fx::FxPanel>(*generated); auto& panel=*panelStorage4;
         generated->durationParameter().setValueNotifyingHost(generated->durationParameter().convertTo0to1(7.0f));
         panel.familySelector().setSelectedId(4, juce::sendNotificationSync);
         panel.factorySelector().setSelectedId(21,juce::sendNotificationSync);
@@ -336,7 +336,7 @@ int main() {
         panel.layerLock(0).setToggleState(true,juce::sendNotificationSync);
         auto generatorSaved=save(*generated);auto generatorRecall=std::make_unique<vox::fx::FxProcessor>();
         generatorRecall->setStateInformation(generatorSaved.getData(),static_cast<int>(generatorSaved.getSize()));
-        vox::fx::FxPanel recalledPanel(*generatorRecall);
+        auto recalledPanelStorage5=std::make_unique<vox::fx::FxPanel>(*generatorRecall); auto& recalledPanel=*recalledPanelStorage5;
         check(recalledPanel.seedSlider().getValue()==123 && recalledPanel.layerLock(0).getToggleState(),"generator seed and locks recalled in editor");
         auto invalidGenerator=vox::preset::decode(std::span(static_cast<const std::byte*>(generatorSaved.getData()),generatorSaved.getSize()),vox::preset::makeTag("VXFX"),1);
         for(auto& section:invalidGenerator.document.sections)if(section.tag==vox::fx::fxGeneratorSectionTag)section.data[0]=std::byte{5};
@@ -384,7 +384,7 @@ int main() {
     {
         auto effected=std::make_unique<vox::fx::FxProcessor>();
         auto dry=std::make_unique<vox::fx::FxProcessor>();
-        vox::fx::FxPanel panel(*effected);
+        auto panelStorage6=std::make_unique<vox::fx::FxPanel>(*effected); auto& panel=*panelStorage6;
         check(panel.comparisonSelector().getNumItems()==4,"A/B comparison actions exposed");
         check(panel.midiExportButton().isEnabled() && panel.midiExportButton().getTooltip().contains("host tempo"),
               "MIDI export control communicates captured host tempo");
@@ -439,7 +439,7 @@ int main() {
             }else check(false,"encode malformed comparison fixture");
         }
         {
-            auto dragProcessor=std::make_unique<vox::fx::FxProcessor>();vox::fx::FxPanel dragPanel(*dragProcessor);
+            auto dragProcessor=std::make_unique<vox::fx::FxProcessor>();auto dragPanelStorage7=std::make_unique<vox::fx::FxPanel>(*dragProcessor); auto& dragPanel=*dragPanelStorage7;
             auto& source=dragPanel.sourcePanel();
             source.typeSelector(0).setSelectedId(2,juce::sendNotificationSync);
             source.cutoffSlider(0).setValue(800,juce::sendNotificationSync);
@@ -564,7 +564,7 @@ int main() {
     phase("pattern editor");
     {
         auto owner=std::make_unique<vox::fx::FxProcessor>();vox::fx::pattern::Pattern pattern;
-        vox::fx::FxPanel panel(*owner);
+        auto panelStorage8=std::make_unique<vox::fx::FxPanel>(*owner); auto& panel=*panelStorage8;
         panel.patternLengthSelector().setSelectedId(4,juce::sendNotificationSync);
         panel.patternBarSelector().setSelectedId(4,juce::sendNotificationSync);
         panel.patternStep(2).setToggleState(true,juce::sendNotificationSync);
@@ -673,7 +673,7 @@ int main() {
     phase("modulation");
     {
         auto modulated=std::make_unique<vox::fx::FxProcessor>();auto dry=std::make_unique<vox::fx::FxProcessor>();
-        vox::fx::FxPanel panel(*modulated);
+        auto panelStorage9=std::make_unique<vox::fx::FxPanel>(*modulated); auto& panel=*panelStorage9;
         panel.macroDepthSlider().setValue(-.5,juce::sendNotificationSync);
         check(modulated->macroConfig().count==1,"editor assigns typed macro gain route");
         check(modulated->setMacroGainRoute(0,-.5f,0),"assign macro to output gain");
@@ -777,7 +777,7 @@ int main() {
         check(sound.getMagnitude(0,0,512)>0,"missing sample does not suppress non-granular audio");
         check(missing->renderProgramWav(settings,bytes),"non-granular WAV ignores missing sample");
         missing->panic();block(*missing,sound,note);check(missing->setFamily(11),"return to granular family");
-        vox::fx::FxPanel samplePanel(*missing);
+        auto samplePanelStorage10=std::make_unique<vox::fx::FxPanel>(*missing); auto& samplePanel=*samplePanelStorage10;
         check(samplePanel.sampleImportButton().isEnabled(),"sample import action exposed");
         samplePanel.sampleBuiltinButton().onClick();
         check(missing->sampleReference().kind==vox::fx::sample::Reference::Kind::builtin,"editor explicitly selects built-in sample");
