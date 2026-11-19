@@ -5,6 +5,8 @@
 #include "engine/SynthEngine.h"
 #include "Parameters.h"
 
+#include <juce_audio_processors/juce_audio_processors.h>
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -13,6 +15,14 @@
 namespace vox::syn {
 
 inline constexpr preset::Tag engineSectionTag = preset::makeTag ("ENG1");
+inline constexpr preset::Tag userBankTag = preset::makeTag ("UBNK");
+inline constexpr int maxUserPrograms = 128;
+
+struct UserProgram {
+    juce::String name;
+    int category = 0;
+    std::vector<float> values;
+};
 
 // SYN-01: two parts (Psy Bass, Acid, VA), one 16-voice allocator, ENG1 state.
 class SynthesisProcessor final : public vox::suite::SuiteProcessor {
@@ -36,10 +46,19 @@ public:
     [[nodiscard]] int vaFadeLeft() const noexcept { return engine_.vaFadeLeft(); }
     [[nodiscard]] std::uint64_t droppedMidi() const noexcept { return droppedMidi_.load (std::memory_order_relaxed); }
 
+    [[nodiscard]] int userProgramCount() const;
+    [[nodiscard]] juce::String userProgramName (int index) const;
+    [[nodiscard]] int userProgramCategory (int index) const;
+    bool saveUserProgram (const juce::String& name, int category);
+    bool loadUserProgram (int index);
+
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
-    bool isProductSection (preset::Tag tag) const override { return tag == engineSectionTag; }
+    bool isProductSection (preset::Tag tag) const override
+    {
+        return tag == engineSectionTag || tag == userBankTag;
+    }
 
 private:
     juce::AudioProcessorValueTreeState parameters_;
@@ -52,6 +71,8 @@ private:
 
     struct Restored { float loaded = 0.0f, held = 0.0f; };
     std::vector<Restored> restored_;
+    std::vector<UserProgram> userPrograms_;
+    juce::CriticalSection bankLock_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SynthesisProcessor)
 };

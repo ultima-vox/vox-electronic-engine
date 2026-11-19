@@ -41,6 +41,17 @@ struct PartParams {
     float slide = 0.30f;
     float portamento = 0.0f;
     float drive = 0.25f;
+    // Defaults reproduce the SYN-01 render. Omitted brace fields keep them.
+    float sub = 0.18f;
+    double pitchSeconds = 0.018;
+    float square = 0.30f;
+    float env = 1.0f;
+    double detuneCents = 8.0;
+    double attack = 0.008;
+    double decay = 0.25;
+    double sustain = 0.72;
+    double release = 0.28;
+    float noise = 0.04f;
 };
 
 struct BlockParams {

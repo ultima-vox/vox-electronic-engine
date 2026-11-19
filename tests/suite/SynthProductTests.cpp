@@ -2,6 +2,7 @@
 // shared voice cap, realtime allocation, and rejection of a bad engine blob.
 #include "Processor.h"
 #include "Parameters.h"
+#include "FactoryBank.h"
 #include "StateContainer.h"
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -9,7 +10,7 @@
 #endif
 
 #include <algorithm>
-#include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -448,6 +449,113 @@ void testExposedFxTail()
            "restored delay control reports the chain tail");
 }
 
+void testParameterAutomation()
+{
+    auto synth = make();
+    check (vox::syn::parameterCatalog.size() == 75, "catalog exposes the part and FX controls");
+    setPlain (*synth, "syn.a.cutoff", 0.05f);
+    setPlain (*synth, "syn.a.sub", 1.0f);
+    setPlain (*synth, "syn.b.wave", 1.0f);
+    setPlain (*synth, "syn.fx.phaser", 1.0f);
+    setPlain (*synth, "syn.fx.phaser.mix", 0.4f);
+    juce::MemoryBlock saved;
+    synth->getStateInformation (saved);
+    auto copy = make();
+    copy->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (std::abs (plain (*copy, "syn.a.sub") - 1.0f) < 1.0e-5f, "sub restores");
+    check (std::abs (plain (*copy, "syn.b.wave") - 1.0f) < 1.0e-5f, "wave restores");
+    check (std::abs (plain (*copy, "syn.fx.phaser.mix") - 0.4f) < 1.0e-5f, "phaser mix restores");
+
+    synth->prepareToPlay (48000.0, 128);
+    juce::AudioBuffer<float> buffer (2, 128);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (110)), 0);
+    synth->processBlock (buffer, midi);
+    const float low = buffer.getSample (0, 100);
+    setPlain (*synth, "syn.a.cutoff", 0.95f);
+    midi.clear();
+    synth->processBlock (buffer, midi);
+    bool finite = true;
+    for (int i = 0; i < 128; ++i)
+        finite = finite && std::isfinite (buffer.getSample (0, i));
+    check (finite && std::abs (buffer.getSample (0, 100) - low) > 1.0e-5f, "cutoff automation changes the block");
+}
+
+void testProgramBrowser()
+{
+    check (vox::syn::factoryProgramsReady == 0, "no factory programs are approved");
+    check (vox::syn::factoryPhrasesReady == 0, "no factory phrases are approved");
+    check (vox::syn::factoryProgramCapacity == 600 && vox::syn::factoryPhraseCapacity == 120,
+           "factory capacity is 600 programs and 120 phrases");
+
+    auto synth = make();
+    check (! synth->saveUserProgram ("", 0), "empty name is rejected");
+    check (synth->saveUserProgram ("Night Acid", static_cast<int> (vox::syn::ProgramCategory::acid)), "save user program");
+    setPlain (*synth, "syn.a.cutoff", 0.9f);
+    check (synth->saveUserProgram ("Wide Pad", static_cast<int> (vox::syn::ProgramCategory::pad)), "save second program");
+    check (synth->userProgramCount() == 2, "two user programs");
+    check (synth->loadUserProgram (0), "load the first program");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.55f) < 1.0e-5f, "loaded program restores cutoff");
+
+    juce::MemoryBlock saved;
+    synth->getStateInformation (saved);
+    auto copy = make();
+    copy->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    check (copy->userProgramCount() == 2, "user bank restored");
+    check (copy->userProgramName (1) == "Wide Pad", "program name restored");
+    check (copy->userProgramCategory (1) == static_cast<int> (vox::syn::ProgramCategory::pad), "category restored");
+    check (copy->loadUserProgram (1), "load restored program");
+    check (std::abs (plain (*copy, "syn.a.cutoff") - 0.9f) < 1.0e-5f, "restored program recalls its cutoff");
+
+    auto editor = std::unique_ptr<juce::AudioProcessorEditor> (synth->createEditor());
+    check (editor != nullptr, "editor with the browser opens");
+    if (editor != nullptr)
+    {
+        editor->setSize (1180, 760);
+        juce::Image image (juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
+        juce::Graphics graphics (image);
+        editor->paintEntireComponent (graphics, true);
+        synth->editorBeingDeleted (editor.get());
+    }
+}
+
+void testPerformance()
+{
+    auto synth = make();
+    synth->prepareToPlay (48000.0, 128);
+    juce::AudioBuffer<float> buffer (2, 128);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (100)), 0);
+    midi.addEvent (juce::MidiMessage::noteOn (2, 48, static_cast<juce::uint8> (110)), 0);
+    const auto start = std::chrono::steady_clock::now();
+#ifndef VOX_TEST_INTERPOSE_MALLOC
+#error "suite_synth_product_tests requires the allocation probe. A missing probe used to skip the check."
+#endif
+    unsigned long calls = 0;
+    if (! voxProbeAvailable())
+    {
+        ++skips;
+        check (false, "allocation probe did not attach");
+    }
+    else
+        voxProbeBegin();
+    for (int i = 0; i < 375; ++i)
+    {
+        synth->processBlock (buffer, midi);
+        midi.clear();
+    }
+    if (voxProbeAvailable())
+        calls = voxProbeEnd();
+    const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
+    std::printf ("synth perf: %.2f ms for 1.0 s audio, oversampling off, mallocs %lu\n", ms, calls);
+    check (calls == 0, "performance render allocates nothing");
+    check (ms < 1500.0, "1 s of audio stays under 1.5 s without oversampling");
+    bool finite = true;
+    for (int i = 0; i < 128; ++i)
+        finite = finite && std::isfinite (buffer.getSample (0, i));
+    check (finite, "performance render stays finite");
+}
+
 } // namespace
 
 int main()
@@ -459,6 +567,9 @@ int main()
     testSlideVersusSnap();
     testOverflowReleases();
     testExposedFxTail();
+    testParameterAutomation();
+    testProgramBrowser();
+    testPerformance();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);
     else

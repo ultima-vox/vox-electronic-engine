@@ -1,5 +1,6 @@
 #include "Processor.h"
 
+#include "FactoryBank.h"
 #include "Parameters.h"
 #include "SynthEditor.h"
 
@@ -70,23 +71,29 @@ bool isRelease (const juce::MidiMessageMetadata& metadata) noexcept
     return type == 0xb0 && metadata.data[1] == 64 && data2 < 64;
 }
 
-void syncExposedFx (vstengine::effects::EffectsChain& fx, float delay, float reverb) noexcept
+void syncExposedFx (vstengine::effects::EffectsChain& fx, const std::array<std::atomic<float>*, parameterCatalog.size()>& raw) noexcept
 {
     using vstengine::effects::EffectSettings;
     using vstengine::effects::EffectType;
-    const auto slot = [] (EffectType type, bool on) noexcept
+    constexpr EffectType types[8] = {
+        EffectType::distortion, EffectType::wavefolder, EffectType::phaser, EffectType::flanger,
+        EffectType::chorus, EffectType::bitcrusher, EffectType::delay, EffectType::reverb
+    };
+    const auto load = [] (const std::atomic<float>* value) noexcept
+    {
+        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
+    };
+    for (const auto& binding : fxBindings)
     {
         EffectSettings settings;
-        settings.type = type;
-        settings.enabled = on;
-        settings.mix = on ? 0.35f : 0.0f;
-        settings.amount = 0.5f;
-        settings.rate = 0.4f;
-        settings.character = 0.5f;
-        return settings;
-    };
-    fx.setEffect (6, slot (EffectType::delay, delay >= 0.5f));
-    fx.setEffect (7, slot (EffectType::reverb, reverb >= 0.5f));
+        settings.type = types[binding.slot];
+        settings.enabled = load (raw[static_cast<std::size_t> (binding.enable)]) >= 0.5f;
+        settings.mix = std::clamp (load (raw[static_cast<std::size_t> (binding.mix)]), 0.0f, 1.0f);
+        settings.amount = std::clamp (load (raw[static_cast<std::size_t> (binding.amount)]), 0.0f, 1.0f);
+        settings.rate = std::clamp (load (raw[static_cast<std::size_t> (binding.rate)]), 0.0f, 1.0f);
+        settings.character = std::clamp (load (raw[static_cast<std::size_t> (binding.character)]), 0.0f, 1.0f);
+        fx.setEffect (static_cast<std::size_t> (binding.slot), settings);
+    }
 }
 
 preset::Section encodeParameters (const float* plain, int count)
@@ -146,18 +153,28 @@ void SynthesisProcessor::releaseResources()
 
 double SynthesisProcessor::getTailLengthSeconds() const
 {
-    // Voice release is voiceTailSeconds(). syn.fx.delay and syn.fx.reverb
-    // are the host controls. 6 s and 8 s match EffectsChain::tailSamples
-    // for delay slot 6 and reverb slot 7. The report follows the controls
-    // so a host read between callbacks is not a stale chain.
-    double tail = engine::voiceTailSeconds();
-    const auto on = [] (const std::atomic<float>* value) noexcept
+    // Voice release is voiceTailSeconds(). A VA release longer than that
+    // extends the report. Delay is 6 s and reverb is 8 s when that slot is
+    // enabled and its mix is above zero, matching EffectsChain::tailSamples.
+    const auto load = [] (const std::atomic<float>* value) noexcept
     {
-        return value != nullptr && value->load (std::memory_order_relaxed) >= 0.5f;
+        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
     };
-    if (on (raw_[reverbParameterIndex]))
+    double tail = engine::voiceTailSeconds();
+    for (int part = 0; part < engine::partCount; ++part)
+    {
+        const int base = part * 7;
+        const int extra = part == 0 ? static_cast<int> (partAExtraIndex) : static_cast<int> (partBExtraIndex);
+        if (kindFrom (load (raw_[static_cast<std::size_t> (base)])) != engine::EngineKind::va)
+            continue;
+        const float release = 0.02f + load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::release))]);
+        tail = std::max (tail, static_cast<double> (release));
+    }
+    const bool reverb = load (raw_[reverbParameterIndex]) >= 0.5f && load (raw_[reverbMixIndex]) > 0.0f;
+    const bool delay = load (raw_[delayParameterIndex]) >= 0.5f && load (raw_[delayMixIndex]) > 0.0f;
+    if (reverb)
         tail = std::max (tail, 8.0);
-    else if (on (raw_[delayParameterIndex]))
+    else if (delay)
         tail = std::max (tail, 6.0);
     return tail;
 }
@@ -186,16 +203,28 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (int part = 0; part < engine::partCount; ++part)
     {
         const int base = part * 7;
-        block.part[part].engine = kindFrom (load (raw_[static_cast<std::size_t> (base)]));
-        block.part[part].level = load (raw_[static_cast<std::size_t> (base + 1)]);
-        block.part[part].cutoff = load (raw_[static_cast<std::size_t> (base + 2)]);
-        block.part[part].resonance = load (raw_[static_cast<std::size_t> (base + 3)]);
-        block.part[part].slide = load (raw_[static_cast<std::size_t> (base + 4)]);
-        block.part[part].portamento = load (raw_[static_cast<std::size_t> (base + 5)]);
-        block.part[part].drive = load (raw_[static_cast<std::size_t> (base + 6)]);
+        const int extra = part == 0 ? static_cast<int> (partAExtraIndex) : static_cast<int> (partBExtraIndex);
+        auto& dst = block.part[part];
+        dst.engine = kindFrom (load (raw_[static_cast<std::size_t> (base)]));
+        dst.level = load (raw_[static_cast<std::size_t> (base + 1)]);
+        dst.cutoff = load (raw_[static_cast<std::size_t> (base + 2)]);
+        dst.resonance = load (raw_[static_cast<std::size_t> (base + 3)]);
+        dst.slide = load (raw_[static_cast<std::size_t> (base + 4)]);
+        dst.portamento = load (raw_[static_cast<std::size_t> (base + 5)]);
+        dst.drive = load (raw_[static_cast<std::size_t> (base + 6)]);
+        dst.sub = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sub))]);
+        dst.pitchSeconds = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::pitch))])) * 0.1;
+        dst.square = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::wave))]);
+        dst.env = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::env))]);
+        dst.detuneCents = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::detune))])) * 50.0;
+        dst.attack = 0.001 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::attack))])) * 0.2;
+        dst.decay = 0.01 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::decay))])) * 2.0;
+        dst.sustain = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sustain))]));
+        dst.release = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::release))]));
+        dst.noise = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::noise))]);
     }
     block.output = load (raw_[outputParameterIndex]);
-    syncExposedFx (fx_, load (raw_[delayParameterIndex]), load (raw_[reverbParameterIndex]));
+    syncExposedFx (fx_, raw_);
 
     int count = 0;
     std::uint64_t dropped = 0;
@@ -304,6 +333,28 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
         plain[i] = juce::exactlyEqual (current, restored_[i].held) ? restored_[i].loaded : current;
     }
     out.push_back (encodeParameters (plain, static_cast<int> (parameterCatalog.size())));
+    const juce::ScopedLock lock (bankLock_);
+    preset::Section bank;
+    bank.tag = userBankTag;
+    putU32 (bank.data, 1u);
+    putU32 (bank.data, static_cast<std::uint32_t> (userPrograms_.size()));
+    for (const auto& program : userPrograms_)
+    {
+        const auto utf8 = program.name.toRawUTF8();
+        const auto length = static_cast<std::uint32_t> (std::min<std::size_t> (std::strlen (utf8), 64));
+        putU32 (bank.data, length);
+        for (std::uint32_t c = 0; c < length; ++c)
+            bank.data.push_back (static_cast<std::byte> (utf8[c]));
+        putU32 (bank.data, static_cast<std::uint32_t> (program.category));
+        putU32 (bank.data, static_cast<std::uint32_t> (program.values.size()));
+        for (float value : program.values)
+        {
+            std::uint32_t bits = 0;
+            std::memcpy (&bits, &value, sizeof bits);
+            putU32 (bank.data, bits);
+        }
+    }
+    out.push_back (std::move (bank));
 }
 
 SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const preset::StateDocument& document,
@@ -317,7 +368,7 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
     {
         std::size_t at = 0;
         std::uint32_t version = 0, count = 0;
-        if (! takeU32 (section->data, at, version) || version != 1u || ! takeU32 (section->data, at, count) || count > 64)
+        if (! takeU32 (section->data, at, version) || version != 1u || ! takeU32 (section->data, at, count) || count > 256)
         {
             error = "malformed ENG1 section";
             return {};
@@ -358,12 +409,96 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         }
     }
 
+    auto bank = std::make_shared<std::vector<UserProgram>>();
+    if (const auto* section = document.find (userBankTag))
+    {
+        std::size_t at = 0;
+        std::uint32_t version = 0, count = 0;
+        if (! takeU32 (section->data, at, version) || version != 1u || ! takeU32 (section->data, at, count) || count > static_cast<std::uint32_t> (maxUserPrograms))
+        {
+            error = "malformed UBNK section";
+            return {};
+        }
+        bank->reserve (count);
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            std::uint32_t length = 0, category = 0, values = 0;
+            if (! takeU32 (section->data, at, length) || length > 64
+                || section->data.size() - at < static_cast<std::size_t> (length))
+            {
+                error = "malformed UBNK section";
+                return {};
+            }
+            std::string name (length, '\0');
+            for (std::uint32_t c = 0; c < length; ++c)
+                name[c] = static_cast<char> (section->data[at + c]);
+            at += length;
+            if (! takeU32 (section->data, at, category) || ! takeU32 (section->data, at, values)
+                || category >= static_cast<std::uint32_t> (ProgramCategory::count)
+                || values > parameterCatalog.size())
+            {
+                error = "malformed UBNK section";
+                return {};
+            }
+            UserProgram program;
+            program.name = name;
+            program.category = static_cast<int> (category);
+            program.values.resize (parameterCatalog.size());
+            for (std::size_t p = 0; p < parameterCatalog.size(); ++p)
+                program.values[p] = parameterCatalog[p].initial;
+            for (std::uint32_t v = 0; v < values; ++v)
+            {
+                std::uint32_t bits = 0;
+                if (! takeU32 (section->data, at, bits))
+                {
+                    error = "malformed UBNK section";
+                    return {};
+                }
+                float value = 0.0f;
+                std::memcpy (&value, &bits, sizeof value);
+                if (! std::isfinite (value))
+                {
+                    error = "non-finite UBNK value";
+                    return {};
+                }
+                program.values[v] = std::clamp (value, parameterCatalog[v].minimum, parameterCatalog[v].maximum);
+            }
+            bank->push_back (std::move (program));
+        }
+        if (at != section->data.size())
+        {
+            error = "malformed UBNK section";
+            return {};
+        }
+    }
+
     auto values = std::make_shared<std::array<float, parameterCatalog.size()>>();
     for (std::size_t i = 0; i < values->size(); ++i)
         (*values)[i] = plain[i];
     ProductRestore restore;
     restore.sections.push_back (encodeParameters (values->data(), static_cast<int> (values->size())));
-    restore.apply = [this, values] {
+    preset::Section encoded;
+    encoded.tag = userBankTag;
+    putU32 (encoded.data, 1u);
+    putU32 (encoded.data, static_cast<std::uint32_t> (bank->size()));
+    for (const auto& program : *bank)
+    {
+        const auto utf8 = program.name.toRawUTF8();
+        const auto length = static_cast<std::uint32_t> (std::min<std::size_t> (std::strlen (utf8), 64));
+        putU32 (encoded.data, length);
+        for (std::uint32_t c = 0; c < length; ++c)
+            encoded.data.push_back (static_cast<std::byte> (utf8[c]));
+        putU32 (encoded.data, static_cast<std::uint32_t> (program.category));
+        putU32 (encoded.data, static_cast<std::uint32_t> (program.values.size()));
+        for (float value : program.values)
+        {
+            std::uint32_t bits = 0;
+            std::memcpy (&bits, &value, sizeof bits);
+            putU32 (encoded.data, bits);
+        }
+    }
+    restore.sections.push_back (std::move (encoded));
+    restore.apply = [this, values, bank] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
         {
             auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
@@ -371,6 +506,8 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
                 continue;
             parameter->setValueNotifyingHost (parameter->convertTo0to1 ((*values)[i]));
         }
+        const juce::ScopedLock lock (bankLock_);
+        userPrograms_ = *bank;
     };
     restore.settle = [this, values] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
@@ -380,6 +517,65 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         }
     };
     return restore;
+}
+
+int SynthesisProcessor::userProgramCount() const
+{
+    const juce::ScopedLock lock (bankLock_);
+    return static_cast<int> (userPrograms_.size());
+}
+
+juce::String SynthesisProcessor::userProgramName (int index) const
+{
+    const juce::ScopedLock lock (bankLock_);
+    if (index < 0 || index >= static_cast<int> (userPrograms_.size()))
+        return {};
+    return userPrograms_[static_cast<std::size_t> (index)].name;
+}
+
+int SynthesisProcessor::userProgramCategory (int index) const
+{
+    const juce::ScopedLock lock (bankLock_);
+    if (index < 0 || index >= static_cast<int> (userPrograms_.size()))
+        return 0;
+    return userPrograms_[static_cast<std::size_t> (index)].category;
+}
+
+bool SynthesisProcessor::saveUserProgram (const juce::String& name, int category)
+{
+    if (name.isEmpty() || category < 0 || category >= static_cast<int> (ProgramCategory::count))
+        return false;
+    UserProgram program;
+    program.name = name.substring (0, 64);
+    program.category = category;
+    program.values.resize (parameterCatalog.size());
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
+        program.values[i] = plainValue (*parameters_.getParameter (parameterCatalog[i].id));
+    const juce::ScopedLock lock (bankLock_);
+    if (static_cast<int> (userPrograms_.size()) >= maxUserPrograms)
+        return false;
+    userPrograms_.push_back (std::move (program));
+    return true;
+}
+
+bool SynthesisProcessor::loadUserProgram (int index)
+{
+    std::vector<float> values;
+    {
+        const juce::ScopedLock lock (bankLock_);
+        if (index < 0 || index >= static_cast<int> (userPrograms_.size()))
+            return false;
+        values = userPrograms_[static_cast<std::size_t> (index)].values;
+    }
+    for (std::size_t i = 0; i < parameterCatalog.size() && i < values.size(); ++i)
+    {
+        auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
+        if (parameter == nullptr)
+            continue;
+        const float clamped = std::clamp (values[i], parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
+    }
+    return true;
 }
 
 } // namespace vox::syn

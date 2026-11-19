@@ -1,42 +1,195 @@
 #include "SynthEditor.h"
 
+#include "FactoryBank.h"
+#include "Parameters.h"
 #include "Processor.h"
 
 namespace vox::syn {
 
 SynthPanel::SynthPanel (SynthesisProcessor& processor)
     : processor_ (processor),
-      levelA_ ("A Level"),
-      levelB_ ("B Level"),
-      output_ ("Output")
+      capacity_ ({}, "factory"),
+      load_ ("Load", vox::ui::VoxButton::Type::Primary),
+      save_ ("Save", vox::ui::VoxButton::Type::Secondary)
 {
-    auto& state = processor_.parameters();
-    engineA_.addItemList ({ "Psy Bass", "Acid", "VA" }, 1);
-    engineB_.addItemList ({ "Psy Bass", "Acid", "VA" }, 1);
-    for (auto* box : { &engineA_, &engineB_ })
-        addAndMakeVisible (box);
-    for (auto* knob : { &levelA_, &levelB_, &output_ })
-        addAndMakeVisible (knob);
+    capacity_.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (capacity_);
+    search_.setTextToShowWhenEmpty ("Search programs", juce::Colours::grey);
+    search_.onTextChange = [this] { refresh(); };
+    addAndMakeVisible (search_);
+    category_.addItem ("All", 1);
+    for (std::size_t i = 0; i < categoryNames.size(); ++i)
+        category_.addItem (categoryNames[i], static_cast<int> (i) + 2);
+    category_.setSelectedId (1, juce::dontSendNotification);
+    category_.onChange = [this] { refresh(); };
+    addAndMakeVisible (category_);
+    programs_.setModel (this);
+    programs_.setRowHeight (22);
+    addAndMakeVisible (programs_);
+    name_.setTextToShowWhenEmpty ("Program name", juce::Colours::grey);
+    addAndMakeVisible (name_);
+    load_.onClick = [this] { loadSelected(); };
+    save_.onClick = [this] { saveNamed(); };
+    addAndMakeVisible (load_);
+    addAndMakeVisible (save_);
 
-    engineAAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, "syn.a.engine", engineA_);
-    engineBAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, "syn.b.engine", engineB_);
-    levelAAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, "syn.a.level", levelA_.getSlider());
-    levelBAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, "syn.b.level", levelB_.getSlider());
-    outputAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, "syn.output", output_.getSlider());
+    auto& state = processor_.parameters();
+    juce::String lastGroup;
+    for (const auto& entry : parameterCatalog)
+    {
+        const juce::String id (entry.id);
+        const juce::String group = id.startsWith ("syn.a.") ? "Part A"
+                                 : id.startsWith ("syn.b.") ? "Part B"
+                                 : id.startsWith ("syn.fx.") ? "FX"
+                                                             : "Output";
+        if (group != lastGroup)
+        {
+            auto label = std::make_unique<juce::Label>();
+            label->setText (group, juce::dontSendNotification);
+            label->setJustificationType (juce::Justification::centredLeft);
+            page_.addAndMakeVisible (*label);
+            controls_.push_back (std::move (label));
+            lastGroup = group;
+        }
+        if (entry.choice)
+        {
+            auto box = std::make_unique<vox::ui::VoxComboBox>();
+            box->addItemList ({ "Psy Bass", "Acid", "VA" }, 1);
+            page_.addAndMakeVisible (*box);
+            combos_.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, entry.id, *box));
+            controls_.push_back (std::move (box));
+        }
+        else
+        {
+            auto knob = std::make_unique<vox::ui::VoxKnob> (entry.name, vox::ui::VoxKnob::Size::Small);
+            knob->setDoubleClickResetValue (entry.initial);
+            page_.addAndMakeVisible (*knob);
+            sliders_.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+                state, entry.id, knob->getSlider()));
+            controls_.push_back (std::move (knob));
+        }
+    }
+    viewport_.setViewedComponent (&page_, false);
+    viewport_.setScrollBarsShown (true, false);
+    addAndMakeVisible (viewport_);
+    refresh();
+}
+
+void SynthPanel::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::transparentBlack);
+}
+
+int SynthPanel::getNumRows()
+{
+    return static_cast<int> (visible_.size());
+}
+
+void SynthPanel::paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected)
+{
+    if (row < 0 || row >= static_cast<int> (visible_.size()))
+        return;
+    g.fillAll (selected ? juce::Colour (0xff1d3a4d) : juce::Colours::transparentBlack);
+    g.setColour (juce::Colours::white);
+    const int index = visible_[static_cast<std::size_t> (row)];
+    const auto category = categoryNames[static_cast<std::size_t> (processor_.userProgramCategory (index))];
+    g.drawText (processor_.userProgramName (index) + "  ·  " + category,
+                6, 0, width - 8, height, juce::Justification::centredLeft);
+}
+
+void SynthPanel::listBoxItemDoubleClicked (int, const juce::MouseEvent&)
+{
+    loadSelected();
+}
+
+void SynthPanel::refresh()
+{
+    visible_.clear();
+    const auto query = search_.getText().trim().toLowerCase();
+    const int selected = category_.getSelectedId();
+    const int wanted = selected <= 1 ? -1 : selected - 2;
+    for (int i = 0; i < processor_.userProgramCount(); ++i)
+    {
+        if (wanted >= 0 && processor_.userProgramCategory (i) != wanted)
+            continue;
+        if (query.isNotEmpty() && ! processor_.userProgramName (i).toLowerCase().contains (query))
+            continue;
+        visible_.push_back (i);
+    }
+    capacity_.setText ("Factory ready " + juce::String (factoryProgramsReady) + " / " + juce::String (factoryProgramCapacity)
+                           + "    Phrases ready " + juce::String (factoryPhrasesReady) + " / " + juce::String (factoryPhraseCapacity)
+                           + "    User " + juce::String (processor_.userProgramCount()),
+                       juce::dontSendNotification);
+    programs_.updateContent();
+    programs_.repaint();
+}
+
+void SynthPanel::loadSelected()
+{
+    const int row = programs_.getSelectedRow();
+    if (row < 0 || row >= static_cast<int> (visible_.size()))
+        return;
+    processor_.loadUserProgram (visible_[static_cast<std::size_t> (row)]);
+}
+
+void SynthPanel::saveNamed()
+{
+    const int category = category_.getSelectedId() <= 1
+                           ? static_cast<int> (ProgramCategory::user)
+                           : category_.getSelectedId() - 2;
+    if (processor_.saveUserProgram (name_.getText().trim(), category))
+        refresh();
 }
 
 void SynthPanel::resized()
 {
-    auto row = getLocalBounds().reduced (16);
-    auto combos = row.removeFromTop (36);
-    engineA_.setBounds (combos.removeFromLeft (220));
-    combos.removeFromLeft (12);
-    engineB_.setBounds (combos.removeFromLeft (220));
-    row.removeFromTop (12);
-    auto knobs = row.removeFromTop (120);
-    levelA_.setBounds (knobs.removeFromLeft (110));
-    levelB_.setBounds (knobs.removeFromLeft (110));
-    output_.setBounds (knobs.removeFromLeft (110));
+    auto area = getLocalBounds().reduced (8);
+    capacity_.setBounds (area.removeFromTop (22));
+    auto row = area.removeFromTop (28);
+    search_.setBounds (row.removeFromLeft (220));
+    row.removeFromLeft (8);
+    category_.setBounds (row.removeFromLeft (140));
+    row.removeFromLeft (8);
+    name_.setBounds (row.removeFromLeft (180));
+    row.removeFromLeft (8);
+    save_.setBounds (row.removeFromLeft (72));
+    row.removeFromLeft (8);
+    load_.setBounds (row.removeFromLeft (72));
+    area.removeFromTop (6);
+    programs_.setBounds (area.removeFromTop (120));
+    area.removeFromTop (8);
+    viewport_.setBounds (area);
+
+    const int columns = std::max (1, viewport_.getWidth() / 108);
+    const int cellW = 108;
+    const int cellH = 96;
+    int x = 0;
+    int y = 0;
+    int column = 0;
+    for (auto& control : controls_)
+    {
+        if (dynamic_cast<juce::Label*> (control.get()) != nullptr)
+        {
+            if (column != 0)
+                y += cellH;
+            control->setBounds (0, y, std::max (viewport_.getWidth(), 320), 22);
+            y += 24;
+            column = 0;
+            x = 0;
+            continue;
+        }
+        control->setBounds (x, y, cellW - 8, cellH - 8);
+        x += cellW;
+        if (++column >= columns)
+        {
+            column = 0;
+            x = 0;
+            y += cellH;
+        }
+    }
+    if (column != 0)
+        y += cellH;
+    page_.setSize (std::max (viewport_.getWidth(), columns * cellW), std::max (y, viewport_.getHeight()));
 }
 
 } // namespace vox::syn

@@ -264,7 +264,7 @@ void SynthEngine::startMono (int part, int note, float velocity, bool legato) no
         mono.amp = 0.0f;
         mono.svf.reset();
         mono.ladder[0] = mono.ladder[1] = mono.ladder[2] = mono.ladder[3] = 0.0f;
-        mono.pitchTotal = std::max (1, static_cast<int> (sampleRate_ * 0.018));
+        mono.pitchTotal = std::max (1, static_cast<int> (sampleRate_ * knobs.pitchSeconds));
         mono.pitchLeft = mono.pitchTotal;
     }
 }
@@ -359,7 +359,7 @@ void SynthEngine::releaseVa (int part, int channel, int note) noexcept
         if (voice.active && voice.part == part && voice.channel == channel && voice.note == note && ! voice.dying)
         {
             voice.gate = false;
-            voice.amp.startRelease (0.28, sampleRate_);
+            voice.amp.startRelease (live_[part].release, sampleRate_);
         }
 }
 
@@ -517,7 +517,8 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
     {
         const float saw = static_cast<float> (mono.osc.next (vstengine::dspcore::BlepOscillator::saw, increment));
         const float sub = static_cast<float> (mono.sub.next (vstengine::dspcore::BlepOscillator::sine, increment * 0.5));
-        sample = 0.82f * saw + 0.18f * sub;
+        const float subGain = std::clamp (params.sub, 0.0f, 1.0f);
+        sample = (1.0f - subGain) * saw + subGain * sub;
         sample = std::tanh (sample * (1.0f + 4.0f * params.drive));
         const float cutoff = 40.0f * std::pow (180.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
         sample = static_cast<float> (mono.svf.next (sample, cutoff, std::clamp (params.resonance, 0.0f, 1.0f), sampleRate_));
@@ -526,9 +527,11 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
     {
         const float saw = static_cast<float> (mono.osc.next (vstengine::dspcore::BlepOscillator::saw, increment));
         const float square = static_cast<float> (mono.square.next (vstengine::dspcore::BlepOscillator::square, increment));
-        sample = 0.70f * saw + 0.30f * square;
+        const float squareGain = std::clamp (params.square, 0.0f, 1.0f);
+        sample = (1.0f - squareGain) * saw + squareGain * square;
         sample = std::tanh (sample * (1.0f + 6.0f * params.drive * params.drive));
-        mono.filterEnv *= std::exp (-1.0f / static_cast<float> (sampleRate_ * (0.05 + 0.45 * (1.0f - params.cutoff))));
+        const float envScale = std::clamp (params.env, 0.05f, 1.0f);
+        mono.filterEnv *= std::exp (-1.0f / static_cast<float> (sampleRate_ * (0.05 + 0.45 * (1.0f - params.cutoff)) * envScale));
         if (mono.glide && mono.filterEnv < 0.35f)
         {
             const float rise = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.003));
@@ -602,14 +605,15 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params) noexcept
     const double bend = parts_[voice.part].bendSemis;
     const double frequency = std::min (sampleRate_ * 0.22, midiHz (static_cast<double> (voice.note) + bend));
     const double increment = frequency / sampleRate_;
+    const double detune = std::clamp (params.detuneCents, 0.0, 50.0);
     const float sawA = static_cast<float> (voice.oscA.next (vstengine::dspcore::BlepOscillator::saw, increment));
     const float sawB = static_cast<float> (voice.oscB.next (vstengine::dspcore::BlepOscillator::saw,
-                                                            increment * std::exp2 (8.0 / 1200.0)));
+                                                            increment * std::exp2 (detune / 1200.0)));
     const float sub = static_cast<float> (voice.sub.next (vstengine::dspcore::BlepOscillator::sine, increment * 0.5));
     voice.noise = voice.noise * 1664525u + 1013904223u;
     const float noise = (static_cast<float> (voice.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
-    float sample = 0.62f * sawA + 0.30f * sawB + 0.16f * sub + 0.04f * noise;
-    const float env = static_cast<float> (voice.amp.next (0.008, 0.25, 0.72, sampleRate_));
+    float sample = 0.62f * sawA + 0.30f * sawB + 0.16f * sub + std::clamp (params.noise, 0.0f, 1.0f) * noise;
+    const float env = static_cast<float> (voice.amp.next (params.attack, params.decay, params.sustain, sampleRate_));
     const float cutoff = 80.0f * std::pow (90.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
     sample = static_cast<float> (voice.svf.next (sample, cutoff, std::clamp (params.resonance, 0.0f, 1.0f), sampleRate_));
     sample *= env * voice.velocity * 0.4f * std::clamp (params.level, 0.0f, 1.0f);
