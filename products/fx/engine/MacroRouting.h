@@ -22,23 +22,35 @@ struct LfoSettings {
     bool valid() const noexcept {return std::isfinite(rate)&&rate>=.03125f&&rate<=16;}
     bool operator==(const LfoSettings&) const = default;
 };
+struct EventShape {
+    std::array<float,8> steps{0,.8f,.35f,1,.22f,.72f,.41f,0};
+    bool customAdsr=false;
+    float attack=.01f,decay=.1f,sustain=.65f,release=.005f;
+    bool valid() const noexcept {
+        const auto between=[](float v,float lo,float hi){return std::isfinite(v)&&v>=lo&&v<=hi;};
+        return std::all_of(steps.begin(),steps.end(),[&](float x){return between(x,0,1);})&&
+            between(attack,0,2)&&between(decay,0,2)&&between(sustain,0,1)&&between(release,.005f,2);
+    }
+    bool operator==(const EventShape&) const = default;
+};
 struct Config {
     std::array<mod::Route,64> routes{};
     std::uint32_t count=0;
     std::array<LfoSettings,2> lfos{{{.5f,false},{1,false}}};
     float randomRate=4;
     std::uint32_t randomSeed=0x57a3u;
+    EventShape event{};
     static bool supports(mod::Source src,mod::Destination dest) noexcept {
         return src<mod::Source::count&&dest<mod::Destination::count&&
             (!eventSource(src)||voiceDestination(dest))&&(src!=mod::Source::follower||!voiceDestination(dest));
     }
     bool valid() const noexcept {
-        if(count>routes.size()||!lfos[0].valid()||!lfos[1].valid()||!std::isfinite(randomRate)||randomRate<.03125f||randomRate>16)return false;
+        if(!event.valid()||count>routes.size()||!lfos[0].valid()||!lfos[1].valid()||!std::isfinite(randomRate)||randomRate<.03125f||randomRate>16)return false;
         for(std::size_t i=0;i<count;++i){const auto& r=routes[i];if(!r.valid()||!supports(r.source,r.destination))return false;}
         return true;
     }
     bool operator==(const Config& other) const noexcept {
-        if(count!=other.count||lfos!=other.lfos||randomRate!=other.randomRate||randomSeed!=other.randomSeed)return false;
+        if(count!=other.count||lfos!=other.lfos||randomRate!=other.randomRate||randomSeed!=other.randomSeed||event!=other.event)return false;
         for(std::size_t i=0;i<count;++i){const auto& a=routes[i];const auto& b=other.routes[i];
             if(a.source!=b.source||a.destination!=b.destination||a.depth!=b.depth||a.smoothingSeconds!=b.smoothingSeconds)return false;}
         return true;
@@ -70,7 +82,8 @@ struct Config {
 };
 namespace codec {
 inline constexpr std::size_t legacyWords=1+64*4;
-inline constexpr std::size_t wordCount=legacyWords+6;
+inline constexpr std::size_t clockWords=legacyWords+6;
+inline constexpr std::size_t wordCount=clockWords+13;
 using Words=std::array<std::uint32_t,wordCount>;
 inline bool toWords(const Config& config,Words& output) noexcept {
     if(!config.valid())return false;
@@ -80,6 +93,10 @@ inline bool toWords(const Config& config,Words& output) noexcept {
         next[at+2]=std::bit_cast<std::uint32_t>(route.depth);next[at+3]=std::bit_cast<std::uint32_t>(route.smoothingSeconds);}
     for(unsigned i=0;i<2;++i){next[legacyWords+2*i]=std::bit_cast<std::uint32_t>(config.lfos[i].rate);next[legacyWords+2*i+1]=config.lfos[i].sync?1:0;}
     next[legacyWords+4]=std::bit_cast<std::uint32_t>(config.randomRate);next[legacyWords+5]=config.randomSeed;
+    for(unsigned i=0;i<8;++i)next[clockWords+i]=std::bit_cast<std::uint32_t>(config.event.steps[i]);
+    next[clockWords+8]=config.event.customAdsr?1:0;
+    const float adsr[]{config.event.attack,config.event.decay,config.event.sustain,config.event.release};
+    for(unsigned i=0;i<4;++i)next[clockWords+9+i]=std::bit_cast<std::uint32_t>(adsr[i]);
     output=next;return true;
 }
 inline bool fromWords(const Words& words,Config& output) noexcept {
@@ -93,21 +110,29 @@ inline bool fromWords(const Words& words,Config& output) noexcept {
     for(unsigned i=0;i<2;++i){const auto mode=words[legacyWords+2*i+1];if(mode>1)return false;
         next.lfos[i]={std::bit_cast<float>(words[legacyWords+2*i]),mode==1};}
     next.randomRate=std::bit_cast<float>(words[legacyWords+4]);next.randomSeed=words[legacyWords+5];
+    for(unsigned i=0;i<8;++i)next.event.steps[i]=std::bit_cast<float>(words[clockWords+i]);
+    if(words[clockWords+8]>1)return false;
+    next.event.customAdsr=words[clockWords+8]!=0;
+    next.event.attack=std::bit_cast<float>(words[clockWords+9]);next.event.decay=std::bit_cast<float>(words[clockWords+10]);
+    next.event.sustain=std::bit_cast<float>(words[clockWords+11]);next.event.release=std::bit_cast<float>(words[clockWords+12]);
     if(!next.valid())return false;
     output=next;return true;
 }
 inline bool encode(const Config& config,std::vector<std::byte>& output) {
     Words words{};if(!toWords(config,words))return false;std::vector<std::byte> next;next.reserve((wordCount+1)*4);
     const auto append=[&](std::uint32_t v){for(int shift=0;shift<32;shift+=8)next.push_back(static_cast<std::byte>((v>>shift)&255));};
-    append(2);for(auto v:words)append(v);output=std::move(next);return true;
+    const bool shaped=config.event!=EventShape{};
+    append(shaped?3:2);for(std::size_t i=0;i<(shaped?wordCount:clockWords);++i)append(words[i]);
+    output=std::move(next);return true;
 }
 inline bool decode(std::span<const std::byte> bytes,Config& output) noexcept {
     if(bytes.size()<4)return false;
     auto read=[&](std::size_t i){std::uint32_t v=0;for(unsigned b=0;b<4;++b)v|=std::to_integer<std::uint32_t>(bytes[i*4+b])<<(8*b);return v;};
     const auto version=read(0);
-    if((version!=1&&version!=2)||bytes.size()!=4*(1+(version==1?legacyWords:wordCount)))return false;
+    const auto count=version==1?legacyWords:version==2?clockWords:version==3?wordCount:0;
+    if(count==0||bytes.size()!=4*(1+count))return false;
     Words words{};if(!toWords({},words))return false;
-    for(std::size_t i=0;i<(version==1?legacyWords:wordCount);++i)words[i]=read(i+1);
+    for(std::size_t i=0;i<count;++i)words[i]=read(i+1);
     Config next;
     if(!fromWords(words,next))return false;
     if(version==1)for(std::size_t i=0;i<next.count;++i){const auto r=next.routes[i];
@@ -132,6 +157,10 @@ public:
     }
     void restart(std::uint32_t salt=0) noexcept {
         for(auto& lfo:lfos_)lfo.reset();random_.reset(config_.randomSeed^salt);follower_=0;
+    }
+    bool hasCustomAdsr() const noexcept {return config_.event.customAdsr&&has(mod::Source::adsr);}
+    float noteReleaseSeconds() const noexcept {
+        return hasCustomAdsr()?config_.event.release:.005f;
     }
     bool active() const noexcept { return used_!=0; }
     bool routesFromFollower() const noexcept { return has(mod::Source::follower); }
@@ -158,10 +187,19 @@ public:
         if(voice_){
             event.phase=std::isfinite(event.phase)?std::clamp(event.phase,0.f,1.f):0.f;
             sources[at(mod::Source::phase)]=event.phase;sources[at(mod::Source::velocity)]=event.velocity;
-            constexpr float step[]{0,.8f,.35f,1,.22f,.72f,.41f,0};
-            sources[at(mod::Source::step)]=step[std::clamp(static_cast<int>(event.phase*8),0,7)];
-            const float envelope=event.ageSeconds<.01f?event.ageSeconds*100:std::max(.65f,1-(event.ageSeconds-.01f)*3.5f);
-            sources[at(mod::Source::adsr)]=envelope*event.release;
+            if(has(mod::Source::step))sources[at(mod::Source::step)]=config_.event.steps[std::clamp(static_cast<int>(event.phase*8),0,7)];
+            if(has(mod::Source::adsr)){
+                const auto& shape=config_.event;
+                if(shape.customAdsr){
+                    const auto age=std::isfinite(event.ageSeconds)?std::max(0.f,event.ageSeconds):0.f;
+                    const auto envelope=age<shape.attack?age/shape.attack:shape.decay>0?
+                        1-(1-shape.sustain)*std::clamp((age-shape.attack)/shape.decay,0.f,1.f):shape.sustain;
+                    sources[at(mod::Source::adsr)]=envelope*event.release;
+                }else{
+                    const float envelope=event.ageSeconds<.01f?event.ageSeconds*100:std::max(.65f,1-(event.ageSeconds-.01f)*3.5f);
+                    sources[at(mod::Source::adsr)]=envelope*event.release;
+                }
+            }
         }
         matrix_.sum(result,sources);return result;
     }

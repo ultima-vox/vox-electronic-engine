@@ -66,11 +66,27 @@ int main() {
     p.bars=16; std::vector<std::byte> barBytes; check(vox::fx::programcodec::encode(p,barBytes)&&vox::fx::programcodec::decode(barBytes,migrated)&&migrated.bars==16,"bar roundtrip");
     if(barBytes.size()<4) { std::printf("FAIL: bar fixture too short\n"); return 1; }
     auto invalidBars=barBytes;invalidBars[invalidBars.size()-soundBytes-12]=std::byte{3};check(!vox::fx::programcodec::decode(invalidBars,migrated)&&migrated.bars==16,"invalid bars rejected transactionally");
-    auto future=bytes;future[0]=std::byte{7};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
+    auto future=bytes;future[0]=std::byte{8};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
     auto invalidMode=bytes;invalidMode[invalidMode.size()-soundBytes-8]=std::byte{255};
     check(!vox::fx::programcodec::decode(invalidMode,q),"invalid playback mode rejected");
     auto invalidBool=bytes;invalidBool[4]=std::byte{2};check(!vox::fx::programcodec::decode(invalidBool,q),"invalid enabled rejected");
     auto extra=bytes;extra.push_back(std::byte{0});check(!vox::fx::programcodec::decode(extra,q),"trailing data rejected");
+    {
+        using namespace vox::fx;
+        NoiseProgram granular;granular.layers[0].family=NoiseFamily::granular;
+        std::vector<std::byte> v6,v7,canonical;
+        check(programcodec::encode(granular,v6)&&v6[0]==std::byte{6},"default grains retain FPRG6");
+        granular.layers[0].grains={47.5f,.37f,true};
+        NoiseProgram roundtrip;
+        check(programcodec::encode(granular,v7)&&v7[0]==std::byte{7}&&programcodec::decode(v7,roundtrip)&&
+              roundtrip.layers[0].grains==granular.layers[0].grains&&programcodec::encode(roundtrip,canonical)&&canonical==v7,"FPRG7 canonical roundtrip");
+        auto bad=v7;bad[bad.size()-programcodec::grainBytes+8]=std::byte{2};
+        check(!programcodec::decode(bad,roundtrip)&&roundtrip.layers[0].grains==granular.layers[0].grains,"FPRG7 rejects invalid reverse word");
+        check(!programcodec::decode(std::span(v7).first(v7.size()-1),roundtrip),"FPRG7 rejects truncation");
+        check(programcodec::decode(v6,roundtrip)&&roundtrip.layers[0].grains==source::GrainShape{},"FPRG6 migrates to 80 ms seeded forward");
+        granular.layers[0].grains.position=-.5f;
+        check(!programcodec::encode(granular,canonical)&&canonical==v7,"invalid grain position rejected transactionally");
+    }
     p.layers[0].gain=std::numeric_limits<float>::quiet_NaN();
     check(!vox::fx::programcodec::encode(p,again)&&again==before,"invalid encode is transactional");
     std::mt19937 gen(42);for(int i=0;i<10000;++i){std::vector<std::byte> junk(static_cast<std::size_t>(gen()%512));

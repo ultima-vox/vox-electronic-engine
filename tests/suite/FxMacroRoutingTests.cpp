@@ -22,7 +22,32 @@ int main(){
     check(!codec::decode(unknown,restored)&&restored==config,"unsupported source rejected transactionally");
     for(std::size_t n=0;n<encoded.size();++n)
         check(!codec::decode(std::span(encoded).first(n),restored),"truncated route state rejected");
-    auto future=encoded;future[0]=std::byte{3};check(!codec::decode(future,restored)&&restored==config,"future state rejected transactionally");
+    auto future=encoded;future[0]=std::byte{4};check(!codec::decode(future,restored)&&restored==config,"future state rejected transactionally");
+    {
+        using namespace vox::fx::mod;
+        auto v1=encoded;v1.resize((codec::legacyWords+1)*4);v1[0]=std::byte{1};
+        Config migrated;
+        check(encoded[0]==std::byte{2}&&codec::decode(encoded,migrated)&&migrated.event==EventShape{},"FMOD2 preserves default shape");
+        check(codec::decode(v1,migrated)&&migrated.event==EventShape{},"FMOD1 migrates default shape");
+        Config shaped;
+        shaped.event={{.1f,.2f,.3f,.4f,.5f,.6f,.7f,.8f},true,.02f,.1f,.25f,.4f};
+        check(shaped.put(0,{Source::step,Destination::layerPan,1,0})&&shaped.put(1,{Source::adsr,Destination::pitch,1,0}),"separate step and ADSR route targets");
+        std::vector<std::byte> v3;
+        check(codec::encode(shaped,v3)&&v3[0]==std::byte{3}&&codec::decode(v3,migrated)&&migrated==shaped,"FMOD3 roundtrip");
+        auto broken=v3;broken[4*(1+codec::clockWords+8)]=std::byte{2};
+        check(!codec::decode(broken,migrated)&&migrated==shaped,"FMOD3 rejects invalid toggle transactionally");
+        check(!codec::decode(std::span(v3).first(v3.size()-1),migrated)&&migrated==shaped,"FMOD3 rejects truncation");
+        Runtime event;check(event.prepare(48000)&&event.setConfig(shaped,true),"configure custom event runtime");
+        const auto close=[](float a,float b){return std::abs(a-b)<1e-6f;};
+        std::array<float,8> neutral{};
+        for(unsigned i=0;i<8;++i){
+            const auto values=event.evaluate(neutral,0,{(i+.5f)/8,1,.01f,1});
+            check(close(values[Runtime::at(Destination::layerPan)],shaped.event.steps[i]),"step boundary maps authored cell");
+            check(close(values[Runtime::at(Destination::pitch)],.5f),"ADSR half-attack");
+        }
+        const auto adsr=[&](float age,float release){return event.evaluate(neutral,0,{1,1,age,release})[Runtime::at(Destination::pitch)];};
+        check(close(adsr(.02f,1),1)&&close(adsr(.07f,1),.625f)&&close(adsr(1,1),.25f)&&close(adsr(.07f,.5f),.3125f),"attack peak, decay, sustain and release scaling");
+    }
     std::array<float,8> macros{};macros.fill(.5f);macros[0]=1;macros[7]=1;
     Runtime runtime;check(runtime.prepare(48000)&&runtime.setConfig(config),"prepare macro routing");
     auto before=runtime.process(.5f,macros);check(before<.5f,"bipolar negative route and smoothed positive route");

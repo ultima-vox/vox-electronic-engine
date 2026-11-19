@@ -49,6 +49,21 @@ int main(){
         check(interior>0&&edge<interior*.35,"mode cycle boundary is click-managed across sample rates");
     }
     vox::fx::NoiseProgram longProgram;longProgram.mode=vox::fx::PlayMode::continuous;
+    {
+        using namespace vox::fx;
+        auto held=std::make_unique<NoiseRiser>();held->prepare(8000);
+        NoiseProgram custom;custom.mode=PlayMode::continuous;
+        macro::Config shape;shape.event.customAdsr=true;shape.event.release=.25f;
+        check(shape.put(0,{mod::Source::adsr,mod::Destination::pitch,.5f,0})&&
+              held->setVoiceMotion(shape)&&held->setProgram(custom),"configure held ADSR release");
+        check(held->noteOn(1,60,1,1),"held ADSR note");render(*held,400);
+        held->noteOff(1,60);render(*held,1999);
+        check(held->activeEventCount()==1,"captured ADSR release lasts configured duration");
+        render(*held,1);check(held->activeEventCount()==0,"ADSR release ends at sample boundary");
+        check(held->noteOn(1,60,1,1),"second held note");render(*held,200);
+        held->noteOff(1,60);render(*held,100);held->allSoundOff(0);render(*held,40);
+        check(held->activeEventCount()==0,"panic shortens in-flight musical release to 5 ms");
+    }
     auto longContinuousOwner=std::make_unique<vox::fx::NoiseRiser>();auto& longContinuous=*longContinuousOwner;longContinuous.prepare(8000);longContinuous.setProgram(longProgram);
     check(longContinuous.noteOn(1,60,.8f,32.0),"32-second continuous event starts");render(longContinuous,33*8000);
     check(longContinuous.activeEventCount()==1,"continuous mode remains alive beyond the legacy 32-second timeline");

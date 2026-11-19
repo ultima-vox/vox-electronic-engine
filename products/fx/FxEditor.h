@@ -89,6 +89,10 @@ public:
     juce::ComboBox& sourceSelector() noexcept {return source_;}
     juce::ComboBox& destinationSelector() noexcept {return destination_;}
     juce::TextButton& applyButton() noexcept {return apply_;}
+    juce::Slider& stepLevel(std::size_t i) noexcept {return steps_[i];}
+    juce::TextButton& applyShapeButton() noexcept {return shapeApply_;}
+    juce::ToggleButton& customAdsrButton() noexcept {return customAdsr_;}
+    juce::Slider& adsrValue(std::size_t i) noexcept {return adsr_[i];}
 private:
     int getNumRows() override;
     void paintListBoxItem(int,juce::Graphics&,int,int,bool) override;
@@ -101,6 +105,11 @@ private:
     StructuralSlider depth_,smooth_,randomRate_,randomSeed_;
     std::array<StructuralSlider,2> lfoRate_;
     std::array<juce::ToggleButton,2> sync_;
+    std::array<juce::Slider,8> steps_;
+    std::array<juce::Slider,4> adsr_;
+    juce::Label shapeTitle_;
+    juce::ToggleButton customAdsr_{"Custom ADSR"};
+    juce::TextButton shapeApply_{"Apply shape"},resetShape_{"Reset shape"};
     juce::TextButton apply_{"Apply route"},remove_{"Delete route"},clock_{"Apply clocks"},reload_{"Reload"},close_{"Close"};
     juce::Label status_,title_,routeHelp_;
 };
@@ -115,11 +124,13 @@ public:
     juce::ComboBox& rootSelector() noexcept { return root_; }
     juce::ComboBox& typeSelector(std::size_t slot) noexcept { return filters_[slot].type; }
     juce::Slider& cutoffSlider(std::size_t slot) noexcept { return filters_[slot].hz; }
+    juce::Slider& grainLengthSlider() noexcept {return grainLength_;}
 private:
     struct FilterRow { juce::ComboBox type, slope; StructuralSlider hz, q; };
     FxProcessor& processor_;
     juce::ComboBox layer_, root_, scale_;
-    StructuralSlider transpose_,character_;
+    StructuralSlider transpose_,character_,grainLength_,grainPosition_;
+    juce::ToggleButton scatter_{"Scatter"},reverse_{"Reverse"};
     juce::Label characterLabel_;
     std::array<FilterRow,2> filters_;
     juce::TextButton close_{"Close"};

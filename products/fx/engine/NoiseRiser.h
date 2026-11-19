@@ -32,10 +32,11 @@ struct NoiseLayer {
     timeline::Curve pitchCurve = timeline::Curve::constant(0.5f);
     timeline::Curve cutoffCurve = timeline::Curve::constant(0.5f);
     std::array<source::Filter,2> filters{};
+    source::GrainShape grains{};
     float character = 0; // signed, family-specific; zero is the legacy sound
     float transpose = 0; // semitones; authored bias for pitched sources
     bool valid() const noexcept {
-        if(!std::isfinite(character)||character< -1||character>1)return false;
+        if(!grains.valid()||!std::isfinite(character)||character< -1||character>1)return false;
         if(!std::isfinite(transpose)||transpose< -24||transpose>24||!filters[0].valid()||!filters[1].valid())return false;
         return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::granular) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
@@ -280,7 +281,7 @@ public:
         const auto ticket = ++key.released;
         for (auto& v : voices_)
             if (v.active && v.channel == channel && v.note == note && v.source == TriggerSource::midi &&
-                v.noteTicket == ticket && v.releaseRemaining == 0 && isHeldMode(v.program.mode)) { beginRelease(v); break; }
+                v.noteTicket == ticket && v.releaseRemaining == 0 && isHeldMode(v.program.mode)) { beginRelease(v,true); break; }
     }
     void allSoundOff(int channel) noexcept {
         if (channel < 0 || channel > 16) return;
@@ -351,6 +352,7 @@ private:
         double target = 0, targetSpan = 0, lastPhase = 0;
         bool continuousStarted = false;
         int releaseRemaining = 0, releaseLength = 0;
+        double releaseStart=1;unsigned releaseAge=0;
         NoiseProgram program;
         macro::Runtime motion;
         unsigned motionAge=0;
@@ -359,10 +361,18 @@ private:
     static double layerTranspose(const LayerState& layer,double global,double local) noexcept {
         return layer.transposeRatio*std::exp2(((global-.5)+(local-.5))*4.0);
     }
-    void beginRelease(Voice& v) noexcept {
-        if (v.releaseRemaining != 0) return;
-        v.releaseLength = std::max(1, static_cast<int>(rate_ * 0.005));
-        v.releaseRemaining = v.releaseLength;
+    void beginRelease(Voice& v,bool musical=false) noexcept {
+        const auto hard=std::max(1,static_cast<int>(rate_*.005));
+        if(v.releaseRemaining!=0){
+            if(musical||v.releaseRemaining<=hard)return;
+            // Shorten a musical tail on panic/steal without jumping gain.
+            v.releaseStart*=static_cast<double>(v.releaseRemaining)/v.releaseLength;
+            v.releaseLength=v.releaseRemaining=hard;
+            return;
+        }
+        v.releaseAge=v.motionAge;
+        v.releaseLength=v.releaseRemaining=musical&&v.motion.hasCustomAdsr()?
+            std::max(hard,static_cast<int>(rate_*v.motion.noteReleaseSeconds())):hard;
     }
     void tick(Voice& v, double& left, double& right, std::size_t voiceIndex, double ppq) noexcept {
         if (!v.active) return;
@@ -403,16 +413,19 @@ private:
         }
         if(!advanced){v.active=false;return;}
         double release = 1.0;
-        if (v.releaseRemaining > 0) {
-            release = static_cast<double>(v.releaseRemaining) / v.releaseLength;
+        const bool releasing=v.releaseRemaining>0;
+        if (releasing) {
+            release = v.releaseStart * static_cast<double>(v.releaseRemaining) / v.releaseLength;
             if (--v.releaseRemaining == 0) v.active = false;
         }
         using D=mod::Destination;
         const bool hasMotion=v.motion.active();
         const auto movement=hasMotion?([&]{
             v.motion.setTempo(tempo_);
+            const auto age=releasing&&v.motion.hasCustomAdsr()?v.releaseAge:v.motionAge;
+            ++v.motionAge;
             return v.motion.evaluate(macroBases_,0,{static_cast<float>(eventPhase),v.velocity,
-                static_cast<float>(v.motionAge++/rate_),static_cast<float>(release)});
+                static_cast<float>(age/rate_),static_cast<float>(release)});
         })():mod::Destinations{};
         const auto offsetOf=[&](D dst){return std::clamp(static_cast<double>(movement[macro::Runtime::at(dst)]),-1.0,1.0);};
         const double pitchOffset=offsetOf(D::pitch),cutoffOffset=offsetOf(D::cutoff),qOffset=offsetOf(D::resonance);
@@ -483,10 +496,13 @@ private:
                         grain.active=true; ++activeGrains_; grain.voiceIndex=voiceIndex; grain.layerIndex=i; grain.serial=v.serial;
                         const auto& lease=sampleLeases_[voiceIndex];
                         const auto length=lease.data()?lease.frames():sample_.size();
-                        grain.position=static_cast<double>(layer.rng % length);
+                        grain.position=settings.grains.position<0?static_cast<double>(layer.rng % length):
+                            static_cast<double>(settings.grains.position)*(length-1);
                         const auto ratio=std::clamp(layer.tunedHz / noteHz_[60] * pitchRatio, 0.25, 4.0);
                         grain.speed=lease.data()?samplePlaybackStep(lease.rate(),rate_,ratio):ratio;
-                        grain.age=0; grain.length=grainLength_; break;
+                        if(settings.grains.reverse)grain.speed=-grain.speed;
+                        grain.age=0; grain.length=settings.grains.milliseconds==80?grainLength_:
+                            static_cast<unsigned>(std::max(2.,rate_*(settings.grains.milliseconds/1000.)));break;
                     }
                     const auto density=std::clamp(grainRate+character,-1.,1.);
                     layer.grainCountdown=density==0?grainInterval_:static_cast<unsigned>(std::max(1.0,grainInterval_*std::exp2(-density)));
@@ -729,7 +745,10 @@ private:
                 right+=sample*std::min(1.0,1.0+layer.grainPan);
             }
             grain.position+=grain.speed;
-            if (grain.position >= length) grain.position=std::fmod(grain.position,static_cast<double>(length));
+            if (grain.position >= length || grain.position < 0){
+                grain.position=std::fmod(grain.position,static_cast<double>(length));
+                if(grain.position<0)grain.position+=length;
+            }
             if (++grain.age >= grain.length) { grain.active=false; --activeGrains_; }
         }
         const auto mixFiltered=[&](auto& voices){

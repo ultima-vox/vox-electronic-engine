@@ -8,12 +8,14 @@ int main(){
     int errors=0;const auto check=[&](bool pass,const char* what){if(!pass){std::printf("FAIL: %s\n",what);++errors;}};
     portable::Sound a,b;
     a.state.program.layers[0].transpose=11;
+    a.state.program.layers[1].grains={95,.8f,true};
+    a.state.macros.event={{.3f,.2f,.4f,.5f,.3f,.7f,.8f,1.f},true,.03f,.27f,.43f,.511f};
     a.state.pattern.steps[0]={true,53,97,71,4};
     a.state.effects=effects::pack({effects::Type::reverb,.22f,.71f});
     a.state.macros.setGainRoute(0,-.3f,.02f);
     std::vector<std::byte> bytes,roundtrip;
     check(portable::encode(a,bytes)&&portable::decode(bytes,b)&&portable::encode(b,roundtrip)&&bytes==roundtrip,"deterministic portable round trip");
-    check(b.state.program.layers[0].transpose==11&&b.state.pattern.steps[0].ratchets==4&&b.state.macros==a.state.macros,"portable authored sections restored");
+    check(b.state.program.layers[0].transpose==11&&b.state.program.layers[1].grains==a.state.program.layers[1].grains&&b.state.pattern.steps[0].ratchets==4&&b.state.macros==a.state.macros,"portable authored sections restored");
     check(effects::unpack(static_cast<std::uint16_t>(b.state.effects)).type==effects::Type::reverb&&bytes.size()>0,"effect topology retained without automated values");
     for(std::size_t n=0;n<bytes.size();++n)check(!portable::decode(std::span(bytes).first(n),b),"reject every truncation");
     if(!bytes.empty())bytes.back()^=std::byte{1};

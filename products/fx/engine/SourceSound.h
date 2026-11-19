@@ -21,6 +21,16 @@ struct Tonality {
         return midi;
     }
 };
+struct GrainShape {
+    float milliseconds=80;
+    float position=-1; // -1 = legacy seeded scatter, [0, 1] = fixed start
+    bool reverse=false;
+    bool valid() const noexcept {
+        return std::isfinite(milliseconds)&&milliseconds>=10&&milliseconds<=180&&
+            (position==-1||(std::isfinite(position)&&position>=0&&position<=1));
+    }
+    bool operator==(const GrainShape&) const = default;
+};
 enum class FilterType : std::uint8_t { off, lowpass, highpass, bandpass, notch };
 struct Filter {
     FilterType type = FilterType::off;

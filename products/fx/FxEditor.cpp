@@ -228,6 +228,19 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
         addAndMakeVisible(sync_[i]);addAndMakeVisible(lfoRate_[i]);
     }
     randomRate_.setNumDecimalPlacesToDisplay(4);
+    shapeTitle_.setText("EVENT SHAPE — eight equal phase steps (0–100%)",juce::dontSendNotification);
+    for(std::size_t i=0;i<steps_.size();++i){
+        auto& step=steps_[i];step.setRange(0,100,.01);step.setTitle("Step "+juce::String(static_cast<int>(i+1)));
+        step.setTooltip(step.getTitle());step.setSliderStyle(juce::Slider::LinearVertical);
+        step.setTextBoxStyle(juce::Slider::TextBoxBelow,false,57,19);addAndMakeVisible(step);
+    }
+    constexpr const char* names[]{"Attack","Decay","Sustain","Release"};
+    for(std::size_t i=0;i<adsr_.size();++i){
+        auto& a=adsr_[i];slider(a,i==3?5:0,i==2?100:2000,.01,names[i],i==2?" %":" ms");addAndMakeVisible(a);
+    }
+    customAdsr_.setTooltip("Custom NoteOff release applies to held voices with an ADSR route. Panic still fades in 5 ms.");
+    shapeApply_.onClick=[this]{commit(3);};resetShape_.onClick=[this]{commit(4);};
+    for(auto* c:std::array<juce::Component*,4>{&shapeTitle_,&customAdsr_,&shapeApply_,&resetShape_})addAndMakeVisible(*c);
     apply_.onClick=[this]{commit(0);};remove_.onClick=[this]{commit(1);};clock_.onClick=[this]{commit(2);};
     reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);};
     const std::array<juce::Component*,15> components{&title_,&routeHelp_,&rows_,&source_,&destination_,&depth_,&smooth_,&randomRate_,&randomSeed_,&status_,&apply_,&remove_,&clock_,&reload_,&close_};
@@ -263,6 +276,11 @@ void MotionPanel::refresh(int row){
         lfoRate_[i].setValue(lfo.rate,juce::dontSendNotification);sync_[i].setToggleState(lfo.sync,juce::dontSendNotification);
         lfoRate_[i].setTextValueSuffix(lfo.sync?" cyc/qn":" Hz");}
     randomRate_.setValue(shown_.config.randomRate,juce::dontSendNotification);randomSeed_.setValue(shown_.config.randomSeed,juce::dontSendNotification);
+    const auto& e=shown_.config.event;
+    for(std::size_t i=0;i<steps_.size();++i)steps_[i].setValue(e.steps[i]*100,juce::dontSendNotification);
+    const double values[]{e.attack*1000,e.decay*1000,e.sustain*100,e.release*1000};
+    for(std::size_t i=0;i<adsr_.size();++i)adsr_[i].setValue(values[i],juce::dontSendNotification);
+    customAdsr_.setToggleState(e.customAdsr,juce::dontSendNotification);
     status_.setText(juce::String(shown_.config.count)+" / 64 routes",juce::dontSendNotification);
 }
 void MotionPanel::commit(int action){
@@ -273,10 +291,15 @@ void MotionPanel::commit(int action){
         if(row<0||!next.put(static_cast<std::size_t>(row),route)){
             status_.setText("Unsupported source/target pairing, or no free row.",juce::dontSendNotification);return;}
     }else if(action==1){if(row<0||!next.erase(static_cast<std::size_t>(row)))return;}
-    else {
+    else if(action==2) {
         for(unsigned i=0;i<2;++i)next.lfos[i]={static_cast<float>(lfoRate_[i].getValue()),sync_[i].getToggleState()};
         next.randomRate=static_cast<float>(randomRate_.getValue());next.randomSeed=static_cast<std::uint32_t>(randomSeed_.getValue());
-    }
+    }else if(action==3){
+        for(std::size_t i=0;i<steps_.size();++i)next.event.steps[i]=static_cast<float>(steps_[i].getValue()*.01);
+        next.event.customAdsr=customAdsr_.getToggleState();
+        next.event.attack=static_cast<float>(adsr_[0].getValue()*.001);next.event.decay=static_cast<float>(adsr_[1].getValue()*.001);
+        next.event.sustain=static_cast<float>(adsr_[2].getValue()*.01);next.event.release=static_cast<float>(adsr_[3].getValue()*.001);
+    }else next.event={};
     if(!processor_.replaceMotionIfCurrent(shown_,next)){
         refresh();status_.setText("Program or routes changed. Old edit was not applied.",juce::dontSendNotification);return;}
     refresh(row);
@@ -285,6 +308,7 @@ void MotionPanel::paint(juce::Graphics& g){
     namespace c=vox::ui::tokens::colour;
     g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());g.setColour(c::text);
     g.setFont(juce::FontOptions(12.f));
+    for(const auto& slider:adsr_)g.drawText(slider.getTitle(),slider.getBounds().translated(0,-21),juce::Justification::centredLeft);
     for(auto entry:std::array<std::pair<const char*,juce::Component*>,6>{{{"Depth",&depth_},{"Smoothing",&smooth_},
         {"LFO 1",&lfoRate_[0]},{"LFO 2",&lfoRate_[1]},{"S&H rate",&randomRate_},{"S&H seed",&randomSeed_}}}){
         const auto r=entry.second->getBounds();g.drawText(entry.first,r.getX()-86,r.getY(),82,r.getHeight(),juce::Justification::centredLeft);}
@@ -293,6 +317,16 @@ void MotionPanel::resized(){
     auto a=getLocalBounds().reduced(12);title_.setBounds(a.removeFromTop(23));routeHelp_.setBounds(a.removeFromTop(24));
     auto footer=a.removeFromBottom(32);
     close_.setBounds(footer.removeFromRight(76).reduced(2));reload_.setBounds(footer.removeFromRight(76).reduced(2));status_.setBounds(footer);
+    auto shape=a.removeFromBottom(161);
+    shapeTitle_.setBounds(shape.removeFromTop(20));
+    auto meters=shape.removeFromTop(68);
+    for(auto& step:steps_)step.setBounds(meters.removeFromLeft(getWidth()/9).reduced(2));
+    shape.removeFromTop(17);auto envelope=shape.removeFromTop(28);
+    for(auto& slider:adsr_){
+        const auto width=(getWidth()-24)/4;
+        slider.setBounds(envelope.removeFromLeft(width).reduced(2));
+    }
+    customAdsr_.setBounds(shape.removeFromLeft(163));shapeApply_.setBounds(shape.removeFromLeft(113).reduced(2));resetShape_.setBounds(shape.removeFromLeft(113).reduced(2));
     rows_.setBounds(a.removeFromLeft(a.getWidth()/2).reduced(2));auto form=a.reduced(6,0);
     source_.setBounds(form.removeFromTop(30).reduced(2));destination_.setBounds(form.removeFromTop(30).reduced(2));
     depth_.setBounds(form.removeFromTop(29).withTrimmedLeft(86).reduced(2));smooth_.setBounds(form.removeFromTop(29).withTrimmedLeft(86).reduced(2));
@@ -325,6 +359,14 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     slider(character_,-100,100,.1,"Source character (relative to legacy)"," %");
     character_.onStructuralChange=[this]{const auto value=static_cast<float>(character_.getValue()*.01);editLayer([=](NoiseLayer& l){l.character=value;});};
     addAndMakeVisible(characterLabel_);
+    slider(grainLength_,10,180,.1,"Grain length"," ms");slider(grainPosition_,0,100,.1,"Grain start"," %");
+    grainLength_.onStructuralChange=[this]{const auto value=static_cast<float>(grainLength_.getValue());editLayer([=](auto& l){l.grains.milliseconds=value;});};
+    const auto setPosition=[this]{const float value=scatter_.getToggleState()?-1.f:static_cast<float>(grainPosition_.getValue()*.01);
+        editLayer([=](auto& l){l.grains.position=value;});};
+    grainPosition_.onStructuralChange=setPosition;scatter_.onClick=setPosition;
+    reverse_.onClick=[this]{const auto checked=reverse_.getToggleState();editLayer([=](auto& l){l.grains.reverse=checked;});};
+    scatter_.setTooltip("Use a seeded random grain start instead of a fixed percentage of the source");
+    addAndMakeVisible(scatter_);addAndMakeVisible(reverse_);
     constexpr const char* types[]{"Off","Low-pass","High-pass","Band-pass","Notch"};
     for(std::size_t i=0;i<filters_.size();++i){
         auto& f=filters_[i];options(f.type,types);f.slope.addItem("12 dB/oct",1);f.slope.addItem("24 dB/oct",2);
@@ -367,6 +409,12 @@ void SourcePanel::refresh(){
     characterLabel_.setText(name,juce::dontSendNotification);character_.setTitle(name);
     if(!character_.isMouseButtonDown())character_.setValue(layer.character*100,juce::dontSendNotification);
     if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
+    const bool granular=layer.family==NoiseFamily::granular;
+    for(auto* c:std::array<juce::Component*,4>{&grainLength_,&grainPosition_,&scatter_,&reverse_})c->setVisible(granular);
+    scatter_.setToggleState(layer.grains.position<0,juce::dontSendNotification);reverse_.setToggleState(layer.grains.reverse,juce::dontSendNotification);
+    grainPosition_.setEnabled(layer.grains.position>=0);
+    if(!grainPosition_.isMouseButtonDown())grainPosition_.setValue(std::max(0.f,layer.grains.position)*100,juce::dontSendNotification);
+    if(!grainLength_.isMouseButtonDown())grainLength_.setValue(layer.grains.milliseconds,juce::dontSendNotification);
     for(std::size_t i=0;i<filters_.size();++i){
         const auto& value=layer.filters[i];auto& f=filters_[i];
         f.type.setSelectedId(static_cast<int>(value.type)+1,juce::dontSendNotification);
@@ -386,6 +434,7 @@ void SourcePanel::paint(juce::Graphics& g){
     g.drawText("FILTER     TYPE                     SLOPE                   CUTOFF                                           RESONANCE",a.removeFromTop(20),juce::Justification::centredLeft);
     g.drawText("A",a.removeFromTop(31),juce::Justification::centredLeft);
     g.drawText("B",a.removeFromTop(31),juce::Justification::centredLeft);
+    if(grainLength_.isVisible())g.drawText("GRAIN      Length                                Start",a.removeFromTop(22),juce::Justification::centredLeft);
 }
 void SourcePanel::resized(){
     auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
@@ -397,6 +446,9 @@ void SourcePanel::resized(){
     for(auto& f:filters_){auto row=a.removeFromTop(31);row.removeFromLeft(28);
         f.type.setBounds(row.removeFromLeft(118).reduced(2));f.slope.setBounds(row.removeFromLeft(110).reduced(2));
         f.hz.setBounds(row.removeFromLeft(row.getWidth()/2).reduced(2));f.q.setBounds(row.reduced(2));}
+    a.removeFromTop(20);auto grains=a.removeFromTop(32);
+    grainLength_.setBounds(grains.removeFromLeft(207).reduced(2));grainPosition_.setBounds(grains.removeFromLeft(194).reduced(2));
+    scatter_.setBounds(grains.removeFromLeft(104));reverse_.setBounds(grains.removeFromLeft(93));
     close_.setBounds(a.removeFromBottom(28).removeFromRight(92));
 }
 namespace {
@@ -1073,8 +1125,8 @@ void FxPanel::resized()
     row.removeFromTop(247);
     row.removeFromBottom(120);
     generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(768,372));
-    sourcePanel_.setBounds(getLocalBounds().withSizeKeepingCentre(665,247));
-    motionPanel_.setBounds(getLocalBounds().withSizeKeepingCentre(848,434));
+    sourcePanel_.setBounds(getLocalBounds().withSizeKeepingCentre(665,301));
+    motionPanel_.setBounds(getLocalBounds().withSizeKeepingCentre(848,580));
     browser_.setBounds(getLocalBounds().withSizeKeepingCentre(920,456));
     wavOptions_.setBounds(getLocalBounds().withSizeKeepingCentre(470,232));
     programCurves_.setBounds(row.reduced(3));

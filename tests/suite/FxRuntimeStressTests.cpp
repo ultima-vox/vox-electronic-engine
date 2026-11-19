@@ -3,6 +3,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#if defined(__linux__)
+#include <time.h>
+#endif
 #include <memory>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -13,6 +17,13 @@ extern "C" unsigned long voxFxLockEnd();
 #endif
 
 namespace {
+double threadMicros() noexcept {
+#if defined(__linux__)
+    timespec t{};
+    if(clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t)==0)return t.tv_sec*1e6+t.tv_nsec*.001;
+#endif
+    return -1;
+}
 struct Clock final : juce::AudioPlayHead {
     juce::Optional<PositionInfo> getPosition() const override {return position;}
     void advance(std::int64_t at,double rate){
@@ -26,6 +37,10 @@ int main(){
     using namespace vox::fx;
     juce::ScopedJuceInitialiser_GUI init;
     int errors=0;
+    const bool shapes=std::getenv("VOX_FX_STRESS_AUTHORED")!=nullptr;
+    const bool splitTiming=std::getenv("VOX_FX_TIMING_THREAD_CPU")!=nullptr&&threadMicros()>=0;
+    if(shapes)std::puts("Non-default grain shape, step and held ADSR routes");
+    if(splitTiming)std::puts("Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation");
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
     std::printf("Allocation probe available: %s\n",voxProbeAvailable()?"yes":"no");
 #else
@@ -42,6 +57,10 @@ int main(){
         auto fx=std::make_unique<FxProcessor>();fx->prepareToPlay(rate,frames);
         NoiseProgram p;p.mode=PlayMode::gate;
         for(auto& l:p.layers){l.enabled=true;l.family=NoiseFamily::granular;l.filters[0]={source::FilterType::lowpass,4800,.71f,2};}
+        if(shapes){
+            p.layers[0].grains={90,.43f,true};p.layers[1].grains={118,-1,true};
+            p.layers[2].grains={106,.8f,false};p.layers[3].grains={131,-1,false};
+        }
         fx->setProgram(p);
         Clock clock;
         if(patternOn){
@@ -54,12 +73,20 @@ int main(){
         auto motion=fx->versionedMotion();auto cfg=motion.config;
         for(unsigned i=0;i<64;++i)(void)cfg.put(i,{i%2?mod::Source::macro1:mod::Source::lfo1,
             i%3==0?mod::Destination::grainRate:i%3==1?mod::Destination::width:mod::Destination::amount1,.005f,.002f});
+        if(shapes){
+            cfg.event={{.21f,.78f,.46f,.11f,.64f,.3f,.73f,.42f},true,.04f,.23f,.53f,.25f};
+            if(!cfg.put(0,{mod::Source::step,mod::Destination::grainRate,.17f,.01f})||
+               !cfg.put(1,{mod::Source::adsr,mod::Destination::layerGain,.2f,.002f}))return 1;
+        }
         if(!fx->replaceMotionIfCurrent(motion,cfg))return 1;
         juce::AudioBuffer<float> io(2,frames);juce::MidiBuffer midi;midi.ensureSize(4096);
         constexpr int blocks=160;
         std::array<double,blocks> durations{};unsigned maximumGrains=0;double peak=0,sumL=0,sumR=0;
         std::uint32_t rng=0x154311u;bool finite=true,midiConsumed=true;
         unsigned long alloc=0,locks=0;
+        const double budget=frames*1e6/rate;
+        double maxCpu=0,maxWall=0,cpuAtMaxWall=0;
+        int wallMisses=0,cpuMisses=0,wallOnly=0;
         for(int block=0;block<blocks;++block){
             if(block==0)for(int i=0;i<voices;++i)midi.addEvent(juce::MidiMessage::noteOn(1,47+i,juce::uint8(100)),0);
             if(block>=48&&block%3==0)for(int j=0;j<voices*2;++j){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
@@ -79,8 +106,16 @@ int main(){
 #ifdef VOX_FX_LOCK_PROBE
             voxFxLockBegin();
 #endif
+            const double cpuStart=splitTiming?threadMicros():-1;
             const auto now=std::chrono::steady_clock::now();fx->processBlock(io,midi);
             durations[block]=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-now).count();
+            const double cpuEnd=splitTiming?threadMicros():-1;
+            if(cpuEnd>=0&&cpuStart>=0){
+                const auto wall=durations[block],cpu=cpuEnd-cpuStart;
+                maxCpu=std::max(maxCpu,cpu);
+                if(wall>maxWall){maxWall=wall;cpuAtMaxWall=cpu;}
+                wallMisses+=wall>budget;cpuMisses+=cpu>budget;wallOnly+=wall>budget&&cpu<=budget;
+            }
 #ifdef VOX_FX_LOCK_PROBE
             locks+=voxFxLockEnd();
 #endif
@@ -97,6 +132,8 @@ int main(){
         std::sort(durations.begin(),durations.end());
         std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu p50 %.2f p95 %.2f p99 %.2f max %.2f us\n",
             rate,frames,voices,peak,dc,maximumGrains,alloc,locks,durations[79],durations[151],durations[158],durations.back());
+        if(splitTiming)std::printf("  thread max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
+            maxCpu,maxWall,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocks);
     }
     }
     std::printf("FX JUCE runtime stress: %d failing cases\n",errors);return errors?1:0;

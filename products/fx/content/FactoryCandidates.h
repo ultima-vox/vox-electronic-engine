@@ -118,15 +118,41 @@ inline constexpr AuthoredRecipe authored[]{
       {.82f,.68f,0,.33f},{{{E::ring,.27f,.4f},{E::delay,.17f,.28f},{E::reverb,.13f,.42f}}},{K::minor,7},{.59f,.29f}},
 };
 #include "ReviewWaveARecipes.h"
+#include "ReviewWaveACompletion.h"
+inline void applyWaveItem(offline::Capture& result,const WaveItem& item){
+    auto& p=result.program;
+    for(std::size_t i=0;i<item.layers.size();++i){
+        const auto& r=item.layers[i];if(r.gain==0)continue;
+        auto& l=p.layers[i];l.enabled=true;l.family=r.family;l.gain=r.gain;l.pan=r.pan;l.timing={r.start,r.span};
+        l.transpose=r.transpose;l.filters[0]=r.filter;l.character=r.character;
+    }
+    const auto curve=[](Contour c){
+        using S=timeline::Shape;
+        timeline::Curve result;result.count=3;result.nodes[0]={0,c.start,S::smooth};
+        result.nodes[1]={c.pivot,c.middle,S::exponential};result.nodes[2]={1,c.end,S::linear};return result;
+    };
+    p.amplitudeCurve=curve(item.amp);p.pitchCurve=curve(item.pitch);p.panoramaCurve=curve(item.pan);
+    p.tonality=item.key;result.settings.effects=item.fx;
+    if(item.entry.mode==PlayMode::sequence){
+        auto& pattern=result.pattern;
+        pattern.bars=item.beat.bars;pattern.grid=item.beat.grid;pattern.swing=item.beat.swing;
+        for(const auto& h:item.beat.hits)if(h.velocity!=0)pattern.steps[h.step]={true,h.note,h.velocity,h.chance,h.ratchet};
+    }
+}
 } // namespace detail
 
 inline constexpr auto reviewEntries=[] {
-    std::array<Entry,std::size(firstReviewEntries)+std::size(detail::waveA)> result{};
+    std::array<Entry,std::size(firstReviewEntries)+std::size(detail::waveA)+std::size(detail::completion::items)> result{};
     std::copy(std::begin(firstReviewEntries),std::end(firstReviewEntries),result.begin());
     for(std::size_t i=0;i<std::size(detail::waveA);++i){
         auto e=detail::waveA[i].entry;
         e.authored=static_cast<unsigned>(std::size(detail::authored)+1+i);
         result[std::size(firstReviewEntries)+i]=e;
+    }
+    for(std::size_t i=0;i<std::size(detail::completion::items);++i){
+        auto e=detail::completion::items[i].entry;
+        e.authored=static_cast<unsigned>(std::size(detail::authored)+std::size(detail::waveA)+1+i);
+        result[std::size(firstReviewEntries)+std::size(detail::waveA)+i]=e;
     }
     return result;
 }();
@@ -169,21 +195,9 @@ inline offline::Capture makePreview(const Entry& e, std::uint32_t rate) {
     }
     if(e.authored>std::size(detail::authored)){
         const auto index=e.authored-std::size(detail::authored)-1;
-        if(index<std::size(detail::waveA)){
-            const auto& item=detail::waveA[index];
-            for(std::size_t i=0;i<item.layers.size();++i){
-                const auto& r=item.layers[i];if(r.gain==0)continue;
-                layer(i,r.family,r.gain,r.pan,r.start,r.span);
-                p.layers[i].transpose=r.transpose;p.layers[i].filters[0]=r.filter;p.layers[i].character=r.character;
-            }
-            const auto curve=[&](detail::Contour c){return envelope(c.start,c.middle,c.end,c.pivot);};
-            p.amplitudeCurve=curve(item.amp);p.pitchCurve=curve(item.pitch);p.panoramaCurve=curve(item.pan);
-            p.tonality=item.key;s.effects=item.fx;
-            if(e.mode==PlayMode::sequence){
-                auto& pattern=result.pattern;
-                pattern.bars=item.beat.bars;pattern.grid=item.beat.grid;pattern.swing=item.beat.swing;
-                for(const auto& h:item.beat.hits)if(h.velocity!=0)pattern.steps[h.step]={true,h.note,h.velocity,h.chance,h.ratchet};
-            }
+        if(index<std::size(detail::waveA)+std::size(detail::completion::items)){
+            const auto& item=index<std::size(detail::waveA)?detail::waveA[index]:detail::completion::items[index-std::size(detail::waveA)];
+            detail::applyWaveItem(result,item);
             return result;
         }
     }

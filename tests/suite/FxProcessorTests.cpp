@@ -1,5 +1,6 @@
 #include "Processor.h"
 #include "FxEditor.h"
+#include "content/FactoryCandidates.h"
 #include <cmath>
 #include <bit>
 #include <cstdio>
@@ -164,6 +165,16 @@ int main() {
         motion.destinationSelector().setSelectedId(static_cast<int>(mod::Destination::cutoff)+1,juce::sendNotificationSync);
         motion.applyButton().onClick();
         check(owner->macroConfig().routes[0].destination==mod::Destination::pitch,"stale Motion draft cannot overwrite a host restore");
+        motion.stepLevel(3).setValue(37,juce::dontSendNotification);
+        motion.customAdsrButton().setToggleState(true,juce::dontSendNotification);
+        motion.adsrValue(3).setValue(280,juce::dontSendNotification);
+        motion.applyShapeButton().onClick();
+        const auto authoredMotion=owner->macroConfig();
+        check(authoredMotion.event.customAdsr&&std::abs(authoredMotion.event.steps[3]-.37f)<1e-6f&&
+              std::abs(authoredMotion.event.release-.28f)<1e-6f,"native shape action publishes FMOD3 settings");
+        const auto shaped=save(*owner);owner->setStateInformation(shaped.getData(),static_cast<int>(shaped.getSize()));
+        motion.stepLevel(3).setValue(99,juce::dontSendNotification);motion.applyShapeButton().onClick();
+        check(owner->macroConfig()==authoredMotion,"stale step/ADSR draft rejected after host restore");
         owner->editGeneratorState([](auto& state){state.role=5;});owner->effectWetParameter(0).setValueNotifyingHost(.31f);
         check(owner->generateSound(false)&&owner->program().mode==PlayMode::sequence&&owner->patternSnapshot().steps[0].enabled&&
             std::abs(owner->effectWetParameter(0).get()-.31f)<1e-5f,"full graph generation keeps host automation bases");
@@ -178,9 +189,14 @@ int main() {
             tonality.setSelectedId(3,juce::sendNotificationSync);
             check(browser.matchCount()>0&&browser.matchCount()<full,"tonality facet excludes pitched review Programs");
             duration.setSelectedId(4,juce::sendNotificationSync);
-            check(browser.matchCount()==0,"categorical duration and tonality filters intersect");
+            const auto expectedBars=[](bool pitched){
+                return static_cast<int>(std::count_if(std::begin(content::reviewEntries),std::end(content::reviewEntries),[=](const auto& e){
+                    return e.pitchedSource==pitched&&(e.bars>0||e.mode==PlayMode::sequence);
+                }));
+            };
+            check(expectedBars(false)>0&&browser.matchCount()==expectedBars(false),"keyless bar rolls and transitions match both facets");
             tonality.setSelectedId(2,juce::sendNotificationSync);
-            check(browser.matchCount()>0,"bar duration includes transitions and pattern cycles");
+            check(expectedBars(true)>0&&browser.matchCount()==expectedBars(true),"pitched bar duration includes transitions and pattern cycles");
             for(int i=0;i<style.getNumItems();++i)if(style.getItemText(i)=="Uplifting")style.setSelectedItemIndex(i,juce::sendNotificationSync);
             check(browser.matchCount()>0&&browser.matchCount()<full,"style facet combines with pitch and duration");
             tonality.setSelectedId(1,juce::sendNotificationSync);duration.setSelectedId(1,juce::sendNotificationSync);style.setSelectedId(1,juce::sendNotificationSync);
@@ -430,6 +446,21 @@ int main() {
             check(cutoff.getValue()==800,"gesture release reads back restored value");
             cutoff.setValue(900,juce::sendNotificationSync);
             check(dragProcessor->program().layers[0].filters[0].hz==900,"new gesture accepted after restore");
+            check(!source.grainLengthSlider().isVisible(),"non-granular source hides grain length");
+            check(dragProcessor->editLayer(0,[](auto& l){l.family=vox::fx::NoiseFamily::granular;}),"switch source to granular");
+            source.refresh();auto& length=source.grainLengthSlider();
+            check(length.isVisible(),"granular source exposes length");
+            length.setValue(47.5,juce::sendNotificationSync);
+            check(dragProcessor->program().layers[0].grains.milliseconds==47.5f,"native grain length publishes FPRG7");
+            const auto grains=save(*dragProcessor);
+            {
+                juce::Slider::ScopedDragNotification gesture(length);
+                length.setValue(71,juce::sendNotificationAsync);
+                dragProcessor->setStateInformation(grains.getData(),static_cast<int>(grains.getSize()));
+                source.refresh();length.setValue(96,juce::sendNotificationAsync);
+                check(dragProcessor->program().layers[0].grains.milliseconds==47.5f,"stale grain drag cannot overwrite host restore");
+            }
+            check(length.getValue()==47.5,"native grain length refreshes after stale drag");
         }
         check(effected->setMacroGainRoute(0,0,0),"clear comparison test route");
         effected->outputParameter().setValueNotifyingHost(1.0f);

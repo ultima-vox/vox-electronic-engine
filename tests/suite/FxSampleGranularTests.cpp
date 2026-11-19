@@ -99,5 +99,20 @@ int main(){
             for(float value:l)check(std::isfinite(value)&&std::abs(value)<1,"concurrent replacement remains finite");}
         writer.join();
     }
+    {
+        const auto sound=[&](source::GrainShape grains){
+            sample::Store store;auto engine=std::make_unique<NoiseRiser>();engine->prepare(48000);
+            auto modified=program;modified.layers[0].grains=grains;
+            std::vector<float> ramp(997);for(std::size_t i=0;i<ramp.size();++i)ramp[i]=.7f*static_cast<float>(i)/ramp.size()-.3f;
+            check(engine->setProgram(modified)&&store.publish(ramp,44100)&&engine->attachSampleStore(&store)&&
+                  engine->noteOn(1,60,1,.3,true),"custom grain render setup");
+            std::vector<float> l(14400),r(l.size());engine->render(l.data(),r.data(),static_cast<int>(l.size()));
+            check(engine->activeGrainCount()<=64&&std::all_of(l.begin(),l.end(),[](float x){return std::isfinite(x)&&std::abs(x)<1;}),"grain outputs finite and bounded");
+            return l;
+        };
+        const auto base=sound({80,0,false});
+        check(base==sound({80,0,false})&&base!=sound({30,0,false})&&base!=sound({80,.35f,false})&&
+              base!=sound({80,0,true}),"grain length, normalized position and reverse each alter deterministic audio");
+    }
     std::printf("FX sample granular ownership: %d failure(s)\n",fails);return fails?1:0;
 }
