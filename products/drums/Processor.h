@@ -138,6 +138,7 @@ public:
         layout::Document document;
         layout::Status status = layout::Status::valid;
         std::uint64_t generation = 0;
+        bool recovered = false;
     };
     LayoutSnapshot layoutState() const;
     bool commitLayout (layout::Document, bool confirmedReset = false);
@@ -215,6 +216,7 @@ public:
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
+    bool recoverOversizedStateForSave (preset::StateDocument&) override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     // The most the product's own sections can take (ten 4 x 64 patterns, 64
     // unique 64-step bars, 32 sample references with the longest paths:

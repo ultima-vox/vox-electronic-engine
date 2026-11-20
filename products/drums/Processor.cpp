@@ -155,7 +155,7 @@ void DrumsProcessor::setUiState (const UiState& ui)
 DrumsProcessor::LayoutSnapshot DrumsProcessor::layoutState() const
 {
     const juce::SpinLock::ScopedLockType sl (settingsLock_);
-    return { layout_.document(), layout_.status(), layoutGeneration_.load (std::memory_order_acquire) };
+    return { layout_.document(), layout_.status(), layoutGeneration_.load (std::memory_order_acquire), layout_.wasRecovered() };
 }
 
 bool DrumsProcessor::commitLayout (layout::Document document, bool confirmedReset)
@@ -780,6 +780,58 @@ preset::Section encodeParameters (const std::vector<float>& plain)
 
 } // namespace
 
+namespace {
+// The failed full snapshot, not a reserve estimate, establishes budget pressure.
+// Test a copy first: unknown records, valid/future layouts and music are never
+// candidates for removal, and an unrelated encode failure changes nothing.
+bool recoverLayoutBudget (layout::ProjectState& current, preset::StateDocument& document)
+{
+    std::size_t total = preset::headerBytes + preset::checksumBytes;
+    for (const auto& s : document.sections) total += 8 + s.data.size();
+    if (total <= preset::maxStateBytes) return false;
+    const auto* original = document.find (layoutSectionTag);
+    if (! original) return false;
+    const auto raw = current.save();
+    if (original->data.size() != raw.size()
+        || ! std::equal (raw.begin(), raw.end(), original->data.begin(),
+                        [] (auto a, auto b) { return a == std::to_integer<layout::Byte> (b); })) return false;
+    auto recovered = current;
+    if (! recovered.recoverCorruptV1()) return false;
+    auto candidate = document;
+    for (auto& s : candidate.sections) if (s.tag == layoutSectionTag)
+    {
+        s.data.clear();
+        for (const auto byte : recovered.save()) s.data.push_back (static_cast<std::byte> (byte));
+    }
+    if (! preset::encode (candidate)) return false;
+    document = std::move (candidate);
+    current = std::move (recovered);
+    return true;
+}
+} // namespace
+
+bool DrumsProcessor::recoverOversizedStateForSave (preset::StateDocument& document)
+{
+    const auto* section = document.find (layoutSectionTag);
+    if (! section) return false;
+    const auto raw = section->data;
+    layout::ProjectState recovered;
+    recovered.restore ({ reinterpret_cast<const layout::Byte*> (raw.data()), raw.size() });
+    if (! recoverLayoutBudget (recovered, document)) return false;
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    // A concurrent committed layout edit may already have replaced the corrupt
+    // bytes. Recover the captured save, but never overwrite that newer edit.
+    const auto current = layout_.save();
+    if (current.size() != raw.size()
+        || ! std::equal (current.begin(), current.end(), raw.begin(),
+                        [] (auto a, auto b) { return a == std::to_integer<layout::Byte> (b); })) return true;
+    layout_ = std::move (recovered);
+    // Native UI polls this generation. No ChangeBroadcaster/host callback
+    // while SuiteProcessor holds its state snapshot lock.
+    layoutGeneration_.fetch_add (1, std::memory_order_release);
+    return true;
+}
+
 void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
     const auto& entries = pluginParameters();
@@ -1015,6 +1067,15 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         if (rolesRestore->explicitRoles)
             restore.sections.push_back (encodeRoles (*rolesRestore));
     }
+    // Normalisation of an accepted older musical encoding can itself grow
+    // the output. Apply the same exception only to this local, fully validated
+    // restore plan; SuiteProcessor still validates unknown/UI state before
+    // committing anything. A later rejection cannot publish recovery.
+    auto prospective = document;
+    std::erase_if (prospective.sections, [this] (const auto& s) { return isProductSection (s.tag); });
+    prospective.sections.insert (prospective.sections.end(), restore.sections.begin(), restore.sections.end());
+    if (recoverLayoutBudget (*layoutRestore, prospective))
+        for (auto& s : restore.sections) if (s.tag == layoutSectionTag) s = *prospective.find (layoutSectionTag);
     restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore, generatorRestore,
                      layoutRestore, rolesRestore] {
         setGenerator (*generatorRestore);

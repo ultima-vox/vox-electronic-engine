@@ -208,6 +208,69 @@ void testStateBudget()
     check (upperBound <= DrumsProcessor::productStateBudgetBytes, "T21 largest fixed state + full DSTL upper bound + DLAY/DROL fits unchanged reserve");
 }
 
+void testCorruptLayoutBudgetRecovery()
+{
+    auto p = std::make_unique<DrumsProcessor>();
+    auto fixture = document (*p);
+    layout::Bytes corrupt (900000, 0); corrupt[0] = 1;
+    setLayout (fixture, corrupt);
+    fixture.sections.push_back ({ vox::preset::makeTag ("TLOP"), { std::byte { 17 }, std::byte { 93 } } });
+    const auto input = vox::preset::encode (fixture);
+    check (input && input->size() > 968000 && input->size() < 970000, "TL reported ~968095-byte CRC-valid fixture fits");
+    restore (*p, fixture);
+    check (p->lastStateError().isEmpty() && ! p->layoutState().recovered && state (*p).getSize() == input->size()
+           && document (*p).find (layoutSectionTag)->data == section (corrupt).data,
+           "TL invalid v1 stays byte-exact without budget pressure");
+    const auto unchanged = state (*p);
+    check (input && unchanged == juce::MemoryBlock (input->data(), input->size()),
+           "TL no-pressure corrupt-v1 control round-trips the entire VOXS byte-exactly");
+    const auto generation = p->layoutState().generation;
+    auto badCrc = *input; badCrc.back() ^= std::byte { 1 };
+    p->setStateInformation (badCrc.data(), static_cast<int> (badCrc.size()));
+    check (p->lastStateError().isNotEmpty() && state (*p) == unchanged && ! p->layoutState().recovered
+           && p->layoutState().generation == generation, "TL bad CRC never salvages music or publishes recovery");
+    auto badMusic = fixture;
+    for (auto& s : badMusic.sections) if (s.tag == padSectionTag) s.data.clear();
+    restore (*p, badMusic);
+    check (p->lastStateError().isNotEmpty() && state (*p) == unchanged && ! p->layoutState().recovered
+           && p->layoutState().generation == generation, "TL invalid music refuses transactionally beside corrupt layout");
+    restore (*p, fixture);
+    auto all = std::make_unique<PatternStore::Everything>(); p->patterns().copyEverything (*all);
+    for (auto* bank : { &all->slots, &all->alternates })
+        for (auto& pattern : *bank) { pattern.bars = 4; pattern.resolution = timing::Resolution::sixtyFourth; }
+    p->patterns().setEverything (*all);
+    auto expected = fixture;
+    for (auto& part : expected.sections) if (part.tag == sequenceSectionTag) part = p->patterns().encodeCurrent();
+    const auto saved = state (*p);
+    std::printf ("TL 7048135242: input %zu, invalid v1 DLAY %zu, save after legal maximum grids %zu / %zu bytes\n",
+                 input->size(), corrupt.size(), saved.getSize(), vox::preset::maxStateBytes);
+    check (saved.getSize() > 0 && saved.getSize() <= vox::preset::maxStateBytes,
+           "TL corrupt v1 cannot prevent saving after legal maximum pattern growth");
+    if (saved.getSize() > 0)
+    {
+        check (p->lastStateError().isEmpty() && p->layoutState().recovered,
+               "TL recovery is diagnosed persistently, not presented as lossless restore or a rejected project");
+        const auto recoveredGeneration = p->layoutState().generation;
+        auto q = std::make_unique<DrumsProcessor>(); q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        const auto reopened = document (*q);
+        check (q->lastStateError().isEmpty() && sameMusic (expected, reopened)
+               && reopened.find (vox::suite::uiSectionTag)->data == fixture.find (vox::suite::uiSectionTag)->data,
+               "TL recovery reopens all musical/other opaque bytes and UIST untouched");
+        check (state (*p) == saved && state (*q) == saved && q->layoutState().recovered
+               && p->layoutState().generation == recoveredGeneration, "TL repeated save/reopen preserves diagnostic and never discards again");
+        check (p->editSong ([] (SongData& song) { song.length = 32; }), "TL musical edit creates real Undo entry after recovery");
+        const auto edited = state (*p);
+        p->patternHistory().undo (p->patterns());
+        check (state (*p) == saved && p->layoutState().recovered, "TL Undo preserves recovered layout/diagnostic and restores musical bytes");
+        p->patternHistory().redo (p->patterns());
+        check (state (*p) == edited && p->layoutState().recovered, "TL Redo preserves recovered layout/diagnostic");
+        p->commitLayout (layout::factory (layout::Preset::mixing));
+        check (p->layoutState().recovered, "TL ordinary layout edits cannot silently erase the recovery diagnostic");
+        p->commitLayout (layout::factory (layout::Preset::beatmaking), true);
+        check (! p->layoutState().recovered, "TL explicit Reset acknowledges recovery");
+    }
+}
+
 void testPresentationSize()
 {
     auto p = std::make_unique<DrumsProcessor>();
@@ -233,6 +296,7 @@ int main()
     testPresetIndependence();
     testStateBudget();
     testPresentationSize();
+    testCorruptLayoutBudgetRecovery();
     auto p = std::make_unique<DrumsProcessor>();
     const auto initial = document (*p);
     check (initial.find (layoutSectionTag) && ! initial.find (uiStateSectionTag), "one canonical DLAY, no DUIS writer");

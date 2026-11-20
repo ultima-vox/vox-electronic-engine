@@ -124,9 +124,11 @@ public:
     // which getStateInformation never takes.
     void getStateInformation (juce::MemoryBlock& destination) override
     {
+        // Keep the snapshot and an optional product-specific budget recovery
+        // in one transaction. Neither path may notify listeners/the host.
+        const juce::ScopedLock lock (stateLock_);
         SaveableState snapshot;
         {
-            const juce::ScopedLock lock (stateLock_);
             snapshot = saved_;
             if (restoring_)
                 snapshot.product = restoringProduct_;
@@ -153,12 +155,14 @@ public:
         // the product's largest own state still fits next to them, so this
         // encode cannot fail for a state the plugin accepted. If it fails
         // anyway the host gets no state and the error is recorded.
-        if (const auto bytes = preset::encode (document))
+        auto bytes = preset::encode (document);
+        if (! bytes && ! restoring_ && recoverOversizedStateForSave (document))
+            bytes = preset::encode (document);
+        if (bytes)
             destination.replaceAll (bytes->data(), bytes->size());
         else
         {
             destination.reset();
-            const juce::ScopedLock lock (stateLock_);
             lastStateError_ = "the state is too large to save";
         }
     }
@@ -299,6 +303,12 @@ protected:
     };
 
     virtual void writeProductState (std::vector<preset::Section>&) const {}
+
+    // Non-RT, under stateLock_, after a complete save snapshot failed to
+    // encode. Default is strict refusal. An override must prove its narrowly
+    // authorised replacement fits before changing either document/live state;
+    // no callbacks, host notifications or I/O are allowed here.
+    virtual bool recoverOversizedStateForSave (preset::StateDocument&) { return false; }
 
     virtual ProductRestore readProductState (const preset::StateDocument&, juce::String&)
     {

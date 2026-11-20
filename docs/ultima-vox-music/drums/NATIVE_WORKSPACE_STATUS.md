@@ -5,6 +5,7 @@ Continue `dev/drums-native-workspace`, Draft [#163](https://github.com/ultima-vo
 target `integration/vox-drums-1.0@ef13daa3887dbd6079054384b04be7b65849d9ef`.
 Current request: [TL 7038015054](https://github.com/ultima-vox/vox-electronic-engine/pull/163#issuecomment-7038015054),
 updated 2026-11-20T11:09:26Z against parent `351aa0a9`.
+Corrupt-layout budget policy: [TL 7048135242](https://github.com/ultima-vox/vox-electronic-engine/pull/163#issuecomment-7048135242), updated 2026-11-20T19:02:07Z.
 
 **Development checkpoint, not merge/release acceptance. HOLD does not stop coding.**
 Verify live HEAD and the PR's exact-source evidence before resuming.
@@ -53,7 +54,7 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 - DUIS is recognised/discarded, never migrated/written/retained as unknown. Only the
   canonical three selection fields persist; donor page/export-scope is session-only.
 - Invalid v1 DLAY shows default Beatmaking and retains raw bytes until edit/reset,
-  **subject to the unresolved over-budget conflict below**. Future versions are opaque,
+  except the authorised recovery described below. Future versions are opaque,
   not misclassified as corrupt v1 merely because they exceed v1 size. Accepted future
   bytes survive session edits; only an explicitly confirmed Reset replaces them.
 - Future opaque data must fit alongside worst-case music and preserved unknown sections
@@ -87,6 +88,14 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
   Combined production/persistence/MIDI/future packet: **10/10 (287.08s)**, including
   real Song/Pattern drag files and visible failure, accepted future growth, old corpus,
   all 174 bindings and the three product shells. These are not Windows PASS.
+- TL 7048135242 red/green: the CRC-valid fixture is 968105 bytes (the reported
+  968095 bytes plus an opaque control section), with 900000 invalid-v1 DLAY bytes.
+  It round-trips exactly without pressure. After legal maximum pattern-grid growth,
+  recovery saves **170585 / 1048576 bytes**; reopen preserves every musical/opaque
+  control section and UIST. CRC/music rejection, persistent diagnosis, repeated
+  save/reopen and musical Undo/Redo pass in the production project-state test.
+  Local focused codec/project tests: 2/2 PASS; codec ASan/UBSan PASS. Merged #153
+  StyleEngine/StyleLibrary tests: 2/2 PASS (86.02s), retaining Windows-only cases for CI.
 - T21: fixed encoder fixtures 602924 bytes + full DSTL upper bound 65584 =
   **668508 / 753664 bytes**, including UIST/container, full 2048-byte DLAY and DROL.
   The 736 KiB product reserve is unchanged.
@@ -102,19 +111,31 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
   `ca2077fc02c686f5b19edf25e5c0b166ea6249a3`; Drums binary SHA256
   `d47a27fae39b9b687426dc31fc64641c18155928edeaa62cb136825fe55d385b`.
   Artifacts 14623431762 (listening), 14622434085 (suite/native).
-  **This historical result does not qualify the later production/persistence package.**
+  **This historical result does not qualify later source.**
+- Production/persistence head `13532de9fe637cd7fef74c51b75ba5ef24813868`: inspected
+  [Windows suite 44767815227](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44767815227),
+  job136397182173: 36/36 serial +8/8 gain; validator47/47 each. Manifest checkout
+  `91cc54b6bebc5159f985265b8956a01c723dd6ac`, same source tree `2a509af8e377ce1f0f38670afc2a7fc5e2938131` as the feature head.
+  Drums binary SHA256 `72d16e7357d1b6ae16194fe06cdf06716dd77d184bf2e4ef11d50896a198eaee`.
+  Listening artifact14647453738 digest `d900510e544e2d208efc937eb39e09de7ea107d52e518cb1f82eab83543f2dc1`;
+  suite14648217271 digest `c64e58f3cdf3b77e44d0ad467b2d2ebe0c711e6d4c2a36f835caaf34d8099819`.
+  **This parent result does not qualify the recovery fix.**
 
 ## Open gates
 
-1. **New policy conflict; owner answer pending.** #130 requires nonfatal invalid-DLAY
-   fallback plus exact invalid-byte retention until layout edit. A CRC-valid 968095-byte
-   VOXS with 900000 bytes of invalid DLAY v1 restores/saves exactly, but after valid
-   maximum pattern-grid growth saves zero bytes (`the state is too large to save`).
-   Both requirements cannot hold for arbitrary oversized raw under a fixed 1 MiB cap.
-   Required decision requested: recover music and replace only over-budget corrupt v1
-   layout with a diagnosed default, or reject that restore transactionally.
-   **No answer is recorded and no exception is implemented. Do not infer consent from
-   elapsed time or repeated automation.** This is distinct from future-version handling.
+1. Verify the corrupt-v1 recovery fix on its exact published Windows head; the policy is
+   resolved by TL 7048135242. Preserve invalid v1 raw exactly while the full state fits.
+   If and only if a full save exceeds VOXS 1 MiB, prove that replacing only structurally
+   invalid, explicitly version-1 DLAY with canonical defaults makes it encode. Preserve
+   all music, UIST and other opaque records. A failed proof changes nothing. The same
+   check applies to a fully validated restore plan if canonical musical encoding grows.
+   CRC/framing/UI/music/unknown-section validation remains transactional. Valid layouts,
+   future layouts and unidentified corruption cannot enter this exception.
+   DLAY record 12, payload `{1}`, is a bounded recovery provenance marker; other payloads
+   remain opaque. Diagnostics persist through save/reopen and ordinary layout edits;
+   Workspace > Reset layout acknowledges it. No user workspace file is changed.
+   Save recovery and the snapshot share the non-RT state transaction, with no callbacks
+   or I/O. A concurrent newer committed layout edit is never overwritten.
 2. Context-specific Inspector for steps/Song/sample remains unfinished. Pad follow/pin
    works. Step/Song pins validate/preserve but currently show disabled/unavailable with
    Unpin, instead of redirecting edits to another object.
@@ -122,8 +143,10 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
    collapsible-section presentation remain. Existing step/Sound controls still work.
 4. Complete keyboard/focus/scroll and actual Windows VST3 peer/content-scale plus
    OS/host DPI 100/125/150/200% evidence. Raster snapshots are insufficient.
-5. Reconcile separate StyleLibrary #153 at live HEAD (currently `83c616d4`) before final
-   combined qualification. Preserve both implementations/parents; no silent merge/discard.
+5. The normal feature merge now includes StyleLibrary #153 at `83c616d429991d8b8da01bdd27d11002630b2103`,
+   preserving both parents and its failure/Unicode/UUID regressions. This is preparation
+   in Draft #163, not integration-ref mutation or independent approval of #153. Native
+   library import/export/management UI still needs wiring to this existing service.
 6. Exact integrated-head Windows build/full suite/validator/artifact hashes, RT/state/
    undo/Song/MIDI/nine-output gates; factory licensing/listening and one final owner
    Cubase/REAPER pass. No integration/main/release ref changes or auto-merge.

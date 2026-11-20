@@ -68,7 +68,8 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/KitStore.cpp drums/KitStore.h
   drums/PatternStore.cpp drums/PatternStore.h drums/SongModel.cpp drums/Generator.cpp drums/Generator.h drums/PadRoles.cpp drums/PadRoles.h drums/FactoryContent.cpp drums/FactoryContent.h drums/Presets.cpp drums/Presets.h drums/DrumsPages.cpp drums/DrumsPages.h drums/PatternExport.cpp drums/PatternExport.h
   drums/PatternEditor.cpp drums/PatternEditor.h
-  drums/StyleDefinition.cpp drums/StyleDefinition.h drums/StyleRegistry.cpp drums/StyleRegistry.h)
+  drums/StyleDefinition.cpp drums/StyleDefinition.h drums/StyleRegistry.cpp drums/StyleRegistry.h
+  drums/StyleLibrary.cpp drums/StyleLibrary.h)
 target_link_libraries(${VOX_SUITE_drm_TARGET} PRIVATE vox_drums_engine juce::juce_cryptography)
 
 # Factory style definitions (issue 136): the JSON files in drums/styles are

@@ -179,6 +179,11 @@ target_link_libraries(suite_drums_style_engine_tests PRIVATE ${VOX_SUITE_drm_TAR
 target_include_directories(suite_drums_style_engine_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME suite_drums_style_engine_tests COMMAND suite_drums_style_engine_tests ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/example-user-style.voxstyle)
 
+add_executable(suite_drums_style_library_tests DrumsStyleLibraryTests.cpp)
+target_link_libraries(suite_drums_style_library_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_style_library_tests PRIVATE ${juce_SOURCE_DIR}/modules)
+add_test(NAME suite_drums_style_library_tests COMMAND suite_drums_style_library_tests ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/example-user-style.voxstyle)
+
 # Generator style fidelity (issue 128): rhythm grammar per style over a
 # settings matrix, audible roles on the factory kits, reproducibility.
 add_executable(suite_drums_generator_style_tests DrumsGeneratorStyleTests.cpp)

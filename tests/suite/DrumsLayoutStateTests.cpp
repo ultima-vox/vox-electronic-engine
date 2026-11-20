@@ -110,6 +110,18 @@ int main()
     bytes[6] = 255;
     check (decode (bytes).status == Status::invalid, "wire order checked before exposing a document");
     ProjectState project;
+    check (! project.recoverCorruptV1(), "valid v1 is never a recovery candidate");
+    project.restore (Bytes { 2, 0, 0, 0 });
+    check (! project.recoverCorruptV1(), "future version is never a recovery candidate");
+    project.restore (Bytes { 0, 0, 0, 0 });
+    check (! project.recoverCorruptV1(), "unidentified/version-zero corruption is never rewritten by the v1 exception");
+    project.restore (Bytes { 1, 0, 0, 0 });
+    check (project.recoverCorruptV1() && project.wasRecovered() && roundTrip (project.document()),
+           "explicit invalid v1 recovers to a bounded canonical default with persistent provenance");
+    ProjectState reopened;
+    reopened.restore (project.save());
+    check (reopened.wasRecovered(), "recovery diagnostic survives canonical save/restore");
+    project = ProjectState {};
     const auto original = project.save();
     check (decode (original).status == Status::valid, "no DLAY defaults to canonical Beatmaking");
     project.restore (bytes);

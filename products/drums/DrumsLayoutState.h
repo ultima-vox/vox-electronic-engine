@@ -20,7 +20,8 @@ enum class Type : Byte {
     workspace = 1,
     // 2 is retired by D1-a. UIST is the only editor-size owner.
     left = 3, right, central, mixer, padRack, paramLanes, inspectorPin, soundSections,
-    selection // §14 adds SELECTION; appended as type 11, never reuses a type.
+    selection, // §14 adds SELECTION; appended as type 11, never reuses a type.
+    recovery // 12: {1} records diagnosed corrupt-v1 budget recovery (TL 7048135242).
 };
 struct Record {
     Byte type = 0;
@@ -65,7 +66,8 @@ std::optional<Document> hidePanel (const Document&, Byte panel);
 
 // Project ownership policy, independent of the native views and user files.
 // The caller holds its state lock. Restores are already bounded by VOXS (1 MiB);
-// oversized/invalid DLAY is preserved as-is until the first committed edit.
+// Invalid DLAY is preserved until a committed edit, except the narrowly scoped
+// diagnosed corrupt-v1 save-budget recovery authorised in TL 7048135242.
 class ProjectState {
 public:
     ProjectState();
@@ -73,6 +75,10 @@ public:
     const Document& document() const noexcept { return document_; }
     Status status() const noexcept { return status_; }
     Bytes save() const;
+    // Only a structurally invalid, explicitly version-1 original qualifies.
+    // Caller must first prove replacing it makes the entire project saveable.
+    bool recoverCorruptV1();
+    bool wasRecovered() const noexcept;
     // Future data: edits affect this session only unless Reset was confirmed.
     // Returns false only for an invalid proposed document.
     bool commit (Document, bool confirmedReset = false);

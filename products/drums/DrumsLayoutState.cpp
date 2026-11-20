@@ -305,6 +305,23 @@ Bytes ProjectState::save() const
     return original_ ? *original_ : *encode (document_);
 }
 
+bool ProjectState::recoverCorruptV1()
+{
+    if (status_ != Status::invalid || ! original_ || original_->size() < 4
+        || (*original_)[0] != 1 || (*original_)[1] != 0 || (*original_)[2] != 0 || (*original_)[3] != 0) return false;
+    document_ = factory (Preset::beatmaking);
+    document_.records.push_back ({ static_cast<Byte> (Type::recovery), { 1 } });
+    original_.reset();
+    status_ = Status::valid;
+    return true;
+}
+
+bool ProjectState::wasRecovered() const noexcept
+{
+    const auto* record = find (document_, Type::recovery);
+    return record && record->payload.size() == 1 && record->payload[0] == 1;
+}
+
 bool ProjectState::commit (Document doc, bool confirmedReset)
 {
     if (! valid (doc)) return false;
@@ -313,6 +330,7 @@ bool ProjectState::commit (Document doc, bool confirmedReset)
     for (const auto& record : document_.records)
     {
         if (record.type == 1 || between (record.type, 3, 11)) continue;
+        if (record.type == static_cast<Byte> (Type::recovery) && confirmedReset && wasRecovered()) continue;
         const auto at = std::lower_bound (doc.records.begin(), doc.records.end(), record.type,
                                          [] (const Record& r, Byte type) { return r.type < type; });
         if (at != doc.records.end() && at->type == record.type) *at = record;
