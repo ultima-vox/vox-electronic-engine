@@ -29,7 +29,7 @@ bool monoEngine (EngineKind kind) noexcept
     return kind != EngineKind::va;
 }
 
-float shapedOsc (VaOsc& osc, int wave, double dt, float pulseWidth) noexcept
+VOX_FORCEINLINE float shapedOsc (VaOsc& osc, int wave, double dt, float pulseWidth) noexcept
 {
     return osc.next (wave, dt, pulseWidth);
 }
@@ -797,7 +797,11 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
         return 0.0f;
     }
     VoiceMod local = mod;
-    applyRetrig (voice, params, local);
+    bool retrig = false;
+    for (int index = 0; index < 4; ++index)
+        retrig = retrig || params.lfoRetrig[index];
+    if (retrig)
+        applyRetrig (voice, params, local);
     const double bend = parts_[voice.part].bendSemis;
     const double note = static_cast<double> (voice.note) + bend + static_cast<double> (local.pitch)
                       + static_cast<double> (voice.detuneCents) / 100.0;

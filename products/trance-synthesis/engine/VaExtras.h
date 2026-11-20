@@ -8,6 +8,12 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined (_MSC_VER)
+#define VOX_FORCEINLINE __forceinline
+#else
+#define VOX_FORCEINLINE [[gnu::always_inline]] inline
+#endif
+
 namespace vox::syn::engine {
 
 struct VaOsc {
@@ -22,11 +28,27 @@ struct VaOsc {
     {
         return next (wave, dt, 0.5f);
     }
-    float next (int wave, double dt, float pulseWidth) noexcept
+    VOX_FORCEINLINE float next (int wave, double dt, float pulseWidth) noexcept
     {
         const int index = std::clamp (wave, 0, 4);
         if (index <= 2)
-            return static_cast<float> (core.next (index, dt));
+        {
+            const double phase = core.phase;
+            double out;
+            if (index == 0)
+                out = std::sin (2.0 * vstengine::dspcore::pi * phase);
+            else if (index == 2)
+            {
+                out = (phase < 0.5 ? 1.0 : -1.0)
+                    + vstengine::dspcore::BlepOscillator::polyBlep (phase, dt)
+                    - vstengine::dspcore::BlepOscillator::polyBlep (std::fmod (phase + 0.5, 1.0), dt);
+            }
+            else
+                out = 2.0 * phase - 1.0 - vstengine::dspcore::BlepOscillator::polyBlep (phase, dt);
+            core.phase = phase + dt;
+            core.phase -= std::floor (core.phase);
+            return static_cast<float> (out);
+        }
         const double phase = core.phase;
         double out;
         if (index == 4)
@@ -62,7 +84,7 @@ struct VaFilter {
         fc_ = -1.0;
     }
     struct Stage { double lp, bp, hp, notch; };
-    static Stage tick (double x, double g, double k, double& ic1, double& ic2) noexcept
+    VOX_FORCEINLINE static Stage tick (double x, double g, double k, double& ic1, double& ic2) noexcept
     {
         const double a1 = 1.0 / (1.0 + g * (g + k));
         const double v3 = x - ic2;
@@ -77,7 +99,7 @@ struct VaFilter {
         out.notch = x - k * v1;
         return out;
     }
-    double next (double x, double cutoffHz, double resonance, double sampleRate, int mode) noexcept
+    VOX_FORCEINLINE double next (double x, double cutoffHz, double resonance, double sampleRate, int mode) noexcept
     {
         if (! std::isfinite (x) || ! std::isfinite (cutoffHz) || sampleRate < 1.0)
         {

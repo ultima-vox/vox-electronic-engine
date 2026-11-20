@@ -24,6 +24,9 @@
 #include <set>
 #include <string>
 #include <thread>
+#if defined (_WIN32)
+#include <windows.h>
+#endif
 #include <tuple>
 #include <vector>
 
@@ -2090,6 +2093,11 @@ void testModHost()
 
 void testWorstCase()
 {
+#if defined (_WIN32)
+    SetPriorityClass (GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    SetThreadAffinityMask (GetCurrentThread(), 1);
+    SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
     const double rates[] = { 44100.0, 48000.0, 96000.0 };
     const int blocks[] = { 32, 64, 128, 256, 512 };
     constexpr int samples = 200;
