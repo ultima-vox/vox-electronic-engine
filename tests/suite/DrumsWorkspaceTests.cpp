@@ -1,9 +1,13 @@
 #include "DrumsWorkspace.h"
+#include "DrumsEditor.h"
+#include "PadControlSurface.h"
 #include "Processor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
+#include <mutex>
 
 namespace {
 int failures = 0;
@@ -19,12 +23,132 @@ void block (vox::drums::DrumsProcessor& p)
     p.processBlock (audio, midi);
 }
 void press (juce::Button& b) { if (b.onClick) b.onClick(); }
+void pump() { juce::MessageManager::getInstance()->runDispatchLoopUntil (20); }
+
+void testSurfaces()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto donor = std::make_unique<DrumsPanel> (*p);
+    pump();
+    PadControlSurface sound (*p, PadControlSurface::Group::sound);
+    pump();
+    PadControlSurface sample (*p, PadControlSurface::Group::sample);
+    pump();
+    sound.setSize (720, 470); sample.setSize (720, 560);
+    for (const auto* name : { "fine", "character", "resonance", "attack", "sustain", "pitch_amount", "pitch_decay", "drive", "sub", "tail",
+                              "split", "start", "end", "sample_level" })
+    {
+        auto* next = sound.structuralSlider (name);
+        if (next == nullptr) next = sample.structuralSlider (name);
+        auto* old = donor->structuralSlider (name);
+        check (next != nullptr && old != nullptr, juce::String ("port retains structural control ") + name);
+        if (next && old)
+        {
+            check (next->getMinimum() == old->getMinimum() && next->getMaximum() == old->getMaximum()
+                   && next->getInterval() == old->getInterval(), juce::String ("port retains exact range/step ") + name);
+            check (next->getTextFromValue (next->getMaximum()) == old->getTextFromValue (old->getMaximum()),
+                   juce::String ("port retains units ") + name);
+        }
+    }
+    for (const auto* name : { "model", "note", "choke", "poly", "filter", "source", "sample_mode" })
+    {
+        auto* next = sound.structuralCombo (name);
+        if (! next) next = sample.structuralCombo (name);
+        auto* old = donor->structuralCombo (name);
+        check (next && old && next->getNumItems() == old->getNumItems(), juce::String ("port retains choices ") + name);
+    }
+    for (const auto* name : { "level", "tune", "decay", "pan", "cutoff" })
+        check (sound.hostSlider (name) != nullptr, juce::String ("Sound retains host control ") + name);
+    for (const auto* name : { "loop", "reverse", "normalize" })
+        check (sample.structuralToggle (name) != nullptr, juce::String ("Sample retains toggle ") + name);
+    donor.reset();
+    pump();
+    sound.setContext (4, 0); sample.setContext (4, 1);
+    sound.structuralCombo ("model")->setSelectedItemIndex (static_cast<int> (kit::Model::kick), juce::sendNotificationSync);
+    sound.structuralSlider ("drive")->setValue (5.4, juce::sendNotificationSync);
+    sound.hostSlider ("cutoff")->setValue (4500, juce::sendNotificationSync);
+    sample.structuralSlider ("sample_level")->setValue (0.35, juce::sendNotificationSync);
+    auto* reverse = sample.structuralToggle ("reverse"); reverse->setToggleState (true, juce::dontSendNotification); press (*reverse);
+    const auto settings = p->kitStore().pad (4);
+    check (std::abs (settings.drive - 5.4f) < 0.001f && std::abs (plain (*p, "drm.p05.cutoff") - 4500) < 1,
+           "Sound writes selected structural and host settings");
+    check (std::abs (settings.players[1].level - 0.35f) < 0.001f && settings.players[1].reverse
+           && ! settings.players[0].reverse, "Sample controls address player B independently");
+    auto external = settings; external.fine = 17; external.players[1].level = 0.7f;
+    p->kitStore().setPad (4, external); sound.update(); sample.update();
+    check (sound.structuralSlider ("fine")->getValue() == 17 && std::abs (sample.structuralSlider ("sample_level")->getValue() - 0.7) < 0.001,
+           "native Sound/Sample reflect external KitStore edits");
+    external.model = kit::Model::snare;
+    p->kitStore().setPad (4, external); sound.update();
+    check (! sound.structuralSlider ("drive")->getParentComponent()->isVisible(), "external model change hides kick-only controls");
+
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("vox-native-sample", "", false);
+    check (folder.createDirectory().wasOk(), "create native Sample fixture folder");
+    const auto file = folder.getChildFile ("trim.wav");
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (file);
+        auto writer = juce::WavAudioFormat().createWriterFor (stream, juce::AudioFormatWriterOptions()
+                              .withSampleRate (48000).withNumChannels (1).withBitsPerSample (16));
+        check (writer != nullptr, "create native Sample WAV fixture");
+        if (writer)
+        {
+            juce::AudioBuffer<float> audio (1, 1024);
+            for (int n = 0; n < 1024; ++n) audio.setSample (0, n, std::sin (static_cast<float> (n) * 0.05f) * 0.4f);
+            check (writer->writeFromAudioSampleBuffer (audio, 0, 1024), "write native Sample WAV fixture");
+        }
+    }
+    std::mutex mutex;
+    std::vector<std::function<void()>> held;
+    p->samples().setCompletionDispatcherForTesting ([&] (std::function<void()> f) { std::lock_guard lock (mutex); held.push_back (std::move (f)); });
+    const auto complete = [&] {
+        p->samples().waitForPendingDecodes();
+        std::vector<std::function<void()>> pending;
+        { std::lock_guard lock (mutex); pending.swap (held); }
+        for (auto& f : pending) f();
+    };
+    sample.loadSample (file); complete(); sample.update();
+    check (p->samples().pad (slotOf (4, 1)).buffer != nullptr && sample.sampleStatus().contains ("trim.wav"),
+           "native Sample Load uses actual asynchronous library decode");
+    auto& wave = sample.waveform();
+    const auto event = [&] (float x, bool down) {
+        const juce::Point<float> at { x, 30 };
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+            down ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &wave, &wave, juce::Time::getCurrentTime(), at,
+            juce::Time::getCurrentTime(), 1, false);
+    };
+    wave.mouseDown (event (0, true));
+    sample.setContext (6, 0); // must defer while the old sample's handle is held
+    wave.mouseDrag (event (static_cast<float> (wave.getWidth()) * 0.4f, true));
+    wave.mouseUp (event (static_cast<float> (wave.getWidth()) * 0.4f, false)); sample.update();
+    check (std::abs (p->kitStore().pad (4).players[1].start - 0.4f) < 0.002f && p->kitStore().pad (6).players[0].start == 0,
+           "waveform trim edits the captured sample across context changes");
+    sample.setContext (4, 1);
+    const auto reference = p->samples().pad (slotOf (4, 1)).reference;
+    const auto assignedBuffer = p->samples().pad (slotOf (4, 1)).buffer;
+    sample.loadSample (folder.getChildFile ("missing.wav")); complete(); sample.update();
+    const auto retained = p->samples().pad (slotOf (4, 1)).reference;
+    check (retained && reference && retained->sha256 == reference->sha256 && retained->path == reference->path
+           && retained->frames == reference->frames && p->samples().pad (slotOf (4, 1)).buffer == assignedBuffer
+           && sample.sampleStatus().isNotEmpty(),
+           "failed Sample Load preserves existing assignment and shows diagnosis");
+    press (*sample.sampleButton ("clear"));
+    check (! p->samples().pad (slotOf (4, 1)).reference.has_value(), "native Clear clears only the selected sample slot");
+    auto closing = std::make_unique<PadControlSurface> (*p, PadControlSurface::Group::sample);
+    pump(); closing->setContext (2, 1); closing->loadSample (file);
+    p->samples().waitForPendingDecodes(); closing.reset(); complete();
+    check (p->samples().pad (slotOf (2, 1)).buffer != nullptr, "closing Sample view before completion safely retains the requested library load");
+    p->samples().setCompletionDispatcherForTesting ({});
+    check (folder.deleteRecursively(), "remove owned native sample fixtures");
+}
 
 void test()
 {
     auto p = std::make_unique<vox::drums::DrumsProcessor>();
     p->prepareToPlay (48000, 128);
     auto ui = std::make_unique<vox::drums::DrumsWorkspace> (*p);
+    pump();
     ui->setSize (1180, 660);
     press (ui->padSelectButton (3));
     block (*p); ui->pollForTesting();
@@ -93,9 +217,14 @@ void test()
     juce::MemoryBlock stateBeforeLayout;
     p->getStateInformation (stateBeforeLayout);
     for (auto size : { std::pair { 1040, 600 }, std::pair { 1280, 620 }, std::pair { 1440, 800 }, std::pair { 1600, 900 } })
+        for (int editor = 0; editor < 4; ++editor)
         for (bool list : { false, true })
             for (float scale : { 1.0f, 1.25f, 1.5f, 2.0f })
             {
+                if (editor != 0 && list) continue;
+                vox::drums::workspace::Layout layout;
+                layout.primary = static_cast<vox::drums::workspace::Editor> (editor);
+                ui->setLayout (layout);
                 ui->setSize (size.first, size.second); ui->setListView (list);
                 for (int pad = 0; pad < 16; ++pad)
                 {
@@ -110,10 +239,12 @@ void test()
                 if (shots != nullptr && juce::exactlyEqual (scale, 1.0f))
                 {
                     juce::File folder { juce::String (shots) }; folder.createDirectory();
-                    juce::FileOutputStream stream (folder.getChildFile (juce::String (size.first) + (list ? "-list.png" : "-grid.png")));
+                    juce::FileOutputStream stream (folder.getChildFile (juce::String (size.first) + "-editor-" + juce::String (editor)
+                                                                       + (list ? "-list.png" : "-grid.png")));
                     check (stream.setPosition (0) && stream.truncate().wasOk(), "replace previous native snapshot");
                     check (juce::PNGImageFormat().writeImageToStream (image, stream), "write native workspace snapshot");
                 }
+                pump();
             }
     for (int split = 0; split < 3; ++split)
         for (int mixer = 0; mixer < 3; ++mixer)
@@ -146,6 +277,8 @@ void test()
 int main()
 {
     juce::ScopedJuceInitialiser_GUI gui;
+    testSurfaces();
+    pump();
     test();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;

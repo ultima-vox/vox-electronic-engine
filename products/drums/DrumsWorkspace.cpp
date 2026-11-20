@@ -2,6 +2,7 @@
 #include "DrumsParameters.h"
 #include "DrumsPages.h"
 #include "PatternEditor.h"
+#include "PadControlSurface.h"
 #include "Processor.h"
 #include "Tokens.h"
 #include "Typography.h"
@@ -271,14 +272,20 @@ private:
 struct DrumsWorkspace::Impl {
     Impl (DrumsWorkspace& owner, DrumsProcessor& p)
         : processor (p), inspector (p), steps (p, p.product().accent), song (p, p.product().accent),
+          sound (p, PadControlSurface::Group::sound), sample (p, PadControlSurface::Group::sample),
           mainLeft (p.product().accent), mainRight (p.product().accent)
     {
         owner.setLookAndFeel (&lookAndFeel);
-        for (auto* component : std::initializer_list<juce::Component*> { &inspector, &stepViewport, &songViewport, &rackViewport, &top, &list, &pin,
-                 &split, &mixerSize, &primary, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
+        for (auto* component : std::initializer_list<juce::Component*> { &inspector, &rackViewport, &top, &list, &pin,
+                 &split, &mixerSize, &primary, &secondary, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
             owner.addAndMakeVisible (*component);
-        stepViewport.setViewedComponent (&steps, false);
-        songViewport.setViewedComponent (&song, false);
+        const std::array<juce::Component*, 4> editors { &steps, &song, &sound, &sample };
+        for (std::size_t n = 0; n < editors.size(); ++n)
+        {
+            editorViews[n].setViewedComponent (editors[n], false);
+            owner.addAndMakeVisible (editorViews[n]);
+        }
+        sample.onPlayerSelected = [this] (int player) { selectedPlayer = player; };
         rackViewport.setViewedComponent (&rackContent, false);
         rackViewport.setScrollBarsShown (true, false);
         top.setJustificationType (juce::Justification::centredLeft);
@@ -287,8 +294,23 @@ struct DrumsWorkspace::Impl {
         pin.setButtonText ("Pin"); pin.setClickingTogglesState (true);
         pin.onClick = [&owner, this] { owner.pinInspector (pin.getToggleState()); };
         inspector.pin.onClick = [&owner, this] { owner.pinInspector (inspector.pin.getToggleState()); };
-        primary.addItemList ({ "Step", "Song" }, 1); primary.setSelectedId (1, juce::dontSendNotification);
-        primary.onChange = [&owner] { owner.resized(); };
+        primary.addItemList ({ "Step", "Song", "Sound", "Sample" }, 1); primary.setSelectedId (1, juce::dontSendNotification);
+        secondary.addItemList ({ "Step", "Song", "Sound", "Sample" }, 1); secondary.setSelectedId (2, juce::dontSendNotification);
+        primary.setTooltip ("Primary central editor"); secondary.setTooltip ("Secondary central editor / available in split layouts");
+        primary.onChange = [&owner, this] {
+            const auto next = static_cast<workspace::Editor> (primary.getSelectedId() - 1);
+            if (next == layout.secondary) layout.secondary = layout.primary;
+            layout.primary = next;
+            secondary.setSelectedId (static_cast<int> (layout.secondary) + 1, juce::dontSendNotification);
+            owner.resized();
+        };
+        secondary.onChange = [&owner, this] {
+            const auto next = static_cast<workspace::Editor> (secondary.getSelectedId() - 1);
+            if (next == layout.primary) layout.primary = layout.secondary;
+            layout.secondary = next;
+            primary.setSelectedId (static_cast<int> (layout.primary) + 1, juce::dontSendNotification);
+            owner.resized();
+        };
         split.addItemList ({ "One editor", "Split across", "Split below" }, 1); split.setSelectedId (1, juce::dontSendNotification);
         split.onChange = [&owner, this] { layout.split = static_cast<workspace::Split> (split.getSelectedId() - 1); owner.resized(); };
         mixerSize.addItemList ({ "Mixer closed", "Mixer compact", "Mixer expanded" }, 1); mixerSize.setSelectedId (2, juce::dontSendNotification);
@@ -311,8 +333,7 @@ struct DrumsWorkspace::Impl {
     ~Impl()
     {
         mixerViewport.setViewedComponent (nullptr, false);
-        stepViewport.setViewedComponent (nullptr, false);
-        songViewport.setViewedComponent (nullptr, false);
+        for (auto& viewport : editorViews) viewport.setViewedComponent (nullptr, false);
         rackViewport.setViewedComponent (nullptr, false);
     }
     DrumsProcessor& processor;
@@ -336,17 +357,20 @@ struct DrumsWorkspace::Impl {
     }
     Telemetry telemetry;
     bool listView = false, auditionRefused = false;
+    int selectedPlayer = 0;
     Inspector inspector;
     PatternEditor steps;
     SongStrip song;
+    PadControlSurface sound, sample;
     std::array<std::unique_ptr<PadCell>, 16> pads;
     std::array<std::unique_ptr<MixerStrip>, 16> strips;
     juce::Label top, mixerTitle;
     juce::TextButton list, pin;
-    juce::ComboBox split, mixerSize, primary;
+    juce::ComboBox split, mixerSize, primary, secondary;
     juce::Viewport mixerViewport;
     juce::Component mixerContent;
-    juce::Viewport stepViewport, songViewport, rackViewport;
+    std::array<juce::Viewport, 4> editorViews;
+    juce::Viewport rackViewport;
     juce::Component rackContent;
     Knob kitLevel;
     Peak mainLeft, mainRight;
@@ -365,6 +389,8 @@ void DrumsWorkspace::selectPad (int pad)
     if (! impl_->selection.selectPad (pad)) return;
     impl_->steps.selectCell (pad, impl_->steps.selectedStep());
     impl_->inspector.update (impl_->selection.inspectorPad(), impl_->selection.pinned());
+    impl_->sound.setContext (pad, impl_->selectedPlayer);
+    impl_->sample.setContext (pad, impl_->selectedPlayer);
     // Do not consume telemetry merely because selection changed.
     for (int i = 0; i < 16; ++i)
         impl_->pads[static_cast<std::size_t> (i)]->select.setToggleState (i == pad, juce::dontSendNotification);
@@ -383,6 +409,10 @@ void DrumsWorkspace::setLayout (workspace::Layout layout)
     impl_->layout = layout;
     impl_->split.setSelectedId (static_cast<int> (layout.split) + 1, juce::dontSendNotification);
     impl_->mixerSize.setSelectedId (static_cast<int> (layout.mixer) + 1, juce::dontSendNotification);
+    if (impl_->layout.primary == impl_->layout.secondary)
+        impl_->layout.secondary = static_cast<workspace::Editor> ((static_cast<int> (impl_->layout.primary) + 1) % 4);
+    impl_->primary.setSelectedId (static_cast<int> (impl_->layout.primary) + 1, juce::dontSendNotification);
+    impl_->secondary.setSelectedId (static_cast<int> (impl_->layout.secondary) + 1, juce::dontSendNotification);
     resized();
 }
 workspace::Layout DrumsWorkspace::layout() const noexcept { return impl_->layout; }
@@ -455,6 +485,8 @@ void DrumsWorkspace::timerCallback()
     i.steps.update(); i.song.update();
     if (i.steps.selectedLane() != i.selection.pad()) i.selection.selectPad (i.steps.selectedLane());
     i.inspector.update (i.selection.inspectorPad(), i.selection.pinned());
+    i.sound.setContext (i.selection.pad(), i.selectedPlayer);
+    i.sample.setContext (i.selection.pad(), i.selectedPlayer);
     i.top.setText (juce::String (i.processor.transportPlaying() ? "HOST PLAYING / " : "HOST STOPPED / ")
                    + juce::String (i.processor.lastBpm(), 1) + " BPM" + (i.auditionRefused ? " / audition queue full" : ""), juce::dontSendNotification);
 }
@@ -466,6 +498,8 @@ void DrumsWorkspace::resized()
     i.mixerSize.setBounds (top.removeFromRight (146).reduced (2));
     i.split.setBounds (top.removeFromRight (132).reduced (2));
     i.primary.setBounds (top.removeFromRight (88).reduced (2));
+    i.secondary.setBounds (top.removeFromRight (88).reduced (2));
+    i.secondary.setEnabled (i.layout.split != workspace::Split::single);
     i.pin.setBounds (top.removeFromRight (48).reduced (2));
     i.list.setBounds (top.removeFromRight (48).reduced (2)); i.top.setBounds (top);
     i.rackViewport.setBounds (rectangle (boxes.left));
@@ -485,16 +519,20 @@ void DrumsWorkspace::resized()
         cell.resized();
     }
     i.inspector.setBounds (rectangle (boxes.right));
-    const bool stepPrimary = i.primary.getSelectedId() == 1;
-    i.stepViewport.setBounds (rectangle (stepPrimary ? boxes.primary : boxes.secondary));
-    i.songViewport.setBounds (rectangle (stepPrimary ? boxes.secondary : boxes.primary));
-    i.stepViewport.setVisible (stepPrimary || ! boxes.secondary.empty());
-    i.songViewport.setVisible (! stepPrimary || ! boxes.secondary.empty());
-    // Preserve the donor's full toolbars at narrow sizes during the port.
-    // Viewports expose their actual controls, rather than clipping or scaling
-    // hit targets. A later workspace-specific toolbar can replace this adapter.
-    i.steps.setSize (std::max (980, i.stepViewport.getWidth() - 14), std::max (320, i.stepViewport.getHeight() - 14));
-    i.song.setSize (std::max (1100, i.songViewport.getWidth() - 14), std::max (240, i.songViewport.getHeight() - 14));
+    const std::array<juce::Component*, 4> editors { &i.steps, &i.song, &i.sound, &i.sample };
+    const std::array widths { 980, 1100, 720, 720 }, heights { 320, 240, 470, 560 };
+    for (std::size_t n = 0; n < editors.size(); ++n)
+    {
+        const auto editor = static_cast<workspace::Editor> (n);
+        const bool isPrimary = editor == i.layout.primary, isSecondary = editor == i.layout.secondary && ! boxes.secondary.empty();
+        auto& viewport = i.editorViews[n];
+        viewport.setVisible (isPrimary || isSecondary);
+        if (! viewport.isVisible()) continue;
+        viewport.setBounds (rectangle (isPrimary ? boxes.primary : boxes.secondary));
+        // Preserve full donor controls in scrollable canvases during the port;
+        // no clipping/scaling away of controls or duplicate editor instances.
+        editors[n]->setSize (std::max (widths[n], viewport.getWidth() - 14), std::max (heights[n], viewport.getHeight() - 14));
+    }
     auto mixer = rectangle (boxes.mixer);
     i.mixerTitle.setText ("MIXER / 16 PADS / 9 OUTPUTS / Main L-R", juce::dontSendNotification);
     i.mixerTitle.setBounds (mixer.removeFromTop (24));

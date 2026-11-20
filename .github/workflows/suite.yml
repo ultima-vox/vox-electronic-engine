@@ -88,6 +88,8 @@ jobs:
           # VOX Drums gain staging reports (CSV per rate/routing, blocks), in the suite artifact.
           New-Item -ItemType Directory -Force -Path suite-out\gain | Out-Null
           $env:VOX_GAIN_REPORT = Join-Path (Resolve-Path suite-out\gain).Path 'gain'
+          # Native Drums workspace qualification snapshots (not OS/host DPI approval).
+          $env:VOX_WORKSPACE_SCREENSHOTS = Join-Path (Resolve-Path suite-out).Path 'native-workspace'
           # Everything but the gain-staging gates runs one test at a time (the
           # callback timing bench measures wall time); the eight independent
           # gain-staging renders then run in parallel.

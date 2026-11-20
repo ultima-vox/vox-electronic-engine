@@ -101,7 +101,8 @@ target_include_directories(suite_drums_workspace_model_tests PRIVATE ${PROJECT_S
 add_test(NAME suite_drums_workspace_model_tests COMMAND suite_drums_workspace_model_tests)
 
 add_executable(suite_drums_workspace_tests DrumsWorkspaceTests.cpp)
-target_link_libraries(suite_drums_workspace_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_link_libraries(suite_drums_workspace_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_events)
+target_compile_definitions(suite_drums_workspace_tests PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)
 target_include_directories(suite_drums_workspace_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 if(MSVC)
   target_link_options(suite_drums_workspace_tests PRIVATE /STACK:8388608)

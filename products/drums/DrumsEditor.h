@@ -15,6 +15,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "DrumsPages.h"
+#include "PadControlBindings.h"
 #include "VoxComponents.h"
 #include "engine/KitEngine.h"
 #include "PatternStore.h"
@@ -28,14 +29,6 @@ namespace vox::drums {
 
 class DrumsProcessor;
 
-// What a structural control reads and writes: the selected pad's settings
-// and its selected sample player.
-struct StructuralContext {
-    kit::PadSettings pad;
-    int player = 0;
-    kit::SamplePlayer& sample() { return pad.players[static_cast<std::size_t> (player)]; }
-    const kit::SamplePlayer& sample() const { return pad.players[static_cast<std::size_t> (player)]; }
-};
 
 class PatternEditor;
 
@@ -94,6 +87,9 @@ public:
     void loadSample (int pad, int player, const juce::File& file);
 
 private:
+    template <typename Sink> friend void populateSoundBindings (Sink&);
+    template <typename Sink> friend void populateSampleBindings (Sink&);
+    template <typename Sink> friend void configurePadValueText (Sink&);
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;

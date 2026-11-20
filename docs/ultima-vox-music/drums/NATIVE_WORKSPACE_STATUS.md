@@ -9,7 +9,7 @@ No merge or release is authorized by this ledger.
 ## Implemented first slice
 
 - `DrumsWorkspace`: persistent host-status bar; bounded left/right docks;
-  one/two central Step/Song views; draggable dock/split dividers; one bottom
+  one/two central Step/Song/Sound/Sample views; draggable dock/split dividers; one bottom
   Mixer with collapsed, compact and expanded sizes. Narrow splits degrade to
   one editor without changing the requested layout.
 - One 16-pad Rack switches between 4x4 and scrollable List. Separate SELECT
@@ -24,6 +24,12 @@ No merge or release is authorized by this ledger.
   mask once per tick; Rack and Mixer receive the same snapshot. Selection
   and painting never drain meters. Hit activity is binary; the existing mask
   does not provide actual MIDI velocity and no velocity telemetry is invented.
+- Sound/Sample share `PadControlBindings.h` with the donor editor: the same
+  ranges, choices, setters and value units. All five Sound host controls and
+  all structural/sample controls are retained. Sample A/B, async Load, Clear,
+  Library and file drop use the actual SampleLibrary. Native waveform trim
+  handles retain their captured pad/player while selection changes. Missing
+  files retain the previous assignment; completion after closing a view is safe.
 - The single Mixer has all 16 strips through horizontal scrolling, vertical
   level faders, rotary pan/sends, mute/solo, requested-output/fallback labels,
   actual pad/Main peaks and the existing Kit Level control. Kit Level retains
@@ -42,6 +48,14 @@ No merge or release is authorized by this ledger.
 - Native tests exercise real processor audition/audio peaks, APVTS write and
   readback, one balanced host gesture, selection during drag, KitStore binding,
   one-consumer telemetry and unchanged project bytes under layout/rendering.
+  Sound/Sample controls are compared against the real donor controls for
+  range/step/units/choices, then exercised on a different pad and player B.
+  The external model-change test reproduced stale kick-only visibility and
+  passed after refresh was fixed. Tests decode a real WAV, drag trim across a
+  context change, reject a missing file without losing the buffer/reference,
+  and complete a pending load after closing the view. The GUI test owns an
+  event dispatcher so queued JUCE UI work can run between test operations;
+  production modal-loop configuration is unchanged.
 - Content sizes 1040x600, 1280x620, 1440x800 and 1600x900 correspond to the
   required outer sizes after the current 72/28 frame. Tests render Grid/List
   at 1/1.25/1.5/2 raster scales; this is **not** proof of host/OS DPI behavior.
@@ -50,6 +64,13 @@ No merge or release is authorized by this ledger.
 - Linux uses GNU C++ 14.2, C++20 and verified JUCE 9.0.1 commit
   `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`. Windows qualification belongs
   to the exact published feature head and must be recorded in its PR.
+- Local targeted regression: 5/5 (model, native workspace, existing product,
+  candidate and samples), followed by 2/2 workspace tests after additional
+  pending-load lifetime and GUI-dispatch checks. Debug logs also report JUCE's
+  Linux 128-message wake queue assertions during bulk UI construction and
+  three static AudioFormatManager shutdown detector reports. These are not
+  Windows or DSP results; the inherited product GUI tests also emit queue
+  assertions. Functional exit codes passed; do not call these logs warning-free.
 
 This is a **candidate component under qualification**, not a claim that #127
 is complete. The production `createEditor()` still uses DrumsPanel until its
@@ -60,8 +81,8 @@ its Windows results are separate evidence, not results for this native branch.
 
 ## Continue in the same PR
 
-1. Port Sound/Sample controls and waveform interactions by extracting existing
-   bindings; preserve every structural/sample setting and undo behavior.
+1. Finish Sound/Sample presentation and sample-specific Inspector contexts;
+   preserve every structural/sample setting and existing undo behavior.
 2. Complete Generator/roles, Library/Presets, Routing and Diagnostics tools,
    responsive central toolbars and Inspector contexts for steps/Song/sample.
 3. Implement the bounded canonical layout/state contract from #130 section 14

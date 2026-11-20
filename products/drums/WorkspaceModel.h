@@ -28,12 +28,14 @@ private:
 
 enum class Split { single, horizontal, vertical };
 enum class MixerSize { collapsed, compact, expanded };
+enum class Editor { step, song, sound, sample };
 
 struct Layout {
     int leftWidth = 208, rightWidth = 220;
     float ratio = 0.5f;
     Split split = Split::single;
     MixerSize mixer = MixerSize::compact;
+    Editor primary = Editor::step, secondary = Editor::song;
 };
 
 struct Box {
