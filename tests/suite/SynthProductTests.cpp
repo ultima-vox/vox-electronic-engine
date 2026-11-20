@@ -1409,13 +1409,13 @@ void testPhrasePlayer()
     setPlain (*offsets, "syn.a.engine", 1.0f);
     setPlain (*offsets, "syn.b.level", 0.0f);
     offsets->prepareToPlay (48000.0, 64);
-    juce::AudioBuffer<float> small (2, 64);
+    juce::AudioBuffer<float> blockAudio (2, 64);
     vox::syn::AuditionEvent chord[3] = {
         { 0, true, 60, 80, false, false },
         { 10, true, 64, 80, false, false },
         { 20, true, 67, 80, false, false },
     };
-    offsets->audition (small, chord, 3);
+    offsets->audition (blockAudio, chord, 3);
     check (offsets->monoGate (0) && offsets->monoNote (0) == 67, "later offset in the block wins the mono note");
 
     auto player = make();
@@ -1791,16 +1791,16 @@ void testPhraseHardening()
     held.slide = false;
     stopping->setPhraseNote (0, held);
     stopping->setPhrasePlaying (true);
-    juce::AudioBuffer<float> small (2, 128);
+    juce::AudioBuffer<float> blockAudio (2, 128);
     juce::MidiBuffer live;
     live.addEvent (juce::MidiMessage::noteOn (1, 72, static_cast<juce::uint8> (110)), 0);
-    stopping->processBlock (small, live);
+    stopping->processBlock (blockAudio, live);
     check (stopping->vaNoteHeld (0, 40) && stopping->vaNoteHeld (0, 72), "phrase and host notes are both held");
     juce::MidiBuffer stopFlood;
     for (int i = 0; i < 300; ++i)
         stopFlood.addEvent (juce::MidiMessage::controllerEvent (1, 1, 20), 0);
     stopping->setPhrasePlaying (false);
-    stopping->processBlock (small, stopFlood);
+    stopping->processBlock (blockAudio, stopFlood);
     check (! stopping->vaNoteHeld (0, 40), "stop releases the phrase note while the host buffer is full");
     check (stopping->vaNoteHeld (0, 72), "stop does not send a channel panic over host notes");
 
@@ -1827,10 +1827,10 @@ void testPhraseHardening()
     reopened->prepareToPlay (48000.0, 128);
     reopened->setPhrasePlaying (true);
     juce::MidiBuffer silent;
-    reopened->processBlock (small, silent);
+    reopened->processBlock (blockAudio, silent);
     bool finite = true;
     for (int i = 0; i < 128; ++i)
-        finite = finite && std::isfinite (small.getSample (0, i));
+        finite = finite && std::isfinite (blockAudio.getSample (0, i));
     check (finite, "playback after the editor closes stays finite");
 
     auto decoded = vox::preset::decode (
