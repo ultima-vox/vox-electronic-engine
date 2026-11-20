@@ -49,6 +49,15 @@ If one of the four fails in the authorized run, replay its same executable and w
 | Win32 drag | Actual copy-only OLE WAV and SMF in Cubase and REAPER; same-path retries, cancel, duplicate/reentered/late callbacks, new preparation, Copy into project vs reference, reopen and unload. Confirm MIDI remains editable and file remains readable after unload. Do not evict offered scratch. |
 | Host, UI and bounce | Validate six modes, repeat notes, real PPQ/meter/seek/start/stop, 4/8/16-bar Transition target and [measured post-event tails / bar-clock status](HOST_CLOCK_AND_TAIL_20261119.md#one-host-procedure-once-authorized), state/A-B/sample relink, automation IDs, focused Motion undo and layer-drag restore, keyboard-only curve insertion/selection/undo, Tab/focus and screen readers, 100/125/150/200% DPI, and matching-history wet-tail bounce vs fresh start. Exercise editor close/reopen, processor destroy, cancellation/read-only/blocked I/O; record stalls. |
 
+### Native Source keyboard acceptance (not yet run)
+
+Use real Win32 keyboard event delivery with a VST3 editor peer, not direct handler calls. Check at 100/125/150/200% DPI in each owner DAW, and record actual focus, resulting Program state, and any host shortcut dispatch:
+
+1. Tab to **Source / Key**, press Enter, and confirm focus on the layer selector. Tab and Shift+Tab in both directions through the controls; verify text and focus indication are readable. Switch between a Glitch and a non-Glitch layer; hidden slice controls must not be tabbable.
+2. Open the **Slice grid** or **Read** popup by keyboard and press Escape. The popup should dismiss without applying the pending selection or closing Source. A second Escape with focus back on the ComboBox should close Source and return focus to its opener. Repeat Escape from a focused slice gate (no popup), and check the same return focus when activating **Close**.
+3. Activate a focused slice gate by keyboard; verify the visual state, edited layer only, and an audible change on a new event. Reopen the project and confirm the same mask and direction. Close/reopen the editor and repeat to catch stale return-focus targets.
+4. Verify Escape outside Source still follows host behavior and local Source controls do not seize global undo or transport shortcuts. Exercise popup dismissal and return focus independently in both Cubase and REAPER; log failures rather than counting direct offscreen calls as a pass.
+
 Engineering qualification and the **one owner Cubase/REAPER round** are distinct. Owner listening/rights review and **600 distinct owner-approved factory programs** remain separate production gates. The current library is frozen at **232 review-only / 0 approved**.
 
 ## Save policy: owner-approved create-only

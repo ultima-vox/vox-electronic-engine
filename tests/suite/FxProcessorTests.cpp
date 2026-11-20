@@ -1,6 +1,7 @@
 #include "Processor.h"
 #include "FxEditor.h"
 #include "content/ReviewWaveBAssets.h"
+#include "fixtures/FxLegacyGlitchProject.h"
 #include <cmath>
 #include <cstring>
 #include <bit>
@@ -190,6 +191,79 @@ void checkGlitchSourceEditor() {
           "project reopen and controller readback preserve authored slices");
     check(panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey))&&!panel.isVisible()&&
           !panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)),"Escape closes the Source overlay only while it is open");
+}
+
+// This fixture was saved by the pre-v8 processor, not the current writer.
+void checkGlitchHostProjectMigration() {
+    using namespace vox::fx;
+    using namespace vox::preset;
+    constexpr auto fprg=makeTag("FPRG");
+    const auto inspect=[](const juce::MemoryBlock& bytes){
+        return decode({static_cast<const std::byte*>(bytes.getData()),bytes.getSize()},compare::productTag,1);
+    };
+    juce::MemoryOutputStream raw;
+    check(juce::Base64::convertFromBase64(raw,fxfixtures::legacyGlitchProject),"decode immutable pre-v8 host fixture");
+    const auto old=raw.getMemoryBlock();
+    const auto archived=inspect(old);
+    const auto* legacy=archived.document.find(fprg);
+    if(!archived.ok()||!legacy||legacy->data.empty()||legacy->data.front()!=std::byte{7}){
+        check(false,"historical fixture must be an unmodified FPRG7 host project");return;
+    }
+    auto author=std::make_unique<FxProcessor>();
+    author->setStateInformation(old.getData(),static_cast<int>(old.getSize()));
+    const auto beforeEdit=inspect(save(*author));const auto* stillV7=beforeEdit.document.find(fprg);
+    check(author->lastStateError().isEmpty()&&stillV7&&stillV7->data==legacy->data&&
+          author->family()==static_cast<int>(NoiseFamily::glitch)&&author->outputParameter().get()==.63f&&
+          author->program().layers[0].character==-.5f&&author->program().layers[0].glitch==source::GlitchShape{}&&
+          author->program().layers[1].grains==source::GrainShape{47.f,.25f,true},
+          "old host project restores defaults, automation and independent grain settings and saves the same FPRG7 bytes");
+    const source::GlitchShape edited{source::SliceGrid::thirtySecond,source::SliceRead::reverse,0b0101};
+    check(author->editLayer(0,[&](auto& l){l.glitch=edited;}),"edit Glitch after opening a historical project");
+    const auto modern=save(*author);
+    const auto encoded=inspect(modern);
+    const auto* v8=encoded.document.find(fprg);
+    if(!encoded.ok()||!v8||v8->data.size()!=legacy->data.size()+programcodec::glitchBytes||v8->data.front()!=std::byte{8}){
+        check(false,"first Glitch edit upgrades only the nested Program format to FPRG8");return;
+    }
+    check(std::equal(legacy->data.begin()+4,legacy->data.end(),v8->data.begin()+4),
+          "v8 stores every existing v7 Program field byte-for-byte");
+    auto subject=std::make_unique<FxProcessor>(),control=std::make_unique<FxProcessor>();
+    for(auto* fx:{subject.get(),control.get()}){
+        fx->setStateInformation(modern.getData(),static_cast<int>(modern.getSize()));
+        check(fx->lastStateError().isEmpty()&&save(*fx)==modern&&fx->program().layers[0].glitch==edited&&
+              fx->outputParameter().get()==.63f,"fresh processor reopens and re-saves the authored v8 project exactly");
+        fx->prepareToPlay(48000,128);
+    }
+    juce::AudioBuffer<float> a(2,128),b(2,128);juce::MidiBuffer ma,mb;
+    ma.addEvent(juce::MidiMessage::noteOn(1,60,.9f),11);mb=ma;
+    for(int i=0;i<8;++i){block(*subject,a,ma);block(*control,b,mb);}
+    check(subject->audioTelemetry().events==1&&a.getMagnitude(0,128)>0.f,"active Glitch event before malformed restore");
+    const auto revision=subject->versionedProgram().revision;
+    const auto ticket=subject->previewBus().ticket();
+    for(bool truncate:{false,true}){
+        auto malformed=encoded.document;
+        for(auto& section:malformed.sections)if(section.tag==fprg){
+            if(truncate)section.data.pop_back();
+            else section.data[section.data.size()-programcodec::glitchBytes+1]|=std::byte{1};
+        }
+        const auto bad=encode(malformed); // valid outer CRC; the inner Program must reject
+        if(!bad){check(false,"build malformed nested v8 project fixture");continue;}
+        subject->setStateInformation(bad->data(),static_cast<int>(bad->size()));
+        check(subject->lastStateError().contains("FX Program")&&save(*subject)==modern&&
+              subject->versionedProgram().revision==revision&&subject->previewBus().ticket()==ticket,
+              "malformed nested v8 changes neither saved Program/host bases, revision nor preview ticket");
+        double peak=0,error=0;
+        for(int i=0;i<64;++i){
+            block(*subject,a,ma);block(*control,b,mb);
+            for(int ch=0;ch<2;++ch)for(int j=0;j<128;++j){
+                peak=std::max(peak,std::abs(static_cast<double>(a.getSample(ch,j))));
+                error=std::max(error,std::abs(static_cast<double>(a.getSample(ch,j))-b.getSample(ch,j)));
+            }
+        }
+        check(subject->audioTelemetry().events==1&&peak>0.001&&error==0.,
+              "malformed v8 leaves active audio sample-exact against an untouched processor");
+        std::printf("Glitch v7->v8 project / %s rollback: peak %.7f, max error %.9g\n",truncate?"truncation":"reserved-bit",peak,error);
+    }
 }
 
 void checkRestoreAdmission() {
@@ -1180,6 +1254,7 @@ int main() {
     phase("measured serial FX tail and route");checkMeasuredFxTail();
     phase("capture parity");checkCaptureParity();
     phase("Glitch source authoring, state and scope");checkGlitchSourceEditor();
+    phase("immutable Glitch host project migration and rollback");checkGlitchHostProjectMigration();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
     phase("motion, generator and preset browser");

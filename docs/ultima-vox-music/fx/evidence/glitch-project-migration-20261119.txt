@@ -1,0 +1,76 @@
+Targeted Linux follow-up of the accepted 09d4e9a implementation.
+Recompiled FxProcessorTests and FxPresetLibraryTests against unchanged product sources and pinned JUCE objects.
+Historical writer: 12f65469cd1a429198e2ec5b201612f01df7c6f0; 3032 bytes; SHA-256 1b28ae725d6d4763eb8af2618e01cd7ad313a5b6455736e8cfa35df65a40323a.
+[FX processor] JUCE initialization
+[FX processor] layer solo and synchronized cursor
+[FX processor] offline host monitor isolation
+[FX processor] in-place bounce effect history and audition priority
+[FX processor] External granular preview under repeated MIDI and Pattern pressure
+[FX processor] Layer drag across host restore
+[FX processor] Motion history rollover and non-Motion host restore
+[FX processor] Pattern clipboard during restore and editor recreation
+[FX processor] timeline viewport keyboard and selection
+[FX processor] WAV export across editor close and recreation
+[FX processor] WAV export pending host save, cancellation and processor unload
+[FX processor] MIDI export lifecycle and picker reentry
+[FX processor] prepared WAV and MIDI drag lifecycle
+[FX processor] host Transition clock matrix and diagnostics
+[FX processor] measured serial FX tail and route
+[FX processor] capture parity
+[FX processor] Glitch source authoring, state and scope
+[FX processor] immutable Glitch host project migration and rollback
+[FX processor] restore admission
+[FX processor] motion, generator and preset browser
+[FX processor] editor/parameters and state
+[FX processor] layer editor
+[FX processor] generation
+[FX processor] FX slots, comparison and Source editor
+[FX processor] pattern editor
+[FX processor] pattern playback
+[FX processor] modulation
+[FX processor] sample import and relink
+[FX processor] tempo capture
+[FX processor] bar-clock gate and capture
+[FX processor] bar transitions
+[FX processor] voice capacity and telemetry
+[FX processor] transport discontinuity
+[FX processor] PPQ snapshots
+[FX processor] source-family playback
+[FX processor] layered Program
+[FX processor] legacy parameter migration
+[FX processor] duration capture
+[FX processor] test cases finished; teardown follows
+host Transition: 8000 Hz 4 bars 60->45 BPM, target PPQ 12.5, sample 130667, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 100->75 BPM, target PPQ 12.5, sample 78400, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 128->96 BPM, target PPQ 12.5, sample 61250, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 140->105 BPM, target PPQ 12.5, sample 56001, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 160->120 BPM, target PPQ 12.5, sample 49000, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 200->150 BPM, target PPQ 12.5, sample 39200, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 60->45 BPM, target PPQ 28.5, sample 280000, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 100->75 BPM, target PPQ 28.5, sample 168000, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 128->96 BPM, target PPQ 28.5, sample 131250, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 140->105 BPM, target PPQ 28.5, sample 120001, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 160->120 BPM, target PPQ 28.5, sample 105000, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 200->150 BPM, target PPQ 28.5, sample 84000, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 60->45 BPM, target PPQ 60.5, sample 578667, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 100->75 BPM, target PPQ 60.5, sample 347200, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 128->96 BPM, target PPQ 60.5, sample 271250, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 140->105 BPM, target PPQ 60.5, sample 248001, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 160->120 BPM, target PPQ 60.5, sample 217000, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 200->150 BPM, target PPQ 60.5, sample 173600, suffix peak 0.0000000
+host Transition: 44100 Hz 4 bars 200->150 BPM, target PPQ 12.5, sample 216090, suffix peak 0.0000000
+host Transition: 48000 Hz 8 bars 200->150 BPM, target PPQ 28.5, sample 504000, suffix peak 0.0000000
+host Transition: 96000 Hz 16 bars 200->150 BPM, target PPQ 60.5, sample 2083200, suffix peak 0.0000000
+FX tail: 63 qualified blocks, peak 0.0189440, routed difference sum 0.0419000
+capture parity case 0: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 1: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 2: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 3: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 4: 149280 frames peak 0.0280716 tail 0.0000006 max error 0
+capture parity case 5: 150000 frames peak 0.0076635 tail 0.0000000 max error 0
+capture parity case 6: 149280 frames peak 0.0280716 tail 0.0000006 max error 0
+capture parity case 7: 101280 frames peak 0.0067602 tail 0.0000082 max error 0
+Glitch v7->v8 project / reserved-bit rollback: peak 0.0178352, max error 0
+Glitch v7->v8 project / truncation rollback: peak 0.0179972, max error 0
+FX processor: 0 failure(s)
+FX user library and preview: 0 failure(s)

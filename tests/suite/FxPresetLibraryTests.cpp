@@ -19,6 +19,18 @@ int main(){
     auto invalid=tags;invalid.name="invalid\nname";
     check(!library::write(file,original,&invalid)&&library::read(file,decoded,&read)&&read.name==tags.name,"failed save preserves existing preset");
     check(library::write(file,original)&&library::read(file,decoded,&read)&&read.name.empty(),"legacy portable files remain loadable without tags");
+    constexpr source::GlitchShape slices{source::SliceGrid::eighth,source::SliceRead::reverse,5};
+    original.state.program.layers[0].family=NoiseFamily::glitch;
+    original.state.program.layers[0].glitch=slices;
+    check(library::write(file,original,&tags)&&file.getSize()<=static_cast<juce::int64>(portable::maxBytes)&&
+          library::read(file,decoded,&read)&&decoded.state.program.layers[0].glitch==slices,
+          "bounded on-disk preset update carries an authored FPRG8 Program");
+    const auto oversized=root.getChildFile("oversized.voxfx");
+    std::vector<std::byte> bytes;
+    check(portable::encode(original,bytes,&tags),"build v8 preset for library size boundary");
+    bytes.resize(portable::maxBytes+1);
+    check(oversized.replaceWithData(bytes.data(),bytes.size())&&!library::read(oversized,decoded,&read)&&
+          decoded.state.program.layers[0].glitch==slices&&read.name==tags.name,"oversized input cannot change published preset or tags");
     check(!library::managedFile(file,root)&&!library::managedFile(root,root.getChildFile("nested/deep.voxfx")),"nested/outside objects are not managed files");
     offline::Capture a;a.settings.duration=.16f;a.program.layers[0].family=NoiseFamily::laser;
     preview::Job job(a);
