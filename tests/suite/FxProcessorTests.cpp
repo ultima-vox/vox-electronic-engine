@@ -167,10 +167,20 @@ void checkGlitchSourceEditor() {
     auto fx=std::make_unique<FxProcessor>();auto editor=std::make_unique<FxPanel>(*fx);
     auto& panel=editor->sourcePanel();juce::TextButton opener("Source");
     panel.open(opener);
+    auto traverser=panel.createKeyboardFocusTraverser();
+    const auto contains=[&](const juce::Component& c){const auto order=traverser->getAllComponents(&panel);
+        return std::find(order.begin(),order.end(),&c)!=order.end();};
+    check(panel.isKeyboardFocusContainer()&&!contains(panel.sliceGridSelector())&&!contains(panel.sliceGate(0)),
+          "Source owns a local keyboard traversal and skips hidden slice controls");
     check(panel.isVisible()&&!panel.sliceGridSelector().isVisible(),"non-Glitch family hides slice controls");
     check(fx->setFamily(static_cast<int>(NoiseFamily::glitch)),"set Glitch through product controller");panel.refresh();
     check(panel.sliceGridSelector().isVisible()&&panel.sliceGridSelector().getSelectedId()==2&&
           panel.sliceReadSelector().getSelectedId()==1&&!panel.sliceGate(2).getToggleState(),"Glitch editor reads legacy per-layer settings");
+    check(panel.sliceGridSelector().findKeyboardFocusContainer()==&panel&&contains(panel.sliceGate(0))&&
+          traverser->getNextComponent(&panel.sliceGridSelector())==&panel.sliceReadSelector()&&
+          traverser->getNextComponent(&panel.sliceReadSelector())==&panel.sliceGate(0)&&
+          traverser->getPreviousComponent(&panel.sliceGate(0))==&panel.sliceReadSelector()&&
+          !contains(panel.grainLengthSlider()),"JUCE traverses the visible Glitch controls in both directions inside Source");
     panel.sliceGridSelector().setSelectedId(3,juce::sendNotificationSync);
     panel.sliceReadSelector().setSelectedId(3,juce::sendNotificationSync);
     panel.sliceGate(2).setToggleState(true,juce::dontSendNotification);panel.sliceGate(2).onClick();

@@ -406,6 +406,9 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     reverse_.onClick=[this]{const auto checked=reverse_.getToggleState();editLayer([=](auto& l){l.grains.reverse=checked;});};
     scatter_.setTooltip("Use a seeded random grain start instead of a fixed percentage of the source");
     addAndMakeVisible(scatter_);addAndMakeVisible(reverse_);
+    // Keep JUCE's Tab/Shift+Tab traversal inside this overlay instead of
+    // mixing the explicit Source order with the underlying editor controls.
+    setFocusContainerType(juce::Component::FocusContainerType::keyboardFocusContainer);
     setTitle("Layer Source Editor");
     setDescription("Choose a layer, then Tab through its source controls. Escape closes this editor.");
     constexpr const char* grids[]{"1/8","1/16","1/32"};
@@ -498,11 +501,20 @@ void SourcePanel::refresh(){
     if(!character_.isMouseButtonDown())character_.setValue(layer.character*100,juce::dontSendNotification);
     if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
     const bool glitch=layer.family==NoiseFamily::glitch;
+    const bool granular=layer.family==NoiseFamily::granular;
+    // A restore/family change can hide the focused control. Keep focus in
+    // Source, but do not take focus from the host or another editor panel.
+    if(isShowing()&&getPeer()!=nullptr&&hasKeyboardFocus(true)){
+        const auto focused=[](const juce::Component& c){return c.hasKeyboardFocus(true);};
+        const bool hidesSlice=!glitch&&(focused(sliceGrid_)||focused(sliceRead_)||focused(sliceReset_)||
+            std::any_of(sliceGate_.begin(),sliceGate_.end(),focused));
+        const bool hidesGrain=!granular&&(focused(grainLength_)||focused(grainPosition_)||focused(scatter_)||focused(reverse_));
+        if(hidesSlice||hidesGrain)layer_.grabKeyboardFocus();
+    }
     for(auto* c:std::array<juce::Component*,3>{&sliceGrid_,&sliceRead_,&sliceReset_})c->setVisible(glitch);
     sliceGrid_.setSelectedId(static_cast<int>(layer.glitch.grid)+1,juce::dontSendNotification);
     sliceRead_.setSelectedId(static_cast<int>(layer.glitch.read)+1,juce::dontSendNotification);
     for(unsigned i=0;i<sliceGate_.size();++i){sliceGate_[i].setVisible(glitch);sliceGate_[i].setToggleState(layer.glitch.gate(i),juce::dontSendNotification);}
-    const bool granular=layer.family==NoiseFamily::granular;
     for(auto* c:std::array<juce::Component*,4>{&grainLength_,&grainPosition_,&scatter_,&reverse_})c->setVisible(granular);
     scatter_.setToggleState(layer.grains.position<0,juce::dontSendNotification);reverse_.setToggleState(layer.grains.reverse,juce::dontSendNotification);
     grainPosition_.setEnabled(layer.grains.position>=0);

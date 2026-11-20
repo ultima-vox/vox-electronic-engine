@@ -149,6 +149,135 @@ int main(){
                         10*std::log10(oldError/energy),10*std::log10(newError/energy));
         }
         {
+            // Use an exact, hand-authored tap trajectory to force crossings
+            // during the morph (not just after it) and isolate correction
+            // discontinuities from the intended Doppler motion of the tap.
+            const unsigned fade=static_cast<unsigned>(std::round(rate*.005));
+            for(double speed:{.003,.031}){
+                detail::FreeDelayTap tap;
+                double ideal=1000.49,previous=tap.update(ideal,.3f,fade),maxExtraStep=0,legacyStep=0;
+                double oldPrevious=previous;unsigned crossings=0;
+                const auto step=[&](double next,float target,unsigned entryIndex=0){
+                    const auto output=tap.update(next,target,fade);
+                    maxExtraStep=std::max(maxExtraStep,std::abs((output-previous)-(next-ideal)));
+                    if(entryIndex!=0){
+                        const double rounded=std::round(next);
+                        const double old=rounded+(next-rounded)*entryIndex/fade;
+                        legacyStep=std::max(legacyStep,std::abs((old-oldPrevious)-(next-ideal)));
+                        oldPrevious=old;
+                        if(std::round(next)!=std::round(ideal))++crossings;
+                    }
+                    ideal=next;previous=output;
+                };
+                for(unsigned n=1;n<=fade;++n){const double next=ideal+((n/19)%2==0?speed:-speed);step(next,.32f,n);}
+                // The old exit criterion could start a fade on the wrong
+                // side of +.5, then cross while still inside .01 sample.
+                for(double next:{1000.491,1000.497,1000.499,1000.5,1000.501,1000.502})step(next,.31f);
+                for(unsigned n=0;n<2*fade;++n)step(1000.502,.31f);
+                check(previous==1001.,"moving tap returns exactly to the held legacy tap");
+                // Restart during a fade-out and reverse direction repeatedly.
+                for(unsigned n=0;n<fade;++n)step(1000.499,.33f);
+                for(unsigned n=0;n<fade/3+2;++n)step(1000.499,.33f);
+                check(previous<1000.499&&previous>1000.,"fixture re-enters partway through exit correction");
+                for(unsigned n=0;n<fade;++n)step(ideal+(n%2?speed:-speed),n%2?.29f:.33f);
+                check(crossings>0&&legacyStep>.4&&maxExtraStep<=.5/fade+1e-10,
+                      "crossing residual is bounded through entrance, plateau exit, and interrupted exit");
+                std::printf("free Delay boundary %.0f Hz speed %.3f: %u crossings, old entry residual %.6f, max new %.6f samples\n",
+                            rate,speed,crossings,legacyStep,maxExtraStep);
+            }
+            // A linear reading region turns the address residual into a
+            // measurable output derivative residual in a real first echo.
+            // Choose a held setting that approaches +.5 from below, then
+            // cross it early during the 5 ms morph, before feedback arrives.
+            const int onset=static_cast<int>(rate*.24),end=onset+static_cast<int>(fade)+1;
+            const double sm=1.-std::exp(-1./(.005*rate));
+            const auto advance=[&](float v,float target){return v+static_cast<float>((target-v)*sm);};
+            const auto address=[&](float v){return rate*(.05+.45*v);};
+            float base=.3f;
+            for(int i=0;i<1000;++i){
+                float v=.5f;for(int n=0;n<onset;++n)v=advance(v,base);
+                const double fraction=address(v)-std::floor(address(v));
+                if(fraction>.475&&fraction<.493)break;
+                base+=.000001f;
+            }
+            Chain echo;check(echo.prepare(rate)&&echo.set(0,{Type::delay,1,base}),"first echo boundary audio setup");
+            const double origin=onset-address(base),slope=.0005;
+            float amount=.5f;
+            double previousResidual=0.,oldPreviousResidual=0.,maxResidual=0.,oldResidual=0.;
+            int crossings=0;
+            for(int n=0;n<end;++n){
+                const float target=n<onset?base:base+.0001f;
+                const double before=address(amount);amount=advance(amount,target);
+                const double tap=address(amount);
+                if(n==onset)echo.set(0,{Type::delay,1,target});
+                float l=n<rate*.12?static_cast<float>(std::clamp(slope*(n-origin),-.4,.4)):0.f,r=-l;
+                echo.process(&l,&r,1);
+                if(n>=onset-1){
+                    const double ideal=slope*(n-tap-origin);
+                    const double residual=l-ideal;
+                    const double rounded=std::round(tap);
+                    const double mix=std::clamp(static_cast<double>(n-onset+1)/fade,0.,1.);
+                    const double simulatedOld=slope*(n-(rounded+(tap-rounded)*mix)-origin)-ideal;
+                    if(n>=onset){
+                        if(std::round(tap)!=std::round(before))++crossings;
+                        maxResidual=std::max(maxResidual,std::abs(residual-previousResidual));
+                        oldResidual=std::max(oldResidual,std::abs(simulatedOld-oldPreviousResidual));
+                    }
+                    previousResidual=residual;oldPreviousResidual=simulatedOld;
+                }
+            }
+            check(crossings>0&&oldResidual>slope*.65&&maxResidual<slope*.004,
+                  "real delay echo removes the abrupt derivative residual at an early read-head crossing");
+            std::printf("free Delay first-echo boundary %.0f Hz: old derivative residual %.9f, measured new %.9f\n",
+                        rate,oldResidual,maxResidual);
+            // Replay note-like noise plus a transient into real delay memory;
+            // split at control edges as well as different callback bounds.
+            for(bool dualMono:{true,false}){
+                const int frames=static_cast<int>(rate*1.4),release=static_cast<int>(rate*.11);
+                const int start=static_cast<int>(rate*.19),interval=static_cast<int>(rate*.0027);
+                const auto render=[&](int blockSize){
+                    Chain delay;check(delay.prepare(rate)&&delay.set(0,{Type::delay,1,.3f}),"boundary audio fixture prepare");
+                    std::vector<float> l(frames),r(frames);
+                    std::uint32_t random=17;
+                    for(int n=0;n<release;++n){
+                        random=1664525u*random+1013904223u;
+                        l[n]=.15f*(static_cast<float>(random>>16)/32768.f-1.f);
+                        r[n]=dualMono?l[n]:-.6f*l[n];
+                    }
+                    l[180]+=.42f;r[180]+=dualMono?.42f:-.25f;
+                    int at=0;
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+                    voxProbeBegin();
+#endif
+                    while(at<frames){
+                        constexpr float changes[]{.3001f,.2996f,.301f,.3002f,.296f,.298f,.305f,.303f,.301f};
+                        const int i=at<start?-1:(at-start)/interval;
+                        const bool held=i>=static_cast<int>(std::size(changes));
+                        const float amount=i<0?.3f:held?.3001f:changes[i];
+                        const int next=i<0?start:held?frames:std::min(frames,start+(i+1)*interval);
+                        const int count=std::min({blockSize-(at%blockSize),next-at,frames-at});
+                        delay.set(0,{Type::delay,1,amount});delay.process(l.data()+at,r.data()+at,count);at+=count;
+                    }
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+                    const auto allocations=voxProbeEnd();if(voxProbeAvailable())check(allocations==0,"boundary replay allocates nothing in delay callback");
+#endif
+                    return std::pair(std::move(l),std::move(r));
+                };
+                const auto samplewise=render(1);
+                for(int size:{64,128,512})check(render(size)==samplewise,"moving and settling noisy tail is sample-exact at 1/64/128/512 frames");
+                float echo=0,late=0,stereo=0;bool bounded=true;
+                for(int n=start;n<frames;++n){
+                    const float l=samplewise.first[n],r=samplewise.second[n];
+                    bounded&=std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<1&&std::abs(r)<1;
+                    if(n>=static_cast<int>(rate*.35)&&n<static_cast<int>(rate*.52))echo=std::max(echo,std::abs(l));
+                    if(n>static_cast<int>(rate*1.3))late=std::max(late,std::abs(l));
+                    stereo=std::max(stereo,std::abs(l-r));
+                }
+                check(bounded&&echo>.005f&&late<.001f&&(dualMono?stereo==0:stereo>.02f),
+                      "moving tap keeps repeat energy, bounded decaying tail, and channel independence");
+            }
+        }
+        {
             Chain sync;check(sync.prepare(rate)&&sync.set(0,{Type::tempoDelay,1,0}),"Tempo Delay prepare");
             std::array<float,256> l{},r{};
             const auto silence=[&]{for(int i=0;i<8;++i)sync.process(l.data(),r.data(),l.size());};
