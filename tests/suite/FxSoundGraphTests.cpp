@@ -27,6 +27,16 @@ int main(){
               b.program.layers[0].filters[0].hz==a.program.layers[0].filters[0].hz&&b.program.layers[0].transpose==a.program.layers[0].transpose,
               "independent graph and layer locks survive a nontrivial mutation");
     }
+    {
+        ProgramStore::Snapshot edited,generated;bool builtin=false;
+        const source::GlitchShape slices{source::SliceGrid::eighth,source::SliceRead::reverse,4};
+        edited.generator.role=5;edited.program.layers[0].glitch=slices;
+        for(bool mutate:{false,true})for(auto locks:{0u,static_cast<unsigned>(generator::character)}){
+            edited.generator.locks.layers[0]=locks;
+            check(generator::makeSound(edited,mutate,generated,builtin)&&generated.program.layers[0].glitch==slices,
+                  "Generate and Mutate preserve authored Slice settings with or without Character lock");
+        }
+    }
     using S=mod::Source;using D=mod::Destination;
     macro::Config motion;std::vector<std::byte> bytes;
     check(motion.setRoute(S::macro1,D::gain,.2f,0)&&macro::codec::encode(motion,bytes),"historical route fixture");
@@ -81,6 +91,43 @@ int main(){
 #endif
         check(finite&&peak>.0001&&peak<1&&std::abs(mean/16384)<.01&&grains==64&&bases[0]==1,"64-route mix/headroom/DC/grain bound and automation base integrity");
         std::printf("motion %.0f Hz 64 routes: peak %.6f DC %.7f / %u grains\n",rate,peak,std::abs(mean/16384),grains);
+    }
+    // Production-rate mixed nonlinear and time effects, rather than a
+    // bypass-only synthetic tail. This bounds the rendered signal; it does
+    // not certify alias rejection or musical quality.
+    for(double rate:{44100.,48000.,96000.}){
+        const int changeAt=static_cast<int>(rate*.12),frames=static_cast<int>(rate*4);
+        const auto run=[&](bool smallBlocks){
+            effects::Chain chain;macro::Runtime motion;macro::Config routes;
+            check(chain.prepare(rate)&&motion.prepare(rate),"nonlinear serial fixture prepare");
+            check(routes.setRoute(S::macro1,D::amount1,.3f,.003f)&&routes.setRoute(S::lfo1,D::amount2,.25f,.015f)&&
+                  routes.setRoute(S::follower,D::wet4,.45f,.018f)&&motion.setConfig(routes),"independent nonlinear and tail controls route");
+            check(chain.set(0,{effects::Type::drive,.65f,.48f})&&chain.set(1,{effects::Type::wavefold,.38f,.29f})&&
+                  chain.set(2,{effects::Type::tempoDelay,.62f,.21f})&&chain.set(3,{effects::Type::reverb,.57f,.52f}),"install mixed four-slot topology");
+            auto values=bases;std::vector<float> l(frames),r(frames);
+            for(int i=0;i<changeAt;++i){
+                const auto x=static_cast<double>(i)/changeAt;
+                const auto sample=static_cast<float>(.22*std::sin(6.283185307179586*703*i/rate)*std::sin(3.141592653589793*x));
+                l[i]=sample;r[i]=sample*.7f;
+            }
+            for(int at=0;at<frames;){
+                if(at==changeAt){values[0]=.22f;chain.setTempo(144);motion.setTempo(144);}
+                const auto size=std::min(smallBlocks?97:512,(at<changeAt?changeAt:frames)-at);
+                macro::renderPost(chain,motion,l.data()+at,r.data()+at,size,values,[]{return .8f;});at+=size;
+            }
+            return std::pair(std::move(l),std::move(r));
+        };
+        const auto large=run(false),small=run(true);
+        check(large==small,"mixed nonlinear/routed tempo tails remain sample-exact across block partitions");
+        double peak=0,tail=0,stereo=0,late=0;bool finite=true;
+        for(int i=0;i<frames;++i){
+            const auto l=large.first[i],r=large.second[i];const auto amplitude=std::max(std::abs(l),std::abs(r));
+            finite&=std::isfinite(l)&&std::isfinite(r);peak=std::max(peak,static_cast<double>(amplitude));
+            if(i>=rate*.23){tail=std::max(tail,static_cast<double>(amplitude));stereo+=std::abs(l-r);}
+            if(i>=rate*3.5)late=std::max(late,static_cast<double>(amplitude));
+        }
+        check(finite&&peak>.02&&peak<1&&tail>.001&&late<1e-5&&stereo>.01,"modulated serial FX stay finite, retain wet stereo energy and decay");
+        std::printf("mixed nonlinear/tempo tail %.0f Hz: peak %.7f, tail %.7f, final peak %.9f\n",rate,peak,tail,late);
     }
     std::printf("FX sound graph/deterministic routes: %d failure(s)\n",failures);return failures?1:0;
 }

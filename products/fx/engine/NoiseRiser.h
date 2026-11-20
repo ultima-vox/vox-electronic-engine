@@ -34,10 +34,11 @@ struct NoiseLayer {
     timeline::Curve cutoffCurve = timeline::Curve::constant(0.5f);
     std::array<source::Filter,2> filters{};
     source::GrainShape grains{};
+    source::GlitchShape glitch{};
     float character = 0; // signed, family-specific; zero is the legacy sound
     float transpose = 0; // semitones; authored bias for pitched sources
     bool valid() const noexcept {
-        if(!grains.valid()||!std::isfinite(character)||character< -1||character>1)return false;
+        if(!grains.valid()||!glitch.valid()||!std::isfinite(character)||character< -1||character>1)return false;
         if(!std::isfinite(transpose)||transpose< -24||transpose>24||!filters[0].valid()||!filters[1].valid())return false;
         return static_cast<unsigned>(family) <= static_cast<unsigned>(NoiseFamily::granular) &&
                timing.valid() && std::isfinite(gain) && gain >= 0 && gain <= 1 &&
@@ -268,6 +269,10 @@ public:
             const auto& settings = slot->program.layers[i];
             if(settings.enabled) {
                 for (std::size_t f=0;f<2;++f) layer.filters[f].prepare(settings.filters[f],rate_);
+                if(settings.family==NoiseFamily::glitch){
+                    layer.legacyGlitch=settings.glitch==source::GlitchShape{};
+                    layer.glitchGridScale=settings.glitch.gridScale();
+                }
                 layer.filterGrains=settings.family==NoiseFamily::granular&&(settings.filters[0].type!=source::FilterType::off||settings.filters[1].type!=source::FilterType::off);
                 if(settings.transpose!=0)layer.transposeRatio=std::exp2(settings.transpose/12.0);
                 layer.tunedHz=noteHz_[static_cast<std::size_t>(mapped)];
@@ -414,7 +419,9 @@ private:
         bool modesStarted = false;
         std::array<float, 256> delay {};
         unsigned delayWrite = 0, glitchWritten = 0, grainCountdown = 0,glitchStepAge=0;
-        double glitchGrid=0;
+        double glitchGrid=0,glitchGridScale=1;
+        unsigned glitchEntrance=0;
+        bool legacyGlitch=true;
         std::uint64_t glitchStep=0;
         double grainGain = 0, grainPan = 0;
         bool grainLayerActive = false;
@@ -610,29 +617,37 @@ private:
             if (settings.family == NoiseFamily::glitch) {
                 // Capture this layer's own synthesized signal into a bounded
                 // 256-sample loop, then windowed slices on an event-local
-                // sixteenth grid. Beat phase integrates tempo per sample.
+                // grid. Beat phase integrates tempo per sample.
                 // There is no external audio input or host-PPQ alignment.
                 const auto step=static_cast<std::uint64_t>(layer.glitchGrid);
                 const double fractionOfStep=layer.glitchGrid-static_cast<double>(step);
                 if(step!=layer.glitchStep){layer.glitchStep=step;layer.glitchStepAge=0;}
                 const unsigned sliceAge=layer.glitchStepAge++;
-                layer.glitchGrid+=glitchGridIncrement_;
+                layer.glitchGrid+=glitchGridIncrement_*layer.glitchGridScale;
                 const double frequency = std::min(layer.tunedHz * pitchRatio * 2.0, rate_ * 0.4);
                 const double dry = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
                 layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 if (layer.glitchWritten < layer.delay.size()) {
                     layer.delay[layer.glitchWritten++] = static_cast<float>(dry);
-                    source = dry * 0.5;
+                    source = layer.legacyGlitch?dry*.5:0.0;
+                } else if (!layer.legacyGlitch && !settings.glitch.gate(step)) {
+                    // Authored rests mute the source, including the dry Character
+                    // blend. Per-layer filters and post FX can still ring out.
+                    source = 0.0;
                 } else {
-                    const unsigned speed = (step & 1u) != 0 ? 2u : 1u;
+                    const unsigned speed = settings.glitch.read==source::SliceRead::alternatingSpeed&&(step&1u)!=0?2u:1u;
                     const auto sliceIndex = (sliceAge * speed) & 255u;
+                    const auto readIndex = settings.glitch.read==source::SliceRead::reverse?255u-sliceIndex:sliceIndex;
                     const double window = std::sin(3.141592653589793 * static_cast<double>(sliceIndex) / 255.0);
                     const double edge = std::min(1.0, std::min(fractionOfStep, 1.0-fractionOfStep) * 125.0);
-                    source = (step % 4 == 2 ? 0.0 : layer.delay[sliceIndex] * window * window * edge);
-                    if(character!=0){ // toward dry pulse or sharper slice gating, neutral is legacy
+                    const bool open=settings.glitch.gate(step);
+                    source = open ? layer.delay[readIndex] * window * window * edge : 0.0;
+                    if(character!=0){
                         const double amount=std::abs(character)*.6;
-                        source=character<0?source*(1-amount)+dry*.5*amount:source*(1-amount*(1-window));
+                        source=character<0?source*(1-amount)+(dry*.5*amount)*(layer.legacyGlitch?1:edge):source*(1-amount*(1-window));
                     }
+                    if(!layer.legacyGlitch&&layer.glitchEntrance<32)
+                        source*=static_cast<double>(layer.glitchEntrance++)/32.;
                 }
                 envelope = 0.75;
             } else if (settings.family == NoiseFamily::formant) {

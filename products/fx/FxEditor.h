@@ -128,6 +128,8 @@ private:
 class SourcePanel final : public juce::Component {
 public:
     explicit SourcePanel(FxProcessor&);
+    void open(juce::Component& returnFocus);
+    bool keyPressed(const juce::KeyPress&) override;
     void refresh();
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -136,13 +138,22 @@ public:
     juce::ComboBox& typeSelector(std::size_t slot) noexcept { return filters_[slot].type; }
     juce::Slider& cutoffSlider(std::size_t slot) noexcept { return filters_[slot].hz; }
     juce::Slider& grainLengthSlider() noexcept {return grainLength_;}
+    juce::ComboBox& sliceGridSelector() noexcept {return sliceGrid_;}
+    juce::ComboBox& sliceReadSelector() noexcept {return sliceRead_;}
+    juce::ToggleButton& sliceGate(std::size_t i) noexcept {return sliceGate_[i];}
 private:
+    void close();
+    template <typename Edit> void editGlitch(Edit);
     struct FilterRow { juce::ComboBox type, slope; StructuralSlider hz, q; };
     FxProcessor& processor_;
     juce::ComboBox layer_, root_, scale_;
     StructuralSlider transpose_,character_,grainLength_,grainPosition_;
     juce::ToggleButton scatter_{"Scatter"},reverse_{"Reverse"};
     juce::Label characterLabel_;
+    juce::ComboBox sliceGrid_,sliceRead_;
+    std::array<juce::ToggleButton,4> sliceGate_;
+    juce::TextButton sliceReset_{"Reset slices"};
+    juce::Component::SafePointer<juce::Component> returnFocus_;
     std::array<FilterRow,2> filters_;
     juce::TextButton close_{"Close"};
     std::uint64_t revision_=0;

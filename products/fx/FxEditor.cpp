@@ -406,6 +406,30 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     reverse_.onClick=[this]{const auto checked=reverse_.getToggleState();editLayer([=](auto& l){l.grains.reverse=checked;});};
     scatter_.setTooltip("Use a seeded random grain start instead of a fixed percentage of the source");
     addAndMakeVisible(scatter_);addAndMakeVisible(reverse_);
+    setTitle("Layer Source Editor");
+    setDescription("Choose a layer, then Tab through its source controls. Escape closes this editor.");
+    constexpr const char* grids[]{"1/8","1/16","1/32"};
+    constexpr const char* reads[]{"Alt. 1x / 2x","Forward","Reverse"};
+    options(sliceGrid_,grids);options(sliceRead_,reads);
+    sliceGrid_.setTitle("Glitch slice tempo division");
+    sliceGrid_.setTooltip("Event-local clock starts with the note; follows tempo, not host PPQ or the Trigger Pattern.");
+    sliceRead_.setTitle("Glitch slice read direction and speed");
+    sliceRead_.setTooltip("Play the procedural capture forward, backward, or forward at alternating 1x and 2x rates.");
+    sliceGrid_.onChange=[this]{const auto id=sliceGrid_.getSelectedId();
+        if(id>=1&&id<=3)editGlitch([id](auto& s){s.grid=static_cast<source::SliceGrid>(id-1);});};
+    sliceRead_.onChange=[this]{const auto id=sliceRead_.getSelectedId();
+        if(id>=1&&id<=3)editGlitch([id](auto& s){s.read=static_cast<source::SliceRead>(id-1);});};
+    sliceGrid_.setName("Slice grid");sliceRead_.setName("Slice read");
+    addAndMakeVisible(sliceGrid_);addAndMakeVisible(sliceRead_);
+    for(unsigned i=0;i<sliceGate_.size();++i){
+        auto& gate=sliceGate_[i];gate.setButtonText(juce::String(i+1));gate.setTitle("Play Glitch slice "+juce::String(i+1));
+        gate.setTooltip("Enable this slice in the repeating four-step source cycle. Filters and shared FX may still ring on rests.");
+        gate.onClick=[this,i]{const auto on=sliceGate_[i].getToggleState();
+            editGlitch([i,on](auto& s){s.gates=static_cast<std::uint8_t>(on?s.gates|(1u<<i):s.gates&~(1u<<i));});};
+        addAndMakeVisible(gate);
+    }
+    sliceReset_.setTooltip("Restore default 1/16 divisions, alternating rate and legacy slice gates.");
+    sliceReset_.onClick=[this]{editGlitch([](auto& s){s={};});};addAndMakeVisible(sliceReset_);
     constexpr const char* types[]{"Off","Low-pass","High-pass","Band-pass","Notch"};
     for(std::size_t i=0;i<filters_.size();++i){
         auto& f=filters_[i];options(f.type,types);f.slope.addItem("12 dB/oct",1);f.slope.addItem("24 dB/oct",2);
@@ -420,7 +444,32 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
         f.q.onStructuralChange=[this,i]{const auto value=static_cast<float>(filters_[i].q.getValue());editLayer([=](NoiseLayer& l){l.filters[i].q=value;});};
         addAndMakeVisible(f.type);addAndMakeVisible(f.slope);
     }
-    close_.onClick=[this]{setVisible(false);};addAndMakeVisible(close_);refresh();
+    close_.onClick=[this]{close();};addAndMakeVisible(close_);
+    int order=0;
+    const auto tab=[&](juce::Component& child){child.setExplicitFocusOrder(++order);};
+    tab(layer_);tab(root_);tab(scale_);tab(transpose_);tab(character_);
+    for(auto& f:filters_){tab(f.type);tab(f.slope);tab(f.hz);tab(f.q);}
+    tab(grainLength_);tab(grainPosition_);tab(scatter_);tab(reverse_);
+    tab(sliceGrid_);tab(sliceRead_);for(auto& gate:sliceGate_)tab(gate);tab(sliceReset_);tab(close_);
+    refresh();
+}
+void SourcePanel::open(juce::Component& returnFocus){
+    returnFocus_=&returnFocus;
+    refresh();setVisible(true);toFront(false);
+    if(isShowing()&&getPeer()!=nullptr)layer_.grabKeyboardFocus();
+}
+void SourcePanel::close(){
+    dragging_=false;setVisible(false);
+    if(auto* target=returnFocus_.getComponent();target&&target->isShowing()&&target->isEnabled()&&target->getPeer()!=nullptr)
+        target->grabKeyboardFocus();
+    returnFocus_=nullptr;
+}
+bool SourcePanel::keyPressed(const juce::KeyPress& key){
+    if(isVisible()&&key==juce::KeyPress::escapeKey){close();return true;}
+    return false;
+}
+template <typename Edit> void SourcePanel::editGlitch(Edit edit){
+    editLayer([&](auto& l){if(l.family==NoiseFamily::glitch)edit(l.glitch);});
 }
 template <typename Edit> void SourcePanel::editLayer(Edit edit){
     const int index=layer_.getSelectedId()-1;
@@ -448,6 +497,11 @@ void SourcePanel::refresh(){
     characterLabel_.setText(name,juce::dontSendNotification);character_.setTitle(name);
     if(!character_.isMouseButtonDown())character_.setValue(layer.character*100,juce::dontSendNotification);
     if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
+    const bool glitch=layer.family==NoiseFamily::glitch;
+    for(auto* c:std::array<juce::Component*,3>{&sliceGrid_,&sliceRead_,&sliceReset_})c->setVisible(glitch);
+    sliceGrid_.setSelectedId(static_cast<int>(layer.glitch.grid)+1,juce::dontSendNotification);
+    sliceRead_.setSelectedId(static_cast<int>(layer.glitch.read)+1,juce::dontSendNotification);
+    for(unsigned i=0;i<sliceGate_.size();++i){sliceGate_[i].setVisible(glitch);sliceGate_[i].setToggleState(layer.glitch.gate(i),juce::dontSendNotification);}
     const bool granular=layer.family==NoiseFamily::granular;
     for(auto* c:std::array<juce::Component*,4>{&grainLength_,&grainPosition_,&scatter_,&reverse_})c->setVisible(granular);
     scatter_.setToggleState(layer.grains.position<0,juce::dontSendNotification);reverse_.setToggleState(layer.grains.reverse,juce::dontSendNotification);
@@ -473,7 +527,14 @@ void SourcePanel::paint(juce::Graphics& g){
     g.drawText("FILTER     TYPE                     SLOPE                   CUTOFF                                           RESONANCE",a.removeFromTop(20),juce::Justification::centredLeft);
     g.drawText("A",a.removeFromTop(31),juce::Justification::centredLeft);
     g.drawText("B",a.removeFromTop(31),juce::Justification::centredLeft);
-    if(grainLength_.isVisible())g.drawText("GRAIN      Length                                Start",a.removeFromTop(22),juce::Justification::centredLeft);
+    if(sliceGrid_.isVisible()){
+        const auto labels=a.removeFromTop(22);
+        const auto label=[&](const char* text,const juce::Component& child){
+            g.drawText(text,labels.withX(child.getX()).withWidth(getWidth()-child.getX()),juce::Justification::centredLeft);
+        };
+        label("Slice grid",sliceGrid_);label("Read",sliceRead_);label("Repeat gates 1–4",sliceGate_[0]);
+    }
+    else if(grainLength_.isVisible())g.drawText("GRAIN      Length                                Start",a.removeFromTop(22),juce::Justification::centredLeft);
 }
 void SourcePanel::resized(){
     auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
@@ -488,6 +549,10 @@ void SourcePanel::resized(){
     a.removeFromTop(20);auto grains=a.removeFromTop(32);
     grainLength_.setBounds(grains.removeFromLeft(207).reduced(2));grainPosition_.setBounds(grains.removeFromLeft(194).reduced(2));
     scatter_.setBounds(grains.removeFromLeft(104));reverse_.setBounds(grains.removeFromLeft(93));
+    auto slices=grainLength_.getBounds().getUnion(reverse_.getBounds());
+    sliceGrid_.setBounds(slices.removeFromLeft(98).reduced(2,0));sliceRead_.setBounds(slices.removeFromLeft(126).reduced(2,0));
+    for(auto& gate:sliceGate_)gate.setBounds(slices.removeFromLeft(55).reduced(2,0));
+    sliceReset_.setBounds(slices.removeFromLeft(110).reduced(1,0));
     close_.setBounds(a.removeFromBottom(28).removeFromRight(92));
 }
 namespace {
@@ -973,8 +1038,8 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     };
     addAndMakeVisible(programCurvesButton_);
     addChildComponent(sourcePanel_);
-    sourceButton_.setTooltip("Edit Program key and per-layer pitch and filters");
-    sourceButton_.onClick=[this]{sourcePanel_.refresh();sourcePanel_.setVisible(true);sourcePanel_.toFront(true);};
+    sourceButton_.setTooltip("Edit Program key, per-layer pitch and filters, and Glitch or Granular source controls");
+    sourceButton_.onClick=[this]{sourcePanel_.open(sourceButton_);};
     addChildComponent(motionPanel_);
     motionButton_.setTooltip("Open the native 64-route modulation editor");
     motionButton_.onClick=[this]{motionPanel_.refresh();motionPanel_.setVisible(true);motionPanel_.toFront(true);};

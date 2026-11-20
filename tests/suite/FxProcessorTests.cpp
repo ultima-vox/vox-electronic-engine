@@ -36,12 +36,12 @@ void block (vox::fx::FxProcessor& p, juce::AudioBuffer<float>& audio, juce::Midi
 // Processor boundary, not a test of the VST3 wrapper or of a real DAW.
 void checkHostTransitionMatrix() {
     using namespace vox::fx;
-    constexpr double rate=8000, start=-1.5, origin=-3.5;
+    constexpr double start=-1.5, origin=-3.5;
     constexpr int noteOffset=23;
     auto fx=std::make_unique<FxProcessor>();TestPlayHead host;
     fx->setPlayHead(&host);
     juce::AudioBuffer<float> audio(2,511);juce::MidiBuffer midi;midi.ensureSize(256);
-    for(int bars:{4,8,16})for(double bpm:{60.,100.,128.,140.,160.,200.}){
+    const auto run=[&](double rate,int bars,double bpm){
         fx->prepareToPlay(rate,511);
         auto program=fx->program();program.mode=PlayMode::transition;program.bars=static_cast<std::uint8_t>(bars);
         program.layers[0].family=NoiseFamily::shepard;
@@ -75,9 +75,11 @@ void checkHostTransitionMatrix() {
         render(16);
         check(fx->audioTelemetry().events==0&&audio.getMagnitude(0,8,8)==0&&audio.getMagnitude(1,8,8)==0,
               "dry Transition retires inside the callback precisely at the target sample");
-        std::printf("host Transition: %d bars %.0f->%.0f BPM, target PPQ %.1f, sample %d, suffix peak %.7f\n",
-                    bars,bpm,bpm*.75,target,end,audio.getMagnitude(8,8));
-    }
+        std::printf("host Transition: %.0f Hz %d bars %.0f->%.0f BPM, target PPQ %.1f, sample %d, suffix peak %.7f\n",
+                    rate,bars,bpm,bpm*.75,target,end,audio.getMagnitude(8,8));
+    };
+    for(int bars:{4,8,16})for(double bpm:{60.,100.,128.,140.,160.,200.})run(8000,bars,bpm);
+    run(44100,4,200);run(48000,8,200);run(96000,16,200);
     fx->setPlayHead(nullptr);
 }
 
@@ -157,6 +159,37 @@ void checkMeasuredFxTail() {
     for(int i=0;i<180;++i){block(*subject,a,ma);
         if(i>5)offlineTail=std::max(offlineTail,static_cast<double>(a.getMagnitude(0,128)));}
     check(offlineTail>FxProcessor::fxTailThreshold&&!subject->consumeFxTail(),"offline bounce keeps audio tails without lighting the live indicator");
+}
+
+void checkGlitchSourceEditor() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();auto editor=std::make_unique<FxPanel>(*fx);
+    auto& panel=editor->sourcePanel();juce::TextButton opener("Source");
+    panel.open(opener);
+    check(panel.isVisible()&&!panel.sliceGridSelector().isVisible(),"non-Glitch family hides slice controls");
+    check(fx->setFamily(static_cast<int>(NoiseFamily::glitch)),"set Glitch through product controller");panel.refresh();
+    check(panel.sliceGridSelector().isVisible()&&panel.sliceGridSelector().getSelectedId()==2&&
+          panel.sliceReadSelector().getSelectedId()==1&&!panel.sliceGate(2).getToggleState(),"Glitch editor reads legacy per-layer settings");
+    panel.sliceGridSelector().setSelectedId(3,juce::sendNotificationSync);
+    panel.sliceReadSelector().setSelectedId(3,juce::sendNotificationSync);
+    panel.sliceGate(2).setToggleState(true,juce::dontSendNotification);panel.sliceGate(2).onClick();
+    const source::GlitchShape expected{source::SliceGrid::thirtySecond,source::SliceRead::reverse,15};
+    check(fx->program().layers[0].glitch==expected&&fx->program().layers[1].glitch==source::GlitchShape{},"controls publish only the edited layer");
+    const auto saved=save(*fx);
+    std::vector<std::byte> portable;
+    auto other=std::make_unique<FxProcessor>();
+    check(fx->encodePortablePreset(portable)&&other->restorePortablePreset(portable)&&other->program().layers[0].glitch==expected,
+          "new slice settings survive portable preset exchange");
+    auto prior=std::make_unique<FxProcessor>();(void)prior->setFamily(static_cast<int>(NoiseFamily::glitch));
+    const auto old=save(*prior);fx->setStateInformation(old.getData(),static_cast<int>(old.getSize()));
+    panel.sliceReadSelector().setSelectedId(2,juce::sendNotificationSync);
+    check(fx->program().layers[0].glitch==source::GlitchShape{}&&panel.sliceReadSelector().getSelectedId()==1,
+          "stale selector event cannot edit the restored Glitch layer");
+    fx->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));panel.refresh();
+    check(fx->lastStateError().isEmpty()&&fx->program().layers[0].glitch==expected&&panel.sliceReadSelector().getSelectedId()==3,
+          "project reopen and controller readback preserve authored slices");
+    check(panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey))&&!panel.isVisible()&&
+          !panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)),"Escape closes the Source overlay only while it is open");
 }
 
 void checkRestoreAdmission() {
@@ -1045,7 +1078,7 @@ void checkHostTempoCursor() {
 // loop/held performance with an arbitrary MIDI NoteOff or a DAW tempo map.
 void checkCaptureParity() {
     using namespace vox::fx;
-    for(unsigned mode=0;mode<7;++mode){
+    for(unsigned mode=0;mode<8;++mode){
         auto fx=std::make_unique<FxProcessor>();TestPlayHead host;fx->setPlayHead(&host);
         constexpr int rate=48000,cycle=rate;
         const auto clock=[&](int at){
@@ -1058,6 +1091,12 @@ void checkCaptureParity() {
         program.layers[0].family=NoiseFamily::laser;program.layers[0].pan=-.18f;
         program.layers[1]=program.layers[0];program.layers[1].family=NoiseFamily::formant;program.layers[1].pan=.25f;
         program.layers[1].gain=.49f;program.layers[1].timing={.09f,.85f};
+        if(mode==7){
+            program.layers[0].family=program.layers[1].family=NoiseFamily::glitch;
+            program.layers[0].character=-.65f;
+            program.layers[0].glitch={source::SliceGrid::thirtySecond,source::SliceRead::reverse,6};
+            program.layers[1].glitch={source::SliceGrid::sixteenth,source::SliceRead::forward,1};
+        }
         check(fx->setProgram(program),"configure fixed-tempo multi-layer capture");
         fx->durationParameter().setValueNotifyingHost(fx->durationParameter().convertTo0to1(.11f));
         fx->outputParameter().setValueNotifyingHost(.63f);
@@ -1140,6 +1179,7 @@ int main() {
     phase("host Transition clock matrix and diagnostics");checkHostTransitionMatrix();checkBarClockStates();
     phase("measured serial FX tail and route");checkMeasuredFxTail();
     phase("capture parity");checkCaptureParity();
+    phase("Glitch source authoring, state and scope");checkGlitchSourceEditor();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
     phase("motion, generator and preset browser");

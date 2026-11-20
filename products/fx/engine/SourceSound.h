@@ -31,6 +31,23 @@ struct GrainShape {
     }
     bool operator==(const GrainShape&) const = default;
 };
+// A four-step, event-local gate over a fixed procedural 256-sample capture.
+// Values describe source playback, not host Pattern, PPQ or pitch automation.
+enum class SliceGrid : std::uint8_t { eighth, sixteenth, thirtySecond };
+enum class SliceRead : std::uint8_t { alternatingSpeed, forward, reverse };
+struct GlitchShape {
+    SliceGrid grid=SliceGrid::sixteenth;
+    SliceRead read=SliceRead::alternatingSpeed;
+    std::uint8_t gates=0b1011;
+    constexpr bool valid() const noexcept {
+        return grid<=SliceGrid::thirtySecond&&read<=SliceRead::reverse&&gates<=15;
+    }
+    constexpr double gridScale() const noexcept {
+        return grid==SliceGrid::eighth?.5:grid==SliceGrid::thirtySecond?2.:1.;
+    }
+    constexpr bool gate(std::uint64_t step) const noexcept {return (gates&(1u<<(step&3u)))!=0;}
+    bool operator==(const GlitchShape&) const = default;
+};
 enum class FilterType : std::uint8_t { off, lowpass, highpass, bandpass, notch };
 struct Filter {
     FilterType type = FilterType::off;
