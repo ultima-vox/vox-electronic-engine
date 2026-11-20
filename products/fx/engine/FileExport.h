@@ -40,14 +40,15 @@ private:
 using WriteObserver=void(*)(void*,std::size_t) noexcept;
 using EncodeObserver=void(*)(void*,std::size_t) noexcept;
 
-// Sample the overwrite policy once, before any expensive render or encode.
-// This is worker-side for WAV/MIDI. Files that appear after this observation
-// are not eligible for replacement. An already-existing file still follows
-// the save dialog's overwrite policy; this is not an identity check.
+// Observe before rendering. New-file commits remain atomic no-replace.
+// Existing-file commits reject an observed change before the native move;
+// there is still a race between final observation and replacement.
 struct Destination {
     juce::File file;
-    bool replaceExisting;
-    static Destination observe(const juce::File& file) { return {file,file.existsAsFile()}; }
+    detail::TargetObservation original;
+    bool canWrite() const noexcept { return original.state!=detail::TargetState::blocked; }
+    bool replaceExisting() const noexcept { return original.state==detail::TargetState::regular; }
+    static Destination observe(const juce::File& file) { return {file,detail::observeTarget(file)}; }
 };
 
 // Off the audio thread. Keep the staging file beside the destination. Only a
@@ -55,7 +56,7 @@ struct Destination {
 // via a copy. These are publication semantics, not crash-durability guarantees.
 inline bool writeBytesTo(const Destination& destination,const std::vector<std::uint8_t>& bytes,
                          Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
-    if((cancel&&cancel->cancelled())||bytes.empty()||destination.file==juce::File{}||destination.file.isDirectory())return false;
+    if((cancel&&cancel->cancelled())||bytes.empty()||!destination.canWrite())return false;
     juce::TemporaryFile temporary(destination.file);
     bool written=false;
     {
@@ -71,7 +72,8 @@ inline bool writeBytesTo(const Destination& destination,const std::vector<std::u
     // JUCE flush can report an incomplete buffered write only through the
     // final file size on some platforms. Never publish a truncated file.
     return written&&temporary.getFile().getSize()==static_cast<juce::int64>(bytes.size())&&
-           (!cancel||cancel->beginCommit())&&detail::commitFile(temporary.getFile(),destination.file,destination.replaceExisting);
+           (!destination.replaceExisting()||detail::observeTarget(destination.file)==destination.original)&&
+           (!cancel||cancel->beginCommit())&&detail::commitFile(temporary.getFile(),destination.file,destination.replaceExisting());
 }
 inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>& bytes,
                        Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
@@ -89,8 +91,8 @@ struct Status { Kind kind; Result result; float progress; bool cancelling, commi
 // on drag-end or plugin unload. The OS temporary area isn't a project asset.
 class DragFile {
 public:
-    static std::shared_ptr<DragFile> create(Kind kind) {
-        const auto root=juce::File::getSpecialLocation(juce::File::tempDirectory);
+    static std::shared_ptr<DragFile> create(Kind kind,const juce::File& scratchRoot) {
+        const auto root=scratchRoot==juce::File{}?juce::File::getSpecialLocation(juce::File::tempDirectory):scratchRoot;
         if(root==juce::File{})return {};
         const auto directory=root.getChildFile("vox-fx-drag-"+juce::Uuid().toString());
         auto payload=std::shared_ptr<DragFile>(new DragFile(kind,directory));
@@ -125,7 +127,10 @@ inline Result renderFile(const offline::Capture& capture,const juce::File& targe
                          WriteObserver observe=nullptr,void* observerContext=nullptr) {
     bool success=false;
     try {
-        if(!cancel.cancelled())success=renderTo(capture,Destination::observe(target),cancel,progress,observe,observerContext);
+        if(!cancel.cancelled()){
+            const auto destination=Destination::observe(target);
+            success=destination.canWrite()&&renderTo(capture,destination,cancel,progress,observe,observerContext);
+        }
     } catch(...) { success=false; }
     return success?Result::success:(cancel.sealFailure()?Result::cancelled:Result::failure);
 }
@@ -169,11 +174,14 @@ private:
               try {
                   if(!cancel_.cancelled()){
                       if(purpose_==Purpose::drag){
-                          auto payload=DragFile::create(kind_);
-                          if(payload&&(*work)(Destination{payload->file,false},cancel_,progress_)){
+                          auto payload=DragFile::create(kind_,target);
+                          if(payload&&(*work)(Destination{payload->file,{detail::TargetState::absent}},cancel_,progress_)){
                               drag_=std::move(payload);success=true;
                           }
-                      } else success=(*work)(Destination::observe(target),cancel_,progress_);
+                      } else {
+                          const auto destination=Destination::observe(target);
+                          success=destination.canWrite()&&(*work)(destination,cancel_,progress_);
+                      }
                   }
               } catch(...) { success=false; }
               // Retire captured data and unsuccessful staging before publication.

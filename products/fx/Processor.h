@@ -31,7 +31,8 @@ inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
 // off the audio thread; host parameters remain independent of generation.
 class FxProcessor final : public vox::suite::SuiteProcessor {
 public:
-    FxProcessor();
+    // A nonempty scratch root is used by isolated native fixtures.
+    explicit FxProcessor(juce::File dragScratchRoot={});
     void setStateInformation(const void*,int) override;
     void prepareToPlay (double sampleRate, int maximumBlockSize) override;
     void releaseResources() override;
@@ -259,6 +260,7 @@ private:
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     transport::Tracker transport_;
+    const juce::File dragScratchRoot_;
     std::shared_ptr<fileexport::DragFile> preparedDrag_;
     std::unique_ptr<fileexport::Job> fileExportJob_;
 };

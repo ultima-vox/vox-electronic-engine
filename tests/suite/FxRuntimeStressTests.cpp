@@ -57,6 +57,9 @@ int main(){
     if(typical)std::puts("Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI");
     if(shapes&&!typical)std::puts("Non-default grain shape, step and held ADSR routes");
     if(splitTiming){
+        std::printf("Timing environment: %s; CPU %s; logical CPUs %d; %s\n",
+            juce::SystemStats::getOperatingSystemName().toRawUTF8(),juce::SystemStats::getCpuModel().toRawUTF8(),
+            juce::SystemStats::getNumCpus(),sizeof(void*)==8?"64-bit":"32-bit");
 #if JUCE_WINDOWS
         std::puts("Windows GetThreadTimes enabled (outside callback); accounting may be coarser than a block, see zero deltas and min positive delta");
 #else
@@ -131,6 +134,9 @@ int main(){
         const double budget=frames*1e6/rate;
         double maxCpu=0,maxWall=0,cpuAtMaxWall=-1,minPositiveCpu=0;
         int wallMisses=0,cpuMisses=0,wallOnly=0,cpuPairs=0,zeroCpuDeltas=0;
+        struct Miss { int block; double wall,cpu; unsigned events,grains; };
+        std::array<Miss,blocks> misses{};
+        std::size_t missesRecorded=0;
         for(int block=0;block<blocks;++block){
             if(block==0)for(int i=0;i<voices;++i)midi.addEvent(juce::MidiMessage::noteOn(1,firstNote+i,juce::uint8(100)),0);
             if(!typical&&block>=48&&block%3==0)for(int j=0;j<voices*2;++j){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
@@ -159,8 +165,9 @@ int main(){
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             alloc+=voxProbeEnd();
 #endif
+            const double cpuEnd=splitTiming?threadMicros():-1;
+            const auto telemetry=fx->audioTelemetry();
             if(splitTiming){
-                const double cpuEnd=threadMicros();
                 const auto wall=durations[block];
                 const bool hasCpu=cpuStart>=0&&cpuEnd>=cpuStart;
                 const auto cpu=hasCpu?cpuEnd-cpuStart:-1.;
@@ -173,9 +180,11 @@ int main(){
                     else if(minPositiveCpu==0||cpu<minPositiveCpu)minPositiveCpu=cpu;
                     cpuMisses+=cpu>budget;wallOnly+=wall>budget&&cpu<=budget;
                 }
+                if(wall>budget||cpu>budget)
+                    misses[missesRecorded++]={block,wall,cpu,telemetry.events,telemetry.grains};
             }
             midiConsumed &= midi.isEmpty();
-            maximumGrains=std::max(maximumGrains,fx->audioTelemetry().grains);
+            maximumGrains=std::max(maximumGrains,telemetry.grains);
             for(int i=0;i<frames;++i){const auto a=io.getSample(0,i),b=io.getSample(1,i);finite &= std::isfinite(a)&&std::isfinite(b);
                 peak=std::max(peak,static_cast<double>(std::max(std::abs(a),std::abs(b))));sumL+=a;sumR+=b;}
         }
@@ -189,6 +198,11 @@ int main(){
                 maxCpu,maxWall,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocks);
             std::printf("  thread CPU valid %d/%d; zero deltas %d; min positive delta %.2f us\n",
                 cpuPairs,blocks,zeroCpuDeltas,minPositiveCpu);
+            for(std::size_t i=0;i<missesRecorded;++i){
+                const auto& m=misses[i];
+                std::printf("  deadline miss: rate=%.0f frames=%d initialVoices=%d pattern=%s block=%d events=%u grains=%u wall_us=%.3f cpu_us=%.3f budget_us=%.3f wall_miss=%d cpu_miss=%d\n",
+                    rate,frames,voices,patternOn?"on":"off",m.block,m.events,m.grains,m.wall,m.cpu,budget,m.wall>budget,m.cpu>budget);
+            }
             if(cpuPairs!=blocks)++errors;
         }
     }

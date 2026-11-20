@@ -95,11 +95,12 @@ std::uint32_t wordAt (const std::vector<std::byte>& data, std::size_t offset)
 }
 } // namespace
 
-FxProcessor::FxProcessor()
+FxProcessor::FxProcessor(juce::File dragScratchRoot)
     : vox::suite::SuiteProcessor ({ JucePlugin_Name,
                                     vox::preset::makeTag (VOX_SUITE_STATE_TAG),
                                     1,
-                                    juce::Colour::fromString ("FF16CDBA") })
+                                    juce::Colour::fromString ("FF16CDBA") }),
+      dragScratchRoot_(std::move(dragScratchRoot))
 {
     (void) engine_.attachSampleStore(&samples_.store());
     output_ = new juce::AudioParameterFloat (juce::ParameterID { "fx.output.gain", 1 },
@@ -302,7 +303,7 @@ bool FxProcessor::startMidiExport(pattern::Pattern snapshot,double tempo,juce::F
 bool FxProcessor::prepareWavDrag(offline::Capture capture) {
     if(!onFileControllerThread()||fileExportJob_||dragInProgress())return false;
     try {
-        fileExportJob_=std::make_unique<fileexport::Job>(std::move(capture),juce::File{},nullptr,nullptr,
+        fileExportJob_=std::make_unique<fileexport::Job>(std::move(capture),dragScratchRoot_,nullptr,nullptr,
                                                          fileexport::Purpose::drag,std::move(preparedDrag_));
     } catch(...) { return false; }
     return true;
@@ -312,7 +313,7 @@ bool FxProcessor::prepareMidiDrag(pattern::Pattern snapshot,double tempo) {
     if(!onFileControllerThread()||fileExportJob_||dragInProgress()||!snapshot.valid()||
        !std::isfinite(tempo)||tempo<10||tempo>1000)return false;
     try {
-        fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,juce::File{},nullptr,nullptr,nullptr,
+        fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,dragScratchRoot_,nullptr,nullptr,nullptr,
                                                          fileexport::Purpose::drag,std::move(preparedDrag_));
     } catch(...) { return false; }
     return true;

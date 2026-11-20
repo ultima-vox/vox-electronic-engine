@@ -7,6 +7,7 @@
 #include <vector>
 #if JUCE_LINUX
  #include <sys/stat.h>
+ #include <unistd.h>
 #endif
 
 int main() {
@@ -131,6 +132,19 @@ int main() {
         check(newWav.result()==fileexport::Result::failure&&lateWav.loadFileAsString()=="concurrent WAV"&&
               dir.findChildFiles(juce::File::findFiles,false).size()==4,
               "new WAV publication cannot replace a late destination and cleans staging files");
+
+        gate.bytes=0;gate.resume=false;
+        fileexport::Job overwrite(longer,lateWav,holdWrite,&gate);
+        {
+            std::unique_lock lock(gate.mutex);
+            const bool entered=gate.condition.wait_for(lock,std::chrono::seconds(5),[&]{return gate.bytes>0;});
+            check(entered&&lateWav.appendText(" changed by another writer"),"edit an existing destination while overwrite is staged");
+            gate.resume=true;
+        }
+        gate.condition.notify_all();overwrite.wait();
+        check(overwrite.result()==fileexport::Result::failure&&lateWav.loadFileAsString()=="concurrent WAV changed by another writer"&&
+              dir.findChildFiles(juce::File::findFiles,false).size()==4,
+              "worker rejects the changed incumbent, preserves its new bytes and cleans staging");
     }
 #if JUCE_LINUX
     {
@@ -177,6 +191,33 @@ int main() {
         Job bad(invalid,juce::File{},nullptr,nullptr,Purpose::drag);
         bad.wait();
         check(bad.result()==Result::failure&&!bad.takeDragFile(),"failed drag render cannot give the interface a file");
+    }
+    {
+        const auto current=dir.getChildFile("existing.mid"),substitute=dir.getChildFile("substitute.mid");
+        const std::vector<std::uint8_t> encoded{5,6,7};
+        check(current.replaceWithText("original")&&substitute.replaceWithText("original"),"set up incumbent and same-byte replacement");
+        auto saveTo=fileexport::Destination::observe(current);
+        check(saveTo.replaceExisting()&&fileexport::detail::commitFile(substitute,current,true),"replace incumbent after observation");
+        check(!fileexport::writeBytesTo(saveTo,encoded)&&current.loadFileAsString()=="original",
+              "existing destination with new identity is not overwritten even when bytes match");
+        saveTo=fileexport::Destination::observe(current);
+        check(current.appendText(" appended")&&!fileexport::writeBytesTo(saveTo,encoded)&&
+              current.loadFileAsString()=="original appended","an in-place edit after observation is preserved");
+        saveTo=fileexport::Destination::observe(current);
+        check(current.deleteFile()&&!fileexport::writeBytesTo(saveTo,encoded)&&!current.exists(),
+              "an observed overwrite cannot recreate a removed file");
+        check(dir.findChildFiles(juce::File::findFiles,false).size()==4,"failed identity checks clean staging files");
+#if JUCE_LINUX
+        check(current.replaceWithText("read only")&&::chmod(current.getFullPathName().toRawUTF8(),0400)==0,
+              "create a readonly destination in the fixture");
+        check(!fileexport::writeBytes(current,encoded)&&current.loadFileAsString()=="read only","readonly incumbent is refused");
+        const auto alias=dir.getChildFile("symlink.mid");
+        check(::symlink(current.getFullPathName().toRawUTF8(),alias.getFullPathName().toRawUTF8())==0,
+              "create a symlink fixture");
+        check(!fileexport::writeBytes(alias,encoded)&&alias.isSymbolicLink()&&current.loadFileAsString()=="read only",
+              "leaf symlink is refused without changing the link or its target");
+        alias.deleteFile();current.deleteFile();
+#endif
     }
     auto longCapture=capture;longCapture.settings.duration=32;
     {fileexport::Job job(longCapture,path);job.cancel();job.wait();

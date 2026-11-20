@@ -575,7 +575,10 @@ void checkPreparedDrag() {
     using namespace vox::fx;
     using Kind=fileexport::Kind;
     using Purpose=fileexport::Purpose;
-    auto fx=std::make_unique<FxProcessor>();
+    const auto scratch=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-drag-test","",false);
+    if(!scratch.createDirectory().wasOk()){check(false,"create isolated drag scratch directory");return;}
+    const auto scratchDirs=[&]{return scratch.findChildFiles(juce::File::findDirectories,false).size();};
+    auto fx=std::make_unique<FxProcessor>(scratch);
     int picks=0,offers=0;
     bool allow=false;
     juce::File offered;
@@ -656,6 +659,14 @@ void checkPreparedDrag() {
         return false;
     })&&fx->preparedDragKind()==Kind::midi,"rejected launch of an already-offered file keeps it available");
 
+    for(int retry=0;retry<12;++retry){
+        check(fx->offerPreparedDrag([&](const juce::File& path,std::function<void()> finish){
+            check(path==handed&&!fx->fileExportStatus(),"retry uses the exact handed-off path without a worker");
+            finish();return true;
+        })&&scratchDirs()==1&&handed.getParentDirectory().findChildFiles(juce::File::findFiles,false).size()==1,
+            "repeated successful retry does not add scratch directories or files");
+    }
+
     allow=false;
     panel=std::make_unique<FxPanel>(*fx,picker,drag);
     offline::Settings settings;
@@ -665,6 +676,9 @@ void checkPreparedDrag() {
     const auto wav=await();
     check(wav&&wav->purpose==Purpose::drag&&wav->result==fileexport::Result::success&&fx->preparedDragKind()==Kind::wav&&picks==0,
           "WAV options prepare a real WAV without a Save chooser");
+    juce::MemoryBlock retainedBytes;
+    check(scratchDirs()==2&&handed.loadFileAsData(retainedBytes)&&retainedBytes==bytes,
+          "preparing a new WAV leaves the previously offered MIDI file and its bytes intact");
     panel=std::make_unique<FxPanel>(*fx,picker,drag);
     gesture(0,true);gesture(12);
     const auto unused=offered;
@@ -674,7 +688,24 @@ void checkPreparedDrag() {
     panel.reset();fx.reset();
     check(!unused.exists()&&!unused.getParentDirectory().exists()&&handed.existsAsFile(),
           "processor teardown removes unused staging, not a path already offered to the DAW");
-    if(handed.existsAsFile()){handed.deleteFile();handed.getParentDirectory().deleteFile();}
+    check(scratchDirs()==1,"unused file removed, previously offered directory retained");
+
+    fx=std::make_unique<FxProcessor>(scratch);
+    panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    check(fx->prepareMidiDrag(pattern,120.),"prepare a separate clip for pending callback teardown");
+    const auto pending=await();
+    check(pending&&pending->result==fileexport::Result::success,"the teardown fixture prepared the file");
+    panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    allow=true;gesture(0,true);gesture(16);
+    const auto lateFile=offered;
+    check(fx->dragInProgress()&&lateFile!=handed&&bool(ended)&&scratchDirs()==2,"a distinct drag remains pending before teardown");
+    juce::MemoryBlock before,after;
+    check(lateFile.loadFileAsData(before)&&before.getSize()>0,"record pending native payload before teardown");
+    panel.reset();fx.reset();
+    if(ended){std::thread callback([done=std::exchange(ended,{})]{done();done();});callback.join();}
+    check(lateFile.loadFileAsData(after)&&after==before&&scratchDirs()==2&&handed.existsAsFile(),
+          "late duplicate completion after editor and processor teardown does not touch retained bytes or directories");
+    check(scratch.deleteRecursively(),"remove isolated transfer test files");
 }
 
 void checkTimelineViewport() {
