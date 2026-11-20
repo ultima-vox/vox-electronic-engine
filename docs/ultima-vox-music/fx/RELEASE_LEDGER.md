@@ -2,7 +2,7 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
-- [Engineering delta](ENGINEERING_DELTA_20261119.md): bounded granular admission, layer drag restore guard, a single requirement/evidence map, and the frozen 232-cue private transfer index. [Windows gate](WINDOWS_ENGINEERING_GATE_20261119.md) prepared, not dispatched; FX-T18 and Save policy remain open.
+- [Engineering delta](ENGINEERING_DELTA_20261119.md): bounded granular admission, layer drag restore guard, a single requirement/evidence map, and the frozen 232-cue private transfer index. [Windows gate](WINDOWS_ENGINEERING_GATE_20261119.md) prepared, not dispatched; FX-T18 remains open. The owner approved [create-only Save](CREATE_ONLY_SAVE_20261119.md); local implementation is staged, Windows and DAW proof are pending.
 
 - [Motion history and selected-bar Pattern authoring](MOTION_PATTERN_AUTHORING_20261119.md): Linux native history rollover, mixed replay and non-Motion project restore regression; DAW focus and keyboard ownership are not qualified. [Wave B Edit Points](WAVE_B_EDIT_POINTS_20261119.md) adds 32 authored cues, bringing the review-only total to 232 with zero approvals. No Windows dispatch, new audio ZIP or upload.
 
@@ -49,10 +49,10 @@ Baseline: `a23b67b02264ca42f2b9bf5f9fed8e233a31fe35` (TZ); implementation parent
 | FX-T11 | PARTIAL: deterministic generator and session A/B; full Program/curation unavailable | queued / not approved / not done |
 | FX-T12 | OPEN: no approved catalog audit | queued / none / not done |
 | FX-T13 | PARTIAL: standalone pattern and MIDI tests; host/DAW parity missing | queued / not approved / not done |
-| FX-T14 | PARTIAL: offline WAV, MIDI and file worker tests; host file dialogs/transfer missing | queued / not approved / not done |
+| FX-T14 | PARTIAL: WAV/SMF create-only publication and lifecycle tested on Linux; Windows chooser/host transfer missing | queued / not approved / not done |
 | FX-T15 | OPEN: editor only syntax checked here; DPI/runtime unexecuted | queued / N/A / not done |
 | FX-T16 | PARTIAL: codec tests; full processor and project reopen unexecuted | queued / N/A / not done |
-| FX-T17 | BLOCKED: historical Windows crashes; no current binary or validator evidence | queued / N/A / not done |
+| FX-T17 | BLOCKED: historical Windows crashes; no exact-head Release/validator/artifacts or native create-only results | queued / N/A / not done |
 | FX-T18 | PARTIAL: Linux standalone allocation/stress and diagnostic timings only; Windows deadline matrix missing | queued / not approved / not done |
 | FX-T19 | OPEN: complete asset/license inventory absent | queued / N/A / not done |
 | FX-T20 | NOT READY: single integrated owner acceptance after candidate qualification | queued / not approved / not done |

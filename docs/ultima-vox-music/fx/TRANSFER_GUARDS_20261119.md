@@ -1,5 +1,7 @@
 # VOX FX — transfer guards and timing capture
 
+**Historical checkpoint.** Its WAV/SMF replacement policy is superseded by [owner-approved create-only Save](CREATE_ONLY_SAVE_20261119.md).
+
 Follow-up to [TL review 7032059198](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7032059198), integrated base `c306ea08dbd9dcbd727556a1b76767b0361a3b2c`. **Development / Draft / HOLD / NO MERGE.** No Windows job or owner DAW round was dispatched.
 
 ## Save destination changed during export

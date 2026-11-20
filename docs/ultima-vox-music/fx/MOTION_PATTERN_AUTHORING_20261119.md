@@ -14,9 +14,9 @@ In **Pattern → Edit…**, choose **Shift bar one step earlier**, **Shift bar o
 
 Host IDs, FMOD/FPAT encoding, playback scheduling, sound rendering and file-transfer behavior are unchanged. Actual Pattern MIDI import, OLE, save/dialog, bounce and unloading remain in the [candidate gate](CANDIDATE_GATE_20261119.md). The [200-cue listening matrix](evidence/fx-review-200-working-matrix.tsv) is unchanged; no new audio package, upload, or approval.
 
-## Save overwrite decision still needed
+## Historical Save proposal — superseded
 
-No reviewed native primitive here atomically says “replace this destination only if it still has the observed identity.” `MoveFileExW` and `ReplaceFileW` operate on destination names; a destination handle that denies delete also prevents the normal replacement. The precommit observation therefore remains a **best-effort guard**, not compare-and-replace. Before release the owner must explicitly accept the remaining race for the overwrite workflow, or require a create-only/different-filename policy for Save. Do not infer acceptance from the TL's development integration. Do not extend the guarantee to network/cloud paths.
+The owner selected [create-only WAV/MIDI Save](CREATE_ONLY_SAVE_20261119.md). The former observation-then-replace behavior had a check-to-move race and is no longer used for these exports.
 
 ## Local evidence
 

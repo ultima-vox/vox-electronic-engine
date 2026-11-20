@@ -6,7 +6,7 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Current handoff:** [Engineering delta](ENGINEERING_DELTA_20261119.md) is the live requirement map; [Windows engineering-gate plan](WINDOWS_ENGINEERING_GATE_20261119.md) is staged but unauthorized. Draft/HOLD/NO MERGE. FX-T18, owner Save policy, private delivery/listening and actual host qualification are open. The 232-cue catalog is frozen, zero approved. The table and resume notes below are historical.
+**Current handoff:** [Engineering delta](ENGINEERING_DELTA_20261119.md) is the live requirement map; [Windows engineering-gate plan](WINDOWS_ENGINEERING_GATE_20261119.md) is staged but unauthorized. Draft/HOLD/NO MERGE. FX-T18, Windows and host proof of the implemented [owner-approved create-only Save](CREATE_ONLY_SAVE_20261119.md), private delivery and listening remain open. The 232-cue catalog is frozen, zero approved. The table and resume notes below are historical.
 
 | Milestone | Status |
 |---|---|
