@@ -5,8 +5,16 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#if defined(__linux__)
-#include <time.h>
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+#elif defined(__linux__)
+ #include <time.h>
 #endif
 #include <memory>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
@@ -19,7 +27,11 @@ extern "C" unsigned long voxFxLockEnd();
 
 namespace {
 double threadMicros() noexcept {
-#if defined(__linux__)
+#if JUCE_WINDOWS
+    FILETIME created{},exited{},kernel{},user{};
+    const auto ticks=[](const FILETIME& t){return (std::uint64_t{t.dwHighDateTime}<<32)|t.dwLowDateTime;};
+    if(::GetThreadTimes(::GetCurrentThread(),&created,&exited,&kernel,&user))return (ticks(kernel)+ticks(user))*.1;
+#elif defined(__linux__)
     timespec t{};
     if(clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t)==0)return t.tv_sec*1e6+t.tv_nsec*.001;
 #endif
@@ -40,10 +52,17 @@ int main(){
     int errors=0;
     const bool typical=std::getenv("VOX_FX_STRESS_TYPICAL")!=nullptr;
     const bool shapes=std::getenv("VOX_FX_STRESS_AUTHORED")!=nullptr;
-    const bool splitTiming=std::getenv("VOX_FX_TIMING_THREAD_CPU")!=nullptr&&threadMicros()>=0;
+    const bool splitTiming=std::getenv("VOX_FX_TIMING_THREAD_CPU")!=nullptr;
+    if(splitTiming&&threadMicros()<0){std::fputs("Requested thread CPU clock unavailable\n",stderr);return 2;}
     if(typical)std::puts("Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI");
     if(shapes&&!typical)std::puts("Non-default grain shape, step and held ADSR routes");
-    if(splitTiming)std::puts("Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation");
+    if(splitTiming){
+#if JUCE_WINDOWS
+        std::puts("Windows GetThreadTimes enabled (outside callback); accounting may be coarser than a block, see zero deltas and min positive delta");
+#else
+        std::puts("Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation");
+#endif
+    }
 #if defined(VOX_TEST_INTERPOSE_MALLOC)
     std::printf("Allocation probe available: %s\n",voxProbeAvailable()?"yes":"no");
 #else
@@ -110,8 +129,8 @@ int main(){
         std::uint32_t rng=0x154311u;bool finite=true,midiConsumed=true;
         unsigned long alloc=0,locks=0;
         const double budget=frames*1e6/rate;
-        double maxCpu=0,maxWall=0,cpuAtMaxWall=0;
-        int wallMisses=0,cpuMisses=0,wallOnly=0;
+        double maxCpu=0,maxWall=0,cpuAtMaxWall=-1,minPositiveCpu=0;
+        int wallMisses=0,cpuMisses=0,wallOnly=0,cpuPairs=0,zeroCpuDeltas=0;
         for(int block=0;block<blocks;++block){
             if(block==0)for(int i=0;i<voices;++i)midi.addEvent(juce::MidiMessage::noteOn(1,firstNote+i,juce::uint8(100)),0);
             if(!typical&&block>=48&&block%3==0)for(int j=0;j<voices*2;++j){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
@@ -125,28 +144,36 @@ int main(){
             }
             if(!typical&&block==129)fx->panic();
             if(patternOn)clock.advance(static_cast<std::int64_t>(block)*frames,rate);
+            const double cpuStart=splitTiming?threadMicros():-1;
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             voxProbeBegin();
 #endif
 #ifdef VOX_FX_LOCK_PROBE
             voxFxLockBegin();
 #endif
-            const double cpuStart=splitTiming?threadMicros():-1;
             const auto now=std::chrono::steady_clock::now();fx->processBlock(io,midi);
             durations[block]=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-now).count();
-            const double cpuEnd=splitTiming?threadMicros():-1;
-            if(cpuEnd>=0&&cpuStart>=0){
-                const auto wall=durations[block],cpu=cpuEnd-cpuStart;
-                maxCpu=std::max(maxCpu,cpu);
-                if(wall>maxWall){maxWall=wall;cpuAtMaxWall=cpu;}
-                wallMisses+=wall>budget;cpuMisses+=cpu>budget;wallOnly+=wall>budget&&cpu<=budget;
-            }
 #ifdef VOX_FX_LOCK_PROBE
             locks+=voxFxLockEnd();
 #endif
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             alloc+=voxProbeEnd();
 #endif
+            if(splitTiming){
+                const double cpuEnd=threadMicros();
+                const auto wall=durations[block];
+                const bool hasCpu=cpuStart>=0&&cpuEnd>=cpuStart;
+                const auto cpu=hasCpu?cpuEnd-cpuStart:-1.;
+                wallMisses+=wall>budget;
+                if(wall>maxWall){maxWall=wall;cpuAtMaxWall=cpu;}
+                if(hasCpu){
+                    ++cpuPairs;
+                    maxCpu=std::max(maxCpu,cpu);
+                    if(cpu==0)++zeroCpuDeltas;
+                    else if(minPositiveCpu==0||cpu<minPositiveCpu)minPositiveCpu=cpu;
+                    cpuMisses+=cpu>budget;wallOnly+=wall>budget&&cpu<=budget;
+                }
+            }
             midiConsumed &= midi.isEmpty();
             maximumGrains=std::max(maximumGrains,fx->audioTelemetry().grains);
             for(int i=0;i<frames;++i){const auto a=io.getSample(0,i),b=io.getSample(1,i);finite &= std::isfinite(a)&&std::isfinite(b);
@@ -157,8 +184,13 @@ int main(){
         std::sort(durations.begin(),durations.end());
         std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu p50 %.2f p95 %.2f p99 %.2f max %.2f us\n",
             rate,frames,voices,peak,dc,maximumGrains,alloc,locks,durations[79],durations[151],durations[158],durations.back());
-        if(splitTiming)std::printf("  thread max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
-            maxCpu,maxWall,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocks);
+        if(splitTiming){
+            std::printf("  thread max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
+                maxCpu,maxWall,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocks);
+            std::printf("  thread CPU valid %d/%d; zero deltas %d; min positive delta %.2f us\n",
+                cpuPairs,blocks,zeroCpuDeltas,minPositiveCpu);
+            if(cpuPairs!=blocks)++errors;
+        }
     }
     }
     std::printf("FX JUCE runtime stress: %d failing cases\n",errors);return errors?1:0;
