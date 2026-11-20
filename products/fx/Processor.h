@@ -57,7 +57,12 @@ public:
     }
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
-    bool musicalClockUnavailable() const noexcept { return musicalClockUnavailable_.load(std::memory_order_relaxed); }
+    enum class BarClock : unsigned { noPosition, stopped, missingMeter, unsupportedMeter, invalidTempo,
+                                     invalidPpq, assumedOrigin, ready44 };
+    BarClock barClock() const noexcept { return barClock_.load(std::memory_order_relaxed); }
+    bool musicalClockUnavailable() const noexcept {
+        const auto clock=barClock();return clock!=BarClock::ready44&&clock!=BarClock::assumedOrigin;
+    }
     enum class PatternClock : unsigned { inactive, noPlayhead, stopped, invalidPpq, invalidTempo,
                                          unsupportedMeter, waitingForState, blockRejected, readyAssumed44, ready44 };
     PatternClock patternClock() const noexcept { return patternClock_.load(std::memory_order_relaxed); }
@@ -91,10 +96,13 @@ public:
     }
     float outputPeak() const noexcept { const auto p=outputPeaks();return std::max(p.left,p.right); }
     bool consumeClip() noexcept { return clipLatched_.exchange(false,std::memory_order_relaxed); }
-    struct AudioTelemetry { unsigned events=0,grains=0;bool clipped=false;std::uint32_t dropped=0; };
+    // Minimum peak (-90 dBFS) for a live, FX-only block to light the meter.
+    static constexpr float fxTailThreshold=0.0000316228f;
+    bool consumeFxTail() noexcept { return fxTailSeen_.exchange(false,std::memory_order_relaxed); }
+    struct AudioTelemetry { unsigned events=0,grains=0;bool clipped=false;std::uint32_t dropped=0;bool fxTailOnly=false; };
     AudioTelemetry audioTelemetry() const noexcept {
         const auto value=telemetry_.load(std::memory_order_relaxed);
-        return {value&15u,(value>>4)&127u,(value&(1u<<11))!=0,droppedEvents_.load(std::memory_order_relaxed)};
+        return {value&15u,(value>>4)&127u,(value&(1u<<11))!=0,droppedEvents_.load(std::memory_order_relaxed),(value&(1u<<12))!=0};
     }
     // Controller methods only: these may lock/allocate and are never called
     // from the audio callback. Existing events retain their captured program.
@@ -193,8 +201,8 @@ protected:
 
 private:
     void publishPlayhead(bool rendered) noexcept;
-    void publishTelemetry(bool clipped) noexcept {
-        const auto value=engine_.activeEventCount()|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u);
+    void publishTelemetry(unsigned events,bool clipped,bool fxTailOnly) noexcept {
+        const auto value=events|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u)|(fxTailOnly?(1u<<12):0u);
         telemetry_.store(value,std::memory_order_relaxed);
         droppedEvents_.store(engine_.droppedEventCount(),std::memory_order_relaxed);
     }
@@ -236,7 +244,8 @@ private:
     } pendingGraph_;
     std::uint64_t programSequence_ = 0; // audio thread only
     juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
-    std::atomic<bool> musicalClockUnavailable_ {true};
+    std::atomic<BarClock> barClock_ {BarClock::noPosition};
+    std::atomic<bool> fxTailSeen_{false};
     juce::AudioParameterFloat* duration_ = nullptr;
     juce::AudioParameterBool* patternEnabled_ = nullptr;
     std::array<juce::AudioParameterFloat*,4> effectWet_{}, effectAmount_{};

@@ -835,7 +835,11 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         if(m>=0&&m<=5&&p>=0&&p<=2)(void)processor_.setPlayback(static_cast<PlayMode>(m),static_cast<TriggerPolicy>(p));};
     playMode_.onChange=updatePlayback;triggerPolicy_.onChange=updatePlayback;
     addAndMakeVisible(playMode_);addAndMakeVisible(triggerPolicy_);
-    clockStatus_.setFont(juce::FontOptions(10.0f)); addAndMakeVisible(clockStatus_);
+    clockStatus_.setTitle("Host bar clock");clockStatus_.setFont(juce::FontOptions(10.0f));addAndMakeVisible(clockStatus_);
+    fxTailStatus_.setTitle("FX tail activity");fxTailStatus_.setFont(juce::FontOptions(10.0f));
+    fxTailStatus_.setJustificationType(juce::Justification::centredRight);
+    fxTailStatus_.setTooltip("Measured FX-only output above -90 dBFS, after voices stop and before preset preview. Not an estimate of remaining tail time.");
+    fxTailStatus_.setDescription(fxTailStatus_.getTooltip());addAndMakeVisible(fxTailStatus_);
     sampleImport_.setTooltip("Import a licensed mono or stereo WAV for granular layers; decoding is asynchronous");
     sampleBuiltin_.setTooltip("Explicitly select the built-in granular source");
     sampleStatus_.setTooltip("Granular sample status");sampleStatus_.setFont(juce::FontOptions(11.0f));
@@ -1196,6 +1200,8 @@ void FxPanel::resized()
         column=column.reduced(3).withTrimmedTop(14);effectsType_[i].setBounds(column.removeFromLeft(column.getWidth()*4/10));
         effectsWet_[i].setBounds(column.removeFromLeft(column.getWidth()/2));effectsAmount_[i].setBounds(column);
     }
+    auto meterHeader=getLocalBounds().reduced(32).removeFromBottom(55).removeFromLeft(320).reduced(8,3).removeFromTop(16);
+    fxTailStatus_.setBounds(meterHeader.removeFromRight(100));
     auto patternRow=getLocalBounds().reduced(32).removeFromBottom(55);
     patternActions_.setBounds(patternRow.removeFromLeft(80).reduced(2,8));
     patternRow.removeFromLeft(260);
@@ -1526,7 +1532,24 @@ void FxPanel::timerCallback()
     eventBars_.setSelectedId(barsId,juce::dontSendNotification);
     playMode_.setSelectedId(static_cast<int>(program.mode)+1,juce::dontSendNotification);
     triggerPolicy_.setSelectedId(static_cast<int>(program.triggerPolicy)+1,juce::dontSendNotification);
-    clockStatus_.setText(program.bars==0?"Seconds":processor_.musicalClockUnavailable()?"Host bar clock unavailable":(program.mode==PlayMode::transition ? "Ends on host bar line" : "Host bar clock ready"),juce::dontSendNotification);
+    using Bars=FxProcessor::BarClock;
+    juce::String barLabel="Seconds",barHelp="Free-running seconds events do not require host PPQ.";
+    if(program.bars!=0)switch(processor_.barClock()){
+        case Bars::noPosition: barLabel="No host bar clock";barHelp="Host did not supply transport position.";break;
+        case Bars::stopped: barLabel="Bar clock: stopped";barHelp="Start transport to trigger bar events.";break;
+        case Bars::missingMeter: barLabel="Bar clock: no meter";barHelp="Bar events require the host to report 4/4 explicitly.";break;
+        case Bars::unsupportedMeter: barLabel="Bar clock: needs 4/4";barHelp="Reported meter is unsupported for bar events. Use seconds or change to 4/4.";break;
+        case Bars::invalidTempo: barLabel="Bar clock: invalid BPM";barHelp="Bar events require finite host tempo from 1 to 1000 BPM.";break;
+        case Bars::invalidPpq: barLabel="Bar clock: invalid PPQ";barHelp="Host beat position or bar origin is missing, non-finite or out of range.";break;
+        case Bars::assumedOrigin:
+            barLabel=program.mode==PlayMode::transition?"Bar line: PPQ-zero grid":"Host bar clock ready";
+            barHelp="Host supplied 4/4 and PPQ but not bar start. Transition anchors its bar grid at PPQ zero.";break;
+        case Bars::ready44:
+            barLabel=program.mode==PlayMode::transition?"Ends on host bar line":"Host bar clock ready";
+            barHelp="Bar events use the host's reported 4/4 clock. Transition ends its dry event on the target bar; wet effects may ring on.";break;
+    }
+    clockStatus_.setText(barLabel,juce::dontSendNotification);
+    if(clockStatus_.getTooltip()!=barHelp){clockStatus_.setTooltip(barHelp);clockStatus_.setDescription(barHelp);}
     const auto fx=processor_.effectsSnapshot();
     for (std::size_t i=0;i<4;++i) {
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
@@ -1537,6 +1560,8 @@ void FxPanel::timerCallback()
     else for (std::size_t i=0; i<layers_.size(); ++i) layers_[i]->refresh(program.layers[i]);
     const auto telemetry=processor_.audioTelemetry();shownEvents_=telemetry.events;shownGrains_=telemetry.grains;shownDropped_=telemetry.dropped;
     clipHold_=processor_.consumeClip()?25u:(clipHold_?clipHold_-1:0u);
+    fxTailHold_=processor_.consumeFxTail()?12u:(fxTailHold_?fxTailHold_-1:0u);
+    fxTailStatus_.setText(fxTailHold_?"FX TAIL":"",juce::dontSendNotification);
     const auto peaks=processor_.outputPeaks();
     shownPeaks_[0]=std::max(peaks.left,shownPeaks_[0]*.88f);
     shownPeaks_[1]=std::max(peaks.right,shownPeaks_[1]*.88f);

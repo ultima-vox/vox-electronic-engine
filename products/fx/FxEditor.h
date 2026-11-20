@@ -306,7 +306,7 @@ private:
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment durationAttachment_;
     vox::ui::VoxComboBox family_,eventBars_,playMode_,triggerPolicy_,macroSelector_,macroDestination_,factory_,comparison_;
-    juce::Label clockStatus_;
+    juce::Label clockStatus_,fxTailStatus_;
     juce::Slider macroValue_,macroDepth_;
     std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;
     vox::ui::VoxButton audition_ { "AUDITION" }, stopAudition_ { "STOP" };
@@ -356,7 +356,7 @@ private:
     std::array<juce::Slider,4> effectsWet_, effectsAmount_;
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,4> wetAttachments_,amountAttachments_;
     std::array<float,2> shownPeaks_{};
-    unsigned shownEvents_=0,shownGrains_=0,clipHold_=0;
+    unsigned shownEvents_=0,shownGrains_=0,clipHold_=0,fxTailHold_=0;
     std::uint32_t shownDropped_=0;
 };
 } // namespace vox::fx

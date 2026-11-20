@@ -33,6 +33,132 @@ juce::MemoryBlock save (vox::fx::FxProcessor& processor) {
 void block (vox::fx::FxProcessor& p, juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi) {
     p.processBlock(audio, midi); midi.clear();
 }
+// Processor boundary, not a test of the VST3 wrapper or of a real DAW.
+void checkHostTransitionMatrix() {
+    using namespace vox::fx;
+    constexpr double rate=8000, start=-1.5, origin=-3.5;
+    constexpr int noteOffset=23;
+    auto fx=std::make_unique<FxProcessor>();TestPlayHead host;
+    fx->setPlayHead(&host);
+    juce::AudioBuffer<float> audio(2,511);juce::MidiBuffer midi;midi.ensureSize(256);
+    for(int bars:{4,8,16})for(double bpm:{60.,100.,128.,140.,160.,200.}){
+        fx->prepareToPlay(rate,511);
+        auto program=fx->program();program.mode=PlayMode::transition;program.bars=static_cast<std::uint8_t>(bars);
+        program.layers[0].family=NoiseFamily::shepard;
+        check(fx->setProgram(program),"tonal host Transition matrix setup");
+        const double target=origin+4*bars,step1=bpm/(60.*rate),step2=step1*.75;
+        const int midpoint=static_cast<int>((target-start)*.5/step1);
+        const double middlePpq=start+midpoint*step1;
+        const int end=midpoint+static_cast<int>(std::ceil((target-middlePpq-1e-9)/step2));
+        int sample=0,segments=0;
+        const auto render=[&](int size){
+            const bool first=sample<midpoint;
+            const double ppq=first?start+sample*step1:middlePpq+(sample-midpoint)*step2;
+            juce::AudioPlayHead::PositionInfo pos;
+            pos.setIsPlaying(true);pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});
+            pos.setBpm(first?bpm:bpm*.75);pos.setPpqPosition(ppq);pos.setTimeInSamples(sample-2048);
+            pos.setPpqPositionOfLastBarStart(origin+4*std::floor((ppq-origin)/4.));host.position=pos;
+            audio.setSize(2,size,false,false,true);block(*fx,audio,midi);sample+=size;
+        };
+        const auto advanceTo=[&](int endSample){
+            constexpr int sizes[]{64,511,127,193};
+            while(sample<endSample)render(std::min(sizes[segments++%4],endSample-sample));
+        };
+        midi.addEvent(juce::MidiMessage::noteOn(1,60,.8f),noteOffset);render(64);
+        check(fx->barClock()==FxProcessor::BarClock::ready44&&audio.getMagnitude(0,0,noteOffset)==0&&
+              audio.getMagnitude(0,noteOffset,64-noteOffset)>0,"host bar anchor and in-block MIDI onset reach audio");
+        advanceTo(midpoint);
+        midi.addEvent(juce::MidiMessage::noteOff(1,60),0);render(127);
+        check(fx->audioTelemetry().events==1&&audio.getMagnitude(0,127)>1e-5f,"tempo changes without a false seek or NoteOff cutoff");
+        advanceTo(end-8);
+        check(fx->audioTelemetry().events==1,"Transition survives up to its target sample");
+        render(16);
+        check(fx->audioTelemetry().events==0&&audio.getMagnitude(0,8,8)==0&&audio.getMagnitude(1,8,8)==0,
+              "dry Transition retires inside the callback precisely at the target sample");
+        std::printf("host Transition: %d bars %.0f->%.0f BPM, target PPQ %.1f, sample %d, suffix peak %.7f\n",
+                    bars,bpm,bpm*.75,target,end,audio.getMagnitude(8,8));
+    }
+    fx->setPlayHead(nullptr);
+}
+
+void checkBarClockStates() {
+    using namespace vox::fx;
+    using Clock=FxProcessor::BarClock;
+    auto fx=std::make_unique<FxProcessor>();TestPlayHead host;
+    fx->setPlayHead(&host);fx->prepareToPlay(8000,128);
+    auto program=fx->program();program.bars=4;program.mode=PlayMode::transition;
+    check(fx->setProgram(program),"bar clock diagnostics fixture");
+    juce::AudioBuffer<float> audio(2,128);juce::MidiBuffer midi;
+    const auto render=[&](bool note){if(note)midi.addEvent(juce::MidiMessage::noteOn(1,60,.8f),0);block(*fx,audio,midi);};
+    const auto rejected=[&](Clock reason){render(true);check(fx->barClock()==reason&&fx->musicalClockUnavailable()&&
+        fx->audioTelemetry().events==0&&audio.getMagnitude(0,128)==0,"clock reason reflects silent rejection");};
+    rejected(Clock::noPosition);
+    juce::AudioPlayHead::PositionInfo pos;
+    host.position=pos;rejected(Clock::stopped);
+    pos.setIsPlaying(true);host.position=pos;rejected(Clock::missingMeter);
+    pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{7,8});host.position=pos;rejected(Clock::unsupportedMeter);
+    pos.setTimeSignature(juce::AudioPlayHead::TimeSignature{4,4});host.position=pos;rejected(Clock::invalidTempo);
+    pos.setBpm(120);host.position=pos;rejected(Clock::invalidPpq);
+    pos.setPpqPosition(1000001.0);host.position=pos;rejected(Clock::invalidPpq);
+    pos.setPpqPosition(0.);pos.setPpqPositionOfLastBarStart(std::numeric_limits<double>::quiet_NaN());host.position=pos;rejected(Clock::invalidPpq);
+    pos.setPpqPositionOfLastBarStart({});host.position=pos;render(true);
+    check(fx->barClock()==Clock::assumedOrigin&&fx->audioTelemetry().events==1,"explicit 4/4 with absent origin starts on documented PPQ-zero grid");
+    host.position={};render(false);
+    check(fx->barClock()==Clock::noPosition&&fx->audioTelemetry().events==0&&audio.getMagnitude(0,41,87)==0,
+          "clock loss releases an active Transition without a stuck voice");
+    pos.setPpqPosition(.5);pos.setPpqPositionOfLastBarStart(.5);host.position=pos;render(true);
+    check(fx->barClock()==Clock::ready44&&fx->audioTelemetry().events==1,"live clock recovery admits a new note");
+    fx->setPlayHead(nullptr);
+}
+
+void checkMeasuredFxTail() {
+    using namespace vox::fx;
+    constexpr double rate=8000;
+    auto subject=std::make_unique<FxProcessor>(),baseline=std::make_unique<FxProcessor>();
+    for(auto* fx:{subject.get(),baseline.get()}){
+        check(fx->setFamily(static_cast<int>(NoiseFamily::impact))&&
+              fx->setEffect(0,{effects::Type::delay,.6f,.45f})&&fx->setEffect(1,{effects::Type::reverb,.4f,.5f}),
+              "bind serial Delay and Reverb fixture");
+        // The processor's automatable wet and amount lanes take precedence
+        // over the packed settings. Leave wet headroom for a positive route.
+        fx->effectWetParameter(0).setValueNotifyingHost(.6f);
+        fx->effectAmountParameter(0).setValueNotifyingHost(.45f);
+        fx->effectWetParameter(1).setValueNotifyingHost(.4f);
+        fx->effectAmountParameter(1).setValueNotifyingHost(.5f);
+        auto& duration=fx->durationParameter();duration.setValueNotifyingHost(duration.convertTo0to1(.075f));
+    }
+    check(subject->setMotionRoute(mod::Source::follower,mod::Destination::wet2,.55f,0),"dry follower routes to second slot wet");
+    for(auto* fx:{subject.get(),baseline.get()})fx->prepareToPlay(rate,128);
+    const auto snapshot=save(*subject);
+    juce::AudioBuffer<float> a(2,128),b(2,128);juce::MidiBuffer ma,mb;
+    ma.addEvent(juce::MidiMessage::noteOn(1,60,.9f),0);mb=ma;
+    int tails=0;double routedDifference=0,peak=0;
+    for(int i=0;i<640;++i){
+        block(*subject,a,ma);block(*baseline,b,mb);
+        const auto info=subject->audioTelemetry();
+        if(i<5)check(!info.fxTailOnly,"source voice or partial source block is not FX-only");
+        if(info.fxTailOnly){
+            check(info.events==0&&a.getMagnitude(0, 128)>=FxProcessor::fxTailThreshold,"tail indicator witnesses measured post output without an input voice");
+            ++tails;peak=std::max(peak,static_cast<double>(a.getMagnitude(0, 128)));
+            for(int ch=0;ch<2;++ch)for(int j=0;j<128;++j)routedDifference+=std::abs(a.getSample(ch,j)-b.getSample(ch,j));
+        }
+    }
+    check(tails>0&&routedDifference>1e-4&&save(*subject)==snapshot,"follower route changes the measured serial tail without rewriting host state");
+    check(!subject->audioTelemetry().fxTailOnly&&subject->consumeFxTail()&&!subject->consumeFxTail(),"sparse activity latches once; decayed tail stops measuring");
+    std::printf("FX tail: %d qualified blocks, peak %.7f, routed difference sum %.7f\n",tails,peak,routedDifference);
+    subject->prepareToPlay(rate,128);
+    const std::array<float,512> preview=[] {std::array<float,512> out{};out.fill(.3f);return out;}();
+    auto& bus=subject->previewBus();check(bus.publish(preview,8000,bus.ticket()),"publish isolated preview");
+    block(*subject,a,ma);
+    check(a.getMagnitude(0,128)>.01f&&!subject->audioTelemetry().fxTailOnly&&!subject->consumeFxTail(),"browser preview is excluded from measured FX tails");
+    subject->setNonRealtime(true);
+    ma.addEvent(juce::MidiMessage::noteOn(1,60,.9f),0);
+    double offlineTail=0;
+    for(int i=0;i<180;++i){block(*subject,a,ma);
+        if(i>5)offlineTail=std::max(offlineTail,static_cast<double>(a.getMagnitude(0,128)));}
+    check(offlineTail>FxProcessor::fxTailThreshold&&!subject->consumeFxTail(),"offline bounce keeps audio tails without lighting the live indicator");
+}
+
 void checkRestoreAdmission() {
     using namespace vox::fx;
     struct Listener final : juce::AudioProcessorParameter::Listener {
@@ -1011,6 +1137,8 @@ int main() {
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
     phase("MIDI export lifecycle and picker reentry");checkMidiExportLifecycle();checkExportChooserReentry();
     phase("prepared WAV and MIDI drag lifecycle");checkPreparedDrag();
+    phase("host Transition clock matrix and diagnostics");checkHostTransitionMatrix();checkBarClockStates();
+    phase("measured serial FX tail and route");checkMeasuredFxTail();
     phase("capture parity");checkCaptureParity();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;
