@@ -1831,6 +1831,106 @@ void testPhraseHardening()
     check (edited->lastStateError().isNotEmpty(), "corrupt PHRS is rejected");
     check (edited->phraseNote (2).velocity == 42, "rejected PHRS leaves the live phrase alone");
 
+    auto truncated = decoded.document;
+    for (auto& section : truncated.sections)
+        if (section.tag == vox::syn::phraseSectionTag)
+            section.data.resize (4);
+    const auto truncatedBytes = vox::preset::encode (truncated);
+    edited->setStateInformation (truncatedBytes->data(), static_cast<int> (truncatedBytes->size()));
+    check (edited->lastStateError().isNotEmpty(), "truncated PHRS is rejected");
+    check (edited->phraseNote (2).velocity == 42, "truncated PHRS leaves the live phrase alone");
+
+    auto fresh = make();
+    check (migrated->phraseIndex() == fresh->phraseIndex(), "missing PHRS selects the same factory phrase");
+    check (migrated->phraseNote (0).note == fresh->phraseNote (0).note
+               && migrated->phraseNote (0).velocity == fresh->phraseNote (0).velocity
+               && migrated->phraseNote (2).note == fresh->phraseNote (2).note
+               && migrated->phraseNote (2).velocity == fresh->phraseNote (2).velocity,
+           "missing PHRS restores the factory phrase deterministically");
+
+    auto shared = make();
+    setPlain (*shared, "syn.a.engine", 2.0f);
+    setPlain (*shared, "syn.b.level", 0.0f);
+    shared->prepareToPlay (48000.0, 128);
+    shared->setPhraseIndex (0);
+    for (int i = 1; i < shared->phraseNoteCount(); ++i)
+    {
+        auto note = shared->phraseNote (i);
+        note.tick = 3000;
+        note.slide = false;
+        shared->setPhraseNote (i, note);
+    }
+    auto same = shared->phraseNote (0);
+    same.tick = 0;
+    same.duration = 960;
+    same.note = 60;
+    same.velocity = 80;
+    same.slide = false;
+    same.accent = false;
+    shared->setPhraseNote (0, same);
+    shared->setPhrasePlaying (true);
+    juce::AudioBuffer<float> sharedBuffer (2, 128);
+    juce::MidiBuffer sharedMidi;
+    sharedMidi.addEvent (juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (100)), 0);
+    shared->processBlock (sharedBuffer, sharedMidi);
+    check (shared->vaNoteHeld (0, 60), "host and phrase share one key");
+    shared->setPhrasePlaying (false);
+    juce::MidiBuffer sharedStop;
+    for (int i = 0; i < 300; ++i)
+        sharedStop.addEvent (juce::MidiMessage::controllerEvent (1, 1, 10), 0);
+    shared->processBlock (sharedBuffer, sharedStop);
+    check (shared->vaNoteHeld (0, 60), "phrase stop does not release the host-owned same pitch");
+
+    auto acid = make();
+    setPlain (*acid, "syn.a.engine", 1.0f);
+    setPlain (*acid, "syn.b.level", 0.0f);
+    acid->prepareToPlay (48000.0, 128);
+    acid->setPhraseIndex (0);
+    for (int i = 1; i < acid->phraseNoteCount(); ++i)
+    {
+        auto note = acid->phraseNote (i);
+        note.tick = 3000;
+        acid->setPhraseNote (i, note);
+    }
+    auto acidNote = acid->phraseNote (0);
+    acidNote.tick = 0;
+    acidNote.duration = 960;
+    acidNote.note = 60;
+    acidNote.velocity = 70;
+    acidNote.slide = false;
+    acid->setPhraseNote (0, acidNote);
+    acid->setPhrasePlaying (true);
+    juce::MidiBuffer acidMidi;
+    acidMidi.addEvent (juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (90)), 0);
+    acid->processBlock (sharedBuffer, acidMidi);
+    check (acid->monoGate (0) && acid->monoNote (0) == 60, "acid holds the shared key");
+    acid->setPhrasePlaying (false);
+    acid->processBlock (sharedBuffer, sharedStop);
+    check (acid->monoGate (0) && acid->monoNote (0) == 60, "acid phrase stop leaves the host key held");
+
+    auto gated = make();
+    gated->prepareToPlay (48000.0, 64);
+    gated->armPhraseHandoffForTest();
+    std::thread reader ([&] {
+        juce::AudioBuffer<float> audio (2, 64);
+        juce::MidiBuffer none;
+        gated->processBlock (audio, none);
+    });
+    int spins = 0;
+    while (gated->phraseHandoffPhase() != 2 && spins < 2000)
+    {
+        ++spins;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    auto burst = gated->phraseNote (0);
+    burst.velocity = 41;
+    gated->setPhraseNote (0, burst);
+    gated->setPhraseIndex (3);
+    gated->releasePhraseHandoffForTest();
+    reader.join();
+    check (spins < 2000, "reader parked between load and claim");
+    check (gated->phraseClaimViolations() == 0, "a slot was not copied while it was being written");
+
     auto raced = make();
     raced->prepareToPlay (48000.0, 64);
     raced->setPhrasePlaying (true);
@@ -1847,6 +1947,12 @@ void testPhraseHardening()
             raced->setPhraseNote (0, note);
             raced->setPhrasePlaying ((n % 5) != 0);
             raced->setPhraseClock ((n % 2) == 0, true, (n % 8) * 0.25, 120.0);
+            if ((n % 16) == 0)
+            {
+                juce::MemoryBlock state;
+                raced->getStateInformation (state);
+                raced->setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+            }
             ++n;
         }
     });
@@ -1865,7 +1971,8 @@ void testPhraseHardening()
     raced->setPhrasePlaying (false);
     juce::MidiBuffer empty;
     raced->processBlock (race, empty);
-    check (raceFinite, "edit, switch, play and stop during processBlock stay finite");
+    check (raceFinite, "edit, switch, play, stop and restore during processBlock stay finite");
+    check (raced->phraseClaimViolations() == 0, "burst did not copy a slot that was being written");
 }
 
 } // namespace

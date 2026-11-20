@@ -443,26 +443,78 @@ void SynthesisProcessor::publishLocked()
     PhraseSnapshot snap;
     if (! fillPerformanceSnapshot (notes, count, length, snap))
         return;
-    const int reading = phraseAudioSlot_.load (std::memory_order_acquire);
-    const int published = phrasePublished_.load (std::memory_order_acquire);
-    int slot = (published + 1) % 3;
-    for (int i = 0; i < 3; ++i)
-        if (i != reading && i != published)
+    const int revision = ++phraseRevision_;
+    snap.stamp = revision;
+    snap.stampEnd = revision;
+
+    auto reclaim = [this] ()
+    {
+        const int published = phrasePublished_.load (std::memory_order_acquire);
+        for (int i = 0; i < 3; ++i)
         {
-            slot = i;
-            break;
+            if (i == published)
+                continue;
+            int expected = slotReady;
+            phraseSlots_[i].state.compare_exchange_strong (expected, slotFree, std::memory_order_acq_rel);
         }
+    };
+
+    int slot = -1;
+    for (int attempt = 0; attempt < 8 && slot < 0; ++attempt)
+    {
+        reclaim();
+        for (int i = 0; i < 3; ++i)
+        {
+            int expected = slotFree;
+            if (phraseSlots_[i].state.compare_exchange_strong (expected, slotWriting, std::memory_order_acq_rel))
+            {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0)
+        return;
     phraseSlots_[slot].snap = snap;
-    phraseSlots_[slot].revision = ++phraseRevision_;
-    phrasePublished_.store (slot, std::memory_order_release);
+    phraseSlots_[slot].state.store (slotReady, std::memory_order_release);
+    const int previous = phrasePublished_.exchange (slot, std::memory_order_acq_rel);
+    if (previous != slot)
+    {
+        int expected = slotReady;
+        phraseSlots_[previous].state.compare_exchange_strong (expected, slotFree, std::memory_order_acq_rel);
+    }
 }
 
 void SynthesisProcessor::readSnapshot (PhraseSnapshot& out) noexcept
 {
-    const int slot = phrasePublished_.load (std::memory_order_acquire);
-    phraseAudioSlot_.store (slot, std::memory_order_release);
-    out = phraseSlots_[slot].snap;
-    phraseAudioSlot_.store (-1, std::memory_order_release);
+    for (int attempt = 0; attempt < 4; ++attempt)
+    {
+        const int slot = phrasePublished_.load (std::memory_order_acquire);
+        if (phraseHandoffPark_.load (std::memory_order_acquire) == 1)
+        {
+            phraseHandoffPark_.store (2, std::memory_order_release);
+            while (phraseHandoffPark_.load (std::memory_order_acquire) == 2)
+            {
+            }
+        }
+        if (slot < 0 || slot > 2)
+            continue;
+        int expected = slotReady;
+        if (! phraseSlots_[slot].state.compare_exchange_strong (expected, slotReading, std::memory_order_acq_rel))
+            continue;
+        const PhraseSnapshot local = phraseSlots_[slot].snap;
+        const int now = phrasePublished_.load (std::memory_order_acquire);
+        int owned = slotReading;
+        phraseSlots_[slot].state.compare_exchange_strong (owned, now == slot ? slotReady : slotFree, std::memory_order_acq_rel);
+        if (local.stamp == local.stampEnd && local.stamp != 0)
+        {
+            rtLast_ = local;
+            out = local;
+            return;
+        }
+        phraseClaimViolations_.fetch_add (1, std::memory_order_relaxed);
+    }
+    out = rtLast_;
 }
 
 namespace {

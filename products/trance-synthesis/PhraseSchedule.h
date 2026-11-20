@@ -56,7 +56,9 @@ inline constexpr int maxPhraseEvents = maxPhraseNotes * 2;
 struct PhraseSnapshot {
     int loopTicks = 1;
     int eventCount = 0;
+    int stamp = 0;
     ScheduledEvent events[maxPhraseEvents] {};
+    int stampEnd = 0;
 };
 
 [[nodiscard]] inline bool fillPerformanceSnapshot (const PhraseNote* notes, int count, int lengthTicks,

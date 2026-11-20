@@ -76,6 +76,13 @@ public:
     void setPhraseNote (int index, PhraseNote note);
     [[nodiscard]] std::vector<std::byte> exportCurrentPhrase() const;
 
+    // Test gate. The audio thread loads the published slot, then waits until released,
+    // and only then claims it. A writer can publish twice inside that gap.
+    void armPhraseHandoffForTest() noexcept { phraseHandoffPark_.store (1, std::memory_order_release); }
+    [[nodiscard]] int phraseHandoffPhase() const noexcept { return phraseHandoffPark_.load (std::memory_order_acquire); }
+    void releasePhraseHandoffForTest() noexcept { phraseHandoffPark_.store (0, std::memory_order_release); }
+    [[nodiscard]] int phraseClaimViolations() const noexcept { return phraseClaimViolations_.load (std::memory_order_acquire); }
+
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
@@ -98,25 +105,26 @@ private:
     engine::Event events_[engine::maxEvents] {};
     bool prepared_ = false;
     double sampleRate_ = 48000.0;
-    // Control thread owns the editable phrase under phraseLock_. It builds a
-    // fixed PhraseSnapshot into a slot the audio thread is not copying, then
-    // publishes the slot with release. The audio thread copies that slot onto
-    // its stack and never frees it. Slots live for the processor lifetime.
-    // Play, stop and the clock epoch are atomics. Stop sends note-offs only
-    // for notes this player turned on, so host-held notes stay.
+    // A slot is Free, Ready, Reading or Writing. The snapshot bytes are written
+    // only while the slot is Writing, and copied only while it is Reading.
+    // Those states are exclusive, so a slot is never modified while the audio
+    // thread may copy it. Failed claims retry. The last intact copy is kept.
+    enum SlotState { slotFree = 0, slotReady = 1, slotReading = 2, slotWriting = 3 };
     juce::CriticalSection phraseLock_;
     int phraseIndex_ = 0;
     bool phraseEdited_ = false;
     int phraseLength_ = 3840;
     std::vector<PhraseNote> phraseEdit_;
     struct PhraseSlot {
-        PhraseSnapshot snap;
-        int revision = 0;
+        PhraseSnapshot snap {};
+        std::atomic<int> state { slotFree };
     };
     PhraseSlot phraseSlots_[3] {};
     std::atomic<int> phrasePublished_ { 0 };
-    std::atomic<int> phraseAudioSlot_ { -1 };
     int phraseRevision_ = 0;
+    PhraseSnapshot rtLast_ {};
+    std::atomic<int> phraseClaimViolations_ { 0 };
+    std::atomic<int> phraseHandoffPark_ { 0 };
     std::atomic<bool> phrasePlaying_ { false };
     std::atomic<int> phraseStopEpoch_ { 0 };
     std::atomic<int> phraseClockEpoch_ { 0 };
