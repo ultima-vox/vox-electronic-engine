@@ -342,6 +342,8 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
 engine::BlockParams SynthesisProcessor::latchBlock()
 {
+    ExtraRoutes routes;
+    readModSnapshot (routes);
     engine::BlockParams block;
     const auto load = [] (std::atomic<float>* value) noexcept
     {
@@ -428,7 +430,6 @@ engine::BlockParams SynthesisProcessor::latchBlock()
             dst.lfoDiv[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at + 1)])), 0, 8);
             dst.lfoRetrig[index] = load (raw_[static_cast<std::size_t> (at + 2)]) >= 0.5f;
         }
-        const auto routes = readExtraRoutes();
         for (int index = 0; index < extraRouteCount; ++index)
         {
             dst.routeSource[routeCount + index] = routes.row[part][index].source;
@@ -884,7 +885,11 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
         putU32 (phrase.data, note.accent ? 1u : 0u);
     }
     out.push_back (std::move (phrase));
-    const auto routes = readExtraRoutes();
+    ExtraRoutes routes;
+    {
+        const juce::ScopedLock lock (modLock_);
+        routes = modEdit_;
+    }
     preset::Section mod;
     mod.tag = modSectionTag;
     putU32 (mod.data, 1u);
@@ -1182,7 +1187,9 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         phraseClockEpoch_.fetch_add (1, std::memory_order_release);
         if (phrasePlaying_.load (std::memory_order_relaxed))
             phraseStopEpoch_.fetch_add (1, std::memory_order_release);
-        publishExtraRoutes (*routes);
+        const juce::ScopedLock modLock (modLock_);
+        modEdit_ = *routes;
+        publishModLocked();
     };
     restore.settle = [this, values] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
@@ -1282,24 +1289,81 @@ juce::String SynthesisProcessor::factoryProgramSearch (int index) const
          + program.variant + " " + program.mood + " " + program.purpose;
 }
 
-SynthesisProcessor::ExtraRoutes SynthesisProcessor::readExtraRoutes() const noexcept
+void SynthesisProcessor::readModSnapshot (ExtraRoutes& out) noexcept
 {
-    for (;;)
+    for (int attempt = 0; attempt < 4; ++attempt)
     {
-        const auto seq = extraSeq_.load (std::memory_order_acquire);
-        if ((seq & 1u) != 0u)
+        const int slot = modPublished_.load (std::memory_order_acquire);
+        if (modHandoffPark_.load (std::memory_order_acquire) == 1)
+        {
+            modHandoffPark_.store (2, std::memory_order_release);
+            while (modHandoffPark_.load (std::memory_order_acquire) == 2)
+            {
+            }
+        }
+        if (slot < 0 || slot > 2)
             continue;
-        const auto copy = extraRoutes_;
-        if (extraSeq_.load (std::memory_order_acquire) == seq)
-            return copy;
+        int expected = slotReady;
+        if (! modSlots_[slot].state.compare_exchange_strong (expected, slotReading, std::memory_order_acq_rel))
+            continue;
+        const int stamp = modSlots_[slot].stamp;
+        const ExtraRoutes local = modSlots_[slot].routes;
+        const int stampEnd = modSlots_[slot].stampEnd;
+        const int now = modPublished_.load (std::memory_order_acquire);
+        int owned = slotReading;
+        modSlots_[slot].state.compare_exchange_strong (owned, now == slot ? slotReady : slotFree, std::memory_order_acq_rel);
+        if (stamp == stampEnd && stamp != 0)
+        {
+            modLast_ = local;
+            out = local;
+            return;
+        }
+        modClaimViolations_.fetch_add (1, std::memory_order_relaxed);
     }
+    out = modLast_;
 }
 
-void SynthesisProcessor::publishExtraRoutes (const ExtraRoutes& next) noexcept
+void SynthesisProcessor::publishModLocked() noexcept
 {
-    extraSeq_.fetch_add (1u, std::memory_order_release);
-    extraRoutes_ = next;
-    extraSeq_.fetch_add (1u, std::memory_order_release);
+    const int revision = ++modRevision_;
+    auto reclaim = [this] ()
+    {
+        const int published = modPublished_.load (std::memory_order_acquire);
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i == published)
+                continue;
+            int expected = slotReady;
+            modSlots_[i].state.compare_exchange_strong (expected, slotFree, std::memory_order_acq_rel);
+        }
+    };
+    int slot = -1;
+    for (int attempt = 0; attempt < 8 && slot < 0; ++attempt)
+    {
+        reclaim();
+        for (int i = 0; i < 3; ++i)
+        {
+            int expected = slotFree;
+            if (modSlots_[i].state.compare_exchange_strong (expected, slotWriting, std::memory_order_acq_rel))
+            {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0)
+        return;
+    modSlots_[slot].stamp = revision;
+    modSlots_[slot].stampEnd = 0;
+    modSlots_[slot].routes = modEdit_;
+    modSlots_[slot].stampEnd = revision;
+    modSlots_[slot].state.store (slotReady, std::memory_order_release);
+    const int previous = modPublished_.exchange (slot, std::memory_order_acq_rel);
+    if (previous != slot)
+    {
+        int expected = slotReady;
+        modSlots_[previous].state.compare_exchange_strong (expected, slotFree, std::memory_order_acq_rel);
+    }
 }
 
 void SynthesisProcessor::setModRoute (int part, int route, int source, int dest, float amount01)
@@ -1323,12 +1387,12 @@ void SynthesisProcessor::setModRoute (int part, int route, int source, int dest,
         write (".amt", amount01);
         return;
     }
-    auto copy = readExtraRoutes();
-    auto& row = copy.row[part][route - routeCount];
+    const juce::ScopedLock lock (modLock_);
+    auto& row = modEdit_.row[part][route - routeCount];
     row.source = source;
     row.dest = dest;
     row.amount = (amount01 - 0.5f) * 2.0f;
-    publishExtraRoutes (copy);
+    publishModLocked();
 }
 
 void SynthesisProcessor::getModRoute (int part, int route, int& source, int& dest, float& amount01)
@@ -1351,8 +1415,8 @@ void SynthesisProcessor::getModRoute (int part, int route, int& source, int& des
         amount01 = read (".amt");
         return;
     }
-    const auto copy = readExtraRoutes();
-    const auto& row = copy.row[part][route - routeCount];
+    const juce::ScopedLock lock (modLock_);
+    const auto& row = modEdit_.row[part][route - routeCount];
     source = row.source;
     dest = row.dest;
     amount01 = std::clamp (row.amount * 0.5f + 0.5f, 0.0f, 1.0f);

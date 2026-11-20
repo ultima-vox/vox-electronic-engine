@@ -58,19 +58,22 @@ Wavetable::Wavetable() noexcept
     }
 }
 
-float Wavetable::read (float position, double phase, double cyclesPerSample) const noexcept
+int Wavetable::frame (float position, double cyclesPerSample) const noexcept
 {
     const int user = std::clamp (static_cast<int> (position * static_cast<float> (frames - 1)), 0, frames - 1);
     const int safe = std::clamp (static_cast<int> (0.45 / std::max (cyclesPerSample, 1.0e-8)), 1, 48);
     const int mip = std::clamp ((safe - 1) * (frames - 1) / (48 - 1), 0, frames - 1);
-    const int frame = std::min (user, mip);
+    return std::min (user, mip);
+}
+
+float Wavetable::readFrame (int which, double phase) const noexcept
+{
+    const int frame = std::clamp (which, 0, frames - 1);
     const double wrapped = phase - std::floor (phase);
     const double pos = wrapped * static_cast<double> (cycle);
     const int index = static_cast<int> (pos) % cycle;
     const float frac = static_cast<float> (pos - std::floor (pos));
-    const float a = data[frame][index];
-    const float b = data[frame][(index + 1) % cycle];
-    return a + (b - a) * frac;
+    return data[frame][index] + (data[frame][(index + 1) % cycle] - data[frame][index]) * frac;
 }
 
 const Wavetable& sharedWavetable() noexcept
@@ -90,7 +93,7 @@ void SynthEngine::prepare (double sampleRate, int maximumBlockSize) noexcept
     sampleRate_ = sampleRate;
     maximumBlockSize_ = maximumBlockSize;
     prepared_ = true;
-    (void) sharedWavetable();
+    table_ = &sharedWavetable();
     reset();
 }
 
@@ -798,21 +801,41 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
     const double bend = parts_[voice.part].bendSemis;
     const double note = static_cast<double> (voice.note) + bend + static_cast<double> (local.pitch)
                       + static_cast<double> (voice.detuneCents) / 100.0;
-    const double frequency = std::min (sampleRate_ * 0.22, midiHz (note));
+    double frequency;
+    if (note == voice.noteKey)
+        frequency = voice.noteHz;
+    else
+    {
+        voice.noteKey = note;
+        voice.noteHz = std::min (sampleRate_ * 0.22, midiHz (note));
+        frequency = voice.noteHz;
+    }
     const double increment = frequency / sampleRate_;
-    const double detune = std::clamp (params.detuneCents, 0.0, 50.0);
+    double ratio;
+    if (params.detuneCents == voice.detuneKey)
+        ratio = voice.detuneRatio;
+    else
+    {
+        voice.detuneKey = params.detuneCents;
+        voice.detuneRatio = std::exp2 (std::clamp (params.detuneCents, 0.0, 50.0) / 1200.0);
+        ratio = voice.detuneRatio;
+    }
     float carrier = 0.0f;
     if (params.oscLevel[2] > 0.0f || params.fm > 0.0f || local.fm > 0.0f)
     {
-        const double incC = increment * std::exp2 (static_cast<double> (params.osc3Semi) / 12.0);
-        carrier = shapedOsc (voice.oscC, params.oscWave[2], incC, params.oscPulse[2]);
+        if (params.osc3Semi != voice.osc3Key)
+        {
+            voice.osc3Key = params.osc3Semi;
+            voice.osc3Ratio = std::exp2 (static_cast<double> (params.osc3Semi) / 12.0);
+        }
+        carrier = shapedOsc (voice.oscC, params.oscWave[2], increment * voice.osc3Ratio, params.oscPulse[2]);
     }
     double incA = increment;
     const float fm = params.fm + local.fm;
     if (fm > 0.0f)
         incA *= std::exp2 (std::clamp (static_cast<double> (fm) * static_cast<double> (carrier), -2.0, 2.0));
     const float sawA = shapedOsc (voice.oscA, params.oscWave[0], incA, params.oscPulse[0]);
-    const float sawB = shapedOsc (voice.oscB, params.oscWave[1], increment * std::exp2 (detune / 1200.0), params.oscPulse[1]);
+    const float sawB = shapedOsc (voice.oscB, params.oscWave[1], increment * ratio, params.oscPulse[1]);
     const float sub = static_cast<float> (voice.sub.next (vstengine::dspcore::BlepOscillator::sine, increment * 0.5));
     voice.noise = voice.noise * 1664525u + 1013904223u;
     const float noise = (static_cast<float> (voice.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
@@ -822,9 +845,15 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
         sample += params.oscLevel[2] * carrier;
     if (params.ring > 0.0f)
         sample += params.ring * sawA * sawB;
-    if (params.wtLevel > 0.0f)
+    if (params.wtLevel > 0.0f && table_ != nullptr)
     {
-        const float table = sharedWavetable().read (params.wtPos, voice.wtPhase, increment);
+        if (increment != voice.wtInc || params.wtPos != voice.wtPosKey)
+        {
+            voice.wtInc = increment;
+            voice.wtPosKey = params.wtPos;
+            voice.wtFrame = table_->frame (params.wtPos, increment);
+        }
+        const float table = table_->readFrame (voice.wtFrame, voice.wtPhase);
         voice.wtPhase += increment;
         voice.wtPhase -= std::floor (voice.wtPhase);
         sample += params.wtLevel * table;
@@ -834,7 +863,15 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
     const float cutoffNorm = local.cutoff == 0.0f
                                  ? params.cutoff
                                  : std::clamp (params.cutoff + local.cutoff, 0.0f, 1.0f);
-    const float cutoff = 80.0f * std::pow (90.0f, std::clamp (cutoffNorm, 0.0f, 1.0f));
+    float cutoff;
+    if (cutoffNorm == voice.cutoffKey)
+        cutoff = voice.cutoffHz;
+    else
+    {
+        voice.cutoffKey = cutoffNorm;
+        voice.cutoffHz = 80.0f * std::pow (90.0f, std::clamp (cutoffNorm, 0.0f, 1.0f));
+        cutoff = voice.cutoffHz;
+    }
     float scale = 1.0f;
     if (params.keyTrack != 0.0f)
         scale *= std::exp2 (params.keyTrack * (static_cast<float> (voice.note) - 60.0f) / 12.0f);
@@ -856,7 +893,15 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
             const float secondBaseNorm = local.filter2 == 0.0f
                                               ? params.filter2Cutoff
                                               : std::clamp (params.filter2Cutoff + local.filter2, 0.0f, 1.0f);
-            const float secondBase = 80.0f * std::pow (90.0f, std::clamp (secondBaseNorm, 0.0f, 1.0f));
+            float secondBase;
+            if (secondBaseNorm == voice.secondKey)
+                secondBase = voice.secondHz;
+            else
+            {
+                voice.secondKey = secondBaseNorm;
+                voice.secondHz = 80.0f * std::pow (90.0f, std::clamp (secondBaseNorm, 0.0f, 1.0f));
+                secondBase = voice.secondHz;
+            }
             const float secondCutoff = scale == 1.0f
                                            ? secondBase
                                            : std::clamp (secondBase * scale, 20.0f, static_cast<float> (sampleRate_ * 0.45));

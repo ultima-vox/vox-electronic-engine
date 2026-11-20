@@ -90,6 +90,12 @@ public:
     void releasePhraseHandoffForTest() noexcept { phraseHandoffPark_.store (0, std::memory_order_release); }
     [[nodiscard]] int phraseClaimViolations() const noexcept { return phraseClaimViolations_.load (std::memory_order_acquire); }
 
+    // Test gate for the MODX slot handoff. Same shape as the phrase gate.
+    void armModHandoffForTest() noexcept { modHandoffPark_.store (1, std::memory_order_release); }
+    [[nodiscard]] int modHandoffPhase() const noexcept { return modHandoffPark_.load (std::memory_order_acquire); }
+    void releaseModHandoffForTest() noexcept { modHandoffPark_.store (0, std::memory_order_release); }
+    [[nodiscard]] int modClaimViolations() const noexcept { return modClaimViolations_.load (std::memory_order_acquire); }
+
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
@@ -99,7 +105,6 @@ protected:
     }
 
 private:
-    engine::BlockParams latchBlock();
     struct ExtraRoutes {
         struct Row {
             int source = 0;
@@ -108,8 +113,9 @@ private:
         };
         Row row[2][extraRouteCount] {};
     };
-    [[nodiscard]] ExtraRoutes readExtraRoutes() const noexcept;
-    void publishExtraRoutes (const ExtraRoutes& next) noexcept;
+    void readModSnapshot (ExtraRoutes& out) noexcept;
+    void publishModLocked() noexcept;
+    engine::BlockParams latchBlock();
     void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
     bool insertEvent (const engine::Event& event, int& count);
     void publishLocked();
@@ -118,8 +124,22 @@ private:
     juce::AudioProcessorValueTreeState parameters_;
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
-    ExtraRoutes extraRoutes_ {};
-    std::atomic<std::uint32_t> extraSeq_ { 0 };
+    // Writer-side copy. Non-RT threads take modLock_, edit this, then publish
+    // a slot. The audio thread never reads this object.
+    mutable juce::CriticalSection modLock_;
+    mutable ExtraRoutes modEdit_ {};
+    struct ModSlot {
+        ExtraRoutes routes {};
+        int stamp = 0;
+        int stampEnd = 0;
+        std::atomic<int> state { 0 };
+    };
+    ModSlot modSlots_[3] {};
+    std::atomic<int> modPublished_ { 0 };
+    int modRevision_ = 0;
+    ExtraRoutes modLast_ {};
+    std::atomic<int> modClaimViolations_ { 0 };
+    std::atomic<int> modHandoffPark_ { 0 };
     double hostBpm_ = 120.0;
     bool hostBpmValid_ = false;
     vstengine::effects::EffectsChain fx_;

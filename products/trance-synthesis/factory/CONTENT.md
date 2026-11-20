@@ -27,5 +27,7 @@ Wavetable playback reads one shared 256 by 2048 table built off the callback. Un
 
 Three factory candidates use the new timbre: lead 210, pad 400 and stab 565. The other 597 stay on the frozen 75 values.
 
-The Windows worst-case load is 4-note unison, wavetable, both filters, delay and reverb, oversampling off. At 44.1 and 48 kHz every measured block fits its deadline. At 96 kHz, blocks of 64 and up fit. The 32-sample block does not: p99 was 0.672 ms against a 0.333 ms deadline on the self-hosted runner. That miss is recorded, not treated as a pass.
+Extra routes use the same Free, Writing, Ready, Reading slots as phrases. The audio thread copies a slot only after it claims it, retries at most four times, and otherwise keeps the last intact copy. Writers serialize on one lock and never touch the slot the reader owns. The snapshot is taken once per block.
+
+Filter and wavetable coefficients that do not change inside the note are reused. The default low-pass is still SvfLowpass. Every measured worst-case cell, including 96 kHz and 32 samples, has to finish inside its own block deadline. Oversampling stays off.
 

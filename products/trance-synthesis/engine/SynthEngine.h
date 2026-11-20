@@ -218,6 +218,19 @@ private:
         float pendingDetune = 0.0f;
         float pendingPan = 0.0f;
         double wtPhase = 0.0;
+        double wtInc = -1.0;
+        float wtPosKey = -1.0f;
+        int wtFrame = 0;
+        double noteKey = -1000.0;
+        double noteHz = 0.0;
+        double detuneKey = -1.0;
+        double detuneRatio = 1.0;
+        float cutoffKey = -1.0f;
+        float cutoffHz = 80.0f;
+        float secondKey = -1.0f;
+        float secondHz = 80.0f;
+        double osc3Key = -100.0;
+        double osc3Ratio = 1.0;
         LfoState retrig[4] {};
         vstengine::dspcore::SvfLowpass svf;
         VaFilter flt1;
@@ -275,6 +288,7 @@ private:
     LfoState lfo_[partCount][4] {};
     float lastCutoff_[partCount] {};
     double bpmLive_ = 120.0;
+    const Wavetable* table_ = nullptr;
     double sampleRate_ = 48000.0;
     int maximumBlockSize_ = 0;
     bool prepared_ = false;

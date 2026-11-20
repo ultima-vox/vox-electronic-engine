@@ -2026,12 +2026,73 @@ void testModHost()
     check (copy->loadFactoryProgram (0), "bass candidate loads");
     copy->getModRoute (0, 4, source, dest, amount);
     check (source == 0 && dest == 0, "a bass candidate does not keep the pad route");
+
+    auto gated = make();
+    gated->prepareToPlay (48000.0, 64);
+    gated->armModHandoffForTest();
+    std::thread reader ([&] {
+        juce::AudioBuffer<float> audio (2, 64);
+        juce::MidiBuffer none;
+        gated->processBlock (audio, none);
+    });
+    int spins = 0;
+    while (gated->modHandoffPhase() != 2 && spins < 2000)
+    {
+        ++spins;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    gated->setModRoute (0, 6, 1, 1, 0.7f);
+    gated->setModRoute (0, 10, 2, 3, 0.4f);
+    gated->releaseModHandoffForTest();
+    reader.join();
+    check (spins < 2000, "MODX reader parked between load and claim");
+    check (gated->modClaimViolations() == 0, "MODX slot was not copied while it was being written");
+    gated->getModRoute (0, 10, source, dest, amount);
+    check (source == 2 && dest == 3, "the second publish is the one the editor keeps");
+
+    auto raced = make();
+    raced->prepareToPlay (48000.0, 64);
+    setPlain (*raced, "syn.a.engine", 2.0f);
+    juce::AudioBuffer<float> live (2, 64);
+    juce::MidiBuffer notes;
+    notes.addEvent (juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (100)), 0);
+    raced->processBlock (live, notes);
+    std::atomic<bool> run { true };
+    std::thread writer ([&] {
+        int n = 0;
+        while (run.load (std::memory_order_relaxed))
+        {
+            raced->setModRoute (n & 1, 4 + (n % 20), 1 + (n % 4), 1, 0.2f + 0.01f * (n % 10));
+            if ((n % 32) == 0)
+                raced->loadFactoryProgram (n % 600);
+            if ((n % 48) == 0)
+            {
+                juce::MemoryBlock state;
+                raced->getStateInformation (state);
+                raced->setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+            }
+            ++n;
+        }
+    });
+    bool liveFinite = true;
+    juce::MidiBuffer none;
+    for (int i = 0; i < 80; ++i)
+    {
+        raced->processBlock (live, none);
+        for (int sample = 0; sample < 64; ++sample)
+            liveFinite = liveFinite && std::isfinite (live.getSample (0, sample));
+    }
+    run.store (false, std::memory_order_relaxed);
+    writer.join();
+    check (liveFinite, "route edits during playback stay finite");
+    check (raced->modClaimViolations() == 0, "concurrent route edits did not tear a slot");
 }
 
 void testWorstCase()
 {
     const double rates[] = { 44100.0, 48000.0, 96000.0 };
-    const int blocks[] = { 32, 64, 128, 256 };
+    const int blocks[] = { 32, 64, 128, 256, 512 };
+    constexpr int samples = 200;
     for (double rate : rates)
         for (int block : blocks)
         {
@@ -2063,9 +2124,9 @@ void testWorstCase()
                 midi.clear();
             }
             std::vector<double> times;
-            times.reserve (64);
+            times.reserve (samples);
             bool finite = true;
-            for (int i = 0; i < 64; ++i)
+            for (int i = 0; i < samples; ++i)
             {
                 const auto started = std::chrono::steady_clock::now();
                 synth->processBlock (buffer, midi);
@@ -2075,20 +2136,19 @@ void testWorstCase()
             }
             std::sort (times.begin(), times.end());
             const double deadline = 1000.0 * static_cast<double> (block) / rate;
-            const double p50 = times[32];
-            const double p95 = times[60];
-            const double p99 = times[63];
+            const auto at = [&] (double q)
+            {
+                const int index = std::clamp (static_cast<int> (std::llround (q * static_cast<double> (samples - 1))), 0, samples - 1);
+                return times[static_cast<std::size_t> (index)];
+            };
+            const double p50 = at (0.50);
+            const double p95 = at (0.95);
+            const double p99 = at (0.99);
             const double worst = times.back();
-            std::printf ("synth worst %.0f/%d: p50 %.3f p95 %.3f p99 %.3f max %.3f deadline %.3f\n",
-                         rate, block, p50, p95, p99, worst, deadline);
+            std::printf ("synth worst %.0f/%d n=%d: p50 %.3f p95 %.3f p99 %.3f max %.3f deadline %.3f\n",
+                         rate, block, samples, p50, p95, p99, worst, deadline);
             check (finite, "worst-case output stays finite");
-            // 96 kHz and 32 samples is over the block deadline on the Windows
-            // runner (about 2x). Every other measured cell fits. Bound the miss
-            // so a later regression still fails.
-            if (rate == 96000.0 && block == 32)
-                check (p99 < deadline * 2.5, "96 kHz / 32-sample overrun stays under 2.5x");
-            else
-                check (p99 < deadline, "worst-case p99 stays inside the block deadline at " + std::to_string (rate));
+            check (p99 < deadline, "worst-case p99 stays inside the block deadline at " + std::to_string (rate) + "/" + std::to_string (block));
         }
 }
 

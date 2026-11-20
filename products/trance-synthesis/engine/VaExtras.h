@@ -55,7 +55,12 @@ struct VaOsc {
 // The default VA low-pass stays on SvfLowpass.
 struct VaFilter {
     double s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0;
-    void reset() noexcept { s1 = s2 = s3 = s4 = 0.0; }
+    double fc_ = -1.0, res_ = -1.0, sr_ = -1.0, g_ = 0.0, k_ = 0.0;
+    void reset() noexcept
+    {
+        s1 = s2 = s3 = s4 = 0.0;
+        fc_ = -1.0;
+    }
     struct Stage { double lp, bp, hp, notch; };
     static Stage tick (double x, double g, double k, double& ic1, double& ic2) noexcept
     {
@@ -80,9 +85,17 @@ struct VaFilter {
             return 0.0;
         }
         const double fc = std::min (std::max (cutoffHz, 20.0), 0.45 * sampleRate);
-        const double g = std::tan (vstengine::dspcore::pi * fc / sampleRate);
         const double res = std::clamp (resonance, 0.0, 1.0);
-        const double k = 2.0 - 1.9 * res;
+        if (fc != fc_ || res != res_ || sampleRate != sr_)
+        {
+            fc_ = fc;
+            res_ = res;
+            sr_ = sampleRate;
+            g_ = std::tan (vstengine::dspcore::pi * fc / sampleRate);
+            k_ = 2.0 - 1.9 * res;
+        }
+        const double g = g_;
+        const double k = k_;
         const int m = std::clamp (mode, 0, 5);
         double y;
         if (m == 1 || m == 3)
@@ -113,7 +126,12 @@ struct Wavetable {
     static constexpr int cycle = 2048;
     float data[frames][cycle] {};
     Wavetable() noexcept;
-    [[nodiscard]] float read (float position, double phase, double cyclesPerSample) const noexcept;
+    [[nodiscard]] int frame (float position, double cyclesPerSample) const noexcept;
+    [[nodiscard]] float readFrame (int frame, double phase) const noexcept;
+    [[nodiscard]] float read (float position, double phase, double cyclesPerSample) const noexcept
+    {
+        return readFrame (frame (position, cyclesPerSample), phase);
+    }
 };
 
 [[nodiscard]] const Wavetable& sharedWavetable() noexcept;
