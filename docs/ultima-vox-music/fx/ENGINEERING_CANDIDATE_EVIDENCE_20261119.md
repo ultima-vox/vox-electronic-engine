@@ -1,6 +1,6 @@
 # VOX FX engineering candidate evidence — Draft #156
 
-**Development candidate only / HOLD / NO MERGE.** The Windows run is neither requested nor authorized. Product source `8e32925daa997f45772bb96bd72d6044047b6fb1` follows the accepted Delay/Source package, Granular Travel, family depth and the antialiased Drive slice, on top of Draft CI-only head `5c2f122`. See the [TL phase order](INTEGRATED_CANDIDATE_PLAN_20261119.md). Before any owner-authorized run, re-pin the exact reviewed **integrated** PR head and record commit, tree, compiler, dependencies and product hashes in the same receipt. Do not substitute a different checkout or a synthetic merge commit.
+**Development candidate only / HOLD / NO MERGE.** The Windows run is neither requested nor authorized. Product source `8e77f005d4f503cb49fcc8c8f4cb2d791fdb2ac0` follows the accepted Delay/Source package, Granular Travel, family depth and the antialiased Drive slice, on top of Draft CI-only head `5c2f122`. See the [TL phase order](INTEGRATED_CANDIDATE_PLAN_20261119.md). Before any owner-authorized run, re-pin the exact reviewed **integrated** PR head and record commit, tree, compiler, dependencies and product hashes in the same receipt. Do not substitute a different checkout or a synthetic merge commit.
 
 | Area | Evidence available now | Outstanding qualification |
 |---|---|---|
