@@ -23,17 +23,26 @@ jobs:
     if: >-
       ${{
         github.event_name != 'pull_request' ||
-        !(github.event.pull_request.draft &&
+        (github.event.action != 'edited' &&
+          !(github.event.pull_request.draft &&
           (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
             (github.event.pull_request.base.ref == 'next/fx-development' &&
-              startsWith(github.head_ref, 'arena/')))) ||
+              startsWith(github.head_ref, 'arena/'))))) ||
         (github.event.action == 'edited' &&
+          (github.event.pull_request.draft &&
+          (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
+            (github.event.pull_request.base.ref == 'next/fx-development' &&
+              startsWith(github.head_ref, 'arena/')))) &&
           github.event.changes.body.from != null &&
-          ((!contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
-            contains(github.event.pull_request.body, '[RUN_FX_SUITE]')) ||
-           (github.event.pull_request.number == 156 &&
-            !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
-            contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]'))))
+          !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
+          contains(github.event.pull_request.body, '[RUN_FX_SUITE]')) ||
+        (github.event.action == 'edited' &&
+          github.event.pull_request.number == 156 &&
+          github.event.pull_request.draft &&
+          github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+          github.event.changes.body.from != null &&
+          !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
+          contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]'))
       }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -93,11 +102,16 @@ jobs:
     if: >-
       ${{
         github.event_name != 'pull_request' ||
-        !(github.event.pull_request.draft &&
+        (github.event.action != 'edited' &&
+          !(github.event.pull_request.draft &&
           (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
             (github.event.pull_request.base.ref == 'next/fx-development' &&
-              startsWith(github.head_ref, 'arena/')))) ||
+              startsWith(github.head_ref, 'arena/'))))) ||
         (github.event.action == 'edited' &&
+          (github.event.pull_request.draft &&
+          (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
+            (github.event.pull_request.base.ref == 'next/fx-development' &&
+              startsWith(github.head_ref, 'arena/')))) &&
           github.event.changes.body.from != null &&
           !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
           contains(github.event.pull_request.body, '[RUN_FX_SUITE]'))
