@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Granular Travel](GRANULAR_TRAVEL_20261119.md): per-layer scan of grain starts, distinct from pitch and reverse, with opt-in FPRG v9 state requiring review. Legacy v6–v8 encodings, host IDs, Save, and offered drag contracts are unchanged. See the [integrated candidate plan](INTEGRATED_CANDIDATE_PLAN_20261119.md).
+
 - [Delay transition boundaries and Source keyboard scope](FREE_DELAY_BOUNDARY_20261119.md): no rounded tap jumps while entering or leaving the moving-read mode in the targeted tests; fixed sound pins unchanged. Source traversal is scoped and tests skip controls hidden by family. [Current engineering candidate evidence and open gates](ENGINEERING_CANDIDATE_EVIDENCE_20261119.md).
 
 - [Free Delay Amount motion](FREE_DELAY_MOTION_20261119.md): fractional moving read reduces measured staircase error while nine stationary fixtures stay byte-identical. Existing Delay automation retains its meaning but can sound different while moving. No state/host-ID change; nonlinear aliasing, FX-T18, Windows and DAWs remain open.

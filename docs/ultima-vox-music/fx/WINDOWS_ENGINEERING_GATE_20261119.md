@@ -10,6 +10,8 @@
 
 ### Read-only preflight before requesting authorization
 
+TL decision: this is a release-qualification requirement, **not a development or review blocker**. Continue DSP/UI work in parallel; [operator issue #164](https://github.com/ultima-vox/vox-electronic-engine/issues/164) tracks the intended-runner receipt.
+
 On the intended Windows runner, from the trusted reviewed checkout, use Python 3 with PyYAML, CMake, and **Windows PowerShell 5.1**. Keep the output private. Use a fresh scratch path; these commands do not build, start a job, invoke a validator, replay CDB, or change any opt-in.
 
 ```powershell
