@@ -114,6 +114,41 @@ int main(){
             check(unpack(pack({Type::delay,1,.5f})).type==Type::delay,"delay structural state");
         }
         {
+            // Compare a swept first echo with a continuous sine reference.
+            // During this window no feedback can have reached the read head.
+            Chain swept;constexpr float base=.3f;
+            check(swept.prepare(rate)&&swept.set(0,{Type::delay,1,base}),"moving free Delay fixture");
+            const auto end=static_cast<int>(rate*.27),onset=static_cast<int>(rate*.1);
+            constexpr double omega=6.283185307179586*.075;
+            const double smoothing=1.-std::exp(-1./(.005*rate));
+            float smoothed=.5f;
+            std::array<float,8> route{};
+            double oldError=0,newError=0,energy=0;bool finite=true;
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+            voxProbeBegin();
+#endif
+            for(int n=0;n<end;++n){
+                route[1]=n>=onset?static_cast<float>(.002*std::sin(6.283185307179586*7*(n-onset)/rate)):0.f;
+                smoothed+=static_cast<float>(((base+route[1])-smoothed)*smoothing);
+                float l=n<onset?static_cast<float>(.4*std::sin(omega*n)):0.f,r=-l;
+                swept.process(&l,&r,1,route.data());
+                const double tap=rate*(.05+.45*smoothed);
+                if(n>rate*.21){
+                    const double ideal=.4*std::sin(omega*(n-tap));
+                    const double staircase=.4*std::sin(omega*(n-std::round(tap)));
+                    oldError+=(staircase-ideal)*(staircase-ideal);newError+=(l-ideal)*(l-ideal);energy+=ideal*ideal;
+                    finite&=std::isfinite(l)&&l==-r;
+                }
+            }
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+            const auto allocations=voxProbeEnd();if(voxProbeAvailable())check(allocations==0,"fractional moving Delay allocates nothing");
+#endif
+            check(finite&&energy>1&&oldError>0&&newError<oldError*.1,
+                  "moving Delay reduces staircase error by at least 10 dB without losing stereo polarity");
+            std::printf("free Delay sweep %.0f Hz: relative staircase %.2f dB, fractional %.2f dB\n",rate,
+                        10*std::log10(oldError/energy),10*std::log10(newError/energy));
+        }
+        {
             Chain sync;check(sync.prepare(rate)&&sync.set(0,{Type::tempoDelay,1,0}),"Tempo Delay prepare");
             std::array<float,256> l{},r{};
             const auto silence=[&]{for(int i=0;i<8;++i)sync.process(l.data(),r.data(),l.size());};

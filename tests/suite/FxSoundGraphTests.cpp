@@ -95,15 +95,16 @@ int main(){
     // Production-rate mixed nonlinear and time effects, rather than a
     // bypass-only synthetic tail. This bounds the rendered signal; it does
     // not certify alias rejection or musical quality.
-    for(double rate:{44100.,48000.,96000.}){
+    for(double rate:{44100.,48000.,96000.})for(bool sync:{true,false}){
         const int changeAt=static_cast<int>(rate*.12),frames=static_cast<int>(rate*4);
         const auto run=[&](bool smallBlocks){
             effects::Chain chain;macro::Runtime motion;macro::Config routes;
             check(chain.prepare(rate)&&motion.prepare(rate),"nonlinear serial fixture prepare");
             check(routes.setRoute(S::macro1,D::amount1,.3f,.003f)&&routes.setRoute(S::lfo1,D::amount2,.25f,.015f)&&
-                  routes.setRoute(S::follower,D::wet4,.45f,.018f)&&motion.setConfig(routes),"independent nonlinear and tail controls route");
+                  routes.setRoute(S::follower,D::wet4,.45f,.018f)&&(sync||routes.setRoute(S::lfo2,D::amount3,.1f,.012f))&&
+                  motion.setConfig(routes),"independent nonlinear and tail controls route");
             check(chain.set(0,{effects::Type::drive,.65f,.48f})&&chain.set(1,{effects::Type::wavefold,.38f,.29f})&&
-                  chain.set(2,{effects::Type::tempoDelay,.62f,.21f})&&chain.set(3,{effects::Type::reverb,.57f,.52f}),"install mixed four-slot topology");
+                  chain.set(2,{sync?effects::Type::tempoDelay:effects::Type::delay,.62f,.21f})&&chain.set(3,{effects::Type::reverb,.57f,.52f}),"install mixed four-slot topology");
             auto values=bases;std::vector<float> l(frames),r(frames);
             for(int i=0;i<changeAt;++i){
                 const auto x=static_cast<double>(i)/changeAt;
@@ -118,7 +119,7 @@ int main(){
             return std::pair(std::move(l),std::move(r));
         };
         const auto large=run(false),small=run(true);
-        check(large==small,"mixed nonlinear/routed tempo tails remain sample-exact across block partitions");
+        check(large==small,"mixed nonlinear/routed delay tails remain sample-exact across block partitions");
         double peak=0,tail=0,stereo=0,late=0;bool finite=true;
         for(int i=0;i<frames;++i){
             const auto l=large.first[i],r=large.second[i];const auto amplitude=std::max(std::abs(l),std::abs(r));
@@ -127,7 +128,7 @@ int main(){
             if(i>=rate*3.5)late=std::max(late,static_cast<double>(amplitude));
         }
         check(finite&&peak>.02&&peak<1&&tail>.001&&late<1e-5&&stereo>.01,"modulated serial FX stay finite, retain wet stereo energy and decay");
-        std::printf("mixed nonlinear/tempo tail %.0f Hz: peak %.7f, tail %.7f, final peak %.9f\n",rate,peak,tail,late);
+        std::printf("mixed nonlinear/%s delay tail %.0f Hz: peak %.7f, tail %.7f, final peak %.9f\n",sync?"tempo":"moving free",rate,peak,tail,late);
     }
     std::printf("FX sound graph/deterministic routes: %d failure(s)\n",failures);return failures?1:0;
 }

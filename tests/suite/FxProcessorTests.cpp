@@ -1152,7 +1152,7 @@ void checkHostTempoCursor() {
 // loop/held performance with an arbitrary MIDI NoteOff or a DAW tempo map.
 void checkCaptureParity() {
     using namespace vox::fx;
-    for(unsigned mode=0;mode<8;++mode){
+    for(unsigned mode=0;mode<9;++mode){
         auto fx=std::make_unique<FxProcessor>();TestPlayHead host;fx->setPlayHead(&host);
         constexpr int rate=48000,cycle=rate;
         const auto clock=[&](int at){
@@ -1180,10 +1180,15 @@ void checkCaptureParity() {
             fx->setEffect(1,{effects::Type::tempoDelay,.37f,0});
             fx->effectWetParameter(1).setValueNotifyingHost(.37f);fx->effectAmountParameter(1).setValueNotifyingHost(0.f);
         }
+        if(mode==8){
+            check(fx->setEffect(1,{effects::Type::delay,.57f,.28f}),"set free delay for moving tap parity");
+            fx->effectWetParameter(1).setValueNotifyingHost(.57f);fx->effectAmountParameter(1).setValueNotifyingHost(.28f);
+        }
         auto motion=fx->versionedMotion();auto routes=motion.config;
         (void)routes.put(0,{mod::Source::lfo2,mod::Destination::pitch,.11f,.02f});
         (void)routes.put(1,{mod::Source::follower,mod::Destination::amount1,.2f,.018f});
         (void)routes.put(2,{mod::Source::lfo1,mod::Destination::width,.12f,.014f});
+        if(mode==8)check(routes.put(3,{mod::Source::lfo2,mod::Destination::amount2,.16f,.008f}),"route LFO to free delay Amount");
         check(fx->replaceMotionIfCurrent(motion,routes),"capture has pre- and post-DSP motion");
         const bool sequence=program.mode==PlayMode::sequence||mode==6;
         if(sequence){

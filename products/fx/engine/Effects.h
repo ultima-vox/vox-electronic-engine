@@ -62,6 +62,8 @@ class Chain {
         std::size_t write=0,age=0,silentSamples=0;
         double syncTap=0,oldSyncTap=0;
         unsigned syncFade=0;
+        float delayTarget=-1;
+        unsigned delayTapMix=0,delayQuiet=0;
         std::array<std::size_t,4> reverbL{},reverbR{};
     };
     struct Bank { std::vector<float> left,right; };
@@ -105,9 +107,9 @@ public:
                 const float amount=modulation?std::clamp(slot.desired.amount+modulation[2*slotIndex+1],0.f,1.f):slot.desired.amount;
                 slot.wet+=static_cast<float>((wet-slot.wet)*smoothing_);
                 slot.amount+=static_cast<float>((amount-slot.amount)*smoothing_);
-                double a=l,b=r;apply(slot.current,banks_[slotIndex][slot.current.bank],slot.amount,a,b);
+                double a=l,b=r;apply(slot.current,banks_[slotIndex][slot.current.bank],slot.amount,amount,a,b);
                 if(slot.current.type!=Type::bypass){a=l+(a-l)*slot.wet;b=r+(b-r)*slot.wet;}
-                if(slot.transition){double oldL=l,oldR=r;apply(slot.old,banks_[slotIndex][slot.old.bank],slot.amount,oldL,oldR);
+                if(slot.transition){double oldL=l,oldR=r;apply(slot.old,banks_[slotIndex][slot.old.bank],slot.amount,amount,oldL,oldR);
                     if(slot.old.type!=Type::bypass){oldL=l+(oldL-l)*slot.wet;oldR=r+(oldR-r)*slot.wet;}
                     const double mix=1.0-static_cast<double>(slot.transition)/fadeSamples_;
                     a=oldL+(a-oldL)*mix;b=oldR+(b-oldR)*mix;--slot.transition;
@@ -127,7 +129,31 @@ private:
         const double older=state.age>whole?buffer[previous]:0.0;
         return buffer[index]*(1-fraction)+older*fraction;
     }
-    void apply(State& state,Bank& bank,float amount,double& l,double& r) noexcept {
+    double freeDelayTap(State& state,float smoothed,float target) const noexcept {
+        const double tap=rate_*(.05+.45*smoothed);
+        const double nearest=std::round(tap);
+        // Preserve the original integer tap for fixed settings (including
+        // cold start). Once Amount moves, fade toward a fractional read to
+        // avoid full-sample jumps. Return to the old stationary tap after
+        // the control has settled; don't switch modes at a modulation peak.
+        if(state.delayTarget==target&&state.delayTapMix==0&&state.delayQuiet==fadeSamples_)return nearest;
+        if(state.delayTarget==target){
+            if(state.delayQuiet<fadeSamples_)++state.delayQuiet;
+        }else{
+            state.delayQuiet=state.delayTarget<0?fadeSamples_:0;
+            state.delayTarget=target;
+        }
+        const bool moving=state.delayQuiet<fadeSamples_||
+            (state.delayTapMix!=0&&std::abs(tap-rate_*(.05+.45*target))>.01);
+        if(moving){if(state.delayTapMix<fadeSamples_)++state.delayTapMix;}
+        else if(state.delayTapMix!=0)--state.delayTapMix;
+        if(state.delayTapMix==0)return nearest;
+        if(state.delayTapMix==fadeSamples_)return tap;
+        // The nearest tap is one endpoint of the same interpolation cell;
+        // morph the position, not two memory reads per channel.
+        return nearest+(tap-nearest)*(static_cast<double>(state.delayTapMix)/fadeSamples_);
+    }
+    void apply(State& state,Bank& bank,float amount,float targetAmount,double& l,double& r) noexcept {
         constexpr double tau=6.2831853071795864769;
         switch(state.type){
         case Type::bypass: break;
@@ -219,7 +245,7 @@ private:
                     state.oldSyncTap=state.syncTap;state.syncTap=syncTap_;state.syncFade=fadeSamples_;
                 }
                 length=state.syncTap;
-            }else length=std::round(rate_*(.05+.45*amount));
+            }else length=freeDelayTap(state,amount,targetAmount);
             auto delayedL=readDelay(state,bank.left,length),delayedR=readDelay(state,bank.right,length);
             if(state.syncFade){
                 const double blend=1.-static_cast<double>(state.syncFade)/fadeSamples_;
