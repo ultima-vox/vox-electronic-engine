@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Candidate gate and outstanding work](CANDIDATE_GATE_20261119.md): native same-directory export commit without copy fallback, no-clobber race and cross-device tests, plus an opt-in Windows thread CPU probe (not executed on Windows). Latest Linux timing was clean; prior wall overruns keep FX-T18 open. No catalog or release approval.
+
 - [Export lifecycle follow-up and gain-staging matrix](EXPORT_QUALIFICATION_FOLLOWUP_20261119.md): active SMF cancellation, chooser reentry protection, host-save and rate-change fixtures, and SHA-verified level estimates for the same 176 unapproved references. Windows, FX-T18, private delivery and owner acceptance remain open.
 
 - [Shared WAV/MIDI export and consolidated listening review](FILE_EXPORT_AND_ARRANGEMENT_REVIEW_20261119.md): immutable MIDI file job, native granular preview/retirement and wet-bounce regression, 176 prior review cues verified in one bundle, no approvals. Three fresh wall-only misses; FX-T18 remains open.
