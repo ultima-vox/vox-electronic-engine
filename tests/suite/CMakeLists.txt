@@ -96,6 +96,18 @@ add_test(NAME suite_drums_legacy_golden_tests
 
 # DRM-01: VOX Drums product tests (parameter contract, editor bindings,
 # sound, state, realtime).
+add_executable(suite_drums_workspace_model_tests DrumsWorkspaceModelTests.cpp)
+target_include_directories(suite_drums_workspace_model_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/drums)
+add_test(NAME suite_drums_workspace_model_tests COMMAND suite_drums_workspace_model_tests)
+
+add_executable(suite_drums_workspace_tests DrumsWorkspaceTests.cpp)
+target_link_libraries(suite_drums_workspace_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_workspace_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+if(MSVC)
+  target_link_options(suite_drums_workspace_tests PRIVATE /STACK:8388608)
+endif()
+add_test(NAME suite_drums_workspace_tests COMMAND suite_drums_workspace_tests)
+
 add_executable(suite_drums_product_tests DrumsProductTests.cpp)
 target_link_libraries(suite_drums_product_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)

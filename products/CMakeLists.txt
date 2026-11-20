@@ -56,6 +56,7 @@ endforeach()
 target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/DrumsParameters.cpp drums/DrumsParameters.h
   drums/DrumsEditor.cpp drums/DrumsEditor.h
+  drums/DrumsWorkspace.cpp drums/DrumsWorkspace.h drums/WorkspaceModel.h
   drums/SampleLibrary.cpp drums/SampleLibrary.h
   drums/KitStore.cpp drums/KitStore.h
   drums/PatternStore.cpp drums/PatternStore.h drums/SongModel.cpp drums/Generator.cpp drums/Generator.h drums/PadRoles.cpp drums/PadRoles.h drums/FactoryContent.cpp drums/FactoryContent.h drums/Presets.cpp drums/Presets.h drums/DrumsPages.cpp drums/DrumsPages.h drums/PatternExport.cpp drums/PatternExport.h
