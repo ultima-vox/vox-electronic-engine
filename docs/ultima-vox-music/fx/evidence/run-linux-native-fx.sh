@@ -54,7 +54,7 @@ prod=('-DJucePlugin_Name="VOX FX"' '-DVOX_SUITE_STATE_TAG="VXFX"' -DVOX_TEST_INT
 gcc -O2 -c libs/vox-testkit/probe/AllocationProbeLinux.c -o "$out/probe.o"
 gcc -O2 -c tests/suite/FxLockProbeLinux.c -o "$out/lock.o"
 objects=()
-for src in products/fx/{Processor,FxEditor,LayerPanel,CurveEditor}.cpp libs/vox-ui/VoxLookAndFeel.cpp libs/vox-ui/components/*.cpp libs/vox-preset/StateContainer.cpp; do
+for src in products/fx/{Processor,FxEditor,LayerPanel,CurveEditor}.cpp products/fx/engine/FileCommit.cpp libs/vox-ui/VoxLookAndFeel.cpp libs/vox-ui/components/*.cpp libs/vox-preset/StateContainer.cpp; do
     n=${src##*/}; dst="$out/obj/${n%.cpp}.o"
     echo "VOX $src"; g++ "${flags[@]}" "${prod[@]}" -O2 -c "$src" -o "$dst"; objects+=("$dst")
 done

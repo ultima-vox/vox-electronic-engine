@@ -417,7 +417,7 @@ target_include_directories(suite_fx_generator_state_tests PRIVATE ${PROJECT_SOUR
 add_test(NAME suite_fx_generator_state_tests COMMAND suite_fx_generator_state_tests)
 set_tests_properties(suite_fx_generator_state_tests PROPERTIES LABELS suite)
 
-add_executable(suite_fx_file_export_tests FxFileExportTests.cpp)
+add_executable(suite_fx_file_export_tests FxFileExportTests.cpp ${PROJECT_SOURCE_DIR}/products/fx/engine/FileCommit.cpp)
 target_link_libraries(suite_fx_file_export_tests PRIVATE juce::juce_core)
 target_compile_definitions(suite_fx_file_export_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_include_directories(suite_fx_file_export_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
@@ -493,7 +493,7 @@ vox_suite_add_allocation_probe(suite_fx_sound_graph_tests)
 add_test(NAME suite_fx_sound_graph_tests COMMAND suite_fx_sound_graph_tests)
 set_tests_properties(suite_fx_sound_graph_tests PROPERTIES LABELS suite)
 
-add_executable(suite_fx_preset_library_tests FxPresetLibraryTests.cpp)
+add_executable(suite_fx_preset_library_tests FxPresetLibraryTests.cpp ${PROJECT_SOURCE_DIR}/products/fx/engine/FileCommit.cpp)
 target_include_directories(suite_fx_preset_library_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 target_link_libraries(suite_fx_preset_library_tests PRIVATE vox_preset juce::juce_cryptography juce::juce_recommended_config_flags)
 target_compile_definitions(suite_fx_preset_library_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)

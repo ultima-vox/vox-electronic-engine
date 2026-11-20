@@ -5,6 +5,9 @@
 #include <mutex>
 #include <chrono>
 #include <vector>
+#if JUCE_LINUX
+ #include <sys/stat.h>
+#endif
 
 int main() {
     using namespace vox::fx;
@@ -14,7 +17,8 @@ int main() {
     if(!dir.createDirectory().wasOk()){std::puts("FAIL: temporary directory");return 1;}
     const auto path=dir.getChildFile("output.wav");
     const std::vector<std::uint8_t> original{1,2,3,4};
-    check(fileexport::writeBytes(path,original),"write original file");
+    check(fileexport::writeBytes(path,original),"publish new file");
+    check(!fileexport::writeBytes(path,{})&&path.getSize()==4,"empty payload never replaces a valid file");
     fileexport::Cancellation cancel;cancel.request();
     check(!fileexport::writeBytes(path,{5,6,7},&cancel),"pre-cancelled write refused");
     check(path.loadFileAsString().getNumBytesAsUTF8()==4,"cancelled write preserves original");
@@ -99,7 +103,55 @@ int main() {
         gate.condition.notify_all();encoding.wait();
         check(encoding.result()==fileexport::Result::cancelled&&midiPath.loadFileAsString()=="original MIDI"&&
               dir.findChildFiles(juce::File::findFiles,false).size()==2,"cancelled encoding leaves no temporary MIDI bytes");
+
+        const auto lateMidi=dir.getChildFile("late.mid");
+        gate.bytes=0;gate.resume=false;
+        fileexport::Job newMidi(pattern,125.,lateMidi,nullptr,&gate,holdWrite);
+        {
+            std::unique_lock lock(gate.mutex);
+            const bool entered=gate.condition.wait_for(lock,std::chrono::seconds(5),[&]{return gate.bytes>0;});
+            check(entered&&lateMidi.replaceWithText("concurrent MIDI"),"another writer creates a destination after SMF work starts");
+            gate.resume=true;
+        }
+        gate.condition.notify_all();newMidi.wait();
+        check(newMidi.result()==fileexport::Result::failure&&lateMidi.loadFileAsString()=="concurrent MIDI"&&
+              dir.findChildFiles(juce::File::findFiles,false).size()==3,
+              "new MIDI publication cannot replace a destination created during encoding");
+
+        const auto lateWav=dir.getChildFile("late.wav");
+        gate.bytes=0;gate.resume=false;
+        fileexport::Job newWav(longer,lateWav,holdWrite,&gate);
+        {
+            std::unique_lock lock(gate.mutex);
+            const bool entered=gate.condition.wait_for(lock,std::chrono::seconds(5),[&]{return gate.bytes>0;});
+            check(entered&&lateWav.replaceWithText("concurrent WAV"),"another writer creates a destination before WAV publication");
+            gate.resume=true;
+        }
+        gate.condition.notify_all();newWav.wait();
+        check(newWav.result()==fileexport::Result::failure&&lateWav.loadFileAsString()=="concurrent WAV"&&
+              dir.findChildFiles(juce::File::findFiles,false).size()==4,
+              "new WAV publication cannot replace a late destination and cleans staging files");
     }
+#if JUCE_LINUX
+    {
+        // A different device intentionally violates the normal same-directory
+        // staging invariant to check that the commit primitive does not copy.
+        struct stat tempDevice{},shmDevice{};
+        const auto shm=juce::File("/dev/shm");
+        if(::stat(dir.getFullPathName().toRawUTF8(),&tempDevice)==0&&
+           ::stat(shm.getFullPathName().toRawUTF8(),&shmDevice)==0&&tempDevice.st_dev!=shmDevice.st_dev&&shm.hasWriteAccess()){
+            juce::TemporaryFile crossVolume(shm.getNonexistentChildFile("vox-fx-cross-volume",".wav",false));
+            const auto staged=crossVolume.getFile();
+            check(staged.replaceWithText("complete staged file"),"create cross-device fixture");
+            const auto fresh=dir.getChildFile("cross-volume.wav");
+            juce::MemoryBlock saved;
+            check(!fileexport::detail::commitFile(staged,path,true)&&path.loadFileAsData(saved)&&saved==actual&&
+                  !fileexport::detail::commitFile(staged,fresh,false)&&!fresh.exists()&&
+                  staged.loadFileAsString()=="complete staged file","cross-device commit never copies or removes destination/source");
+            std::puts("FX file export: cross-device failure checked");
+        } else std::puts("FX file export: cross-device fixture skipped (no writable second filesystem)");
+    }
+#endif
     auto longCapture=capture;longCapture.settings.duration=32;
     {fileexport::Job job(longCapture,path);job.cancel();job.wait();
         // If the thread finished before cancellation, success is legitimate.

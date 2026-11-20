@@ -1,6 +1,6 @@
 #pragma once
 #include "OfflineRender.h"
-#include <juce_core/juce_core.h>
+#include "FileCommit.h"
 #include <atomic>
 #include <thread>
 
@@ -39,15 +39,23 @@ private:
 using WriteObserver=void(*)(void*,std::size_t) noexcept;
 using EncodeObserver=void(*)(void*,std::size_t) noexcept;
 
-// Off the audio thread. The temporary lives beside the destination; the
-// destination is replaced only after a complete, closed write. Filesystem
-// replacement guarantees depend on the platform/filesystem.
-inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>& bytes,
-                       Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
-    if(cancel&&cancel->cancelled())return false;
-    // Do not attempt to replace a directory, regardless of its extension.
-    if(target.isDirectory())return false;
-    juce::TemporaryFile temporary(target);
+// Sample the overwrite policy once, before any expensive render or encode.
+// This is worker-side for WAV/MIDI. Files that appear after this observation
+// are not eligible for replacement. An already-existing file still follows
+// the save dialog's overwrite policy; this is not an identity check.
+struct Destination {
+    juce::File file;
+    bool replaceExisting;
+    static Destination observe(const juce::File& file) { return {file,file.existsAsFile()}; }
+};
+
+// Off the audio thread. Keep the staging file beside the destination. Only a
+// complete, closed write can enter commit; failed publication is not retried
+// via a copy. These are publication semantics, not crash-durability guarantees.
+inline bool writeBytesTo(const Destination& destination,const std::vector<std::uint8_t>& bytes,
+                         Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
+    if((cancel&&cancel->cancelled())||bytes.empty()||destination.file==juce::File{}||destination.file.isDirectory())return false;
+    juce::TemporaryFile temporary(destination.file);
     bool written=false;
     {
         juce::FileOutputStream stream(temporary.getFile());
@@ -62,7 +70,12 @@ inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>&
     // JUCE flush can report an incomplete buffered write only through the
     // final file size on some platforms. Never publish a truncated file.
     return written&&temporary.getFile().getSize()==static_cast<juce::int64>(bytes.size())&&
-           (!cancel||cancel->beginCommit())&&temporary.overwriteTargetFileWithTemporary();
+           (!cancel||cancel->beginCommit())&&detail::commitFile(temporary.getFile(),destination.file,destination.replaceExisting);
+}
+inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>& bytes,
+                       Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
+    if(cancel&&cancel->cancelled())return false;
+    return writeBytesTo(Destination::observe(target),bytes,cancel,observe,observerContext);
 }
 enum class Result { running, success, failure, cancelled };
 enum class Kind { wav, midi };
@@ -73,9 +86,12 @@ inline Result renderFile(const offline::Capture& capture,const juce::File& targe
                          WriteObserver observe=nullptr,void* observerContext=nullptr) {
     bool success=false;
     try {
-        std::vector<std::uint8_t> bytes;
-        success=offline::renderWav(capture,bytes,&cancel.renderFlag(),&progress) &&
-                writeBytes(target,bytes,&cancel,observe,observerContext);
+        if(!cancel.cancelled()){
+            const auto destination=Destination::observe(target);
+            std::vector<std::uint8_t> bytes;
+            success=offline::renderWav(capture,bytes,&cancel.renderFlag(),&progress) &&
+                    writeBytesTo(destination,bytes,&cancel,observe,observerContext);
+        }
     } catch(...) { success=false; }
     return success?Result::success:(cancel.sealFailure()?Result::cancelled:Result::failure);
 }
@@ -94,11 +110,14 @@ public:
         : kind_(Kind::midi),worker_([this,snapshot,bpm,target=std::move(target),observe,context,observeEncoding] {
             bool success=false;
             try {
-                std::vector<std::uint8_t> bytes;
-                success=pattern::exportMidiChecked(snapshot,bpm,bytes,[&](std::size_t count) noexcept {
-                    if(observeEncoding&&count!=0)observeEncoding(context,count);
-                    return !cancel_.cancelled();
-                })&&writeBytes(target,bytes,&cancel_,observe,context);
+                if(!cancel_.cancelled()){
+                    const auto destination=Destination::observe(target);
+                    std::vector<std::uint8_t> bytes;
+                    success=pattern::exportMidiChecked(snapshot,bpm,bytes,[&](std::size_t count) noexcept {
+                        if(observeEncoding&&count!=0)observeEncoding(context,count);
+                        return !cancel_.cancelled();
+                    })&&writeBytesTo(destination,bytes,&cancel_,observe,context);
+                }
             } catch(...) { success=false; }
             if(success)progress_.store(1.f,std::memory_order_relaxed);
             const auto result=success?Result::success:(cancel_.sealFailure()?Result::cancelled:Result::failure);
