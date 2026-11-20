@@ -2191,10 +2191,10 @@ void testHearLifecycle()
     for (auto* parameter : host->getParameters())
         parameter->removeListener (&tap);
     check (tap.hits == 0, "Hear does not notify the host");
-    bool same = true;
+    bool valuesMatch = true;
     for (std::size_t i = 0; i < before.size(); ++i)
-        same = same && std::abs (plain (*host, vox::syn::parameterCatalog[i].id) - before[i]) < 1.0e-5f;
-    check (same, "Hear leaves the edited patch values unchanged");
+        valuesMatch = valuesMatch && std::abs (plain (*host, vox::syn::parameterCatalog[i].id) - before[i]) < 1.0e-5f;
+    check (valuesMatch, "Hear leaves the edited patch values unchanged");
     int source = 0, dest = 0;
     float amount = 0.0f;
     host->getModRoute (0, 6, source, dest, amount);
@@ -2298,22 +2298,22 @@ void testHearLifecycle()
     flooded->processBlock (block, floodOff);
     check (flooded->previewLastOff() == 36 && ! flooded->previewMonoGate (0), "a full host queue still releases Hear");
 
-    auto same = make();
-    same->prepareToPlay (48000.0, 128);
-    setPlain (*same, "syn.a.engine", 0.0f);
-    setPlain (*same, "syn.b.level", 0.0f);
+    auto pitched = make();
+    pitched->prepareToPlay (48000.0, 128);
+    setPlain (*pitched, "syn.a.engine", 0.0f);
+    setPlain (*pitched, "syn.b.level", 0.0f);
     juce::MidiBuffer sameNote;
     sameNote.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (110)), 0);
-    same->processBlock (block, sameNote);
-    same->requestPreview (36);
+    pitched->processBlock (block, sameNote);
+    pitched->requestPreview (36);
     juce::MidiBuffer hold;
-    same->processBlock (block, hold);
-    check (same->monoGate (0) && same->monoNote (0) == 36, "host keeps 36 while Hear plays 36");
-    check (same->previewMonoGate (0) && same->previewMonoNote (0) == 36, "preview plays 36 on its own engine");
-    same->forcePreviewReleaseForTest();
-    same->processBlock (block, hold);
-    check (same->monoGate (0) && same->monoNote (0) == 36, "releasing preview 36 leaves the host 36 held");
-    check (same->previewLastOff() == 36 && ! same->previewMonoGate (0), "preview 36 was the note that was released");
+    pitched->processBlock (block, hold);
+    check (pitched->monoGate (0) && pitched->monoNote (0) == 36, "host keeps 36 while Hear plays 36");
+    check (pitched->previewMonoGate (0) && pitched->previewMonoNote (0) == 36, "preview plays 36 on its own engine");
+    pitched->forcePreviewReleaseForTest();
+    pitched->processBlock (block, hold);
+    check (pitched->monoGate (0) && pitched->monoNote (0) == 36, "releasing preview 36 leaves the host 36 held");
+    check (pitched->previewLastOff() == 36 && ! pitched->previewMonoGate (0), "preview 36 was the note that was released");
 
     int bass = -1, acid = -1, pad = -1;
     for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
