@@ -12,11 +12,64 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  choose-windows-runner:
+    # The lightweight selector executes on GitHub-hosted Linux only when the
+    # existing Windows job eligibility is satisfied.
+    if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      route: ${{ steps.pick.outputs.route }}
+    steps:
+      - name: Select Windows runner
+        id: pick
+        uses: actions/github-script@v7
+        env:
+          HAS_RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN != '' }}
+        with:
+          github-token: ${{ secrets.RUNNER_STATUS_TOKEN || github.token }}
+          script: |
+            const selfHosted = ['self-hosted', 'windows'];
+            let runner = selfHosted;
+            let reason = 'Status credential unavailable; use self-hosted';
+            if (process.env.HAS_RUNNER_STATUS_TOKEN === 'true') {
+              try {
+                const runners = await github.paginate(
+                  github.rest.actions.listSelfHostedRunnersForRepo,
+                  {owner: context.repo.owner, repo: context.repo.repo, per_page: 100}
+                );
+                const idle = runners.filter(r => r.status === 'online' && r.busy === false &&
+                  ['self-hosted', 'windows'].every(n =>
+                    (r.labels || []).some(l => String(l.name).toLowerCase() === n)));
+                if (idle.length === 0) {
+                  runner = 'windows-2022';
+                  reason = 'No online idle matching self-hosted Windows runner';
+                } else {
+                  reason = `${idle.length} online idle matching self-hosted Windows runner(s)`;
+                }
+              } catch (error) {
+                core.warning(`Cannot query self-hosted runner inventory (HTTP ${error.status || 'unknown'}); keeping self-hosted`);
+                reason = 'Inventory inaccessible; keep self-hosted';
+              }
+            } else {
+              core.warning('RUNNER_STATUS_TOKEN missing: hosted fallback cannot activate');
+            }
+            core.setOutput('runner', JSON.stringify(runner));
+            core.setOutput('route', Array.isArray(runner) ? 'self-hosted' : 'github-hosted');
+            core.info(`Route: ${JSON.stringify(runner)}. ${reason}`);
+            await core.summary.addHeading('Windows runner selection')
+              .addTable([[{data:'Route',header:true},{data:'Reason',header:true}],
+                         [Array.isArray(runner)?'self-hosted/windows':'windows-2022',reason]])
+              .write();
   windows-vst3:
+    needs: choose-windows-runner
     # FX draft PR — heavy Windows gate is manual until the integrated candidate.
     # All other PRs and main continue to build as before.
     if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
-    runs-on: [self-hosted, windows]
+    runs-on: ${{ fromJSON(needs.choose-windows-runner.outputs.runner) }}
     env:
       CMAKE_GENERATOR: Visual Studio 17 2022
 
