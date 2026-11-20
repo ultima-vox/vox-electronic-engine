@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WorkspaceModel.h"
+#include "DrumsLayoutState.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <array>
 #include <memory>
@@ -8,11 +9,15 @@
 namespace vox::drums {
 class DrumsProcessor;
 class Page;
+class DrumsDockZone;
+class PatternEditor;
+class SongStrip;
 
-// Candidate native #127 workspace. Instantiated by qualification tests while
-// Sound/Sample and DLAY are ported; the production editor is switched only when
-// its existing functional inventory is preserved. No second processor or DSP.
-class DrumsWorkspace final : public juce::Component, private juce::Timer {
+// Native #127 production editor. Owns views, not a second processor or DSP.
+// Draft qualification and the remaining dock/responsiveness/host gates are
+// tracked in NATIVE_WORKSPACE_STATUS.md.
+class DrumsWorkspace final : public juce::Component, public juce::DragAndDropContainer,
+                             private juce::Timer, private juce::ChangeListener {
 public:
     struct Telemetry {
         std::array<float, 16> pads {};
@@ -43,10 +48,27 @@ public:
     Page* toolPage (workspace::DockTool);
     juce::ComboBox* hostCombo (const juce::String& id);
     juce::Slider* returnSlider (const juce::String& id);
+    // Bound controls for production qualification. Pad Sound controls follow
+    // selection; Mixer controls exist for every pad.
+    juce::Slider* sliderFor (const juce::String& id);
+    juce::Button* buttonFor (const juce::String& id);
     void pollForTesting();
+    bool applyWorkspace (const layout::Document&, bool confirmedReset = false);
+    bool moveDockPanel (layout::Byte, layout::Type, unsigned group = 0, bool newGroup = false);
+    bool hideDockPanel (layout::Byte);
+    bool setDockRail (layout::Type, bool);
+    DrumsDockZone& dockZone (layout::Type);
+    PatternEditor& patternEditor();
+    SongStrip& songEditor();
 
 private:
     void timerCallback() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void readLayout();
+    void commitLayout();
+    void showWorkspaceMenu();
+    void showDockMenu (layout::Type, unsigned, layout::Byte, juce::Component&);
+    bool commitDockDocument (std::optional<layout::Document>);
     struct Impl;
     std::unique_ptr<Impl> impl_;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DrumsWorkspace)

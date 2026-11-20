@@ -29,7 +29,7 @@ struct ProductInfo {
 struct EditorLimits {
     static constexpr int minWidth = 1040, minHeight = 700;
     static constexpr int defaultWidth = 1180, defaultHeight = 760;
-    static constexpr int maxWidth = 1500, maxHeight = 920;
+    static constexpr int maxWidth = 2560, maxHeight = 1600;
 
     static bool valid (std::uint32_t w, std::uint32_t h) noexcept
     {
@@ -374,6 +374,7 @@ inline vox::suite::SuiteEditor::SuiteEditor (SuiteProcessor& owner)
       productName_ (owner.product().name),
       accent_ (owner.product().accent)
 {
+    const auto requested = owner.editorSize();
     const auto stateError = owner.lastStateError();
     footerText_ = stateError.isEmpty()
                       ? "State schema " + juce::String (owner.product().stateSchema)
@@ -382,13 +383,25 @@ inline vox::suite::SuiteEditor::SuiteEditor (SuiteProcessor& owner)
     setResizable (true, true);
     setResizeLimits (EditorLimits::minWidth, EditorLimits::minHeight,
                      EditorLimits::maxWidth, EditorLimits::maxHeight);
-    const auto [width, height] = owner.editorSize();
+    setSize (requested.first, requested.second);
+    initialising_ = false;
+}
+
+inline void vox::suite::SuiteEditor::setPresentationSize (int width, int height)
+{
+    if (! EditorLimits::valid (static_cast<std::uint32_t> (width), static_cast<std::uint32_t> (height))) return;
+    presentationSize_ = std::pair { width, height };
     setSize (width, height);
 }
 
 inline void vox::suite::SuiteEditor::resized()
 {
-    processor_.setEditorSize (getWidth(), getHeight());
+    const auto actual = std::pair { getWidth(), getHeight() };
+    if (! initialising_ && (! presentationSize_ || *presentationSize_ != actual))
+    {
+        presentationSize_.reset();
+        processor_.setEditorSize (actual.first, actual.second);
+    }
     if (content_ != nullptr)
         content_->setBounds (getLocalBounds().withTrimmedTop (headerHeight).withTrimmedBottom (footerHeight));
 }

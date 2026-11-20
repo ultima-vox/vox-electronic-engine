@@ -79,6 +79,7 @@ public:
     int selectedLane() const noexcept { return lane_; }
     int selectedStep() const noexcept { return step_; }
     void selectCell (int lane, int step);
+    std::function<void()> onSelectionChanged;
     void clickCell (int lane, int step);              // as a mouse click on the cell
     juce::Rectangle<int> cellBounds (int lane, int step) const;
     juce::Slider* inspector (const juce::String& name);   // "velocity", "probability", "ratchet", "micro"
@@ -93,10 +94,14 @@ public:
     // What a click or a drag exports now (the scope chosen in the editor
     // state: Pattern or Entire Song), frozen; both write it with writeSnapshot.
     std::shared_ptr<const ExportSnapshot> snapshot() const;
+    void useFixedPatternExportScope() noexcept { fixedPatternExport_ = true; }
+    void saveExport (std::shared_ptr<const ExportSnapshot>);
+    void dragExport (std::shared_ptr<const ExportSnapshot>, juce::Component& source);
     static bool writeSnapshot (const ExportSnapshot& snapshot, const juce::File& file);
     // What a drag drops: the export in a new folder unique to this editor
     // instance and this drag (review 6753052108); empty on failure.
     juce::File exportForDrag();
+    juce::File exportForDrag (std::shared_ptr<const ExportSnapshot>);
     // Removes this instance's drag folders older than dragLifetime (never
     // its newest) and other instances' folders older than staleLifetime.
     void cleanupDragFiles (juce::Time now);
@@ -120,9 +125,10 @@ private:
     void editBoth (const std::function<void (StoredPattern& a, StoredPattern& b)>& change);
     void refreshControls();
     void checkEpoch();
+    void layoutGrid (juce::Rectangle<int>);
     void startDrag();
     void openSaveDialog();
-    juce::File newDragFile();
+    juce::File newDragFile (const juce::String& name);
     // "<creation ms>-<UUID>": the age of this instance's folder for others' cleanup.
     const juce::String instanceId_ = juce::String (juce::Time::currentTimeMillis()) + "-" + juce::Uuid().toString();
     int dragCount_ = 0;
@@ -134,6 +140,7 @@ private:
     int slot_ = -1, bar_ = 0, playStep_ = -1, playBar_ = -1, songBar_ = -1, shownSongBar_ = -1;
     int lane_ = 0, step_ = 0, lanePage_ = 0;
     bool refreshing_ = false, gesture_ = false;
+    bool fixedPatternExport_ = false; // Native always opts in; donor fixture keeps its scope selector.
     juce::String lastKey_, exportMessage_;
     void exported (bool ok, const juce::File& file);
 
@@ -143,6 +150,7 @@ private:
     std::unique_ptr<MidiDragButton> midi_;
     std::unique_ptr<juce::Label> abLabel_;
     std::unique_ptr<Grid> grid_;
+    juce::Viewport gridViewport_;
     std::unique_ptr<vox::ui::VoxKnob> velocity_, probability_, ratchet_, micro_;
     std::unique_ptr<juce::ToggleButton> accentButton_, lockButton_;
     std::unique_ptr<juce::FileChooser> chooser_;

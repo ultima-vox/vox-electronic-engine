@@ -170,7 +170,7 @@ struct PadControlSurface::Impl {
             h->attachment = std::make_unique<Attachment> (processor.state(), id, h->knob->getSlider());
         }
         wave.setContext (pad, player);
-        if (relayout) owner.resized();
+        if (relayout) { owner.resized(); if (owner.onLayoutChanged) owner.onLayoutChanged(); }
     }
     void change (Control& s, float value)
     {
@@ -258,6 +258,7 @@ void PadControlSurface::update()
     {
         i.shownModel = ctx.pad.model;
         resized();
+        if (onLayoutChanged) onLayoutChanged();
     }
     for (auto& s : i.controls)
     {
@@ -287,7 +288,8 @@ void PadControlSurface::resized()
     if (i.group == Group::sample)
     {
         auto toolbar = r.removeFromTop (30);
-        for (auto* button : { &i.a, &i.b, &i.load, &i.clear, &i.library }) button->setBounds (toolbar.removeFromLeft (82).reduced (2));
+        for (auto* button : { &i.a, &i.b }) button->setBounds (toolbar.removeFromLeft (48).reduced (2));
+        for (auto* button : { &i.load, &i.clear, &i.library }) button->setBounds (toolbar.removeFromLeft (82).reduced (2));
         i.status.setBounds (r.removeFromTop (24)); i.wave.setBounds (r.removeFromTop (150)); r.removeFromTop (8);
     }
     if (! i.hosts.empty())
@@ -312,6 +314,20 @@ void PadControlSurface::resized()
         if (s->toggle) s->toggle->setBounds (cell.removeFromTop (30));
         ++item;
     }
+}
+int PadControlSurface::preferredHeight (int width) const
+{
+    const auto& i = *impl_;
+    const int columns = std::max (1, (width - 16) / 110);
+    int count = 0;
+    for (const auto& control : i.controls)
+    {
+        const auto& name = control->name;
+        const bool body = name == "pitch_amount" || name == "pitch_decay" || name == "drive" || name == "sub" || name == "tail";
+        if (! body || i.processor.kitStore().pad (i.pad).model == kit::Model::kick) ++count;
+    }
+    return 16 + 24 + (i.group == Group::sample ? 30 + 24 + 150 + 8 : 0)
+        + (i.hosts.empty() ? 0 : 86) + ((count + columns - 1) / columns) * 96;
 }
 juce::Slider* PadControlSurface::structuralSlider (const juce::String& name)
 {

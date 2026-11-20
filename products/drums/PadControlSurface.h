@@ -17,6 +17,8 @@ public:
     void update();
     void paint (juce::Graphics&) override;
     void resized() override;
+    int preferredHeight (int width) const;
+    std::function<void()> onLayoutChanged;
     juce::Slider* structuralSlider (const juce::String&);
     juce::ComboBox* structuralCombo (const juce::String&);
     juce::Button* structuralToggle (const juce::String&);

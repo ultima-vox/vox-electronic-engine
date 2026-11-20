@@ -57,6 +57,9 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/DrumsParameters.cpp drums/DrumsParameters.h
   drums/DrumsEditor.cpp drums/DrumsEditor.h
   drums/DrumsWorkspace.cpp drums/DrumsWorkspace.h drums/WorkspaceModel.h
+  drums/DrumsLayoutState.cpp drums/DrumsLayoutState.h
+  drums/WorkspaceLibrary.cpp drums/WorkspaceLibrary.h
+  drums/DrumsDockZone.cpp drums/DrumsDockZone.h
   drums/DrumsDial.h
   drums/DrumsFader.h
   drums/DrumsRolesPanel.cpp drums/DrumsRolesPanel.h

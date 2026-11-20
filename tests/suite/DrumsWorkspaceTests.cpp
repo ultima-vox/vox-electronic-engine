@@ -1,4 +1,6 @@
 #include "DrumsWorkspace.h"
+#include "DrumsDockZone.h"
+#include "PatternEditor.h"
 #include "DrumsEditor.h"
 #include "PadControlSurface.h"
 #include "DrumsRolesPanel.h"
@@ -10,6 +12,8 @@
 #include <cstdlib>
 #include <vector>
 #include <mutex>
+#include <thread>
+#include <set>
 
 namespace {
 int failures = 0;
@@ -397,8 +401,325 @@ void test()
                "native Routing retains every sequencer lane enable");
     juce::MemoryBlock stateAfterLayout;
     p->getStateInformation (stateAfterLayout);
-    check (stateBeforeLayout == stateAfterLayout, "workspace layout and rendering never mutate musical/project state");
+    const auto decode = [&] (const juce::MemoryBlock& state) {
+        return vox::preset::decode ({ static_cast<const std::byte*> (state.getData()), state.getSize() }, p->product().stateTag, 1).document;
+    };
+    const auto before = decode (stateBeforeLayout), after = decode (stateAfterLayout);
+    bool musicalUnchanged = true;
+    for (const auto& section : before.sections)
+    {
+        if (section.tag == vox::drums::layoutSectionTag) continue;
+        const auto* next = after.find (section.tag);
+        musicalUnchanged = musicalUnchanged && next != nullptr && next->data == section.data;
+    }
+    check (musicalUnchanged && before.sections.size() == after.sections.size(), "committed layout changes only DLAY; all musical/project sections remain exact");
+    juce::MemoryBlock afterPaint;
+    ui->createComponentSnapshot (ui->getLocalBounds());
+    p->getStateInformation (afterPaint);
+    check (afterPaint == stateAfterLayout, "rendering alone never changes even the DLAY bytes");
     p->releaseResources();
+}
+
+void testLayoutLifecycle()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    p->commitLayout (layout::factory (layout::Preset::composition));
+    p->setUiState ({ 0, 5, 12, 3, 0 });
+    const auto save = [&] { juce::MemoryBlock b; p->getStateInformation (b); return b; };
+    const auto original = save();
+    auto ui = std::make_unique<DrumsWorkspace> (*p);
+    ui->setSize (1040, 600);
+    check (ui->layout().primary == workspace::Editor::song && ui->layout().secondary == workspace::Editor::step
+           && ui->layout().split == workspace::Split::vertical && ui->selection().pad() == 5,
+           "native open reads the processor's canonical workspace/selection");
+    pump();
+    check (save() == original, "opening, readback and forced narrow degradation do not rewrite DLAY");
+    ui->pinInspector (true); ui->selectPad (9); ui->setListView (true);
+    const auto pinned = save();
+    ui.reset(); pump();
+    check (save() == pinned, "closed-editor save keeps the last committed layout");
+    ui = std::make_unique<DrumsWorkspace> (*p); ui->setSize (1040, 600);
+    check (ui->selection().pad() == 9 && ui->selection().inspectorPad() == 5 && ui->selection().pinned(),
+           "native reopen retains selected object and independent pinned pad identity");
+    check (save() == pinned, "reopen is byte-identical");
+    std::thread host ([&] { p->setStateInformation (original.getData(), static_cast<int> (original.getSize())); });
+    host.join(); pump();
+    check (ui->selection().pad() == 5 && ! ui->selection().pinned() && ui->layout().primary == workspace::Editor::song,
+           "host-thread restore reaches the open native editor through its message-thread listener");
+    ui->applyWorkspace (layout::factory (layout::Preset::beatmaking));
+    const auto beat = save();
+    const auto event = [&] (float x, bool down) {
+        const juce::Point<float> at { x, 70 };
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+            down ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ui.get(), ui.get(), juce::Time::getCurrentTime(), at,
+            juce::Time::getCurrentTime(), 1, false);
+    };
+    ui->mouseDown (event (210, true)); ui->mouseDrag (event (245, true));
+    check (ui->layout().leftWidth == 245 && save() == beat, "save during divider drag uses the prior committed layout");
+    ui->mouseUp (event (245, false));
+    check (save() != beat, "divider release commits layout");
+    ui->mouseDown (event (247, true)); ui->mouseDrag (event (265, true));
+    p->setStateInformation (beat.getData(), static_cast<int> (beat.getSize())); pump();
+    ui->mouseUp (event (265, false));
+    check (ui->layout().leftWidth == 208 && save() == beat, "restore cancels a divider drag; stale release cannot overwrite restored state");
+    p->setStateInformation (original.getData(), static_cast<int> (original.getSize()));
+    ui.reset(); pump();
+    ui = std::make_unique<DrumsWorkspace> (*p);
+    check (ui->selection().pad() == 5 && save() == original, "close while restore notification is pending is safe and next open uses restored layout");
+    auto longSong = std::make_unique<DrumsProcessor>();
+    longSong->editSong ([] (SongData& song) { song.length = 64; });
+    longSong->setUiState ({ 0, 14, 63, 3, 0 });
+    juce::MemoryBlock longState; longSong->getStateInformation (longState);
+    std::thread longHost ([&] { p->setStateInformation (longState.getData(), static_cast<int> (longState.getSize())); });
+    longHost.join(); pump();
+    check (ui->songEditor().selectionStart() == 63 && ui->patternEditor().bar() == 3 && ui->selection().pad() == 14
+           && save() == longState, "open-editor restore applies canonical selection against the new Song length and pattern stores");
+}
+
+void testProductionBindings()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    auto* workspace = frame ? dynamic_cast<DrumsWorkspace*> (frame->content()) : nullptr;
+    check (workspace != nullptr, "production createEditor instantiates the native workspace");
+    if (! workspace) { p->editorBeingDeleted (editor.get()); return; }
+    auto visible = workspace->layout();
+    visible.primary = vox::drums::workspace::Editor::sound;
+    visible.mixer = vox::drums::workspace::MixerSize::expanded;
+    workspace->setLayout (visible);
+    std::set<std::string> reached;
+    for (const auto& entry : pluginParameters())
+    {
+        if (entry.pad >= 0) workspace->selectPad (entry.pad);
+        const juce::String id (entry.id);
+        auto* parameter = p->state().getParameter (id);
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (parameter))
+        {
+            auto* box = workspace->hostCombo (id);
+            check (box != nullptr, "production choice reachable: " + id);
+            if (! box) continue;
+            reached.insert (entry.id);
+            const int target = choice->choices.size() - 1;
+            box->setSelectedItemIndex (target, juce::sendNotificationSync);
+            check (static_cast<int> (plain (*p, id)) == target, "production choice writes actual host parameter: " + id);
+            parameter->setValueNotifyingHost (0.0f); pump();
+            check (box->getSelectedItemIndex() == 0, "production choice reads host change: " + id);
+        }
+        else if (dynamic_cast<juce::AudioParameterBool*> (parameter))
+        {
+            auto* button = workspace->buttonFor (id);
+            check (button != nullptr, "production toggle reachable: " + id);
+            if (! button) continue;
+            reached.insert (entry.id);
+            button->setToggleState (true, juce::sendNotificationSync);
+            check (plain (*p, id) >= 0.5f, "production toggle writes actual host parameter: " + id);
+            parameter->setValueNotifyingHost (0.0f); pump();
+            check (! button->getToggleState(), "production toggle reads host change: " + id);
+        }
+        else
+        {
+            auto* slider = workspace->sliderFor (id);
+            check (slider != nullptr, "production dial/fader reachable: " + id);
+            if (! slider) continue;
+            reached.insert (entry.id);
+            const auto& range = parameter->getNormalisableRange();
+            const auto target = range.snapToLegalValue (range.convertFrom0to1 (0.73f));
+            slider->setValue (target, juce::sendNotificationSync);
+            check (std::abs (plain (*p, id) - target) <= 0.0001f * std::max (1.0f, std::abs (target)),
+                   "production dial/fader writes actual host parameter: " + id);
+            const auto readback = range.snapToLegalValue (range.convertFrom0to1 (0.27f));
+            parameter->setValueNotifyingHost (range.convertTo0to1 (readback)); pump();
+            check (std::abs (static_cast<float> (slider->getValue()) - readback) <= 0.0001f * std::max (1.0f, std::abs (readback)),
+                   "production dial/fader reads host change: " + id);
+        }
+    }
+    check (reached.size() == 174 && reached.size() == pluginParameters().size(), "all 174 frozen host parameters exercised in the actual production workspace");
+    p->editorBeingDeleted (editor.get()); editor.reset(); pump();
+    editor.reset (p->createEditorAndMakeActive());
+    frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    check (frame && dynamic_cast<DrumsWorkspace*> (frame->content()), "production close/reopen retains native editor path");
+    p->editorBeingDeleted (editor.get());
+}
+
+void testNativeDocking()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    const auto save = [&] { juce::MemoryBlock b; p->getStateInformation (b); return b; };
+    const auto initial = save();
+    auto ui = std::make_unique<DrumsWorkspace> (*p); ui->setSize (1040, 600);
+    auto* hit = &ui->padHitButton (0);
+    check (ui->moveDockPanel (1, layout::Type::right), "native action moves the existing Rack to the right dock");
+    check (! ui->layout().leftVisible && ui->dockZone (layout::Type::left).groupCount() == 0
+           && hit->findParentComponentOfClass<DrumsDockZone>() == &ui->dockZone (layout::Type::right),
+           "empty side hides and the same Rack component is reparented, never copied");
+    ui->selectPad (7);
+    ui->dockZone (layout::Type::right).tabs (0)->setCurrentTabIndex (0); pump();
+    check (ui->inspectorSlider ("pan")->findParentComponentOfClass<DrumsDockZone>() == &ui->dockZone (layout::Type::right),
+           "native tab click after pad selection activates Inspector on first attempt");
+    ui->dockZone (layout::Type::right).tabs (0)->setCurrentTabIndex (1); pump();
+    check (&ui->padHitButton (0) == hit && hit->findParentComponentOfClass<DrumsDockZone>() == &ui->dockZone (layout::Type::right),
+           "native tab reactivation retains the one physical Rack");
+    check (ui->moveDockPanel (4, layout::Type::right, 0, true) && ui->moveDockPanel (5, layout::Type::right, 0, true),
+           "native actions stack Generator and Routing as distinct dock groups");
+    check (ui->dockZone (layout::Type::right).groupCount() == 3 && ui->toolPage (workspace::DockTool::generator)->getParentComponent()
+           && ui->toolPage (workspace::DockTool::routing)->getParentComponent(), "all three active groups own their real existing views");
+    const auto full = save();
+    check (! ui->moveDockPanel (6, layout::Type::right, 0, true) && save() == full, "fourth native group refused without changing project bytes");
+    check (ui->setDockRail (layout::Type::right, true) && ui->layout().rightRail
+           && ui->dockZone (layout::Type::right).getWidth() == 26, "rail mode is real native geometry and persists independently of expanded width");
+    check (ui->setDockRail (layout::Type::right, false) && ui->dockZone (layout::Type::right).groupCount() == 3
+           && &ui->padHitButton (0) == hit, "expanding rail restores all groups and existing panel identities");
+    auto& zone = ui->dockZone (layout::Type::right);
+    const auto second = zone.tabs (1)->getParentComponent()->getBounds();
+    const auto event = [&] (float y, bool down) {
+        const juce::Point<float> at { 20, y };
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+            down ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &zone, &zone, juce::Time::getCurrentTime(), at,
+            juce::Time::getCurrentTime(), 1, false);
+    };
+    const auto beforeDrag = save();
+    zone.mouseDown (event (static_cast<float> (second.getY() - 3), true));
+    zone.mouseDrag (event (static_cast<float> (second.getY() + 20), true));
+    check (save() == beforeDrag, "group-divider drag never writes an in-progress layout");
+    zone.mouseUp (event (static_cast<float> (second.getY() + 20), false));
+    check (save() != beforeDrag && layout::encode (p->layoutState().document).has_value(), "group-divider release commits bounded canonical heights");
+    const auto stacked = save();
+    ui.reset(); pump(); ui = std::make_unique<DrumsWorkspace> (*p); ui->setSize (1040, 600);
+    check (ui->dockZone (layout::Type::right).groupCount() == 3 && ! ui->layout().leftVisible && save() == stacked,
+           "native close/reopen restores full groups/tabs without rewriting DLAY");
+    check (ui->hideDockPanel (4) && ui->dockZone (layout::Type::right).groupCount() == 2,
+           "Hide removes the empty Generator group while keeping other groups");
+    ui->dockZone (layout::Type::right).tabs (0)->setCurrentTabIndex (0);
+    p->setStateInformation (initial.getData(), static_cast<int> (initial.getSize())); pump();
+    check (save() == initial && ui->layout().leftVisible && ui->dockZone (layout::Type::right).groupCount() == 1,
+           "queued tab action from an old project cannot overwrite host restore");
+}
+
+void testResponsiveCentral()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    PatternEditor steps (*p, p->product().accent);
+    SongStrip song (*p, p->product().accent);
+    PadControlSurface sample (*p, PadControlSurface::Group::sample);
+    for (int width : { 366, 580, 820 })
+    {
+        steps.setSize (width, 500); song.setSize (width, 500); sample.setSize (width, 1000);
+        checkToolLayout (steps); checkToolLayout (song); checkToolLayout (sample);
+        check (sample.sampleButton ("library")->getWidth() >= 70, "narrow Sample library action retains a readable/clickable target");
+    }
+}
+
+void testMixerAndFocus()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    DrumsWorkspace ui (*p); ui.setSize (1040, 600);
+    const auto find = [&] (auto&& self, juce::Component& parent, const juce::String& name) -> juce::Component* {
+        if (parent.getName() == name) return &parent;
+        for (auto* child : parent.getChildren()) if (auto* found = self (self, *child, name)) return found;
+        return nullptr;
+    };
+    auto requested = ui.layout(); requested.split = workspace::Split::vertical;
+    requested.mixer = workspace::MixerSize::expanded; requested.ratio = 0.15f; ui.setLayout (requested);
+    auto* focus = dynamic_cast<juce::Button*> (find (find, ui, "Focus central editor"));
+    check (focus != nullptr, "native split has a real focus/restore action");
+    if (focus)
+    {
+        press (*focus);
+        check (ui.layout().maximized == 0 && layout::find (p->layoutState().document, layout::Type::central)->payload.back() == 0,
+               "focus action maximizes primary and persists CENTRAL selection");
+        press (*focus); check (ui.layout().maximized == 255, "focus Restore returns the requested split");
+    }
+    auto* bank = dynamic_cast<juce::ComboBox*> (find (find, ui, "Mixer bank"));
+    check (bank != nullptr, "single Mixer exposes its canonical bank preference");
+    if (bank)
+    {
+        bank->setSelectedItemIndex (1, juce::sendNotificationSync);
+        check (layout::find (p->layoutState().document, layout::Type::mixer)->payload[5] == 1, "Mixer bank selection persists without adding host parameters");
+    }
+    const auto event = [&] (juce::Point<float> at, bool down) {
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+            down ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &ui, &ui, juce::Time::getCurrentTime(), at,
+            juce::Time::getCurrentTime(), 1, false);
+    };
+    ui.mouseDown (event ({ 210, 70 }, true)); ui.mouseDrag (event ({ 242, 70 }, true)); ui.mouseUp (event ({ 242, 70 }, false));
+    check (std::abs (ui.layout().ratio - 0.15f) < 0.0001f, "moving a dock divider does not rewrite a valid narrow split ratio");
+    juce::MemoryBlock before; p->getStateInformation (before);
+    ui.mouseDown (event ({ 500, 317 }, true)); ui.mouseDrag (event ({ 500, 290 }, true));
+    juce::MemoryBlock during; p->getStateInformation (during);
+    check (during == before, "Mixer height drag saves the last committed preference");
+    ui.mouseUp (event ({ 500, 290 }, false));
+    check (ui.layout().expandedHeight == 310, "Mixer divider release persists its bounded expanded height");
+}
+
+void testNativeMidiScopes()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    DrumsWorkspace ui (*p); ui.setSize (1040, 600);
+    auto view = ui.layout(); view.primary = workspace::Editor::song; ui.setLayout (view);
+    auto* container = dynamic_cast<juce::DragAndDropContainer*> (&ui);
+    check (container && juce::DragAndDropContainer::findParentDragContainerFor (&ui.patternEditor()) == container,
+           "production workspace supplies the actual external MIDI drag container");
+    auto session = p->uiState(); session.exportScope = 1; p->setUiState (session);
+    std::vector<std::shared_ptr<const ExportSnapshot>> captures;
+    ui.patternEditor().saveDialogForTesting = [&] (auto frozen) { captures.push_back (std::move (frozen)); };
+    press (*ui.patternEditor().button ("midi"));
+    check (captures.size() == 1 && captures.back()->scope == ExportSnapshot::Scope::pattern,
+           "native Step MIDI has fixed Pattern scope, independent of the donor scope selector");
+    auto* songMidi = ui.songEditor().button ("midi");
+    check (songMidi != nullptr, "native Song has its own directly reachable MIDI save/drag handle");
+    if (songMidi)
+    {
+        for (int length : { 16, 32, 64 })
+        {
+            p->editSong ([=] (SongData& song) { song.length = static_cast<std::uint8_t> (length); });
+            const auto before = captures.size(); press (*songMidi);
+            check (captures.size() == before + 1 && captures.back()->scope == ExportSnapshot::Scope::song
+                   && captures.back()->songLength == length, "native Song MIDI captures the actual entire 16/32/64-bar song");
+        }
+        check (! ui.songEditor().combo ("scope")->isVisible(), "native fixed-scope handles replace the old global export selector");
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("vox-native-midi", {}, false);
+        root.createDirectory(); PatternEditor::setDragRootForTesting (root);
+        std::vector<juce::File> files;
+        ui.patternEditor().externalDragForTesting = [&] (const auto& file) { files.push_back (file); };
+        const auto drag = [&] (juce::Component& button) {
+            const auto event = [&] (juce::Point<float> at, bool down) {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+                    down ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
+                    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &button, &button, juce::Time::getCurrentTime(), { 6, 6 },
+                    juce::Time::getCurrentTime(), 1, false);
+            };
+            button.mouseDown (event ({ 6, 6 }, true)); button.mouseDrag (event ({ 24, 6 }, true)); button.mouseUp (event ({ 24, 6 }, false));
+        };
+        const auto savedClicks = captures.size();
+        const auto songBytes = DrumsProcessor::renderExport (*captures.back());
+        drag (*songMidi);
+        juce::MemoryBlock songFile;
+        check (files.size() == 1 && files[0].getFileName() == "VOX Drums Song.mid" && files[0].loadFileAsData (songFile)
+               && songFile == songBytes && captures.size() == savedClicks, "native Song drag writes the same frozen bytes as Save and never also clicks");
+        drag (*ui.patternEditor().button ("midi"));
+        juce::MemoryBlock patternFile, songStill;
+        check (files.size() == 2 && files[1] != files[0] && files[1].loadFileAsData (patternFile)
+               && patternFile == DrumsProcessor::renderExport (*p->captureExport (ExportSnapshot::Scope::pattern))
+               && files[0].loadFileAsData (songStill) && songStill == songBytes, "native Pattern/Song drags keep distinct immutable handoff files");
+        const auto blocked = root.getChildFile ("not-a-directory"); blocked.replaceWithText ("blocked");
+        PatternEditor::setDragRootForTesting (blocked); drag (*songMidi); ui.songEditor().update();
+        juce::Label* status = nullptr;
+        for (auto* child : ui.songEditor().getChildren())
+            if (child->getName() == "Song MIDI export status") status = dynamic_cast<juce::Label*> (child);
+        check (files.size() == 2 && status && status->getText().contains ("MIDI export failed") && status->isVisible(),
+               "native Song export failure starts no drag and is visible in the Song view");
+        PatternEditor::setDragRootForTesting ({}); root.deleteRecursively();
+    }
 }
 } // namespace
 int main()
@@ -409,6 +730,18 @@ int main()
     testRolesUI();
     pump();
     test();
+    pump();
+    testLayoutLifecycle();
+    pump();
+    testProductionBindings();
+    pump();
+    testNativeDocking();
+    pump();
+    testResponsiveCentral();
+    pump();
+    testMixerAndFocus();
+    pump();
+    testNativeMidiScopes();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

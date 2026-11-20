@@ -4,6 +4,7 @@
 #include "Processor.h"
 #include "Tokens.h"
 #include "Typography.h"
+#include "DrumsDial.h"
 
 #include <cmath>
 
@@ -313,10 +314,13 @@ PatternEditor::PatternEditor (DrumsProcessor& processor, juce::Colour accent) : 
 
     grid_ = std::make_unique<Grid> (*this);
     addAndMakeVisible (*grid_);
+    addChildComponent (gridViewport_);
+    gridViewport_.setScrollBarsShown (false, true);
 
     const auto knob = [this] (std::unique_ptr<vox::ui::VoxKnob>& k, const juce::String& label, double lo, double hi,
                               std::function<juce::String (double)> text, std::function<void (kit::PatternStep&, double, int)> set) {
-        k = std::make_unique<vox::ui::VoxKnob> (label, vox::ui::VoxKnob::Size::Normal);
+        k = std::make_unique<DrumsDial> (label, vox::ui::VoxKnob::Size::Normal);
+        if (lo < 0.0 && hi > 0.0) k->setStyle (vox::ui::VoxKnob::Style::Bipolar);
         auto& s = k->getSlider();
         s.setRange (lo, hi, 1.0);
         s.textFromValueFunction = std::move (text);
@@ -498,6 +502,7 @@ void PatternEditor::update (bool repaintIfChanged)
     }
     if (changed)
     {
+        if (getWidth() > 0) resized();
         refreshControls();
         if (repaintIfChanged)
             repaint();
@@ -558,7 +563,9 @@ void PatternEditor::selectBar (int bar)
 {
     bar_ = juce::jlimit (0, shown_.bars - 1, bar);
     refreshControls();
+    if (getWidth() > 0) resized();
     repaint();
+    if (onSelectionChanged) onSelectionChanged();
 }
 
 void PatternEditor::selectCell (int lane, int step)
@@ -568,6 +575,7 @@ void PatternEditor::selectCell (int lane, int step)
     step_ = juce::jlimit (0, cellCount (shown_.timing (lane_, bar_)) - 1, step);
     refreshControls();
     repaint();
+    if (onSelectionChanged) onSelectionChanged();
 }
 
 void PatternEditor::clickCell (int lane, int step)
@@ -589,7 +597,7 @@ void PatternEditor::clickCell (int lane, int step)
 
 juce::Rectangle<int> PatternEditor::cellBounds (int lane, int step) const
 {
-    return grid_->cell (lane, step) + grid_->getPosition();
+    return getLocalArea (grid_.get(), grid_->cell (lane, step));
 }
 
 juce::Slider* PatternEditor::inspector (const juce::String& name)
@@ -634,7 +642,7 @@ juce::Button* PatternEditor::barButton (int bar)
 
 juce::String PatternEditor::fileName() const
 {
-    if (processor_.uiState().exportScope == 1)
+    if (! fixedPatternExport_ && processor_.uiState().exportScope == 1)
         return "VOX Drums Song.mid";
     return "VOX Drums Pattern " + juce::String (juce::jmax (0, slot_) + 1) + ".mid";
 }
@@ -684,7 +692,7 @@ int dragNumber (const juce::File& folder)
 
 } // namespace
 
-juce::File PatternEditor::newDragFile()
+juce::File PatternEditor::newDragFile (const juce::String& name)
 {
     // Review 6753052108: every drag gets its own folder, unique per editor
     // instance (and process) and per drag, so no other export, from this
@@ -695,7 +703,7 @@ juce::File PatternEditor::newDragFile()
     const auto folder = dragRoot().getChildFile (instanceId_).getChildFile (
         juce::String (now.toMilliseconds()) + "-" + juce::String (++dragCount_) + "-" + juce::Uuid().toString().substring (0, 12));
     folder.createDirectory();
-    return folder.getChildFile (fileName());
+    return folder.getChildFile (name);
 }
 
 void PatternEditor::cleanupDragFiles (juce::Time now)
@@ -728,7 +736,8 @@ void PatternEditor::cleanupDragFiles (juce::Time now)
 
 std::shared_ptr<const ExportSnapshot> PatternEditor::snapshot() const
 {
-    return processor_.captureExport (processor_.uiState().exportScope == 1 ? ExportSnapshot::Scope::song : ExportSnapshot::Scope::pattern);
+    return processor_.captureExport (! fixedPatternExport_ && processor_.uiState().exportScope == 1
+                                        ? ExportSnapshot::Scope::song : ExportSnapshot::Scope::pattern);
 }
 
 bool PatternEditor::writeSnapshot (const ExportSnapshot& snapshot, const juce::File& file)
@@ -754,23 +763,44 @@ void PatternEditor::exported (bool ok, const juce::File& file)
 
 juce::File PatternEditor::exportForDrag()
 {
-    const auto file = newDragFile();
-    if (! writeMidi (file))
-        return {};
+    return exportForDrag (snapshot());
+}
+
+namespace {
+juce::String exportName (const ExportSnapshot& frozen)
+{
+    return frozen.scope == ExportSnapshot::Scope::song ? "VOX Drums Song.mid"
+        : "VOX Drums Pattern " + juce::String (frozen.slot + 1) + ".mid";
+}
+}
+
+juce::File PatternEditor::exportForDrag (std::shared_ptr<const ExportSnapshot> frozen)
+{
+    if (! frozen) return {};
+    const auto file = newDragFile (exportName (*frozen));
+    const bool ok = writeSnapshot (*frozen, file);
+    exported (ok, file);
+    if (! ok) return {};
     return file;
 }
 
 void PatternEditor::openSaveDialog()
 {
+    saveExport (snapshot());
+}
+
+void PatternEditor::saveExport (std::shared_ptr<const ExportSnapshot> frozen)
+{
     // Frozen at the click: what is saved is what was there when the
     // button was pressed, whatever changes while the dialog is open.
-    const auto frozen = snapshot();
+    if (! frozen) return;
     if (saveDialogForTesting)
     {
         saveDialogForTesting (frozen);
         return;
     }
-    chooser_ = std::make_unique<juce::FileChooser> ("Save as MIDI", saveAsDefault(), "*.mid");
+    const auto suggested = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (exportName (*frozen));
+    chooser_ = std::make_unique<juce::FileChooser> ("Save as MIDI", suggested, "*.mid");
     chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                | juce::FileBrowserComponent::warnAboutOverwriting,
                            [frozen, safe = juce::Component::SafePointer<PatternEditor> (this)] (const juce::FileChooser& fc) {
@@ -785,8 +815,13 @@ void PatternEditor::openSaveDialog()
 
 void PatternEditor::startDrag()
 {
+    dragExport (snapshot(), *this);
+}
+
+void PatternEditor::dragExport (std::shared_ptr<const ExportSnapshot> frozen, juce::Component& source)
+{
     // A failed export is shown (exportMessage) and starts no drag.
-    const auto file = exportForDrag();
+    const auto file = exportForDrag (std::move (frozen));
     if (file == juce::File())
         return;
     if (externalDragForTesting)
@@ -796,8 +831,8 @@ void PatternEditor::startDrag()
     }
     // The OS drag (JUCE): on Windows an OLE DoDragDrop with a copy of the
     // file (CF_HDROP). Not changed by issue 131; see the audit there.
-    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
-        container->performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (&source))
+        container->performExternalDragDropOfFiles ({ file.getFullPathName() }, false, &source);
 }
 
 //==============================================================================
@@ -841,7 +876,33 @@ void PatternEditor::paint (juce::Graphics&) {}
 
 void PatternEditor::resized()
 {
+    if (getWidth() <= 0 || getHeight() <= 0) return;
     auto area = getLocalBounds();
+    if (getWidth() < 900)
+    {
+        int x = 0, y = 0;
+        const auto put = [&] (juce::Component& component, int width) {
+            if (x > 0 && x + width > getWidth()) { x = 0; y += 28; }
+            component.setBounds (juce::Rectangle<int> (x, y, width, 28).reduced (1)); x += width;
+        };
+        for (auto& bar : bars_) put (*bar, 28);
+        put (*steps_, 100); put (*barCount_, 84);
+        for (auto* button : { dup_.get(), clear_.get(), seed_.get() }) put (*button, 60);
+        put (*lanes_, 70); put (*abLabel_, 120);
+        area.removeFromTop (y + 28 + sp::xs);
+        auto bottom = area.removeFromBottom (118);
+        auto actions = bottom.removeFromBottom (30);
+        const int knobWidth = juce::jlimit (52, 66, (bottom.getWidth() - 84) / 4);
+        for (auto* knob : { velocity_.get(), probability_.get(), ratchet_.get(), micro_.get() })
+            knob->setBounds (bottom.removeFromLeft (knobWidth));
+        accentButton_->setBounds (bottom.removeFromTop (32).reduced (2));
+        lockButton_->setBounds (bottom.removeFromTop (32).reduced (2));
+        for (auto* button : { swap_.get(), copyB_.get(), undo_.get(), redo_.get() })
+            button->setBounds (actions.removeFromLeft (56).reduced (1));
+        midi_->setBounds (actions.removeFromLeft (70).reduced (1));
+        area.removeFromBottom (sp::xs); layoutGrid (area); refreshControls();
+        return;
+    }
     // Top: bar selector, grid size, bar actions, position.
     auto top = area.removeFromTop (28);
     for (auto& b : bars_)
@@ -870,8 +931,23 @@ void PatternEditor::resized()
     for (auto* b : { redo_.get(), undo_.get(), copyB_.get(), swap_.get() })
         b->setBounds (bottom.removeFromRight (56).withSizeKeepingCentre (54, 30));
     area.removeFromBottom (sp::xs);
-    grid_->setBounds (area);
+    layoutGrid (area);
     refreshControls();   // the lane page button depends on the grid height
+}
+
+void PatternEditor::layoutGrid (juce::Rectangle<int> area)
+{
+    if (getWidth() >= 900)
+    {
+        gridViewport_.setViewedComponent (nullptr, false); gridViewport_.setVisible (false);
+        addAndMakeVisible (*grid_); grid_->setBounds (area); return;
+    }
+    if (gridViewport_.getViewedComponent() != grid_.get()) gridViewport_.setViewedComponent (grid_.get(), false);
+    gridViewport_.setVisible (true); gridViewport_.setBounds (area);
+    int cells = 1;
+    for (int lane = 0; lane < padCount; ++lane) cells = std::max (cells, cellCount (shown_.timing (lane, bar_)));
+    const int width = std::max (area.getWidth(), nameWidth + cells * 10);
+    grid_->setSize (width, std::max (88, area.getHeight() - (width > area.getWidth() ? gridViewport_.getScrollBarThickness() : 0)));
 }
 
 } // namespace vox::drums

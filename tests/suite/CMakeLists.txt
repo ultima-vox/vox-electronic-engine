@@ -100,6 +100,17 @@ add_executable(suite_drums_workspace_model_tests DrumsWorkspaceModelTests.cpp)
 target_include_directories(suite_drums_workspace_model_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/drums)
 add_test(NAME suite_drums_workspace_model_tests COMMAND suite_drums_workspace_model_tests)
 
+add_executable(suite_drums_layout_state_tests DrumsLayoutStateTests.cpp
+  ${PROJECT_SOURCE_DIR}/products/drums/DrumsLayoutState.cpp)
+target_include_directories(suite_drums_layout_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/drums)
+add_test(NAME suite_drums_layout_state_tests COMMAND suite_drums_layout_state_tests)
+
+add_executable(suite_drums_layout_project_tests DrumsLayoutProjectTests.cpp)
+target_link_libraries(suite_drums_layout_project_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_events)
+target_compile_definitions(suite_drums_layout_project_tests PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)
+target_include_directories(suite_drums_layout_project_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_layout_project_tests COMMAND suite_drums_layout_project_tests)
+
 add_executable(suite_drums_workspace_tests DrumsWorkspaceTests.cpp)
 target_link_libraries(suite_drums_workspace_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_events)
 target_compile_definitions(suite_drums_workspace_tests PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)

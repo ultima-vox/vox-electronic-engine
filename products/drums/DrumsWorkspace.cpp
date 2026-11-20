@@ -10,6 +10,8 @@
 #include "DrumsDial.h"
 #include "DrumsFader.h"
 #include "DrumsRolesPanel.h"
+#include "WorkspaceLibrary.h"
+#include "DrumsDockZone.h"
 #include "VoxLookAndFeel.h"
 
 #include <cmath>
@@ -23,6 +25,23 @@ using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
 juce::Rectangle<int> rectangle (workspace::Box b) { return { b.x, b.y, b.w, b.h }; }
+
+void putLayoutRecord (layout::Document& document, layout::Type type, layout::Bytes bytes)
+{
+    const auto id = static_cast<layout::Byte> (type);
+    const auto at = std::lower_bound (document.records.begin(), document.records.end(), id,
+                                     [] (const auto& r, auto value) { return r.type < value; });
+    if (at != document.records.end() && at->type == id) at->payload = std::move (bytes);
+    else document.records.insert (at, { id, std::move (bytes) });
+}
+void layoutWord (layout::Bytes& bytes, std::size_t at, int value)
+{
+    bytes[at] = static_cast<layout::Byte> (value); bytes[at + 1] = static_cast<layout::Byte> (value >> 8);
+}
+int layoutWord (const layout::Bytes& bytes, std::size_t at)
+{
+    return static_cast<int> (bytes[at]) | (static_cast<int> (bytes[at + 1]) << 8);
+}
 
 struct Knob {
     bool dragging = false;
@@ -235,6 +254,20 @@ private:
 
 class MixerStrip final : public juce::Component {
 public:
+    juce::Slider* slider (const juce::String& suffix)
+    {
+        if (suffix == "level") return &level_;
+        if (suffix == "pan") return &pan_.control->getSlider();
+        if (suffix == "send1") return &send1_.control->getSlider();
+        if (suffix == "send2") return &send2_.control->getSlider();
+        return nullptr;
+    }
+    juce::Button* button (const juce::String& suffix)
+    {
+        if (suffix == "mute") return &mute_;
+        if (suffix == "solo") return &solo_;
+        return nullptr;
+    }
     MixerStrip (DrumsProcessor& p, int pad) : processor_ (p), pad_ (pad), peak_ (p.product().accent)
     {
         const auto id = juce::String (padPrefix (pad));
@@ -292,9 +325,14 @@ struct DrumsWorkspace::Impl {
           mainLeft (p.product().accent), mainRight (p.product().accent)
     {
         owner.setLookAndFeel (&lookAndFeel);
-        for (auto* component : std::initializer_list<juce::Component*> { &inspector, &rackViewport, &top, &list, &pin,
-                 &split, &mixerSize, &mixerView, &mode, &pattern, &primary, &secondary, &toolSelect, &toolViewport, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
+        for (auto* component : std::initializer_list<juce::Component*> { &leftDock, &rightDock, &top, &list, &pin,
+                 &workspaceMenu, &maximise, &split, &mixerSize, &mixerView, &mixerBank, &mode, &pattern, &primary, &secondary, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
             owner.addAndMakeVisible (*component);
+        workspaceMenu.setButtonText ("Workspace");
+        workspaceMenu.onClick = [&owner] { owner.showWorkspaceMenu(); };
+        maximise.setName ("Focus central editor"); maximise.setButtonText ("Focus");
+        maximise.setTooltip ("Focus the primary editor, or restore the split");
+        maximise.onClick = [&owner, this] { layout.maximized = layout.maximized == 255 ? 0 : 255; owner.setLayout (layout); };
         const std::array<juce::Component*, 4> editors { &steps, &song, &sound, &sample };
         for (std::size_t n = 0; n < editors.size(); ++n)
         {
@@ -302,17 +340,16 @@ struct DrumsWorkspace::Impl {
             owner.addAndMakeVisible (editorViews[n]);
         }
         sample.onPlayerSelected = [this] (int player) { selectedPlayer = player; };
+        sound.onLayoutChanged = sample.onLayoutChanged = song.onLayoutChanged = [&owner] { owner.resized(); };
+        steps.useFixedPatternExportScope();
+        song.enableMidiExport ([this] { steps.saveExport (processor.captureExport (ExportSnapshot::Scope::song)); },
+                               [this] { steps.dragExport (processor.captureExport (ExportSnapshot::Scope::song), song); },
+                               [this] { return steps.exportMessage(); });
         toolPages[0] = makeGeneratorDock (p);
         toolPages[1] = makePresetsPage (p, [this] { return selection.pad(); });
         toolPages[2] = makeRoutingPage (p);
         toolPages[3] = makeAdvancedPage (p);
         for (auto& page : toolPages) page->onDockSizeChanged = [&owner] { owner.resized(); };
-        toolSelect.addItemList ({ "Inspector", "Generator", "Library", "Routing", "Diagnostics" }, 1);
-        toolSelect.setSelectedId (1, juce::dontSendNotification);
-        toolSelect.setTooltip ("Right dock tool");
-        toolSelect.onChange = [&owner, this] {
-            layout.rightTool = static_cast<workspace::DockTool> (toolSelect.getSelectedId() - 1); owner.resized();
-        };
         const auto combo = [&p] (juce::ComboBox& box, const juce::String& id) {
             auto* parameter = dynamic_cast<juce::AudioParameterChoice*> (p.state().getParameter (id));
             jassert (parameter != nullptr);
@@ -329,7 +366,20 @@ struct DrumsWorkspace::Impl {
             returns[n].bind (returnContent, p, ids[n], labels[n], vox::ui::VoxKnob::Size::Normal);
         mixerView.addItemList ({ "Pads", "Returns / FX" }, 1); mixerView.setSelectedId (1, juce::dontSendNotification);
         mixerView.setName ("Mixer section");
-        mixerView.onChange = [&owner] { owner.resized(); };
+        mixerBank.addItemList ({ "Pads 1-8", "Pads 9-16" }, 1); mixerBank.setSelectedId (1, juce::dontSendNotification);
+        mixerBank.setName ("Mixer bank"); mixerBank.setTooltip ("Focus this pad bank in the single Mixer");
+        mixerBank.onChange = [&owner, this] {
+            if (applyingLayout) return;
+            auto document = processor.layoutState().document;
+            const auto* current = layout::find (document, layout::Type::mixer);
+            auto mixer = current ? current->payload : layout::find (layout::factory (layout::Preset::beatmaking), layout::Type::mixer)->payload;
+            mixer[5] = static_cast<layout::Byte> (mixerBank.getSelectedId() == 2);
+            putLayoutRecord (document, layout::Type::mixer, std::move (mixer)); owner.commitDockDocument (std::move (document));
+        };
+        mixerView.onChange = [&owner, this] {
+            owner.resized();
+            if (mixerView.getSelectedId() == 1) mixerViewport.setViewPosition (mixerBank.getSelectedId() == 2 ? 8 * 84 : 0, 0);
+        };
         rackViewport.setViewedComponent (&rackContent, false);
         rackViewport.setScrollBarsShown (true, false);
         top.setJustificationType (juce::Justification::centredLeft);
@@ -346,20 +396,31 @@ struct DrumsWorkspace::Impl {
             if (next == layout.secondary) layout.secondary = layout.primary;
             layout.primary = next;
             secondary.setSelectedId (static_cast<int> (layout.secondary) + 1, juce::dontSendNotification);
-            owner.resized();
+            owner.setLayout (layout);
         };
         secondary.onChange = [&owner, this] {
             const auto next = static_cast<workspace::Editor> (secondary.getSelectedId() - 1);
             if (next == layout.primary) layout.primary = layout.secondary;
             layout.secondary = next;
             primary.setSelectedId (static_cast<int> (layout.primary) + 1, juce::dontSendNotification);
-            owner.resized();
+            owner.setLayout (layout);
         };
         split.addItemList ({ "One editor", "Split across", "Split below" }, 1); split.setSelectedId (1, juce::dontSendNotification);
-        split.onChange = [&owner, this] { layout.split = static_cast<workspace::Split> (split.getSelectedId() - 1); owner.resized(); };
+        split.onChange = [&owner, this] {
+            layout.split = static_cast<workspace::Split> (split.getSelectedId() - 1); layout.maximized = 255; owner.setLayout (layout);
+        };
         mixerSize.addItemList ({ "Mixer closed", "Mixer compact", "Mixer expanded" }, 1); mixerSize.setSelectedId (2, juce::dontSendNotification);
-        mixerSize.onChange = [&owner, this] { layout.mixer = static_cast<workspace::MixerSize> (mixerSize.getSelectedId() - 1); owner.resized(); };
+        mixerSize.onChange = [&owner, this] { layout.mixer = static_cast<workspace::MixerSize> (mixerSize.getSelectedId() - 1); owner.setLayout (layout); };
         song.onEditBar = [this] (int bar) { steps.editSongBar (bar); };
+        song.onSelectionChanged = [this] { layoutGeneration = processor.layoutState().generation; };
+        steps.onSelectionChanged = [this] {
+            if (applyingLayout) return;
+            auto ui = processor.uiState();
+            ui.pad = static_cast<std::uint8_t> (steps.selectedLane());
+            ui.patternBar = static_cast<std::uint8_t> (steps.bar());
+            processor.setUiState (ui);
+            layoutGeneration = processor.layoutState().generation;
+        };
         for (int i = 0; i < 16; ++i)
         {
             auto& pad = pads[static_cast<std::size_t> (i)];
@@ -378,30 +439,36 @@ struct DrumsWorkspace::Impl {
     {
         mixerViewport.setViewedComponent (nullptr, false);
         for (auto& viewport : editorViews) viewport.setViewedComponent (nullptr, false);
-        toolViewport.setViewedComponent (nullptr, false);
+        leftDock.clear(); rightDock.clear();
         rackViewport.setViewedComponent (nullptr, false);
     }
     DrumsProcessor& processor;
     vox::ui::VoxLookAndFeel lookAndFeel;
     workspace::Selection selection;
-    workspace::Layout layout;
-    enum class Divider { none, left, right, across, below };
+    workspace::Layout layout, committedLayout;
+    enum class Divider { none, left, right, across, below, mixer };
     Divider drag = Divider::none;
     Divider dividerAt (int width, int height, juce::Point<int> point) const
     {
         const auto r = workspace::arrange (width, height, layout);
+        if (layout.mixer != workspace::MixerSize::collapsed && point.y >= r.mixer.y - 6 && point.y < r.mixer.y) return Divider::mixer;
         if (point.y < r.left.y || point.y >= r.left.y + r.left.h) return Divider::none;
-        if (point.x >= r.left.w && point.x < r.primary.x) return Divider::left;
-        if (point.x >= r.right.x - 6 && point.x < r.right.x) return Divider::right;
-        if (! r.secondary.empty() && layout.split == workspace::Split::horizontal
+        const int centralX = ! r.primary.empty() ? r.primary.x : ! r.secondary.empty() ? r.secondary.x : r.left.w + 6;
+        if (layout.leftVisible && ! layout.leftRail && point.x >= r.left.w && point.x < centralX) return Divider::left;
+        if (layout.rightVisible && ! layout.rightRail && point.x >= r.right.x - 6 && point.x < r.right.x) return Divider::right;
+        if (! r.primary.empty() && ! r.secondary.empty() && layout.split == workspace::Split::horizontal
             && point.x >= r.primary.x + r.primary.w && point.x < r.secondary.x) return Divider::across;
-        if (! r.secondary.empty() && layout.split == workspace::Split::vertical
+        if (! r.primary.empty() && ! r.secondary.empty() && layout.split == workspace::Split::vertical
             && point.x >= r.primary.x && point.x < r.primary.x + r.primary.w
             && point.y >= r.primary.y + r.primary.h && point.y < r.secondary.y) return Divider::below;
         return Divider::none;
     }
     Telemetry telemetry;
-    bool listView = false, auditionRefused = false;
+    bool listView = false, auditionRefused = false, applyingLayout = false;
+    bool committedListView = false, committedPin = false, unsupportedPin = false;
+    int committedPinPad = 0;
+    std::uint64_t layoutGeneration = 0;
+    std::uint64_t layoutEpoch = 0;
     int selectedPlayer = 0;
     Inspector inspector;
     PatternEditor steps;
@@ -410,11 +477,11 @@ struct DrumsWorkspace::Impl {
     std::array<std::unique_ptr<PadCell>, 16> pads;
     std::array<std::unique_ptr<MixerStrip>, 16> strips;
     juce::Label top, mixerTitle;
-    juce::TextButton list, pin;
-    juce::ComboBox split, mixerSize, mixerView, primary, secondary, toolSelect, mode, pattern, delayTime;
+    juce::TextButton list, pin, workspaceMenu, maximise;
+    juce::ComboBox split, mixerSize, mixerView, mixerBank, primary, secondary, mode, pattern, delayTime;
     std::unique_ptr<ComboAttachment> modeAttachment, patternAttachment, delayAttachment;
     std::array<std::unique_ptr<Page>, 4> toolPages;
-    juce::Viewport toolViewport;
+    DrumsDockZone leftDock { layout::Type::left }, rightDock { layout::Type::right };
     juce::Viewport mixerViewport;
     juce::Component mixerContent;
     juce::Component returnContent;
@@ -428,9 +495,14 @@ struct DrumsWorkspace::Impl {
 
 DrumsWorkspace::DrumsWorkspace (DrumsProcessor& p) : impl_ (std::make_unique<Impl> (*this, p))
 {
+    p.layoutChanges().addChangeListener (this);
+    readLayout();
     timerCallback(); startTimerHz (30);
 }
-DrumsWorkspace::~DrumsWorkspace() { stopTimer(); setLookAndFeel (nullptr); }
+DrumsWorkspace::~DrumsWorkspace()
+{
+    stopTimer(); impl_->processor.layoutChanges().removeChangeListener (this); setLookAndFeel (nullptr);
+}
 void DrumsWorkspace::paint (juce::Graphics& g) { g.fillAll (c::background); }
 const workspace::Selection& DrumsWorkspace::selection() const noexcept { return impl_->selection; }
 const DrumsWorkspace::Telemetry& DrumsWorkspace::telemetry() const noexcept { return impl_->telemetry; }
@@ -447,18 +519,33 @@ void DrumsWorkspace::selectPad (int pad)
         impl_->pads[static_cast<std::size_t> (i)]->select.setToggleState (i == pad, juce::dontSendNotification);
         impl_->pads[static_cast<std::size_t> (i)]->hit.setToggleState (i == pad, juce::dontSendNotification);
     }
+    if (! impl_->applyingLayout)
+    {
+        auto ui = impl_->processor.uiState(); ui.pad = static_cast<std::uint8_t> (pad);
+        impl_->processor.setUiState (ui);
+        impl_->layoutGeneration = impl_->processor.layoutState().generation;
+    }
 }
 void DrumsWorkspace::pinInspector (bool pin)
 {
+    impl_->unsupportedPin = false; impl_->inspector.setEnabled (true);
     impl_->selection.setPinned (pin); impl_->pin.setToggleState (pin, juce::dontSendNotification);
     impl_->inspector.update (impl_->selection.inspectorPad(), pin);
+    commitLayout();
 }
 void DrumsWorkspace::setListView (bool list)
 {
     impl_->listView = list; impl_->list.setToggleState (list, juce::dontSendNotification); resized();
+    commitLayout();
 }
 void DrumsWorkspace::setLayout (workspace::Layout layout)
 {
+    layout.leftWidth = juce::jlimit (196, 640, layout.leftWidth);
+    layout.rightWidth = juce::jlimit (196, 640, layout.rightWidth);
+    layout.ratio = std::isfinite (layout.ratio) ? juce::jlimit (0.15f, 0.85f, layout.ratio) : 0.5f;
+    layout.compactHeight = juce::jlimit (120, 220, layout.compactHeight);
+    layout.expandedHeight = juce::jlimit (280, 560, layout.expandedHeight);
+    if (layout.maximized != 0 && layout.maximized != 1) layout.maximized = 255;
     impl_->layout = layout;
     impl_->split.setSelectedId (static_cast<int> (layout.split) + 1, juce::dontSendNotification);
     impl_->mixerSize.setSelectedId (static_cast<int> (layout.mixer) + 1, juce::dontSendNotification);
@@ -466,8 +553,10 @@ void DrumsWorkspace::setLayout (workspace::Layout layout)
         impl_->layout.secondary = static_cast<workspace::Editor> ((static_cast<int> (impl_->layout.primary) + 1) % 4);
     impl_->primary.setSelectedId (static_cast<int> (impl_->layout.primary) + 1, juce::dontSendNotification);
     impl_->secondary.setSelectedId (static_cast<int> (impl_->layout.secondary) + 1, juce::dontSendNotification);
-    impl_->toolSelect.setSelectedId (static_cast<int> (impl_->layout.rightTool) + 1, juce::dontSendNotification);
+    impl_->maximise.setButtonText (impl_->layout.maximized == 255 ? "Focus" : "Restore");
+    impl_->maximise.setEnabled (impl_->layout.split != workspace::Split::single);
     resized();
+    commitLayout();
 }
 workspace::Layout DrumsWorkspace::layout() const noexcept { return impl_->layout; }
 juce::Button& DrumsWorkspace::padSelectButton (int i) { return impl_->pads.at (static_cast<std::size_t> (i))->select; }
@@ -510,16 +599,364 @@ juce::Slider* DrumsWorkspace::returnSlider (const juce::String& id)
     return nullptr;
 }
 void DrumsWorkspace::pollForTesting() { timerCallback(); }
+juce::Slider* DrumsWorkspace::sliderFor (const juce::String& id)
+{
+    auto& i = *impl_;
+    if (id == "drm.kit.volume") return &i.kitLevel.control->getSlider();
+    if (auto* slider = returnSlider (id)) return slider;
+    if (auto* slider = i.toolPages[3]->slider (id)) return slider;
+    for (int pad = 0; pad < 16; ++pad)
+    {
+        const auto prefix = juce::String (padPrefix (pad)) + ".";
+        if (! id.startsWith (prefix)) continue;
+        const auto suffix = id.substring (prefix.length());
+        if (auto* slider = i.strips[static_cast<std::size_t> (pad)]->slider (suffix)) return slider;
+        return pad == i.selection.pad() ? i.sound.hostSlider (suffix) : nullptr;
+    }
+    return nullptr;
+}
+juce::Button* DrumsWorkspace::buttonFor (const juce::String& id)
+{
+    auto& i = *impl_;
+    if (auto* button = i.toolPages[2]->button (id)) return button;
+    if (auto* button = i.toolPages[3]->button (id)) return button;
+    for (int pad = 0; pad < 16; ++pad)
+    {
+        const auto prefix = juce::String (padPrefix (pad)) + ".";
+        if (id.startsWith (prefix)) return i.strips[static_cast<std::size_t> (pad)]->button (id.substring (prefix.length()));
+    }
+    return nullptr;
+}
+
+void DrumsWorkspace::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    if (impl_->layoutGeneration != impl_->processor.layoutState().generation) readLayout();
+}
+
+void DrumsWorkspace::readLayout()
+{
+    auto& i = *impl_;
+    const auto snapshot = i.processor.layoutState();
+    i.applyingLayout = true;
+    i.steps.update(); i.song.update();
+    i.drag = Impl::Divider::none;
+    i.leftDock.clear(); i.rightDock.clear();
+    const auto defaults = layout::factory (layout::Preset::beatmaking);
+    const auto bytes = [&] (layout::Type type) -> const layout::Bytes& {
+        const auto* record = layout::find (snapshot.document, type);
+        return (record ? record : layout::find (defaults, type))->payload;
+    };
+    auto next = workspace::Layout {};
+    const auto leftDock = layout::dock (snapshot.document, layout::Type::left);
+    const auto rightDock = layout::dock (snapshot.document, layout::Type::right);
+    next.leftVisible = leftDock.has_value(); next.rightVisible = rightDock.has_value();
+    next.leftRail = leftDock && leftDock->rail; next.rightRail = rightDock && rightDock->rail;
+    if (leftDock) next.leftWidth = static_cast<int> (leftDock->width);
+    if (rightDock) next.rightWidth = static_cast<int> (rightDock->width);
+    switch (rightDock ? rightDock->groups[0].tabs[rightDock->groups[0].active] : 3)
+    {
+        case 2: next.rightTool = workspace::DockTool::library; break;
+        case 4: next.rightTool = workspace::DockTool::generator; break;
+        case 5: next.rightTool = workspace::DockTool::routing; break;
+        case 6: next.rightTool = workspace::DockTool::diagnostics; break;
+        default: next.rightTool = workspace::DockTool::inspector; break;
+    }
+    const auto& central = bytes (layout::Type::central);
+    next.centralVisible = layout::find (snapshot.document, layout::Type::central) != nullptr;
+    next.primary = static_cast<workspace::Editor> (central[4] - 16);
+    next.secondary = central[0] == 2 ? static_cast<workspace::Editor> (central[5] - 16)
+        : static_cast<workspace::Editor> ((static_cast<int> (next.primary) + 1) % 4);
+    next.split = central[0] == 1 ? workspace::Split::single
+        : central[1] == 0 ? workspace::Split::vertical : workspace::Split::horizontal;
+    next.ratio = static_cast<float> (layoutWord (central, 2)) / 1000.0f;
+    next.maximized = central.back();
+    const auto& mixer = bytes (layout::Type::mixer);
+    next.mixer = static_cast<workspace::MixerSize> (mixer[0]);
+    next.compactHeight = layoutWord (mixer, 1); next.expandedHeight = layoutWord (mixer, 3);
+    i.mixerBank.setSelectedId (mixer[5] + 1, juce::dontSendNotification);
+    setLayout (next);
+    setListView (bytes (layout::Type::padRack)[0] != 0);
+    const auto& selected = bytes (layout::Type::selection);
+    i.selection.setPinned (false);
+    const auto& pin = bytes (layout::Type::inspectorPin);
+    if (pin[0] == 1) { i.selection.selectPad (pin[1]); i.selection.setPinned (true); }
+    i.unsupportedPin = pin[0] > 1;
+    if (i.unsupportedPin) i.selection.setPinned (true);
+    selectPad (selected[0]);
+    i.steps.selectBar (selected[2]);
+    if (i.song.selectionStart() != selected[1] || i.layoutEpoch != i.processor.patternEpoch()) i.song.restoreSelection (selected[1]);
+    i.layoutEpoch = i.processor.patternEpoch();
+    i.pin.setToggleState (pin[0] != 0, juce::dontSendNotification);
+    i.inspector.setEnabled (! i.unsupportedPin);
+    i.pin.setTooltip (i.unsupportedPin ? "Pinned object unavailable here; unpin to edit the current pad" : "Pin current pad");
+    i.layoutGeneration = snapshot.generation;
+    i.committedLayout = i.layout; i.committedListView = i.listView;
+    i.committedPin = i.selection.pinned(); i.committedPinPad = i.selection.inspectorPad();
+    const auto panel = [&i] (layout::Byte id) -> juce::Component* {
+        switch (id)
+        {
+            case 1: return &i.rackViewport; case 2: return i.toolPages[1].get(); case 3: return &i.inspector;
+            case 4: return i.toolPages[0].get(); case 5: return i.toolPages[2].get(); case 6: return i.toolPages[3].get();
+            default: return nullptr;
+        }
+    };
+    const auto height = [&i] (layout::Byte id) {
+        if (id == 1) return 0;
+        if (id == 3) return 328;
+        const int index = id == 2 ? 1 : id == 4 ? 0 : id == 5 ? 2 : 3;
+        const std::array defaultHeights { 1200, 900, 1660, 620 };
+        const auto requested = i.toolPages[static_cast<std::size_t> (index)]->dockHeight();
+        return requested > 0 ? requested : defaultHeights[static_cast<std::size_t> (index)];
+    };
+    const auto configure = [&] (DrumsDockZone& zone, layout::Type side, const std::optional<layout::Dock>& dock) {
+        zone.configure (dock, panel, height, [this, side, expected = dock, epoch = i.processor.patternEpoch()] (const layout::Dock& nextDock) {
+            const auto current = impl_->processor.layoutState();
+            auto live = layout::dock (current.document, side);
+            if (! expected || ! live || impl_->processor.patternEpoch() != epoch) { readLayout(); return; }
+            const auto width = live->width;
+            live->width = expected->width; // A dock tab does not undo a newer width gesture.
+            if (*live != *expected) { readLayout(); return; }
+            auto committed = nextDock; committed.width = width;
+            commitDockDocument (layout::setDock (current.document, side, committed));
+        }, [this, side] (unsigned group, layout::Byte id, juce::Component& target) { showDockMenu (side, group, id, target); });
+    };
+    configure (i.leftDock, layout::Type::left, leftDock); configure (i.rightDock, layout::Type::right, rightDock);
+    i.applyingLayout = false;
+    resized();
+    if (i.mixerView.getSelectedId() == 1) i.mixerViewport.setViewPosition (mixer[5] != 0 ? 8 * 84 : 0, 0);
+}
+
+void DrumsWorkspace::commitLayout()
+{
+    auto& i = *impl_;
+    if (i.applyingLayout) return;
+    const auto snapshot = i.processor.layoutState();
+    if (snapshot.generation != i.layoutGeneration) { readLayout(); return; }
+    auto document = snapshot.document;
+    const auto before = document;
+    const auto defaults = layout::factory (layout::Preset::beatmaking);
+    const auto bytes = [&] (layout::Type type) {
+        const auto* record = layout::find (document, type);
+        return (record ? record : layout::find (defaults, type))->payload;
+    };
+    if (i.layout.leftWidth != i.committedLayout.leftWidth)
+    {
+        auto left = bytes (layout::Type::left); layoutWord (left, 0, i.layout.leftWidth);
+        putLayoutRecord (document, layout::Type::left, std::move (left));
+    }
+    if (i.layout.rightWidth != i.committedLayout.rightWidth)
+    {
+        auto right = bytes (layout::Type::right); layoutWord (right, 0, i.layout.rightWidth);
+        putLayoutRecord (document, layout::Type::right, std::move (right));
+    }
+    if (i.layout.rightTool != i.committedLayout.rightTool)
+    {
+        const std::array<layout::Byte, 5> ids { 3, 4, 2, 5, 6 };
+        const auto moved = layout::movePanel (document, ids[static_cast<std::size_t> (i.layout.rightTool)], layout::Type::right);
+        if (! moved) { readLayout(); return; }
+        document = *moved;
+    }
+    const auto& a = i.layout; const auto& b = i.committedLayout;
+    const bool reparent = a.rightTool != b.rightTool;
+    if (a.primary != b.primary || a.secondary != b.secondary || a.split != b.split || a.ratio != b.ratio || a.maximized != b.maximized)
+    {
+        layout::Bytes central { static_cast<layout::Byte> (a.split == workspace::Split::single ? 1 : 2),
+                                static_cast<layout::Byte> (a.split == workspace::Split::horizontal ? 1 : 0), 0, 0,
+                                static_cast<layout::Byte> (16 + static_cast<int> (a.primary)) };
+        layoutWord (central, 2, juce::roundToInt (a.ratio * 1000.0f));
+        if (a.split != workspace::Split::single) central.push_back (static_cast<layout::Byte> (16 + static_cast<int> (a.secondary)));
+        central.push_back (static_cast<layout::Byte> (a.maximized == 1 && a.split == workspace::Split::single ? 255 : a.maximized));
+        putLayoutRecord (document, layout::Type::central, std::move (central));
+    }
+    if (a.mixer != b.mixer || a.compactHeight != b.compactHeight || a.expandedHeight != b.expandedHeight)
+    {
+        auto mixer = bytes (layout::Type::mixer); mixer[0] = static_cast<layout::Byte> (a.mixer);
+        layoutWord (mixer, 1, a.compactHeight); layoutWord (mixer, 3, a.expandedHeight);
+        putLayoutRecord (document, layout::Type::mixer, std::move (mixer));
+    }
+    if (i.listView != i.committedListView) putLayoutRecord (document, layout::Type::padRack, { static_cast<layout::Byte> (i.listView) });
+    if (! i.unsupportedPin && (i.selection.pinned() != i.committedPin || i.selection.inspectorPad() != i.committedPinPad))
+    {
+        layout::Bytes pin { static_cast<layout::Byte> (i.selection.pinned() ? 1 : 0) };
+        if (i.selection.pinned()) pin.push_back (static_cast<layout::Byte> (i.selection.inspectorPad()));
+        putLayoutRecord (document, layout::Type::inspectorPin, std::move (pin));
+    }
+    if (document == before) return;
+    auto workspace = bytes (layout::Type::workspace); workspace[1] = 1;
+    putLayoutRecord (document, layout::Type::workspace, std::move (workspace));
+    if (! i.processor.commitLayout (std::move (document))) { readLayout(); return; }
+    i.layoutGeneration = i.processor.layoutState().generation;
+    i.committedLayout = i.layout; i.committedListView = i.listView;
+    i.committedPin = i.selection.pinned(); i.committedPinPad = i.selection.inspectorPad();
+    if (reparent) readLayout();
+}
+
+bool DrumsWorkspace::applyWorkspace (const layout::Document& document, bool confirmedReset)
+{
+    if (! impl_->processor.commitLayout (document, confirmedReset)) return false;
+    readLayout();
+    return true;
+}
+
+bool DrumsWorkspace::commitDockDocument (std::optional<layout::Document> document)
+{
+    if (! document) return false;
+    const auto* workspace = layout::find (*document, layout::Type::workspace);
+    const layout::Byte preset = workspace ? workspace->payload[0] : 0;
+    putLayoutRecord (*document, layout::Type::workspace, { preset, 1 });
+    return applyWorkspace (*document);
+}
+bool DrumsWorkspace::moveDockPanel (layout::Byte panel, layout::Type side, unsigned group, bool newGroup)
+{
+    return commitDockDocument (layout::movePanel (impl_->processor.layoutState().document, panel, side, group, newGroup));
+}
+bool DrumsWorkspace::hideDockPanel (layout::Byte panel)
+{
+    return commitDockDocument (layout::hidePanel (impl_->processor.layoutState().document, panel));
+}
+bool DrumsWorkspace::setDockRail (layout::Type side, bool rail)
+{
+    const auto document = impl_->processor.layoutState().document;
+    auto dock = layout::dock (document, side);
+    if (! dock) return false;
+    dock->rail = rail;
+    return commitDockDocument (layout::setDock (document, side, dock));
+}
+DrumsDockZone& DrumsWorkspace::dockZone (layout::Type side)
+{
+    jassert (side == layout::Type::left || side == layout::Type::right);
+    return side == layout::Type::left ? impl_->leftDock : impl_->rightDock;
+}
+PatternEditor& DrumsWorkspace::patternEditor() { return impl_->steps; }
+SongStrip& DrumsWorkspace::songEditor() { return impl_->song; }
+void DrumsWorkspace::showDockMenu (layout::Type side, unsigned sourceGroup, layout::Byte panel, juce::Component& target)
+{
+    juce::ignoreUnused (sourceGroup);
+    const auto snapshot = impl_->processor.layoutState();
+    juce::PopupMenu menu;
+    menu.addSectionHeader (DrumsDockZone::panelName (panel));
+    for (const auto destination : { layout::Type::left, layout::Type::right })
+    {
+        juce::PopupMenu groups;
+        const auto zone = layout::dock (snapshot.document, destination);
+        const unsigned count = zone ? static_cast<unsigned> (zone->groups.size()) : 1;
+        const int first = destination == layout::Type::left ? 10 : 20;
+        for (unsigned n = 0; n < count; ++n) groups.addItem (first + static_cast<int> (n), "Group " + juce::String (n + 1));
+        const auto hidden = layout::hidePanel (snapshot.document, panel);
+        const auto afterRemoval = hidden ? layout::dock (*hidden, destination) : std::nullopt;
+        groups.addItem (destination == layout::Type::left ? 30 : 31, "New group", ! afterRemoval || afterRemoval->groups.size() < 3);
+        menu.addSubMenu (destination == layout::Type::left ? "Move to left dock" : "Move to right dock", groups);
+    }
+    menu.addItem (40, "Hide panel"); menu.addItem (50, "Collapse dock to rail");
+    const auto weak = juce::Component::SafePointer<DrumsWorkspace> (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target),
+        [weak, generation = snapshot.generation, panel, side] (int id) {
+            if (! weak || generation != weak->impl_->processor.layoutState().generation) return;
+            if (id >= 10 && id <= 12) weak->moveDockPanel (panel, layout::Type::left, static_cast<unsigned> (id - 10));
+            else if (id >= 20 && id <= 22) weak->moveDockPanel (panel, layout::Type::right, static_cast<unsigned> (id - 20));
+            else if (id == 30 || id == 31) weak->moveDockPanel (panel, id == 30 ? layout::Type::left : layout::Type::right, 0, true);
+            else if (id == 40) weak->hideDockPanel (panel);
+            else if (id == 50) weak->setDockRail (side, true);
+        });
+}
+
+void DrumsWorkspace::showWorkspaceMenu()
+{
+    WorkspaceLibrary menuLibrary;
+    const auto read = menuLibrary.read();
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Factory workspaces");
+    menu.addItem (1, "Beatmaking"); menu.addItem (2, "Composition");
+    menu.addItem (3, "Sound Design"); menu.addItem (4, "Mixing");
+    menu.addSeparator();
+    for (std::size_t n = 0; n < read.entries.size(); ++n)
+        menu.addItem (100 + static_cast<int> (n), read.entries[n].name);
+    menu.addItem (10, "Save Workspace As...");
+    if (! read.entries.empty())
+    {
+        juce::PopupMenu remove;
+        for (std::size_t n = 0; n < read.entries.size(); ++n)
+            remove.addItem (200 + static_cast<int> (n), read.entries[n].name);
+        menu.addSubMenu ("Delete user workspace", remove);
+    }
+    menu.addItem (11, "Reset layout...");
+    juce::PopupMenu open;
+    for (layout::Byte panel = 1; panel <= 6; ++panel) open.addItem (300 + panel, DrumsDockZone::panelName (panel));
+    menu.addSubMenu ("Open panel", open);
+    const auto snapshot = impl_->processor.layoutState();
+    if (snapshot.status == layout::Status::future)
+        menu.addSectionHeader ("Newer layout preserved; session changes are not saved");
+    if (read.diagnostic.isNotEmpty()) menu.addSectionHeader (read.diagnostic);
+    const auto weak = juce::Component::SafePointer<DrumsWorkspace> (this);
+    const auto generation = snapshot.generation;
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&impl_->workspaceMenu),
+        [weak, generation, entries = read.entries] (int id) {
+            if (! weak || id == 0 || generation != weak->impl_->processor.layoutState().generation) return;
+            if (id >= 301 && id <= 306)
+                weak->moveDockPanel (static_cast<layout::Byte> (id - 300), id == 301 ? layout::Type::left : layout::Type::right);
+            else if (id >= 1 && id <= 4)
+                weak->applyWorkspace (layout::factory (static_cast<layout::Preset> (id - 1)));
+            else if (id >= 100 && id < 100 + static_cast<int> (entries.size()))
+            {
+                auto document = entries[static_cast<std::size_t> (id - 100)].layout;
+                const auto* old = layout::find (document, layout::Type::workspace);
+                putLayoutRecord (document, layout::Type::workspace, { old ? old->payload[0] : layout::Byte { 0 }, 1 });
+                weak->applyWorkspace (document);
+            }
+            else if (id >= 200 && id < 200 + static_cast<int> (entries.size()))
+            {
+                WorkspaceLibrary library;
+                auto current = library.read().entries;
+                const auto name = entries[static_cast<std::size_t> (id - 200)].name;
+                std::erase_if (current, [&] (const auto& entry) { return entry.name.equalsIgnoreCase (name); });
+                const auto result = library.write (current);
+                if (result.failed()) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Workspace", result.getErrorMessage());
+            }
+            else if (id == 10)
+            {
+                auto* dialog = new juce::AlertWindow ("Save Workspace As", "Name this workspace (1-64 characters).", juce::MessageBoxIconType::NoIcon);
+                dialog->addTextEditor ("name", {}, "Name");
+                dialog->addButton ("Save", 1); dialog->addButton ("Cancel", 0);
+                const auto alert = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+                dialog->enterModalState (true, juce::ModalCallbackFunction::create ([weak, generation, alert] (int result) {
+                    if (result != 1 || ! weak || ! alert || generation != weak->impl_->processor.layoutState().generation) return;
+                    WorkspaceLibrary library;
+                    auto current = library.read().entries;
+                    current.push_back ({ alert->getTextEditorContents ("name"), weak->impl_->processor.layoutState().document });
+                    const auto saved = library.write (current);
+                    if (saved.failed()) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Workspace", saved.getErrorMessage());
+                }), true);
+            }
+            else if (id == 11)
+            {
+                if (weak->impl_->processor.layoutState().status != layout::Status::future)
+                    weak->applyWorkspace (layout::factory (layout::Preset::beatmaking), true);
+                else
+                    juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon, "Reset newer layout?",
+                        "Replace the newer layout with this version's layout? The newer layout will be lost.", "Replace", "Cancel", nullptr,
+                        juce::ModalCallbackFunction::create ([weak, generation] (int result) {
+                            if (result != 0 && weak && generation == weak->impl_->processor.layoutState().generation)
+                                weak->applyWorkspace (layout::factory (layout::Preset::beatmaking), true);
+                        }));
+            }
+        });
+}
 void DrumsWorkspace::mouseDown (const juce::MouseEvent& e)
 {
     impl_->drag = impl_->dividerAt (getWidth(), getHeight(), e.getPosition());
 }
-void DrumsWorkspace::mouseUp (const juce::MouseEvent&) { impl_->drag = Impl::Divider::none; }
+void DrumsWorkspace::mouseUp (const juce::MouseEvent&)
+{
+    if (impl_->drag == Impl::Divider::none) return;
+    impl_->drag = Impl::Divider::none;
+    commitLayout();
+}
 void DrumsWorkspace::mouseMove (const juce::MouseEvent& e)
 {
     const auto target = impl_->dividerAt (getWidth(), getHeight(), e.getPosition());
     setMouseCursor (target == Impl::Divider::none ? juce::MouseCursor::NormalCursor
-                   : target == Impl::Divider::below ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::LeftRightResizeCursor);
+                   : target == Impl::Divider::below || target == Impl::Divider::mixer
+                       ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::LeftRightResizeCursor);
 }
 void DrumsWorkspace::mouseDrag (const juce::MouseEvent& e)
 {
@@ -527,15 +964,18 @@ void DrumsWorkspace::mouseDrag (const juce::MouseEvent& e)
     const auto r = workspace::arrange (getWidth(), getHeight(), i.layout);
     switch (i.drag)
     {
-        case Impl::Divider::left: i.layout.leftWidth = juce::jlimit (160, 280, e.x); break;
-        case Impl::Divider::right: i.layout.rightWidth = juce::jlimit (200, 300, getWidth() - e.x); break;
+        case Impl::Divider::left: i.layout.leftWidth = juce::jlimit (196, 640, e.x); break;
+        case Impl::Divider::right: i.layout.rightWidth = juce::jlimit (196, 640, getWidth() - e.x); break;
         case Impl::Divider::across:
-            i.layout.ratio = static_cast<float> (e.x - r.primary.x) / static_cast<float> (r.primary.w + r.secondary.w); break;
+            i.layout.ratio = juce::jlimit (0.15f, 0.85f, static_cast<float> (e.x - r.primary.x) / static_cast<float> (r.primary.w + r.secondary.w)); break;
         case Impl::Divider::below:
-            i.layout.ratio = static_cast<float> (e.y - r.primary.y) / static_cast<float> (r.primary.h + r.secondary.h); break;
+            i.layout.ratio = juce::jlimit (0.15f, 0.85f, static_cast<float> (e.y - r.primary.y) / static_cast<float> (r.primary.h + r.secondary.h)); break;
+        case Impl::Divider::mixer:
+            if (i.layout.mixer == workspace::MixerSize::compact) i.layout.compactHeight = juce::jlimit (120, 220, getHeight() - e.y);
+            else i.layout.expandedHeight = juce::jlimit (280, 560, getHeight() - e.y);
+            break;
         case Impl::Divider::none: return;
     }
-    i.layout.ratio = juce::jlimit (0.25f, 0.75f, i.layout.ratio);
     resized();
 }
 void DrumsWorkspace::timerCallback()
@@ -555,11 +995,11 @@ void DrumsWorkspace::timerCallback()
     for (int ch = 0; ch < 2; ++ch) i.telemetry.main[static_cast<std::size_t> (ch)] = i.processor.takeMainMeter (ch);
     i.mainLeft.push (i.telemetry.main[0]); i.mainRight.push (i.telemetry.main[1]);
     i.steps.update(); i.song.update();
-    if (i.steps.selectedLane() != i.selection.pad()) i.selection.selectPad (i.steps.selectedLane());
+    if (i.steps.selectedLane() != i.selection.pad()) selectPad (i.steps.selectedLane());
     i.inspector.update (i.selection.inspectorPad(), i.selection.pinned());
     i.sound.setContext (i.selection.pad(), i.selectedPlayer);
     i.sample.setContext (i.selection.pad(), i.selectedPlayer);
-    if (auto* page = toolPage (i.layout.rightTool)) page->update();
+    for (auto& page : i.toolPages) if (page->isVisible() && page->getParentComponent()) page->update();
     i.top.setText (juce::String (i.processor.transportPlaying() ? "HOST PLAYING / " : "HOST STOPPED / ")
                    + juce::String (i.processor.lastBpm(), 1) + " BPM" + (i.auditionRefused ? " / audition queue full" : ""), juce::dontSendNotification);
 }
@@ -568,17 +1008,20 @@ void DrumsWorkspace::resized()
     auto& i = *impl_;
     const auto boxes = workspace::arrange (getWidth(), getHeight(), i.layout);
     auto top = rectangle (boxes.top);
+    i.workspaceMenu.setBounds (top.removeFromLeft (104).reduced (2));
     i.pattern.setBounds (top.removeFromRight (104).reduced (2));
-    i.mode.setBounds (top.removeFromRight (132).reduced (2));
-    i.split.setBounds (top.removeFromRight (132).reduced (2));
-    i.primary.setBounds (top.removeFromRight (88).reduced (2));
+    i.mode.setBounds (top.removeFromRight (120).reduced (2));
+    i.split.setBounds (top.removeFromRight (108).reduced (2));
+    i.maximise.setBounds (top.removeFromRight (56).reduced (2));
+    i.primary.setBounds (top.removeFromRight (80).reduced (2));
     i.secondary.setVisible (i.layout.split != workspace::Split::single);
-    if (i.secondary.isVisible()) i.secondary.setBounds (top.removeFromRight (88).reduced (2));
-    i.pin.setBounds (top.removeFromRight (48).reduced (2));
-    i.list.setBounds (top.removeFromRight (48).reduced (2)); i.top.setBounds (top);
-    i.rackViewport.setBounds (rectangle (boxes.left));
-    i.rackContent.setSize (std::max (0, boxes.left.w - i.rackViewport.getScrollBarThickness()),
-                           i.listView ? std::max (boxes.left.h, 16 * 32) : boxes.left.h);
+    if (i.secondary.isVisible()) i.secondary.setBounds (top.removeFromRight (80).reduced (2));
+    i.pin.setBounds (top.removeFromRight (44).reduced (2));
+    i.list.setBounds (top.removeFromRight (44).reduced (2)); i.top.setBounds (top);
+    i.leftDock.setBounds (rectangle (boxes.left)); i.rightDock.setBounds (rectangle (boxes.right));
+    i.leftDock.resized(); i.rightDock.resized();
+    i.rackContent.setSize (std::max (0, i.rackViewport.getWidth() - i.rackViewport.getScrollBarThickness()),
+                           std::max (i.rackViewport.getHeight(), i.listView ? 16 * 32 : 4 * 70));
     const auto rack = i.rackContent.getLocalBounds();
     for (int pad = 0; pad < 16; ++pad)
     {
@@ -592,43 +1035,30 @@ void DrumsWorkspace::resized()
         cell.setBounds (juce::Rectangle<int> (x1, y1, x2 - x1, y2 - y1).reduced (1));
         cell.resized();
     }
-    auto right = rectangle (boxes.right);
-    i.toolSelect.setBounds (right.removeFromTop (28));
-    i.toolViewport.setBounds (right);
-    auto* tool = toolPage (i.layout.rightTool);
-    auto* displayed = tool != nullptr ? static_cast<juce::Component*> (tool) : &i.inspector;
-    if (i.toolViewport.getViewedComponent() != displayed) i.toolViewport.setViewedComponent (displayed, false);
-    i.toolViewport.setVisible (true);
-    if (tool != nullptr)
-    {
-        const std::array heights { 1200, 900, 1660, 620 };
-        tool->setSize (std::max (196, i.toolViewport.getWidth() - i.toolViewport.getScrollBarThickness()),
-                       std::max (i.toolViewport.getHeight(), tool->dockHeight() > 0 ? tool->dockHeight()
-                           : heights[static_cast<std::size_t> (static_cast<int> (i.layout.rightTool) - 1)]));
-        tool->update();
-    }
-    else i.inspector.setSize (std::max (196, i.toolViewport.getWidth() - i.toolViewport.getScrollBarThickness()), std::max (328, right.getHeight()));
     const std::array<juce::Component*, 4> editors { &i.steps, &i.song, &i.sound, &i.sample };
-    const std::array widths { 980, 1100, 720, 720 }, heights { 320, 240, 470, 560 };
     for (std::size_t n = 0; n < editors.size(); ++n)
     {
         const auto editor = static_cast<workspace::Editor> (n);
-        const bool isPrimary = editor == i.layout.primary, isSecondary = editor == i.layout.secondary && ! boxes.secondary.empty();
+        const bool isPrimary = editor == i.layout.primary && ! boxes.primary.empty();
+        const bool isSecondary = editor == i.layout.secondary && ! boxes.secondary.empty();
         auto& viewport = i.editorViews[n];
         viewport.setVisible (isPrimary || isSecondary);
         if (! viewport.isVisible()) continue;
         viewport.setBounds (rectangle (isPrimary ? boxes.primary : boxes.secondary));
-        // Preserve full donor controls in scrollable canvases during the port;
-        // no clipping/scaling away of controls or duplicate editor instances.
-        editors[n]->setSize (std::max (widths[n], viewport.getWidth() - 14), std::max (heights[n], viewport.getHeight() - 14));
+        const int width = std::max (360, viewport.getWidth() - viewport.getScrollBarThickness());
+        const std::array preferredHeights { width < 900 ? 400 : 320, i.song.preferredHeightForWidth (width),
+                                           i.sound.preferredHeight (width), i.sample.preferredHeight (width) };
+        editors[n]->setSize (width, std::max (preferredHeights[n], viewport.getHeight() - viewport.getScrollBarThickness()));
     }
     auto mixer = rectangle (boxes.mixer);
     i.mixerTitle.setText ("MIXER / 16 PADS / 9 OUTPUTS / Main L-R", juce::dontSendNotification);
     auto mixerHeader = mixer.removeFromTop (24);
+    const bool open = i.layout.mixer != workspace::MixerSize::collapsed;
     i.mixerSize.setBounds (mixerHeader.removeFromRight (146).reduced (1));
     i.mixerView.setBounds (mixerHeader.removeFromRight (118).reduced (1));
+    i.mixerBank.setVisible (open && i.mixerView.getSelectedId() == 1);
+    if (i.mixerBank.isVisible()) i.mixerBank.setBounds (mixerHeader.removeFromRight (108).reduced (1));
     i.mixerTitle.setBounds (mixerHeader);
-    const bool open = i.layout.mixer != workspace::MixerSize::collapsed;
     i.mixerViewport.setVisible (open); i.kitLevel.control->setVisible (open);
     i.mainLeft.setVisible (open); i.mainRight.setVisible (open);
     i.mainRight.setBounds (mixer.removeFromRight (8).reduced (1));

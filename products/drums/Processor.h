@@ -3,6 +3,7 @@
 #include "common/SuiteProcessor.h"
 
 #include "DrumsParameters.h"
+#include "DrumsLayoutState.h"
 #include "Generator.h"
 #include "KitStore.h"
 #include "PadRoles.h"
@@ -29,8 +30,11 @@ inline constexpr preset::Tag parameterSectionTag = preset::makeTag ("DPRM");
 bool decodeParameterValues (const preset::Section& section, std::map<std::string, float>& values, juce::String& error);
 preset::Section encodeParameterValues (const std::map<std::string, float>& values);
 
-// Editor state saved with the project (section DUIS): where the user was.
+// In-memory adapter for the existing musical editors. Only pad/songBar/
+// patternBar persist, in DLAY SELECTION. Page/exportScope are session-only
+// while the old panel remains a test reference; DUIS is recognised/discarded.
 inline constexpr preset::Tag uiStateSectionTag = preset::makeTag ("DUIS");
+inline constexpr preset::Tag layoutSectionTag = preset::makeTag ("DLAY");
 struct UiState {
     std::uint8_t page = 0;         // 0..7: PERFORMANCE .. ADVANCED
     std::uint8_t pad = 0;          // selected pad 0..15
@@ -42,8 +46,6 @@ struct UiState {
         return page == o.page && pad == o.pad && songBar == o.songBar && patternBar == o.patternBar && exportScope == o.exportScope;
     }
 };
-preset::Section encodeUiState (const UiState&);
-bool decodeUiState (const preset::Section&, UiState& out, juce::String& error);
 
 // What a MIDI export writes, frozen on the message thread at the click or
 // at the start of the drag (DRM-05): both paths render the same snapshot
@@ -132,6 +134,14 @@ public:
     void setGenerator (const GeneratorSettings&);
     UiState uiState() const;
     void setUiState (const UiState&);
+    struct LayoutSnapshot {
+        layout::Document document;
+        layout::Status status = layout::Status::valid;
+        std::uint64_t generation = 0;
+    };
+    LayoutSnapshot layoutState() const;
+    bool commitLayout (layout::Document, bool confirmedReset = false);
+    juce::ChangeBroadcaster& layoutChanges() noexcept { return layoutChanges_; }
     // Runs the generator on the slot the sequencer plays (pattern, mutate
     // `laneMask`, fill in `bar`, variation: B from A) or on everything
     // (song). With `newSeed` the seed advances first, so every press gives
@@ -197,6 +207,7 @@ public:
     std::uint64_t droppedMidiEvents() const noexcept { return droppedMidi_.load (std::memory_order_relaxed); }
 
     static constexpr std::size_t midiCapacity = 4096;   // events per host block
+    static constexpr std::size_t productStateBudgetBytes = 736u * 1024u;
 
     // Tests: the voice pool size applied at the next prepareToPlay (the
     // product uses kit::maxVoices; the DRM-00 reference used 16).
@@ -209,11 +220,12 @@ protected:
     // unique 64-step bars, 32 sample references with the longest paths:
     // about 705 KB), so that much of the container is never given to
     // sections of an unknown writer.
-    std::size_t productStateReserve() const override { return 736u * 1024u; }
+    std::size_t productStateReserve() const override { return productStateBudgetBytes; }
     bool isProductSection (preset::Tag tag) const override
     {
         return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag
-            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == rolesSectionTag || tag == styleSectionTag;
+            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == layoutSectionTag
+            || tag == rolesSectionTag || tag == styleSectionTag;
     }
 
 private:
@@ -269,6 +281,9 @@ private:
     mutable juce::SpinLock settingsLock_;   // generator_, ui_, roles_
     GeneratorSettings generator_;
     UiState ui_;
+    layout::ProjectState layout_;
+    std::atomic<std::uint64_t> layoutGeneration_ { 0 };
+    juce::ChangeBroadcaster layoutChanges_;
     PadRoles roles_;
     void storeRoles (const PadRoles&);
 

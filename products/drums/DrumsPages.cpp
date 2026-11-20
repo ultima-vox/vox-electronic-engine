@@ -6,6 +6,7 @@
 #include "Tokens.h"
 #include "Typography.h"
 #include "DrumsDial.h"
+#include "PatternEditor.h"
 
 #include <deque>
 
@@ -990,7 +991,13 @@ public:
              << "Outputs: Main + Out 2..9 (9 stereo buses); enabled now: "
              << juce::String (juce::BigInteger (static_cast<juce::int64> (processor_.activeOutputs())).countNumberOfSetBits()) << "\n"
              << "Version " << JucePlugin_VersionString << ", state schema " << juce::String (processor_.product().stateSchema)
-             << ", sections DPRM DPAD(2) DSMP(2) DSEQ(4) DSNG(2) DGEN(2) DSTL(1) DUIS(1)";
+             << ", sections DPRM DPAD(2) DSMP(2) DSEQ(4) DSNG(2) DGEN(2) DSTL(1) DLAY(1)";
+        switch (processor_.layoutState().status)
+        {
+            case layout::Status::invalid: text << "\nLayout data was invalid; a default layout is shown"; break;
+            case layout::Status::future: text << "\nLayout saved by a newer VOX Drums; changes here are not saved. Use Workspace > Reset layout to replace it."; break;
+            case layout::Status::valid: break;
+        }
         // PR 137 §10.4: say when the host gives no bar positions.
         if (processor_.transportPlaying() && ! processor_.hostBars())
             text << "\nHost gives no bar positions; bars counted from the start";
@@ -1167,6 +1174,18 @@ SongStrip::SongStrip (DrumsProcessor& processor, juce::Colour accent) : processo
 
 SongStrip::~SongStrip() = default;
 
+void SongStrip::enableMidiExport (std::function<void()> save, std::function<void()> drag, std::function<juce::String()> status)
+{
+    midi_ = std::make_unique<MidiDragButton> ("Song MIDI", VoxButton::Type::Primary);
+    midi_->setTooltip ("Click: save the entire Song as MIDI. Drag: drop the entire Song into your DAW.");
+    midi_->onClick = std::move (save); midi_->onDragStart = std::move (drag);
+    addAndMakeVisible (*midi_);
+    midiStatus_ = makeLabel ("Entire Song MIDI / click save / drag to DAW", true);
+    midiStatus_->setName ("Song MIDI export status"); addAndMakeVisible (*midiStatus_);
+    midiStatusQuery_ = std::move (status);
+    scope_->setVisible (false); resized();
+}
+
 void SongStrip::apply (const std::function<void (SongData&)>& change)
 {
     if (refreshing_)
@@ -1188,7 +1207,14 @@ void SongStrip::refresh()
 
 void SongStrip::update()
 {
+    if (midiStatus_ && midiStatusQuery_)
+    {
+        const auto error = midiStatusQuery_();
+        const auto text = error.isEmpty() ? juce::String ("Entire Song MIDI / click save / drag to DAW") : error;
+        midiStatus_->setText (text, juce::dontSendNotification); midiStatus_->setTooltip (text);
+    }
     bool changed = false;
+    const auto previousLength = song_.length;
     if (processor_.patterns().generation() != generation_)
     {
         generation_ = processor_.patterns().generation();
@@ -1210,11 +1236,17 @@ void SongStrip::update()
         refresh();
         repaint();
     }
+    if (song_.length != previousLength) { resized(); if (onLayoutChanged) onLayoutChanged(); }
 }
 
 int SongStrip::preferredHeight() const
 {
-    return 30 + sp::xs + (song_.length / 16) * 22;
+    return preferredHeightForWidth (getWidth() > 0 ? getWidth() : 1100);
+}
+int SongStrip::preferredHeightForWidth (int width) const
+{
+    const int columns = width >= 1000 ? 16 : juce::jlimit (4, 16, width / 74);
+    return (width >= 1000 ? 30 : 120) + (midi_ ? 24 : 0) + sp::xs + ((song_.length + columns - 1) / columns) * 24;
 }
 
 void SongStrip::select (int from, int count)
@@ -1227,13 +1259,23 @@ void SongStrip::select (int from, int count)
     if (editing_ && onEditBar)
         onEditBar (selFrom_);
     repaint();
+    if (onSelectionChanged) onSelectionChanged();
+}
+
+void SongStrip::restoreSelection (int from)
+{
+    selFrom_ = juce::jlimit (0, song_.length - 1, from);
+    selCount_ = 1;
+    repaint();
 }
 
 juce::Rectangle<int> SongStrip::barBounds (int bar) const
 {
-    const int rows = juce::jmax (1, song_.length / 16);
-    const int w = grid_.getWidth() / 16, h = grid_.getHeight() / rows;
-    return { grid_.getX() + (bar % 16) * w, grid_.getY() + (bar / 16) * h, w, h };
+    const int rows = juce::jmax (1, (song_.length + columns_ - 1) / columns_);
+    const int x1 = grid_.getX() + bar % columns_ * grid_.getWidth() / columns_;
+    const int x2 = grid_.getX() + (bar % columns_ + 1) * grid_.getWidth() / columns_;
+    const int h = grid_.getHeight() / rows;
+    return { x1, grid_.getY() + bar / columns_ * h, x2 - x1, h };
 }
 
 int SongStrip::barAt (juce::Point<int> p) const
@@ -1311,6 +1353,23 @@ void SongStrip::paint (juce::Graphics& g)
 void SongStrip::resized()
 {
     auto area = getLocalBounds();
+    columns_ = getWidth() >= 1000 ? 16 : juce::jlimit (4, 16, getWidth() / 74);
+    if (getWidth() < 1000)
+    {
+        int x = 0, y = 0;
+        const auto put = [&] (juce::Component& component, int width) {
+            if (x > 0 && x + width > getWidth()) { x = 0; y += 30; }
+            component.setBounds (juce::Rectangle<int> (x, y, width, 30).reduced (1)); x += width;
+        };
+        put (*mode_, 52); put (*length_, 84); put (*slot_, 62); put (*variation_, 54); put (*place_, 50);
+        for (auto* button : { insert_.get(), delete_.get(), dup_.get() }) put (*button, 40);
+        put (*clear_, 46); put (*copy_, 46); put (*paste_, 48); put (*unique_, 56);
+        put (*loop_, 46); put (*loopSel_, 66); put (*edit_, 64);
+        if (midi_) put (*midi_, 96); else put (*scope_, 150);
+        area.removeFromTop (y + 30 + sp::xs);
+        if (midiStatus_) midiStatus_->setBounds (area.removeFromTop (24));
+        grid_ = area; return;
+    }
     auto top = area.removeFromTop (30);
     const auto put = [&top] (juce::Component& comp, int width) { comp.setBounds (top.removeFromLeft (width).reduced (1)); };
     put (*mode_, 52);
@@ -1330,13 +1389,16 @@ void SongStrip::resized()
     put (*loop_, 46);
     put (*loopSel_, 66);
     put (*edit_, 64);
-    scope_->setBounds (top.removeFromRight (juce::jmin (150, top.getWidth())).reduced (1));
+    if (midi_) midi_->setBounds (top.removeFromRight (96).reduced (1));
+    else scope_->setBounds (top.removeFromRight (juce::jmin (150, top.getWidth())).reduced (1));
     area.removeFromTop (sp::xs);
+    if (midiStatus_) midiStatus_->setBounds (area.removeFromTop (24));
     grid_ = area;
 }
 
 juce::Button* SongStrip::button (const juce::String& name)
 {
+    if (name == "midi") return midi_.get();
     if (name == "mode") return mode_.get();
     if (name == "loop") return loop_.get();
     if (name == "edit") return edit_.get();

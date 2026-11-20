@@ -1,137 +1,132 @@
 # Native Drums workspace — development ledger
 
-Owner: Codex, per [#141 assignment 6986368003](https://github.com/ultima-vox/vox-electronic-engine/pull/141#issuecomment-6986368003),
-updated 2026-11-18T17:32:32Z. Starting source:
-`integration/vox-drums-1.0@ef13daa3887dbd6079054384b04be7b65849d9ef`.
-Continue this work in `dev/drums-native-workspace` and its single Draft PR.
-No merge or release is authorized by this ledger.
+Codex owns Drums per [#141 / 6986368003](https://github.com/ultima-vox/vox-electronic-engine/pull/141#issuecomment-6986368003).
+Continue `dev/drums-native-workspace`, Draft [#163](https://github.com/ultima-vox/vox-electronic-engine/pull/163),
+target `integration/vox-drums-1.0@ef13daa3887dbd6079054384b04be7b65849d9ef`.
+Current request: [TL 7038015054](https://github.com/ultima-vox/vox-electronic-engine/pull/163#issuecomment-7038015054),
+updated 2026-11-20T11:09:26Z against parent `351aa0a9`.
 
-## Implemented native sections
+**Development checkpoint, not merge/release acceptance. HOLD does not stop coding.**
+Verify live HEAD and the PR's exact-source evidence before resuming.
 
-- `DrumsWorkspace`: persistent host-status bar; bounded left/right docks;
-  one/two central Step/Song/Sound/Sample views; draggable dock/split dividers; one bottom
-  Mixer with collapsed, compact and expanded sizes. Narrow splits degrade to
-  one editor without changing the requested layout.
-- One 16-pad Rack switches between 4x4 and scrollable List. Separate SELECT
-  and HIT buttons: SELECT changes canonical context without sending a note;
-  HIT queues the existing processor audition at velocity 110 without changing
-  selection. The large rubber face is HIT; the separate smaller SEL affordance
-  selects. Grid/List geometry is asserted. Queue refusal is visible.
-- Inspector follows the selected pad or pins its object identity. Level,
-  Tune, Decay, Pan, Mute and Solo use real APVTS attachments. Model, MIDI note
-  and requested output use KitStore, including external readback. A selection
-  change during a knob drag defers rebinding until that gesture finishes.
-- One message-thread coordinator drains all 16 pad peaks, Main L/R and hit
-  mask once per tick; Rack and Mixer receive the same snapshot. Selection
-  and painting never drain meters. Hit activity is binary; the existing mask
-  does not provide actual MIDI velocity and no velocity telemetry is invented.
-- Sound/Sample share `PadControlBindings.h` with the donor editor: the same
-  ranges, choices, setters and value units. All five Sound host controls and
-  all structural/sample controls are retained. Sample A/B, async Load, Clear,
-  Library and file drop use the actual SampleLibrary. Native waveform trim
-  handles retain their captured pad/player while selection changes. Missing
-  files retain the previous assignment; completion after closing a view is safe.
-- The single Mixer has all 16 strips through horizontal scrolling, vertical
-  level faders, rotary pan/sends, mute/solo, requested-output/fallback labels,
-  actual pad/Main peaks and the existing Kit Level control. Kit Level retains
-  its pre-routing/all-outputs/new-triggers meaning. Compact mode hides sends;
-  expanded mode exposes them.
-- Reuses `libs/vox-ui` painting and controls without changing its API. Reuses
-  the real PatternEditor and SongStrip with scrollable adapters that preserve
-  their complete existing toolbars. There is no browser or parallel DSP.
-- Drums-local `DrumsDial` and `DrumsFader` implement metallic 52/34 px rotary
-  bodies, recessed tracks, pointers, unit readouts, bipolar zero-origin arcs,
-  focus/hover/disabled treatment and physical vertical fader caps. Input and
-  APVTS attachments stay native. Dial angles follow the real parameter skew,
-  including frequency ranges. No shared family API was modified. This is
-  native #135 implementation progress, not final visual acceptance.
-- Right dock tools reuse the real Generator, Library, Routing and Diagnostics
-  actions with narrow vertical layouts and bounded scrolling. Existing wide
-  layouts remain tested. Routing includes all 16 sequencer lane enables and
-  all nine destinations. Persistent Mode/Pattern selectors use real host
-  parameters. The one bottom Mixer switches Pads/Returns without creating a
-  second Mixer; delay/reverb returns, swing and accent remain automatable.
-- Generator role authoring exposes all 13 existing roles for all 16 pads.
-  Model proposals require explicit Apply/Cancel, refuse unresolved choices and
-  stale kit/role/restore contexts, and apply as one existing undo transaction.
-  Style-aware notices expose Assign and Use-pad actions. A stale duplicate
-  action refuses a transfer if a newly inserted earlier duplicate would still
-  shadow its target. MIDI notes are never remapped by role edits.
-- Generator reflects embedded custom definitions even when the factory enum
-  and amounts did not change. An explicit factory selection clears the custom
-  override. Both defects were reproduced by failing UI regressions before the
-  binding fix; no generator algorithm, DGEN format or factory ID was changed.
+## Production implementation
+
+- `createEditor()` uses `DrumsWorkspace`. The unpublished eight-page panel remains an
+  explicitly named donor test fixture. Its functional regressions still run; native
+  production tests independently write/read all 174 frozen host bindings and reopen
+  the actual production editor. No DSP, plugin/FUID/automation identity changes.
+- One physical 16-pad Rack has separate rubber HIT and SEL controls, Grid/List and real
+  kit labels. HIT uses the bounded audition queue at velocity 110 without selection.
+  Hit telemetry is binary, never invented MIDI velocity. One 30 Hz consumer distributes
+  a snapshot to the Rack and the single bottom Mixer.
+- Mixer: 16 physical level/pan/send/mute/solo strips, requested-output/fallback labels,
+  real pad/Main peaks, nine outputs, Kit Level's all-outputs/new-triggers meaning,
+  one Pads/Returns viewport, all FX returns, swing/accent and all 16 lane enables.
+  Drums-local metallic 52/34 px dials/fader caps retain actual native input/units/skew.
+- Sound/Sample and donor controls share canonical bindings. Sample A/B, async Load,
+  Clear/Library/drop and waveform trim use the existing sample engine. Active gestures
+  retain pad/player identity; missing files and closing before completion are tested.
+- Real Generator/roles/Library/Routing/Diagnostics views preserve role preview, explicit
+  Apply/Cancel, stale-proposal/duplicate refusal and one-step Undo. Embedded custom
+  definitions display correctly; choosing a factory clears the override. No note remap.
+- Side panels move between docks, tabs and up to three stacked groups, hide/reopen and
+  collapse to 26 px rails. Views are reparented, never copied. Empty sides disappear.
+  Central editors remain unique, support splits/focus; Mixer heights/bank persist.
+  Divider gestures commit only on release. Narrow fallback never rewrites saved intent.
+- Narrow Step/Song toolbars wrap. Only the dense Step timeline scrolls horizontally;
+  Song uses responsive readable bar columns. Sound/Sample height follows visible controls.
+- Native Step MIDI has fixed Pattern scope; Song has a direct Entire Song save/drag
+  handle for 16/32/64 bars. Both reuse the frozen exporter, existing MidiDragButton
+  click/drag state machine and unique per-instance/per-drag files. The native root
+  supplies the real drag container. Native Song hides the donor global scope selector.
+
+## Project, user and ephemeral state
+
+- DLAY v1: little-endian, <=2048 bytes, <=32 strictly ascending unique records, each
+  payload <=256 bytes; strict lengths, ranges, panel uniqueness and allowed zones.
+  SELECTION is appended as type 11. Type 2 is unassigned/opaque, not a size owner.
+  Unknown records survive committed edits. UIST remains the only 8-byte size record.
+- Processor ownership uses the existing settings lock. Restore publishes UI generation
+  and asynchronous notification after musical stores/parameters apply; editors unregister
+  safely. No Component mutation from host/audio callbacks. Save during drag uses the
+  last commit. Layout edits do not add musical Undo and mark non-parameter host state dirty.
+- DUIS is recognised/discarded, never migrated/written/retained as unknown. Only the
+  canonical three selection fields persist; donor page/export-scope is session-only.
+- Invalid v1 DLAY shows default Beatmaking and retains raw bytes until edit/reset,
+  **subject to the unresolved over-budget conflict below**. Future versions are opaque,
+  not misclassified as corrupt v1 merely because they exceed v1 size. Accepted future
+  bytes survive session edits; only an explicitly confirmed Reset replaces them.
+- Future opaque data must fit alongside worst-case music and preserved unknown sections
+  using the existing forward-safe VOXS budget. Excessive future input is refused
+  transactionally, never silently discarded. VOXS hard cap remains 1 MiB.
+- User workspaces: `userApplicationDataDirectory/ULTIMA VOX/VOX Drums/Workspaces/workspaces.json`;
+  `VOX_DRUMS_WORKSPACES` overrides the folder. JSON v1, <=32 names of 1-64 characters,
+  case-insensitive uniqueness, bounded file/base64/TLV input. Temp-file replacement,
+  .bad quarantine, factory presets and Save/Delete/Open-panel menus. Applying copies
+  DLAY into the project; projects never reference the user file.
+- Preset Load preserves layout. Reproduced Undo Load rollback of later DLAY/UIST edits
+  is fixed for all four musical preset types.
+- Shared editor maximum is 2560x1600; minimum 1040x700 unchanged. The opt-in Drums
+  `SuiteEditor::setPresentationSize` clamps to logical work area without writing UIST.
+  Real resize clears the override. Constructor constraint setup no longer replaces
+  requested size with minimum size. FX/Synth do not opt into presentation fallback.
+  Shared changes were coordinated in #156: comments
+  [7041795552](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7041795552) and
+  [7043092478](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7043092478).
+  FX/Synth branches and runner policy are untouched.
 
 ## Evidence and limits
 
-- The standalone model test first failed to compile because the new model
-  header did not exist, then passed after implementation. It covers pinned
-  object selection, invalid pad indices, all split/Mixer combinations, bounds,
-  overlap and narrow-window fallback.
-- Native tests exercise real processor audition/audio peaks, APVTS write and
-  readback, one balanced host gesture, selection during drag, KitStore binding,
-  one-consumer telemetry and unchanged project bytes under layout/rendering.
-  Sound/Sample controls are compared against the real donor controls for
-  range/step/units/choices, then exercised on a different pad and player B.
-  The external model-change test reproduced stale kick-only visibility and
-  passed after refresh was fixed. Tests decode a real WAV, drag trim across a
-  context change, reject a missing file without losing the buffer/reference,
-  and complete a pending load after closing the view. The GUI test owns an
-  event dispatcher so queued JUCE UI work can run between test operations;
-  production modal-loop configuration is unchanged.
-- Content sizes 1040x600, 1280x620, 1440x800 and 1600x900 correspond to the
-  required outer sizes after the current 72/28 frame. Tests render Grid/List
-  at 1/1.25/1.5/2 raster scales; this is **not** proof of host/OS DPI behavior.
-- Optional `VOX_WORKSPACE_SCREENSHOTS` writes replaceable PNG evidence from
-  the actual native component. Screenshots are not owner/DAW acceptance.
-- Linux uses GNU C++ 14.2, C++20 and verified JUCE 9.0.1 commit
-  `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`. Windows qualification belongs
-  to the exact published feature head and must be recorded in its PR.
-- Local targeted regression: 5/5 (model, native workspace, existing product,
-  candidate and samples), followed by 2/2 workspace tests after additional
-  pending-load lifetime and GUI-dispatch checks. Debug logs also report JUCE's
-  Linux 128-message wake queue assertions during bulk UI construction and
-  three static AudioFormatManager shutdown detector reports. These are not
-  Windows or DSP results; the inherited product GUI tests also emit queue
-  assertions. Functional exit codes passed; do not call these logs warning-free.
-- Tools/roles/custom-style packet: 3/3 model/native/candidate regression tests
-  passed (88.00 s; native 12.83 s, existing candidate 75.17 s). This includes
-  narrow-input bounds/overlap, real Pattern/return bindings, role preview,
-  stale-action refusal, one-step Undo and custom-definition selection.
-- Historical Windows qualification of the **first slice only**:
-  [44709428713](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44709428713),
-  job 136197113705, completed successfully. Raw logs: 34/34 serial + 8/8 gain
-  tests; native tests included; validator 47/47 for each of the three products.
-  PR head `6785f123f81b9e5e2ee40b4e1753f87133668197` and manifest checkout
-  `53fd3ecdbaed540124bb81556c9702c046856974` share tree
-  `762cd373b6d407ffc1a71fde9e07a722f99d41ec` (Git objects verified).
-  This is not qualification of later native commits or a production-editor
-  switch. New commits require their own normal PR workflow evidence.
+- JUCE `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8` (9.0.1), GNU C++14.2/C++20.
+  Codec/docking actions pass ASan/UBSan, including bounds, order, duplicate/misplaced
+  panels, opaque/future data, move/hide/rail/group limits.
+- Red/green regressions cover toolbar overflow, missing MIDI handles/container/scope,
+  constructor UIST reset, unrelated-divider ratio rewriting and Undo Load layout rollback.
+- Local increments: production 10/10 (267.02s); native docking 3/3 (15.19s); responsive/
+  state/real-mouse 3/3 (64.79s); T15/T23 and all-three shells 5/5 (121.31s).
+  Combined production/persistence/MIDI/future packet: **10/10 (287.08s)**, including
+  real Song/Pattern drag files and visible failure, accepted future growth, old corpus,
+  all 174 bindings and the three product shells. These are not Windows PASS.
+- T21: fixed encoder fixtures 602924 bytes + full DSTL upper bound 65584 =
+  **668508 / 753664 bytes**, including UIST/container, full 2048-byte DLAY and DROL.
+  The 736 KiB product reserve is unchanged.
+- Captures use actual native content at 1040x600, 1280x620, 1440x800, 1600x900 and
+  raster 1/1.25/1.5/2. They are **not OS/host DPI evidence**.
+- Linux Debug emits inherited JUCE wake-queue assertions during bulk UI construction and
+  static AudioFormatManager shutdown reports. Exit codes are recorded separately;
+  do not call these logs warning-free or diagnose them as Windows DSP failures.
+- Historical parent `351aa0a954d4b812304601b5c7dc4a9e9027be71`:
+  [Windows suite 44717551921](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44717551921),
+  job 136232641327: inspected 34/34 serial +8/8 gain, validator 47/47 per product.
+  Checkout `75b46a0128878b067a8d078546efbf19e7cd03c2` shares source tree
+  `ca2077fc02c686f5b19edf25e5c0b166ea6249a3`; Drums binary SHA256
+  `d47a27fae39b9b687426dc31fc64641c18155928edeaa62cb136825fe55d385b`.
+  Artifacts 14623431762 (listening), 14622434085 (suite/native).
+  **This historical result does not qualify the later production/persistence package.**
 
-This is a **candidate component under qualification**, not a claim that #127
-is complete. The production `createEditor()` still uses DrumsPanel until its
-entire functional inventory has been ported. Existing production and regression
-tests remain intact. No audio, state schema, frozen identity or host parameter
-ID was changed. This branch does not include unmerged StyleLibrary #153;
-its Windows results are separate evidence, not results for this native branch.
+## Open gates
 
-## Continue in the same PR
+1. **New policy conflict; owner answer pending.** #130 requires nonfatal invalid-DLAY
+   fallback plus exact invalid-byte retention until layout edit. A CRC-valid 968095-byte
+   VOXS with 900000 bytes of invalid DLAY v1 restores/saves exactly, but after valid
+   maximum pattern-grid growth saves zero bytes (`the state is too large to save`).
+   Both requirements cannot hold for arbitrary oversized raw under a fixed 1 MiB cap.
+   Required decision requested: recover music and replace only over-budget corrupt v1
+   layout with a diagnosed default, or reject that restore transactionally.
+   **No answer is recorded and no exception is implemented. Do not infer consent from
+   elapsed time or repeated automation.** This is distinct from future-version handling.
+2. Context-specific Inspector for steps/Song/sample remains unfinished. Pad follow/pin
+   works. Step/Song pins validate/preserve but currently show disabled/unavailable with
+   Unpin, instead of redirecting edits to another object.
+3. PARAM_LANES and SOUND_SECTIONS validate/preserve; complete graphical lanes and
+   collapsible-section presentation remain. Existing step/Sound controls still work.
+4. Complete keyboard/focus/scroll and actual Windows VST3 peer/content-scale plus
+   OS/host DPI 100/125/150/200% evidence. Raster snapshots are insufficient.
+5. Reconcile separate StyleLibrary #153 at live HEAD (currently `83c616d4`) before final
+   combined qualification. Preserve both implementations/parents; no silent merge/discard.
+6. Exact integrated-head Windows build/full suite/validator/artifact hashes, RT/state/
+   undo/Song/MIDI/nine-output gates; factory licensing/listening and one final owner
+   Cubase/REAPER pass. No integration/main/release ref changes or auto-merge.
 
-1. Finish context-specific Inspector behavior for steps/Song/sample and
-   responsive central toolbars; preserve every setting and undo behavior.
-2. Complete native presentation and all source/step/song workflow acceptance.
-3. Implement the bounded canonical layout/state contract from #130 section 14
-   and #127: project layout, per-user workspaces and ephemeral degradation stay
-   separate. Do not add DUIS migration/dual-write shims. Shared editor-size/API
-   changes require coordination with #156 before editing the common baseline.
-4. Switch production editor only after all existing functions are reachable in
-   the new workspace; replace the obsolete eight-page visual assertion with
-   stronger native workspace acceptance while retaining its functional tests.
-5. Run exact-head Windows full build/CTest/validator, actual OS/host DPI at
-   100/125/150/200%, all four sizes, state/undo/Song/MIDI/9-output/RT gates.
-   Integrate only through TL decision; one final owner Cubase/REAPER pass.
-
-Visual Gate 1 is already accepted in #127 comment 6980638479; do not reopen
-browser polishing or request another visual approval loop. Arena owns #156 FX
-and #160 browser work. Other release gates (factory licences/listening,
-96 kHz headroom and final combined candidate) remain in #141/#152.
+Gate 1 is accepted in #127 comment 6980638479. Do not reopen browser polishing or
+another owner visual-approval loop. Arena owns #156 FX and #160 browser work.

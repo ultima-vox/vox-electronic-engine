@@ -12,6 +12,9 @@ int main()
         if (! ok) { std::printf ("FAIL workspace: %s\n", message); ++failures; }
     };
     Selection selection;
+    check (fitToDisplay (1600, 1000, 1366, 768) == std::pair { 1366, 768 }, "T15 logical work area clamps the presentation");
+    check (fitToDisplay (1600, 1000, 3840, 2160) == std::pair { 1600, 1000 }, "T15 large display keeps the saved intent");
+    check (fitToDisplay (1600, 1000, 800, 600) == std::pair { 1040, 700 }, "T15 the supported minimum is not silently lowered");
     check (selection.selectPad (3) && selection.inspectorPad() == 3, "Inspector follows selection");
     selection.setPinned (true);
     check (selection.selectPad (12) && selection.pad() == 12 && selection.inspectorPad() == 3,
@@ -46,6 +49,18 @@ int main()
     extreme.split = Split::horizontal;
     const auto narrow = arrange (1040, 600, extreme);
     check (narrow.primary.w >= 380 && narrow.secondary.empty(), "small windows use one editor, not clipped split panes");
+    Layout hidden;
+    hidden.leftVisible = false; hidden.rightRail = true;
+    const auto rails = arrange (1040, 600, hidden);
+    check (rails.left.empty() && rails.right.w == 26 && rails.primary.w >= 380, "hidden docks and real rails release central space");
+    hidden.leftVisible = true; hidden.rightRail = false; hidden.leftWidth = hidden.rightWidth = 640;
+    hidden.expandedHeight = 560; hidden.mixer = MixerSize::expanded;
+    const auto degraded = arrange (1040, 600, hidden);
+    check (degraded.primary.w >= 380 && degraded.primary.h >= 160 && hidden.leftWidth == 640 && hidden.expandedHeight == 560,
+           "oversized preferences degrade within bounds without changing saved intent");
+    hidden.split = Split::vertical; hidden.maximized = 1;
+    const auto maximized = arrange (1040, 600, hidden);
+    check (maximized.primary.empty() && ! maximized.secondary.empty(), "maximized secondary remains available even in a forced narrow layout");
     std::printf ("Workspace model: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
