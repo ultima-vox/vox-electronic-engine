@@ -2072,13 +2072,13 @@ void testModHost()
     copy->prepareToPlay (48000.0, 128);
     copy->requestPreview (36);
     juce::AudioBuffer<float> heard (2, 128);
-    juce::MidiBuffer none;
-    copy->processBlock (heard, none);
+    juce::MidiBuffer previewMidi;
+    copy->processBlock (heard, previewMidi);
     check (copy->monoGate (0), "Hear starts the audition note");
     bool heardFinite = true;
     for (int i = 0; i < 200; ++i)
     {
-        copy->processBlock (heard, none);
+        copy->processBlock (heard, previewMidi);
         for (int sample = 0; sample < 128; ++sample)
             heardFinite = heardFinite && std::isfinite (heard.getSample (0, sample));
     }
