@@ -310,6 +310,11 @@ target_include_directories(suite_fx_formant_tests PRIVATE ${PROJECT_SOURCE_DIR}/
 add_test(NAME suite_fx_formant_tests COMMAND suite_fx_formant_tests)
 set_tests_properties(suite_fx_formant_tests PROPERTIES LABELS suite)
 
+add_executable(suite_fx_family_differentiation_tests FxFamilyDifferentiationTests.cpp)
+target_include_directories(suite_fx_family_differentiation_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_family_differentiation_tests COMMAND suite_fx_family_differentiation_tests)
+set_tests_properties(suite_fx_family_differentiation_tests PROPERTIES LABELS suite)
+
 add_executable(suite_fx_program_codec_tests FxProgramCodecTests.cpp)
 target_include_directories(suite_fx_program_codec_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_program_codec_tests COMMAND suite_fx_program_codec_tests)

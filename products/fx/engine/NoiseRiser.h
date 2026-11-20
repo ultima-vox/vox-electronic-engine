@@ -655,8 +655,21 @@ private:
                 // excited by a tonal oscillator and a small noise component.
                 const double elapsed = t * layerDuration;
                 const double frequency = std::min(layer.tunedHz * pitchRatio, rate_ * 0.4);
-                const double input = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise;
-                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                // A single sine only excites a vowel band when one of its
+                // harmonics happens to land there, so the level swung by about
+                // 16 dB across the keyboard. A polyBLEP saw fills every band
+                // while the BLEP edge keeps the excitation band-limited; the
+                // noise share keeps the valleys between formants alive, and
+                // the light damping above leaves those valleys audibly dark.
+                const double dtSaw = frequency / rate_;
+                const auto blep = [](double phase, double dt) {
+                    if (phase < dt) { const double x = phase / dt; return x + x - x * x - 1.0; }
+                    if (phase > 1.0 - dt) { const double x = (phase - 1.0) / dt; return x * x + x + x + 1.0; }
+                    return 0.0;
+                };
+                const double saw = 2.0 * layer.phase - 1.0 - blep(layer.phase, dtSaw);
+                const double input = 0.30 * saw + 0.70 * noise;
+                layer.phase += dtSaw; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 constexpr std::array<double, 3> centers {0.25, 0.48, 0.70};
                 constexpr std::array<double, 3> depths {0.11, 0.08, 0.06};
                 source = 0.0;
@@ -665,7 +678,10 @@ private:
                     const double pos = (centers[formant] + depths[formant] * morph + character*(static_cast<double>(formant)-1)*.11) * tableIntervals;
                     const auto gi = static_cast<std::size_t>(pos);
                     const double g = svfG_[gi] + (pos - static_cast<double>(gi)) * (svfG_[gi+1] - svfG_[gi]);
-                    constexpr double damping = 0.32;
+                    // A little more resonance than the first version: the
+                    // three vowel peaks become audible as peaks (~5 dB above
+                    // the valleys) without approaching instability.
+                    constexpr double damping = 0.25;
                     const double a1 = 1.0 / (1.0 + g * (g + damping));
                     const double v3 = input - layer.formant2[formant];
                     const double v1 = a1 * layer.formant1[formant] + g * a1 * v3;
@@ -715,10 +731,18 @@ private:
                 const auto at = static_cast<std::size_t>(pos), next = std::min(at + 1, tableIntervals);
                 const double f = pos - static_cast<double>(at);
                 const auto read = [at, next, f] (const auto& table) { return table[at] + f * (table[next] - table[at]); };
-                const double frequency = std::min(layer.tunedHz * pitchRatio * (1.0 + 3.0 * read(impactPitch_)), 0.4 * rate_);
-                const double exciter = 0.7 * std::sin(6.283185307179586 * layer.phase) + 0.3 * noise * read(impactNoise_);
-                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
+                // Cap the tonal exciter below the aliasing region: above note
+                // ~119 the uncapped version ran its tone into the resonant
+                // filter's stop of interest and the event nearly went silent.
+                const double frequency = std::min(layer.tunedHz * pitchRatio * (1.0 + 3.0 * read(impactPitch_)),
+                                                  std::min(0.40 * rate_, 6000.0));
                 const double sweep = std::clamp(1.0 - std::abs(elapsed / 0.15 - 1.0), 0.0, 1.0);
+                // A short noise skirt keeps the resonant sweep excited for the
+                // full 300 ms rather than only for the 8 ms tone burst.
+                const double skirt = 1.0 - sweep;
+                const double exciter = 0.6 * std::sin(6.283185307179586 * layer.phase) +
+                                       0.25 * noise * read(impactNoise_) + 0.5 * noise * skirt * skirt;
+                layer.phase += frequency / rate_; if (layer.phase >= 1.0) layer.phase -= 1.0;
                 const double gp = std::min(sweep * tableIntervals, std::nextafter(static_cast<double>(tableIntervals), 0.0));
                 const auto gi = static_cast<std::size_t>(gp);
                 const double g = svfG_[gi] + (gp - static_cast<double>(gi)) * (svfG_[gi+1] - svfG_[gi]);
