@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Free Delay Amount motion](FREE_DELAY_MOTION_20261119.md): fractional moving read reduces measured staircase error while nine stationary fixtures stay byte-identical. Existing Delay automation retains its meaning but can sound different while moving. No state/host-ID change; nonlinear aliasing, FX-T18, Windows and DAWs remain open.
+
 - [Glitch checkpoint](GLITCH_SOURCE_20261119.md), [TL acceptance for development](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7034953740), and [1.0 user compatibility notes](USER_NOTES_1_0.md): **FPRG v8 is forward-only.** The new reader accepts v1–v7; the writer still emits v6/v7 for a Program with all-default Glitch settings. An authored v8 Glitch Program (including nested project/A-B state or portable `.voxfx`) is rejected by readers capped at v7. Do not silently down-convert an edited Program; retain older project/preset backups. The portable size limit is still 64 KiB. No validator, DAW, release or owner approval follows.
 
 - [Engineering delta](ENGINEERING_DELTA_20261119.md): bounded granular admission, layer drag restore guard, a single requirement/evidence map, and the frozen 232-cue private transfer index. [Windows gate](WINDOWS_ENGINEERING_GATE_20261119.md) prepared, not dispatched; FX-T18 remains open. The preceding clock/tail checkpoint adds [measured FX-tail and bar-clock feedback](HOST_CLOCK_AND_TAIL_20261119.md), not Windows/DAW qualification. The owner approved [create-only Save](CREATE_ONLY_SAVE_20261119.md); local implementation is staged, Windows and DAW proof are pending. TL follow-up adds Windows filesystem fixtures and 5.1 syntax/inventory preflight tooling; neither was run on Windows.
