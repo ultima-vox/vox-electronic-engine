@@ -1,6 +1,6 @@
 #pragma once
 #include "PortablePreset.h"
-#include "FileExport.h"
+#include "PresetFileCommit.h"
 #include <thread>
 
 namespace vox::fx::library {
@@ -27,8 +27,7 @@ inline bool write(const juce::File& file,const portable::Sound& sound,const port
     try {
         if(!file.hasFileExtension("voxfx")||file.isSymbolicLink())return false;
         std::vector<std::byte> bytes;if(!portable::encode(sound,bytes,tags))return false;
-        auto payload=std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),bytes.size());
-        return fileexport::writeBytes(file,{payload.begin(),payload.end()});
+        return writePresetBytes(file,bytes);
     }catch(...){return false;}
 }
 // Worker-only directory scanning. The message thread sees only bounded

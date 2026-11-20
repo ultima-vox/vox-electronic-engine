@@ -422,7 +422,7 @@ add_test(NAME suite_fx_generator_state_tests COMMAND suite_fx_generator_state_te
 set_tests_properties(suite_fx_generator_state_tests PROPERTIES LABELS suite)
 
 add_executable(suite_fx_file_export_tests FxFileExportTests.cpp ${PROJECT_SOURCE_DIR}/products/fx/engine/FileCommit.cpp)
-target_link_libraries(suite_fx_file_export_tests PRIVATE juce::juce_core)
+target_link_libraries(suite_fx_file_export_tests PRIVATE juce::juce_cryptography)
 target_compile_definitions(suite_fx_file_export_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_include_directories(suite_fx_file_export_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_file_export_tests COMMAND suite_fx_file_export_tests)

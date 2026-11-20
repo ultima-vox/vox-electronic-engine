@@ -1244,11 +1244,7 @@ void FxPanel::choosePreset(bool saving){
             try {
                 if(file.hasFileExtension("voxfx")&&saving){
                     std::vector<std::byte> bytes;
-                    if(safe->processor_.encodePortablePreset(bytes)){
-                        std::vector<std::uint8_t> data;data.reserve(bytes.size());
-                        for(auto b:bytes)data.push_back(std::to_integer<std::uint8_t>(b));
-                        ok=fileexport::writeBytes(file,data);
-                    }
+                    if(safe->processor_.encodePortablePreset(bytes))ok=library::writePresetBytes(file,bytes);
                 }else if(file.hasFileExtension("voxfx")&&file.getSize()>0&&file.getSize()<=static_cast<juce::int64>(portable::maxBytes)){
                     juce::FileInputStream input(file);
                     if(input.openedOk()){
@@ -1310,10 +1306,9 @@ void FxPanel::chooseExportFile(fileexport::Kind kind,SaveResult accept)
     };
     try {
         if(savePicker_){savePicker_(kind,std::move(complete));return;}
-        exportChooser_=std::make_unique<juce::FileChooser>(wav?"Export VOX FX stereo WAV":"Export trigger pattern as MIDI",
+        exportChooser_=std::make_unique<juce::FileChooser>(wav?"Export VOX FX stereo WAV to a new file":"Export trigger pattern as a new MIDI file",
             juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(wav?"VOX FX.wav":"VOX FX Pattern.mid"),"*."+extension);
-        exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
-            juce::FileBrowserComponent::warnAboutOverwriting,
+        exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles,
             [complete=std::move(complete)](const juce::FileChooser& chooser){complete(chooser.getResult());});
     } catch (...) {
         if(safe!=nullptr&&safe->exportChooserTicket_==ticket){
@@ -1487,6 +1482,7 @@ void FxPanel::timerCallback()
                 format+" drag preparation failed","Could not write a temporary export file. Save to a different location instead.");
         } else juce::AlertWindow::showMessageBoxAsync(ok?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
             format+(ok?" exported":" export failed"),ok?(wav?"The captured audio was exported.":"The captured trigger pattern and tempo were exported."):
+            done->result==fileexport::Result::destinationExists?"A file or folder already exists at this path. Choose another name or location.":
             "Could not render or write the selected file.");
     }
     refreshExportControls();

@@ -487,7 +487,6 @@ void checkPendingExportLifecycle() {
     const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-export-lifecycle","",false);
     check(dir.createDirectory().wasOk(),"lifecycle test directory");
     const auto path=dir.getChildFile("during-save.wav");
-    check(path.replaceWithText("old destination"),"prepare overwrite sentinel");
     check(fx->startWavExport(capture,path)&&fx->fileExportStatus()->result==fileexport::Result::running,"export pending at session save");
     bool hostSave=false,refused=false;
     std::thread host([&]{
@@ -496,6 +495,14 @@ void checkPendingExportLifecycle() {
                 !fx->startWavExport(capture,dir.getChildFile("off-thread.wav"));
     });host.join();
     check(hostSave&&refused,"host-thread save excludes export job; job controls refuse off-message access");
+    const auto waitForRender=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    auto rendering=fx->fileExportStatus();
+    while(rendering&&rendering->result==fileexport::Result::running&&rendering->progress==0&&
+          std::chrono::steady_clock::now()<waitForRender){
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));rendering=fx->fileExportStatus();
+    }
+    check(rendering&&rendering->result==fileexport::Result::running&&rendering->progress>0&&
+          rendering->progress<1&&!path.exists(),"WAV render is active before cancellation; destination is still absent");
     const bool accepted=fx->cancelFileExport(fileexport::Kind::wav);
     const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
     std::optional<fileexport::Completion> result;
@@ -503,12 +510,12 @@ void checkPendingExportLifecycle() {
         result=fx->takeFileExportResult();
         if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    check(accepted&&result&&result->kind==fileexport::Kind::wav&&result->result==fileexport::Result::cancelled&&path.loadFileAsString()=="old destination",
-          "controller cancellation preserves existing WAV target");
+    check(accepted&&result&&result->kind==fileexport::Kind::wav&&result->result==fileexport::Result::cancelled&&!path.exists(),
+          "controller cancellation leaves the new WAV path absent");
     const auto unloadPath=dir.getChildFile("during-unload.wav");
     check(fx->startWavExport(std::move(capture),unloadPath),"start long render before processor unload");
     fx.reset();
-    check(!unloadPath.exists()&&dir.findChildFiles(juce::File::findFiles,false).size()==1,
+    check(!unloadPath.exists()&&dir.findChildFiles(juce::File::findFilesAndDirectories,false).isEmpty(),
           "processor destruction cancels, joins and leaves no partial export");
     dir.deleteRecursively();
 }
@@ -532,7 +539,7 @@ void checkMidiExportLifecycle() {
     const auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-midi-export","",false);
     check(dir.createDirectory().wasOk(),"create MIDI export test directory");
     const auto target=dir.getChildFile("pattern.mid");
-    check(target.replaceWithText("old file")&&!fx->startMidiExport(snapshot,9.,target)&&
+    check(!fx->startMidiExport(snapshot,9.,target)&&
           !fx->startMidiExport(snapshot,120.,dir.getChildFile("wrong.wav")),"reject invalid tempo or extension before starting a file job");
     check(fx->startMidiExport(snapshot,133.75,target,holdFirstEvent,&gate),"processor owns MIDI job");
     {
@@ -562,8 +569,8 @@ void checkMidiExportLifecycle() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     const auto duringSave=fx->fileExportStatus();
     check(hostFinished.load(std::memory_order_acquire)&&duringSave&&duringSave->kind==fileexport::Kind::midi&&
-          duringSave->result==fileexport::Result::running&&target.loadFileAsString()=="old file",
-          "host save returns while the MIDI encoder is blocked and the old destination is intact");
+          duringSave->result==fileexport::Result::running&&!target.exists(),
+          "host save returns while the MIDI encoder is blocked and no file has been published");
     {
         std::lock_guard lock(gate.mutex);gate.released=true;
     }
@@ -631,6 +638,29 @@ void checkExportChooserReentry() {
     check(result&&result->kind==Kind::midi&&result->result==fileexport::Result::success&&!duplicate.exists()&&
           target.loadFileAsData(actual)&&actual.getSize()==expected.size()&&std::memcmp(actual.getData(),expected.data(),expected.size())==0,
           "confirmed picker exports the pre-picker Pattern exactly once despite later edits");
+    const auto wait=[&]{std::optional<fileexport::Completion> next;
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!(next=fx->takeFileExportResult())&&std::chrono::steady_clock::now()<until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return next;
+    };
+    for(const auto format:{Kind::midi,Kind::wav}){
+        const bool wav=format==Kind::wav;
+        const auto occupied=wav?dir.getChildFile("occupied.wav"):target;
+        if(wav)check(occupied.replaceWithText("original WAV destination"),"seed a WAV destination selected in the picker");
+        juce::MemoryBlock before;check(occupied.loadFileAsData(before),"read incumbent before Save retry");
+        if(wav)wavRequest();else midiClick();
+        confirm(occupied);
+        const auto conflict=wait();juce::MemoryBlock after;
+        check(conflict&&conflict->kind==format&&conflict->result==fileexport::Result::destinationExists&&
+              occupied.loadFileAsData(after)&&after==before,"confirmed existing path reports a collision and preserves bytes");
+        const auto fresh=dir.getChildFile(wav?"new file.wav":"new file.mid");
+        if(wav)wavRequest();else midiClick();
+        confirm(fresh);
+        const auto retry=wait();
+        check(retry&&retry->kind==format&&retry->result==fileexport::Result::success&&fresh.getSize()>0,
+              "explicit Save to a different filename succeeds; no automatic retry");
+    }
     dir.deleteRecursively();
 }
 

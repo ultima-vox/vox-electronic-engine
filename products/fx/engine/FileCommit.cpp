@@ -1,4 +1,7 @@
 #include "FileCommit.h"
+#include "PresetFileCommit.h"
+#include <array>
+#include <cstdint>
 
 #if JUCE_WINDOWS
  #ifndef NOMINMAX
@@ -26,7 +29,54 @@ bool createPrivateDirectory(const juce::File& directory) {
 #endif
 }
 
-TargetObservation observeTarget(const juce::File& file) {
+TargetState observeTarget(const juce::File& file) {
+    if(file==juce::File{})return TargetState::unavailable;
+    const auto& path=file.getFullPathName();
+#if JUCE_WINDOWS
+    // Alternate data streams would modify an existing file's container, not
+    // create a normal new file. A colon is reserved in every component other
+    // than a drive prefix.
+    const auto withoutDrive=path.length()>1&&path[1]==':'?path.substring(2):path;
+    if(withoutDrive.containsChar(':'))return TargetState::unavailable;
+    if(::GetFileAttributesW(path.toWideCharPointer())!=INVALID_FILE_ATTRIBUTES)return TargetState::occupied;
+    const auto error=::GetLastError();
+    return (error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND)?TargetState::absent:TargetState::unavailable;
+#else
+    struct stat info{};
+    if(::lstat(path.toRawUTF8(),&info)==0)return TargetState::occupied;
+    return errno==ENOENT?TargetState::absent:TargetState::unavailable;
+#endif
+}
+
+PublishResult publishNewFile(const juce::File& staged,const juce::File& destination) {
+    const auto& from=staged.getFullPathName();
+    const auto& to=destination.getFullPathName();
+#if JUCE_WINDOWS
+    // No MOVEFILE_REPLACE_EXISTING and no MOVEFILE_COPY_ALLOWED.
+    if(::MoveFileExW(from.toWideCharPointer(),to.toWideCharPointer(),0)!=0)return PublishResult::published;
+    const auto error=::GetLastError();
+    // Some existing targets (e.g. directories) report access denied. The
+    // observation after failure is used for the message, never for a retry.
+    return error==ERROR_ALREADY_EXISTS||error==ERROR_FILE_EXISTS||observeTarget(destination)==TargetState::occupied
+        ?PublishResult::occupied:PublishResult::failure;
+#else
+    // link(2) publishes complete bytes or fails if the name is already in
+    // use. Unsupported filesystems fail closed; no rename or copy fallback.
+    if(::link(from.toRawUTF8(),to.toRawUTF8())==0)return PublishResult::published;
+    return errno==EEXIST?PublishResult::occupied:PublishResult::failure;
+#endif
+}
+}
+
+namespace vox::fx::library {
+namespace {
+enum class TargetState { absent, regular, blocked };
+struct TargetObservation {
+    TargetState state=TargetState::blocked;
+    std::array<std::uint64_t,8> revision{};
+    bool operator==(const TargetObservation&) const = default;
+};
+TargetObservation observePresetTarget(const juce::File& file) {
     if(file==juce::File{})return {};
     const auto& path=file.getFullPathName();
 #if JUCE_WINDOWS
@@ -63,18 +113,28 @@ TargetObservation observeTarget(const juce::File& file) {
 #endif
 }
 
-bool commitFile(const juce::File& staged,const juce::File& destination,bool replaceExisting) {
-    const auto& from=staged.getFullPathName();
-    const auto& to=destination.getFullPathName();
+} // namespace
+
+bool writePresetBytes(const juce::File& target,std::span<const std::byte> payload) {
+    if(!target.hasFileExtension("voxfx")||payload.empty())return false;
+    const auto original=observePresetTarget(target);
+    if(original.state==TargetState::blocked)return false;
+    juce::TemporaryFile temporary(target);
+    {
+        juce::FileOutputStream stream(temporary.getFile());
+        if(!stream.openedOk()||!stream.write(payload.data(),payload.size()))return false;
+        stream.flush();if(stream.getStatus().failed())return false;
+    }
+    if(temporary.getFile().getSize()!=static_cast<juce::int64>(payload.size()))return false;
+    if(original.state==TargetState::absent)return fileexport::detail::publishNewFile(temporary.getFile(),target)==fileexport::detail::PublishResult::published;
+    // Keep the pre-existing best-effort preset tag/edit guard. This is not
+    // used by audio or SMF and is not an atomic identity comparison.
+    if(observePresetTarget(target)!=original)return false;
+    const auto& from=temporary.getFile().getFullPathName();const auto& to=target.getFullPathName();
 #if JUCE_WINDOWS
-    // No MOVEFILE_COPY_ALLOWED: a failed same-volume move must stay a failure.
-    return ::MoveFileExW(from.toWideCharPointer(),to.toWideCharPointer(),
-                        replaceExisting?MOVEFILE_REPLACE_EXISTING:0)!=0;
+    return ::MoveFileExW(from.toWideCharPointer(),to.toWideCharPointer(),MOVEFILE_REPLACE_EXISTING)!=0;
 #else
-    if(replaceExisting)return ::rename(from.toRawUTF8(),to.toRawUTF8())==0;
-    // link(2) publishes complete bytes without a check-then-rename race.
-    // Filesystems without hard-link support fail closed, with no copy fallback.
-    return ::link(from.toRawUTF8(),to.toRawUTF8())==0;
+    return ::rename(from.toRawUTF8(),to.toRawUTF8())==0;
 #endif
 }
 }

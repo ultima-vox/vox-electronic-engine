@@ -6,9 +6,9 @@
 #include <thread>
 
 namespace vox::fx::fileexport {
-// The cancel/replace race is resolved before calling into the filesystem.
-// Cancellation accepted before commit guarantees no replacement. Once commit
-// starts, its actual success/failure wins; there is no rollback of a rename.
+// The cancel/publish race is resolved before calling into the filesystem.
+// Cancellation accepted before commit guarantees no publication. Once commit
+// starts, its actual success/failure wins; there is no rollback of a published file.
 class Cancellation {
 public:
     bool request() noexcept {
@@ -40,27 +40,40 @@ private:
 using WriteObserver=void(*)(void*,std::size_t) noexcept;
 using EncodeObserver=void(*)(void*,std::size_t) noexcept;
 
-// Observe before rendering. New-file commits remain atomic no-replace.
-// Existing-file commits reject an observed change before the native move;
-// there is still a race between final observation and replacement.
+enum class Result { running, success, failure, cancelled, destinationExists };
+
+// Observe before rendering for diagnostics and to avoid costly work. The
+// final OS operation is always no-replace even when this saw an absent path.
 struct Destination {
     juce::File file;
-    detail::TargetObservation original;
-    bool canWrite() const noexcept { return original.state!=detail::TargetState::blocked; }
-    bool replaceExisting() const noexcept { return original.state==detail::TargetState::regular; }
+    detail::TargetState original;
     static Destination observe(const juce::File& file) { return {file,detail::observeTarget(file)}; }
+    Result rejection() const noexcept {
+        if(original==detail::TargetState::occupied)return Result::destinationExists;
+        return original==detail::TargetState::absent?Result::running:Result::failure;
+    }
 };
 
-// Off the audio thread. Keep the staging file beside the destination. Only a
-// complete, closed write can enter commit; failed publication is not retried
-// via a copy. These are publication semantics, not crash-durability guarantees.
-inline bool writeBytesTo(const Destination& destination,const std::vector<std::uint8_t>& bytes,
-                         Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
-    if((cancel&&cancel->cancelled())||bytes.empty()||!destination.canWrite())return false;
-    juce::TemporaryFile temporary(destination.file);
+// Off the audio thread. An exclusively created sibling directory gives the
+// stage its own pathname. Only a complete, closed file can enter publication.
+// This is a name-publication guarantee, not a crash-durability guarantee.
+inline Result writeBytesTo(const Destination& destination,const std::vector<std::uint8_t>& bytes,
+                           Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
+    if(cancel&&cancel->cancelled())return Result::cancelled;
+    if(const auto rejected=destination.rejection();rejected!=Result::running)return rejected;
+    if(bytes.empty())return Result::failure;
+    struct Stage {
+        juce::File directory,file;
+        bool owned=false;
+        ~Stage(){if(owned){file.deleteFile();directory.deleteFile();}}
+    } stage;
+    stage.directory=destination.file.getParentDirectory().getChildFile(".vox-fx-export-"+juce::Uuid().toString());
+    stage.file=stage.directory.getChildFile("payload");
+    stage.owned=detail::createPrivateDirectory(stage.directory);
+    if(!stage.owned)return Result::failure;
     bool written=false;
     {
-        juce::FileOutputStream stream(temporary.getFile());
+        juce::FileOutputStream stream(stage.file);
         written=stream.openedOk();
         for(std::size_t offset=0;written&&offset<bytes.size()&&!(cancel&&cancel->cancelled());){
             const auto count=std::min<std::size_t>(16384,bytes.size()-offset);
@@ -69,18 +82,19 @@ inline bool writeBytesTo(const Destination& destination,const std::vector<std::u
         }
         stream.flush();written=written&&stream.getStatus().wasOk();
     }
-    // JUCE flush can report an incomplete buffered write only through the
-    // final file size on some platforms. Never publish a truncated file.
-    return written&&temporary.getFile().getSize()==static_cast<juce::int64>(bytes.size())&&
-           (!destination.replaceExisting()||detail::observeTarget(destination.file)==destination.original)&&
-           (!cancel||cancel->beginCommit())&&detail::commitFile(temporary.getFile(),destination.file,destination.replaceExisting());
+    // JUCE can report a short buffered write through file size only.
+    if(!written||stage.file.getSize()!=static_cast<juce::int64>(bytes.size()))return Result::failure;
+    if(cancel&&!cancel->beginCommit())return Result::cancelled;
+    const auto committed=detail::publishNewFile(stage.file,destination.file);
+    if(committed==detail::PublishResult::published)return Result::success;
+    if(committed==detail::PublishResult::occupied)return Result::destinationExists;
+    return Result::failure;
 }
 inline bool writeBytes(const juce::File& target,const std::vector<std::uint8_t>& bytes,
                        Cancellation* cancel=nullptr,WriteObserver observe=nullptr,void* observerContext=nullptr) {
     if(cancel&&cancel->cancelled())return false;
-    return writeBytesTo(Destination::observe(target),bytes,cancel,observe,observerContext);
+    return writeBytesTo(Destination::observe(target),bytes,cancel,observe,observerContext)==Result::success;
 }
-enum class Result { running, success, failure, cancelled };
 enum class Kind { wav, midi };
 enum class Purpose { save, drag };
 struct Completion { Kind kind; Result result; Purpose purpose; };
@@ -101,7 +115,7 @@ public:
         return payload;
     }
     ~DragFile() {
-        if(ownsDirectory_&&!offered){file.deleteFile();directory_.deleteFile();}
+        if(ownsDirectory_&&!offered){if(ownsPayload_)file.deleteFile();directory_.deleteFile();}
     }
     const Kind kind;
     const juce::File file;
@@ -110,29 +124,28 @@ public:
     std::uint64_t sequence=0;      // message-thread only; zero is reserved
     std::atomic<std::uint64_t> activeTicket{0}; // native completion may be asynchronous
 private:
+    friend class Job;
     DragFile(Kind k,const juce::File& directory)
         : kind(k),file(directory.getChildFile(k==Kind::wav?"VOX FX.wav":"VOX FX Pattern.mid")),directory_(directory) {}
     const juce::File directory_;
-    bool ownsDirectory_=false;
+    bool ownsDirectory_=false,ownsPayload_=false;
 };
 
-inline bool renderTo(const offline::Capture& capture,const Destination& destination,
-                     Cancellation& cancel,std::atomic<float>& progress,WriteObserver observe,void* context) {
+inline Result renderTo(const offline::Capture& capture,const Destination& destination,
+                       Cancellation& cancel,std::atomic<float>& progress,WriteObserver observe,void* context) {
+    if(const auto rejected=destination.rejection();rejected!=Result::running)return rejected;
     std::vector<std::uint8_t> bytes;
-    return offline::renderWav(capture,bytes,&cancel.renderFlag(),&progress)&&
-           writeBytesTo(destination,bytes,&cancel,observe,context);
+    if(!offline::renderWav(capture,bytes,&cancel.renderFlag(),&progress))return Result::failure;
+    return writeBytesTo(destination,bytes,&cancel,observe,context);
 }
 inline Result renderFile(const offline::Capture& capture,const juce::File& target,
                          Cancellation& cancel,std::atomic<float>& progress,
                          WriteObserver observe=nullptr,void* observerContext=nullptr) {
-    bool success=false;
+    auto outcome=Result::failure;
     try {
-        if(!cancel.cancelled()){
-            const auto destination=Destination::observe(target);
-            success=destination.canWrite()&&renderTo(capture,destination,cancel,progress,observe,observerContext);
-        }
-    } catch(...) { success=false; }
-    return success?Result::success:(cancel.sealFailure()?Result::cancelled:Result::failure);
+        if(!cancel.cancelled())outcome=renderTo(capture,Destination::observe(target),cancel,progress,observe,observerContext);
+    } catch(...) { outcome=Result::failure; }
+    return outcome!=Result::success&&cancel.sealFailure()?Result::cancelled:outcome;
 }
 class Job {
 public:
@@ -147,10 +160,11 @@ public:
         : Job(Kind::midi,purpose,std::move(target),std::move(retired),
           [snapshot,bpm,observe,context,observeEncoding](const Destination& destination,Cancellation& cancel,std::atomic<float>&){
               std::vector<std::uint8_t> bytes;
-              return pattern::exportMidiChecked(snapshot,bpm,bytes,[&](std::size_t count) noexcept {
+              if(!pattern::exportMidiChecked(snapshot,bpm,bytes,[&](std::size_t count) noexcept {
                   if(observeEncoding&&count!=0)observeEncoding(context,count);
                   return !cancel.cancelled();
-              })&&writeBytesTo(destination,bytes,&cancel,observe,context);
+              }))return Result::failure;
+              return writeBytesTo(destination,bytes,&cancel,observe,context);
           }) {}
     Job(const Job&)=delete;
     Job& operator=(const Job&)=delete;
@@ -170,24 +184,26 @@ private:
         : kind_(kind),purpose_(purpose),
           worker_([this,target=std::move(target),retired=std::move(retired),work=std::optional<Work>(std::move(work))]() mutable {
               retired.reset();
-              bool success=false;
+              auto outcome=Result::failure;
               try {
                   if(!cancel_.cancelled()){
                       if(purpose_==Purpose::drag){
                           auto payload=DragFile::create(kind_,target);
-                          if(payload&&(*work)(Destination{payload->file,{detail::TargetState::absent}},cancel_,progress_)){
-                              drag_=std::move(payload);success=true;
+                          if(payload){
+                              outcome=(*work)(Destination{payload->file,detail::TargetState::absent},cancel_,progress_);
+                              if(outcome==Result::success){payload->ownsPayload_=true;drag_=std::move(payload);}
                           }
                       } else {
                           const auto destination=Destination::observe(target);
-                          success=destination.canWrite()&&(*work)(destination,cancel_,progress_);
+                          outcome=destination.rejection();
+                          if(outcome==Result::running)outcome=(*work)(destination,cancel_,progress_);
                       }
                   }
-              } catch(...) { success=false; }
+              } catch(...) { outcome=Result::failure; }
               // Retire captured data and unsuccessful staging before publication.
               work.reset();
-              if(success)progress_.store(1.f,std::memory_order_relaxed);
-              const auto outcome=success?Result::success:(cancel_.sealFailure()?Result::cancelled:Result::failure);
+              if(outcome==Result::success)progress_.store(1.f,std::memory_order_relaxed);
+              else if(cancel_.sealFailure())outcome=Result::cancelled;
               result_.store(outcome,std::memory_order_release);
           }) {}
     const Kind kind_;
