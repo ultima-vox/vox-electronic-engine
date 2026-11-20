@@ -1,0 +1,34 @@
+Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI
+Timing environment: Linux; CPU Intel(R) Xeon(R) Processor @ 2.60GHz; logical CPUs 2; 64-bit
+Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation
+Allocation probe available: yes
+Lock probe: linked pthread mutex/rwlock entry points
+Random MIDI without Pattern
+44100 Hz 64 samples 1 initial voices: peak 0.002116 DC 0.0000015 grains 0 alloc 0 lock 0 p50 14.40 p95 23.30 p99 43.30 max 47.36 us
+  thread max 58.46 us; at wall max 47.36 us thread 58.46 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 14.24 us
+44100 Hz 128 samples 1 initial voices: peak 0.002116 DC 0.0000018 grains 0 alloc 0 lock 0 p50 28.83 p95 58.12 p99 105.29 max 261.14 us
+  thread max 105.84 us; at wall max 261.14 us thread 87.97 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 27.56 us
+44100 Hz 512 samples 1 initial voices: peak 0.002116 DC 0.0000003 grains 0 alloc 0 lock 0 p50 146.88 p95 182.79 p99 201.03 max 226.37 us
+  thread max 226.83 us; at wall max 226.37 us thread 226.83 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 108.77 us
+48000 Hz 64 samples 1 initial voices: peak 0.002109 DC 0.0000031 grains 0 alloc 0 lock 0 p50 14.32 p95 31.64 p99 61.57 max 61.96 us
+  thread max 62.47 us; at wall max 61.96 us thread 62.47 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 14.14 us
+48000 Hz 128 samples 1 initial voices: peak 0.002109 DC 0.0000018 grains 0 alloc 0 lock 0 p50 28.04 p95 32.74 p99 59.07 max 80.15 us
+  thread max 80.63 us; at wall max 80.15 us thread 80.63 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 27.14 us
+48000 Hz 512 samples 1 initial voices: peak 0.002109 DC 0.0000003 grains 0 alloc 0 lock 0 p50 150.21 p95 229.10 p99 361.87 max 376.44 us
+  thread max 377.86 us; at wall max 376.44 us thread 377.86 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 107.68 us
+96000 Hz 64 samples 1 initial voices: peak 0.002088 DC 0.0000029 grains 0 alloc 0 lock 0 p50 14.26 p95 18.25 p99 48.99 max 51.59 us
+  thread max 52.19 us; at wall max 51.59 us thread 52.19 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 14.07 us
+96000 Hz 128 samples 1 initial voices: peak 0.002088 DC 0.0000027 grains 0 alloc 0 lock 0 p50 28.35 p95 32.49 p99 57.44 max 121.73 us
+  thread max 73.71 us; at wall max 121.73 us thread 73.71 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 27.54 us
+96000 Hz 512 samples 1 initial voices: peak 0.002088 DC 0.0000005 grains 0 alloc 0 lock 0 p50 128.41 p95 197.85 p99 252.40 max 275.06 us
+  thread max 276.04 us; at wall max 275.06 us thread 276.04 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 108.86 us
+FX JUCE runtime stress: 0 failing cases

@@ -1,0 +1,15 @@
+Source 446e05dc140069a6a20ebf9762011f2f8df78c8b
+Debian x86-64, GCC 12.2, CPU affinity 1
+Each optimized test was compiled with: g++ -std=c++20 -O2 -pthread -Iproducts/fx tests/suite/<name>.cpp -o <output>
+FxPatternGridTests, FxPatternTests, FxPatternCodecTests, FxPatternPlaybackTests, FxOfflineRenderTests, FxMacroRoutingTests, FxProgramStoreTests, in order:
+FX pattern grid: 0 failure(s)
+FX trigger patterns: 0 failure(s)
+FX pattern codec: 0 failure(s)
+FX pattern playback scheduling: 0 failure(s)
+FX offline WAV: 0 failure(s)
+FX macro routing: 0 failure(s)
+FX Program store: 0 failure(s)
+ASan+UBSan: -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie; UBSAN_OPTIONS=halt_on_error=1
+FX pattern grid: 0 failure(s)
+FX Program store: 0 failure(s)
+Both test groups exited 0.

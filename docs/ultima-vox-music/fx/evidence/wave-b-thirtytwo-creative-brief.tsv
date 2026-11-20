@@ -1,0 +1,9 @@
+preset_id	revision	review_schema	dayphase	energy	license_review	arrangement_check
+voxfx.impact.bronze-dovetail	1	2	Night	Driving	Original synthesis, release approval pending	Clear the kick recovery gap without adding a sustained sub; check on small speakers.
+voxfx.riser.saffron-vectors	1	2	Sunset	Peak	Original synthesis, release approval pending	Keep the opening four bars out of the chord body; listen for the rising fifth through the drop.
+voxfx.fall.cinder-lattice	1	2	Deep Night	Moderate	Original synthesis, release approval pending	Check that the successive bands leave the existing arpeggio articulate.
+voxfx.sweep.cobalt-sluice	1	2	Twilight	Driving	Original synthesis, release approval pending	Move the last formant behind the lead, not across its center; check stereo-to-mono.
+voxfx.zap.pulse-quartz	1	2	Morning	Driving	Original synthesis, release approval pending	Use live NoteOff in the gaps of an acid phrase; the reference WAV is a finite pass.
+voxfx.rhythm.quiet-escapement	1	2	Night	Moderate	Original synthesis, release approval pending	Hold through two cycles against straight hats, then release before the turnaround.
+voxfx.atmosphere.lunar-crib	1	2	Sunrise	Soft	Original synthesis, release approval pending	Hold the two-bar bed through two cycles and verify the bass still has room after fold-down.
+voxfx.stinger.mirror-inlet	1	2	Day	Moderate	Original synthesis, release approval pending	Confirm the late octave reply does not mask the pickup of the melodic hook.

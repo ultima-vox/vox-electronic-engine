@@ -1,0 +1,164 @@
+JUCE juce_core.cpp
+JUCE juce_core_CompilationTime.cpp
+JUCE juce_cryptography.cpp
+JUCE juce_events.cpp
+JUCE juce_data_structures.cpp
+JUCE juce_audio_basics.cpp
+JUCE juce_graphics.cpp
+JUCE juce_graphics_Harfbuzz.cpp
+JUCE juce_gui_basics.cpp
+JUCE juce_gui_basics_2.cpp
+JUCE juce_gui_basics_3.cpp
+JUCE juce_gui_basics_4.cpp
+JUCE juce_gui_basics_5.cpp
+JUCE juce_gui_extra.cpp
+JUCE juce_audio_processors_headless.cpp
+JUCE juce_audio_processors_headless_ara.cpp
+JUCE juce_audio_processors_headless_lv2_libs.cpp
+JUCE juce_audio_processors.cpp
+VOX products/fx/Processor.cpp
+VOX products/fx/FxEditor.cpp
+VOX products/fx/LayerPanel.cpp
+VOX products/fx/CurveEditor.cpp
+VOX products/fx/engine/FileCommit.cpp
+VOX libs/vox-ui/VoxLookAndFeel.cpp
+VOX libs/vox-ui/components/VoxButton.cpp
+VOX libs/vox-ui/components/VoxComboBox.cpp
+VOX libs/vox-ui/components/VoxKnob.cpp
+VOX libs/vox-ui/components/VoxPanel.cpp
+VOX libs/vox-ui/components/VoxSectionHeader.cpp
+VOX libs/vox-ui/components/VoxTabBar.cpp
+VOX libs/vox-preset/StateContainer.cpp
+9eaebf68aee23f5bfe11a75f65ffeeffa9302a09
+[FX processor] JUCE initialization
+[FX processor] layer solo and synchronized cursor
+[FX processor] offline host monitor isolation
+[FX processor] in-place bounce effect history and audition priority
+[FX processor] External granular preview under repeated MIDI and Pattern pressure
+[FX processor] Layer drag across host restore
+[FX processor] Motion history rollover and non-Motion host restore
+[FX processor] Pattern clipboard during restore and editor recreation
+[FX processor] timeline viewport keyboard and selection
+[FX processor] WAV export across editor close and recreation
+[FX processor] WAV export pending host save, cancellation and processor unload
+[FX processor] MIDI export lifecycle and picker reentry
+[FX processor] prepared WAV and MIDI drag lifecycle
+[FX processor] host Transition clock matrix and diagnostics
+[FX processor] measured serial FX tail and route
+[FX processor] capture parity
+[FX processor] Glitch source authoring, state and scope
+[FX processor] restore admission
+[FX processor] motion, generator and preset browser
+[FX processor] editor/parameters and state
+[FX processor] layer editor
+[FX processor] generation
+[FX processor] FX slots, comparison and Source editor
+[FX processor] pattern editor
+[FX processor] pattern playback
+[FX processor] modulation
+[FX processor] sample import and relink
+[FX processor] tempo capture
+[FX processor] bar-clock gate and capture
+[FX processor] bar transitions
+[FX processor] voice capacity and telemetry
+[FX processor] transport discontinuity
+[FX processor] PPQ snapshots
+[FX processor] source-family playback
+[FX processor] layered Program
+[FX processor] legacy parameter migration
+[FX processor] duration capture
+[FX processor] test cases finished; teardown follows
+host Transition: 8000 Hz 4 bars 60->45 BPM, target PPQ 12.5, sample 130667, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 100->75 BPM, target PPQ 12.5, sample 78400, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 128->96 BPM, target PPQ 12.5, sample 61250, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 140->105 BPM, target PPQ 12.5, sample 56001, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 160->120 BPM, target PPQ 12.5, sample 49000, suffix peak 0.0000000
+host Transition: 8000 Hz 4 bars 200->150 BPM, target PPQ 12.5, sample 39200, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 60->45 BPM, target PPQ 28.5, sample 280000, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 100->75 BPM, target PPQ 28.5, sample 168000, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 128->96 BPM, target PPQ 28.5, sample 131250, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 140->105 BPM, target PPQ 28.5, sample 120001, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 160->120 BPM, target PPQ 28.5, sample 105000, suffix peak 0.0000000
+host Transition: 8000 Hz 8 bars 200->150 BPM, target PPQ 28.5, sample 84000, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 60->45 BPM, target PPQ 60.5, sample 578667, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 100->75 BPM, target PPQ 60.5, sample 347200, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 128->96 BPM, target PPQ 60.5, sample 271250, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 140->105 BPM, target PPQ 60.5, sample 248001, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 160->120 BPM, target PPQ 60.5, sample 217000, suffix peak 0.0000000
+host Transition: 8000 Hz 16 bars 200->150 BPM, target PPQ 60.5, sample 173600, suffix peak 0.0000000
+host Transition: 44100 Hz 4 bars 200->150 BPM, target PPQ 12.5, sample 216090, suffix peak 0.0000000
+host Transition: 48000 Hz 8 bars 200->150 BPM, target PPQ 28.5, sample 504000, suffix peak 0.0000000
+host Transition: 96000 Hz 16 bars 200->150 BPM, target PPQ 60.5, sample 2083200, suffix peak 0.0000000
+FX tail: 63 qualified blocks, peak 0.0189440, routed difference sum 0.0419000
+capture parity case 0: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 1: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 2: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 3: 101280 frames peak 0.0092894 tail 0.0000048 max error 0
+capture parity case 4: 149280 frames peak 0.0280716 tail 0.0000006 max error 0
+capture parity case 5: 150000 frames peak 0.0076635 tail 0.0000000 max error 0
+capture parity case 6: 149280 frames peak 0.0280716 tail 0.0000006 max error 0
+capture parity case 7: 101280 frames peak 0.0067602 tail 0.0000082 max error 0
+FX processor: 0 failure(s)
+Allocation probe available: yes
+Lock probe: linked pthread mutex/rwlock entry points
+Random MIDI without Pattern
+44100 Hz 64 samples 1 initial voices: peak 0.031780 DC 0.0008663 grains 48 alloc 0 lock 0 p50 85.39 p95 161.03 p99 2175.00 max 2932.12 us
+44100 Hz 64 samples 4 initial voices: peak 0.032863 DC 0.0002290 grains 64 alloc 0 lock 0 p50 123.79 p95 239.25 p99 2157.13 max 2861.30 us
+44100 Hz 64 samples 8 initial voices: peak 0.042493 DC 0.0002705 grains 64 alloc 0 lock 0 p50 149.66 p95 223.72 p99 2306.22 max 2760.67 us
+44100 Hz 128 samples 1 initial voices: peak 0.042611 DC 0.0006330 grains 64 alloc 0 lock 0 p50 157.47 p95 330.88 p99 2563.96 max 2566.86 us
+44100 Hz 128 samples 4 initial voices: peak 0.048256 DC 0.0001794 grains 64 alloc 0 lock 0 p50 228.71 p95 410.81 p99 2462.63 max 2603.91 us
+44100 Hz 128 samples 8 initial voices: peak 0.042493 DC 0.0001430 grains 64 alloc 0 lock 0 p50 295.02 p95 612.70 p99 2407.85 max 2661.80 us
+44100 Hz 512 samples 1 initial voices: peak 0.071406 DC 0.0003775 grains 64 alloc 0 lock 0 p50 649.13 p95 2479.90 p99 3686.09 max 3761.58 us
+44100 Hz 512 samples 4 initial voices: peak 0.056455 DC 0.0003610 grains 64 alloc 0 lock 0 p50 876.49 p95 3191.69 p99 6859.13 max 9615.10 us
+44100 Hz 512 samples 8 initial voices: peak 0.105386 DC 0.0005008 grains 64 alloc 0 lock 0 p50 1046.73 p95 2121.04 p99 3240.50 max 3359.13 us
+48000 Hz 64 samples 1 initial voices: peak 0.031530 DC 0.0010422 grains 48 alloc 0 lock 0 p50 85.62 p95 153.24 p99 174.31 max 191.75 us
+48000 Hz 64 samples 4 initial voices: peak 0.028176 DC 0.0000123 grains 64 alloc 0 lock 0 p50 117.00 p95 190.33 p99 222.90 max 226.19 us
+48000 Hz 64 samples 8 initial voices: peak 0.067149 DC 0.0002874 grains 64 alloc 0 lock 0 p50 244.06 p95 339.97 p99 399.80 max 404.18 us
+48000 Hz 128 samples 1 initial voices: peak 0.040245 DC 0.0000896 grains 64 alloc 0 lock 0 p50 186.47 p95 364.13 p99 569.04 max 586.94 us
+48000 Hz 128 samples 4 initial voices: peak 0.038085 DC 0.0002549 grains 64 alloc 0 lock 0 p50 226.05 p95 376.23 p99 417.19 max 446.30 us
+48000 Hz 128 samples 8 initial voices: peak 0.067149 DC 0.0002697 grains 64 alloc 0 lock 0 p50 363.51 p95 552.07 p99 797.14 max 1020.95 us
+48000 Hz 512 samples 1 initial voices: peak 0.059470 DC 0.0004293 grains 64 alloc 0 lock 0 p50 652.41 p95 1277.74 p99 1310.56 max 1347.84 us
+48000 Hz 512 samples 4 initial voices: peak 0.051069 DC 0.0002488 grains 64 alloc 0 lock 0 p50 1036.49 p95 1570.46 p99 1901.83 max 2161.54 us
+48000 Hz 512 samples 8 initial voices: peak 0.090380 DC 0.0001387 grains 64 alloc 0 lock 0 p50 1079.79 p95 1393.91 p99 1742.40 max 1891.80 us
+96000 Hz 64 samples 1 initial voices: peak 0.023053 DC 0.0001646 grains 48 alloc 0 lock 0 p50 100.70 p95 191.36 p99 218.87 max 224.29 us
+96000 Hz 64 samples 4 initial voices: peak 0.012087 DC 0.0002396 grains 64 alloc 0 lock 0 p50 160.51 p95 224.56 p99 246.91 max 293.11 us
+96000 Hz 64 samples 8 initial voices: peak 0.027856 DC 0.0001596 grains 64 alloc 0 lock 0 p50 176.75 p95 226.79 p99 297.37 max 321.27 us
+96000 Hz 128 samples 1 initial voices: peak 0.027139 DC 0.0003105 grains 48 alloc 0 lock 0 p50 167.03 p95 310.57 p99 333.62 max 333.89 us
+96000 Hz 128 samples 4 initial voices: peak 0.035554 DC 0.0002701 grains 64 alloc 0 lock 0 p50 252.21 p95 537.49 p99 2127.87 max 4367.22 us
+96000 Hz 128 samples 8 initial voices: peak 0.058889 DC 0.0000664 grains 64 alloc 0 lock 0 p50 330.53 p95 544.01 p99 1926.26 max 3482.31 us
+96000 Hz 512 samples 1 initial voices: peak 0.083133 DC 0.0001861 grains 64 alloc 0 lock 0 p50 749.45 p95 1852.10 p99 4054.83 max 5017.69 us
+96000 Hz 512 samples 4 initial voices: peak 0.046966 DC 0.0001914 grains 64 alloc 0 lock 0 p50 1334.40 p95 4507.73 p99 8211.38 max 14187.87 us
+96000 Hz 512 samples 8 initial voices: peak 0.065849 DC 0.0001789 grains 64 alloc 0 lock 0 p50 1858.88 p95 5514.65 p99 5960.21 max 6670.40 us
+Max-ratchet synchronized Pattern + random MIDI
+44100 Hz 64 samples 1 initial voices: peak 0.041615 DC 0.0008245 grains 64 alloc 0 lock 0 p50 205.39 p95 336.71 p99 371.39 max 371.67 us
+44100 Hz 64 samples 4 initial voices: peak 0.029219 DC 0.0000392 grains 64 alloc 0 lock 0 p50 186.10 p95 331.99 p99 368.78 max 383.62 us
+44100 Hz 64 samples 8 initial voices: peak 0.055377 DC 0.0000068 grains 64 alloc 0 lock 0 p50 267.44 p95 375.80 p99 417.96 max 652.71 us
+44100 Hz 128 samples 1 initial voices: peak 0.041615 DC 0.0005953 grains 64 alloc 0 lock 0 p50 345.64 p95 1033.52 p99 3366.51 max 16389.18 us
+44100 Hz 128 samples 4 initial voices: peak 0.043411 DC 0.0006155 grains 64 alloc 0 lock 0 p50 327.33 p95 534.68 p99 646.77 max 690.64 us
+44100 Hz 128 samples 8 initial voices: peak 0.055377 DC 0.0003512 grains 64 alloc 0 lock 0 p50 314.41 p95 422.20 p99 515.32 max 612.64 us
+44100 Hz 512 samples 1 initial voices: peak 0.051428 DC 0.0011591 grains 64 alloc 0 lock 0 p50 1306.06 p95 2449.50 p99 2546.63 max 2547.46 us
+44100 Hz 512 samples 4 initial voices: peak 0.047801 DC 0.0005097 grains 64 alloc 0 lock 0 p50 1294.35 p95 2309.82 p99 3305.49 max 3644.10 us
+44100 Hz 512 samples 8 initial voices: peak 0.055377 DC 0.0005693 grains 64 alloc 0 lock 0 p50 1313.55 p95 2213.03 p99 4681.26 max 11825.02 us
+48000 Hz 64 samples 1 initial voices: peak 0.041783 DC 0.0009950 grains 64 alloc 0 lock 0 p50 150.75 p95 372.14 p99 554.64 max 3440.29 us
+48000 Hz 64 samples 4 initial voices: peak 0.035159 DC 0.0005240 grains 64 alloc 0 lock 0 p50 157.80 p95 339.73 p99 5400.93 max 6005.65 us
+48000 Hz 64 samples 8 initial voices: peak 0.051352 DC 0.0005280 grains 64 alloc 0 lock 0 p50 157.46 p95 258.30 p99 1757.86 max 2093.88 us
+48000 Hz 128 samples 1 initial voices: peak 0.041783 DC 0.0006483 grains 64 alloc 0 lock 0 p50 326.29 p95 2011.23 p99 4502.82 max 7011.56 us
+48000 Hz 128 samples 4 initial voices: peak 0.043108 DC 0.0005454 grains 64 alloc 0 lock 0 p50 312.48 p95 474.44 p99 2437.91 max 2746.93 us
+48000 Hz 128 samples 8 initial voices: peak 0.051352 DC 0.0002284 grains 64 alloc 0 lock 0 p50 316.21 p95 480.02 p99 2284.32 max 2322.06 us
+48000 Hz 512 samples 1 initial voices: peak 0.055910 DC 0.0002196 grains 64 alloc 0 lock 0 p50 1438.27 p95 3779.97 p99 4461.52 max 4580.95 us
+48000 Hz 512 samples 4 initial voices: peak 0.051138 DC 0.0000553 grains 64 alloc 0 lock 0 p50 1439.10 p95 3704.59 p99 4517.39 max 4712.95 us
+48000 Hz 512 samples 8 initial voices: peak 0.051352 DC 0.0001969 grains 64 alloc 0 lock 0 p50 1292.96 p95 3510.22 p99 3783.41 max 6370.25 us
+96000 Hz 64 samples 1 initial voices: peak 0.033073 DC 0.0000164 grains 60 alloc 0 lock 0 p50 159.50 p95 366.50 p99 692.53 max 1782.62 us
+96000 Hz 64 samples 4 initial voices: peak 0.021771 DC 0.0003724 grains 64 alloc 0 lock 0 p50 180.27 p95 243.57 p99 302.02 max 320.55 us
+96000 Hz 64 samples 8 initial voices: peak 0.049908 DC 0.0005788 grains 64 alloc 0 lock 0 p50 173.63 p95 249.49 p99 337.13 max 360.00 us
+96000 Hz 128 samples 1 initial voices: peak 0.050818 DC 0.0003212 grains 64 alloc 0 lock 0 p50 277.74 p95 533.71 p99 582.10 max 617.03 us
+96000 Hz 128 samples 4 initial voices: peak 0.031095 DC 0.0002619 grains 64 alloc 0 lock 0 p50 312.56 p95 395.75 p99 423.90 max 427.96 us
+96000 Hz 128 samples 8 initial voices: peak 0.055189 DC 0.0006960 grains 64 alloc 0 lock 0 p50 316.95 p95 410.38 p99 462.27 max 695.52 us
+96000 Hz 512 samples 1 initial voices: peak 0.060937 DC 0.0004150 grains 64 alloc 0 lock 0 p50 1265.82 p95 1929.56 p99 2320.66 max 2353.86 us
+96000 Hz 512 samples 4 initial voices: peak 0.049182 DC 0.0000966 grains 64 alloc 0 lock 0 p50 1246.24 p95 1926.90 p99 2431.38 max 2626.21 us
+96000 Hz 512 samples 8 initial voices: peak 0.059691 DC 0.0001433 grains 64 alloc 0 lock 0 p50 1162.27 p95 1490.90 p99 2234.89 max 2397.97 us
+FX JUCE runtime stress: 0 failing cases
+FX WAV create-only: expected bytes=21650 sha256=263ee0ae0e7826eaef86e20a8f35da1b7820c5df03d6b8a7455dfe7ece92b526
+FX SMF create-only: expected bytes=51 sha256=f43d09a540cb14cef8ee5029b1d575ec7e7574580c05d476221b13f8464eb84b
+FX file export: cross-device failure checked
+FX file export: 0 failure(s)

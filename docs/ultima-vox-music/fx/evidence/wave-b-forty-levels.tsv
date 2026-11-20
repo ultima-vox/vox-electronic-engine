@@ -1,0 +1,9 @@
+id	raw-peak-dBFS	active-rms-dBFS	active-window-s	bridge-trim-dB	bridge-peak-dBFS	bridge-FX-rms-dBFS
+voxfx.impact.slate-clutch	-45.321	-63.121	0.360	-	-	-
+voxfx.riser.lantern-parallax	-41.868	-62.940	6.800	24.000	-6.911	-38.940
+voxfx.riser.vapour-splice	-38.146	-57.438	4.580	18.497	-6.911	-38.940
+voxfx.fall.chalk-eddy	-41.042	-56.293	7.040	-	-	-
+voxfx.sweep.silt-compass	-53.115	-64.020	2.320	-	-	-
+voxfx.zap.fraction-spark	-40.788	-55.225	0.320	-	-	-
+voxfx.rhythm.hex-repeater	-40.849	-53.059	1.180	-	-	-
+voxfx.stinger.amber-branch	-47.457	-62.614	0.980	-	-	-

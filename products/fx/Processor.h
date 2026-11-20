@@ -1,14 +1,277 @@
 #pragma once
 
 #include "common/SuiteProcessor.h"
+#include "engine/NoiseRiser.h"
+#include "engine/ProgramStore.h"
+#include "engine/Generator.h"
+#include "engine/Effects.h"
+#include "engine/OfflineRender.h"
+#include "engine/SampleController.h"
+#include "engine/Transport.h"
+#include "engine/ComparisonState.h"
+#include "engine/PortablePreset.h"
+#include "engine/Preview.h"
+#include "engine/FileExport.h"
+#include <bit>
 
 namespace vox::fx {
 
-// FOUND-01 shell. The product engine, parameter map (parameters.csv) and
-// editor are added by the product's *-01 PR.
+inline constexpr preset::Tag fxParameterSectionTag = preset::makeTag ("FPRM");
+inline constexpr preset::Tag fxFamilySectionTag = preset::makeTag ("FFAM");
+inline constexpr preset::Tag fxGeneratorSectionTag = preset::makeTag ("FGEN");
+inline constexpr preset::Tag fxMacroSectionTag = preset::makeTag ("FMAC");
+inline constexpr preset::Tag fxMacroRouteSectionTag = preset::makeTag ("FMOD");
+inline constexpr preset::Tag fxPatternEnableSectionTag = preset::makeTag ("FPEN");
+inline constexpr preset::Tag fxPatternSectionTag = preset::makeTag ("FPAT");
+inline constexpr preset::Tag fxEffectsSectionTag = preset::makeTag ("FXSL");
+inline constexpr preset::Tag fxSampleSectionTag = preset::makeTag ("FSMP");
+inline constexpr preset::Tag fxProgramSectionTag = preset::makeTag ("FPRG");
+
+// Work-in-progress standalone FX instrument. Structural edits are published
+// off the audio thread; host parameters remain independent of generation.
 class FxProcessor final : public vox::suite::SuiteProcessor {
 public:
-    FxProcessor();
+    // A nonempty scratch root is used by isolated native fixtures.
+    explicit FxProcessor(juce::File dragScratchRoot={});
+    void setStateInformation(const void*,int) override;
+    void prepareToPlay (double sampleRate, int maximumBlockSize) override;
+    void releaseResources() override;
+    void reset() override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using vox::suite::SuiteProcessor::processBlock;
+    double getTailLengthSeconds() const override { return 41.0; }
+    juce::AudioProcessorEditor* createEditor() override;
+    juce::AudioParameterFloat& macroParameter(std::size_t index) noexcept { return *macros_[index]; }
+    bool setMacroGainRoute(std::size_t index,float depth,float smoothing) {
+        return programs_.editMacroConfig([=](macro::Config& config){return config.setGainRoute(index,depth,smoothing);});
+    }
+    bool setMotionGainRoute(mod::Source source,float depth,float smoothing) {
+        return programs_.editMacroConfig([=](macro::Config& config){return config.setSourceGainRoute(source,depth,smoothing);});
+    }
+    bool setMotionRoute(mod::Source source,mod::Destination destination,float depth,float smoothing) {
+        return programs_.editMacroConfig([=](macro::Config& config){return config.setRoute(source,destination,depth,smoothing);});
+    }
+    ProgramStore::VersionedMotion versionedMotion() const {return programs_.versionedMotion();}
+    bool replaceMotionIfCurrent(const ProgramStore::VersionedMotion& expected,const macro::Config& value,std::uint64_t* revision=nullptr) {
+        return programs_.replaceMotionIfCurrent(expected,value,revision);
+    }
+    macro::Config macroConfig() const { return programs_.snapshotState().macros; }
+    juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }
+    enum class BarClock : unsigned { noPosition, stopped, missingMeter, unsupportedMeter, invalidTempo,
+                                     invalidPpq, assumedOrigin, ready44 };
+    BarClock barClock() const noexcept { return barClock_.load(std::memory_order_relaxed); }
+    bool musicalClockUnavailable() const noexcept {
+        const auto clock=barClock();return clock!=BarClock::ready44&&clock!=BarClock::assumedOrigin;
+    }
+    enum class PatternClock : unsigned { inactive, noPlayhead, stopped, invalidPpq, invalidTempo,
+                                         unsupportedMeter, waitingForState, blockRejected, readyAssumed44, ready44 };
+    PatternClock patternClock() const noexcept { return patternClock_.load(std::memory_order_relaxed); }
+    bool patternUnavailable() const noexcept {
+        const auto status=patternClock();
+        return status!=PatternClock::inactive&&status!=PatternClock::ready44&&status!=PatternClock::readyAssumed44;
+    }
+    juce::AudioParameterFloat& outputParameter() noexcept { return *output_; }
+    juce::AudioParameterFloat& durationParameter() noexcept { return *duration_; }
+    juce::AudioParameterFloat& effectWetParameter(std::size_t index) noexcept { return *effectWet_[index]; }
+    juce::AudioParameterFloat& effectAmountParameter(std::size_t index) noexcept { return *effectAmount_[index]; }
+    // Message-to-audio requests are bounded and coalesced, not a MIDI queue.
+    void audition() noexcept { auditionRequest_.store(AuditionRequest::start,std::memory_order_release); }
+    void stopAudition() noexcept {
+        previewBus_.stop();auditionRequest_.store(AuditionRequest::stop,std::memory_order_release);
+    }
+    void panic() noexcept { previewBus_.stop();panicPending_.store (true, std::memory_order_release); }
+    // Transient monitor state; never encoded into presets or host sessions.
+    unsigned layerSoloMask() const noexcept { return layerSoloMask_.load(std::memory_order_relaxed); }
+    void toggleLayerSolo(std::size_t index) noexcept {
+        if(index<4)layerSoloMask_.fetch_xor(1u<<index,std::memory_order_relaxed);
+    }
+    // No extrapolation: sample the last rendered curve position from audio.
+    // Returns null for stale graph, stopped voice, or inactive layer window.
+    std::optional<float> curvePlayhead(std::uint64_t publication,std::optional<std::size_t> layer={}) const noexcept;
+    struct OutputPeaks { float left, right; };
+    OutputPeaks outputPeaks() const noexcept {
+        const auto packed=peaks_.load(std::memory_order_relaxed);
+        return {std::bit_cast<float>(static_cast<std::uint32_t>(packed)),
+                std::bit_cast<float>(static_cast<std::uint32_t>(packed>>32))};
+    }
+    float outputPeak() const noexcept { const auto p=outputPeaks();return std::max(p.left,p.right); }
+    bool consumeClip() noexcept { return clipLatched_.exchange(false,std::memory_order_relaxed); }
+    // Minimum peak (-90 dBFS) for a live, FX-only block to light the meter.
+    static constexpr float fxTailThreshold=0.0000316228f;
+    bool consumeFxTail() noexcept { return fxTailSeen_.exchange(false,std::memory_order_relaxed); }
+    struct AudioTelemetry { unsigned events=0,grains=0;bool clipped=false;std::uint32_t dropped=0;bool fxTailOnly=false; };
+    AudioTelemetry audioTelemetry() const noexcept {
+        const auto value=telemetry_.load(std::memory_order_relaxed);
+        return {value&15u,(value>>4)&127u,(value&(1u<<11))!=0,droppedEvents_.load(std::memory_order_relaxed),(value&(1u<<12))!=0};
+    }
+    // Controller methods only: these may lock/allocate and are never called
+    // from the audio callback. Existing events retain their captured program.
+    bool setFamily (int family) {
+        if (family < 0 || family > 11) return false;
+        return programs_.setLayerFamily (0, static_cast<NoiseFamily> (family));
+    }
+    bool setEventBars (int bars) {
+        if (bars != 0 && bars != 1 && bars != 2 && bars != 4 && bars != 8 && bars != 16) return false;
+        return programs_.editProgram([bars](NoiseProgram& p) { p.bars=static_cast<std::uint8_t>(bars); return true; });
+    }
+    bool setPlayback(PlayMode mode,TriggerPolicy policy) {
+        if(static_cast<unsigned>(mode)>static_cast<unsigned>(PlayMode::transition)||
+           static_cast<unsigned>(policy)>static_cast<unsigned>(TriggerPolicy::replace))return false;
+        return programs_.editProgram([=](NoiseProgram& p){p.mode=mode;p.triggerPolicy=policy;return true;});
+    }
+    int family() const { return static_cast<int> (programs_.snapshot().layers[0].family); }
+    bool setProgram (const NoiseProgram& program) {
+        return programs_.publish (program);
+    }
+    // Message/controller thread only. A/B snapshots are stored in the project and
+    // deliberately recall all host parameter bases with host notification.
+    bool storeComparison(std::size_t slot);
+    bool recallComparison(std::size_t slot);
+    portable::Sound portableSnapshot() const;
+    bool encodePortablePreset(std::vector<std::byte>&) const;
+    bool applyPortableSound(const portable::Sound&);
+    bool restorePortablePreset(std::span<const std::byte>);
+    bool loadReviewCandidate(std::size_t index);
+    offline::Capture capturePresetPreview(const portable::Sound&) const;
+    preview::Bus& previewBus() noexcept {return previewBus_;}
+    generator::ControllerState generatorState() const { return programs_.snapshotState().generator; }
+    template<typename Edit> bool editGeneratorState(Edit edit) { return programs_.editGeneratorState(edit); }
+    bool generateProgram (const generator::Settings&, const generator::Locks&);
+    bool mutateProgram (std::uint32_t seed, const generator::Locks&);
+    bool generateSound(bool mutation);
+    // These operations lock or perform file I/O; never call from audio.
+    bool importSample(const juce::File& path) { return samples_.import(path); }
+    bool relinkSample(const juce::File& path, const sample::Reference& expected) { return samples_.relink(path,expected); }
+    bool useBuiltinSample() { return samples_.restore({}); }
+    sample::Controller::Status sampleStatus() const { return samples_.status(); }
+    sample::Controller::Snapshot sampleSnapshot() const { return samples_.snapshot(); }
+    sample::Reference sampleReference() const { return samples_.reference(); }
+    bool waitForSample(std::chrono::milliseconds timeout) { return samples_.waitUntilSettled(timeout); }
+    // Worker/controller thread only: captures the structural snapshot and
+    // current host base parameters; may allocate and render for many seconds.
+    offline::Capture captureProgramWav (offline::Settings settings) const;
+    bool renderProgramWav (offline::Settings settings, std::vector<std::uint8_t>& output,
+                           const std::atomic<bool>* cancel=nullptr, std::atomic<float>* progress=nullptr) const;
+    // Message thread only. Own export independently of editor lifetime; the
+    // render receives an immutable capture, never a processor/editor pointer.
+    bool startWavExport(offline::Capture,juce::File);
+    // Optional worker checkpoint for deterministic lifecycle tests; null for UI requests.
+    bool startMidiExport(pattern::Pattern,double tempo,juce::File,
+                         fileexport::EncodeObserver=nullptr,void* observerContext=nullptr);
+    bool prepareWavDrag(offline::Capture);
+    bool prepareMidiDrag(pattern::Pattern,double tempo);
+    std::optional<fileexport::Kind> preparedDragKind() const noexcept;
+    bool dragInProgress() const noexcept;
+    using DragLauncher=std::function<bool(const juce::File&,std::function<void()>)>;
+    bool offerPreparedDrag(const DragLauncher&);
+    std::optional<fileexport::Status> fileExportStatus() const noexcept;
+    bool cancelFileExport(fileexport::Kind) noexcept;
+    std::optional<fileexport::Completion> takeFileExportResult();
+    // Trigger pattern controller and offline MIDI export.
+    bool setPattern(const pattern::Pattern& value) { return programs_.setPattern(value); }
+    template<typename Edit> bool editPattern(Edit edit) { return programs_.editPattern(edit); }
+    ProgramStore::VersionedPattern versionedPattern() const { return programs_.versionedPattern(); }
+    bool replacePatternIfCurrent(const ProgramStore::VersionedPattern& expected,const pattern::Pattern& value) {
+        return programs_.replacePatternIfCurrent(expected,value);
+    }
+    pattern::Pattern patternSnapshot() const { return programs_.snapshotState().pattern; }
+    double observedTempo() const noexcept { return capturedTempo_.load(std::memory_order_relaxed); }
+    bool exportPatternMidi(double bpm, std::vector<std::uint8_t>& bytes) const {
+        return pattern::exportMidi(patternSnapshot(),bpm,bytes);
+    }
+    bool setEffect (std::size_t index, effects::Settings settings);
+    effects::Settings effect (std::size_t index) const;
+    std::uint64_t effectsSnapshot() const { return programs_.snapshotState().effects; }
+    NoiseProgram program() const { return programs_.snapshot(); }
+    std::uint64_t programRestoreEpoch() const noexcept { return programs_.programRevision(); }
+    ProgramStore::VersionedProgram versionedProgram() const { return programs_.versionedProgram(); }
+    bool editTonalityIfRevision(source::Tonality tonality,std::uint64_t revision) { return programs_.editTonalityIfRevision(tonality,revision); }
+    bool editCurveIfRevision(CurveTarget target, std::uint64_t revision, const timeline::Curve& curve) {
+        return programs_.editCurveIfRevision(target, revision, curve);
+    }
+    template <typename Edit> bool editLayerIfRevision(std::size_t index,std::uint64_t revision,Edit edit) {
+        return programs_.editLayerIfRevision(index,revision,edit);
+    }
+    template <typename Edit> bool editLayer (std::size_t index, Edit edit) { return programs_.editLayer (index, edit); }
+
+protected:
+    void writeProductState (std::vector<preset::Section>&) const override;
+    ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
+    bool isProductSection (preset::Tag tag) const override { return tag == compare::sectionTag || tag == fxSampleSectionTag || tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
+
+private:
+    void publishPlayhead(bool rendered) noexcept;
+    void publishTelemetry(unsigned events,bool clipped,bool fxTailOnly) noexcept {
+        const auto value=events|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u)|(fxTailOnly?(1u<<12):0u);
+        telemetry_.store(value,std::memory_order_relaxed);
+        droppedEvents_.store(engine_.droppedEventCount(),std::memory_order_relaxed);
+    }
+    mutable sample::Controller samples_; // destroyed after engine and all sample leases
+    NoiseRiser engine_;
+    static_assert(std::atomic<double>::is_always_lock_free);
+    std::atomic<double> capturedTempo_ {120.0}; // audio -> offline snapshot
+    effects::Chain effects_;
+    macro::Runtime macroRuntime_;
+    preview::Bus previewBus_;
+    macro::Config audioMacroConfig_;
+    std::uint64_t audioEffects_ = effects::defaults(); // audio thread only
+    ProgramStore programs_;
+    mutable juce::CriticalSection controllerRestoreLock_; // serialize project restore, preset load and comparison commands
+    mutable std::mutex comparisonMutex_; // never entered on the audio thread
+    compare::Bank comparisons_;
+    NoiseProgram audioProgram_;
+    pattern::Pattern audioPattern_;
+    pattern::FixedSchedule audioPatternSchedule_;
+    struct CallbackBases {
+        std::array<float,8> macros{};
+        std::array<float,4> wet{},amount{};
+        float duration=4,output=1;
+        bool pattern=false;
+    } audioBases_;
+    CallbackBases readCallbackBases() const noexcept;
+    // The structural store and immutable audio assets have separate owners.
+    // This fence makes host restore/preset load an admission boundary. Only
+    // the controller under controllerRestoreLock_ can change its parity.
+    std::atomic<std::uint64_t> controllerEpoch_{0}, retireAtEpoch_{0};
+    void retireOnPublication() noexcept;
+    unsigned publicationDepth_=0;
+    std::uint64_t audioEpoch_=0,retiredEpoch_=0;
+    struct PendingGraph {
+        NoiseProgram program;
+        pattern::Pattern pattern;
+        macro::Config macros;
+        std::uint64_t effects=0;
+    } pendingGraph_;
+    std::uint64_t programSequence_ = 0; // audio thread only
+    juce::AudioParameterFloat* output_ = nullptr; // owned by AudioProcessor
+    std::atomic<BarClock> barClock_ {BarClock::noPosition};
+    std::atomic<bool> fxTailSeen_{false};
+    juce::AudioParameterFloat* duration_ = nullptr;
+    juce::AudioParameterBool* patternEnabled_ = nullptr;
+    std::array<juce::AudioParameterFloat*,4> effectWet_{}, effectAmount_{};
+    std::array<juce::AudioParameterFloat*,8> macros_{};
+    // Guarded by SuiteProcessor state lock, not accessed by the audio thread.
+    float loadedDuration_ = 0.0f, heldDuration_ = 0.0f;
+    juce::SmoothedValue<float> outputSmoothing_;
+    enum class AuditionRequest : std::uint32_t { none,start,stop };
+    static_assert(std::atomic<AuditionRequest>::is_always_lock_free);
+    std::atomic<AuditionRequest> auditionRequest_ { AuditionRequest::none };
+    std::atomic<bool> panicPending_ { false };
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+    std::atomic<std::uint64_t> peaks_ { 0 };
+    std::atomic<unsigned> layerSoloMask_{0};
+    // Single writer (audio or stopped host lifecycle) with bounded reader.
+    std::atomic<std::uint64_t> cursorSequence_{0},cursorGraph_{0},cursorPhases_{0};
+    static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
+    std::atomic<std::uint32_t> telemetry_ { 0 }, droppedEvents_ { 0 };
+    std::atomic<bool> clipLatched_ { false };
+    std::atomic<PatternClock> patternClock_ { PatternClock::inactive };
+    // Audio-thread-only transport history. Missing host position invalidates
+    // continuity tracking; it never fabricates a seek.
+    transport::Tracker transport_;
+    const juce::File dragScratchRoot_;
+    std::shared_ptr<fileexport::DragFile> preparedDrag_;
+    std::unique_ptr<fileexport::Job> fileExportJob_;
 };
 
 } // namespace vox::fx

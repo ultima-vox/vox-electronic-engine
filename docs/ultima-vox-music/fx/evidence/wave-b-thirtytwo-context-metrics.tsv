@@ -1,0 +1,9 @@
+id	FX-trim-dB	bed-peak	mix-peak	headroom-dBFS	cue-seconds
+voxfx.impact.bronze-dovetail	24.000	0.42942514	0.42942514	7.342	1.73913
+voxfx.riser.saffron-vectors	24.000	0.45621079	0.45682000	6.805	1.76471
+voxfx.fall.cinder-lattice	20.195	0.43971110	0.48106665	6.356	1.81819
+voxfx.sweep.cobalt-sluice	24.000	0.45168900	0.52316876	5.627	1.19206
+voxfx.zap.pulse-quartz	18.619	0.44219142	0.44219142	7.088	1.44827
+voxfx.rhythm.quiet-escapement	24.000	0.42698145	0.44172556	7.097	1.55844
+voxfx.atmosphere.lunar-crib	22.441	0.20922618	0.20903315	13.596	0.00000
+voxfx.stinger.mirror-inlet	24.000	0.45864783	0.45864783	6.770	1.81819

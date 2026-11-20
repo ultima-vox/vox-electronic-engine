@@ -1,0 +1,670 @@
+48 FX executables: native harness owns 3; this inventory runs 45
+830a3ad1946a567346deca725d5b792506eb9999
+g++ (Debian 12.2.0-14+deb12u1) 12.2.0
+=== FxBarEventTests ===
+FX bar event: 0 failure(s)
+PASS FxBarEventTests
+=== FxCallbackBenchmark ===
+44100 riser 8 events x 4 layers: p50 145.90 p95 218.96 p99 8203.38 max 8225.68 us
+44100 downlifter 8 events x 4 layers: p50 201.73 p95 253.66 p99 8282.37 max 8286.23 us
+44100 shepard 8 events x 4 layers: p50 555.45 p95 8606.62 p99 8671.42 max 8718.76 us
+44100 impact 8 events x 4 layers: p50 279.41 p95 648.64 p99 8463.70 max 8638.58 us
+44100 whoosh 8 events x 4 layers: p50 333.37 p95 790.45 p99 8521.98 max 8702.98 us
+44100 laser 8 events x 4 layers: p50 273.83 p95 642.60 p99 8423.73 max 8427.43 us
+44100 squelch 8 events x 4 layers: p50 293.74 p95 381.44 p99 8377.97 max 8383.49 us
+44100 metallic 8 events x 4 layers: p50 209.57 p95 349.26 p99 8317.83 max 8380.57 us
+44100 texture 8 events x 4 layers: p50 289.12 p95 518.92 p99 8379.53 max 8557.28 us
+44100 formant 8 events x 4 layers: p50 482.45 p95 8510.77 p99 8612.41 max 8661.90 us
+44100 glitch 8 events x 4 layers: p50 268.84 p95 480.78 p99 8364.94 max 8426.49 us
+44100 granular 8 events x 4 layers: p50 157.24 p95 274.96 p99 8246.07 max 8251.37 us
+48000 riser 8 events x 4 layers: p50 146.98 p95 251.00 p99 8230.24 max 8253.72 us
+48000 downlifter 8 events x 4 layers: p50 200.99 p95 286.70 p99 8311.49 max 8353.25 us
+48000 shepard 8 events x 4 layers: p50 558.67 p95 8623.42 p99 8650.96 max 8695.71 us
+48000 impact 8 events x 4 layers: p50 257.92 p95 317.31 p99 8296.14 max 8312.32 us
+48000 whoosh 8 events x 4 layers: p50 242.63 p95 478.90 p99 544.00 max 560.96 us
+48000 laser 8 events x 4 layers: p50 212.80 p95 266.94 p99 344.19 max 347.34 us
+48000 squelch 8 events x 4 layers: p50 287.90 p95 342.34 p99 349.49 max 369.40 us
+48000 metallic 8 events x 4 layers: p50 209.36 p95 257.03 p99 274.43 max 276.94 us
+48000 texture 8 events x 4 layers: p50 286.96 p95 363.00 p99 8377.20 max 8377.77 us
+48000 formant 8 events x 4 layers: p50 470.36 p95 557.66 p99 8550.46 max 8577.96 us
+48000 glitch 8 events x 4 layers: p50 263.63 p95 310.58 p99 329.82 max 330.17 us
+48000 granular 8 events x 4 layers: p50 152.02 p95 185.34 p99 204.77 max 235.97 us
+96000 riser 8 events x 4 layers: p50 145.40 p95 175.13 p99 195.45 max 198.43 us
+96000 downlifter 8 events x 4 layers: p50 200.61 p95 250.64 p99 310.18 max 334.12 us
+96000 shepard 8 events x 4 layers: p50 543.27 p95 842.08 p99 8625.26 max 8628.41 us
+96000 impact 8 events x 4 layers: p50 256.96 p95 500.26 p99 8352.67 max 8500.33 us
+96000 whoosh 8 events x 4 layers: p50 229.12 p95 285.46 p99 8321.37 max 8322.43 us
+96000 laser 8 events x 4 layers: p50 212.86 p95 428.14 p99 437.11 max 502.32 us
+96000 squelch 8 events x 4 layers: p50 279.86 p95 323.23 p99 353.61 max 359.46 us
+96000 metallic 8 events x 4 layers: p50 213.07 p95 268.63 p99 284.26 max 287.20 us
+96000 texture 8 events x 4 layers: p50 268.46 p95 321.64 p99 365.00 max 407.37 us
+96000 formant 8 events x 4 layers: p50 466.14 p95 518.99 p99 540.40 max 8551.01 us
+96000 glitch 8 events x 4 layers: p50 263.81 p95 325.56 p99 8356.22 max 8358.84 us
+96000 granular 8 events x 4 layers: p50 151.60 p95 205.08 p99 8182.26 max 8242.94 us
+granular bypass 44100 Hz 64 frames 1 events: grains 16 peak 0.006292 DC 0.0001168 p50 16.11 p95 23.38 p99 24.95 max 34.93 us
+granular dual-filter 44100 Hz 64 frames 1 events: grains 16 peak 0.003153 DC 0.0000147 p50 19.28 p95 62.44 p99 95.55 max 3403.20 us
+granular bypass 44100 Hz 64 frames 4 events: grains 64 peak 0.012395 DC 0.0003354 p50 49.80 p95 62.38 p99 82.00 max 105.21 us
+granular dual-filter 44100 Hz 64 frames 4 events: grains 64 peak 0.006523 DC 0.0000043 p50 59.43 p95 94.47 p99 106.28 max 12121.82 us
+granular bypass 44100 Hz 64 frames 8 events: grains 64 peak 0.013547 DC 0.0002869 p50 76.06 p95 117.71 p99 4166.60 max 12135.68 us
+granular dual-filter 44100 Hz 64 frames 8 events: grains 64 peak 0.006098 DC 0.0000086 p50 97.35 p95 117.81 p99 131.02 max 8176.68 us
+granular bypass 44100 Hz 128 frames 1 events: grains 16 peak 0.006292 DC 0.0000410 p50 31.47 p95 51.67 p99 82.00 max 8094.58 us
+granular dual-filter 44100 Hz 128 frames 1 events: grains 16 peak 0.003153 DC 0.0000023 p50 36.26 p95 45.10 p99 60.00 max 8101.28 us
+granular bypass 44100 Hz 128 frames 4 events: grains 64 peak 0.012395 DC 0.0002221 p50 100.11 p95 144.19 p99 234.61 max 8200.27 us
+granular dual-filter 44100 Hz 128 frames 4 events: grains 64 peak 0.006523 DC 0.0000052 p50 122.29 p95 234.31 p99 336.90 max 8210.34 us
+granular bypass 44100 Hz 128 frames 8 events: grains 64 peak 0.013547 DC 0.0001325 p50 162.19 p95 276.30 p99 8203.88 max 8210.12 us
+granular dual-filter 44100 Hz 128 frames 8 events: grains 64 peak 0.006100 DC 0.0000059 p50 195.90 p95 394.51 p99 8266.43 max 8384.16 us
+granular bypass 44100 Hz 512 frames 1 events: grains 16 peak 0.006292 DC 0.0000397 p50 132.84 p95 223.55 p99 8160.99 max 8212.06 us
+granular dual-filter 44100 Hz 512 frames 1 events: grains 16 peak 0.003153 DC 0.0000011 p50 150.29 p95 198.48 p99 8215.26 max 8239.71 us
+granular bypass 44100 Hz 512 frames 4 events: grains 64 peak 0.016155 DC 0.0001380 p50 431.08 p95 555.80 p99 8587.28 max 8597.37 us
+granular dual-filter 44100 Hz 512 frames 4 events: grains 64 peak 0.006523 DC 0.0000024 p50 499.90 p95 8533.27 p99 8596.86 max 8598.81 us
+granular bypass 44100 Hz 512 frames 8 events: grains 64 peak 0.018261 DC 0.0001237 p50 613.24 p95 704.57 p99 731.56 max 1405.74 us
+granular dual-filter 44100 Hz 512 frames 8 events: grains 64 peak 0.008237 DC 0.0000037 p50 805.60 p95 1026.89 p99 1305.72 max 1627.99 us
+granular bypass 48000 Hz 64 frames 1 events: grains 16 peak 0.005625 DC 0.0000123 p50 15.53 p95 18.05 p99 33.52 max 33.70 us
+granular dual-filter 48000 Hz 64 frames 1 events: grains 16 peak 0.002641 DC 0.0000049 p50 18.18 p95 20.74 p99 35.82 max 48.86 us
+granular bypass 48000 Hz 64 frames 4 events: grains 64 peak 0.011326 DC 0.0001897 p50 51.90 p95 67.31 p99 76.64 max 118.63 us
+granular dual-filter 48000 Hz 64 frames 4 events: grains 64 peak 0.006355 DC 0.0000271 p50 61.11 p95 78.47 p99 95.77 max 121.39 us
+granular bypass 48000 Hz 64 frames 8 events: grains 64 peak 0.013623 DC 0.0001034 p50 78.77 p95 168.53 p99 181.12 max 8247.30 us
+granular dual-filter 48000 Hz 64 frames 8 events: grains 64 peak 0.007306 DC 0.0000205 p50 97.61 p95 159.62 p99 8153.77 max 8158.66 us
+granular bypass 48000 Hz 128 frames 1 events: grains 16 peak 0.005913 DC 0.0000999 p50 31.24 p95 35.82 p99 52.44 max 65.97 us
+granular dual-filter 48000 Hz 128 frames 1 events: grains 16 peak 0.002958 DC 0.0000001 p50 36.02 p95 50.15 p99 59.87 max 8094.44 us
+granular bypass 48000 Hz 128 frames 4 events: grains 64 peak 0.012106 DC 0.0002091 p50 100.48 p95 140.08 p99 157.42 max 8290.50 us
+granular dual-filter 48000 Hz 128 frames 4 events: grains 64 peak 0.006355 DC 0.0000050 p50 122.10 p95 167.84 p99 8188.93 max 8205.65 us
+granular bypass 48000 Hz 128 frames 8 events: grains 64 peak 0.013623 DC 0.0002643 p50 151.28 p95 215.75 p99 270.96 max 8256.91 us
+granular dual-filter 48000 Hz 128 frames 8 events: grains 64 peak 0.007952 DC 0.0000238 p50 194.63 p95 225.96 p99 231.96 max 265.82 us
+granular bypass 48000 Hz 512 frames 1 events: grains 16 peak 0.008673 DC 0.0000532 p50 130.44 p95 156.20 p99 159.52 max 165.93 us
+granular dual-filter 48000 Hz 512 frames 1 events: grains 16 peak 0.002971 DC 0.0000003 p50 148.80 p95 181.86 p99 208.82 max 229.07 us
+granular bypass 48000 Hz 512 frames 4 events: grains 64 peak 0.015414 DC 0.0001638 p50 421.16 p95 477.58 p99 492.37 max 546.01 us
+granular dual-filter 48000 Hz 512 frames 4 events: grains 64 peak 0.006355 DC 0.0000004 p50 508.12 p95 979.75 p99 8746.24 max 8781.00 us
+granular bypass 48000 Hz 512 frames 8 events: grains 64 peak 0.016283 DC 0.0001759 p50 617.70 p95 8707.60 p99 9705.30 max 12698.34 us
+granular dual-filter 48000 Hz 512 frames 8 events: grains 64 peak 0.007952 DC 0.0000004 p50 787.12 p95 8883.03 p99 8969.28 max 12869.17 us
+granular bypass 96000 Hz 64 frames 1 events: grains 12 peak 0.006100 DC 0.0000447 p50 13.16 p95 18.47 p99 24.32 max 90.57 us
+granular dual-filter 96000 Hz 64 frames 1 events: grains 12 peak 0.003778 DC 0.0000079 p50 16.05 p95 31.20 p99 46.86 max 47.45 us
+granular bypass 96000 Hz 64 frames 4 events: grains 48 peak 0.009056 DC 0.0002563 p50 43.08 p95 55.55 p99 69.63 max 81.03 us
+granular dual-filter 96000 Hz 64 frames 4 events: grains 48 peak 0.006100 DC 0.0000322 p50 51.11 p95 64.13 p99 78.72 max 93.41 us
+granular bypass 96000 Hz 64 frames 8 events: grains 64 peak 0.011367 DC 0.0001620 p50 75.66 p95 95.22 p99 122.76 max 153.35 us
+granular dual-filter 96000 Hz 64 frames 8 events: grains 64 peak 0.010115 DC 0.0001268 p50 97.22 p95 116.40 p99 121.86 max 132.03 us
+granular bypass 96000 Hz 128 frames 1 events: grains 16 peak 0.007606 DC 0.0000196 p50 31.17 p95 39.04 p99 51.63 max 91.11 us
+granular dual-filter 96000 Hz 128 frames 1 events: grains 16 peak 0.004069 DC 0.0000230 p50 35.95 p95 42.06 p99 56.62 max 67.79 us
+granular bypass 96000 Hz 128 frames 4 events: grains 64 peak 0.011598 DC 0.0001222 p50 99.55 p95 127.08 p99 164.77 max 183.00 us
+granular dual-filter 96000 Hz 128 frames 4 events: grains 64 peak 0.007245 DC 0.0000045 p50 117.78 p95 148.73 p99 172.98 max 226.75 us
+granular bypass 96000 Hz 128 frames 8 events: grains 64 peak 0.013666 DC 0.0000894 p50 151.06 p95 207.72 p99 226.84 max 246.25 us
+granular dual-filter 96000 Hz 128 frames 8 events: grains 64 peak 0.010310 DC 0.0000029 p50 194.43 p95 222.74 p99 240.28 max 244.55 us
+granular bypass 96000 Hz 512 frames 1 events: grains 16 peak 0.007606 DC 0.0000282 p50 129.31 p95 155.77 p99 175.63 max 176.55 us
+granular dual-filter 96000 Hz 512 frames 1 events: grains 16 peak 0.004403 DC 0.0000024 p50 146.99 p95 177.18 p99 196.76 max 197.28 us
+granular bypass 96000 Hz 512 frames 4 events: grains 64 peak 0.015943 DC 0.0001309 p50 451.73 p95 769.94 p99 8620.04 max 8723.17 us
+granular dual-filter 96000 Hz 512 frames 4 events: grains 64 peak 0.010082 DC 0.0000166 p50 500.20 p95 768.91 p99 8656.04 max 8858.10 us
+granular bypass 96000 Hz 512 frames 8 events: grains 64 peak 0.014875 DC 0.0001424 p50 624.61 p95 895.86 p99 939.67 max 1209.48 us
+granular dual-filter 96000 Hz 512 frames 8 events: grains 64 peak 0.010789 DC 0.0000145 p50 794.62 p95 1146.13 p99 8897.08 max 8955.61 us
+checksum 8696.719949, bound failures 0
+PASS FxCallbackBenchmark
+=== FxCurveTrajectoryTests ===
+FX curve trajectories: 0 failure(s)
+PASS FxCurveTrajectoryTests
+=== FxDownlifterTests ===
+FX downlifter: 0 failure(s)
+PASS FxDownlifterTests
+=== FxEffectsBenchmark ===
+96k Shepard 8x4 + 4x effect 0: p50 538.37 p95 8594.73 p99 8925.80 max 9245.38 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 539.59 p95 8597.51 p99 12619.69 max 13800.09 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 577.55 p95 2943.38 p99 9098.32 max 10886.64 us; checksum -7.178030
+96k Shepard 8x4 + 4x effect 3: p50 576.90 p95 1047.15 p99 8652.48 max 9034.59 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 559.48 p95 6900.09 p99 9145.49 max 16638.07 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 545.17 p95 8610.40 p99 10577.92 max 12830.86 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 539.41 p95 8610.30 p99 8697.08 max 9138.44 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 552.89 p95 4619.89 p99 12623.76 max 14186.48 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 550.65 p95 8633.70 p99 8676.33 max 12626.45 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 554.01 p95 1057.11 p99 8690.33 max 9065.64 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 548.49 p95 855.47 p99 8652.22 max 13060.59 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 589.92 p95 8856.18 p99 12583.94 max 18108.01 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 589.40 p95 1334.02 p99 8683.49 max 8796.09 us; checksum -7.162567
+PASS FxEffectsBenchmark
+=== FxEffectsTests ===
+free Delay sweep 44100 Hz: relative staircase -17.52 dB, fractional -34.00 dB
+free Delay sweep 48000 Hz: relative staircase -17.63 dB, fractional -34.10 dB
+free Delay sweep 96000 Hz: relative staircase -17.38 dB, fractional -33.89 dB
+FX effects foundation: 0 failure(s)
+PASS FxEffectsTests
+=== FxFactoryCandidatesTests ===
+voxfx.impact.iron-drop 44100 Hz 119070 frames peak 0.020436 DC 0.0000287 mono/stereo RMS 0.99928 end5ms 0.0000000
+voxfx.impact.iron-drop 48000 Hz 129600 frames peak 0.020396 DC 0.0000286 mono/stereo RMS 0.99928 end5ms 0.0000000
+voxfx.impact.iron-drop 96000 Hz 259200 frames peak 0.020510 DC 0.0000277 mono/stereo RMS 0.99930 end5ms 0.0000000
+voxfx.riser.first-light 44100 Hz 350883 frames peak 0.017199 DC 0.0000013 mono/stereo RMS 0.99290 end5ms 0.0000000
+voxfx.riser.first-light 48000 Hz 381914 frames peak 0.016055 DC 0.0000013 mono/stereo RMS 0.99303 end5ms 0.0000000
+voxfx.riser.first-light 96000 Hz 763827 frames peak 0.015089 DC 0.0000014 mono/stereo RMS 0.99395 end5ms 0.0000000
+voxfx.fall.blue-hour 44100 Hz 555660 frames peak 0.017973 DC 0.0000000 mono/stereo RMS 0.99653 end5ms 0.0000000
+voxfx.fall.blue-hour 48000 Hz 604800 frames peak 0.018654 DC 0.0000000 mono/stereo RMS 0.99652 end5ms 0.0000000
+voxfx.fall.blue-hour 96000 Hz 1209600 frames peak 0.018378 DC 0.0000000 mono/stereo RMS 0.99622 end5ms 0.0000000
+voxfx.sweep.salt-air 44100 Hz 123480 frames peak 0.018524 DC 0.0000003 mono/stereo RMS 0.96612 end5ms 0.0000000
+voxfx.sweep.salt-air 48000 Hz 134400 frames peak 0.017217 DC 0.0000001 mono/stereo RMS 0.96575 end5ms 0.0000000
+voxfx.sweep.salt-air 96000 Hz 268800 frames peak 0.014999 DC 0.0000001 mono/stereo RMS 0.96560 end5ms 0.0000000
+voxfx.zap.acid-spore 44100 Hz 457758 frames peak 0.025090 DC 0.0000005 mono/stereo RMS 0.99862 end5ms 0.0000000
+voxfx.zap.acid-spore 48000 Hz 498240 frames peak 0.026010 DC 0.0000005 mono/stereo RMS 0.99862 end5ms 0.0000000
+voxfx.zap.acid-spore 96000 Hz 996480 frames peak 0.026034 DC 0.0000004 mono/stereo RMS 0.99864 end5ms 0.0000000
+voxfx.rhythm.neon-fault 44100 Hz 126693 frames peak 0.042686 DC 0.0002095 mono/stereo RMS 0.99253 end5ms 0.0000000
+voxfx.rhythm.neon-fault 48000 Hz 137898 frames peak 0.051026 DC 0.0002507 mono/stereo RMS 0.99244 end5ms 0.0000000
+voxfx.rhythm.neon-fault 96000 Hz 275795 frames peak 0.042623 DC 0.0002907 mono/stereo RMS 0.99254 end5ms 0.0000000
+voxfx.atmosphere.root-system 44100 Hz 352800 frames peak 0.004537 DC 0.0000037 mono/stereo RMS 0.99103 end5ms 0.0000000
+voxfx.atmosphere.root-system 48000 Hz 384000 frames peak 0.004586 DC 0.0000063 mono/stereo RMS 0.99101 end5ms 0.0000000
+voxfx.atmosphere.root-system 96000 Hz 768000 frames peak 0.004316 DC 0.0000063 mono/stereo RMS 0.98998 end5ms 0.0000000
+voxfx.stinger.sun-glass 44100 Hz 127890 frames peak 0.006846 DC 0.0000001 mono/stereo RMS 0.97904 end5ms 0.0000000
+voxfx.stinger.sun-glass 48000 Hz 139200 frames peak 0.006882 DC 0.0000001 mono/stereo RMS 0.97906 end5ms 0.0000000
+voxfx.stinger.sun-glass 96000 Hz 278400 frames peak 0.006885 DC 0.0000001 mono/stereo RMS 0.97902 end5ms 0.0000000
+voxfx.impact.subduction 44100 Hz 489511 frames peak 0.022198 DC 0.0000042 mono/stereo RMS 0.99974 end5ms 0.0000000
+voxfx.impact.subduction 48000 Hz 532801 frames peak 0.022393 DC 0.0000044 mono/stereo RMS 0.99973 end5ms 0.0000000
+voxfx.impact.subduction 96000 Hz 1065601 frames peak 0.022558 DC 0.0000040 mono/stereo RMS 0.99973 end5ms 0.0000000
+voxfx.riser.vernal-arc 44100 Hz 239400 frames peak 0.007773 DC 0.0000000 mono/stereo RMS 0.99099 end5ms 0.0000000
+voxfx.riser.vernal-arc 48000 Hz 260572 frames peak 0.008080 DC 0.0000000 mono/stereo RMS 0.99104 end5ms 0.0000000
+voxfx.riser.vernal-arc 96000 Hz 521143 frames peak 0.007944 DC 0.0000000 mono/stereo RMS 0.99098 end5ms 0.0000000
+voxfx.fall.ash-tide 44100 Hz 119071 frames peak 0.004786 DC 0.0000001 mono/stereo RMS 0.99089 end5ms 0.0000000
+voxfx.fall.ash-tide 48000 Hz 129601 frames peak 0.004673 DC 0.0000002 mono/stereo RMS 0.99082 end5ms 0.0000000
+voxfx.fall.ash-tide 96000 Hz 259201 frames peak 0.003550 DC 0.0000000 mono/stereo RMS 0.99074 end5ms 0.0000000
+voxfx.sweep.cedar-probe 44100 Hz 101430 frames peak 0.013266 DC 0.0000003 mono/stereo RMS 0.96818 end5ms 0.0000000
+voxfx.sweep.cedar-probe 48000 Hz 110400 frames peak 0.012729 DC 0.0000002 mono/stereo RMS 0.96870 end5ms 0.0000000
+voxfx.sweep.cedar-probe 96000 Hz 220800 frames peak 0.011134 DC 0.0000001 mono/stereo RMS 0.96876 end5ms 0.0000000
+voxfx.zap.pixel-wasp 44100 Hz 8379 frames peak 0.029307 DC 0.0000844 mono/stereo RMS 0.98025 end5ms 0.0000000
+voxfx.zap.pixel-wasp 48000 Hz 9120 frames peak 0.028178 DC 0.0000833 mono/stereo RMS 0.98020 end5ms 0.0000000
+voxfx.zap.pixel-wasp 96000 Hz 18240 frames peak 0.028228 DC 0.0000973 mono/stereo RMS 0.97996 end5ms 0.0000000
+voxfx.rhythm.sand-code 44100 Hz 595248 frames peak 0.018979 DC 0.0000012 mono/stereo RMS 0.99346 end5ms 0.0000000
+voxfx.rhythm.sand-code 48000 Hz 647889 frames peak 0.018896 DC 0.0000012 mono/stereo RMS 0.99346 end5ms 0.0000000
+voxfx.rhythm.sand-code 96000 Hz 1295777 frames peak 0.019062 DC 0.0000012 mono/stereo RMS 0.99346 end5ms 0.0000000
+voxfx.atmosphere.cloud-temple 44100 Hz 330750 frames peak 0.005924 DC 0.0000000 mono/stereo RMS 0.97196 end5ms 0.0000000
+voxfx.atmosphere.cloud-temple 48000 Hz 360000 frames peak 0.005898 DC 0.0000000 mono/stereo RMS 0.97213 end5ms 0.0000000
+voxfx.atmosphere.cloud-temple 96000 Hz 720000 frames peak 0.005982 DC 0.0000000 mono/stereo RMS 0.97216 end5ms 0.0000000
+voxfx.stinger.copper-warning 44100 Hz 125686 frames peak 0.010188 DC 0.0000056 mono/stereo RMS 0.99793 end5ms 0.0000000
+voxfx.stinger.copper-warning 48000 Hz 136801 frames peak 0.009915 DC 0.0000057 mono/stereo RMS 0.99795 end5ms 0.0000000
+voxfx.stinger.copper-warning 96000 Hz 273601 frames peak 0.009980 DC 0.0000058 mono/stereo RMS 0.99795 end5ms 0.0000000
+voxfx.impact.thunder-veil 44100 Hz 198450 frames peak 0.010408 DC 0.0000139 mono/stereo RMS 0.99411 end5ms 0.0000000
+voxfx.impact.thunder-veil 48000 Hz 216000 frames peak 0.010397 DC 0.0000138 mono/stereo RMS 0.99413 end5ms 0.0000000
+voxfx.impact.thunder-veil 96000 Hz 432000 frames peak 0.010120 DC 0.0000134 mono/stereo RMS 0.99459 end5ms 0.0000000
+voxfx.impact.oxide-bloom 44100 Hz 466578 frames peak 0.013731 DC 0.0000053 mono/stereo RMS 0.99900 end5ms 0.0000000
+voxfx.impact.oxide-bloom 48000 Hz 507840 frames peak 0.014137 DC 0.0000053 mono/stereo RMS 0.99901 end5ms 0.0000000
+voxfx.impact.oxide-bloom 96000 Hz 1015680 frames peak 0.014148 DC 0.0000052 mono/stereo RMS 0.99899 end5ms 0.0000000
+voxfx.riser.cobalt-choir 44100 Hz 737100 frames peak 0.008745 DC 0.0000000 mono/stereo RMS 0.97836 end5ms 0.0000000
+voxfx.riser.cobalt-choir 48000 Hz 802286 frames peak 0.008557 DC 0.0000000 mono/stereo RMS 0.97837 end5ms 0.0000000
+voxfx.riser.cobalt-choir 96000 Hz 1604572 frames peak 0.008342 DC 0.0000000 mono/stereo RMS 0.97839 end5ms 0.0000000
+voxfx.riser.pressure-front 44100 Hz 608580 frames peak 0.014800 DC 0.0000000 mono/stereo RMS 0.99118 end5ms 0.0000000
+voxfx.riser.pressure-front 48000 Hz 662400 frames peak 0.014286 DC 0.0000001 mono/stereo RMS 0.99126 end5ms 0.0000000
+voxfx.riser.pressure-front 96000 Hz 1324800 frames peak 0.012083 DC 0.0000000 mono/stereo RMS 0.99119 end5ms 0.0000000
+voxfx.fall.halcyon-wake 44100 Hz 635041 frames peak 0.007178 DC 0.0000000 mono/stereo RMS 0.99282 end5ms 0.0000000
+voxfx.fall.halcyon-wake 48000 Hz 691201 frames peak 0.007421 DC 0.0000000 mono/stereo RMS 0.99281 end5ms 0.0000000
+voxfx.fall.halcyon-wake 96000 Hz 1382401 frames peak 0.006823 DC 0.0000000 mono/stereo RMS 0.99294 end5ms 0.0000000
+voxfx.fall.glass-elevator 44100 Hz 519057 frames peak 0.008664 DC 0.0000011 mono/stereo RMS 0.97309 end5ms 0.0000000
+voxfx.fall.glass-elevator 48000 Hz 564960 frames peak 0.009207 DC 0.0000008 mono/stereo RMS 0.97464 end5ms 0.0000000
+voxfx.fall.glass-elevator 96000 Hz 1129920 frames peak 0.009941 DC 0.0000007 mono/stereo RMS 0.97394 end5ms 0.0000000
+voxfx.sweep.velvet-conduit 44100 Hz 99225 frames peak 0.007347 DC 0.0000000 mono/stereo RMS 0.98248 end5ms 0.0000000
+voxfx.sweep.velvet-conduit 48000 Hz 108000 frames peak 0.006420 DC 0.0000000 mono/stereo RMS 0.98288 end5ms 0.0000000
+voxfx.sweep.velvet-conduit 96000 Hz 216000 frames peak 0.006548 DC 0.0000000 mono/stereo RMS 0.98484 end5ms 0.0000000
+voxfx.sweep.monsoon-edge 44100 Hz 110250 frames peak 0.004126 DC 0.0000002 mono/stereo RMS 0.98634 end5ms 0.0000000
+voxfx.sweep.monsoon-edge 48000 Hz 120000 frames peak 0.004493 DC 0.0000005 mono/stereo RMS 0.98656 end5ms 0.0000000
+voxfx.sweep.monsoon-edge 96000 Hz 240000 frames peak 0.002983 DC 0.0000003 mono/stereo RMS 0.98662 end5ms 0.0000000
+voxfx.zap.mantis-antenna 44100 Hz 459964 frames peak 0.004810 DC 0.0000002 mono/stereo RMS 0.99421 end5ms 0.0000000
+voxfx.zap.mantis-antenna 48000 Hz 500641 frames peak 0.004986 DC 0.0000002 mono/stereo RMS 0.99412 end5ms 0.0000000
+voxfx.zap.mantis-antenna 96000 Hz 1001281 frames peak 0.004827 DC 0.0000002 mono/stereo RMS 0.99439 end5ms 0.0000000
+voxfx.zap.prism-arc 44100 Hz 144649 frames peak 0.010059 DC 0.0000000 mono/stereo RMS 0.98774 end5ms 0.0000000
+voxfx.zap.prism-arc 48000 Hz 157441 frames peak 0.009435 DC 0.0000000 mono/stereo RMS 0.98745 end5ms 0.0000000
+voxfx.zap.prism-arc 96000 Hz 314881 frames peak 0.009503 DC 0.0000000 mono/stereo RMS 0.98679 end5ms 0.0000000
+voxfx.rhythm.rusted-bell-grid 44100 Hz 578944 frames peak 0.013663 DC 0.0000283 mono/stereo RMS 0.99614 end5ms 0.0000000
+voxfx.rhythm.rusted-bell-grid 48000 Hz 630143 frames peak 0.013782 DC 0.0000283 mono/stereo RMS 0.99613 end5ms 0.0000000
+voxfx.rhythm.rusted-bell-grid 96000 Hz 1260286 frames peak 0.012719 DC 0.0000284 mono/stereo RMS 0.99614 end5ms 0.0000000
+voxfx.rhythm.lantern-bounce 44100 Hz 574831 frames peak 0.008031 DC 0.0000018 mono/stereo RMS 0.99687 end5ms 0.0000000
+voxfx.rhythm.lantern-bounce 48000 Hz 625666 frames peak 0.007941 DC 0.0000018 mono/stereo RMS 0.99685 end5ms 0.0000000
+voxfx.rhythm.lantern-bounce 96000 Hz 1251332 frames peak 0.007911 DC 0.0000018 mono/stereo RMS 0.99686 end5ms 0.0000000
+voxfx.atmosphere.lichen-cavern 44100 Hz 343981 frames peak 0.002097 DC 0.0000000 mono/stereo RMS 0.98013 end5ms 0.0000000
+voxfx.atmosphere.lichen-cavern 48000 Hz 374401 frames peak 0.002078 DC 0.0000000 mono/stereo RMS 0.98020 end5ms 0.0000000
+voxfx.atmosphere.lichen-cavern 96000 Hz 748801 frames peak 0.002250 DC 0.0000000 mono/stereo RMS 0.97963 end5ms 0.0000000
+voxfx.atmosphere.horizon-vapour 44100 Hz 321931 frames peak 0.002862 DC 0.0000000 mono/stereo RMS 0.97147 end5ms 0.0000000
+voxfx.atmosphere.horizon-vapour 48000 Hz 350401 frames peak 0.003176 DC 0.0000000 mono/stereo RMS 0.97063 end5ms 0.0000000
+voxfx.atmosphere.horizon-vapour 96000 Hz 700801 frames peak 0.002161 DC 0.0000000 mono/stereo RMS 0.97032 end5ms 0.0000000
+voxfx.stinger.solar-insignia 44100 Hz 169786 frames peak 0.010507 DC 0.0000054 mono/stereo RMS 0.99211 end5ms 0.0000000
+voxfx.stinger.solar-insignia 48000 Hz 184801 frames peak 0.010949 DC 0.0000054 mono/stereo RMS 0.99213 end5ms 0.0000000
+voxfx.stinger.solar-insignia 96000 Hz 369601 frames peak 0.010524 DC 0.0000053 mono/stereo RMS 0.99215 end5ms 0.0000000
+voxfx.stinger.null-beacon 44100 Hz 582121 frames peak 0.005259 DC 0.0000007 mono/stereo RMS 0.99166 end5ms 0.0000000
+voxfx.stinger.null-beacon 48000 Hz 633601 frames peak 0.005300 DC 0.0000006 mono/stereo RMS 0.99141 end5ms 0.0000000
+voxfx.stinger.null-beacon 96000 Hz 1267201 frames peak 0.004959 DC 0.0000005 mono/stereo RMS 0.99145 end5ms 0.0000000
+voxfx.impact.crystal-bulkhead 44100 Hz 216090 frames peak 0.011589 DC 0.0000095 mono/stereo RMS 0.99830 end5ms 0.0000000
+voxfx.impact.crystal-bulkhead 48000 Hz 235200 frames peak 0.011662 DC 0.0000092 mono/stereo RMS 0.99835 end5ms 0.0000000
+voxfx.impact.crystal-bulkhead 96000 Hz 470400 frames peak 0.011139 DC 0.0000097 mono/stereo RMS 0.99869 end5ms 0.0000000
+voxfx.impact.substation 44100 Hz 18522 frames peak 0.022647 DC 0.0001306 mono/stereo RMS 1.00000 end5ms 0.0000000
+voxfx.impact.substation 48000 Hz 20160 frames peak 0.023136 DC 0.0001303 mono/stereo RMS 1.00000 end5ms 0.0000000
+voxfx.impact.substation 96000 Hz 40320 frames peak 0.023811 DC 0.0001267 mono/stereo RMS 1.00000 end5ms 0.0000000
+voxfx.impact.curtain-crack 44100 Hz 124803 frames peak 0.007180 DC 0.0000001 mono/stereo RMS 0.98317 end5ms 0.0000000
+voxfx.impact.curtain-crack 48000 Hz 135840 frames peak 0.006679 DC 0.0000001 mono/stereo RMS 0.98248 end5ms 0.0000000
+voxfx.impact.curtain-crack 96000 Hz 271680 frames peak 0.005375 DC 0.0000000 mono/stereo RMS 0.98269 end5ms 0.0000000
+voxfx.riser.signal-flags 44100 Hz 443595 frames peak 0.005625 DC 0.0000022 mono/stereo RMS 0.96343 end5ms 0.0000000
+voxfx.riser.signal-flags 48000 Hz 482824 frames peak 0.005652 DC 0.0000022 mono/stereo RMS 0.96352 end5ms 0.0000000
+voxfx.riser.signal-flags 96000 Hz 965648 frames peak 0.005646 DC 0.0000022 mono/stereo RMS 0.96362 end5ms 0.0000000
+voxfx.riser.saffron-spark 44100 Hz 105840 frames peak 0.009244 DC 0.0000001 mono/stereo RMS 0.97561 end5ms 0.0000000
+voxfx.riser.saffron-spark 48000 Hz 115200 frames peak 0.008503 DC 0.0000001 mono/stereo RMS 0.97552 end5ms 0.0000000
+voxfx.riser.saffron-spark 96000 Hz 230400 frames peak 0.006540 DC 0.0000001 mono/stereo RMS 0.97658 end5ms 0.0000000
+voxfx.riser.alloy-sunrise 44100 Hz 1308300 frames peak 0.010049 DC 0.0000000 mono/stereo RMS 0.97072 end5ms 0.0000000
+voxfx.riser.alloy-sunrise 48000 Hz 1424000 frames peak 0.009503 DC 0.0000000 mono/stereo RMS 0.97081 end5ms 0.0000000
+voxfx.riser.alloy-sunrise 96000 Hz 2848000 frames peak 0.009246 DC 0.0000000 mono/stereo RMS 0.97075 end5ms 0.0000000
+voxfx.fall.quarry-glass 44100 Hz 568891 frames peak 0.009689 DC 0.0000005 mono/stereo RMS 0.98182 end5ms 0.0000000
+voxfx.fall.quarry-glass 48000 Hz 619201 frames peak 0.009151 DC 0.0000017 mono/stereo RMS 0.98186 end5ms 0.0000000
+voxfx.fall.quarry-glass 96000 Hz 1238401 frames peak 0.008113 DC 0.0000393 mono/stereo RMS 0.98090 end5ms 0.0000000
+voxfx.fall.decompression 44100 Hz 96138 frames peak 0.006976 DC 0.0000001 mono/stereo RMS 0.99125 end5ms 0.0000000
+voxfx.fall.decompression 48000 Hz 104640 frames peak 0.006813 DC 0.0000000 mono/stereo RMS 0.99103 end5ms 0.0000000
+voxfx.fall.decompression 96000 Hz 209280 frames peak 0.006478 DC 0.0000001 mono/stereo RMS 0.98943 end5ms 0.0000000
+voxfx.fall.iris-fold 44100 Hz 292664 frames peak 0.004686 DC 0.0000000 mono/stereo RMS 0.95307 end5ms 0.0000000
+voxfx.fall.iris-fold 48000 Hz 318546 frames peak 0.004580 DC 0.0000000 mono/stereo RMS 0.95219 end5ms 0.0000000
+voxfx.fall.iris-fold 96000 Hz 637091 frames peak 0.004427 DC 0.0000000 mono/stereo RMS 0.95190 end5ms 0.0000000
+voxfx.sweep.rail-camera 44100 Hz 116865 frames peak 0.005843 DC 0.0000000 mono/stereo RMS 0.97302 end5ms 0.0000000
+voxfx.sweep.rail-camera 48000 Hz 127200 frames peak 0.006049 DC 0.0000000 mono/stereo RMS 0.97303 end5ms 0.0000000
+voxfx.sweep.rail-camera 96000 Hz 254400 frames peak 0.004827 DC 0.0000000 mono/stereo RMS 0.97270 end5ms 0.0000000
+voxfx.sweep.wire-wind 44100 Hz 102754 frames peak 0.008450 DC 0.0000001 mono/stereo RMS 0.92589 end5ms 0.0000000
+voxfx.sweep.wire-wind 48000 Hz 111841 frames peak 0.009159 DC 0.0000002 mono/stereo RMS 0.92553 end5ms 0.0000000
+voxfx.sweep.wire-wind 96000 Hz 223681 frames peak 0.006628 DC 0.0000000 mono/stereo RMS 0.92600 end5ms 0.0000000
+voxfx.sweep.amber-visor 44100 Hz 119071 frames peak 0.005370 DC 0.0000015 mono/stereo RMS 0.97740 end5ms 0.0000000
+voxfx.sweep.amber-visor 48000 Hz 129601 frames peak 0.004993 DC 0.0000016 mono/stereo RMS 0.97742 end5ms 0.0000000
+voxfx.sweep.amber-visor 96000 Hz 259201 frames peak 0.005324 DC 0.0000017 mono/stereo RMS 0.97872 end5ms 0.0000000
+voxfx.zap.ion-needle 44100 Hz 6175 frames peak 0.011578 DC 0.0000085 mono/stereo RMS 0.99506 end5ms 0.0001098
+voxfx.zap.ion-needle 48000 Hz 6721 frames peak 0.011521 DC 0.0000086 mono/stereo RMS 0.99474 end5ms 0.0001161
+voxfx.zap.ion-needle 96000 Hz 13441 frames peak 0.011572 DC 0.0000077 mono/stereo RMS 0.99497 end5ms 0.0001630
+voxfx.zap.delta-dialogue 44100 Hz 469224 frames peak 0.016522 DC 0.0000003 mono/stereo RMS 0.90682 end5ms 0.0000000
+voxfx.zap.delta-dialogue 48000 Hz 510720 frames peak 0.016559 DC 0.0000003 mono/stereo RMS 0.90671 end5ms 0.0000000
+voxfx.zap.delta-dialogue 96000 Hz 1021440 frames peak 0.016435 DC 0.0000002 mono/stereo RMS 0.90651 end5ms 0.0000000
+voxfx.zap.hive-jab 44100 Hz 57772 frames peak 0.003534 DC 0.0000024 mono/stereo RMS 0.98819 end5ms 0.0000000
+voxfx.zap.hive-jab 48000 Hz 62881 frames peak 0.003577 DC 0.0000008 mono/stereo RMS 0.98827 end5ms 0.0000000
+voxfx.zap.hive-jab 96000 Hz 125761 frames peak 0.003421 DC 0.0000005 mono/stereo RMS 0.98843 end5ms 0.0000000
+voxfx.rhythm.ribbon-code 44100 Hz 769909 frames peak 0.019194 DC 0.0000412 mono/stereo RMS 0.99494 end5ms 0.0000000
+voxfx.rhythm.ribbon-code 48000 Hz 837996 frames peak 0.018671 DC 0.0000412 mono/stereo RMS 0.99492 end5ms 0.0000000
+voxfx.rhythm.ribbon-code 96000 Hz 1675992 frames peak 0.018507 DC 0.0000412 mono/stereo RMS 0.99493 end5ms 0.0000000
+voxfx.rhythm.tokamak-ticks 44100 Hz 118748 frames peak 0.013037 DC 0.0000004 mono/stereo RMS 0.97609 end5ms 0.0000000
+voxfx.rhythm.tokamak-ticks 48000 Hz 129250 frames peak 0.009025 DC 0.0000014 mono/stereo RMS 0.97515 end5ms 0.0000000
+voxfx.rhythm.tokamak-ticks 96000 Hz 258499 frames peak 0.010076 DC 0.0000029 mono/stereo RMS 0.97390 end5ms 0.0000000
+voxfx.rhythm.equinox-call 44100 Hz 219139 frames peak 0.004490 DC 0.0000000 mono/stereo RMS 0.97143 end5ms 0.0000000
+voxfx.rhythm.equinox-call 48000 Hz 238519 frames peak 0.004343 DC 0.0000000 mono/stereo RMS 0.97150 end5ms 0.0000000
+voxfx.rhythm.equinox-call 96000 Hz 477037 frames peak 0.004296 DC 0.0000000 mono/stereo RMS 0.97152 end5ms 0.0000000
+voxfx.atmosphere.polar-halo 44100 Hz 361620 frames peak 0.005507 DC 0.0000000 mono/stereo RMS 0.93349 end5ms 0.0000000
+voxfx.atmosphere.polar-halo 48000 Hz 393600 frames peak 0.005529 DC 0.0000000 mono/stereo RMS 0.93380 end5ms 0.0000000
+voxfx.atmosphere.polar-halo 96000 Hz 787200 frames peak 0.005640 DC 0.0000000 mono/stereo RMS 0.93396 end5ms 0.0000000
+voxfx.atmosphere.black-peat 44100 Hz 275625 frames peak 0.003372 DC 0.0000019 mono/stereo RMS 0.99489 end5ms 0.0000000
+voxfx.atmosphere.black-peat 48000 Hz 300000 frames peak 0.003357 DC 0.0000032 mono/stereo RMS 0.99499 end5ms 0.0000000
+voxfx.atmosphere.black-peat 96000 Hz 600000 frames peak 0.003319 DC 0.0000009 mono/stereo RMS 0.99484 end5ms 0.0000000
+voxfx.atmosphere.skylight-dust 44100 Hz 445410 frames peak 0.005611 DC 0.0000000 mono/stereo RMS 0.95241 end5ms 0.0000000
+voxfx.atmosphere.skylight-dust 48000 Hz 484800 frames peak 0.005346 DC 0.0000000 mono/stereo RMS 0.95247 end5ms 0.0000000
+voxfx.atmosphere.skylight-dust 96000 Hz 969600 frames peak 0.003731 DC 0.0000000 mono/stereo RMS 0.95225 end5ms 0.0000000
+voxfx.stinger.crest-mark 44100 Hz 179488 frames peak 0.005084 DC 0.0000026 mono/stereo RMS 0.99054 end5ms 0.0000000
+voxfx.stinger.crest-mark 48000 Hz 195361 frames peak 0.005174 DC 0.0000026 mono/stereo RMS 0.99050 end5ms 0.0000000
+voxfx.stinger.crest-mark 96000 Hz 390721 frames peak 0.005162 DC 0.0000026 mono/stereo RMS 0.99065 end5ms 0.0000000
+voxfx.stinger.hard-stop 44100 Hz 22932 frames peak 0.020231 DC 0.0000950 mono/stereo RMS 0.98752 end5ms 0.0000887
+voxfx.stinger.hard-stop 48000 Hz 24960 frames peak 0.020567 DC 0.0000947 mono/stereo RMS 0.98753 end5ms 0.0000890
+voxfx.stinger.hard-stop 96000 Hz 49920 frames peak 0.019680 DC 0.0000924 mono/stereo RMS 0.98754 end5ms 0.0000895
+voxfx.stinger.parallax-fill 44100 Hz 85995 frames peak 0.009390 DC 0.0000226 mono/stereo RMS 0.95021 end5ms 0.0000000
+voxfx.stinger.parallax-fill 48000 Hz 93600 frames peak 0.009734 DC 0.0000221 mono/stereo RMS 0.95060 end5ms 0.0000000
+voxfx.stinger.parallax-fill 96000 Hz 187200 frames peak 0.009707 DC 0.0000225 mono/stereo RMS 0.95155 end5ms 0.0000000
+voxfx.impact.paper-cannon 44100 Hz 13672 frames peak 0.013737 DC 0.0000002 mono/stereo RMS 0.99677 end5ms 0.0000000
+voxfx.impact.paper-cannon 48000 Hz 14881 frames peak 0.014243 DC 0.0000002 mono/stereo RMS 0.99661 end5ms 0.0000000
+voxfx.impact.paper-cannon 96000 Hz 29761 frames peak 0.007938 DC 0.0000001 mono/stereo RMS 0.99621 end5ms 0.0000000
+voxfx.impact.marrow-drum 44100 Hz 121716 frames peak 0.012364 DC 0.0000136 mono/stereo RMS 0.99935 end5ms 0.0000000
+voxfx.impact.marrow-drum 48000 Hz 132480 frames peak 0.012306 DC 0.0000135 mono/stereo RMS 0.99936 end5ms 0.0000000
+voxfx.impact.marrow-drum 96000 Hz 264960 frames peak 0.012168 DC 0.0000128 mono/stereo RMS 0.99936 end5ms 0.0000000
+voxfx.impact.silver-sill 44100 Hz 202861 frames peak 0.004277 DC 0.0000002 mono/stereo RMS 0.94445 end5ms 0.0000000
+voxfx.impact.silver-sill 48000 Hz 220801 frames peak 0.004349 DC 0.0000002 mono/stereo RMS 0.94437 end5ms 0.0000000
+voxfx.impact.silver-sill 96000 Hz 441601 frames peak 0.004246 DC 0.0000002 mono/stereo RMS 0.94444 end5ms 0.0000000
+voxfx.impact.seismic-lock 44100 Hz 59536 frames peak 0.021488 DC 0.0000198 mono/stereo RMS 0.99905 end5ms 0.0001055
+voxfx.impact.seismic-lock 48000 Hz 64801 frames peak 0.021846 DC 0.0000198 mono/stereo RMS 0.99904 end5ms 0.0001076
+voxfx.impact.seismic-lock 96000 Hz 129601 frames peak 0.021868 DC 0.0000202 mono/stereo RMS 0.99905 end5ms 0.0001088
+voxfx.impact.fizz-hammer 44100 Hz 11466 frames peak 0.027846 DC 0.0000448 mono/stereo RMS 0.98193 end5ms 0.0000000
+voxfx.impact.fizz-hammer 48000 Hz 12480 frames peak 0.028945 DC 0.0000437 mono/stereo RMS 0.98189 end5ms 0.0000000
+voxfx.impact.fizz-hammer 96000 Hz 24960 frames peak 0.032382 DC 0.0000414 mono/stereo RMS 0.98128 end5ms 0.0000000
+voxfx.impact.shadow-slab 44100 Hz 224910 frames peak 0.006953 DC 0.0000072 mono/stereo RMS 0.97307 end5ms 0.0000000
+voxfx.impact.shadow-slab 48000 Hz 244800 frames peak 0.006951 DC 0.0000072 mono/stereo RMS 0.97310 end5ms 0.0000000
+voxfx.impact.shadow-slab 96000 Hz 489600 frames peak 0.006830 DC 0.0000069 mono/stereo RMS 0.97304 end5ms 0.0000000
+voxfx.impact.reef-splash 44100 Hz 129214 frames peak 0.006960 DC 0.0000000 mono/stereo RMS 0.96540 end5ms 0.0000000
+voxfx.impact.reef-splash 48000 Hz 140641 frames peak 0.007344 DC 0.0000000 mono/stereo RMS 0.96571 end5ms 0.0000000
+voxfx.impact.reef-splash 96000 Hz 281281 frames peak 0.005647 DC 0.0000000 mono/stereo RMS 0.96880 end5ms 0.0000000
+voxfx.impact.phosphor-bolt 44100 Hz 26019 frames peak 0.011638 DC 0.0000273 mono/stereo RMS 0.99474 end5ms 0.0000000
+voxfx.impact.phosphor-bolt 48000 Hz 28320 frames peak 0.011515 DC 0.0000266 mono/stereo RMS 0.99475 end5ms 0.0000000
+voxfx.impact.phosphor-bolt 96000 Hz 56640 frames peak 0.011415 DC 0.0000262 mono/stereo RMS 0.99470 end5ms 0.0000000
+voxfx.riser.silk-stair 44100 Hz 364828 frames peak 0.008886 DC 0.0000000 mono/stereo RMS 0.96924 end5ms 0.0000000
+voxfx.riser.silk-stair 48000 Hz 397091 frames peak 0.009423 DC 0.0000000 mono/stereo RMS 0.96924 end5ms 0.0000000
+voxfx.riser.silk-stair 96000 Hz 794182 frames peak 0.009140 DC 0.0000000 mono/stereo RMS 0.96922 end5ms 0.0000000
+voxfx.riser.quarter-fuse 44100 Hz 647931 frames peak 0.017539 DC 0.0000000 mono/stereo RMS 0.95680 end5ms 0.0000000
+voxfx.riser.quarter-fuse 48000 Hz 705231 frames peak 0.016747 DC 0.0000000 mono/stereo RMS 0.95734 end5ms 0.0000000
+voxfx.riser.quarter-fuse 96000 Hz 1410462 frames peak 0.015074 DC 0.0000000 mono/stereo RMS 0.95776 end5ms 0.0000000
+voxfx.riser.firefly-ladder 44100 Hz 542430 frames peak 0.002687 DC 0.0000001 mono/stereo RMS 0.98458 end5ms 0.0000000
+voxfx.riser.firefly-ladder 48000 Hz 590400 frames peak 0.002679 DC 0.0000001 mono/stereo RMS 0.98449 end5ms 0.0000000
+voxfx.riser.firefly-ladder 96000 Hz 1180800 frames peak 0.002652 DC 0.0000000 mono/stereo RMS 0.98448 end5ms 0.0000000
+voxfx.riser.thorn-weather 44100 Hz 689353 frames peak 0.012150 DC 0.0000038 mono/stereo RMS 0.84151 end5ms 0.0000000
+voxfx.riser.thorn-weather 48000 Hz 750316 frames peak 0.013852 DC 0.0000041 mono/stereo RMS 0.83953 end5ms 0.0000000
+voxfx.riser.thorn-weather 96000 Hz 1500632 frames peak 0.012225 DC 0.0000040 mono/stereo RMS 0.84003 end5ms 0.0000000
+voxfx.riser.pulse-ignition 44100 Hz 50715 frames peak 0.010510 DC 0.0000065 mono/stereo RMS 0.99217 end5ms 0.0001950
+voxfx.riser.pulse-ignition 48000 Hz 55200 frames peak 0.010406 DC 0.0000088 mono/stereo RMS 0.99203 end5ms 0.0001925
+voxfx.riser.pulse-ignition 96000 Hz 110400 frames peak 0.010788 DC 0.0000088 mono/stereo RMS 0.99287 end5ms 0.0001930
+voxfx.riser.gold-meridian 44100 Hz 1276517 frames peak 0.009885 DC 0.0000009 mono/stereo RMS 0.94326 end5ms 0.0000000
+voxfx.riser.gold-meridian 48000 Hz 1389406 frames peak 0.009817 DC 0.0000009 mono/stereo RMS 0.94321 end5ms 0.0000000
+voxfx.riser.gold-meridian 96000 Hz 2778811 frames peak 0.009854 DC 0.0000009 mono/stereo RMS 0.94320 end5ms 0.0000000
+voxfx.riser.air-drawbridge 44100 Hz 156555 frames peak 0.007139 DC 0.0000001 mono/stereo RMS 0.95155 end5ms 0.0000000
+voxfx.riser.air-drawbridge 48000 Hz 170400 frames peak 0.007381 DC 0.0000001 mono/stereo RMS 0.95244 end5ms 0.0000000
+voxfx.riser.air-drawbridge 96000 Hz 340800 frames peak 0.005020 DC 0.0000000 mono/stereo RMS 0.95427 end5ms 0.0000000
+voxfx.riser.iron-oxygen 44100 Hz 715910 frames peak 0.003072 DC 0.0000001 mono/stereo RMS 0.98902 end5ms 0.0000000
+voxfx.riser.iron-oxygen 48000 Hz 779221 frames peak 0.002900 DC 0.0000001 mono/stereo RMS 0.98902 end5ms 0.0000000
+voxfx.riser.iron-oxygen 96000 Hz 1558442 frames peak 0.003103 DC 0.0000001 mono/stereo RMS 0.98864 end5ms 0.0000000
+voxfx.fall.velour-slide 44100 Hz 439083 frames peak 0.007656 DC 0.0000000 mono/stereo RMS 0.92932 end5ms 0.0000000
+voxfx.fall.velour-slide 48000 Hz 477914 frames peak 0.006989 DC 0.0000000 mono/stereo RMS 0.92797 end5ms 0.0000000
+voxfx.fall.velour-slide 96000 Hz 955827 frames peak 0.006503 DC 0.0000000 mono/stereo RMS 0.92710 end5ms 0.0000000
+voxfx.fall.loose-bolt 44100 Hz 484219 frames peak 0.006117 DC 0.0000014 mono/stereo RMS 0.96701 end5ms 0.0000000
+voxfx.fall.loose-bolt 48000 Hz 527041 frames peak 0.006252 DC 0.0000011 mono/stereo RMS 0.96728 end5ms 0.0000000
+voxfx.fall.loose-bolt 96000 Hz 1054081 frames peak 0.006886 DC 0.0000165 mono/stereo RMS 0.96899 end5ms 0.0000000
+voxfx.fall.ebb-foam 44100 Hz 257985 frames peak 0.005092 DC 0.0000000 mono/stereo RMS 0.98410 end5ms 0.0000000
+voxfx.fall.ebb-foam 48000 Hz 280800 frames peak 0.004839 DC 0.0000000 mono/stereo RMS 0.98366 end5ms 0.0000000
+voxfx.fall.ebb-foam 96000 Hz 561600 frames peak 0.004527 DC 0.0000000 mono/stereo RMS 0.98002 end5ms 0.0000000
+voxfx.fall.embrittled 44100 Hz 14995 frames peak 0.021892 DC 0.0000019 mono/stereo RMS 0.96515 end5ms 0.0000000
+voxfx.fall.embrittled 48000 Hz 16321 frames peak 0.021764 DC 0.0000017 mono/stereo RMS 0.96525 end5ms 0.0000000
+voxfx.fall.embrittled 96000 Hz 32641 frames peak 0.022187 DC 0.0000032 mono/stereo RMS 0.96536 end5ms 0.0000000
+voxfx.fall.root-sink 44100 Hz 269010 frames peak 0.006707 DC 0.0000040 mono/stereo RMS 0.98550 end5ms 0.0000000
+voxfx.fall.root-sink 48000 Hz 292800 frames peak 0.007131 DC 0.0000073 mono/stereo RMS 0.98612 end5ms 0.0000000
+voxfx.fall.root-sink 96000 Hz 585600 frames peak 0.007218 DC 0.0000055 mono/stereo RMS 0.98588 end5ms 0.0000000
+voxfx.fall.saffron-eddy 44100 Hz 560071 frames peak 0.006328 DC 0.0000000 mono/stereo RMS 0.90549 end5ms 0.0000000
+voxfx.fall.saffron-eddy 48000 Hz 609601 frames peak 0.006320 DC 0.0000000 mono/stereo RMS 0.90598 end5ms 0.0000000
+voxfx.fall.saffron-eddy 96000 Hz 1219201 frames peak 0.006469 DC 0.0000000 mono/stereo RMS 0.91197 end5ms 0.0000000
+voxfx.fall.dusk-shutter 44100 Hz 195300 frames peak 0.006166 DC 0.0000003 mono/stereo RMS 0.98633 end5ms 0.0000000
+voxfx.fall.dusk-shutter 48000 Hz 212572 frames peak 0.005634 DC 0.0000003 mono/stereo RMS 0.98628 end5ms 0.0000000
+voxfx.fall.dusk-shutter 96000 Hz 425143 frames peak 0.004186 DC 0.0000000 mono/stereo RMS 0.98634 end5ms 0.0000000
+voxfx.fall.sunken-diode 44100 Hz 137593 frames peak 0.003869 DC 0.0000033 mono/stereo RMS 0.98420 end5ms 0.0000000
+voxfx.fall.sunken-diode 48000 Hz 149761 frames peak 0.003951 DC 0.0000034 mono/stereo RMS 0.98424 end5ms 0.0000000
+voxfx.fall.sunken-diode 96000 Hz 299521 frames peak 0.003881 DC 0.0000034 mono/stereo RMS 0.98419 end5ms 0.0000000
+voxfx.sweep.lake-prism 44100 Hz 222705 frames peak 0.008060 DC 0.0000000 mono/stereo RMS 0.96780 end5ms 0.0000000
+voxfx.sweep.lake-prism 48000 Hz 242400 frames peak 0.007379 DC 0.0000000 mono/stereo RMS 0.96818 end5ms 0.0000000
+voxfx.sweep.lake-prism 96000 Hz 484800 frames peak 0.007099 DC 0.0000000 mono/stereo RMS 0.96743 end5ms 0.0000000
+voxfx.sweep.duct-runner 44100 Hz 85114 frames peak 0.009607 DC 0.0000002 mono/stereo RMS 0.92386 end5ms 0.0000000
+voxfx.sweep.duct-runner 48000 Hz 92641 frames peak 0.009804 DC 0.0000001 mono/stereo RMS 0.92107 end5ms 0.0000000
+voxfx.sweep.duct-runner 96000 Hz 185281 frames peak 0.006399 DC 0.0000000 mono/stereo RMS 0.91609 end5ms 0.0000000
+voxfx.sweep.void-boomerang 44100 Hz 122598 frames peak 0.009072 DC 0.0000002 mono/stereo RMS 0.92444 end5ms 0.0000000
+voxfx.sweep.void-boomerang 48000 Hz 133440 frames peak 0.008595 DC 0.0000004 mono/stereo RMS 0.92313 end5ms 0.0000000
+voxfx.sweep.void-boomerang 96000 Hz 266880 frames peak 0.007889 DC 0.0000001 mono/stereo RMS 0.92557 end5ms 0.0000000
+voxfx.sweep.coconut-air 44100 Hz 156114 frames peak 0.006294 DC 0.0000001 mono/stereo RMS 0.95196 end5ms 0.0000000
+voxfx.sweep.coconut-air 48000 Hz 169920 frames peak 0.005616 DC 0.0000001 mono/stereo RMS 0.95236 end5ms 0.0000000
+voxfx.sweep.coconut-air 96000 Hz 339840 frames peak 0.004431 DC 0.0000000 mono/stereo RMS 0.95327 end5ms 0.0000000
+voxfx.sweep.metal-drifter 44100 Hz 72324 frames peak 0.008878 DC 0.0000022 mono/stereo RMS 0.96688 end5ms 0.0000000
+voxfx.sweep.metal-drifter 48000 Hz 78720 frames peak 0.008662 DC 0.0000018 mono/stereo RMS 0.96579 end5ms 0.0000000
+voxfx.sweep.metal-drifter 96000 Hz 157440 frames peak 0.007432 DC 0.0000026 mono/stereo RMS 0.96452 end5ms 0.0000000
+voxfx.sweep.needle-ecology 44100 Hz 255780 frames peak 0.003924 DC 0.0000001 mono/stereo RMS 0.96921 end5ms 0.0000000
+voxfx.sweep.needle-ecology 48000 Hz 278400 frames peak 0.004123 DC 0.0000001 mono/stereo RMS 0.96920 end5ms 0.0000000
+voxfx.sweep.needle-ecology 96000 Hz 556800 frames peak 0.003741 DC 0.0000001 mono/stereo RMS 0.97155 end5ms 0.0000000
+voxfx.sweep.saffron-mirror 44100 Hz 582121 frames peak 0.003043 DC 0.0000001 mono/stereo RMS 0.95530 end5ms 0.0000000
+voxfx.sweep.saffron-mirror 48000 Hz 633601 frames peak 0.003073 DC 0.0000001 mono/stereo RMS 0.95485 end5ms 0.0000000
+voxfx.sweep.saffron-mirror 96000 Hz 1267201 frames peak 0.003150 DC 0.0000000 mono/stereo RMS 0.95156 end5ms 0.0000000
+voxfx.sweep.blue-aperture 44100 Hz 249166 frames peak 0.008098 DC 0.0000000 mono/stereo RMS 0.97314 end5ms 0.0000000
+voxfx.sweep.blue-aperture 48000 Hz 271201 frames peak 0.007975 DC 0.0000000 mono/stereo RMS 0.97366 end5ms 0.0000000
+voxfx.sweep.blue-aperture 96000 Hz 542401 frames peak 0.007912 DC 0.0000000 mono/stereo RMS 0.97498 end5ms 0.0000000
+voxfx.zap.sun-midge 44100 Hz 53361 frames peak 0.007668 DC 0.0000000 mono/stereo RMS 0.99274 end5ms 0.0000000
+voxfx.zap.sun-midge 48000 Hz 58080 frames peak 0.007840 DC 0.0000000 mono/stereo RMS 0.99269 end5ms 0.0000000
+voxfx.zap.sun-midge 96000 Hz 116160 frames peak 0.007713 DC 0.0000000 mono/stereo RMS 0.99261 end5ms 0.0000000
+voxfx.zap.resin-tongue 44100 Hz 66591 frames peak 0.011462 DC 0.0000003 mono/stereo RMS 0.96943 end5ms 0.0000000
+voxfx.zap.resin-tongue 48000 Hz 72480 frames peak 0.011248 DC 0.0000004 mono/stereo RMS 0.96932 end5ms 0.0000000
+voxfx.zap.resin-tongue 96000 Hz 144960 frames peak 0.011423 DC 0.0000006 mono/stereo RMS 0.96911 end5ms 0.0000000
+voxfx.zap.neon-morse 44100 Hz 18964 frames peak 0.011240 DC 0.0000029 mono/stereo RMS 0.91017 end5ms 0.0000178
+voxfx.zap.neon-morse 48000 Hz 20641 frames peak 0.008858 DC 0.0000027 mono/stereo RMS 0.90866 end5ms 0.0000179
+voxfx.zap.neon-morse 96000 Hz 41281 frames peak 0.008516 DC 0.0000101 mono/stereo RMS 0.90104 end5ms 0.0000179
+voxfx.zap.deep-arc 44100 Hz 474075 frames peak 0.002887 DC 0.0000005 mono/stereo RMS 0.99195 end5ms 0.0000000
+voxfx.zap.deep-arc 48000 Hz 516000 frames peak 0.002841 DC 0.0000006 mono/stereo RMS 0.99193 end5ms 0.0000000
+voxfx.zap.deep-arc 96000 Hz 1032000 frames peak 0.002772 DC 0.0000004 mono/stereo RMS 0.99209 end5ms 0.0000000
+voxfx.zap.ion-marble 44100 Hz 65268 frames peak 0.017285 DC 0.0000000 mono/stereo RMS 0.95640 end5ms 0.0000000
+voxfx.zap.ion-marble 48000 Hz 71040 frames peak 0.016483 DC 0.0000000 mono/stereo RMS 0.95629 end5ms 0.0000000
+voxfx.zap.ion-marble 96000 Hz 142080 frames peak 0.017109 DC 0.0000000 mono/stereo RMS 0.95608 end5ms 0.0000000
+voxfx.zap.air-pin 44100 Hz 7939 frames peak 0.008749 DC 0.0000004 mono/stereo RMS 0.99874 end5ms 0.0000000
+voxfx.zap.air-pin 48000 Hz 8641 frames peak 0.009095 DC 0.0000024 mono/stereo RMS 0.99863 end5ms 0.0000000
+voxfx.zap.air-pin 96000 Hz 17281 frames peak 0.008400 DC 0.0000013 mono/stereo RMS 0.99874 end5ms 0.0000000
+voxfx.zap.chime-reply 44100 Hz 153468 frames peak 0.004042 DC 0.0000000 mono/stereo RMS 0.95613 end5ms 0.0000000
+voxfx.zap.chime-reply 48000 Hz 167040 frames peak 0.004154 DC 0.0000000 mono/stereo RMS 0.95533 end5ms 0.0000000
+voxfx.zap.chime-reply 96000 Hz 334080 frames peak 0.004167 DC 0.0000000 mono/stereo RMS 0.95569 end5ms 0.0000000
+voxfx.zap.rubber-knot 44100 Hz 74089 frames peak 0.010602 DC 0.0000003 mono/stereo RMS 0.98288 end5ms 0.0000000
+voxfx.zap.rubber-knot 48000 Hz 80641 frames peak 0.010417 DC 0.0000003 mono/stereo RMS 0.98308 end5ms 0.0000000
+voxfx.zap.rubber-knot 96000 Hz 161281 frames peak 0.010067 DC 0.0000004 mono/stereo RMS 0.98565 end5ms 0.0000000
+voxfx.rhythm.rooftop-lanterns 44100 Hz 209127 frames peak 0.003892 DC 0.0000000 mono/stereo RMS 0.96481 end5ms 0.0000000
+voxfx.rhythm.rooftop-lanterns 48000 Hz 227621 frames peak 0.003408 DC 0.0000000 mono/stereo RMS 0.96462 end5ms 0.0000000
+voxfx.rhythm.rooftop-lanterns 96000 Hz 455241 frames peak 0.003742 DC 0.0000000 mono/stereo RMS 0.96395 end5ms 0.0000000
+voxfx.rhythm.utility-shuffle 44100 Hz 85164 frames peak 0.005385 DC 0.0000000 mono/stereo RMS 0.98162 end5ms 0.0000000
+voxfx.rhythm.utility-shuffle 48000 Hz 92696 frames peak 0.004962 DC 0.0000000 mono/stereo RMS 0.98136 end5ms 0.0000000
+voxfx.rhythm.utility-shuffle 96000 Hz 185391 frames peak 0.003064 DC 0.0000000 mono/stereo RMS 0.98204 end5ms 0.0000000
+voxfx.rhythm.burl-ritual 44100 Hz 235843 frames peak 0.010289 DC 0.0000688 mono/stereo RMS 0.99206 end5ms 0.0000000
+voxfx.rhythm.burl-ritual 48000 Hz 256699 frames peak 0.010197 DC 0.0000691 mono/stereo RMS 0.99207 end5ms 0.0000000
+voxfx.rhythm.burl-ritual 96000 Hz 513398 frames peak 0.010362 DC 0.0000692 mono/stereo RMS 0.99202 end5ms 0.0000000
+voxfx.rhythm.cracked-clock 44100 Hz 59770 frames peak 0.014989 DC 0.0000017 mono/stereo RMS 0.95866 end5ms 0.0000000
+voxfx.rhythm.cracked-clock 48000 Hz 65056 frames peak 0.019003 DC 0.0000020 mono/stereo RMS 0.95940 end5ms 0.0000000
+voxfx.rhythm.cracked-clock 96000 Hz 130111 frames peak 0.014582 DC 0.0000031 mono/stereo RMS 0.95617 end5ms 0.0000000
+voxfx.rhythm.citron-hop 44100 Hz 591940 frames peak 0.028270 DC 0.0000005 mono/stereo RMS 0.99605 end5ms 0.0000000
+voxfx.rhythm.citron-hop 48000 Hz 644289 frames peak 0.028470 DC 0.0000005 mono/stereo RMS 0.99605 end5ms 0.0000000
+voxfx.rhythm.citron-hop 96000 Hz 1288577 frames peak 0.027913 DC 0.0000005 mono/stereo RMS 0.99604 end5ms 0.0000000
+voxfx.rhythm.harbour-bells 44100 Hz 315799 frames peak 0.006532 DC 0.0000000 mono/stereo RMS 0.94402 end5ms 0.0000000
+voxfx.rhythm.harbour-bells 48000 Hz 343727 frames peak 0.006544 DC 0.0000001 mono/stereo RMS 0.94400 end5ms 0.0000000
+voxfx.rhythm.harbour-bells 96000 Hz 687453 frames peak 0.006583 DC 0.0000001 mono/stereo RMS 0.94397 end5ms 0.0000000
+voxfx.rhythm.dark-relay 44100 Hz 138826 frames peak 0.015138 DC 0.0001706 mono/stereo RMS 0.99098 end5ms 0.0000000
+voxfx.rhythm.dark-relay 48000 Hz 151103 frames peak 0.015844 DC 0.0001707 mono/stereo RMS 0.99087 end5ms 0.0000000
+voxfx.rhythm.dark-relay 96000 Hz 302206 frames peak 0.016655 DC 0.0001704 mono/stereo RMS 0.99065 end5ms 0.0000000
+voxfx.rhythm.aurora-pickup 44100 Hz 792061 frames peak 0.004636 DC 0.0000000 mono/stereo RMS 0.96116 end5ms 0.0000000
+voxfx.rhythm.aurora-pickup 48000 Hz 862108 frames peak 0.004670 DC 0.0000000 mono/stereo RMS 0.96101 end5ms 0.0000000
+voxfx.rhythm.aurora-pickup 96000 Hz 1724215 frames peak 0.004639 DC 0.0000000 mono/stereo RMS 0.96114 end5ms 0.0000000
+voxfx.atmosphere.linen-circuit 44100 Hz 317520 frames peak 0.004728 DC 0.0000011 mono/stereo RMS 0.98927 end5ms 0.0000000
+voxfx.atmosphere.linen-circuit 48000 Hz 345600 frames peak 0.004760 DC 0.0000009 mono/stereo RMS 0.98927 end5ms 0.0000000
+voxfx.atmosphere.linen-circuit 96000 Hz 691200 frames peak 0.004617 DC 0.0000014 mono/stereo RMS 0.98925 end5ms 0.0000000
+voxfx.atmosphere.fen-lamp 44100 Hz 313110 frames peak 0.001736 DC 0.0000002 mono/stereo RMS 0.91362 end5ms 0.0000000
+voxfx.atmosphere.fen-lamp 48000 Hz 340800 frames peak 0.001630 DC 0.0000021 mono/stereo RMS 0.91594 end5ms 0.0000000
+voxfx.atmosphere.fen-lamp 96000 Hz 681600 frames peak 0.001534 DC 0.0000034 mono/stereo RMS 0.91399 end5ms 0.0000000
+voxfx.atmosphere.tide-observer 44100 Hz 429975 frames peak 0.003524 DC 0.0000000 mono/stereo RMS 0.95115 end5ms 0.0000000
+voxfx.atmosphere.tide-observer 48000 Hz 468000 frames peak 0.003077 DC 0.0000000 mono/stereo RMS 0.95096 end5ms 0.0000000
+voxfx.atmosphere.tide-observer 96000 Hz 936000 frames peak 0.002280 DC 0.0000000 mono/stereo RMS 0.95264 end5ms 0.0000000
+voxfx.atmosphere.blind-aluminium 44100 Hz 306495 frames peak 0.001827 DC 0.0000021 mono/stereo RMS 0.92459 end5ms 0.0000000
+voxfx.atmosphere.blind-aluminium 48000 Hz 333600 frames peak 0.001711 DC 0.0000024 mono/stereo RMS 0.92360 end5ms 0.0000000
+voxfx.atmosphere.blind-aluminium 96000 Hz 667200 frames peak 0.001565 DC 0.0000034 mono/stereo RMS 0.92133 end5ms 0.0000000
+voxfx.atmosphere.slow-sundial 44100 Hz 454231 frames peak 0.006165 DC 0.0000000 mono/stereo RMS 0.97347 end5ms 0.0000000
+voxfx.atmosphere.slow-sundial 48000 Hz 494401 frames peak 0.006180 DC 0.0000000 mono/stereo RMS 0.97357 end5ms 0.0000000
+voxfx.atmosphere.slow-sundial 96000 Hz 988801 frames peak 0.006143 DC 0.0000000 mono/stereo RMS 0.97363 end5ms 0.0000000
+voxfx.atmosphere.pulse-ice 44100 Hz 154350 frames peak 0.007586 DC 0.0000000 mono/stereo RMS 0.94348 end5ms 0.0000000
+voxfx.atmosphere.pulse-ice 48000 Hz 168000 frames peak 0.007420 DC 0.0000001 mono/stereo RMS 0.94107 end5ms 0.0000000
+voxfx.atmosphere.pulse-ice 96000 Hz 336000 frames peak 0.007321 DC 0.0000000 mono/stereo RMS 0.94437 end5ms 0.0000000
+voxfx.atmosphere.citron-canopy 44100 Hz 767341 frames peak 0.001890 DC 0.0000000 mono/stereo RMS 0.96035 end5ms 0.0000000
+voxfx.atmosphere.citron-canopy 48000 Hz 835201 frames peak 0.001886 DC 0.0000000 mono/stereo RMS 0.96029 end5ms 0.0000000
+voxfx.atmosphere.citron-canopy 96000 Hz 1670401 frames peak 0.001977 DC 0.0000000 mono/stereo RMS 0.95950 end5ms 0.0000000
+voxfx.atmosphere.cloud-trestle 44100 Hz 379260 frames peak 0.006931 DC 0.0000000 mono/stereo RMS 0.97070 end5ms 0.0000000
+voxfx.atmosphere.cloud-trestle 48000 Hz 412800 frames peak 0.007185 DC 0.0000000 mono/stereo RMS 0.97077 end5ms 0.0000000
+voxfx.atmosphere.cloud-trestle 96000 Hz 825600 frames peak 0.006916 DC 0.0000000 mono/stereo RMS 0.97075 end5ms 0.0000000
+voxfx.stinger.terrace-sign 44100 Hz 180811 frames peak 0.003456 DC 0.0000040 mono/stereo RMS 0.98014 end5ms 0.0000000
+voxfx.stinger.terrace-sign 48000 Hz 196801 frames peak 0.003460 DC 0.0000040 mono/stereo RMS 0.98021 end5ms 0.0000000
+voxfx.stinger.terrace-sign 96000 Hz 393601 frames peak 0.003472 DC 0.0000040 mono/stereo RMS 0.98014 end5ms 0.0000000
+voxfx.stinger.air-quench 44100 Hz 75853 frames peak 0.018586 DC 0.0000010 mono/stereo RMS 0.99837 end5ms 0.0000000
+voxfx.stinger.air-quench 48000 Hz 82561 frames peak 0.020608 DC 0.0000003 mono/stereo RMS 0.99839 end5ms 0.0000000
+voxfx.stinger.air-quench 96000 Hz 165121 frames peak 0.016268 DC 0.0000002 mono/stereo RMS 0.99856 end5ms 0.0000000
+voxfx.stinger.black-vane 44100 Hz 143766 frames peak 0.009178 DC 0.0000072 mono/stereo RMS 0.99009 end5ms 0.0000000
+voxfx.stinger.black-vane 48000 Hz 156480 frames peak 0.010006 DC 0.0000110 mono/stereo RMS 0.99057 end5ms 0.0000000
+voxfx.stinger.black-vane 96000 Hz 312960 frames peak 0.009720 DC 0.0000146 mono/stereo RMS 0.99119 end5ms 0.0000000
+voxfx.stinger.gold-ribbon 44100 Hz 207900 frames peak 0.006918 DC 0.0000023 mono/stereo RMS 0.97537 end5ms 0.0000000
+voxfx.stinger.gold-ribbon 48000 Hz 226286 frames peak 0.006678 DC 0.0000023 mono/stereo RMS 0.97529 end5ms 0.0000000
+voxfx.stinger.gold-ribbon 96000 Hz 452572 frames peak 0.006664 DC 0.0000023 mono/stereo RMS 0.97544 end5ms 0.0000000
+voxfx.stinger.fault-beacon 44100 Hz 27783 frames peak 0.010615 DC 0.0000509 mono/stereo RMS 0.91279 end5ms 0.0000627
+voxfx.stinger.fault-beacon 48000 Hz 30240 frames peak 0.010973 DC 0.0000580 mono/stereo RMS 0.91239 end5ms 0.0000601
+voxfx.stinger.fault-beacon 96000 Hz 60480 frames peak 0.011280 DC 0.0000585 mono/stereo RMS 0.91362 end5ms 0.0000626
+voxfx.stinger.night-crest 44100 Hz 501418 frames peak 0.006684 DC 0.0000002 mono/stereo RMS 0.98594 end5ms 0.0000000
+voxfx.stinger.night-crest 48000 Hz 545761 frames peak 0.006749 DC 0.0000001 mono/stereo RMS 0.98542 end5ms 0.0000000
+voxfx.stinger.night-crest 96000 Hz 1091521 frames peak 0.006996 DC 0.0000001 mono/stereo RMS 0.98550 end5ms 0.0000000
+voxfx.stinger.incense-mark 44100 Hz 529200 frames peak 0.003736 DC 0.0000000 mono/stereo RMS 0.91048 end5ms 0.0000000
+voxfx.stinger.incense-mark 48000 Hz 576000 frames peak 0.003401 DC 0.0000000 mono/stereo RMS 0.90908 end5ms 0.0000000
+voxfx.stinger.incense-mark 96000 Hz 1152000 frames peak 0.002673 DC 0.0000000 mono/stereo RMS 0.88770 end5ms 0.0000000
+voxfx.stinger.hammock-finish 44100 Hz 211680 frames peak 0.004681 DC 0.0000001 mono/stereo RMS 0.94086 end5ms 0.0000000
+voxfx.stinger.hammock-finish 48000 Hz 230400 frames peak 0.004433 DC 0.0000001 mono/stereo RMS 0.94106 end5ms 0.0000000
+voxfx.stinger.hammock-finish 96000 Hz 460800 frames peak 0.004197 DC 0.0000000 mono/stereo RMS 0.93993 end5ms 0.0000000
+impact: 15 candidates, 0 approved
+riser: 15 candidates, 0 approved
+fall: 15 candidates, 0 approved
+sweep: 15 candidates, 0 approved
+zap: 15 candidates, 0 approved
+rhythm: 15 candidates, 0 approved
+atmosphere: 15 candidates, 0 approved
+stinger: 15 candidates, 0 approved
+mode oneShot: 53
+mode gate: 17
+mode continuous: 12
+mode loop: 9
+mode sequence: 15
+mode transition: 14
+style Anthem: 2
+style Balearic: 1
+style Balearic Trance: 9
+style Dark Forest: 10
+style Dark Psy: 12
+style Dark Trance: 3
+style Daylight Trance: 14
+style Forest Psy: 7
+style Goa: 3
+style Goa Psy: 11
+style Hi-Tech: 15
+style Industrial Psy: 1
+style Peak-Time Tech: 1
+style Progressive: 1
+style Progressive Tech: 14
+style Uplifting: 16
+Wave B staged progressive-four-bar voxfx.riser.trellis-ascent 4 bars peak 0.004942 edge 0.0000000
+Wave B staged progressive-four-bar voxfx.riser.gasket-rush 4 bars peak 0.023149 edge 0.0000000
+Wave B staged forest-eight-bar voxfx.fall.hush-mycelium 8 bars peak 0.002616 edge 0.0000000
+Wave B staged forest-eight-bar voxfx.fall.canopy-ash 8 bars peak 0.005829 edge 0.0000000
+Wave B staged uplifting-sixteen-bar voxfx.riser.zenith-thread 16 bars peak 0.006384 edge 0.0000000
+Wave B staged uplifting-sixteen-bar voxfx.riser.white-veranda 16 bars peak 0.011897 edge 0.0000000
+PASS FxFactoryCandidatesTests
+=== FxFormantTests ===
+FX formant: 0 failure(s)
+PASS FxFormantTests
+=== FxGeneratorStateTests ===
+FX generator state: 0 failure(s)
+PASS FxGeneratorStateTests
+=== FxGeneratorTests ===
+FX generator: 0 failure(s)
+PASS FxGeneratorTests
+=== FxGlitchTests ===
+custom Glitch: open-slice energy 0.0542287, reverse-forward difference 11.0697508
+FX glitch: 0 failure(s)
+PASS FxGlitchTests
+=== FxGranularTests ===
+FX granular: 0 failure(s)
+PASS FxGranularTests
+=== FxImpactTests ===
+FX impact: 0 failure(s)
+PASS FxImpactTests
+=== FxLaserTests ===
+FX laser: 0 failure(s)
+PASS FxLaserTests
+=== FxLayerTests ===
+FX layers: 0 failure(s)
+PASS FxLayerTests
+=== FxMacroRoutingTests ===
+FX macro routing: 0 failure(s)
+PASS FxMacroRoutingTests
+=== FxMetallicTests ===
+FX metallic: 0 failure(s)
+PASS FxMetallicTests
+=== FxModulationTests ===
+FX modulation primitives: 0 failure(s)
+PASS FxModulationTests
+=== FxNoiseRiserTests ===
+rate 44100 reference max error 3.7252903e-09 relative RMS 3.5186314e-08 spectral-difference ratio 751.553
+rate 48000 reference max error 3.7252903e-09 relative RMS 3.54426858e-08 spectral-difference ratio 786.570
+rate 96000 reference max error 3.7252903e-09 relative RMS 5.15886981e-08 spectral-difference ratio 922.651
+128 samples 44100 Hz 1 voices: p50 11.68 p95 13.62 p99 27.70 max 27.94 us
+128 samples 44100 Hz 8 voices: p50 53.26 p95 80.38 p99 107.62 max 311.86 us
+128 samples 44100 Hz 9 voices: p50 59.98 p95 81.84 p99 931.02 max 1746.13 us
+128 samples 48000 Hz 1 voices: p50 11.67 p95 14.55 p99 31.81 max 46.15 us
+128 samples 48000 Hz 8 voices: p50 53.29 p95 72.28 p99 104.45 max 114.53 us
+128 samples 48000 Hz 9 voices: p50 59.85 p95 78.45 p99 93.52 max 121.49 us
+128 samples 96000 Hz 1 voices: p50 11.97 p95 13.90 p99 28.71 max 30.65 us
+128 samples 96000 Hz 8 voices: p50 53.34 p95 70.27 p99 108.64 max 5239.06 us
+128 samples 96000 Hz 9 voices: p50 60.23 p95 81.57 p99 137.07 max 416.30 us
+FX noise riser: 0 failure(s)
+PASS FxNoiseRiserTests
+=== FxOfflineRenderTests ===
+FX offline WAV: 0 failure(s)
+PASS FxOfflineRenderTests
+=== FxPatternBenchmark ===
+44100 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 817.13 p95 1308.09 p99 2969.30 max 6336.07 us; accepted 929 dropped 0 peak 0.278 clipped 0 checksum -54.202954
+48000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 817.92 p95 904.41 p99 1373.88 max 4502.32 us; accepted 854 dropped 0 peak 0.278 clipped 0 checksum -91.264208
+96000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 807.66 p95 1025.38 p99 2820.92 max 6215.48 us; accepted 427 dropped 0 peak 0.278 clipped 0 checksum -81.864656
+scheduler only full scan 48k 128 @137 BPM: p50 3.398 p95 4.767 p99 6.521 max 1989.487 us; checksum 655856
+scheduler only bounded lookup 48k 128 @137 BPM: p50 0.076 p95 0.114 p99 0.137 max 3.565 us; checksum 655856
+PASS FxPatternBenchmark
+=== FxPatternCodecTests ===
+FX pattern codec: 0 failure(s)
+PASS FxPatternCodecTests
+=== FxPatternGridTests ===
+FX pattern grid: 0 failure(s)
+PASS FxPatternGridTests
+=== FxPatternPlaybackTests ===
+FX pattern playback scheduling: 0 failure(s)
+PASS FxPatternPlaybackTests
+=== FxPatternSwingTests ===
+FX pattern swing: 0 failure(s)
+PASS FxPatternSwingTests
+=== FxPatternTests ===
+FX trigger patterns: 0 failure(s)
+PASS FxPatternTests
+=== FxPlaybackModeTests ===
+FX playback modes and note ownership: 0 failure(s)
+PASS FxPlaybackModeTests
+=== FxPortablePresetTests ===
+FX portable preset and comparison codecs: 0 failure(s)
+PASS FxPortablePresetTests
+=== FxPresetLibraryTests ===
+FX user library and preview: 0 failure(s)
+PASS FxPresetLibraryTests
+=== FxProgramBridgeTests ===
+FX Program bridge: 0 failure(s)
+PASS FxProgramBridgeTests
+=== FxProgramCodecTests ===
+FX Program codec: 0 failure(s)
+PASS FxProgramCodecTests
+=== FxProgramStoreTests ===
+FX Program store: 0 failure(s)
+PASS FxProgramStoreTests
+=== FxSampleControllerTests ===
+Wave B external asset cue voxfx.sweep.vellum-coil peak 0.001632 source SHA-256 6737b0be62f5d6ebdf33f82bef880ad0cbd758ec5dd31eb967650f2f84eb154a
+Wave B external asset cue voxfx.atmosphere.kiln-choir peak 0.002909 source SHA-256 99476406853eb4a42733b90157786a80fa064a21aa747b2b39aef181743e654f
+FX sample controller: 0 failure(s)
+PASS FxSampleControllerTests
+=== FxSampleDecodeTests ===
+FX sample WAV decode: 0 failure(s)
+PASS FxSampleDecodeTests
+=== FxSampleGranularTests ===
+FX sample granular ownership: 0 failure(s)
+PASS FxSampleGranularTests
+=== FxSampleReferenceTests ===
+FX sample reference state: 0 failure(s)
+PASS FxSampleReferenceTests
+=== FxSampleStoreTests ===
+FX sample ownership: 0 failure(s)
+PASS FxSampleStoreTests
+=== FxShepardTests ===
+44100 Hz Shepard energy 21.1286 max step 0.0021761053
+48000 Hz Shepard energy 22.997113 max step 0.0019998108
+96000 Hz Shepard energy 45.994205 max step 0.0010001119
+FX Shepard: 0 failure(s)
+PASS FxShepardTests
+=== FxSoundGraphTests ===
+motion 44100 Hz 64 routes: peak 0.020048 DC 0.0001550 / 64 grains
+motion 48000 Hz 64 routes: peak 0.019299 DC 0.0001860 / 64 grains
+motion 96000 Hz 64 routes: peak 0.026238 DC 0.0001167 / 64 grains
+mixed nonlinear/tempo delay tail 44100 Hz: peak 0.2049740, tail 0.2049740, final peak 0.000000000
+mixed nonlinear/moving free delay tail 44100 Hz: peak 0.1601409, tail 0.1601409, final peak 0.000000000
+mixed nonlinear/tempo delay tail 48000 Hz: peak 0.2063994, tail 0.2063994, final peak 0.000000000
+mixed nonlinear/moving free delay tail 48000 Hz: peak 0.1604469, tail 0.1604469, final peak 0.000000000
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2038673, tail 0.2038673, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1612363, tail 0.1612363, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)
+PASS FxSoundGraphTests
+=== FxSourceSoundTests ===
+FX source sound: 0 failure(s)
+PASS FxSourceSoundTests
+=== FxSquelchTests ===
+FX squelch: 0 failure(s)
+PASS FxSquelchTests
+=== FxTextureTests ===
+FX texture: 0 failure(s)
+PASS FxTextureTests
+=== FxTimelineTests ===
+FX timeline: 0 failure(s)
+PASS FxTimelineTests
+=== FxTransportTests ===
+FX transport tracking: 0 failure(s)
+PASS FxTransportTests
+=== FxWhooshTests ===
+FX whoosh: 0 failure(s)
+PASS FxWhooshTests
+Optimized standalone FX inventory: 45 passed, 0 failed

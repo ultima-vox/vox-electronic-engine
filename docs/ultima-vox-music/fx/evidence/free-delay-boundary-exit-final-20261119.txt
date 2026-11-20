@@ -1,0 +1,27 @@
+d086cb6bfa02ff47f57514635b7a1c9e2d436330
+free Delay sweep 44100 Hz: relative staircase -17.52 dB, fractional -34.00 dB
+free Delay boundary 44100 Hz speed 0.003: 11 crossings, old entry/exit residual 0.981213 / 0.251127, max new 0.002258 samples
+free Delay boundary 44100 Hz speed 0.031: 11 crossings, old entry/exit residual 0.966833 / 0.251127, max new 0.002258 samples
+free Delay first-echo boundary 44100 Hz: old derivative residual 0.000492209, measured new 0.000001116
+free Delay sweep 48000 Hz: relative staircase -17.63 dB, fractional -34.10 dB
+free Delay boundary 48000 Hz speed 0.003: 13 crossings, old entry/exit residual 0.982462 / 0.247913, max new 0.002079 samples
+free Delay boundary 48000 Hz speed 0.031: 13 crossings, old entry/exit residual 0.967004 / 0.247913, max new 0.002079 samples
+free Delay first-echo boundary 48000 Hz: old derivative residual 0.000490649, measured new 0.000001008
+free Delay sweep 96000 Hz: relative staircase -17.38 dB, fractional -33.89 dB
+free Delay boundary 96000 Hz speed 0.003: 25 crossings, old entry/exit residual 0.989731 / 0.248956, max new 0.001040 samples
+free Delay boundary 96000 Hz speed 0.031: 25 crossings, old entry/exit residual 0.968002 / 0.248956, max new 0.001040 samples
+free Delay first-echo boundary 96000 Hz: old derivative residual 0.000494583, measured new 0.000000522
+FX effects foundation: 0 failure(s)
+free Delay sweep 44100 Hz: relative staircase -17.52 dB, fractional -34.00 dB
+free Delay boundary 44100 Hz speed 0.003: 11 crossings, old entry/exit residual 0.981213 / 0.251127, max new 0.002258 samples
+free Delay boundary 44100 Hz speed 0.031: 11 crossings, old entry/exit residual 0.966833 / 0.251127, max new 0.002258 samples
+free Delay first-echo boundary 44100 Hz: old derivative residual 0.000492209, measured new 0.000001116
+free Delay sweep 48000 Hz: relative staircase -17.63 dB, fractional -34.10 dB
+free Delay boundary 48000 Hz speed 0.003: 13 crossings, old entry/exit residual 0.982462 / 0.247913, max new 0.002079 samples
+free Delay boundary 48000 Hz speed 0.031: 13 crossings, old entry/exit residual 0.967004 / 0.247913, max new 0.002079 samples
+free Delay first-echo boundary 48000 Hz: old derivative residual 0.000490649, measured new 0.000001008
+free Delay sweep 96000 Hz: relative staircase -17.38 dB, fractional -33.89 dB
+free Delay boundary 96000 Hz speed 0.003: 25 crossings, old entry/exit residual 0.989731 / 0.248956, max new 0.001040 samples
+free Delay boundary 96000 Hz speed 0.031: 25 crossings, old entry/exit residual 0.968002 / 0.248956, max new 0.001040 samples
+free Delay first-echo boundary 96000 Hz: old derivative residual 0.000494583, measured new 0.000000522
+FX effects foundation: 0 failure(s)

@@ -1,0 +1,18 @@
+pid 38718's current affinity list: 0,1
+pid 38718's new affinity list: 0
+7a986221ec386bd3571a061d13d9d4415396c9a2
+=== plain FxFileExportTests ===
+FX WAV create-only: expected bytes=21650 sha256=263ee0ae0e7826eaef86e20a8f35da1b7820c5df03d6b8a7455dfe7ece92b526
+FX SMF create-only: expected bytes=51 sha256=f43d09a540cb14cef8ee5029b1d575ec7e7574580c05d476221b13f8464eb84b
+FX file export: cross-device failure checked
+FX file export: 0 failure(s)
+=== plain FxPresetLibraryTests ===
+FX user library and preview: 0 failure(s)
+=== sanitized FxFileExportTests ===
+FX WAV create-only: expected bytes=21650 sha256=263ee0ae0e7826eaef86e20a8f35da1b7820c5df03d6b8a7455dfe7ece92b526
+FX SMF create-only: expected bytes=51 sha256=f43d09a540cb14cef8ee5029b1d575ec7e7574580c05d476221b13f8464eb84b
+FX file export: cross-device failure checked
+FX file export: 0 failure(s)
+=== sanitized FxPresetLibraryTests ===
+FX user library and preview: 0 failure(s)
+All four checks exited 0

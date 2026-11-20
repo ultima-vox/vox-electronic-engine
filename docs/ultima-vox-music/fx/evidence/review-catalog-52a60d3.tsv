@@ -1,0 +1,33 @@
+schema	ID	revision	name	role	style	mood	mode	pitched-source	status	provenance
+1	voxfx.impact.iron-drop	1	Iron Drop	impact	Peak-Time Tech	Heavy	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.riser.first-light	1	First Light	riser	Uplifting	Bright	transition	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.fall.blue-hour	1	Blue Hour	fall	Progressive	Melancholic	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.sweep.salt-air	1	Salt Air	sweep	Balearic	Airy	loop	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.zap.acid-spore	1	Acid Spore	zap	Goa	Acidic	gate	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.rhythm.neon-fault	1	Neon Fault	rhythm	Hi-Tech	Extreme	sequence	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.atmosphere.root-system	1	Root System	atmosphere	Dark Forest	Organic	continuous	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.stinger.sun-glass	1	Sun Glass	stinger	Anthem	Euphoric	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.impact.subduction	1	Subduction	impact	Dark Psy	Subterranean	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.riser.vernal-arc	1	Vernal Arc	riser	Daylight Trance	Open	transition	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.fall.ash-tide	1	Ash Tide	fall	Dark Trance	Hollow	oneShot	0	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.sweep.cedar-probe	1	Cedar Probe	sweep	Forest Psy	Dry	gate	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.zap.pixel-wasp	1	Pixel Wasp	zap	Hi-Tech	Angular	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.rhythm.sand-code	1	Sand Code	rhythm	Goa	Coiled	sequence	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.atmosphere.cloud-temple	1	Cloud Temple	atmosphere	Uplifting	Weightless	continuous	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.stinger.copper-warning	1	Copper Warning	stinger	Dark Psy	Ominous	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.impact.thunder-veil	1	Thunder Veil	impact	Daylight Trance	Expansive	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.impact.oxide-bloom	1	Oxide Bloom	impact	Industrial Psy	Gritty	gate	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.riser.cobalt-choir	1	Cobalt Choir	riser	Uplifting	Radiant	transition	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.riser.pressure-front	1	Pressure Front	riser	Progressive Tech	Tense	oneShot	0	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.fall.halcyon-wake	1	Halcyon Wake	fall	Daylight Trance	Nostalgic	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.fall.glass-elevator	1	Glass Elevator	fall	Hi-Tech	Brittle	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.sweep.velvet-conduit	1	Velvet Conduit	sweep	Progressive Tech	Liquid	loop	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.sweep.monsoon-edge	1	Monsoon Edge	sweep	Goa Psy	Restless	gate	0	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.zap.mantis-antenna	1	Mantis Antenna	zap	Forest Psy	Insectile	gate	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.zap.prism-arc	1	Prism Arc	zap	Anthem	Luminous	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.rhythm.rusted-bell-grid	1	Rusted Bell Grid	rhythm	Dark Psy	Mechanical	sequence	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.rhythm.lantern-bounce	1	Lantern Bounce	rhythm	Daylight Trance	Playful	sequence	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.atmosphere.lichen-cavern	1	Lichen Cavern	atmosphere	Forest Psy	Damp	continuous	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.atmosphere.horizon-vapour	1	Horizon Vapour	atmosphere	Balearic Trance	Mist	continuous	0	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.stinger.solar-insignia	1	Solar Insignia	stinger	Uplifting	Triumphant	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending
+1	voxfx.stinger.null-beacon	1	Null Beacon	stinger	Dark Trance	Uneasy	oneShot	1	review-only	Original hand-authored VOX synth recipe; no external assets; distribution approval pending

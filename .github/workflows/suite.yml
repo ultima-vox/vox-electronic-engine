@@ -6,15 +6,110 @@ name: suite
 # The legacy engine keeps its own workflow (build.yml), unchanged.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [next/standalone-suite]
   workflow_dispatch:
 
+# Cancel obsolete runs for the same PR and workflow (does not clear existing queue).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  choose-windows-runner:
+    # The lightweight selector executes on GitHub-hosted Linux only when the
+    # existing Windows job eligibility is satisfied.
+    if: >-
+      ${{
+        (github.event_name != 'pull_request' ||
+        (github.event.action != 'edited' &&
+          !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine')) ||
+        (github.event.action == 'edited' &&
+          github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+          github.event.changes.body.from != null &&
+          !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
+          contains(github.event.pull_request.body, '[RUN_FX_SUITE]'))) ||
+        (github.event_name == 'pull_request' &&
+        github.event.action == 'edited' &&
+        github.event.pull_request.number == 156 &&
+        github.event.pull_request.draft &&
+        github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+        github.event.changes.body.from != null &&
+        !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
+        contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]'))
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      route: ${{ steps.pick.outputs.route }}
+    steps:
+      - name: Select Windows runner
+        id: pick
+        uses: actions/github-script@v7
+        env:
+          HAS_RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN != '' }}
+        with:
+          github-token: ${{ secrets.RUNNER_STATUS_TOKEN || github.token }}
+          script: |
+            const selfHosted = ['self-hosted', 'windows'];
+            let runner = selfHosted;
+            let reason = 'Status credential unavailable; use self-hosted';
+            if (process.env.HAS_RUNNER_STATUS_TOKEN === 'true') {
+              try {
+                const runners = await github.paginate(
+                  github.rest.actions.listSelfHostedRunnersForRepo,
+                  {owner: context.repo.owner, repo: context.repo.repo, per_page: 100}
+                );
+                const idle = runners.filter(r => r.status === 'online' && r.busy === false &&
+                  ['self-hosted', 'windows'].every(n =>
+                    (r.labels || []).some(l => String(l.name).toLowerCase() === n)));
+                if (idle.length === 0) {
+                  runner = 'windows-2022';
+                  reason = 'No online idle matching self-hosted Windows runner';
+                } else {
+                  reason = `${idle.length} online idle matching self-hosted Windows runner(s)`;
+                }
+              } catch (error) {
+                core.warning(`Cannot query self-hosted runner inventory (HTTP ${error.status || 'unknown'}); keeping self-hosted`);
+                reason = 'Inventory inaccessible; keep self-hosted';
+              }
+            } else {
+              core.warning('RUNNER_STATUS_TOKEN missing: hosted fallback cannot activate');
+            }
+            core.setOutput('runner', JSON.stringify(runner));
+            core.setOutput('route', Array.isArray(runner) ? 'self-hosted' : 'github-hosted');
+            core.info(`Route: ${JSON.stringify(runner)}. ${reason}`);
+            await core.summary.addHeading('Windows runner selection')
+              .addTable([[{data:'Route',header:true},{data:'Reason',header:true}],
+                         [Array.isArray(runner)?'self-hosted/windows':'windows-2022',reason]])
+              .write();
   windows-suite:
-    runs-on: [self-hosted, windows]
+    needs: choose-windows-runner
+    # FX draft PR — heavy Windows gate is manual until the integrated candidate.
+    # Other PRs and protected branch pushes keep their existing CI behavior.
+    # Regular FX Draft synchronizations stay skipped. To run exact-head suite
+    # while keeping Draft/HOLD, add [RUN_FX_SUITE] to PR #156 description.
+    # It triggers only on the addition (an edited-body event), not future pushes.
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        (github.event.action != 'edited' &&
+          !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine')) ||
+        (github.event.action == 'edited' &&
+          github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+          github.event.changes.body.from != null &&
+          !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
+          contains(github.event.pull_request.body, '[RUN_FX_SUITE]'))
+      }}
+    runs-on: ${{ fromJSON(needs.choose-windows-runner.outputs.runner) }}
     timeout-minutes: 120
     env:
+      # FX-only diagnostics; does not change job eligibility or other products.
+      FX_DIAGNOSTICS: ${{ github.event_name == 'pull_request' && github.head_ref == 'arena/d9776bd9-vox-electronic-engine' && 'ON' || 'OFF' }}
       CMAKE_GENERATOR: Visual Studio 17 2022
       # Reviewed dependency pins. A tag can move; these commits cannot.
       JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
@@ -26,6 +121,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The explicitly admitted FX engineering gate builds the reviewed
+          # source itself, not the mutable synthetic PR merge commit.
+          ref: ${{ env.FX_DIAGNOSTICS == 'ON' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify FX engineering source
+        if: ${{ env.FX_DIAGNOSTICS == 'ON' }}
+        shell: powershell
+        env:
+          FX_EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $actual = & git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:FX_EXPECTED_SHA) {
+            throw "Expected reviewed FX HEAD $env:FX_EXPECTED_SHA, found $actual"
+          }
 
       # Infrastructure: FetchContent's JUCE clone broke off repeatedly on this
       # runner. Use verified copies of the pinned commits from the runner tool
@@ -56,28 +166,91 @@ jobs:
       - name: Configure (suite only)
         shell: powershell
         run: |
-          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DVOX_FX_DIAGNOSTIC_SYMBOLS=$env:FX_DIAGNOSTICS"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
         run: cmake --build build-suite --config Release --clean-first --parallel
 
       - name: Test (label suite)
+        id: suite-ctest
         shell: powershell
         run: |
-          # Golden renders are also written as WAV files for listening (artifact).
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            # The FX gate retains fixture hashes but does not upload audio.
+            $golden = Join-Path $env:RUNNER_TEMP "vox-fx-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-golden"
+            $env:VOX_GOLDEN_OUT = (New-Item -ItemType Directory -Force -Path $golden).FullName
+            "VOX_GOLDEN_OUT=$env:VOX_GOLDEN_OUT" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
+            $report = (Resolve-Path suite-out\ctest).Path
+            ctest --test-dir build-suite -C Release -L suite --show-only=json-v1 | Set-Content (Join-Path $report 'inventory.json')
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ctest --test-dir build-suite -C Release -L suite --no-tests=error --timeout 180 --output-on-failure --output-junit (Join-Path $report 'results.xml')
+            exit $LASTEXITCODE
+          }
           New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Preserve FX CTest text logs
+        if: ${{ always() && !cancelled() && steps.suite-ctest.outcome != 'skipped' && env.FX_DIAGNOSTICS == 'ON' }}
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
+          foreach ($file in 'LastTest.log','LastTestsFailed.log') {
+            $source = Join-Path 'build-suite\Testing\Temporary' $file
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination suite-out\ctest }
+          }
+
+      - name: Replay historical FX crash cases only if they failed
+        if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
+        timeout-minutes: 8
+        shell: powershell
+        run: |
+          $failed = 'suite-out\ctest\LastTestsFailed.log'
+          if (Test-Path $failed) {
+            foreach ($test in 'suite_fx_noise_riser_tests', 'suite_fx_processor_tests', 'suite_fx_layer_tests', 'suite_fx_shepard_tests') {
+              if (Select-String -Path $failed -Pattern "^\d+:$test$" -Quiet) {
+                try {
+                  & .github\scripts\Capture-FxProcessorException.ps1 -BuildDir build-suite -TestName $test -OutputDir (Join-Path 'suite-diagnostic' $test) -TimeoutSeconds 90
+                } catch { Write-Warning "Unable to replay ${test}: $_" }
+              }
+            }
+          }
+
+      - name: Upload FX crash diagnostics
+        if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-FX-Processor-Diagnostic
+          path: suite-diagnostic
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Steinberg VST3 validator
+        id: suite-validator
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path suite-out\validator | Out-Null
           $failed = @()
-          foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory) {
-            $log = Join-Path 'suite-out\validator' "$($bundle.BaseName).txt"
+          $bundles = @(Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory)
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            # FX inventory preflight begin
+            $required = @('VOX FX', 'VOX Drums', 'VOX Trance Synthesis')
+            $names = @($bundles | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Name) })
+            $missing = @($required | Where-Object { -not ($names -ccontains $_) })
+            if ($bundles.Count -ne $required.Count -or $missing.Count -ne 0) {
+              throw "Expected the three standalone VST3 bundles; missing: $($missing -join ', '); found: $($names -join ', ')"
+            }
+            foreach ($bundle in $bundles) {
+              $binary = Join-Path $bundle.FullName (Join-Path 'Contents\x86_64-win' $bundle.Name)
+              if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Missing x64 VST3 binary: $binary" }
+            }
+            # FX inventory preflight end
+          }
+          foreach ($bundle in $bundles) {
+            $log = Join-Path 'suite-out\validator' "$([IO.Path]::GetFileNameWithoutExtension($bundle.Name)).txt"
             & $env:VST3_VALIDATOR $bundle.FullName *> $log
             $code = $LASTEXITCODE
             Get-Content $log | Select-String -Pattern 'Result:|ERROR' | ForEach-Object { "$($bundle.Name): $_" }
@@ -88,21 +261,41 @@ jobs:
       - name: Record binaries and environment
         if: always()
         shell: powershell
+        env:
+          SUITE_CTEST_OUTCOME: ${{ steps.suite-ctest.outcome }}
+          SUITE_VALIDATOR_OUTCOME: ${{ steps.suite-validator.outcome }}
         run: |
           New-Item -ItemType Directory -Force -Path suite-out\VST3 | Out-Null
           $lines = @(
-            "Commit: $env:GITHUB_SHA",
+            "Commit: $(& git rev-parse HEAD)",
+            "Tree: $(& git rev-parse 'HEAD^{tree}')",
+            "Event SHA: $env:GITHUB_SHA",
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
             "Runner: $env:RUNNER_NAME",
             "JUCE: $env:JUCE_COMMIT",
             "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
           )
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            $lines += "CTest outcome: $env:SUITE_CTEST_OUTCOME"
+            $lines += "Steinberg validator outcome: $env:SUITE_VALIDATOR_OUTCOME"
+            if ($env:SUITE_VALIDATOR_OUTCOME -ne 'success') {
+              $lines += 'Not qualified by the validator; collected binaries are diagnostic only.'
+            }
+          }
           foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory -ErrorAction SilentlyContinue) {
             Copy-Item -Recurse -Force $bundle.FullName suite-out\VST3\
             foreach ($file in Get-ChildItem $bundle.FullName -Recurse -File) {
               $relative = $file.FullName.Substring($bundle.Parent.FullName.Length + 1)
               $lines += "SHA-256 $relative : $((Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower())"
             }
+          }
+          if ($env:FX_DIAGNOSTICS -eq 'ON' -and $env:VOX_GOLDEN_OUT -and (Test-Path -LiteralPath $env:VOX_GOLDEN_OUT)) {
+            $goldenLines = @(Get-ChildItem -LiteralPath $env:VOX_GOLDEN_OUT -Recurse -File | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($env:VOX_GOLDEN_OUT.Length + 1).Replace('\', '/')
+              "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())  $relative"
+            })
+            if ($goldenLines.Count -gt 0) { $goldenLines | Set-Content suite-out\golden-members.sha256 }
+            $lines += "Fixture golden files hashed (not uploaded): $($goldenLines.Count)"
           }
           $lines | Set-Content suite-out\manifest.txt
           Get-Content suite-out\manifest.txt
@@ -114,3 +307,116 @@ jobs:
           name: VOX-Suite-VST3
           path: suite-out
           if-no-files-found: error
+
+  # Explicit, single-test Windows reproduction. Trigger only by adding
+  # [RUN_FX_PROCESSOR] to Draft PR #156 body; never on push/synchronize.
+  windows-fx-processor-triage:
+    needs: choose-windows-runner
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.action == 'edited' &&
+        github.event.pull_request.number == 156 &&
+        github.event.pull_request.draft &&
+        github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
+        github.event.changes.body.from != null &&
+        !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
+        contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]')
+      }}
+    runs-on: ${{ fromJSON(needs.choose-windows-runner.outputs.runner) }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell
+    env:
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+      VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+      FX_TEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout diagnostic tools from current PR
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout exact failed FX source snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: fx-current
+          persist-credentials: false
+
+      - name: Resolve pinned JUCE and VST3 dependencies
+        run: |
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository 'https://github.com/juce-framework/JUCE.git' -Ref 9.0.1 -Commit $env:JUCE_COMMIT
+          if (-not $juce) { exit 1 }
+          $sdk = & .github\scripts\Use-PinnedCheckout.ps1 -Name vst3sdk -Repository 'https://github.com/steinbergmedia/vst3sdk.git' -Ref v3.8.0_build_66 -Commit $env:VST3SDK_COMMIT -Submodules base,pluginterfaces,public.sdk,cmake
+          if (-not $sdk) { exit 1 }
+          "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VST3SDK_DIR=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure exact-head Release test with PDB symbols
+        run: |
+          cmake -S fx-current -B fx-current/build-triage -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DCMAKE_CXX_FLAGS_RELEASE:STRING=/O2 /Ob2 /DNDEBUG /Zi" "-DCMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=/INCREMENTAL:NO /DEBUG:FULL"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build ONLY the failed FX processor test and dependencies
+        id: build
+        run: |
+          cmake --build fx-current/build-triage --config Release --target suite_fx_processor_tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run ONLY exact-head suite_fx_processor_tests
+        id: targeted
+        run: |
+          New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
+          $junit = Join-Path (Resolve-Path fx-triage).Path 'results.xml'
+          # Keep the native exit status; the always() step preserves CTest text separately.
+          ctest --test-dir fx-current/build-triage -C Release -R '^suite_fx_processor_tests$' '--no-tests=error' --output-on-failure --output-junit $junit -VV
+          exit $LASTEXITCODE
+
+      - name: Capture the exact test exception under installed x64 CDB
+        # Without a status function Actions adds success(), so a failed
+        # targeted test would skip the very step that captures the crash.
+        if: ${{ failure() && !cancelled() && steps.targeted.outcome == 'failure' }}
+        timeout-minutes: 4
+        run: |
+          $helper = Join-Path $env:GITHUB_WORKSPACE '.github\scripts\Capture-FxProcessorException.ps1'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'fx-triage\capture'
+          Push-Location fx-current
+          try { & $helper -BuildDir build-triage -OutputDir $output -TimeoutSeconds 100 }
+          finally { Pop-Location }
+
+      - name: Preserve targeted CTest output and exact-head binary provenance
+        if: ${{ always() }}
+        run: |
+          New-Item -ItemType Directory -Force -Path fx-triage | Out-Null
+          $lines = @("Source SHA intended: $env:FX_TEST_SOURCE_SHA", "Job SHA: $env:GITHUB_SHA", "Run: $env:GITHUB_RUN_ID", "This executable was built from the exact PR head with /Zi and /DEBUG:FULL; it is NOT the original historical failing EXE.")
+          if (Test-Path fx-current/.git) {
+            $lines += "PR head source checkout: $(& git -C fx-current rev-parse HEAD)"
+            $lines += "PR head source tree: $(& git -C fx-current rev-parse 'HEAD^{tree}')"
+          }
+          $temp = 'fx-current\build-triage\Testing\Temporary'
+          if (Test-Path $temp) {
+            Get-ChildItem $temp -File -Filter '*Test*.log' | Copy-Item -Destination fx-triage -ErrorAction SilentlyContinue
+          }
+          $exe = Get-ChildItem 'fx-current\build-triage\tests\suite' -Filter 'suite_fx_processor_tests.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exe) {
+            $lines += "Rebuilt EXE SHA-256: $((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+            Copy-Item $exe.FullName fx-triage
+            $pdb = [System.IO.Path]::ChangeExtension($exe.FullName, '.pdb')
+            if (Test-Path $pdb) {
+              $lines += "Rebuilt PDB SHA-256: $((Get-FileHash $pdb -Algorithm SHA256).Hash.ToLowerInvariant())"
+              Copy-Item $pdb fx-triage
+            }
+          }
+          $lines | Set-Content fx-triage/provenance.txt
+          $lines | ForEach-Object { Write-Host $_ }
+
+      - name: Upload single-test CTest, CDB, PDB and dump evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-FX-Processor-Triage-Head
+          path: fx-triage
+          if-no-files-found: error
+          retention-days: 7

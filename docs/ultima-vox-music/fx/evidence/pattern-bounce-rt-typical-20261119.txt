@@ -1,0 +1,24 @@
+Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI
+Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation
+Allocation probe available: yes
+Lock probe: linked pthread mutex/rwlock entry points
+Random MIDI without Pattern
+44100 Hz 64 samples 1 initial voices: peak 0.002116 DC 0.0000015 grains 0 alloc 0 lock 0 p50 14.23 p95 15.43 p99 62.35 max 63.88 us
+  thread max 72.08 us; at wall max 63.88 us thread 72.08 us; misses wall/CPU/wall-only 0/0/0 of 160
+44100 Hz 128 samples 1 initial voices: peak 0.002116 DC 0.0000018 grains 0 alloc 0 lock 0 p50 27.89 p95 31.99 p99 68.04 max 95.56 us
+  thread max 68.56 us; at wall max 95.56 us thread 62.69 us; misses wall/CPU/wall-only 0/0/0 of 160
+44100 Hz 512 samples 1 initial voices: peak 0.002116 DC 0.0000003 grains 0 alloc 0 lock 0 p50 143.78 p95 184.02 p99 203.90 max 209.79 us
+  thread max 204.40 us; at wall max 209.79 us thread 185.95 us; misses wall/CPU/wall-only 0/0/0 of 160
+48000 Hz 64 samples 1 initial voices: peak 0.002109 DC 0.0000031 grains 0 alloc 0 lock 0 p50 14.12 p95 14.99 p99 30.45 max 61.28 us
+  thread max 61.73 us; at wall max 61.28 us thread 61.73 us; misses wall/CPU/wall-only 0/0/0 of 160
+48000 Hz 128 samples 1 initial voices: peak 0.002109 DC 0.0000018 grains 0 alloc 0 lock 0 p50 27.91 p95 31.59 p99 43.89 max 50.44 us
+  thread max 51.06 us; at wall max 50.44 us thread 51.06 us; misses wall/CPU/wall-only 0/0/0 of 160
+48000 Hz 512 samples 1 initial voices: peak 0.002109 DC 0.0000003 grains 0 alloc 0 lock 0 p50 143.53 p95 180.00 p99 195.62 max 203.78 us
+  thread max 204.27 us; at wall max 203.78 us thread 204.27 us; misses wall/CPU/wall-only 0/0/0 of 160
+96000 Hz 64 samples 1 initial voices: peak 0.002088 DC 0.0000029 grains 0 alloc 0 lock 0 p50 14.21 p95 15.97 p99 34.05 max 57.79 us
+  thread max 58.27 us; at wall max 57.79 us thread 58.27 us; misses wall/CPU/wall-only 0/0/0 of 160
+96000 Hz 128 samples 1 initial voices: peak 0.002088 DC 0.0000027 grains 0 alloc 0 lock 0 p50 28.05 p95 32.10 p99 47.56 max 75.48 us
+  thread max 65.58 us; at wall max 75.48 us thread 65.58 us; misses wall/CPU/wall-only 0/0/0 of 160
+96000 Hz 512 samples 1 initial voices: peak 0.002088 DC 0.0000005 grains 0 alloc 0 lock 0 p50 114.48 p95 157.06 p99 166.75 max 168.27 us
+  thread max 168.74 us; at wall max 168.27 us thread 168.74 us; misses wall/CPU/wall-only 0/0/0 of 160
+FX JUCE runtime stress: 0 failing cases

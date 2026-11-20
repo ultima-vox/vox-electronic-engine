@@ -1,0 +1,536 @@
+VOX FX / Linux x86-64 / 2026-11-19
+GCC 12.2.0 (Debian 12.2.0-14+deb12u1); glibc allocation probe.
+JUCE e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8 (9.0.1).
+
+Commands (each <source> is tests/suite/<test name>.cpp):
+  Merge: g++ -std=c++20 -O2 -pthread -Iproducts/fx <source> -o <test>; <test>
+  Checkpoint native: g++ -std=c++20 -O2 -pthread -Iproducts/fx <source> [probe flags] -o <test>; (ulimit -s 1024; <test>)
+  Probe flags for sources referencing VOX_TEST_INTERPOSE_MALLOC: -DVOX_TEST_INTERPOSE_MALLOC=1 -Ilibs/vox-testkit/probe -rdynamic <probe.o>
+  Probe object: gcc -std=c11 -O2 -c libs/vox-testkit/probe/AllocationProbeLinux.c -o <probe.o>
+  Checkpoint sanitizer: g++ -std=c++20 -O1 -g1 -pthread -no-pie -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -Iproducts/fx <source> -o <test>; <test>
+  JUCE-linked file/sample tests: g++ -std=c++20 -O1 -pthread -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 -DJUCE_USE_CURL=0 -DJUCE_WEB_BROWSER=0 -I<JUCE>/modules -Iproducts/fx <source> [probe flags] <juce objects> -ldl -lrt -l:libz.so.1 -o <test>; (ulimit -s 1024; <test>)
+  JUCE objects compiled with the same flags from juce_core/juce_core.cpp, juce_core/juce_core_CompilationTime.cpp and juce_cryptography/juce_cryptography.cpp.
+  Syntax-only: g++ -std=c++20 -fsyntax-only -pthread -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 -DJUCE_USE_CURL=0 -DJUCE_WEB_BROWSER=0 '-DJucePlugin_Name="VOX FX"' '-DVOX_SUITE_STATE_TAG="VXFX"' -I<JUCE>/modules -Iproducts -Iproducts/fx -Ilibs/vox-preset -Ilibs/vox-ui products/fx/Processor.cpp products/fx/FxEditor.cpp tests/suite/FxProcessorTests.cpp
+
+== Merge: 35 optimized runs ==
+SHA: 7c79a2f09f0df4e59fe83ae0eec5ea295374bb17
+
+--- FxBarEventTests.log ---
+FX bar event: 0 failure(s)
+
+--- FxCurveTrajectoryTests.log ---
+FX curve trajectories: 0 failure(s)
+
+--- FxDownlifterTests.log ---
+FX downlifter: 0 failure(s)
+
+--- FxEffectsTests.log ---
+FX effects foundation: 0 failure(s)
+
+--- FxFormantTests.log ---
+FX formant: 0 failure(s)
+
+--- FxGeneratorStateTests.log ---
+FX generator state: 0 failure(s)
+
+--- FxGeneratorTests.log ---
+FX generator: 0 failure(s)
+
+--- FxGlitchTests.log ---
+FX glitch: 0 failure(s)
+
+--- FxGranularTests.log ---
+FX granular: 0 failure(s)
+
+--- FxImpactTests.log ---
+FX impact: 0 failure(s)
+
+--- FxLaserTests.log ---
+FX laser: 0 failure(s)
+
+--- FxLayerTests.log ---
+FX layers: 0 failure(s)
+
+--- FxMacroRoutingTests.log ---
+FX macro routing: 0 failure(s)
+
+--- FxMetallicTests.log ---
+FX metallic: 0 failure(s)
+
+--- FxModulationTests.log ---
+FX modulation primitives: 0 failure(s)
+
+--- FxNoiseRiserTests.log ---
+rate 44100 reference max error 3.7252903e-09 relative RMS 3.5186314e-08 spectral-difference ratio 751.553
+rate 48000 reference max error 3.7252903e-09 relative RMS 3.54426858e-08 spectral-difference ratio 786.570
+rate 96000 reference max error 3.7252903e-09 relative RMS 5.15886981e-08 spectral-difference ratio 922.651
+128 samples 44100 Hz 1 voices: p50 9.95 p95 26.70 p99 793.43 max 8021.40 us
+128 samples 44100 Hz 8 voices: p50 60.11 p95 131.11 p99 279.74 max 8154.71 us
+128 samples 44100 Hz 9 voices: p50 56.33 p95 74.82 p99 101.54 max 8124.92 us
+128 samples 48000 Hz 1 voices: p50 9.82 p95 15.18 p99 31.03 max 6888.49 us
+128 samples 48000 Hz 8 voices: p50 50.33 p95 120.65 p99 4216.56 max 16141.33 us
+128 samples 48000 Hz 9 voices: p50 131.63 p95 168.08 p99 7967.33 max 12213.17 us
+128 samples 96000 Hz 1 voices: p50 24.50 p95 40.71 p99 73.44 max 77.59 us
+128 samples 96000 Hz 8 voices: p50 50.36 p95 125.99 p99 281.87 max 8189.05 us
+128 samples 96000 Hz 9 voices: p50 56.41 p95 97.35 p99 112.46 max 8128.73 us
+FX noise riser: 0 failure(s)
+
+--- FxOfflineRenderTests.log ---
+FX offline WAV: 0 failure(s)
+
+--- FxPatternCodecTests.log ---
+FX pattern codec: 0 failure(s)
+
+--- FxPatternGridTests.log ---
+FX pattern grid: 0 failure(s)
+
+--- FxPatternPlaybackTests.log ---
+FX pattern playback scheduling: 0 failure(s)
+
+--- FxPatternSwingTests.log ---
+FX pattern swing: 0 failure(s)
+
+--- FxPatternTests.log ---
+FX trigger patterns: 0 failure(s)
+
+--- FxPlaybackModeTests.log ---
+FX playback modes and note ownership: 0 failure(s)
+
+--- FxProgramBridgeTests.log ---
+FX Program bridge: 0 failure(s)
+
+--- FxProgramCodecTests.log ---
+FX Program codec: 0 failure(s)
+
+--- FxProgramStoreTests.log ---
+FX Program store: 0 failure(s)
+
+--- FxSampleGranularTests.log ---
+FX sample granular ownership: 0 failure(s)
+
+--- FxSampleReferenceTests.log ---
+FX sample reference state: 0 failure(s)
+
+--- FxSampleStoreTests.log ---
+FX sample ownership: 0 failure(s)
+
+--- FxShepardTests.log ---
+44100 Hz Shepard energy 21.1286 max step 0.0021761053
+48000 Hz Shepard energy 22.997113 max step 0.0019998108
+96000 Hz Shepard energy 45.994205 max step 0.0010001119
+FX Shepard: 0 failure(s)
+
+--- FxSquelchTests.log ---
+FX squelch: 0 failure(s)
+
+--- FxTextureTests.log ---
+FX texture: 0 failure(s)
+
+--- FxTimelineTests.log ---
+FX timeline: 0 failure(s)
+
+--- FxTransportTests.log ---
+FX transport tracking: 0 failure(s)
+
+--- FxWhooshTests.log ---
+FX whoosh: 0 failure(s)
+
+--- summary.log ---
+PASS FxCurveTrajectoryTests
+PASS FxDownlifterTests
+PASS FxBarEventTests
+PASS FxEffectsTests
+PASS FxGeneratorStateTests
+PASS FxFormantTests
+PASS FxGlitchTests
+PASS FxGeneratorTests
+PASS FxGranularTests
+PASS FxLaserTests
+PASS FxImpactTests
+PASS FxMacroRoutingTests
+PASS FxModulationTests
+PASS FxLayerTests
+PASS FxMetallicTests
+PASS FxPatternCodecTests
+PASS FxPatternGridTests
+PASS FxOfflineRenderTests
+PASS FxPatternPlaybackTests
+PASS FxPatternSwingTests
+PASS FxPatternTests
+PASS FxNoiseRiserTests
+PASS FxPlaybackModeTests
+PASS FxProgramCodecTests
+PASS FxProgramBridgeTests
+PASS FxSampleReferenceTests
+PASS FxSampleGranularTests
+PASS FxProgramStoreTests
+PASS FxSampleStoreTests
+PASS FxShepardTests
+PASS FxTextureTests
+PASS FxSquelchTests
+PASS FxTransportTests
+PASS FxTimelineTests
+PASS FxWhooshTests
+
+== Checkpoint: 38 optimized runs, 35 ASan/UBSan runs, 1 syntax-only check ==
+SHA: 6256625ef8d59aae348be9c7991fa095a0df337d
+
+--- FxBarEventTests-sanitized.log ---
+FX bar event: 0 failure(s)
+
+--- FxBarEventTests.log ---
+FX bar event: 0 failure(s)
+
+--- FxCurveTrajectoryTests-sanitized.log ---
+FX curve trajectories: 0 failure(s)
+
+--- FxCurveTrajectoryTests.log ---
+FX curve trajectories: 0 failure(s)
+
+--- FxDownlifterTests-sanitized.log ---
+FX downlifter: 0 failure(s)
+
+--- FxDownlifterTests.log ---
+FX downlifter: 0 failure(s)
+
+--- FxEffectsTests-sanitized.log ---
+FX effects foundation: 0 failure(s)
+
+--- FxEffectsTests.log ---
+FX effects foundation: 0 failure(s)
+
+--- FxFileExportTests.log ---
+FX file export: 0 failure(s)
+
+--- FxFormantTests-sanitized.log ---
+FX formant: 0 failure(s)
+
+--- FxFormantTests.log ---
+FX formant: 0 failure(s)
+
+--- FxGeneratorStateTests-sanitized.log ---
+FX generator state: 0 failure(s)
+
+--- FxGeneratorStateTests.log ---
+FX generator state: 0 failure(s)
+
+--- FxGeneratorTests-sanitized.log ---
+FX generator: 0 failure(s)
+
+--- FxGeneratorTests.log ---
+FX generator: 0 failure(s)
+
+--- FxGlitchTests-sanitized.log ---
+FX glitch: 0 failure(s)
+
+--- FxGlitchTests.log ---
+FX glitch: 0 failure(s)
+
+--- FxGranularTests-sanitized.log ---
+FX granular: 0 failure(s)
+
+--- FxGranularTests.log ---
+FX granular: 0 failure(s)
+
+--- FxImpactTests-sanitized.log ---
+FX impact: 0 failure(s)
+
+--- FxImpactTests.log ---
+FX impact: 0 failure(s)
+
+--- FxLaserTests-sanitized.log ---
+FX laser: 0 failure(s)
+
+--- FxLaserTests.log ---
+FX laser: 0 failure(s)
+
+--- FxLayerTests-sanitized.log ---
+FX layers: 0 failure(s)
+
+--- FxLayerTests.log ---
+FX layers: 0 failure(s)
+
+--- FxMacroRoutingTests-sanitized.log ---
+FX macro routing: 0 failure(s)
+
+--- FxMacroRoutingTests.log ---
+FX macro routing: 0 failure(s)
+
+--- FxMetallicTests-sanitized.log ---
+FX metallic: 0 failure(s)
+
+--- FxMetallicTests.log ---
+FX metallic: 0 failure(s)
+
+--- FxModulationTests-sanitized.log ---
+FX modulation primitives: 0 failure(s)
+
+--- FxModulationTests.log ---
+FX modulation primitives: 0 failure(s)
+
+--- FxNoiseRiserTests-sanitized.log ---
+rate 44100 reference max error 3.7252903e-09 relative RMS 3.5186314e-08 spectral-difference ratio 751.553
+rate 48000 reference max error 3.7252903e-09 relative RMS 3.54426858e-08 spectral-difference ratio 786.570
+rate 96000 reference max error 3.7252903e-09 relative RMS 5.15886981e-08 spectral-difference ratio 922.651
+128 samples 44100 Hz 1 voices: p50 90.24 p95 143.01 p99 16140.15 max 16154.78 us
+128 samples 44100 Hz 8 voices: p50 284.56 p95 394.65 p99 16368.47 max 16468.29 us
+128 samples 44100 Hz 9 voices: p50 313.09 p95 511.26 p99 16391.91 max 16397.34 us
+128 samples 48000 Hz 1 voices: p50 90.17 p95 160.76 p99 8171.04 max 16210.02 us
+128 samples 48000 Hz 8 voices: p50 301.94 p95 622.94 p99 16335.23 max 16563.56 us
+128 samples 48000 Hz 9 voices: p50 313.60 p95 4388.78 p99 12549.83 max 16375.69 us
+128 samples 96000 Hz 1 voices: p50 89.58 p95 114.84 p99 12151.05 max 16151.66 us
+128 samples 96000 Hz 8 voices: p50 283.49 p95 536.79 p99 8555.47 max 16477.44 us
+128 samples 96000 Hz 9 voices: p50 312.61 p95 8377.25 p99 16402.10 max 24416.82 us
+FX noise riser: 0 failure(s)
+
+--- FxNoiseRiserTests.log ---
+rate 44100 reference max error 3.7252903e-09 relative RMS 3.5186314e-08 spectral-difference ratio 751.553
+rate 48000 reference max error 3.7252903e-09 relative RMS 3.54426858e-08 spectral-difference ratio 786.570
+rate 96000 reference max error 3.7252903e-09 relative RMS 5.15886981e-08 spectral-difference ratio 922.651
+128 samples 44100 Hz 1 voices: p50 10.36 p95 15.24 p99 25.75 max 37.12 us
+128 samples 44100 Hz 8 voices: p50 55.05 p95 114.91 p99 135.78 max 16106.38 us
+128 samples 44100 Hz 9 voices: p50 56.89 p95 116.17 p99 12117.23 max 12135.30 us
+128 samples 48000 Hz 1 voices: p50 10.49 p95 20.63 p99 30.14 max 32.60 us
+128 samples 48000 Hz 8 voices: p50 50.67 p95 81.91 p99 12100.81 max 12108.27 us
+128 samples 48000 Hz 9 voices: p50 56.41 p95 72.99 p99 12111.10 max 16120.26 us
+128 samples 96000 Hz 1 voices: p50 10.35 p95 15.59 p99 32.40 max 12067.77 us
+128 samples 96000 Hz 8 voices: p50 50.81 p95 102.37 p99 12122.41 max 17494.39 us
+128 samples 96000 Hz 9 voices: p50 56.53 p95 108.92 p99 149.75 max 12112.77 us
+FX noise riser: 0 failure(s)
+
+--- FxOfflineRenderTests-sanitized.log ---
+FX offline WAV: 0 failure(s)
+
+--- FxOfflineRenderTests.log ---
+FX offline WAV: 0 failure(s)
+
+--- FxPatternCodecTests-sanitized.log ---
+FX pattern codec: 0 failure(s)
+
+--- FxPatternCodecTests.log ---
+FX pattern codec: 0 failure(s)
+
+--- FxPatternGridTests-sanitized.log ---
+FX pattern grid: 0 failure(s)
+
+--- FxPatternGridTests.log ---
+FX pattern grid: 0 failure(s)
+
+--- FxPatternPlaybackTests-sanitized.log ---
+FX pattern playback scheduling: 0 failure(s)
+
+--- FxPatternPlaybackTests.log ---
+FX pattern playback scheduling: 0 failure(s)
+
+--- FxPatternSwingTests-sanitized.log ---
+FX pattern swing: 0 failure(s)
+
+--- FxPatternSwingTests.log ---
+FX pattern swing: 0 failure(s)
+
+--- FxPatternTests-sanitized.log ---
+FX trigger patterns: 0 failure(s)
+
+--- FxPatternTests.log ---
+FX trigger patterns: 0 failure(s)
+
+--- FxPlaybackModeTests-sanitized.log ---
+FX playback modes and note ownership: 0 failure(s)
+
+--- FxPlaybackModeTests.log ---
+FX playback modes and note ownership: 0 failure(s)
+
+--- FxProgramBridgeTests-sanitized.log ---
+FX Program bridge: 0 failure(s)
+
+--- FxProgramBridgeTests.log ---
+FX Program bridge: 0 failure(s)
+
+--- FxProgramCodecTests-sanitized.log ---
+In file included from /usr/include/c++/12/array:43,
+                 from products/fx/engine/SampleStore.h:2,
+                 from products/fx/engine/NoiseRiser.h:2,
+                 from products/fx/engine/ProgramCodec.h:2,
+                 from tests/suite/FxProgramCodecTests.cpp:1:
+In function 'constexpr typename __gnu_cxx::__enable_if<std::__is_byte<_Tp>::__value, void>::__type std::__fill_a1(_Tp*, _Tp*, const _Tp&) [with _Tp = byte]',
+    inlined from 'constexpr void std::__fill_a(_FIte, _FIte, const _Tp&) [with _FIte = byte*; _Tp = byte]' at /usr/include/c++/12/bits/stl_algobase.h:968:21,
+    inlined from 'constexpr _OutputIterator std::__fill_n_a(_OutputIterator, _Size, const _Tp&, random_access_iterator_tag) [with _OutputIterator = byte*; _Size = long unsigned int; _Tp = byte]' at /usr/include/c++/12/bits/stl_algobase.h:1119:20,
+    inlined from 'constexpr _OI std::fill_n(_OI, _Size, const _Tp&) [with _OI = byte*; _Size = long unsigned int; _Tp = byte]' at /usr/include/c++/12/bits/stl_algobase.h:1148:29,
+    inlined from 'static constexpr _ForwardIterator std::__uninitialized_default_n_1<true>::__uninit_default_n(_ForwardIterator, _Size) [with _ForwardIterator = std::byte*; _Size = long unsigned int]' at /usr/include/c++/12/bits/stl_uninitialized.h:663:29,
+    inlined from 'constexpr _ForwardIterator std::__uninitialized_default_n(_ForwardIterator, _Size) [with _ForwardIterator = byte*; _Size = long unsigned int]' at /usr/include/c++/12/bits/stl_uninitialized.h:701:20,
+    inlined from 'constexpr _ForwardIterator std::__uninitialized_default_n_a(_ForwardIterator, _Size, allocator<_Tp>&) [with _ForwardIterator = byte*; _Size = long unsigned int; _Tp = byte]' at /usr/include/c++/12/bits/stl_uninitialized.h:766:44,
+    inlined from 'constexpr void std::vector<_Tp, _Alloc>::_M_default_append(size_type) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]' at /usr/include/c++/12/bits/vector.tcc:642:35,
+    inlined from 'constexpr void std::vector<_Tp, _Alloc>::resize(size_type) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]' at /usr/include/c++/12/bits/stl_vector.h:1011:21,
+    inlined from 'int main()' at tests/suite/FxProgramCodecTests.cpp:46:40:
+/usr/include/c++/12/bits/stl_algobase.h:942:25: warning: 'void* __builtin_memset(void*, int, long unsigned int)' specified bound 18446744073709551607 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
+  942 |         __builtin_memset(__first, static_cast<unsigned char>(__tmp), __len);
+      |         ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function 'constexpr typename __gnu_cxx::__enable_if<std::__is_byte<_Tp>::__value, void>::__type std::__fill_a1(_Tp*, _Tp*, const _Tp&) [with _Tp = byte]',
+    inlined from 'constexpr void std::__fill_a(_FIte, _FIte, const _Tp&) [with _FIte = byte*; _Tp = byte]' at /usr/include/c++/12/bits/stl_algobase.h:968:21,
+    inlined from 'constexpr _OutputIterator std::__fill_n_a(_OutputIterator, _Size, const _Tp&, random_access_iterator_tag) [with _OutputIterator = byte*; _Size = long unsigned int; _Tp = byte]' at /usr/include/c++/12/bits/stl_algobase.h:1119:20,
+    inlined from 'constexpr _OI std::fill_n(_OI, _Size, const _Tp&) [with _OI = byte*; _Size = long unsigned int; _Tp = byte]' at /usr/include/c++/12/bits/stl_algobase.h:1148:29,
+    inlined from 'static constexpr _ForwardIterator std::__uninitialized_default_n_1<true>::__uninit_default_n(_ForwardIterator, _Size) [with _ForwardIterator = std::byte*; _Size = long unsigned int]' at /usr/include/c++/12/bits/stl_uninitialized.h:663:29,
+    inlined from 'constexpr _ForwardIterator std::__uninitialized_default_n(_ForwardIterator, _Size) [with _ForwardIterator = byte*; _Size = long unsigned int]' at /usr/include/c++/12/bits/stl_uninitialized.h:701:20,
+    inlined from 'constexpr _ForwardIterator std::__uninitialized_default_n_a(_ForwardIterator, _Size, allocator<_Tp>&) [with _ForwardIterator = byte*; _Size = long unsigned int; _Tp = byte]' at /usr/include/c++/12/bits/stl_uninitialized.h:766:44,
+    inlined from 'constexpr void std::vector<_Tp, _Alloc>::_M_default_append(size_type) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]' at /usr/include/c++/12/bits/vector.tcc:655:41,
+    inlined from 'constexpr void std::vector<_Tp, _Alloc>::resize(size_type) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]' at /usr/include/c++/12/bits/stl_vector.h:1011:21,
+    inlined from 'int main()' at tests/suite/FxProgramCodecTests.cpp:46:40:
+/usr/include/c++/12/bits/stl_algobase.h:942:25: warning: 'void* __builtin_memset(void*, int, long unsigned int)' specified bound 18446744073709551607 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
+  942 |         __builtin_memset(__first, static_cast<unsigned char>(__tmp), __len);
+      |         ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+FX Program codec: 0 failure(s)
+
+--- FxProgramCodecTests.log ---
+FX Program codec: 0 failure(s)
+
+--- FxProgramStoreTests-sanitized.log ---
+FX Program store: 0 failure(s)
+
+--- FxProgramStoreTests.log ---
+FX Program store: 0 failure(s)
+
+--- FxSampleControllerTests.log ---
+FX sample controller: 0 failure(s)
+
+--- FxSampleDecodeTests.log ---
+FX sample WAV decode: 0 failure(s)
+
+--- FxSampleGranularTests-sanitized.log ---
+FX sample granular ownership: 0 failure(s)
+
+--- FxSampleGranularTests.log ---
+FX sample granular ownership: 0 failure(s)
+
+--- FxSampleReferenceTests-sanitized.log ---
+FX sample reference state: 0 failure(s)
+
+--- FxSampleReferenceTests.log ---
+FX sample reference state: 0 failure(s)
+
+--- FxSampleStoreTests-sanitized.log ---
+FX sample ownership: 0 failure(s)
+
+--- FxSampleStoreTests.log ---
+FX sample ownership: 0 failure(s)
+
+--- FxShepardTests-sanitized.log ---
+44100 Hz Shepard energy 21.1286 max step 0.0021761053
+48000 Hz Shepard energy 22.997113 max step 0.0019998108
+96000 Hz Shepard energy 45.994205 max step 0.0010001119
+FX Shepard: 0 failure(s)
+
+--- FxShepardTests.log ---
+44100 Hz Shepard energy 21.1286 max step 0.0021761053
+48000 Hz Shepard energy 22.997113 max step 0.0019998108
+96000 Hz Shepard energy 45.994205 max step 0.0010001119
+FX Shepard: 0 failure(s)
+
+--- FxSquelchTests-sanitized.log ---
+FX squelch: 0 failure(s)
+
+--- FxSquelchTests.log ---
+FX squelch: 0 failure(s)
+
+--- FxTextureTests-sanitized.log ---
+FX texture: 0 failure(s)
+
+--- FxTextureTests.log ---
+FX texture: 0 failure(s)
+
+--- FxTimelineTests-sanitized.log ---
+FX timeline: 0 failure(s)
+
+--- FxTimelineTests.log ---
+FX timeline: 0 failure(s)
+
+--- FxTransportTests-sanitized.log ---
+FX transport tracking: 0 failure(s)
+
+--- FxTransportTests.log ---
+FX transport tracking: 0 failure(s)
+
+--- FxWhooshTests-sanitized.log ---
+FX whoosh: 0 failure(s)
+
+--- FxWhooshTests.log ---
+FX whoosh: 0 failure(s)
+
+--- juce-syntax.log ---
+PASS JUCE syntax (no link or execution)
+
+--- sanitizer-summary.log ---
+PASS FxEffectsTests ASan+UBSan
+PASS FxCurveTrajectoryTests ASan+UBSan
+PASS FxDownlifterTests ASan+UBSan
+PASS FxGeneratorStateTests ASan+UBSan
+PASS FxGlitchTests ASan+UBSan
+PASS FxGeneratorTests ASan+UBSan
+PASS FxBarEventTests ASan+UBSan
+PASS FxFormantTests ASan+UBSan
+PASS FxLaserTests ASan+UBSan
+PASS FxLayerTests ASan+UBSan
+PASS FxImpactTests ASan+UBSan
+PASS FxMacroRoutingTests ASan+UBSan
+PASS FxModulationTests ASan+UBSan
+PASS FxGranularTests ASan+UBSan
+PASS FxPatternCodecTests ASan+UBSan
+PASS FxPatternGridTests ASan+UBSan
+PASS FxPatternPlaybackTests ASan+UBSan
+PASS FxMetallicTests ASan+UBSan
+PASS FxPatternSwingTests ASan+UBSan
+PASS FxOfflineRenderTests ASan+UBSan
+PASS FxPatternTests ASan+UBSan
+PASS FxProgramCodecTests ASan+UBSan
+PASS FxNoiseRiserTests ASan+UBSan
+PASS FxProgramBridgeTests ASan+UBSan
+PASS FxPlaybackModeTests ASan+UBSan
+PASS FxSampleReferenceTests ASan+UBSan
+PASS FxSampleStoreTests ASan+UBSan
+PASS FxProgramStoreTests ASan+UBSan
+PASS FxSampleGranularTests ASan+UBSan
+PASS FxTimelineTests ASan+UBSan
+PASS FxTransportTests ASan+UBSan
+PASS FxShepardTests ASan+UBSan
+PASS FxSquelchTests ASan+UBSan
+PASS FxTextureTests ASan+UBSan
+PASS FxWhooshTests ASan+UBSan
+
+--- summary.log ---
+PASS FxCurveTrajectoryTests
+PASS FxDownlifterTests
+PASS FxBarEventTests
+PASS FxEffectsTests
+PASS FxFormantTests
+PASS FxGeneratorStateTests
+PASS FxGeneratorTests
+PASS FxGlitchTests
+PASS FxGranularTests
+PASS FxImpactTests
+PASS FxLaserTests
+PASS FxMacroRoutingTests
+PASS FxModulationTests
+PASS FxLayerTests
+PASS FxMetallicTests
+PASS FxPatternCodecTests
+PASS FxPatternGridTests
+PASS FxOfflineRenderTests
+PASS FxPatternPlaybackTests
+PASS FxPatternSwingTests
+PASS FxNoiseRiserTests
+PASS FxPatternTests
+PASS FxPlaybackModeTests
+PASS FxProgramCodecTests
+PASS FxProgramBridgeTests
+PASS FxSampleReferenceTests
+PASS FxProgramStoreTests
+PASS FxSampleStoreTests
+PASS FxSampleGranularTests
+PASS FxShepardTests
+PASS FxTextureTests
+PASS FxSquelchTests
+PASS FxTimelineTests
+PASS FxTransportTests
+PASS FxWhooshTests
+PASS FxFileExportTests
+PASS FxSampleControllerTests
+PASS FxSampleDecodeTests

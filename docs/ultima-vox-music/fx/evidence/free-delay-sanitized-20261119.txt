@@ -1,0 +1,14 @@
+free Delay sweep 44100 Hz: relative staircase -17.52 dB, fractional -34.00 dB
+free Delay sweep 48000 Hz: relative staircase -17.63 dB, fractional -34.10 dB
+free Delay sweep 96000 Hz: relative staircase -17.38 dB, fractional -33.89 dB
+FX effects foundation: 0 failure(s)
+motion 44100 Hz 64 routes: peak 0.020048 DC 0.0001550 / 64 grains
+motion 48000 Hz 64 routes: peak 0.019299 DC 0.0001860 / 64 grains
+motion 96000 Hz 64 routes: peak 0.026238 DC 0.0001167 / 64 grains
+mixed nonlinear/tempo delay tail 44100 Hz: peak 0.2049740, tail 0.2049740, final peak 0.000000000
+mixed nonlinear/moving free delay tail 44100 Hz: peak 0.1601409, tail 0.1601409, final peak 0.000000000
+mixed nonlinear/tempo delay tail 48000 Hz: peak 0.2063994, tail 0.2063994, final peak 0.000000000
+mixed nonlinear/moving free delay tail 48000 Hz: peak 0.1604469, tail 0.1604469, final peak 0.000000000
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2038673, tail 0.2038673, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1612363, tail 0.1612363, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)

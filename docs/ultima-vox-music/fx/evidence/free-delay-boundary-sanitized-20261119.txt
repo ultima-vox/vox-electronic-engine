@@ -1,0 +1,23 @@
+free Delay sweep 44100 Hz: relative staircase -17.52 dB, fractional -34.00 dB
+free Delay boundary 44100 Hz speed 0.003: 11 crossings, old entry residual 0.981213, max new 0.002258 samples
+free Delay boundary 44100 Hz speed 0.031: 11 crossings, old entry residual 0.966833, max new 0.002258 samples
+free Delay first-echo boundary 44100 Hz: old derivative residual 0.000492209, measured new 0.000001116
+free Delay sweep 48000 Hz: relative staircase -17.63 dB, fractional -34.10 dB
+free Delay boundary 48000 Hz speed 0.003: 13 crossings, old entry residual 0.982462, max new 0.002079 samples
+free Delay boundary 48000 Hz speed 0.031: 13 crossings, old entry residual 0.967004, max new 0.002079 samples
+free Delay first-echo boundary 48000 Hz: old derivative residual 0.000490649, measured new 0.000001008
+free Delay sweep 96000 Hz: relative staircase -17.38 dB, fractional -33.89 dB
+free Delay boundary 96000 Hz speed 0.003: 25 crossings, old entry residual 0.989731, max new 0.001040 samples
+free Delay boundary 96000 Hz speed 0.031: 25 crossings, old entry residual 0.968002, max new 0.001040 samples
+free Delay first-echo boundary 96000 Hz: old derivative residual 0.000494583, measured new 0.000000522
+FX effects foundation: 0 failure(s)
+motion 44100 Hz 64 routes: peak 0.020048 DC 0.0001550 / 64 grains
+motion 48000 Hz 64 routes: peak 0.019299 DC 0.0001860 / 64 grains
+motion 96000 Hz 64 routes: peak 0.026238 DC 0.0001167 / 64 grains
+mixed nonlinear/tempo delay tail 44100 Hz: peak 0.2049740, tail 0.2049740, final peak 0.000000000
+mixed nonlinear/moving free delay tail 44100 Hz: peak 0.1601409, tail 0.1601409, final peak 0.000000000
+mixed nonlinear/tempo delay tail 48000 Hz: peak 0.2063994, tail 0.2063994, final peak 0.000000000
+mixed nonlinear/moving free delay tail 48000 Hz: peak 0.1604469, tail 0.1604469, final peak 0.000000000
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2038673, tail 0.2038673, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1612363, tail 0.1612363, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)
