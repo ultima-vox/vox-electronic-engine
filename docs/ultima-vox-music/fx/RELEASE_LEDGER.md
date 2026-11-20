@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Delay transition boundaries and Source keyboard scope](FREE_DELAY_BOUNDARY_20261119.md): no rounded tap jumps while entering or leaving the moving-read mode in the targeted tests; fixed sound pins unchanged. Source traversal is scoped and tests skip controls hidden by family. [Current engineering candidate evidence and open gates](ENGINEERING_CANDIDATE_EVIDENCE_20261119.md).
+
 - [Free Delay Amount motion](FREE_DELAY_MOTION_20261119.md): fractional moving read reduces measured staircase error while nine stationary fixtures stay byte-identical. Existing Delay automation retains its meaning but can sound different while moving. No state/host-ID change; nonlinear aliasing, FX-T18, Windows and DAWs remain open.
 
 - [Glitch checkpoint](GLITCH_SOURCE_20261119.md), [TL acceptance for development](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7034953740), and [1.0 user compatibility notes](USER_NOTES_1_0.md): **FPRG v8 is forward-only.** The new reader accepts v1–v7; the writer still emits v6/v7 for a Program with all-default Glitch settings. An authored v8 Glitch Program (including nested project/A-B state or portable `.voxfx`) is rejected by readers capped at v7. Do not silently down-convert an edited Program; retain older project/preset backups. The portable size limit is still 64 KiB. No validator, DAW, release or owner approval follows.

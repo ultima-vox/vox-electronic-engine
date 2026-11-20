@@ -4,6 +4,8 @@
 
 The new read head fades into fractional linear interpolation when the target Amount changes, then fades back to the original integer tap after the target stays unchanged for at least 5 ms and the smoothed tap is within .01 sample of it. Each fade takes 5 ms. The rounded position is one endpoint of the same interpolation cell, so blending the address only needs the existing interpolation read. No new buffer, host parameter, preset schema, effect type, or reported latency. **Tempo Delay** retains its own BPM-synced eighth-note tap and two-head crossfade. Feedback safety limits, silence cap, structural slot crossfades, Save and drag contracts are unchanged.
 
+**Follow-up:** the TL found a half-sample crossing issue during the 5 ms blends. The [boundary follow-up](FREE_DELAY_BOUNDARY_20261119.md) supersedes that part of the implementation and verifies both transition directions. The measurements below describe this earlier checkpoint.
+
 ## Evidence and limitations
 
 The production-rate first-echo fixture feeds stereo opposite-polarity sines at 0.075 × sample rate. It compares steady sweep output to an analytic continuous sine at the actual smoothed tap, before feedback arrives. Relative mean-square error vs reference (rounded model → interpolated measured):
