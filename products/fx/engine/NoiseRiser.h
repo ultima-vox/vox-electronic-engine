@@ -241,7 +241,7 @@ public:
             if(retired.active)discardVoice(retired,leaseIndex);
             retired=*slot;beginRelease(retired);
             if(sampleStore_&&sampleLeases_[slotIndex].data())(void)sampleStore_->transfer(sampleLeases_[slotIndex],sampleLeases_[leaseIndex]);
-            forEachGrain([&](Grain& grain,std::uint64_t){if(grain.serial==retired.serial)grain.voiceIndex=leaseIndex;});
+            for(auto& grain:grains_)if(grain.active&&grain.serial==retired.serial)grain.voiceIndex=leaseIndex;
         }
         if(userSample)(void)sampleStore_->transfer(incoming,sampleLeases_[slotIndex]);
         *slot = {};
@@ -320,10 +320,11 @@ public:
             }
         };
         drop(voices_,0);drop(retiring_,voices_.size());
-        if(discarded)forEachGrain([&](Grain& grain,std::uint64_t bit){
+        if(discarded)for(auto& grain:grains_){
+            if(!grain.active)continue;
             const auto& owner=grain.voiceIndex<voices_.size()?voices_[grain.voiceIndex]:retiring_[grain.voiceIndex-voices_.size()];
-            if(!owner.active)grainMask_&=~bit;
-        });
+            if(!owner.active){clearGrain(grain);}
+        }
     }
     void allSoundOff(int channel) noexcept {
         if (channel < 0 || channel > 16) return;
@@ -445,7 +446,7 @@ private:
     void discardVoice(Voice& v,std::size_t index) noexcept {
         v.active=false;
         if(sampleLeases_[index].data())sampleStore_->release(sampleLeases_[index]);
-        forEachGrain([&](Grain& grain,std::uint64_t bit){if(grain.voiceIndex==index)grainMask_&=~bit;});
+        for(auto& grain:grains_)if(grain.active&&grain.voiceIndex==index){clearGrain(grain);}
     }
     void beginRelease(Voice& v,bool musical=false) noexcept {
         const auto hard=std::max(1,static_cast<int>(rate_*.005));
@@ -559,9 +560,10 @@ private:
                                  2.0 * settings.panCurve.evaluate(static_cast<float>(t)) - 1.0 +
                                  2.0 * globalPan - 1.0, -1.0, 1.0);
                 if (layer.grainCountdown == 0) {
-                    if(const auto free=~grainMask_;free!=0) {
+                    if (const auto free=~grainMask_;free!=0) {
                         const auto slot=std::countr_zero(free);
-                        auto& grain=grains_[slot];grainMask_|=std::uint64_t{1}<<slot;
+                        auto& grain=grains_[slot];
+                        grain.active=true;grainMask_|=std::uint64_t{1}<<slot;
                         grain.voiceIndex=voiceIndex; grain.layerIndex=i; grain.serial=v.serial;
                         const auto& lease=sampleLeases_[voiceIndex];
                         const auto length=lease.data()?lease.frames():sample_.size();
@@ -811,26 +813,23 @@ private:
         }
     }
     struct Grain {
+        bool active=false;
         std::size_t voiceIndex=0, layerIndex=0;
         std::uint64_t serial=0;
         double position=0, speed=1;
         unsigned age=0, length=0;
     };
-    // A bit per slot is the sole occupancy state. Ascending slots retain
-    // the existing first-free and floating-point summation order. The local
-    // mask permits expiring the current grain without affecting iteration.
-    template<class Visit> void forEachGrain(Visit visit) noexcept {
-        for(auto remaining=grainMask_;remaining!=0;remaining&=remaining-1){
-            const auto slot=std::countr_zero(remaining);
-            visit(grains_[slot],std::uint64_t{1}<<slot);
-        }
+    void clearGrain(Grain& grain) noexcept {
+        grain.active=false;
+        grainMask_&=~(std::uint64_t{1}<<(&grain-grains_.data()));
     }
     void mixGrains(double& left, double& right) noexcept {
-        forEachGrain([&](Grain& grain,std::uint64_t bit){
+        if (grainMask_ != 0) for (auto& grain:grains_) {
+            if (!grain.active) continue;
             auto& owner = grain.voiceIndex < voices_.size() ? voices_[grain.voiceIndex] : retiring_[grain.voiceIndex-voices_.size()];
-            if (!owner.active || owner.serial != grain.serial || grain.age >= grain.length) { grainMask_&=~bit; return; }
+            if (!owner.active || owner.serial != grain.serial || grain.age >= grain.length) { clearGrain(grain); continue; }
             auto& layer = owner.layers[grain.layerIndex];
-            if (!layer.grainLayerActive) { grainMask_&=~bit; return; }
+            if (!layer.grainLayerActive) { clearGrain(grain); continue; }
             const auto& lease=sampleLeases_[grain.voiceIndex];
             const auto* data=lease.data()?lease.data():sample_.data();
             const auto length=lease.data()?lease.frames():sample_.size();
@@ -857,8 +856,8 @@ private:
                 grain.position=std::fmod(grain.position,static_cast<double>(length));
                 if(grain.position<0)grain.position+=length;
             }
-            if (++grain.age >= grain.length) grainMask_&=~bit;
-        });
+            if (++grain.age >= grain.length) { clearGrain(grain); }
+        }
         const auto mixFiltered=[&](auto& voices){
             for(auto& voice:voices)if(voice.active)for(std::size_t i=0;i<voice.layers.size();++i){
                 auto& layer=voice.layers[i];
@@ -886,6 +885,8 @@ private:
     std::array<double, 1025> grainWindow_ {};
     std::array<Grain, 64> grains_ {};
     unsigned grainLength_ = 2, grainInterval_ = 1;
+    // Admission index. Keep the per-grain flag for the predictable dense mix
+    // loop; both are updated together only on admission/clear/prepare.
     std::uint64_t grainMask_=0;
     NoiseProgram program_;
     std::uint64_t programPublication_=0;

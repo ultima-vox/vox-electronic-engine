@@ -42,6 +42,18 @@ int main(){
         check(stolen && e->activeGrainCount()<=64,"grain ownership survives event steal");
         e->allSoundOff(0);for(int i=0;i<2;++i)e->render(l,r,512);
         check(e->activeGrainCount()==0&&e->activeEventCount()==0,"panic retires grains and events");
+        // Exercise refilling every bit, including slot 63, after ownership
+        // remap and panic. Old occupancy must never exclude a reusable slot.
+        for(auto& layer:p.layers){layer.enabled=true;layer.family=vox::fx::NoiseFamily::granular;}
+        check(e->setProgram(p),"refill with four granular layers");
+        unsigned refillPeak=0;
+        for(int cycle=0;cycle<2;++cycle){
+            for(int i=0;i<8;++i)check(e->noteOn(1,60+i,1,1),"admit event after clearing the grain pool");
+            for(int block=0;block<12;++block){e->render(l,r,512);refillPeak=std::max(refillPeak,e->activeGrainCount());}
+            check(refillPeak==64,"all grain slots are reusable after clearing");refillPeak=0;
+            e->allSoundOff(0);e->render(l,r,512);
+            check(e->activeGrainCount()==0&&e->activeEventCount()==0,"refilled pool drains to zero");
+        }
     }
     {
         vox::fx::sample::Store store;auto engine=std::make_unique<vox::fx::NoiseRiser>();engine->prepare(48000);

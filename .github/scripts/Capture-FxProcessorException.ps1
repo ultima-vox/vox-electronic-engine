@@ -1,4 +1,4 @@
-# Replay only the existing Release FX processor CTest executable. This is a
+# Replay one allowlisted existing Release FX CTest executable. This is a
 # diagnostic capture, never a replacement for CTest's result. No runner-wide
 # WER/debug settings are changed and no debugger is installed by this script.
 [CmdletBinding()]
@@ -6,13 +6,15 @@ param(
     [string]$BuildDir = 'build-suite',
     [string]$OutputDir = 'suite-diagnostic',
     [string]$CdbPath,
-    [ValidateRange(5,180)][int]$TimeoutSeconds = 90
+    [ValidateRange(5,180)][int]$TimeoutSeconds = 90,
+    [ValidateSet('suite_fx_processor_tests', 'suite_fx_noise_riser_tests', 'suite_fx_layer_tests', 'suite_fx_shepard_tests')]
+    [string]$TestName = 'suite_fx_processor_tests'
 )
 $ErrorActionPreference = 'Stop'
 $build = (Resolve-Path -LiteralPath $BuildDir).Path
 $out = (New-Item -ItemType Directory -Force -Path $OutputDir).FullName
-$report = Join-Path $out 'fx-processor-diagnostic.txt'
-$testName = 'suite_fx_processor_tests'
+$label = $TestName -creplace '^suite_', '' -creplace '_tests$', '' -replace '_', '-'
+$report = Join-Path $out "$label-diagnostic.txt"
 
 function Note([string]$Message) {
     $Message | Add-Content -LiteralPath $report
@@ -33,7 +35,7 @@ $metadata = & ctest --test-dir $build -C Release -R "^$testName$" '--show-only=j
 if ($LASTEXITCODE -ne 0) { throw 'Unable to discover the Release FX CTest executable.' }
 $test = @((($metadata -join "`n") | ConvertFrom-Json).tests | Where-Object { $_.name -ceq $testName })
 if ($test.Count -ne 1 -or @($test[0].command).Count -ne 1) {
-    throw 'Expected exactly one FX processor test with a no-argument Release command.'
+    throw 'Expected exactly one named FX test with a no-argument Release command.'
 }
 $exe = (Resolve-Path -LiteralPath $test[0].command[0]).Path
 $working = ($test[0].properties | Where-Object { $_.name -ceq 'WORKING_DIRECTORY' } | Select-Object -First 1).value
@@ -55,9 +57,9 @@ if (-not $CdbPath) {
     return
 }
 
-$dump = Join-Path $out 'fx-processor.dmp'
-$commands = Join-Path $out 'fx-processor-cdb-commands.txt'
-$debugLog = Join-Path $out 'fx-processor-cdb.log'
+$dump = Join-Path $out "$label.dmp"
+$commands = Join-Path $out "$label-cdb-commands.txt"
+$debugLog = Join-Path $out "$label-cdb.log"
 # The dump command is inside an event-command string; use a relative ASCII
 # filename (in the CTest working directory) rather than nested path quotes.
 # Use a unique name so a stale crash cannot be mistaken for this replay.

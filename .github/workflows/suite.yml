@@ -50,6 +50,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The explicitly admitted FX engineering gate builds the reviewed
+          # source itself, not the mutable synthetic PR merge commit.
+          ref: ${{ env.FX_DIAGNOSTICS == 'ON' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify FX engineering source
+        if: ${{ env.FX_DIAGNOSTICS == 'ON' }}
+        shell: powershell
+        env:
+          FX_EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $actual = & git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:FX_EXPECTED_SHA) {
+            throw "Expected reviewed FX HEAD $env:FX_EXPECTED_SHA, found $actual"
+          }
 
       # Infrastructure: FetchContent's JUCE clone broke off repeatedly on this
       # runner. Use verified copies of the pinned commits from the runner tool
@@ -96,7 +111,7 @@ jobs:
           if ($env:FX_DIAGNOSTICS -eq 'ON') {
             New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
             $report = (Resolve-Path suite-out\ctest).Path
-            ctest --test-dir build-suite -C Release -L suite --output-on-failure --output-junit (Join-Path $report 'results.xml')
+            ctest --test-dir build-suite -C Release -L suite --no-tests=error --timeout 180 --output-on-failure --output-junit (Join-Path $report 'results.xml')
             exit $LASTEXITCODE
           }
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
@@ -112,17 +127,23 @@ jobs:
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination suite-out\ctest }
           }
 
-      - name: Capture failed FX processor test only
+      - name: Replay historical FX crash cases only if they failed
         if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
-        timeout-minutes: 3
+        timeout-minutes: 8
         shell: powershell
         run: |
           $failed = 'suite-out\ctest\LastTestsFailed.log'
-          if ((Test-Path $failed) -and (Select-String -Path $failed -Pattern '^\d+:suite_fx_processor_tests$' -Quiet)) {
-            & .github\scripts\Capture-FxProcessorException.ps1 -BuildDir build-suite -OutputDir suite-diagnostic
+          if (Test-Path $failed) {
+            foreach ($test in 'suite_fx_noise_riser_tests', 'suite_fx_processor_tests', 'suite_fx_layer_tests', 'suite_fx_shepard_tests') {
+              if (Select-String -Path $failed -Pattern "^\d+:$test$" -Quiet) {
+                try {
+                  & .github\scripts\Capture-FxProcessorException.ps1 -BuildDir build-suite -TestName $test -OutputDir (Join-Path 'suite-diagnostic' $test) -TimeoutSeconds 90
+                } catch { Write-Warning "Unable to replay ${test}: $_" }
+              }
+            }
           }
 
-      - name: Upload FX processor crash diagnostics
+      - name: Upload FX crash diagnostics
         if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
         uses: actions/upload-artifact@v4
         with:
@@ -136,7 +157,14 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path suite-out\validator | Out-Null
           $failed = @()
-          foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory) {
+          $bundles = @(Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory)
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            $names = @($bundles | ForEach-Object { $_.BaseName })
+            if ($bundles.Count -ne 3 -or @('VOX FX', 'VOX Drums', 'VOX Trance Synthesis' | Where-Object { $_ -notin $names }).Count -ne 0) {
+              throw "Expected the three standalone VST3 bundles, found: $($names -join ', ')"
+            }
+          }
+          foreach ($bundle in $bundles) {
             $log = Join-Path 'suite-out\validator' "$($bundle.BaseName).txt"
             & $env:VST3_VALIDATOR $bundle.FullName *> $log
             $code = $LASTEXITCODE
@@ -151,7 +179,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path suite-out\VST3 | Out-Null
           $lines = @(
-            "Commit: $env:GITHUB_SHA",
+            "Commit: $(& git rev-parse HEAD)",
+            "Tree: $(& git rev-parse 'HEAD^{tree}')",
+            "Event SHA: $env:GITHUB_SHA",
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
             "Runner: $env:RUNNER_NAME",
             "JUCE: $env:JUCE_COMMIT",
