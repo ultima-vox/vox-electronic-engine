@@ -111,7 +111,7 @@ jobs:
               '- [ ] Merge or cherry-pick selected changes into next/fx-development only after review.',
               '',
               'Heavy Windows jobs are deliberately skipped for this FX Draft PR.',
-              'For a one-time exact-head Windows suite run, explicitly add \`[RUN_FX_SUITE]\` in a later PR-body edit.',
+              'For a one-time exact-head Windows suite run, use the opt-in marker documented in ARENA_SYNC.md in a later PR-body edit.',
               'The initial GitHub-token PR creation may not trigger standard pull_request CI.',
               '',
               'Policy: docs/ultima-vox-music/fx/ARENA_SYNC.md'
