@@ -170,11 +170,23 @@ int main(){
                     ideal=next;previous=output;
                 };
                 for(unsigned n=1;n<=fade;++n){const double next=ideal+((n/19)%2==0?speed:-speed);step(next,.32f,n);}
-                // The old exit criterion could start a fade on the wrong
-                // side of +.5, then cross while still inside .01 sample.
-                for(double next:{1000.491,1000.497,1000.499,1000.5,1000.501,1000.502})step(next,.31f);
-                for(unsigned n=0;n<2*fade;++n)step(1000.502,.31f);
-                check(previous==1001.,"moving tap returns exactly to the held legacy tap");
+                // Emulate the end of a long slew. For this held target,
+                // all late positions are within .01 sample of its endpoint;
+                // the old exit correction would start before the crossing.
+                step(1000.495,.31f);
+                double priorOld=ideal,priorIdeal=ideal,legacyExitStep=0;
+                for(unsigned n=1;n<=2*fade;++n){
+                    const double next=1000.495+.008*static_cast<double>(n)/(2*fade);
+                    step(next,.31f);
+                    const double mix=n<fade?1.:1.-static_cast<double>(n-fade)/fade;
+                    const double rounded=std::round(next);
+                    const double old=rounded+(next-rounded)*mix;
+                    legacyExitStep=std::max(legacyExitStep,std::abs((old-priorOld)-(next-priorIdeal)));
+                    priorOld=old;priorIdeal=next;
+                    check(previous==next,"exit waits for an actual plateau, even across +.5 inside .01 sample");
+                }
+                for(unsigned n=0;n<fade+1;++n)step(1000.503,.31f);
+                check(previous==1001.&&legacyExitStep>.2,"held tap lands exactly after the premature old exit would have jumped");
                 // Restart during a fade-out and reverse direction repeatedly.
                 for(unsigned n=0;n<fade;++n)step(1000.499,.33f);
                 for(unsigned n=0;n<fade/3+2;++n)step(1000.499,.33f);
@@ -182,8 +194,8 @@ int main(){
                 for(unsigned n=0;n<fade;++n)step(ideal+(n%2?speed:-speed),n%2?.29f:.33f);
                 check(crossings>0&&legacyStep>.4&&maxExtraStep<=.5/fade+1e-10,
                       "crossing residual is bounded through entrance, plateau exit, and interrupted exit");
-                std::printf("free Delay boundary %.0f Hz speed %.3f: %u crossings, old entry residual %.6f, max new %.6f samples\n",
-                            rate,speed,crossings,legacyStep,maxExtraStep);
+                std::printf("free Delay boundary %.0f Hz speed %.3f: %u crossings, old entry/exit residual %.6f / %.6f, max new %.6f samples\n",
+                            rate,speed,crossings,legacyStep,legacyExitStep,maxExtraStep);
             }
             // A linear reading region turns the address residual into a
             // measurable output derivative residual in a real first echo.
