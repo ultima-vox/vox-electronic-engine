@@ -65,6 +65,10 @@ public:
     [[nodiscard]] int factoryProgramRole (int index) const;
     [[nodiscard]] juce::String factoryProgramSearch (int index) const;
     bool loadFactoryProgram (int index);
+    [[nodiscard]] int factoryProgramAudition (int index) const;
+    // One note from the message thread. The audio thread plays it and
+    // releases it. No allocation and no lock.
+    void requestPreview (int note) noexcept;
 
     void setPhraseIndex (int index);
     [[nodiscard]] int phraseIndex() const;
@@ -118,6 +122,8 @@ private:
     engine::BlockParams latchBlock();
     void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
     bool insertEvent (const engine::Event& event, int& count);
+    bool insertKeepingRelease (const engine::Event& event, int& count);
+    void takePreview (int frames, int& count);
     void publishLocked();
     void readSnapshot (PhraseSnapshot& out) noexcept;
     void collectPhrase (int frames, const PhraseSnapshot& snap, engine::Event* phraseEvents, int& phraseCount);
@@ -178,6 +184,10 @@ private:
     std::int64_t rtPlayed_ = 0;
     std::uint8_t phraseHeld_[128] {};
     std::atomic<std::uint64_t> droppedMidi_ { 0 };
+    std::atomic<int> previewStage_ { 0 };
+    std::atomic<int> previewNote_ { 60 };
+    std::atomic<int> previewLeft_ { 0 };
+    std::atomic<int> previewReplace_ { -1 };
 
     struct Restored { float loaded = 0.0f, held = 0.0f; };
     std::vector<Restored> restored_;

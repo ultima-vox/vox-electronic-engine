@@ -2024,14 +2024,66 @@ void testModHost()
     copy->getModRoute (0, 20, source, dest, amount);
     check (source == 3 && dest == 1 && std::abs (amount - 0.80f) < 1.0e-4f, "route 21 restores from MODX");
     check (std::abs (plain (*copy, "syn.a.unison") - 2.0f) < 1.0e-4f, "unison restores");
-    check (copy->loadFactoryProgram (210), "lead candidate loads");
-    check (std::abs (plain (*copy, "syn.a.wt.level") - 0.45f) < 1.0e-4f, "lead candidate uses the wavetable");
-    check (copy->loadFactoryProgram (400), "pad candidate loads");
-    copy->getModRoute (0, 4, source, dest, amount);
-    check (source == 2 && dest == 1, "pad candidate uses an extra route");
+    int wavetable = 0;
+    int unison = 0;
+    int modulated = 0;
+    int extra = 0;
+    int nonVa = 0;
+    int pad = -1;
+    for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
+    {
+        const auto& program = vox::syn::factoryProgram (i);
+        const auto& feature = vox::syn::factoryFeature (i);
+        if (program.engineA != 2)
+        {
+            if (feature.wtLevel > 0.0f || feature.unison > 0.0f || feature.modSource != 0)
+                ++nonVa;
+            continue;
+        }
+        if (feature.wtLevel >= 0.05f)
+            ++wavetable;
+        if (feature.unison >= 1.0f)
+            ++unison;
+        if (feature.modSource > 0 && std::abs (feature.modAmount - 0.5f) > 0.02f)
+            ++modulated;
+        if (feature.extraRoute >= 4)
+        {
+            ++extra;
+            if (pad < 0 && program.role == vox::syn::FactoryRole::padAtmos)
+                pad = i;
+        }
+    }
+    check (nonVa == 0, "psy and acid candidates do not take the VA feature layer");
+    check (wavetable >= 250, "wavetable covers more than three candidates");
+    check (unison >= 120, "unison covers a range of VA candidates");
+    check (modulated >= 180, "modulation covers a range of VA candidates");
+    check (extra >= 8 && pad >= 0, "MODX extra routes are a class of programs");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "feature coverage is not human approval");
+    check (copy->loadFactoryProgram (pad), "pad candidate loads");
+    const auto& padFeature = vox::syn::factoryFeature (pad);
+    check (std::abs (plain (*copy, "syn.a.wt.level") - padFeature.wtLevel) < 1.0e-4f, "pad wavetable comes from the feature table");
+    check (std::abs (plain (*copy, "syn.a.unison") - padFeature.unison) < 1.0e-4f, "pad unison comes from the feature table");
+    copy->getModRoute (0, padFeature.extraRoute, source, dest, amount);
+    check (source == padFeature.extraSource && dest == padFeature.extraDest, "pad extra route is the generated one");
     check (copy->loadFactoryProgram (0), "bass candidate loads");
+    check (std::abs (plain (*copy, "syn.a.wt.level")) < 1.0e-4f, "psy bass does not keep the wavetable");
     copy->getModRoute (0, 4, source, dest, amount);
     check (source == 0 && dest == 0, "a bass candidate does not keep the pad route");
+    copy->prepareToPlay (48000.0, 128);
+    copy->requestPreview (36);
+    juce::AudioBuffer<float> heard (2, 128);
+    juce::MidiBuffer none;
+    copy->processBlock (heard, none);
+    check (copy->monoGate (0), "Hear starts the audition note");
+    bool heardFinite = true;
+    for (int i = 0; i < 200; ++i)
+    {
+        copy->processBlock (heard, none);
+        for (int sample = 0; sample < 128; ++sample)
+            heardFinite = heardFinite && std::isfinite (heard.getSample (0, sample));
+    }
+    check (! copy->monoGate (0), "Hear releases the audition note");
+    check (heardFinite, "audition stays finite");
 
     auto gated = make();
     gated->prepareToPlay (48000.0, 64);

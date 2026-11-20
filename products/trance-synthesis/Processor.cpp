@@ -337,6 +337,7 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         else if (phraseHeld_[note] < 255)
             ++phraseHeld_[note];
     }
+    takePreview (frames, count);
     runEngine (buffer, count, block);
 }
 
@@ -503,6 +504,97 @@ bool SynthesisProcessor::insertEvent (const engine::Event& event, int& count)
     events_[index] = event;
     ++count;
     return true;
+}
+
+bool SynthesisProcessor::insertKeepingRelease (const engine::Event& event, int& count)
+{
+    if (insertEvent (event, count))
+        return true;
+    const auto type = static_cast<std::uint8_t> (event.status & 0xf0u);
+    const bool release = type == 0x80u || (type == 0x90u && event.data2 == 0);
+    if (! release)
+    {
+        droppedMidi_.fetch_add (1, std::memory_order_relaxed);
+        return false;
+    }
+    int victim = -1;
+    for (int i = count - 1; i >= 0; --i)
+    {
+        const auto held = static_cast<std::uint8_t> (events_[i].status & 0xf0u);
+        const bool heldRelease = held == 0x80u || (held == 0x90u && events_[i].data2 == 0)
+                              || (held == 0xb0u && (events_[i].data1 == 120 || events_[i].data1 == 123));
+        if (! heldRelease)
+        {
+            victim = i;
+            break;
+        }
+    }
+    if (victim < 0)
+    {
+        droppedMidi_.fetch_add (1, std::memory_order_relaxed);
+        return false;
+    }
+    for (int i = victim; i < count - 1; ++i)
+        events_[i] = events_[i + 1];
+    --count;
+    droppedMidi_.fetch_add (1, std::memory_order_relaxed);
+    return insertEvent (event, count);
+}
+
+void SynthesisProcessor::takePreview (int frames, int& count)
+{
+    const int stage = previewStage_.load (std::memory_order_acquire);
+    if (stage == 0 || frames <= 0)
+        return;
+    if (stage == 1)
+    {
+        const int replace = previewReplace_.exchange (-1, std::memory_order_relaxed);
+        if (replace >= 0 && replace < 128)
+        {
+            engine::Event off;
+            off.offset = 0;
+            off.status = 0x80;
+            off.data1 = static_cast<std::uint8_t> (replace);
+            insertKeepingRelease (off, count);
+        }
+        engine::Event on;
+        on.offset = 0;
+        on.status = 0x90;
+        on.data1 = static_cast<std::uint8_t> (std::clamp (previewNote_.load (std::memory_order_relaxed), 0, 127));
+        on.data2 = 96;
+        if (! insertEvent (on, count))
+        {
+            droppedMidi_.fetch_add (1, std::memory_order_relaxed);
+            previewStage_.store (0, std::memory_order_release);
+            return;
+        }
+        previewStage_.store (2, std::memory_order_release);
+        return;
+    }
+    const int left = previewLeft_.load (std::memory_order_relaxed) - frames;
+    previewLeft_.store (left, std::memory_order_relaxed);
+    if (left > 0)
+        return;
+    engine::Event off;
+    off.offset = 0;
+    off.status = 0x80;
+    off.data1 = static_cast<std::uint8_t> (std::clamp (previewNote_.load (std::memory_order_relaxed), 0, 127));
+    insertKeepingRelease (off, count);
+    previewStage_.store (0, std::memory_order_release);
+}
+
+void SynthesisProcessor::requestPreview (int note) noexcept
+{
+    note = std::clamp (note, 0, 127);
+    const int stage = previewStage_.exchange (0, std::memory_order_acq_rel);
+    if (stage == 2)
+        previewReplace_.store (previewNote_.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    else
+        previewReplace_.store (-1, std::memory_order_relaxed);
+    previewNote_.store (note, std::memory_order_relaxed);
+    const double rate = sampleRate_ > 1.0 ? sampleRate_ : 48000.0;
+    previewLeft_.store (std::max (1, static_cast<int> (rate * 0.40)), std::memory_order_relaxed);
+    previewStage_.store (1, std::memory_order_release);
 }
 
 void SynthesisProcessor::publishLocked()
@@ -1427,6 +1519,7 @@ bool SynthesisProcessor::loadFactoryProgram (int index)
     if (index < 0 || index >= vox::syn::factoryProgramCount())
         return false;
     const float* values = factoryProgram (index).values;
+    const FactoryFeature feature = factoryFeature (index);
     for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
     {
         auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
@@ -1436,38 +1529,38 @@ bool SynthesisProcessor::loadFactoryProgram (int index)
         const float clamped = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
     }
+    const auto write = [&] (const char* id, float value)
+    {
+        auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (id));
+        if (parameter == nullptr)
+            return;
+        const auto& range = parameter->getNormalisableRange();
+        const float clamped = std::clamp (value, range.start, range.end);
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
+    };
+    write ("syn.a.unison", feature.unison);
+    write ("syn.a.uni.detune", feature.detune);
+    write ("syn.a.uni.spread", feature.spread);
+    write ("syn.a.wt.level", feature.wtLevel);
+    write ("syn.a.wt.pos", feature.wtPos);
+    write ("syn.a.fm", feature.fm);
+    write ("syn.a.ring", feature.ring);
+    write ("syn.a.osc3.level", feature.osc3Level);
+    write ("syn.a.osc3.semi", feature.osc3Semi);
     for (int part = 0; part < 2; ++part)
         for (int route = routeCount; route < engine::PartParams::routeSlots; ++route)
             setModRoute (part, route, 0, 0, 0.5f);
-    struct RouteUse { int program; int part; int route; int source; int dest; float amount; };
-    static constexpr RouteUse uses[] = {
-        { 210, 0, 0, 1, 1, 0.72f },
-        { 400, 0, 4, 2, 1, 0.66f },
-        { 565, 0, 8, 1, 3, 0.60f },
-    };
-    struct KnobUse { int program; const char* id; float value; };
-    static constexpr KnobUse knobs[] = {
-        { 210, "syn.a.unison", 2.0f },
-        { 210, "syn.a.uni.detune", 0.35f },
-        { 210, "syn.a.uni.spread", 0.70f },
-        { 210, "syn.a.wt.level", 0.45f },
-        { 210, "syn.a.wt.pos", 0.62f },
-        { 400, "syn.a.unison", 1.0f },
-        { 400, "syn.a.uni.spread", 0.85f },
-        { 400, "syn.a.wt.level", 0.80f },
-        { 400, "syn.a.wt.pos", 0.28f },
-        { 565, "syn.a.unison", 3.0f },
-        { 565, "syn.a.uni.detune", 0.22f },
-        { 565, "syn.a.lfo1.sync", 1.0f },
-    };
-    for (const auto& use : knobs)
-        if (use.program == index)
-            if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (use.id)))
-                parameter->setValueNotifyingHost (parameter->convertTo0to1 (use.value));
-    for (const auto& use : uses)
-        if (use.program == index)
-            setModRoute (use.part, use.route, use.source, use.dest, use.amount);
+    setModRoute (0, 0, feature.modSource, feature.modDest, feature.modAmount);
+    if (feature.extraRoute >= routeCount)
+        setModRoute (0, feature.extraRoute, feature.extraSource, feature.extraDest, feature.extraAmount);
     return true;
+}
+
+int SynthesisProcessor::factoryProgramAudition (int index) const
+{
+    if (index < 0 || index >= vox::syn::factoryProgramCount())
+        return 60;
+    return factoryProgram (index).auditionNote;
 }
 
 } // namespace vox::syn

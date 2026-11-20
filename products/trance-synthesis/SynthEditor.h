@@ -27,6 +27,7 @@ private:
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
     void refresh();
     void loadSelected();
+    void previewSelected();
     void saveNamed();
     void showStep();
     void commitStep();
@@ -44,7 +45,7 @@ private:
     juce::TextEditor search_, name_;
     vox::ui::VoxComboBox category_;
     juce::ListBox programs_;
-    vox::ui::VoxButton load_, save_, play_, stop_, exportSmf_;
+    vox::ui::VoxButton load_, save_, hear_, play_, stop_, exportSmf_;
     vox::ui::VoxComboBox phrase_;
     juce::Slider step_;
     juce::TextEditor stepNote_, stepVelocity_, stepDuration_;

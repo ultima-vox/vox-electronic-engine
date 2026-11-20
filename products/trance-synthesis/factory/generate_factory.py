@@ -446,6 +446,82 @@ def programs(rows):
     return made
 
 
+def _feat(**kwargs):
+    base = dict(
+        unison=0.0, detune=0.0, spread=0.0, wt=0.0, pos=0.0,
+        fm=0.0, ring=0.0, osc3=0.0, semi=0.5,
+        mod_src=0, mod_dst=0, mod_amt=0.5,
+        extra=-1, extra_src=0, extra_dst=0, extra_amt=0.5,
+    )
+    base.update(kwargs)
+    return base
+
+
+# VA-only. Psy Bass and Acid stay on the defaults above.
+# Unison is the host knob: 0 is one voice, 1 is two, 2 is three.
+FEATURE = {
+    ROLE_BASS: {
+        "offbeat": _feat(wt=0.12, pos=0.20),
+        "rolling": _feat(wt=0.16, pos=0.28, mod_src=1, mod_dst=1, mod_amt=0.58),
+        "sub": _feat(wt=0.08, pos=0.12),
+        "glide": _feat(wt=0.10, pos=0.24, fm=0.06),
+        "growl": _feat(wt=0.22, pos=0.16, fm=0.14, mod_src=1, mod_dst=1, mod_amt=0.64),
+        "short": _feat(wt=0.18, pos=0.40),
+    },
+    ROLE_LEAD: {
+        "hook": _feat(unison=1, detune=0.28, spread=0.55, wt=0.22, pos=0.40, fm=0.12, osc3=0.10, mod_src=1, mod_dst=1, mod_amt=0.66),
+        "wide": _feat(unison=2, detune=0.48, spread=0.82, wt=0.38, pos=0.55, ring=0.08, mod_src=1, mod_dst=1, mod_amt=0.60),
+        "solo": _feat(fm=0.42, osc3=0.55, semi=0.62, mod_src=2, mod_dst=4, mod_amt=0.64),
+        "bright": _feat(unison=1, detune=0.22, spread=0.48, wt=0.62, pos=0.78, osc3=0.15, mod_src=1, mod_dst=1, mod_amt=0.58),
+        "dark": _feat(unison=1, detune=0.18, spread=0.40, wt=0.16, pos=0.18, fm=0.08, mod_src=1, mod_dst=1, mod_amt=0.70),
+        "fifth": _feat(detune=0.10, spread=0.30, wt=0.20, pos=0.48, ring=0.32, osc3=0.28, semi=0.75, mod_src=1, mod_dst=4, mod_amt=0.62),
+    },
+    ROLE_PLUCK: {
+        "pluck": _feat(wt=0.34, pos=0.62, mod_src=1, mod_dst=1, mod_amt=0.60),
+        "bell": _feat(fm=0.20, osc3=0.70, semi=0.75, pos=0.80, mod_src=1, mod_dst=3, mod_amt=0.58),
+        "mute": _feat(wt=0.12, pos=0.18),
+        "epiano": _feat(fm=0.18, osc3=0.25, semi=0.58, wt=0.10, pos=0.46, mod_src=1, mod_dst=1, mod_amt=0.56),
+        "organ": _feat(unison=1, detune=0.08, spread=0.22, mod_src=1, mod_dst=1, mod_amt=0.54),
+        "stack": _feat(unison=1, detune=0.24, spread=0.46, wt=0.25, pos=0.50, mod_src=1, mod_dst=1, mod_amt=0.60),
+    },
+    ROLE_PAD: {
+        "swell": _feat(unison=2, detune=0.36, spread=0.80, wt=0.48, pos=0.42, mod_src=1, mod_dst=1, mod_amt=0.68, extra=4, extra_src=2, extra_dst=5, extra_amt=0.64),
+        "choir": _feat(unison=2, detune=0.42, spread=0.90, wt=0.55, pos=0.58, mod_src=1, mod_dst=1, mod_amt=0.66, extra=4, extra_src=2, extra_dst=1, extra_amt=0.60),
+        "dark": _feat(unison=1, detune=0.20, spread=0.48, wt=0.12, pos=0.15, mod_src=1, mod_dst=1, mod_amt=0.72),
+        "air": _feat(unison=1, detune=0.30, spread=0.70, wt=0.42, pos=0.66, mod_src=1, mod_dst=1, mod_amt=0.62),
+        "bed": _feat(unison=1, detune=0.16, spread=0.40, wt=0.20, pos=0.30, mod_src=1, mod_dst=1, mod_amt=0.58),
+        "glass": _feat(wt=0.72, pos=0.82, osc3=0.20, semi=0.70, mod_src=2, mod_dst=1, mod_amt=0.60),
+    },
+    ROLE_ARP: {
+        "gate": _feat(wt=0.30, pos=0.48, mod_src=1, mod_dst=1, mod_amt=0.74),
+        "up": _feat(wt=0.45, pos=0.70, unison=1, detune=0.16, spread=0.36, mod_src=1, mod_dst=1, mod_amt=0.66),
+        "octave": _feat(wt=0.28, pos=0.40, ring=0.12, mod_src=1, mod_dst=1, mod_amt=0.62),
+        "tight": _feat(wt=0.15, pos=0.22, mod_src=1, mod_dst=1, mod_amt=0.70),
+        "fifth": _feat(wt=0.24, pos=0.52, ring=0.22, osc3=0.16, semi=0.75, mod_src=1, mod_dst=3, mod_amt=0.60),
+        "muted": _feat(wt=0.10, pos=0.16, mod_src=1, mod_dst=1, mod_amt=0.56),
+    },
+    ROLE_STAB: {
+        "rave": _feat(unison=2, detune=0.30, spread=0.72, wt=0.40, pos=0.60, mod_src=1, mod_dst=1, mod_amt=0.64),
+        "minor": _feat(unison=1, detune=0.22, spread=0.50, wt=0.30, pos=0.36, mod_src=1, mod_dst=1, mod_amt=0.60),
+        "seventh": _feat(unison=1, detune=0.26, spread=0.58, wt=0.35, pos=0.44, mod_src=1, mod_dst=1, mod_amt=0.62),
+        "short": _feat(unison=1, detune=0.14, spread=0.34, wt=0.20, pos=0.28, mod_src=1, mod_dst=1, mod_amt=0.58),
+        "low": _feat(wt=0.12, pos=0.18, fm=0.08, mod_src=1, mod_dst=1, mod_amt=0.66),
+        "bright": _feat(unison=1, detune=0.20, spread=0.55, wt=0.55, pos=0.80, mod_src=1, mod_dst=1, mod_amt=0.60),
+    },
+}
+
+
+def feature_for(program):
+    if int(program["values"][0]) != 2:
+        return _feat()
+    table = FEATURE.get(program["role"], {})
+    spec = dict(table.get(program["variant"], _feat(wt=0.2, pos=0.4, mod_src=1, mod_dst=1, mod_amt=0.6)))
+    style_index = next(i for i, row in enumerate(STYLES) if row[0] == program["style"])
+    if spec["wt"] > 0.0:
+        spec["pos"] = c01(spec["pos"] + (style_index - 10) * 0.012)
+    return spec
+
+
 def degree(scale, step):
     return scale[step % len(scale)] + 12 * (step // len(scale))
 
@@ -696,6 +772,36 @@ def emit(rows, bank, phrase_bank):
         lines.append(f"    {{ {body} }},")
     lines.append("};")
     lines.append("")
+    lines.append("static const FactoryFeature kFactoryFeatures[] = {")
+    wavetable = unison = modulated = non_va = extra = 0
+    for program in bank:
+        feat = feature_for(program)
+        engine = int(program["values"][0])
+        if engine != 2 and (feat["wt"] > 0.0 or feat["unison"] > 0.0 or feat["mod_src"] != 0):
+            non_va += 1
+        if feat["wt"] >= 0.05:
+            wavetable += 1
+        if feat["unison"] >= 1.0:
+            unison += 1
+        if feat["mod_src"] > 0 and abs(feat["mod_amt"] - 0.5) > 0.02:
+            modulated += 1
+        if feat["extra"] >= 0:
+            extra += 1
+        lines.append(
+            "    { "
+            f"{feat['unison']:.2f}f, {feat['detune']:.2f}f, {feat['spread']:.2f}f, "
+            f"{feat['wt']:.2f}f, {feat['pos']:.2f}f, {feat['fm']:.2f}f, {feat['ring']:.2f}f, "
+            f"{feat['osc3']:.2f}f, {feat['semi']:.2f}f, "
+            f"{int(feat['mod_src'])}, {int(feat['mod_dst'])}, {feat['mod_amt']:.2f}f, "
+            f"{int(feat['extra'])}, {int(feat['extra_src'])}, {int(feat['extra_dst'])}, {feat['extra_amt']:.2f}f }},"
+        )
+    lines.append("};")
+    if wavetable < 250 or unison < 120 or modulated < 180 or non_va != 0 or extra < 8:
+        raise SystemExit(
+            f"feature coverage wt {wavetable} unison {unison} mod {modulated} "
+            f"extra {extra} non-va {non_va}"
+        )
+    lines.append("")
     lines.append("static const PhraseNote kFactoryNotes[] = {")
     offsets = []
     cursor = 0
@@ -755,6 +861,14 @@ def emit(rows, bank, phrase_bank):
     manifest.append("phrase_quotas: bass 30, acid 25, arp 25, lead 20, pad+chord+stab 20")
     manifest.append(f"nearest_timbre_L1_excluding_output: {closest:.4f} ({pair[0]} vs {pair[1]})")
     manifest.append("syn.output is role-level trim only and is excluded from distinctness")
+    manifest.append("feature_layer: VA unison / wavetable / FM / host mod / MODX extra routes")
+    manifest.append(f"feature_wavetable: {wavetable}")
+    manifest.append(f"feature_unison_voices: {unison}")
+    manifest.append(f"feature_mod_routes: {modulated}")
+    manifest.append(f"feature_extra_routes: {extra}")
+    manifest.append("feature_on_psy_or_acid: 0")
+    manifest.append("provenance: original generator factory/generate_factory.py, no third-party presets")
+    manifest.append("owner_listening: not started")
     manifest.append("ids: FS-001..FS-600, FP-001..FP-120")
     manifest.append("midi: factory/midi/FP-001.mid .. FP-120.mid")
     MANIFEST.write_text("\n".join(manifest) + "\n")

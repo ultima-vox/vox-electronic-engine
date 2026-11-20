@@ -18,5 +18,13 @@ programs_by_primary_role:
 phrase_quotas: bass 30, acid 25, arp 25, lead 20, pad+chord+stab 20
 nearest_timbre_L1_excluding_output: 0.2556 (FS-369 vs FS-536)
 syn.output is role-level trim only and is excluded from distinctness
+feature_layer: VA unison / wavetable / FM / host mod / MODX extra routes
+feature_wavetable: 375
+feature_unison_voices: 235
+feature_mod_routes: 378
+feature_extra_routes: 44
+feature_on_psy_or_acid: 0
+provenance: original generator factory/generate_factory.py, no third-party presets
+owner_listening: not started
 ids: FS-001..FS-600, FP-001..FP-120
 midi: factory/midi/FP-001.mid .. FP-120.mid

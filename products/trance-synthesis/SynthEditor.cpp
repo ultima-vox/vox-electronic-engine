@@ -32,6 +32,7 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
       capacity_ ({}, "factory"),
       load_ ("Load", vox::ui::VoxButton::Type::Primary),
       save_ ("Save", vox::ui::VoxButton::Type::Secondary),
+      hear_ ("Hear", vox::ui::VoxButton::Type::Primary),
       play_ ("Play", vox::ui::VoxButton::Type::Primary),
       stop_ ("Stop", vox::ui::VoxButton::Type::Secondary),
       exportSmf_ ("SMF", vox::ui::VoxButton::Type::Secondary)
@@ -55,8 +56,10 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
     addAndMakeVisible (name_);
     load_.onClick = [this] { loadSelected(); };
     save_.onClick = [this] { saveNamed(); };
+    hear_.onClick = [this] { previewSelected(); };
     addAndMakeVisible (load_);
     addAndMakeVisible (save_);
+    addAndMakeVisible (hear_);
 
     for (int i = 0; i < factoryPhraseCount(); ++i)
     {
@@ -128,7 +131,12 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
     for (const auto& entry : parameterCatalog)
     {
         const juce::String id (entry.id);
-        const juce::String group = id.startsWith ("syn.a.") ? "Part A"
+        const bool mod = id.contains (".mod") || id.contains (".lfo") || id.contains ("unison")
+                      || id.contains (".wt.") || id.contains ("uni.");
+        const juce::String group = id.startsWith ("syn.macro") ? "Macros"
+                                 : id.startsWith ("syn.a.") && mod ? "Part A Mod"
+                                 : id.startsWith ("syn.b.") && mod ? "Part B Mod"
+                                 : id.startsWith ("syn.a.") ? "Part A"
                                  : id.startsWith ("syn.b.") ? "Part B"
                                  : id.startsWith ("syn.fx.") ? "FX"
                                                              : "Output";
@@ -240,6 +248,20 @@ void SynthPanel::loadSelected()
         processor_.loadFactoryProgram (row.index);
     else
         processor_.loadUserProgram (row.index);
+}
+
+void SynthPanel::previewSelected()
+{
+    const int selected = programs_.getSelectedRow();
+    int note = 60;
+    if (selected >= 0 && selected < static_cast<int> (visible_.size()))
+    {
+        const auto row = visible_[static_cast<std::size_t> (selected)];
+        loadSelected();
+        if (row.factory)
+            note = processor_.factoryProgramAudition (row.index);
+    }
+    processor_.requestPreview (note);
 }
 
 void SynthPanel::saveNamed()
@@ -358,6 +380,8 @@ void SynthPanel::resized()
     save_.setBounds (row.removeFromLeft (72));
     row.removeFromLeft (8);
     load_.setBounds (row.removeFromLeft (72));
+    row.removeFromLeft (8);
+    hear_.setBounds (row.removeFromLeft (72));
     area.removeFromTop (6);
     auto phraseRow = area.removeFromTop (28);
     phrase_.setBounds (phraseRow.removeFromLeft (360));
