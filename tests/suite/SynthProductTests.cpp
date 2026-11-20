@@ -462,7 +462,7 @@ void testExposedFxTail()
 void testParameterAutomation()
 {
     auto synth = make();
-    check (vox::syn::parameterCatalog.size() == 171, "catalog keeps the frozen 75 and appends VA and modulation");
+    check (vox::syn::parameterCatalog.size() == 205, "catalog keeps the frozen 75 and appends VA, modulation and unison");
     check (std::string (vox::syn::parameterCatalog[0].id) == "syn.a.engine", "first id stays");
     check (std::string (vox::syn::parameterCatalog[74].id) == "syn.fx.reverb.character", "frozen tail stays");
     check (std::string (vox::syn::parameterCatalog[75].id) == "syn.a.osc1.wave", "VA ids are appended");
@@ -1995,6 +1995,97 @@ void testPhraseHardening()
     check (raced->phraseClaimViolations() == 0, "burst did not copy a slot that was being written");
 }
 
+void testModHost()
+{
+    auto synth = make();
+    synth->prepareToPlay (48000.0, 256);
+    setPlain (*synth, "syn.a.engine", 2.0f);
+    setPlain (*synth, "syn.b.level", 0.0f);
+    setPlain (*synth, "syn.a.cutoff", 0.33f);
+    setPlain (*synth, "syn.a.unison", 2.0f);
+    synth->setModRoute (0, 20, 3, 1, 0.80f);
+    juce::AudioBuffer<float> buffer (2, 128);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, 60, static_cast<juce::uint8> (100)), 0);
+    synth->processBlock (buffer, midi);
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.33f) < 1.0e-5f, "modulation does not rewrite the cutoff base");
+    juce::MemoryBlock saved;
+    synth->getStateInformation (saved);
+    auto copy = make();
+    copy->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    int source = 0, dest = 0;
+    float amount = 0.0f;
+    copy->getModRoute (0, 20, source, dest, amount);
+    check (source == 3 && dest == 1 && std::abs (amount - 0.80f) < 1.0e-4f, "route 21 restores from MODX");
+    check (std::abs (plain (*copy, "syn.a.unison") - 2.0f) < 1.0e-4f, "unison restores");
+    check (copy->loadFactoryProgram (210), "lead candidate loads");
+    check (std::abs (plain (*copy, "syn.a.wt.level") - 0.45f) < 1.0e-4f, "lead candidate uses the wavetable");
+    check (copy->loadFactoryProgram (400), "pad candidate loads");
+    copy->getModRoute (0, 4, source, dest, amount);
+    check (source == 2 && dest == 1, "pad candidate uses an extra route");
+    check (copy->loadFactoryProgram (0), "bass candidate loads");
+    copy->getModRoute (0, 4, source, dest, amount);
+    check (source == 0 && dest == 0, "a bass candidate does not keep the pad route");
+}
+
+void testWorstCase()
+{
+    const double rates[] = { 44100.0, 48000.0, 96000.0 };
+    const int blocks[] = { 32, 64, 128, 256 };
+    for (double rate : rates)
+        for (int block : blocks)
+        {
+            auto synth = make();
+            synth->prepareToPlay (rate, block);
+            setPlain (*synth, "syn.a.engine", 2.0f);
+            setPlain (*synth, "syn.b.engine", 0.0f);
+            setPlain (*synth, "syn.b.level", 0.0f);
+            setPlain (*synth, "syn.a.unison", 3.0f);
+            setPlain (*synth, "syn.a.wt.level", 0.7f);
+            setPlain (*synth, "syn.a.wt.pos", 0.8f);
+            setPlain (*synth, "syn.a.fm", 0.4f);
+            setPlain (*synth, "syn.a.ring", 0.2f);
+            setPlain (*synth, "syn.a.osc3.level", 0.3f);
+            setPlain (*synth, "syn.a.flt2.mix", 1.0f);
+            setPlain (*synth, "syn.a.flt2.resonance", 0.7f);
+            setPlain (*synth, "syn.a.resonance", 0.6f);
+            setPlain (*synth, "syn.fx.delay", 1.0f);
+            setPlain (*synth, "syn.fx.delay.mix", 0.4f);
+            setPlain (*synth, "syn.fx.reverb", 1.0f);
+            setPlain (*synth, "syn.fx.reverb.mix", 0.4f);
+            juce::AudioBuffer<float> buffer (2, block);
+            juce::MidiBuffer midi;
+            for (int note = 0; note < 4; ++note)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 48 + note * 3, static_cast<juce::uint8> (100)), note);
+            for (int i = 0; i < 4; ++i)
+            {
+                synth->processBlock (buffer, midi);
+                midi.clear();
+            }
+            std::vector<double> times;
+            times.reserve (64);
+            bool finite = true;
+            for (int i = 0; i < 64; ++i)
+            {
+                const auto started = std::chrono::steady_clock::now();
+                synth->processBlock (buffer, midi);
+                times.push_back (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count());
+                for (int sample = 0; sample < block; ++sample)
+                    finite = finite && std::isfinite (buffer.getSample (0, sample)) && std::isfinite (buffer.getSample (1, sample));
+            }
+            std::sort (times.begin(), times.end());
+            const double deadline = 1000.0 * static_cast<double> (block) / rate;
+            const double p50 = times[32];
+            const double p95 = times[60];
+            const double p99 = times[63];
+            const double worst = times.back();
+            std::printf ("synth worst %.0f/%d: p50 %.3f p95 %.3f p99 %.3f max %.3f deadline %.3f\n",
+                         rate, block, p50, p95, p99, worst, deadline);
+            check (finite, "worst-case output stays finite");
+            check (p99 < deadline, "worst-case p99 stays inside the block deadline at " + std::to_string (rate));
+        }
+}
+
 } // namespace
 
 int main()
@@ -2017,6 +2108,8 @@ int main()
     testPhraseHardening();
     testStateEdges();
     testIntegrationStress();
+    testModHost();
+    testWorstCase();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);
     else

@@ -21,7 +21,7 @@ struct Parameter
 
 inline constexpr int engineChoices = 3;
 
-inline const std::array<Parameter, 171> parameterCatalog {{
+inline const std::array<Parameter, 205> parameterCatalog {{
     { "syn.a.engine", "Part A Engine", 0.0f, 2.0f, 0.0f, true },
     { "syn.a.level", "Part A Level", 0.0f, 1.0f, 0.75f, false },
     { "syn.a.cutoff", "Part A Cutoff", 0.0f, 1.0f, 0.55f, false },
@@ -193,6 +193,40 @@ inline const std::array<Parameter, 171> parameterCatalog {{
     { "syn.macro.6", "Macro 6", 0.0f, 1.0f, 0.0f, false },
     { "syn.macro.7", "Macro 7", 0.0f, 1.0f, 0.0f, false },
     { "syn.macro.8", "Macro 8", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.unison", "Part A Unison", 0.0f, 3.0f, 0.0f, false },
+    { "syn.a.uni.detune", "Part A Unison Detune", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.uni.spread", "Part A Unison Spread", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.wt.level", "Part A Wavetable", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.wt.pos", "Part A Wavetable Pos", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo1.sync", "Part A LFO1 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo1.div", "Part A LFO1 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.a.lfo1.retrig", "Part A LFO1 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo2.sync", "Part A LFO2 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo2.div", "Part A LFO2 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.a.lfo2.retrig", "Part A LFO2 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo3.sync", "Part A LFO3 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo3.div", "Part A LFO3 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.a.lfo3.retrig", "Part A LFO3 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo4.sync", "Part A LFO4 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.lfo4.div", "Part A LFO4 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.a.lfo4.retrig", "Part A LFO4 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.unison", "Part B Unison", 0.0f, 3.0f, 0.0f, false },
+    { "syn.b.uni.detune", "Part B Unison Detune", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.uni.spread", "Part B Unison Spread", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.wt.level", "Part B Wavetable", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.wt.pos", "Part B Wavetable Pos", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo1.sync", "Part B LFO1 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo1.div", "Part B LFO1 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.b.lfo1.retrig", "Part B LFO1 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo2.sync", "Part B LFO2 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo2.div", "Part B LFO2 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.b.lfo2.retrig", "Part B LFO2 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo3.sync", "Part B LFO3 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo3.div", "Part B LFO3 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.b.lfo3.retrig", "Part B LFO3 Retrigger", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo4.sync", "Part B LFO4 Sync", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.lfo4.div", "Part B LFO4 Division", 0.0f, 8.0f, 2.0f, false },
+    { "syn.b.lfo4.retrig", "Part B LFO4 Retrigger", 0.0f, 1.0f, 0.0f, false },
 }};
 
 inline constexpr std::size_t outputParameterIndex = 14;
@@ -228,7 +262,7 @@ inline constexpr std::array<FxBinding, 8> fxBindings {{
     { 7, 16, 71, 72, 73, 74 },
 }};
 
-static_assert (parameterCatalog.size() == 171);
+static_assert (parameterCatalog.size() == 205);
 static_assert (fxBindings.back().character + 1 == 75);
 
 // Factory rows and historical UBNK values stop here. Later ids use their defaults.
@@ -241,6 +275,9 @@ inline constexpr int routeBase = 139;
 inline constexpr int macroBase = 163;
 inline constexpr int lfoCount = 4;
 inline constexpr int routeCount = 4;
+inline constexpr int extraRouteCount = 28;
+inline constexpr int featureBase = 171;
+inline constexpr int featureCount = 17;
 inline constexpr int macroCount = 8;
 
 enum class VaKnob : int {
@@ -255,7 +292,8 @@ enum class VaKnob : int {
 
 static_assert (static_cast<int> (VaKnob::count) == vaParamCount);
 static_assert (vaParamBase + vaParamCount * 2 == filterAdsrBase);
-static_assert (macroBase + macroCount == static_cast<int> (parameterCatalog.size()));
+static_assert (macroBase + macroCount == featureBase);
+static_assert (featureBase + featureCount * 2 == static_cast<int> (parameterCatalog.size()));
 
 inline constexpr const char* outputParameterName = "Output";
 

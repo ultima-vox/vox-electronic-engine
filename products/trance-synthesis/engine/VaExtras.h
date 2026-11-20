@@ -1,13 +1,7 @@
 #pragma once
 
-// SYN-04 VA waves and the second filter. Not a change to the locked
-// dspcore primitives: saw, square and sine still call BlepOscillator::next.
-//
-// Still open, with a fixed budget so they are not fake features:
-// Wavetable: one shared read-only table, 256 frames x 2048 samples, picked
-// before the callback. No callback allocation. Oversampling stays off.
-// Unison: at most 4 detuned copies per oscillator, and those copies spend
-// the same 16-voice pool. A 4-stack unison note costs 4 voices.
+// SYN-04 VA waves, the second filter, the shared wavetable and unison.
+// Saw, square and sine still call BlepOscillator::next. Oversampling stays off.
 
 #include "dspcore/Primitives.h"
 
@@ -110,5 +104,22 @@ struct VaFilter {
         return y;
     }
 };
+
+// Wavetable: one shared read-only table, 256 frames x 2048 samples.
+// Built once, off the callback. Playback only reads it.
+// Unison: 1 to 4 copies, and each copy spends one slot of the 16-voice pool.
+struct Wavetable {
+    static constexpr int frames = 256;
+    static constexpr int cycle = 2048;
+    float data[frames][cycle] {};
+    Wavetable() noexcept;
+    [[nodiscard]] float read (float position, double phase, double cyclesPerSample) const noexcept;
+};
+
+[[nodiscard]] const Wavetable& sharedWavetable() noexcept;
+[[nodiscard]] constexpr int wavetableBytes() noexcept
+{
+    return Wavetable::frames * Wavetable::cycle * static_cast<int> (sizeof (float));
+}
 
 } // namespace vox::syn::engine

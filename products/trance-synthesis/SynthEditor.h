@@ -31,6 +31,8 @@ private:
     void showStep();
     void commitStep();
     void exportPhrase();
+    void showMatrix();
+    void commitMatrix (int row);
 
     struct ProgramRow {
         bool factory = false;
@@ -47,6 +49,12 @@ private:
     juce::Slider step_;
     juce::TextEditor stepNote_, stepVelocity_, stepDuration_;
     juce::ToggleButton stepSlide_, stepAccent_;
+    vox::ui::VoxComboBox matrixPart_;
+    vox::ui::VoxButton matrixPrev_, matrixNext_;
+    juce::Label matrixLabel_;
+    vox::ui::VoxComboBox matrixSource_[4], matrixDest_[4];
+    juce::Slider matrixAmount_[4];
+    int matrixPage_ = 0;
     std::shared_ptr<juce::FileChooser> chooser_;
     bool filling_ = false;
     juce::Viewport viewport_;

@@ -93,6 +93,34 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
     stepAccent_.onClick = [this] { commitStep(); };
     addAndMakeVisible (stepSlide_);
     addAndMakeVisible (stepAccent_);
+    matrixPart_.addItemList ({ "Part A", "Part B" }, 1);
+    matrixPart_.setSelectedId (1, juce::dontSendNotification);
+    matrixPart_.onChange = [this] { if (! filling_) showMatrix(); };
+    matrixPrev_.setButtonText ("Prev");
+    matrixNext_.setButtonText ("Next");
+    matrixPrev_.onClick = [this] { if (matrixPage_ > 0) { --matrixPage_; showMatrix(); } };
+    matrixNext_.onClick = [this] { if (matrixPage_ < 7) { ++matrixPage_; showMatrix(); } };
+    matrixLabel_.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (matrixPart_);
+    addAndMakeVisible (matrixPrev_);
+    addAndMakeVisible (matrixNext_);
+    addAndMakeVisible (matrixLabel_);
+    for (int row = 0; row < 4; ++row)
+    {
+        matrixSource_[row].addItemList ({ "Off", "LFO1", "LFO2", "LFO3", "LFO4", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8" }, 1);
+        matrixDest_[row].addItemList ({ "Off", "Cutoff", "Reso", "Pitch", "FM", "Filter2" }, 1);
+        matrixAmount_[row].setRange (0.0, 1.0, 0.0);
+        matrixAmount_[row].setValue (0.5, juce::dontSendNotification);
+        matrixAmount_[row].setSliderStyle (juce::Slider::LinearHorizontal);
+        matrixAmount_[row].setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        matrixSource_[row].onChange = [this, row] { commitMatrix (row); };
+        matrixDest_[row].onChange = [this, row] { commitMatrix (row); };
+        matrixAmount_[row].onValueChange = [this, row] { commitMatrix (row); };
+        addAndMakeVisible (matrixSource_[row]);
+        addAndMakeVisible (matrixDest_[row]);
+        addAndMakeVisible (matrixAmount_[row]);
+    }
+    showMatrix();
     showStep();
 
     auto& state = processor_.parameters();
@@ -272,6 +300,36 @@ void SynthPanel::commitStep()
     processor_.setPhraseNote (index, note);
 }
 
+void SynthPanel::showMatrix()
+{
+    const bool was = filling_;
+    filling_ = true;
+    const int part = matrixPart_.getSelectedId() == 2 ? 1 : 0;
+    matrixLabel_.setText ("Routes " + juce::String (matrixPage_ * 4 + 1) + "-" + juce::String (matrixPage_ * 4 + 4),
+                          juce::dontSendNotification);
+    for (int row = 0; row < 4; ++row)
+    {
+        int source = 0, dest = 0;
+        float amount = 0.5f;
+        processor_.getModRoute (part, matrixPage_ * 4 + row, source, dest, amount);
+        matrixSource_[row].setSelectedId (source + 1, juce::dontSendNotification);
+        matrixDest_[row].setSelectedId (dest + 1, juce::dontSendNotification);
+        matrixAmount_[row].setValue (amount, juce::dontSendNotification);
+    }
+    filling_ = was;
+}
+
+void SynthPanel::commitMatrix (int row)
+{
+    if (filling_ || row < 0 || row >= 4)
+        return;
+    const int part = matrixPart_.getSelectedId() == 2 ? 1 : 0;
+    processor_.setModRoute (part, matrixPage_ * 4 + row,
+                            std::max (0, matrixSource_[row].getSelectedId() - 1),
+                            std::max (0, matrixDest_[row].getSelectedId() - 1),
+                            static_cast<float> (matrixAmount_[row].getValue()));
+}
+
 void SynthPanel::exportPhrase()
 {
     const auto bytes = processor_.exportCurrentPhrase();
@@ -321,6 +379,24 @@ void SynthPanel::resized()
     stepRow.removeFromLeft (6);
     stepSlide_.setBounds (stepRow.removeFromLeft (70));
     stepAccent_.setBounds (stepRow.removeFromLeft (80));
+    area.removeFromTop (4);
+    auto matrix = area.removeFromTop (22);
+    matrixPart_.setBounds (matrix.removeFromLeft (90));
+    matrix.removeFromLeft (6);
+    matrixPrev_.setBounds (matrix.removeFromLeft (56));
+    matrix.removeFromLeft (4);
+    matrixNext_.setBounds (matrix.removeFromLeft (56));
+    matrix.removeFromLeft (6);
+    matrixLabel_.setBounds (matrix);
+    for (int row = 0; row < 4; ++row)
+    {
+        auto line = area.removeFromTop (22);
+        matrixSource_[row].setBounds (line.removeFromLeft (90));
+        line.removeFromLeft (4);
+        matrixDest_[row].setBounds (line.removeFromLeft (90));
+        line.removeFromLeft (4);
+        matrixAmount_[row].setBounds (line.removeFromLeft (160));
+    }
     area.removeFromTop (6);
     programs_.setBounds (area.removeFromTop (88));
     area.removeFromTop (8);

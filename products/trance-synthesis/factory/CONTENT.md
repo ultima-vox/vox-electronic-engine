@@ -23,5 +23,9 @@ SYN-04 appends VA oscillator and filter ids after the frozen 75. Existing ids ar
 
 Wavetable and unison are not in this build. Wavetable budget: one shared read-only table, 256 frames by 2048 samples, chosen off the audio thread, oversampling off. Unison budget: at most 4 copies per oscillator, counted inside the 16-voice pool.
 
-SYN-05 adds an independent filter ADSR, four LFOs per part, four one-way routes per part, and eight macros. Route amount 0.5 is off. A route cannot read another route. Tempo-sync is not wired yet; LFO rate is free hertz. The editor shows the new knobs because it lists the catalog. It is not the final modulation page.
+SYN-05 keeps four LFOs per part. The default is a free-running part LFO: a new note does not restart it. Retrigger is per voice and starts only that voice. Sync uses the host BPM, and a missing clock falls back to 120. Routes 1-4 stay on their existing ids. Routes 5-32 live in the MODX section, not as hundreds of new host ids. A route adds to the base and never writes the base back. The editor has a 32-route matrix.
+
+Wavetable playback reads one shared 256 by 2048 table built off the callback. Unison is 1 to 4 copies and each copy spends one slot of the 16-voice pool, which is also shared with a mono part. Oversampling stays off.
+
+Three factory candidates actually use the new timbre: lead 210, pad 400 and stab 565. The other 597 stay on the frozen 75 values. Human approval is still 0.
 

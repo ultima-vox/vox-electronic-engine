@@ -36,6 +36,49 @@ float shapedOsc (VaOsc& osc, int wave, double dt, float pulseWidth) noexcept
 
 } // namespace
 
+Wavetable::Wavetable() noexcept
+{
+    constexpr int maxHarmonic = 48;
+    for (int frame = 0; frame < frames; ++frame)
+    {
+        const int harmonics = 1 + (frame * (maxHarmonic - 1)) / (frames - 1);
+        float peak = 0.0f;
+        for (int i = 0; i < cycle; ++i)
+        {
+            double sum = 0.0;
+            const double phase = (2.0 * 3.14159265358979323846 * static_cast<double> (i)) / static_cast<double> (cycle);
+            for (int harmonic = 1; harmonic <= harmonics; ++harmonic)
+                sum += std::sin (phase * harmonic) / harmonic;
+            data[frame][i] = static_cast<float> (sum);
+            peak = std::max (peak, std::fabs (data[frame][i]));
+        }
+        const float scale = peak > 1.0e-8f ? 0.9f / peak : 0.0f;
+        for (int i = 0; i < cycle; ++i)
+            data[frame][i] *= scale;
+    }
+}
+
+float Wavetable::read (float position, double phase, double cyclesPerSample) const noexcept
+{
+    const int user = std::clamp (static_cast<int> (position * static_cast<float> (frames - 1)), 0, frames - 1);
+    const int safe = std::clamp (static_cast<int> (0.45 / std::max (cyclesPerSample, 1.0e-8)), 1, 48);
+    const int mip = std::clamp ((safe - 1) * (frames - 1) / (48 - 1), 0, frames - 1);
+    const int frame = std::min (user, mip);
+    const double wrapped = phase - std::floor (phase);
+    const double pos = wrapped * static_cast<double> (cycle);
+    const int index = static_cast<int> (pos) % cycle;
+    const float frac = static_cast<float> (pos - std::floor (pos));
+    const float a = data[frame][index];
+    const float b = data[frame][(index + 1) % cycle];
+    return a + (b - a) * frac;
+}
+
+const Wavetable& sharedWavetable() noexcept
+{
+    static const Wavetable table;
+    return table;
+}
+
 void SynthEngine::prepare (double sampleRate, int maximumBlockSize) noexcept
 {
     if (! std::isfinite (sampleRate) || sampleRate < 8000.0 || sampleRate > 384000.0
@@ -47,6 +90,7 @@ void SynthEngine::prepare (double sampleRate, int maximumBlockSize) noexcept
     sampleRate_ = sampleRate;
     maximumBlockSize_ = maximumBlockSize;
     prepared_ = true;
+    (void) sharedWavetable();
     reset();
 }
 
@@ -159,6 +203,41 @@ float SynthEngine::vaAccentGain (int part, int note) const noexcept
         if (voice.active && ! voice.dying && voice.part == part && voice.note == note)
             return voice.accentGain;
     return 0.0f;
+}
+
+int SynthEngine::vaActive (int part) const noexcept
+{
+    if (part < 0 || part >= partCount)
+        return 0;
+    int count = 0;
+    for (const auto& voice : voices_)
+        if (voice.active && ! voice.dying && voice.part == part)
+            ++count;
+    return count;
+}
+
+double SynthEngine::lfoPhase (int part, int index) const noexcept
+{
+    if (part < 0 || part >= partCount || index < 0 || index >= 4)
+        return 0.0;
+    return lfo_[part][index].phase;
+}
+
+double SynthEngine::vaRetrigPhase (int part, int note, int index) const noexcept
+{
+    if (part < 0 || part >= partCount || note < 0 || note > 127 || index < 0 || index >= 4)
+        return 0.0;
+    for (const auto& voice : voices_)
+        if (voice.active && ! voice.dying && voice.part == part && voice.note == note)
+            return voice.retrig[index].phase;
+    return 0.0;
+}
+
+float SynthEngine::modCutoff (int part) const noexcept
+{
+    if (part < 0 || part >= partCount)
+        return 0.0f;
+    return lastCutoff_[part];
 }
 
 int SynthEngine::vaFadeLeft() const noexcept
@@ -329,68 +408,96 @@ void SynthEngine::startMono (int part, int note, float velocity, bool legato, No
     }
 }
 
+void SynthEngine::finishVoice (VaVoice& slot, int part, int channel, int note, float velocity, float accent,
+                               int index, int copies, float cents, float pan) noexcept
+{
+    slot = {};
+    slot.active = true;
+    slot.gate = true;
+    slot.part = part;
+    slot.channel = channel;
+    slot.note = note;
+    slot.velocity = velocity;
+    slot.accentGain = accent;
+    slot.age = ++age_;
+    slot.noise = 0x9e3779b9u ^ (static_cast<std::uint32_t> (note) * 0x85ebca6bu) ^ static_cast<std::uint32_t> (slot.age);
+    slot.fade = 1.0f;
+    slot.unisonIndex = index;
+    slot.unisonCopies = std::max (1, copies);
+    slot.detuneCents = cents;
+    slot.pan = pan;
+    const double offset = copies <= 1 ? 0.0 : static_cast<double> (index) / static_cast<double> (copies);
+    slot.oscA.core.phase = offset;
+    slot.oscB.core.phase = offset * 0.5;
+    slot.wtPhase = offset;
+    slot.amp.gate();
+    slot.filterAmp.gate();
+}
+
 void SynthEngine::startVa (int part, int channel, int note, float velocity, NoteArticulation art) noexcept
 {
     if (parts_[part].engine != EngineKind::va)
         return;
-    for (auto& lfo : lfo_[part])
-        lfo.phase = 0.0;
+    const float accent = art.forceAccent ? 1.35f : 1.0f;
+    bool held = false;
     for (auto& voice : voices_)
     {
-        if (voice.active && ! voice.dying && voice.part == part && voice.note == note && voice.channel == channel)
+        if (! voice.active || voice.dying || voice.part != part || voice.note != note || voice.channel != channel)
+            continue;
+        held = true;
+        voice.velocity = velocity;
+        voice.accentGain = accent;
+        voice.amp.gate();
+        voice.filterAmp.gate();
+        voice.gate = true;
+        voice.age = ++age_;
+        for (int index = 0; index < 4; ++index)
+            if (live_[part].lfoRetrig[index])
+                voice.retrig[index] = {};
+    }
+    if (held)
+        return;
+
+    const int copies = std::clamp (live_[part].unison, 1, 4);
+    const float mid = 0.5f * static_cast<float> (copies - 1);
+    for (int index = 0; index < copies; ++index)
+    {
+        const float cents = (static_cast<float> (index) - mid) * live_[part].unisonDetune;
+        const float pan = copies <= 1 ? 0.0f : ((static_cast<float> (index) - mid) / std::max (0.5f, mid)) * live_[part].unisonSpread;
+        if (used() < maxVoices)
         {
-            voice.velocity = velocity;
-            voice.accentGain = art.forceAccent ? 1.35f : 1.0f;
-            voice.amp.gate();
-            voice.filterAmp.gate();
-            voice.gate = true;
-            voice.age = ++age_;
-            return;
-        }
-    }
-    VaVoice* slot = nullptr;
-    if (used() < maxVoices)
-    {
-        for (auto& voice : voices_)
-            if (! voice.active)
+            VaVoice* slot = nullptr;
+            for (auto& voice : voices_)
+                if (! voice.active)
+                {
+                    slot = &voice;
+                    break;
+                }
+            if (slot != nullptr)
             {
-                slot = &voice;
-                break;
+                finishVoice (*slot, part, channel, note, velocity, accent, index, copies, cents, pan);
+                continue;
             }
-    }
-    if (slot == nullptr)
-    {
-        slot = oldestVa();
+        }
+        VaVoice* slot = oldestVa();
         if (slot == nullptr)
             return;
         slot->dying = true;
         slot->pendingNote = note;
         slot->pendingVelocity = velocity;
-        slot->pendingAccent = art.forceAccent ? 1.35f : 1.0f;
+        slot->pendingAccent = accent;
         slot->pendingPart = part;
+        slot->pendingUnison = index;
+        slot->pendingCopies = copies;
+        slot->pendingDetune = cents;
+        slot->pendingPan = pan;
         slot->fadeTotal = std::max (1, static_cast<int> (sampleRate_ * (fadeMs / 1000.0)));
         slot->fadeLeft = slot->fadeTotal;
         slot->fade = 1.0f;
         slot->channel = channel;
         if (slot->gate)
             slot->filterAmp.startRelease (std::max (0.001, live_[part].filterRelease), sampleRate_);
-        return;
     }
-    *slot = {};
-    slot->active = true;
-    slot->gate = true;
-    slot->part = part;
-    slot->channel = channel;
-    slot->note = note;
-    slot->velocity = velocity;
-    slot->accentGain = art.forceAccent ? 1.35f : 1.0f;
-    slot->age = ++age_;
-    slot->noise = 0x9e3779b9u ^ (static_cast<std::uint32_t> (note) * 0x85ebca6bu) ^ static_cast<std::uint32_t> (slot->age);
-    slot->fade = 1.0f;
-    slot->amp.gate();
-    slot->filterAmp.gate();
-    for (auto& lfo : lfo_[part])
-        lfo.phase = 0.0;
 }
 
 void SynthEngine::restoreLatest (int part, bool fromSlide) noexcept
@@ -670,23 +777,13 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
             const float accent = voice.pendingAccent;
             const int channel = voice.channel;
             const int part = voice.pendingPart;
+            const int index = voice.pendingUnison;
+            const int copies = voice.pendingCopies;
+            const float cents = voice.pendingDetune;
+            const float pan = voice.pendingPan;
             voice = {};
             if (note >= 0)
-            {
-                voice.active = true;
-                voice.gate = true;
-                voice.part = part;
-                voice.channel = channel;
-                voice.note = note;
-                voice.velocity = velocity;
-                voice.accentGain = accent;
-                voice.age = ++age_;
-                voice.noise = 0x9e3779b9u ^ static_cast<std::uint32_t> (note * 17);
-                voice.amp.gate();
-                voice.filterAmp.gate();
-                for (auto& lfo : lfo_[part])
-                    lfo.phase = 0.0;
-            }
+                finishVoice (voice, part, channel, note, velocity, accent, index, std::max (1, copies), cents, pan);
         }
         return sample * std::clamp (params.level, 0.0f, 1.0f) * 0.35f;
     }
@@ -696,19 +793,22 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
         voice = {};
         return 0.0f;
     }
+    VoiceMod local = mod;
+    applyRetrig (voice, params, local);
     const double bend = parts_[voice.part].bendSemis;
-    const double note = static_cast<double> (voice.note) + bend + static_cast<double> (mod.pitch);
+    const double note = static_cast<double> (voice.note) + bend + static_cast<double> (local.pitch)
+                      + static_cast<double> (voice.detuneCents) / 100.0;
     const double frequency = std::min (sampleRate_ * 0.22, midiHz (note));
     const double increment = frequency / sampleRate_;
     const double detune = std::clamp (params.detuneCents, 0.0, 50.0);
     float carrier = 0.0f;
-    if (params.oscLevel[2] > 0.0f || params.fm > 0.0f || mod.fm > 0.0f)
+    if (params.oscLevel[2] > 0.0f || params.fm > 0.0f || local.fm > 0.0f)
     {
         const double incC = increment * std::exp2 (static_cast<double> (params.osc3Semi) / 12.0);
         carrier = shapedOsc (voice.oscC, params.oscWave[2], incC, params.oscPulse[2]);
     }
     double incA = increment;
-    const float fm = params.fm + mod.fm;
+    const float fm = params.fm + local.fm;
     if (fm > 0.0f)
         incA *= std::exp2 (std::clamp (static_cast<double> (fm) * static_cast<double> (carrier), -2.0, 2.0));
     const float sawA = shapedOsc (voice.oscA, params.oscWave[0], incA, params.oscPulse[0]);
@@ -722,11 +822,18 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
         sample += params.oscLevel[2] * carrier;
     if (params.ring > 0.0f)
         sample += params.ring * sawA * sawB;
+    if (params.wtLevel > 0.0f)
+    {
+        const float table = sharedWavetable().read (params.wtPos, voice.wtPhase, increment);
+        voice.wtPhase += increment;
+        voice.wtPhase -= std::floor (voice.wtPhase);
+        sample += params.wtLevel * table;
+    }
     const float env = static_cast<float> (voice.amp.next (params.attack, params.decay, params.sustain, sampleRate_));
     const float filterLevel = static_cast<float> (voice.filterAmp.next (params.filterAttack, params.filterDecay, params.filterSustain, sampleRate_));
-    const float cutoffNorm = mod.cutoff == 0.0f
+    const float cutoffNorm = local.cutoff == 0.0f
                                  ? params.cutoff
-                                 : std::clamp (params.cutoff + mod.cutoff, 0.0f, 1.0f);
+                                 : std::clamp (params.cutoff + local.cutoff, 0.0f, 1.0f);
     const float cutoff = 80.0f * std::pow (90.0f, std::clamp (cutoffNorm, 0.0f, 1.0f));
     float scale = 1.0f;
     if (params.keyTrack != 0.0f)
@@ -736,7 +843,7 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
     const float shapedCutoff = scale == 1.0f
                                    ? cutoff
                                    : std::clamp (cutoff * scale, 20.0f, static_cast<float> (sampleRate_ * 0.45));
-    const float resonance = std::clamp (params.resonance + mod.resonance, 0.0f, 1.0f);
+    const float resonance = std::clamp (params.resonance + local.resonance, 0.0f, 1.0f);
     if (params.filterType == 0 && params.filter2Mix <= 0.0f)
         sample = static_cast<float> (voice.svf.next (sample, shapedCutoff, resonance, sampleRate_));
     else
@@ -746,9 +853,9 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
         sample = first;
         if (params.filter2Mix > 0.0f)
         {
-            const float secondBaseNorm = mod.filter2 == 0.0f
+            const float secondBaseNorm = local.filter2 == 0.0f
                                               ? params.filter2Cutoff
-                                              : std::clamp (params.filter2Cutoff + mod.filter2, 0.0f, 1.0f);
+                                              : std::clamp (params.filter2Cutoff + local.filter2, 0.0f, 1.0f);
             const float secondBase = 80.0f * std::pow (90.0f, std::clamp (secondBaseNorm, 0.0f, 1.0f));
             const float secondCutoff = scale == 1.0f
                                            ? secondBase
@@ -773,54 +880,94 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
 
 void SynthEngine::updateMod (int part, const BlockParams& params) noexcept
 {
+    bpmLive_ = params.bpmValid && params.bpm > 1.0 ? params.bpm : 120.0;
     auto& mod = mod_[part];
     mod = {};
     const auto& knobs = params.part[part];
     float source[13] {};
     for (int index = 0; index < 4; ++index)
-    {
-        auto& lfo = lfo_[part][index];
-        const double rate = std::clamp (static_cast<double> (knobs.lfoRate[index]), 0.0, 40.0);
-        const double step = rate / sampleRate_;
-        lfo.phase += step;
-        bool wrapped = false;
-        if (lfo.phase >= 1.0)
-        {
-            lfo.phase -= std::floor (lfo.phase);
-            wrapped = true;
-        }
-        if (wrapped)
-        {
-            lfo.noise = lfo.noise * 1664525u + 1013904223u;
-            lfo.held = (static_cast<float> (lfo.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
-            lfo.target = lfo.held;
-        }
-        lfo.smooth += 0.01f * (lfo.target - lfo.smooth);
-        const double phase = lfo.phase;
-        const int shape = std::clamp (knobs.lfoShape[index], 0, 6);
-        float value = 0.0f;
-        switch (shape)
-        {
-            case 1: value = static_cast<float> (4.0 * std::fabs (phase - 0.5) - 1.0); break;
-            case 2: value = static_cast<float> (2.0 * phase - 1.0); break;
-            case 3: value = static_cast<float> (1.0 - 2.0 * phase); break;
-            case 4: value = phase < 0.5 ? 1.0f : -1.0f; break;
-            case 5: value = lfo.held; break;
-            case 6: value = lfo.smooth; break;
-            default: value = static_cast<float> (std::sin (2.0 * pi * phase)); break;
-        }
-        source[index + 1] = value;
-    }
+        source[index + 1] = advanceLfo (lfo_[part][index], lfoHz (knobs, index), knobs.lfoShape[index]);
     for (int index = 0; index < 8; ++index)
         source[index + 5] = std::clamp (params.macro[index], 0.0f, 1.0f) * 2.0f - 1.0f;
-    for (int index = 0; index < 4; ++index)
+    for (int index = 0; index < PartParams::routeSlots; ++index)
     {
         const int src = knobs.routeSource[index];
         const int dst = knobs.routeDest[index];
         const float amount = knobs.routeAmount[index];
         if (src <= 0 || src > 12 || dst <= 0 || amount == 0.0f)
             continue;
+        if (src <= 4 && knobs.lfoRetrig[src - 1])
+            continue;
         const float delta = amount * source[src];
+        switch (dst)
+        {
+            case 1: mod.cutoff += delta; break;
+            case 2: mod.resonance += delta; break;
+            case 3: mod.pitch += delta * 12.0f; break;
+            case 4: mod.fm += delta; break;
+            case 5: mod.filter2 += delta; break;
+            default: break;
+        }
+    }
+    lastCutoff_[part] = mod.cutoff;
+}
+
+double SynthEngine::lfoHz (const PartParams& params, int index) const noexcept
+{
+    if (! params.lfoSync[index])
+        return std::clamp (static_cast<double> (params.lfoRate[index]), 0.0, 40.0);
+    static constexpr double beats[] = { 4.0, 2.0, 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125 };
+    const int div = std::clamp (params.lfoDiv[index], 0, 8);
+    return (bpmLive_ / 60.0) / beats[div];
+}
+
+float SynthEngine::advanceLfo (LfoState& lfo, double hz, int shape) noexcept
+{
+    const double step = std::max (0.0, hz) / sampleRate_;
+    lfo.phase += step;
+    bool wrapped = false;
+    if (lfo.phase >= 1.0)
+    {
+        lfo.phase -= std::floor (lfo.phase);
+        wrapped = true;
+    }
+    if (wrapped)
+    {
+        lfo.noise = lfo.noise * 1664525u + 1013904223u;
+        lfo.held = (static_cast<float> (lfo.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
+        lfo.target = lfo.held;
+    }
+    lfo.smooth += 0.01f * (lfo.target - lfo.smooth);
+    const double phase = lfo.phase;
+    switch (std::clamp (shape, 0, 6))
+    {
+        case 1: return static_cast<float> (4.0 * std::fabs (phase - 0.5) - 1.0);
+        case 2: return static_cast<float> (2.0 * phase - 1.0);
+        case 3: return static_cast<float> (1.0 - 2.0 * phase);
+        case 4: return phase < 0.5 ? 1.0f : -1.0f;
+        case 5: return lfo.held;
+        case 6: return lfo.smooth;
+        default: return static_cast<float> (std::sin (2.0 * pi * phase));
+    }
+}
+
+void SynthEngine::applyRetrig (VaVoice& voice, const PartParams& params, VoiceMod& mod) noexcept
+{
+    float value[4] {};
+    for (int index = 0; index < 4; ++index)
+    {
+        if (! params.lfoRetrig[index])
+            continue;
+        value[index] = advanceLfo (voice.retrig[index], lfoHz (params, index), params.lfoShape[index]);
+    }
+    for (int index = 0; index < PartParams::routeSlots; ++index)
+    {
+        const int src = params.routeSource[index];
+        const int dst = params.routeDest[index];
+        const float amount = params.routeAmount[index];
+        if (src < 1 || src > 4 || dst <= 0 || amount == 0.0f || ! params.lfoRetrig[src - 1])
+            continue;
+        const float delta = amount * value[src - 1];
         switch (dst)
         {
             case 1: mod.cutoff += delta; break;
@@ -864,23 +1011,36 @@ void SynthEngine::process (float* left, float* right, int frames,
             for (int part = 0; part < partCount; ++part)
                 handle (part, event.status, event.data1, event.data2, event.articulation);
         }
-        float mix = 0.0f;
+        float mixL = 0.0f;
+        float mixR = 0.0f;
         for (int part = 0; part < partCount; ++part)
             updateMod (part, params);
         for (int part = 0; part < partCount; ++part)
         {
             if (monoEngine (parts_[part].engine))
-                mix += renderMono (part, params.part[part]);
+            {
+                const float monoSample = renderMono (part, params.part[part]);
+                mixL += monoSample;
+                mixR += monoSample;
+            }
             else
                 for (auto& voice : voices_)
                     if (voice.active && voice.part == part)
-                        mix += renderVa (voice, params.part[part], mod_[part]);
+                    {
+                        const float voiceSample = renderVa (voice, params.part[part], mod_[part]);
+                        const float pan = std::clamp (voice.pan, -1.0f, 1.0f);
+                        mixL += voiceSample * (pan > 0.0f ? 1.0f - pan : 1.0f);
+                        mixR += voiceSample * (pan < 0.0f ? 1.0f + pan : 1.0f);
+                    }
         }
-        mix = std::tanh (mix) * output;
-        if (! std::isfinite (mix))
-            mix = 0.0f;
-        left[sample] = mix;
-        right[sample] = mix;
+        mixL = std::tanh (mixL) * output;
+        mixR = std::tanh (mixR) * output;
+        if (! std::isfinite (mixL))
+            mixL = 0.0f;
+        if (! std::isfinite (mixR))
+            mixR = 0.0f;
+        left[sample] = mixL;
+        right[sample] = mixR;
     }
 }
 

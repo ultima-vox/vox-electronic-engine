@@ -18,6 +18,7 @@ namespace vox::syn {
 inline constexpr preset::Tag engineSectionTag = preset::makeTag ("ENG1");
 inline constexpr preset::Tag userBankTag = preset::makeTag ("UBNK");
 inline constexpr preset::Tag phraseSectionTag = preset::makeTag ("PHRS");
+inline constexpr preset::Tag modSectionTag = preset::makeTag ("MODX");
 inline constexpr int maxUserPrograms = 128;
 
 struct UserProgram {
@@ -76,6 +77,12 @@ public:
     void setPhraseNote (int index, PhraseNote note);
     [[nodiscard]] std::vector<std::byte> exportCurrentPhrase() const;
 
+    // Routes 0-3 are the existing host ids. Routes 4-31 live in the MODX
+    // section. amount01 is the host value: 0.5 is off. The audio thread adds
+    // the route to the base and never writes the base back.
+    void setModRoute (int part, int route, int source, int dest, float amount01);
+    void getModRoute (int part, int route, int& source, int& dest, float& amount01);
+
     // Test gate. The audio thread loads the published slot, then waits until released,
     // and only then claims it. A writer can publish twice inside that gap.
     void armPhraseHandoffForTest() noexcept { phraseHandoffPark_.store (1, std::memory_order_release); }
@@ -88,11 +95,21 @@ protected:
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     bool isProductSection (preset::Tag tag) const override
     {
-        return tag == engineSectionTag || tag == userBankTag || tag == phraseSectionTag;
+        return tag == engineSectionTag || tag == userBankTag || tag == phraseSectionTag || tag == modSectionTag;
     }
 
 private:
     engine::BlockParams latchBlock();
+    struct ExtraRoutes {
+        struct Row {
+            int source = 0;
+            int dest = 0;
+            float amount = 0.0f;
+        };
+        Row row[2][extraRouteCount] {};
+    };
+    [[nodiscard]] ExtraRoutes readExtraRoutes() const noexcept;
+    void publishExtraRoutes (const ExtraRoutes& next) noexcept;
     void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
     bool insertEvent (const engine::Event& event, int& count);
     void publishLocked();
@@ -101,6 +118,10 @@ private:
     juce::AudioProcessorValueTreeState parameters_;
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
+    ExtraRoutes extraRoutes_ {};
+    std::atomic<std::uint32_t> extraSeq_ { 0 };
+    double hostBpm_ = 120.0;
+    bool hostBpmValid_ = false;
     vstengine::effects::EffectsChain fx_;
     engine::Event events_[engine::maxEvents] {};
     bool prepared_ = false;

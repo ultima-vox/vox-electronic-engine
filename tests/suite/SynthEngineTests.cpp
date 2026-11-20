@@ -905,6 +905,186 @@ void testVaQuality()
     check (splitWorst < 1.0e-5f, "block splits do not move the phase");
 }
 
+void testLfoPolicy()
+{
+    auto params = vaBase();
+    params.part[0].lfoRate[0] = 4.0f;
+    params.part[0].routeSource[0] = 1;
+    params.part[0].routeDest[0] = 1;
+    params.part[0].routeAmount[0] = 0.5f;
+    params.part[0].cutoff = 0.40f;
+    eng::SynthEngine alone;
+    eng::SynthEngine extra;
+    alone.prepare (48000.0, 256);
+    extra.prepare (48000.0, 256);
+    const eng::Event first = midi (0, 0x90, 60, 100);
+    const eng::Event second = midi (0, 0x90, 67, 100);
+    render (alone, 2000, &first, 1, params, 128);
+    render (extra, 2000, &first, 1, params, 128);
+    render (extra, 2000, &second, 1, params, 128);
+    render (alone, 2000, nullptr, 0, params, 128);
+    check (std::fabs (alone.lfoPhase (0, 0) - extra.lfoPhase (0, 0)) < 1.0e-6,
+           "a second note does not restart the free-running LFO");
+    check (std::fabs (alone.modCutoff (0) - extra.modCutoff (0)) < 1.0e-5f,
+           "the cutoff trajectory survives the second note");
+
+    auto retrig = params;
+    retrig.part[0].lfoRetrig[0] = true;
+    eng::SynthEngine perNote;
+    perNote.prepare (48000.0, 256);
+    render (perNote, 4000, &first, 1, retrig, 128);
+    const double moved = perNote.vaRetrigPhase (0, 60, 0);
+    render (perNote, 64, &second, 1, retrig, 128);
+    check (moved > 0.05, "the held voice has its own phase");
+    check (perNote.vaRetrigPhase (0, 60, 0) + 1.0e-4 > moved, "the held voice is not restarted");
+    check (perNote.vaRetrigPhase (0, 67, 0) < 0.02, "the new voice starts at its own phase");
+
+    eng::Event chord[15];
+    chord[0] = midi (0, 0x90, 36, 80);
+    chord[1] = midi (1, 0x90, 60, 100);
+    for (int i = 2; i < 15; ++i)
+        chord[i] = midi (static_cast<std::uint32_t> (i), 0x90, static_cast<std::uint8_t> (40 + i), 80);
+    eng::SynthEngine stolen;
+    eng::SynthEngine steady;
+    stolen.prepare (48000.0, 512);
+    steady.prepare (48000.0, 512);
+    render (stolen, 256, chord, 15, params, 128);
+    render (steady, 256, chord, 15, params, 128);
+    const eng::Event thief = midi (0, 0x90, 96, 110);
+    render (stolen, 512, &thief, 1, params, 128);
+    render (steady, 512, nullptr, 0, params, 128);
+    check (std::fabs (stolen.lfoPhase (0, 0) - steady.lfoPhase (0, 0)) < 1.0e-6, "voice steal does not restart the part LFO");
+    check (stolen.vaNoteHeld (0, 60), "the held note is not the stolen one");
+    check (! stolen.vaNoteHeld (0, 36), "the oldest note was the one stolen");
+
+    auto psy = defaults();
+    psy.part[0].lfoRate[0] = 3.0f;
+    eng::SynthEngine psyOn;
+    eng::SynthEngine psyOff;
+    psyOn.prepare (48000.0, 128);
+    psyOff.prepare (48000.0, 128);
+    render (psyOn, 1000, &first, 1, psy, 128);
+    render (psyOff, 1000, nullptr, 0, psy, 128);
+    check (std::fabs (psyOn.lfoPhase (0, 0) - psyOff.lfoPhase (0, 0)) < 1.0e-6, "Psy notes do not reset the LFO");
+    auto acid = psy;
+    acid.part[0].engine = eng::EngineKind::acid;
+    eng::SynthEngine acidOn;
+    eng::SynthEngine acidOff;
+    acidOn.prepare (48000.0, 128);
+    acidOff.prepare (48000.0, 128);
+    render (acidOn, 1000, &first, 1, acid, 128);
+    render (acidOff, 1000, nullptr, 0, acid, 128);
+    check (std::fabs (acidOn.lfoPhase (0, 0) - acidOff.lfoPhase (0, 0)) < 1.0e-6, "Acid notes do not reset the LFO");
+
+    auto clock = vaBase();
+    clock.part[0].lfoSync[0] = true;
+    clock.part[0].lfoDiv[0] = 2;
+    clock.bpm = 120.0;
+    clock.bpmValid = true;
+    eng::SynthEngine synced;
+    synced.prepare (48000.0, 256);
+    render (synced, 12000, nullptr, 0, clock, 256);
+    check (std::fabs (synced.lfoPhase (0, 0) - 0.5) < 1.0e-4, "quarter-note sync at 120 bpm is 2 Hz");
+    clock.bpmValid = false;
+    eng::SynthEngine fallback;
+    fallback.prepare (48000.0, 256);
+    render (fallback, 12000, nullptr, 0, clock, 256);
+    check (std::fabs (fallback.lfoPhase (0, 0) - 0.5) < 1.0e-4, "a missing clock falls back to 120 bpm");
+    clock.bpm = 60.0;
+    clock.bpmValid = true;
+    eng::SynthEngine half;
+    half.prepare (48000.0, 256);
+    render (half, 12000, nullptr, 0, clock, 256);
+    check (std::fabs (half.lfoPhase (0, 0) - 0.25) < 1.0e-4, "quarter-note sync follows the host bpm");
+
+    eng::SynthEngine whole;
+    eng::SynthEngine split;
+    whole.prepare (48000.0, 256);
+    split.prepare (48000.0, 256);
+    float wholeL[256] {};
+    float splitL[128] {};
+    float splitL2[128] {};
+    float ignored[256] {};
+    whole.process (wholeL, ignored, 256, &first, 1, params);
+    split.process (splitL, ignored, 128, &first, 1, params);
+    split.process (splitL2, ignored, 128, nullptr, 0, params);
+    float worst = 0.0f;
+    for (int i = 0; i < 128; ++i)
+    {
+        worst = std::max (worst, std::fabs (wholeL[i] - splitL[i]));
+        worst = std::max (worst, std::fabs (wholeL[128 + i] - splitL2[i]));
+    }
+    check (worst < 1.0e-5f, "LFO modulation is independent of the block size");
+    check (std::fabs (whole.lfoPhase (0, 0) - split.lfoPhase (0, 0)) < 1.0e-6, "LFO phase is independent of the block size");
+}
+
+void testUnisonTable()
+{
+    check (vox::syn::engine::wavetableBytes() == 256 * 2048 * 4, "wavetable is 256 x 2048");
+    auto plain = vaBase();
+    auto table = plain;
+    table.part[0].wtLevel = 1.0f;
+    table.part[0].wtPos = 0.8f;
+    check (std::fabs (energy (play (plain, 52, 2048)) - energy (play (table, 52, 2048))) > 1.0e-4f, "wavetable changes the sound");
+    auto other = table;
+    other.part[0].wtPos = 0.05f;
+    check (std::fabs (energy (play (table, 52, 2048)) - energy (play (other, 52, 2048))) > 1.0e-4f, "wavetable frames are different");
+    auto high = table;
+    const auto top = play (high, 108, 2048);
+    check (top.finite && top.peak < 1.5f && top.peak > 1.0e-4f, "a high wavetable note stays bounded");
+
+    auto wide = vaBase();
+    wide.part[0].unison = 4;
+    wide.part[0].unisonDetune = 12.0f;
+    wide.part[0].unisonSpread = 1.0f;
+    wide.part[0].wtLevel = 0.4f;
+    eng::SynthEngine engine;
+    engine.prepare (48000.0, 256);
+    const eng::Event on = midi (0, 0x90, 64, 110);
+    const auto stereo = render (engine, 512, &on, 1, wide, 128);
+    check (engine.vaActive (0) == 4, "one unison note costs four voices");
+    check (stereo.side > 1.0e-4f, "unison spread is stereo");
+    auto center = wide;
+    center.part[0].unisonSpread = 0.0f;
+    const auto mono = play (center, 64, 512);
+    check (mono.side < 1.0e-6f, "spread zero stays mono");
+
+    const eng::Event off = midi (0, 0x80, 64, 0);
+    render (engine, 64, &off, 1, wide, 64);
+    check (engine.vaFilterStage (0, 64) == 4, "unison note-off releases every copy");
+    eng::SynthEngine panic;
+    panic.prepare (48000.0, 128);
+    render (panic, 64, &on, 1, wide, 64);
+    const eng::Event hard = midi (0, 0xb0, 120, 0);
+    render (panic, 32, &hard, 1, wide, 32);
+    check (panic.vaActive (0) == 0, "CC120 clears unison voices");
+
+    eng::SynthEngine full;
+    full.prepare (48000.0, 128);
+    eng::Event stack[5];
+    for (int i = 0; i < 5; ++i)
+        stack[i] = midi (static_cast<std::uint32_t> (i), 0x90, static_cast<std::uint8_t> (48 + i), 100);
+    render (full, 256, stack, 5, wide, 128);
+    check (full.activeVoices() == 16, "unison stays inside the shared 16-voice pool");
+    float scratch[128] {};
+    full.process (scratch, scratch, 128, nullptr, 0, wide);
+    voxProbeBegin();
+    full.process (scratch, scratch, 128, nullptr, 0, wide);
+    const auto calls = voxProbeEnd();
+    check (calls == 0, "wavetable and unison allocate nothing in the callback (" + std::to_string (calls) + ")");
+
+    auto routed = vaBase();
+    routed.part[0].cutoff = 0.15f;
+    routed.macro[7] = 1.0f;
+    routed.part[0].routeSource[31] = 12;
+    routed.part[0].routeDest[31] = 1;
+    routed.part[0].routeAmount[31] = 1.0f;
+    auto quiet = routed;
+    quiet.part[0].routeAmount[31] = 0.0f;
+    check (std::fabs (energy (play (routed, 48, 1024)) - energy (play (quiet, 48, 1024))) > 1.0e-4f,
+           "route 32 reaches the cutoff");
+}
+
 } // namespace
 
 int main()
@@ -925,6 +1105,8 @@ int main()
     testVaLifecycle();
     testMod();
     testVaQuality();
+    testLfoPolicy();
+    testUnisonTable();
     if (failures == 0 && skips == 0)
         std::printf ("synth engine tests passed (%d checks, 0 skipped)\n", checks);
     else

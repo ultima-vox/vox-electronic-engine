@@ -202,6 +202,17 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (! prepared_ || frames <= 0 || buffer.getNumChannels() < 2)
         return;
 
+    hostBpm_ = 120.0;
+    hostBpmValid_ = false;
+    if (auto* head = getPlayHead())
+        if (const auto position = head->getPosition())
+            if (const auto hostBpm = position->getBpm())
+                if (*hostBpm > 1.0)
+                {
+                    hostBpm_ = *hostBpm;
+                    hostBpmValid_ = true;
+                }
+
     const auto block = latchBlock();
 
     PhraseSnapshot snap;
@@ -404,11 +415,33 @@ engine::BlockParams SynthesisProcessor::latchBlock()
             dst.routeDest[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at + 1)])), 0, 5);
             dst.routeAmount[index] = (load (raw_[static_cast<std::size_t> (at + 2)]) - 0.5f) * 2.0f;
         }
+        const int feature = featureBase + part * featureCount;
+        dst.unison = 1 + std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (feature)])), 0, 3);
+        dst.unisonDetune = load (raw_[static_cast<std::size_t> (feature + 1)]) * 40.0f;
+        dst.unisonSpread = load (raw_[static_cast<std::size_t> (feature + 2)]);
+        dst.wtLevel = load (raw_[static_cast<std::size_t> (feature + 3)]);
+        dst.wtPos = load (raw_[static_cast<std::size_t> (feature + 4)]);
+        for (int index = 0; index < lfoCount; ++index)
+        {
+            const int at = feature + 5 + index * 3;
+            dst.lfoSync[index] = load (raw_[static_cast<std::size_t> (at)]) >= 0.5f;
+            dst.lfoDiv[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at + 1)])), 0, 8);
+            dst.lfoRetrig[index] = load (raw_[static_cast<std::size_t> (at + 2)]) >= 0.5f;
+        }
+        const auto routes = readExtraRoutes();
+        for (int index = 0; index < extraRouteCount; ++index)
+        {
+            dst.routeSource[routeCount + index] = routes.row[part][index].source;
+            dst.routeDest[routeCount + index] = routes.row[part][index].dest;
+            dst.routeAmount[routeCount + index] = routes.row[part][index].amount;
+        }
         if (part == 0)
             for (int index = 0; index < macroCount; ++index)
                 block.macro[index] = load (raw_[static_cast<std::size_t> (macroBase + index)]);
     }
     block.output = load (raw_[outputParameterIndex]);
+    block.bpm = hostBpm_;
+    block.bpmValid = hostBpmValid_;
     syncExposedFx (fx_, raw_);
     return block;
 }
@@ -851,6 +884,20 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
         putU32 (phrase.data, note.accent ? 1u : 0u);
     }
     out.push_back (std::move (phrase));
+    const auto routes = readExtraRoutes();
+    preset::Section mod;
+    mod.tag = modSectionTag;
+    putU32 (mod.data, 1u);
+    for (int part = 0; part < 2; ++part)
+        for (int index = 0; index < extraRouteCount; ++index)
+        {
+            putU32 (mod.data, static_cast<std::uint32_t> (routes.row[part][index].source));
+            putU32 (mod.data, static_cast<std::uint32_t> (routes.row[part][index].dest));
+            std::uint32_t bits = 0;
+            std::memcpy (&bits, &routes.row[part][index].amount, sizeof bits);
+            putU32 (mod.data, bits);
+        }
+    out.push_back (std::move (mod));
 }
 
 SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const preset::StateDocument& document,
@@ -1066,7 +1113,57 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         putU32 (phraseSection.data, note.accent ? 1u : 0u);
     }
     restore.sections.push_back (std::move (phraseSection));
-    restore.apply = [this, values, bank, phrase] {
+    auto routes = std::make_shared<ExtraRoutes>();
+    if (const auto* section = document.find (modSectionTag))
+    {
+        std::size_t at = 0;
+        std::uint32_t version = 0;
+        if (! takeU32 (section->data, at, version) || version != 1u)
+        {
+            error = "malformed MODX section";
+            return {};
+        }
+        for (int part = 0; part < 2; ++part)
+            for (int index = 0; index < extraRouteCount; ++index)
+            {
+                std::uint32_t source = 0, dest = 0, bits = 0;
+                if (! takeU32 (section->data, at, source) || ! takeU32 (section->data, at, dest) || ! takeU32 (section->data, at, bits)
+                    || source > 12u || dest > 5u)
+                {
+                    error = "malformed MODX section";
+                    return {};
+                }
+                float amount = 0.0f;
+                std::memcpy (&amount, &bits, sizeof amount);
+                if (! std::isfinite (amount))
+                {
+                    error = "non-finite MODX value";
+                    return {};
+                }
+                routes->row[part][index].source = static_cast<int> (source);
+                routes->row[part][index].dest = static_cast<int> (dest);
+                routes->row[part][index].amount = std::clamp (amount, -1.0f, 1.0f);
+            }
+        if (at != section->data.size())
+        {
+            error = "malformed MODX section";
+            return {};
+        }
+    }
+    preset::Section modSection;
+    modSection.tag = modSectionTag;
+    putU32 (modSection.data, 1u);
+    for (int part = 0; part < 2; ++part)
+        for (int index = 0; index < extraRouteCount; ++index)
+        {
+            putU32 (modSection.data, static_cast<std::uint32_t> (routes->row[part][index].source));
+            putU32 (modSection.data, static_cast<std::uint32_t> (routes->row[part][index].dest));
+            std::uint32_t bits = 0;
+            std::memcpy (&bits, &routes->row[part][index].amount, sizeof bits);
+            putU32 (modSection.data, bits);
+        }
+    restore.sections.push_back (std::move (modSection));
+    restore.apply = [this, values, bank, phrase, routes] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
         {
             auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
@@ -1085,6 +1182,7 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         phraseClockEpoch_.fetch_add (1, std::memory_order_release);
         if (phrasePlaying_.load (std::memory_order_relaxed))
             phraseStopEpoch_.fetch_add (1, std::memory_order_release);
+        publishExtraRoutes (*routes);
     };
     restore.settle = [this, values] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
@@ -1184,6 +1282,82 @@ juce::String SynthesisProcessor::factoryProgramSearch (int index) const
          + program.variant + " " + program.mood + " " + program.purpose;
 }
 
+SynthesisProcessor::ExtraRoutes SynthesisProcessor::readExtraRoutes() const noexcept
+{
+    for (;;)
+    {
+        const auto seq = extraSeq_.load (std::memory_order_acquire);
+        if ((seq & 1u) != 0u)
+            continue;
+        const auto copy = extraRoutes_;
+        if (extraSeq_.load (std::memory_order_acquire) == seq)
+            return copy;
+    }
+}
+
+void SynthesisProcessor::publishExtraRoutes (const ExtraRoutes& next) noexcept
+{
+    extraSeq_.fetch_add (1u, std::memory_order_release);
+    extraRoutes_ = next;
+    extraSeq_.fetch_add (1u, std::memory_order_release);
+}
+
+void SynthesisProcessor::setModRoute (int part, int route, int source, int dest, float amount01)
+{
+    if (part < 0 || part > 1 || route < 0 || route >= engine::PartParams::routeSlots)
+        return;
+    source = std::clamp (source, 0, 12);
+    dest = std::clamp (dest, 0, 5);
+    amount01 = std::clamp (amount01, 0.0f, 1.0f);
+    if (route < routeCount)
+    {
+        const juce::String prefix = juce::String (part == 0 ? "syn.a.mod" : "syn.b.mod") + juce::String (route + 1);
+        const auto write = [&] (const juce::String& suffix, float value)
+        {
+            auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (prefix + suffix));
+            if (parameter != nullptr)
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+        };
+        write (".src", static_cast<float> (source));
+        write (".dst", static_cast<float> (dest));
+        write (".amt", amount01);
+        return;
+    }
+    auto copy = readExtraRoutes();
+    auto& row = copy.row[part][route - routeCount];
+    row.source = source;
+    row.dest = dest;
+    row.amount = (amount01 - 0.5f) * 2.0f;
+    publishExtraRoutes (copy);
+}
+
+void SynthesisProcessor::getModRoute (int part, int route, int& source, int& dest, float& amount01)
+{
+    source = 0;
+    dest = 0;
+    amount01 = 0.5f;
+    if (part < 0 || part > 1 || route < 0 || route >= engine::PartParams::routeSlots)
+        return;
+    if (route < routeCount)
+    {
+        const juce::String prefix = juce::String (part == 0 ? "syn.a.mod" : "syn.b.mod") + juce::String (route + 1);
+        const auto read = [&] (const juce::String& suffix)
+        {
+            auto* parameter = parameters_.getParameter (prefix + suffix);
+            return parameter == nullptr ? 0.0f : plainValue (*parameter);
+        };
+        source = juce::roundToInt (read (".src"));
+        dest = juce::roundToInt (read (".dst"));
+        amount01 = read (".amt");
+        return;
+    }
+    const auto copy = readExtraRoutes();
+    const auto& row = copy.row[part][route - routeCount];
+    source = row.source;
+    dest = row.dest;
+    amount01 = std::clamp (row.amount * 0.5f + 0.5f, 0.0f, 1.0f);
+}
+
 bool SynthesisProcessor::loadFactoryProgram (int index)
 {
     if (index < 0 || index >= vox::syn::factoryProgramCount())
@@ -1198,6 +1372,37 @@ bool SynthesisProcessor::loadFactoryProgram (int index)
         const float clamped = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
     }
+    for (int part = 0; part < 2; ++part)
+        for (int route = routeCount; route < engine::PartParams::routeSlots; ++route)
+            setModRoute (part, route, 0, 0, 0.5f);
+    struct RouteUse { int program; int part; int route; int source; int dest; float amount; };
+    static constexpr RouteUse uses[] = {
+        { 210, 0, 0, 1, 1, 0.72f },
+        { 400, 0, 4, 2, 1, 0.66f },
+        { 565, 0, 8, 1, 3, 0.60f },
+    };
+    struct KnobUse { int program; const char* id; float value; };
+    static constexpr KnobUse knobs[] = {
+        { 210, "syn.a.unison", 2.0f },
+        { 210, "syn.a.uni.detune", 0.35f },
+        { 210, "syn.a.uni.spread", 0.70f },
+        { 210, "syn.a.wt.level", 0.45f },
+        { 210, "syn.a.wt.pos", 0.62f },
+        { 400, "syn.a.unison", 1.0f },
+        { 400, "syn.a.uni.spread", 0.85f },
+        { 400, "syn.a.wt.level", 0.80f },
+        { 400, "syn.a.wt.pos", 0.28f },
+        { 565, "syn.a.unison", 3.0f },
+        { 565, "syn.a.uni.detune", 0.22f },
+        { 565, "syn.a.lfo1.sync", 1.0f },
+    };
+    for (const auto& use : knobs)
+        if (use.program == index)
+            if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (use.id)))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (use.value));
+    for (const auto& use : uses)
+        if (use.program == index)
+            setModRoute (use.part, use.route, use.source, use.dest, use.amount);
     return true;
 }
 

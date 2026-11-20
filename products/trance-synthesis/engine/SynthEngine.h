@@ -88,18 +88,31 @@ struct PartParams {
     double filterRelease = 0.28;
     // Four global LFOs and four one-way routes. Amount 0 is off.
     // Sources: 0 off, 1-4 LFO, 5-12 macro. Dests: 0 off, 1 cutoff, 2 resonance,
-    // 3 pitch, 4 FM, 5 filter 2 cutoff. No route reads another route.
+    // 3 pitch, 4 FM, 5 filter 2 cutoff. Routes do not read other routes.
+    // Free-running LFOs are the default. Their phase is never reset by a note.
+    // Retrigger stores a separate phase on the voice that owns the note.
     float lfoRate[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     int lfoShape[4] = {};
-    int routeSource[4] = {};
-    int routeDest[4] = {};
-    float routeAmount[4] = {};
+    bool lfoSync[4] = {};
+    int lfoDiv[4] = { 2, 2, 2, 2 };
+    bool lfoRetrig[4] = {};
+    int unison = 1;
+    float unisonDetune = 0.0f;
+    float unisonSpread = 0.0f;
+    float wtLevel = 0.0f;
+    float wtPos = 0.0f;
+    static constexpr int routeSlots = 32;
+    int routeSource[routeSlots] = {};
+    int routeDest[routeSlots] = {};
+    float routeAmount[routeSlots] = {};
 };
 
 struct BlockParams {
     PartParams part[partCount] {};
     float output = 0.8f;
     float macro[8] = {};
+    double bpm = 120.0;
+    bool bpmValid = false;
 };
 
 class SynthEngine {
@@ -124,6 +137,10 @@ public:
     [[nodiscard]] bool vaNoteHeld (int part, int note) const noexcept;
     [[nodiscard]] int vaFilterStage (int part, int note) const noexcept;
     [[nodiscard]] float vaAccentGain (int part, int note) const noexcept;
+    [[nodiscard]] int vaActive (int part) const noexcept;
+    [[nodiscard]] double lfoPhase (int part, int index) const noexcept;
+    [[nodiscard]] double vaRetrigPhase (int part, int note, int index) const noexcept;
+    [[nodiscard]] float modCutoff (int part) const noexcept;
     [[nodiscard]] int vaFadeLeft() const noexcept;
 
 private:
@@ -162,6 +179,14 @@ private:
         float ladder[4] {};
     };
 
+    struct LfoState {
+        double phase = 0.0;
+        float held = 0.0f;
+        float smooth = 0.0f;
+        float target = 0.0f;
+        std::uint32_t noise = 1;
+    };
+
     struct VaVoice {
         VaOsc oscA;
         VaOsc oscB;
@@ -184,6 +209,16 @@ private:
         bool dying = false;
         float pendingVelocity = 0.0f;
         float pendingAccent = 1.0f;
+        int unisonIndex = 0;
+        int unisonCopies = 1;
+        float detuneCents = 0.0f;
+        float pan = 0.0f;
+        int pendingUnison = 0;
+        int pendingCopies = 1;
+        float pendingDetune = 0.0f;
+        float pendingPan = 0.0f;
+        double wtPhase = 0.0;
+        LfoState retrig[4] {};
         vstengine::dspcore::SvfLowpass svf;
         VaFilter flt1;
         VaFilter flt2;
@@ -213,6 +248,8 @@ private:
     void restoreLatest (int part, bool fromSlide) noexcept;
     void startMono (int part, int note, float velocity, bool legato, NoteArticulation art) noexcept;
     void startVa (int part, int channel, int note, float velocity, NoteArticulation art) noexcept;
+    void finishVoice (VaVoice& slot, int part, int channel, int note, float velocity, float accent,
+                      int index, int copies, float cents, float pan) noexcept;
     void freeMonoRoom() noexcept;
     [[nodiscard]] int used() const noexcept;
     [[nodiscard]] VaVoice* oldestVa() noexcept;
@@ -227,20 +264,17 @@ private:
     [[nodiscard]] float renderVa (VaVoice& voice, const PartParams& params, const VoiceMod& mod) noexcept;
     [[nodiscard]] float acidFilter (int part, float input, float cutoffHz, float resonance) noexcept;
     void updateMod (int part, const BlockParams& params) noexcept;
-
-    struct LfoState {
-        double phase = 0.0;
-        float held = 0.0f;
-        float smooth = 0.0f;
-        float target = 0.0f;
-        std::uint32_t noise = 1;
-    };
+    void applyRetrig (VaVoice& voice, const PartParams& params, VoiceMod& mod) noexcept;
+    [[nodiscard]] float advanceLfo (LfoState& lfo, double hz, int shape) noexcept;
+    [[nodiscard]] double lfoHz (const PartParams& params, int index) const noexcept;
 
     Part parts_[partCount];
     VaVoice voices_[maxVoices];
     PartParams live_[partCount] {};
     VoiceMod mod_[partCount] {};
     LfoState lfo_[partCount][4] {};
+    float lastCutoff_[partCount] {};
+    double bpmLive_ = 120.0;
     double sampleRate_ = 48000.0;
     int maximumBlockSize_ = 0;
     bool prepared_ = false;
