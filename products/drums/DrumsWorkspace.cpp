@@ -167,11 +167,167 @@ private:
     float active_ = 0.0f;
 };
 
+class StepInspector final : public juce::Component {
+public:
+    explicit StepInspector (DrumsProcessor& processor) : processor_ (processor)
+    {
+        addAndMakeVisible (description_); description_.setJustificationType (juce::Justification::topLeft);
+        static constexpr const char* labels[] { "Velocity", "Chance", "Ratchet", "Micro" };
+        static constexpr double low[] { 0, 1, 1, -50 }, high[] { 127, 100, 8, 50 };
+        for (unsigned i = 0; i < knobs_.size(); ++i)
+        {
+            knobs_[i] = std::make_unique<DrumsDial> (labels[i]); addAndMakeVisible (*knobs_[i]);
+            if (i == 3) knobs_[i]->setStyle (vox::ui::VoxKnob::Style::Bipolar);
+            auto& slider = knobs_[i]->getSlider(); slider.setRange (low[i], high[i], 1);
+            slider.textFromValueFunction = [this, i] (double value) {
+                if (mixed_[i]) return juce::String ("Mixed");
+                const auto n = juce::roundToInt (value);
+                return juce::String (n) + (i == 1 || i == 3 ? " %" : i == 2 ? "x" : "");
+            };
+            slider.valueFromTextFunction = [&slider] (const juce::String& value) {
+                return value.trim().equalsIgnoreCase ("Mixed") ? slider.getValue() : value.getDoubleValue();
+            };
+            slider.onDragStart = [this, i] {
+                dragging_ = abandoned_ = amended_ = false; activeField_ = -1;
+                update (true); dragging_ = true; activeField_ = static_cast<int> (i);
+            };
+            slider.onDragEnd = [this] { dragging_ = abandoned_ = amended_ = false; activeField_ = -1; update (true); };
+            slider.onValueChange = [this, i, &slider] { apply (static_cast<StepField> (i), slider.getValue()); };
+        }
+        const std::array fields { StepField::on, StepField::accent, StepField::locked };
+        for (unsigned i = 0; i < toggles_.size(); ++i)
+        {
+            addAndMakeVisible (toggles_[i]);
+            toggles_[i].onClick = [this, i, field = fields[i]] { apply (field, toggles_[i].getToggleState() ? 1 : 0); };
+        }
+    }
+    void setTarget (std::optional<StepTarget> target) { requested_ = std::move (target); update(); }
+    const std::optional<StepTarget>& target() const noexcept { return bound_; }
+    bool available() const noexcept { return values_ && ! values_->cells.empty() && ! abandoned_; }
+    bool dragging() const noexcept { return dragging_; }
+    void abandon() { if (dragging_) { abandoned_ = true; description_.setText ("Gesture canceled after context changed", juce::dontSendNotification); } }
+    void update (bool force = false)
+    {
+        if (dragging_)
+        {
+            if (! values_ || values_->epoch != processor_.patternEpoch() || values_->generation != processor_.patterns().generation()
+                || processor_.restoringMusic()) abandon();
+            return;
+        }
+        const auto generation = processor_.patterns().generation(), epoch = processor_.patternEpoch();
+        const auto restoring = processor_.restoringMusic();
+        if (! force && bound_ == requested_ && generation == lastGeneration_ && epoch == lastEpoch_ && restoring == lastRestoring_) return;
+        bound_ = requested_; lastGeneration_ = generation; lastEpoch_ = epoch; lastRestoring_ = restoring;
+        values_ = bound_ ? inspectSteps (processor_, *bound_) : std::optional<StepValues> {};
+        refresh();
+    }
+    juce::Slider* slider (const juce::String& name)
+    {
+        const std::array<const char*, 4> names { "velocity", "probability", "ratchet", "micro" };
+        for (unsigned i = 0; i < names.size(); ++i) if (name == names[i]) return &knobs_[i]->getSlider();
+        return nullptr;
+    }
+    juce::Button* button (const juce::String& name)
+    {
+        if (name == "stepOn") return &toggles_[0];
+        if (name == "accent") return &toggles_[1];
+        if (name == "locked") return &toggles_[2];
+        return nullptr;
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds(); description_.setBounds (r.removeFromTop (44));
+        for (int row = 0; row < 2; ++row)
+        {
+            auto line = r.removeFromTop (86);
+            knobs_[static_cast<unsigned> (row * 2)]->setBounds (line.removeFromLeft (line.getWidth() / 2));
+            knobs_[static_cast<unsigned> (row * 2 + 1)]->setBounds (line);
+        }
+        auto line = r.removeFromTop (26);
+        toggles_[0].setBounds (line.removeFromLeft (line.getWidth() / 2)); toggles_[1].setBounds (line);
+        toggles_[2].setBounds (r.removeFromTop (26));
+    }
+private:
+    void apply (StepField field, double value)
+    {
+        if (refreshing_ || abandoned_ || ! bound_ || ! values_
+            || (dragging_ && activeField_ != static_cast<int> (field))) return;
+        if (editSteps (processor_, *bound_, field, value, *values_, dragging_ && amended_))
+        {
+            if (dragging_) amended_ = true;
+            values_ = inspectSteps (processor_, *bound_);
+            lastGeneration_ = values_ ? values_->generation : ~std::uint64_t {};
+            lastEpoch_ = values_ ? values_->epoch : ~std::uint64_t {};
+            if (dragging_ && ! values_) abandon();
+            else refresh();
+        }
+        else if (dragging_) update();
+        else update (true);
+    }
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing_, true);
+        const bool available = values_ && ! values_->cells.empty();
+        bool allOn = available;
+        if (available) for (const auto& cell : values_->cells) allOn = allOn && cell.on;
+        for (unsigned field = 0; field < knobs_.size(); ++field)
+        {
+            mixed_[field] = false;
+            if (available)
+            {
+                const int value = stepValue (static_cast<StepField> (field), values_->cells[0], values_->ticks[0]);
+                for (unsigned n = 1; n < values_->cells.size(); ++n)
+                    mixed_[field] = mixed_[field] || value != stepValue (static_cast<StepField> (field), values_->cells[n], values_->ticks[n]);
+                knobs_[field]->getSlider().setValue (value, juce::dontSendNotification);
+            }
+            knobs_[field]->setEnabled (available && allOn && (! dragging_ || activeField_ == static_cast<int> (field)));
+            knobs_[field]->getSlider().updateText();
+        }
+        const std::array fields { StepField::on, StepField::accent, StepField::locked };
+        static constexpr const char* names[] { "On", "Accent", "Lock" };
+        for (unsigned i = 0; i < toggles_.size(); ++i)
+        {
+            bool mixed = false; int value = 0;
+            if (available)
+            {
+                value = stepValue (fields[i], values_->cells[0], values_->ticks[0]);
+                for (unsigned n = 1; n < values_->cells.size(); ++n)
+                    mixed = mixed || value != stepValue (fields[i], values_->cells[n], values_->ticks[n]);
+            }
+            toggles_[i].setButtonText (juce::String (names[i]) + (mixed ? " (mixed)" : ""));
+            toggles_[i].setToggleState (value != 0, juce::dontSendNotification);
+            toggles_[i].setEnabled (available && (i != 1 || allOn) && ! dragging_);
+        }
+        juce::String text = "Steps unavailable; unpin or select a valid object";
+        if (available)
+        {
+            const auto& t = *bound_;
+            text = t.song >= 0 ? "Song bar " + juce::String (t.song + 1) : "P" + juce::String (t.slot + 1) + (t.variation ? " B" : " A") + " bar " + juce::String (t.bar + 1);
+            text << " / Pad " << t.lane + 1 << "\nStep " << t.first + 1;
+            if (t.last != t.first) text << "-" << t.last + 1;
+        }
+        description_.setText (text, juce::dontSendNotification);
+    }
+    DrumsProcessor& processor_;
+    std::optional<StepTarget> requested_, bound_;
+    std::optional<StepValues> values_;
+    std::array<std::unique_ptr<DrumsDial>, 4> knobs_;
+    std::array<bool, 4> mixed_ {};
+    std::array<juce::ToggleButton, 3> toggles_;
+    juce::Label description_;
+    std::uint64_t lastGeneration_ = ~std::uint64_t {}, lastEpoch_ = ~std::uint64_t {};
+    int activeField_ = -1;
+    bool lastRestoring_ = false, refreshing_ = false, dragging_ = false, abandoned_ = false, amended_ = false;
+};
+
 class Inspector final : public juce::Component {
 public:
-    explicit Inspector (DrumsProcessor& p) : processor_ (p)
+    explicit Inspector (DrumsProcessor& p) : processor_ (p), stepControls_ (p)
     {
+        addChildComponent (stepControls_);
         addAndMakeVisible (title); addAndMakeVisible (pin); addAndMakeVisible (mute); addAndMakeVisible (solo);
+        addAndMakeVisible (openSound);
+        openSound.setButtonText ("Open Sound"); openSound.setTooltip ("Open Sound Editor for this Inspector's pad");
         for (auto* combo : { &model, &note, &output }) addAndMakeVisible (*combo);
         for (int i = 0; i < kit::modelCount; ++i) model.addItem (modelName (static_cast<kit::Model> (i)), i + 1);
         for (int i = 0; i < 128; ++i) note.addItem ("Note " + juce::String (i), i + 1);
@@ -214,6 +370,10 @@ public:
     }
     void update (int pad, bool pinned)
     {
+        if (stepMode_ && stepControls_.dragging()) return;
+        const bool changed = stepMode_;
+        stepMode_ = false; stepControls_.setTarget ({}); stepControls_.setVisible (false); padVisible (true); openSound.setEnabled (true); pin.setEnabled (true);
+        pin.setButtonText ("Pin pad");
         bind (pad);
         title.setText ("INSPECTOR / PAD " + juce::String (pad_ + 1) + (pinned ? " / PINNED" : " / FOLLOW"), juce::dontSendNotification);
         pin.setToggleState (pinned, juce::dontSendNotification);
@@ -221,12 +381,36 @@ public:
         model.setSelectedId (static_cast<int> (settings.model) + 1, juce::dontSendNotification);
         note.setSelectedId (settings.note + 1, juce::dontSendNotification);
         output.setSelectedId (settings.output + 1, juce::dontSendNotification);
+        if (changed) resized();
     }
+    void showSteps (std::optional<StepTarget> target, bool pinned)
+    {
+        for (const auto& knob : knobs) if (knob.dragging) return;
+        const bool changed = ! stepMode_;
+        stepMode_ = true; padVisible (false); stepControls_.setVisible (true); stepControls_.setTarget (target);
+        const bool available = stepControls_.available();
+        title.setText (available ? "INSPECTOR / STEPS" : pinned ? "PINNED / UNAVAILABLE" : "STEPS / UNAVAILABLE", juce::dontSendNotification);
+        pin.setToggleState (pinned, juce::dontSendNotification);
+        pin.setButtonText (pinned ? "Unpin" : target && target->song >= 0 ? "Pin unavailable" : "Pin steps");
+        pin.setEnabled (pinned || (available && target && target->song < 0));
+        openSound.setEnabled (available);
+        if (changed) resized();
+    }
+    bool showingSteps() const noexcept { return stepMode_; }
+    bool stepAvailable() const noexcept { return stepControls_.available(); }
+    const std::optional<StepTarget>& stepTarget() const noexcept { return stepControls_.target(); }
+    int padTarget() const noexcept { return pad_; }
+    juce::Slider* stepSlider (const juce::String& name) { return stepMode_ ? stepControls_.slider (name) : nullptr; }
+    juce::Button* stepButton (const juce::String& name) { return stepMode_ ? stepControls_.button (name) : nullptr; }
     void paint (juce::Graphics& g) override { g.fillAll (c::panel); }
     void resized() override
     {
         auto r = getLocalBounds().reduced (8);
-        title.setBounds (r.removeFromTop (24)); pin.setBounds (r.removeFromTop (24)); r.removeFromTop (8);
+        title.setBounds (r.removeFromTop (24));
+        auto actions = r.removeFromTop (24);
+        pin.setBounds (actions.removeFromLeft (actions.getWidth() / 2)); openSound.setBounds (actions);
+        r.removeFromTop (8);
+        if (stepMode_) { stepControls_.setBounds (r); return; }
         for (int row = 0; row < 2; ++row)
         {
             auto cells = r.removeFromTop (getHeight() >= 328 ? 86 : 76);
@@ -245,9 +429,18 @@ public:
     std::array<Knob, 4> knobs;
     juce::Label title;
     juce::ToggleButton pin, mute, solo;
+    juce::TextButton openSound;
     juce::ComboBox model, note, output;
 private:
+    void padVisible (bool visible)
+    {
+        for (auto& knob : knobs) { knob.control->setVisible (visible); knob.control->setEnabled (visible); }
+        for (auto* control : std::initializer_list<juce::Component*> { &mute, &solo, &model, &note, &output })
+        { control->setVisible (visible); control->setEnabled (visible); }
+    }
     DrumsProcessor& processor_;
+    StepInspector stepControls_;
+    bool stepMode_ = false;
     int pad_ = -1;
     std::unique_ptr<ButtonAttachment> muteAttachment, soloAttachment;
 };
@@ -342,6 +535,7 @@ struct DrumsWorkspace::Impl {
         sample.onPlayerSelected = [this] (int player) { selectedPlayer = player; };
         sound.onLayoutChanged = sample.onLayoutChanged = song.onLayoutChanged = [&owner] { owner.resized(); };
         steps.useFixedPatternExportScope();
+        steps.useContextInspector();
         song.enableMidiExport ([this] { steps.saveExport (processor.captureExport (ExportSnapshot::Scope::song)); },
                                [this] { steps.dragExport (processor.captureExport (ExportSnapshot::Scope::song), song); },
                                [this] { return steps.exportMessage(); });
@@ -388,6 +582,16 @@ struct DrumsWorkspace::Impl {
         pin.setButtonText ("Pin"); pin.setClickingTogglesState (true);
         pin.onClick = [&owner, this] { owner.pinInspector (pin.getToggleState()); };
         inspector.pin.onClick = [&owner, this] { owner.pinInspector (inspector.pin.getToggleState()); };
+        inspector.openSound.onClick = [&owner, this] {
+            if (unsupportedPin) return;
+            const auto target = inspector.stepTarget();
+            owner.selectPad (inspector.showingSteps() && target ? target->lane : inspector.padTarget());
+            auto next = layout;
+            if (next.secondary == workspace::Editor::sound) next.secondary = next.primary;
+            next.primary = workspace::Editor::sound;
+            next.centralVisible = true;
+            owner.setLayout (next);
+        };
         primary.addItemList ({ "Step", "Song", "Sound", "Sample" }, 1); primary.setSelectedId (1, juce::dontSendNotification);
         secondary.addItemList ({ "Step", "Song", "Sound", "Sample" }, 1); secondary.setSelectedId (2, juce::dontSendNotification);
         primary.setTooltip ("Primary central editor"); secondary.setTooltip ("Secondary central editor / available in split layouts");
@@ -411,10 +615,24 @@ struct DrumsWorkspace::Impl {
         };
         mixerSize.addItemList ({ "Mixer closed", "Mixer compact", "Mixer expanded" }, 1); mixerSize.setSelectedId (2, juce::dontSendNotification);
         mixerSize.onChange = [&owner, this] { layout.mixer = static_cast<workspace::MixerSize> (mixerSize.getSelectedId() - 1); owner.setLayout (layout); };
-        song.onEditBar = [this] (int bar) { steps.editSongBar (bar); };
+        song.onEditBar = [&owner, this] (int bar) {
+            steps.editSongBar (bar);
+            if (followedSteps)
+            {
+                followedSteps = StepTarget { steps.slot(), 0, steps.bar(), steps.selectedLane(), steps.selectionFirst(), steps.selectionLast(), steps.songBar() };
+                owner.refreshInspector();
+            }
+        };
         song.onSelectionChanged = [this] { layoutGeneration = processor.layoutState().generation; };
-        steps.onSelectionChanged = [this] {
+        steps.onSelectionChanged = [&owner, this] {
             if (applyingLayout) return;
+            if (! selectingPad)
+            {
+                const juce::ScopedValueSetter<bool> sync (syncingStep, true);
+                owner.selectPad (steps.selectedLane());
+                followedSteps = StepTarget { steps.slot(), 0, steps.bar(), steps.selectedLane(), steps.selectionFirst(), steps.selectionLast(), steps.songBar() };
+                owner.refreshInspector();
+            }
             auto ui = processor.uiState();
             ui.pad = static_cast<std::uint8_t> (steps.selectedLane());
             ui.patternBar = static_cast<std::uint8_t> (steps.bar());
@@ -473,8 +691,9 @@ struct DrumsWorkspace::Impl {
     }
     Telemetry telemetry;
     bool listView = false, auditionRefused = false, applyingLayout = false;
-    bool committedListView = false, committedPin = false, unsupportedPin = false;
-    int committedPinPad = 0;
+    bool committedListView = false, unsupportedPin = false, selectingPad = false, syncingStep = false;
+    std::optional<StepTarget> followedSteps;
+    layout::Bytes pinPayload { 0 }, committedPinPayload { 0 };
     std::uint64_t layoutGeneration = 0;
     std::uint64_t layoutEpoch = 0;
     int selectedPlayer = 0;
@@ -516,9 +735,13 @@ const workspace::Selection& DrumsWorkspace::selection() const noexcept { return 
 const DrumsWorkspace::Telemetry& DrumsWorkspace::telemetry() const noexcept { return impl_->telemetry; }
 void DrumsWorkspace::selectPad (int pad)
 {
+    const juce::ScopedValueSetter<bool> selecting (impl_->selectingPad, true);
     if (! impl_->selection.selectPad (pad)) return;
-    impl_->steps.selectCell (pad, impl_->steps.selectedStep());
-    impl_->inspector.update (impl_->selection.inspectorPad(), impl_->selection.pinned());
+    if (impl_->steps.selectedLane() != pad
+        || (! impl_->syncingStep && (! impl_->applyingLayout || impl_->layoutEpoch != impl_->processor.patternEpoch())))
+        impl_->steps.selectCell (pad, impl_->steps.selectedStep());
+    if (! impl_->syncingStep && ! impl_->applyingLayout) impl_->followedSteps.reset();
+    refreshInspector();
     impl_->sound.setContext (pad, impl_->selectedPlayer);
     impl_->sample.setContext (pad, impl_->selectedPlayer);
     // Do not consume telemetry merely because selection changed.
@@ -536,10 +759,44 @@ void DrumsWorkspace::selectPad (int pad)
 }
 void DrumsWorkspace::pinInspector (bool pin)
 {
-    impl_->unsupportedPin = false; impl_->inspector.setEnabled (true);
-    impl_->selection.setPinned (pin); impl_->pin.setToggleState (pin, juce::dontSendNotification);
-    impl_->inspector.update (impl_->selection.inspectorPad(), pin);
+    auto& i = *impl_;
+    if (pin && ! i.selection.pinned())
+    {
+        int pad = i.inspector.padTarget();
+        if (i.inspector.showingSteps())
+        {
+            const auto target = i.inspector.stepTarget();
+            if (! target || target->song >= 0 || ! i.inspector.stepAvailable()) { refreshInspector(); return; }
+            const auto& t = *target;
+            pad = t.lane;
+            i.pinPayload = { 2, static_cast<layout::Byte> (t.slot), static_cast<layout::Byte> (t.variation), static_cast<layout::Byte> (t.bar),
+                             static_cast<layout::Byte> (t.lane), static_cast<layout::Byte> (t.first), static_cast<layout::Byte> (t.last) };
+        }
+        else i.pinPayload = { 1, static_cast<layout::Byte> (pad) };
+        const int selected = i.selection.pad();
+        i.selection.selectPad (pad); i.selection.setPinned (true); i.selection.selectPad (selected);
+    }
+    else if (! pin) { i.selection.setPinned (false); i.pinPayload = { 0 }; }
+    refreshInspector();
     commitLayout();
+}
+void DrumsWorkspace::refreshInspector()
+{
+    auto& i = *impl_;
+    i.inspector.setEnabled (true);
+    if (i.selection.pinned() && i.pinPayload[0] == 2)
+    {
+        const auto& p = i.pinPayload;
+        i.inspector.showSteps (StepTarget { p[1], p[2], p[3], p[4], p[5], p[6], -1 }, true);
+    }
+    else if (i.selection.pinned() && i.pinPayload[0] == 3) i.inspector.showSteps ({}, true);
+    else if (! i.selection.pinned() && i.followedSteps) i.inspector.showSteps (i.followedSteps, false);
+    else i.inspector.update (i.selection.inspectorPad(), i.selection.pinned());
+    i.unsupportedPin = i.inspector.showingSteps() && ! i.inspector.stepAvailable();
+    i.pin.setToggleState (i.selection.pinned(), juce::dontSendNotification);
+    i.pin.setEnabled (i.selection.pinned() || ! i.inspector.showingSteps()
+                     || (i.inspector.stepAvailable() && i.inspector.stepTarget() && i.inspector.stepTarget()->song < 0));
+    i.pin.setTooltip (i.selection.pinned() ? "Unpin Inspector" : i.inspector.showingSteps() ? "Pin these steps" : "Pin this pad");
 }
 void DrumsWorkspace::setListView (bool list)
 {
@@ -571,14 +828,17 @@ juce::Button& DrumsWorkspace::padSelectButton (int i) { return impl_->pads.at (s
 juce::Button& DrumsWorkspace::padHitButton (int i) { return impl_->pads.at (static_cast<std::size_t> (i))->hit; }
 juce::Slider* DrumsWorkspace::inspectorSlider (const juce::String& suffix)
 {
+    if (auto* slider = impl_->inspector.stepSlider (suffix)) return slider;
     for (std::size_t i = 0; i < impl_->inspector.knobs.size(); ++i)
         if (suffix == Inspector::names[i]) return &impl_->inspector.knobs[i].control->getSlider();
     return nullptr;
 }
 juce::Button* DrumsWorkspace::inspectorButton (const juce::String& suffix)
 {
+    if (auto* button = impl_->inspector.stepButton (suffix)) return button;
     if (suffix == "mute") return &impl_->inspector.mute;
     if (suffix == "solo") return &impl_->inspector.solo;
+    if (suffix == "openSound") return &impl_->inspector.openSound;
     return nullptr;
 }
 juce::ComboBox* DrumsWorkspace::inspectorCombo (const juce::String& name)
@@ -687,21 +947,25 @@ void DrumsWorkspace::readLayout()
     const auto& selected = bytes (layout::Type::selection);
     i.selection.setPinned (false);
     const auto& pin = bytes (layout::Type::inspectorPin);
+    i.pinPayload = pin;
+    if (i.layoutEpoch != i.processor.patternEpoch()) i.followedSteps.reset();
     if (pin[0] == 1) { i.selection.selectPad (pin[1]); i.selection.setPinned (true); }
-    i.unsupportedPin = pin[0] > 1;
-    if (i.unsupportedPin) i.selection.setPinned (true);
+    if (pin[0] == 2) { i.selection.selectPad (pin[4]); i.selection.setPinned (true); }
+    if (pin[0] == 3) i.selection.setPinned (true);
     selectPad (selected[0]);
-    i.steps.selectBar (selected[2]);
+    if (i.steps.bar() != selected[2] || i.layoutEpoch != i.processor.patternEpoch()) i.steps.selectBar (selected[2]);
     const auto& lanes = bytes (layout::Type::paramLanes);
     i.steps.setParameterLanes ({ lanes.begin() + 1, lanes.end() }, false);
     if (i.song.selectionStart() != selected[1] || i.layoutEpoch != i.processor.patternEpoch()) i.song.restoreSelection (selected[1]);
+    if (i.steps.songBar() != i.song.editedBar()) i.steps.editSongBar (i.song.editedBar());
+    if (i.followedSteps)
+        i.followedSteps = StepTarget { i.steps.slot(), 0, i.steps.bar(), i.steps.selectedLane(), i.steps.selectionFirst(), i.steps.selectionLast(), i.steps.songBar() };
     i.layoutEpoch = i.processor.patternEpoch();
     i.pin.setToggleState (pin[0] != 0, juce::dontSendNotification);
-    i.inspector.setEnabled (! i.unsupportedPin);
-    i.pin.setTooltip (i.unsupportedPin ? "Pinned object unavailable here; unpin to edit the current pad" : "Pin current pad");
+    refreshInspector();
     i.layoutGeneration = snapshot.generation;
     i.committedLayout = i.layout; i.committedListView = i.listView;
-    i.committedPin = i.selection.pinned(); i.committedPinPad = i.selection.inspectorPad();
+    i.committedPinPayload = i.pinPayload;
     const auto panel = [&i] (layout::Byte id) -> juce::Component* {
         switch (id)
         {
@@ -768,15 +1032,21 @@ void DrumsWorkspace::commitLayout()
     }
     const auto& a = i.layout; const auto& b = i.committedLayout;
     const bool reparent = a.rightTool != b.rightTool;
-    if (a.primary != b.primary || a.secondary != b.secondary || a.split != b.split || a.ratio != b.ratio || a.maximized != b.maximized)
+    if (a.primary != b.primary || a.secondary != b.secondary || a.split != b.split || a.ratio != b.ratio || a.maximized != b.maximized
+        || a.centralVisible != b.centralVisible)
     {
-        layout::Bytes central { static_cast<layout::Byte> (a.split == workspace::Split::single ? 1 : 2),
+        if (! a.centralVisible)
+            std::erase_if (document.records, [] (const auto& record) { return record.type == static_cast<layout::Byte> (layout::Type::central); });
+        else
+        {
+            layout::Bytes central { static_cast<layout::Byte> (a.split == workspace::Split::single ? 1 : 2),
                                 static_cast<layout::Byte> (a.split == workspace::Split::horizontal ? 1 : 0), 0, 0,
                                 static_cast<layout::Byte> (16 + static_cast<int> (a.primary)) };
-        layoutWord (central, 2, juce::roundToInt (a.ratio * 1000.0f));
-        if (a.split != workspace::Split::single) central.push_back (static_cast<layout::Byte> (16 + static_cast<int> (a.secondary)));
-        central.push_back (static_cast<layout::Byte> (a.maximized == 1 && a.split == workspace::Split::single ? 255 : a.maximized));
-        putLayoutRecord (document, layout::Type::central, std::move (central));
+            layoutWord (central, 2, juce::roundToInt (a.ratio * 1000.0f));
+            if (a.split != workspace::Split::single) central.push_back (static_cast<layout::Byte> (16 + static_cast<int> (a.secondary)));
+            central.push_back (static_cast<layout::Byte> (a.maximized == 1 && a.split == workspace::Split::single ? 255 : a.maximized));
+            putLayoutRecord (document, layout::Type::central, std::move (central));
+        }
     }
     if (a.mixer != b.mixer || a.compactHeight != b.compactHeight || a.expandedHeight != b.expandedHeight)
     {
@@ -785,19 +1055,14 @@ void DrumsWorkspace::commitLayout()
         putLayoutRecord (document, layout::Type::mixer, std::move (mixer));
     }
     if (i.listView != i.committedListView) putLayoutRecord (document, layout::Type::padRack, { static_cast<layout::Byte> (i.listView) });
-    if (! i.unsupportedPin && (i.selection.pinned() != i.committedPin || i.selection.inspectorPad() != i.committedPinPad))
-    {
-        layout::Bytes pin { static_cast<layout::Byte> (i.selection.pinned() ? 1 : 0) };
-        if (i.selection.pinned()) pin.push_back (static_cast<layout::Byte> (i.selection.inspectorPad()));
-        putLayoutRecord (document, layout::Type::inspectorPin, std::move (pin));
-    }
+    if (i.pinPayload != i.committedPinPayload) putLayoutRecord (document, layout::Type::inspectorPin, i.pinPayload);
     if (document == before) return;
     auto workspace = bytes (layout::Type::workspace); workspace[1] = 1;
     putLayoutRecord (document, layout::Type::workspace, std::move (workspace));
     if (! i.processor.commitLayout (std::move (document))) { readLayout(); return; }
     i.layoutGeneration = i.processor.layoutState().generation;
     i.committedLayout = i.layout; i.committedListView = i.listView;
-    i.committedPin = i.selection.pinned(); i.committedPinPad = i.selection.inspectorPad();
+    i.committedPinPayload = i.pinPayload;
     if (reparent) readLayout();
 }
 
@@ -1005,8 +1270,10 @@ void DrumsWorkspace::timerCallback()
     for (int ch = 0; ch < 2; ++ch) i.telemetry.main[static_cast<std::size_t> (ch)] = i.processor.takeMainMeter (ch);
     i.mainLeft.push (i.telemetry.main[0]); i.mainRight.push (i.telemetry.main[1]);
     i.steps.update(); i.song.update();
+    if (i.followedSteps)
+        i.followedSteps = StepTarget { i.steps.slot(), 0, i.steps.bar(), i.steps.selectedLane(), i.steps.selectionFirst(), i.steps.selectionLast(), i.steps.songBar() };
     if (i.steps.selectedLane() != i.selection.pad()) selectPad (i.steps.selectedLane());
-    i.inspector.update (i.selection.inspectorPad(), i.selection.pinned());
+    refreshInspector();
     i.sound.setContext (i.selection.pad(), i.selectedPlayer);
     i.sample.setContext (i.selection.pad(), i.selectedPlayer);
     for (auto& page : i.toolPages) if (page->isVisible() && page->getParentComponent()) page->update();

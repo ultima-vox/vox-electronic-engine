@@ -112,6 +112,7 @@ public:
         return patternHistory_;
     }
     std::uint64_t patternEpoch() const noexcept { return patternEpoch_.load(); }
+    bool restoringMusic() const noexcept { return restoringMusic_.load (std::memory_order_acquire); }
     // The host tempo of the last block (120 before any), for MIDI export.
     double lastBpm() const noexcept { return lastBpm_.load (std::memory_order_relaxed); }
     // Tests: the engine, to read what the last processBlock triggered
@@ -276,6 +277,7 @@ private:
     PatternHistory patternHistory_;
     std::uint64_t historyEpoch_ = 0;   // message thread: the epoch patternHistory_ belongs to
     std::atomic<std::uint64_t> patternEpoch_ { 0 };
+    std::atomic<bool> restoringMusic_ { false }; // Host/message state lifecycle, never read by DSP.
     std::atomic<double> lastBpm_ { 120.0 };
     PatternStore::Live livePattern_;   // audio thread
     PatternStore::SongLive liveSong_;  // audio thread

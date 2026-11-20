@@ -1078,6 +1078,7 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         for (auto& s : restore.sections) if (s.tag == layoutSectionTag) s = *prospective.find (layoutSectionTag);
     restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore, generatorRestore,
                      layoutRestore, rolesRestore] {
+        restoringMusic_.store (true, std::memory_order_release);
         setGenerator (*generatorRestore);
         storeRoles (*rolesRestore);
         store_.setAll (*kitRestore);
@@ -1106,6 +1107,7 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
     restore.settle = [this, shared, held] {
         for (std::size_t i = 0; i < shared->size(); ++i)
             restored_[i] = { (*shared)[i].second, (*held)[i] };
+        restoringMusic_.store (false, std::memory_order_release);
     };
     return restore;
 }

@@ -721,6 +721,256 @@ void testNativeMidiScopes()
         PatternEditor::setDragRootForTesting ({}); root.deleteRecursively();
     }
 }
+void testStepContextModel()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto a = std::make_unique<StoredPattern>(); a->bars = 1;
+    auto b = std::make_unique<StoredPattern> (*a); b->mask (2, 0) = 1;
+    for (int i : { 0, 1 }) { a->cell (2, 0, i).on = true; a->cell (2, 0, i).velocity = 10; }
+    for (int i : { 0, 1, 5, 6 }) { b->cell (2, 0, i).on = true; b->cell (2, 0, i).velocity = 90; }
+    check (a->valid() && b->valid(), "A/B fixtures obey actual active/reserved slot rules");
+    p->patterns().setSlot (1, *a); p->patterns().setAlternate (1, *b);
+    StepTarget target { 1, 1, 0, 2, 0, 1, -1 };
+    auto values = inspectSteps (*p, target);
+    check (values && values->cells.size() == 2 && values->cells[0].velocity == 90, "explicit step target resolves B without changing playback or A");
+    if (! values) return;
+    const auto before = p->patterns().encodeCurrent().data;
+    p->patternHistory().clear();
+    check (editSteps (*p, target, StepField::velocity, 42, *values), "scoped B range edits canonical cells");
+    values = inspectSteps (*p, target);
+    check (values && editSteps (*p, target, StepField::velocity, 73, *values, true)
+           && p->patternHistory().size() == 1, "one B range gesture amends one real history entry");
+    auto actualA = std::make_unique<StoredPattern>(), actualB = std::make_unique<StoredPattern>();
+    p->patterns().copySlot (1, *actualA); p->patterns().copyAlternate (1, *actualB);
+    auto expectedB = std::make_unique<StoredPattern> (*b); expectedB->cell (2, 0, 0).velocity = expectedB->cell (2, 0, 1).velocity = 73;
+    check (*actualA == *a && *actualB == *expectedB, "B range edit affects exactly its cells, leaves entire A and rest of B untouched");
+    const auto after = p->patterns().encodeCurrent().data;
+    p->patternHistory().undo (p->patterns()); check (p->patterns().encodeCurrent().data == before, "B range Undo restores full DSEQ byte-exactly");
+    p->patternHistory().redo (p->patterns()); check (p->patterns().encodeCurrent().data == after, "B range Redo restores full DSEQ byte-exactly");
+    target.first = 5; target.last = 6; values = inspectSteps (*p, target);
+    check (values && values->ticks[0] != values->ticks[1], "range fixture crosses alternative and straight beat subdivisions");
+    if (! values) return;
+    if (values)
+    {
+        check (editSteps (*p, target, StepField::micro, 25, *values), "scoped mixed-duration micro edit applies");
+        const auto edited = inspectSteps (*p, target);
+        check (edited && edited->cells[0].microTicks == kit::percentToTicks (25, values->ticks[0])
+               && edited->cells[1].microTicks == kit::percentToTicks (25, values->ticks[1]), "each selected cell uses its own canonical tick duration");
+    }
+    auto invalid = target; invalid.bar = 3;
+    const auto unchanged = p->patterns().encodeCurrent().data;
+    check (! inspectSteps (*p, invalid) && ! editSteps (*p, invalid, StepField::velocity, 99, *values)
+           && p->patterns().encodeCurrent().data == unchanged, "unavailable pinned bar is refused, never clamped to a different object");
+    values = inspectSteps (*p, target);
+    std::vector<std::byte> external;
+    p->patterns().beforeCommitForTesting = [&] {
+        p->patterns().beforeCommitForTesting = {};
+        auto changed = std::make_unique<StoredPattern>(); p->patterns().copySlot (0, *changed);
+        changed->cell (7, 0, 0).on = true; p->patterns().setSlot (0, *changed); external = p->patterns().encodeCurrent().data;
+    };
+    check (values && ! editSteps (*p, target, StepField::velocity, 33, *values)
+           && p->patterns().encodeCurrent().data == external, "conditional commit refuses an external write inserted immediately before the store lock");
+    juce::MemoryBlock saved; p->getStateInformation (saved);
+    values = inspectSteps (*p, target);
+    p->patterns().beforeCommitForTesting = [&] {
+        p->patterns().beforeCommitForTesting = {};
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    };
+    check (values && ! editSteps (*p, target, StepField::velocity, 44, *values)
+           && p->patterns().encodeCurrent().data == external && p->patternHistory().size() == 0,
+           "restore at the commit boundary wins without a stale edit or old-project Undo entry");
+    bool sawRestore = false;
+    p->patterns().beforeCommitForTesting = [&] {
+        sawRestore = p->restoringMusic() && ! inspectSteps (*p, target);
+    };
+    p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    p->patterns().beforeCommitForTesting = {};
+    check (sawRestore && ! p->restoringMusic(), "scoped Inspector cannot read partially applied musical restore");
+    p->patterns().setSlot (0, *a);
+    StepTarget songTarget { 0, 0, 0, 2, 0, 0, 0 };
+    auto songValues = inspectSteps (*p, songTarget);
+    check (songValues.has_value(), "Song step context resolves its actual linked source");
+    if (songValues)
+    {
+        const auto songBefore = p->patterns().song(); const auto sourceBefore = p->patterns().encodeCurrent().data;
+        p->patternHistory().clear();
+        check (! editSteps (*p, songTarget, StepField::velocity, songValues->cells[0].velocity, *songValues)
+               && p->patterns().song() == songBefore && p->patternHistory().size() == 0, "unchanged Song Inspector value never unlinks or creates history");
+        check (editSteps (*p, songTarget, StepField::velocity, 74, *songValues), "first actual Song Inspector edit commits");
+        const auto songAfter = p->patterns().song();
+        check (songAfter.bars[0].kind == SongBar::Kind::unique && p->patterns().encodeCurrent().data == sourceBefore,
+               "Song Inspector changes only its bar and preserves source DSEQ");
+        p->patternHistory().undo (p->patterns()); check (p->patterns().song() == songBefore, "Song Inspector Undo restores linkage and all Song data");
+        p->patternHistory().redo (p->patterns()); check (p->patterns().song() == songAfter, "Song Inspector Redo restores unique bar exactly");
+    }
+    for (int length : { 16, 32, 64 })
+    {
+        auto song = SongData::initial(); song.length = static_cast<std::uint8_t> (length); song.bars[static_cast<std::size_t> (length - 1)] = {};
+        p->patterns().setSong (song); songTarget.song = length - 1;
+        songValues = inspectSteps (*p, songTarget); p->patternHistory().clear();
+        check (songValues && editSteps (*p, songTarget, StepField::on, 1, *songValues), "16/32/64-bar Song Inspector can activate a cell in an empty last bar");
+        p->patternHistory().undo (p->patterns());
+        check (p->patterns().song() == song, "16/32/64-bar Song Inspector Undo restores the exact empty bar");
+        songTarget.song = length;
+        check (! inspectSteps (*p, songTarget), "Song context outside current length is unavailable, never redirected");
+    }
+}
+void testContextStepInspector()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto fixture = std::make_unique<StoredPattern>(); fixture->bars = 1;
+    fixture->cell (2, 0, 0).on = true; fixture->cell (2, 0, 0).velocity = 63;
+    fixture->cell (2, 0, 1).on = true; fixture->cell (2, 0, 1).velocity = 29;
+    fixture->cell (3, 0, 1).on = true; fixture->cell (3, 0, 1).velocity = 17;
+    p->patterns().setSlot (0, *fixture);
+    DrumsWorkspace ui (*p); ui.setSize (1280, 700);
+    ui.patternEditor().selectCell (2, 0); ui.pollForTesting();
+    auto* velocity = ui.inspectorSlider ("velocity");
+    check (velocity && velocity->isVisible(), "context Inspector follows the actual selected step");
+    if (! velocity) return;
+    check (juce::roundToInt (velocity->getValue()) == 63, "step Inspector reads canonical step velocity");
+    ui.pinInspector (true); ui.patternEditor().selectCell (3, 1); ui.pollForTesting();
+    check (juce::roundToInt (velocity->getValue()) == 63, "step pin freezes its object while grid selection changes");
+    check (layout::find (p->layoutState().document, layout::Type::inspectorPin)->payload == layout::Bytes { 2, 0, 0, 0, 2, 0, 0 },
+           "step pin persists the approved slot/variation/bar/lane/range address");
+    velocity->setValue (88, juce::sendNotificationSync);
+    auto expected = std::make_unique<StoredPattern> (*fixture); expected->cell (2, 0, 0).velocity = 88;
+    auto actual = std::make_unique<StoredPattern>(); p->patterns().copySlot (0, *actual);
+    check (*actual == *expected, "pinned step edit affects exactly its address, not the new grid selection");
+    ui.pinInspector (false); ui.pollForTesting();
+    check (juce::roundToInt (velocity->getValue()) == 17, "unpin follows the current grid step again");
+    ui.patternEditor().selectCell (2, 0); ui.patternEditor().selectCell (2, 1, true); ui.pollForTesting();
+    check (ui.patternEditor().selectionFirst() == 0 && ui.patternEditor().selectionLast() == 1
+           && velocity->getTextFromValue (velocity->getValue()) == "Mixed", "range selection exposes honest mixed values in the one context Inspector");
+    check (juce::exactlyEqual (velocity->getValueFromText ("Mixed"), velocity->getValue()), "unchanged Mixed placeholder never parses as a new numeric value");
+    ui.patternEditor().setParameterLanes ({ 1, 3 });
+    check (ui.patternEditor().selectionFirst() == 0 && ui.patternEditor().selectionLast() == 1,
+           "layout-only lane presentation commits preserve ephemeral step range selection");
+    const auto rangeBefore = p->patterns().encodeCurrent().data;
+    p->patternHistory().clear(); ui.pinInspector (true); ui.patternEditor().selectCell (3, 1); ui.pollForTesting();
+    check (layout::find (p->layoutState().document, layout::Type::inspectorPin)->payload == layout::Bytes { 2, 0, 0, 0, 2, 0, 1 },
+           "range pin persists its exact first/last address");
+    if (const auto* shots = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+    {
+        ui.setSize (1040, 600); ui.pollForTesting();
+        juce::Image image (juce::Image::ARGB, ui.getWidth(), ui.getHeight(), true);
+        { juce::Graphics graphics (image); ui.paintEntireComponent (graphics, false); }
+        juce::File folder { juce::String (shots) }; folder.createDirectory();
+        juce::FileOutputStream stream (folder.getChildFile ("inspector-step-range-pinned.png"));
+        check (stream.setPosition (0) && stream.truncate().wasOk() && juce::PNGImageFormat().writeImageToStream (image, stream),
+               "write actual native pinned-range Inspector snapshot");
+        ui.setSize (1280, 700);
+    }
+    velocity->setValue (55, juce::sendNotificationSync);
+    p->patterns().copySlot (0, *actual);
+    check (actual->cell (2, 0, 0).velocity == 55 && actual->cell (2, 0, 1).velocity == 55
+           && actual->cell (3, 0, 1).velocity == 17 && p->patternHistory().size() == 1,
+           "pinned numeric range edit changes exactly that range in one Undo entry");
+    p->patternHistory().undo (p->patterns()); ui.pollForTesting();
+    check (p->patterns().encodeCurrent().data == rangeBefore, "Inspector range Undo restores complete DSEQ bytes");
+    checkToolLayout (*velocity->getParentComponent()->getParentComponent());
+    const auto event = [velocity] (juce::Point<float> at, juce::Point<float> origin, bool down) {
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+            juce::ModifierKeys (down ? juce::ModifierKeys::leftButtonModifier : 0), 1.0f, 0, 0, 0, 0,
+            velocity, velocity, juce::Time::getCurrentTime(), origin, juce::Time::getCurrentTime(), 1, true);
+    };
+    const auto origin = velocity->getLocalBounds().getCentre().toFloat(), end = origin.translated (0, -45);
+    p->patternHistory().clear();
+    velocity->mouseDown (event (origin, origin, true)); velocity->mouseDrag (event (end, origin, true));
+    velocity->mouseUp (event (end, origin, false));
+    check (p->patternHistory().size() == 1, "real Inspector slider drag is one range Undo gesture");
+    p->patternHistory().undo (p->patterns()); ui.pollForTesting();
+    check (p->patterns().encodeCurrent().data == rangeBefore, "real Inspector drag Undo restores all musical bytes");
+    juce::MemoryBlock saved; p->getStateInformation (saved);
+    velocity->mouseDown (event (origin, origin, true));
+    p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize())); pump(); ui.pollForTesting();
+    juce::MemoryBlock restored; p->getStateInformation (restored);
+    velocity->mouseDrag (event (end, origin, true)); velocity->mouseDrag (event (end.translated (0, -15), origin, true));
+    velocity->mouseUp (event (end, origin, false));
+    juce::MemoryBlock afterRestore; p->getStateInformation (afterRestore);
+    check (afterRestore == restored && p->patternHistory().size() == 0, "restore cancels the entire remaining Inspector gesture without new-project writes/Undo");
+    ui.pinInspector (false); ui.patternEditor().selectCell (2, 0); ui.pollForTesting();
+    p->patterns().copySlot (0, *actual); actual->cell (2, 0, 0).velocity = 0;
+    check (actual->valid(), "zero velocity is an accepted canonical DSEQ boundary");
+    p->patterns().setSlot (0, *actual); const auto zero = p->patterns().encodeCurrent().data; ui.pollForTesting();
+    check (juce::exactlyEqual (velocity->getValue(), 0.0) && p->patterns().encodeCurrent().data == zero,
+           "Inspector displays a stored zero velocity without clamping or modifying music");
+    check (ui.patternEditor().inspector ("velocity") == nullptr && ui.patternEditor().accentToggle() == nullptr,
+           "native Step uses the single context Inspector; donor-only duplicate controls are unavailable");
+
+    auto alternate = std::make_unique<StoredPattern> (*fixture); alternate->cell (2, 0, 0).velocity = 97;
+    p->patterns().setAlternate (1, *alternate);
+    auto document = p->layoutState().document;
+    for (auto& record : document.records)
+        if (record.type == static_cast<layout::Byte> (layout::Type::inspectorPin)) record.payload = { 2, 1, 1, 0, 2, 0, 0 };
+    check (ui.applyWorkspace (document), "approved B step pin loads into native Inspector");
+    ui.pollForTesting();
+    check (juce::roundToInt (velocity->getValue()) == 97, "loaded B pin reads its actual alternate, never A");
+    juce::MemoryBlock pinnedB; p->getStateInformation (pinnedB);
+    auto q = std::make_unique<DrumsProcessor>(); q->setStateInformation (pinnedB.getData(), static_cast<int> (pinnedB.getSize()));
+    DrumsWorkspace reopened (*q); reopened.setSize (1040, 600); reopened.pollForTesting();
+    auto* reopenedVelocity = reopened.inspectorSlider ("velocity");
+    check (reopenedVelocity && juce::roundToInt (reopenedVelocity->getValue()) == 97, "new editor/project restores the exact B pin address");
+    const auto aBefore = q->patterns().slot (1);
+    if (reopenedVelocity) reopenedVelocity->setValue (48, juce::sendNotificationSync);
+    check (q->patterns().slot (1) == aBefore && q->patterns().alternate (1).cell (2, 0, 0).velocity == 48,
+           "restored B pin edits only B, without redirecting to canonical A");
+    for (auto& record : document.records)
+        if (record.type == static_cast<layout::Byte> (layout::Type::inspectorPin)) record.payload = { 2, 1, 1, 3, 2, 0, 0 };
+    check (ui.applyWorkspace (document), "structurally valid pin can reference a currently unavailable pattern bar");
+    ui.pollForTesting(); const auto unavailableBefore = p->patterns().encodeCurrent().data;
+    check (! velocity->isEnabled(), "unavailable pin disables numeric editing while retaining Unpin");
+    velocity->setValue (110, juce::sendNotificationSync);
+    check (p->patterns().encodeCurrent().data == unavailableBefore, "late numeric callback cannot edit an unavailable pin");
+    ui.pinInspector (false); ui.patternEditor().selectCell (2, 0); ui.pollForTesting();
+    auto& steps = ui.patternEditor();
+    const auto point = steps.cellBounds (2, 1).getCentre();
+    auto* grid = steps.getComponentAt (point);
+    check (grid && grid->getName() == "pattern grid", "range gesture reaches the actual native grid");
+    if (grid)
+    {
+        const auto local = grid->getLocalPoint (&steps, point).toFloat();
+        const auto beforeRange = p->patterns().encodeCurrent().data;
+        grid->mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), local,
+            juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier), 1.0f, 0, 0, 0, 0,
+            grid, grid, juce::Time::getCurrentTime(), local, juce::Time::getCurrentTime(), 1, false));
+        check (steps.selectionFirst() == 0 && steps.selectionLast() == 1 && p->patterns().encodeCurrent().data == beforeRange,
+               "real Shift-click selects a range without toggling music");
+    }
+}
+void testInspectorOpenSound()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    DrumsWorkspace ui (*p); ui.setSize (1040, 600); ui.selectPad (3); ui.pinInspector (true); ui.selectPad (7);
+    auto* open = ui.inspectorButton ("openSound");
+    check (open && open->isVisible(), "pad Inspector exposes Open Sound Editor");
+    if (! open) return;
+    checkToolLayout (*open->getParentComponent());
+    const auto before = p->patterns().encodeCurrent().data;
+    const auto history = p->patternHistory().size();
+    press (*open);
+    check (ui.layout().primary == workspace::Editor::sound && ui.selection().pad() == 3 && ui.selection().inspectorPad() == 3,
+           "Open Sound uses the pinned Inspector target rather than an unrelated selected pad");
+    check (p->patterns().encodeCurrent().data == before && p->patternHistory().size() == history,
+           "Open Sound changes only UI context, never musical data/Undo");
+    auto hidden = ui.layout(); hidden.centralVisible = false; ui.setLayout (hidden);
+    check (layout::find (p->layoutState().document, layout::Type::central) == nullptr,
+           "an explicit hidden-central layout commits the actual visibility");
+    press (*open);
+    juce::MemoryBlock saved; p->getStateInformation (saved);
+    const auto decoded = vox::preset::decode ({ static_cast<const std::byte*> (saved.getData()), saved.getSize() }, p->product().stateTag, 1);
+    check (ui.layout().centralVisible && decoded.ok() && decoded.document.find (layoutSectionTag),
+           "Open Sound restores a hidden central editor persistently");
+    auto q = std::make_unique<DrumsProcessor>(); q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    DrumsWorkspace reopened (*q);
+    check (reopened.layout().centralVisible && reopened.layout().primary == workspace::Editor::sound,
+           "Open Sound survives project save and a new editor instance");
+    p->prepareToPlay (48000, 128); block (*p);
+    check (p->takeHitMask() == 0, "Open Sound never auditions");
+}
 void testParameterLanes()
 {
     using namespace vox::drums;
@@ -841,7 +1091,9 @@ void testParameterLanes()
     p->patterns().copySlot (0, *result); result->cell (2, 0, 0).velocity = 127; p->patterns().setSlot (0, *result);
     const auto source = p->patterns().encodeCurrent().data;
     const auto songBefore = p->patterns().song();
-    steps.editSongBar (0); steps.selectCell (2, 0); steps.setParameterLanes ({ 0 });
+    ui.songEditor().select (0, 1);
+    ui.songEditor().button ("edit")->setToggleState (true, juce::dontSendNotification); press (*ui.songEditor().button ("edit"));
+    steps.selectCell (2, 0); steps.setParameterLanes ({ 0 });
     p->patternHistory().clear();
     const auto noop = point (0, 0, true);
     grid->mouseDown (event (noop, noop, true)); grid->mouseUp (event (noop, noop, false));
@@ -895,6 +1147,9 @@ int main()
     pump();
     testNativeMidiScopes();
     testParameterLanes();
+    testInspectorOpenSound();
+    testStepContextModel();
+    testContextStepInspector();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

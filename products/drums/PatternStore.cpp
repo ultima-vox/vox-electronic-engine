@@ -415,6 +415,20 @@ void PatternStore::setSlot (int index, const StoredPattern& pattern)
     generation_.store (g);
 }
 
+bool PatternStore::setSlotIfUnchanged (int index, bool alternate, const StoredPattern& pattern, std::uint64_t expected)
+{
+    if (index < 0 || index >= slotCount) return false;
+    if (const auto hook = beforeCommitForTesting) hook();
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    if (generation_.load() != expected) return false;
+    const auto at = static_cast<std::size_t> (index);
+    const auto g = expected + 1;
+    (alternate ? alternates_ : slots_)[at] = pattern;
+    (alternate ? alternateGeneration_ : slotGeneration_)[at] = g;
+    generation_.store (g);
+    return true;
+}
+
 void PatternStore::setAll (const std::array<StoredPattern, slotCount>& slots)
 {
     if (beforeCommitForTesting)
@@ -578,6 +592,14 @@ bool PatternHistory::amendLastSong (const SongData& after)
     if (undo_.empty() || ! redo_.empty() || ! undo_.back()->hasSong || undo_.back()->slot >= 0 || undo_.back()->allBefore != nullptr)
         return false;
     undo_.back()->songAfter = after;
+    return true;
+}
+
+bool PatternHistory::amendLastAlternate (int slot, const StoredPattern& after)
+{
+    if (undo_.empty() || ! redo_.empty() || undo_.back()->slot != slot || ! undo_.back()->alternate
+        || undo_.back()->hasSong || undo_.back()->allBefore != nullptr) return false;
+    undo_.back()->afterB = after;
     return true;
 }
 

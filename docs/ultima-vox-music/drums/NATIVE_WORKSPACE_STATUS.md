@@ -45,6 +45,19 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
   gestures. Song remains linked until its first real edit; source patterns stay exact.
   At minimum size/compact Mixer, commands fit without outer Step scrolling; only
   dense timeline content scrolls. Actual native 1040x600 snapshot inspected.
+- One context Inspector follows the selected step or Shift-click range, displays mixed
+  values honestly and edits Velocity/Chance/Ratchet/Micro/On/Accent/Lock through the
+  canonical pattern store and musical history. Native Step hides its duplicate donor
+  numeric controls; the donor fixture retains them. One drag is one Undo entry.
+  DLAY9 kind2 pins the exact slot/A-B/bar/pad/range, including restored B addresses;
+  unavailable addresses disable edits and retain Unpin. Selection and Pin do not alter
+  music. Each microtiming cell uses its own actual BarTiming duration.
+  Generation-conditional writes refuse stale snapshots under the existing store lock;
+  a restore fence prevents reads/edits of a partially applied project. Active gestures
+  retain their target and abandon subsequent writes after external edits/restore.
+  Pad/step Open Sound uses the Inspector's actual target and persistently reopens a
+  hidden central editor, without audition or musical Undo. No new DLAY pin kinds,
+  host parameters, DSP model or processBlock work.
 - Native Step MIDI has fixed Pattern scope; Song has a direct Entire Song save/drag
   handle for 16/32/64 bars. Both reuse the frozen exporter, existing MidiDragButton
   click/drag state machine and unique per-instance/per-drag files. The native root
@@ -150,12 +163,15 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
    Workspace > Reset layout acknowledges it. No user workspace file is changed.
    Save recovery and the snapshot share the non-RT state transaction, with no callbacks
    or I/O. A concurrent newer committed layout edit is never overwritten.
-2. Context-specific Inspector for steps/Song/sample remains unfinished. Pad follow/pin
-   works. Step/Song pins validate/preserve but currently show disabled/unavailable with
-   Unpin, instead of redirecting edits to another object.
+2. Pad and step/range Inspector follow/pin work, including explicit A/B pin addresses.
+   Song step numeric edits use the resolved bar and retain copy-on-first-real-edit,
+   source isolation and exact Undo/Redo. Song bar target/status Inspector, explicit
+   Edit Source Pattern navigation and sample context remain unfinished. Kind3 Song
+   pins still preserve their address and show unavailable with Unpin; Song step Pin
+   is disabled until that context exists, never persisted as a misleading pattern pin.
 3. SOUND_SECTIONS still needs collapsible-section presentation. Graphical PARAM_LANES
-   now exists and restores from DLAY; complete multi-step selection/context Inspector
-   remains in the preceding gate. Existing step/Sound controls remain canonical.
+   now exists and restores from DLAY; multi-step/range numeric editing is implemented.
+   Existing step/Sound controls remain canonical.
 4. Complete keyboard/focus/scroll and actual Windows VST3 peer/content-scale plus
    OS/host DPI 100/125/150/200% evidence. Raster snapshots are insufficient.
 5. The normal feature merge now includes StyleLibrary #153 at `83c616d429991d8b8da01bdd27d11002630b2103`,

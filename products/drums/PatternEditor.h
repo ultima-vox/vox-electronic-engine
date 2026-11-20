@@ -23,11 +23,30 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace vox::drums {
 
 class DrumsProcessor;
+
+// Explicit UI target, independent of playback and subsequent grid selection.
+// song >= 0 means the resolved cells of that one Song bar (bar must be 0).
+struct StepTarget {
+    int slot = 0, variation = 0, bar = 0, lane = 0, first = 0, last = 0, song = -1;
+    bool operator== (const StepTarget&) const = default;
+};
+enum class StepField { velocity, chance, ratchet, micro, accent, locked, on };
+int stepValue (StepField, const kit::PatternStep&, int cellTicks) noexcept; // micro in cell percent
+struct StepValues {
+    std::vector<kit::PatternStep> cells;
+    std::vector<int> ticks;
+    std::uint64_t epoch = 0, generation = 0;
+};
+std::optional<StepValues> inspectSteps (DrumsProcessor&, const StepTarget&);
+// Non-RT. Exact scope, canonical setters/Undo and generation-conditional commit;
+// false means unavailable/stale/no change, never a clamped different target.
+bool editSteps (DrumsProcessor&, const StepTarget&, StepField, double value, const StepValues& expected, bool amend = false);
 
 // The MIDI button: one press either clicks or drags, never both (issue 131,
 // H1). Release without moving more than dragThreshold pixels, over the
@@ -79,7 +98,9 @@ public:
     void selectBar (int bar);
     int selectedLane() const noexcept { return lane_; }
     int selectedStep() const noexcept { return step_; }
-    void selectCell (int lane, int step);
+    int selectionFirst() const noexcept { return selectionFirst_; }
+    int selectionLast() const noexcept { return selectionLast_; }
+    void selectCell (int lane, int step, bool extend = false);
     std::function<void()> onSelectionChanged;
     // DLAY PARAM_LANES: 0 Velocity, 1 Probability, 2 Ratchet, 3 Microtiming.
     // Donor stays unchanged until the native workspace explicitly opts in.
@@ -102,6 +123,7 @@ public:
     // state: Pattern or Entire Song), frozen; both write it with writeSnapshot.
     std::shared_ptr<const ExportSnapshot> snapshot() const;
     void useFixedPatternExportScope() noexcept { fixedPatternExport_ = true; }
+    void useContextInspector(); // Native owns one contextual Inspector; donor keeps its local controls.
     void saveExport (std::shared_ptr<const ExportSnapshot>);
     void dragExport (std::shared_ptr<const ExportSnapshot>, juce::Component& source);
     static bool writeSnapshot (const ExportSnapshot& snapshot, const juce::File& file);
@@ -147,9 +169,11 @@ private:
     std::uint64_t generation_ = 0, epoch_ = 0;
     int slot_ = -1, bar_ = 0, playStep_ = -1, playBar_ = -1, songBar_ = -1, shownSongBar_ = -1;
     int lane_ = 0, step_ = 0, lanePage_ = 0;
+    int selectionFirst_ = 0, selectionLast_ = 0, selectionAnchor_ = 0;
     bool refreshing_ = false, gesture_ = false;
     bool fixedPatternExport_ = false; // Native always opts in; donor fixture keeps its scope selector.
     bool parameterLanesEnabled_ = false;
+    bool contextInspector_ = false;
     std::vector<int> parameterLanes_;
     juce::String lastKey_, exportMessage_;
     void exported (bool ok, const juce::File& file);

@@ -66,6 +66,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void readLayout();
     void commitLayout();
+    void refreshInspector();
     void showWorkspaceMenu();
     void showDockMenu (layout::Type, unsigned, layout::Byte, juce::Component&);
     bool commitDockDocument (std::optional<layout::Document>);
