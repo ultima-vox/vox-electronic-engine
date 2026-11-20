@@ -9,6 +9,7 @@
 #include <memory>
 #include <limits>
 #include <span>
+#include <utility>
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -636,8 +637,17 @@ void checkPreparedDrag() {
     const auto handed=offered;
     check(offers==2&&picks==0&&fx->dragInProgress()&&!fx->preparedDragKind()&&!fx->fileExportStatus()&&save(*fx)==project,
           "one native offer takes the stage with no second worker, picker or serialized state");
-    panel.reset();if(ended){ended();ended={};}
-    check(!fx->dragInProgress()&&handed.existsAsFile(),"native completion after editor close leaves the handed-off file available");
+    panel.reset();const auto oldEnd=std::exchange(ended,{});if(oldEnd)oldEnd();
+    check(!fx->dragInProgress()&&fx->preparedDragKind()==Kind::midi&&handed.existsAsFile(),
+          "completion after editor close makes the original snapshot reusable");
+    panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    gesture(0,true);gesture(14);
+    check(offers==3&&offered==handed&&!fx->fileExportStatus()&&picks==0&&fx->dragInProgress(),
+          "re-drag uses the identical path without preparing or saving again");
+    if(oldEnd)oldEnd();
+    check(fx->dragInProgress()&&!fx->preparedDragKind(),"stale completion cannot release a newer drag of the same file");
+    if(ended){ended();ended={};}
+    check(fx->preparedDragKind()==Kind::midi,"current completion releases the active drag only");
 
     allow=false;
     panel=std::make_unique<FxPanel>(*fx,picker,drag);
@@ -652,7 +662,7 @@ void checkPreparedDrag() {
     gesture(0,true);gesture(12);
     const auto unused=offered;
     juce::MemoryBlock wavBytes;
-    check(offers==3&&unused.hasFileExtension("wav")&&unused.loadFileAsData(wavBytes)&&wavBytes.getSize()==expected.size()&&
+    check(offers==4&&unused.hasFileExtension("wav")&&unused.loadFileAsData(wavBytes)&&wavBytes.getSize()==expected.size()&&
           std::memcmp(wavBytes.getData(),expected.data(),expected.size())==0,"WAV drag bytes match the shared renderer");
     panel.reset();fx.reset();
     check(!unused.exists()&&!unused.getParentDirectory().exists()&&handed.existsAsFile(),

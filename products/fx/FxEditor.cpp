@@ -864,6 +864,11 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     dragGrip_.setTooltip("Drag a prepared WAV or MIDI snapshot. Copy imports into the DAW project; use Save for a lasting file path.");
     dragGrip_.begin=[this]{beginFileDrag();};
     addAndMakeVisible(dragGrip_);
+    dragWarning_.setText("Copy into project · Save for a lasting file",juce::dontSendNotification);
+    dragWarning_.setJustificationType(juce::Justification::centredRight);
+    dragWarning_.setFont(juce::FontOptions(12.0f));
+    dragWarning_.setTooltip("Dragged files live in OS temp and may be cleared. VOX FX keeps handed-off files even after canceled drops; copy them into the project before cleaning temp files.");
+    addAndMakeVisible(dragWarning_);
     refreshExportControls();
     addChildComponent(wavOptions_);
     wavExport_.onClick=[this]{if(processor_.fileExportStatus())processor_.cancelFileExport(fileexport::Kind::wav);else if(!exportChooserOpen_&&!processor_.dragInProgress()){wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
@@ -1099,6 +1104,7 @@ void FxPanel::resized()
     auto transfer=area.withTrimmedTop(30).removeFromTop(26);
     dragGrip_.setBounds(transfer.removeFromRight(152).reduced(2));
     prepareMidiDrag_.setBounds(transfer.removeFromRight(130).reduced(2));
+    dragWarning_.setBounds(transfer.removeFromRight(246).reduced(4,0));
     area.removeFromTop (80);
     output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));

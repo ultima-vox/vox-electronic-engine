@@ -104,7 +104,9 @@ public:
     const Kind kind;
     const juce::File file;
     bool offered=false; // message-thread only, or after ownership moved off it
-    std::atomic<bool> active{false}; // platform completion may be asynchronous
+    bool launching=false;          // guard synchronous native reentry
+    std::uint64_t sequence=0;      // message-thread only; zero is reserved
+    std::atomic<std::uint64_t> activeTicket{0}; // native completion may be asynchronous
 private:
     DragFile(Kind k,const juce::File& directory)
         : kind(k),file(directory.getChildFile(k==Kind::wav?"VOX FX.wav":"VOX FX Pattern.mid")),directory_(directory) {}

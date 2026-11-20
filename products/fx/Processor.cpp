@@ -319,25 +319,40 @@ bool FxProcessor::prepareMidiDrag(pattern::Pattern snapshot,double tempo) {
 }
 
 std::optional<fileexport::Kind> FxProcessor::preparedDragKind() const noexcept {
-    if(!onFileControllerThread()||!preparedDrag_||preparedDrag_->offered)return {};
+    if(!onFileControllerThread()||!preparedDrag_||dragInProgress())return {};
     return preparedDrag_->kind;
 }
 
 bool FxProcessor::dragInProgress() const noexcept {
-    return onFileControllerThread()&&preparedDrag_&&preparedDrag_->active.load(std::memory_order_acquire);
+    return onFileControllerThread()&&preparedDrag_&&
+           (preparedDrag_->launching||preparedDrag_->activeTicket.load(std::memory_order_acquire)!=0);
 }
 
 bool FxProcessor::offerPreparedDrag(const DragLauncher& launch) {
     if(!onFileControllerThread()||fileExportJob_||!preparedDragKind()||!launch)return false;
     const auto payload=preparedDrag_;
-    payload->offered=true; // before launch: nested dispatch cannot offer it twice
-    payload->active.store(true,std::memory_order_release);
+    if(++payload->sequence==0)++payload->sequence;
+    const auto ticket=payload->sequence;
+    const bool previouslyOffered=payload->offered;
+    payload->offered=true;
+    payload->launching=true;
+    payload->activeTicket.store(ticket,std::memory_order_release);
+    const auto finish=[payload,ticket]{
+        auto expected=ticket;
+        (void)payload->activeTicket.compare_exchange_strong(expected,0,std::memory_order_acq_rel);
+    };
     bool started=false;
-    try { started=launch(payload->file,[payload]{payload->active.store(false,std::memory_order_release);}); }
-    catch(...) {}
-    // No callback owns the processor/editor. A successful native start does
-    // not tell us whether the drop was accepted or the file was copied.
-    if(!started){payload->offered=false;payload->active.store(false,std::memory_order_release);}
+    try {
+        started=launch(payload->file,finish);
+        if(!started)payload->offered=previouslyOffered;
+    } catch(...) {
+        // If native launch threw after inspecting the path, keep it rather
+        // than guessing whether a receiver has already observed it.
+    }
+    payload->launching=false;
+    if(!started)finish();
+    // Keep the prepared snapshot after drag-end. A user retry does not create
+    // another file, and late/duplicate callbacks cannot release a newer drag.
     return started;
 }
 

@@ -310,6 +310,7 @@ private:
     vox::ui::VoxButton wavExport_ { "WAV" };
     juce::TextButton prepareMidiDrag_{"Prepare MIDI drag"};
     DragFileGrip dragGrip_{"No drag file"};
+    juce::Label dragWarning_;
     bool dragFailed_=false;
     WavOptionsPanel wavOptions_;
     juce::TextButton sampleImport_ { "Import" },sampleBuiltin_ { "Built-in" };
