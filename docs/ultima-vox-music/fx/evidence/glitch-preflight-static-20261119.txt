@@ -1,0 +1,3 @@
+Linux static extraction only; no PowerShell parser/runtime, dummy fixtures, or real Windows bundles.
+Checkout 9eaebf68aee23f5bfe11a75f65ffeeffa9302a09; 16 PowerShell run blocks extracted, not executed
+SuiteIdentity.cmake matches workflow bundle names: VOX Trance Synthesis, VOX Drums, VOX FX
