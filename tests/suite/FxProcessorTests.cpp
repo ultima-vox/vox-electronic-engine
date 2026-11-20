@@ -361,6 +361,42 @@ void checkGranularPreviewPressure(double rate) {
     fx.reset();reference.reset();dir.deleteRecursively();
 }
 
+void checkMotionHistoryBoundaries() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    auto motion=std::make_unique<MotionPanel>(*fx);
+    // Distinct binary-exact clock rates make each expected transition explicit.
+    const auto rate=[](int i){return .5f+static_cast<float>(i)*.125f;};
+    for(int i=1;i<=35;++i){
+        motion->lfoRate(0).setValue(rate(i),juce::dontSendNotification);
+        motion->applyClocksButton().onClick();
+        check(fx->macroConfig().lfos[0].rate==rate(i),"each clock commit publishes exactly once");
+    }
+    for(int i=34;i>=3;--i){
+        check(motion->undoButton().isEnabled(),"each retained entry can be undone");
+        motion->undoButton().onClick();
+        check(fx->macroConfig().lfos[0].rate==rate(i),"Motion history unwinds in committed order");
+    }
+    check(!motion->undoButton().isEnabled(),"Motion rollover discards exactly the three oldest entries");
+    for(int i=4;i<=35;++i){
+        check(motion->redoButton().isEnabled(),"each reverted clock can be redone");
+        motion->redoButton().onClick();
+        check(fx->macroConfig().lfos[0].rate==rate(i),"Motion redo restores the exact clock sequence");
+    }
+    check(!motion->redoButton().isEnabled(),"Motion redo stops at the most recent edit");
+    const auto clock=fx->macroConfig();
+    auto pattern=fx->patternSnapshot();pattern.steps[0]={true,64,95,67,2};
+    check(fx->setPattern(pattern),"prepare project with a different Pattern and the same Motion");
+    const auto restored=save(*fx);
+    pattern.steps[0].enabled=false;
+    check(fx->setPattern(pattern),"change only Pattern before host restore");
+    check(motion->undoButton().isEnabled(),"Motion has undo when a non-Motion project is restored");
+    fx->setStateInformation(restored.getData(),static_cast<int>(restored.getSize()));
+    motion->undoButton().onClick();
+    check(!motion->undoButton().isEnabled()&&!motion->redoButton().isEnabled()&&
+          fx->macroConfig()==clock&&save(*fx)==restored,"non-Motion project restore invalidates old undo atomically");
+}
+
 void checkPatternClipboardRestore() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();
@@ -886,6 +922,7 @@ int main() {
     phase("in-place bounce effect history and audition priority");checkInPlaceBounceHistory();checkAuditionAtCapacity();
     phase("External granular preview under repeated MIDI and Pattern pressure");
     for(double rate:{44100.,48000.,96000.})checkGranularPreviewPressure(rate);
+    phase("Motion history rollover and non-Motion host restore");checkMotionHistoryBoundaries();
     phase("Pattern clipboard during restore and editor recreation");checkPatternClipboardRestore();
     phase("timeline viewport keyboard and selection");checkTimelineViewport();
     phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
@@ -938,6 +975,15 @@ int main() {
         motion.undoButton().onClick();
         check(owner->macroConfig()==routed,"event shape undo preserves the underlying route");
         motion.redoButton().onClick();check(owner->macroConfig()==authoredMotion,"event shape redo restores all ADSR and step values");
+        motion.lfoRate(1).setValue(2.125,juce::dontSendNotification);motion.applyClocksButton().onClick();
+        const auto mixed=owner->macroConfig();
+        motion.undoButton().onClick();motion.undoButton().onClick();
+        check(owner->macroConfig()==routed,"mixed undo restores shape and clock in reverse order");
+        motion.redoButton().onClick();
+        check(owner->macroConfig()==authoredMotion,"mixed redo restores shape before clock");
+        motion.redoButton().onClick();
+        check(owner->macroConfig()==mixed&&mixed.lfos[1].rate==2.125f,"mixed redo restores the clock without losing shape");
+        motion.undoButton().onClick();
         const auto shaped=save(*owner);owner->setStateInformation(shaped.getData(),static_cast<int>(shaped.getSize()));
         motion.stepLevel(3).setValue(99,juce::dontSendNotification);motion.applyShapeButton().onClick();
         check(owner->macroConfig()==authoredMotion,"stale step/ADSR draft rejected after host restore");
