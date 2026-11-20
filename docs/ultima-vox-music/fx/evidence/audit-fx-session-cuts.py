@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify the B80 export against the pinned A120+B56 baseline; emit metadata only.
+"""Verify a Wave B export against a pinned baseline; emit metadata only.
 
-Usage: audit-fx-session-cuts.py <B80-export> <new-metadata-directory>
+Usage: audit-fx-session-cuts.py <export-root> <new-metadata-directory> [--edit-points]
 The output is never an audio archive. Requires NumPy 2.2.6.
 """
 import argparse
@@ -27,37 +27,57 @@ def read_tsv(path):
         return list(csv.DictReader(f, delimiter='\t'))
 
 
-def audit(root, output):
-    baseline = read_tsv(HERE / 'fx-review-176-working-matrix.tsv')
+def audit(root, output, edit_points=False):
+    baseline_count, old_b, new_b = (200, 80, 112) if edit_points else (176, 56, 80)
+    old_prefix = 'wave-b-eighty' if edit_points else 'wave-b-fiftysix'
+    new_prefix = 'wave-b-onehundredtwelve' if edit_points else 'wave-b-eighty'
+    baseline_path = HERE / f'fx-review-{baseline_count}-working-matrix.tsv'
+    baseline = read_tsv(baseline_path)
     prior_b = {row['id'] for row in baseline if row['wave'] == 'B'}
     ids = {row['id'] for row in baseline}
     fingerprints = {row['raw-wav-sha256'] for row in baseline}
-    if len(ids) != 176 or len(baseline) != 176 or len(prior_b) != 56 or len(fingerprints) != 176:
+    if (len(ids) != baseline_count or len(baseline) != baseline_count or
+            len(prior_b) != old_b or len(fingerprints) != baseline_count):
         raise ValueError('wrong baseline scope')
 
-    old_members = 0
+    checked = set()
     for line in (HERE / 'fx-review-176-members.sha256').read_text().splitlines():
         sha, name = line.split('  ', 1)
-        if name.startswith('Wave-B/'):
+        if name.startswith(('Wave-B/solo/', 'Wave-B/presets/', 'Wave-B/sources/')):
             relative = name.removeprefix('Wave-B/')
-            if relative.startswith(('solo/', 'presets/', 'sources/')):
-                if digest(root / relative) != sha:
-                    raise ValueError(f'pinned Wave B member changed: {relative}')
-                old_members += 1
-    if old_members != 114:
+            if relative in checked or digest(root / relative) != sha:
+                raise ValueError(f'pinned Wave B member changed: {relative}')
+            checked.add(relative)
+    if edit_points:
+        pinned_metadata = set()
+        for line in (HERE / 'wave-b-eighty-members.sha256').read_text().splitlines():
+            sha, name = line.split('  ', 1)
+            if name.startswith(('solo/', 'presets/')):
+                if name in checked or digest(root / name) != sha:
+                    raise ValueError(f'pinned Session Cuts member changed: {name}')
+                checked.add(name)
+            elif name in {baseline_path.name, *(f'{old_prefix}-{name}.tsv' for name in ('manifest', 'metrics', 'settings'))}:
+                if name in pinned_metadata or digest(HERE / name) != sha:
+                    raise ValueError(f'pinned Session Cuts metadata changed: {name}')
+                pinned_metadata.add(name)
+            else:
+                raise ValueError(f'unexpected Session Cuts pin: {name}')
+        if len(pinned_metadata) != 4:
+            raise ValueError('missing Session Cuts metadata pins')
+    if len(checked) != 2 * old_b + 2:
         raise ValueError('missing pinned Wave B members')
 
     manifest = read_tsv(root / 'manifest.tsv')
     rates = read_tsv(root / 'metrics.tsv')
     settings = read_tsv(root / 'settings.tsv')
     for name in ('manifest', 'metrics', 'settings'):
-        original = (HERE / f'wave-b-fiftysix-{name}.tsv').read_bytes()
+        original = (HERE / f'{old_prefix}-{name}.tsv').read_bytes()
         if not (root / f'{name}.tsv').read_bytes().startswith(original):
-            raise ValueError(f'pinned B56 {name} prefix changed')
+            raise ValueError(f'pinned B{old_b} {name} prefix changed')
     b_ids = {row['id'] for row in manifest}
-    if (len(manifest) != 80 or len(b_ids) != 80 or b_ids & ids != prior_b or
+    if (len(manifest) != new_b or len(b_ids) != new_b or b_ids & ids != prior_b or
             [row['id'] for row in settings] != [row['id'] for row in manifest] or
-            len(rates) != 240 or {(row['id'], row['rate']) for row in rates} !=
+            len(rates) != new_b * 3 or {(row['id'], row['rate']) for row in rates} !=
             {(id_, rate) for id_ in b_ids for rate in ('44100', '48000', '96000')}):
         raise ValueError('incomplete Wave B export')
     # The exporter checks decoded PCM metrics as well as Program structural
@@ -70,11 +90,11 @@ def audit(root, output):
     tools = runpy.run_path(str(HERE / 'measure-wave-b-signals.py'))
     load, active_rms = tools['common']['load'], tools['rms_active']
     added, pins = [], {}
-    for cue in manifest[56:]:
+    for cue in manifest[old_b:]:
         id_ = cue['id']
         if (id_ in ids or not re.fullmatch(r'voxfx\.[a-z0-9-]+\.[a-z0-9-]+', id_) or
                 cue['status'] != 'staged-review-only' or cue['source'] != 'built-in'):
-            raise ValueError(f'invalid Session Cuts row: {id_}')
+            raise ValueError(f'invalid new Wave B row: {id_}')
         ids.add(id_)
         wav, preset = f'solo/{id_}.wav', f'presets/{id_}.voxfx'
         sha = digest(root / wav)
@@ -98,28 +118,30 @@ def audit(root, output):
                     'review-status': 'not reviewed'})
         added.append(row)
     roles = collections.Counter(row['role'] for row in added)
-    if len(added) != 24 or len(roles) != 8 or set(roles.values()) != {3} or len({row['mode'] for row in added}) != 6:
-        raise ValueError('unexpected Session Cuts role/mode coverage')
+    if (len(added) != new_b - old_b or len(roles) != 8 or set(roles.values()) != {(new_b - old_b) // 8} or
+            len({row['mode'] for row in added}) != 6):
+        raise ValueError('unexpected Wave B role/mode coverage')
 
     # Write no report until all pinned inputs and new identities are verified.
     output.mkdir(parents=True, exist_ok=False)
     for name in ('manifest', 'settings', 'metrics'):
-        target = output / f'wave-b-eighty-{name}.tsv'
+        target = output / f'{new_prefix}-{name}.tsv'
         target.write_bytes((root / f'{name}.tsv').read_bytes())
         pins[target.name] = digest(target)
-    matrix = output / 'fx-review-200-working-matrix.tsv'
+    matrix = output / f'fx-review-{baseline_count + len(added)}-working-matrix.tsv'
     # Preserve the old serialized rows, including all existing reviewer fields.
-    matrix.write_bytes((HERE / 'fx-review-176-working-matrix.tsv').read_bytes())
+    matrix.write_bytes(baseline_path.read_bytes())
     with matrix.open('a', newline='', encoding='utf-8') as f:
         csv.DictWriter(f, fieldnames=list(baseline[0]), delimiter='\t', lineterminator='\n').writerows(added)
     pins[matrix.name] = digest(matrix)
-    (output / 'wave-b-eighty-members.sha256').write_text(''.join(f'{sha}  {name}\n' for name, sha in sorted(pins.items())))
-    print(f'{old_members} prior B files unchanged; {len(added)} new cues, {len(ids)} total; no audio copied')
+    (output / f'{new_prefix}-members.sha256').write_text(''.join(f'{sha}  {name}\n' for name, sha in sorted(pins.items())))
+    print(f'{len(checked)} prior B files unchanged; {len(added)} new cues, {len(ids)} total; no audio copied')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('export', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--edit-points', action='store_true')
     args = parser.parse_args()
-    audit(args.export, args.output)
+    audit(args.export, args.output, args.edit_points)
