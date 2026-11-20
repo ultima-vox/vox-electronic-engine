@@ -15,7 +15,14 @@ jobs:
   choose-windows-runner:
     # The lightweight selector executes on GitHub-hosted Linux only when the
     # existing Windows job eligibility is satisfied.
-    if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        !(github.event.pull_request.draft &&
+          (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
+            (github.event.pull_request.base.ref == 'next/fx-development' &&
+              startsWith(github.head_ref, 'arena/'))))
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     permissions:
@@ -68,7 +75,14 @@ jobs:
     needs: choose-windows-runner
     # FX draft PR — heavy Windows gate is manual until the integrated candidate.
     # All other PRs and main continue to build as before.
-    if: ${{ github.event_name != 'pull_request' || !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine') }}
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        !(github.event.pull_request.draft &&
+          (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
+            (github.event.pull_request.base.ref == 'next/fx-development' &&
+              startsWith(github.head_ref, 'arena/'))))
+      }}
     runs-on: ${{ fromJSON(needs.choose-windows-runner.outputs.runner) }}
     env:
       CMAKE_GENERATOR: Visual Studio 17 2022
