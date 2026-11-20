@@ -171,7 +171,8 @@ WavOptionsPanel::WavOptionsPanel() {
     velocity_.setTooltip("MIDI velocity; Sequence uses its own pattern velocities");
     close_.onClick=[this]{setVisible(false);};
     save_.onClick=[this]{setVisible(false);if(onSave)onSave(settings());};
-    addAndMakeVisible(close_); addAndMakeVisible(save_);
+    prepare_.onClick=[this]{setVisible(false);if(onPrepareDrag)onPrepareDrag(settings());};
+    addAndMakeVisible(close_); addAndMakeVisible(save_); addAndMakeVisible(prepare_);
 }
 offline::Settings WavOptionsPanel::settings() const {
     offline::Settings result;
@@ -194,7 +195,7 @@ void WavOptionsPanel::resized() {
     auto area=getLocalBounds().reduced(14); area.removeFromTop(48);
     std::array<juce::Component*,4> controls {&rate_, &format_, &note_, &velocity_};
     for(std::size_t i=0;i<controls.size();++i){auto row=area.removeFromTop(29);labels_[i].setBounds(row.removeFromLeft(143));controls[i]->setBounds(row.reduced(2));}
-    auto footer=area.removeFromBottom(30); save_.setBounds(footer.removeFromRight(130).reduced(2));close_.setBounds(footer.removeFromRight(80).reduced(2));
+    auto footer=area.removeFromBottom(30); save_.setBounds(footer.removeFromRight(130).reduced(2));prepare_.setBounds(footer.removeFromRight(130).reduced(2));close_.setBounds(footer.removeFromRight(80).reduced(2));
 }
 namespace {
 constexpr const char* motionSources[]{"LFO 1","LFO 2","Event step","Sample & hold","Event ADSR","Event phase","Velocity","Dry signal follower","Macro 1","Macro 2","Macro 3","Macro 4","Macro 5","Macro 6","Macro 7","Macro 8"};
@@ -742,8 +743,8 @@ void FxPanel::patternCommand(int id){
         refreshPattern();
     }
 }
-FxPanel::FxPanel (FxProcessor& processor,SavePicker picker)
-    : processor_ (processor),savePicker_(std::move(picker)), attachment_ (processor.outputParameter(), output_.getSlider()),
+FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
+    : processor_ (processor),savePicker_(std::move(picker)),externalDrag_(std::move(drag)), attachment_ (processor.outputParameter(), output_.getSlider()),
       durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor)
 {
     addAndMakeVisible (output_);
@@ -854,8 +855,18 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker)
     wavExport_.setTitle("Export WAV");
     wavExport_.setTooltip("Choose stereo WAV options; click during rendering to cancel");
     wavOptions_.onSave=[this](offline::Settings settings){exportWav(settings);};
+    wavOptions_.onPrepareDrag=[this](offline::Settings settings){exportWav(settings,true);};
+    prepareMidiDrag_.setTooltip("Prepare a fixed-tempo MIDI snapshot, then drag it from the adjacent handle; Save remains separate.");
+    prepareMidiDrag_.onClick=[this]{exportPattern(true);};
+    addAndMakeVisible(prepareMidiDrag_);
+    dragGrip_.setTitle("Prepared file drag handle");
+    dragGrip_.setWantsKeyboardFocus(false);
+    dragGrip_.setTooltip("Drag a prepared WAV or MIDI snapshot. Copy imports into the DAW project; use Save for a lasting file path.");
+    dragGrip_.begin=[this]{beginFileDrag();};
+    addAndMakeVisible(dragGrip_);
+    refreshExportControls();
     addChildComponent(wavOptions_);
-    wavExport_.onClick=[this]{if(processor_.fileExportStatus())processor_.cancelFileExport(fileexport::Kind::wav);else if(!exportChooserOpen_){wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
+    wavExport_.onClick=[this]{if(processor_.fileExportStatus())processor_.cancelFileExport(fileexport::Kind::wav);else if(!exportChooserOpen_&&!processor_.dragInProgress()){wavOptions_.setVisible(true);wavOptions_.toFront(true);}};
     addAndMakeVisible(wavExport_);
     audition_.setTooltip ("Trigger a finite audition of the current voice. Bar programs require the host bar clock.");
     stopAudition_.setTitle("Stop audition");stopAudition_.setTooltip("Fade audition voices and stop preset preview without stopping MIDI or Pattern voices");
@@ -1085,6 +1096,9 @@ void FxPanel::resized()
     sourceButton_.setBounds(actions.removeFromRight(130).reduced(2));
     presets_.setBounds(actions.removeFromRight(141).reduced(2));
     motionButton_.setBounds(actions.removeFromRight(90).reduced(2));
+    auto transfer=area.withTrimmedTop(30).removeFromTop(26);
+    dragGrip_.setBounds(transfer.removeFromRight(152).reduced(2));
+    prepareMidiDrag_.setBounds(transfer.removeFromRight(130).reduced(2));
     area.removeFromTop (80);
     output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
     duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));
@@ -1219,7 +1233,7 @@ void FxPanel::importSample()
 }
 void FxPanel::chooseExportFile(fileexport::Kind kind,SaveResult accept)
 {
-    if(exportChooserOpen_||processor_.fileExportStatus())return;
+    if(exportChooserOpen_||processor_.fileExportStatus()||processor_.dragInProgress())return;
     const bool wav=kind==fileexport::Kind::wav;
     const auto format=juce::String(wav?"WAV":"MIDI");
     const auto extension=juce::String(wav?"wav":"mid");
@@ -1258,9 +1272,9 @@ void FxPanel::chooseExportFile(fileexport::Kind kind,SaveResult accept)
         }
     }
 }
-void FxPanel::exportPattern()
+void FxPanel::exportPattern(bool drag)
 {
-    if(exportChooserOpen_||processor_.fileExportStatus())return;
+    if(exportChooserOpen_||processor_.fileExportStatus()||processor_.dragInProgress())return;
     // Capture before opening the chooser; later edits do not change the file.
     const auto pattern=processor_.patternSnapshot();
     const auto bpm=processor_.observedTempo();
@@ -1268,14 +1282,19 @@ void FxPanel::exportPattern()
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "MIDI export failed","The captured host tempo is outside the supported MIDI export range (10–1000 BPM).");return;
     }
+    if(drag){
+        if(!processor_.prepareMidiDrag(pattern,bpm))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"MIDI drag preparation failed","Could not start the file worker.");
+        dragFailed_=false;refreshExportControls();return;
+    }
     chooseExportFile(fileexport::Kind::midi,[this,pattern,bpm](juce::File target){
         if(!processor_.startMidiExport(pattern,bpm,std::move(target)))
             juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"MIDI export failed","Could not start the file worker.");
     });
 }
-void FxPanel::exportWav(offline::Settings settings)
+void FxPanel::exportWav(offline::Settings settings,bool drag)
 {
-    if(exportChooserOpen_||processor_.fileExportStatus())return;
+    if(exportChooserOpen_||processor_.fileExportStatus()||processor_.dragInProgress())return;
     // Capture a self-contained value while the processor is alive. The worker
     // never references the processor or editor and cannot touch the callback.
     std::shared_ptr<offline::Capture> capture;
@@ -1299,11 +1318,32 @@ void FxPanel::exportWav(offline::Settings settings)
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","The selected granular sample is unavailable. Reimport it or choose the built-in source.");return;
     }
+    if(drag){
+        if(!processor_.prepareWavDrag(std::move(*capture)))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"WAV drag preparation failed","Could not start the render worker.");
+        dragFailed_=false;refreshExportControls();return;
+    }
     chooseExportFile(fileexport::Kind::wav,[this,capture](juce::File target){
         if(!processor_.startWavExport(std::move(*capture),std::move(target)))
             juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                 "WAV export failed","Could not start the render worker.");
     });
+}
+void FxPanel::beginFileDrag()
+{
+    if(exportChooserOpen_||processor_.fileExportStatus()||!processor_.preparedDragKind())return;
+    const auto safe=juce::Component::SafePointer<FxPanel>(this);
+    // Copy the test launcher before entering any native/nested dispatch. Only
+    // the processor's value lease survives the callback, not this component.
+    const auto launch=externalDrag_;
+    const bool started=processor_.offerPreparedDrag([safe,launch](const juce::File& file,std::function<void()> done){
+        if(safe==nullptr)return false;
+        if(launch)return launch(file,safe->dragGrip_,std::move(done));
+        if(safe->dragGrip_.getPeer()==nullptr)return false;
+        return juce::DragAndDropContainer::performExternalDragDropOfFiles({file.getFullPathName()},false,
+                                                                         &safe->dragGrip_,std::move(done));
+    });
+    if(safe!=nullptr){safe->dragFailed_=!started;safe->refreshExportControls();}
 }
 void FxPanel::refreshPattern()
 {
@@ -1368,8 +1408,15 @@ void FxPanel::refreshExportControls()
     using Kind=fileexport::Kind;
     const auto status=processor_.fileExportStatus();
     const bool wavBusy=status&&status->kind==Kind::wav, midiBusy=status&&status->kind==Kind::midi;
-    midiExport_.setEnabled(!exportChooserOpen_&&!wavBusy);
-    wavExport_.setEnabled(!exportChooserOpen_&&!midiBusy);
+    const auto ready=processor_.preparedDragKind();
+    const bool active=processor_.dragInProgress();
+    midiExport_.setEnabled(!exportChooserOpen_&&!wavBusy&&!active);
+    wavExport_.setEnabled(!exportChooserOpen_&&!midiBusy&&!active);
+    prepareMidiDrag_.setEnabled(!exportChooserOpen_&&!status&&!active);
+    dragGrip_.setEnabled(!exportChooserOpen_&&!status&&ready&&!active);
+    const auto dragLabel=active?"Dragging…":ready?(dragFailed_?"Drag failed · retry":*ready==Kind::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
+        (status&&status->purpose==fileexport::Purpose::drag?"Preparing drag…":"No drag file");
+    if(dragGrip_.getButtonText()!=dragLabel)dragGrip_.setButtonText(dragLabel);
     if(status){
         const auto label=status->committing?juce::String("Saving…"):status->cancelling?juce::String("Cancelling…"):
             wavBusy?juce::String(static_cast<int>(status->progress*100))+"%":juce::String("Cancel");
@@ -1385,7 +1432,10 @@ void FxPanel::timerCallback()
         const bool ok=done->result==fileexport::Result::success;
         const bool wav=done->kind==Kind::wav;
         const juce::String format=wav?"WAV":"MIDI";
-        juce::AlertWindow::showMessageBoxAsync(ok?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+        if(done->purpose==fileexport::Purpose::drag){
+            if(!ok)juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                format+" drag preparation failed","Could not write a temporary export file. Save to a different location instead.");
+        } else juce::AlertWindow::showMessageBoxAsync(ok?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
             format+(ok?" exported":" export failed"),ok?(wav?"The captured audio was exported.":"The captured trigger pattern and tempo were exported."):
             "Could not render or write the selected file.");
     }

@@ -65,12 +65,12 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     offline::Settings settings() const;
-    std::function<void(offline::Settings)> onSave;
+    std::function<void(offline::Settings)> onSave,onPrepareDrag;
 private:
     juce::ComboBox rate_, format_;
     juce::Slider note_, velocity_;
     std::array<juce::Label,4> labels_;
-    juce::TextButton close_{"Cancel"}, save_{"Choose file..."};
+    juce::TextButton close_{"Cancel"}, save_{"Choose file..."},prepare_{"Prepare drag"};
 };
 
 // Structural gestures must submit synchronously: an ordinary Slider's
@@ -195,6 +195,27 @@ private:
     bool armed_=false;
 };
 
+// Deliberately no click or keyboard action: a native file drag needs a
+// held pointer gesture. Save remains the keyboard-accessible export path.
+class DragFileGrip final : public juce::TextButton {
+public:
+    using TextButton::TextButton;
+    std::function<void()> begin;
+    void mouseDown(const juce::MouseEvent& event) override {
+        source_=isEnabled()&&event.mods.isLeftButtonDown()?event.source.getIndex():-1;
+    }
+    void mouseDrag(const juce::MouseEvent& event) override {
+        if(source_==event.source.getIndex()&&isEnabled()&&event.mods.isLeftButtonDown()&&event.getDistanceFromDragStart()>=5){
+            source_=-1;
+            const auto run=begin;
+            if(run)run();
+        }
+    }
+    void mouseUp(const juce::MouseEvent&) override { source_=-1; }
+private:
+    int source_=-1;
+};
+
 // An honest FX-01 panel: only controls with working processor bindings are
 // exposed. Additional workspaces are added as their DSP/controller exists.
 class FxPanel final : public juce::Component, private juce::Timer {
@@ -203,7 +224,8 @@ public:
     // Inject the nonblocking picker in the native offscreen harness. The
     // completion is always delivered on the message thread.
     using SavePicker=std::function<void(fileexport::Kind,SaveResult)>;
-    explicit FxPanel (FxProcessor&,SavePicker={});
+    using ExternalDrag=std::function<bool(const juce::File&,juce::Component&,std::function<void()>)>;
+    explicit FxPanel (FxProcessor&,SavePicker={},ExternalDrag={});
     ~FxPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -236,6 +258,8 @@ public:
     juce::ComboBox& patternSelector() noexcept { return patternSelector_; }
     juce::Button& midiExportButton() noexcept { return midiExport_; }
     const juce::Button& wavExportButton() const noexcept { return wavExport_; }
+    juce::Button& prepareMidiDragButton() noexcept { return prepareMidiDrag_; }
+    DragFileGrip& dragGrip() noexcept { return dragGrip_; }
     WavOptionsPanel& wavOptionsPanel() noexcept { return wavOptions_; }
     juce::Button& sampleImportButton() noexcept { return sampleImport_; }
     juce::Button& sampleBuiltinButton() noexcept { return sampleBuiltin_; }
@@ -251,9 +275,10 @@ public:
 private:
     void timerCallback() override;
     void importSample();
-    void exportPattern();
+    void exportPattern(bool drag=false);
+    void beginFileDrag();
     void choosePreset(bool saving);
-    void exportWav(offline::Settings);
+    void exportWav(offline::Settings,bool drag=false);
     void chooseExportFile(fileexport::Kind,SaveResult);
     void refreshExportControls();
     void refreshPattern();
@@ -265,6 +290,7 @@ private:
     void refreshGenerator();
     FxProcessor& processor_;
     SavePicker savePicker_;
+    ExternalDrag externalDrag_;
     vox::ui::VoxKnob output_ { "OUTPUT", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment attachment_;
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
@@ -282,6 +308,9 @@ private:
     std::unique_ptr<GeneratorPanel> generatorPanel_;
     vox::ui::VoxButton midiExport_ { "MIDI" };
     vox::ui::VoxButton wavExport_ { "WAV" };
+    juce::TextButton prepareMidiDrag_{"Prepare MIDI drag"};
+    DragFileGrip dragGrip_{"No drag file"};
+    bool dragFailed_=false;
     WavOptionsPanel wavOptions_;
     juce::TextButton sampleImport_ { "Import" },sampleBuiltin_ { "Built-in" };
     juce::Label sampleStatus_;

@@ -570,6 +570,96 @@ void checkExportChooserReentry() {
     dir.deleteRecursively();
 }
 
+void checkPreparedDrag() {
+    using namespace vox::fx;
+    using Kind=fileexport::Kind;
+    using Purpose=fileexport::Purpose;
+    auto fx=std::make_unique<FxProcessor>();
+    int picks=0,offers=0;
+    bool allow=false;
+    juce::File offered;
+    std::function<void()> ended;
+    const FxPanel::SavePicker picker=[&](Kind,FxPanel::SaveResult){++picks;};
+    const FxPanel::ExternalDrag drag=[&](const juce::File& path,juce::Component& source,std::function<void()> onEnd){
+        ++offers;offered=path;
+        check(path.existsAsFile()&&path.getSize()>0&&source.getTitle()=="Prepared file drag handle",
+              "only a closed, real file reaches the OS drag adapter");
+        if(!allow)return false;
+        ended=std::move(onEnd);
+        const FxProcessor::DragLauncher nested=[](const juce::File&,std::function<void()>){return true;};
+        check(!fx->offerPreparedDrag(nested)&&!fx->prepareMidiDrag({},120.)&&!fx->startMidiExport({},120.,path),
+              "nested drag, preparation and Save are refused during the native offer");
+        return true;
+    };
+    auto panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    panel->setSize(1040,760);
+    check(panel->dragGrip().getY()>=60&&panel->dragGrip().getRight()<panel->getWidth()&&
+          panel->prepareMidiDragButton().getRight()<=panel->dragGrip().getX(),"drag controls fit below the title at minimum editor width");
+    const auto gesture=[&](int d,bool down=false,bool up=false){
+        auto& grip=panel->dragGrip();
+        const auto when=juce::Time::getCurrentTime();
+        const juce::MouseEvent event(juce::Desktop::getInstance().getMainMouseSource(),{float(d),0.f},
+            juce::ModifierKeys(up?0:juce::ModifierKeys::leftButtonModifier),0.f,0.f,0.f,0.f,0.f,
+            &grip,&grip,when,{0.f,0.f},when,1,d>=5);
+        if(down)grip.mouseDown(event);else if(up)grip.mouseUp(event);else grip.mouseDrag(event);
+    };
+    const auto await=[&]{
+        std::optional<fileexport::Completion> result;
+        const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!(result=fx->takeFileExportResult())&&std::chrono::steady_clock::now()<end)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return result;
+    };
+    pattern::Pattern pattern;pattern.steps[0]={true,52,96,100,3};
+    std::vector<std::uint8_t> expected;
+    check(fx->setPattern(pattern)&&pattern::exportMidi(pattern,120.,expected),"prepare reference SMF snapshot");
+    panel->prepareMidiDragButton().onClick();
+    check(fx->fileExportStatus()&&fx->fileExportStatus()->purpose==Purpose::drag&&picks==0&&!panel->dragGrip().isEnabled(),
+          "prepare MIDI uses the existing worker slot and never opens Save");
+    const auto unusedSave=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("vox-fx-unexpected-drag-save.wav");
+    check(!fx->startWavExport({},unusedSave),"Save cannot enter the occupied worker slot");
+    pattern.steps[0].note=74;check(fx->setPattern(pattern),"edit Pattern after preparing drag");
+    const auto project=save(*fx);
+    panel.reset();
+    const auto midi=await();
+    check(midi&&midi->purpose==Purpose::drag&&midi->result==fileexport::Result::success&&fx->preparedDragKind()==Kind::midi,
+          "processor-owned prepared MIDI survives editor close");
+    panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    gesture(0,true);gesture(3);gesture(0,false,true);gesture(12);
+    check(offers==0&&picks==0,"click, sub-threshold motion and post-release motion do not start drag or Save");
+    gesture(0,true);gesture(12);gesture(20);
+    juce::MemoryBlock bytes;
+    check(offers==1&&fx->preparedDragKind()==Kind::midi&&offered.hasFileExtension("mid")&&offered.loadFileAsData(bytes)&&
+          bytes.getSize()==expected.size()&&std::memcmp(bytes.getData(),expected.data(),expected.size())==0,
+          "a failed OS launch can retry the same exact immutable MIDI snapshot on the next gesture only");
+    allow=true;gesture(0,true);gesture(15);gesture(22);
+    const auto handed=offered;
+    check(offers==2&&picks==0&&fx->dragInProgress()&&!fx->preparedDragKind()&&!fx->fileExportStatus()&&save(*fx)==project,
+          "one native offer takes the stage with no second worker, picker or serialized state");
+    panel.reset();if(ended){ended();ended={};}
+    check(!fx->dragInProgress()&&handed.existsAsFile(),"native completion after editor close leaves the handed-off file available");
+
+    allow=false;
+    panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    offline::Settings settings;
+    const auto captured=fx->captureProgramWav(settings);
+    check(offline::renderWav(captured,expected),"render reference WAV bytes for drag");
+    panel->wavOptionsPanel().onPrepareDrag(settings);
+    const auto wav=await();
+    check(wav&&wav->purpose==Purpose::drag&&wav->result==fileexport::Result::success&&fx->preparedDragKind()==Kind::wav&&picks==0,
+          "WAV options prepare a real WAV without a Save chooser");
+    panel=std::make_unique<FxPanel>(*fx,picker,drag);
+    gesture(0,true);gesture(12);
+    const auto unused=offered;
+    juce::MemoryBlock wavBytes;
+    check(offers==3&&unused.hasFileExtension("wav")&&unused.loadFileAsData(wavBytes)&&wavBytes.getSize()==expected.size()&&
+          std::memcmp(wavBytes.getData(),expected.data(),expected.size())==0,"WAV drag bytes match the shared renderer");
+    panel.reset();fx.reset();
+    check(!unused.exists()&&!unused.getParentDirectory().exists()&&handed.existsAsFile(),
+          "processor teardown removes unused staging, not a path already offered to the DAW");
+    if(handed.existsAsFile()){handed.deleteFile();handed.getParentDirectory().deleteFile();}
+}
+
 void checkTimelineViewport() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();NoiseProgram p;
@@ -745,6 +835,7 @@ int main() {
     phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
     phase("MIDI export lifecycle and picker reentry");checkMidiExportLifecycle();checkExportChooserReentry();
+    phase("prepared WAV and MIDI drag lifecycle");checkPreparedDrag();
     phase("capture parity");checkCaptureParity();
     phase("restore admission");checkRestoreAdmission();
     auto pOwner=std::make_unique<vox::fx::FxProcessor>(); auto& p=*pOwner;

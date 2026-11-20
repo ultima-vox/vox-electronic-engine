@@ -10,10 +10,21 @@
  #include <windows.h>
 #else
  #include <cstdio>
+ #include <sys/stat.h>
  #include <unistd.h>
 #endif
 
 namespace vox::fx::fileexport::detail {
+bool createPrivateDirectory(const juce::File& directory) {
+    const auto& path=directory.getFullPathName();
+#if JUCE_WINDOWS
+    // The OS user temporary directory supplies the inherited ACL.
+    return ::CreateDirectoryW(path.toWideCharPointer(),nullptr)!=0;
+#else
+    return ::mkdir(path.toRawUTF8(),0700)==0;
+#endif
+}
+
 bool commitFile(const juce::File& staged,const juce::File& destination,bool replaceExisting) {
     const auto& from=staged.getFullPathName();
     const auto& to=destination.getFullPathName();

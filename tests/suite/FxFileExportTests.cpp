@@ -152,6 +152,32 @@ int main() {
         } else std::puts("FX file export: cross-device fixture skipped (no writable second filesystem)");
     }
 #endif
+    {
+        using namespace fileexport;
+        juce::File scratch;
+        {
+            Job staged(capture,juce::File{},nullptr,nullptr,Purpose::drag);
+            staged.wait();
+            const auto payload=staged.takeDragFile();
+            check(staged.result()==Result::success&&staged.status().purpose==Purpose::drag&&payload&&
+                  payload->kind==Kind::wav&&payload->file.hasFileExtension("wav"),"drag worker publishes a dedicated scratch file");
+            if(payload){
+                scratch=payload->file;
+                juce::MemoryBlock stagedBytes;
+                check(scratch.loadFileAsData(stagedBytes)&&stagedBytes==actual,"staging uses byte-identical WAV export");
+#if JUCE_LINUX
+                struct stat attributes{};
+                check(::stat(scratch.getParentDirectory().getFullPathName().toRawUTF8(),&attributes)==0&&
+                      (attributes.st_mode&0777)==0700,"drag staging directory is private");
+#endif
+            }
+        }
+        check(scratch!=juce::File{}&&!scratch.exists()&&!scratch.getParentDirectory().exists(),
+              "releasing the unused staging lease removes the private directory");
+        Job bad(invalid,juce::File{},nullptr,nullptr,Purpose::drag);
+        bad.wait();
+        check(bad.result()==Result::failure&&!bad.takeDragFile(),"failed drag render cannot give the interface a file");
+    }
     auto longCapture=capture;longCapture.settings.duration=32;
     {fileexport::Job job(longCapture,path);job.cancel();job.wait();
         // If the thread finished before cancellation, success is legitimate.

@@ -149,6 +149,12 @@ public:
     // Optional worker checkpoint for deterministic lifecycle tests; null for UI requests.
     bool startMidiExport(pattern::Pattern,double tempo,juce::File,
                          fileexport::EncodeObserver=nullptr,void* observerContext=nullptr);
+    bool prepareWavDrag(offline::Capture);
+    bool prepareMidiDrag(pattern::Pattern,double tempo);
+    std::optional<fileexport::Kind> preparedDragKind() const noexcept;
+    bool dragInProgress() const noexcept;
+    using DragLauncher=std::function<bool(const juce::File&,std::function<void()>)>;
+    bool offerPreparedDrag(const DragLauncher&);
     std::optional<fileexport::Status> fileExportStatus() const noexcept;
     bool cancelFileExport(fileexport::Kind) noexcept;
     std::optional<fileexport::Completion> takeFileExportResult();
@@ -253,6 +259,7 @@ private:
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.
     transport::Tracker transport_;
+    std::shared_ptr<fileexport::DragFile> preparedDrag_;
     std::unique_ptr<fileexport::Job> fileExportJob_;
 };
 

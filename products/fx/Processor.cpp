@@ -284,7 +284,7 @@ bool onFileControllerThread() noexcept {
 }
 
 bool FxProcessor::startWavExport(offline::Capture capture,juce::File target) {
-    if(!onFileControllerThread()||fileExportJob_||!target.hasFileExtension("wav"))return false;
+    if(!onFileControllerThread()||fileExportJob_||dragInProgress()||!target.hasFileExtension("wav"))return false;
     try { fileExportJob_=std::make_unique<fileexport::Job>(std::move(capture),std::move(target)); }
     catch(...) { return false; }
     return true;
@@ -292,11 +292,53 @@ bool FxProcessor::startWavExport(offline::Capture capture,juce::File target) {
 
 bool FxProcessor::startMidiExport(pattern::Pattern snapshot,double tempo,juce::File target,
                                   fileexport::EncodeObserver observe,void* observerContext) {
-    if(!onFileControllerThread()||fileExportJob_||!target.hasFileExtension("mid")||
+    if(!onFileControllerThread()||fileExportJob_||dragInProgress()||!target.hasFileExtension("mid")||
        !snapshot.valid()||!std::isfinite(tempo)||tempo<10||tempo>1000)return false;
     try { fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,std::move(target),nullptr,observerContext,observe); }
     catch(...) { return false; }
     return true;
+}
+
+bool FxProcessor::prepareWavDrag(offline::Capture capture) {
+    if(!onFileControllerThread()||fileExportJob_||dragInProgress())return false;
+    try {
+        fileExportJob_=std::make_unique<fileexport::Job>(std::move(capture),juce::File{},nullptr,nullptr,
+                                                         fileexport::Purpose::drag,std::move(preparedDrag_));
+    } catch(...) { return false; }
+    return true;
+}
+
+bool FxProcessor::prepareMidiDrag(pattern::Pattern snapshot,double tempo) {
+    if(!onFileControllerThread()||fileExportJob_||dragInProgress()||!snapshot.valid()||
+       !std::isfinite(tempo)||tempo<10||tempo>1000)return false;
+    try {
+        fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,juce::File{},nullptr,nullptr,nullptr,
+                                                         fileexport::Purpose::drag,std::move(preparedDrag_));
+    } catch(...) { return false; }
+    return true;
+}
+
+std::optional<fileexport::Kind> FxProcessor::preparedDragKind() const noexcept {
+    if(!onFileControllerThread()||!preparedDrag_||preparedDrag_->offered)return {};
+    return preparedDrag_->kind;
+}
+
+bool FxProcessor::dragInProgress() const noexcept {
+    return onFileControllerThread()&&preparedDrag_&&preparedDrag_->active.load(std::memory_order_acquire);
+}
+
+bool FxProcessor::offerPreparedDrag(const DragLauncher& launch) {
+    if(!onFileControllerThread()||fileExportJob_||!preparedDragKind()||!launch)return false;
+    const auto payload=preparedDrag_;
+    payload->offered=true; // before launch: nested dispatch cannot offer it twice
+    payload->active.store(true,std::memory_order_release);
+    bool started=false;
+    try { started=launch(payload->file,[payload]{payload->active.store(false,std::memory_order_release);}); }
+    catch(...) {}
+    // No callback owns the processor/editor. A successful native start does
+    // not tell us whether the drop was accepted or the file was copied.
+    if(!started){payload->offered=false;payload->active.store(false,std::memory_order_release);}
+    return started;
 }
 
 std::optional<fileexport::Status> FxProcessor::fileExportStatus() const noexcept {
@@ -313,8 +355,11 @@ std::optional<fileexport::Completion> FxProcessor::takeFileExportResult() {
     const auto result=fileExportJob_->result();
     if(result==fileexport::Result::running)return {};
     const auto kind=fileExportJob_->kind();
+    const auto purpose=fileExportJob_->purpose();
+    if(purpose==fileexport::Purpose::drag&&result==fileexport::Result::success)
+        preparedDrag_=fileExportJob_->takeDragFile();
     fileExportJob_.reset();
-    return fileexport::Completion{kind,result};
+    return fileexport::Completion{kind,result,purpose};
 }
 
 bool FxProcessor::setEffect (std::size_t index, effects::Settings settings)
