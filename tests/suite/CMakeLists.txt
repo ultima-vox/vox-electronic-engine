@@ -310,6 +310,11 @@ target_include_directories(suite_fx_formant_tests PRIVATE ${PROJECT_SOURCE_DIR}/
 add_test(NAME suite_fx_formant_tests COMMAND suite_fx_formant_tests)
 set_tests_properties(suite_fx_formant_tests PROPERTIES LABELS suite)
 
+add_executable(suite_fx_effect_tail_tests FxEffectTailTests.cpp)
+target_include_directories(suite_fx_effect_tail_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
+add_test(NAME suite_fx_effect_tail_tests COMMAND suite_fx_effect_tail_tests)
+set_tests_properties(suite_fx_effect_tail_tests PROPERTIES LABELS suite)
+
 add_executable(suite_fx_nonlinear_alias_tests FxNonlinearAliasTests.cpp)
 target_include_directories(suite_fx_nonlinear_alias_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_nonlinear_alias_tests COMMAND suite_fx_nonlinear_alias_tests)
