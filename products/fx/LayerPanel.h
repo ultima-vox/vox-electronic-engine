@@ -5,6 +5,7 @@
 #include "engine/NoiseRiser.h"
 #include "CurveEditor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <optional>
 
 namespace vox::fx {
 class FxProcessor;
@@ -24,6 +25,8 @@ public:
     CurveEditor& curveEditor() noexcept { return curve_; }
     juce::ComboBox& curveSelector() noexcept { return curveType_; }
 private:
+    template<typename Edit> void editKnob(Edit);
+    std::optional<std::uint64_t> dragRevision_;
     FxProcessor& processor_;
     int index_;
     CurveEditor curve_;

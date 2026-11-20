@@ -361,6 +361,25 @@ void checkGranularPreviewPressure(double rate) {
     fx.reset();reference.reset();dir.deleteRecursively();
 }
 
+void checkLayerDragRestore() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    auto program=fx->program();program.layers[1].gain=.625f;program.layers[1].pan=-.25f;
+    check(fx->setProgram(program),"prepare distinct layer restore fixture");const auto saved=save(*fx);
+    program.layers[1].gain=.25f;check(fx->setProgram(program),"prepare layer gesture fixture");
+    auto layer=std::make_unique<LayerPanel>(*fx,1);
+    auto& gain=layer->gainSlider();gain.onDragStart();gain.setValue(.375,juce::sendNotificationSync);
+    check(fx->program().layers[1].gain==.375f,"layer gain drag takes effect before restore");
+    fx->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));
+    layer->refresh(fx->program().layers[1]);
+    gain.setValue(.5,juce::sendNotificationSync);gain.setValue(.7,juce::sendNotificationSync);
+    check(save(*fx)==saved,"timer readback cannot rearm stale layer drag across project restore");
+    gain.onDragEnd();check(gain.getValue()==.625,"gesture end reads back restored layer gain");
+    gain.onDragStart();gain.setValue(.75,juce::sendNotificationSync);gain.onDragEnd();
+    check(fx->program().layers[1].gain==.75f&&fx->program().layers[1].pan==-.25f,
+          "next layer drag edits the restored Program without changing adjacent fields");
+}
+
 void checkMotionHistoryBoundaries() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();
@@ -922,6 +941,7 @@ int main() {
     phase("in-place bounce effect history and audition priority");checkInPlaceBounceHistory();checkAuditionAtCapacity();
     phase("External granular preview under repeated MIDI and Pattern pressure");
     for(double rate:{44100.,48000.,96000.})checkGranularPreviewPressure(rate);
+    phase("Layer drag across host restore");checkLayerDragRestore();
     phase("Motion history rollover and non-Motion host restore");checkMotionHistoryBoundaries();
     phase("Pattern clipboard during restore and editor recreation");checkPatternClipboardRestore();
     phase("timeline viewport keyboard and selection");checkTimelineViewport();
