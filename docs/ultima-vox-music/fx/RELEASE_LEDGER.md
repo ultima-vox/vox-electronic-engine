@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Prepared WAV and MIDI drag](FILE_DRAG_20261119.md): bounded worker staging, one native copy-only offer per gesture, independent Save fallback, and offscreen payload/lifecycle checks. Real Win32 drag, drop-copy behavior, disk/teardown and owner-host acceptance remain unqualified. No audio delivery or new approvals.
+
 - [Candidate gate and outstanding work](CANDIDATE_GATE_20261119.md): native same-directory export commit without copy fallback, no-clobber race and cross-device tests, plus an opt-in Windows thread CPU probe (not executed on Windows). Latest Linux timing was clean; prior wall overruns keep FX-T18 open. No catalog or release approval.
 
 - [Export lifecycle follow-up and gain-staging matrix](EXPORT_QUALIFICATION_FOLLOWUP_20261119.md): active SMF cancellation, chooser reentry protection, host-save and rate-change fixtures, and SHA-verified level estimates for the same 176 unapproved references. Windows, FX-T18, private delivery and owner acceptance remain open.

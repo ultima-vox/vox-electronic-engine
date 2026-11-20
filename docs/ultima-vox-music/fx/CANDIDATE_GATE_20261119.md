@@ -6,7 +6,7 @@
 
 1. **FX-01/02/03 — sound, playback and editing:** maintain the 19 host IDs and backward-compatible state. Check automation/readback, source restore, real clock loss/meter/seek, and musical note and lease ownership. The offscreen native suite exercises the processor/editor, not the Windows wrapper.
 2. **FX-04 — modulation, effects and real time:** finish checks for supported route combinations, controls, anti-alias behavior, serial FX tails and modulation in the host. Keep wall deadlines separate from thread CPU. Two prior misses at 96 kHz / 64 with Pattern are an explicit retest case, not a cleared defect.
-3. **FX-05 — authoring, catalog and exchange:** preserve the deterministic Program/Pattern, A/B, and user-library regressions. Native Save for WAV/SMF exists; OS file drag is still a functional gap. The candidate must not advertise drag until it uses a real exported file, doesn't double-trigger Save, and is qualified. Catalog curation and licensing remain distinct from preset generation and the technical gate.
+3. **FX-05 — authoring, catalog and exchange:** preserve the deterministic Program/Pattern, A/B, and user-library regressions. Native Save and [prepared file drag](FILE_DRAG_20261119.md) are implemented for WAV/SMF; real OS and DAW import are unqualified. Verify copy into project, no double-trigger with Save and editable SMF before advertising host support. Catalog curation and licensing remain distinct from preset generation and the technical gate.
 4. **FX-06/07 — native UI, build and release:** complete focus/keyboard/DPI checks and the export/bounce/teardown scenarios below, then retain exact-head Windows Release and owner evidence. A clean Linux run cannot authorize shipping.
 
 ## File publication checkpoint
@@ -39,7 +39,7 @@ The WAV/MIDI worker observes whether the path exists **before** rendering/encodi
 | FX-T11 | Deterministic generator and locks, persistent A/B and native preset browse/save | Workflow and automation readback in real host, broader lock and library stress |
 | FX-T12 | 176 unique pinned review references, deterministic provenance and working matrix | 124/424 more candidates to reach 300/600, real arrangement listening, zero current approvals |
 | FX-T13 | Canonical SMF/Pattern grid, playback, seek and native clipboard regressions | Host transfer, cross-host boundary and editable SMF import |
-| FX-T14 | Seven sample-exact capture fixtures, cancellation and closed-file publication | Native chooser, filesystem matrix, OS drag gap and actual bounce/teardown |
+| FX-T14 | Seven sample-exact capture fixtures, cancellation and closed-file publication | Native chooser, filesystem matrix, actual OS drag/import and bounce/teardown |
 | FX-T15 | Native offscreen editor, timeline and chooser callback regressions | Real OS focus/tab, scale, resizing and accessibility |
 | FX-T16 | Native closed-editor state, restore/rejection, sample and A/B fixtures | Actual project reopen, path changes and compatibility in both hosts |
 | FX-T17 | Historical diagnostics only; no current exact-head Windows result | Full Windows Release CTest, Steinberg validation, VST3/artifact SHA and provenance |

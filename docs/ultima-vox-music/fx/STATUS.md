@@ -6,8 +6,8 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [Candidate gate and outstanding work](CANDIDATE_GATE_20261119.md).
-WAV/MIDI publication now avoids destructive copy fallback and refuses a late-created destination on an initially unoccupied path; the next Windows timing opt-in can capture paired wall/CPU measurements. The [previous export and gain-staging checkpoint](EXPORT_QUALIFICATION_FOLLOWUP_20261119.md) covers the 176 pinned listening candidates; zero are approved. Real arrangements, durable private handoff, FX-T18, exact-head Windows and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
+**Latest:** [Prepared WAV and MIDI drag](FILE_DRAG_20261119.md) and the [candidate qualification gate](CANDIDATE_GATE_20261119.md).
+WAV/SMF Save remains separate from preparing a temporary snapshot for native copy-only drag. Editor reopen, file bytes and injected drag-controller regressions are distinct from Win32 and DAW qualification. The 176 pinned listening candidates still have zero approvals; real arrangements, durable private handoff, FX-T18, exact-head Windows and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
 
 | Milestone | Status |
 |---|---|
