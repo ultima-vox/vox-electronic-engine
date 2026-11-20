@@ -13,7 +13,8 @@ namespace vox::fx::programcodec {
 // v4 appends playback mode and repeated-note policy. v5 appends Program
 // key/scale and dual filter/transpose settings per layer; v6 appends signed
 // family-specific Character on each layer; v7 appends grain shape; v8 adds
-// one packed Glitch shape per layer after the grain block. Older fields
+// one packed Glitch shape per layer after the grain block; v9 appends grain
+// travel after those shapes. Older fields
 // remain byte-identical; old Programs use chromatic, bypassed filters.
 // Every decoder path is bounded, rejects unknown versions/truncation/trailing
 // bytes, and assigns its output only after complete validation.
@@ -52,15 +53,16 @@ inline bool getCurve(std::span<const std::byte> bytes, std::size_t& offset, time
     return curve.valid();
 }
 inline constexpr std::size_t soundBytes=8+4*(4+2*16);
-inline constexpr std::size_t characterBytes=16, grainBytes=48, glitchBytes=16;
-inline constexpr std::size_t maxBytes=16 + 4 * (24 + 4 * (4 + 16 * 12)) + 4 * (4 + 16 * 12) + soundBytes + characterBytes + grainBytes + glitchBytes;
+inline constexpr std::size_t characterBytes=16, grainBytes=48, glitchBytes=16, travelBytes=16;
+inline constexpr std::size_t maxBytes=16 + 4 * (24 + 4 * (4 + 16 * 12)) + 4 * (4 + 16 * 12) + soundBytes + characterBytes + grainBytes + glitchBytes + travelBytes;
 inline bool encode(const NoiseProgram& program, std::vector<std::byte>& result) {
     if (!program.valid()) return false;
     std::vector<std::byte> next;
     next.reserve(maxBytes);
     const bool grainExtension=std::any_of(program.layers.begin(),program.layers.end(),[](const auto& l){return l.grains!=source::GrainShape{};});
     const bool glitchExtension=std::any_of(program.layers.begin(),program.layers.end(),[](const auto& l){return l.glitch!=source::GlitchShape{};});
-    putU32(next,glitchExtension?8:grainExtension?7:6);
+    const bool travelExtension=std::any_of(program.layers.begin(),program.layers.end(),[](const auto& l){return l.grains.travel!=0;});
+    putU32(next,travelExtension?9:glitchExtension?8:grainExtension?7:6);
     for (const auto& layer:program.layers) {
         putU32(next,layer.enabled ? 1u : 0u); putU32(next,static_cast<std::uint32_t>(layer.family));
         putFloat(next,layer.timing.offset); putFloat(next,layer.timing.span); putFloat(next,layer.gain); putFloat(next,layer.pan);
@@ -80,14 +82,15 @@ inline bool encode(const NoiseProgram& program, std::vector<std::byte>& result) 
     if(grainExtension||glitchExtension)for(const auto& l:program.layers){
         putFloat(next,l.grains.milliseconds);putFloat(next,l.grains.position);putU32(next,l.grains.reverse?1:0);
     }
-    if(glitchExtension)for(const auto& l:program.layers)
+    if(glitchExtension||travelExtension)for(const auto& l:program.layers)
         putU32(next,static_cast<unsigned>(l.glitch.grid)|(static_cast<unsigned>(l.glitch.read)<<2)|(static_cast<unsigned>(l.glitch.gates)<<4));
+    if(travelExtension)for(const auto& l:program.layers)putFloat(next,l.grains.travel==0?0.f:l.grains.travel);
     result=std::move(next); return true;
 }
 inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexcept {
     if (bytes.size() > maxBytes) return false;
     NoiseProgram next; std::size_t offset=0; std::uint32_t version=0;
-    if (!getU32(bytes,offset,version) || (version < 1 || version > 8)) return false;
+    if (!getU32(bytes,offset,version) || (version < 1 || version > 9)) return false;
     for (auto& layer:next.layers) {
         std::uint32_t enabled=0, family=0;
         if (!getU32(bytes,offset,enabled) || enabled > 1 || !getU32(bytes,offset,family) ||
@@ -136,7 +139,15 @@ inline bool decode(std::span<const std::byte> bytes, NoiseProgram& result) noexc
             if(!l.glitch.valid())return false;
             edited|=l.glitch!=source::GlitchShape{};
         }
-        if(!edited)return false; // canonical v6/v7 when no slice was authored
+        if(version==8&&!edited)return false; // canonical v6/v7 when no slice was authored
+    }
+    if(version>=9){
+        bool edited=false;
+        for(auto& l:next.layers){
+            if(!getFloat(bytes,offset,l.grains.travel)||(l.grains.travel==0&&std::signbit(l.grains.travel)))return false;
+            edited|=l.grains.travel!=0;
+        }
+        if(!edited)return false; // unchanged travel retains v6/v7/v8
     }
     if (offset != bytes.size() || !next.valid()) return false;
     result=next; return true;

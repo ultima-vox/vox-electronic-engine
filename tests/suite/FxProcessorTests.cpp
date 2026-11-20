@@ -199,6 +199,28 @@ void checkGlitchSourceEditor() {
     fx->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));panel.refresh();
     check(fx->lastStateError().isEmpty()&&fx->program().layers[0].glitch==expected&&panel.sliceReadSelector().getSelectedId()==3,
           "project reopen and controller readback preserve authored slices");
+    check(!panel.grainTravelSlider().isVisible(),"Glitch hides grain travel");
+    check(fx->setFamily(static_cast<int>(NoiseFamily::granular)),"switch Source to Granular");panel.refresh();
+    auto& travel=panel.grainTravelSlider();auto& scatter=panel.grainScatterButton();
+    check(travel.isVisible()&&!travel.isEnabled()&&!contains(travel),"Scatter disables travel and removes it from keyboard traversal");
+    scatter.setToggleState(false,juce::dontSendNotification);scatter.onClick();
+    check(travel.isEnabled()&&contains(travel)&&!contains(panel.sliceGridSelector()),"fixed grain mode exposes travel in local traversal");
+    travel.setValue(-61,juce::sendNotificationSync);
+    check(travel.keyPressed(juce::KeyPress(juce::KeyPress::leftKey)),"focused grain travel edits with an unmodified arrow key");
+    check(fx->program().layers[0].grains.travel==-.62f&&fx->program().layers[1].grains.travel==0,
+          "native travel control changes only the selected Granular layer");
+    const auto moved=save(*fx);
+    const auto structure=vox::preset::decode({static_cast<const std::byte*>(moved.getData()),moved.getSize()},compare::productTag,1);
+    const auto* fprg=structure.document.find(vox::preset::makeTag("FPRG"));
+    check(fprg&&!fprg->data.empty()&&fprg->data.front()==std::byte{9},"authored travel saves FPRG9 inside the project");
+    check(fx->encodePortablePreset(portable)&&other->restorePortablePreset(portable)&&other->program().layers[0].grains.travel==-.62f,
+          "portable restore retains authored grain travel");
+    fx->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));panel.refresh();
+    fx->setStateInformation(moved.getData(),static_cast<int>(moved.getSize()));panel.refresh();
+    check(fx->lastStateError().isEmpty()&&save(*fx)==moved&&travel.isEnabled()&&travel.getValue()==-62,
+          "project restore reopens travel and its accessible control");
+    scatter.setToggleState(true,juce::dontSendNotification);scatter.onClick();
+    check(!travel.isEnabled()&&fx->program().layers[0].grains.travel==-.62f,"Scatter keeps but suspends an authored travel setting");
     check(panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey))&&!panel.isVisible()&&
           !panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)),"Escape closes the Source overlay only while it is open");
 }
@@ -1162,7 +1184,7 @@ void checkHostTempoCursor() {
 // loop/held performance with an arbitrary MIDI NoteOff or a DAW tempo map.
 void checkCaptureParity() {
     using namespace vox::fx;
-    for(unsigned mode=0;mode<9;++mode){
+    for(unsigned mode=0;mode<10;++mode){
         auto fx=std::make_unique<FxProcessor>();TestPlayHead host;fx->setPlayHead(&host);
         constexpr int rate=48000,cycle=rate;
         const auto clock=[&](int at){
@@ -1181,6 +1203,12 @@ void checkCaptureParity() {
             program.layers[0].glitch={source::SliceGrid::thirtySecond,source::SliceRead::reverse,6};
             program.layers[1].glitch={source::SliceGrid::sixteenth,source::SliceRead::forward,1};
         }
+        if(mode==9){
+            program.layers[0].family=NoiseFamily::granular;
+            program.layers[0].grains={34.f,.05f,false,.87f};
+            program.layers[1].family=NoiseFamily::glitch;
+            program.layers[1].glitch={source::SliceGrid::thirtySecond,source::SliceRead::reverse,0b1011};
+        }
         check(fx->setProgram(program),"configure fixed-tempo multi-layer capture");
         fx->durationParameter().setValueNotifyingHost(fx->durationParameter().convertTo0to1(.11f));
         fx->outputParameter().setValueNotifyingHost(.63f);
@@ -1190,15 +1218,19 @@ void checkCaptureParity() {
             fx->setEffect(1,{effects::Type::tempoDelay,.37f,0});
             fx->effectWetParameter(1).setValueNotifyingHost(.37f);fx->effectAmountParameter(1).setValueNotifyingHost(0.f);
         }
-        if(mode==8){
+        if(mode>=8){
             check(fx->setEffect(1,{effects::Type::delay,.57f,.28f}),"set free delay for moving tap parity");
             fx->effectWetParameter(1).setValueNotifyingHost(.57f);fx->effectAmountParameter(1).setValueNotifyingHost(.28f);
+        }
+        if(mode==9){
+            check(fx->setEffect(2,{effects::Type::drive,.42f,.43f}),"set Drive after the moving tap in the hybrid graph");
+            fx->effectWetParameter(2).setValueNotifyingHost(.42f);fx->effectAmountParameter(2).setValueNotifyingHost(.43f);
         }
         auto motion=fx->versionedMotion();auto routes=motion.config;
         (void)routes.put(0,{mod::Source::lfo2,mod::Destination::pitch,.11f,.02f});
         (void)routes.put(1,{mod::Source::follower,mod::Destination::amount1,.2f,.018f});
         (void)routes.put(2,{mod::Source::lfo1,mod::Destination::width,.12f,.014f});
-        if(mode==8)check(routes.put(3,{mod::Source::lfo2,mod::Destination::amount2,.16f,.008f}),"route LFO to free delay Amount");
+        if(mode>=8)check(routes.put(3,{mod::Source::lfo2,mod::Destination::amount2,.16f,.008f}),"route LFO to free delay Amount");
         check(fx->replaceMotionIfCurrent(motion,routes),"capture has pre- and post-DSP motion");
         const bool sequence=program.mode==PlayMode::sequence||mode==6;
         if(sequence){

@@ -138,6 +138,40 @@ int main(){
               base!=sound({80,0,true}),"grain length, normalized position and reverse each alter deterministic audio");
     }
     {
+        constexpr int frames=28800;
+        const auto travel=[&](source::GrainShape shape,int partition,bool editDuringNote){
+            sample::Store store;auto engine=std::make_unique<NoiseRiser>();engine->prepare(48000);
+            std::vector<float> sample(48000);for(std::size_t j=0;j<sample.size();++j)sample[j]=static_cast<float>(j)*.8f/sample.size();
+            auto p=program;p.layers[0].grains=shape;
+            check(engine->setProgram(p)&&store.publish(sample,48000)&&engine->attachSampleStore(&store)&&
+                  engine->noteOn(1,60,1,.6,true),"grain travel ramp fixture setup");
+            if(editDuringNote){p.layers[0].grains.travel=-shape.travel;check(engine->setProgram(p),"publish travel for subsequent events");}
+            std::vector<float> l(frames),r(frames);unsigned grains=0;
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+            voxProbeBegin();
+#endif
+            for(int at=0;at<frames;at+=partition){engine->render(l.data()+at,r.data()+at,std::min(partition,frames-at));
+                grains=std::max(grains,engine->activeGrainCount());}
+#ifdef VOX_TEST_INTERPOSE_MALLOC
+            const auto allocations=voxProbeEnd();if(voxProbeAvailable())check(allocations==0,"grain travel allocates nothing during render");
+#endif
+            check(grains>0&&grains<=64,"travel retains bounded grain pool");
+            return l;
+        };
+        const auto forward=travel({25.f,.42f,false,.5f},127,false);
+        const auto backward=travel({25.f,.42f,false,-.5f},127,false);
+        const auto stationary=travel({25.f,.42f,false,0},127,false);
+        check(forward==travel({25.f,.42f,false,.5f},512,true),"grain travel remains sample-exact across blocks and in-flight Program edit");
+        check(travel({25.f,-1,false,.5f},127,false)==travel({25.f,-1,false,0},127,false),"Scatter ignores a retained travel value");
+        const auto sum=[](const auto& v){double s=0;for(int i=15000;i<23500;++i)s+=v[i];return s;};
+        check(sum(forward)>1.25*sum(stationary)&&sum(backward)<.75*sum(stationary)&&sum(backward)>0,
+              "opposite signed travel scans different parts of an external source");
+        check(forward!=travel({25.f,.42f,true,.5f},127,false),"reverse remains independent of direction of grain starts");
+        const source::GrainShape left{25.f,.2f,false,-1.f},right{25.f,.8f,false,1.f};
+        check(left.startAt(.9)==0.&&right.startAt(.9)==1.,"travel stops at sample boundary, does not wrap starts");
+        std::printf("granular travel ramp sums: backwards %.6f, stationary %.6f, forwards %.6f\n",sum(backward),sum(stationary),sum(forward));
+    }
+    {
         // Admit one grain at pitch 1, then sweep the programmed pitch before
         // the next admission. Its exact reverse readout must still follow
         // the original step, even through repeated odd-length wraps.

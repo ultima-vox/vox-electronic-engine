@@ -30,11 +30,12 @@ int main(){
     {
         ProgramStore::Snapshot edited,generated;bool builtin=false;
         const source::GlitchShape slices{source::SliceGrid::eighth,source::SliceRead::reverse,4};
-        edited.generator.role=5;edited.program.layers[0].glitch=slices;
+        edited.generator.role=5;edited.program.layers[0].glitch=slices;edited.program.layers[0].grains.travel=.73f;
         for(bool mutate:{false,true})for(auto locks:{0u,static_cast<unsigned>(generator::character)}){
             edited.generator.locks.layers[0]=locks;
-            check(generator::makeSound(edited,mutate,generated,builtin)&&generated.program.layers[0].glitch==slices,
-                  "Generate and Mutate preserve authored Slice settings with or without Character lock");
+            check(generator::makeSound(edited,mutate,generated,builtin)&&generated.program.layers[0].glitch==slices&&
+                  generated.program.layers[0].grains.travel==.73f,
+                  "Generate and Mutate preserve authored Slice and Grain travel settings with or without Character lock");
         }
     }
     using S=mod::Source;using D=mod::Destination;

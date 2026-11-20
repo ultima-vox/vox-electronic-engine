@@ -575,7 +575,7 @@ private:
                         const auto& lease=sampleLeases_[voiceIndex];
                         const auto length=lease.data()?lease.frames():sample_.size();
                         grain.position=settings.grains.position<0?static_cast<double>(layer.rng % length):
-                            static_cast<double>(settings.grains.position)*(length-1);
+                            settings.grains.startAt(t)*(length-1);
                         const double localPitch=settings.pitchCurve.evaluate(static_cast<float>(t));
                         const double pitchRatio=layerTranspose(layer,globalPitch+pitchOffset*.25,localPitch);
                         const auto ratio=std::clamp(layer.tunedHz / noteHz_[60] * pitchRatio, 0.25, 4.0);

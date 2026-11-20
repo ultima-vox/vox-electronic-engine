@@ -138,6 +138,8 @@ public:
     juce::ComboBox& typeSelector(std::size_t slot) noexcept { return filters_[slot].type; }
     juce::Slider& cutoffSlider(std::size_t slot) noexcept { return filters_[slot].hz; }
     juce::Slider& grainLengthSlider() noexcept {return grainLength_;}
+    juce::Slider& grainTravelSlider() noexcept {return grainTravel_;}
+    juce::ToggleButton& grainScatterButton() noexcept {return scatter_;}
     juce::ComboBox& sliceGridSelector() noexcept {return sliceGrid_;}
     juce::ComboBox& sliceReadSelector() noexcept {return sliceRead_;}
     juce::ToggleButton& sliceGate(std::size_t i) noexcept {return sliceGate_[i];}
@@ -147,7 +149,7 @@ private:
     struct FilterRow { juce::ComboBox type, slope; StructuralSlider hz, q; };
     FxProcessor& processor_;
     juce::ComboBox layer_, root_, scale_;
-    StructuralSlider transpose_,character_,grainLength_,grainPosition_;
+    StructuralSlider transpose_,character_,grainLength_,grainPosition_,grainTravel_;
     juce::ToggleButton scatter_{"Scatter"},reverse_{"Reverse"};
     juce::Label characterLabel_;
     juce::ComboBox sliceGrid_,sliceRead_;

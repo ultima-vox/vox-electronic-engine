@@ -66,7 +66,7 @@ int main() {
     p.bars=16; std::vector<std::byte> barBytes; check(vox::fx::programcodec::encode(p,barBytes)&&vox::fx::programcodec::decode(barBytes,migrated)&&migrated.bars==16,"bar roundtrip");
     if(barBytes.size()<4) { std::printf("FAIL: bar fixture too short\n"); return 1; }
     auto invalidBars=barBytes;invalidBars[invalidBars.size()-soundBytes-12]=std::byte{3};check(!vox::fx::programcodec::decode(invalidBars,migrated)&&migrated.bars==16,"invalid bars rejected transactionally");
-    auto future=bytes;future[0]=std::byte{9};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
+    auto future=bytes;future[0]=std::byte{10};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
     auto invalidMode=bytes;invalidMode[invalidMode.size()-soundBytes-8]=std::byte{255};
     check(!vox::fx::programcodec::decode(invalidMode,q),"invalid playback mode rejected");
     auto invalidBool=bytes;invalidBool[4]=std::byte{2};check(!vox::fx::programcodec::decode(invalidBool,q),"invalid enabled rejected");
@@ -112,6 +112,38 @@ int main() {
               programcodec::encode(restored,canonical)&&canonical==v7,"FPRG7 migrates and re-encodes byte-identically");
         custom.layers[0].glitch.gates=16;
         check(!programcodec::encode(custom,canonical)&&canonical==v7,"out-of-range slice mask cannot be published");
+    }
+    {
+        using namespace vox::fx;
+        NoiseProgram scan;scan.layers[0].family=NoiseFamily::granular;
+        scan.layers[0].grains={43.f,.24f,true};
+        scan.layers[2].family=NoiseFamily::glitch;
+        scan.layers[2].glitch={source::SliceGrid::eighth,source::SliceRead::reverse,3};
+        std::vector<std::byte> v8,v9,reencoded;
+        check(programcodec::encode(scan,v8)&&v8.front()==std::byte{8},"neutral travel retains original FPRG8");
+        scan.layers[0].grains.travel=.75f;
+        scan.layers[3].grains.travel=-.5f;
+        NoiseProgram read;
+        check(programcodec::encode(scan,v9)&&v9.front()==std::byte{9}&&v9.size()==v8.size()+programcodec::travelBytes&&
+              std::equal(v8.begin()+4,v8.end(),v9.begin()+4)&&programcodec::decode(v9,read)&&
+              read.layers[0].grains==scan.layers[0].grains&&read.layers[3].grains.travel==-.5f&&
+              programcodec::encode(read,reencoded)&&reencoded==v9,"FPRG9 appends layer travel without replacing existing bytes");
+        if(v9.size()>=programcodec::travelBytes){
+            for(auto bits:{0x7fc00000u,0x7f800000u,0x40000000u,0x80000000u}){
+                auto corrupt=v9;const auto start=corrupt.size()-programcodec::travelBytes;
+                for(unsigned k=0;k<4;++k)corrupt[start+k]=static_cast<std::byte>((bits>>(8*k))&255u);
+                check(!programcodec::decode(corrupt,read)&&read.layers[0].grains.travel==.75f,
+                      "reject nonfinite, out-of-range or noncanonical FPRG9 travel transactionally");
+            }
+            auto zero=v9;std::fill_n(zero.end()-programcodec::travelBytes,programcodec::travelBytes,std::byte{0});
+            check(!programcodec::decode(zero,read)&&!programcodec::decode(std::span(v9).first(v9.size()-1),read),
+                  "reject redundant all-zero or truncated FPRG9");
+        }
+        check(programcodec::decode(v8,read)&&read.layers[0].grains.travel==0&&
+              programcodec::encode(read,reencoded)&&reencoded==v8,"old v8 retains its bytes on reopen");
+        scan.layers[2].glitch={};
+        check(programcodec::encode(scan,v9)&&programcodec::decode(v9,read)&&read.layers[2].glitch==source::GlitchShape{},
+              "travel-only programs can carry default Glitch words in FPRG9");
     }
     p.layers[0].gain=std::numeric_limits<float>::quiet_NaN();
     check(!vox::fx::programcodec::encode(p,again)&&again==before,"invalid encode is transactional");

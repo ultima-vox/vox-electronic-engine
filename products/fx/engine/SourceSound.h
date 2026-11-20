@@ -25,9 +25,15 @@ struct GrainShape {
     float milliseconds=80;
     float position=-1; // -1 = legacy seeded scatter, [0, 1] = fixed start
     bool reverse=false;
+    float travel=0; // signed fraction of source traversed over one layer timeline
+    double startAt(double phase) const noexcept {
+        return travel==0?static_cast<double>(position):
+            std::clamp(static_cast<double>(position)+travel*phase,0.,1.);
+    }
     bool valid() const noexcept {
         return std::isfinite(milliseconds)&&milliseconds>=10&&milliseconds<=180&&
-            (position==-1||(std::isfinite(position)&&position>=0&&position<=1));
+            (position==-1||(std::isfinite(position)&&position>=0&&position<=1))&&
+            std::isfinite(travel)&&travel>=-1&&travel<=1;
     }
     bool operator==(const GrainShape&) const = default;
 };

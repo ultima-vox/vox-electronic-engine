@@ -400,6 +400,17 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     addAndMakeVisible(characterLabel_);
     slider(grainLength_,10,180,.1,"Grain length"," ms");slider(grainPosition_,0,100,.1,"Grain start"," %");
     grainLength_.onStructuralChange=[this]{const auto value=static_cast<float>(grainLength_.getValue());editLayer([=](auto& l){l.grains.milliseconds=value;});};
+    slider(grainTravel_,-100,100,1,"Grain travel across the layer timeline"," %");
+    // JUCE sliders opt out of focus by default; these fixed-grain
+    // controls support local arrow-key editing in the Source panel.
+    for(auto* control:{&grainLength_,&grainPosition_,&grainTravel_}){
+        control->setWantsKeyboardFocus(true);
+        control->setTextBoxStyle(juce::Slider::TextBoxRight,false,64,24);
+    }
+    grainTravel_.setDoubleClickReturnValue(true,0);
+    grainTravel_.setTooltip("Move new grain starts along the source over the layer timeline. Stops at either edge. Does not change pitch or reverse. Unavailable while Scatter is on.");
+    grainTravel_.onStructuralChange=[this]{const auto value=static_cast<float>(grainTravel_.getValue()*.01);
+        editLayer([value](auto& l){if(l.family==NoiseFamily::granular&&l.grains.position>=0)l.grains.travel=value;});};
     const auto setPosition=[this]{const float value=scatter_.getToggleState()?-1.f:static_cast<float>(grainPosition_.getValue()*.01);
         editLayer([=](auto& l){l.grains.position=value;});};
     grainPosition_.onStructuralChange=setPosition;scatter_.onClick=setPosition;
@@ -452,7 +463,7 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     const auto tab=[&](juce::Component& child){child.setExplicitFocusOrder(++order);};
     tab(layer_);tab(root_);tab(scale_);tab(transpose_);tab(character_);
     for(auto& f:filters_){tab(f.type);tab(f.slope);tab(f.hz);tab(f.q);}
-    tab(grainLength_);tab(grainPosition_);tab(scatter_);tab(reverse_);
+    tab(grainLength_);tab(grainPosition_);tab(grainTravel_);tab(scatter_);tab(reverse_);
     tab(sliceGrid_);tab(sliceRead_);for(auto& gate:sliceGate_)tab(gate);tab(sliceReset_);tab(close_);
     refresh();
 }
@@ -508,16 +519,18 @@ void SourcePanel::refresh(){
         const auto focused=[](const juce::Component& c){return c.hasKeyboardFocus(true);};
         const bool hidesSlice=!glitch&&(focused(sliceGrid_)||focused(sliceRead_)||focused(sliceReset_)||
             std::any_of(sliceGate_.begin(),sliceGate_.end(),focused));
-        const bool hidesGrain=!granular&&(focused(grainLength_)||focused(grainPosition_)||focused(scatter_)||focused(reverse_));
+        const bool hidesGrain=(!granular&&(focused(grainLength_)||focused(scatter_)||focused(reverse_)))||
+            ((!granular||layer.grains.position<0)&&(focused(grainPosition_)||focused(grainTravel_)));
         if(hidesSlice||hidesGrain)layer_.grabKeyboardFocus();
     }
     for(auto* c:std::array<juce::Component*,3>{&sliceGrid_,&sliceRead_,&sliceReset_})c->setVisible(glitch);
     sliceGrid_.setSelectedId(static_cast<int>(layer.glitch.grid)+1,juce::dontSendNotification);
     sliceRead_.setSelectedId(static_cast<int>(layer.glitch.read)+1,juce::dontSendNotification);
     for(unsigned i=0;i<sliceGate_.size();++i){sliceGate_[i].setVisible(glitch);sliceGate_[i].setToggleState(layer.glitch.gate(i),juce::dontSendNotification);}
-    for(auto* c:std::array<juce::Component*,4>{&grainLength_,&grainPosition_,&scatter_,&reverse_})c->setVisible(granular);
+    for(auto* c:std::array<juce::Component*,5>{&grainLength_,&grainPosition_,&grainTravel_,&scatter_,&reverse_})c->setVisible(granular);
     scatter_.setToggleState(layer.grains.position<0,juce::dontSendNotification);reverse_.setToggleState(layer.grains.reverse,juce::dontSendNotification);
-    grainPosition_.setEnabled(layer.grains.position>=0);
+    grainPosition_.setEnabled(layer.grains.position>=0);grainTravel_.setEnabled(layer.grains.position>=0);
+    if(!grainTravel_.isMouseButtonDown())grainTravel_.setValue(layer.grains.travel*100,juce::dontSendNotification);
     if(!grainPosition_.isMouseButtonDown())grainPosition_.setValue(std::max(0.f,layer.grains.position)*100,juce::dontSendNotification);
     if(!grainLength_.isMouseButtonDown())grainLength_.setValue(layer.grains.milliseconds,juce::dontSendNotification);
     for(std::size_t i=0;i<filters_.size();++i){
@@ -539,14 +552,15 @@ void SourcePanel::paint(juce::Graphics& g){
     g.drawText("FILTER     TYPE                     SLOPE                   CUTOFF                                           RESONANCE",a.removeFromTop(20),juce::Justification::centredLeft);
     g.drawText("A",a.removeFromTop(31),juce::Justification::centredLeft);
     g.drawText("B",a.removeFromTop(31),juce::Justification::centredLeft);
+    const auto labels=a.removeFromTop(22);
+    const auto label=[&](const char* text,const juce::Component& child){
+        g.drawText(text,labels.withX(child.getX()).withWidth(getWidth()-child.getX()),juce::Justification::centredLeft);
+    };
     if(sliceGrid_.isVisible()){
-        const auto labels=a.removeFromTop(22);
-        const auto label=[&](const char* text,const juce::Component& child){
-            g.drawText(text,labels.withX(child.getX()).withWidth(getWidth()-child.getX()),juce::Justification::centredLeft);
-        };
         label("Slice grid",sliceGrid_);label("Read",sliceRead_);label("Repeat gates 1–4",sliceGate_[0]);
+    }else if(grainLength_.isVisible()){
+        label("Grain length",grainLength_);label("Start",grainPosition_);label("Travel",grainTravel_);
     }
-    else if(grainLength_.isVisible())g.drawText("GRAIN      Length                                Start",a.removeFromTop(22),juce::Justification::centredLeft);
 }
 void SourcePanel::resized(){
     auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
@@ -559,8 +573,9 @@ void SourcePanel::resized(){
         f.type.setBounds(row.removeFromLeft(118).reduced(2));f.slope.setBounds(row.removeFromLeft(110).reduced(2));
         f.hz.setBounds(row.removeFromLeft(row.getWidth()/2).reduced(2));f.q.setBounds(row.reduced(2));}
     a.removeFromTop(20);auto grains=a.removeFromTop(32);
-    grainLength_.setBounds(grains.removeFromLeft(207).reduced(2));grainPosition_.setBounds(grains.removeFromLeft(194).reduced(2));
-    scatter_.setBounds(grains.removeFromLeft(104));reverse_.setBounds(grains.removeFromLeft(93));
+    grainLength_.setBounds(grains.removeFromLeft(148).reduced(2));grainPosition_.setBounds(grains.removeFromLeft(148).reduced(2));
+    grainTravel_.setBounds(grains.removeFromLeft(148).reduced(2));
+    scatter_.setBounds(grains.removeFromLeft(90));reverse_.setBounds(grains.removeFromLeft(90));
     auto slices=grainLength_.getBounds().getUnion(reverse_.getBounds());
     sliceGrid_.setBounds(slices.removeFromLeft(98).reduced(2,0));sliceRead_.setBounds(slices.removeFromLeft(126).reduced(2,0));
     for(auto& gate:sliceGate_)gate.setBounds(slices.removeFromLeft(55).reduced(2,0));
