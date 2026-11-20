@@ -421,6 +421,14 @@ struct DrumsWorkspace::Impl {
             processor.setUiState (ui);
             layoutGeneration = processor.layoutState().generation;
         };
+        steps.onParameterLanesChanged = [&owner, this] {
+            if (applyingLayout) return;
+            auto document = processor.layoutState().document;
+            layout::Bytes lanes { static_cast<layout::Byte> (steps.parameterLanes().size()) };
+            for (const auto kind : steps.parameterLanes()) lanes.push_back (static_cast<layout::Byte> (kind));
+            putLayoutRecord (document, layout::Type::paramLanes, std::move (lanes));
+            owner.commitDockDocument (std::move (document));
+        };
         for (int i = 0; i < 16; ++i)
         {
             auto& pad = pads[static_cast<std::size_t> (i)];
@@ -684,6 +692,8 @@ void DrumsWorkspace::readLayout()
     if (i.unsupportedPin) i.selection.setPinned (true);
     selectPad (selected[0]);
     i.steps.selectBar (selected[2]);
+    const auto& lanes = bytes (layout::Type::paramLanes);
+    i.steps.setParameterLanes ({ lanes.begin() + 1, lanes.end() }, false);
     if (i.song.selectionStart() != selected[1] || i.layoutEpoch != i.processor.patternEpoch()) i.song.restoreSelection (selected[1]);
     i.layoutEpoch = i.processor.patternEpoch();
     i.pin.setToggleState (pin[0] != 0, juce::dontSendNotification);
@@ -1046,7 +1056,7 @@ void DrumsWorkspace::resized()
         if (! viewport.isVisible()) continue;
         viewport.setBounds (rectangle (isPrimary ? boxes.primary : boxes.secondary));
         const int width = std::max (360, viewport.getWidth() - viewport.getScrollBarThickness());
-        const std::array preferredHeights { width < 900 ? 400 : 320, i.song.preferredHeightForWidth (width),
+        const std::array preferredHeights { 320, i.song.preferredHeightForWidth (width),
                                            i.sound.preferredHeight (width), i.sample.preferredHeight (width) };
         editors[n]->setSize (width, std::max (preferredHeights[n], viewport.getHeight() - viewport.getScrollBarThickness()));
     }

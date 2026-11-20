@@ -36,6 +36,15 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
   Divider gestures commit only on release. Narrow fallback never rewrites saved intent.
 - Narrow Step/Song toolbars wrap. Only the dense Step timeline scrolls horizontally;
   Song uses responsive readable bar columns. Sound/Sample height follows visible controls.
+- Native Step has 0-2 graphical Velocity/Probability/Ratchet/Microtiming lanes from
+  canonical DLAY record8. Ruler, pad cells and value bars share the same BarTiming x
+  mapping and one timeline viewport. Paging pad rows never redirects/empties the
+  selected pad's lane. Native Lanes menu persists presentation, not musical state.
+  Real lane gestures reuse canonical cell setters and existing edit/Undo/Redo, one
+  drag per history entry. Epoch/grid/scope/external-generation changes cancel stale
+  gestures. Song remains linked until its first real edit; source patterns stay exact.
+  At minimum size/compact Mixer, commands fit without outer Step scrolling; only
+  dense timeline content scrolls. Actual native 1040x600 snapshot inspected.
 - Native Step MIDI has fixed Pattern scope; Song has a direct Entire Song save/drag
   handle for 16/32/64 bars. Both reuse the frozen exporter, existing MidiDragButton
   click/drag state machine and unique per-instance/per-drag files. The native root
@@ -99,6 +108,11 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 - T21: fixed encoder fixtures 602924 bytes + full DSTL upper bound 65584 =
   **668508 / 753664 bytes**, including UIST/container, full 2048-byte DLAY and DROL.
   The 736 KiB product reserve is unchanged.
+- Graphical lanes regressions cover exact 64-cell alignment at 376/900/1280 widths,
+  touched-cell Undo/Redo, canonical ranges/tick quantisation, no music/UIST change from
+  presentation, header non-edit, external-edit/restore cancellation, pad-row paging,
+  closed-editor/future DLAY retention, and Song unlink/source isolation. Local evidence
+  is recorded per published SHA in the working PR.
 - Captures use actual native content at 1040x600, 1280x620, 1440x800, 1600x900 and
   raster 1/1.25/1.5/2. They are **not OS/host DPI evidence**.
 - Linux Debug emits inherited JUCE wake-queue assertions during bulk UI construction and
@@ -139,8 +153,9 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 2. Context-specific Inspector for steps/Song/sample remains unfinished. Pad follow/pin
    works. Step/Song pins validate/preserve but currently show disabled/unavailable with
    Unpin, instead of redirecting edits to another object.
-3. PARAM_LANES and SOUND_SECTIONS validate/preserve; complete graphical lanes and
-   collapsible-section presentation remain. Existing step/Sound controls still work.
+3. SOUND_SECTIONS still needs collapsible-section presentation. Graphical PARAM_LANES
+   now exists and restores from DLAY; complete multi-step selection/context Inspector
+   remains in the preceding gate. Existing step/Sound controls remain canonical.
 4. Complete keyboard/focus/scroll and actual Windows VST3 peer/content-scale plus
    OS/host DPI 100/125/150/200% evidence. Raster snapshots are insufficient.
 5. The normal feature merge now includes StyleLibrary #153 at `83c616d429991d8b8da01bdd27d11002630b2103`,

@@ -721,6 +721,158 @@ void testNativeMidiScopes()
         PatternEditor::setDragRootForTesting ({}); root.deleteRecursively();
     }
 }
+void testParameterLanes()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto fixture = std::make_unique<StoredPattern>();
+    fixture->resolution = timing::Resolution::sixtyFourth;
+    for (int cell = 0; cell < 3; ++cell) { fixture->cell (2, 0, cell).on = true; fixture->cell (2, 0, cell).velocity = 64; }
+    p->patterns().setSlot (0, *fixture);
+    DrumsWorkspace ui (*p); ui.setSize (1280, 700); ui.selectPad (2); ui.pollForTesting();
+    auto& steps = ui.patternEditor();
+    ui.setSize (1040, 600);
+    juce::Viewport* centralViewport = nullptr;
+    for (auto* parent = steps.getParentComponent(); parent; parent = parent->getParentComponent())
+        if (auto* viewport = dynamic_cast<juce::Viewport*> (parent)) { centralViewport = viewport; break; }
+    check (centralViewport && steps.getHeight() <= centralViewport->getViewHeight(),
+           "at minimum workspace with compact Mixer, Step commands fit without outer editor scrolling");
+    ui.setSize (1280, 700);
+    auto* lanes = steps.button ("parameters");
+    check (lanes && lanes->isVisible() && lanes->getWidth() >= 60,
+           "native Step exposes the graphical Parameter Lanes presentation menu");
+    check (steps.parameterLanes() == std::vector<int> { 0 }, "factory DLAY displays its real Velocity lane");
+    const auto save = [&] { juce::MemoryBlock out; p->getStateInformation (out); return out; };
+    const auto decode = [&] (const juce::MemoryBlock& b) {
+        return vox::preset::decode ({ static_cast<const std::byte*> (b.getData()), b.getSize() }, p->product().stateTag, 1).document;
+    };
+    const auto beforeLayout = decode (save());
+    const auto history = p->patternHistory().size();
+    check (steps.setParameterLanes ({ 1, 3 }) && steps.parameterLanes() == std::vector<int> { 1, 3 }, "choose two graphical lanes");
+    const auto afterLayout = decode (save());
+    for (const auto& part : beforeLayout.sections)
+        if (part.tag != layoutSectionTag)
+            check (afterLayout.find (part.tag) && afterLayout.find (part.tag)->data == part.data, "lane presentation never changes music/other sections/UIST");
+    check (p->patternHistory().size() == history && layout::find (p->layoutState().document, layout::Type::paramLanes)->payload == layout::Bytes { 2, 1, 3 },
+           "Parameter Lanes commits only canonical DLAY, never musical Undo");
+    const auto validLayout = save();
+    check (! steps.setParameterLanes ({ 4 }) && ! steps.setParameterLanes ({ 0, 1, 2 }) && save() == validLayout,
+           "invalid lane kinds/count refuse without changing presentation or project bytes");
+    for (const int width : { 376, 900, 1280 })
+    {
+        steps.setSize (width, 400);
+        for (int step = 0; step < 64; ++step)
+        {
+            const auto cell = steps.cellBounds (2, step);
+            for (unsigned row = 0; row < 2; ++row)
+            {
+                const auto parameter = steps.parameterCellBounds (row, step);
+                check (! parameter.isEmpty() && parameter.getX() == cell.getX() && parameter.getWidth() == cell.getWidth(),
+                       "all 64 lane cells share exact grid x/width through responsive scrolling");
+            }
+        }
+    }
+    check (steps.setParameterLanes ({ 0 }), "Velocity returns as the sole lane");
+    steps.setSize (376, 320);
+    check (steps.button ("lanes")->isVisible(), "short timeline exposes the pad-row page switch");
+    const auto selectedPad = steps.selectedLane();
+    press (*steps.button ("lanes"));
+    check (steps.selectedLane() == selectedPad && ! steps.parameterCellBounds (0, 0).isEmpty(),
+           "viewing the other pad-row page never blanks or redirects the selected pad's parameter lane");
+    press (*steps.button ("lanes"));
+    const auto findGrid = [] (auto&& self, juce::Component& parent) -> juce::Component* {
+        if (parent.getName() == "pattern grid") return &parent;
+        for (auto* child : parent.getChildren()) if (auto* found = self (self, *child)) return found;
+        return nullptr;
+    };
+    auto* grid = findGrid (findGrid, steps);
+    check (grid != nullptr, "graphical lanes use the actual timeline canvas");
+    if (! grid) return;
+    const auto point = [&] (unsigned row, int step, bool top) {
+        const auto area = steps.parameterCellBounds (row, step);
+        return grid->getLocalPoint (&steps, juce::Point<int> { area.getCentreX(), top ? area.getY() : area.getBottom() - 1 }).toFloat();
+    };
+    const auto event = [grid] (juce::Point<float> at, juce::Point<float> origin, bool down) {
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+            juce::ModifierKeys (down ? juce::ModifierKeys::leftButtonModifier : 0), 1.0f, 0, 0, 0, 0,
+            grid, grid, juce::Time::getCurrentTime(), origin, juce::Time::getCurrentTime(), 1, true);
+    };
+    const auto drag = [&] (unsigned row, int from, int to) {
+        const auto origin = point (row, from, false), end = point (row, to, true);
+        grid->mouseDown (event (origin, origin, true)); grid->mouseDrag (event (end, origin, true)); grid->mouseUp (event (end, origin, false));
+    };
+    p->patternHistory().clear();
+    auto before = std::make_unique<StoredPattern>(); p->patterns().copySlot (0, *before);
+    drag (0, 0, 1);
+    auto result = std::make_unique<StoredPattern>(); p->patterns().copySlot (0, *result);
+    auto expected = std::make_unique<StoredPattern> (*before);
+    expected->cell (2, 0, 0).velocity = 1; expected->cell (2, 0, 1).velocity = 127;
+    check (*result == *expected && p->patternHistory().size() == 1, "real lane drag edits exactly touched cells in one Undo entry");
+    p->patternHistory().undo (p->patterns()); p->patterns().copySlot (0, *result);
+    check (*result == *before, "graphical lane Undo restores complete musical bytes");
+    p->patternHistory().redo (p->patterns()); p->patterns().copySlot (0, *result);
+    check (*result == *expected, "graphical lane Redo restores complete musical bytes");
+    steps.setParameterLanes ({ 1, 2 }); drag (0, 2, 2); drag (1, 2, 2);
+    p->patterns().copySlot (0, *result);
+    check (result->cell (2, 0, 2).probability == 100 && result->cell (2, 0, 2).ratchet == 8, "probability and ratchet graphics use canonical ranges");
+    steps.setParameterLanes ({ 3 });
+    const auto origin = point (0, 2, false);
+    grid->mouseDown (event (origin, origin, true)); grid->mouseUp (event (origin, origin, false));
+    p->patterns().copySlot (0, *result);
+    check (result->cell (2, 0, 2).microTicks == kit::percentToTicks (-50, result->timing (2, 0).cellTicks (0)),
+           "bipolar micro lane uses canonical percent-to-ticks quantisation");
+    // Header/ruler clicks are presentation, never a hidden musical edit.
+    const auto beforeHeader = save();
+    const auto header = point (0, 0, true).translated (0, -8);
+    grid->mouseDown (event (header, header, true)); grid->mouseUp (event (header, header, false));
+    check (save() == beforeHeader, "lane header never edits musical values");
+    grid->mouseDown (event (point (0, 0, true), origin, true));
+    p->patterns().copySlot (0, *result); result->cell (7, 0, 0).on = true; p->patterns().setSlot (0, *result);
+    const auto external = p->patterns().encodeCurrent().data;
+    grid->mouseDrag (event (point (0, 1, false), origin, true)); grid->mouseUp (event (origin, origin, false));
+    check (p->patterns().encodeCurrent().data == external, "an external canonical edit cancels the lane gesture instead of absorbing it into Undo");
+    const auto restored = save();
+    grid->mouseDown (event (point (0, 0, true), point (0, 0, true), true));
+    p->setStateInformation (restored.getData(), static_cast<int> (restored.getSize())); ui.pollForTesting();
+    const auto unchanged = save();
+    grid->mouseDrag (event (point (0, 1, true), origin, true)); grid->mouseUp (event (origin, origin, false));
+    check (save() == unchanged && p->patternHistory().size() == 0, "project restore cancels a stale lane gesture without editing the new project");
+    // The same editor path keeps Song unlink-on-first-edit and source isolation.
+    p->patterns().copySlot (0, *result); result->cell (2, 0, 0).velocity = 127; p->patterns().setSlot (0, *result);
+    const auto source = p->patterns().encodeCurrent().data;
+    const auto songBefore = p->patterns().song();
+    steps.editSongBar (0); steps.selectCell (2, 0); steps.setParameterLanes ({ 0 });
+    p->patternHistory().clear();
+    const auto noop = point (0, 0, true);
+    grid->mouseDown (event (noop, noop, true)); grid->mouseUp (event (noop, noop, false));
+    check (p->patterns().song() == songBefore && p->patternHistory().size() == 0, "unchanged lane value never unlinks a Song bar or creates Undo");
+    const auto changed = point (0, 0, false);
+    grid->mouseDown (event (changed, changed, true)); grid->mouseUp (event (changed, changed, false));
+    const auto songAfter = p->patterns().song();
+    check (songAfter.bars[0].kind == SongBar::Kind::unique && p->patterns().encodeCurrent().data == source
+           && p->patternHistory().size() == 1, "first real lane edit makes only this Song bar unique, never modifies the source");
+    p->patternHistory().undo (p->patterns());
+    check (p->patterns().song() == songBefore, "lane Undo restores Song linkage and all Song bytes");
+    p->patternHistory().redo (p->patterns());
+    check (p->patterns().song() == songAfter, "lane Redo restores unique Song content exactly");
+    auto q = std::make_unique<DrumsProcessor>(); q->setStateInformation (restored.getData(), static_cast<int> (restored.getSize()));
+    DrumsWorkspace reopened (*q);
+    check (reopened.patternEditor().parameterLanes() == std::vector<int> { 3 }, "closed-editor DLAY lane presentation restores into the native canvas");
+    auto futureDocument = decode (restored);
+    const std::vector<std::byte> futureLayout { std::byte { 2 }, std::byte {}, std::byte {}, std::byte {}, std::byte { 77 } };
+    for (auto& part : futureDocument.sections) if (part.tag == layoutSectionTag) part.data = futureLayout;
+    const auto future = vox::preset::encode (futureDocument);
+    check (future.has_value(), "future layout UI fixture fits VOXS");
+    if (future)
+    {
+        q->setStateInformation (future->data(), static_cast<int> (future->size())); reopened.pollForTesting();
+        reopened.patternEditor().setParameterLanes ({ 0, 1 });
+        juce::MemoryBlock futureSaved; q->getStateInformation (futureSaved);
+        check (q->layoutState().status == layout::Status::future && decode (futureSaved).find (layoutSectionTag)->data == futureLayout
+               && reopened.patternEditor().parameterLanes() == std::vector<int> { 0, 1 },
+               "native lane presentation edits stay session-only and retain future layout bytes exactly");
+    }
+}
 } // namespace
 int main()
 {
@@ -742,6 +894,7 @@ int main()
     testMixerAndFocus();
     pump();
     testNativeMidiScopes();
+    testParameterLanes();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

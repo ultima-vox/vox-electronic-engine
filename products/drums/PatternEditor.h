@@ -23,6 +23,7 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace vox::drums {
 
@@ -80,6 +81,12 @@ public:
     int selectedStep() const noexcept { return step_; }
     void selectCell (int lane, int step);
     std::function<void()> onSelectionChanged;
+    // DLAY PARAM_LANES: 0 Velocity, 1 Probability, 2 Ratchet, 3 Microtiming.
+    // Donor stays unchanged until the native workspace explicitly opts in.
+    bool setParameterLanes (std::vector<int>, bool notify = true);
+    const std::vector<int>& parameterLanes() const noexcept { return parameterLanes_; }
+    std::function<void()> onParameterLanesChanged;
+    juce::Rectangle<int> parameterCellBounds (unsigned lane, int step) const;
     void clickCell (int lane, int step);              // as a mouse click on the cell
     juce::Rectangle<int> cellBounds (int lane, int step) const;
     juce::Slider* inspector (const juce::String& name);   // "velocity", "probability", "ratchet", "micro"
@@ -126,6 +133,7 @@ private:
     void refreshControls();
     void checkEpoch();
     void layoutGrid (juce::Rectangle<int>);
+    void showParameterLanesMenu();
     void startDrag();
     void openSaveDialog();
     juce::File newDragFile (const juce::String& name);
@@ -141,12 +149,15 @@ private:
     int lane_ = 0, step_ = 0, lanePage_ = 0;
     bool refreshing_ = false, gesture_ = false;
     bool fixedPatternExport_ = false; // Native always opts in; donor fixture keeps its scope selector.
+    bool parameterLanesEnabled_ = false;
+    std::vector<int> parameterLanes_;
     juce::String lastKey_, exportMessage_;
     void exported (bool ok, const juce::File& file);
 
     std::array<std::unique_ptr<vox::ui::VoxButton>, kit::maxPatternBars> bars_;
     std::unique_ptr<vox::ui::VoxComboBox> steps_, barCount_;
     std::unique_ptr<vox::ui::VoxButton> dup_, clear_, swap_, copyB_, seed_, undo_, redo_, lanes_;
+    std::unique_ptr<vox::ui::VoxButton> parameterLanesButton_;
     std::unique_ptr<MidiDragButton> midi_;
     std::unique_ptr<juce::Label> abLabel_;
     std::unique_ptr<Grid> grid_;
