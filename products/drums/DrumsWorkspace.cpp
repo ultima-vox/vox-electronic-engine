@@ -7,6 +7,8 @@
 #include "Tokens.h"
 #include "Typography.h"
 #include "VoxComponents.h"
+#include "DrumsDial.h"
+#include "DrumsFader.h"
 #include "VoxLookAndFeel.h"
 
 #include <cmath>
@@ -22,14 +24,15 @@ juce::Rectangle<int> rectangle (workspace::Box b) { return { b.x, b.y, b.w, b.h 
 
 struct Knob {
     bool dragging = false;
-    std::unique_ptr<vox::ui::VoxKnob> control;
+    std::unique_ptr<DrumsDial> control;
     std::unique_ptr<SliderAttachment> attachment;
-    void bind (juce::Component& parent, DrumsProcessor& p, const juce::String& id, const juce::String& label)
+    void bind (juce::Component& parent, DrumsProcessor& p, const juce::String& id, const juce::String& label,
+               vox::ui::VoxKnob::Size size = vox::ui::VoxKnob::Size::Small)
     {
         attachment.reset();
         if (control == nullptr)
         {
-            control = std::make_unique<vox::ui::VoxKnob> (label, vox::ui::VoxKnob::Size::Small);
+            control = std::make_unique<DrumsDial> (label, size);
             parent.addAndMakeVisible (*control);
             control->getSlider().onDragStart = [this] { dragging = true; };
             control->getSlider().onDragEnd = [this] { dragging = false; };
@@ -63,15 +66,21 @@ private:
 
 class PadCell final : public juce::Component {
 public:
-    class Select final : public juce::Button {
+    class Face final : public juce::Button {
     public:
-        Select() : juce::Button ("Select pad") {}
+        Face() : juce::Button ("Audition pad") { setTriggeredOnMouseDown (true); }
         bool list = false;
+        float activity = 0;
         void paintButton (juce::Graphics& g, bool over, bool down) override
         {
             const auto bounds = getLocalBounds().toFloat().reduced (1);
-            g.setColour (down ? c::control : over ? c::panelRaised : c::panel);
-            g.fillRoundedRectangle (bounds, 4.0f);
+            g.setColour (juce::Colours::black.withAlpha (0.6f)); g.fillRoundedRectangle (bounds, 4.0f);
+            const auto rubber = bounds.reduced (2).translated (0, down ? 1.0f : -1.0f);
+            g.setGradientFill (juce::ColourGradient (over ? c::panelRaised.brighter (0.2f) : c::panelRaised,
+                                                    rubber.getTopLeft(), c::control, rubber.getBottomRight(), false));
+            g.fillRoundedRectangle (rubber, 4.0f);
+            // Binary activity from the real hit mask; never labelled velocity.
+            g.setColour (c::accent.withAlpha (activity * 0.2f)); g.fillRoundedRectangle (rubber, 4.0f);
             g.setColour (getToggleState() ? c::accent : c::border);
             g.drawRoundedRectangle (bounds, 4.0f, getToggleState() ? 2.0f : 1.0f);
             g.setColour (c::text);
@@ -81,18 +90,19 @@ public:
     };
     PadCell (DrumsProcessor& p, int index) : processor_ (p), pad_ (index), peak_ (p.product().accent)
     {
-        select.setButtonText (juce::String (index + 1));
+        select.setButtonText ("SEL");
         select.setTooltip ("Select pad; does not play audio");
-        hit.setButtonText ("HIT");
         hit.setTooltip ("Audition at velocity 110; does not change selection");
         addAndMakeVisible (select); addAndMakeVisible (hit); addAndMakeVisible (peak_);
     }
     void update (bool selected, float peak, bool hitNow)
     {
         select.setToggleState (selected, juce::dontSendNotification);
+        hit.setToggleState (selected, juce::dontSendNotification);
         refreshLabel();
         peak_.push (peak);
         active_ = hitNow ? 1.0f : active_ * 0.72f;
+        hit.activity = active_; hit.repaint();
         repaint();
     }
     void paint (juce::Graphics& g) override
@@ -102,30 +112,30 @@ public:
     }
     void resized() override
     {
-        select.list = list;
+        hit.list = list;
         refreshLabel();
         auto r = getLocalBounds().reduced (2);
         peak_.setBounds (r.removeFromRight (4)); r.removeFromRight (2);
         if (list)
         {
-            hit.setBounds (r.removeFromRight (34));
-            select.setBounds (r);
+            select.setBounds (r.removeFromRight (36));
+            hit.setBounds (r);
         }
         else
         {
-            hit.setBounds (r.removeFromBottom (24));
-            select.setBounds (r);
+            select.setBounds (r.removeFromBottom (24));
+            hit.setBounds (r);
         }
     }
     bool list = false;
-    Select select;
-    juce::TextButton hit;
+    juce::TextButton select;
+    Face hit;
 private:
     void refreshLabel()
     {
         const auto pad = processor_.kitStore().pad (pad_);
         const auto separator = list ? " " : "\n";
-        select.setButtonText (juce::String (pad_ + 1) + separator + modelName (pad.model) + separator + juce::String (pad.note));
+        hit.setButtonText (juce::String (pad_ + 1) + separator + modelName (pad.model) + separator + juce::String (pad.note));
     }
     DrumsProcessor& processor_;
     int pad_;
@@ -174,7 +184,7 @@ public:
         pad_ = pad;
         const auto prefix = juce::String (padPrefix (pad));
         for (std::size_t i = 0; i < knobs.size(); ++i)
-            knobs[i].bind (*this, processor_, prefix + "." + names[i], labels[i]);
+            knobs[i].bind (*this, processor_, prefix + "." + names[i], labels[i], vox::ui::VoxKnob::Size::Normal);
         muteAttachment = std::make_unique<ButtonAttachment> (processor_.state(), prefix + ".mute", mute);
         soloAttachment = std::make_unique<ButtonAttachment> (processor_.state(), prefix + ".solo", solo);
     }
@@ -195,7 +205,7 @@ public:
         title.setBounds (r.removeFromTop (24)); pin.setBounds (r.removeFromTop (24)); r.removeFromTop (8);
         for (int row = 0; row < 2; ++row)
         {
-            auto cells = r.removeFromTop (76);
+            auto cells = r.removeFromTop (getHeight() >= 328 ? 86 : 76);
             knobs[static_cast<std::size_t> (row * 2)].control->setBounds (cells.removeFromLeft (cells.getWidth() / 2));
             knobs[static_cast<std::size_t> (row * 2 + 1)].control->setBounds (cells);
         }
@@ -260,7 +270,7 @@ private:
     DrumsProcessor& processor_;
     int pad_;
     juce::Label title_, output_;
-    juce::Slider level_;
+    DrumsFader level_;
     juce::ToggleButton mute_, solo_;
     Peak peak_;
     Knob pan_, send1_, send2_;
@@ -393,7 +403,10 @@ void DrumsWorkspace::selectPad (int pad)
     impl_->sample.setContext (pad, impl_->selectedPlayer);
     // Do not consume telemetry merely because selection changed.
     for (int i = 0; i < 16; ++i)
+    {
         impl_->pads[static_cast<std::size_t> (i)]->select.setToggleState (i == pad, juce::dontSendNotification);
+        impl_->pads[static_cast<std::size_t> (i)]->hit.setToggleState (i == pad, juce::dontSendNotification);
+    }
 }
 void DrumsWorkspace::pinInspector (bool pin)
 {

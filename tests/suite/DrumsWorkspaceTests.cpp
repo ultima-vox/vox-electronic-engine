@@ -36,6 +36,7 @@ void testSurfaces()
     PadControlSurface sample (*p, PadControlSurface::Group::sample);
     pump();
     sound.setSize (720, 470); sample.setSize (720, 560);
+    check (sound.hostSlider ("level")->getWidth() == 52, "primary Sound dials use 52 logical pixels when space permits");
     for (const auto* name : { "fine", "character", "resonance", "attack", "sustain", "pitch_amount", "pitch_decay", "drive", "sub", "tail",
                               "split", "start", "end", "sample_level" })
     {
@@ -150,6 +151,7 @@ void test()
     auto ui = std::make_unique<vox::drums::DrumsWorkspace> (*p);
     pump();
     ui->setSize (1180, 660);
+    check (ui->inspectorSlider ("level")->getWidth() == 52, "primary Inspector dials retain 52 px geometry");
     press (ui->padSelectButton (3));
     block (*p); ui->pollForTesting();
     check (ui->selection().pad() == 3 && ui->telemetry().hits == 0 && p->activeVoices() == 0,
@@ -233,6 +235,9 @@ void test()
                            "all 16 select/audition targets remain accessible");
                     check (! ui->padSelectButton (pad).getBounds().intersects (ui->padHitButton (pad).getBounds()),
                            "selection and audition never share a hit target");
+                    check (list ? ui->padHitButton (pad).getWidth() > ui->padSelectButton (pad).getWidth()
+                                : ui->padHitButton (pad).getHeight() > ui->padSelectButton (pad).getHeight(),
+                           "large rubber face auditions; separate smaller affordance selects");
                 }
                 juce::Image image (juce::Image::ARGB, juce::roundToInt (size.first * scale), juce::roundToInt (size.second * scale), true);
                 { juce::Graphics g (image); g.addTransform (juce::AffineTransform::scale (scale)); ui->paintEntireComponent (g, false); }

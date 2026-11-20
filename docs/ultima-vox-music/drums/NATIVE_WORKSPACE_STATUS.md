@@ -15,7 +15,8 @@ No merge or release is authorized by this ledger.
 - One 16-pad Rack switches between 4x4 and scrollable List. Separate SELECT
   and HIT buttons: SELECT changes canonical context without sending a note;
   HIT queues the existing processor audition at velocity 110 without changing
-  selection. Queue refusal is visible.
+  selection. The large rubber face is HIT; the separate smaller SEL affordance
+  selects. Grid/List geometry is asserted. Queue refusal is visible.
 - Inspector follows the selected pad or pins its object identity. Level,
   Tune, Decay, Pan, Mute and Solo use real APVTS attachments. Model, MIDI note
   and requested output use KitStore, including external readback. A selection
@@ -38,6 +39,12 @@ No merge or release is authorized by this ledger.
 - Reuses `libs/vox-ui` painting and controls without changing its API. Reuses
   the real PatternEditor and SongStrip with scrollable adapters that preserve
   their complete existing toolbars. There is no browser or parallel DSP.
+- Drums-local `DrumsDial` and `DrumsFader` implement metallic 52/34 px rotary
+  bodies, recessed tracks, pointers, unit readouts, bipolar zero-origin arcs,
+  focus/hover/disabled treatment and physical vertical fader caps. Input and
+  APVTS attachments stay native. Dial angles follow the real parameter skew,
+  including frequency ranges. No shared family API was modified. This is
+  native #135 implementation progress, not final visual acceptance.
 
 ## Evidence and limits
 

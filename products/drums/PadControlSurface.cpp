@@ -4,6 +4,7 @@
 #include "Tokens.h"
 #include "Typography.h"
 #include "VoxComponents.h"
+#include "DrumsDial.h"
 
 #include <algorithm>
 #include <cmath>
@@ -85,7 +86,7 @@ struct PadControlSurface::Impl {
         juce::String name;
         std::function<float (const StructuralContext&)> get;
         std::function<void (StructuralContext&, float)> set;
-        std::unique_ptr<vox::ui::VoxKnob> knob;
+        std::unique_ptr<DrumsDial> knob;
         std::unique_ptr<juce::Label> label;
         std::unique_ptr<vox::ui::VoxComboBox> combo;
         std::unique_ptr<juce::ToggleButton> toggle;
@@ -93,7 +94,7 @@ struct PadControlSurface::Impl {
     };
     struct Host {
         juce::String suffix;
-        std::unique_ptr<vox::ui::VoxKnob> knob;
+        std::unique_ptr<DrumsDial> knob;
         std::unique_ptr<Attachment> attachment;
         bool dragging = false;
     };
@@ -108,7 +109,7 @@ struct PadControlSurface::Impl {
                                               { "pan", "Pan" }, { "cutoff", "Cutoff" } })
             {
                 auto h = std::make_unique<Host>(); h->suffix = name;
-                h->knob = std::make_unique<vox::ui::VoxKnob> (label);
+                h->knob = std::make_unique<DrumsDial> (label);
                 if (h->suffix == "pan" || h->suffix == "tune") h->knob->setStyle (vox::ui::VoxKnob::Style::Bipolar);
                 auto* raw = h.get();
                 h->knob->getSlider().onDragStart = [raw] { raw->dragging = true; };
@@ -182,7 +183,7 @@ struct PadControlSurface::Impl {
                      bool bipolar = false, double skew = 0)
     {
         auto s = std::make_unique<Control>(); s->name = name; s->get = std::move (get); s->set = std::move (set);
-        s->knob = std::make_unique<vox::ui::VoxKnob> (label);
+        s->knob = std::make_unique<DrumsDial> (label);
         if (bipolar) s->knob->setStyle (vox::ui::VoxKnob::Style::Bipolar);
         auto& slider = s->knob->getSlider(); slider.setRange (lo, hi, step);
         if (skew > 0) slider.setSkewFactorFromMidPoint (skew);
@@ -302,7 +303,7 @@ void PadControlSurface::resized()
         if (s->label) s->label->setVisible (visible);
         if (s->toggle) s->toggle->setVisible (visible);
         if (! visible) continue;
-        auto cell = juce::Rectangle<int> (r.getX() + item % columns * cellWidth, r.getY() + item / columns * 86, cellWidth, 82).reduced (3);
+        auto cell = juce::Rectangle<int> (r.getX() + item % columns * cellWidth, r.getY() + item / columns * 96, cellWidth, 92).reduced (3);
         if (s->knob) s->knob->setBounds (cell);
         if (s->combo) { s->label->setBounds (cell.removeFromTop (20)); s->combo->setBounds (cell.removeFromTop (30)); }
         if (s->toggle) s->toggle->setBounds (cell.removeFromTop (30));
