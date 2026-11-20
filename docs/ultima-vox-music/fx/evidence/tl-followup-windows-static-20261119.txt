@@ -1,0 +1,10 @@
+6d8513e1308a61097df4cd7deca0a22f845952e0
+cmake version 3.31.10
+Checkout 6d8513e1308a61097df4cd7deca0a22f845952e0; 16 PowerShell run blocks extracted, not executed
+SuiteIdentity.cmake matches workflow bundle names: VOX Trance Synthesis, VOX Drums, VOX FX
+Job eligibility, env and focused triage unchanged. Altered steps: Steinberg VST3 validator; Record binaries and environment
+Alternate grammar accepts: inventory-only.ps1
+Alternate grammar accepts: Capture-FxProcessorException.ps1
+Alternate grammar accepts: Test-FxWindowsPreflight.ps1
+Alternate grammar flags these unchanged sources (not a native PowerShell finding): Use-PinnedCheckout.ps1, windows-fx-processor-triage-02.ps1, windows-fx-processor-triage-03.ps1, windows-suite-02.ps1, windows-suite-03.ps1, windows-suite-04.ps1, windows-suite-06.ps1
+Windows PowerShell 5.1 parser, dry inventory execution and CDB/validation NOT RUN in this Linux environment.
