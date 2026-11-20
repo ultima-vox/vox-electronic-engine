@@ -218,29 +218,79 @@ bool isRelease (const juce::MidiMessageMetadata& metadata) noexcept
     return type == 0xb0 && metadata.data[1] == 64 && data2 < 64;
 }
 
-void syncExposedFx (vstengine::effects::EffectsChain& fx, const std::array<std::atomic<float>*, parameterCatalog.size()>& raw) noexcept
+constexpr vstengine::effects::EffectType previewFxTypes[vstengine::effects::EffectsChain::effectCount] = {
+    vstengine::effects::EffectType::distortion, vstengine::effects::EffectType::wavefolder,
+    vstengine::effects::EffectType::phaser, vstengine::effects::EffectType::flanger,
+    vstengine::effects::EffectType::chorus, vstengine::effects::EffectType::bitcrusher,
+    vstengine::effects::EffectType::delay, vstengine::effects::EffectType::reverb
+};
+
+template <typename Load>
+void fillFxSlots (vstengine::effects::EffectSettings* out, Load load) noexcept
 {
     using vstengine::effects::EffectSettings;
-    using vstengine::effects::EffectType;
-    constexpr EffectType types[8] = {
-        EffectType::distortion, EffectType::wavefolder, EffectType::phaser, EffectType::flanger,
-        EffectType::chorus, EffectType::bitcrusher, EffectType::delay, EffectType::reverb
-    };
-    const auto load = [] (const std::atomic<float>* value) noexcept
-    {
-        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
-    };
     for (const auto& binding : fxBindings)
     {
         EffectSettings settings;
-        settings.type = types[binding.slot];
-        settings.enabled = load (raw[static_cast<std::size_t> (binding.enable)]) >= 0.5f;
-        settings.mix = std::clamp (load (raw[static_cast<std::size_t> (binding.mix)]), 0.0f, 1.0f);
-        settings.amount = std::clamp (load (raw[static_cast<std::size_t> (binding.amount)]), 0.0f, 1.0f);
-        settings.rate = std::clamp (load (raw[static_cast<std::size_t> (binding.rate)]), 0.0f, 1.0f);
-        settings.character = std::clamp (load (raw[static_cast<std::size_t> (binding.character)]), 0.0f, 1.0f);
-        fx.setEffect (static_cast<std::size_t> (binding.slot), settings);
+        settings.type = previewFxTypes[binding.slot];
+        settings.enabled = load (binding.enable) >= 0.5f;
+        settings.mix = std::clamp (load (binding.mix), 0.0f, 1.0f);
+        settings.amount = std::clamp (load (binding.amount), 0.0f, 1.0f);
+        settings.rate = std::clamp (load (binding.rate), 0.0f, 1.0f);
+        settings.character = std::clamp (load (binding.character), 0.0f, 1.0f);
+        out[binding.slot] = settings;
     }
+}
+
+void syncExposedFx (vstengine::effects::EffectsChain& fx, const std::array<std::atomic<float>*, parameterCatalog.size()>& raw) noexcept
+{
+    const auto load = [&raw] (int index) noexcept
+    {
+        const auto* value = raw[static_cast<std::size_t> (index)];
+        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
+    };
+    vstengine::effects::EffectSettings settings[vstengine::effects::EffectsChain::effectCount];
+    fillFxSlots (settings, load);
+    for (std::size_t slot = 0; slot < vstengine::effects::EffectsChain::effectCount; ++slot)
+        fx.setEffect (slot, settings[slot]);
+}
+
+void appendUserProgram (std::vector<std::byte>& data, const UserProgram& program)
+{
+    const auto utf8 = program.name.toRawUTF8();
+    const auto length = static_cast<std::uint32_t> (std::min<std::size_t> (std::strlen (utf8), 64));
+    putU32 (data, length);
+    for (std::uint32_t c = 0; c < length; ++c)
+        data.push_back (static_cast<std::byte> (utf8[c]));
+    putU32 (data, static_cast<std::uint32_t> (program.category));
+    putU32 (data, static_cast<std::uint32_t> (program.values.size()));
+    for (float value : program.values)
+    {
+        std::uint32_t bits = 0;
+        std::memcpy (&bits, &value, sizeof bits);
+        putU32 (data, bits);
+    }
+    putU32 (data, 2u);
+    putU32 (data, static_cast<std::uint32_t> (extraRouteCount));
+    for (int part = 0; part < 2; ++part)
+        for (int route = 0; route < extraRouteCount; ++route)
+        {
+            putU32 (data, static_cast<std::uint32_t> (program.extra[part][route].source));
+            putU32 (data, static_cast<std::uint32_t> (program.extra[part][route].dest));
+            std::uint32_t bits = 0;
+            std::memcpy (&bits, &program.extra[part][route].amount, sizeof bits);
+            putU32 (data, bits);
+        }
+}
+
+void appendUserBank (preset::Section& bank, const std::vector<UserProgram>& programs)
+{
+    bank.tag = userBankTag;
+    bank.data.clear();
+    putU32 (bank.data, userBankVersion);
+    putU32 (bank.data, static_cast<std::uint32_t> (programs.size()));
+    for (const auto& program : programs)
+        appendUserProgram (bank.data, program);
 }
 
 preset::Section encodeParameters (const float* plain, int count)
@@ -306,9 +356,11 @@ void SynthesisProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
     rtPreviewTail_ = 0;
     rtPreviewEventCount_ = 0;
     rtPreviewGen_ = rtFinishedGen_;
+    previewBusReady_ = false;
     sampleRate_ = sampleRate;
     const auto block = static_cast<std::uint32_t> (std::max (1, maximumBlockSize));
     fx_.prepare (sampleRate, block, 2u);
+    previewFx_.prepare (sampleRate, block, 2u);
     prepared_ = sampleRate >= 8000.0 && sampleRate <= 384000.0 && maximumBlockSize > 0;
 }
 
@@ -318,7 +370,9 @@ void SynthesisProcessor::releaseResources()
     previewEngine_.reset();
     rtPreviewActive_ = false;
     rtSoundingCount_ = 0;
+    previewBusReady_ = false;
     fx_.reset();
+    previewFx_.reset();
     prepared_ = false;
 }
 
@@ -714,7 +768,7 @@ bool SynthesisProcessor::insertKeepingRelease (const engine::Event& event, int& 
     return insertEvent (event, count);
 }
 
-engine::BlockParams SynthesisProcessor::liveBlock() const
+engine::BlockParams SynthesisProcessor::liveBlock (PreviewFx& fx) const
 {
     float plain[parameterCatalog.size()];
     for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
@@ -724,13 +778,36 @@ engine::BlockParams SynthesisProcessor::liveBlock() const
         const juce::ScopedLock lock (modLock_);
         routes = modEdit_;
     }
+    fx = fxFromPlain (plain);
     auto block = mapPlain (plain, routes);
     block.bpm = 120.0;
     block.bpmValid = false;
     return block;
 }
 
-void SynthesisProcessor::publishPreview (const engine::BlockParams& params, const engine::Event* events, int eventCount, int tailSamples) noexcept
+SynthesisProcessor::PreviewFx SynthesisProcessor::fxFromPlain (const float* plain) const noexcept
+{
+    PreviewFx fx;
+    fillFxSlots (fx.slot, [plain] (int index) noexcept { return plain[index]; });
+    return fx;
+}
+
+SynthesisProcessor::PreviewFx SynthesisProcessor::bypassPreviewFx() noexcept
+{
+    PreviewFx fx;
+    for (std::size_t slot = 0; slot < vstengine::effects::EffectsChain::effectCount; ++slot)
+    {
+        fx.slot[slot].type = previewFxTypes[slot];
+        fx.slot[slot].enabled = false;
+        fx.slot[slot].mix = 0.0f;
+        fx.slot[slot].amount = 0.5f;
+        fx.slot[slot].rate = 0.5f;
+        fx.slot[slot].character = 0.5f;
+    }
+    return fx;
+}
+
+void SynthesisProcessor::publishPreview (const engine::BlockParams& params, const PreviewFx& fx, const engine::Event* events, int eventCount, int tailSamples) noexcept
 {
     const juce::ScopedLock lock (previewLock_);
     const int generation = previewGeneration_ + 1;
@@ -768,6 +845,7 @@ void SynthesisProcessor::publishPreview (const engine::BlockParams& params, cons
     dst.stamp = revision;
     dst.stampEnd = 0;
     dst.params = params;
+    dst.fx = fx;
     dst.eventCount = std::clamp (eventCount, 0, previewEventCap);
     for (int i = 0; i < dst.eventCount; ++i)
         dst.events[i] = events[i];
@@ -784,7 +862,7 @@ void SynthesisProcessor::publishPreview (const engine::BlockParams& params, cons
     previewGenPublished_.store (generation, std::memory_order_release);
 }
 
-bool SynthesisProcessor::copyPreview (engine::BlockParams& params, engine::Event* events, int& eventCount, int& generation, int& tailSamples) noexcept
+bool SynthesisProcessor::copyPreview (engine::BlockParams& params, PreviewFx& fx, engine::Event* events, int& eventCount, int& generation, int& tailSamples) noexcept
 {
     for (int attempt = 0; attempt < 4; ++attempt)
     {
@@ -796,6 +874,7 @@ bool SynthesisProcessor::copyPreview (engine::BlockParams& params, engine::Event
             continue;
         const int stamp = previewSlots_[slot].stamp;
         params = previewSlots_[slot].params;
+        fx = previewSlots_[slot].fx;
         eventCount = previewSlots_[slot].eventCount;
         for (int i = 0; i < eventCount && i < previewEventCap; ++i)
             events[i] = previewSlots_[slot].events[i];
@@ -812,7 +891,7 @@ bool SynthesisProcessor::copyPreview (engine::BlockParams& params, engine::Event
     return false;
 }
 
-void SynthesisProcessor::adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params) noexcept
+void SynthesisProcessor::adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params, const PreviewFx& fx) noexcept
 {
     rtPreviewGen_ = generation;
     rtPreviewEventCount_ = std::clamp (eventCount, 0, previewEventCap);
@@ -825,6 +904,12 @@ void SynthesisProcessor::adoptPreview (int generation, int tailSamples, const en
     rtPreviewActive_ = rtPreviewEventCount_ > 0;
     rtSoundingCount_ = 0;
     rtPreviewNote_ = -1;
+    if (previewFx_.isPrepared())
+    {
+        for (std::size_t slot = 0; slot < vstengine::effects::EffectsChain::effectCount; ++slot)
+            previewFx_.setEffect (slot, fx.slot[slot]);
+        previewFx_.reset();
+    }
     if (! rtPreviewActive_)
         rtFinishedGen_ = generation;
 }
@@ -889,6 +974,11 @@ void SynthesisProcessor::renderPreview (juce::AudioBuffer<float>& buffer, int fr
     if (frames <= 0 || frames > previewCapacity_ || previewMixL_.size() < static_cast<std::size_t> (frames))
         return;
     previewEngine_.process (previewMixL_.data(), previewMixR_.data(), frames, play, playCount, rtPreviewParams_);
+    if (previewFx_.isPrepared())
+    {
+        float* audio[2] = { previewMixL_.data(), previewMixR_.data() };
+        previewFx_.process (std::span<float*> (audio, 2), static_cast<std::uint32_t> (frames));
+    }
     auto* left = buffer.getWritePointer (0);
     auto* right = buffer.getWritePointer (1);
     for (int i = 0; i < frames; ++i)
@@ -902,14 +992,17 @@ void SynthesisProcessor::renderPreview (juce::AudioBuffer<float>& buffer, int fr
         left[i] = std::clamp (mixedL, -1.0f, 1.0f);
         right[i] = std::clamp (mixedR, -1.0f, 1.0f);
     }
+    previewBusReady_ = true;
 }
 
 void SynthesisProcessor::servicePreview (juce::AudioBuffer<float>& buffer, int frames)
 {
+    previewBusReady_ = false;
     if (! prepared_ || frames <= 0 || frames > previewCapacity_)
         return;
     engine::Event staged[previewEventCap] {};
     engine::BlockParams stagedParams;
+    PreviewFx stagedFx;
     int stagedCount = 0;
     int stagedGen = 0;
     int stagedTail = 0;
@@ -918,9 +1011,9 @@ void SynthesisProcessor::servicePreview (juce::AudioBuffer<float>& buffer, int f
         const int genNow = previewGenPublished_.load (std::memory_order_acquire);
         if (genNow == 0 || genNow == ownedGen)
             return false;
-        if (! copyPreview (stagedParams, staged, stagedCount, stagedGen, stagedTail) || stagedGen != genNow)
+        if (! copyPreview (stagedParams, stagedFx, staged, stagedCount, stagedGen, stagedTail) || stagedGen != genNow)
             return false;
-        adoptPreview (stagedGen, stagedTail, staged, stagedCount, stagedParams);
+        adoptPreview (stagedGen, stagedTail, staged, stagedCount, stagedParams, stagedFx);
         return true;
     };
 
@@ -1003,7 +1096,8 @@ void SynthesisProcessor::requestPreview (int note) noexcept
     const int offAt = previewSamples (sampleRate_, 0.40);
     pushPreview (events, count, 0, 0x90, note, 96, 0);
     pushPreview (events, count, static_cast<std::uint32_t> (offAt), 0x80, note, 0, 0);
-    publishPreview (liveBlock(), events, count, previewSamples (sampleRate_, 0.20));
+    PreviewFx fx;
+    publishPreview (liveBlock (fx), fx, events, count, previewSamples (sampleRate_, 0.20));
 }
 
 void SynthesisProcessor::requestFactoryPreview (int index) noexcept
@@ -1044,43 +1138,50 @@ void SynthesisProcessor::requestFactoryPreview (int index) noexcept
     int count = 0;
     int tail = 0;
     fillRoleScore (factoryProgram (index).role, factoryProgram (index).auditionNote, sampleRate_, events, count, tail);
-    publishPreview (block, events, count, tail);
+    publishPreview (block, fxFromPlain (plain), events, count, tail);
 }
 
 bool SynthesisProcessor::requestUserPreview (int index)
 {
-    std::vector<float> values;
-    int category = 0;
+    UserProgram program;
     {
         const juce::ScopedLock lock (bankLock_);
         if (index < 0 || index >= static_cast<int> (userPrograms_.size()))
             return false;
-        values = userPrograms_[static_cast<std::size_t> (index)].values;
-        category = userPrograms_[static_cast<std::size_t> (index)].category;
+        program = userPrograms_[static_cast<std::size_t> (index)];
     }
     float plain[parameterCatalog.size()];
     for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
     {
-        const float source = i < values.size() ? values[i] : parameterCatalog[i].initial;
+        const float source = i < program.values.size() ? program.values[i] : parameterCatalog[i].initial;
         plain[i] = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
     }
     ExtraRoutes routes;
+    for (int part = 0; part < 2; ++part)
+        for (int route = 0; route < extraRouteCount; ++route)
+        {
+            const auto& saved = program.extra[part][route];
+            auto& row = routes.row[part][route];
+            row.source = std::clamp (saved.source, 0, 12);
+            row.dest = std::clamp (saved.dest, 0, 5);
+            row.amount = std::isfinite (saved.amount) ? std::clamp (saved.amount, -1.0f, 1.0f) : 0.0f;
+        }
     auto block = mapPlain (plain, routes);
     block.bpm = 120.0;
     block.bpmValid = false;
-    const int note = roleForCategory (category) == FactoryRole::bass || roleForCategory (category) == FactoryRole::acid ? 36 : 60;
+    const int note = roleForCategory (program.category) == FactoryRole::bass || roleForCategory (program.category) == FactoryRole::acid ? 36 : 60;
     engine::Event events[previewEventCap] {};
     int count = 0;
     int tail = 0;
-    fillRoleScore (roleForCategory (category), note, sampleRate_, events, count, tail);
-    publishPreview (block, events, count, tail);
+    fillRoleScore (roleForCategory (program.category), note, sampleRate_, events, count, tail);
+    publishPreview (block, fxFromPlain (plain), events, count, tail);
     return true;
 }
 
 void SynthesisProcessor::cancelPreview() noexcept
 {
     engine::BlockParams block;
-    publishPreview (block, nullptr, 0, 0);
+    publishPreview (block, bypassPreviewFx(), nullptr, 0, 0);
 }
 
 std::uint32_t SynthesisProcessor::renderListeningHash (int index) const
@@ -1519,25 +1620,7 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
     out.push_back (encodeParameters (plain, static_cast<int> (parameterCatalog.size())));
     const juce::ScopedLock lock (bankLock_);
     preset::Section bank;
-    bank.tag = userBankTag;
-    putU32 (bank.data, 1u);
-    putU32 (bank.data, static_cast<std::uint32_t> (userPrograms_.size()));
-    for (const auto& program : userPrograms_)
-    {
-        const auto utf8 = program.name.toRawUTF8();
-        const auto length = static_cast<std::uint32_t> (std::min<std::size_t> (std::strlen (utf8), 64));
-        putU32 (bank.data, length);
-        for (std::uint32_t c = 0; c < length; ++c)
-            bank.data.push_back (static_cast<std::byte> (utf8[c]));
-        putU32 (bank.data, static_cast<std::uint32_t> (program.category));
-        putU32 (bank.data, static_cast<std::uint32_t> (program.values.size()));
-        for (float value : program.values)
-        {
-            std::uint32_t bits = 0;
-            std::memcpy (&bits, &value, sizeof bits);
-            putU32 (bank.data, bits);
-        }
-    }
+    appendUserBank (bank, userPrograms_);
     out.push_back (std::move (bank));
     int phraseIndex = 0;
     bool phraseEdited = false;
@@ -1672,7 +1755,8 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
     {
         std::size_t at = 0;
         std::uint32_t version = 0, count = 0;
-        if (! takeU32 (section->data, at, version) || version != 1u || ! takeU32 (section->data, at, count) || count > static_cast<std::uint32_t> (maxUserPrograms))
+        if (! takeU32 (section->data, at, version) || (version != 1u && version != userBankVersion)
+            || ! takeU32 (section->data, at, count) || count > static_cast<std::uint32_t> (maxUserPrograms))
         {
             error = "malformed UBNK section";
             return {};
@@ -1720,6 +1804,37 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
                     return {};
                 }
                 program.values[v] = std::clamp (value, parameterCatalog[v].minimum, parameterCatalog[v].maximum);
+            }
+            if (version == userBankVersion)
+            {
+                std::uint32_t parts = 0, routes = 0;
+                if (! takeU32 (section->data, at, parts) || ! takeU32 (section->data, at, routes)
+                    || parts != 2u || routes != static_cast<std::uint32_t> (extraRouteCount))
+                {
+                    error = "malformed UBNK section";
+                    return {};
+                }
+                for (std::uint32_t part = 0; part < parts; ++part)
+                    for (std::uint32_t route = 0; route < routes; ++route)
+                    {
+                        std::uint32_t source = 0, dest = 0, bits = 0;
+                        if (! takeU32 (section->data, at, source) || ! takeU32 (section->data, at, dest) || ! takeU32 (section->data, at, bits)
+                            || source > 12u || dest > 5u)
+                        {
+                            error = "malformed UBNK section";
+                            return {};
+                        }
+                        float amount = 0.0f;
+                        std::memcpy (&amount, &bits, sizeof amount);
+                        if (! std::isfinite (amount))
+                        {
+                            error = "non-finite UBNK value";
+                            return {};
+                        }
+                        program.extra[part][route].source = static_cast<int> (source);
+                        program.extra[part][route].dest = static_cast<int> (dest);
+                        program.extra[part][route].amount = std::clamp (amount, -1.0f, 1.0f);
+                    }
             }
             bank->push_back (std::move (program));
         }
@@ -1791,25 +1906,7 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
     ProductRestore restore;
     restore.sections.push_back (encodeParameters (values->data(), static_cast<int> (values->size())));
     preset::Section encoded;
-    encoded.tag = userBankTag;
-    putU32 (encoded.data, 1u);
-    putU32 (encoded.data, static_cast<std::uint32_t> (bank->size()));
-    for (const auto& program : *bank)
-    {
-        const auto utf8 = program.name.toRawUTF8();
-        const auto length = static_cast<std::uint32_t> (std::min<std::size_t> (std::strlen (utf8), 64));
-        putU32 (encoded.data, length);
-        for (std::uint32_t c = 0; c < length; ++c)
-            encoded.data.push_back (static_cast<std::byte> (utf8[c]));
-        putU32 (encoded.data, static_cast<std::uint32_t> (program.category));
-        putU32 (encoded.data, static_cast<std::uint32_t> (program.values.size()));
-        for (float value : program.values)
-        {
-            std::uint32_t bits = 0;
-            std::memcpy (&bits, &value, sizeof bits);
-            putU32 (encoded.data, bits);
-        }
-    }
+    appendUserBank (encoded, *bank);
     restore.sections.push_back (std::move (encoded));
     preset::Section phraseSection;
     phraseSection.tag = phraseSectionTag;
@@ -1995,6 +2092,16 @@ bool SynthesisProcessor::saveUserProgram (const juce::String& name, int category
     program.values.resize (parameterCatalog.size());
     for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
         program.values[i] = plainValue (*parameters_.getParameter (parameterCatalog[i].id));
+    {
+        const juce::ScopedLock lock (modLock_);
+        for (int part = 0; part < 2; ++part)
+            for (int route = 0; route < extraRouteCount; ++route)
+            {
+                program.extra[part][route].source = modEdit_.row[part][route].source;
+                program.extra[part][route].dest = modEdit_.row[part][route].dest;
+                program.extra[part][route].amount = modEdit_.row[part][route].amount;
+            }
+    }
     const juce::ScopedLock lock (bankLock_);
     if (static_cast<int> (userPrograms_.size()) >= maxUserPrograms)
         return false;
@@ -2004,23 +2111,39 @@ bool SynthesisProcessor::saveUserProgram (const juce::String& name, int category
 
 bool SynthesisProcessor::loadUserProgram (int index)
 {
-    std::vector<float> values;
+    UserProgram program;
     {
         const juce::ScopedLock lock (bankLock_);
         if (index < 0 || index >= static_cast<int> (userPrograms_.size()))
             return false;
-        values = userPrograms_[static_cast<std::size_t> (index)].values;
+        program = userPrograms_[static_cast<std::size_t> (index)];
     }
-    for (std::size_t i = 0; i < parameterCatalog.size() && i < values.size(); ++i)
+    for (std::size_t i = 0; i < parameterCatalog.size() && i < program.values.size(); ++i)
     {
         auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
         if (parameter == nullptr)
             continue;
-        const float clamped = std::clamp (values[i], parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+        const float clamped = std::clamp (program.values[i], parameterCatalog[i].minimum, parameterCatalog[i].maximum);
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
     }
+    applyUserRoutes (program);
     cancelPreview();
     return true;
+}
+
+void SynthesisProcessor::applyUserRoutes (const UserProgram& program) noexcept
+{
+    const juce::ScopedLock lock (modLock_);
+    for (int part = 0; part < 2; ++part)
+        for (int route = 0; route < extraRouteCount; ++route)
+        {
+            const auto& saved = program.extra[part][route];
+            auto& row = modEdit_.row[part][route];
+            row.source = std::clamp (saved.source, 0, 12);
+            row.dest = std::clamp (saved.dest, 0, 5);
+            row.amount = std::isfinite (saved.amount) ? std::clamp (saved.amount, -1.0f, 1.0f) : 0.0f;
+        }
+    publishModLocked();
 }
 
 int SynthesisProcessor::factoryProgramCount() const noexcept
@@ -2233,6 +2356,40 @@ int SynthesisProcessor::factoryProgramAudition (int index) const
     if (index < 0 || index >= vox::syn::factoryProgramCount())
         return 60;
     return factoryProgram (index).auditionNote;
+}
+
+float SynthesisProcessor::previewBusSample (int channel, int index) const noexcept
+{
+    const auto& bus = channel == 0 ? previewMixL_ : previewMixR_;
+    if ((channel != 0 && channel != 1) || index < 0 || static_cast<std::size_t> (index) >= bus.size())
+        return 0.0f;
+    return bus[static_cast<std::size_t> (index)];
+}
+
+int SynthesisProcessor::factoryPreviewEventsForTest (int index, AuditionEvent* out, int capacity, int& tailSamples) const noexcept
+{
+    tailSamples = 0;
+    if (out == nullptr || capacity <= 0 || index < 0 || index >= vox::syn::factoryProgramCount())
+        return 0;
+    engine::Event events[previewEventCap] {};
+    int count = 0;
+    int tail = 0;
+    const auto& program = factoryProgram (index);
+    fillRoleScore (program.role, program.auditionNote, sampleRate_, events, count, tail);
+    int written = 0;
+    for (int i = 0; i < count && written < capacity; ++i)
+    {
+        const auto type = static_cast<std::uint8_t> (events[i].status & 0xf0u);
+        out[written].sample = static_cast<int> (events[i].offset);
+        out[written].on = type == 0x90 && events[i].data2 > 0;
+        out[written].note = events[i].data1;
+        out[written].velocity = events[i].data2;
+        out[written].slide = (events[i].articulation & engine::articulateSlide) != 0;
+        out[written].accent = (events[i].articulation & engine::articulateAccent) != 0;
+        ++written;
+    }
+    tailSamples = tail;
+    return written;
 }
 
 } // namespace vox::syn

@@ -22,11 +22,20 @@ inline constexpr preset::Tag modSectionTag = preset::makeTag ("MODX");
 inline constexpr preset::Tag listenSectionTag = preset::makeTag ("LIST");
 inline constexpr int maxUserPrograms = 128;
 inline constexpr int previewEventCap = 32;
+// UBNK v1 is name, category, and parameter floats. v2 appends the extra
+// MODX routes (indices 4-31) so a user program is a whole patch. v1 still loads.
+inline constexpr std::uint32_t userBankVersion = 2u;
 
 struct UserProgram {
+    struct Route {
+        int source = 0;
+        int dest = 0;
+        float amount = 0.0f; // bipolar, same as the MODX section. 0 is off.
+    };
     juce::String name;
     int category = 0;
     std::vector<float> values;
+    Route extra[2][extraRouteCount] {};
 };
 
 // SYN-01: two parts (Psy Bass, Acid, VA), one 16-voice allocator, ENG1 state.
@@ -99,6 +108,12 @@ public:
     [[nodiscard]] float previewMonoAccent (int part) const noexcept { return previewEngine_.monoAccent (part); }
     [[nodiscard]] int previewGlideSource (int part) const noexcept { return previewEngine_.glideSource (part); }
     [[nodiscard]] bool previewVaHeld (int part, int note) const noexcept { return previewEngine_.vaNoteHeld (part, note); }
+    // Post-FX preview bus from the last callback, before the 0.30 trim.
+    [[nodiscard]] float previewBusSample (int channel, int index) const noexcept;
+    [[nodiscard]] bool previewBusValid() const noexcept { return previewBusReady_; }
+    [[nodiscard]] float previewRouteAmount (int part, int index) const noexcept { return previewEngine_.routeAmount (part, index); }
+    // Absolute sample offsets of the factory Hear score. Same events Hear plays.
+    int factoryPreviewEventsForTest (int index, AuditionEvent* out, int capacity, int& tailSamples) const noexcept;
 
     void setPhraseIndex (int index);
     [[nodiscard]] int phraseIndex() const;
@@ -148,6 +163,9 @@ private:
         };
         Row row[2][extraRouteCount] {};
     };
+    struct PreviewFx {
+        vstengine::effects::EffectSettings slot[vstengine::effects::EffectsChain::effectCount] {};
+    };
     void readModSnapshot (ExtraRoutes& out) noexcept;
     void publishModLocked() noexcept;
     engine::BlockParams latchBlock();
@@ -155,14 +173,17 @@ private:
     bool insertEvent (const engine::Event& event, int& count);
     bool insertKeepingRelease (const engine::Event& event, int& count);
     engine::BlockParams mapPlain (const float* plain, const ExtraRoutes& routes) const;
-    engine::BlockParams liveBlock() const;
-    void publishPreview (const engine::BlockParams& params, const engine::Event* events, int eventCount, int tailSamples) noexcept;
-    bool copyPreview (engine::BlockParams& params, engine::Event* events, int& eventCount, int& generation, int& tailSamples) noexcept;
+    engine::BlockParams liveBlock (PreviewFx& fx) const;
+    void publishPreview (const engine::BlockParams& params, const PreviewFx& fx, const engine::Event* events, int eventCount, int tailSamples) noexcept;
+    bool copyPreview (engine::BlockParams& params, PreviewFx& fx, engine::Event* events, int& eventCount, int& generation, int& tailSamples) noexcept;
     void servicePreview (juce::AudioBuffer<float>& buffer, int frames);
-    void adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params) noexcept;
+    void adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params, const PreviewFx& fx) noexcept;
     void queuePreviewOffs (engine::Event* play, int& playCount, const int* notes, int noteCount) noexcept;
     void queuePreviewScore (engine::Event* play, int& playCount, int frames) noexcept;
     void renderPreview (juce::AudioBuffer<float>& buffer, int frames, const engine::Event* play, int playCount);
+    void applyUserRoutes (const UserProgram& program) noexcept;
+    PreviewFx fxFromPlain (const float* plain) const noexcept;
+    static PreviewFx bypassPreviewFx() noexcept;
     std::uint32_t renderListeningHash (int index) const;
     void publishLocked();
     void readSnapshot (PhraseSnapshot& out) noexcept;
@@ -171,9 +192,12 @@ private:
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
     engine::SynthEngine previewEngine_;
+    vstengine::effects::EffectsChain fx_;
+    vstengine::effects::EffectsChain previewFx_;
     std::vector<float> previewMixL_;
     std::vector<float> previewMixR_;
     int previewCapacity_ = 0;
+    bool previewBusReady_ = false;
     // Writer-side copy. Non-RT threads take modLock_, edit this, then publish
     // a slot. The audio thread never reads this object.
     mutable juce::CriticalSection modLock_;
@@ -192,7 +216,6 @@ private:
     std::atomic<int> modHandoffPark_ { 0 };
     double hostBpm_ = 120.0;
     bool hostBpmValid_ = false;
-    vstengine::effects::EffectsChain fx_;
     engine::Event events_[engine::maxEvents] {};
     bool prepared_ = false;
     double sampleRate_ = 48000.0;
@@ -233,6 +256,7 @@ private:
     // change that NoteOff, and finishing a command never clears a newer one.
     struct PreviewSlot {
         engine::BlockParams params {};
+        PreviewFx fx {};
         engine::Event events[previewEventCap] {};
         int eventCount = 0;
         int generation = 0;

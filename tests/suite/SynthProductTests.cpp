@@ -1258,6 +1258,14 @@ void testHistoricalUbnk()
     }
     check (synth->loadUserProgram (0), "load historical bass");
     check (std::abs (plain (*synth, "syn.a.cutoff") - 0.41f) < 1.0e-5f, "historical program value restored");
+    synth->setModRoute (0, 20, 3, 1, 0.80f);
+    check (synth->loadUserProgram (0), "reload historical bass over a live extra route");
+    int legacySource = 0, legacyDest = 0;
+    float legacyAmount = 0.0f;
+    synth->getModRoute (0, 20, legacySource, legacyDest, legacyAmount);
+    check (legacySource == 0 && legacyDest == 0 && std::abs (legacyAmount - 0.5f) < 1.0e-5f,
+           "UBNK v1 load clears extra routes");
+    check (std::abs (plain (*synth, "syn.a.cutoff") - 0.41f) < 1.0e-5f, "v1 migration keeps the frozen value");
 
     juce::MemoryBlock saved;
     synth->getStateInformation (saved);
@@ -1272,6 +1280,12 @@ void testHistoricalUbnk()
     check (copy->loadUserProgram (3), "load historical user slot");
     check (copy->userProgramCategory (3) == 8, "user ordinal 8 survives re-save");
     check (std::abs (plain (*copy, "syn.a.cutoff") - 0.61f) < 1.0e-5f, "historical user value survives re-save");
+    copy->setModRoute (0, 20, 6, 4, 0.66f);
+    check (copy->loadUserProgram (3), "reload migrated historical slot");
+    copy->getModRoute (0, 20, legacySource, legacyDest, legacyAmount);
+    check (legacySource == 0 && legacyDest == 0 && std::abs (legacyAmount - 0.5f) < 1.0e-5f,
+           "re-saved v1 programs still have empty extra routes");
+    check (std::abs (plain (*copy, "syn.a.cutoff") - 0.61f) < 1.0e-5f, "migrated value stays");
 }
 
 void testPhrasePlayer()
@@ -2393,6 +2407,217 @@ void testHearLifecycle()
     check (restored->listeningMark (3) == 3 && restored->listeningMark (4) == 2, "Hear does not rewrite the ledger");
 }
 
+void playAudition (vox::syn::SynthesisProcessor& synth, juce::AudioBuffer<float>& block,
+                   const vox::syn::AuditionEvent* score, int scoreCount, int pos)
+{
+    const int frames = block.getNumSamples();
+    vox::syn::AuditionEvent local[32] {};
+    int localCount = 0;
+    for (int i = 0; i < scoreCount && localCount < 32; ++i)
+    {
+        const int at = score[i].sample;
+        if (at < pos || at >= pos + frames)
+            continue;
+        local[localCount] = score[i];
+        local[localCount].sample = at - pos;
+        ++localCount;
+    }
+    synth.audition (block, local, localCount);
+}
+
+void testPreviewFx()
+{
+    int fxProgram = -1;
+    for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
+    {
+        const auto& program = vox::syn::factoryProgram (i);
+        if (program.role != vox::syn::FactoryRole::bass || program.engineA != 0)
+            continue;
+        for (const auto& binding : vox::syn::fxBindings)
+        {
+            if (binding.slot >= 2 && binding.slot <= 4
+                && program.values[binding.enable] >= 0.5f
+                && program.values[binding.mix] > 0.05f)
+            {
+                fxProgram = i;
+                break;
+            }
+        }
+        if (fxProgram >= 0)
+            break;
+    }
+    check (fxProgram >= 0, "a bass candidate enables chorus, flanger or phaser");
+    if (fxProgram < 0)
+        return;
+
+    constexpr int frames = 128;
+    auto loaded = make();
+    auto bypassed = make();
+    loaded->prepareToPlay (48000.0, frames);
+    bypassed->prepareToPlay (48000.0, frames);
+    check (loaded->loadFactoryProgram (fxProgram), "load the FX candidate");
+    check (bypassed->loadFactoryProgram (fxProgram), "load the bypass candidate");
+    for (const auto& binding : vox::syn::fxBindings)
+        setPlain (*bypassed, vox::syn::parameterCatalog[static_cast<std::size_t> (binding.enable)].id, 0.0f);
+
+    auto heard = make();
+    heard->prepareToPlay (48000.0, frames);
+    setPlain (*heard, "syn.a.cutoff", 0.21f);
+    heard->setModRoute (0, 6, 2, 1, 0.77f);
+    juce::AudioBuffer<float> hostAudio (2, frames);
+    juce::MidiBuffer hostNote;
+    hostNote.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (100)), 0);
+    heard->processBlock (hostAudio, hostNote);
+    std::vector<float> before (vox::syn::parameterCatalog.size());
+    for (std::size_t i = 0; i < before.size(); ++i)
+        before[i] = plain (*heard, vox::syn::parameterCatalog[i].id);
+    int routeSource = 0, routeDest = 0;
+    float routeAmount = 0.0f;
+    heard->getModRoute (0, 6, routeSource, routeDest, routeAmount);
+    juce::MemoryBlock stateBefore;
+    heard->getStateInformation (stateBefore);
+    struct Tap : juce::AudioProcessorParameter::Listener
+    {
+        int hits = 0;
+        void parameterValueChanged (int, float) override { ++hits; }
+        void parameterGestureChanged (int, bool) override {}
+    } tap;
+    for (auto* parameter : heard->getParameters())
+        parameter->addListener (&tap);
+
+    heard->requestFactoryPreview (fxProgram);
+    vox::syn::AuditionEvent score[32] {};
+    int tail = 0;
+    const int scoreCount = heard->factoryPreviewEventsForTest (fxProgram, score, 32, tail);
+    check (scoreCount > 0, "factory Hear publishes a score");
+    juce::AudioBuffer<float> loadedAudio (2, frames);
+    juce::AudioBuffer<float> bypassAudio (2, frames);
+    juce::MidiBuffer idleMidi;
+    bool exact = true;
+    float gap = 0.0f;
+    int compared = 0;
+    int pos = 0;
+    while (compared < 2000)
+    {
+        if (compared > 0 && ! heard->previewActive())
+            break;
+        playAudition (*loaded, loadedAudio, score, scoreCount, pos);
+        playAudition (*bypassed, bypassAudio, score, scoreCount, pos);
+        heard->processBlock (hostAudio, idleMidi);
+        if (! heard->previewBusValid())
+            break;
+        for (int sample = 0; sample < frames; ++sample)
+        {
+            const float left = heard->previewBusSample (0, sample);
+            const float right = heard->previewBusSample (1, sample);
+            const float loadedLeft = loadedAudio.getSample (0, sample);
+            const float loadedRight = loadedAudio.getSample (1, sample);
+            if (left != loadedLeft || right != loadedRight)
+            {
+                std::printf ("preview FX mismatch program %d block %d sample %d loaded %.9g/%.9g bus %.9g/%.9g\n",
+                             fxProgram, compared, sample, loadedLeft, loadedRight, left, right);
+                exact = false;
+                break;
+            }
+            gap = std::max (gap, std::abs (left - bypassAudio.getSample (0, sample)));
+            gap = std::max (gap, std::abs (right - bypassAudio.getSample (1, sample)));
+        }
+        ++compared;
+        pos += frames;
+        if (! exact)
+            break;
+    }
+    for (auto* parameter : heard->getParameters())
+        parameter->removeListener (&tap);
+    check (compared > 8, "Hear and Load rendered the candidate phrase");
+    check (exact, "isolated Hear+FX matches the loaded synth+FX before the trim");
+    check (gap > 1.0e-3f, "the candidate FX changes the preview waveform versus bypass");
+    check (tap.hits == 0, "FX Hear does not notify the host");
+    bool valuesMatch = true;
+    for (std::size_t i = 0; i < before.size(); ++i)
+        valuesMatch = valuesMatch && std::abs (plain (*heard, vox::syn::parameterCatalog[i].id) - before[i]) < 1.0e-5f;
+    check (valuesMatch, "FX Hear leaves host parameters unchanged");
+    int source = 0, dest = 0;
+    float amount = 0.0f;
+    heard->getModRoute (0, 6, source, dest, amount);
+    check (source == routeSource && dest == routeDest && std::abs (amount - routeAmount) < 1.0e-4f, "FX Hear leaves MODX unchanged");
+    juce::MemoryBlock stateAfter;
+    heard->getStateInformation (stateAfter);
+    check (stateBefore.getSize() == stateAfter.getSize()
+               && std::memcmp (stateBefore.getData(), stateAfter.getData(), stateBefore.getSize()) == 0,
+           "FX Hear leaves the saved state unchanged while the host is playing");
+    check (heard->monoGate (0) && heard->monoNote (0) == 40, "FX Hear does not steal the host note");
+
+    while (heard->previewActive())
+        heard->processBlock (hostAudio, idleMidi);
+    auto fresh = make();
+    fresh->prepareToPlay (48000.0, frames);
+    fresh->requestFactoryPreview (fxProgram);
+    juce::AudioBuffer<float> freshAudio (2, frames);
+    juce::MidiBuffer freshMidi;
+    fresh->processBlock (freshAudio, freshMidi);
+    heard->requestFactoryPreview (fxProgram);
+    heard->processBlock (hostAudio, idleMidi);
+    bool cleared = heard->previewBusValid() && fresh->previewBusValid();
+    if (cleared)
+        for (int sample = 0; sample < frames; ++sample)
+            cleared = cleared && heard->previewBusSample (0, sample) == fresh->previewBusSample (0, sample)
+                   && heard->previewBusSample (1, sample) == fresh->previewBusSample (1, sample);
+    check (cleared, "a retriggered Hear starts from a cleared FX tail");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "FX Hear is not human approval");
+}
+
+void testUserModRoutes()
+{
+    auto synth = make();
+    synth->setModRoute (0, 20, 3, 1, 0.80f);
+    synth->setModRoute (1, 31, 4, 2, 0.10f);
+    setPlain (*synth, "syn.a.cutoff", 0.42f);
+    setPlain (*synth, "syn.fx.delay", 1.0f);
+    setPlain (*synth, "syn.fx.delay.mix", 0.55f);
+    check (synth->saveUserProgram ("Routed", static_cast<int> (vox::syn::ProgramCategory::bass)), "save a user program with extra routes");
+    synth->setModRoute (0, 20, 1, 2, 0.15f);
+    synth->setModRoute (0, 21, 5, 3, 0.90f);
+    synth->setModRoute (1, 31, 0, 0, 0.5f);
+    setPlain (*synth, "syn.a.cutoff", 0.20f);
+    setPlain (*synth, "syn.fx.delay", 0.0f);
+    juce::MemoryBlock project;
+    synth->getStateInformation (project);
+    auto restored = make();
+    restored->setStateInformation (project.getData(), static_cast<int> (project.getSize()));
+    check (restored->lastStateError().isEmpty(), "a user bank with extra routes round-trips");
+    int source = 0, dest = 0;
+    float amount = 0.0f;
+    restored->getModRoute (0, 20, source, dest, amount);
+    check (source == 1 && dest == 2 && std::abs (amount - 0.15f) < 1.0e-4f, "project MODX stays the edited route");
+    restored->getModRoute (0, 21, source, dest, amount);
+    check (source == 5 && dest == 3 && std::abs (amount - 0.90f) < 1.0e-4f, "project MODX keeps a route the user program does not own");
+    check (restored->loadUserProgram (0), "Load User restores the saved patch");
+    restored->getModRoute (0, 20, source, dest, amount);
+    check (source == 3 && dest == 1 && std::abs (amount - 0.80f) < 1.0e-4f, "Load User restores extra route 20");
+    restored->getModRoute (0, 21, source, dest, amount);
+    check (source == 0 && dest == 0 && std::abs (amount - 0.5f) < 1.0e-4f, "Load User clears a route the program did not store");
+    restored->getModRoute (1, 31, source, dest, amount);
+    check (source == 4 && dest == 2 && std::abs (amount - 0.10f) < 1.0e-4f, "Load User restores part B");
+    check (std::abs (plain (*restored, "syn.a.cutoff") - 0.42f) < 1.0e-5f, "Load User restores cutoff");
+    check (plain (*restored, "syn.fx.delay") >= 0.5f && std::abs (plain (*restored, "syn.fx.delay.mix") - 0.55f) < 1.0e-5f,
+           "Load User restores the effect row");
+
+    restored->setModRoute (0, 20, 0, 0, 0.5f);
+    restored->setModRoute (1, 31, 0, 0, 0.5f);
+    restored->prepareToPlay (48000.0, 128);
+    check (restored->requestUserPreview (0), "Hear User");
+    juce::AudioBuffer<float> block (2, 128);
+    juce::MidiBuffer idleMidi;
+    restored->processBlock (block, idleMidi);
+    check (std::abs (restored->previewRouteAmount (0, 20) - (0.80f - 0.5f) * 2.0f) < 1.0e-4f, "Hear User plays the saved extra route");
+    check (std::abs (restored->previewRouteAmount (0, 21)) < 1.0e-4f, "Hear User does not play a route the program omitted");
+    check (std::abs (restored->previewRouteAmount (1, 31) - (0.10f - 0.5f) * 2.0f) < 1.0e-4f, "Hear User plays part B's saved route");
+    restored->getModRoute (0, 20, source, dest, amount);
+    check (source == 0 && dest == 0 && std::abs (amount - 0.5f) < 1.0e-4f, "Hear User does not write the host MODX");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "a user route is not human approval");
+}
+
 void testWorstCase()
 {
 #if defined (_WIN32)
@@ -2428,6 +2653,7 @@ void testWorstCase()
             juce::MidiBuffer midi;
             for (int note = 0; note < 4; ++note)
                 midi.addEvent (juce::MidiMessage::noteOn (1, 48 + note * 3, static_cast<juce::uint8> (100)), note);
+            synth->requestPreview (72);
             for (int i = 0; i < 4; ++i)
             {
                 synth->processBlock (buffer, midi);
@@ -2459,6 +2685,8 @@ void testWorstCase()
                          rate, block, samples, p50, p95, p99, worst, deadline);
             check (finite, "worst-case output stays finite");
             check (p99 < deadline, "worst-case p99 stays inside the block deadline at " + std::to_string (rate) + "/" + std::to_string (block));
+            if (rate == 96000.0 && block == 32)
+                check (synth->previewActive(), "96k/32 deadline included a sounding Hear");
         }
 }
 
@@ -2486,6 +2714,8 @@ int main()
     testIntegrationStress();
     testModHost();
     testHearLifecycle();
+    testPreviewFx();
+    testUserModRoutes();
     testWorstCase();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);

@@ -243,6 +243,13 @@ float SynthEngine::modCutoff (int part) const noexcept
     return lastCutoff_[part];
 }
 
+float SynthEngine::routeAmount (int part, int index) const noexcept
+{
+    if (part < 0 || part >= partCount || index < 0 || index >= PartParams::routeSlots)
+        return 0.0f;
+    return live_[part].routeAmount[index];
+}
+
 int SynthEngine::vaFadeLeft() const noexcept
 {
     int left = 0;

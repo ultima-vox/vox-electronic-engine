@@ -141,6 +141,7 @@ public:
     [[nodiscard]] double lfoPhase (int part, int index) const noexcept;
     [[nodiscard]] double vaRetrigPhase (int part, int note, int index) const noexcept;
     [[nodiscard]] float modCutoff (int part) const noexcept;
+    [[nodiscard]] float routeAmount (int part, int index) const noexcept;
     [[nodiscard]] int vaFadeLeft() const noexcept;
 
 private:
