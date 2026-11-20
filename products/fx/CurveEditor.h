@@ -7,7 +7,7 @@ namespace vox::fx {
 class FxProcessor;
 
 // Layer or Program trajectory editor. Nodes are normalized; endpoints stay at 0 and 1 in time.
-// Double-click inserts, Delete removes an interior node, drag snaps time to
+// Double-click or Insert adds a node, Delete removes an interior node; drag snaps time to
 // 1/16, L/S/E/H select the outgoing segment shape, Ctrl-Z/Y undo/redo.
 class CurveEditor final : public juce::Component {
 public:
@@ -44,6 +44,10 @@ private:
     bool copyCurve() const;
     bool pasteCurve();
     void syncRestore();
+    bool insertNode(float time,float value,timeline::Shape);
+    bool insertInSelectedSegment();
+    void focusGained(FocusChangeType) override { repaint(); }
+    void focusLost(FocusChangeType) override { repaint(); }
     FxProcessor& processor_;
     CurveTarget target_;
     timeline::Curve shown_;

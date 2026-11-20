@@ -158,19 +158,28 @@ jobs:
           retention-days: 7
 
       - name: Steinberg VST3 validator
+        id: suite-validator
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path suite-out\validator | Out-Null
           $failed = @()
           $bundles = @(Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory)
           if ($env:FX_DIAGNOSTICS -eq 'ON') {
-            $names = @($bundles | ForEach-Object { $_.BaseName })
-            if ($bundles.Count -ne 3 -or @('VOX FX', 'VOX Drums', 'VOX Trance Synthesis' | Where-Object { $_ -notin $names }).Count -ne 0) {
-              throw "Expected the three standalone VST3 bundles, found: $($names -join ', ')"
+            # FX inventory preflight begin
+            $required = @('VOX FX', 'VOX Drums', 'VOX Trance Synthesis')
+            $names = @($bundles | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Name) })
+            $missing = @($required | Where-Object { -not ($names -ccontains $_) })
+            if ($bundles.Count -ne $required.Count -or $missing.Count -ne 0) {
+              throw "Expected the three standalone VST3 bundles; missing: $($missing -join ', '); found: $($names -join ', ')"
             }
+            foreach ($bundle in $bundles) {
+              $binary = Join-Path $bundle.FullName (Join-Path 'Contents\x86_64-win' $bundle.Name)
+              if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Missing x64 VST3 binary: $binary" }
+            }
+            # FX inventory preflight end
           }
           foreach ($bundle in $bundles) {
-            $log = Join-Path 'suite-out\validator' "$($bundle.BaseName).txt"
+            $log = Join-Path 'suite-out\validator' "$([IO.Path]::GetFileNameWithoutExtension($bundle.Name)).txt"
             & $env:VST3_VALIDATOR $bundle.FullName *> $log
             $code = $LASTEXITCODE
             Get-Content $log | Select-String -Pattern 'Result:|ERROR' | ForEach-Object { "$($bundle.Name): $_" }
@@ -181,6 +190,9 @@ jobs:
       - name: Record binaries and environment
         if: always()
         shell: powershell
+        env:
+          SUITE_CTEST_OUTCOME: ${{ steps.suite-ctest.outcome }}
+          SUITE_VALIDATOR_OUTCOME: ${{ steps.suite-validator.outcome }}
         run: |
           New-Item -ItemType Directory -Force -Path suite-out\VST3 | Out-Null
           $lines = @(
@@ -192,6 +204,13 @@ jobs:
             "JUCE: $env:JUCE_COMMIT",
             "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
           )
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            $lines += "CTest outcome: $env:SUITE_CTEST_OUTCOME"
+            $lines += "Steinberg validator outcome: $env:SUITE_VALIDATOR_OUTCOME"
+            if ($env:SUITE_VALIDATOR_OUTCOME -ne 'success') {
+              $lines += 'Not qualified by the validator; collected binaries are diagnostic only.'
+            }
+          }
           foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory -ErrorAction SilentlyContinue) {
             Copy-Item -Recurse -Force $bundle.FullName suite-out\VST3\
             foreach ($file in Get-ChildItem $bundle.FullName -Recurse -File) {

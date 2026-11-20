@@ -6,6 +6,7 @@
 #include <cmath>
 #include <iomanip>
 #include <locale>
+#include <numeric>
 #include <sstream>
 
 namespace vox::fx {
@@ -39,13 +40,14 @@ CurveEditor::CurveEditor(FxProcessor& processor,std::optional<std::size_t> layer
     jassert(!layer || *layer < 4);
     setWantsKeyboardFocus(true);
     updateTitle();
-    setDescription("Double click to add nodes. Shift click to select multiple; drag or arrow keys move them. Enter edits one node numerically. Command-C/V copy or paste the entire curve. L, S, E or H set segment shape. Wheel or plus/minus zooms; Shift-wheel or Alt-left/right pans; zero fits the full authored duration. Bracket keys select the previous or next node and reveal it.");
+    setDescription("Insert adds a midpoint node after the selected node, or before the last node. Double click to place a node with the mouse. Shift click to select multiple; drag or arrow keys move them. Enter edits one node numerically. Command-C/V copy or paste the entire curve. L, S, E or H set segment shape. Wheel or plus/minus zooms; Shift-wheel or Alt-left/right pans; zero fits the full authored duration. Bracket keys select the previous or next node and reveal it.");
     refresh();
 }
 void CurveEditor::updateTitle() {
     const char* name = kind()==Kind::gain ? "amplitude" : kind()==Kind::pitch ? "pitch" :
                        kind()==Kind::cutoff ? "cutoff" : "panorama";
-    setTitle(juce::String(target_.layer ? "Layer " : "Program ") + name + " curve");
+    const auto scope=target_.layer?"Layer "+juce::String(*target_.layer+1)+" ":juce::String("Program ");
+    setTitle(scope + name + " curve");
 }
 void CurveEditor::setKind(Kind kind) {
     if (target_.kind == kind || static_cast<unsigned>(kind) > static_cast<unsigned>(Kind::pan)) return;
@@ -209,12 +211,29 @@ void CurveEditor::mouseDoubleClick(const juce::MouseEvent& event) {
     syncRestore();
     dragging_=false;auto r=graph();if(r.isEmpty()||!r.contains(event.position)||shown_.count>=16)return;
     const float time=phaseAt(event.position.x,!event.mods.isAltDown());
-    if(time<=0||time>=1)return;
+    (void)insertNode(time,juce::jlimit(0.0f,1.0f,(r.getBottom()-event.position.y)/r.getHeight()),timeline::Shape::linear);
+}
+bool CurveEditor::insertNode(float time,float value,timeline::Shape shape) {
+    if(time<=0||time>=1||shown_.count>=shown_.nodes.size())return false;
     auto next=shown_;int at=1;while(at<next.count && next.nodes[static_cast<std::size_t>(at)].time<time)++at;
-    if(at>=next.count || next.nodes[static_cast<std::size_t>(at)].time==time)return;
+    if(at>=next.count || next.nodes[static_cast<std::size_t>(at)].time==time)return false;
     for(int i=next.count;i>at;--i)next.nodes[static_cast<std::size_t>(i)]=next.nodes[static_cast<std::size_t>(i-1)];
-    next.nodes[static_cast<std::size_t>(at)]={time,juce::jlimit(0.0f,1.0f,(r.getBottom()-event.position.y)/r.getHeight()),timeline::Shape::linear};
-    ++next.count;if(applyEdit(next)){selected_=at;selection_=curveedit::bit(static_cast<unsigned>(at));}
+    next.nodes[static_cast<std::size_t>(at)]={time,value,shape};
+    ++next.count;
+    if(!applyEdit(next))return false;
+    selected_=at;selection_=curveedit::bit(static_cast<unsigned>(at));viewport_.reveal(time);repaint();
+    return true;
+}
+bool CurveEditor::insertInSelectedSegment() {
+    if(dragging_||(selection_&&(selected_<0||selection_!=curveedit::bit(static_cast<unsigned>(selected_)))))return false;
+    const int left=std::clamp(selected_,0,shown_.count-2);
+    const auto& a=shown_.nodes[static_cast<std::size_t>(left)];
+    const auto& b=shown_.nodes[static_cast<std::size_t>(left+1)];
+    const auto time=std::midpoint(a.time,b.time);
+    if(time<=a.time||time>=b.time)return false;
+    // Start at the curve's current value. Splitting a nonlinear segment
+    // restarts its interpolation on each side; Undo restores the original.
+    return insertNode(time,shown_.evaluate(time),a.shape);
 }
 bool CurveEditor::copyCurve() const {
     std::ostringstream text;
@@ -270,6 +289,7 @@ void CurveEditor::enterNodeValues() {
 bool CurveEditor::keyPressed(const juce::KeyPress& key) {
     syncRestore();
     const int code=key.getKeyCode();
+    if(key==juce::KeyPress::insertKey){(void)insertInSelectedSegment();return true;}
     if(key.getModifiers().isCommandDown()) {
         if(code=='z'||code=='Z')return key.getModifiers().isShiftDown()?redo():undo();
         if(code=='y'||code=='Y')return redo();

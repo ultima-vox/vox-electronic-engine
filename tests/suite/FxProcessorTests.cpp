@@ -839,6 +839,38 @@ void checkTimelineViewport() {
           "axis follows project restore");
 }
 
+void checkKeyboardCurveAuthoring() {
+    using namespace vox::fx;
+    auto fx=std::make_unique<FxProcessor>();
+    CurveEditor editor(*fx,1);
+    const juce::KeyPress insert(juce::KeyPress::insertKey);
+    const auto read=[&]{return fx->program().layers[1].gainCurve;};
+    auto initial=timeline::Curve::constant(.75f);initial.nodes[1].value=.25f;
+    check(editor.setCurve(initial),"keyboard curve initial slope");
+    const auto original=save(*fx);
+    check(editor.getTitle()=="Layer 2 amplitude curve"&&editor.getDescription().contains("Insert"),"layer-specific accessible title and key help");
+    check(editor.keyPressed(insert)&&read().count==3&&read().nodes[1].time==.5f&&read().nodes[1].value==.5f,
+          "Insert adds the first midpoint at the current curve value without a pointer");
+    check(editor.keyPressed(juce::KeyPress(juce::KeyPress::upKey))&&std::abs(read().nodes[1].value-.51f)<1e-6,
+          "new node is selected for keyboard editing");
+    check(editor.undo()&&editor.undo()&&save(*fx)==original&&editor.redo()&&read().count==3,
+          "insertion is one undoable structural change");
+    check(editor.keyPressed(juce::KeyPress('['))&&editor.keyPressed(juce::KeyPress('['))&&editor.keyPressed(insert)&&
+          read().count==4&&read().nodes[2].time==.75f,
+          "Insert uses the selected segment, including selection of the last endpoint");
+    const auto keyboardSaved=save(*fx);
+    fx->setStateInformation(original.getData(),static_cast<int>(original.getSize()));
+    check(!editor.undo()&&read().count==2,"host restore invalidates keyboard edit history");
+    fx->setStateInformation(keyboardSaved.getData(),static_cast<int>(keyboardSaved.getSize()));
+    editor.refresh();
+    check(read().count==4,"keyboard-authored nodes survive project reopen");
+    auto full=timeline::Curve::constant(.5f);full.count=16;
+    for(unsigned i=0;i<full.count;++i)full.nodes[i].time=static_cast<float>(i)/15.f;
+    check(editor.setCurve(full),"full curve keyboard fixture");
+    const auto fullState=save(*fx);
+    check(editor.keyPressed(insert)&&save(*fx)==fullState,"Insert at capacity does not mutate or overflow the curve");
+}
+
 void checkHostTempoCursor() {
     using namespace vox::fx;
     TestPlayHead automated, reference;
@@ -974,7 +1006,7 @@ int main() {
     phase("Layer drag across host restore");checkLayerDragRestore();
     phase("Motion history rollover and non-Motion host restore");checkMotionHistoryBoundaries();
     phase("Pattern clipboard during restore and editor recreation");checkPatternClipboardRestore();
-    phase("timeline viewport keyboard and selection");checkTimelineViewport();
+    phase("timeline viewport keyboard and selection");checkTimelineViewport();checkKeyboardCurveAuthoring();
     phase("WAV export across editor close and recreation");checkExportAcrossEditorClose();
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
     phase("MIDI export lifecycle and picker reentry");checkMidiExportLifecycle();checkExportChooserReentry();

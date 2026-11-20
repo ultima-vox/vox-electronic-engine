@@ -43,6 +43,8 @@ if (-not $working) { throw 'CTest did not provide the working directory.' }
 $working = (Resolve-Path -LiteralPath $working).Path
 $exeDir = Split-Path -Parent $exe
 $pdb = [IO.Path]::ChangeExtension($exe, '.pdb')
+$module = [IO.Path]::GetFileNameWithoutExtension($exe)
+if ($module -cne $TestName) { throw "Unexpected executable basename for ${TestName}: $module" }
 Note "Checkout: $(& git rev-parse HEAD)"
 Note "Tree: $(& git rev-parse 'HEAD^{tree}')"
 Note "Test: $testName"
@@ -67,6 +69,11 @@ $dumpName = 'vox-fx-' + [Guid]::NewGuid().ToString('N') + '.dmp'
 $tempDump = Join-Path $working $dumpName
 $onException = ".lastevent; .exr -1; .ecxr; kP; .dump /m $dumpName; q"
 @(
+    # Reject mismatched symbols and leave the module's loaded-symbol status
+    # in the transcript. The presence of an adjacent PDB is not a match.
+    '.symopt+ 0x400'
+    ".reload /f $module.exe"
+    "lmv m $module"
     "sxd -c2 `"$onException`" av"
     "sxd -c2 `"$onException`" sov"
     "sxd -c2 `"$onException`" eh"

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <string_view>
 #include <mutex>
 #if JUCE_WINDOWS
  #ifndef NOMINMAX
@@ -34,9 +35,61 @@ struct Hold {
         cv.notify_all();
     }
 };
+
+#if JUCE_WINDOWS
+// Opt-in against an operator-provisioned, isolated fixture. Does not fill a
+// disk, change an ACL or remove someone else's file. Paths use an ASCII root
+// here (the normal suite separately exercises Unicode leaf names).
+int winFailureFixture(std::string_view mode,const juce::File& root) {
+    using namespace vox::fx;
+    using namespace fileexport;
+    if(mode!="denied"&&mode!="low-space")return 2;
+    if(!root.isDirectory()||root.getFileName()!="vox-fx-failure-fixture")return 2;
+    const auto entries=[&]{
+        juce::StringArray names;
+        for(const auto& file:root.findChildFiles(juce::File::findFilesAndDirectories,false))names.add(file.getFileName());
+        names.sort(false);return names;
+    };
+    if(mode=="denied"){
+        const auto probe=root.getChildFile("independent-probe-"+juce::Uuid().toString());
+        if(::CreateDirectoryW(probe.getFullPathName().toWideCharPointer(),nullptr)!=0){probe.deleteFile();return 2;}
+        if(::GetLastError()!=ERROR_ACCESS_DENIED){std::puts("ACL fixture did not produce ERROR_ACCESS_DENIED");return 2;}
+    }
+    ULARGE_INTEGER freeBytes{};
+    if(mode=="low-space"&&!::GetDiskFreeSpaceExW(root.getFullPathName().toWideCharPointer(),&freeBytes,nullptr,nullptr))return 2;
+    const auto before=entries();
+    int failures=0;
+    for(const auto kind:{Kind::wav,Kind::midi}){
+        const bool audio=kind==Kind::wav;
+        const auto dest=root.getChildFile(audio?"new output.wav":"new output.mid");
+        if(Destination::observe(dest).original==detail::TargetState::occupied)return 2;
+        offline::Capture wav;wav.settings.duration=1.f;
+        pattern::Pattern smf;smf.steps[0].enabled=true;
+        std::vector<std::uint8_t> expected;
+        if(!(audio?offline::renderWav(wav,expected):pattern::exportMidi(smf,125.,expected)))return 2;
+        if(mode=="low-space"&&freeBytes.QuadPart>=expected.size()){
+            std::printf("%s low-space case unexercised: free bytes must be below %zu\n",audio?"WAV":"SMF",expected.size());
+            ++failures;continue;
+        }
+        auto job=audio?std::make_unique<Job>(wav,dest):std::make_unique<Job>(smf,125.,dest);
+        job->wait();
+        const bool ok=job->result()==Result::failure&&!dest.exists()&&entries()==before;
+        std::printf("%s %s: %s; expected payload=%zu bytes; fixture available=%llu bytes\n",audio?"WAV":"SMF",
+                    mode=="denied"?"ACL denial":"low space",ok?"PASS":"FAIL",expected.size(),static_cast<unsigned long long>(freeBytes.QuadPart));
+        if(!ok)++failures;
+    }
+    return failures?1:0;
+}
+#endif
 }
 
-int main() {
+int main(int argc,char** argv) {
+#if JUCE_WINDOWS
+    if(argc==4&&std::string_view(argv[1])=="--win-failure-fixture")
+        return winFailureFixture(argv[2],juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(argv[3])));
+#endif
+    if(argc!=1)return 2;
+    (void)argv;
     using namespace vox::fx;
     using namespace fileexport;
     int failures=0;
@@ -83,7 +136,14 @@ int main() {
         Hold lateWrite;auto racing=launch(late,&lateWrite);
         const bool entered=lateWrite.entered();
         check(entered&&!late.exists()&&late.replaceWithData(other.data(),other.size()),"competing writer wins after observation and staging begins");
+#if JUCE_WINDOWS
+        const auto lateHandle=::CreateFileW(late.getFullPathName().toWideCharPointer(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr);
+        check(lateHandle!=INVALID_HANDLE_VALUE,"lock late Win32 competitor through native publication");
+#endif
         lateWrite.release();racing->wait();
+#if JUCE_WINDOWS
+        if(lateHandle!=INVALID_HANDLE_VALUE)::CloseHandle(lateHandle);
+#endif
         check(racing->result()==Result::destinationExists&&same(late,other)&&children()==before+2,
               "native publication refuses late target, preserves its size/hash and cleans staging");
         const auto cancelled=dir.getChildFile(juce::String("cancelled")+extension);
@@ -112,7 +172,33 @@ int main() {
         check(handle!=INVALID_HANDLE_VALUE,"hold an exclusive Win32 incumbent handle");
         auto locked=launch(late);locked->wait();
         if(handle!=INVALID_HANDLE_VALUE)::CloseHandle(handle);
-        check(locked->result()!=Result::success&&same(late,other),"locked Win32 incumbent remains byte-exact");
+        check(locked->result()==Result::destinationExists&&same(late,other),"locked Win32 incumbent remains byte-exact");
+        const juce::File stream(late.getFullPathName()+":alternate"+extension);
+        auto ads=launch(stream);ads->wait();
+        HANDLE streamHandle=::CreateFileW(stream.getFullPathName().toWideCharPointer(),GENERIC_READ,FILE_SHARE_READ,
+                                          nullptr,OPEN_EXISTING,0,nullptr);
+        check(ads->result()==Result::failure&&streamHandle==INVALID_HANDLE_VALUE&&same(late,other),
+              "ADS admission fails without adding a stream to the incumbent");
+        if(streamHandle!=INVALID_HANDLE_VALUE)::CloseHandle(streamHandle);
+        const auto alias=dir.getChildFile(juce::String("dangling reparse leaf")+extension);
+        const auto never=dir.getChildFile("never-reparse-target");
+        // Developer Mode permits an unprivileged symlink (flag 0x2); older
+        // hosts may support only the privileged call. Do not fake the result.
+        auto linkMade=::CreateSymbolicLinkW(alias.getFullPathName().toWideCharPointer(),never.getFullPathName().toWideCharPointer(),2);
+        if(!linkMade&&::GetLastError()==ERROR_INVALID_PARAMETER)
+            linkMade=::CreateSymbolicLinkW(alias.getFullPathName().toWideCharPointer(),never.getFullPathName().toWideCharPointer(),0);
+        if(linkMade){
+            auto reparse=launch(alias);reparse->wait();
+            const auto attrs=::GetFileAttributesW(alias.getFullPathName().toWideCharPointer());
+            check(reparse->result()==Result::destinationExists&&attrs!=INVALID_FILE_ATTRIBUTES&&
+                  (attrs&FILE_ATTRIBUTE_REPARSE_POINT)!=0&&!never.exists(),"Win32 dangling reparse leaf survives");
+            check(::DeleteFileW(alias.getFullPathName().toWideCharPointer())!=0,"remove reparse fixture only");
+        }else{
+            const auto error=::GetLastError();
+            const bool unavailable=error==ERROR_PRIVILEGE_NOT_HELD||error==ERROR_NOT_SUPPORTED||error==ERROR_INVALID_FUNCTION;
+            check(unavailable,"unexpected failure while creating Win32 reparse fixture");
+            std::printf("FX file export: %s reparse fixture unexercised (Win32 %lu)\n",audio?"WAV":"SMF",static_cast<unsigned long>(error));
+        }
 #endif
         auto missing=launch(dir.getChildFile("absent-parent").getChildFile(juce::String("output")+extension));missing->wait();
         check(missing->result()==Result::failure&&!dir.getChildFile("absent-parent").exists(),"missing parent fails without creating a fallback path");
