@@ -1,0 +1,50 @@
+=== build/fx-source-scan/sani/FxFamilyDifferentiationTests.build.log
+=== build/fx-source-scan/sani/FxFamilyDifferentiationTests.log
+closest families: whoosh / metallic distance 1.331
+riser       keyboard level spread 0.0 dB
+downlifter  keyboard level spread 0.1 dB
+shepard     keyboard level spread 1.1 dB
+impact      keyboard level spread 0.0 dB
+whoosh      keyboard level spread 0.2 dB
+laser       keyboard level spread 0.1 dB
+squelch     keyboard level spread 3.8 dB
+metallic    keyboard level spread 5.0 dB
+texture     keyboard level spread 3.6 dB
+formant     keyboard level spread 2.8 dB
+glitch      keyboard level spread 1.9 dB
+granular    keyboard level spread 1.2 dB
+formant note 36 492 Hz best contrast 12.2 dB
+formant note 36 2980 Hz best contrast 6.3 dB
+formant note 60 492 Hz best contrast 7.0 dB
+formant note 60 2980 Hz best contrast 6.3 dB
+formant note 84 492 Hz best contrast 19.6 dB
+formant note 84 2980 Hz best contrast 6.1 dB
+FX family differentiation: 0 failure(s)
+=== build/fx-source-scan/sani/FxFormantTests.build.log
+=== build/fx-source-scan/sani/FxFormantTests.log
+FX formant: 0 failure(s)
+=== build/fx-source-scan/sani/FxOfflineRenderTests.build.log
+=== build/fx-source-scan/sani/FxOfflineRenderTests.log
+FX offline WAV: 0 failure(s)
+=== build/fx-source-scan/sani/FxProgramCodecTests.build.log
+=== build/fx-source-scan/sani/FxProgramCodecTests.log
+FX Program codec: 0 failure(s)
+=== build/fx-source-scan/sani/FxSampleGranularTests.build.log
+=== build/fx-source-scan/sani/FxSampleGranularTests.log
+granular travel ramp sums: backwards 7.137864, stationary 28.602086, forwards 50.066306
+FX sample granular ownership: 0 failure(s)
+=== build/fx-source-scan/sani/FxSoundGraphTests.build.log
+=== build/fx-source-scan/sani/FxSoundGraphTests.log
+motion 44100 Hz 64 routes: peak 0.020048 DC 0.0001550 / 64 grains
+motion 48000 Hz 64 routes: peak 0.019299 DC 0.0001860 / 64 grains
+motion 96000 Hz 64 routes: peak 0.026238 DC 0.0001167 / 64 grains
+mixed nonlinear/tempo delay tail 44100 Hz: peak 0.2049740, tail 0.2049740, final peak 0.000000000
+mixed nonlinear/moving free delay tail 44100 Hz: peak 0.1601409, tail 0.1601409, final peak 0.000000000
+mixed nonlinear/tempo delay tail 48000 Hz: peak 0.2063994, tail 0.2063994, final peak 0.000000000
+mixed nonlinear/moving free delay tail 48000 Hz: peak 0.1604469, tail 0.1604469, final peak 0.000000000
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2038673, tail 0.2038673, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1612363, tail 0.1612363, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)
+=== build/fx-source-scan/sani/FxSquelchTests.build.log
+=== build/fx-source-scan/sani/FxSquelchTests.log
+FX squelch: 0 failure(s)
