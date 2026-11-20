@@ -585,6 +585,114 @@ void appendPerf (const std::string& line)
     out << line << '\n';
 }
 
+void appendPerfCsv (const std::string& row)
+{
+    const auto path = envOrEmpty ("VOX_SYNTH_PERF_CSV");
+    if (path.empty())
+        return;
+    static bool started = false;
+    std::ofstream out (path, started ? std::ios::app : std::ios::trunc);
+    check (static_cast<bool> (out), "performance csv opens");
+    if (! out)
+        return;
+    if (! started)
+    {
+        out << "scenario,rate_hz,block,n,p50_ms,p95_ms,p99_ms,max_ms,deadline_ms,mallocs,within_deadline\n";
+        started = true;
+    }
+    out << row << '\n';
+}
+
+struct TimedCell
+{
+    double p50 = 0.0;
+    double p95 = 0.0;
+    double p99 = 0.0;
+    double worst = 0.0;
+    double deadline = 0.0;
+    unsigned long mallocs = 0;
+};
+
+TimedCell summariseCell (std::vector<double> times, double rate, int block, unsigned long mallocs)
+{
+    std::sort (times.begin(), times.end());
+    const auto at = [&] (double q)
+    {
+        const int index = std::clamp (static_cast<int> (std::llround (q * static_cast<double> (times.size() - 1))), 0, static_cast<int> (times.size() - 1));
+        return times[static_cast<std::size_t> (index)];
+    };
+    TimedCell cell;
+    cell.p50 = at (0.50);
+    cell.p95 = at (0.95);
+    cell.p99 = at (0.99);
+    cell.worst = times.empty() ? 0.0 : times.back();
+    cell.deadline = 1000.0 * static_cast<double> (block) / rate;
+    cell.mallocs = mallocs;
+    return cell;
+}
+
+void publishCell (const char* scenario, double rate, int block, int n, const TimedCell& cell)
+{
+    std::printf ("synth cell %s %.0f/%d n=%d: p50 %.3f p95 %.3f p99 %.3f max %.3f deadline %.3f mallocs %lu\n",
+                 scenario, rate, block, n, cell.p50, cell.p95, cell.p99, cell.worst, cell.deadline, cell.mallocs);
+    char row[640];
+    std::snprintf (row, sizeof row, "%s,%.0f,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%lu,%d",
+                   scenario, rate, block, n, cell.p50, cell.p95, cell.p99, cell.worst, cell.deadline,
+                   cell.mallocs, cell.p99 < cell.deadline ? 1 : 0);
+    appendPerf (row);
+    appendPerfCsv (row);
+}
+
+void bindRealtimeThread()
+{
+#if defined (_WIN32)
+    SetPriorityClass (GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    SetThreadAffinityMask (GetCurrentThread(), 1);
+    SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
+}
+
+void configureWorstCase (vox::syn::SynthesisProcessor& synth)
+{
+    setPlain (synth, "syn.a.engine", 2.0f);
+    setPlain (synth, "syn.b.engine", 0.0f);
+    setPlain (synth, "syn.b.level", 0.0f);
+    setPlain (synth, "syn.a.unison", 3.0f);
+    setPlain (synth, "syn.a.wt.level", 0.7f);
+    setPlain (synth, "syn.a.wt.pos", 0.8f);
+    setPlain (synth, "syn.a.fm", 0.4f);
+    setPlain (synth, "syn.a.ring", 0.2f);
+    setPlain (synth, "syn.a.osc3.level", 0.3f);
+    setPlain (synth, "syn.a.flt2.mix", 1.0f);
+    setPlain (synth, "syn.a.flt2.resonance", 0.7f);
+    setPlain (synth, "syn.a.resonance", 0.6f);
+    setPlain (synth, "syn.fx.delay", 1.0f);
+    setPlain (synth, "syn.fx.delay.mix", 0.4f);
+    setPlain (synth, "syn.fx.reverb", 1.0f);
+    setPlain (synth, "syn.fx.reverb.mix", 0.4f);
+}
+
+unsigned long timeProcess (vox::syn::SynthesisProcessor& synth, juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi, double& milliseconds)
+{
+    unsigned long calls = 0;
+    if (voxProbeAvailable())
+        voxProbeBegin();
+    const auto started = std::chrono::steady_clock::now();
+    synth.processBlock (buffer, midi);
+    milliseconds = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count();
+    if (voxProbeAvailable())
+        calls = voxProbeEnd();
+    return calls;
+}
+
+bool blockFinite (const juce::AudioBuffer<float>& buffer)
+{
+    bool finite = true;
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        finite = finite && std::isfinite (buffer.getSample (0, sample)) && std::isfinite (buffer.getSample (1, sample));
+    return finite;
+}
+
 void testPerformance()
 {
     auto synth = make();
@@ -2620,11 +2728,13 @@ void testUserModRoutes()
 
 void testWorstCase()
 {
-#if defined (_WIN32)
-    SetPriorityClass (GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-    SetThreadAffinityMask (GetCurrentThread(), 1);
-    SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-#endif
+    bindRealtimeThread();
+    if (! voxProbeAvailable())
+    {
+        ++skips;
+        check (false, "allocation probe did not attach");
+        return;
+    }
     const double rates[] = { 44100.0, 48000.0, 96000.0 };
     const int blocks[] = { 32, 64, 128, 256, 512 };
     constexpr int samples = 200;
@@ -2633,22 +2743,7 @@ void testWorstCase()
         {
             auto synth = make();
             synth->prepareToPlay (rate, block);
-            setPlain (*synth, "syn.a.engine", 2.0f);
-            setPlain (*synth, "syn.b.engine", 0.0f);
-            setPlain (*synth, "syn.b.level", 0.0f);
-            setPlain (*synth, "syn.a.unison", 3.0f);
-            setPlain (*synth, "syn.a.wt.level", 0.7f);
-            setPlain (*synth, "syn.a.wt.pos", 0.8f);
-            setPlain (*synth, "syn.a.fm", 0.4f);
-            setPlain (*synth, "syn.a.ring", 0.2f);
-            setPlain (*synth, "syn.a.osc3.level", 0.3f);
-            setPlain (*synth, "syn.a.flt2.mix", 1.0f);
-            setPlain (*synth, "syn.a.flt2.resonance", 0.7f);
-            setPlain (*synth, "syn.a.resonance", 0.6f);
-            setPlain (*synth, "syn.fx.delay", 1.0f);
-            setPlain (*synth, "syn.fx.delay.mix", 0.4f);
-            setPlain (*synth, "syn.fx.reverb", 1.0f);
-            setPlain (*synth, "syn.fx.reverb.mix", 0.4f);
+            configureWorstCase (*synth);
             juce::AudioBuffer<float> buffer (2, block);
             juce::MidiBuffer midi;
             for (int note = 0; note < 4; ++note)
@@ -2662,32 +2757,174 @@ void testWorstCase()
             std::vector<double> times;
             times.reserve (samples);
             bool finite = true;
+            unsigned long mallocs = 0;
             for (int i = 0; i < samples; ++i)
             {
-                const auto started = std::chrono::steady_clock::now();
-                synth->processBlock (buffer, midi);
-                times.push_back (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count());
-                for (int sample = 0; sample < block; ++sample)
-                    finite = finite && std::isfinite (buffer.getSample (0, sample)) && std::isfinite (buffer.getSample (1, sample));
+                double milliseconds = 0.0;
+                mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                times.push_back (milliseconds);
+                finite = finite && blockFinite (buffer);
             }
-            std::sort (times.begin(), times.end());
-            const double deadline = 1000.0 * static_cast<double> (block) / rate;
-            const auto at = [&] (double q)
-            {
-                const int index = std::clamp (static_cast<int> (std::llround (q * static_cast<double> (samples - 1))), 0, samples - 1);
-                return times[static_cast<std::size_t> (index)];
-            };
-            const double p50 = at (0.50);
-            const double p95 = at (0.95);
-            const double p99 = at (0.99);
-            const double worst = times.back();
+            const auto cell = summariseCell (times, rate, block, mallocs);
             std::printf ("synth worst %.0f/%d n=%d: p50 %.3f p95 %.3f p99 %.3f max %.3f deadline %.3f\n",
-                         rate, block, samples, p50, p95, p99, worst, deadline);
+                         rate, block, samples, cell.p50, cell.p95, cell.p99, cell.worst, cell.deadline);
+            publishCell ("steady", rate, block, samples, cell);
             check (finite, "worst-case output stays finite");
-            check (p99 < deadline, "worst-case p99 stays inside the block deadline at " + std::to_string (rate) + "/" + std::to_string (block));
+            check (mallocs == 0, "steady worst-case processBlock allocates nothing");
+            check (cell.p99 < cell.deadline, "worst-case p99 stays inside the block deadline at " + std::to_string (rate) + "/" + std::to_string (block)
+                                              + " p99 " + std::to_string (cell.p99) + " deadline " + std::to_string (cell.deadline));
             if (rate == 96000.0 && block == 32)
                 check (synth->previewActive(), "96k/32 deadline included a sounding Hear");
         }
+}
+
+// The steady-state cell calls requestPreview before its warm-up, so the
+// adopt/reset is not in those 200 blocks. These cells time that transition:
+// first Hear, FX switch, cancel, and a retrigger that lands in the timed block.
+void testPreviewTransitions()
+{
+    bindRealtimeThread();
+    if (! voxProbeAvailable())
+    {
+        ++skips;
+        check (false, "allocation probe did not attach");
+        return;
+    }
+    const double rates[] = { 44100.0, 48000.0, 96000.0 };
+    const int blocks[] = { 32, 64, 128, 256, 512 };
+    constexpr int samples = 200;
+    for (double rate : rates)
+        for (int block : blocks)
+        {
+            auto synth = make();
+            synth->prepareToPlay (rate, block);
+            configureWorstCase (*synth);
+            setPlain (*synth, "syn.fx.delay.amount", 0.72f);
+            setPlain (*synth, "syn.fx.delay.rate", 0.85f);
+            setPlain (*synth, "syn.fx.reverb.amount", 0.80f);
+            juce::AudioBuffer<float> buffer (2, block);
+            juce::MidiBuffer midi;
+            for (int note = 0; note < 4; ++note)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 48 + note * 3, static_cast<juce::uint8> (100)), note);
+            for (int i = 0; i < 4; ++i)
+            {
+                synth->processBlock (buffer, midi);
+                midi.clear();
+            }
+
+            const auto requireCell = [&] (const char* scenario, const TimedCell& cell, bool sounding)
+            {
+                check (cell.mallocs == 0, std::string (scenario) + " processBlock allocates nothing at "
+                                             + std::to_string (rate) + "/" + std::to_string (block));
+                check (cell.p99 < cell.deadline, std::string (scenario) + " p99 stays inside the block deadline at "
+                                                   + std::to_string (rate) + "/" + std::to_string (block)
+                                                   + " p99 " + std::to_string (cell.p99)
+                                                   + " max " + std::to_string (cell.worst)
+                                                   + " deadline " + std::to_string (cell.deadline));
+                if (rate == 96000.0 && block == 32)
+                    check (sounding, std::string (scenario) + " 96k/32 timed a Hear transition");
+            };
+
+            {
+                std::vector<double> times;
+                times.reserve (samples);
+                unsigned long mallocs = 0;
+                bool finite = true;
+                bool sounded = false;
+                for (int i = 0; i < samples; ++i)
+                {
+                    synth->requestPreview (72);
+                    double milliseconds = 0.0;
+                    mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                    times.push_back (milliseconds);
+                    finite = finite && blockFinite (buffer);
+                    sounded = synth->previewActive() && synth->previewBusValid();
+                    synth->cancelPreview();
+                    synth->processBlock (buffer, midi);
+                }
+                const auto cell = summariseCell (times, rate, block, mallocs);
+                publishCell ("first-hear", rate, block, samples, cell);
+                check (finite, "first Hear stays finite");
+                requireCell ("first-hear", cell, sounded);
+            }
+
+            {
+                setPlain (*synth, "syn.fx.delay.rate", 0.85f);
+                setPlain (*synth, "syn.fx.reverb.amount", 0.80f);
+                synth->requestPreview (72);
+                synth->processBlock (buffer, midi);
+                std::vector<double> times;
+                times.reserve (samples);
+                unsigned long mallocs = 0;
+                bool finite = true;
+                bool sounded = false;
+                for (int i = 0; i < samples; ++i)
+                {
+                    const bool alternate = (i % 2) == 0;
+                    setPlain (*synth, "syn.fx.delay.rate", alternate ? 0.22f : 0.85f);
+                    setPlain (*synth, "syn.fx.reverb.amount", alternate ? 0.30f : 0.80f);
+                    synth->requestPreview (alternate ? 67 : 72);
+                    double milliseconds = 0.0;
+                    mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                    times.push_back (milliseconds);
+                    finite = finite && blockFinite (buffer);
+                    sounded = synth->previewActive() && synth->previewBusValid();
+                }
+                const auto cell = summariseCell (times, rate, block, mallocs);
+                publishCell ("switch", rate, block, samples, cell);
+                check (finite, "Hear switch stays finite");
+                requireCell ("switch", cell, sounded);
+            }
+
+            {
+                std::vector<double> times;
+                times.reserve (samples);
+                unsigned long mallocs = 0;
+                bool finite = true;
+                bool cleared = false;
+                for (int i = 0; i < samples; ++i)
+                {
+                    setPlain (*synth, "syn.fx.delay.rate", 0.85f);
+                    setPlain (*synth, "syn.fx.reverb.amount", 0.80f);
+                    synth->requestPreview (72);
+                    synth->processBlock (buffer, midi);
+                    synth->cancelPreview();
+                    double milliseconds = 0.0;
+                    mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                    times.push_back (milliseconds);
+                    finite = finite && blockFinite (buffer);
+                    cleared = ! synth->previewActive();
+                }
+                const auto cell = summariseCell (times, rate, block, mallocs);
+                publishCell ("cancel", rate, block, samples, cell);
+                check (finite, "Hear cancel stays finite");
+                requireCell ("cancel", cell, cleared);
+            }
+
+            {
+                synth->requestPreview (72);
+                synth->processBlock (buffer, midi);
+                std::vector<double> times;
+                times.reserve (samples);
+                unsigned long mallocs = 0;
+                bool finite = true;
+                bool sounded = false;
+                for (int i = 0; i < samples; ++i)
+                {
+                    synth->requestPreview (i % 2 == 0 ? 60 : 72);
+                    double milliseconds = 0.0;
+                    mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                    times.push_back (milliseconds);
+                    finite = finite && blockFinite (buffer);
+                    sounded = synth->previewActive() && synth->previewBusValid();
+                }
+                const auto cell = summariseCell (times, rate, block, mallocs);
+                publishCell ("rapid-retrigger", rate, block, samples, cell);
+                check (finite, "rapid Hear retrigger stays finite");
+                requireCell ("rapid-retrigger", cell, sounded);
+            }
+        }
+    check (vox::syn::factoryProgramsHumanApproved == 0, "a timed Hear transition is not human approval");
 }
 
 } // namespace
@@ -2717,6 +2954,7 @@ int main()
     testPreviewFx();
     testUserModRoutes();
     testWorstCase();
+    testPreviewTransitions();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);
     else

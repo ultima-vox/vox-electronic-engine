@@ -69,10 +69,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
           $env:VOX_SYNTH_PERF_LOG = (Join-Path (Resolve-Path suite-out).Path 'synth-perf.txt')
+          $env:VOX_SYNTH_PERF_CSV = (Join-Path (Resolve-Path suite-out).Path 'synth-perf-cells.csv')
           $env:VOX_FACTORY_AUDIT = (Join-Path (Resolve-Path suite-out).Path 'factory-render.csv')
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Test-Path suite-out\synth-perf.txt) { Get-Content suite-out\synth-perf.txt }
+          if (Test-Path suite-out\synth-perf-cells.csv) { Get-Content suite-out\synth-perf-cells.csv }
 
       - name: Steinberg VST3 validator
         shell: powershell

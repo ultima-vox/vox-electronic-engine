@@ -908,6 +908,8 @@ void SynthesisProcessor::adoptPreview (int generation, int tailSamples, const en
     {
         for (std::size_t slot = 0; slot < vstengine::effects::EffectsChain::effectCount; ++slot)
             previewFx_.setEffect (slot, fx.slot[slot]);
+        // Constant-time history invalidation. Do not fill the delay lines here,
+        // and do not reset this chain from the UI thread while audio owns it.
         previewFx_.reset();
     }
     if (! rtPreviewActive_)
