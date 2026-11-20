@@ -2,7 +2,7 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
-- [Engineering delta](ENGINEERING_DELTA_20261119.md): bounded granular admission, layer drag restore guard, a single requirement/evidence map, and the frozen 232-cue private transfer index. [Windows gate](WINDOWS_ENGINEERING_GATE_20261119.md) prepared, not dispatched; FX-T18 remains open. The owner approved [create-only Save](CREATE_ONLY_SAVE_20261119.md); local implementation is staged, Windows and DAW proof are pending. TL follow-up adds Windows filesystem fixtures and 5.1 syntax/inventory preflight tooling; neither was run on Windows.
+- [Engineering delta](ENGINEERING_DELTA_20261119.md): bounded granular admission, layer drag restore guard, a single requirement/evidence map, and the frozen 232-cue private transfer index. [Windows gate](WINDOWS_ENGINEERING_GATE_20261119.md) prepared, not dispatched; FX-T18 remains open. The current staging checkpoint adds [measured FX-tail and bar-clock feedback](HOST_CLOCK_AND_TAIL_20261119.md), not Windows/DAW qualification. The owner approved [create-only Save](CREATE_ONLY_SAVE_20261119.md); local implementation is staged, Windows and DAW proof are pending. TL follow-up adds Windows filesystem fixtures and 5.1 syntax/inventory preflight tooling; neither was run on Windows.
 
 - [Motion history and selected-bar Pattern authoring](MOTION_PATTERN_AUTHORING_20261119.md): Linux native history rollover, mixed replay and non-Motion project restore regression; DAW focus and keyboard ownership are not qualified. [Wave B Edit Points](WAVE_B_EDIT_POINTS_20261119.md) adds 32 authored cues, bringing the review-only total to 232 with zero approvals. No Windows dispatch, new audio ZIP or upload.
 
