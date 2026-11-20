@@ -22,22 +22,18 @@ jobs:
     # existing Windows job eligibility is satisfied.
     if: >-
       ${{
-        (github.event_name != 'pull_request' ||
-        (github.event.action != 'edited' &&
-          !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine')) ||
+        github.event_name != 'pull_request' ||
+        !(github.event.pull_request.draft &&
+          (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
+            (github.event.pull_request.base.ref == 'next/fx-development' &&
+              startsWith(github.head_ref, 'arena/')))) ||
         (github.event.action == 'edited' &&
-          github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
           github.event.changes.body.from != null &&
-          !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
-          contains(github.event.pull_request.body, '[RUN_FX_SUITE]'))) ||
-        (github.event_name == 'pull_request' &&
-        github.event.action == 'edited' &&
-        github.event.pull_request.number == 156 &&
-        github.event.pull_request.draft &&
-        github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
-        github.event.changes.body.from != null &&
-        !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
-        contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]'))
+          ((!contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
+            contains(github.event.pull_request.body, '[RUN_FX_SUITE]')) ||
+           (github.event.pull_request.number == 156 &&
+            !contains(github.event.changes.body.from, '[RUN_FX_PROCESSOR]') &&
+            contains(github.event.pull_request.body, '[RUN_FX_PROCESSOR]'))))
       }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -97,10 +93,11 @@ jobs:
     if: >-
       ${{
         github.event_name != 'pull_request' ||
-        (github.event.action != 'edited' &&
-          !(github.event.pull_request.draft && github.head_ref == 'arena/d9776bd9-vox-electronic-engine')) ||
+        !(github.event.pull_request.draft &&
+          (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' ||
+            (github.event.pull_request.base.ref == 'next/fx-development' &&
+              startsWith(github.head_ref, 'arena/')))) ||
         (github.event.action == 'edited' &&
-          github.head_ref == 'arena/d9776bd9-vox-electronic-engine' &&
           github.event.changes.body.from != null &&
           !contains(github.event.changes.body.from, '[RUN_FX_SUITE]') &&
           contains(github.event.pull_request.body, '[RUN_FX_SUITE]'))
@@ -109,7 +106,7 @@ jobs:
     timeout-minutes: 120
     env:
       # FX-only diagnostics; does not change job eligibility or other products.
-      FX_DIAGNOSTICS: ${{ github.event_name == 'pull_request' && github.head_ref == 'arena/d9776bd9-vox-electronic-engine' && 'ON' || 'OFF' }}
+      FX_DIAGNOSTICS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'arena/d9776bd9-vox-electronic-engine' || (github.event.pull_request.base.ref == 'next/fx-development' && startsWith(github.head_ref, 'arena/'))) && 'ON' || 'OFF' }}
       CMAKE_GENERATOR: Visual Studio 17 2022
       # Reviewed dependency pins. A tag can move; these commits cannot.
       JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
