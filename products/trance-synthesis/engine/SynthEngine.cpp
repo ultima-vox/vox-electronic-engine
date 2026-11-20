@@ -29,12 +29,9 @@ bool monoEngine (EngineKind kind) noexcept
     return kind != EngineKind::va;
 }
 
-float shapedOsc (vstengine::dspcore::BlepOscillator& osc, int wave, double dt, float pulseWidth) noexcept
+float shapedOsc (VaOsc& osc, int wave, double dt, float pulseWidth) noexcept
 {
-    const int index = std::clamp (wave, 0, 4);
-    if (index <= 2)
-        return static_cast<float> (osc.next (index, dt));
-    return static_cast<float> (osc.nextExtra (index, dt, pulseWidth));
+    return osc.next (wave, dt, pulseWidth);
 }
 
 } // namespace

@@ -5,6 +5,7 @@
 // No JUCE and no Rack / instrument ABI headers.
 
 #include "dspcore/Primitives.h"
+#include "engine/VaExtras.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -145,9 +146,9 @@ private:
     };
 
     struct VaVoice {
-        vstengine::dspcore::BlepOscillator oscA;
-        vstengine::dspcore::BlepOscillator oscB;
-        vstengine::dspcore::BlepOscillator oscC;
+        VaOsc oscA;
+        VaOsc oscB;
+        VaOsc oscC;
         vstengine::dspcore::BlepOscillator sub;
         float velocity = 0.0f;
         float accentGain = 1.0f;
@@ -167,8 +168,8 @@ private:
         float pendingVelocity = 0.0f;
         float pendingAccent = 1.0f;
         vstengine::dspcore::SvfLowpass svf;
-        vstengine::dspcore::SvfFilter flt1;
-        vstengine::dspcore::SvfFilter flt2;
+        VaFilter flt1;
+        VaFilter flt2;
         vstengine::dspcore::LinearAdsr amp;
         vstengine::dspcore::LinearAdsr filterAmp;
     };
