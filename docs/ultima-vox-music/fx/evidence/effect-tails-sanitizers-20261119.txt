@@ -1,0 +1,89 @@
+=== build/fx-source-scan/sani/FxEffectTailTests.build.log
+=== build/fx-source-scan/sani/FxEffectTailTests.log
+44100 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4477, final second 0
+44100 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+44100 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+44100 Hz reverb into slow delay into reverb   audible tail 11.244 s, last nonzero 12.213 s, peak 0.3622, final second 0
+44100 Hz four reverbs                         audible tail  0.667 s, last nonzero  1.853 s, peak 0.3321, final second 0
+48000 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4446, final second 0
+48000 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+48000 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+48000 Hz reverb into slow delay into reverb   audible tail 11.240 s, last nonzero 12.213 s, peak 0.3621, final second 0
+48000 Hz four reverbs                         audible tail  0.665 s, last nonzero  1.853 s, peak 0.3248, final second 0
+96000 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4446, final second 0
+96000 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+96000 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+96000 Hz reverb into slow delay into reverb   audible tail 11.242 s, last nonzero 12.213 s, peak 0.3621, final second 0
+96000 Hz four reverbs                         audible tail  0.663 s, last nonzero  1.853 s, peak 0.3248, final second 0
+FX effect tails: 0 failure(s)
+=== build/fx-source-scan/sani/FxFamilyDifferentiationTests.build.log
+=== build/fx-source-scan/sani/FxFamilyDifferentiationTests.log
+closest families: whoosh / metallic distance 1.331
+riser       keyboard level spread 0.0 dB
+downlifter  keyboard level spread 0.1 dB
+shepard     keyboard level spread 1.1 dB
+impact      keyboard level spread 0.0 dB
+whoosh      keyboard level spread 0.2 dB
+laser       keyboard level spread 0.1 dB
+squelch     keyboard level spread 3.8 dB
+metallic    keyboard level spread 5.0 dB
+texture     keyboard level spread 3.6 dB
+formant     keyboard level spread 2.8 dB
+glitch      keyboard level spread 1.9 dB
+granular    keyboard level spread 1.2 dB
+formant note 36 492 Hz best contrast 12.2 dB
+formant note 36 2980 Hz best contrast 6.3 dB
+formant note 60 492 Hz best contrast 7.0 dB
+formant note 60 2980 Hz best contrast 6.3 dB
+formant note 84 492 Hz best contrast 19.6 dB
+formant note 84 2980 Hz best contrast 6.1 dB
+FX family differentiation: 0 failure(s)
+=== build/fx-source-scan/sani/FxFormantTests.build.log
+=== build/fx-source-scan/sani/FxFormantTests.log
+FX formant: 0 failure(s)
+=== build/fx-source-scan/sani/FxNonlinearAliasTests.build.log
+=== build/fx-source-scan/sani/FxNonlinearAliasTests.log
+44100 Hz f0  1838.4 amt 0.5: direct tanh 0.0000 (-49.5 dB), antialiased Drive 0.0000 (-54.9 dB), wavefold 0.0112 (-19.5 dB)
+44100 Hz f0  1838.4 amt 1.0: direct tanh 0.0015 (-28.2 dB), antialiased Drive 0.0004 (-34.1 dB), wavefold 0.1233 (- 9.1 dB)
+44100 Hz f0  4594.6 amt 0.5: direct tanh 0.0029 (-25.4 dB), antialiased Drive 0.0008 (-31.0 dB), wavefold 0.8652 (- 0.6 dB)
+44100 Hz f0  4594.6 amt 1.0: direct tanh 0.0431 (-13.7 dB), antialiased Drive 0.0109 (-19.6 dB), wavefold 0.8683 (- 0.6 dB)
+44100 Hz f0  7350.9 amt 0.5: direct tanh 0.0137 (-18.6 dB), antialiased Drive 0.0042 (-23.8 dB), wavefold 1.0000 (- 0.0 dB)
+44100 Hz f0  7350.9 amt 1.0: direct tanh 0.1303 (- 8.9 dB), antialiased Drive 0.0397 (-14.0 dB), wavefold 0.9041 (- 0.4 dB)
+48000 Hz f0  2001.0 amt 0.5: direct tanh 0.0000 (-49.5 dB), antialiased Drive 0.0000 (-54.9 dB), wavefold 0.0112 (-19.5 dB)
+48000 Hz f0  2001.0 amt 1.0: direct tanh 0.0015 (-28.2 dB), antialiased Drive 0.0004 (-34.1 dB), wavefold 0.1233 (- 9.1 dB)
+48000 Hz f0  5001.0 amt 0.5: direct tanh 0.0029 (-25.4 dB), antialiased Drive 0.0008 (-31.0 dB), wavefold 0.8652 (- 0.6 dB)
+48000 Hz f0  5001.0 amt 1.0: direct tanh 0.0431 (-13.7 dB), antialiased Drive 0.0109 (-19.6 dB), wavefold 0.8683 (- 0.6 dB)
+48000 Hz f0  8001.0 amt 0.5: direct tanh 0.0137 (-18.6 dB), antialiased Drive 0.0042 (-23.8 dB), wavefold 1.0000 (- 0.0 dB)
+48000 Hz f0  8001.0 amt 1.0: direct tanh 0.1303 (- 8.9 dB), antialiased Drive 0.0397 (-14.0 dB), wavefold 0.9041 (- 0.4 dB)
+96000 Hz f0  4002.0 amt 0.5: direct tanh 0.0000 (-49.5 dB), antialiased Drive 0.0000 (-54.9 dB), wavefold 0.0112 (-19.5 dB)
+96000 Hz f0  4002.0 amt 1.0: direct tanh 0.0015 (-28.2 dB), antialiased Drive 0.0004 (-34.1 dB), wavefold 0.1233 (- 9.1 dB)
+96000 Hz f0 10002.0 amt 0.5: direct tanh 0.0029 (-25.4 dB), antialiased Drive 0.0008 (-31.0 dB), wavefold 0.8652 (- 0.6 dB)
+96000 Hz f0 10002.0 amt 1.0: direct tanh 0.0431 (-13.7 dB), antialiased Drive 0.0109 (-19.6 dB), wavefold 0.8683 (- 0.6 dB)
+96000 Hz f0 16002.0 amt 0.5: direct tanh 0.0137 (-18.6 dB), antialiased Drive 0.0042 (-23.8 dB), wavefold 1.0000 (- 0.0 dB)
+96000 Hz f0 16002.0 amt 1.0: direct tanh 0.1303 (- 8.9 dB), antialiased Drive 0.0397 (-14.0 dB), wavefold 0.9041 (- 0.4 dB)
+FX nonlinear alias: 0 failure(s)
+=== build/fx-source-scan/sani/FxOfflineRenderTests.build.log
+=== build/fx-source-scan/sani/FxOfflineRenderTests.log
+FX offline WAV: 0 failure(s)
+=== build/fx-source-scan/sani/FxProgramCodecTests.build.log
+=== build/fx-source-scan/sani/FxProgramCodecTests.log
+FX Program codec: 0 failure(s)
+=== build/fx-source-scan/sani/FxSampleGranularTests.build.log
+=== build/fx-source-scan/sani/FxSampleGranularTests.log
+granular travel ramp sums: backwards 7.137864, stationary 28.602086, forwards 50.066306
+FX sample granular ownership: 0 failure(s)
+=== build/fx-source-scan/sani/FxSoundGraphTests.build.log
+=== build/fx-source-scan/sani/FxSoundGraphTests.log
+motion 44100 Hz 64 routes: peak 0.019922 DC 0.0001549 / 64 grains
+motion 48000 Hz 64 routes: peak 0.019241 DC 0.0001858 / 64 grains
+motion 96000 Hz 64 routes: peak 0.026175 DC 0.0001166 / 64 grains
+mixed nonlinear/tempo delay tail 44100 Hz: peak 0.2050317, tail 0.2050317, final peak 0.000000000
+mixed nonlinear/moving free delay tail 44100 Hz: peak 0.1601616, tail 0.1601616, final peak 0.000000000
+mixed nonlinear/tempo delay tail 48000 Hz: peak 0.2063064, tail 0.2063064, final peak 0.000000000
+mixed nonlinear/moving free delay tail 48000 Hz: peak 0.1604605, tail 0.1604605, final peak 0.000000000
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2039244, tail 0.2039244, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1612411, tail 0.1612411, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)
+=== build/fx-source-scan/sani/FxSquelchTests.build.log
+=== build/fx-source-scan/sani/FxSquelchTests.log
+FX squelch: 0 failure(s)

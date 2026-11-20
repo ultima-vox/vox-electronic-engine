@@ -1,0 +1,16 @@
+44100 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4477, final second 0
+44100 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+44100 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+44100 Hz reverb into slow delay into reverb   audible tail 11.244 s, last nonzero 12.213 s, peak 0.3622, final second 0
+44100 Hz four reverbs                         audible tail  0.667 s, last nonzero  1.853 s, peak 0.3321, final second 0
+48000 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4446, final second 0
+48000 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+48000 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+48000 Hz reverb into slow delay into reverb   audible tail 11.240 s, last nonzero 12.213 s, peak 0.3621, final second 0
+48000 Hz four reverbs                         audible tail  0.665 s, last nonzero  1.853 s, peak 0.3248, final second 0
+96000 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4446, final second 0
+96000 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+96000 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+96000 Hz reverb into slow delay into reverb   audible tail 11.242 s, last nonzero 12.213 s, peak 0.3621, final second 0
+96000 Hz four reverbs                         audible tail  0.663 s, last nonzero  1.853 s, peak 0.3248, final second 0
+FX effect tails: 0 failure(s)
