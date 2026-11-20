@@ -2,6 +2,12 @@
 
 // SYN-04 VA waves and the second filter. Not a change to the locked
 // dspcore primitives: saw, square and sine still call BlepOscillator::next.
+//
+// Still open, with a fixed budget so they are not fake features:
+// Wavetable: one shared read-only table, 256 frames x 2048 samples, picked
+// before the callback. No callback allocation. Oversampling stays off.
+// Unison: at most 4 detuned copies per oscillator, and those copies spend
+// the same 16-voice pool. A 4-stack unison note costs 4 voices.
 
 #include "dspcore/Primitives.h"
 

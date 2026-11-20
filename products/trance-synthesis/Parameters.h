@@ -21,7 +21,7 @@ struct Parameter
 
 inline constexpr int engineChoices = 3;
 
-inline const std::array<Parameter, 115> parameterCatalog {{
+inline const std::array<Parameter, 171> parameterCatalog {{
     { "syn.a.engine", "Part A Engine", 0.0f, 2.0f, 0.0f, true },
     { "syn.a.level", "Part A Level", 0.0f, 1.0f, 0.75f, false },
     { "syn.a.cutoff", "Part A Cutoff", 0.0f, 1.0f, 0.55f, false },
@@ -137,6 +137,62 @@ inline const std::array<Parameter, 115> parameterCatalog {{
     { "syn.b.flt.route", "Part B Filter Route", 0.0f, 1.0f, 0.0f, false },
     { "syn.b.flt.env", "Part B Filter Env", 0.0f, 1.0f, 0.0f, false },
     { "syn.b.flt.key", "Part B Key Track", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.flt.a.attack", "Part A Filter Attack", 0.0f, 1.0f, 0.035f, false },
+    { "syn.a.flt.a.decay", "Part A Filter Decay", 0.0f, 1.0f, 0.12f, false },
+    { "syn.a.flt.a.sustain", "Part A Filter Sustain", 0.0f, 1.0f, 0.72f, false },
+    { "syn.a.flt.a.release", "Part A Filter Release", 0.0f, 1.0f, 0.26f, false },
+    { "syn.b.flt.a.attack", "Part B Filter Attack", 0.0f, 1.0f, 0.035f, false },
+    { "syn.b.flt.a.decay", "Part B Filter Decay", 0.0f, 1.0f, 0.12f, false },
+    { "syn.b.flt.a.sustain", "Part B Filter Sustain", 0.0f, 1.0f, 0.72f, false },
+    { "syn.b.flt.a.release", "Part B Filter Release", 0.0f, 1.0f, 0.26f, false },
+    { "syn.a.lfo1.rate", "Part A LFO1 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.a.lfo1.shape", "Part A LFO1 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.a.lfo2.rate", "Part A LFO2 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.a.lfo2.shape", "Part A LFO2 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.a.lfo3.rate", "Part A LFO3 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.a.lfo3.shape", "Part A LFO3 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.a.lfo4.rate", "Part A LFO4 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.a.lfo4.shape", "Part A LFO4 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.b.lfo1.rate", "Part B LFO1 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.b.lfo1.shape", "Part B LFO1 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.b.lfo2.rate", "Part B LFO2 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.b.lfo2.shape", "Part B LFO2 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.b.lfo3.rate", "Part B LFO3 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.b.lfo3.shape", "Part B LFO3 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.b.lfo4.rate", "Part B LFO4 Rate", 0.0f, 1.0f, 0.25f, false },
+    { "syn.b.lfo4.shape", "Part B LFO4 Shape", 0.0f, 6.0f, 0.0f, false },
+    { "syn.a.mod1.src", "Part A Mod1 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.a.mod1.dst", "Part A Mod1 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.a.mod1.amt", "Part A Mod1 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.a.mod2.src", "Part A Mod2 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.a.mod2.dst", "Part A Mod2 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.a.mod2.amt", "Part A Mod2 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.a.mod3.src", "Part A Mod3 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.a.mod3.dst", "Part A Mod3 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.a.mod3.amt", "Part A Mod3 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.a.mod4.src", "Part A Mod4 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.a.mod4.dst", "Part A Mod4 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.a.mod4.amt", "Part A Mod4 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.b.mod1.src", "Part B Mod1 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.b.mod1.dst", "Part B Mod1 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.b.mod1.amt", "Part B Mod1 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.b.mod2.src", "Part B Mod2 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.b.mod2.dst", "Part B Mod2 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.b.mod2.amt", "Part B Mod2 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.b.mod3.src", "Part B Mod3 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.b.mod3.dst", "Part B Mod3 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.b.mod3.amt", "Part B Mod3 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.b.mod4.src", "Part B Mod4 Source", 0.0f, 12.0f, 0.0f, false },
+    { "syn.b.mod4.dst", "Part B Mod4 Dest", 0.0f, 5.0f, 0.0f, false },
+    { "syn.b.mod4.amt", "Part B Mod4 Amount", 0.0f, 1.0f, 0.5f, false },
+    { "syn.macro.1", "Macro 1", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.2", "Macro 2", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.3", "Macro 3", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.4", "Macro 4", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.5", "Macro 5", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.6", "Macro 6", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.7", "Macro 7", 0.0f, 1.0f, 0.0f, false },
+    { "syn.macro.8", "Macro 8", 0.0f, 1.0f, 0.0f, false },
 }};
 
 inline constexpr std::size_t outputParameterIndex = 14;
@@ -172,13 +228,20 @@ inline constexpr std::array<FxBinding, 8> fxBindings {{
     { 7, 16, 71, 72, 73, 74 },
 }};
 
-static_assert (parameterCatalog.size() == 115);
+static_assert (parameterCatalog.size() == 171);
 static_assert (fxBindings.back().character + 1 == 75);
 
 // Factory rows and historical UBNK values stop here. Later ids use their defaults.
 inline constexpr int frozenParameterCount = 75;
 inline constexpr int vaParamCount = 20;
 inline constexpr int vaParamBase = frozenParameterCount;
+inline constexpr int filterAdsrBase = 115;
+inline constexpr int lfoBase = 123;
+inline constexpr int routeBase = 139;
+inline constexpr int macroBase = 163;
+inline constexpr int lfoCount = 4;
+inline constexpr int routeCount = 4;
+inline constexpr int macroCount = 8;
 
 enum class VaKnob : int {
     osc1Wave, osc1Level, osc1Pw,
@@ -191,7 +254,8 @@ enum class VaKnob : int {
 };
 
 static_assert (static_cast<int> (VaKnob::count) == vaParamCount);
-static_assert (vaParamBase + vaParamCount * 2 == static_cast<int> (parameterCatalog.size()));
+static_assert (vaParamBase + vaParamCount * 2 == filterAdsrBase);
+static_assert (macroBase + macroCount == static_cast<int> (parameterCatalog.size()));
 
 inline constexpr const char* outputParameterName = "Output";
 

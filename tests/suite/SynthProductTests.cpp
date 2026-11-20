@@ -462,7 +462,7 @@ void testExposedFxTail()
 void testParameterAutomation()
 {
     auto synth = make();
-    check (vox::syn::parameterCatalog.size() == 115, "catalog keeps the frozen 75 and appends VA");
+    check (vox::syn::parameterCatalog.size() == 171, "catalog keeps the frozen 75 and appends VA and modulation");
     check (std::string (vox::syn::parameterCatalog[0].id) == "syn.a.engine", "first id stays");
     check (std::string (vox::syn::parameterCatalog[74].id) == "syn.fx.reverb.character", "frozen tail stays");
     check (std::string (vox::syn::parameterCatalog[75].id) == "syn.a.osc1.wave", "VA ids are appended");
@@ -479,6 +479,9 @@ void testParameterAutomation()
     setPlain (*synth, "syn.a.osc3.level", 0.4f);
     setPlain (*synth, "syn.a.flt1.type", 4.0f);
     setPlain (*synth, "syn.b.fm", 0.25f);
+    setPlain (*synth, "syn.a.flt.a.release", 0.8f);
+    setPlain (*synth, "syn.macro.3", 0.4f);
+    setPlain (*synth, "syn.a.mod1.amt", 0.9f);
     juce::MemoryBlock saved;
     synth->getStateInformation (saved);
     auto copy = make();
@@ -489,6 +492,9 @@ void testParameterAutomation()
     check (std::abs (plain (*copy, "syn.a.osc3.level") - 0.4f) < 1.0e-5f, "osc3 level restores");
     check (std::abs (plain (*copy, "syn.a.flt1.type") - 4.0f) < 1.0e-5f, "filter type restores");
     check (std::abs (plain (*copy, "syn.b.fm") - 0.25f) < 1.0e-5f, "FM restores");
+    check (std::abs (plain (*copy, "syn.a.flt.a.release") - 0.8f) < 1.0e-5f, "filter release restores");
+    check (std::abs (plain (*copy, "syn.macro.3") - 0.4f) < 1.0e-5f, "macro restores");
+    check (std::abs (plain (*copy, "syn.a.mod1.amt") - 0.9f) < 1.0e-5f, "route amount restores");
 
     synth->prepareToPlay (48000.0, 128);
     juce::AudioBuffer<float> buffer (2, 128);

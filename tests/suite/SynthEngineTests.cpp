@@ -9,7 +9,7 @@
 #include "AllocationProbe.h"
 #endif
 
-#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -697,6 +697,214 @@ void testVa()
     check (engine.activeVoices() == 16, "16 VA voices stay inside the cap");
 }
 
+void testVaLifecycle()
+{
+    auto params = vaBase();
+    params.part[0].filterEnv = 1.0f;
+    params.part[0].cutoff = 0.15f;
+    eng::SynthEngine engine;
+    engine.prepare (48000.0, 256);
+    const eng::Event on = midi (0, 0x90, 60, 100);
+    render (engine, 64, &on, 1, params, 64);
+    check (engine.vaFilterStage (0, 60) == 1, "filter envelope attacks with the note");
+
+    auto fast = params;
+    fast.part[0].filterAttack = 0.001;
+    fast.part[0].filterDecay = 0.02;
+    fast.part[0].filterSustain = 1.0;
+    auto slow = fast;
+    slow.part[0].filterAttack = 0.80;
+    slow.part[0].filterDecay = 0.80;
+    slow.part[0].filterSustain = 0.0;
+    const float fastEnergy = energy (play (fast, 60, 3000));
+    const float slowEnergy = energy (play (slow, 60, 3000));
+    check (std::fabs (fastEnergy - slowEnergy) > 1.0e-4f,
+           "filter ADSR is not the amp ADSR (" + std::to_string (fastEnergy) + " vs " + std::to_string (slowEnergy) + ")");
+
+    const eng::Event off = midi (0, 0x80, 60, 0);
+    render (engine, 64, &off, 1, params, 64);
+    check (engine.vaFilterStage (0, 60) == 4, "note-off releases the filter envelope");
+
+    eng::SynthEngine panic;
+    panic.prepare (48000.0, 128);
+    render (panic, 64, &on, 1, params, 64);
+    const eng::Event soft = midi (0, 0xb0, 123, 0);
+    render (panic, 32, &soft, 1, params, 32);
+    check (panic.vaFilterStage (0, 60) == 4, "CC123 releases the filter envelope");
+    const eng::Event hard = midi (0, 0xb0, 120, 0);
+    render (panic, 32, &hard, 1, params, 32);
+    check (panic.vaFilterStage (0, 60) == -1, "CC120 clears the voice");
+
+    auto paramsSteal = vaBase();
+    eng::Event chord[16];
+    for (int i = 0; i < 16; ++i)
+        chord[i] = midi (0, 0x90, static_cast<std::uint8_t> (36 + i), 70);
+    eng::SynthEngine accented;
+    eng::SynthEngine plain;
+    accented.prepare (48000.0, 512);
+    plain.prepare (48000.0, 512);
+    render (accented, 128, chord, 16, paramsSteal, 128);
+    render (plain, 128, chord, 16, paramsSteal, 128);
+    eng::Event loudOn = midi (0, 0x90, 96, 120);
+    loudOn.articulation = eng::articulateAccent;
+    const eng::Event softOn = midi (0, 0x90, 96, 120);
+    const auto loud = render (accented, 512, &loudOn, 1, paramsSteal, 128);
+    const auto quiet = render (plain, 512, &softOn, 1, paramsSteal, 128);
+    check (std::fabs (accented.vaAccentGain (0, 96) - 1.35f) < 1.0e-6f, "stolen accent survives the fade");
+    check (std::fabs (plain.vaAccentGain (0, 96) - 1.0f) < 1.0e-6f, "unaccented steal stays at unity");
+    paramsSteal.part[0].release = 0.02;
+    eng::Event rest[15];
+    for (int i = 0; i < 15; ++i)
+        rest[i] = midi (0, 0x80, static_cast<std::uint8_t> (37 + i), 0);
+    render (accented, 4000, rest, 15, paramsSteal, 128);
+    render (plain, 4000, rest, 15, paramsSteal, 128);
+    const auto loudLeft = render (accented, 512, nullptr, 0, paramsSteal, 128);
+    const auto quietLeft = render (plain, 512, nullptr, 0, paramsSteal, 128);
+    double loudEnergy = 0.0;
+    double quietEnergy = 0.0;
+    for (float sample : loudLeft.left)
+        loudEnergy += static_cast<double> (sample) * sample;
+    for (float sample : quietLeft.left)
+        quietEnergy += static_cast<double> (sample) * sample;
+    check (loudEnergy > quietEnergy * 1.2,
+           "accented stolen note is louder (" + std::to_string (loudEnergy) + " vs " + std::to_string (quietEnergy) + ")");
+    const eng::Event release = midi (0, 0x80, 96, 0);
+    render (accented, 64, &release, 1, paramsSteal, 64);
+    check (accented.vaFilterStage (0, 96) == 4, "stolen note still releases");
+}
+
+void testMod()
+{
+    auto plain = vaBase();
+    plain.part[0].cutoff = 0.20f;
+    auto moved = plain;
+    moved.part[0].lfoRate[0] = 12.0f;
+    moved.part[0].lfoShape[0] = 0;
+    moved.part[0].routeSource[0] = 1;
+    moved.part[0].routeDest[0] = 1;
+    moved.part[0].routeAmount[0] = 1.0f;
+    check (std::fabs (energy (play (moved, 48, 4096)) - energy (play (plain, 48, 4096))) > 1.0e-4f,
+           "LFO route moves the cutoff");
+
+    auto silent = moved;
+    silent.part[0].routeAmount[0] = 0.0f;
+    const auto left = play (plain, 48, 1024);
+    const auto right = play (silent, 48, 1024);
+    float worst = 0.0f;
+    for (std::size_t i = 0; i < left.left.size(); ++i)
+        worst = std::max (worst, std::fabs (left.left[i] - right.left[i]));
+    check (worst < 1.0e-6f, "a zero route does not change the sound");
+
+    auto macro = plain;
+    macro.macro[0] = 1.0f;
+    macro.part[0].routeSource[0] = 5;
+    macro.part[0].routeDest[0] = 1;
+    macro.part[0].routeAmount[0] = 1.0f;
+    check (std::fabs (energy (play (macro, 48, 2048)) - energy (play (plain, 48, 2048))) > 1.0e-4f,
+           "macro route moves the cutoff");
+}
+
+void testVaQuality()
+{
+    auto heavy = vaBase();
+    heavy.part[0].oscLevel[2] = 0.25f;
+    heavy.part[0].fm = 0.35f;
+    heavy.part[0].ring = 0.20f;
+    heavy.part[0].filter2Mix = 1.0f;
+    heavy.part[0].filter2Cutoff = 0.35f;
+    heavy.part[0].filter2Resonance = 0.75f;
+    heavy.part[0].resonance = 0.65f;
+    heavy.part[0].cutoff = 0.55f;
+    const double rates[] = { 44100.0, 48000.0, 96000.0 };
+    for (double rate : rates)
+    {
+        eng::SynthEngine engine;
+        engine.prepare (rate, 128);
+        eng::Event notes[16];
+        for (int i = 0; i < 16; ++i)
+            notes[i] = midi (static_cast<std::uint32_t> (i), 0x90, static_cast<std::uint8_t> (36 + i * 3), 100);
+        float left[32] {};
+        float right[32] {};
+        engine.process (left, right, 32, notes, 16, heavy);
+        const int blocks = std::max (8, static_cast<int> (rate * 0.20 / 32.0));
+        bool finite = true;
+        float peak = 0.0f;
+        voxProbeBegin();
+        const auto started = std::chrono::steady_clock::now();
+        for (int block = 0; block < blocks; ++block)
+        {
+            if (block == blocks / 2)
+            {
+                heavy.part[0].filterType = 4;
+                heavy.part[0].oscWave[0] = 4;
+                heavy.part[0].oscPulse[0] = 0.2f;
+            }
+            engine.process (left, right, 32, nullptr, 0, heavy);
+            for (int i = 0; i < 32; ++i)
+            {
+                finite = finite && std::isfinite (left[i]) && std::isfinite (right[i]);
+                peak = std::max (peak, std::fabs (left[i]));
+            }
+        }
+        const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count();
+        const auto calls = voxProbeEnd();
+        const double audioMs = 1000.0 * 32.0 * static_cast<double> (blocks) / rate;
+        std::printf ("va load %.0f Hz: %.2f ms for %.0f ms audio, mallocs %d\n", rate, ms, audioMs, calls);
+        check (calls == 0, "loaded VA allocates nothing at " + std::to_string (rate));
+        check (finite && peak > 1.0e-4f && peak < 1.2f, "loaded VA stays finite at " + std::to_string (rate));
+        check (ms < audioMs, "loaded VA is faster than realtime at " + std::to_string (rate));
+    }
+
+    auto lead = vaBase();
+    lead.part[0].oscLevel[1] = 0.0f;
+    lead.part[0].vaSub = 0.0f;
+    lead.part[0].noise = 0.0f;
+    lead.part[0].cutoff = 1.0f;
+    lead.part[0].resonance = 0.0f;
+    eng::SynthEngine pitch;
+    pitch.prepare (48000.0, 256);
+    const eng::Event a440 = midi (0, 0x90, 69, 100);
+    const auto tone = render (pitch, 4800, &a440, 1, lead, 128);
+    int crossings = 0;
+    for (std::size_t i = 1; i < tone.left.size(); ++i)
+        if ((tone.left[i - 1] <= 0.0f && tone.left[i] > 0.0f) || (tone.left[i - 1] >= 0.0f && tone.left[i] < 0.0f))
+            ++crossings;
+    check (crossings > 70 && crossings < 120, "A440 saw stays near 440 Hz (" + std::to_string (crossings) + " crossings)");
+
+    auto highpass = lead;
+    highpass.part[0].oscWave[0] = 0;
+    highpass.part[0].filterType = 2;
+    highpass.part[0].cutoff = 0.80f;
+    const auto hp = play (highpass, 48, 2048);
+    double mean = 0.0;
+    for (float sample : hp.left)
+        mean += sample;
+    mean /= static_cast<double> (hp.left.size());
+    check (hp.finite && std::fabs (mean) < 0.02, "high-pass VA does not sit on a DC offset");
+
+    eng::SynthEngine whole;
+    eng::SynthEngine split;
+    whole.prepare (48000.0, 256);
+    split.prepare (48000.0, 256);
+    float wholeL[256] {};
+    float wholeR[256] {};
+    float splitL[128] {};
+    float splitR[128] {};
+    float splitL2[128] {};
+    float splitR2[128] {};
+    const eng::Event edge = midi (0, 0x90, 76, 110);
+    whole.process (wholeL, wholeR, 256, &edge, 1, heavy);
+    split.process (splitL, splitR, 128, &edge, 1, heavy);
+    split.process (splitL2, splitR2, 128, nullptr, 0, heavy);
+    float splitWorst = 0.0f;
+    for (int i = 0; i < 128; ++i)
+    {
+        splitWorst = std::max (splitWorst, std::fabs (wholeL[i] - splitL[i]));
+        splitWorst = std::max (splitWorst, std::fabs (wholeL[128 + i] - splitL2[i]));
+    }
+    check (splitWorst < 1.0e-5f, "block splits do not move the phase");
+}
+
 } // namespace
 
 int main()
@@ -714,6 +922,9 @@ int main()
     testAllocation();
     testGolden();
     testVa();
+    testVaLifecycle();
+    testMod();
+    testVaQuality();
     if (failures == 0 && skips == 0)
         std::printf ("synth engine tests passed (%d checks, 0 skipped)\n", checks);
     else

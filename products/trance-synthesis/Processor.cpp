@@ -384,6 +384,29 @@ engine::BlockParams SynthesisProcessor::latchBlock()
         dst.filterRoute = std::clamp (juce::roundToInt (knob (VaKnob::filterRoute)), 0, 1);
         dst.filterEnv = knob (VaKnob::filterEnv);
         dst.keyTrack = knob (VaKnob::keyTrack);
+        const int adsr = filterAdsrBase + part * 4;
+        dst.filterAttack = 0.001 + static_cast<double> (load (raw_[static_cast<std::size_t> (adsr)])) * 0.2;
+        dst.filterDecay = 0.01 + static_cast<double> (load (raw_[static_cast<std::size_t> (adsr + 1)])) * 2.0;
+        dst.filterSustain = static_cast<double> (load (raw_[static_cast<std::size_t> (adsr + 2)]));
+        dst.filterRelease = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (adsr + 3)]));
+        const int lfo = lfoBase + part * (lfoCount * 2);
+        for (int index = 0; index < lfoCount; ++index)
+        {
+            const float rate = load (raw_[static_cast<std::size_t> (lfo + index * 2)]);
+            dst.lfoRate[index] = 0.05f * std::pow (400.0f, std::clamp (rate, 0.0f, 1.0f));
+            dst.lfoShape[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (lfo + index * 2 + 1)])), 0, 6);
+        }
+        const int route = routeBase + part * (routeCount * 3);
+        for (int index = 0; index < routeCount; ++index)
+        {
+            const int at = route + index * 3;
+            dst.routeSource[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at)])), 0, 12);
+            dst.routeDest[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at + 1)])), 0, 5);
+            dst.routeAmount[index] = (load (raw_[static_cast<std::size_t> (at + 2)]) - 0.5f) * 2.0f;
+        }
+        if (part == 0)
+            for (int index = 0; index < macroCount; ++index)
+                block.macro[index] = load (raw_[static_cast<std::size_t> (macroBase + index)]);
     }
     block.output = load (raw_[outputParameterIndex]);
     syncExposedFx (fx_, raw_);

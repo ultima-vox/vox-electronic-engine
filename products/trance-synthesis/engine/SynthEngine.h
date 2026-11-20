@@ -80,11 +80,26 @@ struct PartParams {
     int filterRoute = 0;
     float filterEnv = 0.0f;
     float keyTrack = 0.0f;
+    // Filter envelope is independent of the amp envelope. Defaults match the
+    // amp defaults, so an old caller that leaves them alone keeps the old motion.
+    double filterAttack = 0.008;
+    double filterDecay = 0.25;
+    double filterSustain = 0.72;
+    double filterRelease = 0.28;
+    // Four global LFOs and four one-way routes. Amount 0 is off.
+    // Sources: 0 off, 1-4 LFO, 5-12 macro. Dests: 0 off, 1 cutoff, 2 resonance,
+    // 3 pitch, 4 FM, 5 filter 2 cutoff. No route reads another route.
+    float lfoRate[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    int lfoShape[4] = {};
+    int routeSource[4] = {};
+    int routeDest[4] = {};
+    float routeAmount[4] = {};
 };
 
 struct BlockParams {
     PartParams part[partCount] {};
     float output = 0.8f;
+    float macro[8] = {};
 };
 
 class SynthEngine {
@@ -107,6 +122,8 @@ public:
     [[nodiscard]] float monoAccent (int part) const noexcept;
     [[nodiscard]] int glideSource (int part) const noexcept;
     [[nodiscard]] bool vaNoteHeld (int part, int note) const noexcept;
+    [[nodiscard]] int vaFilterStage (int part, int note) const noexcept;
+    [[nodiscard]] float vaAccentGain (int part, int note) const noexcept;
     [[nodiscard]] int vaFadeLeft() const noexcept;
 
 private:
@@ -199,13 +216,31 @@ private:
     void freeMonoRoom() noexcept;
     [[nodiscard]] int used() const noexcept;
     [[nodiscard]] VaVoice* oldestVa() noexcept;
+    struct VoiceMod {
+        float cutoff = 0.0f;
+        float resonance = 0.0f;
+        float pitch = 0.0f;
+        float fm = 0.0f;
+        float filter2 = 0.0f;
+    };
     [[nodiscard]] float renderMono (int part, const PartParams& params) noexcept;
-    [[nodiscard]] float renderVa (VaVoice& voice, const PartParams& params) noexcept;
+    [[nodiscard]] float renderVa (VaVoice& voice, const PartParams& params, const VoiceMod& mod) noexcept;
     [[nodiscard]] float acidFilter (int part, float input, float cutoffHz, float resonance) noexcept;
+    void updateMod (int part, const BlockParams& params) noexcept;
+
+    struct LfoState {
+        double phase = 0.0;
+        float held = 0.0f;
+        float smooth = 0.0f;
+        float target = 0.0f;
+        std::uint32_t noise = 1;
+    };
 
     Part parts_[partCount];
     VaVoice voices_[maxVoices];
     PartParams live_[partCount] {};
+    VoiceMod mod_[partCount] {};
+    LfoState lfo_[partCount][4] {};
     double sampleRate_ = 48000.0;
     int maximumBlockSize_ = 0;
     bool prepared_ = false;

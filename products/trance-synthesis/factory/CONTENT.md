@@ -19,5 +19,9 @@ Primary roles follow the owner quota: Bass 120, Acid 90, Lead 110, Pluck/Keys 80
 
 `tests/suite/fixtures/ubnk-b0f230f.voxstate` is a UBNK v1 blob in the layout introduced by `b0f230f`. Category ordinals in it are the pre-role-split values.
 
-SYN-04 appends VA oscillator and filter ids after the frozen 75. Existing ids are not reordered. Factory rows stay 75 values wide; a loaded program leaves the new knobs at their defaults. Wavetable frames and unison are not in this build. Human approval is still 0.
+SYN-04 appends VA oscillator and filter ids after the frozen 75. Existing ids are not reordered. Factory rows stay 75 values wide; a loaded program leaves the new knobs at their defaults. The 600 candidates do not yet use the new oscillators, the second filter, or modulation. Human approval is still 0.
+
+Wavetable and unison are not in this build. Wavetable budget: one shared read-only table, 256 frames by 2048 samples, chosen off the audio thread, oversampling off. Unison budget: at most 4 copies per oscillator, counted inside the 16-voice pool.
+
+SYN-05 adds an independent filter ADSR, four LFOs per part, four one-way routes per part, and eight macros. Route amount 0.5 is off. A route cannot read another route. Tempo-sync is not wired yet; LFO rate is free hertz. The editor shows the new knobs because it lists the catalog. It is not the final modulation page.
 
