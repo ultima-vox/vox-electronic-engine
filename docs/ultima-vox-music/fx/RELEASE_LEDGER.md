@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Transfer guards and timing capture](TRANSFER_GUARDS_20261119.md): existing-file recheck (not atomic compare-and-replace), isolated replay/teardown tests, and per-callback wall/CPU miss rows. Linux baseline and deliberate same-core contention retain their misses separately; neither clears FX-T18. No change to the 200 unapproved review candidates.
+
 - [Drag replay](DRAG_REPLAY_20261119.md) and [Wave B Session Cuts](WAVE_B_SESSION_CUTS_20261119.md): same-path drag retry and stale completion guard; 24 new individually authored cues, 200 review-only total, no new ZIP or approvals. Native regressions pass; new wall and thread-CPU miss evidence keeps FX-T18 open.
 
 - [Prepared WAV and MIDI drag](FILE_DRAG_20261119.md): bounded worker staging, one native copy-only offer per gesture, independent Save fallback, and offscreen payload/lifecycle checks. Real Win32 drag, drop-copy behavior, disk/teardown and owner-host acceptance remain unqualified. No audio delivery or new approvals.

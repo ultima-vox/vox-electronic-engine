@@ -1,0 +1,432 @@
+Diagnostic load: one GNU yes writer to /dev/null inherited CPU 0 affinity; not a Windows or DAW model
+Linux 6.1.158+ #1 SMP PREEMPT_DYNAMIC Mon May 11 18:48:24 UTC 2026 x86_64 GNU/Linux
+Timing environment: Linux; CPU Intel(R) Xeon(R) Processor @ 2.60GHz; logical CPUs 2; 64-bit
+Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation
+Allocation probe available: yes
+Lock probe: linked pthread mutex/rwlock entry points
+Random MIDI without Pattern
+44100 Hz 64 samples 1 initial voices: peak 0.031780 DC 0.0008663 grains 48 alloc 0 lock 0 p50 86.76 p95 154.98 p99 8078.24 max 8210.97 us
+  thread max 205.52 us; at wall max 8210.97 us thread 205.52 us; misses wall/CPU/wall-only 2/0/2 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 35.30 us
+  deadline miss: rate=44100 frames=64 initialVoices=1 pattern=off block=21 events=1 grains=8 wall_us=8078.236 cpu_us=148.037 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=1 pattern=off block=105 events=9 grains=40 wall_us=8210.974 cpu_us=205.518 budget_us=1451.247 wall_miss=1 cpu_miss=0
+44100 Hz 64 samples 4 initial voices: peak 0.032863 DC 0.0002290 grains 64 alloc 0 lock 0 p50 121.89 p95 198.50 p99 8198.19 max 8211.20 us
+  thread max 264.94 us; at wall max 8211.20 us thread 213.89 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 49.51 us
+  deadline miss: rate=44100 frames=64 initialVoices=4 pattern=off block=44 events=4 grains=48 wall_us=8198.195 cpu_us=142.438 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=4 pattern=off block=96 events=8 grains=32 wall_us=8211.199 cpu_us=213.887 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=4 pattern=off block=153 events=9 grains=36 wall_us=8162.553 cpu_us=154.240 budget_us=1451.247 wall_miss=1 cpu_miss=0
+44100 Hz 64 samples 8 initial voices: peak 0.042493 DC 0.0002705 grains 64 alloc 0 lock 0 p50 152.97 p95 200.56 p99 8185.90 max 8220.19 us
+  thread max 215.08 us; at wall max 8220.19 us thread 182.61 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 74.87 us
+  deadline miss: rate=44100 frames=64 initialVoices=8 pattern=off block=34 events=8 grains=64 wall_us=8220.188 cpu_us=182.612 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=8 pattern=off block=82 events=4 grains=16 wall_us=8127.397 cpu_us=118.588 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=8 pattern=off block=133 events=9 grains=36 wall_us=8185.900 cpu_us=183.025 budget_us=1451.247 wall_miss=1 cpu_miss=0
+44100 Hz 128 samples 1 initial voices: peak 0.042611 DC 0.0006330 grains 64 alloc 0 lock 0 p50 152.33 p95 315.99 p99 8218.89 max 8341.58 us
+  thread max 344.66 us; at wall max 8341.58 us thread 334.73 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 30.67 us
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=off block=60 events=4 grains=36 wall_us=8218.893 cpu_us=207.480 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=off block=93 events=9 grains=52 wall_us=8341.584 cpu_us=334.725 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=off block=136 events=3 grains=12 wall_us=8170.374 cpu_us=156.936 budget_us=2902.494 wall_miss=1 cpu_miss=0
+44100 Hz 128 samples 4 initial voices: peak 0.048256 DC 0.0001794 grains 64 alloc 0 lock 0 p50 221.57 p95 374.40 p99 8391.52 max 8405.87 us
+  thread max 583.01 us; at wall max 8405.87 us thread 410.74 us; misses wall/CPU/wall-only 4/0/4 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 54.57 us
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=off block=28 events=4 grains=48 wall_us=8262.557 cpu_us=225.723 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=off block=61 events=10 grains=40 wall_us=8405.872 cpu_us=410.742 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=off block=94 events=6 grains=24 wall_us=8391.523 cpu_us=383.231 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=off block=124 events=6 grains=24 wall_us=8335.822 cpu_us=330.073 budget_us=2902.494 wall_miss=1 cpu_miss=0
+44100 Hz 128 samples 8 initial voices: peak 0.042493 DC 0.0001430 grains 64 alloc 0 lock 0 p50 297.57 p95 572.69 p99 8572.07 max 8621.83 us
+  thread max 580.98 us; at wall max 8621.83 us thread 571.62 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 110.88 us
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=off block=6 events=8 grains=32 wall_us=8621.833 cpu_us=571.625 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=off block=20 events=8 grains=64 wall_us=8572.072 cpu_us=576.394 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=off block=48 events=12 grains=64 wall_us=8442.608 cpu_us=431.192 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=off block=74 events=6 grains=24 wall_us=8263.110 cpu_us=263.735 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=off block=102 events=10 grains=40 wall_us=8244.170 cpu_us=229.814 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=off block=131 events=7 grains=28 wall_us=8291.943 cpu_us=276.325 budget_us=2902.494 wall_miss=1 cpu_miss=0
+44100 Hz 512 samples 1 initial voices: peak 0.071406 DC 0.0003775 grains 64 alloc 0 lock 0 p50 707.91 p95 8908.51 p99 9415.89 max 10047.98 us
+  thread max 2399.99 us; at wall max 10047.98 us thread 2064.20 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.20 us
+44100 Hz 512 samples 4 initial voices: peak 0.056455 DC 0.0003610 grains 64 alloc 0 lock 0 p50 818.62 p95 8826.24 p99 9251.54 max 9673.15 us
+  thread max 2225.46 us; at wall max 9673.15 us thread 1657.76 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.66 us
+44100 Hz 512 samples 8 initial voices: peak 0.105386 DC 0.0005008 grains 64 alloc 0 lock 0 p50 1076.30 p95 9136.23 p99 9266.17 max 9291.66 us
+  thread max 2029.76 us; at wall max 9291.66 us thread 1252.39 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 120.30 us
+48000 Hz 64 samples 1 initial voices: peak 0.031530 DC 0.0010422 grains 48 alloc 0 lock 0 p50 85.11 p95 159.84 p99 8171.23 max 8237.77 us
+  thread max 189.57 us; at wall max 8237.77 us thread 189.57 us; misses wall/CPU/wall-only 2/0/2 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 35.01 us
+  deadline miss: rate=48000 frames=64 initialVoices=1 pattern=off block=75 events=10 grains=48 wall_us=8237.773 cpu_us=189.568 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=1 pattern=off block=145 events=8 grains=32 wall_us=8171.235 cpu_us=162.785 budget_us=1333.333 wall_miss=1 cpu_miss=0
+48000 Hz 64 samples 4 initial voices: peak 0.028176 DC 0.0000123 grains 64 alloc 0 lock 0 p50 116.78 p95 193.75 p99 8198.01 max 8229.22 us
+  thread max 233.24 us; at wall max 8229.22 us thread 231.23 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 48.61 us
+  deadline miss: rate=48000 frames=64 initialVoices=4 pattern=off block=44 events=4 grains=48 wall_us=8171.415 cpu_us=130.392 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=4 pattern=off block=99 events=10 grains=40 wall_us=8198.015 cpu_us=191.392 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=4 pattern=off block=156 events=12 grains=48 wall_us=8229.222 cpu_us=231.230 budget_us=1333.333 wall_miss=1 cpu_miss=0
+48000 Hz 64 samples 8 initial voices: peak 0.067149 DC 0.0002874 grains 64 alloc 0 lock 0 p50 148.19 p95 200.51 p99 8213.09 max 8219.62 us
+  thread max 224.08 us; at wall max 8219.62 us thread 224.08 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 14.10 us
+  deadline miss: rate=48000 frames=64 initialVoices=8 pattern=off block=33 events=8 grains=64 wall_us=8213.094 cpu_us=194.229 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=8 pattern=off block=84 events=12 grains=48 wall_us=8177.095 cpu_us=176.754 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=8 pattern=off block=136 events=12 grains=48 wall_us=8219.624 cpu_us=224.077 budget_us=1333.333 wall_miss=1 cpu_miss=0
+48000 Hz 128 samples 1 initial voices: peak 0.040245 DC 0.0000896 grains 64 alloc 0 lock 0 p50 153.15 p95 320.06 p99 8263.07 max 8318.04 us
+  thread max 338.86 us; at wall max 8318.04 us thread 333.43 us; misses wall/CPU/wall-only 4/0/4 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 26.52 us
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=off block=27 events=1 grains=12 wall_us=8152.378 cpu_us=115.913 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=off block=79 events=8 grains=48 wall_us=8318.042 cpu_us=333.426 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=off block=107 events=5 grains=36 wall_us=8263.070 cpu_us=259.660 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=off block=157 events=5 grains=32 wall_us=8219.352 cpu_us=214.911 budget_us=2666.667 wall_miss=1 cpu_miss=0
+48000 Hz 128 samples 4 initial voices: peak 0.038085 DC 0.0002549 grains 64 alloc 0 lock 0 p50 227.43 p95 414.14 p99 8422.62 max 8504.67 us
+  thread max 483.93 us; at wall max 8504.67 us thread 478.52 us; misses wall/CPU/wall-only 5/0/5 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 88.55 us
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=off block=27 events=4 grains=48 wall_us=8255.787 cpu_us=218.976 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=off block=60 events=12 grains=48 wall_us=8380.065 cpu_us=391.171 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=off block=92 events=8 grains=32 wall_us=8377.724 cpu_us=368.884 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=off block=121 events=12 grains=48 wall_us=8422.620 cpu_us=423.139 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=off block=155 events=5 grains=20 wall_us=8504.670 cpu_us=478.523 budget_us=2666.667 wall_miss=1 cpu_miss=0
+48000 Hz 128 samples 8 initial voices: peak 0.067149 DC 0.0002697 grains 64 alloc 0 lock 0 p50 296.21 p95 398.95 p99 8375.87 max 8493.40 us
+  thread max 489.15 us; at wall max 8493.40 us thread 489.15 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 130.30 us
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=off block=10 events=8 grains=64 wall_us=8375.868 cpu_us=334.590 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=off block=36 events=8 grains=32 wall_us=8293.147 cpu_us=294.004 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=off block=63 events=9 grains=36 wall_us=8254.684 cpu_us=237.907 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=off block=89 events=6 grains=24 wall_us=8301.494 cpu_us=293.242 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=off block=118 events=10 grains=40 wall_us=8360.624 cpu_us=358.159 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=off block=145 events=9 grains=36 wall_us=8493.396 cpu_us=489.152 budget_us=2666.667 wall_miss=1 cpu_miss=0
+48000 Hz 512 samples 1 initial voices: peak 0.059470 DC 0.0004293 grains 64 alloc 0 lock 0 p50 615.64 p95 8752.25 p99 9309.49 max 9328.64 us
+  thread max 1335.02 us; at wall max 9328.64 us thread 1335.02 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 110.30 us
+48000 Hz 512 samples 4 initial voices: peak 0.051069 DC 0.0002488 grains 64 alloc 0 lock 0 p50 796.83 p95 9025.23 p99 9319.64 max 9420.98 us
+  thread max 2600.55 us; at wall max 9420.98 us thread 1428.33 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 105.37 us
+48000 Hz 512 samples 8 initial voices: peak 0.090380 DC 0.0001387 grains 64 alloc 0 lock 0 p50 1077.27 p95 9298.25 p99 10294.48 max 10450.75 us
+  thread max 2457.40 us; at wall max 10450.75 us thread 2457.40 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 104.27 us
+96000 Hz 64 samples 1 initial voices: peak 0.023053 DC 0.0001646 grains 48 alloc 0 lock 0 p50 106.26 p95 186.47 p99 8111.70 max 8189.16 us
+  thread max 224.67 us; at wall max 8189.16 us thread 191.57 us; misses wall/CPU/wall-only 2/0/2 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 34.98 us
+  deadline miss: rate=96000 frames=64 initialVoices=1 pattern=off block=67 events=7 grains=32 wall_us=8189.160 cpu_us=191.571 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=1 pattern=off block=121 events=3 grains=12 wall_us=8111.696 cpu_us=97.654 budget_us=666.667 wall_miss=1 cpu_miss=0
+96000 Hz 64 samples 4 initial voices: peak 0.012087 DC 0.0002396 grains 64 alloc 0 lock 0 p50 157.43 p95 216.59 p99 8192.73 max 8216.78 us
+  thread max 559.18 us; at wall max 8216.78 us thread 220.24 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 75.65 us
+  deadline miss: rate=96000 frames=64 initialVoices=4 pattern=off block=22 events=4 grains=16 wall_us=8181.099 cpu_us=122.769 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=4 pattern=off block=79 events=11 grains=44 wall_us=8216.780 cpu_us=220.243 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=4 pattern=off block=127 events=5 grains=20 wall_us=8192.730 cpu_us=195.732 budget_us=666.667 wall_miss=1 cpu_miss=0
+96000 Hz 64 samples 8 initial voices: peak 0.027856 DC 0.0001596 grains 64 alloc 0 lock 0 p50 170.01 p95 210.85 p99 8204.94 max 8234.85 us
+  thread max 325.67 us; at wall max 8234.85 us thread 219.33 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 64.72 us
+  deadline miss: rate=96000 frames=64 initialVoices=8 pattern=off block=31 events=8 grains=32 wall_us=8174.325 cpu_us=187.370 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=8 pattern=off block=77 events=8 grains=32 wall_us=8204.936 cpu_us=220.301 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=8 pattern=off block=123 events=12 grains=48 wall_us=8234.848 cpu_us=219.332 budget_us=666.667 wall_miss=1 cpu_miss=0
+96000 Hz 128 samples 1 initial voices: peak 0.027139 DC 0.0003105 grains 48 alloc 0 lock 0 p50 163.10 p95 312.45 p99 8202.07 max 8260.77 us
+  thread max 333.04 us; at wall max 8260.77 us thread 264.19 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 69.58 us
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=off block=51 events=4 grains=24 wall_us=8202.067 cpu_us=189.727 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=off block=87 events=8 grains=36 wall_us=8260.775 cpu_us=264.194 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=off block=118 events=3 grains=16 wall_us=8152.916 cpu_us=168.242 budget_us=1333.333 wall_miss=1 cpu_miss=0
+96000 Hz 128 samples 4 initial voices: peak 0.035554 DC 0.0002701 grains 64 alloc 0 lock 0 p50 250.41 p95 392.00 p99 8321.85 max 8384.21 us
+  thread max 422.58 us; at wall max 8384.21 us thread 382.70 us; misses wall/CPU/wall-only 5/0/5 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 123.48 us
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=off block=25 events=4 grains=32 wall_us=8207.960 cpu_us=195.544 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=off block=73 events=10 grains=40 wall_us=8384.211 cpu_us=382.704 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=off block=100 events=8 grains=32 wall_us=8321.849 cpu_us=308.468 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=off block=129 events=10 grains=40 wall_us=8276.633 cpu_us=268.897 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=off block=158 events=9 grains=36 wall_us=8319.648 cpu_us=329.412 budget_us=1333.333 wall_miss=1 cpu_miss=0
+96000 Hz 128 samples 8 initial voices: peak 0.058889 DC 0.0000664 grains 64 alloc 0 lock 0 p50 303.20 p95 415.68 p99 8351.97 max 8414.84 us
+  thread max 427.19 us; at wall max 8414.84 us thread 406.28 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 144.32 us
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=off block=11 events=8 grains=32 wall_us=8312.339 cpu_us=293.935 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=off block=38 events=8 grains=64 wall_us=8350.584 cpu_us=351.090 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=off block=63 events=9 grains=36 wall_us=8414.844 cpu_us=406.277 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=off block=88 events=4 grains=16 wall_us=8279.656 cpu_us=266.897 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=off block=115 events=10 grains=40 wall_us=8351.966 cpu_us=344.369 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=off block=141 events=9 grains=36 wall_us=8142.740 cpu_us=242.194 budget_us=1333.333 wall_miss=1 cpu_miss=0
+96000 Hz 512 samples 1 initial voices: peak 0.083133 DC 0.0001861 grains 64 alloc 0 lock 0 p50 602.79 p95 8705.35 p99 9288.00 max 9343.47 us
+  thread max 1333.85 us; at wall max 9343.47 us thread 1333.85 us; misses wall/CPU/wall-only 13/0/13 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 103.43 us
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=13 events=1 grains=12 wall_us=8351.849 cpu_us=356.000 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=38 events=1 grains=12 wall_us=8344.306 cpu_us=356.017 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=55 events=5 grains=40 wall_us=8822.855 cpu_us=814.427 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=66 events=5 grains=40 wall_us=8762.272 cpu_us=767.599 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=75 events=7 grains=52 wall_us=8925.357 cpu_us=923.070 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=82 events=4 grains=24 wall_us=9020.989 cpu_us=1024.916 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=90 events=10 grains=64 wall_us=9343.465 cpu_us=1333.853 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=97 events=8 grains=52 wall_us=9287.998 cpu_us=1294.665 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=103 events=8 grains=52 wall_us=9271.894 cpu_us=1267.179 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=114 events=3 grains=20 wall_us=8546.247 cpu_us=542.379 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=128 events=3 grains=20 wall_us=8569.125 cpu_us=565.893 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=143 events=7 grains=56 wall_us=9108.361 cpu_us=1113.568 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=off block=152 events=4 grains=32 wall_us=8705.353 cpu_us=706.118 budget_us=5333.333 wall_miss=1 cpu_miss=0
+96000 Hz 512 samples 4 initial voices: peak 0.046966 DC 0.0001914 grains 64 alloc 0 lock 0 p50 837.00 p95 9107.55 p99 9612.01 max 9633.46 us
+  thread max 2423.89 us; at wall max 9633.46 us thread 1604.44 us; misses wall/CPU/wall-only 18/0/18 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 104.15 us
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=6 events=4 grains=32 wall_us=8704.107 cpu_us=706.609 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=17 events=4 grains=48 wall_us=8800.599 cpu_us=787.513 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=27 events=4 grains=64 wall_us=8770.909 cpu_us=771.888 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=37 events=4 grains=64 wall_us=8858.003 cpu_us=838.811 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=48 events=8 grains=64 wall_us=9107.547 cpu_us=1100.059 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=55 events=7 grains=16 wall_us=9263.596 cpu_us=1262.711 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=62 events=4 grains=28 wall_us=8683.621 cpu_us=682.193 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=72 events=12 grains=52 wall_us=9612.008 cpu_us=1628.881 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=81 events=9 grains=44 wall_us=9215.606 cpu_us=1199.184 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=90 events=9 grains=40 wall_us=9299.276 cpu_us=1268.704 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=98 events=8 grains=48 wall_us=9372.690 cpu_us=1356.555 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=103 events=3 grains=12 wall_us=8936.523 cpu_us=940.385 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=110 events=3 grains=12 wall_us=8731.853 cpu_us=740.405 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=118 events=8 grains=32 wall_us=9633.464 cpu_us=1604.437 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=126 events=7 grains=32 wall_us=8905.006 cpu_us=877.409 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=135 events=7 grains=28 wall_us=8581.516 cpu_us=572.894 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=147 events=10 grains=44 wall_us=9308.390 cpu_us=1311.738 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=off block=157 events=7 grains=28 wall_us=9259.028 cpu_us=1248.163 budget_us=5333.333 wall_miss=1 cpu_miss=0
+96000 Hz 512 samples 8 initial voices: peak 0.065849 DC 0.0001789 grains 64 alloc 0 lock 0 p50 1079.67 p95 9240.20 p99 9810.87 max 9969.25 us
+  thread max 2076.55 us; at wall max 9969.25 us thread 1974.57 us; misses wall/CPU/wall-only 21/0/21 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 103.75 us
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=0 events=8 grains=32 wall_us=9206.047 cpu_us=1158.480 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=7 events=8 grains=64 wall_us=9475.318 cpu_us=1486.719 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=14 events=8 grains=32 wall_us=9277.122 cpu_us=1250.965 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=21 events=8 grains=32 wall_us=9116.747 cpu_us=1111.486 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=27 events=8 grains=64 wall_us=9240.203 cpu_us=1236.757 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=33 events=8 grains=32 wall_us=9675.913 cpu_us=1698.371 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=40 events=8 grains=32 wall_us=9126.748 cpu_us=1112.583 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=47 events=8 grains=64 wall_us=9247.593 cpu_us=1242.568 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=54 events=12 grains=48 wall_us=9332.018 cpu_us=1325.480 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=66 events=12 grains=48 wall_us=9129.726 cpu_us=1125.678 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=74 events=7 grains=28 wall_us=8993.685 cpu_us=980.323 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=82 events=8 grains=32 wall_us=9374.230 cpu_us=1363.698 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=91 events=4 grains=16 wall_us=9179.519 cpu_us=1177.929 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=101 events=7 grains=28 wall_us=8971.502 cpu_us=976.109 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=112 events=4 grains=16 wall_us=9039.640 cpu_us=1040.848 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=120 events=11 grains=44 wall_us=9810.874 cpu_us=1823.123 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=126 events=12 grains=48 wall_us=9969.249 cpu_us=1974.566 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=131 events=4 grains=16 wall_us=9105.122 cpu_us=1114.440 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=139 events=0 grains=0 wall_us=8906.623 cpu_us=901.755 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=150 events=12 grains=48 wall_us=8881.693 cpu_us=886.722 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=off block=159 events=12 grains=48 wall_us=9197.698 cpu_us=1197.453 budget_us=5333.333 wall_miss=1 cpu_miss=0
+Max-ratchet synchronized Pattern + random MIDI
+44100 Hz 64 samples 1 initial voices: peak 0.041615 DC 0.0008245 grains 64 alloc 0 lock 0 p50 144.88 p95 182.32 p99 8208.75 max 8252.62 us
+  thread max 219.96 us; at wall max 8252.62 us thread 219.96 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 50.25 us
+  deadline miss: rate=44100 frames=64 initialVoices=1 pattern=on block=40 events=9 grains=60 wall_us=8252.618 cpu_us=219.961 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=1 pattern=on block=91 events=11 grains=44 wall_us=8208.754 cpu_us=194.069 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=1 pattern=on block=149 events=8 grains=32 wall_us=8174.910 cpu_us=188.394 budget_us=1451.247 wall_miss=1 cpu_miss=0
+44100 Hz 64 samples 4 initial voices: peak 0.029219 DC 0.0000392 grains 64 alloc 0 lock 0 p50 154.95 p95 193.36 p99 8211.95 max 8217.76 us
+  thread max 212.43 us; at wall max 8217.76 us thread 212.43 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 62.99 us
+  deadline miss: rate=44100 frames=64 initialVoices=4 pattern=on block=34 events=9 grains=56 wall_us=8210.031 cpu_us=186.105 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=4 pattern=on block=84 events=10 grains=40 wall_us=8217.762 cpu_us=212.434 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=4 pattern=on block=135 events=6 grains=24 wall_us=8211.955 cpu_us=210.621 budget_us=1451.247 wall_miss=1 cpu_miss=0
+44100 Hz 64 samples 8 initial voices: peak 0.055377 DC 0.0000068 grains 64 alloc 0 lock 0 p50 157.81 p95 206.50 p99 8234.23 max 8236.45 us
+  thread max 249.97 us; at wall max 8236.45 us thread 229.85 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 62.21 us
+  deadline miss: rate=44100 frames=64 initialVoices=8 pattern=on block=41 events=9 grains=60 wall_us=8216.449 cpu_us=201.929 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=8 pattern=on block=89 events=12 grains=48 wall_us=8234.228 cpu_us=223.284 budget_us=1451.247 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=64 initialVoices=8 pattern=on block=138 events=12 grains=48 wall_us=8236.446 cpu_us=229.849 budget_us=1451.247 wall_miss=1 cpu_miss=0
+44100 Hz 128 samples 1 initial voices: peak 0.041615 DC 0.0005953 grains 64 alloc 0 lock 0 p50 304.66 p95 352.63 p99 8393.37 max 8411.02 us
+  thread max 415.85 us; at wall max 8411.02 us thread 415.85 us; misses wall/CPU/wall-only 5/0/5 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 70.73 us
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=on block=24 events=9 grains=60 wall_us=8368.473 cpu_us=360.935 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=on block=49 events=10 grains=52 wall_us=8393.370 cpu_us=385.303 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=on block=76 events=11 grains=52 wall_us=8411.018 cpu_us=415.852 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=on block=103 events=9 grains=36 wall_us=8348.491 cpu_us=346.082 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=1 pattern=on block=133 events=5 grains=20 wall_us=8189.147 cpu_us=181.460 budget_us=2902.494 wall_miss=1 cpu_miss=0
+44100 Hz 128 samples 4 initial voices: peak 0.043411 DC 0.0006155 grains 64 alloc 0 lock 0 p50 308.55 p95 395.04 p99 8399.67 max 8407.53 us
+  thread max 403.71 us; at wall max 8407.53 us thread 389.11 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 119.10 us
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=on block=21 events=9 grains=60 wall_us=8343.238 cpu_us=332.619 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=on block=46 events=9 grains=60 wall_us=8354.761 cpu_us=347.120 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=on block=73 events=9 grains=36 wall_us=8390.277 cpu_us=390.637 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=on block=100 events=9 grains=36 wall_us=8407.529 cpu_us=389.113 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=on block=129 events=12 grains=48 wall_us=8332.544 cpu_us=323.810 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=4 pattern=on block=159 events=12 grains=48 wall_us=8399.666 cpu_us=379.150 budget_us=2902.494 wall_miss=1 cpu_miss=0
+44100 Hz 128 samples 8 initial voices: peak 0.055377 DC 0.0003512 grains 64 alloc 0 lock 0 p50 314.18 p95 394.48 p99 8399.80 max 8401.84 us
+  thread max 864.81 us; at wall max 8401.84 us thread 371.79 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.76 us
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=on block=18 events=8 grains=48 wall_us=8382.557 cpu_us=365.267 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=on block=41 events=9 grains=60 wall_us=8401.843 cpu_us=371.794 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=on block=67 events=8 grains=32 wall_us=8399.796 cpu_us=392.018 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=on block=93 events=8 grains=32 wall_us=8237.606 cpu_us=245.586 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=on block=120 events=12 grains=48 wall_us=8365.498 cpu_us=372.568 budget_us=2902.494 wall_miss=1 cpu_miss=0
+  deadline miss: rate=44100 frames=128 initialVoices=8 pattern=on block=147 events=12 grains=48 wall_us=8286.926 cpu_us=277.232 budget_us=2902.494 wall_miss=1 cpu_miss=0
+44100 Hz 512 samples 1 initial voices: peak 0.051428 DC 0.0011591 grains 64 alloc 0 lock 0 p50 1276.97 p95 9336.38 p99 9980.03 max 10338.25 us
+  thread max 2331.90 us; at wall max 10338.25 us thread 2331.90 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 397.44 us
+44100 Hz 512 samples 4 initial voices: peak 0.047801 DC 0.0005097 grains 64 alloc 0 lock 0 p50 1255.49 p95 9330.58 p99 9860.77 max 9984.41 us
+  thread max 2473.02 us; at wall max 9984.41 us thread 1971.74 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 372.85 us
+44100 Hz 512 samples 8 initial voices: peak 0.055377 DC 0.0005693 grains 64 alloc 0 lock 0 p50 1249.88 p95 9339.06 p99 9473.23 max 10363.95 us
+  thread max 2339.25 us; at wall max 10363.95 us thread 2339.25 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 465.01 us
+48000 Hz 64 samples 1 initial voices: peak 0.041783 DC 0.0009950 grains 64 alloc 0 lock 0 p50 138.89 p95 183.80 p99 8220.31 max 8220.38 us
+  thread max 228.71 us; at wall max 8220.38 us thread 202.08 us; misses wall/CPU/wall-only 2/0/2 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 50.39 us
+  deadline miss: rate=48000 frames=64 initialVoices=1 pattern=on block=50 events=10 grains=52 wall_us=8220.308 cpu_us=228.715 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=1 pattern=on block=102 events=10 grains=40 wall_us=8220.379 cpu_us=202.084 budget_us=1333.333 wall_miss=1 cpu_miss=0
+48000 Hz 64 samples 4 initial voices: peak 0.035159 DC 0.0005240 grains 64 alloc 0 lock 0 p50 155.53 p95 290.79 p99 8203.23 max 8220.84 us
+  thread max 348.14 us; at wall max 8220.84 us thread 215.81 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 62.20 us
+  deadline miss: rate=48000 frames=64 initialVoices=4 pattern=on block=37 events=9 grains=56 wall_us=8203.230 cpu_us=204.292 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=4 pattern=on block=79 events=7 grains=28 wall_us=8183.608 cpu_us=179.755 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=4 pattern=on block=130 events=10 grains=40 wall_us=8220.836 cpu_us=215.815 budget_us=1333.333 wall_miss=1 cpu_miss=0
+48000 Hz 64 samples 8 initial voices: peak 0.051352 DC 0.0005280 grains 64 alloc 0 lock 0 p50 159.38 p95 282.31 p99 8190.26 max 8240.39 us
+  thread max 374.70 us; at wall max 8240.39 us thread 197.96 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 16.37 us
+  deadline miss: rate=48000 frames=64 initialVoices=8 pattern=on block=30 events=9 grains=56 wall_us=8240.393 cpu_us=197.957 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=8 pattern=on block=77 events=9 grains=36 wall_us=8190.256 cpu_us=191.171 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=64 initialVoices=8 pattern=on block=118 events=6 grains=24 wall_us=8148.808 cpu_us=159.880 budget_us=1333.333 wall_miss=1 cpu_miss=0
+48000 Hz 128 samples 1 initial voices: peak 0.041783 DC 0.0006483 grains 64 alloc 0 lock 0 p50 299.23 p95 368.40 p99 8359.89 max 8400.96 us
+  thread max 392.46 us; at wall max 8400.96 us thread 392.46 us; misses wall/CPU/wall-only 5/0/5 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 92.80 us
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=on block=24 events=9 grains=60 wall_us=8344.484 cpu_us=347.074 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=on block=49 events=10 grains=48 wall_us=8400.961 cpu_us=392.461 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=on block=77 events=9 grains=36 wall_us=8359.890 cpu_us=362.067 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=on block=104 events=9 grains=40 wall_us=8329.002 cpu_us=320.143 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=1 pattern=on block=137 events=7 grains=28 wall_us=8281.340 cpu_us=267.880 budget_us=2666.667 wall_miss=1 cpu_miss=0
+48000 Hz 128 samples 4 initial voices: peak 0.043108 DC 0.0005454 grains 64 alloc 0 lock 0 p50 308.08 p95 545.02 p99 8384.09 max 8406.82 us
+  thread max 582.40 us; at wall max 8406.82 us thread 398.72 us; misses wall/CPU/wall-only 5/0/5 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 101.48 us
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=on block=41 events=8 grains=48 wall_us=8377.017 cpu_us=378.821 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=on block=65 events=2 grains=8 wall_us=8218.189 cpu_us=214.427 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=on block=93 events=12 grains=48 wall_us=8384.095 cpu_us=376.618 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=on block=121 events=11 grains=44 wall_us=8406.820 cpu_us=398.716 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=4 pattern=on block=151 events=4 grains=16 wall_us=8299.527 cpu_us=291.643 budget_us=2666.667 wall_miss=1 cpu_miss=0
+48000 Hz 128 samples 8 initial voices: peak 0.051352 DC 0.0002284 grains 64 alloc 0 lock 0 p50 313.66 p95 424.92 p99 8360.42 max 8363.85 us
+  thread max 476.10 us; at wall max 8363.85 us thread 363.16 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 131.85 us
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=on block=18 events=9 grains=56 wall_us=8363.855 cpu_us=363.159 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=on block=43 events=9 grains=60 wall_us=8360.416 cpu_us=356.506 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=on block=68 events=6 grains=24 wall_us=8269.879 cpu_us=256.728 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=on block=94 events=6 grains=24 wall_us=8334.344 cpu_us=320.680 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=on block=120 events=12 grains=48 wall_us=8346.460 cpu_us=350.648 budget_us=2666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=48000 frames=128 initialVoices=8 pattern=on block=146 events=2 grains=8 wall_us=8255.149 cpu_us=240.330 budget_us=2666.667 wall_miss=1 cpu_miss=0
+48000 Hz 512 samples 1 initial voices: peak 0.055910 DC 0.0002196 grains 64 alloc 0 lock 0 p50 1296.51 p95 9363.86 p99 9929.26 max 10031.67 us
+  thread max 2031.86 us; at wall max 10031.67 us thread 2031.86 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 420.85 us
+48000 Hz 512 samples 4 initial voices: peak 0.051138 DC 0.0000553 grains 64 alloc 0 lock 0 p50 1268.71 p95 9626.27 p99 9899.19 max 10037.75 us
+  thread max 2028.86 us; at wall max 10037.75 us thread 2028.86 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 357.67 us
+48000 Hz 512 samples 8 initial voices: peak 0.051352 DC 0.0001969 grains 64 alloc 0 lock 0 p50 1240.56 p95 9323.35 p99 9961.24 max 10047.05 us
+  thread max 2403.43 us; at wall max 10047.05 us thread 2068.77 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 416.44 us
+96000 Hz 64 samples 1 initial voices: peak 0.033073 DC 0.0000164 grains 60 alloc 0 lock 0 p50 130.73 p95 206.72 p99 8222.89 max 8312.24 us
+  thread max 327.86 us; at wall max 8312.24 us thread 327.86 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 48.75 us
+  deadline miss: rate=96000 frames=64 initialVoices=1 pattern=on block=50 events=9 grains=48 wall_us=8210.150 cpu_us=181.948 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=1 pattern=on block=96 events=11 grains=44 wall_us=8312.240 cpu_us=327.856 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=1 pattern=on block=152 events=11 grains=44 wall_us=8222.892 cpu_us=216.365 budget_us=666.667 wall_miss=1 cpu_miss=0
+96000 Hz 64 samples 4 initial voices: peak 0.021771 DC 0.0003724 grains 64 alloc 0 lock 0 p50 159.62 p95 211.40 p99 8201.75 max 8222.19 us
+  thread max 240.55 us; at wall max 8222.19 us thread 240.55 us; misses wall/CPU/wall-only 3/0/3 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 76.34 us
+  deadline miss: rate=96000 frames=64 initialVoices=4 pattern=on block=24 events=7 grains=28 wall_us=8185.197 cpu_us=162.505 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=4 pattern=on block=73 events=9 grains=36 wall_us=8201.753 cpu_us=201.962 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=4 pattern=on block=120 events=12 grains=48 wall_us=8222.188 cpu_us=240.547 budget_us=666.667 wall_miss=1 cpu_miss=0
+96000 Hz 64 samples 8 initial voices: peak 0.049908 DC 0.0005788 grains 64 alloc 0 lock 0 p50 169.99 p95 206.59 p99 8214.34 max 8243.62 us
+  thread max 235.57 us; at wall max 8243.62 us thread 235.57 us; misses wall/CPU/wall-only 2/0/2 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 64.64 us
+  deadline miss: rate=96000 frames=64 initialVoices=8 pattern=on block=76 events=10 grains=40 wall_us=8243.625 cpu_us=235.566 budget_us=666.667 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=64 initialVoices=8 pattern=on block=121 events=8 grains=32 wall_us=8214.338 cpu_us=190.017 budget_us=666.667 wall_miss=1 cpu_miss=0
+96000 Hz 128 samples 1 initial voices: peak 0.050818 DC 0.0003212 grains 64 alloc 0 lock 0 p50 276.21 p95 395.07 p99 8380.08 max 8391.48 us
+  thread max 444.08 us; at wall max 8391.48 us thread 387.38 us; misses wall/CPU/wall-only 5/0/5 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 100.28 us
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=on block=25 events=7 grains=40 wall_us=8294.777 cpu_us=272.085 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=on block=50 events=10 grains=52 wall_us=8391.478 cpu_us=387.383 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=on block=77 events=10 grains=40 wall_us=8367.048 cpu_us=352.692 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=on block=102 events=10 grains=40 wall_us=8380.083 cpu_us=379.908 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=1 pattern=on block=135 events=4 grains=16 wall_us=8156.911 cpu_us=157.769 budget_us=1333.333 wall_miss=1 cpu_miss=0
+96000 Hz 128 samples 4 initial voices: peak 0.031095 DC 0.0002619 grains 64 alloc 0 lock 0 p50 311.54 p95 395.74 p99 8427.98 max 8617.25 us
+  thread max 657.85 us; at wall max 8617.25 us thread 657.85 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 122.53 us
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=on block=16 events=8 grains=32 wall_us=8617.250 cpu_us=657.854 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=on block=42 events=9 grains=56 wall_us=8345.638 cpu_us=350.240 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=on block=66 events=10 grains=40 wall_us=8279.932 cpu_us=281.235 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=on block=92 events=12 grains=48 wall_us=8427.982 cpu_us=412.454 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=on block=117 events=12 grains=48 wall_us=8404.628 cpu_us=396.961 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=4 pattern=on block=146 events=9 grains=36 wall_us=8324.287 cpu_us=315.173 budget_us=1333.333 wall_miss=1 cpu_miss=0
+96000 Hz 128 samples 8 initial voices: peak 0.055189 DC 0.0006960 grains 64 alloc 0 lock 0 p50 308.72 p95 411.88 p99 8415.28 max 8440.15 us
+  thread max 435.20 us; at wall max 8440.15 us thread 435.20 us; misses wall/CPU/wall-only 6/0/6 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 170.48 us
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=on block=12 events=9 grains=36 wall_us=8374.962 cpu_us=339.373 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=on block=38 events=9 grains=56 wall_us=8337.834 cpu_us=344.873 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=on block=62 events=12 grains=48 wall_us=8415.278 cpu_us=411.142 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=on block=87 events=12 grains=48 wall_us=8440.148 cpu_us=435.200 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=on block=113 events=8 grains=32 wall_us=8291.449 cpu_us=296.192 budget_us=1333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=128 initialVoices=8 pattern=on block=138 events=12 grains=48 wall_us=8407.113 cpu_us=401.982 budget_us=1333.333 wall_miss=1 cpu_miss=0
+96000 Hz 512 samples 1 initial voices: peak 0.060937 DC 0.0004150 grains 64 alloc 0 lock 0 p50 1252.65 p95 9306.85 p99 9706.11 max 9964.50 us
+  thread max 1935.72 us; at wall max 9964.50 us thread 1935.72 us; misses wall/CPU/wall-only 23/0/23 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 362.51 us
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=4 events=5 grains=28 wall_us=8975.249 cpu_us=992.127 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=11 events=9 grains=60 wall_us=9706.110 cpu_us=1615.912 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=16 events=9 grains=60 wall_us=9334.348 cpu_us=1337.968 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=22 events=9 grains=60 wall_us=9284.498 cpu_us=1278.372 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=29 events=9 grains=60 wall_us=9283.552 cpu_us=1275.968 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=35 events=9 grains=60 wall_us=9306.846 cpu_us=1311.738 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=41 events=8 grains=48 wall_us=9296.006 cpu_us=1296.574 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=48 events=10 grains=52 wall_us=9481.582 cpu_us=1482.668 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=54 events=10 grains=56 wall_us=9964.495 cpu_us=1935.718 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=60 events=8 grains=52 wall_us=9275.359 cpu_us=1282.034 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=68 events=8 grains=40 wall_us=9272.049 cpu_us=1258.022 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=75 events=10 grains=52 wall_us=9345.265 cpu_us=1336.900 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=81 events=10 grains=56 wall_us=9344.590 cpu_us=1336.025 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=88 events=8 grains=36 wall_us=9388.589 cpu_us=1384.620 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=98 events=9 grains=48 wall_us=9172.935 cpu_us=1173.002 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=104 events=9 grains=52 wall_us=9229.645 cpu_us=1231.218 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=111 events=10 grains=64 wall_us=9412.272 cpu_us=1400.484 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=118 events=9 grains=56 wall_us=9265.880 cpu_us=1259.038 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=125 events=9 grains=56 wall_us=9258.519 cpu_us=1260.743 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=133 events=7 grains=32 wall_us=8938.740 cpu_us=936.528 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=140 events=9 grains=44 wall_us=9249.510 cpu_us=1253.541 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=146 events=9 grains=52 wall_us=9277.444 cpu_us=1268.742 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=1 pattern=on block=154 events=7 grains=40 wall_us=9204.661 cpu_us=1196.705 budget_us=5333.333 wall_miss=1 cpu_miss=0
+96000 Hz 512 samples 4 initial voices: peak 0.049182 DC 0.0000966 grains 64 alloc 0 lock 0 p50 1241.41 p95 9321.59 p99 9698.95 max 10715.74 us
+  thread max 2709.63 us; at wall max 10715.74 us thread 2709.63 us; misses wall/CPU/wall-only 23/0/23 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 335.40 us
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=2 events=7 grains=28 wall_us=9698.954 cpu_us=1709.417 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=9 events=9 grains=60 wall_us=9345.967 cpu_us=1325.791 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=15 events=9 grains=60 wall_us=9321.595 cpu_us=1314.080 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=22 events=9 grains=60 wall_us=9270.519 cpu_us=1280.954 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=28 events=9 grains=60 wall_us=9283.413 cpu_us=1284.158 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=34 events=9 grains=60 wall_us=9311.243 cpu_us=1306.765 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=40 events=8 grains=48 wall_us=9281.366 cpu_us=1273.933 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=47 events=8 grains=48 wall_us=9304.742 cpu_us=1283.973 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=53 events=5 grains=24 wall_us=8781.184 cpu_us=780.724 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=60 events=11 grains=44 wall_us=9430.156 cpu_us=1421.691 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=68 events=3 grains=12 wall_us=8560.127 cpu_us=548.354 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=72 events=12 grains=48 wall_us=10715.737 cpu_us=2709.634 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=81 events=9 grains=36 wall_us=9073.947 cpu_us=1080.818 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=90 events=10 grains=40 wall_us=8983.329 cpu_us=978.898 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=96 events=11 grains=48 wall_us=9465.748 cpu_us=1462.227 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=102 events=6 grains=24 wall_us=9479.976 cpu_us=1476.760 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=109 events=3 grains=12 wall_us=9168.240 cpu_us=1170.344 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=117 events=12 grains=48 wall_us=9150.748 cpu_us=1157.099 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=124 events=5 grains=20 wall_us=9004.085 cpu_us=999.551 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=132 events=12 grains=48 wall_us=9442.549 cpu_us=1429.107 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=139 events=1 grains=4 wall_us=8555.571 cpu_us=574.336 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=149 events=6 grains=28 wall_us=8904.115 cpu_us=906.016 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=4 pattern=on block=156 events=12 grains=52 wall_us=9435.777 cpu_us=1439.028 budget_us=5333.333 wall_miss=1 cpu_miss=0
+96000 Hz 512 samples 8 initial voices: peak 0.059691 DC 0.0001433 grains 64 alloc 0 lock 0 p50 1213.17 p95 9294.82 p99 9393.22 max 9538.85 us
+  thread max 1964.31 us; at wall max 9538.85 us thread 1520.80 us; misses wall/CPU/wall-only 22/0/22 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 305.55 us
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=3 events=9 grains=36 wall_us=9183.421 cpu_us=1192.713 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=10 events=9 grains=60 wall_us=9318.620 cpu_us=1310.128 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=16 events=9 grains=60 wall_us=9326.703 cpu_us=1297.181 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=22 events=9 grains=60 wall_us=9335.896 cpu_us=1330.780 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=28 events=9 grains=60 wall_us=9289.933 cpu_us=1285.996 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=35 events=9 grains=60 wall_us=9298.318 cpu_us=1299.181 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=41 events=8 grains=48 wall_us=9294.817 cpu_us=1295.905 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=47 events=8 grains=48 wall_us=9288.500 cpu_us=1289.088 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=54 events=12 grains=48 wall_us=9391.329 cpu_us=1392.960 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=63 events=10 grains=40 wall_us=8906.144 cpu_us=907.429 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=72 events=12 grains=48 wall_us=9383.812 cpu_us=1378.498 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=79 events=1 grains=4 wall_us=8917.203 cpu_us=922.674 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=88 events=7 grains=28 wall_us=9233.305 cpu_us=1225.865 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=96 events=12 grains=48 wall_us=9158.668 cpu_us=1159.177 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=103 events=7 grains=28 wall_us=9216.669 cpu_us=1218.733 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=110 events=2 grains=8 wall_us=8399.201 cpu_us=395.119 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=118 events=5 grains=20 wall_us=9393.224 cpu_us=1397.701 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=131 events=5 grains=20 wall_us=8999.271 cpu_us=722.354 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=139 events=2 grains=8 wall_us=8893.582 cpu_us=883.785 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=148 events=2 grains=8 wall_us=9538.850 cpu_us=1520.797 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=156 events=12 grains=48 wall_us=5379.211 cpu_us=1304.457 budget_us=5333.333 wall_miss=1 cpu_miss=0
+  deadline miss: rate=96000 frames=512 initialVoices=8 pattern=on block=159 events=12 grains=48 wall_us=5457.764 cpu_us=1454.092 budget_us=5333.333 wall_miss=1 cpu_miss=0
+FX JUCE runtime stress: 0 failing cases

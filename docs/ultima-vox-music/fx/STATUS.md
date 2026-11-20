@@ -6,8 +6,8 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [Drag replay](DRAG_REPLAY_20261119.md), [24 Session Cuts](WAVE_B_SESSION_CUTS_20261119.md) and the [candidate gate](CANDIDATE_GATE_20261119.md).
-A native drag attempt can reuse the existing snapshot after completion; the copy-into-project warning is visible and FX still does not evict handed-off scratch paths. The single listening sheet now covers **200 candidates, zero approved**. The latest Linux profiles recorded wall misses, including one concurrent-run thread-CPU miss. Real arrangements, durable private handoff, FX-T18, exact-head Windows and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
+**Latest:** [Transfer guards and timing capture](TRANSFER_GUARDS_20261119.md), [24 Session Cuts](WAVE_B_SESSION_CUTS_20261119.md) and the [candidate gate](CANDIDATE_GATE_20261119.md).
+Native fixtures now cover same-path drag retry without scratch growth, pending completion after teardown, and refusal when the observed Save destination changes before the final check. The timing harness records each missed callback. The single listening sheet covers **200 candidates, zero approved**. Real arrangements, durable private handoff, FX-T18, exact-head Windows and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
 
 | Milestone | Status |
 |---|---|

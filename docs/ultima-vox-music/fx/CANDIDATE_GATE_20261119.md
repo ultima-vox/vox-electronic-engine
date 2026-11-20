@@ -13,7 +13,7 @@
 
 The pinned JUCE `TemporaryFile` replacement path can retry a failed rename via a copy on POSIX, and its move path can delete a destination first. FX no longer uses that replacement path. The worker writes and closes a staging file beside the destination and checks byte count, then commits using a single platform primitive: POSIX rename for replacement, POSIX hard link for no-replace creation, or `MoveFileExW` on Windows without `MOVEFILE_COPY_ALLOWED`. There is no delete-first or copy fallback. On POSIX, a destination filesystem that cannot hard-link a new file fails closed. This is not a crash-durability or arbitrary network-filesystem guarantee.
 
-The WAV/MIDI worker observes whether the path exists **before** rendering/encoding. If absent, the native commit rejects any entry that appears later, leaving its bytes untouched. A path already present when the worker observes it is still treated as an overwrite under the save chooser policy. This is not a guarantee about changes before that observation or about the identity of an already-existing target. The new tests pause during encoding or writing, create competing files, then verify those originals and staging cleanup. A direct cross-device failure fixture verifies no copy, source deletion, or overwrite on Linux. Windows file behavior remains unqualified. No DSP, host IDs, preset/state format, or WAV/MIDI encoding changes.
+The WAV/MIDI worker observes whether the path exists **before** rendering/encoding. If absent, the native commit rejects any entry that appears later, leaving its bytes untouched. For a path already present, the [latest transfer guard](TRANSFER_GUARDS_20261119.md) checks native identity and modification metadata against a second observation before claim/commit. This does not protect changes before the first observation or changes in the final check-to-move race, and is not an atomic conditional overwrite. The new tests pause during encoding or writing, create competing files, then verify those originals and staging cleanup. A direct cross-device failure fixture verifies no copy, source deletion, or overwrite on Linux. Windows file behavior remains unqualified. No DSP, host IDs, preset/state format, or WAV/MIDI encoding changes.
 
 ## Local qualification of this checkpoint
 
@@ -82,7 +82,15 @@ try {
 }
 ```
 
-A process exit of zero indicates functional assertions and clock-read coverage, not a deadline pass. Review the wall and CPU counts before deciding the gate and retain all raw logs.
+A process exit of zero indicates functional assertions and clock-read coverage, not a deadline pass. Record the exact source SHA, runner, Windows build, CPU/power plan, the declared competing workload and measured processor utilization during the capture (not only the bench profile). Preserve the before/during/after load samples with the logs. For example, the runner can collect Windows performance-counter samples or an approved ETW/WPR trace alongside the existing run; if short-block `GetThreadTimes` resolution is insufficient, use a validated method that can separate running thread time from elapsed wall rather than extrapolating zero deltas. The synthetic callback loop does not substitute for actual host deadlines.
+
+Reconcile the copied raw logs with:
+
+```bash
+python docs/ultima-vox-music/fx/evidence/audit-fx-timing.py suite-out/rt/routed.txt suite-out/rt/authored.txt suite-out/rt/typical.txt
+```
+
+The checker reports completeness, per-miss context and coarse-accounting warnings; it does not certify loaded conditions, Windows probes, timer resolution or FX-T18. Review the wall and CPU counts before deciding the gate and retain all raw logs.
 
 ## Listening delivery
 
