@@ -290,10 +290,11 @@ bool FxProcessor::startWavExport(offline::Capture capture,juce::File target) {
     return true;
 }
 
-bool FxProcessor::startMidiExport(pattern::Pattern snapshot,double tempo,juce::File target) {
+bool FxProcessor::startMidiExport(pattern::Pattern snapshot,double tempo,juce::File target,
+                                  fileexport::EncodeObserver observe,void* observerContext) {
     if(!onFileControllerThread()||fileExportJob_||!target.hasFileExtension("mid")||
        !snapshot.valid()||!std::isfinite(tempo)||tempo<10||tempo>1000)return false;
-    try { fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,std::move(target)); }
+    try { fileExportJob_=std::make_unique<fileexport::Job>(std::move(snapshot),tempo,std::move(target),nullptr,observerContext,observe); }
     catch(...) { return false; }
     return true;
 }

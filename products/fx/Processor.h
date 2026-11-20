@@ -146,7 +146,9 @@ public:
     // Message thread only. Own export independently of editor lifetime; the
     // render receives an immutable capture, never a processor/editor pointer.
     bool startWavExport(offline::Capture,juce::File);
-    bool startMidiExport(pattern::Pattern,double tempo,juce::File);
+    // Optional worker checkpoint for deterministic lifecycle tests; null for UI requests.
+    bool startMidiExport(pattern::Pattern,double tempo,juce::File,
+                         fileexport::EncodeObserver=nullptr,void* observerContext=nullptr);
     std::optional<fileexport::Status> fileExportStatus() const noexcept;
     bool cancelFileExport(fileexport::Kind) noexcept;
     std::optional<fileexport::Completion> takeFileExportResult();

@@ -118,8 +118,11 @@ inline void vlq(std::vector<std::uint8_t>& out,std::uint32_t value){
 }
 // Type 0 Standard MIDI File, one track, tempo and 4/4 signature. Only the
 // trigger notes are exported; generated audio is never represented as MIDI.
-inline bool exportMidi(const Pattern& pattern,double bpm,std::vector<std::uint8_t>& output) {
-    if(!std::isfinite(bpm)||bpm<10||bpm>1000)return false;
+// `proceed` is an off-thread checkpoint: 0 before scheduling, then the
+// number of fully encoded events. Never publish partially serialized bytes.
+template <typename Proceed>
+inline bool exportMidiChecked(const Pattern& pattern,double bpm,std::vector<std::uint8_t>& output,Proceed proceed) {
+    if(!proceed(0)||!std::isfinite(bpm)||bpm<10||bpm>1000)return false;
     std::vector<Event> events;if(!schedule(pattern,events))return false;
     const auto micros=static_cast<std::uint32_t>(std::llround(60000000.0/bpm));
     if(micros>0xffffffu)return false;
@@ -127,13 +130,20 @@ inline bool exportMidi(const Pattern& pattern,double bpm,std::vector<std::uint8_
     track.insert(track.end(),{0,0xff,0x51,3,static_cast<std::uint8_t>(micros>>16),static_cast<std::uint8_t>(micros>>8),static_cast<std::uint8_t>(micros)});
     track.insert(track.end(),{0,0xff,0x58,4,4,2,24,8});
     std::uint32_t last=0;
-    for(const auto& event:events){vlq(track,event.tick-last);last=event.tick;
-        track.push_back(event.on?0x90:0x80);track.push_back(event.note);track.push_back(event.velocity);}
+    std::size_t encoded=0;
+    for(const auto& event:events){
+        vlq(track,event.tick-last);last=event.tick;
+        track.push_back(event.on?0x90:0x80);track.push_back(event.note);track.push_back(event.velocity);
+        if(!proceed(++encoded))return false;
+    }
     vlq(track,static_cast<std::uint32_t>(pattern.bars)*16*ticksPerStep-last);
     track.insert(track.end(),{0xff,0x2f,0});
     std::vector<std::uint8_t> bytes;bytes.insert(bytes.end(),{'M','T','h','d'});be32(bytes,6);be16(bytes,0);be16(bytes,1);be16(bytes,static_cast<std::uint16_t>(ppq));
     bytes.insert(bytes.end(),{'M','T','r','k'});be32(bytes,static_cast<std::uint32_t>(track.size()));bytes.insert(bytes.end(),track.begin(),track.end());
     output=std::move(bytes);return true;
+}
+inline bool exportMidi(const Pattern& pattern,double bpm,std::vector<std::uint8_t>& output) {
+    return exportMidiChecked(pattern,bpm,output,[](std::size_t) noexcept {return true;});
 }
 inline bool factory(std::size_t index,Pattern& output) noexcept {
     if(index>=12)return false;

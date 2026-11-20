@@ -83,6 +83,22 @@ int main() {
         check(midi.status().kind==fileexport::Kind::midi&&midi.result()==fileexport::Result::cancelled&&
               midiPath.loadFileAsString()=="original MIDI"&&dir.findChildFiles(juce::File::findFiles,false).size()==2,
               "MIDI cancellation preserves old destination and removes temporary bytes");
+        gate.bytes=0;gate.resume=false;
+        pattern.bars=4;pattern.grid=pattern::Grid::thirtysecondTriplet;
+        for(auto& step:pattern.steps){step.enabled=true;step.ratchets=4;}
+        // Hold the encoder after one complete MIDI event, with no file open.
+        fileexport::Job encoding(pattern,125.,midiPath,nullptr,&gate,holdWrite);
+        {
+            std::unique_lock lock(gate.mutex);
+            const bool entered=gate.condition.wait_for(lock,std::chrono::seconds(5),[&]{return gate.bytes>0;});
+            check(entered&&gate.bytes==1&&dir.findChildFiles(juce::File::findFiles,false).size()==2&&encoding.cancel(),
+                  "active maximum-size SMF encoding cooperatively cancels before opening a temporary file");
+            if(!entered)(void)encoding.cancel();
+            gate.resume=true;
+        }
+        gate.condition.notify_all();encoding.wait();
+        check(encoding.result()==fileexport::Result::cancelled&&midiPath.loadFileAsString()=="original MIDI"&&
+              dir.findChildFiles(juce::File::findFiles,false).size()==2,"cancelled encoding leaves no temporary MIDI bytes");
     }
     auto longCapture=capture;longCapture.settings.duration=32;
     {fileexport::Job job(longCapture,path);job.cancel();job.wait();

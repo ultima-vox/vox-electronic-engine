@@ -37,6 +37,7 @@ private:
 
 // Worker-side observer for deterministic write/cancel tests; null in the UI.
 using WriteObserver=void(*)(void*,std::size_t) noexcept;
+using EncodeObserver=void(*)(void*,std::size_t) noexcept;
 
 // Off the audio thread. The temporary lives beside the destination; the
 // destination is replaced only after a complete, closed write. Filesystem
@@ -88,12 +89,16 @@ public:
             std::vector<float>().swap(capture.sample);
             result_.store(outcome,std::memory_order_release);
         }) {}
-    Job(pattern::Pattern snapshot,double bpm,juce::File target,WriteObserver observe=nullptr,void* context=nullptr)
-        : kind_(Kind::midi),worker_([this,snapshot,bpm,target=std::move(target),observe,context] {
+    Job(pattern::Pattern snapshot,double bpm,juce::File target,WriteObserver observe=nullptr,void* context=nullptr,
+        EncodeObserver observeEncoding=nullptr)
+        : kind_(Kind::midi),worker_([this,snapshot,bpm,target=std::move(target),observe,context,observeEncoding] {
             bool success=false;
             try {
                 std::vector<std::uint8_t> bytes;
-                success=!cancel_.cancelled()&&pattern::exportMidi(snapshot,bpm,bytes)&&writeBytes(target,bytes,&cancel_,observe,context);
+                success=pattern::exportMidiChecked(snapshot,bpm,bytes,[&](std::size_t count) noexcept {
+                    if(observeEncoding&&count!=0)observeEncoding(context,count);
+                    return !cancel_.cancelled();
+                })&&writeBytes(target,bytes,&cancel_,observe,context);
             } catch(...) { success=false; }
             if(success)progress_.store(1.f,std::memory_order_relaxed);
             const auto result=success?Result::success:(cancel_.sealFailure()?Result::cancelled:Result::failure);

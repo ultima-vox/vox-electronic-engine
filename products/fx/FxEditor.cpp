@@ -742,8 +742,8 @@ void FxPanel::patternCommand(int id){
         refreshPattern();
     }
 }
-FxPanel::FxPanel (FxProcessor& processor)
-    : processor_ (processor), attachment_ (processor.outputParameter(), output_.getSlider()),
+FxPanel::FxPanel (FxProcessor& processor,SavePicker picker)
+    : processor_ (processor),savePicker_(std::move(picker)), attachment_ (processor.outputParameter(), output_.getSlider()),
       durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor)
 {
     addAndMakeVisible (output_);
@@ -1033,7 +1033,12 @@ FxPanel::FxPanel (FxProcessor& processor)
     refreshPattern();
     startTimerHz (25);
 }
-FxPanel::~FxPanel() { stopTimer(); }
+FxPanel::~FxPanel()
+{
+    stopTimer();
+    exportChooserOpen_=false;
+    exportChooser_.reset();
+}
 void FxPanel::paint (juce::Graphics& g)
 {
     namespace c = vox::ui::tokens::colour;
@@ -1212,6 +1217,47 @@ void FxPanel::importSample()
                     "Sample request failed","The selected path is invalid or the sample selection changed while the chooser was open.");
         });
 }
+void FxPanel::chooseExportFile(fileexport::Kind kind,SaveResult accept)
+{
+    if(exportChooserOpen_||processor_.fileExportStatus())return;
+    const bool wav=kind==fileexport::Kind::wav;
+    const auto format=juce::String(wav?"WAV":"MIDI");
+    const auto extension=juce::String(wav?"wav":"mid");
+    const auto safe=juce::Component::SafePointer<FxPanel>(this);
+    const auto ticket=++exportChooserTicket_;
+    exportChooserOpen_=true;
+    refreshExportControls();
+    auto complete=[safe,ticket,format,extension,accept=std::move(accept)](juce::File target){
+        if(safe==nullptr||!safe->exportChooserOpen_||safe->exportChooserTicket_!=ticket)return;
+        ++safe->exportChooserTicket_; // invalidate duplicate completions immediately
+        if(target!=juce::File{}){
+            if(!target.hasFileExtension(extension))
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    format+" export failed","Choose a filename ending in ."+extension+".");
+            else {
+                try {accept(std::move(target));}
+                catch (...) {
+                    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                        format+" export failed","Could not submit the selected file.");
+                }
+            }
+        }
+        if(safe!=nullptr){safe->exportChooserOpen_=false;safe->refreshExportControls();}
+    };
+    try {
+        if(savePicker_){savePicker_(kind,std::move(complete));return;}
+        exportChooser_=std::make_unique<juce::FileChooser>(wav?"Export VOX FX stereo WAV":"Export trigger pattern as MIDI",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(wav?"VOX FX.wav":"VOX FX Pattern.mid"),"*."+extension);
+        exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
+            juce::FileBrowserComponent::warnAboutOverwriting,
+            [complete=std::move(complete)](const juce::FileChooser& chooser){complete(chooser.getResult());});
+    } catch (...) {
+        if(safe!=nullptr&&safe->exportChooserTicket_==ticket){
+            ++safe->exportChooserTicket_;safe->exportChooserOpen_=false;safe->refreshExportControls();
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,format+" export failed","Could not open the save dialog.");
+        }
+    }
+}
 void FxPanel::exportPattern()
 {
     if(exportChooserOpen_||processor_.fileExportStatus())return;
@@ -1222,25 +1268,10 @@ void FxPanel::exportPattern()
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "MIDI export failed","The captured host tempo is outside the supported MIDI export range (10–1000 BPM).");return;
     }
-    exportChooser_=std::make_unique<juce::FileChooser>("Export trigger pattern as MIDI",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX Pattern.mid"),"*.mid");
-    exportChooserOpen_=true;
-    midiExport_.setEnabled(false);wavExport_.setEnabled(false);
-    exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
-        juce::FileBrowserComponent::warnAboutOverwriting,
-        [safe=juce::Component::SafePointer<FxPanel>(this),pattern,bpm](const juce::FileChooser& chooser){
-            if(safe==nullptr)return;
-            safe->exportChooserOpen_=false;
-            auto target=chooser.getResult();if(target==juce::File{})return;
-            // Do not silently change the destination after the chooser's
-            // overwrite confirmation, which could overwrite another file.
-            if(!target.hasFileExtension("mid")){
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                    "MIDI export failed","Choose a filename ending in .mid.");return;
-            }
-            if(!safe->processor_.startMidiExport(pattern,bpm,target))
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"MIDI export failed","Could not start the file worker.");
-        });
+    chooseExportFile(fileexport::Kind::midi,[this,pattern,bpm](juce::File target){
+        if(!processor_.startMidiExport(pattern,bpm,std::move(target)))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"MIDI export failed","Could not start the file worker.");
+    });
 }
 void FxPanel::exportWav(offline::Settings settings)
 {
@@ -1268,25 +1299,11 @@ void FxPanel::exportWav(offline::Settings settings)
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
             "WAV export failed","The selected granular sample is unavailable. Reimport it or choose the built-in source.");return;
     }
-    exportChooser_=std::make_unique<juce::FileChooser>("Export VOX FX stereo WAV",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VOX FX.wav"),"*.wav");
-    exportChooserOpen_=true;
-    midiExport_.setEnabled(false);wavExport_.setEnabled(false);
-    exportChooser_->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|
-        juce::FileBrowserComponent::warnAboutOverwriting,
-        [safe=juce::Component::SafePointer<FxPanel>(this),capture](const juce::FileChooser& chooser){
-            if(safe==nullptr)return;
-            safe->exportChooserOpen_=false;
-            const auto target=chooser.getResult();if(target==juce::File{})return;
-            if(!target.hasFileExtension("wav")){
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                    "WAV export failed","Choose a filename ending in .wav.");return;
-            }
-            if(!safe->processor_.startWavExport(std::move(*capture),target)) {
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                    "WAV export failed","Could not start the render worker.");
-            }
-        });
+    chooseExportFile(fileexport::Kind::wav,[this,capture](juce::File target){
+        if(!processor_.startWavExport(std::move(*capture),std::move(target)))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "WAV export failed","Could not start the render worker.");
+    });
 }
 void FxPanel::refreshPattern()
 {
@@ -1346,17 +1363,9 @@ void FxPanel::refreshMacro()
         if(config.routes[i].source==source&&config.routes[i].destination==destination){depth=config.routes[i].depth;break;}
     if(!macroDepth_.isMouseButtonDown()&&!macroDepth_.hasKeyboardFocus(true))macroDepth_.setValue(depth,juce::dontSendNotification);
 }
-void FxPanel::timerCallback()
+void FxPanel::refreshExportControls()
 {
     using Kind=fileexport::Kind;
-    if(const auto done=processor_.takeFileExportResult();done&&done->result!=fileexport::Result::cancelled){
-        const bool ok=done->result==fileexport::Result::success;
-        const bool wav=done->kind==Kind::wav;
-        const juce::String format=wav?"WAV":"MIDI";
-        juce::AlertWindow::showMessageBoxAsync(ok?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
-            format+(ok?" exported":" export failed"),ok?(wav?"The captured audio was exported.":"The captured trigger pattern and tempo were exported."):
-            "Could not render or write the selected file.");
-    }
     const auto status=processor_.fileExportStatus();
     const bool wavBusy=status&&status->kind==Kind::wav, midiBusy=status&&status->kind==Kind::midi;
     midiExport_.setEnabled(!exportChooserOpen_&&!wavBusy);
@@ -1368,6 +1377,19 @@ void FxPanel::timerCallback()
     }
     if(!wavBusy&&wavExport_.getButtonText()!="WAV")wavExport_.setButtonText("WAV");
     if(!midiBusy&&midiExport_.getButtonText()!="MIDI")midiExport_.setButtonText("MIDI");
+}
+void FxPanel::timerCallback()
+{
+    using Kind=fileexport::Kind;
+    if(const auto done=processor_.takeFileExportResult();done&&done->result!=fileexport::Result::cancelled){
+        const bool ok=done->result==fileexport::Result::success;
+        const bool wav=done->kind==Kind::wav;
+        const juce::String format=wav?"WAV":"MIDI";
+        juce::AlertWindow::showMessageBoxAsync(ok?juce::MessageBoxIconType::InfoIcon:juce::MessageBoxIconType::WarningIcon,
+            format+(ok?" exported":" export failed"),ok?(wav?"The captured audio was exported.":"The captured trigger pattern and tempo were exported."):
+            "Could not render or write the selected file.");
+    }
+    refreshExportControls();
     if (!isShowing()) return;
     const auto sample=processor_.sampleSnapshot();
     using Status=sample::Controller::Status;

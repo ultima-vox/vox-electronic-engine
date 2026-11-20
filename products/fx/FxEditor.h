@@ -199,7 +199,11 @@ private:
 // exposed. Additional workspaces are added as their DSP/controller exists.
 class FxPanel final : public juce::Component, private juce::Timer {
 public:
-    explicit FxPanel (FxProcessor&);
+    using SaveResult=std::function<void(juce::File)>;
+    // Inject the nonblocking picker in the native offscreen harness. The
+    // completion is always delivered on the message thread.
+    using SavePicker=std::function<void(fileexport::Kind,SaveResult)>;
+    explicit FxPanel (FxProcessor&,SavePicker={});
     ~FxPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -231,6 +235,8 @@ public:
     juce::Button& patternStep(std::size_t index) noexcept { return patternSteps_[index]; }
     juce::ComboBox& patternSelector() noexcept { return patternSelector_; }
     juce::Button& midiExportButton() noexcept { return midiExport_; }
+    const juce::Button& wavExportButton() const noexcept { return wavExport_; }
+    WavOptionsPanel& wavOptionsPanel() noexcept { return wavOptions_; }
     juce::Button& sampleImportButton() noexcept { return sampleImport_; }
     juce::Button& sampleBuiltinButton() noexcept { return sampleBuiltin_; }
     juce::Button& patternButton() noexcept { return patternEnabled_; }
@@ -248,6 +254,8 @@ private:
     void exportPattern();
     void choosePreset(bool saving);
     void exportWav(offline::Settings);
+    void chooseExportFile(fileexport::Kind,SaveResult);
+    void refreshExportControls();
     void refreshPattern();
     template <typename Edit> void editPattern(Edit);
     void patternCommand(int);
@@ -256,6 +264,7 @@ private:
     void refreshMacro();
     void refreshGenerator();
     FxProcessor& processor_;
+    SavePicker savePicker_;
     vox::ui::VoxKnob output_ { "OUTPUT", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment attachment_;
     vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
@@ -279,6 +288,7 @@ private:
     std::unique_ptr<juce::FileChooser> sampleChooser_;
     std::unique_ptr<juce::FileChooser> exportChooser_;
     bool exportChooserOpen_=false;
+    std::uint64_t exportChooserTicket_=0;
     std::array<juce::ToggleButton,4> layerLocks_;
     vox::ui::VoxComboBox patternSelector_,patternLength_,patternBar_,patternStepSelector_,patternGrid_,patternPage_;
     std::array<StructuralSlider,4> patternDetails_;
