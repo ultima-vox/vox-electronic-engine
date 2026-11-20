@@ -20,7 +20,8 @@ for match in re.finditer(r'^foreach\(test (Fx\w+(?: Fx\w+)*)\)', cmake, re.M):
 actual = {p.name for p in Path('tests/suite').glob('Fx*.cpp')}
 if len(named) != len(actual) or set(named) != actual:
     raise SystemExit(f'FX CMake/source inventory discrepancy: {set(named)^actual}')
-print(f'{len(named)} FX executables: native harness owns 3; this inventory runs {len(named)-3}')
+native_owned = 4  # Processor, RuntimeStress, FileExport, Automation
+print(f'{len(named)} FX executables: native harness owns {native_owned}; this inventory runs {len(named)-native_owned}')
 PY
 git rev-parse HEAD
 g++ --version | sed -n '1p'
@@ -35,7 +36,7 @@ for source in tests/suite/Fx*.cpp; do
     name=${source##*/}; name=${name%.cpp}
     args=()
     case "$name" in
-        FxProcessorTests|FxRuntimeStressTests|FxFileExportTests) continue ;;
+        FxProcessorTests|FxRuntimeStressTests|FxFileExportTests|FxAutomationTests) continue ;;
         FxPresetLibraryTests) args+=("$out/filecommit.o") ;;&
         FxPresetLibraryTests|FxSampleDecodeTests|FxSampleControllerTests)
             args+=("$deps/obj"/juce_core*.o "$deps/obj/juce_cryptography.o" -ldl -lrt -l:libz.so.1) ;;

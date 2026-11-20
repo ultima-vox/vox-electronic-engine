@@ -219,6 +219,13 @@ target_include_directories(suite_fx_noise_riser_tests PRIVATE ${PROJECT_SOURCE_D
 add_test(NAME suite_fx_noise_riser_tests COMMAND suite_fx_noise_riser_tests)
 set_tests_properties(suite_fx_noise_riser_tests PROPERTIES LABELS suite)
 
+add_executable(suite_fx_automation_tests FxAutomationTests.cpp)
+target_link_libraries(suite_fx_automation_tests PRIVATE ${VOX_SUITE_fx_TARGET})
+target_include_directories(suite_fx_automation_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_fx_automation_tests
+         COMMAND suite_fx_automation_tests ${PROJECT_SOURCE_DIR}/products/fx/parameters.csv)
+set_tests_properties(suite_fx_automation_tests PROPERTIES LABELS suite)
+
 add_executable(suite_fx_processor_tests FxProcessorTests.cpp)
 target_link_libraries(suite_fx_processor_tests PRIVATE ${VOX_SUITE_fx_TARGET})
 target_include_directories(suite_fx_processor_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)

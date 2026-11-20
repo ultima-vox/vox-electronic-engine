@@ -61,8 +61,13 @@ done
 wrap=(-Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_trylock -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_wrlock)
 libs=(-ldl -lrt -l:libz.so.1 -l:libX11.so.6 -l:libXext.so.6 -l:libfreetype.so.6 -l:libfontconfig.so.1 -l:libpng16.so.16 -l:libjpeg.so.62)
 git rev-parse HEAD
-for n in FxProcessorTests FxRuntimeStressTests FxFileExportTests; do
+# FxAutomationTests also takes products/fx/parameters.csv, the frozen contract.
+for n in FxProcessorTests FxRuntimeStressTests FxFileExportTests FxAutomationTests; do
     g++ "${flags[@]}" "${prod[@]}" -O2 -c "tests/suite/$n.cpp" -o "$out/obj/$n.o"
     g++ -pthread "${objects[@]}" "$out/obj/$n.o" "$deps"/obj/*.o "$out/probe.o" "$out/lock.o" "${wrap[@]}" "${libs[@]}" -o "$out/$n"
-    (ulimit -s 1024; "$out/$n")
+    if [[ "$n" == FxAutomationTests ]]; then
+        (ulimit -s 1024; "$out/$n" products/fx/parameters.csv)
+    else
+        (ulimit -s 1024; "$out/$n")
+    fi
 done
