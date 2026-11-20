@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Export lifecycle follow-up and gain-staging matrix](EXPORT_QUALIFICATION_FOLLOWUP_20261119.md): active SMF cancellation, chooser reentry protection, host-save and rate-change fixtures, and SHA-verified level estimates for the same 176 unapproved references. Windows, FX-T18, private delivery and owner acceptance remain open.
+
 - [Shared WAV/MIDI export and consolidated listening review](FILE_EXPORT_AND_ARRANGEMENT_REVIEW_20261119.md): immutable MIDI file job, native granular preview/retirement and wet-bounce regression, 176 prior review cues verified in one bundle, no approvals. Three fresh wall-only misses; FX-T18 remains open.
 
 - [In-place bounce history](BOUNCE_HISTORY_20261119.md) and [Wave B 56](WAVE_B_ROOM_CUTS_20261119.md): live audition cannot steal musical voices; identical-history wet-tail and clipboard-restore Linux tests passed. One fresh wall-only deadline miss; FX-T18 remains open. A 120 + B 56 = 176 review candidates, zero approved.

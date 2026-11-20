@@ -6,12 +6,8 @@ validator and binary SHA are pending; HOLD prohibits merge and release. See the
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Latest:** [File export, voice pressure and consolidated arrangement review](FILE_EXPORT_AND_ARRANGEMENT_REVIEW_20261119.md).
-WAV and MIDI share a processor-owned file worker. A120 + B56 remains 176
-candidates, zero approved, now with one verified listening package and review
-matrix. Real arrangements, durable private handoff, FX-T18, exact-head Windows
-and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume
-notes below describe earlier checkpoints.
+**Latest:** [Export lifecycle follow-up and gain-staging matrix](EXPORT_QUALIFICATION_FOLLOWUP_20261119.md).
+WAV and MIDI share a processor-owned file worker; the save chooser has one active ticket and MIDI encoding can be cancelled in progress. A120 + B56 remains 176 candidates, zero approved, with active RMS for each pinned WAV in the working matrix. Real arrangements, durable private handoff, FX-T18, exact-head Windows and the owner host round remain open. Draft/HOLD/NO MERGE. The table and resume notes below describe earlier checkpoints.
 
 | Milestone | Status |
 |---|---|
