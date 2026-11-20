@@ -82,6 +82,9 @@ public:
     // the host parameters. `requestPreview` auditions the live patch on a
     // side engine. Factory and user preview audition that candidate instead.
     void requestPreview (int note) noexcept;
+    // Same as requestPreview, but the side-chain delay and reverb are the
+    // candidate's, not a fresh write of the host parameters. Measurement only.
+    void requestPreviewWithFx (int note, float delayRate, float reverbAmount) noexcept;
     void requestFactoryPreview (int index) noexcept;
     bool requestUserPreview (int index);
     void cancelPreview() noexcept;

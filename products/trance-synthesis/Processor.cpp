@@ -1102,6 +1102,30 @@ void SynthesisProcessor::requestPreview (int note) noexcept
     publishPreview (liveBlock (fx), fx, events, count, previewSamples (sampleRate_, 0.20));
 }
 
+void SynthesisProcessor::requestPreviewWithFx (int note, float delayRate, float reverbAmount) noexcept
+{
+    note = std::clamp (note, 0, 127);
+    engine::Event events[2] {};
+    int count = 0;
+    const int offAt = previewSamples (sampleRate_, 0.40);
+    pushPreview (events, count, 0, 0x90, note, 96, 0);
+    pushPreview (events, count, static_cast<std::uint32_t> (offAt), 0x80, note, 0, 0);
+    PreviewFx fx;
+    const auto block = liveBlock (fx);
+    auto tune = [] (vstengine::effects::EffectSettings& slot, float amount, float rate) noexcept
+    {
+        slot.enabled = true;
+        slot.mix = 0.40f;
+        slot.amount = std::clamp (amount, 0.0f, 1.0f);
+        slot.rate = std::clamp (rate, 0.0f, 1.0f);
+        if (! std::isfinite (slot.character))
+            slot.character = 0.5f;
+    };
+    tune (fx.slot[6], 0.72f, delayRate);
+    tune (fx.slot[7], reverbAmount, 0.50f);
+    publishPreview (block, fx, events, count, previewSamples (sampleRate_, 0.20));
+}
+
 void SynthesisProcessor::requestFactoryPreview (int index) noexcept
 {
     if (index < 0 || index >= vox::syn::factoryProgramCount())

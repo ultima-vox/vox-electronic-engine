@@ -2849,9 +2849,7 @@ void testPreviewTransitions()
             }
 
             {
-                setPlain (*synth, "syn.fx.delay.rate", 0.85f);
-                setPlain (*synth, "syn.fx.reverb.amount", 0.80f);
-                synth->requestPreview (72);
+                synth->requestPreviewWithFx (72, 0.85f, 0.80f);
                 synth->processBlock (buffer, midi);
                 std::vector<double> times;
                 times.reserve (samples);
@@ -2861,9 +2859,9 @@ void testPreviewTransitions()
                 for (int i = 0; i < samples; ++i)
                 {
                     const bool alternate = (i % 2) == 0;
-                    setPlain (*synth, "syn.fx.delay.rate", alternate ? 0.22f : 0.85f);
-                    setPlain (*synth, "syn.fx.reverb.amount", alternate ? 0.30f : 0.80f);
-                    synth->requestPreview (alternate ? 67 : 72);
+                    synth->requestPreviewWithFx (alternate ? 67 : 72,
+                                                 alternate ? 0.22f : 0.85f,
+                                                 alternate ? 0.30f : 0.80f);
                     double milliseconds = 0.0;
                     mallocs += timeProcess (*synth, buffer, midi, milliseconds);
                     times.push_back (milliseconds);
@@ -2884,9 +2882,7 @@ void testPreviewTransitions()
                 bool cleared = false;
                 for (int i = 0; i < samples; ++i)
                 {
-                    setPlain (*synth, "syn.fx.delay.rate", 0.85f);
-                    setPlain (*synth, "syn.fx.reverb.amount", 0.80f);
-                    synth->requestPreview (72);
+                    synth->requestPreviewWithFx (72, 0.85f, 0.80f);
                     synth->processBlock (buffer, midi);
                     synth->cancelPreview();
                     double milliseconds = 0.0;
