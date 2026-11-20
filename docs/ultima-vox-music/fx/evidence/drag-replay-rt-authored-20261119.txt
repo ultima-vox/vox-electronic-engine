@@ -1,0 +1,169 @@
+Non-default grain shape, step and held ADSR routes
+Linux thread CPU clock enabled (outside callback); diagnostic, not a deadline relaxation
+Allocation probe available: yes
+Lock probe: linked pthread mutex/rwlock entry points
+Random MIDI without Pattern
+44100 Hz 64 samples 1 initial voices: peak 0.027211 DC 0.0001550 grains 48 alloc 0 lock 0 p50 86.03 p95 159.37 p99 195.79 max 220.48 us
+  thread max 189.34 us; at wall max 220.48 us thread 175.45 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 34.67 us
+44100 Hz 64 samples 4 initial voices: peak 0.060566 DC 0.0008869 grains 64 alloc 0 lock 0 p50 121.15 p95 190.36 p99 224.25 max 242.31 us
+  thread max 242.88 us; at wall max 242.31 us thread 242.88 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 49.46 us
+44100 Hz 64 samples 8 initial voices: peak 0.042445 DC 0.0011121 grains 64 alloc 0 lock 0 p50 147.88 p95 200.37 p99 211.64 max 213.47 us
+  thread max 213.95 us; at wall max 213.47 us thread 213.95 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 75.60 us
+44100 Hz 128 samples 1 initial voices: peak 0.035829 DC 0.0004537 grains 64 alloc 0 lock 0 p50 155.69 p95 308.23 p99 340.10 max 357.97 us
+  thread max 358.48 us; at wall max 357.97 us thread 358.48 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 27.05 us
+44100 Hz 128 samples 4 initial voices: peak 0.076315 DC 0.0002172 grains 64 alloc 0 lock 0 p50 216.88 p95 368.62 p99 382.44 max 389.59 us
+  thread max 389.92 us; at wall max 389.59 us thread 389.92 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 91.34 us
+44100 Hz 128 samples 8 initial voices: peak 0.070547 DC 0.0000762 grains 64 alloc 0 lock 0 p50 291.17 p95 384.92 p99 420.80 max 429.77 us
+  thread max 430.27 us; at wall max 429.77 us thread 430.27 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.46 us
+44100 Hz 512 samples 1 initial voices: peak 0.055295 DC 0.0000622 grains 64 alloc 0 lock 0 p50 593.03 p95 1231.36 p99 1273.63 max 1288.30 us
+  thread max 1288.91 us; at wall max 1288.30 us thread 1288.91 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 113.60 us
+44100 Hz 512 samples 4 initial voices: peak 0.076315 DC 0.0000763 grains 64 alloc 0 lock 0 p50 796.40 p95 1211.44 p99 1353.71 max 1419.67 us
+  thread max 1420.26 us; at wall max 1419.67 us thread 1420.26 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 107.37 us
+44100 Hz 512 samples 8 initial voices: peak 0.070547 DC 0.0002413 grains 64 alloc 0 lock 0 p50 992.78 p95 1224.76 p99 1384.05 max 1392.92 us
+  thread max 1393.48 us; at wall max 1392.92 us thread 1393.48 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 109.77 us
+48000 Hz 64 samples 1 initial voices: peak 0.012924 DC 0.0000614 grains 48 alloc 0 lock 0 p50 88.87 p95 159.59 p99 173.08 max 197.48 us
+  thread max 189.63 us; at wall max 197.48 us thread 189.63 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 34.71 us
+48000 Hz 64 samples 4 initial voices: peak 0.035101 DC 0.0004789 grains 64 alloc 0 lock 0 p50 129.75 p95 186.23 p99 212.63 max 228.95 us
+  thread max 222.19 us; at wall max 228.95 us thread 222.19 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 62.17 us
+48000 Hz 64 samples 8 initial voices: peak 0.026628 DC 0.0004104 grains 64 alloc 0 lock 0 p50 147.33 p95 199.90 p99 216.67 max 223.25 us
+  thread max 223.71 us; at wall max 223.25 us thread 223.71 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 13.99 us
+48000 Hz 128 samples 1 initial voices: peak 0.031969 DC 0.0004068 grains 64 alloc 0 lock 0 p50 153.25 p95 310.71 p99 362.84 max 389.25 us
+  thread max 389.78 us; at wall max 389.25 us thread 389.78 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 27.12 us
+48000 Hz 128 samples 4 initial voices: peak 0.035101 DC 0.0001125 grains 64 alloc 0 lock 0 p50 220.68 p95 376.15 p99 391.93 max 411.47 us
+  thread max 404.98 us; at wall max 411.47 us thread 404.98 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 91.68 us
+48000 Hz 128 samples 8 initial voices: peak 0.042526 DC 0.0002190 grains 64 alloc 0 lock 0 p50 293.74 p95 389.65 p99 414.46 max 433.83 us
+  thread max 434.68 us; at wall max 433.83 us thread 434.68 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 132.34 us
+48000 Hz 512 samples 1 initial voices: peak 0.053376 DC 0.0000662 grains 64 alloc 0 lock 0 p50 617.75 p95 1237.51 p99 1298.39 max 1299.06 us
+  thread max 1299.60 us; at wall max 1299.06 us thread 1299.60 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 110.19 us
+48000 Hz 512 samples 4 initial voices: peak 0.056634 DC 0.0000511 grains 64 alloc 0 lock 0 p50 794.15 p95 1238.00 p99 1369.65 max 1375.71 us
+  thread max 1376.24 us; at wall max 1375.71 us thread 1376.24 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 107.06 us
+48000 Hz 512 samples 8 initial voices: peak 0.063926 DC 0.0000609 grains 64 alloc 0 lock 0 p50 988.77 p95 1221.80 p99 1420.63 max 1428.73 us
+  thread max 1429.31 us; at wall max 1428.73 us thread 1429.31 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.79 us
+96000 Hz 64 samples 1 initial voices: peak 0.010975 DC 0.0001629 grains 48 alloc 0 lock 0 p50 101.01 p95 177.97 p99 204.55 max 208.09 us
+  thread max 205.01 us; at wall max 208.09 us thread 200.40 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 34.53 us
+96000 Hz 64 samples 4 initial voices: peak 0.019618 DC 0.0002836 grains 64 alloc 0 lock 0 p50 149.20 p95 201.61 p99 221.77 max 235.76 us
+  thread max 230.63 us; at wall max 235.76 us thread 230.63 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 75.17 us
+96000 Hz 64 samples 8 initial voices: peak 0.010582 DC 0.0000639 grains 64 alloc 0 lock 0 p50 167.08 p95 205.58 p99 230.40 max 232.91 us
+  thread max 233.41 us; at wall max 232.91 us thread 233.41 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 64.09 us
+96000 Hz 128 samples 1 initial voices: peak 0.022560 DC 0.0001377 grains 48 alloc 0 lock 0 p50 171.20 p95 314.45 p99 342.17 max 345.14 us
+  thread max 345.49 us; at wall max 345.14 us thread 345.49 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 68.77 us
+96000 Hz 128 samples 4 initial voices: peak 0.031831 DC 0.0002024 grains 64 alloc 0 lock 0 p50 243.96 p95 376.57 p99 397.99 max 411.52 us
+  thread max 412.00 us; at wall max 411.52 us thread 412.00 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 98.59 us
+96000 Hz 128 samples 8 initial voices: peak 0.072158 DC 0.0002503 grains 64 alloc 0 lock 0 p50 295.10 p95 379.06 p99 410.72 max 431.47 us
+  thread max 431.97 us; at wall max 431.47 us thread 431.97 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 124.37 us
+96000 Hz 512 samples 1 initial voices: peak 0.043902 DC 0.0002289 grains 64 alloc 0 lock 0 p50 595.22 p95 1267.25 p99 1348.79 max 1430.72 us
+  thread max 1431.26 us; at wall max 1430.72 us thread 1431.26 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 107.38 us
+96000 Hz 512 samples 4 initial voices: peak 0.055328 DC 0.0004431 grains 64 alloc 0 lock 0 p50 807.99 p95 1294.66 p99 1438.11 max 1440.47 us
+  thread max 1441.15 us; at wall max 1440.47 us thread 1441.15 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.39 us
+96000 Hz 512 samples 8 initial voices: peak 0.072158 DC 0.0003013 grains 64 alloc 0 lock 0 p50 1039.61 p95 1309.42 p99 1433.76 max 1497.99 us
+  thread max 1498.52 us; at wall max 1497.99 us thread 1498.52 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 106.40 us
+Max-ratchet synchronized Pattern + random MIDI
+44100 Hz 64 samples 1 initial voices: peak 0.023172 DC 0.0000785 grains 64 alloc 0 lock 0 p50 147.99 p95 185.19 p99 197.49 max 202.03 us
+  thread max 202.60 us; at wall max 202.03 us thread 202.60 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 49.27 us
+44100 Hz 64 samples 4 initial voices: peak 0.024198 DC 0.0005501 grains 64 alloc 0 lock 0 p50 155.89 p95 191.71 p99 209.40 max 210.46 us
+  thread max 211.03 us; at wall max 210.46 us thread 211.03 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 62.83 us
+44100 Hz 64 samples 8 initial voices: peak 0.031090 DC 0.0009712 grains 64 alloc 0 lock 0 p50 158.72 p95 201.00 p99 209.03 max 210.84 us
+  thread max 211.33 us; at wall max 210.84 us thread 211.33 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 75.33 us
+44100 Hz 128 samples 1 initial voices: peak 0.033208 DC 0.0019221 grains 64 alloc 0 lock 0 p50 304.18 p95 356.89 p99 369.11 max 395.66 us
+  thread max 396.33 us; at wall max 395.66 us thread 396.33 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 70.32 us
+44100 Hz 128 samples 4 initial voices: peak 0.031615 DC 0.0013442 grains 64 alloc 0 lock 0 p50 304.53 p95 383.71 p99 402.83 max 412.33 us
+  thread max 412.89 us; at wall max 412.33 us thread 412.89 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 118.55 us
+44100 Hz 128 samples 8 initial voices: peak 0.031090 DC 0.0010302 grains 64 alloc 0 lock 0 p50 315.14 p95 445.90 p99 640.68 max 647.98 us
+  thread max 649.25 us; at wall max 647.98 us thread 649.25 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 107.78 us
+44100 Hz 512 samples 1 initial voices: peak 0.036419 DC 0.0008199 grains 64 alloc 0 lock 0 p50 1254.48 p95 1334.76 p99 1360.13 max 1369.33 us
+  thread max 1370.45 us; at wall max 1369.33 us thread 1370.45 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 463.64 us
+44100 Hz 512 samples 4 initial voices: peak 0.037829 DC 0.0007450 grains 64 alloc 0 lock 0 p50 1246.51 p95 1421.22 p99 1513.19 max 1577.17 us
+  thread max 1578.42 us; at wall max 1577.17 us thread 1578.42 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 393.47 us
+44100 Hz 512 samples 8 initial voices: peak 0.034547 DC 0.0004893 grains 64 alloc 0 lock 0 p50 1205.99 p95 1463.31 p99 1605.54 max 1881.80 us
+  thread max 1882.37 us; at wall max 1881.80 us thread 1882.37 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 442.05 us
+48000 Hz 64 samples 1 initial voices: peak 0.027365 DC 0.0008423 grains 64 alloc 0 lock 0 p50 141.09 p95 182.96 p99 197.13 max 203.41 us
+  thread max 203.89 us; at wall max 203.41 us thread 203.89 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 50.06 us
+48000 Hz 64 samples 4 initial voices: peak 0.029654 DC 0.0010806 grains 64 alloc 0 lock 0 p50 154.88 p95 193.76 p99 227.77 max 238.29 us
+  thread max 231.95 us; at wall max 238.29 us thread 231.95 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 63.69 us
+48000 Hz 64 samples 8 initial voices: peak 0.034656 DC 0.0010808 grains 64 alloc 0 lock 0 p50 155.23 p95 201.42 p99 221.63 max 224.80 us
+  thread max 225.33 us; at wall max 224.80 us thread 225.33 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 13.88 us
+48000 Hz 128 samples 1 initial voices: peak 0.037265 DC 0.0019130 grains 64 alloc 0 lock 0 p50 301.28 p95 350.77 p99 367.65 max 374.66 us
+  thread max 375.21 us; at wall max 374.66 us thread 375.21 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 91.81 us
+48000 Hz 128 samples 4 initial voices: peak 0.035673 DC 0.0014677 grains 64 alloc 0 lock 0 p50 308.96 p95 376.04 p99 396.96 max 413.34 us
+  thread max 413.91 us; at wall max 413.34 us thread 413.91 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 101.91 us
+48000 Hz 128 samples 8 initial voices: peak 0.034656 DC 0.0010931 grains 64 alloc 0 lock 0 p50 312.45 p95 389.78 p99 420.17 max 428.47 us
+  thread max 429.08 us; at wall max 428.47 us thread 429.08 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 132.08 us
+48000 Hz 512 samples 1 initial voices: peak 0.044226 DC 0.0009215 grains 64 alloc 0 lock 0 p50 1253.95 p95 1343.31 p99 1405.96 max 1561.11 us
+  thread max 1561.69 us; at wall max 1561.11 us thread 1561.69 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 413.71 us
+48000 Hz 512 samples 4 initial voices: peak 0.042472 DC 0.0007460 grains 64 alloc 0 lock 0 p50 1229.94 p95 1399.92 p99 1463.47 max 1467.27 us
+  thread max 1467.80 us; at wall max 1467.27 us thread 1467.80 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 356.57 us
+48000 Hz 512 samples 8 initial voices: peak 0.035924 DC 0.0005862 grains 64 alloc 0 lock 0 p50 1185.45 p95 1438.93 p99 1507.39 max 2256.53 us
+  thread max 2258.15 us; at wall max 2256.53 us thread 2258.15 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 430.40 us
+96000 Hz 64 samples 1 initial voices: peak 0.022941 DC 0.0001736 grains 60 alloc 0 lock 0 p50 130.24 p95 190.13 p99 224.61 max 228.57 us
+  thread max 229.07 us; at wall max 228.57 us thread 229.07 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 48.46 us
+96000 Hz 64 samples 4 initial voices: peak 0.013328 DC 0.0002201 grains 64 alloc 0 lock 0 p50 159.73 p95 203.01 p99 214.94 max 230.56 us
+  thread max 224.17 us; at wall max 230.56 us thread 224.17 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 77.80 us
+96000 Hz 64 samples 8 initial voices: peak 0.018000 DC 0.0002026 grains 64 alloc 0 lock 0 p50 173.49 p95 208.84 p99 239.23 max 244.49 us
+  thread max 247.50 us; at wall max 244.49 us thread 247.50 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 64.24 us
+96000 Hz 128 samples 1 initial voices: peak 0.036539 DC 0.0001313 grains 64 alloc 0 lock 0 p50 277.56 p95 361.34 p99 385.74 max 397.48 us
+  thread max 398.03 us; at wall max 397.48 us thread 398.03 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 98.61 us
+96000 Hz 128 samples 4 initial voices: peak 0.024249 DC 0.0000155 grains 64 alloc 0 lock 0 p50 310.56 p95 388.31 p99 432.35 max 443.57 us
+  thread max 444.14 us; at wall max 443.57 us thread 444.14 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 129.05 us
+96000 Hz 128 samples 8 initial voices: peak 0.024305 DC 0.0001284 grains 64 alloc 0 lock 0 p50 310.12 p95 388.60 p99 416.37 max 430.34 us
+  thread max 430.84 us; at wall max 430.34 us thread 430.84 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 152.91 us
+96000 Hz 512 samples 1 initial voices: peak 0.051192 DC 0.0003774 grains 64 alloc 0 lock 0 p50 1245.52 p95 1369.68 p99 1407.57 max 1462.47 us
+  thread max 1463.04 us; at wall max 1462.47 us thread 1463.04 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 352.93 us
+96000 Hz 512 samples 4 initial voices: peak 0.039449 DC 0.0001595 grains 64 alloc 0 lock 0 p50 1196.01 p95 1438.12 p99 1530.93 max 1600.81 us
+  thread max 1604.11 us; at wall max 1600.81 us thread 1604.11 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 321.47 us
+96000 Hz 512 samples 8 initial voices: peak 0.035684 DC 0.0000104 grains 64 alloc 0 lock 0 p50 1142.33 p95 1357.86 p99 1465.73 max 1556.46 us
+  thread max 1557.71 us; at wall max 1556.46 us thread 1557.71 us; misses wall/CPU/wall-only 0/0/0 of 160
+  thread CPU valid 160/160; zero deltas 0; min positive delta 303.12 us
+FX JUCE runtime stress: 0 failing cases

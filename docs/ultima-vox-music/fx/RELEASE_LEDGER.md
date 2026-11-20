@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Drag replay](DRAG_REPLAY_20261119.md) and [Wave B Session Cuts](WAVE_B_SESSION_CUTS_20261119.md): same-path drag retry and stale completion guard; 24 new individually authored cues, 200 review-only total, no new ZIP or approvals. Native regressions pass; new wall and thread-CPU miss evidence keeps FX-T18 open.
+
 - [Prepared WAV and MIDI drag](FILE_DRAG_20261119.md): bounded worker staging, one native copy-only offer per gesture, independent Save fallback, and offscreen payload/lifecycle checks. Real Win32 drag, drop-copy behavior, disk/teardown and owner-host acceptance remain unqualified. No audio delivery or new approvals.
 
 - [Candidate gate and outstanding work](CANDIDATE_GATE_20261119.md): native same-directory export commit without copy fallback, no-clobber race and cross-device tests, plus an opt-in Windows thread CPU probe (not executed on Windows). Latest Linux timing was clean; prior wall overruns keep FX-T18 open. No catalog or release approval.
