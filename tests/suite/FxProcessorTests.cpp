@@ -637,7 +637,7 @@ void checkPreparedDrag() {
     const auto handed=offered;
     check(offers==2&&picks==0&&fx->dragInProgress()&&!fx->preparedDragKind()&&!fx->fileExportStatus()&&save(*fx)==project,
           "one native offer takes the stage with no second worker, picker or serialized state");
-    panel.reset();const auto oldEnd=std::exchange(ended,{});if(oldEnd)oldEnd();
+    panel.reset();auto oldEnd=std::exchange(ended,{});if(oldEnd)oldEnd();
     check(!fx->dragInProgress()&&fx->preparedDragKind()==Kind::midi&&handed.existsAsFile(),
           "completion after editor close makes the original snapshot reusable");
     panel=std::make_unique<FxPanel>(*fx,picker,drag);
@@ -648,6 +648,13 @@ void checkPreparedDrag() {
     check(fx->dragInProgress()&&!fx->preparedDragKind(),"stale completion cannot release a newer drag of the same file");
     if(ended){ended();ended={};}
     check(fx->preparedDragKind()==Kind::midi,"current completion releases the active drag only");
+    oldEnd={};
+    check(!fx->offerPreparedDrag([&](const juce::File& path,std::function<void()> finish){
+        finish();
+        check(path==handed&&fx->dragInProgress()&&!fx->prepareMidiDrag({},120.),
+              "synchronous completion cannot reenter the launch or replace its payload");
+        return false;
+    })&&fx->preparedDragKind()==Kind::midi,"rejected launch of an already-offered file keeps it available");
 
     allow=false;
     panel=std::make_unique<FxPanel>(*fx,picker,drag);
