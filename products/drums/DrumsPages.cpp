@@ -5,6 +5,7 @@
 #include "Processor.h"
 #include "Tokens.h"
 #include "Typography.h"
+#include "DrumsDial.h"
 
 #include <deque>
 
@@ -294,10 +295,11 @@ public:
         styleLabel_ = makeLabel ("Style");
         addAndMakeVisible (*styleLabel_);
         style_ = std::make_unique<VoxComboBox>();
-        for (int i = 0; i < factoryStyleCount; ++i)
-            style_->addItem (styleName (static_cast<Style> (i)), i + 1);
         style_->onChange = [this] {
-            change ([this] (GeneratorSettings& g) { g.style = static_cast<Style> (juce::jmax (0, style_->getSelectedItemIndex())); });
+            const int index = style_->getSelectedItemIndex();
+            if (refreshing_ || index < 0 || index >= factoryStyleCount) return;
+            change ([index] (GeneratorSettings& g) { g.style = static_cast<Style> (index); g.custom.reset(); });
+            refresh();
         };
         addAndMakeVisible (*style_);
         static const char* names[8] = { "density", "groove", "syncopation", "swing", "humanize", "complexity", "fills", "variation" };
@@ -305,7 +307,7 @@ public:
         for (int i = 0; i < 8; ++i)
         {
             auto& k = amounts_[static_cast<std::size_t> (i)];
-            k = std::make_unique<VoxKnob> (labels[i], VoxKnob::Size::Normal);
+            k = std::make_unique<DrumsDial> (labels[i], VoxKnob::Size::Normal);
             k->setName (names[i]);
             auto& s = k->getSlider();
             s.setRange (0.0, 1.0, 0.0);
@@ -365,7 +367,7 @@ public:
         action (defaults_, "Style defaults", "Set the eight amounts to the selected style's recommended values (one undo step)", [this] {
             const bool changed = processor_.applyStyleDefaults();
             refresh();
-            status_->setText (changed ? juce::String ("Style defaults of ") + styleName (shown_.style) + " applied"
+            status_->setText (changed ? juce::String ("Style defaults of ") + (shown_.custom ? shown_.custom->name : juce::String (styleName (shown_.style))) + " applied"
                                       : juce::String ("Nothing changed: the amounts already are the style defaults"),
                               juce::dontSendNotification);
         });
@@ -376,7 +378,8 @@ public:
 
     void update() override
     {
-        if (processor_.generator() != shown_)
+        const auto current = processor_.generator();
+        if (current != shown_ || current.custom != shown_.custom)
             refresh();
         undo_->setEnabled (processor_.patternHistory().canUndo());
         redo_->setEnabled (processor_.patternHistory().canRedo());
@@ -384,6 +387,30 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            styleLabel_->setBounds (area.removeFromTop (18));
+            style_->setBounds (area.removeFromTop (30)); seed_->setBounds (area.removeFromTop (22));
+            for (int row = 0; row < 4; ++row)
+            {
+                auto cells = area.removeFromTop (86);
+                amounts_[static_cast<std::size_t> (row * 2)]->setBounds (cells.removeFromLeft (cells.getWidth() / 2));
+                amounts_[static_cast<std::size_t> (row * 2 + 1)]->setBounds (cells);
+            }
+            const auto lanes = [] (juce::Rectangle<int> r, auto& buttons) {
+                for (int n = 0; n < padCount; ++n)
+                    buttons[static_cast<std::size_t> (n)]->setBounds (juce::Rectangle<int>
+                        (r.getX() + n % 4 * r.getWidth() / 4, r.getY() + n / 4 * 28, r.getWidth() / 4, 28).reduced (1));
+            };
+            lockLabel_->setBounds (area.removeFromTop (32)); lanes (area.removeFromTop (112), locks_);
+            mutateLabel_->setBounds (area.removeFromTop (24)); lanes (area.removeFromTop (112), mutate_);
+            for (auto* button : { pattern_.get(), song_.get(), mutateButton_.get(), fill_.get(), variation_.get(),
+                                  undo_.get(), redo_.get(), defaults_.get() })
+                button->setBounds (area.removeFromTop (32).reduced (1));
+            status_->setBounds (area.removeFromTop (60));
+            return;
+        }
         auto area = getLocalBounds();
         auto left = area.removeFromLeft (juce::jlimit (380, 520, area.getWidth() * 45 / 100));
         area.removeFromLeft (sp::xxl);
@@ -500,7 +527,12 @@ private:
     {
         refreshing_ = true;
         shown_ = processor_.generator();
-        style_->setSelectedItemIndex (static_cast<int> (shown_.style), juce::dontSendNotification);
+        style_->clear (juce::dontSendNotification);
+        for (int i = 0; i < factoryStyleCount; ++i)
+            style_->addItem (styleName (static_cast<Style> (i)), i + 1);
+        if (shown_.custom)
+            style_->addItem (shown_.custom->name + " (embedded)", factoryStyleCount + 1);
+        style_->setSelectedId (shown_.custom ? factoryStyleCount + 1 : static_cast<int> (shown_.style) + 1, juce::dontSendNotification);
         for (int i = 0; i < 8; ++i)
             amounts_[static_cast<std::size_t> (i)]->getSlider().setValue (*field (shown_, i), juce::dontSendNotification);
         for (int lane = 0; lane < padCount; ++lane)
@@ -532,6 +564,8 @@ public:
         for (int pad = 0; pad < padCount; ++pad)
         {
             auto& r = rows_[static_cast<std::size_t> (pad)];
+            r.lane = &host_.toggle ("drm.seq.lane." + juce::String (padPrefix (pad).substr (4)), "Seq");
+            r.lane->setTooltip ("Enable this pad's sequencer lane; incoming MIDI is independent");
             r.name = makeLabel ("");
             r.note = std::make_unique<VoxComboBox>();
             r.note->addItemList (notes, 1);
@@ -596,6 +630,23 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            for (auto& r : rows_)
+            {
+                auto row = area.removeFromTop (88);
+                auto title = row.removeFromTop (28);
+                r.lane->setBounds (title.removeFromRight (48).reduced (1)); r.name->setBounds (title);
+                auto choices = row.removeFromTop (30);
+                r.note->setBounds (choices.removeFromLeft (choices.getWidth() / 2).reduced (1));
+                r.output->setBounds (choices.reduced (1));
+                r.state->setBounds (row.removeFromTop (24));
+            }
+            modeLabel_->setBounds (area.removeFromTop (18)); mode_->setBounds (area.removeFromTop (30));
+            sync_->setBounds (area.removeFromTop (48)); buses_->setBounds (area.removeFromTop (48));
+            return;
+        }
         auto area = getLocalBounds();
         auto bottom = area.removeFromBottom (52);
         area.removeFromBottom (sp::sm);
@@ -605,6 +656,7 @@ public:
         {
             auto& r = rows_[static_cast<std::size_t> (pad)];
             auto row = juce::Rectangle<int> (area.getX() + (pad / 8) * colW, area.getY() + (pad % 8) * rowH, colW, rowH).reduced (sp::xs, 2);
+            r.lane->setBounds (row.removeFromLeft (36).withSizeKeepingCentre (34, juce::jmin (28, rowH - 4)));
             r.name->setBounds (row.removeFromLeft (96));
             r.note->setBounds (row.removeFromLeft (104).withSizeKeepingCentre (100, juce::jmin (28, rowH - 4)));
             r.output->setBounds (row.removeFromLeft (94).withSizeKeepingCentre (90, juce::jmin (28, rowH - 4)));
@@ -618,6 +670,7 @@ public:
     }
 
     juce::ComboBox* combo (const juce::String& id) override { return host_.comboFor (id); }
+    juce::Button* button (const juce::String& id) override { return host_.button (id); }
     juce::Component* named (const juce::String& name) override
     {
         if (name == "sync")
@@ -629,6 +682,7 @@ public:
         if (name.startsWith ("note.")) return r.note.get();
         if (name.startsWith ("output.")) return r.output.get();
         if (name.startsWith ("state.")) return r.state.get();
+        if (name.startsWith ("lane.")) return r.lane;
         return nullptr;
     }
 
@@ -658,6 +712,7 @@ private:
     }
 
     struct Row {
+        VoxButton* lane = nullptr;
         std::unique_ptr<juce::Label> name, state;
         std::unique_ptr<VoxComboBox> note, output;
     };
@@ -746,6 +801,17 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            typeLabel_->setBounds (area.removeFromTop (18)); type_->setBounds (area.removeFromTop (30));
+            area.removeFromTop (6); list_->setBounds (area.removeFromTop (260));
+            nameLabel_->setBounds (area.removeFromTop (18)); name_->setBounds (area.removeFromTop (30));
+            for (auto* button : { load_.get(), save_.get(), undo_.get(), import_.get(), export_.get() })
+                button->setBounds (area.removeFromTop (32).reduced (1));
+            status_->setBounds (area.removeFromTop (72)); samples_->setBounds (area);
+            return;
+        }
         auto area = getLocalBounds();
         auto left = area.removeFromLeft (juce::jlimit (300, 460, area.getWidth() * 42 / 100));
         area.removeFromLeft (sp::xxl);
@@ -938,6 +1004,15 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            voicesLabel_->setBounds (area.removeFromTop (18)); voices_->setBounds (area.removeFromTop (30));
+            velocity_->setBounds (area.removeFromTop (86));
+            choke_->setBounds (area.removeFromTop (32)); panic_->setBounds (area.removeFromTop (32));
+            area.removeFromTop (8); diagnostics_->setBounds (area);
+            return;
+        }
         auto area = getLocalBounds();
         auto top = area.removeFromTop (84);
         auto voices = top.removeFromLeft (180);

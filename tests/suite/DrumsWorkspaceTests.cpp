@@ -1,6 +1,8 @@
 #include "DrumsWorkspace.h"
 #include "DrumsEditor.h"
 #include "PadControlSurface.h"
+#include "DrumsRolesPanel.h"
+#include "StyleRegistry.h"
 #include "Processor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
@@ -24,6 +26,30 @@ void block (vox::drums::DrumsProcessor& p)
 }
 void press (juce::Button& b) { if (b.onClick) b.onClick(); }
 void pump() { juce::MessageManager::getInstance()->runDispatchLoopUntil (20); }
+
+void checkToolLayout (juce::Component& page)
+{
+    std::vector<juce::Component*> inputs;
+    const auto collect = [&] (auto&& self, juce::Component& parent) -> void {
+        for (auto* child : parent.getChildren())
+        {
+            if (! child->isVisible()) continue;
+            if (dynamic_cast<juce::Slider*> (child) || dynamic_cast<juce::Button*> (child)
+                || dynamic_cast<juce::ComboBox*> (child) || dynamic_cast<juce::TextEditor*> (child)
+                || dynamic_cast<juce::ListBox*> (child)) inputs.push_back (child);
+            else self (self, *child);
+        }
+    };
+    collect (collect, page);
+    check (! inputs.empty(), "dock tool contains actual input controls");
+    for (std::size_t n = 0; n < inputs.size(); ++n)
+    {
+        const auto bounds = page.getLocalArea (inputs[n], inputs[n]->getLocalBounds());
+        check (! bounds.isEmpty() && page.getLocalBounds().contains (bounds), "narrow tool inputs remain inside scrollable canvas");
+        for (std::size_t k = n + 1; k < inputs.size(); ++k)
+            check (! bounds.intersects (page.getLocalArea (inputs[k], inputs[k]->getLocalBounds())), "narrow tool inputs do not overlap");
+    }
+}
 
 void testSurfaces()
 {
@@ -144,6 +170,73 @@ void testSurfaces()
     check (folder.deleteRecursively(), "remove owned native sample fixtures");
 }
 
+void testRolesUI()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto panel = makeGeneratorDock (*p); panel->setSize (220, 2200); pump();
+    const auto button = [&] (const char* name) { return dynamic_cast<juce::Button*> (panel->named (name)); };
+    const auto choice = [&] (int pad) { return dynamic_cast<juce::ComboBox*> (panel->named ("role." + juce::String (pad + 1))); };
+    press (*button ("roles.view")); checkToolLayout (*panel);
+    check (choice (0) && choice (15) && choice (0)->getNumItems() == padRoleCount, "all 16 role selectors include the 13 existing semantic roles");
+    const auto before = p->padRoles(); const auto note = p->kitStore().pad (0).note;
+    choice (0)->setSelectedId (static_cast<int> (PadRole::ride) + 1, juce::sendNotificationSync);
+    check (p->padRoles().role[0] == PadRole::ride && p->kitStore().pad (0).note == note, "role editing changes generator metadata, not MIDI note");
+    press (*button ("roles.undo")); check (p->padRoles() == before, "manual role edit is undoable");
+    choice (1)->setSelectedId (static_cast<int> (PadRole::kick) + 1, juce::sendNotificationSync);
+    panel->update();
+    auto* useSecond = button ("roles.use.2");
+    check (useSecond != nullptr, "duplicate role notice offers explicit Use pad 2 action");
+    if (useSecond) press (*useSecond);
+    check (p->padRoles().role[0] == PadRole::none && p->padRoles().role[1] == PadRole::kick, "Use pad action transfers the generator role without swapping identical values");
+    press (*button ("roles.undo"));
+    const auto duplicate = p->padRoles();
+    choice (1)->setSelectedId (1, juce::sendNotificationSync);
+    choice (2)->setSelectedId (static_cast<int> (PadRole::kick) + 1, juce::sendNotificationSync); panel->update();
+    auto* staleThird = button ("roles.use.3"); check (staleThird != nullptr, "second matching role offers a transfer");
+    p->setPadRole (1, PadRole::kick); // a new earlier duplicate, before UI refresh
+    const auto triple = p->padRoles();
+    if (staleThird) press (*staleThird);
+    check (p->padRoles() == triple && RoleMap::from (p->padRoles()).laneOfSlot[0] == 0,
+           "stale transfer cannot claim the chosen pad plays while a new earlier duplicate would shadow it");
+    panel->update();
+    auto* currentSecond = button ("roles.use.2"); check (currentSecond != nullptr, "refreshed notice names the current second duplicate");
+    if (currentSecond) press (*currentSecond);
+    check (RoleMap::from (p->padRoles()).laneOfSlot[0] == 1, "fresh duplicate action makes its named pad play");
+    press (*button ("roles.undo")); check (p->padRoles() == triple, "one Undo reverses the duplicate action");
+    p->setPadRoles (duplicate.role); panel->update();
+
+    press (*button ("roles.preview"));
+    for (int pad = 0; pad < 16; ++pad) choice (pad)->setSelectedId (1, juce::sendNotificationSync);
+    check (p->padRoles() == duplicate && button ("roles.apply")->isEnabled(), "resolved role preview is explicit and does not apply itself");
+    press (*button ("roles.cancel")); check (p->padRoles() == duplicate, "Cancel leaves actual roles unchanged");
+    press (*button ("roles.preview"));
+    for (int pad = 0; pad < 16; ++pad) choice (pad)->setSelectedId (1, juce::sendNotificationSync);
+    press (*button ("roles.apply"));
+    check (p->padRoles().role[0] == PadRole::none && p->padRoles().role[1] == PadRole::none, "Apply commits the resolved proposal");
+    press (*button ("roles.undo")); check (p->padRoles() == duplicate, "one Undo reverses the entire proposal");
+
+    press (*button ("roles.preview"));
+    for (int pad = 0; pad < 16; ++pad) choice (pad)->setSelectedId (1, juce::sendNotificationSync);
+    auto pad = p->kitStore().pad (0); pad.note = 60; p->kitStore().setPad (0, pad);
+    press (*button ("roles.apply"));
+    check (p->padRoles() == duplicate && ! button ("roles.apply")->isEnabled(), "stale model proposal cannot overwrite roles after kit edits");
+    auto sampledHat = p->kitStore().pad (3); sampledHat.source = kit::Source::sample; p->kitStore().setPad (3, sampledHat);
+    press (*button ("roles.preview"));
+    check (! button ("roles.apply")->isEnabled() && choice (3)->getSelectedId() == 0,
+           "sample-derived hat needs an explicit role choice; Apply stays disabled");
+    press (*button ("roles.apply")); check (p->padRoles() == duplicate, "unresolved Apply is refused in the action handler too");
+    auto definition = std::make_shared<style::Definition> (*style::factoryDefinition (0));
+    definition->id = "12345678-1234-4abc-9abc-123456789abc";
+    definition->key = "native-custom-test"; definition->name = "Embedded native test";
+    auto generator = p->generator(); generator.custom = definition; p->setGenerator (generator); panel->update();
+    auto* styleBox = dynamic_cast<juce::ComboBox*> (panel->named ("style"));
+    check (styleBox && styleBox->getText().contains (definition->name), "Generator reflects an embedded custom definition even when factory enum and amounts did not change");
+    styleBox->setSelectedItemIndex (2, juce::sendNotificationSync);
+    check (! p->generator().custom && styleUuidOf (p->generator()) == style::infoById (2)->uuid,
+           "explicit factory choice replaces the custom definition the engine actually runs");
+}
+
 void test()
 {
     auto p = std::make_unique<vox::drums::DrumsProcessor>();
@@ -152,6 +245,17 @@ void test()
     pump();
     ui->setSize (1180, 660);
     check (ui->inspectorSlider ("level")->getWidth() == 52, "primary Inspector dials retain 52 px geometry");
+    check (ui->hostCombo ("drm.seq.mode") && ui->hostCombo ("drm.seq.pattern") && ui->hostCombo ("drm.fx.delay.time"),
+           "persistent sequencer selectors and single-Mixer delay time retain host attachments");
+    for (const auto* id : { "drm.fx.delay.feedback", "drm.fx.delay.tone", "drm.fx.delay.level", "drm.fx.reverb.size",
+                            "drm.fx.reverb.damp", "drm.fx.reverb.level", "drm.seq.swing", "drm.seq.accent" })
+        check (ui->returnSlider (id) != nullptr, juce::String ("single Mixer retains return/macro binding ") + id);
+    check (ui->returnSlider ("unknown") == nullptr, "unknown return parameter lookup is refused");
+    ui->hostCombo ("drm.seq.pattern")->setSelectedItemIndex (3, juce::sendNotificationSync);
+    check (p->currentSlot() == 3, "persistent Pattern selector edits the actual sequencer slot parameter");
+    ui->hostCombo ("drm.seq.pattern")->setSelectedItemIndex (0, juce::sendNotificationSync);
+    ui->returnSlider ("drm.fx.delay.feedback")->setValue (0.44, juce::sendNotificationSync);
+    check (std::abs (plain (*p, "drm.fx.delay.feedback") - 0.44f) < 0.001f, "single Mixer FX view writes actual return automation");
     press (ui->padSelectButton (3));
     block (*p); ui->pollForTesting();
     check (ui->selection().pad() == 3 && ui->telemetry().hits == 0 && p->activeVoices() == 0,
@@ -273,6 +377,24 @@ void test()
     ui->mouseDrag (dividerEvent ({ dividerX + 30.0f, 70.0f }, true));
     ui->mouseUp (dividerEvent ({ dividerX + 30.0f, 70.0f }, false));
     check (ui->layout().leftWidth == requested.leftWidth + 32, "left dock divider writes bounded requested width");
+    for (int tool = 1; tool < 5; ++tool)
+    {
+        auto layout = ui->layout();
+        layout.rightTool = static_cast<vox::drums::workspace::DockTool> (tool);
+        ui->setLayout (layout); ui->pollForTesting();
+        auto* page = ui->toolPage (layout.rightTool);
+        check (page != nullptr && page->getWidth() < 600, "native right dock owns one narrow tool view");
+        if (page) checkToolLayout (*page);
+    }
+    auto* generator = ui->toolPage (vox::drums::workspace::DockTool::generator);
+    auto* styles = dynamic_cast<juce::ComboBox*> (generator->named ("style"));
+    check (styles && styles->getNumItems() == 23, "native Generator exposes all 23 actual styles");
+    auto* routing = ui->toolPage (vox::drums::workspace::DockTool::routing);
+    auto* output = dynamic_cast<juce::ComboBox*> (routing->named ("output.16"));
+    check (output && output->getNumItems() == 9, "native Routing retains all nine destinations for pad 16");
+    for (int pad = 1; pad <= 16; ++pad)
+        check (dynamic_cast<juce::Button*> (routing->named ("lane." + juce::String (pad))) != nullptr,
+               "native Routing retains every sequencer lane enable");
     juce::MemoryBlock stateAfterLayout;
     p->getStateInformation (stateAfterLayout);
     check (stateBeforeLayout == stateAfterLayout, "workspace layout and rendering never mutate musical/project state");
@@ -283,6 +405,8 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI gui;
     testSurfaces();
+    pump();
+    testRolesUI();
     pump();
     test();
     std::printf ("Native workspace: %d failures\n", failures);

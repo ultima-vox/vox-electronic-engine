@@ -7,6 +7,7 @@
 
 namespace vox::drums {
 class DrumsProcessor;
+class Page;
 
 // Candidate native #127 workspace. Instantiated by qualification tests while
 // Sound/Sample and DLAY are ported; the production editor is switched only when
@@ -39,6 +40,9 @@ public:
     juce::Slider* inspectorSlider (const juce::String& suffix);
     juce::Button* inspectorButton (const juce::String& suffix);
     juce::ComboBox* inspectorCombo (const juce::String& name);
+    Page* toolPage (workspace::DockTool);
+    juce::ComboBox* hostCombo (const juce::String& id);
+    juce::Slider* returnSlider (const juce::String& id);
     void pollForTesting();
 
 private:

@@ -9,6 +9,7 @@
 #include "VoxComponents.h"
 #include "DrumsDial.h"
 #include "DrumsFader.h"
+#include "DrumsRolesPanel.h"
 #include "VoxLookAndFeel.h"
 
 #include <cmath>
@@ -19,16 +20,19 @@ namespace {
 namespace c = vox::ui::tokens::colour;
 using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
 juce::Rectangle<int> rectangle (workspace::Box b) { return { b.x, b.y, b.w, b.h }; }
 
 struct Knob {
     bool dragging = false;
+    juce::String parameterId;
     std::unique_ptr<DrumsDial> control;
     std::unique_ptr<SliderAttachment> attachment;
     void bind (juce::Component& parent, DrumsProcessor& p, const juce::String& id, const juce::String& label,
                vox::ui::VoxKnob::Size size = vox::ui::VoxKnob::Size::Small)
     {
+        parameterId = id;
         attachment.reset();
         if (control == nullptr)
         {
@@ -42,8 +46,9 @@ struct Knob {
         auto* parameter = p.state().getParameter (id);
         jassert (parameter != nullptr);
         control->setDoubleClickResetValue (parameter->convertFrom0to1 (parameter->getDefaultValue()));
-        control->setTooltip (id);
         attachment = std::make_unique<SliderAttachment> (p.state(), id, control->getSlider());
+        control->setTooltip (parameter->getName (64));
+        control->getSlider().setName (parameter->getName (64));
     }
 };
 
@@ -152,7 +157,7 @@ public:
         for (int i = 0; i < kit::modelCount; ++i) model.addItem (modelName (static_cast<kit::Model> (i)), i + 1);
         for (int i = 0; i < 128; ++i) note.addItem ("Note " + juce::String (i), i + 1);
         for (int i = 0; i < 9; ++i) output.addItem (i == 0 ? "Main" : "Out " + juce::String (i + 1), i + 1);
-        model.setTooltip ("Pad synthesis model / KitStore"); note.setTooltip ("Pad MIDI note / KitStore");
+        model.setTooltip ("Pad synthesis model"); note.setTooltip ("Pad MIDI note");
         output.setTooltip ("Requested output / disabled buses fall back to Main");
         model.onChange = [this] {
             auto pad = processor_.kitStore().pad (pad_);
@@ -237,6 +242,7 @@ public:
         addAndMakeVisible (peak_); addAndMakeVisible (mute_); addAndMakeVisible (solo_);
         level_.setSliderStyle (juce::Slider::LinearVertical); level_.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         levelAttachment_ = std::make_unique<SliderAttachment> (p.state(), id + ".level", level_);
+        level_.setName ("Pad " + juce::String (pad + 1) + " level");
         mute_.setButtonText ("M"); solo_.setButtonText ("S");
         muteAttachment_ = std::make_unique<ButtonAttachment> (p.state(), id + ".mute", mute_);
         soloAttachment_ = std::make_unique<ButtonAttachment> (p.state(), id + ".solo", solo_);
@@ -287,7 +293,7 @@ struct DrumsWorkspace::Impl {
     {
         owner.setLookAndFeel (&lookAndFeel);
         for (auto* component : std::initializer_list<juce::Component*> { &inspector, &rackViewport, &top, &list, &pin,
-                 &split, &mixerSize, &primary, &secondary, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
+                 &split, &mixerSize, &mixerView, &mode, &pattern, &primary, &secondary, &toolSelect, &toolViewport, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
             owner.addAndMakeVisible (*component);
         const std::array<juce::Component*, 4> editors { &steps, &song, &sound, &sample };
         for (std::size_t n = 0; n < editors.size(); ++n)
@@ -296,6 +302,34 @@ struct DrumsWorkspace::Impl {
             owner.addAndMakeVisible (editorViews[n]);
         }
         sample.onPlayerSelected = [this] (int player) { selectedPlayer = player; };
+        toolPages[0] = makeGeneratorDock (p);
+        toolPages[1] = makePresetsPage (p, [this] { return selection.pad(); });
+        toolPages[2] = makeRoutingPage (p);
+        toolPages[3] = makeAdvancedPage (p);
+        for (auto& page : toolPages) page->onDockSizeChanged = [&owner] { owner.resized(); };
+        toolSelect.addItemList ({ "Inspector", "Generator", "Library", "Routing", "Diagnostics" }, 1);
+        toolSelect.setSelectedId (1, juce::dontSendNotification);
+        toolSelect.setTooltip ("Right dock tool");
+        toolSelect.onChange = [&owner, this] {
+            layout.rightTool = static_cast<workspace::DockTool> (toolSelect.getSelectedId() - 1); owner.resized();
+        };
+        const auto combo = [&p] (juce::ComboBox& box, const juce::String& id) {
+            auto* parameter = dynamic_cast<juce::AudioParameterChoice*> (p.state().getParameter (id));
+            jassert (parameter != nullptr);
+            box.addItemList (parameter->choices, 1); box.setTooltip (parameter->getName (64));
+            return std::make_unique<ComboAttachment> (p.state(), id, box);
+        };
+        modeAttachment = combo (mode, "drm.seq.mode"); patternAttachment = combo (pattern, patternParameterId);
+        returnContent.addAndMakeVisible (delayTime);
+        delayAttachment = combo (delayTime, "drm.fx.delay.time");
+        static const std::array<const char*, 8> ids { "drm.fx.delay.feedback", "drm.fx.delay.tone", "drm.fx.delay.level",
+            "drm.fx.reverb.size", "drm.fx.reverb.damp", "drm.fx.reverb.level", "drm.seq.swing", "drm.seq.accent" };
+        static const std::array<const char*, 8> labels { "Delay FB", "Delay tone", "Delay return", "Reverb size", "Damp", "Reverb return", "Swing", "Accent" };
+        for (std::size_t n = 0; n < returns.size(); ++n)
+            returns[n].bind (returnContent, p, ids[n], labels[n], vox::ui::VoxKnob::Size::Normal);
+        mixerView.addItemList ({ "Pads", "Returns / FX" }, 1); mixerView.setSelectedId (1, juce::dontSendNotification);
+        mixerView.setName ("Mixer section");
+        mixerView.onChange = [&owner] { owner.resized(); };
         rackViewport.setViewedComponent (&rackContent, false);
         rackViewport.setScrollBarsShown (true, false);
         top.setJustificationType (juce::Justification::centredLeft);
@@ -344,6 +378,7 @@ struct DrumsWorkspace::Impl {
     {
         mixerViewport.setViewedComponent (nullptr, false);
         for (auto& viewport : editorViews) viewport.setViewedComponent (nullptr, false);
+        toolViewport.setViewedComponent (nullptr, false);
         rackViewport.setViewedComponent (nullptr, false);
     }
     DrumsProcessor& processor;
@@ -376,9 +411,14 @@ struct DrumsWorkspace::Impl {
     std::array<std::unique_ptr<MixerStrip>, 16> strips;
     juce::Label top, mixerTitle;
     juce::TextButton list, pin;
-    juce::ComboBox split, mixerSize, primary, secondary;
+    juce::ComboBox split, mixerSize, mixerView, primary, secondary, toolSelect, mode, pattern, delayTime;
+    std::unique_ptr<ComboAttachment> modeAttachment, patternAttachment, delayAttachment;
+    std::array<std::unique_ptr<Page>, 4> toolPages;
+    juce::Viewport toolViewport;
     juce::Viewport mixerViewport;
     juce::Component mixerContent;
+    juce::Component returnContent;
+    std::array<Knob, 8> returns;
     std::array<juce::Viewport, 4> editorViews;
     juce::Viewport rackViewport;
     juce::Component rackContent;
@@ -426,6 +466,7 @@ void DrumsWorkspace::setLayout (workspace::Layout layout)
         impl_->layout.secondary = static_cast<workspace::Editor> ((static_cast<int> (impl_->layout.primary) + 1) % 4);
     impl_->primary.setSelectedId (static_cast<int> (impl_->layout.primary) + 1, juce::dontSendNotification);
     impl_->secondary.setSelectedId (static_cast<int> (impl_->layout.secondary) + 1, juce::dontSendNotification);
+    impl_->toolSelect.setSelectedId (static_cast<int> (impl_->layout.rightTool) + 1, juce::dontSendNotification);
     resized();
 }
 workspace::Layout DrumsWorkspace::layout() const noexcept { return impl_->layout; }
@@ -448,6 +489,24 @@ juce::ComboBox* DrumsWorkspace::inspectorCombo (const juce::String& name)
     if (name == "model") return &impl_->inspector.model;
     if (name == "note") return &impl_->inspector.note;
     if (name == "output") return &impl_->inspector.output;
+    return nullptr;
+}
+Page* DrumsWorkspace::toolPage (workspace::DockTool tool)
+{
+    const auto index = static_cast<int> (tool) - 1;
+    return index >= 0 && index < 4 ? impl_->toolPages[static_cast<std::size_t> (index)].get() : nullptr;
+}
+juce::ComboBox* DrumsWorkspace::hostCombo (const juce::String& id)
+{
+    if (id == "drm.seq.mode") return &impl_->mode;
+    if (id == patternParameterId) return &impl_->pattern;
+    if (id == "drm.fx.delay.time") return &impl_->delayTime;
+    return nullptr;
+}
+juce::Slider* DrumsWorkspace::returnSlider (const juce::String& id)
+{
+    for (auto& knob : impl_->returns)
+        if (knob.parameterId == id) return &knob.control->getSlider();
     return nullptr;
 }
 void DrumsWorkspace::pollForTesting() { timerCallback(); }
@@ -500,6 +559,7 @@ void DrumsWorkspace::timerCallback()
     i.inspector.update (i.selection.inspectorPad(), i.selection.pinned());
     i.sound.setContext (i.selection.pad(), i.selectedPlayer);
     i.sample.setContext (i.selection.pad(), i.selectedPlayer);
+    if (auto* page = toolPage (i.layout.rightTool)) page->update();
     i.top.setText (juce::String (i.processor.transportPlaying() ? "HOST PLAYING / " : "HOST STOPPED / ")
                    + juce::String (i.processor.lastBpm(), 1) + " BPM" + (i.auditionRefused ? " / audition queue full" : ""), juce::dontSendNotification);
 }
@@ -508,11 +568,12 @@ void DrumsWorkspace::resized()
     auto& i = *impl_;
     const auto boxes = workspace::arrange (getWidth(), getHeight(), i.layout);
     auto top = rectangle (boxes.top);
-    i.mixerSize.setBounds (top.removeFromRight (146).reduced (2));
+    i.pattern.setBounds (top.removeFromRight (104).reduced (2));
+    i.mode.setBounds (top.removeFromRight (132).reduced (2));
     i.split.setBounds (top.removeFromRight (132).reduced (2));
     i.primary.setBounds (top.removeFromRight (88).reduced (2));
-    i.secondary.setBounds (top.removeFromRight (88).reduced (2));
-    i.secondary.setEnabled (i.layout.split != workspace::Split::single);
+    i.secondary.setVisible (i.layout.split != workspace::Split::single);
+    if (i.secondary.isVisible()) i.secondary.setBounds (top.removeFromRight (88).reduced (2));
     i.pin.setBounds (top.removeFromRight (48).reduced (2));
     i.list.setBounds (top.removeFromRight (48).reduced (2)); i.top.setBounds (top);
     i.rackViewport.setBounds (rectangle (boxes.left));
@@ -531,7 +592,22 @@ void DrumsWorkspace::resized()
         cell.setBounds (juce::Rectangle<int> (x1, y1, x2 - x1, y2 - y1).reduced (1));
         cell.resized();
     }
-    i.inspector.setBounds (rectangle (boxes.right));
+    auto right = rectangle (boxes.right);
+    i.toolSelect.setBounds (right.removeFromTop (28));
+    i.toolViewport.setBounds (right);
+    auto* tool = toolPage (i.layout.rightTool);
+    auto* displayed = tool != nullptr ? static_cast<juce::Component*> (tool) : &i.inspector;
+    if (i.toolViewport.getViewedComponent() != displayed) i.toolViewport.setViewedComponent (displayed, false);
+    i.toolViewport.setVisible (true);
+    if (tool != nullptr)
+    {
+        const std::array heights { 1200, 900, 1660, 620 };
+        tool->setSize (std::max (196, i.toolViewport.getWidth() - i.toolViewport.getScrollBarThickness()),
+                       std::max (i.toolViewport.getHeight(), tool->dockHeight() > 0 ? tool->dockHeight()
+                           : heights[static_cast<std::size_t> (static_cast<int> (i.layout.rightTool) - 1)]));
+        tool->update();
+    }
+    else i.inspector.setSize (std::max (196, i.toolViewport.getWidth() - i.toolViewport.getScrollBarThickness()), std::max (328, right.getHeight()));
     const std::array<juce::Component*, 4> editors { &i.steps, &i.song, &i.sound, &i.sample };
     const std::array widths { 980, 1100, 720, 720 }, heights { 320, 240, 470, 560 };
     for (std::size_t n = 0; n < editors.size(); ++n)
@@ -548,7 +624,10 @@ void DrumsWorkspace::resized()
     }
     auto mixer = rectangle (boxes.mixer);
     i.mixerTitle.setText ("MIXER / 16 PADS / 9 OUTPUTS / Main L-R", juce::dontSendNotification);
-    i.mixerTitle.setBounds (mixer.removeFromTop (24));
+    auto mixerHeader = mixer.removeFromTop (24);
+    i.mixerSize.setBounds (mixerHeader.removeFromRight (146).reduced (1));
+    i.mixerView.setBounds (mixerHeader.removeFromRight (118).reduced (1));
+    i.mixerTitle.setBounds (mixerHeader);
     const bool open = i.layout.mixer != workspace::MixerSize::collapsed;
     i.mixerViewport.setVisible (open); i.kitLevel.control->setVisible (open);
     i.mainLeft.setVisible (open); i.mainRight.setVisible (open);
@@ -556,8 +635,14 @@ void DrumsWorkspace::resized()
     i.mainLeft.setBounds (mixer.removeFromRight (8).reduced (1));
     i.kitLevel.control->setBounds (mixer.removeFromRight (78));
     i.mixerViewport.setBounds (mixer);
+    auto* mixerPage = i.mixerView.getSelectedId() == 2 ? &i.returnContent : &i.mixerContent;
+    if (i.mixerViewport.getViewedComponent() != mixerPage) i.mixerViewport.setViewedComponent (mixerPage, false);
     i.mixerContent.setSize (16 * 84, std::max (0, mixer.getHeight() - i.mixerViewport.getScrollBarThickness()));
     for (int pad = 0; pad < 16; ++pad)
         i.strips[static_cast<std::size_t> (pad)]->setBounds (pad * 84, 0, 84, i.mixerContent.getHeight());
+    i.returnContent.setSize (924, i.mixerContent.getHeight());
+    i.delayTime.setBounds (4, 6, 116, 30);
+    for (std::size_t n = 0; n < i.returns.size(); ++n)
+        i.returns[n].control->setBounds (124 + static_cast<int> (n) * 100, 0, 100, 96);
 }
 } // namespace vox::drums

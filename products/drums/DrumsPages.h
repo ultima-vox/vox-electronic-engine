@@ -26,6 +26,8 @@ class Page : public juce::Component {
 public:
     // Editor timer (30 Hz), while the page is shown; `force` after a page change.
     virtual void update() {}
+    virtual int dockHeight() const { return 0; }
+    std::function<void()> onDockSizeChanged;
     // Host-parameter controls by parameter ID.
     virtual juce::Slider* slider (const juce::String&) { return nullptr; }
     virtual juce::Button* button (const juce::String&) { return nullptr; }

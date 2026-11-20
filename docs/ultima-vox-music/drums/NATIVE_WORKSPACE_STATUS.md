@@ -6,7 +6,7 @@ updated 2026-11-18T17:32:32Z. Starting source:
 Continue this work in `dev/drums-native-workspace` and its single Draft PR.
 No merge or release is authorized by this ledger.
 
-## Implemented first slice
+## Implemented native sections
 
 - `DrumsWorkspace`: persistent host-status bar; bounded left/right docks;
   one/two central Step/Song/Sound/Sample views; draggable dock/split dividers; one bottom
@@ -45,6 +45,22 @@ No merge or release is authorized by this ledger.
   APVTS attachments stay native. Dial angles follow the real parameter skew,
   including frequency ranges. No shared family API was modified. This is
   native #135 implementation progress, not final visual acceptance.
+- Right dock tools reuse the real Generator, Library, Routing and Diagnostics
+  actions with narrow vertical layouts and bounded scrolling. Existing wide
+  layouts remain tested. Routing includes all 16 sequencer lane enables and
+  all nine destinations. Persistent Mode/Pattern selectors use real host
+  parameters. The one bottom Mixer switches Pads/Returns without creating a
+  second Mixer; delay/reverb returns, swing and accent remain automatable.
+- Generator role authoring exposes all 13 existing roles for all 16 pads.
+  Model proposals require explicit Apply/Cancel, refuse unresolved choices and
+  stale kit/role/restore contexts, and apply as one existing undo transaction.
+  Style-aware notices expose Assign and Use-pad actions. A stale duplicate
+  action refuses a transfer if a newly inserted earlier duplicate would still
+  shadow its target. MIDI notes are never remapped by role edits.
+- Generator reflects embedded custom definitions even when the factory enum
+  and amounts did not change. An explicit factory selection clears the custom
+  override. Both defects were reproduced by failing UI regressions before the
+  binding fix; no generator algorithm, DGEN format or factory ID was changed.
 
 ## Evidence and limits
 
@@ -78,6 +94,19 @@ No merge or release is authorized by this ledger.
   three static AudioFormatManager shutdown detector reports. These are not
   Windows or DSP results; the inherited product GUI tests also emit queue
   assertions. Functional exit codes passed; do not call these logs warning-free.
+- Tools/roles/custom-style packet: 3/3 model/native/candidate regression tests
+  passed (88.00 s; native 12.83 s, existing candidate 75.17 s). This includes
+  narrow-input bounds/overlap, real Pattern/return bindings, role preview,
+  stale-action refusal, one-step Undo and custom-definition selection.
+- Historical Windows qualification of the **first slice only**:
+  [44709428713](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44709428713),
+  job 136197113705, completed successfully. Raw logs: 34/34 serial + 8/8 gain
+  tests; native tests included; validator 47/47 for each of the three products.
+  PR head `6785f123f81b9e5e2ee40b4e1753f87133668197` and manifest checkout
+  `53fd3ecdbaed540124bb81556c9702c046856974` share tree
+  `762cd373b6d407ffc1a71fde9e07a722f99d41ec` (Git objects verified).
+  This is not qualification of later native commits or a production-editor
+  switch. New commits require their own normal PR workflow evidence.
 
 This is a **candidate component under qualification**, not a claim that #127
 is complete. The production `createEditor()` still uses DrumsPanel until its
@@ -88,10 +117,9 @@ its Windows results are separate evidence, not results for this native branch.
 
 ## Continue in the same PR
 
-1. Finish Sound/Sample presentation and sample-specific Inspector contexts;
-   preserve every structural/sample setting and existing undo behavior.
-2. Complete Generator/roles, Library/Presets, Routing and Diagnostics tools,
-   responsive central toolbars and Inspector contexts for steps/Song/sample.
+1. Finish context-specific Inspector behavior for steps/Song/sample and
+   responsive central toolbars; preserve every setting and undo behavior.
+2. Complete native presentation and all source/step/song workflow acceptance.
 3. Implement the bounded canonical layout/state contract from #130 section 14
    and #127: project layout, per-user workspaces and ephemeral degradation stay
    separate. Do not add DUIS migration/dual-write shims. Shared editor-size/API

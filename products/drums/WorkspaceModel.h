@@ -29,6 +29,7 @@ private:
 enum class Split { single, horizontal, vertical };
 enum class MixerSize { collapsed, compact, expanded };
 enum class Editor { step, song, sound, sample };
+enum class DockTool { inspector, generator, library, routing, diagnostics };
 
 struct Layout {
     int leftWidth = 208, rightWidth = 220;
@@ -36,6 +37,7 @@ struct Layout {
     Split split = Split::single;
     MixerSize mixer = MixerSize::compact;
     Editor primary = Editor::step, secondary = Editor::song;
+    DockTool rightTool = DockTool::inspector;
 };
 
 struct Box {

@@ -165,6 +165,7 @@ struct PadControlSurface::Impl {
             h->attachment.reset();
             const auto id = juce::String (padPrefix (pad)) + "." + h->suffix;
             auto* parameter = processor.state().getParameter (id);
+            h->knob->getSlider().setName (parameter->getName (64));
             h->knob->setDoubleClickResetValue (parameter->convertFrom0to1 (parameter->getDefaultValue()));
             h->attachment = std::make_unique<Attachment> (processor.state(), id, h->knob->getSlider());
         }
@@ -186,6 +187,7 @@ struct PadControlSurface::Impl {
         s->knob = std::make_unique<DrumsDial> (label);
         if (bipolar) s->knob->setStyle (vox::ui::VoxKnob::Style::Bipolar);
         auto& slider = s->knob->getSlider(); slider.setRange (lo, hi, step);
+        slider.setName (label);
         if (skew > 0) slider.setSkewFactorFromMidPoint (skew);
         auto* raw = s.get();
         slider.onValueChange = [this, raw] { change (*raw, static_cast<float> (raw->knob->getSlider().getValue())); };
@@ -197,6 +199,7 @@ struct PadControlSurface::Impl {
     {
         auto s = std::make_unique<Control>(); s->name = name; s->get = std::move (get); s->set = std::move (set);
         s->combo = std::make_unique<vox::ui::VoxComboBox>(); s->combo->addItemList (items, 1);
+        s->combo->setName (label);
         s->label = std::make_unique<juce::Label> (name, label);
         auto* raw = s.get();
         s->combo->onChange = [this, raw] { change (*raw, static_cast<float> (raw->combo->getSelectedItemIndex())); };
