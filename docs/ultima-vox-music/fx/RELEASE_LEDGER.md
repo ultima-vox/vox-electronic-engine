@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Engineering delta](ENGINEERING_DELTA_20261119.md): bounded granular admission, layer drag restore guard, a single requirement/evidence map, and the frozen 232-cue private transfer index. [Windows gate](WINDOWS_ENGINEERING_GATE_20261119.md) prepared, not dispatched; FX-T18 and Save policy remain open.
+
 - [Motion history and selected-bar Pattern authoring](MOTION_PATTERN_AUTHORING_20261119.md): Linux native history rollover, mixed replay and non-Motion project restore regression; DAW focus and keyboard ownership are not qualified. [Wave B Edit Points](WAVE_B_EDIT_POINTS_20261119.md) adds 32 authored cues, bringing the review-only total to 232 with zero approvals. No Windows dispatch, new audio ZIP or upload.
 
 - [Transfer guards and timing capture](TRANSFER_GUARDS_20261119.md): existing-file recheck (not atomic compare-and-replace), isolated replay/teardown tests, and per-callback wall/CPU miss rows. Linux baseline and deliberate same-core contention retain their misses separately; neither clears FX-T18. No change to the 200 unapproved review candidates.

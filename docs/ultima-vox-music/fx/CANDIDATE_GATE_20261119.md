@@ -20,32 +20,9 @@ The WAV/MIDI worker observes whether the path exists **before** rendering/encodi
 - File publication implementation `d4c3c3ff702e65d4f980749239121c3a783c31e9`, Debian/GCC 12.2 x86-64, JUCE `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`: `VOX_FX_TIMING_THREAD_CPU=1 taskset -c 0 bash docs/ultima-vox-music/fx/evidence/run-linux-native-fx.sh <output>`. [Native processor and file export transcript](evidence/candidate-export-native-20261119.txt): zero failures, seven WAV comparisons with zero sample difference, cross-device fixture executed. The routed stress fixture also had zero functional failures. `FxFileExportTests` and `FxPresetLibraryTests` each passed both an optimized plain build and ASan/UBSan, using pinned JUCE core objects that were not themselves instrumented.
 - Timing harness `ed9045ed17ec8f5b3eb99a6e805db535bd8c3a3a`: rebuilt `FxRuntimeStressTests` with the Linux harness flags, linked the unchanged processor objects above, and ran on CPU 0 with a 1 MiB stack. [Routed](evidence/candidate-rt-routed-20261119.txt) and [authored](evidence/candidate-rt-authored-20261119.txt) each recorded 54 × 160 callbacks; [typical](evidence/candidate-rt-typical-20261119.txt) recorded 9 × 160. **18,720 valid CPU pairs**, no zero deltas, zero measured wall or CPU deadline misses, zero scoped allocations or wrapped locks. No Windows timing here. The new Linux run does **not** erase the two prior 96 kHz wall misses (or earlier misses); FX-T18 is still open.
 
-## FX-T01…20 evidence map
+## Current requirements and evidence
 
-“Local evidence” identifies an executable test or report, not a qualification pass. A later implementation should update the affected rows and retain source SHA, command/run URL, environment, counts/skips, raw output and open exceptions.
-
-| ID | Local evidence | What still gates acceptance |
-|---|---|---|
-| FX-T01 | Family render and SourceSound regressions across 12 families | Accepted characteristic references and human listen |
-| FX-T02 | Layer, ProgramStore and SoundGraph tests; independent layer snapshot coverage | Target-host readback and dense four-layer quality |
-| FX-T03 | Layer/Program 20-curve codec, DSP and native undo/stale-gesture tests | Full real-host edit, keyboard and reopen workflow |
-| FX-T04 | PlaybackMode and native six-mode/transport tests | Host loop seams, Transition timing and long holds |
-| FX-T05 | Native FIFO, CC120/123, panic, retire-slot and audition-pressure tests | Real MIDI stress and audible click review |
-| FX-T06 | Timeline/bar/Transport tests and synthetic PlayHead | Actual DAW tempo, start/stop/seek/loop/meter sequences |
-| FX-T07 | SourceSound root/scale/transpose checks and non-tonal tags | Musical listen in pitched and keyless arrangements |
-| FX-T08 | MacroRouting, SoundGraph, reversible native Motion commits and scoped stress | Complete supported route/automation permutations |
-| FX-T09 | Four-slot and Drive regression; paired wet-tail history and offline render | Full spectral, long-tail and host bounce qualification |
-| FX-T10 | 64-grain stress; import/hash/lease/relink, supersession and sample restore | Host restore/relink through real paths and OS file failures |
-| FX-T11 | Deterministic generator and locks, persistent A/B and native preset browse/save | Workflow and automation readback in real host, broader lock and library stress |
-| FX-T12 | [232 unique pinned review references](WAVE_B_EDIT_POINTS_20261119.md), deterministic provenance and working matrix | 68/368 more candidates to reach 300/600, real arrangement listening, zero current approvals |
-| FX-T13 | Canonical SMF/Pattern grid, playback, seek, clipboard and selected-bar variations | Host transfer, cross-host boundary and editable SMF import |
-| FX-T14 | Seven sample-exact capture fixtures, cancellation and closed-file publication | Native chooser, filesystem matrix, actual OS drag/import and bounce/teardown |
-| FX-T15 | Native offscreen editor, timeline and chooser callback regressions | Real OS focus/tab, scale, resizing and accessibility |
-| FX-T16 | Native closed-editor state, restore/rejection, sample and A/B fixtures | Actual project reopen, path changes and compatibility in both hosts |
-| FX-T17 | Historical diagnostics only; no current exact-head Windows result | Full Windows Release CTest, Steinberg validation, VST3/artifact SHA and provenance |
-| FX-T18 | Probed 44.1/48/96 × 64/128/512 Linux stress, wall and CPU independently reported | **OPEN:** Windows loaded runner and actual host deadlines, with every miss retained |
-| FX-T19 | Recipe/source provenance and pinned WAV and portable hashes | Rights/distribution sign-off and per-asset review on the full catalog |
-| FX-T20 | No owner acceptance yet | Once-only Cubase 12–15 and REAPER owner round after technical evidence |
+Use the [single FX-01…07 / FX-T01…20 engineering matrix](ENGINEERING_DELTA_20261119.md) for exact source, executed tests, partial work and open qualification. See the [Windows engineering-gate runbook](WINDOWS_ENGINEERING_GATE_20261119.md) for exact-head checkout, runner/SDK, historical crash replay and the proposed (not approved) Save policy.
 
 ## One consolidated Windows handoff, only when explicitly authorized
 
@@ -94,4 +71,4 @@ The checker reports completeness, per-miss context and coarse-accounting warning
 
 ## Listening delivery
 
-Use the [single working matrix](evidence/fx-review-200-working-matrix.tsv); it links each untouched raw reference to the portable recipe and an arrangement decision. Keep the archived matrix and [pinned ZIP hash](evidence/fx-review-176-archive.sha256) immutable. The durable handoff requires an owner-authorized private destination, permitted recipients and actual arrangements. Give reviewers the ZIP checksum and the working sheet, not public audio. Start with Tangent Iris, Glass Estuary and Dust Shutter; log actual printed trim, headroom, placement and mono masking before deciding. Further catalog development should arrive as larger, individually authored tranches with render and portable-preset provenance, not more eight-cue ZIPs or generated-seed counts.
+Use the [single 232-cue working matrix](evidence/fx-review-232-working-matrix.tsv) and [private transfer inventory](ENGINEERING_DELTA_20261119.md#frozen-listening-handoff-no-media-transfer). Freeze the 232/0 inventory until the owner provides recipients, durable private storage and 2–3 real arrangements. No new ZIP or public audio; archived SHA pins stay immutable. Review actual printed trim, headroom, placement and mono masking before deciding what roles warrant expansion. Engineering qualification is not content approval.

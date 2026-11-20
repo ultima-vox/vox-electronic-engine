@@ -1,0 +1,44 @@
+# VOX FX — one Windows engineering gate (not authorized yet)
+
+[TL execution plan](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7032985337) · Draft #156 · **HOLD / NO MERGE**. This can qualify an engineering candidate, not a content-complete release. Neither the suite marker, processor-triage marker, nor dispatch was used in staging.
+
+## Preflight and one run
+
+1. TL reviews the staging package, then integrates only the reviewed SHA to Draft #156. Owner explicitly authorizes **that** SHA. Verify the remote draft head and base `next/standalone-suite`; do not run an older queued check. The existing edited-body opt-in is one deliberate addition of the FX suite marker, not a general workflow dispatch. Do not add the separate single-processor marker. Ordinary Draft synchronization stays skipped.
+2. Confirm an available trusted self-hosted Windows x64 runner, VS 2022 Desktop C++ workload/Windows SDK, native x64 compiler, CMake/CTest ≥3.22, fixture-only test projects (no customer assets), writable runner tool cache with enough build/diagnostic space, Git, and installed **x64 CDB** from Windows Debugging Tools. Record Windows version, CPU, logical cores, RAM, disk/filesystem, power plan, MSVC/CMake versions and runner load. Separate build/test from foreground host UI on suitable test machines. Keep dump access restricted; no personal project state in crash fixtures.
+3. `.github/workflows/suite.yml` now checks out the actual PR head for this FX gate, compares `git rev-parse HEAD` to the event head and records actual commit/tree separately from the event SHA. Re-verify JUCE 9.0.1 `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8` and Steinberg validator SDK `v3.8.0_build_66` / `9fad9770f2ae8542ab1a548a68c1ad1ac690abe0` including SDK submodule pins. Use `Use-PinnedCheckout.ps1`; do not silently accept stale or moving tag copies. Build validator from the SDK with examples and VSTGUI off. Build-time JUCE bundles and standalone validator are recorded separately.
+
+The automated steps (not commands to run from this sandbox):
+
+```powershell
+cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" -DVOX_FX_DIAGNOSTIC_SYMBOLS=ON
+cmake --build build-suite --config Release --clean-first --parallel
+ctest --test-dir build-suite -C Release -L suite --no-tests=error --timeout 180 --output-on-failure --output-junit suite-out/ctest/results.xml
+# On CTest success, run the SDK Release validator on all three built bundles.
+& $env:VST3_VALIDATOR '<built VOX FX.vst3 bundle directory>'
+```
+
+CI uses absolute JUnit paths; record each exit status. The job timeout is 120 min; 180 s is the per-test CTest default for this gate, not a deadline for sound or a retry allowance. Keep `LastTest.log`, `LastTestsFailed.log` if present, JUnit, `ctest -N` inventory, per-bundle validator output, exact binary SHA-256 and downloaded artifact SHA-256 (compare the service digest too), compiler/SDK/run URL and fixture-only golden provenance. The FX gate records hashes from runner-local golden files; it does not upload those WAVs. Do not co-locate the frozen listening exports in the build workspace. Require the expected VOX FX, VOX Drums and VOX Trance Synthesis bundles. Record **pass / failed assertion / crash (exception code) / timeout / skipped / not run / missing evidence** separately. A skipped validator after CTest failure is not validation; empty or unavailable artifacts are not pass. Download and hash-check a candidate before using it in a DAW. No installer or release publication here.
+
+## Historical crash audit
+
+Older [Windows runs](STATUS.md) observed four crashes in Noise Riser, Processor, Layer and Shepard. `01d8b41` moved large engine/processors off the test stack; it cannot prove the same fault explained all four. Later run [`44479129114`](evidence/windows-44479129114.txt) recorded **73/74**, processor `SEGFAULT` and skipped validation. After diagnostic triage, `71c5045` moved large editor fixtures to heap in response to the `0xC00000FD` `__chkstk` finding recorded in that commit; the historical downloaded-evidence limitation remains recorded in [`44497593788`](evidence/windows-44497593788.txt). Current fixtures use heap for those engine/editor objects; Linux 1 MiB-stack regressions are not current MSVC/Windows results.
+
+If one of the four fails in the authorized run, replay its same executable and working directory from `ctest --show-only=json-v1` with matching optimized Release PDBs, installed CDB and a **90 s** replay bound (job step at most 8 min for four cases). The allowlisted `Capture-FxProcessorException.ps1 -TestName <ctest-name>` saves second-chance AV/stack-overflow/fail-fast evidence, transcripts, EXE/PDB/dump hashes where available, without changing WER or attaching to a host. It does not override CTest. Missing debugger, CDB timeout, replay success or missing dump leave the original result unresolved.
+
+## Same-binary controlled qualification
+
+| Group | Test and acceptance evidence |
+|---|---|
+| Loaded FX-T18 | Run the [routed, authored and typical captures](CANDIDATE_GATE_20261119.md#capture-thread-cpu-without-changing-the-windows-gate) plus the same binary under documented representative load, at 44.1/48/96 kHz × 64/128/512 × 1/4/8 voices with Pattern off/on for stress. Include 96k/64/1 and 44.1k/512/8 Pattern. Retain raw miss rows, wall max/p99 and thread CPU, valid/min-positive/zero deltas, power/load/affinity, allocator and lock probe availability, and budget in µs = `frames / rate × 1e6`. No measured budget exceedances or callback allocation/blocking qualify a pass; coarse `GetThreadTimes` needs suitably resolved thread-running evidence (approved trace), not interpreting zero deltas as zero CPU. Follow with real host load including Drums + Synth. |
+| Win32 Save | Real chooser, cancel/reopen, leaf race/overwrite as currently implemented, non-ASCII, spaces, invalid/long paths, unreadable/locked/read-only/ACL-denied destinations, reparse leaf, parent path, controlled full disk, absent-target collision, cancellation before claim and after claim, no copy fallback. Compare original/stage/final sizes and hashes. Treat network/cloud as out of guarantee. |
+| Win32 drag | Actual copy-only OLE WAV and SMF in Cubase and REAPER; same-path retries, cancel, duplicate/reentered/late callbacks, new preparation, Copy into project vs reference, reopen and unload. Confirm MIDI remains editable and file remains readable after unload. Do not evict offered scratch. |
+| Host, UI and bounce | Validate six modes, repeat notes, real PPQ/meter/seek/start/stop, 4/8/16-bar Transition target, state/A-B/sample relink, automation IDs, focused Motion undo and layer-drag restore, keyboard/tab/screen readers, 100/125/150/200% DPI, and matching-history wet-tail bounce vs fresh start. Exercise editor close/reopen, processor destroy, cancellation/read-only/blocked I/O; record stalls. |
+
+Engineering qualification and the **one owner Cubase/REAPER round** are distinct. Owner listening/rights review and **600 distinct owner-approved factory programs** remain separate production gates. The current library is frozen at **232 review-only / 0 approved**.
+
+## Save policy: proposed only, not a behavior change
+
+Current target identity/metadata checks stop detected changes, but **cannot** make existing-path replacement atomic. Recommend create-only for WAV and SMF: tell the user “A file already exists. Choose a new filename”, suppress replace confirmation if the picker supports it, reopen only on explicit retry with the original capture or a clear new-capture choice, and make the worker use its existing atomic no-replace path even if the target already exists when it starts. Never offer a race of “check then replace”; no silent rename or automatic original deletion. Existing projects and host IDs do not migrate; old files and prepared-drag leases are untouched. Scope this proposal to audio/SMF Save; review user-preset replacement semantics separately. Keep current behavior until owner decision.
+
+If approved, add chooser/worker tests for chosen-existing and late winner (both fail, unchanged bytes, clean unoffered stage); fresh filename (success); duplicate callback; cancellation before/after claim; locked/reparse/ACL/low-space/cross-device cases; and retry/restored editor. Run them on Windows filesystems and hosts as in the table. The alternative is written owner acceptance of the residual race, including final check-to-replace, pre-worker changes, path resolution and metadata limitations.

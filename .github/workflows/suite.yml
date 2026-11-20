@@ -105,15 +105,20 @@ jobs:
         id: suite-ctest
         shell: powershell
         run: |
-          # Golden renders are also written as WAV files for listening (artifact).
-          New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
-          $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
           if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            # The FX gate retains fixture hashes but does not upload audio.
+            $golden = Join-Path $env:RUNNER_TEMP "vox-fx-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-golden"
+            $env:VOX_GOLDEN_OUT = (New-Item -ItemType Directory -Force -Path $golden).FullName
+            "VOX_GOLDEN_OUT=$env:VOX_GOLDEN_OUT" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
             New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
             $report = (Resolve-Path suite-out\ctest).Path
+            ctest --test-dir build-suite -C Release -L suite --show-only=json-v1 | Set-Content (Join-Path $report 'inventory.json')
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             ctest --test-dir build-suite -C Release -L suite --no-tests=error --timeout 180 --output-on-failure --output-junit (Join-Path $report 'results.xml')
             exit $LASTEXITCODE
           }
+          New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
+          $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -193,6 +198,14 @@ jobs:
               $relative = $file.FullName.Substring($bundle.Parent.FullName.Length + 1)
               $lines += "SHA-256 $relative : $((Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower())"
             }
+          }
+          if ($env:FX_DIAGNOSTICS -eq 'ON' -and $env:VOX_GOLDEN_OUT -and (Test-Path -LiteralPath $env:VOX_GOLDEN_OUT)) {
+            $goldenLines = @(Get-ChildItem -LiteralPath $env:VOX_GOLDEN_OUT -Recurse -File | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($env:VOX_GOLDEN_OUT.Length + 1).Replace('\', '/')
+              "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())  $relative"
+            })
+            if ($goldenLines.Count -gt 0) { $goldenLines | Set-Content suite-out\golden-members.sha256 }
+            $lines += "Fixture golden files hashed (not uploaded): $($goldenLines.Count)"
           }
           $lines | Set-Content suite-out\manifest.txt
           Get-Content suite-out\manifest.txt
