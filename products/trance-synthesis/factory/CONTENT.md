@@ -19,13 +19,13 @@ Primary roles follow the owner quota: Bass 120, Acid 90, Lead 110, Pluck/Keys 80
 
 `tests/suite/fixtures/ubnk-b0f230f.voxstate` is a UBNK v1 blob in the layout introduced by `b0f230f`. Category ordinals in it are the pre-role-split values.
 
-SYN-04 appends VA oscillator and filter ids after the frozen 75. Existing ids are not reordered. Factory rows stay 75 values wide; a loaded program leaves the new knobs at their defaults. The 600 candidates do not yet use the new oscillators, the second filter, or modulation. Human approval is still 0.
-
-Wavetable and unison are not in this build. Wavetable budget: one shared read-only table, 256 frames by 2048 samples, chosen off the audio thread, oversampling off. Unison budget: at most 4 copies per oscillator, counted inside the 16-voice pool.
+SYN-04 appends VA oscillator and filter ids after the frozen 75. Existing ids are not reordered. Factory rows stay 75 values wide. Human approval is still 0.
 
 SYN-05 keeps four LFOs per part. The default is a free-running part LFO: a new note does not restart it. Retrigger is per voice and starts only that voice. Sync uses the host BPM, and a missing clock falls back to 120. Routes 1-4 stay on their existing ids. Routes 5-32 live in the MODX section, not as hundreds of new host ids. A route adds to the base and never writes the base back. The editor has a 32-route matrix.
 
 Wavetable playback reads one shared 256 by 2048 table built off the callback. Unison is 1 to 4 copies and each copy spends one slot of the 16-voice pool, which is also shared with a mono part. Oversampling stays off.
 
-Three factory candidates actually use the new timbre: lead 210, pad 400 and stab 565. The other 597 stay on the frozen 75 values. Human approval is still 0.
+Three factory candidates use the new timbre: lead 210, pad 400 and stab 565. The other 597 stay on the frozen 75 values.
+
+The Windows worst-case load is 4-note unison, wavetable, both filters, delay and reverb, oversampling off. At 44.1 and 48 kHz every measured block fits its deadline. At 96 kHz, blocks of 64 and up fit. The 32-sample block does not: p99 was 0.672 ms against a 0.333 ms deadline on the self-hosted runner. That miss is recorded, not treated as a pass.
 
