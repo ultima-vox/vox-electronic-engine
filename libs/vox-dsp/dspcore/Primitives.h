@@ -42,7 +42,10 @@ struct BlepOscillator {
     }
     return 0.0;
   }
-  void reset() noexcept { phase = 0.0; }
+  void reset() noexcept {
+    phase = 0.0;
+    triState = 0.0;
+  }
   // One sample at `dt` = frequency / sampleRate; advances the phase.
   double next(int wave, double dt) noexcept {
     double out;
@@ -57,6 +60,25 @@ struct BlepOscillator {
     default:
       out = 2.0 * phase - 1.0 - polyBlep(phase, dt);
       break;
+    }
+    phase += dt;
+    phase -= std::floor(phase);
+    return out;
+  }
+  // Triangle (3) and pulse (4). Saw, square and sine stay on next().
+  double triState{};
+  double nextExtra(int wave, double dt, double pulseWidth) noexcept {
+    double out;
+    if (wave == 4) {
+      const double width = std::fmin(0.95, std::fmax(0.05, pulseWidth));
+      out = (phase < width ? 1.0 : -1.0) + polyBlep(phase, dt) -
+            polyBlep(std::fmod(phase + 1.0 - width, 1.0), dt);
+    } else {
+      const double square = (phase < 0.5 ? 1.0 : -1.0) + polyBlep(phase, dt) -
+                            polyBlep(std::fmod(phase + 0.5, 1.0), dt);
+      triState = 0.999 * triState + 4.0 * dt * square;
+      triState = std::fmin(1.5, std::fmax(-1.5, triState));
+      out = triState;
     }
     phase += dt;
     phase -= std::floor(phase);
@@ -80,6 +102,55 @@ struct SvfLowpass {
     ic1 = 2.0 * v1 - ic1;
     ic2 = 2.0 * v2 - ic2;
     return v2;
+  }
+};
+
+// Multimode TPT SVF. 0 LP12, 1 LP24, 2 HP12, 3 HP24, 4 BP12, 5 notch.
+// SvfLowpass is unchanged and remains the VA default LP12.
+struct SvfFilter {
+  double s1{}, s2{}, s3{}, s4{};
+  void reset() noexcept { s1 = s2 = s3 = s4 = 0.0; }
+  struct Stage {
+    double lp, bp, hp, notch;
+  };
+  static Stage tick(double x, double g, double k, double& ic1, double& ic2) noexcept {
+    const double a1 = 1.0 / (1.0 + g * (g + k));
+    const double v3 = x - ic2;
+    const double v1 = a1 * ic1 + g * a1 * v3;
+    const double v2 = ic2 + g * v1;
+    ic1 = 2.0 * v1 - ic1;
+    ic2 = 2.0 * v2 - ic2;
+    Stage out;
+    out.lp = v2;
+    out.bp = v1;
+    out.hp = x - k * v1 - v2;
+    out.notch = x - k * v1;
+    return out;
+  }
+  double next(double x, double cutoffHz, double resonance, double sampleRate, int mode) noexcept {
+    if (!std::isfinite(x) || !std::isfinite(cutoffHz) || sampleRate < 1.0) {
+      reset();
+      return 0.0;
+    }
+    const double fc = std::fmin(std::fmax(cutoffHz, 20.0), 0.45 * sampleRate);
+    const double g = std::tan(pi * fc / sampleRate);
+    const double res = std::fmin(1.0, std::fmax(0.0, resonance));
+    const double k = 2.0 - 1.9 * res;
+    const int m = mode < 0 ? 0 : (mode > 5 ? 5 : mode);
+    double y;
+    if (m == 1 || m == 3) {
+      const Stage a = tick(x, g, k, s1, s2);
+      const Stage b = tick(m == 1 ? a.lp : a.hp, g, 2.0, s3, s4);
+      y = m == 1 ? b.lp : b.hp;
+    } else {
+      const Stage a = tick(x, g, k, s1, s2);
+      y = m == 2 ? a.hp : m == 4 ? a.bp : m == 5 ? a.notch : a.lp;
+    }
+    if (!std::isfinite(y)) {
+      reset();
+      return 0.0;
+    }
+    return y;
   }
 };
 

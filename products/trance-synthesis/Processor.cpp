@@ -358,6 +358,32 @@ engine::BlockParams SynthesisProcessor::latchBlock()
         dst.sustain = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sustain))]));
         dst.release = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::release))]));
         dst.noise = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::noise))]);
+        const int va = vaParamBase + part * vaParamCount;
+        const auto knob = [&] (VaKnob which) noexcept
+        {
+            return load (raw_[static_cast<std::size_t> (va + static_cast<int> (which))]);
+        };
+        dst.oscWave[0] = std::clamp (juce::roundToInt (knob (VaKnob::osc1Wave)), 0, 4);
+        dst.oscLevel[0] = knob (VaKnob::osc1Level);
+        dst.oscPulse[0] = knob (VaKnob::osc1Pw);
+        dst.oscWave[1] = std::clamp (juce::roundToInt (knob (VaKnob::osc2Wave)), 0, 4);
+        dst.oscLevel[1] = knob (VaKnob::osc2Level);
+        dst.oscPulse[1] = knob (VaKnob::osc2Pw);
+        dst.oscWave[2] = std::clamp (juce::roundToInt (knob (VaKnob::osc3Wave)), 0, 4);
+        dst.oscLevel[2] = knob (VaKnob::osc3Level);
+        dst.oscPulse[2] = 0.5f;
+        dst.osc3Semi = (knob (VaKnob::osc3Semi) - 0.5f) * 48.0f;
+        dst.vaSub = knob (VaKnob::sub);
+        dst.ring = knob (VaKnob::ring);
+        dst.fm = knob (VaKnob::fm);
+        dst.filterType = std::clamp (juce::roundToInt (knob (VaKnob::filterType)), 0, 5);
+        dst.filter2Type = std::clamp (juce::roundToInt (knob (VaKnob::filter2Type)), 0, 5);
+        dst.filter2Cutoff = knob (VaKnob::filter2Cutoff);
+        dst.filter2Resonance = knob (VaKnob::filter2Resonance);
+        dst.filter2Mix = knob (VaKnob::filter2Mix);
+        dst.filterRoute = std::clamp (juce::roundToInt (knob (VaKnob::filterRoute)), 0, 1);
+        dst.filterEnv = knob (VaKnob::filterEnv);
+        dst.keyTrack = knob (VaKnob::keyTrack);
     }
     block.output = load (raw_[outputParameterIndex]);
     syncExposedFx (fx_, raw_);
@@ -1145,7 +1171,8 @@ bool SynthesisProcessor::loadFactoryProgram (int index)
         auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
         if (parameter == nullptr)
             continue;
-        const float clamped = std::clamp (values[i], parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+        const float source = i < static_cast<std::size_t> (frozenParameterCount) ? values[i] : parameterCatalog[i].initial;
+        const float clamped = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
     }
     return true;

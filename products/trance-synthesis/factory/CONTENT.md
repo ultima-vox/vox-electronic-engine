@@ -19,3 +19,5 @@ Primary roles follow the owner quota: Bass 120, Acid 90, Lead 110, Pluck/Keys 80
 
 `tests/suite/fixtures/ubnk-b0f230f.voxstate` is a UBNK v1 blob in the layout introduced by `b0f230f`. Category ordinals in it are the pre-role-split values.
 
+SYN-04 appends VA oscillator and filter ids after the frozen 75. Existing ids are not reordered. Factory rows stay 75 values wide; a loaded program leaves the new knobs at their defaults. Wavetable frames and unison are not in this build. Human approval is still 0.
+

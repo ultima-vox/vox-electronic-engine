@@ -462,12 +462,23 @@ void testExposedFxTail()
 void testParameterAutomation()
 {
     auto synth = make();
-    check (vox::syn::parameterCatalog.size() == 75, "catalog exposes the part and FX controls");
+    check (vox::syn::parameterCatalog.size() == 115, "catalog keeps the frozen 75 and appends VA");
+    check (std::string (vox::syn::parameterCatalog[0].id) == "syn.a.engine", "first id stays");
+    check (std::string (vox::syn::parameterCatalog[74].id) == "syn.fx.reverb.character", "frozen tail stays");
+    check (std::string (vox::syn::parameterCatalog[75].id) == "syn.a.osc1.wave", "VA ids are appended");
+    setPlain (*synth, "syn.a.osc3.level", 0.8f);
+    setPlain (*synth, "syn.a.flt2.mix", 0.7f);
+    check (synth->loadFactoryProgram (0), "factory program loads");
+    check (std::abs (plain (*synth, "syn.a.osc3.level")) < 1.0e-5f, "factory load does not read past the 75-wide row");
+    check (std::abs (plain (*synth, "syn.a.flt2.mix")) < 1.0e-5f, "factory load resets the second filter");
     setPlain (*synth, "syn.a.cutoff", 0.05f);
     setPlain (*synth, "syn.a.sub", 1.0f);
     setPlain (*synth, "syn.b.wave", 1.0f);
     setPlain (*synth, "syn.fx.phaser", 1.0f);
     setPlain (*synth, "syn.fx.phaser.mix", 0.4f);
+    setPlain (*synth, "syn.a.osc3.level", 0.4f);
+    setPlain (*synth, "syn.a.flt1.type", 4.0f);
+    setPlain (*synth, "syn.b.fm", 0.25f);
     juce::MemoryBlock saved;
     synth->getStateInformation (saved);
     auto copy = make();
@@ -475,6 +486,9 @@ void testParameterAutomation()
     check (std::abs (plain (*copy, "syn.a.sub") - 1.0f) < 1.0e-5f, "sub restores");
     check (std::abs (plain (*copy, "syn.b.wave") - 1.0f) < 1.0e-5f, "wave restores");
     check (std::abs (plain (*copy, "syn.fx.phaser.mix") - 0.4f) < 1.0e-5f, "phaser mix restores");
+    check (std::abs (plain (*copy, "syn.a.osc3.level") - 0.4f) < 1.0e-5f, "osc3 level restores");
+    check (std::abs (plain (*copy, "syn.a.flt1.type") - 4.0f) < 1.0e-5f, "filter type restores");
+    check (std::abs (plain (*copy, "syn.b.fm") - 0.25f) < 1.0e-5f, "FM restores");
 
     synth->prepareToPlay (48000.0, 128);
     juce::AudioBuffer<float> buffer (2, 128);
@@ -806,7 +820,7 @@ void testFactoryContent()
         ids.insert (program.id);
         names.insert (program.name);
         std::string key;
-        for (std::size_t p = 0; p < vox::syn::parameterCatalog.size(); ++p)
+        for (std::size_t p = 0; p < static_cast<std::size_t> (vox::syn::frozenParameterCount); ++p)
         {
             const float value = program.values[p];
             check (value >= vox::syn::parameterCatalog[p].minimum && value <= vox::syn::parameterCatalog[p].maximum,

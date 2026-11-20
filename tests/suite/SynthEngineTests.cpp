@@ -534,6 +534,169 @@ void testTailBound()
     check (eng::voiceTailSeconds() == derivedTail, "voice tail bound is -ln(1e-4) * 0.06 s");
 }
 
+float energy (const Render& audio)
+{
+    double sum = 0.0;
+    for (float sample : audio.left)
+        sum += static_cast<double> (sample) * static_cast<double> (sample);
+    return static_cast<float> (std::sqrt (sum / static_cast<double> (std::max<std::size_t> (1, audio.left.size()))));
+}
+
+Render play (const eng::BlockParams& params, int note, int frames = 2048)
+{
+    eng::SynthEngine engine;
+    engine.prepare (48000.0, 128);
+    const eng::Event on = midi (0, 0x90, static_cast<std::uint8_t> (note), 100);
+    return render (engine, frames, &on, 1, params, 128);
+}
+
+eng::BlockParams vaBase()
+{
+    auto params = defaults();
+    params.part[0].engine = eng::EngineKind::va;
+    params.part[0].level = 0.70f;
+    params.part[1].level = 0.0f;
+    return params;
+}
+
+void testVa()
+{
+    const auto classic = play (vaBase(), 60);
+    auto sine = vaBase();
+    sine.part[0].oscWave[0] = 0;
+    sine.part[0].oscWave[1] = 0;
+    check (std::fabs (energy (classic) - energy (play (sine, 60))) > 1.0e-4f, "sine is not the default saw mix");
+
+    auto triangle = vaBase();
+    triangle.part[0].oscWave[0] = 3;
+    triangle.part[0].oscLevel[1] = 0.0f;
+    triangle.part[0].vaSub = 0.0f;
+    triangle.part[0].noise = 0.0f;
+    const auto tri = play (triangle, 72);
+    check (tri.finite && tri.peak > 1.0e-4f, "triangle speaks");
+
+    auto narrow = triangle;
+    narrow.part[0].oscWave[0] = 4;
+    narrow.part[0].oscPulse[0] = 0.15f;
+    auto wide = narrow;
+    wide.part[0].oscPulse[0] = 0.85f;
+    check (std::fabs (energy (play (narrow, 60)) - energy (play (wide, 60))) > 1.0e-4f, "pulse width changes the tone");
+
+    auto hp = vaBase();
+    hp.part[0].oscWave[0] = 0;
+    hp.part[0].oscLevel[1] = 0.0f;
+    hp.part[0].vaSub = 0.0f;
+    hp.part[0].noise = 0.0f;
+    hp.part[0].cutoff = 0.85f;
+    hp.part[0].filterType = 2;
+    auto lp = hp;
+    lp.part[0].filterType = 0;
+    check (energy (play (hp, 36)) < energy (play (lp, 36)) * 0.5f, "HP12 removes a low sine");
+
+    auto lp24 = vaBase();
+    lp24.part[0].filterType = 1;
+    lp24.part[0].cutoff = 0.15f;
+    auto lp12 = lp24;
+    lp12.part[0].filterType = 0;
+    check (std::fabs (energy (play (lp24, 60)) - energy (play (lp12, 60))) > 1.0e-5f, "LP24 is not LP12");
+
+    auto notch = vaBase();
+    notch.part[0].filterType = 5;
+    notch.part[0].cutoff = 0.40f;
+    notch.part[0].resonance = 0.90f;
+    const auto notched = play (notch, 64);
+    check (notched.finite && notched.peak > 1.0e-4f && notched.peak < 2.0f, "notch stays finite");
+
+    auto band = vaBase();
+    band.part[0].filterType = 4;
+    band.part[0].resonance = 1.0f;
+    const auto banded = play (band, 64);
+    check (banded.finite && banded.peak < 2.0f, "BP12 stays finite at full resonance");
+
+    auto serial = vaBase();
+    serial.part[0].filterType = 2;
+    serial.part[0].cutoff = 0.35f;
+    serial.part[0].filter2Mix = 1.0f;
+    serial.part[0].filter2Cutoff = 0.25f;
+    serial.part[0].filter2Type = 0;
+    serial.part[0].filterRoute = 0;
+    check (std::fabs (energy (play (serial, 60)) - energy (classic)) > 1.0e-4f, "serial filter 2 changes the mix");
+    auto parallel = serial;
+    parallel.part[0].filterRoute = 1;
+    const float serialEnergy = energy (play (serial, 60));
+    const float parallelEnergy = energy (play (parallel, 60));
+    check (std::fabs (serialEnergy - parallelEnergy) > 1.0e-4f,
+           "parallel is not serial (" + std::to_string (serialEnergy) + " vs " + std::to_string (parallelEnergy) + ")");
+
+    auto enveloped = vaBase();
+    enveloped.part[0].filterEnv = 1.0f;
+    enveloped.part[0].cutoff = 0.20f;
+    enveloped.part[0].attack = 0.001;
+    enveloped.part[0].decay = 0.40;
+    enveloped.part[0].sustain = 0.0;
+    const float moved = energy (play (enveloped, 60, 8000));
+    const float still = energy (play (vaBase(), 60, 8000));
+    check (std::fabs (moved - still) > 1.0e-4f,
+           "filter envelope moves the cutoff (" + std::to_string (moved) + " vs " + std::to_string (still) + ")");
+
+    auto fm = vaBase();
+    fm.part[0].fm = 0.80f;
+    fm.part[0].osc3Semi = 12.0f;
+    fm.part[0].oscWave[2] = 0;
+    check (std::fabs (energy (play (fm, 60)) - energy (classic)) > 1.0e-4f, "FM changes the tone");
+
+    auto ring = vaBase();
+    ring.part[0].ring = 1.0f;
+    check (std::fabs (energy (play (ring, 60)) - energy (classic)) > 1.0e-4f, "ring changes the tone");
+
+    auto tracked = vaBase();
+    tracked.part[0].keyTrack = 1.0f;
+    tracked.part[0].cutoff = 0.25f;
+    check (tracked.part[0].oscWave[0] == 1, "default osc1 stays saw");
+    check (std::fabs (energy (play (tracked, 36)) - energy (play (tracked, 84))) > 1.0e-4f, "key track follows the note");
+
+    auto third = vaBase();
+    third.part[0].oscLevel[2] = 0.50f;
+    third.part[0].oscWave[2] = 1;
+    third.part[0].osc3Semi = -12.0f;
+    check (std::fabs (energy (play (third, 67)) - energy (classic)) > 1.0e-4f, "osc3 is in the mix");
+
+    auto lead = vaBase();
+    lead.part[0].oscLevel[1] = 0.0f;
+    lead.part[0].vaSub = 0.0f;
+    lead.part[0].noise = 0.0f;
+    lead.part[0].cutoff = 0.90f;
+    const auto high = play (lead, 96, 4096);
+    check (high.finite && high.peak > 1.0e-3f && high.peak < 2.0f, "high saw lead is finite and bounded");
+
+    eng::SynthEngine engine;
+    engine.prepare (48000.0, 128);
+    auto heavy = vaBase();
+    heavy.part[0].oscLevel[2] = 0.20f;
+    heavy.part[0].filter2Mix = 1.0f;
+    heavy.part[0].filterType = 1;
+    heavy.part[0].fm = 0.20f;
+    heavy.part[0].ring = 0.10f;
+    eng::Event notes[16];
+    for (int i = 0; i < 16; ++i)
+        notes[i] = midi (static_cast<std::uint32_t> (i), 0x90, static_cast<std::uint8_t> (48 + i), 100);
+    float left[128] {};
+    float right[128] {};
+    engine.process (left, right, 128, notes, 16, heavy);
+    for (int i = 0; i < 4; ++i)
+        engine.process (left, right, 128, nullptr, 0, heavy);
+    voxProbeBegin();
+    for (int i = 0; i < 8; ++i)
+        engine.process (left, right, 128, nullptr, 0, heavy);
+    const auto calls = voxProbeEnd();
+    check (calls == 0, "full VA allocates nothing (" + std::to_string (calls) + ")");
+    bool finite = true;
+    for (int i = 0; i < 128; ++i)
+        finite = finite && std::isfinite (left[i]) && std::isfinite (right[i]);
+    check (finite, "16-voice 3-osc 2-filter VA is finite");
+    check (engine.activeVoices() == 16, "16 VA voices stay inside the cap");
+}
+
 } // namespace
 
 int main()
@@ -550,6 +713,7 @@ int main()
     testSameKeyStack();
     testAllocation();
     testGolden();
+    testVa();
     if (failures == 0 && skips == 0)
         std::printf ("synth engine tests passed (%d checks, 0 skipped)\n", checks);
     else

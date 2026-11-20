@@ -29,6 +29,14 @@ bool monoEngine (EngineKind kind) noexcept
     return kind != EngineKind::va;
 }
 
+float shapedOsc (vstengine::dspcore::BlepOscillator& osc, int wave, double dt, float pulseWidth) noexcept
+{
+    const int index = std::clamp (wave, 0, 4);
+    if (index <= 2)
+        return static_cast<float> (osc.next (index, dt));
+    return static_cast<float> (osc.nextExtra (index, dt, pulseWidth));
+}
+
 } // namespace
 
 void SynthEngine::prepare (double sampleRate, int maximumBlockSize) noexcept
@@ -353,6 +361,7 @@ void SynthEngine::startVa (int part, int channel, int note, float velocity, Note
     slot->noise = 0x9e3779b9u ^ (static_cast<std::uint32_t> (note) * 0x85ebca6bu) ^ static_cast<std::uint32_t> (slot->age);
     slot->fade = 1.0f;
     slot->amp.gate();
+    slot->filterAmp.gate();
 }
 
 void SynthEngine::restoreLatest (int part, bool fromSlide) noexcept
@@ -642,6 +651,7 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params) noexcept
                 voice.age = ++age_;
                 voice.noise = 0x9e3779b9u ^ static_cast<std::uint32_t> (note * 17);
                 voice.amp.gate();
+                voice.filterAmp.gate();
             }
         }
         return sample * std::clamp (params.level, 0.0f, 1.0f) * 0.35f;
@@ -656,20 +666,64 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params) noexcept
     const double frequency = std::min (sampleRate_ * 0.22, midiHz (static_cast<double> (voice.note) + bend));
     const double increment = frequency / sampleRate_;
     const double detune = std::clamp (params.detuneCents, 0.0, 50.0);
-    const float sawA = static_cast<float> (voice.oscA.next (vstengine::dspcore::BlepOscillator::saw, increment));
-    const float sawB = static_cast<float> (voice.oscB.next (vstengine::dspcore::BlepOscillator::saw,
-                                                            increment * std::exp2 (detune / 1200.0)));
+    float carrier = 0.0f;
+    if (params.oscLevel[2] > 0.0f || params.fm > 0.0f)
+    {
+        const double incC = increment * std::exp2 (static_cast<double> (params.osc3Semi) / 12.0);
+        carrier = shapedOsc (voice.oscC, params.oscWave[2], incC, params.oscPulse[2]);
+    }
+    double incA = increment;
+    if (params.fm > 0.0f)
+        incA *= std::exp2 (std::clamp (static_cast<double> (params.fm) * static_cast<double> (carrier), -2.0, 2.0));
+    const float sawA = shapedOsc (voice.oscA, params.oscWave[0], incA, params.oscPulse[0]);
+    const float sawB = shapedOsc (voice.oscB, params.oscWave[1], increment * std::exp2 (detune / 1200.0), params.oscPulse[1]);
     const float sub = static_cast<float> (voice.sub.next (vstengine::dspcore::BlepOscillator::sine, increment * 0.5));
     voice.noise = voice.noise * 1664525u + 1013904223u;
     const float noise = (static_cast<float> (voice.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
-    float sample = 0.62f * sawA + 0.30f * sawB + 0.16f * sub + std::clamp (params.noise, 0.0f, 1.0f) * noise;
+    float sample = params.oscLevel[0] * sawA + params.oscLevel[1] * sawB + params.vaSub * sub
+                 + std::clamp (params.noise, 0.0f, 1.0f) * noise;
+    if (params.oscLevel[2] > 0.0f)
+        sample += params.oscLevel[2] * carrier;
+    if (params.ring > 0.0f)
+        sample += params.ring * sawA * sawB;
     const float env = static_cast<float> (voice.amp.next (params.attack, params.decay, params.sustain, sampleRate_));
+    const float filterLevel = static_cast<float> (voice.filterAmp.next (params.attack, params.decay, params.sustain, sampleRate_));
     const float cutoff = 80.0f * std::pow (90.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
-    sample = static_cast<float> (voice.svf.next (sample, cutoff, std::clamp (params.resonance, 0.0f, 1.0f), sampleRate_));
+    float scale = 1.0f;
+    if (params.keyTrack != 0.0f)
+        scale *= std::exp2 (params.keyTrack * (static_cast<float> (voice.note) - 60.0f) / 12.0f);
+    if (params.filterEnv != 0.0f)
+        scale *= std::exp2 (params.filterEnv * 4.0f * filterLevel);
+    const float shapedCutoff = scale == 1.0f
+                                   ? cutoff
+                                   : std::clamp (cutoff * scale, 20.0f, static_cast<float> (sampleRate_ * 0.45));
+    const float resonance = std::clamp (params.resonance, 0.0f, 1.0f);
+    if (params.filterType == 0 && params.filter2Mix <= 0.0f)
+        sample = static_cast<float> (voice.svf.next (sample, shapedCutoff, resonance, sampleRate_));
+    else
+    {
+        const float dry = sample;
+        const float first = static_cast<float> (voice.flt1.next (dry, shapedCutoff, resonance, sampleRate_, params.filterType));
+        sample = first;
+        if (params.filter2Mix > 0.0f)
+        {
+            const float secondBase = 80.0f * std::pow (90.0f, std::clamp (params.filter2Cutoff, 0.0f, 1.0f));
+            const float secondCutoff = scale == 1.0f
+                                           ? secondBase
+                                           : std::clamp (secondBase * scale, 20.0f, static_cast<float> (sampleRate_ * 0.45));
+            const float second = static_cast<float> (voice.flt2.next (
+                params.filterRoute == 0 ? first : dry, secondCutoff,
+                std::clamp (params.filter2Resonance, 0.0f, 1.0f), sampleRate_, params.filter2Type));
+            const float mix = std::clamp (params.filter2Mix, 0.0f, 1.0f);
+            sample = (1.0f - mix) * first + mix * second;
+        }
+    }
     sample *= env * voice.velocity * voice.accentGain * 0.4f * std::clamp (params.level, 0.0f, 1.0f);
     if (! std::isfinite (sample))
     {
         voice.svf.reset();
+        voice.flt1.reset();
+        voice.flt2.reset();
         return 0.0f;
     }
     return sample;

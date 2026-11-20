@@ -21,7 +21,7 @@ struct Parameter
 
 inline constexpr int engineChoices = 3;
 
-inline const std::array<Parameter, 75> parameterCatalog {{
+inline const std::array<Parameter, 115> parameterCatalog {{
     { "syn.a.engine", "Part A Engine", 0.0f, 2.0f, 0.0f, true },
     { "syn.a.level", "Part A Level", 0.0f, 1.0f, 0.75f, false },
     { "syn.a.cutoff", "Part A Cutoff", 0.0f, 1.0f, 0.55f, false },
@@ -97,6 +97,46 @@ inline const std::array<Parameter, 75> parameterCatalog {{
     { "syn.fx.reverb.amount", "Reverb Amount", 0.0f, 1.0f, 0.5f, false },
     { "syn.fx.reverb.rate", "Reverb Rate", 0.0f, 1.0f, 0.4f, false },
     { "syn.fx.reverb.character", "Reverb Character", 0.0f, 1.0f, 0.5f, false },
+    { "syn.a.osc1.wave", "Part A Osc1 Wave", 0.0f, 4.0f, 1.0f, false },
+    { "syn.a.osc1.level", "Part A Osc1 Level", 0.0f, 1.0f, 0.62f, false },
+    { "syn.a.osc1.pw", "Part A Osc1 Pulse", 0.05f, 0.95f, 0.5f, false },
+    { "syn.a.osc2.wave", "Part A Osc2 Wave", 0.0f, 4.0f, 1.0f, false },
+    { "syn.a.osc2.level", "Part A Osc2 Level", 0.0f, 1.0f, 0.30f, false },
+    { "syn.a.osc2.pw", "Part A Osc2 Pulse", 0.05f, 0.95f, 0.5f, false },
+    { "syn.a.osc3.wave", "Part A Osc3 Wave", 0.0f, 4.0f, 0.0f, false },
+    { "syn.a.osc3.level", "Part A Osc3 Level", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.osc3.semi", "Part A Osc3 Semi", 0.0f, 1.0f, 0.5f, false },
+    { "syn.a.va.sub", "Part A VA Sub", 0.0f, 1.0f, 0.16f, false },
+    { "syn.a.ring", "Part A Ring", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.fm", "Part A FM", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.flt1.type", "Part A Filter 1", 0.0f, 5.0f, 0.0f, false },
+    { "syn.a.flt2.type", "Part A Filter 2", 0.0f, 5.0f, 0.0f, false },
+    { "syn.a.flt2.cutoff", "Part A Filter 2 Cutoff", 0.0f, 1.0f, 1.0f, false },
+    { "syn.a.flt2.resonance", "Part A Filter 2 Resonance", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.flt2.mix", "Part A Filter 2 Mix", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.flt.route", "Part A Filter Route", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.flt.env", "Part A Filter Env", 0.0f, 1.0f, 0.0f, false },
+    { "syn.a.flt.key", "Part A Key Track", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.osc1.wave", "Part B Osc1 Wave", 0.0f, 4.0f, 1.0f, false },
+    { "syn.b.osc1.level", "Part B Osc1 Level", 0.0f, 1.0f, 0.62f, false },
+    { "syn.b.osc1.pw", "Part B Osc1 Pulse", 0.05f, 0.95f, 0.5f, false },
+    { "syn.b.osc2.wave", "Part B Osc2 Wave", 0.0f, 4.0f, 1.0f, false },
+    { "syn.b.osc2.level", "Part B Osc2 Level", 0.0f, 1.0f, 0.30f, false },
+    { "syn.b.osc2.pw", "Part B Osc2 Pulse", 0.05f, 0.95f, 0.5f, false },
+    { "syn.b.osc3.wave", "Part B Osc3 Wave", 0.0f, 4.0f, 0.0f, false },
+    { "syn.b.osc3.level", "Part B Osc3 Level", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.osc3.semi", "Part B Osc3 Semi", 0.0f, 1.0f, 0.5f, false },
+    { "syn.b.va.sub", "Part B VA Sub", 0.0f, 1.0f, 0.16f, false },
+    { "syn.b.ring", "Part B Ring", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.fm", "Part B FM", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.flt1.type", "Part B Filter 1", 0.0f, 5.0f, 0.0f, false },
+    { "syn.b.flt2.type", "Part B Filter 2", 0.0f, 5.0f, 0.0f, false },
+    { "syn.b.flt2.cutoff", "Part B Filter 2 Cutoff", 0.0f, 1.0f, 1.0f, false },
+    { "syn.b.flt2.resonance", "Part B Filter 2 Resonance", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.flt2.mix", "Part B Filter 2 Mix", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.flt.route", "Part B Filter Route", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.flt.env", "Part B Filter Env", 0.0f, 1.0f, 0.0f, false },
+    { "syn.b.flt.key", "Part B Key Track", 0.0f, 1.0f, 0.0f, false },
 }};
 
 inline constexpr std::size_t outputParameterIndex = 14;
@@ -132,8 +172,26 @@ inline constexpr std::array<FxBinding, 8> fxBindings {{
     { 7, 16, 71, 72, 73, 74 },
 }};
 
-static_assert (parameterCatalog.size() == 75);
-static_assert (fxBindings.back().character + 1 == static_cast<int> (parameterCatalog.size()));
+static_assert (parameterCatalog.size() == 115);
+static_assert (fxBindings.back().character + 1 == 75);
+
+// Factory rows and historical UBNK values stop here. Later ids use their defaults.
+inline constexpr int frozenParameterCount = 75;
+inline constexpr int vaParamCount = 20;
+inline constexpr int vaParamBase = frozenParameterCount;
+
+enum class VaKnob : int {
+    osc1Wave, osc1Level, osc1Pw,
+    osc2Wave, osc2Level, osc2Pw,
+    osc3Wave, osc3Level, osc3Semi,
+    sub, ring, fm,
+    filterType, filter2Type, filter2Cutoff, filter2Resonance, filter2Mix, filterRoute,
+    filterEnv, keyTrack,
+    count
+};
+
+static_assert (static_cast<int> (VaKnob::count) == vaParamCount);
+static_assert (vaParamBase + vaParamCount * 2 == static_cast<int> (parameterCatalog.size()));
 
 inline constexpr const char* outputParameterName = "Output";
 

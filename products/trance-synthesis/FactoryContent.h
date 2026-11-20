@@ -15,7 +15,7 @@ struct FactoryProgram {
     int engineB;
     const char* mood;
     int auditionNote;
-    const float* values;
+    const float* values; // frozenParameterCount floats. Not the full live catalog.
 };
 
 struct FactoryPhrase {

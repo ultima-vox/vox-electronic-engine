@@ -119,8 +119,10 @@ def catalog():
         r'\{ "([^"]+)", "[^"]+", ([0-9.]+)f, ([0-9.]+)f, ([0-9.]+)f, (true|false) \}',
         text,
     )
-    if len(rows) != 75:
-        raise SystemExit(f"expected 75 parameters, found {len(rows)}")
+    if len(rows) < 75:
+        raise SystemExit(f"expected at least 75 frozen parameters, found {len(rows)}")
+    # Factory rows stay 75 wide. Appended VA ids load as defaults.
+    rows = rows[:75]
     return [(i, float(lo), float(hi), float(init), choice == "true") for i, lo, hi, init, choice in rows]
 
 

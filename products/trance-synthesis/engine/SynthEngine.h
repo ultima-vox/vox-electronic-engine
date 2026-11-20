@@ -62,6 +62,23 @@ struct PartParams {
     double sustain = 0.72;
     double release = 0.28;
     float noise = 0.04f;
+    // VA extras. Defaults are the previous two-saw mix: osc3 off, one LP12,
+    // no FM, no ring, no key track. Wavetable and unison are not in this batch.
+    int oscWave[3] = { 1, 1, 0 };
+    float oscLevel[3] = { 0.62f, 0.30f, 0.0f };
+    float oscPulse[3] = { 0.5f, 0.5f, 0.5f };
+    float osc3Semi = 0.0f;
+    float vaSub = 0.16f;
+    float ring = 0.0f;
+    float fm = 0.0f;
+    int filterType = 0;
+    int filter2Type = 0;
+    float filter2Cutoff = 1.0f;
+    float filter2Resonance = 0.0f;
+    float filter2Mix = 0.0f;
+    int filterRoute = 0;
+    float filterEnv = 0.0f;
+    float keyTrack = 0.0f;
 };
 
 struct BlockParams {
@@ -130,6 +147,7 @@ private:
     struct VaVoice {
         vstengine::dspcore::BlepOscillator oscA;
         vstengine::dspcore::BlepOscillator oscB;
+        vstengine::dspcore::BlepOscillator oscC;
         vstengine::dspcore::BlepOscillator sub;
         float velocity = 0.0f;
         float accentGain = 1.0f;
@@ -149,7 +167,10 @@ private:
         float pendingVelocity = 0.0f;
         float pendingAccent = 1.0f;
         vstengine::dspcore::SvfLowpass svf;
+        vstengine::dspcore::SvfFilter flt1;
+        vstengine::dspcore::SvfFilter flt2;
         vstengine::dspcore::LinearAdsr amp;
+        vstengine::dspcore::LinearAdsr filterAmp;
     };
 
     struct Part {
