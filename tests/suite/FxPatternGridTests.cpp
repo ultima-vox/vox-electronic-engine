@@ -52,6 +52,20 @@ int main(){
         check(!edit::pasteBar(destination,0,clip)&&destination==expected,"invalid step rejects entire paste");
         clip=unchanged;clip.grid=grids[(g+1)%grids.size()];
         check(!edit::pasteBar(destination,0,clip)&&destination==expected,"cross-grid paste does not retime destination");
+        std::vector<std::uint8_t> midiBefore,midiAfter;
+        check(exportMidi(destination,137.,midiBefore),"encode MIDI before variation");
+        const auto variant=[&](bool reverse){
+            auto wanted=expected;
+            for(unsigned i=0;i<steps;++i)wanted.steps[steps+i]=expected.steps[steps+(reverse?steps-1-i:(i+steps-1)%steps)];
+            return wanted;
+        };
+        using V=edit::Variation;
+        check(edit::varyBar(destination,1,V::later)&&destination==variant(false),"shift entire bar later including off-page steps and attributes");
+        check(edit::varyBar(destination,1,V::earlier)&&destination==expected,"earlier shift is the exact inverse");
+        check(edit::varyBar(destination,1,V::reverse)&&destination==variant(true),"reverse only the chosen bar");
+        check(!edit::varyBar(destination,3,V::reverse)&&destination==variant(true),"invalid bar cannot mutate the arrangement");
+        check(edit::varyBar(destination,1,V::reverse)&&destination==expected&&exportMidi(destination,137.,midiAfter)&&midiAfter==midiBefore,
+              "reverse twice restores identical trigger MIDI on every grid");
     }
     Pattern maximum;maximum.bars=4;maximum.grid=Grid::thirtysecondTriplet;
     for(auto& step:maximum.steps){step.enabled=true;step.ratchets=4;}

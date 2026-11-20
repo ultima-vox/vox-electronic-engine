@@ -52,8 +52,8 @@ public:
         return programs_.editMacroConfig([=](macro::Config& config){return config.setRoute(source,destination,depth,smoothing);});
     }
     ProgramStore::VersionedMotion versionedMotion() const {return programs_.versionedMotion();}
-    bool replaceMotionIfCurrent(const ProgramStore::VersionedMotion& expected,const macro::Config& value) {
-        return programs_.replaceMotionIfCurrent(expected,value);
+    bool replaceMotionIfCurrent(const ProgramStore::VersionedMotion& expected,const macro::Config& value,std::uint64_t* revision=nullptr) {
+        return programs_.replaceMotionIfCurrent(expected,value,revision);
     }
     macro::Config macroConfig() const { return programs_.snapshotState().macros; }
     juce::AudioParameterBool& patternEnabledParameter() noexcept { return *patternEnabled_; }

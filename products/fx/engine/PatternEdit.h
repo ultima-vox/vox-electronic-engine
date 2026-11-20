@@ -26,4 +26,19 @@ inline bool pasteBar(Pattern& destination,unsigned bar,const Bar& copied) noexce
     std::copy_n(copied.steps.begin(),count,destination.steps.begin()+bar*count);
     return true;
 }
+enum class Variation { earlier, later, reverse };
+// Reorder complete step records within one bar on any supported grid. This
+// does not reverse audio or move the global swing/probability seed; scheduler
+// draws still apply at the new positions.
+inline bool varyBar(Pattern& pattern,unsigned bar,Variation variation) noexcept {
+    if(!pattern.valid()||bar>=pattern.bars)return false;
+    const auto count=stepsPerBar(pattern.grid);
+    const auto begin=pattern.steps.begin()+bar*count,end=begin+count;
+    switch(variation){
+        case Variation::earlier:std::rotate(begin,begin+1,end);return true;
+        case Variation::later:std::rotate(begin,end-1,end);return true;
+        case Variation::reverse:std::reverse(begin,end);return true;
+    }
+    return false;
+}
 } // namespace vox::fx::pattern::edit

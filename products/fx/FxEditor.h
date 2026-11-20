@@ -87,10 +87,16 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh(int row=-1);
+    bool keyPressed(const juce::KeyPress&) override;
     juce::ComboBox& sourceSelector() noexcept {return source_;}
     juce::ComboBox& destinationSelector() noexcept {return destination_;}
     juce::TextButton& applyButton() noexcept {return apply_;}
     juce::Slider& stepLevel(std::size_t i) noexcept {return steps_[i];}
+    juce::TextButton& undoButton() noexcept {return undoButton_;}
+    juce::TextButton& redoButton() noexcept {return redoButton_;}
+    juce::Slider& lfoRate(std::size_t i) noexcept {return lfoRate_[i];}
+    juce::TextButton& applyClocksButton() noexcept {return clock_;}
+    juce::TextButton& deleteRouteButton() noexcept {return remove_;}
     juce::TextButton& applyShapeButton() noexcept {return shapeApply_;}
     juce::ToggleButton& customAdsrButton() noexcept {return customAdsr_;}
     juce::Slider& adsrValue(std::size_t i) noexcept {return adsr_[i];}
@@ -99,8 +105,11 @@ private:
     void paintListBoxItem(int,juce::Graphics&,int,int,bool) override;
     void selectedRowsChanged(int) override;
     void commit(int action);
+    bool publishMotion(const macro::Config&);
+    void stepHistory(bool redo);
     FxProcessor& processor_;
     ProgramStore::VersionedMotion shown_{};
+    std::deque<macro::Config> undoMotion_,redoMotion_;
     juce::ListBox rows_{"Routes",this};
     juce::ComboBox source_,destination_;
     StructuralSlider depth_,smooth_,randomRate_,randomSeed_;
@@ -112,6 +121,7 @@ private:
     juce::ToggleButton customAdsr_{"Custom ADSR"};
     juce::TextButton shapeApply_{"Apply shape"},resetShape_{"Reset shape"};
     juce::TextButton apply_{"Apply route"},remove_{"Delete route"},clock_{"Apply clocks"},reload_{"Reload"},close_{"Close"};
+    juce::TextButton undoButton_{"Undo"},redoButton_{"Redo"};
     juce::Label status_,title_,routeHelp_;
 };
 

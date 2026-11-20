@@ -173,15 +173,17 @@ public:
     struct VersionedMotion { macro::Config config;std::uint64_t revision; };
     VersionedMotion versionedMotion() const {
         const std::lock_guard<std::mutex> lock(mutex_);
-        return {desiredMacros_,programRevision_.load(std::memory_order_relaxed)};
+        return {desiredMacros_,motionRevision_};
     }
-    bool replaceMotionIfCurrent(const VersionedMotion& expected,const macro::Config& value) {
+    bool replaceMotionIfCurrent(const VersionedMotion& expected,const macro::Config& value,std::uint64_t* revision=nullptr) {
         if(!value.valid())return false;
         const std::lock_guard<std::mutex> lock(mutex_);
-        if(expected.revision!=programRevision_.load(std::memory_order_relaxed)||expected.config!=desiredMacros_)return false;
+        if(expected.revision!=motionRevision_||expected.config!=desiredMacros_)return false;
         std::vector<std::byte> encoded;
         if(!programcodec::encode(desired_,encoded))return false;
-        commit(desired_,encoded,desiredEffects_,desiredPattern_,value,desiredGenerator_);return true;
+        commit(desired_,encoded,desiredEffects_,desiredPattern_,value,desiredGenerator_);
+        if(revision)*revision=motionRevision_;
+        return true;
     }
     template<typename Edit> bool editMacroConfig(Edit edit) {
         const std::lock_guard<std::mutex> lock(mutex_);auto next=desiredMacros_;
@@ -254,7 +256,7 @@ public:
         lastSequence=after; return true;
     }
 private:
-    void advanceProgramRevision() noexcept { programRevision_.fetch_add(1,std::memory_order_release); }
+    void advanceProgramRevision() noexcept { ++motionRevision_;programRevision_.fetch_add(1,std::memory_order_release); }
     // Called with mutex_ held, only from producer threads.
     void commit(const NoiseProgram& program, const std::vector<std::byte>& encoded, std::uint64_t effectsValue,
                 const pattern::Pattern& patternValue,const macro::Config& macrosValue,const generator::ControllerState& generatorValue) noexcept {
@@ -273,6 +275,7 @@ private:
         effectWords_.store(effectsValue);
         for(std::size_t i=0;i<patternWords.size();++i)patternWords_[i].store(patternWords[i]);
         for(std::size_t i=0;i<macroWords.size();++i)macroWords_[i].store(macroWords[i]);
+        if(desiredMacros_!=macrosValue)++motionRevision_;
         desired_ = program; desiredEffects_=effectsValue; desiredPattern_=patternValue; desiredMacros_=macrosValue; desiredGenerator_=generatorValue;
         sequence_.fetch_add(1); // even: complete publication
     }
@@ -290,6 +293,7 @@ private:
     std::array<std::atomic<std::uint32_t>,pattern::codec::wordCount> patternWords_{};
     std::atomic<std::uint64_t> effectWords_ {effects::defaults()};
     std::atomic<std::uint64_t> sequence_ {0};
+    std::uint64_t motionRevision_=0; // writer lock only, including external edits and whole restores
     std::atomic<std::uint64_t> programRevision_ {0};
     std::atomic<std::uint32_t> wordCount_ {0};
     std::array<std::atomic<std::uint32_t>, maxWords> words_ {};

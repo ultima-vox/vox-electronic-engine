@@ -243,8 +243,13 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
     shapeApply_.onClick=[this]{commit(3);};resetShape_.onClick=[this]{commit(4);};
     for(auto* c:std::array<juce::Component*,4>{&shapeTitle_,&customAdsr_,&shapeApply_,&resetShape_})addAndMakeVisible(*c);
     apply_.onClick=[this]{commit(0);};remove_.onClick=[this]{commit(1);};clock_.onClick=[this]{commit(2);};
+    undoButton_.onClick=[this]{stepHistory(false);};redoButton_.onClick=[this]{stepHistory(true);};
+    undoButton_.setTitle("Undo Motion edit");redoButton_.setTitle("Redo Motion edit");
+    undoButton_.setTooltip("Undo a committed route, clock or event-shape edit in this editor");
+    redoButton_.setTooltip("Redo a committed Motion edit; a new edit clears redo");
+    setWantsKeyboardFocus(true);
     reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);};
-    const std::array<juce::Component*,15> components{&title_,&routeHelp_,&rows_,&source_,&destination_,&depth_,&smooth_,&randomRate_,&randomSeed_,&status_,&apply_,&remove_,&clock_,&reload_,&close_};
+    const std::array<juce::Component*,17> components{&title_,&routeHelp_,&rows_,&source_,&destination_,&depth_,&smooth_,&randomRate_,&randomSeed_,&status_,&apply_,&remove_,&clock_,&reload_,&close_,&undoButton_,&redoButton_};
     for(auto* c:components)addAndMakeVisible(*c);
     refresh(0);
 }
@@ -271,7 +276,10 @@ void MotionPanel::selectedRowsChanged(int row){
 }
 void MotionPanel::refresh(int row){
     if(row<0)row=std::max(0,rows_.getSelectedRow());
-    shown_=processor_.versionedMotion();
+    const auto current=processor_.versionedMotion();
+    if(shown_.revision!=current.revision||shown_.config!=current.config){undoMotion_.clear();redoMotion_.clear();}
+    shown_=current;
+    undoButton_.setEnabled(!undoMotion_.empty());redoButton_.setEnabled(!redoMotion_.empty());
     rows_.updateContent();row=std::clamp(row,0,getNumRows()-1);rows_.selectRow(row);selectedRowsChanged(row);
     for(unsigned i=0;i<2;++i){const auto lfo=shown_.config.lfos[i];
         lfoRate_[i].setValue(lfo.rate,juce::dontSendNotification);sync_[i].setToggleState(lfo.sync,juce::dontSendNotification);
@@ -301,9 +309,37 @@ void MotionPanel::commit(int action){
         next.event.attack=static_cast<float>(adsr_[0].getValue()*.001);next.event.decay=static_cast<float>(adsr_[1].getValue()*.001);
         next.event.sustain=static_cast<float>(adsr_[2].getValue()*.01);next.event.release=static_cast<float>(adsr_[3].getValue()*.001);
     }else next.event={};
-    if(!processor_.replaceMotionIfCurrent(shown_,next)){
-        refresh();status_.setText("Program or routes changed. Old edit was not applied.",juce::dontSendNotification);return;}
+    if(next==shown_.config){refresh(row);return;}
+    const auto previous=shown_.config;
+    if(!publishMotion(next))return;
+    if(undoMotion_.size()==32)undoMotion_.pop_front();
+    undoMotion_.push_back(previous);redoMotion_.clear();
     refresh(row);
+}
+bool MotionPanel::publishMotion(const macro::Config& next){
+    std::uint64_t revision=0;
+    if(!processor_.replaceMotionIfCurrent(shown_,next,&revision)){
+        refresh();status_.setText("Program or Motion changed. Old edit was not applied.",juce::dontSendNotification);return false;
+    }
+    shown_={next,revision};
+    return true;
+}
+void MotionPanel::stepHistory(bool redo){
+    auto& from=redo?redoMotion_:undoMotion_;
+    auto& to=redo?undoMotion_:redoMotion_;
+    if(from.empty())return;
+    const auto previous=shown_.config;
+    if(!publishMotion(from.back()))return;
+    to.push_back(previous);from.pop_back();
+    refresh();
+}
+bool MotionPanel::keyPressed(const juce::KeyPress& key){
+    const auto mods=key.getModifiers();
+    if(!mods.isCommandDown()||mods.isAltDown())return false;
+    const auto code=key.getKeyCode();
+    if(code=='Z'||code=='z'){stepHistory(mods.isShiftDown());return true;}
+    if(code=='Y'||code=='y'){stepHistory(true);return true;}
+    return false;
 }
 void MotionPanel::paint(juce::Graphics& g){
     namespace c=vox::ui::tokens::colour;
@@ -317,7 +353,9 @@ void MotionPanel::paint(juce::Graphics& g){
 void MotionPanel::resized(){
     auto a=getLocalBounds().reduced(12);title_.setBounds(a.removeFromTop(23));routeHelp_.setBounds(a.removeFromTop(24));
     auto footer=a.removeFromBottom(32);
-    close_.setBounds(footer.removeFromRight(76).reduced(2));reload_.setBounds(footer.removeFromRight(76).reduced(2));status_.setBounds(footer);
+    close_.setBounds(footer.removeFromRight(76).reduced(2));reload_.setBounds(footer.removeFromRight(76).reduced(2));
+    redoButton_.setBounds(footer.removeFromRight(76).reduced(2));undoButton_.setBounds(footer.removeFromRight(76).reduced(2));
+    status_.setBounds(footer);
     auto shape=a.removeFromBottom(161);
     shapeTitle_.setBounds(shape.removeFromTop(20));
     auto meters=shape.removeFromTop(68);
@@ -713,7 +751,7 @@ void FxPanel::patternCommand(int id){
     if(patternDragging_)return;
     const auto previous=displayedPattern_;const auto revision=patternRevision_;
     refreshPattern();
-    if((id==2||id==6)&&(previous!=displayedPattern_||revision!=patternRevision_))return;
+    if((id==2||id==6||(id>=7&&id<=9))&&(previous!=displayedPattern_||revision!=patternRevision_))return;
     const juce::String prefix="VOXFX-PATTERN/1:";
     if(id==1){
         std::vector<std::byte> bytes;
@@ -734,6 +772,9 @@ void FxPanel::patternCommand(int id){
             (void)pattern::edit::copyBar(displayedPattern_,bar,copiedPatternBar_);
             refreshPattern();
         }else editPattern([&](auto& p){(void)pattern::edit::pasteBar(p,bar,copiedPatternBar_);});
+    }else if(id>=7&&id<=9){
+        const auto bar=static_cast<unsigned>(patternBar_.getSelectedId()-1);
+        editPattern([&](auto& p){(void)pattern::edit::varyBar(p,bar,static_cast<pattern::edit::Variation>(id-7));});
     }else if(id==3||id==4){
         auto& from=id==3?patternUndo_:patternRedo_;
         auto& to=id==3?patternRedo_:patternUndo_;
@@ -1033,10 +1074,13 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
             patternStepSelector_.setSelectedId(static_cast<int>(i+1),juce::dontSendNotification);refreshPattern();};
         addAndMakeVisible(step);
     }
-    patternActions_.setTitle("Pattern and bar clipboard, undo and redo");
-    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid.");patternActions_.setTextWhenNothingSelected("Edit…");
+    patternActions_.setTitle("Pattern clipboard, selected bar variations, undo and redo");
+    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid. Shift or reverse the selected bar without changing other bars.");patternActions_.setTextWhenNothingSelected("Edit…");
     patternActions_.addItem("Copy Pattern",1);patternActions_.addItem("Paste Pattern",2);
     patternActions_.addItem("Copy selected bar",5);patternActions_.addItem("Paste into selected bar",6);
+    patternActions_.addSeparator();
+    patternActions_.addItem("Shift bar one step earlier",7);patternActions_.addItem("Shift bar one step later",8);
+    patternActions_.addItem("Reverse bar step order",9);
     patternActions_.addSeparator();
     patternActions_.addItem("Undo edit",3);patternActions_.addItem("Redo edit",4);
     patternActions_.onChange=[this]{const auto id=patternActions_.getSelectedId();patternActions_.setSelectedId(0,juce::dontSendNotification);patternCommand(id);};

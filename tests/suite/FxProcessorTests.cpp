@@ -377,6 +377,14 @@ void checkPatternClipboardRestore() {
     command(6);auto expected=restored;expected.steps[95]=initial.steps[47];
     check(fx->patternSnapshot()==expected,"deliberate same-grid paste uses the editor-local buffer after refreshing restore");
     command(3);check(fx->patternSnapshot()==restored,"paste undo returns to restored pattern, not pre-restore data");
+    command(4);check(fx->patternSnapshot()==expected,"restore pasted bar for selected bar variation");
+    command(8);auto shifted=restored;shifted.steps[48]=initial.steps[47];
+    check(fx->patternSnapshot()==shifted,"shift selected bar wraps the last page into the first on a triplet grid");
+    command(3);check(fx->patternSnapshot()==expected,"one undo returns the entire shifted bar");
+    command(4);check(fx->patternSnapshot()==shifted,"redo replays the same shift");
+    command(9);check(fx->patternSnapshot()==expected,"reverse only affects the current bar");
+    fx->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));
+    command(9);check(save(*fx)==saved,"a stale bar variation does not mutate a restored project");
     panel.reset();panel=std::make_unique<FxPanel>(*fx);
     panel->patternBarSelector().setSelectedId(2,juce::sendNotificationSync);command(6);
     check(fx->patternSnapshot()==restored&&save(*fx)==saved,"recreating editor clears the bar buffer without affecting host state");
@@ -896,6 +904,26 @@ int main() {
         motion.destinationSelector().setSelectedId(static_cast<int>(mod::Destination::pitch)+1,juce::sendNotificationSync);
         motion.applyButton().onClick();
         check(owner->macroConfig().count==1&&owner->macroConfig().routes[0].destination==mod::Destination::pitch,"native Motion row publishes a typed voice route");
+        const auto routed=owner->macroConfig();
+        check(motion.undoButton().isEnabled(),"route commit enables Motion undo");
+        motion.undoButton().onClick();check(owner->macroConfig().count==0&&motion.redoButton().isEnabled(),"undo removes the committed route");
+        motion.redoButton().onClick();check(owner->macroConfig()==routed,"redo restores the typed route exactly");
+        const auto published=owner->versionedMotion();
+        motion.applyButton().onClick();
+        check(owner->versionedMotion().revision==published.revision,"an unchanged Motion apply does not publish or consume another undo entry");
+        motion.lfoRate(0).setValue(3.125,juce::dontSendNotification);motion.applyClocksButton().onClick();
+        check(owner->macroConfig().lfos[0].rate==3.125f,"publish a new Motion clock");
+        check(motion.keyPressed(juce::KeyPress('Z',juce::ModifierKeys(juce::ModifierKeys::commandModifier),0))&&
+              owner->macroConfig()==routed,"Motion keyboard undo restores the clock without removing routing");
+        motion.deleteRouteButton().onClick();
+        check(owner->macroConfig().count==0&&!motion.redoButton().isEnabled(),"new route deletion clears the previous redo branch");
+        motion.undoButton().onClick();check(owner->macroConfig()==routed,"delete is reversible as one action");
+        const auto repeat=owner->versionedMotion();auto changed=repeat.config;changed.randomSeed+=1;
+        check(owner->replaceMotionIfCurrent(repeat,changed)&&owner->replaceMotionIfCurrent(owner->versionedMotion(),repeat.config),
+              "publish an external Motion edit and revert its values");
+        motion.undoButton().onClick();
+        check(!motion.undoButton().isEnabled()&&!motion.redoButton().isEnabled()&&owner->macroConfig()==routed,
+              "matching values cannot revive history after an external edit and revert");
         const auto restored=save(*owner);owner->setStateInformation(restored.getData(),static_cast<int>(restored.getSize()));
         motion.destinationSelector().setSelectedId(static_cast<int>(mod::Destination::cutoff)+1,juce::sendNotificationSync);
         motion.applyButton().onClick();
@@ -907,6 +935,9 @@ int main() {
         const auto authoredMotion=owner->macroConfig();
         check(authoredMotion.event.customAdsr&&std::abs(authoredMotion.event.steps[3]-.37f)<1e-6f&&
               std::abs(authoredMotion.event.release-.28f)<1e-6f,"native shape action publishes FMOD3 settings");
+        motion.undoButton().onClick();
+        check(owner->macroConfig()==routed,"event shape undo preserves the underlying route");
+        motion.redoButton().onClick();check(owner->macroConfig()==authoredMotion,"event shape redo restores all ADSR and step values");
         const auto shaped=save(*owner);owner->setStateInformation(shaped.getData(),static_cast<int>(shaped.getSize()));
         motion.stepLevel(3).setValue(99,juce::dontSendNotification);motion.applyShapeButton().onClick();
         check(owner->macroConfig()==authoredMotion,"stale step/ADSR draft rejected after host restore");
