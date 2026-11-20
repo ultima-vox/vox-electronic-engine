@@ -2,6 +2,8 @@
 
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
+- [Motion history and selected-bar Pattern authoring](MOTION_PATTERN_AUTHORING_20261119.md): Linux native history rollover, mixed replay and non-Motion project restore regression; DAW focus and keyboard ownership are not qualified. [Wave B Edit Points](WAVE_B_EDIT_POINTS_20261119.md) adds 32 authored cues, bringing the review-only total to 232 with zero approvals. No Windows dispatch, new audio ZIP or upload.
+
 - [Transfer guards and timing capture](TRANSFER_GUARDS_20261119.md): existing-file recheck (not atomic compare-and-replace), isolated replay/teardown tests, and per-callback wall/CPU miss rows. Linux baseline and deliberate same-core contention retain their misses separately; neither clears FX-T18. No change to the 200 unapproved review candidates.
 
 - [Drag replay](DRAG_REPLAY_20261119.md) and [Wave B Session Cuts](WAVE_B_SESSION_CUTS_20261119.md): same-path drag retry and stale completion guard; 24 new individually authored cues, 200 review-only total, no new ZIP or approvals. Native regressions pass; new wall and thread-CPU miss evidence keeps FX-T18 open.

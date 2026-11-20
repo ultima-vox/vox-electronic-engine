@@ -37,7 +37,7 @@ The WAV/MIDI worker observes whether the path exists **before** rendering/encodi
 | FX-T09 | Four-slot and Drive regression; paired wet-tail history and offline render | Full spectral, long-tail and host bounce qualification |
 | FX-T10 | 64-grain stress; import/hash/lease/relink, supersession and sample restore | Host restore/relink through real paths and OS file failures |
 | FX-T11 | Deterministic generator and locks, persistent A/B and native preset browse/save | Workflow and automation readback in real host, broader lock and library stress |
-| FX-T12 | 200 unique pinned review references, deterministic provenance and working matrix | 100/400 more candidates to reach 300/600, real arrangement listening, zero current approvals |
+| FX-T12 | [232 unique pinned review references](WAVE_B_EDIT_POINTS_20261119.md), deterministic provenance and working matrix | 68/368 more candidates to reach 300/600, real arrangement listening, zero current approvals |
 | FX-T13 | Canonical SMF/Pattern grid, playback, seek, clipboard and selected-bar variations | Host transfer, cross-host boundary and editable SMF import |
 | FX-T14 | Seven sample-exact capture fixtures, cancellation and closed-file publication | Native chooser, filesystem matrix, actual OS drag/import and bounce/teardown |
 | FX-T15 | Native offscreen editor, timeline and chooser callback regressions | Real OS focus/tab, scale, resizing and accessibility |
