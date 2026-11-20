@@ -27,6 +27,25 @@ bool userCategoryMatchesRole (int category, int role)
     }
 }
 
+int SynthPanel::pageForId (const juce::String& id) const
+{
+    if (id.startsWith ("syn.fx.") || id == "syn.output")
+        return fx;
+    if (id.contains (".lfo") || id.contains (".mod") || id.startsWith ("syn.macro"))
+        return mod;
+    if (id.contains ("osc") || id.contains ("flt") || id.contains ("unison") || id.contains ("uni.")
+        || id.contains (".wt.") || id.contains (".ring") || id.contains (".fm") || id.contains ("va.sub"))
+        return synth;
+    if (id.startsWith ("syn.b."))
+        return acid;
+    return bass;
+}
+
+SynthPanel::~SynthPanel()
+{
+    processor_.cancelPreview();
+}
+
 SynthPanel::SynthPanel (SynthesisProcessor& processor)
     : processor_ (processor),
       capacity_ ({}, "factory"),
@@ -49,6 +68,38 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
     category_.setSelectedId (1, juce::dontSendNotification);
     category_.onChange = [this] { refresh(); };
     addAndMakeVisible (category_);
+    pageSelect_.addItem ("Bass", bass);
+    pageSelect_.addItem ("Acid", acid);
+    pageSelect_.addItem ("Synth", synth);
+    pageSelect_.addItem ("Sequence", sequence);
+    pageSelect_.addItem ("Mod", mod);
+    pageSelect_.addItem ("FX", fx);
+    pageSelect_.addItem ("Presets", presets);
+    pageSelect_.setSelectedId (bass, juce::dontSendNotification);
+    pageSelect_.onChange = [this] { resized(); };
+    addAndMakeVisible (pageSelect_);
+    listen_.addItem ("Candidate", 1);
+    listen_.addItem ("Reviewed", 2);
+    listen_.addItem ("Rejected", 3);
+    listen_.addItem ("Owner mark", 4);
+    listen_.setSelectedId (1, juce::dontSendNotification);
+    listen_.onChange = [this]
+    {
+        if (filling_)
+            return;
+        const int selected = programs_.getSelectedRow();
+        if (selected < 0 || selected >= static_cast<int> (visible_.size()))
+            return;
+        const auto row = visible_[static_cast<std::size_t> (selected)];
+        if (! row.factory)
+            return;
+        processor_.setListeningMark (row.index, listen_.getSelectedId() - 1);
+        refresh();
+    };
+    addAndMakeVisible (listen_);
+    listenNote_.setText ("Owner mark is not the release count", juce::dontSendNotification);
+    listenNote_.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (listenNote_);
     programs_.setModel (this);
     programs_.setRowHeight (22);
     addAndMakeVisible (programs_);
@@ -128,9 +179,11 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
 
     auto& state = processor_.parameters();
     juce::String lastGroup;
+    int pendingLabel = -1;
     for (const auto& entry : parameterCatalog)
     {
         const juce::String id (entry.id);
+        const int page = pageForId (id);
         const bool mod = id.contains (".mod") || id.contains (".lfo") || id.contains ("unison")
                       || id.contains (".wt.") || id.contains ("uni.");
         const juce::String group = id.startsWith ("syn.macro") ? "Macros"
@@ -147,8 +200,13 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
             label->setJustificationType (juce::Justification::centredLeft);
             page_.addAndMakeVisible (*label);
             controls_.push_back (std::move (label));
+            controlPage_.push_back (page);
+            pendingLabel = static_cast<int> (controlPage_.size()) - 1;
             lastGroup = group;
         }
+        if (pendingLabel >= 0)
+            controlPage_[static_cast<std::size_t> (pendingLabel)] = page;
+        pendingLabel = -1;
         if (entry.choice)
         {
             auto box = std::make_unique<vox::ui::VoxComboBox>();
@@ -166,6 +224,7 @@ SynthPanel::SynthPanel (SynthesisProcessor& processor)
                 state, entry.id, knob->getSlider()));
             controls_.push_back (std::move (knob));
         }
+        controlPage_.push_back (page);
     }
     viewport_.setViewedComponent (&page_, false);
     viewport_.setScrollBarsShown (true, false);
@@ -194,12 +253,42 @@ void SynthPanel::paintListBoxItem (int rowNumber, juce::Graphics& g, int width, 
         ? juce::String (factoryRoleNames[static_cast<std::size_t> (processor_.factoryProgramRole (row.index))])
         : juce::String (categoryNames[static_cast<std::size_t> (processor_.userProgramCategory (row.index))]);
     const auto name = row.factory ? processor_.factoryProgramName (row.index) : processor_.userProgramName (row.index);
-    g.drawText (name + "  ·  " + category, 6, 0, width - 8, height, juce::Justification::centredLeft);
+    juce::String mark;
+    if (row.factory)
+    {
+        switch (processor_.listeningMark (row.index))
+        {
+            case 1: mark = "  ·  reviewed"; break;
+            case 2: mark = "  ·  rejected"; break;
+            case 3: mark = "  ·  owner " + juce::String::toHexString (static_cast<int> (processor_.listeningRenderHash (row.index))); break;
+            default: break;
+        }
+    }
+    g.drawText (name + "  ·  " + category + mark, 6, 0, width - 8, height, juce::Justification::centredLeft);
 }
 
 void SynthPanel::listBoxItemDoubleClicked (int, const juce::MouseEvent&)
 {
     loadSelected();
+}
+
+void SynthPanel::selectedRowsChanged (int)
+{
+    syncListen();
+}
+
+void SynthPanel::syncListen()
+{
+    const int selected = programs_.getSelectedRow();
+    int status = 0;
+    const bool factory = selected >= 0 && selected < static_cast<int> (visible_.size())
+                      && visible_[static_cast<std::size_t> (selected)].factory;
+    if (factory)
+        status = processor_.listeningMark (visible_[static_cast<std::size_t> (selected)].index);
+    filling_ = true;
+    listen_.setSelectedId (status + 1, juce::dontSendNotification);
+    listen_.setEnabled (factory);
+    filling_ = false;
 }
 
 void SynthPanel::refresh()
@@ -236,6 +325,7 @@ void SynthPanel::refresh()
                        juce::dontSendNotification);
     programs_.updateContent();
     programs_.repaint();
+    syncListen();
 }
 
 void SynthPanel::loadSelected()
@@ -253,15 +343,16 @@ void SynthPanel::loadSelected()
 void SynthPanel::previewSelected()
 {
     const int selected = programs_.getSelectedRow();
-    int note = 60;
     if (selected >= 0 && selected < static_cast<int> (visible_.size()))
     {
         const auto row = visible_[static_cast<std::size_t> (selected)];
-        loadSelected();
         if (row.factory)
-            note = processor_.factoryProgramAudition (row.index);
+            processor_.requestFactoryPreview (row.index);
+        else
+            processor_.requestUserPreview (row.index);
+        return;
     }
-    processor_.requestPreview (note);
+    processor_.requestPreview (60);
 }
 
 void SynthPanel::saveNamed()
@@ -368,6 +459,36 @@ void SynthPanel::exportPhrase()
 
 void SynthPanel::resized()
 {
+    const int page = pageSelect_.getSelectedId();
+    const bool showPhrase = page == sequence;
+    const bool showMatrix = page == mod;
+    const bool showKnobs = page != sequence && page != presets;
+    auto show = [] (juce::Component& component, bool visible)
+    {
+        component.setVisible (visible);
+    };
+    show (phrase_, showPhrase);
+    show (play_, showPhrase);
+    show (stop_, showPhrase);
+    show (exportSmf_, showPhrase);
+    show (step_, showPhrase);
+    show (stepNote_, showPhrase);
+    show (stepVelocity_, showPhrase);
+    show (stepDuration_, showPhrase);
+    show (stepSlide_, showPhrase);
+    show (stepAccent_, showPhrase);
+    show (matrixPart_, showMatrix);
+    show (matrixPrev_, showMatrix);
+    show (matrixNext_, showMatrix);
+    show (matrixLabel_, showMatrix);
+    for (int row = 0; row < 4; ++row)
+    {
+        show (matrixSource_[row], showMatrix);
+        show (matrixDest_[row], showMatrix);
+        show (matrixAmount_[row], showMatrix);
+    }
+    show (viewport_, showKnobs);
+
     auto area = getLocalBounds().reduced (8);
     capacity_.setBounds (area.removeFromTop (22));
     auto row = area.removeFromTop (28);
@@ -382,48 +503,72 @@ void SynthPanel::resized()
     load_.setBounds (row.removeFromLeft (72));
     row.removeFromLeft (8);
     hear_.setBounds (row.removeFromLeft (72));
+    area.removeFromTop (4);
+    auto pages = area.removeFromTop (28);
+    pageSelect_.setBounds (pages.removeFromLeft (150));
+    pages.removeFromLeft (8);
+    listen_.setBounds (pages.removeFromLeft (150));
+    pages.removeFromLeft (8);
+    listenNote_.setBounds (pages);
     area.removeFromTop (6);
-    auto phraseRow = area.removeFromTop (28);
-    phrase_.setBounds (phraseRow.removeFromLeft (360));
-    phraseRow.removeFromLeft (8);
-    play_.setBounds (phraseRow.removeFromLeft (64));
-    phraseRow.removeFromLeft (6);
-    stop_.setBounds (phraseRow.removeFromLeft (64));
-    phraseRow.removeFromLeft (6);
-    exportSmf_.setBounds (phraseRow.removeFromLeft (64));
-    area.removeFromTop (4);
-    auto stepRow = area.removeFromTop (28);
-    step_.setBounds (stepRow.removeFromLeft (120));
-    stepRow.removeFromLeft (6);
-    stepNote_.setBounds (stepRow.removeFromLeft (48));
-    stepRow.removeFromLeft (4);
-    stepVelocity_.setBounds (stepRow.removeFromLeft (48));
-    stepRow.removeFromLeft (4);
-    stepDuration_.setBounds (stepRow.removeFromLeft (64));
-    stepRow.removeFromLeft (6);
-    stepSlide_.setBounds (stepRow.removeFromLeft (70));
-    stepAccent_.setBounds (stepRow.removeFromLeft (80));
-    area.removeFromTop (4);
-    auto matrix = area.removeFromTop (22);
-    matrixPart_.setBounds (matrix.removeFromLeft (90));
-    matrix.removeFromLeft (6);
-    matrixPrev_.setBounds (matrix.removeFromLeft (56));
-    matrix.removeFromLeft (4);
-    matrixNext_.setBounds (matrix.removeFromLeft (56));
-    matrix.removeFromLeft (6);
-    matrixLabel_.setBounds (matrix);
-    for (int row = 0; row < 4; ++row)
+    if (showPhrase)
     {
-        auto line = area.removeFromTop (22);
-        matrixSource_[row].setBounds (line.removeFromLeft (90));
-        line.removeFromLeft (4);
-        matrixDest_[row].setBounds (line.removeFromLeft (90));
-        line.removeFromLeft (4);
-        matrixAmount_[row].setBounds (line.removeFromLeft (160));
+        auto phraseRow = area.removeFromTop (28);
+        phrase_.setBounds (phraseRow.removeFromLeft (360));
+        phraseRow.removeFromLeft (8);
+        play_.setBounds (phraseRow.removeFromLeft (64));
+        phraseRow.removeFromLeft (6);
+        stop_.setBounds (phraseRow.removeFromLeft (64));
+        phraseRow.removeFromLeft (6);
+        exportSmf_.setBounds (phraseRow.removeFromLeft (64));
+        area.removeFromTop (4);
+        auto stepRow = area.removeFromTop (28);
+        step_.setBounds (stepRow.removeFromLeft (120));
+        stepRow.removeFromLeft (6);
+        stepNote_.setBounds (stepRow.removeFromLeft (48));
+        stepRow.removeFromLeft (4);
+        stepVelocity_.setBounds (stepRow.removeFromLeft (48));
+        stepRow.removeFromLeft (4);
+        stepDuration_.setBounds (stepRow.removeFromLeft (64));
+        stepRow.removeFromLeft (6);
+        stepSlide_.setBounds (stepRow.removeFromLeft (70));
+        stepAccent_.setBounds (stepRow.removeFromLeft (80));
+        area.removeFromTop (4);
     }
-    area.removeFromTop (6);
+    if (showMatrix)
+    {
+        auto matrix = area.removeFromTop (22);
+        matrixPart_.setBounds (matrix.removeFromLeft (90));
+        matrix.removeFromLeft (6);
+        matrixPrev_.setBounds (matrix.removeFromLeft (56));
+        matrix.removeFromLeft (4);
+        matrixNext_.setBounds (matrix.removeFromLeft (56));
+        matrix.removeFromLeft (6);
+        matrixLabel_.setBounds (matrix);
+        for (int lineIndex = 0; lineIndex < 4; ++lineIndex)
+        {
+            auto line = area.removeFromTop (22);
+            matrixSource_[lineIndex].setBounds (line.removeFromLeft (90));
+            line.removeFromLeft (4);
+            matrixDest_[lineIndex].setBounds (line.removeFromLeft (90));
+            line.removeFromLeft (4);
+            matrixAmount_[lineIndex].setBounds (line.removeFromLeft (160));
+        }
+        area.removeFromTop (4);
+    }
+    if (page == presets)
+    {
+        programs_.setBounds (area);
+        viewport_.setBounds (0, 0, 0, 0);
+        return;
+    }
     programs_.setBounds (area.removeFromTop (88));
     area.removeFromTop (8);
+    if (! showKnobs)
+    {
+        viewport_.setBounds (0, 0, 0, 0);
+        return;
+    }
     viewport_.setBounds (area);
 
     const int columns = std::max (1, viewport_.getWidth() / 108);
@@ -432,8 +577,13 @@ void SynthPanel::resized()
     int x = 0;
     int y = 0;
     int column = 0;
-    for (auto& control : controls_)
+    for (std::size_t i = 0; i < controls_.size(); ++i)
     {
+        auto& control = controls_[i];
+        const bool onPage = i < controlPage_.size() && controlPage_[i] == page;
+        control->setVisible (onPage);
+        if (! onPage)
+            continue;
         if (dynamic_cast<juce::Label*> (control.get()) != nullptr)
         {
             if (column != 0)

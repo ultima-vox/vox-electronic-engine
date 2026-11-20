@@ -2070,20 +2070,22 @@ void testModHost()
     copy->getModRoute (0, 4, source, dest, amount);
     check (source == 0 && dest == 0, "a bass candidate does not keep the pad route");
     copy->prepareToPlay (48000.0, 128);
+    check (! copy->monoGate (0), "the host engine is idle before Hear");
     copy->requestPreview (36);
     juce::AudioBuffer<float> heard (2, 128);
     juce::MidiBuffer previewMidi;
     copy->processBlock (heard, previewMidi);
-    check (copy->monoGate (0), "Hear starts the audition note");
+    check (! copy->monoGate (0), "sequential Hear does not claim the host engine");
+    check (copy->previewMonoGate (0) && copy->previewMonoNote (0) == 36, "sequential Hear starts on the preview engine");
     bool heardFinite = true;
     for (int i = 0; i < 200; ++i)
     {
         copy->processBlock (heard, previewMidi);
         for (int sample = 0; sample < 128; ++sample)
-            heardFinite = heardFinite && std::isfinite (heard.getSample (0, sample));
+            heardFinite = heardFinite && std::isfinite (heard.getSample (0, sample)) && std::abs (heard.getSample (0, sample)) <= 1.0f;
     }
-    check (! copy->monoGate (0), "Hear releases the audition note");
-    check (heardFinite, "audition stays finite");
+    check (! copy->previewMonoGate (0), "sequential Hear releases on the preview engine");
+    check (heardFinite, "audition stays finite and inside the level cap");
 
     auto gated = make();
     gated->prepareToPlay (48000.0, 64);
@@ -2144,6 +2146,251 @@ void testModHost()
     writer.join();
     check (liveFinite, "route edits during playback stay finite");
     check (raced->modClaimViolations() == 0, "concurrent route edits did not tear a slot");
+}
+
+void testHearLifecycle()
+{
+    auto host = make();
+    host->prepareToPlay (48000.0, 128);
+    setPlain (*host, "syn.a.engine", 0.0f);
+    setPlain (*host, "syn.b.level", 0.0f);
+    setPlain (*host, "syn.a.cutoff", 0.21f);
+    host->setModRoute (0, 6, 2, 1, 0.77f);
+    juce::AudioBuffer<float> block (2, 128);
+    juce::MidiBuffer note;
+    note.addEvent (juce::MidiMessage::noteOn (1, 40, static_cast<juce::uint8> (100)), 0);
+    host->processBlock (block, note);
+    check (host->monoGate (0) && host->monoNote (0) == 40, "host holds its own note before Hear");
+    std::vector<float> before (vox::syn::parameterCatalog.size());
+    for (std::size_t i = 0; i < before.size(); ++i)
+        before[i] = plain (*host, vox::syn::parameterCatalog[i].id);
+    int routeSource = 0, routeDest = 0;
+    float routeAmount = 0.0f;
+    host->getModRoute (0, 6, routeSource, routeDest, routeAmount);
+    juce::MemoryBlock stateBefore;
+    host->getStateInformation (stateBefore);
+    struct Tap : juce::AudioProcessorParameter::Listener
+    {
+        int hits = 0;
+        void parameterValueChanged (int, float) override { ++hits; }
+        void parameterGestureChanged (int, bool) override {}
+    } tap;
+    for (auto* parameter : host->getParameters())
+        parameter->addListener (&tap);
+    int other = 1;
+    for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
+        if (vox::syn::factoryProgram (i).role == vox::syn::FactoryRole::padAtmos)
+        {
+            other = i;
+            break;
+        }
+    host->requestFactoryPreview (other);
+    juce::MidiBuffer live;
+    for (int i = 0; i < 8; ++i)
+        host->processBlock (block, live);
+    for (auto* parameter : host->getParameters())
+        parameter->removeListener (&tap);
+    check (tap.hits == 0, "Hear does not notify the host");
+    bool same = true;
+    for (std::size_t i = 0; i < before.size(); ++i)
+        same = same && std::abs (plain (*host, vox::syn::parameterCatalog[i].id) - before[i]) < 1.0e-5f;
+    check (same, "Hear leaves the edited patch values unchanged");
+    int source = 0, dest = 0;
+    float amount = 0.0f;
+    host->getModRoute (0, 6, source, dest, amount);
+    check (source == routeSource && dest == routeDest && std::abs (amount - routeAmount) < 1.0e-4f, "Hear leaves MODX unchanged");
+    juce::MemoryBlock stateAfter;
+    host->getStateInformation (stateAfter);
+    check (stateBefore.getSize() == stateAfter.getSize()
+               && std::memcmp (stateBefore.getData(), stateAfter.getData(), stateBefore.getSize()) == 0,
+           "Hear leaves the saved state unchanged while the host is playing");
+    check (host->monoGate (0) && host->monoNote (0) == 40, "Hear does not steal the host's same-pitch note");
+    check (host->previewHeldNote() >= 0, "the candidate is sounding on the preview engine");
+    host->forcePreviewReleaseForTest();
+    host->processBlock (block, live);
+    check (host->monoGate (0) && host->monoNote (0) == 40, "ending Hear still leaves the host note held");
+    check (host->previewSoundingCount() == 0 && host->previewLastOff() >= 0, "forced release NoteOffs the preview-owned notes");
+
+    auto gated = make();
+    gated->prepareToPlay (48000.0, 64);
+    setPlain (*gated, "syn.a.engine", 0.0f);
+    setPlain (*gated, "syn.b.level", 0.0f);
+    gated->requestPreview (48);
+    juce::AudioBuffer<float> parked (2, 64);
+    juce::MidiBuffer parkedMidi;
+    gated->processBlock (parked, parkedMidi);
+    check (gated->previewMonoGate (0) && gated->previewMonoNote (0) == 48, "preview owns note A");
+    check (! gated->monoGate (0), "note A is not on the host engine");
+    gated->forcePreviewReleaseForTest();
+    gated->armPreviewHandoffForTest();
+    std::thread reader ([&]
+    {
+        juce::AudioBuffer<float> audio (2, 64);
+        juce::MidiBuffer handoffMidi;
+        gated->processBlock (audio, handoffMidi);
+    });
+    int spins = 0;
+    while (gated->previewHandoffPhase() != 2 && spins < 2000)
+    {
+        ++spins;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    gated->requestPreview (72);
+    gated->releasePreviewHandoffForTest();
+    reader.join();
+    check (spins < 2000, "preview reader parked after snapshotting note A");
+    check (gated->previewClaimViolations() == 0, "preview slot was not copied while it was being written");
+    check (gated->previewLastOff() == 48, "the last-block NoteOff targets the owned note A");
+    check (gated->previewMonoGate (0) && gated->previewMonoNote (0) == 72, "note B survives the callback that releases A");
+
+    auto rapid = make();
+    rapid->prepareToPlay (48000.0, 64);
+    setPlain (*rapid, "syn.a.engine", 0.0f);
+    setPlain (*rapid, "syn.b.level", 0.0f);
+    rapid->requestPreview (40);
+    rapid->processBlock (parked, parkedMidi);
+    rapid->requestPreview (41);
+    rapid->requestPreview (42);
+    rapid->requestPreview (43);
+    rapid->processBlock (parked, parkedMidi);
+    check (rapid->previewLastOff() == 40, "a rapid click NoteOffs only the note that was actually sounding");
+    check (rapid->previewMonoNote (0) == 43 && rapid->previewMonoGate (0), "the newest Hear is the one that sounds");
+
+    auto closed = make();
+    closed->prepareToPlay (48000.0, 128);
+    setPlain (*closed, "syn.a.engine", 0.0f);
+    setPlain (*closed, "syn.b.level", 0.0f);
+    closed->requestPreview (50);
+    closed->processBlock (block, live);
+    check (closed->previewMonoNote (0) == 50, "Hear is sounding before the editor closes");
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> editor (closed->createEditor());
+    }
+    closed->processBlock (block, live);
+    check (! closed->previewMonoGate (0), "closing the editor releases the preview");
+    check (closed->previewLastOff() == 50, "editor close NoteOffs the owned preview note");
+
+    auto changed = make();
+    changed->prepareToPlay (48000.0, 128);
+    setPlain (*changed, "syn.a.engine", 0.0f);
+    setPlain (*changed, "syn.b.level", 0.0f);
+    changed->requestPreview (52);
+    changed->processBlock (block, live);
+    check (changed->loadFactoryProgram (1), "preset change loads");
+    changed->processBlock (block, live);
+    check (! changed->previewMonoGate (0), "a preset change releases Hear");
+    check (changed->previewLastOff() == 52, "preset change NoteOffs the owned preview note");
+
+    auto flooded = make();
+    flooded->prepareToPlay (48000.0, 128);
+    setPlain (*flooded, "syn.a.engine", 0.0f);
+    setPlain (*flooded, "syn.b.level", 0.0f);
+    flooded->requestPreview (36);
+    juce::MidiBuffer flood;
+    for (int i = 0; i < 300; ++i)
+        flood.addEvent (juce::MidiMessage::controllerEvent (1, 1, i % 127), 0);
+    flooded->processBlock (block, flood);
+    check (flooded->previewMonoGate (0) && flooded->previewMonoNote (0) == 36, "a full host queue still starts Hear");
+    flooded->forcePreviewReleaseForTest();
+    juce::MidiBuffer floodOff;
+    for (int i = 0; i < 300; ++i)
+        floodOff.addEvent (juce::MidiMessage::controllerEvent (1, 1, 3), 0);
+    flooded->processBlock (block, floodOff);
+    check (flooded->previewLastOff() == 36 && ! flooded->previewMonoGate (0), "a full host queue still releases Hear");
+
+    auto same = make();
+    same->prepareToPlay (48000.0, 128);
+    setPlain (*same, "syn.a.engine", 0.0f);
+    setPlain (*same, "syn.b.level", 0.0f);
+    juce::MidiBuffer sameNote;
+    sameNote.addEvent (juce::MidiMessage::noteOn (1, 36, static_cast<juce::uint8> (110)), 0);
+    same->processBlock (block, sameNote);
+    same->requestPreview (36);
+    juce::MidiBuffer hold;
+    same->processBlock (block, hold);
+    check (same->monoGate (0) && same->monoNote (0) == 36, "host keeps 36 while Hear plays 36");
+    check (same->previewMonoGate (0) && same->previewMonoNote (0) == 36, "preview plays 36 on its own engine");
+    same->forcePreviewReleaseForTest();
+    same->processBlock (block, hold);
+    check (same->monoGate (0) && same->monoNote (0) == 36, "releasing preview 36 leaves the host 36 held");
+    check (same->previewLastOff() == 36 && ! same->previewMonoGate (0), "preview 36 was the note that was released");
+
+    int bass = -1, acid = -1, pad = -1;
+    for (int i = 0; i < vox::syn::factoryProgramCount(); ++i)
+    {
+        const auto& program = vox::syn::factoryProgram (i);
+        if (bass < 0 && program.role == vox::syn::FactoryRole::bass && program.engineA == 0)
+            bass = i;
+        if (acid < 0 && program.role == vox::syn::FactoryRole::acid && program.engineA == 1)
+            acid = i;
+        if (pad < 0 && program.role == vox::syn::FactoryRole::padAtmos && program.engineA == 2)
+            pad = i;
+    }
+    check (bass >= 0 && acid >= 0 && pad >= 0, "role previews have a bass, an acid and a pad candidate");
+    auto roles = make();
+    roles->prepareToPlay (48000.0, 128);
+    roles->requestFactoryPreview (bass);
+    roles->processBlock (block, hold);
+    const int bassRoot = vox::syn::factoryProgram (bass).auditionNote;
+    check (roles->previewMonoNote (0) == bassRoot && roles->previewSoundingCount() == 1, "bass Hear starts on the audition root");
+    for (int i = 0; i < 54; ++i)
+        roles->processBlock (block, hold);
+    check (roles->previewMonoNote (0) == std::max (0, bassRoot - 12), "bass Hear continues into the lower neighbour");
+    roles->cancelPreview();
+    roles->processBlock (block, hold);
+    roles->requestFactoryPreview (acid);
+    roles->processBlock (block, hold);
+    check (roles->previewMonoAccent (0) > 0.5f, "acid Hear accents the first step");
+    for (int i = 0; i < 48; ++i)
+        roles->processBlock (block, hold);
+    check (roles->previewGlideSource (0) == 1, "acid Hear slides into the next step");
+    roles->cancelPreview();
+    roles->processBlock (block, hold);
+    roles->requestFactoryPreview (pad);
+    roles->processBlock (block, hold);
+    check (roles->previewSoundingCount() == 3, "pad Hear owns a three-note chord");
+    bool capped = true;
+    for (int sample = 0; sample < 128; ++sample)
+        capped = capped && std::abs (block.getSample (0, sample)) <= 1.0f && std::abs (block.getSample (1, sample)) <= 1.0f;
+    check (capped, "role Hear stays inside the level cap");
+
+    auto probe = make();
+    probe->prepareToPlay (48000.0, 128);
+    setPlain (*probe, "syn.a.engine", 0.0f);
+    setPlain (*probe, "syn.b.level", 0.0f);
+    probe->requestFactoryPreview (bass);
+#ifndef VOX_TEST_INTERPOSE_MALLOC
+#error "suite_synth_product_tests requires the allocation probe."
+#endif
+    unsigned long calls = 0;
+    if (voxProbeAvailable())
+        voxProbeBegin();
+    for (int i = 0; i < 16; ++i)
+        probe->processBlock (block, hold);
+    if (voxProbeAvailable())
+        calls = voxProbeEnd();
+    check (calls == 0, "player-on Hear processBlock allocates nothing");
+    check (probe->previewActive() && probe->previewMonoGate (0), "the allocation probe ran while Hear was sounding");
+
+    check (vox::syn::factoryProgramsHumanApproved == 0, "the listening ledger is not human approval");
+    auto ledger = make();
+    ledger->setListeningMark (3, 1);
+    check (ledger->listeningMark (3) == 1 && ledger->listeningRenderHash (3) != 0, "reviewed stores a render hash");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "marking reviewed does not raise human-approved");
+    const auto reviewedHash = ledger->listeningRenderHash (3);
+    ledger->setListeningMark (3, 3);
+    check (ledger->listeningMark (3) == 3 && ledger->listeningRenderHash (3) == reviewedHash, "owner mark keeps the same render");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "an owner mark does not raise human-approved");
+    juce::MemoryBlock ledgerState;
+    ledger->getStateInformation (ledgerState);
+    auto restored = make();
+    restored->setStateInformation (ledgerState.getData(), static_cast<int> (ledgerState.getSize()));
+    check (restored->listeningMark (3) == 3 && restored->listeningRenderHash (3) == reviewedHash, "LIST restores the mark and the hash");
+    check (vox::syn::factoryProgramsHumanApproved == 0, "restoring a mark does not raise human-approved");
+    restored->setListeningMark (4, 2);
+    check (restored->listeningMark (4) == 2, "rejected is a distinct mark");
+    restored->requestFactoryPreview (0);
+    check (restored->listeningMark (3) == 3 && restored->listeningMark (4) == 2, "Hear does not rewrite the ledger");
 }
 
 void testWorstCase()
@@ -2238,6 +2485,7 @@ int main()
     testStateEdges();
     testIntegrationStress();
     testModHost();
+    testHearLifecycle();
     testWorstCase();
     if (failures == 0 && skips == 0)
         std::printf ("synth product tests passed (%d checks, 0 skipped)\n", checks);

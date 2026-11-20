@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 namespace vox::syn {
 namespace {
@@ -47,6 +48,151 @@ engine::EngineKind kindFrom (float raw) noexcept
     if (index == 1)
         return engine::EngineKind::acid;
     return engine::EngineKind::va;
+}
+
+int previewSamples (double sampleRate, double seconds) noexcept
+{
+    const double rate = sampleRate > 1.0 ? sampleRate : 48000.0;
+    return std::max (1, static_cast<int> (std::lround (rate * seconds)));
+}
+
+void pushPreview (engine::Event* events, int& count, std::uint32_t at, std::uint8_t status, int note, int velocity, std::uint8_t articulation) noexcept
+{
+    if (count >= previewEventCap || note < 0 || note > 127)
+        return;
+    engine::Event event;
+    event.offset = at;
+    event.status = status;
+    event.data1 = static_cast<std::uint8_t> (note);
+    event.data2 = static_cast<std::uint8_t> (std::clamp (velocity, 0, 127));
+    event.articulation = articulation;
+    events[count++] = event;
+}
+
+// Built on the message thread. Note-offs belong to this command, so a newer
+// Hear cannot retarget them. Offsets stay inside one short gesture.
+void fillRoleScore (FactoryRole role, int root, double sampleRate, engine::Event* events, int& count, int& tail) noexcept
+{
+    count = 0;
+    root = std::clamp (root, 0, 127);
+    const auto on = [&] (int at, int note, int velocity, bool slide, bool accent)
+    {
+        std::uint8_t articulation = 0;
+        if (accent)
+            articulation = static_cast<std::uint8_t> (articulation | engine::articulateAccent);
+        if (slide)
+            articulation = static_cast<std::uint8_t> (articulation | engine::articulateSlide);
+        pushPreview (events, count, static_cast<std::uint32_t> (std::max (0, at)), 0x90, std::clamp (note, 0, 127), velocity, articulation);
+    };
+    const auto off = [&] (int at, int note)
+    {
+        pushPreview (events, count, static_cast<std::uint32_t> (std::max (0, at)), 0x80, std::clamp (note, 0, 127), 0, 0);
+    };
+    switch (role)
+    {
+        case FactoryRole::acid:
+        {
+            const int step = previewSamples (sampleRate, 0.125);
+            const int gate = std::max (1, step * 3 / 4);
+            const int line[] = { 0, 1, 3, 0, 5, -2 };
+            int previous = -1;
+            for (int i = 0; i < 6; ++i)
+            {
+                const int note = std::clamp (root + line[i], 0, 127);
+                const int at = i * step;
+                const bool accent = (i % 2) == 0;
+                const bool slide = i > 0 && (i % 2) == 1;
+                on (at, note, accent ? 118 : 84, slide, accent);
+                if (previous >= 0)
+                    off (at, previous);
+                previous = note;
+            }
+            if (previous >= 0)
+                off (5 * step + gate, previous);
+            tail = previewSamples (sampleRate, 0.25);
+            break;
+        }
+        case FactoryRole::arp:
+        {
+            const int step = previewSamples (sampleRate, 0.125);
+            const int gate = std::max (1, step / 2);
+            const int line[] = { 0, 3, 7, 12, 7, 3 };
+            for (int i = 0; i < 6; ++i)
+            {
+                const int note = std::clamp (root + line[i], 0, 127);
+                on (i * step, note, 100, false, i == 0);
+                off (i * step + gate, note);
+            }
+            tail = previewSamples (sampleRate, 0.20);
+            break;
+        }
+        case FactoryRole::padAtmos:
+        {
+            const int hold = previewSamples (sampleRate, 1.10);
+            const int notes[] = { root, std::min (127, root + 7), std::min (127, root + 12) };
+            for (int note : notes)
+                on (0, note, 76, false, false);
+            for (int note : notes)
+                off (hold, note);
+            tail = previewSamples (sampleRate, 0.80);
+            break;
+        }
+        case FactoryRole::pluckKeys:
+        case FactoryRole::stab:
+        {
+            const int hold = previewSamples (sampleRate, role == FactoryRole::stab ? 0.09 : 0.22);
+            const int notes[] = { root, std::min (127, root + 3), std::min (127, root + 7) };
+            for (int note : notes)
+                on (0, note, role == FactoryRole::stab ? 112 : 96, false, role == FactoryRole::stab);
+            for (int note : notes)
+                off (hold, note);
+            tail = previewSamples (sampleRate, 0.35);
+            break;
+        }
+        case FactoryRole::lead:
+        {
+            const int step = previewSamples (sampleRate, 0.18);
+            const int gate = previewSamples (sampleRate, 0.14);
+            const int line[] = { 0, 3, 7, 3, 12 };
+            for (int i = 0; i < 5; ++i)
+            {
+                const int note = std::clamp (root + line[i], 0, 127);
+                on (i * step, note, 104, false, i == 0);
+                off (i * step + gate, note);
+            }
+            tail = previewSamples (sampleRate, 0.25);
+            break;
+        }
+        case FactoryRole::bass:
+        default:
+        {
+            const int step = previewSamples (sampleRate, 0.14);
+            const int gate = previewSamples (sampleRate, 0.10);
+            const int notes[] = { root, std::max (0, root - 12), std::min (127, root + 7) };
+            for (int i = 0; i < 3; ++i)
+            {
+                on (i * step, notes[i], 104, false, i == 0);
+                off (i * step + gate, notes[i]);
+            }
+            tail = previewSamples (sampleRate, 0.20);
+            break;
+        }
+    }
+}
+
+FactoryRole roleForCategory (int category) noexcept
+{
+    switch (category)
+    {
+        case static_cast<int> (ProgramCategory::acid): return FactoryRole::acid;
+        case static_cast<int> (ProgramCategory::lead): return FactoryRole::lead;
+        case static_cast<int> (ProgramCategory::pluck):
+        case static_cast<int> (ProgramCategory::keys): return FactoryRole::pluckKeys;
+        case static_cast<int> (ProgramCategory::pad):
+        case static_cast<int> (ProgramCategory::atmos): return FactoryRole::padAtmos;
+        case static_cast<int> (ProgramCategory::bass):
+        default: return FactoryRole::bass;
+    }
 }
 
 bool isPanic (const juce::MidiMessageMetadata& metadata) noexcept
@@ -145,6 +291,21 @@ void SynthesisProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
 {
     vox::suite::SuiteProcessor::prepareToPlay (sampleRate, maximumBlockSize);
     engine_.prepare (sampleRate, maximumBlockSize);
+    previewEngine_.prepare (sampleRate, maximumBlockSize);
+    previewEngine_.reset();
+    previewCapacity_ = std::max (1, maximumBlockSize);
+    previewMixL_.assign (static_cast<std::size_t> (previewCapacity_), 0.0f);
+    previewMixR_.assign (static_cast<std::size_t> (previewCapacity_), 0.0f);
+    if (rtPreviewActive_)
+        rtFinishedGen_ = rtPreviewGen_;
+    rtPreviewActive_ = false;
+    rtSoundingCount_ = 0;
+    rtPreviewNote_ = -1;
+    rtPreviewCursor_ = 0;
+    rtPreviewPos_ = 0;
+    rtPreviewTail_ = 0;
+    rtPreviewEventCount_ = 0;
+    rtPreviewGen_ = rtFinishedGen_;
     sampleRate_ = sampleRate;
     const auto block = static_cast<std::uint32_t> (std::max (1, maximumBlockSize));
     fx_.prepare (sampleRate, block, 2u);
@@ -154,6 +315,9 @@ void SynthesisProcessor::prepareToPlay (double sampleRate, int maximumBlockSize)
 void SynthesisProcessor::releaseResources()
 {
     engine_.reset();
+    previewEngine_.reset();
+    rtPreviewActive_ = false;
+    rtSoundingCount_ = 0;
     fx_.reset();
     prepared_ = false;
 }
@@ -337,45 +501,57 @@ void SynthesisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         else if (phraseHeld_[note] < 255)
             ++phraseHeld_[note];
     }
-    takePreview (frames, count);
     runEngine (buffer, count, block);
+    servicePreview (buffer, frames);
 }
 
 engine::BlockParams SynthesisProcessor::latchBlock()
 {
+    float plain[parameterCatalog.size()];
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
+        plain[i] = raw_[i] != nullptr ? raw_[i]->load (std::memory_order_relaxed) : 0.0f;
     ExtraRoutes routes;
     readModSnapshot (routes);
+    auto block = mapPlain (plain, routes);
+    block.bpm = hostBpm_;
+    block.bpmValid = hostBpmValid_;
+    syncExposedFx (fx_, raw_);
+    return block;
+}
+
+engine::BlockParams SynthesisProcessor::mapPlain (const float* plain, const ExtraRoutes& routes) const
+{
     engine::BlockParams block;
-    const auto load = [] (std::atomic<float>* value) noexcept
+    const auto load = [plain] (int index) noexcept
     {
-        return value != nullptr ? value->load (std::memory_order_relaxed) : 0.0f;
+        return plain[index];
     };
     for (int part = 0; part < engine::partCount; ++part)
     {
         const int base = part * 7;
         const int extra = part == 0 ? static_cast<int> (partAExtraIndex) : static_cast<int> (partBExtraIndex);
         auto& dst = block.part[part];
-        dst.engine = kindFrom (load (raw_[static_cast<std::size_t> (base)]));
-        dst.level = load (raw_[static_cast<std::size_t> (base + 1)]);
-        dst.cutoff = load (raw_[static_cast<std::size_t> (base + 2)]);
-        dst.resonance = load (raw_[static_cast<std::size_t> (base + 3)]);
-        dst.slide = load (raw_[static_cast<std::size_t> (base + 4)]);
-        dst.portamento = load (raw_[static_cast<std::size_t> (base + 5)]);
-        dst.drive = load (raw_[static_cast<std::size_t> (base + 6)]);
-        dst.sub = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sub))]);
-        dst.pitchSeconds = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::pitch))])) * 0.1;
-        dst.square = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::wave))]);
-        dst.env = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::env))]);
-        dst.detuneCents = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::detune))])) * 50.0;
-        dst.attack = 0.001 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::attack))])) * 0.2;
-        dst.decay = 0.01 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::decay))])) * 2.0;
-        dst.sustain = static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::sustain))]));
-        dst.release = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::release))]));
-        dst.noise = load (raw_[static_cast<std::size_t> (extra + static_cast<int> (PartExtra::noise))]);
+        dst.engine = kindFrom (load (base));
+        dst.level = load (base + 1);
+        dst.cutoff = load (base + 2);
+        dst.resonance = load (base + 3);
+        dst.slide = load (base + 4);
+        dst.portamento = load (base + 5);
+        dst.drive = load (base + 6);
+        dst.sub = load (extra + static_cast<int> (PartExtra::sub));
+        dst.pitchSeconds = static_cast<double> (load (extra + static_cast<int> (PartExtra::pitch))) * 0.1;
+        dst.square = load (extra + static_cast<int> (PartExtra::wave));
+        dst.env = load (extra + static_cast<int> (PartExtra::env));
+        dst.detuneCents = static_cast<double> (load (extra + static_cast<int> (PartExtra::detune))) * 50.0;
+        dst.attack = 0.001 + static_cast<double> (load (extra + static_cast<int> (PartExtra::attack))) * 0.2;
+        dst.decay = 0.01 + static_cast<double> (load (extra + static_cast<int> (PartExtra::decay))) * 2.0;
+        dst.sustain = static_cast<double> (load (extra + static_cast<int> (PartExtra::sustain)));
+        dst.release = 0.02 + static_cast<double> (load (extra + static_cast<int> (PartExtra::release)));
+        dst.noise = load (extra + static_cast<int> (PartExtra::noise));
         const int va = vaParamBase + part * vaParamCount;
         const auto knob = [&] (VaKnob which) noexcept
         {
-            return load (raw_[static_cast<std::size_t> (va + static_cast<int> (which))]);
+            return load (va + static_cast<int> (which));
         };
         dst.oscWave[0] = std::clamp (juce::roundToInt (knob (VaKnob::osc1Wave)), 0, 4);
         dst.oscLevel[0] = knob (VaKnob::osc1Level);
@@ -399,37 +575,37 @@ engine::BlockParams SynthesisProcessor::latchBlock()
         dst.filterEnv = knob (VaKnob::filterEnv);
         dst.keyTrack = knob (VaKnob::keyTrack);
         const int adsr = filterAdsrBase + part * 4;
-        dst.filterAttack = 0.001 + static_cast<double> (load (raw_[static_cast<std::size_t> (adsr)])) * 0.2;
-        dst.filterDecay = 0.01 + static_cast<double> (load (raw_[static_cast<std::size_t> (adsr + 1)])) * 2.0;
-        dst.filterSustain = static_cast<double> (load (raw_[static_cast<std::size_t> (adsr + 2)]));
-        dst.filterRelease = 0.02 + static_cast<double> (load (raw_[static_cast<std::size_t> (adsr + 3)]));
+        dst.filterAttack = 0.001 + static_cast<double> (load (adsr)) * 0.2;
+        dst.filterDecay = 0.01 + static_cast<double> (load (adsr + 1)) * 2.0;
+        dst.filterSustain = static_cast<double> (load (adsr + 2));
+        dst.filterRelease = 0.02 + static_cast<double> (load (adsr + 3));
         const int lfo = lfoBase + part * (lfoCount * 2);
         for (int index = 0; index < lfoCount; ++index)
         {
-            const float rate = load (raw_[static_cast<std::size_t> (lfo + index * 2)]);
+            const float rate = load (lfo + index * 2);
             dst.lfoRate[index] = 0.05f * std::pow (400.0f, std::clamp (rate, 0.0f, 1.0f));
-            dst.lfoShape[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (lfo + index * 2 + 1)])), 0, 6);
+            dst.lfoShape[index] = std::clamp (juce::roundToInt (load (lfo + index * 2 + 1)), 0, 6);
         }
         const int route = routeBase + part * (routeCount * 3);
         for (int index = 0; index < routeCount; ++index)
         {
             const int at = route + index * 3;
-            dst.routeSource[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at)])), 0, 12);
-            dst.routeDest[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at + 1)])), 0, 5);
-            dst.routeAmount[index] = (load (raw_[static_cast<std::size_t> (at + 2)]) - 0.5f) * 2.0f;
+            dst.routeSource[index] = std::clamp (juce::roundToInt (load (at)), 0, 12);
+            dst.routeDest[index] = std::clamp (juce::roundToInt (load (at + 1)), 0, 5);
+            dst.routeAmount[index] = (load (at + 2) - 0.5f) * 2.0f;
         }
         const int feature = featureBase + part * featureCount;
-        dst.unison = 1 + std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (feature)])), 0, 3);
-        dst.unisonDetune = load (raw_[static_cast<std::size_t> (feature + 1)]) * 40.0f;
-        dst.unisonSpread = load (raw_[static_cast<std::size_t> (feature + 2)]);
-        dst.wtLevel = load (raw_[static_cast<std::size_t> (feature + 3)]);
-        dst.wtPos = load (raw_[static_cast<std::size_t> (feature + 4)]);
+        dst.unison = 1 + std::clamp (juce::roundToInt (load (feature)), 0, 3);
+        dst.unisonDetune = load (feature + 1) * 40.0f;
+        dst.unisonSpread = load (feature + 2);
+        dst.wtLevel = load (feature + 3);
+        dst.wtPos = load (feature + 4);
         for (int index = 0; index < lfoCount; ++index)
         {
             const int at = feature + 5 + index * 3;
-            dst.lfoSync[index] = load (raw_[static_cast<std::size_t> (at)]) >= 0.5f;
-            dst.lfoDiv[index] = std::clamp (juce::roundToInt (load (raw_[static_cast<std::size_t> (at + 1)])), 0, 8);
-            dst.lfoRetrig[index] = load (raw_[static_cast<std::size_t> (at + 2)]) >= 0.5f;
+            dst.lfoSync[index] = load (at) >= 0.5f;
+            dst.lfoDiv[index] = std::clamp (juce::roundToInt (load (at + 1)), 0, 8);
+            dst.lfoRetrig[index] = load (at + 2) >= 0.5f;
         }
         for (int index = 0; index < extraRouteCount; ++index)
         {
@@ -439,12 +615,9 @@ engine::BlockParams SynthesisProcessor::latchBlock()
         }
         if (part == 0)
             for (int index = 0; index < macroCount; ++index)
-                block.macro[index] = load (raw_[static_cast<std::size_t> (macroBase + index)]);
+                block.macro[index] = load (macroBase + index);
     }
-    block.output = load (raw_[outputParameterIndex]);
-    block.bpm = hostBpm_;
-    block.bpmValid = hostBpmValid_;
-    syncExposedFx (fx_, raw_);
+    block.output = load (static_cast<int> (outputParameterIndex));
     return block;
 }
 
@@ -541,60 +714,478 @@ bool SynthesisProcessor::insertKeepingRelease (const engine::Event& event, int& 
     return insertEvent (event, count);
 }
 
-void SynthesisProcessor::takePreview (int frames, int& count)
+engine::BlockParams SynthesisProcessor::liveBlock() const
 {
-    const int stage = previewStage_.load (std::memory_order_acquire);
-    if (stage == 0 || frames <= 0)
-        return;
-    if (stage == 1)
+    float plain[parameterCatalog.size()];
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
+        plain[i] = raw_[i] != nullptr ? raw_[i]->load (std::memory_order_relaxed) : 0.0f;
+    ExtraRoutes routes;
     {
-        const int replace = previewReplace_.exchange (-1, std::memory_order_relaxed);
-        if (replace >= 0 && replace < 128)
+        const juce::ScopedLock lock (modLock_);
+        routes = modEdit_;
+    }
+    auto block = mapPlain (plain, routes);
+    block.bpm = 120.0;
+    block.bpmValid = false;
+    return block;
+}
+
+void SynthesisProcessor::publishPreview (const engine::BlockParams& params, const engine::Event* events, int eventCount, int tailSamples) noexcept
+{
+    const juce::ScopedLock lock (previewLock_);
+    const int generation = previewGeneration_ + 1;
+    const int revision = previewRevision_ + 1;
+    auto reclaim = [this] ()
+    {
+        const int published = previewPublished_.load (std::memory_order_acquire);
+        for (int i = 0; i < 3; ++i)
         {
-            engine::Event off;
-            off.offset = 0;
-            off.status = 0x80;
-            off.data1 = static_cast<std::uint8_t> (replace);
-            insertKeepingRelease (off, count);
+            if (i == published)
+                continue;
+            int expected = slotReady;
+            previewSlots_[i].state.compare_exchange_strong (expected, slotFree, std::memory_order_acq_rel);
         }
-        engine::Event on;
-        on.offset = 0;
-        on.status = 0x90;
-        on.data1 = static_cast<std::uint8_t> (std::clamp (previewNote_.load (std::memory_order_relaxed), 0, 127));
-        on.data2 = 96;
-        if (! insertEvent (on, count))
+    };
+    int slot = -1;
+    for (int attempt = 0; attempt < 8 && slot < 0; ++attempt)
+    {
+        reclaim();
+        for (int i = 0; i < 3; ++i)
         {
-            droppedMidi_.fetch_add (1, std::memory_order_relaxed);
-            previewStage_.store (0, std::memory_order_release);
-            return;
+            int expected = slotFree;
+            if (previewSlots_[i].state.compare_exchange_strong (expected, slotWriting, std::memory_order_acq_rel))
+            {
+                slot = i;
+                break;
+            }
         }
-        previewStage_.store (2, std::memory_order_release);
+    }
+    if (slot < 0)
+        return;
+    previewGeneration_ = generation;
+    previewRevision_ = revision;
+    auto& dst = previewSlots_[slot];
+    dst.stamp = revision;
+    dst.stampEnd = 0;
+    dst.params = params;
+    dst.eventCount = std::clamp (eventCount, 0, previewEventCap);
+    for (int i = 0; i < dst.eventCount; ++i)
+        dst.events[i] = events[i];
+    dst.generation = generation;
+    dst.tailSamples = std::max (0, tailSamples);
+    dst.stampEnd = revision;
+    dst.state.store (slotReady, std::memory_order_release);
+    const int previous = previewPublished_.exchange (slot, std::memory_order_acq_rel);
+    if (previous != slot)
+    {
+        int expected = slotReady;
+        previewSlots_[previous].state.compare_exchange_strong (expected, slotFree, std::memory_order_acq_rel);
+    }
+    previewGenPublished_.store (generation, std::memory_order_release);
+}
+
+bool SynthesisProcessor::copyPreview (engine::BlockParams& params, engine::Event* events, int& eventCount, int& generation, int& tailSamples) noexcept
+{
+    for (int attempt = 0; attempt < 4; ++attempt)
+    {
+        const int slot = previewPublished_.load (std::memory_order_acquire);
+        if (slot < 0 || slot > 2)
+            continue;
+        int expected = slotReady;
+        if (! previewSlots_[slot].state.compare_exchange_strong (expected, slotReading, std::memory_order_acq_rel))
+            continue;
+        const int stamp = previewSlots_[slot].stamp;
+        params = previewSlots_[slot].params;
+        eventCount = previewSlots_[slot].eventCount;
+        for (int i = 0; i < eventCount && i < previewEventCap; ++i)
+            events[i] = previewSlots_[slot].events[i];
+        generation = previewSlots_[slot].generation;
+        tailSamples = previewSlots_[slot].tailSamples;
+        const int stampEnd = previewSlots_[slot].stampEnd;
+        const int now = previewPublished_.load (std::memory_order_acquire);
+        int owned = slotReading;
+        previewSlots_[slot].state.compare_exchange_strong (owned, now == slot ? slotReady : slotFree, std::memory_order_acq_rel);
+        if (stamp == stampEnd && stamp != 0 && eventCount >= 0 && eventCount <= previewEventCap)
+            return true;
+        previewClaimViolations_.fetch_add (1, std::memory_order_relaxed);
+    }
+    return false;
+}
+
+void SynthesisProcessor::adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params) noexcept
+{
+    rtPreviewGen_ = generation;
+    rtPreviewEventCount_ = std::clamp (eventCount, 0, previewEventCap);
+    for (int i = 0; i < rtPreviewEventCount_; ++i)
+        rtPreviewEvents_[i] = events[i];
+    rtPreviewParams_ = params;
+    rtPreviewPos_ = 0;
+    rtPreviewCursor_ = 0;
+    rtPreviewTail_ = std::max (0, tailSamples);
+    rtPreviewActive_ = rtPreviewEventCount_ > 0;
+    rtSoundingCount_ = 0;
+    rtPreviewNote_ = -1;
+    if (! rtPreviewActive_)
+        rtFinishedGen_ = generation;
+}
+
+void SynthesisProcessor::queuePreviewOffs (engine::Event* play, int& playCount, const int* notes, int noteCount) noexcept
+{
+    for (int i = 0; i < noteCount; ++i)
+    {
+        if (playCount >= previewEventCap + 8)
+            break;
+        engine::Event off;
+        off.offset = 0;
+        off.status = 0x80;
+        off.data1 = static_cast<std::uint8_t> (std::clamp (notes[i], 0, 127));
+        play[playCount++] = off;
+        rtPreviewLastOff_ = notes[i];
+    }
+    rtSoundingCount_ = 0;
+    rtPreviewNote_ = -1;
+}
+
+void SynthesisProcessor::queuePreviewScore (engine::Event* play, int& playCount, int frames) noexcept
+{
+    if (! rtPreviewActive_ || frames <= 0)
+        return;
+    const int start = rtPreviewPos_;
+    const int end = start + frames;
+    while (rtPreviewCursor_ < rtPreviewEventCount_ && playCount < previewEventCap + 8)
+    {
+        const auto& source = rtPreviewEvents_[rtPreviewCursor_];
+        if (static_cast<int> (source.offset) >= end)
+            break;
+        engine::Event event = source;
+        const int local = std::clamp (static_cast<int> (source.offset) - start, 0, frames - 1);
+        event.offset = static_cast<std::uint32_t> (local);
+        play[playCount++] = event;
+        const auto type = static_cast<std::uint8_t> (event.status & 0xf0u);
+        if (type == 0x90 && event.data2 > 0)
+        {
+            if (rtSoundingCount_ < 8)
+                rtSounding_[rtSoundingCount_++] = event.data1;
+            rtPreviewNote_ = event.data1;
+        }
+        else if (type == 0x80 || type == 0x90)
+        {
+            int write = 0;
+            for (int i = 0; i < rtSoundingCount_; ++i)
+                if (rtSounding_[i] != event.data1)
+                    rtSounding_[write++] = rtSounding_[i];
+            rtSoundingCount_ = write;
+            rtPreviewNote_ = rtSoundingCount_ > 0 ? rtSounding_[rtSoundingCount_ - 1] : -1;
+        }
+        ++rtPreviewCursor_;
+    }
+    rtPreviewPos_ = end;
+    if (rtPreviewCursor_ >= rtPreviewEventCount_)
+        rtPreviewTail_ -= frames;
+}
+
+void SynthesisProcessor::renderPreview (juce::AudioBuffer<float>& buffer, int frames, const engine::Event* play, int playCount)
+{
+    if (frames <= 0 || frames > previewCapacity_ || previewMixL_.size() < static_cast<std::size_t> (frames))
+        return;
+    previewEngine_.process (previewMixL_.data(), previewMixR_.data(), frames, play, playCount, rtPreviewParams_);
+    auto* left = buffer.getWritePointer (0);
+    auto* right = buffer.getWritePointer (1);
+    for (int i = 0; i < frames; ++i)
+    {
+        float mixedL = left[i] + previewMixL_[static_cast<std::size_t> (i)] * 0.30f;
+        float mixedR = right[i] + previewMixR_[static_cast<std::size_t> (i)] * 0.30f;
+        if (! std::isfinite (mixedL))
+            mixedL = 0.0f;
+        if (! std::isfinite (mixedR))
+            mixedR = 0.0f;
+        left[i] = std::clamp (mixedL, -1.0f, 1.0f);
+        right[i] = std::clamp (mixedR, -1.0f, 1.0f);
+    }
+}
+
+void SynthesisProcessor::servicePreview (juce::AudioBuffer<float>& buffer, int frames)
+{
+    if (! prepared_ || frames <= 0 || frames > previewCapacity_)
+        return;
+    engine::Event staged[previewEventCap] {};
+    engine::BlockParams stagedParams;
+    int stagedCount = 0;
+    int stagedGen = 0;
+    int stagedTail = 0;
+    const auto takeNewer = [&] (int ownedGen) noexcept
+    {
+        const int genNow = previewGenPublished_.load (std::memory_order_acquire);
+        if (genNow == 0 || genNow == ownedGen)
+            return false;
+        if (! copyPreview (stagedParams, staged, stagedCount, stagedGen, stagedTail) || stagedGen != genNow)
+            return false;
+        adoptPreview (stagedGen, stagedTail, staged, stagedCount, stagedParams);
+        return true;
+    };
+
+    const int genBefore = previewGenPublished_.load (std::memory_order_acquire);
+    const bool forced = previewForceRelease_.exchange (0, std::memory_order_acq_rel) == 1;
+    const bool newer = rtPreviewActive_ && genBefore != 0 && genBefore != rtPreviewGen_;
+    if (rtPreviewActive_ && (forced || newer))
+    {
+        int ownedNotes[8] {};
+        const int ownedCount = rtSoundingCount_;
+        for (int i = 0; i < ownedCount; ++i)
+            ownedNotes[i] = rtSounding_[i];
+        const int ownedGen = rtPreviewGen_;
+        if (previewHandoffPark_.load (std::memory_order_acquire) == 1)
+        {
+            previewHandoffPark_.store (2, std::memory_order_release);
+            while (previewHandoffPark_.load (std::memory_order_acquire) == 2)
+            {
+            }
+        }
+        engine::Event play[previewEventCap + 8] {};
+        int playCount = 0;
+        queuePreviewOffs (play, playCount, ownedNotes, ownedCount);
+        rtPreviewActive_ = false;
+        rtPreviewCursor_ = rtPreviewEventCount_;
+        rtPreviewTail_ = 0;
+        const bool adopted = takeNewer (ownedGen);
+        if (! adopted && previewGenPublished_.load (std::memory_order_acquire) == ownedGen)
+            rtFinishedGen_ = ownedGen;
+        if (rtPreviewActive_)
+            queuePreviewScore (play, playCount, frames);
+        if (playCount > 0 || rtPreviewActive_)
+            renderPreview (buffer, frames, play, playCount);
         return;
     }
-    const int left = previewLeft_.load (std::memory_order_relaxed) - frames;
-    previewLeft_.store (left, std::memory_order_relaxed);
-    if (left > 0)
-        return;
-    engine::Event off;
-    off.offset = 0;
-    off.status = 0x80;
-    off.data1 = static_cast<std::uint8_t> (std::clamp (previewNote_.load (std::memory_order_relaxed), 0, 127));
-    insertKeepingRelease (off, count);
-    previewStage_.store (0, std::memory_order_release);
+
+    if (! rtPreviewActive_)
+    {
+        const int genNow = previewGenPublished_.load (std::memory_order_acquire);
+        if (genNow != 0 && genNow != rtFinishedGen_)
+            takeNewer (rtFinishedGen_);
+    }
+
+    engine::Event play[previewEventCap + 8] {};
+    int playCount = 0;
+    if (rtPreviewActive_)
+        queuePreviewScore (play, playCount, frames);
+    if (rtPreviewActive_ && rtPreviewCursor_ >= rtPreviewEventCount_ && rtPreviewTail_ <= 0)
+    {
+        int ownedNotes[8] {};
+        const int ownedCount = rtSoundingCount_;
+        for (int i = 0; i < ownedCount; ++i)
+            ownedNotes[i] = rtSounding_[i];
+        const int ownedGen = rtPreviewGen_;
+        if (previewHandoffPark_.load (std::memory_order_acquire) == 1)
+        {
+            previewHandoffPark_.store (2, std::memory_order_release);
+            while (previewHandoffPark_.load (std::memory_order_acquire) == 2)
+            {
+            }
+        }
+        if (ownedCount > 0)
+            queuePreviewOffs (play, playCount, ownedNotes, ownedCount);
+        rtPreviewActive_ = false;
+        const bool adopted = takeNewer (ownedGen);
+        if (! adopted && previewGenPublished_.load (std::memory_order_acquire) == ownedGen)
+            rtFinishedGen_ = ownedGen;
+        if (rtPreviewActive_)
+            queuePreviewScore (play, playCount, frames);
+    }
+    if (playCount > 0 || rtPreviewActive_)
+        renderPreview (buffer, frames, play, playCount);
 }
 
 void SynthesisProcessor::requestPreview (int note) noexcept
 {
     note = std::clamp (note, 0, 127);
-    const int stage = previewStage_.exchange (0, std::memory_order_acq_rel);
-    if (stage == 2)
-        previewReplace_.store (previewNote_.load (std::memory_order_relaxed), std::memory_order_relaxed);
-    else
-        previewReplace_.store (-1, std::memory_order_relaxed);
-    previewNote_.store (note, std::memory_order_relaxed);
-    const double rate = sampleRate_ > 1.0 ? sampleRate_ : 48000.0;
-    previewLeft_.store (std::max (1, static_cast<int> (rate * 0.40)), std::memory_order_relaxed);
-    previewStage_.store (1, std::memory_order_release);
+    engine::Event events[2] {};
+    int count = 0;
+    const int offAt = previewSamples (sampleRate_, 0.40);
+    pushPreview (events, count, 0, 0x90, note, 96, 0);
+    pushPreview (events, count, static_cast<std::uint32_t> (offAt), 0x80, note, 0, 0);
+    publishPreview (liveBlock(), events, count, previewSamples (sampleRate_, 0.20));
+}
+
+void SynthesisProcessor::requestFactoryPreview (int index) noexcept
+{
+    if (index < 0 || index >= vox::syn::factoryProgramCount())
+        return;
+    float plain[parameterCatalog.size()];
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
+    {
+        const float source = i < static_cast<std::size_t> (frozenParameterCount) ? factoryProgram (index).values[i] : parameterCatalog[i].initial;
+        plain[i] = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+    }
+    const FactoryFeature feature = factoryFeature (index);
+    plain[featureBase + 0] = feature.unison;
+    plain[featureBase + 1] = feature.detune;
+    plain[featureBase + 2] = feature.spread;
+    plain[featureBase + 3] = feature.wtLevel;
+    plain[featureBase + 4] = feature.wtPos;
+    plain[vaParamBase + static_cast<int> (VaKnob::fm)] = feature.fm;
+    plain[vaParamBase + static_cast<int> (VaKnob::ring)] = feature.ring;
+    plain[vaParamBase + static_cast<int> (VaKnob::osc3Level)] = feature.osc3Level;
+    plain[vaParamBase + static_cast<int> (VaKnob::osc3Semi)] = feature.osc3Semi;
+    plain[routeBase + 0] = static_cast<float> (feature.modSource);
+    plain[routeBase + 1] = static_cast<float> (feature.modDest);
+    plain[routeBase + 2] = feature.modAmount;
+    ExtraRoutes routes;
+    if (feature.extraRoute >= routeCount && feature.extraRoute < engine::PartParams::routeSlots)
+    {
+        auto& row = routes.row[0][feature.extraRoute - routeCount];
+        row.source = feature.extraSource;
+        row.dest = feature.extraDest;
+        row.amount = (feature.extraAmount - 0.5f) * 2.0f;
+    }
+    auto block = mapPlain (plain, routes);
+    block.bpm = 120.0;
+    block.bpmValid = false;
+    engine::Event events[previewEventCap] {};
+    int count = 0;
+    int tail = 0;
+    fillRoleScore (factoryProgram (index).role, factoryProgram (index).auditionNote, sampleRate_, events, count, tail);
+    publishPreview (block, events, count, tail);
+}
+
+bool SynthesisProcessor::requestUserPreview (int index)
+{
+    std::vector<float> values;
+    int category = 0;
+    {
+        const juce::ScopedLock lock (bankLock_);
+        if (index < 0 || index >= static_cast<int> (userPrograms_.size()))
+            return false;
+        values = userPrograms_[static_cast<std::size_t> (index)].values;
+        category = userPrograms_[static_cast<std::size_t> (index)].category;
+    }
+    float plain[parameterCatalog.size()];
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
+    {
+        const float source = i < values.size() ? values[i] : parameterCatalog[i].initial;
+        plain[i] = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+    }
+    ExtraRoutes routes;
+    auto block = mapPlain (plain, routes);
+    block.bpm = 120.0;
+    block.bpmValid = false;
+    const int note = roleForCategory (category) == FactoryRole::bass || roleForCategory (category) == FactoryRole::acid ? 36 : 60;
+    engine::Event events[previewEventCap] {};
+    int count = 0;
+    int tail = 0;
+    fillRoleScore (roleForCategory (category), note, sampleRate_, events, count, tail);
+    publishPreview (block, events, count, tail);
+    return true;
+}
+
+void SynthesisProcessor::cancelPreview() noexcept
+{
+    engine::BlockParams block;
+    publishPreview (block, nullptr, 0, 0);
+}
+
+std::uint32_t SynthesisProcessor::renderListeningHash (int index) const
+{
+    auto local = std::make_unique<engine::SynthEngine>();
+    local->prepare (48000.0, 256);
+    float plain[parameterCatalog.size()];
+    for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
+    {
+        const float source = i < static_cast<std::size_t> (frozenParameterCount) ? factoryProgram (index).values[i] : parameterCatalog[i].initial;
+        plain[i] = std::clamp (source, parameterCatalog[i].minimum, parameterCatalog[i].maximum);
+    }
+    const FactoryFeature feature = factoryFeature (index);
+    plain[featureBase + 0] = feature.unison;
+    plain[featureBase + 1] = feature.detune;
+    plain[featureBase + 2] = feature.spread;
+    plain[featureBase + 3] = feature.wtLevel;
+    plain[featureBase + 4] = feature.wtPos;
+    plain[vaParamBase + static_cast<int> (VaKnob::fm)] = feature.fm;
+    plain[vaParamBase + static_cast<int> (VaKnob::ring)] = feature.ring;
+    plain[vaParamBase + static_cast<int> (VaKnob::osc3Level)] = feature.osc3Level;
+    plain[vaParamBase + static_cast<int> (VaKnob::osc3Semi)] = feature.osc3Semi;
+    plain[routeBase + 0] = static_cast<float> (feature.modSource);
+    plain[routeBase + 1] = static_cast<float> (feature.modDest);
+    plain[routeBase + 2] = feature.modAmount;
+    ExtraRoutes routes;
+    if (feature.extraRoute >= routeCount && feature.extraRoute < engine::PartParams::routeSlots)
+    {
+        auto& row = routes.row[0][feature.extraRoute - routeCount];
+        row.source = feature.extraSource;
+        row.dest = feature.extraDest;
+        row.amount = (feature.extraAmount - 0.5f) * 2.0f;
+    }
+    auto block = mapPlain (plain, routes);
+    block.bpm = 120.0;
+    block.bpmValid = false;
+    engine::Event events[previewEventCap] {};
+    int count = 0;
+    int tail = 0;
+    const auto& program = factoryProgram (index);
+    fillRoleScore (program.role, program.auditionNote, 48000.0, events, count, tail);
+    std::uint32_t hash = 2166136261u;
+    const auto mix = [&hash] (std::uint32_t bits)
+    {
+        hash ^= bits;
+        hash *= 16777619u;
+    };
+    const auto* id = program.id != nullptr ? program.id : "";
+    for (const char* cursor = id; *cursor != '\0'; ++cursor)
+        mix (static_cast<std::uint32_t> (static_cast<unsigned char> (*cursor)));
+    float left[256] {};
+    float right[256] {};
+    int cursor = 0;
+    const int rendered = std::min (count > 0 ? static_cast<int> (events[count - 1].offset) + 1 : 256, 2048);
+    while (cursor < rendered)
+    {
+        const int frames = std::min (256, rendered - cursor);
+        engine::Event window[previewEventCap] {};
+        int windowCount = 0;
+        for (int i = 0; i < count && windowCount < previewEventCap; ++i)
+        {
+            const int at = static_cast<int> (events[i].offset);
+            if (at < cursor || at >= cursor + frames)
+                continue;
+            window[windowCount] = events[i];
+            window[windowCount].offset = static_cast<std::uint32_t> (at - cursor);
+            ++windowCount;
+        }
+        local->process (left, right, frames, window, windowCount, block);
+        for (int i = 0; i < frames; ++i)
+        {
+            std::uint32_t bits = 0;
+            std::memcpy (&bits, &left[i], sizeof bits);
+            mix (bits);
+        }
+        cursor += frames;
+    }
+    return hash == 0u ? 1u : hash;
+}
+
+void SynthesisProcessor::setListeningMark (int index, int status)
+{
+    if (index < 0 || index >= factoryProgramCount() || index >= factoryProgramCapacity)
+        return;
+    status = std::clamp (status, 0, 3);
+    const std::uint32_t hash = status == 0 ? 0u : renderListeningHash (index);
+    const juce::ScopedLock lock (listenLock_);
+    listen_[index].status = static_cast<std::uint8_t> (status);
+    listen_[index].hash = hash;
+}
+
+int SynthesisProcessor::listeningMark (int index) const
+{
+    if (index < 0 || index >= factoryProgramCapacity)
+        return 0;
+    const juce::ScopedLock lock (listenLock_);
+    return listen_[index].status;
+}
+
+std::uint32_t SynthesisProcessor::listeningRenderHash (int index) const
+{
+    if (index < 0 || index >= factoryProgramCapacity)
+        return 0;
+    const juce::ScopedLock lock (listenLock_);
+    return listen_[index].hash;
 }
 
 void SynthesisProcessor::publishLocked()
@@ -995,6 +1586,33 @@ void SynthesisProcessor::writeProductState (std::vector<preset::Section>& out) c
             putU32 (mod.data, bits);
         }
     out.push_back (std::move (mod));
+    int listenCount = 0;
+    ListenMark listenCopy[factoryProgramCapacity];
+    {
+        const juce::ScopedLock listenLock (listenLock_);
+        for (int i = 0; i < factoryProgramCapacity; ++i)
+        {
+            listenCopy[i] = listen_[i];
+            if (listen_[i].status != 0)
+                ++listenCount;
+        }
+    }
+    if (listenCount > 0)
+    {
+        preset::Section listen;
+        listen.tag = listenSectionTag;
+        putU32 (listen.data, 1u);
+        putU32 (listen.data, static_cast<std::uint32_t> (listenCount));
+        for (int i = 0; i < factoryProgramCapacity; ++i)
+        {
+            if (listenCopy[i].status == 0)
+                continue;
+            putU32 (listen.data, static_cast<std::uint32_t> (i));
+            putU32 (listen.data, listenCopy[i].status);
+            putU32 (listen.data, listenCopy[i].hash);
+        }
+        out.push_back (std::move (listen));
+    }
 }
 
 SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const preset::StateDocument& document,
@@ -1260,7 +1878,56 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
             putU32 (modSection.data, bits);
         }
     restore.sections.push_back (std::move (modSection));
-    restore.apply = [this, values, bank, phrase, routes] {
+    auto marks = std::make_shared<std::array<ListenMark, factoryProgramCapacity>>();
+    if (const auto* section = document.find (listenSectionTag))
+    {
+        std::size_t at = 0;
+        std::uint32_t version = 0, count = 0;
+        if (! takeU32 (section->data, at, version) || version != 1u
+            || ! takeU32 (section->data, at, count) || count > static_cast<std::uint32_t> (factoryProgramCapacity))
+        {
+            error = "malformed LIST section";
+            return {};
+        }
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            std::uint32_t index = 0, status = 0, hash = 0;
+            if (! takeU32 (section->data, at, index) || ! takeU32 (section->data, at, status) || ! takeU32 (section->data, at, hash)
+                || index >= static_cast<std::uint32_t> (factoryProgramCapacity) || status > 3u)
+            {
+                error = "malformed LIST section";
+                return {};
+            }
+            (*marks)[index].status = static_cast<std::uint8_t> (status);
+            (*marks)[index].hash = hash;
+        }
+        if (at != section->data.size())
+        {
+            error = "malformed LIST section";
+            return {};
+        }
+    }
+    int storedMarks = 0;
+    for (const auto& mark : *marks)
+        if (mark.status != 0)
+            ++storedMarks;
+    if (storedMarks > 0)
+    {
+        preset::Section listenSection;
+        listenSection.tag = listenSectionTag;
+        putU32 (listenSection.data, 1u);
+        putU32 (listenSection.data, static_cast<std::uint32_t> (storedMarks));
+        for (int i = 0; i < factoryProgramCapacity; ++i)
+        {
+            if ((*marks)[i].status == 0)
+                continue;
+            putU32 (listenSection.data, static_cast<std::uint32_t> (i));
+            putU32 (listenSection.data, (*marks)[i].status);
+            putU32 (listenSection.data, (*marks)[i].hash);
+        }
+        restore.sections.push_back (std::move (listenSection));
+    }
+    restore.apply = [this, values, bank, phrase, routes, marks] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
         {
             auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters_.getParameter (parameterCatalog[i].id));
@@ -1282,6 +1949,9 @@ SynthesisProcessor::ProductRestore SynthesisProcessor::readProductState (const p
         const juce::ScopedLock modLock (modLock_);
         modEdit_ = *routes;
         publishModLocked();
+        const juce::ScopedLock listenLock (listenLock_);
+        for (int i = 0; i < factoryProgramCapacity; ++i)
+            listen_[i] = (*marks)[i];
     };
     restore.settle = [this, values] {
         for (std::size_t i = 0; i < parameterCatalog.size(); ++i)
@@ -1349,6 +2019,7 @@ bool SynthesisProcessor::loadUserProgram (int index)
         const float clamped = std::clamp (values[i], parameterCatalog[i].minimum, parameterCatalog[i].maximum);
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (clamped));
     }
+    cancelPreview();
     return true;
 }
 
@@ -1553,6 +2224,7 @@ bool SynthesisProcessor::loadFactoryProgram (int index)
     setModRoute (0, 0, feature.modSource, feature.modDest, feature.modAmount);
     if (feature.extraRoute >= routeCount)
         setModRoute (0, feature.extraRoute, feature.extraSource, feature.extraDest, feature.extraAmount);
+    cancelPreview();
     return true;
 }
 

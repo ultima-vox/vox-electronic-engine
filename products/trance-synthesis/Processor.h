@@ -19,7 +19,9 @@ inline constexpr preset::Tag engineSectionTag = preset::makeTag ("ENG1");
 inline constexpr preset::Tag userBankTag = preset::makeTag ("UBNK");
 inline constexpr preset::Tag phraseSectionTag = preset::makeTag ("PHRS");
 inline constexpr preset::Tag modSectionTag = preset::makeTag ("MODX");
+inline constexpr preset::Tag listenSectionTag = preset::makeTag ("LIST");
 inline constexpr int maxUserPrograms = 128;
+inline constexpr int previewEventCap = 32;
 
 struct UserProgram {
     juce::String name;
@@ -66,9 +68,37 @@ public:
     [[nodiscard]] juce::String factoryProgramSearch (int index) const;
     bool loadFactoryProgram (int index);
     [[nodiscard]] int factoryProgramAudition (int index) const;
-    // One note from the message thread. The audio thread plays it and
-    // releases it. No allocation and no lock.
+    // Message thread. Publishes one immutable preview command. The audio
+    // thread owns the sounding notes and the countdown. This does not write
+    // the host parameters. `requestPreview` auditions the live patch on a
+    // side engine. Factory and user preview audition that candidate instead.
     void requestPreview (int note) noexcept;
+    void requestFactoryPreview (int index) noexcept;
+    bool requestUserPreview (int index);
+    void cancelPreview() noexcept;
+
+    // Local listening ledger. Status 1 reviewed, 2 rejected, 3 owner mark.
+    // This never changes factoryProgramsHumanApproved.
+    void setListeningMark (int index, int status);
+    [[nodiscard]] int listeningMark (int index) const;
+    [[nodiscard]] std::uint32_t listeningRenderHash (int index) const;
+
+    // Test gate for the preview handoff. The audio thread snapshots the notes
+    // it actually started, then waits, and only then sends their NoteOff.
+    void armPreviewHandoffForTest() noexcept { previewHandoffPark_.store (1, std::memory_order_release); }
+    [[nodiscard]] int previewHandoffPhase() const noexcept { return previewHandoffPark_.load (std::memory_order_acquire); }
+    void releasePreviewHandoffForTest() noexcept { previewHandoffPark_.store (0, std::memory_order_release); }
+    void forcePreviewReleaseForTest() noexcept { previewForceRelease_.store (1, std::memory_order_release); }
+    [[nodiscard]] int previewClaimViolations() const noexcept { return previewClaimViolations_.load (std::memory_order_acquire); }
+    [[nodiscard]] int previewHeldNote() const noexcept { return rtPreviewNote_; }
+    [[nodiscard]] int previewSoundingCount() const noexcept { return rtSoundingCount_; }
+    [[nodiscard]] int previewLastOff() const noexcept { return rtPreviewLastOff_; }
+    [[nodiscard]] bool previewActive() const noexcept { return rtPreviewActive_; }
+    [[nodiscard]] bool previewMonoGate (int part) const noexcept { return previewEngine_.monoGate (part); }
+    [[nodiscard]] int previewMonoNote (int part) const noexcept { return previewEngine_.monoNote (part); }
+    [[nodiscard]] float previewMonoAccent (int part) const noexcept { return previewEngine_.monoAccent (part); }
+    [[nodiscard]] int previewGlideSource (int part) const noexcept { return previewEngine_.glideSource (part); }
+    [[nodiscard]] bool previewVaHeld (int part, int note) const noexcept { return previewEngine_.vaNoteHeld (part, note); }
 
     void setPhraseIndex (int index);
     [[nodiscard]] int phraseIndex() const;
@@ -105,7 +135,8 @@ protected:
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     bool isProductSection (preset::Tag tag) const override
     {
-        return tag == engineSectionTag || tag == userBankTag || tag == phraseSectionTag || tag == modSectionTag;
+        return tag == engineSectionTag || tag == userBankTag || tag == phraseSectionTag
+            || tag == modSectionTag || tag == listenSectionTag;
     }
 
 private:
@@ -123,13 +154,26 @@ private:
     void runEngine (juce::AudioBuffer<float>& buffer, int count, const engine::BlockParams& block);
     bool insertEvent (const engine::Event& event, int& count);
     bool insertKeepingRelease (const engine::Event& event, int& count);
-    void takePreview (int frames, int& count);
+    engine::BlockParams mapPlain (const float* plain, const ExtraRoutes& routes) const;
+    engine::BlockParams liveBlock() const;
+    void publishPreview (const engine::BlockParams& params, const engine::Event* events, int eventCount, int tailSamples) noexcept;
+    bool copyPreview (engine::BlockParams& params, engine::Event* events, int& eventCount, int& generation, int& tailSamples) noexcept;
+    void servicePreview (juce::AudioBuffer<float>& buffer, int frames);
+    void adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params) noexcept;
+    void queuePreviewOffs (engine::Event* play, int& playCount, const int* notes, int noteCount) noexcept;
+    void queuePreviewScore (engine::Event* play, int& playCount, int frames) noexcept;
+    void renderPreview (juce::AudioBuffer<float>& buffer, int frames, const engine::Event* play, int playCount);
+    std::uint32_t renderListeningHash (int index) const;
     void publishLocked();
     void readSnapshot (PhraseSnapshot& out) noexcept;
     void collectPhrase (int frames, const PhraseSnapshot& snap, engine::Event* phraseEvents, int& phraseCount);
     juce::AudioProcessorValueTreeState parameters_;
     std::array<std::atomic<float>*, parameterCatalog.size()> raw_ {};
     engine::SynthEngine engine_;
+    engine::SynthEngine previewEngine_;
+    std::vector<float> previewMixL_;
+    std::vector<float> previewMixR_;
+    int previewCapacity_ = 0;
     // Writer-side copy. Non-RT threads take modLock_, edit this, then publish
     // a slot. The audio thread never reads this object.
     mutable juce::CriticalSection modLock_;
@@ -184,10 +228,47 @@ private:
     std::int64_t rtPlayed_ = 0;
     std::uint8_t phraseHeld_[128] {};
     std::atomic<std::uint64_t> droppedMidi_ { 0 };
-    std::atomic<int> previewStage_ { 0 };
-    std::atomic<int> previewNote_ { 60 };
-    std::atomic<int> previewLeft_ { 0 };
-    std::atomic<int> previewReplace_ { -1 };
+    // Preview commands are immutable slots. The audio thread copies one while
+    // it is Reading, then owns the notes it started. A later publish cannot
+    // change that NoteOff, and finishing a command never clears a newer one.
+    struct PreviewSlot {
+        engine::BlockParams params {};
+        engine::Event events[previewEventCap] {};
+        int eventCount = 0;
+        int generation = 0;
+        int tailSamples = 0;
+        int stamp = 0;
+        int stampEnd = 0;
+        std::atomic<int> state { slotFree };
+    };
+    mutable juce::CriticalSection previewLock_;
+    PreviewSlot previewSlots_[3] {};
+    std::atomic<int> previewPublished_ { 0 };
+    std::atomic<int> previewGenPublished_ { 0 };
+    int previewGeneration_ = 0;
+    int previewRevision_ = 0;
+    std::atomic<int> previewClaimViolations_ { 0 };
+    std::atomic<int> previewHandoffPark_ { 0 };
+    std::atomic<int> previewForceRelease_ { 0 };
+    int rtPreviewGen_ = 0;
+    int rtFinishedGen_ = 0;
+    int rtPreviewNote_ = -1;
+    int rtPreviewLastOff_ = -1;
+    int rtSounding_[8] {};
+    int rtSoundingCount_ = 0;
+    bool rtPreviewActive_ = false;
+    int rtPreviewPos_ = 0;
+    int rtPreviewCursor_ = 0;
+    int rtPreviewTail_ = 0;
+    int rtPreviewEventCount_ = 0;
+    engine::Event rtPreviewEvents_[previewEventCap] {};
+    engine::BlockParams rtPreviewParams_ {};
+    struct ListenMark {
+        std::uint8_t status = 0;
+        std::uint32_t hash = 0;
+    };
+    mutable juce::CriticalSection listenLock_;
+    ListenMark listen_[factoryProgramCapacity] {};
 
     struct Restored { float loaded = 0.0f, held = 0.0f; };
     std::vector<Restored> restored_;
