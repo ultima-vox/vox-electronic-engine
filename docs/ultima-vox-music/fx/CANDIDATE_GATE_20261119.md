@@ -5,7 +5,7 @@
 ## Candidate blockers
 
 1. **FX-01/02/03 — sound, playback and editing:** maintain the 19 host IDs and backward-compatible state. Check automation/readback, source restore, real clock loss/meter/seek, and musical note and lease ownership. The offscreen native suite exercises the processor/editor, not the Windows wrapper.
-2. **FX-04 — modulation, effects and real time:** finish checks for supported route combinations, controls, anti-alias behavior, serial FX tails and modulation in the host. Keep wall deadlines separate from thread CPU. Two prior misses at 96 kHz / 64 with Pattern are an explicit retest case, not a cleared defect.
+2. **FX-04 — modulation, effects and real time:** finish checks for supported route combinations, controls, anti-alias behavior, serial FX tails and modulation in the host. Keep wall deadlines separate from thread CPU. The 96 kHz / 64 Pattern thread-CPU exceedance and separate wall-clock misses are explicit retest cases, not cleared defects.
 3. **FX-05 — authoring, catalog and exchange:** preserve the deterministic Program/Pattern, A/B, and user-library regressions. Native Save and [prepared file drag](FILE_DRAG_20261119.md) are implemented for WAV/SMF; real OS and DAW import are unqualified. Verify copy into project, no double-trigger with Save and editable SMF before advertising host support. Catalog curation and licensing remain distinct from preset generation and the technical gate.
 4. **FX-06/07 — native UI, build and release:** complete focus/keyboard/DPI checks and the export/bounce/teardown scenarios below, then retain exact-head Windows Release and owner evidence. A clean Linux run cannot authorize shipping.
 
@@ -13,7 +13,7 @@
 
 The pinned JUCE `TemporaryFile` replacement path can retry a failed rename via a copy on POSIX, and its move path can delete a destination first. FX no longer uses that replacement path. The worker writes and closes a staging file beside the destination and checks byte count, then commits using a single platform primitive: POSIX rename for replacement, POSIX hard link for no-replace creation, or `MoveFileExW` on Windows without `MOVEFILE_COPY_ALLOWED`. There is no delete-first or copy fallback. On POSIX, a destination filesystem that cannot hard-link a new file fails closed. This is not a crash-durability or arbitrary network-filesystem guarantee.
 
-The WAV/MIDI worker observes whether the path exists **before** rendering/encoding. If absent, the native commit rejects any entry that appears later, leaving its bytes untouched. For a path already present, the [latest transfer guard](TRANSFER_GUARDS_20261119.md) checks native identity and modification metadata against a second observation before claim/commit. This does not protect changes before the first observation or changes in the final check-to-move race, and is not an atomic conditional overwrite. The new tests pause during encoding or writing, create competing files, then verify those originals and staging cleanup. A direct cross-device failure fixture verifies no copy, source deletion, or overwrite on Linux. Windows file behavior remains unqualified. No DSP, host IDs, preset/state format, or WAV/MIDI encoding changes.
+The WAV/MIDI worker observes whether the path exists **before** rendering/encoding. If absent, the native commit rejects any entry that appears later, leaving its bytes untouched. For a path already present, the [latest transfer guard](TRANSFER_GUARDS_20261119.md) checks native identity and modification metadata against a second observation before claim/commit. This does not protect changes before the first observation or changes in the final check-to-move race, and is not an atomic conditional overwrite. The [overwrite policy](MOTION_PATTERN_AUTHORING_20261119.md#save-overwrite-decision-still-needed) requires explicit owner acceptance of this limitation or a create-only/different-filename policy before release. The new tests pause during encoding or writing, create competing files, then verify those originals and staging cleanup. A direct cross-device failure fixture verifies no copy, source deletion, or overwrite on Linux. Windows file behavior remains unqualified. No DSP, host IDs, preset/state format, or WAV/MIDI encoding changes.
 
 ## Local qualification of this checkpoint
 
@@ -33,12 +33,12 @@ The WAV/MIDI worker observes whether the path exists **before** rendering/encodi
 | FX-T05 | Native FIFO, CC120/123, panic, retire-slot and audition-pressure tests | Real MIDI stress and audible click review |
 | FX-T06 | Timeline/bar/Transport tests and synthetic PlayHead | Actual DAW tempo, start/stop/seek/loop/meter sequences |
 | FX-T07 | SourceSound root/scale/transpose checks and non-tonal tags | Musical listen in pitched and keyless arrangements |
-| FX-T08 | MacroRouting, SoundGraph, native route editor and scoped stress | Complete supported route/automation permutations |
+| FX-T08 | MacroRouting, SoundGraph, reversible native Motion commits and scoped stress | Complete supported route/automation permutations |
 | FX-T09 | Four-slot and Drive regression; paired wet-tail history and offline render | Full spectral, long-tail and host bounce qualification |
 | FX-T10 | 64-grain stress; import/hash/lease/relink, supersession and sample restore | Host restore/relink through real paths and OS file failures |
 | FX-T11 | Deterministic generator and locks, persistent A/B and native preset browse/save | Workflow and automation readback in real host, broader lock and library stress |
 | FX-T12 | 200 unique pinned review references, deterministic provenance and working matrix | 100/400 more candidates to reach 300/600, real arrangement listening, zero current approvals |
-| FX-T13 | Canonical SMF/Pattern grid, playback, seek and native clipboard regressions | Host transfer, cross-host boundary and editable SMF import |
+| FX-T13 | Canonical SMF/Pattern grid, playback, seek, clipboard and selected-bar variations | Host transfer, cross-host boundary and editable SMF import |
 | FX-T14 | Seven sample-exact capture fixtures, cancellation and closed-file publication | Native chooser, filesystem matrix, actual OS drag/import and bounce/teardown |
 | FX-T15 | Native offscreen editor, timeline and chooser callback regressions | Real OS focus/tab, scale, resizing and accessibility |
 | FX-T16 | Native closed-editor state, restore/rejection, sample and A/B fixtures | Actual project reopen, path changes and compatibility in both hosts |
