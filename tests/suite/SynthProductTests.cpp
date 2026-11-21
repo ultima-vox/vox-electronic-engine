@@ -605,7 +605,7 @@ void appendPerfCsv (const std::string& row)
 
 #if defined (_WIN32)
 // Optional diagnostic samples bracket the existing wall timer. Thread cycles
-// are not elapsed time and include timer/probe calls; they are useful only for
+// are not elapsed time and include timer/counter calls; they are useful only for
 // comparing callbacks and do not prove the cause of a wall-time outlier.
 struct CallbackProfileSample
 {
@@ -847,22 +847,30 @@ unsigned long timeProcess (vox::syn::SynthesisProcessor& synth, juce::AudioBuffe
     DWORD cpuBefore = 0;
     bool cyclesValid = false;
     if (collectingCallbackProfile)
-    {
         cpuBefore = GetCurrentProcessorNumber();
-        cyclesValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesBefore) != 0;
-    }
    #endif
     if (voxProbeAvailable())
         voxProbeBegin();
+   #if defined (_WIN32)
+    // Probe installation walks loaded modules; exclude it from cycle counts.
+    // Counter calls are inside the allocation probe in diagnostic mode only,
+    // so any allocation they cause is conservatively included in the result.
+    if (collectingCallbackProfile)
+        cyclesValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesBefore) != 0;
+   #endif
     const auto started = std::chrono::steady_clock::now();
     synth.processBlock (buffer, midi);
     milliseconds = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count();
+   #if defined (_WIN32)
+    bool afterValid = false;
+    if (collectingCallbackProfile)
+        afterValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesAfter) != 0;
+   #endif
     if (voxProbeAvailable())
         calls = voxProbeEnd();
    #if defined (_WIN32)
     if (collectingCallbackProfile)
     {
-        const bool afterValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesAfter) != 0;
         const DWORD cpuAfter = GetCurrentProcessorNumber();
         const bool valid = cyclesValid && afterValid && cyclesAfter >= cyclesBefore;
         callbackProfile.push_back ({ milliseconds, valid ? cyclesAfter - cyclesBefore : 0, cpuBefore, cpuAfter, valid });
