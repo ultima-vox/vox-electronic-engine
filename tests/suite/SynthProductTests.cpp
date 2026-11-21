@@ -604,6 +604,41 @@ void appendPerfCsv (const std::string& row)
 }
 
 #if defined (_WIN32)
+// Optional diagnostic samples bracket the existing wall timer. Thread cycles
+// are not elapsed time and include timer/probe calls; they are useful only for
+// comparing callbacks and do not prove the cause of a wall-time outlier.
+struct CallbackProfileSample
+{
+    double wallMs = 0.0;
+    ULONGLONG cycles = 0;
+    DWORD cpuBefore = 0, cpuAfter = 0;
+    bool valid = false;
+};
+std::vector<CallbackProfileSample> callbackProfile;
+bool collectingCallbackProfile = false;
+
+void writeCallbackProfile (const char* scenario, double rate, int block, int trial)
+{
+    const auto path = envOrEmpty ("VOX_SYNTH_CALLBACK_PROFILE_CSV");
+    if (path.empty()) return;
+    static bool started = false;
+    std::ofstream out (path, started ? std::ios::app : std::ios::trunc);
+    check (static_cast<bool> (out), "callback profile csv opens");
+    if (! out) return;
+    if (! started)
+    {
+        out << "scenario,rate_hz,block,trial,sample,wall_ms,thread_cycles,cpu_before,cpu_after,valid\n";
+        started = true;
+    }
+    for (std::size_t i = 0; i < callbackProfile.size(); ++i)
+    {
+        const auto& sample = callbackProfile[i];
+        out << scenario << ',' << rate << ',' << block << ',' << trial << ',' << i << ','
+            << sample.wallMs << ',' << sample.cycles << ',' << sample.cpuBefore << ','
+            << sample.cpuAfter << ',' << sample.valid << '\n';
+    }
+}
+
 // Coarse OS counters cover the whole measure() trial, including setup between
 // callbacks. They aid diagnosis, not the per-callback deadline verdict.
 struct TrialUsage
@@ -732,10 +767,24 @@ TimedCell acceptCell (const char* scenario, double rate, int block, int n, Measu
     {
        #if defined (_WIN32)
         const auto usageStart = collectUsage ? trialUsage() : TrialUsage {};
+        collectingCallbackProfile = ! envOrEmpty ("VOX_SYNTH_CALLBACK_PROFILE_CSV").empty();
+        if (collectingCallbackProfile)
+        {
+            callbackProfile.clear();
+            callbackProfile.reserve (static_cast<std::size_t> (n));
+        }
        #endif
         const TimedCell cell = measure();
        #if defined (_WIN32)
-        if (collectUsage) appendTrialUsage (scenario, rate, block, trial, usageStart, trialUsage());
+        const auto usageEnd = collectUsage ? trialUsage() : TrialUsage {};
+        const bool hadProfile = collectingCallbackProfile;
+        collectingCallbackProfile = false;
+        if (hadProfile)
+        {
+            check (callbackProfile.size() == static_cast<std::size_t> (n), "callback profile has one row per timed callback");
+            writeCallbackProfile (scenario, rate, block, trial);
+        }
+        if (collectUsage) appendTrialUsage (scenario, rate, block, trial, usageStart, usageEnd);
        #endif
         char name[80];
         std::snprintf (name, sizeof name, "%s#%d", scenario, trial);
@@ -793,6 +842,16 @@ void configureWorstCase (vox::syn::SynthesisProcessor& synth)
 unsigned long timeProcess (vox::syn::SynthesisProcessor& synth, juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi, double& milliseconds)
 {
     unsigned long calls = 0;
+   #if defined (_WIN32)
+    ULONGLONG cyclesBefore = 0, cyclesAfter = 0;
+    DWORD cpuBefore = 0;
+    bool cyclesValid = false;
+    if (collectingCallbackProfile)
+    {
+        cpuBefore = GetCurrentProcessorNumber();
+        cyclesValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesBefore) != 0;
+    }
+   #endif
     if (voxProbeAvailable())
         voxProbeBegin();
     const auto started = std::chrono::steady_clock::now();
@@ -800,6 +859,15 @@ unsigned long timeProcess (vox::syn::SynthesisProcessor& synth, juce::AudioBuffe
     milliseconds = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count();
     if (voxProbeAvailable())
         calls = voxProbeEnd();
+   #if defined (_WIN32)
+    if (collectingCallbackProfile)
+    {
+        const bool afterValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesAfter) != 0;
+        const DWORD cpuAfter = GetCurrentProcessorNumber();
+        const bool valid = cyclesValid && afterValid && cyclesAfter >= cyclesBefore;
+        callbackProfile.push_back ({ milliseconds, valid ? cyclesAfter - cyclesBefore : 0, cpuBefore, cpuAfter, valid });
+    }
+   #endif
     return calls;
 }
 
@@ -2977,7 +3045,7 @@ void testPreviewTransitions()
                 requireCell ("first-hear", cell, sounded, bounded);
             }
 
-            // A cold Hear is the first audition after a fresh prepare, with the
+            // Cold-prepare stress: first audition after a fresh prepare, with the
             // host engine already playing. Setup and memory allocation happen
             // before timeProcess; 32 samples make the reported p99 the maximum.
             {
@@ -3018,8 +3086,8 @@ void testPreviewTransitions()
                     if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (sounded, "each cold Hear trial actually sounds");
                     return summariseCell (times, rate, block, mallocs);
                 };
-                const auto cell = acceptCell ("cold-hear", rate, block, coldSamples, measure);
-                requireCell ("cold-hear", cell, sounded, bounded);
+                const auto cell = acceptCell ("cold-prepare-hear", rate, block, coldSamples, measure);
+                requireCell ("cold-prepare-hear", cell, sounded, bounded);
             }
 
             {
