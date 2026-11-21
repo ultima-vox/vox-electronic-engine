@@ -1161,6 +1161,8 @@ SongStrip::SongStrip (DrumsProcessor& processor, juce::Colour accent) : processo
     toggle (edit_, "Edit Bar", "Edit the selected song bar in the step grid (the bar becomes unique when you change it)");
     edit_->onClick = [this] {
         editing_ = edit_->getToggleState();
+        sourceEditing_ = false;
+        if (source_) source_->setToggleState (false, juce::dontSendNotification);
         if (onEditBar)
             onEditBar (editedBar());
     };
@@ -1176,6 +1178,38 @@ SongStrip::SongStrip (DrumsProcessor& processor, juce::Colour accent) : processo
 }
 
 SongStrip::~SongStrip() = default;
+
+void SongStrip::enableSourceEditing()
+{
+    source_ = std::make_unique<VoxButton> ("Edit Source", VoxButton::Type::Toggle);
+    source_->setClickingTogglesState (true);
+    source_->setTooltip ("Edit this bar's canonical A/B source; all linked occurrences follow. Playback selection is unchanged.");
+    source_->onClick = [this] {
+        sourceEditing_ = source_->getToggleState(); editing_ = false;
+        edit_->setToggleState (false, juce::dontSendNotification);
+        if (sourceEditing_) { if (onEditSource) onEditSource (selFrom_); }
+        else if (onEditBar) onEditBar (-1);
+    };
+    edit_->setButtonText ("Edit This Bar");
+    addAndMakeVisible (*source_); refresh(); resized();
+}
+
+void SongStrip::editTarget (int bar, bool source)
+{
+    update();
+    if (bar < 0 || bar >= song_.length || (source && song_.bars[static_cast<std::size_t> (bar)].kind != SongBar::Kind::pattern)) return;
+    editing_ = ! source; sourceEditing_ = source;
+    edit_->setToggleState (editing_, juce::dontSendNotification);
+    if (source_) source_->setToggleState (sourceEditing_, juce::dontSendNotification);
+    select (bar, 1);
+}
+
+void SongStrip::clearEditing()
+{
+    editing_ = sourceEditing_ = false;
+    edit_->setToggleState (false, juce::dontSendNotification);
+    if (source_) source_->setToggleState (false, juce::dontSendNotification);
+}
 
 void SongStrip::enableMidiExport (std::function<void()> save, std::function<void()> drag, std::function<juce::String()> status)
 {
@@ -1205,6 +1239,7 @@ void SongStrip::refresh()
     length_->setSelectedItemIndex (song_.length == 64 ? 2 : song_.length == 32 ? 1 : 0, juce::dontSendNotification);
     scope_->setSelectedItemIndex (processor_.uiState().exportScope, juce::dontSendNotification);
     paste_->setEnabled (! clipboard_.empty());
+    if (source_) source_->setEnabled (song_.bars[static_cast<std::size_t> (selFrom_)].kind == SongBar::Kind::pattern);
     refreshing_ = false;
 }
 
@@ -1218,6 +1253,8 @@ void SongStrip::update()
     }
     bool changed = false;
     const auto previousLength = song_.length;
+    const auto previousSelection = selFrom_;
+    const auto previousTarget = song_.bars[static_cast<std::size_t> (selFrom_)];
     if (processor_.patterns().generation() != generation_)
     {
         generation_ = processor_.patterns().generation();
@@ -1240,6 +1277,9 @@ void SongStrip::update()
         repaint();
     }
     if (song_.length != previousLength) { resized(); if (onLayoutChanged) onLayoutChanged(); }
+    if (sourceEditing_ && (previousSelection != selFrom_ || ! (previousTarget == song_.bars[static_cast<std::size_t> (selFrom_)])))
+    { if (onEditSource) onEditSource (selFrom_); }
+    else if (editing_ && previousSelection != selFrom_) { if (onEditBar) onEditBar (selFrom_); }
 }
 
 int SongStrip::preferredHeight() const
@@ -1249,7 +1289,7 @@ int SongStrip::preferredHeight() const
 int SongStrip::preferredHeightForWidth (int width) const
 {
     const int columns = width >= 1000 ? 16 : juce::jlimit (4, 16, width / 74);
-    return (width >= 1000 ? 30 : 120) + (midi_ ? 24 : 0) + sp::xs + ((song_.length + columns - 1) / columns) * 24;
+    return (width >= (source_ ? 1200 : 1000) ? 30 : 120) + (midi_ ? 24 : 0) + sp::xs + ((song_.length + columns - 1) / columns) * 24;
 }
 
 void SongStrip::select (int from, int count)
@@ -1261,6 +1301,8 @@ void SongStrip::select (int from, int count)
     processor_.setUiState (ui);
     if (editing_ && onEditBar)
         onEditBar (selFrom_);
+    else if (sourceEditing_ && onEditSource) onEditSource (selFrom_);
+    refresh();
     repaint();
     if (onSelectionChanged) onSelectionChanged();
 }
@@ -1357,7 +1399,7 @@ void SongStrip::resized()
 {
     auto area = getLocalBounds();
     columns_ = getWidth() >= 1000 ? 16 : juce::jlimit (4, 16, getWidth() / 74);
-    if (getWidth() < 1000)
+    if (getWidth() < (source_ ? 1200 : 1000))
     {
         int x = 0, y = 0;
         const auto put = [&] (juce::Component& component, int width) {
@@ -1367,7 +1409,8 @@ void SongStrip::resized()
         put (*mode_, 52); put (*length_, 84); put (*slot_, 62); put (*variation_, 54); put (*place_, 50);
         for (auto* button : { insert_.get(), delete_.get(), dup_.get() }) put (*button, 40);
         put (*clear_, 46); put (*copy_, 46); put (*paste_, 48); put (*unique_, 56);
-        put (*loop_, 46); put (*loopSel_, 66); put (*edit_, 64);
+        put (*loop_, 46); put (*loopSel_, 66); put (*edit_, source_ ? 104 : 64);
+        if (source_) put (*source_, 104);
         if (midi_) put (*midi_, 96); else put (*scope_, 150);
         area.removeFromTop (y + 30 + sp::xs);
         if (midiStatus_) midiStatus_->setBounds (area.removeFromTop (24));
@@ -1391,7 +1434,8 @@ void SongStrip::resized()
     top.removeFromLeft (sp::xs);
     put (*loop_, 46);
     put (*loopSel_, 66);
-    put (*edit_, 64);
+    put (*edit_, source_ ? 104 : 64);
+    if (source_) put (*source_, 104);
     if (midi_) midi_->setBounds (top.removeFromRight (96).reduced (1));
     else scope_->setBounds (top.removeFromRight (juce::jmin (150, top.getWidth())).reduced (1));
     area.removeFromTop (sp::xs);
@@ -1405,6 +1449,7 @@ juce::Button* SongStrip::button (const juce::String& name)
     if (name == "mode") return mode_.get();
     if (name == "loop") return loop_.get();
     if (name == "edit") return edit_.get();
+    if (name == "source") return source_.get();
     if (name == "place") return place_.get();
     if (name == "insert") return insert_.get();
     if (name == "delete") return delete_.get();

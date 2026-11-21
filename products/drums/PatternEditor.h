@@ -88,6 +88,11 @@ public:
     //== tests and the panel
     const StoredPattern& shown() const noexcept { return shown_; }
     int slot() const noexcept { return slot_; }
+    int variation() const noexcept { return sourceSlot_ >= 0 ? sourceVariation_ : 0; }
+    bool editingSource() const noexcept { return sourceSlot_ >= 0; }
+    int playheadBar() const noexcept { return playBar_; }
+    int playheadTick() const noexcept { return playStep_; }
+    bool editSourcePattern (int slot, int variation, int patternBar);
     // DRM-05: edit song bar `bar` instead of the pattern slot (-1: the
     // slot). Any change makes the bar unique (its own cells); the pattern
     // it referenced is not changed. A/B and the bar count do not apply.
@@ -168,6 +173,7 @@ private:
     StoredPattern shown_;
     std::uint64_t generation_ = 0, epoch_ = 0;
     int slot_ = -1, bar_ = 0, playStep_ = -1, playBar_ = -1, songBar_ = -1, shownSongBar_ = -1;
+    int sourceSlot_ = -1, sourceVariation_ = 0, shownVariation_ = -1;
     int lane_ = 0, step_ = 0, lanePage_ = 0;
     int selectionFirst_ = 0, selectionLast_ = 0, selectionAnchor_ = 0;
     bool refreshing_ = false, gesture_ = false;

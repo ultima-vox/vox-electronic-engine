@@ -940,6 +940,159 @@ void testContextStepInspector()
                "real Shift-click selects a range without toggling music");
     }
 }
+void testSongContextInspector()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto a = std::make_unique<StoredPattern>(); a->bars = 2;
+    auto b = std::make_unique<StoredPattern> (*a); b->cell (2, 1, 0).on = true; b->cell (2, 1, 0).velocity = 91;
+    p->patterns().setSlot (2, *a); p->patterns().setAlternate (2, *b);
+    auto song = SongData::initial();
+    for (int index : { 5, 6 }) { auto& bar = song.bars[static_cast<std::size_t> (index)]; bar.kind = SongBar::Kind::pattern; bar.slot = 2; bar.variation = 1; bar.patternBar = 3; }
+    p->patterns().setSong (song);
+    DrumsWorkspace ui (*p); ui.setSize (1280, 700);
+    const auto sourceBefore = p->patterns().encodeCurrent().data;
+    ui.songEditor().select (5, 1); ui.pollForTesting();
+    auto* source = ui.inspectorButton ("editSource");
+    auto* local = ui.inspectorButton ("editThisBar");
+    check (source && local && source->isVisible() && local->isVisible(), "Song bar Inspector exposes explicit source and per-bar targets");
+    if (! source || ! local) return;
+    check (p->patterns().song() == song && p->patterns().encodeCurrent().data == sourceBefore,
+           "Song context selection never creates a unique bar or changes source data");
+    ui.pinInspector (true); ui.songEditor().select (6, 1); ui.pollForTesting();
+    check (layout::find (p->layoutState().document, layout::Type::inspectorPin)->payload == layout::Bytes { 3, 5 },
+           "Song Inspector pin records the approved exact bar address");
+    press (*source); ui.pollForTesting();
+    check (ui.patternEditor().slot() == 2 && ui.patternEditor().bar() == 1 && ui.patternEditor().songBar() == -1
+           && juce::roundToInt (plain (*p, patternParameterId)) == 0 && p->patterns().song() == song,
+           "Edit Source opens the pinned B source/bar without changing playback slot or Song linkage");
+    ui.pinInspector (false); ui.patternEditor().selectCell (2, 0); ui.pollForTesting();
+    auto* velocity = ui.inspectorSlider ("velocity");
+    check (velocity && juce::roundToInt (velocity->getValue()) == 91, "source Step Inspector reads B, not A");
+    if (! velocity) return;
+    p->patternHistory().clear(); velocity->setValue (44, juce::sendNotificationSync); ui.pollForTesting();
+    auto actual = std::make_unique<StoredPattern>(); p->patterns().copyAlternate (2, *actual);
+    check (actual->cell (2, 1, 0).velocity == 44 && p->patterns().slot (2) == *a && p->patterns().song() == song,
+           "source edit changes B for all linked occurrences, leaving A and Song references exact");
+    auto snapshot = ui.patternEditor().snapshot();
+    check (snapshot && snapshot->slot == 2 && snapshot->pattern == *actual, "source MIDI snapshot matches the actual B pattern displayed and edited");
+    check (snapshot && snapshot->trackName.endsWith ("P3 B") && ui.patternEditor().fileName().endsWith ("P3 B.mid"),
+           "source MIDI names identify the explicit B source rather than an unrelated playback slot");
+    const auto sourceAfter = p->patterns().encodeCurrent().data;
+    p->patternHistory().undo (p->patterns()); check (p->patterns().encodeCurrent().data == sourceBefore, "source B Undo restores full DSEQ exactly");
+    p->patternHistory().redo (p->patterns()); check (p->patterns().encodeCurrent().data == sourceAfter, "source B Redo restores full DSEQ exactly");
+    p->patternHistory().clear(); ui.patternEditor().clickCell (3, 1);
+    p->patterns().copyAlternate (2, *actual);
+    check (actual->cell (3, 1, 1).on && p->patterns().slot (2) == *a && p->patterns().song() == song
+           && p->patternHistory().size() == 1, "actual source grid toggle edits B only in one Undo entry");
+    p->patternHistory().undo (p->patterns()); ui.pollForTesting();
+    check (p->patterns().encodeCurrent().data == sourceAfter, "source grid Undo restores the entire prior DSEQ");
+    ui.songEditor().select (6, 1); ui.pollForTesting();
+    local = ui.inspectorButton ("editThisBar");
+    check (local != nullptr, "Song selection returns contextual bar controls after source edits");
+    if (! local) return;
+    press (*local); ui.patternEditor().selectCell (2, 0); ui.pollForTesting();
+    check (ui.patternEditor().songBar() == 6 && p->patterns().song() == song, "Edit This Bar selects its scope without eagerly unlinking");
+    velocity = ui.inspectorSlider ("velocity");
+    if (! velocity) { check (false, "bar step context exists"); return; }
+    p->patternHistory().clear(); velocity->setValue (35, juce::sendNotificationSync); ui.pollForTesting();
+    const auto changed = p->patterns().song();
+    check (changed.bars[6].kind == SongBar::Kind::unique && changed.bars[5] == song.bars[5]
+           && changed.bars[6].cells->cell (2, 0).velocity == 35 && p->patterns().encodeCurrent().data == sourceAfter,
+           "first per-bar edit changes only that occurrence and preserves B source");
+    p->patternHistory().undo (p->patterns()); check (p->patterns().song() == song, "bar-target Undo restores all exact Song references");
+    p->patternHistory().redo (p->patterns()); check (p->patterns().song() == changed, "bar-target Redo restores unique data exactly");
+    ui.songEditor().select (6, 1); ui.pollForTesting();
+    source = ui.inspectorButton ("editSource");
+    check (source && ! source->isEnabled(), "a unique Song bar has no invented source target");
+    ui.songEditor().select (5, 1); ui.pinInspector (true); ui.songEditor().select (6, 1); ui.pollForTesting();
+    juce::MemoryBlock pinned; p->getStateInformation (pinned);
+    auto q = std::make_unique<DrumsProcessor>(); q->setStateInformation (pinned.getData(), static_cast<int> (pinned.getSize()));
+    DrumsWorkspace reopened (*q); reopened.setSize (1040, 600); reopened.pollForTesting();
+    auto* reopenedSource = reopened.inspectorButton ("editSource");
+    auto* reopenedLocal = reopened.inspectorButton ("editThisBar");
+    check (reopenedSource && reopenedLocal && reopenedSource->isEnabled() && reopenedLocal->isEnabled(),
+           "Song pin save/new-editor restores linked bar5 despite unique bar6 selection");
+    if (reopenedSource) checkToolLayout (*reopenedSource->getParentComponent());
+    auto document = q->layoutState().document;
+    for (auto& record : document.records)
+        if (record.type == static_cast<layout::Byte> (layout::Type::inspectorPin)) record.payload = { 3, 31 };
+    check (reopened.applyWorkspace (document), "Song pin can retain a valid-format address outside current Song length");
+    reopened.pollForTesting();
+    check (reopenedSource && reopenedLocal && ! reopenedSource->isEnabled() && ! reopenedLocal->isEnabled(),
+           "out-of-length Song pin disables both editing targets rather than clamping to another bar");
+    const auto unavailable = q->patterns().song();
+    if (reopenedSource) press (*reopenedSource);
+    if (reopenedLocal) press (*reopenedLocal);
+    check (q->patterns().song() == unavailable, "late callbacks on an unavailable Song pin cannot write musical data");
+    ui.setSize (1040, 600);
+    auto composition = ui.layout(); composition.primary = workspace::Editor::song; composition.secondary = workspace::Editor::step;
+    composition.split = workspace::Split::horizontal; ui.setLayout (composition);
+    checkToolLayout (ui.songEditor());
+    if (const auto* destination = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+    {
+        juce::File folder (destination); folder.createDirectory(); const auto image = ui.createComponentSnapshot (ui.getLocalBounds());
+        juce::FileOutputStream stream (folder.getChildFile ("inspector-song-pinned.png"));
+        check (stream.setPosition (0) && stream.truncate().wasOk() && juce::PNGImageFormat().writeImageToStream (image, stream),
+               "write actual native Song bar Inspector snapshot");
+    }
+    source = ui.inspectorButton ("editSource");
+    if (source) press (*source);
+    auto frozenSource = ui.patternEditor().snapshot();
+    const auto frozenMidi = frozenSource ? DrumsProcessor::renderExport (*frozenSource) : juce::MemoryBlock {};
+    juce::MemoryBlock restored; p->getStateInformation (restored);
+    p->setStateInformation (restored.getData(), static_cast<int> (restored.getSize()));
+    check (frozenSource && ! ui.patternEditor().snapshot() && DrumsProcessor::renderExport (*frozenSource) == frozenMidi,
+           "restore invalidates new source captures while the already frozen source MIDI remains exact");
+    ui.patternEditor().saveExport (ui.patternEditor().snapshot());
+    check (ui.patternEditor().exportMessage().contains ("context changed"), "rejected source export has a visible reason");
+    ui.pollForTesting();
+    check (! ui.patternEditor().editingSource() && ui.songEditor().sourceBar() == -1 && ui.songEditor().editedBar() == -1,
+           "completed restore clears ephemeral source/bar edit modes before the next action");
+}
+void testSourcePlayhead()
+{
+    using namespace vox::drums;
+    class Playhead final : public juce::AudioPlayHead {
+    public:
+        juce::Optional<PositionInfo> getPosition() const override { return info; }
+        PositionInfo info;
+    } head;
+    auto p = std::make_unique<DrumsProcessor>();
+    auto b = std::make_unique<StoredPattern>(); b->bars = 2; p->patterns().setAlternate (2, *b);
+    auto song = SongData::initial(); song.songMode = true;
+    auto& ref = song.bars[5]; ref.kind = SongBar::Kind::pattern; ref.slot = 2; ref.variation = 1; ref.patternBar = 3;
+    p->patterns().setSong (song); p->prepareToPlay (48000, 128); p->setPlayHead (&head);
+    PatternEditor editor (*p, p->product().accent); editor.editSourcePattern (2, 1, 3);
+    const auto play = [&] (double ppq) {
+        head.info.setIsPlaying (true); head.info.setBpm (120); head.info.setPpqPosition (ppq);
+        head.info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+        head.info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+        block (*p); editor.update();
+    };
+    play (20.125);
+    check (editor.playheadBar() == 1 && editor.playheadTick() == 120,
+           "source playhead maps the real linked B occurrence and modulo bar to actual audio telemetry");
+    play (0.125);
+    check (editor.playheadTick() == -1, "unrelated playing Song occurrence is never painted on the source grid");
+    song.songMode = false; p->patterns().setSong (song); editor.editSourcePattern (0, 0, 0); play (0.125);
+    check (editor.playheadBar() == 0 && editor.playheadTick() == 120, "matching source A follows actual pattern-mode playback");
+    editor.editSourcePattern (0, 1, 0); play (0.125);
+    check (editor.playheadTick() == -1, "source B never borrows the audible A pattern playhead");
+    p->setPlayHead (nullptr);
+    juce::MemoryBlock saved; p->getStateInformation (saved);
+    const auto before = p->patterns().encodeCurrent().data;
+    p->patterns().beforeCommitForTesting = [&] {
+        p->patterns().beforeCommitForTesting = {};
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    };
+    editor.clickCell (4, 0);
+    check (p->patterns().encodeCurrent().data == before && p->patternHistory().size() == 0,
+           "restore at a source-grid commit boundary prevents stale writes and old-project history");
+    editor.editSourcePattern (0, 1, 0); editor.setEnabled (false); editor.clickCell (4, 0);
+    check (! editor.snapshot() && p->patterns().encodeCurrent().data == before && p->patternHistory().size() == 0,
+           "unavailable source view refuses late grid callbacks and new MIDI snapshots");
+}
 void testInspectorOpenSound()
 {
     using namespace vox::drums;
@@ -1093,10 +1246,13 @@ void testParameterLanes()
     const auto songBefore = p->patterns().song();
     ui.songEditor().select (0, 1);
     ui.songEditor().button ("edit")->setToggleState (true, juce::dontSendNotification); press (*ui.songEditor().button ("edit"));
+    check (steps.songBar() == 0, "Song target is active immediately after Edit This Bar");
     steps.selectCell (2, 0); steps.setParameterLanes ({ 0 });
+    check (steps.songBar() == 0, "layout-only lane selection preserves the explicit Song edit target");
     p->patternHistory().clear();
     const auto noop = point (0, 0, true);
     grid->mouseDown (event (noop, noop, true)); grid->mouseUp (event (noop, noop, false));
+    check (steps.songBar() == 0, "no-op lane gesture preserves the explicit Song edit target");
     check (p->patterns().song() == songBefore && p->patternHistory().size() == 0, "unchanged lane value never unlinks a Song bar or creates Undo");
     const auto changed = point (0, 0, false);
     grid->mouseDown (event (changed, changed, true)); grid->mouseUp (event (changed, changed, false));
@@ -1150,6 +1306,8 @@ int main()
     testInspectorOpenSound();
     testStepContextModel();
     testContextStepInspector();
+    testSongContextInspector();
+    testSourcePlayhead();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

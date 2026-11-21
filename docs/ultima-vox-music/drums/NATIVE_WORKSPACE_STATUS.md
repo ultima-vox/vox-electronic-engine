@@ -58,6 +58,19 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
   Pad/step Open Sound uses the Inspector's actual target and persistently reopens a
   hidden central editor, without audition or musical Undo. No new DLAY pin kinds,
   host parameters, DSP model or processBlock work.
+- Song bar Inspector follows selection or DLAY9 kind3's exact pinned bar and shows
+  linked A/B source/reference bar, unique/empty state, length and loop context. Explicit
+  Edit Source Pattern / Edit This Bar actions open Step without eagerly changing data.
+  Native Song has the same mutually exclusive targets; the donor toolbar is unchanged.
+  Source navigation is ephemeral and independent of the audible host Pattern selector.
+  It resolves the actual A/B source and modulo bar, edits that canonical variation with
+  conditional commits/history, and freezes the same source for Pattern MIDI (named A/B).
+  Source playhead highlights only its actual playing occurrence, never an unrelated A
+  or Song bar. Swap A/B and Copy A>B are unavailable in this exact-source scope.
+  Per-bar edits retain the existing first-real-edit copy-on-write and source isolation.
+  Unavailable Song pins disable both actions and retain Unpin. A completed project
+  epoch clears ephemeral edit modes before subsequent actions, even if the asynchronous
+  notification is queued; partial restore waits. Stale source export is visibly refused.
 - Native Step MIDI has fixed Pattern scope; Song has a direct Entire Song save/drag
   handle for 16/32/64 bars. Both reuse the frozen exporter, existing MidiDragButton
   click/drag state machine and unique per-instance/per-drag files. The native root
@@ -163,12 +176,10 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
    Workspace > Reset layout acknowledges it. No user workspace file is changed.
    Save recovery and the snapshot share the non-RT state transaction, with no callbacks
    or I/O. A concurrent newer committed layout edit is never overwritten.
-2. Pad and step/range Inspector follow/pin work, including explicit A/B pin addresses.
-   Song step numeric edits use the resolved bar and retain copy-on-first-real-edit,
-   source isolation and exact Undo/Redo. Song bar target/status Inspector, explicit
-   Edit Source Pattern navigation and sample context remain unfinished. Kind3 Song
-   pins still preserve their address and show unavailable with Unpin; Song step Pin
-   is disabled until that context exists, never persisted as a misleading pattern pin.
+2. Pad, step/range and Song bar Inspector follow/pin work, including exact A/B source
+   navigation and explicit per-bar copy-on-first-edit. Sample context remains open.
+   Song step Pin is disabled: select the Song bar to pin kind3's bar context; a Song
+   step/range is never persisted as a misleading pattern pin.
 3. SOUND_SECTIONS still needs collapsible-section presentation. Graphical PARAM_LANES
    now exists and restores from DLAY; multi-step/range numeric editing is implemented.
    Existing step/Sound controls remain canonical.

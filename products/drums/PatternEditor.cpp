@@ -340,7 +340,7 @@ public:
             && e.y >= rulerHeight() + gridHeight() + index * 60 + 16)
         {
             editingLane_ = true; laneIndex_ = static_cast<unsigned> (index);
-            pad_ = owner_.lane_; bar_ = owner_.bar_; slot_ = owner_.slot_; song_ = owner_.songBar_;
+            pad_ = owner_.lane_; bar_ = owner_.bar_; slot_ = owner_.slot_; song_ = owner_.songBar_; variation_ = owner_.variation();
             epoch_ = owner_.processor_.patternEpoch(); kind_ = owner_.parameterLanes_[laneIndex_];
             expectedGeneration_ = owner_.processor_.patterns().generation();
             timing_ = owner_.shown_.timing (pad_, bar_);
@@ -406,7 +406,7 @@ private:
         owner_.update();
         const auto now = owner_.shown_.timing (pad_, bar_);
         if (epoch_ != owner_.processor_.patternEpoch() || pad_ != owner_.lane_ || bar_ != owner_.bar_
-            || slot_ != owner_.slot_ || song_ != owner_.songBar_ || laneIndex_ >= owner_.parameterLanes_.size()
+            || slot_ != owner_.slot_ || song_ != owner_.songBar_ || variation_ != owner_.variation() || laneIndex_ >= owner_.parameterLanes_.size()
             || kind_ != owner_.parameterLanes_[laneIndex_] || now.signature != timing_.signature
             || now.resolution != timing_.resolution || now.alternativeBeats != timing_.alternativeBeats)
         { cancelGesture(); return; }
@@ -431,7 +431,7 @@ private:
     PatternEditor& owner_;
     bool editingLane_ = false;
     unsigned laneIndex_ = 0;
-    int pad_ = 0, bar_ = 0, slot_ = 0, song_ = -1, kind_ = 0;
+    int pad_ = 0, bar_ = 0, slot_ = 0, song_ = -1, kind_ = 0, variation_ = 0;
     std::uint64_t epoch_ = 0, expectedGeneration_ = 0;
     timing::BarTiming timing_;
 };
@@ -688,6 +688,7 @@ void PatternEditor::checkEpoch()
         processor_.patternHistory().clear();
         lastKey_.clear();
         selectionFirst_ = selectionLast_ = selectionAnchor_ = step_;
+        sourceSlot_ = -1; sourceVariation_ = 0;
     }
 }
 
@@ -699,6 +700,28 @@ void PatternEditor::edit (const juce::String& key, const std::function<void (Sto
     auto& store = processor_.patterns();
     // On the heap: an entry holds ~100 KB of patterns (small host stacks).
     auto e = std::make_unique<PatternHistory::Entry>();
+    if (editingSource())
+    {
+        if (! isEnabled()) return;
+        const auto all = std::make_unique<PatternStore::Everything>();
+        const auto generation = store.generation(); store.copyEverything (*all);
+        if (generation != store.generation() || processor_.restoringMusic() || epoch_ != processor_.patternEpoch()) return;
+        e->slot = slot_; e->alternate = variation() != 0;
+        e->before = all->slots[static_cast<std::size_t> (slot_)]; e->beforeB = all->alternates[static_cast<std::size_t> (slot_)];
+        e->after = e->before; e->afterB = e->beforeB;
+        auto& after = e->alternate ? e->afterB : e->after;
+        const auto& before = e->alternate ? e->beforeB : e->before;
+        change (after);
+        if (after == before || ! after.valid() || processor_.restoringMusic() || epoch_ != processor_.patternEpoch()
+            || ! store.setSlotIfUnchanged (slot_, e->alternate, after, generation)) return;
+        if (epoch_ != processor_.patternEpoch() || processor_.restoringMusic()) return;
+        auto& history = processor_.patternHistory();
+        const bool amended = gesture_ && key == lastKey_ && (e->alternate ? history.amendLastAlternate (slot_, after) : history.amendLast (slot_, after));
+        if (! amended) history.push (std::move (e));
+        lastKey_ = gesture_ ? key : juce::String();
+        processor_.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+        update(); return;
+    }
     if (songBar_ >= 0)
     {
         // The bar as it plays now, changed, becomes the bar's own cells.
@@ -768,16 +791,19 @@ void PatternEditor::editBoth (const std::function<void (StoredPattern& a, Stored
 void PatternEditor::update (bool repaintIfChanged)
 {
     checkEpoch();
-    const int index = std::clamp (static_cast<int> (std::lround (processor_.state().getRawParameterValue (patternParameterId)->load())), 0,
+    const int index = editingSource() ? sourceSlot_ : std::clamp (static_cast<int> (std::lround (processor_.state().getRawParameterValue (patternParameterId)->load())), 0,
                                   PatternStore::slotCount - 1);
     bool changed = false;
-    if (index != slot_ || songBar_ != shownSongBar_ || processor_.patterns().generation() != generation_)
+    if (index != slot_ || variation() != shownVariation_ || songBar_ != shownSongBar_ || processor_.patterns().generation() != generation_)
     {
         if (songBar_ >= 0)
             processor_.patterns().copySongBar (songBar_, shown_, generation_);
+        else if (variation() != 0)
+            processor_.patterns().copyAlternate (index, shown_, generation_);
         else
             processor_.patterns().copySlot (index, shown_, generation_);   // read together (review 6745483562)
         shownSongBar_ = songBar_;
+        shownVariation_ = variation();
         if (index != slot_)
             lastKey_.clear();
         slot_ = index;
@@ -793,11 +819,29 @@ void PatternEditor::update (bool repaintIfChanged)
     const auto tick = static_cast<long long> (std::floor (processor_.lastPpq() * timing::ticksPerQuarter));
     const long long inBar = tick - processor_.lastBarStartTick();
     const long long barIndex = processor_.lastBarIndex();
-    // A song bar shows the playhead only while that bar plays.
-    const bool here = songBar_ < 0 || processor_.songBarPlaying() == songBar_;
+    // Source navigation never changes playback. Highlight only an actual
+    // playing occurrence of this exact A/B source, with resolveBar's modulo.
+    bool here = songBar_ < 0 || processor_.songBarPlaying() == songBar_;
+    int sourcePlayBar = -1;
+    if (editingSource())
+    {
+        const int playing = processor_.songBarPlaying();
+        if (playing >= 0)
+        {
+            const auto song = processor_.patterns().song();
+            here = playing < song.length;
+            if (here)
+            {
+                const auto& ref = song.bars[static_cast<std::size_t> (playing)];
+                here = ref.kind == SongBar::Kind::pattern && ref.slot == sourceSlot_ && ref.variation == sourceVariation_;
+                if (here) sourcePlayBar = ref.patternBar % shown_.bars;
+            }
+        }
+        else here = sourceVariation_ == 0 && sourceSlot_ == juce::roundToInt (processor_.state().getRawParameterValue (patternParameterId)->load());
+    }
     const bool inside = tick >= 0 && barIndex >= 0 && inBar >= 0 && inBar < processor_.lastBarTicks();
     const int play = processor_.transportPlaying() && inside && here ? static_cast<int> (inBar) : -1;
-    const int playBar = inside && here ? static_cast<int> (barIndex % shown_.bars) : -1;
+    const int playBar = inside && here ? (sourcePlayBar >= 0 ? sourcePlayBar : static_cast<int> (barIndex % shown_.bars)) : -1;
     if (play != playStep_ || playBar != playBar_)
     {
         playStep_ = play;
@@ -837,15 +881,16 @@ void PatternEditor::refreshControls()
         k->setEnabled (c.on);
     accentButton_->setEnabled (c.on);
     lockButton_->setToggleState (c.locked, juce::dontSendNotification);
-    for (auto* b : { swap_.get(), copyB_.get(), dup_.get() })
-        b->setEnabled (songBar_ < 0);
+    for (auto* b : { swap_.get(), copyB_.get() })
+        b->setEnabled (songBar_ < 0 && ! editingSource());
+    dup_->setEnabled (songBar_ < 0);
     barCount_->setEnabled (songBar_ < 0);
     lanes_->setButtonText (lanePage_ == 0 ? "1-8" : "9-16");
     lanes_->setVisible (grid_ != nullptr && grid_->rows() < padCount);
     undo_->setEnabled (processor_.patternHistory().canUndo());
     redo_->setEnabled (processor_.patternHistory().canRedo());
     abLabel_->setColour (juce::Label::textColourId, exportMessage_.isEmpty() ? c::textMuted : juce::Colours::orange);
-    abLabel_->setText (exportMessage_.isNotEmpty() ? exportMessage_ : ((songBar_ >= 0 ? "Song bar " + juce::String (songBar_ + 1) : "Pattern " + juce::String (slot_ + 1)) + "  " + juce::String (lane_ + 1) + "." + juce::String (bar_ + 1) + "."
+    abLabel_->setText (exportMessage_.isNotEmpty() ? exportMessage_ : ((songBar_ >= 0 ? "Song bar " + juce::String (songBar_ + 1) : (editingSource() ? "Source P" : "Pattern ") + juce::String (slot_ + 1) + (variation() ? " B" : " A")) + "  " + juce::String (lane_ + 1) + "." + juce::String (bar_ + 1) + "."
                            + juce::String (step_ + 1)),
                        juce::dontSendNotification);
     refreshing_ = false;
@@ -853,9 +898,23 @@ void PatternEditor::refreshControls()
 
 void PatternEditor::editSongBar (int bar)
 {
+    if (editingSource()) shownVariation_ = -1;
+    sourceSlot_ = -1; sourceVariation_ = 0;
     songBar_ = bar >= 0 && bar < kit::maxSongBars ? bar : -1;
     lastKey_.clear();
     update();
+}
+
+bool PatternEditor::editSourcePattern (int slot, int variation, int patternBar)
+{
+    if (processor_.restoringMusic() || slot < 0 || slot >= PatternStore::slotCount || variation < 0 || variation > 1
+        || patternBar < 0 || patternBar >= kit::maxPatternBars) return false;
+    checkEpoch();
+    sourceSlot_ = slot; sourceVariation_ = variation; songBar_ = -1; lastKey_.clear();
+    update();
+    // Exactly the same modulo policy as resolveBar/playback for shortened sources.
+    selectBar (patternBar % std::max<int> (1, shown_.bars));
+    return true;
 }
 
 juce::Button* PatternEditor::lockToggle()
@@ -946,6 +1005,7 @@ juce::Button* PatternEditor::barButton (int bar)
 
 juce::String PatternEditor::fileName() const
 {
+    if (editingSource()) return "VOX Drums Source P" + juce::String (slot_ + 1) + (variation() ? " B.mid" : " A.mid");
     if (! fixedPatternExport_ && processor_.uiState().exportScope == 1)
         return "VOX Drums Song.mid";
     return "VOX Drums Pattern " + juce::String (juce::jmax (0, slot_) + 1) + ".mid";
@@ -1040,6 +1100,18 @@ void PatternEditor::cleanupDragFiles (juce::Time now)
 
 std::shared_ptr<const ExportSnapshot> PatternEditor::snapshot() const
 {
+    if (editingSource())
+    {
+        if (! isEnabled() || processor_.restoringMusic() || epoch_ != processor_.patternEpoch()) return {};
+        const auto epoch = processor_.patternEpoch();
+        auto frozen = std::make_shared<ExportSnapshot> (*processor_.captureExport (ExportSnapshot::Scope::pattern));
+        frozen->slot = slot_;
+        if (variation()) processor_.patterns().copyAlternate (slot_, frozen->pattern);
+        else processor_.patterns().copySlot (slot_, frozen->pattern);
+        frozen->trackName = "VOX Drums Source P" + juce::String (slot_ + 1) + (variation() ? " B" : " A");
+        if (processor_.restoringMusic() || epoch != processor_.patternEpoch()) return {};
+        return frozen;
+    }
     return processor_.captureExport (! fixedPatternExport_ && processor_.uiState().exportScope == 1
                                         ? ExportSnapshot::Scope::song : ExportSnapshot::Scope::pattern);
 }
@@ -1052,7 +1124,8 @@ bool PatternEditor::writeSnapshot (const ExportSnapshot& snapshot, const juce::F
 
 bool PatternEditor::writeMidi (const juce::File& file)
 {
-    const bool ok = writeSnapshot (*snapshot(), file);
+    const auto frozen = snapshot();
+    const bool ok = frozen && writeSnapshot (*frozen, file);
     exported (ok, file);
     return ok;
 }
@@ -1073,6 +1146,7 @@ juce::File PatternEditor::exportForDrag()
 namespace {
 juce::String exportName (const ExportSnapshot& frozen)
 {
+    if (frozen.trackName.startsWith ("VOX Drums Source P")) return frozen.trackName + ".mid";
     return frozen.scope == ExportSnapshot::Scope::song ? "VOX Drums Song.mid"
         : "VOX Drums Pattern " + juce::String (frozen.slot + 1) + ".mid";
 }
@@ -1097,7 +1171,7 @@ void PatternEditor::saveExport (std::shared_ptr<const ExportSnapshot> frozen)
 {
     // Frozen at the click: what is saved is what was there when the
     // button was pressed, whatever changes while the dialog is open.
-    if (! frozen) return;
+    if (! frozen) { exportMessage_ = "MIDI export unavailable: project/source context changed"; refreshControls(); return; }
     if (saveDialogForTesting)
     {
         saveDialogForTesting (frozen);
@@ -1124,6 +1198,7 @@ void PatternEditor::startDrag()
 
 void PatternEditor::dragExport (std::shared_ptr<const ExportSnapshot> frozen, juce::Component& source)
 {
+    if (! frozen) { exportMessage_ = "MIDI export unavailable: project/source context changed"; refreshControls(); return; }
     // A failed export is shown (exportMessage) and starts no drag.
     const auto file = exportForDrag (std::move (frozen));
     if (file == juce::File())

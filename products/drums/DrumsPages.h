@@ -98,6 +98,11 @@ public:
     // The bar to edit in the step grid (-1: the pattern slot).
     std::function<void (int bar)> onEditBar;
     int editedBar() const noexcept { return editing_ ? selFrom_ : -1; }
+    void enableSourceEditing(); // Native opt-in; donor keeps its original toolbar.
+    void editTarget (int bar, bool source);
+    void clearEditing();
+    int sourceBar() const noexcept { return sourceEditing_ ? selFrom_ : -1; }
+    std::function<void (int bar)> onEditSource;
 
 private:
     int barAt (juce::Point<int> p) const;
@@ -110,10 +115,12 @@ private:
     std::uint64_t generation_ = 0;
     int selFrom_ = 0, selCount_ = 1, anchor_ = 0, playing_ = -1;
     bool editing_ = false, refreshing_ = false;
+    bool sourceEditing_ = false;
     int columns_ = 16;
     std::vector<SongBar> clipboard_;
     juce::Rectangle<int> grid_;
     std::unique_ptr<vox::ui::VoxButton> mode_, loop_, edit_, place_, insert_, delete_, dup_, clear_, copy_, paste_, unique_, loopSel_;
+    std::unique_ptr<vox::ui::VoxButton> source_;
     std::unique_ptr<vox::ui::VoxComboBox> length_, slot_, variation_, scope_;
     std::unique_ptr<MidiDragButton> midi_;
     std::unique_ptr<juce::Label> midiStatus_;

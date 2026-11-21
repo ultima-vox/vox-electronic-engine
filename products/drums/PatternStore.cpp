@@ -353,6 +353,13 @@ StoredPattern PatternStore::alternate (int index) const
     return alternates_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
 }
 
+void PatternStore::copyAlternate (int index, StoredPattern& out, std::uint64_t& generation) const
+{
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    out = alternates_[static_cast<std::size_t> (std::clamp (index, 0, slotCount - 1))];
+    generation = generation_.load();
+}
+
 void PatternStore::setAlternate (int index, const StoredPattern& pattern)
 {
     if (index < 0 || index >= slotCount)

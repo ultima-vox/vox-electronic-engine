@@ -290,6 +290,7 @@ public:
     // slot (A); swapping exchanges A and B. Saved with the slots (DSEQ).
     StoredPattern alternate (int index) const;   // tests
     void copyAlternate (int index, StoredPattern& out) const;
+    void copyAlternate (int index, StoredPattern& out, std::uint64_t& generation) const;
     void setAlternate (int index, const StoredPattern& pattern);
     void copyAlternates (std::array<StoredPattern, slotCount>& out) const;
     void setAlternates (const std::array<StoredPattern, slotCount>& alternates);
