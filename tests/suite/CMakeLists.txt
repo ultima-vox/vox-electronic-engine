@@ -306,3 +306,9 @@ add_test(NAME suite_drums_acceptance_checklist
   COMMAND ${CMAKE_COMMAND} -DCHECKLIST=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md
           -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptance.cmake)
 set_tests_properties(suite_drums_acceptance_checklist PROPERTIES LABELS suite)
+add_test(NAME suite_drums_acceptance_guard_regression
+  COMMAND ${CMAKE_COMMAND} -DCHECKLIST=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md
+          -DGUARD=${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptance.cmake
+          -DWORK=${CMAKE_CURRENT_BINARY_DIR}/acceptance-guard-fixture.md
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptanceRegression.cmake)
+set_tests_properties(suite_drums_acceptance_guard_regression PROPERTIES LABELS suite)
