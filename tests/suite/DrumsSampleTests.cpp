@@ -17,6 +17,7 @@
 //    reference; the library copy is found by content hash; malformed
 //    sample sections are rejected without touching the live state.
 #include "Processor.h"
+#include "DrumsDonorEditorFixture.h"
 #include "DrumsEditor.h"
 #include "SampleLibrary.h"
 #include "DrumsParameters.h"
@@ -1189,7 +1190,7 @@ void testEditor()
 {
     const auto file = writeWav ("editor-kick.wav", 48000.0, 2, 16, 0.3);
     auto p = makeProcessor();
-    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
     check (panel != nullptr, "Drums panel");

@@ -9,6 +9,11 @@ on:
   push:
     branches: [next/standalone-suite]
   workflow_dispatch:
+    inputs:
+      drums_rt_source:
+        description: 'Optional exact 40-character source SHA for the controlled Drums RT study'
+        required: false
+        type: string
 
 # Keep one running and one newest pending run per PR/workflow.
 # New PR pushes supersede older pending runs; running tests finish to avoid
@@ -23,6 +28,7 @@ jobs:
     secrets: inherit
 
   windows-suite:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.drums_rt_source == '' }}
     needs: choose_runner
     runs-on: ${{ fromJSON(needs.choose_runner.outputs.runs_on) }}
     timeout-minutes: 120
@@ -88,6 +94,8 @@ jobs:
           # VOX Drums gain staging reports (CSV per rate/routing, blocks), in the suite artifact.
           New-Item -ItemType Directory -Force -Path suite-out\gain | Out-Null
           $env:VOX_GAIN_REPORT = Join-Path (Resolve-Path suite-out\gain).Path 'gain'
+          # Native Drums workspace qualification snapshots (not OS/host DPI approval).
+          $env:VOX_WORKSPACE_SCREENSHOTS = Join-Path (Resolve-Path suite-out).Path 'native-workspace'
           # Everything but the gain-staging gates runs one test at a time (the
           # callback timing bench measures wall time); the eight independent
           # gain-staging renders then run in parallel.
@@ -159,3 +167,53 @@ jobs:
           name: VOX-Suite-VST3
           path: suite-out
           if-no-files-found: error
+
+  # Explicit diagnostic mode only. The regular PR suite and runner selector
+  # are unchanged; the source under measurement is checked out separately.
+  drums-rt-study:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.drums_rt_source != '' }}
+    needs: choose_runner
+    runs-on: ${{ fromJSON(needs.choose_runner.outputs.runs_on) }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CMAKE_GENERATOR: Visual Studio 17 2022
+      JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+      GH_TOKEN: ${{ github.token }}
+      RT_SOURCE_SHA: ${{ inputs.drums_rt_source }}
+      RT_RUNNER_KIND: ${{ needs.choose_runner.outputs.kind }}
+    steps:
+      - name: Checkout diagnostic controller
+        uses: actions/checkout@v4
+        with:
+          path: controller
+      - name: Validate requested study
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path rt-study | Out-Null
+          if ($env:RT_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Supply an exact lowercase commit SHA.' }
+          if ($env:RT_RUNNER_KIND -ne 'self-hosted' -or $env:RUNNER_NAME -ne '3') {
+            "Inconclusive: expected self-hosted runner 3, got $env:RT_RUNNER_KIND / $env:RUNNER_NAME" | Set-Content rt-study\inconclusive.txt
+            throw 'Study requires the same identified self-hosted runner; do not substitute another.'
+          }
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.drums_rt_source }}
+          path: source
+      - name: Build and run controlled study
+        shell: powershell
+        run: |
+          & .\controller\.github\scripts\Invoke-DrumsRtStudy.ps1 -SourceDir (Resolve-Path source).Path -OutputDir (Resolve-Path rt-study).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload raw study and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-Drums-RT-Study
+          path: rt-study
+          if-no-files-found: error
+          retention-days: 14

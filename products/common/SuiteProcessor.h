@@ -29,7 +29,7 @@ struct ProductInfo {
 struct EditorLimits {
     static constexpr int minWidth = 1040, minHeight = 700;
     static constexpr int defaultWidth = 1180, defaultHeight = 760;
-    static constexpr int maxWidth = 1500, maxHeight = 920;
+    static constexpr int maxWidth = 2560, maxHeight = 1600;
 
     static bool valid (std::uint32_t w, std::uint32_t h) noexcept
     {
@@ -124,9 +124,11 @@ public:
     // which getStateInformation never takes.
     void getStateInformation (juce::MemoryBlock& destination) override
     {
+        // Keep the snapshot and an optional product-specific budget recovery
+        // in one transaction. Neither path may notify listeners/the host.
+        const juce::ScopedLock lock (stateLock_);
         SaveableState snapshot;
         {
-            const juce::ScopedLock lock (stateLock_);
             snapshot = saved_;
             if (restoring_)
                 snapshot.product = restoringProduct_;
@@ -153,12 +155,14 @@ public:
         // the product's largest own state still fits next to them, so this
         // encode cannot fail for a state the plugin accepted. If it fails
         // anyway the host gets no state and the error is recorded.
-        if (const auto bytes = preset::encode (document))
+        auto bytes = preset::encode (document);
+        if (! bytes && ! restoring_ && recoverOversizedStateForSave (document))
+            bytes = preset::encode (document);
+        if (bytes)
             destination.replaceAll (bytes->data(), bytes->size());
         else
         {
             destination.reset();
-            const juce::ScopedLock lock (stateLock_);
             lastStateError_ = "the state is too large to save";
         }
     }
@@ -300,6 +304,12 @@ protected:
 
     virtual void writeProductState (std::vector<preset::Section>&) const {}
 
+    // Non-RT, under stateLock_, after a complete save snapshot failed to
+    // encode. Default is strict refusal. An override must prove its narrowly
+    // authorised replacement fits before changing either document/live state;
+    // no callbacks, host notifications or I/O are allowed here.
+    virtual bool recoverOversizedStateForSave (preset::StateDocument&) { return false; }
+
     virtual ProductRestore readProductState (const preset::StateDocument&, juce::String&)
     {
         return { [] {}, [] {}, {} };
@@ -374,6 +384,7 @@ inline vox::suite::SuiteEditor::SuiteEditor (SuiteProcessor& owner)
       productName_ (owner.product().name),
       accent_ (owner.product().accent)
 {
+    const auto requested = owner.editorSize();
     const auto stateError = owner.lastStateError();
     footerText_ = stateError.isEmpty()
                       ? "State schema " + juce::String (owner.product().stateSchema)
@@ -382,13 +393,25 @@ inline vox::suite::SuiteEditor::SuiteEditor (SuiteProcessor& owner)
     setResizable (true, true);
     setResizeLimits (EditorLimits::minWidth, EditorLimits::minHeight,
                      EditorLimits::maxWidth, EditorLimits::maxHeight);
-    const auto [width, height] = owner.editorSize();
+    setSize (requested.first, requested.second);
+    initialising_ = false;
+}
+
+inline void vox::suite::SuiteEditor::setPresentationSize (int width, int height)
+{
+    if (! EditorLimits::valid (static_cast<std::uint32_t> (width), static_cast<std::uint32_t> (height))) return;
+    presentationSize_ = std::pair { width, height };
     setSize (width, height);
 }
 
 inline void vox::suite::SuiteEditor::resized()
 {
-    processor_.setEditorSize (getWidth(), getHeight());
+    const auto actual = std::pair { getWidth(), getHeight() };
+    if (! initialising_ && (! presentationSize_ || *presentationSize_ != actual))
+    {
+        presentationSize_.reset();
+        processor_.setEditorSize (actual.first, actual.second);
+    }
     if (content_ != nullptr)
         content_->setBounds (getLocalBounds().withTrimmedTop (headerHeight).withTrimmedBottom (footerHeight));
 }

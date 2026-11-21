@@ -468,6 +468,21 @@ void PatternStore::setSong (const SongData& song)
     }
 }
 
+bool PatternStore::setSongIfUnchanged (const SongData& song, std::uint64_t expected)
+{
+    SongData next = song;
+    next.normalise();
+    if (const auto hook = beforeCommitForTesting) hook();
+    {
+        const juce::SpinLock::ScopedLockType sl (lock_);
+        if (generation_.load() != expected) return false;
+        std::swap (song_, next);
+        songGeneration_ = expected + 1;
+        generation_.store (expected + 1);
+    }
+    return true;
+}
+
 void PatternStore::copyEverything (Everything& out) const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);

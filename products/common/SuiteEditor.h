@@ -11,6 +11,8 @@
 #include "VoxLookAndFeel.h"
 
 #include <memory>
+#include <optional>
+#include <utility>
 
 namespace vox::suite {
 
@@ -64,6 +66,9 @@ public:
     }
 
     void resized() override;
+    // Opt-in display/work-area fallback. This visual size is not UIST.
+    // A subsequent real user resize restores ordinary size persistence.
+    void setPresentationSize (int width, int height);
 
     // The product's controls, laid out between header and footer.
     void setContent (std::unique_ptr<juce::Component> content)
@@ -88,6 +93,8 @@ private:
     juce::String footerText_;
     juce::Colour accent_;
     std::unique_ptr<juce::Component> content_;
+    std::optional<std::pair<int, int>> presentationSize_;
+    bool initialising_ = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuiteEditor)
 };

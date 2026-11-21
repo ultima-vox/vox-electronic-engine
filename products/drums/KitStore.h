@@ -17,6 +17,7 @@
 #include "engine/KitEngine.h"
 
 #include <atomic>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -31,6 +32,8 @@ public:
     //== message / host threads
     kit::PadSettings pad (int pad) const;
     void setPad (int pad, const kit::PadSettings& settings);   // structural fields only
+    bool setPadIfUnchanged (int pad, const kit::PadSettings&, std::uint64_t expectedGeneration);
+    std::function<void()> beforeCommitForTesting; // Conditional UI commit boundary, empty in production.
     kit::KitSettings snapshot() const;
     void setAll (const kit::KitSettings& settings);           // structural fields only
     void setVoiceLimit (int voices);                          // 16, 32 or 64

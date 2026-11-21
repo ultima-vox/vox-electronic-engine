@@ -279,6 +279,10 @@ public:
     // generation; review 6745483562).
     void copySlot (int index, StoredPattern& out, std::uint64_t& generation) const;
     void setSlot (int index, const StoredPattern& pattern);
+    // Message-thread scoped editors: refuse a stale snapshot atomically with
+    // the write. Same canonical data/generation as setSlot/setAlternate.
+    bool setSlotIfUnchanged (int index, bool alternate, const StoredPattern&, std::uint64_t expectedGeneration);
+    bool setSongIfUnchanged (const SongData&, std::uint64_t expectedGeneration);
     void setAll (const std::array<StoredPattern, slotCount>& slots);
     void copyAll (std::array<StoredPattern, slotCount>& out) const;
 
@@ -286,6 +290,7 @@ public:
     // slot (A); swapping exchanges A and B. Saved with the slots (DSEQ).
     StoredPattern alternate (int index) const;   // tests
     void copyAlternate (int index, StoredPattern& out) const;
+    void copyAlternate (int index, StoredPattern& out, std::uint64_t& generation) const;
     void setAlternate (int index, const StoredPattern& pattern);
     void copyAlternates (std::array<StoredPattern, slotCount>& out) const;
     void setAlternates (const std::array<StoredPattern, slotCount>& alternates);
@@ -400,6 +405,7 @@ public:
     // Replaces the newest entry's result (one knob drag = one undo step);
     // false if there is none for `slot` or it can be redone instead.
     bool amendLast (int slot, const StoredPattern& after);
+    bool amendLastAlternate (int slot, const StoredPattern& after);
     bool amendLastSong (const SongData& after);   // the same for a song edit
     bool canUndo() const noexcept { return ! undo_.empty(); }
     bool canRedo() const noexcept { return ! redo_.empty(); }

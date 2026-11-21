@@ -19,6 +19,7 @@
 //    transport, sequencer, MIDI, automation and audition all active.
 #include "DrumsPatternTestUtil.h"
 #include "Processor.h"
+#include "DrumsDonorEditorFixture.h"
 #include "DrumsEditor.h"
 #include "DrumsParameters.h"
 #include "KitStore.h"
@@ -318,13 +319,13 @@ struct StructuralContextSetter {
 };
 
 //==============================================================================
-void testEditorBindings()
+void testDonorEditorBindings()
 {
     auto p = makeProcessor();
-    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
-    check (panel != nullptr, "the Drums editor shows the Drums panel");
+    check (panel != nullptr, "the donor reference fixture shows the original panel");
     if (panel == nullptr)
         return;
 
@@ -1675,7 +1676,7 @@ void testPatterns()
     // and its commit; the next poll must show the committed pattern.
     {
         auto p = makeProcessor();
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
         auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
         auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
         check (panel != nullptr, "Drums panel for the pattern view");
@@ -2101,7 +2102,7 @@ void testPatternEditorUi()
     using vox::drums::PatternStore;
     using vox::drums::StoredPattern;
     auto p = makeProcessor();
-    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<vox::drums::DrumsPanel*> (frame->content()) : nullptr;
     check (panel != nullptr, "step editor: Drums panel");
@@ -2268,7 +2269,7 @@ void testPatternEditorUi()
         vox::drums::PatternEditor::setDragRootForTesting (testRoot);
         // Instance B: same slot index (3), different notes.
         auto q = makeProcessor();
-        std::unique_ptr<juce::AudioProcessorEditor> editorB (q->createEditorAndMakeActive());
+        std::unique_ptr<juce::AudioProcessorEditor> editorB (vox::drums::testutil::makeDonorEditor (*q));
         auto* panelB = dynamic_cast<vox::drums::DrumsPanel*> (dynamic_cast<vox::suite::SuiteEditor*> (editorB.get())->content());
         setPlain (*q, vox::drums::patternParameterId, 2.0f);
         const auto otherHeap = std::make_unique<StoredPattern>();
@@ -2312,15 +2313,18 @@ void testPatternEditorUi()
         const auto r = ed.cellBounds (13, 5);
         check (! r.isEmpty(), "step editor: a selected lane is on the shown page");
         juce::Component* target = nullptr;
-        for (auto* child : ed.getChildren())
-            if (child->getName() == "pattern grid")
-                target = child;
+        const auto findGrid = [&] (auto&& self, juce::Component& parent) -> void {
+            for (auto* child : parent.getChildren())
+                if (child->getName() == "pattern grid") target = child;
+                else self (self, *child);
+        };
+        findGrid (findGrid, ed);
         check (target != nullptr, "step editor: grid component");
         if (target != nullptr)
         {
             const bool before = testutil::stepAt (*heapSlot (store, 2), 13, ed.bar(), 5).on;
             auto source = juce::Desktop::getInstance().getMainMouseSource();
-            const auto pos = (r.getCentre() - target->getPosition()).toFloat();
+            const auto pos = target->getLocalPoint (&ed, r.getCentre()).toFloat();
             const juce::MouseEvent e (source, pos, juce::ModifierKeys(), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, target, target,
                                       juce::Time::getCurrentTime(), pos, juce::Time::getCurrentTime(), 1, false);
             target->mouseDown (e);
@@ -2343,7 +2347,7 @@ int main (int argc, char** argv)
     parametersCsvPath = argv[1];
     juce::ScopedJuceInitialiser_GUI juce;
     testParameterContract();
-    testEditorBindings();
+    testDonorEditorBindings();
     testSound();
     testState();
     testStateReentrancy();

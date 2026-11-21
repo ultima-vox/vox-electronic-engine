@@ -237,7 +237,7 @@ Not yet done:
 
 - `DGEN` v2 (style by UUID) and `DSTL` (embedded user style). Their exact state layout is
   committed before the code.
-- Import UI, library folder, collision handling.
+- Import UI (the library folder and collision handling are done; see below).
 
 ## State layout: `DGEN` v2 and `DSTL` v1 (exact; committed before the code)
 
@@ -299,5 +299,40 @@ Pre-release policy (#136): there is **no `DGEN` v1 decoder**. A development-buil
   project's `DSTL`.
 - **Mutation check (local):** removing the canonical-text check, or the "DSTL not used by
   DGEN" check, fails the corresponding tests.
-- **Not yet:** the library folder, Import/Export UI and the library-level UUID collisions
-  (Replace / Keep both). They come with the import feature.
+- **Library (`drm/style-library`, §11.2):** `products/drums/StyleLibrary.{h,cpp}`, message thread.
+  - **Folder:** `<user application data>/ULTIMA VOX/VOX Drums/Styles` (`VOX_DRUMS_STYLES`, an absolute
+    path, overrides it); one canonical `.voxstyle` per style, `<key>-<first 8 id digits>.voxstyle`.
+    A file that does not parse or exceeds `style::maxTextBytes` is skipped and reported,
+    never offered. The file size is checked before loading; `importText()` checks UTF-8
+    bytes before parsing (the parser also enforces this bound).
+  - **Import:** strict parse (every rejection names its field) → refused for a factory id ("factory
+    styles cannot be replaced") → refused if the style breaks its own assertions
+    (`checkStyleAssertions`; self-consistency only, not genre or quality) → by id: same content
+    hash = "already in the library" (nothing written); other content = a **conflict** until the
+    user chooses **Replace** (the entry changes; projects keep their embedded copy) or **Keep both**
+    (a new id, " (2)", " (3)" … in the name); another id with the same name is allowed.
+  - **Safe Replace:** write, flush and verify canonical text in a sibling `.tmp` file first.
+    If the key changes, rename the existing entry to the new filename before replacing its
+    content. A denied rename leaves the old entry unchanged. A failed replacement attempts
+    to restore the old filename; if that rename also fails, the error identifies the new
+    path that still holds the original content. No successful import is reported on failure.
+    An occupied destination is refused, including another UUID with the same eight-digit
+    prefix. Staging files are never `.voxstyle`. This is message-thread, single-writer I/O;
+    it does not provide interprocess locking or a power-loss durability guarantee.
+  - **Duplicate UUIDs:** all copies are excluded from `list()` with deterministic per-file
+    diagnostics; `find()` returns null and `remove()` returns false. Import refuses all
+    collision choices for that UUID until the user explicitly repairs the duplicate files.
+    No copy is silently chosen as authoritative.
+  - **Projects:** never depend on the library; they restore from their `DSTL`.
+    `projectNotice()` gives "This project uses its own version of <name>" when the library holds
+    the same id with other content.
+  - **Tests** (`testStyleLibrary`): every collision row, refusals (factory id, invalid field,
+    broken assertions), the skipped file, a library style saved in a project and restored into a
+    fresh instance with an **empty** library (same state, same `DSTL` bytes, identical generation),
+    the notice after Replace, remove. `suite_drums_style_library_tests` adds direct ASCII
+    and multibyte input bounds, on-disk bounds, key renames, destination collisions and
+    duplicate UUID recovery. Windows CI additionally forces an old-file deletion failure
+    with a real deny-delete handle and checks same-path replacement failure. These Windows
+    cases require the Windows runner; a local Linux run does not execute them.
+- **Not yet:** the Import / Export UI and the library browser. They belong to the native UI
+  workstream (after the owner's visual sign-off).

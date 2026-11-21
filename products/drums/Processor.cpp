@@ -1,7 +1,7 @@
 #include "Processor.h"
 #include "PatternExport.h"
 
-#include "DrumsEditor.h"
+#include "DrumsWorkspace.h"
 #include "Presets.h"
 
 #include <cmath>
@@ -104,43 +104,6 @@ preset::Section encodeParameterValues (const std::map<std::string, float>& value
     return section;
 }
 
-// DUIS: u32 version (1), u8 page, pad, song bar, pattern bar, export scope.
-preset::Section encodeUiState (const UiState& ui)
-{
-    preset::Section section;
-    section.tag = uiStateSectionTag;
-    putU32 (section.data, 1);
-    for (auto v : { ui.page, ui.pad, ui.songBar, ui.patternBar, ui.exportScope })
-        section.data.push_back (static_cast<std::byte> (v));
-    return section;
-}
-
-bool decodeUiState (const preset::Section& section, UiState& out, juce::String& error)
-{
-    const auto& d = section.data;
-    std::size_t at = 0;
-    std::uint32_t version = 0;
-    if (! takeU32 (d, at, version) || version != 1 || d.size() != 9)
-    {
-        error = "unsupported editor state section";
-        return false;
-    }
-    UiState ui;
-    ui.page = std::to_integer<std::uint8_t> (d[4]);
-    ui.pad = std::to_integer<std::uint8_t> (d[5]);
-    ui.songBar = std::to_integer<std::uint8_t> (d[6]);
-    ui.patternBar = std::to_integer<std::uint8_t> (d[7]);
-    ui.exportScope = std::to_integer<std::uint8_t> (d[8]);
-    if (ui.page > 7 || ui.pad >= padCount || ui.songBar >= kit::maxSongBars || ui.patternBar >= kit::maxPatternBars
-        || ui.exportScope > 1)
-    {
-        error = "invalid editor state section";
-        return false;
-    }
-    out = ui;
-    return true;
-}
-
 GeneratorSettings DrumsProcessor::generator() const
 {
     const juce::SpinLock::ScopedLockType sl (settingsLock_);
@@ -153,16 +116,73 @@ void DrumsProcessor::setGenerator (const GeneratorSettings& g)
     generator_ = g;
 }
 
+bool DrumsProcessor::useUserStyle (std::shared_ptr<const style::Definition> definition, std::uint64_t expectedEpoch)
+{
+    if (! definition) return false;
+    {
+        const juce::SpinLock::ScopedLockType sl (settingsLock_);
+        if (restoringMusic_.load (std::memory_order_acquire) || patternEpoch_.load() != expectedEpoch) return false;
+        generator_.custom = std::move (definition);
+    }
+    updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+    return true;
+}
+
 UiState DrumsProcessor::uiState() const
 {
     const juce::SpinLock::ScopedLockType sl (settingsLock_);
-    return ui_;
+    UiState ui { ui_.page, 0, 0, 0, ui_.exportScope };
+    if (const auto* selection = layout::find (layout_.document(), layout::Type::selection))
+    {
+        ui.pad = selection->payload[0]; ui.songBar = selection->payload[1]; ui.patternBar = selection->payload[2];
+    }
+    return ui;
 }
 
 void DrumsProcessor::setUiState (const UiState& ui)
 {
+    if (ui.pad >= 16 || ui.songBar >= 64 || ui.patternBar >= 4) return;
+    bool changed = false, dirty = false;
+    {
+        const juce::SpinLock::ScopedLockType sl (settingsLock_);
+        ui_ = { ui.page, 0, 0, 0, ui.exportScope };
+        auto doc = layout_.document();
+        const auto at = std::lower_bound (doc.records.begin(), doc.records.end(), 11,
+                                         [] (const layout::Record& r, int type) { return r.type < type; });
+        const layout::Record selection { 11, { ui.pad, ui.songBar, ui.patternBar } };
+        if (at != doc.records.end() && at->type == 11)
+        {
+            if (*at == selection) return;
+            *at = selection;
+        }
+        else doc.records.insert (at, selection);
+        changed = layout_.commit (std::move (doc));
+        dirty = changed && layout_.status() != layout::Status::future;
+        if (changed) layoutGeneration_.fetch_add (1, std::memory_order_release);
+    }
+    if (changed) layoutChanges_.sendChangeMessage();
+    if (dirty) updateHostDisplay (ChangeDetails().withNonParameterStateChanged (true));
+}
+
+DrumsProcessor::LayoutSnapshot DrumsProcessor::layoutState() const
+{
     const juce::SpinLock::ScopedLockType sl (settingsLock_);
-    ui_ = ui;
+    return { layout_.document(), layout_.status(), layoutGeneration_.load (std::memory_order_acquire), layout_.wasRecovered() };
+}
+
+bool DrumsProcessor::commitLayout (layout::Document document, bool confirmedReset)
+{
+    bool dirty = false;
+    {
+        const juce::SpinLock::ScopedLockType sl (settingsLock_);
+        if (! confirmedReset && document == layout_.document()) return true;
+        if (! layout_.commit (std::move (document), confirmedReset)) return false;
+        dirty = layout_.status() != layout::Status::future;
+        layoutGeneration_.fetch_add (1, std::memory_order_release);
+    }
+    layoutChanges_.sendChangeMessage();
+    if (dirty) updateHostDisplay (ChangeDetails().withNonParameterStateChanged (true));
+    return true;
 }
 
 PadRoles DrumsProcessor::padRoles() const
@@ -772,6 +792,58 @@ preset::Section encodeParameters (const std::vector<float>& plain)
 
 } // namespace
 
+namespace {
+// The failed full snapshot, not a reserve estimate, establishes budget pressure.
+// Test a copy first: unknown records, valid/future layouts and music are never
+// candidates for removal, and an unrelated encode failure changes nothing.
+bool recoverLayoutBudget (layout::ProjectState& current, preset::StateDocument& document)
+{
+    std::size_t total = preset::headerBytes + preset::checksumBytes;
+    for (const auto& s : document.sections) total += 8 + s.data.size();
+    if (total <= preset::maxStateBytes) return false;
+    const auto* original = document.find (layoutSectionTag);
+    if (! original) return false;
+    const auto raw = current.save();
+    if (original->data.size() != raw.size()
+        || ! std::equal (raw.begin(), raw.end(), original->data.begin(),
+                        [] (auto a, auto b) { return a == std::to_integer<layout::Byte> (b); })) return false;
+    auto recovered = current;
+    if (! recovered.recoverCorruptV1()) return false;
+    auto candidate = document;
+    for (auto& s : candidate.sections) if (s.tag == layoutSectionTag)
+    {
+        s.data.clear();
+        for (const auto byte : recovered.save()) s.data.push_back (static_cast<std::byte> (byte));
+    }
+    if (! preset::encode (candidate)) return false;
+    document = std::move (candidate);
+    current = std::move (recovered);
+    return true;
+}
+} // namespace
+
+bool DrumsProcessor::recoverOversizedStateForSave (preset::StateDocument& document)
+{
+    const auto* section = document.find (layoutSectionTag);
+    if (! section) return false;
+    const auto raw = section->data;
+    layout::ProjectState recovered;
+    recovered.restore ({ reinterpret_cast<const layout::Byte*> (raw.data()), raw.size() });
+    if (! recoverLayoutBudget (recovered, document)) return false;
+    const juce::SpinLock::ScopedLockType sl (settingsLock_);
+    // A concurrent committed layout edit may already have replaced the corrupt
+    // bytes. Recover the captured save, but never overwrite that newer edit.
+    const auto current = layout_.save();
+    if (current.size() != raw.size()
+        || ! std::equal (current.begin(), current.end(), raw.begin(),
+                        [] (auto a, auto b) { return a == std::to_integer<layout::Byte> (b); })) return true;
+    layout_ = std::move (recovered);
+    // Native UI polls this generation. No ChangeBroadcaster/host callback
+    // while SuiteProcessor holds its state snapshot lock.
+    layoutGeneration_.fetch_add (1, std::memory_order_release);
+    return true;
+}
+
 void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
 {
     const auto& entries = pluginParameters();
@@ -793,7 +865,13 @@ void DrumsProcessor::writeProductState (std::vector<preset::Section>& out) const
     out.push_back (encodeGenerator (g));
     if (g.custom != nullptr)   // a user style travels with the project (DSTL)
         out.push_back (encodeStyleSection (*g.custom));
-    out.push_back (encodeUiState (uiState()));
+    {
+        const juce::SpinLock::ScopedLockType sl (settingsLock_);
+        const auto bytes = layout_.save();
+        preset::Section section { layoutSectionTag, {} };
+        for (const auto byte : bytes) section.data.push_back (static_cast<std::byte> (byte));
+        out.push_back (std::move (section));
+    }
     // Only roles the user set are saved: a project without them keeps
     // exactly the sections it had before roles existed.
     if (const auto roles = padRoles(); roles.explicitRoles)
@@ -865,6 +943,28 @@ juce::MemoryBlock DrumsProcessor::exportPatternMidi (int slot, int passes, doubl
 
 DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::StateDocument& document, juce::String& error)
 {
+    // A future layout must never be relabelled as corrupt v1 and overwritten
+    // just because its opaque payload exceeds v1's 2 KiB bound. Like unknown
+    // writer sections in SuiteProcessor, accept it only with forward-safe
+    // room for the instrument's largest musical state. Refusal changes nothing.
+    if (const auto* section = document.find (layoutSectionTag); section && section->data.size() > layout::maxBytes)
+    {
+        std::size_t at = 0; std::uint32_t version = 0;
+        if (takeU32 (section->data, at, version) && version > 1)
+        {
+            std::size_t unknown = 0;
+            for (const auto& other : document.sections)
+                if (other.tag != suite::uiSectionTag && ! isProductSection (other.tag)) unknown += other.data.size() + 16;
+            const auto reserve = productStateReserve() + 4096; // Same forward-safe budget as SuiteProcessor.
+            const auto room = preset::maxStateBytes > reserve ? preset::maxStateBytes - reserve : 0;
+            const auto extra = section->data.size() - layout::maxBytes;
+            if (extra > room || unknown > room - extra)
+            {
+                error = "the newer layout exceeds the forward-safe state budget; nothing was restored";
+                return {};
+            }
+        }
+    }
     // Samples first: validation and decoding, before anything changes.
     // Hard cap (owner decision, #120): the restored samples reserve their
     // memory next to everything held now; what does not fit is deferred and
@@ -929,12 +1029,11 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         error = "the embedded style is not the generator's style";
         return {};
     }
-    auto uiRestore = std::make_shared<UiState>();
-    if (const auto* section = document.find (uiStateSectionTag))
-    {
-        if (! decodeUiState (*section, *uiRestore, error))
-            return {};
-    }
+    // #130 §14: DUIS is recognised and discarded, never migrated/preserved.
+    // Invalid UI-only DLAY falls back without rejecting valid music/audio.
+    auto layoutRestore = std::make_shared<layout::ProjectState>();
+    if (const auto* section = document.find (layoutSectionTag))
+        layoutRestore->restore ({ reinterpret_cast<const layout::Byte*> (section->data.data()), section->data.size() });
 
     // Pad roles: DROL when the user set them; identity otherwise (DROL
     // written as derived, explicit = 0, also means identity).
@@ -974,15 +1073,26 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
         restore.sections.push_back (encodeGenerator (*generatorRestore));
         if (generatorRestore->custom != nullptr)
             restore.sections.push_back (encodeStyleSection (*generatorRestore->custom));
-        restore.sections.push_back (encodeUiState (*uiRestore));
+        preset::Section section { layoutSectionTag, {} };
+        for (const auto byte : layoutRestore->save()) section.data.push_back (static_cast<std::byte> (byte));
+        restore.sections.push_back (std::move (section));
         if (rolesRestore->explicitRoles)
             restore.sections.push_back (encodeRoles (*rolesRestore));
     }
+    // Normalisation of an accepted older musical encoding can itself grow
+    // the output. Apply the same exception only to this local, fully validated
+    // restore plan; SuiteProcessor still validates unknown/UI state before
+    // committing anything. A later rejection cannot publish recovery.
+    auto prospective = document;
+    std::erase_if (prospective.sections, [this] (const auto& s) { return isProductSection (s.tag); });
+    prospective.sections.insert (prospective.sections.end(), restore.sections.begin(), restore.sections.end());
+    if (recoverLayoutBudget (*layoutRestore, prospective))
+        for (auto& s : restore.sections) if (s.tag == layoutSectionTag) s = *prospective.find (layoutSectionTag);
     restore.apply = [this, shared, held, sampleRestore, kitRestore, patternRestore, alternateRestore, songRestore, generatorRestore,
-                     uiRestore, rolesRestore] {
+                     layoutRestore, rolesRestore] {
+        restoringMusic_.store (true, std::memory_order_release);
         setGenerator (*generatorRestore);
         storeRoles (*rolesRestore);
-        setUiState (*uiRestore);
         store_.setAll (*kitRestore);
         patternStore_.setAll (*patternRestore);
         patternStore_.setAlternates (*alternateRestore);
@@ -995,10 +1105,21 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
             parameter->setValueNotifyingHost (parameter->convertTo0to1 ((*shared)[i].second));
             (*held)[i] = plainValueOf (*parameter);
         }
+        // Publish the UI handoff after the musical stores and parameters
+        // are applied. An open editor must not restore selection against
+        // the previous project's Song length or current slot.
+        {
+            const juce::SpinLock::ScopedLockType sl (settingsLock_);
+            layout_ = *layoutRestore;
+            ui_ = {};
+            layoutGeneration_.fetch_add (1, std::memory_order_release);
+        }
+        layoutChanges_.sendChangeMessage();
     };
     restore.settle = [this, shared, held] {
         for (std::size_t i = 0; i < shared->size(); ++i)
             restored_[i] = { (*shared)[i].second, (*held)[i] };
+        restoringMusic_.store (false, std::memory_order_release);
     };
     return restore;
 }
@@ -1006,7 +1127,13 @@ DrumsProcessor::ProductRestore DrumsProcessor::readProductState (const preset::S
 juce::AudioProcessorEditor* DrumsProcessor::createEditor()
 {
     auto* editor = new vox::suite::SuiteEditor (*this);
-    editor->setContent (std::make_unique<DrumsPanel> (*this));
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+    {
+        const auto requested = editorSize();
+        const auto effective = workspace::fitToDisplay (requested.first, requested.second, static_cast<int> (display->userBounds.getWidth()), static_cast<int> (display->userBounds.getHeight()));
+        editor->setPresentationSize (effective.first, effective.second);
+    }
+    editor->setContent (std::make_unique<DrumsWorkspace> (*this));
     return editor;
 }
 

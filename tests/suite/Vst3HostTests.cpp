@@ -62,6 +62,36 @@ juce::AudioProcessorParameter* parameterNamed (juce::AudioPluginInstance& plugin
     return nullptr;
 }
 
+void testDrumsNativePeer (juce::AudioPluginInstance& plugin, juce::AudioProcessorEditor& editor)
+{
+    // Direct editor-scale simulation: this does not prove a host invoked the VST3 scale interface.
+    // Native monitor DPI is a separate observation, not simulated by these calls.
+    editor.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    editor.setVisible (true); editor.toFront (true);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    auto* peer = editor.getPeer();
+    check (peer && peer->getNativeHandle(), "[VOX Drums] real hosted native editor peer");
+    if (! peer) { editor.removeFromDesktop(); return; }
+    const auto initial = editor.getBounds();
+    juce::MemoryBlock before; plugin.getStateInformation (before);
+    std::printf ("[VOX Drums] native platform scale %.3f; direct editor-scale requests follow (not an OS DPI matrix)\n",
+                 peer->getPlatformScaleFactor());
+    for (float scale : { 1.0f, 1.25f, 1.5f, 2.0f, 1.0f })
+    {
+        editor.setScaleFactor (scale);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+        const auto bounds = editor.getBounds();
+        std::printf ("[VOX Drums] direct editor scale %.2f: peer %dx%d\n", scale, bounds.getWidth(), bounds.getHeight());
+        check (bounds.getWidth() > 0 && bounds.getHeight() > 0 && editor.getPeer() == peer,
+               "[VOX Drums] content scaling retains the live peer and valid bounds");
+        juce::MemoryBlock after; plugin.getStateInformation (after);
+        check (after == before, "[VOX Drums] direct editor scaling preserves complete project bytes including UIST/DLAY");
+    }
+    check (editor.getWidth() == initial.getWidth() && editor.getHeight() == initial.getHeight(),
+           "[VOX Drums] host scale round trip restores editor size exactly");
+    // The editor destructor detaches the plug view before its peer is destroyed.
+}
+
 void testBundle (juce::VST3PluginFormat& format, const juce::String& bundle, const juce::String& name,
                  bool hasEngine, const juce::String& levelName)
 {
@@ -133,6 +163,7 @@ void testBundle (juce::VST3PluginFormat& format, const juce::String& bundle, con
         if (editor != nullptr)
         {
             check (editor->getWidth() >= 1040 && editor->getHeight() >= 700, label + "editor size");
+            if (name == "VOX Drums") testDrumsNativePeer (*plugin, *editor);
             plugin->editorBeingDeleted (editor.get());
             editor.reset();
         }
