@@ -2977,6 +2977,51 @@ void testPreviewTransitions()
                 requireCell ("first-hear", cell, sounded, bounded);
             }
 
+            // A cold Hear is the first audition after a fresh prepare, with the
+            // host engine already playing. Setup and memory allocation happen
+            // before timeProcess; 32 samples make the reported p99 the maximum.
+            {
+                constexpr int coldSamples = 32;
+                bool sounded = true;
+                bool bounded = true;
+                auto measure = [&] ()
+                {
+                    std::vector<double> times;
+                    times.reserve (coldSamples);
+                    unsigned long mallocs = 0;
+                    bool finite = true;
+                    sounded = true;
+                    bounded = true;
+                    bool idleBeforeHear = true;
+                    for (int i = 0; i < coldSamples; ++i)
+                    {
+                        synth->releaseResources();
+                        synth->prepareToPlay (rate, block);
+                        juce::MidiBuffer notes;
+                        for (int note = 0; note < 4; ++note)
+                            notes.addEvent (juce::MidiMessage::noteOn (1, 48 + note * 3, static_cast<juce::uint8> (100)), note);
+                        for (int warm = 0; warm < 4; ++warm) { synth->processBlock (buffer, notes); notes.clear(); }
+                        idleBeforeHear = idleBeforeHear && ! synth->previewActive();
+                        synth->requestPreview (72);
+                        double milliseconds = 0.0;
+                        mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                        times.push_back (milliseconds);
+                        finite = finite && blockFinite (buffer);
+                        sounded = sounded && synth->previewActive() && synth->previewBusValid();
+                        bounded = bounded && synth->previewActiveVoices() <= 8;
+                        synth->cancelPreview();
+                        synth->processBlock (buffer, midi); // settle the old generation before the next prepare
+                    }
+                    check (finite, "cold Hear stays finite");
+                    check (idleBeforeHear, "each cold Hear starts with no prior audition active");
+                    check (bounded, "each cold Hear trial keeps audition voices bounded");
+                    if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (sounded, "each cold Hear trial actually sounds");
+                    return summariseCell (times, rate, block, mallocs);
+                };
+                const auto cell = acceptCell ("cold-hear", rate, block, coldSamples, measure);
+                requireCell ("cold-hear", cell, sounded, bounded);
+            }
+
             {
                 synth->requestPreviewWithFx (72, 0.85f, 0.80f);
                 synth->processBlock (buffer, midi);
