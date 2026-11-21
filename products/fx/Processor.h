@@ -160,6 +160,14 @@ public:
                          fileexport::EncodeObserver=nullptr,void* observerContext=nullptr);
     bool prepareWavDrag(offline::Capture);
     bool prepareMidiDrag(pattern::Pattern,double tempo);
+    enum class PreparedDragState : unsigned { none, unavailable, wav, midi, active };
+    // Message-thread only: validates readability at an explicit user gesture.
+    // A successful check is not an OLE import guarantee: the OS may consume
+    // the file later, after external cleanup or permission changes.
+    PreparedDragState preparedDragState() const noexcept;
+    // Message-thread presentation snapshot: no filesystem operations. A
+    // disappeared file becomes unavailable when the next drag validates it.
+    PreparedDragState cachedPreparedDragState() const noexcept;
     std::optional<fileexport::Kind> preparedDragKind() const noexcept;
     bool dragInProgress() const noexcept;
     using DragLauncher=std::function<bool(const juce::File&,std::function<void()>)>;
@@ -271,6 +279,7 @@ private:
     transport::Tracker transport_;
     const juce::File dragScratchRoot_;
     std::shared_ptr<fileexport::DragFile> preparedDrag_;
+    mutable bool dragPayloadUnavailable_=false; // message-thread presentation cache
     std::unique_ptr<fileexport::Job> fileExportJob_;
 };
 

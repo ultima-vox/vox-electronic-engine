@@ -319,9 +319,27 @@ bool FxProcessor::prepareMidiDrag(pattern::Pattern snapshot,double tempo) {
     return true;
 }
 
+FxProcessor::PreparedDragState FxProcessor::preparedDragState() const noexcept {
+    // Do not touch the scratch filesystem unless called from the message thread.
+    if(!onFileControllerThread()||!preparedDrag_)return PreparedDragState::none;
+    if(dragInProgress())return PreparedDragState::active;
+    dragPayloadUnavailable_=!preparedDrag_->hasReadablePayload();
+    return cachedPreparedDragState();
+}
+
+FxProcessor::PreparedDragState FxProcessor::cachedPreparedDragState() const noexcept {
+    if(!onFileControllerThread()||!preparedDrag_)return PreparedDragState::none;
+    if(dragInProgress())return PreparedDragState::active;
+    if(dragPayloadUnavailable_)return PreparedDragState::unavailable;
+    return preparedDrag_->kind==fileexport::Kind::wav?PreparedDragState::wav:PreparedDragState::midi;
+}
+
 std::optional<fileexport::Kind> FxProcessor::preparedDragKind() const noexcept {
-    if(!onFileControllerThread()||!preparedDrag_||dragInProgress())return {};
-    return preparedDrag_->kind;
+    switch(preparedDragState()){
+        case PreparedDragState::wav:return fileexport::Kind::wav;
+        case PreparedDragState::midi:return fileexport::Kind::midi;
+        default:return {};
+    }
 }
 
 bool FxProcessor::dragInProgress() const noexcept {
@@ -372,8 +390,10 @@ std::optional<fileexport::Completion> FxProcessor::takeFileExportResult() {
     if(result==fileexport::Result::running)return {};
     const auto kind=fileExportJob_->kind();
     const auto purpose=fileExportJob_->purpose();
-    if(purpose==fileexport::Purpose::drag&&result==fileexport::Result::success)
+    if(purpose==fileexport::Purpose::drag&&result==fileexport::Result::success) {
         preparedDrag_=fileExportJob_->takeDragFile();
+        dragPayloadUnavailable_=false;
+    }
     fileExportJob_.reset();
     return fileexport::Completion{kind,result,purpose};
 }

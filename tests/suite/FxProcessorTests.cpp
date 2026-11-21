@@ -11,6 +11,14 @@
 #include <limits>
 #include <span>
 #include <utility>
+#if JUCE_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif JUCE_LINUX || JUCE_MAC
+#include <sys/stat.h>
+#endif
 
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
@@ -1066,6 +1074,190 @@ void checkPreparedDrag() {
     check(scratch.deleteRecursively(),"remove isolated transfer test files");
 }
 
+// Force a real OS-level read failure without changing file bytes. If the
+// environment cannot enforce a denial, report it rather than claiming a pass.
+bool withDeniedDragRead(const juce::File& file,const std::function<void()>& exercise) {
+#if JUCE_WINDOWS
+    const auto fullName=file.getFullPathName();
+    const auto name=fullName.toWideCharPointer();
+    const auto handle=CreateFileW(name,GENERIC_READ,0,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(handle==INVALID_HANDLE_VALUE)return false;
+    exercise();CloseHandle(handle);return true;
+#elif JUCE_LINUX || JUCE_MAC
+    const auto fullName=file.getFullPathName();
+    const auto path=fullName.toRawUTF8();
+    struct stat previous{};
+    if(stat(path,&previous)!=0||chmod(path,0)!=0)return false;
+    const bool denied=!file.hasReadAccess();
+    if(denied)exercise();
+    (void)chmod(path,previous.st_mode&07777);
+    return denied;
+#else
+    juce::ignoreUnused(file,exercise);return false;
+#endif
+}
+
+void checkPreparedDragExpiryRecovery() {
+    using namespace vox::fx;
+    using State=FxProcessor::PreparedDragState;
+    const auto scratch=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("vox-fx-drag-expiry-test","",false);
+    if(!scratch.createDirectory().wasOk()){check(false,"create isolated drag-expiry scratch directory");return;}
+    const auto scratchDirs=[&]{return scratch.findChildFiles(juce::File::findDirectories,false).size();};
+    auto fx=std::make_unique<FxProcessor>(scratch);
+    pattern::Pattern pattern;pattern.steps[0]={true,52,96,100,3};
+    std::vector<std::uint8_t> expected;
+    check(fx->setPattern(pattern)&&pattern::exportMidi(pattern,120.,expected),"prepare bytes for expired MIDI drag recovery");
+
+    int offers=0;
+    juce::File firstPath,recoveredPath;
+    std::function<void()> firstEnd,recoveredEnd;
+    const FxPanel::ExternalDrag drag=[&](const juce::File& path,juce::Component&,std::function<void()> end){
+        ++offers;
+        check(path.existsAsFile()&&path.hasReadAccess()&&path.getSize()==static_cast<juce::int64>(expected.size()),
+              "native launch receives only a retained, readable, complete snapshot");
+        if(offers==1){firstPath=path;firstEnd=end;}
+        else if(offers==2){recoveredPath=path;recoveredEnd=end;}
+        else check(false,"no implicit or duplicate native drag launch");
+        return true;
+    };
+    auto panel=std::make_unique<FxPanel>(*fx,FxPanel::SavePicker{},drag);
+    panel->setSize(1040,760);
+    const auto await=[&]{
+        std::optional<fileexport::Completion> result;
+        const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!(result=fx->takeFileExportResult())&&std::chrono::steady_clock::now()<end)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return result;
+    };
+    panel->prepareMidiDragButton().onClick();
+    const auto prepared=await();
+    check(prepared&&prepared->purpose==fileexport::Purpose::drag&&prepared->result==fileexport::Result::success&&
+          fx->preparedDragState()==State::midi,"initial MIDI snapshot is valid and ready");
+    panel->dragGrip().begin();
+    juce::MemoryBlock original;
+    check(offers==1&&fx->dragInProgress()&&firstPath.loadFileAsData(original)&&original.getSize()==expected.size()&&
+          std::memcmp(original.getData(),expected.data(),expected.size())==0,
+          "first offer preserves the exact prepared MIDI bytes");
+    if(firstEnd)firstEnd();
+    check(!fx->dragInProgress()&&fx->preparedDragState()==State::midi,"native completion releases the first offer");
+
+    check(firstPath.deleteFile()&&!firstPath.existsAsFile()&&firstPath.getParentDirectory().exists(),
+          "simulate external temporary-file cleanup after the native handoff completed");
+    // UI refresh reads only the cached presentation snapshot; deletion is
+    // discovered by the explicit gesture's controller validation, not by I/O
+    // in the 25 Hz timer. An OS consumer can still race after that check.
+    check(fx->cachedPreparedDragState()==State::midi,
+          "cached drag presentation does not probe a deleted file");
+    const auto cacheStart=std::chrono::steady_clock::now();
+    unsigned readyReads=0;
+    for(int i=0;i<100000;++i)readyReads+=fx->cachedPreparedDragState()==State::midi?1u:0u;
+    const auto cacheMicros=std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now()-cacheStart).count();
+    std::printf("FX drag presentation cache: 100000 reads in %lld us (no filesystem)\n",
+                static_cast<long long>(cacheMicros));
+    check(readyReads==100000,"cached presentation remains stable without filesystem polling");
+    panel->dragGrip().begin();
+    check(offers==1&&!panel->dragGrip().isEnabled(),
+          "first explicit drag detects expiry and disables the handle without an OS offer");
+    check(fx->preparedDragState()==State::unavailable&&!fx->preparedDragKind()&&!fx->dragInProgress()&&
+          fx->cachedPreparedDragState()==State::unavailable,
+          "expired snapshot is reported unavailable rather than remaining drag-ready");
+    panel->dragGrip().begin();
+    check(offers==1&&!panel->dragGrip().isEnabled()&&panel->dragGrip().getButtonText()=="Snapshot unavailable"&&
+          panel->dragGrip().getTooltip().contains("not recreated automatically"),
+          "missing-file retry is not offered and the disabled handle explains explicit recovery");
+    check(!fx->offerPreparedDrag([&](const juce::File&,std::function<void()>){++offers;return true;})&&offers==1&&
+          !fx->fileExportStatus()&&!firstPath.existsAsFile()&&firstPath.getParentDirectory().exists()&&scratchDirs()==1,
+          "invalid retry neither launches, silently recreates the file nor evicts an offered lease");
+
+    panel->prepareMidiDragButton().onClick();
+    const auto recovered=await();
+    check(recovered&&recovered->purpose==fileexport::Purpose::drag&&recovered->result==fileexport::Result::success&&
+          fx->preparedDragState()==State::midi&&!firstPath.existsAsFile()&&firstPath.getParentDirectory().exists()&&scratchDirs()==2,
+          "explicit Prepare creates a new snapshot while the removed path stays missing and its offered directory is retained");
+    panel->dragGrip().begin();
+    juce::MemoryBlock replacement;
+    check(offers==2&&recoveredPath!=firstPath&&fx->dragInProgress()&&recoveredPath.loadFileAsData(replacement)&&
+          replacement.getSize()==expected.size()&&std::memcmp(replacement.getData(),expected.data(),expected.size())==0,
+          "explicit recovery offers a distinct file with the original complete MIDI snapshot");
+    if(firstEnd)firstEnd();
+    check(fx->dragInProgress()&&!fx->preparedDragKind(),"stale completion from the expired lease cannot unlock the replacement drag");
+    if(recoveredEnd)recoveredEnd();
+    check(!fx->dragInProgress()&&fx->preparedDragState()==State::midi,"the current completion releases the replacement drag");
+    if(!withDeniedDragRead(recoveredPath,[&]{
+        check(fx->preparedDragState()==State::unavailable&&
+              !fx->offerPreparedDrag([](const juce::File&,std::function<void()>){return true;}),
+              "unreadable MIDI snapshot refuses a native offer");
+    }))std::printf("SKIP: OS cannot enforce MIDI read denial in this environment\n");
+    check(recoveredPath.replaceWithText("partial")&&fx->preparedDragState()==State::unavailable&&
+          !fx->preparedDragKind()&&recoveredPath.existsAsFile(),
+          "truncated retained bytes disable retry without deleting or silently rebuilding the offered file");
+
+    State offMessageThread=State::active,cachedOffThread=State::active;
+    std::thread probe([&]{offMessageThread=fx->preparedDragState();cachedOffThread=fx->cachedPreparedDragState();});probe.join();
+    check(offMessageThread==State::none&&cachedOffThread==State::none&&recoveredPath.existsAsFile(),
+          "off-message-thread queries return before any scratch-file probe");
+    panel.reset();fx.reset();firstEnd={};recoveredEnd={};
+    check(recoveredPath.existsAsFile()&&firstPath.getParentDirectory().exists()&&scratchDirs()==2,
+          "teardown retains only already-offered paths until the OS temp cleanup");
+    check(scratch.deleteRecursively(),"remove isolated drag-expiry test files");
+}
+
+void checkPreparedWavDragExpiryRecovery() {
+    using namespace vox::fx;
+    using State=FxProcessor::PreparedDragState;
+    const auto scratch=juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("vox-fx-wav-expiry-test","",false);
+    if(!scratch.createDirectory().wasOk()){check(false,"create isolated WAV expiry directory");return;}
+    auto fx=std::make_unique<FxProcessor>(scratch);
+    offline::Settings settings;settings.duration=.05f;
+    const auto await=[&]{
+        std::optional<fileexport::Completion> result;
+        const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(!(result=fx->takeFileExportResult())&&std::chrono::steady_clock::now()<end)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return result;
+    };
+    const auto prepare=[&]{
+        if(!fx->prepareWavDrag(fx->captureProgramWav(settings)))return false;
+        const auto done=await();
+        return done&&done->purpose==fileexport::Purpose::drag&&
+            done->result==fileexport::Result::success&&fx->preparedDragState()==State::wav;
+    };
+    juce::File first,second,third;
+    std::function<void()> firstEnd,secondEnd,thirdEnd;
+    const auto offer=[&](juce::File& target,std::function<void()>& end){
+        return fx->offerPreparedDrag([&](const juce::File& file,std::function<void()> done){
+            target=file;end=std::move(done);return true;
+        });
+    };
+    check(prepare()&&offer(first,firstEnd)&&first.existsAsFile(),"WAV initial prepare and native offer succeed");
+    if(firstEnd)firstEnd();
+    check(first.deleteFile()&&fx->preparedDragState()==State::unavailable&&
+          !fx->offerPreparedDrag([](const juce::File&,std::function<void()>){return true;}),
+          "deleted offered WAV cannot be retried or silently recreated");
+    check(prepare()&&offer(second,secondEnd)&&second!=first&&fx->dragInProgress(),
+          "explicit WAV re-prepare creates and offers a distinct file");
+    if(firstEnd)firstEnd();
+    check(fx->dragInProgress(),"stale WAV completion cannot unlock the replacement offer");
+    if(secondEnd)secondEnd();
+    if(!withDeniedDragRead(second,[&]{
+        check(fx->preparedDragState()==State::unavailable&&
+              !fx->offerPreparedDrag([](const juce::File&,std::function<void()>){return true;}),
+              "unreadable WAV snapshot refuses a native offer");
+    }))std::printf("SKIP: OS cannot enforce WAV read denial in this environment\n");
+    check(second.replaceWithText("partial")&&fx->preparedDragState()==State::unavailable&&
+          !fx->offerPreparedDrag([](const juce::File&,std::function<void()>){return true;}),
+          "truncated offered WAV is unavailable without silent reconstruction");
+    check(prepare()&&offer(third,thirdEnd)&&third!=second&&third!=first,
+          "repeated WAV prepare after truncation uses another distinct path");
+    if(thirdEnd)thirdEnd();
+    fx.reset();firstEnd={};secondEnd={};thirdEnd={};
+    check(!first.existsAsFile()&&first.getParentDirectory().exists()&&second.existsAsFile()&&third.existsAsFile(),
+          "all offered WAV paths and directories remain under OS cleanup policy");
+    check(scratch.deleteRecursively(),"remove isolated WAV expiry files");
+}
+
 void checkTimelineViewport() {
     using namespace vox::fx;
     auto fx=std::make_unique<FxProcessor>();NoiseProgram p;
@@ -1297,6 +1489,7 @@ int main() {
     phase("WAV export pending host save, cancellation and processor unload");checkPendingExportLifecycle();
     phase("MIDI export lifecycle and picker reentry");checkMidiExportLifecycle();checkExportChooserReentry();
     phase("prepared WAV and MIDI drag lifecycle");checkPreparedDrag();
+    phase("expired drag snapshot and explicit recovery");checkPreparedDragExpiryRecovery();checkPreparedWavDragExpiryRecovery();
     phase("host Transition clock matrix and diagnostics");checkHostTransitionMatrix();checkBarClockStates();
     phase("measured serial FX tail and route");checkMeasuredFxTail();
     phase("capture parity");checkCaptureParity();
