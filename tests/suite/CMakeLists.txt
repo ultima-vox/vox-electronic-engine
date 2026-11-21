@@ -301,3 +301,8 @@ set_tests_properties(suite_verify_juce_strict-wrong-commit suite_verify_juce_str
 
 get_property(suite_tests DIRECTORY PROPERTY TESTS)
 set_tests_properties(${suite_tests} PROPERTIES LABELS suite)
+
+add_test(NAME suite_drums_acceptance_checklist
+  COMMAND ${CMAKE_COMMAND} -DCHECKLIST=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptance.cmake)
+set_tests_properties(suite_drums_acceptance_checklist PROPERTIES LABELS suite)

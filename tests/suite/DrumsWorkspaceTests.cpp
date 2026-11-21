@@ -1281,7 +1281,7 @@ void testKeyboardViewportFocus()
         if (focused == last) { reachedLast = true; break; }
         focused->moveKeyboardFocusToSibling (true); pump();
     }
-    check (reachedLast && allVisible, "actual Tab traversal reaches all Routing rows with every focused control visible");
+    check (reachedLast && allVisible, "programmatic focus traversal reaches all Routing rows with every focused control visible");
     bool reachedFirst = false;
     for (int n = 0; n < 100; ++n)
     {
@@ -1291,7 +1291,7 @@ void testKeyboardViewportFocus()
         if (focused == first) { reachedFirst = true; break; }
         focused->moveKeyboardFocusToSibling (false); pump();
     }
-    check (reachedFirst && allVisible, "backward keyboard traversal reveals the previous Routing rows without trapping focus");
+    check (reachedFirst && allVisible, "backward programmatic traversal reveals the previous Routing rows without trapping focus");
     auto* lastFader = ui->sliderFor ("drm.p16.level"); auto* firstFader = ui->sliderFor ("drm.p01.level");
     lastFader->grabKeyboardFocus(); pump();
     check (lastFader->hasKeyboardFocus (true) && visibleThroughViewports (juce::Component::getCurrentlyFocusedComponent()),
