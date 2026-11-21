@@ -70,6 +70,9 @@ jobs:
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
           $env:VOX_SYNTH_PERF_LOG = (Join-Path (Resolve-Path suite-out).Path 'synth-perf.txt')
           $env:VOX_SYNTH_PERF_CSV = (Join-Path (Resolve-Path suite-out).Path 'synth-perf-cells.csv')
+          # Trial-level thread CPU and overall system-load snapshots are taken
+          # outside timed processBlock calls; they are diagnostics, not a gate.
+          $env:VOX_SYNTH_TRIAL_USAGE_CSV = (Join-Path (Resolve-Path suite-out).Path 'synth-trial-usage.csv')
           $env:VOX_FACTORY_AUDIT = (Join-Path (Resolve-Path suite-out).Path 'factory-render.csv')
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -102,6 +105,8 @@ jobs:
             "JUCE: $env:JUCE_COMMIT",
             "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
           )
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $lines += "Machine: $($cpu.Name.Trim()), $($cpu.NumberOfCores) cores / $($cpu.NumberOfLogicalProcessors) threads, $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)) GB RAM, $((Get-CimInstance Win32_OperatingSystem).Caption)"
           foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory -ErrorAction SilentlyContinue) {
             Copy-Item -Recurse -Force $bundle.FullName suite-out\VST3\
             foreach ($file in Get-ChildItem $bundle.FullName -Recurse -File) {
