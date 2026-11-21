@@ -893,6 +893,11 @@ bool SynthesisProcessor::copyPreview (engine::BlockParams& params, PreviewFx& fx
 
 void SynthesisProcessor::adoptPreview (int generation, int tailSamples, const engine::Event* events, int eventCount, const engine::BlockParams& params, const PreviewFx& fx) noexcept
 {
+    // The previous gesture's amp release is up to 280 ms. Leaving those voices
+    // running stacks the 16-voice pool on every click. Cut them here, in
+    // bounded time, then start the new score from silence. Delay history is
+    // invalidated separately and is not filled on this thread.
+    previewEngine_.silenceAudition();
     rtPreviewGen_ = generation;
     rtPreviewEventCount_ = std::clamp (eventCount, 0, previewEventCap);
     for (int i = 0; i < rtPreviewEventCount_; ++i)

@@ -2812,18 +2812,20 @@ void testPreviewTransitions()
                 midi.clear();
             }
 
-            const auto requireCell = [&] (const char* scenario, const TimedCell& cell, bool sounding)
-            {
-                check (cell.mallocs == 0, std::string (scenario) + " processBlock allocates nothing at "
-                                             + std::to_string (rate) + "/" + std::to_string (block));
-                check (cell.p99 < cell.deadline, std::string (scenario) + " p99 stays inside the block deadline at "
-                                                   + std::to_string (rate) + "/" + std::to_string (block)
-                                                   + " p99 " + std::to_string (cell.p99)
-                                                   + " max " + std::to_string (cell.worst)
-                                                   + " deadline " + std::to_string (cell.deadline));
-                if (rate == 96000.0 && block == 32)
-                    check (sounding, std::string (scenario) + " 96k/32 timed a Hear transition");
-            };
+                const auto requireCell = [&] (const char* scenario, const TimedCell& cell, bool sounding, bool bounded)
+                {
+                    check (cell.mallocs == 0, std::string (scenario) + " processBlock allocates nothing at "
+                                                 + std::to_string (rate) + "/" + std::to_string (block));
+                    check (cell.p99 < cell.deadline, std::string (scenario) + " p99 stays inside the block deadline at "
+                                                       + std::to_string (rate) + "/" + std::to_string (block)
+                                                       + " p99 " + std::to_string (cell.p99)
+                                                       + " max " + std::to_string (cell.worst)
+                                                       + " deadline " + std::to_string (cell.deadline));
+                    check (bounded, std::string (scenario) + " does not stack released audition voices at "
+                                       + std::to_string (rate) + "/" + std::to_string (block));
+                    if (rate == 96000.0 && block == 32)
+                        check (sounding, std::string (scenario) + " 96k/32 timed a Hear transition");
+                };
 
             {
                 std::vector<double> times;
@@ -2831,6 +2833,7 @@ void testPreviewTransitions()
                 unsigned long mallocs = 0;
                 bool finite = true;
                 bool sounded = false;
+                bool bounded = true;
                 for (int i = 0; i < samples; ++i)
                 {
                     synth->requestPreview (72);
@@ -2839,13 +2842,14 @@ void testPreviewTransitions()
                     times.push_back (milliseconds);
                     finite = finite && blockFinite (buffer);
                     sounded = synth->previewActive() && synth->previewBusValid();
+                    bounded = bounded && synth->previewActiveVoices() <= 8;
                     synth->cancelPreview();
                     synth->processBlock (buffer, midi);
                 }
                 const auto cell = summariseCell (times, rate, block, mallocs);
                 publishCell ("first-hear", rate, block, samples, cell);
                 check (finite, "first Hear stays finite");
-                requireCell ("first-hear", cell, sounded);
+                requireCell ("first-hear", cell, sounded, bounded);
             }
 
             {
@@ -2856,6 +2860,7 @@ void testPreviewTransitions()
                 unsigned long mallocs = 0;
                 bool finite = true;
                 bool sounded = false;
+                bool bounded = true;
                 for (int i = 0; i < samples; ++i)
                 {
                     const bool alternate = (i % 2) == 0;
@@ -2867,11 +2872,12 @@ void testPreviewTransitions()
                     times.push_back (milliseconds);
                     finite = finite && blockFinite (buffer);
                     sounded = synth->previewActive() && synth->previewBusValid();
+                    bounded = bounded && synth->previewActiveVoices() <= 8;
                 }
                 const auto cell = summariseCell (times, rate, block, mallocs);
                 publishCell ("switch", rate, block, samples, cell);
                 check (finite, "Hear switch stays finite");
-                requireCell ("switch", cell, sounded);
+                requireCell ("switch", cell, sounded, bounded);
             }
 
             {
@@ -2880,6 +2886,7 @@ void testPreviewTransitions()
                 unsigned long mallocs = 0;
                 bool finite = true;
                 bool cleared = false;
+                bool bounded = true;
                 for (int i = 0; i < samples; ++i)
                 {
                     synth->requestPreviewWithFx (72, 0.85f, 0.80f);
@@ -2890,11 +2897,12 @@ void testPreviewTransitions()
                     times.push_back (milliseconds);
                     finite = finite && blockFinite (buffer);
                     cleared = ! synth->previewActive();
+                    bounded = bounded && synth->previewActiveVoices() == 0;
                 }
                 const auto cell = summariseCell (times, rate, block, mallocs);
                 publishCell ("cancel", rate, block, samples, cell);
                 check (finite, "Hear cancel stays finite");
-                requireCell ("cancel", cell, cleared);
+                requireCell ("cancel", cell, cleared, bounded);
             }
 
             {
@@ -2905,6 +2913,7 @@ void testPreviewTransitions()
                 unsigned long mallocs = 0;
                 bool finite = true;
                 bool sounded = false;
+                bool bounded = true;
                 for (int i = 0; i < samples; ++i)
                 {
                     synth->requestPreview (i % 2 == 0 ? 60 : 72);
@@ -2913,11 +2922,12 @@ void testPreviewTransitions()
                     times.push_back (milliseconds);
                     finite = finite && blockFinite (buffer);
                     sounded = synth->previewActive() && synth->previewBusValid();
+                    bounded = bounded && synth->previewActiveVoices() <= 8;
                 }
                 const auto cell = summariseCell (times, rate, block, mallocs);
                 publishCell ("rapid-retrigger", rate, block, samples, cell);
                 check (finite, "rapid Hear retrigger stays finite");
-                requireCell ("rapid-retrigger", cell, sounded);
+                requireCell ("rapid-retrigger", cell, sounded, bounded);
             }
         }
     check (vox::syn::factoryProgramsHumanApproved == 0, "a timed Hear transition is not human approval");

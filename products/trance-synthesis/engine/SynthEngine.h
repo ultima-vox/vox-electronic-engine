@@ -119,6 +119,10 @@ class SynthEngine {
 public:
     void prepare (double sampleRate, int maximumBlockSize) noexcept;
     void reset() noexcept;
+    // Drops every sounding note without scanning the key table. Engine kind
+    // stays put. Used when a new audition replaces the previous one, so a
+    // 280 ms release cannot pile voices up inside the callback.
+    void silenceAudition() noexcept;
 
     // Realtime: no allocation. Overwrites `left`/`right`.
     // Events are in non-decreasing offset order, each offset < frames.
@@ -280,6 +284,7 @@ private:
     void updateMod (int part, const BlockParams& params) noexcept;
     void applyRetrig (VaVoice& voice, const PartParams& params, VoiceMod& mod) noexcept;
     [[nodiscard]] float advanceLfo (LfoState& lfo, double hz, int shape) noexcept;
+    void advanceLfoClock (LfoState& lfo, double hz) noexcept;
     [[nodiscard]] double lfoHz (const PartParams& params, int index) const noexcept;
 
     Part parts_[partCount];

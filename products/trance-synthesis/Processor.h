@@ -107,6 +107,7 @@ public:
     [[nodiscard]] int previewLastOff() const noexcept { return rtPreviewLastOff_; }
     [[nodiscard]] bool previewActive() const noexcept { return rtPreviewActive_; }
     [[nodiscard]] bool previewMonoGate (int part) const noexcept { return previewEngine_.monoGate (part); }
+    [[nodiscard]] int previewActiveVoices() const noexcept { return previewEngine_.activeVoices(); }
     [[nodiscard]] int previewMonoNote (int part) const noexcept { return previewEngine_.monoNote (part); }
     [[nodiscard]] float previewMonoAccent (int part) const noexcept { return previewEngine_.monoAccent (part); }
     [[nodiscard]] int previewGlideSource (int part) const noexcept { return previewEngine_.glideSource (part); }

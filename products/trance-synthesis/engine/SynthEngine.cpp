@@ -293,12 +293,36 @@ void SynthEngine::silencePart (int part) noexcept
 {
     auto& slot = parts_[part];
     slot.mono = {};
+    // Alive keys are the held list. Walking it is bounded by the note count,
+    // not by the 2048-slot table.
+    std::uint16_t key = slot.latest;
+    for (int guard = 0; key != noKey && guard < maxKeys; ++guard)
+    {
+        const std::uint16_t next = slot.keys[key].next;
+        slot.keys[key] = {};
+        key = next;
+    }
     slot.latest = noKey;
-    for (auto& key : slot.keys)
-        key = {};
     for (auto& voice : voices_)
         if (voice.part == part)
             voice = {};
+}
+
+void SynthEngine::silenceAudition() noexcept
+{
+    silencePart (0);
+    silencePart (1);
+    for (auto& part : parts_)
+    {
+        part.bendSemis = 0.0f;
+        for (auto& down : part.sustain)
+            down = false;
+    }
+    for (auto& row : lfo_)
+        for (auto& lfo : row)
+            lfo = {};
+    for (auto& mod : mod_)
+        mod = {};
 }
 
 void SynthEngine::latchEngine (int part, EngineKind next) noexcept
@@ -940,9 +964,21 @@ void SynthEngine::updateMod (int part, const BlockParams& params) noexcept
     auto& mod = mod_[part];
     mod = {};
     const auto& knobs = params.part[part];
+    bool shaped = false;
+    for (int index = 0; index < PartParams::routeSlots; ++index)
+    {
+        const int src = knobs.routeSource[index];
+        if (src >= 1 && src <= 4 && knobs.routeAmount[index] != 0.0f && ! knobs.lfoRetrig[src - 1])
+            shaped = true;
+    }
     float source[13] {};
     for (int index = 0; index < 4; ++index)
-        source[index + 1] = advanceLfo (lfo_[part][index], lfoHz (knobs, index), knobs.lfoShape[index]);
+    {
+        if (shaped)
+            source[index + 1] = advanceLfo (lfo_[part][index], lfoHz (knobs, index), knobs.lfoShape[index]);
+        else
+            advanceLfoClock (lfo_[part][index], lfoHz (knobs, index));
+    }
     for (int index = 0; index < 8; ++index)
         source[index + 5] = std::clamp (params.macro[index], 0.0f, 1.0f) * 2.0f - 1.0f;
     for (int index = 0; index < PartParams::routeSlots; ++index)
@@ -979,21 +1015,7 @@ double SynthEngine::lfoHz (const PartParams& params, int index) const noexcept
 
 float SynthEngine::advanceLfo (LfoState& lfo, double hz, int shape) noexcept
 {
-    const double step = std::max (0.0, hz) / sampleRate_;
-    lfo.phase += step;
-    bool wrapped = false;
-    if (lfo.phase >= 1.0)
-    {
-        lfo.phase -= std::floor (lfo.phase);
-        wrapped = true;
-    }
-    if (wrapped)
-    {
-        lfo.noise = lfo.noise * 1664525u + 1013904223u;
-        lfo.held = (static_cast<float> (lfo.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
-        lfo.target = lfo.held;
-    }
-    lfo.smooth += 0.01f * (lfo.target - lfo.smooth);
+    advanceLfoClock (lfo, hz);
     const double phase = lfo.phase;
     switch (std::clamp (shape, 0, 6))
     {
@@ -1005,6 +1027,20 @@ float SynthEngine::advanceLfo (LfoState& lfo, double hz, int shape) noexcept
         case 6: return lfo.smooth;
         default: return static_cast<float> (std::sin (2.0 * pi * phase));
     }
+}
+
+void SynthEngine::advanceLfoClock (LfoState& lfo, double hz) noexcept
+{
+    const double step = std::max (0.0, hz) / sampleRate_;
+    lfo.phase += step;
+    if (lfo.phase >= 1.0)
+    {
+        lfo.phase -= std::floor (lfo.phase);
+        lfo.noise = lfo.noise * 1664525u + 1013904223u;
+        lfo.held = (static_cast<float> (lfo.noise >> 8) / 16777216.0f) * 2.0f - 1.0f;
+        lfo.target = lfo.held;
+    }
+    lfo.smooth += 0.01f * (lfo.target - lfo.smooth);
 }
 
 void SynthEngine::applyRetrig (VaVoice& voice, const PartParams& params, VoiceMod& mod) noexcept
