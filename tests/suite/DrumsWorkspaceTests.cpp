@@ -1237,6 +1237,76 @@ void testNativeStyleLibrary()
                "write actual native user-style Library capture");
     }
 }
+void testKeyboardViewportFocus()
+{
+    using namespace vox::drums;
+    const bool display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr;
+   #if JUCE_WINDOWS
+    check (display, "Windows native keyboard qualification requires an actual display");
+   #endif
+    if (! display) { std::printf ("Native keyboard peer: no display, not qualified\n"); return; }
+    auto p = std::make_unique<DrumsProcessor>();
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    auto* ui = frame ? dynamic_cast<DrumsWorkspace*> (frame->content()) : nullptr;
+    check (ui != nullptr, "keyboard qualification uses the actual production editor");
+    if (! ui) return;
+    editor->setSize (1040, 700); editor->addToDesktop (juce::ComponentPeer::windowIsTemporary);
+    editor->setVisible (true); editor->toFront (true); pump();
+    check (editor->getPeer() && editor->getPeer()->getNativeHandle(), "production keyboard test attaches a real native peer");
+    auto next = ui->layout(); next.rightTool = workspace::DockTool::routing; ui->setLayout (next); ui->pollForTesting(); pump();
+    auto* routing = ui->toolPage (workspace::DockTool::routing);
+    auto* first = routing->named ("lane.1"); auto* last = routing->named ("lane.16");
+    const auto visibleThroughViewports = [] (juce::Component* control) {
+        for (auto* ancestor = control->getParentComponent(); ancestor; ancestor = ancestor->getParentComponent())
+            if (auto* view = dynamic_cast<juce::Viewport*> (ancestor))
+                if (auto* content = view->getViewedComponent())
+                    if (! view->getViewArea().contains (content->getLocalArea (control, control->getLocalBounds()))) return false;
+        return true;
+    };
+    juce::MemoryBlock before; p->getStateInformation (before); const auto history = p->patternHistory().size();
+    first->grabKeyboardFocus(); pump();
+    check (first->hasKeyboardFocus (false), "native peer gives the first Routing lane actual keyboard focus");
+    last->grabKeyboardFocus(); pump();
+    check (last->hasKeyboardFocus (false) && visibleThroughViewports (last),
+           "keyboard focus reveals an offscreen Routing control in its dock viewport");
+    first->grabKeyboardFocus(); pump();
+    check (visibleThroughViewports (first), "returning keyboard focus reveals the top of the dock again");
+    bool reachedLast = false, allVisible = true;
+    for (int n = 0; n < 100; ++n)
+    {
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        if (! focused || ! ui->isParentOf (focused)) break;
+        allVisible = allVisible && visibleThroughViewports (focused);
+        if (focused == last) { reachedLast = true; break; }
+        focused->moveKeyboardFocusToSibling (true); pump();
+    }
+    check (reachedLast && allVisible, "actual Tab traversal reaches all Routing rows with every focused control visible");
+    bool reachedFirst = false;
+    for (int n = 0; n < 100; ++n)
+    {
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        if (! focused || ! ui->isParentOf (focused)) break;
+        allVisible = allVisible && visibleThroughViewports (focused);
+        if (focused == first) { reachedFirst = true; break; }
+        focused->moveKeyboardFocusToSibling (false); pump();
+    }
+    check (reachedFirst && allVisible, "backward keyboard traversal reveals the previous Routing rows without trapping focus");
+    auto* lastFader = ui->sliderFor ("drm.p16.level"); auto* firstFader = ui->sliderFor ("drm.p01.level");
+    lastFader->grabKeyboardFocus(); pump();
+    check (lastFader->hasKeyboardFocus (true) && visibleThroughViewports (juce::Component::getCurrentlyFocusedComponent()),
+           "keyboard focus reveals pad16 in the single horizontal Mixer viewport");
+    firstFader->grabKeyboardFocus(); pump();
+    check (visibleThroughViewports (juce::Component::getCurrentlyFocusedComponent()), "Mixer keyboard focus returns to pad1 without a saved bank change");
+    juce::MemoryBlock after; p->getStateInformation (after);
+    check (after == before && p->patternHistory().size() == history, "keyboard reveal is presentation-only and leaves project/Undo exact");
+    ui->setListView (true); pump(); p->getStateInformation (before);
+    ui->padSelectButton (15).grabKeyboardFocus(); pump();
+    check (ui->padSelectButton (15).hasKeyboardFocus (false) && visibleThroughViewports (&ui->padSelectButton (15)),
+           "keyboard focus reveals the last Rack list pad through nested dock/Rack viewports");
+    p->getStateInformation (after); check (after == before, "nested focus reveal never rewrites the saved Rack presentation");
+    editor->removeFromDesktop(); p->editorBeingDeleted (editor.get()); editor.reset(); pump();
+}
 void testFullSoundFlow()
 {
     using namespace vox::drums;
@@ -1608,6 +1678,7 @@ int main()
     testSourcePlayhead();
     testFullSoundFlow();
     testNativeStyleLibrary();
+    testKeyboardViewportFocus();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

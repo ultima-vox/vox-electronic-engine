@@ -142,6 +142,14 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 
 ## Evidence and limits
 
+- Keyboard focus in a real Linux native peer reproduced offscreen Routing focus.
+  Focus changes now reveal the focused descendant through nested viewports without
+  consuming keys or changing saved state; Mixer faders opt into JUCE keyboard focus.
+  Forward/backward Routing traversal, horizontal Mixer and nested Rack visibility
+  preserve project/Undo bytes. Local project/workspace/VST3 host tests 3/3 PASS
+  (21.64s). A real hosted VST3 peer accepted content-scale requests 1/1.25/1.5/2/1,
+  preserved state and returned to its original size. Linux X11 at platform scale 1
+  is not Windows peer or OS/host DPI matrix evidence.
 - Native Library package: local **8/8 PASS342.86s** (project, native workspace,
   product, candidate, StyleEngine, StyleLibrary, samples and Drums shell).
   Production UI regressions use isolated temporary library files and cover explicit

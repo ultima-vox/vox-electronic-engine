@@ -10,6 +10,7 @@ public:
     {
         setSliderStyle (juce::Slider::LinearVertical);
         setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        setWantsKeyboardFocus (true);
     }
     void paint (juce::Graphics& g) override
     {

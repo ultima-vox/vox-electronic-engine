@@ -805,10 +805,33 @@ DrumsWorkspace::DrumsWorkspace (DrumsProcessor& p) : impl_ (std::make_unique<Imp
     p.layoutChanges().addChangeListener (this);
     readLayout();
     timerCallback(); startTimerHz (30);
+    juce::Desktop::getInstance().addFocusChangeListener (this);
 }
 DrumsWorkspace::~DrumsWorkspace()
 {
+    juce::Desktop::getInstance().removeFocusChangeListener (this);
     stopTimer(); impl_->processor.layoutChanges().removeChangeListener (this); setLookAndFeel (nullptr);
+}
+void DrumsWorkspace::globalFocusChanged (juce::Component* focused)
+{
+    // Observe JUCE focus without handling keys: DAW transport shortcuts retain
+    // their existing path. Only reveal this workspace's content, inner to outer.
+    if (! focused || ! isParentOf (focused) || ! focused->isShowing()) return;
+    for (auto* ancestor = focused->getParentComponent(); ancestor && ancestor != this; ancestor = ancestor->getParentComponent())
+        if (auto* viewport = dynamic_cast<juce::Viewport*> (ancestor))
+            if (auto* content = viewport->getViewedComponent(); content && (content == focused || content->isParentOf (focused)))
+            {
+                const auto bounds = content->getLocalArea (focused, focused->getLocalBounds());
+                const auto visible = viewport->getViewArea();
+                auto position = viewport->getViewPosition();
+                const auto reveal = [] (int start, int length, int viewStart, int viewLength) {
+                    if (start < viewStart || length > viewLength) return start;
+                    return start + length > viewStart + viewLength ? start + length - viewLength : viewStart;
+                };
+                position.x = reveal (bounds.getX(), bounds.getWidth(), visible.getX(), visible.getWidth());
+                position.y = reveal (bounds.getY(), bounds.getHeight(), visible.getY(), visible.getHeight());
+                viewport->setViewPosition (position);
+            }
 }
 void DrumsWorkspace::paint (juce::Graphics& g) { g.fillAll (c::background); }
 const workspace::Selection& DrumsWorkspace::selection() const noexcept { return impl_->selection; }

@@ -17,7 +17,8 @@ class SongStrip;
 // Draft qualification and the remaining dock/responsiveness/host gates are
 // tracked in NATIVE_WORKSPACE_STATUS.md.
 class DrumsWorkspace final : public juce::Component, public juce::DragAndDropContainer,
-                             private juce::Timer, private juce::ChangeListener {
+                             private juce::Timer, private juce::ChangeListener,
+                             private juce::FocusChangeListener {
 public:
     struct Telemetry {
         std::array<float, 16> pads {};
@@ -64,6 +65,7 @@ public:
 private:
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void globalFocusChanged (juce::Component*) override;
     void readLayout();
     void commitLayout();
     void refreshInspector();

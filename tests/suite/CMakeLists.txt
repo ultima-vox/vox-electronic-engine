@@ -263,7 +263,7 @@ endforeach()
 juce_add_console_app(suite_vst3_host_tests PRODUCT_NAME "suite_vst3_host_tests")
 target_sources(suite_vst3_host_tests PRIVATE Vst3HostTests.cpp)
 target_compile_definitions(suite_vst3_host_tests PRIVATE
-  JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+  JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
   VOX_TEST_COMPANY="${VOX_SUITE_COMPANY_NAME}")
 target_link_libraries(suite_vst3_host_tests PRIVATE
   juce::juce_audio_processors juce::juce_recommended_config_flags)
