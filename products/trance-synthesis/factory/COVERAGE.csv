@@ -1,0 +1,463 @@
+role,style,engine,count,status,reason
+bass,classic90s,psy,6,candidate,psy bass
+bass,classic90s,acid,0,N/A,303 adapter is the Acid role only
+bass,classic90s,va,0,N/A,this bass style uses Psy Bass
+bass,dream,psy,0,N/A,this bass style is written for the VA engine
+bass,dream,acid,0,N/A,303 adapter is the Acid role only
+bass,dream,va,6,candidate,VA
+bass,uplifting,psy,6,candidate,psy bass
+bass,uplifting,acid,0,N/A,303 adapter is the Acid role only
+bass,uplifting,va,0,N/A,this bass style uses Psy Bass
+bass,anthem,psy,6,candidate,psy bass
+bass,anthem,acid,0,N/A,303 adapter is the Acid role only
+bass,anthem,va,0,N/A,this bass style uses Psy Bass
+bass,melodic,psy,0,N/A,this bass style is written for the VA engine
+bass,melodic,acid,0,N/A,303 adapter is the Acid role only
+bass,melodic,va,6,candidate,VA
+bass,balearic,psy,0,N/A,this bass style is written for the VA engine
+bass,balearic,acid,0,N/A,303 adapter is the Acid role only
+bass,balearic,va,6,candidate,VA
+bass,progressive,psy,6,candidate,psy bass
+bass,progressive,acid,0,N/A,303 adapter is the Acid role only
+bass,progressive,va,0,N/A,this bass style uses Psy Bass
+bass,deepprog,psy,0,N/A,this bass style is written for the VA engine
+bass,deepprog,acid,0,N/A,303 adapter is the Acid role only
+bass,deepprog,va,6,candidate,VA
+bass,acidtrance,psy,6,candidate,psy bass
+bass,acidtrance,acid,0,N/A,303 adapter is the Acid role only
+bass,acidtrance,va,0,N/A,this bass style uses Psy Bass
+bass,techtrance,psy,6,candidate,psy bass
+bass,techtrance,acid,0,N/A,303 adapter is the Acid role only
+bass,techtrance,va,0,N/A,this bass style uses Psy Bass
+bass,hardtrance,psy,5,candidate,psy bass
+bass,hardtrance,acid,0,N/A,303 adapter is the Acid role only
+bass,hardtrance,va,0,N/A,this bass style uses Psy Bass
+bass,peaktime,psy,5,candidate,psy bass
+bass,peaktime,acid,0,N/A,303 adapter is the Acid role only
+bass,peaktime,va,0,N/A,this bass style uses Psy Bass
+bass,goa,psy,5,candidate,psy bass
+bass,goa,acid,0,N/A,303 adapter is the Acid role only
+bass,goa,va,0,N/A,this bass style uses Psy Bass
+bass,progpsy,psy,5,candidate,psy bass
+bass,progpsy,acid,0,N/A,303 adapter is the Acid role only
+bass,progpsy,va,0,N/A,this bass style uses Psy Bass
+bass,morning,psy,5,candidate,psy bass
+bass,morning,acid,0,N/A,303 adapter is the Acid role only
+bass,morning,va,0,N/A,this bass style uses Psy Bass
+bass,fullon,psy,5,candidate,psy bass
+bass,fullon,acid,0,N/A,303 adapter is the Acid role only
+bass,fullon,va,0,N/A,this bass style uses Psy Bass
+bass,twilight,psy,5,candidate,psy bass
+bass,twilight,acid,0,N/A,303 adapter is the Acid role only
+bass,twilight,va,0,N/A,this bass style uses Psy Bass
+bass,forest,psy,5,candidate,psy bass
+bass,forest,acid,0,N/A,303 adapter is the Acid role only
+bass,forest,va,0,N/A,this bass style uses Psy Bass
+bass,darkpsy,psy,5,candidate,psy bass
+bass,darkpsy,acid,0,N/A,303 adapter is the Acid role only
+bass,darkpsy,va,0,N/A,this bass style uses Psy Bass
+bass,hitech,psy,5,candidate,psy bass
+bass,hitech,acid,0,N/A,303 adapter is the Acid role only
+bass,hitech,va,0,N/A,this bass style uses Psy Bass
+bass,zenonesque,psy,5,candidate,psy bass
+bass,zenonesque,acid,0,N/A,303 adapter is the Acid role only
+bass,zenonesque,va,0,N/A,this bass style uses Psy Bass
+bass,psybient,psy,0,N/A,this bass style is written for the VA engine
+bass,psybient,acid,0,N/A,303 adapter is the Acid role only
+bass,psybient,va,5,candidate,VA
+acid,classic90s,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,classic90s,acid,5,candidate,303
+acid,classic90s,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,dream,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,dream,acid,5,candidate,303
+acid,dream,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,uplifting,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,uplifting,acid,4,candidate,303
+acid,uplifting,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,anthem,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,anthem,acid,4,candidate,303
+acid,anthem,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,melodic,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,melodic,acid,4,candidate,303
+acid,melodic,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,balearic,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,balearic,acid,4,candidate,303
+acid,balearic,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,progressive,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,progressive,acid,4,candidate,303
+acid,progressive,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,deepprog,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,deepprog,acid,4,candidate,303
+acid,deepprog,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,acidtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,acidtrance,acid,4,candidate,303
+acid,acidtrance,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,techtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,techtrance,acid,4,candidate,303
+acid,techtrance,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,hardtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,hardtrance,acid,4,candidate,303
+acid,hardtrance,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,peaktime,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,peaktime,acid,4,candidate,303
+acid,peaktime,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,goa,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,goa,acid,4,candidate,303
+acid,goa,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,progpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,progpsy,acid,4,candidate,303
+acid,progpsy,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,morning,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,morning,acid,4,candidate,303
+acid,morning,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,fullon,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,fullon,acid,4,candidate,303
+acid,fullon,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,twilight,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,twilight,acid,4,candidate,303
+acid,twilight,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,forest,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,forest,acid,4,candidate,303
+acid,forest,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,darkpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,darkpsy,acid,4,candidate,303
+acid,darkpsy,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,hitech,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,hitech,acid,4,candidate,303
+acid,hitech,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,zenonesque,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,zenonesque,acid,4,candidate,303
+acid,zenonesque,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+acid,psybient,psy,0,N/A,Psy Bass adapter is a bass voice only
+acid,psybient,acid,4,candidate,303
+acid,psybient,va,0,N/A,Acid role uses the 303 adapter; VA leads are the Lead role
+lead,classic90s,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,classic90s,acid,0,N/A,303 adapter is the Acid role only
+lead,classic90s,va,5,candidate,VA
+lead,dream,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,dream,acid,0,N/A,303 adapter is the Acid role only
+lead,dream,va,5,candidate,VA
+lead,uplifting,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,uplifting,acid,0,N/A,303 adapter is the Acid role only
+lead,uplifting,va,5,candidate,VA
+lead,anthem,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,anthem,acid,0,N/A,303 adapter is the Acid role only
+lead,anthem,va,5,candidate,VA
+lead,melodic,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,melodic,acid,0,N/A,303 adapter is the Acid role only
+lead,melodic,va,5,candidate,VA
+lead,balearic,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,balearic,acid,0,N/A,303 adapter is the Acid role only
+lead,balearic,va,5,candidate,VA
+lead,progressive,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,progressive,acid,0,N/A,303 adapter is the Acid role only
+lead,progressive,va,5,candidate,VA
+lead,deepprog,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,deepprog,acid,0,N/A,303 adapter is the Acid role only
+lead,deepprog,va,5,candidate,VA
+lead,acidtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,acidtrance,acid,0,N/A,303 adapter is the Acid role only
+lead,acidtrance,va,5,candidate,VA
+lead,techtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,techtrance,acid,0,N/A,303 adapter is the Acid role only
+lead,techtrance,va,5,candidate,VA
+lead,hardtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,hardtrance,acid,0,N/A,303 adapter is the Acid role only
+lead,hardtrance,va,5,candidate,VA
+lead,peaktime,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,peaktime,acid,0,N/A,303 adapter is the Acid role only
+lead,peaktime,va,5,candidate,VA
+lead,goa,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,goa,acid,0,N/A,303 adapter is the Acid role only
+lead,goa,va,5,candidate,VA
+lead,progpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,progpsy,acid,0,N/A,303 adapter is the Acid role only
+lead,progpsy,va,5,candidate,VA
+lead,morning,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,morning,acid,0,N/A,303 adapter is the Acid role only
+lead,morning,va,5,candidate,VA
+lead,fullon,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,fullon,acid,0,N/A,303 adapter is the Acid role only
+lead,fullon,va,5,candidate,VA
+lead,twilight,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,twilight,acid,0,N/A,303 adapter is the Acid role only
+lead,twilight,va,5,candidate,VA
+lead,forest,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,forest,acid,0,N/A,303 adapter is the Acid role only
+lead,forest,va,5,candidate,VA
+lead,darkpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,darkpsy,acid,0,N/A,303 adapter is the Acid role only
+lead,darkpsy,va,5,candidate,VA
+lead,hitech,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,hitech,acid,0,N/A,303 adapter is the Acid role only
+lead,hitech,va,5,candidate,VA
+lead,zenonesque,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,zenonesque,acid,0,N/A,303 adapter is the Acid role only
+lead,zenonesque,va,5,candidate,VA
+lead,psybient,psy,0,N/A,Psy Bass adapter is a bass voice only
+lead,psybient,acid,0,N/A,303 adapter is the Acid role only
+lead,psybient,va,5,candidate,VA
+pluck-keys,classic90s,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,classic90s,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,classic90s,va,4,candidate,VA
+pluck-keys,dream,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,dream,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,dream,va,4,candidate,VA
+pluck-keys,uplifting,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,uplifting,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,uplifting,va,4,candidate,VA
+pluck-keys,anthem,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,anthem,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,anthem,va,4,candidate,VA
+pluck-keys,melodic,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,melodic,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,melodic,va,4,candidate,VA
+pluck-keys,balearic,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,balearic,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,balearic,va,4,candidate,VA
+pluck-keys,progressive,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,progressive,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,progressive,va,4,candidate,VA
+pluck-keys,deepprog,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,deepprog,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,deepprog,va,4,candidate,VA
+pluck-keys,acidtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,acidtrance,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,acidtrance,va,4,candidate,VA
+pluck-keys,techtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,techtrance,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,techtrance,va,4,candidate,VA
+pluck-keys,hardtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,hardtrance,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,hardtrance,va,4,candidate,VA
+pluck-keys,peaktime,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,peaktime,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,peaktime,va,4,candidate,VA
+pluck-keys,goa,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,goa,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,goa,va,4,candidate,VA
+pluck-keys,progpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,progpsy,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,progpsy,va,4,candidate,VA
+pluck-keys,morning,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,morning,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,morning,va,3,candidate,VA
+pluck-keys,fullon,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,fullon,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,fullon,va,3,candidate,VA
+pluck-keys,twilight,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,twilight,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,twilight,va,3,candidate,VA
+pluck-keys,forest,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,forest,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,forest,va,3,candidate,VA
+pluck-keys,darkpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,darkpsy,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,darkpsy,va,3,candidate,VA
+pluck-keys,hitech,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,hitech,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,hitech,va,3,candidate,VA
+pluck-keys,zenonesque,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,zenonesque,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,zenonesque,va,3,candidate,VA
+pluck-keys,psybient,psy,0,N/A,Psy Bass adapter is a bass voice only
+pluck-keys,psybient,acid,0,N/A,303 adapter is the Acid role only
+pluck-keys,psybient,va,3,candidate,VA
+pad-atmos,classic90s,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,classic90s,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,classic90s,va,5,candidate,VA
+pad-atmos,dream,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,dream,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,dream,va,5,candidate,VA
+pad-atmos,uplifting,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,uplifting,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,uplifting,va,4,candidate,VA
+pad-atmos,anthem,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,anthem,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,anthem,va,4,candidate,VA
+pad-atmos,melodic,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,melodic,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,melodic,va,4,candidate,VA
+pad-atmos,balearic,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,balearic,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,balearic,va,4,candidate,VA
+pad-atmos,progressive,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,progressive,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,progressive,va,4,candidate,VA
+pad-atmos,deepprog,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,deepprog,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,deepprog,va,4,candidate,VA
+pad-atmos,acidtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,acidtrance,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,acidtrance,va,4,candidate,VA
+pad-atmos,techtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,techtrance,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,techtrance,va,4,candidate,VA
+pad-atmos,hardtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,hardtrance,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,hardtrance,va,4,candidate,VA
+pad-atmos,peaktime,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,peaktime,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,peaktime,va,4,candidate,VA
+pad-atmos,goa,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,goa,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,goa,va,4,candidate,VA
+pad-atmos,progpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,progpsy,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,progpsy,va,4,candidate,VA
+pad-atmos,morning,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,morning,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,morning,va,4,candidate,VA
+pad-atmos,fullon,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,fullon,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,fullon,va,4,candidate,VA
+pad-atmos,twilight,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,twilight,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,twilight,va,4,candidate,VA
+pad-atmos,forest,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,forest,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,forest,va,4,candidate,VA
+pad-atmos,darkpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,darkpsy,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,darkpsy,va,4,candidate,VA
+pad-atmos,hitech,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,hitech,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,hitech,va,4,candidate,VA
+pad-atmos,zenonesque,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,zenonesque,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,zenonesque,va,4,candidate,VA
+pad-atmos,psybient,psy,0,N/A,Psy Bass adapter is a bass voice only
+pad-atmos,psybient,acid,0,N/A,303 adapter is the Acid role only
+pad-atmos,psybient,va,4,candidate,VA
+arp,classic90s,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,classic90s,acid,0,N/A,303 adapter is the Acid role only
+arp,classic90s,va,4,candidate,VA
+arp,dream,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,dream,acid,0,N/A,303 adapter is the Acid role only
+arp,dream,va,4,candidate,VA
+arp,uplifting,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,uplifting,acid,0,N/A,303 adapter is the Acid role only
+arp,uplifting,va,4,candidate,VA
+arp,anthem,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,anthem,acid,0,N/A,303 adapter is the Acid role only
+arp,anthem,va,4,candidate,VA
+arp,melodic,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,melodic,acid,0,N/A,303 adapter is the Acid role only
+arp,melodic,va,4,candidate,VA
+arp,balearic,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,balearic,acid,0,N/A,303 adapter is the Acid role only
+arp,balearic,va,4,candidate,VA
+arp,progressive,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,progressive,acid,0,N/A,303 adapter is the Acid role only
+arp,progressive,va,4,candidate,VA
+arp,deepprog,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,deepprog,acid,0,N/A,303 adapter is the Acid role only
+arp,deepprog,va,4,candidate,VA
+arp,acidtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,acidtrance,acid,0,N/A,303 adapter is the Acid role only
+arp,acidtrance,va,4,candidate,VA
+arp,techtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,techtrance,acid,0,N/A,303 adapter is the Acid role only
+arp,techtrance,va,3,candidate,VA
+arp,hardtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,hardtrance,acid,0,N/A,303 adapter is the Acid role only
+arp,hardtrance,va,3,candidate,VA
+arp,peaktime,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,peaktime,acid,0,N/A,303 adapter is the Acid role only
+arp,peaktime,va,3,candidate,VA
+arp,goa,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,goa,acid,0,N/A,303 adapter is the Acid role only
+arp,goa,va,3,candidate,VA
+arp,progpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,progpsy,acid,0,N/A,303 adapter is the Acid role only
+arp,progpsy,va,3,candidate,VA
+arp,morning,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,morning,acid,0,N/A,303 adapter is the Acid role only
+arp,morning,va,3,candidate,VA
+arp,fullon,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,fullon,acid,0,N/A,303 adapter is the Acid role only
+arp,fullon,va,3,candidate,VA
+arp,twilight,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,twilight,acid,0,N/A,303 adapter is the Acid role only
+arp,twilight,va,3,candidate,VA
+arp,forest,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,forest,acid,0,N/A,303 adapter is the Acid role only
+arp,forest,va,3,candidate,VA
+arp,darkpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,darkpsy,acid,0,N/A,303 adapter is the Acid role only
+arp,darkpsy,va,3,candidate,VA
+arp,hitech,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,hitech,acid,0,N/A,303 adapter is the Acid role only
+arp,hitech,va,3,candidate,VA
+arp,zenonesque,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,zenonesque,acid,0,N/A,303 adapter is the Acid role only
+arp,zenonesque,va,3,candidate,VA
+arp,psybient,psy,0,N/A,Psy Bass adapter is a bass voice only
+arp,psybient,acid,0,N/A,303 adapter is the Acid role only
+arp,psybient,va,3,candidate,VA
+stab,classic90s,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,classic90s,acid,0,N/A,303 adapter is the Acid role only
+stab,classic90s,va,2,candidate,VA
+stab,dream,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,dream,acid,0,N/A,303 adapter is the Acid role only
+stab,dream,va,2,candidate,VA
+stab,uplifting,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,uplifting,acid,0,N/A,303 adapter is the Acid role only
+stab,uplifting,va,2,candidate,VA
+stab,anthem,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,anthem,acid,0,N/A,303 adapter is the Acid role only
+stab,anthem,va,2,candidate,VA
+stab,melodic,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,melodic,acid,0,N/A,303 adapter is the Acid role only
+stab,melodic,va,2,candidate,VA
+stab,balearic,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,balearic,acid,0,N/A,303 adapter is the Acid role only
+stab,balearic,va,2,candidate,VA
+stab,progressive,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,progressive,acid,0,N/A,303 adapter is the Acid role only
+stab,progressive,va,2,candidate,VA
+stab,deepprog,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,deepprog,acid,0,N/A,303 adapter is the Acid role only
+stab,deepprog,va,2,candidate,VA
+stab,acidtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,acidtrance,acid,0,N/A,303 adapter is the Acid role only
+stab,acidtrance,va,2,candidate,VA
+stab,techtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,techtrance,acid,0,N/A,303 adapter is the Acid role only
+stab,techtrance,va,2,candidate,VA
+stab,hardtrance,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,hardtrance,acid,0,N/A,303 adapter is the Acid role only
+stab,hardtrance,va,2,candidate,VA
+stab,peaktime,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,peaktime,acid,0,N/A,303 adapter is the Acid role only
+stab,peaktime,va,2,candidate,VA
+stab,goa,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,goa,acid,0,N/A,303 adapter is the Acid role only
+stab,goa,va,2,candidate,VA
+stab,progpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,progpsy,acid,0,N/A,303 adapter is the Acid role only
+stab,progpsy,va,1,candidate,VA
+stab,morning,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,morning,acid,0,N/A,303 adapter is the Acid role only
+stab,morning,va,1,candidate,VA
+stab,fullon,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,fullon,acid,0,N/A,303 adapter is the Acid role only
+stab,fullon,va,1,candidate,VA
+stab,twilight,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,twilight,acid,0,N/A,303 adapter is the Acid role only
+stab,twilight,va,1,candidate,VA
+stab,forest,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,forest,acid,0,N/A,303 adapter is the Acid role only
+stab,forest,va,1,candidate,VA
+stab,darkpsy,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,darkpsy,acid,0,N/A,303 adapter is the Acid role only
+stab,darkpsy,va,1,candidate,VA
+stab,hitech,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,hitech,acid,0,N/A,303 adapter is the Acid role only
+stab,hitech,va,1,candidate,VA
+stab,zenonesque,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,zenonesque,acid,0,N/A,303 adapter is the Acid role only
+stab,zenonesque,va,1,candidate,VA
+stab,psybient,psy,0,N/A,Psy Bass adapter is a bass voice only
+stab,psybient,acid,0,N/A,303 adapter is the Acid role only
+stab,psybient,va,1,candidate,VA

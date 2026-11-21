@@ -71,7 +71,7 @@ private:
     void processReverb(std::span<float*>, std::uint32_t,
                        const EffectSettings&) noexcept;
     static float readDelay(const std::vector<float>&, std::size_t write,
-                           float delaySamples) noexcept;
+                           float delaySamples, std::size_t validSamples) noexcept;
 
     ChainState state_;
     double sampleRate_ { 48000.0 };
@@ -81,6 +81,13 @@ private:
     StereoBuffer chorusBuffer_;
     StereoBuffer delayBuffer_;
     StereoBuffer reverbBuffer_;
+    // Samples written since reset occupy [0, valid). A read outside that
+    // prefix is silence until the ring has been overwritten. reset() does
+    // not fill the lines.
+    std::array<std::size_t, 2> flangerValid_ {};
+    std::array<std::size_t, 2> chorusValid_ {};
+    std::array<std::size_t, 2> delayValid_ {};
+    std::array<std::size_t, 2> reverbValid_ {};
     std::size_t flangerWrite_ {};
     std::size_t chorusWrite_ {};
     std::size_t delayWrite_ {};
