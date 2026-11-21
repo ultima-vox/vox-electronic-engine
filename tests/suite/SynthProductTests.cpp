@@ -814,8 +814,51 @@ void bindRealtimeThread()
 {
 #if defined (_WIN32)
     SetPriorityClass (GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-    SetThreadAffinityMask (GetCurrentThread(), 1);
+    // EcoQoS execution-speed throttling stretches on-CPU time without adding
+    // instructions. Disable it for the qualification thread. Failure is not
+    // fatal: the strict p99 gate still applies either way.
+   #if defined (PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
+    PROCESS_POWER_THROTTLING_STATE power {};
+    power.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    power.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+    power.StateMask = 0;
+    SetProcessInformation (GetCurrentProcess(), ProcessPowerThrottling, &power, sizeof power);
+   #endif
+   #if defined (THREAD_POWER_THROTTLING_EXECUTION_SPEED)
+    THREAD_POWER_THROTTLING_STATE threadPower {};
+    threadPower.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+    threadPower.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+    threadPower.StateMask = 0;
+    SetThreadInformation (GetCurrentThread(), ThreadPowerThrottling, &threadPower, sizeof threadPower);
+   #endif
+    // Logical processor 0 takes most device DPCs. Pin one even, non-zero
+    // processor and check that the mask was accepted.
+    DWORD_PTR affinity = 0;
+    for (int cpu = 2; cpu < 64; cpu += 2)
+    {
+        const DWORD_PTR mask = static_cast<DWORD_PTR> (1) << cpu;
+        if (SetThreadAffinityMask (GetCurrentThread(), mask) != 0)
+        {
+            affinity = mask;
+            break;
+        }
+    }
+    if (affinity == 0)
+        affinity = SetThreadAffinityMask (GetCurrentThread(), 1);
     SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    using AvSetMmThreadCharacteristicsA_fn = HANDLE (WINAPI*) (LPCSTR, LPDWORD);
+    if (HMODULE avrt = LoadLibraryA ("avrt.dll"))
+    {
+        if (auto setTask = reinterpret_cast<AvSetMmThreadCharacteristicsA_fn> (
+                GetProcAddress (avrt, "AvSetMmThreadCharacteristicsA")))
+        {
+            DWORD taskIndex = 0;
+            setTask ("Pro Audio", &taskIndex);
+        }
+    }
+    std::printf ("synth rt cpu %lu affinity 0x%llx\n",
+                 GetCurrentProcessorNumber(),
+                 static_cast<unsigned long long> (affinity));
 #endif
 }
 

@@ -69,7 +69,7 @@ int Wavetable::frame (float position, double cyclesPerSample) const noexcept
 float Wavetable::readFrame (int which, double phase) const noexcept
 {
     const int frame = std::clamp (which, 0, frames - 1);
-    const double wrapped = phase - std::floor (phase);
+    const double wrapped = (phase >= 0.0 && phase < 1.0) ? phase : phase - std::floor (phase);
     const double pos = wrapped * static_cast<double> (cycle);
     const int index = static_cast<int> (pos) % cycle;
     const float frac = static_cast<float> (pos - std::floor (pos));
@@ -92,6 +92,9 @@ void SynthEngine::prepare (double sampleRate, int maximumBlockSize) noexcept
     }
     sampleRate_ = sampleRate;
     maximumBlockSize_ = maximumBlockSize;
+    monoSlew_ = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.003));
+    monoAttack_ = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.002));
+    monoRelease_ = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.06));
     prepared_ = true;
     table_ = &sharedWavetable();
     reset();
@@ -722,12 +725,12 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
         mono.frequency = mono.targetFrequency;
     mono.frequency = std::clamp (mono.frequency, 8.0, sampleRate_ * 0.45);
 
-    const float slew = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.003));
+    const float slew = monoSlew_;
     mono.velocity += slew * (mono.velocityTarget - mono.velocity);
     mono.accent += slew * (mono.accentTarget - mono.accent);
 
-    const float attack = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.002));
-    const float release = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.06));
+    const float attack = monoAttack_;
+    const float release = monoRelease_;
     const float target = mono.gate ? 1.0f : 0.0f;
     mono.amp += (mono.gate ? attack : release) * (target - mono.amp);
 
@@ -749,7 +752,16 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
         const float subGain = std::clamp (params.sub, 0.0f, 1.0f);
         sample = (1.0f - subGain) * saw + subGain * sub;
         sample = std::tanh (sample * (1.0f + 4.0f * params.drive));
-        const float cutoff = 40.0f * std::pow (180.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
+        float cutoff;
+        if (mono.psyCutoffReady && params.cutoff == mono.psyCutoffKey)
+            cutoff = mono.psyCutoffHz;
+        else
+        {
+            mono.psyCutoffKey = params.cutoff;
+            mono.psyCutoffHz = 40.0f * std::pow (180.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
+            mono.psyCutoffReady = true;
+            cutoff = mono.psyCutoffHz;
+        }
         sample = static_cast<float> (mono.svf.next (sample, cutoff, std::clamp (params.resonance, 0.0f, 1.0f), sampleRate_));
         sample *= 1.0f + 0.45f * mono.accent;
     }
@@ -761,13 +773,29 @@ float SynthEngine::renderMono (int part, const PartParams& params) noexcept
         sample = (1.0f - squareGain) * saw + squareGain * square;
         sample = std::tanh (sample * (1.0f + 6.0f * params.drive * params.drive));
         const float envScale = std::clamp (params.env, 0.05f, 1.0f);
-        mono.filterEnv *= std::exp (-1.0f / static_cast<float> (sampleRate_ * (0.05 + 0.45 * (1.0f - params.cutoff)) * envScale));
+        if (! mono.acidEnvReady || params.cutoff != mono.acidEnvCutoff || envScale != mono.acidEnvScale)
+        {
+            mono.acidEnvCutoff = params.cutoff;
+            mono.acidEnvScale = envScale;
+            mono.acidEnvCoeff = std::exp (-1.0f / static_cast<float> (sampleRate_ * (0.05 + 0.45 * (1.0f - params.cutoff)) * envScale));
+            mono.acidEnvReady = true;
+        }
+        mono.filterEnv *= mono.acidEnvCoeff;
         if (mono.glide && mono.filterEnv < 0.35f)
         {
-            const float rise = 1.0f - std::exp (-1.0f / static_cast<float> (sampleRate_ * 0.003));
+            const float rise = monoSlew_;
             mono.filterEnv += rise * (0.35f - mono.filterEnv);
         }
-        const float base = 50.0f * std::pow (80.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
+        float base;
+        if (mono.acidBaseReady && params.cutoff == mono.acidBaseKey)
+            base = mono.acidBaseHz;
+        else
+        {
+            mono.acidBaseKey = params.cutoff;
+            mono.acidBaseHz = 50.0f * std::pow (80.0f, std::clamp (params.cutoff, 0.0f, 1.0f));
+            mono.acidBaseReady = true;
+            base = mono.acidBaseHz;
+        }
         const float cutoff = std::clamp (base * std::exp2 ((2.0f + 4.0f * params.resonance) * mono.filterEnv * (1.0f + mono.accent)),
                                          35.0f, static_cast<float> (sampleRate_ * 0.45));
         sample = acidFilter (part, sample, cutoff, params.resonance);
@@ -889,8 +917,7 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
             voice.wtFrame = table_->frame (params.wtPos, increment);
         }
         const float table = table_->readFrame (voice.wtFrame, voice.wtPhase);
-        voice.wtPhase += increment;
-        voice.wtPhase -= std::floor (voice.wtPhase);
+        voice.wtPhase = vstengine::dspcore::wrapPhase (voice.wtPhase, increment);
         sample += params.wtLevel * table;
     }
     const float env = static_cast<float> (voice.amp.next (params.attack, params.decay, params.sustain, sampleRate_));
@@ -956,6 +983,32 @@ float SynthEngine::renderVa (VaVoice& voice, const PartParams& params, const Voi
         return 0.0f;
     }
     return sample;
+}
+
+void SynthEngine::advanceIdleMod (int part, const BlockParams& params) noexcept
+{
+    bpmLive_ = params.bpmValid && params.bpm > 1.0 ? params.bpm : 120.0;
+    mod_[part] = {};
+    const auto& knobs = params.part[part];
+    for (int index = 0; index < 4; ++index)
+        advanceLfoClock (lfo_[part][index], lfoHz (knobs, index));
+    lastCutoff_[part] = 0.0f;
+}
+
+bool SynthEngine::modIsIdle (const PartParams& knobs) const noexcept
+{
+    for (int index = 0; index < PartParams::routeSlots; ++index)
+    {
+        const int src = knobs.routeSource[index];
+        const int dst = knobs.routeDest[index];
+        const float amount = knobs.routeAmount[index];
+        if (src <= 0 || src > 12 || dst <= 0 || amount == 0.0f)
+            continue;
+        if (src <= 4 && knobs.lfoRetrig[src - 1])
+            continue;
+        return false;
+    }
+    return true;
 }
 
 void SynthEngine::updateMod (int part, const BlockParams& params) noexcept
@@ -1093,6 +1146,9 @@ void SynthEngine::process (float* left, float* right, int frames,
 
     int eventIndex = 0;
     const float output = std::clamp (params.output, 0.0f, 1.0f);
+    bool idleMod[partCount];
+    for (int part = 0; part < partCount; ++part)
+        idleMod[part] = modIsIdle (params.part[part]);
     for (int sample = 0; sample < frames; ++sample)
     {
         while (eventIndex < eventCount && events[eventIndex].offset <= static_cast<std::uint32_t> (sample))
@@ -1106,7 +1162,12 @@ void SynthEngine::process (float* left, float* right, int frames,
         float mixL = 0.0f;
         float mixR = 0.0f;
         for (int part = 0; part < partCount; ++part)
-            updateMod (part, params);
+        {
+            if (idleMod[part])
+                advanceIdleMod (part, params);
+            else
+                updateMod (part, params);
+        }
         for (int part = 0; part < partCount; ++part)
         {
             if (monoEngine (parts_[part].engine))

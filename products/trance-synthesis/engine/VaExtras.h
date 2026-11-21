@@ -45,8 +45,7 @@ struct VaOsc {
             }
             else
                 out = 2.0 * phase - 1.0 - vstengine::dspcore::BlepOscillator::polyBlep (phase, dt);
-            core.phase = phase + dt;
-            core.phase -= std::floor (core.phase);
+            core.phase = vstengine::dspcore::wrapPhase (phase, dt);
             return static_cast<float> (out);
         }
         const double phase = core.phase;
@@ -67,8 +66,7 @@ struct VaOsc {
             tri = std::clamp (tri, -1.5, 1.5);
             out = tri;
         }
-        core.phase = phase + dt;
-        core.phase -= std::floor (core.phase);
+        core.phase = vstengine::dspcore::wrapPhase (phase, dt);
         return static_cast<float> (out);
     }
 };
@@ -77,16 +75,15 @@ struct VaOsc {
 // The default VA low-pass stays on SvfLowpass.
 struct VaFilter {
     double s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0;
-    double fc_ = -1.0, res_ = -1.0, sr_ = -1.0, g_ = 0.0, k_ = 0.0;
+    double fc_ = -1.0, res_ = -1.0, sr_ = -1.0, g_ = 0.0, k_ = 0.0, a1_ = 0.0, a1Fixed_ = 0.0;
     void reset() noexcept
     {
         s1 = s2 = s3 = s4 = 0.0;
         fc_ = -1.0;
     }
     struct Stage { double lp, bp, hp, notch; };
-    VOX_FORCEINLINE static Stage tick (double x, double g, double k, double& ic1, double& ic2) noexcept
+    VOX_FORCEINLINE static Stage tick (double x, double g, double a1, double k, double& ic1, double& ic2) noexcept
     {
-        const double a1 = 1.0 / (1.0 + g * (g + k));
         const double v3 = x - ic2;
         const double v1 = a1 * ic1 + g * a1 * v3;
         const double v2 = ic2 + g * v1;
@@ -115,20 +112,23 @@ struct VaFilter {
             sr_ = sampleRate;
             g_ = std::tan (vstengine::dspcore::pi * fc / sampleRate);
             k_ = 2.0 - 1.9 * res;
+            a1_ = 1.0 / (1.0 + g_ * (g_ + k_));
+            a1Fixed_ = 1.0 / (1.0 + g_ * (g_ + 2.0));
         }
         const double g = g_;
         const double k = k_;
+        const double a1 = a1_;
         const int m = std::clamp (mode, 0, 5);
         double y;
         if (m == 1 || m == 3)
         {
-            const Stage a = tick (x, g, k, s1, s2);
-            const Stage b = tick (m == 1 ? a.lp : a.hp, g, 2.0, s3, s4);
+            const Stage a = tick (x, g, a1, k, s1, s2);
+            const Stage b = tick (m == 1 ? a.lp : a.hp, g, a1Fixed_, 2.0, s3, s4);
             y = m == 1 ? b.lp : b.hp;
         }
         else
         {
-            const Stage a = tick (x, g, k, s1, s2);
+            const Stage a = tick (x, g, a1, k, s1, s2);
             y = m == 2 ? a.hp : m == 4 ? a.bp : m == 5 ? a.notch : a.lp;
         }
         if (! std::isfinite (y))

@@ -182,6 +182,16 @@ private:
         vstengine::dspcore::BlepOscillator sub;
         vstengine::dspcore::SvfLowpass svf;
         float ladder[4] {};
+        bool psyCutoffReady = false;
+        float psyCutoffKey = 0.0f;
+        float psyCutoffHz = 0.0f;
+        bool acidBaseReady = false;
+        float acidBaseKey = 0.0f;
+        float acidBaseHz = 0.0f;
+        bool acidEnvReady = false;
+        float acidEnvCutoff = 0.0f;
+        float acidEnvScale = 0.0f;
+        float acidEnvCoeff = 0.0f;
     };
 
     struct LfoState {
@@ -282,6 +292,8 @@ private:
     [[nodiscard]] float renderVa (VaVoice& voice, const PartParams& params, const VoiceMod& mod) noexcept;
     [[nodiscard]] float acidFilter (int part, float input, float cutoffHz, float resonance) noexcept;
     void updateMod (int part, const BlockParams& params) noexcept;
+    void advanceIdleMod (int part, const BlockParams& params) noexcept;
+    [[nodiscard]] bool modIsIdle (const PartParams& knobs) const noexcept;
     void applyRetrig (VaVoice& voice, const PartParams& params, VoiceMod& mod) noexcept;
     [[nodiscard]] float advanceLfo (LfoState& lfo, double hz, int shape) noexcept;
     void advanceLfoClock (LfoState& lfo, double hz) noexcept;
@@ -296,6 +308,9 @@ private:
     double bpmLive_ = 120.0;
     const Wavetable* table_ = nullptr;
     double sampleRate_ = 48000.0;
+    float monoSlew_ = 0.0f;
+    float monoAttack_ = 0.0f;
+    float monoRelease_ = 0.0f;
     int maximumBlockSize_ = 0;
     bool prepared_ = false;
     std::uint64_t age_ = 1;
