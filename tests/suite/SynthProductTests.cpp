@@ -613,6 +613,29 @@ struct TimedCell
     unsigned long mallocs = 0;
 };
 
+bool qualifiedTrial (const TimedCell& cell) noexcept
+{
+    return cell.mallocs == 0 && cell.p99 < cell.deadline;
+}
+
+bool retainTrialVerdict (bool previous, const TimedCell& cell) noexcept
+{
+    return previous && qualifiedTrial (cell);
+}
+
+void testStrictTrialQualification()
+{
+    TimedCell late; late.deadline = 1.0; late.p50 = 0.3; late.p99 = 1.1;
+    TimedCell quiet = late; quiet.p99 = 0.7;
+    check (! retainTrialVerdict (retainTrialVerdict (true, late), quiet)
+           && retainTrialVerdict (retainTrialVerdict (true, quiet), quiet),
+           "a quiet later trial cannot qualify a prior deadline miss");
+    quiet.p99 = quiet.deadline;
+    check (! qualifiedTrial (quiet), "a p99 exactly at the deadline fails the strict gate");
+    quiet.p99 = 0.7; quiet.mallocs = 1;
+    check (! qualifiedTrial (quiet), "a fast trial with RT allocation is not qualified");
+}
+
 TimedCell summariseCell (std::vector<double> times, double rate, int block, unsigned long mallocs)
 {
     std::sort (times.begin(), times.end());
@@ -643,34 +666,39 @@ void publishCell (const char* scenario, double rate, int block, int n, const Tim
     appendPerfCsv (row);
 }
 
-// One shared-runner preemption used to fail a cell whose median was half the
-// deadline. Take up to three trials. A trial whose own p99 is inside the
-// deadline qualifies. Every trial's median must also be inside it, so a slow
-// render cannot hide behind a single quiet tail.
+// All predefined qualification trials are recorded and must pass individually.
+// A later quiet trial cannot erase a failed p99 or allocation result.
 template <typename Measure>
 TimedCell acceptCell (const char* scenario, double rate, int block, int n, Measure&& measure)
 {
-    TimedCell best;
+    TimedCell worst;
     bool have = false;
+    bool allQualified = true;
     for (int trial = 1; trial <= 3; ++trial)
     {
         const TimedCell cell = measure();
         char name[80];
         std::snprintf (name, sizeof name, "%s#%d", scenario, trial);
         publishCell (name, rate, block, n, cell);
-        if (! have || cell.p99 < best.p99)
-            best = cell;
+        if (! have || cell.p99 > worst.p99)
+            worst = cell;
         have = true;
+        allQualified = retainTrialVerdict (allQualified, cell);
         check (cell.mallocs == 0, std::string (scenario) + " processBlock allocates nothing at "
                                      + std::to_string (rate) + "/" + std::to_string (block));
         check (cell.p50 < cell.deadline, std::string (scenario) + " median stays inside the block deadline at "
                                            + std::to_string (rate) + "/" + std::to_string (block)
                                            + " p50 " + std::to_string (cell.p50)
                                            + " deadline " + std::to_string (cell.deadline));
-        if (cell.mallocs == 0 && cell.p50 < cell.deadline && cell.p99 < cell.deadline)
-            return cell;
+        check (qualifiedTrial (cell), std::string (scenario) + " trial " + std::to_string (trial)
+                                            + " p99 stays inside the block deadline at "
+                                            + std::to_string (rate) + "/" + std::to_string (block)
+                                            + " p99 " + std::to_string (cell.p99)
+                                            + " deadline " + std::to_string (cell.deadline));
     }
-    return best;
+    check (allQualified, std::string (scenario) + " every qualification trial passes at "
+                         + std::to_string (rate) + "/" + std::to_string (block));
+    return worst;
 }
 
 void bindRealtimeThread()
@@ -2985,8 +3013,11 @@ void testPreviewTransitions()
 
 } // namespace
 
-int main()
+int main (int argc, char** argv)
 {
+    testStrictTrialQualification();
+    if (argc == 2 && std::strcmp (argv[1], "--strict-trial-self-test") == 0)
+        return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     juce::ScopedJuceInitialiser_GUI juce;
     testPartsAndCap();
     testState();
