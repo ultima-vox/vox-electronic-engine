@@ -27,6 +27,23 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 - Sound/Sample and donor controls share canonical bindings. Sample A/B, async Load,
   Clear/Library/drop and waveform trim use the existing sample engine. Active gestures
   retain pad/player identity; missing files and closing before completion are tested.
+- Full Sound now presents Source -> Shaping -> Filter/Envelope -> Output in one
+  scrollable flow, with actual Synth/Sample/Layer, sample A/B/waveform/Load/trim,
+  host controls and the existing Main/Out2..9 route. Sample and Sound share one player
+  selection; A/B have explicit immediate selected states. Synthesis controls appear
+  for Synth/Layer and actual Sample fallback conditions; kick-only controls remain
+  model-specific. No synthetic signal nodes or new host parameter IDs.
+  DLAY10 bits0..3 collapse these four sections; other bits are retained. Collapse is
+  layout-only (no music/sample/UIST/Undo changes), persists through save/new editor,
+  and remains session-only over future layout bytes. Active gestures defer collapse.
+- Reproduced and fixed old waveform writes after project restore. Waveform and
+  structural Sound gestures check epoch and canonical Kit generation; conditional
+  pad writes compare generation under the existing non-RT store lock. The Kit
+  generation publishes under that same lock; audio pull still uses its existing
+  non-blocking try-lock, with no new allocation or callback work. Tests restore at
+  the actual commit boundary and retain exact DPAD; inserted external pad edits win.
+  Old decode/dialog callbacks cannot update the restored UI scope, and restore clears
+  stale loading text. Successful trim/structural edits mark non-parameter host state.
 - Real Generator/roles/Library/Routing/Diagnostics views preserve role preview, explicit
   Apply/Cancel, stale-proposal/duplicate refusal and one-step Undo. Embedded custom
   definitions display correctly; choosing a factory clears the override. No note remap.
@@ -177,12 +194,14 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
    Save recovery and the snapshot share the non-RT state transaction, with no callbacks
    or I/O. A concurrent newer committed layout edit is never overwritten.
 2. Pad, step/range and Song bar Inspector follow/pin work, including exact A/B source
-   navigation and explicit per-bar copy-on-first-edit. Sample context remains open.
+   navigation and explicit per-bar copy-on-first-edit. These are the Inspector contexts
+   required by #127 section2; Sample editing remains central with shared pad/player
+   bindings, not an additional pin-kind requirement.
    Song step Pin is disabled: select the Song bar to pin kind3's bar context; a Song
    step/range is never persisted as a misleading pattern pin.
-3. SOUND_SECTIONS still needs collapsible-section presentation. Graphical PARAM_LANES
-   now exists and restores from DLAY; multi-step/range numeric editing is implemented.
-   Existing step/Sound controls remain canonical.
+3. SOUND_SECTIONS and graphical PARAM_LANES are implemented and restore from DLAY;
+   multi-step/range numeric editing and Full Sound's actual source/sample flow are
+   implemented. Keep final product qualification separate from these code checkpoints.
 4. Complete keyboard/focus/scroll and actual Windows VST3 peer/content-scale plus
    OS/host DPI 100/125/150/200% evidence. Raster snapshots are insufficient.
 5. The normal feature merge now includes StyleLibrary #153 at `83c616d429991d8b8da01bdd27d11002630b2103`,

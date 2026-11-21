@@ -94,6 +94,20 @@ void KitStore::setVoiceLimit (int voices)
     setAll (next);
 }
 
+bool KitStore::setPadIfUnchanged (int pad, const kit::PadSettings& settings, std::uint64_t expected)
+{
+    if (pad < 0 || pad >= kit::padCount) return false;
+    if (const auto hook = beforeCommitForTesting) hook();
+    const juce::SpinLock::ScopedLockType sl (lock_);
+    if (generation_.load() != expected) return false;
+    auto next = structure_;
+    next.pads[static_cast<std::size_t> (pad)] = settings;
+    copyStructure (next, structure_); // Same structural/host separation as setAll.
+    dirty_ = true;
+    generation_.fetch_add (1);
+    return true;
+}
+
 kit::KitSettings KitStore::snapshot() const
 {
     const juce::SpinLock::ScopedLockType sl (lock_);
@@ -106,8 +120,8 @@ void KitStore::setAll (const kit::KitSettings& settings)
         const juce::SpinLock::ScopedLockType sl (lock_);
         copyStructure (settings, structure_);
         dirty_ = true;
+        generation_.fetch_add (1);
     }
-    generation_.fetch_add (1);
 }
 
 void KitStore::copyStructure (const kit::KitSettings& from, kit::KitSettings& to) noexcept

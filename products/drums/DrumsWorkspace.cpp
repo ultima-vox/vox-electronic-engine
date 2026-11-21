@@ -586,7 +586,7 @@ struct DrumsWorkspace::Impl {
             editorViews[n].setViewedComponent (editors[n], false);
             owner.addAndMakeVisible (editorViews[n]);
         }
-        sample.onPlayerSelected = [this] (int player) { selectedPlayer = player; };
+        sound.onPlayerSelected = sample.onPlayerSelected = [this] (int player) { selectedPlayer = player; };
         sound.onLayoutChanged = sample.onLayoutChanged = song.onLayoutChanged = [&owner] { owner.resized(); };
         steps.useFixedPatternExportScope();
         steps.useContextInspector();
@@ -718,6 +718,12 @@ struct DrumsWorkspace::Impl {
             layout::Bytes lanes { static_cast<layout::Byte> (steps.parameterLanes().size()) };
             for (const auto kind : steps.parameterLanes()) lanes.push_back (static_cast<layout::Byte> (kind));
             putLayoutRecord (document, layout::Type::paramLanes, std::move (lanes));
+            owner.commitDockDocument (std::move (document));
+        };
+        sound.onSectionsChanged = [&owner, this] {
+            if (applyingLayout) return;
+            auto document = processor.layoutState().document;
+            putLayoutRecord (document, layout::Type::soundSections, { sound.collapsedSections() });
             owner.commitDockDocument (std::move (document));
         };
         for (int i = 0; i < 16; ++i)
@@ -1040,6 +1046,7 @@ void DrumsWorkspace::readLayout()
     if (i.steps.bar() != selected[2] || i.layoutEpoch != i.processor.patternEpoch()) i.steps.selectBar (selected[2]);
     const auto& lanes = bytes (layout::Type::paramLanes);
     i.steps.setParameterLanes ({ lanes.begin() + 1, lanes.end() }, false);
+    i.sound.setCollapsedSections (bytes (layout::Type::soundSections)[0], false);
     if (i.song.selectionStart() != selected[1] || i.layoutEpoch != i.processor.patternEpoch()) i.song.restoreSelection (selected[1]);
     if (i.steps.songBar() != i.song.editedBar()) i.steps.editSongBar (i.song.editedBar());
     if (i.followedSteps)

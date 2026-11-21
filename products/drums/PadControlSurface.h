@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <functional>
 #include <memory>
+#include <cstdint>
 
 namespace vox::drums {
 class DrumsProcessor;
@@ -18,6 +19,11 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     int preferredHeight (int width) const;
+    // DLAY SOUND_SECTIONS bits0..3: Source, Shaping, Filter/Envelope, Output.
+    // Other bits are retained for forward-safe presentation edits.
+    std::uint8_t collapsedSections() const noexcept;
+    bool setCollapsedSections (std::uint8_t mask, bool notify = true);
+    std::function<void()> onSectionsChanged;
     std::function<void()> onLayoutChanged;
     juce::Slider* structuralSlider (const juce::String&);
     juce::ComboBox* structuralCombo (const juce::String&);

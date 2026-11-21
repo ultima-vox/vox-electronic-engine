@@ -156,6 +156,45 @@ void testSurfaces()
     check (std::abs (p->kitStore().pad (4).players[1].start - 0.4f) < 0.002f && p->kitStore().pad (6).players[0].start == 0,
            "waveform trim edits the captured sample across context changes");
     sample.setContext (4, 1);
+    juce::MemoryBlock trimProject; p->getStateInformation (trimProject);
+    const auto trimX = static_cast<float> (wave.getWidth()) * 0.4f;
+    wave.mouseDown (event (trimX, true));
+    p->setStateInformation (trimProject.getData(), static_cast<int> (trimProject.getSize()));
+    const auto restoredStart = p->kitStore().pad (4).players[1].start;
+    const auto restoredPadState = KitStore::encode (p->kitStore().snapshot()).data;
+    wave.mouseDrag (event (static_cast<float> (wave.getWidth()) * 0.7f, true)); wave.mouseUp (event (trimX, false));
+    check (juce::exactlyEqual (p->kitStore().pad (4).players[1].start, restoredStart),
+           "project restore cancels an old waveform trim before it can write into the restored project");
+    sample.update();
+    p->kitStore().beforeCommitForTesting = [&] {
+        p->kitStore().beforeCommitForTesting = {};
+        p->setStateInformation (trimProject.getData(), static_cast<int> (trimProject.getSize()));
+    };
+    wave.mouseDown (event (0, true)); wave.mouseUp (event (0, false));
+    check (KitStore::encode (p->kitStore().snapshot()).data == restoredPadState,
+           "restore immediately before the waveform commit wins without a stale trim write");
+    auto* fine = sound.structuralSlider ("fine");
+    if (fine->onDragStart) fine->onDragStart();
+    p->setStateInformation (trimProject.getData(), static_cast<int> (trimProject.getSize()));
+    fine->setValue (50, juce::sendNotificationSync);
+    if (fine->onDragEnd) fine->onDragEnd();
+    check (KitStore::encode (p->kitStore().snapshot()).data == restoredPadState,
+           "Sound structural drag cannot write an old gesture into the restored project");
+    sound.update();
+    std::vector<std::byte> externalPadState;
+    p->kitStore().beforeCommitForTesting = [&] {
+        p->kitStore().beforeCommitForTesting = {};
+        auto settings = p->kitStore().pad (6); settings.character = 0.33f; p->kitStore().setPad (6, settings);
+        externalPadState = KitStore::encode (p->kitStore().snapshot()).data;
+    };
+    fine->setValue (51, juce::sendNotificationSync);
+    check (KitStore::encode (p->kitStore().snapshot()).data == externalPadState,
+           "conditional Sound commit preserves an external pad edit inserted at the store boundary");
+    sample.loadSample (folder.getChildFile ("missing.wav")); p->samples().waitForPendingDecodes();
+    p->setStateInformation (trimProject.getData(), static_cast<int> (trimProject.getSize())); sample.update();
+    const auto restoredMessage = sample.sampleStatus(); complete(); sample.update();
+    check (sample.sampleStatus() == restoredMessage && p->samples().pad (slotOf (4, 1)).buffer != nullptr,
+           "an old decode completion cannot replace restored sample status or assignment");
     const auto reference = p->samples().pad (slotOf (4, 1)).reference;
     const auto assignedBuffer = p->samples().pad (slotOf (4, 1)).buffer;
     sample.loadSample (folder.getChildFile ("missing.wav")); complete(); sample.update();
@@ -1050,6 +1089,117 @@ void testSongContextInspector()
     check (! ui.patternEditor().editingSource() && ui.songEditor().sourceBar() == -1 && ui.songEditor().editedBar() == -1,
            "completed restore clears ephemeral source/bar edit modes before the next action");
 }
+void testFullSoundFlow()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    PadControlSurface sound (*p, PadControlSurface::Group::sound); sound.setSize (376, 1400);
+    auto* source = sound.structuralCombo ("source");
+    check (source != nullptr, "Full Sound contains the real Synth/Sample/Layer source binding in its signal flow");
+    if (! source) return;
+    const auto find = [] (auto&& self, juce::Component& component, const juce::String& name) -> juce::Component* {
+        if (component.getName() == name) return &component;
+        for (auto* child : component.getChildren()) if (auto* found = self (self, *child, name)) return found;
+        return nullptr;
+    };
+    for (int section = 0; section < 4; ++section)
+        check (find (find, sound, "sound.section." + juce::String (section)) != nullptr,
+               "Full Sound provides four real collapsible signal-flow sections");
+    check (! sound.waveform().isVisible(), "Synth source does not display an unused sample waveform");
+    source->setSelectedItemIndex (2, juce::sendNotificationSync); sound.update();
+    check (p->kitStore().pad (0).source == kit::Source::layer && sound.waveform().isVisible(),
+           "Layer uses the actual source binding and reveals sample shaping in Full Sound");
+    press (*sound.sampleButton ("B"));
+    check (sound.sampleButton ("B")->getToggleState() && ! sound.sampleButton ("A")->getToggleState(),
+           "Full Sound A/B has one immediate and visible selected-player state");
+    sound.structuralSlider ("start")->setValue (0.2, juce::sendNotificationSync);
+    check (std::abs (p->kitStore().pad (0).players[1].start - 0.2f) < 0.001f
+           && juce::exactlyEqual (p->kitStore().pad (0).players[0].start, 0.0f), "Full Sound trim addresses the selected B player, not A");
+    const auto file = juce::File::createTempFile (".wav");
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (file);
+        auto writer = juce::WavAudioFormat().createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (16));
+        check (writer != nullptr, "create Full Sound source fixture");
+        if (writer) { juce::AudioBuffer<float> audio (1, 64); audio.clear(); audio.setSample (0, 0, 0.5f); check (writer->writeFromAudioSampleBuffer (audio, 0, 64), "write Full Sound source fixture"); }
+    }
+    sound.loadSample (file); p->samples().waitForPendingDecodes(); pump(); sound.update();
+    check (p->samples().pad (slotOf (0, 1)).buffer != nullptr, "Full Sound Load uses the actual asynchronous sample library");
+    source->setSelectedItemIndex (1, juce::sendNotificationSync);
+    press (*sound.sampleButton ("A")); sound.loadSample (file); p->samples().waitForPendingDecodes(); pump(); sound.update();
+    check (! sound.structuralCombo ("model")->isVisible(), "usable A-only Sample source hides irrelevant synthesis controls");
+    auto* mode = sound.structuralCombo ("sample_mode"); mode->setSelectedItemIndex (1, juce::sendNotificationSync);
+    press (*sound.sampleButton ("B")); press (*sound.sampleButton ("clear")); sound.update();
+    check (sound.structuralCombo ("model")->isVisible(), "velocity A/B exposes real synth fallback when one required player is missing");
+    mode->setSelectedItemIndex (2, juce::sendNotificationSync); sound.update();
+    check (! sound.structuralCombo ("model")->isVisible(), "A+B with a usable A remains sampled despite missing B");
+    source->setSelectedItemIndex (2, juce::sendNotificationSync); sound.update();
+    check (sound.structuralCombo ("model")->isVisible(), "Layer always exposes its real synthesis model");
+    sound.structuralCombo ("output")->setSelectedItemIndex (8, juce::sendNotificationSync);
+    check (p->kitStore().pad (0).output == 8, "Full Sound output selects the existing Out9 structural route");
+    for (int width : { 320, 376, 720, 1100 }) { sound.setSize (width, sound.preferredHeight (width)); checkToolLayout (sound); }
+    int changes = 0; sound.onSectionsChanged = [&] { ++changes; };
+    auto* drive = sound.structuralSlider ("drive");
+    if (drive->onDragStart) drive->onDragStart();
+    check (! sound.setCollapsedSections (0xa2), "section collapse refuses to hide an active Sound gesture");
+    if (drive->onDragEnd) drive->onDragEnd();
+    check (sound.setCollapsedSections (0xa2) && changes == 1 && ! drive->getParentComponent()->isVisible(),
+           "collapse hides the actual shaping section and retains reserved bits");
+    sound.setSize (376, sound.preferredHeight (376)); checkToolLayout (sound);
+    DrumsWorkspace ui (*p); ui.setSize (1040, 600);
+    const auto full = [] (auto&& self, juce::Component& component) -> PadControlSurface* {
+        if (auto* view = dynamic_cast<PadControlSurface*> (&component); view && view->structuralCombo ("model")) return view;
+        for (auto* child : component.getChildren()) if (auto* found = self (self, *child)) return found;
+        return nullptr;
+    };
+    auto* production = full (full, ui);
+    check (production != nullptr, "production workspace contains the same Full Sound component");
+    if (! production) return;
+    press (*production->sampleButton ("B")); ui.pollForTesting();
+    const auto sampleView = [] (auto&& self, juce::Component& component) -> PadControlSurface* {
+        if (auto* view = dynamic_cast<PadControlSurface*> (&component); view && ! view->structuralCombo ("model")) return view;
+        for (auto* child : component.getChildren()) if (auto* found = self (self, *child)) return found;
+        return nullptr;
+    };
+    auto* sample = sampleView (sampleView, ui);
+    check (sample && sample->sampleButton ("B")->getToggleState() && production->sampleButton ("B")->getToggleState()
+           && std::abs (sample->structuralSlider ("start")->getValue() - 0.2) < 0.001,
+           "Sound and Sample central views follow one actual player selection and canonical trim");
+    const auto save = [&] { juce::MemoryBlock result; p->getStateInformation (result); return result; };
+    const auto decode = [&] (const juce::MemoryBlock& data) { return vox::preset::decode ({ static_cast<const std::byte*> (data.getData()), data.getSize() }, p->product().stateTag, 1).document; };
+    const auto before = decode (save()); const auto history = p->patternHistory().size();
+    check (production->setCollapsedSections (0xa2), "production Sound commits a real collapsed presentation");
+    const auto after = decode (save());
+    for (const auto& section : before.sections)
+        if (section.tag != layoutSectionTag) check (after.find (section.tag) && after.find (section.tag)->data == section.data, "Sound collapse never changes music/sample/UIST sections");
+    check (p->patternHistory().size() == history && layout::find (p->layoutState().document, layout::Type::soundSections)->payload == layout::Bytes { 0xa2 },
+           "Sound collapse commits only canonical DLAY, never musical Undo");
+    const auto committed = save();
+    auto q = std::make_unique<DrumsProcessor>(); q->setStateInformation (committed.getData(), static_cast<int> (committed.getSize()));
+    DrumsWorkspace reopened (*q); reopened.setSize (1040, 600); reopened.pollForTesting();
+    auto* reopenedSound = full (full, reopened);
+    check (reopenedSound && reopenedSound->collapsedSections() == 0xa2, "new project/editor restores Sound sections exactly");
+    auto futureDocument = decode (committed);
+    const std::vector<std::byte> futureBytes { std::byte { 2 }, std::byte {}, std::byte {}, std::byte {}, std::byte { 66 } };
+    for (auto& section : futureDocument.sections) if (section.tag == layoutSectionTag) section.data = futureBytes;
+    const auto future = vox::preset::encode (futureDocument);
+    check (future.has_value(), "Full Sound future-layout fixture fits VOXS");
+    if (future && reopenedSound)
+    {
+        q->setStateInformation (future->data(), static_cast<int> (future->size())); reopened.pollForTesting();
+        reopenedSound->setCollapsedSections (0x0f);
+        juce::MemoryBlock saved; q->getStateInformation (saved);
+        check (q->layoutState().status == layout::Status::future && decode (saved).find (layoutSectionTag)->data == futureBytes
+               && reopenedSound->collapsedSections() == 0x0f, "future Sound layout edits stay session-only and preserve every opaque byte");
+    }
+    if (const auto* destination = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+    {
+        production->setCollapsedSections (0); auto next = ui.layout(); next.primary = workspace::Editor::sound; next.centralVisible = true; ui.setLayout (next); ui.pollForTesting();
+        const auto image = ui.createComponentSnapshot (ui.getLocalBounds()); juce::File folder (destination); folder.createDirectory();
+        juce::FileOutputStream stream (folder.getChildFile ("full-sound-flow.png"));
+        check (stream.setPosition (0) && stream.truncate().wasOk() && juce::PNGImageFormat().writeImageToStream (image, stream), "write actual Full Sound snapshot");
+    }
+    file.deleteFile();
+}
 void testSourcePlayhead()
 {
     using namespace vox::drums;
@@ -1308,6 +1458,7 @@ int main()
     testContextStepInspector();
     testSongContextInspector();
     testSourcePlayhead();
+    testFullSoundFlow();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
