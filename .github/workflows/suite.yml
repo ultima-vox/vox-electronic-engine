@@ -171,7 +171,7 @@ jobs:
   # Explicit diagnostic mode only. The regular PR suite and runner selector
   # are unchanged; the source under measurement is checked out separately.
   drums-rt-study:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.drums_rt_source != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.drums_rt_source != '' && inputs.drums_rt_source != 'discover-runner-labels' }}
     needs: choose_runner
     runs-on: ${{ fromJSON(needs.choose_runner.outputs.runs_on) }}
     timeout-minutes: 120
@@ -217,3 +217,24 @@ jobs:
           path: rt-study
           if-no-files-found: error
           retention-days: 14
+
+  runner-label-discovery:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.drums_rt_source == 'discover-runner-labels' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Identify labels unique to runner 3
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CI_RUNNER_STATUS_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then echo 'Runner-status token unavailable'; exit 1; fi
+          gh api "repos/$REPOSITORY/actions/runners?per_page=100" | jq -r '
+            .runners as $all | ($all[] | select(.name == "3")) as $target |
+            "runner 3 status: \($target.status)",
+            ("runner 3 labels: " + ([$target.labels[].name] | join(", "))),
+            ("labels unique to runner 3: " + ([$target.labels[].name as $label | select([$all[] | select(.name != "3") | .labels[].name | ascii_downcase] | index($label | ascii_downcase) | not) | $label] | join(", ")))
+          '
