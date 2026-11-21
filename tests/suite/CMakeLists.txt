@@ -157,6 +157,7 @@ if(NOT WIN32)
   target_link_libraries(suite_synth_product_tests PRIVATE Threads::Threads)
 endif()
 add_test(NAME suite_synth_product_tests COMMAND suite_synth_product_tests)
+add_test(NAME suite_synth_strict_trial_tests COMMAND suite_synth_product_tests --strict-trial-self-test)
 
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)

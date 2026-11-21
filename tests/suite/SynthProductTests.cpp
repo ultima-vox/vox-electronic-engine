@@ -603,6 +603,92 @@ void appendPerfCsv (const std::string& row)
     out << row << '\n';
 }
 
+#if defined (_WIN32)
+// Optional diagnostic samples bracket the existing wall timer. Thread cycles
+// are not elapsed time and include timer/counter calls; they are useful only for
+// comparing callbacks and do not prove the cause of a wall-time outlier.
+struct CallbackProfileSample
+{
+    double wallMs = 0.0;
+    ULONGLONG cycles = 0;
+    DWORD cpuBefore = 0, cpuAfter = 0;
+    bool valid = false;
+};
+std::vector<CallbackProfileSample> callbackProfile;
+bool collectingCallbackProfile = false;
+
+void writeCallbackProfile (const char* scenario, double rate, int block, int trial)
+{
+    const auto path = envOrEmpty ("VOX_SYNTH_CALLBACK_PROFILE_CSV");
+    if (path.empty()) return;
+    static bool started = false;
+    std::ofstream out (path, started ? std::ios::app : std::ios::trunc);
+    check (static_cast<bool> (out), "callback profile csv opens");
+    if (! out) return;
+    if (! started)
+    {
+        out << "scenario,rate_hz,block,trial,sample,wall_ms,thread_cycles,cpu_before,cpu_after,valid\n";
+        started = true;
+    }
+    for (std::size_t i = 0; i < callbackProfile.size(); ++i)
+    {
+        const auto& sample = callbackProfile[i];
+        out << scenario << ',' << rate << ',' << block << ',' << trial << ',' << i << ','
+            << sample.wallMs << ',' << sample.cycles << ',' << sample.cpuBefore << ','
+            << sample.cpuAfter << ',' << sample.valid << '\n';
+    }
+}
+
+// Coarse OS counters cover the whole measure() trial, including setup between
+// callbacks. They aid diagnosis, not the per-callback deadline verdict.
+struct TrialUsage
+{
+    std::chrono::steady_clock::time_point wall;
+    ULONGLONG thread = 0, idle = 0, system = 0;
+    bool valid = false;
+};
+
+ULONGLONG fileTicks (const FILETIME& value) noexcept
+{
+    return (static_cast<ULONGLONG> (value.dwHighDateTime) << 32) | value.dwLowDateTime;
+}
+
+TrialUsage trialUsage()
+{
+    TrialUsage usage;
+    FILETIME creation {}, exit {}, kernel {}, user {}, idle {}, systemKernel {}, systemUser {};
+    usage.wall = std::chrono::steady_clock::now();
+    usage.valid = GetThreadTimes (GetCurrentThread(), &creation, &exit, &kernel, &user) != 0
+               && GetSystemTimes (&idle, &systemKernel, &systemUser) != 0;
+    if (usage.valid)
+    {
+        usage.thread = fileTicks (kernel) + fileTicks (user);
+        usage.idle = fileTicks (idle);
+        usage.system = fileTicks (systemKernel) + fileTicks (systemUser);
+    }
+    return usage;
+}
+
+void appendTrialUsage (const char* scenario, double rate, int block, int trial,
+                       const TrialUsage& begin, const TrialUsage& end)
+{
+    const auto path = envOrEmpty ("VOX_SYNTH_TRIAL_USAGE_CSV");
+    if (path.empty()) return;
+    static bool started = false;
+    std::ofstream out (path, started ? std::ios::app : std::ios::trunc);
+    check (static_cast<bool> (out), "trial usage csv opens");
+    if (! out) return;
+    if (! started) { out << "scenario,rate_hz,block,trial,valid,trial_wall_ms,thread_cpu_ms,system_busy_pct\n"; started = true; }
+    const bool valid = begin.valid && end.valid && end.thread >= begin.thread && end.idle >= begin.idle
+                    && end.system > begin.system && end.system - begin.system >= end.idle - begin.idle;
+    const double wall = std::chrono::duration<double, std::milli> (end.wall - begin.wall).count();
+    const double cpu = valid ? static_cast<double> (end.thread - begin.thread) / 10000.0 : -1.0;
+    const double busy = valid ? 100.0 * (1.0 - static_cast<double> (end.idle - begin.idle)
+                                                       / static_cast<double> (end.system - begin.system)) : -1.0;
+    out << scenario << ',' << rate << ',' << block << ',' << trial << ',' << valid << ',' << wall << ',' << cpu << ',' << busy << '\n';
+}
+#endif
+
 struct TimedCell
 {
     double p50 = 0.0;
@@ -612,6 +698,29 @@ struct TimedCell
     double deadline = 0.0;
     unsigned long mallocs = 0;
 };
+
+bool qualifiedTrial (const TimedCell& cell) noexcept
+{
+    return cell.mallocs == 0 && cell.p99 < cell.deadline;
+}
+
+bool retainTrialVerdict (bool previous, const TimedCell& cell) noexcept
+{
+    return previous && qualifiedTrial (cell);
+}
+
+void testStrictTrialQualification()
+{
+    TimedCell late; late.deadline = 1.0; late.p50 = 0.3; late.p99 = 1.1;
+    TimedCell quiet = late; quiet.p99 = 0.7;
+    check (! retainTrialVerdict (retainTrialVerdict (true, late), quiet)
+           && retainTrialVerdict (retainTrialVerdict (true, quiet), quiet),
+           "a quiet later trial cannot qualify a prior deadline miss");
+    quiet.p99 = quiet.deadline;
+    check (! qualifiedTrial (quiet), "a p99 exactly at the deadline fails the strict gate");
+    quiet.p99 = 0.7; quiet.mallocs = 1;
+    check (! qualifiedTrial (quiet), "a fast trial with RT allocation is not qualified");
+}
 
 TimedCell summariseCell (std::vector<double> times, double rate, int block, unsigned long mallocs)
 {
@@ -643,34 +752,62 @@ void publishCell (const char* scenario, double rate, int block, int n, const Tim
     appendPerfCsv (row);
 }
 
-// One shared-runner preemption used to fail a cell whose median was half the
-// deadline. Take up to three trials. A trial whose own p99 is inside the
-// deadline qualifies. Every trial's median must also be inside it, so a slow
-// render cannot hide behind a single quiet tail.
+// All predefined qualification trials are recorded and must pass individually.
+// A later quiet trial cannot erase a failed p99 or allocation result.
 template <typename Measure>
 TimedCell acceptCell (const char* scenario, double rate, int block, int n, Measure&& measure)
 {
-    TimedCell best;
+    TimedCell worst;
     bool have = false;
+    bool allQualified = true;
+   #if defined (_WIN32)
+    const bool collectUsage = ! envOrEmpty ("VOX_SYNTH_TRIAL_USAGE_CSV").empty();
+   #endif
     for (int trial = 1; trial <= 3; ++trial)
     {
+       #if defined (_WIN32)
+        const auto usageStart = collectUsage ? trialUsage() : TrialUsage {};
+        collectingCallbackProfile = ! envOrEmpty ("VOX_SYNTH_CALLBACK_PROFILE_CSV").empty();
+        if (collectingCallbackProfile)
+        {
+            callbackProfile.clear();
+            callbackProfile.reserve (static_cast<std::size_t> (n));
+        }
+       #endif
         const TimedCell cell = measure();
+       #if defined (_WIN32)
+        const auto usageEnd = collectUsage ? trialUsage() : TrialUsage {};
+        const bool hadProfile = collectingCallbackProfile;
+        collectingCallbackProfile = false;
+        if (hadProfile)
+        {
+            check (callbackProfile.size() == static_cast<std::size_t> (n), "callback profile has one row per timed callback");
+            writeCallbackProfile (scenario, rate, block, trial);
+        }
+        if (collectUsage) appendTrialUsage (scenario, rate, block, trial, usageStart, usageEnd);
+       #endif
         char name[80];
         std::snprintf (name, sizeof name, "%s#%d", scenario, trial);
         publishCell (name, rate, block, n, cell);
-        if (! have || cell.p99 < best.p99)
-            best = cell;
+        if (! have || cell.p99 > worst.p99)
+            worst = cell;
         have = true;
+        allQualified = retainTrialVerdict (allQualified, cell);
         check (cell.mallocs == 0, std::string (scenario) + " processBlock allocates nothing at "
                                      + std::to_string (rate) + "/" + std::to_string (block));
         check (cell.p50 < cell.deadline, std::string (scenario) + " median stays inside the block deadline at "
                                            + std::to_string (rate) + "/" + std::to_string (block)
                                            + " p50 " + std::to_string (cell.p50)
                                            + " deadline " + std::to_string (cell.deadline));
-        if (cell.mallocs == 0 && cell.p50 < cell.deadline && cell.p99 < cell.deadline)
-            return cell;
+        check (qualifiedTrial (cell), std::string (scenario) + " trial " + std::to_string (trial)
+                                            + " p99 stays inside the block deadline at "
+                                            + std::to_string (rate) + "/" + std::to_string (block)
+                                            + " p99 " + std::to_string (cell.p99)
+                                            + " deadline " + std::to_string (cell.deadline));
     }
-    return best;
+    check (allQualified, std::string (scenario) + " every qualification trial passes at "
+                         + std::to_string (rate) + "/" + std::to_string (block));
+    return worst;
 }
 
 void bindRealtimeThread()
@@ -705,13 +842,40 @@ void configureWorstCase (vox::syn::SynthesisProcessor& synth)
 unsigned long timeProcess (vox::syn::SynthesisProcessor& synth, juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi, double& milliseconds)
 {
     unsigned long calls = 0;
+   #if defined (_WIN32)
+    ULONGLONG cyclesBefore = 0, cyclesAfter = 0;
+    DWORD cpuBefore = 0;
+    bool cyclesValid = false;
+    if (collectingCallbackProfile)
+        cpuBefore = GetCurrentProcessorNumber();
+   #endif
     if (voxProbeAvailable())
         voxProbeBegin();
+   #if defined (_WIN32)
+    // Probe installation walks loaded modules; exclude it from cycle counts.
+    // Counter calls are inside the allocation probe in diagnostic mode only,
+    // so any allocation they cause is conservatively included in the result.
+    if (collectingCallbackProfile)
+        cyclesValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesBefore) != 0;
+   #endif
     const auto started = std::chrono::steady_clock::now();
     synth.processBlock (buffer, midi);
     milliseconds = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - started).count();
+   #if defined (_WIN32)
+    bool afterValid = false;
+    if (collectingCallbackProfile)
+        afterValid = QueryThreadCycleTime (GetCurrentThread(), &cyclesAfter) != 0;
+   #endif
     if (voxProbeAvailable())
         calls = voxProbeEnd();
+   #if defined (_WIN32)
+    if (collectingCallbackProfile)
+    {
+        const DWORD cpuAfter = GetCurrentProcessorNumber();
+        const bool valid = cyclesValid && afterValid && cyclesAfter >= cyclesBefore;
+        callbackProfile.push_back ({ milliseconds, valid ? cyclesAfter - cyclesBefore : 0, cpuBefore, cpuAfter, valid });
+    }
+   #endif
     return calls;
 }
 
@@ -2881,10 +3045,57 @@ void testPreviewTransitions()
                         synth->processBlock (buffer, midi);
                     }
                     check (finite, "first Hear stays finite");
+                    check (bounded, "each first Hear trial keeps audition voices bounded");
+                    if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (sounded, "each first Hear trial actually sounds");
                     return summariseCell (times, rate, block, mallocs);
                 };
                 const auto cell = acceptCell ("first-hear", rate, block, samples, measure);
                 requireCell ("first-hear", cell, sounded, bounded);
+            }
+
+            // Cold-prepare stress: first audition after a fresh prepare, with the
+            // host engine already playing. Setup and memory allocation happen
+            // before timeProcess; 32 samples make the reported p99 the maximum.
+            {
+                constexpr int coldSamples = 32;
+                bool sounded = true;
+                bool bounded = true;
+                auto measure = [&] ()
+                {
+                    std::vector<double> times;
+                    times.reserve (coldSamples);
+                    unsigned long mallocs = 0;
+                    bool finite = true;
+                    sounded = true;
+                    bounded = true;
+                    bool idleBeforeHear = true;
+                    for (int i = 0; i < coldSamples; ++i)
+                    {
+                        synth->releaseResources();
+                        synth->prepareToPlay (rate, block);
+                        juce::MidiBuffer notes;
+                        for (int note = 0; note < 4; ++note)
+                            notes.addEvent (juce::MidiMessage::noteOn (1, 48 + note * 3, static_cast<juce::uint8> (100)), note);
+                        for (int warm = 0; warm < 4; ++warm) { synth->processBlock (buffer, notes); notes.clear(); }
+                        idleBeforeHear = idleBeforeHear && ! synth->previewActive();
+                        synth->requestPreview (72);
+                        double milliseconds = 0.0;
+                        mallocs += timeProcess (*synth, buffer, midi, milliseconds);
+                        times.push_back (milliseconds);
+                        finite = finite && blockFinite (buffer);
+                        sounded = sounded && synth->previewActive() && synth->previewBusValid();
+                        bounded = bounded && synth->previewActiveVoices() <= 8;
+                        synth->cancelPreview();
+                        synth->processBlock (buffer, midi); // settle the old generation before the next prepare
+                    }
+                    check (finite, "cold Hear stays finite");
+                    check (idleBeforeHear, "each cold Hear starts with no prior audition active");
+                    check (bounded, "each cold Hear trial keeps audition voices bounded");
+                    if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (sounded, "each cold Hear trial actually sounds");
+                    return summariseCell (times, rate, block, mallocs);
+                };
+                const auto cell = acceptCell ("cold-prepare-hear", rate, block, coldSamples, measure);
+                requireCell ("cold-prepare-hear", cell, sounded, bounded);
             }
 
             {
@@ -2914,6 +3125,8 @@ void testPreviewTransitions()
                         bounded = bounded && synth->previewActiveVoices() <= 8;
                     }
                     check (finite, "Hear switch stays finite");
+                    check (bounded, "each Hear switch trial keeps audition voices bounded");
+                    if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (sounded, "each Hear switch trial actually sounds");
                     return summariseCell (times, rate, block, mallocs);
                 };
                 const auto cell = acceptCell ("switch", rate, block, samples, measure);
@@ -2944,6 +3157,8 @@ void testPreviewTransitions()
                         bounded = bounded && synth->previewActiveVoices() == 0;
                     }
                     check (finite, "Hear cancel stays finite");
+                    check (bounded, "each Hear cancel trial clears audition voices");
+                    if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (cleared, "each Hear cancel trial actually clears");
                     return summariseCell (times, rate, block, mallocs);
                 };
                 const auto cell = acceptCell ("cancel", rate, block, samples, measure);
@@ -2974,6 +3189,8 @@ void testPreviewTransitions()
                         bounded = bounded && synth->previewActiveVoices() <= 8;
                     }
                     check (finite, "rapid Hear retrigger stays finite");
+                    check (bounded, "each rapid Hear trial keeps audition voices bounded");
+                    if (juce::exactlyEqual (rate, 96000.0) && block == 32) check (sounded, "each rapid Hear trial actually sounds");
                     return summariseCell (times, rate, block, mallocs);
                 };
                 const auto cell = acceptCell ("rapid-retrigger", rate, block, samples, measure);
@@ -2985,8 +3202,11 @@ void testPreviewTransitions()
 
 } // namespace
 
-int main()
+int main (int argc, char** argv)
 {
+    testStrictTrialQualification();
+    if (argc == 2 && std::strcmp (argv[1], "--strict-trial-self-test") == 0)
+        return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     juce::ScopedJuceInitialiser_GUI juce;
     testPartsAndCap();
     testState();
