@@ -117,6 +117,21 @@ public:
     ~DragFile() {
         if(ownsDirectory_&&!offered){if(ownsPayload_)file.deleteFile();directory_.deleteFile();}
     }
+    // Read-only validation for a completed scratch payload. This is controller/
+    // worker-thread work only, never an audio-callback operation. Checking the
+    // original byte length catches expired/truncated files without retaining a
+    // second copy of a potentially large WAV in memory.
+    bool hasReadablePayload() const noexcept {
+        if(!ownsDirectory_||!ownsPayload_||payloadSize_<=0)return false;
+        try {
+            if(!file.existsAsFile()||file.isDirectory()||!file.hasReadAccess()||file.getSize()!=payloadSize_)
+                return false;
+            auto input=file.createInputStream();
+            if(!input||!input->getStatus().wasOk()||input->getTotalLength()!=payloadSize_)return false;
+            char firstByte=0;
+            return input->read(&firstByte,1)==1&&input->getStatus().wasOk();
+        } catch(...) { return false; }
+    }
     const Kind kind;
     const juce::File file;
     bool offered=false; // message-thread only, or after ownership moved off it
@@ -128,6 +143,7 @@ private:
     DragFile(Kind k,const juce::File& directory)
         : kind(k),file(directory.getChildFile(k==Kind::wav?"VOX FX.wav":"VOX FX Pattern.mid")),directory_(directory) {}
     const juce::File directory_;
+    juce::int64 payloadSize_=0; // published with Job::result_ before controller access
     bool ownsDirectory_=false,ownsPayload_=false;
 };
 
@@ -191,7 +207,12 @@ private:
                           auto payload=DragFile::create(kind_,target);
                           if(payload){
                               outcome=(*work)(Destination{payload->file,detail::TargetState::absent},cancel_,progress_);
-                              if(outcome==Result::success){payload->ownsPayload_=true;drag_=std::move(payload);}
+                              if(outcome==Result::success){
+                                  payload->ownsPayload_=true;
+                                  payload->payloadSize_=payload->file.getSize();
+                                  if(payload->hasReadablePayload())drag_=std::move(payload);
+                                  else outcome=Result::failure;
+                              }
                           }
                       } else {
                           const auto destination=Destination::observe(target);

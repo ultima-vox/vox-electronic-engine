@@ -999,6 +999,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     dragGrip_.setTitle("Prepared file drag handle");
     dragGrip_.setWantsKeyboardFocus(false);
     dragGrip_.setTooltip("Drag a prepared WAV or MIDI snapshot. Copy imports into the DAW project; use Save for a lasting file path.");
+    dragGrip_.setDescription(dragGrip_.getTooltip());
     dragGrip_.begin=[this]{beginFileDrag();};
     addAndMakeVisible(dragGrip_);
     dragWarning_.setText("Copy into project · Save for a lasting file",juce::dontSendNotification);
@@ -1474,7 +1475,16 @@ void FxPanel::exportWav(offline::Settings settings,bool drag)
 }
 void FxPanel::beginFileDrag()
 {
-    if(exportChooserOpen_||processor_.fileExportStatus()||!processor_.preparedDragKind())return;
+    if(exportChooserOpen_||processor_.fileExportStatus()){
+        refreshExportControls();
+        return;
+    }
+    const auto prepared=processor_.preparedDragState();
+    const bool available=prepared==FxProcessor::PreparedDragState::wav||prepared==FxProcessor::PreparedDragState::midi;
+    if(!available){
+        refreshExportControls();
+        return;
+    }
     const auto safe=juce::Component::SafePointer<FxPanel>(this);
     // Copy the test launcher before entering any native/nested dispatch. Only
     // the processor's value lease survives the callback, not this component.
@@ -1549,17 +1559,33 @@ void FxPanel::refreshMacro()
 void FxPanel::refreshExportControls()
 {
     using Kind=fileexport::Kind;
+    using DragState=FxProcessor::PreparedDragState;
     const auto status=processor_.fileExportStatus();
     const bool wavBusy=status&&status->kind==Kind::wav, midiBusy=status&&status->kind==Kind::midi;
-    const auto ready=processor_.preparedDragKind();
-    const bool active=processor_.dragInProgress();
+    const auto dragState=processor_.preparedDragState();
+    const bool ready=dragState==DragState::wav||dragState==DragState::midi;
+    const bool unavailable=dragState==DragState::unavailable;
+    const bool active=dragState==DragState::active;
+    const bool preparing=status&&status->purpose==fileexport::Purpose::drag;
     midiExport_.setEnabled(!exportChooserOpen_&&!wavBusy&&!active);
     wavExport_.setEnabled(!exportChooserOpen_&&!midiBusy&&!active);
     prepareMidiDrag_.setEnabled(!exportChooserOpen_&&!status&&!active);
     dragGrip_.setEnabled(!exportChooserOpen_&&!status&&ready&&!active);
-    const auto dragLabel=active?"Dragging…":ready?(dragFailed_?"Drag failed · retry":*ready==Kind::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
-        (status&&status->purpose==fileexport::Purpose::drag?"Preparing drag…":"No drag file");
+    const auto dragLabel=active?"Dragging…":preparing?"Preparing drag…":unavailable?"Snapshot unavailable":ready?
+        (dragFailed_?"Drag failed · retry":dragState==DragState::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
+        "No drag file";
     if(dragGrip_.getButtonText()!=dragLabel)dragGrip_.setButtonText(dragLabel);
+    const auto dragHelp=unavailable?
+        "The prepared temporary file is missing, incomplete, or unreadable. It is not recreated automatically. Use Prepare MIDI drag or WAV > Prepare drag to explicitly render a replacement; Save remains separate.":
+        "Drag a prepared WAV or MIDI snapshot. Copy imports into the DAW project; use Save for a lasting file path.";
+    if(dragGrip_.getTooltip()!=dragHelp){dragGrip_.setTooltip(dragHelp);dragGrip_.setDescription(dragHelp);}
+    const auto warning=unavailable?(preparing?"Preparing replacement snapshot…":"Snapshot unavailable · prepare again"):
+        "Copy into project · Save for a lasting file";
+    if(dragWarning_.getText()!=warning)dragWarning_.setText(warning,juce::dontSendNotification);
+    const auto warningHelp=unavailable?
+        "The temporary drag file is no longer available. VOX FX will not silently recreate it or delete a file already handed to the OS. Prepare a fresh WAV or MIDI snapshot explicitly.":
+        "Dragged files live in OS temp and may be cleared. VOX FX keeps handed-off files even after canceled drops; copy them into the project before cleaning temp files.";
+    if(dragWarning_.getTooltip()!=warningHelp)dragWarning_.setTooltip(warningHelp);
     if(status){
         const auto label=status->committing?juce::String("Saving…"):status->cancelling?juce::String("Cancelling…"):
             wavBusy?juce::String(static_cast<int>(status->progress*100))+"%":juce::String("Cancel");

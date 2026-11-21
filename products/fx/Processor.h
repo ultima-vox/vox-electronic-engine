@@ -160,6 +160,10 @@ public:
                          fileexport::EncodeObserver=nullptr,void* observerContext=nullptr);
     bool prepareWavDrag(offline::Capture);
     bool prepareMidiDrag(pattern::Pattern,double tempo);
+    enum class PreparedDragState : unsigned { none, unavailable, wav, midi, active };
+    // Message-thread only: validates the temporary payload's readability. No
+    // filesystem checks are performed from the audio callback.
+    PreparedDragState preparedDragState() const noexcept;
     std::optional<fileexport::Kind> preparedDragKind() const noexcept;
     bool dragInProgress() const noexcept;
     using DragLauncher=std::function<bool(const juce::File&,std::function<void()>)>;
