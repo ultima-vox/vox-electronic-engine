@@ -64,6 +64,7 @@ target_sources(${VOX_SUITE_drm_TARGET} PRIVATE
   drums/DrumsFader.h
   drums/DrumsRolesPanel.cpp drums/DrumsRolesPanel.h
   drums/PadControlBindings.h drums/PadControlSurface.cpp drums/PadControlSurface.h
+  drums/StyleLibraryPanel.cpp drums/StyleLibraryPanel.h
   drums/SampleLibrary.cpp drums/SampleLibrary.h
   drums/KitStore.cpp drums/KitStore.h
   drums/PatternStore.cpp drums/PatternStore.h drums/SongModel.cpp drums/Generator.cpp drums/Generator.h drums/PadRoles.cpp drums/PadRoles.h drums/FactoryContent.cpp drums/FactoryContent.h drums/Presets.cpp drums/Presets.h drums/DrumsPages.cpp drums/DrumsPages.h drums/PatternExport.cpp drums/PatternExport.h

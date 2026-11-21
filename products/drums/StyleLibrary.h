@@ -52,6 +52,7 @@ public:
         enum class Status { added, alreadyInLibrary, replaced, keptBoth, conflict, refused } status = Status::refused;
         juce::String message;                               // why it was refused, or what happened
         std::shared_ptr<const style::Definition> definition;   // the style as it is now in the library
+        std::shared_ptr<const style::Definition> incoming; // Validated immutable input on conflict; freeze before asking.
     };
     // `conflict`: same id with other content and `onConflict` == ask; nothing
     // was written; call again with replace or keepBoth.

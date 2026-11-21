@@ -133,6 +133,10 @@ public:
     //== generator (DRM-05), message thread
     GeneratorSettings generator() const;
     void setGenerator (const GeneratorSettings&);
+    // Explicit native Library action. Input is an immutable definition already
+    // validated by StyleLibrary/state. Preserve current generator amounts and
+    // refuse a project epoch that changed during file validation.
+    bool useUserStyle (std::shared_ptr<const style::Definition>, std::uint64_t expectedEpoch);
     UiState uiState() const;
     void setUiState (const UiState&);
     struct LayoutSnapshot {

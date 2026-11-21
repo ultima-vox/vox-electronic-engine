@@ -47,6 +47,18 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 - Real Generator/roles/Library/Routing/Diagnostics views preserve role preview, explicit
   Apply/Cancel, stale-proposal/duplicate refusal and one-step Undo. Embedded custom
   definitions display correctly; choosing a factory clears the override. No note remap.
+- Native Library has Musical presets / User styles categories, retaining the existing
+  musical preset page and strict StyleLibrary service. User styles offer Import,
+  Export, Refresh, explicit Use, confirmed Remove and inline Replace / Keep both /
+  Cancel. Import and selection never generate or apply music. Use embeds the chosen
+  immutable definition, preserves current generator amounts and refuses a changed
+  project epoch. Projects retain their DSTL copy after library replacement/deletion;
+  that copy remains exportable and is distinguished from another library version.
+  Conflict decisions and Export freeze validated input/selection; they never reread
+  a later edited input file. Stale library hashes refuse Use/Remove/Replace decisions.
+  Native chooser completions use safe component pointers; completion after destruction
+  writes nothing. Directory scans occur only on explicit library operations, not in
+  the UI timer or audio callback. Actions appear above the scrollable list/details.
 - Side panels move between docks, tabs and up to three stacked groups, hide/reopen and
   collapse to 26 px rails. Views are reparented, never copied. Empty sides disappear.
   Central editors remain unique, support splits/focus; Mixer heights/bank persist.
@@ -130,6 +142,14 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 
 ## Evidence and limits
 
+- Native Library package: local **8/8 PASS342.86s** (project, native workspace,
+  product, candidate, StyleEngine, StyleLibrary, samples and Drums shell).
+  Production UI regressions use isolated temporary library files and cover explicit
+  Use, byte-exact no-apply Import/selection, frozen conflict input and Export,
+  project-copy survival, Keep both UUID, cancelled/stale confirmed Remove, rejected
+  input/write failure, old project epochs and Import/Export completion after close.
+  Actual native 1040x600 Library raster inspected; controls also fit196/220/376/640px
+  scrollable dock canvases. This is local evidence, not Windows/OS-DPI acceptance.
 - JUCE `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8` (9.0.1), GNU C++14.2/C++20.
   Codec/docking actions pass ASan/UBSan, including bounds, order, duplicate/misplaced
   panels, opaque/future data, move/hide/rail/group limits.
@@ -158,6 +178,21 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
   is recorded per published SHA in the working PR.
 - Captures use actual native content at 1040x600, 1280x620, 1440x800, 1600x900 and
   raster 1/1.25/1.5/2. They are **not OS/host DPI evidence**.
+- Full Sound source `7d180b28fd0da5ca9d143f3d69c5ae2d247d82ca`:
+  [Windows suite44859210860](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/44859210860),
+  job136708980448, GitHub-hosted Server2022, Intel Xeon Platinum8573C (2 cores/4 threads).
+  Raw logs: 37/37 serial +8/8 gain; Steinberg validator47/47 per product.
+  Manifest checkout `6598d94c5974eb9193a22e447052587f00ef5aef` has exact source tree
+  `e57d3598c52d23905a18da32a92ef9bc3d5680f3` (Git objects and parents checked).
+  Drums binary bytes SHA256 `1cc163797c485d7480eaeda16358e0b64e253ade1d4964e76758e81c43ae37fe`.
+  Suite artifact14690121771 downloaded ZIP digest verified
+  `6dd8b5e4bdcb620cb56044289f0ca6cd6cc9997e808d5c706d492a576d2cacec`;
+  listening14690326493 metadata digest `f19fb9a58749b1450e09aeae9cd07d1afa7d10286ab2081bd248ffe32bb4f4fa`.
+  Windows native Full Sound raster inspected; it is not a peer/OS-DPI check.
+  Timing qualification remains open: at96kHz/128, p99=478.2us but worst=1640.6us
+  against1333.33us deadline (123.045%). A passing suite does not prove every callback
+  met its deadline; one hosted-runner outlier does not justify a DSP change.
+  **This result qualifies Full Sound source, not the later native Library changes.**
 - Linux Debug emits inherited JUCE wake-queue assertions during bulk UI construction and
   static AudioFormatManager shutdown reports. Exit codes are recorded separately;
   do not call these logs warning-free or diagnose them as Windows DSP failures.
@@ -180,8 +215,10 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 
 ## Open gates
 
-1. Verify the corrupt-v1 recovery fix on its exact published Windows head; the policy is
-   resolved by TL 7048135242. Preserve invalid v1 raw exactly while the full state fits.
+1. Preserve the corrupt-v1 recovery fix qualified on parent e21d02f by Windows
+   suite44811964594/job136550627859 (37 serial +8 gain, validators47 each; checkout
+   27bc604 has the same source tree15987b2). Repeat it with each integrated source
+   package. The policy is resolved by TL7048135242: preserve invalid v1 raw exactly while the full state fits.
    If and only if a full save exceeds VOXS 1 MiB, prove that replacing only structurally
    invalid, explicitly version-1 DLAY with canonical defaults makes it encode. Preserve
    all music, UIST and other opaque records. A failed proof changes nothing. The same
@@ -207,7 +244,8 @@ Verify live HEAD and the PR's exact-source evidence before resuming.
 5. The normal feature merge now includes StyleLibrary #153 at `83c616d429991d8b8da01bdd27d11002630b2103`,
    preserving both parents and its failure/Unicode/UUID regressions. This is preparation
    in Draft #163, not integration-ref mutation or independent approval of #153. Native
-   library import/export/management UI still needs wiring to this existing service.
+   import/export/management UI is wired to this service; exact-head Windows and final
+   host qualification remain separate gates.
 6. Exact integrated-head Windows build/full suite/validator/artifact hashes, RT/state/
    undo/Song/MIDI/nine-output gates; factory licensing/listening and one final owner
    Cubase/REAPER pass. No integration/main/release ref changes or auto-merge.

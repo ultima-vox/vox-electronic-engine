@@ -116,6 +116,18 @@ void DrumsProcessor::setGenerator (const GeneratorSettings& g)
     generator_ = g;
 }
 
+bool DrumsProcessor::useUserStyle (std::shared_ptr<const style::Definition> definition, std::uint64_t expectedEpoch)
+{
+    if (! definition) return false;
+    {
+        const juce::SpinLock::ScopedLockType sl (settingsLock_);
+        if (restoringMusic_.load (std::memory_order_acquire) || patternEpoch_.load() != expectedEpoch) return false;
+        generator_.custom = std::move (definition);
+    }
+    updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+    return true;
+}
+
 UiState DrumsProcessor::uiState() const
 {
     const juce::SpinLock::ScopedLockType sl (settingsLock_);

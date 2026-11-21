@@ -211,6 +211,7 @@ StyleLibrary::ImportResult StyleLibrary::importText (const juce::String& text, C
         r.status = Status::conflict;
         r.message = "The library has another version of " + same->definition->name + ": Replace it, or Keep both";
         r.definition = same->definition;
+        r.incoming = d;
         return r;
     }
     if (onConflict == Collision::replace)

@@ -5,6 +5,7 @@
 #include "PadControlSurface.h"
 #include "DrumsRolesPanel.h"
 #include "StyleRegistry.h"
+#include "StyleLibraryPanel.h"
 #include "Processor.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
@@ -1089,6 +1090,153 @@ void testSongContextInspector()
     check (! ui.patternEditor().editingSource() && ui.songEditor().sourceBar() == -1 && ui.songEditor().editedBar() == -1,
            "completed restore clears ephemeral source/bar edit modes before the next action");
 }
+void testNativeStyleLibrary()
+{
+    using namespace vox::drums;
+    struct FolderScope {
+        juce::String old = juce::SystemStats::getEnvironmentVariable ("VOX_DRUMS_STYLES", {});
+        juce::File root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vox-native-styles-" + juce::Uuid().toString());
+        static void set (const juce::String& value) {
+           #if JUCE_WINDOWS
+            _wputenv_s (L"VOX_DRUMS_STYLES", value.toWideCharPointer());
+           #else
+            if (value.isEmpty()) unsetenv ("VOX_DRUMS_STYLES"); else setenv ("VOX_DRUMS_STYLES", value.toRawUTF8(), 1);
+           #endif
+        }
+        FolderScope() { root.createDirectory(); set (root.getChildFile ("styles").getFullPathName()); }
+        ~FolderScope() { set (old); root.deleteRecursively(); }
+    } folder;
+    const bool isolated = StyleLibrary::defaultFolder() == folder.root.getChildFile ("styles");
+    check (isolated, "native style test isolates all library writes in its temporary folder");
+    if (! isolated) return;
+    auto p = std::make_unique<DrumsProcessor>();
+    DrumsWorkspace ui (*p); ui.setSize (1040, 600);
+    auto* library = ui.toolPage (workspace::DockTool::library);
+    auto* category = dynamic_cast<juce::ComboBox*> (library->named ("library.category"));
+    check (category != nullptr, "native Library offers the user-style service alongside musical presets");
+    if (! category) return;
+    category->setSelectedId (2, juce::sendNotificationSync);
+    for (const auto* name : { "style.import", "style.export", "style.use", "style.refresh", "style.remove", "style.list", "style.status" })
+        check (library->named (name) != nullptr, juce::String ("native style workflow exposes actual control ") + name);
+    auto* panel = dynamic_cast<StyleLibraryPanel*> (library->named ("styles"));
+    check (panel != nullptr, "production native Library delegates to the actual style-service controller");
+    if (! panel) return;
+    StyleLibrary service (folder.root.getChildFile ("styles"));
+    auto definition = *style::factoryDefinition (0); definition.id = "12345678-1234-4abc-9abc-123456789abc";
+    definition.key = "native-library-test"; definition.name = "Native library test"; definition.meta.author = "Native tester";
+    const auto input = folder.root.getChildFile ("incoming.voxstyle"); check (input.replaceWithText (style::serialize (definition)), "write native user-style fixture");
+    auto generator = p->generator(); generator.density = 0.42f; p->setGenerator (generator);
+    const auto save = [&] { juce::MemoryBlock state; p->getStateInformation (state); return state; };
+    const auto before = save(); const auto pattern = p->patterns().encodeCurrent().data; const auto song = p->patterns().song();
+    const auto imported = panel->importFile (input);
+    check (imported.status == StyleLibrary::ImportResult::Status::added && service.list().size() == 1 && save() == before,
+           "native import adds a real file without changing project bytes or applying/generating music");
+    if (imported.status != StyleLibrary::ImportResult::Status::added) return;
+    check (panel->useSelected() && p->generator().custom && p->generator().custom->id == definition.id
+           && std::abs (p->generator().density - 0.42f) < 0.001f && p->patterns().encodeCurrent().data == pattern && p->patterns().song() == song,
+           "explicit Use embeds the chosen style, preserves amounts and never generates patterns or Song");
+    if (! p->generator().custom) return;
+    const auto project = save(); const auto originalHash = style::documentHash (*p->generator().custom);
+    auto changed = definition; changed.name = "Incoming version"; changed.rules[0].velocity = 0.91f;
+    input.replaceWithText (style::serialize (changed));
+    const auto conflict = panel->importFile (input);
+    check (conflict.status == StyleLibrary::ImportResult::Status::conflict && conflict.incoming
+           && style::documentHash (*conflict.incoming) == style::documentHash (changed)
+           && save() == project, "native conflict retains the validated incoming snapshot and leaves the project untouched");
+    auto later = changed; later.name = "Later disk edit"; later.rules[0].velocity = 0.77f; input.replaceWithText (style::serialize (later));
+    press (*dynamic_cast<juce::Button*> (panel->named ("style.replace")));
+    auto stored = service.find (definition.id);
+    check (stored && style::documentHash (*stored) == style::documentHash (changed)
+           && style::documentHash (*p->generator().custom) == originalHash && save() == project,
+           "Replace uses the confirmed frozen input, not a later file edit, and projects retain their exact own copy");
+    auto* notice = dynamic_cast<juce::Label*> (panel->named ("style.notice"));
+    check (notice && notice->getText().contains ("own version"), "native notice distinguishes project and library versions");
+    panel->importFile (input); press (*dynamic_cast<juce::Button*> (panel->named ("style.keepBoth")));
+    const auto entries = service.list();
+    check (entries.size() == 2 && entries[0].definition->id != entries[1].definition->id && save() == project,
+           "Keep both creates a distinct canonical UUID without altering the project");
+    std::function<void (juce::File)> exportCompleted;
+    panel->fileDialogForTesting = [&] (bool isSave, const juce::File&, std::function<void (juce::File)> completed) {
+        check (isSave, "Export uses the save-file dialog completion"); exportCompleted = std::move (completed);
+    };
+    panel->selectLibraryStyle (definition.id);
+    press (*dynamic_cast<juce::Button*> (panel->named ("style.export")));
+    auto* styleList = dynamic_cast<juce::ListBox*> (panel->named ("style.list")); styleList->selectRow (0);
+    const auto frozenOutput = folder.root.getChildFile ("frozen-dialog.voxstyle");
+    check (static_cast<bool> (exportCompleted), "native Export freezes its selection before opening the file dialog");
+    if (exportCompleted) exportCompleted (frozenOutput);
+    style::Definition frozenExport;
+    check (style::parse (frozenOutput.loadFileAsString(), frozenExport).wasOk()
+           && style::documentHash (frozenExport) == style::documentHash (changed) && save() == project,
+           "changing selection during Export cannot replace the frozen library version with the project copy");
+    panel->fileDialogForTesting = {};
+    juce::String copiedId;
+    for (const auto& entry : entries) if (entry.definition->id != definition.id) copiedId = entry.definition->id;
+    panel->selectLibraryStyle (copiedId);
+    press (*dynamic_cast<juce::Button*> (panel->named ("style.remove")));
+    check (service.find (copiedId) != nullptr, "Remove requires an explicit confirmation before deleting its library file");
+    press (*dynamic_cast<juce::Button*> (panel->named ("style.cancel")));
+    check (service.find (copiedId) != nullptr, "Cancel removal retains the library file");
+    panel->selectLibraryStyle (definition.id); press (*dynamic_cast<juce::Button*> (panel->named ("style.remove")));
+    service.importText (style::serialize (later), StyleLibrary::Collision::replace);
+    press (*dynamic_cast<juce::Button*> (panel->named ("style.confirmRemove")));
+    check (service.find (definition.id) && style::documentHash (*service.find (definition.id)) == style::documentHash (later),
+           "stale removal confirmation refuses to delete a library entry replaced by another writer");
+    for (const auto& id : { copiedId, definition.id })
+    {
+        panel->selectLibraryStyle (id); press (*dynamic_cast<juce::Button*> (panel->named ("style.remove")));
+        press (*dynamic_cast<juce::Button*> (panel->named ("style.confirmRemove")));
+    }
+    check (service.list().empty() && save() == project, "library deletion never removes the embedded project style or changes project bytes");
+    auto* list = dynamic_cast<juce::ListBox*> (panel->named ("style.list")); list->selectRow (0);
+    check (! dynamic_cast<juce::Button*> (panel->named ("style.remove"))->isEnabled(), "embedded project copy is exportable but cannot be removed as a library file");
+    const auto output = folder.root.getChildFile ("project-copy.voxstyle");
+    check (panel->exportSelection (output).wasOk(), "native export writes the selected embedded project copy");
+    style::Definition exported;
+    check (style::parse (output.loadFileAsString(), exported).wasOk() && style::documentHash (exported) == originalHash,
+           "exported project style is canonical and independent of removed library files");
+    const auto blocked = folder.root.getChildFile ("blocked"); blocked.replaceWithText ("keep");
+    check (panel->exportSelection (blocked.getChildFile ("out.voxstyle")).failed() && blocked.loadFileAsString() == "keep",
+           "native export reports an unwritable destination without damaging its existing parent file");
+    input.replaceWithText ("{\"not_a_style\":true}");
+    check (panel->importFile (input).status == StyleLibrary::ImportResult::Status::refused && save() == project && service.list().empty(),
+           "native import rejection leaves project and library unchanged");
+    input.replaceWithText (style::serialize (definition));
+    std::function<void (juce::File)> closedImport, closedExport;
+    {
+        auto closing = makeNativeLibraryDock (*p, [] { return 0; }, service.folder());
+        auto* closingPanel = dynamic_cast<StyleLibraryPanel*> (closing->named ("styles"));
+        closingPanel->fileDialogForTesting = [&] (bool isSave, const juce::File&, std::function<void (juce::File)> completed) {
+            (isSave ? closedExport : closedImport) = std::move (completed);
+        };
+        auto* closingList = dynamic_cast<juce::ListBox*> (closingPanel->named ("style.list")); closingList->selectRow (0);
+        press (*dynamic_cast<juce::Button*> (closingPanel->named ("style.import")));
+        press (*dynamic_cast<juce::Button*> (closingPanel->named ("style.export")));
+    }
+    const auto closedOutput = folder.root.getChildFile ("closed-dialog.voxstyle");
+    check (closedImport && closedExport, "both native file dialogs use the qualified completion path");
+    if (closedImport) closedImport (input);
+    if (closedExport) closedExport (closedOutput);
+    check (service.list().empty() && ! closedOutput.exists() && save() == project,
+           "file dialog completions after editor destruction cannot import, export, or mutate the project");
+    input.replaceWithText (style::serialize (definition)); panel->importFile (input);
+    service.importText (style::serialize (changed), StyleLibrary::Collision::replace);
+    check (! panel->useSelected() && save() == project, "native Use refuses a stale library version instead of silently applying different content");
+    const auto oldEpoch = p->patternEpoch(); p->setStateInformation (project.getData(), static_cast<int> (project.getSize()));
+    check (! p->useUserStyle (service.find (definition.id), oldEpoch) && style::documentHash (*p->generator().custom) == originalHash,
+           "style application with an old project epoch cannot overwrite the restored project definition");
+    for (int width : { 196, 220, 376, 640 }) { library->setSize (width, library->dockHeight()); checkToolLayout (*library); }
+    ui.pollForTesting(); panel->refresh();
+    auto next = ui.layout(); next.rightTool = workspace::DockTool::library; ui.setLayout (next); ui.setSize (1040, 600); ui.pollForTesting();
+    check (ui.layout().rightTool == workspace::DockTool::library, "native style capture opens the actual Library dock after restore convergence");
+    if (const auto* destination = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+    {
+        const auto image = ui.createComponentSnapshot (ui.getLocalBounds()); juce::File directory (destination); directory.createDirectory();
+        juce::FileOutputStream stream (directory.getChildFile ("native-user-style-library.png"));
+        check (stream.setPosition (0) && stream.truncate().wasOk() && juce::PNGImageFormat().writeImageToStream (image, stream),
+               "write actual native user-style Library capture");
+    }
+}
 void testFullSoundFlow()
 {
     using namespace vox::drums;
@@ -1459,6 +1607,7 @@ int main()
     testSongContextInspector();
     testSourcePlayhead();
     testFullSoundFlow();
+    testNativeStyleLibrary();
     std::printf ("Native workspace: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

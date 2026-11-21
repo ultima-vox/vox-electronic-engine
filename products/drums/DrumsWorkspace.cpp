@@ -594,7 +594,7 @@ struct DrumsWorkspace::Impl {
                                [this] { steps.dragExport (processor.captureExport (ExportSnapshot::Scope::song), song); },
                                [this] { return steps.exportMessage(); });
         toolPages[0] = makeGeneratorDock (p);
-        toolPages[1] = makePresetsPage (p, [this] { return selection.pad(); });
+        toolPages[1] = makeNativeLibraryDock (p, [this] { return selection.pad(); });
         toolPages[2] = makeRoutingPage (p);
         toolPages[3] = makeAdvancedPage (p);
         for (auto& page : toolPages) page->onDockSizeChanged = [&owner] { owner.resized(); };

@@ -60,6 +60,7 @@ std::unique_ptr<Page> makeRoutingPage (DrumsProcessor&);
 // (ListBox), "name" (TextEditor), "load", "save", "undo", "import",
 // "export" (buttons), "status" (label).
 std::unique_ptr<Page> makePresetsPage (DrumsProcessor&, std::function<int()> selectedPad);
+std::unique_ptr<Page> makeNativeLibraryDock (DrumsProcessor&, std::function<int()> selectedPad, juce::File styleFolder = {});
 
 // ADVANCED: voice limit, velocity sensitivity, choke groups, panic and
 // diagnostics. named: "voices" (combo), "panic" (button), "diagnostics"
