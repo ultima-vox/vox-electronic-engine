@@ -94,6 +94,105 @@ private:
     unsigned remaining_=0,quiet_=0;
     double lastIdeal_=0,lastPosition_=0,from_=0,to_=0;
 };
+
+// The Wavefold static shape is an unmodified triangle fold:
+//   u = clamp(gain*x, -8, 8),  y = tri(u),
+// where tri is the 4-periodic triangle with tri(u)=u on [-1,1], peaks +-1 at
+// odd integers and zeros at even integers. Evaluating it with asin/sin is
+// exact but point-sampled, so a folding sinusoid at audio rate generates
+// harmonics far above Nyquist that fold back as inharmonic tones.
+//
+// First- and second-order antiderivatives have exact piecewise-polynomial
+// closed forms, which lets the slot use second-order antiderivative
+// antialiasing (ADAA) without oversampling, buffers or added integer latency.
+// For u in [2m, 2m+2), s = |u| - 2m:
+//   tri(u)   = (-1)^m * A'(s),          F(u)   = (-1)^m * A(s) + S(m)
+//   F2(u)    = (-1)^m * B(s) + S(m)*s + m
+// with A(s)=s^2/2 (s<=1), A(s)=2s-s^2/2-1 (s>1), B(s)=int A, and
+// S(m)=1 for odd m, 0 otherwise. F is even, F2 is odd, both are C1 and match
+// the clamped zero output beyond |u|=8.
+inline double wavefoldA(double s) noexcept {
+    return s <= 1.0 ? s*s*.5 : 2.0*s - s*s*.5 - 1.0;
+}
+inline double wavefoldB(double s) noexcept {
+    return s <= 1.0 ? s*s*s/6.0 : s*s - s*s*s/6.0 - s + 1.0/3.0;
+}
+inline int wavefoldParity(double m) noexcept {
+    return static_cast<int>(m) & 1;
+}
+// Point-sampled transfer function, identical to the previous slot shape.
+inline double wavefoldValue(double x,double gain) noexcept {
+    const double u=gain*x;
+    if(u<=-8.0||u>=8.0)return 0.0; // clamp region ends at tri(+-8)=0
+    const double au=std::abs(u),m=std::floor(au*.5),s=au-2.0*m;
+    const double tri=s<=1.0?s:2.0-s;
+    const double folded=wavefoldParity(m)?-tri:tri;
+    return u<0?-folded:folded; // the triangle fold is odd
+}
+inline double wavefoldFirst(double x,double gain) noexcept {
+    const double u=gain*x;
+    if(std::abs(u)>=8.0)return 0.0;
+    const double au=std::abs(u),m=std::floor(au*.5),s=au-2.0*m;
+    const double a=wavefoldA(s);
+    const double g=wavefoldParity(m)?-a:a;
+    return ((wavefoldParity(m)?1.0:0.0)+g)/gain;
+}
+inline double wavefoldSecond(double x,double gain) noexcept {
+    const double u=gain*x;
+    const double au=std::abs(u);
+    double h;
+    if(au>=8.0)h=4.0;
+    else {
+        const double m=std::floor(au*.5),s=au-2.0*m;
+        const double b=wavefoldB(s);
+        h=wavefoldParity(m)?m+s-b:m+b;
+    }
+    return (u<0?-h:h)/(gain*gain);
+}
+// Per-channel ADAA history: the previous two inputs, the previous divided
+// difference and the cached F2(x[n-1]) for the gain it was generated with.
+struct WavefoldMemory {
+    double x1=0,x2=0,f2x1=0,lastDifference=0,gain=-1;
+};
+inline double wavefoldTick(double x,double gain,WavefoldMemory& memory) noexcept {
+    constexpr double tolerance=1e-9;
+    // The floor/parity mapping is only defined for finite input. Clearing the
+    // history keeps a non-finite sample from poisoning later output, matching
+    // the bounded-output behaviour of the previous expression.
+    if(!std::isfinite(x)){memory=WavefoldMemory{};return 0.0;}
+    const double f2x0=wavefoldSecond(x,gain);
+    // Gain follows the smoothed amount. Recompute the cached antiderivative
+    // and the previous divided difference only when the shape actually moved;
+    // a steady slot pays a single F2 evaluation per sample.
+    if(memory.gain!=gain) {
+        memory.f2x1=wavefoldSecond(memory.x1,gain);
+        const double previous=memory.x1-memory.x2;
+        memory.lastDifference=std::abs(previous)<tolerance
+            ?wavefoldFirst((memory.x1+memory.x2)*.5,gain)
+            :(memory.f2x1-wavefoldSecond(memory.x2,gain))/previous;
+        memory.gain=gain;
+    }
+    const double current=x-memory.x1;
+    const double divided=std::abs(current)<tolerance
+        ?wavefoldFirst((x+memory.x1)*.5,gain)
+        :(f2x0-memory.f2x1)/current;
+    const double span=x-memory.x2;
+    double y;
+    if(std::abs(span)<tolerance) {
+        // x[n] and x[n-2] coincide: use the mean-value form around x[n-1].
+        const double middle=(x+memory.x2)*.5;
+        const double delta=middle-memory.x1;
+        y=std::abs(delta)<tolerance
+            ?wavefoldValue((middle+memory.x1)*.5,gain)
+            :(2.0/delta)*(wavefoldFirst(middle,gain)
+                +(memory.f2x1-wavefoldSecond(middle,gain))/delta);
+    } else {
+        y=2.0*(divided-memory.lastDifference)/span;
+    }
+    memory.x2=memory.x1;memory.x1=x;memory.f2x1=f2x0;
+    memory.lastDifference=divided;
+    return y;
+}
 } // namespace detail
 class Chain {
     struct State {
@@ -108,6 +207,7 @@ class Chain {
         unsigned syncFade=0;
         detail::FreeDelayTap freeTap;
         double drivePreviousL=0,drivePreviousR=0;
+        detail::WavefoldMemory wavefoldL{},wavefoldR{};
         std::array<std::size_t,4> reverbL{},reverbR{};
     };
     struct Bank { std::vector<float> left,right; };
@@ -139,10 +239,15 @@ public:
         if(slot>=slots_.size()||!settings.valid())return false;
         // A silent input feeds an identically silent input into a new nonlinear
         // stage, so any stale ADAA history is inaudible. Starting from zero
-        // keeps a freshly selected Drive slot deterministic.
-        if(slots_[slot].desired.type!=settings.type)
-            slots_[slot].current.drivePreviousL=slots_[slot].current.drivePreviousR=
-                slots_[slot].old.drivePreviousL=slots_[slot].old.drivePreviousR=0;
+        // keeps a freshly selected Drive or Wavefold slot deterministic.
+        if(slots_[slot].desired.type!=settings.type){
+            auto clear=[](State& state){
+                state.drivePreviousL=state.drivePreviousR=0;
+                state.wavefoldL=detail::WavefoldMemory{};
+                state.wavefoldR=detail::WavefoldMemory{};
+            };
+            clear(slots_[slot].current);clear(slots_[slot].old);
+        }
         slots_[slot].desired=settings;return true;
     }
     void process(float* left,float* right,std::size_t count,const float* modulation=nullptr) noexcept {
@@ -229,9 +334,17 @@ private:
             l=tick(l,state.drivePreviousL);r=tick(r,state.drivePreviousR);break;
         }
         case Type::wavefold: {
+            // Same triangle fold as before, now through second-order
+            // antiderivative antialiasing (ADAA). The static shape is
+            // unchanged; the two-stage divided difference removes the
+            // fold-generated harmonics that used to fold below Nyquist.
+            // No oversampling, buffer or integer latency is added; ADAA2
+            // carries the method's inherent ~1-sample (p/2) phase delay, as
+            // the existing first-order Drive ADAA carries ~0.5 sample.
             const double gain=1+7*amount;
-            auto fold=[gain](double x){x=std::clamp(x*gain,-8.0,8.0);return 2.0/std::acos(-1.0)*std::asin(std::sin(std::acos(-1.0)*x*.5));};
-            l=fold(l);r=fold(r);break;
+            l=detail::wavefoldTick(l,gain,state.wavefoldL);
+            r=detail::wavefoldTick(r,gain,state.wavefoldR);
+            break;
         }
         case Type::bitcrush: {const double levels=std::round(32768.0*std::pow(1.0/8192.0,amount));
             l=std::round(std::clamp(l,-1.0,1.0)*levels)/levels;

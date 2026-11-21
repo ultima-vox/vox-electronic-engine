@@ -177,3 +177,24 @@ this workload). Timing was 44.1 kHz p50 675.39 / p95 723.24 / p99 1231.74 /
 max 1315.48 µs; 48 kHz 681.46 / 715.52 / 1183.99 / 1453.84 µs; 96 kHz
 670.87 / 698.06 / 713.47 / 774.78 µs. Output saturation and the non-Windows,
 non-host qualification caveats above still apply.
+
+### Wavefold anti-aliasing (FX-04 follow-up, 2026-11-21)
+
+The focused slot-only row of `FxEffectsBenchmark` (four serial stereo slots,
+96 kHz, 128-sample blocks, p50 of 20000 blocks, three runs) shows the
+second-order-ADAA Wavefold is cheaper than the point-sampled version it
+replaces, because the old expression evaluated `acos(-1.0)` twice per sample:
+
+```text
+wavefold amount 0.5: 46.14 -> 28.93 us (45.1 -> 28.3 ns/sample/channel/slot)
+wavefold amount 1.0: 48.33 -> 30.29 us
+drive amount 0.5:    38.25 -> 38.63 us (same checksum)
+drive amount 1.0:    37.04 -> 37.20 us (same checksum)
+```
+
+The whole-engine Shepard rows moved from ~581 to ~563 µs p50, inside this
+container's run-to-run noise. Measured group delay is 1.000 input sample for
+the Wavefold slot (ADAA2's p/2 term) versus 0.198 for Drive at amount 0.28;
+there is no integer pre-delay, buffer or PDC change and no oversampling.
+Raw runs: [wavefold-cpu-20261121](evidence/wavefold-cpu-20261121.txt). The same
+non-Windows, non-host, non-deadline caveats apply; this is not an FX-T18 result.

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -41,5 +42,34 @@ int main(){
         std::sort(times.begin(),times.end());
         std::printf("96k Shepard 8x4 + 4x drive + 64 routes: p50 %.2f p95 %.2f p99 %.2f max %.2f us; checksum %.6f\n",
                     times[iterations/2],times[iterations*95/100],times[iterations*99/100],times.back(),checksum);
+    }
+    // Focused slot cost without the Shepard generator, which otherwise masks
+    // a single effect's cost in the whole-engine rows above. Four serial
+    // stereo slots, fixed amount, 128-sample blocks at 96 kHz.
+    {
+        constexpr int slotIterations=20000;
+        for(auto type:{vox::fx::effects::Type::drive,vox::fx::effects::Type::wavefold})
+            for(float amount:{.5f,1.0f}){
+                vox::fx::effects::Chain chain;if(!chain.prepare(rate))return 1;
+                for(std::size_t i=0;i<4;++i)if(!chain.set(i,{type,1,amount}))return 1;
+                std::array<float,block> l{},r{};
+                const auto fill=[&](int n){
+                    for(int i=0;i<block;++i){const auto t=static_cast<double>(n*block+i);
+                        l[i]=static_cast<float>(.31*std::sin(t*.017)+.12*std::sin(t*.101));
+                        r[i]=static_cast<float>(.27*std::sin(t*.013+.7)+.09*std::sin(t*.071));}
+                };
+                for(int n=0;n<1000;++n){fill(n);chain.process(l.data(),r.data(),block);}
+                std::vector<double> times;times.reserve(slotIterations);double checksum=0;
+                for(int n=1000;n<1000+slotIterations;++n){fill(n);
+                    const auto start=Clock::now();chain.process(l.data(),r.data(),block);
+                    const auto end=Clock::now();times.push_back(std::chrono::duration<double,std::micro>(end-start).count());
+                    checksum+=l[block-1];}
+                std::sort(times.begin(),times.end());
+                const auto median=times[slotIterations/2];
+                std::printf("96k 4x slot-only %s amount %.1f: p50 %.2f p95 %.2f p99 %.2f max %.2f us; %.2f ns/sample/channel/slot; checksum %.6f\n",
+                    type==vox::fx::effects::Type::drive?"drive":"wavefold",amount,
+                    median,times[slotIterations*95/100],times[slotIterations*99/100],times.back(),
+                    median*1000.0/(block*2.0*4.0),checksum);
+            }
     }
 }

@@ -1,0 +1,56 @@
+FX-04 Wavefold anti-aliasing — standalone executable inventory
+Generated 2026-11-21. Linux, GCC 12.2.0, -O2. No CMake/CTest or JUCE
+toolchain is installed in this container; these are direct local builds,
+equivalent to the previous FX slices' standalone inventory. Windows,
+native processor and host qualification remain unverified.
+
+Command pattern:
+  g++ -std=c++20 -O2 -Iproducts/fx -Ilibs/vox-preset tests/suite/<test>.cpp \
+      libs/vox-preset/StateContainer.cpp -o /tmp/<test> && /tmp/<test>
+
+=== FxEffectsTests ===
+free Delay boundary 96000 Hz speed 0.031: 25 crossings, old entry/exit residual 0.968002 / 0.248956, max new 0.001040 samples
+free Delay first-echo boundary 96000 Hz: old derivative residual 0.000494583, measured new 0.000000522
+FX effects foundation: 0 failure(s)
+exit: 0
+
+=== FxNonlinearAliasTests ===
+96000 Hz f0 16002.0 amt 0.50: Drive ADAA 0.0042 ( 23.8 dB) | Wavefold point 1.0000 (  0.0 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.1525 (  8.2 dB,  -16.3 dB abs)
+96000 Hz f0 16002.0 amt 1.00: Drive ADAA 0.0397 ( 14.0 dB) | Wavefold point 0.9041 (  0.4 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.5603 (  2.5 dB,  -21.4 dB abs)
+FX nonlinear alias: 0 failure(s)
+exit: 0
+
+=== FxOfflineRenderTests ===
+FX offline WAV: 0 failure(s)
+exit: 0
+
+=== FxEffectTailTests ===
+96000 Hz reverb into slow delay into reverb   audible tail 11.242 s, last nonzero 12.213 s, peak 0.3621, final second 0
+96000 Hz four reverbs                         audible tail  0.663 s, last nonzero  1.853 s, peak 0.3248, final second 0
+FX effect tails: 0 failure(s)
+exit: 0
+
+=== FxBarEventTests ===
+FX bar event: 0 failure(s)
+exit: 0
+
+=== FxSoundGraphTests ===
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2037755, tail 0.2037755, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1611706, tail 0.1611706, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)
+exit: 0
+
+=== FxPortablePresetTests ===
+FX portable preset and comparison codecs: 0 failure(s)
+exit: 0
+
+=== FxFactoryCandidatesTests ===
+Wave B staged forest-eight-bar voxfx.fall.canopy-ash 8 bars peak 0.005829 edge 0.0000000
+Wave B staged uplifting-sixteen-bar voxfx.riser.zenith-thread 16 bars peak 0.006331 edge 0.0000000
+Wave B staged uplifting-sixteen-bar voxfx.riser.white-veranda 16 bars peak 0.011897 edge 0.0000000
+exit: 0
+
+=== ASan/UBSan ===
+FxNonlinearAliasTests: PASS (0 failures, no sanitizer report)
+FxEffectsTests:         PASS (0 failures, no sanitizer report)
+FxEffectTailTests:      PASS (0 failures, no sanitizer report)

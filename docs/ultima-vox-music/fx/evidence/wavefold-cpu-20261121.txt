@@ -1,0 +1,125 @@
+FX-04 Wavefold anti-aliasing — CPU evidence
+Generated 2026-11-21. Linux, GCC 12.2.0, -O2, Intel Xeon 2.60 GHz (2 cores).
+Noisy single-container wall clock, not a Windows/DAW deadline or FX-T18 claim.
+
+Command (same source both sides):
+  g++ -std=c++20 -O2 -Iproducts/fx tests/suite/FxEffectsBenchmark.cpp -o bench_after
+  g++ -std=c++20 -O2 -I/tmp/before/fx tests/suite/FxEffectsBenchmark.cpp -o bench_before
+  where /tmp/before/fx is products/fx with Effects.h from base c7ee608.
+Three runs each, in order. 'slot-only' is the focused four-serial-slot
+measurement added to the benchmark: 96 kHz, 128-sample stereo blocks.
+
+=== BASE (point-sampled wavefold) run 1 ===
+96k Shepard 8x4 + 4x effect 0: p50 549.13 p95 714.96 p99 895.85 max 947.28 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 564.22 p95 1122.23 p99 1219.81 max 1358.65 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 581.57 p95 616.92 p99 650.37 max 656.84 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 573.98 p95 823.03 p99 1089.68 max 1150.73 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 573.36 p95 658.89 p99 891.87 max 1029.70 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 552.68 p95 684.28 p99 911.12 max 1057.50 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 563.04 p95 696.54 p99 1018.52 max 1060.18 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 566.88 p95 915.01 p99 1098.61 max 1169.01 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 567.29 p95 1049.10 p99 1537.13 max 1740.05 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 553.23 p95 720.49 p99 1038.83 max 1093.67 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 554.51 p95 690.44 p99 1065.62 max 1094.20 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 552.12 p95 653.28 p99 1041.64 max 1071.45 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 607.59 p95 703.94 p99 1097.64 max 1149.15 us; checksum -6.902837
+96k 4x slot-only drive amount 0.5: p50 38.20 p95 55.62 p99 75.17 max 174.26 us; 37.30 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.04 p95 64.02 p99 82.40 max 231.08 us; 36.17 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 46.49 p95 64.62 p99 119.64 max 495.84 us; 45.40 ns/sample/channel/slot; checksum -4.188448
+96k 4x slot-only wavefold amount 1.0: p50 48.53 p95 64.55 p99 89.75 max 151.92 us; 47.39 ns/sample/channel/slot; checksum -29.913630
+
+=== BASE (point-sampled wavefold) run 2 ===
+96k Shepard 8x4 + 4x effect 0: p50 541.94 p95 607.84 p99 918.84 max 961.34 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 530.26 p95 572.98 p99 618.17 max 964.72 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 579.45 p95 1078.85 p99 1145.83 max 1204.36 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 580.78 p95 975.49 p99 1029.01 max 1034.69 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 579.90 p95 1073.55 p99 1141.12 max 1241.32 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 568.32 p95 1032.80 p99 1105.88 max 1127.70 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 552.16 p95 999.82 p99 1125.24 max 1313.72 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 542.43 p95 623.85 p99 818.46 max 1070.65 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 555.37 p95 591.40 p99 599.52 max 608.80 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 546.01 p95 582.76 p99 600.85 max 783.90 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 550.18 p95 659.25 p99 1022.74 max 1104.30 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 554.33 p95 592.91 p99 663.31 max 714.02 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 601.80 p95 636.70 p99 667.89 max 706.75 us; checksum -6.902837
+96k 4x slot-only drive amount 0.5: p50 38.25 p95 64.40 p99 78.07 max 230.60 us; 37.35 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 36.91 p95 62.58 p99 84.69 max 315.13 us; 36.04 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 46.14 p95 59.87 p99 83.58 max 224.80 us; 45.06 ns/sample/channel/slot; checksum -4.188448
+96k 4x slot-only wavefold amount 1.0: p50 48.33 p95 63.45 p99 87.05 max 275.26 us; 47.20 ns/sample/channel/slot; checksum -29.913630
+
+=== BASE (point-sampled wavefold) run 3 ===
+96k Shepard 8x4 + 4x effect 0: p50 557.31 p95 718.55 p99 861.59 max 913.85 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 572.14 p95 781.25 p99 982.19 max 1058.15 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 615.07 p95 798.47 p99 886.37 max 1084.47 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 587.09 p95 634.31 p99 745.01 max 1132.28 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 573.34 p95 622.13 p99 948.56 max 1080.91 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 579.78 p95 965.09 p99 1239.39 max 1452.92 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 563.21 p95 673.20 p99 821.53 max 877.92 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 571.34 p95 645.70 p99 1048.84 max 1069.66 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 587.89 p95 727.75 p99 1009.24 max 1056.16 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 572.04 p95 673.17 p99 1028.90 max 1121.07 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 584.75 p95 851.49 p99 1055.82 max 1334.17 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 585.54 p95 690.04 p99 902.21 max 978.21 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 630.87 p95 765.23 p99 1002.57 max 1062.44 us; checksum -6.902837
+96k 4x slot-only drive amount 0.5: p50 38.88 p95 65.70 p99 84.17 max 290.58 us; 37.97 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.09 p95 52.31 p99 74.99 max 133.22 us; 36.23 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 45.80 p95 60.45 p99 84.33 max 238.85 us; 44.73 ns/sample/channel/slot; checksum -4.188448
+96k 4x slot-only wavefold amount 1.0: p50 48.01 p95 63.82 p99 87.85 max 374.79 us; 46.88 ns/sample/channel/slot; checksum -29.913630
+
+=== CHANGE (ADAA2 wavefold) run 1 ===
+96k Shepard 8x4 + 4x effect 0: p50 572.58 p95 1204.88 p99 1313.48 max 1867.64 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 541.64 p95 573.30 p99 586.74 max 595.43 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 578.15 p95 614.11 p99 629.62 max 652.72 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 555.07 p95 1089.23 p99 1149.19 max 1201.38 us; checksum -11.783843
+96k Shepard 8x4 + 4x effect 4: p50 556.34 p95 914.44 p99 1147.16 max 1204.29 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 543.71 p95 581.38 p99 613.51 max 641.40 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 538.67 p95 877.22 p99 1146.42 max 1278.50 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 545.52 p95 721.16 p99 983.54 max 1127.47 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 550.86 p95 604.63 p99 1069.24 max 1367.83 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 545.62 p95 653.48 p99 1206.64 max 1444.97 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 555.73 p95 593.22 p99 693.63 max 1188.69 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 558.99 p95 592.27 p99 603.05 max 633.73 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 604.87 p95 639.94 p99 764.24 max 1206.89 us; checksum -6.902837
+96k 4x slot-only drive amount 0.5: p50 38.64 p95 66.16 p99 88.73 max 210.06 us; 37.73 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 36.94 p95 62.77 p99 82.37 max 192.93 us; 36.07 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 29.11 p95 39.60 p99 63.65 max 130.62 us; 28.43 ns/sample/channel/slot; checksum -6.442995
+96k 4x slot-only wavefold amount 1.0: p50 30.30 p95 39.09 p99 60.70 max 187.75 us; 29.59 ns/sample/channel/slot; checksum 3.737215
+
+=== CHANGE (ADAA2 wavefold) run 2 ===
+96k Shepard 8x4 + 4x effect 0: p50 538.86 p95 629.07 p99 989.54 max 1002.41 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 531.69 p95 575.32 p99 760.46 max 1062.67 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 580.91 p95 623.67 p99 679.98 max 871.38 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 573.89 p95 981.60 p99 1065.51 max 1609.44 us; checksum -11.783843
+96k Shepard 8x4 + 4x effect 4: p50 565.64 p95 923.10 p99 1129.35 max 1583.56 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 560.44 p95 1035.06 p99 1226.32 max 1694.99 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 565.07 p95 1095.35 p99 1289.57 max 1451.24 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 554.94 p95 990.11 p99 1132.31 max 1609.90 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 562.26 p95 991.66 p99 1107.81 max 1146.48 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 546.84 p95 609.64 p99 722.31 max 996.86 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 558.55 p95 690.89 p99 837.68 max 985.30 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 555.46 p95 706.53 p99 1023.15 max 1089.49 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 686.15 p95 860.98 p99 1007.61 max 1108.42 us; checksum -6.902837
+96k 4x slot-only drive amount 0.5: p50 38.63 p95 54.99 p99 76.81 max 141.00 us; 37.73 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.20 p95 50.72 p99 74.40 max 166.82 us; 36.33 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 28.93 p95 35.85 p99 59.99 max 151.60 us; 28.25 ns/sample/channel/slot; checksum -6.442995
+96k 4x slot-only wavefold amount 1.0: p50 30.29 p95 36.86 p99 56.77 max 100.84 us; 29.58 ns/sample/channel/slot; checksum 3.737215
+
+=== CHANGE (ADAA2 wavefold) run 3 ===
+96k Shepard 8x4 + 4x effect 0: p50 538.76 p95 592.77 p99 905.58 max 1008.87 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 544.54 p95 597.26 p99 683.22 max 986.33 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 583.42 p95 651.96 p99 1052.54 max 1095.53 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 563.40 p95 611.08 p99 1007.77 max 1127.93 us; checksum -11.783843
+96k Shepard 8x4 + 4x effect 4: p50 559.24 p95 633.79 p99 1013.15 max 1138.54 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 551.13 p95 625.15 p99 853.63 max 991.46 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 544.13 p95 611.80 p99 674.14 max 808.73 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 556.31 p95 610.43 p99 646.50 max 856.50 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 589.13 p95 1165.70 p99 1295.85 max 1355.52 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 554.18 p95 974.84 p99 1079.23 max 1207.06 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50 571.10 p95 1059.32 p99 1123.31 max 1168.99 us; checksum -0.373560
+96k Shepard 8x4 + 4x effect 11: p50 565.36 p95 610.76 p99 994.45 max 1204.25 us; checksum 0.086172
+96k Shepard 8x4 + 4x drive + 64 routes: p50 610.97 p95 643.33 p99 654.53 max 757.78 us; checksum -6.902837
+96k 4x slot-only drive amount 0.5: p50 38.05 p95 63.47 p99 80.05 max 1439.78 us; 37.15 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.02 p95 62.48 p99 80.60 max 154.15 us; 36.15 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 28.83 p95 34.83 p99 53.34 max 117.94 us; 28.15 ns/sample/channel/slot; checksum -6.442995
+96k 4x slot-only wavefold amount 1.0: p50 30.07 p95 35.16 p99 52.47 max 313.64 us; 29.37 ns/sample/channel/slot; checksum 3.737215
+

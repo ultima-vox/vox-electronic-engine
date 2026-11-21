@@ -2,6 +2,8 @@
 
 **Draft / HOLD / NO MERGE.** Development slice on top of `8e32925`. No new IDs, no codec change, no oversampling and no latency change. Wavefold remains open and is measured, not claimed fixed.
 
+> **Follow-up (2026-11-21):** the Wavefold open item below now has an implementation slice, [Wavefold alias — second-order ADAA](WAVEFOLD_ALIAS_20261121.md). It keeps this Drive change untouched and closes the point-sampled Wavefold path; listening, native and host gates remain open.
+
 ## What was measured first
 
 A bin-centred sine was fed through a single slot. Because the input period divides the analysis window, every harmonic lands exactly on a DFT bin, so all remaining positive-side energy is content the nonlinearity created and folded below Nyquist. Raw rows: [nonlinear-alias](evidence/nonlinear-alias-20261119.txt).

@@ -1,0 +1,93 @@
+FX-04 Wavefold anti-aliasing — option comparison evidence
+Generated 2026-11-21. Linux, GCC 12.2.0, -O2, Intel Xeon 2.60 GHz (2 cores).
+
+Command:
+  g++ -std=c++20 -O2 -Iproducts/fx docs/ultima-vox-music/fx/evidence/measure-wavefold-options.cpp -o /tmp/wfopt
+  /tmp/wfopt
+
+Alias columns: absolute folded (non-harmonic) power relative to a unit
+sine in dB, then aliased/output power ratio. Lower is better. The ADAA2
+row calls the shipped products/fx/engine/Effects.h helpers. Oversampling
+rows use a centred linear-phase 31-tap halfband and are prototype-only;
+their reported quality does not pay the 15/23-sample real-time group delay.
+
+=== run 1 ===
+44.1 kHz, absolute folded power relative to a unit sine, ratio of output power
+f0 1838 Hz
+ amt 0.28 | point  -24.9 dB 0.004 | ADAA1  -31.2 dB 0.001 | ADAA2  -36.7 dB 0.000 | 2xOS  -37.1 dB 0.000 | 4xOS  -39.0 dB 0.000 | 2xOS+ADAA2  -41.9 dB 0.000 | 4xOS+ADAA2  -40.2 dB 0.000
+ amt 0.50 | point  -22.3 dB 0.011 | ADAA1  -32.8 dB 0.001 | ADAA2  -39.7 dB 0.000 | 2xOS  -35.7 dB 0.001 | 4xOS  -43.9 dB 0.000 | 2xOS+ADAA2  -48.9 dB 0.000 | 4xOS+ADAA2  -47.4 dB 0.000
+ amt 1.00 | point  -11.4 dB 0.123 | ADAA1  -17.1 dB 0.053 | ADAA2  -22.8 dB 0.019 | 2xOS  -22.9 dB 0.013 | 4xOS  -24.3 dB 0.009 | 2xOS+ADAA2  -26.9 dB 0.006 | 4xOS+ADAA2  -25.0 dB 0.008
+f0 4595 Hz
+ amt 0.28 | point   -9.9 dB 0.125 | ADAA1  -15.5 dB 0.057 | ADAA2  -22.2 dB 0.024 | 2xOS  -18.8 dB 0.018 | 4xOS  -19.2 dB 0.017 | 2xOS+ADAA2  -21.6 dB 0.012 | 4xOS+ADAA2  -19.8 dB 0.015
+ amt 0.50 | point   -3.4 dB 0.865 | ADAA1   -9.0 dB 0.792 | ADAA2  -14.2 dB 0.318 | 2xOS  -13.7 dB 0.374 | 4xOS  -14.2 dB 0.348 | 2xOS+ADAA2  -15.8 dB 0.389 | 4xOS+ADAA2  -14.6 dB 0.363
+ amt 1.00 | point   -2.9 dB 0.868 | ADAA1  -16.5 dB 0.126 | ADAA2  -18.5 dB 0.099 | 2xOS  -19.1 dB 0.136 | 4xOS  -24.0 dB 0.050 | 2xOS+ADAA2  -41.7 dB 0.000 | 4xOS+ADAA2  -33.2 dB 0.005
+f0 7351 Hz
+ amt 0.28 | point   -2.2 dB 0.738 | ADAA1   -7.7 dB 0.812 | ADAA2  -16.3 dB 0.365 | 2xOS   -8.9 dB 0.375 | 4xOS   -9.0 dB 0.369 | 2xOS+ADAA2  -11.2 dB 0.516 | 4xOS+ADAA2   -9.5 dB 0.396
+ amt 0.50 | point   -2.7 dB 1.000 | ADAA1  -17.3 dB 0.227 | ADAA2  -16.3 dB 0.153 | 2xOS  -16.6 dB 1.000 | 4xOS  -17.4 dB 1.000 | 2xOS+ADAA2  -29.4 dB 0.028 | 4xOS+ADAA2  -19.4 dB 0.782
+ amt 1.00 | point   -2.7 dB 0.904 | ADAA1   -9.9 dB 0.510 | ADAA2  -21.4 dB 0.560 | 2xOS   -5.0 dB 0.850 | 4xOS  -21.7 dB 0.106 | 2xOS+ADAA2  -17.1 dB 0.141 | 4xOS+ADAA2  -20.2 dB 0.107
+
+CPU (this container, 128-sample stereo blocks, ns per input sample per channel)
+ harness buffer-restore overhead: 0.11 ns
+ amt 0.5: point 4.10 ADAA1 9.70 ADAA2 13.10 2xOS 70.12 4xOS 202.78 2xOS+ADAA2 84.10 4xOS+ADAA2 252.16
+ amt 1.0: point 4.13 ADAA1 9.56 ADAA2 11.33 2xOS 68.67 4xOS 192.92 2xOS+ADAA2 81.41 4xOS+ADAA2 230.84
+
+31-tap linear-phase halfband group delay: 2x 15 input samples, 4x 23 input samples
+ADAA1/ADAA2 add no integer latency; ADAA's inherent p/2 group delay is ~0.5 / ~1.0 sample.
+
+=== run 2 ===
+44.1 kHz, absolute folded power relative to a unit sine, ratio of output power
+f0 1838 Hz
+ amt 0.28 | point  -24.9 dB 0.004 | ADAA1  -31.2 dB 0.001 | ADAA2  -36.7 dB 0.000 | 2xOS  -37.1 dB 0.000 | 4xOS  -39.0 dB 0.000 | 2xOS+ADAA2  -41.9 dB 0.000 | 4xOS+ADAA2  -40.2 dB 0.000
+ amt 0.50 | point  -22.3 dB 0.011 | ADAA1  -32.8 dB 0.001 | ADAA2  -39.7 dB 0.000 | 2xOS  -35.7 dB 0.001 | 4xOS  -43.9 dB 0.000 | 2xOS+ADAA2  -48.9 dB 0.000 | 4xOS+ADAA2  -47.4 dB 0.000
+ amt 1.00 | point  -11.4 dB 0.123 | ADAA1  -17.1 dB 0.053 | ADAA2  -22.8 dB 0.019 | 2xOS  -22.9 dB 0.013 | 4xOS  -24.3 dB 0.009 | 2xOS+ADAA2  -26.9 dB 0.006 | 4xOS+ADAA2  -25.0 dB 0.008
+f0 4595 Hz
+ amt 0.28 | point   -9.9 dB 0.125 | ADAA1  -15.5 dB 0.057 | ADAA2  -22.2 dB 0.024 | 2xOS  -18.8 dB 0.018 | 4xOS  -19.2 dB 0.017 | 2xOS+ADAA2  -21.6 dB 0.012 | 4xOS+ADAA2  -19.8 dB 0.015
+ amt 0.50 | point   -3.4 dB 0.865 | ADAA1   -9.0 dB 0.792 | ADAA2  -14.2 dB 0.318 | 2xOS  -13.7 dB 0.374 | 4xOS  -14.2 dB 0.348 | 2xOS+ADAA2  -15.8 dB 0.389 | 4xOS+ADAA2  -14.6 dB 0.363
+ amt 1.00 | point   -2.9 dB 0.868 | ADAA1  -16.5 dB 0.126 | ADAA2  -18.5 dB 0.099 | 2xOS  -19.1 dB 0.136 | 4xOS  -24.0 dB 0.050 | 2xOS+ADAA2  -41.7 dB 0.000 | 4xOS+ADAA2  -33.2 dB 0.005
+f0 7351 Hz
+ amt 0.28 | point   -2.2 dB 0.738 | ADAA1   -7.7 dB 0.812 | ADAA2  -16.3 dB 0.365 | 2xOS   -8.9 dB 0.375 | 4xOS   -9.0 dB 0.369 | 2xOS+ADAA2  -11.2 dB 0.516 | 4xOS+ADAA2   -9.5 dB 0.396
+ amt 0.50 | point   -2.7 dB 1.000 | ADAA1  -17.3 dB 0.227 | ADAA2  -16.3 dB 0.153 | 2xOS  -16.6 dB 1.000 | 4xOS  -17.4 dB 1.000 | 2xOS+ADAA2  -29.4 dB 0.028 | 4xOS+ADAA2  -19.4 dB 0.782
+ amt 1.00 | point   -2.7 dB 0.904 | ADAA1   -9.9 dB 0.510 | ADAA2  -21.4 dB 0.560 | 2xOS   -5.0 dB 0.850 | 4xOS  -21.7 dB 0.106 | 2xOS+ADAA2  -17.1 dB 0.141 | 4xOS+ADAA2  -20.2 dB 0.107
+
+CPU (this container, 128-sample stereo blocks, ns per input sample per channel)
+ harness buffer-restore overhead: 0.14 ns
+ amt 0.5: point 4.39 ADAA1 11.42 ADAA2 11.44 2xOS 71.15 4xOS 215.11 2xOS+ADAA2 113.28 4xOS+ADAA2 235.11
+ amt 1.0: point 4.14 ADAA1 10.01 ADAA2 12.18 2xOS 68.96 4xOS 207.99 2xOS+ADAA2 83.66 4xOS+ADAA2 280.81
+
+31-tap linear-phase halfband group delay: 2x 15 input samples, 4x 23 input samples
+ADAA1/ADAA2 add no integer latency; ADAA's inherent p/2 group delay is ~0.5 / ~1.0 sample.
+
+=== run 3 ===
+44.1 kHz, absolute folded power relative to a unit sine, ratio of output power
+f0 1838 Hz
+ amt 0.28 | point  -24.9 dB 0.004 | ADAA1  -31.2 dB 0.001 | ADAA2  -36.7 dB 0.000 | 2xOS  -37.1 dB 0.000 | 4xOS  -39.0 dB 0.000 | 2xOS+ADAA2  -41.9 dB 0.000 | 4xOS+ADAA2  -40.2 dB 0.000
+ amt 0.50 | point  -22.3 dB 0.011 | ADAA1  -32.8 dB 0.001 | ADAA2  -39.7 dB 0.000 | 2xOS  -35.7 dB 0.001 | 4xOS  -43.9 dB 0.000 | 2xOS+ADAA2  -48.9 dB 0.000 | 4xOS+ADAA2  -47.4 dB 0.000
+ amt 1.00 | point  -11.4 dB 0.123 | ADAA1  -17.1 dB 0.053 | ADAA2  -22.8 dB 0.019 | 2xOS  -22.9 dB 0.013 | 4xOS  -24.3 dB 0.009 | 2xOS+ADAA2  -26.9 dB 0.006 | 4xOS+ADAA2  -25.0 dB 0.008
+f0 4595 Hz
+ amt 0.28 | point   -9.9 dB 0.125 | ADAA1  -15.5 dB 0.057 | ADAA2  -22.2 dB 0.024 | 2xOS  -18.8 dB 0.018 | 4xOS  -19.2 dB 0.017 | 2xOS+ADAA2  -21.6 dB 0.012 | 4xOS+ADAA2  -19.8 dB 0.015
+ amt 0.50 | point   -3.4 dB 0.865 | ADAA1   -9.0 dB 0.792 | ADAA2  -14.2 dB 0.318 | 2xOS  -13.7 dB 0.374 | 4xOS  -14.2 dB 0.348 | 2xOS+ADAA2  -15.8 dB 0.389 | 4xOS+ADAA2  -14.6 dB 0.363
+ amt 1.00 | point   -2.9 dB 0.868 | ADAA1  -16.5 dB 0.126 | ADAA2  -18.5 dB 0.099 | 2xOS  -19.1 dB 0.136 | 4xOS  -24.0 dB 0.050 | 2xOS+ADAA2  -41.7 dB 0.000 | 4xOS+ADAA2  -33.2 dB 0.005
+f0 7351 Hz
+ amt 0.28 | point   -2.2 dB 0.738 | ADAA1   -7.7 dB 0.812 | ADAA2  -16.3 dB 0.365 | 2xOS   -8.9 dB 0.375 | 4xOS   -9.0 dB 0.369 | 2xOS+ADAA2  -11.2 dB 0.516 | 4xOS+ADAA2   -9.5 dB 0.396
+ amt 0.50 | point   -2.7 dB 1.000 | ADAA1  -17.3 dB 0.227 | ADAA2  -16.3 dB 0.153 | 2xOS  -16.6 dB 1.000 | 4xOS  -17.4 dB 1.000 | 2xOS+ADAA2  -29.4 dB 0.028 | 4xOS+ADAA2  -19.4 dB 0.782
+ amt 1.00 | point   -2.7 dB 0.904 | ADAA1   -9.9 dB 0.510 | ADAA2  -21.4 dB 0.560 | 2xOS   -5.0 dB 0.850 | 4xOS  -21.7 dB 0.106 | 2xOS+ADAA2  -17.1 dB 0.141 | 4xOS+ADAA2  -20.2 dB 0.107
+
+CPU (this container, 128-sample stereo blocks, ns per input sample per channel)
+ harness buffer-restore overhead: 0.11 ns
+ amt 0.5: point 4.12 ADAA1 9.60 ADAA2 11.19 2xOS 67.46 4xOS 206.21 2xOS+ADAA2 81.65 4xOS+ADAA2 246.40
+ amt 1.0: point 4.87 ADAA1 18.28 ADAA2 14.90 2xOS 68.31 4xOS 205.22 2xOS+ADAA2 86.15 4xOS+ADAA2 238.40
+
+31-tap linear-phase halfband group delay: 2x 15 input samples, 4x 23 input samples
+ADAA1/ADAA2 add no integer latency; ADAA's inherent p/2 group delay is ~0.5 / ~1.0 sample.
+
+=== measured group delay, shipped slots (linear region, 0.1 amplitude,
+=== amount 0.28; bin-centred tone, 32768-sample Goertzel window)
+Command:
+  g++ -std=c++20 -O2 -Iproducts/fx docs/ultima-vox-music/fx/evidence/measure-wavefold-latency.cpp -o /tmp/wflat
+  /tmp/wflat
+44100 f   458.9 wavefold 1.000 drive 0.198
+44100 f   919.2 wavefold 1.000 drive 0.198
+48000 f   499.5 wavefold 1.000 drive 0.198
+48000 f  1000.5 wavefold 1.000 drive 0.198
+96000 f   999.0 wavefold 1.000 drive 0.198
+96000 f  2001.0 wavefold 1.000 drive 0.198
