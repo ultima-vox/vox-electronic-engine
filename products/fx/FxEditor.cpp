@@ -1005,7 +1005,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     dragWarning_.setText("Copy into project · Save for a lasting file",juce::dontSendNotification);
     dragWarning_.setJustificationType(juce::Justification::centredRight);
     dragWarning_.setFont(juce::FontOptions(12.0f));
-    dragWarning_.setTooltip("Dragged files live in OS temp and may be cleared. VOX FX keeps handed-off files even after canceled drops; copy them into the project before cleaning temp files.");
+    dragWarning_.setTooltip("Temporary files may expire. Availability is checked when dragging; the OS may still read later after that check. Copy imports into the project; handed-off files are retained even after canceled drops.");
     addAndMakeVisible(dragWarning_);
     refreshExportControls();
     addChildComponent(wavOptions_);
@@ -1479,7 +1479,8 @@ void FxPanel::beginFileDrag()
         refreshExportControls();
         return;
     }
-    const auto prepared=processor_.preparedDragState();
+    // The offer performs the one fresh filesystem validation for this gesture.
+    const auto prepared=processor_.cachedPreparedDragState();
     const bool available=prepared==FxProcessor::PreparedDragState::wav||prepared==FxProcessor::PreparedDragState::midi;
     if(!available){
         refreshExportControls();
@@ -1562,7 +1563,9 @@ void FxPanel::refreshExportControls()
     using DragState=FxProcessor::PreparedDragState;
     const auto status=processor_.fileExportStatus();
     const bool wavBusy=status&&status->kind==Kind::wav, midiBusy=status&&status->kind==Kind::midi;
-    const auto dragState=processor_.preparedDragState();
+    // This refresh runs at 25 Hz; never probe the filesystem here. The next
+    // explicit drag gesture validates the payload immediately before offering.
+    const auto dragState=processor_.cachedPreparedDragState();
     const bool ready=dragState==DragState::wav||dragState==DragState::midi;
     const bool unavailable=dragState==DragState::unavailable;
     const bool active=dragState==DragState::active;
@@ -1584,7 +1587,7 @@ void FxPanel::refreshExportControls()
     if(dragWarning_.getText()!=warning)dragWarning_.setText(warning,juce::dontSendNotification);
     const auto warningHelp=unavailable?
         "The temporary drag file is no longer available. VOX FX will not silently recreate it or delete a file already handed to the OS. Prepare a fresh WAV or MIDI snapshot explicitly.":
-        "Dragged files live in OS temp and may be cleared. VOX FX keeps handed-off files even after canceled drops; copy them into the project before cleaning temp files.";
+        "Temporary files may expire. Availability is checked when dragging; the OS may still read later after that check. Copy imports into the project; handed-off files are retained even after canceled drops.";
     if(dragWarning_.getTooltip()!=warningHelp)dragWarning_.setTooltip(warningHelp);
     if(status){
         const auto label=status->committing?juce::String("Saving…"):status->cancelling?juce::String("Cancelling…"):
