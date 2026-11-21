@@ -29,6 +29,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <tlhelp32.h>
 #endif
 #include <tuple>
 #include <vector>
@@ -752,6 +753,54 @@ void publishCell (const char* scenario, double rate, int block, int n, const Tim
     appendPerfCsv (row);
 }
 
+#if defined (_WIN32)
+struct QualificationCore
+{
+    DWORD cpu = 0;
+    int index = -1;
+    DWORD_PTR audio = 1;
+    DWORD_PTR reserved = 1;
+    DWORD_PTR others = ~static_cast<DWORD_PTR> (0);
+    bool armed = false;
+};
+
+QualificationCore& qualificationCore() noexcept
+{
+    static QualificationCore core;
+    return core;
+}
+
+void holdQualificationCore() noexcept
+{
+    const auto& pin = qualificationCore();
+    if (! pin.armed)
+        return;
+    SetThreadAffinityMask (GetCurrentThread(), pin.audio);
+    const DWORD self = GetCurrentThreadId();
+    const DWORD pid = GetCurrentProcessId();
+    HANDLE snap = CreateToolhelp32Snapshot (TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return;
+    THREADENTRY32 entry {};
+    entry.dwSize = sizeof entry;
+    if (Thread32First (snap, &entry))
+    {
+        do
+        {
+            if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self)
+                continue;
+            if (HANDLE thread = OpenThread (THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID))
+            {
+                SetThreadAffinityMask (thread, pin.others);
+                CloseHandle (thread);
+            }
+        }
+        while (Thread32Next (snap, &entry));
+    }
+    CloseHandle (snap);
+}
+#endif
+
 // All predefined qualification trials are recorded and must pass individually.
 // A later quiet trial cannot erase a failed p99 or allocation result.
 template <typename Measure>
@@ -766,6 +815,7 @@ TimedCell acceptCell (const char* scenario, double rate, int block, int n, Measu
     for (int trial = 1; trial <= 3; ++trial)
     {
        #if defined (_WIN32)
+        holdQualificationCore();
         const auto usageStart = collectUsage ? trialUsage() : TrialUsage {};
         collectingCallbackProfile = ! envOrEmpty ("VOX_SYNTH_CALLBACK_PROFILE_CSV").empty();
         if (collectingCallbackProfile)
@@ -813,9 +863,121 @@ TimedCell acceptCell (const char* scenario, double rate, int block, int n, Measu
 void bindRealtimeThread()
 {
 #if defined (_WIN32)
+    // EcoQoS execution-speed throttling stretches on-CPU time without adding
+    // instructions. The previous CPU-2 + MMCSS "Pro Audio" package made the
+    // tails worse, so this pin does not call AvSetMmThreadCharacteristics.
+    // Logical processor 0 takes most device DPCs. Reserve the last reported
+    // physical core: this thread on one sibling, every other thread in this
+    // process off both siblings. External load can still land there. The
+    // strict per-trial p99 gate is unchanged.
+   #if defined (PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
+    PROCESS_POWER_THROTTLING_STATE power {};
+    power.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    power.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+    power.StateMask = 0;
+    SetProcessInformation (GetCurrentProcess(), ProcessPowerThrottling, &power, sizeof power);
+   #endif
+   #if defined (THREAD_POWER_THROTTLING_EXECUTION_SPEED)
+    THREAD_POWER_THROTTLING_STATE threadPower {};
+    threadPower.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+    threadPower.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+    threadPower.StateMask = 0;
+    SetThreadInformation (GetCurrentThread(), ThreadPowerThrottling, &threadPower, sizeof threadPower);
+   #endif
     SetPriorityClass (GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-    SetThreadAffinityMask (GetCurrentThread(), 1);
+
+    DWORD_PTR processMask = 0;
+    DWORD_PTR systemMask = 0;
+    if (! GetProcessAffinityMask (GetCurrentProcess(), &processMask, &systemMask))
+        processMask = static_cast<DWORD_PTR> (1);
+    const DWORD_PTR allowed = processMask != 0 ? processMask : (systemMask != 0 ? systemMask : static_cast<DWORD_PTR> (1));
+
+    DWORD_PTR chosenMask = 0;
+    int chosenIndex = -1;
+    int seen = 0;
+    DWORD length = 0;
+    GetLogicalProcessorInformation (nullptr, &length);
+    if (length > 0)
+    {
+        const std::size_t stride = sizeof (SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> info ((static_cast<std::size_t> (length) + stride - 1) / stride);
+        DWORD bytes = static_cast<DWORD> (info.size() * stride);
+        if (! info.empty() && GetLogicalProcessorInformation (info.data(), &bytes))
+        {
+            const std::size_t rows = static_cast<std::size_t> (bytes) / stride;
+            for (std::size_t row = 0; row < rows && row < info.size(); ++row)
+            {
+                if (info[row].Relationship != RelationProcessorCore)
+                    continue;
+                const DWORD_PTR mask = info[row].ProcessorMask & allowed;
+                if (mask == 0)
+                    continue;
+                ++seen;
+                if (seen == 1)
+                    continue;
+                chosenMask = mask;
+                chosenIndex = seen - 1;
+            }
+        }
+    }
+    if (chosenMask == 0)
+    {
+        const int top = static_cast<int> (sizeof (DWORD_PTR) * 8) - 1;
+        for (int shift = top; shift >= 1; --shift)
+        {
+            const DWORD_PTR bit = static_cast<DWORD_PTR> (1) << shift;
+            if ((bit & allowed) != 0)
+            {
+                chosenMask = bit;
+                break;
+            }
+        }
+        if (chosenMask == 0)
+            chosenMask = static_cast<DWORD_PTR> (1);
+        chosenIndex = -1;
+    }
+
+    const DWORD_PTR audio = chosenMask & (~chosenMask + 1);
+    DWORD cpu = 0;
+    for (DWORD_PTR bit = audio; bit > 1; bit >>= 1)
+        ++cpu;
+    DWORD_PTR others = allowed & ~chosenMask;
+    if (others == 0)
+        others = allowed & ~audio;
+    if (others == 0)
+        others = allowed;
+
+    auto& pin = qualificationCore();
+    pin.cpu = cpu;
+    pin.index = chosenIndex;
+    pin.audio = audio != 0 ? audio : static_cast<DWORD_PTR> (1);
+    pin.reserved = chosenMask != 0 ? chosenMask : pin.audio;
+    pin.others = others;
+    pin.armed = true;
+
+    if (SetThreadAffinityMask (GetCurrentThread(), pin.audio) == 0 && pin.audio != 1)
+    {
+        pin.audio = 1;
+        pin.cpu = 0;
+        pin.reserved = 1;
+        pin.others = allowed & ~static_cast<DWORD_PTR> (1);
+        if (pin.others == 0)
+            pin.others = allowed;
+        SetThreadAffinityMask (GetCurrentThread(), 1);
+    }
+    holdQualificationCore();
     SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds (40);
+    volatile unsigned sink = 0;
+    while (std::chrono::steady_clock::now() < until)
+        sink += 1u;
+    (void) sink;
+    std::printf ("synth rt core %d want %lu cpu %lu audio 0x%llx reserved 0x%llx others 0x%llx\n",
+                 pin.index, static_cast<unsigned long> (pin.cpu), GetCurrentProcessorNumber(),
+                 static_cast<unsigned long long> (pin.audio),
+                 static_cast<unsigned long long> (pin.reserved),
+                 static_cast<unsigned long long> (pin.others));
 #endif
 }
 
