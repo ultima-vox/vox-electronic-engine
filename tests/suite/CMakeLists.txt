@@ -536,7 +536,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_compile_definitions(suite_fx_runtime_stress_tests PRIVATE VOX_FX_LOCK_PROBE=1)
   target_link_options(suite_fx_runtime_stress_tests PRIVATE
     -Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_trylock
-    -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_wrlock)
+    -Wl,--wrap=pthread_mutex_timedlock
+    -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_tryrdlock
+    -Wl,--wrap=pthread_rwlock_wrlock -Wl,--wrap=pthread_rwlock_trywrlock
+    -Wl,--wrap=pthread_spin_lock
+    -Wl,--wrap=pthread_cond_wait -Wl,--wrap=pthread_cond_timedwait
+    -Wl,--wrap=sem_wait -Wl,--wrap=sem_timedwait)
+elseif(WIN32)
+  target_sources(suite_fx_runtime_stress_tests PRIVATE FxLockProbeWindows.c)
+  target_compile_definitions(suite_fx_runtime_stress_tests PRIVATE VOX_FX_LOCK_PROBE=1)
 endif()
 add_test(NAME suite_fx_runtime_stress_tests COMMAND suite_fx_runtime_stress_tests)
 set_tests_properties(suite_fx_runtime_stress_tests PROPERTIES LABELS suite)
