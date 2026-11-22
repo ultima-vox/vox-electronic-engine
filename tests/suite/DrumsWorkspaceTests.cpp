@@ -1292,6 +1292,29 @@ void testKeyboardViewportFocus()
         focused->moveKeyboardFocusToSibling (false); pump();
     }
     check (reachedFirst && allVisible, "backward programmatic traversal reveals the previous Routing rows without trapping focus");
+    // Deliver Tab and Shift-Tab through the real peer's key dispatch. This
+    // exercises JUCE's peer-to-component route; it does not inject OS keys.
+    first->grabKeyboardFocus(); pump();
+    auto* nativePeer = editor->getPeer();
+    bool peerForward = false, peerBackward = false, peerVisible = true, peerConsumed = nativePeer != nullptr;
+    const auto traversePeer = [&] (bool backwards, juce::Component* target) {
+        for (int n = 0; n < 100 && peerConsumed; ++n)
+        {
+            auto* focused = juce::Component::getCurrentlyFocusedComponent();
+            if (! focused || ! ui->isParentOf (focused)) break;
+            peerVisible = peerVisible && visibleThroughViewports (focused);
+            if (focused == target) return true;
+            const auto modifiers = backwards ? juce::ModifierKeys (juce::ModifierKeys::shiftModifier)
+                                             : juce::ModifierKeys();
+            peerConsumed = nativePeer->handleKeyPress (juce::KeyPress (juce::KeyPress::tabKey, modifiers, 0));
+            pump();
+        }
+        return false;
+    };
+    peerForward = traversePeer (false, last);
+    peerBackward = peerForward && traversePeer (true, first);
+    check (peerConsumed && peerForward && peerBackward && peerVisible,
+           "Tab and Shift-Tab dispatched through the native peer reveal all Routing controls in both directions");
     auto* lastFader = ui->sliderFor ("drm.p16.level"); auto* firstFader = ui->sliderFor ("drm.p01.level");
     lastFader->grabKeyboardFocus(); pump();
     check (lastFader->hasKeyboardFocus (true) && visibleThroughViewports (juce::Component::getCurrentlyFocusedComponent()),
