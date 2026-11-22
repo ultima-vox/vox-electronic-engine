@@ -743,7 +743,7 @@ public:
         type_->onChange = [this] { rescan(); };
         addAndMakeVisible (*type_);
         list_ = std::make_unique<juce::ListBox> ("presets", this);
-        list_->setRowHeight (24);
+        list_->setRowHeight (40);
         list_->setColour (juce::ListBox::backgroundColourId, c::panel);
         addAndMakeVisible (*list_);
         nameLabel_ = makeLabel ("Name for Save");
@@ -862,32 +862,37 @@ private:
         int factory = -1;    // factory kit index, or -1
         juce::File file;     // user preset
         int style = -1;      // factory style song (PR 137 §5), or -1
+        juce::String readiness; // explicit release boundary; empty for user files
     };
     PresetType type() const { return static_cast<PresetType> (juce::jlimit (0, 3, type_->getSelectedItemIndex())); }
     void rescan()
     {
         items_.clear();
         const auto t = type();
+        const auto readiness = [] (int kit, bool example) {
+            const auto state = factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples
+                                   ? "NOT RELEASE-READY" : "Listening pending";
+            return juce::String (example ? "Example / " : "") + state;
+        };
         // Factory patterns load only the current slot; paired full arrangements
         // and kits remain separate, explicit choices.
         if (t == PresetType::kit)
             for (int kit = 0; kit < factoryKitCount; ++kit)
-                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name
-                                        + (factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples ? "  (NOT RELEASE-READY)" : ""),
-                                    kit, {} });
+                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name,
+                                    kit, {}, -1, readiness (kit, false) });
         if (t == PresetType::pattern)
             for (int style = 0; style < factoryStyleCount; ++style)
-                items_.push_back ({ juce::String ("Factory pattern: ") + styleName (static_cast<Style> (style)), -1, {}, style });
+                items_.push_back ({ juce::String ("Factory pattern: ") + styleName (static_cast<Style> (style)),
+                                    -1, {}, style, readiness (factoryKitOfStyle (style), true) });
         if (t == PresetType::song)
         {
             for (int kit = 0; kit < originalFactoryKitCount; ++kit)
-                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name + " patterns and song", kit, {} });
+                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name + " patterns and song",
+                                    kit, {}, -1, readiness (kit, true) });
             for (int style = 0; style < factoryStyleCount; ++style)
                 items_.push_back ({ juce::String ("Factory song: ") + styleName (static_cast<Style> (style)) + "  (loads kit "
-                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")"
-                                        + (factoryKitRelease (factoryKitOfStyle (style)) == FactoryRelease::needsLicensedSamples ? "  NOT RELEASE-READY"
-                                                                                                                                   : ""),
-                                    -1, {}, style });
+                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")",
+                                    -1, {}, style, readiness (factoryKitOfStyle (style), true) });
         }
         for (const auto& file : processor_.presets().userPresets (t))
             items_.push_back ({ file.getFileNameWithoutExtension(), -1, file });
@@ -936,6 +941,12 @@ private:
     }
 
     int getNumRows() override { return static_cast<int> (items_.size()); }
+    juce::String getNameForRow (int row) override
+    {
+        if (row < 0 || row >= static_cast<int> (items_.size())) return {};
+        const auto& item = items_[static_cast<std::size_t> (row)];
+        return item.label + (item.readiness.isNotEmpty() ? "; " + item.readiness : juce::String());
+    }
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= static_cast<int> (items_.size()))
@@ -947,7 +958,15 @@ private:
         }
         g.setColour (c::text);
         g.setFont (vox::ui::typography::valueText());
-        g.drawText (items_[static_cast<std::size_t> (row)].label, 8, 0, width - 16, height, juce::Justification::centredLeft);
+        const auto& item = items_[static_cast<std::size_t> (row)];
+        g.drawFittedText (item.label, 8, 1, width - 16, item.readiness.isEmpty() ? height - 2 : height / 2,
+                          juce::Justification::centredLeft, 1);
+        if (item.readiness.isNotEmpty())
+        {
+            g.setColour (item.readiness.contains ("NOT RELEASE-READY") ? juce::Colours::orange : c::text.withAlpha (0.8f));
+            g.drawFittedText (item.readiness, 8, height / 2, width - 16, height - height / 2 - 1,
+                              juce::Justification::centredLeft, 1);
+        }
     }
     void listBoxItemDoubleClicked (int, const juce::MouseEvent&) override { loadSelected(); }
 

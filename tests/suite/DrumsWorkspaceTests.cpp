@@ -663,6 +663,15 @@ void testVisibleGeneratorAndPresets()
            "Presets shortcut opens the actual populated musical preset library");
     if (list && load && status && list->getListBoxModel() && list->getListBoxModel()->getNumRows() > 0)
     {
+        auto* presetModel = list->getListBoxModel();
+        check (presetModel->getNumRows() >= factoryKitCount, "factory kit catalog exposes all eleven kits");
+        for (int kit = 0; kit < factoryKitCount && kit < presetModel->getNumRows(); ++kit)
+        {
+            const auto label = presetModel->getNameForRow (kit);
+            const auto expected = factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples
+                                      ? "NOT RELEASE-READY" : "Listening pending";
+            check (label.contains (expected), "factory kit exposes its actual listening/licensing status");
+        }
         auto* viewport = load->findParentComponentOfClass<juce::Viewport>();
         check (viewport && viewport->getViewedComponent()
                && viewport->getViewArea().contains (viewport->getViewedComponent()->getLocalArea (load, load->getLocalBounds()))
@@ -677,6 +686,15 @@ void testVisibleGeneratorAndPresets()
             type->setSelectedId (3, juce::sendNotificationSync); pump();
             check (list->getListBoxModel() && list->getListBoxModel()->getNumRows() >= 23,
                    "Pattern preset category exposes a factory pattern for each style");
+            if (list->getListBoxModel() && list->getListBoxModel()->getNumRows() >= factoryStyleCount)
+                for (int style = 0; style < factoryStyleCount; ++style)
+                {
+                    const auto label = list->getListBoxModel()->getNameForRow (style);
+                    const auto expected = factoryKitRelease (factoryKitOfStyle (style)) == FactoryRelease::needsLicensedSamples
+                                              ? "NOT RELEASE-READY" : "Listening pending";
+                    check (label.contains ("Example") && label.contains (expected),
+                           "factory Pattern identifies example and paired-kit readiness");
+                }
             if (list->getListBoxModel() && list->getListBoxModel()->getNumRows() >= 23)
             {
                 const auto beforeSong = p->patterns().song();
@@ -701,6 +719,22 @@ void testVisibleGeneratorAndPresets()
                        "Undo Load restores the previous pattern bytes after loading a factory Pattern");
             }
         }
+        if (type)
+        {
+            type->setSelectedId (4, juce::sendNotificationSync); pump();
+            auto* model = list->getListBoxModel();
+            check (model && model->getNumRows() >= originalFactoryKitCount + factoryStyleCount,
+                   "Song category exposes original and per-style factory examples");
+            if (model && model->getNumRows() >= originalFactoryKitCount + factoryStyleCount)
+                for (int style = 0; style < factoryStyleCount; ++style)
+                {
+                    const auto label = model->getNameForRow (originalFactoryKitCount + style);
+                    const auto expected = factoryKitRelease (factoryKitOfStyle (style)) == FactoryRelease::needsLicensedSamples
+                                              ? "NOT RELEASE-READY" : "Listening pending";
+                    check (label.contains ("Example") && label.contains (expected),
+                           "factory Song identifies example and paired-kit readiness");
+                }
+        }
     }
     if (page && library)
     {
@@ -722,6 +756,160 @@ void testVisibleGeneratorAndPresets()
         }
         else check (false, "Generator and Library mode controls exist");
     }
+}
+
+void testFreshProductionWorkflows()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    p->prepareToPlay (48000, 128);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
+    auto* ui = frame ? dynamic_cast<DrumsWorkspace*> (frame->content()) : nullptr;
+    check (ui != nullptr, "fresh production workflow uses the actual processor editor");
+    if (! ui) { if (editor) p->editorBeingDeleted (editor.get()); return; }
+    const auto captureProduction = [&] (const juce::String& name) {
+        if (const auto* destination = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+        {
+            juce::File directory (destination); directory.createDirectory();
+            juce::FileOutputStream out (directory.getChildFile (name));
+            check (out.setPosition (0) && out.truncate().wasOk()
+                   && juce::PNGImageFormat().writeImageToStream (editor->createComponentSnapshot (editor->getLocalBounds()), out),
+                   "write production editor workflow snapshot");
+        }
+    };
+    if (const auto* destination = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+    {
+        juce::File directory (destination); directory.createDirectory();
+        for (const auto size : { juce::Point<int> { 1040, 700 }, { 1280, 720 }, { 1440, 900 }, { 1600, 1000 } })
+        {
+            editor->setSize (size.x, size.y); pump();
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+            juce::FileOutputStream out (directory.getChildFile ("production-" + juce::String (size.x) + "x" + juce::String (size.y) + ".png"));
+            check (image.getWidth() == size.x && image.getHeight() == size.y && out.setPosition (0) && out.truncate().wasOk()
+                   && juce::PNGImageFormat().writeImageToStream (image, out), "save actual production-editor size snapshot");
+        }
+    }
+    editor->setSize (1040, 700); pump();
+    auto* shortcut = ui->buttonFor ("workspace.generator");
+    auto* presetShortcut = ui->buttonFor ("workspace.presets");
+    check (shortcut && shortcut->isVisible() && presetShortcut && presetShortcut->isVisible(),
+           "fresh production editor exposes Generator and Presets");
+    if (! shortcut || ! presetShortcut) { p->editorBeingDeleted (editor.get()); return; }
+    const int originalSlot = p->currentSlot();
+    const auto originalSongMode = p->patterns().song().songMode;
+    const auto originalTransportMode = plain (*p, "drm.seq.mode");
+    const auto originalKit = KitStore::encode (p->kitStore().snapshot()).data;
+    const auto initialPattern = p->patterns().encodeCurrent().data;
+    press (*shortcut); pump();
+    captureProduction ("production-generator-1040x700.png");
+    auto* generator = ui->toolPage (workspace::DockTool::generator);
+    auto* makePattern = generator ? dynamic_cast<juce::Button*> (generator->named ("pattern")) : nullptr;
+    auto* makeSong = generator ? dynamic_cast<juce::Button*> (generator->named ("song")) : nullptr;
+    check (makePattern && makeSong && makePattern->isEnabled() && makeSong->isEnabled(), "production Generator actions are live");
+    if (makePattern && makeSong)
+    {
+        press (*makePattern); pump();
+        const auto generated = p->patterns().encodeCurrent().data;
+        auto pattern = std::make_unique<StoredPattern>(); p->patterns().copySlot (originalSlot, *pattern);
+        int lane = -1, step = -1;
+        for (int l = 0; l < padCount && lane < 0; ++l)
+            for (int s = 0; s < 16; ++s)
+                if (pattern->cell (l, 0, s).on) { lane = l; step = s; break; }
+        check (generated != initialPattern && lane >= 0 && p->currentSlot() == originalSlot,
+               "Generate Pattern produces inspectable notes without changing the selected slot");
+        if (lane >= 0)
+        {
+            juce::AudioBuffer<float> audio (p->getTotalNumOutputChannels(), 128); audio.clear();
+            juce::MidiBuffer midi; midi.addEvent (juce::MidiMessage::noteOn (1, p->kitStore().pad (lane).note, juce::uint8 (110)), 0);
+            float peak = 0;
+            for (int n = 0; n < 20; ++n) { audio.clear(); p->processBlock (audio, midi); midi.clear(); peak = std::max (peak, audio.getMagnitude (0, 0, audio.getNumSamples())); }
+            check (peak > 1e-5f, "generated lane's mapped pad produces audio on a MIDI note");
+            ui->patternEditor().selectCell (lane, step); ui->pollForTesting();
+            auto* velocity = ui->inspectorSlider ("velocity");
+            check (velocity != nullptr, "production Inspector exposes the selected generated step");
+            if (velocity)
+            {
+                const int original = juce::roundToInt (velocity->getValue());
+                velocity->setValue (original == 127 ? 126 : original + 1, juce::sendNotificationSync);
+                check (p->patterns().encodeCurrent().data != generated, "Inspector edits the generated pattern");
+                auto* undoEdit = ui->patternEditor().button ("undo"); ui->patternEditor().update();
+                check (undoEdit && undoEdit->isEnabled(), "production Step Undo is enabled after editing");
+                if (undoEdit) press (*undoEdit);
+                check (p->patterns().encodeCurrent().data == generated, "Undo restores the generated pattern after editing");
+            }
+        }
+        auto* undoGenerate = ui->patternEditor().button ("undo"); ui->patternEditor().update();
+        check (undoGenerate && undoGenerate->isEnabled(), "production Step Undo is enabled after generation");
+        if (undoGenerate) press (*undoGenerate);
+        check (p->patterns().encodeCurrent().data == initialPattern, "Undo restores the pre-generation pattern");
+        auto layout = ui->layout(); layout.primary = workspace::Editor::song; ui->setLayout (layout); ui->pollForTesting();
+        auto* length = ui->songEditor().combo ("length"); auto* midiButton = ui->songEditor().button ("midi");
+        std::vector<std::shared_ptr<const ExportSnapshot>> captures;
+        ui->patternEditor().saveDialogForTesting = [&] (auto frozen) { captures.push_back (std::move (frozen)); };
+        check (length && midiButton, "production Song exposes length and entire-song MIDI");
+        if (length && midiButton)
+            for (int index = 0; index < 3; ++index)
+            {
+                length->setSelectedItemIndex (index, juce::sendNotificationSync); pump();
+                const int bars = 16 << index;
+                press (*makeSong); ui->pollForTesting();
+                const auto song = p->patterns().song();
+                check (song.length == bars && song.bars[static_cast<std::size_t> (bars - 1)].kind != SongBar::Kind::empty,
+                       "Generate Song creates the requested 16/32/64-bar arrangement");
+                const auto count = captures.size(); press (*midiButton);
+                check (captures.size() == count + 1 && captures.back()->scope == ExportSnapshot::Scope::song
+                       && captures.back()->songLength == bars, "production Song button captures the entire requested arrangement");
+                if (captures.size() == count + 1)
+                {
+                    const auto bytes = DrumsProcessor::renderExport (*captures.back());
+                    juce::MemoryInputStream input (bytes, false); juce::MidiFile file;
+                    const bool readable = file.readFrom (input);
+                    int notes = 0;
+                    for (int track = 0; track < file.getNumTracks(); ++track)
+                        if (auto* events = file.getTrack (track))
+                            for (int event = 0; event < events->getNumEvents(); ++event)
+                                if (events->getEventPointer (event)->message.isNoteOn()) ++notes;
+                    check (readable && notes > 0, "entire-song export is readable and contains MIDI notes");
+                }
+            }
+        ui->patternEditor().saveDialogForTesting = {};
+    }
+    check (p->patterns().song().songMode == originalSongMode && plain (*p, "drm.seq.mode") == originalTransportMode,
+           "generation workflows do not change transport mode");
+    check (p->currentSlot() == originalSlot && KitStore::encode (p->kitStore().snapshot()).data == originalKit,
+           "generation workflows do not silently change the kit or selected slot");
+    press (*presetShortcut); pump();
+    auto* library = ui->toolPage (workspace::DockTool::library);
+    auto* type = library ? dynamic_cast<juce::ComboBox*> (library->named ("type")) : nullptr;
+    auto* list = library ? dynamic_cast<juce::ListBox*> (library->named ("list")) : nullptr;
+    auto* load = library ? dynamic_cast<juce::Button*> (library->named ("load")) : nullptr;
+    auto* undo = library ? dynamic_cast<juce::Button*> (library->named ("undo")) : nullptr;
+    check (type && list && load && undo, "production preset library has Kit/Pattern/Song Load and Undo");
+    if (list && list->getListBoxModel() && list->getListBoxModel()->getNumRows() > 9)
+    {
+        list->scrollToEnsureRowIsOnscreen (10);
+        if (auto* view = list->findParentComponentOfClass<juce::Viewport>())
+            if (auto* content = view->getViewedComponent())
+            {
+                const auto bounds = content->getLocalArea (list, list->getLocalBounds());
+                view->setViewPosition (view->getViewPositionX(), juce::jmax (0, bounds.getBottom() - view->getHeight()));
+            }
+        pump();
+        captureProduction ("production-presets-readiness-1040x700.png");
+    }
+    if (type && list && load && undo)
+        for (const int choice : { 1, 3, 4 })
+        {
+            type->setSelectedId (choice, juce::sendNotificationSync); pump();
+            if (! list->getListBoxModel() || list->getListBoxModel()->getNumRows() == 0) { check (false, "factory preset list is populated"); continue; }
+            list->selectRow (0); juce::MemoryBlock before; p->getStateInformation (before);
+            press (*load); pump();
+            check (p->presets().canUndoLoad(), "factory preset load enables Undo Load");
+            press (*undo); pump(); juce::MemoryBlock after; p->getStateInformation (after);
+            check (after == before, "Kit/Pattern/Song Undo Load restores complete state exactly");
+        }
+    p->editorBeingDeleted (editor.get()); editor.reset(); p->releaseResources(); pump();
 }
 
 void testNativeDocking()
@@ -1826,6 +2014,8 @@ int main()
     testProductionBindings();
     pump();
     testVisibleGeneratorAndPresets();
+    pump();
+    testFreshProductionWorkflows();
     pump();
     testNativeDocking();
     pump();
