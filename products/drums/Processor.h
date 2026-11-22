@@ -3,6 +3,7 @@
 #include "common/SuiteProcessor.h"
 
 #include "DrumsParameters.h"
+#include "DrumsLayoutState.h"
 #include "Generator.h"
 #include "KitStore.h"
 #include "PadRoles.h"
@@ -29,8 +30,11 @@ inline constexpr preset::Tag parameterSectionTag = preset::makeTag ("DPRM");
 bool decodeParameterValues (const preset::Section& section, std::map<std::string, float>& values, juce::String& error);
 preset::Section encodeParameterValues (const std::map<std::string, float>& values);
 
-// Editor state saved with the project (section DUIS): where the user was.
+// In-memory adapter for the existing musical editors. Only pad/songBar/
+// patternBar persist, in DLAY SELECTION. Page/exportScope are session-only
+// while the old panel remains a test reference; DUIS is recognised/discarded.
 inline constexpr preset::Tag uiStateSectionTag = preset::makeTag ("DUIS");
+inline constexpr preset::Tag layoutSectionTag = preset::makeTag ("DLAY");
 struct UiState {
     std::uint8_t page = 0;         // 0..7: PERFORMANCE .. ADVANCED
     std::uint8_t pad = 0;          // selected pad 0..15
@@ -42,8 +46,6 @@ struct UiState {
         return page == o.page && pad == o.pad && songBar == o.songBar && patternBar == o.patternBar && exportScope == o.exportScope;
     }
 };
-preset::Section encodeUiState (const UiState&);
-bool decodeUiState (const preset::Section&, UiState& out, juce::String& error);
 
 // What a MIDI export writes, frozen on the message thread at the click or
 // at the start of the drag (DRM-05): both paths render the same snapshot
@@ -110,6 +112,7 @@ public:
         return patternHistory_;
     }
     std::uint64_t patternEpoch() const noexcept { return patternEpoch_.load(); }
+    bool restoringMusic() const noexcept { return restoringMusic_.load (std::memory_order_acquire); }
     // The host tempo of the last block (120 before any), for MIDI export.
     double lastBpm() const noexcept { return lastBpm_.load (std::memory_order_relaxed); }
     // Tests: the engine, to read what the last processBlock triggered
@@ -130,8 +133,21 @@ public:
     //== generator (DRM-05), message thread
     GeneratorSettings generator() const;
     void setGenerator (const GeneratorSettings&);
+    // Explicit native Library action. Input is an immutable definition already
+    // validated by StyleLibrary/state. Preserve current generator amounts and
+    // refuse a project epoch that changed during file validation.
+    bool useUserStyle (std::shared_ptr<const style::Definition>, std::uint64_t expectedEpoch);
     UiState uiState() const;
     void setUiState (const UiState&);
+    struct LayoutSnapshot {
+        layout::Document document;
+        layout::Status status = layout::Status::valid;
+        std::uint64_t generation = 0;
+        bool recovered = false;
+    };
+    LayoutSnapshot layoutState() const;
+    bool commitLayout (layout::Document, bool confirmedReset = false);
+    juce::ChangeBroadcaster& layoutChanges() noexcept { return layoutChanges_; }
     // Runs the generator on the slot the sequencer plays (pattern, mutate
     // `laneMask`, fill in `bar`, variation: B from A) or on everything
     // (song). With `newSeed` the seed advances first, so every press gives
@@ -197,6 +213,7 @@ public:
     std::uint64_t droppedMidiEvents() const noexcept { return droppedMidi_.load (std::memory_order_relaxed); }
 
     static constexpr std::size_t midiCapacity = 4096;   // events per host block
+    static constexpr std::size_t productStateBudgetBytes = 736u * 1024u;
 
     // Tests: the voice pool size applied at the next prepareToPlay (the
     // product uses kit::maxVoices; the DRM-00 reference used 16).
@@ -204,16 +221,18 @@ public:
 
 protected:
     void writeProductState (std::vector<preset::Section>&) const override;
+    bool recoverOversizedStateForSave (preset::StateDocument&) override;
     ProductRestore readProductState (const preset::StateDocument&, juce::String&) override;
     // The most the product's own sections can take (ten 4 x 64 patterns, 64
     // unique 64-step bars, 32 sample references with the longest paths:
     // about 705 KB), so that much of the container is never given to
     // sections of an unknown writer.
-    std::size_t productStateReserve() const override { return 736u * 1024u; }
+    std::size_t productStateReserve() const override { return productStateBudgetBytes; }
     bool isProductSection (preset::Tag tag) const override
     {
         return tag == parameterSectionTag || tag == sampleSectionTag || tag == padSectionTag || tag == sequenceSectionTag
-            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == rolesSectionTag || tag == styleSectionTag;
+            || tag == songSectionTag || tag == generatorSectionTag || tag == uiStateSectionTag || tag == layoutSectionTag
+            || tag == rolesSectionTag || tag == styleSectionTag;
     }
 
 private:
@@ -262,6 +281,7 @@ private:
     PatternHistory patternHistory_;
     std::uint64_t historyEpoch_ = 0;   // message thread: the epoch patternHistory_ belongs to
     std::atomic<std::uint64_t> patternEpoch_ { 0 };
+    std::atomic<bool> restoringMusic_ { false }; // Host/message state lifecycle, never read by DSP.
     std::atomic<double> lastBpm_ { 120.0 };
     PatternStore::Live livePattern_;   // audio thread
     PatternStore::SongLive liveSong_;  // audio thread
@@ -269,6 +289,9 @@ private:
     mutable juce::SpinLock settingsLock_;   // generator_, ui_, roles_
     GeneratorSettings generator_;
     UiState ui_;
+    layout::ProjectState layout_;
+    std::atomic<std::uint64_t> layoutGeneration_ { 0 };
+    juce::ChangeBroadcaster layoutChanges_;
     PadRoles roles_;
     void storeRoles (const PadRoles&);
 

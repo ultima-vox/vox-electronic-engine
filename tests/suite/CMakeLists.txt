@@ -96,6 +96,30 @@ add_test(NAME suite_drums_legacy_golden_tests
 
 # DRM-01: VOX Drums product tests (parameter contract, editor bindings,
 # sound, state, realtime).
+add_executable(suite_drums_workspace_model_tests DrumsWorkspaceModelTests.cpp)
+target_include_directories(suite_drums_workspace_model_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/drums)
+add_test(NAME suite_drums_workspace_model_tests COMMAND suite_drums_workspace_model_tests)
+
+add_executable(suite_drums_layout_state_tests DrumsLayoutStateTests.cpp
+  ${PROJECT_SOURCE_DIR}/products/drums/DrumsLayoutState.cpp)
+target_include_directories(suite_drums_layout_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/drums)
+add_test(NAME suite_drums_layout_state_tests COMMAND suite_drums_layout_state_tests)
+
+add_executable(suite_drums_layout_project_tests DrumsLayoutProjectTests.cpp)
+target_link_libraries(suite_drums_layout_project_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_events)
+target_compile_definitions(suite_drums_layout_project_tests PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)
+target_include_directories(suite_drums_layout_project_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+add_test(NAME suite_drums_layout_project_tests COMMAND suite_drums_layout_project_tests)
+
+add_executable(suite_drums_workspace_tests DrumsWorkspaceTests.cpp)
+target_link_libraries(suite_drums_workspace_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_events)
+target_compile_definitions(suite_drums_workspace_tests PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)
+target_include_directories(suite_drums_workspace_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+if(MSVC)
+  target_link_options(suite_drums_workspace_tests PRIVATE /STACK:8388608)
+endif()
+add_test(NAME suite_drums_workspace_tests COMMAND suite_drums_workspace_tests)
+
 add_executable(suite_drums_product_tests DrumsProductTests.cpp)
 target_link_libraries(suite_drums_product_tests PRIVATE ${VOX_SUITE_drm_TARGET})
 target_include_directories(suite_drums_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
@@ -154,6 +178,11 @@ add_executable(suite_drums_style_engine_tests DrumsStyleEngineTests.cpp Generato
 target_link_libraries(suite_drums_style_engine_tests PRIVATE ${VOX_SUITE_drm_TARGET} juce::juce_cryptography)
 target_include_directories(suite_drums_style_engine_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME suite_drums_style_engine_tests COMMAND suite_drums_style_engine_tests ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/example-user-style.voxstyle)
+
+add_executable(suite_drums_style_library_tests DrumsStyleLibraryTests.cpp)
+target_link_libraries(suite_drums_style_library_tests PRIVATE ${VOX_SUITE_drm_TARGET})
+target_include_directories(suite_drums_style_library_tests PRIVATE ${juce_SOURCE_DIR}/modules)
+add_test(NAME suite_drums_style_library_tests COMMAND suite_drums_style_library_tests ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/example-user-style.voxstyle)
 
 # Generator style fidelity (issue 128): rhythm grammar per style over a
 # settings matrix, audible roles on the factory kits, reproducibility.
@@ -234,7 +263,7 @@ endforeach()
 juce_add_console_app(suite_vst3_host_tests PRODUCT_NAME "suite_vst3_host_tests")
 target_sources(suite_vst3_host_tests PRIVATE Vst3HostTests.cpp)
 target_compile_definitions(suite_vst3_host_tests PRIVATE
-  JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+  JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
   VOX_TEST_COMPANY="${VOX_SUITE_COMPANY_NAME}")
 target_link_libraries(suite_vst3_host_tests PRIVATE
   juce::juce_audio_processors juce::juce_recommended_config_flags)
@@ -272,3 +301,14 @@ set_tests_properties(suite_verify_juce_strict-wrong-commit suite_verify_juce_str
 
 get_property(suite_tests DIRECTORY PROPERTY TESTS)
 set_tests_properties(${suite_tests} PROPERTIES LABELS suite)
+
+add_test(NAME suite_drums_acceptance_checklist
+  COMMAND ${CMAKE_COMMAND} -DCHECKLIST=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptance.cmake)
+set_tests_properties(suite_drums_acceptance_checklist PROPERTIES LABELS suite)
+add_test(NAME suite_drums_acceptance_guard_regression
+  COMMAND ${CMAKE_COMMAND} -DCHECKLIST=${PROJECT_SOURCE_DIR}/docs/ultima-vox-music/drums/DAW_ACCEPTANCE_CHECKLIST.md
+          -DGUARD=${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptance.cmake
+          -DWORK=${CMAKE_CURRENT_BINARY_DIR}/acceptance-guard-fixture.md
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/CheckDrumsAcceptanceRegression.cmake)
+set_tests_properties(suite_drums_acceptance_guard_regression PROPERTIES LABELS suite)

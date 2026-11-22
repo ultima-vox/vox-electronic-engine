@@ -156,17 +156,33 @@ void testEditor()
     auto p = makeProcessor();
     for (int round = 0; round < 3; ++round)
     {
+        const auto requested = p->editorSize();
         std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
         check (editor != nullptr, "editor opens");
         if (editor == nullptr)
             return;
-        check (editor->getWidth() == p->editorWidth() && editor->getHeight() == p->editorHeight(),
-               "editor opens at the stored size");
+        auto expected = requested;
+        if (p->product().name == "VOX Drums")
+            if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+                expected = { std::max (1040, std::min (requested.first, static_cast<int> (display->userBounds.getWidth()))),
+                             std::max (700, std::min (requested.second, static_cast<int> (display->userBounds.getHeight()))) };
+        check (std::pair { editor->getWidth(), editor->getHeight() } == expected && p->editorSize() == requested,
+               "editor opens at stored size or exact Drums work-area fallback without rewriting UIST");
         editor->setSize (1300, 800);
         check (p->editorWidth() == 1300 && p->editorHeight() == 800, "editor size is stored");
         juce::Image image (juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
         juce::Graphics g (image);
         editor->paintEntireComponent (g, false);
+        for (const auto& size : { std::pair { 1040, 700 }, std::pair { 2560, 1600 } })
+        {
+            editor->setSize (size.first, size.second);
+            check (p->editorSize() == size, "T23: actual editor stores canonical min/max logical size");
+            const auto boundaryState = stateOf (*p);
+            auto restored = makeProcessor();
+            restored->setStateInformation (boundaryState.getData(), static_cast<int> (boundaryState.getSize()));
+            check (restored->lastStateError().isEmpty() && restored->editorSize() == size && stateOf (*restored) == boundaryState,
+                   "T23: min/max UIST restores and saves identically");
+        }
         p->editorBeingDeleted (editor.get());
     }
 }
@@ -200,6 +216,8 @@ void testState()
     expectRejected (encoded (documentWithUi (foreignTag, 1, 1200, 760)), "another product's state");
     expectRejected (encoded (documentWithUi (tag, 2, 1200, 760)), "newer schema");
     expectRejected (encoded (documentWithUi (tag, 1, 10, 10)), "UI size out of range");
+    expectRejected (encoded (documentWithUi (tag, 1, 2561, 700)), "UI width above canonical maximum");
+    expectRejected (encoded (documentWithUi (tag, 1, 1040, 1601)), "UI height above canonical maximum");
     auto noUi = documentWithUi (tag, 1, 1200, 760);
     noUi.sections.clear();
     expectRejected (encoded (noUi), "missing UI section");

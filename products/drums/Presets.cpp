@@ -517,7 +517,18 @@ juce::Result Presets::undoLoad()
         previous_.reset();   // of another project state: gone for good
         return juce::Result::fail ("nothing to undo");
     }
-    processor_.setStateInformation (previous_.getData(), static_cast<int> (previous_.getSize()));
+    // Undo Load is musical undo, not workspace/resize undo. A layout edit
+    // made after loading a preset must survive, including opaque/future DLAY.
+    auto current = currentDocument (processor_);
+    preset::StateDocument previous;
+    juce::String error;
+    if (! current || ! decodeBlob (previous_.getData(), previous_.getSize(), processor_, previous, error))
+        return juce::Result::fail ("cannot read preset undo state");
+    for (const auto tag : { suite::uiSectionTag, layoutSectionTag })
+        if (const auto* section = current->find (tag)) replaceSection (previous, *section);
+    const auto restored = encodeBlob (previous);
+    if (restored.getSize() == 0) return juce::Result::fail ("the preset undo state is too large");
+    processor_.setStateInformation (restored.getData(), static_cast<int> (restored.getSize()));
     const auto rejected = processor_.lastStateError();
     if (rejected.isNotEmpty())
         return juce::Result::fail (rejected);
@@ -543,6 +554,19 @@ juce::Result Presets::loadFactoryKit (int kit)
     if (kit < 0 || kit >= factoryKitCount)
         return juce::Result::fail ("no such factory kit");
     return applyDocument (factoryKitDocument (kit), -1);
+}
+
+juce::Result Presets::loadFactoryStylePattern (int style)
+{
+    auto all = std::make_unique<PatternStore::Everything>();
+    if (! factoryStyleSong (style, *all))
+        return juce::Result::fail ("no such factory style");
+    preset::StateDocument doc;
+    doc.product = processor_.product().stateTag;
+    doc.schema = processor_.product().stateSchema;
+    doc.sections.push_back (encodeInfo ({ PresetType::pattern, juce::String (styleName (static_cast<Style> (style))) + " pattern", 0 }));
+    doc.sections.push_back (PatternStore::encode (all->slots, all->alternates));
+    return applyDocument (std::move (doc), -1, PresetType::pattern);
 }
 
 juce::Result Presets::loadFactoryStyleSong (int style)

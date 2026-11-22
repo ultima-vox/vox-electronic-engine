@@ -5,6 +5,8 @@
 #include "Processor.h"
 #include "Tokens.h"
 #include "Typography.h"
+#include "DrumsDial.h"
+#include "PatternEditor.h"
 
 #include <deque>
 
@@ -294,10 +296,11 @@ public:
         styleLabel_ = makeLabel ("Style");
         addAndMakeVisible (*styleLabel_);
         style_ = std::make_unique<VoxComboBox>();
-        for (int i = 0; i < factoryStyleCount; ++i)
-            style_->addItem (styleName (static_cast<Style> (i)), i + 1);
         style_->onChange = [this] {
-            change ([this] (GeneratorSettings& g) { g.style = static_cast<Style> (juce::jmax (0, style_->getSelectedItemIndex())); });
+            const int index = style_->getSelectedItemIndex();
+            if (refreshing_ || index < 0 || index >= factoryStyleCount) return;
+            change ([index] (GeneratorSettings& g) { g.style = static_cast<Style> (index); g.custom.reset(); });
+            refresh();
         };
         addAndMakeVisible (*style_);
         static const char* names[8] = { "density", "groove", "syncopation", "swing", "humanize", "complexity", "fills", "variation" };
@@ -305,7 +308,7 @@ public:
         for (int i = 0; i < 8; ++i)
         {
             auto& k = amounts_[static_cast<std::size_t> (i)];
-            k = std::make_unique<VoxKnob> (labels[i], VoxKnob::Size::Normal);
+            k = std::make_unique<DrumsDial> (labels[i], VoxKnob::Size::Normal);
             k->setName (names[i]);
             auto& s = k->getSlider();
             s.setRange (0.0, 1.0, 0.0);
@@ -365,7 +368,7 @@ public:
         action (defaults_, "Style defaults", "Set the eight amounts to the selected style's recommended values (one undo step)", [this] {
             const bool changed = processor_.applyStyleDefaults();
             refresh();
-            status_->setText (changed ? juce::String ("Style defaults of ") + styleName (shown_.style) + " applied"
+            status_->setText (changed ? juce::String ("Style defaults of ") + (shown_.custom ? shown_.custom->name : juce::String (styleName (shown_.style))) + " applied"
                                       : juce::String ("Nothing changed: the amounts already are the style defaults"),
                               juce::dontSendNotification);
         });
@@ -376,7 +379,8 @@ public:
 
     void update() override
     {
-        if (processor_.generator() != shown_)
+        const auto current = processor_.generator();
+        if (current != shown_ || current.custom != shown_.custom)
             refresh();
         undo_->setEnabled (processor_.patternHistory().canUndo());
         redo_->setEnabled (processor_.patternHistory().canRedo());
@@ -384,6 +388,32 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            styleLabel_->setBounds (area.removeFromTop (18));
+            style_->setBounds (area.removeFromTop (30)); seed_->setBounds (area.removeFromTop (22));
+            pattern_->setBounds (area.removeFromTop (32).reduced (1));
+            song_->setBounds (area.removeFromTop (32).reduced (1));
+            for (int row = 0; row < 4; ++row)
+            {
+                auto cells = area.removeFromTop (86);
+                amounts_[static_cast<std::size_t> (row * 2)]->setBounds (cells.removeFromLeft (cells.getWidth() / 2));
+                amounts_[static_cast<std::size_t> (row * 2 + 1)]->setBounds (cells);
+            }
+            const auto lanes = [] (juce::Rectangle<int> r, auto& buttons) {
+                for (int n = 0; n < padCount; ++n)
+                    buttons[static_cast<std::size_t> (n)]->setBounds (juce::Rectangle<int>
+                        (r.getX() + n % 4 * r.getWidth() / 4, r.getY() + n / 4 * 28, r.getWidth() / 4, 28).reduced (1));
+            };
+            lockLabel_->setBounds (area.removeFromTop (32)); lanes (area.removeFromTop (112), locks_);
+            mutateLabel_->setBounds (area.removeFromTop (24)); lanes (area.removeFromTop (112), mutate_);
+            for (auto* button : { mutateButton_.get(), fill_.get(), variation_.get(),
+                                  undo_.get(), redo_.get(), defaults_.get() })
+                button->setBounds (area.removeFromTop (32).reduced (1));
+            status_->setBounds (area.removeFromTop (60));
+            return;
+        }
         auto area = getLocalBounds();
         auto left = area.removeFromLeft (juce::jlimit (380, 520, area.getWidth() * 45 / 100));
         area.removeFromLeft (sp::xxl);
@@ -500,7 +530,12 @@ private:
     {
         refreshing_ = true;
         shown_ = processor_.generator();
-        style_->setSelectedItemIndex (static_cast<int> (shown_.style), juce::dontSendNotification);
+        style_->clear (juce::dontSendNotification);
+        for (int i = 0; i < factoryStyleCount; ++i)
+            style_->addItem (styleName (static_cast<Style> (i)), i + 1);
+        if (shown_.custom)
+            style_->addItem (shown_.custom->name + " (embedded)", factoryStyleCount + 1);
+        style_->setSelectedId (shown_.custom ? factoryStyleCount + 1 : static_cast<int> (shown_.style) + 1, juce::dontSendNotification);
         for (int i = 0; i < 8; ++i)
             amounts_[static_cast<std::size_t> (i)]->getSlider().setValue (*field (shown_, i), juce::dontSendNotification);
         for (int lane = 0; lane < padCount; ++lane)
@@ -532,6 +567,8 @@ public:
         for (int pad = 0; pad < padCount; ++pad)
         {
             auto& r = rows_[static_cast<std::size_t> (pad)];
+            r.lane = &host_.toggle ("drm.seq.lane." + juce::String (padPrefix (pad).substr (4)), "Seq");
+            r.lane->setTooltip ("Enable this pad's sequencer lane; incoming MIDI is independent");
             r.name = makeLabel ("");
             r.note = std::make_unique<VoxComboBox>();
             r.note->addItemList (notes, 1);
@@ -596,6 +633,23 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            for (auto& r : rows_)
+            {
+                auto row = area.removeFromTop (88);
+                auto title = row.removeFromTop (28);
+                r.lane->setBounds (title.removeFromRight (48).reduced (1)); r.name->setBounds (title);
+                auto choices = row.removeFromTop (30);
+                r.note->setBounds (choices.removeFromLeft (choices.getWidth() / 2).reduced (1));
+                r.output->setBounds (choices.reduced (1));
+                r.state->setBounds (row.removeFromTop (24));
+            }
+            modeLabel_->setBounds (area.removeFromTop (18)); mode_->setBounds (area.removeFromTop (30));
+            sync_->setBounds (area.removeFromTop (48)); buses_->setBounds (area.removeFromTop (48));
+            return;
+        }
         auto area = getLocalBounds();
         auto bottom = area.removeFromBottom (52);
         area.removeFromBottom (sp::sm);
@@ -605,6 +659,7 @@ public:
         {
             auto& r = rows_[static_cast<std::size_t> (pad)];
             auto row = juce::Rectangle<int> (area.getX() + (pad / 8) * colW, area.getY() + (pad % 8) * rowH, colW, rowH).reduced (sp::xs, 2);
+            r.lane->setBounds (row.removeFromLeft (36).withSizeKeepingCentre (34, juce::jmin (28, rowH - 4)));
             r.name->setBounds (row.removeFromLeft (96));
             r.note->setBounds (row.removeFromLeft (104).withSizeKeepingCentre (100, juce::jmin (28, rowH - 4)));
             r.output->setBounds (row.removeFromLeft (94).withSizeKeepingCentre (90, juce::jmin (28, rowH - 4)));
@@ -618,6 +673,7 @@ public:
     }
 
     juce::ComboBox* combo (const juce::String& id) override { return host_.comboFor (id); }
+    juce::Button* button (const juce::String& id) override { return host_.button (id); }
     juce::Component* named (const juce::String& name) override
     {
         if (name == "sync")
@@ -629,6 +685,7 @@ public:
         if (name.startsWith ("note.")) return r.note.get();
         if (name.startsWith ("output.")) return r.output.get();
         if (name.startsWith ("state.")) return r.state.get();
+        if (name.startsWith ("lane.")) return r.lane;
         return nullptr;
     }
 
@@ -658,6 +715,7 @@ private:
     }
 
     struct Row {
+        VoxButton* lane = nullptr;
         std::unique_ptr<juce::Label> name, state;
         std::unique_ptr<VoxComboBox> note, output;
     };
@@ -685,7 +743,7 @@ public:
         type_->onChange = [this] { rescan(); };
         addAndMakeVisible (*type_);
         list_ = std::make_unique<juce::ListBox> ("presets", this);
-        list_->setRowHeight (24);
+        list_->setRowHeight (40);
         list_->setColour (juce::ListBox::backgroundColourId, c::panel);
         addAndMakeVisible (*list_);
         nameLabel_ = makeLabel ("Name for Save");
@@ -746,6 +804,19 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            typeLabel_->setBounds (area.removeFromTop (18)); type_->setBounds (area.removeFromTop (30));
+            load_->setBounds (area.removeFromTop (32).reduced (1));
+            status_->setBounds (area.removeFromTop (44));
+            area.removeFromTop (6); list_->setBounds (area.removeFromTop (220));
+            nameLabel_->setBounds (area.removeFromTop (18)); name_->setBounds (area.removeFromTop (30));
+            for (auto* button : { save_.get(), undo_.get(), import_.get(), export_.get() })
+                button->setBounds (area.removeFromTop (32).reduced (1));
+            samples_->setBounds (area);
+            return;
+        }
         auto area = getLocalBounds();
         auto left = area.removeFromLeft (juce::jlimit (300, 460, area.getWidth() * 42 / 100));
         area.removeFromLeft (sp::xxl);
@@ -791,28 +862,37 @@ private:
         int factory = -1;    // factory kit index, or -1
         juce::File file;     // user preset
         int style = -1;      // factory style song (PR 137 §5), or -1
+        juce::String readiness; // explicit release boundary; empty for user files
     };
     PresetType type() const { return static_cast<PresetType> (juce::jlimit (0, 3, type_->getSelectedItemIndex())); }
     void rescan()
     {
         items_.clear();
         const auto t = type();
-        // Factory content: kits under Kit, each kit's patterns and song under Song.
+        const auto readiness = [] (int kit, bool example) {
+            const auto state = factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples
+                                   ? "NOT RELEASE-READY" : "Listening pending";
+            return juce::String (example ? "Example / " : "") + state;
+        };
+        // Factory patterns load only the current slot; paired full arrangements
+        // and kits remain separate, explicit choices.
         if (t == PresetType::kit)
             for (int kit = 0; kit < factoryKitCount; ++kit)
-                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name
-                                        + (factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples ? "  (NOT RELEASE-READY)" : ""),
-                                    kit, {} });
+                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name,
+                                    kit, {}, -1, readiness (kit, false) });
+        if (t == PresetType::pattern)
+            for (int style = 0; style < factoryStyleCount; ++style)
+                items_.push_back ({ juce::String ("Factory pattern: ") + styleName (static_cast<Style> (style)),
+                                    -1, {}, style, readiness (factoryKitOfStyle (style), true) });
         if (t == PresetType::song)
         {
             for (int kit = 0; kit < originalFactoryKitCount; ++kit)
-                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name + " patterns and song", kit, {} });
+                items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name + " patterns and song",
+                                    kit, {}, -1, readiness (kit, true) });
             for (int style = 0; style < factoryStyleCount; ++style)
                 items_.push_back ({ juce::String ("Factory song: ") + styleName (static_cast<Style> (style)) + "  (loads kit "
-                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")"
-                                        + (factoryKitRelease (factoryKitOfStyle (style)) == FactoryRelease::needsLicensedSamples ? "  NOT RELEASE-READY"
-                                                                                                                                   : ""),
-                                    -1, {}, style });
+                                        + factoryKitInfo (factoryKitOfStyle (style)).name + ")",
+                                    -1, {}, style, readiness (factoryKitOfStyle (style), true) });
         }
         for (const auto& file : processor_.presets().userPresets (t))
             items_.push_back ({ file.getFileNameWithoutExtension(), -1, file });
@@ -829,7 +909,10 @@ private:
         }
         const auto& item = items_[static_cast<std::size_t> (row)];
         auto& presets = processor_.presets();
-        if (item.style >= 0)
+        if (item.style >= 0 && type() == PresetType::pattern)
+            report (presets.loadFactoryStylePattern (item.style),
+                    "Loaded " + item.label + "\nKit unchanged; paired kit: " + factoryKitInfo (factoryKitOfStyle (item.style)).name);
+        else if (item.style >= 0)
             report (presets.loadFactoryStyleSong (item.style), "Loaded " + item.label);
         else if (item.factory >= 0)
             report (type() == PresetType::kit ? presets.loadFactoryKit (item.factory) : presets.loadFactoryPatterns (item.factory),
@@ -858,6 +941,12 @@ private:
     }
 
     int getNumRows() override { return static_cast<int> (items_.size()); }
+    juce::String getNameForRow (int row) override
+    {
+        if (row < 0 || row >= static_cast<int> (items_.size())) return {};
+        const auto& item = items_[static_cast<std::size_t> (row)];
+        return item.label + (item.readiness.isNotEmpty() ? "; " + item.readiness : juce::String());
+    }
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= static_cast<int> (items_.size()))
@@ -869,7 +958,15 @@ private:
         }
         g.setColour (c::text);
         g.setFont (vox::ui::typography::valueText());
-        g.drawText (items_[static_cast<std::size_t> (row)].label, 8, 0, width - 16, height, juce::Justification::centredLeft);
+        const auto& item = items_[static_cast<std::size_t> (row)];
+        g.drawFittedText (item.label, 8, 1, width - 16, item.readiness.isEmpty() ? height - 2 : height / 2,
+                          juce::Justification::centredLeft, 1);
+        if (item.readiness.isNotEmpty())
+        {
+            g.setColour (item.readiness.contains ("NOT RELEASE-READY") ? juce::Colours::orange : c::text.withAlpha (0.8f));
+            g.drawFittedText (item.readiness, 8, height / 2, width - 16, height - height / 2 - 1,
+                              juce::Justification::centredLeft, 1);
+        }
     }
     void listBoxItemDoubleClicked (int, const juce::MouseEvent&) override { loadSelected(); }
 
@@ -924,7 +1021,16 @@ public:
              << "Outputs: Main + Out 2..9 (9 stereo buses); enabled now: "
              << juce::String (juce::BigInteger (static_cast<juce::int64> (processor_.activeOutputs())).countNumberOfSetBits()) << "\n"
              << "Version " << JucePlugin_VersionString << ", state schema " << juce::String (processor_.product().stateSchema)
-             << ", sections DPRM DPAD(2) DSMP(2) DSEQ(4) DSNG(2) DGEN(2) DSTL(1) DUIS(1)";
+             << ", sections DPRM DPAD(2) DSMP(2) DSEQ(4) DSNG(2) DGEN(2) DSTL(1) DLAY(1)";
+        const auto layoutState = processor_.layoutState();
+        switch (layoutState.status)
+        {
+            case layout::Status::invalid: text << "\nLayout data was invalid; a default layout is shown"; break;
+            case layout::Status::future: text << "\nLayout saved by a newer VOX Drums; changes here are not saved. Use Workspace > Reset layout to replace it."; break;
+            case layout::Status::valid: break;
+        }
+        if (layoutState.recovered)
+            text << "\nRecovered project: corrupt v1 layout bytes were NOT retained because they prevented saving. Music was preserved; default layout restored. Use Workspace > Reset layout to acknowledge, or restore a backup to recover the original layout bytes.";
         // PR 137 §10.4: say when the host gives no bar positions.
         if (processor_.transportPlaying() && ! processor_.hostBars())
             text << "\nHost gives no bar positions; bars counted from the start";
@@ -938,6 +1044,15 @@ public:
 
     void resized() override
     {
+        if (getWidth() < 600)
+        {
+            auto area = getLocalBounds().reduced (6);
+            voicesLabel_->setBounds (area.removeFromTop (18)); voices_->setBounds (area.removeFromTop (30));
+            velocity_->setBounds (area.removeFromTop (86));
+            choke_->setBounds (area.removeFromTop (32)); panic_->setBounds (area.removeFromTop (32));
+            area.removeFromTop (8); diagnostics_->setBounds (area);
+            return;
+        }
         auto area = getLocalBounds();
         auto top = area.removeFromTop (84);
         auto voices = top.removeFromLeft (180);
@@ -1076,6 +1191,8 @@ SongStrip::SongStrip (DrumsProcessor& processor, juce::Colour accent) : processo
     toggle (edit_, "Edit Bar", "Edit the selected song bar in the step grid (the bar becomes unique when you change it)");
     edit_->onClick = [this] {
         editing_ = edit_->getToggleState();
+        sourceEditing_ = false;
+        if (source_) source_->setToggleState (false, juce::dontSendNotification);
         if (onEditBar)
             onEditBar (editedBar());
     };
@@ -1091,6 +1208,50 @@ SongStrip::SongStrip (DrumsProcessor& processor, juce::Colour accent) : processo
 }
 
 SongStrip::~SongStrip() = default;
+
+void SongStrip::enableSourceEditing()
+{
+    source_ = std::make_unique<VoxButton> ("Edit Source", VoxButton::Type::Toggle);
+    source_->setClickingTogglesState (true);
+    source_->setTooltip ("Edit this bar's canonical A/B source; all linked occurrences follow. Playback selection is unchanged.");
+    source_->onClick = [this] {
+        sourceEditing_ = source_->getToggleState(); editing_ = false;
+        edit_->setToggleState (false, juce::dontSendNotification);
+        if (sourceEditing_) { if (onEditSource) onEditSource (selFrom_); }
+        else if (onEditBar) onEditBar (-1);
+    };
+    edit_->setButtonText ("Edit This Bar");
+    addAndMakeVisible (*source_); refresh(); resized();
+}
+
+void SongStrip::editTarget (int bar, bool source)
+{
+    update();
+    if (bar < 0 || bar >= song_.length || (source && song_.bars[static_cast<std::size_t> (bar)].kind != SongBar::Kind::pattern)) return;
+    editing_ = ! source; sourceEditing_ = source;
+    edit_->setToggleState (editing_, juce::dontSendNotification);
+    if (source_) source_->setToggleState (sourceEditing_, juce::dontSendNotification);
+    select (bar, 1);
+}
+
+void SongStrip::clearEditing()
+{
+    editing_ = sourceEditing_ = false;
+    edit_->setToggleState (false, juce::dontSendNotification);
+    if (source_) source_->setToggleState (false, juce::dontSendNotification);
+}
+
+void SongStrip::enableMidiExport (std::function<void()> save, std::function<void()> drag, std::function<juce::String()> status)
+{
+    midi_ = std::make_unique<MidiDragButton> ("Song MIDI", VoxButton::Type::Primary);
+    midi_->setTooltip ("Click: save the entire Song as MIDI. Drag: drop the entire Song into your DAW.");
+    midi_->onClick = std::move (save); midi_->onDragStart = std::move (drag);
+    addAndMakeVisible (*midi_);
+    midiStatus_ = makeLabel ("Entire Song MIDI / click save / drag to DAW", true);
+    midiStatus_->setName ("Song MIDI export status"); addAndMakeVisible (*midiStatus_);
+    midiStatusQuery_ = std::move (status);
+    scope_->setVisible (false); resized();
+}
 
 void SongStrip::apply (const std::function<void (SongData&)>& change)
 {
@@ -1108,12 +1269,22 @@ void SongStrip::refresh()
     length_->setSelectedItemIndex (song_.length == 64 ? 2 : song_.length == 32 ? 1 : 0, juce::dontSendNotification);
     scope_->setSelectedItemIndex (processor_.uiState().exportScope, juce::dontSendNotification);
     paste_->setEnabled (! clipboard_.empty());
+    if (source_) source_->setEnabled (song_.bars[static_cast<std::size_t> (selFrom_)].kind == SongBar::Kind::pattern);
     refreshing_ = false;
 }
 
 void SongStrip::update()
 {
+    if (midiStatus_ && midiStatusQuery_)
+    {
+        const auto error = midiStatusQuery_();
+        const auto text = error.isEmpty() ? juce::String ("Entire Song MIDI / click save / drag to DAW") : error;
+        midiStatus_->setText (text, juce::dontSendNotification); midiStatus_->setTooltip (text);
+    }
     bool changed = false;
+    const auto previousLength = song_.length;
+    const auto previousSelection = selFrom_;
+    const auto previousTarget = song_.bars[static_cast<std::size_t> (selFrom_)];
     if (processor_.patterns().generation() != generation_)
     {
         generation_ = processor_.patterns().generation();
@@ -1135,11 +1306,20 @@ void SongStrip::update()
         refresh();
         repaint();
     }
+    if (song_.length != previousLength) { resized(); if (onLayoutChanged) onLayoutChanged(); }
+    if (sourceEditing_ && (previousSelection != selFrom_ || ! (previousTarget == song_.bars[static_cast<std::size_t> (selFrom_)])))
+    { if (onEditSource) onEditSource (selFrom_); }
+    else if (editing_ && previousSelection != selFrom_) { if (onEditBar) onEditBar (selFrom_); }
 }
 
 int SongStrip::preferredHeight() const
 {
-    return 30 + sp::xs + (song_.length / 16) * 22;
+    return preferredHeightForWidth (getWidth() > 0 ? getWidth() : 1100);
+}
+int SongStrip::preferredHeightForWidth (int width) const
+{
+    const int columns = width >= 1000 ? 16 : juce::jlimit (4, 16, width / 74);
+    return (width >= (source_ ? 1200 : 1000) ? 30 : 120) + (midi_ ? 24 : 0) + sp::xs + ((song_.length + columns - 1) / columns) * 24;
 }
 
 void SongStrip::select (int from, int count)
@@ -1151,14 +1331,26 @@ void SongStrip::select (int from, int count)
     processor_.setUiState (ui);
     if (editing_ && onEditBar)
         onEditBar (selFrom_);
+    else if (sourceEditing_ && onEditSource) onEditSource (selFrom_);
+    refresh();
+    repaint();
+    if (onSelectionChanged) onSelectionChanged();
+}
+
+void SongStrip::restoreSelection (int from)
+{
+    selFrom_ = juce::jlimit (0, song_.length - 1, from);
+    selCount_ = 1;
     repaint();
 }
 
 juce::Rectangle<int> SongStrip::barBounds (int bar) const
 {
-    const int rows = juce::jmax (1, song_.length / 16);
-    const int w = grid_.getWidth() / 16, h = grid_.getHeight() / rows;
-    return { grid_.getX() + (bar % 16) * w, grid_.getY() + (bar / 16) * h, w, h };
+    const int rows = juce::jmax (1, (song_.length + columns_ - 1) / columns_);
+    const int x1 = grid_.getX() + bar % columns_ * grid_.getWidth() / columns_;
+    const int x2 = grid_.getX() + (bar % columns_ + 1) * grid_.getWidth() / columns_;
+    const int h = grid_.getHeight() / rows;
+    return { x1, grid_.getY() + bar / columns_ * h, x2 - x1, h };
 }
 
 int SongStrip::barAt (juce::Point<int> p) const
@@ -1236,6 +1428,24 @@ void SongStrip::paint (juce::Graphics& g)
 void SongStrip::resized()
 {
     auto area = getLocalBounds();
+    columns_ = getWidth() >= 1000 ? 16 : juce::jlimit (4, 16, getWidth() / 74);
+    if (getWidth() < (source_ ? 1200 : 1000))
+    {
+        int x = 0, y = 0;
+        const auto put = [&] (juce::Component& component, int width) {
+            if (x > 0 && x + width > getWidth()) { x = 0; y += 30; }
+            component.setBounds (juce::Rectangle<int> (x, y, width, 30).reduced (1)); x += width;
+        };
+        put (*mode_, 52); put (*length_, 84); put (*slot_, 62); put (*variation_, 54); put (*place_, 50);
+        for (auto* button : { insert_.get(), delete_.get(), dup_.get() }) put (*button, 40);
+        put (*clear_, 46); put (*copy_, 46); put (*paste_, 48); put (*unique_, 56);
+        put (*loop_, 46); put (*loopSel_, 66); put (*edit_, source_ ? 104 : 64);
+        if (source_) put (*source_, 104);
+        if (midi_) put (*midi_, 96); else put (*scope_, 150);
+        area.removeFromTop (y + 30 + sp::xs);
+        if (midiStatus_) midiStatus_->setBounds (area.removeFromTop (24));
+        grid_ = area; return;
+    }
     auto top = area.removeFromTop (30);
     const auto put = [&top] (juce::Component& comp, int width) { comp.setBounds (top.removeFromLeft (width).reduced (1)); };
     put (*mode_, 52);
@@ -1254,17 +1464,22 @@ void SongStrip::resized()
     top.removeFromLeft (sp::xs);
     put (*loop_, 46);
     put (*loopSel_, 66);
-    put (*edit_, 64);
-    scope_->setBounds (top.removeFromRight (juce::jmin (150, top.getWidth())).reduced (1));
+    put (*edit_, source_ ? 104 : 64);
+    if (source_) put (*source_, 104);
+    if (midi_) midi_->setBounds (top.removeFromRight (96).reduced (1));
+    else scope_->setBounds (top.removeFromRight (juce::jmin (150, top.getWidth())).reduced (1));
     area.removeFromTop (sp::xs);
+    if (midiStatus_) midiStatus_->setBounds (area.removeFromTop (24));
     grid_ = area;
 }
 
 juce::Button* SongStrip::button (const juce::String& name)
 {
+    if (name == "midi") return midi_.get();
     if (name == "mode") return mode_.get();
     if (name == "loop") return loop_.get();
     if (name == "edit") return edit_.get();
+    if (name == "source") return source_.get();
     if (name == "place") return place_.get();
     if (name == "insert") return insert_.get();
     if (name == "delete") return delete_.get();

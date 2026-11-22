@@ -79,6 +79,9 @@ public:
     // sets the default layout.
     juce::Result loadFactoryKit (int kit);
     juce::Result loadFactoryPatterns (int kit);
+    // Load the first A/B pattern pair of the style's deterministic factory
+    // song into the current slot. Kit, Song and generator settings stay put.
+    juce::Result loadFactoryStylePattern (int style);
     // The Factory Song of style `style` (PR 137 §5; TL review on #147): its
     // paired factory kit (pads, kit parameters, roles: DROL for a genre kit,
     // the default layout for an original one), the generator set to the

@@ -23,10 +23,30 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 namespace vox::drums {
 
 class DrumsProcessor;
+
+// Explicit UI target, independent of playback and subsequent grid selection.
+// song >= 0 means the resolved cells of that one Song bar (bar must be 0).
+struct StepTarget {
+    int slot = 0, variation = 0, bar = 0, lane = 0, first = 0, last = 0, song = -1;
+    bool operator== (const StepTarget&) const = default;
+};
+enum class StepField { velocity, chance, ratchet, micro, accent, locked, on };
+int stepValue (StepField, const kit::PatternStep&, int cellTicks) noexcept; // micro in cell percent
+struct StepValues {
+    std::vector<kit::PatternStep> cells;
+    std::vector<int> ticks;
+    std::uint64_t epoch = 0, generation = 0;
+};
+std::optional<StepValues> inspectSteps (DrumsProcessor&, const StepTarget&);
+// Non-RT. Exact scope, canonical setters/Undo and generation-conditional commit;
+// false means unavailable/stale/no change, never a clamped different target.
+bool editSteps (DrumsProcessor&, const StepTarget&, StepField, double value, const StepValues& expected, bool amend = false);
 
 // The MIDI button: one press either clicks or drags, never both (issue 131,
 // H1). Release without moving more than dragThreshold pixels, over the
@@ -68,6 +88,11 @@ public:
     //== tests and the panel
     const StoredPattern& shown() const noexcept { return shown_; }
     int slot() const noexcept { return slot_; }
+    int variation() const noexcept { return sourceSlot_ >= 0 ? sourceVariation_ : 0; }
+    bool editingSource() const noexcept { return sourceSlot_ >= 0; }
+    int playheadBar() const noexcept { return playBar_; }
+    int playheadTick() const noexcept { return playStep_; }
+    bool editSourcePattern (int slot, int variation, int patternBar);
     // DRM-05: edit song bar `bar` instead of the pattern slot (-1: the
     // slot). Any change makes the bar unique (its own cells); the pattern
     // it referenced is not changed. A/B and the bar count do not apply.
@@ -78,7 +103,16 @@ public:
     void selectBar (int bar);
     int selectedLane() const noexcept { return lane_; }
     int selectedStep() const noexcept { return step_; }
-    void selectCell (int lane, int step);
+    int selectionFirst() const noexcept { return selectionFirst_; }
+    int selectionLast() const noexcept { return selectionLast_; }
+    void selectCell (int lane, int step, bool extend = false);
+    std::function<void()> onSelectionChanged;
+    // DLAY PARAM_LANES: 0 Velocity, 1 Probability, 2 Ratchet, 3 Microtiming.
+    // Donor stays unchanged until the native workspace explicitly opts in.
+    bool setParameterLanes (std::vector<int>, bool notify = true);
+    const std::vector<int>& parameterLanes() const noexcept { return parameterLanes_; }
+    std::function<void()> onParameterLanesChanged;
+    juce::Rectangle<int> parameterCellBounds (unsigned lane, int step) const;
     void clickCell (int lane, int step);              // as a mouse click on the cell
     juce::Rectangle<int> cellBounds (int lane, int step) const;
     juce::Slider* inspector (const juce::String& name);   // "velocity", "probability", "ratchet", "micro"
@@ -93,10 +127,15 @@ public:
     // What a click or a drag exports now (the scope chosen in the editor
     // state: Pattern or Entire Song), frozen; both write it with writeSnapshot.
     std::shared_ptr<const ExportSnapshot> snapshot() const;
+    void useFixedPatternExportScope() noexcept { fixedPatternExport_ = true; }
+    void useContextInspector(); // Native owns one contextual Inspector; donor keeps its local controls.
+    void saveExport (std::shared_ptr<const ExportSnapshot>);
+    void dragExport (std::shared_ptr<const ExportSnapshot>, juce::Component& source);
     static bool writeSnapshot (const ExportSnapshot& snapshot, const juce::File& file);
     // What a drag drops: the export in a new folder unique to this editor
     // instance and this drag (review 6753052108); empty on failure.
     juce::File exportForDrag();
+    juce::File exportForDrag (std::shared_ptr<const ExportSnapshot>);
     // Removes this instance's drag folders older than dragLifetime (never
     // its newest) and other instances' folders older than staleLifetime.
     void cleanupDragFiles (juce::Time now);
@@ -120,9 +159,11 @@ private:
     void editBoth (const std::function<void (StoredPattern& a, StoredPattern& b)>& change);
     void refreshControls();
     void checkEpoch();
+    void layoutGrid (juce::Rectangle<int>);
+    void showParameterLanesMenu();
     void startDrag();
     void openSaveDialog();
-    juce::File newDragFile();
+    juce::File newDragFile (const juce::String& name);
     // "<creation ms>-<UUID>": the age of this instance's folder for others' cleanup.
     const juce::String instanceId_ = juce::String (juce::Time::currentTimeMillis()) + "-" + juce::Uuid().toString();
     int dragCount_ = 0;
@@ -132,17 +173,25 @@ private:
     StoredPattern shown_;
     std::uint64_t generation_ = 0, epoch_ = 0;
     int slot_ = -1, bar_ = 0, playStep_ = -1, playBar_ = -1, songBar_ = -1, shownSongBar_ = -1;
+    int sourceSlot_ = -1, sourceVariation_ = 0, shownVariation_ = -1;
     int lane_ = 0, step_ = 0, lanePage_ = 0;
+    int selectionFirst_ = 0, selectionLast_ = 0, selectionAnchor_ = 0;
     bool refreshing_ = false, gesture_ = false;
+    bool fixedPatternExport_ = false; // Native always opts in; donor fixture keeps its scope selector.
+    bool parameterLanesEnabled_ = false;
+    bool contextInspector_ = false;
+    std::vector<int> parameterLanes_;
     juce::String lastKey_, exportMessage_;
     void exported (bool ok, const juce::File& file);
 
     std::array<std::unique_ptr<vox::ui::VoxButton>, kit::maxPatternBars> bars_;
     std::unique_ptr<vox::ui::VoxComboBox> steps_, barCount_;
     std::unique_ptr<vox::ui::VoxButton> dup_, clear_, swap_, copyB_, seed_, undo_, redo_, lanes_;
+    std::unique_ptr<vox::ui::VoxButton> parameterLanesButton_;
     std::unique_ptr<MidiDragButton> midi_;
     std::unique_ptr<juce::Label> abLabel_;
     std::unique_ptr<Grid> grid_;
+    juce::Viewport gridViewport_;
     std::unique_ptr<vox::ui::VoxKnob> velocity_, probability_, ratchet_, micro_;
     std::unique_ptr<juce::ToggleButton> accentButton_, lockButton_;
     std::unique_ptr<juce::FileChooser> chooser_;

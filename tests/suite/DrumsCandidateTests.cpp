@@ -35,6 +35,7 @@
 #include "Presets.h"
 #include "StyleRegistry.h"
 #include "Processor.h"
+#include "DrumsDonorEditorFixture.h"
 #include "common/SuiteEditor.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -492,7 +493,7 @@ void testSongParity()
         check (notes[9] == 71 && notes[11] == 28 && notes[15] == 101, "song export: remapped pad notes are used");
         {
             // A write that cannot succeed is reported, not silent.
-            std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+            std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
             auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
             auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
             if (panel != nullptr)
@@ -681,7 +682,7 @@ void testExport()
 {
     auto p = makeProcessor();
     buildSong (*p);
-    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
     check (panel != nullptr, "export: Drums panel");
@@ -765,7 +766,7 @@ void testMidiGesture()
 {
     auto p = makeProcessor();
     buildSong (*p);
-    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
     check (panel != nullptr, "gesture: Drums panel");
@@ -1720,7 +1721,7 @@ void testState()
                    && testutil::stepsOf (*song.bars[20].cells) == 32 && song.bars[4].kind == SongBar::Kind::pattern && song.bars[8].variation == 1,
                "state: the song (mode, length, references, unique bars) is restored");
         check (q->generator() == g, "state: generator settings and seed are restored");
-        check (q->uiState() == UiState { 3, 11, 42, 2, 1 }, "state: the editor's page, pad and bars are restored");
+        check (q->uiState() == UiState { 0, 11, 42, 2, 0 }, "state: canonical DLAY selection restores; obsolete page/export scope do not persist");
         check (q->kitStore().pad (5).output == 7 && q->kitStore().snapshot().voiceLimit == 32, "state: pad outputs and the voice limit are restored");
         check (std::abs (plainOf (*q, "drm.p07.send1") - 0.66f) < 1.0e-5f && plainOf (*q, "drm.p07.solo") >= 0.5f
                    && static_cast<int> (plainOf (*q, "drm.fx.delay.time")) == 5,
@@ -1770,9 +1771,8 @@ void testState()
         rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d[23] = std::byte { 0xbf }; d[22] = std::byte { 0x80 }; }, "DGEN negative amount");
         rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d.pop_back(); }, "DGEN truncated");
         rejects (generatorSectionTag, [] (std::vector<std::byte>& d) { d.push_back (std::byte { 0 }); }, "DGEN trailing bytes");
-        rejects (uiStateSectionTag, set (4, 8), "DUIS page out of range");
-        rejects (uiStateSectionTag, set (5, 16), "DUIS pad out of range");
-        rejects (uiStateSectionTag, set (0, 2), "DUIS unknown version");
+        // #130 §14 intentionally discards DUIS. Dedicated DLAY project tests
+        // cover invalid UI fallback, exact preservation and strict audio rejection.
         rejects (padSectionTag, [] (std::vector<std::byte>& d) { d[d.size() - 1] = std::byte { 48 }; }, "DPAD invalid voice limit");
         rejects (padSectionTag, [] (std::vector<std::byte>& d) { d[d.size() - 2] = std::byte { 9 }; }, "DPAD output out of range");
         check (stateOf (*q) == before, "state: after every rejected blob the instrument is still the same");
@@ -1785,7 +1785,7 @@ void testState()
         auto doc = decoded.document;
         doc.sections.erase (std::remove_if (doc.sections.begin(), doc.sections.end(),
                                             [] (const vox::preset::Section& s) {
-                                                return s.tag == songSectionTag || s.tag == generatorSectionTag || s.tag == uiStateSectionTag;
+                                                return s.tag == songSectionTag || s.tag == generatorSectionTag || s.tag == uiStateSectionTag || s.tag == layoutSectionTag;
                                             }),
                             doc.sections.end());
         for (auto& s : doc.sections)
@@ -1856,7 +1856,7 @@ void testState()
 void testEditor()
 {
     auto p = makeProcessor();
-    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
     auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
     check (panel != nullptr, "editor: Drums panel");
@@ -2255,7 +2255,7 @@ void testReviewFindings()
         p->generate (DrumsProcessor::Generate::song);
         p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         const auto restored = everything (*p);   // (the editor below changes the saved page, not this)
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditorAndMakeActive());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*p));
         auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
         auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
         if (panel != nullptr)
@@ -2500,7 +2500,7 @@ void testReviewFindings()
             q->setStateInformation (again.getData(), static_cast<int> (again.getSize()));
             check (again == before && q->lastStateError().isEmpty() && stateOf (*q) == before, "unknown sections: the instrument still saves and reopens after the refusal");
             // The error is visible in the editor (ADVANCED diagnostics).
-            std::unique_ptr<juce::AudioProcessorEditor> editor (r->createEditorAndMakeActive());
+            std::unique_ptr<juce::AudioProcessorEditor> editor (vox::drums::testutil::makeDonorEditor (*r));
             auto* frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
             auto* panel = frame != nullptr ? dynamic_cast<DrumsPanel*> (frame->content()) : nullptr;
             if (panel != nullptr)
@@ -3471,6 +3471,41 @@ void testTrapTriplets()
     }
 }
 
+void testFactoryStylePatternPresets()
+{
+    auto p = makeProcessor();
+    auto* selected = p->state().getParameter (patternParameterId);
+    check (selected != nullptr, "factory Pattern: selected-slot parameter exists");
+    if (! selected) return;
+    selected->setValueNotifyingHost (selected->convertTo0to1 (2.f));
+    const auto initial = stateOf (*p);
+    const auto beforeSong = p->patterns().song();
+    const auto beforeKit = KitStore::encode (p->kitStore().snapshot()).data;
+    const auto beforeGenerator = p->generator();
+    auto unrelated = std::make_unique<StoredPattern>();
+    auto actual = std::make_unique<StoredPattern>();
+    auto alternate = std::make_unique<StoredPattern>();
+    auto afterOther = std::make_unique<StoredPattern>();
+    auto expected = std::make_unique<PatternStore::Everything>();
+    p->patterns().copySlot (0, *unrelated);
+    bool all = true;
+    for (int style = 0; style < factoryStyleCount; ++style)
+    {
+        const bool prepared = factoryStyleSong (style, *expected);
+        const bool loaded = p->presets().loadFactoryStylePattern (style).wasOk();
+        p->patterns().copySlot (2, *actual);
+        p->patterns().copyAlternate (2, *alternate);
+        p->patterns().copySlot (0, *afterOther);
+        all = all && prepared && loaded && *actual == expected->slots[0] && *alternate == expected->alternates[0]
+              && *afterOther == *unrelated && p->patterns().song() == beforeSong
+              && KitStore::encode (p->kitStore().snapshot()).data == beforeKit && p->generator() == beforeGenerator;
+        all = p->presets().undoLoad().wasOk() && stateOf (*p) == initial && all;
+    }
+    check (all, "factory Pattern: every style loads its A/B into the selected slot and Undo restores state exactly");
+    check (p->presets().loadFactoryStylePattern (-1).failed() && p->presets().loadFactoryStylePattern (factoryStyleCount).failed()
+           && stateOf (*p) == initial, "factory Pattern: invalid styles fail transactionally");
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -3490,6 +3525,7 @@ int main (int argc, char** argv)
     testGenerator();
     testStyleDefaults();
     testGenreContent();
+    testFactoryStylePatternPresets();
     testListeningFiles();
     testMeterSongs();
     testTrapTriplets();
