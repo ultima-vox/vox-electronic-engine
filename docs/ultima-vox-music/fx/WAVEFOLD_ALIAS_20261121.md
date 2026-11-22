@@ -7,6 +7,14 @@ is unchanged, no ID/codec/state/parameter changes, no oversampling, no
 allocated buffers, no integer latency and no PDC change. The existing Drive
 ADAA path is bit-identical and its test limits are untouched.
 
+> **2026-11-22 update — do not ship bare ADAA2.** A post-review frequency-response
+> study ([evidence](evidence/wavefold-response-20261122.txt),
+> [CSV](evidence/wavefold-response-20261122.csv)) shows the method's linear
+> response is a 3-point average with a **null at fs/3** (14.7 kHz at 44.1 kHz)
+> and a 180° phase flip above it. The alias and CPU measurements below remain
+> valid, but the shipping decision is withdrawn pending an oversampling or
+> compensation choice. See [Frequency response](#frequency-response--the-3-point-average-2026-11-22).
+
 ## What was measured first
 
 The existing `FxNonlinearAliasTests` feeds a bin-centred sine through one slot.
@@ -66,12 +74,16 @@ uniformly: at 7.35 kHz/0.28, 2×OS+ADAA2 (−11.2 dB) is 5 dB worse than ADAA2
 Only 2×OS+ADAA2 at 4.59 kHz/1.0 (−41.7 dB) is dramatically better than ADAA2,
 and it needs PDC plus prepared filters to be usable.
 
-**Decision: second-order ADAA on the unchanged static shape.** It removes
-10.8–18.7 dB of absolute folded power across all nine probes, needs no oversampling,
-allocation, buffer or integer latency, and costs about 2.7× the arithmetic
-triangle (still under the shipped chain cost, see below). Oversampling is
-rejected for this slice because the benefit is not uniform, the CPU is 6–20×,
-and the plugin currently reports no latency compensation.
+**Decision on alias and CPU: second-order ADAA on the unchanged static shape.**
+It removes 10.8–18.7 dB of absolute folded power across all nine probes, needs
+no oversampling, allocation, buffer or integer latency, and costs about 2.7× the
+arithmetic triangle (still under the shipped chain cost, see below). Oversampling
+was rejected for this slice because the benefit is not uniform, the CPU is
+6–20×, and the plugin currently reports no latency compensation.
+
+**This is not a shipping decision.** The later frequency-response measurement
+below found an fs/3 null in the ADAA2 passband that the alias probes do not
+cover. ADAA2 is therefore an experimental diagnostic until that is resolved.
 
 ## Change
 
@@ -145,14 +157,62 @@ became cheaper because the old expression called `acos(-1.0)` twice per sample
 in addition to `asin`/`sin`; the ADAA2 path is pure arithmetic. The whole-engine
 Shepard row moved from ~581 to ~563 µs p50, inside this container's noise.
 
-Latency: the shipped slot's measured group delay is **1.000 input sample** at
-44.1/48/96 kHz (linear region), the p/2 delay inherent to second-order ADAA.
+Latency: the slot's measured low-frequency group delay is **1.000 input
+sample** at 44.1/48/96 kHz (linear region), the p/2 delay inherent to
+second-order ADAA. That is only the low-frequency limit: the same measurement
+shows the amplitude response is a 3-point average with an fs/3 null, not a pure
+delay (see §Frequency response).
 There is no integer pre-delay, no buffer and no PDC change. For comparison the
 Drive slot measures **0.198 sample** at amount 0.28 because its ADAA wet term
 is mixed with an undelayed dry term. The 1-sample Wavefold shift is 20.8 µs at
 48 kHz and must be considered if a host session uses a parallel dry copy; it is
 not a plugin latency report. Raw: [wavefold-options](evidence/wavefold-options-20261121.txt)
 and `evidence/measure-wavefold-latency.cpp`.
+
+## Frequency response — the 3-point average (2026-11-22)
+
+For a linear segment the two-stage divided difference reduces exactly to
+
+```text
+y[n] = (x[n] + x[n-1] + x[n-2]) / 3
+```
+
+so the method is not a pure one-sample delay: its response is the 3-point
+average `S(ω) = (1 + e^-jω + e^-j2ω)/3`. That response has a **zero at
+ω = 2π/3, i.e. f = rate/3**, and a 180° phase inversion above it. A low-level
+bin-centred sine through the real `Chain` (762 points; measured against theory
+to 0.023 dB / 0.009°) gives, for one wet-1 slot at amount 1, candidate minus
+point-sampled parent:
+
+| rate | 1 kHz | 5 kHz | 10 kHz | near fs/3 | 20 kHz |
+|---|---|---|---|---|---|
+| 44.1 kHz | −0.06 dB | −1.56 dB | −7.14 dB | grid −38.1 dB | −10.8 dB |
+| 48 kHz | −0.05 dB | −1.31 dB | −5.78 dB | grid −22.8 dB | −13.2 dB |
+| 96 kHz | −0.01 dB | −0.32 dB | −1.26 dB | grid −25.7 dB | −5.5 dB |
+
+An exactly-fs/3 tone is removed in the small-signal limit (the linear null is
+phase-independent): 0.5-amplitude, phase-0 sines at 14.7/16/32 kHz leave peaks of
+8.5e-12/1.0e-11/2.1e-11, and at 44.1 kHz the phase-0 result stays ~1e-12 from
+amplitude 0.001 to 0.9. Large signals at other phases are not exactly zero but
+remain deeply notched. Four
+serial slots compound the average to `S^4` (−28.6 dB at 10 kHz for 44.1 kHz).
+Wet 0.5 only partially fills the null (worst grid point −18.6 dB).
+
+The absolute alias figures above are measured output alias energy and remain
+valid, but they should not be read as flat-response alias suppression: at the
+three probe frequencies the fundamental is itself attenuated by up to 3.5 dB,
+and the folded/output ratio improves by 2.1–15.7 dB, less than the absolute
+figures. The passband null is the larger issue.
+
+Implications for the options already measured: moving ADAA2 to 2× oversampling
+moves the null to 2fs/3 (29.4 kHz at 44.1 kHz) but still droops about 7 dB at
+20 kHz; 4× moves it to 4fs/3 with roughly 1.5 dB at 20 kHz, at the measured
+23-input-sample halfband delay, 230–265 ns/sample and required PDC. First-order
+ADAA has no mid-band null, but its 2-point average rolls off toward Nyquist
+(about −6 dB at 15 kHz/44.1 kHz) and its alias suppression is 5–7 dB weaker.
+The exact inverse of the 3-point average has poles on the unit circle and cannot
+be used directly, so compensation would be a reviewed design, not a patch.
+None of these alternatives is implemented in this slice.
 
 ## Compatibility
 
@@ -208,10 +268,10 @@ Linux, GCC 12.2.0, `-O2`, Intel Xeon 2.60 GHz. Full inventory:
 
 ## Open, deliberately not weakened
 
-- Listening acceptance is pending. ADAA has a known low-pass effect; at
-  7.35 kHz/1.0 the output is strongly attenuated (ratio stays high even though
-  absolute alias improves 18.7 dB). Musical A/B and the 1-sample delay need a
-  listening step before this counts as a quality result.
+- Listening acceptance is pending, and the fs/3 null above is a sound blocker,
+  not a nuance: a 14.7 kHz tone disappears at wet 1. Musical A/B is still
+  required, but the passband response must be fixed before this can be judged
+  as an alias improvement.
 - The 4.59 kHz/0.5 residual is −14.2 dB. It is 10.8 dB better than before but
   not inaudible. Closing it further needs 2× oversampling **with PDC** or a
   higher-order ADAA; both are separate measured decisions.

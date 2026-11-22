@@ -1,0 +1,50 @@
+FX-04 Wavefold ADAA2 — measured linear frequency response
+Generated 2026-11-22. Linux, GCC 12.2.0, -O3. Chain-level diagnostic.
+
+Command:
+  python3 tools/compare_wavefold_response.py /tmp/vox-wavefold-response
+
+Method: bin-centred low-level sine (amplitude 0.05 for one slot, 0.002 for
+four slots at amount 0.28), 0.25 s settle, 32768-sample Goertzel window,
+64-sample blocks. Output/input complex ratio is measured against the same
+buffer, so the parent (point-sampled) reference has zero phase. The theory
+column is the exact second-order-ADAA response for a linear segment:
+  H(w) = (1-wet) + wet*(1+7*amount)*(1+e^-jw+e^-j2w)/3,  raised to slots.
+762 points; measured vs theory max error 0.023 dB and 0.009 deg.
+
+=== Candidate minus parent, one slot, wet 1, amount 1 (delta magnitude dB) ===
+rate     1 kHz    5 kHz   10 kHz  near fs/3    20 kHz   phase at 1 kHz
+44100    -0.06    -1.56    -7.14   -38.08   -10.80     -8.12 deg
+48000    -0.05    -1.31    -5.78   -22.78   -13.19     -7.46 deg
+96000    -0.01    -0.32    -1.26   -25.66    -5.54     -3.74 deg
+
+=== Exact null: a tone at fs/3 through one wet-1 slot ===
+amount 1, sine phase 0, output after half a second:
+44.1 kHz, 14.7 kHz, amplitude 0.001 -> tail mean |y| 2.1e-14, peak 6.0e-14
+44.1 kHz, 14.7 kHz, amplitude 0.050 -> tail mean |y| 1.1e-12, peak 3.0e-12
+44.1 kHz, 14.7 kHz, amplitude 0.500 -> tail mean |y| 3.0e-12, peak 8.5e-12
+44.1 kHz, 14.7 kHz, amplitude 0.900 -> tail mean |y| 1.5e-12, peak 4.3e-12
+44.1 kHz, 14.7 kHz, amplitude 0.500 -> peak 8.48e-12
+48 kHz,   16.0 kHz, amplitude 0.500 -> peak 1.03e-11
+96 kHz,   32.0 kHz, amplitude 0.500 -> peak 2.06e-11
+(phase 0 makes the three sample phases exactly {0, +A, -A}; the odd triangle
+integral cancels. Other phases are not exactly zero but are strongly notched
+in the small-signal response because the underlying 3-point average is zero.)
+
+=== Other measured configurations (worst delta magnitude, grid point) ===
+one slot, wet 0.5, amount 1:  44.1k -18.62 dB @ 14.85k; 48k -19.11 @ 14.85k; 96k -18.31 @ 29.19k
+one slot, wet 0.5, amount 1 at 10 kHz: 44.1k -7.47; 48k -6.04; 96k -1.31 dB
+four slots, wet 1, amount .28: 44.1k -28.55 dB at 10 kHz; 48k -23.11; 96k -5.05
+four slots compound the 3-point average (S^4), so the audible band is much darker.
+
+=== Why ===
+For a linear segment, ADAA2's two-stage divided difference reduces exactly to
+  y[n] = (x[n] + x[n-1] + x[n-2]) / 3.
+That 3-point average has a zero at w = 2*pi/3, i.e. f = rate/3 (14.7 kHz at
+44.1 kHz, 16 kHz at 48 kHz, 32 kHz at 96 kHz), and flips phase by 180 degrees
+above it. It is not a pure one-sample delay: the low-frequency group delay is
+one sample, but the amplitude response is the 3-point average.
+
+=== Limitations ===
+Small-signal linearization only; large signals also fold and are not described
+by this response. Chain-level, not a plugin/DAW render. No listening claim.
