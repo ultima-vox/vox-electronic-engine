@@ -90,6 +90,13 @@ jobs:
       - name: Run the instrumented handoff tests
         run: |
           set -euo pipefail
+          mkdir -p tsan-out
+          ctest --test-dir build -N -L tsan | tee tsan-out/listed-tsan.txt
+          grep -q 'suite_synth_tsan_concurrency' tsan-out/listed-tsan.txt
+          if ctest --test-dir build -N -L suite | grep -q 'suite_synth_tsan_concurrency'; then
+            echo "the ThreadSanitizer test is inside the suite label" >&2
+            exit 1
+          fi
           # Headless JUCE GUI init. Timing benchmarks are not this test.
           set +e
           xvfb-run -a ctest --test-dir build -R '^suite_synth_tsan_concurrency$' --output-on-failure --verbose \

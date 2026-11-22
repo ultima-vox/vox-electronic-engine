@@ -160,9 +160,9 @@ add_test(NAME suite_synth_product_tests COMMAND suite_synth_product_tests)
 add_test(NAME suite_synth_strict_trial_tests COMMAND suite_synth_product_tests --strict-trial-self-test)
 if(VOX_SANITIZE_THREAD)
   # Handoff tests only. The strict p99 matrix is a different gate and is not
-  # comparable once ThreadSanitizer is linked in.
+  # comparable once ThreadSanitizer is linked in. The suite label is applied
+  # to every test later in this file; this one is removed from that set.
   add_test(NAME suite_synth_tsan_concurrency COMMAND suite_synth_product_tests --tsan-concurrency)
-  set_tests_properties(suite_synth_tsan_concurrency PROPERTIES LABELS tsan TIMEOUT 1200)
 endif()
 
 add_test(NAME suite_boundaries
@@ -241,4 +241,10 @@ set_tests_properties(suite_verify_juce_strict-wrong-commit suite_verify_juce_str
                      suite_verify_juce_relaxed-wrong-commit PROPERTIES WILL_FAIL TRUE)
 
 get_property(suite_tests DIRECTORY PROPERTY TESTS)
+if(VOX_SANITIZE_THREAD)
+  list(REMOVE_ITEM suite_tests suite_synth_tsan_concurrency)
+endif()
 set_tests_properties(${suite_tests} PROPERTIES LABELS suite)
+if(VOX_SANITIZE_THREAD)
+  set_tests_properties(suite_synth_tsan_concurrency PROPERTIES LABELS tsan TIMEOUT 1200)
+endif()
