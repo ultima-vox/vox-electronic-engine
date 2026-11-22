@@ -809,11 +809,12 @@ public:
             auto area = getLocalBounds().reduced (6);
             typeLabel_->setBounds (area.removeFromTop (18)); type_->setBounds (area.removeFromTop (30));
             load_->setBounds (area.removeFromTop (32).reduced (1));
-            area.removeFromTop (6); list_->setBounds (area.removeFromTop (260));
+            status_->setBounds (area.removeFromTop (44));
+            area.removeFromTop (6); list_->setBounds (area.removeFromTop (220));
             nameLabel_->setBounds (area.removeFromTop (18)); name_->setBounds (area.removeFromTop (30));
             for (auto* button : { save_.get(), undo_.get(), import_.get(), export_.get() })
                 button->setBounds (area.removeFromTop (32).reduced (1));
-            status_->setBounds (area.removeFromTop (72)); samples_->setBounds (area);
+            samples_->setBounds (area);
             return;
         }
         auto area = getLocalBounds();
@@ -867,12 +868,16 @@ private:
     {
         items_.clear();
         const auto t = type();
-        // Factory content: kits under Kit, each kit's patterns and song under Song.
+        // Factory patterns load only the current slot; paired full arrangements
+        // and kits remain separate, explicit choices.
         if (t == PresetType::kit)
             for (int kit = 0; kit < factoryKitCount; ++kit)
                 items_.push_back ({ juce::String ("Factory: ") + factoryKitInfo (kit).name
                                         + (factoryKitRelease (kit) == FactoryRelease::needsLicensedSamples ? "  (NOT RELEASE-READY)" : ""),
                                     kit, {} });
+        if (t == PresetType::pattern)
+            for (int style = 0; style < factoryStyleCount; ++style)
+                items_.push_back ({ juce::String ("Factory pattern: ") + styleName (static_cast<Style> (style)), -1, {}, style });
         if (t == PresetType::song)
         {
             for (int kit = 0; kit < originalFactoryKitCount; ++kit)
@@ -899,7 +904,10 @@ private:
         }
         const auto& item = items_[static_cast<std::size_t> (row)];
         auto& presets = processor_.presets();
-        if (item.style >= 0)
+        if (item.style >= 0 && type() == PresetType::pattern)
+            report (presets.loadFactoryStylePattern (item.style),
+                    "Loaded " + item.label + "\nKit unchanged; paired kit: " + factoryKitInfo (factoryKitOfStyle (item.style)).name);
+        else if (item.style >= 0)
             report (presets.loadFactoryStyleSong (item.style), "Loaded " + item.label);
         else if (item.factory >= 0)
             report (type() == PresetType::kit ? presets.loadFactoryKit (item.factory) : presets.loadFactoryPatterns (item.factory),

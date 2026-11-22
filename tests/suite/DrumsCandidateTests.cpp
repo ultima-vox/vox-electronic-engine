@@ -3471,6 +3471,41 @@ void testTrapTriplets()
     }
 }
 
+void testFactoryStylePatternPresets()
+{
+    auto p = makeProcessor();
+    auto* selected = p->state().getParameter (patternParameterId);
+    check (selected != nullptr, "factory Pattern: selected-slot parameter exists");
+    if (! selected) return;
+    selected->setValueNotifyingHost (selected->convertTo0to1 (2.f));
+    const auto initial = stateOf (*p);
+    const auto beforeSong = p->patterns().song();
+    const auto beforeKit = KitStore::encode (p->kitStore().snapshot()).data;
+    const auto beforeGenerator = p->generator();
+    auto unrelated = std::make_unique<StoredPattern>();
+    auto actual = std::make_unique<StoredPattern>();
+    auto alternate = std::make_unique<StoredPattern>();
+    auto afterOther = std::make_unique<StoredPattern>();
+    auto expected = std::make_unique<PatternStore::Everything>();
+    p->patterns().copySlot (0, *unrelated);
+    bool all = true;
+    for (int style = 0; style < factoryStyleCount; ++style)
+    {
+        const bool prepared = factoryStyleSong (style, *expected);
+        const bool loaded = p->presets().loadFactoryStylePattern (style).wasOk();
+        p->patterns().copySlot (2, *actual);
+        p->patterns().copyAlternate (2, *alternate);
+        p->patterns().copySlot (0, *afterOther);
+        all = all && prepared && loaded && *actual == expected->slots[0] && *alternate == expected->alternates[0]
+              && *afterOther == *unrelated && p->patterns().song() == beforeSong
+              && KitStore::encode (p->kitStore().snapshot()).data == beforeKit && p->generator() == beforeGenerator;
+        all = p->presets().undoLoad().wasOk() && stateOf (*p) == initial && all;
+    }
+    check (all, "factory Pattern: every style loads its A/B into the selected slot and Undo restores state exactly");
+    check (p->presets().loadFactoryStylePattern (-1).failed() && p->presets().loadFactoryStylePattern (factoryStyleCount).failed()
+           && stateOf (*p) == initial, "factory Pattern: invalid styles fail transactionally");
+}
+
 int main (int argc, char** argv)
 {
     if (argc < 2)
@@ -3490,6 +3525,7 @@ int main (int argc, char** argv)
     testGenerator();
     testStyleDefaults();
     testGenreContent();
+    testFactoryStylePatternPresets();
     testListeningFiles();
     testMeterSongs();
     testTrapTriplets();

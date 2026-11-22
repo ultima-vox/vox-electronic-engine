@@ -556,6 +556,19 @@ juce::Result Presets::loadFactoryKit (int kit)
     return applyDocument (factoryKitDocument (kit), -1);
 }
 
+juce::Result Presets::loadFactoryStylePattern (int style)
+{
+    auto all = std::make_unique<PatternStore::Everything>();
+    if (! factoryStyleSong (style, *all))
+        return juce::Result::fail ("no such factory style");
+    preset::StateDocument doc;
+    doc.product = processor_.product().stateTag;
+    doc.schema = processor_.product().stateSchema;
+    doc.sections.push_back (encodeInfo ({ PresetType::pattern, juce::String (styleName (static_cast<Style> (style))) + " pattern", 0 }));
+    doc.sections.push_back (PatternStore::encode (all->slots, all->alternates));
+    return applyDocument (std::move (doc), -1, PresetType::pattern);
+}
+
 juce::Result Presets::loadFactoryStyleSong (int style)
 {
     const auto all = std::make_unique<PatternStore::Everything>();

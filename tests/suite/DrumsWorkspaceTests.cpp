@@ -8,6 +8,8 @@
 #include "StyleRegistry.h"
 #include "StyleLibraryPanel.h"
 #include "Processor.h"
+#include "Presets.h"
+#include "FactoryContent.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
 #include <cstdio>
@@ -663,10 +665,42 @@ void testVisibleGeneratorAndPresets()
     {
         auto* viewport = load->findParentComponentOfClass<juce::Viewport>();
         check (viewport && viewport->getViewedComponent()
-               && viewport->getViewArea().contains (viewport->getViewedComponent()->getLocalArea (load, load->getLocalBounds())),
-               "factory preset Load is visible without scrolling in the default dock");
+               && viewport->getViewArea().contains (viewport->getViewedComponent()->getLocalArea (load, load->getLocalBounds()))
+               && viewport->getViewArea().contains (viewport->getViewedComponent()->getLocalArea (status, status->getLocalBounds())),
+               "factory preset Load and its status are visible without scrolling in the default dock");
         list->selectRow (0); press (*load); pump();
         check (status->getText().startsWith ("Loaded"), "factory preset loads through the visible library action");
+        auto* type = dynamic_cast<juce::ComboBox*> (library->named ("type"));
+        check (type != nullptr, "musical presets expose the preset type selector");
+        if (type)
+        {
+            type->setSelectedId (3, juce::sendNotificationSync); pump();
+            check (list->getListBoxModel() && list->getListBoxModel()->getNumRows() >= 23,
+                   "Pattern preset category exposes a factory pattern for each style");
+            if (list->getListBoxModel() && list->getListBoxModel()->getNumRows() >= 23)
+            {
+                const auto beforeSong = p->patterns().song();
+                const auto beforeKit = KitStore::encode (p->kitStore().snapshot()).data;
+                const auto beforePattern = p->patterns().encodeCurrent().data;
+                list->selectRow (0); press (*load); pump();
+                check (status->getText().startsWith ("Loaded") && p->presets().canUndoLoad(),
+                       "a factory Pattern preset loads via the existing undoable preset flow");
+                check (status->getText().contains ("Kit unchanged; paired kit:"),
+                       "factory Pattern reports that the kit is unchanged and identifies its intended paired kit");
+                check (p->patterns().song() == beforeSong && KitStore::encode (p->kitStore().snapshot()).data == beforeKit,
+                       "loading a factory Pattern preset does not replace the Song or kit");
+                auto expected = std::make_unique<PatternStore::Everything>();
+                auto current = std::make_unique<StoredPattern>();
+                auto alternate = std::make_unique<StoredPattern>();
+                const bool generated = factoryStyleSong (0, *expected);
+                p->patterns().copySlot (p->currentSlot(), *current);
+                p->patterns().copyAlternate (p->currentSlot(), *alternate);
+                check (generated && *current == expected->slots[0] && *alternate == expected->alternates[0],
+                       "factory Pattern loads the style's canonical A/B material into the selected slot");
+                check (p->presets().undoLoad().wasOk() && p->patterns().encodeCurrent().data == beforePattern,
+                       "Undo Load restores the previous pattern bytes after loading a factory Pattern");
+            }
+        }
     }
     if (page && library)
     {
