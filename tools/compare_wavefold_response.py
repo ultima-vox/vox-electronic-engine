@@ -4,9 +4,11 @@
 Usage: python3 tools/compare_wavefold_response.py OUTPUT_DIRECTORY
 A low-level bin-centred sine keeps every slot inside the fold's linear region,
 so the output/input ratio is the method's own response (gain, phase and any
-low-pass droop). The theoretical column is the exact second-order-ADAA response
-for a linear segment: one slot multiplies by S(w) = (1+e^-jw+e^-j2w)/3.
-These are Chain-level diagnostics, not host renders or listening approval.
+low-pass droop). The theoretical column is the exact ADAA response for a linear
+segment: first order multiplies by S(w) = (1+e^-jw)/2, second order by
+(1+e^-jw+e^-j2w)/3. The latter has a null at fs/3 and is retained only to
+reproduce the rejected prototype. These are Chain-level diagnostics, not host
+renders or listening approval.
 """
 import argparse
 import csv
@@ -38,10 +40,13 @@ def run(binary, rate, amount, wet, slots, amplitude):
     return rows
 
 
-def theory(f0, rate, amount, wet, slots):
+def theory(f0, rate, amount, wet, slots, method):
     w = 2 * math.pi * f0 / rate
-    s = complex((1 + math.cos(w) + math.cos(2 * w)) / 3,
-                -(math.sin(w) + math.sin(2 * w)) / 3)
+    if method == 'adaa1':
+        s = complex((1 + math.cos(w)) / 2, -math.sin(w) / 2)
+    else:
+        s = complex((1 + math.cos(w) + math.cos(2 * w)) / 3,
+                    -(math.sin(w) + math.sin(2 * w)) / 3)
     gain = 1 + 7 * amount
     h = (1 - wet) + wet * gain * s
     hp = (1 - wet) + wet * gain
@@ -52,6 +57,7 @@ def theory(f0, rate, amount, wet, slots):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('directory', type=pathlib.Path)
+    parser.add_argument('--method', choices=('adaa1', 'adaa2'), default='adaa1')
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='vox-wavefold-response-') as tmp:
@@ -81,7 +87,7 @@ def main():
             if len(old) != len(new) or not old:
                 raise RuntimeError('capture length mismatch')
             for (f0, old_mag, old_phase), (_, new_mag, new_phase) in zip(old, new):
-                t_mag, t_phase = theory(f0, rate, amount, wet, slots)
+                t_mag, t_phase = theory(f0, rate, amount, wet, slots, args.method)
                 rows.append([rate, amount, wet, slots, f0, old_mag, new_mag,
                              new_mag - old_mag, old_phase, new_phase,
                              wrap(new_phase - old_phase), t_mag, t_phase])

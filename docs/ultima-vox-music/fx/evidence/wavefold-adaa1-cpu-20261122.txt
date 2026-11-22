@@ -1,0 +1,54 @@
+FX-04 Wavefold ADAA1 — CPU evidence
+Generated 2026-11-22. Linux, GCC 12.2.0, -O2, Intel Xeon 2.60 GHz.
+Single container, noisy; not a Windows/DAW deadline or FX-T18 claim.
+
+Three interleaved runs: parent c7ee608 (point), ADAA1 (this head),
+ADAA2 f007994. Same benchmark source; only products/fx/engine/Effects.h
+differs. Command pattern:
+  g++ -std=c++20 -O2 -I<header>/fx -Iproducts/fx tests/suite/FxEffectsBenchmark.cpp
+
+96k Shepard 8x4 + 4x effect 3: p50 1063.58 p95 1207.55 p99 1301.27 max 1390.84 us; checksum 12.919668
+96k 4x slot-only drive amount 0.5: p50 40.66 p95 74.90 p99 97.29 max 212.71 us; 39.71 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 41.98 p95 76.62 p99 102.85 max 3791.85 us; 41.00 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 47.30 p95 71.04 p99 90.70 max 3466.43 us; 46.19 ns/sample/channel/slot; checksum -4.188448
+96k 4x slot-only wavefold amount 1.0: p50 48.49 p95 65.37 p99 84.57 max 260.59 us; 47.36 ns/sample/channel/slot; checksum -29.913630
+96k Shepard 8x4 + 4x effect 3: p50 570.09 p95 1057.82 p99 1763.49 max 2095.56 us; checksum -16.292010
+96k 4x slot-only drive amount 0.5: p50 39.30 p95 70.84 p99 92.81 max 2856.41 us; 38.38 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.10 p95 62.83 p99 83.14 max 5466.43 us; 36.24 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 25.14 p95 30.80 p99 47.42 max 144.39 us; 24.55 ns/sample/channel/slot; checksum -7.236662
+96k 4x slot-only wavefold amount 1.0: p50 26.13 p95 32.36 p99 48.17 max 89.96 us; 25.52 ns/sample/channel/slot; checksum 1.262844
+96k Shepard 8x4 + 4x effect 3: p50 572.39 p95 652.41 p99 761.44 max 865.03 us; checksum -11.783856
+96k 4x slot-only drive amount 0.5: p50 38.35 p95 68.12 p99 89.43 max 187.78 us; 37.45 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.52 p95 68.13 p99 88.98 max 183.15 us; 36.64 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 30.26 p95 40.12 p99 55.69 max 99.62 us; 29.55 ns/sample/channel/slot; checksum -6.442999
+96k 4x slot-only wavefold amount 1.0: p50 31.69 p95 41.02 p99 56.28 max 97.45 us; 30.94 ns/sample/channel/slot; checksum 3.737219
+96k Shepard 8x4 + 4x effect 3: p50 607.67 p95 950.52 p99 1009.98 max 1051.27 us; checksum 12.919668
+96k 4x slot-only drive amount 0.5: p50 38.82 p95 67.71 p99 85.79 max 203.64 us; 37.91 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.19 p95 67.06 p99 84.32 max 204.57 us; 36.32 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 49.78 p95 75.37 p99 98.57 max 234.38 us; 48.61 ns/sample/channel/slot; checksum -4.188448
+96k 4x slot-only wavefold amount 1.0: p50 48.72 p95 71.09 p99 93.65 max 206.77 us; 47.57 ns/sample/channel/slot; checksum -29.913630
+96k Shepard 8x4 + 4x effect 3: p50 570.31 p95 1039.13 p99 1109.82 max 1190.47 us; checksum -16.292010
+96k 4x slot-only drive amount 0.5: p50 38.52 p95 67.01 p99 85.28 max 153.52 us; 37.61 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 36.74 p95 61.84 p99 73.94 max 135.13 us; 35.88 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 25.30 p95 32.72 p99 47.06 max 175.84 us; 24.70 ns/sample/channel/slot; checksum -7.236662
+96k 4x slot-only wavefold amount 1.0: p50 26.53 p95 35.43 p99 54.25 max 133.06 us; 25.91 ns/sample/channel/slot; checksum 1.262844
+96k Shepard 8x4 + 4x effect 3: p50 603.50 p95 1156.64 p99 1450.67 max 1816.72 us; checksum -11.783856
+96k 4x slot-only drive amount 0.5: p50 40.60 p95 80.15 p99 102.68 max 342.80 us; 39.65 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.23 p95 66.02 p99 84.54 max 184.49 us; 36.36 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 30.71 p95 44.66 p99 60.70 max 166.83 us; 29.99 ns/sample/channel/slot; checksum -6.442999
+96k 4x slot-only wavefold amount 1.0: p50 36.74 p95 58.27 p99 81.63 max 197.04 us; 35.88 ns/sample/channel/slot; checksum 3.737219
+96k Shepard 8x4 + 4x effect 3: p50 883.46 p95 1040.66 p99 1323.01 max 2161.86 us; checksum 12.919668
+96k 4x slot-only drive amount 0.5: p50 60.79 p95 83.83 p99 108.12 max 170.60 us; 59.37 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 60.34 p95 83.91 p99 110.49 max 247.90 us; 58.93 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 54.24 p95 77.19 p99 100.10 max 230.17 us; 52.97 ns/sample/channel/slot; checksum -4.188448
+96k 4x slot-only wavefold amount 1.0: p50 56.36 p95 76.31 p99 95.39 max 543.16 us; 55.04 ns/sample/channel/slot; checksum -29.913630
+96k Shepard 8x4 + 4x effect 3: p50 577.35 p95 1115.14 p99 1260.37 max 1757.16 us; checksum -16.292010
+96k 4x slot-only drive amount 0.5: p50 48.38 p95 72.04 p99 92.62 max 194.09 us; 47.24 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 37.38 p95 66.72 p99 87.01 max 205.39 us; 36.50 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 25.43 p95 33.65 p99 53.70 max 139.63 us; 24.83 ns/sample/channel/slot; checksum -7.236662
+96k 4x slot-only wavefold amount 1.0: p50 27.44 p95 35.27 p99 51.84 max 184.40 us; 26.79 ns/sample/channel/slot; checksum 1.262844
+96k Shepard 8x4 + 4x effect 3: p50 1003.04 p95 1102.47 p99 1159.26 max 1637.59 us; checksum -11.783856
+96k 4x slot-only drive amount 0.5: p50 39.52 p95 69.64 p99 91.18 max 295.59 us; 38.59 ns/sample/channel/slot; checksum 0.551730
+96k 4x slot-only drive amount 1.0: p50 54.21 p95 80.96 p99 106.19 max 299.30 us; 52.94 ns/sample/channel/slot; checksum 2.681207
+96k 4x slot-only wavefold amount 0.5: p50 30.62 p95 44.13 p99 61.93 max 223.75 us; 29.90 ns/sample/channel/slot; checksum -6.442999
+96k 4x slot-only wavefold amount 1.0: p50 32.25 p95 46.23 p99 63.74 max 156.48 us; 31.49 ns/sample/channel/slot; checksum 3.737219

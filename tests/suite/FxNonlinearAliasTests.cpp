@@ -7,11 +7,13 @@
 // Goertzel probe on the harmonic bins only, so the check stays cheap.
 //
 // Drive uses first-order antiderivative antialiasing (ADAA) and keeps the
-// thresholds introduced with that change. Wavefold now uses second-order ADAA
+// thresholds introduced with that change. Wavefold now uses first-order ADAA
 // on its unchanged triangle-fold shape. It is measured against an independent
 // point-sampled reference of the old transfer function: the assertion is on
 // absolute folded power, because ADAA also attenuates the extreme probes and a
-// ratio-only check would hide that.
+// ratio-only check would hide that. The second-order prototype was rejected
+// because its three-point average has a null at fs/3; the response check below
+// guards against reintroducing a mid-band null.
 #include "engine/Effects.h"
 #include <algorithm>
 #include <cmath>
@@ -21,8 +23,6 @@
 #include <limits>
 #include <random>
 
-struct WavefoldReference { double gain,x0,x1,x2,expected; };
-#include "fixtures/FxWavefoldReference.h"
 
 namespace {
 constexpr int window = 16384;
@@ -83,22 +83,29 @@ AliasResult measureDirect(float amount, double rate, int fundamentalBin) {
 
 // Point-sampled reference for Wavefold: the literal pre-change expression,
 // independent of the arithmetic triangle and ADAA helpers in the slot.
-AliasResult measureDirectWavefold(float amount, double rate, int fundamentalBin) {
+AliasResult measureDirectWavefold(float amount, double rate, int fundamentalBin,
+                                  int slots = 1) {
     const double f0 = fundamentalBin * rate / window;
     const double gain = 1.0 + 7.0 * amount;
     std::vector<float> left(window);
     for (int i = 0; i < window; ++i) {
-        const double x = std::sin(2 * pi * f0 * i / rate);
-        const double u = std::clamp(x * gain, -8.0, 8.0);
-        left[i] = static_cast<float>(2.0 / pi * std::asin(std::sin(pi * u * .5)));
+        double y = std::sin(2 * pi * f0 * i / rate);
+        for (int s = 0; s < slots; ++s) {
+            const double u = std::clamp(y * gain, -8.0, 8.0);
+            y = 2.0 / pi * std::asin(std::sin(pi * u * .5));
+        }
+        left[i] = static_cast<float>(y);
     }
     return analyse(left, fundamentalBin);
 }
 
-AliasResult measure(vox::fx::effects::Type type, float amount, double rate, int fundamentalBin) {
+AliasResult measure(vox::fx::effects::Type type, float amount, double rate, int fundamentalBin,
+                    int slots = 1) {
     vox::fx::effects::Chain chain;
     AliasResult result;
-    if (!chain.prepare(rate) || !chain.set(0, {type, 1.0f, amount})) return result;
+    if (!chain.prepare(rate)) return result;
+    for (int s = 0; s < slots; ++s)
+        if (!chain.set(static_cast<std::size_t>(s), {type, 1.0f, amount})) return result;
     const std::size_t settle = static_cast<std::size_t>(rate * .2);
     std::vector<float> left(settle + window), right(left.size());
     const double f0 = fundamentalBin * rate / window;
@@ -140,59 +147,28 @@ int main() {
         check(bypassed.ratio < 1e-12, "zero Drive amount is alias-free");
     }
 
-    // Repeated near-coincident samples in a linear segment should integrate
-    // to the exact average, even when divided differences nearly cancel.
+    // Near-coincident samples in a linear segment must use the mean-value
+    // limit instead of dividing two nearly equal antiderivatives.
     {
         using namespace vox::fx::effects::detail;
         bool stable=true; double maxError=0.0, maxOutput=0.0;
-        for (double centre : { .25, 1.0, -.25 })
+        for (double centre : { .25, .6, -.25 })
             for (double step : { 1e-6, 1e-7, 1e-8, 2e-9, 1e-9, 1e-10 }) {
                 WavefoldMemory state;
                 for (int i=0;i<60;++i) {
-                    const double x=centre+(i%3-1)*step;
+                    const double x=centre+(i%2?1:-1)*step*.5;
                     const double out=wavefoldTick(x,2.0,state);
-                    if(i<2)continue;
-                    const double x1=centre+((i-1)%3-1)*step;
-                    const double x2=centre+((i-2)%3-1)*step;
-                    // These centres and samples are away from slope corners;
-                    // a linear transfer integrates exactly at the mean.
-                    const double reference=wavefoldValue((x+x1+x2)/3.0,2.0);
+                    if(i<1)continue;
+                    const double x1=centre+((i-1)%2?1:-1)*step*.5;
+                    const double reference=wavefoldValue((x+x1)*.5,2.0);
                     maxError=std::max(maxError,std::abs(out-reference));
                     maxOutput=std::max(maxOutput,std::abs(out));
-                    stable=stable&&std::isfinite(out)&&std::abs(out-reference)<1e-5&&std::abs(out)<=1.00001;
+                    stable=stable&&std::isfinite(out)&&std::abs(out-reference)<1e-5
+                           &&std::abs(out)<=1.00001;
                 }
             }
         std::printf("Wavefold near-coincident max error %.12g max output %.12g\n",maxError,maxOutput);
-        check(stable,"Wavefold ADAA2 near-coincident samples stay bounded and follow the linear reference");
-    }
-
-    // Decimal-generated high precision references cover near-coincident,
-    // alternating, slope-corner and clamp-boundary samples. The reference is
-    // rate-independent mathematics; spectral tests below run at three rates.
-    {
-        using namespace vox::fx::effects::detail;
-        bool accurate=true; double maxError=0.0, maxOutput=0.0;
-        for (const auto& c : wavefoldReferences) {
-            WavefoldMemory state;
-            state.x1=c.x1; state.x2=c.x2;
-            state.gain=c.gain==1.0?8.0:1.0; // force gain-change recomputation
-            state.f2x1=wavefoldSecond(state.x1,state.gain);
-            state.lastDifference=123.0; // stale value must not be reused
-            const double out=wavefoldTick(c.x0,c.gain,state);
-            const double error=std::abs(out-c.expected);
-            maxError=std::max(maxError,error); maxOutput=std::max(maxOutput,std::abs(out));
-            accurate=accurate&&std::isfinite(out)&&error<1e-5&&std::abs(out)<=1.00001;
-        }
-        WavefoldMemory denormal;
-        const double tiny=std::numeric_limits<double>::denorm_min();
-        const auto tinyOut=wavefoldTick(tiny,8.0,denormal);
-        accurate=accurate&&std::isfinite(tinyOut)&&std::abs(tinyOut)<1e-300;
-        const auto floatTiny=static_cast<double>(std::numeric_limits<float>::denorm_min());
-        const auto floatTinyOut=wavefoldTick(floatTiny,8.0,denormal);
-        accurate=accurate&&std::isfinite(floatTinyOut)&&std::abs(floatTinyOut)<1e-35;
-        std::printf("Wavefold Decimal references: %zu cases max error %.12g max output %.12g\n",
-                    std::size(wavefoldReferences),maxError,maxOutput);
-        check(accurate,"Wavefold ADAA2 matches high-precision boundary references and handles denormals");
+        check(stable,"Wavefold ADAA1 near-coincident samples follow the mean-value limit");
     }
 
     // Rapid per-sample gain changes and tiny/alternating inputs must remain
@@ -213,7 +189,7 @@ int main() {
             }
         }
         std::printf("Wavefold changing-gain adversarial max output %.12g\n",maxOutput);
-        check(bounded,"Wavefold ADAA2 stays finite and bounded under rapid gain changes");
+        check(bounded,"Wavefold ADAA1 stays finite and bounded under rapid gain changes");
     }
 
     // Real Chain control path: rapid parameter changes and repeated slot-type
@@ -286,7 +262,7 @@ int main() {
         check(mixedCorrectly,"Wavefold 50 percent wet matches independently rendered parallel dry/wet sum");
     }
 
-    // Wavefold: second-order ADAA against the old point-sampled shape.
+    // Wavefold: first-order ADAA against the old point-sampled shape.
     for (const double rate : {44100.0, 48000.0, 96000.0}) {
         for (const int bin : {683, 1707, 2731}) {
             for (const float amount : {.28f, .5f, 1.0f}) {
@@ -295,22 +271,37 @@ int main() {
                 const auto drive = measure(Type::drive, amount, rate, bin);
                 std::printf("%5.0f Hz f0 %7.1f amt %.2f: Drive ADAA %.4f (%5.1f dB) | "
                             "Wavefold point %.4f (%5.1f dB, %6.1f dB abs) -> "
-                            "Wavefold ADAA2 %.4f (%5.1f dB, %6.1f dB abs)\n",
+                            "Wavefold ADAA1 %.4f (%5.1f dB, %6.1f dB abs)\n",
                             rate, bin * rate / window, amount, drive.ratio, ratioDb(drive),
                             direct.ratio, ratioDb(direct), foldedDb(direct),
                             fold.ratio, ratioDb(fold), foldedDb(fold));
                 check(std::isfinite(fold.ratio) && fold.ratio >= 0 && fold.ratio <= 1,
                       "wavefold alias measure in range");
-                // Absolute folded power must stay a small fraction of the old
+                // Absolute folded power must stay a clear fraction of the old
                 // point-sampled folded power and of the input power itself.
-                // Measured worst case is 8.3% of the old power and -14.2 dB
-                // relative to a unit sine; the limits keep a clear margin while
-                // still catching a silent fall back to point sampling.
-                check(fold.aliased <= .20 * direct.aliased + 1e-12,
-                      "antialiased Wavefold folds far less energy than point sampling");
-                check(fold.aliased <= .10 * fold.inputPower,
+                // Measured worst cases for ADAA1 are about 28% of the old power
+                // and 17% of input power; the limits keep margin while still
+                // catching a silent fall back to point sampling.
+                check(fold.aliased <= .35 * direct.aliased + 1e-12,
+                      "antialiased Wavefold folds less energy than point sampling");
+                check(fold.aliased <= .25 * fold.inputPower,
                       "antialiased Wavefold keeps absolute folded energy low");
             }
+        }
+    }
+
+    // Four serial slots compound both the alias reduction and the passband
+    // roll-off; report the pair explicitly instead of extrapolating one slot.
+    for (const int bin : {1707, 2731}) {
+        for (const float amount : {.5f, 1.0f}) {
+            const auto fold = measure(Type::wavefold, amount, 44100, bin, 4);
+            const auto direct = measureDirectWavefold(amount, 44100, bin, 4);
+            std::printf("44100 Hz f0 %7.1f amt %.2f, 4 slots: point %.4f "
+                        "(%6.1f dB abs) -> ADAA1 %.4f (%6.1f dB abs)\n",
+                        bin * 44100.0 / window, amount, direct.ratio, foldedDb(direct),
+                        fold.ratio, foldedDb(fold));
+            check(std::isfinite(fold.ratio) && fold.ratio >= 0 && fold.ratio <= 1,
+                  "four-slot wavefold alias measure in range");
         }
     }
 
@@ -361,11 +352,11 @@ int main() {
         check(error < 2e-3, "wavefold quasi-static sweep follows the old static shape");
     }
 
-    // Latency impact. Second-order ADAA has no integer pre-delay and no
-    // buffer, but the method itself carries p/2 = one sample of group delay.
-    // Measure it in the wavefold's linear region (low level keeps the fold
-    // inside |u|<=1) against the input phase. Drive keeps the smaller
-    // effective delay of its parallel dry/nonlinear mix.
+    // Latency impact. First-order ADAA has no integer pre-delay and no buffer,
+    // but the method carries p/2 = half a sample of group delay. Measure it in
+    // the wavefold's linear region (low level keeps the fold inside |u|<=1)
+    // against the input phase. Drive keeps the smaller effective delay of its
+    // parallel dry/nonlinear mix.
     {
         const auto groupDelay = [](Type type, float amount, double rate, int bin) {
             constexpr int samples = 32768;
@@ -401,10 +392,66 @@ int main() {
             const auto driveDelay = groupDelay(Type::drive, .28f, rate, 683);
             std::printf("%5.0f Hz group delay: Wavefold %.3f samples, Drive %.3f samples\n",
                         rate, wavefoldDelay, driveDelay);
-            check(wavefoldDelay > .9 && wavefoldDelay < 1.1,
-                  "Wavefold adds one sample of ADAA group delay, not more");
+            check(wavefoldDelay > .4 && wavefoldDelay < .6,
+                  "Wavefold adds half a sample of ADAA1 group delay, not more");
             check(driveDelay >= 0 && driveDelay < .5,
                   "Drive keeps its parallel-path group delay");
+        }
+    }
+
+    // The ADAA1 linear response is the two-point average (1+z^-1)/2, not a pure
+    // delay. It rolls off toward Nyquist but must not null an in-band frequency
+    // (the rejected ADAA2 three-point average nulled fs/3). A low-level,
+    // bin-centred tone keeps the slot in a single linear segment.
+    {
+        const auto responseDb = [](float amount, double rate, int bin, int slots,
+                                   double amplitude) {
+            constexpr int samples = 32768;
+            const auto settle = static_cast<std::size_t>(rate * .25);
+            const double f0 = bin * rate / samples;
+            std::vector<float> input(settle + samples), left, right;
+            for (std::size_t i = 0; i < input.size(); ++i)
+                input[i] = static_cast<float>(amplitude * std::sin(2 * pi * f0 * i / rate));
+            left = input;
+            right = input;
+            vox::fx::effects::Chain chain;
+            if (!chain.prepare(rate)) return 0.0;
+            for (int s = 0; s < slots; ++s)
+                if (!chain.set(static_cast<std::size_t>(s), {Type::wavefold, 1, amount}))
+                    return 0.0;
+            chain.process(left.data(), right.data(), left.size());
+            const auto coefficient = [&](const std::vector<float>& v) {
+                double re = 0, im = 0;
+                for (int i = 0; i < samples; ++i) {
+                    const double w = 2 * pi * f0 * i / rate;
+                    const auto at = settle + static_cast<std::size_t>(i);
+                    re += v[at] * std::cos(w);
+                    im -= v[at] * std::sin(w);
+                }
+                return std::hypot(re, im);
+            };
+            return 20 * std::log10(coefficient(left) / coefficient(input));
+        };
+        for (const double rate : {44100.0, 48000.0, 96000.0}) {
+            constexpr int samples = 32768;
+            const int fs3 = static_cast<int>(std::lround(samples / 3.0));
+            const double f0 = fs3 * rate / samples;
+            const double shape = 20 * std::log10(std::abs(std::cos(pi * f0 / rate)));
+            const double gain1 = 20 * std::log10(1 + 7 * 1.0);
+            const double gain4 = 4 * 20 * std::log10(1 + 7 * .28);
+            const double expected = gain1 + shape;
+            const double expected4 = gain4 + 4 * shape;
+            const double one = responseDb(1.f, rate, fs3, 1, .05);
+            const double four = responseDb(.28f, rate, fs3, 4, .002);
+            std::printf("%5.0f Hz fs/3 response: ADAA1 one slot %.2f dB "
+                        "(theory %.2f), four slots %.2f dB (theory %.2f)\n",
+                        rate, one, expected, four, expected4);
+            // Compare against the no-ADAA gain: the alias-suppression shape
+            // must not null an in-band frequency (the ADAA2 prototype did).
+            check(std::abs(one - expected) < .2 && one - gain1 > -8,
+                  "ADAA1 has no in-band null at fs/3 (one slot)");
+            check(std::abs(four - expected4) < .8 && four - gain4 > -30,
+                  "ADAA1 has no in-band null at fs/3 (four slots)");
         }
     }
 

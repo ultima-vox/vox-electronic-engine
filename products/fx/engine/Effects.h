@@ -102,20 +102,20 @@ private:
 // exact but point-sampled, so a folding sinusoid at audio rate generates
 // harmonics far above Nyquist that fold back as inharmonic tones.
 //
-// First- and second-order antiderivatives have exact piecewise-polynomial
-// closed forms, which lets the slot use second-order antiderivative
-// antialiasing (ADAA) without oversampling, buffers or added integer latency.
-// For u in [2m, 2m+2), s = |u| - 2m:
-//   tri(u)   = (-1)^m * A'(s),          F(u)   = (-1)^m * A(s) + S(m)
-//   F2(u)    = (-1)^m * B(s) + S(m)*s + m
-// with A(s)=s^2/2 (s<=1), A(s)=2s-s^2/2-1 (s>1), B(s)=int A, and
-// S(m)=1 for odd m, 0 otherwise. F is even, F2 is odd, both are C1 and match
-// the clamped zero output beyond |u|=8.
+// The first antiderivative F has an exact piecewise-polynomial closed form,
+// which lets the slot use first-order antiderivative antialiasing (ADAA1)
+// without oversampling, buffers or added integer latency. For u in [2m, 2m+2),
+// s = |u| - 2m:
+//   tri(u) = (-1)^m * A'(s),   F(u) = (-1)^m * A(s) + S(m)
+// with A(s)=s^2/2 (s<=1), A(s)=2s-s^2/2-1 (s>1) and S(m)=1 for odd m, else 0.
+// F is even, C1, and matches the clamped zero output beyond |u|=8.
+//
+// ADAA1 evaluates y[n]=(F(x[n])-F(x[n-1]))/(x[n]-x[n-1]). On a linear segment
+// that is the two-point average (1+z^-1)/2: half a sample of group delay and a
+// roll-off toward Nyquist, but no in-band null. The second-order prototype was
+// rejected because its three-point average nulls fs/3.
 inline double wavefoldA(double s) noexcept {
     return s <= 1.0 ? s*s*.5 : 2.0*s - s*s*.5 - 1.0;
-}
-inline double wavefoldB(double s) noexcept {
-    return s <= 1.0 ? s*s*s/6.0 : s*s - s*s*s/6.0 - s + 1.0/3.0;
 }
 inline int wavefoldParity(double m) noexcept {
     return static_cast<int>(m) & 1;
@@ -137,80 +137,31 @@ inline double wavefoldFirst(double x,double gain) noexcept {
     const double g=wavefoldParity(m)?-a:a;
     return ((wavefoldParity(m)?1.0:0.0)+g)/gain;
 }
-inline double wavefoldSecond(double x,double gain) noexcept {
-    const double u=gain*x;
-    const double au=std::abs(u);
-    double h;
-    if(au>=8.0)h=4.0;
-    else {
-        const double m=std::floor(au*.5),s=au-2.0*m;
-        const double b=wavefoldB(s);
-        h=wavefoldParity(m)?m+s-b:m+b;
-    }
-    return (u<0?-h:h)/(gain*gain);
-}
-// Per-channel ADAA history: the previous two inputs, the previous divided
-// difference and the cached F2(x[n-1]) for the gain it was generated with.
+// Per-channel ADAA1 history: the previous input and its antiderivative for the
+// gain it was generated with. A steady slot pays two lookups and one divide.
 struct WavefoldMemory {
-    double x1=0,x2=0,f2x1=0,lastDifference=0,gain=-1;
+    double x1=0,f1x1=0,gain=-1;
 };
 inline double wavefoldTick(double x,double gain,WavefoldMemory& memory) noexcept {
-    // Absolute 1e-9 thresholds allow catastrophic cancellation in the
-    // second divided difference (including on bounded, nearly constant input).
-    // Below this scale use the continuous mean-value limit; the Wavefold slope
-    // is bounded by gain <= 8 in the supported parameter range.
-    constexpr double relativeTolerance=1e-5;
     // The floor/parity mapping is only defined for finite input. Clearing the
     // history keeps a non-finite sample from poisoning later output, matching
     // the bounded-output behaviour of the previous expression.
     if(!std::isfinite(x)){memory=WavefoldMemory{};return 0.0;}
-    const double f2x0=wavefoldSecond(x,gain);
-    const double scale=std::max({1.0,std::abs(x),std::abs(memory.x1),std::abs(memory.x2)});
-    const double tolerance=relativeTolerance*scale;
     // Gain follows the smoothed amount. Recompute the cached antiderivative
-    // and the previous divided difference only when the shape actually moved;
-    // a steady slot pays a single F2 evaluation per sample.
+    // only when the shape actually moved.
     if(memory.gain!=gain) {
-        memory.f2x1=wavefoldSecond(memory.x1,gain);
-        const double previous=memory.x1-memory.x2;
-        memory.lastDifference=std::abs(previous)<tolerance
-            ?wavefoldFirst((memory.x1+memory.x2)*.5,gain)
-            :(memory.f2x1-wavefoldSecond(memory.x2,gain))/previous;
+        memory.f1x1=wavefoldFirst(memory.x1,gain);
         memory.gain=gain;
     }
-    const double current=x-memory.x1;
-    const double divided=std::abs(current)<tolerance
-        ?wavefoldFirst((x+memory.x1)*.5,gain)
-        :(f2x0-memory.f2x1)/current;
-    const double span=x-memory.x2;
-    double y;
-    const double low=std::min({x,memory.x1,memory.x2});
-    const double high=std::max({x,memory.x1,memory.x2});
-    // Within one linear segment the ADAA2 integral is exactly the transfer
-    // at the mean. Use that identity for nearby inputs before subtracting
-    // nearly equal antiderivatives. Adjacent triangle slope changes are at
-    // odd integer values of gain*x; +/-8 are the clamp boundaries.
-    const bool nearby=high-low<10.0*tolerance;
-    const double lowU=low*gain,highU=high*gain;
-    const bool oneSegment=nearby&&((lowU>=8.0||highU<=-8.0)||
-        (lowU>-8.0&&highU<8.0&&std::floor((lowU+1.0)*.5)==std::floor((highU+1.0)*.5)));
-    if(oneSegment||high-low<tolerance) {
-        // Across a corner the mean-value approximation is bounded by
-        // gain*(high-low); within one segment the expression is exact.
-        y=wavefoldValue((x+memory.x1+memory.x2)/3.0,gain);
-    } else if(std::abs(span)<tolerance) {
-        // x[n] and x[n-2] coincide: use the mean-value form around x[n-1].
-        const double middle=(x+memory.x2)*.5;
-        const double delta=middle-memory.x1;
-        y=std::abs(delta)<tolerance
-            ?wavefoldValue((middle+memory.x1)*.5,gain)
-            :(2.0/delta)*(wavefoldFirst(middle,gain)
-                +(memory.f2x1-wavefoldSecond(middle,gain))/delta);
-    } else {
-        y=2.0*(divided-memory.lastDifference)/span;
-    }
-    memory.x2=memory.x1;memory.x1=x;memory.f2x1=f2x0;
-    memory.lastDifference=divided;
+    const double f1x0=wavefoldFirst(x,gain);
+    const double delta=x-memory.x1;
+    const double scale=std::max({1.0,std::abs(x),std::abs(memory.x1)});
+    // Below this scale use the continuous mean-value limit; the fold slope is
+    // bounded by gain <= 8 in the supported parameter range.
+    const double y=std::abs(delta)<1e-9*scale
+        ?wavefoldValue((x+memory.x1)*.5,gain)
+        :(f1x0-memory.f1x1)/delta;
+    memory.x1=x;memory.f1x1=f1x0;
     return y;
 }
 } // namespace detail
@@ -351,13 +302,12 @@ private:
             l=tick(l,state.drivePreviousL);r=tick(r,state.drivePreviousR);break;
         }
         case Type::wavefold: {
-            // Same triangle fold as before, now through second-order
+            // Same triangle fold as before, now through first-order
             // antiderivative antialiasing (ADAA). The static shape is
-            // unchanged; the two-stage divided difference removes the
+            // unchanged; the divided difference removes some of the
             // fold-generated harmonics that used to fold below Nyquist.
-            // No oversampling, buffer or integer latency is added; ADAA2
-            // carries the method's inherent ~1-sample (p/2) phase delay, as
-            // the existing first-order Drive ADAA carries ~0.5 sample.
+            // No oversampling, buffer or integer latency is added; ADAA1
+            // carries the method's inherent ~0.5-sample (p/2) phase delay.
             const double gain=1+7*amount;
             l=detail::wavefoldTick(l,gain,state.wavefoldL);
             r=detail::wavefoldTick(r,gain,state.wavefoldR);

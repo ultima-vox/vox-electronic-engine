@@ -1,0 +1,37 @@
+FX-04 Wavefold ADAA1 — standalone executable inventory
+Generated 2026-11-22. Linux, GCC 12.2.0, -O2. No CMake/CTest or JUCE
+toolchain is installed in this container; these are direct local builds.
+Windows, native processor, host and listening remain unverified.
+
+Command pattern:
+  g++ -std=c++20 -O2 -Iproducts/fx -Ilibs/vox-preset tests/suite/<test>.cpp \
+      libs/vox-preset/StateContainer.cpp -o /tmp/<test> && /tmp/<test>
+
+=== FxEffectsTests ===
+FX effects foundation: 0 failure(s)
+
+=== FxNonlinearAliasTests ===
+FX nonlinear alias: 0 failure(s)
+
+=== FxOfflineRenderTests ===
+FX offline WAV: 0 failure(s)
+
+=== FxEffectTailTests ===
+FX effect tails: 0 failure(s)
+
+=== FxBarEventTests ===
+FX bar event: 0 failure(s)
+
+=== FxSoundGraphTests ===
+FX sound graph/deterministic routes: 0 failure(s)
+
+=== FxPortablePresetTests ===
+FX portable preset and comparison codecs: 0 failure(s)
+
+=== FxFactoryCandidatesTests ===
+Wave B staged uplifting-sixteen-bar voxfx.riser.white-veranda 16 bars peak 0.011897 edge 0.0000000
+
+=== ASan/UBSan ===
+FxNonlinearAliasTests: PASS (0 failures, no sanitizer report)
+FxEffectsTests:         PASS (0 failures, no sanitizer report)
+FxEffectTailTests:      PASS (0 failures, no sanitizer report)

@@ -7,7 +7,10 @@ is unchanged, no ID/codec/state/parameter changes, no oversampling, no
 allocated buffers, no integer latency and no PDC change. The existing Drive
 ADAA path is bit-identical and its test limits are untouched.
 
-> **2026-11-22 update — do not ship bare ADAA2.** A post-review frequency-response
+> **2026-11-22 update — ADAA2 is rejected for integration.** The TL decision is
+> to keep the original Wavefold and test first-order ADAA next
+> ([experiment](WAVEFOLD_ADAA1_20261122.md)). This document is retained as the
+> rejected prototype's evidence. A post-review frequency-response
 > study ([evidence](evidence/wavefold-response-20261122.txt),
 > [CSV](evidence/wavefold-response-20261122.csv)) shows the method's linear
 > response is a 3-point average with a **null at fs/3** (14.7 kHz at 44.1 kHz)

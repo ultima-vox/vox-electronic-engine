@@ -198,3 +198,20 @@ the Wavefold slot (ADAA2's p/2 term) versus 0.198 for Drive at amount 0.28;
 there is no integer pre-delay, buffer or PDC change and no oversampling.
 Raw runs: [wavefold-cpu-20261121](evidence/wavefold-cpu-20261121.txt). The same
 non-Windows, non-host, non-deadline caveats apply; this is not an FX-T18 result.
+
+### Wavefold first-order ADAA experiment (2026-11-22)
+
+The same focused four-slot row, now comparing the original point-sampled
+Wavefold, first-order ADAA and the rejected second-order probe (three
+interleaved runs, medians; single noisy container):
+
+```text
+wavefold amount 0.5: 49.78 (point) -> 25.30 (ADAA1) -> 30.62 us (ADAA2)
+wavefold amount 1.0: 48.72 (point) -> 26.53 (ADAA1) -> 32.25 us (ADAA2)
+drive amount 0.5:    38.6 us on all three, same checksum
+```
+
+ADAA1 is ~46–49 % cheaper than the old `asin`/`sin` expression and ~17 %
+cheaper than ADAA2, but it rolls off the top octave and its four-slot alias
+gain is small; see [the experiment](WAVEFOLD_ADAA1_20261122.md). These remain
+single-machine, non-Windows, non-deadline measurements.

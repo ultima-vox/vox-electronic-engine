@@ -1,0 +1,39 @@
+FX-04 Wavefold ADAA1 — measured linear frequency response
+Generated 2026-11-22. Linux, GCC 12.2.0, -O3. Chain-level diagnostic.
+
+Command:
+  python3 tools/compare_wavefold_response.py /tmp/vox-wavefold-adaa1
+
+Method: low-level bin-centred sine (0.05 amplitude for one slot, 0.002 for
+four slots at amount 0.28), 0.25 s settle, 32768-sample Goertzel window,
+64-sample blocks. Output/input ratio is measured against the same buffer.
+Theory is the exact ADAA1 response for a linear segment:
+  H(w) = (1-wet) + wet*(1+7*amount)*(1+e^-jw)/2, raised to slots.
+762 points; measured vs theory max error 0.00148 dB and 0.0061 deg.
+
+=== Candidate minus parent, one slot, wet 1, amount 1 (delta magnitude dB) ===
+rate     1 kHz    5 kHz   10 kHz   15 kHz  ~19.5 kHz
+44100    -0.02    -0.57    -2.37    -6.19   -14.74
+48000    -0.02    -0.48    -1.97    -4.98   -10.67
+96000    -0.00    -0.12    -0.46    -1.07    -1.90
+
+=== Four serial slots, wet 1, amount 0.28 ===
+rate     1 kHz    5 kHz   10 kHz   15 kHz  worst
+44100    -0.09    -2.29    -9.47   -24.74   -58.94 @ 19.46k
+48000    -0.07    -1.92    -7.87   -19.92   -75.93 @ 22.28k
+96000    -0.02    -0.47    -1.86    -4.28   -68.98 @ 43.79k
+
+=== fs/3 ===
+At 44.1/48/96 kHz the one-slot relative loss at fs/3 is 6.02 dB, exactly the
+two-point average |cos(w/2)|; four slots are 4x that (24.08 dB relative).
+There is no null: this is the key difference from the rejected ADAA2, whose
+three-point average is zero at fs/3.
+
+=== Phase ===
+Measured group delay is 0.500 sample in the linear region at all three
+rates (the two-point average's p/2 delay). Drive measures 0.198 at amount
+0.28 because its ADAA wet term is mixed with an undelayed dry term.
+
+=== Limitations ===
+Small-signal linearization; large signals also fold. Chain-level, not a
+plugin/DAW render. No listening claim.
