@@ -70,6 +70,7 @@ private:
     void commitLayout();
     void refreshInspector();
     void showWorkspaceMenu();
+    void showToolPanel (layout::Byte);
     void showDockMenu (layout::Type, unsigned, layout::Byte, juce::Component&);
     bool commitDockDocument (std::optional<layout::Document>);
     struct Impl;

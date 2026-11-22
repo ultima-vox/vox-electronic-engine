@@ -393,6 +393,8 @@ public:
             auto area = getLocalBounds().reduced (6);
             styleLabel_->setBounds (area.removeFromTop (18));
             style_->setBounds (area.removeFromTop (30)); seed_->setBounds (area.removeFromTop (22));
+            pattern_->setBounds (area.removeFromTop (32).reduced (1));
+            song_->setBounds (area.removeFromTop (32).reduced (1));
             for (int row = 0; row < 4; ++row)
             {
                 auto cells = area.removeFromTop (86);
@@ -406,7 +408,7 @@ public:
             };
             lockLabel_->setBounds (area.removeFromTop (32)); lanes (area.removeFromTop (112), locks_);
             mutateLabel_->setBounds (area.removeFromTop (24)); lanes (area.removeFromTop (112), mutate_);
-            for (auto* button : { pattern_.get(), song_.get(), mutateButton_.get(), fill_.get(), variation_.get(),
+            for (auto* button : { mutateButton_.get(), fill_.get(), variation_.get(),
                                   undo_.get(), redo_.get(), defaults_.get() })
                 button->setBounds (area.removeFromTop (32).reduced (1));
             status_->setBounds (area.removeFromTop (60));
@@ -806,9 +808,10 @@ public:
         {
             auto area = getLocalBounds().reduced (6);
             typeLabel_->setBounds (area.removeFromTop (18)); type_->setBounds (area.removeFromTop (30));
+            load_->setBounds (area.removeFromTop (32).reduced (1));
             area.removeFromTop (6); list_->setBounds (area.removeFromTop (260));
             nameLabel_->setBounds (area.removeFromTop (18)); name_->setBounds (area.removeFromTop (30));
-            for (auto* button : { load_.get(), save_.get(), undo_.get(), import_.get(), export_.get() })
+            for (auto* button : { save_.get(), undo_.get(), import_.get(), export_.get() })
                 button->setBounds (area.removeFromTop (32).reduced (1));
             status_->setBounds (area.removeFromTop (72)); samples_->setBounds (area);
             return;

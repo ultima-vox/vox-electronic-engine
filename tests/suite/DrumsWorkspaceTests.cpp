@@ -1,5 +1,6 @@
 #include "DrumsWorkspace.h"
 #include "DrumsDockZone.h"
+#include "DrumsPages.h"
 #include "PatternEditor.h"
 #include "DrumsEditor.h"
 #include "PadControlSurface.h"
@@ -583,6 +584,110 @@ void testProductionBindings()
     frame = dynamic_cast<vox::suite::SuiteEditor*> (editor.get());
     check (frame && dynamic_cast<DrumsWorkspace*> (frame->content()), "production close/reopen retains native editor path");
     p->editorBeingDeleted (editor.get());
+}
+
+void testVisibleGeneratorAndPresets()
+{
+    using namespace vox::drums;
+    auto p = std::make_unique<DrumsProcessor>();
+    DrumsWorkspace ui (*p); ui.setSize (1040, 600); pump();
+    auto* generator = ui.buttonFor ("workspace.generator");
+    auto* presets = ui.buttonFor ("workspace.presets");
+    check (generator && presets && generator->isVisible() && presets->isVisible(),
+           "fresh workspace exposes Generator and Presets shortcuts");
+    if (! generator || ! presets) return;
+    for (const auto width : { 1040, 1280, 1440, 1600 })
+    {
+        ui.setSize (width, 700);
+        for (const auto split : { workspace::Split::single, workspace::Split::vertical, workspace::Split::horizontal })
+        {
+            auto current = ui.layout(); current.split = split; ui.setLayout (current);
+            check (! generator->getBounds().isEmpty() && ! presets->getBounds().isEmpty()
+                   && ui.getLocalBounds().contains (generator->getBounds()) && ui.getLocalBounds().contains (presets->getBounds())
+                   && ! generator->getBounds().intersects (presets->getBounds()),
+                   "Generator and Presets shortcuts fit at supported widths and splits");
+        }
+    }
+    ui.setSize (1040, 600);
+    const auto patternBefore = p->patterns().encodeCurrent().data;
+    const auto historyBefore = p->patternHistory().size();
+    const auto kitBefore = p->kitStore().generation();
+    const auto capture = [&] (const char* name) {
+        if (const auto* folder = std::getenv ("VOX_WORKSPACE_SCREENSHOTS"))
+        {
+            juce::File directory (folder); directory.createDirectory();
+            juce::FileOutputStream out (directory.getChildFile (name));
+            check (out.setPosition (0) && out.truncate().wasOk()
+                   && juce::PNGImageFormat().writeImageToStream (ui.createComponentSnapshot (ui.getLocalBounds()), out),
+                   "write actual workspace shortcut capture");
+        }
+    };
+    press (*generator); pump();
+    capture ("native-generator-shortcut.png");
+    auto* page = ui.toolPage (workspace::DockTool::generator);
+    auto* generatePattern = page ? dynamic_cast<juce::Button*> (page->named ("pattern")) : nullptr;
+    auto* generateSong = page ? dynamic_cast<juce::Button*> (page->named ("song")) : nullptr;
+    check (page && page->isVisible() && page->getParentComponent() && generatePattern && generateSong,
+           "Generator shortcut opens the existing live generator and its pattern/song actions");
+    check (p->patterns().encodeCurrent().data == patternBefore && p->patternHistory().size() == historyBefore
+           && p->kitStore().generation() == kitBefore, "opening Generator changes layout only");
+    if (generatePattern && generateSong)
+    {
+        auto* viewport = generatePattern->findParentComponentOfClass<juce::Viewport>();
+        if (viewport && viewport->getViewedComponent())
+        {
+            auto* content = viewport->getViewedComponent();
+            check (viewport->getViewArea().contains (content->getLocalArea (generatePattern, generatePattern->getLocalBounds()))
+                   && viewport->getViewArea().contains (content->getLocalArea (generateSong, generateSong->getLocalBounds())),
+                   "both generator actions are visible without scrolling in the default dock");
+        }
+        else check (false, "Generator actions have a real dock viewport");
+        press (*generatePattern); pump();
+        check (p->patternHistory().size() > historyBefore && p->patterns().encodeCurrent().data != patternBefore,
+               "visible Generate Pattern action changes the actual pattern with Undo");
+        const auto songBefore = p->patterns().song();
+        const auto afterPatternHistory = p->patternHistory().size();
+        press (*generateSong); pump();
+        check (p->patternHistory().size() > afterPatternHistory && p->patterns().song() != songBefore,
+               "visible Generate Song action changes the actual song with Undo");
+    }
+    press (*presets); pump();
+    capture ("native-presets-shortcut.png");
+    auto* library = ui.toolPage (workspace::DockTool::library);
+    auto* list = library ? dynamic_cast<juce::ListBox*> (library->named ("list")) : nullptr;
+    auto* load = library ? dynamic_cast<juce::Button*> (library->named ("load")) : nullptr;
+    auto* status = library ? dynamic_cast<juce::Label*> (library->named ("status")) : nullptr;
+    check (library && library->isVisible() && library->getParentComponent() && list && load && status && list->getListBoxModel() && list->getListBoxModel()->getNumRows() > 0,
+           "Presets shortcut opens the actual populated musical preset library");
+    if (list && load && status && list->getListBoxModel() && list->getListBoxModel()->getNumRows() > 0)
+    {
+        auto* viewport = load->findParentComponentOfClass<juce::Viewport>();
+        check (viewport && viewport->getViewedComponent()
+               && viewport->getViewArea().contains (viewport->getViewedComponent()->getLocalArea (load, load->getLocalBounds())),
+               "factory preset Load is visible without scrolling in the default dock");
+        list->selectRow (0); press (*load); pump();
+        check (status->getText().startsWith ("Loaded"), "factory preset loads through the visible library action");
+    }
+    if (page && library)
+    {
+        auto* roles = dynamic_cast<juce::Button*> (page->named ("roles.view"));
+        auto* category = dynamic_cast<juce::ComboBox*> (library->named ("library.category"));
+        if (roles && category && generatePattern)
+        {
+            press (*generator); press (*roles); pump();
+            press (*generator); pump();
+            check (generatePattern->getParentComponent() && generatePattern->getParentComponent()->isVisible(), "Generator shortcut returns from Pad roles to generator controls");
+            category->setSelectedId (2, juce::sendNotificationSync);
+            press (*presets); pump();
+            check (category->getSelectedId() == 1 && list->isVisible(), "Presets shortcut returns from user styles to musical presets");
+            check (ui.moveDockPanel (4, layout::Type::left) && ui.setDockRail (layout::Type::left, true),
+                   "generator shortcut fixture moves the real panel to a collapsed custom dock");
+            press (*generator); pump();
+            check (! ui.layout().leftRail && page->findParentComponentOfClass<DrumsDockZone>() == &ui.dockZone (layout::Type::left),
+                   "Generator shortcut expands the saved dock without moving the panel");
+        }
+        else check (false, "Generator and Library mode controls exist");
+    }
 }
 
 void testNativeDocking()
@@ -1685,6 +1790,8 @@ int main()
     testLayoutLifecycle();
     pump();
     testProductionBindings();
+    pump();
+    testVisibleGeneratorAndPresets();
     pump();
     testNativeDocking();
     pump();

@@ -573,10 +573,16 @@ struct DrumsWorkspace::Impl {
     {
         owner.setLookAndFeel (&lookAndFeel);
         for (auto* component : std::initializer_list<juce::Component*> { &leftDock, &rightDock, &top, &list, &pin,
-                 &workspaceMenu, &maximise, &split, &mixerSize, &mixerView, &mixerBank, &mode, &pattern, &primary, &secondary, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
+                 &workspaceMenu, &generatorShortcut, &presetsShortcut, &maximise, &split, &mixerSize, &mixerView, &mixerBank, &mode, &pattern, &primary, &secondary, &mixerTitle, &mixerViewport, &mainLeft, &mainRight })
             owner.addAndMakeVisible (*component);
         workspaceMenu.setButtonText ("Workspace");
         workspaceMenu.onClick = [&owner] { owner.showWorkspaceMenu(); };
+        generatorShortcut.setButtonText ("Generator"); generatorShortcut.setName ("Open Generator");
+        generatorShortcut.setTooltip ("Open the pattern and song generator");
+        generatorShortcut.onClick = [&owner] { owner.showToolPanel (4); };
+        presetsShortcut.setButtonText ("Presets"); presetsShortcut.setName ("Open Presets");
+        presetsShortcut.setTooltip ("Open musical presets and user styles");
+        presetsShortcut.onClick = [&owner] { owner.showToolPanel (2); };
         maximise.setName ("Focus central editor"); maximise.setButtonText ("Focus");
         maximise.setTooltip ("Focus the primary editor, or restore the split");
         maximise.onClick = [&owner, this] { layout.maximized = layout.maximized == 255 ? 0 : 255; owner.setLayout (layout); };
@@ -784,7 +790,7 @@ struct DrumsWorkspace::Impl {
     std::array<std::unique_ptr<PadCell>, 16> pads;
     std::array<std::unique_ptr<MixerStrip>, 16> strips;
     juce::Label top, mixerTitle;
-    juce::TextButton list, pin, workspaceMenu, maximise;
+    juce::TextButton list, pin, workspaceMenu, generatorShortcut, presetsShortcut, maximise;
     juce::ComboBox split, mixerSize, mixerView, mixerBank, primary, secondary, mode, pattern, delayTime;
     std::unique_ptr<ComboAttachment> modeAttachment, patternAttachment, delayAttachment;
     std::array<std::unique_ptr<Page>, 4> toolPages;
@@ -996,6 +1002,8 @@ juce::Slider* DrumsWorkspace::sliderFor (const juce::String& id)
 juce::Button* DrumsWorkspace::buttonFor (const juce::String& id)
 {
     auto& i = *impl_;
+    if (id == "workspace.generator") return &i.generatorShortcut;
+    if (id == "workspace.presets") return &i.presetsShortcut;
     if (auto* button = i.toolPages[2]->button (id)) return button;
     if (auto* button = i.toolPages[3]->button (id)) return button;
     for (int pad = 0; pad < 16; ++pad)
@@ -1198,6 +1206,27 @@ bool DrumsWorkspace::commitDockDocument (std::optional<layout::Document> documen
 bool DrumsWorkspace::moveDockPanel (layout::Byte panel, layout::Type side, unsigned group, bool newGroup)
 {
     return commitDockDocument (layout::movePanel (impl_->processor.layoutState().document, panel, side, group, newGroup));
+}
+void DrumsWorkspace::showToolPanel (layout::Byte panel)
+{
+    const auto document = impl_->processor.layoutState().document;
+    const auto selectRequestedView = [&] {
+        if (panel == 4)
+            if (auto* settings = dynamic_cast<juce::Button*> (impl_->toolPages[0]->named ("roles.settings")))
+                if (settings->onClick) settings->onClick();
+        if (panel == 2)
+            if (auto* category = dynamic_cast<juce::ComboBox*> (impl_->toolPages[1]->named ("library.category")))
+                category->setSelectedId (1, juce::sendNotificationSync);
+    };
+    // Reopen the existing panel in its saved side/group instead of moving it.
+    for (const auto side : { layout::Type::left, layout::Type::right })
+        if (const auto dock = layout::dock (document, side))
+            for (unsigned group = 0; group < dock->groups.size(); ++group)
+                if (std::find (dock->groups[group].tabs.begin(), dock->groups[group].tabs.end(), panel) != dock->groups[group].tabs.end())
+                { if (moveDockPanel (panel, side, group)) selectRequestedView(); return; }
+    if (moveDockPanel (panel, layout::Type::right)) selectRequestedView();
+    else
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Workspace", "Cannot open this panel in the current workspace.");
 }
 bool DrumsWorkspace::hideDockPanel (layout::Byte panel)
 {
@@ -1404,6 +1433,8 @@ void DrumsWorkspace::resized()
     const auto boxes = workspace::arrange (getWidth(), getHeight(), i.layout);
     auto top = rectangle (boxes.top);
     i.workspaceMenu.setBounds (top.removeFromLeft (104).reduced (2));
+    i.generatorShortcut.setBounds (top.removeFromLeft (94).reduced (2));
+    i.presetsShortcut.setBounds (top.removeFromLeft (74).reduced (2));
     i.pattern.setBounds (top.removeFromRight (104).reduced (2));
     i.mode.setBounds (top.removeFromRight (120).reduced (2));
     i.split.setBounds (top.removeFromRight (108).reduced (2));
