@@ -3362,6 +3362,23 @@ void testPreviewTransitions()
     check (vox::syn::factoryProgramsHumanApproved == 0, "a timed Hear transition is not human approval");
 }
 
+// Producer/consumer handoff only. The strict p99 matrix is intentionally
+// absent: ThreadSanitizer makes those timings incomparable with the Windows gate.
+void runTsanConcurrency()
+{
+    std::printf ("tsan-concurrency: phrase, MODX, Hear, parameter, state and bank handoffs\n");
+    const int before = checks;
+    testState();
+    testParameterAutomation();
+    testStateEdges();
+    testPhraseHardening();
+    testModHost();
+    testHearLifecycle();
+    testPreviewFx();
+    testUserModRoutes();
+    check (checks - before >= 40, "tsan concurrency mode executed the handoff tests");
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -3369,6 +3386,16 @@ int main (int argc, char** argv)
     testStrictTrialQualification();
     if (argc == 2 && std::strcmp (argv[1], "--strict-trial-self-test") == 0)
         return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 2 && std::strcmp (argv[1], "--tsan-concurrency") == 0)
+    {
+        juce::ScopedJuceInitialiser_GUI juce;
+        runTsanConcurrency();
+        if (failures == 0 && skips == 0)
+            std::printf ("tsan concurrency passed (%d checks, 0 skipped)\n", checks);
+        else
+            std::printf ("tsan concurrency failed (%d checks, %d failed, %d skipped)\n", checks, failures, skips);
+        return failures == 0 && skips == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
     testPartsAndCap();
     testState();

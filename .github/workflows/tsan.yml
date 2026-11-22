@@ -1,0 +1,113 @@
+name: tsan
+
+# SYN-08 TSAN-01. Linux Clang ThreadSanitizer for the synth handoff tests.
+# This is not the Windows strict-p99 gate and it does not build the archived
+# Rack installer. A green job requires an instrumented binary and a real
+# --tsan-concurrency run. halt_on_error stays on.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-clang-tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+      # Do not set halt_on_error=0. A race fails the job.
+      TSAN_OPTIONS: halt_on_error=1:abort_on_error=1:exitcode=66
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Clang and JUCE's Linux dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang ninja-build git ca-certificates pkg-config \
+            libasound2-dev libfreetype6-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev \
+            libxcomposite-dev libxrender-dev libxfixes-dev \
+            libgtk-3-dev xvfb binutils
+
+      - name: Pin JUCE to the reviewed commit
+        run: |
+          set -euo pipefail
+          git init juce-src
+          git -C juce-src remote add origin https://github.com/juce-framework/JUCE.git
+          git -C juce-src fetch --depth 1 origin "$JUCE_COMMIT"
+          git -C juce-src checkout --detach FETCH_HEAD
+          test "$(git -C juce-src rev-parse HEAD)" = "$JUCE_COMMIT"
+
+      - name: Configure the instrumented suite
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DVOX_SANITIZE_THREAD=ON \
+            -DVOX_BUILD_SUITE=ON \
+            -DVOX_BUILD_LEGACY=OFF \
+            -DVOX_STRICT_DEPENDENCIES=ON \
+            -DFETCHCONTENT_SOURCE_DIR_JUCE="$PWD/juce-src"
+          grep -n 'ThreadSanitizer' build/CMakeFiles/CMakeConfigureLog.yaml build/CMakeCache.txt || true
+          grep -q 'VOX_SANITIZE_THREAD:BOOL=ON' build/CMakeCache.txt
+
+      - name: Build the synth handoff test
+        run: |
+          set -euo pipefail
+          cmake --build build --target suite_synth_product_tests --parallel
+
+      - name: Prove the binary and the engine object are instrumented
+        run: |
+          set -euo pipefail
+          mkdir -p tsan-out
+          {
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            uname -a
+            clang --version
+            clang++ --version
+            echo "TSAN_OPTIONS=$TSAN_OPTIONS"
+            echo "CMAKE_BUILD_TYPE=RelWithDebInfo"
+            grep -E 'VOX_SANITIZE_THREAD|CMAKE_CXX_COMPILER:|CMAKE_BUILD_TYPE' build/CMakeCache.txt
+          } | tee tsan-out/toolchain.txt
+          bin=$(find build -type f -name suite_synth_product_tests -executable | head -n 1)
+          test -n "$bin"
+          echo "binary: $bin" | tee -a tsan-out/toolchain.txt
+          nm -a "$bin" | tee tsan-out/nm-binary.txt | grep -q '__tsan_init'
+          obj=$(find build -type f -name 'SynthEngine.cpp.o' | head -n 1)
+          test -n "$obj"
+          echo "engine object: $obj" | tee -a tsan-out/toolchain.txt
+          nm -a "$obj" | tee tsan-out/nm-engine.txt | grep -E '__tsan_(read|write)[0-9]*' >/dev/null
+          proc=$(find build -type f -name 'Processor.cpp.o' | head -n 1)
+          test -n "$proc"
+          echo "processor object: $proc" | tee -a tsan-out/toolchain.txt
+          nm -a "$proc" | tee tsan-out/nm-processor.txt | grep -E '__tsan_(read|write)[0-9]*' >/dev/null
+
+      - name: Run the instrumented handoff tests
+        run: |
+          set -euo pipefail
+          # Headless JUCE GUI init. Timing benchmarks are not this test.
+          set +e
+          xvfb-run -a ctest --test-dir build -R '^suite_synth_tsan_concurrency$' --output-on-failure --verbose \
+            | tee tsan-out/ctest.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "ctest exit: $code" | tee tsan-out/exit-code.txt
+          grep -q 'tsan concurrency passed' tsan-out/ctest.txt
+          test "$code" -eq 0
+          if find tsan-out -name 'tsan.*' | grep -q .; then
+            echo "ThreadSanitizer wrote a diagnostic" >&2
+            exit 66
+          fi
+
+      - name: Upload ThreadSanitizer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synth-tsan
+          path: tsan-out
+          if-no-files-found: error

@@ -158,6 +158,12 @@ if(NOT WIN32)
 endif()
 add_test(NAME suite_synth_product_tests COMMAND suite_synth_product_tests)
 add_test(NAME suite_synth_strict_trial_tests COMMAND suite_synth_product_tests --strict-trial-self-test)
+if(VOX_SANITIZE_THREAD)
+  # Handoff tests only. The strict p99 matrix is a different gate and is not
+  # comparable once ThreadSanitizer is linked in.
+  add_test(NAME suite_synth_tsan_concurrency COMMAND suite_synth_product_tests --tsan-concurrency)
+  set_tests_properties(suite_synth_tsan_concurrency PROPERTIES LABELS tsan TIMEOUT 1200)
+endif()
 
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)
