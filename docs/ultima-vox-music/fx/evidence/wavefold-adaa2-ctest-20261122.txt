@@ -1,0 +1,19 @@
+Internal ctest changing into directory: /workspace/work/build-fx-adaa2
+Test project /workspace/work/build-fx-adaa2
+    Start 28: suite_fx_automation_tests
+1/5 Test #28: suite_fx_automation_tests ........   Passed    0.03 sec
+    Start 29: suite_fx_processor_tests
+2/5 Test #29: suite_fx_processor_tests .........   Passed    2.98 sec
+    Start 43: suite_fx_effect_tail_tests
+3/5 Test #43: suite_fx_effect_tail_tests .......   Passed    1.95 sec
+    Start 44: suite_fx_nonlinear_alias_tests
+4/5 Test #44: suite_fx_nonlinear_alias_tests ...   Passed    0.38 sec
+    Start 57: suite_fx_effects_tests
+5/5 Test #57: suite_fx_effects_tests ...........   Passed    0.32 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Label Time Summary:
+suite    =   5.67 sec*proc (5 tests)
+
+Total Test time (real) =   5.67 sec

@@ -1,0 +1,33 @@
+Wavefold near-coincident max error 55.5111450839 max output 55.5111450839
+FAIL: Wavefold ADAA2 near-coincident samples stay bounded and follow the linear reference
+44100 Hz f0  1838.4 amt 0.28: Drive ADAA 0.0000 ( 75.6 dB) | Wavefold point 0.0040 ( 24.0 dB,  -24.9 dB abs) -> Wavefold ADAA2 0.0003 ( 35.0 dB,  -36.7 dB abs)
+44100 Hz f0  1838.4 amt 0.50: Drive ADAA 0.0000 ( 54.9 dB) | Wavefold point 0.0112 ( 19.5 dB,  -22.3 dB abs) -> Wavefold ADAA2 0.0003 ( 35.2 dB,  -39.7 dB abs)
+44100 Hz f0  1838.4 amt 1.00: Drive ADAA 0.0004 ( 34.1 dB) | Wavefold point 0.1233 (  9.1 dB,  -11.4 dB abs) -> Wavefold ADAA2 0.0189 ( 17.2 dB,  -22.8 dB abs)
+44100 Hz f0  4594.6 amt 0.28: Drive ADAA 0.0001 ( 40.3 dB) | Wavefold point 0.1254 (  9.0 dB,   -9.9 dB abs) -> Wavefold ADAA2 0.0244 ( 16.1 dB,  -22.2 dB abs)
+44100 Hz f0  4594.6 amt 0.50: Drive ADAA 0.0008 ( 31.0 dB) | Wavefold point 0.8652 (  0.6 dB,   -3.4 dB abs) -> Wavefold ADAA2 0.3177 (  5.0 dB,  -14.2 dB abs)
+44100 Hz f0  4594.6 amt 1.00: Drive ADAA 0.0109 ( 19.6 dB) | Wavefold point 0.8684 (  0.6 dB,   -2.9 dB abs) -> Wavefold ADAA2 0.0991 ( 10.0 dB,  -18.5 dB abs)
+44100 Hz f0  7350.9 amt 0.28: Drive ADAA 0.0008 ( 30.8 dB) | Wavefold point 0.7380 (  1.3 dB,   -2.2 dB abs) -> Wavefold ADAA2 0.3655 (  4.4 dB,  -16.3 dB abs)
+44100 Hz f0  7350.9 amt 0.50: Drive ADAA 0.0042 ( 23.8 dB) | Wavefold point 1.0000 (  0.0 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.1525 (  8.2 dB,  -16.3 dB abs)
+44100 Hz f0  7350.9 amt 1.00: Drive ADAA 0.0397 ( 14.0 dB) | Wavefold point 0.9041 (  0.4 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.5604 (  2.5 dB,  -21.4 dB abs)
+48000 Hz f0  2001.0 amt 0.28: Drive ADAA 0.0000 ( 75.6 dB) | Wavefold point 0.0040 ( 24.0 dB,  -24.9 dB abs) -> Wavefold ADAA2 0.0003 ( 35.0 dB,  -36.7 dB abs)
+48000 Hz f0  2001.0 amt 0.50: Drive ADAA 0.0000 ( 54.9 dB) | Wavefold point 0.0112 ( 19.5 dB,  -22.3 dB abs) -> Wavefold ADAA2 0.0003 ( 35.2 dB,  -39.7 dB abs)
+48000 Hz f0  2001.0 amt 1.00: Drive ADAA 0.0004 ( 34.1 dB) | Wavefold point 0.1233 (  9.1 dB,  -11.4 dB abs) -> Wavefold ADAA2 0.0189 ( 17.2 dB,  -22.8 dB abs)
+48000 Hz f0  5001.0 amt 0.28: Drive ADAA 0.0001 ( 40.3 dB) | Wavefold point 0.1254 (  9.0 dB,   -9.9 dB abs) -> Wavefold ADAA2 0.0244 ( 16.1 dB,  -22.2 dB abs)
+48000 Hz f0  5001.0 amt 0.50: Drive ADAA 0.0008 ( 31.0 dB) | Wavefold point 0.8652 (  0.6 dB,   -3.4 dB abs) -> Wavefold ADAA2 0.3177 (  5.0 dB,  -14.2 dB abs)
+48000 Hz f0  5001.0 amt 1.00: Drive ADAA 0.0109 ( 19.6 dB) | Wavefold point 0.8684 (  0.6 dB,   -2.9 dB abs) -> Wavefold ADAA2 0.0991 ( 10.0 dB,  -18.5 dB abs)
+48000 Hz f0  8001.0 amt 0.28: Drive ADAA 0.0008 ( 30.8 dB) | Wavefold point 0.7380 (  1.3 dB,   -2.2 dB abs) -> Wavefold ADAA2 0.3655 (  4.4 dB,  -16.3 dB abs)
+48000 Hz f0  8001.0 amt 0.50: Drive ADAA 0.0042 ( 23.8 dB) | Wavefold point 1.0000 (  0.0 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.1525 (  8.2 dB,  -16.3 dB abs)
+48000 Hz f0  8001.0 amt 1.00: Drive ADAA 0.0397 ( 14.0 dB) | Wavefold point 0.9041 (  0.4 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.5604 (  2.5 dB,  -21.4 dB abs)
+96000 Hz f0  4002.0 amt 0.28: Drive ADAA 0.0000 ( 75.6 dB) | Wavefold point 0.0040 ( 24.0 dB,  -24.9 dB abs) -> Wavefold ADAA2 0.0003 ( 35.0 dB,  -36.7 dB abs)
+96000 Hz f0  4002.0 amt 0.50: Drive ADAA 0.0000 ( 54.9 dB) | Wavefold point 0.0112 ( 19.5 dB,  -22.3 dB abs) -> Wavefold ADAA2 0.0003 ( 35.2 dB,  -39.7 dB abs)
+96000 Hz f0  4002.0 amt 1.00: Drive ADAA 0.0004 ( 34.1 dB) | Wavefold point 0.1233 (  9.1 dB,  -11.4 dB abs) -> Wavefold ADAA2 0.0189 ( 17.2 dB,  -22.8 dB abs)
+96000 Hz f0 10002.0 amt 0.28: Drive ADAA 0.0001 ( 40.3 dB) | Wavefold point 0.1254 (  9.0 dB,   -9.9 dB abs) -> Wavefold ADAA2 0.0244 ( 16.1 dB,  -22.2 dB abs)
+96000 Hz f0 10002.0 amt 0.50: Drive ADAA 0.0008 ( 31.0 dB) | Wavefold point 0.8652 (  0.6 dB,   -3.4 dB abs) -> Wavefold ADAA2 0.3177 (  5.0 dB,  -14.2 dB abs)
+96000 Hz f0 10002.0 amt 1.00: Drive ADAA 0.0109 ( 19.6 dB) | Wavefold point 0.8684 (  0.6 dB,   -2.9 dB abs) -> Wavefold ADAA2 0.0991 ( 10.0 dB,  -18.5 dB abs)
+96000 Hz f0 16002.0 amt 0.28: Drive ADAA 0.0008 ( 30.8 dB) | Wavefold point 0.7380 (  1.3 dB,   -2.2 dB abs) -> Wavefold ADAA2 0.3656 (  4.4 dB,  -16.3 dB abs)
+96000 Hz f0 16002.0 amt 0.50: Drive ADAA 0.0042 ( 23.8 dB) | Wavefold point 1.0000 (  0.0 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.1525 (  8.2 dB,  -16.3 dB abs)
+96000 Hz f0 16002.0 amt 1.00: Drive ADAA 0.0397 ( 14.0 dB) | Wavefold point 0.9041 (  0.4 dB,   -2.7 dB abs) -> Wavefold ADAA2 0.5603 (  2.5 dB,  -21.4 dB abs)
+44100 Hz group delay: Wavefold 1.000 samples, Drive 0.198 samples
+48000 Hz group delay: Wavefold 1.000 samples, Drive 0.198 samples
+96000 Hz group delay: Wavefold 1.000 samples, Drive 0.198 samples
+FX nonlinear alias: 1 failure(s)

@@ -155,12 +155,18 @@ struct WavefoldMemory {
     double x1=0,x2=0,f2x1=0,lastDifference=0,gain=-1;
 };
 inline double wavefoldTick(double x,double gain,WavefoldMemory& memory) noexcept {
-    constexpr double tolerance=1e-9;
+    // Absolute 1e-9 thresholds allow catastrophic cancellation in the
+    // second divided difference (including on bounded, nearly constant input).
+    // Below this scale use the continuous mean-value limit; the Wavefold slope
+    // is bounded by gain <= 8 in the supported parameter range.
+    constexpr double relativeTolerance=1e-5;
     // The floor/parity mapping is only defined for finite input. Clearing the
     // history keeps a non-finite sample from poisoning later output, matching
     // the bounded-output behaviour of the previous expression.
     if(!std::isfinite(x)){memory=WavefoldMemory{};return 0.0;}
     const double f2x0=wavefoldSecond(x,gain);
+    const double scale=std::max({1.0,std::abs(x),std::abs(memory.x1),std::abs(memory.x2)});
+    const double tolerance=relativeTolerance*scale;
     // Gain follows the smoothed amount. Recompute the cached antiderivative
     // and the previous divided difference only when the shape actually moved;
     // a steady slot pays a single F2 evaluation per sample.
@@ -178,7 +184,21 @@ inline double wavefoldTick(double x,double gain,WavefoldMemory& memory) noexcept
         :(f2x0-memory.f2x1)/current;
     const double span=x-memory.x2;
     double y;
-    if(std::abs(span)<tolerance) {
+    const double low=std::min({x,memory.x1,memory.x2});
+    const double high=std::max({x,memory.x1,memory.x2});
+    // Within one linear segment the ADAA2 integral is exactly the transfer
+    // at the mean. Use that identity for nearby inputs before subtracting
+    // nearly equal antiderivatives. Adjacent triangle slope changes are at
+    // odd integer values of gain*x; +/-8 are the clamp boundaries.
+    const bool nearby=high-low<10.0*tolerance;
+    const double lowU=low*gain,highU=high*gain;
+    const bool oneSegment=nearby&&((lowU>=8.0||highU<=-8.0)||
+        (lowU>-8.0&&highU<8.0&&std::floor((lowU+1.0)*.5)==std::floor((highU+1.0)*.5)));
+    if(oneSegment||high-low<tolerance) {
+        // Across a corner the mean-value approximation is bounded by
+        // gain*(high-low); within one segment the expression is exact.
+        y=wavefoldValue((x+memory.x1+memory.x2)/3.0,gain);
+    } else if(std::abs(span)<tolerance) {
         // x[n] and x[n-2] coincide: use the mean-value form around x[n-1].
         const double middle=(x+memory.x2)*.5;
         const double delta=middle-memory.x1;
@@ -237,16 +257,13 @@ public:
     // request during a crossfade is coalesced until that transition completes.
     bool set(std::size_t slot,Settings settings) noexcept {
         if(slot>=slots_.size()||!settings.valid())return false;
-        // A silent input feeds an identically silent input into a new nonlinear
-        // stage, so any stale ADAA history is inaudible. Starting from zero
-        // keeps a freshly selected Drive or Wavefold slot deterministic.
+        // Preserve the outgoing Wavefold history for its crossfade. The
+        // incoming slot is value-initialized when the transition actually
+        // starts, so it always receives fresh Wavefold state. Drive's existing
+        // type-change behavior remains unchanged.
         if(slots_[slot].desired.type!=settings.type){
-            auto clear=[](State& state){
-                state.drivePreviousL=state.drivePreviousR=0;
-                state.wavefoldL=detail::WavefoldMemory{};
-                state.wavefoldR=detail::WavefoldMemory{};
-            };
-            clear(slots_[slot].current);clear(slots_[slot].old);
+            auto clearDrive=[](State& state){state.drivePreviousL=state.drivePreviousR=0;};
+            clearDrive(slots_[slot].current);clearDrive(slots_[slot].old);
         }
         slots_[slot].desired=settings;return true;
     }

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #if JUCE_WINDOWS
  #ifndef NOMINMAX
   #define NOMINMAX
@@ -53,9 +54,11 @@ int main(){
     const bool typical=std::getenv("VOX_FX_STRESS_TYPICAL")!=nullptr;
     const bool shapes=std::getenv("VOX_FX_STRESS_AUTHORED")!=nullptr;
     const bool splitTiming=std::getenv("VOX_FX_TIMING_THREAD_CPU")!=nullptr;
+    const bool wavefold=std::getenv("VOX_FX_STRESS_WAVEFOLD")!=nullptr;
     if(splitTiming&&threadMicros()<0){std::fputs("Requested thread CPU clock unavailable\n",stderr);return 2;}
     if(typical)std::puts("Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI");
     if(shapes&&!typical)std::puts("Non-default grain shape, step and held ADSR routes");
+    if(wavefold&&!typical)std::puts("Wavefold stress: four serial slots, wet and amount 1");
     if(splitTiming){
         std::printf("Timing environment: %s; CPU %s; logical CPUs %d; %s\n",
             juce::SystemStats::getOperatingSystemName().toRawUTF8(),juce::SystemStats::getCpuModel().toRawUTF8(),
@@ -79,8 +82,8 @@ int main(){
     for(bool patternOn:{false,true}){
     if(typical&&patternOn)continue;
     std::puts(patternOn?"Max-ratchet synchronized Pattern + random MIDI":"Random MIDI without Pattern");
-    for(double rate:{44100.,48000.,96000.})for(int frames:{64,128,512})for(int voices:{1,4,8}){
-        if(typical&&voices!=1)continue;
+    for(double rate:{44100.,48000.,96000.})for(int frames:{32,64,128,512})for(int voices:{1,4,8}){
+        if((frames==32&&!wavefold)||(typical&&voices!=1))continue;
         auto fx=std::make_unique<FxProcessor>();fx->prepareToPlay(rate,frames);
         NoiseProgram p;p.mode=PlayMode::gate;
         for(auto& l:p.layers){l.enabled=true;l.family=NoiseFamily::granular;l.filters[0]={source::FilterType::lowpass,4800,.71f,2};}
@@ -115,7 +118,13 @@ int main(){
             }
             const auto m=fx->versionedMotion();if(!fx->replaceMotionIfCurrent(m,capture.settings.macroRoutes))return 1;
         }else{
-            for(std::size_t i=0;i<4;++i)fx->setEffect(i,{effects::Type::drive,1,.7f});
+            for(std::size_t i=0;i<4;++i){
+                if(!fx->setEffect(i,{wavefold?effects::Type::wavefold:effects::Type::drive,1,wavefold?1.f:.7f}))return 1;
+                if(wavefold){
+                    fx->effectWetParameter(i).setValueNotifyingHost(1.f);
+                    fx->effectAmountParameter(i).setValueNotifyingHost(1.f);
+                }
+            }
             auto motion=fx->versionedMotion();auto cfg=motion.config;
             for(unsigned i=0;i<64;++i)(void)cfg.put(i,{i%2?mod::Source::macro1:mod::Source::lfo1,
                 i%3==0?mod::Destination::grainRate:i%3==1?mod::Destination::width:mod::Destination::amount1,.005f,.002f});
@@ -128,7 +137,8 @@ int main(){
         }
         juce::AudioBuffer<float> io(2,frames);juce::MidiBuffer midi;midi.ensureSize(4096);
         constexpr int blocks=160;
-        std::array<double,blocks> durations{};unsigned maximumGrains=0;double peak=0,sumL=0,sumR=0;
+        std::array<double,blocks> durations{},cpuDurations{};cpuDurations.fill(-1.0);
+        unsigned maximumGrains=0;double peak=0,sumL=0,sumR=0;
         std::uint32_t rng=0x154311u;bool finite=true,midiConsumed=true;
         unsigned long alloc=0,locks=0;
         const double budget=frames*1e6/rate;
@@ -149,38 +159,42 @@ int main(){
                 else midi.addEvent(juce::MidiMessage::noteOn(channel,note,juce::uint8(36+(rng%90))),when);
             }
             if(!typical&&block==129)fx->panic();
-            if(patternOn)clock.advance(static_cast<std::int64_t>(block)*frames,rate);
-            const double cpuStart=splitTiming?threadMicros():-1;
+            if(patternOn)clock.advance(wavefold&&block==80?0:static_cast<std::int64_t>(block)*frames,rate);
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             voxProbeBegin();
 #endif
 #ifdef VOX_FX_LOCK_PROBE
             voxFxLockBegin();
 #endif
+            // Exclude probe installation (which walks loaded modules on
+            // Windows) from CPU timing. Counter calls remain conservatively
+            // inside allocation/lock probes, outside the wall interval.
+            const double cpuStart=splitTiming?threadMicros():-1;
             const auto now=std::chrono::steady_clock::now();fx->processBlock(io,midi);
             durations[block]=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-now).count();
+            const double cpuEnd=splitTiming?threadMicros():-1;
 #ifdef VOX_FX_LOCK_PROBE
             locks+=voxFxLockEnd();
 #endif
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             alloc+=voxProbeEnd();
 #endif
-            const double cpuEnd=splitTiming?threadMicros():-1;
             const auto telemetry=fx->audioTelemetry();
             if(splitTiming){
                 const auto wall=durations[block];
                 const bool hasCpu=cpuStart>=0&&cpuEnd>=cpuStart;
                 const auto cpu=hasCpu?cpuEnd-cpuStart:-1.;
-                wallMisses+=wall>budget;
+                cpuDurations[block]=cpu;
+                wallMisses+=wall>=budget;
                 if(wall>maxWall){maxWall=wall;cpuAtMaxWall=cpu;}
                 if(hasCpu){
                     ++cpuPairs;
                     maxCpu=std::max(maxCpu,cpu);
                     if(cpu==0)++zeroCpuDeltas;
                     else if(minPositiveCpu==0||cpu<minPositiveCpu)minPositiveCpu=cpu;
-                    cpuMisses+=cpu>budget;wallOnly+=wall>budget&&cpu<=budget;
+                    cpuMisses+=cpu>=budget;wallOnly+=wall>=budget&&cpu<budget;
                 }
-                if(wall>budget||cpu>budget)
+                if(wall>=budget||cpu>=budget)
                     misses[missesRecorded++]={block,wall,cpu,telemetry.events,telemetry.grains};
             }
             midiConsumed &= midi.isEmpty();
@@ -188,12 +202,30 @@ int main(){
             for(int i=0;i<frames;++i){const auto a=io.getSample(0,i),b=io.getSample(1,i);finite &= std::isfinite(a)&&std::isfinite(b);
                 peak=std::max(peak,static_cast<double>(std::max(std::abs(a),std::abs(b))));sumL+=a;sumR+=b;}
         }
+        // Optional raw evidence is written after all callbacks in this cell.
+        if(const char* path=std::getenv("VOX_FX_WAVEFOLD_TIMING_CSV");path&&*path){
+            static bool started=false;
+            std::ofstream out(path,started?std::ios::app:std::ios::trunc);
+            if(!out)++errors;
+            else {
+                if(!started){out<<"rate_hz,frames,initial_voices,pattern,block,wall_us,thread_cpu_us,budget_us,wall_miss,cpu_miss,allocations,locks\n";started=true;}
+                for(int i=0;i<blocks;++i)
+                    out<<rate<<','<<frames<<','<<voices<<','<<patternOn<<','<<i<<','<<durations[i]<<','<<cpuDurations[i]<<','<<budget<<','
+                       <<(durations[i]>=budget)<<','<<(cpuDurations[i]>=0&&cpuDurations[i]>=budget)<<','<<alloc<<','<<locks<<'\n';
+                if(!out)++errors;
+            }
+        }
         const double dc=std::max(std::abs(sumL),std::abs(sumR))/(blocks*frames);
         if(!finite||!midiConsumed||!(peak>.00001&&peak<1&&dc<.01)||alloc||locks||maximumGrains>64||(voices==8&&maximumGrains!=64))++errors;
         std::sort(durations.begin(),durations.end());
         std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu p50 %.2f p95 %.2f p99 %.2f max %.2f us\n",
             rate,frames,voices,peak,dc,maximumGrains,alloc,locks,durations[79],durations[151],durations[158],durations.back());
         if(splitTiming){
+            if(cpuPairs==blocks){
+                std::sort(cpuDurations.begin(),cpuDurations.end());
+                std::printf("  thread p50 %.2f p95 %.2f p99 %.2f max %.2f us\n",
+                    cpuDurations[79],cpuDurations[151],cpuDurations[158],cpuDurations.back());
+            }
             std::printf("  thread max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
                 maxCpu,maxWall,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocks);
             std::printf("  thread CPU valid %d/%d; zero deltas %d; min positive delta %.2f us\n",
@@ -201,7 +233,7 @@ int main(){
             for(std::size_t i=0;i<missesRecorded;++i){
                 const auto& m=misses[i];
                 std::printf("  deadline miss: rate=%.0f frames=%d initialVoices=%d pattern=%s block=%d events=%u grains=%u wall_us=%.3f cpu_us=%.3f budget_us=%.3f wall_miss=%d cpu_miss=%d\n",
-                    rate,frames,voices,patternOn?"on":"off",m.block,m.events,m.grains,m.wall,m.cpu,budget,m.wall>budget,m.cpu>budget);
+                    rate,frames,voices,patternOn?"on":"off",m.block,m.events,m.grains,m.wall,m.cpu,budget,m.wall>=budget,m.cpu>=budget);
             }
             if(cpuPairs!=blocks)++errors;
         }
