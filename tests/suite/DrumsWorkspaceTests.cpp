@@ -865,12 +865,15 @@ void testFreshProductionWorkflows()
                     const auto bytes = DrumsProcessor::renderExport (*captures.back());
                     juce::MemoryInputStream input (bytes, false); juce::MidiFile file;
                     const bool readable = file.readFrom (input);
-                    int notes = 0;
+                    int notes = 0; double lastNoteTick = -1;
                     for (int track = 0; track < file.getNumTracks(); ++track)
                         if (auto* events = file.getTrack (track))
                             for (int event = 0; event < events->getNumEvents(); ++event)
-                                if (events->getEventPointer (event)->message.isNoteOn()) ++notes;
-                    check (readable && notes > 0, "entire-song export is readable and contains MIDI notes");
+                                if (events->getEventPointer (event)->message.isNoteOn())
+                                { ++notes; lastNoteTick = std::max (lastNoteTick, events->getEventPointer (event)->message.getTimeStamp()); }
+                    check (readable && notes > 0 && file.getTimeFormat() > 0
+                           && lastNoteTick >= static_cast<double> (bars - 1) * 4.0 * file.getTimeFormat(),
+                           "entire-song MIDI reaches the final generated 4/4 bar");
                 }
             }
         ui->patternEditor().saveDialogForTesting = {};
