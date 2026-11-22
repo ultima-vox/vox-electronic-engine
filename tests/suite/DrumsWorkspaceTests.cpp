@@ -384,6 +384,9 @@ void test()
                     check (ui->padSelectButton (pad).isVisible() && ui->padHitButton (pad).isVisible(), "single Rack exposes select and audition together");
                     check (ui->padSelectButton (pad).getWidth() > 0 && ui->padHitButton (pad).getHeight() >= 24,
                            "all 16 select/audition targets remain accessible");
+                    if (! list)
+                        check (std::abs (ui->padHitButton (pad).getWidth() - ui->padHitButton (pad).getHeight()) <= 12,
+                               "grid audition surface stays approximately square at every workspace size");
                     check (! ui->padSelectButton (pad).getBounds().intersects (ui->padHitButton (pad).getBounds()),
                            "selection and audition never share a hit target");
                     check (list ? ui->padHitButton (pad).getWidth() > ui->padSelectButton (pad).getWidth()

@@ -95,7 +95,12 @@ void DrumsDockZone::configure (std::optional<layout::Dock> model, Panel panel, H
 }
 void DrumsDockZone::paint (juce::Graphics& g)
 {
-    g.fillAll (c::panel); g.setColour (c::border);
+    const auto bounds = getLocalBounds().toFloat();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff263541), bounds.getTopLeft(),
+                                            juce::Colour (0xff101922), bounds.getBottomRight(), false));
+    g.fillRect (bounds);
+    g.setColour (juce::Colour (0xff405362)); g.drawRect (bounds, 1.0f);
+    g.setColour (c::border);
     for (std::size_t n = 1; n < groups_.size(); ++n) g.fillRect (0, groups_[n]->getY() - 4, getWidth(), 2);
 }
 void DrumsDockZone::resized()

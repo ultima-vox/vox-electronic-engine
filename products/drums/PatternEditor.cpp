@@ -1251,7 +1251,14 @@ void MidiDragButton::mouseUp (const juce::MouseEvent& e)
         onClick();
 }
 
-void PatternEditor::paint (juce::Graphics&) {}
+void PatternEditor::paint (juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1b2934), bounds.getTopLeft(),
+                                            juce::Colour (0xff0e1821), bounds.getBottomRight(), false));
+    g.fillRect (bounds);
+    g.setColour (juce::Colour (0xff344754)); g.drawRect (bounds.reduced (0.5f), 1.0f);
+}
 
 void PatternEditor::resized()
 {

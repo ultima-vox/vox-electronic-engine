@@ -440,7 +440,14 @@ void PadControlSurface::update()
         i.clear.setEnabled (info.reference.has_value()); i.library.setEnabled (info.buffer != nullptr); i.wave.repaint();
     }
 }
-void PadControlSurface::paint (juce::Graphics& g) { g.fillAll (c::panel); }
+void PadControlSurface::paint (juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff25343f), bounds.getTopLeft(),
+                                            juce::Colour (0xff101a23), bounds.getBottomRight(), false));
+    g.fillRect (bounds);
+    g.setColour (juce::Colour (0xff405361)); g.drawRect (bounds.reduced (0.5f), 1.0f);
+}
 void PadControlSurface::resized()
 {
     if (! impl_) return;

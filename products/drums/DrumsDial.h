@@ -56,13 +56,15 @@ public:
         g.setColour (enabled ? c::accent.withAlpha (input.isMouseOverOrDragging() ? 1.0f : 0.75f) : c::textMuted);
         g.strokePath (value, juce::PathStrokeType (2.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         const auto body = r.reduced (radius * 0.23f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff456071), body.getTopLeft(),
-                                                juce::Colour (0xff152832), body.getBottomRight(), false));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff87949b), body.getTopLeft(),
+                                                juce::Colour (0xff182630), body.getBottomRight(), false));
         g.fillEllipse (body);
         g.setColour (c::textSecondary.withAlpha (enabled ? 0.5f : 0.2f)); g.drawEllipse (body, 0.8f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff293f4d), body.getTopLeft(),
-                                                juce::Colour (0xff0b1922), body.getBottomRight(), false));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4e5d68), body.getTopLeft(),
+                                                juce::Colour (0xff131d25), body.getBottomRight(), false));
         g.fillEllipse (body.reduced (2));
+        g.setColour (juce::Colours::white.withAlpha (enabled ? 0.16f : 0.05f));
+        g.drawEllipse (body.reduced (3), 0.8f);
         const auto tip = centre.getPointOnCircumference (radius * 0.61f, angle);
         const auto base = centre.getPointOnCircumference (radius * 0.30f, angle);
         g.setColour (enabled ? c::text : c::textMuted);

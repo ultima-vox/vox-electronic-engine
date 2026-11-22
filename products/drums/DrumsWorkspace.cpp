@@ -97,16 +97,25 @@ public:
         float activity = 0;
         void paintButton (juce::Graphics& g, bool over, bool down) override
         {
-            const auto bounds = getLocalBounds().toFloat().reduced (1);
-            g.setColour (juce::Colours::black.withAlpha (0.6f)); g.fillRoundedRectangle (bounds, 4.0f);
-            const auto rubber = bounds.reduced (2).translated (0, down ? 1.0f : -1.0f);
-            g.setGradientFill (juce::ColourGradient (over ? c::panelRaised.brighter (0.2f) : c::panelRaised,
-                                                    rubber.getTopLeft(), c::control, rubber.getBottomRight(), false));
+            const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+            const bool selected = getToggleState();
+            const float alpha = isEnabled() ? 1.0f : 0.4f;
+            g.setColour (juce::Colours::black.withAlpha (0.65f * alpha));
+            g.fillRoundedRectangle (bounds.translated (0, 2), 5.0f);
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xff56636c).withAlpha (alpha), bounds.getTopLeft(),
+                                                    juce::Colour (0xff101820).withAlpha (alpha), bounds.getBottomRight(), false));
+            g.fillRoundedRectangle (bounds, 5.0f);
+            const auto rubber = bounds.reduced (2.5f).translated (0, down ? 1.0f : 0.0f);
+            g.setGradientFill (juce::ColourGradient (juce::Colour (over ? 0xff495761 : 0xff3d4851).withAlpha (alpha), rubber.getTopLeft(),
+                                                    juce::Colour (down ? 0xff10171d : 0xff151e27).withAlpha (alpha), rubber.getBottomRight(), false));
             g.fillRoundedRectangle (rubber, 4.0f);
-            // Binary activity from the real hit mask; never labelled velocity.
+            g.setColour (juce::Colours::white.withAlpha ((down ? 0.03f : 0.13f) * alpha));
+            g.drawHorizontalLine (juce::roundToInt (rubber.getY() + 1), rubber.getX() + 3, rubber.getRight() - 3);
+            // Activity is the real hit mask, not a simulated level or velocity.
             g.setColour (c::accent.withAlpha (activity * 0.2f)); g.fillRoundedRectangle (rubber, 4.0f);
-            g.setColour (getToggleState() ? c::accent : c::border);
-            g.drawRoundedRectangle (bounds, 4.0f, getToggleState() ? 2.0f : 1.0f);
+            g.setColour (selected ? juce::Colour (0xffff9b5e) : juce::Colour (0xff53606b));
+            g.drawRoundedRectangle (bounds, 5.0f, selected ? 1.6f : 0.8f);
+            if (hasKeyboardFocus (true)) { g.setColour (c::accent); g.drawRoundedRectangle (rubber.reduced (2), 3, 1.5f); }
             g.setColour (c::text);
             g.setFont (vox::ui::typography::valueText());
             g.drawFittedText (getButtonText(), getLocalBounds().reduced (3), juce::Justification::centred, list ? 1 : 3);
@@ -131,8 +140,11 @@ public:
     }
     void paint (juce::Graphics& g) override
     {
-        g.setColour (active_ > 0.1f ? processor_.product().accent.withAlpha (active_ * 0.35f) : c::panel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+        const auto bounds = getLocalBounds().toFloat();
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2b3943), bounds.getTopLeft(),
+                                                juce::Colour (0xff111a22), bounds.getBottomRight(), false));
+        g.fillRoundedRectangle (bounds, 5.0f);
+        if (active_ > 0.1f) { g.setColour (processor_.product().accent.withAlpha (active_ * 0.12f)); g.fillRoundedRectangle (bounds, 5.0f); }
     }
     void resized() override
     {
@@ -537,9 +549,19 @@ public:
         const auto destination = pad.output == 0 ? juce::String ("Main") : "Out " + juce::String (pad.output + 1);
         output_.setText (destination + ((outputs & (1u << pad.output)) != 0 ? "" : ">Main"), juce::dontSendNotification);
     }
+    void paint (juce::Graphics& g) override
+    {
+        const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff293944), bounds.getTopLeft(),
+                                                juce::Colour (0xff111b24), bounds.getBottomRight(), false));
+        g.fillRoundedRectangle (bounds, 5.0f);
+        g.setColour (juce::Colour (0xff405363)); g.drawRoundedRectangle (bounds, 5.0f, 0.8f);
+        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        g.drawHorizontalLine (1, bounds.getX() + 4, bounds.getRight() - 4);
+    }
     void resized() override
     {
-        auto r = getLocalBounds().reduced (2);
+        auto r = getLocalBounds().reduced (3);
         title_.setBounds (r.removeFromTop (18)); output_.setBounds (r.removeFromTop (16));
         auto buttons = r.removeFromBottom (22);
         mute_.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2)); solo_.setBounds (buttons);
@@ -1446,8 +1468,10 @@ void DrumsWorkspace::resized()
     i.list.setBounds (top.removeFromRight (44).reduced (2)); i.top.setBounds (top);
     i.leftDock.setBounds (rectangle (boxes.left)); i.rightDock.setBounds (rectangle (boxes.right));
     i.leftDock.resized(); i.rightDock.resized();
-    i.rackContent.setSize (std::max (0, i.rackViewport.getWidth() - i.rackViewport.getScrollBarThickness()),
-                           std::max (i.rackViewport.getHeight(), i.listView ? 16 * 32 : 4 * 70));
+    const int rackWidth = std::max (0, i.rackViewport.getWidth() - i.rackViewport.getScrollBarThickness());
+    // Keep each audition face approximately square; unused dock space is not stretched into tall strips.
+    const int cellHeight = i.listView ? 32 : std::max (70, rackWidth / 4 + 24);
+    i.rackContent.setSize (rackWidth, 16 / (i.listView ? 1 : 4) * cellHeight);
     const auto rack = i.rackContent.getLocalBounds();
     for (int pad = 0; pad < 16; ++pad)
     {

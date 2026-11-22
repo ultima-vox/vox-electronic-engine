@@ -19,13 +19,17 @@ public:
         if (bounds.isEmpty()) return;
         const float x = bounds.getCentreX();
         const auto well = juce::Rectangle<float> (x - 4, bounds.getY() + 3, 8, juce::jmax (0.0f, bounds.getHeight() - 6));
-        g.setColour (c::border); g.fillRoundedRectangle (well.expanded (1), 3);
-        g.setColour (c::graph); g.fillRoundedRectangle (well, 2);
+        g.setColour (juce::Colour (0xff52616a)); g.fillRoundedRectangle (well.expanded (1), 3);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff050b0f), well.getX(), well.getY(),
+                                                juce::Colour (0xff293842), well.getRight(), well.getY(), false));
+        g.fillRoundedRectangle (well, 2);
+        g.setColour (juce::Colours::black.withAlpha (0.7f));
+        g.drawVerticalLine (juce::roundToInt (x), well.getY() + 1, well.getBottom() - 1);
         const float position = getPositionOfValue (getValue());
         auto cap = juce::Rectangle<float> (24, 14).withCentre ({ x, position });
         g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (cap.translated (1, 2), 2);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff536b7b), cap.getTopLeft(),
-                                                juce::Colour (0xff142936), cap.getBottomRight(), false));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xffadb9bf), cap.getTopLeft(),
+                                                juce::Colour (0xff354651), cap.getBottomRight(), false));
         g.fillRoundedRectangle (cap, 2);
         g.setColour (c::textSecondary.withAlpha (0.5f)); g.drawRoundedRectangle (cap, 2, 0.7f);
         g.setColour (isEnabled() ? c::accent : c::textMuted);
