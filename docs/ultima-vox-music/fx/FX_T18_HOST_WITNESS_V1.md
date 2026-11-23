@@ -50,7 +50,22 @@ Capture mode writes a witness even when evidence is blocked, then exits with
 code 2. It never repairs contention or controls the host to make evidence look
 clean. Missing `-IdentityPolicyPath`, `-LeaseReceiptPath` or
 `-EventLossReceiptPath` therefore produces a retained blocked witness rather
-than a pass.
+than a pass. Preflight attestation failures and WMI/provider/query failures use
+complete safe defaults under PowerShell StrictMode and persist a
+`VOX_FX_T18_HOST_WITNESS_V1` receipt with `evidence_blocked=true`,
+`diagnostic.reason_codes`, an error category and a recommended exit code of 2.
+Blocked receipts intentionally suppress process/event records, names and PIDs;
+they retain only non-identifying observation counters and sanitized diagnostics.
+If receipt serialization itself fails, the script makes a second minimal,
+sanitized persistence attempt and still exits 2.
+
+The checked-in host-witness fixture invokes the real `Capture` entrypoint for
+missing-policy, missing-lease, missing-event-loss and simulated provider/query
+failure cases. Each case requires a persisted blocked JSON, exit code 2, no raw
+PID or command-line fields, and the expected reason code. The fixture captures
+child exit codes plus only a line-count/presence summary of stderr in a private
+temporary directory; raw process inventory is never archived. Cleanup is
+source-checked for service/process control operations.
 
 ## Safe offline fixtures
 

@@ -36,7 +36,8 @@ strict evaluator/conformance fixtures, and a safe host-observation schema.
   control operations and no command-line serialization.
 - `evidence/test-fx-t18-host-witness.ps1` and
   `FX_T18_HOST_WITNESS_V1.md` — offline short-lived-competitor and unknown-PID
-  fixtures and the receipt schema.
+  fixtures plus real-Capture missing-attestation/provider-failure regressions,
+  sanitized blocked receipts and child exit/stderr summaries.
 
 ## Exact sandbox commands and results
 

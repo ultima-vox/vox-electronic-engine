@@ -14,7 +14,8 @@ param(
     [string]$LeaseReceiptPath = '',
     [string]$EventLossReceiptPath = '',
     [switch]$SyntheticCompetitor,
-    [switch]$SyntheticUnknownPid
+    [switch]$SyntheticUnknownPid,
+    [switch]$SimulateProviderFailure
 )
 
 # Safe host-wide observation only. This script never starts, stops, kills,
@@ -35,6 +36,28 @@ function Get-UtcNowText {
     return [DateTime]::UtcNow.ToString('o')
 }
 
+function Get-OptionalProperty([object]$Object, [string]$Name, [object]$Default) {
+    if ($null -eq $Object) { return $Default }
+    if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) {
+        if ($null -ne $Object[$Name]) { return $Object[$Name] }
+        return $Default
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return $Default }
+    return $property.Value
+}
+
+function New-SafeIdentityPolicy([string]$Format, [string]$PolicyId) {
+    return [ordered]@{
+        format = $Format
+        policy_id = $PolicyId
+        owner_approved = $false
+        policy_sha256 = '<missing>'
+        approved_processes = @()
+        denied_process_name_regex = @()
+    }
+}
+
 function New-OfflinePolicy {
     return [ordered]@{
         format = 'VOX_FX_T18_IDENTITY_POLICY_V1'
@@ -51,76 +74,99 @@ function New-OfflinePolicy {
 }
 
 function Get-IdentityPolicy {
-    if ($IdentityPolicyPath -and (Test-Path -LiteralPath $IdentityPolicyPath -PathType Leaf)) {
-        try {
-            return Get-Content -LiteralPath $IdentityPolicyPath -Raw | ConvertFrom-Json
-        } catch {
-            return [ordered]@{ format = 'invalid'; owner_approved = $false; approved_processes = @(); denied_process_name_regex = @() }
-        }
+    if (-not $IdentityPolicyPath) {
+        return New-SafeIdentityPolicy 'missing' '<missing>'
     }
-    return [ordered]@{ format = 'missing'; owner_approved = $false; approved_processes = @(); denied_process_name_regex = @() }
+    try {
+        if (-not (Test-Path -LiteralPath $IdentityPolicyPath -PathType Leaf)) {
+            return New-SafeIdentityPolicy 'missing' '<missing>'
+        }
+        $raw = Get-Content -LiteralPath $IdentityPolicyPath -Raw | ConvertFrom-Json
+        $format = [string](Get-OptionalProperty $raw 'format' 'invalid')
+        $policyId = [string](Get-OptionalProperty $raw 'policy_id' '<missing>')
+        $ownerApproved = [bool](Get-OptionalProperty $raw 'owner_approved' $false)
+        $policyHash = [string](Get-OptionalProperty $raw 'policy_sha256' '<missing>')
+        $approved = @(Get-OptionalProperty $raw 'approved_processes' @())
+        $denied = @(Get-OptionalProperty $raw 'denied_process_name_regex' @())
+        return [ordered]@{
+            format = $format
+            policy_id = $policyId
+            owner_approved = $ownerApproved
+            policy_sha256 = $policyHash
+            approved_processes = $approved
+            denied_process_name_regex = $denied
+        }
+    } catch {
+        return New-SafeIdentityPolicy 'invalid' '<invalid>'
+    }
 }
 
 function Get-VerifiedLeaseReceipt {
-    if (-not $LeaseReceiptPath -or -not (Test-Path -LiteralPath $LeaseReceiptPath -PathType Leaf)) {
-        return @{ verified = $false; error = 'owner-verified lease receipt is missing' }
+    if (-not $LeaseReceiptPath) {
+        return @{ verified = $false; receipt = $null; hash = '<missing>'; error_code = 'LEASE_RECEIPT_MISSING'; error_category = 'ATTESTATION_MISSING'; error = 'owner-verified lease receipt is missing' }
     }
     try {
+        if (-not (Test-Path -LiteralPath $LeaseReceiptPath -PathType Leaf)) {
+            return @{ verified = $false; receipt = $null; hash = '<missing>'; error_code = 'LEASE_RECEIPT_MISSING'; error_category = 'ATTESTATION_MISSING'; error = 'owner-verified lease receipt is missing' }
+        }
         $receipt = Get-Content -LiteralPath $LeaseReceiptPath -Raw | ConvertFrom-Json
         $required = @('format', 'verified', 'host', 'lease_id', 'owner', 'policy_sha256',
                       'valid_from_utc', 'valid_until_utc', 'verification_method')
         foreach ($field in $required) {
-            if ($null -eq $receipt.$field) { throw "lease receipt is missing $field" }
+            if ($null -eq (Get-OptionalProperty $receipt $field $null)) { throw "missing $field" }
         }
         if ($receipt.format -ne 'VOX_FX_T18_HOST_LEASE_RECEIPT_V1' -or
             $receipt.verified -ne $true -or
             $receipt.verification_method -ne 'owner_attested_file') {
-            throw 'lease receipt is not an independently owner-attested file'
+            throw 'not owner-attested'
         }
         if ([string]$receipt.host -ne [string]$env:COMPUTERNAME) {
-            throw 'lease receipt host does not match this host'
+            throw 'host mismatch'
         }
         $validFrom = [DateTime]::Parse([string]$receipt.valid_from_utc).ToUniversalTime()
         $validUntil = [DateTime]::Parse([string]$receipt.valid_until_utc).ToUniversalTime()
         if ($validUntil -le $validFrom -or $validUntil -lt [DateTime]::UtcNow) {
-            throw 'lease receipt is expired or has an invalid interval'
+            throw 'expired or invalid interval'
         }
         if ([string]$receipt.policy_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
-            throw 'lease receipt policy hash is not a SHA-256'
+            throw 'policy hash is not SHA-256'
         }
         $hash = (Get-FileHash -LiteralPath $LeaseReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        return @{ verified = $true; receipt = $receipt; hash = $hash; error = $null }
+        return @{ verified = $true; receipt = $receipt; hash = $hash; error_code = $null; error_category = $null; error = $null }
     } catch {
-        return @{ verified = $false; error = $_.Exception.ToString() }
+        return @{ verified = $false; receipt = $null; hash = '<invalid>'; error_code = 'LEASE_RECEIPT_INVALID'; error_category = 'ATTESTATION_INVALID'; error = 'owner-verified lease receipt is malformed or unverifiable' }
     }
 }
 
 function Get-VerifiedEventLossReceipt([string]$CaptureStartUtc) {
-    if (-not $EventLossReceiptPath -or -not (Test-Path -LiteralPath $EventLossReceiptPath -PathType Leaf)) {
-        return @{ verified = $false; error = 'owner-attested event-loss receipt is missing' }
+    if (-not $EventLossReceiptPath) {
+        return @{ verified = $false; receipt = $null; hash = '<missing>'; error_code = 'EVENT_LOSS_RECEIPT_MISSING'; error_category = 'ATTESTATION_MISSING'; error = 'owner-attested event-loss receipt is missing' }
     }
     try {
+        if (-not (Test-Path -LiteralPath $EventLossReceiptPath -PathType Leaf)) {
+            return @{ verified = $false; receipt = $null; hash = '<missing>'; error_code = 'EVENT_LOSS_RECEIPT_MISSING'; error_category = 'ATTESTATION_MISSING'; error = 'owner-attested event-loss receipt is missing' }
+        }
         $receipt = Get-Content -LiteralPath $EventLossReceiptPath -Raw | ConvertFrom-Json
         foreach ($field in @('format', 'provider', 'coverage_complete', 'lost_events',
                              'loss_accounting', 'coverage_start_utc', 'coverage_end_utc')) {
-            if ($null -eq $receipt.$field) { throw "event-loss receipt is missing $field" }
+            if ($null -eq (Get-OptionalProperty $receipt $field $null)) { throw "missing $field" }
         }
         if ($receipt.format -ne 'VOX_FX_T18_EVENT_LOSS_RECEIPT_V1' -or
             $receipt.provider -ne 'Win32_ProcessStartTrace/Win32_ProcessStopTrace' -or
             $receipt.coverage_complete -ne $true -or $receipt.lost_events -ne 0 -or
             $receipt.loss_accounting -ne 'owner_attested') {
-            throw 'event-loss receipt does not attest complete lossless provider coverage'
+            throw 'incomplete lossless provider coverage'
         }
         $coverageStart = [DateTime]::Parse([string]$receipt.coverage_start_utc).ToUniversalTime()
         $coverageEnd = [DateTime]::Parse([string]$receipt.coverage_end_utc).ToUniversalTime()
         $captureStart = [DateTime]::Parse($CaptureStartUtc).ToUniversalTime()
         if ($coverageEnd -le $coverageStart -or $coverageStart -gt $captureStart) {
-            throw 'event-loss receipt coverage interval is invalid or begins too late'
+            throw 'invalid coverage interval'
         }
         $hash = (Get-FileHash -LiteralPath $EventLossReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        return @{ verified = $true; receipt = $receipt; hash = $hash; error = $null }
+        return @{ verified = $true; receipt = $receipt; hash = $hash; error_code = $null; error_category = $null; error = $null }
     } catch {
-        return @{ verified = $false; error = $_.Exception.ToString() }
+        return @{ verified = $false; receipt = $null; hash = '<invalid>'; error_code = 'EVENT_LOSS_RECEIPT_INVALID'; error_category = 'ATTESTATION_INVALID'; error = 'owner-attested event-loss receipt is malformed or unverifiable' }
     }
 }
 
@@ -178,7 +224,7 @@ function Get-ProcessSnapshot {
             elseif (-not $approved) { $unrecognized += "$name#$pidValue" }
         }
     } catch {
-        return @{ error = $_.Exception.ToString(); processes = @(); unrecognized = @(); unknown = @() }
+        return @{ error = 'PROCESS_QUERY_FAILURE'; processes = @(); unrecognized = @(); unknown = @() }
     }
     return @{ error = $null; processes = @($items); unrecognized = @($unrecognized); unknown = @($unknown) }
 }
@@ -322,40 +368,233 @@ if ($Mode -eq 'OfflineSynthetic') {
     exit 0
 }
 
-$script:IdentityPolicy = Get-IdentityPolicy
+function New-BlockedWitness(
+    [string]$CaptureStartUtc,
+    [string]$CaptureEndUtc,
+    [string[]]$ReasonCodes,
+    [string]$ErrorCategory,
+    [string[]]$ErrorSummaries,
+    [string]$IdentityPolicyHash,
+    [object]$LeaseStatus,
+    [object]$LossStatus,
+    [bool]$EventTraceAvailable,
+    [string]$EventTraceError,
+    [int]$SampleCount,
+    [int]$EventCount,
+    [int]$QueryErrorCount,
+    [int]$GapCount
+) {
+    $policy = $script:IdentityPolicy
+    $policyId = [string](Get-OptionalProperty $policy 'policy_id' '<missing>')
+    $policyFormat = [string](Get-OptionalProperty $policy 'format' 'invalid')
+    $leaseVerified = [bool](Get-OptionalProperty $LeaseStatus 'verified' $false)
+    $lossVerified = [bool](Get-OptionalProperty $LossStatus 'verified' $false)
+    $safeReasons = @($ReasonCodes | Where-Object { $_ } | Select-Object -Unique)
+    $safeSummaries = @($ErrorSummaries | Where-Object { $_ } | Select-Object -Unique)
+    if ($safeReasons.Count -eq 0) { $safeReasons = @('CAPTURE_BLOCKED') }
+    if ($safeSummaries.Count -eq 0) { $safeSummaries = @('host witness capture was blocked') }
+    return [ordered]@{
+        format = 'VOX_FX_T18_HOST_WITNESS_V1'
+        schema_version = 1
+        mode = 'capture'
+        host_observation_mode = 'process_snapshot_and_event_trace'
+        sample_interval_ms = 1000
+        pre_seconds = $PreSeconds
+        during_seconds = $DuringSeconds
+        post_seconds = $PostSeconds
+        capture_start_utc = if ($CaptureStartUtc) { $CaptureStartUtc } else { Get-UtcNowText }
+        capture_end_utc = if ($CaptureEndUtc) { $CaptureEndUtc } else { Get-UtcNowText }
+        monitor_gaps = @()
+        identity_policy = [ordered]@{
+            format = $policyFormat
+            policy_id = $policyId
+            owner_approved = $false
+            policy_sha256 = $IdentityPolicyHash
+            # Blocked receipts intentionally suppress the raw approved PID list.
+            approved_processes = @()
+            denied_process_name_regex = @()
+        }
+        identity_policy_path = '<redacted>'
+        identity_policy_sha256 = $IdentityPolicyHash
+        event_trace = [ordered]@{
+            provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'
+            available = [bool]$EventTraceAvailable
+            coverage_complete = $false
+            lost_events = $null
+            loss_accounting = 'unknown'
+            loss_receipt_path = '<redacted>'
+            loss_receipt_sha256 = '<redacted>'
+            error = $EventTraceError
+            loss_receipt_error = [string](Get-OptionalProperty $LossStatus 'error' 'event-loss attestation unavailable')
+        }
+        runner_lease = [ordered]@{
+            recognized = $leaseVerified
+            owner_verified = $leaseVerified
+            owner = if ($leaseVerified) { '<owner-attested>' } else { '<missing>' }
+            host = [string]$env:COMPUTERNAME
+            lease_id = if ($leaseVerified) { '<redacted>' } else { '<missing>' }
+            verification_receipt_path = '<redacted>'
+            verification_receipt_sha256 = '<redacted>'
+            token = '<redacted>'
+        }
+        runner_service_identities = @()
+        # Do not persist raw process/event records, names or PIDs in a blocked receipt.
+        samples = @()
+        process_events = @()
+        unrecognized_competitors = @()
+        unknown_pids = @()
+        inventory_summary = [ordered]@{
+            samples_observed = $SampleCount
+            events_observed = $EventCount
+            query_error_count = $QueryErrorCount
+            monitor_gap_count = $GapCount
+            raw_inventory_suppressed = $true
+        }
+        evidence_blocked = $true
+        query_errors = @($safeReasons)
+        diagnostic = [ordered]@{
+            error_category = $ErrorCategory
+            reason_codes = @($safeReasons)
+            error_summaries = @($safeSummaries)
+            sanitized = $true
+            recommended_exit_code = 2
+        }
+        fixture_notes = 'Capture was blocked; raw process inventory and event identities were suppressed.'
+    }
+}
+
+$script:IdentityPolicy = New-SafeIdentityPolicy 'missing' '<missing>'
 $identityPolicyHash = '<missing>'
 $identityPolicyValid = $false
-if ($IdentityPolicyPath -and (Test-Path -LiteralPath $IdentityPolicyPath -PathType Leaf)) {
+$policyReasonCodes = @()
+$policySummaries = @()
+$script:IdentityPolicy = Get-IdentityPolicy
+
+if ($IdentityPolicyPath) {
     try {
-        $identityPolicyHash = (Get-FileHash -LiteralPath $IdentityPolicyPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        $identityPolicyValid = ($script:IdentityPolicy.format -eq 'VOX_FX_T18_IDENTITY_POLICY_V1' -and
-            $script:IdentityPolicy.owner_approved -eq $true -and
-            [string]$script:IdentityPolicy.policy_id -ne '' -and
-            @($script:IdentityPolicy.approved_processes).Count -gt 0)
-    } catch { $identityPolicyValid = $false }
+        if (Test-Path -LiteralPath $IdentityPolicyPath -PathType Leaf) {
+            $identityPolicyHash = (Get-FileHash -LiteralPath $IdentityPolicyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    } catch {
+        $policyReasonCodes += 'IDENTITY_POLICY_HASH_FAILURE'
+        $policySummaries += 'identity policy hash could not be computed'
+    }
 }
-$verifiedLease = Get-VerifiedLeaseReceipt
-$startSource = "VOX-FX-T18-ProcessStart-$PID"
-$stopSource = "VOX-FX-T18-ProcessStop-$PID"
-$subscriptions = @(); $events = @(); $samples = @(); $gaps = @(); $queryErrors = @()
-$unrecognized = @(); $unknownPids = @()
+$policyFormat = [string](Get-OptionalProperty $script:IdentityPolicy 'format' 'invalid')
+$policyId = [string](Get-OptionalProperty $script:IdentityPolicy 'policy_id' '<missing>')
+$policyOwnerApproved = [bool](Get-OptionalProperty $script:IdentityPolicy 'owner_approved' $false)
+$approvedEntries = @(Get-OptionalProperty $script:IdentityPolicy 'approved_processes' @())
+$deniedEntries = @(Get-OptionalProperty $script:IdentityPolicy 'denied_process_name_regex' @())
+$policyEntriesValid = $approvedEntries.Count -gt 0
+foreach ($approved in $approvedEntries) {
+    $approvedPid = Get-OptionalProperty $approved 'pid' $null
+    $approvedName = [string](Get-OptionalProperty $approved 'process_name' '')
+    if ($null -eq $approvedPid -or $approvedName -eq '') { $policyEntriesValid = $false }
+}
+$identityPolicyValid = ($policyFormat -eq 'VOX_FX_T18_IDENTITY_POLICY_V1' -and
+    $policyOwnerApproved -and $policyId -ne '' -and $policyId -ne '<missing>' -and
+    $policyEntriesValid -and $deniedEntries.Count -ge 0 -and $identityPolicyHash -match '^[0-9a-fA-F]{64}$')
+if (-not $identityPolicyValid) {
+    if ($policyFormat -eq 'missing') {
+        $policyReasonCodes += 'IDENTITY_POLICY_MISSING'
+        $policySummaries += 'owner-approved identity policy is missing'
+    } else {
+        $policyReasonCodes += 'IDENTITY_POLICY_INVALID'
+        $policySummaries += 'owner-approved identity policy is malformed or unverifiable'
+    }
+}
+
 $captureStart = Get-UtcNowText
-try {
+$verifiedLease = Get-VerifiedLeaseReceipt
+$lossReceipt = Get-VerifiedEventLossReceipt $captureStart
+$preflightCodes = @($policyReasonCodes)
+$preflightSummaries = @($policySummaries)
+if (-not [bool](Get-OptionalProperty $verifiedLease 'verified' $false)) {
+    $preflightCodes += [string](Get-OptionalProperty $verifiedLease 'error_code' 'LEASE_RECEIPT_INVALID')
+    $preflightSummaries += [string](Get-OptionalProperty $verifiedLease 'error' 'owner-verified lease receipt is unavailable')
+}
+if (-not [bool](Get-OptionalProperty $lossReceipt 'verified' $false)) {
+    $preflightCodes += [string](Get-OptionalProperty $lossReceipt 'error_code' 'EVENT_LOSS_RECEIPT_INVALID')
+    $preflightSummaries += [string](Get-OptionalProperty $lossReceipt 'error' 'event-loss attestation is unavailable')
+}
+$leaseReceiptForCheck = Get-OptionalProperty $verifiedLease 'receipt' $null
+$leasePolicyHash = [string](Get-OptionalProperty $leaseReceiptForCheck 'policy_sha256' '')
+if ([bool](Get-OptionalProperty $verifiedLease 'verified' $false) -and
+    $identityPolicyHash -match '^[0-9a-fA-F]{64}$' -and
+    $leasePolicyHash -ine $identityPolicyHash) {
+    $preflightCodes += 'LEASE_POLICY_MISMATCH'
+    $preflightSummaries += 'owner lease is bound to a different process policy'
+}
+$preflightCodes = @($preflightCodes | Where-Object { $_ } | Select-Object -Unique)
+$preflightSummaries = @($preflightSummaries | Where-Object { $_ } | Select-Object -Unique)
+if ($preflightCodes.Count -gt 0) {
+    $blocked = New-BlockedWitness $captureStart (Get-UtcNowText) $preflightCodes 'ATTESTATION_BLOCKED' `
+        $preflightSummaries $identityPolicyHash $verifiedLease $lossReceipt $false `
+        'capture did not start because required owner attestations were unavailable' 0 0 0 0
     try {
+        Write-WitnessJson $blocked $OutputPath
+    } catch {
+        try {
+            $minimal = [ordered]@{
+                format = 'VOX_FX_T18_HOST_WITNESS_V1'; schema_version = 1; mode = 'capture'
+                evidence_blocked = $true; capture_start_utc = $captureStart; capture_end_utc = Get-UtcNowText
+                reason_codes = @($preflightCodes); error_category = 'RECEIPT_WRITE_FAILURE'
+                diagnostic = [ordered]@{ error_category = 'RECEIPT_WRITE_FAILURE'; reason_codes = @('RECEIPT_WRITE_FAILURE'); sanitized = $true; recommended_exit_code = 2 }
+                samples = @(); process_events = @(); unrecognized_competitors = @(); unknown_pids = @()
+            }
+            Write-WitnessJson $minimal $OutputPath
+        } catch {
+            Write-Error 'Unable to persist the blocked host witness receipt'
+        }
+    }
+    exit 2
+}
+
+$eventTraceAvailable = $false
+$eventTraceError = $null
+$subscriptions = @()
+$events = @()
+$samples = @()
+$gaps = @()
+$unrecognized = @()
+$unknownPids = @()
+$captureFailureCodes = @()
+$captureFailureSummaries = @()
+$startSource = $null
+$stopSource = $null
+$script:events = @()
+$script:samples = @()
+$script:gaps = @()
+$script:unrecognized = @()
+$script:unknownPids = @()
+$script:queryErrors = @()
+$script:queryErrorCodes = @()
+
+try {
+    if ($SimulateProviderFailure) { throw 'simulated provider/query failure' }
+    try {
+        $startSource = "VOX-FX-T18-ProcessStart-$PID"
+        $stopSource = "VOX-FX-T18-ProcessStop-$PID"
         $subscriptions += Register-CimIndicationEvent -Namespace 'root/cimv2' `
             -Query 'SELECT * FROM Win32_ProcessStartTrace' -SourceIdentifier $startSource
         $subscriptions += Register-CimIndicationEvent -Namespace 'root/cimv2' `
             -Query 'SELECT * FROM Win32_ProcessStopTrace' -SourceIdentifier $stopSource
-        $eventTraceAvailable = $true; $eventTraceError = $null
+        $eventTraceAvailable = $true
     } catch {
-        $eventTraceAvailable = $false; $eventTraceError = $_.Exception.ToString()
+        $eventTraceAvailable = $false
+        $eventTraceError = 'process event provider registration failed'
+        $captureFailureCodes += 'EVENT_PROVIDER_UNAVAILABLE'
+        $captureFailureSummaries += 'process event provider could not be registered'
     }
 
     function Add-PhaseSamples([string]$Phase, [int]$Seconds) {
         for ($index = 0; $index -le $Seconds; $index++) {
             $before = [DateTime]::UtcNow
             $snapshot = Get-ProcessSnapshot
-            if ($snapshot.error) { $script:queryErrors += $snapshot.error }
+            if ($snapshot.error) {
+                $script:queryErrors += [string]$snapshot.error
+                $script:queryErrorCodes += 'PROCESS_QUERY_FAILURE'
+            }
             $script:samples += [ordered]@{
                 phase = $Phase; timestamp_utc = Get-UtcNowText
                 processes = @($snapshot.processes); total_processes = @($snapshot.processes).Count
@@ -378,38 +617,80 @@ try {
     Add-PhaseSamples 'pre' $PreSeconds
     Add-PhaseSamples 'during' $DuringSeconds
     Add-PhaseSamples 'post' $PostSeconds
+} catch {
+    $captureFailureCodes += 'CAPTURE_EXCEPTION'
+    $captureFailureSummaries += 'host process observation failed before a complete witness was collected'
 } finally {
     foreach ($subscription in $subscriptions) {
         Unregister-Event -SubscriptionId $subscription.SubscriptionId -ErrorAction SilentlyContinue
     }
-    Unregister-Event -SourceIdentifier $startSource -ErrorAction SilentlyContinue
-    Unregister-Event -SourceIdentifier $stopSource -ErrorAction SilentlyContinue
+    if ($startSource) { Unregister-Event -SourceIdentifier $startSource -ErrorAction SilentlyContinue }
+    if ($stopSource) { Unregister-Event -SourceIdentifier $stopSource -ErrorAction SilentlyContinue }
 }
 
 $captureEnd = Get-UtcNowText
+$samples = @($script:samples)
+$events = @($script:events)
+$gaps = @($script:gaps)
+$unrecognized = @($script:unrecognized)
+$unknownPids = @($script:unknownPids)
+$verifiedLease = Get-VerifiedLeaseReceipt
 $lossReceipt = Get-VerifiedEventLossReceipt $captureStart
-$lossAttested = [bool]$lossReceipt.verified
+$lossAttested = [bool](Get-OptionalProperty $lossReceipt 'verified' $false)
 if ($lossAttested) {
     try {
         $lossEnd = [DateTime]::Parse([string]$lossReceipt.receipt.coverage_end_utc).ToUniversalTime()
         if ($lossEnd -lt [DateTime]::Parse($captureEnd).ToUniversalTime()) {
             $lossAttested = $false
+            $lossReceipt.error_code = 'EVENT_LOSS_COVERAGE_SHORT'
             $lossReceipt.error = 'event-loss receipt ends before capture completion'
         }
     } catch {
         $lossAttested = $false
-        $lossReceipt.error = $_.Exception.ToString()
+        $lossReceipt.error_code = 'EVENT_LOSS_RECEIPT_INVALID'
+        $lossReceipt.error = 'event-loss receipt completion time is invalid'
     }
 }
-$lostEvents = if ($lossAttested) { 0 } else { $null }
-$leaseVerified = [bool]$verifiedLease.verified
-$leaseReceipt = if ($leaseVerified) { $verifiedLease.receipt } else { $null }
-$runnerOwner = if ($leaseReceipt) { [string]$leaseReceipt.owner } else { '<missing>' }
-$leaseId = if ($leaseReceipt) { [string]$leaseReceipt.lease_id } else { '<missing>' }
-$eventTraceComplete = $eventTraceAvailable -and $queryErrors.Count -eq 0 -and $lossAttested
+$eventTraceComplete = $eventTraceAvailable -and $script:queryErrors.Count -eq 0 -and $lossAttested
 $events = @($events | Sort-Object timestamp_utc)
 $unrecognized = @($unrecognized | Sort-Object -Unique)
 $unknownPids = @($unknownPids | Sort-Object -Unique)
+$reasonCodes = @($captureFailureCodes + $script:queryErrorCodes)
+$reasonSummaries = @($captureFailureSummaries)
+if (-not [bool](Get-OptionalProperty $verifiedLease 'verified' $false)) {
+    $reasonCodes += [string](Get-OptionalProperty $verifiedLease 'error_code' 'LEASE_RECEIPT_INVALID')
+    $reasonSummaries += [string](Get-OptionalProperty $verifiedLease 'error' 'owner-verified lease receipt became unavailable')
+}
+$leaseReceiptAfter = Get-OptionalProperty $verifiedLease 'receipt' $null
+$leasePolicyHashAfter = [string](Get-OptionalProperty $leaseReceiptAfter 'policy_sha256' '')
+if ([bool](Get-OptionalProperty $verifiedLease 'verified' $false) -and
+    $identityPolicyHash -match '^[0-9a-fA-F]{64}$' -and
+    $leasePolicyHashAfter -ine $identityPolicyHash) {
+    $reasonCodes += 'LEASE_POLICY_MISMATCH'
+    $reasonSummaries += 'owner lease is bound to a different process policy'
+}
+if (-not $eventTraceComplete) {
+    if (-not $eventTraceAvailable) { $reasonCodes += 'EVENT_PROVIDER_UNAVAILABLE'; $reasonSummaries += 'process event provider was unavailable' }
+    if ($script:queryErrors.Count -gt 0) { $reasonCodes += 'PROCESS_QUERY_FAILURE'; $reasonSummaries += 'one or more process queries failed' }
+    if (-not $lossAttested) { $reasonCodes += [string](Get-OptionalProperty $lossReceipt 'error_code' 'EVENT_LOSS_RECEIPT_INVALID'); $reasonSummaries += [string](Get-OptionalProperty $lossReceipt 'error' 'event-loss attestation is unavailable') }
+}
+if ($gaps.Count -gt 0) { $reasonCodes += 'MONITOR_GAP'; $reasonSummaries += 'host observation sampling had a gap' }
+if ($unknownPids.Count -gt 0) { $reasonCodes += 'UNKNOWN_PROCESS_IDENTITY'; $reasonSummaries += 'one or more process identities were unknown' }
+if ($unrecognized.Count -gt 0) { $reasonCodes += 'UNRECOGNIZED_PROCESS_IDENTITY'; $reasonSummaries += 'one or more observed process identities were not approved' }
+$reasonCodes = @($reasonCodes | Where-Object { $_ } | Select-Object -Unique)
+$reasonSummaries = @($reasonSummaries | Where-Object { $_ } | Select-Object -Unique)
+if ($reasonCodes.Count -gt 0) {
+    $blocked = New-BlockedWitness $captureStart $captureEnd $reasonCodes 'CAPTURE_BLOCKED' `
+        $reasonSummaries $identityPolicyHash $verifiedLease $lossReceipt $eventTraceAvailable `
+        $eventTraceError $samples.Count $events.Count $script:queryErrors.Count $gaps.Count
+    try {
+        Write-WitnessJson $blocked $OutputPath
+    } catch {
+        Write-Error 'Unable to persist the blocked host witness receipt'
+    }
+    exit 2
+}
+
 $runnerServiceIdentities = @()
 if ($env:RUNNER_NAME) { $runnerServiceIdentities += "runner:$($env:RUNNER_NAME)" }
 if ($env:GITHUB_JOB) { $runnerServiceIdentities += "job:$($env:GITHUB_JOB)" }
@@ -421,39 +702,46 @@ $witnessPolicy = [ordered]@{
     approved_processes = @($script:IdentityPolicy.approved_processes)
     denied_process_name_regex = @($script:IdentityPolicy.denied_process_name_regex)
 }
+$leaseReceipt = $verifiedLease.receipt
 $witness = [ordered]@{
     format = 'VOX_FX_T18_HOST_WITNESS_V1'; schema_version = 1; mode = 'capture'
     host_observation_mode = 'process_snapshot_and_event_trace'; sample_interval_ms = 1000
     pre_seconds = $PreSeconds; during_seconds = $DuringSeconds; post_seconds = $PostSeconds
     capture_start_utc = $captureStart; capture_end_utc = $captureEnd
     monitor_gaps = @($gaps); identity_policy = $witnessPolicy
-    identity_policy_path = if ($IdentityPolicyPath) { [IO.Path]::GetFullPath($IdentityPolicyPath) } else { '<missing>' }
+    identity_policy_path = [IO.Path]::GetFullPath($IdentityPolicyPath)
     identity_policy_sha256 = $identityPolicyHash
     event_trace = [ordered]@{
         provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'
         available = $eventTraceAvailable; coverage_complete = $eventTraceComplete
-        lost_events = $lostEvents; loss_accounting = if ($lossAttested) { 'owner_attested' } else { 'unknown' }
-        loss_receipt_path = if ($EventLossReceiptPath) { [IO.Path]::GetFullPath($EventLossReceiptPath) } else { '<missing>' }
-        loss_receipt_sha256 = if ($lossAttested) { $lossReceipt.hash } else { '<missing>' }
+        lost_events = 0; loss_accounting = 'owner_attested'
+        loss_receipt_path = [IO.Path]::GetFullPath($EventLossReceiptPath)
+        loss_receipt_sha256 = $lossReceipt.hash
         error = $eventTraceError
         loss_receipt_error = $lossReceipt.error
     }
     runner_lease = [ordered]@{
-        recognized = [bool]$leaseVerified; owner_verified = [bool]$leaseVerified
-        owner = $runnerOwner; host = $env:COMPUTERNAME; lease_id = $leaseId
-        verification_receipt_path = if ($LeaseReceiptPath) { [IO.Path]::GetFullPath($LeaseReceiptPath) } else { '<missing>' }
-        verification_receipt_sha256 = if ($leaseVerified) { $verifiedLease.hash } else { '<missing>' }
+        recognized = $true; owner_verified = $true
+        owner = [string]$leaseReceipt.owner; host = $env:COMPUTERNAME
+        lease_id = [string]$leaseReceipt.lease_id
+        verification_receipt_path = [IO.Path]::GetFullPath($LeaseReceiptPath)
+        verification_receipt_sha256 = $verifiedLease.hash
         token = '<redacted>'
     }
     runner_service_identities = @($runnerServiceIdentities | Sort-Object -Unique)
     samples = @($samples); process_events = @($events)
     unrecognized_competitors = @($unrecognized); unknown_pids = @($unknownPids)
-    evidence_blocked = (-not $eventTraceComplete) -or $gaps.Count -gt 0 -or
-        $unknownPids.Count -gt 0 -or $unrecognized.Count -gt 0 -or
-        (-not $leaseVerified) -or (-not $identityPolicyValid)
-    query_errors = @($queryErrors)
+    evidence_blocked = $false
+    query_errors = @($script:queryErrors)
     fixture_notes = 'Observation only; no service or process control operation is performed.'
 }
-Write-WitnessJson $witness $OutputPath
-if ($witness.evidence_blocked) { exit 2 }
+try {
+    Write-WitnessJson $witness $OutputPath
+} catch {
+    $blocked = New-BlockedWitness $captureStart $captureEnd @('RECEIPT_WRITE_FAILURE') 'RECEIPT_WRITE_FAILURE' `
+        @('host witness receipt serialization failed') $identityPolicyHash $verifiedLease $lossReceipt $eventTraceAvailable `
+        $eventTraceError $samples.Count $events.Count $script:queryErrors.Count $gaps.Count
+    try { Write-WitnessJson $blocked $OutputPath } catch { Write-Error 'Unable to persist the host witness receipt' }
+    exit 2
+}
 exit 0
