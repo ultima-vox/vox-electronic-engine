@@ -269,7 +269,7 @@ def make_provenance_fixture(text: str, directory: Path, head: str, tree: str) ->
     }), encoding="utf-8")
     junit.write_text('<testsuites><testsuite tests="1"><testcase name="suite_fx_runtime_stress_tests" /></testsuite></testsuites>',
                      encoding="utf-8")
-    ctest_raw.write_text("Test project fixture\\n1/1 Test #1: suite_fx_runtime_stress_tests ... Passed\\n",
+    ctest_raw.write_text("Test project fixture\n1/1 Test #1: suite_fx_runtime_stress_tests ... Passed\n",
                          encoding="utf-8")
     outcome.write_text(json.dumps({
         "format": "VOX_FX_T18_POST_TEST_OUTCOME_V1", "scenario": "routed",

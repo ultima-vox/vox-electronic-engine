@@ -76,8 +76,9 @@ function Test-CpuOnlyFailure([string]$Report, [string]$CpuStatus) {
     return $true
 }
 
-function Test-FxT18NativeFailureText([string]$Text) {
+function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber) {
     $marker = 'CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution'
+    $canonicalListingCount = 0
     foreach ($line in ($Text -split '\r?\n')) {
         $normalized = [regex]::Replace($line.Trim(), '^\s*\d+\s*:\s*', '')
         if ($normalized -notmatch '(?i)\b(?:assert(?:ion)?|fail(?:ed|ure|ing)?|error|regression|unexpected|native[ _-]?(?:failure|reason))\b') {
@@ -85,11 +86,27 @@ function Test-FxT18NativeFailureText([string]$Text) {
         }
         if ($normalized -ceq $marker -or
             $normalized -match '(?i)^FX JUCE runtime stress:\s*1\s+failing cases$' -or
-            ($normalized -match '(?i)(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:.*(?:\*{3})?(?:Failed|Passed|Timeout)\b' -and
-             $normalized -match '(?i)suite_fx_runtime_stress_tests') -or
             $normalized -match '(?i)^\d+% tests passed, \d+ tests failed out of \d+$' -or
-            $normalized -match '(?i)^The following tests FAILED:?$') {
+            $normalized -match '(?i)^The following tests FAILED:?$' -or
+            $normalized -match '(?i)^ctest(?:\.exe)?\s*:\s*Errors while running CTest$') {
             continue
+        }
+        if ($normalized -match '(?i)^(?:\d+\s*/\s*\d+\s+)?Test\s+#(\d+):.*(?:\*{3})?(?:Failed|Passed|Timeout)\b') {
+            $resultNumber = $Matches[1]
+            if ($normalized -match '(?i)suite_fx_runtime_stress_tests' -and
+                $resultNumber -eq $SelectedTestNumber) {
+                continue
+            }
+            return $true
+        }
+        if ($normalized -match '(?i)^(\d+)\s*-\s*(\S+)\s+\(Failed\)(?:\s+suite)?\s*$')
+            if ($Matches[1] -eq $SelectedTestNumber -and
+                $Matches[2] -ceq 'suite_fx_runtime_stress_tests') {
+                $canonicalListingCount++
+                if ($canonicalListingCount -gt 1) { return $true }
+                continue
+            }
+            return $true
         }
         return $true
     }
@@ -116,6 +133,10 @@ function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
         if ($resultLines.Count -ne 1 -or
             $resultLines[0] -notmatch '(?i)suite_fx_runtime_stress_tests' -or
             $resultLines[0] -notmatch '(?i)(?:\*{3})?Failed\b') { return $false }
+        if ($resultLines[0] -notmatch '(?i)(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#(\d+):') {
+            return $false
+        }
+        $selectedTestNumber = $Matches[1]
 
         $summaryCount = 0
         foreach ($line in ($raw -split '\r?\n')) {
@@ -125,7 +146,7 @@ function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
                 if ([int]$Matches[1] -ne 1) { return $false }
             }
         }
-        if ($summaryCount -eq 0 -or (Test-FxT18NativeFailureText $raw)) { return $false }
+        if ($summaryCount -eq 0 -or (Test-FxT18NativeFailureText $raw $selectedTestNumber)) { return $false }
 
         $junit = [xml](Get-Content -LiteralPath $JunitPath -Raw)
         $testcases = @($junit.SelectNodes('//testcase'))
@@ -155,7 +176,7 @@ function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
                 if ([int]$Matches[1] -ne 1) { return $false }
             }
         }
-        if ($junitSummaryCount -eq 0 -or (Test-FxT18NativeFailureText $systemOutText)) { return $false }
+        if ($junitSummaryCount -eq 0 -or (Test-FxT18NativeFailureText $systemOutText $selectedTestNumber)) { return $false }
         return $true
     } catch { return $false }
 }

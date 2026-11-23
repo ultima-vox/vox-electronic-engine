@@ -104,9 +104,10 @@ try {
     }
 
     # Realistic coarse-clock red CTest fixture modeled on the owner-authorized
-    # #78 capture: CTest -VV prefixes the marker once and echoes it once, while
-    # JUnit uses message="Failed" and keeps the marker in system-out. The
-    # runner may classify it CPU-only only when TSV and native evidence agree.
+    # #78 capture: CTest -VV prefixes the marker once and echoes it once, then
+    # emits the canonical failed-test listing and stderr wrapper. JUnit uses
+    # message="Failed" and keeps the marker in system-out. The runner may
+    # classify it CPU-only only when TSV and native evidence agree.
     $cpuReport = Join-Path $tempRoot 'cpu-only.tsv'
     $cpuRaw = Join-Path $tempRoot 'cpu-only.ctest.txt'
     $cpuJunit = Join-Path $tempRoot 'cpu-only.junit.xml'
@@ -114,7 +115,7 @@ try {
         (@('case', 'r44100_f64_v1_poff', 'routed', '44100', '64', '1', 'off', '160', '1451', '0', '0', '0', '160', '159', '15625', '0', '1', '0') -join "`t")
         (@('functional', 'r44100_f64_v1_poff', '1', '1', '1', '1', '1', '1', '1', 'NONE') -join "`t")
     ) | Set-Content -LiteralPath $cpuReport -Encoding UTF8
-    "Test project fixture`r`n78: CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution`r`nFX JUCE runtime stress: 1 failing cases`r`n1/1 Test #78: suite_fx_runtime_stress_tests ....***Failed 1.94 sec`r`nCPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution" |
+    "Test project fixture`r`n78: CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution`r`nFX JUCE runtime stress: 1 failing cases`r`n1/1 Test #78: suite_fx_runtime_stress_tests ....***Failed 1.94 sec`r`nCPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution`r`nThe following tests FAILED:`r`n     78 - suite_fx_runtime_stress_tests (Failed)            suite`r`nctest.exe : Errors while running CTest" |
         Set-Content -LiteralPath $cpuRaw -Encoding UTF8
     '<testsuite tests="1" failures="1"><testcase name="suite_fx_runtime_stress_tests"><failure message="Failed" /><system-out>CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution
 FX JUCE runtime stress: 1 failing cases</system-out></testcase></testsuite>' |
@@ -146,6 +147,13 @@ FX_T18_NATIVE_FAILURE_REASON: unexpected DSP regression</system-out></testcase><
         Set-Content -LiteralPath $mixedJunit -Encoding UTF8
     if (Test-CpuOnlyNativeEvidence $mixedRaw $mixedJunit) {
         throw 'Unknown mixed native failure reason was incorrectly accepted as CPU-only'
+    }
+    $otherTestRaw = Join-Path $tempRoot 'other-test.ctest.txt'
+    ((Get-Content -LiteralPath $cpuRaw -Raw) +
+        "     79 - unrelated_stress_test (Failed)            suite`r`n") |
+        Set-Content -LiteralPath $otherTestRaw -Encoding UTF8
+    if (Test-CpuOnlyNativeEvidence $otherTestRaw $cpuJunit) {
+        throw 'Unrelated CTest failed-test listing was incorrectly accepted as CPU-only'
     }
 
     if ($CtestBuildDir) {

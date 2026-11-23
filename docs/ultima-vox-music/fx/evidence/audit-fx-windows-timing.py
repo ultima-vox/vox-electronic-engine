@@ -243,6 +243,12 @@ CPU_TERMINAL_SUMMARY_RE = re.compile(
 NATIVE_FAILURE_WORD_RE = re.compile(
     r"\b(?:assert(?:ion)?|fail(?:ed|ure|ing)?|error|regression|unexpected|"
     r"native[ _-]?(?:failure|reason))\b", re.IGNORECASE)
+CTEST_RESULT_RE = re.compile(
+    r"^(?:\d+\s*/\s*\d+\s+)?Test\s+#(?P<number>\d+):[^\r\n]*"
+    r"(?:\*{3})?(?P<status>Failed|Passed|Timeout)\b", re.IGNORECASE)
+CTEST_FAILED_LISTING_RE = re.compile(
+    r"^(?P<number>\d+)\s*-\s*(?P<name>[^\s]+)\s+\(Failed\)(?:\s+suite)?\s*$",
+    re.IGNORECASE)
 TEST_IDENTITY = "suite_fx_runtime_stress_tests"
 
 
@@ -266,16 +272,20 @@ def _terminal_summary_counts(text: str) -> list[int]:
     return counts
 
 
-def _has_unallowlisted_native_failure_text(text: str, test_identity: str) -> bool:
+def _has_unallowlisted_native_failure_text(
+    text: str, test_identity: str, selected_test_number: str,
+) -> bool:
     """Reject failure-like native text outside the C++/CTest allowlist.
 
     The C++ stress binary's terminal summary is the only expected native
-    failure summary for a CPU-only run. CTest contributes the selected result
-    line and its standard aggregate/failure headings. Anything else that
-    claims an assertion, failure, error, regression or native reason is an
-    independently observed mixed failure, even if it uses a new label that is
-    not yet present in the functional reason-code list.
+    failure summary for a CPU-only run. CTest contributes the selected result,
+    exactly one matching failed-test listing, standard aggregate headings and
+    its non-specific shell error wrapper. Anything else that claims an
+    assertion, failure, error, regression or native reason is an independently
+    observed mixed failure, even if it uses a new label that is not yet present
+    in the functional reason-code list.
     """
+    canonical_listing_count = 0
     for line in text.splitlines():
         normalized = _native_line_without_ctest_prefix(line)
         if not NATIVE_FAILURE_WORD_RE.search(normalized):
@@ -284,15 +294,26 @@ def _has_unallowlisted_native_failure_text(text: str, test_identity: str) -> boo
             continue
         if CPU_TERMINAL_SUMMARY_RE.fullmatch(normalized):
             continue
-        if re.search(
-                rf"(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:.*"
-                rf"(?:\*{{3}})?(?:Failed|Passed|Timeout)\b",
-                normalized, re.IGNORECASE) and test_identity in normalized:
+        result_match = CTEST_RESULT_RE.match(normalized)
+        if (result_match and test_identity in normalized
+                and result_match.group("number") == str(selected_test_number)):
             continue
+        listing_match = CTEST_FAILED_LISTING_RE.fullmatch(normalized)
+        if listing_match:
+            if (listing_match.group("number") == str(selected_test_number)
+                    and listing_match.group("name") == test_identity):
+                canonical_listing_count += 1
+                if canonical_listing_count > 1:
+                    return True
+                continue
+            return True
         if re.fullmatch(r"\d+% tests passed, \d+ tests failed out of \d+", normalized,
                         re.IGNORECASE):
             continue
         if re.fullmatch(r"The following tests FAILED:?", normalized, re.IGNORECASE):
+            continue
+        if re.fullmatch(r"ctest(?:\.exe)?\s*:\s*Errors while running CTest",
+                        normalized, re.IGNORECASE):
             continue
         return True
     return False
@@ -326,20 +347,15 @@ def reconcile_native_ctest(
     if not raw.strip() or test_identity not in raw:
         raise ValueError(f"native CTest output {raw_path} lacks the selected test identity")
     all_result_lines = [line for line in raw.splitlines()
-                        if re.search(r"(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:.*"
-                                     r"(?:\*{3})?(?:Failed|Passed|Timeout)\b",
-                                     line, re.IGNORECASE)]
+                        if CTEST_RESULT_RE.match(_native_line_without_ctest_prefix(line))]
     if len(all_result_lines) != 1 or test_identity not in all_result_lines[0]:
         raise ValueError(f"native CTest output {raw_path} has unrelated or ambiguous test results")
     result_line = all_result_lines[0]
-    if re.search(r"Timeout\b", result_line, re.IGNORECASE):
-        raw_result = "timeout"
-    elif re.search(r"(?:\*{3})?Failed\b", result_line, re.IGNORECASE):
-        raw_result = "failed"
-    elif re.search(r"Passed\b", result_line, re.IGNORECASE):
-        raw_result = "passed"
-    else:
+    result_match = CTEST_RESULT_RE.match(_native_line_without_ctest_prefix(result_line))
+    if result_match is None:
         raise ValueError(f"native CTest output {raw_path} has an unknown selected result")
+    selected_test_number = result_match.group("number")
+    raw_result = result_match.group("status").lower()
     if ctest_exit_code == 0 and raw_result != "passed":
         raise ValueError("native CTest exit code is green but captured result is not Passed")
     if ctest_exit_code != 0 and raw_result == "passed":
@@ -381,8 +397,10 @@ def reconcile_native_ctest(
         and junit_failure_text in {"", "Failed"} and junit_marker_count == 1
         and summary_counts and all(count == 1 for count in summary_counts)
         and junit_summary_counts and all(count == 1 for count in junit_summary_counts)
-        and not _has_unallowlisted_native_failure_text(raw, test_identity)
-        and not _has_unallowlisted_native_failure_text(system_out, test_identity))
+        and not _has_unallowlisted_native_failure_text(
+            raw, test_identity, selected_test_number)
+        and not _has_unallowlisted_native_failure_text(
+            system_out, test_identity, selected_test_number))
     native_failure = ctest_exit_code != 0 or failures > 0 or errors > 0 \
         or skipped > 0 or junit_timeout
     return {
