@@ -105,7 +105,11 @@ runner receipt, artifact manifest and audit attempt. The final exit is 1 if
 any profile is a performance, test, timeout, infrastructure or artifact
 failure. A CTest `--show-only=json-v1` inventory is saved for every profile;
 the EXE path and SHA-256 used by the report must match the Release executable
-selected by that inventory.
+selected by that inventory. Inventory, raw CTest/JUnit and auditor captures use
+explicit UTF-8 output in Windows PowerShell 5.1; Python reads the BOM-safe JSON.
+The timeout classifier accepts only CTest `***Timeout` or a structured JUnit
+Timeout result, not the ordinary `Test timeout computed to be: 180` verbose line,
+and each scenario preserves the native CTest exit code alongside that outcome.
 
 The checked-in orchestrator invokes the auditor with `--root`, `--executable`,
 `--runner-receipt`, `--artifact-manifest`, `--expected-head` and
@@ -117,12 +121,15 @@ a valid report with deadline/allocation/lock/wait failures is classified as
 performance failure. All three profiles still run after any earlier category.
 
 Before the owner-authorized Windows smoke, run the Windows PowerShell 5.1
-parser/runtime check. It only parses the orchestrator and round-trips the JSON
-and SHA-256 primitives; it does not build or measure:
+parser/runtime check. It parses the orchestrator/helper, tests positive and
+negative timeout fixtures, and when given `build-t18` captures a real CTest
+inventory with explicit UTF-8 encoding and sends it through the Python auditor.
+It does not build or measure:
 
 ```powershell
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-  -File docs\ultima-vox-music\fx\evidence\test-fx-t18-powershell.ps1
+  -File docs\ultima-vox-music\fx\evidence\test-fx-t18-powershell.ps1 `
+  -Python python -CtestBuildDir build-t18
 ```
 
 For a local schema-only fixture, the auditor may be invoked with both

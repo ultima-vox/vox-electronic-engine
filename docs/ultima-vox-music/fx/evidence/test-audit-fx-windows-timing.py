@@ -11,6 +11,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
@@ -91,6 +92,37 @@ def report_text() -> str:
     return "\n".join(lines) + "\n"
 
 
+def test_ctest_inventory_audit() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        directory_path = Path(directory)
+        executable = directory_path / "suite_fx_runtime_stress_tests.exe"
+        executable.write_bytes(b"fixture executable")
+        inventory = directory_path / "inventory.json"
+        inventory.write_text(json.dumps({
+            "version": {"major": 1, "minor": 0},
+            "tests": [{"name": "suite_fx_runtime_stress_tests",
+                       "command": [str(executable), "--fixture"]}],
+        }), encoding="utf-8-sig")
+        result = AUDIT.audit_ctest_inventory(inventory, executable)
+        assert result["tests"] == 1
+        cli = subprocess.run(
+            [sys.executable, str(HERE / "audit-fx-windows-timing.py"),
+             "--check-ctest-inventory", str(inventory),
+             "--inventory-executable", str(executable)],
+            check=True, capture_output=True, text=True,
+        )
+        assert json.loads(cli.stdout)["format"] == "VOX_FX_CTEST_INVENTORY_SMOKE_V1"
+        inventory.write_text(json.dumps({"tests": [{
+            "name": "suite_fx_runtime_stress_tests", "command": ["not-an-executable"]
+        }]}), encoding="utf-8")
+        try:
+            AUDIT.audit_ctest_inventory(inventory)
+        except ValueError as error:
+            assert "no executable command" in str(error)
+        else:
+            raise AssertionError("malformed CTest inventory unexpectedly passed")
+
+
 def expect_failure(text: str, needle: str) -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "fixture.tsv"
@@ -114,6 +146,7 @@ def make_provenance_fixture(text: str, directory: Path, head: str, tree: str) ->
     configure_log = directory / "configure.txt"
     build_log = directory / "build.txt"
     inventory = directory / "inventory.json"
+    junit = directory / "results.xml"
     juce_dir = directory / ("juce-" + head[:8])
     juce_dir.mkdir()
     subprocess.run(["git", "init", "-q", str(juce_dir)], check=True)
@@ -127,6 +160,8 @@ def make_provenance_fixture(text: str, directory: Path, head: str, tree: str) ->
     inventory.write_text(json.dumps({
         "tests": [{"name": "suite_fx_runtime_stress_tests", "command": [str(executable)]}]
     }), encoding="utf-8")
+    junit.write_text('<testsuites><testsuite tests="1"><testcase name="suite_fx_runtime_stress_tests" /></testsuite></testsuites>',
+                     encoding="utf-8")
     text = text.replace("meta\tsource_sha\t" + "a" * 40, "meta\tsource_sha\t" + head)
     text = text.replace("meta\tsource_head\t" + "a" * 40, "meta\tsource_head\t" + head)
     text = text.replace("meta\tsource_tree\t" + "b" * 40, "meta\tsource_tree\t" + tree)
@@ -153,6 +188,7 @@ def make_provenance_fixture(text: str, directory: Path, head: str, tree: str) ->
         "build_log_path": str(build_log),
         "ctest_timeout_seconds": 180,
         "ctest_inventory_path": str(inventory),
+        "ctest_junit_path": str(junit),
         "ctest_selected_executable": str(executable),
         "juce_dir": str(juce_dir),
         "juce_commit": juce_commit,
@@ -163,7 +199,7 @@ def make_provenance_fixture(text: str, directory: Path, head: str, tree: str) ->
                         "meta\trunner_receipt_sha256\t" + receipt_sha)
     report.write_text(text, encoding="utf-8")
     files = []
-    for artifact in (report, receipt, executable, configure_log, build_log, inventory):
+    for artifact in (report, receipt, executable, configure_log, build_log, inventory, junit):
         files.append({"path": str(artifact), "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()})
     manifest.write_text(json.dumps({"format": "VOX_FX_T18_ARTIFACTS_V1", "files": files}), encoding="utf-8")
     return report, receipt, executable, manifest
@@ -182,6 +218,7 @@ def expect_provenance_failure(paths: tuple[Path, Path, Path, Path], root: Path, 
 
 
 def main() -> int:
+    test_ctest_inventory_audit()
     valid = report_text()
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "valid.tsv"

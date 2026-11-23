@@ -24,6 +24,7 @@ import math
 from pathlib import Path
 import re
 import subprocess
+import xml.etree.ElementTree as ET
 from typing import Any
 
 RATES = (44100, 48000, 96000)
@@ -159,6 +160,32 @@ def _verify_manifest(path: Path, report: Path, receipt: Path, executable: Path) 
     return {"path": str(path), "files": len(files), "hashes": verified}
 
 
+def audit_ctest_inventory(path: Path, executable: Path | None = None) -> dict[str, Any]:
+    """Check the UTF-8/BOM CTest inventory without requiring a timing report."""
+    try:
+        inventory = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid CTest inventory {path}: {error}") from error
+    if not isinstance(inventory, dict) or not isinstance(inventory.get("tests"), list):
+        raise ValueError(f"{path}: CTest inventory has no tests list")
+    tests = [item for item in inventory["tests"]
+             if isinstance(item, dict) and item.get("name") == "suite_fx_runtime_stress_tests"]
+    if len(tests) != 1:
+        raise ValueError(f"{path}: expected exactly one FX stress test")
+    command = tests[0].get("command")
+    if not isinstance(command, list):
+        raise ValueError(f"{path}: FX stress test has no command list")
+    commands = [str(value) for value in command]
+    executable_commands = [value for value in commands if value.lower().endswith(".exe")]
+    if not executable_commands:
+        raise ValueError(f"{path}: inventory has no executable command")
+    if executable is not None and not any(_same_path(value, executable)
+                                          for value in executable_commands):
+        raise ValueError(f"{path}: inventory executable does not match {executable}")
+    return {"format": "VOX_FX_CTEST_INVENTORY_SMOKE_V1", "path": str(path),
+            "tests": len(tests), "executable": executable_commands[0]}
+
+
 def _verify_provenance(
     metadata: dict[str, str], report: Path, root: Path | None,
     executable_arg: Path | None, receipt_arg: Path | None,
@@ -191,7 +218,7 @@ def _verify_provenance(
                   "source_tracked_clean_before_build", "source_tracked_clean_after_build",
                   "build_config", "configure_exit_code", "build_exit_code",
                   "build_fresh_clean_first", "configure_log_path", "build_log_path",
-                  "ctest_timeout_seconds", "ctest_inventory_path",
+                  "ctest_timeout_seconds", "ctest_inventory_path", "ctest_junit_path",
                   "ctest_selected_executable", "juce_dir", "juce_commit",
                   "juce_tracked_clean"):
         if field not in receipt:
@@ -213,8 +240,8 @@ def _verify_provenance(
     if receipt["build_config"] != "Release" \
             or int(receipt["configure_exit_code"]) != 0 \
             or int(receipt["build_exit_code"]) != 0 \
-            or int(receipt["ctest_timeout_seconds"]) <= 0:
-        raise ValueError("runner receipt does not attest a successful bounded Release build")
+            or int(receipt["ctest_timeout_seconds"]) != 180:
+        raise ValueError("runner receipt does not attest a successful fresh Release build with the 180-second CTest bound")
     if receipt["juce_tracked_clean"] is not True \
             or not re.fullmatch(r"[0-9a-fA-F]{40}", str(receipt["juce_commit"])):
         raise ValueError("runner receipt does not attest a clean pinned JUCE checkout")
@@ -242,22 +269,17 @@ def _verify_provenance(
     if receipt_sha.casefold() != metadata["runner_receipt_sha256"].casefold():
         raise ValueError("report runner receipt SHA-256 does not match the receipt file")
     manifest_result = _verify_manifest(manifest_arg, report, receipt_arg, executable)
-    for field in ("configure_log_path", "build_log_path", "ctest_inventory_path"):
+    for field in ("configure_log_path", "build_log_path", "ctest_inventory_path", "ctest_junit_path"):
         artifact = Path(receipt[field])
         if not artifact.is_file() or not _manifest_contains(manifest_result["hashes"], artifact):
             raise ValueError(f"runner receipt artifact is missing or unhashed: {field}")
+    try:
+        ET.parse(receipt["ctest_junit_path"])
+    except (OSError, ET.ParseError) as error:
+        raise ValueError(f"invalid CTest JUnit artifact in runner receipt: {error}") from error
     if not _same_path(receipt["ctest_selected_executable"], executable):
         raise ValueError("runner receipt CTest executable does not match the hashed executable")
-    try:
-        inventory = json.loads(Path(receipt["ctest_inventory_path"]).read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"invalid CTest inventory in runner receipt: {error}") from error
-    tests = [item for item in inventory.get("tests", []) if item.get("name") == "suite_fx_runtime_stress_tests"]
-    if len(tests) != 1:
-        raise ValueError("CTest inventory does not contain exactly one FX stress test")
-    commands = [str(command) for command in tests[0].get("command", [])]
-    if not any(_same_path(command, executable) for command in commands if command.lower().endswith(".exe")):
-        raise ValueError("CTest inventory command does not match the hashed executable")
+    audit_ctest_inventory(Path(receipt["ctest_inventory_path"]), executable)
     return {
         "verified": True,
         "git_head": actual_head,
@@ -523,7 +545,10 @@ def audit(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("report", type=Path)
+    parser.add_argument("report", type=Path, nargs="?")
+    parser.add_argument("--check-ctest-inventory", type=Path,
+                        help="audit only a UTF-8/BOM CTest JSON inventory")
+    parser.add_argument("--inventory-executable", type=Path)
     parser.add_argument("--root", type=Path)
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--runner-receipt", type=Path)
@@ -536,13 +561,18 @@ def main() -> int:
                         help="skip independent files/git checks; never use for qualification")
     args = parser.parse_args()
     try:
-        result = audit(
-            args.report, require_windows=not args.allow_nonwindows, root=args.root,
-            executable=args.executable, runner_receipt=args.runner_receipt,
-            artifact_manifest=args.artifact_manifest, expected_head=args.expected_head,
-            expected_tree=args.expected_tree,
-            allow_unverified_provenance=args.allow_unverified_provenance,
-        )
+        if args.check_ctest_inventory is not None:
+            result = audit_ctest_inventory(args.check_ctest_inventory, args.inventory_executable)
+        else:
+            if args.report is None:
+                parser.error('a report is required unless --check-ctest-inventory is used')
+            result = audit(
+                args.report, require_windows=not args.allow_nonwindows, root=args.root,
+                executable=args.executable, runner_receipt=args.runner_receipt,
+                artifact_manifest=args.artifact_manifest, expected_head=args.expected_head,
+                expected_tree=args.expected_tree,
+                allow_unverified_provenance=args.allow_unverified_provenance,
+            )
     except (OSError, ValueError) as error:
         parser.exit(2, f"FX Windows timing audit: {error}\n")
     print(json.dumps(result, indent=2, sort_keys=True))

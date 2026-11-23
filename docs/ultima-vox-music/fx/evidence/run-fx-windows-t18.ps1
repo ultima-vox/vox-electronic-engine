@@ -25,6 +25,7 @@ $build = Join-Path $repo $BuildDir
 $out = Join-Path $repo $OutputDir
 $outputRelative = $OutputDir.Replace('\', '/').TrimStart('./').TrimEnd('/') + '/'
 $testName = 'suite_fx_runtime_stress_tests'
+. (Join-Path $PSScriptRoot 'FxT18CtestHelpers.ps1')
 
 function Get-GitValue([string]$Directory, [string[]]$Arguments) {
     $value = & git -C $Directory @Arguments
@@ -120,11 +121,12 @@ function Invoke-FxScenario([string]$Scenario) {
     $report = Join-Path $out "$Scenario.tsv"
     $ctestRaw = Join-Path $out "$Scenario.ctest.txt"
     $inventoryPath = Join-Path $out "$Scenario.inventory.json"
+    $junitPath = Join-Path $out "$Scenario.junit.xml"
     $auditRaw = Join-Path $out "$Scenario.audit.txt"
     $auditJson = Join-Path $out "$Scenario.audit.json"
     $receiptPath = Join-Path $out "$Scenario.runner.json"
     $manifestPath = Join-Path $out "$Scenario.artifacts.json"
-    foreach ($path in @($report, $ctestRaw, $inventoryPath, $auditRaw, $auditJson, $receiptPath, $manifestPath)) {
+    foreach ($path in @($report, $ctestRaw, $inventoryPath, $junitPath, $auditRaw, $auditJson, $receiptPath, $manifestPath)) {
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     }
 
@@ -144,7 +146,7 @@ function Invoke-FxScenario([string]$Scenario) {
 
     if ($buildSucceeded) {
         try {
-            & ctest --test-dir $build -C Release -R "^$testName$" '--show-only=json-v1' *> $inventoryPath
+            & ctest --test-dir $build -C Release -R "^$testName$" '--show-only=json-v1' 2>&1 | Out-File -LiteralPath $inventoryPath -Encoding UTF8 -Width 4096
             $inventoryExit = $LASTEXITCODE
         } catch {
             $exceptionText = $_.Exception.ToString()
@@ -187,6 +189,7 @@ function Invoke-FxScenario([string]$Scenario) {
         build_log_path = [IO.Path]::GetFullPath($buildLog)
         ctest_timeout_seconds = $TimeoutSeconds
         ctest_inventory_path = [IO.Path]::GetFullPath($inventoryPath)
+        ctest_junit_path = [IO.Path]::GetFullPath($junitPath)
         ctest_selected_executable = $selectedExeValue
         executable_path = $selectedExeValue
         executable_sha256 = $selectedExeHashValue
@@ -214,7 +217,7 @@ function Invoke-FxScenario([string]$Scenario) {
 
     if ($buildSucceeded) {
         try {
-            & ctest --test-dir $build -C Release -R "^$testName$" '--no-tests=error' '--timeout' $TimeoutSeconds '--output-on-failure' '-VV' *> $ctestRaw
+            & ctest --test-dir $build -C Release -R "^$testName$" '--no-tests=error' '--timeout' $TimeoutSeconds '--output-on-failure' '--output-junit' $junitPath '-VV' 2>&1 | Out-File -LiteralPath $ctestRaw -Encoding UTF8 -Width 4096
             $ctestExit = $LASTEXITCODE
         } catch {
             $exceptionText = $_.Exception.ToString()
@@ -226,12 +229,18 @@ function Invoke-FxScenario([string]$Scenario) {
     if (-not (Test-Path -LiteralPath $ctestRaw -PathType Leaf)) {
         Write-CommandFailure $ctestRaw 'CTest did not produce a capture.'
     }
-    $ctestTimedOut = Select-String -LiteralPath $ctestRaw -Pattern '(?i)\btimeout\b|timed out' -Quiet
+    $junitAvailable = Test-Path -LiteralPath $junitPath -PathType Leaf
+    if (-not $junitAvailable) {
+        Write-CommandFailure $junitPath 'CTest did not produce JUnit output.'
+    }
+    $ctestTimedOut = Test-FxT18CtestTimeout -RawLog $ctestRaw -JunitPath $junitPath
+    $ctestOutcome = Get-FxT18CtestOutcome -ExitCode $ctestExit -TimedOut $ctestTimedOut
 
     $entries = @(
         Get-ArtifactEntry $report
         Get-ArtifactEntry $ctestRaw
         Get-ArtifactEntry $inventoryPath
+        Get-ArtifactEntry $junitPath
         Get-ArtifactEntry $receiptPath
         Get-ArtifactEntry $selectedExe
         Get-ArtifactEntry $configureLog
@@ -245,7 +254,7 @@ function Invoke-FxScenario([string]$Scenario) {
 
     if ((Test-Path -LiteralPath $report -PathType Leaf) -and $selectedExe -and $buildSucceeded) {
         try {
-            & $Python $auditScript $report '--root' $repo '--executable' $selectedExe '--runner-receipt' $receiptPath '--artifact-manifest' $manifestPath '--expected-head' $sourceHead '--expected-tree' $sourceTree *> $auditRaw
+            & $Python $auditScript $report '--root' $repo '--executable' $selectedExe '--runner-receipt' $receiptPath '--artifact-manifest' $manifestPath '--expected-head' $sourceHead '--expected-tree' $sourceTree 2>&1 | Out-File -LiteralPath $auditRaw -Encoding UTF8 -Width 4096
             $auditExit = $LASTEXITCODE
         } catch {
             $exceptionText = $_.Exception.ToString()
@@ -265,7 +274,7 @@ function Invoke-FxScenario([string]$Scenario) {
     $classification = 'diagnostic_pass'
     if ($configureExit -ne 0 -or $buildExit -ne 0) {
         $classification = 'infrastructure_failure'
-    } elseif ($ctestTimedOut) {
+    } elseif ($ctestOutcome -eq 'timeout_failure') {
         $classification = 'timeout_failure'
     } elseif ($auditExit -ne 0) {
         if (Test-Path -LiteralPath $report -PathType Leaf) {
@@ -275,9 +284,11 @@ function Invoke-FxScenario([string]$Scenario) {
         }
     } elseif ($inventoryExit -ne 0) {
         $classification = 'infrastructure_failure'
+    } elseif (-not $junitAvailable) {
+        $classification = 'infrastructure_failure'
     } elseif ([bool]$auditObject.performance_failure) {
         $classification = 'performance_failure'
-    } elseif ($ctestExit -ne 0) {
+    } elseif ($ctestOutcome -eq 'test_failure') {
         $classification = 'test_failure'
     }
 
@@ -287,6 +298,7 @@ function Invoke-FxScenario([string]$Scenario) {
         Get-ArtifactEntry $report
         Get-ArtifactEntry $ctestRaw
         Get-ArtifactEntry $inventoryPath
+        Get-ArtifactEntry $junitPath
         Get-ArtifactEntry $receiptPath
         Get-ArtifactEntry $selectedExe
         Get-ArtifactEntry $configureLog
@@ -311,10 +323,12 @@ function Invoke-FxScenario([string]$Scenario) {
         ctest_exit_code = $ctestExit
         audit_exit_code = $auditExit
         timeout_seconds = $TimeoutSeconds
+        ctest_outcome = $ctestOutcome
         timed_out = $ctestTimedOut
         classification = $classification
         report = $report
         inventory = $inventoryPath
+        junit = $junitPath
         ctest_raw = $ctestRaw
         audit_raw = $auditRaw
         audit_json = $auditJsonValue
@@ -356,14 +370,14 @@ if (Test-Path -LiteralPath $build) { Remove-Item -LiteralPath $build -Recurse -F
 $configureExit = 125
 $buildExit = 125
 try {
-    & cmake -S $repo -B $build -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$JuceDir" *> $configureLog
+    & cmake -S $repo -B $build -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$JuceDir" 2>&1 | Out-File -LiteralPath $configureLog -Encoding UTF8 -Width 4096
     $configureExit = $LASTEXITCODE
 } catch {
     Write-CommandFailure $configureLog $_.Exception.ToString()
 }
 if ($configureExit -eq 0) {
     try {
-        & cmake --build $build --config Release --clean-first --target $testName --parallel *> $buildLog
+        & cmake --build $build --config Release --clean-first --target $testName --parallel 2>&1 | Out-File -LiteralPath $buildLog -Encoding UTF8 -Width 4096
         $buildExit = $LASTEXITCODE
     } catch {
         Write-CommandFailure $buildLog $_.Exception.ToString()
