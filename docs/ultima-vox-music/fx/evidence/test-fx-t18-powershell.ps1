@@ -13,6 +13,10 @@ param(
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 may not bind $PSScriptRoot during param-default evaluation.
 # Resolve the default only after the param block, when script scope is active.
+# The explicit guard protects the direct powershell.exe -File entrypoint.
+if ([string]::IsNullOrEmpty($PSScriptRoot)) {
+    throw 'PowerShell -File entrypoint did not provide PSScriptRoot'
+}
 if ([string]::IsNullOrWhiteSpace($OrchestratorPath)) {
     $OrchestratorPath = Join-Path -Path $PSScriptRoot -ChildPath 'run-fx-windows-t18.ps1'
 }
