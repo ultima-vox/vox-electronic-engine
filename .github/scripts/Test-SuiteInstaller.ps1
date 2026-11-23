@@ -1,7 +1,9 @@
 # Install / upgrade / uninstall smoke for the ULTIMA VOX MUSIC suite installer.
-# The default NSIS directory is the standard VST3 location (checked in the
-# generated script). The process under test uses NSIS /D= so this runner's
-# Common Files\VST3 directory is not modified.
+# The generated NSIS script's default directory is the standard VST3 location.
+# This process never installs there: NSIS /D= points at a directory created for
+# this job under RUNNER_TEMP. Nothing under C:\ or a pre-existing install is
+# deleted. Registry cleanup is only our own Uninstall.exe, and only after a
+# preflight proved the uninstall key was absent.
 param(
   [Parameter(Mandatory)] [string] $Installer,
   [Parameter(Mandatory)] [string] $BuildDir,
@@ -28,8 +30,12 @@ $products = @(
   @{ Name = 'VOX FX'; Id = 'com.ultimavox.vox-fx'; Cid = 'ABCDEF019182FAEB556C567856784658' },
   @{ Name = 'VOX Trance Synthesis'; Id = 'com.ultimavox.vox-trance-synthesis'; Cid = 'ABCDEF019182FAEB556C567856785453' }
 )
-$stage = 'C:\vox-suite-smoke'
-$neighbor = 'C:\vox-suite-smoke-neighbor'
+$stage = $null
+$neighbor = $null
+$ownedRoot = $null
+$ownedToken = [guid]::NewGuid().ToString('n')
+$installedByThisTest = $false
+$cleanupFailed = $false
 $regViews = @(
   'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ULTIMA VOX MUSIC',
   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\ULTIMA VOX MUSIC',
@@ -40,7 +46,37 @@ function Uninstall-Keys {
   @($regViews | Where-Object { Test-Path $_ })
 }
 
+function Test-UnderOwnedRoot([string] $dir) {
+  if (-not $dir -or -not $ownedRoot) { return $false }
+  $full = [IO.Path]::GetFullPath($dir).TrimEnd('\')
+  $root = [IO.Path]::GetFullPath($ownedRoot).TrimEnd('\')
+  if ($full.Equals($root, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  return $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-Owned([string] $dir) {
+  if (-not (Test-UnderOwnedRoot $dir)) { return $false }
+  $marker = Join-Path $ownedRoot 'VOX-SUITE-SMOKE-OWNED.txt'
+  if (-not (Test-Path -LiteralPath $marker)) { return $false }
+  return (Get-Content -Raw -LiteralPath $marker).Trim() -eq $ownedToken
+}
+
+function Remove-Owned([string] $dir) {
+  if (-not (Test-Path -LiteralPath $dir)) { return }
+  if (-not (Test-Owned $dir)) { Fail "refusing to delete unowned path $dir" }
+  Remove-Item -LiteralPath $dir -Recurse -Force
+}
+
+# NSIS requires /D= to be the last argument and unquoted, including when the
+# path contains spaces. FileName holds the executable; Arguments is one string.
 function Invoke-Installer([string] $path, [string] $arguments, [string] $label) {
+  if ($arguments -match '/D=') {
+    if ($arguments -notmatch '^/S /D=.+') { Fail "$label /D= must be the last argument" }
+    if ($arguments.Contains('"')) { Fail "$label /D= path must not be quoted" }
+    $dest = $arguments.Substring(6)
+    if ($dest -match ' /') { Fail "$label /D= must be the last argument" }
+    if (-not (Test-Owned $dest)) { Fail "$label refused /D= outside the job-owned directory" }
+  }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $path
   $psi.Arguments = $arguments
@@ -78,6 +114,25 @@ try {
     [Security.Principal.WindowsBuiltInRole]::Administrator)
   Note "elevated: $admin"
   if (-not $admin) { Fail 'smoke requires an elevated runner so the NSIS uninstall registry entry can be created and removed' }
+  if (-not $env:RUNNER_TEMP) { Fail 'RUNNER_TEMP is not set; refusing to invent a path outside the job temp directory' }
+  $preexisting = @(Uninstall-Keys)
+  if ($preexisting.Count -gt 0) {
+    Fail "refusing to run: uninstall key already exists ($($preexisting -join '; ')). This smoke will not uninstall or replace it."
+  }
+
+  $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
+  $ownedRoot = Join-Path $tempRoot ("vox-suite-smoke-" + $(if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { 'local' }) + "-" + $ownedToken)
+  if (Test-Path -LiteralPath $ownedRoot) { Fail "owned staging path already exists: $ownedRoot" }
+  New-Item -ItemType Directory -Path $ownedRoot | Out-Null
+  Set-Content -LiteralPath (Join-Path $ownedRoot 'VOX-SUITE-SMOKE-OWNED.txt') -Value $ownedToken -Encoding ascii -NoNewline
+  if (-not (Test-Owned $ownedRoot)) { Fail "ownership marker was not written for $ownedRoot" }
+  $stage = Join-Path $ownedRoot 'stage'
+  $neighbor = Join-Path $ownedRoot 'neighbor'
+  New-Item -ItemType Directory -Path $stage | Out-Null
+  New-Item -ItemType Directory -Path $neighbor | Out-Null
+  Set-Content -LiteralPath (Join-Path $neighbor 'keep.txt') -Value 'do not delete' -Encoding ascii -NoNewline
+  Note "owned: $ownedRoot"
+  Note "stage: $stage"
 
   $os = Get-CimInstance Win32_OperatingSystem
   Note "os: $($os.Caption) $($os.Version) $($os.OSArchitecture)"
@@ -103,14 +158,8 @@ try {
     if ($line -match 'InstallDir|WriteRegStr|DeleteRegKey|DisplayName') { Note "nsi-line: $($line.Trim())" }
   }
 
-  if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-  if (Test-Path $neighbor) { Remove-Item -Recurse -Force $neighbor }
-  New-Item -ItemType Directory -Force -Path $neighbor | Out-Null
-  Set-Content -Path (Join-Path $neighbor 'keep.txt') -Value 'do not delete' -Encoding ascii
-
-  $expand = Join-Path $env:RUNNER_TEMP 'vox-suite-zip'
-  if (Test-Path $expand) { Remove-Item -Recurse -Force $expand }
-  Expand-Archive -Path $Zip -DestinationPath $expand -Force
+  $expand = Join-Path $ownedRoot 'zip-expand'
+  Expand-Archive -Path $Zip -DestinationPath $expand
   $zipBundles = @(Get-ChildItem -Path $expand -Recurse -Directory -Filter '*.vst3')
   if ($zipBundles.Count -ne 3) { Fail "ZIP does not contain exactly 3 VST3 bundles ($($zipBundles.Count))" }
   foreach ($product in $products) {
@@ -122,6 +171,7 @@ try {
   Note 'zip: 3 suite bundles, no legacy payload'
 
   Note "install /D=$stage"
+  $installedByThisTest = $true
   Invoke-Installer $Installer "/S /D=$stage" 'install'
   Assert-Bundles $stage
   if (-not (Test-Path (Join-Path $stage 'SUITE-MANIFEST.txt'))) { Fail 'SUITE-MANIFEST.txt was not installed' }
@@ -162,13 +212,27 @@ try {
   if ((Uninstall-Keys).Count -ne 0) { Fail 'reinstall uninstall left the registry key' }
   Note 'reinstall and final uninstall passed'
 } finally {
-  if (Test-Path (Join-Path $stage 'Uninstall.exe')) {
-    try { Invoke-Installer (Join-Path $stage 'Uninstall.exe') '/S' 'cleanup-uninstall' } catch {}
+  if ($installedByThisTest -and $stage -and (Test-Owned $stage)) {
+    $cleanup = Join-Path $stage 'Uninstall.exe'
+    if (Test-Path -LiteralPath $cleanup) {
+      try { Invoke-Installer $cleanup '/S' 'cleanup-uninstall' } catch { Note "cleanup-uninstall: $_" }
+    }
   }
-  if (Test-Path $stage) { Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue }
-  if (Test-Path $neighbor) { Remove-Item -Recurse -Force $neighbor -ErrorAction SilentlyContinue }
+  if ($ownedRoot -and (Test-Path -LiteralPath $ownedRoot)) {
+    if (Test-Owned $ownedRoot) {
+      try { Remove-Owned $ownedRoot } catch { Note "cleanup-dir: $_" }
+      if (Test-Path -LiteralPath $ownedRoot) {
+        Note 'FAIL: job-owned directory remains after cleanup'
+        $cleanupFailed = $true
+      }
+    } else {
+      Note "leaving $ownedRoot because the ownership marker does not match"
+      $cleanupFailed = $true
+    }
+  }
   $dir = Split-Path $EvidencePath
   if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   $log | Set-Content -Path $EvidencePath -Encoding utf8
 }
+if ($cleanupFailed) { exit 1 }
 exit 0
