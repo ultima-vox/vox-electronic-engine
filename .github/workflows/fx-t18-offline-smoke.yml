@@ -1,6 +1,8 @@
 name: fx-t18-offline-smoke
 
 on:
+  pull_request:
+    types: [synchronize]
   workflow_dispatch:
     inputs:
       expected_head:
@@ -15,6 +17,7 @@ on:
 
 jobs:
   offline-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.number == 170 && github.event.pull_request.head.ref == 'arena/3f9aa012-vox-electronic-engine') }}
     # This job is intentionally fixture-only. It must never select the hosted
     # fallback or build/run the FX executable.
     runs-on: [self-hosted, windows]
@@ -25,7 +28,7 @@ jobs:
       - name: Checkout exact reviewed source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.expected_head }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.expected_head }}
           clean: true
           fetch-depth: 0
 
@@ -33,8 +36,8 @@ jobs:
         id: smoke
         shell: powershell
         env:
-          EXPECTED_HEAD: ${{ inputs.expected_head }}
-          EXPECTED_HOST: ${{ inputs.expected_host }}
+          EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.expected_head || 'unknown' }}
+          EXPECTED_HOST: ${{ github.event_name == 'pull_request' && 'HAMUNAPTRA' || inputs.expected_host }}
         run: |
           $ErrorActionPreference = 'Stop'
           $output = Join-Path $env:GITHUB_WORKSPACE 'fx-t18-offline-smoke'
