@@ -39,6 +39,11 @@ def report_text() -> str:
         "wall_timer_overhead_us": "0",
         "cpu_timer_overhead_us": "0",
         "timer_calibration_samples": "128",
+        "cpu_running_time_measured": "1",
+        "cpu_resolution": "0.01",
+        "cpu_attribution": "MEASURED",
+        "cpu_measurement_status": "MEASURED",
+        "cpu_zero_delta_semantics": "UNKNOWN_NOT_ZERO_WORK",
         "allocation_probe": "available",
         "lock_probe": "available",
         "wait_probe": "available",
@@ -90,6 +95,72 @@ def report_text() -> str:
                             f"{budget:.17f}\t0\t0\t0\t0"
                         )
     return "\n".join(lines) + "\n"
+
+
+def quantized_cpu_report_text(text: str) -> str:
+    replacements = {
+        "cpu_running_time_measured": "1",
+        "cpu_resolution": "15625",
+        "cpu_attribution": "UNKNOWN",
+        "cpu_measurement_status": "CPU_MEASUREMENT_INSUFFICIENT",
+        "cpu_zero_delta_semantics": "UNKNOWN_NOT_ZERO_WORK",
+    }
+    output: list[str] = []
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if fields[0] == "meta" and fields[1] in replacements:
+            output.append(f"meta\t{fields[1]}\t{replacements[fields[1]]}")
+        elif fields[0] == "case":
+            values = dict(zip(AUDIT.CASE_FIELDS, fields[1:]))
+            for field in ("cpu_p50_us", "cpu_p95_us", "cpu_p99_us"):
+                values[field] = "0"
+            for field in ("cpu_p99_9_us", "cpu_max_us", "cpu_at_wall_max_us", "min_positive_cpu_us"):
+                values[field] = "15625"
+            values["cpu_pairs"] = "160"
+            values["zero_cpu_deltas"] = "159"
+            values["cpu_misses"] = "1"
+            values["max_grains"] = "1"
+            output.append("case\t" + "\t".join(values[field] for field in AUDIT.CASE_FIELDS))
+        elif fields[0] == "block":
+            block = int(fields[2])
+            fields[4] = "15625" if block == 0 else "0"
+            fields[7] = "1" if block == 0 else "0"
+            if block == 1:
+                fields[9] = "1"
+            output.append("\t".join(fields))
+            if block == 0:
+                output.append("miss\t" + "\t".join(fields[1:]))
+        else:
+            output.append(line)
+    return "\n".join(output) + "\n"
+
+
+def non_quantized_cpu_report_text(text: str) -> str:
+    target = "r44100_f64_v1_poff"
+    output: list[str] = []
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if fields[0] == "case" and fields[1] == target:
+            values = dict(zip(AUDIT.CASE_FIELDS, fields[1:]))
+            values["min_positive_cpu_us"] = "15625"
+            values["cpu_p99_us"] = "15625"
+            values["cpu_p99_9_us"] = "15626"
+            values["cpu_max_us"] = "15626"
+            values["zero_cpu_deltas"] = "158"
+            values["cpu_at_wall_max_us"] = "15625"
+            values["cpu_misses"] = "2"
+            output.append("case\t" + "\t".join(values[field] for field in AUDIT.CASE_FIELDS))
+        elif fields[0] == "block" and fields[1] == target:
+            block = int(fields[2])
+            if block == 1:
+                fields[4] = "15626"
+                fields[7] = "1"
+            output.append("\t".join(fields))
+            if block == 1:
+                output.append("miss\t" + "\t".join(fields[1:]))
+        else:
+            output.append(line)
+    return "\n".join(output) + "\n"
 
 
 def test_ctest_inventory_audit() -> None:
@@ -225,11 +296,33 @@ def expect_provenance_failure(paths: tuple[Path, Path, Path, Path], root: Path, 
 def main() -> int:
     test_ctest_inventory_audit()
     valid = report_text()
+    quantized = quantized_cpu_report_text(valid)
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "valid.tsv"
         path.write_text(valid, encoding="utf-8")
         result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True)
         assert not result["performance_failure"]
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "quantized.tsv"
+        path.write_text(quantized, encoding="utf-8")
+        result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True)
+        assert result["cpu_measurement_insufficient"]
+        assert result["diagnostic_failure"]
+        assert not result["performance_failure"]
+        assert result["totals"]["wall_misses"] == 0
+        assert result["totals"]["cpu_misses"] > 0
+
+    # A coarse 0/15625-us clock must remain diagnostic, not a real CPU pass.
+    falsely_measured = quantized.replace(
+        "meta\tcpu_measurement_status\tCPU_MEASUREMENT_INSUFFICIENT",
+        "meta\tcpu_measurement_status\tMEASURED", 1).replace(
+        "meta\tcpu_attribution\tUNKNOWN", "meta\tcpu_attribution\tMEASURED", 1)
+    expect_failure(falsely_measured, "resolution too coarse")
+    expect_failure(non_quantized_cpu_report_text(quantized), "raw CPU deltas are not quantized")
+    expect_failure(quantized.replace(
+        "meta\tcpu_zero_delta_semantics\tUNKNOWN_NOT_ZERO_WORK",
+        "meta\tcpu_zero_delta_semantics\tZERO_WORK", 1),
+                   "zero CPU deltas must not be labeled zero work")
 
     # Exact equality is not a miss; the auditor and C++ fixture both use >.
     first_block = next(line for line in valid.splitlines() if line.startswith("block\t"))

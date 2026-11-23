@@ -144,6 +144,10 @@ int main(){
 #ifdef VOX_TEST_INTERPOSE_MALLOC
     allocationProbeAvailable=voxProbeAvailable()!=0;
 #endif
+    double observedCpuResolution=0.0;
+    double minimumBudget=std::numeric_limits<double>::max();
+    bool allCpuPairs=splitTiming;
+    std::size_t totalCpuMisses=0;
 
     std::ofstream report;
     if(wantsReport){
@@ -285,6 +289,7 @@ int main(){
         std::uint32_t rng=0x154311u;bool finite=true,midiConsumed=true;
         unsigned long alloc=0,locks=0,waits=0;std::size_t cpuCount=0;
         const double budget=frames*1e6/rate;
+        minimumBudget=std::min(minimumBudget,budget);
         double maxWall=-1,cpuAtMaxWall=-1,minPositiveCpu=0;
         int wallMisses=0,cpuMisses=0,wallOnly=0,cpuPairs=0,zeroCpuDeltas=0;
         for(int block=0;block<blocksPerCase;++block){
@@ -333,8 +338,11 @@ int main(){
                 if(hasCpu){
                     ++cpuPairs;cpuDurations[cpuCount++]=cpu;
                     if(cpu==0)++zeroCpuDeltas;
-                    else if(minPositiveCpu==0||cpu<minPositiveCpu)minPositiveCpu=cpu;
-                    cpuMisses+=cpu>budget;wallOnly+=wall>budget&&cpu<=budget;
+                    else {
+                        if(minPositiveCpu==0||cpu<minPositiveCpu)minPositiveCpu=cpu;
+                        if(observedCpuResolution==0.0||cpu<observedCpuResolution)observedCpuResolution=cpu;
+                    }
+                    cpuMisses+=cpu>budget;wallOnly+=hasCpu&&wall>budget&&cpu<=budget;
                 }
             }
             midiConsumed &= midi.isEmpty();
@@ -346,9 +354,10 @@ int main(){
         const auto wallMissesFromSamples=[&]{int count=0;for(const auto value:durations)count+=value>budget;return count;};
         wallMisses=wallMissesFromSamples();
         if(!finite||!midiConsumed||!(peak>.00001&&peak<1&&dc<.01)||alloc||locks||waits||maximumGrains>64||(voices==8&&maximumGrains!=64))++errors;
-        if(splitTiming&&(wallMisses>0||cpuMisses>0))++errors;
-        if(splitTiming&&cpuPairs!=blocksPerCase)++errors;
+        if(splitTiming&&wallMisses>0)++errors;
+        if(splitTiming&&cpuPairs!=blocksPerCase)allCpuPairs=false;
         if(splitTiming&&(!allocationProbeAvailable||!lockProbeAvailable))++errors;
+        totalCpuMisses+=static_cast<std::size_t>(cpuMisses);
 
         const auto wallP50=percentile(durations,blocksPerCase,79);
         const auto wallP95=percentile(durations,blocksPerCase,151);
@@ -364,7 +373,7 @@ int main(){
         std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu wait %lu wall p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us\n",
             rate,frames,voices,peak,dc,maximumGrains,alloc,locks,waits,wallP50,wallP95,wallP99,wallP999,wallMax);
         if(splitTiming){
-            std::printf("  thread CPU p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
+            std::printf("  thread CPU p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us; at wall max %.2f us thread %.2f us; raw misses wall_deadline_miss/CPU/wall-only %d/%d/%d of %d\n",
                 cpuP50,cpuP95,cpuP99,cpuP999,cpuMax,wallMax,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocksPerCase);
             std::printf("  thread CPU valid %d/%d; zero deltas %d; min positive delta %.2f us\n",
                 cpuPairs,blocksPerCase,zeroCpuDeltas,minPositiveCpu);
@@ -398,7 +407,26 @@ int main(){
         }
     }
     }
+    const bool cpuRunningTimeMeasured=splitTiming&&allCpuPairs;
+    const bool cpuMeasurementInsufficient=splitTiming&&
+        (!cpuRunningTimeMeasured||observedCpuResolution<=0.0||observedCpuResolution>=minimumBudget);
+    if(splitTiming){
+        std::printf("Thread CPU attribution: %s; running time measured: %s; observed resolution %.3f us\n",
+            cpuMeasurementInsufficient?"UNKNOWN":"MEASURED",
+            cpuRunningTimeMeasured?"yes":"no",observedCpuResolution);
+        if(cpuMeasurementInsufficient){
+            std::puts("CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution");
+            ++errors;
+        }else if(totalCpuMisses>0){
+            ++errors;
+        }
+    }
     if(report){
+        writeMeta(report,"cpu_running_time_measured",cpuRunningTimeMeasured?"1":"0");
+        writeMeta(report,"cpu_resolution",observedCpuResolution);
+        writeMeta(report,"cpu_attribution",splitTiming?(cpuMeasurementInsufficient?"UNKNOWN":"MEASURED"):"NOT_REQUESTED");
+        writeMeta(report,"cpu_measurement_status",splitTiming?(cpuMeasurementInsufficient?"CPU_MEASUREMENT_INSUFFICIENT":"MEASURED"):"NOT_REQUESTED");
+        writeMeta(report,"cpu_zero_delta_semantics",splitTiming?"UNKNOWN_NOT_ZERO_WORK":"NOT_REQUESTED");
         report.flush();
         if(!report){
             std::fprintf(stderr,"FX timing report write failed: %s\n",requestedReport);

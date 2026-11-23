@@ -23,12 +23,16 @@ The existing `suite_fx_runtime_stress_tests` fixture drives the actual
   remain the raw observed callback intervals, conservatively including the
   boundary API cost);
 - the deadline `frames / sample-rate * 1,000,000` in microseconds;
-- wall, CPU and wall-only deadline exceedances;
-- p50, p95, p99, p99.9 and max for both wall and CPU, plus complete CPU-pair
-coverage, zero deltas and the minimum positive CPU delta so coarse Windows
-timer resolution is visible instead of being treated as zero CPU. With 160
-observations, nearest-rank p99.9 equals max; it is retained as a separate
-field, not presented as an independent tail estimate;
+- wall, raw CPU and wall-only deadline flags;
+- p50, p95, p99, p99.9 and max for both wall and raw CPU, plus complete
+  CPU-pair coverage, zero deltas and the minimum positive CPU delta;
+- explicit `cpu_running_time_measured`, observed `cpu_resolution` in
+  microseconds, `cpu_attribution` and `cpu_measurement_status`. If the
+  Windows `GetThreadTimes` quantum is coarser than the callback budget, raw
+  CPU flags are retained but attribution is `UNKNOWN` and the report is
+  `CPU_MEASUREMENT_INSUFFICIENT`; a zero delta is never interpreted as zero
+  work. With 160 observations, nearest-rank p99.9 equals max; it is retained
+  as a separate field, not presented as an independent tail estimate;
 - peak, DC, finite-output and active-grain assertions.
 
 The callback fixture also enables the existing Windows IAT allocation probe and
@@ -44,10 +48,12 @@ to mask that state.
 The new `VOX_FX_T18_REPORT_V1` TSV is an auditable companion to stdout. It keeps
 all 160 callback rows for every matrix cell and explicit `miss` rows, not only
 an aggregate. The checker `evidence/audit-fx-windows-timing.py` reconciles the
-matrix, deadlines, p50/p95/p99/p99.9/max values, CPU pairs, miss flags, probe
-attestation and case totals. It independently reads git HEAD/tree, hashes the
-executable and runner receipt, and verifies the artifact manifest. It
-deliberately reports `diagnostic only`; it cannot grant qualification.
+matrix, deadlines, p50/p95/p99/p99.9/max values, CPU pairs, raw miss flags,
+CPU quantization, probe attestation and case totals. It independently reads git
+HEAD/tree, hashes the executable and runner receipt, and verifies the artifact
+manifest. A coarse CPU clock produces a blocking `cpu_measurement_insufficient`
+diagnostic, not a green CPU performance claim. The checker deliberately reports
+`diagnostic only`; it cannot grant qualification.
 
 ## Proposed controlled scenario
 
@@ -117,8 +123,10 @@ The checked-in orchestrator invokes the auditor with `--root`, `--executable`,
 source SHA: it independently executes `git rev-parse`, recomputes the EXE and
 receipt SHA-256 values, and hashes every artifact listed in the manifest. A
 missing report or failed audit is classified as infrastructure/test evidence;
-a valid report with deadline/allocation/lock/wait failures is classified as
-performance failure. All three profiles still run after any earlier category.
+a valid report with wall/allocation/lock/wait failures is classified as
+performance failure. A coarse CPU clock is classified separately as
+`cpu_measurement_insufficient`, preserving raw CPU flags without claiming a
+CPU deadline violation. All three profiles still run after any earlier category.
 
 Before the owner-authorized Windows smoke, run the Windows PowerShell 5.1
 parser/runtime check. It parses the orchestrator/helper, tests positive and
@@ -145,11 +153,15 @@ receipt. Do not commit the hardware reports or generated build tree to Git.
 
 The receipt must report these outcomes independently:
 
-- `wall_miss`: callback wall time exceeded its frame deadline;
-- `cpu_miss`: measured thread CPU exceeded its frame deadline;
+- `wall_miss` (`wall_deadline_miss`): callback wall time exceeded its frame
+  deadline and remains the real-time metric;
+- `cpu_miss`: raw thread-CPU comparison against the frame deadline; it is not
+  an attributable CPU violation when `cpu_attribution=UNKNOWN`;
 - `wall_only_miss`: wall exceeded while the measured thread CPU did not;
-- p50/p95/p99/p99.9/max for wall and CPU, with every raw callback and explicit
-  raw miss rows retained;
+- `cpu_measurement_status`, `cpu_running_time_measured`, `cpu_resolution` and
+  `cpu_attribution`, with zero-delta semantics explicitly marked unknown;
+- p50/p95/p99/p99.9/max for wall and raw CPU, with every raw callback and
+  explicit raw miss rows retained;
 - allocation probe unavailable, non-zero, or zero;
 - synchronization/wait probe unavailable, incomplete, non-zero, or zero, with
   target/resolved/imported/installed counts and positive-control results;
@@ -160,8 +172,9 @@ The receipt must report these outcomes independently:
 - independent git HEAD/tree, executable SHA-256, runner receipt and artifact
   manifest checks.
 
-The orchestrator classifies a valid report with deadline/allocation/lock/wait
-failures as `performance_failure`, a bounded CTest timeout as
+The orchestrator classifies a valid report with wall/allocation/lock/wait
+failures as `performance_failure`, a coarse CPU clock as the separate blocking
+`cpu_measurement_insufficient` diagnostic, a bounded CTest timeout as
 `timeout_failure`, a valid report with a failed fixture assertion as
 `test_failure`, and missing/malformed/unverifiable reports or artifacts as
 `infrastructure_failure` (a missing report is additionally
@@ -174,14 +187,36 @@ fixture result is therefore necessary evidence, not a DAW dropout guarantee.
 The negative fixtures in `evidence/test-audit-fx-windows-timing.py` protect the
 strict `>` deadline parity at exact budget equality, miss-row reconciliation,
 incomplete-probe rejection, dropped/duplicated callback rows, bad percentiles,
-spoofed well-formed source/EXE receipts and modified binary hashes against an
-independent git checkout.
+spoofed well-formed source/EXE receipts, modified binary hashes and coarse
+`0/15625 us` CPU quantization falsely labeled as real CPU deadline failures
+against an independent git checkout.
 
 The proposed engineering interpretation is **not a pass/fail threshold** until
 TL approves the scenario and target hardware. For the later qualification gate,
 any measured deadline exceedance, callback allocation or observed lock/wait
 entry remains a review item. This fixture does not establish Cubase/REAPER
 hosting, UI, listening, validator, packaging or release readiness.
+
+## CPU-resolution disposition
+
+This revision deliberately retains CPU attribution as `UNKNOWN` when the
+observed positive `GetThreadTimes` quantum is not smaller than the strictest
+callback budget. The raw per-block deltas and raw `cpu_miss` flags remain
+review evidence, but they cannot establish per-block thread CPU use in that
+state. `QueryThreadCycleTime` is not substituted: no verified contract has
+been established here for its scope, accounting semantics or availability on
+the authorized runner.
+
+A future high-resolution method may be proposed only as a separate reviewed
+instrumentation change: capture a validated Windows ETW/WPR scheduling trace
+with the measured thread identity, context-switch/running intervals and a
+calibrated high-resolution timestamp, then reconcile those intervals to the
+same callback sequence and wall deadline. The method must demonstrate complete
+thread attribution, timestamp calibration, dropped-event detection and an
+independent positive-control fixture before CPU attribution changes from
+`UNKNOWN`. Until that contract is verified, the blocking
+`CPU_MEASUREMENT_INSUFFICIENT` state is the intended result, not a green CPU
+claim.
 
 ## Deliberately not done in this checkpoint
 

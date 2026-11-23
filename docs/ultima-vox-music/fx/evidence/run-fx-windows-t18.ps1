@@ -286,6 +286,8 @@ function Invoke-FxScenario([string]$Scenario) {
         $classification = 'infrastructure_failure'
     } elseif (-not $junitAvailable) {
         $classification = 'infrastructure_failure'
+    } elseif ([bool]$auditObject.cpu_measurement_insufficient) {
+        $classification = 'cpu_measurement_insufficient'
     } elseif ([bool]$auditObject.performance_failure) {
         $classification = 'performance_failure'
     } elseif ($ctestOutcome -eq 'test_failure') {

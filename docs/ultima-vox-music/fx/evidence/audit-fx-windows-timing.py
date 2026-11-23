@@ -53,7 +53,9 @@ REQUIRED_METADATA = {
     "executable_path", "executable_sha256", "runner_receipt_sha256",
     "platform", "pointer_bits", "timing_clock", "timing_requested",
     "timing_bracket", "wall_timer_overhead_us", "cpu_timer_overhead_us",
-    "timer_calibration_samples", "allocation_probe", "lock_probe",
+    "timer_calibration_samples", "cpu_running_time_measured", "cpu_resolution",
+    "cpu_attribution", "cpu_measurement_status", "cpu_zero_delta_semantics",
+    "allocation_probe", "lock_probe",
     "wait_probe", "lock_target_count", "lock_resolved_target_count",
     "lock_matched_slot_count", "lock_patched_slot_count", "wait_target_count",
     "wait_resolved_target_count", "wait_matched_slot_count",
@@ -86,6 +88,13 @@ def _int(value: str, name: str) -> int:
 
 def _near(actual: float, expected: float, absolute: float = 0.02) -> bool:
     return abs(actual - expected) <= absolute + abs(expected) * 1.0e-6
+
+
+def _quantized(value: float, resolution: float) -> bool:
+    if resolution <= 0.0 or value < 0.0:
+        return False
+    quotient = value / resolution
+    return abs(quotient - round(quotient)) <= 1.0e-6 + abs(quotient) * 1.0e-6
 
 
 def _percentiles(values: list[float]) -> tuple[float, float, float, float, float]:
@@ -405,6 +414,26 @@ def audit(
     if _int(metadata["timer_calibration_samples"], "timer_calibration_samples") <= 0:
         raise ValueError(f"{path}: timer calibration is not recorded")
 
+    cpu_running_time_measured = _int(metadata["cpu_running_time_measured"], "cpu_running_time_measured")
+    if cpu_running_time_measured not in (0, 1):
+        raise ValueError(f"{path}: cpu_running_time_measured is not boolean")
+    cpu_resolution = _float(metadata["cpu_resolution"], "cpu_resolution")
+    if cpu_resolution < 0.0:
+        raise ValueError(f"{path}: cpu_resolution is negative")
+    cpu_attribution = metadata["cpu_attribution"]
+    cpu_measurement_status = metadata["cpu_measurement_status"]
+    if cpu_measurement_status not in {"MEASURED", "CPU_MEASUREMENT_INSUFFICIENT"}:
+        raise ValueError(f"{path}: unsupported CPU measurement status {cpu_measurement_status!r}")
+    if cpu_measurement_status == "MEASURED":
+        if cpu_attribution != "MEASURED" or cpu_running_time_measured != 1 or cpu_resolution <= 0.0:
+            raise ValueError(f"{path}: measured CPU status lacks a usable resolution/attribution")
+    else:
+        if cpu_attribution != "UNKNOWN":
+            raise ValueError(f"{path}: insufficient CPU status is not marked UNKNOWN attribution")
+    if metadata["cpu_zero_delta_semantics"] != "UNKNOWN_NOT_ZERO_WORK":
+        raise ValueError(f"{path}: zero CPU deltas must not be labeled zero work")
+    cpu_measurement_insufficient = cpu_measurement_status == "CPU_MEASUREMENT_INSUFFICIENT"
+
     # A zero callback count is not qualifying evidence unless both target
     # classes were actually installed and the positive controls counted them.
     coverage_ints = {
@@ -449,6 +478,8 @@ def audit(
               "wait_entries": 0, "zero_cpu_deltas": 0}
     deadline_rows: list[dict[str, Any]] = []
     expected_misses: dict[tuple[str, int], dict[str, Any]] = {}
+    cpu_values: list[float] = []
+    zero_cpu_work_rows = 0
 
     for case_id, case in cases.items():
         key = (case["rate_hz"], case["frames"], case["initial_voices"], case["pattern"])
@@ -478,6 +509,9 @@ def audit(
                 raise ValueError(f"{path}: miss flag mismatch in {case_id} block {row['block']}")
             if row["cpu_us"] < 0.0 or row["wall_us"] < 0.0:
                 raise ValueError(f"{path}: invalid timing in {case_id} block {row['block']}")
+            cpu_values.append(row["cpu_us"])
+            if row["cpu_us"] == 0.0 and (row["events"] > 0 or row["grains"] > 0):
+                zero_cpu_work_rows += 1
             if wall_miss or cpu_miss:
                 expected_misses[(case_id, row["block"])] = row
                 deadline_rows.append({"case_id": case_id, **row})
@@ -528,14 +562,37 @@ def audit(
     if unknown_block_cases:
         raise ValueError(f"{path}: block rows have unknown cases: {sorted(unknown_block_cases)}")
 
+    minimum_budget = min(case["budget_us"] for case in cases.values())
+    if not cpu_measurement_insufficient and cpu_running_time_measured == 1 \
+            and cpu_resolution >= minimum_budget:
+        raise ValueError(f"{path}: measured CPU attribution uses a resolution too coarse for the callback budget")
+    if cpu_measurement_insufficient:
+        positive_cpu = [value for value in cpu_values if value > 0.0]
+        if cpu_resolution > 0.0 and positive_cpu:
+            if not all(_quantized(value, cpu_resolution) for value in positive_cpu):
+                raise ValueError(f"{path}: raw CPU deltas are not quantized at the declared resolution")
+            if not _near(min(positive_cpu), cpu_resolution, absolute=0.02):
+                raise ValueError(f"{path}: cpu_resolution is not the observed minimum positive raw delta")
+            if cpu_running_time_measured == 1 and cpu_resolution < minimum_budget:
+                raise ValueError(f"{path}: insufficient CPU status is inconsistent with its callback resolution")
+        if totals["zero_cpu_deltas"] > 0 and zero_cpu_work_rows == 0:
+            raise ValueError(f"{path}: zero CPU deltas have no retained nonzero-work rows")
+
+    # Raw CPU flags remain in the report, but a coarse/unknown clock cannot
+    # turn those flags into demonstrated CPU deadline violations.
+    cpu_deadline_failure = totals["cpu_misses"] > 0 and not cpu_measurement_insufficient
     performance_failure = any(totals[name] > 0 for name in (
-        "wall_misses", "cpu_misses", "alloc_calls", "lock_entries", "wait_entries"))
+        "wall_misses", "alloc_calls", "lock_entries", "wait_entries")) or cpu_deadline_failure
     return {
         "qualification": "diagnostic only; TL must review hardware load, timing resolution and host evidence",
         "report": str(path),
         "profile": profile,
         "cells": len(cases),
         "performance_failure": performance_failure,
+        "cpu_measurement_insufficient": cpu_measurement_insufficient,
+        "diagnostic_failure": cpu_measurement_insufficient,
+        "cpu_attribution": cpu_attribution,
+        "cpu_resolution": cpu_resolution,
         "totals": totals,
         "deadline_rows": deadline_rows,
         "metadata": metadata,
