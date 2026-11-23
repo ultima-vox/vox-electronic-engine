@@ -131,6 +131,40 @@ int main()
     REQUIRE(difference(first, driven) > 1.0,
             "factory chain presets materially differ");
 
+    // A full-buffer fill used to live in reset(). History must still match a
+    // chain that has never sounded, including after the delay line wraps.
+    for (const char* id : { "wide-motion", "deep-space" }) {
+        EffectsChain kept, cleared;
+        REQUIRE(kept.prepare(48000.0, 4096, 2) && cleared.prepare(48000.0, 4096, 2),
+                "history pair prepares");
+        REQUIRE(kept.applyPreset(id) && cleared.applyPreset(id), "history preset");
+        auto warm = source(48000 * 3);
+        for (std::size_t offset = 0; offset < warm[0].size(); ) {
+            const auto count = std::min<std::size_t>(4096, warm[0].size() - offset);
+            Stereo block { std::vector<float>(count), std::vector<float>(count) };
+            for (std::size_t i = 0; i < count; ++i) {
+                block[0][i] = warm[0][offset + i];
+                block[1][i] = warm[1][offset + i];
+            }
+            auto other = block;
+            process(kept, block);
+            process(cleared, other);
+            offset += count;
+        }
+        auto withHistory = dry;
+        auto dropped = dry;
+        cleared.reset();
+        process(kept, withHistory);
+        process(cleared, dropped);
+        REQUIRE(difference(withHistory, dropped) > 0.01, "time-effect history is audible before reset");
+        EffectsChain fresh;
+        REQUIRE(fresh.prepare(48000.0, 4096, 2), "fresh chain prepares");
+        REQUIRE(fresh.applyPreset(id), "fresh preset");
+        auto fromFresh = dry;
+        process(fresh, fromFresh);
+        REQUIRE(dropped == fromFresh, "reset matches a chain with no prior tail");
+    }
+
     std::cout << "Effects chain tests passed (" << checks << ")\n";
     return EXIT_SUCCESS;
 }

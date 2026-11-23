@@ -27,6 +27,20 @@ struct Smoothed {
   }
 };
 
+// Phase stays in [0, 1). A step inside (-1, 1) wraps with one subtract,
+// which matches std::floor for that range. Larger steps keep the floor.
+inline double wrapPhase(double phase, double dt) noexcept {
+  phase += dt;
+  if (phase >= 1.0) {
+    if (phase < 2.0)
+      phase -= 1.0;
+    else
+      phase -= std::floor(phase);
+  } else if (phase < 0.0)
+    phase -= std::floor(phase);
+  return phase;
+}
+
 // Band-limited oscillator (polyBLEP): sine, saw, square. Phase in [0, 1).
 struct BlepOscillator {
   enum Wave { sine = 0, saw = 1, square = 2 };
@@ -58,22 +72,31 @@ struct BlepOscillator {
       out = 2.0 * phase - 1.0 - polyBlep(phase, dt);
       break;
     }
-    phase += dt;
-    phase -= std::floor(phase);
+    phase = wrapPhase(phase, dt);
     return out;
   }
 };
 
 // TPT state-variable low-pass (Zavalishin). resonance 0..1 maps to damping
 // k = 2 - 1.9 * resonance; cutoff is clamped below 0.45 * sampleRate.
+// Coefficients depend only on cutoff, resonance and sample rate, so a held
+// note reuses them. The state update is unchanged.
 struct SvfLowpass {
   double ic1{}, ic2{};
+  double g_ = 0.0, a1_ = 0.0, fc_ = -1.0, res_ = -1.0, sr_ = -1.0;
   void reset() noexcept { ic1 = ic2 = 0.0; }
   double next(double x, double cutoffHz, double resonance, double sampleRate) noexcept {
     const double fc = std::fmin(cutoffHz, 0.45 * sampleRate);
-    const double g = std::tan(pi * fc / sampleRate);
-    const double k = 2.0 - 1.9 * resonance;
-    const double a1 = 1.0 / (1.0 + g * (g + k));
+    if (fc != fc_ || resonance != res_ || sampleRate != sr_) {
+      fc_ = fc;
+      res_ = resonance;
+      sr_ = sampleRate;
+      const double k = 2.0 - 1.9 * resonance;
+      g_ = std::tan(pi * fc / sampleRate);
+      a1_ = 1.0 / (1.0 + g_ * (g_ + k));
+    }
+    const double g = g_;
+    const double a1 = a1_;
     const double v3 = x - ic2;
     const double v1 = a1 * ic1 + g * a1 * v3;
     const double v2 = ic2 + g * v1;

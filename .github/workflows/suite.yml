@@ -2,13 +2,20 @@ name: suite
 
 # ULTIMA VOX MUSIC standalone plugins (FOUND-01). Builds only the suite
 # (VOX_BUILD_LEGACY=OFF), runs the CTest label "suite", runs the Steinberg
-# VST3 validator on all three bundles and publishes the bundles with SHA-256.
+# VST3 validator on all three bundles, packages those bundles into an unsigned
+# Windows installer and ZIP, and publishes the bundles with SHA-256.
 # The legacy engine keeps its own workflow (build.yml), unchanged.
 on:
   pull_request:
   push:
     branches: [next/standalone-suite]
   workflow_dispatch:
+    inputs:
+      synth_profile_callbacks:
+        description: 'Record optional per-callback thread-cycle diagnostics'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   windows-suite:
@@ -53,10 +60,18 @@ jobs:
           }
           "VST3_VALIDATOR=$validator" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      - name: Provide pinned NSIS 3.13
+        shell: powershell
+        run: |
+          $nsis = & .github\scripts\Use-PinnedNsis.ps1
+          if (-not $nsis) { exit 1 }
+          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) { throw "makensis.exe not in $nsis" }
+          "PATH=$nsis;$env:PATH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Configure (suite only)
         shell: powershell
         run: |
-          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
+          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_SUITE_PACKAGE=ON "-DVOX_PACKAGE_GIT_SHA=$env:GITHUB_SHA" -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
@@ -68,8 +83,21 @@ jobs:
           # Golden renders are also written as WAV files for listening (artifact).
           New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
           $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          $env:VOX_SYNTH_PERF_LOG = (Join-Path (Resolve-Path suite-out).Path 'synth-perf.txt')
+          $env:VOX_SYNTH_PERF_CSV = (Join-Path (Resolve-Path suite-out).Path 'synth-perf-cells.csv')
+          # Trial-level thread CPU and overall system-load snapshots are taken
+          # outside timed processBlock calls; they are diagnostics, not a gate.
+          $env:VOX_SYNTH_TRIAL_USAGE_CSV = (Join-Path (Resolve-Path suite-out).Path 'synth-trial-usage.csv')
+          # Opt-in diagnostic only: the extra counter calls bracket the timed
+          # callback. This is not a substitute for uninstrumented gate evidence.
+          if ('${{ inputs.synth_profile_callbacks }}' -eq 'true') {
+            $env:VOX_SYNTH_CALLBACK_PROFILE_CSV = (Join-Path (Resolve-Path suite-out).Path 'synth-callback-profile.csv')
+          }
+          $env:VOX_FACTORY_AUDIT = (Join-Path (Resolve-Path suite-out).Path 'factory-render.csv')
           ctest --test-dir build-suite -C Release -L suite --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path suite-out\synth-perf.txt) { Get-Content suite-out\synth-perf.txt }
+          if (Test-Path suite-out\synth-perf-cells.csv) { Get-Content suite-out\synth-perf-cells.csv }
 
       - name: Steinberg VST3 validator
         shell: powershell
@@ -97,6 +125,8 @@ jobs:
             "JUCE: $env:JUCE_COMMIT",
             "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
           )
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $lines += "Machine: $($cpu.Name.Trim()), $($cpu.NumberOfCores) cores / $($cpu.NumberOfLogicalProcessors) threads, $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)) GB RAM, $((Get-CimInstance Win32_OperatingSystem).Caption)"
           foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory -ErrorAction SilentlyContinue) {
             Copy-Item -Recurse -Force $bundle.FullName suite-out\VST3\
             foreach ($file in Get-ChildItem $bundle.FullName -Recurse -File) {
@@ -106,6 +136,44 @@ jobs:
           }
           $lines | Set-Content suite-out\manifest.txt
           Get-Content suite-out\manifest.txt
+
+      - name: Package ULTIMA VOX MUSIC
+        shell: powershell
+        run: |
+          cmake --build build-suite --config Release --target package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path suite-out\package | Out-Null
+          $packed = @(Get-ChildItem build-suite -File | Where-Object { $_.Name -like 'ULTIMA-VOX-MUSIC-*.exe' -or $_.Name -like 'ULTIMA-VOX-MUSIC-*.zip' -or $_.Name -like 'ULTIMA-VOX-MUSIC-*.sha256' })
+          if (($packed | Where-Object { $_.Extension -eq '.exe' }).Count -ne 1) { throw 'suite installer exe was not produced' }
+          if (($packed | Where-Object { $_.Extension -eq '.zip' }).Count -ne 1) { throw 'suite ZIP was not produced' }
+          if ($packed.Name -match 'Vox Electronic Engine') { throw 'legacy package name leaked into the suite package' }
+          Copy-Item $packed.FullName suite-out\package\
+          if (Test-Path suite-out\synth-perf-cells.csv) { Copy-Item suite-out\synth-perf-cells.csv suite-out\package\ }
+          $rows = @(Import-Csv suite-out\synth-perf-cells.csv)
+          if ($rows.Count -lt 1) { throw 'synth-perf-cells.csv is empty; refusing to describe this package' }
+          $bad = @($rows | Where-Object { $_.within_deadline -ne '1' -or $_.mallocs -ne '0' })
+          if ($bad.Count -gt 0) { throw "p99 gate failed on $($bad.Count) rows; package step must not hide that" }
+          $maxOver = @($rows | Where-Object { [double]$_.max_ms -gt [double]$_.deadline_ms })
+          @(
+            "SYN-08 package note for commit $env:GITHUB_SHA only."
+            "Strict rows: $($rows.Count). p99 < deadline and mallocs = 0: $($rows.Count)."
+            "max > deadline (dropout risk, not a p99 failure): $($maxOver.Count)."
+            'See synth-perf-cells.csv from this run. This is not a Cubase/REAPER or sonic sign-off.'
+            'factoryProgramsHumanApproved remains 0. The installer Authenticode status is unsigned.'
+            'Not an accepted release. The legacy Vox Electronic Engine ZIP is not this package.'
+          ) | Set-Content suite-out\package\perf-risk.txt -Encoding utf8
+          Get-ChildItem suite-out\package | ForEach-Object {
+            if (-not $_.PSIsContainer) { "SHA-256 $($_.Name) $((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower())" }
+          }
+
+      - name: Smoke install, upgrade, uninstall
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem suite-out\package\ULTIMA-VOX-MUSIC-*.exe | Select-Object -First 1
+          $zip = Get-ChildItem suite-out\package\ULTIMA-VOX-MUSIC-*.zip | Select-Object -First 1
+          & .github\scripts\Test-SuiteInstaller.ps1 -Installer $exe.FullName -BuildDir (Resolve-Path build-suite).Path -Zip $zip.FullName -EvidencePath (Join-Path (Resolve-Path suite-out).Path 'package\install-smoke.txt')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content suite-out\package\install-smoke.txt
 
       - name: Upload suite bundles and reports
         if: always()

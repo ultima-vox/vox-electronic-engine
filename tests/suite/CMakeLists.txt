@@ -137,6 +137,34 @@ target_link_libraries(suite_drums_parity_tests PRIVATE ${VOX_SUITE_drm_TARGET} v
 target_include_directories(suite_drums_parity_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
 add_test(NAME suite_drums_parity_tests COMMAND suite_drums_parity_tests)
 
+add_executable(suite_synth_engine_tests SynthEngineTests.cpp)
+target_link_libraries(suite_synth_engine_tests PRIVATE vox_synth_engine vox_testkit)
+target_compile_definitions(suite_synth_engine_tests PRIVATE
+  VOX_SYNTH_GOLDEN_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/golden/synth-engine.csv")
+vox_suite_add_allocation_probe(suite_synth_engine_tests)
+add_test(NAME suite_synth_engine_tests COMMAND suite_synth_engine_tests)
+
+add_executable(suite_synth_product_tests SynthProductTests.cpp)
+target_link_libraries(suite_synth_product_tests PRIVATE ${VOX_SUITE_syn_TARGET})
+target_include_directories(suite_synth_product_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+vox_suite_add_allocation_probe(suite_synth_product_tests)
+target_compile_definitions(suite_synth_product_tests PRIVATE
+  VOX_TEST_STATE_TAG="${VOX_SUITE_syn_STATE_TAG}"
+  VOX_FACTORY_MIDI_DIR="${CMAKE_SOURCE_DIR}/products/trance-synthesis/factory/midi"
+  VOX_UBNK_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ubnk-b0f230f.voxstate")
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(suite_synth_product_tests PRIVATE Threads::Threads)
+endif()
+add_test(NAME suite_synth_product_tests COMMAND suite_synth_product_tests)
+add_test(NAME suite_synth_strict_trial_tests COMMAND suite_synth_product_tests --strict-trial-self-test)
+if(VOX_SANITIZE_THREAD)
+  # Handoff tests only. The strict p99 matrix is a different gate and is not
+  # comparable once ThreadSanitizer is linked in. The suite label is applied
+  # to every test later in this file; this one is removed from that set.
+  add_test(NAME suite_synth_tsan_concurrency COMMAND suite_synth_product_tests --tsan-concurrency)
+endif()
+
 add_test(NAME suite_boundaries
   COMMAND ${CMAKE_COMMAND} "-DROOT=${PROJECT_SOURCE_DIR}" -P ${PROJECT_SOURCE_DIR}/cmake/suite/CheckBoundaries.cmake)
 
@@ -158,8 +186,10 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
     VOX_TEST_STATE_TAG="${VOX_SUITE_${key}_STATE_TAG}"
     VOX_TEST_FOREIGN_TAG="${VOX_SUITE_${otherKey}_STATE_TAG}")
   # Products with a sound engine (others must stay silent).
-  if(key STREQUAL "drm")
+  if(key STREQUAL "drm" OR key STREQUAL "syn")
     target_compile_definitions(${test} PRIVATE VOX_TEST_HAS_ENGINE=1)
+  else()
+    target_compile_definitions(${test} PRIVATE VOX_TEST_HAS_ENGINE=0)
   endif()
   add_test(NAME ${test} COMMAND ${test})
 
@@ -183,6 +213,9 @@ foreach(key IN LISTS VOX_SUITE_PRODUCTS)
   if(key STREQUAL "drm")
     set(engine 1)
     set(level "Pad 1 Level")
+  elseif(key STREQUAL "syn")
+    set(engine 1)
+    set(level "Output")
   endif()
   list(APPEND host_bundles
     "$<TARGET_FILE_DIR:${VOX_SUITE_${key}_TARGET}_VST3>/../..|${VOX_SUITE_${key}_NAME}|${engine}|${level}")
@@ -208,4 +241,10 @@ set_tests_properties(suite_verify_juce_strict-wrong-commit suite_verify_juce_str
                      suite_verify_juce_relaxed-wrong-commit PROPERTIES WILL_FAIL TRUE)
 
 get_property(suite_tests DIRECTORY PROPERTY TESTS)
+if(VOX_SANITIZE_THREAD)
+  list(REMOVE_ITEM suite_tests suite_synth_tsan_concurrency)
+endif()
 set_tests_properties(${suite_tests} PROPERTIES LABELS suite)
+if(VOX_SANITIZE_THREAD)
+  set_tests_properties(suite_synth_tsan_concurrency PROPERTIES LABELS tsan TIMEOUT 1200)
+endif()

@@ -16,12 +16,19 @@
 #include <memory>
 #include <thread>
 
+#ifndef VOX_TEST_HAS_ENGINE
+#error "VOX_TEST_HAS_ENGINE must be defined as 0 or 1. Undefined used to take the silent fallback and pass."
+#endif
+
 namespace {
 int failures = 0;
+int checks = 0;
+int skips = 0;
 unsigned long probedAllocations = 0;
 
 void check (bool condition, const juce::String& what)
 {
+    ++checks;
     if (! condition)
     {
         std::printf ("FAIL [%s]: %s\n", VOX_TEST_PRODUCT_NAME, what.toRawUTF8());
@@ -148,6 +155,16 @@ void testLifecycle()
     if (voxProbeAvailable())
         check (probedAllocations == 0, "processBlock allocates nothing on the audio thread ("
                                            + juce::String (static_cast<juce::int64> (probedAllocations)) + " calls)");
+#if VOX_TEST_HAS_ENGINE
+    else
+    {
+        ++skips;
+        check (false, "allocation probe did not attach");
+    }
+#endif
+#elif VOX_TEST_HAS_ENGINE
+    ++skips;
+    check (false, "allocation probe was not compiled");
 #endif
 }
 
@@ -330,7 +347,10 @@ int main()
     testEditor();
     testState();
     testConcurrentState();
-    if (failures == 0)
-        std::printf ("%s shell tests passed\n", VOX_TEST_PRODUCT_NAME);
-    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (failures == 0 && skips == 0)
+        std::printf ("%s shell tests passed (%d checks, 0 skipped)\n", VOX_TEST_PRODUCT_NAME, checks);
+    else
+        std::printf ("%s shell tests failed (%d checks, %d failed, %d skipped)\n",
+                     VOX_TEST_PRODUCT_NAME, checks, failures, skips);
+    return failures == 0 && skips == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

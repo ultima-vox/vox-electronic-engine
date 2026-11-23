@@ -4,6 +4,23 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Clang ThreadSanitizer for the Linux concurrency gate. Default OFF, so the
+# Windows/MSVC suite is unchanged. The flags are directory-wide and are set
+# before JUCE is fetched, so the code under test and the JUCE sources built
+# in this tree are both instrumented. MSVC is not a TSan toolchain.
+option(VOX_SANITIZE_THREAD "Instrument this build with Clang ThreadSanitizer (Linux only)" OFF)
+if(VOX_SANITIZE_THREAD)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    message(FATAL_ERROR
+      "VOX_SANITIZE_THREAD requires Linux Clang. "
+      "Found ${CMAKE_CXX_COMPILER_ID} on ${CMAKE_SYSTEM_NAME}. "
+      "The Windows MSVC suite is not a ThreadSanitizer gate.")
+  endif()
+  add_compile_options(-fsanitize=thread -fno-omit-frame-pointer -g -DJUCE_WEB_BROWSER=0 -DJUCE_USE_CURL=0)
+  add_link_options(-fsanitize=thread)
+  message(STATUS "ThreadSanitizer: -fsanitize=thread -fno-omit-frame-pointer -g on C and C++ compile and link")
+endif()
+
 include(FetchContent)
 FetchContent_Declare(JUCE
   GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -459,3 +476,9 @@ set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64/Common Files/VST3")
 include(CPack)
 
 endif() # VOX_BUILD_LEGACY
+
+# Suite installer. Separate from the legacy Rack CPack block above, and only
+# configured for a suite-only build so the two packages cannot be combined.
+if(VOX_BUILD_SUITE AND NOT VOX_BUILD_LEGACY)
+  include(cmake/suite/Package.cmake)
+endif()
