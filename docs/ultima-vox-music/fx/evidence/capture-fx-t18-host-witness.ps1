@@ -621,11 +621,16 @@ try {
     $captureFailureCodes += 'CAPTURE_EXCEPTION'
     $captureFailureSummaries += 'host process observation failed before a complete witness was collected'
 } finally {
-    foreach ($subscription in $subscriptions) {
-        Unregister-Event -SubscriptionId $subscription.SubscriptionId -ErrorAction SilentlyContinue
+    foreach ($subscription in @($subscriptions)) {
+        try {
+            $subscriptionId = Get-OptionalProperty $subscription 'SubscriptionId' $null
+            if ($null -ne $subscriptionId) {
+                Unregister-Event -SubscriptionId $subscriptionId -ErrorAction SilentlyContinue
+            }
+        } catch { }
     }
-    if ($startSource) { Unregister-Event -SourceIdentifier $startSource -ErrorAction SilentlyContinue }
-    if ($stopSource) { Unregister-Event -SourceIdentifier $stopSource -ErrorAction SilentlyContinue }
+    try { if ($startSource) { Unregister-Event -SourceIdentifier $startSource -ErrorAction SilentlyContinue } } catch { }
+    try { if ($stopSource) { Unregister-Event -SourceIdentifier $stopSource -ErrorAction SilentlyContinue } } catch { }
 }
 
 $captureEnd = Get-UtcNowText
