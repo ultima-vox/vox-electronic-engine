@@ -5,6 +5,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "FxLockProbe.h"
 #include <pthread.h>
 #include <semaphore.h>
 #include <time.h>
@@ -13,8 +14,19 @@ static _Thread_local unsigned long lockCount;
 static _Thread_local unsigned long waitCount;
 static _Thread_local int active;
 
-int voxFxLockAvailable(void) { return 1; }
-void voxFxLockPrepare(void) { active = 0; }
+/* These are the link-time targets requested by CMake. The positive control in
+ * the executable proves that the installed --wrap path is live; it is not a
+ * claim that a dynamically loaded host library is covered. */
+static VoxFxLockCoverage coverage = {
+  12, 12, 1, 12, 12, 0,
+  8, 8, 8, 8,
+  4, 4, 4, 4,
+  1, 1
+};
+
+int voxFxLockAvailable(void) { return coverage.complete; }
+int voxFxLockPrepare(void) { active = 0; return coverage.complete; }
+VoxFxLockCoverage voxFxLockCoverage(void) { return coverage; }
 void voxFxLockBegin(void) { lockCount = 0; waitCount = 0; active = 1; }
 unsigned long voxFxLockEnd(void) { active = 0; return lockCount; }
 unsigned long voxFxWaitEnd(void) { active = 0; return waitCount; }
@@ -56,3 +68,17 @@ WAIT_PROBE(pthread_cond_timedwait,
 WAIT_PROBE(sem_wait, (sem_t* semaphore), (semaphore))
 WAIT_PROBE(sem_timedwait, (sem_t* semaphore, const struct timespec* until),
            (semaphore, until))
+
+int voxFxLockPositiveControl(void) {
+  pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+  sem_t semaphore;
+  const int mutexOk = pthread_mutex_lock(&mutex) == 0;
+  if (mutexOk)
+    (void)pthread_mutex_unlock(&mutex);
+  if (sem_init(&semaphore, 0, 1) != 0)
+    return 0;
+  const int semaphoreOk = sem_wait(&semaphore) == 0;
+  (void)sem_destroy(&semaphore);
+  (void)pthread_mutex_destroy(&mutex);
+  return mutexOk && semaphoreOk;
+}

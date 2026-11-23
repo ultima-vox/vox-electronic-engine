@@ -25,6 +25,7 @@
 #ifndef PSAPI_VERSION
 #define PSAPI_VERSION 2
 #endif
+#include "FxLockProbe.h"
 #include <windows.h>
 #include <psapi.h>
 #include <stddef.h>
@@ -32,6 +33,7 @@
 static __declspec(thread) int vox_fx_lock_active;
 static __declspec(thread) unsigned long vox_fx_lock_count;
 static __declspec(thread) unsigned long vox_fx_wait_count;
+static VoxFxLockCoverage vox_fx_coverage;
 
 #define VOX_FX_COUNT_LOCK() do { if (vox_fx_lock_active) ++vox_fx_lock_count; } while (0)
 #define VOX_FX_COUNT_WAIT() do { if (vox_fx_lock_active) ++vox_fx_wait_count; } while (0)
@@ -182,8 +184,8 @@ static VoxFxTarget vox_fx_targets[] = {
               sleepConditionVariableSrwOriginal, sleepConditionVariableSrwHook),
 
   /* Some import tables name kernel32 directly instead of the forwarded
-   * kernelbase export. The resolver suppresses duplicate addresses so only
-   * one original/hook pair is used for a forwarded export. */
+   * kernelbase export. Both table entries intentionally share the same
+   * original/hook pair for that API. */
   LOCK_TARGET("kernel32.dll", "EnterCriticalSection",
               enterCriticalSectionOriginal, enterCriticalSectionHook),
   LOCK_TARGET("kernel32.dll", "TryEnterCriticalSection",
@@ -216,28 +218,72 @@ static VoxFxTarget vox_fx_targets[] = {
 
 #define VOX_FX_TARGET_COUNT (sizeof(vox_fx_targets) / sizeof(vox_fx_targets[0]))
 
+static unsigned long voxFxUniqueTargetCount(int resolvedOnly, int waitOnly) {
+  size_t i;
+  unsigned long count = 0;
+  for (i = 0; i < VOX_FX_TARGET_COUNT; ++i) {
+    size_t j;
+    int first = 1;
+    if (waitOnly >= 0 && vox_fx_targets[i].wait != waitOnly)
+      continue;
+    for (j = 0; j < i; ++j) {
+      if (vox_fx_targets[j].original == vox_fx_targets[i].original) {
+        first = 0;
+        break;
+      }
+    }
+    if (first && (!resolvedOnly || *vox_fx_targets[i].original != NULL))
+      ++count;
+  }
+  return count;
+}
+
+static void voxFxInstallTarget(void **slot, VoxFxTarget *target) {
+  DWORD oldProtect = 0;
+  BOOL restored;
+  ++vox_fx_coverage.matchedSlotCount;
+  if (target->wait)
+    ++vox_fx_coverage.waitMatchedSlotCount;
+  else
+    ++vox_fx_coverage.lockMatchedSlotCount;
+  if (*slot == target->hook) {
+    ++vox_fx_coverage.patchedSlotCount;
+    if (target->wait)
+      ++vox_fx_coverage.waitPatchedSlotCount;
+    else
+      ++vox_fx_coverage.lockPatchedSlotCount;
+    return;
+  }
+  if (!VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &oldProtect)) {
+    ++vox_fx_coverage.patchFailureCount;
+    return;
+  }
+  InterlockedExchangePointer((PVOID volatile *)slot, target->hook);
+  restored = VirtualProtect(slot, sizeof(void *), oldProtect, &oldProtect);
+  FlushInstructionCache(GetCurrentProcess(), slot, sizeof(void *));
+  if (restored) {
+    ++vox_fx_coverage.patchedSlotCount;
+    if (target->wait)
+      ++vox_fx_coverage.waitPatchedSlotCount;
+    else
+      ++vox_fx_coverage.lockPatchedSlotCount;
+  } else {
+    ++vox_fx_coverage.patchFailureCount;
+  }
+}
+
 static void voxFxResolveTargets(void) {
   size_t i;
   for (i = 0; i < VOX_FX_TARGET_COUNT; ++i) {
     HMODULE module;
     void *address;
-    size_t j;
-    int duplicate = 0;
     if (*vox_fx_targets[i].original != NULL)
       continue;
     module = GetModuleHandleA(vox_fx_targets[i].module);
     if (module == NULL)
       continue;
     address = (void *)GetProcAddress(module, vox_fx_targets[i].name);
-    if (address == NULL)
-      continue;
-    for (j = 0; j < VOX_FX_TARGET_COUNT; ++j) {
-      if (j != i && *vox_fx_targets[j].original == address) {
-        duplicate = 1;
-        break;
-      }
-    }
-    if (!duplicate)
+    if (address != NULL)
       *vox_fx_targets[i].original = address;
   }
 }
@@ -246,16 +292,10 @@ static void voxFxPatchSlot(void **slot) {
   size_t i;
   const void *current = *slot;
   for (i = 0; i < VOX_FX_TARGET_COUNT; ++i) {
-    DWORD oldProtect;
     if (*vox_fx_targets[i].original == NULL ||
         current != *vox_fx_targets[i].original)
       continue;
-    oldProtect = 0;
-    if (VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &oldProtect)) {
-      InterlockedExchangePointer(slot, vox_fx_targets[i].hook);
-      VirtualProtect(slot, sizeof(void *), oldProtect, &oldProtect);
-      FlushInstructionCache(GetCurrentProcess(), slot, sizeof(void *));
-    }
+    voxFxInstallTarget(slot, &vox_fx_targets[i]);
     return;
   }
 }
@@ -263,17 +303,11 @@ static void voxFxPatchSlot(void **slot) {
 static void voxFxPatchNamedSlot(void **slot, const char *module, const char *name) {
   size_t i;
   for (i = 0; i < VOX_FX_TARGET_COUNT; ++i) {
-    DWORD oldProtect;
     if (*vox_fx_targets[i].original == NULL ||
         lstrcmpiA(module, vox_fx_targets[i].module) != 0 ||
         lstrcmpiA(name, vox_fx_targets[i].name) != 0)
       continue;
-    oldProtect = 0;
-    if (VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &oldProtect)) {
-      InterlockedExchangePointer(slot, vox_fx_targets[i].hook);
-      VirtualProtect(slot, sizeof(void *), oldProtect, &oldProtect);
-      FlushInstructionCache(GetCurrentProcess(), slot, sizeof(void *));
-    }
+    voxFxInstallTarget(slot, &vox_fx_targets[i]);
     return;
   }
   voxFxPatchSlot(slot);
@@ -321,28 +355,65 @@ static void voxFxPatchModule(HMODULE module) {
   }
 }
 
-static void voxFxInstallHooks(void) {
+static int voxFxInstallHooks(void) {
   HMODULE modules[1024];
   DWORD needed = 0;
   DWORD count;
   DWORD i;
+  vox_fx_coverage.targetCount=voxFxUniqueTargetCount(0, -1);
+  vox_fx_coverage.resolvedTargetCount=0;
+  vox_fx_coverage.loadedModuleCount=0;
+  vox_fx_coverage.matchedSlotCount=0;
+  vox_fx_coverage.patchedSlotCount=0;
+  vox_fx_coverage.patchFailureCount=0;
+  vox_fx_coverage.lockTargetCount=voxFxUniqueTargetCount(0, 0);
+  vox_fx_coverage.lockResolvedTargetCount=0;
+  vox_fx_coverage.lockMatchedSlotCount=0;
+  vox_fx_coverage.lockPatchedSlotCount=0;
+  vox_fx_coverage.waitTargetCount=voxFxUniqueTargetCount(0, 1);
+  vox_fx_coverage.waitResolvedTargetCount=0;
+  vox_fx_coverage.waitMatchedSlotCount=0;
+  vox_fx_coverage.waitPatchedSlotCount=0;
+  vox_fx_coverage.moduleEnumerationComplete=0;
+  vox_fx_coverage.complete=0;
   voxFxResolveTargets();
+  vox_fx_coverage.resolvedTargetCount=voxFxUniqueTargetCount(1, -1);
+  vox_fx_coverage.lockResolvedTargetCount=voxFxUniqueTargetCount(1, 0);
+  vox_fx_coverage.waitResolvedTargetCount=voxFxUniqueTargetCount(1, 1);
   if (!K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed))
-    return;
+    return 0;
+  if (needed > (DWORD)sizeof(modules))
+    return 0;
   count = needed / (DWORD)sizeof(HMODULE);
-  if (count > (DWORD)(sizeof(modules) / sizeof(modules[0])))
-    count = (DWORD)(sizeof(modules) / sizeof(modules[0]));
+  vox_fx_coverage.loadedModuleCount=count;
+  vox_fx_coverage.moduleEnumerationComplete=1;
   for (i = 0; i < count; ++i)
     voxFxPatchModule(modules[i]);
+  vox_fx_coverage.complete=vox_fx_coverage.moduleEnumerationComplete &&
+                           vox_fx_coverage.resolvedTargetCount==vox_fx_coverage.targetCount &&
+                           vox_fx_coverage.lockResolvedTargetCount==vox_fx_coverage.lockTargetCount &&
+                           vox_fx_coverage.waitResolvedTargetCount==vox_fx_coverage.waitTargetCount &&
+                           vox_fx_coverage.matchedSlotCount>0 &&
+                           vox_fx_coverage.patchedSlotCount==vox_fx_coverage.matchedSlotCount &&
+                           vox_fx_coverage.lockMatchedSlotCount>0 &&
+                           vox_fx_coverage.waitMatchedSlotCount>0 &&
+                           vox_fx_coverage.lockPatchedSlotCount==vox_fx_coverage.lockMatchedSlotCount &&
+                           vox_fx_coverage.waitPatchedSlotCount==vox_fx_coverage.waitMatchedSlotCount &&
+                           vox_fx_coverage.patchFailureCount==0;
+  return vox_fx_coverage.complete;
 }
 
 int voxFxLockAvailable(void) {
-  return 1;
+  return vox_fx_coverage.complete;
 }
 
-void voxFxLockPrepare(void) {
+int voxFxLockPrepare(void) {
   vox_fx_lock_active = 0;
-  voxFxInstallHooks();
+  return voxFxInstallHooks();
+}
+
+VoxFxLockCoverage voxFxLockCoverage(void) {
+  return vox_fx_coverage;
 }
 
 void voxFxLockBegin(void) {
@@ -359,4 +430,20 @@ unsigned long voxFxLockEnd(void) {
 unsigned long voxFxWaitEnd(void) {
   vox_fx_lock_active = 0;
   return vox_fx_wait_count;
+}
+
+int voxFxLockPositiveControl(void) {
+  CRITICAL_SECTION lock;
+  HANDLE event;
+  DWORD result;
+  InitializeCriticalSection(&lock);
+  EnterCriticalSection(&lock);
+  LeaveCriticalSection(&lock);
+  DeleteCriticalSection(&lock);
+  event=CreateEventA(NULL,TRUE,TRUE,NULL);
+  if (event==NULL)
+    return 0;
+  result=WaitForSingleObject(event,0);
+  CloseHandle(event);
+  return result==WAIT_OBJECT_0;
 }

@@ -16,27 +16,36 @@ The existing `suite_fx_runtime_stress_tests` fixture drives the actual
 `FxProcessor::processBlock` path, rather than a stand-alone DSP function. With
 `VOX_FX_TIMING_THREAD_CPU=1` it records, for every measured callback:
 
-- wall time from `steady_clock`;
-- thread CPU time from the Windows `GetThreadTimes` user plus kernel counters;
+- the exact bracket `CPU start -> wall start -> processBlock -> wall end -> CPU end`;
+- wall time from `steady_clock` and thread CPU time from Windows
+  `GetThreadTimes` user plus kernel counters;
+- the separately calibrated empty wall/CPU timer deltas (the deadline values
+  remain the raw observed callback intervals, conservatively including the
+  boundary API cost);
 - the deadline `frames / sample-rate * 1,000,000` in microseconds;
 - wall, CPU and wall-only deadline exceedances;
-- CPU-pair coverage, zero deltas and the minimum positive CPU delta so coarse
-  Windows timer resolution is visible instead of being treated as zero CPU;
+- p50, p95, p99, p99.9 and max for both wall and CPU, plus complete CPU-pair
+  coverage, zero deltas and the minimum positive CPU delta so coarse Windows
+  timer resolution is visible instead of being treated as zero CPU;
 - peak, DC, finite-output and active-grain assertions.
 
 The callback fixture also enables the existing Windows IAT allocation probe and
-the new Windows synchronization probe on the measured thread. The probes are
-started before `processBlock` and stopped after it; their installation and
-reporting are outside the timed region. The allocation count is an entry-point
-count, not a byte count. The synchronization count includes observed critical
-section/SRW-lock entries and Win32 wait/condition-variable entries, reported as
-lock and wait columns separately.
+the new Windows synchronization probe on the measured thread. Probe setup,
+positive-control lock/wait calls, and probe teardown are outside the timed
+bracket. The allocation count is an entry-point count, not a byte count. The
+synchronization probe records target, resolved, matched-import, installed-hook
+and patch-failure counts separately for lock and wait APIs. A report is not
+qualifying when the probe is unavailable, incomplete, or its positive control
+did not count both paths; an observed callback count of zero is never allowed
+to mask that state.
 
 The new `VOX_FX_T18_REPORT_V1` TSV is an auditable companion to stdout. It keeps
-all 160 callback rows for every matrix cell, not only misses. The checker
-`evidence/audit-fx-windows-timing.py` reconciles the matrix, deadlines,
-percentiles, CPU pairs, miss flags and case totals. It deliberately reports
-`diagnostic only`; it cannot grant qualification.
+all 160 callback rows for every matrix cell and explicit `miss` rows, not only
+an aggregate. The checker `evidence/audit-fx-windows-timing.py` reconciles the
+matrix, deadlines, p50/p95/p99/p99.9/max values, CPU pairs, miss flags, probe
+attestation and case totals. It independently reads git HEAD/tree, hashes the
+executable and runner receipt, and verifies the artifact manifest. It
+deliberately reports `diagnostic only`; it cannot grant qualification.
 
 ## Proposed controlled scenario
 
@@ -50,8 +59,10 @@ with no DAW or build activity competing for the runner:
 | typical | `VOX_FX_STRESS_TYPICAL=1` | 44.1/48/96 kHz × 64/128/512 frames × 1 voice × Pattern off | one curated Firefly Ladder event without randomized MIDI or host Pattern |
 
 Each cell measures 160 callbacks after `prepareToPlay`. The first measured
-callback is retained; it must not be hidden by a warm-up policy. The fixture
-uses only built-in deterministic data and does not read customer files. The
+callback is retained; it must not be hidden by a warm-up policy. Every full
+profile report explicitly retains the sentinel cases `r96000_f64_v1_poff` and
+`r44100_f512_v8_pon`; the reduced typical report declares them not applicable.
+The fixture uses only built-in deterministic data and does not read customer files. The
 stress profiles use the existing four granular layers, four serial Drive slots
 and 64-route configuration. Pattern-on cells use the existing max-ratchet
 four-bar grid.
@@ -80,40 +91,31 @@ cmake -S . -B build-t18 -A x64 `
   "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
 cmake --build build-t18 --config Release --clean-first --parallel
 
-$env:VOX_FX_TIMING_THREAD_CPU = '1'
-$env:VOX_FX_SOURCE_SHA = (git rev-parse HEAD)
-$env:VOX_FX_REPORT = (Join-Path (Resolve-Path .).Path 't18-out\routed.tsv')
-New-Item -ItemType Directory -Force t18-out | Out-Null
-ctest --test-dir build-t18 -C Release `
-  -R '^suite_fx_runtime_stress_tests$' --no-tests=error `
-  --output-on-failure -VV
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-$env:VOX_FX_STRESS_AUTHORED = '1'
-$env:VOX_FX_REPORT = (Join-Path (Resolve-Path .).Path 't18-out\authored.tsv')
-ctest --test-dir build-t18 -C Release `
-  -R '^suite_fx_runtime_stress_tests$' --no-tests=error `
-  --output-on-failure -VV
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Remove-Item Env:VOX_FX_STRESS_AUTHORED
-$env:VOX_FX_STRESS_TYPICAL = '1'
-$env:VOX_FX_REPORT = (Join-Path (Resolve-Path .).Path 't18-out\typical.tsv')
-ctest --test-dir build-t18 -C Release `
-  -R '^suite_fx_runtime_stress_tests$' --no-tests=error `
-  --output-on-failure -VV
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-python docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py `
-  t18-out\routed.tsv > t18-out\routed.audit.json
-python docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py `
-  t18-out\authored.tsv > t18-out\authored.audit.json
-python docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py `
-  t18-out\typical.tsv > t18-out\typical.audit.json
+# This runs routed, authored and typical independently. It does not stop after
+# the first failure; each profile retains its own CTest exit, raw text, TSV,
+# runner receipt, artifact manifest and audit attempt. The final exit is 1 if
+# any profile is a performance, test, infrastructure or artifact failure.
+.\docs\ultima-vox-music\fx\evidence\run-fx-windows-t18.ps1 `
+  -BuildDir build-t18 -OutputDir t18-out `
+  -ExpectedHead (git rev-parse HEAD) `
+  -ExpectedTree (git rev-parse 'HEAD^{tree}')
 ```
 
+The checked-in orchestrator invokes the auditor with `--root`, `--executable`,
+`--runner-receipt`, `--artifact-manifest`, `--expected-head` and
+`--expected-tree`. The auditor does not trust the report's caller-supplied
+source SHA: it independently executes `git rev-parse`, recomputes the EXE and
+receipt SHA-256 values, and hashes every artifact listed in the manifest. A
+missing report or failed audit is classified as infrastructure/test evidence;
+a valid report with deadline/allocation/lock/wait failures is classified as
+performance failure. All three profiles still run after any earlier category.
+
+For a local schema-only fixture, the auditor may be invoked with both
+`--allow-nonwindows --allow-unverified-provenance`; those flags are explicitly
+not a qualification receipt and must not be used on a Windows result.
+
 The report paths must be unique per invocation. Preserve the raw CTest text,
-three TSV files, three JSON audit outputs, `ctest --show-only=json-v1`, exact
+three TSV files, three audit outputs (JSON on successful audit, raw text otherwise), `ctest --show-only=json-v1`, exact
 source/tree SHA, binary SHA-256, runner manifest and the PowerShell environment
 receipt. Do not commit the hardware reports or generated build tree to Git.
 
@@ -124,17 +126,31 @@ The receipt must report these outcomes independently:
 - `wall_miss`: callback wall time exceeded its frame deadline;
 - `cpu_miss`: measured thread CPU exceeded its frame deadline;
 - `wall_only_miss`: wall exceeded while the measured thread CPU did not;
+- p50/p95/p99/p99.9/max for wall and CPU, with every raw callback and explicit
+  raw miss rows retained;
 - allocation probe unavailable, non-zero, or zero;
-- synchronization/wait probe unavailable, non-zero, or zero;
-- incomplete CPU pairs, zero deltas, and minimum positive delta;
+- synchronization/wait probe unavailable, incomplete, non-zero, or zero, with
+  target/resolved/imported/installed counts and positive-control results;
+- incomplete CPU pairs, zero deltas, minimum positive delta and timer/API
+  calibration values;
 - finite/output/grain assertion failure, timeout, crash, skipped run or missing
-  artifact.
+  artifact;
+- independent git HEAD/tree, executable SHA-256, runner receipt and artifact
+  manifest checks.
 
-No aggregate average can erase a per-block miss. A zero `GetThreadTimes` delta
-is not evidence of zero work. A zero IAT count covers only the loaded fixture
-and documented API entry points; it is not a proof about all host modules or
-kernel-internal waits. A clean fixture result is therefore necessary evidence,
-not a DAW dropout guarantee.
+The orchestrator classifies a valid report with deadline/allocation/lock/wait
+failures as `performance_failure`, a valid report with a failed fixture
+assertion as `test_failure`, and missing/malformed/unverifiable reports or
+artifacts as `infrastructure_failure` (a missing report is additionally
+`infrastructure_or_test_failure`). It still runs every profile after a failure
+and returns a failing overall status. No aggregate average can erase a
+per-block miss. A zero `GetThreadTimes` delta is not evidence of zero work. A
+zero IAT count covers only the loaded fixture and documented API entry points;
+it is not a proof about all host modules or kernel-internal waits. A clean
+fixture result is therefore necessary evidence, not a DAW dropout guarantee.
+The negative fixtures in `evidence/test-audit-fx-windows-timing.py` protect the
+strict `>` deadline parity at exact budget equality, miss-row reconciliation,
+and incomplete-probe rejection.
 
 The proposed engineering interpretation is **not a pass/fail threshold** until
 TL approves the scenario and target hardware. For the later qualification gate,

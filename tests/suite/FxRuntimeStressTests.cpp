@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <memory>
 #include <string>
+#include <limits>
 #if JUCE_WINDOWS
  #ifndef NOMINMAX
   #define NOMINMAX
@@ -42,6 +43,33 @@ double threadMicros() noexcept {
     if(clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t)==0)return t.tv_sec*1e6+t.tv_nsec*.001;
 #endif
     return -1;
+}
+
+struct TimingOverhead final {
+    double wallUs=0.0;
+    double cpuUs=-1.0;
+    int samples=0;
+};
+
+TimingOverhead calibrateTimingOverhead(bool includeCpu) noexcept {
+    TimingOverhead result;
+    double bestWall=std::numeric_limits<double>::max();
+    double bestCpu=std::numeric_limits<double>::max();
+    constexpr int samples=128;
+    for(int i=0;i<samples;++i){
+        const auto wall0=std::chrono::steady_clock::now();
+        const auto wall1=std::chrono::steady_clock::now();
+        bestWall=std::min(bestWall,std::chrono::duration<double,std::micro>(wall1-wall0).count());
+        if(includeCpu){
+            const auto cpu0=threadMicros();
+            const auto cpu1=threadMicros();
+            if(cpu0>=0&&cpu1>=cpu0)bestCpu=std::min(bestCpu,cpu1-cpu0);
+        }
+    }
+    result.wallUs=bestWall==std::numeric_limits<double>::max()?0.0:bestWall;
+    result.cpuUs=bestCpu==std::numeric_limits<double>::max()?-1.0:bestCpu;
+    result.samples=samples;
+    return result;
 }
 
 std::string cleanText(const juce::String& value) {
@@ -87,13 +115,26 @@ int main(){
     const char* requestedReport=std::getenv("VOX_FX_REPORT");
     const bool wantsReport=requestedReport!=nullptr&&*requestedReport!='\0';
     const char* profile=typical?"typical":(shapes?"authored":"routed");
+    VoxFxLockCoverage lockCoverage{};
+    bool lockProbeAvailable=false;
+    bool positiveControlPassed=false;
+    unsigned long positiveControlLocks=0,positiveControlWaits=0;
 #ifdef VOX_FX_LOCK_PROBE
-    const bool lockProbeAvailable=voxFxLockAvailable()!=0;
-#else
-    const bool lockProbeAvailable=false;
+    if(voxFxLockPrepare()){
+        lockCoverage=voxFxLockCoverage();
+        voxFxLockBegin();
+        positiveControlPassed=voxFxLockPositiveControl()!=0;
+        positiveControlLocks=voxFxLockEnd();
+        positiveControlWaits=voxFxWaitEnd();
+        lockCoverage=voxFxLockCoverage();
+        lockProbeAvailable=positiveControlPassed&&lockCoverage.complete&&positiveControlLocks>0&&positiveControlWaits>0;
+    }else{
+        lockCoverage=voxFxLockCoverage();
+    }
 #endif
 
     if(splitTiming&&threadMicros()<0){std::fputs("Requested thread CPU clock unavailable\n",stderr);return 2;}
+    const auto timingOverhead=splitTiming?calibrateTimingOverhead(true):TimingOverhead{};
     if(wantsReport&&!splitTiming){
         std::fputs("VOX_FX_REPORT requires VOX_FX_TIMING_THREAD_CPU=1\n",stderr);
         return 2;
@@ -115,6 +156,11 @@ int main(){
         writeMeta(report,"format","VOX_FX_T18_REPORT_V1");
         writeMeta(report,"profile",profile);
         writeMeta(report,"source_sha",std::getenv("VOX_FX_SOURCE_SHA")?std::getenv("VOX_FX_SOURCE_SHA"):"not-supplied");
+        writeMeta(report,"source_head",std::getenv("VOX_FX_SOURCE_SHA")?std::getenv("VOX_FX_SOURCE_SHA"):"not-supplied");
+        writeMeta(report,"source_tree",std::getenv("VOX_FX_SOURCE_TREE")?std::getenv("VOX_FX_SOURCE_TREE"):"not-supplied");
+        writeMeta(report,"executable_path",std::getenv("VOX_FX_EXECUTABLE")?std::getenv("VOX_FX_EXECUTABLE"):"not-supplied");
+        writeMeta(report,"executable_sha256",std::getenv("VOX_FX_EXE_SHA256")?std::getenv("VOX_FX_EXE_SHA256"):"not-supplied");
+        writeMeta(report,"runner_receipt_sha256",std::getenv("VOX_FX_RUNNER_RECEIPT_SHA256")?std::getenv("VOX_FX_RUNNER_RECEIPT_SHA256"):"not-supplied");
         writeMeta(report,"platform",cleanText(juce::SystemStats::getOperatingSystemName()));
         writeMeta(report,"cpu_model",cleanText(juce::SystemStats::getCpuModel()));
         writeMeta(report,"logical_cpus",juce::SystemStats::getNumCpus());
@@ -125,13 +171,38 @@ int main(){
         writeMeta(report,"timing_clock","CLOCK_THREAD_CPUTIME_ID");
 #endif
         writeMeta(report,"timing_requested",splitTiming?"1":"0");
+        writeMeta(report,"timing_bracket","cpu_start,wall_start,processBlock,wall_end,cpu_end");
+        writeMeta(report,"wall_timer_overhead_us",timingOverhead.wallUs);
+        writeMeta(report,"cpu_timer_overhead_us",timingOverhead.cpuUs);
+        writeMeta(report,"timer_calibration_samples",timingOverhead.samples);
         writeMeta(report,"allocation_probe",allocationProbeAvailable?"available":"unavailable");
         writeMeta(report,"lock_probe",lockProbeAvailable?"available":"unavailable");
         writeMeta(report,"wait_probe",lockProbeAvailable?"available":"unavailable");
+        writeMeta(report,"lock_target_count",lockCoverage.lockTargetCount);
+        writeMeta(report,"lock_resolved_target_count",lockCoverage.lockResolvedTargetCount);
+        writeMeta(report,"lock_matched_slot_count",lockCoverage.lockMatchedSlotCount);
+        writeMeta(report,"lock_patched_slot_count",lockCoverage.lockPatchedSlotCount);
+        writeMeta(report,"wait_target_count",lockCoverage.waitTargetCount);
+        writeMeta(report,"wait_resolved_target_count",lockCoverage.waitResolvedTargetCount);
+        writeMeta(report,"wait_matched_slot_count",lockCoverage.waitMatchedSlotCount);
+        writeMeta(report,"wait_patched_slot_count",lockCoverage.waitPatchedSlotCount);
+        writeMeta(report,"lock_target_count_total",lockCoverage.targetCount);
+        writeMeta(report,"lock_resolved_target_count_total",lockCoverage.resolvedTargetCount);
+        writeMeta(report,"lock_loaded_module_count",lockCoverage.loadedModuleCount);
+        writeMeta(report,"lock_matched_slot_count_total",lockCoverage.matchedSlotCount);
+        writeMeta(report,"lock_patched_slot_count_total",lockCoverage.patchedSlotCount);
+        writeMeta(report,"lock_patch_failure_count",lockCoverage.patchFailureCount);
+        writeMeta(report,"lock_module_enumeration_complete",lockCoverage.moduleEnumerationComplete?"1":"0");
+        writeMeta(report,"lock_positive_control_passed",positiveControlPassed?"1":"0");
+        writeMeta(report,"lock_positive_control_entries",positiveControlLocks);
+        writeMeta(report,"wait_positive_control_entries",positiveControlWaits);
+        writeMeta(report,"lock_coverage_complete",lockCoverage.complete?"1":"0");
         writeMeta(report,"blocks_per_case",blocksPerCase);
+        writeMeta(report,"sentinel_cases",typical?"not-applicable":"r96000_f64_v1_poff,r44100_f512_v8_pon");
         writeMeta(report,"matrix","44100,48000,96000 Hz x 64,128,512 frames x 1,4,8 voices x Pattern off,on (typical is reduced)");
-        report << "schema\tcase\tcase_id\tprofile\trate_hz\tframes\tinitial_voices\tpattern\tblocks\tbudget_us\talloc_calls\tlock_entries\twait_entries\tcpu_pairs\tzero_cpu_deltas\tmin_positive_cpu_us\twall_misses\tcpu_misses\twall_only_misses\tmax_grains\tpeak\tdc\twall_p50_us\twall_p95_us\twall_p99_us\twall_max_us\tcpu_p50_us\tcpu_p95_us\tcpu_p99_us\tcpu_max_us\tcpu_at_wall_max_us\n";
+        report << "schema\tcase\tcase_id\tprofile\trate_hz\tframes\tinitial_voices\tpattern\tblocks\tbudget_us\talloc_calls\tlock_entries\twait_entries\tcpu_pairs\tzero_cpu_deltas\tmin_positive_cpu_us\twall_misses\tcpu_misses\twall_only_misses\tmax_grains\tpeak\tdc\twall_p50_us\twall_p95_us\twall_p99_us\twall_p99_9_us\twall_max_us\tcpu_p50_us\tcpu_p95_us\tcpu_p99_us\tcpu_p99_9_us\tcpu_max_us\tcpu_at_wall_max_us\n";
         report << "schema\tblock\tcase_id\tblock\twall_us\tcpu_us\tbudget_us\twall_miss\tcpu_miss\tevents\tgrains\n";
+        report << "schema\tmiss\tcase_id\tblock\twall_us\tcpu_us\tbudget_us\twall_miss\tcpu_miss\tevents\tgrains\n";
     }
 
     if(typical)std::puts("Typical profile: one triggered curated riser, no synchronized pattern or randomized MIDI");
@@ -214,7 +285,7 @@ int main(){
         std::uint32_t rng=0x154311u;bool finite=true,midiConsumed=true;
         unsigned long alloc=0,locks=0,waits=0;std::size_t cpuCount=0;
         const double budget=frames*1e6/rate;
-        double maxWall=0,cpuAtMaxWall=-1,minPositiveCpu=0;
+        double maxWall=-1,cpuAtMaxWall=-1,minPositiveCpu=0;
         int wallMisses=0,cpuMisses=0,wallOnly=0,cpuPairs=0,zeroCpuDeltas=0;
         for(int block=0;block<blocksPerCase;++block){
             if(block==0)for(int i=0;i<voices;++i)midi.addEvent(juce::MidiMessage::noteOn(1,firstNote+i,juce::uint8(100)),0);
@@ -229,20 +300,18 @@ int main(){
             }
             if(!typical&&block==129)fx->panic();
             if(patternOn)clock.advance(static_cast<std::int64_t>(block)*frames,rate);
-#ifdef VOX_FX_LOCK_PROBE
-            voxFxLockPrepare();
-#endif
 #ifdef VOX_TEST_INTERPOSE_MALLOC
             voxProbeBegin();
 #endif
 #ifdef VOX_FX_LOCK_PROBE
             voxFxLockBegin();
 #endif
-            const auto now=std::chrono::steady_clock::now();
-            const double cpuStart=splitTiming?threadMicros():-1;
+            const double cpuStart=splitTiming?threadMicros():-1.0;
+            const auto wallStart=std::chrono::steady_clock::now();
             fx->processBlock(io,midi);
-            const double cpuEnd=splitTiming?threadMicros():-1;
-            durations[block]=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-now).count();
+            const auto wallEnd=std::chrono::steady_clock::now();
+            const double cpuEnd=splitTiming?threadMicros():-1.0;
+            durations[block]=std::chrono::duration<double,std::micro>(wallEnd-wallStart).count();
             unsigned long lockCount=0,waitCount=0;
 #ifdef VOX_FX_LOCK_PROBE
             lockCount=voxFxLockEnd();
@@ -277,23 +346,26 @@ int main(){
         const auto wallMissesFromSamples=[&]{int count=0;for(const auto value:durations)count+=value>budget;return count;};
         wallMisses=wallMissesFromSamples();
         if(!finite||!midiConsumed||!(peak>.00001&&peak<1&&dc<.01)||alloc||locks||waits||maximumGrains>64||(voices==8&&maximumGrains!=64))++errors;
+        if(splitTiming&&(wallMisses>0||cpuMisses>0))++errors;
         if(splitTiming&&cpuPairs!=blocksPerCase)++errors;
         if(splitTiming&&(!allocationProbeAvailable||!lockProbeAvailable))++errors;
 
         const auto wallP50=percentile(durations,blocksPerCase,79);
         const auto wallP95=percentile(durations,blocksPerCase,151);
         const auto wallP99=percentile(durations,blocksPerCase,158);
-        const auto wallMax=percentile(durations,blocksPerCase,159);
+        const auto wallP999=percentile(durations,blocksPerCase,159);
+        const auto wallMax=wallP999;
         const auto cpuP50=percentile(cpuDurations,cpuCount,79);
         const auto cpuP95=percentile(cpuDurations,cpuCount,151);
         const auto cpuP99=percentile(cpuDurations,cpuCount,158);
-        const auto cpuMax=percentile(cpuDurations,cpuCount,159);
+        const auto cpuP999=percentile(cpuDurations,cpuCount,159);
+        const auto cpuMax=cpuP999;
         char caseId[96];std::snprintf(caseId,sizeof(caseId),"r%.0f_f%d_v%d_p%s",rate,frames,voices,patternOn?"on":"off");
-        std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu wait %lu p50 %.2f p95 %.2f p99 %.2f max %.2f us\n",
-            rate,frames,voices,peak,dc,maximumGrains,alloc,locks,waits,wallP50,wallP95,wallP99,wallMax);
+        std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu wait %lu wall p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us\n",
+            rate,frames,voices,peak,dc,maximumGrains,alloc,locks,waits,wallP50,wallP95,wallP99,wallP999,wallMax);
         if(splitTiming){
-            std::printf("  thread CPU p50 %.2f p95 %.2f p99 %.2f max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
-                cpuP50,cpuP95,cpuP99,cpuMax,wallMax,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocksPerCase);
+            std::printf("  thread CPU p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us; at wall max %.2f us thread %.2f us; misses wall/CPU/wall-only %d/%d/%d of %d\n",
+                cpuP50,cpuP95,cpuP99,cpuP999,cpuMax,wallMax,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocksPerCase);
             std::printf("  thread CPU valid %d/%d; zero deltas %d; min positive delta %.2f us\n",
                 cpuPairs,blocksPerCase,zeroCpuDeltas,minPositiveCpu);
             for(int block=0;block<blocksPerCase;++block){
@@ -304,18 +376,24 @@ int main(){
             }
         }
         if(report){
-            report << "case\t" << caseId << '\t' << profile << '\t' << std::fixed << std::setprecision(9)
+            report << "case\t" << caseId << '\t' << profile << '\t' << std::fixed << std::setprecision(17)
                    << static_cast<int>(rate) << '\t' << frames << '\t' << voices << '\t' << (patternOn?"on":"off") << '\t'
                    << blocksPerCase << '\t' << budget << '\t' << alloc << '\t' << locks << '\t' << waits << '\t'
                    << cpuPairs << '\t' << zeroCpuDeltas << '\t' << minPositiveCpu << '\t' << wallMisses << '\t'
                    << cpuMisses << '\t' << wallOnly << '\t' << maximumGrains << '\t' << peak << '\t' << dc << '\t'
-                   << wallP50 << '\t' << wallP95 << '\t' << wallP99 << '\t' << wallMax << '\t'
-                   << cpuP50 << '\t' << cpuP95 << '\t' << cpuP99 << '\t' << cpuMax << '\t' << cpuAtMaxWall << '\n';
+                   << wallP50 << '\t' << wallP95 << '\t' << wallP99 << '\t' << wallP999 << '\t' << wallMax << '\t'
+                   << cpuP50 << '\t' << cpuP95 << '\t' << cpuP99 << '\t' << cpuP999 << '\t' << cpuMax << '\t' << cpuAtMaxWall << '\n';
             for(int block=0;block<blocksPerCase;++block){
                 const auto cpu=cpuByBlock[static_cast<std::size_t>(block)];
+                const bool wallMiss=durations[block]>budget;
+                const bool cpuMiss=cpu>=0.0&&cpu>budget;
                 report << "block\t" << caseId << '\t' << block << '\t' << durations[block] << '\t' << cpu << '\t'
-                       << budget << '\t' << (durations[block]>budget) << '\t' << (cpu>budget) << '\t'
+                       << budget << '\t' << wallMiss << '\t' << cpuMiss << '\t'
                        << eventCounts[block] << '\t' << grainCounts[block] << '\n';
+                if(wallMiss||cpuMiss)
+                    report << "miss\t" << caseId << '\t' << block << '\t' << durations[block] << '\t' << cpu << '\t'
+                           << budget << '\t' << wallMiss << '\t' << cpuMiss << '\t'
+                           << eventCounts[block] << '\t' << grainCounts[block] << '\n';
             }
         }
     }
