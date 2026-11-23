@@ -72,6 +72,7 @@ def report_text() -> str:
     lines = ["# fixture", *(f"meta\t{k}\t{v}" for k, v in metadata.items())]
     lines += [
         "schema\tcase\tfixture",
+        "schema\tfunctional\t" + "\t".join(AUDIT.FUNCTIONAL_FIELDS),
         "schema\tblock\tfixture",
         "schema\tmiss\tfixture",
     ]
@@ -89,6 +90,7 @@ def report_text() -> str:
                         f"{budget:.17f}", f"{budget:.17f}", f"{budget:.17f}", f"{budget:.17f}", f"{budget:.17f}", f"{budget:.17f}",
                     ]
                     lines.append("case\t" + "\t".join(values))
+                    lines.append(f"functional\t{case_id}\t1\t1\t1\t1\t1\t1\t1\tNONE")
                     for block in range(160):
                         lines.append(
                             f"block\t{case_id}\t{block}\t{budget:.17f}\t{budget:.17f}\t"
@@ -172,6 +174,19 @@ def mixed_failure_report_text(text: str) -> str:
             values = dict(zip(AUDIT.CASE_FIELDS, fields[1:]))
             values["alloc_calls"] = "1"
             output.append("case\t" + "\t".join(values[field] for field in AUDIT.CASE_FIELDS))
+        else:
+            output.append(line)
+    return "\n".join(output) + "\n"
+
+
+def mutate_functional_record(text: str, target: str, **updates: str) -> str:
+    output: list[str] = []
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if fields[0] == "functional" and fields[1] == target:
+            values = dict(zip(AUDIT.FUNCTIONAL_FIELDS, fields[1:]))
+            values.update(updates)
+            output.append("functional\t" + "\t".join(values[field] for field in AUDIT.FUNCTIONAL_FIELDS))
         else:
             output.append(line)
     return "\n".join(output) + "\n"
@@ -328,11 +343,51 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "mixed-failure.tsv"
+        mixed = mutate_functional_record(
+            quantized, "r44100_f64_v1_poff", finite_output="0", functional_pass="0",
+            reasons="FINITE_OUTPUT")
+        path.write_text(mixed, encoding="utf-8")
+        result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True)
+        assert result["cpu_measurement_insufficient"]
+        assert result["functional_failure"]
+        assert result["performance_failure"]
+        assert result["primary_status"] == "WALL_GATE_FAIL"
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "mixed-allocation-failure.tsv"
         path.write_text(mixed_failure_report_text(quantized), encoding="utf-8")
         result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True)
         assert result["cpu_measurement_insufficient"]
         assert result["performance_failure"]
         assert result["totals"]["alloc_calls"] > 0
+
+    expect_failure(mutate_functional_record(
+        valid, "r44100_f64_v1_poff", finite_output="0", functional_pass="0", reasons="NONE"),
+                   "functional reason codes do not match")
+    expect_failure(mutate_functional_record(
+        valid, "r44100_f64_v1_poff", voice8_grain_invariant="0", functional_pass="0",
+        reasons="VOICE8_GRAIN_INVARIANT"),
+                   "non-8-voice case has false voice8_grain_invariant")
+
+    blocked_iat = valid.replace("meta\tlock_probe\tavailable", "meta\tlock_probe\tunavailable", 1)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "iat-blocked.tsv"
+        path.write_text(blocked_iat, encoding="utf-8")
+        result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True,
+                             allow_instrumentation_blocked=True)
+        assert result["instrumentation_blocked"]
+        assert result["evidence_blocked"]
+        assert not result["safety_failure"]
+        assert result["primary_status"] == "WALL_GATE_BLOCKED"
+
+    observed_lock = valid.replace("\t0\t0\t0\t160\t0\t", "\t0\t1\t0\t160\t0\t", 1)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "observed-lock.tsv"
+        path.write_text(observed_lock, encoding="utf-8")
+        result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True)
+        assert result["safety_failure"]
+        assert result["performance_failure"]
+        assert result["primary_status"] == "WALL_GATE_FAIL"
 
     # A coarse 0/15625-us clock must remain diagnostic, not a real CPU pass.
     falsely_measured = quantized.replace(

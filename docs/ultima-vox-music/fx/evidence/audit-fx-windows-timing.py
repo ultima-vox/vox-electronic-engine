@@ -47,6 +47,18 @@ BLOCK_FIELDS = (
     "cpu_miss", "events", "grains",
 )
 MISS_FIELDS = BLOCK_FIELDS
+FUNCTIONAL_FIELDS = (
+    "case_id", "finite_output", "midi_consumed", "peak_in_range", "dc_in_range",
+    "grain_limit", "voice8_grain_invariant", "functional_pass", "reasons",
+)
+FUNCTIONAL_REASON_ORDER = (
+    ("finite_output", "FINITE_OUTPUT"),
+    ("midi_consumed", "MIDI_NOT_CONSUMED"),
+    ("peak_in_range", "PEAK_RANGE"),
+    ("dc_in_range", "DC_OFFSET"),
+    ("grain_limit", "MAX_GRAINS"),
+    ("voice8_grain_invariant", "VOICE8_GRAIN_INVARIANT"),
+)
 
 REQUIRED_METADATA = {
     "format", "profile", "source_sha", "source_head", "source_tree",
@@ -316,14 +328,44 @@ def _parse_record(values: list[str], fields: tuple[str, ...], line_number: int, 
     return result
 
 
+def _parse_functional(values: list[str], line_number: int, path: Path) -> dict[str, Any]:
+    if len(values) != 1 + len(FUNCTIONAL_FIELDS):
+        raise ValueError(f"{path}:{line_number}: malformed functional record")
+    result: dict[str, Any] = dict(zip(FUNCTIONAL_FIELDS, values[1:]))
+    for field in ("finite_output", "midi_consumed", "peak_in_range", "dc_in_range",
+                  "grain_limit", "voice8_grain_invariant", "functional_pass"):
+        result[field] = _int(result[field], field)
+        if result[field] not in (0, 1):
+            raise ValueError(f"{path}:{line_number}: {field} is not boolean")
+    reason_text = result["reasons"]
+    if reason_text == "NONE":
+        result["reason_codes"] = []
+    else:
+        codes = reason_text.split(";")
+        known = {code for _, code in FUNCTIONAL_REASON_ORDER}
+        if any(not code or code not in known for code in codes):
+            raise ValueError(f"{path}:{line_number}: unknown functional reason code")
+        if len(codes) != len(set(codes)):
+            raise ValueError(f"{path}:{line_number}: duplicate functional reason code")
+        order = [code for _, code in FUNCTIONAL_REASON_ORDER]
+        if codes != sorted(codes, key=order.index):
+            raise ValueError(f"{path}:{line_number}: functional reason codes are not canonical")
+        result["reason_codes"] = codes
+    return result
+
+
 def audit(
     path: Path, require_windows: bool = True, root: Path | None = None,
     executable: Path | None = None, runner_receipt: Path | None = None,
     artifact_manifest: Path | None = None, expected_head: str | None = None,
     expected_tree: str | None = None, allow_unverified_provenance: bool = False,
+    allow_instrumentation_blocked: bool = False,
 ) -> dict[str, Any]:
     metadata: dict[str, str] = {}
+    instrumentation_blocked = False
     cases: dict[str, dict[str, Any]] = {}
+    functional: dict[str, dict[str, Any]] = {}
+    functional_schema_seen = False
     blocks: dict[str, list[dict[str, Any]]] = {}
     misses: dict[tuple[str, int], dict[str, Any]] = {}
 
@@ -341,6 +383,11 @@ def audit(
                 raise ValueError(f"{path}:{line_number}: malformed or duplicate metadata")
             metadata[fields[1]] = fields[2]
         elif fields[0] == "schema":
+            if len(fields) > 1 and fields[1] == "functional":
+                expected_schema = ("schema", "functional", *FUNCTIONAL_FIELDS)
+                if tuple(fields) != expected_schema:
+                    raise ValueError(f"{path}:{line_number}: functional schema header mismatch")
+                functional_schema_seen = True
             continue
         elif fields[0] == "case":
             if len(fields) != 1 + len(CASE_FIELDS):
@@ -364,6 +411,12 @@ def audit(
                           "cpu_max_us", "cpu_at_wall_max_us"):
                 values[field] = _float(values[field], field)
             cases[case_id] = values
+        elif fields[0] == "functional":
+            values = _parse_functional(fields, line_number, path)
+            case_id = values["case_id"]
+            if case_id in functional:
+                raise ValueError(f"{path}:{line_number}: duplicate functional record {case_id}")
+            functional[case_id] = values
         elif fields[0] == "block":
             values = _parse_record(fields, BLOCK_FIELDS, line_number, path)
             blocks.setdefault(values["case_id"], []).append(values)
@@ -376,6 +429,8 @@ def audit(
         else:
             raise ValueError(f"{path}:{line_number}: unknown record {fields[0]!r}")
 
+    if not functional_schema_seen:
+        raise ValueError(f"{path}: missing functional schema header")
     missing = REQUIRED_METADATA - metadata.keys()
     if missing:
         raise ValueError(f"{path}: missing metadata: {', '.join(sorted(missing))}")
@@ -407,7 +462,10 @@ def audit(
         raise ValueError(f"{path}: unexpected Windows timing clock {metadata['timing_clock']!r}")
     for probe in ("allocation_probe", "lock_probe", "wait_probe"):
         if metadata[probe] != "available":
-            raise ValueError(f"{path}: {probe} is {metadata[probe]!r}, not available")
+            if allow_instrumentation_blocked:
+                instrumentation_blocked = True
+            else:
+                raise ValueError(f"{path}: {probe} is {metadata[probe]!r}, not available")
     for name in ("wall_timer_overhead_us", "cpu_timer_overhead_us"):
         if _float(metadata[name], name) < 0.0:
             raise ValueError(f"{path}: {name} is unavailable")
@@ -446,25 +504,33 @@ def audit(
             "lock_patch_failure_count", "lock_positive_control_entries",
             "wait_positive_control_entries")
     }
-    if metadata["lock_coverage_complete"] != "1" \
-            or metadata["lock_module_enumeration_complete"] != "1" \
-            or metadata["lock_positive_control_passed"] != "1":
-        raise ValueError(f"{path}: synchronization instrumentation is incomplete")
-    if coverage_ints["lock_target_count"] <= 0 \
-            or coverage_ints["wait_target_count"] <= 0 \
-            or coverage_ints["lock_loaded_module_count"] <= 0 \
-            or coverage_ints["lock_positive_control_entries"] <= 0 \
-            or coverage_ints["wait_positive_control_entries"] <= 0:
-        raise ValueError(f"{path}: synchronization positive control or target coverage is zero")
-    for prefix in ("lock", "wait"):
-        if coverage_ints[f"{prefix}_target_count"] != coverage_ints[f"{prefix}_resolved_target_count"] \
-                or coverage_ints[f"{prefix}_matched_slot_count"] != coverage_ints[f"{prefix}_patched_slot_count"] \
-                or coverage_ints[f"{prefix}_matched_slot_count"] <= 0:
-            raise ValueError(f"{path}: incomplete {prefix} hook coverage")
-    if coverage_ints["lock_target_count_total"] != coverage_ints["lock_resolved_target_count_total"] \
-            or coverage_ints["lock_matched_slot_count_total"] != coverage_ints["lock_patched_slot_count_total"] \
-            or coverage_ints["lock_patch_failure_count"] != 0:
-        raise ValueError(f"{path}: incomplete aggregate hook coverage")
+    coverage_incomplete = metadata["lock_coverage_complete"] != "1" \
+        or metadata["lock_module_enumeration_complete"] != "1" \
+        or metadata["lock_positive_control_passed"] != "1"
+    coverage_zero = coverage_ints["lock_target_count"] <= 0 \
+        or coverage_ints["wait_target_count"] <= 0 \
+        or coverage_ints["lock_loaded_module_count"] <= 0 \
+        or coverage_ints["lock_positive_control_entries"] <= 0 \
+        or coverage_ints["wait_positive_control_entries"] <= 0
+    prefix_incomplete = any(
+        coverage_ints[f"{prefix}_target_count"] != coverage_ints[f"{prefix}_resolved_target_count"]
+        or coverage_ints[f"{prefix}_matched_slot_count"] != coverage_ints[f"{prefix}_patched_slot_count"]
+        or coverage_ints[f"{prefix}_matched_slot_count"] <= 0
+        for prefix in ("lock", "wait"))
+    aggregate_incomplete = coverage_ints["lock_target_count_total"] != coverage_ints["lock_resolved_target_count_total"] \
+        or coverage_ints["lock_matched_slot_count_total"] != coverage_ints["lock_patched_slot_count_total"] \
+        or coverage_ints["lock_patch_failure_count"] != 0
+    if coverage_incomplete or coverage_zero or prefix_incomplete or aggregate_incomplete:
+        if allow_instrumentation_blocked:
+            instrumentation_blocked = True
+        elif coverage_incomplete:
+            raise ValueError(f"{path}: synchronization instrumentation is incomplete")
+        elif coverage_zero:
+            raise ValueError(f"{path}: synchronization positive control or target coverage is zero")
+        elif prefix_incomplete:
+            raise ValueError(f"{path}: incomplete hook coverage")
+        else:
+            raise ValueError(f"{path}: incomplete aggregate hook coverage")
 
     provenance = _verify_provenance(
         metadata, path, root, executable, runner_receipt, artifact_manifest,
@@ -475,7 +541,7 @@ def audit(
     observed: set[tuple[int, int, int, str]] = set()
     totals = {"callbacks": 0, "cpu_pairs": 0, "wall_misses": 0, "cpu_misses": 0,
               "wall_only_misses": 0, "alloc_calls": 0, "lock_entries": 0,
-              "wait_entries": 0, "zero_cpu_deltas": 0}
+              "wait_entries": 0, "zero_cpu_deltas": 0, "functional_failures": 0}
     deadline_rows: list[dict[str, Any]] = []
     expected_misses: dict[tuple[str, int], dict[str, Any]] = {}
     cpu_values: list[float] = []
@@ -488,6 +554,19 @@ def audit(
         observed.add(key)
         if case["profile"] != profile or case["blocks"] != BLOCKS:
             raise ValueError(f"{path}: mislabeled case {case_id}")
+        functional_row = functional.get(case_id)
+        if functional_row is None:
+            raise ValueError(f"{path}: missing functional record for {case_id}")
+        if case["initial_voices"] != 8 and functional_row["voice8_grain_invariant"] != 1:
+            raise ValueError(f"{path}: non-8-voice case has false voice8_grain_invariant in {case_id}")
+        functional_flags = [functional_row[field] for field, _ in FUNCTIONAL_REASON_ORDER]
+        expected_reason_codes = [code for value, (_, code) in zip(functional_flags, FUNCTIONAL_REASON_ORDER) if value == 0]
+        if functional_row["reason_codes"] != expected_reason_codes:
+            raise ValueError(f"{path}: functional reason codes do not match assertion bits in {case_id}")
+        expected_functional_pass = int(not expected_reason_codes)
+        if functional_row["functional_pass"] != expected_functional_pass:
+            raise ValueError(f"{path}: functional_pass does not reconcile in {case_id}")
+        case["functional_failure"] = not bool(expected_functional_pass)
         budget = case["frames"] * 1_000_000.0 / case["rate_hz"]
         if not _near(case["budget_us"], budget, 0.001):
             raise ValueError(f"{path}: bad deadline in {case_id}")
@@ -546,6 +625,7 @@ def audit(
         totals["lock_entries"] += case["lock_entries"]
         totals["wait_entries"] += case["wait_entries"]
         totals["zero_cpu_deltas"] += case["zero_cpu_deltas"]
+        totals["functional_failures"] += int(case["functional_failure"])
 
     if observed != expected:
         missing_cases = sorted(expected - observed)
@@ -561,6 +641,12 @@ def audit(
     unknown_block_cases = set(blocks) - set(cases)
     if unknown_block_cases:
         raise ValueError(f"{path}: block rows have unknown cases: {sorted(unknown_block_cases)}")
+    unknown_functional_cases = set(functional) - set(cases)
+    if unknown_functional_cases:
+        raise ValueError(f"{path}: functional rows have unknown cases: {sorted(unknown_functional_cases)}")
+    if set(functional) != set(cases):
+        missing_functional = sorted(set(cases) - set(functional))
+        raise ValueError(f"{path}: functional matrix mismatch; missing={missing_functional}")
 
     minimum_budget = min(case["budget_us"] for case in cases.values())
     if not cpu_measurement_insufficient and cpu_running_time_measured == 1 \
@@ -583,18 +669,28 @@ def audit(
     # Raw CPU flags remain in the report, but a coarse/unknown clock cannot
     # turn those flags into demonstrated CPU deadline violations.
     cpu_deadline_failure = totals["cpu_misses"] > 0 and not cpu_measurement_insufficient
-    performance_failure = any(totals[name] > 0 for name in (
-        "wall_misses", "alloc_calls", "lock_entries", "wait_entries")) or cpu_deadline_failure
+    wall_failure = totals["wall_misses"] > 0
+    safety_failure = any(totals[name] > 0 for name in ("alloc_calls", "lock_entries", "wait_entries"))
+    functional_failure = totals["functional_failures"] > 0
+    performance_failure = wall_failure or safety_failure or functional_failure or cpu_deadline_failure
     return {
         "qualification": "diagnostic only; TL must review hardware load, timing resolution and host evidence",
         "report": str(path),
         "profile": profile,
         "cells": len(cases),
         "performance_failure": performance_failure,
+        "wall_failure": wall_failure,
+        "safety_failure": safety_failure,
+        "functional_failure": functional_failure,
+        "execution_failure": False,
+        "instrumentation_blocked": instrumentation_blocked,
+        "evidence_blocked": instrumentation_blocked,
         "cpu_measurement_insufficient": cpu_measurement_insufficient,
+        "cpu_diagnostic_blocked": cpu_measurement_insufficient,
         "diagnostic_failure": cpu_measurement_insufficient,
         "cpu_attribution": cpu_attribution,
         "cpu_resolution": cpu_resolution,
+        "primary_status": "WALL_GATE_FAIL" if (wall_failure or safety_failure or functional_failure) else "WALL_GATE_BLOCKED" if instrumentation_blocked else "PROFILE_INTEGRITY_PASS_CPU_UNKNOWN" if cpu_measurement_insufficient else "PROFILE_INTEGRITY_PASS",
         "totals": totals,
         "deadline_rows": deadline_rows,
         "metadata": metadata,
@@ -618,6 +714,8 @@ def main() -> int:
                         help="allow a non-Windows report for a local schema fixture")
     parser.add_argument("--allow-unverified-provenance", action="store_true",
                         help="skip independent files/git checks; never use for qualification")
+    parser.add_argument("--allow-instrumentation-blocked", action="store_true",
+                        help="retain failed/unavailable probe evidence as BLOCKED; fixture mode only")
     args = parser.parse_args()
     try:
         if args.check_ctest_inventory is not None:
@@ -631,6 +729,7 @@ def main() -> int:
                 artifact_manifest=args.artifact_manifest, expected_head=args.expected_head,
                 expected_tree=args.expected_tree,
                 allow_unverified_provenance=args.allow_unverified_provenance,
+                allow_instrumentation_blocked=args.allow_instrumentation_blocked,
             )
     except (OSError, ValueError) as error:
         parser.exit(2, f"FX Windows timing audit: {error}\n")

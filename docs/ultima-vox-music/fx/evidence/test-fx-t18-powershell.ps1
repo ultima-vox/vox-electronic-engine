@@ -23,6 +23,7 @@ if ([string]::IsNullOrWhiteSpace($OrchestratorPath)) {
 $path = (Resolve-Path -LiteralPath $OrchestratorPath).Path
 $helperPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'FxT18CtestHelpers.ps1')).Path
 $auditScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'audit-fx-windows-timing.py')).Path
+$witnessScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'capture-fx-t18-host-witness.ps1')).Path
 
 function Assert-PowerShellParses([string]$File) {
     $tokens = $null
@@ -35,6 +36,7 @@ function Assert-PowerShellParses([string]$File) {
 
 Assert-PowerShellParses $path
 Assert-PowerShellParses $helperPath
+Assert-PowerShellParses $witnessScript
 . $helperPath
 
 $tempRoot = Join-Path $env:TEMP "vox-fx-t18-powershell-$PID"

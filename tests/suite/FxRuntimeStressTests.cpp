@@ -88,6 +88,23 @@ void writeMeta(std::ofstream& report,const char* key,Value value) {
     report << "meta\t" << key << '\t' << value << '\n';
 }
 
+std::string functionalReasonCodes(bool finiteOutput,bool midiConsumed,bool peakInRange,
+                                  bool dcInRange,bool grainLimit,bool voice8GrainInvariant) {
+    std::string reasons;
+    const auto append=[&](const char* code,bool passed){
+        if(passed)return;
+        if(!reasons.empty())reasons.push_back(';');
+        reasons += code;
+    };
+    append("FINITE_OUTPUT",finiteOutput);
+    append("MIDI_NOT_CONSUMED",midiConsumed);
+    append("PEAK_RANGE",peakInRange);
+    append("DC_OFFSET",dcInRange);
+    append("MAX_GRAINS",grainLimit);
+    append("VOICE8_GRAIN_INVARIANT",voice8GrainInvariant);
+    return reasons.empty()?"NONE":reasons;
+}
+
 double percentile(const Samples& source,std::size_t count,std::size_t index) {
     if(count<=index)return -1.0;
     auto sorted=source;
@@ -205,6 +222,7 @@ int main(){
         writeMeta(report,"sentinel_cases",typical?"not-applicable":"r96000_f64_v1_poff,r44100_f512_v8_pon");
         writeMeta(report,"matrix","44100,48000,96000 Hz x 64,128,512 frames x 1,4,8 voices x Pattern off,on (typical is reduced)");
         report << "schema\tcase\tcase_id\tprofile\trate_hz\tframes\tinitial_voices\tpattern\tblocks\tbudget_us\talloc_calls\tlock_entries\twait_entries\tcpu_pairs\tzero_cpu_deltas\tmin_positive_cpu_us\twall_misses\tcpu_misses\twall_only_misses\tmax_grains\tpeak\tdc\twall_p50_us\twall_p95_us\twall_p99_us\twall_p99_9_us\twall_max_us\tcpu_p50_us\tcpu_p95_us\tcpu_p99_us\tcpu_p99_9_us\tcpu_max_us\tcpu_at_wall_max_us\n";
+        report << "schema\tfunctional\tcase_id\tfinite_output\tmidi_consumed\tpeak_in_range\tdc_in_range\tgrain_limit\tvoice8_grain_invariant\tfunctional_pass\treasons\n";
         report << "schema\tblock\tcase_id\tblock\twall_us\tcpu_us\tbudget_us\twall_miss\tcpu_miss\tevents\tgrains\n";
         report << "schema\tmiss\tcase_id\tblock\twall_us\tcpu_us\tbudget_us\twall_miss\tcpu_miss\tevents\tgrains\n";
     }
@@ -351,9 +369,17 @@ int main(){
                 peak=std::max(peak,static_cast<double>(std::max(std::abs(a),std::abs(b))));sumL+=a;sumR+=b;}
         }
         const double dc=std::max(std::abs(sumL),std::abs(sumR))/(blocksPerCase*frames);
+        const bool finiteOutput=finite;
+        const bool midiConsumedForFunctional=midiConsumed;
+        const bool peakInRange=peak>.00001&&peak<1;
+        const bool dcInRange=dc<.01;
+        const bool grainLimit=maximumGrains<=64;
+        const bool voice8GrainInvariant=voices!=8||maximumGrains==64;
+        const bool functionalPass=finiteOutput&&midiConsumedForFunctional&&peakInRange&&dcInRange&&grainLimit&&voice8GrainInvariant;
+        const auto functionalReasons=functionalReasonCodes(finiteOutput,midiConsumedForFunctional,peakInRange,dcInRange,grainLimit,voice8GrainInvariant);
         const auto wallMissesFromSamples=[&]{int count=0;for(const auto value:durations)count+=value>budget;return count;};
         wallMisses=wallMissesFromSamples();
-        if(!finite||!midiConsumed||!(peak>.00001&&peak<1&&dc<.01)||alloc||locks||waits||maximumGrains>64||(voices==8&&maximumGrains!=64))++errors;
+        if(!functionalPass||alloc||locks||waits)++errors;
         if(splitTiming&&wallMisses>0)++errors;
         if(splitTiming&&cpuPairs!=blocksPerCase)allCpuPairs=false;
         if(splitTiming&&(!allocationProbeAvailable||!lockProbeAvailable))++errors;
@@ -372,6 +398,8 @@ int main(){
         char caseId[96];std::snprintf(caseId,sizeof(caseId),"r%.0f_f%d_v%d_p%s",rate,frames,voices,patternOn?"on":"off");
         std::printf("%.0f Hz %d samples %d initial voices: peak %.6f DC %.7f grains %u alloc %lu lock %lu wait %lu wall p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us\n",
             rate,frames,voices,peak,dc,maximumGrains,alloc,locks,waits,wallP50,wallP95,wallP99,wallP999,wallMax);
+        std::printf("  functional: finite_output=%d midi_consumed=%d peak_in_range=%d dc_in_range=%d grain_limit=%d voice8_grain_invariant=%d functional_pass=%d reasons=%s\n",
+            finiteOutput,midiConsumedForFunctional,peakInRange,dcInRange,grainLimit,voice8GrainInvariant,functionalPass,functionalReasons.c_str());
         if(splitTiming){
             std::printf("  thread CPU p50 %.2f p95 %.2f p99 %.2f p99.9 %.2f max %.2f us; at wall max %.2f us thread %.2f us; raw misses wall_deadline_miss/CPU/wall-only %d/%d/%d of %d\n",
                 cpuP50,cpuP95,cpuP99,cpuP999,cpuMax,wallMax,cpuAtMaxWall,wallMisses,cpuMisses,wallOnly,blocksPerCase);
@@ -392,6 +420,10 @@ int main(){
                    << cpuMisses << '\t' << wallOnly << '\t' << maximumGrains << '\t' << peak << '\t' << dc << '\t'
                    << wallP50 << '\t' << wallP95 << '\t' << wallP99 << '\t' << wallP999 << '\t' << wallMax << '\t'
                    << cpuP50 << '\t' << cpuP95 << '\t' << cpuP99 << '\t' << cpuP999 << '\t' << cpuMax << '\t' << cpuAtMaxWall << '\n';
+            report << "functional\t" << caseId << '\t'
+                   << finiteOutput << '\t' << midiConsumedForFunctional << '\t' << peakInRange << '\t'
+                   << dcInRange << '\t' << grainLimit << '\t' << voice8GrainInvariant << '\t'
+                   << functionalPass << '\t' << functionalReasons << '\n';
             for(int block=0;block<blocksPerCase;++block){
                 const auto cpu=cpuByBlock[static_cast<std::size_t>(block)];
                 const bool wallMiss=durations[block]>budget;
