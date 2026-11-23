@@ -14,7 +14,7 @@ original Wavefold remains the shipping implementation; ADAA1/ADAA2 experiments
 are not part of this work.
 
 The next decision artifact is the separately versioned
-[`FX-T18-WALL-GATE v1.1-proposed`](FX_T18_WALL_GATE_V1_20261123.md). It defines
+[`FX-T18-WALL-GATE v1.2-proposed`](FX_T18_WALL_GATE_V1_20261123.md). It defines
 wall-only diagnostic conditions but does not approve new release criteria or
 authorize the full matrix.
 

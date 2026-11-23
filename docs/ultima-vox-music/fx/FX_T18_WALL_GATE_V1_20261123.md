@@ -1,14 +1,16 @@
-# FX-T18-WALL-GATE v1.1 — proposed wall-deadline diagnostic contract
+# FX-T18-WALL-GATE v1.2 — proposed wall-deadline diagnostic contract
 
 **Contract ID:** `FX-T18-WALL-GATE`<br>
-**Version:** `1.1-proposed`<br>
+**Version:** `1.2-proposed`<br>
 **Date:** 2026-11-23<br>
 **Status:** Draft for separate owner approval; not a release-acceptance decision<br>
 **Scope:** FX-T18 callback completion evidence only
 
-Revision `1.1` adds independently reason-coded functional assertions, deterministic
-FAIL/BLOCKED precedence, and host-wide four-service isolation requirements. It
-preserves the v1.0 wall metric and does not change any existing threshold.
+Revision `1.2` clarifies the six-boolean functional schema and exact reason
+bijection, requires non-runner host-process observation even with a runner
+lease, and separates IAT observability failure from observed callback safety
+failure. It preserves the v1.1 wall metric and does not change any existing
+threshold.
 
 This contract proposes a wall-time criterion for realtime callback completion.
 It does not retroactively change the red CTest result from run `45130013544`,
@@ -93,14 +95,27 @@ The measurement must hold one auditable host-wide capture lease covering the
 pre-capture baseline, all measured profiles and the post-capture window. The
 preferred mechanism is an owner-managed lock recognized by all four runner
 services, with a lease token, owner, host, acquisition time, release time and
-service/job identities recorded in the receipt. If such a shared lock is not
-available, use an independent host-wide contention monitor instead: snapshot
-all runner-service jobs and processes before capture, poll once per second
-through capture, and snapshot again afterward. Record process identity,
-command line or job identity, PID, service identity and start/stop timestamps.
-Any unrecognized overlapping build, DAW, test or workflow process blocks the
-wall result. A missing lock, incomplete monitor, ambiguous identity or monitor
-gap is `evidence_blocked`; it must never be treated as an idle host.
+service/job identities recorded in the receipt. The lease only controls
+cooperating runner jobs; it does not by itself exclude a DAW, manual compiler,
+other test process or non-participating workflow.
+
+Therefore, regardless of whether the lease or a monitor is used for runner-job
+coordination, add one separate host-wide control covering non-runner processes:
+
+- either an auditable process observation that snapshots all processes and
+  runner-service jobs before capture, polls once per second through the complete
+  capture, and snapshots again afterward;
+- or a documented owner-controlled exclusive-machine mode that explicitly
+  covers DAW, manual-build, test and other non-runner processes, with host,
+  owner, activation/deactivation timestamps and verification evidence.
+
+For process observation, record process identity, protected command-line or job
+identity, PID, service identity and start/stop timestamps without exposing any
+command-line secrets in public evidence. Any unrecognized overlapping build,
+DAW, test or workflow process blocks the wall result. A missing lease,
+exclusive-machine proof or process observation, incomplete monitor, ambiguous
+identity or monitor gap is `evidence_blocked`; it must never be treated as an
+idle host.
 
 Do not stop or alter runner services without owner approval. Record the
 runner's before/during/after load samples: at least a 30-second pre-capture
@@ -149,17 +164,32 @@ exactly one independently auditable functional record:
 functional  case_id  finite_output  midi_consumed  peak_in_range  dc_in_range  grain_limit  voice8_grain_invariant  functional_pass  reasons
 ```
 
-The seven assertion fields and `functional_pass` are `0` or `1`. `reasons` is
-`NONE` only when all fields are `1`; otherwise it is a semicolon-separated list
-from the closed set `FINITE_OUTPUT`, `MIDI_NOT_CONSUMED`, `PEAK_RANGE`,
-`DC_OFFSET`, `MAX_GRAINS`, `VOICE8_GRAIN_INVARIANT`. The auditor must reject
-missing, duplicate, unknown-reason or contradictory records and recompute
-`functional_pass` as the conjunction of the seven assertion fields. A CTest
-exit code alone is never a functional reason.
+The six assertion fields before `functional_pass` are `0` or `1`; they are
+`finite_output`, `midi_consumed`, `peak_in_range`, `dc_in_range`,
+`grain_limit` and `voice8_grain_invariant`. `functional_pass` is a seventh,
+derived boolean and must equal their conjunction. For every case whose initial
+voice count is not 8, `voice8_grain_invariant` is explicitly `1` because that
+invariant is inapplicable; it may be `0` only for a voice-8 case whose required
+invariant fails.
+
+`reasons` is an exact, duplicate-free, canonical-order bijection with the
+false assertion fields, not an arbitrary subset. The required mapping is
+`finite_output=0` ↔ `FINITE_OUTPUT`, `midi_consumed=0` ↔
+`MIDI_NOT_CONSUMED`, `peak_in_range=0` ↔ `PEAK_RANGE`, `dc_in_range=0` ↔
+`DC_OFFSET`, `grain_limit=0` ↔ `MAX_GRAINS`, and
+`voice8_grain_invariant=0` ↔ `VOICE8_GRAIN_INVARIANT`. `NONE` is valid only
+when all six assertion fields are `1`. The auditor must reject missing,
+duplicate, unknown, out-of-order, extra or missing reason codes and recompute
+`functional_pass` from the six fields. A CTest exit code alone is never a
+functional reason.
 
 Missing, unavailable or incomplete instrumentation is not a zero and cannot
-produce a wall-gate PASS. A missing functional record is evidence blockage;
-an observed `functional_pass=0` is a functional failure.
+produce a wall-gate PASS. In particular, a failed or absent IAT positive
+control proves only that lock/wait coverage was not established; it is
+`instrumentation_blocked`/`evidence_blocked`, not proof of callback blocking.
+Only an independently observed callback lock/wait entry sets `safety_failure`.
+A missing functional record is evidence blockage; an observed
+`functional_pass=0` is a functional failure.
 
 ## 4. Proposed test procedure
 
@@ -199,12 +229,15 @@ run:
 |---|---|---|
 | `coarse_cpu_plus_functional` | One case has 0/15,625-us CPU deltas, `wall_miss=0`, and a functional record with `finite_output=0` or `midi_consumed=0` | `cpu_diagnostic_blocked=true`, `functional_failure=true`, `performance_failure=true`, primary `WALL_GATE_FAIL`; never CPU-only |
 | `coarse_cpu_only` | Coarse CPU fields, complete functional records, zero wall/safety violations | `cpu_diagnostic_blocked=true`, `functional_failure=false`; only the proposed `WALL_GATE_PASS_CPU_UNKNOWN` may apply after full coverage |
+| `functional_reason_mismatch` | A false assertion has a missing, duplicate, extra or wrong-order reason code; include a zero-reason all-pass case | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; no wall PASS |
+| `non8_voice_invariant` | A non-8-voice case reports `voice8_grain_invariant=0` or omits the required inapplicable `1` | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; no inferred functional failure |
 | `missing_functional_record` | A case has complete wall rows but no functional record | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; no wall PASS |
 | `missing_rows_or_manifest` | No observed wall violation but callback rows, provenance or required manifest entries are missing | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED` |
-| `incomplete_iat` | No observed lock/wait entries, but hook coverage or positive control is incomplete | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; zero entries are not accepted as proof |
+| `failed_iat_positive_control` | No observed callback lock/wait entry, but IAT hook coverage or its positive control fails | `instrumentation_blocked=true`, `safety_failure=false`, `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; this is not proof of callback blocking |
+| `observed_lock_wait` | An independently observed callback lock/wait entry is retained with otherwise valid instrumentation | `safety_failure=true`, `performance_failure=true`, primary `WALL_GATE_FAIL` |
 | `timeout_or_skip` | Timeout, crash or skipped execution with no complete wall result | `execution_failure=true`, `evidence_blocked=true`, primary `WALL_GATE_BLOCKED` |
 | `observed_wall_then_crash` | A retained wall miss precedes a crash or incomplete tail | `wall_failure=true`, `execution_failure=true`, `evidence_blocked=true`, primary `WALL_GATE_FAIL`; both conditions remain visible |
-| `host_contention` | Missing host lease, monitor gap or unrecognized concurrent runner process | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; never infer an idle host |
+| `host_contention` | Missing host lease/observation, monitor gap or unrecognized concurrent process | `evidence_blocked=true`, primary `WALL_GATE_BLOCKED`; never infer an idle host |
 
 These fixtures must exercise both the report parser and the final status
 precedence, not merely assert a process exit code. The mixed functional/CPU
@@ -220,15 +253,17 @@ primary status:
 
 ```text
 wall_failure              = any wall_deadline_miss == 1
-safety_failure            = observed allocation, lock or wait entry, or failed IAT positive control
+safety_failure            = observed callback allocation, lock or wait entry
 functional_failure        = any audited functional_pass == 0
 execution_failure         = crash, timeout, skip or incomplete execution
 performance_failure       = wall_failure or safety_failure or functional_failure
+instrumentation_blocked   = unavailable/incomplete IAT coverage or failed positive control
 evidence_blocked          = missing, incomplete or unverifiable measurement/evidence
 cpu_diagnostic_blocked    = cpu_measurement_insufficient == true
 ```
 
-An unavailable probe is not an observed zero: it sets `evidence_blocked`, not
+An unavailable probe or failed instrumentation positive control is not an
+observed zero: it sets `instrumentation_blocked` and `evidence_blocked`, not
 `safety_failure`. A missing functional record is not `functional_pass=1`: it
 sets `evidence_blocked`. A CTest exit code is never used by itself to infer a
 functional or wall cause.
@@ -315,8 +350,8 @@ approved otherwise:
 - fresh-build configure/build logs;
 - one TSV per profile containing all 160 block rows per cell, all raw CPU
   values, wall flags, raw CPU flags and explicit miss rows;
-- exactly one functional assertion record per case with all seven assertion
-  fields, `functional_pass` and reason codes;
+- exactly one functional assertion record per case with six assertion fields,
+  derived `functional_pass` and exact reason-code mapping;
 - raw CTest stdout/stderr, native exit code and JUnit output;
 - initial and final artifact manifests with SHA-256 entries;
 - full auditor JSON on exit 0 or raw auditor output on failure;
@@ -338,7 +373,7 @@ or relabeled.
 
 ## 7. Approval and versioning
 
-This document is `FX-T18-WALL-GATE v1.1-proposed`. Owner approval is required
+This document is `FX-T18-WALL-GATE v1.2-proposed`. Owner approval is required
 for the contract itself before any full 117-cell run is used to assess it.
 Approval of the contract is distinct from authorization to dispatch a Windows
 job. Any change to profile coverage, load, deadline comparison, safety checks,
