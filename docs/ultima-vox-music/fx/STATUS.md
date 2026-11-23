@@ -10,7 +10,7 @@ with `CPU_MEASUREMENT_INSUFFICIENT` because `GetThreadTimes` quantized at
 Wavefold decision is unchanged. The separate method proposal is
 [FX_T18_CPU_METHOD_PROPOSAL_20261123.md](FX_T18_CPU_METHOD_PROPOSAL_20261123.md).
 The next owner-review artifact is the draft
-[FX-T18-WALL-GATE v1.0](FX_T18_WALL_GATE_V1_20261123.md); no full matrix is
+[FX-T18-WALL-GATE v1.1](FX_T18_WALL_GATE_V1_20261123.md); no full matrix is
 authorized until that contract is approved separately.
 
 This is a resume record, not release acceptance. Exact-head Windows suite,
