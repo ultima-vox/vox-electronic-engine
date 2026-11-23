@@ -140,19 +140,20 @@ jobs:
           $schemaCode=$LASTEXITCODE
           $ErrorActionPreference='Stop'
           $probe=Join-Path $out 'native-evidence-probe.py'
-          @'
-import importlib.util, json, pathlib, sys
-script, raw, junit, ctest_exit = sys.argv[1:]
-spec=importlib.util.spec_from_file_location("fx_t18_audit", script)
-module=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-try:
-    result=module.reconcile_native_ctest(pathlib.Path(raw),pathlib.Path(junit),"suite_fx_runtime_stress_tests",int(ctest_exit))
-    print(json.dumps(result,indent=2))
-except Exception as exc:
-    print(json.dumps({"verified":False,"error":str(exc)},indent=2))
-    sys.exit(2)
-'@ | Set-Content -LiteralPath $probe -Encoding UTF8
+          $probeText=@'
+          import importlib.util, json, pathlib, sys
+          script, raw, junit, ctest_exit = sys.argv[1:]
+          spec=importlib.util.spec_from_file_location("fx_t18_audit", script)
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          try:
+              result=module.reconcile_native_ctest(pathlib.Path(raw),pathlib.Path(junit),"suite_fx_runtime_stress_tests",int(ctest_exit))
+              print(json.dumps(result,indent=2))
+          except Exception as exc:
+              print(json.dumps({"verified":False,"error":str(exc)},indent=2))
+              sys.exit(2)
+          '@
+          Set-Content -LiteralPath $probe -Value $probeText -Encoding UTF8
           $ErrorActionPreference='Continue'
           & python $probe $audit $raw $junit $ctestExit 2>&1 | Out-File -LiteralPath (Join-Path $out 'native-evidence.json') -Encoding UTF8 -Width 4096
           $nativeCode=$LASTEXITCODE
