@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$OrchestratorPath = (Join-Path $PSScriptRoot 'run-fx-windows-t18.ps1'),
+    [string]$OrchestratorPath = '',
     [string]$Python = 'python',
     [string]$CtestBuildDir = '',
     [string]$InventoryPath = ''
@@ -11,6 +11,11 @@ param(
 # does not build the product or run the timing suite itself. If CtestBuildDir
 # is supplied, --show-only runs CTest inventory without executing the test.
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 may not bind $PSScriptRoot during param-default evaluation.
+# Resolve the default only after the param block, when script scope is active.
+if ([string]::IsNullOrWhiteSpace($OrchestratorPath)) {
+    $OrchestratorPath = Join-Path -Path $PSScriptRoot -ChildPath 'run-fx-windows-t18.ps1'
+}
 $path = (Resolve-Path -LiteralPath $OrchestratorPath).Path
 $helperPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'FxT18CtestHelpers.ps1')).Path
 $auditScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'audit-fx-windows-timing.py')).Path
