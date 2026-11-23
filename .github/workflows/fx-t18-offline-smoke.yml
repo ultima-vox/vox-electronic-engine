@@ -1,0 +1,145 @@
+name: fx-t18-offline-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact reviewed source commit to check out
+        required: true
+        type: string
+      expected_host:
+        description: Authorized self-hosted Windows host name
+        required: true
+        default: HAMUNAPTRA
+        type: string
+
+jobs:
+  offline-smoke:
+    # This job is intentionally fixture-only. It must never select the hosted
+    # fallback or build/run the FX executable.
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_head }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Run only Windows PowerShell 5.1 offline fixtures
+        id: smoke
+        shell: powershell
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_HOST: ${{ inputs.expected_host }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'fx-t18-offline-smoke'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          $metadata = [ordered]@{
+              format = 'VOX_FX_T18_OFFLINE_SMOKE_V1'
+              expected_head = $env:EXPECTED_HEAD
+              expected_host = $env:EXPECTED_HOST
+              host = $env:COMPUTERNAME
+              powershell = $PSVersionTable.PSVersion.ToString()
+              powershell_edition = $PSVersionTable.PSEdition
+              started_utc = [DateTime]::UtcNow.ToString('o')
+          }
+          $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'environment.json') -Encoding UTF8
+
+          $results = @()
+          $fatal = $null
+          try {
+              if ($PSVersionTable.PSVersion.Major -ne 5) {
+                  throw "Expected Windows PowerShell 5.1, found $($PSVersionTable.PSVersion)"
+              }
+              if ($env:COMPUTERNAME -ine $env:EXPECTED_HOST) {
+                  throw "Expected authorized host $env:EXPECTED_HOST, found $env:COMPUTERNAME"
+              }
+              $actualHead = (& git rev-parse HEAD).Trim()
+              if ($LASTEXITCODE -ne 0 -or $actualHead -cne $env:EXPECTED_HEAD) {
+                  throw "Expected source HEAD $env:EXPECTED_HEAD, found $actualHead"
+              }
+              $actualTree = (& git rev-parse 'HEAD^{tree}').Trim()
+              if ($LASTEXITCODE -ne 0) { throw 'Could not resolve checked-out source tree' }
+              $metadata.actual_head = $actualHead
+              $metadata.actual_tree = $actualTree
+              $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'environment.json') -Encoding UTF8
+
+              $scriptRoot = Join-Path $env:GITHUB_WORKSPACE 'docs\ultima-vox-music\fx\evidence'
+              $specs = @(
+                  [pscustomobject]@{ name = 'test-fx-t18-powershell'; path = (Join-Path $scriptRoot 'test-fx-t18-powershell.ps1') }
+                  [pscustomobject]@{ name = 'test-fx-t18-host-witness'; path = (Join-Path $scriptRoot 'test-fx-t18-host-witness.ps1') }
+              )
+              foreach ($spec in $specs) {
+                  $stdout = Join-Path $output ($spec.name + '.stdout.txt')
+                  $stderr = Join-Path $output ($spec.name + '.stderr.txt')
+                  & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $spec.path 1> $stdout 2> $stderr
+                  $exitCode = $LASTEXITCODE
+                  $results += [ordered]@{
+                      name = $spec.name
+                      path = $spec.path
+                      stdout_path = $stdout
+                      stderr_path = $stderr
+                      exit_code = $exitCode
+                  }
+              }
+          }
+          catch {
+              $fatal = $_.Exception.Message
+          }
+
+          $metadata.finished_utc = [DateTime]::UtcNow.ToString('o')
+          $metadata.fatal_error = $fatal
+          $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'environment.json') -Encoding UTF8
+          $results | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'results.json') -Encoding UTF8
+
+          $scriptFiles = @(
+              'docs\ultima-vox-music\fx\evidence\test-fx-t18-powershell.ps1',
+              'docs\ultima-vox-music\fx\evidence\test-fx-t18-host-witness.ps1',
+              'docs\ultima-vox-music\fx\evidence\FxT18CtestHelpers.ps1',
+              'docs\ultima-vox-music\fx\evidence\run-fx-windows-t18.ps1',
+              'docs\ultima-vox-music\fx\evidence\capture-fx-t18-host-witness.ps1',
+              'docs\ultima-vox-music\fx\evidence\audit-fx-windows-timing.py',
+              'docs\ultima-vox-music\fx\evidence\evaluate-fx-t18-wall-gate.py'
+          )
+          $hashes = foreach ($relative in $scriptFiles) {
+              $file = Join-Path $env:GITHUB_WORKSPACE $relative
+              if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing smoke script: $relative" }
+              $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
+              [ordered]@{ path = $relative; sha256 = $hash.Hash.ToLowerInvariant() }
+          }
+          [ordered]@{
+              format = 'VOX_FX_T18_OFFLINE_SMOKE_MANIFEST_V1'
+              source_head = $metadata.actual_head
+              source_tree = $metadata.actual_tree
+              host = $metadata.host
+              powershell = $metadata.powershell
+              scripts = @($hashes)
+              results = $results
+              environment_path = 'environment.json'
+          } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding UTF8
+
+          if ($null -ne $fatal) {
+              Write-Error $fatal
+              exit 2
+          }
+          $failed = @($results | Where-Object { $_.exit_code -ne 0 })
+          if ($failed.Count -ne 0) {
+              Write-Error "Offline fixture failure: $($failed.name -join ', ')"
+              exit 1
+          }
+          Write-Output 'FX-T18 bounded Windows PowerShell 5.1 OfflineSynthetic smoke: PASS'
+
+      - name: Upload bounded smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-offline-smoke-${{ github.run_id }}
+          path: fx-t18-offline-smoke
+          if-no-files-found: error
+          retention-days: 14
