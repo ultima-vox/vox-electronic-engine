@@ -1,0 +1,46 @@
+VOX FX-T18 restricted Windows typical-only diagnostic — full audit completed
+Run: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/45130013544
+Artifact: https://github.com/ultima-vox/vox-electronic-engine/actions/runs/45130013544/artifacts/14797986060
+Artifact name: FX-T18-typical-full-audit-348bb2c-r2
+Artifact size: 49,732 bytes
+Artifact metadata digest: sha256:3b78ce7c89f8d12198389fbbfc2e3b2b42adcfcc0d383b9a2f38287217e51cb9
+Artifact expires: 2026-11-26 07:17:33 UTC (repository three-day retention)
+
+Owner authorization/result: PR #170 comment 7094312855. The workflow-only
+commit was b3e594a650f9ac629251a16030b4604ae8cd3a69 on isolated branch
+ci/fx-t18-smoke-348bb2c-r2; it did not modify PR #170, main or next/fx-development.
+Source under test: 348bb2c807b3abd7ca75efc7b4a8e5bd8f007d8b
+Source tree: d768979117f49be548a522516fcac0311f1d8d81
+Runner: 3 / HAMUNAPTRA
+Pinned JUCE: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+Selected Release executable SHA-256: c18d49ad007aa2b2806391c4597c248a1dc791e84d8b445e4d6963781324bc6e
+
+Scope/result: one typical-only CTest; 9 cells x 160 callbacks = 1,440.
+Fresh x64 Release target build, PS5.1 fixtures, CTest inventory, full TSV plus
+receipt/manifest/EXE provenance audit all passed. The auditor exited 0 with
+provenance.verified=true. CTest exited 8 as deliberately required by the
+coarse CPU diagnostic; the workflow classification was CPU_MEASUREMENT_INSUFFICIENT.
+
+Independent measurements: wall misses 0/1,440; allocations 0; lock entries 0;
+wait entries 0; lock IAT matched/patched 132/132; wait matched/patched 97/97;
+positive controls 1/1. Maximum wall ratio 19.95525% at
+r44100_f64_v1_poff: 289.6 us / 1451.247 us.
+
+Raw CPU evidence: 17 cpu_miss flags, each a 15,625 us GetThreadTimes delta;
+1,423 other deltas were zero. The observed 15,625 us quantum exceeds every
+callback budget, so the auditor returned performance_failure=false,
+cpu_measurement_insufficient=true, cpu_attribution=UNKNOWN,
+diagnostic_failure=true and cpu_zero_delta_semantics=UNKNOWN_NOT_ZERO_WORK.
+The 17 raw flags remain evidence but are not attributable CPU deadline failures.
+
+The signed artifact archive was retained by GitHub at the URL above. The Arena
+sandbox could read the GitHub metadata/digest but its restricted outbound host
+policy could not retrieve the blob redirect; do not claim a local archive copy.
+Preserve the archive externally before expiry if raw files are needed. This
+record is metadata only and does not replace the raw artifact.
+
+Disposition: establishes a clean reduced typical wall-deadline result and a
+blocking CPU-measurement insufficiency only. It is not full routed/authored
+qualification, DAW/host acceptance, release acceptance, a threshold change,
+or permission to merge. Next method review: validated high-resolution ETW/WPR
+thread-running evidence or an explicitly approved wall-only acceptance gate.
