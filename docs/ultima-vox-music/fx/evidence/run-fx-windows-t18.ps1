@@ -126,24 +126,6 @@ function Get-ReportMeta([string]$Report, [string]$Key) {
     return ($line -split "`t", 3)[2]
 }
 
-function Test-CpuOnlyFailure([string]$Report, [string]$CpuStatus) {
-    if ($CpuStatus -ne 'CPU_MEASUREMENT_INSUFFICIENT' -or
-        -not (Test-Path -LiteralPath $Report -PathType Leaf)) { return $false }
-    $cases = @(Get-Content -LiteralPath $Report | Where-Object { $_ -like 'case`t*' })
-    $functional = @(Get-Content -LiteralPath $Report | Where-Object { $_ -like 'functional`t*' })
-    if ($cases.Count -eq 0 -or $functional.Count -ne $cases.Count) { return $false }
-    foreach ($line in $cases) {
-        $fields = $line -split "`t"
-        if ($fields.Count -lt 18 -or [int]$fields[9] -ne 0 -or [int]$fields[10] -ne 0 -or
-            [int]$fields[11] -ne 0 -or [int]$fields[15] -ne 0) { return $false }
-    }
-    foreach ($line in $functional) {
-        $fields = $line -split "`t"
-        if ($fields.Count -lt 9 -or [int]$fields[8] -ne 1) { return $false }
-    }
-    return $true
-}
-
 function Get-JunitSummary([string]$JunitPath) {
     $summary = [ordered]@{ tests = 0; failures = 0; errors = 0; skipped = 0; timeout = $false }
     if (-not (Test-Path -LiteralPath $JunitPath -PathType Leaf)) { return $summary }
@@ -294,7 +276,9 @@ function Invoke-FxScenario([string]$Scenario) {
     $ctestOutcome = Get-FxT18CtestOutcome -ExitCode $ctestExit -TimedOut $ctestTimedOut
     $junitSummary = Get-JunitSummary $junitPath
     $cpuStatus = Get-ReportMeta $report 'cpu_measurement_status'
-    $cpuOnlyFailure = ($ctestExit -ne 0) -and (Test-CpuOnlyFailure $report $cpuStatus)
+    $cpuOnlyFailure = ($ctestExit -ne 0) -and
+        (Test-CpuOnlyFailure $report $cpuStatus) -and
+        (Test-CpuOnlyNativeEvidence $ctestRaw $junitPath)
     $cpuOnlyReason = if ($cpuOnlyFailure) { 'CPU_MEASUREMENT_INSUFFICIENT' } else { 'NONE' }
     Write-JsonFile ([ordered]@{
         format = 'VOX_FX_T18_POST_TEST_OUTCOME_V1'

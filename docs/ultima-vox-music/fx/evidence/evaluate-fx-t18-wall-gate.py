@@ -434,12 +434,15 @@ def validate_witness(
 
 
 def _scan_observed_failures(path: Path) -> dict[str, bool]:
-    """Retain observed failures even if a later report tail is corrupt."""
-    result = {"wall_failure": False, "safety_failure": False, "functional_failure": False}
+    """Retain only internally consistent observed failures from a partial report."""
+    result = {"wall_failure": False, "safety_failure": False,
+              "functional_failure": False, "functional_evidence_invalid": False}
     cases: dict[str, dict[str, Any]] = {}
+    functional_rows: dict[str, dict[str, Any]] = {}
     try:
         lines = path.read_text(encoding="utf-8-sig").splitlines()
     except (OSError, UnicodeDecodeError):
+        result["functional_evidence_invalid"] = True
         return result
     for line_number, line in enumerate(lines, 1):
         fields = line.split("\t")
@@ -447,25 +450,53 @@ def _scan_observed_failures(path: Path) -> dict[str, bool]:
             continue
         if fields[0] == "case" and len(fields) == 1 + len(AUDIT.CASE_FIELDS):
             values = dict(zip(AUDIT.CASE_FIELDS, fields[1:]))
+            if values["case_id"] in cases:
+                result["functional_evidence_invalid"] = True
+                continue
             cases[values["case_id"]] = values
             try:
                 result["wall_failure"] |= int(values["wall_misses"]) > 0
                 result["safety_failure"] |= any(
                     int(values[field]) > 0 for field in ("alloc_calls", "lock_entries", "wait_entries"))
-            except ValueError:
+            except (TypeError, ValueError):
                 pass
         elif fields[0] == "functional":
             try:
                 functional = AUDIT._parse_functional(fields, line_number, path)
             except ValueError:
+                result["functional_evidence_invalid"] = True
                 continue
-            if functional["functional_pass"] == 0:
-                result["functional_failure"] = True
+            case_id = functional["case_id"]
+            if case_id in functional_rows:
+                result["functional_evidence_invalid"] = True
+            functional_rows[case_id] = functional
         elif fields[0] == "block" and len(fields) == 1 + len(AUDIT.BLOCK_FIELDS):
             try:
                 result["wall_failure"] |= int(fields[6]) == 1
-            except ValueError:
+            except (TypeError, ValueError):
                 pass
+
+    for case_id, functional in functional_rows.items():
+        case = cases.get(case_id)
+        if case is None:
+            result["functional_evidence_invalid"] = True
+            continue
+        try:
+            initial_voices = int(case["initial_voices"])
+            flags = [functional[field] for field, _ in AUDIT.FUNCTIONAL_REASON_ORDER]
+            expected_codes = [code for flag, (_, code) in zip(flags, AUDIT.FUNCTIONAL_REASON_ORDER)
+                              if flag == 0]
+            consistent = (
+                functional["reason_codes"] == expected_codes
+                and functional["functional_pass"] == int(not expected_codes)
+                and (initial_voices == 8 or functional["voice8_grain_invariant"] == 1)
+            )
+        except (KeyError, TypeError, ValueError):
+            consistent = False
+        if not consistent:
+            result["functional_evidence_invalid"] = True
+        elif functional["functional_pass"] == 0:
+            result["functional_failure"] = True
     return result
 
 
@@ -555,6 +586,9 @@ def _execution_state(path: Path | None) -> dict[str, Any]:
             artifact_paths[field] = artifact
         outcome_info = _load_outcome(outcome_path)
         outcome = outcome_info["value"]
+        native_evidence = AUDIT.reconcile_native_ctest(
+            artifact_paths["ctest_raw_path"], artifact_paths["ctest_junit_path"],
+            outcome["test_identity"], outcome["ctest_exit_code"])
         if outcome["scenario"] != receipt["scenario"] \
                 or outcome["test_identity"] != "suite_fx_runtime_stress_tests" \
                 or not _same_path(outcome["junit_path"], artifact_paths["ctest_junit_path"]) \
@@ -570,7 +604,8 @@ def _execution_state(path: Path | None) -> dict[str, Any]:
         junit_failure = bool(outcome["junit_failures"] > 0 or outcome["junit_errors"] > 0
                              or outcome["junit_skipped"] > 0 or outcome["junit_timeout"])
         cpu_only_valid = bool(outcome["cpu_only_failure"] and outcome["ctest_exit_code"] != 0
-                              and not junit_failure and not execution_failure)
+                              and native_evidence.get("cpu_reason_verified")
+                              and not execution_failure)
         native_failure = bool(outcome["ctest_exit_code"] != 0 or junit_failure) and not cpu_only_valid
         execution_blocked = native_failure
         evidence_blocked = execution_failure or native_failure
@@ -589,6 +624,7 @@ def _execution_state(path: Path | None) -> dict[str, Any]:
             "policy_sha256": str(receipt["host_policy_sha256"]),
             "outcome_path": outcome_path,
             "outcome": outcome,
+            "native_execution_evidence": native_evidence,
         }
     except (OSError, ValueError) as error:
         return {"execution_failure": False, "execution_blocked": True,
@@ -630,6 +666,7 @@ def evaluate_results(
     execution_failure = False
     execution_blocked = False
     instrumentation_blocked = False
+    functional_evidence_invalid = False
     evidence_blocked = coverage_error or witness is None \
         or (witness is not None and witness.get("verified") is not True) \
         or qualification_prohibited or not provenance_verified or not host_manifest_verified
@@ -640,9 +677,14 @@ def evaluate_results(
         wall_failure |= bool(result.get("wall_failure", False) or observed.get("wall_failure", False))
         safety_failure |= bool(result.get("safety_failure", False) or observed.get("safety_failure", False))
         functional_failure |= bool(result.get("functional_failure", False) or observed.get("functional_failure", False))
+        functional_evidence_invalid |= bool(
+            result.get("functional_evidence_invalid", False)
+            or observed.get("functional_evidence_invalid", False))
         execution_failure |= bool(result.get("execution_failure", False))
         instrumentation_blocked |= bool(result.get("instrumentation_blocked", False))
         evidence_blocked |= bool(result.get("evidence_blocked", False))
+        evidence_blocked |= bool(result.get("functional_evidence_invalid", False)
+                                  or observed.get("functional_evidence_invalid", False))
         cpu_diagnostic_blocked |= bool(
             result.get("cpu_diagnostic_blocked", False)
             or result.get("cpu_measurement_insufficient", False))
@@ -658,7 +700,23 @@ def evaluate_results(
             execution_blocked |= bool(state.get("receipt_missing", False))
             evidence_blocked |= bool(state.get("evidence_blocked", False))
             evidence_blocked |= bool(state.get("receipt_missing", False))
-            cpu_diagnostic_blocked |= bool(state.get("cpu_only_failure", False))
+            state_cpu_only = bool(state.get("cpu_only_failure", False))
+            if state_cpu_only:
+                report_cpu_only = bool(result.get("cpu_measurement_insufficient", False)) \
+                    and not bool(result.get("wall_failure", False)) \
+                    and not bool(result.get("safety_failure", False)) \
+                    and not bool(result.get("functional_failure", False)) \
+                    and not bool(result.get("functional_evidence_invalid", False))
+                if report_cpu_only:
+                    cpu_diagnostic_blocked = True
+                else:
+                    state["cpu_only_failure_reconciled"] = False
+                    state["execution_blocked"] = True
+                    state["evidence_blocked"] = True
+                    execution_blocked = True
+                    evidence_blocked = True
+            else:
+                cpu_diagnostic_blocked |= bool(state.get("cpu_only_failure", False))
         else:
             execution_blocked = True
             evidence_blocked = True
@@ -680,6 +738,7 @@ def evaluate_results(
         "wall_failure": wall_failure,
         "safety_failure": safety_failure,
         "functional_failure": functional_failure,
+        "functional_evidence_invalid": functional_evidence_invalid,
         "execution_failure": execution_failure,
         "execution_blocked": execution_blocked,
         "performance_failure": performance_failure,
@@ -737,6 +796,7 @@ def evaluate_reports(
                 "totals": {}, "wall_failure": observed["wall_failure"],
                 "safety_failure": observed["safety_failure"],
                 "functional_failure": observed["functional_failure"],
+                "functional_evidence_invalid": observed["functional_evidence_invalid"],
                 "execution_failure": False, "evidence_blocked": True,
                 "audit_error": str(error),
             }

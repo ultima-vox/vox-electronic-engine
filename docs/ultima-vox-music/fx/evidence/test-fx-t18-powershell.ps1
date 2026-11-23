@@ -103,6 +103,37 @@ try {
         throw 'Structured JUnit timeout result was not recognized without a raw marker'
     }
 
+    # Realistic coarse-clock red CTest fixture: the selected test fails in both
+    # raw CTest and JUnit for the exact CPU attribution reason. The runner may
+    # classify it CPU-only only when both the TSV and native evidence agree.
+    $cpuReport = Join-Path $tempRoot 'cpu-only.tsv'
+    $cpuRaw = Join-Path $tempRoot 'cpu-only.ctest.txt'
+    $cpuJunit = Join-Path $tempRoot 'cpu-only.junit.xml'
+    @(
+        (@('case', 'r44100_f64_v1_poff', 'routed', '44100', '64', '1', 'off', '160', '1451', '0', '0', '0', '160', '159', '15625', '0', '1', '0') -join "`t")
+        (@('functional', 'r44100_f64_v1_poff', '1', '1', '1', '1', '1', '1', '1', 'NONE') -join "`t")
+    ) | Set-Content -LiteralPath $cpuReport -Encoding UTF8
+    "Test project fixture`r`n1/1 Test #1: suite_fx_runtime_stress_tests ...***Failed 0.01 sec`r`nCPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution" |
+        Set-Content -LiteralPath $cpuRaw -Encoding UTF8
+    '<testsuite tests="1" failures="1"><testcase name="suite_fx_runtime_stress_tests"><failure message="CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution" /></testcase></testsuite>' |
+        Set-Content -LiteralPath $cpuJunit -Encoding UTF8
+    # The helper is sourced above; this explicit assertion also exercises the
+    # production report selectors against literal tab-separated rows.
+    if (@(Get-Content -LiteralPath $cpuReport | Where-Object { $_ -match '^case\t' }).Count -ne 1 -or
+        @(Get-Content -LiteralPath $cpuReport | Where-Object { $_ -match '^functional\t' }).Count -ne 1) {
+        throw 'TSV fixture rows were not selected with actual tab-aware matching'
+    }
+    if (-not (Test-CpuOnlyFailure $cpuReport 'CPU_MEASUREMENT_INSUFFICIENT') -or
+        -not (Test-CpuOnlyNativeEvidence $cpuRaw $cpuJunit)) {
+        throw 'Red CPU CTest/JUnit/TSV fixture was not classified as independently CPU-attributed'
+    }
+    $unrelatedJunit = Join-Path $tempRoot 'unrelated.junit.xml'
+    '<testsuite tests="1" failures="1"><testcase name="suite_fx_runtime_stress_tests"><failure message="unrelated assertion failed" /></testcase></testsuite>' |
+        Set-Content -LiteralPath $unrelatedJunit -Encoding UTF8
+    if (Test-CpuOnlyNativeEvidence $cpuRaw $unrelatedJunit) {
+        throw 'Unrelated JUnit failure was incorrectly accepted as CPU-only'
+    }
+
     if ($CtestBuildDir) {
         if (-not $InventoryPath) { $InventoryPath = Join-Path $tempRoot 'ctest.inventory.json' }
         & ctest --test-dir $CtestBuildDir -C Release -R '^suite_fx_runtime_stress_tests$' '--show-only=json-v1' 2>&1 | Out-File -LiteralPath $InventoryPath -Encoding UTF8 -Width 4096

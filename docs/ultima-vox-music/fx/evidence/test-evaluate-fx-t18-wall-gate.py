@@ -183,15 +183,31 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
     outcome_path = directory / f"{profile}.outcome.json"
     junit_path = directory / f"{profile}.junit.xml"
     ctest_raw_path = directory / f"{profile}.ctest.txt"
-    ctest_raw_path.write_text(
-        "Test project fixture\\n1/1 Test #1: suite_fx_runtime_stress_tests ... "
-        + ("Failed" if mode in {"functional", "nonzero_unrelated"} and profile == "routed" else "Passed")
-        + "\\n", encoding="utf-8")
-    junit_failed = mode == "junit_failure" and profile == "routed"
+    cpu_claim_mixed = mode == "cpu_claim_mixed" and profile == "routed"
+    cpu_reason = mode == "coarse" or (mode == "functional" and profile != "routed")
+    red_unrelated = mode in {"functional", "nonzero_unrelated", "junit_failure", "cpu_claim_unrelated"} and profile == "routed"
+    override_status = (override or {}).get(profile, {}).get("execution_status")
+    raw_failed = cpu_reason or red_unrelated or cpu_claim_mixed or (
+        override_status in {"timeout_failure", "skip_failure", "crash_failure"})
+    raw_status = "Timeout" if override_status == "timeout_failure" else (
+        "Failed" if raw_failed else "Passed")
+    raw_text = (
+        "Test project fixture\n1/1 Test #1: suite_fx_runtime_stress_tests ... "
+        + raw_status + "\n"
+    )
+    if cpu_reason or cpu_claim_mixed:
+        raw_text += EVALUATOR.AUDIT.CPU_REASON_MARKER + "\n"
+    if cpu_claim_mixed:
+        raw_text += "Assertion failed: PEAK_RANGE\n"
+    ctest_raw_path.write_text(raw_text, encoding="utf-8")
+    junit_failed = cpu_reason or red_unrelated or cpu_claim_mixed
+    junit_reason = EVALUATOR.AUDIT.CPU_REASON_MARKER if cpu_reason else "native assertion failed"
+    if cpu_claim_mixed:
+        junit_reason = EVALUATOR.AUDIT.CPU_REASON_MARKER + " PEAK_RANGE"
     junit_path.write_text(
         f'<testsuite tests="1" failures="{int(junit_failed)}" errors="0" skipped="0">'
         '<testcase name="suite_fx_runtime_stress_tests">'
-        + ('<failure message="native assertion failed" />' if junit_failed else '')
+        + (f'<failure message="{junit_reason}" />' if junit_failed else '')
         + '</testcase></testsuite>', encoding="utf-8")
     outcome = {
         "format": "VOX_FX_T18_POST_TEST_OUTCOME_V1", "scenario": profile,
@@ -203,7 +219,7 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
         "ctest_outcome": "diagnostic_pass", "execution_complete": True,
         "timed_out": False, "crashed": False, "skipped": False,
         "junit_path": str(junit_path), "junit_tests": 1,
-        "junit_failures": 0, "junit_errors": 0, "junit_skipped": 0,
+        "junit_failures": int(junit_failed), "junit_errors": 0, "junit_skipped": 0,
         "junit_timeout": False, "cpu_only_failure": False,
         "cpu_only_failure_reason": "NONE",
     }
@@ -214,9 +230,12 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
     if mode == "functional" and profile == "routed":
         outcome.update({"ctest_exit_code": 8, "native_exit_code": 8,
                         "ctest_outcome": "test_failure"})
-    if mode == "nonzero_unrelated" and profile == "routed":
+    if mode in {"nonzero_unrelated", "cpu_claim_unrelated"} and profile == "routed":
         outcome.update({"ctest_exit_code": 8, "native_exit_code": 8,
                         "ctest_outcome": "test_failure"})
+    if mode in {"cpu_claim_unrelated", "cpu_claim_mixed"} and profile == "routed":
+        outcome.update({"cpu_only_failure": True,
+                        "cpu_only_failure_reason": "CPU_MEASUREMENT_INSUFFICIENT"})
     if mode == "junit_failure" and profile == "routed":
         outcome.update({"junit_failures": 1})
     if mode == "mismatched_outcome" and profile == "routed":
@@ -371,13 +390,15 @@ def main() -> int:
         names.append("all_profiles_unverified_provenance")
 
         result = evaluate(directory / "reason-mismatch", "reason_mismatch")
-        assert_status(result, "WALL_GATE_FAIL", "functional_reason_mismatch")
-        assert result["evidence_blocked"] and result["functional_failure"]
+        assert_status(result, "WALL_GATE_BLOCKED", "functional_reason_mismatch")
+        assert result["evidence_blocked"] and not result["functional_failure"]
+        assert result["functional_evidence_invalid"]
         names.append("functional_reason_mismatch")
 
         result = evaluate(directory / "non8", "non8")
-        assert_status(result, "WALL_GATE_FAIL", "non8_voice_invariant")
-        assert result["evidence_blocked"] and result["functional_failure"]
+        assert_status(result, "WALL_GATE_BLOCKED", "non8_voice_invariant")
+        assert result["evidence_blocked"] and not result["functional_failure"]
+        assert result["functional_evidence_invalid"]
         names.append("non8_voice_invariant")
 
         result = evaluate(directory / "missing-functional", "missing_functional")
@@ -425,12 +446,15 @@ def main() -> int:
         assert result["functional_failure"] and result["evidence_blocked"]
         names.append("functional_failure_then_truncation")
 
-        for mode in ("missing_outcome", "nonzero_unrelated", "junit_failure", "mismatched_outcome"):
+        for mode in ("missing_outcome", "nonzero_unrelated", "junit_failure",
+                     "cpu_claim_unrelated", "cpu_claim_mixed", "mismatched_outcome"):
             result = evaluate(directory / mode, mode)
             assert_status(result, "WALL_GATE_BLOCKED", mode)
             assert result["evidence_blocked"]
+            if mode in {"cpu_claim_unrelated", "cpu_claim_mixed"}:
+                assert result["execution_blocked"] and not result["cpu_diagnostic_blocked"]
         names.extend(["absent_native_outcome", "ctest_nonzero_unrelated", "junit_failure_green_tsv",
-                      "mismatched_native_outcome"])
+                      "cpu_claim_unrelated_raw_junit", "cpu_claim_mixed_raw_junit", "mismatched_native_outcome"])
 
         short_samples = [
             {"phase": phase, "timestamp_utc": "2026-11-22T00:00:30Z",

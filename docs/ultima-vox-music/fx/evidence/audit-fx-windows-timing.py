@@ -234,6 +234,112 @@ def _junit_summary(path: Path) -> dict[str, Any]:
             "skipped": skipped, "timeout": timeout}
 
 
+CPU_REASON_MARKER = (
+    "CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse "
+    "for callback CPU attribution"
+)
+TEST_IDENTITY = "suite_fx_runtime_stress_tests"
+
+
+def _junit_reason_text(testcase: ET.Element) -> str:
+    nodes = list(testcase.findall("./failure")) + list(testcase.findall("./error"))
+    nodes += list(testcase.findall("./system-out")) + list(testcase.findall("./system-err"))
+    fragments: list[str] = []
+    for node in nodes:
+        fragments.append(" ".join(str(value) for value in node.attrib.values()))
+        fragments.append("".join(node.itertext()))
+    return " ".join(fragment for fragment in fragments if fragment).strip()
+
+
+def _read_native_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-16")
+
+
+def reconcile_native_ctest(
+    raw_path: Path, junit_path: Path, test_identity: str,
+    ctest_exit_code: int,
+) -> dict[str, Any]:
+    """Reconcile CTest's captured result and JUnit failure reason.
+
+    The outcome JSON is not trusted for CPU-only classification. A CPU-only
+    candidate must have the exact native reason in raw CTest output and in the
+    one selected JUnit testcase, with no second failure/error/skip/timeout.
+    """
+    try:
+        raw = _read_native_text(raw_path)
+    except OSError as error:
+        raise ValueError(f"cannot read native CTest output {raw_path}: {error}") from error
+    if not raw.strip() or test_identity not in raw:
+        raise ValueError(f"native CTest output {raw_path} lacks the selected test identity")
+    all_result_lines = [line for line in raw.splitlines()
+                        if re.search(r"(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:.*"
+                                     r"(?:\*{3})?(?:Failed|Passed|Timeout)\b",
+                                     line, re.IGNORECASE)]
+    if len(all_result_lines) != 1 or test_identity not in all_result_lines[0]:
+        raise ValueError(f"native CTest output {raw_path} has unrelated or ambiguous test results")
+    result_line = all_result_lines[0]
+    if re.search(r"Timeout\b", result_line, re.IGNORECASE):
+        raw_result = "timeout"
+    elif re.search(r"(?:\*{3})?Failed\b", result_line, re.IGNORECASE):
+        raw_result = "failed"
+    elif re.search(r"Passed\b", result_line, re.IGNORECASE):
+        raw_result = "passed"
+    else:
+        raise ValueError(f"native CTest output {raw_path} has an unknown selected result")
+    if ctest_exit_code == 0 and raw_result != "passed":
+        raise ValueError("native CTest exit code is green but captured result is not Passed")
+    if ctest_exit_code != 0 and raw_result == "passed":
+        raise ValueError("native CTest exit code is red but captured result is Passed")
+
+    try:
+        root = ET.parse(junit_path).getroot()
+    except (OSError, ET.ParseError) as error:
+        raise ValueError(f"invalid CTest JUnit artifact {junit_path}: {error}") from error
+    testcases = list(root.findall(".//testcase"))
+    if len(testcases) != 1:
+        raise ValueError(f"CTest JUnit must contain exactly one testcase, found {len(testcases)}")
+    testcase = testcases[0]
+    if testcase.get("name") != test_identity and testcase.get("classname") != test_identity:
+        raise ValueError("CTest JUnit testcase identity does not match the selected stress test")
+    failures = len(testcase.findall("./failure"))
+    errors = len(testcase.findall("./error"))
+    skipped = len(testcase.findall("./skipped"))
+    status = str(testcase.get("status", "")).lower()
+    result = str(testcase.get("result", "")).lower()
+    junit_timeout = status in {"timeout", "timedout", "timed-out"} \
+        or result in {"timeout", "timedout", "timed-out"}
+    reason_text = _junit_reason_text(testcase)
+    raw_marker_count = raw.count(CPU_REASON_MARKER)
+    junit_marker_count = reason_text.count(CPU_REASON_MARKER)
+    unrelated_tokens = (
+        "Assertion failed", "assertion failed", "FINITE_OUTPUT", "MIDI_NOT_CONSUMED",
+        "PEAK_RANGE", "DC_OFFSET", "MAX_GRAINS", "VOICE8_GRAIN_INVARIANT")
+    unrelated_reason = any(token in reason_text for token in unrelated_tokens)
+    raw_unrelated_reason = any(token in raw for token in unrelated_tokens)
+    cpu_reason_verified = (
+        ctest_exit_code != 0 and raw_result == "failed" and failures == 1 and errors == 0
+        and skipped == 0 and not junit_timeout and raw_marker_count == 1
+        and junit_marker_count == 1 and not unrelated_reason and not raw_unrelated_reason)
+    native_failure = ctest_exit_code != 0 or failures > 0 or errors > 0 \
+        or skipped > 0 or junit_timeout
+    return {
+        "verified": True,
+        "raw_result": raw_result,
+        "junit_tests": 1,
+        "junit_failures": failures,
+        "junit_errors": errors,
+        "junit_skipped": skipped,
+        "junit_timeout": junit_timeout,
+        "raw_cpu_reason_count": raw_marker_count,
+        "junit_cpu_reason_count": junit_marker_count,
+        "cpu_reason_verified": cpu_reason_verified,
+        "native_failure": native_failure,
+    }
+
+
 def _load_post_test_outcome(path: Path) -> dict[str, Any]:
     try:
         outcome = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -396,6 +502,9 @@ def _verify_provenance(
     if not _same_path(receipt["ctest_selected_executable"], executable):
         raise ValueError("runner receipt CTest executable does not match the hashed executable")
     audit_ctest_inventory(Path(receipt["ctest_inventory_path"]), executable)
+    native_evidence = reconcile_native_ctest(
+        Path(receipt["ctest_raw_path"]), Path(receipt["ctest_junit_path"]),
+        receipt["test_identity"], outcome["ctest_exit_code"])
     return {
         "verified": True,
         "git_head": actual_head,
@@ -407,6 +516,7 @@ def _verify_provenance(
         "artifact_manifest": manifest_result,
         "post_test_outcome": outcome,
         "post_test_outcome_path": str(outcome_path),
+        "native_execution_evidence": native_evidence,
     }
 
 
@@ -780,9 +890,10 @@ def audit(
             or outcome["junit_skipped"] > 0 or outcome["junit_timeout"]
         execution_failure = bool(outcome["timed_out"] or outcome["crashed"]
                                  or outcome["skipped"] or not outcome["execution_complete"])
+        native_evidence = provenance.get("native_execution_evidence", {})
         cpu_only_valid = cpu_only_failure and cpu_measurement_insufficient \
             and not performance_failure and outcome["ctest_exit_code"] != 0 \
-            and not junit_failure and not execution_failure
+            and bool(native_evidence.get("cpu_reason_verified")) and not execution_failure
         native_failure = bool(outcome["ctest_exit_code"] != 0 or junit_failure) and not cpu_only_valid
         if not cpu_only_valid:
             cpu_only_failure = False
