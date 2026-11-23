@@ -193,23 +193,38 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
         override_status in {"timeout_failure", "skip_failure", "crash_failure"})
     raw_status = "Timeout" if override_status == "timeout_failure" else (
         "Failed" if raw_failed else "Passed")
-    raw_text = (
-        "Test project fixture\n1/1 Test #1: suite_fx_runtime_stress_tests ... "
-        + raw_status + "\n"
-    )
-    if cpu_reason or cpu_claim_mixed:
-        raw_text += EVALUATOR.AUDIT.CPU_REASON_MARKER + "\n"
+    # Mirrors the owner-authorized Windows #78 capture: CTest -VV prefixes
+    # the executable's terminal marker once and echoes it once on failure;
+    # JUnit reports message="Failed" while retaining the marker in system-out.
+    cpu_native_failure = cpu_reason or cpu_claim_mixed
+    if cpu_native_failure:
+        raw_text = (
+            "Test project fixture\n"
+            "78: " + EVALUATOR.AUDIT.CPU_REASON_MARKER + "\n"
+            "FX JUCE runtime stress: 1 failing cases\n"
+            "1/1 Test #78: suite_fx_runtime_stress_tests ....***" + raw_status + " 1.94 sec\n"
+            + EVALUATOR.AUDIT.CPU_REASON_MARKER + "\n"
+        )
+    else:
+        raw_text = (
+            "Test project fixture\n1/1 Test #1: suite_fx_runtime_stress_tests ... "
+            + raw_status + "\n"
+        )
     if cpu_claim_mixed:
-        raw_text += "Assertion failed: PEAK_RANGE\n"
+        raw_text += "FX_T18_NATIVE_FAILURE_REASON: unexpected DSP regression\n"
     ctest_raw_path.write_text(raw_text, encoding="utf-8")
-    junit_failed = cpu_reason or red_unrelated or cpu_claim_mixed
-    junit_reason = EVALUATOR.AUDIT.CPU_REASON_MARKER if cpu_reason else "native assertion failed"
+    junit_failed = cpu_native_failure or red_unrelated
+    junit_system_out = ""
+    if cpu_native_failure:
+        junit_system_out = EVALUATOR.AUDIT.CPU_REASON_MARKER + "\nFX JUCE runtime stress: 1 failing cases\n"
     if cpu_claim_mixed:
-        junit_reason = EVALUATOR.AUDIT.CPU_REASON_MARKER + " PEAK_RANGE"
+        junit_system_out += "FX_T18_NATIVE_FAILURE_REASON: unexpected DSP regression\n"
+    junit_message = "Failed" if cpu_native_failure else "native assertion failed"
     junit_path.write_text(
         f'<testsuite tests="1" failures="{int(junit_failed)}" errors="0" skipped="0">'
         '<testcase name="suite_fx_runtime_stress_tests">'
-        + (f'<failure message="{junit_reason}" />' if junit_failed else '')
+        + (f'<failure message="{junit_message}" />' if junit_failed else '')
+        + (f'<system-out>{junit_system_out}</system-out>' if junit_system_out else '')
         + '</testcase></testsuite>', encoding="utf-8")
     outcome = {
         "format": "VOX_FX_T18_POST_TEST_OUTCOME_V1", "scenario": profile,

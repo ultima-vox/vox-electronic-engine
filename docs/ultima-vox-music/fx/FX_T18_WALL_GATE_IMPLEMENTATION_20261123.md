@@ -15,12 +15,17 @@ strict evaluator/conformance fixtures, and a safe host-observation schema.
   output remain.
 - `evidence/audit-fx-windows-timing.py` — strict functional parser and exact
   case reconciliation, with optional fixture-mode retention of failed probe
-  coverage as instrumentation/evidence blockage.
+  coverage as instrumentation/evidence blockage. Native CTest/JUnit
+  reconciliation models the real `#78` coarse-clock capture: one prefixed and
+  one CTest-echoed CPU marker, a failed JUnit testcase with `message="Failed"`,
+  and the allowlisted terminal summary; unknown mixed native reasons remain
+  blocked.
 - `evidence/evaluate-fx-t18-wall-gate.py` — three-profile evaluator for
   54 routed + 54 authored + 9 typical cells, independent dispositions,
   provenance/manifest hooks, host-witness validation and the required
   `WALL_GATE_FAIL` → `WALL_GATE_BLOCKED` →
-  `WALL_GATE_PASS_CPU_UNKNOWN` precedence.
+  `WALL_GATE_PASS_CPU_UNKNOWN` precedence. Partial functional salvage retains
+  only internally consistent observed violations.
 - `evidence/test-audit-fx-windows-timing.py` and
   `evidence/test-evaluate-fx-t18-wall-gate.py` — executable parser/status
   fixtures, including all eleven reviewed fixture names.
@@ -42,7 +47,7 @@ FX-T18 auditor negative fixtures: PASS
 
 PYTHONDONTWRITEBYTECODE=1 python3 docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 FX-T18 wall-gate executable fixtures: PASS
-fixtures: coarse_cpu_plus_functional, coarse_cpu_only, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, host_contention, missing_manifest_reconciliation
+fixtures: independent_host_attestations, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, host_contention, missing_manifest_reconciliation
 
 python3 -m py_compile docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 # exit 0; __pycache__ removed immediately afterward

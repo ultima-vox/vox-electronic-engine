@@ -238,17 +238,12 @@ CPU_REASON_MARKER = (
     "CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse "
     "for callback CPU attribution"
 )
+CPU_TERMINAL_SUMMARY_RE = re.compile(
+    r"^FX JUCE runtime stress:\s*(?P<count>\d+)\s+failing cases$", re.IGNORECASE)
+NATIVE_FAILURE_WORD_RE = re.compile(
+    r"\b(?:assert(?:ion)?|fail(?:ed|ure|ing)?|error|regression|unexpected|"
+    r"native[ _-]?(?:failure|reason))\b", re.IGNORECASE)
 TEST_IDENTITY = "suite_fx_runtime_stress_tests"
-
-
-def _junit_reason_text(testcase: ET.Element) -> str:
-    nodes = list(testcase.findall("./failure")) + list(testcase.findall("./error"))
-    nodes += list(testcase.findall("./system-out")) + list(testcase.findall("./system-err"))
-    fragments: list[str] = []
-    for node in nodes:
-        fragments.append(" ".join(str(value) for value in node.attrib.values()))
-        fragments.append("".join(node.itertext()))
-    return " ".join(fragment for fragment in fragments if fragment).strip()
 
 
 def _read_native_text(path: Path) -> str:
@@ -256,6 +251,62 @@ def _read_native_text(path: Path) -> str:
         return path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:
         return path.read_text(encoding="utf-16")
+
+
+def _native_line_without_ctest_prefix(line: str) -> str:
+    return re.sub(r"^\s*\d+\s*:\s*", "", line.strip())
+
+
+def _terminal_summary_counts(text: str) -> list[int]:
+    counts: list[int] = []
+    for line in text.splitlines():
+        match = CPU_TERMINAL_SUMMARY_RE.fullmatch(_native_line_without_ctest_prefix(line))
+        if match:
+            counts.append(int(match.group("count")))
+    return counts
+
+
+def _has_unallowlisted_native_failure_text(text: str, test_identity: str) -> bool:
+    """Reject failure-like native text outside the C++/CTest allowlist.
+
+    The C++ stress binary's terminal summary is the only expected native
+    failure summary for a CPU-only run. CTest contributes the selected result
+    line and its standard aggregate/failure headings. Anything else that
+    claims an assertion, failure, error, regression or native reason is an
+    independently observed mixed failure, even if it uses a new label that is
+    not yet present in the functional reason-code list.
+    """
+    for line in text.splitlines():
+        normalized = _native_line_without_ctest_prefix(line)
+        if not NATIVE_FAILURE_WORD_RE.search(normalized):
+            continue
+        if normalized == CPU_REASON_MARKER:
+            continue
+        if CPU_TERMINAL_SUMMARY_RE.fullmatch(normalized):
+            continue
+        if re.search(
+                rf"(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:.*"
+                rf"(?:\*{{3}})?(?:Failed|Passed|Timeout)\b",
+                normalized, re.IGNORECASE) and test_identity in normalized:
+            continue
+        if re.fullmatch(r"\d+% tests passed, \d+ tests failed out of \d+", normalized,
+                        re.IGNORECASE):
+            continue
+        if re.fullmatch(r"The following tests FAILED:?", normalized, re.IGNORECASE):
+            continue
+        return True
+    return False
+
+
+def _real_ctest_cpu_marker_shape(raw: str) -> bool:
+    marker_lines = [line.strip() for line in raw.splitlines() if CPU_REASON_MARKER in line]
+    if len(marker_lines) != 2:
+        return False
+    marker = re.escape(CPU_REASON_MARKER)
+    prefixed = sum(bool(re.fullmatch(rf"\d+\s*:\s*{marker}", line))
+                   for line in marker_lines)
+    plain = sum(line == CPU_REASON_MARKER for line in marker_lines)
+    return prefixed == 1 and plain == 1
 
 
 def reconcile_native_ctest(
@@ -311,18 +362,27 @@ def reconcile_native_ctest(
     result = str(testcase.get("result", "")).lower()
     junit_timeout = status in {"timeout", "timedout", "timed-out"} \
         or result in {"timeout", "timedout", "timed-out"}
-    reason_text = _junit_reason_text(testcase)
+    failure_nodes = list(testcase.findall("./failure"))
+    system_out_nodes = list(testcase.findall("./system-out"))
+    system_err_nodes = list(testcase.findall("./system-err"))
+    system_out = " ".join("".join(node.itertext()) for node in system_out_nodes)
     raw_marker_count = raw.count(CPU_REASON_MARKER)
-    junit_marker_count = reason_text.count(CPU_REASON_MARKER)
-    unrelated_tokens = (
-        "Assertion failed", "assertion failed", "FINITE_OUTPUT", "MIDI_NOT_CONSUMED",
-        "PEAK_RANGE", "DC_OFFSET", "MAX_GRAINS", "VOICE8_GRAIN_INVARIANT")
-    unrelated_reason = any(token in reason_text for token in unrelated_tokens)
-    raw_unrelated_reason = any(token in raw for token in unrelated_tokens)
+    junit_marker_count = system_out.count(CPU_REASON_MARKER)
+    summary_counts = _terminal_summary_counts(raw)
+    junit_summary_counts = _terminal_summary_counts(system_out)
+    junit_failure_message = failure_nodes[0].get("message", "") if len(failure_nodes) == 1 else ""
+    junit_failure_type = failure_nodes[0].get("type", "") if len(failure_nodes) == 1 else ""
+    junit_failure_text = "".join(failure_nodes[0].itertext()).strip() if len(failure_nodes) == 1 else ""
     cpu_reason_verified = (
         ctest_exit_code != 0 and raw_result == "failed" and failures == 1 and errors == 0
-        and skipped == 0 and not junit_timeout and raw_marker_count == 1
-        and junit_marker_count == 1 and not unrelated_reason and not raw_unrelated_reason)
+        and skipped == 0 and not junit_timeout and len(system_out_nodes) == 1
+        and not system_err_nodes and _real_ctest_cpu_marker_shape(raw)
+        and junit_failure_message == "Failed" and junit_failure_type in {"", "Failed"}
+        and junit_failure_text in {"", "Failed"} and junit_marker_count == 1
+        and summary_counts and all(count == 1 for count in summary_counts)
+        and junit_summary_counts and all(count == 1 for count in junit_summary_counts)
+        and not _has_unallowlisted_native_failure_text(raw, test_identity)
+        and not _has_unallowlisted_native_failure_text(system_out, test_identity))
     native_failure = ctest_exit_code != 0 or failures > 0 or errors > 0 \
         or skipped > 0 or junit_timeout
     return {
@@ -335,6 +395,8 @@ def reconcile_native_ctest(
         "junit_timeout": junit_timeout,
         "raw_cpu_reason_count": raw_marker_count,
         "junit_cpu_reason_count": junit_marker_count,
+        "raw_terminal_summary_counts": summary_counts,
+        "junit_terminal_summary_counts": junit_summary_counts,
         "cpu_reason_verified": cpu_reason_verified,
         "native_failure": native_failure,
     }
