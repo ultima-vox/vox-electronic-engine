@@ -244,12 +244,14 @@ NATIVE_FAILURE_WORD_RE = re.compile(
     r"\b(?:assert(?:ion)?|fail(?:ed|ure|ing)?|error|regression|unexpected|"
     r"native[ _-]?(?:failure|reason))\b", re.IGNORECASE)
 CTEST_RESULT_RE = re.compile(
-    r"^(?:\d+\s*/\s*\d+\s+)?Test\s+#(?P<number>\d+):[^\r\n]*"
-    r"(?:\*{3})?(?P<status>Failed|Passed|Timeout)\b", re.IGNORECASE)
+    r"^(?:\d+\s*/\s*\d+\s+)?Test\s+#(?P<number>\d+):\s*"
+    r"(?P<name>\S+)\s+[^\r\n]*?(?:\*{3})?"
+    r"(?P<status>Failed|Passed|Timeout)\b", re.IGNORECASE)
 CTEST_FAILED_LISTING_RE = re.compile(
     r"^(?P<number>\d+)\s*-\s*(?P<name>[^\s]+)\s+\(Failed\)(?:\s+suite)?\s*$",
     re.IGNORECASE)
 TEST_IDENTITY = "suite_fx_runtime_stress_tests"
+CTEST_SELECTED_TEST_NUMBER = "78"
 
 
 def _read_native_text(path: Path) -> str:
@@ -296,12 +298,13 @@ def _has_unallowlisted_native_failure_text(
         if CPU_TERMINAL_SUMMARY_RE.fullmatch(normalized):
             continue
         result_match = CTEST_RESULT_RE.match(normalized)
-        if (result_match and test_identity in normalized
+        if (result_match and result_match.group("name") == test_identity
                 and result_match.group("number") == str(selected_test_number)):
             continue
         listing_match = CTEST_FAILED_LISTING_RE.fullmatch(normalized)
         if listing_match:
-            if (listing_match.group("number") == str(selected_test_number)
+            if (listing_match.group("number") == CTEST_SELECTED_TEST_NUMBER
+                    and listing_match.group("number") == str(selected_test_number)
                     and listing_match.group("name") == test_identity):
                 canonical_listing_count += 1
                 if canonical_listing_count > 1:
@@ -349,12 +352,12 @@ def reconcile_native_ctest(
         raise ValueError(f"native CTest output {raw_path} lacks the selected test identity")
     all_result_lines = [line for line in raw.splitlines()
                         if CTEST_RESULT_RE.match(_native_line_without_ctest_prefix(line))]
-    if len(all_result_lines) != 1 or test_identity not in all_result_lines[0]:
+    if len(all_result_lines) != 1:
         raise ValueError(f"native CTest output {raw_path} has unrelated or ambiguous test results")
     result_line = all_result_lines[0]
     result_match = CTEST_RESULT_RE.match(_native_line_without_ctest_prefix(result_line))
-    if result_match is None:
-        raise ValueError(f"native CTest output {raw_path} has an unknown selected result")
+    if result_match is None or result_match.group("name") != test_identity:
+        raise ValueError(f"native CTest output {raw_path} has an unrelated selected result")
     selected_test_number = result_match.group("number")
     raw_result = result_match.group("status").lower()
     if ctest_exit_code == 0 and raw_result != "passed":

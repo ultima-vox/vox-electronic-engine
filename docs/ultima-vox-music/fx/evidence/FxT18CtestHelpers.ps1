@@ -76,7 +76,10 @@ function Test-CpuOnlyFailure([string]$Report, [string]$CpuStatus) {
     return $true
 }
 
-function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber, [bool]$RequireCanonicalListing = $false) {
+function Test-FxT18NativeFailureText(
+    [string]$Text, [string]$SelectedTestNumber,
+    [bool]$RequireCanonicalListing = $false,
+    [string]$ExpectedTestNumber = '78') {
     $marker = 'CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution'
     $canonicalListingCount = 0
     foreach ($line in ($Text -split '\r?\n')) {
@@ -91,16 +94,18 @@ function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber,
             $normalized -match '(?i)^ctest(?:\.exe)?\s*:\s*Errors while running CTest$') {
             continue
         }
-        if ($normalized -match '(?i)^(?:\d+\s*/\s*\d+\s+)?Test\s+#(\d+):.*(?:\*{3})?(?:Failed|Passed|Timeout)\b') {
+        if ($normalized -match '(?i)^(?:\d+\s*/\s*\d+\s+)?Test\s+#(\d+):\s*(\S+)\s+[^\r\n]*?(?:\*{3})?(?:Failed|Passed|Timeout)\b') {
             $resultNumber = $Matches[1]
-            if ($normalized -match '(?i)suite_fx_runtime_stress_tests' -and
+            $resultName = $Matches[2]
+            if ($resultName -ceq 'suite_fx_runtime_stress_tests' -and
                 $resultNumber -eq $SelectedTestNumber) {
                 continue
             }
             return $true
         }
         if ($normalized -match '(?i)^(\d+)\s*-\s*(\S+)\s+\(Failed\)(?:\s+suite)?\s*$') {
-            if ($Matches[1] -eq $SelectedTestNumber -and
+            if ($Matches[1] -eq $ExpectedTestNumber -and
+                $Matches[1] -eq $SelectedTestNumber -and
                 $Matches[2] -ceq 'suite_fx_runtime_stress_tests') {
                 $canonicalListingCount++
                 if ($canonicalListingCount -gt 1) { return $true }
@@ -114,6 +119,7 @@ function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber,
 }
 
 function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
+    $expectedTestNumber = '78'
     $marker = 'CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution'
     if (-not (Test-Path -LiteralPath $RawLog -PathType Leaf) -or
         -not (Test-Path -LiteralPath $JunitPath -PathType Leaf)) { return $false }
@@ -128,15 +134,16 @@ function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
         $plainMarkers = @($markerLines | Where-Object { $_ -ceq $marker }).Count
         if ($markerLines.Count -ne 2 -or $prefixedMarkers -ne 1 -or $plainMarkers -ne 1) { return $false }
         $resultLines = @([regex]::Matches(
-            $raw, '(?im)^\s*(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:[^\r\n]*(?:\*{3})?(?:Failed|Passed|Timeout)\b') |
+            $raw, '(?im)^\s*(?:\d+\s*/\s*\d+\s+)?Test\s+#\d+:\s*\S+\s+[^\r\n]*?(?:\*{3})?(?:Failed|Passed|Timeout)\b') |
             ForEach-Object { $_.Value })
         if ($resultLines.Count -ne 1 -or
-            $resultLines[0] -notmatch '(?i)suite_fx_runtime_stress_tests' -or
             $resultLines[0] -notmatch '(?i)(?:\*{3})?Failed\b') { return $false }
-        if ($resultLines[0] -notmatch '(?i)(?:^|\s)(?:\d+\s*/\s*\d+\s+)?Test\s+#(\d+):') {
+        if ($resultLines[0] -notmatch '(?i)^(?:\s*)(?:\d+\s*/\s*\d+\s+)?Test\s+#(\d+):\s*(\S+)\s+') {
             return $false
         }
         $selectedTestNumber = $Matches[1]
+        if ($Matches[2] -cne 'suite_fx_runtime_stress_tests') { return $false }
+        if ($selectedTestNumber -ne $expectedTestNumber) { return $false }
 
         $summaryCount = 0
         foreach ($line in ($raw -split '\r?\n')) {
