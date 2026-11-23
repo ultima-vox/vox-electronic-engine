@@ -1,0 +1,173 @@
+name: FX-T18 one authorized Windows typical native CTest and host witness diagnostic
+
+# Push once to this dedicated branch. Not full 117 cells, not DAW, not qualification.
+on:
+  push:
+    branches:
+      - ci/fx-t18-win-native-witness-45c0922-20261123
+    paths:
+      - .github/workflows/fx-t18-win-native-witness-45c0922.yml
+permissions:
+  contents: read
+concurrency:
+  group: fx-t18-win-native-witness-45c0922
+  cancel-in-progress: false
+jobs:
+  one-typical-native-and-live-witness:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 25
+    env:
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact reviewed source without git credentials
+        uses: actions/checkout@v4
+        with:
+          ref: 45c0922c1bd679518f2cfb93efaa1a3818941dcb
+          persist-credentials: false
+      - name: Verify host, pin JUCE, build ONLY FX runtime stress Release x64
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:COMPUTERNAME -cne 'HAMUNAPTRA' -or @('1','2','3','4') -cnotcontains [string]$env:RUNNER_NAME) { throw "Unauthorized host/runner: $env:COMPUTERNAME/$env:RUNNER_NAME" }
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw "Requires PS5.1, got $($PSVersionTable.PSVersion)" }
+          $head = (& git rev-parse HEAD).Trim()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne '45c0922c1bd679518f2cfb93efaa1a3818941dcb') { throw "Incorrect source $head" }
+          $dirty = @(& git status --porcelain=v1 --untracked-files=all | Where-Object { $_ })
+          if ($dirty.Count -gt 0) { throw "Dirty source: $($dirty -join '; ')" }
+          foreach ($tool in 'git','cmake','ctest','python','powershell.exe') {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing tool: $tool" }
+          }
+          New-Item -ItemType Directory -Force 't18-native-diagnostic-out' | Out-Null
+          $out = Join-Path (Get-Location).Path 't18-native-diagnostic-out'
+          ([ordered]@{mode='DIAGNOSTIC_ONLY';source_head=$head;source_tree=$tree;host=$env:COMPUTERNAME;runner=$env:RUNNER_NAME;ps51=$PSVersionTable.PSVersion.ToString(); workflow_commit=$env:GITHUB_SHA;run_id=$env:GITHUB_RUN_ID;utc=[DateTime]::UtcNow.ToString('o')}) | ConvertTo-Json | Set-Content (Join-Path $out 'source.json') -Encoding UTF8
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository 'https://github.com/juce-framework/JUCE.git' -Ref '9.0.1' -Commit $env:JUCE_COMMIT
+          if (-not $juce) { throw 'Pinned JUCE unavailable' }
+          if ((& git -C $juce rev-parse HEAD).Trim() -cne $env:JUCE_COMMIT) { throw 'JUCE wrong SHA' }
+          $juceDirty = @(& git -C $juce status --porcelain=v1 --untracked-files=all | Where-Object { $_ })
+          if ($juceDirty.Count -ne 0) { throw 'JUCE checkout dirty' }
+          "JUCE_DIR=$juce" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding UTF8
+          if (Test-Path build-t18-native-diag) { Remove-Item build-t18-native-diag -Recurse -Force }
+          $ErrorActionPreference = 'Continue'
+          & cmake -S . -B build-t18-native-diag -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$juce" 2>&1 | Out-File (Join-Path $out 'configure.txt') -Encoding UTF8 -Width 4096
+          $configExit=$LASTEXITCODE
+          if ($configExit -ne 0) { throw "Configure failed exit $configExit" }
+          & cmake --build build-t18-native-diag --config Release --clean-first --target suite_fx_runtime_stress_tests --parallel 2>&1 | Out-File (Join-Path $out 'build.txt') -Encoding UTF8 -Width 4096
+          $buildExit=$LASTEXITCODE
+          if ($buildExit -ne 0) { throw "Build failed exit $buildExit" }
+          Write-Host "Build PASS; pinned source=$head tree=$tree pinned JUCE=$env:JUCE_COMMIT"
+      - name: One real typical-only CTest, CPU diagnosis, and unattested live host observation
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path (Get-Location).Path 't18-native-diagnostic-out'
+          $raw = Join-Path $out 'typical.ctest.txt'
+          $junit = Join-Path $out 'typical.junit.xml'
+          $report = Join-Path $out 'typical.tsv'
+          $inventory = Join-Path $out 'typical.inventory.json'
+          $witnessScript = Join-Path (Get-Location).Path 'docs\ultima-vox-music\fx\evidence\capture-fx-t18-host-witness.ps1'
+          $witnessRaw = Join-Path $env:RUNNER_TEMP ("FX-T18-PRIVATE-HOST-WITNESS-" + $env:GITHUB_RUN_ID + ".json")
+          & ctest --test-dir build-t18-native-diag -C Release -R '^suite_fx_runtime_stress_tests$' '--show-only=json-v1' | Out-File -LiteralPath $inventory -Encoding UTF8 -Width 4096
+          if ($LASTEXITCODE -ne 0) { throw 'CTest inventory query failed' }
+          $object = Get-Content $inventory -Raw | ConvertFrom-Json
+          $tests = @($object.tests | Where-Object { $_.name -ceq 'suite_fx_runtime_stress_tests' })
+          if ($tests.Count -ne 1) { throw "Expected exactly one selected test, got $($tests.Count)" }
+          $exe = [string]$tests[0].command[0]
+          if ($exe -notmatch '(?i)[\\/]Release[\\/]') { throw "Expected Release executable, found $exe" }
+          $exe = (Resolve-Path -LiteralPath $exe).Path
+          $exeSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $head=(& git rev-parse HEAD).Trim()
+          $tree=(& git rev-parse 'HEAD^{tree}').Trim()
+          $env:VOX_FX_STRESS_TYPICAL='1'
+          Remove-Item Env:VOX_FX_STRESS_AUTHORED -ErrorAction SilentlyContinue
+          $env:VOX_FX_TIMING_THREAD_CPU='1'
+          $env:VOX_FX_REPORT=$report
+          $env:VOX_FX_SOURCE_SHA=$head
+          $env:VOX_FX_SOURCE_TREE=$tree
+          $env:VOX_FX_EXECUTABLE=$exe
+          $env:VOX_FX_EXE_SHA256=$exeSha
+          $env:VOX_FX_RUNNER_RECEIPT_SHA256=('0'*64)
+          $observer = Start-Job -ArgumentList @($witnessScript,$witnessRaw) -ScriptBlock {
+            param($script,$path)
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Mode Capture -OutputPath $path -PreSeconds 30 -DuringSeconds 120 -PostSeconds 30 2>&1 | Out-Null
+            $LASTEXITCODE
+          }
+          Write-Host 'Live process/event observer started; no owner lease/event-loss attestations supplied; evidence BLOCKED expected.'
+          Start-Sleep -Seconds 42
+          $testStart=[DateTime]::UtcNow.ToString('o')
+          $ErrorActionPreference='Continue'
+          & ctest --test-dir build-t18-native-diag -C Release -R '^suite_fx_runtime_stress_tests$' '--no-tests=error' '--timeout' 180 '--output-on-failure' '--output-junit' $junit '-VV' 2>&1 | Out-File -LiteralPath $raw -Encoding UTF8 -Width 4096
+          $ctestExit=$LASTEXITCODE
+          $ErrorActionPreference='Stop'
+          $testEnd=[DateTime]::UtcNow.ToString('o')
+          Write-Host "Single real typical CTest exit code: $ctestExit (no qualification)"
+          $waited=Wait-Job -Job $observer -Timeout 320
+          $captureCode=$null
+          if ($null -ne $waited) {
+            $values=@(Receive-Job -Job $observer -ErrorAction SilentlyContinue)
+            $numbers=@($values | Where-Object { $_ -match '^\\d+$' })
+            if ($numbers.Count -gt 0) { $captureCode=[int]$numbers[-1] }
+          }
+          $summary=[ordered]@{ witness_mode='LIVE_UNATTESTED_DIAGNOSTIC';witness_completed=($null -ne $waited);witness_exit=$captureCode;witness_blocked=$true;qualification='NOT_GRANTED';raw_process_data_published=$false;test_start_utc=$testStart;test_end_utc=$testEnd }
+          try {
+            if (Test-Path $witnessRaw) {
+              $summary.private_raw_sha256=(Get-FileHash $witnessRaw -Algorithm SHA256).Hash.ToLowerInvariant()
+              $w=Get-Content $witnessRaw -Raw | ConvertFrom-Json
+              $summary.sample_counts=[ordered]@{pre=@($w.samples | Where-Object {$_.phase -eq 'pre'}).Count;during=@($w.samples | Where-Object {$_.phase -eq 'during'}).Count;post=@($w.samples | Where-Object {$_.phase -eq 'post'}).Count}
+              $summary.events_count=@($w.process_events).Count
+              $summary.monitor_gaps=@($w.monitor_gaps).Count
+              $summary.process_query_errors=@($w.query_errors).Count
+              $summary.unrecognized_process_count=@($w.unrecognized_competitors).Count
+              $summary.unknown_pid_count=@($w.unknown_pids).Count
+              $summary.event_provider_available=[bool]$w.event_trace.available
+              $summary.capture_start_utc=$w.capture_start_utc
+              $summary.capture_end_utc=$w.capture_end_utc
+              $summary.witness_blocked=[bool]$w.evidence_blocked
+              $summary.during_window_covers_ctest_start=$false
+              foreach($sample in @($w.samples | Where-Object {$_.phase -eq 'during'})) {
+                $stamp=[DateTime]::Parse([string]$sample.timestamp_utc).ToUniversalTime()
+                if ($stamp -ge [DateTime]::Parse($testStart).ToUniversalTime() -and $stamp -le [DateTime]::Parse($testEnd).ToUniversalTime()) { $summary.during_window_covers_ctest_start=$true }
+              }
+              if (-not $summary.witness_blocked) { throw 'Unattested witness unexpectedly claimed success' }
+            } else { $summary.witness_error='Capture has no raw output, BLOCKED' }
+          } finally { if (Test-Path $witnessRaw) { Remove-Item $witnessRaw -Force } }
+          $summary | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'host-witness-summary.json') -Encoding UTF8
+          ([ordered]@{profile='typical';source_head=$head;source_tree=$tree;selected_executable_sha256=$exeSha;ctest_exit_code=$ctestExit;test_start_utc=$testStart;test_end_utc=$testEnd;machine=$env:COMPUTERNAME;runner=$env:RUNNER_NAME;juce_commit=$env:JUCE_COMMIT;host_witness_attestation='BLOCKED';qualification='NOT_GRANTED'}) | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $out 'ctest-status.json') -Encoding UTF8
+          $audit = Join-Path (Get-Location).Path 'docs\ultima-vox-music\fx\evidence\audit-fx-windows-timing.py'
+          $ErrorActionPreference='Continue'
+          & python $audit $report '--allow-unverified-provenance' 2>&1 | Out-File -LiteralPath (Join-Path $out 'typical.schema-audit.json') -Encoding UTF8 -Width 4096
+          $schemaCode=$LASTEXITCODE
+          $ErrorActionPreference='Stop'
+          $probe=Join-Path $out 'native-evidence-probe.py'
+          @'
+import importlib.util, json, pathlib, sys
+script, raw, junit, ctest_exit = sys.argv[1:]
+spec=importlib.util.spec_from_file_location("fx_t18_audit", script)
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    result=module.reconcile_native_ctest(pathlib.Path(raw),pathlib.Path(junit),"suite_fx_runtime_stress_tests",int(ctest_exit))
+    print(json.dumps(result,indent=2))
+except Exception as exc:
+    print(json.dumps({"verified":False,"error":str(exc)},indent=2))
+    sys.exit(2)
+'@ | Set-Content -LiteralPath $probe -Encoding UTF8
+          $ErrorActionPreference='Continue'
+          & python $probe $audit $raw $junit $ctestExit 2>&1 | Out-File -LiteralPath (Join-Path $out 'native-evidence.json') -Encoding UTF8 -Width 4096
+          $nativeCode=$LASTEXITCODE
+          $ErrorActionPreference='Stop'
+          ([ordered]@{ctest_exit=$ctestExit;schema_audit_exit=$schemaCode;native_evidence_exit=$nativeCode;witness_exit=$captureCode;expected_witness_blocked=$true;full_matrix=$false;retries=0;qualification='NOT_GRANTED'}) | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $out 'diagnostic-result.json') -Encoding UTF8
+          $files=@(Get-ChildItem $out -File | Where-Object {$_.Name -ne 'artifact-manifest.json'} | ForEach-Object { [ordered]@{name=$_.Name;sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant();bytes=$_.Length} })
+          ([ordered]@{format='FX_T18_NATIVE_DIAGNOSTIC_MANIFEST_V1';source_head=$head;source_tree=$tree;executable_sha256=$exeSha;files=$files;qualification='NOT_GRANTED'}) | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $out 'artifact-manifest.json') -Encoding UTF8
+          Write-Host "Typical diagnostic: CTest=$ctestExit; schema=$schemaCode; native=$nativeCode; live witness=$captureCode (BLOCKED expected)."
+          if ($schemaCode -ne 0 -or $nativeCode -ne 0) { throw 'Native audit/reconciliation failed; NO RETRY; raw logs retained.' }
+          Write-Host 'One real CTest diagnosed; no full wall/CPU/DAW qualification.'
+      - name: Retain all non-private evidence even on diagnostic failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-NATIVE-TYPICAL-WITNESS-45c0922
+          path: t18-native-diagnostic-out/
+          if-no-files-found: warn
+          retention-days: 3
