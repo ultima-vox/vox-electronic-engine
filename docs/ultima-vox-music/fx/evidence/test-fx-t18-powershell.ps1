@@ -94,7 +94,7 @@ try {
 
     if ($CtestBuildDir) {
         if (-not $InventoryPath) { $InventoryPath = Join-Path $tempRoot 'ctest.inventory.json' }
-        & ctest --test-dir $CtestBuildDir -C Release -R '^suite_fx_runtime_stress_tests$' '--show-only=json-v1' 2>&1 | Out-File -LiteralPath $InventoryPath -Encoding UTF8
+        & ctest --test-dir $CtestBuildDir -C Release -R '^suite_fx_runtime_stress_tests$' '--show-only=json-v1' 2>&1 | Out-File -LiteralPath $InventoryPath -Encoding UTF8 -Width 4096
         $ctestExit = $LASTEXITCODE
         if ($ctestExit -ne 0) { throw "CTest inventory smoke failed with exit code $ctestExit" }
     }

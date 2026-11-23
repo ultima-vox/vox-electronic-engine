@@ -95,8 +95,13 @@ def report_text() -> str:
 def test_ctest_inventory_audit() -> None:
     with tempfile.TemporaryDirectory() as directory:
         directory_path = Path(directory)
-        executable = directory_path / "suite_fx_runtime_stress_tests.exe"
+        executable = (directory_path / ("release-" + "x" * 30) /
+                      ("configuration-" + "y" * 30) /
+                      ("runner-output-" + "z" * 30) /
+                      "suite_fx_runtime_stress_tests.exe")
+        executable.parent.mkdir(parents=True)
         executable.write_bytes(b"fixture executable")
+        assert len(str(executable)) > 80
         inventory = directory_path / "inventory.json"
         inventory.write_text(json.dumps({
             "version": {"major": 1, "minor": 0},
