@@ -76,7 +76,7 @@ function Test-CpuOnlyFailure([string]$Report, [string]$CpuStatus) {
     return $true
 }
 
-function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber) {
+function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber, [bool]$RequireCanonicalListing = $false) {
     $marker = 'CPU_MEASUREMENT_INSUFFICIENT: raw GetThreadTimes deltas are too coarse for callback CPU attribution'
     $canonicalListingCount = 0
     foreach ($line in ($Text -split '\r?\n')) {
@@ -99,7 +99,7 @@ function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber)
             }
             return $true
         }
-        if ($normalized -match '(?i)^(\d+)\s*-\s*(\S+)\s+\(Failed\)(?:\s+suite)?\s*$')
+        if ($normalized -match '(?i)^(\d+)\s*-\s*(\S+)\s+\(Failed\)(?:\s+suite)?\s*$') {
             if ($Matches[1] -eq $SelectedTestNumber -and
                 $Matches[2] -ceq 'suite_fx_runtime_stress_tests') {
                 $canonicalListingCount++
@@ -110,7 +110,7 @@ function Test-FxT18NativeFailureText([string]$Text, [string]$SelectedTestNumber)
         }
         return $true
     }
-    return $false
+    return $RequireCanonicalListing -and $canonicalListingCount -ne 1
 }
 
 function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
@@ -146,7 +146,8 @@ function Test-CpuOnlyNativeEvidence([string]$RawLog, [string]$JunitPath) {
                 if ([int]$Matches[1] -ne 1) { return $false }
             }
         }
-        if ($summaryCount -eq 0 -or (Test-FxT18NativeFailureText $raw $selectedTestNumber)) { return $false }
+        if ($summaryCount -eq 0 -or
+            (Test-FxT18NativeFailureText $raw $selectedTestNumber $true)) { return $false }
 
         $junit = [xml](Get-Content -LiteralPath $JunitPath -Raw)
         $testcases = @($junit.SelectNodes('//testcase'))

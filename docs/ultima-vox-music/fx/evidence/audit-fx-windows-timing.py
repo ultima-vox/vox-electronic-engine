@@ -274,6 +274,7 @@ def _terminal_summary_counts(text: str) -> list[int]:
 
 def _has_unallowlisted_native_failure_text(
     text: str, test_identity: str, selected_test_number: str,
+    require_canonical_listing: bool = False,
 ) -> bool:
     """Reject failure-like native text outside the C++/CTest allowlist.
 
@@ -316,7 +317,7 @@ def _has_unallowlisted_native_failure_text(
                         normalized, re.IGNORECASE):
             continue
         return True
-    return False
+    return require_canonical_listing and canonical_listing_count != 1
 
 
 def _real_ctest_cpu_marker_shape(raw: str) -> bool:
@@ -398,7 +399,7 @@ def reconcile_native_ctest(
         and summary_counts and all(count == 1 for count in summary_counts)
         and junit_summary_counts and all(count == 1 for count in junit_summary_counts)
         and not _has_unallowlisted_native_failure_text(
-            raw, test_identity, selected_test_number)
+            raw, test_identity, selected_test_number, require_canonical_listing=True)
         and not _has_unallowlisted_native_failure_text(
             system_out, test_identity, selected_test_number))
     native_failure = ctest_exit_code != 0 or failures > 0 or errors > 0 \
