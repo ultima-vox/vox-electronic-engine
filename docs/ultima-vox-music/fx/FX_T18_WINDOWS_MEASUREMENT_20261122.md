@@ -1,14 +1,52 @@
 # FX-T18 — Windows x64 callback measurement proposal
 
-**Status: Draft PR preparation, measurement not run.** This document defines the
-reviewable scenario for the next FX qualification step. It does not authorize a
-Windows job, a release decision, or a merge into `next/fx-development`.
+**Status: one owner-authorized typical-only diagnostic run completed; CPU
+measurement is blocking and no qualification claim is made.** This document
+defines the reviewable scenario and preserves the run metadata in
+[evidence/windows-45130013544.txt](evidence/windows-45130013544.txt). It does not
+authorize another Windows job, a release decision, or a merge into
+`next/fx-development`.
 
 The source baseline for this checkpoint is `c7ee608a0879087d9dade1f2471c69a1bde92732`.
 The change is test and evidence tooling only: no FX DSP, parameter identity,
 state schema, Wavefold implementation, or host contract is changed. The
 original Wavefold remains the shipping implementation; ADAA1/ADAA2 experiments
 are not part of this work.
+
+## Recorded restricted diagnostic run
+
+Owner-authorized run `45130013544` tested exact source
+`348bb2c807b3abd7ca75efc7b4a8e5bd8f007d8b` (tree
+`d768979117f49be548a522516fcac0311f1d8d81`) on runner 3 / HAMUNAPTRA with
+pinned JUCE `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`. It ran only the reduced
+typical profile: 9 cells × 160 callbacks = 1,440. The fresh x64 Release build,
+PowerShell 5.1 fixtures, CTest inventory, and full TSV/receipt/manifest/EXE
+provenance audit all passed; the auditor exited 0 with verified provenance.
+The selected executable SHA-256 was
+`c18d49ad007aa2b2806391c4597c248a1dc791e84d8b445e4d6963781324bc6e`.
+
+The CTest exit was deliberately nonzero (`8`) and remains blocking:
+`CPU_MEASUREMENT_INSUFFICIENT`. Independent review found 0/1,440 wall misses,
+0 allocations, 0 lock entries, 0 wait entries, lock coverage 132/132, wait
+coverage 97/97 and positive controls 1/1. The largest wall ratio was 19.95525%
+(289.6 us / 1451.247 us at `r44100_f64_v1_poff`). The raw CPU evidence contains
+17 flags at 15,625 us and 1,423 zero deltas; because that quantum exceeds every
+reduced-profile callback budget, the result is
+`performance_failure=false`, `cpu_measurement_insufficient=true`,
+`cpu_attribution=UNKNOWN` and `diagnostic_failure=true`. These raw flags remain
+preserved and are not attributable CPU deadline violations.
+
+The immutable GitHub artifact is
+[14797986060](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/45130013544/artifacts/14797986060),
+metadata digest `sha256:3b78ce7c89f8d12198389fbbfc2e3b2b42adcfcc0d383b9a2f38287217e51cb9`,
+with repository retention through 2026-11-26 07:17:33 UTC. The raw archive is
+not committed; the metadata record notes that this sandbox could not retrieve
+the signed blob redirect. Preserve the archive externally before expiry if raw
+files are needed.
+
+This run establishes only a reduced typical wall-deadline result and a blocking
+CPU-measurement insufficiency. It is not routed/authored qualification,
+DAW/host acceptance, release acceptance or a merge signal.
 
 ## What this checkpoint measures
 
@@ -203,7 +241,10 @@ hosting, UI, listening, validator, packaging or release readiness.
 
 ## CPU-resolution disposition
 
-This revision deliberately retains CPU attribution as `UNKNOWN` when the
+The separate [CPU method proposal](FX_T18_CPU_METHOD_PROPOSAL_20261123.md)
+asks TL to choose validated ETW/WPR running-interval evidence or an explicitly
+wall-only diagnostic contract. This revision deliberately retains CPU
+attribution as `UNKNOWN` when the
 observed positive `GetThreadTimes` quantum is not smaller than the strictest
 callback budget. The raw per-block deltas and raw `cpu_miss` flags remain
 review evidence, but they cannot establish per-block thread CPU use in that
@@ -222,10 +263,12 @@ independent positive-control fixture before CPU attribution changes from
 `CPU_MEASUREMENT_INSUFFICIENT` state is the intended result, not a green CPU
 claim.
 
-## Next isolated diagnostic smoke — authorization pending
+## Future isolated diagnostic smoke — separately authorized only
 
-No command is authorized or dispatched by this revision. After explicit owner
-authorization for the exact reviewed head, the single bounded attempt is:
+The owner-authorized typical-only smoke described above has completed. No further
+command is authorized or dispatched by this revision. If a future instrumented
+attempt is requested after the separate method review, the single bounded
+attempt is:
 
 1. On the existing approved Windows runner, verify a clean checkout of the
    exact source HEAD/tree and pinned JUCE commit, run the PowerShell 5.1 parser/
@@ -266,13 +309,15 @@ permission.
 
 ## Deliberately not done in this checkpoint
 
-- no `[RUN_FX_SUITE]` opt-in or heavy Windows job;
-- no Windows result, CPU claim, lock claim or release qualification claim;
+- no full routed/authored/117-cell or three-profile qualification run;
+- no CPU attribution or CPU realtime qualification claim;
+- no release acceptance, DAW/host acceptance, or merge authorization;
 - no change to PR #156, its Draft/HOLD/NO MERGE state, or `next/fx-development`;
 - no ADAA/Wavefold experiment, oversampling, PDC or DSP optimization;
 - no host DAW run and no customer/project asset collection.
 
-TL approval of this scenario is required before the exact-head Windows run is
-requested. After the run, the separate Draft PR should be updated with the
-immutable raw artifacts and the independent review should classify each result
-before any integration decision.
+The reduced typical result and immutable artifact metadata are recorded above.
+The next gate is a separate review of validated high-resolution ETW/WPR evidence
+versus an explicitly documented wall-only deadline contract. Preserve the raw
+GitHub archive externally before its retention expiry; do not relabel this red
+CTest result or dispatch a retry without separate authorization.

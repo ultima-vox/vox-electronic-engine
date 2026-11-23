@@ -1,9 +1,14 @@
 # VOX FX development status — Draft PR #156
 
-**Next engineering checkpoint:** the Windows x64 FX-T18 measurement scenario is
-prepared in [FX_T18_WINDOWS_MEASUREMENT_20261122.md](FX_T18_WINDOWS_MEASUREMENT_20261122.md).
-It adds only auditable callback timing/probe tooling; no Windows run has been
-authorized or performed, and the Wavefold decision is unchanged.
+**Current engineering checkpoint:** the Windows x64 FX-T18 measurement
+scenario is documented in
+[FX_T18_WINDOWS_MEASUREMENT_20261122.md](FX_T18_WINDOWS_MEASUREMENT_20261122.md).
+One owner-authorized typical-only diagnostic run completed at source
+`348bb2c`; its full audit passed integrity checks, but CTest remains blocking
+with `CPU_MEASUREMENT_INSUFFICIENT` because `GetThreadTimes` quantized at
+15,625 microseconds. No CPU qualification or release claim is made, and the
+Wavefold decision is unchanged. The separate method proposal is
+[FX_T18_CPU_METHOD_PROPOSAL_20261123.md](FX_T18_CPU_METHOD_PROPOSAL_20261123.md).
 
 This is a resume record, not release acceptance. Exact-head Windows suite,
 validator and binary SHA are pending; HOLD prohibits merge and release. See the
