@@ -184,7 +184,9 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
     junit_path = directory / f"{profile}.junit.xml"
     ctest_raw_path = directory / f"{profile}.ctest.txt"
     cpu_claim_mixed = mode == "cpu_claim_mixed" and profile == "routed"
-    cpu_reason = mode == "coarse" or (mode == "functional" and profile != "routed")
+    cpu_claim_selected = mode == "cpu_claim_selected_mismatch" and profile == "routed"
+    cpu_reason = (mode == "coarse" or (mode == "functional" and profile != "routed")
+                  or cpu_claim_selected)
     red_unrelated = mode in {"functional", "nonzero_unrelated", "junit_failure", "cpu_claim_unrelated"} and profile == "routed"
     override_status = (override or {}).get(profile, {}).get("execution_status")
     raw_failed = cpu_reason or red_unrelated or cpu_claim_mixed or (
@@ -233,7 +235,7 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
     if mode in {"nonzero_unrelated", "cpu_claim_unrelated"} and profile == "routed":
         outcome.update({"ctest_exit_code": 8, "native_exit_code": 8,
                         "ctest_outcome": "test_failure"})
-    if mode in {"cpu_claim_unrelated", "cpu_claim_mixed"} and profile == "routed":
+    if mode in {"cpu_claim_unrelated", "cpu_claim_mixed", "cpu_claim_selected_mismatch"} and profile == "routed":
         outcome.update({"cpu_only_failure": True,
                         "cpu_only_failure_reason": "CPU_MEASUREMENT_INSUFFICIENT"})
     if mode == "junit_failure" and profile == "routed":
@@ -270,8 +272,11 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
         "host_policy_sha256": "a" * 64, "post_test_outcome_path": str(outcome_path),
         "ctest_raw_path": str(ctest_raw_path), "ctest_inventory_path": str(junit_path),
         "ctest_junit_path": str(junit_path),
+        "ctest_selected_executable": str(executable),
         "executable_path": str(executable), "executable_sha256": "c" * 64,
     }
+    if mode == "selected_executable_mismatch" and profile == "routed":
+        receipt["ctest_selected_executable"] = str(directory / "other.exe")
     receipt_path = directory / f"{profile}.json"
     receipt_path.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
     return receipt_path
@@ -285,7 +290,7 @@ def write_case_files(directory: Path, mode: str, witness: dict | None = None,
     receipt_paths: dict[str, Path] = {}
     for profile in EVALUATOR.PROFILES:
         text = profile_report(base, profile)
-        if mode in {"coarse", "functional"}:
+        if mode in {"coarse", "functional"} or (mode == "cpu_claim_selected_mismatch" and profile == "routed"):
             text = quantized(text)
         if mode in {"functional", "functional_truncated"} and profile == "routed":
             text = mutate(text, "r44100_f64_v1_poff", finite_output="0",
@@ -447,14 +452,16 @@ def main() -> int:
         names.append("functional_failure_then_truncation")
 
         for mode in ("missing_outcome", "nonzero_unrelated", "junit_failure",
-                     "cpu_claim_unrelated", "cpu_claim_mixed", "mismatched_outcome"):
+                     "cpu_claim_unrelated", "cpu_claim_mixed", "cpu_claim_selected_mismatch",
+                     "mismatched_outcome"):
             result = evaluate(directory / mode, mode)
             assert_status(result, "WALL_GATE_BLOCKED", mode)
             assert result["evidence_blocked"]
-            if mode in {"cpu_claim_unrelated", "cpu_claim_mixed"}:
+            if mode in {"cpu_claim_unrelated", "cpu_claim_mixed", "cpu_claim_selected_mismatch"}:
                 assert result["execution_blocked"] and not result["cpu_diagnostic_blocked"]
         names.extend(["absent_native_outcome", "ctest_nonzero_unrelated", "junit_failure_green_tsv",
-                      "cpu_claim_unrelated_raw_junit", "cpu_claim_mixed_raw_junit", "mismatched_native_outcome"])
+                      "cpu_claim_unrelated_raw_junit", "cpu_claim_mixed_raw_junit",
+                      "cpu_claim_selected_executable_mismatch", "mismatched_native_outcome"])
 
         short_samples = [
             {"phase": phase, "timestamp_utc": "2026-11-22T00:00:30Z",

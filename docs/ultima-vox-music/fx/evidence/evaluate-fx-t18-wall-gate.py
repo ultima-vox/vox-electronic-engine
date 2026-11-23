@@ -557,19 +557,25 @@ def _execution_state(path: Path | None) -> dict[str, Any]:
                 "evidence_blocked": True, "receipt_missing": True}
     try:
         receipt = _read_json(path, "runner receipt")
-        required = ("format", "scenario", "test_start_utc", "test_end_utc", "machine",
+        required = ("format", "scenario", "test_identity", "test_start_utc", "test_end_utc", "machine",
                     "host_lease_id", "host_policy_sha256", "post_test_outcome_path",
-                    "ctest_raw_path", "ctest_inventory_path", "ctest_junit_path")
+                    "ctest_raw_path", "ctest_inventory_path", "ctest_junit_path",
+                    "executable_path", "executable_sha256", "ctest_selected_executable")
         missing = [field for field in required if field not in receipt]
         if missing:
             raise ValueError(f"runner receipt is missing {', '.join(missing)}")
-        for field in ("scenario", "test_start_utc", "test_end_utc", "machine",
+        for field in ("scenario", "test_identity", "test_start_utc", "test_end_utc", "machine",
                       "host_lease_id", "host_policy_sha256", "post_test_outcome_path",
-                      "ctest_raw_path", "ctest_inventory_path", "ctest_junit_path"):
+                      "ctest_raw_path", "ctest_inventory_path", "ctest_junit_path",
+                      "executable_path", "executable_sha256", "ctest_selected_executable"):
             if not isinstance(receipt[field], str) or not receipt[field]:
                 raise ValueError(f"runner receipt {field} is not a non-empty string")
+        if receipt["test_identity"] != "suite_fx_runtime_stress_tests":
+            raise ValueError("runner receipt test identity is not the FX stress test")
         if not SHA256_RE.fullmatch(receipt["host_policy_sha256"]):
             raise ValueError("runner receipt host policy SHA-256 is malformed")
+        if not SHA256_RE.fullmatch(receipt["executable_sha256"]):
+            raise ValueError("runner receipt executable SHA-256 is malformed")
         start = _utc(receipt["test_start_utc"], "receipt.test_start_utc")
         receipt_end = None if receipt["test_end_utc"] in ("post-test-outcome", "") \
             else _utc(receipt["test_end_utc"], "receipt.test_end_utc")
@@ -590,14 +596,16 @@ def _execution_state(path: Path | None) -> dict[str, Any]:
             artifact_paths["ctest_raw_path"], artifact_paths["ctest_junit_path"],
             outcome["test_identity"], outcome["ctest_exit_code"])
         if outcome["scenario"] != receipt["scenario"] \
-                or outcome["test_identity"] != "suite_fx_runtime_stress_tests" \
+                or outcome["test_identity"] != receipt["test_identity"] \
                 or not _same_path(outcome["junit_path"], artifact_paths["ctest_junit_path"]) \
                 or outcome_info["test_start"] != start \
                 or (receipt_end is not None and outcome_info["test_end"] != receipt_end):
             raise ValueError("post-test outcome does not reconcile with runner receipt")
         end = outcome_info["test_end"]
-        if outcome["executable_path"] != receipt.get("executable_path"):
-            raise ValueError("post-test outcome executable does not match runner receipt")
+        if not _same_path(outcome["executable_path"], receipt["executable_path"]) \
+                or not _same_path(receipt["ctest_selected_executable"], receipt["executable_path"]) \
+                or outcome["executable_sha256"].casefold() != receipt["executable_sha256"].casefold():
+            raise ValueError("post-test outcome executable does not match the selected CTest executable")
         status = str(outcome["ctest_outcome"]).lower()
         execution_failure = bool(outcome["timed_out"] or outcome["crashed"] or outcome["skipped"]
                                  or not outcome["execution_complete"])
@@ -685,7 +693,7 @@ def evaluate_results(
         evidence_blocked |= bool(result.get("evidence_blocked", False))
         evidence_blocked |= bool(result.get("functional_evidence_invalid", False)
                                   or observed.get("functional_evidence_invalid", False))
-        cpu_diagnostic_blocked |= bool(
+        report_cpu_diagnostic = bool(
             result.get("cpu_diagnostic_blocked", False)
             or result.get("cpu_measurement_insufficient", False))
         expected_cells = PROFILES.get(profile)
@@ -715,11 +723,13 @@ def evaluate_results(
                     state["evidence_blocked"] = True
                     execution_blocked = True
                     evidence_blocked = True
-            else:
-                cpu_diagnostic_blocked |= bool(state.get("cpu_only_failure", False))
+            elif state.get("test_start") and not state.get("execution_blocked") \
+                    and not state.get("execution_failure"):
+                cpu_diagnostic_blocked |= report_cpu_diagnostic
         else:
             execution_blocked = True
             evidence_blocked = True
+            cpu_diagnostic_blocked |= report_cpu_diagnostic
     evidence_blocked |= not profile_cells_complete
     performance_failure = wall_failure or safety_failure or functional_failure
     if performance_failure:
