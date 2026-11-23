@@ -13,6 +13,11 @@ state schema, Wavefold implementation, or host contract is changed. The
 original Wavefold remains the shipping implementation; ADAA1/ADAA2 experiments
 are not part of this work.
 
+The next decision artifact is the separately versioned
+[`FX-T18-WALL-GATE v1.0-proposed`](FX_T18_WALL_GATE_V1_20261123.md). It defines
+wall-only diagnostic conditions but does not approve new release criteria or
+authorize the full matrix.
+
 ## Recorded restricted diagnostic run
 
 Owner-authorized run `45130013544` tested exact source

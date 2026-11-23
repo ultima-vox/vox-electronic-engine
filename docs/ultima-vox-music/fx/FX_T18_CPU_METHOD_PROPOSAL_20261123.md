@@ -42,9 +42,11 @@ A conforming method would need to:
    The trace configuration must record provider version, buffer settings,
    timestamp mode, CPU affinity and any lost-event counters.
 3. Reconstruct the thread-running interval intersecting each callback bracket.
-   A missing marker, ambiguous thread identity, lost event, timestamp
-   discontinuity or interval crossing a callback boundary must make the CPU
-   attribution UNKNOWN, not be interpolated silently.
+   A running interval crossing a callback boundary is normal: after the two
+   time domains are calibrated, clip/account its overlap with the callback
+   bracket rather than rejecting it. A missing marker, ambiguous thread
+   identity, lost event, timestamp discontinuity or unresolved overlap must
+   make the CPU attribution UNKNOWN; do not interpolate those cases silently.
 4. Validate resolution and attribution with a positive-control fixture on the
    same runner: deliberately separated known-running and known-not-running
    intervals, repeated enough to expose event loss and timestamp quantization.
@@ -77,7 +79,8 @@ CPU consumption, TL may instead define an explicit wall-only diagnostic gate:
 
 This is a contract decision, not a threshold relaxation and not a qualification
 pass. It must not be mixed with language claiming that the callback's CPU use
-fit its budget.
+fit its budget. The concrete draft for separate review is
+[`FX-T18-WALL-GATE v1.0`](FX_T18_WALL_GATE_V1_20261123.md).
 
 ## Explicitly excluded
 
