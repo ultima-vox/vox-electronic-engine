@@ -25,8 +25,10 @@ The existing `suite_fx_runtime_stress_tests` fixture drives the actual
 - the deadline `frames / sample-rate * 1,000,000` in microseconds;
 - wall, CPU and wall-only deadline exceedances;
 - p50, p95, p99, p99.9 and max for both wall and CPU, plus complete CPU-pair
-  coverage, zero deltas and the minimum positive CPU delta so coarse Windows
-  timer resolution is visible instead of being treated as zero CPU;
+coverage, zero deltas and the minimum positive CPU delta so coarse Windows
+timer resolution is visible instead of being treated as zero CPU. With 160
+observations, nearest-rank p99.9 equals max; it is retained as a separate
+field, not presented as an independent tail estimate;
 - peak, DC, finite-output and active-grain assertions.
 
 The callback fixture also enables the existing Windows IAT allocation probe and
@@ -85,21 +87,25 @@ These are the proposed commands for the authorized Windows runner. They are
 not to be run from this Arena checkpoint:
 
 ```powershell
-cmake -S . -B build-t18 -A x64 `
-  -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF `
-  -DVOX_STRICT_DEPENDENCIES=ON `
-  "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR"
-cmake --build build-t18 --config Release --clean-first --parallel
-
-# This runs routed, authored and typical independently. It does not stop after
-# the first failure; each profile retains its own CTest exit, raw text, TSV,
-# runner receipt, artifact manifest and audit attempt. The final exit is 1 if
-# any profile is a performance, test, infrastructure or artifact failure.
+# The orchestrator requires a clean exact-head checkout and a verified pinned
+# JUCE directory. It deletes/reconfigures build-t18 and freshly builds only the
+# Release FX stress target before reading the CTest-selected executable path.
+$env:JUCE_COMMIT = 'e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8'
+# Fill these from the owner-approved PR head; do not derive them in the run.
+$expectedHead = 'OWNER_APPROVED_EXACT_HEAD_SHA'
+$expectedTree = 'OWNER_APPROVED_EXACT_TREE_SHA'
 .\docs\ultima-vox-music\fx\evidence\run-fx-windows-t18.ps1 `
-  -BuildDir build-t18 -OutputDir t18-out `
-  -ExpectedHead (git rev-parse HEAD) `
-  -ExpectedTree (git rev-parse 'HEAD^{tree}')
+  -JuceDir $env:JUCE_DIR -BuildDir build-t18 -OutputDir t18-out `
+  -ExpectedHead $expectedHead -ExpectedTree $expectedTree -TimeoutSeconds 180
 ```
+
+This runs routed, authored and typical independently. It does not stop after
+the first failure; each profile retains its own CTest exit, raw text, TSV,
+runner receipt, artifact manifest and audit attempt. The final exit is 1 if
+any profile is a performance, test, timeout, infrastructure or artifact
+failure. A CTest `--show-only=json-v1` inventory is saved for every profile;
+the EXE path and SHA-256 used by the report must match the Release executable
+selected by that inventory.
 
 The checked-in orchestrator invokes the auditor with `--root`, `--executable`,
 `--runner-receipt`, `--artifact-manifest`, `--expected-head` and
@@ -109,6 +115,15 @@ receipt SHA-256 values, and hashes every artifact listed in the manifest. A
 missing report or failed audit is classified as infrastructure/test evidence;
 a valid report with deadline/allocation/lock/wait failures is classified as
 performance failure. All three profiles still run after any earlier category.
+
+Before the owner-authorized Windows smoke, run the Windows PowerShell 5.1
+parser/runtime check. It only parses the orchestrator and round-trips the JSON
+and SHA-256 primitives; it does not build or measure:
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+  -File docs\ultima-vox-music\fx\evidence\test-fx-t18-powershell.ps1
+```
 
 For a local schema-only fixture, the auditor may be invoked with both
 `--allow-nonwindows --allow-unverified-provenance`; those flags are explicitly
@@ -139,9 +154,10 @@ The receipt must report these outcomes independently:
   manifest checks.
 
 The orchestrator classifies a valid report with deadline/allocation/lock/wait
-failures as `performance_failure`, a valid report with a failed fixture
-assertion as `test_failure`, and missing/malformed/unverifiable reports or
-artifacts as `infrastructure_failure` (a missing report is additionally
+failures as `performance_failure`, a bounded CTest timeout as
+`timeout_failure`, a valid report with a failed fixture assertion as
+`test_failure`, and missing/malformed/unverifiable reports or artifacts as
+`infrastructure_failure` (a missing report is additionally
 `infrastructure_or_test_failure`). It still runs every profile after a failure
 and returns a failing overall status. No aggregate average can erase a
 per-block miss. A zero `GetThreadTimes` delta is not evidence of zero work. A
@@ -150,7 +166,9 @@ it is not a proof about all host modules or kernel-internal waits. A clean
 fixture result is therefore necessary evidence, not a DAW dropout guarantee.
 The negative fixtures in `evidence/test-audit-fx-windows-timing.py` protect the
 strict `>` deadline parity at exact budget equality, miss-row reconciliation,
-and incomplete-probe rejection.
+incomplete-probe rejection, dropped/duplicated callback rows, bad percentiles,
+spoofed well-formed source/EXE receipts and modified binary hashes against an
+independent git checkout.
 
 The proposed engineering interpretation is **not a pass/fail threshold** until
 TL approves the scenario and target hardware. For the later qualification gate,

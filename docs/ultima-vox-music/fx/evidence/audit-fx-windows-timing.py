@@ -114,6 +114,10 @@ def _same_path(left: str | Path, right: str | Path) -> bool:
     return str(Path(left).absolute()).casefold() == str(Path(right).absolute()).casefold()
 
 
+def _manifest_contains(hashes: dict[str, str], target: str | Path) -> bool:
+    return any(_same_path(path, target) for path in hashes)
+
+
 def _git(root: Path, *arguments: str) -> str:
     try:
         result = subprocess.run(
@@ -150,7 +154,7 @@ def _verify_manifest(path: Path, report: Path, receipt: Path, executable: Path) 
             raise ValueError(f"artifact hash mismatch for {artifact}")
         verified[str(artifact.absolute())] = actual
     required = (report, receipt, executable)
-    if any(str(item.absolute()) not in verified for item in required):
+    if any(not _manifest_contains(verified, item) for item in required):
         raise ValueError(f"artifact manifest {path} does not cover report, receipt and executable")
     return {"path": str(path), "files": len(files), "hashes": verified}
 
@@ -183,7 +187,13 @@ def _verify_provenance(
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid runner receipt {receipt_arg}: {error}") from error
     for field in ("format", "scenario", "source_head", "source_tree", "executable_path",
-                  "executable_sha256", "report_path", "runner"):
+                  "executable_sha256", "report_path", "runner", "build_succeeded",
+                  "source_tracked_clean_before_build", "source_tracked_clean_after_build",
+                  "build_config", "configure_exit_code", "build_exit_code",
+                  "build_fresh_clean_first", "configure_log_path", "build_log_path",
+                  "ctest_timeout_seconds", "ctest_inventory_path",
+                  "ctest_selected_executable", "juce_dir", "juce_commit",
+                  "juce_tracked_clean"):
         if field not in receipt:
             raise ValueError(f"runner receipt is missing {field}")
     if receipt["format"] != "VOX_FX_T18_RUNNER_RECEIPT_V1":
@@ -195,6 +205,24 @@ def _verify_provenance(
         raise ValueError("runner receipt source does not match independently read git")
     if not receipt["runner"]:
         raise ValueError("runner receipt has an empty runner identity")
+    if receipt["build_succeeded"] is not True \
+            or receipt["source_tracked_clean_before_build"] is not True \
+            or receipt["source_tracked_clean_after_build"] is not True \
+            or receipt["build_fresh_clean_first"] is not True:
+        raise ValueError("runner receipt does not attest a clean fresh build")
+    if receipt["build_config"] != "Release" \
+            or int(receipt["configure_exit_code"]) != 0 \
+            or int(receipt["build_exit_code"]) != 0 \
+            or int(receipt["ctest_timeout_seconds"]) <= 0:
+        raise ValueError("runner receipt does not attest a successful bounded Release build")
+    if receipt["juce_tracked_clean"] is not True \
+            or not re.fullmatch(r"[0-9a-fA-F]{40}", str(receipt["juce_commit"])):
+        raise ValueError("runner receipt does not attest a clean pinned JUCE checkout")
+    juce_dir = Path(receipt["juce_dir"])
+    if _git(juce_dir, "rev-parse", "HEAD").casefold() != str(receipt["juce_commit"]).casefold():
+        raise ValueError("runner receipt JUCE commit does not match independently read JUCE HEAD")
+    if _git(juce_dir, "status", "--porcelain=v1", "--untracked-files=all"):
+        raise ValueError("pinned JUCE checkout has unexpected changes")
 
     executable = executable_arg or Path(receipt["executable_path"])
     if not executable.is_file():
@@ -214,6 +242,22 @@ def _verify_provenance(
     if receipt_sha.casefold() != metadata["runner_receipt_sha256"].casefold():
         raise ValueError("report runner receipt SHA-256 does not match the receipt file")
     manifest_result = _verify_manifest(manifest_arg, report, receipt_arg, executable)
+    for field in ("configure_log_path", "build_log_path", "ctest_inventory_path"):
+        artifact = Path(receipt[field])
+        if not artifact.is_file() or not _manifest_contains(manifest_result["hashes"], artifact):
+            raise ValueError(f"runner receipt artifact is missing or unhashed: {field}")
+    if not _same_path(receipt["ctest_selected_executable"], executable):
+        raise ValueError("runner receipt CTest executable does not match the hashed executable")
+    try:
+        inventory = json.loads(Path(receipt["ctest_inventory_path"]).read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid CTest inventory in runner receipt: {error}") from error
+    tests = [item for item in inventory.get("tests", []) if item.get("name") == "suite_fx_runtime_stress_tests"]
+    if len(tests) != 1:
+        raise ValueError("CTest inventory does not contain exactly one FX stress test")
+    commands = [str(command) for command in tests[0].get("command", [])]
+    if not any(_same_path(command, executable) for command in commands if command.lower().endswith(".exe")):
+        raise ValueError("CTest inventory command does not match the hashed executable")
     return {
         "verified": True,
         "git_head": actual_head,

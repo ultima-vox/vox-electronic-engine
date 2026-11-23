@@ -6,8 +6,11 @@ unverified provenance, and therefore cannot be qualification evidence.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
@@ -101,6 +104,83 @@ def expect_failure(text: str, needle: str) -> None:
             raise AssertionError(f"fixture unexpectedly passed: {needle}")
 
 
+def make_provenance_fixture(text: str, directory: Path, head: str, tree: str) -> tuple[Path, Path, Path, Path]:
+    executable = directory / "fixture.exe"
+    executable.write_bytes(b"fixture executable")
+    executable_sha = hashlib.sha256(executable.read_bytes()).hexdigest()
+    report = directory / "fixture.tsv"
+    receipt = directory / "runner.json"
+    manifest = directory / "manifest.json"
+    configure_log = directory / "configure.txt"
+    build_log = directory / "build.txt"
+    inventory = directory / "inventory.json"
+    juce_dir = directory / ("juce-" + head[:8])
+    juce_dir.mkdir()
+    subprocess.run(["git", "init", "-q", str(juce_dir)], check=True)
+    (juce_dir / "pinned.txt").write_text("fixture JUCE\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(juce_dir), "add", "pinned.txt"], check=True)
+    subprocess.run(["git", "-C", str(juce_dir), "-c", "user.name=fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-q", "-m", "fixture"], check=True)
+    juce_commit = subprocess.check_output(["git", "-C", str(juce_dir), "rev-parse", "HEAD"], text=True).strip()
+    configure_log.write_text("configure PASS\n", encoding="utf-8")
+    build_log.write_text("build PASS\n", encoding="utf-8")
+    inventory.write_text(json.dumps({
+        "tests": [{"name": "suite_fx_runtime_stress_tests", "command": [str(executable)]}]
+    }), encoding="utf-8")
+    text = text.replace("meta\tsource_sha\t" + "a" * 40, "meta\tsource_sha\t" + head)
+    text = text.replace("meta\tsource_head\t" + "a" * 40, "meta\tsource_head\t" + head)
+    text = text.replace("meta\tsource_tree\t" + "b" * 40, "meta\tsource_tree\t" + tree)
+    text = text.replace("meta\texecutable_path\tfixture.exe", "meta\texecutable_path\t" + str(executable))
+    text = text.replace("meta\texecutable_sha256\t" + "c" * 64,
+                        "meta\texecutable_sha256\t" + executable_sha)
+    receipt.write_text(json.dumps({
+        "format": "VOX_FX_T18_RUNNER_RECEIPT_V1",
+        "scenario": "routed",
+        "source_head": head,
+        "source_tree": tree,
+        "executable_path": str(executable),
+        "executable_sha256": executable_sha,
+        "report_path": str(report),
+        "runner": "fixture-runner",
+        "build_succeeded": True,
+        "source_tracked_clean_before_build": True,
+        "source_tracked_clean_after_build": True,
+        "build_config": "Release",
+        "configure_exit_code": 0,
+        "build_exit_code": 0,
+        "build_fresh_clean_first": True,
+        "configure_log_path": str(configure_log),
+        "build_log_path": str(build_log),
+        "ctest_timeout_seconds": 180,
+        "ctest_inventory_path": str(inventory),
+        "ctest_selected_executable": str(executable),
+        "juce_dir": str(juce_dir),
+        "juce_commit": juce_commit,
+        "juce_tracked_clean": True,
+    }), encoding="utf-8")
+    receipt_sha = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    text = text.replace("meta\trunner_receipt_sha256\t" + "d" * 64,
+                        "meta\trunner_receipt_sha256\t" + receipt_sha)
+    report.write_text(text, encoding="utf-8")
+    files = []
+    for artifact in (report, receipt, executable, configure_log, build_log, inventory):
+        files.append({"path": str(artifact), "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()})
+    manifest.write_text(json.dumps({"format": "VOX_FX_T18_ARTIFACTS_V1", "files": files}), encoding="utf-8")
+    return report, receipt, executable, manifest
+
+
+def expect_provenance_failure(paths: tuple[Path, Path, Path, Path], root: Path, needle: str) -> None:
+    report, receipt, executable, manifest = paths
+    try:
+        AUDIT.audit(report, require_windows=False, root=root, executable=executable,
+                    runner_receipt=receipt, artifact_manifest=manifest)
+    except ValueError as error:
+        if needle not in str(error):
+            raise AssertionError(f"expected {needle!r}, got {error!s}")
+    else:
+        raise AssertionError(f"provenance fixture unexpectedly passed: {needle}")
+
+
 def main() -> int:
     valid = report_text()
     with tempfile.TemporaryDirectory() as directory:
@@ -112,7 +192,7 @@ def main() -> int:
     # Exact equality is not a miss; the auditor and C++ fixture both use >.
     first_block = next(line for line in valid.splitlines() if line.startswith("block\t"))
     fields = first_block.split("\t")
-    fields[3] = f"{float(fields[5]) + 0.001:.9f}"
+    fields[3] = f"{float(fields[5]) + 0.001:.17f}"
     expect_failure(valid.replace(first_block, "\t".join(fields), 1), "miss flag mismatch")
 
     # Instrumentation cannot silently degrade into a qualifying zero.
@@ -122,6 +202,38 @@ def main() -> int:
     # Explicit raw miss rows must reconcile with the block rows.
     expect_failure(valid + "miss\tr44100_f64_v1_poff\t0\t0\t0\t0\t1\t0\t0\t0\n",
                    "explicit miss rows")
+
+    # Dropped and duplicated callback rows cannot be hidden by a valid-looking
+    # case aggregate.
+    expect_failure(valid.replace(first_block + "\n", "", 1), "exactly 160 unique block rows")
+    expect_failure(valid.replace(first_block, first_block + "\n" + first_block, 1),
+                   "exactly 160 unique block rows")
+
+    # A well-formed but wrong percentile is still rejected.
+    first_case = next(line for line in valid.splitlines() if line.startswith("case\t"))
+    case_fields = first_case.split("\t")
+    case_fields[23] = f"{float(case_fields[23]) + 1.0:.17f}"
+    expect_failure(valid.replace(first_case, "\t".join(case_fields), 1), "percentile mismatch")
+
+    # Forge a self-consistent receipt/manifest with a spoofed source identity;
+    # independent git inspection must reject it. Then verify an independently
+    # valid receipt and reject a post-receipt EXE modification.
+    root = HERE.parents[3]
+    head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    tree = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True).strip()
+    with tempfile.TemporaryDirectory() as directory:
+        directory_path = Path(directory)
+        forged = make_provenance_fixture(valid, directory_path, "e" * 40, "f" * 40)
+        expect_provenance_failure(forged, root, "report source HEAD/tree")
+        valid_provenance = make_provenance_fixture(valid, directory_path, head, tree)
+        verified = AUDIT.audit(valid_provenance[0], require_windows=False, root=root,
+                               executable=valid_provenance[2], runner_receipt=valid_provenance[1],
+                               artifact_manifest=valid_provenance[3], expected_head=head,
+                               expected_tree=tree)
+        assert verified["provenance"]["verified"]
+        valid_provenance[2].write_bytes(b"modified executable")
+        expect_provenance_failure(valid_provenance, root, "executable SHA-256")
+
     print("FX-T18 auditor negative fixtures: PASS")
     return 0
 
