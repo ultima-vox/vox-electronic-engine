@@ -1,0 +1,130 @@
+name: FX-T18 owner-authorized PS5.1 offline fixtures (45c0922)
+
+# Exactly ONE owner-authorized, push-triggered fixture-only job.
+# This file exists exclusively in the isolated CI branch; no PR/main changes.
+on:
+  push:
+    branches:
+      - ci/fx-t18-ps51-offline-45c0922-20261123
+    paths:
+      - .github/workflows/fx-t18-ps51-offline-45c0922.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx-t18-ps51-offline-45c0922-20261123
+  cancel-in-progress: false
+
+jobs:
+  offline-ps51-fixtures-only:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact reviewed PR source (not CI branch commit)
+        uses: actions/checkout@v4
+        with:
+          ref: 45c0922c1bd679518f2cfb93efaa1a3818941dcb
+          persist-credentials: false
+
+      - name: Enforce HAMUNAPTRA runner, source, PS5.1 and log provenance
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:COMPUTERNAME -cne 'HAMUNAPTRA' -or
+              @('1','2','3','4') -cnotcontains [string]$env:RUNNER_NAME) {
+            throw "Unauthorized Windows runner: $env:RUNNER_NAME/$env:COMPUTERNAME"
+          }
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw "Requires Windows PowerShell 5.1, observed $($PSVersionTable.PSVersion)"
+          }
+          $expected = '45c0922c1bd679518f2cfb93efaa1a3818941dcb'
+          $head = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $expected) {
+            throw "Expected exact reviewed source HEAD $expected; got $head"
+          }
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $tree) { throw 'Unable to establish source tree' }
+          $dirty = @(& git status --porcelain=v1 --untracked-files=all | Where-Object { $_ })
+          if ($dirty.Count -gt 0) { throw "Source checkout is dirty: $($dirty -join '; ')" }
+          if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw 'Python unavailable' }
+          if (-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) { throw 'powershell.exe unavailable' }
+          $out = Join-Path (Get-Location).Path 't18-ps51-offline-out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $scripts = @(
+            'docs/ultima-vox-music/fx/evidence/test-fx-t18-powershell.ps1',
+            'docs/ultima-vox-music/fx/evidence/test-fx-t18-host-witness.ps1',
+            'docs/ultima-vox-music/fx/evidence/FxT18CtestHelpers.ps1',
+            'docs/ultima-vox-music/fx/evidence/capture-fx-t18-host-witness.ps1',
+            'docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py'
+          )
+          $hashes = @($scripts | ForEach-Object {
+            if (-not (Test-Path -LiteralPath $_ -PathType Leaf)) { throw "Missing reviewed script: $_" }
+            [ordered]@{ path = $_; sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+          ([ordered]@{
+            mode = 'offline-fixtures-only'; authorized_source_head = $expected;
+            source_head = $head; source_tree = $tree;
+            workflow_commit = $env:GITHUB_SHA; github_run_id = $env:GITHUB_RUN_ID;
+            computer = $env:COMPUTERNAME; runner = $env:RUNNER_NAME;
+            powershell = $PSVersionTable.PSVersion.ToString();
+            created_utc = [DateTime]::UtcNow.ToString('o');
+            scripts = $hashes;
+            prohibited = @('CMake build','FX stress CTest','117-cell matrix','DAW','retry','merge')
+          }) | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'provenance.json') -Encoding UTF8
+          Write-Host "Verified HAMUNAPTRA/$env:RUNNER_NAME, Windows PS $($PSVersionTable.PSVersion), source $head, tree $tree"
+          Write-Host 'Scope: two OfflineSynthetic fixture scripts, no build, no actual host capture, no CTest execution'
+
+      - name: Run EXACTLY TWO offline fixtures and capture native exit codes
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path (Get-Location).Path 't18-ps51-offline-out'
+          if (-not (Test-Path -LiteralPath (Join-Path $out 'provenance.json'))) {
+            throw 'Missing verified preflight provenance'
+          }
+          $fixtures = @(
+            @{ name = 'ps51-ctest-parsers'; script = 'docs/ultima-vox-music/fx/evidence/test-fx-t18-powershell.ps1' },
+            @{ name = 'ps51-host-witness-synthetic'; script = 'docs/ultima-vox-music/fx/evidence/test-fx-t18-host-witness.ps1' }
+          )
+          $results = @()
+          foreach ($fixture in $fixtures) {
+            $log = Join-Path $out ($fixture.name + '.txt')
+            $start = [DateTime]::UtcNow.ToString('o')
+            $ErrorActionPreference = 'Continue'
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fixture.script -Python python 2>&1 |
+              Out-File -LiteralPath $log -Encoding UTF8 -Width 4096
+            $exitCode = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            $result = [ordered]@{
+              fixture = $fixture.name; script = $fixture.script; exit_code = $exitCode;
+              started_utc = $start; finished_utc = [DateTime]::UtcNow.ToString('o');
+              log = $log
+            }
+            $results += $result
+            Write-Host "$($fixture.name): exit $exitCode"
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 30 }
+          }
+          ([ordered]@{
+            format = 'FX_T18_PS51_OFFLINE_SMOKE_V1'; source_head = '45c0922c1bd679518f2cfb93efaa1a3818941dcb';
+            run_id = $env:GITHUB_RUN_ID; runner = $env:RUNNER_NAME; machine = $env:COMPUTERNAME;
+            fixtures = $results; qualification = 'NOT_GRANTED';
+          }) | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding UTF8
+          $unexpected = @(& git status --porcelain=v1 --untracked-files=all |
+            Where-Object { $_ -and $_ -notmatch '^\?\? t18-ps51-offline-out/' })
+          if ($unexpected.Count -gt 0) { throw "Unexpected repo change: $($unexpected -join '; ')" }
+          if (@($results | Where-Object { $_.exit_code -ne 0 }).Count -ne 0) {
+            throw 'One or more offline fixtures failed; no retry authorized; raw logs retained'
+          }
+          Write-Host 'Two PS5.1 offline fixtures PASS. NO FX-T18 wall/CPU/DAW/release qualification.'
+
+      - name: Archive PS5.1 offline evidence, including on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-PS51-OFFLINE-45c0922
+          path: t18-ps51-offline-out/
+          if-no-files-found: warn
+          retention-days: 3
