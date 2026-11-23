@@ -1,0 +1,142 @@
+name: FX-T18 restricted Windows x64 smoke (399c4fe)
+
+# One-shot, owner-authorized FX-T18 smoke. This workflow is isolated from PR
+# #170, and ONLY fires when this exact workflow file is initially pushed
+# to this one-off CI branch. No manual or scheduled triggers.
+on:
+  push:
+    branches:
+      - ci/fx-t18-smoke-399c4fe
+    paths:
+      - .github/workflows/fx-t18-restricted-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx-t18-restricted-smoke-399c4fe
+  cancel-in-progress: false
+
+jobs:
+  fx-typical-only:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact owner-reviewed source (not workflow commit)
+        uses: actions/checkout@v4
+        with:
+          ref: 399c4fe9d28c454939defebc6ba946dd35d218b2
+          persist-credentials: false
+
+      - name: Verify exact SHA, clean checkout, Windows PS5.1 and tools
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = '399c4fe9d28c454939defebc6ba946dd35d218b2'
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) { throw "Unexpected source HEAD: $actual" }
+          $dirty = @(git status --porcelain=v1 --untracked-files=all)
+          if (@($dirty | Where-Object { $_ }).Count -gt 0) { throw "Dirty checkout: $($dirty -join '; ')" }
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw "Expected Windows PowerShell 5.1, found $($PSVersionTable.PSVersion)" }
+          foreach ($tool in 'cmake', 'ctest', 'python', 'git') {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required tool unavailable: $tool" }
+          }
+          New-Item -ItemType Directory -Force t18-smoke-out | Out-Null
+          @("source_head=$actual", "source_tree=$((& git rev-parse 'HEAD^{tree}').Trim())",
+            "runner=$env:RUNNER_NAME", "machine=$env:COMPUTERNAME",
+            "powershell=$($PSVersionTable.PSVersion)", "mode=typical-only",
+            "scope=no full matrix; no main/PR merge; no retries") |
+            Out-File -LiteralPath t18-smoke-out\provenance.txt -Encoding UTF8 -Width 4096
+
+      - name: Resolve pinned clean JUCE (no VST3 validator)
+        shell: powershell
+        env:
+          JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository 'https://github.com/juce-framework/JUCE.git' -Ref '9.0.1' -Commit $env:JUCE_COMMIT
+          if (-not $juce) { throw 'Pinned JUCE checkout failed' }
+          $actual = (& git -C $juce rev-parse HEAD).Trim()
+          if ($actual -cne $env:JUCE_COMMIT) { throw "JUCE SHA mismatch: $actual" }
+          $dirty = @(git -C $juce status --porcelain=v1 --untracked-files=all)
+          if (@($dirty | Where-Object { $_ }).Count -gt 0) { throw 'JUCE checkout is dirty' }
+          "JUCE_DIR=$juce" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          "juce_commit=$actual" | Out-File -LiteralPath t18-smoke-out\provenance.txt -Encoding UTF8 -Append
+
+      - name: PowerShell 5.1 regression fixture (no test execution)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File docs\ultima-vox-music\fx\evidence\test-fx-t18-powershell.ps1 -Python python 2>&1 |
+            Out-File -LiteralPath t18-smoke-out\ps51-fixtures.txt -Encoding UTF8 -Width 4096
+          if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath t18-smoke-out\ps51-fixtures.txt; throw "PS5.1 fixture failed: $LASTEXITCODE" }
+
+      - name: Configure and build ONLY the FX runtime stress target (Release x64)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (Test-Path -LiteralPath build-t18) { Remove-Item -LiteralPath build-t18 -Recurse -Force }
+          & cmake -S . -B build-t18 -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" 2>&1 |
+            Out-File -LiteralPath t18-smoke-out\configure.txt -Encoding UTF8 -Width 4096
+          $configureExit = $LASTEXITCODE
+          if ($configureExit -ne 0) { throw "FX-only configure failed: $configureExit" }
+          & cmake --build build-t18 --config Release --clean-first --target suite_fx_runtime_stress_tests --parallel 2>&1 |
+            Out-File -LiteralPath t18-smoke-out\build.txt -Encoding UTF8 -Width 4096
+          $buildExit = $LASTEXITCODE
+          if ($buildExit -ne 0) { throw "FX runtime stress target build failed: $buildExit" }
+          $dirty = @(git status --porcelain=v1 --untracked-files=all | Where-Object { $_ -notmatch '^\?\? t18-smoke-out/' })
+          if (@($dirty | Where-Object { $_ }).Count -gt 0) { throw "Unexpected source change: $($dirty -join '; ')" }
+
+      - name: Windows PS5.1 real CTest inventory to Python auditor (no tests)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File docs\ultima-vox-music\fx\evidence\test-fx-t18-powershell.ps1 -Python python -CtestBuildDir build-t18 2>&1 |
+            Out-File -LiteralPath t18-smoke-out\ps51-real-inventory.txt -Encoding UTF8 -Width 4096
+          if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath t18-smoke-out\ps51-real-inventory.txt; throw "PS5.1/CTest inventory audit failed: $LASTEXITCODE" }
+
+      - name: ONE typical-only CTest with IAT controls, bounded 180s
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = (Resolve-Path -LiteralPath t18-smoke-out).Path
+          $inventory = Join-Path $out 'typical.inventory.json'
+          & ctest --test-dir build-t18 -C Release -R '^suite_fx_runtime_stress_tests$' '--show-only=json-v1' 2>&1 |
+            Out-File -LiteralPath $inventory -Encoding UTF8 -Width 4096
+          if ($LASTEXITCODE -ne 0) { throw 'CTest inventory unavailable' }
+          $obj = Get-Content -LiteralPath $inventory -Raw | ConvertFrom-Json
+          $tests = @($obj.tests | Where-Object { $_.name -eq 'suite_fx_runtime_stress_tests' })
+          if ($tests.Count -ne 1) { throw "Expected exactly one FX test, got $($tests.Count)" }
+          $exe = [string]$tests[0].command[0]
+          if ($exe -notmatch '(?i)[\\/]Release[\\/]') { throw "Not a Release EXE: $exe" }
+          $exe = (Resolve-Path -LiteralPath $exe).Path
+          $sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          & python docs\ultima-vox-music\fx\evidence\audit-fx-windows-timing.py '--check-ctest-inventory' $inventory '--inventory-executable' $exe 2>&1 |
+            Out-File -LiteralPath (Join-Path $out 'typical-inventory.audit.txt') -Encoding UTF8 -Width 4096
+          if ($LASTEXITCODE -ne 0) { throw 'CTest-selected EXE failed inventory auditor' }
+          $env:VOX_FX_STRESS_TYPICAL = '1'
+          $env:VOX_FX_TIMING_THREAD_CPU = '1'
+          $env:VOX_FX_SOURCE_SHA = '399c4fe9d28c454939defebc6ba946dd35d218b2'
+          $env:VOX_FX_SOURCE_TREE = (& git rev-parse 'HEAD^{tree}').Trim()
+          $env:VOX_FX_EXECUTABLE = $exe
+          $env:VOX_FX_EXE_SHA256 = $sha256
+          $env:VOX_FX_REPORT = Join-Path $out 'typical.tsv'
+          @("source_head=$env:VOX_FX_SOURCE_SHA", "source_tree=$env:VOX_FX_SOURCE_TREE",
+            "ctest_selected_exe=$exe", "exe_sha256=$sha256",
+            "note=restricted smoke; standalone TSV is NOT full FX-T18 qualification") |
+            Out-File -LiteralPath (Join-Path $out 'binary-receipt.txt') -Encoding UTF8 -Width 4096
+          $junit = Join-Path $out 'typical.junit.xml'
+          & ctest --test-dir build-t18 -C Release -R '^suite_fx_runtime_stress_tests$' '--no-tests=error' '--timeout' 180 '--output-on-failure' '--output-junit' $junit '-VV' 2>&1 |
+            Out-File -LiteralPath (Join-Path $out 'typical.ctest.txt') -Encoding UTF8 -Width 4096
+          $code = $LASTEXITCODE
+          "ctest_exit_code=$code" | Out-File -LiteralPath (Join-Path $out 'binary-receipt.txt') -Encoding UTF8 -Append
+          if ($code -ne 0) { throw "FX-T18 typical-only CTest failed (evidence retained): $code" }
+
+      - name: Preserve all restricted smoke evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-typical-only-399c4fe
+          path: t18-smoke-out/
+          if-no-files-found: warn
+          retention-days: 3
