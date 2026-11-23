@@ -34,3 +34,14 @@ On the self-hosted runner, `.github/scripts/Use-PinnedCheckout.ps1` provides eac
 - it fetches a copy, with retries, only when the cache does not have one;
 - it refuses a copy at another commit or with local changes;
 - it uses long paths, which the VST3 SDK needs on Windows.
+
+## Suite package (not the legacy Rack installer)
+
+`VOX_SUITE_PACKAGE=ON` is Windows-only and is refused together with `VOX_BUILD_LEGACY`. It packages **VOX Drums**, **VOX FX** and **VOX Trance Synthesis** as:
+
+| Artifact | What it is |
+|---|---|
+| `ULTIMA-VOX-MUSIC-<version>-win64.exe` | NSIS install/uninstall. Default directory: `$PROGRAMFILES64/Common Files/VST3/Ultima Vox`. Unsigned. |
+| `ULTIMA-VOX-MUSIC-<version>-win64.zip` | The same three bundles plus `SUITE-MANIFEST.txt`. |
+
+CI pins NSIS **3.13** (`nsis-3.13.zip` SHA-256 `ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8`) via `.github/scripts/Use-PinnedNsis.ps1`. The legacy `Vox Electronic Engine-*.zip` from `build.yml` is a different product and is not reused. `factoryProgramsHumanApproved` stays 0. This package is not a release and is not a Cubase/REAPER sign-off.

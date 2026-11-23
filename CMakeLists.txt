@@ -476,3 +476,9 @@ set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64/Common Files/VST3")
 include(CPack)
 
 endif() # VOX_BUILD_LEGACY
+
+# Suite installer. Separate from the legacy Rack CPack block above, and only
+# configured for a suite-only build so the two packages cannot be combined.
+if(VOX_BUILD_SUITE AND NOT VOX_BUILD_LEGACY)
+  include(cmake/suite/Package.cmake)
+endif()
