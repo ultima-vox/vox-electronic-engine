@@ -266,8 +266,14 @@ function Invoke-FxScenario([string]$Scenario) {
     if ($auditExit -eq 0) { Copy-Item -LiteralPath $auditRaw -Destination $auditJson -Force }
 
     $auditObject = $null
+    $auditPerformanceFailure = $false
+    $auditCpuMeasurementInsufficient = $false
     if ($auditExit -eq 0) {
-        try { $auditObject = Get-Content -LiteralPath $auditJson -Raw | ConvertFrom-Json }
+        try {
+            $auditObject = Get-Content -LiteralPath $auditJson -Raw | ConvertFrom-Json
+            $auditPerformanceFailure = [bool]$auditObject.performance_failure
+            $auditCpuMeasurementInsufficient = [bool]$auditObject.cpu_measurement_insufficient
+        }
         catch { $auditExit = 125; $exceptionText = "Successful auditor output was not JSON: $($_.Exception)" }
     }
 
@@ -286,10 +292,10 @@ function Invoke-FxScenario([string]$Scenario) {
         $classification = 'infrastructure_failure'
     } elseif (-not $junitAvailable) {
         $classification = 'infrastructure_failure'
-    } elseif ([bool]$auditObject.cpu_measurement_insufficient) {
-        $classification = 'cpu_measurement_insufficient'
-    } elseif ([bool]$auditObject.performance_failure) {
+    } elseif ($auditPerformanceFailure) {
         $classification = 'performance_failure'
+    } elseif ($auditCpuMeasurementInsufficient) {
+        $classification = 'cpu_measurement_insufficient'
     } elseif ($ctestOutcome -eq 'test_failure') {
         $classification = 'test_failure'
     }
@@ -328,6 +334,8 @@ function Invoke-FxScenario([string]$Scenario) {
         ctest_outcome = $ctestOutcome
         timed_out = $ctestTimedOut
         classification = $classification
+        performance_failure = $auditPerformanceFailure
+        cpu_measurement_insufficient = $auditCpuMeasurementInsufficient
         report = $report
         inventory = $inventoryPath
         junit = $junitPath

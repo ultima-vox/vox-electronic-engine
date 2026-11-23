@@ -52,8 +52,11 @@ matrix, deadlines, p50/p95/p99/p99.9/max values, CPU pairs, raw miss flags,
 CPU quantization, probe attestation and case totals. It independently reads git
 HEAD/tree, hashes the executable and runner receipt, and verifies the artifact
 manifest. A coarse CPU clock produces a blocking `cpu_measurement_insufficient`
-diagnostic, not a green CPU performance claim. The checker deliberately reports
-`diagnostic only`; it cannot grant qualification.
+diagnostic, not a green CPU performance claim. The orchestration result carries
+`performance_failure` and `cpu_measurement_insufficient` independently; its
+single classification prioritizes a real wall/allocation/lock/wait failure over
+the CPU diagnostic. The checker deliberately reports `diagnostic only`; it
+cannot grant qualification.
 
 ## Proposed controlled scenario
 
@@ -188,7 +191,8 @@ The negative fixtures in `evidence/test-audit-fx-windows-timing.py` protect the
 strict `>` deadline parity at exact budget equality, miss-row reconciliation,
 incomplete-probe rejection, dropped/duplicated callback rows, bad percentiles,
 spoofed well-formed source/EXE receipts, modified binary hashes and coarse
-`0/15625 us` CPU quantization falsely labeled as real CPU deadline failures
+`0/15625 us` CPU quantization falsely labeled as real CPU deadline failures,
+positive-delta `cpu_resolution=0`, and mixed CPU/instrumentation failures
 against an independent git checkout.
 
 The proposed engineering interpretation is **not a pass/fail threshold** until
@@ -217,6 +221,48 @@ independent positive-control fixture before CPU attribution changes from
 `UNKNOWN`. Until that contract is verified, the blocking
 `CPU_MEASUREMENT_INSUFFICIENT` state is the intended result, not a green CPU
 claim.
+
+## Next isolated diagnostic smoke — authorization pending
+
+No command is authorized or dispatched by this revision. After explicit owner
+authorization for the exact reviewed head, the single bounded attempt is:
+
+1. On the existing approved Windows runner, verify a clean checkout of the
+   exact source HEAD/tree and pinned JUCE commit, run the PowerShell 5.1 parser/
+   fixture smoke, and perform one fresh x64 Release build of
+   `suite_fx_runtime_stress_tests` only.
+2. Capture `ctest --show-only=json-v1` and select the actual Release executable;
+   record its path and SHA-256 in the runner receipt. The receipt must also
+   record the exact source/tree, runner, PowerShell version, JUCE SHA, build
+   result and 180-second bound.
+3. Set `VOX_FX_STRESS_TYPICAL=1`, `VOX_FX_TIMING_THREAD_CPU=1` and a unique
+   `VOX_FX_REPORT`, then run exactly one
+   `ctest -R '^suite_fx_runtime_stress_tests$' --timeout 180` invocation with
+   raw CTest and JUnit captures. Save the deliberate nonzero CTest exit if the
+   coarse clock emits `CPU_MEASUREMENT_INSUFFICIENT`; do not retry it.
+4. Before auditing, create an artifact manifest covering the TSV, raw CTest,
+   JUnit, inventory, runner receipt and selected executable with SHA-256s.
+   Invoke the full report auditor, not only the inventory mode:
+
+   ```powershell
+   python docs\\ultima-vox-music\\fx\\evidence\\audit-fx-windows-timing.py `
+     $report --root $repo --executable $selectedExe `
+     --runner-receipt $receipt --artifact-manifest $manifest `
+     --expected-head $expectedHead --expected-tree $expectedTree
+   $auditExit = $LASTEXITCODE
+   ```
+
+   Preserve the auditor JSON/raw output and final manifest. An auditor exit of
+   zero means only that the TSV, provenance and artifacts are structurally
+   valid; inspect both structured booleans independently. A coarse capture
+   must report `cpu_measurement_insufficient=true` and
+   `cpu_attribution=UNKNOWN`. Any independent wall/allocation/lock/wait failure
+   must also remain `performance_failure=true` and must control the summary
+   classification.
+
+This is typical-only, one-shot diagnostic evidence. It is not the three-profile
+orchestrator, the 117-cell matrix, qualification, a threshold change or merge
+permission.
 
 ## Deliberately not done in this checkpoint
 

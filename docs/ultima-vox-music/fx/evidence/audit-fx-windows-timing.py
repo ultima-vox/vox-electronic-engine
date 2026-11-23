@@ -568,7 +568,9 @@ def audit(
         raise ValueError(f"{path}: measured CPU attribution uses a resolution too coarse for the callback budget")
     if cpu_measurement_insufficient:
         positive_cpu = [value for value in cpu_values if value > 0.0]
-        if cpu_resolution > 0.0 and positive_cpu:
+        if positive_cpu:
+            if cpu_resolution <= 0.0:
+                raise ValueError(f"{path}: positive CPU deltas require a positive cpu_resolution")
             if not all(_quantized(value, cpu_resolution) for value in positive_cpu):
                 raise ValueError(f"{path}: raw CPU deltas are not quantized at the declared resolution")
             if not _near(min(positive_cpu), cpu_resolution, absolute=0.02):

@@ -163,6 +163,20 @@ def non_quantized_cpu_report_text(text: str) -> str:
     return "\n".join(output) + "\n"
 
 
+def mixed_failure_report_text(text: str) -> str:
+    target = "r44100_f64_v1_poff"
+    output: list[str] = []
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if fields[0] == "case" and fields[1] == target:
+            values = dict(zip(AUDIT.CASE_FIELDS, fields[1:]))
+            values["alloc_calls"] = "1"
+            output.append("case\t" + "\t".join(values[field] for field in AUDIT.CASE_FIELDS))
+        else:
+            output.append(line)
+    return "\n".join(output) + "\n"
+
+
 def test_ctest_inventory_audit() -> None:
     with tempfile.TemporaryDirectory() as directory:
         directory_path = Path(directory)
@@ -312,6 +326,14 @@ def main() -> int:
         assert result["totals"]["wall_misses"] == 0
         assert result["totals"]["cpu_misses"] > 0
 
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "mixed-failure.tsv"
+        path.write_text(mixed_failure_report_text(quantized), encoding="utf-8")
+        result = AUDIT.audit(path, require_windows=False, allow_unverified_provenance=True)
+        assert result["cpu_measurement_insufficient"]
+        assert result["performance_failure"]
+        assert result["totals"]["alloc_calls"] > 0
+
     # A coarse 0/15625-us clock must remain diagnostic, not a real CPU pass.
     falsely_measured = quantized.replace(
         "meta\tcpu_measurement_status\tCPU_MEASUREMENT_INSUFFICIENT",
@@ -319,6 +341,9 @@ def main() -> int:
         "meta\tcpu_attribution\tUNKNOWN", "meta\tcpu_attribution\tMEASURED", 1)
     expect_failure(falsely_measured, "resolution too coarse")
     expect_failure(non_quantized_cpu_report_text(quantized), "raw CPU deltas are not quantized")
+    expect_failure(quantized.replace(
+        "meta\tcpu_resolution\t15625", "meta\tcpu_resolution\t0", 1),
+                   "positive CPU deltas require a positive cpu_resolution")
     expect_failure(quantized.replace(
         "meta\tcpu_zero_delta_semantics\tUNKNOWN_NOT_ZERO_WORK",
         "meta\tcpu_zero_delta_semantics\tZERO_WORK", 1),
