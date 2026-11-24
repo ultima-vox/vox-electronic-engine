@@ -17,6 +17,12 @@ short-lived `VOX_FX_T18_IDENTITY_POLICY_V1` containing:
 - every process permitted by the baseline, including executable path/hash,
   process name, parent identity, service identity, and either the reviewed
   PID plus creation time or an explicit reviewed dynamic-spawn rule;
+- every ordinary authorized CTest/native child must carry
+  `lineage_mode=runner_service_ancestry`, an ordered child-to-service chain,
+  and an exact `parent_identity` path/hash/name rule. A PID-only dynamic child
+  rule is invalid. The four direct runner-service identities remain explicit
+  roots; a signed job-lineage alternative must carry its independent job
+  identity hash and signer provenance;
 - a deny/decision rule that treats unknown names, paths, hashes, parent
   identities, service identities, PID reuse, manual builds, DAWs, other
   runners, validators, and unrelated tests as unexpected;
@@ -80,11 +86,47 @@ receipt into a pass.
 ## 4. Close the interval and finalize
 
 After the observation exits, the owner independently parses the retained ETW
-collector. The parse receipt must state the actual provider/session, collector
-SHA-256, coverage interval, received/lost/buffer counters and the complete
-parsed process-event list. It must include PID/start time, exact executable
-path/hash, parent and service context for every event. A raw or arbitrary `.etl`
-file with a matching hash is not a parse.
+collector. The pinned toolchain is Microsoft Windows SDK `tracerpt.exe`
+`10.0.26100.1`; record and verify the actual executable path and file version.
+The exact decoder command is:
+
+```powershell
+python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
+  --etl 'D:\owner-evidence\fx-t18\process.etl' `
+  --output 'D:\owner-evidence\fx-t18\process-parse.json' `
+  --coverage-start '<UTC-COVERAGE-START>' `
+  --coverage-end '<UTC-COVERAGE-END>' `
+  --session-name 'FX-T18-KernelProcess' `
+  --tracerpt 'C:\Windows\System32\tracerpt.exe' `
+  --identity-join 'D:\owner-evidence\fx-t18\etw-identity-join.json'
+python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
+  --verify-receipt --etl 'D:\owner-evidence\fx-t18\process.etl' `
+  --receipt 'D:\owner-evidence\fx-t18\process-parse.json' `
+  --tracerpt 'C:\Windows\System32\tracerpt.exe'
+```
+
+The parser source records the event source (Kernel-Process IDs 1/2), loss
+counter source (`tracerpt -lr` Events Lost/Buffers Lost), raw ETL SHA-256,
+toolchain/version, exact CLI, decoded core/event digests, identity-join hash,
+and replay command. The parse receipt must state the actual provider/session,
+collector SHA-256, coverage interval, received/lost/buffer counters and the
+complete parsed process-event list. It must include PID/start time, exact
+executable path/hash, parent and service context for every event after the
+owner identity join.
+
+`etw-identity-join.json` is an owner-private
+`VOX_FX_T18_ETW_IDENTITY_JOIN_V1` artifact containing one-to-one start/stop
+records joined to the raw ETW PID, parent PID, process name, creation time and
+provider timestamp within the same two-second bound. It carries the exact
+image path/hash and the verified child-to-runner-service ancestry used by the
+policy. The parser retains and hashes this join, but independently replays the
+raw ETL core event digest; changing the raw ETL, adding/removing a core event,
+or making the join ambiguous fails before correlation. Include the identity
+join artifact in the owner host manifest beside the raw ETL and parse receipt.
+A raw or arbitrary `.etl` file with a matching hash is not a parse; replay must
+be performed from the retained raw bytes. If the ETL is tampered and JSON
+claims are regenerated, the evaluator still applies the signed policy and
+fails the event/lifecycle/correlation reconciliation.
 
 The trusted runner then retains the native routed/authored/typical CTest
 receipts and creates `VOX_FX_T18_EXECUTION_BINDING_V1` with their actual start
@@ -121,8 +163,8 @@ manifest covering at least:
 - immutable blocked observation and final witness plus owner-private process inventory;
 - identity policy, lease, ETW loss and execution-binding payloads, each bound to
   the observation hash where issued after capture;
-- all four detached signatures, the ETW collector artifact and independent ETW
-  parse receipt;
+- all four detached signatures, the raw ETL collector artifact, independent
+  ETW parse receipt and the retained ETW identity-join artifact;
 - each routed/authored/typical runner receipt, report, CTest raw output, JUnit,
   inventory, post-test outcome, selected executable and audit output.
 

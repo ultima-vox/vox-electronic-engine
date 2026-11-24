@@ -37,6 +37,11 @@ if ($source -match '\$env:FX_T18_LEASE_' -or
     $source -match 'Get-VerifiedExecutionBinding' -or
     $source -notmatch 'Get-MonotonicSeconds' -or
     $source -notmatch 'Get-EventTimeUtc' -or
+    $source -notmatch 'Get-ProcessNode' -or
+    $source -notmatch 'service_ancestry_verified' -or
+    $source -notmatch 'Get-CanonicalSampleDigest' -or
+    $source -notmatch 'full_host_cim_hash_duration_ms' -or
+    $source -notmatch 'full_host_cim_hash_cadence_met' -or
     $source -notmatch 'RevocationMode' -or
     $source -notmatch 'VOX-FX-T18-ProcessStart' -or
     $source -notmatch 'VOX_FX_T18_HOST_OBSERVATION_V1' -or

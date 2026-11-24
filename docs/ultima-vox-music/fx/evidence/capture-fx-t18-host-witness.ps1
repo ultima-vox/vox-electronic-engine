@@ -39,6 +39,8 @@ $script:QualificationProhibited = ($Mode -eq 'OfflineSynthetic' -or $script:Fixt
 $script:IdentityPolicy = $null
 $script:SeenPidIdentities = @{}
 $script:KnownPidRecords = @{}
+$script:LastProcessMap = @{}
+$script:ExecutableHashCache = @{}
 $script:ActivePidRecords = @{}
 $script:RawSamples = @()
 $script:RawEvents = @()
@@ -59,8 +61,16 @@ function Write-WitnessJson([object]$Value, [string]$Path) {
     $Value | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Format-UtcText([DateTime]$Value) {
+    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-UtcTicks([string]$Value) {
+    return [DateTimeOffset]::Parse($Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal).UtcDateTime.Ticks
+}
+
 function Get-UtcNowText {
-    return [DateTime]::UtcNow.ToString('o')
+    return Format-UtcText ([DateTime]::UtcNow)
 }
 
 function Get-MonotonicSeconds {
@@ -87,6 +97,82 @@ function Get-Sha256Text([string]$Text) {
 
 function Get-ObjectSha256([object]$Value) {
     return Get-Sha256Text (($Value | ConvertTo-Json -Depth 30 -Compress))
+}
+
+function Get-CanonicalText([object]$Value) {
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [double] -or $Value -is [decimal]) {
+        if ([double]$Value -eq [math]::Truncate([double]$Value)) { return ([int64]$Value).ToString([Globalization.CultureInfo]::InvariantCulture) }
+        return ([double]$Value).ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    return [string]$Value
+}
+
+function Get-CanonicalBool([object]$Value) {
+    if ($Value -is [bool]) { if ($Value) { return 'true' } else { return 'false' } }
+    return Get-CanonicalText $Value
+}
+
+function Get-CanonicalNodeLine([object]$Node) {
+    $services = @((Get-OptionalProperty $Node 'service_identity_sha256' @()) | ForEach-Object { ([string]$_).ToLowerInvariant() } | Sort-Object) -join ','
+    $fields = @(
+        (Get-OptionalProperty $Node 'pid' $null),
+        (Get-OptionalProperty $Node 'process_name' $null),
+        (Get-OptionalProperty $Node 'parent_pid' $null),
+        (Get-UtcTicks ([string](Get-OptionalProperty $Node 'start_time_utc' '<invalid>'))),
+        ([string](Get-OptionalProperty $Node 'executable_path' '')).ToLowerInvariant(),
+        ([string](Get-OptionalProperty $Node 'executable_sha256' '')).ToLowerInvariant(),
+        $services,
+        ([string](Get-OptionalProperty $Node 'identity_digest' '')).ToLowerInvariant()
+    )
+    return (($fields | ForEach-Object { Get-CanonicalText $_ }) -join [char]0x1f)
+}
+
+function Get-CanonicalRecordLine([object]$Record) {
+    $ancestry = @((Get-OptionalProperty $Record 'service_ancestry' @()) | ForEach-Object { Get-CanonicalNodeLine $_ }) -join [char]0x1e
+    $eventTimestamp = ''
+    $recordTimestamp = Get-OptionalProperty $Record 'timestamp_utc' $null
+    if ($null -ne $recordTimestamp) { $eventTimestamp = [string](Get-UtcTicks ([string]$recordTimestamp)) }
+    $fields = @(
+        (Get-OptionalProperty $Record 'pid' $null),
+        (Get-OptionalProperty $Record 'process_name' $null),
+        (Get-OptionalProperty $Record 'parent_pid' $null),
+        (Get-UtcTicks ([string](Get-OptionalProperty $Record 'start_time_utc' '<invalid>'))),
+        ([string](Get-OptionalProperty $Record 'executable_path' '')).ToLowerInvariant(),
+        ([string](Get-OptionalProperty $Record 'executable_sha256' '')).ToLowerInvariant(),
+        (@((Get-OptionalProperty $Record 'service_identity_sha256' @()) | ForEach-Object { ([string]$_).ToLowerInvariant() } | Sort-Object) -join ','),
+        (Get-CanonicalBool (Get-OptionalProperty $Record 'service_ancestry_verified' $null)),
+        (Get-OptionalProperty $Record 'lineage_verification' $null),
+        (Get-CanonicalBool (Get-OptionalProperty $Record 'identity_known' $null)),
+        (Get-CanonicalBool (Get-OptionalProperty $Record 'approved_by_policy' $null)),
+        ([string](Get-OptionalProperty $Record 'identity_digest' '')).ToLowerInvariant(),
+        (Get-OptionalProperty $Record 'decision_reason' $null),
+        (Get-OptionalProperty $Record 'event' $null), $eventTimestamp,
+        (Get-OptionalProperty $Record 'event_process_name' $null), $ancestry
+    )
+    return (($fields | ForEach-Object { Get-CanonicalText $_ }) -join [char]0x1f)
+}
+
+function Get-CanonicalSampleDigest([object]$Sample) {
+    $processes = @((Get-OptionalProperty $Sample 'processes' @()) | ForEach-Object { Get-CanonicalRecordLine $_ } | Sort-Object) -join [char]0x1e
+    $events = @((Get-OptionalProperty $Sample 'events' @()) | ForEach-Object { Get-CanonicalRecordLine $_ } | Sort-Object) -join [char]0x1e
+    $monotonic = Get-OptionalProperty $Sample 'monotonic_elapsed_ms' $null
+    if ($monotonic -is [double] -and $monotonic -eq [math]::Truncate($monotonic)) { $monotonic = [int64]$monotonic }
+    elseif ($monotonic -is [double]) { $monotonic = $monotonic.ToString('R', [Globalization.CultureInfo]::InvariantCulture) }
+    $lines = @(
+        (Get-OptionalProperty $Sample 'phase' $null),
+        (Get-OptionalProperty $Sample 'sample_ordinal' $null),
+        (Get-UtcTicks ([string](Get-OptionalProperty $Sample 'timestamp_utc' '<invalid>'))),
+        (Get-UtcTicks ([string](Get-OptionalProperty $Sample 'scheduled_timestamp_utc' '<invalid>'))),
+        $monotonic,
+        (Get-OptionalProperty $Sample 'query_error' $null),
+        (Get-OptionalProperty $Sample 'full_host_process_count' $null),
+        (Get-OptionalProperty $Sample 'full_host_hash_count' $null),
+        (Get-OptionalProperty $Sample 'full_host_cim_hash_duration_ms' $null),
+        (Get-CanonicalBool (Get-OptionalProperty $Sample 'full_host_cim_hash_cadence_met' $null)),
+        ('processes=' + $processes), ('events=' + $events)
+    )
+    return Get-Sha256Text (($lines | ForEach-Object { Get-CanonicalText $_ }) -join "`n")
 }
 
 function Normalize-Thumbprint([string]$Thumbprint) {
@@ -222,11 +308,12 @@ function Get-IdentityPolicy {
 
 function Test-IdentityPolicyShape([object]$Policy) {
     try {
+        $runnerServices = @($Policy.runner_service_identity_sha256)
         if ($null -eq $Policy -or [string]$Policy.format -ne 'VOX_FX_T18_IDENTITY_POLICY_V1' -or
             -not [string]$Policy.host -or [string]$Policy.host -eq '<missing>' -or
             -not [string]$Policy.baseline_id -or [string]$Policy.baseline_id -eq '<missing>' -or
-            @($Policy.runner_service_identity_sha256).Count -ne 4 -or
-            @($Policy.runner_service_identity_sha256 | Where-Object { [string]$_ -notmatch '^[0-9a-fA-F]{64}$' }).Count -gt 0 -or
+            $runnerServices.Count -ne 4 -or @($runnerServices | Sort-Object -Unique).Count -ne 4 -or
+            @($runnerServices | Where-Object { [string]$_ -notmatch '^[0-9a-fA-F]{64}$' }).Count -gt 0 -or
             @($Policy.approved_processes).Count -eq 0 -or @($Policy.denied_process_name_regex).Count -eq 0) { return $false }
         foreach ($approved in @($Policy.approved_processes)) {
             $name = [string](Get-OptionalProperty $approved 'process_name' '')
@@ -241,15 +328,36 @@ function Test-IdentityPolicyShape([object]$Policy) {
             $exactStart = Get-OptionalProperty $approved 'start_time_utc' $null
             $hasPid = $null -ne $exactPid
             $hasStart = $null -ne $exactStart
+            $lineageMode = [string](Get-OptionalProperty $approved 'lineage_mode' 'runner_service_ancestry')
+            $parentRule = Get-OptionalProperty $approved 'parent_identity' $null
             if (-not $path -or $path.StartsWith('<') -or $path.Contains('*') -or $path.Contains('?') -or
                 $hash -notmatch '^[0-9a-fA-F]{64}$' -or $serviceHash -notmatch '^[0-9a-fA-F]{64}$' -or
-                $null -eq $parentPid -or [int]$parentPid -lt 0 -or
-                $allowDynamic -isnot [bool] -or $hasPid -ne $hasStart -or
-                ($hasPid -and ([int]$exactPid -lt 1)) -or
-                ((-not $hasPid) -and $allowDynamic -ne $true)) { return $false }
-            if ($hasStart) {
-                try { [DateTime]::Parse([string]$exactStart).ToUniversalTime() | Out-Null }
-                catch { return $false }
+                $runnerServices -notcontains $serviceHash -or $null -eq $parentPid -or [int]$parentPid -lt 0 -or
+                $allowDynamic -isnot [bool] -or $hasPid -ne $hasStart -or $lineageMode -notin @('runner_service_ancestry', 'signed_job_lineage') -or
+                ($hasPid -and ([int]$exactPid -lt 1)) -or ((-not $hasPid) -and $allowDynamic -ne $true)) { return $false }
+            if ($hasStart) { try { Get-UtcTicks ([string]$exactStart) | Out-Null } catch { return $false } }
+            if ($lineageMode -eq 'signed_job_lineage') {
+                $job = Get-OptionalProperty $approved 'job_lineage' $null
+                if ($null -eq $job -or -not [string](Get-OptionalProperty $job 'issuer' '') -or
+                    [string](Get-OptionalProperty $job 'job_identity_sha256' '') -notmatch '^[0-9a-fA-F]{64}$') { return $false }
+            }
+            if ($null -ne $parentRule) {
+                $parentPath = [string](Get-OptionalProperty $parentRule 'executable_path' '')
+                $parentHash = [string](Get-OptionalProperty $parentRule 'executable_sha256' '')
+                $parentRulePid = Get-OptionalProperty $parentRule 'pid' $null
+                $parentRuleStart = Get-OptionalProperty $parentRule 'start_time_utc' $null
+                $parentStartInvalid = $false
+                if ($null -ne $parentRuleStart) {
+                    try { Get-UtcTicks ([string]$parentRuleStart) | Out-Null } catch { $parentStartInvalid = $true }
+                }
+                if (-not ($parentRule -is [object]) -or
+                    -not [string](Get-OptionalProperty $parentRule 'process_name' '') -or
+                    -not $parentPath -or $parentPath.StartsWith('<') -or $parentPath.Contains('*') -or $parentPath.Contains('?') -or
+                    $parentHash -notmatch '^[0-9a-fA-F]{64}$' -or
+                    ($null -ne $parentRulePid -and ([int]$parentRulePid -lt 1)) -or $parentStartInvalid) { return $false }
+            } elseif (-not $hasPid -and $lineageMode -in @('runner_service_ancestry', 'signed_job_lineage') -and
+                      [string](Get-OptionalProperty $approved 'role' '') -notin @('runner', 'runner_service', 'direct_service')) {
+                return $false
             }
         }
         foreach ($deniedRegex in @($Policy.denied_process_name_regex)) {
@@ -311,19 +419,23 @@ function Get-VerifiedLeaseReceipt([object]$SignatureStatus, [bool]$AllowFixtureU
 function Test-ProcessAgainstPolicy([object]$Record) {
     $result = [ordered]@{ known = $true; approved = $false; pid_reuse = $false; identity_digest = '<unknown>'; reason = 'UNRECOGNIZED_PROCESS_IDENTITY' }
     $pidKey = [string]$Record.pid
-    $digestInput = "$($Record.process_name)|$($Record.executable_path)|$($Record.executable_sha256)|$($Record.parent_pid)|$($Record.start_time_utc)|$(@($Record.service_identity_sha256) -join ',')"
-    $result.identity_digest = Get-Sha256Text $digestInput
-    if ($Record.start_time_utc -eq '<unknown>' -or $Record.executable_sha256 -eq '<unknown>') {
-        $result.known = $false; $result.reason = 'UNKNOWN_PROCESS_IDENTITY'
+    try {
+        $digestInput = "$($Record.process_name)|$($Record.executable_path)|$($Record.executable_sha256)|$($Record.parent_pid)|$(Get-UtcTicks ([string]$Record.start_time_utc))|$(@($Record.service_identity_sha256) -join ',')"
+        $result.identity_digest = Get-Sha256Text $digestInput
+    } catch { $result.known = $false; $result.reason = 'UNKNOWN_PROCESS_IDENTITY' }
+    if ($Record.start_time_utc -eq '<unknown>' -or $Record.executable_sha256 -eq '<unknown>' -or
+        $Record.service_ancestry_verified -ne $true) {
+        $result.known = $false; $result.reason = if ($Record.service_ancestry_verified -ne $true) { 'UNVERIFIED_RUNNER_SERVICE_ANCESTRY' } else { 'UNKNOWN_PROCESS_IDENTITY' }
     }
     if ($script:SeenPidIdentities.ContainsKey($pidKey)) {
         $previous = $script:SeenPidIdentities[$pidKey]
-        if ([string]$previous.start_time_utc -ne [string]$Record.start_time_utc -or
+        if ([string]$previous.start_time_ticks -ne [string](Get-UtcTicks ([string]$Record.start_time_utc)) -or
             [string]$previous.identity_digest -ne [string]$result.identity_digest) {
             $result.pid_reuse = $true; $result.reason = 'PID_REUSE_OR_DYNAMIC_IDENTITY_MISMATCH'
         }
     }
-    $script:SeenPidIdentities[$pidKey] = [ordered]@{ start_time_utc = $Record.start_time_utc; identity_digest = $result.identity_digest }
+    try { $startTicks = Get-UtcTicks ([string]$Record.start_time_utc) } catch { $startTicks = -1 }
+    $script:SeenPidIdentities[$pidKey] = [ordered]@{ start_time_ticks = $startTicks; identity_digest = $result.identity_digest }
     $script:KnownPidRecords[$pidKey] = $Record
     if (-not $result.known -or $result.pid_reuse) { return $result }
     foreach ($deniedRegex in @($script:IdentityPolicy.denied_process_name_regex)) {
@@ -338,21 +450,36 @@ function Test-ProcessAgainstPolicy([object]$Record) {
         $nameMatches = ($name -and $Record.process_name -ceq $name) -or ($nameRegex -and $Record.process_name -match $nameRegex)
         if (-not $nameMatches) { continue }
         $approvedPath = [string](Get-OptionalProperty $approved 'executable_path' '')
-        if ($approvedPath -and $Record.executable_path -ine $approvedPath) { continue }
+        if ($Record.executable_path -ine $approvedPath) { continue }
         $hash = [string](Get-OptionalProperty $approved 'executable_sha256' '')
-        if ($hash -and $hash -notmatch '^<') {
-            if ($Record.executable_sha256 -ine $hash) { continue }
-        }
+        if ($Record.executable_sha256 -ine $hash) { continue }
         $serviceHash = [string](Get-OptionalProperty $approved 'service_identity_sha256' '')
-        if ($serviceHash -and @($Record.service_identity_sha256) -notcontains $serviceHash) { continue }
+        if (-not (@($Record.service_identity_sha256) -contains $serviceHash)) { continue }
         $parentPid = Get-OptionalProperty $approved 'parent_pid' $null
         if ($null -ne $parentPid -and [int]$parentPid -ne [int]$Record.parent_pid) { continue }
+        $parentRule = Get-OptionalProperty $approved 'parent_identity' $null
+        if ($null -ne $parentRule) {
+            $parentIdentity = Get-OptionalProperty $Record 'parent_identity' $null
+            if ($null -eq $parentIdentity -or
+                [string](Get-OptionalProperty $parentIdentity 'process_name' '') -ine [string](Get-OptionalProperty $parentRule 'process_name' '') -or
+                [string](Get-OptionalProperty $parentIdentity 'executable_path' '') -ine [string](Get-OptionalProperty $parentRule 'executable_path' '') -or
+                [string](Get-OptionalProperty $parentIdentity 'executable_sha256' '') -ine [string](Get-OptionalProperty $parentRule 'executable_sha256' '')) { continue }
+            $parentRulePid = Get-OptionalProperty $parentRule 'pid' $null
+            if ($null -ne $parentRulePid -and [int]$parentRulePid -ne [int](Get-OptionalProperty $parentIdentity 'pid' 0)) { continue }
+            $parentRuleStart = Get-OptionalProperty $parentRule 'start_time_utc' $null
+            if ($null -ne $parentRuleStart -and (Get-UtcTicks ([string]$parentRuleStart)) -ne (Get-UtcTicks ([string](Get-OptionalProperty $parentIdentity 'start_time_utc' '<unknown>')))) { continue }
+        } elseif ([string](Get-OptionalProperty $approved 'lineage_mode' 'runner_service_ancestry') -eq 'runner_service_ancestry' -and
+                  $null -ne (Get-OptionalProperty $Record 'parent_identity' $null) -and
+                  [bool](Get-OptionalProperty $approved 'allow_dynamic' $false)) {
+            # A dynamic native child may not be approved by a PID-only rule.
+            continue
+        }
         $exactPid = Get-OptionalProperty $approved 'pid' $null
-        $exactStart = [string](Get-OptionalProperty $approved 'start_time_utc' '')
+        $exactStart = Get-OptionalProperty $approved 'start_time_utc' $null
         if ($null -ne $exactPid -and [int]$exactPid -ne [int]$Record.pid) { continue }
-        if ($exactStart -and $exactStart -ne $Record.start_time_utc) { continue }
+        if ($null -ne $exactStart -and (Get-UtcTicks ([string]$exactStart)) -ne (Get-UtcTicks ([string]$Record.start_time_utc))) { continue }
         $dynamic = [bool](Get-OptionalProperty $approved 'allow_dynamic' $false)
-        if (($null -eq $exactPid -and -not $dynamic) -or ($null -ne $exactPid -and $exactStart -and $exactStart -ne $Record.start_time_utc)) { continue }
+        if (($null -eq $exactPid -and -not $dynamic) -or ($null -ne $exactPid -and $null -eq $exactStart)) { continue }
         $result.approved = $true; $result.reason = $null
         return $result
     }
@@ -361,8 +488,8 @@ function Test-ProcessAgainstPolicy([object]$Record) {
 
 function Get-ProcessStartUtc($Process) {
     try {
-        return [System.Management.ManagementDateTimeConverter]::ToDateTime(
-            [string]$Process.CreationDate).ToUniversalTime().ToString('o')
+        return Format-UtcText ([System.Management.ManagementDateTimeConverter]::ToDateTime(
+            [string]$Process.CreationDate).ToUniversalTime())
     } catch { return '<unknown>' }
 }
 
@@ -380,37 +507,103 @@ function Get-ServiceIdentityMap {
     return $map
 }
 
-function Get-ProcessRecord($Process, [hashtable]$ServiceMap) {
+function Get-ProcessNode($Process, [hashtable]$ServiceMap) {
     $path = [string](Get-OptionalProperty $Process 'ExecutablePath' '')
     $serviceHashes = @()
     if ($null -ne $ServiceMap -and $ServiceMap.ContainsKey([string]$Process.ProcessId)) {
         $serviceHashes = @($ServiceMap[[string]$Process.ProcessId] | Sort-Object -Unique)
     }
-    return [ordered]@{
+    $executableHash = '<unknown>'
+    if ($path) {
+        if ($script:ExecutableHashCache.ContainsKey($path)) {
+            $executableHash = $script:ExecutableHashCache[$path]
+        } else {
+            $executableHash = Get-HashOrUnknown $path
+            $script:ExecutableHashCache[$path] = $executableHash
+        }
+    }
+    $node = [ordered]@{
         pid = [int]$Process.ProcessId
-        process_name = [string]$Process.Name
+        process_name = [string](Get-OptionalProperty $Process 'Name' '<unknown>')
         parent_pid = [int](Get-OptionalProperty $Process 'ParentProcessId' 0)
         start_time_utc = Get-ProcessStartUtc $Process
         executable_path = if ($path) { $path } else { '<unknown>' }
-        executable_sha256 = Get-HashOrUnknown $path
+        executable_sha256 = $executableHash
         service_identity_sha256 = @($serviceHashes)
     }
+    try {
+        $digestInput = "$($node.process_name)|$($node.executable_path)|$($node.executable_sha256)|$($node.parent_pid)|$(Get-UtcTicks ([string]$node.start_time_utc))|$(@($node.service_identity_sha256) -join ',')"
+        $node.identity_digest = Get-Sha256Text $digestInput
+    } catch { $node.identity_digest = '<unknown>' }
+    return $node
+}
+
+function Get-ProcessRecord($Process, [hashtable]$ServiceMap, [hashtable]$ProcessMap) {
+    $chain = @(); $cursor = $Process; $visited = @{}; $root = $null
+    while ($null -ne $cursor) {
+        $pidKey = [string]$cursor.ProcessId
+        if ($visited.ContainsKey($pidKey)) { throw 'process parent chain contains a cycle' }
+        $visited[$pidKey] = $true
+        $node = Get-ProcessNode $cursor $ServiceMap
+        $chain += $node
+        $runnerSet = @($script:IdentityPolicy.runner_service_identity_sha256)
+        if (@($node.service_identity_sha256 | Where-Object { $runnerSet -contains $_ }).Count -gt 0) {
+            $root = $node
+            break
+        }
+        $parentPid = [int]$node.parent_pid
+        if ($parentPid -lt 1 -or $null -eq $ProcessMap -or -not $ProcessMap.ContainsKey([string]$parentPid)) {
+            break
+        }
+        $cursor = $ProcessMap[[string]$parentPid]
+    }
+    $verified = $null -ne $root
+    if (-not $verified) {
+        $rootServices = @()
+    } else {
+        $rootServices = @($root.service_identity_sha256 | Sort-Object -Unique)
+    }
+    $record = [ordered]@{
+        pid = [int]$Process.ProcessId
+        process_name = [string](Get-OptionalProperty $Process 'Name' '<unknown>')
+        parent_pid = [int](Get-OptionalProperty $Process 'ParentProcessId' 0)
+        start_time_utc = Get-ProcessStartUtc $Process
+        executable_path = [string](Get-OptionalProperty $Process 'ExecutablePath' '<unknown>')
+        executable_sha256 = Get-HashOrUnknown ([string](Get-OptionalProperty $Process 'ExecutablePath' ''))
+        service_identity_sha256 = @($rootServices)
+        service_ancestry_verified = [bool]$verified
+        lineage_verification = 'runner_service_ancestry_v1'
+        service_ancestry = @($chain)
+    }
+    if ($chain.Count -gt 1) { $record.parent_identity = $chain[1] }
+    else { $record.parent_identity = $null }
+    return $record
 }
 
 function Get-ProcessSnapshot {
-    $public = @(); $raw = @(); $serviceMap = Get-ServiceIdentityMap
+    $public = @(); $raw = @(); $queryStart = Get-MonotonicSeconds; $serviceMap = Get-ServiceIdentityMap
+    $script:ExecutableHashCache = @{}
     if ($null -eq $serviceMap) {
-        return @{ error = 'SERVICE_IDENTITY_QUERY_FAILURE'; processes = @(); raw = @(); unknown = 0; unexpected = 0; pid_reuse = 0; services = @() }
+        $elapsed = [math]::Round(((Get-MonotonicSeconds) - $queryStart) * 1000.0, 3)
+        return @{ error = 'SERVICE_IDENTITY_QUERY_FAILURE'; processes = @(); raw = @(); unknown = 0; unexpected = 0; pid_reuse = 0; services = @()
+            full_host_process_count = 0; full_host_hash_count = 0; full_host_cim_hash_duration_ms = $elapsed; full_host_cim_hash_cadence_met = $false }
     }
     try {
-        foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
-            $record = Get-ProcessRecord $process $serviceMap
+        $allProcesses = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+        $processMap = @{}
+        foreach ($candidate in $allProcesses) { $processMap[[string]$candidate.ProcessId] = $candidate }
+        $script:LastProcessMap = $processMap
+        foreach ($process in $allProcesses) {
+            $record = Get-ProcessRecord $process $serviceMap $processMap
             $decision = Test-ProcessAgainstPolicy $record
             $record.identity_known = [bool]$decision.known
             $record.approved_by_policy = [bool]$decision.approved
             $record.identity_digest = $decision.identity_digest
             $record.decision_reason = $decision.reason
-            if ($decision.approved -eq $true) { $script:ActivePidRecords[[string]$record.pid] = $record }
+            # Retain every resolved lifecycle, including denied competitors, so
+            # a later stop event proves the same PID/start identity rather than
+            # degrading into an unparsed stop.
+            $script:ActivePidRecords[[string]$record.pid] = $record
             $raw += $record
             $public += [ordered]@{
                 identity_known = [bool]$decision.known
@@ -425,18 +618,24 @@ function Get-ProcessSnapshot {
             if (-not $decision.approved) { $script:UnrecognizedCount++ }
             if ($decision.pid_reuse) { $script:PidReuseCount++ }
         }
+        $elapsed = [math]::Round(((Get-MonotonicSeconds) - $queryStart) * 1000.0, 3)
     } catch {
-        return @{ error = 'PROCESS_QUERY_FAILURE'; processes = @(); raw = @(); unknown = 0; unexpected = 0; pid_reuse = 0; services = @() }
+        $elapsed = [math]::Round(((Get-MonotonicSeconds) - $queryStart) * 1000.0, 3)
+        return @{ error = 'PROCESS_QUERY_FAILURE'; processes = @(); raw = @(); unknown = 0; unexpected = 0; pid_reuse = 0; services = @()
+            full_host_process_count = 0; full_host_hash_count = 0; full_host_cim_hash_duration_ms = $elapsed; full_host_cim_hash_cadence_met = $false }
     }
+    $hashCount = @($raw | Where-Object { [string]$_.executable_sha256 -match '^[0-9a-fA-F]{64}$' }).Count
     return @{ error = $null; processes = @($public); raw = @($raw); unknown = @($raw | Where-Object { $_.identity_known -ne $true }).Count
         unexpected = @($raw | Where-Object { $_.approved_by_policy -ne $true }).Count
         pid_reuse = @($raw | Where-Object { $_.decision_reason -eq 'PID_REUSE_OR_DYNAMIC_IDENTITY_MISMATCH' }).Count
-        services = @($raw | ForEach-Object { @($_.service_identity_sha256) } | Where-Object { $_ } | Sort-Object -Unique) }
+        services = @($raw | ForEach-Object { @($_.service_identity_sha256) } | Where-Object { $_ } | Sort-Object -Unique)
+        full_host_process_count = $allProcesses.Count; full_host_hash_count = $hashCount
+        full_host_cim_hash_duration_ms = $elapsed; full_host_cim_hash_cadence_met = ($elapsed -le 1000.0) }
 }
 
 function Get-EventTimeUtc($NewEvent) {
     if ($null -eq $NewEvent.TIME_CREATED) { throw 'process event has no provider timestamp' }
-    return [DateTime]::FromFileTimeUtc([Int64]$NewEvent.TIME_CREATED).ToString('o')
+    return Format-UtcText ([DateTime]::FromFileTimeUtc([Int64]$NewEvent.TIME_CREATED))
 }
 
 function Get-EventRecords([string]$SourceIdentifier) {
@@ -455,7 +654,7 @@ function Get-EventRecords([string]$SourceIdentifier) {
             if ($eventKind -eq 'start') {
                 $candidate = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction SilentlyContinue
                 if (-not $candidate) { throw 'process start identity could not be resolved while the PID was live' }
-                $candidateRecord = Get-ProcessRecord $candidate (Get-ServiceIdentityMap)
+                $candidateRecord = Get-ProcessRecord $candidate (Get-ServiceIdentityMap) $script:LastProcessMap
                 if ($cached -and ([string]$candidateRecord.start_time_utc -cne [string]$cached.start_time_utc -or
                                   [string]$candidateRecord.executable_sha256 -ine [string]$cached.executable_sha256 -or
                                   [string]$candidateRecord.executable_path -ine [string]$cached.executable_path -or
@@ -510,6 +709,10 @@ function New-PrivateInventory(
         fixture_mode = $script:FixtureMode
         capture_start_utc = $CaptureStartUtc; capture_end_utc = $CaptureEndUtc
         policy_sha256 = $script:IdentityPolicyHash
+        canonicalization = 'fx-t18-private-sample-canonical-v2-utc-ticks'
+        cadence_contract = 'full_host_cim_process_snapshot_and_sha256_each_executable_le_1000ms_every_1000ms'
+        correlation_max_skew_seconds = 2.0
+        correlation_identity_fields = @('event','pid','process_name','start_time_utc','identity_digest','executable_path','executable_sha256','parent_pid','service_identity_sha256')
         lease_receipt_sha256 = [string](Get-OptionalProperty $LeaseStatus 'hash' '<missing>')
         event_loss_receipt_sha256 = [string](Get-OptionalProperty $LossStatus 'hash' '<missing>')
         execution_binding_sha256 = [string](Get-OptionalProperty $BindingStatus 'hash' '<missing>')
@@ -549,7 +752,7 @@ function New-ObservationReceipt(
             event_loss = [ordered]@{ verified = $false; status = 'pending_post_capture_owner_parse_and_signature'; verification_method = 'pending_post_capture_owner_cms' }
             execution_binding = [ordered]@{ verified = $false; status = 'pending_post_capture_owner_binding_and_signature'; verification_method = 'pending_post_capture_owner_cms' }
         }
-        event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = 'pending_post_capture_owner_etw_parse'; available = $EventTraceAvailable; coverage_complete = $false; loss_accounting = 'pending_post_capture_owner_etw_parse'; coverage_start_utc = $CaptureStartUtc; coverage_end_utc = $CaptureEndUtc; collector_artifact_path = '<pending-finalization>'; collector_artifact_sha256 = '<pending>'; collector_parse_receipt_path = '<pending-finalization>'; collector_parse_receipt_sha256 = '<pending>'; loss_receipt_path = '<pending-finalization>'; loss_receipt_sha256 = '<pending>'; error = $EventTraceError }
+        event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = 'pending_post_capture_owner_etw_parse'; available = $EventTraceAvailable; coverage_complete = $false; loss_accounting = 'pending_post_capture_owner_etw_parse'; coverage_start_utc = $CaptureStartUtc; coverage_end_utc = $CaptureEndUtc; collector_artifact_path = '<pending-finalization>'; collector_artifact_sha256 = '<pending>'; collector_parse_receipt_path = '<pending-finalization>'; collector_parse_receipt_sha256 = '<pending>'; loss_receipt_path = '<pending-finalization>'; loss_receipt_sha256 = '<pending>'; correlation_max_skew_seconds = 2.0; correlation_identity_fields = @('event','pid','process_name','start_time_utc','identity_digest','executable_path','executable_sha256','parent_pid','service_identity_sha256'); error = $EventTraceError }
         runner_lease = [ordered]@{ recognized = [bool](Get-OptionalProperty $LeaseStatus 'verified' $false); owner_verified = [bool](Get-OptionalProperty $LeaseStatus 'verified' $false); owner = if ($leaseReceipt) { [string]$leaseReceipt.owner } else { '<missing>' }; host = if ($leaseReceipt) { [string]$leaseReceipt.host } else { [string]$env:COMPUTERNAME }; lease_id = if ($leaseReceipt) { [string]$leaseReceipt.lease_id } else { '<missing>' }; verification_receipt_path = [IO.Path]::GetFullPath($LeaseReceiptPath); verification_receipt_sha256 = [string](Get-OptionalProperty $LeaseStatus 'hash' '<missing>'); token = '<redacted>' }
         runner_service_identities = @($serviceSet)
         execution_binding = [ordered]@{ verified = $false; qualification_prohibited = $script:QualificationProhibited; binding_receipt_path = '<pending-finalization>'; binding_receipt_sha256 = '<pending>' }
@@ -565,20 +768,21 @@ function New-OfflineWitness {
     $base = [DateTime]::Parse('2026-11-22T00:00:00Z').ToUniversalTime()
     $events = @(); $competitors = 0; $unknowns = 0
     if ($SyntheticCompetitor) {
-        $events += [ordered]@{ event = 'start'; timestamp_utc = $base.AddSeconds(1.1).ToString('o'); identity_known = $true; approved_by_policy = $false; identity_digest = ('c' * 64); decision_reason = 'UNRECOGNIZED_PROCESS_IDENTITY' }
-        $events += [ordered]@{ event = 'stop'; timestamp_utc = $base.AddSeconds(1.7).ToString('o'); identity_known = $true; approved_by_policy = $false; identity_digest = ('c' * 64); decision_reason = 'UNRECOGNIZED_PROCESS_IDENTITY' }
+        $events += [ordered]@{ event = 'start'; timestamp_utc = Format-UtcText ($base.AddSeconds(1.1)); identity_known = $true; approved_by_policy = $false; identity_digest = ('c' * 64); decision_reason = 'UNRECOGNIZED_PROCESS_IDENTITY' }
+        $events += [ordered]@{ event = 'stop'; timestamp_utc = Format-UtcText ($base.AddSeconds(1.7)); identity_known = $true; approved_by_policy = $false; identity_digest = ('c' * 64); decision_reason = 'UNRECOGNIZED_PROCESS_IDENTITY' }
         $competitors = 1
     }
     if ($SyntheticUnknownPid) {
-        $events += [ordered]@{ event = 'start'; timestamp_utc = $base.AddSeconds(2.1).ToString('o'); identity_known = $false; approved_by_policy = $false; identity_digest = '<unknown>'; decision_reason = 'UNKNOWN_PROCESS_IDENTITY' }
+        $events += [ordered]@{ event = 'start'; timestamp_utc = Format-UtcText ($base.AddSeconds(2.1)); identity_known = $false; approved_by_policy = $false; identity_digest = '<unknown>'; decision_reason = 'UNKNOWN_PROCESS_IDENTITY' }
         $unknowns = 1
     }
     $policy = New-OfflinePolicy
     $samples = @()
     for ($index = 0; $index -le 122; $index++) {
         $phase = if ($index -le 30) { 'pre' } elseif ($index -le 91) { 'during' } else { 'post' }
-        $samples += [ordered]@{ phase = $phase; sample_ordinal = $index; timestamp_utc = $base.AddSeconds($index).ToString('o')
-            scheduled_timestamp_utc = $base.AddSeconds($index).ToString('o'); monotonic_elapsed_ms = $index * 1000
+        $samples += [ordered]@{ phase = $phase; sample_ordinal = $index; timestamp_utc = Format-UtcText ($base.AddSeconds($index))
+            scheduled_timestamp_utc = Format-UtcText ($base.AddSeconds($index)); monotonic_elapsed_ms = $index * 1000
+            full_host_process_count = 1; full_host_hash_count = 1; full_host_cim_hash_duration_ms = 10.0; full_host_cim_hash_cadence_met = $true
             observed_process_count = 1; approved_process_count = 1; unknown_identity_count = 0
             unexpected_identity_count = 0; pid_reuse_mismatch_count = 0; process_query_error = $null
             process_inventory_sha256 = ('a' * 64) }
@@ -588,12 +792,12 @@ function New-OfflineWitness {
         mode = 'offline_synthetic'; fixture_mode = $true; qualification_prohibited = $true
         host_observation_mode = 'process_snapshot_and_event_trace'
         sample_interval_ms = 1000; pre_seconds = 30; during_seconds = 60; post_seconds = 30
-        capture_start_utc = $base.ToString('o'); capture_end_utc = $base.AddSeconds(122).ToString('o')
+        capture_start_utc = Format-UtcText $base; capture_end_utc = Format-UtcText ($base.AddSeconds(122))
         monitor_gaps = @(); identity_policy = $policy; identity_policy_sha256 = ('f' * 64)
         identity_policy_path = '<fixture-not-an-attestation>'; private_inventory_path = '<fixture-private-not-retained>'
         event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = 'fixture-no-loss-proof'
             available = $true; coverage_complete = $false; lost_events = $null; buffer_loss_events = $null
-            loss_accounting = 'unverified_fixture'; coverage_start_utc = $base.ToString('o'); coverage_end_utc = $base.AddSeconds(122).ToString('o')
+            loss_accounting = 'unverified_fixture'; coverage_start_utc = Format-UtcText $base; coverage_end_utc = Format-UtcText ($base.AddSeconds(122))
             loss_receipt_path = '<fixture-not-an-attestation>'; loss_receipt_sha256 = '<missing>' }
         runner_lease = [ordered]@{ recognized = $false; owner_verified = $false; owner = '<fixture>'; host = 'offline-fixture'; lease_id = '<fixture>'; verification_receipt_path = '<fixture>'; verification_receipt_sha256 = '<missing>'; token = '<redacted>' }
         runner_service_identities = @('1' * 64, '2' * 64, '3' * 64, '4' * 64)
@@ -639,7 +843,7 @@ function New-BlockedWitness(
             event_loss = [ordered]@{ verified = [bool](Get-OptionalProperty (Get-OptionalProperty $LossStatus 'signature' $null) 'verified' $false); data_sha256 = [string](Get-OptionalProperty (Get-OptionalProperty $LossStatus 'signature' $null) 'data_hash' '<missing>'); signature_sha256 = [string](Get-OptionalProperty (Get-OptionalProperty $LossStatus 'signature' $null) 'signature_hash' '<missing>'); signer_thumbprint = '<redacted>'; verification_method = '<redacted>' }
             execution_binding = [ordered]@{ verified = [bool](Get-OptionalProperty (Get-OptionalProperty $BindingStatus 'signature' $null) 'verified' $false); data_sha256 = [string](Get-OptionalProperty (Get-OptionalProperty $BindingStatus 'signature' $null) 'data_hash' '<missing>'); signature_sha256 = [string](Get-OptionalProperty (Get-OptionalProperty $BindingStatus 'signature' $null) 'signature_hash' '<missing>'); signer_thumbprint = '<redacted>'; verification_method = '<redacted>' }
         }
-        event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = 'Microsoft-Windows-Kernel-Process/ETW'; available = [bool]$EventTraceAvailable; coverage_complete = $false; lost_events = $null; buffer_loss_events = $null; loss_accounting = 'unknown'; coverage_start_utc = '<unknown>'; coverage_end_utc = '<unknown>'; loss_receipt_path = '<redacted>'; loss_receipt_sha256 = '<redacted>'; error = $EventTraceError; loss_receipt_error = [string](Get-OptionalProperty $LossStatus 'error' 'event-loss attestation unavailable') }
+        event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = 'Microsoft-Windows-Kernel-Process/ETW'; available = [bool]$EventTraceAvailable; coverage_complete = $false; lost_events = $null; buffer_loss_events = $null; loss_accounting = 'unknown'; coverage_start_utc = '<unknown>'; coverage_end_utc = '<unknown>'; correlation_max_skew_seconds = 2.0; correlation_identity_fields = @('event','pid','process_name','start_time_utc','identity_digest','executable_path','executable_sha256','parent_pid','service_identity_sha256'); loss_receipt_path = '<redacted>'; loss_receipt_sha256 = '<redacted>'; error = $EventTraceError; loss_receipt_error = [string](Get-OptionalProperty $LossStatus 'error' 'event-loss attestation unavailable') }
         runner_lease = [ordered]@{ recognized = $leaseVerified; owner_verified = $leaseVerified; owner = if ($leaseVerified) { '<owner-attested>' } else { '<missing>' }; host = [string]$env:COMPUTERNAME; lease_id = if ($leaseVerified) { '<redacted>' } else { '<missing>' }; verification_receipt_path = '<redacted>'; verification_receipt_sha256 = '<redacted>'; token = '<redacted>' }
         runner_service_identities = @(); execution_binding = [ordered]@{ verified = $bindingVerified; qualification_prohibited = $script:QualificationProhibited; binding_receipt_path = '<redacted>'; binding_receipt_sha256 = [string](Get-OptionalProperty $BindingStatus 'hash' '<missing>') }
         samples = @(); process_events = @(); unrecognized_competitors = 0; unknown_pids = 0
@@ -750,11 +954,12 @@ try {
             if ($eventTraceAvailable) {
                 $startEvents = Get-EventRecords $startSource; $stopEvents = Get-EventRecords $stopSource
             }
-            $rawSample = [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; timestamp_utc = Get-UtcNowText; scheduled_timestamp_utc = $script:CaptureUtcOrigin.AddSeconds($expectedElapsed).ToString('o'); monotonic_elapsed_ms = (($observed - $script:CaptureMonotonicOrigin) * 1000.0); processes = @($snapshot.raw); events = @($startEvents.raw) + @($stopEvents.raw) }
-            $inventoryHash = Get-ObjectSha256 $rawSample
+            $monotonicElapsed = [math]::Round(($observed - $script:CaptureMonotonicOrigin) * 1000.0, 3)
+            $rawSample = [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; timestamp_utc = Get-UtcNowText; scheduled_timestamp_utc = Format-UtcText ($script:CaptureUtcOrigin.AddSeconds($expectedElapsed)); monotonic_elapsed_ms = $monotonicElapsed; query_error = $snapshot.error; full_host_process_count = [int]$snapshot.full_host_process_count; full_host_hash_count = [int]$snapshot.full_host_hash_count; full_host_cim_hash_duration_ms = [double]$snapshot.full_host_cim_hash_duration_ms; full_host_cim_hash_cadence_met = [bool]$snapshot.full_host_cim_hash_cadence_met; processes = @($snapshot.raw); events = @($startEvents.raw) + @($stopEvents.raw) }
+            $inventoryHash = Get-CanonicalSampleDigest $rawSample
             $script:RawSamples += $rawSample
             $script:RawEvents += @($startEvents.raw) + @($stopEvents.raw)
-            $script:PublicSamples += [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; timestamp_utc = $rawSample.timestamp_utc; scheduled_timestamp_utc = $rawSample.scheduled_timestamp_utc; monotonic_elapsed_ms = $rawSample.monotonic_elapsed_ms; observed_process_count = @($snapshot.raw).Count; approved_process_count = @($snapshot.raw | Where-Object { $_.approved_by_policy -eq $true }).Count; unknown_identity_count = $snapshot.unknown + $startEvents.unknown + $stopEvents.unknown; unexpected_identity_count = $snapshot.unexpected + $startEvents.unexpected + $stopEvents.unexpected; pid_reuse_mismatch_count = $snapshot.pid_reuse + $startEvents.reuse + $stopEvents.reuse; process_query_error = $snapshot.error; process_inventory_sha256 = $inventoryHash }
+            $script:PublicSamples += [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; timestamp_utc = $rawSample.timestamp_utc; scheduled_timestamp_utc = $rawSample.scheduled_timestamp_utc; monotonic_elapsed_ms = $rawSample.monotonic_elapsed_ms; full_host_process_count = [int]$snapshot.full_host_process_count; full_host_hash_count = [int]$snapshot.full_host_hash_count; full_host_cim_hash_duration_ms = [double]$snapshot.full_host_cim_hash_duration_ms; full_host_cim_hash_cadence_met = [bool]$snapshot.full_host_cim_hash_cadence_met; observed_process_count = @($snapshot.raw).Count; approved_process_count = @($snapshot.raw | Where-Object { $_.approved_by_policy -eq $true }).Count; unknown_identity_count = $snapshot.unknown + $startEvents.unknown + $stopEvents.unknown; unexpected_identity_count = $snapshot.unexpected + $startEvents.unexpected + $stopEvents.unexpected; pid_reuse_mismatch_count = $snapshot.pid_reuse + $startEvents.reuse + $stopEvents.reuse; process_query_error = $snapshot.error; process_inventory_sha256 = $inventoryHash }
             $script:PublicEvents += @($startEvents.public) + @($stopEvents.public)
             $script:SampleOrdinal++
             if ($index -lt $Seconds) {

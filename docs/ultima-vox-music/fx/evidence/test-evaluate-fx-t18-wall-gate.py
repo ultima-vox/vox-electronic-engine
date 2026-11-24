@@ -166,84 +166,141 @@ def valid_witness(competitors: list[str] | None = None,
     return witness
 
 
+def _fixture_process(base: datetime, *, pid: int = 1000,
+                     name: str = "Runner.Listener.exe", executable_hash: str = "5" * 64,
+                     executable_path: str | None = None, parent_pid: int = 4,
+                     service_hash: str = "1" * 64, parent_identity: dict | None = None) -> dict:
+    start_time = (base - timedelta(seconds=60)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    node = {
+        "pid": pid, "process_name": name, "parent_pid": parent_pid,
+        "start_time_utc": start_time,
+        "executable_path": executable_path or f"C:\\fixture\\{name}",
+        "executable_sha256": executable_hash,
+        "service_identity_sha256": [service_hash],
+    }
+    node["identity_digest"] = EVALUATOR._identity_digest(node)
+    process = dict(node)
+    process.update({
+        "service_ancestry_verified": True, "lineage_verification": "runner_service_ancestry_v1",
+        "service_ancestry": [node], "identity_known": True, "approved_by_policy": True,
+        "decision_reason": None, "parent_identity": parent_identity,
+    })
+    process["identity_digest"] = EVALUATOR._identity_digest(process)
+    process["service_ancestry"][0]["identity_digest"] = EVALUATOR._identity_digest(process["service_ancestry"][0])
+    return process
+
+
+def _fixture_public_sample(raw: dict) -> dict:
+    processes = raw["processes"]
+    events = raw["events"]
+    return {
+        "phase": raw["phase"], "sample_ordinal": raw["sample_ordinal"],
+        "timestamp_utc": raw["timestamp_utc"], "scheduled_timestamp_utc": raw["scheduled_timestamp_utc"],
+        "monotonic_elapsed_ms": raw["monotonic_elapsed_ms"],
+        "full_host_process_count": len(processes), "full_host_hash_count": len(processes),
+        "full_host_cim_hash_duration_ms": 10.0, "full_host_cim_hash_cadence_met": True,
+        "observed_process_count": len(processes),
+        "approved_process_count": sum(item["approved_by_policy"] is True for item in processes),
+        "unknown_identity_count": sum(item["identity_known"] is not True for item in processes + events),
+        "unexpected_identity_count": sum(item["approved_by_policy"] is not True for item in processes + events),
+        "pid_reuse_mismatch_count": sum(item.get("decision_reason") == "PID_REUSE_OR_DYNAMIC_IDENTITY_MISMATCH" for item in events),
+        "process_query_error": raw.get("query_error"),
+        "process_inventory_sha256": EVALUATOR._canonical_sample_digest(raw),
+    }
+
+
 def strict_witness_fixture(directory: Path, etw_events: list[dict] | None = None,
                            wmi_events: list[dict] | None = None) -> tuple[Path, Path]:
-    """Build a structural fixture with fake signatures, explicitly prohibited."""
+    """Build a qualification-prohibited fixture with a real raw replay path."""
     etw_events = list(etw_events or [])
     wmi_events = list(wmi_events or [])
     directory.mkdir(parents=True, exist_ok=True)
-    witness = valid_witness()
+    base = datetime(2026, 11, 22, tzinfo=timezone.utc)
+    process = _fixture_process(base)
+    policy = {
+        "format": "VOX_FX_T18_IDENTITY_POLICY_V1", "policy_id": "fixture-policy",
+        "host": "fixture", "baseline_id": "fixture-baseline", "owner_approved": True,
+        "valid_from_utc": "2026-11-21T23:59:00Z", "valid_until_utc": "2026-11-22T00:03:00Z",
+        "runner_service_identity_sha256": ["1" * 64, "2" * 64, "3" * 64, "4" * 64],
+        "approved_processes": [{"pid": 1000, "process_name": "Runner.Listener.exe", "role": "runner",
+                                "lineage_mode": "runner_service_ancestry", "allow_dynamic": False,
+                                "start_time_utc": process["start_time_utc"],
+                                "executable_path": process["executable_path"],
+                                "executable_sha256": process["executable_sha256"],
+                                "parent_pid": 4, "service_identity_sha256": "1" * 64}],
+        "denied_process_name_regex": ["^(devenv|msbuild|cmake|ctest|ninja|python|cubase|reaper)"],
+    }
     policy_file = directory / "identity-policy.json"
-    policy_data = dict(witness["identity_policy"])
-    policy_data.pop("policy_sha256", None)
-    policy_file.write_text(json.dumps(policy_data, indent=2), encoding="utf-8")
+    policy_file.write_text(json.dumps(policy, indent=2), encoding="utf-8")
     policy_hash = hashlib.sha256(policy_file.read_bytes()).hexdigest()
-    witness["identity_policy"]["policy_sha256"] = policy_hash
-    witness["identity_policy_path"] = str(policy_file)
-    witness["identity_policy_sha256"] = policy_hash
+
+    samples: list[dict] = []
+    for sample in capture_sampler_samples(base):
+        raw = {
+            "phase": sample["phase"], "sample_ordinal": sample["sample_ordinal"],
+            "timestamp_utc": sample["timestamp_utc"], "scheduled_timestamp_utc": sample["scheduled_timestamp_utc"],
+            "monotonic_elapsed_ms": sample["monotonic_elapsed_ms"], "query_error": None,
+            "full_host_process_count": 1, "full_host_hash_count": 1,
+            "full_host_cim_hash_duration_ms": 10.0, "full_host_cim_hash_cadence_met": True,
+            "processes": [json.loads(json.dumps(process))], "events": [],
+        }
+        sample_time = EVALUATOR._utc(raw["timestamp_utc"], "fixture.sample.timestamp_utc")
+        for event in wmi_events:
+            event_time = EVALUATOR._utc(event["timestamp_utc"], "fixture.event.timestamp_utc")
+            if event_time <= sample_time and not any(item is event for item in raw["events"]):
+                # Events are assigned once below; this branch is replaced by
+                # the ordinal map after all samples are created.
+                pass
+        samples.append(raw)
+    for event in wmi_events:
+        event_time = EVALUATOR._utc(event["timestamp_utc"], "fixture.event.timestamp_utc")
+        target = next((item for item in samples if EVALUATOR._utc(item["timestamp_utc"], "fixture.sample.timestamp_utc") >= event_time), samples[-1])
+        target["events"].append(json.loads(json.dumps(event)))
+    public_samples = [_fixture_public_sample(raw) for raw in samples]
+    public_events = [{"event": event["event"], "timestamp_utc": event["timestamp_utc"],
+                      "identity_known": event["identity_known"], "approved_by_policy": event["approved_by_policy"],
+                      "identity_digest": event["identity_digest"],
+                      "decision_reason": event.get("decision_reason") or "APPROVED"}
+                     for event in wmi_events]
 
     lease_file = directory / "lease.json"
     lease_file.write_text(json.dumps({
         "format": "VOX_FX_T18_HOST_LEASE_RECEIPT_V1", "verified": True,
         "owner_approved": True, "attestation_source": "owner_controlled_offline",
         "host": "fixture", "lease_id": "fixture-lease", "owner": "fixture",
-        "policy_sha256": policy_hash,
-        "valid_from_utc": "2026-11-21T23:59:00Z",
+        "policy_sha256": policy_hash, "valid_from_utc": "2026-11-21T23:59:00Z",
         "valid_until_utc": "2026-11-22T00:03:00Z",
         "verification_method": "owner_signed_detached_cms",
     }, indent=2), encoding="utf-8")
-    witness["runner_lease"]["verification_receipt_path"] = str(lease_file)
-    witness["runner_lease"]["verification_receipt_sha256"] = hashlib.sha256(lease_file.read_bytes()).hexdigest()
-    witness["runner_lease"]["owner"] = "fixture"
-    witness["runner_lease"]["host"] = "fixture"
 
-    collector_file = directory / "collector.etl"
-    collector_file.write_bytes(b"synthetic ETW collector artifact")
-    collector_hash = hashlib.sha256(collector_file.read_bytes()).hexdigest()
-    parse_file = directory / "collector-parse.json"
-    parse_file.write_text(json.dumps({
-        "format": "VOX_FX_T18_ETW_PARSE_RECEIPT_V1",
-        "provider": "Microsoft-Windows-Kernel-Process/ETW",
-        "session_name": "fixture-etw-session", "coverage_start_utc": "2026-11-21T23:59:00Z",
-        "coverage_end_utc": "2026-11-22T00:03:00Z", "events_received": 0,
-        "lost_events": 0, "buffer_loss_events": 0,
-        "collector_artifact_sha256": collector_hash,
-        "process_events": etw_events,
+    collector_file = directory / "collector.etl.json"
+    collector_file.write_text(json.dumps({
+        "format": "VOX_FX_T18_RAW_ETL_FIXTURE_V1", "provider": "Microsoft-Windows-Kernel-Process/ETW",
+        "counters": {"lost_events": 0, "buffer_loss_events": 0}, "process_events": etw_events,
     }, indent=2), encoding="utf-8")
+    parse_file = directory / "collector-parse.json"
+    parse_value = EVALUATOR.ETL_PARSER.make_receipt(
+        collector_file, "2026-11-21T23:59:00Z", "2026-11-22T00:03:00Z",
+        "fixture-etw-session", fixture=True)
+    parse_file.write_text(json.dumps(parse_value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    collector_hash = hashlib.sha256(collector_file.read_bytes()).hexdigest()
     parse_hash = hashlib.sha256(parse_file.read_bytes()).hexdigest()
+
     loss_file = directory / "event-loss.json"
     loss_file.write_text(json.dumps({
-        "format": "VOX_FX_T18_EVENT_LOSS_RECEIPT_V1",
-        "provider": "Microsoft-Windows-Kernel-Process/ETW",
-        "measurement_method": "ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS",
-        "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
-        "events_received": 0, "session_name": "fixture-etw-session", "owner_approved": True,
-        "attestation_source": "owner_controlled_offline",
-        "verification_method": "owner_signed_detached_cms",
+        "format": "VOX_FX_T18_EVENT_LOSS_RECEIPT_V1", "provider": "Microsoft-Windows-Kernel-Process/ETW",
+        "measurement_method": "ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS", "coverage_complete": True,
+        "lost_events": 0, "buffer_loss_events": 0, "events_received": len(etw_events),
+        "session_name": "fixture-etw-session", "owner_approved": True,
+        "attestation_source": "owner_controlled_offline", "verification_method": "owner_signed_detached_cms",
         "trace_id": "fixture-trace", "collector_artifact_path": str(collector_file),
         "collector_artifact_sha256": collector_hash, "collector_artifact_format": "ETL",
         "collector_parse_method": "owner_independent_etw_parser_v1",
         "collector_parse_receipt_path": str(parse_file), "collector_parse_receipt_sha256": parse_hash,
-        "process_events": etw_events,
-        "coverage_start_utc": "2026-11-21T23:59:00Z",
+        "process_events": etw_events, "coverage_start_utc": "2026-11-21T23:59:00Z",
         "coverage_end_utc": "2026-11-22T00:03:00Z",
+        "parser_provenance": parse_value["parser_provenance"],
     }, indent=2), encoding="utf-8")
-    witness["event_trace"].update({
-        "observation_provider": "Win32_ProcessStartTrace/Win32_ProcessStopTrace",
-        "loss_provider": "Microsoft-Windows-Kernel-Process/ETW",
-        "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
-        "events_received": 0, "session_name": "fixture-etw-session", "loss_accounting": "etw_provider_counters",
-        "coverage_start_utc": "2026-11-21T23:59:00Z",
-        "coverage_end_utc": "2026-11-22T00:03:00Z",
-        "loss_receipt_path": str(loss_file),
-        "loss_receipt_sha256": hashlib.sha256(loss_file.read_bytes()).hexdigest(),
-        "collector_artifact_path": str(collector_file),
-        "collector_artifact_sha256": collector_hash,
-        "collector_artifact_format": "ETL",
-        "collector_parse_method": "owner_independent_etw_parser_v1",
-        "collector_parse_receipt_path": str(parse_file),
-        "collector_parse_receipt_sha256": parse_hash,
-    })
 
     runner_receipt_files = []
     runner_receipt_claims = []
@@ -253,29 +310,61 @@ def strict_witness_fixture(directory: Path, etw_events: list[dict] | None = None
         runner_receipt_files.append(receipt_file)
         runner_receipt_claims.append({"profile": profile, "receipt_path": str(receipt_file), "receipt_sha256": hashlib.sha256(receipt_file.read_bytes()).hexdigest()})
     binding_file = directory / "execution-binding.json"
-    binding_file.write_text(json.dumps({
+    binding_value = {
         "format": "VOX_FX_T18_EXECUTION_BINDING_V1", "binding_id": "fixture-binding",
         "owner_approved": True, "attestation_source": "owner_controlled_offline",
-        "verification_method": "owner_signed_detached_cms", "host": "fixture",
-        "runner_job_id": "fixture-job", "source_head": "a" * 40,
-        "source_tree": "b" * 40, "executable_path": "fixture.exe",
-        "executable_sha256": "c" * 64, "lease_id": "fixture-lease",
-        "policy_sha256": policy_hash,
+        "verification_method": "owner_signed_detached_cms", "host": "fixture", "runner_job_id": "fixture-job",
+        "source_head": "a" * 40, "source_tree": "b" * 40, "executable_path": "fixture.exe",
+        "executable_sha256": "c" * 64, "lease_id": "fixture-lease", "policy_sha256": policy_hash,
         "runner_receipts": runner_receipt_claims,
         "profiles": [
             {"profile": "routed", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:00Z", "test_end_utc": "2026-11-22T00:01:05Z", "ctest_exit_code": 0},
             {"profile": "authored", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:08Z", "test_end_utc": "2026-11-22T00:01:13Z", "ctest_exit_code": 0},
             {"profile": "typical", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:16Z", "test_end_utc": "2026-11-22T00:01:21Z", "ctest_exit_code": 0},
         ],
-    }, indent=2), encoding="utf-8")
-    witness["execution_binding"].update({"binding_receipt_path": str(binding_file), "binding_receipt_sha256": hashlib.sha256(binding_file.read_bytes()).hexdigest(), "policy_sha256": policy_hash, "runner_receipts": runner_receipt_claims})
+    }
+    binding_file.write_text(json.dumps(binding_value, indent=2), encoding="utf-8")
 
     private_file = directory / "private-inventory.json"
-    private_file.write_text(json.dumps({"format": "VOX_FX_T18_PRIVATE_PROCESS_INVENTORY_V1", "fixture": True}, indent=2), encoding="utf-8")
-    witness["process_events"] = wmi_events
-    witness["private_inventory_path"] = str(private_file)
-    witness["private_inventory_sha256"] = hashlib.sha256(private_file.read_bytes()).hexdigest()
+    private_value = {
+        "format": "VOX_FX_T18_PRIVATE_PROCESS_INVENTORY_V1", "visibility": "owner_private_not_for_public_artifact",
+        "fixture_mode": True, "capture_start_utc": "2026-11-22T00:00:00Z", "capture_end_utc": "2026-11-22T00:02:02Z",
+        "policy_sha256": policy_hash,
+        "canonicalization": "fx-t18-private-sample-canonical-v2-utc-ticks",
+        "cadence_contract": "full_host_cim_process_snapshot_and_sha256_each_executable_le_1000ms_every_1000ms",
+        "correlation_max_skew_seconds": 2.0,
+        "correlation_identity_fields": ["event", "pid", "process_name", "start_time_utc", "identity_digest", "executable_path", "executable_sha256", "parent_pid", "service_identity_sha256"],
+        "samples": samples, "process_events": wmi_events,
+    }
+    private_file.write_text(json.dumps(private_value, indent=2), encoding="utf-8")
 
+    witness = valid_witness()
+    witness.update({
+        "identity_policy": {**witness["identity_policy"], "policy_sha256": policy_hash},
+        "identity_policy_path": str(policy_file), "identity_policy_sha256": policy_hash,
+        "private_inventory_path": str(private_file), "private_inventory_sha256": hashlib.sha256(private_file.read_bytes()).hexdigest(),
+        "samples": public_samples, "process_events": public_events,
+        "event_trace": {"observation_provider": "Win32_ProcessStartTrace/Win32_ProcessStopTrace",
+                        "loss_provider": "Microsoft-Windows-Kernel-Process/ETW", "available": True,
+                        "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
+                        "events_received": len(etw_events), "session_name": "fixture-etw-session",
+                        "loss_accounting": "etw_provider_counters", "coverage_start_utc": "2026-11-21T23:59:00Z",
+                        "coverage_end_utc": "2026-11-22T00:03:00Z", "loss_receipt_path": str(loss_file),
+                        "loss_receipt_sha256": hashlib.sha256(loss_file.read_bytes()).hexdigest(),
+                        "collector_artifact_path": str(collector_file), "collector_artifact_sha256": collector_hash,
+                        "collector_artifact_format": "ETL", "collector_parse_method": "owner_independent_etw_parser_v1",
+                        "collector_parse_receipt_path": str(parse_file), "collector_parse_receipt_sha256": parse_hash,
+                        "correlation_max_skew_seconds": 2.0,
+                        "correlation_identity_fields": ["event", "pid", "process_name", "start_time_utc", "identity_digest", "executable_path", "executable_sha256", "parent_pid", "service_identity_sha256"]},
+        "runner_lease": {**witness["runner_lease"], "verification_receipt_path": str(lease_file),
+                         "verification_receipt_sha256": hashlib.sha256(lease_file.read_bytes()).hexdigest(),
+                         "host": "fixture", "owner": "fixture"},
+        "runner_service_identities": policy["runner_service_identity_sha256"],
+        "execution_binding": {**witness["execution_binding"], "binding_receipt_path": str(binding_file),
+                              "binding_receipt_sha256": hashlib.sha256(binding_file.read_bytes()).hexdigest(),
+                              "policy_sha256": policy_hash, "runner_receipts": runner_receipt_claims},
+        "attestation_proofs": {}, "evidence_blocked": False,
+    })
     signature_paths = {}
     for name, data_file in (("policy", policy_file), ("lease", lease_file), ("event_loss", loss_file), ("execution_binding", binding_file)):
         signature = directory / f"{name}.p7s"
@@ -287,30 +376,83 @@ def strict_witness_fixture(directory: Path, etw_events: list[dict] | None = None
             "signer_thumbprint": "A" * 40, "verification_method": "detached_cms_owner_certificate_chain_and_thumbprint",
             "data_path": str(data_file), "signature_path": str(signature),
         }
-    witness["attestation_proofs"]["event_loss"]["verified"] = True
     witness_path = directory / "witness.json"
     witness_path.write_text(json.dumps(witness, indent=2), encoding="utf-8")
     manifest = directory / "host-manifest.json"
-    files = [policy_file, lease_file, loss_file, binding_file, collector_file, parse_file, private_file, witness_path, *runner_receipt_files, *signature_paths.values()]
-    manifest.write_text(json.dumps({
-        "format": "VOX_FX_T18_HOST_ARTIFACTS_V2",
-        "files": [{"path": str(item), "sha256": hashlib.sha256(item.read_bytes()).hexdigest()}
-                  for item in files],
-    }, indent=2), encoding="utf-8")
+    files = [policy_file, lease_file, loss_file, binding_file, collector_file, parse_file, private_file,
+             witness_path, *runner_receipt_files, *signature_paths.values()]
+    manifest.write_text(json.dumps({"format": "VOX_FX_T18_HOST_ARTIFACTS_V2",
+        "files": [{"path": str(item), "sha256": hashlib.sha256(item.read_bytes()).hexdigest()} for item in files]}, indent=2), encoding="utf-8")
     return witness_path, manifest
 
 
 def etw_event(*, event: str, pid: int, process_name: str, executable_hash: str,
-              start_time: str, timestamp: str, approved: bool = True) -> dict:
+              start_time: str, timestamp: str, approved: bool = True,
+              service_hash: str = "1" * 64, executable_path: str | None = None,
+              parent_pid: int = 4, lineage: list[dict] | None = None) -> dict:
+    if lineage is None:
+        node = {"pid": pid, "process_name": process_name, "executable_path": executable_path or f"C:\\fixture\\{process_name}",
+                "executable_sha256": executable_hash, "parent_pid": parent_pid,
+                "start_time_utc": start_time, "service_identity_sha256": [service_hash]}
+        node["identity_digest"] = EVALUATOR._identity_digest(node)
+        lineage = [node]
     value = {
-        "event": event, "timestamp_utc": timestamp, "pid": pid,
-        "process_name": process_name, "executable_path": f"C:\\fixture\\{process_name}",
-        "executable_sha256": executable_hash, "parent_pid": 4,
-        "start_time_utc": start_time, "service_identity_sha256": [],
+        "event": event, "timestamp_utc": timestamp, "pid": pid, "process_name": process_name,
+        "executable_path": executable_path or f"C:\\fixture\\{process_name}", "executable_sha256": executable_hash,
+        "parent_pid": parent_pid, "start_time_utc": start_time,
+        "service_identity_sha256": [service_hash], "service_ancestry_verified": True,
+        "lineage_verification": "runner_service_ancestry_v1", "service_ancestry": lineage,
         "identity_known": True, "approved_by_policy": approved,
+        "event_process_name": process_name,
     }
     value["identity_digest"] = EVALUATOR._identity_digest(value)
     return value
+
+
+
+def approved_fixture_event(base: datetime, event: str, timestamp: str) -> dict:
+    value = _fixture_process(base)
+    value.update({"event": event, "timestamp_utc": timestamp,
+                  "event_process_name": value["process_name"], "decision_reason": None})
+    return value
+
+
+def child_lineage_fixture(base: datetime) -> tuple[dict, dict, dict]:
+    root = _fixture_process(base)
+    child_start = (base - timedelta(seconds=30)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    child_node = {
+        "pid": 2000, "process_name": "ctest.exe", "parent_pid": root["pid"],
+        "start_time_utc": child_start, "executable_path": "C:\\fixture\\ctest.exe",
+        "executable_sha256": "d" * 64, "service_identity_sha256": [],
+    }
+    child_node["identity_digest"] = EVALUATOR._identity_digest(child_node)
+    child = {
+        **child_node, "service_identity_sha256": ["1" * 64],
+        "service_ancestry_verified": True, "lineage_verification": "runner_service_ancestry_v1",
+        "service_ancestry": [child_node, root["service_ancestry"][0]],
+        "identity_known": True, "approved_by_policy": True, "decision_reason": None,
+        "parent_identity": root["service_ancestry"][0],
+    }
+    child["identity_digest"] = EVALUATOR._identity_digest(child)
+    policy = {
+        "format": "VOX_FX_T18_IDENTITY_POLICY_V1", "policy_id": "lineage-policy",
+        "baseline_id": "lineage-baseline", "owner_approved": True,
+        "runner_service_identity_sha256": ["1" * 64, "2" * 64, "3" * 64, "4" * 64],
+        "approved_processes": [
+            {"pid": 1000, "start_time_utc": root["start_time_utc"], "process_name": root["process_name"],
+             "role": "runner", "lineage_mode": "runner_service_ancestry", "allow_dynamic": False,
+             "executable_path": root["executable_path"], "executable_sha256": root["executable_sha256"],
+             "parent_pid": root["parent_pid"], "service_identity_sha256": "1" * 64},
+            {"process_name": "ctest.exe", "role": "authorized_child", "lineage_mode": "runner_service_ancestry",
+             "allow_dynamic": True, "executable_path": child["executable_path"],
+             "executable_sha256": child["executable_sha256"], "parent_pid": root["pid"],
+             "parent_identity": {"process_name": root["process_name"], "executable_path": root["executable_path"],
+                                 "executable_sha256": root["executable_sha256"]},
+             "service_identity_sha256": "1" * 64},
+        ],
+        "denied_process_name_regex": ["^(devenv|msbuild|cmake|ninja|python|cubase|reaper)$"],
+    }
+    return child, root, policy
 
 
 def _write_execution_receipt(directory: Path, profile: str, mode: str,
@@ -544,6 +686,150 @@ def main() -> int:
             require_external_attestations=True, allow_fixture=True)
         host_manifest = EVALUATOR._verify_host_manifest(strict_manifest, strict_witness)
         assert strict["verified"] and host_manifest["verified"]
+        precise_etw = [
+            approved_fixture_event(base, "start", "2026-11-22T00:00:30.1234567Z"),
+            approved_fixture_event(base, "stop", "2026-11-22T00:00:31.1234567Z"),
+        ]
+        precise_wmi = [dict(precise_etw[0]), dict(precise_etw[1])]
+        precise_wmi[0]["timestamp_utc"] = "2026-11-21T16:00:30.987654-08:00"
+        precise_wmi[1]["timestamp_utc"] = "2026-11-21T16:00:31.987654-08:00"
+        precise_witness, _ = strict_witness_fixture(directory / "precision-offset-correlation", precise_etw, precise_wmi)
+        precise_result = EVALUATOR.validate_witness(
+            precise_witness, intervals, "fixture", "fixture-lease",
+            json.loads(precise_witness.read_text())["identity_policy"]["policy_sha256"],
+            require_external_attestations=True, allow_fixture=True)
+        assert precise_result["verified"]
+        names.append("etw_wmi_normalized_precision_and_offset_one_to_one")
+
+        raw_core = [{field: event[field] for field in
+                     ("event", "timestamp_utc", "pid", "process_name", "parent_pid", "start_time_utc")}
+                    for event in precise_etw]
+        joined = EVALUATOR.ETL_PARSER._apply_identity_join(raw_core, precise_etw)
+        assert joined[0]["executable_path"] == precise_etw[0]["executable_path"]
+        assert EVALUATOR.ETL_PARSER.core_event_digest(raw_core)
+        try:
+            EVALUATOR.ETL_PARSER._apply_identity_join(raw_core, precise_etw + [dict(precise_etw[1])])
+        except ValueError as error:
+            assert "one-to-one" in str(error).lower() or "ambiguous" in str(error).lower()
+            names.append("independent_etl_identity_join_ambiguous_block")
+        else:
+            raise AssertionError("ambiguous ETW identity join unexpectedly passed")
+
+        beyond_skew = [dict(precise_wmi[0]), dict(precise_wmi[1])]
+        beyond_skew[0]["timestamp_utc"] = "2026-11-21T16:00:32.123458-08:00"
+        skew_witness, _ = strict_witness_fixture(directory / "correlation-skew-block", precise_etw, beyond_skew)
+        try:
+            EVALUATOR.validate_witness(
+                skew_witness, intervals, "fixture", "fixture-lease",
+                json.loads(skew_witness.read_text())["identity_policy"]["policy_sha256"],
+                require_external_attestations=True, allow_fixture=True)
+        except ValueError as error:
+            assert "correlation" in str(error).lower() or "unmatched" in str(error).lower()
+            names.append("etw_wmi_max_skew_block")
+        else:
+            raise AssertionError("ETW/WMI event beyond the explicit skew bound passed")
+
+        extra_wmi = [dict(precise_wmi[0]), dict(precise_wmi[1]), dict(precise_wmi[1])]
+        extra_witness, _ = strict_witness_fixture(directory / "correlation-extra-wmi", precise_etw, extra_wmi)
+        try:
+            EVALUATOR.validate_witness(
+                extra_witness, intervals, "fixture", "fixture-lease",
+                json.loads(extra_witness.read_text())["identity_policy"]["policy_sha256"],
+                require_external_attestations=True, allow_fixture=True)
+        except ValueError as error:
+            assert "count" in str(error).lower() or "extra" in str(error).lower()
+            names.append("etw_wmi_extra_event_block")
+        else:
+            raise AssertionError("WMI extra event unexpectedly passed")
+
+        try:
+            EVALUATOR._correlate_events(
+                [dict(precise_etw[0]), dict(precise_etw[0])],
+                [dict(precise_wmi[0]), dict(precise_wmi[1])],
+                "ambiguous-fixture")
+        except ValueError as error:
+            assert "ambiguous" in str(error).lower() or "one-to-one" in str(error).lower()
+            names.append("etw_wmi_ambiguous_block")
+        else:
+            raise AssertionError("ambiguous ETW/WMI matching unexpectedly passed")
+
+        child, root, lineage_policy = child_lineage_fixture(base)
+        EVALUATOR._validate_identity_policy(lineage_policy, "authorized-child-lineage")
+        assert EVALUATOR._policy_approves_event(lineage_policy, child)
+        names.append("authorized_non_service_child_real_runner_chain")
+        forged_child = json.loads(json.dumps(child))
+        forged_child["service_ancestry"][1]["executable_path"] = "C:\\fixture\\forged-services.exe"
+        try:
+            assert not EVALUATOR._policy_approves_event(lineage_policy, forged_child)
+        except ValueError:
+            pass
+        names.append("forged_runner_ancestry_rejected")
+
+        private_negative_witness, _ = strict_witness_fixture(directory / "private-unauthorized-raw")
+        private_negative_value = json.loads(private_negative_witness.read_text())
+        private_negative_path = Path(private_negative_value["private_inventory_path"])
+        private_negative_inventory = json.loads(private_negative_path.read_text())
+        private_negative_inventory["samples"][0]["processes"][0]["approved_by_policy"] = False
+        private_negative_path.write_text(json.dumps(private_negative_inventory, indent=2), encoding="utf-8")
+        private_negative_value["private_inventory_sha256"] = hashlib.sha256(private_negative_path.read_bytes()).hexdigest()
+        private_negative_path_out = private_negative_witness.parent / "private-negative-witness.json"
+        private_negative_path_out.write_text(json.dumps(private_negative_value, indent=2), encoding="utf-8")
+        try:
+            EVALUATOR.validate_witness(
+                private_negative_path_out, intervals, "fixture", "fixture-lease",
+                private_negative_value["identity_policy"]["policy_sha256"],
+                require_external_attestations=False, allow_fixture=True)
+        except ValueError as error:
+            assert "private" in str(error).lower() or "approved" in str(error).lower()
+            names.append("unauthorized_private_raw_vs_approved_public")
+        else:
+            raise AssertionError("unauthorized private/raw inventory unexpectedly reconciled")
+
+        tampered_etl_witness, _ = strict_witness_fixture(
+            directory / "tampered-etl-regenerated-claims", precise_etw, precise_wmi)
+        tampered_value = json.loads(tampered_etl_witness.read_text())
+        collector_path = Path(tampered_value["event_trace"]["collector_artifact_path"])
+        collector_value = json.loads(collector_path.read_text())
+        for tampered_event in collector_value["process_events"]:
+            tampered_event["executable_path"] = "C:\\fixture\\forged.exe"
+            tampered_event["executable_sha256"] = "e" * 64
+            tampered_event["service_ancestry"][0]["executable_path"] = tampered_event["executable_path"]
+            tampered_event["service_ancestry"][0]["executable_sha256"] = tampered_event["executable_sha256"]
+            tampered_event["service_ancestry"][0]["identity_digest"] = EVALUATOR._identity_digest(tampered_event["service_ancestry"][0])
+            tampered_event["identity_digest"] = EVALUATOR._identity_digest(tampered_event)
+        collector_path.write_text(json.dumps(collector_value, indent=2), encoding="utf-8")
+        regenerated_parse = EVALUATOR.ETL_PARSER.make_receipt(
+            collector_path, "2026-11-21T23:59:00Z", "2026-11-22T00:03:00Z",
+            "fixture-etw-session", fixture=True)
+        parse_path = Path(tampered_value["event_trace"]["collector_parse_receipt_path"])
+        parse_path.write_text(json.dumps(regenerated_parse, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        loss_path = Path(tampered_value["event_trace"]["loss_receipt_path"])
+        loss_value = json.loads(loss_path.read_text())
+        loss_value["collector_artifact_sha256"] = hashlib.sha256(collector_path.read_bytes()).hexdigest()
+        loss_value["collector_parse_receipt_sha256"] = hashlib.sha256(parse_path.read_bytes()).hexdigest()
+        loss_value["process_events"] = regenerated_parse["process_events"]
+        loss_value["parser_provenance"] = regenerated_parse["parser_provenance"]
+        loss_path.write_text(json.dumps(loss_value, indent=2), encoding="utf-8")
+        tampered_value["event_trace"].update({
+            "collector_artifact_sha256": loss_value["collector_artifact_sha256"],
+            "collector_parse_receipt_sha256": loss_value["collector_parse_receipt_sha256"],
+            "loss_receipt_sha256": hashlib.sha256(loss_path.read_bytes()).hexdigest(),
+        })
+        tampered_value["attestation_proofs"]["event_loss"]["data_sha256"] = hashlib.sha256(loss_path.read_bytes()).hexdigest()
+        tampered_witness_path = tampered_etl_witness.parent / "tampered-regenerated-witness.json"
+        tampered_witness_path.write_text(json.dumps(tampered_value, indent=2), encoding="utf-8")
+        try:
+            EVALUATOR.validate_witness(
+                tampered_witness_path, intervals, "fixture", "fixture-lease",
+                tampered_value["identity_policy"]["policy_sha256"],
+                require_external_attestations=True, allow_fixture=True)
+        except ValueError as error:
+            assert ("policy" in str(error).lower() or "denied" in str(error).lower()
+                    or "mismatch" in str(error).lower() or "identity" in str(error).lower())
+            names.append("tampered_etl_regenerated_json_claims_blocked")
+        else:
+            raise AssertionError("tampered ETL with regenerated internally consistent claims unexpectedly passed")
+
         observation_value = json.loads(strict_witness.read_text())
         observation_value.update({
             "format": "VOX_FX_T18_HOST_OBSERVATION_V1", "schema_version": 1,
@@ -623,12 +909,8 @@ def main() -> int:
             event="stop", pid=5252, process_name="other-runner.exe", executable_hash="8" * 64,
             start_time="2026-11-22T00:00:39Z", timestamp="2026-11-22T00:00:41Z")
         mixed_witness, _ = strict_witness_fixture(
-            directory / "mixed-name-same-pid", [mixed_start, mixed_stop], [
-                {"event": item["event"], "timestamp_utc": item["timestamp_utc"],
-                 "identity_known": True, "approved_by_policy": True,
-                 "identity_digest": item["identity_digest"]}
-                for item in (mixed_start, mixed_stop)
-            ])
+            directory / "mixed-name-same-pid", [mixed_start, mixed_stop],
+            [dict(mixed_start), dict(mixed_stop)])
         try:
             EVALUATOR.validate_witness(
                 mixed_witness, intervals, "fixture", "fixture-lease",

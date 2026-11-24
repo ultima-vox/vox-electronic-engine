@@ -11,6 +11,7 @@ is deliberately qualification-prohibited and can never emit a production
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -27,13 +28,19 @@ SPEC = importlib.util.spec_from_file_location("fx_t18_audit", HERE / "audit-fx-w
 assert SPEC and SPEC.loader
 AUDIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(AUDIT)
+PARSER_SPEC = importlib.util.spec_from_file_location("fx_t18_etl_parser", HERE / "parse-fx-t18-etl.py")
+assert PARSER_SPEC and PARSER_SPEC.loader
+ETL_PARSER = importlib.util.module_from_spec(PARSER_SPEC)
+PARSER_SPEC.loader.exec_module(ETL_PARSER)
 
 PROFILES = {"routed": 54, "authored": 54, "typical": 9}
 REQUIRED_PHASES = ("pre", "during", "post")
 MAX_SAMPLE_GAP_SECONDS = 2.0
+MAX_EVENT_CORRELATION_SKEW_SECONDS = 2.0
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 SHA1_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 OWNER_SIGNATURE_METHOD = "detached_cms_owner_certificate_chain_and_thumbprint"
+PRIVATE_INVENTORY_FORMAT = "VOX_FX_T18_PRIVATE_PROCESS_INVENTORY_V1"
 
 
 def _normalize_thumbprint(value: Any) -> str:
@@ -68,14 +75,15 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
 
 
 def _utc(value: Any, name: str) -> datetime:
-    if not isinstance(value, str) or not value.endswith("Z"):
-        raise ValueError(f"{name} is not an explicit UTC timestamp")
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} is not an explicit timestamp with a UTC offset")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+        parsed = datetime.fromisoformat(normalized)
     except ValueError as error:
-        raise ValueError(f"{name} is not ISO-8601 UTC: {value!r}") from error
-    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
-        raise ValueError(f"{name} is not UTC: {value!r}")
+        raise ValueError(f"{name} is not ISO-8601 with a UTC offset: {value!r}") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} has no UTC offset: {value!r}")
     return parsed.astimezone(timezone.utc)
 
 
@@ -100,6 +108,22 @@ def _resolve(path: Path, value: str) -> Path:
     return candidate if candidate.is_absolute() else path.parent / candidate
 
 
+def _utc_ticks(value: Any, name: str) -> int:
+    """Return exact .NET-style UTC ticks, retaining the seventh fraction digit."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} is not a timestamp")
+    parsed = _utc(value, name)
+    fraction_match = re.search(r"\.(\d+)(?:Z|[+-]\d\d:?\d\d)$", value)
+    fraction = fraction_match.group(1) if fraction_match else ""
+    if len(fraction) > 7:
+        raise ValueError(f"{name} has more than seven fractional-second digits")
+    fraction_ticks = int((fraction + "0000000")[:7]) if fraction else 0
+    epoch = datetime(1, 1, 1, tzinfo=timezone.utc)
+    whole_second = parsed.replace(microsecond=0)
+    delta = whole_second - epoch
+    return (delta.days * 86400 + delta.seconds) * 10_000_000 + fraction_ticks
+
+
 def _identity_digest(event: dict[str, Any]) -> str:
     services = event.get("service_identity_sha256")
     if not isinstance(services, list):
@@ -107,51 +131,122 @@ def _identity_digest(event: dict[str, Any]) -> str:
     payload = "|".join((
         str(event.get("process_name", "")), str(event.get("executable_path", "")),
         str(event.get("executable_sha256", "")), str(event.get("parent_pid", "")),
-        str(event.get("start_time_utc", "")), ",".join(str(item) for item in services),
+        str(_utc_ticks(event.get("start_time_utc"), "identity.start_time_utc")),
+        ",".join(str(item) for item in services),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _event_key(event: dict[str, Any]) -> tuple[str, str, str]:
-    return (str(event.get("event")), str(event.get("timestamp_utc")), str(event.get("identity_digest")))
+def _event_identity_key(event: dict[str, Any]) -> tuple[Any, ...]:
+    """Identity key deliberately excludes provider timestamp formatting.
+
+    PID, process creation time, event type, immutable identity digest and the
+    exact executable/parent/service facts identify one lifecycle.  Provider
+    timestamps are correlated separately after UTC normalization and are never
+    used as string-equality keys.
+    """
+    return (
+        str(event["event"]), int(event["pid"]), _utc_ticks(event["start_time_utc"], "event.start_time_utc"),
+        str(event["process_name"]).casefold(), str(event["executable_path"]).casefold(),
+        str(event["executable_sha256"]).casefold(), int(event["parent_pid"]),
+        str(event["identity_digest"]).casefold(),
+        tuple(sorted(str(item).casefold() for item in event["service_identity_sha256"])),
+    )
+
+
+def _same_process_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return _event_identity_key(left) == _event_identity_key(right)
+
+
+def _validate_lineage(record: dict[str, Any], label: str) -> None:
+    if record.get("service_ancestry_verified") is not True:
+        raise ValueError(f"{label}: runner-service ancestry was not verified")
+    if record.get("lineage_verification") not in {"runner_service_ancestry_v1", "signed_job_lineage_v1"}:
+        raise ValueError(f"{label}: lineage verification method is missing")
+    ancestry = record.get("service_ancestry")
+    if not isinstance(ancestry, list) or not ancestry:
+        raise ValueError(f"{label}: verified service ancestry is missing")
+    root_services: set[str] = set()
+    previous: dict[str, Any] | None = None
+    for index, node in enumerate(ancestry):
+        prefix = f"{label}.service_ancestry[{index}]"
+        if not isinstance(node, dict):
+            raise ValueError(f"{prefix}: ancestry node is not an object")
+        required = ("pid", "process_name", "parent_pid", "start_time_utc", "executable_path",
+                    "executable_sha256", "service_identity_sha256", "identity_digest")
+        if any(field not in node for field in required):
+            raise ValueError(f"{prefix}: ancestry node is incomplete")
+        if (type(node["pid"]) is not int or node["pid"] < 1
+                or not isinstance(node["process_name"], str) or not node["process_name"]
+                or type(node["parent_pid"]) is not int or node["parent_pid"] < 0
+                or not isinstance(node["executable_path"], str) or not node["executable_path"]
+                or not SHA256_RE.fullmatch(str(node["executable_sha256"]))
+                or not isinstance(node["service_identity_sha256"], list)
+                or any(not SHA256_RE.fullmatch(str(item)) for item in node["service_identity_sha256"])
+                or not SHA256_RE.fullmatch(str(node["identity_digest"]))):
+            raise ValueError(f"{prefix}: ancestry identity is malformed")
+        _utc(node["start_time_utc"], f"{prefix}.start_time_utc")
+        if _identity_digest(node).casefold() != str(node["identity_digest"]).casefold():
+            raise ValueError(f"{prefix}: ancestry identity digest does not reconcile")
+        if previous is not None and node["pid"] != previous["parent_pid"]:
+            raise ValueError(f"{prefix}: parent PID chain is discontinuous or forged")
+        previous = node
+        root_services.update(str(item).casefold() for item in node["service_identity_sha256"])
+    expected_services = {str(item).casefold() for item in record["service_identity_sha256"]}
+    if not expected_services or root_services != expected_services:
+        raise ValueError(f"{label}: service identity set does not reconcile with the verified ancestry")
+    first = ancestry[0]
+    for field in ("pid", "process_name", "parent_pid", "start_time_utc", "executable_path", "executable_sha256"):
+        left = _utc_ticks(first[field], f"{label}.service_ancestry[0].start_time_utc") if field == "start_time_utc" else first[field]
+        right = _utc_ticks(record[field], f"{label}.start_time_utc") if field == "start_time_utc" else record[field]
+        if left != right:
+            raise ValueError(f"{label}: ancestry root does not match the process identity")
+    if record.get("lineage_verification") == "signed_job_lineage_v1":
+        proof = record.get("job_lineage")
+        if not isinstance(proof, dict) or proof.get("verified") is not True \
+                or not SHA256_RE.fullmatch(str(proof.get("job_identity_sha256", ""))):
+            raise ValueError(f"{label}: signed job lineage proof is incomplete")
 
 
 def _validate_etw_process_events(events: Any, label: str, coverage_start: datetime,
-                                 coverage_end: datetime) -> list[tuple[str, str, str]]:
+                                 coverage_end: datetime) -> list[dict[str, Any]]:
     if not isinstance(events, list):
         raise ValueError(f"{label}: authoritative ETW process_events must be a list")
-    keys: list[tuple[str, str, str]] = []
+    validated: list[dict[str, Any]] = []
     previous_time: datetime | None = None
-    active: dict[int, tuple[str, str, str]] = {}
-    seen_lifecycles: dict[int, tuple[str, str, str]] = {}
+    active: dict[int, tuple[int, int, str]] = {}
+    seen_lifecycles: dict[int, tuple[int, int, str]] = {}
     for index, event in enumerate(events):
         prefix = f"{label}.process_events[{index}]"
         if not isinstance(event, dict) or event.get("event") not in {"start", "stop"}:
             raise ValueError(f"{prefix}: event kind is invalid")
         for field in ("timestamp_utc", "pid", "process_name", "executable_path", "executable_sha256",
-                      "parent_pid", "start_time_utc", "service_identity_sha256", "identity_digest",
-                      "identity_known", "approved_by_policy"):
+                      "parent_pid", "start_time_utc", "service_identity_sha256", "service_ancestry_verified",
+                      "lineage_verification", "service_ancestry", "identity_digest", "identity_known",
+                      "approved_by_policy"):
             if field not in event:
                 raise ValueError(f"{prefix}: missing {field}")
         timestamp = _utc(event["timestamp_utc"], f"{prefix}.timestamp_utc")
         if timestamp < coverage_start or timestamp > coverage_end or (previous_time and timestamp < previous_time):
             raise ValueError(f"{prefix}: timestamp is outside or regresses within ETW coverage")
         previous_time = timestamp
-        if type(event["pid"]) is not int or event["pid"] < 1 or not isinstance(event["process_name"], str) \
-                or not event["process_name"] or not isinstance(event["executable_path"], str) \
-                or not event["executable_path"] or not SHA256_RE.fullmatch(str(event["executable_sha256"])) \
-                or type(event["parent_pid"]) is not int or event["parent_pid"] < 0 \
-                or not SHA256_RE.fullmatch(str(event["identity_digest"])) \
-                or event["identity_known"] is not True or event["approved_by_policy"] is not True \
-                or not isinstance(event["service_identity_sha256"], list) \
-                or any(not SHA256_RE.fullmatch(str(item)) for item in event["service_identity_sha256"]):
-            raise ValueError(f"{prefix}: ETW process identity is incomplete or not approved")
+        if (type(event["pid"]) is not int or event["pid"] < 1 or not isinstance(event["process_name"], str)
+                or not event["process_name"] or not isinstance(event["executable_path"], str)
+                or not event["executable_path"] or not SHA256_RE.fullmatch(str(event["executable_sha256"]))
+                or type(event["parent_pid"]) is not int or event["parent_pid"] < 0
+                or not SHA256_RE.fullmatch(str(event["identity_digest"]))
+                or type(event["identity_known"]) is not bool or type(event["approved_by_policy"]) is not bool
+                or event["identity_known"] is not True
+                or not isinstance(event["service_identity_sha256"], list) or not event["service_identity_sha256"]
+                or any(not SHA256_RE.fullmatch(str(item)) for item in event["service_identity_sha256"])):
+            raise ValueError(f"{prefix}: ETW process identity or service decision is incomplete")
         start_time = _utc(event["start_time_utc"], f"{prefix}.start_time_utc")
         if start_time > timestamp:
             raise ValueError(f"{prefix}: process creation time is after its ETW event")
         if _identity_digest(event).casefold() != str(event["identity_digest"]).casefold():
             raise ValueError(f"{prefix}: ETW identity digest does not reconcile")
-        lifecycle = (str(event["identity_digest"]), str(event["process_name"]), str(event["start_time_utc"]))
+        _validate_lineage(event, prefix)
+        lifecycle = (_utc_ticks(event["start_time_utc"], f"{prefix}.start_time_utc"), event["pid"], str(event["identity_digest"]).casefold())
         if event["event"] == "start":
             if event["pid"] in active:
                 raise ValueError(f"{prefix}: PID started again before its prior lifecycle stopped")
@@ -163,41 +258,59 @@ def _validate_etw_process_events(events: Any, label: str, coverage_start: dateti
             if active[event["pid"]] != lifecycle:
                 raise ValueError(f"{prefix}: PID stop identity disagrees with its start identity")
             del active[event["pid"]]
-        elif _utc(event["start_time_utc"], f"{prefix}.start_time_utc") >= coverage_start:
+        elif start_time >= coverage_start:
             raise ValueError(f"{prefix}: PID stop has no matching start lifecycle")
         elif event["pid"] in seen_lifecycles:
             if seen_lifecycles[event["pid"]] != lifecycle:
                 raise ValueError(f"{prefix}: PID stop identity disagrees with its earlier lifecycle")
             raise ValueError(f"{prefix}: duplicate stop for a PID lifecycle")
         else:
-            # A process may have started before ETW coverage. Retain its
-            # identity so a later start with the same PID cannot be mistaken
-            # for an unrelated, acceptable lifecycle.
             seen_lifecycles[event["pid"]] = lifecycle
-        keys.append(_event_key(event))
-    if len(set(keys)) != len(keys):
-        raise ValueError(f"{label}: duplicate ETW process identity event")
-    return keys
+        validated.append(event)
+    return validated
 
 
-def _validate_wmi_event_keys(events: Any, label: str) -> set[tuple[str, str, str]]:
-    if not isinstance(events, list):
-        raise ValueError(f"{label}: WMI process_events must be a list")
-    keys: set[tuple[str, str, str]] = set()
-    for index, event in enumerate(events):
-        prefix = f"{label}.process_events[{index}]"
-        if not isinstance(event, dict) or event.get("event") not in {"start", "stop"} \
-                or event.get("identity_known") is not True or event.get("approved_by_policy") is not True \
-                or not SHA256_RE.fullmatch(str(event.get("identity_digest", ""))):
-            raise ValueError(f"{prefix}: WMI event is unknown, unapproved, or malformed")
-        keys.add(_event_key(event))
-    if len(keys) != len(events):
-        raise ValueError(f"{label}: duplicate WMI process identity event")
-    return keys
-
+def _correlate_events(etw_events: list[dict[str, Any]], wmi_events: list[dict[str, Any]], label: str) -> None:
+    if not isinstance(wmi_events, list):
+        raise ValueError(f"{label}: WMI process events are missing")
+    if len(etw_events) != len(wmi_events):
+        raise ValueError(f"{label}: ETW/WMI event count mismatch (extra or unmatched event)")
+    candidate_sets: list[list[int]] = []
+    for etw_index, etw_event in enumerate(etw_events):
+        etw_time = _utc(etw_event["timestamp_utc"], f"{label}.etw[{etw_index}].timestamp_utc")
+        candidates: list[int] = []
+        for wmi_index, wmi_event in enumerate(wmi_events):
+            if not _same_process_identity(etw_event, wmi_event):
+                continue
+            wmi_time = _utc(wmi_event["timestamp_utc"], f"{label}.wmi[{wmi_index}].timestamp_utc")
+            skew = abs((etw_time - wmi_time).total_seconds())
+            if skew <= MAX_EVENT_CORRELATION_SKEW_SECONDS:
+                candidates.append(wmi_index)
+        candidate_sets.append(candidates)
+    if any(len(candidates) == 0 for candidates in candidate_sets):
+        raise ValueError(f"{label}: ETW/WMI process event is unmatched beyond the correlation bound")
+    if any(len(candidates) > 1 for candidates in candidate_sets):
+        raise ValueError(f"{label}: ETW/WMI process event correlation is ambiguous")
+    chosen = [candidates[0] for candidates in candidate_sets]
+    if len(set(chosen)) != len(chosen):
+        raise ValueError(f"{label}: ETW/WMI process event correlation is not one-to-one")
+    if set(chosen) != set(range(len(wmi_events))):
+        raise ValueError(f"{label}: WMI contains an extra process event")
 
 def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -> bool:
     process_name = str(event.get("process_name", ""))
+    try:
+        _validate_lineage(event, "policy process")
+    except ValueError:
+        return False
+    service_values = event.get("service_identity_sha256")
+    if not isinstance(service_values, list) or not service_values:
+        return False
+    service_set = {str(value).casefold() for value in service_values}
+    parent = None
+    ancestry = event.get("service_ancestry")
+    if isinstance(ancestry, list) and len(ancestry) > 1:
+        parent = ancestry[1]
     for denied in policy_file.get("denied_process_name_regex", []):
         if re.search(str(denied), process_name, flags=re.IGNORECASE):
             return False
@@ -212,28 +325,52 @@ def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -
             continue
         if str(event.get("executable_sha256", "")).casefold() != str(item.get("executable_sha256", "")).casefold():
             continue
-        if event.get("parent_pid") != item.get("parent_pid"):
+        if str(item.get("service_identity_sha256", "")).casefold() not in service_set:
             continue
-        if str(item.get("service_identity_sha256", "")).casefold() not in {
-                str(value).casefold() for value in event.get("service_identity_sha256", [])}:
+        exact_parent_pid = item.get("parent_pid")
+        if exact_parent_pid is not None and event.get("parent_pid") != exact_parent_pid:
+            continue
+        parent_rule = item.get("parent_identity")
+        if parent_rule is not None:
+            if not isinstance(parent_rule, dict) or not isinstance(parent, dict):
+                continue
+            if parent.get("process_name", "").casefold() != str(parent_rule.get("process_name", "")).casefold():
+                continue
+            if parent.get("executable_path", "").casefold() != str(parent_rule.get("executable_path", "")).casefold():
+                continue
+            if parent.get("executable_sha256", "").casefold() != str(parent_rule.get("executable_sha256", "")).casefold():
+                continue
+            if parent_rule.get("pid") is not None and parent.get("pid") != parent_rule.get("pid"):
+                continue
+            if parent_rule.get("start_time_utc") is not None \
+                    and _utc_ticks(parent.get("start_time_utc"), "parent.start_time_utc") != _utc_ticks(parent_rule.get("start_time_utc"), "policy.parent_identity.start_time_utc"):
+                continue
+        elif item.get("lineage_mode") == "runner_service_ancestry" and len(ancestry) > 1 \
+                and item.get("allow_dynamic") is True:
+            # Dynamic non-service children must pin the exact parent image and
+            # hash. A PID-only rule is not an ancestry authorization.
             continue
         exact_pid = item.get("pid")
         exact_start = item.get("start_time_utc")
         if exact_pid is not None and event.get("pid") != exact_pid:
             continue
-        if exact_start is not None and event.get("start_time_utc") != exact_start:
+        if exact_start is not None \
+                and _utc_ticks(event.get("start_time_utc"), "event.start_time_utc") != _utc_ticks(exact_start, "policy.start_time_utc"):
             continue
         if exact_pid is None and exact_start is None and item.get("allow_dynamic") is not True:
             continue
         return True
     return False
 
-
 def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
     approved = policy_file.get("approved_processes")
     denied = policy_file.get("denied_process_name_regex")
+    runner_services = policy_file.get("runner_service_identity_sha256")
     if not isinstance(approved, list) or not approved or not isinstance(denied, list) or not denied:
         raise ValueError(f"{label}: strict approved and denied process policy is required")
+    if not isinstance(runner_services, list) or len(set(runner_services)) != 4 \
+            or any(not SHA256_RE.fullmatch(str(item)) for item in runner_services):
+        raise ValueError(f"{label}: exactly four runner service identities are required")
     for index, item in enumerate(approved):
         prefix = f"{label}.approved_processes[{index}]"
         if not isinstance(item, dict):
@@ -253,8 +390,32 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
             raise ValueError(f"{prefix}: executable SHA-256 is required")
         if not SHA256_RE.fullmatch(str(item.get("service_identity_sha256", ""))):
             raise ValueError(f"{prefix}: service identity SHA-256 is required")
+        if str(item["service_identity_sha256"]).casefold() not in {str(value).casefold() for value in runner_services}:
+            raise ValueError(f"{prefix}: process is not rooted in one of the four runner services")
         if type(item.get("parent_pid")) is not int or item["parent_pid"] < 0:
-            raise ValueError(f"{prefix}: parent_pid identity is required")
+            raise ValueError(f"{prefix}: exact parent_pid identity is required")
+        lineage_mode = item.get("lineage_mode", "runner_service_ancestry")
+        if lineage_mode not in {"runner_service_ancestry", "signed_job_lineage"}:
+            raise ValueError(f"{prefix}: lineage_mode is invalid")
+        if lineage_mode == "signed_job_lineage":
+            proof = item.get("job_lineage")
+            if not isinstance(proof, dict) or not isinstance(proof.get("issuer"), str) \
+                    or not isinstance(proof.get("job_identity_sha256"), str) \
+                    or not SHA256_RE.fullmatch(proof["job_identity_sha256"]):
+                raise ValueError(f"{prefix}: signed job lineage authorization is incomplete")
+        parent_rule = item.get("parent_identity")
+        if parent_rule is not None:
+            if not isinstance(parent_rule, dict):
+                raise ValueError(f"{prefix}: parent_identity must be an object")
+            for field in ("process_name", "executable_path", "executable_sha256"):
+                if not isinstance(parent_rule.get(field), str) or not parent_rule[field] \
+                        or (field == "executable_sha256" and not SHA256_RE.fullmatch(parent_rule[field])) \
+                        or (field == "executable_path" and (parent_rule[field].startswith("<") or "*" in parent_rule[field] or "?" in parent_rule[field])):
+                    raise ValueError(f"{prefix}: exact parent_identity {field} is required")
+            if parent_rule.get("pid") is not None and (type(parent_rule["pid"]) is not int or parent_rule["pid"] < 1):
+                raise ValueError(f"{prefix}: parent_identity PID is invalid")
+            if parent_rule.get("start_time_utc") is not None:
+                _utc(parent_rule["start_time_utc"], f"{prefix}.parent_identity.start_time_utc")
         allow_dynamic = item.get("allow_dynamic")
         if type(allow_dynamic) is not bool:
             raise ValueError(f"{prefix}: allow_dynamic must be an explicit boolean")
@@ -268,6 +429,9 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
             _utc(exact_start, f"{prefix}.start_time_utc")
         elif allow_dynamic is not True:
             raise ValueError(f"{prefix}: a dynamic rule must explicitly set allow_dynamic=true")
+        if exact_pid is None and item.get("role") not in {"runner", "runner_service", "direct_service"} \
+                and lineage_mode in {"runner_service_ancestry", "signed_job_lineage"} and parent_rule is None:
+            raise ValueError(f"{prefix}: dynamic non-service child must pin exact parent executable/path/hash")
     for index, regex in enumerate(denied):
         if not isinstance(regex, str) or not regex:
             raise ValueError(f"{label}.denied_process_name_regex[{index}]: deny regex is invalid")
@@ -285,7 +449,6 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
                 re.compile(name_regex)
             except re.error as error:
                 raise ValueError(f"{label}.approved_processes[{index}]: process name regex is invalid") from error
-
 
 def _proof(value: dict[str, Any], name: str) -> dict[str, Any]:
     proofs = value.get("attestation_proofs")
@@ -341,6 +504,21 @@ def _verify_host_manifest(path: Path, witness: Path) -> dict[str, Any]:
             raise ValueError(f"{witness}: host artifact path {field} is missing or redacted")
         required.append(_resolve(witness, item))
     if witness_value.get("fixture_mode") is not True and witness_value.get("qualification_prohibited") is not True:
+        parse_value = witness_value.get("event_trace", {}).get("collector_parse_receipt_path")
+        if not isinstance(parse_value, str) or parse_value.startswith("<"):
+            raise ValueError(f"{witness}: independent ETW parse receipt path is missing")
+        parse_path = _resolve(witness, parse_value)
+        parse_value_json = _read_json(parse_path, "ETW parse receipt")
+        provenance = parse_value_json.get("parser_provenance")
+        join_value = provenance.get("identity_join_path") if isinstance(provenance, dict) else None
+        join_hash = provenance.get("identity_join_sha256") if isinstance(provenance, dict) else None
+        if (not isinstance(join_value, str) or join_value.startswith("<")
+                or not isinstance(join_hash, str) or not SHA256_RE.fullmatch(join_hash)):
+            raise ValueError(f"{witness}: independent ETW identity join path/hash is missing")
+        join_path = _resolve(parse_path, join_value)
+        if not join_path.is_file() or _sha256(join_path).casefold() != join_hash.casefold():
+            raise ValueError(f"{witness}: independent ETW identity join hash does not reconcile")
+        required.append(join_path)
         observation_value = witness_value.get("observation_path")
         observation_hash = witness_value.get("observation_sha256")
         if not isinstance(observation_value, str) or observation_value.startswith("<") \
@@ -582,7 +760,8 @@ def _verify_external_witness_attestations(
             or not isinstance(loss_file.get("session_name"), str) or not loss_file["session_name"]
             or loss_file.get("owner_approved") is not True
             or loss_file.get("attestation_source") != "owner_controlled_offline"
-            or loss_file.get("verification_method") != "owner_signed_detached_cms"):
+            or loss_file.get("verification_method") != "owner_signed_detached_cms"
+            or not isinstance(loss_file.get("parser_provenance"), dict)):
         raise ValueError(f"{path}: signed ETW loss receipt is not measurable and lossless")
     collector_value = loss_file.get("collector_artifact_path")
     collector_hash = loss_file.get("collector_artifact_sha256")
@@ -610,13 +789,32 @@ def _verify_external_witness_attestations(
             or parse_file.get("provider") != "Microsoft-Windows-Kernel-Process/ETW"
             or parse_file.get("session_name") != loss_file.get("session_name")
             or str(parse_file.get("collector_artifact_sha256", "")).casefold() != collector_hash.casefold()
-            or parse_file.get("coverage_start_utc") != loss_file.get("coverage_start_utc")
-            or parse_file.get("coverage_end_utc") != loss_file.get("coverage_end_utc")
+            or _utc(parse_file.get("coverage_start_utc"), "ETW parse coverage_start_utc") != loss_start
+            or _utc(parse_file.get("coverage_end_utc"), "ETW parse coverage_end_utc") != loss_end
             or parse_file.get("events_received") != loss_file.get("events_received")
             or parse_file.get("lost_events") != loss_file.get("lost_events")
             or parse_file.get("buffer_loss_events") != loss_file.get("buffer_loss_events")
-            or parse_file.get("process_events") != loss_file.get("process_events")):
+            or parse_file.get("process_events") != loss_file.get("process_events")
+            or parse_file.get("parser_provenance") != loss_file.get("parser_provenance")):
         raise ValueError(f"{path}: ETW parse receipt does not reconcile to the signed loss counters/events")
+    # Do not trust a JSON parse claim merely because its hash is signed.  The
+    # independent parser replays the retained raw ETL (fixture mode replays the
+    # deterministic raw fixture) and compares the decoded event digest/counters.
+    try:
+        ETL_PARSER.verify_receipt(collector_path, parse_file, fixture=allow_fixture)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{path}: independent raw ETL replay failed: {error}") from error
+    parser_provenance = parse_file.get("parser_provenance")
+    if not allow_fixture:
+        join_value = parser_provenance.get("identity_join_path") if isinstance(parser_provenance, dict) else None
+        join_hash = parser_provenance.get("identity_join_sha256") if isinstance(parser_provenance, dict) else None
+        if (not isinstance(join_value, str) or not isinstance(join_hash, str)
+                or not SHA256_RE.fullmatch(join_hash)):
+            raise ValueError(f"{path}: ETW identity join provenance is missing")
+        join_path = _resolve(parse_path, join_value)
+        if not join_path.is_file() or _sha256(join_path).casefold() != join_hash.casefold():
+            raise ValueError(f"{path}: ETW identity join hash does not reconcile")
+        artifacts.append(join_path)
     etw_events = parse_file.get("process_events")
     if not isinstance(etw_events, list):
         raise ValueError(f"{path}: ETW parse receipt process-event list is missing")
@@ -624,14 +822,19 @@ def _verify_external_witness_attestations(
             or parse_file["events_received"] < 0
             or parse_file["events_received"] != len(etw_events)):
         raise ValueError(f"{path}: ETW received-event count does not equal the complete parsed process-event list")
-    etw_keys = _validate_etw_process_events(etw_events, f"{path}: ETW parse receipt", loss_start, loss_end)
-    for index, event in enumerate(etw_events):
+    validated_etw = _validate_etw_process_events(etw_events, f"{path}: ETW parse receipt", loss_start, loss_end)
+    for index, event in enumerate(validated_etw):
         if not _policy_approves_event(policy_file, event):
             raise ValueError(f"{path}: ETW process event {index} is denied or mismatched to the owner policy")
-    wmi_keys = _validate_wmi_event_keys(value.get("process_events"), f"{path}: WMI witness")
-    if set(etw_keys) != wmi_keys:
-        raise ValueError(f"{path}: authoritative ETW process events do not reconcile with WMI observations")
-    artifacts.extend((collector_path, parse_path))
+    private_value = value.get("private_inventory_path")
+    if not isinstance(private_value, str) or private_value.startswith("<"):
+        raise ValueError(f"{path}: private inventory is required for ETW/WMI identity correlation")
+    private_path = _resolve(path, private_value)
+    private_result = _validate_private_inventory(
+        private_path, value, policy_file, value.get("samples", []), value.get("process_events", []),
+        capture_start, capture_end)
+    _correlate_events(validated_etw, private_result["events_value"], f"{path}: authoritative ETW/WMI")
+    artifacts.extend((collector_path, parse_path, private_path))
 
     if (binding_file.get("format") != "VOX_FX_T18_EXECUTION_BINDING_V1"
             or binding_file.get("owner_approved") is not True
@@ -674,6 +877,216 @@ def _verify_external_witness_attestations(
     return artifacts
 
 
+def _canonical_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    return str(value)
+
+
+def _canonical_timestamp(value: Any, name: str) -> str:
+    return str(_utc_ticks(value, name))
+
+
+def _canonical_bool(value: Any) -> str:
+    return "true" if value is True else "false" if value is False else _canonical_text(value)
+
+
+def _canonical_node_line(node: dict[str, Any]) -> str:
+    fields = (
+        node.get("pid"), node.get("process_name"), node.get("parent_pid"),
+        _canonical_timestamp(node.get("start_time_utc"), "canonical.node.start_time_utc"),
+        str(node.get("executable_path", "")).casefold(), str(node.get("executable_sha256", "")).casefold(),
+        ",".join(sorted(str(item).casefold() for item in node.get("service_identity_sha256", []))),
+        str(node.get("identity_digest", "")).casefold(),
+    )
+    return "\x1f".join(_canonical_text(item) for item in fields)
+
+
+def _canonical_record_line(record: dict[str, Any]) -> str:
+    ancestry = "\x1e".join(_canonical_node_line(node) for node in record.get("service_ancestry", []))
+    event_timestamp = "" if record.get("timestamp_utc") is None else _canonical_timestamp(record["timestamp_utc"], "canonical.event.timestamp_utc")
+    fields = (
+        record.get("pid"), record.get("process_name"), record.get("parent_pid"),
+        _canonical_timestamp(record.get("start_time_utc"), "canonical.record.start_time_utc"),
+        str(record.get("executable_path", "")).casefold(), str(record.get("executable_sha256", "")).casefold(),
+        ",".join(sorted(str(item).casefold() for item in record.get("service_identity_sha256", []))),
+        _canonical_bool(record.get("service_ancestry_verified")), record.get("lineage_verification"),
+        _canonical_bool(record.get("identity_known")), _canonical_bool(record.get("approved_by_policy")),
+        str(record.get("identity_digest", "")).casefold(), record.get("decision_reason"),
+        record.get("event"), event_timestamp, record.get("event_process_name"), ancestry,
+    )
+    return "\x1f".join(_canonical_text(item) for item in fields)
+
+
+def _canonical_sample_digest(sample: dict[str, Any]) -> str:
+    process_lines = sorted(_canonical_record_line(item) for item in sample.get("processes", []))
+    event_lines = sorted(_canonical_record_line(item) for item in sample.get("events", []))
+    monotonic = sample.get("monotonic_elapsed_ms")
+    if isinstance(monotonic, float) and monotonic.is_integer():
+        monotonic = int(monotonic)
+    lines = [
+        _canonical_text(sample.get("phase")), _canonical_text(sample.get("sample_ordinal")),
+        _canonical_timestamp(sample.get("timestamp_utc"), "canonical.sample.timestamp_utc"),
+        _canonical_timestamp(sample.get("scheduled_timestamp_utc"), "canonical.sample.scheduled_timestamp_utc"),
+        _canonical_text(monotonic), _canonical_text(sample.get("query_error")),
+        _canonical_text(sample.get("full_host_process_count")),
+        _canonical_text(sample.get("full_host_hash_count")),
+        _canonical_text(sample.get("full_host_cim_hash_duration_ms")),
+        _canonical_bool(sample.get("full_host_cim_hash_cadence_met")),
+        "processes=" + "\x1e".join(process_lines), "events=" + "\x1e".join(event_lines),
+    ]
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _validate_private_record(record: Any, label: str, policy_file: dict[str, Any],
+                             event_record: bool = False) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        raise ValueError(f"{label}: private process identity is not an object")
+    required = ("pid", "process_name", "parent_pid", "start_time_utc", "executable_path",
+                "executable_sha256", "service_identity_sha256", "service_ancestry_verified",
+                "lineage_verification", "service_ancestry", "identity_known", "approved_by_policy",
+                "identity_digest")
+    missing = [field for field in required if field not in record]
+    if missing:
+        raise ValueError(f"{label}: private process identity is missing {', '.join(missing)}")
+    if (type(record["pid"]) is not int or record["pid"] < 1 or not isinstance(record["process_name"], str)
+            or not record["process_name"] or type(record["parent_pid"]) is not int or record["parent_pid"] < 0
+            or not isinstance(record["executable_path"], str) or not record["executable_path"]
+            or not SHA256_RE.fullmatch(str(record["executable_sha256"]))
+            or type(record["service_ancestry_verified"]) is not bool
+            or type(record["identity_known"]) is not bool or type(record["approved_by_policy"]) is not bool
+            or not isinstance(record["service_identity_sha256"], list) or not record["service_identity_sha256"]
+            or any(not SHA256_RE.fullmatch(str(item)) for item in record["service_identity_sha256"])
+            or not SHA256_RE.fullmatch(str(record["identity_digest"]))):
+        raise ValueError(f"{label}: private process identity is incomplete")
+    _utc(record["start_time_utc"], f"{label}.start_time_utc")
+    if event_record:
+        if record.get("event") not in {"start", "stop"} or "timestamp_utc" not in record:
+            raise ValueError(f"{label}: private process event is malformed")
+        event_time = _utc(record["timestamp_utc"], f"{label}.timestamp_utc")
+        if event_time < _utc(record["start_time_utc"], f"{label}.start_time_utc"):
+            raise ValueError(f"{label}: private process event precedes process creation")
+        if record.get("event_process_name") not in (None, record["process_name"]):
+            raise ValueError(f"{label}: provider event name disagrees with the process identity")
+    if _identity_digest(record).casefold() != str(record["identity_digest"]).casefold():
+        raise ValueError(f"{label}: private identity digest does not reconcile")
+    _validate_lineage(record, label)
+    runner_services = {str(item).casefold() for item in policy_file.get("runner_service_identity_sha256", [])}
+    if not {str(item).casefold() for item in record["service_identity_sha256"]}.issubset(runner_services):
+        raise ValueError(f"{label}: private ancestry does not terminate at an owner-baselined runner service")
+    if record["identity_known"] is not True or record["approved_by_policy"] is not True \
+            or not _policy_approves_event(policy_file, record):
+        raise ValueError(f"{label}: private inventory contains an unknown or unauthorized process identity")
+    return record
+
+
+def _validate_private_inventory(path: Path, value: dict[str, Any], policy_file: dict[str, Any],
+                                public_samples: list[dict[str, Any]], public_events: list[dict[str, Any]],
+                                capture_start: datetime, capture_end: datetime) -> dict[str, Any]:
+    inventory = _read_json(path, "private process inventory")
+    if inventory.get("format") != PRIVATE_INVENTORY_FORMAT:
+        raise ValueError(f"{path}: private inventory format is not supported")
+    if inventory.get("canonicalization") != "fx-t18-private-sample-canonical-v2-utc-ticks" \
+            or inventory.get("cadence_contract") != "full_host_cim_process_snapshot_and_sha256_each_executable_le_1000ms_every_1000ms":
+        raise ValueError(f"{path}: private inventory canonicalization/cadence contract is missing")
+    if (_utc(inventory.get("capture_start_utc"), f"{path}.capture_start_utc") != capture_start
+            or _utc(inventory.get("capture_end_utc"), f"{path}.capture_end_utc") != capture_end):
+        raise ValueError(f"{path}: private inventory interval does not match the witness")
+    if str(inventory.get("policy_sha256", "")).casefold() != str(value.get("identity_policy_sha256", "")).casefold():
+        raise ValueError(f"{path}: private inventory policy hash does not match the witness")
+    raw_samples = inventory.get("samples")
+    raw_events = inventory.get("process_events")
+    if not isinstance(raw_samples, list) or not isinstance(raw_events, list) or len(raw_samples) != len(public_samples):
+        raise ValueError(f"{path}: private inventory samples/events are incomplete")
+    flattened_events: list[dict[str, Any]] = []
+    seen_processes: dict[int, tuple[int, str]] = {}
+    for index, (raw, public) in enumerate(zip(raw_samples, public_samples)):
+        label = f"{path}.samples[{index}]"
+        if not isinstance(raw, dict) or not isinstance(public, dict):
+            raise ValueError(f"{label}: sample is not an object")
+        for field in ("phase", "sample_ordinal"):
+            if raw.get(field) != public.get(field):
+                raise ValueError(f"{label}: private/public sample field {field} disagrees")
+        for field in ("timestamp_utc", "scheduled_timestamp_utc"):
+            if _utc(raw.get(field), f"{label}.{field}") != _utc(public.get(field), f"public.{field}"):
+                raise ValueError(f"{label}: private/public sample time {field} disagrees")
+        if not isinstance(raw.get("monotonic_elapsed_ms"), (int, float)) \
+                or not isinstance(public.get("monotonic_elapsed_ms"), (int, float)) \
+                or abs(float(raw["monotonic_elapsed_ms"]) - float(public["monotonic_elapsed_ms"])) > 1e-6:
+            raise ValueError(f"{label}: private/public monotonic sample value disagrees")
+        for field in ("full_host_process_count", "full_host_hash_count", "full_host_cim_hash_duration_ms", "full_host_cim_hash_cadence_met"):
+            if raw.get(field) != public.get(field):
+                raise ValueError(f"{label}: private/public cadence summary {field} disagrees")
+        sample_time = _utc(raw["timestamp_utc"], f"{label}.timestamp_utc")
+        if sample_time < capture_start or sample_time > capture_end:
+            raise ValueError(f"{label}: private sample lies outside the witness interval")
+        processes = raw.get("processes")
+        events = raw.get("events")
+        if not isinstance(processes, list) or not isinstance(events, list):
+            raise ValueError(f"{label}: private sample process/event arrays are missing")
+        if (raw.get("full_host_process_count") != len(processes)
+                or raw.get("full_host_hash_count") != len(processes)
+                or raw.get("full_host_cim_hash_cadence_met") is not True
+                or type(raw.get("full_host_cim_hash_duration_ms")) not in (int, float)
+                or raw["full_host_cim_hash_duration_ms"] < 0.0
+                or raw["full_host_cim_hash_duration_ms"] > 1000.0):
+            raise ValueError(f"{label}: private full-host CIM/SHA-256 cadence measurement is incomplete")
+        approved_count = 0
+        process_unknown = process_unexpected = event_unknown = event_unexpected = 0
+        reuse_count = 0
+        for process_index, process in enumerate(processes):
+            record = _validate_private_record(process, f"{label}.processes[{process_index}]", policy_file)
+            lifecycle = (_utc_ticks(record["start_time_utc"], f"{label}.process.start_time_utc"), str(record["identity_digest"]).casefold())
+            previous_lifecycle = seen_processes.get(record["pid"])
+            if previous_lifecycle is not None and previous_lifecycle != lifecycle:
+                reuse_count += 1
+                raise ValueError(f"{label}: private snapshots show PID reuse or identity mutation")
+            seen_processes[record["pid"]] = lifecycle
+            approved_count += int(record["approved_by_policy"] is True)
+            process_unknown += int(record["identity_known"] is not True)
+            process_unexpected += int(record["approved_by_policy"] is not True)
+        for event_index, event in enumerate(events):
+            record = _validate_private_record(event, f"{label}.events[{event_index}]", policy_file, event_record=True)
+            flattened_events.append(record)
+            event_unknown += int(record["identity_known"] is not True)
+            event_unexpected += int(record["approved_by_policy"] is not True)
+            reuse_count += int(record.get("decision_reason") == "PID_REUSE_OR_DYNAMIC_IDENTITY_MISMATCH")
+        expected_digest = _canonical_sample_digest(raw)
+        if str(public.get("process_inventory_sha256", "")).casefold() != expected_digest:
+            raise ValueError(f"{label}: public process inventory digest does not match private canonical content")
+        if (public.get("observed_process_count") != len(processes)
+                or public.get("approved_process_count") != approved_count
+                or public.get("unknown_identity_count") != process_unknown + event_unknown
+                or public.get("unexpected_identity_count") != process_unexpected + event_unexpected
+                or public.get("pid_reuse_mismatch_count") != reuse_count
+                or public.get("process_query_error") != raw.get("query_error")):
+            raise ValueError(f"{label}: public process summary does not reconcile with private identities")
+    for aggregate_index, aggregate in enumerate(raw_events):
+        _validate_private_record(aggregate, f"{path}.process_events[{aggregate_index}]", policy_file, event_record=True)
+    if Counter(_canonical_record_line(item) for item in raw_events) != Counter(_canonical_record_line(item) for item in flattened_events):
+        raise ValueError(f"{path}: private aggregate process events do not reconcile with per-sample events")
+    if len(public_events) != len(flattened_events):
+        raise ValueError(f"{path}: public process event count does not reconcile with private events")
+    unused = set(range(len(flattened_events)))
+    for index, public in enumerate(public_events):
+        candidates = []
+        for event_index in sorted(unused):
+            raw = flattened_events[event_index]
+            if (public.get("event") == raw.get("event")
+                    and str(public.get("identity_digest", "")).casefold() == str(raw.get("identity_digest", "")).casefold()
+                    and _utc(public.get("timestamp_utc"), f"process_events[{index}].timestamp_utc")
+                    == _utc(raw.get("timestamp_utc"), f"private.events[{event_index}].timestamp_utc")):
+                candidates.append(event_index)
+        if len(candidates) != 1:
+            raise ValueError(f"{path}: public process event {index} is missing, ambiguous, or mismatched")
+        unused.remove(candidates[0])
+    if unused:
+        raise ValueError(f"{path}: private process events are not all publicly accounted for")
+    return {"verified": True, "samples": len(raw_samples), "events": len(flattened_events),
+            "path": str(path), "samples_value": raw_samples, "events_value": flattened_events}
+
 def _validate_process_identity(process: Any, label: str) -> None:
     if not isinstance(process, dict) or type(process.get("pid")) is not int \
             or not isinstance(process.get("process_name"), str):
@@ -692,9 +1105,18 @@ def _validate_public_sample(sample: dict[str, Any], label: str, allow_fixture: b
             _validate_process_identity(process, f"{label}.processes[{index}]")
         return
     for field in ("observed_process_count", "approved_process_count", "unknown_identity_count",
-                  "unexpected_identity_count", "pid_reuse_mismatch_count"):
+                  "unexpected_identity_count", "pid_reuse_mismatch_count", "full_host_process_count",
+                  "full_host_hash_count"):
         if type(sample.get(field)) is not int or sample[field] < 0:
             raise ValueError(f"{label}: process summary field {field} is invalid")
+    if (sample["full_host_process_count"] != sample["observed_process_count"]
+            or sample["full_host_hash_count"] != sample["full_host_process_count"]
+            or type(sample.get("full_host_cim_hash_cadence_met")) is not bool
+            or sample["full_host_cim_hash_cadence_met"] is not True
+            or type(sample.get("full_host_cim_hash_duration_ms")) not in (int, float)
+            or sample["full_host_cim_hash_duration_ms"] < 0.0
+            or sample["full_host_cim_hash_duration_ms"] > 1000.0):
+        raise ValueError(f"{label}: full-host CIM/SHA-256 observation did not meet the measured 1 Hz contract")
     if sample.get("process_query_error") not in (None, ""):
         raise ValueError(f"{label}: process query error is evidence-blocking")
     digest = sample.get("process_inventory_sha256")
@@ -775,6 +1197,11 @@ def validate_witness(
             type(event_trace.get("events_received")) is int and event_trace.get("events_received") >= 0,
             event_trace.get("collector_artifact_format") == "ETL",
             event_trace.get("collector_parse_method") == "owner_independent_etw_parser_v1",
+            type(event_trace.get("correlation_max_skew_seconds")) in (int, float)
+            and event_trace.get("correlation_max_skew_seconds") == MAX_EVENT_CORRELATION_SKEW_SECONDS,
+            set(event_trace.get("correlation_identity_fields", [])) >= {
+                "event", "pid", "process_name", "start_time_utc", "identity_digest", "executable_path",
+                "executable_sha256", "parent_pid", "service_identity_sha256"},
             isinstance(event_trace.get("collector_artifact_sha256"), str)
             and SHA256_RE.fullmatch(event_trace["collector_artifact_sha256"]) is not None,
             isinstance(event_trace.get("collector_parse_receipt_sha256"), str)
@@ -857,6 +1284,26 @@ def validate_witness(
         event_times.append(event_time)
     if any(right < left for left, right in zip(event_times, event_times[1:])):
         raise ValueError(f"{path}: process event timestamps are not monotonic")
+
+    private_result: dict[str, Any] | None = None
+    private_value = value.get("private_inventory_path")
+    if isinstance(private_value, str) and not private_value.startswith("<"):
+        private_path = _resolve(path, private_value)
+        private_hash = value.get("private_inventory_sha256")
+        if not private_path.is_file() or not isinstance(private_hash, str)                 or not SHA256_RE.fullmatch(private_hash) or _sha256(private_path).casefold() != private_hash.casefold():
+            raise ValueError(f"{path}: private inventory path/hash does not reconcile")
+        policy_path_value = value.get("identity_policy_path")
+        if not isinstance(policy_path_value, str) or policy_path_value.startswith("<"):
+            raise ValueError(f"{path}: identity policy path is required for private reconciliation")
+        policy_path = _resolve(path, policy_path_value)
+        policy_file = _read_json(policy_path, "identity policy")
+        _validate_identity_policy(policy_file, f"{path}: private reconciliation policy")
+        if _sha256(policy_path).casefold() != str(value.get("identity_policy_sha256", "")).casefold():
+            raise ValueError(f"{path}: private reconciliation policy hash does not reconcile")
+        private_result = _validate_private_inventory(
+            private_path, value, policy_file, samples, events, capture_start, capture_end)
+    elif not fixture:
+        raise ValueError(f"{path}: private inventory is required for production evidence")
 
     for field in ("unrecognized_competitors", "unknown_pids", "pid_reuse_mismatches"):
         if type(value.get(field)) is not int or value[field] < 0:
@@ -954,6 +1401,7 @@ def validate_witness(
             "policy_sha256": policy["policy_sha256"], "host": lease["host"],
             "lease_id": lease["lease_id"], "source_head": binding["source_head"],
             "source_tree": binding["source_tree"], "executable_sha256": binding["executable_sha256"],
+            "private_inventory": private_result,
             "external_attestations": [str(item) for item in external_attestations]}
 
 

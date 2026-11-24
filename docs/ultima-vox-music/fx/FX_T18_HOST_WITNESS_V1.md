@@ -66,9 +66,10 @@ contains only non-identifying summaries, timestamps, decisions, identity
 hashes and artifact hashes:
 
 - `samples` has a monotonic/deadline-reconciled UTC timestamp, scheduled
-  timestamp, monotonic elapsed value, process count, approved count, unknown /
-  unexpected / PID-reuse counters, query status and a SHA-256 of the matching
-  raw sample;
+  timestamp, monotonic elapsed value, full-host CIM process count, successfully
+  hashed executable count, measured CIM-plus-hash duration and explicit
+  one-Hz cadence result, process count, approved count, unknown / unexpected /
+  PID-reuse counters, query status and a SHA-256 of the matching raw sample;
 - `process_events` has WMI provider timestamp, start/stop kind, known/approved
   decision, identity digest and decision code. It never serializes a PID,
   process name, executable path or command line. Finalization requires exact
@@ -80,9 +81,10 @@ hashes and artifact hashes:
   literal `<redacted>` values;
 - `event_trace` distinguishes the WMI observation stream from the independently
   parsed ETW loss source and records its interval, collector hash, parser
-  receipt/hash, received count and loss counters; the parser receipt must
-  reconcile its provider, collector hash, counters and complete process-event
-  list to the signed loss payload;
+  receipt/hash, identity-join provenance, received count and loss counters; the
+  parser receipt must reconcile its provider, collector hash, counters and
+  complete process-event list to the signed loss payload, and the host manifest
+  must cover the retained identity join;
 - `attestation_proofs` records each payload/signature path and SHA-256 plus
   the pinned signer thumbprint and method;
 - `execution_binding.runner_receipts` lists all three trusted runner-receipt
@@ -133,6 +135,106 @@ provider registration, query, cadence, or hash reconciliation writes a
 If serialization fails, Capture makes a second minimal sanitized persistence
 attempt and still exits `2`. It never edits a failed receipt into a positive
 receipt.
+
+## ETW/WMI correlation and lineage contract
+
+The WMI event stream is retained in the owner-private inventory and the ETW
+stream is decoded from the raw ETL by `evidence/parse-fx-t18-etl.py`. The
+finalizer/evaluator does not compare provider timestamp strings. Each side is
+normalized to UTC ticks and matched one-to-one using this immutable key:
+
+```
+event kind, PID, process creation time, process identity digest,
+process name, exact executable path, executable SHA-256, parent PID,
+owner-baselined runner-service identity set
+```
+
+The provider event timestamps are then compared as normalized UTC datetimes
+with `MAX_EVENT_CORRELATION_SKEW_SECONDS = 2.0`. A zero-candidate,
+multiple-candidate, reused candidate, extra WMI event, extra ETW event, or
+identity/lifecycle mismatch blocks. Precision and offset differences are
+therefore harmless only when they identify exactly one same lifecycle within
+that explicit bound; they are never made harmless by rounding or by set
+conversion.
+
+Every raw process/event identity includes `service_ancestry_verified=true`,
+`lineage_verification=runner_service_ancestry_v1` (or a separately verified
+`signed_job_lineage_v1` proof), and an ordered child-to-runner-service
+`service_ancestry`. Every node carries PID, creation time, name, exact path,
+exact image SHA-256, parent PID, service identities and its own digest. A
+non-service CTest/native child is approved only when its signed policy entry
+also pins its exact path/hash and exact parent image path/hash; a PID-only
+wildcard is not a child authorization. The four direct HAMUNAPTRA runner
+service identities remain the only permitted ancestry roots. A forged parent
+node, discontinuous PID chain, changed parent image/hash, or ancestry root
+that does not match the observed process blocks.
+
+## Independent raw ETL parser and replay
+
+`evidence/parse-fx-t18-etl.py` is the owner-independent parser/verifier. The
+production toolchain is pinned to Microsoft Windows SDK `tracerpt.exe`
+`10.0.26100.1`, invoked without a shell as:
+
+```
+tracerpt.exe <raw-etl> -o <decoded-xml> -of XML -lr -y
+```
+
+The parser consumes `Microsoft-Windows-Kernel-Process` process event IDs 1
+(ProcessStart) and 2 (ProcessStop). Loss counters come from the same
+`tracerpt -lr` summary (`Events Lost` and `Buffers Lost`), not from the JSON
+claim. A receipt records the raw ETL SHA-256, parser/toolchain name and
+version, executable path, exact CLI template, event source, counter source,
+decoded core/event digests, identity-join artifact hash, and replay command.
+The production parser requires an owner-private
+`VOX_FX_T18_ETW_IDENTITY_JOIN_V1` join for the path/hash/service/ancestry facts
+that are not historical fields in the raw Kernel-Process event. `verify_receipt`
+reruns the decoder against the retained raw bytes, reapplies the retained join,
+and compares the raw core digest, complete enriched event digest and counters
+before the wall evaluator accepts the signed receipt. The join is included in
+the host manifest. The offline JSON raw-fixture mode is explicitly
+qualification-prohibited and is only used to exercise the replay and tamper
+negatives.
+
+The owner replay is:
+
+```
+python evidence/parse-fx-t18-etl.py --etl D:\\owner-evidence\\fx-t18\\process.etl \\
+  --output D:\\owner-evidence\\fx-t18\\process-parse.json \\
+  --coverage-start <UTC> --coverage-end <UTC> --session-name FX-T18-KernelProcess \\
+  --tracerpt C:\\Windows\\System32\\tracerpt.exe \\
+  --identity-join D:\\owner-evidence\\fx-t18\\etw-identity-join.json
+python evidence/parse-fx-t18-etl.py --verify-receipt \\
+  --etl D:\\owner-evidence\\fx-t18\\process.etl \\
+  --receipt D:\\owner-evidence\\fx-t18\\process-parse.json
+```
+
+A regenerated JSON receipt for tampered ETL is not sufficient: replay binds
+its raw-byte hash and the evaluator still applies the signed path/hash/parent/
+service policy and ETW/WMI one-to-one reconciliation. The conformance suite
+includes a tampered raw fixture with internally regenerated parser claims and
+requires a block.
+
+## Private inventory semantic reconciliation and cadence
+
+The private sidecar is `VOX_FX_T18_PRIVATE_PROCESS_INVENTORY_V1` with
+canonicalization `fx-t18-private-sample-canonical-v2-utc-ticks`. For every
+sample, the evaluator recomputes the canonical SHA-256 over normalized sample
+times, monotonic/deadline fields, cadence measurements, every raw process
+decision, every raw event, and ordered ancestry nodes. It reconciles the
+sidecar interval, policy hash, sample fields, process/event records, aggregate
+events, per-sample counts, query status, public event summaries and all
+public non-identifying counters. An all-approved public witness paired with
+an unauthorized or edited private process is blocked even when its sidecar
+file hash and regenerated public claims agree.
+
+Each sample also reports the measured full-host CIM process count, number of
+successfully hashed executable images, total CIM plus SHA-256 duration and
+`full_host_cim_hash_cadence_met`. Production accepts only a completed full
+host query/hash operation taking no more than 1000 ms on each 1000 ms deadline;
+missing, false, or over-budget measurements block. The bounded Windows smoke
+must run the real script under Windows PowerShell Desktop 5.1, and the owner
+must retain the measured cadence fields; this source-only environment does
+not claim that smoke or benchmark has run.
 
 ## Fixtures
 

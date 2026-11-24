@@ -170,6 +170,13 @@ def finalize(
     lease = _read_json(lease_path, "host lease receipt")
     loss = _read_json(event_loss_path, "ETW loss receipt")
     binding = _read_json(execution_binding_path, "execution binding")
+    parse_value = loss.get("collector_parse_receipt_path")
+    if not isinstance(parse_value, str) or not parse_value:
+        raise ValueError("ETW loss receipt does not name an independent parse receipt")
+    parse_path = Path(parse_value)
+    if not parse_path.is_absolute():
+        parse_path = (event_loss_path.parent / parse_path).resolve()
+    parse_receipt = _read_json(parse_path, "ETW parse receipt")
     observation_hash = _sha256(observation_path)
     if loss.get("observation_sha256") != observation_hash or binding.get("observation_sha256") != observation_hash:
         raise ValueError("post-capture signed proofs are not bound to the immutable observation")
@@ -235,6 +242,9 @@ def finalize(
             "collector_parse_method": loss.get("collector_parse_method"),
             "collector_parse_receipt_path": _absolute((event_loss_path.parent / str(loss.get("collector_parse_receipt_path"))).resolve()) if not Path(str(loss.get("collector_parse_receipt_path"))).is_absolute() else str(Path(str(loss.get("collector_parse_receipt_path"))).resolve()),
             "collector_parse_receipt_sha256": loss.get("collector_parse_receipt_sha256"),
+            "parser_provenance": parse_receipt.get("parser_provenance"),
+            "correlation_max_skew_seconds": EVALUATOR.MAX_EVENT_CORRELATION_SKEW_SECONDS,
+            "correlation_identity_fields": ["event", "pid", "process_name", "start_time_utc", "identity_digest", "executable_path", "executable_sha256", "parent_pid", "service_identity_sha256"],
             "loss_receipt_path": _absolute(event_loss_path),
             "loss_receipt_sha256": _sha256(event_loss_path),
             "process_event_count": len(loss.get("process_events", [])) if isinstance(loss.get("process_events"), list) else -1,

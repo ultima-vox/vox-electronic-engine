@@ -42,6 +42,11 @@ receipt is fabricated.
   origin, private raw inventory and public counters/hashes. It has no
   service/process control operations, no public command-line serialization, and
   never requires future ETW/CTest facts.
+- `evidence/parse-fx-t18-etl.py` — pinned Windows SDK `tracerpt.exe`
+  `10.0.26100.1` raw-ETL decoder/replay verifier. Production parsing requires
+  a retained one-to-one `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` artifact for exact
+  image hash and verified service/job ancestry; replay independently checks
+  the raw ETL core digest, enriched event digest and loss counters.
 - `evidence/finalize-fx-t18-host-witness.py` — post-capture-only finalizer that
   verifies the immutable observation, independently pinned detached proofs,
   parsed ETW/WMI event equality, PID lifecycle, exact CTest intervals and
@@ -60,6 +65,20 @@ receipt is fabricated.
   owner procedure for exclusive HAMUNAPTRA access, independent attestations,
   future Capture, cleanup and retention.
 
+## Post-review source/fixture checkpoint
+
+The post-review implementation now has executable offline coverage for the
+previously blocking boundaries. `test-evaluate-fx-t18-wall-gate.py` includes
+normalized UTC precision/offset correlation, maximum-skew rejection, extra and
+ambiguous-event rejection, an ambiguous independent ETW identity-join
+negative, authorized non-service child lineage, forged ancestry rejection,
+unauthorized private-inventory reconciliation, and a regenerated-JSON/
+tampered-raw-ETL negative. The private inventory contract also requires
+canonical sample hashing plus measured full-host process/hash counts and a
+one-second cadence flag. These are source/fixture results only; no Windows
+PowerShell parse, real ETL replay, owner signature, or qualification has been
+performed in this environment.
+
 ## Exact sandbox commands and results
 
 All commands below were run from the repository root on Linux. None dispatched
@@ -71,9 +90,9 @@ FX-T18 auditor negative fixtures: PASS
 
 PYTHONDONTWRITEBYTECODE=1 python3 docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 FX-T18 wall-gate executable fixtures: PASS
-fixtures: two_phase_observation_finalization, independent_host_attestations, fake_attestation_cannot_production_pass, etw_competitor_absent_from_wmi, mixed_name_same_pid_event, independent_owner_pin_mismatch, strict_policy_wildcard_path, strict_policy_missing_service_identity, strict_policy_missing_dynamic_authorization, strict_policy_deny_allow_conflict, strict_policy_wrong_executable, capture_sampler_global_monotonic_clock, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
+fixtures: etw_wmi_normalized_precision_and_offset_one_to_one, independent_etl_identity_join_ambiguous_block, etw_wmi_max_skew_block, etw_wmi_extra_event_block, etw_wmi_ambiguous_block, authorized_non_service_child_real_runner_chain, forged_runner_ancestry_rejected, unauthorized_private_raw_vs_approved_public, tampered_etl_regenerated_json_claims_blocked, two_phase_observation_finalization, tampered_observation_rejected, independent_host_attestations, fake_attestation_cannot_production_pass, etw_competitor_absent_from_wmi, mixed_name_same_pid_event, independent_owner_pin_mismatch, strict_policy_wildcard_path, strict_policy_missing_service_identity, strict_policy_missing_dynamic_authorization, strict_policy_deny_allow_conflict, strict_policy_wrong_executable, capture_sampler_global_monotonic_clock, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
 
-python3 -m py_compile docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/finalize-fx-t18-host-witness.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
+python3 -m py_compile docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/parse-fx-t18-etl.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/finalize-fx-t18-host-witness.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 # exit 0; __pycache__ removed immediately afterward
 
 git diff --check
