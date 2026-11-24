@@ -161,7 +161,7 @@ def _same_process_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
 def _validate_lineage(record: dict[str, Any], label: str) -> None:
     if record.get("service_ancestry_verified") is not True:
         raise ValueError(f"{label}: runner-service ancestry was not verified")
-    if record.get("lineage_verification") not in {"runner_service_ancestry_v1", "signed_job_lineage_v1"}:
+    if record.get("lineage_verification") not in {"runner_service_ancestry_v1", "signed_job_lineage_v1", "host_baseline_v1"}:
         raise ValueError(f"{label}: lineage verification method is missing")
     ancestry = record.get("service_ancestry")
     if not isinstance(ancestry, list) or not ancestry:
@@ -193,7 +193,10 @@ def _validate_lineage(record: dict[str, Any], label: str) -> None:
         previous = node
         root_services.update(str(item).casefold() for item in node["service_identity_sha256"])
     expected_services = {str(item).casefold() for item in record["service_identity_sha256"]}
-    if not expected_services or root_services != expected_services:
+    if record.get("lineage_verification") == "host_baseline_v1":
+        if root_services != expected_services:
+            raise ValueError(f"{label}: host-baseline service identity set does not reconcile with the verified ancestry")
+    elif not expected_services or root_services != expected_services:
         raise ValueError(f"{label}: service identity set does not reconcile with the verified ancestry")
     first = ancestry[0]
     for field in ("pid", "process_name", "parent_pid", "start_time_utc", "executable_path", "executable_sha256"):
@@ -237,7 +240,8 @@ def _validate_etw_process_events(events: Any, label: str, coverage_start: dateti
                 or not SHA256_RE.fullmatch(str(event["identity_digest"]))
                 or type(event["identity_known"]) is not bool or type(event["approved_by_policy"]) is not bool
                 or event["identity_known"] is not True
-                or not isinstance(event["service_identity_sha256"], list) or not event["service_identity_sha256"]
+                or not isinstance(event["service_identity_sha256"], list)
+                or (event["lineage_verification"] != "host_baseline_v1" and not event["service_identity_sha256"])
                 or any(not SHA256_RE.fullmatch(str(item)) for item in event["service_identity_sha256"])):
             raise ValueError(f"{prefix}: ETW process identity or service decision is incomplete")
         start_time = _utc(event["start_time_utc"], f"{prefix}.start_time_utc")
@@ -297,6 +301,28 @@ def _correlate_events(etw_events: list[dict[str, Any]], wmi_events: list[dict[st
     if set(chosen) != set(range(len(wmi_events))):
         raise ValueError(f"{label}: WMI contains an extra process event")
 
+def _policy_service_values(item: dict[str, Any]) -> list[str]:
+    value = item.get("service_identity_sha256")
+    if value == "none":
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(entry) for entry in value]
+    return []
+
+
+def _policy_entries(policy_file: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
+    entries: list[tuple[dict[str, Any], str]] = []
+    for item in policy_file.get("approved_processes", []):
+        if isinstance(item, dict):
+            entries.append((item, str(item.get("identity_scope", "runner"))))
+    for item in policy_file.get("host_baseline_processes", []):
+        if isinstance(item, dict):
+            entries.append((item, "host_baseline"))
+    return entries
+
+
 def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -> bool:
     process_name = str(event.get("process_name", ""))
     try:
@@ -304,7 +330,7 @@ def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -
     except ValueError:
         return False
     service_values = event.get("service_identity_sha256")
-    if not isinstance(service_values, list) or not service_values:
+    if not isinstance(service_values, list) or any(not SHA256_RE.fullmatch(str(value)) for value in service_values):
         return False
     service_set = {str(value).casefold() for value in service_values}
     parent = None
@@ -314,7 +340,20 @@ def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -
     for denied in policy_file.get("denied_process_name_regex", []):
         if re.search(str(denied), process_name, flags=re.IGNORECASE):
             return False
-    for item in policy_file.get("approved_processes", []):
+    for item, scope in _policy_entries(policy_file):
+        if scope not in {"runner", "host_baseline"}:
+            continue
+        expected_lineage = "host_baseline_v1" if scope == "host_baseline" else None
+        if expected_lineage is not None and event.get("lineage_verification") != expected_lineage:
+            continue
+        if expected_lineage is None and event.get("lineage_verification") not in {"runner_service_ancestry_v1", "signed_job_lineage_v1"}:
+            continue
+        declared_services = _policy_service_values(item)
+        if scope == "runner" and (len(declared_services) != 1 or declared_services[0].casefold() not in
+                                   {str(value).casefold() for value in policy_file.get("runner_service_identity_sha256", [])}):
+            continue
+        if service_set != {str(value).casefold() for value in declared_services}:
+            continue
         name = item.get("process_name")
         name_regex = item.get("process_name_regex")
         if name and process_name.casefold() != str(name).casefold():
@@ -324,8 +363,6 @@ def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -
         if str(event.get("executable_path", "")).casefold() != str(item.get("executable_path", "")).casefold():
             continue
         if str(event.get("executable_sha256", "")).casefold() != str(item.get("executable_sha256", "")).casefold():
-            continue
-        if str(item.get("service_identity_sha256", "")).casefold() not in service_set:
             continue
         exact_parent_pid = item.get("parent_pid")
         if exact_parent_pid is not None and event.get("parent_pid") != exact_parent_pid:
@@ -345,10 +382,12 @@ def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -
             if parent_rule.get("start_time_utc") is not None \
                     and _utc_ticks(parent.get("start_time_utc"), "parent.start_time_utc") != _utc_ticks(parent_rule.get("start_time_utc"), "policy.parent_identity.start_time_utc"):
                 continue
-        elif item.get("lineage_mode") == "runner_service_ancestry" and len(ancestry) > 1 \
+        elif ((scope == "runner" and item.get("lineage_mode") == "runner_service_ancestry")
+              or scope == "host_baseline") and len(ancestry) > 1 \
                 and item.get("allow_dynamic") is True:
-            # Dynamic non-service children must pin the exact parent image and
-            # hash. A PID-only rule is not an ancestry authorization.
+            # Dynamic children must pin the exact parent image and hash. A
+            # PID-only rule is not an ancestry authorization for either the
+            # runner tree or the owner-baselined host background tree.
             continue
         exact_pid = item.get("pid")
         exact_start = item.get("start_time_utc")
@@ -362,19 +401,39 @@ def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -
         return True
     return False
 
-def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
+def _validate_identity_policy(policy_file: dict[str, Any], label: str,
+                               require_host_baseline: bool = False) -> None:
     approved = policy_file.get("approved_processes")
+    host_baseline = policy_file.get("host_baseline_processes", [])
     denied = policy_file.get("denied_process_name_regex")
     runner_services = policy_file.get("runner_service_identity_sha256")
-    if not isinstance(approved, list) or not approved or not isinstance(denied, list) or not denied:
-        raise ValueError(f"{label}: strict approved and denied process policy is required")
+    if not isinstance(approved, list) or not approved or not isinstance(host_baseline, list) \
+            or not isinstance(denied, list) or not denied:
+        raise ValueError(f"{label}: strict approved/host-baseline and denied process policy is required")
+    if require_host_baseline and (not isinstance(policy_file.get("host_baseline_id"), str)
+                                   or not policy_file["host_baseline_id"] or not host_baseline):
+        raise ValueError(f"{label}: owner host baseline process inventory is required")
     if not isinstance(runner_services, list) or len(set(runner_services)) != 4 \
             or any(not SHA256_RE.fullmatch(str(item)) for item in runner_services):
         raise ValueError(f"{label}: exactly four runner service identities are required")
+
+    entries: list[tuple[str, dict[str, Any]]] = []
     for index, item in enumerate(approved):
-        prefix = f"{label}.approved_processes[{index}]"
         if not isinstance(item, dict):
-            raise ValueError(f"{prefix}: policy entry is not an object")
+            raise ValueError(f"{label}.approved_processes[{index}]: policy entry is not an object")
+        entries.append((f"{label}.approved_processes[{index}]", item))
+    for index, item in enumerate(host_baseline):
+        if not isinstance(item, dict):
+            raise ValueError(f"{label}.host_baseline_processes[{index}]: policy entry is not an object")
+        entries.append((f"{label}.host_baseline_processes[{index}]", item))
+
+    for prefix, item in entries:
+        listed_as_host = prefix.startswith(f"{label}.host_baseline_processes[")
+        scope = "host_baseline" if listed_as_host else item.get("identity_scope", "runner")
+        if scope not in {"runner", "host_baseline"}:
+            raise ValueError(f"{prefix}: identity_scope is invalid")
+        if scope == "host_baseline" and not isinstance(policy_file.get("host_baseline_id"), str):
+            raise ValueError(f"{prefix}: host_baseline_id is required")
         name = item.get("process_name")
         name_regex = item.get("process_name_regex")
         if (name is not None and not isinstance(name, str)) or (name_regex is not None and not isinstance(name_regex, str)):
@@ -388,14 +447,29 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
             raise ValueError(f"{prefix}: exact executable_path is required")
         if not SHA256_RE.fullmatch(str(item.get("executable_sha256", ""))):
             raise ValueError(f"{prefix}: executable SHA-256 is required")
-        if not SHA256_RE.fullmatch(str(item.get("service_identity_sha256", ""))):
-            raise ValueError(f"{prefix}: service identity SHA-256 is required")
-        if str(item["service_identity_sha256"]).casefold() not in {str(value).casefold() for value in runner_services}:
-            raise ValueError(f"{prefix}: process is not rooted in one of the four runner services")
-        if type(item.get("parent_pid")) is not int or item["parent_pid"] < 0:
-            raise ValueError(f"{prefix}: exact parent_pid identity is required")
+        declared_services = _policy_service_values(item)
+        if scope == "runner":
+            if len(declared_services) != 1 or not SHA256_RE.fullmatch(declared_services[0]) \
+                    or declared_services[0].casefold() not in {str(value).casefold() for value in runner_services}:
+                raise ValueError(f"{prefix}: runner process must name one of the four runner service SHA-256 identities")
+        else:
+            if item.get("non_competing") is not True:
+                raise ValueError(f"{prefix}: host baseline entry must explicitly declare non_competing=true")
+            raw_service = item.get("service_identity_sha256")
+            if raw_service == "none":
+                pass
+            elif isinstance(raw_service, str) and SHA256_RE.fullmatch(raw_service):
+                pass
+            elif (isinstance(raw_service, list) and raw_service
+                  and len(set(str(value).casefold() for value in raw_service)) == len(raw_service)
+                  and all(SHA256_RE.fullmatch(str(value)) for value in raw_service)):
+                pass
+            else:
+                raise ValueError(f"{prefix}: host service identity set must be exact SHA-256 values or none")
         lineage_mode = item.get("lineage_mode", "runner_service_ancestry")
-        if lineage_mode not in {"runner_service_ancestry", "signed_job_lineage"}:
+        if scope == "host_baseline" and lineage_mode != "host_baseline_v1":
+            raise ValueError(f"{prefix}: host baseline lineage_mode must be host_baseline_v1")
+        if scope == "runner" and lineage_mode not in {"runner_service_ancestry", "signed_job_lineage"}:
             raise ValueError(f"{prefix}: lineage_mode is invalid")
         if lineage_mode == "signed_job_lineage":
             proof = item.get("job_lineage")
@@ -416,6 +490,12 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
                 raise ValueError(f"{prefix}: parent_identity PID is invalid")
             if parent_rule.get("start_time_utc") is not None:
                 _utc(parent_rule["start_time_utc"], f"{prefix}.parent_identity.start_time_utc")
+        parent_pid = item.get("parent_pid")
+        if scope == "runner":
+            if type(parent_pid) is not int or parent_pid < 0:
+                raise ValueError(f"{prefix}: exact parent_pid identity is required")
+        elif parent_pid is not None and (type(parent_pid) is not int or parent_pid < 0):
+            raise ValueError(f"{prefix}: host baseline parent_pid is invalid")
         allow_dynamic = item.get("allow_dynamic")
         if type(allow_dynamic) is not bool:
             raise ValueError(f"{prefix}: allow_dynamic must be an explicit boolean")
@@ -429,9 +509,13 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
             _utc(exact_start, f"{prefix}.start_time_utc")
         elif allow_dynamic is not True:
             raise ValueError(f"{prefix}: a dynamic rule must explicitly set allow_dynamic=true")
-        if exact_pid is None and item.get("role") not in {"runner", "runner_service", "direct_service"} \
-                and lineage_mode in {"runner_service_ancestry", "signed_job_lineage"} and parent_rule is None:
+        if scope == "runner" and exact_pid is None and item.get("role") not in {"runner", "runner_service", "direct_service"} \
+                and parent_rule is None:
             raise ValueError(f"{prefix}: dynamic non-service child must pin exact parent executable/path/hash")
+        if scope == "host_baseline" and exact_pid is None and parent_pid not in (None, 0) \
+                and parent_rule is None:
+            raise ValueError(f"{prefix}: dynamic host baseline child must pin exact parent executable/path/hash")
+
     for index, regex in enumerate(denied):
         if not isinstance(regex, str) or not regex:
             raise ValueError(f"{label}.denied_process_name_regex[{index}]: deny regex is invalid")
@@ -439,16 +523,16 @@ def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
             re.compile(regex)
         except re.error as error:
             raise ValueError(f"{label}.denied_process_name_regex[{index}]: deny regex is invalid") from error
-    for index, item in enumerate(approved):
+    for prefix, item in entries:
         name = item.get("process_name")
         name_regex = item.get("process_name_regex")
         if isinstance(name, str) and any(re.search(str(regex), name, flags=re.IGNORECASE) for regex in denied):
-            raise ValueError(f"{label}.approved_processes[{index}]: deny rule conflicts with an allow entry")
+            raise ValueError(f"{prefix}: deny rule conflicts with an allow entry")
         if isinstance(name_regex, str):
             try:
                 re.compile(name_regex)
             except re.error as error:
-                raise ValueError(f"{label}.approved_processes[{index}]: process name regex is invalid") from error
+                raise ValueError(f"{prefix}: process name regex is invalid") from error
 
 def _proof(value: dict[str, Any], name: str) -> dict[str, Any]:
     proofs = value.get("attestation_proofs")
@@ -509,6 +593,24 @@ def _verify_host_manifest(path: Path, witness: Path) -> dict[str, Any]:
             raise ValueError(f"{witness}: independent ETW parse receipt path is missing")
         parse_path = _resolve(witness, parse_value)
         parse_value_json = _read_json(parse_path, "ETW parse receipt")
+        summary_value = witness_value.get("event_trace", {}).get("tracerpt_summary_path")
+        summary_hash = witness_value.get("event_trace", {}).get("tracerpt_summary_sha256")
+        if (not isinstance(summary_value, str) or summary_value.startswith("<")
+                or not isinstance(summary_hash, str) or not SHA256_RE.fullmatch(summary_hash)):
+            raise ValueError(f"{witness}: retained tracerpt summary path/hash is missing")
+        summary_path = _resolve(witness, summary_value)
+        if not summary_path.is_file() or _sha256(summary_path).casefold() != summary_hash.casefold():
+            raise ValueError(f"{witness}: retained tracerpt summary hash does not reconcile")
+        required.append(summary_path)
+        collection_value = witness_value.get("event_trace", {}).get("collection_metadata_path")
+        collection_hash = witness_value.get("event_trace", {}).get("collection_metadata_sha256")
+        if (not isinstance(collection_value, str) or collection_value.startswith("<")
+                or not isinstance(collection_hash, str) or not SHA256_RE.fullmatch(collection_hash)):
+            raise ValueError(f"{witness}: retained collection start/stop metadata path/hash is missing")
+        collection_path = _resolve(witness, collection_value)
+        if not collection_path.is_file() or _sha256(collection_path).casefold() != collection_hash.casefold():
+            raise ValueError(f"{witness}: retained collection metadata hash does not reconcile")
+        required.append(collection_path)
         provenance = parse_value_json.get("parser_provenance")
         join_value = provenance.get("identity_join_path") if isinstance(provenance, dict) else None
         join_hash = provenance.get("identity_join_sha256") if isinstance(provenance, dict) else None
@@ -718,7 +820,8 @@ def _verify_external_witness_attestations(
             or len(set(policy_file["runner_service_identity_sha256"])) != 4
             or set(policy_file["runner_service_identity_sha256"]) != set(value.get("runner_service_identities", []))):
         raise ValueError(f"{path}: signed identity baseline does not match the witness")
-    _validate_identity_policy(policy_file, f"{path}: signed identity baseline")
+    _validate_identity_policy(policy_file, f"{path}: signed identity baseline",
+                              require_host_baseline=not allow_fixture)
     actual_policy_hash = _sha256(policy_path)
     if (actual_policy_hash.casefold() != str(policy.get("policy_sha256", "")).casefold()
             or actual_policy_hash.casefold() != str(value.get("identity_policy_sha256", "")).casefold()
@@ -806,6 +909,24 @@ def _verify_external_witness_attestations(
         raise ValueError(f"{path}: independent raw ETL replay failed: {error}") from error
     parser_provenance = parse_file.get("parser_provenance")
     if not allow_fixture:
+        summary_value = parser_provenance.get("summary_path") if isinstance(parser_provenance, dict) else None
+        summary_hash = parser_provenance.get("summary_sha256") if isinstance(parser_provenance, dict) else None
+        if (not isinstance(summary_value, str) or not summary_value
+                or not isinstance(summary_hash, str) or not SHA256_RE.fullmatch(summary_hash)):
+            raise ValueError(f"{path}: retained tracerpt summary provenance is missing")
+        summary_path = _resolve(parse_path, summary_value)
+        if not summary_path.is_file() or _sha256(summary_path).casefold() != summary_hash.casefold():
+            raise ValueError(f"{path}: retained tracerpt summary hash does not reconcile")
+        artifacts.append(summary_path)
+        collection_value = parser_provenance.get("collection_metadata_path") if isinstance(parser_provenance, dict) else None
+        collection_hash = parser_provenance.get("collection_metadata_sha256") if isinstance(parser_provenance, dict) else None
+        if (not isinstance(collection_value, str) or collection_value.startswith("<")
+                or not isinstance(collection_hash, str) or not SHA256_RE.fullmatch(collection_hash)):
+            raise ValueError(f"{path}: retained collection start/stop metadata provenance is missing")
+        collection_path = _resolve(parse_path, collection_value)
+        if not collection_path.is_file() or _sha256(collection_path).casefold() != collection_hash.casefold():
+            raise ValueError(f"{path}: retained collection metadata hash does not reconcile")
+        artifacts.append(collection_path)
         join_value = parser_provenance.get("identity_join_path") if isinstance(parser_provenance, dict) else None
         join_hash = parser_provenance.get("identity_join_sha256") if isinstance(parser_provenance, dict) else None
         if (not isinstance(join_value, str) or not isinstance(join_hash, str)
@@ -957,7 +1078,8 @@ def _validate_private_record(record: Any, label: str, policy_file: dict[str, Any
             or not SHA256_RE.fullmatch(str(record["executable_sha256"]))
             or type(record["service_ancestry_verified"]) is not bool
             or type(record["identity_known"]) is not bool or type(record["approved_by_policy"]) is not bool
-            or not isinstance(record["service_identity_sha256"], list) or not record["service_identity_sha256"]
+            or not isinstance(record["service_identity_sha256"], list)
+            or (record["lineage_verification"] != "host_baseline_v1" and not record["service_identity_sha256"])
             or any(not SHA256_RE.fullmatch(str(item)) for item in record["service_identity_sha256"])
             or not SHA256_RE.fullmatch(str(record["identity_digest"]))):
         raise ValueError(f"{label}: private process identity is incomplete")
@@ -974,7 +1096,8 @@ def _validate_private_record(record: Any, label: str, policy_file: dict[str, Any
         raise ValueError(f"{label}: private identity digest does not reconcile")
     _validate_lineage(record, label)
     runner_services = {str(item).casefold() for item in policy_file.get("runner_service_identity_sha256", [])}
-    if not {str(item).casefold() for item in record["service_identity_sha256"]}.issubset(runner_services):
+    if record.get("lineage_verification") != "host_baseline_v1" \
+            and not {str(item).casefold() for item in record["service_identity_sha256"]}.issubset(runner_services):
         raise ValueError(f"{label}: private ancestry does not terminate at an owner-baselined runner service")
     if record["identity_known"] is not True or record["approved_by_policy"] is not True \
             or not _policy_approves_event(policy_file, record):
@@ -1297,7 +1420,8 @@ def validate_witness(
             raise ValueError(f"{path}: identity policy path is required for private reconciliation")
         policy_path = _resolve(path, policy_path_value)
         policy_file = _read_json(policy_path, "identity policy")
-        _validate_identity_policy(policy_file, f"{path}: private reconciliation policy")
+        _validate_identity_policy(policy_file, f"{path}: private reconciliation policy",
+                                  require_host_baseline=not fixture)
         if _sha256(policy_path).casefold() != str(value.get("identity_policy_sha256", "")).casefold():
             raise ValueError(f"{path}: private reconciliation policy hash does not reconcile")
         private_result = _validate_private_inventory(

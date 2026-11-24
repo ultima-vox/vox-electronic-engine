@@ -222,6 +222,15 @@ def strict_witness_fixture(directory: Path, etw_events: list[dict] | None = None
         "host": "fixture", "baseline_id": "fixture-baseline", "owner_approved": True,
         "valid_from_utc": "2026-11-21T23:59:00Z", "valid_until_utc": "2026-11-22T00:03:00Z",
         "runner_service_identity_sha256": ["1" * 64, "2" * 64, "3" * 64, "4" * 64],
+        "host_baseline_id": "fixture-host-baseline",
+        "host_baseline_processes": [{"identity_scope": "host_baseline", "non_competing": True,
+                                     "process_name": "svchost.exe", "lineage_mode": "host_baseline_v1",
+                                     "allow_dynamic": True, "executable_path": "C:\\Windows\\System32\\svchost.exe",
+                                     "executable_sha256": "6" * 64, "parent_pid": 4,
+                                     "service_identity_sha256": "7" * 64,
+                                     "parent_identity": {"process_name": "services.exe",
+                                                         "executable_path": "C:\\Windows\\System32\\services.exe",
+                                                         "executable_sha256": "8" * 64}}],
         "approved_processes": [{"pid": 1000, "process_name": "Runner.Listener.exe", "role": "runner",
                                 "lineage_mode": "runner_service_ancestry", "allow_dynamic": False,
                                 "start_time_utc": process["start_time_utc"],
@@ -686,6 +695,61 @@ def main() -> int:
             require_external_attestations=True, allow_fixture=True)
         host_manifest = EVALUATOR._verify_host_manifest(strict_manifest, strict_witness)
         assert strict["verified"] and host_manifest["verified"]
+        strict_policy = json.loads((strict_witness.parent / "identity-policy.json").read_text())
+        summary_metadata = EVALUATOR.ETL_PARSER._parse_tracerpt_summary(
+            "Log Start Time: 2026-11-22T00:00:00Z\n"
+            "Log End Time: 2026-11-22T00:02:02Z\n"
+            "Logger Name: FX-T18-KernelProcess\n"
+            "Events Lost: 0\nBuffers Lost: 0\n")
+        assert summary_metadata["coverage_start_utc"] == "2026-11-22T00:00:00.0000000Z"
+        assert summary_metadata["coverage_end_utc"] == "2026-11-22T00:02:02.0000000Z"
+        assert summary_metadata["session_name"] == "FX-T18-KernelProcess"
+        legacy_summary_metadata = EVALUATOR.ETL_PARSER._parse_tracerpt_summary(
+            "Log Start Time: 11/22/2026 12:00:00.1234567 AM\n"
+            "Log End Time: 11/22/2026 12:02:02.1234567 AM\n"
+            "Logger Name: FX-T18-KernelProcess\n"
+            "Events Lost: 0\nLog Buffers Lost: 0\n")
+        assert legacy_summary_metadata["coverage_start_utc"].endswith(".1234567Z")
+        collection_etl = directory / "owner-process.etl"
+        collection_etl.write_bytes(b"synthetic retained ETL name binding")
+        collection_metadata_path = directory / "collection-metadata.json"
+        collection_metadata_path.write_text(json.dumps({
+            "format": EVALUATOR.ETL_PARSER.COLLECTION_METADATA_FORMAT,
+            "provider": EVALUATOR.ETL_PARSER.PROVIDER,
+            "session_name": "FX-T18-KernelProcess",
+            "coverage_start_utc": "2026-11-22T00:00:00Z",
+            "coverage_end_utc": "2026-11-22T00:02:02Z",
+            "etl_path": str(collection_etl),
+        }), encoding="utf-8")
+        collection_summary = EVALUATOR.ETL_PARSER._parse_tracerpt_summary(
+            "Total Events Lost 0\nTotal Buffers Lost 0\n")
+        collection_result = EVALUATOR.ETL_PARSER._read_collection_metadata(
+            collection_metadata_path, collection_etl, collection_summary)
+        assert collection_result["session_name"] == "FX-T18-KernelProcess"
+        assert collection_result["coverage_end_utc"] == "2026-11-22T00:02:02.0000000Z"
+        names.append("collection_metadata_reconciliation")
+        tracerpt_xml = directory / "tracerpt-kernel-process-shape.xml"
+        tracerpt_xml.write_text(
+            """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
+  <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:01.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ParentProcessID\">2620</Data><Data Name=\"ImageName\">\\\\Device\\\\HarddiskVolume2\\\\Windows\\\\System32\\\\cmd.exe</Data></EventData></Event>
+  <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:02.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ExitTime\">2026-11-22T00:00:02.1234567Z</Data><Data Name=\"ExitCode\">0</Data></EventData></Event>
+</Events>""",
+            encoding="utf-8")
+        tracerpt_events, tracerpt_metadata = EVALUATOR.ETL_PARSER._parse_xml(
+            tracerpt_xml,
+            "Start Time: 2026-11-22T00:00:00Z\n"
+            "End Time: 2026-11-22T00:01:00Z\n"
+            "Logger Name: FX-T18-KernelProcess\n"
+            "Total Events Lost 0\nTotal Buffers Lost 0\n")
+        assert len(tracerpt_events) == 2
+        assert tracerpt_events[0]["process_name"] == "cmd.exe"
+        assert tracerpt_events[1]["parent_pid"] == 2620
+        assert tracerpt_metadata["lost_events"] == 0 and tracerpt_metadata["buffer_loss_events"] == 0
+        names.append("tracerpt_kernel_process_start_stop_shape")
+        fixture_parse = json.loads((strict_witness.parent / "collector-parse.json").read_text())
+        assert "--identity-join" not in fixture_parse["parser_provenance"]["command_argv"]
+        assert "-summary" not in fixture_parse["parser_provenance"]["command_argv"]
+        names.append("tracerpt_summary_metadata_and_wrapper_argv")
         precise_etw = [
             approved_fixture_event(base, "start", "2026-11-22T00:00:30.1234567Z"),
             approved_fixture_event(base, "stop", "2026-11-22T00:00:31.1234567Z"),
@@ -757,6 +821,44 @@ def main() -> int:
         EVALUATOR._validate_identity_policy(lineage_policy, "authorized-child-lineage")
         assert EVALUATOR._policy_approves_event(lineage_policy, child)
         names.append("authorized_non_service_child_real_runner_chain")
+        host_start = "2026-11-22T00:00:20Z"
+        host_root = {"pid": 2000, "process_name": "svchost.exe", "parent_pid": 4,
+                     "start_time_utc": host_start, "executable_path": "C:\\Windows\\System32\\svchost.exe",
+                     "executable_sha256": "6" * 64, "service_identity_sha256": ["7" * 64]}
+        host_root["identity_digest"] = EVALUATOR._identity_digest(host_root)
+        host_parent = {"pid": 4, "process_name": "services.exe", "parent_pid": 0,
+                       "start_time_utc": "2026-11-22T00:00:00Z",
+                       "executable_path": "C:\\Windows\\System32\\services.exe",
+                       "executable_sha256": "8" * 64, "service_identity_sha256": []}
+        host_parent["identity_digest"] = EVALUATOR._identity_digest(host_parent)
+        host_event = etw_event(event="start", pid=2000, process_name="svchost.exe", executable_hash="6" * 64,
+                               start_time=host_start, timestamp="2026-11-22T00:00:30Z",
+                               service_hash="7" * 64, executable_path="C:\\Windows\\System32\\svchost.exe",
+                               parent_pid=4, lineage=[host_root, host_parent])
+        host_event["lineage_verification"] = "host_baseline_v1"
+        assert EVALUATOR._policy_approves_event(strict_policy, host_event)
+        none_policy = json.loads(json.dumps(strict_policy))
+        none_policy["host_baseline_processes"] = [{
+            "identity_scope": "host_baseline", "non_competing": True,
+            "process_name": "services.exe", "lineage_mode": "host_baseline_v1",
+            "allow_dynamic": True, "executable_path": "C:\\Windows\\System32\\services.exe",
+            "executable_sha256": "8" * 64, "parent_pid": 0,
+            "service_identity_sha256": "none",
+        }]
+        none_event = {
+            "event": "start", "timestamp_utc": "2026-11-22T00:00:30Z", "pid": 4,
+            "process_name": "services.exe", "parent_pid": 0,
+            "start_time_utc": "2026-11-22T00:00:00Z",
+            "executable_path": "C:\\Windows\\System32\\services.exe",
+            "executable_sha256": "8" * 64, "service_identity_sha256": [],
+            "service_ancestry_verified": True, "lineage_verification": "host_baseline_v1",
+            "service_ancestry": [host_parent], "identity_known": True,
+            "approved_by_policy": True,
+        }
+        none_event["identity_digest"] = EVALUATOR._identity_digest(none_event)
+        EVALUATOR._validate_identity_policy(none_policy, "owner-baselined-no-service")
+        assert EVALUATOR._policy_approves_event(none_policy, none_event)
+        names.append("owner_baselined_non_runner_host_process")
         forged_child = json.loads(json.dumps(child))
         forged_child["service_ancestry"][1]["executable_path"] = "C:\\fixture\\forged-services.exe"
         try:

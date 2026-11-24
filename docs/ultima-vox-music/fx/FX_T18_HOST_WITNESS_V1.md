@@ -80,11 +80,13 @@ hashes and artifact hashes:
   source, executable, lease and policy. Command-line and lease tokens are
   literal `<redacted>` values;
 - `event_trace` distinguishes the WMI observation stream from the independently
-  parsed ETW loss source and records its interval, collector hash, parser
-  receipt/hash, identity-join provenance, received count and loss counters; the
-  parser receipt must reconcile its provider, collector hash, counters and
+  parsed ETW loss source and records its interval, collector hash, retained
+  `tracerpt -summary` path/hash, retained collection metadata path/hash, parser
+  receipt/hash, identity-join provenance,
+  received count and loss counters; the parser receipt must reconcile its
+  provider, collector hash, summary-derived coverage/session, counters and
   complete process-event list to the signed loss payload, and the host manifest
-  must cover the retained identity join;
+  must cover the retained summary and identity join;
 - `attestation_proofs` records each payload/signature path and SHA-256 plus
   the pinned signer thumbprint and method;
 - `execution_binding.runner_receipts` lists all three trusted runner-receipt
@@ -165,9 +167,21 @@ exact image SHA-256, parent PID, service identities and its own digest. A
 non-service CTest/native child is approved only when its signed policy entry
 also pins its exact path/hash and exact parent image path/hash; a PID-only
 wildcard is not a child authorization. The four direct HAMUNAPTRA runner
-service identities remain the only permitted ancestry roots. A forged parent
-node, discontinuous PID chain, changed parent image/hash, or ancestry root
-that does not match the observed process blocks.
+service identities remain the only permitted roots for runner-job processes.
+
+Full-host enumeration also has an explicit owner-signed `host_baseline_id` and
+`host_baseline_processes` inventory. A normal Windows service or protected root
+that is not part of the runner job is not silently treated as an unknown
+competitor: it may be approved only as `identity_scope=host_baseline` with
+`non_competing=true`, exact executable path/hash, the complete exact service
+identity set (or an explicit `service_identity_sha256=none` for a hashable root
+with no service), `lineage_mode=host_baseline_v1`, and an exact parent
+image/path/hash when its parent is dynamic. Deny regexes still have precedence,
+and the owner must
+baseline every observed host process; an omitted host-baseline entry remains a
+block. A forged parent node, discontinuous PID chain, changed parent
+image/hash, runner process rooted outside the four runner services, or host
+process absent from the signed baseline blocks.
 
 ## Independent raw ETL parser and replay
 
@@ -176,15 +190,23 @@ production toolchain is pinned to Microsoft Windows SDK `tracerpt.exe`
 `10.0.26100.1`, invoked without a shell as:
 
 ```
-tracerpt.exe <raw-etl> -o <decoded-xml> -of XML -lr -y
+tracerpt.exe <raw-etl> -o <decoded-xml> -of XML -lr -summary <tracerpt-summary> -y
 ```
 
 The parser consumes `Microsoft-Windows-Kernel-Process` process event IDs 1
-(ProcessStart) and 2 (ProcessStop). Loss counters come from the same
-`tracerpt -lr` summary (`Events Lost` and `Buffers Lost`), not from the JSON
-claim. A receipt records the raw ETL SHA-256, parser/toolchain name and
-version, executable path, exact CLI template, event source, counter source,
-decoded core/event digests, identity-join artifact hash, and replay command.
+(ProcessStart) and 2 (ProcessStop). A stop XML record may omit image and parent
+fields on some provider builds; the parser reconciles those fields to the
+matching retained start record and blocks an unmatched stop rather than
+inventing identity. `-lr` means less-restrictive decoding;
+loss counters and trace metadata come from the separately requested retained
+`tracerpt -summary` artifact (`Events Lost`, `Buffers Lost`, `Log Start Time`,
+`Log End Time`, and `Logger Name`/session), not stdout/stderr or a JSON claim.
+A receipt records the raw ETL SHA-256, summary path/SHA-256, retained
+`VOX_FX_T18_ETW_COLLECTION_METADATA_V1` path/SHA-256, parser/toolchain name
+and version, executable path, exact tracerpt argv, derived coverage/session
+source, event source, counter source, decoded digests, identity-join artifact
+hash, and replay command. Production caller arguments cannot supply coverage or
+session metadata.
 The production parser requires an owner-private
 `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` join for the path/hash/service/ancestry facts
 that are not historical fields in the raw Kernel-Process event. `verify_receipt`
@@ -200,7 +222,8 @@ The owner replay is:
 ```
 python evidence/parse-fx-t18-etl.py --etl D:\\owner-evidence\\fx-t18\\process.etl \\
   --output D:\\owner-evidence\\fx-t18\\process-parse.json \\
-  --coverage-start <UTC> --coverage-end <UTC> --session-name FX-T18-KernelProcess \\
+  --summary-output D:\\owner-evidence\\fx-t18\\process-tracerpt-summary.txt \\
+  --collection-metadata D:\\owner-evidence\\fx-t18\\etw-collection-metadata.json \\
   --tracerpt C:\\Windows\\System32\\tracerpt.exe \\
   --identity-join D:\\owner-evidence\\fx-t18\\etw-identity-join.json
 python evidence/parse-fx-t18-etl.py --verify-receipt \\

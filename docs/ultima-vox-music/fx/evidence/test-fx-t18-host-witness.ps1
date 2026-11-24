@@ -42,6 +42,8 @@ if ($source -match '\$env:FX_T18_LEASE_' -or
     $source -notmatch 'Get-CanonicalSampleDigest' -or
     $source -notmatch 'full_host_cim_hash_duration_ms' -or
     $source -notmatch 'full_host_cim_hash_cadence_met' -or
+    $source -notmatch 'host_baseline_processes' -or
+    $source -notmatch 'host_baseline_v1' -or
     $source -notmatch 'RevocationMode' -or
     $source -notmatch 'VOX-FX-T18-ProcessStart' -or
     $source -notmatch 'VOX_FX_T18_HOST_OBSERVATION_V1' -or
@@ -166,6 +168,8 @@ try {
         valid_until_utc = $now.AddHours(2).ToString('o')
         owner_approved = $true
         runner_service_identity_sha256 = @('1' * 64, '2' * 64, '3' * 64, '4' * 64)
+        host_baseline_id = 'fixture-host-baseline'
+        host_baseline_processes = @([ordered]@{ identity_scope = 'host_baseline'; non_competing = $true; process_name = 'svchost.exe'; lineage_mode = 'host_baseline_v1'; allow_dynamic = $true; executable_path = 'C:\Windows\System32\svchost.exe'; executable_sha256 = ('6' * 64); parent_pid = 4; service_identity_sha256 = ('7' * 64); parent_identity = [ordered]@{ process_name = 'services.exe'; executable_path = 'C:\Windows\System32\services.exe'; executable_sha256 = ('8' * 64) } })
         approved_processes = @([ordered]@{ pid = 1000; process_name = 'Runner.Listener.exe'; role = 'runner'; allow_dynamic = $false; start_time_utc = $now.AddMinutes(-5).ToString('o'); executable_path = 'C:\HAMUNAPTRA\Runner.Listener.exe'; executable_sha256 = ('5' * 64); parent_pid = 4; service_identity_sha256 = ('1' * 64) })
         denied_process_name_regex = @('^(devenv|msbuild|cmake|ctest|ninja|python|cubase|reaper)')
     }

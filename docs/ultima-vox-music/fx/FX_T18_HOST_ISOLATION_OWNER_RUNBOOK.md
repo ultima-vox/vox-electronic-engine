@@ -46,8 +46,16 @@ field such as `owner_approved=true` or `verified=true` is not proof.
 
 The owner stores the policy and lease payloads plus detached signatures in
 write-restricted storage. The policy must contain exact path/hash/parent/service
-identity rules and deny precedence. The lease must bind the host, lease ID and
-policy SHA-256 and remain valid through the entire observation interval.
+identity rules and deny precedence. Because Capture inventories the whole host,
+it must also contain an owner-signed `host_baseline_id` and a complete
+`host_baseline_processes` list. Normal Windows services that are not runner
+job processes belong there only with `identity_scope=host_baseline`,
+`non_competing=true`, `lineage_mode=host_baseline_v1`, exact image/path hash,
+the complete exact service-identity set for that process (or explicit `none`
+for a hashable root with no service), and an exact parent image/path/hash when
+dynamic. A missing baseline entry is an evidence block; it is not ignored as a
+normal OS process. The lease must bind the host, lease ID and policy SHA-256
+and remain valid through the entire observation interval.
 
 Do **not** pre-sign an ETW loss summary or execution binding with future
 completion times. Those artifacts cannot truthfully exist until the observer
@@ -88,29 +96,71 @@ receipt into a pass.
 After the observation exits, the owner independently parses the retained ETW
 collector. The pinned toolchain is Microsoft Windows SDK `tracerpt.exe`
 `10.0.26100.1`; record and verify the actual executable path and file version.
-The exact decoder command is:
+Before parsing, collect the ETW session with an owner-retained start/stop
+record. Capture does not start or control this session. Use an elevated Windows
+PowerShell 5.1 prompt and a unique session name; the kernel-process keyword is
+selected explicitly and the session metadata is retained beside the ETL:
+
+```powershell
+$session = 'VOX-FX-T18-KernelProcess-' + [guid]::NewGuid().ToString('N')
+$etl = 'D:\owner-evidence\fx-t18\process.etl'
+$sessionStart = 'D:\owner-evidence\fx-t18\etw-session-start.txt'
+$sessionStop = 'D:\owner-evidence\fx-t18\etw-session-stop.txt'
+$collectionMetadata = 'D:\owner-evidence\fx-t18\etw-collection-metadata.json'
+$sessionStarted = $false
+$startUtc = $null
+try {
+  logman create trace $session -o $etl -f bincirc -max 1024 -p '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}' 0x10 5 -ets
+  $sessionStarted = $true
+  $startUtc = [DateTime]::UtcNow.ToString('o')
+  [ordered]@{ format = 'VOX_FX_T18_ETW_COLLECTION_METADATA_V1'; provider = 'Microsoft-Windows-Kernel-Process/ETW'; session_name = $session; coverage_start_utc = $startUtc; coverage_end_utc = '<pending-stop>'; etl_path = $etl; start_record_path = $sessionStart; stop_record_path = $sessionStop } |
+    ConvertTo-Json | Set-Content -LiteralPath $collectionMetadata -Encoding UTF8
+  logman query $session -ets | Tee-Object -FilePath $sessionStart
+  # Start Capture immediately after the session-start record, then run the
+  # separately authorized routed/authored/typical job without changing services.
+  # After the post interval and runner receipts are immutable, stop in this
+  # same owner-controlled try/finally scope.
+  Read-Host 'Owner: after Capture and the post interval are complete, press Enter to stop ETW'
+}
+finally {
+  if ($sessionStarted) {
+    $stopUtc = [DateTime]::UtcNow.ToString('o')
+    logman stop $session -ets | Tee-Object -FilePath $sessionStop
+    logman query $session -ets | Out-File -FilePath 'D:\owner-evidence\fx-t18\etw-session-after-stop.txt' -Encoding utf8
+    [ordered]@{ format = 'VOX_FX_T18_ETW_COLLECTION_METADATA_V1'; provider = 'Microsoft-Windows-Kernel-Process/ETW'; session_name = $session; coverage_start_utc = $startUtc; coverage_end_utc = $stopUtc; etl_path = $etl; start_record_path = $sessionStart; stop_record_path = $sessionStop } |
+      ConvertTo-Json | Set-Content -LiteralPath $collectionMetadata -Encoding UTF8
+    logman delete $session -ets
+  }
+}
+```
+
+The exact decoder command requests a separate `tracerpt -summary` artifact;
+`-lr` is the less-restrictive decoder option and is **not** a loss report:
 
 ```powershell
 python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
   --etl 'D:\owner-evidence\fx-t18\process.etl' `
   --output 'D:\owner-evidence\fx-t18\process-parse.json' `
-  --coverage-start '<UTC-COVERAGE-START>' `
-  --coverage-end '<UTC-COVERAGE-END>' `
-  --session-name 'FX-T18-KernelProcess' `
+  --summary-output 'D:\owner-evidence\fx-t18\process-tracerpt-summary.txt' `
+  --collection-metadata 'D:\owner-evidence\fx-t18\etw-collection-metadata.json' `
   --tracerpt 'C:\Windows\System32\tracerpt.exe' `
   --identity-join 'D:\owner-evidence\fx-t18\etw-identity-join.json'
 python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
   --verify-receipt --etl 'D:\owner-evidence\fx-t18\process.etl' `
-  --receipt 'D:\owner-evidence\fx-t18\process-parse.json' `
-  --tracerpt 'C:\Windows\System32\tracerpt.exe'
+  --receipt 'D:\owner-evidence\fx-t18\process-parse.json'
 ```
 
-The parser source records the event source (Kernel-Process IDs 1/2), loss
-counter source (`tracerpt -lr` Events Lost/Buffers Lost), raw ETL SHA-256,
-toolchain/version, exact CLI, decoded core/event digests, identity-join hash,
-and replay command. The parse receipt must state the actual provider/session,
-collector SHA-256, coverage interval, received/lost/buffer counters and the
-complete parsed process-event list. It must include PID/start time, exact
+The parser source records the event source (Kernel-Process IDs 1/2), the
+explicit `tracerpt -summary` loss-counter source, summary path/hash, raw ETL
+SHA-256, toolchain/version, exact tracerpt argv, independently derived
+`Log Start Time`/`Log End Time` coverage when tracerpt emits those fields,
+reconciles the retained logman start/stop metadata for the final interval and
+session, and records decoded core/event digests, identity-join hash, and replay
+command. Caller-supplied coverage/session arguments are fixture-only and are
+not used for production.
+The parse receipt must state the actual provider/session, collector SHA-256,
+summary SHA-256, derived coverage interval, received/lost/buffer counters and
+the complete parsed process-event list. It must include PID/start time, exact
 executable path/hash, parent and service context for every event after the
 owner identity join.
 
@@ -163,8 +213,9 @@ manifest covering at least:
 - immutable blocked observation and final witness plus owner-private process inventory;
 - identity policy, lease, ETW loss and execution-binding payloads, each bound to
   the observation hash where issued after capture;
-- all four detached signatures, the raw ETL collector artifact, independent
-  ETW parse receipt and the retained ETW identity-join artifact;
+- all four detached signatures, the raw ETL collector artifact, retained
+  `tracerpt -summary` artifact, retained logman collection start/stop metadata,
+  independent ETW parse receipt and the retained ETW identity-join artifact;
 - each routed/authored/typical runner receipt, report, CTest raw output, JUnit,
   inventory, post-test outcome, selected executable and audit output.
 

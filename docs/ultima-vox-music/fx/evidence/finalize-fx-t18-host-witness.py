@@ -177,6 +177,67 @@ def finalize(
     if not parse_path.is_absolute():
         parse_path = (event_loss_path.parent / parse_path).resolve()
     parse_receipt = _read_json(parse_path, "ETW parse receipt")
+    parser_provenance = parse_receipt.get("parser_provenance")
+    summary_value = parser_provenance.get("summary_path") if isinstance(parser_provenance, dict) else None
+    summary_hash = parser_provenance.get("summary_sha256") if isinstance(parser_provenance, dict) else None
+    collection_value = parser_provenance.get("collection_metadata_path") if isinstance(parser_provenance, dict) else None
+    collection_hash = parser_provenance.get("collection_metadata_sha256") if isinstance(parser_provenance, dict) else None
+    summary_metadata: dict[str, Any] | None = None
+    collection_metadata: dict[str, Any] | None = None
+    if not allow_fixture and (not isinstance(summary_value, str) or not summary_value
+                              or not isinstance(summary_hash, str) or not SHA256_RE.fullmatch(summary_hash)):
+        raise ValueError("ETW parse receipt does not name a retained tracerpt summary artifact")
+    if not allow_fixture and (not isinstance(collection_value, str) or not collection_value
+                              or not isinstance(collection_hash, str) or not SHA256_RE.fullmatch(collection_hash)):
+        raise ValueError("ETW parse receipt does not name retained collection start/stop metadata")
+    if isinstance(summary_value, str) and summary_value:
+        summary_path = Path(summary_value)
+        if not summary_path.is_absolute():
+            summary_path = (parse_path.parent / summary_path).resolve()
+        if not allow_fixture:
+            if not summary_path.is_file() or _sha256(summary_path).casefold() != str(summary_hash).casefold():
+                raise ValueError("retained tracerpt summary artifact is missing or hash-mismatched")
+            try:
+                summary_metadata = EVALUATOR.ETL_PARSER._parse_tracerpt_summary(
+                    EVALUATOR.ETL_PARSER._read_summary_text(summary_path)
+                )
+            except (OSError, ValueError) as error:
+                raise ValueError("retained tracerpt summary artifact is not parseable") from error
+            for field in ("lost_events", "buffer_loss_events"):
+                if summary_metadata[field] != parse_receipt.get(field):
+                    raise ValueError("retained tracerpt summary counters do not reconcile to the parse receipt")
+            for field in ("coverage_start_utc", "coverage_end_utc", "session_name"):
+                if summary_metadata[field] is not None and summary_metadata[field] != parse_receipt.get(field):
+                    raise ValueError("retained tracerpt summary metadata does not reconcile to the parse receipt")
+        summary_path_text = _absolute(summary_path)
+    else:
+        summary_path_text = "<fixture-summary>"
+    if isinstance(collection_value, str) and collection_value:
+        collection_path = Path(collection_value)
+        if not collection_path.is_absolute():
+            collection_path = (parse_path.parent / collection_path).resolve()
+        if not allow_fixture and (not collection_path.is_file()
+                                  or _sha256(collection_path).casefold() != str(collection_hash).casefold()):
+            raise ValueError("retained collection start/stop metadata is missing or hash-mismatched")
+        if not allow_fixture:
+            raw_value = parse_receipt.get("collector_artifact_path")
+            if not isinstance(raw_value, str) or not raw_value:
+                raise ValueError("ETW parse receipt does not name the retained raw ETL")
+            raw_path = Path(raw_value)
+            if not raw_path.is_absolute():
+                raw_path = (parse_path.parent / raw_path).resolve()
+            try:
+                collection_metadata = EVALUATOR.ETL_PARSER._read_collection_metadata(
+                    collection_path, raw_path, summary_metadata or {}
+                )
+            except (OSError, ValueError) as error:
+                raise ValueError("retained collection metadata is not parseable or does not reconcile") from error
+            for field in ("coverage_start_utc", "coverage_end_utc", "session_name"):
+                if collection_metadata[field] != parse_receipt.get(field):
+                    raise ValueError("retained collection metadata does not reconcile to the parse receipt")
+        collection_path_text = _absolute(collection_path)
+    else:
+        collection_path_text = "<fixture-collection-metadata>"
     observation_hash = _sha256(observation_path)
     if loss.get("observation_sha256") != observation_hash or binding.get("observation_sha256") != observation_hash:
         raise ValueError("post-capture signed proofs are not bound to the immutable observation")
@@ -214,8 +275,10 @@ def finalize(
             "format": policy.get("format"), "policy_id": policy.get("policy_id"),
             "baseline_id": policy.get("baseline_id"), "policy_sha256": policy_hash,
             "runner_service_identity_sha256": list(policy.get("runner_service_identity_sha256", [])),
+            "host_baseline_id": policy.get("host_baseline_id"),
             "runner_service_count": len(policy.get("runner_service_identity_sha256", [])),
             "approved_process_count": len(policy.get("approved_processes", [])),
+            "host_baseline_process_count": len(policy.get("host_baseline_processes", [])),
             "policy_decision_method": "owner_signed_name_path_hash_parent_service_and_pid_start_reconciliation",
         },
         "identity_policy_path": _absolute(policy_path),
@@ -242,6 +305,10 @@ def finalize(
             "collector_parse_method": loss.get("collector_parse_method"),
             "collector_parse_receipt_path": _absolute((event_loss_path.parent / str(loss.get("collector_parse_receipt_path"))).resolve()) if not Path(str(loss.get("collector_parse_receipt_path"))).is_absolute() else str(Path(str(loss.get("collector_parse_receipt_path"))).resolve()),
             "collector_parse_receipt_sha256": loss.get("collector_parse_receipt_sha256"),
+            "tracerpt_summary_path": summary_path_text,
+            "tracerpt_summary_sha256": summary_hash if isinstance(summary_hash, str) else "<fixture-summary>",
+            "collection_metadata_path": collection_path_text,
+            "collection_metadata_sha256": collection_hash if isinstance(collection_hash, str) else "<fixture-collection-metadata>",
             "parser_provenance": parse_receipt.get("parser_provenance"),
             "correlation_max_skew_seconds": EVALUATOR.MAX_EVENT_CORRELATION_SKEW_SECONDS,
             "correlation_identity_fields": ["event", "pid", "process_name", "start_time_utc", "identity_digest", "executable_path", "executable_sha256", "parent_pid", "service_identity_sha256"],

@@ -196,6 +196,8 @@ function New-SafePolicy([string]$Format, [string]$PolicyId) {
         valid_from_utc = '<missing>'
         valid_until_utc = '<missing>'
         runner_service_identity_sha256 = @()
+        host_baseline_id = '<missing>'
+        host_baseline_processes = @()
         approved_processes = @()
         denied_process_name_regex = @()
         owner_approved = $false
@@ -273,6 +275,14 @@ function New-OfflinePolicy {
         valid_until_utc = '2026-11-22T03:00:00.0000000Z'
         owner_approved = $true
         runner_service_identity_sha256 = @('1' * 64, '2' * 64, '3' * 64, '4' * 64)
+        host_baseline_id = 'offline-fixture-host-baseline'
+        host_baseline_processes = @([ordered]@{
+            process_name = 'svchost.exe'; identity_scope = 'host_baseline'; non_competing = $true
+            allow_dynamic = $true; lineage_mode = 'host_baseline_v1'
+            executable_path = 'C:\Windows\System32\svchost.exe'; executable_sha256 = ('6' * 64)
+            parent_pid = 4; service_identity_sha256 = ('7' * 64)
+            parent_identity = [ordered]@{ process_name = 'services.exe'; executable_path = 'C:\Windows\System32\services.exe'; executable_sha256 = ('8' * 64) }
+        })
         approved_processes = @([ordered]@{
             process_name = 'Runner.Listener.exe'; role = 'runner'; allow_dynamic = $true
             executable_path = 'C:\HAMUNAPTRA\Runner.Listener.exe'; executable_sha256 = ('5' * 64)
@@ -299,6 +309,8 @@ function Get-IdentityPolicy {
             valid_from_utc = [string](Get-OptionalProperty $raw 'valid_from_utc' '<missing>')
             valid_until_utc = [string](Get-OptionalProperty $raw 'valid_until_utc' '<missing>')
             runner_service_identity_sha256 = @(Get-OptionalProperty $raw 'runner_service_identity_sha256' @())
+            host_baseline_id = [string](Get-OptionalProperty $raw 'host_baseline_id' '<missing>')
+            host_baseline_processes = @(Get-OptionalProperty $raw 'host_baseline_processes' @())
             approved_processes = @(Get-OptionalProperty $raw 'approved_processes' @())
             denied_process_name_regex = @(Get-OptionalProperty $raw 'denied_process_name_regex' @())
             owner_approved = [bool](Get-OptionalProperty $raw 'owner_approved' $false)
@@ -309,31 +321,47 @@ function Get-IdentityPolicy {
 function Test-IdentityPolicyShape([object]$Policy) {
     try {
         $runnerServices = @($Policy.runner_service_identity_sha256)
+        $hostEntries = @($Policy.host_baseline_processes)
         if ($null -eq $Policy -or [string]$Policy.format -ne 'VOX_FX_T18_IDENTITY_POLICY_V1' -or
             -not [string]$Policy.host -or [string]$Policy.host -eq '<missing>' -or
             -not [string]$Policy.baseline_id -or [string]$Policy.baseline_id -eq '<missing>' -or
             $runnerServices.Count -ne 4 -or @($runnerServices | Sort-Object -Unique).Count -ne 4 -or
             @($runnerServices | Where-Object { [string]$_ -notmatch '^[0-9a-fA-F]{64}$' }).Count -gt 0 -or
-            @($Policy.approved_processes).Count -eq 0 -or @($Policy.denied_process_name_regex).Count -eq 0) { return $false }
-        foreach ($approved in @($Policy.approved_processes)) {
+            @($Policy.approved_processes).Count -eq 0 -or $hostEntries.Count -eq 0 -or
+            [string]$Policy.host_baseline_id -eq '<missing>' -or @($Policy.denied_process_name_regex).Count -eq 0) { return $false }
+        $allEntries = @($Policy.approved_processes) + @($hostEntries)
+        foreach ($approved in $allEntries) {
+            $isHost = [string](Get-OptionalProperty $approved 'identity_scope' 'runner') -eq 'host_baseline'
             $name = [string](Get-OptionalProperty $approved 'process_name' '')
             $nameRegex = [string](Get-OptionalProperty $approved 'process_name_regex' '')
             if ((-not $name -and -not $nameRegex) -or ($name -and $nameRegex)) { return $false }
             $path = [string](Get-OptionalProperty $approved 'executable_path' '')
             $hash = [string](Get-OptionalProperty $approved 'executable_sha256' '')
-            $serviceHash = [string](Get-OptionalProperty $approved 'service_identity_sha256' '')
             $parentPid = Get-OptionalProperty $approved 'parent_pid' $null
             $allowDynamic = Get-OptionalProperty $approved 'allow_dynamic' $null
             $exactPid = Get-OptionalProperty $approved 'pid' $null
             $exactStart = Get-OptionalProperty $approved 'start_time_utc' $null
             $hasPid = $null -ne $exactPid
             $hasStart = $null -ne $exactStart
-            $lineageMode = [string](Get-OptionalProperty $approved 'lineage_mode' 'runner_service_ancestry')
+            $lineageMode = [string](Get-OptionalProperty $approved 'lineage_mode' $(if ($isHost) { 'host_baseline_v1' } else { 'runner_service_ancestry' }))
             $parentRule = Get-OptionalProperty $approved 'parent_identity' $null
+            $serviceValue = Get-OptionalProperty $approved 'service_identity_sha256' $null
+            $serviceHashes = @($serviceValue)
+            if ([string]$serviceValue -eq 'none') { $serviceHashes = @() }
+            $serviceValid = if ($isHost) {
+                ([string]$serviceValue -eq 'none') -or ($serviceHashes.Count -gt 0 -and
+                    @($serviceHashes | Where-Object { [string]$_ -notmatch '^[0-9a-fA-F]{64}$' }).Count -eq 0 -and
+                    @($serviceHashes | Sort-Object -Unique).Count -eq $serviceHashes.Count)
+            } else {
+                $serviceHashes.Count -eq 1 -and [string]$serviceHashes[0] -match '^[0-9a-fA-F]{64}$' -and $runnerServices -contains [string]$serviceHashes[0]
+            }
             if (-not $path -or $path.StartsWith('<') -or $path.Contains('*') -or $path.Contains('?') -or
-                $hash -notmatch '^[0-9a-fA-F]{64}$' -or $serviceHash -notmatch '^[0-9a-fA-F]{64}$' -or
-                $runnerServices -notcontains $serviceHash -or $null -eq $parentPid -or [int]$parentPid -lt 0 -or
-                $allowDynamic -isnot [bool] -or $hasPid -ne $hasStart -or $lineageMode -notin @('runner_service_ancestry', 'signed_job_lineage') -or
+                $hash -notmatch '^[0-9a-fA-F]{64}$' -or -not $serviceValid -or
+                $allowDynamic -isnot [bool] -or $hasPid -ne $hasStart -or
+                ($isHost -and ([bool](Get-OptionalProperty $approved 'non_competing' $false) -ne $true -or $lineageMode -ne 'host_baseline_v1')) -or
+                ((-not $isHost) -and $lineageMode -notin @('runner_service_ancestry', 'signed_job_lineage')) -or
+                ((-not $isHost) -and ($null -eq $parentPid -or [int]$parentPid -lt 0)) -or
+                ($isHost -and $null -ne $parentPid -and [int]$parentPid -lt 0) -or
                 ($hasPid -and ([int]$exactPid -lt 1)) -or ((-not $hasPid) -and $allowDynamic -ne $true)) { return $false }
             if ($hasStart) { try { Get-UtcTicks ([string]$exactStart) | Out-Null } catch { return $false } }
             if ($lineageMode -eq 'signed_job_lineage') {
@@ -350,13 +378,14 @@ function Test-IdentityPolicyShape([object]$Policy) {
                 if ($null -ne $parentRuleStart) {
                     try { Get-UtcTicks ([string]$parentRuleStart) | Out-Null } catch { $parentStartInvalid = $true }
                 }
-                if (-not ($parentRule -is [object]) -or
-                    -not [string](Get-OptionalProperty $parentRule 'process_name' '') -or
+                if (-not [string](Get-OptionalProperty $parentRule 'process_name' '') -or
                     -not $parentPath -or $parentPath.StartsWith('<') -or $parentPath.Contains('*') -or $parentPath.Contains('?') -or
                     $parentHash -notmatch '^[0-9a-fA-F]{64}$' -or
                     ($null -ne $parentRulePid -and ([int]$parentRulePid -lt 1)) -or $parentStartInvalid) { return $false }
-            } elseif (-not $hasPid -and $lineageMode -in @('runner_service_ancestry', 'signed_job_lineage') -and
+            } elseif ((-not $isHost) -and -not $hasPid -and
                       [string](Get-OptionalProperty $approved 'role' '') -notin @('runner', 'runner_service', 'direct_service')) {
+                return $false
+            } elseif ($isHost -and -not $hasPid -and $null -ne $parentPid -and [int]$parentPid -ne 0 -and $null -eq $parentRule) {
                 return $false
             }
         }
@@ -364,7 +393,7 @@ function Test-IdentityPolicyShape([object]$Policy) {
             if ([string]::IsNullOrWhiteSpace([string]$deniedRegex)) { return $false }
             try { [regex]::new([string]$deniedRegex).Dispose() } catch { return $false }
         }
-        foreach ($approved in @($Policy.approved_processes)) {
+        foreach ($approved in $allEntries) {
             $name = [string](Get-OptionalProperty $approved 'process_name' '')
             $nameRegex = [string](Get-OptionalProperty $approved 'process_name_regex' '')
             if ($nameRegex) { try { [regex]::new($nameRegex).Dispose() } catch { return $false } }
@@ -425,7 +454,7 @@ function Test-ProcessAgainstPolicy([object]$Record) {
     } catch { $result.known = $false; $result.reason = 'UNKNOWN_PROCESS_IDENTITY' }
     if ($Record.start_time_utc -eq '<unknown>' -or $Record.executable_sha256 -eq '<unknown>' -or
         $Record.service_ancestry_verified -ne $true) {
-        $result.known = $false; $result.reason = if ($Record.service_ancestry_verified -ne $true) { 'UNVERIFIED_RUNNER_SERVICE_ANCESTRY' } else { 'UNKNOWN_PROCESS_IDENTITY' }
+        $result.known = $false; $result.reason = if ($Record.service_ancestry_verified -ne $true) { 'UNVERIFIED_PROCESS_ANCESTRY' } else { 'UNKNOWN_PROCESS_IDENTITY' }
     }
     if ($script:SeenPidIdentities.ContainsKey($pidKey)) {
         $previous = $script:SeenPidIdentities[$pidKey]
@@ -444,7 +473,12 @@ function Test-ProcessAgainstPolicy([object]$Record) {
             return $result
         }
     }
-    foreach ($approved in @($script:IdentityPolicy.approved_processes)) {
+    $policyEntries = @($script:IdentityPolicy.approved_processes) + @($script:IdentityPolicy.host_baseline_processes)
+    foreach ($approved in $policyEntries) {
+        $scope = [string](Get-OptionalProperty $approved 'identity_scope' 'runner')
+        $expectedLineage = if ($scope -eq 'host_baseline') { 'host_baseline_v1' } else { $null }
+        if ($expectedLineage -and [string]$Record.lineage_verification -ne $expectedLineage) { continue }
+        if (-not $expectedLineage -and [string]$Record.lineage_verification -notin @('runner_service_ancestry_v1', 'signed_job_lineage_v1')) { continue }
         $name = [string](Get-OptionalProperty $approved 'process_name' '')
         $nameRegex = [string](Get-OptionalProperty $approved 'process_name_regex' '')
         $nameMatches = ($name -and $Record.process_name -ceq $name) -or ($nameRegex -and $Record.process_name -match $nameRegex)
@@ -453,8 +487,17 @@ function Test-ProcessAgainstPolicy([object]$Record) {
         if ($Record.executable_path -ine $approvedPath) { continue }
         $hash = [string](Get-OptionalProperty $approved 'executable_sha256' '')
         if ($Record.executable_sha256 -ine $hash) { continue }
-        $serviceHash = [string](Get-OptionalProperty $approved 'service_identity_sha256' '')
-        if (-not (@($Record.service_identity_sha256) -contains $serviceHash)) { continue }
+        $serviceValue = Get-OptionalProperty $approved 'service_identity_sha256' $null
+        $declaredServices = @($serviceValue)
+        if ([string]$serviceValue -eq 'none') { $declaredServices = @() }
+        $recordServices = @($Record.service_identity_sha256 | ForEach-Object { [string]$_ })
+        if ($scope -eq 'runner') {
+            if ($declaredServices.Count -ne 1 -or $recordServices.Count -ne 1 -or
+                $recordServices[0] -ine [string]$declaredServices[0] -or
+                @($script:IdentityPolicy.runner_service_identity_sha256) -notcontains [string]$declaredServices[0]) { continue }
+        } elseif ((($declaredServices | Sort-Object -Unique) -join ',') -ine (($recordServices | Sort-Object -Unique) -join ',')) {
+            continue
+        }
         $parentPid = Get-OptionalProperty $approved 'parent_pid' $null
         if ($null -ne $parentPid -and [int]$parentPid -ne [int]$Record.parent_pid) { continue }
         $parentRule = Get-OptionalProperty $approved 'parent_identity' $null
@@ -468,10 +511,12 @@ function Test-ProcessAgainstPolicy([object]$Record) {
             if ($null -ne $parentRulePid -and [int]$parentRulePid -ne [int](Get-OptionalProperty $parentIdentity 'pid' 0)) { continue }
             $parentRuleStart = Get-OptionalProperty $parentRule 'start_time_utc' $null
             if ($null -ne $parentRuleStart -and (Get-UtcTicks ([string]$parentRuleStart)) -ne (Get-UtcTicks ([string](Get-OptionalProperty $parentIdentity 'start_time_utc' '<unknown>')))) { continue }
-        } elseif ([string](Get-OptionalProperty $approved 'lineage_mode' 'runner_service_ancestry') -eq 'runner_service_ancestry' -and
+        } elseif ($scope -eq 'runner' -and [string](Get-OptionalProperty $approved 'lineage_mode' 'runner_service_ancestry') -eq 'runner_service_ancestry' -and
                   $null -ne (Get-OptionalProperty $Record 'parent_identity' $null) -and
                   [bool](Get-OptionalProperty $approved 'allow_dynamic' $false)) {
-            # A dynamic native child may not be approved by a PID-only rule.
+            continue
+        } elseif ($scope -eq 'host_baseline' -and [bool](Get-OptionalProperty $approved 'allow_dynamic' $false) -and
+                  [int](Get-OptionalProperty $Record 'parent_pid' 0) -ne 0) {
             continue
         }
         $exactPid = Get-OptionalProperty $approved 'pid' $null
@@ -539,7 +584,7 @@ function Get-ProcessNode($Process, [hashtable]$ServiceMap) {
 }
 
 function Get-ProcessRecord($Process, [hashtable]$ServiceMap, [hashtable]$ProcessMap) {
-    $chain = @(); $cursor = $Process; $visited = @{}; $root = $null
+    $chain = @(); $cursor = $Process; $visited = @{}; $root = $null; $rootKind = $null
     while ($null -ne $cursor) {
         $pidKey = [string]$cursor.ProcessId
         if ($visited.ContainsKey($pidKey)) { throw 'process parent chain contains a cycle' }
@@ -548,21 +593,33 @@ function Get-ProcessRecord($Process, [hashtable]$ServiceMap, [hashtable]$Process
         $chain += $node
         $runnerSet = @($script:IdentityPolicy.runner_service_identity_sha256)
         if (@($node.service_identity_sha256 | Where-Object { $runnerSet -contains $_ }).Count -gt 0) {
-            $root = $node
-            break
+            $root = $node; $rootKind = 'runner'; break
         }
+        # A non-runner Windows service is an owner-baselined host background
+        # root, not an unknown runner child. Retain its immediate parent so a
+        # dynamic host-baseline rule can pin the exact parent image/hash. The
+        # first host service node continues for one parent; the next loop pass
+        # closes the chain before walking farther into unrelated ancestry.
+        if (@($node.service_identity_sha256).Count -gt 0) {
+            if ($null -eq $root) { $root = $node; $rootKind = 'host' }
+            if ($chain.Count -gt 1) { break }
+        }
+        if ($rootKind -eq 'host' -and $chain.Count -gt 1) { break }
         $parentPid = [int]$node.parent_pid
         if ($parentPid -lt 1 -or $null -eq $ProcessMap -or -not $ProcessMap.ContainsKey([string]$parentPid)) {
+            # A protected/root OS process may have no service identity. It is
+            # eligible only for an exact host-baseline path/hash rule.
+            if ([string]$node.executable_sha256 -match '^[0-9a-fA-F]{64}$' -and
+                [string]$node.executable_path -notmatch '^<') {
+                $root = $node; $rootKind = 'host'
+            }
             break
         }
         $cursor = $ProcessMap[[string]$parentPid]
     }
     $verified = $null -ne $root
-    if (-not $verified) {
-        $rootServices = @()
-    } else {
-        $rootServices = @($root.service_identity_sha256 | Sort-Object -Unique)
-    }
+    if (-not $verified) { $rootServices = @() } else { $rootServices = @($root.service_identity_sha256 | Sort-Object -Unique) }
+    $lineage = if ($rootKind -eq 'host') { 'host_baseline_v1' } else { 'runner_service_ancestry_v1' }
     $record = [ordered]@{
         pid = [int]$Process.ProcessId
         process_name = [string](Get-OptionalProperty $Process 'Name' '<unknown>')
@@ -572,11 +629,10 @@ function Get-ProcessRecord($Process, [hashtable]$ServiceMap, [hashtable]$Process
         executable_sha256 = Get-HashOrUnknown ([string](Get-OptionalProperty $Process 'ExecutablePath' ''))
         service_identity_sha256 = @($rootServices)
         service_ancestry_verified = [bool]$verified
-        lineage_verification = 'runner_service_ancestry_v1'
+        lineage_verification = $lineage
         service_ancestry = @($chain)
     }
-    if ($chain.Count -gt 1) { $record.parent_identity = $chain[1] }
-    else { $record.parent_identity = $null }
+    if ($chain.Count -gt 1) { $record.parent_identity = $chain[1] } else { $record.parent_identity = $null }
     return $record
 }
 
@@ -743,7 +799,7 @@ function New-ObservationReceipt(
         host_observation_mode = 'process_snapshot_and_event_trace'; sample_interval_ms = 1000
         pre_seconds = $PreSeconds; during_seconds = $DuringSeconds; post_seconds = $PostSeconds
         capture_start_utc = $CaptureStartUtc; capture_end_utc = $CaptureEndUtc
-        identity_policy = [ordered]@{ format = $script:IdentityPolicy.format; policy_id = $script:IdentityPolicy.policy_id; baseline_id = $script:IdentityPolicy.baseline_id; policy_sha256 = $script:IdentityPolicyHash; runner_service_count = @($script:IdentityPolicy.runner_service_identity_sha256).Count; approved_process_count = @($script:IdentityPolicy.approved_processes).Count }
+        identity_policy = [ordered]@{ format = $script:IdentityPolicy.format; policy_id = $script:IdentityPolicy.policy_id; baseline_id = $script:IdentityPolicy.baseline_id; host_baseline_id = [string](Get-OptionalProperty $script:IdentityPolicy 'host_baseline_id' '<missing>'); policy_sha256 = $script:IdentityPolicyHash; runner_service_count = @($script:IdentityPolicy.runner_service_identity_sha256).Count; approved_process_count = @($script:IdentityPolicy.approved_processes).Count; host_baseline_process_count = @($script:IdentityPolicy.host_baseline_processes).Count }
         identity_policy_path = [IO.Path]::GetFullPath($IdentityPolicyPath); identity_policy_sha256 = $script:IdentityPolicyHash
         private_inventory_path = [IO.Path]::GetFullPath($PrivateInventoryPath); private_inventory_sha256 = [string](Get-OptionalProperty $PrivateInventoryStatus 'hash' '<missing>')
         attestation_proofs = [ordered]@{
