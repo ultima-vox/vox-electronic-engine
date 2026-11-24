@@ -1,0 +1,109 @@
+name: FX-T18 one-shot PowerShell 5.1 smoke (d72ad5d)
+
+on:
+  push:
+    branches:
+      - ci/fx-t18-ps51-smoke-d72ad5d-20261124
+    paths:
+      - .github/workflows/fx-t18-ps51-smoke-d72ad5d.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx-t18-ps51-smoke-d72ad5d-20261124
+  cancel-in-progress: false
+
+jobs:
+  fixture-only:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 8
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@v4
+        with:
+          ref: d72ad5da757453b2d01905afb93ea52060e20388
+          persist-credentials: false
+
+      - name: Verify source and execute exactly one default-argument fixture
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:COMPUTERNAME -cne 'HAMUNAPTRA' -or @('1','2','3','4') -cnotcontains [string]$env:RUNNER_NAME) {
+            throw 'Unexpected machine/runner; fixture not run'
+          }
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Windows PowerShell 5.1 required' }
+          $head = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne 'd72ad5da757453b2d01905afb93ea52060e20388') { throw 'Source HEAD mismatch' }
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $tree -cne 'b580128c40282b99c6482c29fd17e89517396477') { throw 'Source tree mismatch' }
+          $dirty = @(& git status --porcelain=v1 --untracked-files=all | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Checkout not clean' }
+          $base = 'docs/ultima-vox-music/fx/evidence'
+          $fixture = "$base/test-fx-t18-powershell.ps1"
+          $files = @($fixture, "$base/FxT18CtestHelpers.ps1", "$base/run-fx-windows-t18.ps1", "$base/audit-fx-windows-timing.py", "$base/capture-fx-t18-host-witness.ps1", 'docs/ultima-vox-music/fx/FX_T18_HOST_ISOLATION_OWNER_RUNBOOK.md')
+          $hashes = @($files | ForEach-Object { [ordered]@{ path = $_; sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() } })
+          $out = Join-Path (Get-Location).Path 'fx-t18-ps51-smoke-evidence'
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          $started = [DateTime]::UtcNow.ToString('o')
+          [ordered]@{
+            format = 'FX_T18_PS51_FIXTURE_ONLY_V1'
+            source_head = $head; source_tree = $tree
+            host = $env:COMPUTERNAME; runner = $env:RUNNER_NAME
+            powershell = $PSVersionTable.PSVersion.ToString()
+            run_id = $env:GITHUB_RUN_ID; workflow_sha = $env:GITHUB_SHA
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            fixture = $fixture; fixture_arguments = @()
+            script_hashes = $hashes; started_utc = $started
+            etw_executed = $false; ctest_executed = $false; qualification = 'NOT_GRANTED'
+          } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $out 'provenance.json') -Encoding UTF8
+          Write-Host "Pinned source $head / $tree on $env:COMPUTERNAME runner $env:RUNNER_NAME, PS $($PSVersionTable.PSVersion)"
+          $raw = Join-Path $env:RUNNER_TEMP ("fx-t18-smoke-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+          New-Item -ItemType Directory -Path $raw -ErrorAction Stop | Out-Null
+          try {
+            $stdout = Join-Path $raw 'stdout.txt'
+            $stderr = Join-Path $raw 'stderr.txt'
+            $ErrorActionPreference = 'Continue'
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fixture 1> $stdout 2> $stderr
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            $stdoutLines = @(Get-Content -LiteralPath $stdout | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $stderrLines = @(Get-Content -LiteralPath $stderr | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $marker = @($stdoutLines | Where-Object { $_ -match '^FX-T18 Windows PowerShell 5\.1 smoke: PASS \(5\.1\.\d+\.\d+\)$' })
+            $pass = ($code -eq 0 -and $marker.Count -eq 1 -and $stderrLines.Count -eq 0)
+            $safe = @("Fixture exit code: $code", "Stdout nonblank lines: $($stdoutLines.Count)", "Stderr nonblank lines: $($stderrLines.Count)")
+            if ($marker.Count -eq 1) { $safe += $marker[0] }
+            if (-not $pass) {
+              # Keep only diagnostics relevant to the fixture, with machine paths redacted.
+              foreach ($line in @($stdoutLines + $stderrLines | Select-Object -First 40)) {
+                $s = [string]$line
+                foreach ($prefix in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:USERPROFILE, $env:TEMP)) {
+                  if ($prefix) { $s = $s -replace [regex]::Escape($prefix), '<redacted-path>' }
+                }
+                $s = $s -replace '(?i)[A-Z]:\\[^\r\n]*', '<redacted-path>'
+                if ($s.Length -gt 500) { $s = $s.Substring(0,500) }
+                $safe += $s
+              }
+            }
+            $safe | Set-Content -LiteralPath (Join-Path $out 'sanitized-log.txt') -Encoding UTF8
+            [ordered]@{
+              fixture = $fixture; fixture_arguments = @()
+              exit_code = $code; pass_marker_count = $marker.Count
+              stdout_nonblank_lines = $stdoutLines.Count; stderr_nonblank_lines = $stderrLines.Count
+              pass = $pass; started_utc = $started; finished_utc = [DateTime]::UtcNow.ToString('o')
+              qualification = 'NOT_GRANTED'; etw_executed = $false; ctest_executed = $false
+            } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding UTF8
+            Write-Host "Fixture exit $code; validated PASS marker: $pass"
+            if (-not $pass) { throw 'Fixture failed or evidence incomplete; no retry' }
+          } finally {
+            Remove-Item -LiteralPath $raw -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Retain sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-PS51-SMOKE-d72ad5d
+          path: fx-t18-ps51-smoke-evidence/
+          if-no-files-found: warn
+          retention-days: 3
