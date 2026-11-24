@@ -712,21 +712,197 @@ def main() -> int:
         assert legacy_summary_metadata["coverage_start_utc"].endswith(".1234567Z")
         collection_etl = directory / "owner-process.etl"
         collection_etl.write_bytes(b"synthetic retained ETL name binding")
+        collection_session = "FX-T18-KernelProcess"
+        collection_guid = EVALUATOR.ETL_PARSER.COLLECTION_PROVIDER_GUID
+        collection_start_utc = "2026-11-22T00:00:00.0000000Z"
+        collection_stop_utc = "2026-11-22T00:02:02.0000000Z"
+        collection_start_receipt = directory / "etw-session-start.txt"
+        collection_stop_receipt = directory / "etw-session-stop.txt"
+        collection_start_lines = [
+            "format=VOX_FX_T18_LOGMAN_RECEIPT_V1", "operation=start",
+            f"session_name={collection_session}", f"control_time_utc={collection_start_utc}",
+            "control_time_source=logman_query_output", "trace_mode=bin",
+            f"provider_guid={collection_guid}", "keywords_hex=0x10", "level=5",
+            "max_file_mb=4096", "free_bytes_before_start=8589934592",
+            "minimum_free_bytes=4831838208", "free_headroom_bytes=536870912",
+            "initial_file_size=0", "rotation_count=0", "truncation_detected=false",
+            f"etl_path={collection_etl}", "create_exit_code=0", "query_exit_code=0",
+            f"command_create=logman.exe create trace {collection_session} -o {collection_etl} -f bin -max 4096 -p {collection_guid} 0x10 5 -ets",
+            f"command_query=logman.exe query {collection_session} -ets",
+            "--- RAW LOGMAN OUTPUT ---", "[create]", "The command completed successfully.",
+            "[query]", f"Name: {collection_session}", "Status: Running",
+            f"Start Time: {collection_start_utc}", f"Root Path: {collection_etl}",
+            "Log Mode: Sequential", "Maximum File Size: 4096",
+            "Provider Name: Microsoft-Windows-Kernel-Process", f"Provider Guid: {collection_guid}",
+            "Level: 5", "KeywordsAll: 0x10", "[capacity]",
+            "Free Bytes Before Start: 8589934592", "Minimum Free Bytes: 4831838208",
+            "Free Headroom Bytes: 536870912", "Initial File Size: 0",
+            "Rotation Count: 0", "Truncation Detected: false",
+        ]
+        collection_start_receipt.write_text("\n".join(collection_start_lines) + "\n", encoding="utf-8")
+        collection_stop_lines = [
+            "format=VOX_FX_T18_LOGMAN_RECEIPT_V1", "operation=stop",
+            f"session_name={collection_session}", f"control_time_utc={collection_stop_utc}",
+            "control_time_source=tracerpt_summary_header", "trace_mode=bin",
+            f"provider_guid={collection_guid}", "keywords_hex=0x10", "level=5", "max_file_mb=4096",
+            "bytes_written=35", "rotation_count=0", "etl_file_count=1", "truncation_detected=false",
+            f"etl_path={collection_etl}", "stop_exit_code=0", "post_stop_query_exit_code=1",
+            "delete_exit_code=0", "tracerpt_probe_exit_code=0",
+            f"command_stop=logman.exe stop {collection_session} -ets",
+            f"command_post_stop_query=logman.exe query {collection_session} -ets",
+            f"command_delete=logman.exe delete {collection_session} -ets",
+            f"command_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt",
+            "--- RAW LOGMAN OUTPUT ---", "[stop]", "The command completed successfully.",
+            "[post-stop-query]", "Data Collector Set was not found.",
+            "[delete]", "The command completed successfully.",
+            "[tracerpt-summary-header]", f"Log End Time: {collection_stop_utc}",
+            "[file-stat]", "Bytes Written: 35", "Rotation Count: 0",
+            "ETL File Count: 1", "Truncation Detected: false",
+        ]
+        collection_stop_receipt.write_text("\n".join(collection_stop_lines) + "\n", encoding="utf-8")
         collection_metadata_path = directory / "collection-metadata.json"
-        collection_metadata_path.write_text(json.dumps({
+        collection_metadata_value = {
             "format": EVALUATOR.ETL_PARSER.COLLECTION_METADATA_FORMAT,
             "provider": EVALUATOR.ETL_PARSER.PROVIDER,
-            "session_name": "FX-T18-KernelProcess",
-            "coverage_start_utc": "2026-11-22T00:00:00Z",
-            "coverage_end_utc": "2026-11-22T00:02:02Z",
-            "etl_path": str(collection_etl),
-        }), encoding="utf-8")
+            "provider_guid": collection_guid, "keywords_hex": "0x10", "level": 5,
+            "trace_mode": "bin", "capacity_policy": EVALUATOR.ETL_PARSER.COLLECTION_CAPACITY_POLICY,
+            "max_file_mb": 4096, "free_headroom_bytes": 536870912,
+            "minimum_free_bytes": 4831838208, "free_bytes_before_start": 8589934592,
+            "bytes_written": 35, "rotation_count": 0, "etl_file_count": 1,
+            "truncation_detected": False, "session_name": collection_session,
+            "coverage_start_utc": collection_start_utc,
+            "coverage_end_utc": collection_stop_utc, "etl_path": str(collection_etl),
+            "start_record_path": str(collection_start_receipt),
+            "start_record_sha256": hashlib.sha256(collection_start_receipt.read_bytes()).hexdigest(),
+            "stop_record_path": str(collection_stop_receipt),
+            "stop_record_sha256": hashlib.sha256(collection_stop_receipt.read_bytes()).hexdigest(),
+        }
+        collection_metadata_path.write_text(json.dumps(collection_metadata_value), encoding="utf-8")
         collection_summary = EVALUATOR.ETL_PARSER._parse_tracerpt_summary(
             "Total Events Lost 0\nTotal Buffers Lost 0\n")
         collection_result = EVALUATOR.ETL_PARSER._read_collection_metadata(
             collection_metadata_path, collection_etl, collection_summary)
-        assert collection_result["session_name"] == "FX-T18-KernelProcess"
-        assert collection_result["coverage_end_utc"] == "2026-11-22T00:02:02.0000000Z"
+        assert collection_result["session_name"] == collection_session
+        assert collection_result["coverage_end_utc"] == collection_stop_utc
+        assert collection_result["coverage_source"] == "validated logman control receipts"
+        full_collection_result = EVALUATOR.ETL_PARSER._read_collection_metadata(
+            collection_metadata_path, collection_etl, summary_metadata)
+        assert full_collection_result["coverage_source"] == "tracerpt -summary and validated logman control receipts"
+        assert len(collection_result["collection_control_receipts"]) == 2
+        missing_receipt_metadata = dict(collection_metadata_value)
+        missing_receipt_metadata.pop("start_record_path")
+        missing_receipt_metadata.pop("start_record_sha256")
+        missing_receipt_metadata_path = directory / "missing-control-collection-metadata.json"
+        missing_receipt_metadata_path.write_text(json.dumps(missing_receipt_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                missing_receipt_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert ("receipt" in str(error).lower() or "record" in str(error).lower())
+            names.append("summary_without_control_receipt_blocked")
+        else:
+            raise AssertionError("summary without trusted control receipt unexpectedly passed")
+        circular_receipt = directory / "circular-start.txt"
+        circular_receipt.write_text(collection_start_receipt.read_text().replace(
+            "Log Mode: Sequential", "Log Mode: Circular"), encoding="utf-8")
+        circular_metadata = dict(collection_metadata_value)
+        circular_metadata["start_record_path"] = str(circular_receipt)
+        circular_metadata["start_record_sha256"] = hashlib.sha256(circular_receipt.read_bytes()).hexdigest()
+        circular_metadata_path = directory / "circular-collection-metadata.json"
+        circular_metadata_path.write_text(json.dumps(circular_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                circular_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert "circular" in str(error).lower() or "non-circular" in str(error).lower()
+            names.append("circular_zero_loss_collection_blocked")
+        else:
+            raise AssertionError("circular zero-loss collection unexpectedly passed")
+        # The synthetic retained bytes intentionally contain only the later
+        # runner lifecycle: a start-of-window competitor is absent while both
+        # provider counters remain zero. The control evidence, not the JSON
+        # event claim, must reject this wrapped/rotated trace.
+        wrapped_raw = directory / "wrapped-zero-loss.etl.json"
+        wrapped_event = approved_fixture_event(base, "start", "2026-11-22T00:01:00.0000000Z")
+        wrapped_raw.write_text(json.dumps({
+            "format": "VOX_FX_T18_RAW_ETL_FIXTURE_V1",
+            "provider": "Microsoft-Windows-Kernel-Process/ETW",
+            "counters": {"lost_events": 0, "buffer_loss_events": 0},
+            "process_events": [wrapped_event],
+        }), encoding="utf-8")
+        wrapped_parse = EVALUATOR.ETL_PARSER.make_receipt(wrapped_raw, fixture=True)
+        assert wrapped_parse["lost_events"] == 0
+        assert all(event["process_name"] != "FX-T18-start-of-window-competitor.exe"
+                   for event in wrapped_parse["process_events"])
+        wrapped_receipt = directory / "wrapped-stop.txt"
+        wrapped_receipt.write_text(collection_stop_receipt.read_text().replace(
+            "rotation_count=0", "rotation_count=1"), encoding="utf-8")
+        wrapped_metadata = dict(collection_metadata_value)
+        wrapped_metadata["stop_record_path"] = str(wrapped_receipt)
+        wrapped_metadata["stop_record_sha256"] = hashlib.sha256(wrapped_receipt.read_bytes()).hexdigest()
+        wrapped_metadata_path = directory / "wrapped-collection-metadata.json"
+        wrapped_metadata_path.write_text(json.dumps(wrapped_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                wrapped_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert "rotation" in str(error).lower() or "truncation" in str(error).lower()
+            names.append("wrapped_zero_loss_collection_blocked")
+        else:
+            raise AssertionError("wrapped zero-loss collection unexpectedly passed")
+        short_receipt = directory / "short-start.txt"
+        short_receipt.write_text(
+            collection_start_receipt.read_text().replace(
+                f"control_time_utc={collection_start_utc}",
+                "control_time_utc=2026-11-22T00:00:30.0000000Z").replace(
+                f"Start Time: {collection_start_utc}",
+                "Start Time: 2026-11-22T00:00:30.0000000Z"), encoding="utf-8")
+        short_metadata = dict(collection_metadata_value)
+        short_metadata["start_record_path"] = str(short_receipt)
+        short_metadata["start_record_sha256"] = hashlib.sha256(short_receipt.read_bytes()).hexdigest()
+        short_metadata_path = directory / "short-collection-metadata.json"
+        short_metadata_path.write_text(json.dumps(short_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                short_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert ("derived" in str(error).lower() or "reconcile" in str(error).lower()
+                    or "control" in str(error).lower() or "timestamp" in str(error).lower())
+            names.append("short_control_interval_blocked")
+        else:
+            raise AssertionError("short control interval unexpectedly passed")
+        failed_receipt = directory / "failed-start.txt"
+        failed_receipt.write_text(collection_start_receipt.read_text().replace(
+            "query_exit_code=0", "query_exit_code=1"), encoding="utf-8")
+        failed_metadata = dict(collection_metadata_value)
+        failed_metadata["start_record_path"] = str(failed_receipt)
+        failed_metadata["start_record_sha256"] = hashlib.sha256(failed_receipt.read_bytes()).hexdigest()
+        failed_metadata_path = directory / "failed-collection-metadata.json"
+        failed_metadata_path.write_text(json.dumps(failed_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                failed_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert "create/query" in str(error).lower() or "exit" in str(error).lower()
+            names.append("failed_control_receipt_blocked")
+        else:
+            raise AssertionError("failed control receipt unexpectedly passed")
+        failed_delete_receipt = directory / "failed-delete-stop.txt"
+        failed_delete_receipt.write_text(collection_stop_receipt.read_text().replace(
+            "delete_exit_code=0", "delete_exit_code=1"), encoding="utf-8")
+        failed_delete_metadata = dict(collection_metadata_value)
+        failed_delete_metadata["stop_record_path"] = str(failed_delete_receipt)
+        failed_delete_metadata["stop_record_sha256"] = hashlib.sha256(failed_delete_receipt.read_bytes()).hexdigest()
+        failed_delete_metadata_path = directory / "failed-delete-collection-metadata.json"
+        failed_delete_metadata_path.write_text(json.dumps(failed_delete_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                failed_delete_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert "cleanup" in str(error).lower() or "delete" in str(error).lower()
+            names.append("failed_delete_control_receipt_blocked")
+        else:
+            raise AssertionError("failed delete control receipt unexpectedly passed")
         names.append("collection_metadata_reconciliation")
         tracerpt_xml = directory / "tracerpt-kernel-process-shape.xml"
         tracerpt_xml.write_text(

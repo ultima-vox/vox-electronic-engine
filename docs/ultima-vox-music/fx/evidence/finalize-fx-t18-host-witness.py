@@ -238,6 +238,18 @@ def finalize(
         collection_path_text = _absolute(collection_path)
     else:
         collection_path_text = "<fixture-collection-metadata>"
+    collection_control_receipts = (
+        collection_metadata.get("collection_control_receipts", [])
+        if isinstance(collection_metadata, dict)
+        else (parser_provenance.get("collection_control_receipts", [])
+              if isinstance(parser_provenance, dict) else [])
+    )
+    if not allow_fixture and (not isinstance(collection_control_receipts, list)
+                              or len(collection_control_receipts) != 2):
+        raise ValueError("retained logman start/stop control receipts are missing")
+    if (not allow_fixture and isinstance(parser_provenance, dict)
+            and collection_control_receipts != parser_provenance.get("collection_control_receipts")):
+        raise ValueError("retained logman control receipts do not reconcile to the parse provenance")
     observation_hash = _sha256(observation_path)
     if loss.get("observation_sha256") != observation_hash or binding.get("observation_sha256") != observation_hash:
         raise ValueError("post-capture signed proofs are not bound to the immutable observation")
@@ -309,6 +321,13 @@ def finalize(
             "tracerpt_summary_sha256": summary_hash if isinstance(summary_hash, str) else "<fixture-summary>",
             "collection_metadata_path": collection_path_text,
             "collection_metadata_sha256": collection_hash if isinstance(collection_hash, str) else "<fixture-collection-metadata>",
+            "collection_control_receipt_source": parser_provenance.get("collection_control_receipt_source") if isinstance(parser_provenance, dict) else "fixture-declared-metadata",
+            "collection_control_receipts": collection_control_receipts,
+            "collector_trace_mode": collection_metadata.get("trace_mode") if isinstance(collection_metadata, dict) else "<fixture>",
+            "collector_max_file_mb": collection_metadata.get("max_file_mb") if isinstance(collection_metadata, dict) else "<fixture>",
+            "collector_bytes_written": collection_metadata.get("bytes_written") if isinstance(collection_metadata, dict) else "<fixture>",
+            "collector_rotation_count": collection_metadata.get("rotation_count") if isinstance(collection_metadata, dict) else "<fixture>",
+            "collector_truncation_detected": collection_metadata.get("truncation_detected") if isinstance(collection_metadata, dict) else "<fixture>",
             "parser_provenance": parse_receipt.get("parser_provenance"),
             "correlation_max_skew_seconds": EVALUATOR.MAX_EVENT_CORRELATION_SKEW_SECONDS,
             "correlation_identity_fields": ["event", "pid", "process_name", "start_time_utc", "identity_digest", "executable_path", "executable_sha256", "parent_pid", "service_identity_sha256"],

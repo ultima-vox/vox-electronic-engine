@@ -611,6 +611,27 @@ def _verify_host_manifest(path: Path, witness: Path) -> dict[str, Any]:
         if not collection_path.is_file() or _sha256(collection_path).casefold() != collection_hash.casefold():
             raise ValueError(f"{witness}: retained collection metadata hash does not reconcile")
         required.append(collection_path)
+        collection_value_json = _read_json(collection_path, "ETW collection metadata")
+        control_receipts = parse_value_json.get("parser_provenance", {}).get("collection_control_receipts")
+        if (not isinstance(control_receipts, list) or len(control_receipts) != 2
+                or {item.get("operation") for item in control_receipts if isinstance(item, dict)} != {"start", "stop"}):
+            raise ValueError(f"{witness}: hashed logman start/stop control receipts are missing")
+        for item in control_receipts:
+            if (not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                    or not SHA256_RE.fullmatch(str(item.get("sha256", "")))):
+                raise ValueError(f"{witness}: malformed hashed logman control receipt")
+            receipt_path = _resolve(parse_path, item["path"])
+            if not receipt_path.is_file() or _sha256(receipt_path).casefold() != item["sha256"].casefold():
+                raise ValueError(f"{witness}: logman control receipt hash does not reconcile")
+            required.append(receipt_path)
+        for field in ("start_record_path", "stop_record_path"):
+            receipt_value = collection_value_json.get(field)
+            if not isinstance(receipt_value, str) or receipt_value.startswith("<"):
+                raise ValueError(f"{witness}: collection metadata {field} is missing")
+            receipt_path = _resolve(collection_path, receipt_value)
+            if not receipt_path.is_file():
+                raise ValueError(f"{witness}: collection metadata {field} is missing")
+            required.append(receipt_path)
         provenance = parse_value_json.get("parser_provenance")
         join_value = provenance.get("identity_join_path") if isinstance(provenance, dict) else None
         join_hash = provenance.get("identity_join_sha256") if isinstance(provenance, dict) else None
@@ -908,6 +929,23 @@ def _verify_external_witness_attestations(
     except (OSError, ValueError) as error:
         raise ValueError(f"{path}: independent raw ETL replay failed: {error}") from error
     parser_provenance = parse_file.get("parser_provenance")
+    control_receipts = parser_provenance.get("collection_control_receipts") if isinstance(parser_provenance, dict) else None
+    if not allow_fixture:
+        if (not isinstance(control_receipts, list) or len(control_receipts) != 2
+                or {item.get("operation") for item in control_receipts if isinstance(item, dict)} != {"start", "stop"}):
+            raise ValueError(f"{path}: independent parser lacks two validated logman control receipts")
+        if event_trace.get("collection_control_receipts") != control_receipts:
+            raise ValueError(f"{path}: witness does not retain the validated logman control receipts")
+        collection_value = parser_provenance.get("collection_metadata_path")
+        collection_path = _resolve(parse_path, collection_value) if isinstance(collection_value, str) else None
+        collection_file = _read_json(collection_path, "ETW collection metadata") if collection_path else {}
+        for field, event_field in (("trace_mode", "collector_trace_mode"),
+                                   ("max_file_mb", "collector_max_file_mb"),
+                                   ("bytes_written", "collector_bytes_written"),
+                                   ("rotation_count", "collector_rotation_count"),
+                                   ("truncation_detected", "collector_truncation_detected")):
+            if event_trace.get(event_field) != collection_file.get(field):
+                raise ValueError(f"{path}: witness collector {field} does not reconcile to collection metadata")
     if not allow_fixture:
         summary_value = parser_provenance.get("summary_path") if isinstance(parser_provenance, dict) else None
         summary_hash = parser_provenance.get("summary_sha256") if isinstance(parser_provenance, dict) else None

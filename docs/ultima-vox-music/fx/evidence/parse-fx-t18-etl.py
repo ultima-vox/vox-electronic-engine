@@ -6,10 +6,10 @@ pinned Microsoft Windows SDK ``tracerpt.exe`` tool.  Capture never creates a
 parse receipt and an owner-signed JSON claim is not a parser.  The wrapper
 records the raw ETL hash, the exact tracerpt path/version/command, the
 retained ``tracerpt -summary`` artifact that supplies loss counters and
-trace metadata, plus a retained collection start/stop metadata artifact when
-tracerpt omits the session or stop boundary, and digests of both the raw ETW
-core and the enriched identity-joined event stream. Production parsing requires
-a retained
+trace metadata, plus retained collection metadata whose hashed start/stop
+control receipts prove the bounded noncircular logger, and digests of both the
+raw ETW core and the enriched identity-joined event stream. Production parsing
+requires a retained
 `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` artifact because historical image hashes and
 verified service ancestry are not guaranteed to be fields in the raw event.
 A replay reruns tracerpt against the retained bytes, reapplies that join and
@@ -52,9 +52,22 @@ EVENT_SOURCE = "Microsoft-Windows-Kernel-Process event IDs 1(ProcessStart) and 2
 LOSS_SOURCE = "tracerpt -summary <tracerpt-summary>: Events Lost and Buffers Lost"
 SUMMARY_SOURCE = "tracerpt -summary artifact; counters are not read from stdout/stderr or JSON claims"
 COLLECTION_METADATA_FORMAT = "VOX_FX_T18_ETW_COLLECTION_METADATA_V1"
-COLLECTION_METADATA_SOURCE = "owner-retained logman start/stop metadata"
-COVERAGE_SOURCE = "tracerpt summary or retained collection start/stop metadata"
-SESSION_SOURCE = "tracerpt summary or retained collection session metadata"
+COLLECTION_RECEIPT_FORMAT = "VOX_FX_T18_LOGMAN_RECEIPT_V1"
+COLLECTION_METADATA_SOURCE = "owner-retained logman start/stop metadata and hashed control receipts"
+COLLECTION_CONTROL_RECEIPT_SOURCE = "hashed owner-retained logman control receipts"
+COLLECTION_TRACE_MODE = "bin"
+COLLECTION_KEYWORDS_HEX = "0x10"
+COLLECTION_LEVEL = 5
+COLLECTION_CAPACITY_POLICY = "max_file_mb_plus_free_headroom"
+COLLECTION_MAX_FILE_MB = 4096
+COLLECTION_FREE_HEADROOM_BYTES = 512 * 1024 * 1024
+COLLECTION_PROVIDER_GUID = "{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"
+COVERAGE_SOURCE = "tracerpt summary or retained validated logman start/stop receipts"
+SESSION_SOURCE = "tracerpt summary or retained validated logman session receipt"
+SUMMARY_AND_CONTROL_COVERAGE_SOURCE = "tracerpt -summary and validated logman control receipts"
+CONTROL_COVERAGE_SOURCE = "validated logman control receipts"
+SUMMARY_AND_CONTROL_SESSION_SOURCE = "tracerpt -summary and validated logman session receipt"
+CONTROL_SESSION_SOURCE = "validated logman session receipt"
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 MAX_EVENT_CORRELATION_SKEW_SECONDS = 2.0
 
@@ -614,6 +627,268 @@ def _collection_value(value: dict[str, Any], *names: str) -> Any:
     return None
 
 
+def _receipt_uint(fields: dict[str, str], name: str, path: Path) -> int:
+    raw = fields.get(name)
+    if raw is None or re.fullmatch(r"[0-9]+", raw) is None:
+        raise ValueError(f"{path}: logman control receipt {name} is not a non-negative integer")
+    return int(raw)
+
+
+def _receipt_bool(fields: dict[str, str], name: str, path: Path) -> bool:
+    raw = fields.get(name, "").casefold()
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{path}: logman control receipt {name} is not true/false")
+    return raw == "true"
+
+
+def _receipt_raw_value(body: str, label: str, path: Path) -> str:
+    pattern = re.compile(r"^\s*" + re.escape(label) + r"\s*[:=]\s*(.*?)\s*$", re.IGNORECASE)
+    values = [match.group(1).strip().strip('"') for line in body.splitlines()
+              if (match := pattern.match(line)) and match.group(1).strip()]
+    if len(values) != 1:
+        raise ValueError(f"{path}: logman control receipt must contain exactly one raw {label} value")
+    return values[0]
+
+
+def _receipt_time_from_body(body: str, label: str, path: Path) -> str:
+    try:
+        return _summary_timestamp(_receipt_raw_value(body, label, path), f"{path} {label}")
+    except ValueError as error:
+        raise ValueError(f"{path}: raw {label} timestamp is not parseable") from error
+
+
+def _receipt_raw_uint(body: str, label: str, expected: int, path: Path) -> None:
+    raw = _receipt_raw_value(body, label, path)
+    if re.fullmatch(r"[0-9]+", raw) is None or int(raw) != expected:
+        raise ValueError(f"{path}: raw {label} does not reconcile to the retained receipt field")
+
+
+def _receipt_raw_bool(body: str, label: str, expected: bool, path: Path) -> None:
+    raw = _receipt_raw_value(body, label, path).casefold()
+    if raw not in {"true", "false"} or (raw == "true") != expected:
+        raise ValueError(f"{path}: raw {label} does not reconcile to the retained receipt field")
+
+
+def _receipt_timestamp(fields: dict[str, str], body: str, operation: str, path: Path) -> str:
+    sources = {
+        "start": ("logman_query_output", "Start Time"),
+        "logman_stop_output": ("logman_stop_output", "Stop Time"),
+        "tracerpt_summary_header": ("tracerpt_summary_header", "Log End Time"),
+    }
+    source = fields.get("control_time_source")
+    if operation == "start":
+        expected_source, label = sources["start"]
+    else:
+        if source not in sources:
+            raise ValueError(f"{path}: stop receipt has no trusted control-time source")
+        expected_source, label = sources[source]
+    if source != expected_source:
+        raise ValueError(f"{path}: logman control receipt control-time source is invalid")
+    raw_time = _receipt_time_from_body(body, label, path)
+    declared_time = _timestamp_text(fields.get("control_time_utc", ""), f"{path} control time")
+    if declared_time != raw_time:
+        raise ValueError(f"{path}: control time does not reconcile to retained command output")
+    return raw_time
+
+
+def _control_receipt_projection(path: Path, fields: dict[str, str], operation: str,
+                                control_time_utc: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "operation": operation,
+        "path": str(path.resolve()),
+        "sha256": sha256(path),
+        "session_name": fields["session_name"],
+        "control_time_utc": control_time_utc,
+        "control_time_source": fields["control_time_source"],
+        "trace_mode": fields["trace_mode"].casefold(),
+        "provider_guid": _normalize_guid(fields["provider_guid"]),
+        "keywords_hex": fields["keywords_hex"].casefold(),
+        "level": int(fields["level"], 0),
+        "max_file_mb": int(fields["max_file_mb"], 10),
+    }
+    for name in (
+        "free_bytes_before_start", "minimum_free_bytes", "free_headroom_bytes",
+        "initial_file_size", "bytes_written", "rotation_count", "etl_file_count",
+    ):
+        if name in fields:
+            result[name] = int(fields[name], 10)
+    if "truncation_detected" in fields:
+        result["truncation_detected"] = fields["truncation_detected"].casefold() == "true"
+    return result
+
+
+def _read_control_receipt(path: Path, operation: str, session_name: str | None,
+                          raw_path: Path, max_file_mb: int) -> dict[str, Any]:
+    text = _read_summary_text(path)
+    marker = "--- RAW LOGMAN OUTPUT ---"
+    if marker not in text:
+        raise ValueError(f"{path}: logman control receipt has no raw-output separator")
+    header, body = text.split(marker, 1)
+    fields: dict[str, str] = {}
+    for line in header.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        fields[key.strip()] = value.strip()
+    if fields.get("format") != COLLECTION_RECEIPT_FORMAT or fields.get("operation") != operation:
+        raise ValueError(f"{path}: logman control receipt format/operation is invalid")
+    if session_name is not None and fields.get("session_name") != session_name:
+        raise ValueError(f"{path}: logman control receipt session does not match collection metadata")
+    receipt_session = fields.get("session_name", "")
+    if not receipt_session or receipt_session.startswith("<"):
+        raise ValueError(f"{path}: logman control receipt session is missing")
+    control_time_utc = _receipt_timestamp(fields, body, operation, path)
+    for key in ("trace_mode", "provider_guid", "keywords_hex", "level", "etl_path", "max_file_mb"):
+        if not fields.get(key):
+            raise ValueError(f"{path}: logman control receipt is missing {key}")
+    declared_etl = fields["etl_path"].replace("\\", "/").casefold()
+    if declared_etl.rsplit("/", 1)[-1] != raw_path.name.casefold():
+        raise ValueError(f"{path}: logman control receipt ETL filename does not match the retained ETL")
+    if fields["trace_mode"].casefold() != COLLECTION_TRACE_MODE:
+        raise ValueError(f"{path}: circular or non-binary ETW log mode is not accepted")
+    if _normalize_guid(fields["provider_guid"]) != _normalize_guid(COLLECTION_PROVIDER_GUID):
+        raise ValueError(f"{path}: logman control receipt provider GUID is not the kernel-process provider")
+    if fields["keywords_hex"].casefold() != COLLECTION_KEYWORDS_HEX:
+        raise ValueError(f"{path}: logman control receipt keyword mask is not 0x10")
+    try:
+        if int(fields["level"], 0) != COLLECTION_LEVEL:
+            raise ValueError
+        expected_max = int(fields["max_file_mb"], 10)
+    except ValueError as error:
+        raise ValueError(f"{path}: logman control receipt level or max file size is invalid") from error
+    if (expected_max != max_file_mb or expected_max != COLLECTION_MAX_FILE_MB
+            or expected_max <= 0):
+        raise ValueError(f"{path}: logman control receipt max file size does not match the pinned policy")
+    lower_header = header.casefold()
+    lower_body = body.casefold()
+    all_text = (header + "\n" + body).casefold()
+    if receipt_session.casefold() not in all_text or raw_path.name.casefold() not in all_text:
+        raise ValueError(f"{path}: logman control receipt is not bound to the session and ETL filename")
+    if operation == "start":
+        for name in ("free_bytes_before_start", "minimum_free_bytes", "free_headroom_bytes",
+                     "initial_file_size", "rotation_count"):
+            _receipt_uint(fields, name, path)
+        if _receipt_bool(fields, "truncation_detected", path):
+            raise ValueError(f"{path}: start receipt reports truncation")
+        free_bytes = int(fields["free_bytes_before_start"])
+        minimum_free = int(fields["minimum_free_bytes"])
+        headroom = int(fields["free_headroom_bytes"])
+        _receipt_raw_uint(body, "Free Bytes Before Start", free_bytes, path)
+        _receipt_raw_uint(body, "Minimum Free Bytes", minimum_free, path)
+        _receipt_raw_uint(body, "Free Headroom Bytes", headroom, path)
+        _receipt_raw_uint(body, "Initial File Size", int(fields["initial_file_size"]), path)
+        _receipt_raw_uint(body, "Rotation Count", int(fields["rotation_count"]), path)
+        _receipt_raw_bool(body, "Truncation Detected", False, path)
+        if (int(fields["initial_file_size"]) != 0 or int(fields["rotation_count"]) != 0
+                or headroom <= 0
+                or minimum_free != expected_max * 1024 * 1024 + headroom
+                or free_bytes < minimum_free):
+            raise ValueError(f"{path}: start receipt does not prove sufficient non-circular capacity")
+        try:
+            create_exit = _receipt_uint(fields, "create_exit_code", path)
+            query_exit = _receipt_uint(fields, "query_exit_code", path)
+        except ValueError as error:
+            raise ValueError(f"{path}: start logman exit codes are invalid") from error
+        if create_exit != 0 or query_exit != 0:
+            raise ValueError(f"{path}: logman create/query did not complete successfully")
+        create_command = lower_header
+        if "[create]" not in lower_body or "[query]" not in lower_body:
+            raise ValueError(f"{path}: start receipt does not retain separate create/query output")
+        if not re.search(r"command_create\s*=.*\blogman(?:\.exe)?\s+create\s+trace\b", create_command):
+            raise ValueError(f"{path}: start receipt does not retain the logman create command")
+        if re.search(r"bincirc", create_command) or not re.search(r"(?:^|\s)-f\s+['\"]?bin(?:['\"]?)(?:\s|$)", create_command):
+            raise ValueError(f"{path}: circular ETW logging mode is present or binary mode is absent")
+        if not re.search(r"(?:^|\s)-max\s+['\"]?" + str(expected_max) + r"(?:['\"]?)(?:\s|$)", create_command):
+            raise ValueError(f"{path}: start receipt does not retain the configured max file size")
+        if not re.search(r"(?:^|\s)-p\s+['\"]?" + re.escape(COLLECTION_PROVIDER_GUID) + r"(?:['\"]?)(?:\s|$)", create_command, re.IGNORECASE):
+            raise ValueError(f"{path}: start receipt does not retain the exact provider GUID argument")
+        if COLLECTION_KEYWORDS_HEX not in create_command or re.search(r"0x10\s+5(?:\s|$)", create_command) is None:
+            raise ValueError(f"{path}: start receipt does not retain the provider keyword/level")
+        if not re.search(r"command_query\s*=.*\blogman(?:\.exe)?\s+query\b", create_command):
+            raise ValueError(f"{path}: start receipt does not retain the logman query command")
+        if not re.search(r"(?im)^\s*status\s*:\s*running\b", body):
+            raise ValueError(f"{path}: start logman query did not prove a running session")
+        if _normalize_guid(COLLECTION_PROVIDER_GUID) not in _normalize_guid(body):
+            raise ValueError(f"{path}: start logman query did not prove the provider GUID")
+        if "microsoft-windows-kernel-process" not in lower_body:
+            raise ValueError(f"{path}: start logman query did not prove the provider name")
+        if COLLECTION_KEYWORDS_HEX not in lower_body or re.search(r"(?im)^\s*(?:level|verbosity)\s*[:=]\s*5\b", body) is None:
+            raise ValueError(f"{path}: start logman query did not prove keyword 0x10 and level 5")
+        mode_lines = [line.casefold() for line in body.splitlines() if re.search(r"log\s+mode", line, re.IGNORECASE)]
+        if not mode_lines or any("circular" in line for line in mode_lines) \
+                or not any(re.search(r"\b(?:sequential|file|normal)\b", line) for line in mode_lines):
+            raise ValueError(f"{path}: start logman query did not prove non-circular log mode")
+        size_match = re.search(r"(?im)^\s*maximum\s+file\s+size\s*:\s*([0-9][0-9,]*)\b", body)
+        if size_match is None or int(size_match.group(1).replace(",", "")) != expected_max:
+            raise ValueError(f"{path}: start logman query did not prove the configured max file size")
+        result = _control_receipt_projection(path, fields, operation, control_time_utc)
+        result.update({"exit_code": create_exit, "query_exit_code": query_exit})
+        return result
+    for name in ("bytes_written", "rotation_count", "etl_file_count"):
+        _receipt_uint(fields, name, path)
+    if _receipt_bool(fields, "truncation_detected", path):
+        raise ValueError(f"{path}: stop receipt reports ETL truncation")
+    stop_exit = _receipt_uint(fields, "stop_exit_code", path)
+    post_query_exit = _receipt_uint(fields, "post_stop_query_exit_code", path)
+    delete_exit = _receipt_uint(fields, "delete_exit_code", path)
+    probe_exit = _receipt_uint(fields, "tracerpt_probe_exit_code", path)
+    if stop_exit != 0 or post_query_exit == 0 or delete_exit != 0 or probe_exit != 0:
+        raise ValueError(f"{path}: logman stop/post-stop-query/delete or tracerpt probe did not prove cleanup")
+    actual_bytes = raw_path.stat().st_size if raw_path.is_file() else -1
+    bytes_written = int(fields["bytes_written"])
+    rotation_count = int(fields["rotation_count"])
+    etl_file_count = int(fields["etl_file_count"])
+    _receipt_raw_uint(body, "Bytes Written", bytes_written, path)
+    _receipt_raw_uint(body, "Rotation Count", rotation_count, path)
+    _receipt_raw_uint(body, "ETL File Count", etl_file_count, path)
+    _receipt_raw_bool(body, "Truncation Detected", False, path)
+    if (actual_bytes <= 0 or bytes_written != actual_bytes
+            or bytes_written >= expected_max * 1024 * 1024
+            or rotation_count != 0 or etl_file_count != 1):
+        raise ValueError(f"{path}: stop receipt bytes/rotation/truncation evidence does not reconcile to the ETL")
+    stop_command = lower_header
+    if any(marker not in lower_body for marker in ("[stop]", "[post-stop-query]", "[delete]")):
+        raise ValueError(f"{path}: stop receipt does not retain separate stop/query/delete output")
+    if not re.search(r"command_stop\s*=.*\blogman(?:\.exe)?\s+stop\b", stop_command):
+        raise ValueError(f"{path}: stop receipt does not retain the logman stop command")
+    if not re.search(r"command_post_stop_query\s*=.*\blogman(?:\.exe)?\s+query\b", stop_command):
+        raise ValueError(f"{path}: stop receipt does not retain the post-stop query command")
+    if not re.search(r"command_delete\s*=.*\blogman(?:\.exe)?\s+delete\b", stop_command):
+        raise ValueError(f"{path}: stop receipt does not retain the logman delete command")
+    if fields["control_time_source"] == "tracerpt_summary_header" and not re.search(
+            r"command_tracerpt_probe\s*=.*\btracerpt(?:\.exe)?\b", stop_command):
+        raise ValueError(f"{path}: stop receipt does not retain the tracerpt header probe command")
+    if "completed successfully" not in lower_body:
+        raise ValueError(f"{path}: stop receipt does not retain successful logman stop/delete output")
+    if re.search(r"(?:not found|does not exist|cannot find|no such)", lower_body) is None:
+        raise ValueError(f"{path}: post-stop query does not prove the session was disabled")
+    result = _control_receipt_projection(path, fields, operation, control_time_utc)
+    result.update({
+        "exit_code": stop_exit,
+        "post_stop_query_exit_code": post_query_exit,
+        "delete_exit_code": delete_exit,
+        "tracerpt_probe_exit_code": probe_exit,
+        "bytes_written": int(fields["bytes_written"]),
+        "rotation_count": int(fields["rotation_count"]),
+        "etl_file_count": int(fields["etl_file_count"]),
+        "truncation_detected": False,
+    })
+    return result
+
+
+def _normalize_guid(value: Any) -> str:
+    return str(value).strip().strip("{}").casefold()
+
+
+def _collection_int(value: dict[str, Any], name: str) -> int:
+    raw = value.get(name)
+    if type(raw) is int:
+        return raw
+    if isinstance(raw, str) and re.fullmatch(r"[0-9]+", raw):
+        return int(raw)
+    raise ValueError(f"ETW collection metadata {name} is not a non-negative integer")
+
+
 def _read_collection_metadata(path: Path, raw_path: Path,
                               summary_metadata: dict[str, Any]) -> dict[str, Any]:
     value = read_json(path)
@@ -621,34 +896,132 @@ def _read_collection_metadata(path: Path, raw_path: Path,
         raise ValueError("ETW collection metadata format is not supported")
     if value.get("provider") != PROVIDER:
         raise ValueError("ETW collection metadata provider is not the kernel process provider")
-    session_value = _collection_value(value, "session_name", "logger_name")
-    start_value = _collection_value(value, "coverage_start_utc", "collection_start_utc", "start_utc")
-    end_value = _collection_value(value, "coverage_end_utc", "collection_end_utc", "stop_utc")
-    if not isinstance(session_value, str) or not session_value or session_value.startswith("<"):
-        raise ValueError("ETW collection metadata session name is absent")
-    if start_value is None or end_value is None:
-        raise ValueError("ETW collection metadata start/stop interval is absent")
-    start = _timestamp_text(start_value, "collection start timestamp")
-    end = _timestamp_text(end_value, "collection stop timestamp")
+    if _normalize_guid(value.get("provider_guid")) != _normalize_guid(COLLECTION_PROVIDER_GUID):
+        raise ValueError("ETW collection metadata provider GUID is not the kernel-process provider")
+    if str(value.get("keywords_hex", "")).casefold() != COLLECTION_KEYWORDS_HEX \
+            or type(value.get("level")) is not int or value.get("level") != COLLECTION_LEVEL:
+        raise ValueError("ETW collection metadata keyword mask/level is not the pinned process selection")
+    trace_mode = str(value.get("trace_mode", "")).casefold()
+    if trace_mode != COLLECTION_TRACE_MODE:
+        raise ValueError("ETW collection metadata is circular or not in bounded binary mode")
+    max_file_mb = _collection_int(value, "max_file_mb")
+    free_headroom_bytes = _collection_int(value, "free_headroom_bytes")
+    minimum_free_bytes = _collection_int(value, "minimum_free_bytes")
+    free_bytes = _collection_int(value, "free_bytes_before_start")
+    if (max_file_mb != COLLECTION_MAX_FILE_MB
+            or free_headroom_bytes != COLLECTION_FREE_HEADROOM_BYTES
+            or minimum_free_bytes != max_file_mb * 1024 * 1024 + free_headroom_bytes
+            or free_bytes < minimum_free_bytes):
+        raise ValueError("ETW collection metadata does not prove sufficient non-circular file capacity")
+    if value.get("capacity_policy") != COLLECTION_CAPACITY_POLICY:
+        raise ValueError("ETW collection metadata capacity policy is not pinned")
+    bytes_written = _collection_int(value, "bytes_written")
+    rotation_count = _collection_int(value, "rotation_count")
+    etl_file_count = _collection_int(value, "etl_file_count")
+    if (bytes_written <= 0 or bytes_written >= max_file_mb * 1024 * 1024
+            or rotation_count != 0 or etl_file_count != 1
+            or value.get("truncation_detected") is not False
+            or raw_path.stat().st_size != bytes_written):
+        raise ValueError("ETW collection metadata does not prove bounded non-rotated ETL bytes")
+    declared_session = _collection_value(value, "session_name", "logger_name")
+    declared_start = _collection_value(value, "coverage_start_utc", "collection_start_utc", "start_utc")
+    declared_end = _collection_value(value, "coverage_end_utc", "collection_end_utc", "stop_utc")
+    receipt_specs = (
+        ("start_record_path", "start_record_sha256", "start"),
+        ("stop_record_path", "stop_record_sha256", "stop"),
+    )
+    control_receipts: list[dict[str, Any]] = []
+    for path_field, hash_field, operation in receipt_specs:
+        receipt_value = value.get(path_field)
+        receipt_hash = value.get(hash_field)
+        if not isinstance(receipt_value, str) or not receipt_value \
+                or not isinstance(receipt_hash, str) or not SHA256_RE.fullmatch(receipt_hash):
+            raise ValueError(f"ETW collection metadata {path_field}/{hash_field} is missing")
+        receipt_path = Path(receipt_value)
+        if not receipt_path.is_absolute():
+            receipt_path = (path.parent / receipt_path).resolve()
+        if receipt_path == path.resolve() or not receipt_path.is_file() \
+                or sha256(receipt_path).casefold() != receipt_hash.casefold():
+            raise ValueError(f"ETW collection metadata {operation} control receipt is missing or hash-mismatched")
+        control_receipts.append(_read_control_receipt(
+            receipt_path, operation, str(declared_session) if declared_session else None,
+            raw_path, max_file_mb
+        ))
+    if len({item["path"] for item in control_receipts}) != len(control_receipts):
+        raise ValueError("ETW collection metadata start/stop control receipts are not distinct")
+    start_receipt, stop_receipt = control_receipts
+    receipt_session = start_receipt["session_name"]
+    if stop_receipt["session_name"] != receipt_session:
+        raise ValueError("ETW collection start/stop receipts name different sessions")
+    if declared_session is not None and str(declared_session) != receipt_session:
+        raise ValueError("ETW collection metadata session is not bound to control receipts")
+    session_value = receipt_session
+    receipt_start = start_receipt["control_time_utc"]
+    receipt_end = stop_receipt["control_time_utc"]
+    summary_start = summary_metadata.get("coverage_start_utc")
+    summary_end = summary_metadata.get("coverage_end_utc")
+    for summary_value, receipt_value, label in ((summary_start, receipt_start, "start"),
+                                                 (summary_end, receipt_end, "end")):
+        if summary_value is not None and summary_value != receipt_value:
+            raise ValueError(f"ETW collection {label} interval does not reconcile to the trusted control receipt")
+    start = summary_start or receipt_start
+    end = summary_end or receipt_end
+    if declared_start is not None and _timestamp_text(declared_start, "collection start timestamp") != start:
+        raise ValueError("ETW collection metadata start timestamp is not independently derived")
+    if declared_end is not None and _timestamp_text(declared_end, "collection stop timestamp") != end:
+        raise ValueError("ETW collection metadata stop timestamp is not independently derived")
     if utc(end) <= utc(start):
         raise ValueError("ETW collection metadata interval is not positive")
+    for field, expected in (("start_observed_utc", start), ("stop_observed_utc", end)):
+        if value.get(field) is not None and _timestamp_text(value[field], f"collection {field}") != expected:
+            raise ValueError("ETW collection metadata interval is not bound to observed logman control times")
     declared_etl = _collection_value(value, "etl_path", "collector_artifact_path")
     if declared_etl is not None:
         declared_text = str(declared_etl).replace("\\", "/").casefold()
         if declared_text.rsplit("/", 1)[-1] != raw_path.name.casefold():
             raise ValueError("ETW collection metadata does not bind the retained ETL filename")
+    if (start_receipt["trace_mode"] != trace_mode
+            or stop_receipt["trace_mode"] != trace_mode
+            or start_receipt["max_file_mb"] != max_file_mb
+            or stop_receipt["max_file_mb"] != max_file_mb
+            or start_receipt.get("free_bytes_before_start") != free_bytes
+            or start_receipt.get("minimum_free_bytes") != minimum_free_bytes
+            or start_receipt.get("free_headroom_bytes") != free_headroom_bytes
+            or stop_receipt.get("bytes_written") != bytes_written
+            or stop_receipt.get("rotation_count") != rotation_count
+            or stop_receipt.get("etl_file_count") != etl_file_count
+            or stop_receipt.get("truncation_detected") is not False):
+        raise ValueError("ETW collection metadata is not bound to control capacity/mode evidence")
     for field, expected in (("coverage_start_utc", start), ("coverage_end_utc", end),
                             ("session_name", session_value)):
         summary_value = summary_metadata.get(field)
         if summary_value is not None and summary_value != expected:
             raise ValueError(f"ETW collection metadata {field} does not reconcile to tracerpt summary")
+    coverage_source = (SUMMARY_AND_CONTROL_COVERAGE_SOURCE
+                       if summary_start is not None and summary_end is not None
+                       else CONTROL_COVERAGE_SOURCE)
+    session_source = (SUMMARY_AND_CONTROL_SESSION_SOURCE
+                      if summary_metadata.get("session_name") is not None
+                      else CONTROL_SESSION_SOURCE)
     return {
         "coverage_start_utc": start,
         "coverage_end_utc": end,
         "session_name": session_value,
         "collection_metadata_source": COLLECTION_METADATA_SOURCE,
+        "collection_control_receipt_source": COLLECTION_CONTROL_RECEIPT_SOURCE,
+        "collection_control_receipts": control_receipts,
+        "coverage_source": coverage_source,
+        "session_name_source": session_source,
+        "trace_mode": trace_mode,
+        "max_file_mb": max_file_mb,
+        "free_headroom_bytes": free_headroom_bytes,
+        "minimum_free_bytes": minimum_free_bytes,
+        "free_bytes_before_start": free_bytes,
+        "bytes_written": bytes_written,
+        "rotation_count": rotation_count,
+        "etl_file_count": etl_file_count,
+        "truncation_detected": False,
     }
-
 
 def _run_tracerpt(raw_path: Path, tool_path: Path,
                   retained_summary_path: Path | None = None,
@@ -713,6 +1086,8 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
             "session_name": derived_session,
             "summary_source": "fixture-json-declared-counters",
             "collection_metadata_source": "fixture-declared-metadata",
+            "collection_control_receipt_source": "fixture-declared-metadata",
+            "collection_control_receipts": [],
             "coverage_source": "fixture-declared-metadata",
             "session_name_source": "fixture-declared-metadata",
         })
@@ -737,13 +1112,15 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
     raw_hash = sha256(raw_path)
     full_digest = event_digest(events)
     provenance: dict[str, Any] = {
-        "parser_name": "vox-fx-t18-raw-etl-verifier", "parser_version": "1.1.0",
+        "parser_name": "vox-fx-t18-raw-etl-verifier", "parser_version": "1.2.0",
         "toolchain_id": TOOLCHAIN_ID, "tool": tool_name, "tool_version": tool_version,
         "command_line": json.dumps(command_argv, ensure_ascii=True),
         "command_argv": command_argv, "command_template": TRACERPT_COMMAND,
         "event_source": EVENT_SOURCE, "counter_source": LOSS_SOURCE,
         "summary_source": counters["summary_source"],
         "collection_metadata_source": counters["collection_metadata_source"],
+        "collection_control_receipt_source": counters["collection_control_receipt_source"],
+        "collection_control_receipts": counters.get("collection_control_receipts", []),
         "coverage_source": counters["coverage_source"],
         "session_name_source": counters["session_name_source"],
         "derived_coverage_start_utc": start, "derived_coverage_end_utc": end,
@@ -787,25 +1164,36 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
     required = (
         "parser_name", "parser_version", "toolchain_id", "tool_version", "command_line",
         "command_template", "event_source", "counter_source", "summary_source",
-        "collection_metadata_source", "coverage_source", "session_name_source", "derived_coverage_start_utc",
+        "collection_metadata_source", "collection_control_receipt_source", "coverage_source",
+        "session_name_source", "derived_coverage_start_utc",
         "derived_coverage_end_utc", "derived_session_name", "raw_etl_sha256",
         "decoded_core_event_digest", "decoded_event_digest", "provenance", "replay",
     )
     if any(not isinstance(provenance.get(field), str) or not provenance[field] for field in required):
         raise ValueError("ETW parse receipt parser provenance is incomplete")
     if provenance.get("parser_name") != "vox-fx-t18-raw-etl-verifier" \
-            or provenance.get("parser_version") != "1.1.0" \
+            or provenance.get("parser_version") != "1.2.0" \
             or provenance.get("toolchain_id") != TOOLCHAIN_ID \
             or provenance.get("event_source") != EVENT_SOURCE \
             or provenance.get("counter_source") != LOSS_SOURCE \
             or provenance.get("summary_source") != ("fixture-json-declared-counters" if fixture else SUMMARY_SOURCE) \
             or provenance.get("collection_metadata_source") != ("fixture-declared-metadata" if fixture else COLLECTION_METADATA_SOURCE) \
-            or provenance.get("coverage_source") != ("fixture-declared-metadata" if fixture else COVERAGE_SOURCE) \
-            or provenance.get("session_name_source") != ("fixture-declared-metadata" if fixture else SESSION_SOURCE) \
+            or provenance.get("collection_control_receipt_source") != ("fixture-declared-metadata" if fixture else COLLECTION_CONTROL_RECEIPT_SOURCE) \
+            or (not fixture and provenance.get("coverage_source") not in {
+                COVERAGE_SOURCE, SUMMARY_AND_CONTROL_COVERAGE_SOURCE, CONTROL_COVERAGE_SOURCE
+            }) \
+            or (not fixture and provenance.get("session_name_source") not in {
+                SESSION_SOURCE, SUMMARY_AND_CONTROL_SESSION_SOURCE, CONTROL_SESSION_SOURCE
+            }) \
+            or (fixture and (provenance.get("coverage_source") != "fixture-declared-metadata"
+                             or provenance.get("session_name_source") != "fixture-declared-metadata")) \
             or provenance.get("command_template") != TRACERPT_COMMAND \
             or not isinstance(provenance.get("command_argv"), list) \
             or any(not isinstance(item, str) or not item for item in provenance["command_argv"]):
         raise ValueError("ETW parse receipt is not from the pinned independent parser")
+    control_receipts = provenance.get("collection_control_receipts")
+    if not isinstance(control_receipts, list) or (not fixture and len(control_receipts) != 2):
+        raise ValueError("ETW parse receipt lacks the two hashed logman control receipts")
     try:
         if json.loads(provenance["command_line"]) != provenance["command_argv"]:
             raise ValueError("command line and argument vector differ")
@@ -849,6 +1237,8 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
         }
         if actual_metadata != expected_metadata:
             raise ValueError("retained summary/collection metadata does not reconcile to the parse receipt")
+        if collection.get("collection_control_receipts") != control_receipts:
+            raise ValueError("retained logman control receipts do not reconcile to parser provenance")
     actual_hash = sha256(raw_path)
     if actual_hash.casefold() != str(receipt.get("collector_artifact_sha256", "")).casefold() \
             or actual_hash.casefold() != str(provenance.get("raw_etl_sha256", "")).casefold():
@@ -897,9 +1287,11 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
         "session_name": receipt.get("session_name"),
     }
     replay_projection = {field: replay_counters.get(field) for field in expected_counters}
+    replay_receipts = replay_counters.get("collection_control_receipts", [])
     if (core_event_digest(replay_events) != str(provenance.get("decoded_core_event_digest"))
             or event_digest(replay_enriched) != event_digest(events)
-            or replay_projection != expected_counters):
+            or replay_projection != expected_counters
+            or (not fixture and replay_receipts != control_receipts)):
         raise ValueError("independent raw ETL replay does not match the parse receipt")
 
 def main() -> int:

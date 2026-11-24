@@ -81,12 +81,14 @@ hashes and artifact hashes:
   literal `<redacted>` values;
 - `event_trace` distinguishes the WMI observation stream from the independently
   parsed ETW loss source and records its interval, collector hash, retained
-  `tracerpt -summary` path/hash, retained collection metadata path/hash, parser
-  receipt/hash, identity-join provenance,
-  received count and loss counters; the parser receipt must reconcile its
-  provider, collector hash, summary-derived coverage/session, counters and
-  complete process-event list to the signed loss payload, and the host manifest
-  must cover the retained summary and identity join;
+  `tracerpt -summary` path/hash, retained collection metadata path/hash, the
+  hashed start/stop logman-control receipt projections, parser receipt/hash,
+  identity-join provenance, received count and loss counters, and bounded
+  collector mode/max/bytes/rotation/truncation evidence; the parser receipt
+  must reconcile its provider, collector hash, summary-or-control-derived
+  coverage/session, counters and complete process-event list to the signed loss
+  payload, and the host manifest must cover the retained summary, collection
+  metadata, both control receipts and identity join;
 - `attestation_proofs` records each payload/signature path and SHA-256 plus
   the pinned signer thumbprint and method;
 - `execution_binding.runner_receipts` lists all three trusted runner-receipt
@@ -206,14 +208,25 @@ A receipt records the raw ETL SHA-256, summary path/SHA-256, retained
 and version, executable path, exact tracerpt argv, derived coverage/session
 source, event source, counter source, decoded digests, identity-join artifact
 hash, and replay command. Production caller arguments cannot supply coverage or
-session metadata.
+session metadata. The collection metadata is valid only when its hashed
+`VOX_FX_T18_LOGMAN_RECEIPT_V1` start and stop records parse successfully: they
+must prove `bin` rather than `bincirc`, the exact Kernel-Process GUID, keyword
+`0x10`, level `5`, max size, free-space headroom, successful create/query/stop/
+delete outcomes, active-before-capture and disabled-after-stop state, plus
+bytes written, one ETL file, zero rotations and no truncation. The public
+projection reconciles collector mode, max, bytes, rotation and truncation to
+the retained collection metadata. If summary coverage labels are absent, the
+parser derives the interval from the validated
+raw control-time lines; owner-authored metadata timestamps alone never supply
+coverage.
 The production parser requires an owner-private
 `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` join for the path/hash/service/ancestry facts
 that are not historical fields in the raw Kernel-Process event. `verify_receipt`
 reruns the decoder against the retained raw bytes, reapplies the retained join,
-and compares the raw core digest, complete enriched event digest and counters
-before the wall evaluator accepts the signed receipt. The join is included in
-the host manifest. The offline JSON raw-fixture mode is explicitly
+revalidates the hashed control receipts and compares the raw core digest,
+complete enriched event digest and counters before the wall evaluator accepts
+the signed receipt. The join and both control receipts are included in the host
+manifest. The offline JSON raw-fixture mode is explicitly
 qualification-prohibited and is only used to exercise the replay and tamper
 negatives.
 

@@ -107,32 +107,202 @@ $etl = 'D:\owner-evidence\fx-t18\process.etl'
 $sessionStart = 'D:\owner-evidence\fx-t18\etw-session-start.txt'
 $sessionStop = 'D:\owner-evidence\fx-t18\etw-session-stop.txt'
 $collectionMetadata = 'D:\owner-evidence\fx-t18\etw-collection-metadata.json'
+$tracerptSummary = 'D:\owner-evidence\fx-t18\process-tracerpt-summary.txt'
+$probeXml = "$etl.probe.xml"
+$providerName = 'Microsoft-Windows-Kernel-Process'
+$providerGuid = '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}'
+$keywords = '0x10'
+$level = 5
+$traceMode = 'bin'
+$maxFileMb = 4096
+$freeHeadroomMb = 512
+$maxFileBytes = [int64]$maxFileMb * 1MB
+$freeHeadroomBytes = [int64]$freeHeadroomMb * 1MB
+$minimumFreeBytes = $maxFileBytes + $freeHeadroomBytes
+$etlDrive = Get-PSDrive -Name (Split-Path -Path $etl -Qualifier).TrimEnd(':') -ErrorAction Stop
+$freeBytesBeforeStart = [int64]$etlDrive.Free
+if ($freeBytesBeforeStart -lt $minimumFreeBytes) { throw 'ETW destination does not have the required non-circular trace capacity' }
+foreach ($path in @($etl, $sessionStart, $sessionStop, $collectionMetadata, $tracerptSummary, $probeXml)) {
+  if (Test-Path -LiteralPath $path) { throw "Refusing to overwrite existing ETW evidence path: $path" }
+}
+function Invoke-LogmanStep([string[]]$Arguments) {
+  $raw = @(& logman.exe @Arguments 2>&1)
+  $exitCode = [int]$LASTEXITCODE
+  $text = ($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+  [pscustomobject]@{ exit_code = $exitCode; text = $text }
+}
+function Get-ControlTimeUtc([string]$Text, [string]$Label) {
+  $match = [regex]::Match($Text, '(?im)^\s*' + [regex]::Escape($Label) + '\s*[:=]\s*(?<value>.+?)\s*$')
+  if (-not $match.Success) { throw "Trusted control output has no $Label" }
+  try {
+    $parsed = [DateTimeOffset]::Parse($match.Groups['value'].Value, [Globalization.CultureInfo]::CurrentCulture, [Globalization.DateTimeStyles]::AssumeLocal)
+    return $parsed.ToUniversalTime().ToString('o')
+  }
+  catch { throw "Trusted control output $Label is not parseable" }
+}
 $sessionStarted = $false
-$startUtc = $null
 try {
-  logman create trace $session -o $etl -f bincirc -max 1024 -p '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}' 0x10 5 -ets
+  $createArgs = @('create', 'trace', $session, '-o', $etl, '-f', $traceMode, '-max', [string]$maxFileMb, '-p', $providerGuid, $keywords, [string]$level, '-ets')
+  $createCommand = "logman.exe create trace `"$session`" -o `"$etl`" -f $traceMode -max $maxFileMb -p $providerGuid $keywords $level -ets"
+  $create = Invoke-LogmanStep $createArgs
+  if ($create.exit_code -ne 0 -or $create.text -notmatch '(?i)completed successfully') { throw 'logman create trace failed' }
   $sessionStarted = $true
-  $startUtc = [DateTime]::UtcNow.ToString('o')
-  [ordered]@{ format = 'VOX_FX_T18_ETW_COLLECTION_METADATA_V1'; provider = 'Microsoft-Windows-Kernel-Process/ETW'; session_name = $session; coverage_start_utc = $startUtc; coverage_end_utc = '<pending-stop>'; etl_path = $etl; start_record_path = $sessionStart; stop_record_path = $sessionStop } |
-    ConvertTo-Json | Set-Content -LiteralPath $collectionMetadata -Encoding UTF8
-  logman query $session -ets | Tee-Object -FilePath $sessionStart
-  # Start Capture immediately after the session-start record, then run the
+  $queryArgs = @('query', $session, '-ets')
+  $queryCommand = "logman.exe query `"$session`" -ets"
+  $startQuery = Invoke-LogmanStep $queryArgs
+  if ($startQuery.exit_code -ne 0 -or $startQuery.text -notmatch '(?im)status\s*:\s*running' -or
+      $startQuery.text -notmatch [regex]::Escape($providerGuid) -or
+      $startQuery.text -notmatch '(?im)microsoft-windows-kernel-process' -or
+      $startQuery.text -notmatch '(?im)^\s*keywords?(?:\s*all|\s*any)?\s*[:=]\s*0x10\b' -or
+      $startQuery.text -notmatch '(?im)(?:level|verbosity)\s*[:=]\s*5\b' -or
+      $startQuery.text -notmatch '(?im)log\s+mode\s*[:=]\s*(?:sequential|file|normal)\b' -or
+      $startQuery.text -match '(?i)bincirc|circular' -or
+      $startQuery.text -notmatch '(?im)maximum\s+file\s+size\s*[:=]\s*4096\b') { throw 'logman query did not prove the requested running non-circular provider session' }
+  $startControlUtc = Get-ControlTimeUtc $startQuery.text 'Start Time'
+  # Start Capture immediately after this verified query, then run the
   # separately authorized routed/authored/typical job without changing services.
-  # After the post interval and runner receipts are immutable, stop in this
-  # same owner-controlled try/finally scope.
+  @(
+    'format=VOX_FX_T18_LOGMAN_RECEIPT_V1'
+    'operation=start'
+    "session_name=$session"
+    "control_time_utc=$startControlUtc"
+    'control_time_source=logman_query_output'
+    "trace_mode=$traceMode"
+    "provider_guid=$providerGuid"
+    "keywords_hex=$keywords"
+    "level=$level"
+    "max_file_mb=$maxFileMb"
+    "free_bytes_before_start=$freeBytesBeforeStart"
+    "minimum_free_bytes=$minimumFreeBytes"
+    "free_headroom_bytes=$freeHeadroomBytes"
+    'initial_file_size=0'
+    'rotation_count=0'
+    'truncation_detected=false'
+    "etl_path=$etl"
+    "create_exit_code=$($create.exit_code)"
+    "query_exit_code=$($startQuery.exit_code)"
+    "command_create=$createCommand"
+    "command_query=$queryCommand"
+    '--- RAW LOGMAN OUTPUT ---'
+    '[create]'
+    $create.text
+    '[query]'
+    $startQuery.text
+    '[capacity]'
+    "Free Bytes Before Start: $freeBytesBeforeStart"
+    "Minimum Free Bytes: $minimumFreeBytes"
+    "Free Headroom Bytes: $freeHeadroomBytes"
+    'Initial File Size: 0'
+    'Rotation Count: 0'
+    'Truncation Detected: false'
+  ) | Set-Content -LiteralPath $sessionStart -Encoding UTF8
   Read-Host 'Owner: after Capture and the post interval are complete, press Enter to stop ETW'
+  $stopArgs = @('stop', $session, '-ets')
+  $stopCommand = "logman.exe stop `"$session`" -ets"
+  $stop = Invoke-LogmanStep $stopArgs
+  if ($stop.exit_code -ne 0 -or $stop.text -notmatch '(?i)completed successfully') { throw 'logman stop trace failed' }
+  $postQuery = Invoke-LogmanStep $queryArgs
+  if ($postQuery.exit_code -eq 0 -or $postQuery.text -notmatch '(?i)not found|does not exist|cannot find|no such') { throw 'post-stop logman query did not prove the session was disabled' }
+  # Retain a pinned tracerpt summary as a second, independent ETW-header
+  # boundary. If the stop command itself exposes Stop Time, that raw control
+  # output remains acceptable when a summary has no coverage labels; otherwise
+  # the retained summary header must provide Log End Time.
+  $tracerpt = 'C:\Windows\System32\tracerpt.exe'
+  $probeOutput = @(& $tracerpt $etl -o $probeXml -of XML -lr -summary $tracerptSummary -y 2>&1)
+  $probeExit = [int]$LASTEXITCODE
+  $probeText = ($probeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+  if ($probeExit -ne 0 -or -not (Test-Path -LiteralPath $tracerptSummary)) { throw 'pinned tracerpt summary probe failed' }
+  $summaryText = Get-Content -LiteralPath $tracerptSummary -Raw
+  $stopControlSource = $null
+  $stopControlUtc = $null
+  try {
+    $stopControlUtc = Get-ControlTimeUtc $stop.text 'Stop Time'
+    $stopControlSource = 'logman_stop_output'
+  }
+  catch {
+    $stopControlUtc = Get-ControlTimeUtc $summaryText 'Log End Time'
+    $stopControlSource = 'tracerpt_summary_header'
+  }
+  $etlInfo = Get-Item -LiteralPath $etl -ErrorAction Stop
+  $bytesWritten = [int64]$etlInfo.Length
+  $truncationDetected = $bytesWritten -ge $maxFileBytes
+  if ($bytesWritten -le 0 -or $truncationDetected) { throw 'ETW artifact is empty or reached the bounded non-circular capacity' }
+  $deleteCommand = "logman.exe delete `"$session`" -ets"
+  $delete = Invoke-LogmanStep @('delete', $session, '-ets')
+  if ($delete.exit_code -ne 0 -or $delete.text -notmatch '(?i)completed successfully') { throw 'logman delete trace failed after verified stop' }
+  @(
+    'format=VOX_FX_T18_LOGMAN_RECEIPT_V1'
+    'operation=stop'
+    "session_name=$session"
+    "control_time_utc=$stopControlUtc"
+    "control_time_source=$stopControlSource"
+    "trace_mode=$traceMode"
+    "provider_guid=$providerGuid"
+    "keywords_hex=$keywords"
+    "level=$level"
+    "max_file_mb=$maxFileMb"
+    "bytes_written=$bytesWritten"
+    'rotation_count=0'
+    'etl_file_count=1'
+    "truncation_detected=$($truncationDetected.ToString().ToLowerInvariant())"
+    "etl_path=$etl"
+    "stop_exit_code=$($stop.exit_code)"
+    "post_stop_query_exit_code=$($postQuery.exit_code)"
+    "delete_exit_code=$($delete.exit_code)"
+    "tracerpt_probe_exit_code=$probeExit"
+    "command_stop=$stopCommand"
+    "command_post_stop_query=$queryCommand"
+    "command_delete=$deleteCommand"
+    "command_tracerpt_probe=$tracerpt $etl -o $probeXml -of XML -lr -summary $tracerptSummary -y"
+    '--- RAW LOGMAN OUTPUT ---'
+    '[stop]'
+    $stop.text
+    '[post-stop-query]'
+    $postQuery.text
+    '[delete]'
+    $delete.text
+    '[tracerpt-summary-header]'
+    $summaryText
+    '[file-stat]'
+    "Bytes Written: $bytesWritten"
+    'Rotation Count: 0'
+    'ETL File Count: 1'
+    "Truncation Detected: $($truncationDetected.ToString().ToLowerInvariant())"
+  ) | Set-Content -LiteralPath $sessionStop -Encoding UTF8
+  $sessionStarted = $false
+  $metadata = [ordered]@{
+    format = 'VOX_FX_T18_ETW_COLLECTION_METADATA_V1'; provider = "$providerName/ETW"; provider_guid = $providerGuid
+    session_name = $session; etl_path = $etl; trace_mode = $traceMode; capacity_policy = 'max_file_mb_plus_free_headroom'
+    max_file_mb = $maxFileMb; free_headroom_bytes = $freeHeadroomBytes; minimum_free_bytes = $minimumFreeBytes
+    free_bytes_before_start = $freeBytesBeforeStart; bytes_written = $bytesWritten; rotation_count = 0; etl_file_count = 1
+    truncation_detected = $truncationDetected; keywords_hex = $keywords; level = $level
+    start_record_path = $sessionStart; start_record_sha256 = (Get-FileHash -LiteralPath $sessionStart -Algorithm SHA256).Hash.ToLowerInvariant()
+    stop_record_path = $sessionStop; stop_record_sha256 = (Get-FileHash -LiteralPath $sessionStop -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+  $metadata | ConvertTo-Json | Set-Content -LiteralPath $collectionMetadata -Encoding UTF8
 }
 finally {
   if ($sessionStarted) {
-    $stopUtc = [DateTime]::UtcNow.ToString('o')
-    logman stop $session -ets | Tee-Object -FilePath $sessionStop
-    logman query $session -ets | Out-File -FilePath 'D:\owner-evidence\fx-t18\etw-session-after-stop.txt' -Encoding utf8
-    [ordered]@{ format = 'VOX_FX_T18_ETW_COLLECTION_METADATA_V1'; provider = 'Microsoft-Windows-Kernel-Process/ETW'; session_name = $session; coverage_start_utc = $startUtc; coverage_end_utc = $stopUtc; etl_path = $etl; start_record_path = $sessionStart; stop_record_path = $sessionStop } |
-      ConvertTo-Json | Set-Content -LiteralPath $collectionMetadata -Encoding UTF8
-    logman delete $session -ets
+    [void](Invoke-LogmanStep @('stop', $session, '-ets'))
   }
 }
 ```
+
+This collector is deliberately noncircular: `-f bin` is required and
+`bincirc`, rotations, and truncation are rejected. The 4096 MiB maximum file
+size plus 512 MiB free headroom is an explicit capacity policy; the run aborts
+before creation when the destination has less than
+`max_file_bytes + free_headroom_bytes`, and aborts after stop if the retained
+ETL reaches the maximum. The start receipt retains the successful `logman
+create` and active `logman query` output, exact provider GUID, keyword `0x10`,
+level `5`, mode, maximum, free-space calculation and zero initial
+rotation/truncation state. The stop receipt retains successful `logman stop`,
+the failed post-stop `logman query` proving the session is disabled, successful
+`logman delete`, the pinned tracerpt probe result, control-time source, actual
+ETL bytes, file count, rotation count and truncation state. Both receipts are
+hashed in the metadata; the parser reads and validates their raw output rather
+than accepting the metadata timestamps. If neither a raw `logman` `Stop Time`
+nor a `tracerpt` `Log End Time` is retained, the collection is blocked.
 
 The exact decoder command requests a separate `tracerpt -summary` artifact;
 `-lr` is the less-restrictive decoder option and is **not** a loss report:
@@ -214,8 +384,9 @@ manifest covering at least:
 - identity policy, lease, ETW loss and execution-binding payloads, each bound to
   the observation hash where issued after capture;
 - all four detached signatures, the raw ETL collector artifact, retained
-  `tracerpt -summary` artifact, retained logman collection start/stop metadata,
-  independent ETW parse receipt and the retained ETW identity-join artifact;
+  `tracerpt -summary` artifact, retained logman collection metadata and both
+  hashed start/stop control receipts, independent ETW parse receipt and the
+  retained ETW identity-join artifact;
 - each routed/authored/typical runner receipt, report, CTest raw output, JUnit,
   inventory, post-test outcome, selected executable and audit output.
 
