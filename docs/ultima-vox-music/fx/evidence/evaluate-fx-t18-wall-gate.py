@@ -36,6 +36,15 @@ SHA1_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 OWNER_SIGNATURE_METHOD = "detached_cms_owner_certificate_chain_and_thumbprint"
 
 
+def _normalize_thumbprint(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("owner certificate thumbprint is not a string")
+    normalized = re.sub(r"[\s:]", "", value).upper()
+    if not SHA1_RE.fullmatch(normalized):
+        raise ValueError("owner certificate thumbprint is not a SHA-1 value")
+    return normalized
+
+
 def _bool(value: Any, name: str) -> bool:
     if type(value) is not bool:
         raise ValueError(f"{name} is not boolean")
@@ -91,6 +100,193 @@ def _resolve(path: Path, value: str) -> Path:
     return candidate if candidate.is_absolute() else path.parent / candidate
 
 
+def _identity_digest(event: dict[str, Any]) -> str:
+    services = event.get("service_identity_sha256")
+    if not isinstance(services, list):
+        raise ValueError("ETW process event service identity list is malformed")
+    payload = "|".join((
+        str(event.get("process_name", "")), str(event.get("executable_path", "")),
+        str(event.get("executable_sha256", "")), str(event.get("parent_pid", "")),
+        str(event.get("start_time_utc", "")), ",".join(str(item) for item in services),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _event_key(event: dict[str, Any]) -> tuple[str, str, str]:
+    return (str(event.get("event")), str(event.get("timestamp_utc")), str(event.get("identity_digest")))
+
+
+def _validate_etw_process_events(events: Any, label: str, coverage_start: datetime,
+                                 coverage_end: datetime) -> list[tuple[str, str, str]]:
+    if not isinstance(events, list):
+        raise ValueError(f"{label}: authoritative ETW process_events must be a list")
+    keys: list[tuple[str, str, str]] = []
+    previous_time: datetime | None = None
+    active: dict[int, tuple[str, str, str]] = {}
+    seen_lifecycles: dict[int, tuple[str, str, str]] = {}
+    for index, event in enumerate(events):
+        prefix = f"{label}.process_events[{index}]"
+        if not isinstance(event, dict) or event.get("event") not in {"start", "stop"}:
+            raise ValueError(f"{prefix}: event kind is invalid")
+        for field in ("timestamp_utc", "pid", "process_name", "executable_path", "executable_sha256",
+                      "parent_pid", "start_time_utc", "service_identity_sha256", "identity_digest",
+                      "identity_known", "approved_by_policy"):
+            if field not in event:
+                raise ValueError(f"{prefix}: missing {field}")
+        timestamp = _utc(event["timestamp_utc"], f"{prefix}.timestamp_utc")
+        if timestamp < coverage_start or timestamp > coverage_end or (previous_time and timestamp < previous_time):
+            raise ValueError(f"{prefix}: timestamp is outside or regresses within ETW coverage")
+        previous_time = timestamp
+        if type(event["pid"]) is not int or event["pid"] < 1 or not isinstance(event["process_name"], str) \
+                or not event["process_name"] or not isinstance(event["executable_path"], str) \
+                or not event["executable_path"] or not SHA256_RE.fullmatch(str(event["executable_sha256"])) \
+                or type(event["parent_pid"]) is not int or event["parent_pid"] < 0 \
+                or not SHA256_RE.fullmatch(str(event["identity_digest"])) \
+                or event["identity_known"] is not True or event["approved_by_policy"] is not True \
+                or not isinstance(event["service_identity_sha256"], list) \
+                or any(not SHA256_RE.fullmatch(str(item)) for item in event["service_identity_sha256"]):
+            raise ValueError(f"{prefix}: ETW process identity is incomplete or not approved")
+        start_time = _utc(event["start_time_utc"], f"{prefix}.start_time_utc")
+        if start_time > timestamp:
+            raise ValueError(f"{prefix}: process creation time is after its ETW event")
+        if _identity_digest(event).casefold() != str(event["identity_digest"]).casefold():
+            raise ValueError(f"{prefix}: ETW identity digest does not reconcile")
+        lifecycle = (str(event["identity_digest"]), str(event["process_name"]), str(event["start_time_utc"]))
+        if event["event"] == "start":
+            if event["pid"] in active:
+                raise ValueError(f"{prefix}: PID started again before its prior lifecycle stopped")
+            if event["pid"] in seen_lifecycles:
+                raise ValueError(f"{prefix}: PID was reused after an earlier lifecycle")
+            seen_lifecycles[event["pid"]] = lifecycle
+            active[event["pid"]] = lifecycle
+        elif event["pid"] in active:
+            if active[event["pid"]] != lifecycle:
+                raise ValueError(f"{prefix}: PID stop identity disagrees with its start identity")
+            del active[event["pid"]]
+        elif _utc(event["start_time_utc"], f"{prefix}.start_time_utc") >= coverage_start:
+            raise ValueError(f"{prefix}: PID stop has no matching start lifecycle")
+        elif event["pid"] in seen_lifecycles:
+            if seen_lifecycles[event["pid"]] != lifecycle:
+                raise ValueError(f"{prefix}: PID stop identity disagrees with its earlier lifecycle")
+            raise ValueError(f"{prefix}: duplicate stop for a PID lifecycle")
+        else:
+            # A process may have started before ETW coverage. Retain its
+            # identity so a later start with the same PID cannot be mistaken
+            # for an unrelated, acceptable lifecycle.
+            seen_lifecycles[event["pid"]] = lifecycle
+        keys.append(_event_key(event))
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"{label}: duplicate ETW process identity event")
+    return keys
+
+
+def _validate_wmi_event_keys(events: Any, label: str) -> set[tuple[str, str, str]]:
+    if not isinstance(events, list):
+        raise ValueError(f"{label}: WMI process_events must be a list")
+    keys: set[tuple[str, str, str]] = set()
+    for index, event in enumerate(events):
+        prefix = f"{label}.process_events[{index}]"
+        if not isinstance(event, dict) or event.get("event") not in {"start", "stop"} \
+                or event.get("identity_known") is not True or event.get("approved_by_policy") is not True \
+                or not SHA256_RE.fullmatch(str(event.get("identity_digest", ""))):
+            raise ValueError(f"{prefix}: WMI event is unknown, unapproved, or malformed")
+        keys.add(_event_key(event))
+    if len(keys) != len(events):
+        raise ValueError(f"{label}: duplicate WMI process identity event")
+    return keys
+
+
+def _policy_approves_event(policy_file: dict[str, Any], event: dict[str, Any]) -> bool:
+    process_name = str(event.get("process_name", ""))
+    for denied in policy_file.get("denied_process_name_regex", []):
+        if re.search(str(denied), process_name, flags=re.IGNORECASE):
+            return False
+    for item in policy_file.get("approved_processes", []):
+        name = item.get("process_name")
+        name_regex = item.get("process_name_regex")
+        if name and process_name.casefold() != str(name).casefold():
+            continue
+        if name_regex and re.search(str(name_regex), process_name, flags=re.IGNORECASE) is None:
+            continue
+        if str(event.get("executable_path", "")).casefold() != str(item.get("executable_path", "")).casefold():
+            continue
+        if str(event.get("executable_sha256", "")).casefold() != str(item.get("executable_sha256", "")).casefold():
+            continue
+        if event.get("parent_pid") != item.get("parent_pid"):
+            continue
+        if str(item.get("service_identity_sha256", "")).casefold() not in {
+                str(value).casefold() for value in event.get("service_identity_sha256", [])}:
+            continue
+        exact_pid = item.get("pid")
+        exact_start = item.get("start_time_utc")
+        if exact_pid is not None and event.get("pid") != exact_pid:
+            continue
+        if exact_start is not None and event.get("start_time_utc") != exact_start:
+            continue
+        if exact_pid is None and exact_start is None and item.get("allow_dynamic") is not True:
+            continue
+        return True
+    return False
+
+
+def _validate_identity_policy(policy_file: dict[str, Any], label: str) -> None:
+    approved = policy_file.get("approved_processes")
+    denied = policy_file.get("denied_process_name_regex")
+    if not isinstance(approved, list) or not approved or not isinstance(denied, list) or not denied:
+        raise ValueError(f"{label}: strict approved and denied process policy is required")
+    for index, item in enumerate(approved):
+        prefix = f"{label}.approved_processes[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{prefix}: policy entry is not an object")
+        name = item.get("process_name")
+        name_regex = item.get("process_name_regex")
+        if (name is not None and not isinstance(name, str)) or (name_regex is not None and not isinstance(name_regex, str)):
+            raise ValueError(f"{prefix}: process name fields must be strings")
+        has_name = isinstance(name, str) and bool(name)
+        has_name_regex = isinstance(name_regex, str) and bool(name_regex)
+        if has_name == has_name_regex:
+            raise ValueError(f"{prefix}: exactly one non-empty process name or regex is required")
+        path = item.get("executable_path")
+        if not isinstance(path, str) or not path or path.startswith("<") or "*" in path or "?" in path:
+            raise ValueError(f"{prefix}: exact executable_path is required")
+        if not SHA256_RE.fullmatch(str(item.get("executable_sha256", ""))):
+            raise ValueError(f"{prefix}: executable SHA-256 is required")
+        if not SHA256_RE.fullmatch(str(item.get("service_identity_sha256", ""))):
+            raise ValueError(f"{prefix}: service identity SHA-256 is required")
+        if type(item.get("parent_pid")) is not int or item["parent_pid"] < 0:
+            raise ValueError(f"{prefix}: parent_pid identity is required")
+        allow_dynamic = item.get("allow_dynamic")
+        if type(allow_dynamic) is not bool:
+            raise ValueError(f"{prefix}: allow_dynamic must be an explicit boolean")
+        exact_pid = item.get("pid")
+        exact_start = item.get("start_time_utc")
+        if (exact_pid is None) != (exact_start is None):
+            raise ValueError(f"{prefix}: exact PID and process creation time must be supplied together")
+        if exact_pid is not None:
+            if type(exact_pid) is not int or exact_pid < 1:
+                raise ValueError(f"{prefix}: exact PID identity is invalid")
+            _utc(exact_start, f"{prefix}.start_time_utc")
+        elif allow_dynamic is not True:
+            raise ValueError(f"{prefix}: a dynamic rule must explicitly set allow_dynamic=true")
+    for index, regex in enumerate(denied):
+        if not isinstance(regex, str) or not regex:
+            raise ValueError(f"{label}.denied_process_name_regex[{index}]: deny regex is invalid")
+        try:
+            re.compile(regex)
+        except re.error as error:
+            raise ValueError(f"{label}.denied_process_name_regex[{index}]: deny regex is invalid") from error
+    for index, item in enumerate(approved):
+        name = item.get("process_name")
+        name_regex = item.get("process_name_regex")
+        if isinstance(name, str) and any(re.search(str(regex), name, flags=re.IGNORECASE) for regex in denied):
+            raise ValueError(f"{label}.approved_processes[{index}]: deny rule conflicts with an allow entry")
+        if isinstance(name_regex, str):
+            try:
+                re.compile(name_regex)
+            except re.error as error:
+                raise ValueError(f"{label}.approved_processes[{index}]: process name regex is invalid") from error
+
+
 def _proof(value: dict[str, Any], name: str) -> dict[str, Any]:
     proofs = value.get("attestation_proofs")
     if not isinstance(proofs, dict) or not isinstance(proofs.get(name), dict):
@@ -137,12 +333,23 @@ def _verify_host_manifest(path: Path, witness: Path) -> dict[str, Any]:
         (witness_value.get("runner_lease", {}), "verification_receipt_path"),
         (witness_value.get("event_trace", {}), "loss_receipt_path"),
         (witness_value.get("event_trace", {}), "collector_artifact_path"),
+        (witness_value.get("event_trace", {}), "collector_parse_receipt_path"),
         (witness_value.get("execution_binding", {}), "binding_receipt_path"),
     ):
         item = container.get(field) if isinstance(container, dict) else None
         if not isinstance(item, str) or not item or item.startswith("<"):
             raise ValueError(f"{witness}: host artifact path {field} is missing or redacted")
         required.append(_resolve(witness, item))
+    if witness_value.get("fixture_mode") is not True and witness_value.get("qualification_prohibited") is not True:
+        observation_value = witness_value.get("observation_path")
+        observation_hash = witness_value.get("observation_sha256")
+        if not isinstance(observation_value, str) or observation_value.startswith("<") \
+                or not isinstance(observation_hash, str) or not SHA256_RE.fullmatch(observation_hash):
+            raise ValueError(f"{witness}: immutable observation path/hash is missing")
+        observation_path = _resolve(witness, observation_value)
+        if not observation_path.is_file() or _sha256(observation_path).casefold() != observation_hash.casefold():
+            raise ValueError(f"{witness}: immutable observation hash does not reconcile")
+        required.append(observation_path)
     for name in ("policy", "lease", "event_loss", "execution_binding"):
         proof = _proof(witness_value, name)
         for field in ("data_path", "signature_path"):
@@ -203,6 +410,13 @@ try {
     $expected = (($env:FX_T18_VERIFY_THUMBPRINT -replace '[^0-9a-fA-F]', '').ToUpperInvariant())
     if ($actual -cne $expected) { throw 'signature thumbprint mismatch' }
     $cms.CheckSignature($false)
+    $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+    try {
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::EntireChain
+        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+        if (-not $chain.Build($certificate)) { throw 'owner certificate chain or revocation check failed' }
+    } finally { $chain.Dispose() }
     exit 0
 } catch { [Console]::Error.WriteLine('detached CMS verification failed'); exit 1 }
 """
@@ -230,9 +444,10 @@ def _verify_signed_proof(
 ) -> tuple[Path, Path, str]:
     if proof.get("verified") is not True or proof.get("verification_method") != OWNER_SIGNATURE_METHOD:
         raise ValueError(f"{witness_path}: {name} proof was not verified by the detached-CMS owner verifier")
-    thumbprint = proof.get("signer_thumbprint")
-    if not isinstance(thumbprint, str) or not re.fullmatch(r"[0-9A-Fa-f]{40}", thumbprint):
-        raise ValueError(f"{witness_path}: {name} proof has no pinned owner certificate thumbprint")
+    try:
+        thumbprint = _normalize_thumbprint(proof.get("signer_thumbprint"))
+    except ValueError as error:
+        raise ValueError(f"{witness_path}: {name} proof has no pinned owner certificate thumbprint") from error
     if expected_thumbprint and thumbprint.casefold() != expected_thumbprint.casefold():
         raise ValueError(f"{witness_path}: {name} proof signer thumbprint differs from the other owner proofs")
     data_path_value = proof.get("data_path")
@@ -264,6 +479,7 @@ def _verify_external_witness_attestations(
     expected_policy_sha256: str | None, expected_source_head: str | None,
     expected_source_tree: str | None, expected_executable_sha256: str | None,
     allow_fixture: bool = False,
+    owner_certificate_thumbprint: str | None = None,
 ) -> list[Path]:
     """Reconcile owner-signed payloads and their detached signature artifacts.
 
@@ -276,7 +492,14 @@ def _verify_external_witness_attestations(
     """
     artifacts: list[Path] = []
     proof_paths: dict[str, tuple[Path, Path]] = {}
-    thumbprint: str | None = None
+    if owner_certificate_thumbprint is not None:
+        try:
+            owner_certificate_thumbprint = _normalize_thumbprint(owner_certificate_thumbprint)
+        except ValueError as error:
+            raise ValueError(f"{path}: independently supplied owner certificate thumbprint is malformed") from error
+    if not allow_fixture and not owner_certificate_thumbprint:
+        raise ValueError(f"{path}: independent owner certificate thumbprint is required")
+    thumbprint: str | None = owner_certificate_thumbprint
     for name in ("policy", "lease", "event_loss", "execution_binding"):
         data_path, signature_path, actual_thumbprint = _verify_signed_proof(
             path, _proof(value, name), name, thumbprint,
@@ -293,6 +516,21 @@ def _verify_external_witness_attestations(
     lease_file = _read_json(lease_path, "host lease receipt")
     loss_file = _read_json(loss_path, "ETW event-loss receipt")
     binding_file = _read_json(binding_path, "execution binding")
+    witness_fixture = value.get("fixture_mode") is True or value.get("qualification_prohibited") is True
+    observation_path: Path | None = None
+    observation_hash: str | None = None
+    if not witness_fixture:
+        observation_value = value.get("observation_path")
+        observation_hash = value.get("observation_sha256")
+        if not isinstance(observation_value, str) or observation_value.startswith("<") \
+                or not isinstance(observation_hash, str) or not SHA256_RE.fullmatch(observation_hash):
+            raise ValueError(f"{path}: immutable observation path/hash is required")
+        observation_path = _resolve(path, observation_value)
+        if not observation_path.is_file() or _sha256(observation_path).casefold() != observation_hash.casefold():
+            raise ValueError(f"{path}: immutable observation hash does not reconcile")
+        if (loss_file.get("observation_sha256") != observation_hash
+                or binding_file.get("observation_sha256") != observation_hash):
+            raise ValueError(f"{path}: post-capture signed proofs are not bound to the immutable observation")
 
     if (policy_file.get("format") != "VOX_FX_T18_IDENTITY_POLICY_V1"
             or policy_file.get("owner_approved") is not True
@@ -302,6 +540,7 @@ def _verify_external_witness_attestations(
             or len(set(policy_file["runner_service_identity_sha256"])) != 4
             or set(policy_file["runner_service_identity_sha256"]) != set(value.get("runner_service_identities", []))):
         raise ValueError(f"{path}: signed identity baseline does not match the witness")
+    _validate_identity_policy(policy_file, f"{path}: signed identity baseline")
     actual_policy_hash = _sha256(policy_path)
     if (actual_policy_hash.casefold() != str(policy.get("policy_sha256", "")).casefold()
             or actual_policy_hash.casefold() != str(value.get("identity_policy_sha256", "")).casefold()
@@ -337,9 +576,10 @@ def _verify_external_witness_attestations(
             or loss_file.get("provider") != "Microsoft-Windows-Kernel-Process/ETW"
             or loss_file.get("measurement_method") != "ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS"
             or loss_file.get("coverage_complete") is not True
-            or loss_file.get("lost_events") != 0
-            or loss_file.get("buffer_loss_events") != 0
-            or type(loss_file.get("events_received")) is not int
+            or type(loss_file.get("lost_events")) is not int or loss_file.get("lost_events") != 0
+            or type(loss_file.get("buffer_loss_events")) is not int or loss_file.get("buffer_loss_events") != 0
+            or type(loss_file.get("events_received")) is not int or loss_file.get("events_received") < 0
+            or not isinstance(loss_file.get("session_name"), str) or not loss_file["session_name"]
             or loss_file.get("owner_approved") is not True
             or loss_file.get("attestation_source") != "owner_controlled_offline"
             or loss_file.get("verification_method") != "owner_signed_detached_cms"):
@@ -349,13 +589,49 @@ def _verify_external_witness_attestations(
     if not isinstance(collector_value, str) or not isinstance(collector_hash, str) or not SHA256_RE.fullmatch(collector_hash):
         raise ValueError(f"{path}: ETW collector artifact path/hash is missing")
     collector_path = _resolve(loss_path, collector_value)
+    if (loss_file.get("collector_artifact_format") != "ETL"
+            or loss_file.get("collector_parse_method") != "owner_independent_etw_parser_v1"):
+        raise ValueError(f"{path}: ETW collector is not accompanied by the required independent parser contract")
     if not collector_path.is_file() or _sha256(collector_path).casefold() != collector_hash.casefold():
         raise ValueError(f"{path}: ETW collector artifact hash does not reconcile")
-    artifacts.append(collector_path)
+    parse_value = loss_file.get("collector_parse_receipt_path")
+    parse_hash = loss_file.get("collector_parse_receipt_sha256")
+    if not isinstance(parse_value, str) or not isinstance(parse_hash, str) or not SHA256_RE.fullmatch(parse_hash):
+        raise ValueError(f"{path}: ETW parse receipt path/hash is missing")
+    parse_path = _resolve(loss_path, parse_value)
+    if not parse_path.is_file() or _sha256(parse_path).casefold() != parse_hash.casefold():
+        raise ValueError(f"{path}: ETW parse receipt hash does not reconcile")
     loss_start = _utc(loss_file.get("coverage_start_utc"), "event_loss.coverage_start_utc")
     loss_end = _utc(loss_file.get("coverage_end_utc"), "event_loss.coverage_end_utc")
     if loss_start > capture_start or loss_end < capture_end:
         raise ValueError(f"{path}: signed ETW loss interval does not cover the witness")
+    parse_file = _read_json(parse_path, "ETW parse receipt")
+    if (parse_file.get("format") != "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
+            or parse_file.get("provider") != "Microsoft-Windows-Kernel-Process/ETW"
+            or parse_file.get("session_name") != loss_file.get("session_name")
+            or str(parse_file.get("collector_artifact_sha256", "")).casefold() != collector_hash.casefold()
+            or parse_file.get("coverage_start_utc") != loss_file.get("coverage_start_utc")
+            or parse_file.get("coverage_end_utc") != loss_file.get("coverage_end_utc")
+            or parse_file.get("events_received") != loss_file.get("events_received")
+            or parse_file.get("lost_events") != loss_file.get("lost_events")
+            or parse_file.get("buffer_loss_events") != loss_file.get("buffer_loss_events")
+            or parse_file.get("process_events") != loss_file.get("process_events")):
+        raise ValueError(f"{path}: ETW parse receipt does not reconcile to the signed loss counters/events")
+    etw_events = parse_file.get("process_events")
+    if not isinstance(etw_events, list):
+        raise ValueError(f"{path}: ETW parse receipt process-event list is missing")
+    if (type(parse_file.get("events_received")) is not int
+            or parse_file["events_received"] < 0
+            or parse_file["events_received"] != len(etw_events)):
+        raise ValueError(f"{path}: ETW received-event count does not equal the complete parsed process-event list")
+    etw_keys = _validate_etw_process_events(etw_events, f"{path}: ETW parse receipt", loss_start, loss_end)
+    for index, event in enumerate(etw_events):
+        if not _policy_approves_event(policy_file, event):
+            raise ValueError(f"{path}: ETW process event {index} is denied or mismatched to the owner policy")
+    wmi_keys = _validate_wmi_event_keys(value.get("process_events"), f"{path}: WMI witness")
+    if set(etw_keys) != wmi_keys:
+        raise ValueError(f"{path}: authoritative ETW process events do not reconcile with WMI observations")
+    artifacts.extend((collector_path, parse_path))
 
     if (binding_file.get("format") != "VOX_FX_T18_EXECUTION_BINDING_V1"
             or binding_file.get("owner_approved") is not True
@@ -440,6 +716,7 @@ def validate_witness(
     expected_executable_sha256: str | None = None,
     require_external_attestations: bool = False,
     allow_fixture: bool = False,
+    owner_certificate_thumbprint: str | None = None,
 ) -> dict[str, Any]:
     """Validate monotonic/deadline sampling and host-wide identity summaries."""
     value = _read_json(path, "host witness")
@@ -496,8 +773,12 @@ def validate_witness(
             type(event_trace.get("lost_events")) is int and event_trace.get("lost_events") == 0,
             type(event_trace.get("buffer_loss_events")) is int and event_trace.get("buffer_loss_events") == 0,
             type(event_trace.get("events_received")) is int and event_trace.get("events_received") >= 0,
+            event_trace.get("collector_artifact_format") == "ETL",
+            event_trace.get("collector_parse_method") == "owner_independent_etw_parser_v1",
             isinstance(event_trace.get("collector_artifact_sha256"), str)
             and SHA256_RE.fullmatch(event_trace["collector_artifact_sha256"]) is not None,
+            isinstance(event_trace.get("collector_parse_receipt_sha256"), str)
+            and SHA256_RE.fullmatch(event_trace["collector_parse_receipt_sha256"]) is not None,
         )
         if not all(required_event):
             raise ValueError(f"{path}: independently measurable ETW event loss/completeness is absent")
@@ -530,15 +811,16 @@ def validate_witness(
         if timestamp < capture_start or timestamp > capture_end:
             raise ValueError(f"{path}: sample lies outside capture interval")
         _validate_public_sample(sample, f"samples[{index}]", allow_fixture)
-        scheduled = _utc(sample.get("scheduled_timestamp_utc", sample.get("timestamp_utc")),
-                         f"samples[{index}].scheduled_timestamp_utc")
+        if "scheduled_timestamp_utc" not in sample or "monotonic_elapsed_ms" not in sample:
+            raise ValueError(f"{path}: sample {index} is missing its global deadline/monotonic fields")
+        scheduled = _utc(sample["scheduled_timestamp_utc"], f"samples[{index}].scheduled_timestamp_utc")
         if scheduled_times and scheduled <= scheduled_times[-1]:
             raise ValueError(f"{path}: sample deadlines are not strictly increasing")
         if abs((timestamp - scheduled).total_seconds()) > MAX_SAMPLE_GAP_SECONDS:
             raise ValueError(f"{path}: sample missed its monotonic/deadline reconciliation")
         monotonic = sample.get("monotonic_elapsed_ms")
         if monotonic is not None:
-            if not isinstance(monotonic, (int, float)) or monotonic < 0.0 \
+            if type(monotonic) not in (int, float) or monotonic < 0.0 \
                     or (previous_monotonic is not None and monotonic <= previous_monotonic):
                 raise ValueError(f"{path}: monotonic sample clock is not strictly increasing")
             previous_monotonic = float(monotonic)
@@ -665,7 +947,7 @@ def validate_witness(
             path, value, capture_start, capture_end, policy, lease, event_trace, binding,
             expected_host, expected_lease_id, expected_policy_sha256,
             expected_source_head, expected_source_tree, expected_executable_sha256,
-            allow_fixture=allow_fixture)
+            allow_fixture=allow_fixture, owner_certificate_thumbprint=owner_certificate_thumbprint)
 
     return {"verified": True, "path": str(path), "samples": len(samples),
             "process_events": len(events), "capture_start": capture_start, "capture_end": capture_end,
@@ -917,7 +1199,8 @@ def evaluate_reports(reports: dict[str, Path], root: Path | None = None, executa
                      receipts: dict[str, Path] | None = None, manifests: dict[str, Path] | None = None,
                      expected_head: str | None = None, expected_tree: str | None = None,
                      witness: Path | None = None, host_manifest: Path | None = None,
-                     allow_unverified_provenance: bool = False) -> dict[str, Any]:
+                     allow_unverified_provenance: bool = False,
+                     owner_certificate_thumbprint: str | None = None) -> dict[str, Any]:
     receipts = receipts or {}; manifests = manifests or {}
     audited: dict[str, dict[str, Any]] = {}
     execution = {profile: _execution_state(receipts.get(profile)) for profile in PROFILES}
@@ -951,7 +1234,8 @@ def evaluate_reports(reports: dict[str, Path], root: Path | None = None, executa
         witness_result = validate_witness(witness, execution, expected_host, expected_lease_id, expected_policy_hash,
                                           expected_source_head, expected_source_tree, expected_executable_sha,
                                           require_external_attestations=not allow_unverified_provenance,
-                                          allow_fixture=allow_unverified_provenance)
+                                          allow_fixture=allow_unverified_provenance,
+                                          owner_certificate_thumbprint=owner_certificate_thumbprint)
         if not allow_unverified_provenance:
             if host_manifest is None: raise ValueError("production evaluation requires a host artifact manifest")
             host_manifest_result = _verify_host_manifest(host_manifest, witness)
@@ -993,6 +1277,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path); parser.add_argument("--executable", type=Path)
     parser.add_argument("--expected-head"); parser.add_argument("--expected-tree")
     parser.add_argument("--witness", type=Path); parser.add_argument("--host-manifest", type=Path)
+    parser.add_argument("--owner-certificate-thumbprint", help="owner-supplied SHA-1 trust anchor; required for production CMS verification")
     parser.add_argument("--allow-unverified-provenance", action="store_true", help="fixture mode only; qualification-prohibited and cannot PASS")
     args = parser.parse_args()
     try:
@@ -1002,7 +1287,8 @@ def main() -> int:
         manifests = _assignments(args.manifest, "--manifest") if args.manifest else {}
         result = evaluate_reports(reports, root=args.root, executable=args.executable, receipts=receipts, manifests=manifests,
                                   expected_head=args.expected_head, expected_tree=args.expected_tree, witness=args.witness,
-                                  host_manifest=args.host_manifest, allow_unverified_provenance=args.allow_unverified_provenance)
+                                  host_manifest=args.host_manifest, allow_unverified_provenance=args.allow_unverified_provenance,
+                                  owner_certificate_thumbprint=args.owner_certificate_thumbprint)
     except (OSError, ValueError) as error:
         parser.exit(2, f"FX-T18 wall evaluator: {error}\n")
     print(json.dumps(result, indent=2, sort_keys=True, default=str))

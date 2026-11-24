@@ -32,12 +32,16 @@ foreach ($forbidden in $forbiddenTokens) {
 if ($source -match '\$env:FX_T18_LEASE_' -or
     $source -notmatch 'Get-VerifiedOwnerSignature' -or
     $source -notmatch 'Get-VerifiedLeaseReceipt' -or
-    $source -notmatch 'Get-VerifiedEventLossReceipt' -or
-    $source -notmatch 'Get-VerifiedExecutionBinding' -or
     $source -notmatch 'Microsoft-Windows-Kernel-Process/ETW' -or
+    $source -match 'Get-VerifiedEventLossReceipt' -or
+    $source -match 'Get-VerifiedExecutionBinding' -or
     $source -notmatch 'Get-MonotonicSeconds' -or
-    $source -notmatch 'Get-EventTimeUtc') {
-    throw 'Host witness lease, CMS, ETW and monotonic verification is incomplete'
+    $source -notmatch 'Get-EventTimeUtc' -or
+    $source -notmatch 'RevocationMode' -or
+    $source -notmatch 'VOX-FX-T18-ProcessStart' -or
+    $source -notmatch 'VOX_FX_T18_HOST_OBSERVATION_V1' -or
+    $source -notmatch "\$Phase -eq 'Observe'") {
+    throw 'Host witness two-phase CMS, ETW, lifecycle and monotonic verification is incomplete'
 }
 
 function Get-SanitizedChildSummary([string]$Path) {
@@ -61,7 +65,6 @@ function Invoke-CaptureFixture {
         [string]$ExpectedReason,
         [string]$PolicyPath = '',
         [string]$LeasePath = '',
-        [string]$EventLossPath = '',
         [switch]$SimulateProviderFailure
     )
     $outputPath = Join-Path $tempRoot ($Name + '.json')
@@ -74,7 +77,6 @@ function Invoke-CaptureFixture {
     )
     if ($PolicyPath) { $arguments += @('-IdentityPolicyPath', $PolicyPath) }
     if ($LeasePath) { $arguments += @('-LeaseReceiptPath', $LeasePath) }
-    if ($EventLossPath) { $arguments += @('-EventLossReceiptPath', $EventLossPath) }
     if ($SimulateProviderFailure) { $arguments += '-SimulateProviderFailure' }
 
     & powershell.exe @arguments 1> $stdoutPath 2> $stderrPath
@@ -159,7 +161,7 @@ try {
         valid_until_utc = $now.AddHours(2).ToString('o')
         owner_approved = $true
         runner_service_identity_sha256 = @('1' * 64, '2' * 64, '3' * 64, '4' * 64)
-        approved_processes = @([ordered]@{ pid = 1000; process_name = 'Runner.Listener.exe'; role = 'runner'; allow_dynamic = $true; executable_sha256 = ('5' * 64) })
+        approved_processes = @([ordered]@{ pid = 1000; process_name = 'Runner.Listener.exe'; role = 'runner'; allow_dynamic = $false; start_time_utc = $now.AddMinutes(-5).ToString('o'); executable_path = 'C:\HAMUNAPTRA\Runner.Listener.exe'; executable_sha256 = ('5' * 64); parent_pid = 4; service_identity_sha256 = ('1' * 64) })
         denied_process_name_regex = @('^(devenv|msbuild|cmake|ctest|ninja|python|cubase|reaper)')
     }
     $policy | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $policyPath -Encoding UTF8
@@ -179,24 +181,36 @@ try {
     $collectorPath = Join-Path $tempRoot 'fixture-etw-collector.etl'
     [IO.File]::WriteAllBytes($collectorPath, [Text.Encoding]::UTF8.GetBytes('synthetic ETW collector artifact'))
     $collectorHash = (Get-FileHash -LiteralPath $collectorPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $parsePath = Join-Path $tempRoot 'fixture-etw-parse.json'
+    [ordered]@{
+        format = 'VOX_FX_T18_ETW_PARSE_RECEIPT_V1'; provider = 'Microsoft-Windows-Kernel-Process/ETW'
+        session_name = 'fixture-etw-session'; coverage_start_utc = $validFrom; coverage_end_utc = $validUntil
+        events_received = 0; lost_events = 0; buffer_loss_events = 0
+        collector_artifact_sha256 = $collectorHash; process_events = @()
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $parsePath -Encoding UTF8
+    $parseHash = (Get-FileHash -LiteralPath $parsePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $lossPath = Join-Path $tempRoot 'fixture-event-loss.json'
     [ordered]@{
         format = 'VOX_FX_T18_EVENT_LOSS_RECEIPT_V1'
         provider = 'Microsoft-Windows-Kernel-Process/ETW'
         measurement_method = 'ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS'
         coverage_complete = $true; lost_events = 0; buffer_loss_events = 0; events_received = 0
+        session_name = 'fixture-etw-session'
         owner_approved = $true; attestation_source = 'owner_controlled_offline'
         verification_method = 'owner_signed_detached_cms'; trace_id = 'fixture-trace'
         collector_artifact_path = $collectorPath
-        collector_artifact_sha256 = $collectorHash
+        collector_artifact_sha256 = $collectorHash; collector_artifact_format = 'ETL'
+        collector_parse_method = 'owner_independent_etw_parser_v1'
+        collector_parse_receipt_path = $parsePath; collector_parse_receipt_sha256 = $parseHash
+        process_events = @()
         coverage_start_utc = $validFrom; coverage_end_utc = $validUntil
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $lossPath -Encoding UTF8
 
     # Each missing attestation is exercised through the real Capture entrypoint.
-    Invoke-CaptureFixture 'missing-policy' 'IDENTITY_POLICY_MISSING' -LeasePath $leasePath -EventLossPath $lossPath
-    Invoke-CaptureFixture 'missing-lease' 'LEASE_RECEIPT_MISSING' -PolicyPath $policyPath -EventLossPath $lossPath
-    Invoke-CaptureFixture 'missing-event-loss' 'EVENT_LOSS_RECEIPT_MISSING' -PolicyPath $policyPath -LeasePath $leasePath
-    Invoke-CaptureFixture 'provider-failure' 'CAPTURE_EXCEPTION' -PolicyPath $policyPath -LeasePath $leasePath -EventLossPath $lossPath -SimulateProviderFailure
+    Invoke-CaptureFixture 'missing-policy' 'IDENTITY_POLICY_MISSING' -LeasePath $leasePath
+    Invoke-CaptureFixture 'missing-lease' 'LEASE_RECEIPT_MISSING' -PolicyPath $policyPath
+    Invoke-CaptureFixture 'missing-event-loss-before-finalization' 'FIXTURE_MODE' -PolicyPath $policyPath -LeasePath $leasePath
+    Invoke-CaptureFixture 'provider-failure' 'CAPTURE_EXCEPTION' -PolicyPath $policyPath -LeasePath $leasePath -SimulateProviderFailure
 
     $summaryPath = Join-Path $tempRoot 'child-invocations.json'
     $script:invocations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8

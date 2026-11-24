@@ -1,7 +1,7 @@
 # FX-T18 host-isolation owner runbook
 
-**Status:** owner review/run authorization only. This branch delivers
-`READY_FOR_OWNER_ATTESTATION`; it does not deliver `WALL_GATE_PASS`, dispatch a
+**Status:** owner review/run authorization only. This source packet does not
+claim owner attestation; it does not deliver `WALL_GATE_PASS`, dispatch a
 Windows job, or authorize qualification.
 
 ## 1. Establish exclusive HAMUNAPTRA access
@@ -31,80 +31,98 @@ kill, disable, restart, or reconfigure services/processes as part of this
 capture. If the owner cannot establish this boundary, retain the blocked
 receipt and stop.
 
-## 2. Produce independent owner attestations
+## 2. Establish the pre-capture signed boundary
 
-The lease, event-loss proof, and CTest binding are separate artifacts. They
-must be issued or reviewed outside the Capture process and signed with the
-owner certificate whose SHA-1 thumbprint is supplied out-of-band. A JSON field
-such as `owner_approved=true`, `verified=true`, or `lost_events=0` is not proof.
+The identity policy and host lease are the only signed inputs required before
+observation. They must be issued or reviewed outside Capture and signed with
+the owner certificate whose SHA-1 thumbprint is supplied out-of-band. A JSON
+field such as `owner_approved=true` or `verified=true` is not proof.
 
-Required signed payloads:
+The owner stores the policy and lease payloads plus detached signatures in
+write-restricted storage. The policy must contain exact path/hash/parent/service
+identity rules and deny precedence. The lease must bind the host, lease ID and
+policy SHA-256 and remain valid through the entire observation interval.
 
-1. **Lease** — `VOX_FX_T18_HOST_LEASE_RECEIPT_V1`, with host, lease ID, owner,
-   policy SHA-256, and a validity interval covering the complete capture.
-2. **Event loss** — `VOX_FX_T18_EVENT_LOSS_RECEIPT_V1`, produced by an
-   independently retained `Microsoft-Windows-Kernel-Process/ETW` collector.
-   It must include the trace interval, a `collector_artifact_path` and
-   matching SHA-256, received event count, provider/buffer loss counters, and
-   `lost_events=0` only when the measurable counters reconcile. A WMI
-   subscription success or a self-written zero is insufficient and blocks.
-3. **Execution binding** — `VOX_FX_T18_EXECUTION_BINDING_V1`, binding the
-   routed/authored/typical trusted CTest start/end timestamps to the host,
-   runner job, source HEAD/tree, selected Release executable SHA-256, lease
-   ID, and policy SHA-256.
+Do **not** pre-sign an ETW loss summary or execution binding with future
+completion times. Those artifacts cannot truthfully exist until the observer
+and all three trusted CTest profiles finish.
 
-The owner stores payloads and detached signatures in write-restricted storage.
-The Capture script verifies each CMS signature against the out-of-band
-thumbprint and records the payload/signature hashes. The Python evaluator
-repeats the CMS check with the owner-host PowerShell verifier, recomputes all
-hashes, requires the same signer thumbprint for all four proofs, reconciles the
-signed claims to each runner receipt, and requires the host manifest to include
-every payload, signature, ETW collector artifact, private inventory, witness,
-runner receipt and test artifact.
-
-## 3. Future separately authorized Capture command
+## 3. Future separately authorized observation command
 
 No command below is authorized by this branch. After separate owner approval,
 run it once beside the already-authorized three-profile runner job, using
 PowerShell Desktop 5.1 and unique paths in the owner evidence store:
 
 ```powershell
-$witness = 'D:\owner-evidence\fx-t18\host-witness.json'
+$observation = 'D:\owner-evidence\fx-t18\host-observation.json'
 $private = 'D:\owner-evidence\fx-t18\private-process-inventory.json'
 & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
   -File .\docs\ultima-vox-music\fx\evidence\capture-fx-t18-host-witness.ps1 `
-  -Mode Capture -OutputPath $witness `
+  -Mode Capture -Phase Observe -OutputPath $observation `
   -IdentityPolicyPath 'D:\owner-evidence\fx-t18\identity-policy.json' `
   -IdentityPolicySignaturePath 'D:\owner-evidence\fx-t18\identity-policy.p7s' `
   -LeaseReceiptPath 'D:\owner-evidence\fx-t18\lease.json' `
   -LeaseReceiptSignaturePath 'D:\owner-evidence\fx-t18\lease.p7s' `
-  -EventLossReceiptPath 'D:\owner-evidence\fx-t18\event-loss.json' `
-  -EventLossReceiptSignaturePath 'D:\owner-evidence\fx-t18\event-loss.p7s' `
-  -ExecutionBindingPath 'D:\owner-evidence\fx-t18\execution-binding.json' `
-  -ExecutionBindingSignaturePath 'D:\owner-evidence\fx-t18\execution-binding.p7s' `
   -PrivateInventoryPath $private `
   -OwnerCertificateThumbprint 'OWNER_SUPPLIED_40_HEX_THUMBPRINT' `
   -PreSeconds 30 -DuringSeconds 60 -PostSeconds 30
-# The signed execution binding must cover the full interval above; do not
-# shorten Capture or substitute a locally rebuilt/manual workload.
-$captureExit = $LASTEXITCODE
+# Exit 2 is expected: the observation is intentionally blocked until finalization.
+$observationExit = $LASTEXITCODE
 ```
 
-`-FixtureMode`, `-Mode OfflineSynthetic`, and all synthetic switches are
-qualification-prohibited and must never be used for an owner run. Capture
-returns exit `2` and writes a sanitized blocked receipt when any proof,
-identity, baseline, service, timing, private-retention, or provider condition
-is unavailable. Do not retry or edit a blocked receipt into a pass.
+The observer writes `VOX_FX_T18_HOST_OBSERVATION_V1` with
+`finalization_required=true`, sanitized WMI samples/events and the private
+inventory hash. It must never contain a future ETW loss proof or CTest binding.
+If identity, provider, cadence, lease coverage or private retention fails, it
+writes a sanitized blocked failure receipt instead. Do not retry or edit any
+receipt into a pass.
+
+## 4. Close the interval and finalize
+
+After the observation exits, the owner independently parses the retained ETW
+collector. The parse receipt must state the actual provider/session, collector
+SHA-256, coverage interval, received/lost/buffer counters and the complete
+parsed process-event list. It must include PID/start time, exact executable
+path/hash, parent and service context for every event. A raw or arbitrary `.etl`
+file with a matching hash is not a parse.
+
+The trusted runner then retains the native routed/authored/typical CTest
+receipts and creates `VOX_FX_T18_EXECUTION_BINDING_V1` with their actual start
+and end times, source/tree, selected executable SHA-256, host, lease and policy
+hashes. The owner signs the event-loss and execution-binding payloads only
+after those facts are immutable.
+
+Run the finalizer with the same independent owner thumbprint:
+
+```powershell
+python .\docs\ultima-vox-music\fx\evidence\finalize-fx-t18-host-witness.py `
+  --observation 'D:\owner-evidence\fx-t18\host-observation.json' `
+  --output 'D:\owner-evidence\fx-t18\host-witness.json' `
+  --identity-policy 'D:\owner-evidence\fx-t18\identity-policy.json' `
+  --identity-policy-signature 'D:\owner-evidence\fx-t18\identity-policy.p7s' `
+  --lease 'D:\owner-evidence\fx-t18\lease.json' `
+  --lease-signature 'D:\owner-evidence\fx-t18\lease.p7s' `
+  --event-loss 'D:\owner-evidence\fx-t18\event-loss.json' `
+  --event-loss-signature 'D:\owner-evidence\fx-t18\event-loss.p7s' `
+  --execution-binding 'D:\owner-evidence\fx-t18\execution-binding.json' `
+  --execution-binding-signature 'D:\owner-evidence\fx-t18\execution-binding.p7s' `
+  --owner-certificate-thumbprint 'OWNER_SUPPLIED_40_HEX_THUMBPRINT'
+```
+
+The finalizer refuses a capture failure, a changed observation/private
+inventory, missing post-capture proofs, ETW/WMI event mismatch, PID lifecycle
+ambiguity, or any interval mismatch. Only its resulting
+`VOX_FX_T18_HOST_WITNESS_V1` can proceed to the Python wall evaluator.
 
 The execution binding must also list all three runner-receipt paths and
-SHA-256s. The runner must retain the trusted CTest receipts and raw artifacts
-with their native exits, exact starts/ends, source/tree, executable hash and job
-identity. The owner then creates one final `VOX_FX_T18_HOST_ARTIFACTS_V2`
+SHA-256s. The owner then creates one final `VOX_FX_T18_HOST_ARTIFACTS_V2`
 manifest covering at least:
 
-- witness and owner-private process inventory;
-- identity policy, lease, ETW loss and execution-binding payloads;
-- all four detached signatures and the ETW collector artifact;
+- immutable blocked observation and final witness plus owner-private process inventory;
+- identity policy, lease, ETW loss and execution-binding payloads, each bound to
+  the observation hash where issued after capture;
+- all four detached signatures, the ETW collector artifact and independent ETW
+  parse receipt;
 - each routed/authored/typical runner receipt, report, CTest raw output, JUnit,
   inventory, post-test outcome, selected executable and audit output.
 
@@ -114,7 +132,7 @@ clean. Do not publish raw process names, paths, PIDs, command lines, or service
 names in public summaries; publish only approved counters, decisions,
 intervals, identity hashes, artifact hashes and sanitized diagnostics.
 
-## 4. Cleanup and retention
+## 5. Cleanup and retention
 
 After the owner confirms the capture interval and final hashes, release the
 owner lease through the separately controlled owner procedure. Capture itself

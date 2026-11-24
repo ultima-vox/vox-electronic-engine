@@ -4,6 +4,8 @@ param(
     [string]$OutputPath,
     [ValidateSet('Capture', 'OfflineSynthetic')]
     [string]$Mode = 'Capture',
+    [ValidateSet('Observe')]
+    [string]$Phase = 'Observe',
     [ValidateRange(30, 86400)]
     [int]$PreSeconds = 30,
     [ValidateRange(1, 86400)]
@@ -14,10 +16,6 @@ param(
     [string]$IdentityPolicySignaturePath = '',
     [string]$LeaseReceiptPath = '',
     [string]$LeaseReceiptSignaturePath = '',
-    [string]$EventLossReceiptPath = '',
-    [string]$EventLossReceiptSignaturePath = '',
-    [string]$ExecutionBindingPath = '',
-    [string]$ExecutionBindingSignaturePath = '',
     [string]$PrivateInventoryPath = '',
     [string]$OwnerCertificateThumbprint = '',
     [switch]$FixtureMode,
@@ -29,10 +27,11 @@ param(
 # Safe host-wide observation only. This script never starts, stops, kills,
 # disables or reconfigures a service or process. It reads process identities,
 # writes raw identity records only to the owner-selected private inventory,
-# and subscribes to the Windows process start/stop indication providers. The
-# independently owner-signed ETW loss receipt is the only source accepted for
-# a production loss claim; WMI events are an observation stream, not proof of
-# zero loss by themselves.
+# and subscribes to the Windows process start/stop indication providers. This
+# phase verifies only the already-issued policy and lease; it never claims ETW
+# losslessness or CTest completion. The post-capture finalizer independently
+# verifies the signed ETW parse/loss receipt and execution binding; WMI events
+# are an observation stream, not proof of zero loss by themselves.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $script:FixtureMode = [bool]$FixtureMode
@@ -40,6 +39,7 @@ $script:QualificationProhibited = ($Mode -eq 'OfflineSynthetic' -or $script:Fixt
 $script:IdentityPolicy = $null
 $script:SeenPidIdentities = @{}
 $script:KnownPidRecords = @{}
+$script:ActivePidRecords = @{}
 $script:RawSamples = @()
 $script:RawEvents = @()
 $script:PublicSamples = @()
@@ -90,7 +90,7 @@ function Get-ObjectSha256([object]$Value) {
 }
 
 function Normalize-Thumbprint([string]$Thumbprint) {
-    return (($Thumbprint -replace '[^0-9a-fA-F]', '').ToUpperInvariant())
+    return (($Thumbprint -replace '[\s:]', '').ToUpperInvariant())
 }
 
 function Get-HashOrUnknown([string]$Path) {
@@ -148,10 +148,17 @@ function Get-VerifiedOwnerSignature(
         if ($null -eq $certificate) { throw 'detached signature has no signer certificate' }
         $actualThumbprint = Normalize-Thumbprint ([string]$certificate.Thumbprint)
         if ($actualThumbprint -cne $expected) { throw 'signer certificate thumbprint mismatch' }
-        # The owner certificate chain and CMS signature are checked here. The
-        # pinned thumbprint is supplied out-of-band by the owner runbook; it is
-        # never read from the JSON being attested.
+        # The owner certificate chain, revocation status and CMS signature are
+        # checked here. The pinned thumbprint is supplied out-of-band by the
+        # owner runbook; it is never read from the JSON being attested.
         $signedCms.CheckSignature($false)
+        $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+        try {
+            $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+            $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::EntireChain
+            $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+            if (-not $chain.Build($certificate)) { throw 'owner certificate chain or revocation check failed' }
+        } finally { $chain.Dispose() }
         return [ordered]@{
             verified = $true
             data_hash = (Get-FileHash -LiteralPath $DataPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -182,7 +189,8 @@ function New-OfflinePolicy {
         runner_service_identity_sha256 = @('1' * 64, '2' * 64, '3' * 64, '4' * 64)
         approved_processes = @([ordered]@{
             process_name = 'Runner.Listener.exe'; role = 'runner'; allow_dynamic = $true
-            executable_sha256 = ('5' * 64); service_identity_sha256 = ('1' * 64)
+            executable_path = 'C:\HAMUNAPTRA\Runner.Listener.exe'; executable_sha256 = ('5' * 64)
+            parent_pid = 4; service_identity_sha256 = ('1' * 64)
         })
         denied_process_name_regex = @(
             '^(devenv|msbuild|cmake|ctest|ninja|clang|gcc|python|cubase|reaper|ableton|flstudio|protools)'
@@ -210,6 +218,52 @@ function Get-IdentityPolicy {
             owner_approved = [bool](Get-OptionalProperty $raw 'owner_approved' $false)
         }
     } catch { return New-SafePolicy 'invalid' '<invalid>' }
+}
+
+function Test-IdentityPolicyShape([object]$Policy) {
+    try {
+        if ($null -eq $Policy -or [string]$Policy.format -ne 'VOX_FX_T18_IDENTITY_POLICY_V1' -or
+            -not [string]$Policy.host -or [string]$Policy.host -eq '<missing>' -or
+            -not [string]$Policy.baseline_id -or [string]$Policy.baseline_id -eq '<missing>' -or
+            @($Policy.runner_service_identity_sha256).Count -ne 4 -or
+            @($Policy.runner_service_identity_sha256 | Where-Object { [string]$_ -notmatch '^[0-9a-fA-F]{64}$' }).Count -gt 0 -or
+            @($Policy.approved_processes).Count -eq 0 -or @($Policy.denied_process_name_regex).Count -eq 0) { return $false }
+        foreach ($approved in @($Policy.approved_processes)) {
+            $name = [string](Get-OptionalProperty $approved 'process_name' '')
+            $nameRegex = [string](Get-OptionalProperty $approved 'process_name_regex' '')
+            if ((-not $name -and -not $nameRegex) -or ($name -and $nameRegex)) { return $false }
+            $path = [string](Get-OptionalProperty $approved 'executable_path' '')
+            $hash = [string](Get-OptionalProperty $approved 'executable_sha256' '')
+            $serviceHash = [string](Get-OptionalProperty $approved 'service_identity_sha256' '')
+            $parentPid = Get-OptionalProperty $approved 'parent_pid' $null
+            $allowDynamic = Get-OptionalProperty $approved 'allow_dynamic' $null
+            $exactPid = Get-OptionalProperty $approved 'pid' $null
+            $exactStart = Get-OptionalProperty $approved 'start_time_utc' $null
+            $hasPid = $null -ne $exactPid
+            $hasStart = $null -ne $exactStart
+            if (-not $path -or $path.StartsWith('<') -or $path.Contains('*') -or $path.Contains('?') -or
+                $hash -notmatch '^[0-9a-fA-F]{64}$' -or $serviceHash -notmatch '^[0-9a-fA-F]{64}$' -or
+                $null -eq $parentPid -or [int]$parentPid -lt 0 -or
+                $allowDynamic -isnot [bool] -or $hasPid -ne $hasStart -or
+                ($hasPid -and ([int]$exactPid -lt 1)) -or
+                ((-not $hasPid) -and $allowDynamic -ne $true)) { return $false }
+            if ($hasStart) {
+                try { [DateTime]::Parse([string]$exactStart).ToUniversalTime() | Out-Null }
+                catch { return $false }
+            }
+        }
+        foreach ($deniedRegex in @($Policy.denied_process_name_regex)) {
+            if ([string]::IsNullOrWhiteSpace([string]$deniedRegex)) { return $false }
+            try { [regex]::new([string]$deniedRegex).Dispose() } catch { return $false }
+        }
+        foreach ($approved in @($Policy.approved_processes)) {
+            $name = [string](Get-OptionalProperty $approved 'process_name' '')
+            $nameRegex = [string](Get-OptionalProperty $approved 'process_name_regex' '')
+            if ($nameRegex) { try { [regex]::new($nameRegex).Dispose() } catch { return $false } }
+            if ($name -and @($Policy.denied_process_name_regex | Where-Object { $name -match [string]$_ }).Count -gt 0) { return $false }
+        }
+        return $true
+    } catch { return $false }
 }
 
 function Get-VerifiedLeaseReceipt([object]$SignatureStatus, [bool]$AllowFixtureUnsigned = $false) {
@@ -254,119 +308,10 @@ function Get-VerifiedLeaseReceipt([object]$SignatureStatus, [bool]$AllowFixtureU
     }
 }
 
-function Get-VerifiedEventLossReceipt([string]$CaptureStartUtc, [object]$SignatureStatus, [bool]$AllowFixtureUnsigned = $false) {
-    if (-not $EventLossReceiptPath) {
-        return [ordered]@{ verified = $false; receipt = $null; hash = '<missing>'; signature = $SignatureStatus
-            error_code = 'EVENT_LOSS_RECEIPT_MISSING'; error_category = 'ATTESTATION_MISSING'; error = 'measurable ETW event-loss receipt is missing' }
-    }
-    try {
-        if (-not (Test-Path -LiteralPath $EventLossReceiptPath -PathType Leaf)) { throw 'event-loss receipt file is missing' }
-        if (-not $AllowFixtureUnsigned -and -not [bool](Get-OptionalProperty $SignatureStatus 'verified' $false)) {
-            return [ordered]@{ verified = $false; receipt = $null; hash = '<invalid>'; signature = $SignatureStatus
-                error_code = [string](Get-OptionalProperty $SignatureStatus 'error_code' 'EVENT_LOSS_RECEIPT_SIGNATURE_INVALID')
-                error_category = 'ATTESTATION_INVALID'; error = 'owner-signed ETW loss receipt is unavailable' }
-        }
-        $receipt = Get-Content -LiteralPath $EventLossReceiptPath -Raw | ConvertFrom-Json
-        foreach ($field in @('format', 'provider', 'measurement_method', 'coverage_complete', 'lost_events',
-                             'buffer_loss_events', 'events_received', 'coverage_start_utc', 'coverage_end_utc',
-                             'collector_artifact_path', 'collector_artifact_sha256')) {
-            if ($null -eq (Get-OptionalProperty $receipt $field $null)) { throw "missing $field" }
-        }
-        if ($receipt.format -ne 'VOX_FX_T18_EVENT_LOSS_RECEIPT_V1' -or
-            $receipt.provider -ne 'Microsoft-Windows-Kernel-Process/ETW' -or
-            $receipt.measurement_method -ne 'ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS' -or
-            $receipt.coverage_complete -ne $true -or
-            $receipt.lost_events -ne 0 -or $receipt.buffer_loss_events -ne 0 -or
-            [int]$receipt.events_received -lt 0 -or
-            [string]$receipt.collector_artifact_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-            $receipt.owner_approved -ne $true -or
-            $receipt.attestation_source -ne 'owner_controlled_offline' -or
-            $receipt.verification_method -ne 'owner_signed_detached_cms') {
-            throw 'ETW loss counters are incomplete or not owner-controlled'
-        }
-        $coverageStart = [DateTime]::Parse([string]$receipt.coverage_start_utc).ToUniversalTime()
-        $coverageEnd = [DateTime]::Parse([string]$receipt.coverage_end_utc).ToUniversalTime()
-        $captureStart = [DateTime]::Parse($CaptureStartUtc).ToUniversalTime()
-        if ($coverageEnd -le $coverageStart -or $coverageStart -gt $captureStart) { throw 'invalid ETW coverage interval' }
-        $collectorPath = [string]$receipt.collector_artifact_path
-        if (-not [IO.Path]::IsPathRooted($collectorPath)) { $collectorPath = Join-Path (Split-Path -Parent $EventLossReceiptPath) $collectorPath }
-        if (-not (Test-Path -LiteralPath $collectorPath -PathType Leaf)) { throw 'ETW collector artifact is missing' }
-        $collectorHash = (Get-FileHash -LiteralPath $collectorPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($collectorHash -ine ([string]$receipt.collector_artifact_sha256).ToLowerInvariant()) { throw 'ETW collector artifact hash mismatch' }
-        $hash = (Get-FileHash -LiteralPath $EventLossReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        return [ordered]@{ verified = $true; receipt = $receipt; hash = $hash; signature = $SignatureStatus
-            error_code = $null; error_category = $null; error = $null }
-    } catch {
-        return [ordered]@{ verified = $false; receipt = $null; hash = '<invalid>'; signature = $SignatureStatus
-            error_code = 'EVENT_LOSS_RECEIPT_INVALID'; error_category = 'ATTESTATION_INVALID'; error = 'ETW event-loss receipt is malformed or unverifiable' }
-    }
-}
-
-function Get-VerifiedExecutionBinding([object]$SignatureStatus, [bool]$AllowFixtureUnsigned = $false) {
-    if (-not $ExecutionBindingPath) {
-        return [ordered]@{ verified = $false; binding = $null; hash = '<missing>'; signature = $SignatureStatus
-            error_code = 'EXECUTION_BINDING_MISSING'; error_category = 'ATTESTATION_MISSING'; error = 'trusted CTest execution binding is missing' }
-    }
-    try {
-        if (-not (Test-Path -LiteralPath $ExecutionBindingPath -PathType Leaf)) { throw 'execution binding file is missing' }
-        if (-not $AllowFixtureUnsigned -and -not [bool](Get-OptionalProperty $SignatureStatus 'verified' $false)) {
-            return [ordered]@{ verified = $false; binding = $null; hash = '<invalid>'; signature = $SignatureStatus
-                error_code = [string](Get-OptionalProperty $SignatureStatus 'error_code' 'EXECUTION_BINDING_SIGNATURE_INVALID')
-                error_category = 'ATTESTATION_INVALID'; error = 'signed execution binding is unavailable' }
-        }
-        $binding = Get-Content -LiteralPath $ExecutionBindingPath -Raw | ConvertFrom-Json
-        foreach ($field in @('format', 'binding_id', 'host', 'runner_job_id', 'source_head', 'source_tree',
-                             'executable_path', 'executable_sha256', 'lease_id', 'policy_sha256', 'profiles', 'runner_receipts')) {
-            if ($null -eq (Get-OptionalProperty $binding $field $null)) { throw "missing $field" }
-        }
-        if ($binding.format -ne 'VOX_FX_T18_EXECUTION_BINDING_V1' -or
-            @($binding.runner_receipts).Count -ne 3 -or
-            [string]$binding.executable_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-            [string]$binding.policy_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-            [string]$binding.source_head -notmatch '^[0-9a-fA-F]{40}$' -or
-            [string]$binding.source_tree -notmatch '^[0-9a-fA-F]{40}$' -or
-            @($binding.profiles).Count -ne 3 -or
-            $binding.owner_approved -ne $true -or
-            $binding.attestation_source -ne 'owner_controlled_offline' -or
-            $binding.verification_method -ne 'owner_signed_detached_cms') { throw 'execution binding is not owner-controlled' }
-        $profiles = @($binding.profiles)
-        $names = @($profiles | ForEach-Object { [string]$_.profile } | Sort-Object -Unique)
-        if (($names -join ',') -cne 'authored,routed,typical') { throw 'execution binding profiles are not exactly routed/authored/typical' }
-        foreach ($profile in $profiles) {
-            foreach ($field in @('profile', 'test_identity', 'test_start_utc', 'test_end_utc', 'ctest_exit_code')) {
-                if ($null -eq (Get-OptionalProperty $profile $field $null)) { throw "binding profile missing $field" }
-            }
-            if ([string]$profile.test_identity -ne 'suite_fx_runtime_stress_tests') { throw 'binding test identity mismatch' }
-            $start = [DateTime]::Parse([string]$profile.test_start_utc).ToUniversalTime()
-            $end = [DateTime]::Parse([string]$profile.test_end_utc).ToUniversalTime()
-            if ($end -le $start) { throw 'binding profile interval is not positive' }
-        }
-        $receiptNames = @($binding.runner_receipts | ForEach-Object { [string]$_.profile } | Sort-Object -Unique)
-        if (($receiptNames -join ',') -cne 'authored,routed,typical') { throw 'binding runner receipts are not exactly routed/authored/typical' }
-        foreach ($runnerReceipt in @($binding.runner_receipts)) {
-            foreach ($field in @('profile', 'receipt_path', 'receipt_sha256')) {
-                if ($null -eq (Get-OptionalProperty $runnerReceipt $field $null)) { throw "binding runner receipt missing $field" }
-            }
-            if ([string]$runnerReceipt.receipt_sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'binding runner receipt hash is not SHA-256' }
-            if ([string]$runnerReceipt.profile -notin $names) { throw 'binding runner receipt profile is not recognized' }
-            $receiptPath = [string]$runnerReceipt.receipt_path
-            if (-not [IO.Path]::IsPathRooted($receiptPath)) { $receiptPath = Join-Path (Split-Path -Parent $ExecutionBindingPath) $receiptPath }
-            if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf) -or
-                (Get-FileHash -LiteralPath $receiptPath -Algorithm SHA256).Hash.ToLowerInvariant() -ine ([string]$runnerReceipt.receipt_sha256).ToLowerInvariant()) { throw 'binding runner receipt hash reconciliation failed' }
-        }
-        $hash = (Get-FileHash -LiteralPath $ExecutionBindingPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        return [ordered]@{ verified = $true; binding = $binding; hash = $hash; signature = $SignatureStatus
-            error_code = $null; error_category = $null; error = $null }
-    } catch {
-        return [ordered]@{ verified = $false; binding = $null; hash = '<invalid>'; signature = $SignatureStatus
-            error_code = 'EXECUTION_BINDING_INVALID'; error_category = 'ATTESTATION_INVALID'; error = 'trusted CTest execution binding is malformed or unverifiable' }
-    }
-}
-
 function Test-ProcessAgainstPolicy([object]$Record) {
     $result = [ordered]@{ known = $true; approved = $false; pid_reuse = $false; identity_digest = '<unknown>'; reason = 'UNRECOGNIZED_PROCESS_IDENTITY' }
     $pidKey = [string]$Record.pid
-    $digestInput = "$($Record.process_name)|$($Record.executable_sha256)|$($Record.start_time_utc)|$(@($Record.service_identity_sha256) -join ',')"
+    $digestInput = "$($Record.process_name)|$($Record.executable_path)|$($Record.executable_sha256)|$($Record.parent_pid)|$($Record.start_time_utc)|$(@($Record.service_identity_sha256) -join ',')"
     $result.identity_digest = Get-Sha256Text $digestInput
     if ($Record.start_time_utc -eq '<unknown>' -or $Record.executable_sha256 -eq '<unknown>') {
         $result.known = $false; $result.reason = 'UNKNOWN_PROCESS_IDENTITY'
@@ -381,11 +326,19 @@ function Test-ProcessAgainstPolicy([object]$Record) {
     $script:SeenPidIdentities[$pidKey] = [ordered]@{ start_time_utc = $Record.start_time_utc; identity_digest = $result.identity_digest }
     $script:KnownPidRecords[$pidKey] = $Record
     if (-not $result.known -or $result.pid_reuse) { return $result }
+    foreach ($deniedRegex in @($script:IdentityPolicy.denied_process_name_regex)) {
+        if ([string]$Record.process_name -match [string]$deniedRegex) {
+            $result.reason = 'DENIED_PROCESS_NAME'
+            return $result
+        }
+    }
     foreach ($approved in @($script:IdentityPolicy.approved_processes)) {
         $name = [string](Get-OptionalProperty $approved 'process_name' '')
         $nameRegex = [string](Get-OptionalProperty $approved 'process_name_regex' '')
         $nameMatches = ($name -and $Record.process_name -ceq $name) -or ($nameRegex -and $Record.process_name -match $nameRegex)
         if (-not $nameMatches) { continue }
+        $approvedPath = [string](Get-OptionalProperty $approved 'executable_path' '')
+        if ($approvedPath -and $Record.executable_path -ine $approvedPath) { continue }
         $hash = [string](Get-OptionalProperty $approved 'executable_sha256' '')
         if ($hash -and $hash -notmatch '^<') {
             if ($Record.executable_sha256 -ine $hash) { continue }
@@ -457,6 +410,7 @@ function Get-ProcessSnapshot {
             $record.approved_by_policy = [bool]$decision.approved
             $record.identity_digest = $decision.identity_digest
             $record.decision_reason = $decision.reason
+            if ($decision.approved -eq $true) { $script:ActivePidRecords[[string]$record.pid] = $record }
             $raw += $record
             $public += [ordered]@{
                 identity_known = [bool]$decision.known
@@ -493,16 +447,30 @@ function Get-EventRecords([string]$SourceIdentifier) {
             $pidValue = [int]$newEvent.ProcessID
             $eventName = [string]$newEvent.ProcessName
             $record = $null
-            if ($script:KnownPidRecords.ContainsKey([string]$pidValue)) {
-                $record = $script:KnownPidRecords[[string]$pidValue].PSObject.Copy()
-                $record.event = if ($SourceIdentifier -like '*start*') { 'start' } else { 'stop' }
-                $record.event_process_name = $eventName
+            $eventKind = if ($SourceIdentifier -like '*start*') { 'start' } else { 'stop' }
+            $cached = if ($script:KnownPidRecords.ContainsKey([string]$pidValue)) { $script:KnownPidRecords[[string]$pidValue].PSObject.Copy() } else { $null }
+            if ($cached -and [string]$cached.process_name -cne $eventName) {
+                throw 'process event name disagrees with cached PID identity'
             }
-            if ($null -eq $record -and $SourceIdentifier -like '*start*') {
+            if ($eventKind -eq 'start') {
                 $candidate = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction SilentlyContinue
-                if ($candidate) { $record = Get-ProcessRecord $candidate (Get-ServiceIdentityMap) }
+                if (-not $candidate) { throw 'process start identity could not be resolved while the PID was live' }
+                $candidateRecord = Get-ProcessRecord $candidate (Get-ServiceIdentityMap)
+                if ($cached -and ([string]$candidateRecord.start_time_utc -cne [string]$cached.start_time_utc -or
+                                  [string]$candidateRecord.executable_sha256 -ine [string]$cached.executable_sha256 -or
+                                  [string]$candidateRecord.executable_path -ine [string]$cached.executable_path -or
+                                  [int]$candidateRecord.parent_pid -ne [int]$cached.parent_pid)) {
+                    throw 'process start reused a PID with a different identity'
+                }
+                $record = $candidateRecord
+                $script:ActivePidRecords[[string]$pidValue] = $record
+            } elseif ($cached -and $script:ActivePidRecords.ContainsKey([string]$pidValue)) {
+                $record = $cached
+                [void]$script:ActivePidRecords.Remove([string]$pidValue)
             }
-            if ($null -eq $record) { throw 'event identity could not be reconciled to a process start record' }
+            if ($null -eq $record) { throw 'process event identity could not be reconciled to a live PID lifecycle' }
+            $record.event = $eventKind
+            $record.event_process_name = $eventName
             $record.timestamp_utc = Get-EventTimeUtc $newEvent
             $decision = Test-ProcessAgainstPolicy $record
             $record.identity_known = [bool]$decision.known
@@ -556,6 +524,41 @@ function Save-PrivateInventory([object]$Value) {
         Write-WitnessJson $Value $PrivateInventoryPath
         return @{ written = $true; hash = (Get-FileHash -LiteralPath $PrivateInventoryPath -Algorithm SHA256).Hash.ToLowerInvariant(); error = $null }
     } catch { return @{ written = $false; hash = '<invalid>'; error = 'PRIVATE_INVENTORY_WRITE_FAILURE' } }
+}
+
+function New-ObservationReceipt(
+    [string]$CaptureStartUtc, [string]$CaptureEndUtc, [object]$PolicySignature,
+    [object]$LeaseStatus, [object]$PrivateInventoryStatus, [string[]]$ReasonCodes,
+    [string[]]$ReasonSummaries, [bool]$EventTraceAvailable, [string]$EventTraceError
+) {
+    $leaseReceipt = Get-OptionalProperty $LeaseStatus 'receipt' $null
+    $serviceSet = @($script:ObservedServiceHashes.Keys | Sort-Object)
+    return [ordered]@{
+        format = 'VOX_FX_T18_HOST_OBSERVATION_V1'; schema_version = 1; mode = 'observe'; phase = 'observe'
+        fixture_mode = $script:FixtureMode; qualification_prohibited = $script:QualificationProhibited
+        finalization_required = $true; evidence_blocked = $true
+        host_observation_mode = 'process_snapshot_and_event_trace'; sample_interval_ms = 1000
+        pre_seconds = $PreSeconds; during_seconds = $DuringSeconds; post_seconds = $PostSeconds
+        capture_start_utc = $CaptureStartUtc; capture_end_utc = $CaptureEndUtc
+        identity_policy = [ordered]@{ format = $script:IdentityPolicy.format; policy_id = $script:IdentityPolicy.policy_id; baseline_id = $script:IdentityPolicy.baseline_id; policy_sha256 = $script:IdentityPolicyHash; runner_service_count = @($script:IdentityPolicy.runner_service_identity_sha256).Count; approved_process_count = @($script:IdentityPolicy.approved_processes).Count }
+        identity_policy_path = [IO.Path]::GetFullPath($IdentityPolicyPath); identity_policy_sha256 = $script:IdentityPolicyHash
+        private_inventory_path = [IO.Path]::GetFullPath($PrivateInventoryPath); private_inventory_sha256 = [string](Get-OptionalProperty $PrivateInventoryStatus 'hash' '<missing>')
+        attestation_proofs = [ordered]@{
+            policy = [ordered]@{ verified = [bool]$PolicySignature.verified; data_sha256 = $PolicySignature.data_hash; signature_sha256 = $PolicySignature.signature_hash; signer_thumbprint = $PolicySignature.signer_thumbprint; verification_method = $PolicySignature.verification_method; data_path = [IO.Path]::GetFullPath($IdentityPolicyPath); signature_path = [IO.Path]::GetFullPath($IdentityPolicySignaturePath) }
+            lease = [ordered]@{ verified = [bool](Get-OptionalProperty $LeaseStatus 'verified' $false); data_sha256 = [string](Get-OptionalProperty (Get-OptionalProperty $LeaseStatus 'signature' $null) 'data_hash' '<missing>'); signature_sha256 = [string](Get-OptionalProperty (Get-OptionalProperty $LeaseStatus 'signature' $null) 'signature_hash' '<missing>'); signer_thumbprint = '<pending-finalization>'; verification_method = 'pending_post_capture_owner_cms' }
+            event_loss = [ordered]@{ verified = $false; status = 'pending_post_capture_owner_parse_and_signature'; verification_method = 'pending_post_capture_owner_cms' }
+            execution_binding = [ordered]@{ verified = $false; status = 'pending_post_capture_owner_binding_and_signature'; verification_method = 'pending_post_capture_owner_cms' }
+        }
+        event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = 'pending_post_capture_owner_etw_parse'; available = $EventTraceAvailable; coverage_complete = $false; loss_accounting = 'pending_post_capture_owner_etw_parse'; coverage_start_utc = $CaptureStartUtc; coverage_end_utc = $CaptureEndUtc; collector_artifact_path = '<pending-finalization>'; collector_artifact_sha256 = '<pending>'; collector_parse_receipt_path = '<pending-finalization>'; collector_parse_receipt_sha256 = '<pending>'; loss_receipt_path = '<pending-finalization>'; loss_receipt_sha256 = '<pending>'; error = $EventTraceError }
+        runner_lease = [ordered]@{ recognized = [bool](Get-OptionalProperty $LeaseStatus 'verified' $false); owner_verified = [bool](Get-OptionalProperty $LeaseStatus 'verified' $false); owner = if ($leaseReceipt) { [string]$leaseReceipt.owner } else { '<missing>' }; host = if ($leaseReceipt) { [string]$leaseReceipt.host } else { [string]$env:COMPUTERNAME }; lease_id = if ($leaseReceipt) { [string]$leaseReceipt.lease_id } else { '<missing>' }; verification_receipt_path = [IO.Path]::GetFullPath($LeaseReceiptPath); verification_receipt_sha256 = [string](Get-OptionalProperty $LeaseStatus 'hash' '<missing>'); token = '<redacted>' }
+        runner_service_identities = @($serviceSet)
+        execution_binding = [ordered]@{ verified = $false; qualification_prohibited = $script:QualificationProhibited; binding_receipt_path = '<pending-finalization>'; binding_receipt_sha256 = '<pending>' }
+        samples = @($script:PublicSamples); process_events = @($script:PublicEvents)
+        unrecognized_competitors = $script:UnrecognizedCount; unknown_pids = $script:UnknownCount; pid_reuse_mismatches = $script:PidReuseCount
+        inventory_summary = [ordered]@{ samples_observed = $script:PublicSamples.Count; events_observed = $script:PublicEvents.Count; unknown_identity_count = $script:UnknownCount; unexpected_identity_count = $script:UnrecognizedCount; pid_reuse_mismatch_count = $script:PidReuseCount; query_error_count = $script:QueryErrors.Count; monitor_gap_count = $script:MonitorGaps.Count; raw_inventory_suppressed = $true }
+        query_errors = @($ReasonCodes); diagnostic = [ordered]@{ error_category = 'FINALIZATION_REQUIRED'; reason_codes = @($ReasonCodes + 'FINALIZATION_REQUIRED'); error_summaries = @($ReasonSummaries + 'capture observation is intentionally blocked until post-capture ETW and CTest proofs are finalized'); sanitized = $true; recommended_exit_code = 2 }
+        fixture_notes = 'Observation receipt is not qualification evidence; owner post-capture ETW parsing, binding, detached signatures and final reconciliation are required.'
+    }
 }
 
 function New-OfflineWitness {
@@ -654,9 +657,11 @@ if ($Mode -eq 'OfflineSynthetic') {
     exit 2
 }
 
-# Preflight: every production attestation must be a detached CMS signed file
-# verified against a thumbprint supplied out-of-band by the owner. FixtureMode
-# is explicit and is never allowed to reach a production evaluator pass.
+# Preflight: only the already-issued policy and lease are verified before
+# observation. ETW loss and execution-binding facts are deliberately absent
+# until the interval closes. Every pre-capture CMS proof is checked against a
+# thumbprint supplied out-of-band by the owner. FixtureMode is explicit and is
+# never allowed to reach a production evaluator pass.
 $script:IdentityPolicy = Get-IdentityPolicy
 $script:IdentityPolicyHash = '<missing>'
 if ($IdentityPolicyPath -and (Test-Path -LiteralPath $IdentityPolicyPath -PathType Leaf)) {
@@ -664,8 +669,6 @@ if ($IdentityPolicyPath -and (Test-Path -LiteralPath $IdentityPolicyPath -PathTy
 }
 $policySignature = Get-VerifiedOwnerSignature $IdentityPolicyPath $IdentityPolicySignaturePath $OwnerCertificateThumbprint 'IDENTITY_POLICY'
 $leaseSignature = Get-VerifiedOwnerSignature $LeaseReceiptPath $LeaseReceiptSignaturePath $OwnerCertificateThumbprint 'LEASE_RECEIPT'
-$lossSignature = Get-VerifiedOwnerSignature $EventLossReceiptPath $EventLossReceiptSignaturePath $OwnerCertificateThumbprint 'EVENT_LOSS_RECEIPT'
-$bindingSignature = Get-VerifiedOwnerSignature $ExecutionBindingPath $ExecutionBindingSignaturePath $OwnerCertificateThumbprint 'EXECUTION_BINDING'
 
 $policyCodes = @(); $policySummaries = @()
 $format = [string](Get-OptionalProperty $script:IdentityPolicy 'format' 'invalid')
@@ -676,7 +679,7 @@ $policyEntries = @($script:IdentityPolicy.approved_processes)
 $policyValid = ($format -eq 'VOX_FX_T18_IDENTITY_POLICY_V1' -and $policyId -ne '<missing>' -and $baselineId -ne '<missing>' -and
     $script:IdentityPolicy.owner_approved -eq $true -and $script:IdentityPolicyHash -match '^[0-9a-fA-F]{64}$' -and
     $policyServices.Count -eq 4 -and @($policyServices | Where-Object { [string]$_ -notmatch '^[0-9a-fA-F]{64}$' }).Count -eq 0 -and
-    $policyEntries.Count -gt 0 -and [string]$script:IdentityPolicy.host -ne '<missing>')
+    (Test-IdentityPolicyShape $script:IdentityPolicy))
 if (-not $policyValid) {
     if (-not $IdentityPolicyPath) { $policyCodes += 'IDENTITY_POLICY_MISSING'; $policySummaries += 'owner-signed identity baseline is missing' }
     else { $policyCodes += 'IDENTITY_POLICY_INVALID'; $policySummaries += 'owner-signed identity baseline is malformed or not four-service complete' }
@@ -692,22 +695,13 @@ try {
     if (-not $script:FixtureMode -and [string]$script:IdentityPolicy.host -cne [string]$env:COMPUTERNAME) { $policyCodes += 'IDENTITY_POLICY_HOST_MISMATCH'; $policySummaries += 'owner identity baseline targets a different host' }
 } catch { $policyCodes += 'IDENTITY_POLICY_INTERVAL_INVALID'; $policySummaries += 'owner identity baseline validity interval is invalid' }
 $verifiedLease = Get-VerifiedLeaseReceipt $leaseSignature $script:FixtureMode
-$lossReceipt = Get-VerifiedEventLossReceipt $captureStart $lossSignature $script:FixtureMode
-$bindingStatus = Get-VerifiedExecutionBinding $bindingSignature $script:FixtureMode
+$lossReceipt = [ordered]@{ verified = $false; pending = $true; receipt = $null; hash = '<pending>'; signature = $null; error_code = 'EVENT_LOSS_FINALIZATION_PENDING'; error = 'post-capture owner ETW parse and signature are pending' }
+$bindingStatus = [ordered]@{ verified = $false; pending = $true; binding = $null; hash = '<pending>'; signature = $null; error_code = 'EXECUTION_BINDING_FINALIZATION_PENDING'; error = 'post-capture owner CTest binding and signature are pending' }
 $preflightCodes = @($policyCodes); $preflightSummaries = @($policySummaries)
 if (-not [bool](Get-OptionalProperty $verifiedLease 'verified' $false)) { $preflightCodes += [string](Get-OptionalProperty $verifiedLease 'error_code' 'LEASE_RECEIPT_INVALID'); $preflightSummaries += [string](Get-OptionalProperty $verifiedLease 'error' 'owner lease is unavailable') }
-if (-not [bool](Get-OptionalProperty $lossReceipt 'verified' $false)) { $preflightCodes += [string](Get-OptionalProperty $lossReceipt 'error_code' 'EVENT_LOSS_RECEIPT_INVALID'); $preflightSummaries += [string](Get-OptionalProperty $lossReceipt 'error' 'measurable event-loss proof is unavailable') }
-if (-not [bool](Get-OptionalProperty $bindingStatus 'verified' $false)) { $preflightCodes += [string](Get-OptionalProperty $bindingStatus 'error_code' 'EXECUTION_BINDING_INVALID'); $preflightSummaries += [string](Get-OptionalProperty $bindingStatus 'error' 'CTest execution binding is unavailable') }
 $leaseReceipt = Get-OptionalProperty $verifiedLease 'receipt' $null
 $leasePolicyHash = [string](Get-OptionalProperty $leaseReceipt 'policy_sha256' '')
 if ([bool](Get-OptionalProperty $verifiedLease 'verified' $false) -and $leasePolicyHash -ine $script:IdentityPolicyHash) { $preflightCodes += 'LEASE_POLICY_MISMATCH'; $preflightSummaries += 'owner lease is bound to a different identity baseline' }
-$bindingReceiptForCheck = Get-OptionalProperty $bindingStatus 'binding' $null
-if ([bool](Get-OptionalProperty $bindingStatus 'verified' $false)) {
-    if ([string]$bindingReceiptForCheck.host -cne [string]$env:COMPUTERNAME -and -not $script:FixtureMode) { $preflightCodes += 'EXECUTION_BINDING_HOST_MISMATCH'; $preflightSummaries += 'CTest binding targets a different host' }
-    $leaseIdForCheck = [string](Get-OptionalProperty $leaseReceipt 'lease_id' '')
-    if ($leaseIdForCheck -and [string]$bindingReceiptForCheck.lease_id -cne $leaseIdForCheck) { $preflightCodes += 'EXECUTION_BINDING_LEASE_MISMATCH'; $preflightSummaries += 'CTest binding is bound to a different host lease' }
-    if ([string]$bindingReceiptForCheck.policy_sha256 -ine $script:IdentityPolicyHash) { $preflightCodes += 'EXECUTION_BINDING_POLICY_MISMATCH'; $preflightSummaries += 'CTest binding is bound to a different identity baseline' }
-}
 if (-not $PrivateInventoryPath) { $preflightCodes += 'PRIVATE_INVENTORY_PATH_MISSING'; $preflightSummaries += 'owner-private raw inventory path is required' }
 if ($script:FixtureMode) { $preflightCodes += 'FIXTURE_MODE'; $preflightSummaries += 'fixture mode is qualification-prohibited' }
 # The provider failure is an executable negative fixture. It intentionally
@@ -725,8 +719,12 @@ if ($preflightCodes.Count -gt 0) {
 $eventTraceAvailable = $false; $eventTraceError = $null; $subscriptions = @(); $startSource = $null; $stopSource = $null
 $captureFailureCodes = @(); $captureFailureSummaries = @()
 $script:PublicSamples = @(); $script:PublicEvents = @(); $script:RawSamples = @(); $script:RawEvents = @(); $script:MonitorGaps = @()
+$script:ActivePidRecords = @{}
 $script:QueryErrors = @(); $script:QueryErrorCodes = @(); $script:UnrecognizedCount = 0; $script:UnknownCount = 0; $script:PidReuseCount = 0; $script:ObservedServiceHashes = @{}
 $script:SampleOrdinal = 0
+$script:CaptureMonotonicOrigin = Get-MonotonicSeconds
+$script:CaptureUtcOrigin = [DateTime]::UtcNow
+$script:NextDeadlineSeconds = 0.0
 try {
     if ($SimulateProviderFailure) { throw 'simulated provider/query failure' }
     try {
@@ -739,10 +737,10 @@ try {
     }
 
     function Add-PhaseSamples([string]$Phase, [int]$Seconds) {
-        $phaseStart = Get-MonotonicSeconds
+        $phaseOffset = $script:NextDeadlineSeconds
         for ($index = 0; $index -le $Seconds; $index++) {
-            $expected = $phaseStart + $index
-            $before = Get-MonotonicSeconds
+            $expectedElapsed = $phaseOffset + $index
+            $expected = $script:CaptureMonotonicOrigin + $expectedElapsed
             $snapshot = Get-ProcessSnapshot
             $observed = Get-MonotonicSeconds
             if ($observed - $expected -gt 2.0) { $script:MonitorGaps += [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; late_by_ms = (($observed - $expected) * 1000.0) } }
@@ -752,7 +750,7 @@ try {
             if ($eventTraceAvailable) {
                 $startEvents = Get-EventRecords $startSource; $stopEvents = Get-EventRecords $stopSource
             }
-            $rawSample = [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; timestamp_utc = Get-UtcNowText; scheduled_timestamp_utc = ([DateTime]::UtcNow.AddSeconds($expected - $observed)).ToString('o'); monotonic_elapsed_ms = (($observed - $phaseStart) * 1000.0); processes = @($snapshot.raw); events = @($startEvents.raw) + @($stopEvents.raw) }
+            $rawSample = [ordered]@{ phase = $Phase; sample_ordinal = $script:SampleOrdinal; timestamp_utc = Get-UtcNowText; scheduled_timestamp_utc = $script:CaptureUtcOrigin.AddSeconds($expectedElapsed).ToString('o'); monotonic_elapsed_ms = (($observed - $script:CaptureMonotonicOrigin) * 1000.0); processes = @($snapshot.raw); events = @($startEvents.raw) + @($stopEvents.raw) }
             $inventoryHash = Get-ObjectSha256 $rawSample
             $script:RawSamples += $rawSample
             $script:RawEvents += @($startEvents.raw) + @($stopEvents.raw)
@@ -760,10 +758,12 @@ try {
             $script:PublicEvents += @($startEvents.public) + @($stopEvents.public)
             $script:SampleOrdinal++
             if ($index -lt $Seconds) {
-                $remaining = $expected + 1.0 - (Get-MonotonicSeconds)
+                $nextExpected = $script:CaptureMonotonicOrigin + $expectedElapsed + 1.0
+                $remaining = $nextExpected - (Get-MonotonicSeconds)
                 if ($remaining -gt 0.0) { Start-Sleep -Milliseconds ([math]::Max(1, [math]::Floor($remaining * 1000.0))) }
             }
         }
+        $script:NextDeadlineSeconds += $Seconds + 1
     }
     Add-PhaseSamples 'pre' $PreSeconds
     Add-PhaseSamples 'during' $DuringSeconds
@@ -781,80 +781,40 @@ try {
 $captureEnd = Get-UtcNowText
 $privateInventory = New-PrivateInventory $captureStart $captureEnd $policySignature $verifiedLease $lossReceipt $bindingStatus
 $privateStatus = Save-PrivateInventory $privateInventory
-$verifiedLeaseAfter = Get-VerifiedLeaseReceipt $leaseSignature $false
-$lossAfter = Get-VerifiedEventLossReceipt $captureStart $lossSignature $false
-$bindingAfter = Get-VerifiedExecutionBinding $bindingSignature $false
-$lossAttested = [bool](Get-OptionalProperty $lossAfter 'verified' $false)
-if ($lossAttested) {
+if ($Phase -eq 'Observe') {
+    $observationCodes = @($captureFailureCodes + $script:QueryErrorCodes)
+    $observationSummaries = @($captureFailureSummaries)
+    $leaseAfterObserve = Get-VerifiedLeaseReceipt $leaseSignature $false
+    if (-not [bool](Get-OptionalProperty $privateStatus 'written' $false)) { $observationCodes += 'PRIVATE_INVENTORY_WRITE_FAILURE'; $observationSummaries += 'owner-private inventory could not be retained' }
+    if (-not [bool](Get-OptionalProperty $leaseAfterObserve 'verified' $false)) { $observationCodes += [string](Get-OptionalProperty $leaseAfterObserve 'error_code' 'LEASE_RECEIPT_INVALID'); $observationSummaries += [string](Get-OptionalProperty $leaseAfterObserve 'error' 'owner lease became unavailable') }
+    if ([bool](Get-OptionalProperty $leaseAfterObserve 'verified' $false)) {
+        try {
+            if ([DateTime]::Parse([string]$leaseAfterObserve.receipt.valid_until_utc).ToUniversalTime() -lt [DateTime]::Parse($captureEnd).ToUniversalTime()) { $observationCodes += 'LEASE_COVERAGE_SHORT'; $observationSummaries += 'owner lease ended before observation completion' }
+        } catch { $observationCodes += 'LEASE_RECEIPT_INVALID'; $observationSummaries += 'owner lease completion time is invalid' }
+    }
     try {
-        $lossEnd = [DateTime]::Parse([string]$lossAfter.receipt.coverage_end_utc).ToUniversalTime()
-        if ($lossEnd -lt [DateTime]::Parse($captureEnd).ToUniversalTime()) { $lossAttested = $false; $lossAfter.error_code = 'EVENT_LOSS_COVERAGE_SHORT'; $lossAfter.error = 'ETW loss receipt ends before capture completion' }
-    } catch { $lossAttested = $false; $lossAfter.error_code = 'EVENT_LOSS_RECEIPT_INVALID'; $lossAfter.error = 'ETW loss receipt completion time is invalid' }
-}
-$reasonCodes = @($captureFailureCodes + $script:QueryErrorCodes); $reasonSummaries = @($captureFailureSummaries)
-try {
-    $policyStartAfter = [DateTime]::Parse([string]$script:IdentityPolicy.valid_from_utc).ToUniversalTime()
-    $policyEndAfter = [DateTime]::Parse([string]$script:IdentityPolicy.valid_until_utc).ToUniversalTime()
-    if ($policyStartAfter -gt [DateTime]::Parse($captureStart).ToUniversalTime() -or $policyEndAfter -lt [DateTime]::Parse($captureEnd).ToUniversalTime()) { $reasonCodes += 'IDENTITY_POLICY_COVERAGE_SHORT'; $reasonSummaries += 'owner identity baseline did not cover the complete witness interval' }
-} catch { $reasonCodes += 'IDENTITY_POLICY_INTERVAL_INVALID'; $reasonSummaries += 'owner identity baseline completion interval is invalid' }
-if (-not [bool](Get-OptionalProperty $privateStatus 'written' $false)) { $reasonCodes += [string](Get-OptionalProperty $privateStatus 'error' 'PRIVATE_INVENTORY_WRITE_FAILURE'); $reasonSummaries += 'owner-private inventory could not be retained' }
-if (-not [bool](Get-OptionalProperty $verifiedLeaseAfter 'verified' $false)) { $reasonCodes += [string](Get-OptionalProperty $verifiedLeaseAfter 'error_code' 'LEASE_RECEIPT_INVALID'); $reasonSummaries += [string](Get-OptionalProperty $verifiedLeaseAfter 'error' 'owner lease became unavailable') }
-if ([bool](Get-OptionalProperty $verifiedLeaseAfter 'verified' $false)) {
-    try {
-        $leaseEndAfter = [DateTime]::Parse([string]$verifiedLeaseAfter.receipt.valid_until_utc).ToUniversalTime()
-        if ($leaseEndAfter -lt [DateTime]::Parse($captureEnd).ToUniversalTime()) { $reasonCodes += 'LEASE_COVERAGE_SHORT'; $reasonSummaries += 'owner lease ended before capture completion' }
-    } catch { $reasonCodes += 'LEASE_RECEIPT_INVALID'; $reasonSummaries += 'owner lease completion time is invalid' }
-}
-if (-not [bool](Get-OptionalProperty $bindingAfter 'verified' $false)) { $reasonCodes += [string](Get-OptionalProperty $bindingAfter 'error_code' 'EXECUTION_BINDING_INVALID'); $reasonSummaries += [string](Get-OptionalProperty $bindingAfter 'error' 'CTest binding became unavailable') }
-if ([bool](Get-OptionalProperty $bindingAfter 'verified' $false)) {
-    try {
-        foreach ($boundProfile in @($bindingAfter.binding.profiles)) {
-            $boundStart = [DateTime]::Parse([string]$boundProfile.test_start_utc).ToUniversalTime()
-            $boundEnd = [DateTime]::Parse([string]$boundProfile.test_end_utc).ToUniversalTime()
-            if ($boundStart -lt [DateTime]::Parse($captureStart).ToUniversalTime() -or $boundEnd -gt [DateTime]::Parse($captureEnd).ToUniversalTime()) { throw 'CTest binding lies outside host witness interval' }
-        }
-    } catch { $reasonCodes += 'EXECUTION_BINDING_INTERVAL_MISMATCH'; $reasonSummaries += 'CTest profile interval was not contained by the host witness' }
-}
-if (-not $eventTraceAvailable) { $reasonCodes += 'EVENT_PROVIDER_UNAVAILABLE'; $reasonSummaries += 'process event provider was unavailable' }
-if ($script:QueryErrors.Count -gt 0) { $reasonCodes += 'PROCESS_QUERY_FAILURE'; $reasonSummaries += 'one or more process/service identity queries failed' }
-if (-not $lossAttested) { $reasonCodes += [string](Get-OptionalProperty $lossAfter 'error_code' 'EVENT_LOSS_RECEIPT_INVALID'); $reasonSummaries += [string](Get-OptionalProperty $lossAfter 'error' 'measurable ETW loss proof is unavailable') }
-if ($script:MonitorGaps.Count -gt 0) { $reasonCodes += 'MONITOR_GAP_OR_MISSING_1HZ_SAMPLE'; $reasonSummaries += 'one or more monotonic one-Hz deadlines were missed' }
-if ($script:UnknownCount -gt 0) { $reasonCodes += 'UNKNOWN_PROCESS_IDENTITY'; $reasonSummaries += 'one or more process identities were unknown' }
-if ($script:UnrecognizedCount -gt 0) { $reasonCodes += 'UNRECOGNIZED_PROCESS_IDENTITY'; $reasonSummaries += 'one or more observed identities were not in the owner baseline' }
-if ($script:PidReuseCount -gt 0) { $reasonCodes += 'PID_REUSE_OR_DYNAMIC_IDENTITY_MISMATCH'; $reasonSummaries += 'PID reuse or dynamic identity mismatch was observed' }
-$policyServiceSet = @($policyServices | Sort-Object -Unique); $observedServiceSet = @($script:ObservedServiceHashes.Keys | Sort-Object -Unique)
-if ($policyServiceSet.Count -ne 4 -or (($policyServiceSet | Where-Object { $observedServiceSet -notcontains $_ }).Count -gt 0)) { $reasonCodes += 'HAMUNAPTRA_RUNNER_SERVICE_BASELINE_MISMATCH'; $reasonSummaries += 'the four owner-baselined HAMUNAPTRA runner service identities were not reconciled' }
-$reasonCodes = @($reasonCodes | Where-Object { $_ } | Select-Object -Unique); $reasonSummaries = @($reasonSummaries | Where-Object { $_ } | Select-Object -Unique)
-$eventTraceComplete = $eventTraceAvailable -and $lossAttested -and $script:QueryErrors.Count -eq 0 -and $script:MonitorGaps.Count -eq 0
-if ($reasonCodes.Count -gt 0) {
-    $blocked = New-BlockedWitness $captureStart $captureEnd $reasonCodes 'CAPTURE_BLOCKED' $reasonSummaries $script:IdentityPolicyHash $policySignature $verifiedLeaseAfter $lossAfter $bindingAfter $eventTraceAvailable $eventTraceError $privateStatus $script:PublicSamples.Count $script:PublicEvents.Count $script:QueryErrors.Count $script:MonitorGaps.Count
-    try { Write-WitnessJson $blocked $OutputPath } catch { Write-Error 'Unable to persist the blocked host witness receipt' }
+        $policyStartObserve = [DateTime]::Parse([string]$script:IdentityPolicy.valid_from_utc).ToUniversalTime()
+        $policyEndObserve = [DateTime]::Parse([string]$script:IdentityPolicy.valid_until_utc).ToUniversalTime()
+        if ($policyStartObserve -gt [DateTime]::Parse($captureStart).ToUniversalTime() -or $policyEndObserve -lt [DateTime]::Parse($captureEnd).ToUniversalTime()) { $observationCodes += 'IDENTITY_POLICY_COVERAGE_SHORT'; $observationSummaries += 'owner identity baseline did not cover the observation interval' }
+    } catch { $observationCodes += 'IDENTITY_POLICY_INTERVAL_INVALID'; $observationSummaries += 'owner identity baseline interval is invalid' }
+    if (-not $eventTraceAvailable) { $observationCodes += 'EVENT_PROVIDER_UNAVAILABLE'; $observationSummaries += 'process event provider was unavailable' }
+    if ($script:MonitorGaps.Count -gt 0) { $observationCodes += 'MONITOR_GAP_OR_MISSING_1HZ_SAMPLE'; $observationSummaries += 'one or more monotonic one-Hz deadlines were missed' }
+    if ($script:UnknownCount -gt 0) { $observationCodes += 'UNKNOWN_PROCESS_IDENTITY'; $observationSummaries += 'one or more process identities were unknown' }
+    if ($script:UnrecognizedCount -gt 0) { $observationCodes += 'UNRECOGNIZED_PROCESS_IDENTITY'; $observationSummaries += 'one or more observed identities were not in the owner baseline' }
+    if ($script:PidReuseCount -gt 0) { $observationCodes += 'PID_REUSE_OR_DYNAMIC_IDENTITY_MISMATCH'; $observationSummaries += 'PID reuse or dynamic identity mismatch was observed' }
+    $policyServiceSetObserve = @($policyServices | Sort-Object -Unique); $observedServiceSetObserve = @($script:ObservedServiceHashes.Keys | Sort-Object -Unique)
+    if ($policyServiceSetObserve.Count -ne 4 -or (($policyServiceSetObserve | Where-Object { $observedServiceSetObserve -notcontains $_ }).Count -gt 0)) { $observationCodes += 'HAMUNAPTRA_RUNNER_SERVICE_BASELINE_MISMATCH'; $observationSummaries += 'the four owner-baselined HAMUNAPTRA runner service identities were not reconciled' }
+    $observationCodes = @($observationCodes | Where-Object { $_ } | Select-Object -Unique)
+    $observationSummaries = @($observationSummaries | Where-Object { $_ } | Select-Object -Unique)
+    if ($observationCodes.Count -gt 0) {
+        $blocked = New-BlockedWitness $captureStart $captureEnd $observationCodes 'CAPTURE_BLOCKED' $observationSummaries $script:IdentityPolicyHash $policySignature $leaseAfterObserve $lossReceipt $bindingStatus $eventTraceAvailable $eventTraceError $privateStatus $script:PublicSamples.Count $script:PublicEvents.Count $script:QueryErrors.Count $script:MonitorGaps.Count
+        try { Write-WitnessJson $blocked $OutputPath } catch { Write-Error 'Unable to persist the blocked host observation receipt' }
+        exit 2
+    }
+    $observation = New-ObservationReceipt $captureStart $captureEnd $policySignature $leaseAfterObserve $privateStatus @() @() $eventTraceAvailable $eventTraceError
+    try { Write-WitnessJson $observation $OutputPath } catch { Write-Error 'Unable to persist the host observation receipt'; exit 2 }
     exit 2
 }
-
-$binding = $bindingAfter.binding; $loss = $lossAfter.receipt
-$policyWindowStart = [DateTime]::Parse([string]$script:IdentityPolicy.valid_from_utc).ToUniversalTime().ToString('o')
-$policyWindowEnd = [DateTime]::Parse([string]$script:IdentityPolicy.valid_until_utc).ToUniversalTime().ToString('o')
-$publicPolicy = [ordered]@{ format = $script:IdentityPolicy.format; policy_id = $script:IdentityPolicy.policy_id; baseline_id = $script:IdentityPolicy.baseline_id; policy_sha256 = $script:IdentityPolicyHash; baseline_valid_from_utc = $policyWindowStart; baseline_valid_until_utc = $policyWindowEnd; runner_service_count = 4; approved_process_count = $policyEntries.Count; policy_decision_method = 'owner_signed_name_path_hash_parent_service_and_pid_start_reconciliation' }
-$runnerServiceHashes = @($observedServiceSet | Sort-Object)
-$witness = [ordered]@{
-    format = 'VOX_FX_T18_HOST_WITNESS_V1'; schema_version = 2; mode = 'capture'; fixture_mode = $false; qualification_prohibited = $false
-    host_observation_mode = 'process_snapshot_and_event_trace'; sample_interval_ms = 1000; pre_seconds = $PreSeconds; during_seconds = $DuringSeconds; post_seconds = $PostSeconds
-    capture_start_utc = $captureStart; capture_end_utc = $captureEnd; monotonic_capture_start = $script:PublicSamples[0].monotonic_elapsed_ms; monotonic_capture_end = $script:PublicSamples[-1].monotonic_elapsed_ms; monitor_gaps = @($script:MonitorGaps)
-    identity_policy = $publicPolicy; identity_policy_path = [IO.Path]::GetFullPath($IdentityPolicyPath); identity_policy_sha256 = $script:IdentityPolicyHash
-    private_inventory_path = [IO.Path]::GetFullPath($PrivateInventoryPath); private_inventory_sha256 = $privateStatus.hash
-    attestation_proofs = [ordered]@{
-        policy = [ordered]@{ verified = $true; data_sha256 = $policySignature.data_hash; signature_sha256 = $policySignature.signature_hash; signer_thumbprint = $policySignature.signer_thumbprint; verification_method = $policySignature.verification_method; data_path = [IO.Path]::GetFullPath($IdentityPolicyPath); signature_path = [IO.Path]::GetFullPath($IdentityPolicySignaturePath) }
-        lease = [ordered]@{ verified = $true; data_sha256 = $leaseSignature.data_hash; signature_sha256 = $leaseSignature.signature_hash; signer_thumbprint = $leaseSignature.signer_thumbprint; verification_method = $leaseSignature.verification_method; data_path = [IO.Path]::GetFullPath($LeaseReceiptPath); signature_path = [IO.Path]::GetFullPath($LeaseReceiptSignaturePath) }
-        event_loss = [ordered]@{ verified = $true; data_sha256 = $lossSignature.data_hash; signature_sha256 = $lossSignature.signature_hash; signer_thumbprint = $lossSignature.signer_thumbprint; verification_method = $lossSignature.verification_method; data_path = [IO.Path]::GetFullPath($EventLossReceiptPath); signature_path = [IO.Path]::GetFullPath($EventLossReceiptSignaturePath) }
-        execution_binding = [ordered]@{ verified = $true; data_sha256 = $bindingSignature.data_hash; signature_sha256 = $bindingSignature.signature_hash; signer_thumbprint = $bindingSignature.signer_thumbprint; verification_method = $bindingSignature.verification_method; data_path = [IO.Path]::GetFullPath($ExecutionBindingPath); signature_path = [IO.Path]::GetFullPath($ExecutionBindingSignaturePath) }
-    }
-    event_trace = [ordered]@{ observation_provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'; loss_provider = [string]$loss.provider; available = $eventTraceAvailable; coverage_complete = $eventTraceComplete; lost_events = [int]$loss.lost_events; buffer_loss_events = [int]$loss.buffer_loss_events; events_received = [int]$loss.events_received; loss_accounting = 'etw_provider_counters'; coverage_start_utc = [string]$loss.coverage_start_utc; coverage_end_utc = [string]$loss.coverage_end_utc; trace_id = [string]$loss.trace_id; collector_artifact_path = if ([IO.Path]::IsPathRooted([string]$loss.collector_artifact_path)) { [IO.Path]::GetFullPath([string]$loss.collector_artifact_path) } else { [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $EventLossReceiptPath) ([string]$loss.collector_artifact_path))) }; collector_artifact_sha256 = [string]$loss.collector_artifact_sha256; loss_receipt_path = [IO.Path]::GetFullPath($EventLossReceiptPath); loss_receipt_sha256 = $lossAfter.hash; error = $eventTraceError; loss_receipt_error = $lossAfter.error }
-    runner_lease = [ordered]@{ recognized = $true; owner_verified = $true; owner = [string]$leaseReceipt.owner; host = [string]$leaseReceipt.host; lease_id = [string]$leaseReceipt.lease_id; verification_receipt_path = [IO.Path]::GetFullPath($LeaseReceiptPath); verification_receipt_sha256 = $verifiedLeaseAfter.hash; token = '<redacted>' }
-    runner_service_identities = @($runnerServiceHashes); execution_binding = [ordered]@{ verified = $true; binding_id = [string]$binding.binding_id; host = [string]$binding.host; runner_job_id = [string]$binding.runner_job_id; source_head = [string]$binding.source_head; source_tree = [string]$binding.source_tree; executable_path = [string]$binding.executable_path; executable_sha256 = [string]$binding.executable_sha256; lease_id = [string]$binding.lease_id; policy_sha256 = [string]$binding.policy_sha256; profiles = @($binding.profiles | ForEach-Object { [ordered]@{ profile = $_.profile; test_identity = $_.test_identity; test_start_utc = $_.test_start_utc; test_end_utc = $_.test_end_utc; ctest_exit_code = $_.ctest_exit_code } }); runner_receipts = @($binding.runner_receipts | ForEach-Object { [ordered]@{ profile = $_.profile; receipt_path = $_.receipt_path; receipt_sha256 = $_.receipt_sha256 } }); binding_receipt_path = [IO.Path]::GetFullPath($ExecutionBindingPath); binding_receipt_sha256 = $bindingAfter.hash }
-    samples = @($script:PublicSamples); process_events = @($script:PublicEvents); unrecognized_competitors = 0; unknown_pids = 0; pid_reuse_mismatches = 0
-    inventory_summary = [ordered]@{ samples_observed = $script:PublicSamples.Count; events_observed = $script:PublicEvents.Count; unknown_identity_count = 0; unexpected_identity_count = 0; pid_reuse_mismatch_count = 0; query_error_count = $script:QueryErrors.Count; monitor_gap_count = $script:MonitorGaps.Count; raw_inventory_suppressed = $true }
-    evidence_blocked = $false; query_errors = @(); fixture_notes = 'Owner-signed observation and ETW loss inputs; raw process inventory is retained only in the private sidecar.'
-}
-try { Write-WitnessJson $witness $OutputPath } catch { $blocked = New-BlockedWitness $captureStart $captureEnd @('RECEIPT_WRITE_FAILURE') 'RECEIPT_WRITE_FAILURE' @('host witness receipt serialization failed') $script:IdentityPolicyHash $policySignature $verifiedLeaseAfter $lossAfter $bindingAfter $eventTraceAvailable $eventTraceError $privateStatus $script:PublicSamples.Count $script:PublicEvents.Count $script:QueryErrors.Count $script:MonitorGaps.Count; try { Write-WitnessJson $blocked $OutputPath } catch { Write-Error 'Unable to persist the host witness receipt' }; exit 2 }
-exit 0
+# Production Capture is intentionally observation-only. Post-capture ETW/CTest
+# proofs are verified and assembled by finalize-fx-t18-host-witness.py.
+exit 2

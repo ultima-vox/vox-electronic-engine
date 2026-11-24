@@ -27,6 +27,7 @@ def load(name: str, filename: str):
 AUDIT_FIXTURES = load("fx_t18_audit_fixtures", "test-audit-fx-windows-timing.py")
 EVALUATOR = load("fx_t18_wall_evaluator", "evaluate-fx-t18-wall-gate.py")
 AUDIT = EVALUATOR.AUDIT
+FINALIZER = load("fx_t18_host_finalizer", "finalize-fx-t18-host-witness.py")
 
 
 def profile_report(text: str, profile: str) -> str:
@@ -71,6 +72,28 @@ def mutate(text: str, target: str, **updates: str) -> str:
     return AUDIT_FIXTURES.mutate_functional_record(text, target, **updates)
 
 
+def capture_sampler_samples(base: datetime) -> list[dict]:
+    """Mirror Add-PhaseSamples: one global monotonic origin and phase offsets."""
+    samples: list[dict] = []
+    deadline_offset = 0
+    for phase, seconds in (("pre", 30), ("during", 60), ("post", 30)):
+        for index in range(seconds + 1):
+            elapsed = deadline_offset + index
+            timestamp = base + timedelta(seconds=elapsed)
+            samples.append({
+                "phase": phase,
+                "sample_ordinal": len(samples),
+                "timestamp_utc": timestamp.isoformat().replace("+00:00", "Z"),
+                "scheduled_timestamp_utc": timestamp.isoformat().replace("+00:00", "Z"),
+                "monotonic_elapsed_ms": elapsed * 1000,
+                "processes": [{"pid": 1000, "process_name": "Runner.Listener.exe",
+                               "identity_known": True, "approved_by_policy": True}],
+                "total_processes": 1, "process_query_error": None,
+            })
+        deadline_offset += seconds + 1
+    return samples
+
+
 def valid_witness(competitors: list[str] | None = None,
                   samples: list[dict] | None = None,
                   mutate: dict | None = None) -> dict:
@@ -82,7 +105,12 @@ def valid_witness(competitors: list[str] | None = None,
         "owner_approved": True,
         "policy_sha256": "a" * 64,
         "runner_service_identity_sha256": ["1" * 64, "2" * 64, "3" * 64, "4" * 64],
-        "approved_processes": [{"pid": 1000, "process_name": "Runner.Listener.exe", "role": "runner"}],
+        "approved_processes": [{"pid": 1000, "process_name": "Runner.Listener.exe", "role": "runner",
+                               "executable_path": "C:\\HAMUNAPTRA\\Runner.Listener.exe",
+                               "executable_sha256": "5" * 64, "parent_pid": 4,
+                               "service_identity_sha256": "1" * 64,
+                               "start_time_utc": (base - timedelta(seconds=60)).isoformat().replace("+00:00", "Z"),
+                               "allow_dynamic": False}],
         "denied_process_name_regex": ["^(devenv|msbuild|cmake|ctest|ninja|python|cubase|reaper)"],
     }
     process = {
@@ -93,18 +121,9 @@ def valid_witness(competitors: list[str] | None = None,
         "approved_by_policy": True,
     }
     if samples is None:
-        samples = []
-        for phase, start, count in (("pre", 0, 31), ("during", 31, 61), ("post", 92, 31)):
-            for offset in range(count):
-                timestamp = base + timedelta(seconds=start + offset)
-                samples.append({
-                    "phase": phase,
-                    "timestamp_utc": timestamp.isoformat().replace("+00:00", "Z"),
-                    "scheduled_timestamp_utc": timestamp.isoformat().replace("+00:00", "Z"),
-                    "monotonic_elapsed_ms": (start + offset) * 1000,
-                    "processes": [dict(process)], "total_processes": 1,
-                    "process_query_error": None,
-                })
+        samples = capture_sampler_samples(base)
+        for sample in samples:
+            sample["processes"] = [dict(process)]
     witness = {
         "format": "VOX_FX_T18_HOST_WITNESS_V1",
         "schema_version": 2,
@@ -147,8 +166,11 @@ def valid_witness(competitors: list[str] | None = None,
     return witness
 
 
-def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
+def strict_witness_fixture(directory: Path, etw_events: list[dict] | None = None,
+                           wmi_events: list[dict] | None = None) -> tuple[Path, Path]:
     """Build a structural fixture with fake signatures, explicitly prohibited."""
+    etw_events = list(etw_events or [])
+    wmi_events = list(wmi_events or [])
     directory.mkdir(parents=True, exist_ok=True)
     witness = valid_witness()
     policy_file = directory / "identity-policy.json"
@@ -178,17 +200,31 @@ def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
     collector_file = directory / "collector.etl"
     collector_file.write_bytes(b"synthetic ETW collector artifact")
     collector_hash = hashlib.sha256(collector_file.read_bytes()).hexdigest()
+    parse_file = directory / "collector-parse.json"
+    parse_file.write_text(json.dumps({
+        "format": "VOX_FX_T18_ETW_PARSE_RECEIPT_V1",
+        "provider": "Microsoft-Windows-Kernel-Process/ETW",
+        "session_name": "fixture-etw-session", "coverage_start_utc": "2026-11-21T23:59:00Z",
+        "coverage_end_utc": "2026-11-22T00:03:00Z", "events_received": 0,
+        "lost_events": 0, "buffer_loss_events": 0,
+        "collector_artifact_sha256": collector_hash,
+        "process_events": etw_events,
+    }, indent=2), encoding="utf-8")
+    parse_hash = hashlib.sha256(parse_file.read_bytes()).hexdigest()
     loss_file = directory / "event-loss.json"
     loss_file.write_text(json.dumps({
         "format": "VOX_FX_T18_EVENT_LOSS_RECEIPT_V1",
         "provider": "Microsoft-Windows-Kernel-Process/ETW",
         "measurement_method": "ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS",
         "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
-        "events_received": 0, "owner_approved": True,
+        "events_received": 0, "session_name": "fixture-etw-session", "owner_approved": True,
         "attestation_source": "owner_controlled_offline",
         "verification_method": "owner_signed_detached_cms",
         "trace_id": "fixture-trace", "collector_artifact_path": str(collector_file),
-        "collector_artifact_sha256": collector_hash,
+        "collector_artifact_sha256": collector_hash, "collector_artifact_format": "ETL",
+        "collector_parse_method": "owner_independent_etw_parser_v1",
+        "collector_parse_receipt_path": str(parse_file), "collector_parse_receipt_sha256": parse_hash,
+        "process_events": etw_events,
         "coverage_start_utc": "2026-11-21T23:59:00Z",
         "coverage_end_utc": "2026-11-22T00:03:00Z",
     }, indent=2), encoding="utf-8")
@@ -196,13 +232,17 @@ def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
         "observation_provider": "Win32_ProcessStartTrace/Win32_ProcessStopTrace",
         "loss_provider": "Microsoft-Windows-Kernel-Process/ETW",
         "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
-        "events_received": 0, "loss_accounting": "etw_provider_counters",
+        "events_received": 0, "session_name": "fixture-etw-session", "loss_accounting": "etw_provider_counters",
         "coverage_start_utc": "2026-11-21T23:59:00Z",
         "coverage_end_utc": "2026-11-22T00:03:00Z",
         "loss_receipt_path": str(loss_file),
         "loss_receipt_sha256": hashlib.sha256(loss_file.read_bytes()).hexdigest(),
         "collector_artifact_path": str(collector_file),
         "collector_artifact_sha256": collector_hash,
+        "collector_artifact_format": "ETL",
+        "collector_parse_method": "owner_independent_etw_parser_v1",
+        "collector_parse_receipt_path": str(parse_file),
+        "collector_parse_receipt_sha256": parse_hash,
     })
 
     runner_receipt_files = []
@@ -232,6 +272,7 @@ def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
 
     private_file = directory / "private-inventory.json"
     private_file.write_text(json.dumps({"format": "VOX_FX_T18_PRIVATE_PROCESS_INVENTORY_V1", "fixture": True}, indent=2), encoding="utf-8")
+    witness["process_events"] = wmi_events
     witness["private_inventory_path"] = str(private_file)
     witness["private_inventory_sha256"] = hashlib.sha256(private_file.read_bytes()).hexdigest()
 
@@ -250,13 +291,26 @@ def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
     witness_path = directory / "witness.json"
     witness_path.write_text(json.dumps(witness, indent=2), encoding="utf-8")
     manifest = directory / "host-manifest.json"
-    files = [policy_file, lease_file, loss_file, binding_file, collector_file, private_file, witness_path, *runner_receipt_files, *signature_paths.values()]
+    files = [policy_file, lease_file, loss_file, binding_file, collector_file, parse_file, private_file, witness_path, *runner_receipt_files, *signature_paths.values()]
     manifest.write_text(json.dumps({
         "format": "VOX_FX_T18_HOST_ARTIFACTS_V2",
         "files": [{"path": str(item), "sha256": hashlib.sha256(item.read_bytes()).hexdigest()}
                   for item in files],
     }, indent=2), encoding="utf-8")
     return witness_path, manifest
+
+
+def etw_event(*, event: str, pid: int, process_name: str, executable_hash: str,
+              start_time: str, timestamp: str, approved: bool = True) -> dict:
+    value = {
+        "event": event, "timestamp_utc": timestamp, "pid": pid,
+        "process_name": process_name, "executable_path": f"C:\\fixture\\{process_name}",
+        "executable_sha256": executable_hash, "parent_pid": 4,
+        "start_time_utc": start_time, "service_identity_sha256": [],
+        "identity_known": True, "approved_by_policy": approved,
+    }
+    value["identity_digest"] = EVALUATOR._identity_digest(value)
+    return value
 
 
 def _write_execution_receipt(directory: Path, profile: str, mode: str,
@@ -490,6 +544,49 @@ def main() -> int:
             require_external_attestations=True, allow_fixture=True)
         host_manifest = EVALUATOR._verify_host_manifest(strict_manifest, strict_witness)
         assert strict["verified"] and host_manifest["verified"]
+        observation_value = json.loads(strict_witness.read_text())
+        observation_value.update({
+            "format": "VOX_FX_T18_HOST_OBSERVATION_V1", "schema_version": 1,
+            "mode": "observe", "phase": "observe", "finalization_required": True,
+            "evidence_blocked": True,
+            "diagnostic": {"reason_codes": ["FINALIZATION_REQUIRED"]},
+        })
+        observation_path = strict_witness.parent / "observation.json"
+        observation_path.write_text(json.dumps(observation_value, indent=2), encoding="utf-8")
+        observation_hash = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+        for proof_name in ("event-loss", "execution-binding"):
+            proof_path = strict_witness.parent / f"{proof_name}.json"
+            proof_value = json.loads(proof_path.read_text())
+            proof_value["observation_sha256"] = observation_hash
+            proof_path.write_text(json.dumps(proof_value, indent=2), encoding="utf-8")
+        finalized_path = strict_witness.parent / "finalized-witness.json"
+        FINALIZER.finalize(
+            observation_path, finalized_path,
+            strict_witness.parent / "identity-policy.json", strict_witness.parent / "policy.p7s",
+            strict_witness.parent / "lease.json", strict_witness.parent / "lease.p7s",
+            strict_witness.parent / "event-loss.json", strict_witness.parent / "event_loss.p7s",
+            strict_witness.parent / "execution-binding.json", strict_witness.parent / "execution_binding.p7s",
+            "A" * 40, allow_fixture=True)
+        finalized_value = json.loads(finalized_path.read_text())
+        assert finalized_value["format"] == "VOX_FX_T18_HOST_WITNESS_V1"
+        assert finalized_value["qualification_prohibited"] is True and finalized_value["evidence_blocked"] is False
+        names.append("two_phase_observation_finalization")
+        tampered_observation = json.loads(json.dumps(observation_value))
+        tampered_observation["private_inventory_sha256"] = "f" * 64
+        tampered_path = strict_witness.parent / "tampered-observation.json"
+        tampered_path.write_text(json.dumps(tampered_observation, indent=2), encoding="utf-8")
+        try:
+            FINALIZER.finalize(
+                tampered_path, strict_witness.parent / "tampered-final.json",
+                strict_witness.parent / "identity-policy.json", strict_witness.parent / "policy.p7s",
+                strict_witness.parent / "lease.json", strict_witness.parent / "lease.p7s",
+                strict_witness.parent / "event-loss.json", strict_witness.parent / "event_loss.p7s",
+                strict_witness.parent / "execution-binding.json", strict_witness.parent / "execution_binding.p7s",
+                "A" * 40, allow_fixture=True)
+        except ValueError:
+            names.append("tampered_observation_rejected")
+        else:
+            raise AssertionError("tampered observation unexpectedly finalized")
         fake_value = json.loads(strict_witness.read_text())
         try:
             EVALUATOR._verify_external_witness_attestations(
@@ -503,6 +600,91 @@ def main() -> int:
         else:
             raise AssertionError("synthetic detached signatures unexpectedly passed production CMS verification")
         names.extend(["independent_host_attestations", "fake_attestation_cannot_production_pass"])
+
+        brief_competitor = etw_event(
+            event="start", pid=4242, process_name="other-runner.exe", executable_hash="6" * 64,
+            start_time="2026-11-22T00:00:29Z", timestamp="2026-11-22T00:00:30Z", approved=False)
+        competitor_witness, _ = strict_witness_fixture(
+            directory / "etw-competitor-absent-wmi", [brief_competitor], [])
+        try:
+            EVALUATOR.validate_witness(
+                competitor_witness, intervals, "fixture", "fixture-lease",
+                json.loads(competitor_witness.read_text())["identity_policy"]["policy_sha256"],
+                require_external_attestations=True, allow_fixture=True)
+        except ValueError:
+            names.append("etw_competitor_absent_from_wmi")
+        else:
+            raise AssertionError("ETW-only competitor unexpectedly passed")
+
+        mixed_start = etw_event(
+            event="start", pid=5252, process_name="Runner.Listener.exe", executable_hash="7" * 64,
+            start_time="2026-11-22T00:00:39Z", timestamp="2026-11-22T00:00:40Z")
+        mixed_stop = etw_event(
+            event="stop", pid=5252, process_name="other-runner.exe", executable_hash="8" * 64,
+            start_time="2026-11-22T00:00:39Z", timestamp="2026-11-22T00:00:41Z")
+        mixed_witness, _ = strict_witness_fixture(
+            directory / "mixed-name-same-pid", [mixed_start, mixed_stop], [
+                {"event": item["event"], "timestamp_utc": item["timestamp_utc"],
+                 "identity_known": True, "approved_by_policy": True,
+                 "identity_digest": item["identity_digest"]}
+                for item in (mixed_start, mixed_stop)
+            ])
+        try:
+            EVALUATOR.validate_witness(
+                mixed_witness, intervals, "fixture", "fixture-lease",
+                json.loads(mixed_witness.read_text())["identity_policy"]["policy_sha256"],
+                require_external_attestations=True, allow_fixture=True)
+        except ValueError:
+            names.append("mixed_name_same_pid_event")
+        else:
+            raise AssertionError("mixed-name same-PID ETW lifecycle unexpectedly passed")
+
+        pin_witness, _ = strict_witness_fixture(directory / "independent-pin")
+        try:
+            EVALUATOR.validate_witness(
+                pin_witness, intervals, "fixture", "fixture-lease",
+                json.loads(pin_witness.read_text())["identity_policy"]["policy_sha256"],
+                require_external_attestations=True, allow_fixture=True,
+                owner_certificate_thumbprint="B" * 40)
+        except ValueError:
+            names.append("independent_owner_pin_mismatch")
+        else:
+            raise AssertionError("wrong independent owner pin unexpectedly passed")
+
+        strict_policy = json.loads((strict_witness.parent / "identity-policy.json").read_text())
+        for mutation_name, mutation in (
+            ("strict_policy_wildcard_path", lambda value: value["approved_processes"][0].update({"executable_path": "*"})),
+            ("strict_policy_missing_service_identity", lambda value: value["approved_processes"][0].pop("service_identity_sha256")),
+            ("strict_policy_missing_dynamic_authorization", lambda value: (value["approved_processes"][0].pop("pid"), value["approved_processes"][0].pop("start_time_utc"), value["approved_processes"][0].update({"allow_dynamic": False}))),
+            ("strict_policy_deny_allow_conflict", lambda value: value["denied_process_name_regex"].append("^Runner\\.Listener\\.exe$")),
+        ):
+            mutated_policy = json.loads(json.dumps(strict_policy))
+            mutation(mutated_policy)
+            try:
+                EVALUATOR._validate_identity_policy(mutated_policy, mutation_name)
+            except ValueError:
+                names.append(mutation_name)
+            else:
+                raise AssertionError(f"{mutation_name} unexpectedly passed")
+        wrong_event = etw_event(
+            event="start", pid=6262, process_name="Runner.Listener.exe", executable_hash="9" * 64,
+            start_time="2026-11-22T00:00:49Z", timestamp="2026-11-22T00:00:50Z")
+        assert not EVALUATOR._policy_approves_event(strict_policy, wrong_event)
+        names.append("strict_policy_wrong_executable")
+
+        reset_samples = capture_sampler_samples(base)
+        phase_offsets = {"pre": 0, "during": 0, "post": 0}
+        for sample in reset_samples:
+            sample["monotonic_elapsed_ms"] = phase_offsets[sample["phase"]] * 1000
+            phase_offsets[sample["phase"]] += 1
+        reset_path = directory / "global-monotonic-reset.json"
+        reset_path.write_text(json.dumps(valid_witness(samples=reset_samples), indent=2), encoding="utf-8")
+        try:
+            EVALUATOR.validate_witness(reset_path, intervals, "fixture", "fixture-lease", "a" * 64, allow_fixture=True)
+        except ValueError:
+            names.append("capture_sampler_global_monotonic_clock")
+        else:
+            raise AssertionError("phase-reset monotonic sampler unexpectedly passed")
 
         result = evaluate(directory / "coarse-functional", "functional")
         assert_status(result, "WALL_GATE_FAIL", "coarse_cpu_plus_functional")

@@ -1,8 +1,9 @@
 # FX-T18-WALL-IMPL-01 implementation record
 
-**Status:** implementation on PR #170; this checkpoint is
-`READY_FOR_OWNER_ATTESTATION` only. Windows execution, full-matrix dispatch,
-qualification, merge and release acceptance remain separately blocked.
+**Status:** implementation on PR #170; this checkpoint is source remediation
+pending owner review. Windows execution, full-matrix dispatch, owner
+attestation, qualification, merge and release acceptance remain separately
+blocked.
 
 This change keeps production DSP, state, transport, UI, host contracts and all
 existing timing thresholds unchanged. It adds the functional TSV/stdout record,
@@ -35,11 +36,16 @@ receipt is fabricated.
   reason/listing negatives, malformed functional evidence and truncation
   salvage.
 - `evidence/capture-fx-t18-host-witness.ps1` — safe Windows PowerShell 5.1
-  observation path with owner-pinned detached-CMS checks, four-service
-  time-bound identity baseline, dynamic/PID-reuse reconciliation, monotonic
-  deadline sampling, private raw inventory, public counters/hashes, and an
-  independently supplied ETW loss receipt. It has no service/process control
-  operations and no public command-line serialization.
+  observation-only phase with owner-pinned policy/lease CMS chain/revocation checks, four-service
+  time-bound identity baseline, deny precedence, strict path/hash/parent/service
+  policy, dynamic/PID-reuse reconciliation, one global monotonic deadline
+  origin, private raw inventory and public counters/hashes. It has no
+  service/process control operations, no public command-line serialization, and
+  never requires future ETW/CTest facts.
+- `evidence/finalize-fx-t18-host-witness.py` — post-capture-only finalizer that
+  verifies the immutable observation, independently pinned detached proofs,
+  parsed ETW/WMI event equality, PID lifecycle, exact CTest intervals and
+  private-inventory hash before producing the sole production witness.
 - `evidence/evaluate-fx-t18-wall-gate.py` — second-stage hash/CMS verification
   on the owner host, host-manifest reconciliation for every payload, detached
   signature, collector, runner receipt and private inventory, and fail-closed
@@ -65,9 +71,9 @@ FX-T18 auditor negative fixtures: PASS
 
 PYTHONDONTWRITEBYTECODE=1 python3 docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 FX-T18 wall-gate executable fixtures: PASS
-fixtures: independent_host_attestations, fake_attestation_cannot_production_pass, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
+fixtures: two_phase_observation_finalization, independent_host_attestations, fake_attestation_cannot_production_pass, etw_competitor_absent_from_wmi, mixed_name_same_pid_event, independent_owner_pin_mismatch, strict_policy_wildcard_path, strict_policy_missing_service_identity, strict_policy_missing_dynamic_authorization, strict_policy_deny_allow_conflict, strict_policy_wrong_executable, capture_sampler_global_monotonic_clock, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
 
-python3 -m py_compile docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
+python3 -m py_compile docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/finalize-fx-t18-host-witness.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 # exit 0; __pycache__ removed immediately afterward
 
 git diff --check
@@ -118,7 +124,8 @@ python docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py \
   --manifest routed=routed.artifacts.json --manifest authored=authored.artifacts.json --manifest typical=typical.artifacts.json \
   --root . --executable suite_fx_runtime_stress_tests.exe \
   --expected-head OWNER_APPROVED_HEAD --expected-tree OWNER_APPROVED_TREE \
-  --witness host-witness.json --host-manifest host-artifacts.json
+  --witness host-witness.json --host-manifest host-artifacts.json \
+  --owner-certificate-thumbprint OWNER_SUPPLIED_40_HEX_THUMBPRINT
 ```
 
 The native run and schema smoke are Linux implementation validation only. The
