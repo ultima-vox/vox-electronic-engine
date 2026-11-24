@@ -1,0 +1,102 @@
+name: FX-T18 one-shot PS5.1 blocked Capture fixture (c1b01e7)
+
+# Scope: owner-authorized one Windows fixture-only execution, no CTest/build/DAW.
+on:
+  push:
+    branches:
+      - ci/fx-t18-host-capture-ps51-c1b01e7-20261124
+    paths:
+      - .github/workflows/fx-t18-host-capture-ps51-c1b01e7.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx-t18-host-capture-ps51-c1b01e7-20261124
+  cancel-in-progress: false
+
+jobs:
+  blocked-witness-fixture:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact current PR source, no persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: c1b01e79eeb77188d4ee11b295f1d7718ac2cfbd
+          persist-credentials: false
+
+      - name: Verify HAMUNAPTRA, PowerShell 5.1, exact HEAD, fixture hashes
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:COMPUTERNAME -cne 'HAMUNAPTRA' -or @('1','2','3','4') -cnotcontains [string]$env:RUNNER_NAME) {
+            throw "Unauthorized host/runner: $env:COMPUTERNAME/$env:RUNNER_NAME"
+          }
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw "PowerShell 5.1 required; actual $($PSVersionTable.PSVersion)"
+          }
+          $expected='c1b01e79eeb77188d4ee11b295f1d7718ac2cfbd'
+          $head=(& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $expected) { throw "Unexpected source HEAD $head" }
+          $tree=(& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $tree) { throw 'Missing source tree' }
+          $dirty=@(& git status --porcelain=v1 --untracked-files=all | Where-Object { $_ })
+          if ($dirty.Count -ne 0) { throw "Dirty checkout: $($dirty -join '; ')" }
+          if (-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) { throw 'powershell.exe unavailable' }
+          $out=Join-Path (Get-Location).Path 'fx-t18-ps51-host-evidence'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $scripts=@(
+            'docs/ultima-vox-music/fx/evidence/test-fx-t18-host-witness.ps1',
+            'docs/ultima-vox-music/fx/evidence/capture-fx-t18-host-witness.ps1'
+          )
+          $hashes=@($scripts | ForEach-Object {
+            if (-not (Test-Path -LiteralPath $_ -PathType Leaf)) { throw "Missing fixture source: $_" }
+            [ordered]@{ path=$_; sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+          ([ordered]@{
+            format='FX_T18_PS51_HOST_CAPTURE_OFFLINE_V1'
+            source_head=$head; source_tree=$tree
+            host=$env:COMPUTERNAME; runner=$env:RUNNER_NAME
+            powershell=$PSVersionTable.PSVersion.ToString()
+            run_id=$env:GITHUB_RUN_ID; workflow_sha=$env:GITHUB_SHA
+            mode='ONE_RESTRICTED_FIXTURE_ONLY'; qualification='NOT_GRANTED'
+            script_hashes=$hashes; started_utc=[DateTime]::UtcNow.ToString('o')
+          }) | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $out 'provenance.json') -Encoding UTF8
+          Write-Host "Verified $env:COMPUTERNAME/$env:RUNNER_NAME PS $($PSVersionTable.PSVersion), source $head tree $tree"
+
+      - name: Run ONE host witness fixture including Capture negative cases
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $out=Join-Path (Get-Location).Path 'fx-t18-ps51-host-evidence'
+          if (-not (Test-Path -LiteralPath (Join-Path $out 'provenance.json'))) { throw 'Missing preflight receipt' }
+          $fixture='docs/ultima-vox-music/fx/evidence/test-fx-t18-host-witness.ps1'
+          $stdout=Join-Path $out 'host-fixture.stdout.txt'
+          $stderr=Join-Path $out 'host-fixture.stderr.txt'
+          $begin=[DateTime]::UtcNow.ToString('o')
+          $ErrorActionPreference='Continue'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fixture -Python python 1> $stdout 2> $stderr
+          $code=$LASTEXITCODE
+          $ErrorActionPreference='Stop'
+          $stderrLines=@()
+          if (Test-Path -LiteralPath $stderr) { $stderrLines=@(Get-Content -LiteralPath $stderr | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) }
+          ([ordered]@{
+            script=$fixture; exit_code=$code
+            started_utc=$begin; finished_utc=[DateTime]::UtcNow.ToString('o')
+            stderr_line_count=$stderrLines.Count; qualification='NOT_GRANTED'
+            expected_negative_scenarios=@('missing-policy','missing-lease','missing-event-loss','provider-failure')
+          }) | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding UTF8
+          Write-Host "Single Windows PS5.1 host fixture exit: $code"
+          if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout -Tail 40 }
+          if ($code -ne 0) { throw "Host fixture failed, exit $code; captured stdout/stderr, NO RETRY" }
+          Write-Host 'Host witness PS5.1 negative Capture fixtures: PASS; no live certified host witness, no FX/CTest/DAW qualification.'
+
+      - name: Preserve one-shot fixture evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-PS51-HOST-CAPTURE-c1b01e7
+          path: fx-t18-ps51-host-evidence/
+          if-no-files-found: warn
+          retention-days: 3
