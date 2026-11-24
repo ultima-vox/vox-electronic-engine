@@ -215,6 +215,7 @@ function Invoke-FxScenario([string]$Scenario) {
         post_test_outcome_path = [IO.Path]::GetFullPath($outcomePath)
         source_head = $sourceHead
         source_tree = $sourceTree
+        runner_job_id = if ($env:GITHUB_RUN_ID) { [string]$env:GITHUB_RUN_ID } elseif ($env:RUNNER_NAME) { [string]$env:RUNNER_NAME } else { '<missing>' }
         source_tracked_clean_before_build = $true
         source_tracked_clean_after_build = $true
         build_succeeded = $buildSucceeded

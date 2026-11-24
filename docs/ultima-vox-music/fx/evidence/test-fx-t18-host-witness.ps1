@@ -30,10 +30,14 @@ foreach ($forbidden in $forbiddenTokens) {
     }
 }
 if ($source -match '\$env:FX_T18_LEASE_' -or
+    $source -notmatch 'Get-VerifiedOwnerSignature' -or
     $source -notmatch 'Get-VerifiedLeaseReceipt' -or
     $source -notmatch 'Get-VerifiedEventLossReceipt' -or
+    $source -notmatch 'Get-VerifiedExecutionBinding' -or
+    $source -notmatch 'Microsoft-Windows-Kernel-Process/ETW' -or
+    $source -notmatch 'Get-MonotonicSeconds' -or
     $source -notmatch 'Get-EventTimeUtc') {
-    throw 'Host witness lease/event verification is not file- and provider-attested'
+    throw 'Host witness lease, CMS, ETW and monotonic verification is incomplete'
 }
 
 function Get-SanitizedChildSummary([string]$Path) {
@@ -65,7 +69,7 @@ function Invoke-CaptureFixture {
     $stderrPath = Join-Path $tempRoot ($Name + '.stderr.txt')
     $arguments = @(
         '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', $witnessScript, '-Mode', 'Capture', '-OutputPath', $outputPath,
+        '-File', $witnessScript, '-Mode', 'Capture', '-FixtureMode', '-OutputPath', $outputPath,
         '-PreSeconds', '30', '-DuringSeconds', '1', '-PostSeconds', '30'
     )
     if ($PolicyPath) { $arguments += @('-IdentityPolicyPath', $PolicyPath) }
@@ -112,8 +116,9 @@ $failure = $null
 try {
     $competitorPath = Join-Path $tempRoot 'short-lived-competitor.json'
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $witnessScript `
-        -Mode OfflineSynthetic -SyntheticCompetitor -OutputPath $competitorPath
-    if ($LASTEXITCODE -ne 0) { throw "Synthetic competitor fixture exited $LASTEXITCODE" }
+        -Mode OfflineSynthetic -FixtureMode -SyntheticCompetitor -OutputPath $competitorPath
+    if ($LASTEXITCODE -ne 2) { throw "Synthetic competitor fixture exited $LASTEXITCODE instead of qualification-prohibited 2" }
+    if ($competitorPath -and (Get-Content -LiteralPath $competitorPath -Raw) -notmatch 'qualification_prohibited') { throw 'Synthetic competitor fixture was not qualification-prohibited' }
     $competitor = Get-Content -LiteralPath $competitorPath -Raw | ConvertFrom-Json
     if ($competitor.format -ne 'VOX_FX_T18_HOST_WITNESS_V1' -or
         @($competitor.unrecognized_competitors).Count -ne 1 -or
@@ -121,13 +126,14 @@ try {
         throw 'Short-lived competitor event fixture did not retain start/stop evidence'
     }
     foreach ($event in @($competitor.process_events)) {
-        if ($event.command_line -ne '<redacted>') { throw 'Competitor command line was exposed' }
+        if ($event.PSObject.Properties['command_line']) { throw 'Competitor command line was exposed' }
+        if ($event.PSObject.Properties['pid']) { throw 'Synthetic competitor PID was exposed' }
     }
 
     $unknownPath = Join-Path $tempRoot 'unknown-pid.json'
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $witnessScript `
-        -Mode OfflineSynthetic -SyntheticUnknownPid -OutputPath $unknownPath
-    if ($LASTEXITCODE -ne 0) { throw "Synthetic unknown-PID fixture exited $LASTEXITCODE" }
+        -Mode OfflineSynthetic -FixtureMode -SyntheticUnknownPid -OutputPath $unknownPath
+    if ($LASTEXITCODE -ne 2) { throw "Synthetic unknown-PID fixture exited $LASTEXITCODE instead of qualification-prohibited 2" }
     $unknown = Get-Content -LiteralPath $unknownPath -Raw | ConvertFrom-Json
     if (@($unknown.unknown_pids).Count -ne 1 -or
         @($unknown.process_events).Count -ne 1 -or
@@ -142,33 +148,47 @@ try {
 
     # Owner-attestation fixtures are private and synthetic. They let the real
     # Capture path reach each failure mode without claiming owner evidence.
+    $now = [DateTime]::UtcNow
     $policyPath = Join-Path $tempRoot 'fixture-policy.json'
     $policy = [ordered]@{
         format = 'VOX_FX_T18_IDENTITY_POLICY_V1'
         policy_id = 'fixture-policy'
+        baseline_id = 'fixture-baseline'
+        host = [string]$env:COMPUTERNAME
+        valid_from_utc = $now.AddMinutes(-10).ToString('o')
+        valid_until_utc = $now.AddHours(2).ToString('o')
         owner_approved = $true
-        approved_processes = @([ordered]@{ pid = 1000; process_name = 'Runner.Listener.exe'; role = 'runner' })
+        runner_service_identity_sha256 = @('1' * 64, '2' * 64, '3' * 64, '4' * 64)
+        approved_processes = @([ordered]@{ pid = 1000; process_name = 'Runner.Listener.exe'; role = 'runner'; allow_dynamic = $true; executable_sha256 = ('5' * 64) })
         denied_process_name_regex = @('^(devenv|msbuild|cmake|ctest|ninja|python|cubase|reaper)')
     }
     $policy | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $policyPath -Encoding UTF8
     $policyHash = (Get-FileHash -LiteralPath $policyPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $now = [DateTime]::UtcNow
     $validFrom = $now.AddMinutes(-10).ToString('o')
     $validUntil = $now.AddHours(2).ToString('o')
 
     $leasePath = Join-Path $tempRoot 'fixture-lease.json'
     [ordered]@{
         format = 'VOX_FX_T18_HOST_LEASE_RECEIPT_V1'; verified = $true
+        owner_approved = $true; attestation_source = 'owner_controlled_offline'
         host = [string]$env:COMPUTERNAME; lease_id = 'fixture-lease'; owner = 'fixture-owner'
         policy_sha256 = $policyHash; valid_from_utc = $validFrom; valid_until_utc = $validUntil
-        verification_method = 'owner_attested_file'
+        verification_method = 'owner_signed_detached_cms'
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $leasePath -Encoding UTF8
 
+    $collectorPath = Join-Path $tempRoot 'fixture-etw-collector.etl'
+    [IO.File]::WriteAllBytes($collectorPath, [Text.Encoding]::UTF8.GetBytes('synthetic ETW collector artifact'))
+    $collectorHash = (Get-FileHash -LiteralPath $collectorPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $lossPath = Join-Path $tempRoot 'fixture-event-loss.json'
     [ordered]@{
         format = 'VOX_FX_T18_EVENT_LOSS_RECEIPT_V1'
-        provider = 'Win32_ProcessStartTrace/Win32_ProcessStopTrace'
-        coverage_complete = $true; lost_events = 0; loss_accounting = 'owner_attested'
+        provider = 'Microsoft-Windows-Kernel-Process/ETW'
+        measurement_method = 'ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS'
+        coverage_complete = $true; lost_events = 0; buffer_loss_events = 0; events_received = 0
+        owner_approved = $true; attestation_source = 'owner_controlled_offline'
+        verification_method = 'owner_signed_detached_cms'; trace_id = 'fixture-trace'
+        collector_artifact_path = $collectorPath
+        collector_artifact_sha256 = $collectorHash
         coverage_start_utc = $validFrom; coverage_end_utc = $validUntil
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $lossPath -Encoding UTF8
 

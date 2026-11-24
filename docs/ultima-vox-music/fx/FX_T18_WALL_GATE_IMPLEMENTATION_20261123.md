@@ -1,11 +1,14 @@
 # FX-T18-WALL-IMPL-01 implementation record
 
-**Status:** implementation on PR #170; Windows execution, full-matrix dispatch,
+**Status:** implementation on PR #170; this checkpoint is
+`READY_FOR_OWNER_ATTESTATION` only. Windows execution, full-matrix dispatch,
 qualification, merge and release acceptance remain separately blocked.
 
 This change keeps production DSP, state, transport, UI, host contracts and all
 existing timing thresholds unchanged. It adds the functional TSV/stdout record,
-strict evaluator/conformance fixtures, and a safe host-observation schema.
+strict evaluator/conformance fixtures, a separately verified host-attestation
+contract, and a safe host-observation schema. No owner proof or live positive
+receipt is fabricated.
 
 ## Implemented paths
 
@@ -32,12 +35,24 @@ strict evaluator/conformance fixtures, and a safe host-observation schema.
   reason/listing negatives, malformed functional evidence and truncation
   salvage.
 - `evidence/capture-fx-t18-host-witness.ps1` — safe Windows PowerShell 5.1
-  process snapshot plus process-start/stop event witness; no service/process
-  control operations and no command-line serialization.
-- `evidence/test-fx-t18-host-witness.ps1` and
-  `FX_T18_HOST_WITNESS_V1.md` — offline short-lived-competitor and unknown-PID
-  fixtures plus real-Capture missing-attestation/provider-failure regressions,
-  sanitized blocked receipts and child exit/stderr summaries.
+  observation path with owner-pinned detached-CMS checks, four-service
+  time-bound identity baseline, dynamic/PID-reuse reconciliation, monotonic
+  deadline sampling, private raw inventory, public counters/hashes, and an
+  independently supplied ETW loss receipt. It has no service/process control
+  operations and no public command-line serialization.
+- `evidence/evaluate-fx-t18-wall-gate.py` — second-stage hash/CMS verification
+  on the owner host, host-manifest reconciliation for every payload, detached
+  signature, collector, runner receipt and private inventory, and fail-closed
+  rejection of fixture/qualification-prohibited evidence.
+- `evidence/test-fx-t18-host-witness.ps1`,
+  `evidence/test-evaluate-fx-t18-wall-gate.py`, and
+  `FX_T18_HOST_WITNESS_V1.md` — executable missing/forged-proof, WMI-loss,
+  dynamic/PID-reuse, DAW/manual-build/other-runner, short-lived-competitor,
+  cadence, phase/CTest, hash and qualification-prohibited fixtures; all raw
+  inventory remains private or synthetic.
+- `FX_T18_HOST_ISOLATION_OWNER_RUNBOOK.md` — minimal separately authorized
+  owner procedure for exclusive HAMUNAPTRA access, independent attestations,
+  future Capture, cleanup and retention.
 
 ## Exact sandbox commands and results
 
@@ -50,7 +65,7 @@ FX-T18 auditor negative fixtures: PASS
 
 PYTHONDONTWRITEBYTECODE=1 python3 docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 FX-T18 wall-gate executable fixtures: PASS
-fixtures: independent_host_attestations, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, host_contention, missing_manifest_reconciliation
+fixtures: independent_host_attestations, fake_attestation_cannot_production_pass, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
 
 python3 -m py_compile docs/ultima-vox-music/fx/evidence/audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 # exit 0; __pycache__ removed immediately afterward
@@ -103,7 +118,7 @@ python docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py \
   --manifest routed=routed.artifacts.json --manifest authored=authored.artifacts.json --manifest typical=typical.artifacts.json \
   --root . --executable suite_fx_runtime_stress_tests.exe \
   --expected-head OWNER_APPROVED_HEAD --expected-tree OWNER_APPROVED_TREE \
-  --witness host-witness.json
+  --witness host-witness.json --host-manifest host-artifacts.json
 ```
 
 The native run and schema smoke are Linux implementation validation only. The

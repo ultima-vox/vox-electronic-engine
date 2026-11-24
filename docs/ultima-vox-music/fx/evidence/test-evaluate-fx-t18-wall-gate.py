@@ -78,8 +78,10 @@ def valid_witness(competitors: list[str] | None = None,
     policy = {
         "format": "VOX_FX_T18_IDENTITY_POLICY_V1",
         "policy_id": "fixture-policy",
+        "baseline_id": "fixture-baseline",
         "owner_approved": True,
         "policy_sha256": "a" * 64,
+        "runner_service_identity_sha256": ["1" * 64, "2" * 64, "3" * 64, "4" * 64],
         "approved_processes": [{"pid": 1000, "process_name": "Runner.Listener.exe", "role": "runner"}],
         "denied_process_name_regex": ["^(devenv|msbuild|cmake|ctest|ninja|python|cubase|reaper)"],
     }
@@ -98,27 +100,47 @@ def valid_witness(competitors: list[str] | None = None,
                 samples.append({
                     "phase": phase,
                     "timestamp_utc": timestamp.isoformat().replace("+00:00", "Z"),
+                    "scheduled_timestamp_utc": timestamp.isoformat().replace("+00:00", "Z"),
+                    "monotonic_elapsed_ms": (start + offset) * 1000,
                     "processes": [dict(process)], "total_processes": 1,
                     "process_query_error": None,
                 })
     witness = {
         "format": "VOX_FX_T18_HOST_WITNESS_V1",
-        "schema_version": 1,
+        "schema_version": 2,
+        "fixture_mode": True,
+        "qualification_prohibited": True,
         "host_observation_mode": "process_snapshot_and_event_trace",
         "sample_interval_ms": 1000,
         "pre_seconds": 30, "during_seconds": 60, "post_seconds": 30,
         "capture_start_utc": base.isoformat().replace("+00:00", "Z"),
         "capture_end_utc": (base + timedelta(seconds=122)).isoformat().replace("+00:00", "Z"),
         "monitor_gaps": [], "identity_policy": policy,
+        "identity_policy_path": "<fixture-policy>",
+        "private_inventory_path": "<fixture-private-inventory>",
+        "private_inventory_sha256": "e" * 64,
+        "attestation_proofs": {},
         "event_trace": {"available": True, "coverage_complete": 1, "lost_events": 0,
-                        "loss_accounting": "owner_attested"},
+                        "buffer_loss_events": 0, "events_received": 0,
+                        "loss_provider": "fixture-loss-provider",
+                        "loss_accounting": "fixture_unverified"},
         "runner_lease": {"recognized": True, "owner_verified": True, "owner": "fixture",
                          "host": "fixture", "lease_id": "fixture-lease",
+                         "verification_receipt_path": "<fixture-lease>",
                          "verification_receipt_sha256": "b" * 64, "token": "<redacted>"},
-        "runner_service_identities": ["fixture-runner"],
+        "runner_service_identities": ["1" * 64, "2" * 64, "3" * 64, "4" * 64],
+        "execution_binding": {"verified": True, "host": "fixture", "runner_job_id": "fixture-job",
+                               "source_head": "a" * 40, "source_tree": "b" * 40,
+                               "executable_sha256": "c" * 64, "lease_id": "fixture-lease",
+                               "policy_sha256": "a" * 64,
+                               "profiles": [
+                                   {"profile": "routed", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:00Z", "test_end_utc": "2026-11-22T00:01:05Z", "ctest_exit_code": 0},
+                                   {"profile": "authored", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:08Z", "test_end_utc": "2026-11-22T00:01:13Z", "ctest_exit_code": 0},
+                                   {"profile": "typical", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:16Z", "test_end_utc": "2026-11-22T00:01:21Z", "ctest_exit_code": 0}],
+                               "binding_receipt_path": "<fixture-binding>", "binding_receipt_sha256": "d" * 64},
         "samples": samples, "process_events": [],
-        "unrecognized_competitors": competitors or [], "unknown_pids": [],
-        "evidence_blocked": False,
+        "unrecognized_competitors": competitors or 0, "unknown_pids": 0,
+        "pid_reuse_mismatches": 0, "evidence_blocked": False,
     }
     if mutate:
         witness.update(mutate)
@@ -126,6 +148,7 @@ def valid_witness(competitors: list[str] | None = None,
 
 
 def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
+    """Build a structural fixture with fake signatures, explicitly prohibited."""
     directory.mkdir(parents=True, exist_ok=True)
     witness = valid_witness()
     policy_file = directory / "identity-policy.json"
@@ -140,32 +163,96 @@ def strict_witness_fixture(directory: Path) -> tuple[Path, Path]:
     lease_file = directory / "lease.json"
     lease_file.write_text(json.dumps({
         "format": "VOX_FX_T18_HOST_LEASE_RECEIPT_V1", "verified": True,
+        "owner_approved": True, "attestation_source": "owner_controlled_offline",
         "host": "fixture", "lease_id": "fixture-lease", "owner": "fixture",
         "policy_sha256": policy_hash,
         "valid_from_utc": "2026-11-21T23:59:00Z",
         "valid_until_utc": "2026-11-22T00:03:00Z",
-        "verification_method": "owner_attested_file",
+        "verification_method": "owner_signed_detached_cms",
     }, indent=2), encoding="utf-8")
     witness["runner_lease"]["verification_receipt_path"] = str(lease_file)
     witness["runner_lease"]["verification_receipt_sha256"] = hashlib.sha256(lease_file.read_bytes()).hexdigest()
+    witness["runner_lease"]["owner"] = "fixture"
+    witness["runner_lease"]["host"] = "fixture"
 
+    collector_file = directory / "collector.etl"
+    collector_file.write_bytes(b"synthetic ETW collector artifact")
+    collector_hash = hashlib.sha256(collector_file.read_bytes()).hexdigest()
     loss_file = directory / "event-loss.json"
     loss_file.write_text(json.dumps({
         "format": "VOX_FX_T18_EVENT_LOSS_RECEIPT_V1",
-        "provider": "Win32_ProcessStartTrace/Win32_ProcessStopTrace",
-        "coverage_complete": True, "lost_events": 0, "loss_accounting": "owner_attested",
+        "provider": "Microsoft-Windows-Kernel-Process/ETW",
+        "measurement_method": "ETW_PROCESS_TRACE_WITH_LOSS_COUNTERS",
+        "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
+        "events_received": 0, "owner_approved": True,
+        "attestation_source": "owner_controlled_offline",
+        "verification_method": "owner_signed_detached_cms",
+        "trace_id": "fixture-trace", "collector_artifact_path": str(collector_file),
+        "collector_artifact_sha256": collector_hash,
         "coverage_start_utc": "2026-11-21T23:59:00Z",
         "coverage_end_utc": "2026-11-22T00:03:00Z",
     }, indent=2), encoding="utf-8")
-    witness["event_trace"]["loss_receipt_path"] = str(loss_file)
-    witness["event_trace"]["loss_receipt_sha256"] = hashlib.sha256(loss_file.read_bytes()).hexdigest()
+    witness["event_trace"].update({
+        "observation_provider": "Win32_ProcessStartTrace/Win32_ProcessStopTrace",
+        "loss_provider": "Microsoft-Windows-Kernel-Process/ETW",
+        "coverage_complete": True, "lost_events": 0, "buffer_loss_events": 0,
+        "events_received": 0, "loss_accounting": "etw_provider_counters",
+        "coverage_start_utc": "2026-11-21T23:59:00Z",
+        "coverage_end_utc": "2026-11-22T00:03:00Z",
+        "loss_receipt_path": str(loss_file),
+        "loss_receipt_sha256": hashlib.sha256(loss_file.read_bytes()).hexdigest(),
+        "collector_artifact_path": str(collector_file),
+        "collector_artifact_sha256": collector_hash,
+    })
 
+    runner_receipt_files = []
+    runner_receipt_claims = []
+    for profile in ("routed", "authored", "typical"):
+        receipt_file = directory / f"{profile}.runner.json"
+        receipt_file.write_text(json.dumps({"format": "VOX_FX_T18_RUNNER_RECEIPT_V1", "profile": profile, "fixture": True}, indent=2), encoding="utf-8")
+        runner_receipt_files.append(receipt_file)
+        runner_receipt_claims.append({"profile": profile, "receipt_path": str(receipt_file), "receipt_sha256": hashlib.sha256(receipt_file.read_bytes()).hexdigest()})
+    binding_file = directory / "execution-binding.json"
+    binding_file.write_text(json.dumps({
+        "format": "VOX_FX_T18_EXECUTION_BINDING_V1", "binding_id": "fixture-binding",
+        "owner_approved": True, "attestation_source": "owner_controlled_offline",
+        "verification_method": "owner_signed_detached_cms", "host": "fixture",
+        "runner_job_id": "fixture-job", "source_head": "a" * 40,
+        "source_tree": "b" * 40, "executable_path": "fixture.exe",
+        "executable_sha256": "c" * 64, "lease_id": "fixture-lease",
+        "policy_sha256": policy_hash,
+        "runner_receipts": runner_receipt_claims,
+        "profiles": [
+            {"profile": "routed", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:00Z", "test_end_utc": "2026-11-22T00:01:05Z", "ctest_exit_code": 0},
+            {"profile": "authored", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:08Z", "test_end_utc": "2026-11-22T00:01:13Z", "ctest_exit_code": 0},
+            {"profile": "typical", "test_identity": "suite_fx_runtime_stress_tests", "test_start_utc": "2026-11-22T00:01:16Z", "test_end_utc": "2026-11-22T00:01:21Z", "ctest_exit_code": 0},
+        ],
+    }, indent=2), encoding="utf-8")
+    witness["execution_binding"].update({"binding_receipt_path": str(binding_file), "binding_receipt_sha256": hashlib.sha256(binding_file.read_bytes()).hexdigest(), "policy_sha256": policy_hash, "runner_receipts": runner_receipt_claims})
+
+    private_file = directory / "private-inventory.json"
+    private_file.write_text(json.dumps({"format": "VOX_FX_T18_PRIVATE_PROCESS_INVENTORY_V1", "fixture": True}, indent=2), encoding="utf-8")
+    witness["private_inventory_path"] = str(private_file)
+    witness["private_inventory_sha256"] = hashlib.sha256(private_file.read_bytes()).hexdigest()
+
+    signature_paths = {}
+    for name, data_file in (("policy", policy_file), ("lease", lease_file), ("event_loss", loss_file), ("execution_binding", binding_file)):
+        signature = directory / f"{name}.p7s"
+        signature.write_bytes(b"synthetic detached CMS; not a production signature")
+        signature_paths[name] = signature
+        witness["attestation_proofs"][name] = {
+            "verified": True, "data_sha256": hashlib.sha256(data_file.read_bytes()).hexdigest(),
+            "signature_sha256": hashlib.sha256(signature.read_bytes()).hexdigest(),
+            "signer_thumbprint": "A" * 40, "verification_method": "detached_cms_owner_certificate_chain_and_thumbprint",
+            "data_path": str(data_file), "signature_path": str(signature),
+        }
+    witness["attestation_proofs"]["event_loss"]["verified"] = True
     witness_path = directory / "witness.json"
     witness_path.write_text(json.dumps(witness, indent=2), encoding="utf-8")
     manifest = directory / "host-manifest.json"
-    files = [policy_file, lease_file, loss_file, witness_path]
+    files = [policy_file, lease_file, loss_file, binding_file, collector_file, private_file, witness_path, *runner_receipt_files, *signature_paths.values()]
     manifest.write_text(json.dumps({
-        "format": "VOX_FX_T18_HOST_ARTIFACTS_V1",
+        "format": "VOX_FX_T18_HOST_ARTIFACTS_V2",
         "files": [{"path": str(item), "sha256": hashlib.sha256(item.read_bytes()).hexdigest()}
                   for item in files],
     }, indent=2), encoding="utf-8")
@@ -290,7 +377,8 @@ def _write_execution_receipt(directory: Path, profile: str, mode: str,
         "format": "VOX_FX_T18_RUNNER_RECEIPT_V1", "scenario": profile,
         "test_identity": "suite_fx_runtime_stress_tests",
         "test_start_utc": outcome["test_start_utc"], "test_end_utc": "post-test-outcome",
-        "machine": "fixture", "host_lease_id": "fixture-lease",
+        "machine": "fixture", "host_lease_id": "fixture-lease", "runner_job_id": "fixture-job",
+        "source_head": "a" * 40, "source_tree": "b" * 40,
         "host_policy_sha256": "a" * 64, "post_test_outcome_path": str(outcome_path),
         "ctest_raw_path": str(ctest_raw_path), "ctest_inventory_path": str(junit_path),
         "ctest_junit_path": str(junit_path),
@@ -399,10 +487,22 @@ def main() -> int:
         strict = EVALUATOR.validate_witness(
             strict_witness, intervals, "fixture", "fixture-lease",
             json.loads(strict_witness.read_text())["identity_policy"]["policy_sha256"],
-            require_external_attestations=True)
+            require_external_attestations=True, allow_fixture=True)
         host_manifest = EVALUATOR._verify_host_manifest(strict_manifest, strict_witness)
         assert strict["verified"] and host_manifest["verified"]
-        names.append("independent_host_attestations")
+        fake_value = json.loads(strict_witness.read_text())
+        try:
+            EVALUATOR._verify_external_witness_attestations(
+                strict_witness, fake_value, strict["capture_start"], strict["capture_end"],
+                fake_value["identity_policy"], fake_value["runner_lease"],
+                fake_value["event_trace"], fake_value["execution_binding"],
+                "fixture", "fixture-lease", fake_value["identity_policy"]["policy_sha256"],
+                "a" * 40, "b" * 40, "c" * 64, allow_fixture=False)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("synthetic detached signatures unexpectedly passed production CMS verification")
+        names.extend(["independent_host_attestations", "fake_attestation_cannot_production_pass"])
 
         result = evaluate(directory / "coarse-functional", "functional")
         assert_status(result, "WALL_GATE_FAIL", "coarse_cpu_plus_functional")
@@ -513,6 +613,18 @@ def main() -> int:
         assert_status(result, "WALL_GATE_BLOCKED", "preexisting_daw")
         names.append("preexisting_daw")
 
+        for workload_name in ("other-runner", "manual-build", "daw-workload"):
+            unexpected = valid_witness()
+            unexpected["samples"][0]["processes"][0].update({
+                "process_name": {"other-runner": "Runner.Worker.other.exe",
+                                 "manual-build": "msbuild.exe",
+                                 "daw-workload": "reaper.exe"}[workload_name],
+                "approved_by_policy": False,
+            })
+            result = evaluate(directory / workload_name, "valid", witness=unexpected)
+            assert_status(result, "WALL_GATE_BLOCKED", workload_name)
+        names.extend(["other_runner_identity", "manual_build_identity", "daw_workload_identity"])
+
         forged_policy = valid_witness()
         forged_policy["samples"][0]["processes"][0].update(
             {"pid": 2001, "process_name": "cubase.exe", "approved_by_policy": True})
@@ -546,13 +658,81 @@ def main() -> int:
         assert_status(result, "WALL_GATE_BLOCKED", "missing_event_time_coverage")
         names.append("missing_event_time_coverage")
 
-        result = evaluate(
-            directory / "host-contention", "valid",
-            witness=valid_witness(["vox-fx-short-lived-competitor.exe"]),
-        )
-        assert_status(result, "WALL_GATE_BLOCKED", "host_contention")
-        assert result["evidence_blocked"] and "witness_error" in result
-        names.append("host_contention")
+        # A short-lived competitor is a counter in the public receipt; it is
+        # never converted to an absent-process/idle-host assumption.
+        short_lived = valid_witness()
+        short_lived["unrecognized_competitors"] = 1
+        result = evaluate(directory / "short-lived-competitor", "valid", witness=short_lived)
+        assert_status(result, "WALL_GATE_BLOCKED", "short_lived_competitor")
+        assert result["evidence_blocked"]
+        names.append("short_lived_competitor")
+
+        pid_reuse = valid_witness()
+        pid_reuse["pid_reuse_mismatches"] = 1
+        result = evaluate(directory / "pid-reuse", "valid", witness=pid_reuse)
+        assert_status(result, "WALL_GATE_BLOCKED", "pid_reuse")
+        names.append("dynamic_pid_reuse_mismatch")
+
+        phase_mismatch = valid_witness()
+        phase_mismatch["execution_binding"]["profiles"][0]["test_start_utc"] = "2026-11-22T00:00:59Z"
+        result = evaluate(directory / "phase-ctest-mismatch", "valid", witness=phase_mismatch)
+        assert_status(result, "WALL_GATE_BLOCKED", "phase_ctest_mismatch")
+        assert "phase/CTest interval mismatch" in result.get("witness_error", "")
+        names.append("phase_ctest_mismatch")
+
+        fixture_guard = evaluate(directory / "fixture-guard", "valid", witness=valid_witness())
+        assert_status(fixture_guard, "WALL_GATE_BLOCKED", "fixture_guard")
+        assert fixture_guard["qualification_prohibited"] and fixture_guard["mode"] == "fixture"
+        assert fixture_guard["primary_status"] != "WALL_GATE_PASS_CPU_UNKNOWN"
+        names.append("fixture_mode_qualification_prohibited")
+
+        def expect_witness_failure(witness_path: Path, needle: str, name: str) -> None:
+            witness_value = json.loads(witness_path.read_text())
+            binding_value = witness_value["execution_binding"]
+            try:
+                EVALUATOR.validate_witness(
+                    witness_path, intervals, "fixture", "fixture-lease",
+                    witness_value["identity_policy"]["policy_sha256"],
+                    binding_value["source_head"], binding_value["source_tree"],
+                    binding_value["executable_sha256"],
+                    require_external_attestations=True, allow_fixture=True)
+            except ValueError as error:
+                if needle not in str(error):
+                    raise AssertionError(f"{name}: expected {needle!r}, got {error}")
+            else:
+                raise AssertionError(f"{name}: forged/missing owner proof unexpectedly passed")
+
+        # Missing proof/signature and failed hash reconciliation are explicit
+        # executable negative cases, not assertions about owner trust.
+        missing_proof = directory / "missing-owner-proof"
+        missing_proof.mkdir()
+        missing_value = json.loads(strict_witness.read_text())
+        missing_value["fixture_mode"] = False; missing_value["qualification_prohibited"] = False
+        missing_value["attestation_proofs"] = {}
+        missing_path = missing_proof / "witness.json"
+        missing_path.write_text(json.dumps(missing_value), encoding="utf-8")
+        expect_witness_failure(missing_path, "signed policy proof is missing", "missing_owner_proof")
+        names.append("missing_owner_proof")
+
+        forged_signature_path = strict_witness.parent / "policy.p7s"
+        forged_signature_path.write_bytes(b"tampered detached CMS")
+        expect_witness_failure(strict_witness, "detached signature hash does not reconcile", "forged_owner_signature")
+        names.append("forged_owner_signature")
+
+        unverified_wmi = valid_witness()
+        unverified_wmi["fixture_mode"] = False; unverified_wmi["qualification_prohibited"] = False
+        unverified_wmi["event_trace"]["loss_provider"] = "Win32_ProcessStartTrace/Win32_ProcessStopTrace"
+        wmi_path = directory / "unverified-wmi.json"
+        wmi_path.write_text(json.dumps(unverified_wmi), encoding="utf-8")
+        try:
+            EVALUATOR.validate_witness(wmi_path, intervals, "fixture", "fixture-lease", "a" * 64,
+                                       "a" * 40, "b" * 40, "c" * 64, allow_fixture=False)
+        except ValueError as error:
+            if "ETW event loss" not in str(error):
+                raise AssertionError(f"unverified_wmi: unexpected error {error}")
+        else:
+            raise AssertionError("unverified WMI loss fixture unexpectedly passed")
+        names.append("unverified_wmi_loss")
 
         # No receipt/manifest or root is not an acceptable full-evidence path,
         # even when all three TSV reports are structurally valid.
