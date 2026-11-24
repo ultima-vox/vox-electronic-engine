@@ -943,6 +943,12 @@ def _verify_external_witness_attestations(
                                    ("max_file_mb", "collector_max_file_mb"),
                                    ("bytes_written", "collector_bytes_written"),
                                    ("rotation_count", "collector_rotation_count"),
+                                   ("etl_file_count", "collector_etl_file_count"),
+                                   ("file_policy", "collector_file_policy"),
+                                   ("file_inventory_source", "collector_file_inventory_source"),
+                                   ("cleanup_mode", "collector_cleanup_mode"),
+                                   ("delete_applicable", "collector_delete_applicable"),
+                                   ("delete_exit_code", "collector_delete_exit_code"),
                                    ("truncation_detected", "collector_truncation_detected")):
             if event_trace.get(event_field) != collection_file.get(field):
                 raise ValueError(f"{path}: witness collector {field} does not reconcile to collection metadata")

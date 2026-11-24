@@ -723,7 +723,8 @@ def main() -> int:
             f"session_name={collection_session}", f"control_time_utc={collection_start_utc}",
             "control_time_source=logman_query_output", "trace_mode=bin",
             f"provider_guid={collection_guid}", "keywords_hex=0x10", "level=5",
-            "max_file_mb=4096", "free_bytes_before_start=8589934592",
+            "max_file_mb=4096", "cleanup_mode=direct_ets_transient",
+            "free_bytes_before_start=8589934592",
             "minimum_free_bytes=4831838208", "free_headroom_bytes=536870912",
             "initial_file_size=0", "rotation_count=0", "truncation_detected=false",
             f"etl_path={collection_etl}", "create_exit_code=0", "query_exit_code=0",
@@ -745,19 +746,21 @@ def main() -> int:
             f"session_name={collection_session}", f"control_time_utc={collection_stop_utc}",
             "control_time_source=tracerpt_summary_header", "trace_mode=bin",
             f"provider_guid={collection_guid}", "keywords_hex=0x10", "level=5", "max_file_mb=4096",
-            "bytes_written=35", "rotation_count=0", "etl_file_count=1", "truncation_detected=false",
-            f"etl_path={collection_etl}", "stop_exit_code=0", "post_stop_query_exit_code=1",
-            "delete_exit_code=0", "tracerpt_probe_exit_code=0",
+            "cleanup_mode=direct_ets_transient", "delete_applicable=false",
+            "delete_exit_code=not_applicable", "bytes_written=35", "rotation_count=0",
+            "etl_file_count=1", "file_policy=single_retained_etl_file_zero_rotation",
+            "file_inventory_source=independent_etl_directory_inventory",
+            "truncation_detected=false", f"etl_path={collection_etl}",
+            "stop_exit_code=0", "post_stop_query_exit_code=1", "tracerpt_probe_exit_code=0",
             f"command_stop=logman.exe stop {collection_session} -ets",
             f"command_post_stop_query=logman.exe query {collection_session} -ets",
-            f"command_delete=logman.exe delete {collection_session} -ets",
             f"command_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt",
             "--- RAW LOGMAN OUTPUT ---", "[stop]", "The command completed successfully.",
             "[post-stop-query]", "Data Collector Set was not found.",
-            "[delete]", "The command completed successfully.",
             "[tracerpt-summary-header]", f"Log End Time: {collection_stop_utc}",
             "[file-stat]", "Bytes Written: 35", "Rotation Count: 0",
-            "ETL File Count: 1", "Truncation Detected: false",
+            "ETL File Count: 1", "Truncation Detected: false", "[file-inventory]",
+            "ETL File: owner-process.etl",
         ]
         collection_stop_receipt.write_text("\n".join(collection_stop_lines) + "\n", encoding="utf-8")
         collection_metadata_path = directory / "collection-metadata.json"
@@ -768,8 +771,12 @@ def main() -> int:
             "trace_mode": "bin", "capacity_policy": EVALUATOR.ETL_PARSER.COLLECTION_CAPACITY_POLICY,
             "max_file_mb": 4096, "free_headroom_bytes": 536870912,
             "minimum_free_bytes": 4831838208, "free_bytes_before_start": 8589934592,
+            "file_policy": "single_retained_etl_file_zero_rotation",
+            "file_inventory_source": "independent_etl_directory_inventory",
             "bytes_written": 35, "rotation_count": 0, "etl_file_count": 1,
             "truncation_detected": False, "session_name": collection_session,
+            "cleanup_mode": "direct_ets_transient", "delete_applicable": False,
+            "delete_exit_code": None,
             "coverage_start_utc": collection_start_utc,
             "coverage_end_utc": collection_stop_utc, "etl_path": str(collection_etl),
             "start_record_path": str(collection_start_receipt),
@@ -836,7 +843,9 @@ def main() -> int:
                    for event in wrapped_parse["process_events"])
         wrapped_receipt = directory / "wrapped-stop.txt"
         wrapped_receipt.write_text(collection_stop_receipt.read_text().replace(
-            "rotation_count=0", "rotation_count=1"), encoding="utf-8")
+            "ETL File Count: 1", "ETL File Count: 2").replace(
+            "ETL File: owner-process.etl",
+            "ETL File: owner-process.etl\nETL File: owner-process_0001.etl"), encoding="utf-8")
         wrapped_metadata = dict(collection_metadata_value)
         wrapped_metadata["stop_record_path"] = str(wrapped_receipt)
         wrapped_metadata["stop_record_sha256"] = hashlib.sha256(wrapped_receipt.read_bytes()).hexdigest()
@@ -846,10 +855,25 @@ def main() -> int:
             EVALUATOR.ETL_PARSER._read_collection_metadata(
                 wrapped_metadata_path, collection_etl, collection_summary)
         except ValueError as error:
-            assert "rotation" in str(error).lower() or "truncation" in str(error).lower()
+            assert ("rotation" in str(error).lower() or "truncation" in str(error).lower()
+                    or "inventory" in str(error).lower() or "file count" in str(error).lower())
             names.append("wrapped_zero_loss_collection_blocked")
         else:
             raise AssertionError("wrapped zero-loss collection unexpectedly passed")
+        independently_extra_etl = directory / "independently-discovered-extra.etl"
+        independently_extra_etl.write_bytes(b"independently discovered extra segment")
+        try:
+            try:
+                EVALUATOR.ETL_PARSER._read_collection_metadata(
+                    collection_metadata_path, collection_etl, collection_summary)
+            except ValueError as error:
+                assert ("inventory" in str(error).lower() or "file" in str(error).lower()
+                        or "rotation" in str(error).lower())
+                names.append("independent_inventory_variation_blocked")
+            else:
+                raise AssertionError("independent ETL inventory variation unexpectedly passed")
+        finally:
+            independently_extra_etl.unlink()
         short_receipt = directory / "short-start.txt"
         short_receipt.write_text(
             collection_start_receipt.read_text().replace(
@@ -887,10 +911,45 @@ def main() -> int:
             names.append("failed_control_receipt_blocked")
         else:
             raise AssertionError("failed control receipt unexpectedly passed")
+        inapplicable_delete_receipt = directory / "inapplicable-delete-stop.txt"
+        inapplicable_delete_receipt.write_text(collection_stop_receipt.read_text().replace(
+            "delete_exit_code=not_applicable", "delete_exit_code=1"), encoding="utf-8")
+        inapplicable_delete_metadata = dict(collection_metadata_value)
+        inapplicable_delete_metadata["stop_record_path"] = str(inapplicable_delete_receipt)
+        inapplicable_delete_metadata["stop_record_sha256"] = hashlib.sha256(inapplicable_delete_receipt.read_bytes()).hexdigest()
+        inapplicable_delete_metadata_path = directory / "inapplicable-delete-collection-metadata.json"
+        inapplicable_delete_metadata_path.write_text(json.dumps(inapplicable_delete_metadata), encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_collection_metadata(
+                inapplicable_delete_metadata_path, collection_etl, collection_summary)
+        except ValueError as error:
+            assert "delete" in str(error).lower() or "cleanup" in str(error).lower()
+            names.append("inapplicable_delete_failure_blocked")
+        else:
+            raise AssertionError("inapplicable direct delete failure unexpectedly passed")
+        persisted_start_receipt = directory / "persisted-session-start.txt"
+        persisted_start_receipt.write_text(
+            collection_start_receipt.read_text().replace(
+                "cleanup_mode=direct_ets_transient", "cleanup_mode=persisted_dcs").replace(
+                f" -ets\n", "\n"), encoding="utf-8")
         failed_delete_receipt = directory / "failed-delete-stop.txt"
         failed_delete_receipt.write_text(collection_stop_receipt.read_text().replace(
-            "delete_exit_code=0", "delete_exit_code=1"), encoding="utf-8")
+            "cleanup_mode=direct_ets_transient", "cleanup_mode=persisted_dcs").replace(
+            "delete_applicable=false", "delete_applicable=true").replace(
+            "delete_exit_code=not_applicable", "delete_exit_code=1").replace(
+            f"command_stop=logman.exe stop {collection_session} -ets",
+            f"command_stop=logman.exe stop {collection_session}").replace(
+            f"command_post_stop_query=logman.exe query {collection_session} -ets",
+            f"command_post_stop_query=logman.exe query {collection_session}").replace(
+            f"command_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt",
+            f"command_delete=logman.exe delete {collection_session}\ncommand_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt").replace(
+            "[tracerpt-summary-header]", "[delete]\nThe command failed.\n[tracerpt-summary-header]"), encoding="utf-8")
         failed_delete_metadata = dict(collection_metadata_value)
+        failed_delete_metadata["cleanup_mode"] = "persisted_dcs"
+        failed_delete_metadata["delete_applicable"] = True
+        failed_delete_metadata["delete_exit_code"] = 1
+        failed_delete_metadata["start_record_path"] = str(persisted_start_receipt)
+        failed_delete_metadata["start_record_sha256"] = hashlib.sha256(persisted_start_receipt.read_bytes()).hexdigest()
         failed_delete_metadata["stop_record_path"] = str(failed_delete_receipt)
         failed_delete_metadata["stop_record_sha256"] = hashlib.sha256(failed_delete_receipt.read_bytes()).hexdigest()
         failed_delete_metadata_path = directory / "failed-delete-collection-metadata.json"
@@ -900,9 +959,36 @@ def main() -> int:
                 failed_delete_metadata_path, collection_etl, collection_summary)
         except ValueError as error:
             assert "cleanup" in str(error).lower() or "delete" in str(error).lower()
-            names.append("failed_delete_control_receipt_blocked")
+            names.append("applicable_delete_failure_blocked")
         else:
-            raise AssertionError("failed delete control receipt unexpectedly passed")
+            raise AssertionError("applicable persisted delete failure unexpectedly passed")
+        persisted_success_receipt = directory / "persisted-session-stop.txt"
+        persisted_success_receipt.write_text(collection_stop_receipt.read_text().replace(
+            "cleanup_mode=direct_ets_transient", "cleanup_mode=persisted_dcs").replace(
+            "delete_applicable=false", "delete_applicable=true").replace(
+            "delete_exit_code=not_applicable", "delete_exit_code=0").replace(
+            f"command_stop=logman.exe stop {collection_session} -ets",
+            f"command_stop=logman.exe stop {collection_session}").replace(
+            f"command_post_stop_query=logman.exe query {collection_session} -ets",
+            f"command_post_stop_query=logman.exe query {collection_session}").replace(
+            f"command_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt",
+            f"command_delete=logman.exe delete {collection_session}\ncommand_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt").replace(
+            "[tracerpt-summary-header]", "[delete]\nThe command completed successfully.\n[tracerpt-summary-header]"), encoding="utf-8")
+        persisted_success_metadata = dict(collection_metadata_value)
+        persisted_success_metadata["cleanup_mode"] = "persisted_dcs"
+        persisted_success_metadata["delete_applicable"] = True
+        persisted_success_metadata["delete_exit_code"] = 0
+        persisted_success_metadata["start_record_path"] = str(persisted_start_receipt)
+        persisted_success_metadata["start_record_sha256"] = hashlib.sha256(persisted_start_receipt.read_bytes()).hexdigest()
+        persisted_success_metadata["stop_record_path"] = str(persisted_success_receipt)
+        persisted_success_metadata["stop_record_sha256"] = hashlib.sha256(persisted_success_receipt.read_bytes()).hexdigest()
+        persisted_success_metadata_path = directory / "persisted-success-collection-metadata.json"
+        persisted_success_metadata_path.write_text(json.dumps(persisted_success_metadata), encoding="utf-8")
+        persisted_result = EVALUATOR.ETL_PARSER._read_collection_metadata(
+            persisted_success_metadata_path, collection_etl, collection_summary)
+        assert persisted_result["cleanup_mode"] == "persisted_dcs"
+        assert persisted_result["delete_applicable"] is True and persisted_result["delete_exit_code"] == 0
+        names.append("applicable_delete_success_reconciled")
         names.append("collection_metadata_reconciliation")
         tracerpt_xml = directory / "tracerpt-kernel-process-shape.xml"
         tracerpt_xml.write_text(

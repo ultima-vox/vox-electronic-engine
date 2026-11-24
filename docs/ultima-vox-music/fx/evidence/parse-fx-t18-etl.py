@@ -37,6 +37,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
+PARSER_VERSION = "1.3.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 PROCESS_PROVIDER_NAMES = {
@@ -61,6 +62,10 @@ COLLECTION_LEVEL = 5
 COLLECTION_CAPACITY_POLICY = "max_file_mb_plus_free_headroom"
 COLLECTION_MAX_FILE_MB = 4096
 COLLECTION_FREE_HEADROOM_BYTES = 512 * 1024 * 1024
+COLLECTION_CLEANUP_DIRECT = "direct_ets_transient"
+COLLECTION_CLEANUP_PERSISTED = "persisted_dcs"
+COLLECTION_FILE_POLICY = "single_retained_etl_file_zero_rotation"
+COLLECTION_INVENTORY_SOURCE = "independent_etl_directory_inventory"
 COLLECTION_PROVIDER_GUID = "{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"
 COVERAGE_SOURCE = "tracerpt summary or retained validated logman start/stop receipts"
 SESSION_SOURCE = "tracerpt summary or retained validated logman session receipt"
@@ -650,6 +655,36 @@ def _receipt_raw_value(body: str, label: str, path: Path) -> str:
     return values[0]
 
 
+def _receipt_raw_values(body: str, label: str, path: Path) -> list[str]:
+    pattern = re.compile(r"^\s*" + re.escape(label) + r"\s*[:=]\s*(.*?)\s*$", re.IGNORECASE)
+    values = [match.group(1).strip().strip('"') for line in body.splitlines()
+              if (match := pattern.match(line)) and match.group(1).strip()]
+    if not values:
+        raise ValueError(f"{path}: logman control receipt has no raw {label} values")
+    return values
+
+
+def _retained_etl_files(raw_path: Path) -> list[Path]:
+    """Enumerate the dedicated evidence directory's ETL files independently.
+
+    The owner runbook reserves a clean directory for one direct session.  The
+    parser therefore inventories every retained ``.etl`` in that directory,
+    plus any raw-path sidecar segment (for example ``capture.etl.001``),
+    instead of accepting a collector-provided count as proof.
+    """
+    raw_resolved = raw_path.resolve()
+    raw_name = raw_path.name.casefold()
+    files: list[Path] = []
+    for candidate in raw_path.parent.iterdir():
+        if not candidate.is_file():
+            continue
+        name = candidate.name.casefold()
+        if candidate.resolve() == raw_resolved or candidate.suffix.casefold() == ".etl" \
+                or name.startswith(raw_name + "."):
+            files.append(candidate)
+    return sorted(files, key=lambda item: item.name.casefold())
+
+
 def _receipt_time_from_body(body: str, label: str, path: Path) -> str:
     try:
         return _summary_timestamp(_receipt_raw_value(body, label, path), f"{path} {label}")
@@ -706,6 +741,14 @@ def _control_receipt_projection(path: Path, fields: dict[str, str], operation: s
         "level": int(fields["level"], 0),
         "max_file_mb": int(fields["max_file_mb"], 10),
     }
+    if "cleanup_mode" in fields:
+        result["cleanup_mode"] = fields["cleanup_mode"]
+    if "delete_applicable" in fields:
+        result["delete_applicable"] = fields["delete_applicable"].casefold() == "true"
+    if "file_inventory_source" in fields:
+        result["file_inventory_source"] = fields["file_inventory_source"]
+    if "file_policy" in fields:
+        result["file_policy"] = fields["file_policy"]
     for name in (
         "free_bytes_before_start", "minimum_free_bytes", "free_headroom_bytes",
         "initial_file_size", "bytes_written", "rotation_count", "etl_file_count",
@@ -762,6 +805,10 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
     lower_header = header.casefold()
     lower_body = body.casefold()
     all_text = (header + "\n" + body).casefold()
+    cleanup_mode = fields.get("cleanup_mode")
+    if cleanup_mode is not None and cleanup_mode not in {
+            COLLECTION_CLEANUP_DIRECT, COLLECTION_CLEANUP_PERSISTED}:
+        raise ValueError(f"{path}: logman control receipt cleanup mode is unsupported")
     if receipt_session.casefold() not in all_text or raw_path.name.casefold() not in all_text:
         raise ValueError(f"{path}: logman control receipt is not bound to the session and ETL filename")
     if operation == "start":
@@ -806,6 +853,14 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
             raise ValueError(f"{path}: start receipt does not retain the provider keyword/level")
         if not re.search(r"command_query\s*=.*\blogman(?:\.exe)?\s+query\b", create_command):
             raise ValueError(f"{path}: start receipt does not retain the logman query command")
+        ets_arg = r"(?:^|\s)-ets(?:\s|$)"
+        if cleanup_mode == COLLECTION_CLEANUP_DIRECT:
+            if (not re.search(r"command_create\s*=.*" + ets_arg, create_command)
+                    or not re.search(r"command_query\s*=.*" + ets_arg, create_command)):
+                raise ValueError(f"{path}: direct transient create/query commands must use -ets")
+        elif cleanup_mode == COLLECTION_CLEANUP_PERSISTED:
+            if re.search(r"command_(?:create|query)\s*=.*" + ets_arg, create_command):
+                raise ValueError(f"{path}: persisted DCS create/query commands must not use -ets")
         if not re.search(r"(?im)^\s*status\s*:\s*running\b", body):
             raise ValueError(f"{path}: start logman query did not prove a running session")
         if _normalize_guid(COLLECTION_PROVIDER_GUID) not in _normalize_guid(body):
@@ -828,12 +883,31 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
         _receipt_uint(fields, name, path)
     if _receipt_bool(fields, "truncation_detected", path):
         raise ValueError(f"{path}: stop receipt reports ETL truncation")
+    cleanup_mode = fields.get("cleanup_mode")
+    if cleanup_mode not in {COLLECTION_CLEANUP_DIRECT, COLLECTION_CLEANUP_PERSISTED}:
+        raise ValueError(f"{path}: stop receipt cleanup mode is unsupported")
+    if (fields.get("file_policy") != COLLECTION_FILE_POLICY
+            or fields.get("file_inventory_source") != COLLECTION_INVENTORY_SOURCE):
+        raise ValueError(f"{path}: stop receipt does not identify the independent single-file ETL inventory policy")
+    delete_applicable_raw = fields.get("delete_applicable", "").casefold()
+    if delete_applicable_raw not in {"true", "false"}:
+        raise ValueError(f"{path}: stop receipt delete applicability is invalid")
+    delete_applicable = delete_applicable_raw == "true"
+    if ((cleanup_mode == COLLECTION_CLEANUP_DIRECT and delete_applicable)
+            or (cleanup_mode == COLLECTION_CLEANUP_PERSISTED and not delete_applicable)):
+        raise ValueError(f"{path}: stop receipt cleanup mode/delete applicability disagree")
     stop_exit = _receipt_uint(fields, "stop_exit_code", path)
     post_query_exit = _receipt_uint(fields, "post_stop_query_exit_code", path)
-    delete_exit = _receipt_uint(fields, "delete_exit_code", path)
     probe_exit = _receipt_uint(fields, "tracerpt_probe_exit_code", path)
-    if stop_exit != 0 or post_query_exit == 0 or delete_exit != 0 or probe_exit != 0:
-        raise ValueError(f"{path}: logman stop/post-stop-query/delete or tracerpt probe did not prove cleanup")
+    if stop_exit != 0 or post_query_exit == 0 or probe_exit != 0:
+        raise ValueError(f"{path}: logman stop/post-stop-query or tracerpt probe did not prove cleanup")
+    delete_exit: int | None = None
+    if delete_applicable:
+        delete_exit = _receipt_uint(fields, "delete_exit_code", path)
+        if delete_exit != 0:
+            raise ValueError(f"{path}: applicable logman delete did not complete successfully")
+    elif fields.get("delete_exit_code", "").casefold() != "not_applicable":
+        raise ValueError(f"{path}: direct transient session must mark delete as not applicable")
     actual_bytes = raw_path.stat().st_size if raw_path.is_file() else -1
     bytes_written = int(fields["bytes_written"])
     rotation_count = int(fields["rotation_count"])
@@ -842,24 +916,45 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
     _receipt_raw_uint(body, "Rotation Count", rotation_count, path)
     _receipt_raw_uint(body, "ETL File Count", etl_file_count, path)
     _receipt_raw_bool(body, "Truncation Detected", False, path)
+    retained_files = _retained_etl_files(raw_path)
+    retained_names = sorted(item.name.casefold() for item in retained_files)
+    raw_names = sorted(item.casefold() for item in _receipt_raw_values(body, "ETL File", path))
     if (actual_bytes <= 0 or bytes_written != actual_bytes
             or bytes_written >= expected_max * 1024 * 1024
-            or rotation_count != 0 or etl_file_count != 1):
-        raise ValueError(f"{path}: stop receipt bytes/rotation/truncation evidence does not reconcile to the ETL")
+            or etl_file_count != len(retained_files)
+            or raw_names != retained_names
+            or rotation_count != max(0, len(retained_files) - 1)):
+        raise ValueError(f"{path}: stop receipt bytes/rotation/file-inventory/truncation evidence does not reconcile to the ETL directory")
+    if etl_file_count != 1 or rotation_count != 0:
+        raise ValueError(f"{path}: independent ETL inventory violates the {COLLECTION_FILE_POLICY} policy")
     stop_command = lower_header
-    if any(marker not in lower_body for marker in ("[stop]", "[post-stop-query]", "[delete]")):
-        raise ValueError(f"{path}: stop receipt does not retain separate stop/query/delete output")
+    required_markers = ["[stop]", "[post-stop-query]"]
+    if delete_applicable:
+        required_markers.append("[delete]")
+    if any(marker not in lower_body for marker in required_markers):
+        raise ValueError(f"{path}: stop receipt does not retain separate cleanup output")
+    if not delete_applicable and ("[delete]" in lower_body or "command_delete=" in stop_command):
+        raise ValueError(f"{path}: direct transient receipt contains an inapplicable delete operation")
     if not re.search(r"command_stop\s*=.*\blogman(?:\.exe)?\s+stop\b", stop_command):
         raise ValueError(f"{path}: stop receipt does not retain the logman stop command")
     if not re.search(r"command_post_stop_query\s*=.*\blogman(?:\.exe)?\s+query\b", stop_command):
         raise ValueError(f"{path}: stop receipt does not retain the post-stop query command")
-    if not re.search(r"command_delete\s*=.*\blogman(?:\.exe)?\s+delete\b", stop_command):
-        raise ValueError(f"{path}: stop receipt does not retain the logman delete command")
+    if delete_applicable and not re.search(r"command_delete\s*=.*\blogman(?:\.exe)?\s+delete\b", stop_command):
+        raise ValueError(f"{path}: stop receipt does not retain the applicable logman delete command")
+    ets_arg = r"(?:^|\s)-ets(?:\s|$)"
+    if cleanup_mode == COLLECTION_CLEANUP_DIRECT:
+        if (not re.search(r"command_stop\s*=.*" + ets_arg, stop_command)
+                or not re.search(r"command_post_stop_query\s*=.*" + ets_arg, stop_command)):
+            raise ValueError(f"{path}: direct transient cleanup commands must use -ets")
+    elif re.search(r"command_(?:stop|post_stop_query|delete)\s*=.*" + ets_arg, stop_command):
+        raise ValueError(f"{path}: persisted DCS cleanup commands must not use -ets")
     if fields["control_time_source"] == "tracerpt_summary_header" and not re.search(
             r"command_tracerpt_probe\s*=.*\btracerpt(?:\.exe)?\b", stop_command):
         raise ValueError(f"{path}: stop receipt does not retain the tracerpt header probe command")
     if "completed successfully" not in lower_body:
-        raise ValueError(f"{path}: stop receipt does not retain successful logman stop/delete output")
+        raise ValueError(f"{path}: stop receipt does not retain successful logman stop output")
+    if delete_applicable and re.search(r"\[delete\][\s\S]*?completed successfully", lower_body) is None:
+        raise ValueError(f"{path}: stop receipt does not retain successful logman delete output")
     if re.search(r"(?:not found|does not exist|cannot find|no such)", lower_body) is None:
         raise ValueError(f"{path}: post-stop query does not prove the session was disabled")
     result = _control_receipt_projection(path, fields, operation, control_time_utc)
@@ -868,9 +963,10 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
         "post_stop_query_exit_code": post_query_exit,
         "delete_exit_code": delete_exit,
         "tracerpt_probe_exit_code": probe_exit,
-        "bytes_written": int(fields["bytes_written"]),
-        "rotation_count": int(fields["rotation_count"]),
-        "etl_file_count": int(fields["etl_file_count"]),
+        "bytes_written": bytes_written,
+        "rotation_count": rotation_count,
+        "etl_file_count": etl_file_count,
+        "file_inventory_source": fields["file_inventory_source"],
         "truncation_detected": False,
     })
     return result
@@ -915,14 +1011,34 @@ def _read_collection_metadata(path: Path, raw_path: Path,
         raise ValueError("ETW collection metadata does not prove sufficient non-circular file capacity")
     if value.get("capacity_policy") != COLLECTION_CAPACITY_POLICY:
         raise ValueError("ETW collection metadata capacity policy is not pinned")
+    if value.get("file_policy") != COLLECTION_FILE_POLICY \
+            or value.get("file_inventory_source") != COLLECTION_INVENTORY_SOURCE:
+        raise ValueError("ETW collection metadata does not identify the independent single-file inventory policy")
+    cleanup_mode = value.get("cleanup_mode")
+    if cleanup_mode not in {COLLECTION_CLEANUP_DIRECT, COLLECTION_CLEANUP_PERSISTED}:
+        raise ValueError("ETW collection metadata cleanup mode is unsupported")
+    delete_applicable = value.get("delete_applicable")
+    if type(delete_applicable) is not bool:
+        raise ValueError("ETW collection metadata delete applicability is not boolean")
+    delete_exit_value = value.get("delete_exit_code")
+    if cleanup_mode == COLLECTION_CLEANUP_DIRECT:
+        if delete_applicable or "delete_exit_code" not in value or delete_exit_value is not None:
+            raise ValueError("direct transient collection metadata must explicitly mark delete as not applicable")
+    elif (not delete_applicable or type(delete_exit_value) is not int
+          or delete_exit_value != 0):
+        raise ValueError("persisted DCS collection metadata must claim a successful delete")
     bytes_written = _collection_int(value, "bytes_written")
     rotation_count = _collection_int(value, "rotation_count")
     etl_file_count = _collection_int(value, "etl_file_count")
+    retained_files = _retained_etl_files(raw_path)
     if (bytes_written <= 0 or bytes_written >= max_file_mb * 1024 * 1024
-            or rotation_count != 0 or etl_file_count != 1
+            or etl_file_count != len(retained_files)
+            or rotation_count != max(0, len(retained_files) - 1)
             or value.get("truncation_detected") is not False
             or raw_path.stat().st_size != bytes_written):
-        raise ValueError("ETW collection metadata does not prove bounded non-rotated ETL bytes")
+        raise ValueError("ETW collection metadata does not reconcile to the independent ETL file inventory")
+    if etl_file_count != 1 or rotation_count != 0:
+        raise ValueError(f"ETW collection metadata violates the {COLLECTION_FILE_POLICY} policy")
     declared_session = _collection_value(value, "session_name", "logger_name")
     declared_start = _collection_value(value, "coverage_start_utc", "collection_start_utc", "start_utc")
     declared_end = _collection_value(value, "coverage_end_utc", "collection_end_utc", "stop_utc")
@@ -980,6 +1096,16 @@ def _read_collection_metadata(path: Path, raw_path: Path,
         declared_text = str(declared_etl).replace("\\", "/").casefold()
         if declared_text.rsplit("/", 1)[-1] != raw_path.name.casefold():
             raise ValueError("ETW collection metadata does not bind the retained ETL filename")
+    cleanup_mode = stop_receipt.get("cleanup_mode")
+    if cleanup_mode not in {COLLECTION_CLEANUP_DIRECT, COLLECTION_CLEANUP_PERSISTED}:
+        raise ValueError("ETW collection stop cleanup mode is missing")
+    if (start_receipt.get("cleanup_mode") != cleanup_mode
+            or stop_receipt.get("file_policy") != COLLECTION_FILE_POLICY
+            or stop_receipt.get("file_inventory_source") != COLLECTION_INVENTORY_SOURCE
+            or value.get("cleanup_mode") != cleanup_mode
+            or value.get("delete_applicable") is not stop_receipt.get("delete_applicable")
+            or value.get("delete_exit_code") != stop_receipt.get("delete_exit_code")):
+        raise ValueError("ETW collection metadata cleanup/inventory outcome is not bound to the control receipts")
     if (start_receipt["trace_mode"] != trace_mode
             or stop_receipt["trace_mode"] != trace_mode
             or start_receipt["max_file_mb"] != max_file_mb
@@ -1020,8 +1146,14 @@ def _read_collection_metadata(path: Path, raw_path: Path,
         "bytes_written": bytes_written,
         "rotation_count": rotation_count,
         "etl_file_count": etl_file_count,
+        "file_inventory_source": COLLECTION_INVENTORY_SOURCE,
+        "file_policy": COLLECTION_FILE_POLICY,
         "truncation_detected": False,
+        "cleanup_mode": cleanup_mode,
+        "delete_applicable": stop_receipt.get("delete_applicable"),
+        "delete_exit_code": stop_receipt.get("delete_exit_code"),
     }
+
 
 def _run_tracerpt(raw_path: Path, tool_path: Path,
                   retained_summary_path: Path | None = None,
@@ -1112,7 +1244,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
     raw_hash = sha256(raw_path)
     full_digest = event_digest(events)
     provenance: dict[str, Any] = {
-        "parser_name": "vox-fx-t18-raw-etl-verifier", "parser_version": "1.2.0",
+        "parser_name": "vox-fx-t18-raw-etl-verifier", "parser_version": PARSER_VERSION,
         "toolchain_id": TOOLCHAIN_ID, "tool": tool_name, "tool_version": tool_version,
         "command_line": json.dumps(command_argv, ensure_ascii=True),
         "command_argv": command_argv, "command_template": TRACERPT_COMMAND,
@@ -1172,7 +1304,7 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
     if any(not isinstance(provenance.get(field), str) or not provenance[field] for field in required):
         raise ValueError("ETW parse receipt parser provenance is incomplete")
     if provenance.get("parser_name") != "vox-fx-t18-raw-etl-verifier" \
-            or provenance.get("parser_version") != "1.2.0" \
+            or provenance.get("parser_version") != PARSER_VERSION \
             or provenance.get("toolchain_id") != TOOLCHAIN_ID \
             or provenance.get("event_source") != EVENT_SOURCE \
             or provenance.get("counter_source") != LOSS_SOURCE \

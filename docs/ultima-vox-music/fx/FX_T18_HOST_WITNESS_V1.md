@@ -211,14 +211,27 @@ hash, and replay command. Production caller arguments cannot supply coverage or
 session metadata. The collection metadata is valid only when its hashed
 `VOX_FX_T18_LOGMAN_RECEIPT_V1` start and stop records parse successfully: they
 must prove `bin` rather than `bincirc`, the exact Kernel-Process GUID, keyword
-`0x10`, level `5`, max size, free-space headroom, successful create/query/stop/
-delete outcomes, active-before-capture and disabled-after-stop state, plus
-bytes written, one ETL file, zero rotations and no truncation. The public
-projection reconciles collector mode, max, bytes, rotation and truncation to
-the retained collection metadata. If summary coverage labels are absent, the
-parser derives the interval from the validated
-raw control-time lines; owner-authored metadata timestamps alone never supply
-coverage.
+`0x10`, level `5`, max size, free-space headroom, successful create/query/stop
+outcomes, active-before-capture and disabled-after-stop state, plus bytes
+written and no truncation. Cleanup is explicit: a direct transient session
+created/stopped with `-ets` uses `cleanup_mode=direct_ets_transient`, marks
+`delete_applicable=false` and records `delete_exit_code=not_applicable`; it
+must not require or retain a delete operation. A persisted Data Collector Set
+uses `cleanup_mode=persisted_dcs`, requires an applicable successful delete
+command without `-ets`, and records its numeric exit code. Both modes are
+validated fail-closed rather than treating an inapplicable delete failure as a
+collection failure.
+
+File count and rotation are not trusted metadata constants. The stop receipt
+retains an independently enumerated ETL-directory inventory and names its
+`independent_etl_directory_inventory` source; the parser reconciles that list
+and count to the actual retained files and derives `rotation_count` from it.
+The current policy is explicit `single_retained_etl_file_zero_rotation`, so any
+independent extra segment blocks. The public projection reconciles collector
+mode, capacity, cleanup outcome, file policy, file count, bytes, rotation and
+truncation to the retained collection metadata. If summary coverage labels are absent, the
+parser derives the interval from the validated raw control-time lines;
+owner-authored metadata timestamps alone never supply coverage.
 The production parser requires an owner-private
 `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` join for the path/hash/service/ancestry facts
 that are not historical fields in the raw Kernel-Process event. `verify_receipt`

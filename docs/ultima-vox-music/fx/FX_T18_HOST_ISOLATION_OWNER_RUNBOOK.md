@@ -108,7 +108,10 @@ $sessionStart = 'D:\owner-evidence\fx-t18\etw-session-start.txt'
 $sessionStop = 'D:\owner-evidence\fx-t18\etw-session-stop.txt'
 $collectionMetadata = 'D:\owner-evidence\fx-t18\etw-collection-metadata.json'
 $tracerptSummary = 'D:\owner-evidence\fx-t18\process-tracerpt-summary.txt'
-$probeXml = "$etl.probe.xml"
+$etlDirectory = Split-Path -Parent $etl
+$etlLeaf = Split-Path -Leaf $etl
+$probeDirectory = Join-Path $etlDirectory 'tracerpt-probe'
+$probeXml = Join-Path $probeDirectory 'decoded.xml'
 $providerName = 'Microsoft-Windows-Kernel-Process'
 $providerGuid = '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}'
 $keywords = '0x10'
@@ -122,7 +125,13 @@ $minimumFreeBytes = $maxFileBytes + $freeHeadroomBytes
 $etlDrive = Get-PSDrive -Name (Split-Path -Path $etl -Qualifier).TrimEnd(':') -ErrorAction Stop
 $freeBytesBeforeStart = [int64]$etlDrive.Free
 if ($freeBytesBeforeStart -lt $minimumFreeBytes) { throw 'ETW destination does not have the required non-circular trace capacity' }
-foreach ($path in @($etl, $sessionStart, $sessionStop, $collectionMetadata, $tracerptSummary, $probeXml)) {
+New-Item -ItemType Directory -LiteralPath $etlDirectory -Force | Out-Null
+$preexistingEtls = @(Get-ChildItem -LiteralPath $etlDirectory -File | Where-Object {
+  $_.Extension -ieq '.etl' -or $_.Name.StartsWith($etlLeaf + '.', [StringComparison]::OrdinalIgnoreCase)
+})
+if ($preexistingEtls.Count -ne 0) { throw "Refusing to use an ETW evidence directory with pre-existing ETL files: $etlDirectory" }
+if (Test-Path -LiteralPath $probeDirectory) { throw "Refusing to reuse existing tracerpt probe directory: $probeDirectory" }
+foreach ($path in @($etl, $sessionStart, $sessionStop, $collectionMetadata, $tracerptSummary)) {
   if (Test-Path -LiteralPath $path) { throw "Refusing to overwrite existing ETW evidence path: $path" }
 }
 function Invoke-LogmanStep([string[]]$Arguments) {
@@ -172,6 +181,7 @@ try {
     "keywords_hex=$keywords"
     "level=$level"
     "max_file_mb=$maxFileMb"
+    'cleanup_mode=direct_ets_transient'
     "free_bytes_before_start=$freeBytesBeforeStart"
     "minimum_free_bytes=$minimumFreeBytes"
     "free_headroom_bytes=$freeHeadroomBytes"
@@ -208,6 +218,7 @@ try {
   # output remains acceptable when a summary has no coverage labels; otherwise
   # the retained summary header must provide Log End Time.
   $tracerpt = 'C:\Windows\System32\tracerpt.exe'
+  New-Item -ItemType Directory -LiteralPath $probeDirectory -Force | Out-Null
   $probeOutput = @(& $tracerpt $etl -o $probeXml -of XML -lr -summary $tracerptSummary -y 2>&1)
   $probeExit = [int]$LASTEXITCODE
   $probeText = ($probeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
@@ -223,13 +234,20 @@ try {
     $stopControlUtc = Get-ControlTimeUtc $summaryText 'Log End Time'
     $stopControlSource = 'tracerpt_summary_header'
   }
+  $etlFiles = @(Get-ChildItem -LiteralPath $etlDirectory -File | Where-Object {
+    $_.Extension -ieq '.etl' -or $_.Name.StartsWith($etlLeaf + '.', [StringComparison]::OrdinalIgnoreCase)
+  })
+  $etlFileCount = [int]$etlFiles.Count
+  $rotationCount = [Math]::Max(0, $etlFileCount - 1)
   $etlInfo = Get-Item -LiteralPath $etl -ErrorAction Stop
   $bytesWritten = [int64]$etlInfo.Length
-  $truncationDetected = $bytesWritten -ge $maxFileBytes
-  if ($bytesWritten -le 0 -or $truncationDetected) { throw 'ETW artifact is empty or reached the bounded non-circular capacity' }
-  $deleteCommand = "logman.exe delete `"$session`" -ets"
-  $delete = Invoke-LogmanStep @('delete', $session, '-ets')
-  if ($delete.exit_code -ne 0 -or $delete.text -notmatch '(?i)completed successfully') { throw 'logman delete trace failed after verified stop' }
+  $truncationDetected = $bytesWritten -ge $maxFileBytes -or $etlFileCount -ne 1
+  if ($bytesWritten -le 0 -or $truncationDetected) { throw 'ETW artifact is empty, rotated, or reached the bounded non-circular capacity' }
+  if ($etlFileCount -ne 1 -or $rotationCount -ne 0) { throw 'Independent ETL directory inventory violated the single-file zero-rotation policy' }
+  $fileInventoryLines = @(
+    "ETL File Count: $etlFileCount"
+    foreach ($etlFile in $etlFiles) { "ETL File: $($etlFile.Name)" }
+  )
   @(
     'format=VOX_FX_T18_LOGMAN_RECEIPT_V1'
     'operation=stop'
@@ -241,40 +259,45 @@ try {
     "keywords_hex=$keywords"
     "level=$level"
     "max_file_mb=$maxFileMb"
+    'cleanup_mode=direct_ets_transient'
+    'delete_applicable=false'
+    'delete_exit_code=not_applicable'
     "bytes_written=$bytesWritten"
-    'rotation_count=0'
-    'etl_file_count=1'
+    "rotation_count=$rotationCount"
+    "etl_file_count=$etlFileCount"
+    'file_policy=single_retained_etl_file_zero_rotation'
+    'file_inventory_source=independent_etl_directory_inventory'
     "truncation_detected=$($truncationDetected.ToString().ToLowerInvariant())"
     "etl_path=$etl"
     "stop_exit_code=$($stop.exit_code)"
     "post_stop_query_exit_code=$($postQuery.exit_code)"
-    "delete_exit_code=$($delete.exit_code)"
     "tracerpt_probe_exit_code=$probeExit"
     "command_stop=$stopCommand"
     "command_post_stop_query=$queryCommand"
-    "command_delete=$deleteCommand"
     "command_tracerpt_probe=$tracerpt $etl -o $probeXml -of XML -lr -summary $tracerptSummary -y"
     '--- RAW LOGMAN OUTPUT ---'
     '[stop]'
     $stop.text
     '[post-stop-query]'
     $postQuery.text
-    '[delete]'
-    $delete.text
     '[tracerpt-summary-header]'
     $summaryText
     '[file-stat]'
     "Bytes Written: $bytesWritten"
-    'Rotation Count: 0'
-    'ETL File Count: 1'
+    "Rotation Count: $rotationCount"
+    "ETL File Count: $etlFileCount"
     "Truncation Detected: $($truncationDetected.ToString().ToLowerInvariant())"
+    '[file-inventory]'
+    $fileInventoryLines
   ) | Set-Content -LiteralPath $sessionStop -Encoding UTF8
   $sessionStarted = $false
   $metadata = [ordered]@{
     format = 'VOX_FX_T18_ETW_COLLECTION_METADATA_V1'; provider = "$providerName/ETW"; provider_guid = $providerGuid
     session_name = $session; etl_path = $etl; trace_mode = $traceMode; capacity_policy = 'max_file_mb_plus_free_headroom'
+    file_policy = 'single_retained_etl_file_zero_rotation'; file_inventory_source = 'independent_etl_directory_inventory'
+    cleanup_mode = 'direct_ets_transient'; delete_applicable = $false; delete_exit_code = $null
     max_file_mb = $maxFileMb; free_headroom_bytes = $freeHeadroomBytes; minimum_free_bytes = $minimumFreeBytes
-    free_bytes_before_start = $freeBytesBeforeStart; bytes_written = $bytesWritten; rotation_count = 0; etl_file_count = 1
+    free_bytes_before_start = $freeBytesBeforeStart; bytes_written = $bytesWritten; rotation_count = $rotationCount; etl_file_count = $etlFileCount
     truncation_detected = $truncationDetected; keywords_hex = $keywords; level = $level
     start_record_path = $sessionStart; start_record_sha256 = (Get-FileHash -LiteralPath $sessionStart -Algorithm SHA256).Hash.ToLowerInvariant()
     stop_record_path = $sessionStop; stop_record_sha256 = (Get-FileHash -LiteralPath $sessionStop -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -297,9 +320,14 @@ ETL reaches the maximum. The start receipt retains the successful `logman
 create` and active `logman query` output, exact provider GUID, keyword `0x10`,
 level `5`, mode, maximum, free-space calculation and zero initial
 rotation/truncation state. The stop receipt retains successful `logman stop`,
-the failed post-stop `logman query` proving the session is disabled, successful
-`logman delete`, the pinned tracerpt probe result, control-time source, actual
-ETL bytes, file count, rotation count and truncation state. Both receipts are
+the failed post-stop `logman query` proving the session is disabled, the
+explicit `direct_ets_transient` cleanup mode with delete marked not applicable,
+the pinned tracerpt probe result, control-time source, an independently
+enumerated ETL-directory inventory, ETL bytes, file count, rotation count and
+truncation state. The single-retained-file/zero-rotation rule is a declared
+policy invariant; any independent inventory variation blocks before witness
+finalization. A persisted DCS variant must instead retain and validate its
+applicable delete command and exit code, without `-ets`. Both receipts are
 hashed in the metadata; the parser reads and validates their raw output rather
 than accepting the metadata timestamps. If neither a raw `logman` `Stop Time`
 nor a `tracerpt` `Log End Time` is retained, the collection is blocked.
