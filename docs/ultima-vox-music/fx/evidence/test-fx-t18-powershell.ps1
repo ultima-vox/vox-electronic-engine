@@ -7,8 +7,9 @@ param(
 )
 
 # Windows PowerShell 5.1 smoke only. This parses the real orchestrator and
-# timeout helper, exercises UTF-8 Out-File -> Python inventory auditing, and
-# does not build the product or run the timing suite itself. If CtestBuildDir
+# timeout helper, validates the owner ETW runbook's PowerShell 5.1 directory
+# parameters and syntax, exercises UTF-8 Out-File -> Python inventory auditing,
+# and does not build the product or run the timing suite itself. If CtestBuildDir
 # is supplied, --show-only runs CTest inventory without executing the test.
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 may not bind $PSScriptRoot during param-default evaluation.
@@ -24,6 +25,7 @@ $path = (Resolve-Path -LiteralPath $OrchestratorPath).Path
 $helperPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'FxT18CtestHelpers.ps1')).Path
 $auditScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'audit-fx-windows-timing.py')).Path
 $witnessScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'capture-fx-t18-host-witness.ps1')).Path
+$ownerRunbookPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\FX_T18_HOST_ISOLATION_OWNER_RUNBOOK.md')).Path
 
 function Assert-PowerShellParses([string]$File) {
     $tokens = $null
@@ -42,6 +44,25 @@ Assert-PowerShellParses $witnessScript
 $tempRoot = Join-Path $env:TEMP "vox-fx-t18-powershell-$PID"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
+    $ownerRunbookSource = Get-Content -LiteralPath $ownerRunbookPath -Raw
+    $unsupportedOwnerRunbookParameters = [regex]::Matches(
+        $ownerRunbookSource, '(?im)^\s*New-Item\b[^\r\n]*-LiteralPath\b')
+    if ($unsupportedOwnerRunbookParameters.Count -ne 0) {
+        throw 'FX-T18 owner runbook uses unsupported New-Item -LiteralPath in the PowerShell 5.1 executable example'
+    }
+    $ownerNewItemCommands = [regex]::Matches(
+        $ownerRunbookSource, '(?im)^\s*New-Item\b[^\r\n]*')
+    if ($ownerNewItemCommands.Count -lt 2 -or
+        @($ownerNewItemCommands | Where-Object { $_.Value -notmatch '(?i)\s-Path\s' }).Count -ne 0) {
+        throw 'FX-T18 owner runbook directory creation does not use PowerShell 5.1 -Path syntax'
+    }
+    $ownerRunbookCode = [regex]::Match(
+        $ownerRunbookSource, '(?s)```powershell\r?\n(?<code>.*?)\r?\n```')
+    if (-not $ownerRunbookCode.Success) { throw 'FX-T18 owner runbook PowerShell code block is missing' }
+    $ownerRunbookCodePath = Join-Path $tempRoot 'fx-t18-owner-runbook.ps1'
+    $ownerRunbookCode.Groups['code'].Value | Set-Content -LiteralPath $ownerRunbookCodePath -Encoding UTF8
+    Assert-PowerShellParses $ownerRunbookCodePath
+
     $probePath = Join-Path $tempRoot 'probe.json'
     $probe = [ordered]@{
         format = 'VOX_FX_T18_POWERSHELL_SMOKE_V2'

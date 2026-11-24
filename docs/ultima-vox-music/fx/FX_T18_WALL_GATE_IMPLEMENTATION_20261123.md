@@ -73,6 +73,7 @@ receipt is fabricated.
   signature, collector, runner receipt and private inventory, and fail-closed
   rejection of fixture/qualification-prohibited evidence.
 - `evidence/test-fx-t18-host-witness.ps1`,
+  `evidence/test-fx-t18-powershell.ps1`,
   `evidence/test-evaluate-fx-t18-wall-gate.py`, and
   `FX_T18_HOST_WITNESS_V1.md` — executable missing/forged-proof, WMI-loss,
   dynamic/PID-reuse, DAW/manual-build/other-runner, short-lived-competitor,
@@ -97,7 +98,9 @@ a zero-loss circular/wrapped trace, a short control interval, failed
 create/query control evidence, independently varying ETL inventories, and
 both applicable and inapplicable cleanup failures. Each blocks unless the
 retained raw control receipts prove the interval and lifecycle mode. The
-private inventory contract also requires canonical sample hashing plus
+PowerShell smoke now extracts and parses the owner runbook's executable block
+and rejects unsupported `New-Item -LiteralPath` directory creation before any
+host action. The private inventory contract also requires canonical sample hashing plus
 measured full-host process/hash counts and a one-second cadence flag. These are
 source/fixture results only; no Windows
 PowerShell parse, real ETL replay, owner signature, or qualification has been
@@ -121,6 +124,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile docs/ultima-vox-music/fx/evidenc
 
 git diff --check
 # exit 0
+
+# Windows-only smoke added to test-fx-t18-powershell.ps1; not dispatched in this Linux sandbox.
+# It statically rejects New-Item -LiteralPath in the owner runbook and parses its executable PowerShell block.
+# result: not run; no Windows PowerShell 5.1 is available here
 ```
 
 The focused native build/test command was:

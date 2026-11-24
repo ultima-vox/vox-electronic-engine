@@ -125,7 +125,7 @@ $minimumFreeBytes = $maxFileBytes + $freeHeadroomBytes
 $etlDrive = Get-PSDrive -Name (Split-Path -Path $etl -Qualifier).TrimEnd(':') -ErrorAction Stop
 $freeBytesBeforeStart = [int64]$etlDrive.Free
 if ($freeBytesBeforeStart -lt $minimumFreeBytes) { throw 'ETW destination does not have the required non-circular trace capacity' }
-New-Item -ItemType Directory -LiteralPath $etlDirectory -Force | Out-Null
+New-Item -ItemType Directory -Path $etlDirectory -Force | Out-Null
 $preexistingEtls = @(Get-ChildItem -LiteralPath $etlDirectory -File | Where-Object {
   $_.Extension -ieq '.etl' -or $_.Name.StartsWith($etlLeaf + '.', [StringComparison]::OrdinalIgnoreCase)
 })
@@ -218,7 +218,7 @@ try {
   # output remains acceptable when a summary has no coverage labels; otherwise
   # the retained summary header must provide Log End Time.
   $tracerpt = 'C:\Windows\System32\tracerpt.exe'
-  New-Item -ItemType Directory -LiteralPath $probeDirectory -Force | Out-Null
+  New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
   $probeOutput = @(& $tracerpt $etl -o $probeXml -of XML -lr -summary $tracerptSummary -y 2>&1)
   $probeExit = [int]$LASTEXITCODE
   $probeText = ($probeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
